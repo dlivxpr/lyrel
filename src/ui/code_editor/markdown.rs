@@ -112,7 +112,10 @@ pub(crate) enum EditKind {
     Command,
 }
 pub(crate) enum Command {
-    Reload { text: String, format: TextFormat },
+    Reload {
+        text: String,
+        format: TextFormat,
+    },
     Select(Selection),
     Insert(String),
     Replace {
@@ -121,7 +124,10 @@ pub(crate) enum Command {
         kind: EditKind,
     },
     /// Non-overlapping ranges in the original source coordinate system.
-    BatchReplace { edits: Vec<(Range<usize>, String)>, kind: EditKind },
+    BatchReplace {
+        edits: Vec<(Range<usize>, String)>,
+        kind: EditKind,
+    },
     Backspace,
     Delete,
     Undo,
@@ -163,10 +169,21 @@ struct SourceText {
 }
 impl SourceText {
     fn from_input(text: String, new_line: LineEnding) -> Self {
-        let endings = text.match_indices('\n').map(|(at, _)| {
-            if at > 0 && text.as_bytes()[at - 1] == b'\r' { LineEnding::CrLf } else { new_line }
-        }).collect();
-        let text = if text.contains("\r\n") { text.replace("\r\n", "\n") } else { text };
+        let endings = text
+            .match_indices('\n')
+            .map(|(at, _)| {
+                if at > 0 && text.as_bytes()[at - 1] == b'\r' {
+                    LineEnding::CrLf
+                } else {
+                    new_line
+                }
+            })
+            .collect();
+        let text = if text.contains("\r\n") {
+            text.replace("\r\n", "\n")
+        } else {
+            text
+        };
         Self { text, endings }
     }
 }
@@ -229,17 +246,30 @@ impl MarkdownDocument {
             for part in chunk.split_inclusive('\n') {
                 if let Some(line) = part.strip_suffix('\n') {
                     text.push_str(line);
-                    if endings.next() == Some(&LineEnding::CrLf) { text.push('\r'); }
+                    if endings.next() == Some(&LineEnding::CrLf) {
+                        text.push('\r');
+                    }
                     text.push('\n');
-                } else { text.push_str(part); }
+                } else {
+                    text.push_str(part);
+                }
             }
         }
-        editor_text::encode(&text, &TextFormat { line_ending: LineEnding::Lf, ..self.format })
+        editor_text::encode(
+            &text,
+            &TextFormat {
+                line_ending: LineEnding::Lf,
+                ..self.format
+            },
+        )
     }
     fn source_text(&self, range: Range<usize>) -> SourceText {
         let start = self.source.offset_to_point(range.start).row;
         let end = self.source.offset_to_point(range.end).row;
-        SourceText { text: self.source.slice(range).to_string(), endings: self.endings[start..end].to_vec() }
+        SourceText {
+            text: self.source.slice(range).to_string(),
+            endings: self.endings[start..end].to_vec(),
+        }
     }
 
     // A line-local string supplies complete grapheme context even when the rope
@@ -303,7 +333,8 @@ impl MarkdownDocument {
     fn replace(&mut self, range: Range<usize>, text: &SourceText) {
         let start = self.source.offset_to_point(range.start).row;
         let end = self.source.offset_to_point(range.end).row;
-        self.endings.splice(start..end, text.endings.iter().copied());
+        self.endings
+            .splice(start..end, text.endings.iter().copied());
         self.pending_changes.push(SourceChange {
             range: range.clone(),
             inserted_len: text.text.len(),
@@ -323,9 +354,10 @@ impl MarkdownDocument {
         } else {
             self.history.end_grouping();
         }
-        self.typing_end = (kind == EditKind::Typing && change.edits.len() == 1
+        self.typing_end = (kind == EditKind::Typing
+            && change.edits.len() == 1
             && !edit.inserted.text.contains(['\n', '\r']))
-            .then_some((owner, edit.start + edit.inserted.text.len()));
+        .then_some((owner, edit.start + edit.inserted.text.len()));
         self.history.push(change);
         self.history.end_grouping();
     }
@@ -350,7 +382,11 @@ impl MarkdownDocument {
         state.selection = Selection::caret(self.boundary(end, true));
         self.record(
             Change {
-                edits: smallvec::smallvec![ReplacedSource { start: range.start, removed, inserted: text }],
+                edits: smallvec::smallvec![ReplacedSource {
+                    start: range.start,
+                    removed,
+                    inserted: text
+                }],
                 before,
                 after: state.selection,
             },
@@ -358,21 +394,43 @@ impl MarkdownDocument {
             state.id,
         );
     }
-    fn batch_edit(&mut self, state: &mut PresentationState, mut edits: Vec<(Range<usize>, String)>, kind: EditKind) {
-        for (range, _) in &mut edits { *range = self.safe_range(range.clone()); }
+    fn batch_edit(
+        &mut self,
+        state: &mut PresentationState,
+        mut edits: Vec<(Range<usize>, String)>,
+        kind: EditKind,
+    ) {
+        for (range, _) in &mut edits {
+            *range = self.safe_range(range.clone());
+        }
         edits.sort_by_key(|(range, _)| std::cmp::Reverse(range.start));
         let before = state.selection;
         let mut changes = smallvec::SmallVec::new();
         for (range, text) in edits {
             let removed = self.source_text(range.clone());
             let inserted = SourceText::from_input(text, self.format.line_ending);
-            if removed == inserted { continue; }
+            if removed == inserted {
+                continue;
+            }
             self.replace(range.clone(), &inserted);
-            state.selection = Selection::caret(self.boundary(range.start + inserted.text.len(), true));
-            changes.push(ReplacedSource { start: range.start, removed, inserted });
+            state.selection =
+                Selection::caret(self.boundary(range.start + inserted.text.len(), true));
+            changes.push(ReplacedSource {
+                start: range.start,
+                removed,
+                inserted,
+            });
         }
         if !changes.is_empty() {
-            self.record(Change { edits: changes, before, after: state.selection }, kind, state.id);
+            self.record(
+                Change {
+                    edits: changes,
+                    before,
+                    after: state.selection,
+                },
+                kind,
+                state.id,
+            );
         }
     }
     fn finish_composition(&mut self, state: &mut PresentationState, cancel: bool) {
@@ -390,7 +448,9 @@ impl MarkdownDocument {
             self.record(
                 Change {
                     edits: smallvec::smallvec![ReplacedSource {
-                        start: composition.range.start, removed: composition.original, inserted,
+                        start: composition.range.start,
+                        removed: composition.original,
+                        inserted,
                     }],
                     before: composition.selection,
                     after: state.selection,
@@ -449,7 +509,8 @@ impl MarkdownDocument {
                 }
                 let text = SourceText::from_input(text, self.format.line_ending);
                 self.replace(range.clone(), &text);
-                state.composition.as_mut().unwrap().range = range.start..range.start + text.text.len();
+                state.composition.as_mut().unwrap().range =
+                    range.start..range.start + text.text.len();
                 let selected = selected.unwrap_or_else(|| {
                     let end = text.text.encode_utf16().count();
                     end..end
@@ -489,7 +550,8 @@ impl MarkdownDocument {
                         self.format = format;
                         self.history = UndoHistory::new();
                         self.typing_end = None;
-                        state.selection = Selection::caret(self.boundary(state.selection.head, false));
+                        state.selection =
+                            Selection::caret(self.boundary(state.selection.head, false));
                     }
                     Command::Select(selection) => {
                         self.typing_end = None;
@@ -525,10 +587,15 @@ impl MarkdownDocument {
                         if let Some(changes) = changes {
                             for change in changes {
                                 let mut edits = change.edits;
-                                if undo { edits.reverse(); }
+                                if undo {
+                                    edits.reverse();
+                                }
                                 for edit in edits {
-                                    let (old, new) = if undo { (&edit.inserted, &edit.removed) }
-                                        else { (&edit.removed, &edit.inserted) };
+                                    let (old, new) = if undo {
+                                        (&edit.inserted, &edit.removed)
+                                    } else {
+                                        (&edit.removed, &edit.inserted)
+                                    };
                                     self.replace(edit.start..edit.start + old.text.len(), new);
                                 }
                                 state.selection = if undo { change.before } else { change.after };

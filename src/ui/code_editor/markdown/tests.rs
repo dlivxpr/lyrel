@@ -154,10 +154,24 @@ fn deleting_and_composing_across_mixed_terminators_restores_exact_saved_bytes() 
     document.command(&mut view, Command::Redo);
     assert_eq!(document.encode().unwrap(), b"a\r\ntail  ");
     document.command(&mut view, Command::Undo);
-    document.command(&mut view, Command::Compose { range: None, text: "replacement\n".into(), selected: None });
+    document.command(
+        &mut view,
+        Command::Compose {
+            range: None,
+            text: "replacement\n".into(),
+            selected: None,
+        },
+    );
     document.command(&mut view, Command::CancelComposition);
     assert_eq!(document.encode().unwrap(), original);
-    document.command(&mut view, Command::Compose { range: None, text: "replacement\n".into(), selected: None });
+    document.command(
+        &mut view,
+        Command::Compose {
+            range: None,
+            text: "replacement\n".into(),
+            selected: None,
+        },
+    );
     document.command(&mut view, Command::Commit("done\n".into()));
     assert_eq!(document.encode().unwrap(), b"adone\r\n\r\ntail  ");
     document.command(&mut view, Command::Undo);
@@ -168,12 +182,25 @@ fn deleting_and_composing_across_mixed_terminators_restores_exact_saved_bytes() 
 fn changing_only_a_terminator_is_an_undoable_edit_and_reload_replaces_its_representation() {
     let mut document = MarkdownDocument::new("a\nb\r\nc".into(), TextFormat::default());
     let mut view = PresentationState::default();
-    document.command(&mut view, Command::Replace { range: 1..2, text: "\r\n".into(), kind: EditKind::Command });
+    document.command(
+        &mut view,
+        Command::Replace {
+            range: 1..2,
+            text: "\r\n".into(),
+            kind: EditKind::Command,
+        },
+    );
     assert_eq!(document.source().to_string(), "a\nb\nc");
     assert_eq!(document.encode().unwrap(), b"a\r\nb\r\nc");
     document.command(&mut view, Command::Undo);
     assert_eq!(document.encode().unwrap(), b"a\nb\r\nc");
-    document.command(&mut view, Command::Reload { text: "a\r\nb\nc".into(), format: TextFormat::default() });
+    document.command(
+        &mut view,
+        Command::Reload {
+            text: "a\r\nb\nc".into(),
+            format: TextFormat::default(),
+        },
+    );
     document.command(&mut view, Command::Undo);
     assert_eq!(document.encode().unwrap(), b"a\r\nb\nc");
 }
@@ -185,14 +212,27 @@ fn sparse_replacements_preserve_between_match_bytes_and_undo_as_one_command() {
     let mut document = MarkdownDocument::new(decoded.text, decoded.format);
     let before = Selection::new(0, 3);
     let mut view = PresentationState::new(before);
-    document.command(&mut view, Command::BatchReplace {
-        edits: vec![(0..3, "kitten".into()), (13..16, "kitten".into()), (32..35, "kitten".into())],
-        kind: EditKind::Command,
-    });
-    assert_eq!(document.encode().unwrap(), b"kitten\r\n* keep  \nkitten\r\n[ref]: /target\nkitten");
+    document.command(
+        &mut view,
+        Command::BatchReplace {
+            edits: vec![
+                (0..3, "kitten".into()),
+                (13..16, "kitten".into()),
+                (32..35, "kitten".into()),
+            ],
+            kind: EditKind::Command,
+        },
+    );
+    assert_eq!(
+        document.encode().unwrap(),
+        b"kitten\r\n* keep  \nkitten\r\n[ref]: /target\nkitten"
+    );
     document.command(&mut view, Command::Undo);
     assert_eq!(document.encode().unwrap(), original);
     assert_eq!(view.selection(), before);
     document.command(&mut view, Command::Redo);
-    assert_eq!(document.encode().unwrap(), b"kitten\r\n* keep  \nkitten\r\n[ref]: /target\nkitten");
+    assert_eq!(
+        document.encode().unwrap(),
+        b"kitten\r\n* keep  \nkitten\r\n[ref]: /target\nkitten"
+    );
 }

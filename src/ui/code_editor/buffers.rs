@@ -192,7 +192,8 @@ impl EditorBuffers {
         let len = text.len();
         let same =
             len == file.saved.len && Fingerprint::of_chunks(len, text.chunks()) == file.saved;
-        file.dirty = !same || file.format(cx) != file.saved_format
+        file.dirty = !same
+            || file.format(cx) != file.saved_format
             || file.representation_fingerprint(cx) != file.saved_representation;
     }
 
@@ -423,7 +424,12 @@ impl EditorBuffers {
         };
         let value = input.read(cx);
         let saved = Fingerprint::of_chunks(value.text().len(), value.text().chunks());
-        let saved_representation = input.markdown().map(|view| view.read(cx).document().read(cx).representation_fingerprint());
+        let saved_representation = input.markdown().map(|view| {
+            view.read(cx)
+                .document()
+                .read(cx)
+                .representation_fingerprint()
+        });
         self.files.push(OpenFile {
             id,
             path,
@@ -702,8 +708,16 @@ impl EditorBuffers {
                 file.saved_format = decoded.format;
                 let input = file.input.clone();
                 if let Some(source) = input.markdown() {
-                    source.update(cx, |source, cx| source.command(
-                        markdown::Command::Reload { text: decoded.text, format: decoded.format }, window, cx));
+                    source.update(cx, |source, cx| {
+                        source.command(
+                            markdown::Command::Reload {
+                                text: decoded.text,
+                                format: decoded.format,
+                            },
+                            window,
+                            cx,
+                        )
+                    });
                 } else {
                     file.set_format(decoded.format, cx);
                     replace_buffer_text(&input, &decoded.text, window, cx);
@@ -794,9 +808,15 @@ fn load_file(
         ))
     })?;
     let Some(decoded) = decode_file(&path, &bytes, preserve).map_err(|error| {
-        EditorOpenError::Message(t_fmt(L10nKey::EditorCantRead,
-            &[("path", &path.display().to_string()), ("e", &error.to_string())]))
-    })? else {
+        EditorOpenError::Message(t_fmt(
+            L10nKey::EditorCantRead,
+            &[
+                ("path", &path.display().to_string()),
+                ("e", &error.to_string()),
+            ],
+        ))
+    })?
+    else {
         return Err(EditorOpenError::NotText(path));
     };
     let config = read_editorconfig(h, &path);
@@ -809,11 +829,23 @@ fn load_file(
     })
 }
 
-fn decode_file(path: &Path, bytes: &[u8], preserve: bool) -> std::io::Result<Option<editor_text::Decoded>> {
-    let markdown = matches!(path.extension().and_then(|ext| ext.to_str())
-        .map(str::to_ascii_lowercase).as_deref(), Some("md" | "markdown" | "mdx"));
-    if preserve && markdown { editor_text::decode_source(bytes) }
-    else { Ok(editor_text::decode(bytes)) }
+fn decode_file(
+    path: &Path,
+    bytes: &[u8],
+    preserve: bool,
+) -> std::io::Result<Option<editor_text::Decoded>> {
+    let markdown = matches!(
+        path.extension()
+            .and_then(|ext| ext.to_str())
+            .map(str::to_ascii_lowercase)
+            .as_deref(),
+        Some("md" | "markdown" | "mdx")
+    );
+    if preserve && markdown {
+        editor_text::decode_source(bytes)
+    } else {
+        Ok(editor_text::decode(bytes))
+    }
 }
 
 /// Collects the `.editorconfig` files that apply to `path`, nearest first,

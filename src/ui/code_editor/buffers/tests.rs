@@ -126,14 +126,20 @@ fn markdown_byte_fidelity_survives_host_save_local_edit_undo_and_reopen(cx: &mut
     wait_until(&mut vcx, |vcx| active_id(&app, vcx).is_some());
     let save = |vcx: &mut VisualTestContext| {
         vcx.dispatch_action(EditorSave);
-        wait_until(vcx, |vcx| app.read_with(vcx, |app, _| {
-            app.active_buffer().is_some_and(|file| !file.saving && !file.dirty)
-        }));
+        wait_until(vcx, |vcx| {
+            app.read_with(vcx, |app, _| {
+                app.active_buffer()
+                    .is_some_and(|file| !file.saving && !file.dirty)
+            })
+        });
     };
     save(&mut vcx);
     assert_eq!(std::fs::read(&path).unwrap(), original);
     vcx.dispatch_action(MoveToStart);
-    vcx.update(|window, cx| { window.render_frame(cx); window.input("new\n", cx); });
+    vcx.update(|window, cx| {
+        window.render_frame(cx);
+        window.input("new\n", cx);
+    });
     save(&mut vcx);
     let edited = b"\xef\xbb\xbfnew\r\nalpha  \r\nbeta\r\ngamma\n\r\n* item\n[ref]: /target  \r\n<Unknown value={1} />";
     assert_eq!(std::fs::read(&path).unwrap(), edited);
@@ -152,13 +158,22 @@ fn markdown_byte_fidelity_survives_host_save_local_edit_undo_and_reopen(cx: &mut
     assert_eq!(std::fs::read(&path).unwrap(), edited);
     app.read_with(&vcx, |app, cx| {
         assert_eq!(app.active_buffer().unwrap().host.id(), HostId(705));
-        assert_eq!(app.active_buffer().unwrap().input.read(cx).text().to_string(),
-            "new\nalpha  \nbeta\ngamma\n\n* item\n[ref]: /target  \n<Unknown value={1} />");
+        assert_eq!(
+            app.active_buffer()
+                .unwrap()
+                .input
+                .read(cx)
+                .text()
+                .to_string(),
+            "new\nalpha  \nbeta\ngamma\n\n* item\n[ref]: /target  \n<Unknown value={1} />"
+        );
     });
 }
 
 #[gpui_kit::test]
-fn markdown_supported_encodings_keep_bom_and_untouched_bytes_through_save_reopen(cx: &mut TestAppContext) {
+fn markdown_supported_encodings_keep_bom_and_untouched_bytes_through_save_reopen(
+    cx: &mut TestAppContext,
+) {
     let dir = tempfile::tempdir().unwrap();
     let fixtures: &[(&[u8], &[u8], usize)] = &[
         (b"a\nb\n", b"x", 0),
@@ -177,30 +192,58 @@ fn markdown_supported_encodings_keep_bom_and_untouched_bytes_through_save_reopen
     for (index, &(original, inserted, bom_len)) in fixtures.iter().enumerate() {
         let path = dir.path().join(format!("encoding-{index}.md"));
         std::fs::write(&path, original).unwrap();
-        app.update_in(&mut vcx, |app, window, cx| app.editor_open_on_host(host.clone(), &path, window, cx));
+        app.update_in(&mut vcx, |app, window, cx| {
+            app.editor_open_on_host(host.clone(), &path, window, cx)
+        });
         wait_until(&mut vcx, |vcx| active_id(&app, vcx).is_some());
         let save = |vcx: &mut VisualTestContext| {
             vcx.dispatch_action(crate::core::actions::EditorSave);
-            wait_until(vcx, |vcx| app.read_with(vcx, |app, _| app.active_buffer().is_some_and(|file| !file.dirty && !file.saving)));
+            wait_until(vcx, |vcx| {
+                app.read_with(vcx, |app, _| {
+                    app.active_buffer()
+                        .is_some_and(|file| !file.dirty && !file.saving)
+                })
+            });
         };
         save(&mut vcx);
-        assert_eq!(std::fs::read(&path).unwrap(), original, "no edit fixture {index}");
+        assert_eq!(
+            std::fs::read(&path).unwrap(),
+            original,
+            "no edit fixture {index}"
+        );
         vcx.dispatch_action(gpui_kit::component::input::MoveToStart);
-        vcx.update(|window, cx| { window.render_frame(cx); window.input("x", cx); });
+        vcx.update(|window, cx| {
+            window.render_frame(cx);
+            window.input("x", cx);
+        });
         save(&mut vcx);
         let expected = [&original[..bom_len], inserted, &original[bom_len..]].concat();
-        assert_eq!(std::fs::read(&path).unwrap(), expected, "local edit fixture {index}");
+        assert_eq!(
+            std::fs::read(&path).unwrap(),
+            expected,
+            "local edit fixture {index}"
+        );
         vcx.dispatch_action(gpui_kit::component::input::Undo);
         save(&mut vcx);
-        assert_eq!(std::fs::read(&path).unwrap(), original, "undo fixture {index}");
+        assert_eq!(
+            std::fs::read(&path).unwrap(),
+            original,
+            "undo fixture {index}"
+        );
         app.update_in(&mut vcx, |app, window, cx| {
             app.editor_close_file(0, window, cx);
             app.editor_open_on_host(host.clone(), &path, window, cx);
         });
         wait_until(&mut vcx, |vcx| active_id(&app, vcx).is_some());
         save(&mut vcx);
-        assert_eq!(std::fs::read(&path).unwrap(), original, "reopen fixture {index}");
-        app.update_in(&mut vcx, |app, window, cx| app.editor_close_file(0, window, cx));
+        assert_eq!(
+            std::fs::read(&path).unwrap(),
+            original,
+            "reopen fixture {index}"
+        );
+        app.update_in(&mut vcx, |app, window, cx| {
+            app.editor_close_file(0, window, cx)
+        });
     }
 }
 
@@ -212,9 +255,14 @@ fn markdown_encoding_failure_keeps_original_bytes_and_recoverable_edits(cx: &mut
     std::fs::write(&path, original).unwrap();
     let (app, mut vcx, _streams) = harness_with_tabs(cx, 1);
     vcx.update(|_, cx| cx.set_global(MarkdownWorkbench));
-    app.update_in(&mut vcx, |app, window, cx| app.open_file_in_editor(&path, window, cx));
+    app.update_in(&mut vcx, |app, window, cx| {
+        app.open_file_in_editor(&path, window, cx)
+    });
     wait_until(&mut vcx, |vcx| active_id(&app, vcx).is_some());
-    vcx.update(|window, cx| { window.render_frame(cx); window.input("🎉", cx); });
+    vcx.update(|window, cx| {
+        window.render_frame(cx);
+        window.input("🎉", cx);
+    });
     vcx.dispatch_action(crate::core::actions::EditorSave);
     wait_until(&mut vcx, |vcx| vcx.has_pending_prompt());
     vcx.simulate_prompt_answer(t(L10nKey::Cancel));
@@ -228,12 +276,19 @@ fn markdown_encoding_failure_keeps_original_bytes_and_recoverable_edits(cx: &mut
     });
     vcx.dispatch_action(gpui_kit::component::input::Undo);
     vcx.dispatch_action(crate::core::actions::EditorSave);
-    wait_until(&mut vcx, |vcx| app.read_with(vcx, |app, _| app.active_buffer().is_some_and(|file| !file.dirty && !file.saving)));
+    wait_until(&mut vcx, |vcx| {
+        app.read_with(vcx, |app, _| {
+            app.active_buffer()
+                .is_some_and(|file| !file.dirty && !file.saving)
+        })
+    });
     assert_eq!(std::fs::read(&path).unwrap(), original);
 }
 
 #[gpui_kit::test]
-fn markdown_declared_encoding_errors_are_visible_without_replacement_or_write(cx: &mut TestAppContext) {
+fn markdown_declared_encoding_errors_are_visible_without_replacement_or_write(
+    cx: &mut TestAppContext,
+) {
     let dir = tempfile::tempdir().unwrap();
     let (app, mut vcx, _streams) = harness_with_tabs(cx, 1);
     vcx.update(|_, cx| cx.set_global(MarkdownWorkbench));
@@ -246,12 +301,20 @@ fn markdown_declared_encoding_errors_are_visible_without_replacement_or_write(cx
     for (index, bytes) in invalid.iter().enumerate() {
         let path = dir.path().join(format!("damaged-{index}.md"));
         std::fs::write(&path, bytes).unwrap();
-        app.update_in(&mut vcx, |app, window, cx| app.open_file_in_editor(&path, window, cx));
-        wait_until(&mut vcx, |vcx| vcx.read(|cx| {
-            crate::ui::notification_history::history(cx).read(cx).records()
-                .any(|record| record.message().contains(&format!("damaged-{index}.md"))
-                    && record.message().contains("invalid source bytes"))
-        }));
+        app.update_in(&mut vcx, |app, window, cx| {
+            app.open_file_in_editor(&path, window, cx)
+        });
+        wait_until(&mut vcx, |vcx| {
+            vcx.read(|cx| {
+                crate::ui::notification_history::history(cx)
+                    .read(cx)
+                    .records()
+                    .any(|record| {
+                        record.message().contains(&format!("damaged-{index}.md"))
+                            && record.message().contains("invalid source bytes")
+                    })
+            })
+        });
         assert_eq!(std::fs::read(&path).unwrap(), *bytes);
         assert_eq!(active_id(&app, &vcx), None);
     }
