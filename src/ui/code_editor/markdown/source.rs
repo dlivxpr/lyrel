@@ -891,7 +891,7 @@ impl SourcePresentation {
             self.follow_link(target, cx);
         }
     }
-    fn follow_link(&mut self, target: String, cx: &mut Context<Self>) {
+    pub(super) fn follow_link(&mut self, target: String, cx: &mut Context<Self>) {
         if self.projection.revision != self.document.read(cx).revision() {
             return;
         }

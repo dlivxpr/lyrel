@@ -5835,6 +5835,183 @@ fn native_mdx_embedded_in_heading_exposes_property_edits_without_replacing_its_s
 }
 
 #[gpui_kit::test]
+fn native_cards_edit_properties_children_follow_host_links_and_save_reopen(
+    cx: &mut gpui_kit::TestAppContext,
+) {
+    use crate::ui::app::test_window::harness_with_tabs;
+    use super::super::test_host::FileHost;
+    use gpui_kit::{Focusable as _, test::TestWindowExt as _};
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("cards.mdx");
+    let target = directory.path().join("next&one.md");
+    std::fs::write(&target, "# Host destination\n").unwrap();
+    let original = "<CardGroup cols=\"2\">\r\n\n<Card title='Guide' href='./unused.md' icon='book' run={() => { throw Error('never execute') }}>\n\nchild **bold**\r\n\n</Card>\n\n</CardGroup>\r\n\n[keep]: /unchanged  ";
+    std::fs::write(&path, original).unwrap();
+    let host = FileHost::new(lyrel_core::host::HostId(726));
+    let (app, mut context, _streams) = harness_with_tabs(cx, 1);
+    context.update(|_, cx| cx.set_global(super::super::MarkdownWorkbench));
+    app.update_in(&mut context, |app, window, cx| app.editor_open_on_host(host.clone(), &path, window, cx));
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    let view = loop {
+        context.run_until_parked();
+        if let Some(view) = app.read_with(&context, |app, _| app.active_editor_input().and_then(|input| input.markdown().cloned())) { break view; }
+        assert!(std::time::Instant::now() < deadline);
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    };
+    context.dispatch_action(crate::core::actions::ToggleDocumentPreview);
+    loop {
+        context.executor().advance_clock(std::time::Duration::from_millis(100));
+        context.run_until_parked();
+        if context.update(|window, cx| { window.render_frame(cx); window.try_find("mdx-card-title").is_some() }) { break; }
+        assert!(std::time::Instant::now() < deadline);
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    context.update(|window, cx| {
+        window.click("mdx-card-title", cx);
+        assert!(view.read(cx).focus_handle(cx).is_focused(window));
+        window.input("中文", cx);
+    });
+    let titled = original.replacen("Guide", "中文", 1);
+    view.read_with(&context, |view, cx| assert_eq!(view.document().read(cx).encode().unwrap(), titled.as_bytes()));
+    assert!(app.read_with(&context, |app, _| app.active_buffer().unwrap().path == path));
+    loop {
+        context.executor().advance_clock(std::time::Duration::from_millis(100));
+        context.run_until_parked();
+        if context.update(|window, cx| { window.render_frame(cx); window.try_find("mdx-card-href").is_some() }) { break; }
+        assert!(std::time::Instant::now() < deadline);
+    }
+    context.update(|window, cx| { window.click("mdx-card-href", cx); window.input("./next&#38;one.md", cx); });
+    let titled = titled.replacen("./unused.md", "./next&#38;one.md", 1);
+    view.read_with(&context, |view, cx| assert_eq!(view.document().read(cx).encode().unwrap(), titled.as_bytes()));
+    assert!(app.read_with(&context, |app, _| app.active_buffer().unwrap().path == path));
+    loop {
+        context.executor().advance_clock(std::time::Duration::from_millis(100));
+        context.run_until_parked();
+        if context.update(|window, cx| { window.render_frame(cx); window.try_find("mdx-card-cols").is_some() }) { break; }
+        assert!(std::time::Instant::now() < deadline);
+    }
+    context.update(|window, cx| { window.click("mdx-card-cols", cx); window.input("3", cx); });
+    let grouped = titled.replacen("cols=\"2\"", "cols=\"3\"", 1);
+    let child = grouped.replace("\r\n", "\n").find("child ").unwrap() + 6;
+    view.update_in(&mut context, |view, window, cx| {
+        view.command(Command::Select(Selection::caret(child)), window, cx);
+        view.focus_handle(cx).focus(window, cx);
+    });
+    context.update(|window, cx| window.input("nested ", cx));
+    let expected = grouped.replacen("child **bold**", "child nested **bold**", 1);
+    context.dispatch_action(crate::core::actions::ToggleDocumentPreview);
+    context.dispatch_action(gpui_kit::component::input::Undo);
+    view.read_with(&context, |view, cx| assert_eq!(view.document().read(cx).encode().unwrap(), grouped.as_bytes()));
+    context.dispatch_action(gpui_kit::component::input::Undo);
+    view.read_with(&context, |view, cx| assert_eq!(view.document().read(cx).encode().unwrap(), titled.as_bytes()));
+    context.dispatch_action(gpui_kit::component::input::Redo);
+    context.dispatch_action(gpui_kit::component::input::Redo);
+    context.dispatch_action(crate::core::actions::EditorSave);
+    loop {
+        context.run_until_parked();
+        if app.read_with(&context, |app, _| app.active_buffer().is_some_and(|buffer| !buffer.dirty && !buffer.saving)) { break; }
+        assert!(std::time::Instant::now() < deadline);
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    assert_eq!(std::fs::read(&path).unwrap(), expected.as_bytes());
+    assert_eq!(host.writes.load(std::sync::atomic::Ordering::SeqCst), 1);
+    context.dispatch_action(crate::core::actions::ToggleDocumentPreview);
+    loop {
+        context.executor().advance_clock(std::time::Duration::from_millis(100));
+        context.run_until_parked();
+        if context.update(|window, cx| { window.render_frame(cx); window.try_find("mdx-card-follow").is_some() }) { break; }
+        assert!(std::time::Instant::now() < deadline);
+    }
+    // Selecting the href only edits; the separate native button follows it.
+    context.update(|window, cx| window.click("mdx-card-href", cx));
+    assert!(app.read_with(&context, |app, _| app.active_buffer().unwrap().path == path));
+    context.update(|window, cx| window.click("mdx-card-follow", cx));
+    loop {
+        context.run_until_parked();
+        if app.read_with(&context, |app, _| app.active_buffer().is_some_and(|buffer| buffer.path == target)) { break; }
+        assert!(std::time::Instant::now() < deadline, "relative card link did not open through the document Host");
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    app.read_with(&context, |app, _| assert_eq!(app.active_buffer().unwrap().host.id(), lyrel_core::host::HostId(726)));
+    app.update_in(&mut context, |app, window, cx| {
+        app.editor_close_file(0, window, cx);
+        app.editor_open_on_host(host.clone(), &path, window, cx);
+    });
+    loop {
+        context.run_until_parked();
+        if app.read_with(&context, |app, _| app.active_buffer().is_some_and(|buffer| buffer.path == path)) { break; }
+        assert!(std::time::Instant::now() < deadline);
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    app.read_with(&context, |app, cx| {
+        let view = app.active_editor_input().unwrap().markdown().unwrap().read(cx);
+        assert_eq!(view.document().read(cx).encode().unwrap(), expected.as_bytes());
+    });
+}
+
+#[gpui_kit::test]
+fn native_cards_add_missing_properties_expand_children_and_never_follow_dynamic_href(
+    cx: &mut gpui_kit::TestAppContext,
+) {
+    use crate::ui::app::test_window::harness_with_tabs;
+    use gpui_kit::test::TestWindowExt as _;
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("empty-cards.mdx");
+    let original = "<CardGroup>\n\n<Card href={chooseDestination()} {...props} />\n\n</CardGroup>\n\nkeep  ";
+    std::fs::write(&path, original).unwrap();
+    let (app, mut context, _streams) = harness_with_tabs(cx, 1);
+    context.update(|_, cx| cx.set_global(super::super::MarkdownWorkbench));
+    app.update_in(&mut context, |app, window, cx| app.open_file_in_editor(&path, window, cx));
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    let view = loop {
+        context.run_until_parked();
+        if let Some(view) = app.read_with(&context, |app, _| app.active_editor_input().and_then(|input| input.markdown().cloned())) { break view; }
+        assert!(std::time::Instant::now() < deadline);
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    };
+    context.dispatch_action(crate::core::actions::ToggleDocumentPreview);
+    loop {
+        context.executor().advance_clock(std::time::Duration::from_millis(100));
+        context.run_until_parked();
+        if context.update(|window, cx| { window.render_frame(cx); window.try_find("mdx-card-add-title").is_some() }) { break; }
+        assert!(std::time::Instant::now() < deadline);
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    context.update(|window, cx| {
+        assert!(window.try_find("mdx-card-follow").is_none(), "dynamic href is source, not an executable destination");
+        window.click("mdx-card-add-title", cx);
+        window.input("Title", cx);
+    });
+    let titled = original.replacen("{...props}", "{...props} title=\"Title\"", 1);
+    view.read_with(&context, |view, cx| assert_eq!(view.document().read(cx).encode().unwrap(), titled.as_bytes()));
+    context.dispatch_action(gpui_kit::component::input::Undo);
+    context.dispatch_action(gpui_kit::component::input::Undo);
+    view.read_with(&context, |view, cx| assert_eq!(view.document().read(cx).encode().unwrap(), original.as_bytes()));
+    loop {
+        context.executor().advance_clock(std::time::Duration::from_millis(100));
+        context.run_until_parked();
+        if context.update(|window, cx| { window.render_frame(cx); window.try_find("mdx-card-add-cols").is_some() }) { break; }
+        assert!(std::time::Instant::now() < deadline);
+    }
+    context.update(|window, cx| { window.click("mdx-card-add-cols", cx); window.input("2", cx); });
+    let grouped = original.replacen("<CardGroup>", "<CardGroup cols=\"2\">", 1);
+    view.read_with(&context, |view, cx| assert_eq!(view.document().read(cx).encode().unwrap(), grouped.as_bytes()));
+    loop {
+        context.executor().advance_clock(std::time::Duration::from_millis(100));
+        context.run_until_parked();
+        if context.update(|window, cx| { window.render_frame(cx); window.try_find("mdx-card-children").is_some() }) { break; }
+        assert!(std::time::Instant::now() < deadline);
+    }
+    context.update(|window, cx| { window.click("mdx-card-children", cx); window.input("nested **child**", cx); });
+    let expanded = grouped.replacen(" />", " >\nnested **child**\n</Card>", 1);
+    view.read_with(&context, |view, cx| assert_eq!(view.document().read(cx).encode().unwrap(), expanded.as_bytes()));
+    context.dispatch_action(crate::core::actions::ToggleDocumentPreview);
+    context.dispatch_action(gpui_kit::component::input::Undo);
+    context.dispatch_action(gpui_kit::component::input::Undo);
+    view.read_with(&context, |view, cx| assert_eq!(view.document().read(cx).encode().unwrap(), grouped.as_bytes()));
+}
+
+#[gpui_kit::test]
 fn native_long_document_scroll_return_reflow_and_pending_parse_keep_selection_and_history(
     cx: &mut gpui_kit::TestAppContext,
 ) {

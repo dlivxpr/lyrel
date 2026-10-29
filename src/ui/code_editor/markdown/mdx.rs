@@ -10,6 +10,7 @@ use std::{
 };
 
 pub(super) mod view;
+pub(super) mod cards;
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(super) enum Grammar {
     #[default]
