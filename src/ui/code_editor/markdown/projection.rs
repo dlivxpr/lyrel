@@ -535,8 +535,7 @@ impl Projection {
                 );
                 let mut at = start;
                 while at < end {
-                    if matches!(leaf.kind, Kind::TableCell(_))
-                        && source[at..end].starts_with("\\|")
+                    if matches!(leaf.kind, Kind::TableCell(_)) && source[at..end].starts_with("\\|")
                     {
                         leaf.push_normalized(at..at + 2, "|", "\\|");
                         at += 2;
@@ -545,7 +544,11 @@ impl Projection {
                     let ch = source[at..end].chars().next().unwrap();
                     leaf.push_normalized(
                         at..at + ch.len_utf8(),
-                        if ch == '\n' { " " } else { &source[at..at + ch.len_utf8()] },
+                        if ch == '\n' {
+                            " "
+                        } else {
+                            &source[at..at + ch.len_utf8()]
+                        },
                         &source[at..at + ch.len_utf8()],
                     );
                     at += ch.len_utf8();
@@ -623,12 +626,16 @@ impl Projection {
         // A cell fragment is not a standalone GFM table. Reparse its entire
         // owning table, retaining the delimiter row and neighboring context.
         if let Kind::TableCell(cell) = self.leaves[first].kind {
-            while first > 0 && matches!(self.leaves[first - 1].kind, Kind::TableCell(other) if other.table() == cell.table()) {
+            while first > 0
+                && matches!(self.leaves[first - 1].kind, Kind::TableCell(other) if other.table() == cell.table())
+            {
                 first -= 1;
             }
         }
         if let Kind::TableCell(cell) = self.leaves[last - 1].kind {
-            while last < self.leaves.len() && matches!(self.leaves[last].kind, Kind::TableCell(other) if other.table() == cell.table()) {
+            while last < self.leaves.len()
+                && matches!(self.leaves[last].kind, Kind::TableCell(other) if other.table() == cell.table())
+            {
                 last += 1;
             }
         }

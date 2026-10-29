@@ -1324,8 +1324,8 @@ fn native_table_cells_navigate_exit_edit_and_save_without_rewriting_neighbors(
     cx: &mut gpui_kit::TestAppContext,
 ) {
     use crate::ui::app::test_window::harness_with_tabs;
-    use gpui_kit::{Focusable as _, MouseButton};
     use gpui_kit::test::TestEventExt as _;
+    use gpui_kit::{Focusable as _, MouseButton};
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("cells.md");
     let original = "# Heading\r\n\nBefore  \r\n\n| **Name** | Value |\r\n| :--- | ---: |\n| one | two |\r\n| three |  |\n\nAfter  ";
@@ -1340,7 +1340,8 @@ fn native_table_cells_navigate_exit_edit_and_save_without_rewriting_neighbors(
     let view = loop {
         context.run_until_parked();
         if let Some(view) = app.read_with(&context, |app, _| {
-            app.active_editor_input().and_then(|input| input.markdown().cloned())
+            app.active_editor_input()
+                .and_then(|input| input.markdown().cloned())
         }) {
             break view;
         }
@@ -1359,9 +1360,16 @@ fn native_table_cells_navigate_exit_edit_and_save_without_rewriting_neighbors(
         let first = view.read(cx).range_to_bounds(&(name..name), cx).unwrap();
         let second = view.read(cx).range_to_bounds(&(value..value), cx).unwrap();
         let body = view.read(cx).range_to_bounds(&(one..one), cx).unwrap();
-        assert_eq!(first.top(), second.top(), "cells share a rendered header row");
+        assert_eq!(
+            first.top(),
+            second.top(),
+            "cells share a rendered header row"
+        );
         assert!(second.left() > first.right(), "cells have distinct columns");
-        assert!(body.top() > first.top(), "delimiter row is not an editable row");
+        assert!(
+            body.top() > first.top(),
+            "delimiter row is not an editable row"
+        );
         window.pointer_down(second.center(), MouseButton::Left, cx);
         window.pointer_up(second.center(), MouseButton::Left, cx);
         assert_eq!(view.read(cx).selection(), Selection::caret(value));
@@ -1370,45 +1378,89 @@ fn native_table_cells_navigate_exit_edit_and_save_without_rewriting_neighbors(
         view.select_range(name..name, cx);
         view.focus_handle(cx).focus(window, cx);
     });
-    for at in [value, one, two, three, empty, source.find("After").unwrap() - 1] {
+    for at in [
+        value,
+        one,
+        two,
+        three,
+        empty,
+        source.find("After").unwrap() - 1,
+    ] {
         context.update(|window, cx| window.press("tab", cx));
         context.run_until_parked();
         view.read_with(&context, |view, cx| {
             assert_eq!(view.selection(), Selection::caret(at));
-            assert_eq!(view.document().read(cx).encode().unwrap(), original.as_bytes());
+            assert_eq!(
+                view.document().read(cx).encode().unwrap(),
+                original.as_bytes()
+            );
         });
     }
-    view.update_in(&mut context, |view, _, cx| view.select_range(empty..empty, cx));
-    for at in [three, two, one, value, name, source.find("| **Name").unwrap() - 1] {
+    view.update_in(&mut context, |view, _, cx| {
+        view.select_range(empty..empty, cx)
+    });
+    for at in [
+        three,
+        two,
+        one,
+        value,
+        name,
+        source.find("| **Name").unwrap() - 1,
+    ] {
         context.update(|window, cx| window.press("shift-tab", cx));
         context.run_until_parked();
-        view.read_with(&context, |view, _| assert_eq!(view.selection(), Selection::caret(at)));
+        view.read_with(&context, |view, _| {
+            assert_eq!(view.selection(), Selection::caret(at))
+        });
     }
-    view.update_in(&mut context, |view, _, cx| view.select_range(empty..empty, cx));
+    view.update_in(&mut context, |view, _, cx| {
+        view.select_range(empty..empty, cx)
+    });
     context.update(|window, cx| window.input("Z", cx));
     context.run_until_parked();
     view.read_with(&context, |view, cx| {
-        assert_eq!(view.document().read(cx).encode().unwrap(), original.replacen("| three |  |", "| three | Z |", 1).as_bytes());
+        assert_eq!(
+            view.document().read(cx).encode().unwrap(),
+            original
+                .replacen("| three |  |", "| three | Z |", 1)
+                .as_bytes()
+        );
     });
     context.dispatch_action(gpui_kit::component::input::Undo);
     context.run_until_parked();
-    for (at, key) in [(one, "backspace"), (one + 3, "delete"), (two, "escape"), (name, "enter")] {
+    for (at, key) in [
+        (one, "backspace"),
+        (one + 3, "delete"),
+        (two, "escape"),
+        (name, "enter"),
+    ] {
         view.update_in(&mut context, |view, _, cx| view.select_range(at..at, cx));
         context.update(|window, cx| window.press(key, cx));
         context.run_until_parked();
         view.read_with(&context, |view, cx| {
-            assert_eq!(view.document().read(cx).encode().unwrap(), original.as_bytes());
+            assert_eq!(
+                view.document().read(cx).encode().unwrap(),
+                original.as_bytes()
+            );
             if matches!(key, "escape" | "enter") {
-                assert_eq!(view.selection(), Selection::caret(source.find("After").unwrap() - 1));
+                assert_eq!(
+                    view.selection(),
+                    Selection::caret(source.find("After").unwrap() - 1)
+                );
             }
         });
     }
-    view.update_in(&mut context, |view, _, cx| view.select_range(one..one + 3, cx));
+    view.update_in(&mut context, |view, _, cx| {
+        view.select_range(one..one + 3, cx)
+    });
     context.update(|window, cx| window.input("中🎉", cx));
     context.run_until_parked();
     let expected = original.replacen("one", "中🎉", 1);
     view.read_with(&context, |view, cx| {
-        assert_eq!(view.document().read(cx).encode().unwrap(), expected.as_bytes());
+        assert_eq!(
+            view.document().read(cx).encode().unwrap(),
+            expected.as_bytes()
+        );
     });
     let identity = view.read_with(&context, |view, _| view.document().entity_id());
     context.dispatch_action(crate::core::actions::ToggleDocumentPreview);
@@ -1417,14 +1469,18 @@ fn native_table_cells_navigate_exit_edit_and_save_without_rewriting_neighbors(
     view.read_with(&context, |view, cx| {
         assert_eq!(view.document().entity_id(), identity);
         assert_eq!(view.selection(), Selection::new(one, one + 3));
-        assert_eq!(view.document().read(cx).encode().unwrap(), original.as_bytes());
+        assert_eq!(
+            view.document().read(cx).encode().unwrap(),
+            original.as_bytes()
+        );
     });
     context.dispatch_action(gpui_kit::component::input::Redo);
     context.dispatch_action(crate::core::actions::EditorSave);
     loop {
         context.run_until_parked();
         if app.read_with(&context, |app, _| {
-            app.active_buffer().is_some_and(|file| !file.dirty && !file.saving)
+            app.active_buffer()
+                .is_some_and(|file| !file.dirty && !file.saving)
         }) {
             break;
         }
@@ -1445,27 +1501,45 @@ fn native_table_cells_navigate_exit_edit_and_save_without_rewriting_neighbors(
         std::thread::sleep(std::time::Duration::from_millis(5));
     }
     app.read_with(&context, |app, cx| {
-        let reopened = app.active_editor_input().unwrap().markdown().unwrap().read(cx);
-        assert_eq!(reopened.document().read(cx).encode().unwrap(), expected.as_bytes());
+        let reopened = app
+            .active_editor_input()
+            .unwrap()
+            .markdown()
+            .unwrap()
+            .read(cx);
+        assert_eq!(
+            reopened.document().read(cx).encode().unwrap(),
+            expected.as_bytes()
+        );
     });
 }
 
 #[test]
 fn table_cell_transactions_preserve_mixed_endings_and_restore_the_cell_selection() {
-    let original = "before  \r\n\n| a | b |\r\n| --- | --- |\n| e\u{301}🎉 | &amp; \\| |\r\n\n[ref]: target";
+    let original =
+        "before  \r\n\n| a | b |\r\n| --- | --- |\n| e\u{301}🎉 | &amp; \\| |\r\n\n[ref]: target";
     let source = original.replace("\r\n", "\n");
     let at = source.find("e\u{301}").unwrap();
     let mut document = MarkdownDocument::new(original.into(), TextFormat::default());
     let mut state = PresentationState::new(Selection::new(at, at + "e\u{301}🎉".len()));
     let range = state.selection().range();
-    document.command(&mut state, Command::Replace {
-        range,
-        text: "中".into(),
-        kind: EditKind::Typing,
-    });
-    assert_eq!(document.encode().unwrap(), original.replacen("e\u{301}🎉", "中", 1).as_bytes());
+    document.command(
+        &mut state,
+        Command::Replace {
+            range,
+            text: "中".into(),
+            kind: EditKind::Typing,
+        },
+    );
+    assert_eq!(
+        document.encode().unwrap(),
+        original.replacen("e\u{301}🎉", "中", 1).as_bytes()
+    );
     document.command(&mut state, Command::Undo);
-    assert_eq!(state.selection(), Selection::new(at, at + "e\u{301}🎉".len()));
+    assert_eq!(
+        state.selection(),
+        Selection::new(at, at + "e\u{301}🎉".len())
+    );
     assert_eq!(document.encode().unwrap(), original.as_bytes());
     document.command(&mut state, Command::Redo);
     assert_eq!(state.selection(), Selection::caret(at + "中".len()));
@@ -1487,12 +1561,15 @@ fn native_table_cell_escapes_wrapping_unicode_and_preedit_share_the_document_map
     std::fs::write(&path, &original).unwrap();
     let (app, mut context, _streams) = harness_with_tabs(cx, 1);
     context.update(|_, cx| cx.set_global(super::super::MarkdownWorkbench));
-    app.update_in(&mut context, |app, window, cx| app.open_file_in_editor(&path, window, cx));
+    app.update_in(&mut context, |app, window, cx| {
+        app.open_file_in_editor(&path, window, cx)
+    });
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
     let view = loop {
         context.run_until_parked();
         if let Some(view) = app.read_with(&context, |app, _| {
-            app.active_editor_input().and_then(|input| input.markdown().cloned())
+            app.active_editor_input()
+                .and_then(|input| input.markdown().cloned())
         }) {
             break view;
         }
@@ -1505,7 +1582,11 @@ fn native_table_cell_escapes_wrapping_unicode_and_preedit_share_the_document_map
         let at = original.find(token).unwrap() + usize::from(token == "x\\|y") + removed.len();
         context.update(|window, cx| {
             window.render_frame(cx);
-            let point = view.read(cx).range_to_bounds(&(at..at), cx).unwrap().center();
+            let point = view
+                .read(cx)
+                .range_to_bounds(&(at..at), cx)
+                .unwrap()
+                .center();
             window.pointer_down(point, MouseButton::Left, cx);
             window.pointer_up(point, MouseButton::Left, cx);
             window.press("backspace", cx);
@@ -1513,17 +1594,25 @@ fn native_table_cell_escapes_wrapping_unicode_and_preedit_share_the_document_map
         context.run_until_parked();
         let start = at - removed.len();
         view.read_with(&context, |view, cx| {
-            assert_eq!(view.document().read(cx).encode().unwrap(), format!("{}{}", &original[..start], &original[at..]).as_bytes());
+            assert_eq!(
+                view.document().read(cx).encode().unwrap(),
+                format!("{}{}", &original[..start], &original[at..]).as_bytes()
+            );
         });
         context.dispatch_action(gpui_kit::component::input::Undo);
         settle_live_geometry(&view, &mut context);
     }
     let insertion = original.find("wrapping").unwrap();
-    view.update_in(&mut context, |view, _, cx| view.select_range(insertion..insertion, cx));
+    view.update_in(&mut context, |view, _, cx| {
+        view.select_range(insertion..insertion, cx)
+    });
     context.update(|window, cx| window.input("|", cx));
     context.run_until_parked();
     view.read_with(&context, |view, cx| {
-        assert_eq!(view.document().read(cx).encode().unwrap(), original.replacen("wrapping", "\\|wrapping", 1).as_bytes());
+        assert_eq!(
+            view.document().read(cx).encode().unwrap(),
+            original.replacen("wrapping", "\\|wrapping", 1).as_bytes()
+        );
     });
     context.dispatch_action(gpui_kit::component::input::Undo);
     settle_live_geometry(&view, &mut context);
@@ -1535,42 +1624,79 @@ fn native_table_cell_escapes_wrapping_unicode_and_preedit_share_the_document_map
     context.update(|window, cx| window.press("backspace", cx));
     context.run_until_parked();
     view.read_with(&context, |view, cx| {
-        assert_eq!(view.document().read(cx).encode().unwrap(), original.replacen("e\u{301}", "", 1).as_bytes());
+        assert_eq!(
+            view.document().read(cx).encode().unwrap(),
+            original.replacen("e\u{301}", "", 1).as_bytes()
+        );
     });
     context.dispatch_action(gpui_kit::component::input::Undo);
     settle_live_geometry(&view, &mut context);
     let wrapped = original.find("wrapping").unwrap();
     let wrapped_end = wrapped + "wrapping words ".len() * 8;
     context.update(|window, cx| {
-        let first = view.read(cx).range_to_bounds(&(wrapped..wrapped), cx).unwrap();
-        let later = view.read(cx).range_to_bounds(&(wrapped_end..wrapped_end), cx).unwrap();
-        assert!(later.top() > first.top(), "long cell content wraps inside its own column");
-        let short_cell = view.read(cx).range_to_bounds(&(unicode..unicode), cx).unwrap();
+        let first = view
+            .read(cx)
+            .range_to_bounds(&(wrapped..wrapped), cx)
+            .unwrap();
+        let later = view
+            .read(cx)
+            .range_to_bounds(&(wrapped_end..wrapped_end), cx)
+            .unwrap();
+        assert!(
+            later.top() > first.top(),
+            "long cell content wraps inside its own column"
+        );
+        let short_cell = view
+            .read(cx)
+            .range_to_bounds(&(unicode..unicode), cx)
+            .unwrap();
         let lower_left = gpui_kit::point(short_cell.left(), later.center().y);
         window.pointer_down(lower_left, MouseButton::Left, cx);
         window.pointer_up(lower_left, MouseButton::Left, cx);
-        assert!(view.read(cx).selection().head() < wrapped, "a tall neighboring cell must not steal a click in this column");
+        assert!(
+            view.read(cx).selection().head() < wrapped,
+            "a tall neighboring cell must not steal a click in this column"
+        );
         window.render_frame(cx);
         window.render_frame(cx);
-        let later = view.read(cx).range_to_bounds(&(wrapped_end..wrapped_end), cx).unwrap();
-        let native = view.update(cx, |view, cx| view.character_index_for_point(later.center(), window, cx)).unwrap();
+        let later = view
+            .read(cx)
+            .range_to_bounds(&(wrapped_end..wrapped_end), cx)
+            .unwrap();
+        let native = view
+            .update(cx, |view, cx| {
+                view.character_index_for_point(later.center(), window, cx)
+            })
+            .unwrap();
         assert_eq!(native, original[..wrapped_end].encode_utf16().count());
         window.pointer_down(later.center(), MouseButton::Left, cx);
         window.pointer_up(later.center(), MouseButton::Left, cx);
         assert_eq!(view.read(cx).selection(), Selection::caret(wrapped_end));
-        let handler = ElementInputHandler::new(window.find("markdown-source").bounds(), view.clone());
+        let handler =
+            ElementInputHandler::new(window.find("markdown-source").bounds(), view.clone());
         let mut input = TestInput::new(handler, window);
         input.compose_text(None, "ni", Some(2..2), cx);
     });
-    context.executor().advance_clock(std::time::Duration::from_millis(100));
+    context
+        .executor()
+        .advance_clock(std::time::Duration::from_millis(100));
     context.run_until_parked();
     context.update(|window, cx| {
         window.render_frame(cx);
         window.render_frame(cx);
-        let marked = view.update(cx, |view, cx| view.marked_text_range(window, cx)).unwrap();
+        let marked = view
+            .update(cx, |view, cx| view.marked_text_range(window, cx))
+            .unwrap();
         let surface = window.find("markdown-source").bounds();
-        let candidate = view.update(cx, |view, cx| view.bounds_for_range(marked, surface, window, cx)).unwrap();
-        let caret = view.read(cx).range_to_bounds(&(wrapped_end + 2..wrapped_end + 2), cx).unwrap();
+        let candidate = view
+            .update(cx, |view, cx| {
+                view.bounds_for_range(marked, surface, window, cx)
+            })
+            .unwrap();
+        let caret = view
+            .read(cx)
+            .range_to_bounds(&(wrapped_end + 2..wrapped_end + 2), cx)
+            .unwrap();
         assert_eq!(candidate.top(), caret.top());
         let handler = ElementInputHandler::new(surface, view.clone());
         let mut input = TestInput::new(handler, window);
@@ -1579,24 +1705,43 @@ fn native_table_cell_escapes_wrapping_unicode_and_preedit_share_the_document_map
     });
     context.run_until_parked();
     view.read_with(&context, |view, cx| {
-        assert_eq!(view.document().read(cx).encode().unwrap(), format!("{}你好🎉{}", &original[..wrapped_end], &original[wrapped_end..]).as_bytes());
+        assert_eq!(
+            view.document().read(cx).encode().unwrap(),
+            format!(
+                "{}你好🎉{}",
+                &original[..wrapped_end],
+                &original[wrapped_end..]
+            )
+            .as_bytes()
+        );
     });
     context.dispatch_action(crate::core::actions::ToggleDocumentPreview);
     context.dispatch_action(gpui_kit::component::input::Undo);
     context.run_until_parked();
-    view.read_with(&context, |view, cx| assert_eq!(view.document().read(cx).encode().unwrap(), original.as_bytes()));
+    view.read_with(&context, |view, cx| {
+        assert_eq!(
+            view.document().read(cx).encode().unwrap(),
+            original.as_bytes()
+        )
+    });
     context.dispatch_action(crate::core::actions::ToggleDocumentPreview);
     settle_live_geometry(&view, &mut context);
-    view.update_in(&mut context, |view, _, cx| view.select_range(unicode..unicode, cx));
+    view.update_in(&mut context, |view, _, cx| {
+        view.select_range(unicode..unicode, cx)
+    });
     context.update(|window, cx| {
-        let handler = ElementInputHandler::new(window.find("markdown-source").bounds(), view.clone());
+        let handler =
+            ElementInputHandler::new(window.find("markdown-source").bounds(), view.clone());
         TestInput::new(handler, window).compose_text(None, "ni", Some(2..2), cx);
         window.press("escape", cx);
     });
     context.run_until_parked();
     view.read_with(&context, |view, cx| {
         assert!(!view.is_composing());
-        assert_eq!(view.document().read(cx).encode().unwrap(), original.as_bytes());
+        assert_eq!(
+            view.document().read(cx).encode().unwrap(),
+            original.as_bytes()
+        );
         assert_eq!(view.selection(), Selection::caret(unicode));
     });
 }
@@ -1613,19 +1758,26 @@ fn native_table_at_document_edges_transfers_focus_without_inserting_rows(
     std::fs::write(&path, original).unwrap();
     let (app, mut context, _streams) = harness_with_tabs(cx, 1);
     context.update(|_, cx| cx.set_global(super::super::MarkdownWorkbench));
-    app.update_in(&mut context, |app, window, cx| app.open_file_in_editor(&path, window, cx));
+    app.update_in(&mut context, |app, window, cx| {
+        app.open_file_in_editor(&path, window, cx)
+    });
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
     let view = loop {
         context.run_until_parked();
         if let Some(view) = app.read_with(&context, |app, _| {
-            app.active_editor_input().and_then(|input| input.markdown().cloned())
-        }) { break view; }
+            app.active_editor_input()
+                .and_then(|input| input.markdown().cloned())
+        }) {
+            break view;
+        }
         assert!(std::time::Instant::now() < deadline);
         std::thread::sleep(std::time::Duration::from_millis(5));
     };
     context.dispatch_action(crate::core::actions::ToggleDocumentPreview);
     loop {
-        context.executor().advance_clock(std::time::Duration::from_millis(100));
+        context
+            .executor()
+            .advance_clock(std::time::Duration::from_millis(100));
         context.run_until_parked();
         context.update(|window, cx| window.render_frame(cx));
         if view.read_with(&context, |view, cx| {
@@ -1634,7 +1786,9 @@ fn native_table_at_document_edges_transfers_focus_without_inserting_rows(
             let delimiter = original.find("---").unwrap();
             let hidden = view.range_to_bounds(&(delimiter..delimiter), cx).unwrap();
             a.top() == b.top() && b.left() > a.left() && hidden.top() == a.top()
-        }) { break; }
+        }) {
+            break;
+        }
         assert!(std::time::Instant::now() < deadline);
     }
     for (at, key) in [(2, "shift-tab"), (original.find("b |").unwrap(), "tab")] {
@@ -1646,7 +1800,10 @@ fn native_table_at_document_edges_transfers_focus_without_inserting_rows(
         context.run_until_parked();
         context.update(|window, cx| {
             assert!(!view.read(cx).focus_handle(cx).is_focused(window));
-            assert_eq!(view.read(cx).document().read(cx).encode().unwrap(), original.as_bytes());
+            assert_eq!(
+                view.read(cx).document().read(cx).encode().unwrap(),
+                original.as_bytes()
+            );
         });
     }
 }
