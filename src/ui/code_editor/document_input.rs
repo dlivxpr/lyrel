@@ -138,6 +138,9 @@ impl EditorInput {
                 });
             }
             Self::Markdown(input) => input.update(cx, |state, cx| {
+                // Explicit workbench/LSP ranges affect only their target, unlike
+                // native typing and clipboard actions with occurrence selections.
+                state.select_range(range.clone(), cx);
                 state.command(
                     Command::Replace {
                         range,
@@ -181,6 +184,9 @@ impl InputRead<'_> {
         self.code
             .map(|s| s.selected_range())
             .unwrap_or_else(|| self.source.unwrap().selection().range())
+    }
+    pub(crate) fn occurrence_range(&self) -> std::ops::Range<usize> {
+        self.source.map_or_else(|| self.selected_range(), SourcePresentation::occurrence_range)
     }
     pub(crate) fn focus_handle(&self, cx: &gpui_kit::App) -> gpui_kit::FocusHandle {
         self.code

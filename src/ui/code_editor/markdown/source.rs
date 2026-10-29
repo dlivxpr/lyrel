@@ -209,6 +209,9 @@ impl SourcePresentation {
     pub(crate) fn selection(&self) -> Selection {
         self.state.selection()
     }
+    pub(crate) fn occurrence_range(&self) -> Range<usize> {
+        self.extra_selections.last().copied().unwrap_or(self.state.selection).range()
+    }
     pub(crate) fn is_composing(&self) -> bool {
         self.state.composition.is_some()
     }

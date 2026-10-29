@@ -690,7 +690,11 @@ impl LyrelApp {
             return false;
         };
         let state = input.read(cx);
-        let selected = state.selected_range();
+        let selected = if matches!(command, Command::Next | Command::Skip) {
+            state.occurrence_range()
+        } else {
+            state.selected_range()
+        };
         let language = file.language();
         let tab_size = file.indent.size.max(1);
         if matches!(command, Command::Next | Command::All | Command::Skip) {
@@ -1050,6 +1054,51 @@ mod gpui_tests {
         app.read_with(&vcx, |app, cx| {
             assert_eq!(app.active_buffer().unwrap().input.read(cx).text().to_string(), "foo foo");
         });
+    }
+    #[gpui_kit::test]
+    fn markdown_explicit_commands_and_repeated_occurrences_keep_their_selection_scope(cx: &mut TestAppContext) {
+        use crate::ui::code_editor::MarkdownWorkbench;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("primary-command.md");
+        std::fs::write(&path, "foo foo foo").unwrap();
+        let (app, mut vcx, _streams) = harness_with_tabs(cx, 1);
+        vcx.update(|_, cx| cx.set_global(MarkdownWorkbench));
+        app.update_in(&mut vcx, |app, window, cx| app.open_file_in_editor(&path, window, cx));
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while !app.read_with(&vcx, |app, _| app.active_buffer().is_some()) {
+            vcx.run_until_parked();
+            assert!(std::time::Instant::now() < deadline, "Markdown open did not settle");
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        app.update_in(&mut vcx, |app, window, cx| {
+            let input = app.active_editor_input().unwrap();
+            input.set_selected_range(0..3, cx);
+            input.focus(window, cx);
+            assert!(app.editor_apply_command(Command::All, window, cx));
+            assert!(app.editor_apply_command(Command::Upper, window, cx));
+        });
+        vcx.run_until_parked();
+        app.read_with(&vcx, |app, cx| {
+            let input = app.active_editor_input().unwrap();
+            assert_eq!(input.read(cx).text().to_string(), "FOO foo foo");
+            assert_eq!(input.read(cx).selected_range(), 0..3);
+        });
+        vcx.dispatch_action(gpui_kit::component::input::Undo);
+        vcx.run_until_parked();
+        app.read_with(&vcx, |app, cx| assert_eq!(app.active_editor_input().unwrap().read(cx).text().to_string(), "foo foo foo"));
+        app.update_in(&mut vcx, |app, window, cx| {
+            let input = app.active_editor_input().unwrap();
+            input.set_selected_range(0..3, cx);
+            input.focus(window, cx);
+            assert!(app.editor_apply_command(Command::Next, window, cx));
+            assert!(app.editor_apply_command(Command::Next, window, cx));
+        });
+        vcx.simulate_keystrokes("x");
+        vcx.run_until_parked();
+        app.read_with(&vcx, |app, cx| assert_eq!(app.active_editor_input().unwrap().read(cx).text().to_string(), "x x x"));
+        vcx.dispatch_action(gpui_kit::component::input::Undo);
+        vcx.run_until_parked();
+        app.read_with(&vcx, |app, cx| assert_eq!(app.active_editor_input().unwrap().read(cx).text().to_string(), "foo foo foo"));
     }
     #[gpui_kit::test]
     fn markdown_source_commands_apply_and_undo_through_the_workbench(cx: &mut TestAppContext) {
