@@ -23,7 +23,7 @@ impl Cell {
     }
 }
 
-pub(super) fn project(source: &str, node: &Node, leaves: &mut Vec<Leaf>) -> bool {
+pub(super) fn project(source: &str, node: &Node, images: &std::sync::Arc<super::images::Definitions>, leaves: &mut Vec<Leaf>) -> bool {
     let Node::Table(table) = node else {
         return false;
     };
@@ -47,6 +47,7 @@ pub(super) fn project(source: &str, node: &Node, leaves: &mut Vec<Leaf>) -> bool
                 align: table.align[column],
             };
             let mut leaf = Leaf::new(range.clone(), Kind::TableCell(metadata));
+            leaf.image_definitions = images.clone();
             for child in cell.children().into_iter().flatten() {
                 Projection::inline(source, child, &mut leaf);
             }

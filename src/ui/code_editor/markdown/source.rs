@@ -2,13 +2,14 @@ use super::projection::{Kind, Projection};
 use super::*;
 use gpui_kit::TestSupportExt as _;
 use gpui_kit::base::text::editor_host::{
-    BlockNode, CodeBlock, FlowPosition, InlineNode, LeafGeometry, Paragraph, RenderContext,
+    BlockNode, CodeBlock, FlowPosition, LeafGeometry, Paragraph, RenderContext,
     collect_leaf_geometry,
 };
 use gpui_kit::component::{ActiveTheme as _, input as actions};
 use gpui_kit::prelude::*;
 use gpui_kit::*;
 use std::collections::HashMap;
+gpui_kit::actions!(markdown_images, [LoadImages]);
 
 actions!(markdown_links, [EditLinkDestination, FollowLink]);
 
@@ -51,6 +52,12 @@ impl SourcePresentation {
     ) -> Self {
         super::lists::init(cx);
         let observe = cx.subscribe(&document, |this, _, event: &DocumentEvent, cx| {
+            if matches!(event, DocumentEvent::ResourceContextChanged | DocumentEvent::ImagesChanged) {
+                this.refresh_images(false, cx);
+                this.geometry = None;
+                cx.notify();
+                return;
+            }
             if let DocumentEvent::Edited(transaction) = event {
                 this.state.rebase(transaction);
                 if transaction.origin != this.state.id {
@@ -176,10 +183,19 @@ impl SourcePresentation {
                     view.selection_notification = true;
                     view.rendered_revision = None;
                     view.geometry = None;
+                    view.refresh_images(false, cx);
                     cx.notify();
                 }
             });
         }));
+    }
+    fn refresh_images(&mut self, consent: bool, cx: &mut Context<Self>) {
+        if !self.live || self.projection.revision != self.document.read(cx).revision() { return; }
+        let mut urls: Vec<String> = self.projection.leaves.iter()
+            .flat_map(|leaf| leaf.image_urls()).map(str::to_owned).collect();
+        urls.sort();
+        urls.dedup();
+        self.document.update(cx, |document, cx| document.sync_images(urls, consent, cx));
     }
     // Display-boundary insertion has right affinity after a hidden opening
     // delimiter and left affinity before a hidden closing delimiter.
@@ -1169,8 +1185,7 @@ impl Render for SourcePresentation {
                     }
                     let mut paragraph = Paragraph::default().with_leaf_key(leaf.id);
                     let marked = self.state.marked_range();
-                    let marks = leaf.marks(marked.as_ref());
-                    paragraph.push(InlineNode::new(leaf.text.clone()).marks(marks));
+                    for node in leaf.inline_nodes(marked.as_ref()) { paragraph.push(node); }
                     let mut node = match leaf.kind {
                         Kind::Heading(level) if self.live => BlockNode::Heading {
                             level,
@@ -1230,7 +1245,17 @@ impl Render for SourcePresentation {
             self.rendered_revision = Some(revision);
         }
         let view = cx.entity().downgrade();
+        let ready: std::collections::HashMap<_, _> = self.document.read(cx).images.states.iter()
+            .filter_map(|(url, state)| if let super::images::State::Ready(image) = state {
+                Some((url.clone(), image.clone()))
+            } else { None }).collect();
         let context = RenderContext::from_app(cx).with_body_font_size(window.rem_size())
+            .with_image_source(move |uri| {
+                ready.get(uri.as_ref()).map_or_else(
+                    || ImageSource::Custom(std::sync::Arc::new(|_, _| None)),
+                    |image| ImageSource::Render(image.clone()),
+                )
+            })
             .on_link_click(move |target, event, _, cx| {
                 let _ = view.update(cx, |view, cx| {
                     view.dragging = false;
@@ -1339,6 +1364,31 @@ impl Render for SourcePresentation {
                         )
                     }),
             );
+        let image_status = if self.live {
+            use crate::ui::i18n::{t, L10nKey};
+            use gpui_kit::component::{button::{Button, ButtonVariants as _}, Sizable as _};
+            let document = self.document.read(cx);
+            let mut states: Vec<_> = document.images.states.iter().collect();
+            states.sort_by_key(|(url, _)| *url);
+            let has_images = !states.is_empty();
+            let rows = states.into_iter().map(|(url, state)| {
+                let (key, detail) = match state {
+                    super::images::State::Unloaded => (L10nKey::EditorImageUnloaded, None),
+                    super::images::State::Loading(_) => (L10nKey::EditorImageLoading, None),
+                    super::images::State::Ready(_) => (L10nKey::EditorImageLoaded, None),
+                    super::images::State::Failed(error) => (L10nKey::EditorImageFailed, Some(error)),
+                };
+                div().id(SharedString::from(format!("markdown-image:{url}")))
+                    .role(Role::Status).test_support().aria_label(t(key))
+                    .text_xs().truncate().child(format!("{} · {}{}", t(key), url,
+                        detail.map_or(String::new(), |error| format!(" · {error}"))))
+            }).collect::<Vec<_>>();
+            div().v_flex().flex_none().when(has_images, |bar| bar.px_3().py_1().gap_1()
+                .child(Button::new("markdown-load-images").ghost().small()
+                    .label(t(L10nKey::EditorLoadImages))
+                    .on_click(cx.listener(|view, _, _, cx| view.refresh_images(true, cx))))
+                .children(rows)).into_any_element()
+        } else { div().into_any_element() };
         let key_context =
             KeyContext::parse("Input mode=editor Markdown").expect("static editor key context");
         let root =
@@ -1397,6 +1447,7 @@ impl Render for SourcePresentation {
                         cx.stop_propagation();
                     }
                 }))
+                .on_action(cx.listener(|view, _: &LoadImages, _, cx| view.refresh_images(true, cx)))
                 .on_action(cx.listener(|this, _: &EditLinkDestination, window, cx| {
                     this.edit_link_destination(window, cx);
                 }))
@@ -1631,6 +1682,7 @@ impl Render for SourcePresentation {
                         cx.propagate();
                     }
                 }))
+                .child(image_status)
                 .when(self.live && self.projection.links.at(self.state.selection.head()).is_some(), |root| {
                     use gpui_kit::component::button::{Button, ButtonVariants as _};
                     use gpui_kit::component::Sizable as _;

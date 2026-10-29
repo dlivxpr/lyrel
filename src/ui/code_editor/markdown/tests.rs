@@ -2183,3 +2183,275 @@ fn native_links_edit_labels_and_reference_destinations_in_shared_history(
         assert_eq!(view.document().read(cx).encode().unwrap(), edited.as_bytes());
     });
 }
+
+#[gpui_kit::test]
+fn native_image_atoms_cross_one_boundary_and_source_edits_share_undo(
+    cx: &mut gpui_kit::TestAppContext,
+) {
+    use crate::ui::app::test_window::harness_with_tabs;
+    use gpui_kit::Focusable as _;
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("images.md");
+    let source = "before ![图](missing.png) after\n\n![引用][picture]\n\n[picture]: other.png\n";
+    std::fs::write(&path, source).unwrap();
+    let (app, mut context, _streams) = harness_with_tabs(cx, 1);
+    context.update(|_, cx| cx.set_global(super::super::MarkdownWorkbench));
+    app.update_in(&mut context, |app, window, cx| app.open_file_in_editor(&path, window, cx));
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    let view = loop {
+        context.run_until_parked();
+        if let Some(view) = app.read_with(&context, |app, _| {
+            app.active_editor_input().and_then(|input| input.markdown().cloned())
+        }) { break view; }
+        assert!(std::time::Instant::now() < deadline);
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    };
+    context.dispatch_action(crate::core::actions::ToggleDocumentPreview);
+    settle_live_geometry(&view, &mut context);
+    let start = source.find("![图]").unwrap();
+    let end = source.find(" after").unwrap();
+    view.update_in(&mut context, |view, window, cx| {
+        view.select_range(start..start, cx);
+        view.focus_handle(cx).focus(window, cx);
+    });
+    context.update(|window, cx| window.press("right", cx));
+    context.run_until_parked();
+    view.read_with(&context, |view, _| assert_eq!(view.selection().range(), end..end));
+    view.update_in(&mut context, |view, _, cx| view.select_range(start + "![图](".len()..end - 1, cx));
+    context.update(|window, cx| window.input("new.png", cx));
+    context.run_until_parked();
+    view.read_with(&context, |view, cx| {
+        assert_eq!(view.document().read(cx).source().to_string(), source.replacen("missing.png", "new.png", 1));
+    });
+    context.dispatch_action(gpui_kit::component::input::Undo);
+    context.run_until_parked();
+    view.read_with(&context, |view, cx| assert_eq!(view.document().read(cx).source().to_string(), source));
+    let reference = source.find("![引用]").unwrap();
+    let reference_end = source.find("\n\n[picture]").unwrap();
+    view.update_in(&mut context, |view, _, cx| view.select_range(reference..reference, cx));
+    settle_live_geometry(&view, &mut context);
+    context.update(|window, cx| window.press("right", cx));
+    context.run_until_parked();
+    view.read_with(&context, |view, _| assert_eq!(view.selection().range(), reference_end..reference_end));
+}
+
+#[gpui_kit::test]
+fn opening_native_images_never_contacts_http_until_loading_intent(
+    cx: &mut gpui_kit::TestAppContext,
+) {
+    use crate::ui::app::test_window::harness_with_tabs;
+    use std::io::{Read as _, Write as _};
+    use std::sync::{Arc, atomic::{AtomicUsize, Ordering}};
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    listener.set_nonblocking(true).unwrap();
+    let address = listener.local_addr().unwrap();
+    let requests = Arc::new(AtomicUsize::new(0));
+    let counted = requests.clone();
+    let (stop, stopping) = std::sync::mpsc::channel();
+    let server = std::thread::spawn(move || {
+        while matches!(stopping.try_recv(), Err(std::sync::mpsc::TryRecvError::Empty)) {
+            if let Ok((mut stream, _)) = listener.accept() {
+                counted.fetch_add(1, Ordering::SeqCst);
+                stream.set_read_timeout(Some(std::time::Duration::from_secs(2))).unwrap();
+                let mut request = [0; 4096];
+                let _ = stream.read(&mut request);
+                stream.write_all(b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n").unwrap();
+            } else { std::thread::sleep(std::time::Duration::from_millis(2)); }
+        }
+    });
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("privacy.md");
+    let url = format!("http://{address}/private.png");
+    std::fs::write(directory.path().join("vector.svg"), format!(r#"<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16"><image href="{url}" width="16" height="16"/></svg>"#)).unwrap();
+    let source = format!("before ![private]({url}) ![nested](vector.svg) after");
+    std::fs::write(&path, &source).unwrap();
+    let (app, mut context, _streams) = harness_with_tabs(cx, 1);
+    context.update(|_, cx| {
+        cx.set_global(super::super::MarkdownWorkbench);
+        cx.set_http_client(Arc::new(reqwest_client::ReqwestClient::new()));
+    });
+    app.update_in(&mut context, |app, window, cx| app.open_file_in_editor(&path, window, cx));
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    let view = loop {
+        context.run_until_parked();
+        if let Some(view) = app.read_with(&context, |app, _| app.active_editor_input().and_then(|input| input.markdown().cloned())) { break view; }
+        assert!(std::time::Instant::now() < deadline);
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    };
+    context.dispatch_action(crate::core::actions::ToggleDocumentPreview);
+    settle_live_geometry(&view, &mut context);
+    let status_id = format!("markdown-image:{url}");
+    context.update(|window, cx| {
+        window.render_frame(cx);
+        assert_eq!(window.find(status_id.as_str()).label(), Some(crate::ui::i18n::t(crate::ui::i18n::L10nKey::EditorImageUnloaded).as_ref()));
+    });
+    loop {
+        context.run_until_parked();
+        if context.update(|window, cx| {
+            window.render_frame(cx);
+            window.find("markdown-image:vector.svg").label() == Some(crate::ui::i18n::t(crate::ui::i18n::L10nKey::EditorImageFailed).as_ref())
+        }) { break; }
+        assert!(std::time::Instant::now() < deadline);
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    assert_eq!(requests.load(Ordering::SeqCst), 0, "render, prefetch and size discovery must not request images");
+    let before = view.read_with(&context, |view, cx| view.range_to_bounds(&(source.len()..source.len()), cx).expect("caret geometry before loading"));
+    context.update(|window, cx| window.click("markdown-load-images", cx));
+    loop {
+        context.run_until_parked();
+        let failed = context.update(|window, cx| {
+            window.render_frame(cx);
+            window.find(status_id.as_str()).label().is_some_and(|label| label.starts_with(crate::ui::i18n::t(crate::ui::i18n::L10nKey::EditorImageFailed).as_ref()))
+        });
+        if failed { break; }
+        assert!(std::time::Instant::now() < deadline);
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    assert_eq!(requests.load(Ordering::SeqCst), 1);
+    view.read_with(&context, |view, cx| {
+        assert_eq!(view.document().read(cx).source().to_string(), source);
+        assert_eq!(view.range_to_bounds(&(source.len()..source.len()), cx).expect("caret geometry after loading"), before);
+    });
+    stop.send(()).unwrap();
+    server.join().unwrap();
+}
+
+#[gpui_kit::test]
+fn native_document_images_read_owning_host_and_reject_old_link_results(
+    cx: &mut gpui_kit::TestAppContext,
+) {
+    use crate::ui::app::test_window::harness_with_tabs;
+    use crate::ui::code_editor::test_host::FileHost;
+    use gpui_kit::Focusable as _;
+    use std::sync::atomic::Ordering;
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("owned-images.md");
+    let old = directory.path().join("old.png");
+    let new = directory.path().join("new.png");
+    image::RgbaImage::from_pixel(3, 2, image::Rgba([255, 0, 0, 255])).save(&old).unwrap();
+    image::RgbaImage::from_pixel(2, 3, image::Rgba([0, 255, 0, 255])).save(&new).unwrap();
+    let source = "before ![owned](old.png) after";
+    std::fs::write(&path, source).unwrap();
+    let host = FileHost::new(lyrel_core::host::HostId(114));
+    let (app, mut context, _streams) = harness_with_tabs(cx, 1);
+    context.update(|_, cx| cx.set_global(super::super::MarkdownWorkbench));
+    app.update_in(&mut context, |app, window, cx| app.editor_open_on_host(host.clone(), &path, window, cx));
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    let view = loop {
+        context.run_until_parked();
+        if let Some(view) = app.read_with(&context, |app, _| app.active_editor_input().and_then(|input| input.markdown().cloned())) { break view; }
+        assert!(std::time::Instant::now() < deadline);
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    };
+    let release = host.pause_next_read();
+    context.dispatch_action(crate::core::actions::ToggleDocumentPreview);
+    loop {
+        context.run_until_parked();
+        if host.entered.load(Ordering::SeqCst) { break; }
+        assert!(std::time::Instant::now() < deadline);
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    context.update(|window, cx| {
+        window.render_frame(cx);
+        assert_eq!(window.find("markdown-image:old.png").label(), Some(crate::ui::i18n::t(crate::ui::i18n::L10nKey::EditorImageLoading).as_ref()));
+    });
+    let from = source.find("old.png").unwrap();
+    view.update_in(&mut context, |view, window, cx| {
+        view.select_range(from..from + 7, cx);
+        view.focus_handle(cx).focus(window, cx);
+    });
+    context.update(|window, cx| window.input("new.png", cx));
+    loop {
+        context.run_until_parked();
+        let loaded = context.update(|window, cx| {
+            window.render_frame(cx);
+            window.try_find("markdown-image:new.png").is_some_and(|status| status.label() == Some(crate::ui::i18n::t(crate::ui::i18n::L10nKey::EditorImageLoaded).as_ref()))
+        });
+        if loaded { break; }
+        assert!(std::time::Instant::now() < deadline);
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    let moved_directory = directory.path().join("renamed");
+    std::fs::create_dir(&moved_directory).unwrap();
+    let moved = moved_directory.join("owned-images.md");
+    std::fs::rename(&path, &moved).unwrap();
+    app.update_in(&mut context, |app, _, cx| {
+        app.editor_path_moved(lyrel_core::host::HostId(114), &path, &moved, cx);
+    });
+    loop {
+        context.run_until_parked();
+        if context.update(|window, cx| {
+            window.render_frame(cx);
+            window.find("markdown-image:new.png").label() == Some(crate::ui::i18n::t(crate::ui::i18n::L10nKey::EditorImageFailed).as_ref())
+        }) { break; }
+        assert!(std::time::Instant::now() < deadline);
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    release.send(()).unwrap();
+    settle_live_geometry(&view, &mut context);
+    context.update(|window, cx| {
+        window.render_frame(cx);
+        assert!(window.try_find("markdown-image:old.png").is_none());
+        assert_eq!(window.find("markdown-image:new.png").label(), Some(crate::ui::i18n::t(crate::ui::i18n::L10nKey::EditorImageFailed).as_ref()));
+    });
+    view.read_with(&context, |view, cx| assert_eq!(view.document().read(cx).source().to_string(), source.replace("old.png", "new.png")));
+    assert_eq!(std::fs::read(&old).unwrap()[..8], *b"\x89PNG\r\n\x1a\n");
+    assert!(new.exists());
+}
+
+#[gpui_kit::test]
+fn local_image_references_follow_document_rename_without_moving_assets(
+    cx: &mut gpui_kit::TestAppContext,
+) {
+    use crate::ui::app::test_window::harness_with_tabs;
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("local-images.md");
+    let asset = directory.path().join("existing.png");
+    image::RgbaImage::from_pixel(2, 2, image::Rgba([0, 0, 255, 255])).save(&asset).unwrap();
+    let source = "| Picture |\n| --- |\n| ![existing][image] |\n\n[image]: existing.png\n";
+    std::fs::write(&path, source).unwrap();
+    let destination = directory.path().join("moved");
+    std::fs::create_dir(&destination).unwrap();
+    let moved = destination.join("renamed.md");
+    let (app, mut context, _streams) = harness_with_tabs(cx, 1);
+    context.update(|_, cx| cx.set_global(super::super::MarkdownWorkbench));
+    app.update_in(&mut context, |app, window, cx| app.open_file_in_editor(&path, window, cx));
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    let view = loop {
+        context.run_until_parked();
+        if let Some(view) = app.read_with(&context, |app, _| app.active_editor_input().and_then(|input| input.markdown().cloned())) { break view; }
+        assert!(std::time::Instant::now() < deadline);
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    };
+    context.dispatch_action(crate::core::actions::ToggleDocumentPreview);
+    loop {
+        context.run_until_parked();
+        if context.update(|window, cx| {
+            window.render_frame(cx);
+            window.try_find("markdown-image:existing.png").is_some_and(|status| status.label() == Some(crate::ui::i18n::t(crate::ui::i18n::L10nKey::EditorImageLoaded).as_ref()))
+        }) { break; }
+        assert!(std::time::Instant::now() < deadline);
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    std::fs::rename(&path, &moved).unwrap();
+    app.update_in(&mut context, |app, _, cx| {
+        let host = app.active_buffer().unwrap().host.id();
+        app.editor_path_moved(host, &path, &moved, cx);
+    });
+    loop {
+        context.run_until_parked();
+        if context.update(|window, cx| {
+            window.render_frame(cx);
+            window.find("markdown-image:existing.png").label() == Some(crate::ui::i18n::t(crate::ui::i18n::L10nKey::EditorImageFailed).as_ref())
+        }) { break; }
+        assert!(std::time::Instant::now() < deadline);
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    view.read_with(&context, |view, cx| {
+        assert_eq!(view.document().read(cx).source().to_string(), source);
+        assert_eq!(view.document().read(cx).revision(), 0);
+    });
+    assert!(asset.exists(), "existing linked images are never moved with the document");
+    assert!(!destination.join("existing.png").exists());
+    assert_eq!(std::fs::read_to_string(moved).unwrap(), source);
+}

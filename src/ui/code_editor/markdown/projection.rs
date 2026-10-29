@@ -40,6 +40,7 @@ struct Segment {
     delimiter: Option<usize>,
     raw: Option<String>,
     verbatim: bool,
+    image: Option<super::images::Image>,
 }
 #[derive(Clone)]
 pub(super) struct Leaf {
@@ -54,6 +55,7 @@ pub(super) struct Leaf {
     container: Option<Range<usize>>,
     spans: Vec<InlineSpan>,
     style: InlineStyle,
+    pub(super) image_definitions: std::sync::Arc<super::images::Definitions>,
 }
 impl Leaf {
     pub(super) fn new(range: Range<usize>, kind: Kind) -> Self {
@@ -69,6 +71,7 @@ impl Leaf {
             container: None,
             spans: Vec::new(),
             style: InlineStyle::default(),
+            image_definitions: Default::default(),
         }
     }
     pub(super) fn empty_insertion(&mut self, at: usize) {
@@ -112,16 +115,19 @@ impl Leaf {
             delimiter,
             raw,
             verbatim: false,
+            image: None,
         });
     }
     fn rebuild(&mut self, marked: Option<&Range<usize>>) {
         self.text.clear();
         for segment in &mut self.segments {
             let start = self.text.len();
-            segment.verbatim = segment.raw.is_some()
-                && marked.is_some_and(|range| {
-                    range.start < segment.source.end && range.end > segment.source.start
-                });
+            if segment.image.is_none() {
+                segment.verbatim = segment.raw.is_some()
+                    && marked.is_some_and(|range| {
+                        range.start < segment.source.end && range.end > segment.source.start
+                    });
+            }
             if segment.delimiter.is_none_or(|ix| self.spans[ix].revealed) {
                 self.text.push_str(if segment.verbatim {
                     segment.raw.as_deref().unwrap()
@@ -153,8 +159,19 @@ impl Leaf {
             changed |= revealed != span.revealed;
             span.revealed = revealed;
         }
+        for segment in &mut self.segments {
+            if segment.image.is_some() {
+                let revealed = std::iter::once(&selection).chain(extra).any(|selection| {
+                    let range = selection.range();
+                    if range.is_empty() { segment.source.start < range.start && range.start < segment.source.end }
+                    else { range.start < segment.source.end && range.end > segment.source.start }
+                }) || marked.is_some_and(|range| range.start < segment.source.end && range.end > segment.source.start);
+                changed |= segment.verbatim != revealed;
+                segment.verbatim = revealed;
+            }
+        }
         changed |= self.segments.iter().any(|segment| {
-            segment.verbatim
+            segment.image.is_none() && segment.verbatim
                 != (segment.raw.is_some()
                     && marked.is_some_and(|range| {
                         range.start < segment.source.end && range.end > segment.source.start
@@ -218,6 +235,33 @@ impl Leaf {
             }
         }
         marks
+    }
+    pub fn image_urls(&self) -> impl Iterator<Item = &str> {
+        self.segments.iter().filter_map(|segment| segment.image.as_ref().map(|image| image.url.as_str()))
+    }
+    pub fn inline_nodes(&self, marked: Option<&Range<usize>>) -> Vec<gpui_kit::base::text::editor_host::InlineNode> {
+        use gpui_kit::base::text::editor_host::{InlineNode, ImageNode};
+        let marks = self.marks(marked);
+        self.segments.iter().filter(|segment| !segment.display.is_empty()).map(|segment| {
+            if let Some(image) = segment.image.as_ref().filter(|_| !segment.verbatim) {
+                let mut node = ImageNode::default();
+                node.url = image.url.clone().into();
+                node.alt = Some(image.alt.clone().into());
+                node.title = image.title.clone().map(Into::into);
+                // Reserve geometry before loading, so completion cannot move the
+                // caret or scroll anchor. Images fit inside this native atom.
+                node.width = Some(gpui_kit::rems(12.).into());
+                node.height = Some(gpui_kit::rems(8.).into());
+                InlineNode::image(node)
+            } else {
+                let range = &segment.display;
+                InlineNode::new(self.text[range.clone()].to_owned()).marks(marks.iter().filter_map(|(mark_range, mark)| {
+                    let start = range.start.max(mark_range.start);
+                    let end = range.end.min(mark_range.end);
+                    (start < end).then(|| (start - range.start..end - range.start, mark.clone()))
+                }).collect())
+            }
+        }).collect()
     }
     fn same_inline(&self, other: &Self) -> bool {
         self.content == other.content
@@ -348,6 +392,7 @@ impl Projection {
                 leaf.raw(source, 0..source.len());
                 leaves.push(leaf);
             } else if let Ok(root) = markdown::to_mdast(source, &options) {
+                let image_definitions = std::sync::Arc::new(super::images::definitions(&root));
                 links = super::links::Index::from_ast(source, &root);
                 let mut cursor = 0;
                 for node in root.children().into_iter().flatten() {
@@ -358,17 +403,18 @@ impl Projection {
                     if matches!(node, Node::List(_) | Node::Blockquote(_)) {
                         let start = source[..range.start].rfind('\n').map_or(0, |ix| ix + 1);
                         Self::gap(source, cursor..start, &mut leaves);
-                        Self::container(source, node, 0, 0, range.start, start..range.end, &mut leaves);
+                        Self::container(source, node, 0, 0, range.start, start..range.end, &image_definitions, &mut leaves);
                         cursor = range.end;
                         continue;
                     }
                     Self::gap(source, cursor..range.start, &mut leaves);
-                    if super::tables::project(source, node, &mut leaves) {
+                    if super::tables::project(source, node, &image_definitions, &mut leaves) {
                         cursor = range.end;
                         continue;
                     }
                     let kind = super::regions::classify(node, &source[range.clone()]);
                     let mut leaf = Leaf::new(range.clone(), kind);
+                    leaf.image_definitions = image_definitions.clone();
                     if matches!(kind, Kind::Prose | Kind::Heading(_)) {
                         if let Some(children) = node.children() {
                             for child in children {
@@ -413,7 +459,7 @@ impl Projection {
             links,
         }
     }
-    fn container(source: &str, node: &Node, depth: usize, quotes: usize, owner: usize, container: Range<usize>, leaves: &mut Vec<Leaf>) {
+    fn container(source: &str, node: &Node, depth: usize, quotes: usize, owner: usize, container: Range<usize>, images: &std::sync::Arc<super::images::Definitions>, leaves: &mut Vec<Leaf>) {
         let Some(position) = node.position() else { return; };
         let range = position.start.offset..position.end.offset;
         match node {
@@ -423,7 +469,7 @@ impl Projection {
                 let owner = if matches!(node, Node::ListItem(_)) || (depth == 0 && matches!(node, Node::Blockquote(_))) { range.start } else { owner };
                 if let Some(children) = node.children().filter(|children| !children.is_empty()) {
                     for child in children {
-                        Self::container(source, child, depth, quotes, owner, container.clone(), leaves);
+                        Self::container(source, child, depth, quotes, owner, container.clone(), images, leaves);
                     }
                 } else {
                     let start = source[..range.start].rfind('\n').map_or(0, |ix| ix + 1);
@@ -446,6 +492,7 @@ impl Projection {
                     Self::gap(source, previous.range.end..start, leaves);
                 }
                 let mut leaf = Leaf::new(start..range.end, kind);
+                leaf.image_definitions = images.clone();
                 leaf.container = Some(container);
                 if prose {
                     leaf.prefix(source, start..range.start);
@@ -491,6 +538,11 @@ impl Projection {
             return;
         };
         let range = position.start.offset..position.end.offset;
+        if let Some(image) = super::images::image(node, &leaf.image_definitions) {
+            leaf.push_normalized(range.clone(), "\u{FFFC}", &source[range]);
+            leaf.segments.last_mut().unwrap().image = Some(image);
+            return;
+        }
         match node {
             Node::Break(_) => leaf.push_normalized(range.clone(), "\n", &source[range]),
             Node::Text(_) => {
