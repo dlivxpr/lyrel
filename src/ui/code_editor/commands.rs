@@ -75,7 +75,12 @@ pub(super) fn install(mut root: Stateful<Div>, cx: &mut Context<LyrelApp>) -> St
         TransformToUppercase => Upper, TransformToLowercase => Lower, TransformToTitleCase => Title,
         TrimTrailingWhitespace => Trim, JoinLines => Join, RemoveSurroundingBrackets => Unwrap,
     );
-    root
+    root.on_action(cx.listener(|app, _: &gpui_kit::component::input::Search, window, cx| {
+        if !app.editor_markdown_search(false, window, cx) { cx.propagate(); }
+    }))
+    .on_action(cx.listener(|app, _: &gpui_kit::component::input::Replace, window, cx| {
+        if !app.editor_markdown_search(true, window, cx) { cx.propagate(); }
+    }))
 }
 
 struct Edit {
@@ -681,7 +686,7 @@ impl LyrelApp {
         let Some(file) = self.active_buffer() else {
             return false;
         };
-        let Some(input) = file.input.code().cloned() else {
+        let Some(input) = self.active_editor_input() else {
             return false;
         };
         let state = input.read(cx);
@@ -700,7 +705,7 @@ impl LyrelApp {
                 return true;
             }
             if select_word {
-                input.update(cx, |state, cx| state.set_selected_range(selected, cx));
+                input.set_selected_range(selected, cx);
                 return true;
             }
             let needle = text.slice(selected.clone()).to_string();
@@ -711,27 +716,23 @@ impl LyrelApp {
                 .collect();
             if matches!(command, Command::All) {
                 if let Some(first) = matches.first().cloned() {
-                    input.update(cx, |state, cx| {
-                        state.set_selected_range(first, cx);
-                        for range in matches.drain(1..) {
-                            state.add_selection(range, cx);
-                        }
-                    });
+                    input.set_selected_range(first, cx);
+                    for range in matches.drain(1..) {
+                        input.add_selection(range, cx);
+                    }
                 }
             } else {
                 let next = matches
                     .into_iter()
                     .find(|range| range.start >= selected.end)
                     .or_else(|| source.find(&needle).map(|at| at..at + needle.len()));
-                input.update(cx, |state, cx| {
-                    if let Some(next) = next {
-                        if matches!(command, Command::Skip) {
-                            state.set_selected_range(next, cx);
-                        } else {
-                            state.add_selection(next, cx);
-                        }
+                if let Some(next) = next {
+                    if matches!(command, Command::Skip) {
+                        input.set_selected_range(next, cx);
+                    } else {
+                        input.add_selection(next, cx);
                     }
-                });
+                }
             }
             return true;
         }
@@ -741,12 +742,12 @@ impl LyrelApp {
             if !selected.is_empty() && selected == range && range.end < text.len() {
                 range.end = whole_lines(&text, &(range.end..range.end)).end;
             }
-            input.update(cx, |state, cx| state.set_selected_range(range, cx));
+            input.set_selected_range(range, cx);
             return true;
         }
         if matches!(command, Command::Bracket) {
             if let Some(offset) = matching_bracket(&text, state.cursor(), language) {
-                input.update(cx, |state, cx| state.set_selected_range(offset..offset, cx));
+                input.set_selected_range(offset..offset, cx);
             }
             return true;
         }
@@ -758,13 +759,17 @@ impl LyrelApp {
         let Some(edit) = plan(&text, selected, language, tab_size, command) else {
             return true;
         };
-        input.update(cx, |state, cx| {
-            // The user-approved migration exception applies IDE commands only
-            // to the active selection. Plain typing remains the framework's.
-            state.set_selected_range(edit.range, cx);
-            state.replace(edit.replacement, window, cx);
-            state.set_selected_range(edit.selection, cx);
-        });
+        // IDE commands deliberately affect the active selection only; typing
+        // continues to honor all occurrence selections in either presentation.
+        if let Some(code) = input.code() {
+            code.update(cx, |state, cx| {
+                state.set_selected_range(edit.range, cx);
+                state.replace(edit.replacement, window, cx);
+            });
+        } else {
+            input.replace(edit.range, &edit.replacement, window, cx);
+        }
+        input.set_selected_range(edit.selection, cx);
         true
     }
 }
@@ -992,5 +997,121 @@ mod gpui_tests {
             input.read_with(&vcx, |state, _| state.text().to_string()),
             "two\none\nthree"
         );
+    }
+    #[gpui_kit::test]
+    fn markdown_workbench_shortcuts_keep_commands_selection_and_shared_undo(cx: &mut TestAppContext) {
+        use crate::ui::code_editor::document_input::MarkdownWorkbench;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("commands.md");
+        std::fs::write(&path, "one\ntwo\nthree").unwrap();
+        let (app, mut vcx, _streams) = harness_with_tabs(cx, 1);
+        vcx.update(|_, cx| cx.set_global(MarkdownWorkbench));
+        app.update_in(&mut vcx, |app, window, cx| app.open_file_in_editor(&path, window, cx));
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while !app.read_with(&vcx, |app, _| app.active_buffer().is_some()) {
+            vcx.run_until_parked();
+            assert!(std::time::Instant::now() < deadline, "Markdown open did not settle");
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        app.update_in(&mut vcx, |app, window, cx| {
+            let input = app.active_buffer().unwrap().input.clone();
+            input.set_selected_range(5..5, cx);
+            input.focus(window, cx);
+        });
+        vcx.simulate_keystrokes("secondary-/");
+        vcx.run_until_parked();
+        app.read_with(&vcx, |app, cx| {
+            assert_eq!(app.active_buffer().unwrap().input.read(cx).text().to_string(), "one\n<!-- two -->\nthree");
+            assert!(app.active_buffer().unwrap().dirty);
+        });
+        vcx.simulate_keystrokes("secondary-z");
+        vcx.run_until_parked();
+        vcx.simulate_keystrokes("alt-up");
+        vcx.run_until_parked();
+        app.read_with(&vcx, |app, cx| {
+            assert_eq!(app.active_buffer().unwrap().input.read(cx).text().to_string(), "two\none\nthree");
+        });
+        vcx.simulate_keystrokes("secondary-a");
+        vcx.simulate_keystrokes("f o o space f o o");
+        vcx.run_until_parked();
+        app.update_in(&mut vcx, |app, window, cx| {
+            let input = app.active_editor_input().unwrap();
+            input.set_selected_range(0..3, cx);
+            input.focus(window, cx);
+        });
+        vcx.simulate_keystrokes("secondary-shift-l");
+        vcx.simulate_keystrokes("x");
+        vcx.run_until_parked();
+        app.read_with(&vcx, |app, cx| {
+            assert_eq!(app.active_buffer().unwrap().input.read(cx).text().to_string(), "x x");
+        });
+        vcx.simulate_keystrokes("secondary-z");
+        vcx.run_until_parked();
+        app.read_with(&vcx, |app, cx| {
+            assert_eq!(app.active_buffer().unwrap().input.read(cx).text().to_string(), "foo foo");
+        });
+    }
+    #[gpui_kit::test]
+    fn markdown_source_commands_apply_and_undo_through_the_workbench(cx: &mut TestAppContext) {
+        use crate::ui::code_editor::MarkdownWorkbench;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("inventory.md");
+        std::fs::write(&path, "initial").unwrap();
+        let (app, mut vcx, _streams) = harness_with_tabs(cx, 1);
+        vcx.update(|_, cx| cx.set_global(MarkdownWorkbench));
+        app.update_in(&mut vcx, |app, window, cx| app.open_file_in_editor(&path, window, cx));
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while !app.read_with(&vcx, |app, _| app.active_buffer().is_some()) {
+            vcx.run_until_parked();
+            assert!(std::time::Instant::now() < deadline, "Markdown open did not settle");
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        for (command, before, selection, expected) in [
+            (Command::Comment, "中", 0..3, "<!-- 中 -->"),
+            (Command::BlockComment, "中", 0..3, "<!-- 中 -->"),
+            (Command::MoveUp, "a\n中", 2..5, "中\na"),
+            (Command::MoveDown, "a\n中", 0..1, "中\na"),
+            (Command::CopyUp, "中", 0..3, "中\n中"),
+            (Command::CopyDown, "中", 0..3, "中\n中"),
+            (Command::Delete, "a\n中", 2..5, "a"),
+            (Command::InsertAbove, "a\nb", 2..2, "a\n\nb"),
+            (Command::InsertBelow, "a\nb", 2..2, "a\nb\n"),
+            (Command::Upper, "aBc", 0..3, "ABC"),
+            (Command::Lower, "aBc", 0..3, "abc"),
+            (Command::Title, "hello world", 0..11, "Hello World"),
+            (Command::Trim, "a  \nb\t", 0..0, "a\nb"),
+            (Command::Join, "a\n b", 0..0, "a b"),
+            (Command::Unwrap, "(中)", 1..4, "中"),
+        ] {
+            app.update_in(&mut vcx, |app, window, cx| {
+                let input = app.active_editor_input().unwrap();
+                let len = input.read(cx).text().len();
+                input.replace(0..len, before, window, cx);
+                input.set_selected_range(selection, cx);
+                input.focus(window, cx);
+                assert!(app.editor_apply_command(command, window, cx));
+            });
+            vcx.run_until_parked();
+            app.read_with(&vcx, |app, cx| assert_eq!(app.active_buffer().unwrap().input.read(cx).text().to_string(), expected));
+            vcx.dispatch_action(gpui_kit::component::input::Undo);
+            vcx.run_until_parked();
+            app.read_with(&vcx, |app, cx| assert_eq!(app.active_buffer().unwrap().input.read(cx).text().to_string(), before));
+        }
+        app.update_in(&mut vcx, |app, window, cx| {
+            let input = app.active_editor_input().unwrap();
+            let len = input.read(cx).text().len();
+            input.replace(0..len, "(中)\nfoo foo foo\n", window, cx);
+            input.set_selected_range(0..0, cx);
+            assert!(app.editor_apply_command(Command::Bracket, window, cx));
+            assert_eq!(input.read(cx).selected_range(), 4..4);
+            input.set_selected_range(7..7, cx);
+            assert!(app.editor_apply_command(Command::SelectLine, window, cx));
+            assert_eq!(input.read(cx).selected_range(), 6..18);
+            input.set_selected_range(7..7, cx);
+            assert!(app.editor_apply_command(Command::Next, window, cx));
+            assert_eq!(input.read(cx).selected_range(), 6..9);
+            assert!(app.editor_apply_command(Command::Skip, window, cx));
+            assert_eq!(input.read(cx).selected_range(), 10..13);
+        });
     }
 }

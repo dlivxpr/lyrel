@@ -9,7 +9,34 @@ pub(crate) enum EditorInput {
     Code(Entity<EditorState>),
     Markdown(Entity<SourcePresentation>),
 }
+
+#[derive(Clone)]
+pub(crate) enum WeakEditorInput {
+    Code(gpui_kit::WeakEntity<EditorState>),
+    Markdown(gpui_kit::WeakEntity<SourcePresentation>),
+}
+impl WeakEditorInput {
+    pub(crate) fn upgrade(&self) -> Option<EditorInput> {
+        match self {
+            Self::Code(input) => input.upgrade().map(EditorInput::Code),
+            Self::Markdown(input) => input.upgrade().map(EditorInput::Markdown),
+        }
+    }
+}
+
 impl EditorInput {
+    pub(crate) fn downgrade(&self) -> WeakEditorInput {
+        match self {
+            Self::Code(input) => WeakEditorInput::Code(input.downgrade()),
+            Self::Markdown(input) => WeakEditorInput::Markdown(input.downgrade()),
+        }
+    }
+    pub(crate) fn add_selection(&self, range: std::ops::Range<usize>, cx: &mut gpui_kit::App) {
+        match self {
+            Self::Code(input) => input.update(cx, |state, cx| state.add_selection(range, cx)),
+            Self::Markdown(input) => input.update(cx, |state, cx| state.add_selection(range, cx)),
+        }
+    }
     pub(crate) fn code(&self) -> Option<&Entity<EditorState>> {
         if let Self::Code(input) = self {
             Some(input)
@@ -178,7 +205,7 @@ impl InputRead<'_> {
 /// Per-presentation storage contains only views, not another document authority.
 #[derive(Default)]
 pub(super) struct MarkdownPresentations(
-    RefCell<Vec<(TabId, split::GroupId, Entity<SourcePresentation>)>>,
+    RefCell<Vec<(TabId, split::GroupId, Entity<SourcePresentation>, Option<Entity<super::markdown_search::MarkdownSearch>>)>>,
 );
 impl MarkdownPresentations {
     pub(super) fn view(
@@ -189,7 +216,7 @@ impl MarkdownPresentations {
         cx: &mut gpui_kit::App,
     ) -> Entity<SourcePresentation> {
         let mut views = self.0.borrow_mut();
-        if let Some((_, _, view)) = views.iter().find(|(t, g, _)| *t == tab && *g == group) {
+        if let Some((_, _, view, _)) = views.iter().find(|(t, g, _, _)| *t == tab && *g == group) {
             return view.clone();
         }
         let view = if views.is_empty() {
@@ -197,9 +224,14 @@ impl MarkdownPresentations {
         } else {
             let document = input.read(cx).document().clone();
             let wrap = input.read(cx).is_soft_wrap();
-            cx.new(|cx| SourcePresentation::new(document, wrap, cx))
+            let indent = input.read(cx).indent();
+            cx.new(|cx| {
+                let mut view = SourcePresentation::new(document, wrap, cx);
+                view.set_indent(indent, cx);
+                view
+            })
         };
-        views.push((tab, group, view.clone()));
+        views.push((tab, group, view.clone(), None));
         view
     }
     pub(super) fn existing(
@@ -210,8 +242,18 @@ impl MarkdownPresentations {
         self.0
             .borrow()
             .iter()
-            .find(|(t, g, _)| *t == tab && *g == group)
-            .map(|(_, _, v)| v.clone())
+            .find(|(t, g, _, _)| *t == tab && *g == group)
+            .map(|(_, _, v, _)| v.clone())
+    }
+    pub(super) fn search(&self, source: &Entity<SourcePresentation>) -> Option<Entity<super::markdown_search::MarkdownSearch>> {
+        self.0.borrow().iter().find(|(_, _, view, _)| view.entity_id() == source.entity_id())
+            .and_then(|(_, _, _, search)| search.clone())
+    }
+    pub(super) fn open_search(&self, source: &Entity<SourcePresentation>, window: &mut Window, cx: &mut gpui_kit::App) -> Entity<super::markdown_search::MarkdownSearch> {
+        let mut views = self.0.borrow_mut();
+        let (_, _, _, search) = views.iter_mut().find(|(_, _, view, _)| view.entity_id() == source.entity_id())
+            .expect("source presentation is registered before receiving commands");
+        search.get_or_insert_with(|| cx.new(|cx| super::markdown_search::MarkdownSearch::new(source, window, cx))).clone()
     }
     pub(super) fn retain(
         &self,
@@ -219,7 +261,7 @@ impl MarkdownPresentations {
         window: &mut Window,
         cx: &mut gpui_kit::App,
     ) {
-        self.0.borrow_mut().retain(|(tab, group, view)| {
+        self.0.borrow_mut().retain(|(tab, group, view, _)| {
             let keep = live(*tab, *group);
             if !keep && view.read(cx).is_composing() {
                 view.update(cx, |view, cx| {
@@ -230,7 +272,7 @@ impl MarkdownPresentations {
         });
     }
     pub(super) fn set_soft_wrap(&self, wrap: bool, primary: &EditorInput, cx: &mut gpui_kit::App) {
-        for (_, _, view) in self.0.borrow().iter() {
+        for (_, _, view, _) in self.0.borrow().iter() {
             if primary
                 .markdown()
                 .is_none_or(|input| input.entity_id() != view.entity_id())

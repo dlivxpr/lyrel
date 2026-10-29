@@ -514,6 +514,8 @@ pub fn translate_zh(key: L10nKey) -> Option<&'static str> {
         L10nKey::SearchWorkspacesAndMachines => "搜索工作区、标签页和机器…",
         L10nKey::SearchFonts => "搜索字体…",
         L10nKey::SearchFind => "查找…",
+        L10nKey::EditorSearchReplacement => "替换为…",
+        L10nKey::EditorSearchReplaceAll => "全部替换",
         L10nKey::SearchMatchCase => "区分大小写",
         L10nKey::SearchUseRegex => "使用正则表达式",
         L10nKey::NewFolderName => "新文件夹名",

@@ -18,6 +18,7 @@ pub(super) struct FileHost {
     id: HostId,
     gate: Mutex<Option<mpsc::Receiver<()>>>,
     pub(super) entered: Arc<AtomicBool>,
+    pub(super) writes: std::sync::atomic::AtomicUsize,
     write_gate: Mutex<Option<mpsc::Receiver<()>>>,
 }
 
@@ -28,6 +29,7 @@ impl FileHost {
             id,
             gate: Mutex::new(None),
             entered: Arc::new(AtomicBool::new(false)),
+            writes: std::sync::atomic::AtomicUsize::new(0),
             write_gate: Mutex::new(None),
         })
     }
@@ -100,6 +102,7 @@ impl Host for FileHost {
             gate.recv_timeout(Duration::from_secs(10))
                 .map_err(|error| io::Error::new(io::ErrorKind::TimedOut, error))?;
         }
+        self.writes.fetch_add(1, Ordering::SeqCst);
         self.inner.write_file(p, bytes)
     }
     fn create_file_new(&self, p: &Path) -> io::Result<()> {

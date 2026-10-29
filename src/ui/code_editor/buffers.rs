@@ -284,13 +284,25 @@ impl EditorBuffers {
             move |host| {
                 files
                     .into_iter()
-                    .map(|path| load_file(host, path, preserve).ok())
-                    .collect()
+                    .map(|path| (path.clone(), load_file(host, path, preserve)))
+                    .collect::<Vec<_>>()
             },
             move |view, loaded, window, cx| {
                 if access(view).context_epoch != epoch || !valid(view, target, cx) {
                     return;
                 }
+                let loaded = loaded.into_iter().map(|(path, result)| match result {
+                    Ok(file) => Some(file),
+                    Err(error) => {
+                        if !preserve || language_for_path(&path) != "markdown" { return None; }
+                        let message = match error {
+                            EditorOpenError::Message(message) => message,
+                            EditorOpenError::NotText(path) => t_fmt(L10nKey::EditorBinaryFile, &[("path", &path.display().to_string())]),
+                        };
+                        window.notify_app(message, cx);
+                        None
+                    }
+                }).collect();
                 landed(view, loaded, window, cx);
             },
         );
@@ -397,6 +409,7 @@ impl EditorBuffers {
                 },
             );
             let presentation = cx.new(|cx| markdown::SourcePresentation::new(document, wrap, cx));
+            presentation.update(cx, |view, cx| view.set_indent(indent, cx));
             let observe = cx.observe(&presentation, |_, _, cx| cx.notify());
             (EditorInput::Markdown(presentation), None, sub, observe)
         } else {

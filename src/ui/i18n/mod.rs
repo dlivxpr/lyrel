@@ -1379,6 +1379,8 @@ l10n_keys! {
     EditorSaveAsPlaceholder,
     EditorReplaceExisting,
     EditorReplace,
+    EditorSearchReplacement,
+    EditorSearchReplaceAll,
     EditorNewFile,
     EditorOrphanAdopted,
     EditorFileDeletedOnDisk,

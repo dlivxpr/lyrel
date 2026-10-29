@@ -4,12 +4,22 @@ use std::sync::atomic::Ordering;
 
 #[gpui_kit::test]
 fn in_flight_save_closes_only_its_original_tab_after_focus_changes(cx: &mut TestAppContext) {
+    in_flight_save_scenario(cx, false);
+}
+
+#[gpui_kit::test]
+fn markdown_in_flight_save_closes_only_original_tab(cx: &mut TestAppContext) {
+    in_flight_save_scenario(cx, true);
+}
+
+fn in_flight_save_scenario(cx: &mut TestAppContext, markdown: bool) {
     let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("in-flight.txt");
+    let path = dir.path().join(if markdown { "in-flight.md" } else { "in-flight.txt" });
     std::fs::write(&path, "before").unwrap();
     let host = FileHost::new(HostId(700));
     let release = host.pause_next_write();
     let (app, mut vcx, _streams) = harness_with_tabs(cx, 2);
+    if markdown { vcx.update(|_, cx| cx.set_global(MarkdownWorkbench)); }
     app.update_in(&mut vcx, |app, window, cx| {
         app.editor_open_on_host(host.clone(), &path, window, cx)
     });
@@ -47,12 +57,22 @@ fn in_flight_save_closes_only_its_original_tab_after_focus_changes(cx: &mut Test
 
 #[gpui_kit::test]
 fn remote_save_as_bar_keeps_its_host_and_local_shared_path_independent(cx: &mut TestAppContext) {
+    remote_save_as_scenario(cx, false);
+}
+
+#[gpui_kit::test]
+fn markdown_remote_save_as_and_later_saves_remain_on_original_host(cx: &mut TestAppContext) {
+    remote_save_as_scenario(cx, true);
+}
+
+fn remote_save_as_scenario(cx: &mut TestAppContext, markdown: bool) {
     let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("same-name.txt");
-    let target = dir.path().join("remote-save-as.txt");
+    let path = dir.path().join(if markdown { "same-name.md" } else { "same-name.txt" });
+    let target = dir.path().join(if markdown { "remote-save-as.md" } else { "remote-save-as.txt" });
     std::fs::write(&path, "unchanged local").unwrap();
     let host = FileHost::new(HostId(701));
     let (app, mut vcx, _streams) = harness_with_tabs(cx, 1);
+    if markdown { vcx.update(|_, cx| cx.set_global(MarkdownWorkbench)); }
     app.update_in(&mut vcx, |app, window, cx| {
         app.open_file_in_editor(&path, window, cx)
     });
@@ -61,7 +81,7 @@ fn remote_save_as_bar_keeps_its_host_and_local_shared_path_independent(cx: &mut 
     });
     let local = app.read_with(&vcx, |app, _| app.tab_code().unwrap().active_id().unwrap());
     app.update_in(&mut vcx, |app, window, cx| {
-        app.editor_open_on_host(host, &path, window, cx)
+        app.editor_open_on_host(host.clone(), &path, window, cx)
     });
     wait_until(&mut vcx, |vcx| {
         app.read_with(vcx, |app, _| {
@@ -103,19 +123,36 @@ fn remote_save_as_bar_keeps_its_host_and_local_shared_path_independent(cx: &mut 
     });
     assert_eq!(std::fs::read_to_string(path).unwrap(), "unchanged local");
     assert_eq!(std::fs::read_to_string(target).unwrap(), "remote edits");
+    assert_eq!(host.writes.load(Ordering::SeqCst), 1);
+    vcx.update(|window, cx| window.input("!", cx));
+    settle(&mut vcx);
+    app.update_in(&mut vcx, |app, window, cx| app.editor_save_active(window, cx));
+    wait_until(&mut vcx, |vcx| app.read_with(vcx, |app, _| !app.active_buffer().unwrap().dirty && !app.active_buffer().unwrap().saving));
+    assert_eq!(host.writes.load(Ordering::SeqCst), 2);
+    app.read_with(&vcx, |app, _| assert!(app.editor.local_file(app.active_buffer().unwrap().id()).is_none()));
 }
 
 #[gpui_kit::test]
 fn a_delayed_save_cannot_close_a_replacement_editor_group(cx: &mut TestAppContext) {
+    replacement_group_scenario(cx, false);
+}
+
+#[gpui_kit::test]
+fn markdown_delayed_save_cannot_close_replacement_editor_group(cx: &mut TestAppContext) {
+    replacement_group_scenario(cx, true);
+}
+
+fn replacement_group_scenario(cx: &mut TestAppContext, markdown: bool) {
     let dir = tempfile::tempdir().unwrap();
     let root = crate::ui::code_editor::tests::test_real_dir(dir.path());
-    let left_path = root.join("left.txt");
-    let path = root.join("saved.txt");
+    let left_path = root.join(if markdown { "left.md" } else { "left.txt" });
+    let path = root.join(if markdown { "saved.md" } else { "saved.txt" });
     std::fs::write(&left_path, "left").unwrap();
     std::fs::write(&path, "before").unwrap();
     let host = FileHost::new(HostId(702));
     let release = host.pause_next_write();
     let (app, mut vcx, _streams) = harness_with_tabs(cx, 1);
+    if markdown { vcx.update(|_, cx| cx.set_global(MarkdownWorkbench)); }
     app.update_in(&mut vcx, |app, window, cx| {
         app.open_file_in_editor(&left_path, window, cx);
     });
@@ -176,4 +213,36 @@ fn a_delayed_save_cannot_close_a_replacement_editor_group(cx: &mut TestAppContex
         );
     });
     assert_eq!(std::fs::read_to_string(path).unwrap(), "saved original");
+}
+
+#[gpui_kit::test]
+fn markdown_remote_save_as_rejects_identity_changed_while_bar_was_open(cx: &mut TestAppContext) {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("original.md");
+    let moved = dir.path().join("moved.md");
+    let target = dir.path().join("stale-target.md");
+    std::fs::write(&path, "original").unwrap();
+    let host = FileHost::new(HostId(703));
+    let (app, mut vcx, _streams) = harness_with_tabs(cx, 1);
+    vcx.update(|_, cx| cx.set_global(MarkdownWorkbench));
+    app.update_in(&mut vcx, |app, window, cx| app.editor_open_on_host(host.clone(), &path, window, cx));
+    wait_until(&mut vcx, |vcx| app.read_with(vcx, |app, _| app.active_buffer().is_some()));
+    vcx.dispatch_action(EditorSaveAs);
+    settle(&mut vcx);
+    std::fs::rename(&path, &moved).unwrap();
+    app.update_in(&mut vcx, |app, _, cx| app.editor_path_moved(HostId(703), &path, &moved, cx));
+    vcx.update(|window, cx| {
+        window.press("secondary-a", cx);
+        window.input(&target.display().to_string(), cx);
+        window.press("enter", cx);
+    });
+    settle(&mut vcx);
+    assert!(!target.exists());
+    assert_eq!(host.writes.load(Ordering::SeqCst), 0);
+    app.read_with(&vcx, |app, cx| {
+        let file = app.active_buffer().unwrap();
+        assert_eq!(file.path, moved);
+        assert_eq!(file.host.id(), HostId(703));
+        assert_eq!(file.input.read(cx).text().to_string(), "original");
+    });
 }
