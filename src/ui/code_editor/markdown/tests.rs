@@ -2189,7 +2189,7 @@ fn native_table_structure_actions_share_undo_and_save_reopen(
     cx: &mut gpui_kit::TestAppContext,
 ) {
     use crate::ui::app::test_window::harness_with_tabs;
-    use gpui_kit::{Focusable as _, test::TestWindowExt as _};
+    use gpui_kit::{Focusable as _, MouseButton, test::{TestEventExt as _, TestQueryExt as _, TestWindowExt as _}};
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("structure.md");
     let original = "before  \r\n\n| **A** | B |\r\n| --- | ---: |\n| x\\|y | `z` |\r\n\n[ref]: target  ";
@@ -2208,6 +2208,9 @@ fn native_table_structure_actions_share_undo_and_save_reopen(
     };
     context.dispatch_action(crate::core::actions::ToggleDocumentPreview);
     settle_live_geometry(&view, &mut context);
+    context.dispatch_action(super::tables::DeleteRow);
+    context.run_until_parked();
+    view.read_with(&context, |view, cx| assert_eq!(view.document().read(cx).encode().unwrap(), original.as_bytes()));
     let at = original.replace("\r\n", "\n").find("x\\|y").unwrap();
     view.update_in(&mut context, |view, window, cx| {
         view.select_range(at..at + 4, cx);
@@ -2233,7 +2236,13 @@ fn native_table_structure_actions_share_undo_and_save_reopen(
     context.run_until_parked();
     context.dispatch_action(super::tables::InsertColumnAfter);
     context.run_until_parked();
-    context.dispatch_action(super::tables::AlignCenter);
+    context.update(|window, cx| window.click("markdown-table-commands", cx));
+    context.run_until_parked();
+    context.update(|window, cx| {
+        let item = window.find_by_label(crate::ui::i18n::t(crate::ui::i18n::L10nKey::EditorTableAlignCenter).as_ref());
+        window.pointer_down(item.bounds().center(), MouseButton::Left, cx);
+        window.pointer_up(item.bounds().center(), MouseButton::Left, cx);
+    });
     context.run_until_parked();
     let expected = "before  \r\n\n| **A** |  | B |\n| --- | :---: | ---: |\n| x\\|y |  | `z` |\n|  |  |  |\r\n\n[ref]: target  ";
     settle_live_geometry(&view, &mut context);
@@ -2241,6 +2250,7 @@ fn native_table_structure_actions_share_undo_and_save_reopen(
         assert_eq!(view.document().read(cx).encode().unwrap(), expected.as_bytes());
         assert!(view.range_to_bounds(&view.selection().range(), cx).is_some());
     });
+    context.update(|window, cx| assert!(view.read(cx).focus_handle(cx).is_focused(window)));
     let before_delete = view.read_with(&context, |view, _| view.selection());
     context.dispatch_action(super::tables::DeleteColumn);
     context.run_until_parked();

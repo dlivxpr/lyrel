@@ -1586,6 +1586,7 @@ pub fn translate_zh(key: L10nKey) -> Option<&'static str> {
         L10nKey::EditorMarkdownCodeRegion => "代码源码",
         L10nKey::EditorMarkdownMetadataRegion => "元数据源码",
         L10nKey::EditorMarkdownHtmlRegion => "HTML 源码 · 不执行，也不还原 HTML/CSS 效果",
+        L10nKey::EditorTableCommands => "表格…",
         L10nKey::EditorTableInsertRowBefore => "表格：在上方插入行",
         L10nKey::EditorTableInsertRowAfter => "表格：在下方插入行",
         L10nKey::EditorTableDeleteRow => "表格：删除行",

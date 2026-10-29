@@ -1312,6 +1312,7 @@ l10n_keys! {
     EditorMarkdownCodeRegion,
     EditorMarkdownMetadataRegion,
     EditorMarkdownHtmlRegion,
+    EditorTableCommands,
     EditorTableInsertRowBefore,
     EditorTableInsertRowAfter,
     EditorTableDeleteRow,

@@ -1730,6 +1730,7 @@ pub fn translate_en(key: L10nKey) -> &'static str {
         L10nKey::EditorMarkdownCodeRegion => "Code source",
         L10nKey::EditorMarkdownMetadataRegion => "Metadata source",
         L10nKey::EditorMarkdownHtmlRegion => "HTML source · not executed or rendered as HTML/CSS",
+        L10nKey::EditorTableCommands => "Table…",
         L10nKey::EditorTableInsertRowBefore => "Table: Insert row above",
         L10nKey::EditorTableInsertRowAfter => "Table: Insert row below",
         L10nKey::EditorTableDeleteRow => "Table: Delete row",

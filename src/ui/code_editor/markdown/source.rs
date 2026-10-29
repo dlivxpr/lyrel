@@ -1679,6 +1679,22 @@ impl Render for SourcePresentation {
                         cx.propagate();
                     }
                 }))
+                .when(self.table_commands_enabled(), |root| {
+                    use gpui_kit::component::{Sizable as _, button::{Button, ButtonVariants as _}, menu::DropdownMenu as _};
+                    let view = cx.entity().downgrade();
+                    let focus = self.focus.clone();
+                    root.child(gpui_kit::component::h_flex().flex_none()
+                        .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                        .child(Button::new("markdown-table-commands").small().ghost()
+                            .label(crate::ui::i18n::t(crate::ui::i18n::L10nKey::EditorTableCommands))
+                            .dropdown_menu(move |menu, _, cx| {
+                                let menu = menu.action_context(focus.clone());
+                                match view.upgrade() {
+                                    Some(view) => view.read(cx).table_menu(menu),
+                                    None => menu,
+                                }
+                            })))
+                })
                 .when(self.live && self.projection.links.at(self.state.selection.head()).is_some(), |root| {
                     use gpui_kit::component::button::{Button, ButtonVariants as _};
                     use gpui_kit::component::Sizable as _;
