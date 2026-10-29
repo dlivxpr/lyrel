@@ -144,12 +144,17 @@ impl EditorPanelState {
             return;
         };
         let text = file.input.read(cx).text().to_string();
-        let text = if text.contains("\r\n") {
+        let text = if file.input.code().is_some() && text.contains("\r\n") {
             text.replace("\r\n", "\n")
         } else {
             text
         };
-        let bytes = match editor_text::encode(&text, &file.format(cx)) {
+        let encoded = if let Some(source) = file.input.markdown() {
+            source.read(cx).document().read(cx).encode()
+        } else {
+            editor_text::encode(&text, &file.format(cx))
+        };
+        let bytes = match encoded {
             Ok(bytes) => bytes,
             Err(error) => {
                 self.offer_utf8(id, error.unmappable, window, cx, bridge);
@@ -165,6 +170,7 @@ impl EditorPanelState {
         };
         let written = Fingerprint::of_str(&text);
         let format = file.format(cx);
+        let representation = file.representation_fingerprint(cx);
         let host = file.host.clone();
         let target = file.path.clone();
         let directory = target.parent().map(Path::to_path_buf);
@@ -198,6 +204,7 @@ impl EditorPanelState {
                         file.disk_mtime = mtime;
                         file.saved = written;
                         file.saved_format = format;
+                        file.saved_representation = representation;
                         file.conflict = None;
                         editor.buffers.note_edit(id, cx);
                         (bridge.event)(
