@@ -430,6 +430,11 @@ impl EditorPanelState {
         let file = self.buffers.get_mut(id).unwrap();
         file.path = path;
         file.untitled = None;
+        if let Some(view) = file.input.markdown() {
+            view.read(cx).document().clone().update(cx, |document, cx| {
+                document.set_resource_context(file.host.clone(), Some(file.path.clone()), cx);
+            });
+        }
         file.conflict = None;
         let language = file.language();
         file.input.set_highlighter(language, cx);

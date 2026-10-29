@@ -1145,3 +1145,160 @@ fn markdown_image_completion_never_replaces_text_typed_over_pending_selection(cx
     app.read_with(&vcx, |app, cx| assert_eq!(app.active_buffer().unwrap().input.read(cx).text().to_string(), "new author text"));
     assert_eq!(read_owned(&host, &dir.path().join("assets/screenshot.png")).unwrap(), png);
 }
+
+#[gpui_kit::test]
+fn markdown_modifier_links_open_on_the_document_host_and_keep_delayed_group_intent(cx: &mut TestAppContext) {
+    use gpui_kit::test::TestEventExt as _;
+    use gpui_kit::{MouseButton, Modifiers};
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::create_dir(dir.path().join("docs")).unwrap();
+    let original = "outside [target][Ref]\n\n[Ref]: <../target%20doc.md> 'keep'\n";
+    std::fs::write(dir.path().join("docs/start.md"), original).unwrap();
+    std::fs::write(dir.path().join("target doc.md"), "# Destination\nremote target").unwrap();
+    let host = FileHost::mapped(HostId(709), dir.path());
+    let (app, mut vcx, _streams) = harness_with_tabs(cx, 2);
+    vcx.update(|_, cx| cx.set_global(MarkdownWorkbench));
+    app.update_in(&mut vcx, |app, window, cx| app.editor_open_on_host(host.clone(), Path::new("/docs/start.md"), window, cx));
+    wait_until(&mut vcx, |vcx| active_id(&app, vcx).is_some());
+    let source_id = active_id(&app, &vcx).unwrap();
+    let view = app.read_with(&vcx, |app, _| app.active_editor_input().unwrap().markdown().unwrap().clone());
+    vcx.dispatch_action(crate::core::actions::ToggleDocumentPreview);
+    wait_until(&mut vcx, |vcx| {
+        vcx.update(|window, cx| { window.render_frame(cx); window.render_frame(cx); });
+        view.read_with(vcx, |view, cx| {
+            let opening = view.range_to_bounds(&(8..8), cx);
+            opening.is_some() && opening == view.range_to_bounds(&(9..9), cx)
+        })
+    });
+    let at = vcx.update(|window, cx| {
+        let point = view.read(cx).range_to_bounds(&(10..10), cx).unwrap().center();
+        window.pointer_down(point, MouseButton::Left, cx);
+        window.pointer_up(point, MouseButton::Left, cx);
+        point
+    });
+    vcx.run_until_parked();
+    assert_eq!(active_id(&app, &vcx), Some(source_id), "ordinary click must only edit");
+    view.read_with(&vcx, |view, cx| assert_eq!(view.document().read(cx).encode().unwrap(), original.as_bytes()));
+    // Hide the contextual syntax again before activating the rendered link.
+    view.update_in(&mut vcx, |view, _, cx| view.select_range(0..0, cx));
+    vcx.update(|window, cx| { window.render_frame(cx); window.render_frame(cx); });
+    let release = host.pause_next_read();
+    let modifier = if cfg!(target_os = "macos") { Modifiers { platform: true, ..Modifiers::none() } } else { Modifiers::control() };
+    vcx.simulate_mouse_move(at, None, modifier);
+    vcx.simulate_mouse_down(at, MouseButton::Left, modifier);
+    vcx.simulate_mouse_up(at, MouseButton::Left, modifier);
+    wait_until(&mut vcx, |_| host.entered.load(Ordering::SeqCst));
+    app.update_in(&mut vcx, |app, window, cx| app.activate(1, window, cx));
+    release.send(()).unwrap();
+    wait_until(&mut vcx, |vcx| app.read_with(vcx, |app, _| app.editor.buffers.pending.is_empty()));
+    app.read_with(&vcx, |app, cx| {
+        assert!(app.tab_code().is_none_or(|code| code.files.is_empty()), "late open must not redirect into active tab");
+        let target = app.editor.buffers.at(HostId(709), Path::new("/target doc.md")).unwrap();
+        let file = app.editor.buffers.get(target).unwrap();
+        assert_eq!(file.host.id(), HostId(709));
+        assert_eq!(file.input.read(cx).text().to_string(), "# Destination\nremote target");
+        assert!(app.tabs[0].code.as_ref().unwrap().files.contains(&target));
+        assert_eq!(view.read(cx).document().read(cx).encode().unwrap(), original.as_bytes());
+    });
+}
+
+#[gpui_kit::test]
+fn markdown_late_link_read_cannot_land_after_its_source_group_is_replaced(cx: &mut TestAppContext) {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("start.md"), "[next](next.md)").unwrap();
+    std::fs::write(dir.path().join("next.md"), "destination").unwrap();
+    let host = FileHost::mapped(HostId(710), dir.path());
+    let (app, mut vcx, _streams) = harness_with_tabs(cx, 1);
+    vcx.update(|_, cx| cx.set_global(MarkdownWorkbench));
+    app.update_in(&mut vcx, |app, window, cx| app.editor_open_on_host(host.clone(), Path::new("/start.md"), window, cx));
+    wait_until(&mut vcx, |vcx| active_id(&app, vcx).is_some());
+    let view = app.read_with(&vcx, |app, _| app.active_editor_input().unwrap().markdown().unwrap().clone());
+    vcx.dispatch_action(crate::core::actions::ToggleDocumentPreview);
+    wait_until(&mut vcx, |vcx| {
+        vcx.update(|window, cx| { window.render_frame(cx); window.render_frame(cx); });
+        view.read_with(vcx, |view, cx| {
+            view.range_to_bounds(&(0..0), cx).is_some()
+                && view.range_to_bounds(&(0..0), cx) == view.range_to_bounds(&(1..1), cx)
+        })
+    });
+    view.update_in(&mut vcx, |view, _, cx| view.select_range(2..2, cx));
+    let release = host.pause_next_read();
+    vcx.dispatch_action(markdown::FollowLink);
+    wait_until(&mut vcx, |_| host.entered.load(Ordering::SeqCst));
+    app.update_in(&mut vcx, |app, window, cx| {
+        app.editor_close_file(0, window, cx);
+        app.editor_new_file(window, cx);
+    });
+    let replacement = active_id(&app, &vcx).unwrap();
+    release.send(()).unwrap();
+    wait_until(&mut vcx, |vcx| app.read_with(vcx, |app, _| app.editor.buffers.pending.is_empty()));
+    assert_eq!(active_id(&app, &vcx), Some(replacement));
+    app.read_with(&vcx, |app, _| assert!(app.editor.buffers.at(HostId(710), Path::new("/next.md")).is_none()));
+}
+
+#[gpui_kit::test]
+fn markdown_local_relative_link_uses_its_document_directory(cx: &mut TestAppContext) {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::create_dir(dir.path().join("docs")).unwrap();
+    let source = dir.path().join("docs/start.md");
+    let destination = dir.path().join("next doc.md");
+    std::fs::write(&source, "[next](../next%20doc.md)").unwrap();
+    std::fs::write(&destination, "local destination").unwrap();
+    let (app, mut vcx, _streams) = harness_with_tabs(cx, 1);
+    vcx.update(|_, cx| cx.set_global(MarkdownWorkbench));
+    app.update_in(&mut vcx, |app, window, cx| app.open_file_in_editor(&source, window, cx));
+    wait_until(&mut vcx, |vcx| active_id(&app, vcx).is_some());
+    let id = active_id(&app, &vcx).unwrap();
+    let view = app.read_with(&vcx, |app, _| app.active_editor_input().unwrap().markdown().unwrap().clone());
+    vcx.dispatch_action(crate::core::actions::ToggleDocumentPreview);
+    wait_until(&mut vcx, |vcx| {
+        vcx.update(|window, cx| { window.render_frame(cx); window.render_frame(cx); });
+        view.read_with(vcx, |view, cx| view.range_to_bounds(&(0..0), cx).is_some()
+            && view.range_to_bounds(&(0..0), cx) == view.range_to_bounds(&(1..1), cx))
+    });
+    view.update_in(&mut vcx, |view, _, cx| view.select_range(2..2, cx));
+    vcx.dispatch_action(markdown::FollowLink);
+    wait_until(&mut vcx, |vcx| active_id(&app, vcx).is_some_and(|active| active != id));
+    app.read_with(&vcx, |app, cx| {
+        let file = app.active_buffer().unwrap();
+        assert_eq!(file.host.id(), HostId::LOCAL);
+        assert_eq!(file.path, std::fs::canonicalize(&destination).unwrap());
+        assert_eq!(file.input.read(cx).text().to_string(), "local destination");
+        assert_eq!(view.read(cx).document().read(cx).encode().unwrap(), b"[next](../next%20doc.md)");
+    });
+}
+
+#[gpui_kit::test]
+fn markdown_external_image_drop_writes_and_reads_virtual_paths_only_on_owning_host(cx: &mut TestAppContext) {
+    let remote = tempfile::tempdir().unwrap();
+    let local = tempfile::tempdir().unwrap();
+    std::fs::create_dir(remote.path().join("docs")).unwrap();
+    std::fs::write(remote.path().join("docs/owned.md"), "remote text").unwrap();
+    let incoming = local.path().join("capture.png");
+    let png = screenshot_bytes();
+    std::fs::write(&incoming, &png).unwrap();
+    let host = FileHost::mapped(HostId(721), remote.path());
+    let document = Path::new("/docs/owned.md");
+    let (app, mut vcx, _streams) = harness_with_tabs(cx, 1);
+    vcx.update(|_, cx| cx.set_global(MarkdownWorkbench));
+    app.update_in(&mut vcx, |app, window, cx| app.editor_open_on_host(host.clone(), document, window, cx));
+    wait_until(&mut vcx, |vcx| active_id(&app, vcx).is_some());
+    drop_image(&mut vcx, &incoming);
+    let inserted = "![capture](assets/capture.png)remote text";
+    wait_until(&mut vcx, |vcx| app.read_with(vcx, |app, cx| app.active_buffer().unwrap().input.read(cx).text().to_string() == inserted));
+    assert_eq!(read_owned(&host, Path::new("/docs/assets/capture.png")).unwrap(), png);
+    assert!(!local.path().join("assets").exists());
+    vcx.dispatch_action(crate::core::actions::EditorSave);
+    wait_until(&mut vcx, |vcx| app.read_with(vcx, |app, _| !app.active_buffer().unwrap().saving && !app.active_buffer().unwrap().dirty));
+    assert_eq!(read_owned(&host, document).unwrap(), inserted.as_bytes());
+    app.update_in(&mut vcx, |app, window, cx| {
+        app.editor_close_file(0, window, cx);
+        app.editor_open_on_host(host.clone(), document, window, cx);
+    });
+    wait_until(&mut vcx, |vcx| active_id(&app, vcx).is_some());
+    app.read_with(&vcx, |app, cx| {
+        assert_eq!(app.active_buffer().unwrap().host.id(), HostId(721));
+        assert_eq!(app.active_buffer().unwrap().input.read(cx).text().to_string(), inserted);
+    });
+    assert_eq!(read_owned(&host, Path::new("/docs/assets/capture.png")).unwrap(), png);
+}
