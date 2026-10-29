@@ -10,6 +10,8 @@ use gpui_kit::prelude::*;
 use gpui_kit::*;
 use std::collections::HashMap;
 
+actions!(markdown_links, [EditLinkDestination, FollowLink]);
+
 struct CachedBlock {
     version: u64,
     seen: u64,
@@ -471,6 +473,25 @@ impl SourcePresentation {
         self.reveal_caret = true;
         self.reveal_at = None;
         cx.notify();
+    }
+    fn edit_link_destination(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.projection.revision != self.document.read(cx).revision() { return; }
+        let Some(range) = self.projection.links.at(self.state.selection.head()).map(|link| link.destination.clone()) else { return; };
+        self.command(Command::Select(Selection::new(range.start, range.end)), window, cx);
+        self.focus.focus(window, cx);
+    }
+    fn follow_link(&mut self, target: String, cx: &mut Context<Self>) {
+        if self.projection.revision != self.document.read(cx).revision() { return; }
+        if let Some(fragment) = target.strip_prefix('#') {
+            if let Some(at) = self.projection.links.anchor(fragment) {
+                self.select_range(at..at, cx);
+                self.reveal_caret = true;
+            }
+            return;
+        }
+        let presentation = cx.entity().entity_id();
+        let revision = self.document.read(cx).revision();
+        self.document.update(cx, |_, cx| cx.emit(DocumentEvent::FollowLink { presentation, revision, target }));
     }
     fn caret_bounds(&self, byte: usize, cx: &App) -> Option<Bounds<Pixels>> {
         let (revision, geometry) = self.geometry.as_ref()?;
@@ -1163,7 +1184,21 @@ impl Render for SourcePresentation {
             }
             self.rendered_revision = Some(revision);
         }
-        let context = RenderContext::from_app(cx).with_body_font_size(window.rem_size());
+        let view = cx.entity().downgrade();
+        let context = RenderContext::from_app(cx).with_body_font_size(window.rem_size())
+            .on_link_click(move |target, event, _, cx| {
+                let _ = view.update(cx, |view, cx| {
+                    view.dragging = false;
+                    if view.document.read(cx).revision() != revision || view.projection.revision != revision { return; }
+                    if let ClickEvent::Mouse(click) = event {
+                        if click.up.button == MouseButton::Left && link_modifier(click.up.modifiers) {
+                            if view.projection.links.links.iter().any(|link| link.target == target.as_ref()) {
+                                view.follow_link(target.to_string(), cx);
+                            }
+                        }
+                    }
+                });
+            });
         let references: Vec<_> = self
             .projection
             .leaves
@@ -1240,6 +1275,7 @@ impl Render for SourcePresentation {
                 .id("markdown-source")
                 .test_support()
                 .size_full()
+                .flex().flex_col()
                 .min_h_0()
                 .key_context(key_context)
                 .track_focus(&self.focus)
@@ -1290,12 +1326,26 @@ impl Render for SourcePresentation {
                         cx.stop_propagation();
                     }
                 }))
+                .on_action(cx.listener(|this, _: &EditLinkDestination, window, cx| {
+                    this.edit_link_destination(window, cx);
+                }))
+                .on_action(cx.listener(|this, _: &FollowLink, _, cx| {
+                    if let Some(link) = this.projection.links.at(this.state.selection.head()).cloned() {
+                        this.follow_link(link.target, cx);
+                    }
+                }))
                 .on_mouse_down(
                     MouseButton::Left,
                     cx.listener(|this, event: &MouseDownEvent, window, cx| {
                         this.focus.focus(window, cx);
-                        this.dragging = true;
-                        this.select_point(event.position, event.modifiers.shift, window, cx);
+                        if link_modifier(event.modifiers)
+                            && this.point_offset(event.position, cx).is_some_and(|at| this.projection.links.at(at).is_some_and(|link| link.label.start <= at && at <= link.label.end))
+                        {
+                            this.dragging = false;
+                        } else {
+                            this.dragging = true;
+                            this.select_point(event.position, event.modifiers.shift, window, cx);
+                        }
                         cx.stop_propagation();
                     }),
                 )
@@ -1497,11 +1547,31 @@ impl Render for SourcePresentation {
                         cx.propagate();
                     }
                 }))
+                .when(self.live && self.projection.links.at(self.state.selection.head()).is_some(), |root| {
+                    use gpui_kit::component::button::{Button, ButtonVariants as _};
+                    use gpui_kit::component::Sizable as _;
+                    root.child(gpui_kit::component::h_flex().gap_2().flex_none()
+                        .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                        .child(Button::new("markdown-link-destination").small().ghost()
+                            .label(crate::ui::i18n::t(if self.projection.links.at(self.state.selection.head())
+                                .is_some_and(|link| !link.source.contains(&link.destination.start)) {
+                                    crate::ui::i18n::L10nKey::MarkdownEditReferenceDestination
+                                } else { crate::ui::i18n::L10nKey::MarkdownEditLinkDestination }))
+                            .on_click(cx.listener(|this, _, window, cx| this.edit_link_destination(window, cx))))
+                        .child(Button::new("markdown-follow-link").small().ghost()
+                            .label(crate::ui::i18n::t(crate::ui::i18n::L10nKey::MarkdownFollowLink))
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                this.focus.focus(window, cx);
+                                if let Some(link) = this.projection.links.at(this.state.selection.head()).cloned() {
+                                    this.follow_link(link.target, cx);
+                                }
+                            }))))
+                })
                 .child(crate::ui::scrollbar::with_vertical_scrollbar(
                     "markdown-source-scrollbar",
                     div()
                         .id("markdown-source-scroll")
-                        .size_full()
+                        .flex_1().min_h_0().w_full()
                         .overflow_y_scroll()
                         .overflow_x_scroll()
                         .track_scroll(&self.scroll)
@@ -1697,4 +1767,9 @@ impl Element for SourceElement {
             }
         }
     }
+}
+
+fn link_modifier(modifiers: Modifiers) -> bool {
+    if cfg!(target_os = "macos") { modifiers.platform && !modifiers.control && !modifiers.alt && !modifiers.shift }
+    else { modifiers.control && !modifiers.platform && !modifiers.alt && !modifiers.shift }
 }

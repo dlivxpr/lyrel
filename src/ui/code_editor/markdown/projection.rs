@@ -8,12 +8,14 @@ struct InlineStyle {
     italic: bool,
     strikethrough: bool,
     code: bool,
+    link: Option<usize>,
 }
 
 #[derive(Clone, PartialEq, Eq)]
 struct InlineSpan {
     source: Range<usize>,
     revealed: bool,
+    target: Option<gpui_kit::SharedString>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -182,6 +184,10 @@ impl Leaf {
                 italic: style.italic,
                 strikethrough: style.strikethrough,
                 code: style.code,
+                link: style.link.map(|ix| gpui_kit::base::text::editor_host::LinkMark {
+                    url: self.spans[ix].target.clone().unwrap_or_default(),
+                    ..Default::default()
+                }),
                 ..Default::default()
             };
             let range = segment.display.clone();
@@ -300,6 +306,7 @@ impl Leaf {
 pub(super) struct Projection {
     pub revision: u64,
     pub leaves: Vec<Leaf>,
+    pub links: super::links::Index,
     next_id: u64,
 }
 impl Projection {
@@ -312,6 +319,7 @@ impl Projection {
     }
     fn parse_fragment(source: &str, revision: u64, live: bool, document_start: bool) -> Self {
         let mut leaves = Vec::new();
+        let mut links = super::links::Index::default();
         if live {
             let mut options = markdown::ParseOptions::gfm();
             options.constructs.frontmatter = document_start;
@@ -320,6 +328,7 @@ impl Projection {
                 leaf.raw(source, 0..source.len());
                 leaves.push(leaf);
             } else if let Ok(root) = markdown::to_mdast(source, &options) {
+                links = super::links::Index::from_ast(source, &root);
                 let mut cursor = 0;
                 for node in root.children().into_iter().flatten() {
                     let Some(position) = node.position() else {
@@ -359,7 +368,13 @@ impl Projection {
             leaves.push(Leaf::new(0..0, Kind::Prose));
         }
         let next_id = leaves.len() as u64 + 1;
+        let targets: std::collections::HashMap<_, _> = links.links.iter().map(|link| (link.source.start, link)).collect();
         for (ix, leaf) in leaves.iter_mut().enumerate() {
+            for span in &mut leaf.spans {
+                if let Some(link) = targets.get(&span.source.start).filter(|link| link.source == span.source) {
+                    span.target = Some(link.target.clone().into());
+                }
+            }
             leaf.rebuild(None);
             leaf.id = ix as u64 + 1;
             leaf.version = leaf.id;
@@ -368,6 +383,7 @@ impl Projection {
             revision,
             leaves,
             next_id,
+            links,
         }
     }
     fn source_lines(source: &str, base: usize, leaves: &mut Vec<Leaf>) {
@@ -493,6 +509,7 @@ impl Projection {
                 leaf.spans.push(InlineSpan {
                     source: range.clone(),
                     revealed: false,
+                    target: None,
                 });
                 leaf.push_segment(
                     range.start..start,
@@ -524,6 +541,7 @@ impl Projection {
                 leaf.spans.push(InlineSpan {
                     source: range.clone(),
                     revealed: false,
+                    target: None,
                 });
                 let before = leaf.style;
                 leaf.style.code = true;
@@ -555,6 +573,29 @@ impl Projection {
                 }
                 leaf.push_segment(end..range.end, &source[end..range.end], Some(ix), None);
                 leaf.style = before;
+            }
+            Node::Link(_) | Node::LinkReference(_) => {
+                let label = super::links::label_range(source, node).unwrap_or_else(|| {
+                    if source[range.clone()].starts_with('<') {
+                        range.start + 1..range.end - 1
+                    } else {
+                        range.clone()
+                    }
+                });
+                let ix = leaf.spans.len();
+                leaf.spans.push(InlineSpan {
+                    source: range.clone(),
+                    revealed: false,
+                    target: None,
+                });
+                leaf.push_segment(range.start..label.start, &source[range.start..label.start], Some(ix), None);
+                let before = leaf.style;
+                leaf.style.link = Some(ix);
+                if let Some(children) = node.children() {
+                    for child in children { Self::inline(source, child, leaf); }
+                }
+                leaf.style = before;
+                leaf.push_segment(label.end..range.end, &source[label.end..range.end], Some(ix), None);
             }
             // Other inline objects retain their source until their editing slice.
             _ => leaf.raw(source, range),
@@ -602,6 +643,9 @@ impl Projection {
         if transaction.edits.is_empty() {
             return;
         }
+        // Absolute destinations and definitions must never be rebased against a
+        // fragment. The revision-checked background parse restores this index.
+        self.links = super::links::Index::default();
         // Only affected leaves and their immediate neighbours are reparsed on
         // input. The debounced background parse resolves larger syntax changes.
         let old = transaction
