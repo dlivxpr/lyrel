@@ -212,6 +212,7 @@ impl SourcePresentation {
                     && view.document.read(cx).grammar() == grammar
                 {
                     view.projection.install(projection);
+                    view.reveal_mdx_selection(cx);
                     view.sync_inline_reveal();
                     view.state.selection = view.map_live_caret(view.state.selection, cx);
                     view.selection_notification = true;
@@ -454,6 +455,7 @@ impl SourcePresentation {
             );
             cx.emit(DocumentEvent::PresentationChanged);
         });
+        self.reveal_mdx_selection(cx);
         self.state.selection = self.map_live_caret(self.state.selection, cx);
         self.sync_inline_reveal();
         cx.notify();
@@ -482,6 +484,44 @@ impl SourcePresentation {
         self.geometry = None;
         self.rendered_revision = None;
         cx.notify();
+    }
+    /// Source/undo selections reveal only their enclosing presentation state.
+    /// Collapsing controls first select their own visible header, so they do not
+    /// immediately reopen themselves through this hook.
+    fn reveal_mdx_selection(&mut self, cx: &App) {
+        if !self.live || self.projection.revision != self.document.read(cx).revision() { return; }
+        let source = self.document.read(cx).source();
+        if super::mdx::tabs::reveal_selection(&self.projection.mdx.components, source, &mut self.mdx_state, self.state.selection) {
+            self.geometry = None;
+            self.rendered_revision = None;
+        }
+    }
+    pub(super) fn activate_mdx_tab(
+        &mut self,
+        group: super::mdx::ComponentId,
+        child: super::mdx::ComponentId,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        // Finalizing preedit can rebase every range. Resolve the stable IDs
+        // afterwards, never select a range captured by the previous frame.
+        self.command(Command::FinishComposition, window, cx);
+        if !self.live || self.document.read(cx).grammar() != super::mdx::Grammar::Mdx { return; }
+        let valid = self.projection.mdx.components.iter().any(|component| component.id() == group && component.child_ids().contains(&child));
+        if !valid { return; }
+        self.update_mdx_view_state(|state| { state.active_child.insert(group, child); }, window, cx);
+        let target = {
+            let source = self.document.read(cx).source();
+            let component = self.projection.mdx.components.iter().find(|component| component.id() == child).expect("validated tab child");
+            let range = component.children_range();
+            self.projection.leaves.iter().find(|leaf| {
+                range.start <= leaf.range.start && leaf.range.end <= range.end
+                    && !matches!(leaf.kind, Kind::Mdx(_))
+                    && super::mdx::view::visible_field(&super::mdx::view::FieldContext::new(&self.projection, leaf, source, &self.mdx_state))
+            }).map_or(component.name_range().start, |leaf| leaf.content_start())
+        };
+        self.command(Command::Select(Selection::caret(target)), window, cx);
+        self.focus.focus(window, cx);
     }
     pub(crate) fn is_composing(&self) -> bool {
         self.state.composition.is_some()
@@ -752,6 +792,7 @@ impl SourcePresentation {
             }
             self.rendered_revision = None;
         }
+        self.reveal_mdx_selection(cx);
         self.sync_inline_reveal();
         if changed {
             self.geometry = None;
@@ -1770,6 +1811,9 @@ impl Render for SourcePresentation {
                     .iter()
                     .enumerate()
                     .filter_map(|(ix, leaf)| {
+                        if self.live && !super::mdx::view::visible_field(&super::mdx::view::FieldContext::new(&self.projection, leaf, &component_source, &self.mdx_state)) {
+                            return None;
+                        }
                         if matches!(leaf.kind, Kind::TableCell(_))
                             && !self.tables.contains_key(&leaf.id)
                         {
