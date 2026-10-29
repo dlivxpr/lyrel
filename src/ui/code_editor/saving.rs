@@ -28,6 +28,7 @@ pub(super) enum BarKind {
 
 pub(super) struct EditorBar {
     kind: BarKind,
+    identity: SaveIdentity,
     input: Entity<InputState>,
     _sub: Subscription,
 }
@@ -431,6 +432,10 @@ impl EditorPanelState {
         cx: &mut Context<E>,
         bridge: EditorBridge<E>,
     ) {
+        let id = match kind {
+            BarKind::GoToLine { id } | BarKind::SaveAs { id } | BarKind::Rename { id, .. } => id,
+        };
+        let Some(identity) = self.save_identity(id) else { return; };
         self.dismiss_bar();
         let placeholder = match kind {
             BarKind::GoToLine { id } => {
@@ -475,6 +480,7 @@ impl EditorPanelState {
         input.update(cx, |input, cx| input.focus(window, cx));
         self.bar = Some(EditorBar {
             kind,
+            identity,
             input,
             _sub: sub,
         });
@@ -508,6 +514,12 @@ impl EditorPanelState {
         bridge: EditorBridge<E>,
     ) -> Option<EditorEvent> {
         let bar = self.bar.as_ref()?;
+        let identity = bar.identity.clone();
+        if !self.accepts_prompt(&identity) {
+            self.dismiss_bar();
+            return Some(EditorEvent::Focus);
+        }
+        let bar = self.bar.as_ref()?;
         let text = bar.input.read(cx).value().to_string();
         match bar.kind {
             BarKind::GoToLine { id } => {
@@ -525,7 +537,7 @@ impl EditorPanelState {
             }
             BarKind::SaveAs { id } => {
                 let path = PathBuf::from(text.trim());
-                let identity = self.save_identity(id)?;
+                let identity = bar.identity.clone();
                 let host = self.buffers.get(id)?.host.clone();
                 if path.as_os_str().is_empty() || !host.is_absolute(&path) {
                     return None;

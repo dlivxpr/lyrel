@@ -358,6 +358,7 @@ struct OutlineCache {
 /// moving it, put back if the picker is dismissed.
 struct SymbolPreview {
     buffer: BufferId,
+    input: super::document_input::WeakEditorInput,
     origin: Position,
     scroll: gpui_kit::Point<gpui_kit::Pixels>,
 }
@@ -689,6 +690,7 @@ impl LyrelApp {
         self.open_search(SearchTab::Symbols, "", window, cx);
         self.editor.nav.preview = Some(SymbolPreview {
             buffer: id,
+            input: input.downgrade(),
             origin,
             scroll,
         });
@@ -715,10 +717,7 @@ impl LyrelApp {
 
     /// Shows a symbol the picker is on, leaving the keyboard in the picker.
     pub(crate) fn editor_symbol_preview(&mut self, line: u32, column: u32, cx: &mut Context<Self>) {
-        let Some(buffer) = self.editor.nav.preview.as_ref().map(|p| p.buffer) else {
-            return;
-        };
-        let Some(input) = self.editor_input_for(buffer) else {
+        let Some(input) = self.editor.nav.preview.as_ref().and_then(|preview| preview.input.upgrade()) else {
             return;
         };
         let offset = input
@@ -735,12 +734,14 @@ impl LyrelApp {
         let Some(f) = self.active_buffer() else {
             return;
         };
+        let Some(input) = self.active_editor_input() else { return; };
         let (origin, scroll) = {
-            let state = f.input.read(cx);
+            let state = input.read(cx);
             (state.cursor_position(), state.scroll_offset())
         };
         self.editor.nav.preview = Some(SymbolPreview {
             buffer: f.id(),
+            input: input.downgrade(),
             origin,
             scroll,
         });
@@ -766,7 +767,7 @@ impl LyrelApp {
         let Some(preview) = self.editor.nav.preview.take() else {
             return;
         };
-        let Some(input) = self.editor_input_for(preview.buffer) else {
+        let Some(input) = preview.input.upgrade() else {
             return;
         };
         input.set_cursor_position(preview.origin, window, cx);
@@ -1512,6 +1513,50 @@ pub(super) mod gpui_tests {
                 app.editor.nav.tabs[&tab].history.back.is_empty(),
                 "looking is not jumping"
             );
+        });
+    }
+
+    #[gpui_kit::test]
+    fn markdown_symbol_preview_cancel_restores_only_its_original_group(cx: &mut TestAppContext) {
+        use gpui_kit::test::TestWindowExt as _;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("symbols.md");
+        std::fs::write(&path, "# One\nfirst\n\n# Two\nsecond\n").unwrap();
+        let (app, mut vcx, _streams) = harness_with_tabs(cx, 1);
+        vcx.update(|_, cx| cx.set_global(MarkdownWorkbench));
+        app.update_in(&mut vcx, |app, window, cx| app.open_file_in_editor(&path, window, cx));
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while !app.read_with(&vcx, |app, _| app.active_buffer().is_some()) {
+            vcx.run_until_parked();
+            assert!(Instant::now() < deadline, "Markdown open did not settle");
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        vcx.update(|window, cx| window.render_frame(cx));
+        let first = app.update_in(&mut vcx, |app, window, cx| {
+            let input = app.active_editor_input().unwrap();
+            input.set_cursor_position(Position::new(1, 2), window, cx);
+            app.editor_split(window, cx);
+            input
+        });
+        vcx.update(|window, cx| window.render_frame(cx));
+        let second = app.update_in(&mut vcx, |app, window, cx| {
+            let input = app.active_editor_input().unwrap();
+            input.set_cursor_position(Position::new(4, 2), window, cx);
+            app.editor_go_to_symbol(window, cx);
+            input
+        });
+        vcx.run_until_parked();
+        vcx.simulate_keystrokes("up");
+        vcx.run_until_parked();
+        app.update_in(&mut vcx, |app, window, cx| {
+            app.editor_focus_group(true, window, cx);
+            app.close_search(window, cx);
+        });
+        vcx.run_until_parked();
+        app.read_with(&vcx, |app, cx| {
+            assert_eq!(first.read(cx).cursor_position(), Position::new(1, 2));
+            assert_eq!(second.read(cx).cursor_position(), Position::new(4, 2));
+            assert!(!app.active_buffer().unwrap().dirty);
         });
     }
 

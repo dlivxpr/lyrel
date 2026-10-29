@@ -273,6 +273,7 @@ impl EditorBuffers {
         landed: impl FnOnce(&mut E, Vec<Option<Loaded>>, &mut Window, &mut Context<E>) + 'static,
     ) {
         let epoch = self.context_epoch;
+        let notify_failures = cx.try_global::<MarkdownWorkbench>().is_some();
         HostOps::run_in(
             host,
             window,
@@ -280,13 +281,25 @@ impl EditorBuffers {
             move |host| {
                 files
                     .into_iter()
-                    .map(|path| load_file(host, path).ok())
-                    .collect()
+                    .map(|path| (path.clone(), load_file(host, path)))
+                    .collect::<Vec<_>>()
             },
             move |view, loaded, window, cx| {
                 if access(view).context_epoch != epoch || !valid(view, target, cx) {
                     return;
                 }
+                let loaded = loaded.into_iter().map(|(path, result)| match result {
+                    Ok(file) => Some(file),
+                    Err(error) => {
+                        if !notify_failures || language_for_path(&path) != "markdown" { return None; }
+                        let message = match error {
+                            EditorOpenError::Message(message) => message,
+                            EditorOpenError::NotText(path) => t_fmt(L10nKey::EditorBinaryFile, &[("path", &path.display().to_string())]),
+                        };
+                        window.notify_app(message, cx);
+                        None
+                    }
+                }).collect();
                 landed(view, loaded, window, cx);
             },
         );

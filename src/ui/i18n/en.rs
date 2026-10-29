@@ -573,6 +573,8 @@ pub fn translate_en(key: L10nKey) -> &'static str {
         L10nKey::SearchWorkspacesAndMachines => "Search workspaces, tabs, and machines…",
         L10nKey::SearchFonts => "Search fonts…",
         L10nKey::SearchFind => "Find…",
+        L10nKey::EditorSearchReplacement => "Replace…",
+        L10nKey::EditorSearchReplaceAll => "Replace All",
         L10nKey::SearchMatchCase => "Match case",
         L10nKey::SearchUseRegex => "Use regular expression",
         L10nKey::NewFolderName => "New folder name",

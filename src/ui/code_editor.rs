@@ -29,6 +29,7 @@ mod buffers;
 pub(crate) mod commands;
 mod document_input;
 pub(crate) mod markdown;
+mod markdown_search;
 use buffers::Loaded;
 pub(crate) use document_input::MarkdownWorkbench;
 use document_input::{EditorInput, MarkdownPresentations};
@@ -1483,6 +1484,10 @@ impl LyrelApp {
         self.editor_has_focus(window, cx)
             || (self.code_panel_visible() && self.editor.empty_focus.is_focused(window))
             || self.editor.bar_has_focus(window, cx)
+            || self.active_editor_input().and_then(|input| {
+                let source = input.markdown()?;
+                self.active_buffer()?.presentations.search(source)
+            }).is_some_and(|search| search.read(cx).has_focus(window, cx))
     }
 
     pub(crate) fn editor_save_active(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -2519,9 +2524,10 @@ impl LyrelApp {
                 let view = f.presentations.view(input, tab, group, cx);
                 let app = cx.entity().downgrade();
                 let id = f.id();
-                div()
+                v_flex()
                     .size_full()
-                    .child(view)
+                    .children(f.presentations.search(&view))
+                    .child(div().flex_1().min_h_0().child(view))
                     .context_menu(move |menu, _, cx| Self::editor_body_menu(menu, &app, id, cx))
                     .into_any_element()
             }
