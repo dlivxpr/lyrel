@@ -2295,7 +2295,7 @@ fn opening_native_images_never_contacts_http_until_loading_intent(
         std::thread::sleep(std::time::Duration::from_millis(5));
     }
     assert_eq!(requests.load(Ordering::SeqCst), 0, "render, prefetch and size discovery must not request images");
-    let before = view.read_with(&context, |view, cx| view.range_to_bounds(&(source.len()..source.len()), cx));
+    let before = view.read_with(&context, |view, cx| view.range_to_bounds(&(source.len()..source.len()), cx).expect("caret geometry before loading"));
     context.update(|window, cx| window.click("markdown-load-images", cx));
     loop {
         context.run_until_parked();
@@ -2310,7 +2310,7 @@ fn opening_native_images_never_contacts_http_until_loading_intent(
     assert_eq!(requests.load(Ordering::SeqCst), 1);
     view.read_with(&context, |view, cx| {
         assert_eq!(view.document().read(cx).source().to_string(), source);
-        assert_eq!(view.range_to_bounds(&(source.len()..source.len()), cx), before);
+        assert_eq!(view.range_to_bounds(&(source.len()..source.len()), cx).expect("caret geometry after loading"), before);
     });
     stop.send(()).unwrap();
     server.join().unwrap();
@@ -2371,12 +2371,28 @@ fn native_document_images_read_owning_host_and_reject_old_link_results(
         assert!(std::time::Instant::now() < deadline);
         std::thread::sleep(std::time::Duration::from_millis(5));
     }
+    let moved_directory = directory.path().join("renamed");
+    std::fs::create_dir(&moved_directory).unwrap();
+    let moved = moved_directory.join("owned-images.md");
+    std::fs::rename(&path, &moved).unwrap();
+    app.update_in(&mut context, |app, _, cx| {
+        app.editor_path_moved(lyrel_core::host::HostId(114), &path, &moved, cx);
+    });
+    loop {
+        context.run_until_parked();
+        if context.update(|window, cx| {
+            window.render_frame(cx);
+            window.find("markdown-image:new.png").label() == Some(crate::ui::i18n::t(crate::ui::i18n::L10nKey::EditorImageFailed).as_ref())
+        }) { break; }
+        assert!(std::time::Instant::now() < deadline);
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
     release.send(()).unwrap();
     settle_live_geometry(&view, &mut context);
     context.update(|window, cx| {
         window.render_frame(cx);
         assert!(window.try_find("markdown-image:old.png").is_none());
-        assert_eq!(window.find("markdown-image:new.png").label(), Some(crate::ui::i18n::t(crate::ui::i18n::L10nKey::EditorImageLoaded).as_ref()));
+        assert_eq!(window.find("markdown-image:new.png").label(), Some(crate::ui::i18n::t(crate::ui::i18n::L10nKey::EditorImageFailed).as_ref()));
     });
     view.read_with(&context, |view, cx| assert_eq!(view.document().read(cx).source().to_string(), source.replace("old.png", "new.png")));
     assert_eq!(std::fs::read(&old).unwrap()[..8], *b"\x89PNG\r\n\x1a\n");
