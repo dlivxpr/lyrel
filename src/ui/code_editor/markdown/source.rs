@@ -43,6 +43,7 @@ pub(crate) struct SourcePresentation {
     reveal_at: Option<usize>,
     selection_notification: bool,
     _observe: Subscription,
+    mdx_state: super::mdx::ViewState,
 }
 impl SourcePresentation {
     pub(crate) fn new(
@@ -53,6 +54,14 @@ impl SourcePresentation {
         super::lists::init(cx);
         let observe = cx.subscribe(&document, |this, _, event: &DocumentEvent, cx| {
             if matches!(event, DocumentEvent::ResourceContextChanged | DocumentEvent::ImagesChanged) {
+                if matches!(event, DocumentEvent::ResourceContextChanged) {
+                    let document = this.document.read(cx);
+                    if this.projection.grammar != document.grammar() {
+                        this.projection.install(Projection::source(document.source(), document.revision(), document.grammar()));
+                        this.rendered_revision = None;
+                        this.schedule_parse(cx);
+                    }
+                }
                 this.refresh_images(false, cx);
                 this.geometry = None;
                 cx.notify();
@@ -89,8 +98,7 @@ impl SourcePresentation {
                 cx.notify();
             }
         });
-        let projection =
-            Projection::source(document.read(cx).source(), document.read(cx).revision());
+        let projection = Projection::source(document.read(cx).source(), document.read(cx).revision(), document.read(cx).grammar());
         Self {
             document,
             state: PresentationState::default(),
@@ -118,6 +126,7 @@ impl SourcePresentation {
             reveal_at: None,
             selection_notification: false,
             _observe: observe,
+            mdx_state: super::mdx::ViewState::default(),
         }
     }
     pub(crate) fn document(&self) -> &Entity<MarkdownDocument> {
@@ -148,6 +157,7 @@ impl SourcePresentation {
             self.projection.install(Projection::source(
                 self.document.read(cx).source(),
                 self.document.read(cx).revision(),
+                self.document.read(cx).grammar(),
             ));
         }
         self.reveal_caret = true;
@@ -156,13 +166,15 @@ impl SourcePresentation {
         cx.notify();
     }
     fn schedule_parse(&mut self, cx: &mut Context<Self>) {
-        if !self.live && self.projection.revision == self.document.read(cx).revision() {
+        if !self.live && self.projection.revision == self.document.read(cx).revision()
+            && self.projection.grammar == self.document.read(cx).grammar() {
             return;
         }
         let live = self.live;
         let document = self.document.clone();
         let identity = document.entity_id();
         let revision = document.read(cx).revision();
+        let grammar = document.read(cx).grammar();
         let source = document.read(cx).source().clone();
         self.parse_task = Some(cx.spawn(async move |view, cx| {
             cx.background_executor()
@@ -170,12 +182,13 @@ impl SourcePresentation {
                 .await;
             let projection = cx
                 .background_executor()
-                .spawn(async move { Projection::parse(&source.to_string(), revision, live) })
+                .spawn(async move { Projection::parse(&source.to_string(), revision, live, grammar) })
                 .await;
             let _ = view.update(cx, |view, cx| {
                 if view.live == live
                     && view.document.entity_id() == identity
                     && view.document.read(cx).revision() == revision
+                    && view.document.read(cx).grammar() == grammar
                 {
                     view.projection.install(projection);
                     view.sync_inline_reveal();
@@ -326,6 +339,10 @@ impl SourcePresentation {
         cx: &mut Context<Self>,
     ) {
         self.state.selection = self.map_live_caret(self.state.selection, cx);
+        let command = if self.live && self.extra_selections.is_empty() && self.projection.grammar == self.document.read(cx).grammar()
+            && self.projection.revision == self.document.read(cx).revision() {
+            super::mdx::name_command(&self.projection.mdx, self.document.read(cx), &self.state, command)
+        } else { command };
         let command = match command {
             Command::Select(selection) => Command::Select(self.map_live_caret(selection, cx)),
             command => command,
@@ -1275,8 +1292,14 @@ impl Render for SourcePresentation {
             .iter()
             .map(|leaf| &self.blocks[&leaf.id].node)
             .collect();
+        let component_source = self.document.read(cx).source().clone();
         let block = div()
             .w_full()
+            .when_some(self.projection.error.as_ref(), |block, error| {
+                block.child(div().text_sm().text_color(cx.theme().danger)
+                    .child(crate::ui::i18n::t(crate::ui::i18n::L10nKey::EditorMdxParseError))
+                    .child(div().text_xs().child(error.clone())))
+            })
             .children(
                 self.projection
                     .leaves
@@ -1301,6 +1324,10 @@ impl Render for SourcePresentation {
                             window,
                             cx,
                         );
+                        let rendered = if self.live {
+                            let field = super::mdx::view::FieldContext::new(&self.projection, leaf, &component_source, &self.mdx_state);
+                            super::mdx::view::render_field(&field, rendered, window, cx)
+                        } else { rendered };
                         Some(
                             div()
                                 .id(("markdown-block", leaf.id))

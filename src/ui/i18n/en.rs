@@ -1727,6 +1727,13 @@ pub fn translate_en(key: L10nKey) -> &'static str {
         L10nKey::EditorMarkdownSourceRegion => {
             "Source · structure not yet adapted for live editing"
         }
+        L10nKey::EditorMdxGeneric => "Generic JSX structure · not runtime output",
+        L10nKey::EditorMdxName => "Component name",
+        L10nKey::EditorMdxProperty => "Property",
+        L10nKey::EditorMdxDynamic => "Dynamic source · never executed",
+        L10nKey::EditorMdxChildren => "Children · continuous Markdown",
+        L10nKey::EditorMdxClosing => "End component",
+        L10nKey::EditorMdxParseError => "Invalid MDX · edit the retained source to recover",
         L10nKey::EditorMarkdownCodeRegion => "Code source",
         L10nKey::EditorMarkdownMetadataRegion => "Metadata source",
         L10nKey::EditorMarkdownHtmlRegion => "HTML source · not executed or rendered as HTML/CSS",
