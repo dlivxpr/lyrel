@@ -2512,6 +2512,28 @@ fn native_math_renders_glyph_atoms_and_local_source_uses_document_history_and_sa
         assert_eq!(view.selection(), Selection::caret(at - 5));
         assert_eq!(view.document().read(cx).encode().unwrap(), source.as_bytes());
     });
+    // Do not pump the executor between revisions: the first requested glyph
+    // batch is still queued when its source is replaced by the second edit.
+    for replacement in ["x_i^3", "x_i^4"] {
+        view.update_in(&mut context, |view, window, cx| {
+            view.command(Command::Replace { range: at - 5..at, text: replacement.into(), kind: EditKind::Command }, window, cx);
+        });
+    }
+    view.update_in(&mut context, |view, _, cx| view.select_range(0..0, cx));
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    loop {
+        context.run_until_parked();
+        context.update(|window, cx| window.render_frame(cx));
+        if context.update(|window, _| window.try_find("markdown-math-ready-x_i^4").is_some()) { break; }
+        assert!(std::time::Instant::now() < deadline, "newest formula output did not replace the queued old revision");
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    context.update(|window, _| assert!(window.try_find("markdown-math-ready-x_i^3").is_none()));
+    view.read_with(&context, |view, cx| assert_eq!(view.document().read(cx).encode().unwrap(), source.replacen("x_i^2", "x_i^4", 1).as_bytes()));
+    context.dispatch_action(gpui_kit::component::input::Undo);
+    context.dispatch_action(gpui_kit::component::input::Undo);
+    context.run_until_parked();
+    view.read_with(&context, |view, cx| assert_eq!(view.document().read(cx).encode().unwrap(), source.as_bytes()));
     view.update_in(&mut context, |view, window, cx| {
         view.select_range(at..at, cx);
         view.focus_handle(cx).focus(window, cx);

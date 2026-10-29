@@ -167,7 +167,9 @@ impl Leaf {
                 let revealed = std::iter::once(&selection).chain(extra).any(|selection| {
                     let range = selection.range();
                     if range.is_empty() { segment.source.start < range.start && range.start < segment.source.end }
-                    else { range.start < segment.source.end && range.end > segment.source.start }
+                    else if segment.math.is_some() {
+                        [selection.anchor, selection.head].into_iter().any(|at| segment.source.start < at && at < segment.source.end)
+                    } else { range.start < segment.source.end && range.end > segment.source.start }
                 }) || marked.is_some_and(|range| range.start < segment.source.end && range.end > segment.source.start);
                 changed |= segment.verbatim != revealed;
                 segment.verbatim = revealed;
@@ -304,7 +306,7 @@ impl Leaf {
             }
             if source < span.source.end {
                 return span.display.start
-                    + if span.source.len() == span.display.len() {
+                    + if span.source.len() == span.display.len() && !(span.math.is_some() && !span.verbatim) {
                         source - span.source.start
                     } else {
                         0
@@ -339,7 +341,7 @@ impl Leaf {
                 },
                 |s| {
                     s.source.start
-                        + if s.source.len() == s.display.len() {
+                        + if s.source.len() == s.display.len() && !(s.math.is_some() && !s.verbatim) {
                             display.saturating_sub(s.display.start)
                         } else {
                             0
