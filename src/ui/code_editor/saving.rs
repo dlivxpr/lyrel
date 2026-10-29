@@ -119,6 +119,7 @@ impl EditorPanelState {
         cx: &mut Context<E>,
         bridge: EditorBridge<E>,
     ) {
+        if let Some(file) = self.buffers.get(id) { file.input.finish_composition(window, cx); }
         let Some(file) = self.buffers.get_mut(id) else {
             return;
         };
@@ -131,9 +132,11 @@ impl EditorPanelState {
             return;
         }
         let text = file.input.read(cx).text().to_string();
-        if let Some(fixed) = editor_text::apply_save_rules(&text, &file.config) {
-            let input = file.input.clone();
-            replace_buffer_text(&input, &fixed, window, cx);
+        if file.input.code().is_some() {
+            if let Some(fixed) = editor_text::apply_save_rules(&text, &file.config) {
+                let input = file.input.clone();
+                replace_buffer_text(&input, &fixed, window, cx);
+            }
         }
         let Some(file) = self.buffers.get_mut(id) else {
             return;
@@ -144,7 +147,7 @@ impl EditorPanelState {
         } else {
             text
         };
-        let bytes = match editor_text::encode(&text, &file.format) {
+        let bytes = match editor_text::encode(&text, &file.format(cx)) {
             Ok(bytes) => bytes,
             Err(error) => {
                 self.offer_utf8(id, error.unmappable, window, cx, bridge);
@@ -159,7 +162,7 @@ impl EditorPanelState {
             _ => Some(file.disk_mtime),
         };
         let written = Fingerprint::of_str(&text);
-        let format = file.format;
+        let format = file.format(cx);
         let host = file.host.clone();
         let target = file.path.clone();
         let directory = target.parent().map(Path::to_path_buf);
@@ -280,7 +283,7 @@ impl EditorPanelState {
         };
         let file = self.buffers.get(id).unwrap();
         let name = file.label();
-        let encoding = file.format.encoding_label();
+        let encoding = file.format(cx).encoding_label();
         self.saves_failed(id);
         let answer = window.prompt(
             PromptLevel::Warning,
@@ -304,10 +307,10 @@ impl EditorPanelState {
                 }
                 if matches!(choice, Ok(0)) {
                     let file = editor.buffers.get_mut(id).unwrap();
-                    file.format = TextFormat {
-                        line_ending: file.format.line_ending,
+                    file.set_format(TextFormat {
+                        line_ending: file.format(cx).line_ending,
                         ..TextFormat::default()
-                    };
+                    }, cx);
                     editor.save(id, false, Path::new(""), window, cx, bridge);
                 } else {
                     (bridge.event)(view, EditorEvent::Focus, window, cx);
@@ -411,8 +414,7 @@ impl EditorPanelState {
         file.untitled = None;
         file.conflict = None;
         let language = file.language();
-        file.input
-            .update(cx, |input, cx| input.set_highlighter(language, cx));
+        file.input.set_highlighter(language, cx);
         self.save(id, true, Path::new(""), window, cx, bridge);
     }
 

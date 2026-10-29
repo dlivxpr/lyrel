@@ -433,7 +433,8 @@ impl LyrelApp {
     /// Where the caret is in the buffer in front, if there is one.
     fn nav_here(&self, cx: &gpui_kit::App) -> Option<Sample> {
         let f = self.active_buffer()?;
-        let state = f.input.read(cx);
+        let input = self.active_editor_input()?;
+        let state = input.read(cx);
         Some(Sample {
             at: NavLocation {
                 host: f.host.id(),
@@ -546,9 +547,9 @@ impl LyrelApp {
                 .or_default()
                 .expect(target.clone(), at);
             self.editor_show_in_tab(tab, id, true, window, cx);
-            if let Some(f) = self.editor.buffers.get(id) {
+            if let Some(input) = self.editor_input_for(id) {
                 place_cursor(
-                    f.input.clone(),
+                    input,
                     target.pos,
                     CURSOR_SCROLL_ATTEMPTS,
                     window,
@@ -673,7 +674,7 @@ impl LyrelApp {
             return;
         };
         let id = f.id();
-        let input = f.input.clone();
+        let Some(input) = self.active_editor_input() else { return; };
         // A symbol is a place in the source; a rendered Markdown file shows
         // the source to be taken to it.
         if let Some(f) = self.editor.buffers.get_mut(id) {
@@ -721,15 +722,9 @@ impl LyrelApp {
         let Some(buffer) = self.editor.nav.preview.as_ref().map(|p| p.buffer) else {
             return;
         };
-        let Some(f) = self.editor.buffers.get(buffer) else {
-            return;
-        };
-        f.input.update(cx, |state, cx| {
-            let offset = state
-                .text()
-                .position_to_offset(&Position::new(line, column));
-            state.set_selected_range(offset..offset, cx);
-        });
+        let Some(input) = self.editor_input_for(buffer) else { return; };
+        let offset = input.read(cx).text().position_to_offset(&Position::new(line, column));
+        input.set_selected_range(offset..offset, cx);
     }
 
     /// Begins a preview in the file in front for a picker someone else
@@ -770,13 +765,9 @@ impl LyrelApp {
         let Some(preview) = self.editor.nav.preview.take() else {
             return;
         };
-        let Some(f) = self.editor.buffers.get(preview.buffer) else {
-            return;
-        };
-        f.input.update(cx, |state, cx| {
-            state.set_cursor_position(preview.origin, window, cx);
-            state.set_scroll_offset(preview.scroll, cx);
-        });
+        let Some(input) = self.editor_input_for(preview.buffer) else { return; };
+        input.set_cursor_position(preview.origin, window, cx);
+        input.set_scroll_offset(preview.scroll, cx);
     }
 
     /// Puts the caret on a 0-based position in the buffer in front.
@@ -788,11 +779,9 @@ impl LyrelApp {
         cx: &mut Context<Self>,
     ) {
         self.editor.nav.preview = None;
-        let Some(f) = self.active_buffer() else {
-            return;
-        };
+        let Some(input) = self.active_editor_input() else { return; };
         place_cursor(
-            f.input.clone(),
+            input,
             Position::new(line, column),
             CURSOR_SCROLL_ATTEMPTS,
             window,
@@ -1465,7 +1454,7 @@ pub(super) mod gpui_tests {
 
     pub(crate) fn put_caret(app: &Entity<LyrelApp>, vcx: &mut VisualTestContext, line: u32) {
         app.update_in(vcx, |app, window, cx| {
-            let input = app.active_buffer().unwrap().input.clone();
+            let input = app.active_buffer().unwrap().input.code().expect("ordinary code editor").clone();
             input.update(cx, |s, cx| {
                 s.set_cursor_position(Position::new(line, 4), window, cx)
             });
@@ -1583,7 +1572,7 @@ pub(super) mod gpui_tests {
         put_caret(&app, &mut vcx, 50);
         // Three lines typed at the top of the file.
         app.update_in(&mut vcx, |app, window, cx| {
-            let input = app.active_buffer().unwrap().input.clone();
+            let input = app.active_buffer().unwrap().input.code().expect("ordinary code editor").clone();
             input.update(cx, |s, cx| {
                 s.replace_text_in_range(Some(0..0), "//\n//\n//\n", window, cx);
                 // Typing took the caret to the top; back to where it was
@@ -1626,7 +1615,7 @@ pub(super) mod gpui_tests {
             before.replace("fn gamma()", "fn gamma_completed()")
         );
         app.update_in(&mut vcx, |app, window, cx| {
-            let input = app.active_buffer().unwrap().input.clone();
+            let input = app.active_buffer().unwrap().input.code().expect("ordinary code editor").clone();
             input.update(cx, |state, cx| {
                 state.replace_text_in_range(
                     Some(0..before.encode_utf16().count()),
@@ -1663,7 +1652,7 @@ pub(super) mod gpui_tests {
             before.replace("fn gamma()", "fn gamma_completed()")
         );
         app.update_in(&mut vcx, |app, window, cx| {
-            let input = app.active_buffer().unwrap().input.clone();
+            let input = app.active_buffer().unwrap().input.code().expect("ordinary code editor").clone();
             input.update(cx, |state, cx| {
                 state.replace_text_in_range(
                     Some(0..before.encode_utf16().count()),

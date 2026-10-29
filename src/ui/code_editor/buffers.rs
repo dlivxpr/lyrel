@@ -40,6 +40,7 @@ struct WatchBatch {
 pub(super) struct OpenTarget {
     pub(super) workspace: WorkspaceId,
     pub(super) tab: TabId,
+    pub(super) group: Option<split::GroupId>,
     pub(super) window_host: HostId,
 }
 
@@ -186,11 +187,11 @@ impl EditorBuffers {
         let Some(file) = self.get_mut(id) else { return };
         // Every edit also retires reads/stat results prepared for older text.
         file.reload_seq = file.reload_seq.wrapping_add(1);
-        let text = file.input.read(cx).text();
+        let input = file.input.read(cx);
+        let text = input.text();
         let len = text.len();
-        let same =
-            len == file.saved.len && Fingerprint::of_chunks(len, text.chunks()) == file.saved;
-        file.dirty = !same || file.format != file.saved_format;
+        let same = len == file.saved.len && Fingerprint::of_chunks(len, text.chunks()) == file.saved;
+        file.dirty = !same || file.format(cx) != file.saved_format;
     }
 
     /// Loading is host-bound; the target guard runs before allocating a buffer.
@@ -214,7 +215,7 @@ impl EditorBuffers {
         let seq = self.open_seq;
         self.foreground.insert(target.tab, seq);
         if let Some(id) = self.at(host.id(), path) {
-            self.place_cursor(id, cursor, window, cx);
+            self.place_cursor(id, cursor, target, window, cx);
             return Some(id);
         }
         self.pending.insert(key.clone(), seq);
@@ -242,7 +243,7 @@ impl EditorBuffers {
                         let (id, created) =
                             access(view).install(host, loaded, window, cx, access, edited);
                         if front {
-                            access(view).place_cursor(id, cursor, window, cx);
+                            access(view).place_cursor(id, cursor, target, window, cx);
                         }
                         OpenResult::Opened { id, created, front }
                     }
@@ -294,19 +295,17 @@ impl EditorBuffers {
         &mut self,
         id: BufferId,
         cursor: Option<Position>,
+        target: OpenTarget,
         window: &mut Window,
         cx: &mut gpui_kit::App,
     ) {
         let Some(position) = cursor else { return };
         let Some(file) = self.get_mut(id) else { return };
         file.preview = false;
-        place_cursor(
-            file.input.clone(),
-            position,
-            CURSOR_SCROLL_ATTEMPTS,
-            window,
-            cx,
-        );
+        let input = if let (Some(source), Some(group)) = (file.input.markdown(), target.group) {
+            EditorInput::Markdown(file.presentations.view(source, target.tab, group, cx))
+        } else { file.input.clone() };
+        place_cursor(input, position, CURSOR_SCROLL_ATTEMPTS, window, cx);
     }
 
     pub(super) fn install<E: 'static>(
@@ -367,38 +366,58 @@ impl EditorBuffers {
         };
         let cfg = cx.global::<crate::core::config::Config>();
         let wrap = cfg.editor_soft_wrap;
-        let preview = cfg.editor_markdown_preview && language == "markdown";
+        let native_markdown = cx.try_global::<MarkdownWorkbench>().is_some()
+            && matches!(path.extension().and_then(|ext| ext.to_str()).map(str::to_ascii_lowercase).as_deref(), Some("md" | "markdown" | "mdx"));
+        let preview = !native_markdown && cfg.editor_markdown_preview && language == "markdown";
         let saved = Fingerprint::of_str(&text);
         let id = BufferId::new();
-        let input = cx.new(|cx| {
-            EditorState::new(window, cx)
-                .language(language)
-                .tab_size(tab_size(indent))
-                .line_number(true)
-                .searchable(true)
-                .replaceable(true)
-                .folding(true)
-                .soft_wrap(wrap)
-                .context_menu(false)
-                .default_value(text)
-        });
-        let popups = cx.new(|cx| crate::ui::lsp::popups::EditorPopups::new(&input, window, cx));
-        let sub = cx.subscribe_in(&input, window, move |view, _, ev, _, cx| {
-            if matches!(ev, InputEvent::Change) {
-                access(view).note_edit(id, cx);
-                edited(view, id, cx);
-            }
-        });
-        let observe = cx.observe(&input, |_, _, cx| cx.notify());
+        let (input, popups, sub, observe) = if native_markdown {
+            let document = cx.new(|_| markdown::MarkdownDocument::new(text, format));
+            let sub = cx.subscribe_in(&document, window, move |view, _, event: &markdown::DocumentEvent, _, cx| {
+                match event {
+                    markdown::DocumentEvent::Edited(_) => {
+                        access(view).note_edit(id, cx);
+                        edited(view, id, cx);
+                    }
+                    markdown::DocumentEvent::PresentationChanged => cx.notify(),
+                }
+            });
+            let presentation = cx.new(|cx| markdown::SourcePresentation::new(document, wrap, cx));
+            let observe = cx.observe(&presentation, |_, _, cx| cx.notify());
+            (EditorInput::Markdown(presentation), None, sub, observe)
+        } else {
+            let input = cx.new(|cx| {
+                EditorState::new(window, cx)
+                    .language(language)
+                    .tab_size(tab_size(indent))
+                    .line_number(true)
+                    .searchable(true)
+                    .replaceable(true)
+                    .folding(true)
+                    .soft_wrap(wrap)
+                    .context_menu(false)
+                    .default_value(text)
+            });
+            let popups = cx.new(|cx| crate::ui::lsp::popups::EditorPopups::new(&input, window, cx));
+            let sub = cx.subscribe_in(&input, window, move |view, _, ev, _, cx| {
+                if matches!(ev, InputEvent::Change) {
+                    access(view).note_edit(id, cx);
+                    edited(view, id, cx);
+                }
+            });
+            let observe = cx.observe(&input, |_, _, cx| cx.notify());
+            (EditorInput::Code(input), Some(popups), sub, observe)
+        };
         self.files.push(OpenFile {
             id,
             path,
             untitled,
             host,
             input,
+            presentations: MarkdownPresentations::default(),
             dirty: false,
             saved,
-            format,
+            format: (!native_markdown).then_some(format),
             saved_format: format,
             config,
             indent,
@@ -662,7 +681,7 @@ impl EditorBuffers {
                 file.disk_mtime = mtime;
                 file.conflict = None;
                 file.saved = Fingerprint::of_str(&decoded.text);
-                file.format = decoded.format;
+                file.set_format(decoded.format, cx);
                 file.saved_format = decoded.format;
                 let input = file.input.clone();
                 replace_buffer_text(&input, &decoded.text, window, cx);
@@ -693,9 +712,7 @@ impl EditorBuffers {
                 to.join(rest)
             };
             file.reload_seq = file.reload_seq.wrapping_add(1);
-            file.input.update(cx, |state, cx| {
-                state.set_highlighter(language_for_path(&file.path), cx)
-            });
+            file.input.set_highlighter(language_for_path(&file.path), cx);
             moved = true;
         }
         moved

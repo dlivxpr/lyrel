@@ -108,6 +108,103 @@ fn opening_across_tabs_shares_edits_and_closing_one_presentation_keeps_them(
 }
 
 #[gpui_kit::test]
+fn markdown_workbench_shares_native_source_history_and_host_save_across_groups(cx: &mut TestAppContext) {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("shared.mdx");
+    std::fs::write(&path, "alpha\nbeta\n").unwrap();
+    let (app, mut vcx, _streams) = harness_with_tabs(cx, 1);
+    vcx.update(|_, cx| cx.set_global(MarkdownWorkbench));
+    app.update_in(&mut vcx, |app, window, cx| app.open_file_in_editor(&path, window, cx));
+    wait_until(&mut vcx, |vcx| active_id(&app, vcx).is_some());
+    let id = active_id(&app, &vcx).unwrap();
+    let first = app.read_with(&vcx, |app, _| app.active_editor_input().unwrap().markdown().unwrap().clone());
+    vcx.update(|window, cx| { window.render_frame(cx); window.input("中🎉", cx); });
+    vcx.run_until_parked();
+    app.update_in(&mut vcx, |app, window, cx| { assert!(app.editor_split(window, cx)); });
+    vcx.update(|window, cx| window.render_frame(cx));
+    let second = app.read_with(&vcx, |app, _| app.active_editor_input().unwrap().markdown().unwrap().clone());
+    vcx.update(|_, cx| {
+        assert_ne!(first.entity_id(), second.entity_id());
+        assert_eq!(first.read(cx).document().entity_id(), second.read(cx).document().entity_id());
+        assert_eq!(first.read(cx).selection().head(), 7);
+        assert_eq!(second.read(cx).selection().head(), 0);
+    });
+    vcx.dispatch_action(gpui_kit::component::input::SelectAll);
+    vcx.dispatch_action(gpui_kit::component::input::Copy);
+    vcx.update(|_, cx| assert_eq!(cx.read_from_clipboard().and_then(|item| item.text()), Some("中🎉alpha\nbeta\n".into())));
+    vcx.dispatch_action(gpui_kit::component::input::Cut);
+    vcx.run_until_parked();
+    app.read_with(&vcx, |app, cx| assert_eq!(app.active_buffer().unwrap().input.read(cx).text().to_string(), ""));
+    vcx.dispatch_action(gpui_kit::component::input::Undo);
+    vcx.dispatch_action(gpui_kit::component::input::MoveToStart);
+    vcx.update(|_, cx| cx.write_to_clipboard(gpui_kit::ClipboardItem::new_string("\r\n".into())));
+    vcx.dispatch_action(gpui_kit::component::input::Paste);
+    vcx.run_until_parked();
+    app.read_with(&vcx, |app, cx| assert_eq!(app.active_buffer().unwrap().input.read(cx).text().to_string(), "\n中🎉alpha\nbeta\n"));
+    vcx.dispatch_action(gpui_kit::component::input::Backspace);
+    vcx.run_until_parked();
+    app.read_with(&vcx, |app, cx| assert_eq!(app.active_buffer().unwrap().input.read(cx).text().to_string(), "中🎉alpha\nbeta\n"));
+    vcx.dispatch_action(gpui_kit::component::input::Undo);
+    vcx.dispatch_action(gpui_kit::component::input::Undo);
+    vcx.dispatch_action(gpui_kit::component::input::Undo);
+    vcx.run_until_parked();
+    app.read_with(&vcx, |app, cx| assert_eq!(app.active_buffer().unwrap().input.read(cx).text().to_string(), "alpha\nbeta\n"));
+    vcx.dispatch_action(gpui_kit::component::input::Redo);
+    vcx.run_until_parked();
+    app.update_in(&mut vcx, |app, window, cx| {
+        app.editor_close_file(0, window, cx);
+        assert_eq!(app.tab_code().unwrap().active_id(), Some(id));
+        app.focus_editor(window, cx);
+    });
+    vcx.update(|window, cx| window.render_frame(cx));
+    vcx.dispatch_action(crate::core::actions::EditorSave);
+    wait_until(&mut vcx, |vcx| app.read_with(vcx, |app, _| app.active_buffer().is_some_and(|file| !file.dirty && !file.saving)));
+    assert_eq!(std::fs::read(&path).unwrap(), "中🎉alpha\nbeta\n".as_bytes());
+    app.update_in(&mut vcx, |app, window, cx| {
+        app.editor_close_file(0, window, cx);
+        app.open_file_in_editor(&path, window, cx);
+    });
+    wait_until(&mut vcx, |vcx| active_id(&app, vcx).is_some());
+    app.read_with(&vcx, |app, cx| {
+        let file = app.active_buffer().unwrap();
+        assert_ne!(file.id(), id);
+        assert!(file.input.code().is_none());
+        assert_eq!(file.input.read(cx).text().to_string(), "中🎉alpha\nbeta\n");
+        assert!(app.editor_unsaved().is_empty());
+    });
+}
+
+#[gpui_kit::test]
+fn markdown_native_handler_converts_utf16_and_composition_undo(cx: &mut TestAppContext) {
+    use gpui_kit::EntityInputHandler as _;
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("ime.md");
+    std::fs::write(&path, "A🎉Z").unwrap();
+    let (app, mut vcx, _streams) = harness_with_tabs(cx, 1);
+    vcx.update(|_, cx| cx.set_global(MarkdownWorkbench));
+    app.update_in(&mut vcx, |app, window, cx| app.open_file_in_editor(&path, window, cx));
+    wait_until(&mut vcx, |vcx| active_id(&app, vcx).is_some());
+    let view = app.read_with(&vcx, |app, _| app.active_editor_input().unwrap().markdown().unwrap().clone());
+    vcx.update(|window, cx| {
+        window.render_frame(cx);
+        view.update(cx, |view, cx| {
+            view.replace_and_mark_text_in_range(Some(1..3), "に🎉", Some(1..3), window, cx);
+            assert_eq!(view.marked_text_range(window, cx), Some(1..4));
+            assert_eq!(view.selected_text_range(false, window, cx).unwrap().range, 2..4);
+            view.replace_and_mark_text_in_range(None, "你好", Some(2..2), window, cx);
+            view.replace_text_in_range(None, "你好", window, cx);
+        });
+        window.render_frame(cx);
+        view.update(cx, |view, cx| {
+            assert!(view.bounds_for_range(3..3, gpui_kit::Bounds::default(), window, cx).is_some());
+        });
+    });
+    vcx.dispatch_action(gpui_kit::component::input::Undo);
+    vcx.run_until_parked();
+    app.read_with(&vcx, |app, cx| assert_eq!(app.active_buffer().unwrap().input.read(cx).text().to_string(), "A🎉Z"));
+}
+
+#[gpui_kit::test]
 fn equal_paths_on_distinct_hosts_do_not_share_buffers_or_local_lsp_documents(
     cx: &mut TestAppContext,
 ) {
