@@ -20,6 +20,8 @@ struct InlineSpan {
 pub(super) enum Kind {
     Prose,
     Heading(u8),
+    List(super::lists::Structure),
+    Quote(super::lists::Structure),
     Rule,
     Code(super::regions::Code),
     Metadata,
@@ -46,6 +48,7 @@ pub(super) struct Leaf {
     segments: Vec<Segment>,
     insertion: usize,
     content: String,
+    container: Option<Range<usize>>,
     spans: Vec<InlineSpan>,
     style: InlineStyle,
 }
@@ -60,6 +63,7 @@ impl Leaf {
             kind,
             segments: Vec::new(),
             content: String::new(),
+            container: None,
             spans: Vec::new(),
             style: InlineStyle::default(),
         }
@@ -208,6 +212,12 @@ impl Leaf {
             && self.segments == other.segments
             && self.spans == other.spans
     }
+    fn prefix(&mut self, source: &str, range: Range<usize>) {
+        if range.is_empty() { return; }
+        let ix = self.spans.len();
+        self.spans.push(InlineSpan { source: range.clone(), revealed: false });
+        self.push_segment(range.clone(), &source[range], Some(ix), None);
+    }
     fn raw(&mut self, source: &str, range: Range<usize>) {
         self.push(range.clone(), &source[range]);
     }
@@ -277,6 +287,12 @@ impl Leaf {
         };
         self.range = shift(self.range.start)..shift(self.range.end);
         self.insertion = shift(self.insertion);
+        if let Kind::List(style) | Kind::Quote(style) = &mut self.kind {
+            style.start = shift(style.start);
+        }
+        if let Some(container) = &mut self.container {
+            *container = shift(container.start)..shift(container.end);
+        }
         for segment in &mut self.segments {
             segment.source = shift(segment.source.start)..shift(segment.source.end);
         }
@@ -317,6 +333,13 @@ impl Projection {
                         continue;
                     };
                     let range = position.start.offset..position.end.offset;
+                    if matches!(node, Node::List(_) | Node::Blockquote(_)) {
+                        let start = source[..range.start].rfind('\n').map_or(0, |ix| ix + 1);
+                        Self::gap(source, cursor..start, &mut leaves);
+                        Self::container(source, node, 0, 0, range.start, start..range.end, &mut leaves);
+                        cursor = range.end;
+                        continue;
+                    }
                     Self::gap(source, cursor..range.start, &mut leaves);
                     let kind = super::regions::classify(node, &source[range.clone()]);
                     let mut leaf = Leaf::new(range.clone(), kind);
@@ -355,6 +378,51 @@ impl Projection {
             revision,
             leaves,
             next_id,
+        }
+    }
+    fn container(source: &str, node: &Node, depth: usize, quotes: usize, owner: usize, container: Range<usize>, leaves: &mut Vec<Leaf>) {
+        let Some(position) = node.position() else { return; };
+        let range = position.start.offset..position.end.offset;
+        match node {
+            Node::List(_) | Node::Blockquote(_) | Node::ListItem(_) => {
+                let depth = depth + usize::from(matches!(node, Node::List(_)));
+                let quotes = quotes + usize::from(matches!(node, Node::Blockquote(_)));
+                let owner = if matches!(node, Node::ListItem(_)) || (depth == 0 && matches!(node, Node::Blockquote(_))) { range.start } else { owner };
+                if let Some(children) = node.children().filter(|children| !children.is_empty()) {
+                    for child in children {
+                        Self::container(source, child, depth, quotes, owner, container.clone(), leaves);
+                    }
+                } else {
+                    let start = source[..range.start].rfind('\n').map_or(0, |ix| ix + 1);
+                    let style = super::lists::style(source, range.start, depth, quotes, owner);
+                    let mut leaf = Leaf::new(start..range.end, if depth > 0 { Kind::List(style) } else { Kind::Quote(style) });
+                    leaf.container = Some(container);
+                    leaf.prefix(source, start..range.end);
+                    leaf.insertion = range.end;
+                    leaves.push(leaf);
+                }
+            }
+            _ => {
+                let start = source[..range.start].rfind('\n').map_or(0, |ix| ix + 1);
+                let style = super::lists::style(source, range.start, depth, quotes, owner);
+                let prose = matches!(node, Node::Paragraph(_) | Node::Heading(_));
+                let kind = if prose {
+                    if depth > 0 { Kind::List(style) } else { Kind::Quote(style) }
+                } else { super::regions::classify(node, &source[range.clone()]) };
+                if let Some(previous) = leaves.last().filter(|previous| previous.range.end + 1 < start) {
+                    Self::gap(source, previous.range.end..start, leaves);
+                }
+                let mut leaf = Leaf::new(start..range.end, kind);
+                leaf.container = Some(container);
+                if prose {
+                    leaf.prefix(source, start..range.start);
+                    if let Some(children) = node.children() {
+                        for child in children { Self::inline(source, child, &mut leaf); }
+                    }
+                    if leaf.segments.is_empty() { leaf.insertion = range.end; }
+                } else { leaf.raw(source, start..range.end); }
+                leaves.push(leaf);
+            }
         }
     }
     fn source_lines(source: &str, base: usize, leaves: &mut Vec<Leaf>) {
@@ -453,6 +521,11 @@ impl Projection {
                             &rest[..ch.len_utf8()],
                         );
                         at += ch.len_utf8();
+                        if ch == '\n' && matches!(leaf.kind, Kind::List(_) | Kind::Quote(_)) {
+                            let width = super::lists::prefix_len(&raw[at..]);
+                            leaf.prefix(source, range.start + at..range.start + at + width);
+                            at += width;
+                        }
                     }
                 }
             }
@@ -583,12 +656,22 @@ impl Projection {
         }
         // Only affected leaves and their immediate neighbours are reparsed on
         // input. The debounced background parse resolves larger syntax changes.
-        let old = transaction
+        let mut old = transaction
             .edits
             .iter()
             .map(|edit| edit.range.clone())
             .reduce(|a, b| a.start.min(b.start)..a.end.max(b.end))
             .unwrap();
+        // Keep affected child leaves inside their original AST container while
+        // reparsing, so a nested item cannot temporarily become indented code.
+        for leaf in &self.leaves {
+            if leaf.range.start <= old.end && leaf.range.end >= old.start {
+                if let Some(container) = &leaf.container {
+                    old.start = old.start.min(container.start);
+                    old.end = old.end.max(container.end);
+                }
+            }
+        }
         let first = self
             .leaves
             .iter()

@@ -45,6 +45,7 @@ impl SourcePresentation {
         wrap: bool,
         cx: &mut Context<Self>,
     ) -> Self {
+        super::lists::init(cx);
         let observe = cx.subscribe(&document, |this, _, event: &DocumentEvent, cx| {
             if let DocumentEvent::Edited(transaction) = event {
                 this.state.rebase(transaction);
@@ -578,6 +579,16 @@ impl SourcePresentation {
         }
     }
     fn indent_selection(&mut self, outdent: bool, window: &mut Window, cx: &mut Context<Self>) {
+        let structure = self.projection.leaf_at(self.state.selection.range().start).and_then(|leaf| match leaf.kind {
+            Kind::List(style) | Kind::Quote(style) => Some(style),
+            _ => None,
+        });
+        if self.live && self.extra_selections.is_empty() {
+            if let Some(style) = structure {
+                self.command(Command::ListIndent { outdent, width: self.indent.size, at: Some(style.start) }, window, cx);
+                return;
+            }
+        }
         let selected = self.state.selection.range();
         let text = if self.indent.hard_tabs {
             "\t".into()
@@ -719,6 +730,16 @@ impl SourcePresentation {
     }
     fn enter(&mut self, hard: bool, window: &mut Window, cx: &mut Context<Self>) {
         let mut range = self.state.selection.range();
+        let structure = self.projection.leaf_at(range.start).and_then(|leaf| match leaf.kind {
+            Kind::List(style) | Kind::Quote(style) => Some(style),
+            _ => None,
+        });
+        if self.live && self.extra_selections.is_empty() {
+            if let Some(style) = structure {
+                self.command(Command::ListBreak { hard, at: Some(style.start) }, window, cx);
+                return;
+            }
+        }
         let region = self
             .live
             .then(|| self.projection.leaf_at(range.start))
@@ -762,6 +783,12 @@ impl SourcePresentation {
         let Some(leaf) = self.projection.leaf_at(at) else {
             return;
         };
+        if backward && matches!(leaf.kind, Kind::List(_) | Kind::Quote(_))
+            && at <= leaf.content_start()
+        {
+            self.command(Command::ListBackspace, window, cx);
+            return;
+        }
         if super::regions::label(leaf.kind).is_some() {
             self.command(
                 if backward {
@@ -1021,7 +1048,7 @@ impl Render for SourcePresentation {
                     let marked = self.state.marked_range();
                     let marks = leaf.marks(marked.as_ref());
                     paragraph.push(InlineNode::new(leaf.text.clone()).marks(marks));
-                    cached.node = match leaf.kind {
+                    let mut node = match leaf.kind {
                         Kind::Heading(level) if self.live => BlockNode::Heading {
                             level,
                             children: paragraph,
@@ -1029,6 +1056,24 @@ impl Render for SourcePresentation {
                         },
                         _ => BlockNode::Paragraph(paragraph),
                     };
+                    if self.live {
+                        if let Kind::List(style) | Kind::Quote(style) = leaf.kind {
+                            if style.task.is_none() {
+                                if let Some(marker) = style.marker {
+                                    node = BlockNode::List {
+                                        children: vec![BlockNode::ListItem { children: vec![node], spread: false, checked: None, span: None }],
+                                        ordered: matches!(marker, super::lists::Marker::Ordered(..)),
+                                        start: match marker { super::lists::Marker::Ordered(number, _) => Some(number), _ => None },
+                                        span: None,
+                                    };
+                                }
+                            }
+                            for _ in 0..style.quotes {
+                                node = BlockNode::Blockquote { children: vec![node], span: None };
+                            }
+                        }
+                    }
+                    cached.node = node;
                     cached.version = leaf.version;
                 }
                 cached.seen = self.render_generation;
@@ -1087,10 +1132,33 @@ impl Render for SourcePresentation {
                             cx,
                         ))
                     })
-                    .child(rendered)
+                    .child({
+                        let style = match leaf.kind {
+                            Kind::List(style) | Kind::Quote(style) if self.live => Some(style),
+                            _ => None,
+                        };
+                        if let Some(style) = style {
+                        let mut row = div().flex().items_start().min_w_0().w_full();
+                            let levels = style.depth.saturating_sub(1) + usize::from(style.depth > 0 && style.marker.is_none());
+                            row = row.pl(rems(levels as f32 * 1.5));
+                            if let Some(checked) = style.task {
+                                let at = leaf.range.start;
+                                row = row.gap_2().child(
+                                    gpui_kit::component::checkbox::Checkbox::new(("markdown-task", leaf.id))
+                                        .checked(checked)
+                                        .accessibility_label(format!("Toggle task: {}", leaf.text))
+                                        .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                                        .on_change(cx.listener(move |this, _, window, cx| {
+                                            this.command(Command::ToggleTask { at }, window, cx);
+                                        })),
+                                );
+                            }
+                            row.child(div().flex_1().min_w_0().child(rendered)).into_any_element()
+                        } else { rendered }
+                    })
             }));
         let key_context =
-            KeyContext::parse("Input mode=editor").expect("static editor key context");
+            KeyContext::parse("Input mode=editor Markdown").expect("static editor key context");
         let root =
             div()
                 .id("markdown-source")
@@ -1182,6 +1250,19 @@ impl Render for SourcePresentation {
                 }))
                 .on_action(cx.listener(|this, _: &actions::Redo, window, cx| {
                     this.command(Command::Redo, window, cx)
+                }))
+                .on_action(cx.listener(|this, _: &super::lists::ToggleTask, window, cx| {
+                    let task = this.projection.leaf_at(this.state.selection.head).and_then(|leaf| match leaf.kind {
+                        Kind::List(style) if style.task.is_some() => Some(style.start),
+                        _ => None,
+                    });
+                    if this.live && !this.is_composing() {
+                        if let Some(at) = task {
+                            this.command(Command::ToggleTask { at }, window, cx);
+                            return;
+                        }
+                    }
+                    cx.propagate();
                 }))
                 .on_action(cx.listener(|this, _: &actions::Backspace, window, cx| {
                     this.delete_prose(true, window, cx)
