@@ -485,6 +485,7 @@ impl EditorBuffers {
             popups,
             _assets_sub: None,
             asset_location: None,
+            asset_save_required: untitled.is_some(),
             _sub: sub,
             _observe: observe,
             _links_sub: None,

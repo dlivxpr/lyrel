@@ -1118,6 +1118,17 @@ fn markdown_untitled_host_save_must_finish_before_assets_and_failed_save_never_c
     assert!(!failed_dir.path().join("assets").exists());
     assert!(!failed.exists());
     app.read_with(&vcx, |app, cx| assert_eq!(app.active_buffer().unwrap().input.read(cx).text().to_string(), ""));
+    paste_screenshot(&mut vcx, &screenshot_bytes());
+    app.read_with(&vcx, |app, _| assert!(app.editor.has_bar(), "a failed document save must not authorize assets on a subsequent paste"));
+    assert!(!failed_dir.path().join("assets").exists());
+    vcx.update(|window, cx| {
+        window.press("secondary-a", cx);
+        window.input(&failed.display().to_string(), cx);
+        window.press("enter", cx);
+    });
+    wait_until(&mut vcx, |vcx| app.read_with(vcx, |app, cx| app.active_buffer().unwrap().input.read(cx).text().to_string() == "![screenshot](assets/screenshot.png)"));
+    assert_eq!(read_owned(&host, &failed).unwrap(), b"");
+    assert_eq!(read_owned(&host, &failed_dir.path().join("assets/screenshot.png")).unwrap(), screenshot_bytes());
 }
 
 #[gpui_kit::test]

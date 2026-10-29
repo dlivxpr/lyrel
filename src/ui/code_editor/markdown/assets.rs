@@ -64,13 +64,9 @@ impl SourcePresentation {
             inputs: Some(inputs),
             cancelled: cancelled.clone(),
         });
-        if self.document.read(cx).resources().is_some_and(|resources| resources.path().is_some()) {
-            self.resume_pending_image(window, cx);
-        } else {
-            let presentation = cx.entity().downgrade();
-            self.document.update(cx, |_, cx| cx.emit(DocumentEvent::RequestAssetLocation { presentation, cancelled }));
-            cx.notify();
-        }
+        let presentation = cx.entity().downgrade();
+        self.document.update(cx, |_, cx| cx.emit(DocumentEvent::RequestAssetLocation { presentation, cancelled }));
+        cx.notify();
     }
 
 

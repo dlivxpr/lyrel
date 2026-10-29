@@ -146,6 +146,8 @@ pub(crate) struct OpenFile {
     popups: Option<Entity<crate::ui::lsp::popups::EditorPopups>>,
     _assets_sub: Option<Subscription>,
     asset_location: Option<(gpui_kit::WeakEntity<markdown::SourcePresentation>, std::rc::Rc<std::cell::Cell<bool>>)>,
+    /// Save As changing a path does not authorize assets until its write succeeds.
+    asset_save_required: bool,
     _sub: Subscription,
     _observe: Subscription,
     _links_sub: Option<Subscription>,
@@ -1155,7 +1157,17 @@ impl LyrelApp {
                         cancelled.set(true);
                         return;
                     }
-                    app.editor_save_as(id, window, cx);
+                    let Some(file) = app.editor.buffers.get(id) else { cancelled.set(true); return };
+                    if !file.asset_save_required {
+                        if let Some(source) = presentation.upgrade() {
+                            source.update(cx, |source, cx| source.resume_pending_image(window, cx));
+                        }
+                        return;
+                    }
+                    let saving = file.saving;
+                    if !saving {
+                        app.editor_save_as(id, window, cx);
+                    }
                     if let Some(file) = app.editor.buffers.get_mut(id) {
                         file.asset_location = Some((presentation.clone(), cancelled.clone()));
                     }

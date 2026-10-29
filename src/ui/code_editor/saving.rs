@@ -207,6 +207,7 @@ impl EditorPanelState {
                 }
                 match outcome {
                     SaveOutcome::Saved(mtime) => {
+                        file.asset_save_required = false;
                         file.disk_mtime = mtime;
                         file.saved = written;
                         file.saved_format = format;
@@ -428,6 +429,7 @@ impl EditorPanelState {
             return;
         }
         let file = self.buffers.get_mut(id).unwrap();
+        file.asset_save_required = true;
         file.path = path;
         file.untitled = None;
         if let Some(view) = file.input.markdown() {
