@@ -120,7 +120,10 @@ impl SourcePresentation {
                         == transaction.revision()
                 {
                     this.projection.rebase(doc.source(), transaction, this.live);
-                    if this.live { this.projection.component_sources(doc.source(), &this.mdx_state); }
+                    if this.live {
+                        this.projection
+                            .component_sources(doc.source(), &this.mdx_state);
+                    }
                     this.rendered_revision = None;
                 }
                 this.sync_inline_reveal();
@@ -263,7 +266,12 @@ impl SourcePresentation {
                     {
                         view.invalidate_layout(cx);
                         view.projection.install(projection);
-                        if live { view.projection.component_sources(view.document.read(cx).source(), &view.mdx_state); }
+                        if live {
+                            view.projection.component_sources(
+                                view.document.read(cx).source(),
+                                &view.mdx_state,
+                            );
+                        }
                         view.reveal_mdx_selection(cx);
                         view.sync_inline_reveal();
                         view.state.selection = view.map_live_caret(view.state.selection, cx);
@@ -452,7 +460,20 @@ impl SourcePresentation {
                 if leaf.inline_position(selection.head) {
                     return selection;
                 }
-                return Selection::caret(leaf.source_offset(leaf.display_offset(selection.head)));
+                let mapped = leaf.source_offset(leaf.display_offset(selection.head));
+                if mapped < selection.head
+                    && self
+                        .document
+                        .read(cx)
+                        .source()
+                        .slice(mapped..selection.head)
+                        .chars()
+                        .last()
+                        .is_some_and(|ch| matches!(ch, ' ' | '\t'))
+                {
+                    return selection;
+                }
+                return Selection::caret(mapped);
             }
         }
         selection
@@ -567,18 +588,38 @@ impl SourcePresentation {
         cx: &mut Context<Self>,
     ) {
         self.command(Command::FinishComposition, window, cx);
-        let Some(component) = self.projection.mdx.components.iter().find(|component| component.id() == id) else { return; };
+        let Some(component) = self
+            .projection
+            .mdx
+            .components
+            .iter()
+            .find(|component| component.id() == id)
+        else {
+            return;
+        };
         let children = component.children_range();
-        let at = self.state.selection.head.clamp(children.start, children.end);
+        let at = self
+            .state
+            .selection
+            .head
+            .clamp(children.start, children.end);
         let leaving = self.mdx_state.source_components.contains(&id);
-        self.update_mdx_view_state(|state| {
-            if leaving { state.source_components.remove(&id); }
-            else { state.source_components.insert(id); }
-        }, window, cx);
+        self.update_mdx_view_state(
+            |state| {
+                if leaving {
+                    state.source_components.remove(&id);
+                } else {
+                    state.source_components.insert(id);
+                }
+            },
+            window,
+            cx,
+        );
         if leaving {
             self.schedule_parse(cx);
         } else {
-            self.projection.component_sources(self.document.read(cx).source(), &self.mdx_state);
+            self.projection
+                .component_sources(self.document.read(cx).source(), &self.mdx_state);
         }
         self.command(Command::Select(Selection::caret(at)), window, cx);
         self.focus.focus(window, cx);
@@ -591,23 +632,51 @@ impl SourcePresentation {
     ) {
         self.command(Command::FinishComposition, window, cx);
         // Resolve the stable identity after composition may rebase the source.
-        let Some(component) = self.projection.mdx.components.iter().find(|component| component.id() == id) else { return; };
+        let Some(component) = self
+            .projection
+            .mdx
+            .components
+            .iter()
+            .find(|component| component.id() == id)
+        else {
+            return;
+        };
         let header = component.name_range().start;
         self.command(Command::Select(Selection::caret(header)), window, cx);
-        self.update_mdx_view_state(|state| {
-            if !state.collapsed.remove(&id) { state.collapsed.insert(id); }
-        }, window, cx);
+        self.update_mdx_view_state(
+            |state| {
+                if !state.collapsed.remove(&id) {
+                    state.collapsed.insert(id);
+                }
+            },
+            window,
+            cx,
+        );
         self.focus.focus(window, cx);
     }
     /// Source/undo selections reveal only their enclosing presentation state.
     /// Collapsing controls first select their own visible header, so they do not
     /// immediately reopen themselves through this hook.
     fn reveal_mdx_selection(&mut self, cx: &App) {
-        if !self.live || self.projection.revision != self.document.read(cx).revision()
-            || self.projection.grammar != self.document.read(cx).grammar() { return; }
+        if !self.live
+            || self.projection.revision != self.document.read(cx).revision()
+            || self.projection.grammar != self.document.read(cx).grammar()
+        {
+            return;
+        }
         let source = self.document.read(cx).source();
-        let tabs_changed = super::mdx::tabs::reveal_selection(&self.projection.mdx.components, source, &mut self.mdx_state, self.state.selection);
-        let accordions_changed = super::mdx::accordions::reveal_selection(&self.projection.mdx.components, source, &mut self.mdx_state, self.state.selection);
+        let tabs_changed = super::mdx::tabs::reveal_selection(
+            &self.projection.mdx.components,
+            source,
+            &mut self.mdx_state,
+            self.state.selection,
+        );
+        let accordions_changed = super::mdx::accordions::reveal_selection(
+            &self.projection.mdx.components,
+            source,
+            &mut self.mdx_state,
+            self.state.selection,
+        );
         if tabs_changed || accordions_changed {
             self.viewport.anchor = None;
             self.viewport.layout = None;
@@ -625,19 +694,50 @@ impl SourcePresentation {
         // Finalizing preedit can rebase every range. Resolve the stable IDs
         // afterwards, never select a range captured by the previous frame.
         self.command(Command::FinishComposition, window, cx);
-        if !self.live || self.document.read(cx).grammar() != super::mdx::Grammar::Mdx { return; }
-        let valid = self.projection.mdx.components.iter().any(|component| component.id() == group && component.child_ids().contains(&child));
-        if !valid { return; }
-        self.update_mdx_view_state(|state| { state.active_child.insert(group, child); }, window, cx);
+        if !self.live || self.document.read(cx).grammar() != super::mdx::Grammar::Mdx {
+            return;
+        }
+        let valid = self
+            .projection
+            .mdx
+            .components
+            .iter()
+            .any(|component| component.id() == group && component.child_ids().contains(&child));
+        if !valid {
+            return;
+        }
+        self.update_mdx_view_state(
+            |state| {
+                state.active_child.insert(group, child);
+            },
+            window,
+            cx,
+        );
         let target = {
             let source = self.document.read(cx).source();
-            let component = self.projection.mdx.components.iter().find(|component| component.id() == child).expect("validated tab child");
+            let component = self
+                .projection
+                .mdx
+                .components
+                .iter()
+                .find(|component| component.id() == child)
+                .expect("validated tab child");
             let range = component.children_range();
-            self.projection.leaves.iter().find(|leaf| {
-                range.start <= leaf.range.start && leaf.range.end <= range.end
-                    && !matches!(leaf.kind, Kind::Mdx(_))
-                    && super::mdx::view::visible_field(&super::mdx::view::FieldContext::new(&self.projection, leaf, source, &self.mdx_state))
-            }).map_or(component.name_range().start, |leaf| leaf.content_start())
+            self.projection
+                .leaves
+                .iter()
+                .find(|leaf| {
+                    range.start <= leaf.range.start
+                        && leaf.range.end <= range.end
+                        && !matches!(leaf.kind, Kind::Mdx(_))
+                        && super::mdx::view::visible_field(&super::mdx::view::FieldContext::new(
+                            &self.projection,
+                            leaf,
+                            source,
+                            &self.mdx_state,
+                        ))
+                })
+                .map_or(component.name_range().start, |leaf| leaf.content_start())
         };
         self.command(Command::Select(Selection::caret(target)), window, cx);
         self.focus.focus(window, cx);
@@ -897,7 +997,10 @@ impl SourcePresentation {
                 if self.projection.revision == revision {
                     self.projection
                         .rebase(document.source(), &transaction, self.live);
-                    if self.live { self.projection.component_sources(document.source(), &self.mdx_state); }
+                    if self.live {
+                        self.projection
+                            .component_sources(document.source(), &self.mdx_state);
+                    }
                 }
                 self.rendered_revision = None;
                 cx.emit(DocumentEvent::Edited(transaction));
@@ -1263,11 +1366,20 @@ impl SourcePresentation {
         // JSX fields expose native command controls, not indentation widgets.
         // Keep ordinary source/code/list/table Tab behavior unchanged while
         // allowing keyboard users to leave the single input for those controls.
-        if self.live && self.document.read(cx).grammar() == super::mdx::Grammar::Mdx
-            && (!self.focus.is_focused(window) || self.projection.leaf_at(self.state.selection.head)
-                .is_some_and(|leaf| matches!(leaf.kind, Kind::Mdx(_)))) {
+        if self.live
+            && self.document.read(cx).grammar() == super::mdx::Grammar::Mdx
+            && (!self.focus.is_focused(window)
+                || self
+                    .projection
+                    .leaf_at(self.state.selection.head)
+                    .is_some_and(|leaf| matches!(leaf.kind, Kind::Mdx(_))))
+        {
             self.command(Command::FinishComposition, window, cx);
-            if outdent { window.focus_prev(cx); } else { window.focus_next(cx); }
+            if outdent {
+                window.focus_prev(cx);
+            } else {
+                window.focus_next(cx);
+            }
             return;
         }
         let structure = self
@@ -1843,7 +1955,14 @@ impl Render for SourcePresentation {
                     end += 1;
                 }
             }
-            if self.live && !super::mdx::view::visible_field(&super::mdx::view::FieldContext::new(&self.projection, leaf, &component_source, &self.mdx_state)) {
+            if self.live
+                && !super::mdx::view::visible_field(&super::mdx::view::FieldContext::new(
+                    &self.projection,
+                    leaf,
+                    &component_source,
+                    &self.mdx_state,
+                ))
+            {
                 ix = end;
                 continue;
             }
@@ -2076,7 +2195,16 @@ impl Render for SourcePresentation {
                     .iter()
                     .enumerate()
                     .filter_map(|(ix, leaf)| {
-                        if self.live && !super::mdx::view::visible_field(&super::mdx::view::FieldContext::new(&self.projection, leaf, &component_source, &self.mdx_state)) {
+                        if self.live
+                            && !super::mdx::view::visible_field(
+                                &super::mdx::view::FieldContext::new(
+                                    &self.projection,
+                                    leaf,
+                                    &component_source,
+                                    &self.mdx_state,
+                                ),
+                            )
+                        {
                             return None;
                         }
                         if matches!(leaf.kind, Kind::TableCell(_))
@@ -2275,7 +2403,9 @@ impl Render for SourcePresentation {
         } else {
             div().into_any_element()
         };
-        let key_context = KeyContext::parse(if self.table_commands_enabled() {
+        let key_context = KeyContext::parse(if !self.focus.is_focused(window) {
+            "Markdown"
+        } else if self.table_commands_enabled() {
             "Input mode=editor Markdown MarkdownTable"
         } else {
             "Input mode=editor Markdown"
@@ -2925,8 +3055,11 @@ impl Element for SourceElement {
                     } else {
                         px(0.)
                     };
-                    if caret.top() >= viewport.top() && caret.bottom() <= viewport.bottom()
-                        && caret.left() >= viewport.left() && caret.right() <= viewport.right() {
+                    if caret.top() >= viewport.top()
+                        && caret.bottom() <= viewport.bottom()
+                        && caret.left() >= viewport.left()
+                        && caret.right() <= viewport.right()
+                    {
                         // Completion is observable only in a frame laid out at
                         // the final offset, not the frame requesting that offset.
                         view.reveal_caret = false;
