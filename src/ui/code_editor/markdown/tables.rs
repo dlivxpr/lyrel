@@ -165,3 +165,128 @@ pub(super) fn geometry(
         Some((leaf.id, Bounds::new(point(column.left(), row.top()), size(column.size.width, row.size.height))))
     }).collect()
 }
+
+gpui_kit::actions!(markdown_table, [
+    InsertRowBefore, InsertRowAfter, DeleteRow,
+    InsertColumnBefore, InsertColumnAfter, DeleteColumn,
+    AlignDefault, AlignLeft, AlignCenter, AlignRight,
+]);
+
+#[derive(Clone, Copy)]
+pub(crate) enum Operation {
+    InsertRowBefore, InsertRowAfter, DeleteRow,
+    InsertColumnBefore, InsertColumnAfter, DeleteColumn,
+    AlignDefault, AlignLeft, AlignCenter, AlignRight,
+}
+
+/// A structural command rewrites only the owning top-level GFM table. Cell
+/// fragments come from mdast source spans, never from their rendered labels.
+/// Deleting the sole row/column clears it, keeping a valid editable table;
+/// deleting a header promotes the next row. New cells are empty insertion sites.
+pub(super) fn edit(source: &str, selection: super::Selection, operation: Operation) -> Option<(Range<usize>, String, usize)> {
+    let mut options = markdown::ParseOptions::gfm();
+    options.constructs.frontmatter = true;
+    let root = markdown::to_mdast(source, &options).ok()?;
+    for node in root.children().into_iter().flatten() {
+        let Node::Table(table) = node else { continue; };
+        let position = node.position()?;
+        let range = position.start.offset..position.end.offset;
+        if selection.range().start < range.start || selection.range().end > range.end { continue; }
+        let mut active = None;
+        let mut rows = Vec::with_capacity(table.children.len() + 1);
+        for (row, row_node) in table.children.iter().enumerate() {
+            let mut cells = Vec::new();
+            for (column, cell) in row_node.children().into_iter().flatten().enumerate() {
+                let span = cell.position()?;
+                if column < table.align.len() && span.start.offset <= selection.head() && selection.head() <= span.end.offset {
+                    active = Some((row, column));
+                }
+                cells.push(source[span.start.offset..span.end.offset].trim().to_owned());
+            }
+            cells.resize(cells.len().max(table.align.len()), String::new());
+            rows.push(cells);
+        }
+        let (mut row, mut column) = active?;
+        let mut aligns = table.align.clone();
+        match operation {
+            Operation::InsertRowBefore | Operation::InsertRowAfter => {
+                row += usize::from(matches!(operation, Operation::InsertRowAfter));
+                rows.insert(row, vec![String::new(); aligns.len()]);
+            }
+            Operation::DeleteRow => {
+                if rows.len() == 1 {
+                    rows[0].iter_mut().for_each(String::clear);
+                } else {
+                    rows.remove(row);
+                    row = row.min(rows.len() - 1);
+                }
+            }
+            Operation::InsertColumnBefore | Operation::InsertColumnAfter => {
+                column += usize::from(matches!(operation, Operation::InsertColumnAfter));
+                aligns.insert(column, AlignKind::None);
+                for cells in &mut rows { cells.insert(column, String::new()); }
+            }
+            Operation::DeleteColumn => {
+                if aligns.len() == 1 {
+                    for cells in &mut rows { cells[0].clear(); }
+                } else {
+                    aligns.remove(column);
+                    for cells in &mut rows { cells.remove(column); }
+                    column = column.min(aligns.len() - 1);
+                }
+            }
+            alignment => aligns[column] = match alignment {
+                Operation::AlignLeft => AlignKind::Left,
+                Operation::AlignCenter => AlignKind::Center,
+                Operation::AlignRight => AlignKind::Right,
+                _ => AlignKind::None,
+            },
+        }
+        let mut output = String::new();
+        let mut caret = 0;
+        for (row_ix, cells) in rows.iter().enumerate() {
+            if row_ix > 0 { output.push('\n'); }
+            output.push('|');
+            for (column_ix, cell) in cells.iter().enumerate() {
+                output.push(' ');
+                if row_ix == row && column_ix == column { caret = range.start + output.len(); }
+                output.push_str(cell);
+                output.push_str(" |");
+            }
+            if row_ix == 0 {
+                output.push_str("\n|");
+                for align in &aligns {
+                    output.push_str(match align {
+                        AlignKind::Left => " :--- |",
+                        AlignKind::Right => " ---: |",
+                        AlignKind::Center => " :---: |",
+                        AlignKind::None => " --- |",
+                    });
+                }
+            }
+        }
+        return Some((range, output, caret));
+    }
+    None
+}
+
+pub(crate) fn bindings(cx: &gpui_kit::App) -> Vec<gpui_kit::KeyBinding> {
+    let bind = |keys: &str, action: Box<dyn gpui_kit::Action>| {
+        let predicate = gpui_kit::KeyBindingContextPredicate::parse("MarkdownTable")
+            .expect("static table key context").into();
+        gpui_kit::KeyBinding::load(keys, action, Some(predicate), false, None, cx)
+            .expect("static table shortcut")
+    };
+    vec![
+        bind("secondary-alt-shift-up", Box::new(InsertRowBefore)),
+        bind("secondary-alt-shift-down", Box::new(InsertRowAfter)),
+        bind("secondary-alt-shift-backspace", Box::new(DeleteRow)),
+        bind("secondary-alt-shift-left", Box::new(InsertColumnBefore)),
+        bind("secondary-alt-shift-right", Box::new(InsertColumnAfter)),
+        bind("secondary-alt-shift-delete", Box::new(DeleteColumn)),
+        bind("secondary-alt-shift-0", Box::new(AlignDefault)),
+        bind("secondary-alt-shift-1", Box::new(AlignLeft)),
+        bind("secondary-alt-shift-2", Box::new(AlignCenter)),
+        bind("secondary-alt-shift-3", Box::new(AlignRight)),
+    ]
+}

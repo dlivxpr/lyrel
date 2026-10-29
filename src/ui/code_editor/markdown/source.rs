@@ -300,6 +300,41 @@ impl SourcePresentation {
         self.reveal_caret = false;
         cx.notify();
     }
+    fn table_commands_enabled(&self) -> bool {
+        self.live && self.state.composition.is_none() && self.extra_selections.is_empty()
+            && self.projection.leaf_at(self.state.selection.head()).is_some_and(|leaf| {
+                matches!(leaf.kind, Kind::TableCell(cell) if self.state.selection.range().start >= cell.table().start && self.state.selection.range().end <= cell.table().end)
+            })
+    }
+
+    fn table_command(&mut self, operation: super::tables::Operation, window: &mut Window, cx: &mut Context<Self>) {
+        if self.table_commands_enabled() {
+            self.command(Command::Table(operation), window, cx);
+            self.focus.focus(window, cx);
+        } else {
+            cx.propagate();
+        }
+    }
+
+    pub(crate) fn table_menu(&self, menu: gpui_kit::component::menu::PopupMenu) -> gpui_kit::component::menu::PopupMenu {
+        use super::tables::*;
+        use crate::ui::i18n::{L10nKey, t};
+        if !self.live { return menu; }
+        let disabled = !self.table_commands_enabled();
+        menu.separator()
+            .menu_with_disabled(t(L10nKey::EditorTableInsertRowBefore), Box::new(InsertRowBefore), disabled)
+            .menu_with_disabled(t(L10nKey::EditorTableInsertRowAfter), Box::new(InsertRowAfter), disabled)
+            .menu_with_disabled(t(L10nKey::EditorTableDeleteRow), Box::new(DeleteRow), disabled)
+            .menu_with_disabled(t(L10nKey::EditorTableInsertColumnBefore), Box::new(InsertColumnBefore), disabled)
+            .menu_with_disabled(t(L10nKey::EditorTableInsertColumnAfter), Box::new(InsertColumnAfter), disabled)
+            .menu_with_disabled(t(L10nKey::EditorTableDeleteColumn), Box::new(DeleteColumn), disabled)
+            .separator()
+            .menu_with_disabled(t(L10nKey::EditorTableAlignDefault), Box::new(AlignDefault), disabled)
+            .menu_with_disabled(t(L10nKey::EditorTableAlignLeft), Box::new(AlignLeft), disabled)
+            .menu_with_disabled(t(L10nKey::EditorTableAlignCenter), Box::new(AlignCenter), disabled)
+            .menu_with_disabled(t(L10nKey::EditorTableAlignRight), Box::new(AlignRight), disabled)
+    }
+
     pub(crate) fn command(
         &mut self,
         command: Command,
@@ -1178,8 +1213,11 @@ impl Render for SourcePresentation {
                     })
                     .child(rendered))
             }));
-        let key_context =
-            KeyContext::parse("Input mode=editor").expect("static editor key context");
+        let key_context = KeyContext::parse(if self.table_commands_enabled() {
+            "Input mode=editor MarkdownTable"
+        } else {
+            "Input mode=editor"
+        }).expect("static editor key context");
         let root =
             div()
                 .id("markdown-source")
@@ -1257,6 +1295,16 @@ impl Render for SourcePresentation {
                     MouseButton::Left,
                     cx.listener(|this, _, _, _| this.dragging = false),
                 )
+                .on_action(cx.listener(|this, _: &super::tables::InsertRowBefore, window, cx| this.table_command(super::tables::Operation::InsertRowBefore, window, cx)))
+                .on_action(cx.listener(|this, _: &super::tables::InsertRowAfter, window, cx| this.table_command(super::tables::Operation::InsertRowAfter, window, cx)))
+                .on_action(cx.listener(|this, _: &super::tables::DeleteRow, window, cx| this.table_command(super::tables::Operation::DeleteRow, window, cx)))
+                .on_action(cx.listener(|this, _: &super::tables::InsertColumnBefore, window, cx| this.table_command(super::tables::Operation::InsertColumnBefore, window, cx)))
+                .on_action(cx.listener(|this, _: &super::tables::InsertColumnAfter, window, cx| this.table_command(super::tables::Operation::InsertColumnAfter, window, cx)))
+                .on_action(cx.listener(|this, _: &super::tables::DeleteColumn, window, cx| this.table_command(super::tables::Operation::DeleteColumn, window, cx)))
+                .on_action(cx.listener(|this, _: &super::tables::AlignDefault, window, cx| this.table_command(super::tables::Operation::AlignDefault, window, cx)))
+                .on_action(cx.listener(|this, _: &super::tables::AlignLeft, window, cx| this.table_command(super::tables::Operation::AlignLeft, window, cx)))
+                .on_action(cx.listener(|this, _: &super::tables::AlignCenter, window, cx| this.table_command(super::tables::Operation::AlignCenter, window, cx)))
+                .on_action(cx.listener(|this, _: &super::tables::AlignRight, window, cx| this.table_command(super::tables::Operation::AlignRight, window, cx)))
                 .on_action(
                     cx.listener(|this, _: &actions::Copy, window, cx| this.copy(false, window, cx)),
                 )

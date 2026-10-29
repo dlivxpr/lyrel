@@ -12,6 +12,7 @@ mod regions;
 mod source;
 mod tables;
 pub(super) use source::SourcePresentation;
+pub(crate) use tables::bindings as table_bindings;
 #[cfg(test)]
 mod tests;
 
@@ -115,6 +116,7 @@ pub(crate) enum EditKind {
     Command,
 }
 pub(crate) enum Command {
+    Table(tables::Operation),
     Reload {
         text: String,
         format: TextFormat,
@@ -483,6 +485,23 @@ impl MarkdownDocument {
 
     fn apply_command(&mut self, state: &mut PresentationState, command: Command) {
         match command {
+            Command::Table(operation) => {
+                self.finish_composition(state, false);
+                if let Some((range, text, caret)) = tables::edit(&self.source.to_string(), state.selection, operation) {
+                    let removed = self.source_text(range.clone());
+                    let inserted = SourceText::from_input(text, LineEnding::Lf);
+                    if removed != inserted {
+                        let before = state.selection;
+                        self.replace(range.clone(), &inserted);
+                        state.selection = Selection::caret(caret);
+                        self.record(Change {
+                            edits: smallvec::smallvec![ReplacedSource { start: range.start, removed, inserted }],
+                            before,
+                            after: state.selection,
+                        }, EditKind::Command, state.id);
+                    }
+                }
+            }
             Command::Compose {
                 range,
                 text,
