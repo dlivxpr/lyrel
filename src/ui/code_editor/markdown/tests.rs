@@ -4753,7 +4753,9 @@ fn mermaid_matrix_workbench(
             let ready = context.update(|window, cx| {
                 window.render_frame(cx);
                 if image {
-                    assert!(window.try_find(error_id.clone()).is_none(), "{name}: actual native renderer reported an error; source/error display is not support");
+                    if let Some(error) = window.try_find(error_id.clone()) {
+                        panic!("{name}: actual native renderer reported {:?}; source/error display is not support", error.label());
+                    }
                     window.try_find(image_id.clone()).is_some_and(|image| {
                         let size = image.bounds().size;
                         size.width > gpui_kit::px(1.) && size.height > gpui_kit::px(1.)
@@ -5073,6 +5075,13 @@ mermaid_matrix_case!(
     native_mermaid_matrix_usecase,
     "usecase-beta\nactor Customer(\"Customer\")\nsystemBoundary \"Order system\"\n Checkout(\"Original\")\nend\nCustomer --> Checkout",
     "usecase-beta\nactor Customer(\"Customer\")\nsystemBoundary \"Order system\"\n Checkout(\"Edited label\")\nend\nCustomer --> Checkout"
+);
+// Keep the boundary fixture above: the flat released registry example is an
+// additional discriminator for parser/family admission versus compound layout.
+mermaid_matrix_case!(
+    native_mermaid_matrix_usecase_flat,
+    "usecase-beta\nactor Customer(\"Customer\")\nCheckout(\"Original\")\nCustomer --> Checkout",
+    "usecase-beta\nactor Customer(\"Customer\")\nCheckout(\"Edited label\")\nCustomer --> Checkout"
 );
 mermaid_matrix_case!(
     native_mermaid_matrix_venn,
