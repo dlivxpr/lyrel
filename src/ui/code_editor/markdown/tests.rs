@@ -5076,6 +5076,13 @@ mermaid_matrix_case!(
     "usecase-beta\nactor Customer(\"Customer\")\nsystemBoundary \"Order system\"\n Checkout(\"Original\")\nend\nCustomer --> Checkout",
     "usecase-beta\nactor Customer(\"Customer\")\nsystemBoundary \"Order system\"\n Checkout(\"Edited label\")\nend\nCustomer --> Checkout"
 );
+// Keep the boundary fixture above: the flat released registry example is an
+// additional discriminator for parser/family admission versus compound layout.
+mermaid_matrix_case!(
+    native_mermaid_matrix_usecase_flat,
+    "usecase-beta\nactor Customer(\"Customer\")\nCheckout(\"Original\")\nCustomer --> Checkout",
+    "usecase-beta\nactor Customer(\"Customer\")\nCheckout(\"Edited label\")\nCustomer --> Checkout"
+);
 mermaid_matrix_case!(
     native_mermaid_matrix_venn,
     "venn-beta\nset A[\"Original\"]:10\nset B[\"Editor\"]:8\nunion A,B[\"Shared\"]:3",
