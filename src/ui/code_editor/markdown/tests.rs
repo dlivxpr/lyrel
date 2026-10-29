@@ -3543,3 +3543,82 @@ fn native_math_renders_glyph_atoms_and_local_source_uses_document_history_and_sa
         std::thread::sleep(std::time::Duration::from_millis(5));
     }
 }
+
+#[gpui_kit::test]
+fn native_long_document_scroll_return_reflow_and_pending_parse_keep_selection_and_history(
+    cx: &mut gpui_kit::TestAppContext,
+) {
+    use crate::ui::app::test_window::harness_with_tabs;
+    use gpui_kit::Focusable as _;
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("long-mixed.md");
+    let mut source = String::from("# Long document\n\n");
+    for ix in 0..1200 {
+        source.push_str(&format!("Paragraph {ix}: wrapped prose 中e\u{301} with **emphasis** and enough words to wrap on a narrow surface.\n\n* parent\n  + nested\n\n```rust\nlet n = {ix};\n```\n\n| Left | Right |\n| --- | --- |\n| a wide cell with retained source | value |\n\n"));
+    }
+    source.push_str("last editable paragraph");
+    std::fs::write(&path, &source).unwrap();
+    let (app, mut context, _streams) = harness_with_tabs(cx, 1);
+    context.update(|_, cx| cx.set_global(super::super::MarkdownWorkbench));
+    app.update_in(&mut context, |app, window, cx| app.open_file_in_editor(&path, window, cx));
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    let view = loop {
+        context.run_until_parked();
+        if let Some(view) = app.read_with(&context, |app, _| app.active_editor_input().and_then(|input| input.markdown().cloned())) { break view; }
+        assert!(std::time::Instant::now() < deadline);
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    };
+    context.dispatch_action(crate::core::actions::ToggleDocumentPreview);
+    settle_live_geometry(&view, &mut context);
+    let start = source.find("Paragraph 0:").unwrap();
+    let end = source.find("last editable").unwrap();
+    let settle_at = |at: usize, context: &mut gpui_kit::VisualTestContext| {
+        loop {
+            context.executor().advance_clock(std::time::Duration::from_millis(100));
+            context.run_until_parked();
+            if context.update(|window, cx| {
+                window.render_frame(cx);
+                view.read(cx).range_to_bounds(&(at..at), cx).is_some_and(|caret| {
+                    caret.top() >= gpui_kit::px(0.) && caret.bottom() <= window.viewport_size().height
+                })
+            }) { break; }
+            assert!(std::time::Instant::now() < deadline, "current source position must reenter the viewport");
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+    };
+    view.update_in(&mut context, |view, window, cx| {
+        view.select_range(end..end, cx);
+        view.focus_handle(cx).focus(window, cx);
+    });
+    settle_at(end, &mut context);
+    view.read_with(&context, |view, cx| {
+        assert!(view.range_to_bounds(&(end..end), cx).is_some());
+        assert!(view.range_to_bounds(&(start..start), cx).is_none(), "offscreen source must not retain frame geometry");
+        assert_eq!(view.document().read(cx).encode().unwrap(), source.as_bytes());
+    });
+    // Edit before the debounced full parse, then leave and return. Old results
+    // must not restore the original source or lose the unified history.
+    view.update_in(&mut context, |view, window, cx| {
+        view.command(Command::Insert("new ".into()), window, cx);
+        view.select_range(start..start, cx);
+    });
+    settle_at(start, &mut context);
+    view.read_with(&context, |view, cx| assert!(view.range_to_bounds(&(start..start), cx).is_some()));
+    view.update_in(&mut context, |view, _, cx| view.select_range(end + 4..end + 4, cx));
+    cx.simulate_window_resize(context.window_handle(), gpui_kit::size(gpui_kit::px(760.), gpui_kit::px(650.)));
+    context.update(|_, cx| gpui_kit::component::Theme::update(cx, |theme| theme.font_size = gpui_kit::px(20.)));
+    settle_at(end + 4, &mut context);
+    context.executor().advance_clock(std::time::Duration::from_secs(1));
+    context.run_until_parked();
+    settle_at(end + 4, &mut context);
+    context.update(|window, cx| {
+        window.render_frame(cx);
+        let caret = view.read(cx).range_to_bounds(&(end + 4..end + 4), cx).unwrap();
+        assert!(caret.top() >= gpui_kit::px(0.) && caret.bottom() <= window.viewport_size().height);
+        assert_eq!(view.read(cx).selection(), Selection::caret(end + 4));
+        assert_eq!(view.read(cx).document().read(cx).source().to_string(), format!("{}new {}", &source[..end], &source[end..]));
+    });
+    context.dispatch_action(gpui_kit::component::input::Undo);
+    context.run_until_parked();
+    view.read_with(&context, |view, cx| assert_eq!(view.document().read(cx).encode().unwrap(), source.as_bytes()));
+}
