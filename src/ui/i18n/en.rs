@@ -1728,6 +1728,13 @@ pub fn translate_en(key: L10nKey) -> &'static str {
             "Source · structure not yet adapted for live editing"
         }
         L10nKey::EditorMarkdownCodeRegion => "Code source",
+        L10nKey::EditorMarkdownMermaidSource => "Mermaid source",
+        L10nKey::EditorMarkdownMermaidLoading => "Rendering diagram…",
+        L10nKey::EditorMarkdownMermaidEdit => "Edit diagram source",
+        L10nKey::EditorMarkdownMermaidError => "Diagram could not render. Source is retained and editable.",
+        L10nKey::EditorMarkdownMermaidEmpty => "No Mermaid diagram detected. Enter a diagram in the retained source.",
+        L10nKey::EditorMarkdownMermaidExternal => "External diagram resources are not allowed. Use self-contained labels and shapes.",
+        L10nKey::EditorMarkdownMermaidRasterLimit => "Diagram exceeds the native image limit (4096 pixels per side or 8 million pixels). Simplify or split the diagram.",
         L10nKey::EditorMarkdownMetadataRegion => "Metadata source",
         L10nKey::EditorMarkdownHtmlRegion => "HTML source · not executed or rendered as HTML/CSS",
         L10nKey::EditorWrapOn => "Wrap: on",

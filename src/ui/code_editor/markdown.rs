@@ -7,6 +7,7 @@ use gpui_kit::base::{
 use std::ops::Range;
 use unicode_segmentation::UnicodeSegmentation as _;
 
+mod mermaid;
 mod projection;
 mod regions;
 mod source;

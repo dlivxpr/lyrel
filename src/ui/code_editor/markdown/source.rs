@@ -33,6 +33,9 @@ pub(crate) struct SourcePresentation {
     rendered_revision: Option<u64>,
     render_generation: u64,
     parse_task: Option<Task<()>>,
+    mermaid: super::mermaid::State,
+    mermaid_task: Option<Task<()>>,
+    _mermaid_theme: Subscription,
     extra_selections: Vec<Selection>,
     search_matches: Vec<Range<usize>>,
     indent: crate::ui::editor_text::Indent,
@@ -49,6 +52,7 @@ impl SourcePresentation {
     ) -> Self {
         let observe = cx.subscribe(&document, |this, _, event: &DocumentEvent, cx| {
             if let DocumentEvent::Edited(transaction) = event {
+                this.mermaid.cancel();
                 this.state.rebase(transaction);
                 if transaction.origin != this.state.id {
                     for selection in &mut this.extra_selections {
@@ -81,6 +85,10 @@ impl SourcePresentation {
         });
         let projection =
             Projection::source(document.read(cx).source(), document.read(cx).revision());
+        let mermaid_theme = cx.observe_global::<gpui_kit::component::Theme>(|this, cx| {
+            this.schedule_mermaid(cx);
+            cx.notify();
+        });
         Self {
             document,
             state: PresentationState::default(),
@@ -98,6 +106,9 @@ impl SourcePresentation {
             rendered_revision: None,
             render_generation: 0,
             parse_task: None,
+            mermaid: super::mermaid::State::default(),
+            mermaid_task: None,
+            _mermaid_theme: mermaid_theme,
             extra_selections: Vec::new(),
             search_matches: Vec::new(),
             indent: crate::ui::editor_text::Indent {
@@ -132,6 +143,7 @@ impl SourcePresentation {
         self.geometry = None;
         self.rendered_revision = None;
         self.parse_task = None;
+        self.mermaid.cancel();
         if self.live {
             self.schedule_parse(cx);
         } else {
@@ -173,9 +185,41 @@ impl SourcePresentation {
                     view.selection_notification = true;
                     view.rendered_revision = None;
                     view.geometry = None;
+                    view.schedule_mermaid(cx);
                     cx.notify();
                 }
             });
+        }));
+    }
+    fn schedule_mermaid(&mut self, cx: &mut Context<Self>) {
+        if !self.live || self.projection.revision != self.document.read(cx).revision() {
+            self.mermaid.cancel();
+            return;
+        }
+        self.mermaid.request(&self.projection, self.document.entity_id(), super::mermaid::Style::current(cx));
+        // One worker and one replaceable pending request per presentation.
+        // Cancelling the control stops synchronous Merman work at checkpoints;
+        // retaining the task prevents rapid edits from creating unbounded jobs.
+        if self.mermaid_task.is_some() { return; }
+        let Some(mut job) = self.mermaid.take_job() else { return; };
+        self.mermaid_task = Some(cx.spawn(async move |view, cx| {
+            loop {
+                let batch = cx.background_executor().spawn(async move { job.run() }).await;
+                let next = view.update(cx, |view, cx| {
+                    if view.live && view.projection.revision == view.document.read(cx).revision() {
+                        view.mermaid.install(batch, &view.projection, view.document.entity_id(), &super::mermaid::Style::current(cx));
+                        view.geometry = None;
+                        cx.notify();
+                    }
+                    let next = view.mermaid.take_job();
+                    if next.is_none() { view.mermaid_task = None; }
+                    next
+                });
+                match next {
+                    Ok(Some(next)) => job = next,
+                    _ => break,
+                }
+            }
         }));
     }
     // Display-boundary insertion has right affinity after a hidden opening
@@ -1075,7 +1119,7 @@ impl Render for SourcePresentation {
                     node: BlockNode::Unknown,
                 });
                 if cached.version != leaf.version {
-                    if self.live && matches!(leaf.kind, Kind::Code(_)) {
+                    if self.live && matches!(leaf.kind, Kind::Code(_) | Kind::Mermaid(_)) {
                         cached.node = BlockNode::CodeBlock(
                             CodeBlock::from_code(leaf.text.clone(), None::<SharedString>)
                                 .with_leaf_key(leaf.id),
@@ -1146,12 +1190,25 @@ impl Render for SourcePresentation {
                     window,
                     cx,
                 );
+                let rendered = if self.live && matches!(leaf.kind, Kind::Mermaid(_)) {
+                    let selection = self.state.selection.range();
+                    let active = selection.start <= leaf.range.end && selection.end >= leaf.range.start;
+                    let at = leaf.range.start + leaf.text.find('\n').map_or(0, |at| at + 1);
+                    self.mermaid.render(leaf, active, rendered.into_any_element(), cx.listener(move |this, _, window, cx| {
+                        cx.stop_propagation();
+                        this.select_range(at..at, cx);
+                        this.focus.focus(window, cx);
+                    }), cx)
+                } else {
+                    rendered.into_any_element()
+                };
                 Some(div()
                     .id(("markdown-block", leaf.id))
                     .w_full()
                     .when(
                         self.live
                             && super::regions::label(leaf.kind).is_some()
+                            && !matches!(leaf.kind, Kind::Mermaid(_))
                             && !leaf.text.is_empty(),
                         |block| {
                             block

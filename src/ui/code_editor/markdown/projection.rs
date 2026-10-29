@@ -22,6 +22,7 @@ pub(super) enum Kind {
     Heading(u8),
     Rule,
     Code(super::regions::Code),
+    Mermaid(super::regions::Code),
     Metadata,
     Html,
     Source,
