@@ -2679,6 +2679,9 @@ fn native_document_images_read_owning_host_and_reject_old_link_results(
     let release = host.pause_next_read();
     context.dispatch_action(crate::core::actions::ToggleDocumentPreview);
     loop {
+        context
+            .executor()
+            .advance_clock(std::time::Duration::from_millis(100));
         context.run_until_parked();
         if host.entered.load(Ordering::SeqCst) {
             break;
@@ -2700,6 +2703,9 @@ fn native_document_images_read_owning_host_and_reject_old_link_results(
     });
     context.update(|window, cx| window.input("new.png", cx));
     loop {
+        context
+            .executor()
+            .advance_clock(std::time::Duration::from_millis(100));
         context.run_until_parked();
         let loaded = context.update(|window, cx| {
             window.render_frame(cx);
@@ -2727,6 +2733,9 @@ fn native_document_images_read_owning_host_and_reject_old_link_results(
         app.editor_path_moved(lyrel_core::host::HostId(114), &path, &moved, cx);
     });
     loop {
+        context
+            .executor()
+            .advance_clock(std::time::Duration::from_millis(100));
         context.run_until_parked();
         if context.update(|window, cx| {
             window.render_frame(cx);
@@ -2793,6 +2802,9 @@ fn local_image_references_follow_document_rename_without_moving_assets(
     };
     context.dispatch_action(crate::core::actions::ToggleDocumentPreview);
     loop {
+        context
+            .executor()
+            .advance_clock(std::time::Duration::from_millis(100));
         context.run_until_parked();
         if context.update(|window, cx| {
             window.render_frame(cx);
@@ -2817,6 +2829,9 @@ fn local_image_references_follow_document_rename_without_moving_assets(
         app.editor_path_moved(host, &path, &moved, cx);
     });
     loop {
+        context
+            .executor()
+            .advance_clock(std::time::Duration::from_millis(100));
         context.run_until_parked();
         if context.update(|window, cx| {
             window.render_frame(cx);
@@ -3551,6 +3566,15 @@ fn native_mixed_selection_drag_cut_history_and_mixed_ending_save_reopen(
                 view.read(cx).document().read(cx).source().to_string(),
                 source
             );
+            window.press(
+                if key == "shift-right" {
+                    "shift-left"
+                } else {
+                    "shift-right"
+                },
+                cx,
+            );
+            assert_eq!(view.read(cx).selection(), Selection::caret(from));
         });
     }
     // A new edit after undo replaces the cut/delete branch, not earlier history.
@@ -4085,6 +4109,686 @@ fn native_math_renders_glyph_atoms_and_local_source_uses_document_history_and_sa
     }
 }
 
+#[gpui_kit::test]
+fn structured_math_syntax_matrix_edits_renders_and_reopens_through_workbench(
+    cx: &mut gpui_kit::TestAppContext,
+) {
+    use crate::ui::app::test_window::harness_with_tabs;
+    use gpui_kit::test::TestWindowExt as _;
+    use gpui_kit::{Focusable as _, VisualContext as _};
+
+    // Each reference is a simpler expression with independently predictable
+    // geometry. Literal TeX, a loading label, or one fixed placeholder cannot
+    // satisfy the row/column/script relationships below.
+    let fixtures = [
+        ("scripts", r"x_i^2", r"x", true),
+        ("fraction", r"\frac{a+b}{c}", r"a+b", true),
+        ("root", r"\sqrt[3]{x}", r"x", false),
+        ("greek", r"\alpha+\Gamma", r"\alpha", false),
+        ("operators", r"\lim_{x\to0}\sin x+\cos x", r"\sin x", false),
+        ("integral", r"\int_0^1 x\,dx", r"x", true),
+        ("sum", r"\sum_{i=1}^n i", r"i", true),
+        ("matrix", r"\begin{matrix}a&b\\c&d\end{matrix}", r"\begin{matrix}a&b\end{matrix}", true),
+        ("parenthesized-matrix", r"\begin{pmatrix}a&b\\c&d\end{pmatrix}", r"\begin{pmatrix}a&b\end{pmatrix}", true),
+        ("bracketed-matrix", r"\begin{bmatrix}a&b\\c&d\end{bmatrix}", r"\begin{bmatrix}a&b\end{bmatrix}", true),
+        ("matrix-combinations", r"\begin{pmatrix}a_i^2&\frac{1}{x}\\\sqrt{x}&\sum_{i=1}^n i\end{pmatrix}", r"\begin{pmatrix}a&b\end{pmatrix}", true),
+        ("cases", r"f(x)=\begin{cases}x_i^2&\text{if }x>0\\0&\text{otherwise}\end{cases}", r"f(x)=\begin{cases}0&x>0\end{cases}", true),
+        ("aligned", r"\begin{aligned}a_i^2&=\sum_{i=1}^n i\\b&=\int_0^1 x\,dx\end{aligned}", r"\begin{aligned}a&=b\end{aligned}", true),
+        ("text-and-operators", r"x_i^2+\text{when }x>0+\sum_{i=1}^n i", r"x_i^2", false),
+    ];
+    let directory = tempfile::tempdir().unwrap();
+    let (app, mut context, _streams) = harness_with_tabs(cx, 1);
+    context.update(|_, cx| cx.set_global(super::super::MarkdownWorkbench));
+    let ready_bounds = |context: &mut gpui_kit::VisualTestContext, tex: &str| {
+        let id = format!("markdown-math-ready-{tex}");
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        loop {
+            context.executor().advance_clock(std::time::Duration::from_millis(100));
+            context.run_until_parked();
+            context.update(|window, cx| window.render_frame(cx));
+            if let Some(bounds) = context.update(|window, _| window.try_find(id.as_str()).map(|image| {
+                assert_eq!(image.label(), Some(format!("Formula: {tex}").as_str()));
+                image.bounds()
+            })) { break bounds; }
+            assert!(std::time::Instant::now() < deadline, "formula did not render: {tex}");
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+    };
+
+    for (name, tex, reference, taller) in fixtures {
+        for block in [false, true] {
+            let path = directory.path().join(format!("{name}-{block}.md"));
+            let delimiter = if block { "$$\n" } else { "$" };
+            let closing = if block { "\n$$" } else { "$" };
+            let separator = if block { "\n\n" } else { " between " };
+            let prose_gap = if block { "\n\n" } else { " " };
+            let source = format!("\u{feff}# Matrix\r\n\r\n前{prose_gap}{delimiter}{tex}{closing}{separator}{delimiter}{reference}{closing}{prose_gap}后  \r\n\n[keep]: target  ");
+            std::fs::write(&path, source.as_bytes()).unwrap();
+            app.update_in(&mut context, |app, window, cx| app.open_file_in_editor(&path, window, cx));
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+            let view = loop {
+                context.run_until_parked();
+                if let Some(view) = app.read_with(&context, |app, _| app.active_editor_input().and_then(|input| input.markdown().cloned())) { break view; }
+                assert!(std::time::Instant::now() < deadline, "{name}: workbench did not open");
+                std::thread::sleep(std::time::Duration::from_millis(5));
+            };
+            let identity = view.read_with(&context, |view, _| view.document().entity_id());
+            context.dispatch_action(crate::core::actions::ToggleDocumentPreview);
+            settle_live_geometry(&view, &mut context);
+            let original_bounds = ready_bounds(&mut context, tex);
+            let reference_bounds = ready_bounds(&mut context, reference);
+            if taller {
+                assert!(original_bounds.size.height > reference_bounds.size.height, "{name}, block={block}: structured rows/scripts must change the rendered height");
+            } else {
+                assert!(original_bounds.size.width > reference_bounds.size.width, "{name}, block={block}: the extra notation must occupy rendered width");
+            }
+            let normalized = source.trim_start_matches('\u{feff}').replace("\r\n", "\n");
+            let start = normalized.find(tex).unwrap();
+            let end = start + tex.len();
+            let after = normalized.find('后').unwrap();
+            view.read_with(&context, |view, cx| {
+                let before_at = normalized.find('前').unwrap();
+                let before = view.range_to_bounds(&(before_at..before_at), cx).unwrap();
+                let after = view.range_to_bounds(&(after..after), cx).unwrap();
+                if block {
+                    assert!(after.top() > original_bounds.top());
+                } else {
+                    assert!(before.left() < original_bounds.left());
+                    assert!(after.left() >= reference_bounds.right());
+                }
+                assert_eq!(view.document().read(cx).encode().unwrap(), source.as_bytes());
+            });
+
+            // Enter through the real image hit target, then replace local TeX
+            // through the focused production input handler, not a converter.
+            context.update(|window, cx| window.click(format!("markdown-math-ready-{tex}").as_str(), cx));
+            context.run_until_parked();
+            view.read_with(&context, |view, cx| {
+                assert!(view.selection().head() >= start - delimiter.len());
+                assert!(view.selection().head() <= end);
+                assert_eq!(view.document().entity_id(), identity);
+                assert_eq!(view.document().read(cx).encode().unwrap(), source.as_bytes());
+            });
+            view.update_in(&mut context, |view, window, cx| {
+                view.command(Command::Select(Selection::new(end, start)), window, cx);
+                view.focus_handle(cx).focus(window, cx);
+            });
+            let edited_tex = format!("{tex}+z");
+            context.update(|window, cx| window.input(&edited_tex, cx));
+            context.run_until_parked();
+            let edited_source = source.replacen(tex, &edited_tex, 1);
+            view.read_with(&context, |view, cx| {
+                assert_eq!(view.selection(), Selection::caret(start + edited_tex.len()));
+                assert_eq!(view.document().read(cx).encode().unwrap(), edited_source.as_bytes());
+            });
+            context.dispatch_action(gpui_kit::component::input::Undo);
+            context.run_until_parked();
+            view.read_with(&context, |view, cx| {
+                assert_eq!(view.selection(), Selection::new(end, start));
+                assert_eq!(view.document().read(cx).encode().unwrap(), source.as_bytes());
+            });
+            context.dispatch_action(gpui_kit::component::input::Redo);
+            context.run_until_parked();
+            view.update_in(&mut context, |view, _, cx| view.select_range(0..0, cx));
+            let edited_bounds = ready_bounds(&mut context, &edited_tex);
+            assert!(edited_bounds.size.width > original_bounds.size.width, "{name}: local edit must update image geometry");
+            context.dispatch_action(crate::core::actions::EditorSave);
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+            loop {
+                context.run_until_parked();
+                if app.read_with(&context, |app, _| app.active_buffer().is_some_and(|file| !file.dirty && !file.saving)) { break; }
+                assert!(std::time::Instant::now() < deadline, "{name}: save did not settle");
+                std::thread::sleep(std::time::Duration::from_millis(5));
+            }
+            assert_eq!(std::fs::read(&path).unwrap(), edited_source.as_bytes());
+            app.update_in(&mut context, |app, window, cx| {
+                app.editor_close_file(0, window, cx);
+                app.open_file_in_editor(&path, window, cx);
+            });
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+            let reopened = loop {
+                context.run_until_parked();
+                if let Some(view) = app.read_with(&context, |app, _| app.active_editor_input().and_then(|input| input.markdown().cloned())) {
+                    if view.read_with(&context, |view, _| view.document().entity_id() != identity) { break view; }
+                }
+                assert!(std::time::Instant::now() < deadline, "{name}: saved document did not reopen");
+                std::thread::sleep(std::time::Duration::from_millis(5));
+            };
+            reopened.read_with(&context, |view, cx| assert_eq!(view.document().read(cx).encode().unwrap(), edited_source.as_bytes()));
+            context.dispatch_action(crate::core::actions::ToggleDocumentPreview);
+            settle_live_geometry(&reopened, &mut context);
+            let reopened_bounds = ready_bounds(&mut context, &edited_tex);
+            assert_eq!(reopened_bounds.size, edited_bounds.size, "{name}: reopening must render the edited expression, not the old source");
+            app.update_in(&mut context, |app, window, cx| app.editor_close_file(0, window, cx));
+            context.run_until_parked();
+        }
+    }
+}
+
+#[gpui_kit::test]
+fn structured_math_local_invalid_recovery_composition_and_selection_keep_one_history(
+    cx: &mut gpui_kit::TestAppContext,
+) {
+    use crate::ui::app::test_window::harness_with_tabs;
+    use gpui_kit::test::{TestInput, TestWindowExt as _};
+    use gpui_kit::{ElementInputHandler, Focusable as _, VisualContext as _};
+
+    let fixtures = [
+        r"\begin{pmatrix}a_i^2&\text{old}\\\sqrt{x}&\sum_{i=1}^n i\end{pmatrix}",
+        r"f(x)=\begin{cases}x_i^2&\text{old}\\0&x\le0\end{cases}",
+        r"\begin{aligned}a_i^2&=\text{old}\\b&=\int_0^1 x\,dx\end{aligned}",
+        r"x_i^2+\sum_{i=1}^n i+\text{old}",
+    ];
+    let directory = tempfile::tempdir().unwrap();
+    let (app, mut context, _streams) = harness_with_tabs(cx, 1);
+    context.update(|_, cx| cx.set_global(super::super::MarkdownWorkbench));
+    let await_output = |context: &mut gpui_kit::VisualTestContext, tex: &str, failed: bool| {
+        let id = format!("markdown-math-{}-{tex}", if failed { "error" } else { "ready" });
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        loop {
+            context.executor().advance_clock(std::time::Duration::from_millis(100));
+            context.run_until_parked();
+            context.update(|window, cx| window.render_frame(cx));
+            if context.update(|window, _| window.try_find(id.as_str()).is_some()) { break; }
+            assert!(std::time::Instant::now() < deadline, "formula output never settled: {id}");
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        context.update(|window, _| {
+            let output = window.find(id.as_str());
+            if failed {
+                let prefix = crate::ui::i18n::t(crate::ui::i18n::L10nKey::EditorMarkdownMathError);
+                let label = output.label().unwrap();
+                assert!(label.starts_with(prefix));
+                assert_ne!(label.trim(), prefix, "a failure must explain its cause");
+                assert!(window.try_find(format!("markdown-math-ready-{tex}").as_str()).is_none());
+            } else {
+                assert_eq!(output.label(), Some(format!("Formula: {tex}").as_str()));
+                assert!(output.bounds().size.width > gpui_kit::px(20.));
+                assert!(output.bounds().size.height > gpui_kit::px(4.));
+            }
+        });
+    };
+
+    for (ix, tex) in fixtures.into_iter().enumerate() {
+        for block in [false, true] {
+            let path = directory.path().join(format!("local-{ix}-{block}.md"));
+            let source = if block {
+                format!("# Local\r\n\r\n前  \r\n\n$$\n{tex}\n$$\n\n后🎉  \r\n[ref]: target  ")
+            } else {
+                format!("# Local\r\n\r\n前 ${tex}$ 后🎉  \r\n\n[ref]: target  ")
+            };
+            std::fs::write(&path, source.as_bytes()).unwrap();
+            app.update_in(&mut context, |app, window, cx| app.open_file_in_editor(&path, window, cx));
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+            let view = loop {
+                context.run_until_parked();
+                if let Some(view) = app.read_with(&context, |app, _| app.active_editor_input().and_then(|input| input.markdown().cloned())) { break view; }
+                assert!(std::time::Instant::now() < deadline);
+                std::thread::sleep(std::time::Duration::from_millis(5));
+            };
+            context.dispatch_action(crate::core::actions::ToggleDocumentPreview);
+            settle_live_geometry(&view, &mut context);
+            await_output(&mut context, tex, false);
+            context.update(|window, cx| window.click(format!("markdown-math-ready-{tex}").as_str(), cx));
+            context.run_until_parked();
+            let normalized = source.replace("\r\n", "\n");
+            if block {
+                if let Some(row) = tex.find(r"\\") {
+                    let at = normalized.find(tex).unwrap() + row + 2;
+                    view.update_in(&mut context, |view, window, cx| {
+                        view.select_range(at..at, cx);
+                        view.focus_handle(cx).focus(window, cx);
+                    });
+                    context.update(|window, cx| window.press("enter", cx));
+                    context.run_until_parked();
+                    view.read_with(&context, |view, cx| {
+                        assert_eq!(view.document().read(cx).source().to_string(), normalized.replacen(r"\\", "\\\\\n", 1));
+                        assert_eq!(view.selection(), Selection::caret(at + 1));
+                    });
+                    context.dispatch_action(gpui_kit::component::input::Undo);
+                    context.run_until_parked();
+                    view.read_with(&context, |view, cx| assert_eq!(view.document().read(cx).encode().unwrap(), source.as_bytes()));
+                }
+            }
+            let end = normalized.find(tex).unwrap() + tex.len();
+            view.update_in(&mut context, |view, window, cx| {
+                view.select_range(end..end, cx);
+                view.focus_handle(cx).focus(window, cx);
+            });
+            context.update(|window, cx| window.press("backspace", cx));
+            context.run_until_parked();
+            let invalid_tex = &tex[..tex.len() - 1];
+            let invalid_source = source.replacen(tex, invalid_tex, 1);
+            view.read_with(&context, |view, cx| {
+                assert_eq!(view.selection(), Selection::caret(end - 1));
+                assert_eq!(view.document().read(cx).encode().unwrap(), invalid_source.as_bytes());
+            });
+            view.update_in(&mut context, |view, _, cx| view.select_range(0..0, cx));
+            await_output(&mut context, invalid_tex, true);
+            // A malformed environment is still clickable local source, not a
+            // dead error panel. Undo recovers both its original source and caret.
+            context.update(|window, cx| window.click(format!("markdown-math-error-{invalid_tex}").as_str(), cx));
+            context.dispatch_action(gpui_kit::component::input::Undo);
+            context.run_until_parked();
+            view.read_with(&context, |view, cx| {
+                assert_eq!(view.selection(), Selection::caret(end));
+                assert_eq!(view.document().read(cx).encode().unwrap(), source.as_bytes());
+            });
+            context.dispatch_action(gpui_kit::component::input::Redo);
+            context.run_until_parked();
+            view.read_with(&context, |view, cx| assert_eq!(view.document().read(cx).encode().unwrap(), invalid_source.as_bytes()));
+            context.dispatch_action(gpui_kit::component::input::Undo);
+            context.run_until_parked();
+
+            let start = normalized.find("old").unwrap();
+            let reversed = Selection::new(start + 3, start);
+            view.update_in(&mut context, |view, window, cx| {
+                view.command(Command::Select(reversed), window, cx);
+                view.focus_handle(cx).focus(window, cx);
+            });
+            let utf16_start = normalized[..start].encode_utf16().count();
+            context.update(|window, cx| {
+                window.render_frame(cx);
+                let bounds = window.find("markdown-source").bounds();
+                let mut input = TestInput::new(ElementInputHandler::new(bounds, view.clone()), window);
+                let selected = input.selected_text_range(cx).unwrap();
+                assert_eq!(selected.range, utf16_start..utf16_start + 3);
+                assert!(selected.reversed);
+                input.compose_text(None, "ni", Some(2..2), cx);
+                assert_eq!(input.marked_text_range(cx), Some(utf16_start..utf16_start + 2));
+                input.compose_text(None, "", Some(0..0), cx);
+                assert!(input.marked_text_range(cx).is_none());
+            });
+            context.run_until_parked();
+            view.read_with(&context, |view, cx| {
+                assert_eq!(view.selection(), reversed);
+                assert_eq!(view.document().read(cx).encode().unwrap(), source.as_bytes());
+            });
+            // Cancelling preedit must not discard the existing redo branch.
+            context.dispatch_action(gpui_kit::component::input::Redo);
+            context.run_until_parked();
+            view.read_with(&context, |view, cx| assert_eq!(view.document().read(cx).encode().unwrap(), invalid_source.as_bytes()));
+            context.dispatch_action(gpui_kit::component::input::Undo);
+            context.run_until_parked();
+            view.update_in(&mut context, |view, window, cx| {
+                view.command(Command::Select(reversed), window, cx);
+                view.focus_handle(cx).focus(window, cx);
+            });
+            context.update(|window, cx| {
+                window.render_frame(cx);
+                let bounds = window.find("markdown-source").bounds();
+                let mut input = TestInput::new(ElementInputHandler::new(bounds, view.clone()), window);
+                input.compose_text(None, "ne", Some(2..2), cx);
+                input.compose_text(None, "new", Some(3..3), cx);
+                assert_eq!(input.marked_text_range(cx), Some(utf16_start..utf16_start + 3));
+                input.commit_text("new", cx);
+                assert!(input.marked_text_range(cx).is_none());
+            });
+            context.run_until_parked();
+            let edited_source = source.replacen("old", "new", 1);
+            let edited_tex = tex.replacen("old", "new", 1);
+            view.read_with(&context, |view, cx| {
+                assert_eq!(view.selection(), Selection::caret(start + 3));
+                assert_eq!(view.document().read(cx).encode().unwrap(), edited_source.as_bytes());
+            });
+            // Cross the live/source boundary; composition is still one undo.
+            context.dispatch_action(crate::core::actions::ToggleDocumentPreview);
+            context.dispatch_action(gpui_kit::component::input::Undo);
+            context.run_until_parked();
+            view.read_with(&context, |view, cx| {
+                assert_eq!(view.selection(), reversed);
+                assert_eq!(view.document().read(cx).encode().unwrap(), source.as_bytes());
+            });
+            context.dispatch_action(gpui_kit::component::input::Redo);
+            context.run_until_parked();
+            view.read_with(&context, |view, cx| assert_eq!(view.document().read(cx).encode().unwrap(), edited_source.as_bytes()));
+            context.dispatch_action(crate::core::actions::ToggleDocumentPreview);
+            view.update_in(&mut context, |view, _, cx| view.select_range(0..0, cx));
+            await_output(&mut context, &edited_tex, false);
+            context.dispatch_action(crate::core::actions::EditorSave);
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+            loop {
+                context.run_until_parked();
+                if app.read_with(&context, |app, _| app.active_buffer().is_some_and(|file| !file.dirty && !file.saving)) { break; }
+                assert!(std::time::Instant::now() < deadline);
+                std::thread::sleep(std::time::Duration::from_millis(5));
+            }
+            assert_eq!(std::fs::read(&path).unwrap(), edited_source.as_bytes());
+            app.update_in(&mut context, |app, window, cx| app.editor_close_file(0, window, cx));
+            context.run_until_parked();
+            app.update_in(&mut context, |app, window, cx| app.open_file_in_editor(&path, window, cx));
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+            let reopened = loop {
+                context.run_until_parked();
+                if let Some(view) = app.read_with(&context, |app, _| app.active_editor_input().and_then(|input| input.markdown().cloned())) { break view; }
+                assert!(std::time::Instant::now() < deadline);
+                std::thread::sleep(std::time::Duration::from_millis(5));
+            };
+            reopened.read_with(&context, |view, cx| assert_eq!(view.document().read(cx).encode().unwrap(), edited_source.as_bytes()));
+            context.dispatch_action(crate::core::actions::ToggleDocumentPreview);
+            settle_live_geometry(&reopened, &mut context);
+            await_output(&mut context, &edited_tex, false);
+            app.update_in(&mut context, |app, window, cx| app.editor_close_file(0, window, cx));
+            context.run_until_parked();
+        }
+    }
+}
+// Merman =0.9.2 / Mermaid 12.1.0. Sources use the released registry corpus
+// (merman-core/src/tests/registry.rs), not a browser or a renderer-only seam.
+// Each expansion is a separate workbench test: one failure must not prevent
+// the remaining families from producing their own verification evidence.
+fn mermaid_matrix_workbench(
+    cx: &mut gpui_kit::TestAppContext,
+    name: &str,
+    diagram: &str,
+    edited: &str,
+    rendered: bool,
+) {
+    use crate::ui::app::test_window::harness_with_tabs;
+    use gpui_kit::test::{TestEventExt as _, TestQueryExt as _, TestWindowExt as _};
+    use gpui_kit::Focusable as _;
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join(format!("{name}.md"));
+    let envelope = |body: &str| format!(
+        "# Matrix\r\n\r\n```mermaid\r\n{}\r\n```\n\n[ref]: untouched  \r\ntail",
+        body.replace('\n', "\r\n")
+    );
+    let original = envelope(diagram);
+    let normalized = original.replace("\r\n", "\n");
+    std::fs::write(&path, original.as_bytes()).unwrap();
+    let (app, mut context, _streams) = harness_with_tabs(cx, 1);
+    cx.simulate_window_resize(context.window_handle(), gpui_kit::size(gpui_kit::px(1200.), gpui_kit::px(1400.)));
+    context.update(|_, cx| cx.set_global(super::super::MarkdownWorkbench));
+    app.update_in(&mut context, |app, window, cx| app.open_file_in_editor(&path, window, cx));
+    let view = {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+        loop {
+            context.run_until_parked();
+            if let Some(view) = app.read_with(&context, |app, _| {
+                app.active_editor_input().and_then(|input| input.markdown().cloned())
+            }) { break view; }
+            assert!(std::time::Instant::now() < deadline, "{name}: document did not open");
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+    };
+    let identity = view.read_with(&context, |view, _| view.document().entity_id());
+    let fence = normalized.find("```mermaid").unwrap();
+    let body = fence + "```mermaid\n".len();
+    let image_id = format!("markdown-mermaid-image-{fence}");
+    let error_id = format!("markdown-mermaid-error-{fence}");
+    let settle = |context: &mut gpui_kit::VisualTestContext, image: bool| {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+        loop {
+            context.executor().advance_clock(std::time::Duration::from_millis(100));
+            context.run_until_parked();
+            let ready = context.update(|window, cx| {
+                window.render_frame(cx);
+                if image {
+                    assert!(window.try_find(error_id.clone()).is_none(), "{name}: actual native renderer reported an error; source/error display is not support");
+                    window.try_find(image_id.clone()).is_some_and(|image| {
+                        let size = image.bounds().size;
+                        size.width > gpui_kit::px(1.) && size.height > gpui_kit::px(1.)
+                    })
+                } else {
+                    window.try_find(error_id.clone()).is_some() && window.try_find(image_id.clone()).is_none()
+                }
+            });
+            if ready { break; }
+            assert!(std::time::Instant::now() < deadline, "{name}: native state did not settle (image={image})");
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+    };
+    context.dispatch_action(crate::core::actions::ToggleDocumentPreview);
+    settle(&mut context, rendered);
+    context.dispatch_action(crate::core::actions::EditorSave);
+    let wait_saved = |context: &mut gpui_kit::VisualTestContext| {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+        loop {
+            context.run_until_parked();
+            if app.read_with(context, |app, _| app.active_buffer().is_some_and(|file| !file.dirty && !file.saving)) { break; }
+            assert!(std::time::Instant::now() < deadline, "{name}: save did not complete");
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+    };
+    wait_saved(&mut context);
+    assert_eq!(std::fs::read(&path).unwrap(), original.as_bytes(), "{name}: no-edit rendering must not rewrite bytes");
+    context.update(|window, cx| {
+        let label = crate::ui::i18n::t(crate::ui::i18n::L10nKey::EditorMarkdownMermaidEdit);
+        let point = window.find_by_label(label).bounds().center();
+        window.pointer_down(point, gpui_kit::MouseButton::Left, cx);
+        window.pointer_up(point, gpui_kit::MouseButton::Left, cx);
+        window.render_frame(cx);
+        assert_eq!(view.read(cx).selection(), Selection::caret(body), "{name}: contextual source activation");
+        assert!(view.read(cx).range_to_bounds(&(body..body), cx).is_some());
+    });
+    // An intervening real failure removes the old successful image, retaining
+    // the editable source. The following successful edit cannot pass by merely
+    // keeping the first raster visible.
+    view.update_in(&mut context, |view, window, cx| {
+        view.select_range(body..body + diagram.len(), cx);
+        view.focus_handle(cx).focus(window, cx);
+        view.command(Command::Insert("not-a-mermaid-diagram".into()), window, cx);
+    });
+    settle(&mut context, false);
+    view.read_with(&context, |view, cx| {
+        assert!(view.document().read(cx).source().to_string().contains("not-a-mermaid-diagram"));
+        assert!(view.range_to_bounds(&(body..body), cx).is_some(), "{name}: failed source remains editable");
+    });
+    context.dispatch_action(gpui_kit::component::input::Undo);
+    settle(&mut context, rendered);
+    view.read_with(&context, |view, cx| assert_eq!(view.document().read(cx).source().to_string(), normalized));
+    view.update_in(&mut context, |view, window, cx| {
+        view.select_range(body..body + diagram.len(), cx);
+        view.focus_handle(cx).focus(window, cx);
+        view.command(Command::Insert(edited.into()), window, cx);
+    });
+    settle(&mut context, rendered);
+    let expected = envelope(edited);
+    view.read_with(&context, |view, cx| {
+        assert_eq!(view.document().entity_id(), identity);
+        assert_eq!(view.document().read(cx).source().to_string(), expected.replace("\r\n", "\n"));
+    });
+    context.dispatch_action(crate::core::actions::ToggleDocumentPreview);
+    context.dispatch_action(gpui_kit::component::input::Undo);
+    context.run_until_parked();
+    view.read_with(&context, |view, cx| assert_eq!(view.document().read(cx).source().to_string(), normalized));
+    context.dispatch_action(gpui_kit::component::input::Redo);
+    context.dispatch_action(crate::core::actions::ToggleDocumentPreview);
+    settle(&mut context, rendered);
+    context.dispatch_action(crate::core::actions::EditorSave);
+    wait_saved(&mut context);
+    assert_eq!(std::fs::read(&path).unwrap(), expected.as_bytes(), "{name}: unchanged Markdown and mixed line endings");
+    app.update_in(&mut context, |app, window, cx| {
+        app.editor_close_file(0, window, cx);
+        app.open_file_in_editor(&path, window, cx);
+    });
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+    loop {
+        context.run_until_parked();
+        if app.read_with(&context, |app, cx| app.active_editor_input().is_some_and(|input| {
+            input.markdown().is_some_and(|view| view.read(cx).document().entity_id() != identity
+                && view.read(cx).document().read(cx).source().to_string() == expected.replace("\r\n", "\n"))
+        })) { break; }
+        assert!(std::time::Instant::now() < deadline, "{name}: saved document did not reopen");
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    context.dispatch_action(crate::core::actions::ToggleDocumentPreview);
+    settle(&mut context, rendered);
+    assert_eq!(std::fs::read(&path).unwrap(), expected.as_bytes());
+}
+
+macro_rules! mermaid_matrix_case {
+    ($name:ident, $source:expr, $edited:expr) => {
+        #[gpui_kit::test]
+        fn $name(cx: &mut gpui_kit::TestAppContext) {
+            mermaid_matrix_workbench(cx, stringify!($name), $source, $edited, true);
+        }
+    };
+}
+
+mermaid_matrix_case!(native_mermaid_matrix_flowchart, "flowchart LR\nA[Original] --> B[End]", "flowchart LR\nA[Edited label] --> B[End]");
+
+// Merman =0.9.2 / Mermaid 12.1.0; all-diagrams + complete-svg, without ELK.
+// Inputs follow the released registry/native_font_families examples, with an
+// independently specified changed label/value. Every row must really rasterize;
+// these are acceptance fixtures, not declarations that an unrun row passed.
+mermaid_matrix_case!(native_mermaid_matrix_agentflow,
+    "agentflow-beta\nA[Original] --> B[End]",
+    "agentflow-beta\nA[Edited label] --> B[End]");
+mermaid_matrix_case!(native_mermaid_matrix_architecture,
+    "architecture-beta\nservice api(server)[Original]",
+    "architecture-beta\nservice api(server)[Edited label]");
+mermaid_matrix_case!(native_mermaid_matrix_block,
+    "block-beta\ncolumns 2\nA[\"Original\"] B[\"End\"]",
+    "block-beta\ncolumns 2\nA[\"Edited label\"] B[\"End\"]");
+mermaid_matrix_case!(native_mermaid_matrix_c4,
+    "C4Context\nPerson(user, \"Original\")\nSystem(bank, \"Bank\")\nRel(user, bank, \"Uses\")",
+    "C4Context\nPerson(user, \"Edited label\")\nSystem(bank, \"Bank\")\nRel(user, bank, \"Uses\")");
+mermaid_matrix_case!(native_mermaid_matrix_class,
+    "classDiagram\nclass Animal {\n+String name\n+eat()\n}\nAnimal <|-- Dog",
+    "classDiagram\nclass Animal {\n+String name\n+sleep()\n}\nAnimal <|-- Dog");
+mermaid_matrix_case!(native_mermaid_matrix_cynefin,
+    "cynefin-beta\nclear\n \"Original\"\ncomplex\n \"Retrospective\"\nclear --> complex : \"Probe\"",
+    "cynefin-beta\nclear\n \"Edited label\"\ncomplex\n \"Retrospective\"\nclear --> complex : \"Probe\"");
+mermaid_matrix_case!(native_mermaid_matrix_er,
+    "erDiagram\nCUSTOMER ||--o{ ORDER : places\nCUSTOMER {\nstring name\n}",
+    "erDiagram\nCUSTOMER ||--o{ ORDER : purchases\nCUSTOMER {\nstring name\n}");
+mermaid_matrix_case!(native_mermaid_matrix_event_modeling,
+    "eventmodeling\ntf 01 ui Shop.Cart\ntf 02 cmd Ordering.AddItem ->> 01 { sku: \"SKU-1\" }",
+    "eventmodeling\ntf 01 ui Shop.Cart\ntf 02 cmd Ordering.RemoveItem ->> 01 { sku: \"SKU-1\" }");
+mermaid_matrix_case!(native_mermaid_matrix_gantt,
+    "gantt\ndateFormat YYYY-MM-DD\nsection Work\nOriginal :a, 2024-01-01, 1d",
+    "gantt\ndateFormat YYYY-MM-DD\nsection Work\nEdited label :a, 2024-01-01, 1d");
+mermaid_matrix_case!(native_mermaid_matrix_git_graph,
+    "gitGraph\ncommit id: \"Original\"\nbranch feature\ncheckout feature\ncommit id: \"Work\"",
+    "gitGraph\ncommit id: \"Edited label\"\nbranch feature\ncheckout feature\ncommit id: \"Work\"");
+mermaid_matrix_case!(native_mermaid_matrix_info,
+    "info",
+    "info showInfo");
+// Merman 0.9.2 ignores showInfo in layout_info_diagram_typed: this is a
+// fixed version-information graphic, not user-editable diagram labels.
+mermaid_matrix_case!(native_mermaid_matrix_ishikawa,
+    "ishikawa-beta\nBlurry Photo\n Process\n  Out of focus\n User\n  Wrong position",
+    "ishikawa-beta\nBlurry Photo\n Process\n  Out of focus\n User\n  Shaky hands");
+mermaid_matrix_case!(native_mermaid_matrix_journey,
+    "journey\nsection Work\nOriginal: 5: Developer",
+    "journey\nsection Work\nEdited label: 3: Developer");
+mermaid_matrix_case!(native_mermaid_matrix_kanban,
+    "kanban\n todo[Todo]\n  task[Original]",
+    "kanban\n todo[Todo]\n  task[Edited label]");
+mermaid_matrix_case!(native_mermaid_matrix_mindmap,
+    "mindmap\n Root\n  Original\n  Other child",
+    "mindmap\n Root\n  Edited label\n  Other child");
+mermaid_matrix_case!(native_mermaid_matrix_packet,
+    "packet-beta\n0-7: \"Original\"\n8-15: \"TYPE\"",
+    "packet-beta\n0-7: \"Edited\"\n8-15: \"TYPE\"");
+mermaid_matrix_case!(native_mermaid_matrix_pie,
+    "pie\n\"Original\": 40\n\"Pending\": 60",
+    "pie\n\"Edited label\": 30\n\"Pending\": 70");
+mermaid_matrix_case!(native_mermaid_matrix_quadrant_chart,
+    "quadrantChart\nx-axis Low --> High\ny-axis Low --> High\nOriginal: [0.5, 0.5]",
+    "quadrantChart\nx-axis Low --> High\ny-axis Low --> High\nEdited: [0.7, 0.8]");
+mermaid_matrix_case!(native_mermaid_matrix_radar,
+    "radar-beta\naxis Speed,Quality,Cost\ncurve Original{1,2,3}",
+    "radar-beta\naxis Speed,Quality,Cost\ncurve Edited{3,2,1}");
+mermaid_matrix_case!(native_mermaid_matrix_railroad,
+    "railroad-beta\nrule = sequence(terminal(\"hello\"), nonterminal(\"other\")) ;\nother = terminal(\"world\") ;",
+    "railroad-beta\nrule = sequence(terminal(\"edited\"), nonterminal(\"other\")) ;\nother = terminal(\"world\") ;");
+mermaid_matrix_case!(native_mermaid_matrix_railroad_ebnf,
+    "railroad-ebnf-beta\nrule = \"original\" ;",
+    "railroad-ebnf-beta\nrule = \"edited\" ;");
+mermaid_matrix_case!(native_mermaid_matrix_railroad_abnf,
+    "railroad-abnf-beta\nrule = \"original\" ;",
+    "railroad-abnf-beta\nrule = \"edited\" ;");
+mermaid_matrix_case!(native_mermaid_matrix_railroad_peg,
+    "railroad-peg-beta\nrule <- \"original\" ;",
+    "railroad-peg-beta\nrule <- \"edited\" ;");
+mermaid_matrix_case!(native_mermaid_matrix_requirement,
+    "requirementDiagram\nrequirement req1 {\nid: 1\ntext: Original\nrisk: high\nverifymethod: analysis\n}",
+    "requirementDiagram\nrequirement req1 {\nid: 1\ntext: Edited label\nrisk: high\nverifymethod: analysis\n}");
+mermaid_matrix_case!(native_mermaid_matrix_sankey,
+    "sankey-beta\nSource,Destination,10",
+    "sankey-beta\nSource,Destination,20");
+mermaid_matrix_case!(native_mermaid_matrix_sequence,
+    "sequenceDiagram\nAlice->>Bob: Original\nBob-->>Alice: Reply",
+    "sequenceDiagram\nAlice->>Bob: Edited label\nBob-->>Alice: Reply");
+mermaid_matrix_case!(native_mermaid_matrix_state,
+    "stateDiagram-v2\n[*] --> Idle\nIdle --> Active: Original\nActive --> Idle: stop",
+    "stateDiagram-v2\n[*] --> Idle\nIdle --> Active: Edited label\nActive --> Idle: stop");
+mermaid_matrix_case!(native_mermaid_matrix_swimlane,
+    "swimlane-beta LR\nA[Original] --> B[End]",
+    "swimlane-beta LR\nA[Edited label] --> B[End]");
+mermaid_matrix_case!(native_mermaid_matrix_timeline,
+    "timeline\nsection Preparation\n2024 : Original\n2025 : Release",
+    "timeline\nsection Preparation\n2024 : Edited label\n2025 : Release");
+mermaid_matrix_case!(native_mermaid_matrix_tree_view,
+    "treeView-beta\n  \"packages\"\n    \"original\"\n      \"src\"",
+    "treeView-beta\n  \"packages\"\n    \"edited\"\n      \"src\"");
+mermaid_matrix_case!(native_mermaid_matrix_treemap,
+    "treemap-beta\n\"Root\"\n \"Original\": 40\n \"Pending\": 60",
+    "treemap-beta\n\"Root\"\n \"Edited label\": 30\n \"Pending\": 70");
+mermaid_matrix_case!(native_mermaid_matrix_usecase,
+    "usecase-beta\nactor Customer(\"Customer\")\nsystemBoundary \"Order system\"\n Checkout(\"Original\")\nend\nCustomer --> Checkout",
+    "usecase-beta\nactor Customer(\"Customer\")\nsystemBoundary \"Order system\"\n Checkout(\"Edited label\")\nend\nCustomer --> Checkout");
+mermaid_matrix_case!(native_mermaid_matrix_venn,
+    "venn-beta\nset A[\"Original\"]:10\nset B[\"Editor\"]:8\nunion A,B[\"Shared\"]:3",
+    "venn-beta\nset A[\"Edited label\"]:10\nset B[\"Editor\"]:8\nunion A,B[\"Shared\"]:3");
+mermaid_matrix_case!(native_mermaid_matrix_wardley,
+    "wardley-beta\ncomponent Original [0.6, 0.7]",
+    "wardley-beta\ncomponent Edited [0.5, 0.8]");
+mermaid_matrix_case!(native_mermaid_matrix_xychart,
+    "xychart-beta\nx-axis [Jan, Feb, Mar]\ny-axis \"Revenue\" 0 --> 100\nbar [20, 40, 80]",
+    "xychart-beta\nx-axis [Jan, Feb, Mar]\ny-axis \"Revenue\" 0 --> 100\nbar [40, 60, 80]");
+// zenuml remains the external comparison channel, not a 38th primary row.
+mermaid_matrix_case!(native_mermaid_matrix_zenuml,
+    "zenuml\nAlice->Bob: Original\nBob-->Alice: Reply",
+    "zenuml\nAlice->Bob: Edited label\nBob-->Alice: Reply");
+mermaid_matrix_case!(native_mermaid_matrix_unicode_html_labels,
+    "flowchart LR\nA[\"<b>中文</b><br/>标签 é 👩‍💻\"] --> B[End]",
+    "flowchart LR\nA[\"<b>中文更新</b><br/>标签 é 👩‍💻\"] --> B[End]");
+mermaid_matrix_case!(native_mermaid_matrix_strict_callback_is_inert,
+    "flowchart LR\nA[Original] --> B[End]\nclick A call arbitraryProjectFunction()",
+    "flowchart LR\nA[Edited label] --> B[End]\nclick A call arbitraryProjectFunction()");
+
+// Additional released syntax examples stay visible, rather than using a small
+// flowchart success to imply that every variant/label grammar was exercised.
+mermaid_matrix_case!(native_mermaid_matrix_graph_alias, "graph TD\nA[Original] --> B", "graph TD\nA[Edited label] --> B");
+mermaid_matrix_case!(native_mermaid_matrix_flowchart_elk_without_elk, "flowchart-elk TD\nA[Original] --> B", "flowchart-elk TD\nA[Edited label] --> B");
+mermaid_matrix_case!(native_mermaid_matrix_state_legacy, "stateDiagram\n[*] --> Original", "stateDiagram\n[*] --> Edited");
+mermaid_matrix_case!(native_mermaid_matrix_flowchart_html_unicode_labels,
+    "flowchart LR\nA[\"<b>中文 é 👩‍💻</b><br/>Long label\"] --> B[End]",
+    "flowchart LR\nA[\"<b>更新中文 é 👩‍💻</b><br/>Long edited label\"] --> B[End]");
+mermaid_matrix_case!(native_mermaid_matrix_flowchart_shapes_edges_styles,
+    "flowchart LR\nsubgraph group[Group]\nA@{ shape: rect, label: Original } ==> B{Decision}\nend\nB -. label .-> C((Done))\nclassDef task font-weight:bold\nclass A task",
+    "flowchart LR\nsubgraph group[Group]\nA@{ shape: rect, label: Edited } ==> B{Decision}\nend\nB -. changed .-> C((Done))\nclassDef task font-weight:bold\nclass A task");
+
+#[gpui_kit::test]
+fn native_mermaid_matrix_error_primary_is_not_successful_diagram(cx: &mut gpui_kit::TestAppContext) {
+    mermaid_matrix_workbench(cx, "error-primary-boundary", "error", "error\n%% retained edit", false);
+}
+
+#[gpui_kit::test]
+fn native_mermaid_matrix_unknown_and_empty_sources_retain_bytes(cx: &mut gpui_kit::TestAppContext) {
+    mermaid_matrix_workbench(cx, "empty-unknown-boundary", "", "unknownDiagram\nretained source", false);
+}
+
+#[gpui_kit::test]
+fn native_mermaid_matrix_external_file_and_network_resources_fail_closed(cx: &mut gpui_kit::TestAppContext) {
+    mermaid_matrix_workbench(cx, "external-resource-boundary",
+        "flowchart LR\nA@{ img: \"file:///private/mermaid-must-not-read.png\", label: \"File\" } --> B",
+        "flowchart LR\nA@{ img: \"https://example.test/mermaid-must-not-fetch.png\", label: \"Network\" } --> B", false);
+}
+
+mermaid_matrix_case!(native_mermaid_matrix_script_labels_are_inert_text,
+    "zenuml\nA->B: <script>throw new Error('must not execute')</script>",
+    "zenuml\nA->B: <script>fetch('https://example.test/must-not-fetch')</script>");
+mermaid_matrix_case!(native_mermaid_matrix_flowchart_math_labels,
+    "flowchart LR\nA[\"$$x^2 + y_1$$\"] --> B[End]",
+    "flowchart LR\nA[\"$$\\frac{x}{y} + \\alpha$$\"] --> B[End]");
+mermaid_matrix_case!(native_mermaid_matrix_flowchart_click_callbacks_are_inert,
+    "flowchart LR\nA[Original] --> B\nclick A mustNotExecute \"Callback\"",
+    "flowchart LR\nA[Edited label] --> B\nclick A mustNotExecute \"Changed callback\"");
+
 #[test]
 fn mdx_component_rename_is_sparse_atomic_and_restores_selection() {
     let source = "before  \n\n<Mystery title='a&amp;b' {...props}>child</Mystery>\n\nafter";
@@ -4611,4 +5315,103 @@ fn native_accordions_preserve_hidden_children_focus_history_and_host_save(
     }
     app.read_with(&context, |app, _| assert_eq!(app.active_buffer().unwrap().host.id(), lyrel_core::host::HostId(729)));
     assert!(!marker.exists());
+}
+
+#[gpui_kit::test]
+fn native_long_document_scroll_return_reflow_and_pending_parse_keep_selection_and_history(
+    cx: &mut gpui_kit::TestAppContext,
+) {
+    use crate::ui::app::test_window::harness_with_tabs;
+    use gpui_kit::Focusable as _;
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("long-mixed.md");
+    let mut source = String::from("# Long document\n\n");
+    for ix in 0..1200 {
+        source.push_str(&format!("Paragraph {ix}: wrapped prose 中e\u{301} with **emphasis** and enough words to wrap on a narrow surface.\n\n* parent\n  + nested\n\n```rust\nlet n = {ix};\n```\n\n| Left | Right |\n| --- | --- |\n| a wide cell with retained source | value |\n\n"));
+    }
+    source.push_str("last editable paragraph");
+    source.push_str(&" wide 中e\u{301} 👩‍💻".repeat(3000));
+    std::fs::write(&path, &source).unwrap();
+    let (app, mut context, _streams) = harness_with_tabs(cx, 1);
+    context.update(|_, cx| cx.set_global(super::super::MarkdownWorkbench));
+    app.update_in(&mut context, |app, window, cx| app.open_file_in_editor(&path, window, cx));
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    let view = loop {
+        context.run_until_parked();
+        if let Some(view) = app.read_with(&context, |app, _| app.active_editor_input().and_then(|input| input.markdown().cloned())) { break view; }
+        assert!(std::time::Instant::now() < deadline);
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    };
+    context.dispatch_action(crate::core::actions::ToggleDocumentPreview);
+    settle_live_geometry(&view, &mut context);
+    let start = source.find("Paragraph 0:").unwrap();
+    let end = source.find("last editable").unwrap();
+    let settle_at = |at: usize, context: &mut gpui_kit::VisualTestContext| {
+        loop {
+            context.executor().advance_clock(std::time::Duration::from_millis(100));
+            context.run_until_parked();
+            if context.update(|window, cx| {
+                window.render_frame(cx);
+                view.read(cx).range_to_bounds(&(at..at), cx).is_some_and(|caret| {
+                    caret.top() >= gpui_kit::px(0.) && caret.bottom() <= window.viewport_size().height
+                })
+            }) { break; }
+            assert!(std::time::Instant::now() < deadline, "current source position must reenter the viewport");
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+    };
+    view.update_in(&mut context, |view, window, cx| {
+        view.select_range(end..end, cx);
+        view.focus_handle(cx).focus(window, cx);
+    });
+    settle_at(end, &mut context);
+    view.read_with(&context, |view, cx| {
+        assert!(view.range_to_bounds(&(end..end), cx).is_some());
+        assert!(view.range_to_bounds(&(start..start), cx).is_none(), "offscreen source must not retain frame geometry");
+        assert_eq!(view.document().read(cx).encode().unwrap(), source.as_bytes());
+    });
+    // Edit before the debounced full parse, then leave and return. Old results
+    // must not restore the original source or lose the unified history.
+    view.update_in(&mut context, |view, window, cx| {
+        view.command(Command::Insert("new ".into()), window, cx);
+        view.select_range(start..start, cx);
+    });
+    settle_at(start, &mut context);
+    view.read_with(&context, |view, cx| assert!(view.range_to_bounds(&(start..start), cx).is_some()));
+    view.update_in(&mut context, |view, _, cx| view.select_range(end + 4..end + 4, cx));
+    cx.simulate_window_resize(context.window_handle(), gpui_kit::size(gpui_kit::px(760.), gpui_kit::px(650.)));
+    context.update(|_, cx| gpui_kit::component::Theme::update(cx, |theme| theme.font_size = gpui_kit::px(20.)));
+    settle_at(end + 4, &mut context);
+    context.executor().advance_clock(std::time::Duration::from_secs(1));
+    context.run_until_parked();
+    settle_at(end + 4, &mut context);
+    context.update(|window, cx| {
+        window.render_frame(cx);
+        let caret = view.read(cx).range_to_bounds(&(end + 4..end + 4), cx).unwrap();
+        assert!(caret.top() >= gpui_kit::px(0.) && caret.bottom() <= window.viewport_size().height);
+        assert_eq!(view.read(cx).selection(), Selection::caret(end + 4));
+        assert_eq!(view.read(cx).document().read(cx).source().to_string(), format!("{}new {}", &source[..end], &source[end..]));
+    });
+    context.dispatch_action(gpui_kit::component::input::Undo);
+    context.run_until_parked();
+    view.read_with(&context, |view, cx| assert_eq!(view.document().read(cx).encode().unwrap(), source.as_bytes()));
+}
+
+#[test]
+fn wide_single_line_transactions_keep_chunk_crossing_graphemes_atomic() {
+    let prefix = "wide ".repeat(20_000);
+    let cluster = "👩‍💻e\u{301}";
+    let source = format!("{prefix}{cluster}{}", " tail".repeat(20_000));
+    let mut document = MarkdownDocument::new(source.clone(), TextFormat::default());
+    let mut state = PresentationState::default();
+    document.command(&mut state, Command::Select(Selection::caret(prefix.len() + "👩‍💻".len())));
+    document.command(&mut state, Command::Backspace);
+    assert_eq!(document.source().to_string(), format!("{prefix}e\u{301}{}", " tail".repeat(20_000)));
+    document.command(&mut state, Command::Undo);
+    assert_eq!(document.encode().unwrap(), source.as_bytes());
+    document.command(&mut state, Command::Select(Selection::caret(prefix.len() + cluster.len())));
+    document.command(&mut state, Command::Backspace);
+    assert_eq!(document.source().to_string(), format!("{prefix}👩‍💻{}", " tail".repeat(20_000)));
+    document.command(&mut state, Command::Undo);
+    assert_eq!(document.encode().unwrap(), source.as_bytes());
 }
