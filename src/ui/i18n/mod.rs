@@ -1333,6 +1333,7 @@ l10n_keys! {
     EditorCardEditGroup,
     EditorMdxStepsNumber,
     EditorMdxStepsSequence,
+    EditorMdxStepsSequenceSingular,
     EditorMdxStepsEditTitle,
     EditorMdxStepsEditSource,
     EditorMdxStepsEditContainerSource,

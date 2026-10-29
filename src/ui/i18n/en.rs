@@ -1753,6 +1753,7 @@ pub fn translate_en(key: L10nKey) -> &'static str {
         L10nKey::EditorCardEditGroup => "Edit cards",
         L10nKey::EditorMdxStepsNumber => "Step {number}",
         L10nKey::EditorMdxStepsSequence => "Procedure · {count} steps",
+        L10nKey::EditorMdxStepsSequenceSingular => "Procedure · {count} step",
         L10nKey::EditorMdxStepsEditTitle => "Edit step title",
         L10nKey::EditorMdxStepsEditSource => "Edit step source",
         L10nKey::EditorMdxStepsEditContainerSource => "Edit procedure source",
