@@ -1929,6 +1929,9 @@ impl Render for SourcePresentation {
                                         if let Some(checked) = style.task {
                                             let at = leaf.range.start;
                                             row = row.gap_2().child(
+                                                div().on_mouse_down(MouseButton::Left, |_, _, cx| {
+                                                    cx.stop_propagation();
+                                                }).child(
                                                 gpui_kit::component::checkbox::Checkbox::new((
                                                     "markdown-task",
                                                     leaf.id,
@@ -1938,9 +1941,6 @@ impl Render for SourcePresentation {
                                                     "Toggle task: {}",
                                                     leaf.text
                                                 ))
-                                                .on_mouse_down(MouseButton::Left, |_, _, cx| {
-                                                    cx.stop_propagation()
-                                                })
                                                 .on_change(cx.listener(
                                                     move |this, _, window, cx| {
                                                         this.command(
@@ -1948,8 +1948,10 @@ impl Render for SourcePresentation {
                                                             window,
                                                             cx,
                                                         );
+                                                        this.focus.focus(window, cx);
                                                     },
                                                 )),
+                                                ),
                                             );
                                         }
                                         row.child(div().flex_1().min_w_0().child(rendered))
