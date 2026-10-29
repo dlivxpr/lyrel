@@ -6142,6 +6142,12 @@ fn native_cards_add_missing_properties_expand_children_and_never_follow_dynamic_
     }
     context.update(|window, cx| {
         window.click("mdx-card-add-cols", cx);
+        assert_eq!(
+            view.read(cx).document().read(cx).encode().unwrap(),
+            original.replacen("<CardGroup>", "<CardGroup cols=\"\">", 1).as_bytes(),
+            "adding a property must never rename the adjacent opening/closing tag",
+        );
+        assert_eq!(view.read(cx).selection(), Selection::caret("<CardGroup cols=\"".len()));
         window.input("2", cx);
     });
     let grouped = original.replacen("<CardGroup>", "<CardGroup cols=\"2\">", 1);

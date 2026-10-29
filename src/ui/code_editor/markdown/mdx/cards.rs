@@ -3,7 +3,7 @@
 use super::{Field, PropertyKind, view::{self, FieldContext}};
 use super::super::{Command, EditKind, Selection, SourcePresentation};
 use crate::ui::i18n::{L10nKey, t};
-use gpui_kit::{*, prelude::*};
+use gpui_kit::*;
 use gpui_kit::component::{ActiveTheme as _, Sizable as _, button::{Button, ButtonVariants as _}};
 use std::ops::Range;
 
@@ -73,7 +73,10 @@ pub(super) fn render(
                             .on_click(cx.listener(move |this, _, window, cx| {
                                 if this.document().read(cx).revision() != revision || this.document().read(cx).grammar() != grammar { return; }
                                 this.command(Command::FinishComposition, window, cx);
-                                this.command(Command::Replace { range: at..at, text: text.clone(), kind: EditKind::Command }, window, cx);
+                                // This changes tag structure, not the name at
+                                // its adjacent insertion boundary. A sparse
+                                // batch must not mirror attributes into </name>.
+                                this.command(Command::BatchReplace { edits: vec![(at..at, text.clone())], kind: EditKind::Command }, window, cx);
                                 this.command(Command::Select(Selection::caret(selected)), window, cx);
                                 this.focus_handle(cx).focus(window, cx);
                             }))));

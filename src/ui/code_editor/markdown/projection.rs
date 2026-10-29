@@ -1065,7 +1065,7 @@ impl Projection {
         // Absolute destinations and definitions must never be rebased against a
         // fragment. The revision-checked background parse restores this index.
         self.links = super::links::Index::default();
-        self.mdx.rebase(transaction);
+        self.mdx.rebase(transaction, source);
         // Only affected leaves and their immediate neighbours are reparsed on
         // input. The debounced background parse resolves larger syntax changes.
         let mut old = transaction
