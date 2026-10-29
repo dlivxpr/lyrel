@@ -403,7 +403,7 @@ impl LyrelApp {
             return None;
         }
         let file = self.editor.buffers.get(id)?;
-        let input = file.input.clone();
+        let input = file.input.code()?.clone();
         let hunks = file.gutter.hunks.clone();
         let app = cx.entity().downgrade();
         let prepaint_input = input.clone();
@@ -552,7 +552,7 @@ impl LyrelApp {
         if f.gutter.fetched.as_ref() == Some(&wanted) {
             return;
         }
-        let format = f.format;
+        let format = f.format(cx);
         if let Some(f) = self.editor.buffers.get_mut(id) {
             f.gutter.fetching = true;
         }
@@ -713,9 +713,7 @@ impl LyrelApp {
         };
         let last = input.read(cx).text().lines_len().saturating_sub(1);
         let target = hunks[ix].new.start.min(last);
-        input.update(cx, |state, cx| {
-            state.set_cursor_position(Position::new(target as u32, 0), window, cx);
-        });
+        input.set_cursor_position(Position::new(target as u32, 0), window, cx);
         true
     }
 
@@ -768,18 +766,12 @@ impl LyrelApp {
         let input = f.input.clone();
         let text = input.read(cx).text().to_string();
         let (range, replacement) = revert_edit(&text, &base, hunk);
-        let start16 = text[..range.start].encode_utf16().count();
-        let end16 = start16 + text[range.clone()].encode_utf16().count();
         let line = hunk.new.start;
         let from_peek = f.gutter.peek.is_some();
-        input.update(cx, |state, cx| {
-            state.replace_text_in_range(Some(start16..end16), &replacement, window, cx);
-            let last = state.text().lines_len().saturating_sub(1);
-            state.set_cursor_position(Position::new(line.min(last) as u32, 0), window, cx);
-            if from_peek {
-                state.focus(window, cx);
-            }
-        });
+        input.replace(range, &replacement, window, cx);
+        let last = input.read(cx).text().lines_len().saturating_sub(1);
+        input.set_cursor_position(Position::new(line.min(last) as u32, 0), window, cx);
+        if from_peek { input.focus(window, cx); }
         if let Some(f) = self.editor.buffers.get_mut(id) {
             f.gutter.peek = None;
             // The input's Change event lands after this returns; until then
@@ -887,9 +879,7 @@ impl LyrelApp {
                 };
                 let last = input.read(cx).text().lines_len().saturating_sub(1);
                 let target = hunks[ix].new.start.min(last);
-                input.update(cx, |state, cx| {
-                    state.set_cursor_position(Position::new(target as u32, 0), window, cx);
-                });
+                input.set_cursor_position(Position::new(target as u32, 0), window, cx);
                 ix
             }
         };
@@ -908,7 +898,7 @@ impl LyrelApp {
         };
         if f.gutter.peek.take().is_some() {
             let input = f.input.clone();
-            input.update(cx, |state, cx| state.focus(window, cx));
+            input.focus(window, cx);
             cx.notify();
         }
     }
@@ -1268,6 +1258,7 @@ mod tests {
                 .get(id)
                 .expect("the buffer")
                 .input
+                .code().expect("ordinary code editor")
                 .clone();
             input.update(cx, |state, cx| {
                 state.set_value("one\nTWO\nthree\nfour\nfive\n", window, cx);

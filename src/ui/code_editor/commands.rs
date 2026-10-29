@@ -681,7 +681,7 @@ impl LyrelApp {
         let Some(file) = self.active_buffer() else {
             return false;
         };
-        let input = file.input.clone();
+        let Some(input) = file.input.code().cloned() else { return false; };
         let state = input.read(cx);
         let selected = state.selected_range();
         let language = file.language();
@@ -920,7 +920,7 @@ mod gpui_tests {
         let (app, mut vcx, _streams) = harness_with_tabs(cx, 1);
         open_rs(&app, &mut vcx, "/commands/active.rs");
         vcx.run_until_parked();
-        let input = app.read_with(&vcx, |app, _| app.active_buffer().unwrap().input.clone());
+        let input = app.read_with(&vcx, |app, _| app.active_buffer().unwrap().input.code().expect("ordinary code editor").clone());
         select_two(&input, &mut vcx);
         vcx.dispatch_action(TransformToUppercase);
         vcx.run_until_parked();
@@ -951,7 +951,7 @@ mod gpui_tests {
         let (app, mut vcx, _streams) = harness_with_tabs(cx, 1);
         open_rs(&app, &mut vcx, "/commands/keyboard.rs");
         vcx.run_until_parked();
-        let input = app.read_with(&vcx, |app, _| app.active_buffer().unwrap().input.clone());
+        let input = app.read_with(&vcx, |app, _| app.active_buffer().unwrap().input.code().expect("ordinary code editor").clone());
         input.update_in(&mut vcx, |state, window, cx| {
             state.set_value("one\ntwo\nthree", window, cx);
             state.set_selected_range(5..5, cx);

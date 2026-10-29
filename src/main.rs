@@ -673,8 +673,13 @@ fn main() {
         return;
     }
 
+    let markdown_workbench = args.iter().any(|arg| arg == "--markdown-workbench");
+    if markdown_workbench && config_dir_from(args.iter().cloned()).is_none() {
+        eprintln!("--markdown-workbench requires an isolated --config-dir");
+        return;
+    }
     let open_path = open_path_from(args.into_iter());
-    if forward_open_path(open_path.as_deref()) {
+    if !markdown_workbench && forward_open_path(open_path.as_deref()) {
         return;
     }
 
@@ -726,7 +731,7 @@ fn main() {
     // routing through a daemon that is not up yet would fail on every cold
     // start. Here the daemon is known to be running, so the probe is cheap and
     // a `Bool(true)` means a GUI actually received the request.
-    if open_path.is_none() && daemon_result.is_ok() && forward_open_path(None) {
+    if !markdown_workbench && open_path.is_none() && daemon_result.is_ok() && forward_open_path(None) {
         return;
     }
     if let Err(e) = daemon_result {
@@ -776,6 +781,7 @@ fn main() {
         })
         .detach();
         gpui_kit::init(cx);
+        if markdown_workbench { cx.set_global(crate::ui::code_editor::MarkdownWorkbench); }
         crate::ui::ime::install(cx);
         crate::ui::lsp::popups::init(cx);
         register_bundled_fonts(cx);
