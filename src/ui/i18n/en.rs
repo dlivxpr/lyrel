@@ -1727,6 +1727,9 @@ pub fn translate_en(key: L10nKey) -> &'static str {
         L10nKey::EditorMarkdownSourceRegion => {
             "Source · structure not yet adapted for live editing"
         }
+        L10nKey::EditorMarkdownCodeRegion => "Code source",
+        L10nKey::EditorMarkdownMetadataRegion => "Metadata source",
+        L10nKey::EditorMarkdownHtmlRegion => "HTML source · not executed or rendered as HTML/CSS",
         L10nKey::EditorWrapOn => "Wrap: on",
         L10nKey::EditorWrapOff => "Wrap: off",
         L10nKey::EditorFileTooLarge => "\"{path}\" is too large for the editor ({size} MB)",
