@@ -53,7 +53,6 @@ impl FileHost {
         self.fail_write.store(true, Ordering::SeqCst);
     }
 
-
     pub(super) fn pause_next_read(&self) -> mpsc::Sender<()> {
         let (tx, rx) = mpsc::channel();
         self.entered.store(false, Ordering::SeqCst);
@@ -131,7 +130,10 @@ impl Host for FileHost {
     }
     fn write_file(&self, p: &Path, bytes: &[u8]) -> io::Result<Meta> {
         if self.fail_write.swap(false, Ordering::SeqCst) {
-            return Err(io::Error::new(io::ErrorKind::PermissionDenied, "injected Host write failure"));
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "injected Host write failure",
+            ));
         }
         let gate = self.write_gate.lock().unwrap().take();
         if let Some(gate) = gate {
