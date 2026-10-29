@@ -6493,3 +6493,157 @@ fn native_callout_info_edits_source_history_and_host_reopen(cx: &mut gpui_kit::T
 fn native_callout_warning_edits_source_history_and_host_reopen(cx: &mut gpui_kit::TestAppContext) {
     exercise_native_callout_consumer(cx, "Warning");
 }
+
+#[gpui_kit::test]
+fn native_accordions_preserve_hidden_children_focus_history_and_host_save(
+    cx: &mut gpui_kit::TestAppContext,
+) {
+    use crate::ui::app::test_window::harness_with_tabs;
+    use super::super::test_host::FileHost;
+    use gpui_kit::test::{TestEventExt as _, TestInput, TestQueryExt as _, TestWindowExt as _};
+    use gpui_kit::{ElementInputHandler, Focusable as _, MouseButton};
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("accordions.mdx");
+    let marker = directory.path().join("executed");
+    std::fs::write(directory.path().join("trap.js"),
+        "import {writeFileSync} from 'node:fs'; writeFileSync(new URL('./executed', import.meta.url), 'bad'); export default () => {throw Error('executed')};"
+    ).unwrap();
+    let original = "import Trap from './trap.js'\r\n\n<AccordionGroup>\r\n\n<Accordion title='Outer' icon='book' defaultOpen action={() => Trap()}>\n\nouter **bold**\r\n\n<Accordion title='Inner'>\n\nsecret child\r\n\n</Accordion>\n\n</Accordion>\r\n\n</AccordionGroup>\n\n[ref]: /keep  ";
+    std::fs::write(&path, original).unwrap();
+    let host = FileHost::new(lyrel_core::host::HostId(729));
+    let (app, mut context, _streams) = harness_with_tabs(cx, 1);
+    context.update(|_, cx| cx.set_global(super::super::MarkdownWorkbench));
+    app.update_in(&mut context, |app, window, cx| app.editor_open_on_host(host.clone(), &path, window, cx));
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    let view = loop {
+        context.run_until_parked();
+        if let Some(view) = app.read_with(&context, |app, _| app.active_editor_input().and_then(|input| input.markdown().cloned())) { break view; }
+        assert!(std::time::Instant::now() < deadline);
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    };
+    context.dispatch_action(crate::core::actions::ToggleDocumentPreview);
+    loop {
+        context.executor().advance_clock(std::time::Duration::from_millis(100));
+        context.run_until_parked();
+        if context.update(|window, cx| {
+            window.render_frame(cx);
+            window.try_find_by_label("Collapse accordion: Outer").is_some()
+        }) { break; }
+        assert!(std::time::Instant::now() < deadline);
+    }
+    // Drive the real named disclosure, not ViewState or parser metadata.
+    context.update(|window, cx| {
+        let at = window.find_by_label("Collapse accordion: Outer").bounds().center();
+        window.pointer_down(at, MouseButton::Left, cx);
+        window.pointer_up(at, MouseButton::Left, cx);
+        assert!(window.try_find_by_label("Collapse accordion: Inner").is_none());
+        assert!(window.try_find_by_label("Expand accordion: Inner").is_none());
+        let hidden = original.replace("\r\n", "\n").find("secret child").unwrap();
+        assert!(view.read(cx).range_to_bounds(&(hidden..hidden), cx).is_none());
+        assert!(view.read(cx).focus_handle(cx).is_focused(window));
+        let at = window.find_by_label("Expand accordion: Outer").bounds().center();
+        window.pointer_down(at, MouseButton::Left, cx);
+        window.pointer_up(at, MouseButton::Left, cx);
+    });
+    context.update(|window, cx| {
+        // Traverse the real focus order, then activate the native Button by key.
+        for _ in 0..128 {
+            window.focus_next(cx);
+            window.render_frame(cx);
+            if window.find_by_label("Collapse accordion: Outer").focused() == Some(true) { break; }
+        }
+        assert_eq!(window.find_by_label("Collapse accordion: Outer").focused(), Some(true));
+        assert_eq!(window.find_by_label("Collapse accordion: Outer").expanded(), Some(true));
+        window.press("enter", cx);
+        assert_eq!(window.find_by_label("Expand accordion: Outer").expanded(), Some(false));
+        assert!(view.read(cx).focus_handle(cx).is_focused(window));
+        for _ in 0..128 {
+            window.focus_next(cx);
+            window.render_frame(cx);
+            if window.find_by_label("Expand accordion: Outer").focused() == Some(true) { break; }
+        }
+        assert_eq!(window.find_by_label("Expand accordion: Outer").focused(), Some(true));
+        window.press("space", cx);
+        assert!(window.try_find_by_label("Collapse accordion: Inner").is_some());
+    });
+    app.read_with(&context, |app, _| assert!(!app.active_buffer().unwrap().dirty));
+    view.read_with(&context, |view, cx| assert_eq!(view.document().read(cx).encode().unwrap(), original.as_bytes()));
+    // Property editing and nested prose use the one document/input/history.
+    context.update(|window, cx| {
+        let at = window.find_all("mdx-property-title")[0].bounds().center();
+        window.pointer_down(at, MouseButton::Left, cx);
+        window.pointer_up(at, MouseButton::Left, cx);
+        window.input("Changed", cx);
+    });
+    let property = original.replacen("title='Outer'", "title='Changed'", 1);
+    let normalized = property.replace("\r\n", "\n");
+    let child = normalized.find("secret child").unwrap() + "secret ".len();
+    view.update_in(&mut context, |view, window, cx| {
+        view.select_range(child..child, cx);
+        view.focus_handle(cx).focus(window, cx);
+    });
+    context.update(|window, cx| window.input("edited ", cx));
+    let edited = property.replacen("secret child", "secret edited child", 1);
+    // A native handler preedit is finalized before hiding its active descendant.
+    context.update(|window, cx| {
+        let bounds = window.find("markdown-source").bounds();
+        let mut input = TestInput::new(ElementInputHandler::new(bounds, view.clone()), window);
+        input.compose_text(None, "preedit", Some(7..7), cx);
+        assert!(input.marked_text_range(cx).is_some());
+    });
+    loop {
+        context.executor().advance_clock(std::time::Duration::from_millis(100));
+        context.run_until_parked();
+        if context.update(|window, cx| {
+            window.render_frame(cx);
+            window.try_find_by_label("Collapse accordion: Changed").is_some()
+        }) { break; }
+        assert!(std::time::Instant::now() < deadline);
+    }
+    context.update(|window, cx| {
+        let at = window.find_by_label("Collapse accordion: Changed").bounds().center();
+        window.pointer_down(at, MouseButton::Left, cx);
+        window.pointer_up(at, MouseButton::Left, cx);
+        assert!(!view.read(cx).is_composing());
+        assert!(view.read(cx).focus_handle(cx).is_focused(window));
+        assert!(window.try_find_by_label("Collapse accordion: Inner").is_none());
+        // Input after collapse goes to the visible header, never the old child.
+        let selection = view.read(cx).selection();
+        let source = view.read(cx).document().read(cx).source().to_string();
+        assert_eq!(selection.range(), source.find("Accordion title='Changed'").unwrap()..source.find("Accordion title='Changed'").unwrap());
+    });
+    let composed = edited.replacen("secret edited child", "secret edited preeditchild", 1);
+    view.read_with(&context, |view, cx| assert_eq!(view.document().read(cx).encode().unwrap(), composed.as_bytes()));
+    context.dispatch_action(gpui_kit::component::input::Undo);
+    view.read_with(&context, |view, cx| assert_eq!(view.document().read(cx).encode().unwrap(), edited.as_bytes()));
+    context.update(|window, cx| {
+        window.render_frame(cx);
+        assert!(window.try_find_by_label("Collapse accordion: Inner").is_some(), "undo into hidden children must reveal every collapsed ancestor");
+    });
+    context.dispatch_action(crate::core::actions::ToggleDocumentPreview);
+    context.dispatch_action(gpui_kit::component::input::Undo);
+    view.read_with(&context, |view, cx| assert_eq!(view.document().read(cx).encode().unwrap(), property.as_bytes()));
+    context.dispatch_action(gpui_kit::component::input::Redo);
+    context.dispatch_action(crate::core::actions::ToggleDocumentPreview);
+    context.dispatch_action(crate::core::actions::EditorSave);
+    loop {
+        context.run_until_parked();
+        if app.read_with(&context, |app, _| app.active_buffer().is_some_and(|buffer| !buffer.dirty && !buffer.saving)) { break; }
+        assert!(std::time::Instant::now() < deadline);
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    assert_eq!(std::fs::read(&path).unwrap(), edited.as_bytes());
+    assert!(!marker.exists());
+    app.update_in(&mut context, |app, window, cx| {
+        app.editor_close_file(0, window, cx);
+        app.editor_open_on_host(host.clone(), &path, window, cx);
+    });
+    loop {
+        context.run_until_parked();
+        if app.read_with(&context, |app, cx| app.active_editor_input().and_then(|input| input.markdown()).is_some_and(|view| view.read(cx).document().read(cx).encode().unwrap() == edited.as_bytes())) { break; }
+        assert!(std::time::Instant::now() < deadline);
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    app.read_with(&context, |app, _| assert_eq!(app.active_buffer().unwrap().host.id(), lyrel_core::host::HostId(729)));
+    assert!(!marker.exists());
+}

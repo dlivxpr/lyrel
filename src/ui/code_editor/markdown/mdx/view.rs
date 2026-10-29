@@ -85,6 +85,12 @@ impl<'a> FieldContext<'a> {
         self.grammar
     }
     pub(in super::super) fn components(&self) -> &[Component] { &self.index.components }
+    pub(in super::super) fn range(&self) -> std::ops::Range<usize> { self.range.clone() }
+}
+
+/// Filters presentation layout without removing authoritative source leaves.
+pub(in super::super) fn visible_field(context: &FieldContext<'_>) -> bool {
+    super::accordions::visible(context)
 }
 
 /// Dedicated family modules attach here: choose the family from the positioned
@@ -135,6 +141,10 @@ fn render_component(context: &FieldContext<'_>, content: AnyElement, window: &mu
     }
     if super::callouts::matches(context) {
         return super::callouts::render(context, content, window, cx);
+    }
+    if let Some(component) = context.component() {
+        let name = context.source().slice(component.name_range()).to_string();
+        if super::accordions::matches(&name) { return super::accordions::render(context, content, window, cx); }
     }
     render_generic(context, content, cx)
 }
@@ -198,6 +208,7 @@ pub(in super::super) fn render_generic(context: &FieldContext<'_>, content: AnyE
             .on_click(cx.listener(move |this, _, window, cx| {
                 if this.document().read(cx).revision() != revision || this.document().read(cx).grammar() != grammar { return; }
                 this.command(Command::FinishComposition, window, cx);
+                if this.document().read(cx).revision() != revision { return; }
                 if let Some((ending, name, block)) = &expansion {
                     this.command(Command::ExpandComponent { ending: ending.clone(), name: name.clone(), block: *block }, window, cx);
                 } else { this.command(Command::Select(Selection::new(range.start, range.end)), window, cx); }

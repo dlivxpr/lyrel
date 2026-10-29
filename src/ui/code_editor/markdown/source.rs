@@ -554,6 +554,7 @@ impl SourcePresentation {
         update(&mut self.mdx_state);
         self.geometry = None;
         self.rendered_revision = None;
+        self.viewport.layout = None;
         cx.notify();
     }
     pub(super) fn toggle_component_source(
@@ -577,6 +578,22 @@ impl SourcePresentation {
             self.projection.component_sources(self.document.read(cx).source(), &self.mdx_state);
         }
         self.command(Command::Select(Selection::caret(at)), window, cx);
+        self.focus.focus(window, cx);
+    }
+    pub(super) fn toggle_mdx_accordion(
+        &mut self,
+        id: super::mdx::ComponentId,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.command(Command::FinishComposition, window, cx);
+        // Resolve the stable identity after composition may rebase the source.
+        let Some(component) = self.projection.mdx.components.iter().find(|component| component.id() == id) else { return; };
+        let header = component.name_range().start;
+        self.command(Command::Select(Selection::caret(header)), window, cx);
+        self.update_mdx_view_state(|state| {
+            if !state.collapsed.remove(&id) { state.collapsed.insert(id); }
+        }, window, cx);
         self.focus.focus(window, cx);
     }
     pub(crate) fn is_composing(&self) -> bool {
@@ -1778,10 +1795,13 @@ impl Render for SourcePresentation {
                     end += 1;
                 }
             }
-            let height = self
-                .viewport
-                .heights
-                .get(&leaf.id)
+            if self.live && !super::mdx::view::visible_field(&super::mdx::view::FieldContext::new(
+                &self.projection, leaf, self.document.read(cx).source(), &self.mdx_state,
+            )) {
+                ix = end;
+                continue;
+            }
+            let height = self.viewport.heights.get(&leaf.id)
                 .filter(|(version, _)| *version == leaf.version)
                 .map_or_else(
                     || {
@@ -2008,6 +2028,9 @@ impl Render for SourcePresentation {
                     .iter()
                     .enumerate()
                     .filter_map(|(ix, leaf)| {
+                        if self.live && !super::mdx::view::visible_field(&super::mdx::view::FieldContext::new(
+                            &self.projection, leaf, &component_source, &self.mdx_state,
+                        )) { return None; }
                         if matches!(leaf.kind, Kind::TableCell(_))
                             && !self.tables.contains_key(&leaf.id)
                         {

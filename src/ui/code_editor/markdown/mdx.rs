@@ -13,6 +13,7 @@ pub(super) mod callouts;
 pub(super) mod view;
 pub(super) mod cards;
 mod steps;
+pub(super) mod accordions;
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(super) enum Grammar {
     #[default]
