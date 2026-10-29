@@ -4,10 +4,23 @@ use gpui_kit::base::StyledExt as _;
 use gpui_kit::component::{ActiveTheme as _, button::ButtonVariants as _};
 use gpui_kit::prelude::*;
 use gpui_kit::*;
-use merman::{Engine, MermaidConfig, OperationControl, ParseOptions, RenderOutput, RenderTarget, Renderer, SvgEnvironment, SvgRequest};
 use merman::resources::{InputResourcePolicy, ResourceProfile};
-use merman::svg::{DeterministicTextMeasurer, MeasurementProfileId, SvgPipeline, SvgPostprocessContext, SvgPostprocessor, TextMeasurementPolicy, TextMeasurementProfile, TextMeasurementProfileIdentity};
-use std::{borrow::Cow, collections::HashMap, ops::Range, sync::{Arc, LazyLock}, time::Duration};
+use merman::svg::{
+    DeterministicTextMeasurer, MeasurementProfileId, SvgPipeline, SvgPostprocessContext,
+    SvgPostprocessor, TextMeasurementPolicy, TextMeasurementProfile,
+    TextMeasurementProfileIdentity,
+};
+use merman::{
+    Engine, MermaidConfig, OperationControl, ParseOptions, RenderOutput, RenderTarget, Renderer,
+    SvgEnvironment, SvgRequest,
+};
+use std::{
+    borrow::Cow,
+    collections::HashMap,
+    ops::Range,
+    sync::{Arc, LazyLock},
+    time::Duration,
+};
 
 #[derive(Clone)]
 pub(super) struct Style {
@@ -21,17 +34,27 @@ pub(super) struct Style {
 }
 impl PartialEq for Style {
     fn eq(&self, other: &Self) -> bool {
-        self.family == other.family && self.size == other.size
-            && self.foreground == other.foreground && self.background == other.background
-            && self.border == other.border && self.dark == other.dark
+        self.family == other.family
+            && self.size == other.size
+            && self.foreground == other.foreground
+            && self.background == other.background
+            && self.border == other.border
+            && self.dark == other.dark
             && Arc::ptr_eq(&self.text_system, &other.text_system)
     }
 }
 impl Style {
     pub(super) fn current(cx: &App) -> Self {
         let theme = cx.theme();
-        Self { family: theme.font_family.clone(), size: theme.font_size.into(), foreground: theme.foreground,
-            background: theme.background, border: theme.border, dark: theme.is_dark(), text_system: cx.text_system().clone() }
+        Self {
+            family: theme.font_family.clone(),
+            size: theme.font_size.into(),
+            foreground: theme.foreground,
+            background: theme.background,
+            border: theme.border,
+            dark: theme.is_dark(),
+            text_system: cx.text_system().clone(),
+        }
     }
     fn engine(&self) -> Engine {
         let css = |color: Hsla| format!("#{:06x}", u32::from(color.to_rgb()) >> 8);
@@ -59,8 +82,13 @@ impl Style {
         css.push('\'');
         for ch in family.chars() {
             match ch {
-                '\\' | '\'' => { css.push('\\'); css.push(ch); }
-                ch if ch.is_control() => { write!(css, "\\{:x} ", ch as u32).expect("writing to String"); }
+                '\\' | '\'' => {
+                    css.push('\\');
+                    css.push(ch);
+                }
+                ch if ch.is_control() => {
+                    write!(css, "\\{:x} ", ch as u32).expect("writing to String");
+                }
                 ch => css.push(ch),
             }
         }
@@ -74,29 +102,48 @@ impl Style {
         // browser bbox/baseline and custom CSS font differences remain limits.
         let text_system = WindowTextSystem::new(self.text_system.clone());
         let family = self.family.clone();
-        let measurer = DeterministicTextMeasurer::default().with_width_callback(move |text, style| {
-            if text.is_empty() { return 0.; }
-            let mut font = font(family.clone());
-            font.weight = match style.font_weight.as_deref() {
-                Some("bold" | "bolder") => FontWeight::BOLD,
-                Some(value) => value.parse::<f32>().map(FontWeight).unwrap_or(FontWeight::NORMAL),
-                None => FontWeight::NORMAL,
-            };
-            font.style = match style.font_style.as_deref() {
-                Some("italic") => FontStyle::Italic,
-                Some("oblique") => FontStyle::Oblique,
-                _ => FontStyle::Normal,
-            };
-            text.split('\n').map(|line| {
-                text_system.shape_line(SharedString::from(line), px(style.font_size as f32),
-                    &[TextRun { len: line.len(), font: font.clone(), ..Default::default() }], None)
-                    .width.as_f32() as f64
-            }).fold(0., f64::max)
-        });
+        let measurer =
+            DeterministicTextMeasurer::default().with_width_callback(move |text, style| {
+                if text.is_empty() {
+                    return 0.;
+                }
+                let mut font = font(family.clone());
+                font.weight = match style.font_weight.as_deref() {
+                    Some("bold" | "bolder") => FontWeight::BOLD,
+                    Some(value) => value
+                        .parse::<f32>()
+                        .map(FontWeight)
+                        .unwrap_or(FontWeight::NORMAL),
+                    None => FontWeight::NORMAL,
+                };
+                font.style = match style.font_style.as_deref() {
+                    Some("italic") => FontStyle::Italic,
+                    Some("oblique") => FontStyle::Oblique,
+                    _ => FontStyle::Normal,
+                };
+                text.split('\n')
+                    .map(|line| {
+                        text_system
+                            .shape_line(
+                                SharedString::from(line),
+                                px(style.font_size as f32),
+                                &[TextRun {
+                                    len: line.len(),
+                                    font: font.clone(),
+                                    ..Default::default()
+                                }],
+                                None,
+                            )
+                            .width
+                            .as_f32() as f64
+                    })
+                    .fold(0., f64::max)
+            });
         let identity = TextMeasurementProfileIdentity::new(
             MeasurementProfileId::new("lyrel.native-text").expect("static profile id"),
             format!("gpui-kit-0.8.1:{}", self.family),
-        ).expect("nonempty native measurement version");
+        )
+        .expect("nonempty native measurement version");
         TextMeasurementPolicy::uniform(TextMeasurementProfile::new(identity, measurer))
     }
 }
@@ -349,22 +396,39 @@ impl Job {
             let renderer = Renderer::new()
                 .with_engine(key.style.engine())
                 .with_parse_options(ParseOptions::strict())
-                .with_resource_policy(InputResourcePolicy::for_profile(ResourceProfile::Interactive));
+                .with_resource_policy(InputResourcePolicy::for_profile(
+                    ResourceProfile::Interactive,
+                ));
             let request = SvgRequest {
-                environment: SvgEnvironment::deterministic().with_text_measurement_policy(key.style.measurement()),
-                pipeline: Some(SvgPipeline::resvg_safe().with_postprocessor(RejectExternalResources)),
+                environment: SvgEnvironment::deterministic()
+                    .with_text_measurement_policy(key.style.measurement()),
+                pipeline: Some(
+                    SvgPipeline::resvg_safe().with_postprocessor(RejectExternalResources),
+                ),
                 ..Default::default()
             };
             let result = (|| {
-                let semantic = renderer.prepare_semantic(&key.source, self.control.child().with_deadline(Duration::from_secs(5)))
-                    .map_err(render_failure)?.ok_or(Failure::Empty)?;
+                let semantic = renderer
+                    .prepare_semantic(
+                        &key.source,
+                        self.control.child().with_deadline(Duration::from_secs(5)),
+                    )
+                    .map_err(render_failure)?
+                    .ok_or(Failure::Empty)?;
                 // `error` is a released primary boundary, not a supported
                 // diagram. Never publish its error-picture as successful art.
                 if semantic.diagram_type() == "error" {
-                    return Err(Failure::Diagnostic("Merman error diagram is diagnostic output, not a rendered diagram family.".into()));
+                    return Err(Failure::Diagnostic(
+                        "Merman error diagram is diagnostic output, not a rendered diagram family."
+                            .into(),
+                    ));
                 }
-                let output = semantic.render(RenderTarget::Svg(request)).map_err(render_failure)?;
-                let RenderOutput::Svg(Some(output)) = output else { return Err(Failure::Empty); };
+                let output = semantic
+                    .render(RenderTarget::Svg(request))
+                    .map_err(render_failure)?;
+                let RenderOutput::Svg(Some(output)) = output else {
+                    return Err(Failure::Empty);
+                };
                 // This parser is used only for preallocation dimensions. GPUI's
                 // public renderer below resolves all labels with its own fonts.
                 let dimensions = resvg::usvg::Tree::from_data(
@@ -407,8 +471,11 @@ fn render_failure(error: merman::RenderError) -> Failure {
         merman::RenderError::Parse(diagnostic) => diagnostic.terminal_safe_message(),
         error => merman::normalize_terminal_diagnostic(&error.to_string()),
     };
-    if message.contains("lyrel-external-resource") { Failure::External }
-    else { Failure::Diagnostic(message) }
+    if message.contains("lyrel-external-resource") {
+        Failure::External
+    } else {
+        Failure::Diagnostic(message)
+    }
 }
 
 struct RejectExternalResources;
