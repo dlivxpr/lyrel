@@ -108,6 +108,156 @@ fn opening_across_tabs_shares_edits_and_closing_one_presentation_keeps_them(
 }
 
 #[gpui_kit::test]
+fn markdown_byte_fidelity_survives_host_save_local_edit_undo_and_reopen(cx: &mut TestAppContext) {
+    use crate::core::actions::EditorSave;
+    use gpui_kit::component::input::{MoveToStart, Redo, Undo};
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("fidelity.mdx");
+    // The first three terminators reproduce the observed majority-CRLF bug.
+    let original = b"\xef\xbb\xbfalpha  \r\nbeta\r\ngamma\n\r\n* item\n[ref]: /target  \r\n<Unknown value={1} />";
+    std::fs::write(&path, original).unwrap();
+    std::fs::write(dir.path().join(".editorconfig"), "root = true\n[*]\ntrim_trailing_whitespace = true\ninsert_final_newline = true\nend_of_line = lf\n").unwrap();
+    let host = FileHost::new(HostId(705));
+    let (app, mut vcx, _streams) = harness_with_tabs(cx, 1);
+    vcx.update(|_, cx| cx.set_global(MarkdownWorkbench));
+    app.update_in(&mut vcx, |app, window, cx| {
+        app.editor_open_on_host(host.clone(), &path, window, cx);
+    });
+    wait_until(&mut vcx, |vcx| active_id(&app, vcx).is_some());
+    let save = |vcx: &mut VisualTestContext| {
+        vcx.dispatch_action(EditorSave);
+        wait_until(vcx, |vcx| app.read_with(vcx, |app, _| {
+            app.active_buffer().is_some_and(|file| !file.saving && !file.dirty)
+        }));
+    };
+    save(&mut vcx);
+    assert_eq!(std::fs::read(&path).unwrap(), original);
+    vcx.dispatch_action(MoveToStart);
+    vcx.update(|window, cx| { window.render_frame(cx); window.input("new\n", cx); });
+    save(&mut vcx);
+    let edited = b"\xef\xbb\xbfnew\r\nalpha  \r\nbeta\r\ngamma\n\r\n* item\n[ref]: /target  \r\n<Unknown value={1} />";
+    assert_eq!(std::fs::read(&path).unwrap(), edited);
+    vcx.dispatch_action(Undo);
+    save(&mut vcx);
+    assert_eq!(std::fs::read(&path).unwrap(), original);
+    vcx.dispatch_action(Redo);
+    save(&mut vcx);
+    assert_eq!(std::fs::read(&path).unwrap(), edited);
+    app.update_in(&mut vcx, |app, window, cx| {
+        app.editor_close_file(0, window, cx);
+        app.editor_open_on_host(host.clone(), &path, window, cx);
+    });
+    wait_until(&mut vcx, |vcx| active_id(&app, vcx).is_some());
+    save(&mut vcx);
+    assert_eq!(std::fs::read(&path).unwrap(), edited);
+    app.read_with(&vcx, |app, cx| {
+        assert_eq!(app.active_buffer().unwrap().host.id(), HostId(705));
+        assert_eq!(app.active_buffer().unwrap().input.read(cx).text().to_string(),
+            "new\nalpha  \nbeta\ngamma\n\n* item\n[ref]: /target  \n<Unknown value={1} />");
+    });
+}
+
+#[gpui_kit::test]
+fn markdown_supported_encodings_keep_bom_and_untouched_bytes_through_save_reopen(cx: &mut TestAppContext) {
+    let dir = tempfile::tempdir().unwrap();
+    let fixtures: &[(&[u8], &[u8], usize)] = &[
+        (b"a\nb\n", b"x", 0),
+        (b"a\r\nb\r\n", b"x", 0),
+        (b"a\r\nb\r\nc\n", b"x", 0),
+        (b"a\nb", b"x", 0),
+        (b"\xef\xbb\xbfa\r\nb\n", b"x", 3),
+        (b"\xff\xfea\0\r\0\n\0b\0\n\0", b"x\0", 2),
+        (b"\xfe\xff\0a\0\r\0\n\0b\0\n", b"\0x", 2),
+        (b"caf\xe9  \r\nref\n", b"x", 0),
+        (b"\xd6\xd0\xce\xc4  \r\nref\n", b"x", 0),
+    ];
+    let host = FileHost::new(HostId(706));
+    let (app, mut vcx, _streams) = harness_with_tabs(cx, 1);
+    vcx.update(|_, cx| cx.set_global(MarkdownWorkbench));
+    for (index, &(original, inserted, bom_len)) in fixtures.iter().enumerate() {
+        let path = dir.path().join(format!("encoding-{index}.md"));
+        std::fs::write(&path, original).unwrap();
+        app.update_in(&mut vcx, |app, window, cx| app.editor_open_on_host(host.clone(), &path, window, cx));
+        wait_until(&mut vcx, |vcx| active_id(&app, vcx).is_some());
+        let save = |vcx: &mut VisualTestContext| {
+            vcx.dispatch_action(crate::core::actions::EditorSave);
+            wait_until(vcx, |vcx| app.read_with(vcx, |app, _| app.active_buffer().is_some_and(|file| !file.dirty && !file.saving)));
+        };
+        save(&mut vcx);
+        assert_eq!(std::fs::read(&path).unwrap(), original, "no edit fixture {index}");
+        vcx.dispatch_action(gpui_kit::component::input::MoveToStart);
+        vcx.update(|window, cx| { window.render_frame(cx); window.input("x", cx); });
+        save(&mut vcx);
+        let expected = [&original[..bom_len], inserted, &original[bom_len..]].concat();
+        assert_eq!(std::fs::read(&path).unwrap(), expected, "local edit fixture {index}");
+        vcx.dispatch_action(gpui_kit::component::input::Undo);
+        save(&mut vcx);
+        assert_eq!(std::fs::read(&path).unwrap(), original, "undo fixture {index}");
+        app.update_in(&mut vcx, |app, window, cx| {
+            app.editor_close_file(0, window, cx);
+            app.editor_open_on_host(host.clone(), &path, window, cx);
+        });
+        wait_until(&mut vcx, |vcx| active_id(&app, vcx).is_some());
+        save(&mut vcx);
+        assert_eq!(std::fs::read(&path).unwrap(), original, "reopen fixture {index}");
+        app.update_in(&mut vcx, |app, window, cx| app.editor_close_file(0, window, cx));
+    }
+}
+
+#[gpui_kit::test]
+fn markdown_encoding_failure_keeps_original_bytes_and_recoverable_edits(cx: &mut TestAppContext) {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("legacy.md");
+    let original = b"caf\xe9  \r\nlast";
+    std::fs::write(&path, original).unwrap();
+    let (app, mut vcx, _streams) = harness_with_tabs(cx, 1);
+    vcx.update(|_, cx| cx.set_global(MarkdownWorkbench));
+    app.update_in(&mut vcx, |app, window, cx| app.open_file_in_editor(&path, window, cx));
+    wait_until(&mut vcx, |vcx| active_id(&app, vcx).is_some());
+    vcx.update(|window, cx| { window.render_frame(cx); window.input("🎉", cx); });
+    vcx.dispatch_action(crate::core::actions::EditorSave);
+    wait_until(&mut vcx, |vcx| vcx.has_pending_prompt());
+    vcx.simulate_prompt_answer(t(L10nKey::Cancel));
+    vcx.run_until_parked();
+    assert_eq!(std::fs::read(&path).unwrap(), original);
+    app.read_with(&vcx, |app, cx| {
+        let file = app.active_buffer().unwrap();
+        assert!(file.dirty);
+        assert_eq!(file.format(cx).encoding_label(), "Windows-1252");
+        assert_eq!(file.input.read(cx).text().to_string(), "🎉café  \nlast");
+    });
+    vcx.dispatch_action(gpui_kit::component::input::Undo);
+    vcx.dispatch_action(crate::core::actions::EditorSave);
+    wait_until(&mut vcx, |vcx| app.read_with(vcx, |app, _| app.active_buffer().is_some_and(|file| !file.dirty && !file.saving)));
+    assert_eq!(std::fs::read(&path).unwrap(), original);
+}
+
+#[gpui_kit::test]
+fn markdown_declared_encoding_errors_are_visible_without_replacement_or_write(cx: &mut TestAppContext) {
+    let dir = tempfile::tempdir().unwrap();
+    let (app, mut vcx, _streams) = harness_with_tabs(cx, 1);
+    vcx.update(|_, cx| cx.set_global(MarkdownWorkbench));
+    let invalid: &[&[u8]] = &[
+        b"\xef\xbb\xbfbroken\xff",
+        b"\xff\xfea\0\x00\xd8",
+        b"\xfe\xff\0a\xd8\x00",
+        b"\xff\xfea",
+    ];
+    for (index, bytes) in invalid.iter().enumerate() {
+        let path = dir.path().join(format!("damaged-{index}.md"));
+        std::fs::write(&path, bytes).unwrap();
+        app.update_in(&mut vcx, |app, window, cx| app.open_file_in_editor(&path, window, cx));
+        wait_until(&mut vcx, |vcx| vcx.read(|cx| {
+            crate::ui::notification_history::history(cx).read(cx).records()
+                .any(|record| record.message().contains(&format!("damaged-{index}.md"))
+                    && record.message().contains("invalid source bytes"))
+        }));
+        assert_eq!(std::fs::read(&path).unwrap(), *bytes);
+        assert_eq!(active_id(&app, &vcx), None);
+    }
+}
+
+#[gpui_kit::test]
 fn markdown_workbench_shares_native_source_history_and_host_save_across_groups(
     cx: &mut TestAppContext,
 ) {

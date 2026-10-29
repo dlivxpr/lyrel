@@ -192,7 +192,8 @@ impl EditorBuffers {
         let len = text.len();
         let same =
             len == file.saved.len && Fingerprint::of_chunks(len, text.chunks()) == file.saved;
-        file.dirty = !same || file.format(cx) != file.saved_format;
+        file.dirty = !same || file.format(cx) != file.saved_format
+            || file.representation_fingerprint(cx) != file.saved_representation;
     }
 
     /// Loading is host-bound; the target guard runs before allocating a buffer.
@@ -221,11 +222,12 @@ impl EditorBuffers {
         }
         self.pending.insert(key.clone(), seq);
         let requested = path.to_path_buf();
+        let preserve = cx.try_global::<MarkdownWorkbench>().is_some();
         HostOps::run_in(
             host.clone(),
             window,
             cx,
-            move |h| load_file(h, requested),
+            move |h| load_file(h, requested, preserve),
             move |view, result, window, cx| {
                 let current = access(view).pending.get(&key).copied() == Some(seq);
                 if !current {
@@ -273,6 +275,7 @@ impl EditorBuffers {
         landed: impl FnOnce(&mut E, Vec<Option<Loaded>>, &mut Window, &mut Context<E>) + 'static,
     ) {
         let epoch = self.context_epoch;
+        let preserve = cx.try_global::<MarkdownWorkbench>().is_some();
         HostOps::run_in(
             host,
             window,
@@ -280,7 +283,7 @@ impl EditorBuffers {
             move |host| {
                 files
                     .into_iter()
-                    .map(|path| load_file(host, path).ok())
+                    .map(|path| load_file(host, path, preserve).ok())
                     .collect()
             },
             move |view, loaded, window, cx| {
@@ -378,7 +381,6 @@ impl EditorBuffers {
                 Some("md" | "markdown" | "mdx")
             );
         let preview = !native_markdown && cfg.editor_markdown_preview && language == "markdown";
-        let saved = Fingerprint::of_str(&text);
         let id = BufferId::new();
         let (input, popups, sub, observe) = if native_markdown {
             let document = cx.new(|_| markdown::MarkdownDocument::new(text, format));
@@ -419,6 +421,9 @@ impl EditorBuffers {
             let observe = cx.observe(&input, |_, _, cx| cx.notify());
             (EditorInput::Code(input), Some(popups), sub, observe)
         };
+        let value = input.read(cx);
+        let saved = Fingerprint::of_chunks(value.text().len(), value.text().chunks());
+        let saved_representation = input.markdown().map(|view| view.read(cx).document().read(cx).representation_fingerprint());
         self.files.push(OpenFile {
             id,
             path,
@@ -430,6 +435,7 @@ impl EditorBuffers {
             saved,
             format: (!native_markdown).then_some(format),
             saved_format: format,
+            saved_representation,
             config,
             indent,
             disk_mtime: mtime,
@@ -654,13 +660,14 @@ impl EditorBuffers {
         let host_id = host.id();
         file.reload_seq = file.reload_seq.wrapping_add(1);
         let seq = file.reload_seq;
+        let preserve = file.input.markdown().is_some();
         HostOps::run_in(
             host,
             window,
             cx,
             move |h| {
                 let bytes = h.read_file(&target, MAX_FILE_BYTES)?;
-                let decoded = editor_text::decode(&bytes).ok_or_else(|| {
+                let decoded = decode_file(&target, &bytes, preserve)?.ok_or_else(|| {
                     std::io::Error::new(std::io::ErrorKind::InvalidData, "no longer text")
                 })?;
                 let mtime = h.stat(&target).ok().and_then(|meta| meta.mtime);
@@ -686,16 +693,25 @@ impl EditorBuffers {
                     }
                     Err(error) => {
                         log::warn!("editor: reload of {} failed: {error}", file.path.display());
+                        HostOps::notify_err(window, cx, &file.label(), &error);
                         return;
                     }
                 };
                 file.disk_mtime = mtime;
                 file.conflict = None;
-                file.saved = Fingerprint::of_str(&decoded.text);
-                file.set_format(decoded.format, cx);
                 file.saved_format = decoded.format;
                 let input = file.input.clone();
-                replace_buffer_text(&input, &decoded.text, window, cx);
+                if let Some(source) = input.markdown() {
+                    source.update(cx, |source, cx| source.command(
+                        markdown::Command::Reload { text: decoded.text, format: decoded.format }, window, cx));
+                } else {
+                    file.set_format(decoded.format, cx);
+                    replace_buffer_text(&input, &decoded.text, window, cx);
+                }
+                let file = access(view).get_mut(id).unwrap();
+                let value = file.input.read(cx);
+                file.saved = Fingerprint::of_chunks(value.text().len(), value.text().chunks());
+                file.saved_representation = file.representation_fingerprint(cx);
                 access(view).note_edit(id, cx);
                 edited(view, id, cx);
             },
@@ -753,6 +769,7 @@ pub(super) struct Loaded {
 fn load_file(
     h: &dyn lyrel_core::host::Host,
     requested: PathBuf,
+    preserve: bool,
 ) -> Result<Loaded, EditorOpenError> {
     let path = h.canonicalize(&requested).unwrap_or(requested);
     let meta = h.stat(&path).map_err(|e| {
@@ -776,7 +793,10 @@ fn load_file(
             &[("path", &path.display().to_string()), ("e", &e.to_string())],
         ))
     })?;
-    let Some(decoded) = editor_text::decode(&bytes) else {
+    let Some(decoded) = decode_file(&path, &bytes, preserve).map_err(|error| {
+        EditorOpenError::Message(t_fmt(L10nKey::EditorCantRead,
+            &[("path", &path.display().to_string()), ("e", &error.to_string())]))
+    })? else {
         return Err(EditorOpenError::NotText(path));
     };
     let config = read_editorconfig(h, &path);
@@ -787,6 +807,13 @@ fn load_file(
         mtime: meta.mtime,
         config,
     })
+}
+
+fn decode_file(path: &Path, bytes: &[u8], preserve: bool) -> std::io::Result<Option<editor_text::Decoded>> {
+    let markdown = matches!(path.extension().and_then(|ext| ext.to_str())
+        .map(str::to_ascii_lowercase).as_deref(), Some("md" | "markdown" | "mdx"));
+    if preserve && markdown { editor_text::decode_source(bytes) }
+    else { Ok(editor_text::decode(bytes)) }
 }
 
 /// Collects the `.editorconfig` files that apply to `path`, nearest first,
