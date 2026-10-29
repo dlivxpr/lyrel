@@ -6,7 +6,7 @@ use gpui_kit::base::text::editor_host::{
 };
 use gpui_kit::component::{ActiveTheme as _, input as actions};
 use gpui_kit::prelude::*;
-use gpui_kit::test::TestSupportExt as _;
+use gpui_kit::TestSupportExt as _;
 use gpui_kit::*;
 use std::collections::HashMap;
 
@@ -134,12 +134,26 @@ impl SourcePresentation {
             let _ = view.update(cx, |view, cx| {
                 if view.live == live && view.document.entity_id() == identity && view.document.read(cx).revision() == revision {
                     view.projection.install(projection);
+                    view.state.selection = view.map_live_caret(view.state.selection, cx);
+                    view.selection_notification = true;
                     view.rendered_revision = None;
                     view.geometry = None;
                     cx.notify();
                 }
             });
         }));
+    }
+    // Display-boundary insertion has right affinity after a hidden opening
+    // delimiter and left affinity before a hidden closing delimiter.
+    fn map_live_caret(&self, selection: Selection, cx: &App) -> Selection {
+        if self.live && !self.is_composing() && selection.range().is_empty()
+            && self.projection.revision == self.document.read(cx).revision()
+        {
+            if let Some(leaf) = self.projection.leaf_at(selection.head) {
+                return Selection::caret(leaf.source_offset(leaf.display_offset(selection.head)));
+            }
+        }
+        selection
     }
     pub(crate) fn finish_active_composition(
         document: &Entity<MarkdownDocument>,
@@ -189,6 +203,7 @@ impl SourcePresentation {
             );
             cx.emit(DocumentEvent::PresentationChanged);
         });
+        self.state.selection = self.map_live_caret(self.state.selection, cx);
         cx.notify();
     }
     pub(crate) fn selection(&self) -> Selection {
@@ -220,6 +235,11 @@ impl SourcePresentation {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        self.state.selection = self.map_live_caret(self.state.selection, cx);
+        let command = match command {
+            Command::Select(selection) => Command::Select(self.map_live_caret(selection, cx)),
+            command => command,
+        };
         let marked_before = self.state.marked_range();
         let mut after_extra = None;
         let command = if !self.extra_selections.is_empty() {

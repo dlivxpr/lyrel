@@ -187,6 +187,17 @@ fn native_live_split_join_and_source_switch_keep_one_document_and_history(cx: &m
         assert!(view.is_live());
         assert_eq!(view.document().entity_id(), identity);
         assert_eq!(view.document().read(cx).revision(), 0);
+        assert_eq!(view.selection(), Selection::caret(2));
+        view.focus_handle(cx).focus(window, cx);
+    });
+    view_context.update(|window, cx| window.input("新", cx));
+    view_context.run_until_parked();
+    presentation.read_with(&view_context, |view, cx| {
+        assert_eq!(view.document().read(cx).source().to_string(), "# 新Heading\n\nalpha beta\n\nlast\n");
+    });
+    view_context.dispatch_action(gpui_kit::component::input::Undo);
+    view_context.run_until_parked();
+    presentation.update_in(&mut view_context, |view, window, cx| {
         view.select_range(17..17, cx);
         view.focus_handle(cx).focus(window, cx);
     });

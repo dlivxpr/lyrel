@@ -78,9 +78,14 @@ impl Projection {
         Self::parse(&text, revision, false)
     }
     pub fn parse(source: &str, revision: u64, live: bool) -> Self {
+        Self::parse_fragment(source, revision, live, true)
+    }
+    fn parse_fragment(source: &str, revision: u64, live: bool, document_start: bool) -> Self {
         let mut leaves = Vec::new();
         if live {
-            if let Ok(root) = markdown::to_mdast(source, &markdown::ParseOptions::gfm()) {
+            let mut options = markdown::ParseOptions::gfm();
+            options.constructs.frontmatter = document_start;
+            if let Ok(root) = markdown::to_mdast(source, &options) {
                 let mut cursor = 0;
                 for node in root.children().into_iter().flatten() {
                     let Some(position) = node.position() else { continue };
@@ -215,7 +220,7 @@ impl Projection {
             leaf.shift(leaf.range.start, map(leaf.range.start));
         }
         let fragment = source.slice(start..end).to_string();
-        let mut patch = Self::parse(&fragment, transaction.revision(), live);
+        let mut patch = Self::parse_fragment(&fragment, transaction.revision(), live, start == 0);
         for leaf in &mut patch.leaves {
             leaf.shift(0, start);
             leaf.id = identities.iter().find(|(at, _)| leaf.range.contains(at) || leaf.range.end == *at).map_or_else(|| {
