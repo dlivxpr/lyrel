@@ -8,6 +8,7 @@ use std::ops::Range;
 use unicode_segmentation::UnicodeSegmentation as _;
 
 mod source;
+mod projection;
 pub(super) use source::SourcePresentation;
 #[cfg(test)]
 mod tests;
@@ -114,6 +115,7 @@ pub(crate) enum EditKind {
 pub(crate) enum Command {
     Select(Selection),
     Insert(String),
+    ParagraphBreak { hard: bool },
     Replace {
         range: Range<usize>,
         text: String,
@@ -411,6 +413,14 @@ impl MarkdownDocument {
                     }
                     Command::Insert(text) => {
                         self.edit(state, state.selection.range(), text, EditKind::Typing)
+                    }
+                    Command::ParagraphBreak { hard } => {
+                        self.edit(
+                            state,
+                            state.selection.range(),
+                            if hard { "  \n" } else { "\n\n" }.into(),
+                            EditKind::Command,
+                        );
                     }
                     Command::Replace { range, text, kind } => self.edit(state, range, text, kind),
                     Command::Backspace | Command::Delete => {

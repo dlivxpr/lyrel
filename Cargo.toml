@@ -61,6 +61,8 @@ memchr = "2"
 # emoji, and half a flag renders as a bare letter. Already in the tree via
 # gpui, so this pins no new code.
 unicode-segmentation = "1"
+# Source-position-aware parser shared with gpui-base's released Markdown renderer.
+markdown = "=1.0.0"
 # Scalar widths remain needed by preedit ink detection and copy unwrapping.
 # Input-bar cluster widths instead use lyrel-core's optional terminal-width.
 rio-unicode.workspace = true

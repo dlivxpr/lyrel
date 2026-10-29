@@ -4315,7 +4315,7 @@ impl LyrelApp {
             DocumentWidthTwoThirds => {
                 self.set_document_ratio(crate::core::config::DOCUMENT_RATIO_TWO_THIRDS, cx)
             }
-            ToggleDocumentPreview => self.toggle_document_preview(cx),
+            ToggleDocumentPreview => self.toggle_document_preview(window, cx),
             ToggleDocumentWrap => self.toggle_document_wrap(window, cx),
             EditorTransformUppercase => {
                 self.editor_dispatch(
