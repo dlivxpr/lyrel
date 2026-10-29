@@ -1255,6 +1255,8 @@ impl Render for SourcePresentation {
                 .id("markdown-source")
                 .test_support()
                 .size_full()
+                .flex()
+                .flex_col()
                 .min_h_0()
                 .key_context(key_context)
                 .track_focus(&self.focus)
@@ -1519,7 +1521,7 @@ impl Render for SourcePresentation {
                 }))
                 .when_some(self.assets.status(), |root, status| root.child(
                     div().id("markdown-image-insertion-status").test_support().role(Role::Status)
-                        .aria_label(status.clone()).text_sm().text_color(cx.theme().muted_foreground).child(status)
+                        .shrink_0().aria_label(status.clone()).text_sm().text_color(cx.theme().muted_foreground).child(status)
                 ))
                 .child(crate::ui::scrollbar::with_vertical_scrollbar(
                     "markdown-source-scrollbar",
