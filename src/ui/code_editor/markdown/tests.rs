@@ -4164,7 +4164,8 @@ fn structured_math_syntax_matrix_edits_renders_and_reopens_through_workbench(
             let end = start + tex.len();
             let after = normalized.find('后').unwrap();
             view.read_with(&context, |view, cx| {
-                let before = view.range_to_bounds(&(start - delimiter.len()..start - delimiter.len()), cx).unwrap();
+                let before_at = normalized.find('前').unwrap();
+                let before = view.range_to_bounds(&(before_at..before_at), cx).unwrap();
                 let after = view.range_to_bounds(&(after..after), cx).unwrap();
                 if block {
                     assert!(after.top() > original_bounds.top());
