@@ -90,7 +90,7 @@ impl<'a> FieldContext<'a> {
 
 /// Filters presentation layout without removing authoritative source leaves.
 pub(in super::super) fn visible_field(context: &FieldContext<'_>) -> bool {
-    super::accordions::visible(context)
+    super::tabs::visible(context) && super::accordions::visible(context)
 }
 
 /// Dedicated family modules attach here: choose the family from the positioned
@@ -99,6 +99,11 @@ pub(in super::super) fn visible_field(context: &FieldContext<'_>) -> bool {
 /// Returning content unchanged preserves its native continuous surface.
 pub(in super::super) fn render_field(context: &FieldContext<'_>, content: AnyElement, window: &mut Window, cx: &mut Context<SourcePresentation>) -> AnyElement {
     if context.field.is_some() { return render_component(context, content, window, cx); }
+    let content = render_embedded(context, content, window, cx);
+    render_component(context, content, window, cx)
+}
+
+fn render_embedded(context: &FieldContext<'_>, content: AnyElement, window: &mut Window, cx: &mut Context<SourcePresentation>) -> AnyElement {
     // JSX inside headings, formatted spans or table cells keeps that leaf's
     // native geometry. Its structure controls select the positioned source in
     // the same input handler instead of installing another nested editor.
@@ -106,7 +111,7 @@ pub(in super::super) fn render_field(context: &FieldContext<'_>, content: AnyEle
         let range = component.source_range();
         context.range.start <= range.start && range.end <= context.range.end
     }).peekable();
-    if embedded.peek().is_none() { return render_component(context, content, window, cx); }
+    if embedded.peek().is_none() { return content; }
     let mut controls = div().w_full().flex().flex_col().gap_1();
     for component in embedded {
         let mut fields = div().id(("mdx-component", component.id().value())).w_full();
@@ -129,10 +134,13 @@ pub(in super::super) fn render_field(context: &FieldContext<'_>, content: AnyEle
         fields = fields.child(render_component(&field_context(Field::Children, None), div().into_any_element(), window, cx));
         controls = controls.child(fields);
     }
-    render_component(context, controls.child(content).into_any_element(), window, cx)
+    controls.child(content).into_any_element()
 }
 
 fn render_component(context: &FieldContext<'_>, content: AnyElement, window: &mut Window, cx: &mut Context<SourcePresentation>) -> AnyElement {
+    if context.component().is_some_and(|component| super::tabs::matches(&context.source().slice(component.name_range()).to_string())) {
+        return super::tabs::render(context, content, window, cx);
+    }
     if context.component.is_some_and(|component| super::cards::matches(&context.source.slice(component.name_range()).to_string())) {
         return super::cards::render(context, content, window, cx);
     }
@@ -152,7 +160,9 @@ fn render_component(context: &FieldContext<'_>, content: AnyElement, window: &mu
 pub(in super::super) fn render_generic(context: &FieldContext<'_>, content: AnyElement, cx: &mut Context<SourcePresentation>) -> AnyElement {
     let Some(field) = context.field else { return content; };
     let mut header = div().flex().flex_col().gap_1().text_xs().text_color(cx.theme().muted_foreground);
-    if field == Field::Name { header = header.child(t(L10nKey::EditorMdxGeneric)); }
+    if field == Field::Name && !context.component().is_some_and(|component| super::tabs::matches(&context.source().slice(component.name_range()).to_string())) {
+        header = header.child(t(L10nKey::EditorMdxGeneric));
+    }
     let (key, target, id, accessibility) = match (field, context.component, context.property) {
         (Field::Name, Some(component), _) => (
             L10nKey::EditorMdxName,

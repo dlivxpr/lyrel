@@ -264,6 +264,7 @@ impl SourcePresentation {
                         view.invalidate_layout(cx);
                         view.projection.install(projection);
                         if live { view.projection.component_sources(view.document.read(cx).source(), &view.mdx_state); }
+                        view.reveal_mdx_selection(cx);
                         view.sync_inline_reveal();
                         view.state.selection = view.map_live_caret(view.state.selection, cx);
                         view.selection_notification = true;
@@ -527,6 +528,7 @@ impl SourcePresentation {
             );
             cx.emit(DocumentEvent::PresentationChanged);
         });
+        self.reveal_mdx_selection(cx);
         self.state.selection = self.map_live_caret(self.state.selection, cx);
         self.sync_inline_reveal();
         cx.notify();
@@ -552,9 +554,10 @@ impl SourcePresentation {
     ) {
         self.command(Command::FinishComposition, window, cx);
         update(&mut self.mdx_state);
+        self.viewport.anchor = None;
+        self.viewport.layout = None;
         self.geometry = None;
         self.rendered_revision = None;
-        self.viewport.layout = None;
         cx.notify();
     }
     pub(super) fn toggle_component_source(
@@ -594,6 +597,49 @@ impl SourcePresentation {
         self.update_mdx_view_state(|state| {
             if !state.collapsed.remove(&id) { state.collapsed.insert(id); }
         }, window, cx);
+        self.focus.focus(window, cx);
+    }
+    /// Source/undo selections reveal only their enclosing presentation state.
+    /// Collapsing controls first select their own visible header, so they do not
+    /// immediately reopen themselves through this hook.
+    fn reveal_mdx_selection(&mut self, cx: &App) {
+        if !self.live || self.projection.revision != self.document.read(cx).revision()
+            || self.projection.grammar != self.document.read(cx).grammar() { return; }
+        let source = self.document.read(cx).source();
+        let tabs_changed = super::mdx::tabs::reveal_selection(&self.projection.mdx.components, source, &mut self.mdx_state, self.state.selection);
+        let accordions_changed = super::mdx::accordions::reveal_selection(&self.projection.mdx.components, source, &mut self.mdx_state, self.state.selection);
+        if tabs_changed || accordions_changed {
+            self.viewport.anchor = None;
+            self.viewport.layout = None;
+            self.geometry = None;
+            self.rendered_revision = None;
+        }
+    }
+    pub(super) fn activate_mdx_tab(
+        &mut self,
+        group: super::mdx::ComponentId,
+        child: super::mdx::ComponentId,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        // Finalizing preedit can rebase every range. Resolve the stable IDs
+        // afterwards, never select a range captured by the previous frame.
+        self.command(Command::FinishComposition, window, cx);
+        if !self.live || self.document.read(cx).grammar() != super::mdx::Grammar::Mdx { return; }
+        let valid = self.projection.mdx.components.iter().any(|component| component.id() == group && component.child_ids().contains(&child));
+        if !valid { return; }
+        self.update_mdx_view_state(|state| { state.active_child.insert(group, child); }, window, cx);
+        let target = {
+            let source = self.document.read(cx).source();
+            let component = self.projection.mdx.components.iter().find(|component| component.id() == child).expect("validated tab child");
+            let range = component.children_range();
+            self.projection.leaves.iter().find(|leaf| {
+                range.start <= leaf.range.start && leaf.range.end <= range.end
+                    && !matches!(leaf.kind, Kind::Mdx(_))
+                    && super::mdx::view::visible_field(&super::mdx::view::FieldContext::new(&self.projection, leaf, source, &self.mdx_state))
+            }).map_or(component.name_range().start, |leaf| leaf.content_start())
+        };
+        self.command(Command::Select(Selection::caret(target)), window, cx);
         self.focus.focus(window, cx);
     }
     pub(crate) fn is_composing(&self) -> bool {
@@ -879,6 +925,7 @@ impl SourcePresentation {
             }
             self.rendered_revision = None;
         }
+        self.reveal_mdx_selection(cx);
         self.sync_inline_reveal();
         if changed {
             self.geometry = None;
@@ -1785,6 +1832,7 @@ impl Render for SourcePresentation {
         let top = -self.scroll.offset().y;
         let mut visible = None;
         let mut caret_row = None;
+        let component_source = self.document.read(cx).source().clone();
         while ix < self.projection.leaves.len() {
             let leaf = &self.projection.leaves[ix];
             let mut end = ix + 1;
@@ -1795,13 +1843,14 @@ impl Render for SourcePresentation {
                     end += 1;
                 }
             }
-            if self.live && !super::mdx::view::visible_field(&super::mdx::view::FieldContext::new(
-                &self.projection, leaf, self.document.read(cx).source(), &self.mdx_state,
-            )) {
+            if self.live && !super::mdx::view::visible_field(&super::mdx::view::FieldContext::new(&self.projection, leaf, &component_source, &self.mdx_state)) {
                 ix = end;
                 continue;
             }
-            let height = self.viewport.heights.get(&leaf.id)
+            let height = self
+                .viewport
+                .heights
+                .get(&leaf.id)
                 .filter(|(version, _)| *version == leaf.version)
                 .map_or_else(
                     || {
@@ -2008,7 +2057,6 @@ impl Render for SourcePresentation {
             .iter()
             .map(|leaf| &self.blocks[&leaf.id].node)
             .collect();
-        let component_source = self.document.read(cx).source().clone();
         let block = div()
             .w_full()
             .when_some(self.projection.error.as_ref(), |block, error| {
@@ -2028,9 +2076,9 @@ impl Render for SourcePresentation {
                     .iter()
                     .enumerate()
                     .filter_map(|(ix, leaf)| {
-                        if self.live && !super::mdx::view::visible_field(&super::mdx::view::FieldContext::new(
-                            &self.projection, leaf, &component_source, &self.mdx_state,
-                        )) { return None; }
+                        if self.live && !super::mdx::view::visible_field(&super::mdx::view::FieldContext::new(&self.projection, leaf, &component_source, &self.mdx_state)) {
+                            return None;
+                        }
                         if matches!(leaf.kind, Kind::TableCell(_))
                             && !self.tables.contains_key(&leaf.id)
                         {
@@ -2285,6 +2333,16 @@ impl Render for SourcePresentation {
                     }
                 })
                 .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
+                    let key = &event.keystroke;
+                    if this.live && key.modifiers.alt && !key.modifiers.control && !key.modifiers.platform
+                        && matches!(key.key.as_str(), "pageup" | "pagedown") {
+                        let target = super::mdx::tabs::adjacent(&this.projection.mdx.components, this.document.read(cx).source(), &this.mdx_state, this.state.selection, key.key == "pageup");
+                        if let Some((group, child)) = target {
+                            this.activate_mdx_tab(group, child, window, cx);
+                            cx.stop_propagation();
+                            return;
+                        }
+                    }
                     if event.keystroke.key == "escape" && this.state.composition.is_some() {
                         this.command(Command::CancelComposition, window, cx);
                         cx.stop_propagation();

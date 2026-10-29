@@ -6647,3 +6647,224 @@ fn native_accordions_preserve_hidden_children_focus_history_and_host_save(
     app.read_with(&context, |app, _| assert_eq!(app.active_buffer().unwrap().host.id(), lyrel_core::host::HostId(729)));
     assert!(!marker.exists());
 }
+
+#[gpui_kit::test]
+fn native_tabs_switch_preserves_hidden_edits_history_composition_and_host_bytes(
+    cx: &mut gpui_kit::TestAppContext,
+) {
+    use crate::ui::app::test_window::harness_with_tabs;
+    use super::super::test_host::FileHost;
+    use gpui_kit::{ElementInputHandler, Focusable as _, test::{TestEventExt as _, TestInput, TestWindowExt as _}};
+    let has = |window: &gpui_kit::Window, kind: &str, label: &str| {
+        window.find_all(kind).iter().any(|target| target.label() == Some(label))
+    };
+    let choose = |window: &mut gpui_kit::Window, cx: &mut gpui_kit::App, label: &str| {
+        let target = window.find_all("mdx-tabs-choice").into_iter().find(|target| target.label() == Some(label)).unwrap().bounds().center();
+        window.pointer_down(target, gpui_kit::MouseButton::Left, cx);
+        window.pointer_up(target, gpui_kit::MouseButton::Left, cx);
+    };
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("tabs.mdx");
+    let original = "before  \r\n\n<Tabs syncKey='keep'>\n\n<Tab title='One'>\n\nfirst **bold**\r\n\n</Tab>\n\n<Tab title='Two'>\n\nsecond 🎉\r\n\n</Tab>\n\n</Tabs>\r\n\n[ref]: /keep  ";
+    std::fs::write(&path, original).unwrap();
+    let host = FileHost::new(lyrel_core::host::HostId(727));
+    let (app, mut context, _streams) = harness_with_tabs(cx, 1);
+    context.update(|_, cx| cx.set_global(super::super::MarkdownWorkbench));
+    app.update_in(&mut context, |app, window, cx| app.editor_open_on_host(host.clone(), &path, window, cx));
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    let view = loop {
+        context.run_until_parked();
+        if let Some(view) = app.read_with(&context, |app, _| app.active_editor_input().and_then(|input| input.markdown().cloned())) { break view; }
+        assert!(std::time::Instant::now() < deadline);
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    };
+    context.dispatch_action(crate::core::actions::ToggleDocumentPreview);
+    loop {
+        context.executor().advance_clock(std::time::Duration::from_millis(100));
+        context.run_until_parked();
+        if context.update(|window, cx| { window.render_frame(cx); has(window, "mdx-tabs-choice", "Two") }) { break; }
+        assert!(std::time::Instant::now() < deadline);
+    }
+    let revision = view.read_with(&context, |view, cx| view.document().read(cx).revision());
+    context.update(|window, cx| {
+        assert!(has(window, "mdx-tabs-panel", "One"));
+        assert!(!has(window, "mdx-tabs-panel", "Two"));
+        choose(window, cx, "Two");
+        window.render_frame(cx);
+        assert!(!has(window, "mdx-tabs-panel", "One"));
+        assert!(has(window, "mdx-tabs-panel", "Two"));
+        assert!(view.read(cx).focus_handle(cx).is_focused(window));
+        assert_eq!(view.read(cx).document().read(cx).revision(), revision);
+        assert_eq!(view.read(cx).document().read(cx).encode().unwrap(), original.as_bytes());
+    });
+    app.read_with(&context, |app, _| assert!(!app.active_buffer().unwrap().dirty));
+    context.update(|window, cx| {
+        // The continuous editor keeps Tab for indentation/table navigation.
+        // Its explicit tab-switch keys use the same native control operation.
+        window.press("alt-pageup", cx);
+        assert!(has(window, "mdx-tabs-panel", "One"));
+        assert!(!has(window, "mdx-tabs-panel", "Two"));
+        window.press("alt-pagedown", cx);
+        assert!(has(window, "mdx-tabs-panel", "Two"));
+        assert!(!has(window, "mdx-tabs-panel", "One"));
+        assert_eq!(view.read(cx).document().read(cx).revision(), revision);
+    });
+    // A switch is not an undo item, including the clean initial state.
+    context.dispatch_action(gpui_kit::component::input::Undo);
+    view.read_with(&context, |view, cx| assert_eq!(view.document().read(cx).revision(), revision));
+    let at = original.replace("\r\n", "\n").find("second").unwrap();
+    view.update_in(&mut context, |view, window, cx| {
+        view.command(Command::Select(Selection::caret(at)), window, cx);
+        view.focus_handle(cx).focus(window, cx);
+    });
+    context.update(|window, cx| window.input("edited ", cx));
+    let edited = original.replacen("second", "edited second", 1);
+    context.update(|window, cx| { window.render_frame(cx); choose(window, cx, "One"); });
+    view.read_with(&context, |view, cx| assert_eq!(view.document().read(cx).encode().unwrap(), edited.as_bytes()));
+    context.dispatch_action(gpui_kit::component::input::Undo);
+    context.update(|window, cx| {
+        window.render_frame(cx);
+        assert!(has(window, "mdx-tabs-panel", "Two"), "undo restores the edited child as a visible input target");
+        assert!(!has(window, "mdx-tabs-panel", "One"));
+    });
+    view.read_with(&context, |view, cx| assert_eq!(view.document().read(cx).encode().unwrap(), original.as_bytes()));
+    context.dispatch_action(gpui_kit::component::input::Redo);
+    context.dispatch_action(crate::core::actions::ToggleDocumentPreview);
+    context.dispatch_action(gpui_kit::component::input::Undo);
+    context.dispatch_action(gpui_kit::component::input::Redo);
+    context.dispatch_action(crate::core::actions::ToggleDocumentPreview);
+    loop {
+        context.executor().advance_clock(std::time::Duration::from_millis(100));
+        context.run_until_parked();
+        if context.update(|window, cx| { window.render_frame(cx); has(window, "mdx-tabs-choice", "One") }) { break; }
+        assert!(std::time::Instant::now() < deadline);
+    }
+    context.update(|window, cx| {
+        let bounds = window.find("markdown-source").bounds();
+        let mut input = TestInput::new(ElementInputHandler::new(bounds, view.clone()), window);
+        input.compose_text(None, "cancel", Some(6..6), cx);
+        input.compose_text(None, "", None, cx);
+        assert!(!view.read(cx).is_composing());
+    });
+    view.read_with(&context, |view, cx| assert_eq!(view.document().read(cx).encode().unwrap(), edited.as_bytes()));
+    context.update(|window, cx| {
+        let bounds = window.find("markdown-source").bounds();
+        let mut input = TestInput::new(ElementInputHandler::new(bounds, view.clone()), window);
+        input.compose_text(None, "中文", Some(2..2), cx);
+    });
+    context.update(|window, cx| { window.render_frame(cx); choose(window, cx, "One"); });
+    let committed = edited.replacen("edited second", "edited 中文second", 1);
+    view.read_with(&context, |view, cx| {
+        assert!(!view.is_composing());
+        assert_eq!(view.document().read(cx).encode().unwrap(), committed.as_bytes());
+    });
+    context.dispatch_action(gpui_kit::component::input::Undo);
+    view.read_with(&context, |view, cx| assert_eq!(view.document().read(cx).encode().unwrap(), edited.as_bytes()));
+    context.dispatch_action(gpui_kit::component::input::Redo);
+    context.dispatch_action(crate::core::actions::EditorSave);
+    loop {
+        context.run_until_parked();
+        if app.read_with(&context, |app, _| app.active_buffer().is_some_and(|buffer| !buffer.dirty && !buffer.saving)) { break; }
+        assert!(std::time::Instant::now() < deadline);
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    assert_eq!(std::fs::read(&path).unwrap(), committed.as_bytes());
+    assert_eq!(host.writes.load(std::sync::atomic::Ordering::SeqCst), 1);
+    app.update_in(&mut context, |app, window, cx| {
+        app.editor_close_file(0, window, cx);
+        app.editor_open_on_host(host.clone(), &path, window, cx);
+    });
+    loop {
+        context.run_until_parked();
+        if app.read_with(&context, |app, _| app.active_buffer().is_some()) { break; }
+        assert!(std::time::Instant::now() < deadline);
+    }
+    app.read_with(&context, |app, cx| {
+        let reopened = app.active_editor_input().unwrap().markdown().unwrap().read(cx);
+        assert_eq!(reopened.document().read(cx).encode().unwrap(), committed.as_bytes());
+        assert_eq!(app.active_buffer().unwrap().host.id(), lyrel_core::host::HostId(727));
+    });
+}
+
+#[gpui_kit::test]
+fn native_tabs_nested_ancestor_visibility_and_property_undo_restore_the_right_child(
+    cx: &mut gpui_kit::TestAppContext,
+) {
+    use crate::ui::app::test_window::harness_with_tabs;
+    use gpui_kit::test::{TestEventExt as _, TestWindowExt as _};
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("nested-tabs.mdx");
+    let original = "<Tabs>\n\n<Tab title='Outer'>\n\n<Tabs>\n\n<Tab title='Inner'>\n\nvisible **inner**\n\n</Tab>\n\n<Tab title='Hidden'>\n\nkept hidden\n\n</Tab>\n\n</Tabs>\n\n</Tab>\n\n<Tab title='Other'>\n\nother child\n\n</Tab>\n\n</Tabs>\n\nkeep  ";
+    std::fs::write(&path, original).unwrap();
+    let (app, mut context, _streams) = harness_with_tabs(cx, 1);
+    context.update(|_, cx| cx.set_global(super::super::MarkdownWorkbench));
+    app.update_in(&mut context, |app, window, cx| app.open_file_in_editor(&path, window, cx));
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    let view = loop {
+        context.run_until_parked();
+        if let Some(view) = app.read_with(&context, |app, _| app.active_editor_input().and_then(|input| input.markdown().cloned())) { break view; }
+        assert!(std::time::Instant::now() < deadline);
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    };
+    let has = |window: &gpui_kit::Window, kind: &str, label: &str| {
+        window.find_all(kind).iter().any(|target| target.label() == Some(label))
+    };
+    let choose = |window: &mut gpui_kit::Window, cx: &mut gpui_kit::App, label: &str| {
+        let target = window.find_all("mdx-tabs-choice").into_iter().find(|target| target.label() == Some(label)).unwrap().bounds().center();
+        window.pointer_down(target, gpui_kit::MouseButton::Left, cx);
+        window.pointer_up(target, gpui_kit::MouseButton::Left, cx);
+        window.render_frame(cx);
+    };
+    context.dispatch_action(crate::core::actions::ToggleDocumentPreview);
+    loop {
+        context.executor().advance_clock(std::time::Duration::from_millis(100));
+        context.run_until_parked();
+        if context.update(|window, cx| { window.render_frame(cx); has(window, "mdx-tabs-choice", "Hidden") }) { break; }
+        assert!(std::time::Instant::now() < deadline);
+    }
+    context.update(|window, cx| {
+        assert!(has(window, "mdx-tabs-panel", "Inner"));
+        assert!(!has(window, "mdx-tabs-panel", "Hidden"));
+        choose(window, cx, "Hidden");
+        assert!(has(window, "mdx-tabs-panel", "Hidden"));
+        assert!(!has(window, "mdx-tabs-panel", "Inner"));
+        choose(window, cx, "Other");
+        assert!(has(window, "mdx-tabs-panel", "Other"));
+        assert!(!has(window, "mdx-tabs-panel", "Hidden"));
+        assert!(!has(window, "mdx-tabs-choice", "Hidden"), "inactive ancestor hides its whole nested strip");
+        choose(window, cx, "Outer");
+        assert!(has(window, "mdx-tabs-panel", "Hidden"), "nested active child survives ancestor switching");
+        assert!(!has(window, "mdx-tabs-panel", "Inner"));
+        // Only the outer and selected nested Tab expose property controls.
+        let target = window.find_all("mdx-property-title").last().unwrap().bounds().center();
+        window.pointer_down(target, gpui_kit::MouseButton::Left, cx);
+        window.pointer_up(target, gpui_kit::MouseButton::Left, cx);
+        window.input("Renamed", cx);
+    });
+    let edited = original.replacen("title='Hidden'", "title='Renamed'", 1);
+    view.read_with(&context, |view, cx| assert_eq!(view.document().read(cx).encode().unwrap(), edited.as_bytes()));
+    loop {
+        context.executor().advance_clock(std::time::Duration::from_millis(100));
+        context.run_until_parked();
+        if context.update(|window, cx| { window.render_frame(cx); has(window, "mdx-tabs-choice", "Renamed") }) { break; }
+        assert!(std::time::Instant::now() < deadline);
+    }
+    context.update(|window, cx| {
+        assert!(has(window, "mdx-tabs-panel", "Renamed"), "editing a title does not replace active stable identity");
+        choose(window, cx, "Other");
+    });
+    context.dispatch_action(crate::core::actions::ToggleDocumentPreview);
+    context.dispatch_action(gpui_kit::component::input::Undo);
+    view.read_with(&context, |view, cx| assert_eq!(view.document().read(cx).encode().unwrap(), original.as_bytes()));
+    context.dispatch_action(crate::core::actions::ToggleDocumentPreview);
+    loop {
+        context.executor().advance_clock(std::time::Duration::from_millis(100));
+        context.run_until_parked();
+        if context.update(|window, cx| { window.render_frame(cx); has(window, "mdx-tabs-panel", "Hidden") }) { break; }
+        assert!(std::time::Instant::now() < deadline);
+    }
+    context.update(|window, _| {
+        assert!(!has(window, "mdx-tabs-panel", "Other"));
+        assert!(!has(window, "mdx-tabs-panel", "Inner"));
+    });
+}
