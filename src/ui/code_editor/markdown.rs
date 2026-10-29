@@ -10,8 +10,8 @@ use unicode_segmentation::UnicodeSegmentation as _;
 mod images;
 pub(super) mod links;
 mod lists;
-mod mdx;
 mod math;
+mod mdx;
 mod mermaid;
 mod projection;
 mod regions;
@@ -136,7 +136,11 @@ pub(crate) enum Command {
         closing: Option<Range<usize>>,
         name: String,
     },
-    ExpandComponent { ending: Range<usize>, name: String, block: bool },
+    ExpandComponent {
+        ending: Range<usize>,
+        name: String,
+        block: bool,
+    },
     Insert(String),
     ParagraphBreak {
         hard: bool,
@@ -278,7 +282,11 @@ impl MarkdownDocument {
         self.format
     }
     pub(super) fn grammar(&self) -> mdx::Grammar {
-        mdx::Grammar::for_path(self.resources.as_ref().and_then(|resources| resources.path()))
+        mdx::Grammar::for_path(
+            self.resources
+                .as_ref()
+                .and_then(|resources| resources.path()),
+        )
     }
     pub(crate) fn set_format(&mut self, format: TextFormat) {
         if format.line_ending != self.format.line_ending {
@@ -335,14 +343,23 @@ impl MarkdownDocument {
     fn source_boundary(source: &Rope, at: usize, forward: bool) -> usize {
         use unicode_segmentation::{GraphemeCursor, GraphemeIncomplete};
         let at = at.min(source.len());
-        let at = if forward { source.ceil_char_boundary(at) } else { source.floor_char_boundary(at) };
+        let at = if forward {
+            source.ceil_char_boundary(at)
+        } else {
+            source.floor_char_boundary(at)
+        };
         let mut cursor = GraphemeCursor::new(at, source.len(), true);
         let (mut chunk, mut start) = source.chunk(at);
         let mut testing = true;
         loop {
             let result = if testing {
                 cursor.is_boundary(chunk, start).map(|boundary| {
-                    if boundary { Some(at) } else { testing = false; None }
+                    if boundary {
+                        Some(at)
+                    } else {
+                        testing = false;
+                        None
+                    }
                 })
             } else if forward {
                 cursor.next_boundary(chunk, start)
@@ -353,8 +370,12 @@ impl MarkdownDocument {
                 Ok(Some(offset)) => return offset,
                 Ok(None) if testing => return at,
                 Ok(None) => {
-                    if cursor.cur_cursor() == 0 { return 0; }
-                    if cursor.cur_cursor() == source.len() { return source.len(); }
+                    if cursor.cur_cursor() == 0 {
+                        return 0;
+                    }
+                    if cursor.cur_cursor() == source.len() {
+                        return source.len();
+                    }
                 }
                 Err(GraphemeIncomplete::PreContext(end)) => {
                     let (context, base) = source.chunk(end - 1);
@@ -366,7 +387,9 @@ impl MarkdownDocument {
                 Err(GraphemeIncomplete::PrevChunk) => {
                     (chunk, start) = source.chunk(start - 1);
                 }
-                Err(GraphemeIncomplete::InvalidOffset) => unreachable!("Rope chunk must contain the grapheme cursor"),
+                Err(GraphemeIncomplete::InvalidOffset) => {
+                    unreachable!("Rope chunk must contain the grapheme cursor")
+                }
             }
         }
     }
@@ -515,8 +538,17 @@ impl MarkdownDocument {
             );
         }
     }
-    fn replace_preedit(&mut self, state: &mut PresentationState, range: Range<usize>, text: &SourceText) {
-        if let Some(mirror) = state.composition.as_mut().and_then(|composition| composition.mirror.as_mut()) {
+    fn replace_preedit(
+        &mut self,
+        state: &mut PresentationState,
+        range: Range<usize>,
+        text: &SourceText,
+    ) {
+        if let Some(mirror) = state
+            .composition
+            .as_mut()
+            .and_then(|composition| composition.mirror.as_mut())
+        {
             self.replace(mirror.range.clone(), text);
             let start = mirror.range.start - range.len() + text.text.len();
             mirror.range = start..start + text.text.len();
@@ -537,20 +569,41 @@ impl MarkdownDocument {
         if cancel {
             // Restore in reverse transaction order, so the original closing-tag
             // coordinate is valid again after restoring the opening name.
-            if inserted != composition.original { self.replace(composition.range, &composition.original); }
+            if inserted != composition.original {
+                self.replace(composition.range, &composition.original);
+            }
             if let Some((mirror, inserted)) = mirror {
                 if inserted != mirror.original {
-                    self.replace(mirror.original_start..mirror.original_start + inserted.text.len(), &mirror.original);
+                    self.replace(
+                        mirror.original_start..mirror.original_start + inserted.text.len(),
+                        &mirror.original,
+                    );
                 }
             }
             state.selection = composition.selection;
         } else if inserted != composition.original {
             let mut edits = smallvec::SmallVec::new();
             if let Some((mirror, inserted)) = mirror {
-                edits.push(ReplacedSource { start: mirror.original_start, removed: mirror.original, inserted });
+                edits.push(ReplacedSource {
+                    start: mirror.original_start,
+                    removed: mirror.original,
+                    inserted,
+                });
             }
-            edits.push(ReplacedSource { start: composition.range.start, removed: composition.original, inserted });
-            self.record(Change { edits, before: composition.selection, after: state.selection }, EditKind::Command, state.id);
+            edits.push(ReplacedSource {
+                start: composition.range.start,
+                removed: composition.original,
+                inserted,
+            });
+            self.record(
+                Change {
+                    edits,
+                    before: composition.selection,
+                    after: state.selection,
+                },
+                EditKind::Command,
+                state.id,
+            );
         }
     }
     /// All editing consumers use this command boundary. Native ranges are converted
@@ -570,16 +623,36 @@ impl MarkdownDocument {
 
     fn apply_command(&mut self, state: &mut PresentationState, command: Command) {
         match command {
-            Command::ComposePaired { range, mirror, text, selected } => {
+            Command::ComposePaired {
+                range,
+                mirror,
+                text,
+                selected,
+            } => {
                 self.finish_composition(state, false);
                 let range = self.safe_range(range);
                 let mirror = self.safe_range(mirror);
-                if mirror.start < range.end { return; }
+                if mirror.start < range.end {
+                    return;
+                }
                 state.composition = Some(Composition {
-                    range: range.clone(), original: self.source_text(range.clone()), selection: state.selection,
-                    mirror: Some(CompositionMirror { original_start: mirror.start, original: self.source_text(mirror.clone()), range: mirror }),
+                    range: range.clone(),
+                    original: self.source_text(range.clone()),
+                    selection: state.selection,
+                    mirror: Some(CompositionMirror {
+                        original_start: mirror.start,
+                        original: self.source_text(mirror.clone()),
+                        range: mirror,
+                    }),
                 });
-                self.apply_command(state, Command::Compose { range: Some(range), text, selected });
+                self.apply_command(
+                    state,
+                    Command::Compose {
+                        range: Some(range),
+                        text,
+                        selected,
+                    },
+                );
             }
             Command::Table(operation) => {
                 self.finish_composition(state, false);
@@ -688,17 +761,36 @@ impl MarkdownDocument {
                             self.boundary(selection.head, false),
                         );
                     }
-                    Command::RenameComponent { opening, closing, name } => {
+                    Command::RenameComponent {
+                        opening,
+                        closing,
+                        name,
+                    } => {
                         let after = Selection::caret(opening.start + name.len());
                         let mut edits = Vec::with_capacity(2);
-                        if let Some(closing) = closing { edits.push((closing, name.clone())); }
+                        if let Some(closing) = closing {
+                            edits.push((closing, name.clone()));
+                        }
                         edits.push((opening, name));
                         self.batch_edit_selected(state, edits, EditKind::Command, Some(after));
                     }
-                    Command::ExpandComponent { ending, name, block } => {
+                    Command::ExpandComponent {
+                        ending,
+                        name,
+                        block,
+                    } => {
                         let after = Selection::caret(ending.start + if block { 2 } else { 1 });
-                        let text = if block { format!(">\n\n</{name}>") } else { format!("></{name}>") };
-                        self.batch_edit_selected(state, vec![(ending, text)], EditKind::Command, Some(after));
+                        let text = if block {
+                            format!(">\n\n</{name}>")
+                        } else {
+                            format!("></{name}>")
+                        };
+                        self.batch_edit_selected(
+                            state,
+                            vec![(ending, text)],
+                            EditKind::Command,
+                            Some(after),
+                        );
                     }
                     Command::Insert(text) => {
                         self.edit(state, state.selection.range(), text, EditKind::Typing)
