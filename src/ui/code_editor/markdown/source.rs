@@ -1,6 +1,7 @@
 use super::projection::{Kind, Projection};
 use super::*;
 use gpui_kit::TestSupportExt as _;
+use gpui_kit::base::StyledExt as _;
 use gpui_kit::base::text::editor_host::{
     BlockNode, CodeBlock, FlowPosition, LeafGeometry, Paragraph, RenderContext,
     collect_leaf_geometry,
@@ -59,7 +60,10 @@ impl SourcePresentation {
         cx: &mut Context<Self>,
     ) -> Self {
         let observe = cx.subscribe(&document, |this, _, event: &DocumentEvent, cx| {
-            if matches!(event, DocumentEvent::ResourceContextChanged | DocumentEvent::ImagesChanged) {
+            if matches!(
+                event,
+                DocumentEvent::ResourceContextChanged | DocumentEvent::ImagesChanged
+            ) {
                 this.refresh_images(false, cx);
                 this.geometry = None;
                 cx.notify();
@@ -212,35 +216,61 @@ impl SourcePresentation {
         }));
     }
     fn refresh_images(&mut self, consent: bool, cx: &mut Context<Self>) {
-        if !self.live || self.projection.revision != self.document.read(cx).revision() { return; }
-        let mut urls: Vec<String> = self.projection.leaves.iter()
-            .flat_map(|leaf| leaf.image_urls()).map(str::to_owned).collect();
+        if !self.live || self.projection.revision != self.document.read(cx).revision() {
+            return;
+        }
+        let mut urls: Vec<String> = self
+            .projection
+            .leaves
+            .iter()
+            .flat_map(|leaf| leaf.image_urls())
+            .map(str::to_owned)
+            .collect();
         urls.sort();
         urls.dedup();
-        self.document.update(cx, |document, cx| document.sync_images(urls, consent, cx));
+        self.document
+            .update(cx, |document, cx| document.sync_images(urls, consent, cx));
     }
     fn schedule_mermaid(&mut self, cx: &mut Context<Self>) {
         if !self.live || self.projection.revision != self.document.read(cx).revision() {
             self.mermaid.cancel();
             return;
         }
-        self.mermaid.request(&self.projection, self.document.entity_id(), super::mermaid::Style::current(cx));
+        self.mermaid.request(
+            &self.projection,
+            self.document.entity_id(),
+            super::mermaid::Style::current(cx),
+        );
         // One worker and one replaceable pending request per presentation.
         // Cancelling the control stops synchronous Merman work at checkpoints;
         // retaining the task prevents rapid edits from creating unbounded jobs.
-        if self.mermaid_task.is_some() { return; }
-        let Some(mut job) = self.mermaid.take_job() else { return; };
+        if self.mermaid_task.is_some() {
+            return;
+        }
+        let Some(mut job) = self.mermaid.take_job() else {
+            return;
+        };
         self.mermaid_task = Some(cx.spawn(async move |view, cx| {
             loop {
-                let batch = cx.background_executor().spawn(async move { job.run() }).await;
+                let batch = cx
+                    .background_executor()
+                    .spawn(async move { job.run() })
+                    .await;
                 let next = view.update(cx, |view, cx| {
                     if view.live && view.projection.revision == view.document.read(cx).revision() {
-                        view.mermaid.install(batch, &view.projection, view.document.entity_id(), &super::mermaid::Style::current(cx));
+                        view.mermaid.install(
+                            batch,
+                            &view.projection,
+                            view.document.entity_id(),
+                            &super::mermaid::Style::current(cx),
+                        );
                         view.geometry = None;
                         cx.notify();
                     }
                     let next = view.mermaid.take_job();
-                    if next.is_none() { view.mermaid_task = None; }
+                    if next.is_none() {
+                        view.mermaid_task = None;
+                    }
                     next
                 });
                 match next {
@@ -251,33 +281,71 @@ impl SourcePresentation {
         }));
     }
     fn schedule_math(&mut self, cx: &mut Context<Self>) {
-        if !self.live || self.math.running || self.projection.revision != self.document.read(cx).revision() { return; }
-        let Some(style) = self.math.style else { return; };
+        if !self.live
+            || self.math.running
+            || self.projection.revision != self.document.read(cx).revision()
+        {
+            return;
+        }
+        let Some(style) = self.math.style else {
+            return;
+        };
         let revision = self.projection.revision;
         let identity = self.document.entity_id();
-        let formulas: std::collections::HashSet<_> = self.projection.leaves.iter().flat_map(|leaf| leaf.formulas()).cloned().collect();
-        self.math.outputs.retain(|formula, _| formulas.contains(formula));
-        let pending: Vec<_> = formulas.into_iter().filter(|formula| !self.math.outputs.contains_key(formula)).collect();
-        if pending.is_empty() { return; }
+        let formulas: std::collections::HashSet<_> = self
+            .projection
+            .leaves
+            .iter()
+            .flat_map(|leaf| leaf.formulas())
+            .cloned()
+            .collect();
+        self.math
+            .outputs
+            .retain(|formula, _| formulas.contains(formula));
+        let pending: Vec<_> = formulas
+            .into_iter()
+            .filter(|formula| !self.math.outputs.contains_key(formula))
+            .collect();
+        if pending.is_empty() {
+            return;
+        }
         self.math.running = true;
         self.math.task = Some(cx.spawn(async move |view, cx| {
-            let results = cx.background_executor().spawn(async move {
-                pending.into_iter().map(|formula| {
-                    let output = super::math::render(&formula, style);
-                    (formula, output)
-                }).collect::<Vec<_>>()
-            }).await;
+            let results = cx
+                .background_executor()
+                .spawn(async move {
+                    pending
+                        .into_iter()
+                        .map(|formula| {
+                            let output = super::math::render(&formula, style);
+                            (formula, output)
+                        })
+                        .collect::<Vec<_>>()
+                })
+                .await;
             let _ = view.update(cx, |view, cx| {
                 view.math.running = false;
-                if view.live && view.document.entity_id() == identity
+                if view.live
+                    && view.document.entity_id() == identity
                     && view.document.read(cx).revision() == revision
-                    && view.projection.revision == revision && view.math.style == Some(style)
+                    && view.projection.revision == revision
+                    && view.math.style == Some(style)
                 {
-                    let current: std::collections::HashSet<_> = view.projection.leaves.iter().flat_map(|leaf| leaf.formulas()).cloned().collect();
+                    let current: std::collections::HashSet<_> = view
+                        .projection
+                        .leaves
+                        .iter()
+                        .flat_map(|leaf| leaf.formulas())
+                        .cloned()
+                        .collect();
                     for (formula, output) in results {
-                        if current.contains(&formula) { view.math.outputs.insert(formula, output); }
+                        if current.contains(&formula) {
+                            view.math.outputs.insert(formula, output);
+                        }
                     }
-                    for cached in view.blocks.values_mut() { cached.version = u64::MAX; }
+                    for cached in view.blocks.values_mut() {
+                        cached.version = u64::MAX;
+                    }
                     view.rendered_revision = None;
                     view.geometry = None;
                     cx.notify();
@@ -417,7 +485,12 @@ impl SourcePresentation {
             })
     }
 
-    fn table_command(&mut self, operation: super::tables::Operation, window: &mut Window, cx: &mut Context<Self>) {
+    fn table_command(
+        &mut self,
+        operation: super::tables::Operation,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         if self.table_commands_enabled() {
             self.command(Command::Table(operation), window, cx);
             self.focus.focus(window, cx);
@@ -426,23 +499,68 @@ impl SourcePresentation {
         }
     }
 
-    pub(crate) fn table_menu(&self, menu: gpui_kit::component::menu::PopupMenu) -> gpui_kit::component::menu::PopupMenu {
+    pub(crate) fn table_menu(
+        &self,
+        menu: gpui_kit::component::menu::PopupMenu,
+    ) -> gpui_kit::component::menu::PopupMenu {
         use super::tables::*;
         use crate::ui::i18n::{L10nKey, t};
-        if !self.live { return menu; }
+        if !self.live {
+            return menu;
+        }
         let disabled = !self.table_commands_enabled();
         menu.separator()
-            .menu_with_disabled(t(L10nKey::EditorTableInsertRowBefore), Box::new(InsertRowBefore), disabled)
-            .menu_with_disabled(t(L10nKey::EditorTableInsertRowAfter), Box::new(InsertRowAfter), disabled)
-            .menu_with_disabled(t(L10nKey::EditorTableDeleteRow), Box::new(DeleteRow), disabled)
-            .menu_with_disabled(t(L10nKey::EditorTableInsertColumnBefore), Box::new(InsertColumnBefore), disabled)
-            .menu_with_disabled(t(L10nKey::EditorTableInsertColumnAfter), Box::new(InsertColumnAfter), disabled)
-            .menu_with_disabled(t(L10nKey::EditorTableDeleteColumn), Box::new(DeleteColumn), disabled)
+            .menu_with_disabled(
+                t(L10nKey::EditorTableInsertRowBefore),
+                Box::new(InsertRowBefore),
+                disabled,
+            )
+            .menu_with_disabled(
+                t(L10nKey::EditorTableInsertRowAfter),
+                Box::new(InsertRowAfter),
+                disabled,
+            )
+            .menu_with_disabled(
+                t(L10nKey::EditorTableDeleteRow),
+                Box::new(DeleteRow),
+                disabled,
+            )
+            .menu_with_disabled(
+                t(L10nKey::EditorTableInsertColumnBefore),
+                Box::new(InsertColumnBefore),
+                disabled,
+            )
+            .menu_with_disabled(
+                t(L10nKey::EditorTableInsertColumnAfter),
+                Box::new(InsertColumnAfter),
+                disabled,
+            )
+            .menu_with_disabled(
+                t(L10nKey::EditorTableDeleteColumn),
+                Box::new(DeleteColumn),
+                disabled,
+            )
             .separator()
-            .menu_with_disabled(t(L10nKey::EditorTableAlignDefault), Box::new(AlignDefault), disabled)
-            .menu_with_disabled(t(L10nKey::EditorTableAlignLeft), Box::new(AlignLeft), disabled)
-            .menu_with_disabled(t(L10nKey::EditorTableAlignCenter), Box::new(AlignCenter), disabled)
-            .menu_with_disabled(t(L10nKey::EditorTableAlignRight), Box::new(AlignRight), disabled)
+            .menu_with_disabled(
+                t(L10nKey::EditorTableAlignDefault),
+                Box::new(AlignDefault),
+                disabled,
+            )
+            .menu_with_disabled(
+                t(L10nKey::EditorTableAlignLeft),
+                Box::new(AlignLeft),
+                disabled,
+            )
+            .menu_with_disabled(
+                t(L10nKey::EditorTableAlignCenter),
+                Box::new(AlignCenter),
+                disabled,
+            )
+            .menu_with_disabled(
+                t(L10nKey::EditorTableAlignRight),
+                Box::new(AlignRight),
+                disabled,
+            )
     }
 
     pub(crate) fn command(
@@ -710,8 +828,13 @@ impl SourcePresentation {
             .leaves
             .iter()
             .find(|mapped| mapped.id == *id)?;
-        let display = leaf.atom_at(point).and_then(|atom| mapped.math_source(atom.start));
-        Some(doc.boundary(display.unwrap_or_else(|| mapped.source_offset(leaf.index_for_position(point))), false))
+        let display = leaf
+            .atom_at(point)
+            .and_then(|atom| mapped.math_source(atom.start));
+        Some(doc.boundary(
+            display.unwrap_or_else(|| mapped.source_offset(leaf.index_for_position(point))),
+            false,
+        ))
     }
     fn select_point(
         &mut self,
@@ -787,24 +910,38 @@ impl SourcePresentation {
         // A sample just past a short row can still hit that row when the next
         // block has a margin (or a tall image). Search the current frame's
         // shaped rows, not source line numbers or absent/unlaid-out leaves.
-        self.projection.leaves.iter().filter_map(|mapped| {
-            let leaf = geometry.get(&mapped.id)?;
-            let y = if mapped.id == current_id {
-                caret.y + leaf.line_height() * (lines + 0.25)
-            } else {
-                leaf.position_for_index(if backward { mapped.text.len() } else { 0 }).y
-                    + leaf.line_height() * 0.25
-            };
-            let display = leaf.index_for_position(point(caret.x, y));
-            let position = leaf.position_for_index(display);
-            let dy = if backward { caret.y - position.y } else { position.y - caret.y };
-            (dy > Pixels::ZERO).then(|| (
-                mapped.source_offset(display),
-                dy,
-                (position.x - caret.x).abs(),
-            ))
-        }).min_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal)
-            .then_with(|| a.2.partial_cmp(&b.2).unwrap_or(std::cmp::Ordering::Equal)))
+        self.projection
+            .leaves
+            .iter()
+            .filter_map(|mapped| {
+                let leaf = geometry.get(&mapped.id)?;
+                let y = if mapped.id == current_id {
+                    caret.y + leaf.line_height() * (lines + 0.25)
+                } else {
+                    leaf.position_for_index(if backward { mapped.text.len() } else { 0 })
+                        .y
+                        + leaf.line_height() * 0.25
+                };
+                let display = leaf.index_for_position(point(caret.x, y));
+                let position = leaf.position_for_index(display);
+                let dy = if backward {
+                    caret.y - position.y
+                } else {
+                    position.y - caret.y
+                };
+                (dy > Pixels::ZERO).then(|| {
+                    (
+                        mapped.source_offset(display),
+                        dy,
+                        (position.x - caret.x).abs(),
+                    )
+                })
+            })
+            .min_by(|a, b| {
+                a.1.partial_cmp(&b.1)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+                    .then_with(|| a.2.partial_cmp(&b.2).unwrap_or(std::cmp::Ordering::Equal))
+            })
             .map(|(at, _, _)| at)
     }
     fn visual_line_edge(&self, at: usize, end: bool, cx: &App) -> Option<usize> {
@@ -960,11 +1097,15 @@ impl SourcePresentation {
         cx: &mut Context<Self>,
     ) {
         if delete && !self.state.selection.range().is_empty() {
-            self.command(Command::Replace {
-                range: self.state.selection.range(),
-                text: String::new(),
-                kind: EditKind::Command,
-            }, window, cx);
+            self.command(
+                Command::Replace {
+                    range: self.state.selection.range(),
+                    text: String::new(),
+                    kind: EditKind::Command,
+                },
+                window,
+                cx,
+            );
             return;
         }
         let doc = self.document.read(cx);
@@ -984,10 +1125,12 @@ impl SourcePresentation {
                 .map_or_else(|| doc.next(end), |(ix, word)| start + ix + word.len())
         };
         let target = if self.live && self.projection.revision == doc.revision() {
-            self.projection.leaf_at(target).map_or(target, |leaf| {
-                leaf.atomic_boundary(target, !backward)
-            })
-        } else { target };
+            self.projection
+                .leaf_at(target)
+                .map_or(target, |leaf| leaf.atomic_boundary(target, !backward))
+        } else {
+            target
+        };
         if delete {
             self.command(
                 Command::Replace {
@@ -1056,7 +1199,12 @@ impl SourcePresentation {
         }
     }
     fn enter(&mut self, hard: bool, window: &mut Window, cx: &mut Context<Self>) {
-        if self.live && self.projection.leaf_at(self.state.selection.head).is_some_and(|leaf| leaf.editing_math(self.state.selection.head)) {
+        if self.live
+            && self
+                .projection
+                .leaf_at(self.state.selection.head)
+                .is_some_and(|leaf| leaf.editing_math(self.state.selection.head))
+        {
             self.command(Command::Insert("\n".into()), window, cx);
             return;
         }
@@ -1234,12 +1382,22 @@ impl SourcePresentation {
         }
     }
     fn paste_clipboard(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(item) = cx.read_from_clipboard() else { return };
-        if item.entries().iter().any(|entry| matches!(entry, ClipboardEntry::Image(_))) {
-            let images = item.entries.into_iter().filter_map(|entry| match entry {
-                ClipboardEntry::Image(image) => Some(assets::IncomingImage::Clipboard(image)),
-                _ => None,
-            }).collect();
+        let Some(item) = cx.read_from_clipboard() else {
+            return;
+        };
+        if item
+            .entries()
+            .iter()
+            .any(|entry| matches!(entry, ClipboardEntry::Image(_)))
+        {
+            let images = item
+                .entries
+                .into_iter()
+                .filter_map(|entry| match entry {
+                    ClipboardEntry::Image(image) => Some(assets::IncomingImage::Clipboard(image)),
+                    _ => None,
+                })
+                .collect();
             self.insert_images(images, window, cx);
             return;
         }
@@ -1393,7 +1551,9 @@ impl Render for SourcePresentation {
         if self.math.style != Some(style) {
             self.math.style = Some(style);
             self.math.outputs.clear();
-            for cached in self.blocks.values_mut() { cached.version = u64::MAX; }
+            for cached in self.blocks.values_mut() {
+                cached.version = u64::MAX;
+            }
             self.rendered_revision = None;
             self.schedule_math(cx);
         }
@@ -1418,7 +1578,9 @@ impl Render for SourcePresentation {
                     }
                     let mut paragraph = Paragraph::default().with_leaf_key(leaf.id);
                     let marked = self.state.marked_range();
-                    for node in leaf.inline_nodes(marked.as_ref(), &self.math) { paragraph.push(node); }
+                    for node in leaf.inline_nodes(marked.as_ref(), &self.math) {
+                        paragraph.push(node);
+                    }
                     let mut node = match leaf.kind {
                         Kind::Heading(level) if self.live => BlockNode::Heading {
                             level,
@@ -1494,11 +1656,22 @@ impl Render for SourcePresentation {
             self.rendered_revision = Some(revision);
         }
         let view = cx.entity().downgrade();
-        let ready: std::collections::HashMap<_, _> = self.document.read(cx).images.states.iter()
-            .filter_map(|(url, state)| if let super::images::State::Ready(image) = state {
-                Some((url.clone(), image.clone()))
-            } else { None }).collect();
-        let context = RenderContext::from_app(cx).with_body_font_size(window.rem_size())
+        let ready: std::collections::HashMap<_, _> = self
+            .document
+            .read(cx)
+            .images
+            .states
+            .iter()
+            .filter_map(|(url, state)| {
+                if let super::images::State::Ready(image) = state {
+                    Some((url.clone(), image.clone()))
+                } else {
+                    None
+                }
+            })
+            .collect();
+        let context = RenderContext::from_app(cx)
+            .with_body_font_size(window.rem_size())
             .with_markdown_extensions(super::math::extensions())
             .with_image_source(move |uri| {
                 ready.get(uri.as_ref()).map_or_else(
@@ -1582,13 +1755,20 @@ impl Render for SourcePresentation {
                         );
                         let rendered = if self.live && matches!(leaf.kind, Kind::Mermaid(_)) {
                             let selection = self.state.selection.range();
-                            let active = selection.start <= leaf.range.end && selection.end >= leaf.range.start;
+                            let active = selection.start <= leaf.range.end
+                                && selection.end >= leaf.range.start;
                             let at = leaf.range.start + leaf.text.find('\n').map_or(0, |at| at + 1);
-                            self.mermaid.render(leaf, active, rendered.into_any_element(), cx.listener(move |this, _, window, cx| {
-                                cx.stop_propagation();
-                                this.select_range(at..at, cx);
-                                this.focus.focus(window, cx);
-                            }), cx)
+                            self.mermaid.render(
+                                leaf,
+                                active,
+                                rendered.into_any_element(),
+                                cx.listener(move |this, _, window, cx| {
+                                    cx.stop_propagation();
+                                    this.select_range(at..at, cx);
+                                    this.focus.focus(window, cx);
+                                }),
+                                cx,
+                            )
                         } else {
                             rendered.into_any_element()
                         };
@@ -1676,35 +1856,69 @@ impl Render for SourcePresentation {
                     }),
             );
         let image_status = if self.live {
-            use crate::ui::i18n::{t, L10nKey};
-            use gpui_kit::component::{button::{Button, ButtonVariants as _}, Sizable as _};
+            use crate::ui::i18n::{L10nKey, t};
+            use gpui_kit::component::{
+                Sizable as _,
+                button::{Button, ButtonVariants as _},
+            };
             let document = self.document.read(cx);
             let mut states: Vec<_> = document.images.states.iter().collect();
             states.sort_by_key(|(url, _)| *url);
             let has_images = !states.is_empty();
-            let rows = states.into_iter().map(|(url, state)| {
-                let (key, detail) = match state {
-                    super::images::State::Unloaded => (L10nKey::EditorImageUnloaded, None),
-                    super::images::State::Loading(_) => (L10nKey::EditorImageLoading, None),
-                    super::images::State::Ready(_) => (L10nKey::EditorImageLoaded, None),
-                    super::images::State::Failed(error) => (L10nKey::EditorImageFailed, Some(error)),
-                };
-                div().id(SharedString::from(format!("markdown-image:{url}")))
-                    .role(Role::Status).test_support().aria_label(t(key))
-                    .text_xs().truncate().child(format!("{} · {}{}", t(key), url,
-                        detail.map_or(String::new(), |error| format!(" · {error}"))))
-            }).collect::<Vec<_>>();
-            div().v_flex().flex_none().when(has_images, |bar| bar.px_3().py_1().gap_1()
-                .child(Button::new("markdown-load-images").ghost().small()
-                    .label(t(L10nKey::EditorLoadImages))
-                    .on_click(cx.listener(|view, _, _, cx| view.refresh_images(true, cx))))
-                .children(rows)).into_any_element()
-        } else { div().into_any_element() };
+            let rows = states
+                .into_iter()
+                .map(|(url, state)| {
+                    let (key, detail) = match state {
+                        super::images::State::Unloaded => (L10nKey::EditorImageUnloaded, None),
+                        super::images::State::Loading(_) => (L10nKey::EditorImageLoading, None),
+                        super::images::State::Ready(_) => (L10nKey::EditorImageLoaded, None),
+                        super::images::State::Failed(error) => {
+                            (L10nKey::EditorImageFailed, Some(error))
+                        }
+                    };
+                    div()
+                        .id(SharedString::from(format!("markdown-image:{url}")))
+                        .role(Role::Status)
+                        .test_support()
+                        .aria_label(t(key))
+                        .text_xs()
+                        .truncate()
+                        .child(format!(
+                            "{} · {}{}",
+                            t(key),
+                            url,
+                            detail.map_or(String::new(), |error| format!(" · {error}"))
+                        ))
+                })
+                .collect::<Vec<_>>();
+            div()
+                .v_flex()
+                .flex_none()
+                .when(has_images, |bar| {
+                    bar.px_3()
+                        .py_1()
+                        .gap_1()
+                        .child(
+                            Button::new("markdown-load-images")
+                                .ghost()
+                                .small()
+                                .label(t(L10nKey::EditorLoadImages))
+                                .on_click(
+                                    cx.listener(|view, _, _, cx| view.refresh_images(true, cx)),
+                                ),
+                        )
+                        .children(rows)
+                })
+                .into_any_element()
+        } else {
+            div().into_any_element()
+        };
         let key_context = KeyContext::parse(if self.table_commands_enabled() {
             "Input mode=editor Markdown MarkdownTable"
         } else {
             "Input mode=editor Markdown"
-        }).expect("static editor key context");
+        })
+        .expect("static editor key context");
         let root =
             div()
                 .id("markdown-source")
@@ -2014,7 +2228,7 @@ impl Render for SourcePresentation {
                 }))
                 .when_some(self.assets.status(), |root, status| root.child(
                     div().id("markdown-image-insertion-status").test_support().role(Role::Status)
-                        .shrink_0().aria_label(status.clone()).text_sm().text_color(cx.theme().muted_foreground).child(status)
+                        .flex_shrink_0().aria_label(status.clone()).text_sm().text_color(cx.theme().muted_foreground).child(status)
                 ))
                 .child(image_status)
                 .when(self.table_commands_enabled(), |root| {

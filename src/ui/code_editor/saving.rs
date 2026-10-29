@@ -718,7 +718,11 @@ impl EditorPanelState {
     }
 
     pub(super) fn saves_failed(&mut self, id: BufferId) {
-        if let Some((_, cancelled)) = self.buffers.get_mut(id).and_then(|file| file.asset_location.take()) {
+        if let Some((_, cancelled)) = self
+            .buffers
+            .get_mut(id)
+            .and_then(|file| file.asset_location.take())
+        {
             cancelled.set(true);
         }
         self.waiters.retain(|waiter| !waiter.ids.contains(&id));
