@@ -3,6 +3,7 @@ use gpui_kit::base::text::editor_host::InlineNode;
 use gpui_kit::component::ActiveTheme as _;
 use gpui_kit::prelude::*;
 use gpui_kit::*;
+use gpui_kit::TestSupportExt as _;
 use markdown::mdast::Node;
 use std::{collections::HashMap, sync::Arc};
 
@@ -10,12 +11,13 @@ use std::{collections::HashMap, sync::Arc};
 pub(super) struct Formula {
     pub tex: String,
     pub block: bool,
+    raw: String,
 }
 impl Formula {
-    pub fn from_node(node: &Node) -> Option<Self> {
+    pub fn from_node(node: &Node, raw: &str) -> Option<Self> {
         match node {
-            Node::InlineMath(value) => Some(Self { tex: value.value.clone(), block: false }),
-            Node::Math(value) => Some(Self { tex: value.value.clone(), block: true }),
+            Node::InlineMath(value) => Some(Self { tex: value.value.clone(), block: false, raw: raw.to_owned() }),
+            Node::Math(value) => Some(Self { tex: value.value.clone(), block: true, raw: raw.to_owned() }),
             _ => None,
         }
     }
@@ -42,7 +44,6 @@ pub(super) struct State {
     pub outputs: HashMap<Formula, Output>,
     pub task: Option<Task<()>>,
     pub running: bool,
-    pub revision: Option<u64>,
 }
 impl State {
     pub fn inline_node(&self, formula: &Formula) -> InlineNode {
@@ -59,8 +60,8 @@ pub(super) fn extensions() -> Arc<MarkdownExtensions> {
 struct MathPlugin;
 impl MarkdownPlugin for MathPlugin {
     fn name(&self) -> &str { "lyrel-math" }
-    fn parse(&self, node: &Node, _: &MarkdownParseContext<'_>) -> Option<MarkdownNode> {
-        Formula::from_node(node).map(|formula| MarkdownNode::new("lyrel-math", (formula, None::<Output>)).text("\u{fffc}"))
+    fn parse(&self, node: &Node, context: &MarkdownParseContext<'_>) -> Option<MarkdownNode> {
+        Formula::from_node(node, context.node_source(node)?).map(|formula| MarkdownNode::new("lyrel-math", (formula, None::<Output>)).text("\u{fffc}"))
     }
     fn render_inline(&self, node: &MarkdownNode, context: &InlineRenderContext, _: &mut Window, cx: &mut App) -> Option<InlineElement> {
         let (formula, output) = node.data::<(Formula, Option<Output>)>()?;
@@ -78,6 +79,7 @@ impl MarkdownPlugin for MathPlugin {
             Some(Output::Failed(error)) => div()
                 .id(SharedString::from(format!("markdown-math-error-{}", formula.tex)))
                 .test_support()
+                .aria_label(format!("{} {error}", crate::ui::i18n::t(crate::ui::i18n::L10nKey::EditorMarkdownMathError)))
                 .text_color(cx.theme().danger)
                 .child(format!("{} {error}", crate::ui::i18n::t(crate::ui::i18n::L10nKey::EditorMarkdownMathError))),
             None => div().text_color(cx.theme().muted_foreground)
@@ -120,7 +122,7 @@ pub(super) fn render(formula: &Formula, style: Style) -> Output {
         Ok(Output::Ready {
             image: Arc::new(RenderImage::new(smallvec::smallvec![image::Frame::new(image)])),
             width: tree.size().width() / font, height: tree.size().height() / font,
-            baseline: layout.height as f32,
+            baseline: list.height as f32,
         })
     })();
     result.unwrap_or_else(|error| Output::Failed(error.to_string()))

@@ -1312,6 +1312,8 @@ l10n_keys! {
     EditorMarkdownCodeRegion,
     EditorMarkdownMetadataRegion,
     EditorMarkdownHtmlRegion,
+    EditorMarkdownMathLoading,
+    EditorMarkdownMathError,
     EditorLoadImages,
     EditorImageUnloaded,
     EditorImageLoading,

@@ -1730,6 +1730,8 @@ pub fn translate_en(key: L10nKey) -> &'static str {
         L10nKey::EditorMarkdownCodeRegion => "Code source",
         L10nKey::EditorMarkdownMetadataRegion => "Metadata source",
         L10nKey::EditorMarkdownHtmlRegion => "HTML source · not executed or rendered as HTML/CSS",
+        L10nKey::EditorMarkdownMathLoading => "Rendering formula",
+        L10nKey::EditorMarkdownMathError => "Couldn’t render formula. Click to edit its source. Reason:",
         L10nKey::EditorLoadImages => "Load document images",
         L10nKey::EditorImageUnloaded => "Image not loaded",
         L10nKey::EditorImageLoading => "Loading image",

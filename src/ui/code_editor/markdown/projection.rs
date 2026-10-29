@@ -26,6 +26,7 @@ pub(super) enum Kind {
     Quote(super::lists::Structure),
     Rule,
     Code(super::regions::Code),
+    Math,
     Metadata,
     Html,
     Source,
@@ -41,6 +42,7 @@ struct Segment {
     raw: Option<String>,
     verbatim: bool,
     image: Option<super::images::Image>,
+    math: Option<super::math::Formula>,
 }
 #[derive(Clone)]
 pub(super) struct Leaf {
@@ -116,13 +118,14 @@ impl Leaf {
             raw,
             verbatim: false,
             image: None,
+            math: None,
         });
     }
     fn rebuild(&mut self, marked: Option<&Range<usize>>) {
         self.text.clear();
         for segment in &mut self.segments {
             let start = self.text.len();
-            if segment.image.is_none() {
+            if segment.image.is_none() && segment.math.is_none() {
                 segment.verbatim = segment.raw.is_some()
                     && marked.is_some_and(|range| {
                         range.start < segment.source.end && range.end > segment.source.start
@@ -160,7 +163,7 @@ impl Leaf {
             span.revealed = revealed;
         }
         for segment in &mut self.segments {
-            if segment.image.is_some() {
+            if segment.image.is_some() || segment.math.is_some() {
                 let revealed = std::iter::once(&selection).chain(extra).any(|selection| {
                     let range = selection.range();
                     if range.is_empty() { segment.source.start < range.start && range.start < segment.source.end }
@@ -171,7 +174,7 @@ impl Leaf {
             }
         }
         changed |= self.segments.iter().any(|segment| {
-            segment.image.is_none() && segment.verbatim
+            segment.image.is_none() && segment.math.is_none() && segment.verbatim
                 != (segment.raw.is_some()
                     && marked.is_some_and(|range| {
                         range.start < segment.source.end && range.end > segment.source.start
@@ -186,6 +189,7 @@ impl Leaf {
         self.spans
             .iter()
             .any(|span| span.source.start <= at && at <= span.source.end)
+            || self.segments.iter().any(|segment| segment.math.is_some() && segment.source.start <= at && at <= segment.source.end)
     }
     pub fn marks(
         &self,
@@ -239,7 +243,7 @@ impl Leaf {
     pub fn image_urls(&self) -> impl Iterator<Item = &str> {
         self.segments.iter().filter_map(|segment| segment.image.as_ref().map(|image| image.url.as_str()))
     }
-    pub fn inline_nodes(&self, marked: Option<&Range<usize>>) -> Vec<gpui_kit::base::text::editor_host::InlineNode> {
+    pub fn inline_nodes(&self, marked: Option<&Range<usize>>, math: &super::math::State) -> Vec<gpui_kit::base::text::editor_host::InlineNode> {
         use gpui_kit::base::text::editor_host::{InlineNode, ImageNode};
         let marks = self.marks(marked);
         self.segments.iter().filter(|segment| !segment.display.is_empty()).map(|segment| {
@@ -253,6 +257,8 @@ impl Leaf {
                 node.width = Some(gpui_kit::rems(12.).into());
                 node.height = Some(gpui_kit::rems(8.).into());
                 InlineNode::image(node)
+            } else if let Some(formula) = segment.math.as_ref().filter(|_| !segment.verbatim) {
+                math.inline_node(formula)
             } else {
                 let range = &segment.display;
                 InlineNode::new(self.text[range.clone()].to_owned()).marks(marks.iter().filter_map(|(mark_range, mark)| {
@@ -262,6 +268,16 @@ impl Leaf {
                 }).collect())
             }
         }).collect()
+    }
+    pub fn formulas(&self) -> impl Iterator<Item = &super::math::Formula> {
+        self.segments.iter().filter_map(|segment| segment.math.as_ref())
+    }
+    pub fn math_source(&self, display: usize) -> Option<usize> {
+        self.segments.iter().find(|segment| segment.math.is_some() && !segment.verbatim && segment.display.contains(&display))
+            .map(|segment| segment.source.start + 1)
+    }
+    pub fn editing_math(&self, at: usize) -> bool {
+        self.segments.iter().any(|segment| segment.math.is_some() && segment.source.start < at && at < segment.source.end)
     }
     fn same_inline(&self, other: &Self) -> bool {
         self.content == other.content
@@ -387,6 +403,8 @@ impl Projection {
         if live {
             let mut options = markdown::ParseOptions::gfm();
             options.constructs.frontmatter = document_start;
+            options.constructs.math_flow = true;
+            options.constructs.math_text = true;
             if super::regions::unfinished_metadata(source, document_start) {
                 let mut leaf = Leaf::new(0..source.len(), Kind::Metadata);
                 leaf.raw(source, 0..source.len());
@@ -424,6 +442,8 @@ impl Projection {
                         if leaf.segments.is_empty() {
                             leaf.insertion = range.end;
                         }
+                    } else if kind == Kind::Math {
+                        Self::inline(source, node, &mut leaf);
                     } else if kind != Kind::Rule {
                         leaf.raw(source, range.clone());
                     }
@@ -500,6 +520,9 @@ impl Projection {
                         for child in children { Self::inline(source, child, &mut leaf); }
                     }
                     if leaf.segments.is_empty() { leaf.insertion = range.end; }
+                } else if kind == Kind::Math {
+                    leaf.prefix(source, start..range.start);
+                    Self::inline(source, node, &mut leaf);
                 } else { leaf.raw(source, start..range.end); }
                 leaves.push(leaf);
             }
@@ -541,6 +564,11 @@ impl Projection {
         if let Some(image) = super::images::image(node, &leaf.image_definitions) {
             leaf.push_normalized(range.clone(), "\u{FFFC}", &source[range]);
             leaf.segments.last_mut().unwrap().image = Some(image);
+            return;
+        }
+        if let Some(formula) = super::math::Formula::from_node(node, &source[range.clone()]) {
+            leaf.push_normalized(range.clone(), "\u{FFFC}", &source[range]);
+            leaf.segments.last_mut().unwrap().math = Some(formula);
             return;
         }
         match node {

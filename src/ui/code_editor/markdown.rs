@@ -11,6 +11,7 @@ mod images;
 pub(super) mod resources;
 pub(super) mod links;
 mod lists;
+mod math;
 mod projection;
 mod regions;
 mod source;
