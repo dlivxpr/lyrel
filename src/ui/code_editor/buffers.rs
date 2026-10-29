@@ -42,6 +42,7 @@ pub(super) struct OpenTarget {
     pub(super) tab: TabId,
     pub(super) group: Option<split::GroupId>,
     pub(super) window_host: HostId,
+    pub(super) origin: Option<(BufferId, u64)>,
 }
 
 pub(super) enum OpenResult {
@@ -405,6 +406,9 @@ impl EditorBuffers {
         let id = BufferId::new();
         let (input, popups, sub, observe) = if native_markdown {
             let document = cx.new(|_| markdown::MarkdownDocument::new(text, format));
+            document.update(cx, |document, cx| {
+                document.set_resource_context(host.clone(), untitled.is_none().then(|| path.clone()), cx);
+            });
             let sub = cx.subscribe_in(
                 &document,
                 window,
@@ -413,7 +417,10 @@ impl EditorBuffers {
                         access(view).note_edit(id, cx);
                         edited(view, id, cx);
                     }
-                    markdown::DocumentEvent::PresentationChanged => cx.notify(),
+                    markdown::DocumentEvent::PresentationChanged
+                    | markdown::DocumentEvent::ResourceContextChanged
+                    | markdown::DocumentEvent::ImagesChanged => cx.notify(),
+                    markdown::DocumentEvent::FollowLink { .. } => {},
                 },
             );
             let presentation = cx.new(|cx| markdown::SourcePresentation::new(document, wrap, cx));
@@ -477,6 +484,7 @@ impl EditorBuffers {
             popups,
             _sub: sub,
             _observe: observe,
+            _links_sub: None,
         });
         id
     }
@@ -773,6 +781,11 @@ impl EditorBuffers {
             } else {
                 to.join(rest)
             };
+            if let Some(view) = file.input.markdown() {
+                view.read(cx).document().clone().update(cx, |document, cx| {
+                    document.set_resource_context(file.host.clone(), Some(file.path.clone()), cx);
+                });
+            }
             file.reload_seq = file.reload_seq.wrapping_add(1);
             file.input
                 .set_highlighter(language_for_path(&file.path), cx);
