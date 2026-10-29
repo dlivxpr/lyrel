@@ -634,13 +634,19 @@ impl Projection {
                 leaf.image_definitions = images.clone();
                 leaf.container = Some(container);
                 if prose {
-                    leaf.prefix(source, start..range.start);
-                    if let Some(children) = node.children() {
-                        for child in children {
-                            Self::inline(source, child, &mut leaf);
+                    let empty_prefix =
+                        super::lists::prefix_len(&source[start..range.end]) == range.end - start;
+                    if empty_prefix {
+                        leaf.prefix(source, start..range.end);
+                    } else {
+                        leaf.prefix(source, start..range.start);
+                        if let Some(children) = node.children() {
+                            for child in children {
+                                Self::inline(source, child, &mut leaf);
+                            }
                         }
                     }
-                    if leaf.segments.is_empty() {
+                    if empty_prefix || leaf.segments.is_empty() {
                         leaf.insertion = range.end;
                     }
                 } else if kind == Kind::Math {

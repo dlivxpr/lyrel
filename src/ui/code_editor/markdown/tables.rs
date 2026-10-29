@@ -293,7 +293,14 @@ pub(super) fn edit(
                 {
                     active = Some((row, column));
                 }
-                cells.push(source[span.start.offset..span.end.offset].trim().to_owned());
+                let children = cell.children()?;
+                let raw = match (children.first(), children.last()) {
+                    (Some(first), Some(last)) => {
+                        &source[first.position()?.start.offset..last.position()?.end.offset]
+                    }
+                    _ => "",
+                };
+                cells.push(raw.to_owned());
             }
             cells.resize(cells.len().max(table.align.len()), String::new());
             rows.push(cells);

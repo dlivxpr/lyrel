@@ -193,6 +193,13 @@ Windows Chromium Cookie 的 AES-GCM 解密使用正式 registry 的 `aes-gcm =0.
   [故障排查](/reference/troubleshooting)。
 </Warning>
 
+### 隔离 Markdown 工作台的原生渲染依赖
+
+桌面包使用正式 registry 的 `merman =0.9.2`（`all-diagrams` 与 `complete-svg`，不启用 ELK），以及 `ratex-parser`、`ratex-layout`、`ratex-svg =0.1.14`；相关 RaTeX 字体与类型组件按 `Cargo.lock` 解析为 `0.1.15`。公式由嵌入 glyph paths 的 SVG 光栅化，Mermaid 仅走 `resvg_safe` 原生管线；不增加 Node.js 或 Chromium 运行时要求，也不把这些桌面依赖加入 `lyrel-core`、server 或 CLI。
+
+RaTeX 代码使用 MIT，内嵌的 20 个 KaTeX 字体 face 使用 SIL OFL 1.1，不可合并写成 MIT。根 `LICENSE` 保留 Merman 本体、翻译／适配来源、RaTeX、字体版权及 Reserved Font Names；同一文件继续进入桌面 `LICENSE.txt` 与 server 的 `--license` 输出。具体功能通过显式隔离入口验收，未切换生产默认；编译依赖不代表所有数学语法、图形家族、离线或平台输入已通过运行验收。
+
+
 ## 在专用工作树中手动打包
 
 `.github/scripts/` 中的脚本同时用于 GitHub Actions 和手动打包。这些脚本会删除当前
