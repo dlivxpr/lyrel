@@ -53,6 +53,7 @@ pub(super) struct Leaf {
     pub range: Range<usize>,
     pub text: String,
     pub kind: Kind,
+    pub deferred: bool,
     segments: Vec<Segment>,
     insertion: usize,
     content: String,
@@ -70,6 +71,7 @@ impl Leaf {
             range,
             text: String::new(),
             kind,
+            deferred: false,
             segments: Vec::new(),
             content: String::new(),
             container: None,
@@ -77,6 +79,13 @@ impl Leaf {
             style: InlineStyle::default(),
             image_definitions: Default::default(),
         }
+    }
+    pub fn materialize(&mut self, source: &Rope) {
+        if !self.deferred { return; }
+        let text = source.slice(self.range.clone()).to_string();
+        self.push(self.range.clone(), &text);
+        self.rebuild(None);
+        self.deferred = false;
     }
     pub(super) fn empty_insertion(&mut self, at: usize) {
         if self.segments.is_empty() {
@@ -359,6 +368,7 @@ impl Leaf {
             })
     }
     pub fn display_offset(&self, source: usize) -> usize {
+        if self.deferred { return source.saturating_sub(self.range.start).min(self.range.len()); }
         for span in &self.segments {
             if source <= span.source.start {
                 return span.display.start;
@@ -377,6 +387,7 @@ impl Leaf {
         self.text.len()
     }
     pub fn source_offset(&self, display: usize) -> usize {
+        if self.deferred { return (self.range.start + display).min(self.range.end); }
         // A shared visual edge belongs inside the preceding closing delimiter;
         // opening delimiters instead select the first visible content byte.
         if let Some(closing) = self.segments.iter().rev().find(|segment| {
@@ -415,6 +426,7 @@ impl Leaf {
         self.source_offset(0)
     }
     pub fn content_end(&self) -> usize {
+        if self.deferred { return self.range.end; }
         self.source_offset(self.text.len())
     }
     fn shift(&mut self, old_start: usize, new_start: usize) {
@@ -902,10 +914,8 @@ impl Projection {
         }
     }
     pub fn leaf_at(&self, at: usize) -> Option<&Leaf> {
-        self.leaves
-            .iter()
-            .find(|leaf| leaf.range.contains(&at) || leaf.range.start == at)
-            .or_else(|| self.leaves.iter().rev().find(|leaf| leaf.range.end <= at))
+        let ix = self.leaves.partition_point(|leaf| leaf.range.start <= at).saturating_sub(1);
+        self.leaves.get(ix)
     }
     pub fn install(&mut self, mut newer: Self) {
         if newer.error.is_some() && self.revision == newer.revision && self.grammar == newer.grammar {
@@ -993,13 +1003,22 @@ impl Projection {
             .map(|edit| edit.range.clone())
             .reduce(|a, b| a.start.min(b.start)..a.end.max(b.end))
             .unwrap();
+        const INPUT_PARSE_LIMIT: usize = 32 * 1024;
+        let mut local_live = live;
         // Keep affected child leaves inside their original AST container while
         // reparsing, so a nested item cannot temporarily become indented code.
         for leaf in &self.leaves {
             if leaf.range.start <= old.end && leaf.range.end >= old.start {
                 if let Some(container) = &leaf.container {
-                    old.start = old.start.min(container.start);
-                    old.end = old.end.max(container.end);
+                    if container.len() <= INPUT_PARSE_LIMIT {
+                        old.start = old.start.min(container.start);
+                        old.end = old.end.max(container.end);
+                    } else {
+                        // A document-sized list must not turn one keystroke
+                        // into a synchronous document parse. Keep its edited
+                        // source editable until the background projection lands.
+                        local_live = false;
+                    }
                 }
             }
         }
@@ -1056,7 +1075,7 @@ impl Projection {
             };
         }
         let end = end.max(start).min(source.len());
-        let identities: Vec<_> = self.leaves[first..last]
+        let mut identities: Vec<_> = self.leaves[first..last]
             .iter()
             .map(|leaf| {
                 (
@@ -1068,21 +1087,36 @@ impl Projection {
         for leaf in self.leaves.iter_mut().skip(last) {
             leaf.shift(leaf.range.start, map(leaf.range.start));
         }
-        let fragment = source.slice(start..end).to_string();
-        let mut patch = Self::parse_fragment(&fragment, transaction.revision(), live, start == 0, self.grammar);
-        for leaf in &mut patch.leaves {
-            leaf.shift(0, start);
-            leaf.id = identities
-                .iter()
-                .find(|(at, _)| leaf.range.contains(at) || leaf.range.end == *at)
-                .map_or_else(
-                    || {
-                        let id = self.next_id;
-                        self.next_id += 1;
-                        id
-                    },
-                    |(_, id)| *id,
-                );
+        let mut patch = if end - start <= INPUT_PARSE_LIMIT {
+            let fragment = source.slice(start..end).to_string();
+            let mut leaves = Self::parse_fragment(&fragment, transaction.revision(), local_live, start == 0, self.grammar).leaves;
+            for leaf in &mut leaves { leaf.shift(0, start); }
+            leaves
+        } else {
+            // Do not copy a document-sized paragraph/table just to keep input
+            // current. These range-only leaves borrow no second source; only
+            // the visible chunks materialize from the authoritative Rope.
+            let mut leaves = Vec::new();
+            let mut at = start;
+            while at < end {
+                let next = super::MarkdownDocument::source_boundary(source, (at + INPUT_PARSE_LIMIT / 2).min(end), true).min(end);
+                let mut leaf = Leaf::new(at..next, Kind::Source);
+                leaf.deferred = true;
+                leaves.push(leaf);
+                at = next;
+            }
+            leaves
+        };
+        for leaf in &mut patch {
+            leaf.id = if let Some(ix) = identities.iter().position(|(at, _)| leaf.range.contains(at) || leaf.range.end == *at) {
+                // One old identity can belong to only one new leaf after a
+                // split. In particular, adjacent empty leaves cannot share it.
+                identities.remove(ix).1
+            } else {
+                let id = self.next_id;
+                self.next_id += 1;
+                id
+            };
             leaf.version = self.leaves[first..last]
                 .iter()
                 .find(|old| {
@@ -1100,7 +1134,7 @@ impl Projection {
                     |old| old.version,
                 );
         }
-        self.leaves.splice(first..last, patch.leaves);
+        self.leaves.splice(first..last, patch);
         self.revision = transaction.revision();
     }
 }

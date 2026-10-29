@@ -327,33 +327,48 @@ impl MarkdownDocument {
         }
     }
 
-    // A line-local string supplies complete grapheme context even when the rope
-    // splits a combining sequence between chunks. No full-document copy on input.
+    // Query borrowed Rope chunks and supply preceding context only when Unicode
+    // requires it. Even a document with one extremely wide line stays zero-copy.
     pub(crate) fn boundary(&self, at: usize, forward: bool) -> usize {
-        let at = at.min(self.source.len());
-        let line_ix = self.source.offset_to_point(at).row;
-        let start = self.source.line_start_offset(line_ix);
-        let end = self.source.line_start_offset(line_ix + 1);
-        let line = self.source.slice(start..end).to_string();
-        let local = at - start;
-        let mut previous = 0;
-        for (offset, _) in line.grapheme_indices(true) {
-            if offset == local {
-                return at;
-            }
-            if offset > local {
-                return start + if forward { offset } else { previous };
-            }
-            previous = offset;
-        }
-        start
-            + if forward {
-                line.len()
-            } else if local == line.len() {
-                local
+        Self::source_boundary(&self.source, at, forward)
+    }
+    fn source_boundary(source: &Rope, at: usize, forward: bool) -> usize {
+        use unicode_segmentation::{GraphemeCursor, GraphemeIncomplete};
+        let at = at.min(source.len());
+        let at = if forward { source.ceil_char_boundary(at) } else { source.floor_char_boundary(at) };
+        let mut cursor = GraphemeCursor::new(at, source.len(), true);
+        let (mut chunk, mut start) = source.chunk(at);
+        let mut testing = true;
+        loop {
+            let result = if testing {
+                cursor.is_boundary(chunk, start).map(|boundary| {
+                    if boundary { Some(at) } else { testing = false; None }
+                })
+            } else if forward {
+                cursor.next_boundary(chunk, start)
             } else {
-                previous
+                cursor.prev_boundary(chunk, start)
+            };
+            match result {
+                Ok(Some(offset)) => return offset,
+                Ok(None) if testing => return at,
+                Ok(None) => {
+                    if cursor.cur_cursor() == 0 { return 0; }
+                    if cursor.cur_cursor() == source.len() { return source.len(); }
+                }
+                Err(GraphemeIncomplete::PreContext(end)) => {
+                    let (context, base) = source.chunk(end - 1);
+                    cursor.provide_context(&context[..end - base], base);
+                }
+                Err(GraphemeIncomplete::NextChunk) => {
+                    (chunk, start) = source.chunk(start + chunk.len());
+                }
+                Err(GraphemeIncomplete::PrevChunk) => {
+                    (chunk, start) = source.chunk(start - 1);
+                }
+                Err(GraphemeIncomplete::InvalidOffset) => unreachable!("Rope chunk must contain the grapheme cursor"),
             }
+        }
     }
     pub(crate) fn previous(&self, at: usize) -> usize {
         if at == 0 {
