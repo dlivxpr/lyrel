@@ -297,10 +297,16 @@ impl State {
             );
         }
         block = block.child(
-            Button::new(("markdown-mermaid-edit", leaf.id))
-                .ghost()
-                .label(t(L10nKey::EditorMarkdownMermaidEdit))
-                .on_click(edit),
+            div()
+                // Do not let the source surface move the caret/reflow the
+                // button between its press and click. Source text still bubbles.
+                .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                .child(
+                    Button::new(("markdown-mermaid-edit", leaf.id))
+                        .ghost()
+                        .label(t(L10nKey::EditorMarkdownMermaidEdit))
+                        .on_click(edit),
+                ),
         );
         if active || error.is_some() || entry.is_none() {
             block = block
