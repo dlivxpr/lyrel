@@ -12,6 +12,7 @@ pub(super) mod resources;
 mod mermaid;
 pub(super) mod links;
 mod lists;
+mod math;
 mod projection;
 mod regions;
 mod source;

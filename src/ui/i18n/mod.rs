@@ -1323,6 +1323,8 @@ l10n_keys! {
     EditorMarkdownMermaidRasterLimit,
     EditorMarkdownMetadataRegion,
     EditorMarkdownHtmlRegion,
+    EditorMarkdownMathLoading,
+    EditorMarkdownMathError,
     EditorLoadImages,
     EditorImageUnloaded,
     EditorImageLoading,

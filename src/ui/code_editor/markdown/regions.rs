@@ -15,6 +15,7 @@ pub(super) fn classify(node: &Node, source: &str) -> Kind {
         Node::Paragraph(_) => Kind::Prose,
         Node::Heading(heading) => Kind::Heading(heading.depth),
         Node::ThematicBreak(_) => Kind::Rule,
+        Node::Math(_) => Kind::Math,
         Node::Code(code) => {
             let opening = source.lines().next().unwrap_or_default().trim_start();
             let marker = opening.as_bytes().first().copied().unwrap_or_default();

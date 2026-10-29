@@ -42,6 +42,7 @@ pub(crate) struct SourcePresentation {
     mermaid: super::mermaid::State,
     mermaid_task: Option<Task<()>>,
     _mermaid_theme: Subscription,
+    math: super::math::State,
     extra_selections: Vec<Selection>,
     search_matches: Vec<Range<usize>>,
     indent: crate::ui::editor_text::Indent,
@@ -94,6 +95,7 @@ impl SourcePresentation {
                 }
                 this.sync_inline_reveal();
                 this.schedule_parse(cx);
+                this.schedule_math(cx);
                 this.geometry = None;
                 cx.notify();
             }
@@ -124,6 +126,7 @@ impl SourcePresentation {
             mermaid: super::mermaid::State::default(),
             mermaid_task: None,
             _mermaid_theme: mermaid_theme,
+            math: super::math::State::default(),
             extra_selections: Vec::new(),
             search_matches: Vec::new(),
             indent: crate::ui::editor_text::Indent {
@@ -203,6 +206,7 @@ impl SourcePresentation {
                     view.geometry = None;
                     view.refresh_images(false, cx);
                     view.schedule_mermaid(cx);
+                    view.schedule_math(cx);
                     cx.notify();
                 }
             });
@@ -245,6 +249,44 @@ impl SourcePresentation {
                     _ => break,
                 }
             }
+        }));
+    }
+    fn schedule_math(&mut self, cx: &mut Context<Self>) {
+        if !self.live || self.math.running || self.projection.revision != self.document.read(cx).revision() { return; }
+        let Some(style) = self.math.style else { return; };
+        let revision = self.projection.revision;
+        let identity = self.document.entity_id();
+        let formulas: std::collections::HashSet<_> = self.projection.leaves.iter().flat_map(|leaf| leaf.formulas()).cloned().collect();
+        self.math.outputs.retain(|formula, _| formulas.contains(formula));
+        let pending: Vec<_> = formulas.into_iter().filter(|formula| !self.math.outputs.contains_key(formula)).collect();
+        if pending.is_empty() { return; }
+        self.math.running = true;
+        self.math.task = Some(cx.spawn(async move |view, cx| {
+            let results = cx.background_executor().spawn(async move {
+                pending.into_iter().map(|formula| {
+                    let output = super::math::render(&formula, style);
+                    (formula, output)
+                }).collect::<Vec<_>>()
+            }).await;
+            let _ = view.update(cx, |view, cx| {
+                view.math.running = false;
+                if view.live && view.document.entity_id() == identity
+                    && view.document.read(cx).revision() == revision
+                    && view.projection.revision == revision && view.math.style == Some(style)
+                {
+                    let current: std::collections::HashSet<_> = view.projection.leaves.iter().flat_map(|leaf| leaf.formulas()).cloned().collect();
+                    for (formula, output) in results {
+                        if current.contains(&formula) { view.math.outputs.insert(formula, output); }
+                    }
+                    for cached in view.blocks.values_mut() { cached.version = u64::MAX; }
+                    view.rendered_revision = None;
+                    view.geometry = None;
+                    cx.notify();
+                }
+                // A single in-flight batch coalesces all edits. A stale batch
+                // never lands, and only the newest projection is queued next.
+                view.schedule_math(cx);
+            });
         }));
     }
     // Display-boundary insertion has right affinity after a hidden opening
@@ -648,7 +690,8 @@ impl SourcePresentation {
             .leaves
             .iter()
             .find(|mapped| mapped.id == *id)?;
-        Some(doc.boundary(mapped.source_offset(leaf.index_for_position(point)), false))
+        let display = leaf.atom_at(point).and_then(|atom| mapped.math_source(atom.start));
+        Some(doc.boundary(display.unwrap_or_else(|| mapped.source_offset(leaf.index_for_position(point))), false))
     }
     fn select_point(
         &mut self,
@@ -980,6 +1023,10 @@ impl SourcePresentation {
         }
     }
     fn enter(&mut self, hard: bool, window: &mut Window, cx: &mut Context<Self>) {
+        if self.live && self.projection.leaf_at(self.state.selection.head).is_some_and(|leaf| leaf.editing_math(self.state.selection.head)) {
+            self.command(Command::Insert("\n".into()), window, cx);
+            return;
+        }
         if self.navigate_table(hard, true, window, cx) {
             return;
         }
@@ -1049,7 +1096,7 @@ impl SourcePresentation {
             self.command(Command::ListBackspace, window, cx);
             return;
         }
-        if super::regions::label(leaf.kind).is_some() {
+        if super::regions::label(leaf.kind).is_some() || leaf.editing_math(at) {
             self.command(
                 if backward {
                     Command::Backspace
@@ -1294,6 +1341,14 @@ impl EntityInputHandler for SourcePresentation {
 }
 impl Render for SourcePresentation {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let style = super::math::Style::new(cx.theme().foreground, window.rem_size());
+        if self.math.style != Some(style) {
+            self.math.style = Some(style);
+            self.math.outputs.clear();
+            for cached in self.blocks.values_mut() { cached.version = u64::MAX; }
+            self.rendered_revision = None;
+            self.schedule_math(cx);
+        }
         let revision = self.projection.revision;
         if self.rendered_revision != Some(revision) {
             self.render_generation += 1;
@@ -1315,7 +1370,7 @@ impl Render for SourcePresentation {
                     }
                     let mut paragraph = Paragraph::default().with_leaf_key(leaf.id);
                     let marked = self.state.marked_range();
-                    for node in leaf.inline_nodes(marked.as_ref()) { paragraph.push(node); }
+                    for node in leaf.inline_nodes(marked.as_ref(), &self.math) { paragraph.push(node); }
                     let mut node = match leaf.kind {
                         Kind::Heading(level) if self.live => BlockNode::Heading {
                             level,
@@ -1380,6 +1435,7 @@ impl Render for SourcePresentation {
                 Some((url.clone(), image.clone()))
             } else { None }).collect();
         let context = RenderContext::from_app(cx).with_body_font_size(window.rem_size())
+            .with_markdown_extensions(super::math::extensions())
             .with_image_source(move |uri| {
                 ready.get(uri.as_ref()).map_or_else(
                     || ImageSource::Custom(std::sync::Arc::new(|_, _| None)),
