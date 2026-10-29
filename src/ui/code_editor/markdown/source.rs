@@ -2788,7 +2788,7 @@ impl Render for SourcePresentation {
                         .overflow_y_scroll()
                         .overflow_x_scroll()
                         .track_scroll(&self.scroll)
-                        .on_scroll_wheel(cx.listener(|view, _, _, cx| {
+                        .on_scroll(cx.listener(|view, _, _, cx| {
                             view.geometry = None;
                             view.reveal_caret = false;
                             cx.notify();
@@ -2931,7 +2931,7 @@ impl Element for SourceElement {
         &mut self,
         _: Option<&GlobalElementId>,
         _: Option<&InspectorElementId>,
-        bounds: Bounds<Pixels>,
+        _: Bounds<Pixels>,
         _: &mut (),
         window: &mut Window,
         cx: &mut App,

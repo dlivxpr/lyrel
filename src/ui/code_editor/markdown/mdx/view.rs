@@ -84,8 +84,12 @@ impl<'a> FieldContext<'a> {
     pub(in super::super) fn grammar(&self) -> Grammar {
         self.grammar
     }
-    pub(in super::super) fn components(&self) -> &[Component] { &self.index.components }
-    pub(in super::super) fn range(&self) -> std::ops::Range<usize> { self.range.clone() }
+    pub(in super::super) fn components(&self) -> &[Component] {
+        &self.index.components
+    }
+    pub(in super::super) fn range(&self) -> std::ops::Range<usize> {
+        self.range.clone()
+    }
 }
 
 /// Filters presentation layout without removing authoritative source leaves.
@@ -97,21 +101,40 @@ pub(in super::super) fn visible_field(context: &FieldContext<'_>) -> bool {
 /// component name, then decorate `content` using the same FieldContext. A normal
 /// Markdown child has field=None; metadata-only Children marks the child boundary.
 /// Returning content unchanged preserves its native continuous surface.
-pub(in super::super) fn render_field(context: &FieldContext<'_>, content: AnyElement, window: &mut Window, cx: &mut Context<SourcePresentation>) -> AnyElement {
-    if context.field.is_some() { return render_component(context, content, window, cx); }
+pub(in super::super) fn render_field(
+    context: &FieldContext<'_>,
+    content: AnyElement,
+    window: &mut Window,
+    cx: &mut Context<SourcePresentation>,
+) -> AnyElement {
+    if context.field.is_some() {
+        return render_component(context, content, window, cx);
+    }
     let content = render_embedded(context, content, window, cx);
     render_component(context, content, window, cx)
 }
 
-fn render_embedded(context: &FieldContext<'_>, content: AnyElement, window: &mut Window, cx: &mut Context<SourcePresentation>) -> AnyElement {
+fn render_embedded(
+    context: &FieldContext<'_>,
+    content: AnyElement,
+    window: &mut Window,
+    cx: &mut Context<SourcePresentation>,
+) -> AnyElement {
     // JSX inside headings, formatted spans or table cells keeps that leaf's
     // native geometry. Its structure controls select the positioned source in
     // the same input handler instead of installing another nested editor.
-    let mut embedded = context.index.components.iter().filter(|component| {
-        let range = component.source_range();
-        context.range.start <= range.start && range.end <= context.range.end
-    }).peekable();
-    if embedded.peek().is_none() { return content; }
+    let mut embedded = context
+        .index
+        .components
+        .iter()
+        .filter(|component| {
+            let range = component.source_range();
+            context.range.start <= range.start && range.end <= context.range.end
+        })
+        .peekable();
+    if embedded.peek().is_none() {
+        return content;
+    }
     let mut controls = div().w_full().flex().flex_col().gap_1();
     for component in embedded {
         let mut fields = div().id(("mdx-component", component.id().value())).w_full();
@@ -126,22 +149,49 @@ fn render_embedded(context: &FieldContext<'_>, content: AnyElement, window: &mut
             index: context.index,
             range: component.source_range(),
         };
-        fields = fields.child(render_component(&field_context(Field::Name, None), div().into_any_element(), window, cx));
+        fields = fields.child(render_component(
+            &field_context(Field::Name, None),
+            div().into_any_element(),
+            window,
+            cx,
+        ));
         for property in component.properties() {
-            fields = fields.child(div().id(("mdx-property", property.source_range().start as u64))
-                .child(render_component(&field_context(Field::Property(property.kind()), Some(property)), div().into_any_element(), window, cx)));
+            fields = fields.child(
+                div()
+                    .id(("mdx-property", property.source_range().start as u64))
+                    .child(render_component(
+                        &field_context(Field::Property(property.kind()), Some(property)),
+                        div().into_any_element(),
+                        window,
+                        cx,
+                    )),
+            );
         }
-        fields = fields.child(render_component(&field_context(Field::Children, None), div().into_any_element(), window, cx));
+        fields = fields.child(render_component(
+            &field_context(Field::Children, None),
+            div().into_any_element(),
+            window,
+            cx,
+        ));
         controls = controls.child(fields);
     }
     controls.child(content).into_any_element()
 }
 
-fn render_component(context: &FieldContext<'_>, content: AnyElement, window: &mut Window, cx: &mut Context<SourcePresentation>) -> AnyElement {
-    if context.component().is_some_and(|component| super::tabs::matches(&context.source().slice(component.name_range()).to_string())) {
+fn render_component(
+    context: &FieldContext<'_>,
+    content: AnyElement,
+    window: &mut Window,
+    cx: &mut Context<SourcePresentation>,
+) -> AnyElement {
+    if context.component().is_some_and(|component| {
+        super::tabs::matches(&context.source().slice(component.name_range()).to_string())
+    }) {
         return super::tabs::render(context, content, window, cx);
     }
-    if context.component.is_some_and(|component| super::cards::matches(&context.source.slice(component.name_range()).to_string())) {
+    if context.component.is_some_and(|component| {
+        super::cards::matches(&context.source.slice(component.name_range()).to_string())
+    }) {
         return super::cards::render(context, content, window, cx);
     }
     if super::steps::matches(context) {
@@ -152,15 +202,32 @@ fn render_component(context: &FieldContext<'_>, content: AnyElement, window: &mu
     }
     if let Some(component) = context.component() {
         let name = context.source().slice(component.name_range()).to_string();
-        if super::accordions::matches(&name) { return super::accordions::render(context, content, window, cx); }
+        if super::accordions::matches(&name) {
+            return super::accordions::render(context, content, window, cx);
+        }
     }
     render_generic(context, content, cx)
 }
 
-pub(in super::super) fn render_generic(context: &FieldContext<'_>, content: AnyElement, cx: &mut Context<SourcePresentation>) -> AnyElement {
-    let Some(field) = context.field else { return content; };
-    let mut header = div().flex().flex_col().gap_1().text_xs().text_color(cx.theme().muted_foreground);
-    if field == Field::Name && !context.component().is_some_and(|component| super::tabs::matches(&context.source().slice(component.name_range()).to_string())) {
+pub(in super::super) fn render_generic(
+    context: &FieldContext<'_>,
+    content: AnyElement,
+    cx: &mut Context<SourcePresentation>,
+) -> AnyElement {
+    let Some(field) = context.field else {
+        return content;
+    };
+    let mut header = div()
+        .flex()
+        .flex_col()
+        .gap_1()
+        .text_xs()
+        .text_color(cx.theme().muted_foreground);
+    if field == Field::Name
+        && !context.component().is_some_and(|component| {
+            super::tabs::matches(&context.source().slice(component.name_range()).to_string())
+        })
+    {
         header = header.child(t(L10nKey::EditorMdxGeneric));
     }
     let (key, target, id, accessibility) = match (field, context.component, context.property) {
@@ -208,23 +275,65 @@ pub(in super::super) fn render_generic(context: &FieldContext<'_>, content: AnyE
     if let Some(range) = target {
         let revision = context.revision;
         let grammar = context.grammar;
-        let expansion = context.component.filter(|component| field == Field::Children && component.closing_name_range().is_none()).map(|component| {
-            (component.source_range().end - 2..component.source_range().end, context.source.slice(component.name_range()).to_string(), component.is_flow())
-        });
-        header = header.child(div()
-            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-            .child(Button::new(SharedString::from(id)).ghost().small()
-            .label(t(key)).accessibility_label(accessibility)
-            .on_click(cx.listener(move |this, _, window, cx| {
-                if this.document().read(cx).revision() != revision || this.document().read(cx).grammar() != grammar { return; }
-                this.command(Command::FinishComposition, window, cx);
-                if this.document().read(cx).revision() != revision { return; }
-                if let Some((ending, name, block)) = &expansion {
-                    this.command(Command::ExpandComponent { ending: ending.clone(), name: name.clone(), block: *block }, window, cx);
-                } else { this.command(Command::Select(Selection::new(range.start, range.end)), window, cx); }
-                this.focus_handle(cx).focus(window, cx);
-                cx.stop_propagation();
-            }))));
-    } else { header = header.child(t(key)); }
-    div().w_full().child(header).child(content).into_any_element()
+        let expansion = context
+            .component
+            .filter(|component| {
+                field == Field::Children && component.closing_name_range().is_none()
+            })
+            .map(|component| {
+                (
+                    component.source_range().end - 2..component.source_range().end,
+                    context.source.slice(component.name_range()).to_string(),
+                    component.is_flow(),
+                )
+            });
+        header = header.child(
+            div()
+                .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                .child(
+                    Button::new(SharedString::from(id))
+                        .ghost()
+                        .small()
+                        .label(t(key))
+                        .accessibility_label(accessibility)
+                        .on_click(cx.listener(move |this, _, window, cx| {
+                            if this.document().read(cx).revision() != revision
+                                || this.document().read(cx).grammar() != grammar
+                            {
+                                return;
+                            }
+                            this.command(Command::FinishComposition, window, cx);
+                            if this.document().read(cx).revision() != revision {
+                                return;
+                            }
+                            if let Some((ending, name, block)) = &expansion {
+                                this.command(
+                                    Command::ExpandComponent {
+                                        ending: ending.clone(),
+                                        name: name.clone(),
+                                        block: *block,
+                                    },
+                                    window,
+                                    cx,
+                                );
+                            } else {
+                                this.command(
+                                    Command::Select(Selection::new(range.start, range.end)),
+                                    window,
+                                    cx,
+                                );
+                            }
+                            this.focus_handle(cx).focus(window, cx);
+                            cx.stop_propagation();
+                        })),
+                ),
+        );
+    } else {
+        header = header.child(t(key));
+    }
+    div()
+        .w_full()
+        .child(header)
+        .child(content)
+        .into_any_element()
 }

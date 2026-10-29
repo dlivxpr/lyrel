@@ -9,12 +9,12 @@ use std::{
     path::Path,
 };
 
+pub(super) mod accordions;
 pub(super) mod callouts;
-pub(super) mod view;
 pub(super) mod cards;
 mod steps;
-pub(super) mod accordions;
 pub(super) mod tabs;
+pub(super) mod view;
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(super) enum Grammar {
     #[default]
@@ -260,7 +260,11 @@ impl Index {
             }
         })
     }
-    pub(super) fn rebase(&mut self, transaction: &super::Transaction, source: &gpui_kit::base::input::Rope) {
+    pub(super) fn rebase(
+        &mut self,
+        transaction: &super::Transaction,
+        source: &gpui_kit::base::input::Rope,
+    ) {
         // Starts stay before inserted field text, ends follow it. In particular,
         // typing another character at a component-name end must extend both
         // name ranges before the debounced AST result is available.
@@ -282,9 +286,15 @@ impl Index {
         // the AST-confirmed name range within its actual identifier so later
         // value input cannot be mirrored into the closing tag.
         let name_end = |range: &Range<usize>| {
-            range.start + source.slice(range.clone()).chars()
-                .take_while(|ch| markdown::id_cont(*ch, true) || matches!(*ch, '$' | '_' | '.' | ':'))
-                .map(char::len_utf8).sum::<usize>()
+            range.start
+                + source
+                    .slice(range.clone())
+                    .chars()
+                    .take_while(|ch| {
+                        markdown::id_cont(*ch, true) || matches!(*ch, '$' | '_' | '.' | ':')
+                    })
+                    .map(char::len_utf8)
+                    .sum::<usize>()
         };
         for component in &mut self.components {
             component.source = map(component.source.start, true)..map(component.source.end, true);
@@ -294,7 +304,9 @@ impl Index {
                 .closing
                 .take()
                 .map(|range| map(range.start, false)..map(range.end, true));
-            if let Some(closing) = &mut component.closing { closing.end = name_end(closing); }
+            if let Some(closing) = &mut component.closing {
+                closing.end = name_end(closing);
+            }
             component.opener_end = map(component.opener_end, true);
             component.children =
                 map(component.children.start, false)..map(component.children.end, true);

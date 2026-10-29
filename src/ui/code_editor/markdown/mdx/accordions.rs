@@ -8,11 +8,8 @@ use super::{
 };
 use crate::ui::i18n::{L10nKey, t};
 use gpui_kit::base::input::Rope;
-use gpui_kit::component::{
-    ActiveTheme as _, IconName, Sizable as _,
-    button::{Button, ButtonVariants as _},
-};
-use gpui_kit::{base::StyledExt, prelude::*, *};
+use gpui_kit::component::{ActiveTheme as _, IconName, Sizable as _};
+use gpui_kit::{base::StyledExt, *};
 
 pub(super) fn matches(name: &str) -> bool {
     matches!(name, "Accordion" | "AccordionGroup")
@@ -141,7 +138,9 @@ pub(super) fn render(
                                 .py_1()
                                 .text_sm()
                                 .rounded_md()
-                                .focus_visible(|style| style.border_1().border_color(cx.theme().primary))
+                                .focus_visible(|style| {
+                                    style.border_1().border_color(cx.theme().primary)
+                                })
                                 .aria_expanded(open)
                                 .child(
                                     gpui_kit::component::Icon::new(if open {

@@ -197,7 +197,7 @@ cargo run --locked -p lyrel --bin lyrel-app -- --config-dir <临时配置目录>
 
 完整解析采用一个运行中的后台任务及一个可替换的最新请求，避免连续输入排队执行多份全文解析。同步局部语法解析限制为 32 KiB；超大容器的受影响区域暂时显示可编辑源码，随后由匹配 identity／revision 的后台结果恢复排版。过大补丁先保留 Rope 源码区间，只为视口内的有界片段生成显示文字；Unicode 边界通过借用 Rope chunk 的 `GraphemeCursor` 查询，不为单个宽行复制全文。该策略不改变唯一源码及撤销所有权，也不意味着任意大小单个段落、代码块或表格已经完成性能验收。
 
-本次新增消费者回归覆盖 1200 组正文／嵌套列表／代码／宽表格与超长单段落的离屏往返、原始选择与撤销、待完成解析后的编辑、宽度与字号改变，以及受控 Host 图片读取延迟后的光标与新文本；宽单行事务另覆盖 emoji ZWJ 和组合字符的删除及撤销。主集成首次实跑长文消费者回归时出现 `current source position must reenter the viewport` 失败，随后修正重入请求的完成时机、滚动区边界和后续帧调度；该修正尚待主集成验证，不能记为通过。Windows／macOS 原生长文输入、系统 IME、真实 SSH 和断外网场景仍需逐项验收，不据此声称已测得响应时延。
+1200 组正文／嵌套列表／代码／宽表格与超长单段落的消费者回归已在 Windows 通过，覆盖离屏往返、原始选择与撤销、待完成解析后的编辑、宽度与字号改变，以及受控 Host 图片读取延迟后的光标与新文本；宽单行事务另覆盖 emoji ZWJ 和组合字符的删除及撤销。首次暴露的 `current source position must reenter the viewport` 已通过重入时机、滚动区边界及后续帧调度修复，并在完整编辑器回归通过。Windows／macOS 原生长文输入、系统 IME、真实 SSH 和断外网场景仍需逐项验收，不据此声称已测得响应时延。
 
 实际负载验证应分别记录短文、上述 1200 组混合结构、超长单段落／单代码块、宽表格和多图片／公式／图形的文件字节数与块数；记录机器 CPU／内存／GPU、OS、窗口尺寸、主题与缩放。使用隔离入口连续输入、软换行选区、快速往返滚动，交错完成资源与解析；记录真实 input-to-paint 与滚动观察、光标及阅读锚点的变化，不用静态截图或未实测百分比代替。
 
@@ -209,9 +209,12 @@ cargo run --locked -p lyrel --bin lyrel-app -- --config-dir <临时配置目录>
 
 列表、表格、链接、图片、公式、Mermaid 和 MDX/JSX 的完整即时编辑仍未验收；尚未适配的结构保留明确的源码标记。完整源码模式始终可用，第一阶段和生产切换门保持开放。
 
+当前 Windows 完整编辑器回归为 262 项：261 项通过，1 项因下述 `markdown 1.0.0` 属性实体解码越界失败；没有跳过失败或修改预期。已修复任务快捷键被通用插行覆盖、原生控件被输入上下文抢占、末尾空白光标回退，以及空引用行无法退出的问题。实窗已验证任务复选框、菜单撤销／重做、短表格单元格中文文本注入、插行与一次撤销、关闭确认保存及文件树重开；1480 字节原样本只改变目标任务标记和目标单元格，其他字节完全一致。后台输入工具未正确传递 Ctrl 组合键，相关尝试已撤销恢复，不记为快捷键或 OS IME 通过。
+
+
 `Steps`／`Step` 使用操作流程专用原生视图：步骤标题、顺序号及正文边界与属性、连续 Markdown 子内容一起展示。序号只从 `Steps` 的直接 `Step` 子组件顺序派生，不写入源码，不提供拖拽重排。标题编辑、其他属性和动态表达式编辑仍聚焦同一原生输入表面；“编辑步骤源码”切换到同一文档的源码模式，并选中对应组件，不另建文档或撤销历史。离开组合输入时先结束当前预编辑，再改变焦点／呈现；普通保存继续经文档所属 Host 并保留未编辑字节。
 
-对应工作台消费者回归覆盖多步骤标题、嵌套格式文本、上下文源码、跨模式统一撤销重做和 Host 保存后关闭重开；本切片未运行自动化检查。Windows／macOS 的系统 IME、候选位置、主题缩放与原生像素、真实 SSH 及性能仍未实测，不能把输入 handler 或 `FileHost` 测试当作上述验收证据。
+对应工作台消费者回归已在 Windows 通过，覆盖多步骤标题、嵌套格式文本、上下文源码、键盘激活及返焦、预编辑结束、跨模式统一撤销重做和 Host 保存后关闭重开。Windows／macOS 的系统 IME、候选位置、主题缩放与原生像素、真实 SSH 及性能仍未实测，不能把输入 handler 或 `FileHost` 测试当作上述验收证据。
 
 新增的消费者回归经同一文档 command 与真实工作台视图覆盖段落拆分／合并、跨块指针选择、source/live 切换与撤销、转义／实体位置、软硬换行、Unicode 删除、窗口 resize 后的原生范围映射、组合输入 handler，以及 live 输入后 Host 保存／关闭／重开。合并后的 Windows 编辑器定向回归 147 项通过，桌面 Debug 构建成功；其中转义字符回归曾暴露段首 escape 引导符未归属于显示字符，修复后删除会覆盖完整原始转义区间。真实隔离窗口已实测段内 Enter 分段、Backspace 合并、跨模式撤销／重做、live 输入后保存的 UTF-8 字节比较，以及关闭重开。live 系统中文 IME、软换行多行候选位置、完整主题／缩放、长文性能及 macOS 尚未验收；短文档 source 模式的历史 IME 证据不能替代本次投影后的 live 验收。
 
@@ -274,13 +277,13 @@ Windows 已运行文档事务、共享呈现及既有工作台的定向回归；
 
 `gpui-kit-markdown-editor` 作为交互与架构参考，不直接集成其 `0.1.1` 发布版：该版本固定 `gpui-pre =0.3.9`，而 lyrel 使用 `0.3.10`；它还明确存在首次保存改变列表紧凑度、空段落消失、缺少源码偏移映射，以及 Windows/macOS 原生输入未验证等限制，见 [发布版依赖与限制](https://docs.rs/crate/gpui-kit-markdown-editor/0.1.1)。不以 Git 依赖、第三方源码复制或构建补丁绕过仓库依赖约束。
 
-数学公式候选为 [MiTeX](https://docs.rs/mitex/latest/mitex/) 的 LaTeX 到 Typst 转换，加 [Typst SVG 输出](https://docs.rs/typst-svg/latest/typst_svg/)。Mermaid 候选为已发布到 crates.io 的 [Merman 0.9.2](https://docs.rs/crate/merman/0.9.2)，原生路径不需要 Node.js 或 Chromium。原生图片显示需验证其 [resvg-safe 输出](https://github.com/Latias94/merman/blob/main/docs/rendering/SVG_OUTPUT_PIPELINE.md)，不能把默认 SVG 的浏览器兼容性当作原生兼容保证。
+隔离工作台已选择正式 [RaTeX 0.1.14](https://docs.rs/ratex-svg/0.1.14/ratex_svg/) 的公开 `parse → layout → glyph SVG` 路径，以及 [Merman 0.9.2](https://docs.rs/crate/merman/0.9.2) 的 `all-diagrams`／`complete-svg` 与完整 `resvg_safe` 管线，不启用 ELK。数学与图形均由 resvg 光栅化为原生图像，不依赖 Node.js、Chromium 或项目 JavaScript。MiTeX／Typst 仅为前期调查候选，未加入产品依赖。
 
-这些库尚未在 lyrel 中完成集成验收，候选不等于最终选型。依赖以实际选定的正式发布版为准，核对其功能、字体及第三方许可；开发分支的能力不能替代发布版证据。
+依赖、字体及第三方许可以正式发布包和 `Cargo.lock` 为准，详见[源码构建依赖](/getting-started/installation)。渲染消费者通过不等于 Windows/macOS 系统输入、实际像素、离线或完整 SSH 流程已验收，生产默认仍未切换。
 
 #### 三阶段范围与验收目标
 
-下表均为待实现、待运行的验收目标，不是测试通过记录。
+下表是三阶段完整验收目标；已实现和已运行范围分别记录，未满足的门槛不记为通过。
 
 | 阶段 | 交付范围 | 必须证明的行为 |
 |---|---|---|
@@ -302,7 +305,50 @@ Windows 已运行文档事务、共享呈现及既有工作台的定向回归；
 
 该发布版的 Usecase 样式输出先把字体 CSS 字符串的引号写成 XML 字符引用，随后 CSS 清洗器却在解码前解析序列化文本，引用末尾的分号因而截断字体声明。宿主现通过公开 `SvgPostprocessor`，仅在普通 `<style>` 文本中将发布版生成的 `&quot;`／`&#39;` 恢复为 XML 文本允许的字面引号；属性、标签、其他实体与文档源码均不改写，CDATA 保持原样。之后仍执行完整 `resvg_safe` 清洗、资源策略和终态验证，不旁路验证或把错误图当渲染成功。
 
-这项样式边界修复尚未运行回归，不能视为 usecase 已验收；两个原正向消费者及完整矩阵均保留。字体解析、中文／emoji 标签、主题缩放和实际像素仍须 Windows/macOS 分别验收，不承诺浏览器 CSS 或 Mermaid.js 的逐像素等价。
+这项样式边界修复后，平面及带 `systemBoundary` 的两个 usecase 正向消费者与其余图形矩阵已在 Windows 完整编辑器回归通过。该结果证明所列样例的原生渲染与编辑路径，不泛化为所有 Mermaid.js 语法；字体解析、中文／emoji 标签、主题缩放和实际像素仍须 Windows/macOS 分别验收，不承诺浏览器 CSS 或 Mermaid.js 的逐像素等价。
+
+每行对应 `native_mermaid_matrix_*` 工作台消费者；“通过”指实际原生渲染、局部修改、错误恢复、统一历史及 Host 保存重开，不代表完整上游语法或逐平台视觉验收。当前不启用 ELK，`flowchart-elk` 请求沿发布版 Dagre 回落路径。
+
+| 图形族／通道 | 已验证样例边界 | Windows 消费者 |
+|---|---|---|
+| `agentflow` | `agentflow-beta` 节点与边 | 通过 |
+| `architecture` | `architecture-beta` service | 通过 |
+| `block` | `block-beta` 两列块 | 通过 |
+| `c4` | `C4Context` Person／System／Rel | 通过 |
+| `class` | `classDiagram` 属性、方法与继承 | 通过 |
+| `cynefin` | `cynefin-beta` 域与关系 | 通过 |
+| `er` | `erDiagram` 实体、属性与关系 | 通过 |
+| `event-modeling` | `eventmodeling` UI 与 command | 通过 |
+| `flowchart` | `flowchart`／`graph`、形状、边、子图、样式、中文／HTML／数学标签；脚本回调不执行 | 通过 |
+| `gantt` | `gantt` 日期与 section | 通过 |
+| `git-graph` | `gitGraph` commit／branch／checkout | 通过 |
+| `info` | 固定版本信息图；`showInfo` 不改变该发布版布局 | 通过 |
+| `ishikawa` | `ishikawa-beta` 类别与原因 | 通过 |
+| `journey` | `journey` section 与评分 | 通过 |
+| `kanban` | `kanban` 列与任务 | 通过 |
+| `mindmap` | `mindmap` 多层节点 | 通过 |
+| `packet` | `packet-beta` 位区间标签 | 通过 |
+| `pie` | `pie` 标签与数值 | 通过 |
+| `quadrant-chart` | `quadrantChart` 坐标与轴 | 通过 |
+| `radar` | `radar-beta` 轴与曲线 | 通过 |
+| `railroad` | 普通、EBNF、ABNF、PEG 四个 beta 方言分别验证 | 通过 |
+| `requirement` | `requirementDiagram` 属性 | 通过 |
+| `sankey` | `sankey-beta` 流量 | 通过 |
+| `sequence` | `sequenceDiagram` 请求与回复 | 通过 |
+| `state` | `stateDiagram-v2` 与旧 `stateDiagram` | 通过 |
+| `swimlane` | `swimlane-beta` 节点与边 | 通过 |
+| `timeline` | `timeline` section 与事件 | 通过 |
+| `tree-view` | `treeView-beta` 层次节点 | 通过 |
+| `treemap` | `treemap-beta` 层次与数值 | 通过 |
+| `usecase` | `usecase-beta` 平面及 `systemBoundary`；包含本节样式边界修复 | 通过 |
+| `venn` | `venn-beta` 集合与交集 | 通过 |
+| `wardley` | `wardley-beta` component 坐标 | 通过 |
+| `xychart` | `xychart-beta` 坐标轴与柱形数据 | 通过 |
+| `zenuml` | 独立外部对照通道，不计为 primary；本地消息渲染与脚本文本不执行 | 通过 |
+| `error` | 诊断边界，不作为成功图形族；无效输入保留原文与可见原因 | 通过 |
+
+字体／布局遵循原生管线而非浏览器 DOM。外部文件、网络图形资源和脚本回调不执行；无效或超限输入显示原因，不把源码代码块计为图形支持。
+
 
 
 公式和 Mermaid 均采用真实渲染加局部源码编辑，不包含 Word 式结构化公式编辑或图表节点、连线拖拽编辑。YAML frontmatter 保留为元数据源码区；原始 HTML 与未适配扩展可原样保留、局部源码编辑，不承诺任意 HTML/CSS 的原生视觉还原。
@@ -323,7 +369,7 @@ Windows 已运行文档事务、共享呈现及既有工作台的定向回归；
 
 `structured_math_local_invalid_recovery_composition_and_selection_keep_one_history` 另外覆盖上述结构公式及文本组合的行内／块级局部编辑：删去闭合花括号后出现带原因的错误；错误仍能激活源码；撤销恢复公式和光标；反向选择中的 preedit 取消不破坏 redo，提交只占一次历史；切换 source/live 后仍能恢复原选择与字节。这里的组合输入通过生产 `EntityInputHandler` 的测试适配器驱动，不是操作系统输入法验收。
 
-以上是新增消费者回归的覆盖契约，尚未运行，不能视为矩阵通过或原生像素正确的证据。Windows/macOS 实窗中的矩阵括号、分支及对齐、行内基线与段落间距、系统 IME 候选窗和提交／取消、真正断网后的渲染、真实 SSH 保存／重开及输入到绘制性能仍须分别记录；headless 几何、库级 SVG/PNG 探针和本机 Host 文件测试不能替代这些门槛。任意 TeX 宏包、文件访问、完整 TeX／KaTeX 兼容和 Word 式结构编辑仍不在范围内。
+上述两个结构公式消费者回归均已在 Windows 通过，覆盖 36 个行内／块级工作流及错误恢复、组合输入 handler、统一历史和完整保存字节。Windows/macOS 实窗中的矩阵括号、分支及对齐、行内基线与段落间距、系统 IME 候选窗和提交／取消、真正断网后的渲染、真实 SSH 保存／重开及输入到绘制性能仍须分别记录；headless 几何、库级 SVG/PNG 探针和本机 Host 文件测试不能替代这些门槛。任意 TeX 宏包、文件访问、完整 TeX／KaTeX 兼容和 Word 式结构编辑仍不在范围内。
 
 
 #### MDX 原生组件与执行边界
@@ -340,11 +386,12 @@ MDX 的可视化编辑不等于执行 React 页面。以下组件需要专用原
 
 隔离工作台为 `Note`、`Tip`、`Info`、`Warning` 提供专用原生提示块：名称文字与语义色边界共同表达备注、提示、信息和警告，正文仍是可连续编辑的嵌套 Markdown，不运行网站组件。现有属性入口直接选择原属性值；“编辑提示块源码”仅在当前组件范围显示完整原文，“返回提示块正文”恢复格式化内容。两者共用同一输入、文档事务与撤销历史；切换先结束组合输入，再将焦点交回原输入，不创建独立属性或源码编辑器。
 
-四种提示块的工作台消费者回归覆盖属性与嵌套格式内容修改、局部源码往返、组合输入 handler、键盘入口、撤销／重做，以及经 `FileHost` 保存、关闭、重开后的完整字节比较。新增回归尚待集成统一运行；这不构成 Windows/macOS 原生像素、真实系统 IME／候选窗、真实 SSH、离线或性能验收，生产切换门仍未解除。
+四种提示块的工作台消费者回归均已在 Windows 通过，覆盖属性与嵌套格式内容修改、局部源码往返、组合输入 handler、键盘入口、撤销／重做，以及经 `FileHost` 保存、关闭、重开后的完整字节比较。输入上下文只在文本输入自身拥有焦点时启用，避免抢占内嵌原生按钮的 Enter／Space。该结果不构成 Windows/macOS 原生像素、真实系统 IME／候选窗、真实 SSH、离线或性能验收，生产切换门仍未解除。
 隔离工作台中的 `Accordion` 使用原生按钮展示标题与展开状态，`AccordionGroup` 保留分组结构；属性与嵌套 Markdown 继续使用原文映射及同一输入、事务和撤销历史。折叠只改变当前呈现的布局，不修改源码、脏状态或保存内容。折叠前结束当前预编辑，并把选择与输入焦点移到可见组件头部；显式定位或撤销回到隐藏内容时，需要展开其祖先，不能把输入继续发送给隐藏光标。布局过滤须与虚拟化统一处理，不保留被折叠内容的旧高度占位。
 
-新增折叠区消费者回归通过既有工作台与 Host 保存入口覆盖展开、属性／子内容编辑、折叠、重开、撤销与逐字节保存；该回归由集成分支统一运行，本切片未执行测试、构建或实窗检查。直接调用 `EntityInputHandler` 的预编辑覆盖不代表 Windows/macOS 系统 IME、候选位置、原生像素或真实 SSH 已验收。
-隔离工作台中的 `Tabs`／`Tab` 使用原生标签控件。点击或键盘激活切换可见子内容，左右方向键及 Home／End 选择相邻或首尾标签；切换后原文档输入获得焦点，选区落在可见子内容。未激活分支（包括嵌套标签组）不参与布局，但完整保留源码、属性与统一撤销历史。活动标签按稳定组件身份保存为当前呈现的展示状态，不写回源码、不单独产生未保存修改或撤销项。正在进行的组合输入先完成，再解析目标位置；源码模式或撤销返回隐藏分支时显示其必要祖先。属性与正文仍通过同一个文档输入和 Host 保存路径编辑。新增消费者回归待集成后统一运行；本切片未执行原生窗口、系统 IME、macOS 或真实 SSH 验收。
+折叠区消费者回归已在 Windows 通过，覆盖展开状态的真实无障碍元数据、键盘激活、隐藏几何、属性／子内容编辑、折叠、重开、撤销展开祖先与逐字节 Host 保存。直接调用 `EntityInputHandler` 的预编辑覆盖不代表 Windows/macOS 系统 IME、候选位置、原生像素或真实 SSH 已验收。
+
+隔离工作台中的 `Tabs`／`Tab` 使用原生标签控件。点击或键盘激活切换可见子内容，左右方向键及 Home／End 选择相邻或首尾标签；切换后原文档输入获得焦点，选区落在可见子内容。未激活分支（包括嵌套标签组）不参与布局，但完整保留源码、属性与统一撤销历史。活动标签按稳定组件身份保存为当前呈现的展示状态，不写回源码、不单独产生未保存修改或撤销项。正在进行的组合输入先完成，再解析目标位置；源码模式或撤销返回隐藏分支时显示其必要祖先。属性与正文仍通过同一个文档输入和 Host 保存路径编辑。两个消费者回归已在 Windows 通过；原生窗口、系统 IME、macOS 与真实 SSH 仍未完成验收。
 
 在标签页正文内，`Alt+Page Up`／`Alt+Page Down` 切换最近一层标签组；嵌套组的状态独立保留。`Tab` 仍用于正文缩进或表格导航，不被改作组件切换键。
 
@@ -352,7 +399,7 @@ MDX 的可视化编辑不等于执行 React 页面。以下组件需要专用原
 
 隔离工作台的 `Card`／`CardGroup` 使用原生卡片标题、分组边界及连续 Markdown 子内容。标题、目标、图标、说明和列数属性通过原文选区进入同一个输入与撤销历史；缺少标题、目标或列数时，只在开标签内局部插入属性。分组按文档阅读顺序呈现，不复制网站的响应式 CSS 网格。动态属性与 spread 仍明确标为不执行的源码，不从中推导链接或样式。
 
-点击属性或正文只编辑；独立的「打开目标」标准按钮才主动导航，并沿原文档的 `FollowLink`／Host 路径解析相对目标。属性、子内容、source/live 切换、撤销及 Host 保存重开的消费者回归已加入；本切片未运行检查，Windows／macOS 的真实 IME、键盘焦点与原生像素仍待集成验收。
+点击属性或正文只编辑；独立的「打开目标」标准按钮才主动导航，并沿原文档的 `FollowLink`／Host 路径解析相对目标。缺省属性与自闭合 children 扩展的消费者已通过；包含逐字符实体目标编辑的完整卡片流程仍因下述依赖 panic 失败，不能记为通过。Windows／macOS 的真实 IME、键盘焦点与原生像素仍待验收。
 
 当前第三阶段仍有明确依赖阻塞：正式 registry 的 `markdown 1.0.0` 在 quoted JSX 属性值以未结束字符实体结尾时，其 [mdast 属性编译路径](https://docs.rs/crate/markdown/1.0.0/source/src/to_mdast.rs) 调用的 [字符实体解码](https://docs.rs/crate/markdown/1.0.0/source/src/util/character_reference.rs) 可能越界 panic；逐字符编辑目标中的 `&#38;` 已在工作台消费者回归触发。此问题尚未修复，也未用改写解析输入、捕获 panic 或削弱字节断言绕过。现有发布版没有属性解码替换 hook，兼容修复发布或更换解析实现需要单独决策；这不构成 MDX 完整即时编辑已验收的声明。
 

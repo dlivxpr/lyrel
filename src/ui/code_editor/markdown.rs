@@ -281,7 +281,7 @@ impl MarkdownDocument {
     pub(crate) fn format(&self) -> TextFormat {
         self.format
     }
-    pub(super) fn grammar(&self) -> mdx::Grammar {
+    fn grammar(&self) -> mdx::Grammar {
         mdx::Grammar::for_path(
             self.resources
                 .as_ref()

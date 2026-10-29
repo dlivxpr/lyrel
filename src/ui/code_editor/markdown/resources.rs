@@ -16,9 +16,6 @@ impl ResourceContext {
     pub(crate) fn path(&self) -> Option<&Path> {
         self.path.as_deref()
     }
-    pub(crate) fn epoch(&self) -> u64 {
-        self.epoch
-    }
     pub(crate) fn is_current(&self, current: Option<&Self>) -> bool {
         current.is_some_and(|current| {
             current.epoch == self.epoch

@@ -337,7 +337,10 @@ impl State {
                 div()
                     .id(format!("markdown-mermaid-error-{}", leaf.range.start))
                     .role(Role::Alert)
-                    .aria_label(diagnostic.map_or_else(|| t(key).to_owned(), |message| format!("{} {message}", t(key))))
+                    .aria_label(diagnostic.map_or_else(
+                        || t(key).to_owned(),
+                        |message| format!("{} {message}", t(key)),
+                    ))
                     .test_support()
                     .text_sm()
                     .text_color(cx.theme().danger)
@@ -404,9 +407,7 @@ impl Job {
             let request = SvgRequest {
                 environment: SvgEnvironment::deterministic()
                     .with_text_measurement_policy(key.style.measurement()),
-                pipeline: Some(
-                    SvgPipeline::resvg_safe().with_postprocessor(NativeSvgAdmission),
-                ),
+                pipeline: Some(SvgPipeline::resvg_safe().with_postprocessor(NativeSvgAdmission)),
                 ..Default::default()
             };
             let result = (|| {
@@ -557,7 +558,9 @@ impl SvgPostprocessor for NativeSvgAdmission {
                 }
             }
         }
-        if quotes.is_empty() { return Ok(svg); }
+        if quotes.is_empty() {
+            return Ok(svg);
+        }
         let mut normalized = String::with_capacity(svg.len());
         let mut cursor = 0;
         for (range, quote) in quotes {
