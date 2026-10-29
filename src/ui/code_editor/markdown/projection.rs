@@ -691,7 +691,9 @@ impl Projection {
             }
             _ => {
                 let first = leaves.len();
-                if super::mdx::project(source, node, images, leaves) {
+                if super::tables::project(source, node, images, leaves)
+                    || super::mdx::project(source, node, images, leaves)
+                {
                     for leaf in &mut leaves[first..] {
                         leaf.container_range(container.clone());
                     }
