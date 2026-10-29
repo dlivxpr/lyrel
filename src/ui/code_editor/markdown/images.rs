@@ -52,9 +52,15 @@ fn decode(bytes: &[u8]) -> anyhow::Result<Arc<RenderImage>> {
         Ok(image) => image.into_rgba8(),
         Err(raster_error) => {
             use resvg::{tiny_skia, usvg};
+            static FONTS: std::sync::LazyLock<Arc<usvg::fontdb::Database>> = std::sync::LazyLock::new(|| {
+                let mut fonts = usvg::fontdb::Database::new();
+                fonts.load_system_fonts();
+                Arc::new(fonts)
+            });
             let denied = Arc::new(std::sync::atomic::AtomicBool::new(false));
             let rejected = denied.clone();
             let options = usvg::Options {
+                fontdb: FONTS.clone(),
                 image_href_resolver: usvg::ImageHrefResolver {
                     resolve_data: usvg::ImageHrefResolver::default_data_resolver(),
                     resolve_string: Box::new(move |_, _| {

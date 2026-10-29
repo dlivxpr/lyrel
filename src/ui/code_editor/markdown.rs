@@ -12,6 +12,7 @@ pub(super) mod resources;
 mod projection;
 mod regions;
 mod source;
+mod tables;
 pub(super) use source::SourcePresentation;
 #[cfg(test)]
 mod tests;

@@ -23,12 +23,14 @@ pub(crate) struct SourcePresentation {
     focus: FocusHandle,
     scroll: ScrollHandle,
     geometry: Option<(u64, HashMap<u64, LeafGeometry>)>,
+    table_geometry: HashMap<u64, Bounds<Pixels>>,
     dragging: bool,
     reveal_caret: bool,
     wrap: bool,
     live: bool,
     projection: Projection,
     blocks: HashMap<u64, CachedBlock>,
+    tables: HashMap<u64, BlockNode>,
     rendered_revision: Option<u64>,
     render_generation: u64,
     parse_task: Option<Task<()>>,
@@ -92,12 +94,14 @@ impl SourcePresentation {
             focus: cx.focus_handle().tab_stop(true),
             scroll: ScrollHandle::new(),
             geometry: None,
+            table_geometry: HashMap::new(),
             dragging: false,
             reveal_caret: false,
             wrap,
             live: false,
             projection,
             blocks: HashMap::new(),
+            tables: HashMap::new(),
             rendered_revision: None,
             render_generation: 0,
             parse_task: None,
@@ -323,6 +327,32 @@ impl SourcePresentation {
             Command::Select(selection) => Command::Select(self.map_live_caret(selection, cx)),
             command => command,
         };
+        let cell_input = |range: &Range<usize>, text: String, selected| {
+            if self.live && self.projection.leaf_at(range.start).is_some_and(|leaf| {
+                matches!(leaf.kind, Kind::TableCell(_)) && range.end <= leaf.range.end
+            }) {
+                super::tables::input(self.document.read(cx).source(), range, text, selected)
+            } else {
+                (text, selected)
+            }
+        };
+        let command = match command {
+            Command::Insert(text) => Command::Insert(cell_input(&self.state.selection.range(), text, None).0),
+            Command::Commit(text) => {
+                let range = self.state.marked_range().unwrap_or_else(|| self.state.selection.range());
+                Command::Commit(cell_input(&range, text, None).0)
+            }
+            Command::Compose { range, text, selected } => {
+                let target = range.clone().or_else(|| self.state.marked_range()).unwrap_or_else(|| self.state.selection.range());
+                let (text, selected) = cell_input(&target, text, selected);
+                Command::Compose { range, text, selected }
+            }
+            Command::Replace { range, text, kind } if matches!(kind, EditKind::Typing | EditKind::Paste) => {
+                let (text, _) = cell_input(&range, text, None);
+                Command::Replace { range, text, kind }
+            }
+            command => command,
+        };
         let marked_before = self.state.marked_range();
         let mut after_extra = None;
         let command = if !self.extra_selections.is_empty() {
@@ -459,19 +489,27 @@ impl SourcePresentation {
         if *revision != doc.revision() {
             return None;
         }
-        let (id, leaf) = geometry.iter().min_by(|(_, a), (_, b)| {
-            let distance = |leaf: &LeafGeometry| {
-                let bounds = leaf.bounds();
-                if point.y < bounds.top() {
+        let (id, leaf) = geometry.iter().min_by(|(a_id, a), (b_id, b)| {
+            let distance = |id: &u64, leaf: &LeafGeometry| {
+                let bounds = self.table_geometry.get(id).copied().unwrap_or_else(|| leaf.bounds());
+                let dy = if point.y < bounds.top() {
                     bounds.top() - point.y
                 } else if point.y > bounds.bottom() {
                     point.y - bounds.bottom()
                 } else {
                     px(0.)
-                }
+                };
+                let dx = if point.x < bounds.left() {
+                    bounds.left() - point.x
+                } else if point.x > bounds.right() {
+                    point.x - bounds.right()
+                } else {
+                    px(0.)
+                };
+                f32::from(dx).powi(2) + f32::from(dy).powi(2)
             };
-            distance(a)
-                .partial_cmp(&distance(b))
+            distance(a_id, a)
+                .partial_cmp(&distance(b_id, b))
                 .unwrap_or(std::cmp::Ordering::Equal)
         })?;
         let mapped = self
@@ -593,7 +631,27 @@ impl SourcePresentation {
             }
         }
     }
+    fn navigate_table(&mut self, backward: bool, exit: bool, window: &mut Window, cx: &mut Context<Self>) -> bool {
+        if !self.live || self.projection.revision != self.document.read(cx).revision() {
+            return false;
+        }
+        let Some(target) = super::tables::navigate(&self.projection.leaves, self.state.selection.head, backward, exit) else {
+            return false;
+        };
+        self.command(Command::FinishComposition, window, cx);
+        if let Some(at) = target {
+            self.command(Command::Select(Selection::caret(at)), window, cx);
+        } else if backward {
+            window.focus_prev(cx);
+        } else {
+            window.focus_next(cx);
+        }
+        true
+    }
     fn indent_selection(&mut self, outdent: bool, window: &mut Window, cx: &mut Context<Self>) {
+        if self.navigate_table(outdent, false, window, cx) {
+            return;
+        }
         let selected = self.state.selection.range();
         let text = if self.indent.hard_tabs {
             "\t".into()
@@ -734,6 +792,9 @@ impl SourcePresentation {
         }
     }
     fn enter(&mut self, hard: bool, window: &mut Window, cx: &mut Context<Self>) {
+        if self.navigate_table(hard, true, window, cx) {
+            return;
+        }
         let mut range = self.state.selection.range();
         let region = self
             .live
@@ -778,6 +839,12 @@ impl SourcePresentation {
         let Some(leaf) = self.projection.leaf_at(at) else {
             return;
         };
+        if matches!(leaf.kind, Kind::TableCell(_))
+            && ((backward && at <= leaf.content_start()) || (!backward && at >= leaf.content_end()))
+        {
+            self.navigate_table(backward, false, window, cx);
+            return;
+        }
         if super::regions::label(leaf.kind).is_some() {
             self.command(
                 if backward {
@@ -1050,6 +1117,25 @@ impl Render for SourcePresentation {
             }
             self.blocks
                 .retain(|_, cached| cached.seen == self.render_generation);
+            self.tables.clear();
+            let mut ix = 0;
+            while ix < self.projection.leaves.len() {
+                let leaf = &self.projection.leaves[ix];
+                if let Kind::TableCell(cell) = leaf.kind {
+                    let end = ix + self.projection.leaves[ix..].iter().take_while(|leaf| {
+                        matches!(leaf.kind, Kind::TableCell(other) if other.table() == cell.table())
+                    }).count();
+                    self.tables.insert(leaf.id, super::tables::block(
+                        self.projection.leaves[ix..end].iter().filter_map(|leaf| {
+                            let Kind::TableCell(cell) = leaf.kind else { return None; };
+                            Some((cell, &self.blocks[&leaf.id].node))
+                        }),
+                    ));
+                    ix = end;
+                } else {
+                    ix += 1;
+                }
+            }
             self.rendered_revision = Some(revision);
         }
         let ready: std::collections::HashMap<_, _> = self.document.read(cx).images.states.iter()
@@ -1071,8 +1157,11 @@ impl Render for SourcePresentation {
             .collect();
         let block = div()
             .w_full()
-            .children(self.projection.leaves.iter().enumerate().map(|(ix, leaf)| {
-                let node = &self.blocks[&leaf.id].node;
+            .children(self.projection.leaves.iter().enumerate().filter_map(|(ix, leaf)| {
+                if matches!(leaf.kind, Kind::TableCell(_)) && !self.tables.contains_key(&leaf.id) {
+                    return None;
+                }
+                let node = self.tables.get(&leaf.id).unwrap_or(&self.blocks[&leaf.id].node);
                 let rendered = node.render_with_id(
                     ("markdown-leaf", leaf.id),
                     FlowPosition::at(&references, ix, ix + 1 == references.len())
@@ -1082,7 +1171,7 @@ impl Render for SourcePresentation {
                     window,
                     cx,
                 );
-                div()
+                Some(div()
                     .id(("markdown-block", leaf.id))
                     .w_full()
                     .when(
@@ -1112,7 +1201,7 @@ impl Render for SourcePresentation {
                             cx,
                         ))
                     })
-                    .child(rendered)
+                    .child(rendered))
             }));
         let image_status = if self.live {
             use crate::ui::i18n::{t, L10nKey};
@@ -1399,6 +1488,8 @@ impl Render for SourcePresentation {
                 .on_action(cx.listener(|this, _: &actions::Escape, window, cx| {
                     if this.state.composition.is_some() {
                         this.command(Command::CancelComposition, window, cx);
+                    } else if this.navigate_table(false, true, window, cx) {
+                        // Escape leaves the table without changing its source.
                     } else {
                         cx.propagate();
                     }
@@ -1524,6 +1615,7 @@ impl Element for SourceElement {
         let (_, geometry) = collect_leaf_geometry(decorations, || self.child.prepaint(window, cx));
         self.view.update(cx, |view, cx| {
             let previous_caret = view.caret_bounds(view.state.selection.head, cx);
+            view.table_geometry = super::tables::geometry(&view.projection.leaves, &geometry);
             view.geometry = Some((self.revision, geometry));
             view.viewport_height = bounds.size.height;
             if view.focus.is_focused(window)
