@@ -6,8 +6,15 @@ use crate::ui::i18n::{t, L10nKey};
 use gpui_kit::{*, prelude::*};
 use gpui_kit::component::{ActiveTheme as _, Sizable as _, button::{Button, ButtonVariants as _}};
 
-pub(super) fn matches(name: &str) -> bool {
-    matches!(name, "Note" | "Tip" | "Info" | "Warning")
+pub(super) fn matches(context: &FieldContext<'_>) -> bool {
+    callout_name(context).is_some()
+}
+
+fn callout_name(context: &FieldContext<'_>) -> Option<&'static str> {
+    let component = context.component()?;
+    ["Note", "Tip", "Info", "Warning"].into_iter().find(|name| {
+        context.source().slice(component.name_range()).chars().eq(name.chars())
+    })
 }
 
 pub(super) fn render(
@@ -17,12 +24,11 @@ pub(super) fn render(
     cx: &mut Context<SourcePresentation>,
 ) -> AnyElement {
     let Some(component) = context.component() else { return content; };
-    let name = context.source().slice(component.name_range()).to_string();
-    let (label, color) = match name.as_str() {
-        "Note" => (L10nKey::EditorCalloutNote, cx.theme().muted_foreground),
-        "Tip" => (L10nKey::EditorCalloutTip, cx.theme().success),
-        "Info" => (L10nKey::EditorCalloutInfo, cx.theme().info),
-        "Warning" => (L10nKey::EditorCalloutWarning, cx.theme().warning),
+    let (label, color) = match callout_name(context) {
+        Some("Note") => (L10nKey::EditorCalloutNote, cx.theme().muted_foreground),
+        Some("Tip") => (L10nKey::EditorCalloutTip, cx.theme().success),
+        Some("Info") => (L10nKey::EditorCalloutInfo, cx.theme().info),
+        Some("Warning") => (L10nKey::EditorCalloutWarning, cx.theme().warning),
         _ => return content,
     };
     let id = component.id();

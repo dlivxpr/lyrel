@@ -964,7 +964,6 @@ impl Projection {
         let ranges: Vec<_> = self.mdx.components.iter()
             .filter(|component| state.source_components.contains(&component.id()))
             .map(|component| component.source_range()).collect();
-        let source = source.to_string();
         for range in &ranges {
             if ranges.iter().any(|outer| outer != range && outer.start <= range.start && range.end <= outer.end) { continue; }
             let Some(first) = self.leaves.iter().position(|leaf| leaf.range.end > range.start && leaf.range.start < range.end) else { continue; };
@@ -977,7 +976,7 @@ impl Projection {
             for part in [start..range.start, range.clone(), range.end..end] {
                 if part.is_empty() { continue; }
                 let mut leaf = Leaf::new(part.clone(), Kind::Mdx(super::mdx::Field::Dynamic));
-                leaf.raw(&source, part.clone());
+                leaf.push(part.clone(), &source.slice(part.clone()).to_string());
                 leaf.rebuild(None);
                 leaf.id = if part == *range { id } else { let id = self.next_id; self.next_id += 1; id };
                 leaf.version = self.next_id;

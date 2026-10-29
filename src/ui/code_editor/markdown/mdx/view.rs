@@ -75,11 +75,8 @@ pub(in super::super) fn render_field(context: &FieldContext<'_>, content: AnyEle
 }
 
 fn render_component(context: &FieldContext<'_>, content: AnyElement, window: &mut Window, cx: &mut Context<SourcePresentation>) -> AnyElement {
-    if let Some(component) = context.component() {
-        let name = context.source().slice(component.name_range()).to_string();
-        if super::callouts::matches(&name) {
-            return super::callouts::render(context, content, window, cx);
-        }
+    if super::callouts::matches(context) {
+        return super::callouts::render(context, content, window, cx);
     }
     render_generic(context, content, cx)
 }
