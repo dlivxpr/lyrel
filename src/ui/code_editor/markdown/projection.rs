@@ -214,7 +214,8 @@ impl Leaf {
             .iter()
             .any(|span| span.source.start <= at && at <= span.source.end)
             || self.segments.iter().any(|segment| {
-                segment.math.is_some() && segment.source.start <= at && at <= segment.source.end
+                (segment.math.is_some() || segment.image.is_some())
+                    && segment.source.start <= at && at <= segment.source.end
             })
     }
     pub fn marks(
