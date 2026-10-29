@@ -668,6 +668,7 @@ impl MarkdownDocument {
                 if revision != self.revision || range.end > self.source.len() {
                     return;
                 }
+                self.typing_end = None;
                 let start = self
                     .source
                     .line_start_offset(self.source.offset_to_point(range.start).row);

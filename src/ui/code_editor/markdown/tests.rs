@@ -2490,6 +2490,7 @@ fn native_image_atoms_cross_one_boundary_and_source_edits_share_undo(
     context.update(|window, cx| {
         window.pointer_down(point, gpui_kit::MouseButton::Left, cx);
         window.pointer_up(point, gpui_kit::MouseButton::Left, cx);
+        assert_eq!(view.read(cx).selection(), Selection::caret(start + 2));
         window.input("新", cx);
     });
     context.run_until_parked();
@@ -3001,7 +3002,7 @@ fn native_table_structure_actions_share_undo_and_save_reopen(cx: &mut gpui_kit::
     context.update(|window, cx| window.press("secondary-alt-shift-down", cx));
     context.run_until_parked();
     settle_live_geometry(&view, &mut context);
-    let after_row = "before  \r\n\n| **A** | B |\n| --- | ---: |\n| x\\|y | `z` |\n|  |  |\r\n\n[ref]: target  ";
+    let after_row = "before  \r\n\n| **A** | B |\r\n| --- | ---: |\n| x\\|y | `z` |\r\n|  |  |\n\n[ref]: target  ";
     view.read_with(&context, |view, cx| {
         assert_eq!(
             view.document().read(cx).encode().unwrap(),
@@ -3036,7 +3037,7 @@ fn native_table_structure_actions_share_undo_and_save_reopen(cx: &mut gpui_kit::
         window.pointer_up(item.bounds().center(), MouseButton::Left, cx);
     });
     context.run_until_parked();
-    let expected = "before  \r\n\n| **A** |  | B |\n| --- | :---: | ---: |\n| x\\|y |  | `z` |\n|  |  |  |\r\n\n[ref]: target  ";
+    let expected = "before  \r\n\n| **A** |  | B |\r\n| --- | :---: | ---: |\n| x\\|y |  | `z` |\r\n|  |  |  |\n\n[ref]: target  ";
     settle_live_geometry(&view, &mut context);
     view.read_with(&context, |view, cx| {
         assert_eq!(
@@ -3276,16 +3277,42 @@ fn table_structure_commands_preserve_cells_boundaries_and_atomic_selection() {
         // Typing at the command's selection must change a surviving real cell.
         document.command(&mut state, Command::Insert("中".into()));
         assert!(document.source().to_string().contains("中"));
+        let typed = document.encode().unwrap();
+        let typed_selection = state.selection();
         document.command(&mut state, Command::Undo);
         assert_eq!(state.selection(), after);
         assert_eq!(document.encode().unwrap(), expected.as_bytes());
-        document.command(&mut state, Command::Undo);
-        assert_eq!(document.encode().unwrap(), original.as_bytes());
-        assert_eq!(state.selection(), selection);
         document.command(&mut state, Command::Redo);
+        assert_eq!(document.encode().unwrap(), typed);
+        assert_eq!(state.selection(), typed_selection);
+        document.command(&mut state, Command::Undo);
         assert_eq!(document.encode().unwrap(), expected.as_bytes());
         assert_eq!(state.selection(), after);
+        if expected == original {
+            // A no-op alignment does not invent a structural history entry.
+            assert_eq!(after, selection);
+        } else {
+            document.command(&mut state, Command::Undo);
+            assert_eq!(document.encode().unwrap(), original.as_bytes());
+            assert_eq!(state.selection(), selection);
+            document.command(&mut state, Command::Redo);
+            assert_eq!(document.encode().unwrap(), expected.as_bytes());
+            assert_eq!(state.selection(), after);
+        }
     }
+    // Even when alignment is already correct, the command separates typing
+    // gestures without inserting a fake source change into shared history.
+    let source = "| a |\r\n| --- |\n| b |";
+    let mut document = MarkdownDocument::new(source.into(), TextFormat::default());
+    let mut state = PresentationState::new(Selection::caret(3));
+    document.command(&mut state, Command::Insert("X".into()));
+    table_command(&mut document, &mut state, Operation::AlignDefault);
+    document.command(&mut state, Command::Insert("Y".into()));
+    assert_eq!(document.encode().unwrap(), b"| aXY |\r\n| --- |\n| b |");
+    document.command(&mut state, Command::Undo);
+    assert_eq!(document.encode().unwrap(), b"| aX |\r\n| --- |\n| b |");
+    document.command(&mut state, Command::Undo);
+    assert_eq!(document.encode().unwrap(), source.as_bytes());
     for (source, token, operation, expected) in [
         (
             "| a |\r\n| --- |\n| b |\r\n| c |",
