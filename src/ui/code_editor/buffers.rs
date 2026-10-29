@@ -42,6 +42,7 @@ pub(super) struct OpenTarget {
     pub(super) tab: TabId,
     pub(super) group: Option<split::GroupId>,
     pub(super) window_host: HostId,
+    pub(super) origin: Option<(BufferId, u64)>,
 }
 
 pub(super) enum OpenResult {
@@ -419,6 +420,7 @@ impl EditorBuffers {
                     markdown::DocumentEvent::PresentationChanged
                     | markdown::DocumentEvent::ResourceContextChanged
                     | markdown::DocumentEvent::ImagesChanged => cx.notify(),
+                    markdown::DocumentEvent::FollowLink { .. } => {},
                 },
             );
             let presentation = cx.new(|cx| markdown::SourcePresentation::new(document, wrap, cx));
@@ -482,6 +484,7 @@ impl EditorBuffers {
             popups,
             _sub: sub,
             _observe: observe,
+            _links_sub: None,
         });
         id
     }

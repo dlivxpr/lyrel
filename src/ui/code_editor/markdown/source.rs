@@ -11,6 +11,8 @@ use gpui_kit::*;
 use std::collections::HashMap;
 gpui_kit::actions!(markdown_images, [LoadImages]);
 
+actions!(markdown_links, [EditLinkDestination, FollowLink]);
+
 struct CachedBlock {
     version: u64,
     seen: u64,
@@ -48,6 +50,7 @@ impl SourcePresentation {
         wrap: bool,
         cx: &mut Context<Self>,
     ) -> Self {
+        super::lists::init(cx);
         let observe = cx.subscribe(&document, |this, _, event: &DocumentEvent, cx| {
             if matches!(event, DocumentEvent::ResourceContextChanged | DocumentEvent::ImagesChanged) {
                 this.refresh_images(false, cx);
@@ -328,26 +331,46 @@ impl SourcePresentation {
             command => command,
         };
         let cell_input = |range: &Range<usize>, text: String, selected| {
-            if self.live && self.projection.leaf_at(range.start).is_some_and(|leaf| {
-                matches!(leaf.kind, Kind::TableCell(_)) && range.end <= leaf.range.end
-            }) {
+            if self.live
+                && self.projection.leaf_at(range.start).is_some_and(|leaf| {
+                    matches!(leaf.kind, Kind::TableCell(_)) && range.end <= leaf.range.end
+                })
+            {
                 super::tables::input(self.document.read(cx).source(), range, text, selected)
             } else {
                 (text, selected)
             }
         };
         let command = match command {
-            Command::Insert(text) => Command::Insert(cell_input(&self.state.selection.range(), text, None).0),
+            Command::Insert(text) => {
+                Command::Insert(cell_input(&self.state.selection.range(), text, None).0)
+            }
             Command::Commit(text) => {
-                let range = self.state.marked_range().unwrap_or_else(|| self.state.selection.range());
+                let range = self
+                    .state
+                    .marked_range()
+                    .unwrap_or_else(|| self.state.selection.range());
                 Command::Commit(cell_input(&range, text, None).0)
             }
-            Command::Compose { range, text, selected } => {
-                let target = range.clone().or_else(|| self.state.marked_range()).unwrap_or_else(|| self.state.selection.range());
+            Command::Compose {
+                range,
+                text,
+                selected,
+            } => {
+                let target = range
+                    .clone()
+                    .or_else(|| self.state.marked_range())
+                    .unwrap_or_else(|| self.state.selection.range());
                 let (text, selected) = cell_input(&target, text, selected);
-                Command::Compose { range, text, selected }
+                Command::Compose {
+                    range,
+                    text,
+                    selected,
+                }
             }
-            Command::Replace { range, text, kind } if matches!(kind, EditKind::Typing | EditKind::Paste) => {
+            Command::Replace { range, text, kind }
+                if matches!(kind, EditKind::Typing | EditKind::Paste) =>
+            {
                 let (text, _) = cell_input(&range, text, None);
                 Command::Replace { range, text, kind }
             }
@@ -468,6 +491,25 @@ impl SourcePresentation {
         self.reveal_at = None;
         cx.notify();
     }
+    fn edit_link_destination(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.projection.revision != self.document.read(cx).revision() { return; }
+        let Some(range) = self.projection.links.at(self.state.selection.head()).map(|link| link.destination.clone()) else { return; };
+        self.command(Command::Select(Selection::new(range.start, range.end)), window, cx);
+        self.focus.focus(window, cx);
+    }
+    fn follow_link(&mut self, target: String, cx: &mut Context<Self>) {
+        if self.projection.revision != self.document.read(cx).revision() { return; }
+        if let Some(fragment) = target.strip_prefix('#') {
+            if let Some(at) = self.projection.links.anchor(fragment) {
+                self.select_range(at..at, cx);
+                self.reveal_caret = true;
+            }
+            return;
+        }
+        let presentation = cx.entity().entity_id();
+        let revision = self.document.read(cx).revision();
+        self.document.update(cx, |_, cx| cx.emit(DocumentEvent::FollowLink { presentation, revision, target }));
+    }
     fn caret_bounds(&self, byte: usize, cx: &App) -> Option<Bounds<Pixels>> {
         let (revision, geometry) = self.geometry.as_ref()?;
         if *revision != self.document.read(cx).revision() {
@@ -491,7 +533,11 @@ impl SourcePresentation {
         }
         let (id, leaf) = geometry.iter().min_by(|(a_id, a), (b_id, b)| {
             let distance = |id: &u64, leaf: &LeafGeometry| {
-                let bounds = self.table_geometry.get(id).copied().unwrap_or_else(|| leaf.bounds());
+                let bounds = self
+                    .table_geometry
+                    .get(id)
+                    .copied()
+                    .unwrap_or_else(|| leaf.bounds());
                 let dy = if point.y < bounds.top() {
                     bounds.top() - point.y
                 } else if point.y > bounds.bottom() {
@@ -631,11 +677,22 @@ impl SourcePresentation {
             }
         }
     }
-    fn navigate_table(&mut self, backward: bool, exit: bool, window: &mut Window, cx: &mut Context<Self>) -> bool {
+    fn navigate_table(
+        &mut self,
+        backward: bool,
+        exit: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
         if !self.live || self.projection.revision != self.document.read(cx).revision() {
             return false;
         }
-        let Some(target) = super::tables::navigate(&self.projection.leaves, self.state.selection.head, backward, exit) else {
+        let Some(target) = super::tables::navigate(
+            &self.projection.leaves,
+            self.state.selection.head,
+            backward,
+            exit,
+        ) else {
             return false;
         };
         self.command(Command::FinishComposition, window, cx);
@@ -651,6 +708,16 @@ impl SourcePresentation {
     fn indent_selection(&mut self, outdent: bool, window: &mut Window, cx: &mut Context<Self>) {
         if self.navigate_table(outdent, false, window, cx) {
             return;
+        }
+        let structure = self.projection.leaf_at(self.state.selection.range().start).and_then(|leaf| match leaf.kind {
+            Kind::List(style) | Kind::Quote(style) => Some(style),
+            _ => None,
+        });
+        if self.live && self.extra_selections.is_empty() {
+            if let Some(style) = structure {
+                self.command(Command::ListIndent { outdent, width: self.indent.size, at: Some(style.start) }, window, cx);
+                return;
+            }
         }
         let selected = self.state.selection.range();
         let text = if self.indent.hard_tabs {
@@ -796,6 +863,16 @@ impl SourcePresentation {
             return;
         }
         let mut range = self.state.selection.range();
+        let structure = self.projection.leaf_at(range.start).and_then(|leaf| match leaf.kind {
+            Kind::List(style) | Kind::Quote(style) => Some(style),
+            _ => None,
+        });
+        if self.live && self.extra_selections.is_empty() {
+            if let Some(style) = structure {
+                self.command(Command::ListBreak { hard, at: Some(style.start) }, window, cx);
+                return;
+            }
+        }
         let region = self
             .live
             .then(|| self.projection.leaf_at(range.start))
@@ -843,6 +920,12 @@ impl SourcePresentation {
             && ((backward && at <= leaf.content_start()) || (!backward && at >= leaf.content_end()))
         {
             self.navigate_table(backward, false, window, cx);
+            return;
+        }
+        if backward && matches!(leaf.kind, Kind::List(_) | Kind::Quote(_))
+            && at <= leaf.content_start()
+        {
+            self.command(Command::ListBackspace, window, cx);
             return;
         }
         if super::regions::label(leaf.kind).is_some() {
@@ -1103,7 +1186,7 @@ impl Render for SourcePresentation {
                     let mut paragraph = Paragraph::default().with_leaf_key(leaf.id);
                     let marked = self.state.marked_range();
                     for node in leaf.inline_nodes(marked.as_ref()) { paragraph.push(node); }
-                    cached.node = match leaf.kind {
+                    let mut node = match leaf.kind {
                         Kind::Heading(level) if self.live => BlockNode::Heading {
                             level,
                             children: paragraph,
@@ -1111,6 +1194,24 @@ impl Render for SourcePresentation {
                         },
                         _ => BlockNode::Paragraph(paragraph),
                     };
+                    if self.live {
+                        if let Kind::List(style) | Kind::Quote(style) = leaf.kind {
+                            if style.task.is_none() {
+                                if let Some(marker) = style.marker {
+                                    node = BlockNode::List {
+                                        children: vec![BlockNode::ListItem { children: vec![node], spread: false, checked: None, span: None }],
+                                        ordered: matches!(marker, super::lists::Marker::Ordered(..)),
+                                        start: match marker { super::lists::Marker::Ordered(number, _) => Some(number), _ => None },
+                                        span: None,
+                                    };
+                                }
+                            }
+                            for _ in 0..style.quotes {
+                                node = BlockNode::Blockquote { children: vec![node], span: None };
+                            }
+                        }
+                    }
+                    cached.node = node;
                     cached.version = leaf.version;
                 }
                 cached.seen = self.render_generation;
@@ -1125,12 +1226,17 @@ impl Render for SourcePresentation {
                     let end = ix + self.projection.leaves[ix..].iter().take_while(|leaf| {
                         matches!(leaf.kind, Kind::TableCell(other) if other.table() == cell.table())
                     }).count();
-                    self.tables.insert(leaf.id, super::tables::block(
-                        self.projection.leaves[ix..end].iter().filter_map(|leaf| {
-                            let Kind::TableCell(cell) = leaf.kind else { return None; };
-                            Some((cell, &self.blocks[&leaf.id].node))
-                        }),
-                    ));
+                    self.tables.insert(
+                        leaf.id,
+                        super::tables::block(self.projection.leaves[ix..end].iter().filter_map(
+                            |leaf| {
+                                let Kind::TableCell(cell) = leaf.kind else {
+                                    return None;
+                                };
+                                Some((cell, &self.blocks[&leaf.id].node))
+                            },
+                        )),
+                    );
                     ix = end;
                 } else {
                     ix += 1;
@@ -1138,6 +1244,7 @@ impl Render for SourcePresentation {
             }
             self.rendered_revision = Some(revision);
         }
+        let view = cx.entity().downgrade();
         let ready: std::collections::HashMap<_, _> = self.document.read(cx).images.states.iter()
             .filter_map(|(url, state)| if let super::images::State::Ready(image) = state {
                 Some((url.clone(), image.clone()))
@@ -1148,6 +1255,19 @@ impl Render for SourcePresentation {
                     || ImageSource::Custom(std::sync::Arc::new(|_, _| None)),
                     |image| ImageSource::Render(image.clone()),
                 )
+            })
+            .on_link_click(move |target, event, _, cx| {
+                let _ = view.update(cx, |view, cx| {
+                    view.dragging = false;
+                    if view.document.read(cx).revision() != revision || view.projection.revision != revision { return; }
+                    if let ClickEvent::Mouse(click) = event {
+                        if click.up.button == MouseButton::Left && link_modifier(click.up.modifiers) {
+                            if view.projection.links.links.iter().any(|link| link.target == target.as_ref()) {
+                                view.follow_link(target.to_string(), cx);
+                            }
+                        }
+                    }
+                });
             });
         let references: Vec<_> = self
             .projection
@@ -1157,52 +1277,93 @@ impl Render for SourcePresentation {
             .collect();
         let block = div()
             .w_full()
-            .children(self.projection.leaves.iter().enumerate().filter_map(|(ix, leaf)| {
-                if matches!(leaf.kind, Kind::TableCell(_)) && !self.tables.contains_key(&leaf.id) {
-                    return None;
-                }
-                let node = self.tables.get(&leaf.id).unwrap_or(&self.blocks[&leaf.id].node);
-                let rendered = node.render_with_id(
-                    ("markdown-leaf", leaf.id),
-                    FlowPosition::at(&references, ix, ix + 1 == references.len())
-                        .first(true)
-                        .last(true),
-                    &context,
-                    window,
-                    cx,
-                );
-                Some(div()
-                    .id(("markdown-block", leaf.id))
-                    .w_full()
-                    .when(
-                        self.live
-                            && super::regions::label(leaf.kind).is_some()
-                            && !leaf.text.is_empty(),
-                        |block| {
-                            block
-                                .font_family(cx.theme().mono_font_family.clone())
-                                .child(
-                                    div()
-                                        .text_xs()
-                                        .text_color(cx.theme().muted_foreground)
-                                        .child(crate::ui::i18n::t(
-                                            super::regions::label(leaf.kind)
-                                                .expect("source region label"),
-                                        )),
-                                )
-                        },
-                    )
-                    .when(self.live && leaf.kind == Kind::Rule, |block| {
-                        block.child(BlockNode::HorizontalRule { span: None }.render_with_id(
-                            ("markdown-rule", leaf.id),
-                            FlowPosition::at(&references, ix, true),
+            .children(
+                self.projection
+                    .leaves
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(ix, leaf)| {
+                        if matches!(leaf.kind, Kind::TableCell(_))
+                            && !self.tables.contains_key(&leaf.id)
+                        {
+                            return None;
+                        }
+                        let node = self
+                            .tables
+                            .get(&leaf.id)
+                            .unwrap_or(&self.blocks[&leaf.id].node);
+                        let rendered = node.render_with_id(
+                            ("markdown-leaf", leaf.id),
+                            FlowPosition::at(&references, ix, ix + 1 == references.len())
+                                .first(true)
+                                .last(true),
                             &context,
                             window,
                             cx,
-                        ))
-                    })
-                    .child(rendered))
-            }));
+                        );
+                        Some(
+                            div()
+                                .id(("markdown-block", leaf.id))
+                                .w_full()
+                                .when(
+                                    self.live
+                                        && super::regions::label(leaf.kind).is_some()
+                                        && !leaf.text.is_empty(),
+                                    |block| {
+                                        block
+                                            .font_family(cx.theme().mono_font_family.clone())
+                                            .child(
+                                                div()
+                                                    .text_xs()
+                                                    .text_color(cx.theme().muted_foreground)
+                                                    .child(crate::ui::i18n::t(
+                                                        super::regions::label(leaf.kind)
+                                                            .expect("source region label"),
+                                                    )),
+                                            )
+                                    },
+                                )
+                                .when(self.live && leaf.kind == Kind::Rule, |block| {
+                                    block.child(
+                                        BlockNode::HorizontalRule { span: None }.render_with_id(
+                                            ("markdown-rule", leaf.id),
+                                            FlowPosition::at(&references, ix, true),
+                                            &context,
+                                            window,
+                                            cx,
+                                        ),
+                                    )
+                                })
+                                .child({
+                                    let style = match leaf.kind {
+                                        Kind::List(style) | Kind::Quote(style) if self.live => Some(style),
+                                        _ => None,
+                                    };
+                                    if let Some(style) = style {
+                                        let mut row = div().flex().items_start().min_w_0().w_full();
+                                        let levels = style.depth.saturating_sub(1)
+                                            + usize::from(style.depth > 0 && style.marker.is_none());
+                                        row = row.pl(rems(levels as f32 * 1.5));
+                                        if let Some(checked) = style.task {
+                                            let at = leaf.range.start;
+                                            row = row.gap_2().child(
+                                                gpui_kit::component::checkbox::Checkbox::new(("markdown-task", leaf.id))
+                                                    .checked(checked)
+                                                    .accessibility_label(format!("Toggle task: {}", leaf.text))
+                                                    .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                                                    .on_change(cx.listener(move |this, _, window, cx| {
+                                                        this.command(Command::ToggleTask { at }, window, cx);
+                                                    })),
+                                            );
+                                        }
+                                        row.child(div().flex_1().min_w_0().child(rendered)).into_any_element()
+                                    } else {
+                                        rendered
+                                    }
+                                }),
+                        )
+                    }),
+            );
         let image_status = if self.live {
             use crate::ui::i18n::{t, L10nKey};
             use gpui_kit::component::{button::{Button, ButtonVariants as _}, Sizable as _};
@@ -1229,13 +1390,13 @@ impl Render for SourcePresentation {
                 .children(rows)).into_any_element()
         } else { div().into_any_element() };
         let key_context =
-            KeyContext::parse("Input mode=editor").expect("static editor key context");
+            KeyContext::parse("Input mode=editor Markdown").expect("static editor key context");
         let root =
             div()
                 .id("markdown-source")
                 .test_support()
                 .size_full()
-                .v_flex()
+                .flex().flex_col()
                 .min_h_0()
                 .key_context(key_context)
                 .track_focus(&self.focus)
@@ -1287,12 +1448,26 @@ impl Render for SourcePresentation {
                     }
                 }))
                 .on_action(cx.listener(|view, _: &LoadImages, _, cx| view.refresh_images(true, cx)))
+                .on_action(cx.listener(|this, _: &EditLinkDestination, window, cx| {
+                    this.edit_link_destination(window, cx);
+                }))
+                .on_action(cx.listener(|this, _: &FollowLink, _, cx| {
+                    if let Some(link) = this.projection.links.at(this.state.selection.head()).cloned() {
+                        this.follow_link(link.target, cx);
+                    }
+                }))
                 .on_mouse_down(
                     MouseButton::Left,
                     cx.listener(|this, event: &MouseDownEvent, window, cx| {
                         this.focus.focus(window, cx);
-                        this.dragging = true;
-                        this.select_point(event.position, event.modifiers.shift, window, cx);
+                        if link_modifier(event.modifiers)
+                            && this.point_offset(event.position, cx).is_some_and(|at| this.projection.links.at(at).is_some_and(|link| link.label.start <= at && at <= link.label.end))
+                        {
+                            this.dragging = false;
+                        } else {
+                            this.dragging = true;
+                            this.select_point(event.position, event.modifiers.shift, window, cx);
+                        }
                         cx.stop_propagation();
                     }),
                 )
@@ -1323,6 +1498,19 @@ impl Render for SourcePresentation {
                 }))
                 .on_action(cx.listener(|this, _: &actions::Redo, window, cx| {
                     this.command(Command::Redo, window, cx)
+                }))
+                .on_action(cx.listener(|this, _: &super::lists::ToggleTask, window, cx| {
+                    let task = this.projection.leaf_at(this.state.selection.head).and_then(|leaf| match leaf.kind {
+                        Kind::List(style) if style.task.is_some() => Some(style.start),
+                        _ => None,
+                    });
+                    if this.live && !this.is_composing() {
+                        if let Some(at) = task {
+                            this.command(Command::ToggleTask { at }, window, cx);
+                            return;
+                        }
+                    }
+                    cx.propagate();
                 }))
                 .on_action(cx.listener(|this, _: &actions::Backspace, window, cx| {
                     this.delete_prose(true, window, cx)
@@ -1495,12 +1683,31 @@ impl Render for SourcePresentation {
                     }
                 }))
                 .child(image_status)
+                .when(self.live && self.projection.links.at(self.state.selection.head()).is_some(), |root| {
+                    use gpui_kit::component::button::{Button, ButtonVariants as _};
+                    use gpui_kit::component::Sizable as _;
+                    root.child(gpui_kit::component::h_flex().gap_2().flex_none()
+                        .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                        .child(Button::new("markdown-link-destination").small().ghost()
+                            .label(crate::ui::i18n::t(if self.projection.links.at(self.state.selection.head())
+                                .is_some_and(|link| !link.source.contains(&link.destination.start)) {
+                                    crate::ui::i18n::L10nKey::MarkdownEditReferenceDestination
+                                } else { crate::ui::i18n::L10nKey::MarkdownEditLinkDestination }))
+                            .on_click(cx.listener(|this, _, window, cx| this.edit_link_destination(window, cx))))
+                        .child(Button::new("markdown-follow-link").small().ghost()
+                            .label(crate::ui::i18n::t(crate::ui::i18n::L10nKey::MarkdownFollowLink))
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                this.focus.focus(window, cx);
+                                if let Some(link) = this.projection.links.at(this.state.selection.head()).cloned() {
+                                    this.follow_link(link.target, cx);
+                                }
+                            }))))
+                })
                 .child(crate::ui::scrollbar::with_vertical_scrollbar(
                     "markdown-source-scrollbar",
                     div()
                         .id("markdown-source-scroll")
-                        .size_full()
-                        .flex_1().min_h_0()
+                        .flex_1().min_h_0().w_full()
                         .overflow_y_scroll()
                         .overflow_x_scroll()
                         .track_scroll(&self.scroll)
@@ -1696,4 +1903,9 @@ impl Element for SourceElement {
             }
         }
     }
+}
+
+fn link_modifier(modifiers: Modifiers) -> bool {
+    if cfg!(target_os = "macos") { modifiers.platform && !modifiers.control && !modifiers.alt && !modifiers.shift }
+    else { modifiers.control && !modifiers.platform && !modifiers.alt && !modifiers.shift }
 }

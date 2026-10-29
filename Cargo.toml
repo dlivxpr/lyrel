@@ -161,7 +161,7 @@ notify = "8"
 
 # Rasterize the application tray SVG. Kit's platform/component layers also
 # carry their published SVG versions; do not patch those copies to unify them.
-resvg = { version = "0.48.1", default-features = false, features = ["text", "system-fonts", "raster-images", "svgz"] }
+resvg = { version = "0.48.1", default-features = false }
 
 # Native tray on Windows and macOS.
 tray-icon = "0.26.1"
