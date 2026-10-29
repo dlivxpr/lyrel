@@ -146,6 +146,7 @@ pub(crate) struct OpenFile {
     popups: Option<Entity<crate::ui::lsp::popups::EditorPopups>>,
     _sub: Subscription,
     _observe: Subscription,
+    _links_sub: Option<Subscription>,
 }
 
 impl OpenFile {
@@ -879,6 +880,19 @@ impl LyrelApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        self.editor_open_request(host, path, cursor, None, window, cx);
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn editor_open_request(
+        &mut self,
+        host: SharedHost,
+        path: &Path,
+        cursor: Option<Position>,
+        origin: Option<(BufferId, u64)>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let Some(tab) = self.tabs.get(self.tabs.active_index()).map(|tab| tab.id()) else {
             return;
         };
@@ -891,6 +905,7 @@ impl LyrelApp {
             tab,
             group: Some(group),
             window_host: self.spawn_host(cx),
+            origin,
         };
         let reused = self.editor.buffers.open(
             host,
@@ -912,7 +927,17 @@ impl LyrelApp {
     fn editor_open_target_valid(&self, target: buffers::OpenTarget, cx: &gpui_kit::App) -> bool {
         self.workspace == target.workspace
             && self.spawn_host(cx) == target.window_host
-            && self.tab_index_of(target.tab).is_some()
+            && self.tabs.iter().find(|tab| tab.id() == target.tab).is_some_and(|tab| {
+                target.group.is_none_or(|group| tab.code.as_ref().is_some_and(|code| {
+                    code.group == group || code.split.as_ref().is_some_and(|other| other.id == group)
+                }))
+            })
+            && target.origin.is_none_or(|(id, revision)| {
+                self.editor.buffers.get(id).and_then(|file| file.input.markdown())
+                    .is_some_and(|view| view.read(cx).document().read(cx).revision() == revision)
+                    && self.tabs.iter().find(|tab| tab.id() == target.tab)
+                        .and_then(|tab| tab.code.as_ref()).is_some_and(|code| code.shows(id))
+            })
     }
 
     fn editor_opened(
@@ -927,7 +952,7 @@ impl LyrelApp {
                 if created {
                     self.editor_buffer_created(id, window, cx);
                 }
-                self.editor_show_in_tab(target.tab, id, front, window, cx);
+                self.editor_show_open_target(target, id, front, window, cx);
                 self.editor_rebuild_watcher(cx);
             }
             buffers::OpenResult::Failed {
@@ -1032,6 +1057,23 @@ impl LyrelApp {
         cx.notify();
     }
 
+    fn editor_show_open_target(&mut self, target: buffers::OpenTarget, id: BufferId, front: bool, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(other) = self.tabs.iter_mut().find(|tab| tab.id() == target.tab)
+            .and_then(|tab| tab.code.as_mut())
+            .and_then(|code| code.split.as_mut())
+            .filter(|other| Some(other.id) == target.group)
+        {
+            let ix = other.files.iter().position(|entry| *entry == id).unwrap_or_else(|| {
+                other.files.push(id);
+                other.files.len() - 1
+            });
+            if front { other.active = ix; }
+            cx.notify();
+            return;
+        }
+        self.editor_show_in_tab(target.tab, id, front, window, cx);
+    }
+
     /// Makes a buffer out of a loaded file, or finds the one already open for
     /// it, and shows it in `tab`.
     fn editor_install(
@@ -1100,6 +1142,40 @@ impl LyrelApp {
         self.editor
             .nav
             .track_buffer(id, input.read(cx).text().clone());
+        if let Some(presentation) = input.markdown() {
+            let document = presentation.read(cx).document().clone();
+            let subscription = cx.subscribe_in(&document, window, move |app, _, event, window, cx| {
+                if let markdown::DocumentEvent::FollowLink { presentation, revision, target } = event {
+                    app.editor_follow_markdown_link(id, *presentation, *revision, target, window, cx);
+                }
+            });
+            if let Some(file) = self.editor.buffers.get_mut(id) { file._links_sub = Some(subscription); }
+        }
+    }
+
+    fn editor_follow_markdown_link(
+        &mut self,
+        id: BufferId,
+        presentation: gpui_kit::EntityId,
+        revision: u64,
+        target: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        // Events from closed/replaced presentations cannot redirect a newer tab.
+        if self.active_buffer().is_none_or(|file| file.id() != id)
+            || self.active_editor_input().and_then(|input| input.markdown().cloned())
+                .is_none_or(|view| view.entity_id() != presentation || view.read(cx).document().read(cx).revision() != revision)
+        { return; }
+        let Some(file) = self.editor.buffers.get(id) else { return; };
+        let host = file.host.clone();
+        let destination = markdown::links::resolve(&file.path, host.id().is_local(), target);
+        match destination {
+            Ok(markdown::links::Target::External(url)) => cx.open_url(&url),
+            Ok(markdown::links::Target::File(path)) => self.editor_open_request(host, &path, None, Some((id, revision)), window, cx),
+            Ok(markdown::links::Target::Anchor) => {},
+            Err(reason) => window.notify_app(t_fmt(L10nKey::MarkdownLinkOpenFailed, &[("reason", t(reason))]), cx),
+        }
     }
 
     /// Re-derives whether a buffer differs from what is on disk, after an
@@ -2250,6 +2326,7 @@ impl LyrelApp {
             tab: tab_id,
             group: None,
             window_host: self.spawn_host(cx),
+            origin: None,
         };
         self.editor.buffers.restore(
             host.clone(),
