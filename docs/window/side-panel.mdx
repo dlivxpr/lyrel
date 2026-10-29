@@ -296,6 +296,15 @@ Windows 已运行文档事务、共享呈现及既有工作台的定向回归；
 
 任意宏包、文件读取和 TeX 程序执行不在范围内。Mermaid 接受原生实现与 Mermaid.js 的合理字体、布局差异，不要求逐像素一致；图形类型和语法的支持声明必须依据发布版兼容清单与实际样例。未支持或解析失败时保留源码并报告原因，不把显示代码块算作支持渲染。
 
+##### Merman 0.9.2 的原生样式边界
+
+完整目标仍为 34 族、37 行 primary 与独立的 zenuml 对照通道，不因某族失败而缩减。集成回归已观察到平面及带 `systemBoundary` 的 `usecase` 均被原生管线拒绝，实际原因为 `validate-resvg-compatible-svg` 报告 `invalid <style> content: unclosed CSS string, comment, or URL`，不是源码语法错误或缺少 ELK。
+
+该发布版的 Usecase 样式输出先把字体 CSS 字符串的引号写成 XML 字符引用，随后 CSS 清洗器却在解码前解析序列化文本，引用末尾的分号因而截断字体声明。宿主现通过公开 `SvgPostprocessor`，仅在普通 `<style>` 文本中将发布版生成的 `&quot;`／`&#39;` 恢复为 XML 文本允许的字面引号；属性、标签、其他实体与文档源码均不改写，CDATA 保持原样。之后仍执行完整 `resvg_safe` 清洗、资源策略和终态验证，不旁路验证或把错误图当渲染成功。
+
+这项样式边界修复尚未运行回归，不能视为 usecase 已验收；两个原正向消费者及完整矩阵均保留。字体解析、中文／emoji 标签、主题缩放和实际像素仍须 Windows/macOS 分别验收，不承诺浏览器 CSS 或 Mermaid.js 的逐像素等价。
+
+
 公式和 Mermaid 均采用真实渲染加局部源码编辑，不包含 Word 式结构化公式编辑或图表节点、连线拖拽编辑。YAML frontmatter 保留为元数据源码区；原始 HTML 与未适配扩展可原样保留、局部源码编辑，不承诺任意 HTML/CSS 的原生视觉还原。
 
 ##### 结构公式消费者矩阵与验收边界

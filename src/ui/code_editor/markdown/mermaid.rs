@@ -405,7 +405,7 @@ impl Job {
                 environment: SvgEnvironment::deterministic()
                     .with_text_measurement_policy(key.style.measurement()),
                 pipeline: Some(
-                    SvgPipeline::resvg_safe().with_postprocessor(RejectExternalResources),
+                    SvgPipeline::resvg_safe().with_postprocessor(NativeSvgAdmission),
                 ),
                 ..Default::default()
             };
@@ -480,10 +480,10 @@ fn render_failure(error: merman::RenderError) -> Failure {
     }
 }
 
-struct RejectExternalResources;
-impl SvgPostprocessor for RejectExternalResources {
+struct NativeSvgAdmission;
+impl SvgPostprocessor for NativeSvgAdmission {
     fn name(&self) -> &'static str {
-        "lyrel-resource-admission"
+        "lyrel-native-svg-admission"
     }
     fn process<'a>(
         &self,
@@ -505,6 +505,7 @@ impl SvgPostprocessor for RejectExternalResources {
             css.to_ascii_lowercase().contains("@import")
                 || URL.captures_iter(css).any(|capture| external(&capture[1]))
         };
+        let mut quotes = Vec::new();
         for node in document.descendants().filter(|node| node.is_element()) {
             let tag = node.tag_name().name();
             for attribute in node.attributes() {
@@ -535,7 +536,36 @@ impl SvgPostprocessor for RejectExternalResources {
                     "lyrel-external-resource",
                 ));
             }
+            if tag == "style" && !svg[node.range()].contains("<![CDATA[") {
+                // Merman 0.9.2's Usecase writer XML-escapes CSS string quotes,
+                // but its CSS sanitizer tokenizes the serialized XML text before
+                // decoding entities. The entity semicolon then ends font-family
+                // prematurely, and final validation sees an unclosed CSS string.
+                // Literal quotes are valid XML character data. Restore only the
+                // writer's quote references, before the full native-safe preset;
+                // never decode attributes, markup, ampersands or active content.
+                for text in node.children().filter(|child| child.is_text()) {
+                    let range = text.range();
+                    for (offset, _) in svg[range.clone()].match_indices('&') {
+                        let start = range.start + offset;
+                        if svg[start..range.end].starts_with("&quot;") {
+                            quotes.push((start..start + "&quot;".len(), '"'));
+                        } else if svg[start..range.end].starts_with("&#39;") {
+                            quotes.push((start..start + "&#39;".len(), '\''));
+                        }
+                    }
+                }
+            }
         }
-        Ok(svg)
+        if quotes.is_empty() { return Ok(svg); }
+        let mut normalized = String::with_capacity(svg.len());
+        let mut cursor = 0;
+        for (range, quote) in quotes {
+            normalized.push_str(&svg[cursor..range.start]);
+            normalized.push(quote);
+            cursor = range.end;
+        }
+        normalized.push_str(&svg[cursor..]);
+        Ok(Cow::Owned(normalized))
     }
 }
