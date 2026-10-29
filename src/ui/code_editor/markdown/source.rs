@@ -120,9 +120,8 @@ impl SourcePresentation {
         let mermaid_theme = cx.observe_global::<gpui_kit::component::Theme>(|this, cx| {
             this.schedule_mermaid(cx);
             cx.notify();
-            this.geometry = None;
+            this.invalidate_layout(cx);
             this.viewport.layout = None;
-            this.reveal_caret = true;
         });
         Self {
             document,
@@ -924,7 +923,7 @@ impl SourcePresentation {
                 self.state.selection.range().end
             }
         } else if self.live {
-            self.visible_step(current, horizontal < 0)
+            self.visible_step(current, horizontal < 0, cx)
         } else if horizontal < 0 {
             doc.previous(current)
         } else {
@@ -1202,10 +1201,14 @@ impl SourcePresentation {
             self.add_selection(offset..offset, cx);
         }
     }
-    fn visible_step(&self, at: usize, backward: bool) -> usize {
+    fn visible_step(&self, at: usize, backward: bool, cx: &App) -> usize {
         let Some(leaf) = self.projection.leaf_at(at) else {
             return at;
         };
+        if leaf.deferred {
+            let document = self.document.read(cx);
+            return if backward { document.previous(at) } else { document.next(at) };
+        }
         let display = leaf.display_offset(at);
         if backward {
             if let Some((ix, _)) = leaf
@@ -1378,7 +1381,7 @@ impl SourcePresentation {
                     }
                 })
         } else {
-            let next = self.visible_step(at, backward);
+            let next = self.visible_step(at, backward, cx);
             Some(next.min(at)..next.max(at))
         };
         if let Some(range) = other.filter(|range| !range.is_empty()) {
@@ -1621,7 +1624,14 @@ impl Render for SourcePresentation {
             }
             let height = self.viewport.heights.get(&leaf.id)
                 .filter(|(version, _)| *version == leaf.version)
-                .map_or(window.rem_size() * 2., |(_, height)| *height);
+                .map_or_else(|| {
+                    let lines = if leaf.deferred && self.wrap {
+                        let width = self.viewport.bounds.map_or(window.rem_size() * 40., |bounds| bounds.size.width);
+                        let columns = (f32::from(width) / f32::from(window.rem_size()) * 1.5).max(1.);
+                        (leaf.range.len() as f32 / columns).ceil().max(1.)
+                    } else { 1. };
+                    window.rem_size() * (lines * 1.5 + 0.5)
+                }, |(_, height)| *height);
             if y + height >= top - screen && y <= top + screen * 2. {
                 if visible.is_none() { before = y; }
                 through = y + height;
@@ -1649,6 +1659,9 @@ impl Render for SourcePresentation {
         }
         let after = (y - through).max(Pixels::ZERO);
         let revision = self.projection.revision;
+        for leaf in &mut self.projection.leaves[visible.clone()] {
+            leaf.materialize(self.document.read(cx).source());
+        }
         {
             self.render_generation += 1;
             for leaf in &self.projection.leaves[visible.clone()] {
@@ -2543,7 +2556,7 @@ impl Element for SourceElement {
                 .map(|(id, _, row)| (*id, row.top()));
             view.viewport.offset = offset;
             if reflow {
-                view.reveal_caret = view.focus.is_focused(window);
+                view.invalidate_layout(cx);
             }
             if measured || reflow { cx.notify(); }
             let previous_caret = view.caret_bounds(view.state.selection.head, cx);

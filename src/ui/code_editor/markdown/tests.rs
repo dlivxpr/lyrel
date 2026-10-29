@@ -4099,6 +4099,7 @@ fn native_long_document_scroll_return_reflow_and_pending_parse_keep_selection_an
         source.push_str(&format!("Paragraph {ix}: wrapped prose 中e\u{301} with **emphasis** and enough words to wrap on a narrow surface.\n\n* parent\n  + nested\n\n```rust\nlet n = {ix};\n```\n\n| Left | Right |\n| --- | --- |\n| a wide cell with retained source | value |\n\n"));
     }
     source.push_str("last editable paragraph");
+    source.push_str(&" wide 中e\u{301} 👩‍💻".repeat(3000));
     std::fs::write(&path, &source).unwrap();
     let (app, mut context, _streams) = harness_with_tabs(cx, 1);
     context.update(|_, cx| cx.set_global(super::super::MarkdownWorkbench));
@@ -4163,4 +4164,23 @@ fn native_long_document_scroll_return_reflow_and_pending_parse_keep_selection_an
     context.dispatch_action(gpui_kit::component::input::Undo);
     context.run_until_parked();
     view.read_with(&context, |view, cx| assert_eq!(view.document().read(cx).encode().unwrap(), source.as_bytes()));
+}
+
+#[test]
+fn wide_single_line_transactions_keep_chunk_crossing_graphemes_atomic() {
+    let prefix = "wide ".repeat(20_000);
+    let cluster = "👩‍💻e\u{301}";
+    let source = format!("{prefix}{cluster}{}", " tail".repeat(20_000));
+    let mut document = MarkdownDocument::new(source.clone(), TextFormat::default());
+    let mut state = PresentationState::default();
+    document.command(&mut state, Command::Select(Selection::caret(prefix.len() + "👩‍💻".len())));
+    document.command(&mut state, Command::Backspace);
+    assert_eq!(document.source().to_string(), format!("{prefix}e\u{301}{}", " tail".repeat(20_000)));
+    document.command(&mut state, Command::Undo);
+    assert_eq!(document.encode().unwrap(), source.as_bytes());
+    document.command(&mut state, Command::Select(Selection::caret(prefix.len() + cluster.len())));
+    document.command(&mut state, Command::Backspace);
+    assert_eq!(document.source().to_string(), format!("{prefix}👩‍💻{}", " tail".repeat(20_000)));
+    document.command(&mut state, Command::Undo);
+    assert_eq!(document.encode().unwrap(), source.as_bytes());
 }

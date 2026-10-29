@@ -52,6 +52,7 @@ pub(super) struct Leaf {
     pub range: Range<usize>,
     pub text: String,
     pub kind: Kind,
+    pub deferred: bool,
     segments: Vec<Segment>,
     insertion: usize,
     content: String,
@@ -69,6 +70,7 @@ impl Leaf {
             range,
             text: String::new(),
             kind,
+            deferred: false,
             segments: Vec::new(),
             content: String::new(),
             container: None,
@@ -76,6 +78,13 @@ impl Leaf {
             style: InlineStyle::default(),
             image_definitions: Default::default(),
         }
+    }
+    pub fn materialize(&mut self, source: &Rope) {
+        if !self.deferred { return; }
+        let text = source.slice(self.range.clone()).to_string();
+        self.push(self.range.clone(), &text);
+        self.rebuild(None);
+        self.deferred = false;
     }
     pub(super) fn empty_insertion(&mut self, at: usize) {
         if self.segments.is_empty() {
@@ -355,6 +364,7 @@ impl Leaf {
             })
     }
     pub fn display_offset(&self, source: usize) -> usize {
+        if self.deferred { return source.saturating_sub(self.range.start).min(self.range.len()); }
         for span in &self.segments {
             if source <= span.source.start {
                 return span.display.start;
@@ -373,6 +383,7 @@ impl Leaf {
         self.text.len()
     }
     pub fn source_offset(&self, display: usize) -> usize {
+        if self.deferred { return (self.range.start + display).min(self.range.end); }
         // A shared visual edge belongs inside the preceding closing delimiter;
         // opening delimiters instead select the first visible content byte.
         if let Some(closing) = self.segments.iter().rev().find(|segment| {
@@ -411,6 +422,7 @@ impl Leaf {
         self.source_offset(0)
     }
     pub fn content_end(&self) -> usize {
+        if self.deferred { return self.range.end; }
         self.source_offset(self.text.len())
     }
     fn shift(&mut self, old_start: usize, new_start: usize) {
@@ -1029,10 +1041,27 @@ impl Projection {
         for leaf in self.leaves.iter_mut().skip(last) {
             leaf.shift(leaf.range.start, map(leaf.range.start));
         }
-        let fragment = source.slice(start..end).to_string();
-        let mut patch = Self::parse_fragment(&fragment, transaction.revision(), local_live && fragment.len() <= INPUT_PARSE_LIMIT, start == 0);
-        for leaf in &mut patch.leaves {
-            leaf.shift(0, start);
+        let mut patch = if end - start <= INPUT_PARSE_LIMIT {
+            let fragment = source.slice(start..end).to_string();
+            let mut leaves = Self::parse_fragment(&fragment, transaction.revision(), local_live, start == 0).leaves;
+            for leaf in &mut leaves { leaf.shift(0, start); }
+            leaves
+        } else {
+            // Do not copy a document-sized paragraph/table just to keep input
+            // current. These range-only leaves borrow no second source; only
+            // the visible chunks materialize from the authoritative Rope.
+            let mut leaves = Vec::new();
+            let mut at = start;
+            while at < end {
+                let next = super::MarkdownDocument::source_boundary(source, (at + INPUT_PARSE_LIMIT / 2).min(end), true).min(end);
+                let mut leaf = Leaf::new(at..next, Kind::Source);
+                leaf.deferred = true;
+                leaves.push(leaf);
+                at = next;
+            }
+            leaves
+        };
+        for leaf in &mut patch {
             leaf.id = if let Some(ix) = identities.iter().position(|(at, _)| leaf.range.contains(at) || leaf.range.end == *at) {
                 // One old identity can belong to only one new leaf after a
                 // split. In particular, adjacent empty leaves cannot share it.
@@ -1059,7 +1088,7 @@ impl Projection {
                     |old| old.version,
                 );
         }
-        self.leaves.splice(first..last, patch.leaves);
+        self.leaves.splice(first..last, patch);
         self.revision = transaction.revision();
     }
 }
