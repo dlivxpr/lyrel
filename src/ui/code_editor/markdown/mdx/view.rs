@@ -45,8 +45,8 @@ impl<'a> FieldContext<'a> {
 /// component name, then decorate `content` using the same FieldContext. A normal
 /// Markdown child has field=None; metadata-only Children marks the child boundary.
 /// Returning content unchanged preserves its native continuous surface.
-pub(in super::super) fn render_field(context: &FieldContext<'_>, content: AnyElement, _: &mut Window, cx: &mut Context<SourcePresentation>) -> AnyElement {
-    if context.field.is_some() { return render_generic(context, content, cx); }
+pub(in super::super) fn render_field(context: &FieldContext<'_>, content: AnyElement, window: &mut Window, cx: &mut Context<SourcePresentation>) -> AnyElement {
+    if context.field.is_some() { return render_component(context, content, window, cx); }
     // JSX inside headings, formatted spans or table cells keeps that leaf's
     // native geometry. Its structure controls select the positioned source in
     // the same input handler instead of installing another nested editor.
@@ -54,7 +54,7 @@ pub(in super::super) fn render_field(context: &FieldContext<'_>, content: AnyEle
         let range = component.source_range();
         context.range.start <= range.start && range.end <= context.range.end
     }).peekable();
-    if embedded.peek().is_none() { return content; }
+    if embedded.peek().is_none() { return render_component(context, content, window, cx); }
     let mut controls = div().w_full().flex().flex_col().gap_1();
     for component in embedded {
         let mut fields = div().id(("mdx-component", component.id().value())).w_full();
@@ -63,18 +63,28 @@ pub(in super::super) fn render_field(context: &FieldContext<'_>, content: AnyEle
             source: context.source, state: context.state, revision: context.revision,
             grammar: context.grammar, index: context.index, range: component.source_range(),
         };
-        fields = fields.child(render_generic(&field_context(Field::Name, None), div().into_any_element(), cx));
+        fields = fields.child(render_component(&field_context(Field::Name, None), div().into_any_element(), window, cx));
         for property in component.properties() {
             fields = fields.child(div().id(("mdx-property", property.source_range().start as u64))
-                .child(render_generic(&field_context(Field::Property(property.kind()), Some(property)), div().into_any_element(), cx)));
+                .child(render_component(&field_context(Field::Property(property.kind()), Some(property)), div().into_any_element(), window, cx)));
         }
-        fields = fields.child(render_generic(&field_context(Field::Children, None), div().into_any_element(), cx));
+        fields = fields.child(render_component(&field_context(Field::Children, None), div().into_any_element(), window, cx));
         controls = controls.child(fields);
     }
-    controls.child(content).into_any_element()
+    render_component(context, controls.child(content).into_any_element(), window, cx)
 }
 
-fn render_generic(context: &FieldContext<'_>, content: AnyElement, cx: &mut Context<SourcePresentation>) -> AnyElement {
+fn render_component(context: &FieldContext<'_>, content: AnyElement, window: &mut Window, cx: &mut Context<SourcePresentation>) -> AnyElement {
+    if let Some(component) = context.component() {
+        let name = context.source().slice(component.name_range()).to_string();
+        if super::callouts::matches(&name) {
+            return super::callouts::render(context, content, window, cx);
+        }
+    }
+    render_generic(context, content, cx)
+}
+
+pub(in super::super) fn render_generic(context: &FieldContext<'_>, content: AnyElement, cx: &mut Context<SourcePresentation>) -> AnyElement {
     let Some(field) = context.field else { return content; };
     let mut header = div().flex().flex_col().gap_1().text_xs().text_color(cx.theme().muted_foreground);
     if field == Field::Name { header = header.child(t(L10nKey::EditorMdxGeneric)); }
@@ -99,17 +109,19 @@ fn render_generic(context: &FieldContext<'_>, content: AnyElement, cx: &mut Cont
         let expansion = context.component.filter(|component| field == Field::Children && component.closing_name_range().is_none()).map(|component| {
             (component.source_range().end - 2..component.source_range().end, context.source.slice(component.name_range()).to_string(), component.is_flow())
         });
-        header = header.child(Button::new(SharedString::from(id)).ghost().xsmall()
-            .label(t(key)).accessibility_label(accessibility)
+        header = header.child(div()
             .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+            .child(Button::new(SharedString::from(id)).ghost().small()
+            .label(t(key)).accessibility_label(accessibility)
             .on_click(cx.listener(move |this, _, window, cx| {
                 if this.document().read(cx).revision() != revision || this.document().read(cx).grammar() != grammar { return; }
+                this.command(Command::FinishComposition, window, cx);
                 if let Some((ending, name, block)) = &expansion {
                     this.command(Command::ExpandComponent { ending: ending.clone(), name: name.clone(), block: *block }, window, cx);
                 } else { this.command(Command::Select(Selection::new(range.start, range.end)), window, cx); }
                 this.focus_handle(cx).focus(window, cx);
                 cx.stop_propagation();
-            })));
+            }))));
     } else { header = header.child(t(key)); }
     div().w_full().child(header).child(content).into_any_element()
 }

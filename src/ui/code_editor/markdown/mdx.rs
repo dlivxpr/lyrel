@@ -5,6 +5,7 @@ use super::projection::{Kind, Leaf, Projection};
 use markdown::mdast::{AttributeContent, AttributeValue, Node};
 use std::{collections::{HashMap, HashSet}, ops::Range, path::Path};
 
+pub(super) mod callouts;
 pub(super) mod view;
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(super) enum Grammar {
@@ -206,6 +207,7 @@ impl Index {
 pub(super) struct ViewState {
     pub(super) collapsed: HashSet<ComponentId>,
     pub(super) active_child: HashMap<ComponentId, ComponentId>,
+    pub(super) source_components: HashSet<ComponentId>,
 }
 
 fn jsx(node: &Node) -> Option<(&Option<String>, &[AttributeContent])> {
