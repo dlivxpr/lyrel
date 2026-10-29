@@ -261,8 +261,8 @@ impl LyrelApp {
                 this.set_document_ratio(crate::core::config::DOCUMENT_RATIO_TWO_THIRDS, cx)
             }),
         )
-        .on_action(cx.listener(|this, _: &ToggleDocumentPreview, _window, cx| {
-            this.toggle_document_preview(cx)
+        .on_action(cx.listener(|this, _: &ToggleDocumentPreview, window, cx| {
+            this.toggle_document_preview(window, cx)
         }))
         .on_action(cx.listener(|this, _: &ToggleDocumentWrap, window, cx| {
             this.toggle_document_wrap(window, cx)

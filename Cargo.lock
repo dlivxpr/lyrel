@@ -5714,6 +5714,7 @@ dependencies = [
  "log",
  "lsp-types",
  "lyrel-core",
+ "markdown",
  "memchr",
  "notify",
  "notify-rust",

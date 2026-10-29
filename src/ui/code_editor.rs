@@ -1307,8 +1307,13 @@ impl LyrelApp {
     /// Markdown and the code panel is on screen — anything else has no
     /// rendered form to switch to. The new state is remembered for the next
     /// Markdown file opened.
-    pub(crate) fn toggle_document_preview(&mut self, cx: &mut Context<Self>) {
+    pub(crate) fn toggle_document_preview(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if !self.code_panel_visible() {
+            return;
+        }
+        if let Some(view) = self.active_editor_input().and_then(|input| input.markdown()).cloned() {
+            view.update(cx, |view, cx| view.toggle_mode(window, cx));
+            cx.notify();
             return;
         }
         let Some(id) = self.tab_code().and_then(TabCode::active_id) else {
@@ -2513,7 +2518,7 @@ impl LyrelApp {
     ) -> AnyElement {
         match id.and_then(|id| self.editor.buffers.get(id)) {
             None => self.render_editor_empty(cx).into_any_element(),
-            Some(f) if f.input.markdown().is_some() && !f.preview => {
+            Some(f) if f.input.markdown().is_some() => {
                 let input = f.input.markdown().unwrap();
                 let tab = self
                     .tabs
@@ -2853,6 +2858,7 @@ impl LyrelApp {
         let wrap: Option<bool> = active.map(|f| f.wrap);
         let is_markdown = active.is_some_and(|f| f.language() == "markdown");
         let preview = active.is_some_and(|f| f.preview);
+        let native_live = self.active_editor_input().and_then(|input| input.markdown()).map(|view| view.read(cx).is_live());
         let indent: Option<SharedString> = active.map(|f| {
             let key = if f.indent.hard_tabs {
                 L10nKey::EditorIndentTabs
@@ -2895,7 +2901,9 @@ impl LyrelApp {
                     })),
             )
             .when(is_markdown, |this| {
-                let label = if preview {
+                let label = if let Some(live) = native_live {
+                    t(if live { L10nKey::EditorMarkdownSource } else { L10nKey::EditorMarkdownLive })
+                } else if preview {
                     t(L10nKey::EditorEdit)
                 } else {
                     t(L10nKey::EditorPreview)
@@ -2903,7 +2911,7 @@ impl LyrelApp {
                 this.child(
                     item("status-md-preview", label.into()).on_click(cx.listener(
                         |this, _, window, cx| {
-                            this.toggle_document_preview(cx);
+                            this.toggle_document_preview(window, cx);
                             this.focus_editor(window, cx);
                         },
                     )),
