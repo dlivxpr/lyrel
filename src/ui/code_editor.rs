@@ -27,11 +27,11 @@ use crate::ui::window_chrome::{TITLE_BAR_BORDER, TitleStripRow as _};
 
 mod buffers;
 pub(crate) mod commands;
-pub(crate) mod markdown;
 mod document_input;
-use document_input::{EditorInput, MarkdownPresentations};
-pub(crate) use document_input::MarkdownWorkbench;
+pub(crate) mod markdown;
 use buffers::Loaded;
+pub(crate) use document_input::MarkdownWorkbench;
+use document_input::{EditorInput, MarkdownPresentations};
 mod gutter;
 mod nav;
 pub(crate) mod outline;
@@ -152,7 +152,9 @@ impl OpenFile {
     }
 
     fn format(&self, cx: &gpui_kit::App) -> TextFormat {
-        self.input.markdown().map(|view| view.read(cx).document().read(cx).format())
+        self.input
+            .markdown()
+            .map(|view| view.read(cx).document().read(cx).format())
             .unwrap_or_else(|| self.format.expect("code document representation"))
     }
 
@@ -160,7 +162,9 @@ impl OpenFile {
         if let Some(view) = self.input.markdown() {
             let document = view.read(cx).document().clone();
             document.update(cx, |document, _| document.set_format(format));
-        } else { self.format = Some(format); }
+        } else {
+            self.format = Some(format);
+        }
     }
 
     fn label(&self) -> SharedString {
@@ -179,7 +183,9 @@ impl OpenFile {
     }
 
     fn language(&self) -> &'static str {
-        if self.input.markdown().is_some() { return "markdown"; }
+        if self.input.markdown().is_some() {
+            return "markdown";
+        }
         if self.untitled.is_some() {
             return "text";
         }
@@ -187,7 +193,9 @@ impl OpenFile {
     }
 
     fn local(&self) -> Option<LocalFile> {
-        if self.untitled.is_some() || !self.host.id().is_local() { return None; }
+        if self.untitled.is_some() || !self.host.id().is_local() {
+            return None;
+        }
         Some(LocalFile {
             id: self.id(),
             input: self.input.code()?.clone(),
@@ -708,7 +716,12 @@ impl LyrelApp {
         let file = self.editor.buffers.get(id)?;
         let tab = self.tabs.get(self.tabs.active_index())?.id();
         let group = self.tab_code()?.group;
-        Some(file.presentations.existing(tab, group).map(EditorInput::Markdown).unwrap_or_else(|| file.input.clone()))
+        Some(
+            file.presentations
+                .existing(tab, group)
+                .map(EditorInput::Markdown)
+                .unwrap_or_else(|| file.input.clone()),
+        )
     }
 
     /// Where the file in front of the active tab's editor lives, if it has
@@ -859,7 +872,9 @@ impl LyrelApp {
             return;
         };
         self.raise_code_overlay();
-        let Some(group) = self.tab_code_mut_or_init().map(|code| code.group) else { return; };
+        let Some(group) = self.tab_code_mut_or_init().map(|code| code.group) else {
+            return;
+        };
         let target = buffers::OpenTarget {
             workspace: self.workspace,
             tab,
@@ -1216,13 +1231,21 @@ impl LyrelApp {
     }
 
     fn focus_editor(&self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(file) = self.active_buffer() else { return; };
+        let Some(file) = self.active_buffer() else {
+            return;
+        };
         if let Some(input) = file.input.markdown() {
-            let tab = self.tabs.get(self.tabs.active_index()).expect("active editor tab").id();
+            let tab = self
+                .tabs
+                .get(self.tabs.active_index())
+                .expect("active editor tab")
+                .id();
             let group = self.tab_code().expect("active editor group").group;
             let view = file.presentations.view(input, tab, group, cx);
             view.read(cx).focus_handle(cx).focus(window, cx);
-        } else { file.input.focus(window, cx); }
+        } else {
+            file.input.focus(window, cx);
+        }
     }
 
     /// Settings borrows focus, not the terminal's place in the workbench.
@@ -1447,11 +1470,9 @@ impl LyrelApp {
 
     pub(crate) fn editor_has_focus(&self, window: &Window, cx: &Context<Self>) -> bool {
         self.code_panel_visible()
-            && self.active_editor_input().is_some_and(|input| {
-                input.read(cx)
-                    .focus_handle(cx)
-                    .contains_focused(window, cx)
-            })
+            && self
+                .active_editor_input()
+                .is_some_and(|input| input.read(cx).focus_handle(cx).contains_focused(window, cx))
     }
 
     /// Whether anything in the editor panel — the text, its search bar, the
@@ -1598,7 +1619,9 @@ impl LyrelApp {
         let Some(id) = self.tab_code().and_then(|c| c.files.get(pos).copied()) else {
             return;
         };
-        if let Some(file) = self.editor.buffers.get(id) { file.input.finish_composition(window, cx); }
+        if let Some(file) = self.editor.buffers.get(id) {
+            file.input.finish_composition(window, cx);
+        }
         let Some(f) = self.editor.buffers.get(id) else {
             return;
         };
@@ -1702,7 +1725,9 @@ impl LyrelApp {
         let Some(f) = this.editor.buffers.get(id) else {
             return menu;
         };
-        let Some(input) = this.editor_input_for(id) else { return menu; };
+        let Some(input) = this.editor_input_for(id) else {
+            return menu;
+        };
         let state = input.read(cx);
         let selected = !state.selected_range().is_empty();
         let mut menu = menu.min_w(px(220.)).action_context(state.focus_handle(cx));
@@ -1731,10 +1756,14 @@ impl LyrelApp {
             )
             .menu(t(L10nKey::AppMenuSelectAll), Box::new(edit::SelectAll));
         if f.input.markdown().is_some() {
-            let menu = menu.menu(t(L10nKey::EditorGoToLineAction), Box::new(crate::core::actions::EditorGoToLine));
+            let menu = menu.menu(
+                t(L10nKey::EditorGoToLineAction),
+                Box::new(crate::core::actions::EditorGoToLine),
+            );
             return this.editor_file_menu_items(menu, id, app, cx);
         }
-        let menu = menu.separator()
+        let menu = menu
+            .separator()
             // The line commands act on every line a cursor or selection
             // touches. Their chords live on gpui-component's `CodeEditor` key
             // context and are re-added in `keymap::fixed_bindings`, so they
@@ -2086,12 +2115,22 @@ impl LyrelApp {
         self.editor_restore_active(window, cx);
         for file in self.editor.buffers.iter() {
             let id = file.id();
-            file.presentations.retain(|tab, group| {
-                self.tabs.iter().find(|entry| entry.id() == tab).and_then(|entry| entry.code.as_deref()).is_some_and(|code| {
-                    (code.group == group && code.files.contains(&id))
-                        || code.split.as_ref().is_some_and(|other| other.id == group && other.files.contains(&id))
-                })
-            }, window, cx);
+            file.presentations.retain(
+                |tab, group| {
+                    self.tabs
+                        .iter()
+                        .find(|entry| entry.id() == tab)
+                        .and_then(|entry| entry.code.as_deref())
+                        .is_some_and(|code| {
+                            (code.group == group && code.files.contains(&id))
+                                || code.split.as_ref().is_some_and(|other| {
+                                    other.id == group && other.files.contains(&id)
+                                })
+                        })
+                },
+                window,
+                cx,
+            );
         }
         self.editor_record_sessions(cx);
     }
@@ -2466,13 +2505,25 @@ impl LyrelApp {
             None => self.render_editor_empty(cx).into_any_element(),
             Some(f) if f.input.markdown().is_some() && !f.preview => {
                 let input = f.input.markdown().unwrap();
-                let tab = self.tabs.get(self.tabs.active_index()).expect("visible editor tab").id();
+                let tab = self
+                    .tabs
+                    .get(self.tabs.active_index())
+                    .expect("visible editor tab")
+                    .id();
                 let code = self.tab_code().expect("visible editor group");
-                let group = if code.focused_slot() == slot { code.group } else { code.split.as_ref().expect("second editor group").id };
+                let group = if code.focused_slot() == slot {
+                    code.group
+                } else {
+                    code.split.as_ref().expect("second editor group").id
+                };
                 let view = f.presentations.view(input, tab, group, cx);
                 let app = cx.entity().downgrade();
                 let id = f.id();
-                div().size_full().child(view).context_menu(move |menu, _, cx| Self::editor_body_menu(menu, &app, id, cx)).into_any_element()
+                div()
+                    .size_full()
+                    .child(view)
+                    .context_menu(move |menu, _, cx| Self::editor_body_menu(menu, &app, id, cx))
+                    .into_any_element()
             }
             Some(f) if f.preview => {
                 let markdown = f.input.read(cx).text().to_string();
@@ -2511,7 +2562,12 @@ impl LyrelApp {
                 div()
                     .id(("editor-body", slot))
                     .size_full()
-                    .map(|root| crate::ui::lsp::popups::EditorPopups::decorate(root, f.popups.as_ref().expect("code editor popups")))
+                    .map(|root| {
+                        crate::ui::lsp::popups::EditorPopups::decorate(
+                            root,
+                            f.popups.as_ref().expect("code editor popups"),
+                        )
+                    })
                     .child(
                         Editor::new(&input)
                             .appearance(false)
@@ -3312,7 +3368,14 @@ mod close_gpui_tests {
             });
             vcx.dispatch_action(EditorNewFile);
             settle(&mut vcx);
-            let editor = app.read_with(&vcx, |app, _| app.active_buffer().unwrap().input.code().expect("ordinary code editor").clone());
+            let editor = app.read_with(&vcx, |app, _| {
+                app.active_buffer()
+                    .unwrap()
+                    .input
+                    .code()
+                    .expect("ordinary code editor")
+                    .clone()
+            });
             assert!(app.update_in(&mut vcx, |app, window, cx| {
                 app.document_dock_px(window, cx).is_some()
             }));
@@ -3327,7 +3390,12 @@ mod close_gpui_tests {
                 );
                 app.read_with(&vcx, |app, _| {
                     assert_eq!(
-                        app.active_buffer().unwrap().input.code().expect("ordinary code editor").entity_id(),
+                        app.active_buffer()
+                            .unwrap()
+                            .input
+                            .code()
+                            .expect("ordinary code editor")
+                            .entity_id(),
                         editor.entity_id()
                     );
                     assert_eq!(app.tabs[0].pane.first_leaf().unwrap().entity_id(), pane);
@@ -3348,7 +3416,8 @@ mod close_gpui_tests {
                     .active_buffer()
                     .unwrap()
                     .input
-                    .code().expect("ordinary code editor")
+                    .code()
+                    .expect("ordinary code editor")
                     .entity_id()),
                 editor.entity_id()
             );

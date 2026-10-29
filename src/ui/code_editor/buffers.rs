@@ -190,7 +190,8 @@ impl EditorBuffers {
         let input = file.input.read(cx);
         let text = input.text();
         let len = text.len();
-        let same = len == file.saved.len && Fingerprint::of_chunks(len, text.chunks()) == file.saved;
+        let same =
+            len == file.saved.len && Fingerprint::of_chunks(len, text.chunks()) == file.saved;
         file.dirty = !same || file.format(cx) != file.saved_format;
     }
 
@@ -304,7 +305,9 @@ impl EditorBuffers {
         file.preview = false;
         let input = if let (Some(source), Some(group)) = (file.input.markdown(), target.group) {
             EditorInput::Markdown(file.presentations.view(source, target.tab, group, cx))
-        } else { file.input.clone() };
+        } else {
+            file.input.clone()
+        };
         place_cursor(input, position, CURSOR_SCROLL_ATTEMPTS, window, cx);
     }
 
@@ -367,21 +370,29 @@ impl EditorBuffers {
         let cfg = cx.global::<crate::core::config::Config>();
         let wrap = cfg.editor_soft_wrap;
         let native_markdown = cx.try_global::<MarkdownWorkbench>().is_some()
-            && matches!(path.extension().and_then(|ext| ext.to_str()).map(str::to_ascii_lowercase).as_deref(), Some("md" | "markdown" | "mdx"));
+            && matches!(
+                path.extension()
+                    .and_then(|ext| ext.to_str())
+                    .map(str::to_ascii_lowercase)
+                    .as_deref(),
+                Some("md" | "markdown" | "mdx")
+            );
         let preview = !native_markdown && cfg.editor_markdown_preview && language == "markdown";
         let saved = Fingerprint::of_str(&text);
         let id = BufferId::new();
         let (input, popups, sub, observe) = if native_markdown {
             let document = cx.new(|_| markdown::MarkdownDocument::new(text, format));
-            let sub = cx.subscribe_in(&document, window, move |view, _, event: &markdown::DocumentEvent, _, cx| {
-                match event {
+            let sub = cx.subscribe_in(
+                &document,
+                window,
+                move |view, _, event: &markdown::DocumentEvent, _, cx| match event {
                     markdown::DocumentEvent::Edited(_) => {
                         access(view).note_edit(id, cx);
                         edited(view, id, cx);
                     }
                     markdown::DocumentEvent::PresentationChanged => cx.notify(),
-                }
-            });
+                },
+            );
             let presentation = cx.new(|cx| markdown::SourcePresentation::new(document, wrap, cx));
             let observe = cx.observe(&presentation, |_, _, cx| cx.notify());
             (EditorInput::Markdown(presentation), None, sub, observe)
@@ -712,7 +723,8 @@ impl EditorBuffers {
                 to.join(rest)
             };
             file.reload_seq = file.reload_seq.wrapping_add(1);
-            file.input.set_highlighter(language_for_path(&file.path), cx);
+            file.input
+                .set_highlighter(language_for_path(&file.path), cx);
             moved = true;
         }
         moved

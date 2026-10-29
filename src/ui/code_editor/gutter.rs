@@ -23,9 +23,8 @@ use gpui_kit::component::input::{Position, RopeExt as _};
 use gpui_kit::component::{ActiveTheme as _, IconName, Sizable as _, h_flex, v_flex};
 use gpui_kit::prelude::*;
 use gpui_kit::{
-    AnyElement, Bounds, Context, EntityInputHandler as _, HitboxBehavior, MouseButton,
-    MouseDownEvent, Pixels, Point, Task, Window, anchored, canvas, deferred, div, fill, point, px,
-    size,
+    AnyElement, Bounds, Context, HitboxBehavior, MouseButton, MouseDownEvent, Pixels, Point, Task,
+    Window, anchored, canvas, deferred, div, fill, point, px, size,
 };
 
 use super::{BufferId, TabCode};
@@ -771,7 +770,9 @@ impl LyrelApp {
         input.replace(range, &replacement, window, cx);
         let last = input.read(cx).text().lines_len().saturating_sub(1);
         input.set_cursor_position(Position::new(line.min(last) as u32, 0), window, cx);
-        if from_peek { input.focus(window, cx); }
+        if from_peek {
+            input.focus(window, cx);
+        }
         if let Some(f) = self.editor.buffers.get_mut(id) {
             f.gutter.peek = None;
             // The input's Change event lands after this returns; until then
@@ -1258,7 +1259,8 @@ mod tests {
                 .get(id)
                 .expect("the buffer")
                 .input
-                .code().expect("ordinary code editor")
+                .code()
+                .expect("ordinary code editor")
                 .clone();
             input.update(cx, |state, cx| {
                 state.set_value("one\nTWO\nthree\nfour\nfive\n", window, cx);

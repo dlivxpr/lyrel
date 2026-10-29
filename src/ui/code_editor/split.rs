@@ -341,15 +341,28 @@ impl LyrelApp {
         let Some(other) = self.tab_code().and_then(TabCode::other_active_id) else {
             return;
         };
-        let Some(code) = self.tab_code() else { return; };
-        let tab = self.tabs.get(self.tabs.active_index()).expect("active editor tab").id();
+        let Some(code) = self.tab_code() else {
+            return;
+        };
+        let tab = self
+            .tabs
+            .get(self.tabs.active_index())
+            .expect("active editor tab")
+            .id();
         let other_group = code.split.as_ref().expect("other editor group").id;
         let focused = self.editor.buffers.get(other).is_some_and(|file| {
             if file.input.markdown().is_some() {
-                file.presentations.existing(tab, other_group).is_some_and(|view| view.read(cx).focus_handle(cx).contains_focused(window, cx))
+                file.presentations
+                    .existing(tab, other_group)
+                    .is_some_and(|view| view.read(cx).focus_handle(cx).contains_focused(window, cx))
             } else if code.active_id() != Some(other) {
-                file.input.read(cx).focus_handle(cx).contains_focused(window, cx)
-            } else { false }
+                file.input
+                    .read(cx)
+                    .focus_handle(cx)
+                    .contains_focused(window, cx)
+            } else {
+                false
+            }
         });
         if focused && let Some(code) = self.tab_code_mut() {
             code.swap_focus();
@@ -436,7 +449,16 @@ impl LyrelApp {
         let same = other.is_some() && other == code.active_id();
         let other_slot = usize::from(focus_left);
         let (other_crumbs, other_body) = match other {
-            Some(id) if same && self.editor.buffers.get(id).is_some_and(|file| file.input.code().is_some()) => (None, self.render_editor_same_file(id, focus_left, cx)),
+            Some(id)
+                if same
+                    && self
+                        .editor
+                        .buffers
+                        .get(id)
+                        .is_some_and(|file| file.input.code().is_some()) =>
+            {
+                (None, self.render_editor_same_file(id, focus_left, cx))
+            }
             Some(id) => (
                 self.render_editor_breadcrumbs_for(id, other_slot, false, window, cx),
                 self.render_editor_body(Some(id), other_slot, cx),
@@ -846,7 +868,16 @@ mod gpui_tests {
         // before anything is drawn.
         vcx.update(|window, cx| {
             let left = app.read(cx).tab_code().unwrap().other_active_id().unwrap();
-            let input = app.read(cx).editor.buffers.get(left).unwrap().input.code().expect("ordinary code editor").clone();
+            let input = app
+                .read(cx)
+                .editor
+                .buffers
+                .get(left)
+                .unwrap()
+                .input
+                .code()
+                .expect("ordinary code editor")
+                .clone();
             input.update(cx, |state, cx| state.focus(window, cx));
             let before = app.read(cx).active_buffer().unwrap().path.clone();
             assert_eq!(
@@ -876,7 +907,16 @@ mod gpui_tests {
         vcx.run_until_parked();
         vcx.update(|window, cx| {
             let left = app.read(cx).tab_code().unwrap().other_active_id().unwrap();
-            let input = app.read(cx).editor.buffers.get(left).unwrap().input.code().expect("ordinary code editor").clone();
+            let input = app
+                .read(cx)
+                .editor
+                .buffers
+                .get(left)
+                .unwrap()
+                .input
+                .code()
+                .expect("ordinary code editor")
+                .clone();
             input.update(cx, |state, cx| state.focus(window, cx));
             let node = window.focused(cx).unwrap();
             node.dispatch_action(&crate::core::actions::EditorGoToLine, window, cx);

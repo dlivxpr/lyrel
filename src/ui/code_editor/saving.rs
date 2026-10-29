@@ -119,7 +119,9 @@ impl EditorPanelState {
         cx: &mut Context<E>,
         bridge: EditorBridge<E>,
     ) {
-        if let Some(file) = self.buffers.get(id) { file.input.finish_composition(window, cx); }
+        if let Some(file) = self.buffers.get(id) {
+            file.input.finish_composition(window, cx);
+        }
         let Some(file) = self.buffers.get_mut(id) else {
             return;
         };
@@ -307,10 +309,13 @@ impl EditorPanelState {
                 }
                 if matches!(choice, Ok(0)) {
                     let file = editor.buffers.get_mut(id).unwrap();
-                    file.set_format(TextFormat {
-                        line_ending: file.format(cx).line_ending,
-                        ..TextFormat::default()
-                    }, cx);
+                    file.set_format(
+                        TextFormat {
+                            line_ending: file.format(cx).line_ending,
+                            ..TextFormat::default()
+                        },
+                        cx,
+                    );
                     editor.save(id, false, Path::new(""), window, cx, bridge);
                 } else {
                     (bridge.event)(view, EditorEvent::Focus, window, cx);
