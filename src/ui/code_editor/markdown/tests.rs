@@ -4473,3 +4473,318 @@ fn structured_math_local_invalid_recovery_composition_and_selection_keep_one_his
         }
     }
 }
+// Merman =0.9.2 / Mermaid 12.1.0. Sources use the released registry corpus
+// (merman-core/src/tests/registry.rs), not a browser or a renderer-only seam.
+// Each expansion is a separate workbench test: one failure must not prevent
+// the remaining families from producing their own verification evidence.
+fn mermaid_matrix_workbench(
+    cx: &mut gpui_kit::TestAppContext,
+    name: &str,
+    diagram: &str,
+    edited: &str,
+    rendered: bool,
+) {
+    use crate::ui::app::test_window::harness_with_tabs;
+    use gpui_kit::test::{TestEventExt as _, TestQueryExt as _, TestWindowExt as _};
+    use gpui_kit::Focusable as _;
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join(format!("{name}.md"));
+    let envelope = |body: &str| format!(
+        "# Matrix\r\n\r\n```mermaid\r\n{}\r\n```\n\n[ref]: untouched  \r\ntail",
+        body.replace('\n', "\r\n")
+    );
+    let original = envelope(diagram);
+    let normalized = original.replace("\r\n", "\n");
+    std::fs::write(&path, original.as_bytes()).unwrap();
+    let (app, mut context, _streams) = harness_with_tabs(cx, 1);
+    cx.simulate_window_resize(context.window_handle(), gpui_kit::size(gpui_kit::px(1200.), gpui_kit::px(1400.)));
+    context.update(|_, cx| cx.set_global(super::super::MarkdownWorkbench));
+    app.update_in(&mut context, |app, window, cx| app.open_file_in_editor(&path, window, cx));
+    let view = {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+        loop {
+            context.run_until_parked();
+            if let Some(view) = app.read_with(&context, |app, _| {
+                app.active_editor_input().and_then(|input| input.markdown().cloned())
+            }) { break view; }
+            assert!(std::time::Instant::now() < deadline, "{name}: document did not open");
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+    };
+    let identity = view.read_with(&context, |view, _| view.document().entity_id());
+    let fence = normalized.find("```mermaid").unwrap();
+    let body = fence + "```mermaid\n".len();
+    let image_id = format!("markdown-mermaid-image-{fence}");
+    let error_id = format!("markdown-mermaid-error-{fence}");
+    let settle = |context: &mut gpui_kit::VisualTestContext, image: bool| {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+        loop {
+            context.executor().advance_clock(std::time::Duration::from_millis(100));
+            context.run_until_parked();
+            let ready = context.update(|window, cx| {
+                window.render_frame(cx);
+                if image {
+                    assert!(window.try_find(error_id.clone()).is_none(), "{name}: actual native renderer reported an error; source/error display is not support");
+                    window.try_find(image_id.clone()).is_some_and(|image| {
+                        let size = image.bounds().size;
+                        size.width > gpui_kit::px(1.) && size.height > gpui_kit::px(1.)
+                    })
+                } else {
+                    window.try_find(error_id.clone()).is_some() && window.try_find(image_id.clone()).is_none()
+                }
+            });
+            if ready { break; }
+            assert!(std::time::Instant::now() < deadline, "{name}: native state did not settle (image={image})");
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+    };
+    context.dispatch_action(crate::core::actions::ToggleDocumentPreview);
+    settle(&mut context, rendered);
+    context.dispatch_action(crate::core::actions::EditorSave);
+    let wait_saved = |context: &mut gpui_kit::VisualTestContext| {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+        loop {
+            context.run_until_parked();
+            if app.read_with(context, |app, _| app.active_buffer().is_some_and(|file| !file.dirty && !file.saving)) { break; }
+            assert!(std::time::Instant::now() < deadline, "{name}: save did not complete");
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+    };
+    wait_saved(&mut context);
+    assert_eq!(std::fs::read(&path).unwrap(), original.as_bytes(), "{name}: no-edit rendering must not rewrite bytes");
+    context.update(|window, cx| {
+        let label = crate::ui::i18n::t(crate::ui::i18n::L10nKey::EditorMarkdownMermaidEdit);
+        let point = window.find_by_label(label).bounds().center();
+        window.pointer_down(point, gpui_kit::MouseButton::Left, cx);
+        window.pointer_up(point, gpui_kit::MouseButton::Left, cx);
+        window.render_frame(cx);
+        assert_eq!(view.read(cx).selection(), Selection::caret(body), "{name}: contextual source activation");
+        assert!(view.read(cx).range_to_bounds(&(body..body), cx).is_some());
+    });
+    // An intervening real failure removes the old successful image, retaining
+    // the editable source. The following successful edit cannot pass by merely
+    // keeping the first raster visible.
+    view.update_in(&mut context, |view, window, cx| {
+        view.select_range(body..body + diagram.len(), cx);
+        view.focus_handle(cx).focus(window, cx);
+        view.command(Command::Insert("not-a-mermaid-diagram".into()), window, cx);
+    });
+    settle(&mut context, false);
+    view.read_with(&context, |view, cx| {
+        assert!(view.document().read(cx).source().to_string().contains("not-a-mermaid-diagram"));
+        assert!(view.range_to_bounds(&(body..body), cx).is_some(), "{name}: failed source remains editable");
+    });
+    context.dispatch_action(gpui_kit::component::input::Undo);
+    settle(&mut context, rendered);
+    view.read_with(&context, |view, cx| assert_eq!(view.document().read(cx).source().to_string(), normalized));
+    view.update_in(&mut context, |view, window, cx| {
+        view.select_range(body..body + diagram.len(), cx);
+        view.focus_handle(cx).focus(window, cx);
+        view.command(Command::Insert(edited.into()), window, cx);
+    });
+    settle(&mut context, rendered);
+    let expected = envelope(edited);
+    view.read_with(&context, |view, cx| {
+        assert_eq!(view.document().entity_id(), identity);
+        assert_eq!(view.document().read(cx).source().to_string(), expected.replace("\r\n", "\n"));
+    });
+    context.dispatch_action(crate::core::actions::ToggleDocumentPreview);
+    context.dispatch_action(gpui_kit::component::input::Undo);
+    context.run_until_parked();
+    view.read_with(&context, |view, cx| assert_eq!(view.document().read(cx).source().to_string(), normalized));
+    context.dispatch_action(gpui_kit::component::input::Redo);
+    context.dispatch_action(crate::core::actions::ToggleDocumentPreview);
+    settle(&mut context, rendered);
+    context.dispatch_action(crate::core::actions::EditorSave);
+    wait_saved(&mut context);
+    assert_eq!(std::fs::read(&path).unwrap(), expected.as_bytes(), "{name}: unchanged Markdown and mixed line endings");
+    app.update_in(&mut context, |app, window, cx| {
+        app.editor_close_file(0, window, cx);
+        app.open_file_in_editor(&path, window, cx);
+    });
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+    loop {
+        context.run_until_parked();
+        if app.read_with(&context, |app, cx| app.active_editor_input().is_some_and(|input| {
+            input.markdown().is_some_and(|view| view.read(cx).document().entity_id() != identity
+                && view.read(cx).document().read(cx).source().to_string() == expected.replace("\r\n", "\n"))
+        })) { break; }
+        assert!(std::time::Instant::now() < deadline, "{name}: saved document did not reopen");
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    context.dispatch_action(crate::core::actions::ToggleDocumentPreview);
+    settle(&mut context, rendered);
+    assert_eq!(std::fs::read(&path).unwrap(), expected.as_bytes());
+}
+
+macro_rules! mermaid_matrix_case {
+    ($name:ident, $source:expr, $edited:expr) => {
+        #[gpui_kit::test]
+        fn $name(cx: &mut gpui_kit::TestAppContext) {
+            mermaid_matrix_workbench(cx, stringify!($name), $source, $edited, true);
+        }
+    };
+}
+
+mermaid_matrix_case!(native_mermaid_matrix_flowchart, "flowchart LR\nA[Original] --> B[End]", "flowchart LR\nA[Edited label] --> B[End]");
+
+// Merman =0.9.2 / Mermaid 12.1.0; all-diagrams + complete-svg, without ELK.
+// Inputs follow the released registry/native_font_families examples, with an
+// independently specified changed label/value. Every row must really rasterize;
+// these are acceptance fixtures, not declarations that an unrun row passed.
+mermaid_matrix_case!(native_mermaid_matrix_agentflow,
+    "agentflow-beta\nA[Original] --> B[End]",
+    "agentflow-beta\nA[Edited label] --> B[End]");
+mermaid_matrix_case!(native_mermaid_matrix_architecture,
+    "architecture-beta\nservice api(server)[Original]",
+    "architecture-beta\nservice api(server)[Edited label]");
+mermaid_matrix_case!(native_mermaid_matrix_block,
+    "block-beta\ncolumns 2\nA[\"Original\"] B[\"End\"]",
+    "block-beta\ncolumns 2\nA[\"Edited label\"] B[\"End\"]");
+mermaid_matrix_case!(native_mermaid_matrix_c4,
+    "C4Context\nPerson(user, \"Original\")\nSystem(bank, \"Bank\")\nRel(user, bank, \"Uses\")",
+    "C4Context\nPerson(user, \"Edited label\")\nSystem(bank, \"Bank\")\nRel(user, bank, \"Uses\")");
+mermaid_matrix_case!(native_mermaid_matrix_class,
+    "classDiagram\nclass Animal {\n+String name\n+eat()\n}\nAnimal <|-- Dog",
+    "classDiagram\nclass Animal {\n+String name\n+sleep()\n}\nAnimal <|-- Dog");
+mermaid_matrix_case!(native_mermaid_matrix_cynefin,
+    "cynefin-beta\nclear\n \"Original\"\ncomplex\n \"Retrospective\"\nclear --> complex : \"Probe\"",
+    "cynefin-beta\nclear\n \"Edited label\"\ncomplex\n \"Retrospective\"\nclear --> complex : \"Probe\"");
+mermaid_matrix_case!(native_mermaid_matrix_er,
+    "erDiagram\nCUSTOMER ||--o{ ORDER : places\nCUSTOMER {\nstring name\n}",
+    "erDiagram\nCUSTOMER ||--o{ ORDER : purchases\nCUSTOMER {\nstring name\n}");
+mermaid_matrix_case!(native_mermaid_matrix_event_modeling,
+    "eventmodeling\ntf 01 ui Shop.Cart\ntf 02 cmd Ordering.AddItem ->> 01 { sku: \"SKU-1\" }",
+    "eventmodeling\ntf 01 ui Shop.Cart\ntf 02 cmd Ordering.RemoveItem ->> 01 { sku: \"SKU-1\" }");
+mermaid_matrix_case!(native_mermaid_matrix_gantt,
+    "gantt\ndateFormat YYYY-MM-DD\nsection Work\nOriginal :a, 2024-01-01, 1d",
+    "gantt\ndateFormat YYYY-MM-DD\nsection Work\nEdited label :a, 2024-01-01, 1d");
+mermaid_matrix_case!(native_mermaid_matrix_git_graph,
+    "gitGraph\ncommit id: \"Original\"\nbranch feature\ncheckout feature\ncommit id: \"Work\"",
+    "gitGraph\ncommit id: \"Edited label\"\nbranch feature\ncheckout feature\ncommit id: \"Work\"");
+mermaid_matrix_case!(native_mermaid_matrix_info,
+    "info",
+    "info showInfo");
+// Merman 0.9.2 ignores showInfo in layout_info_diagram_typed: this is a
+// fixed version-information graphic, not user-editable diagram labels.
+mermaid_matrix_case!(native_mermaid_matrix_ishikawa,
+    "ishikawa-beta\nBlurry Photo\n Process\n  Out of focus\n User\n  Wrong position",
+    "ishikawa-beta\nBlurry Photo\n Process\n  Out of focus\n User\n  Shaky hands");
+mermaid_matrix_case!(native_mermaid_matrix_journey,
+    "journey\nsection Work\nOriginal: 5: Developer",
+    "journey\nsection Work\nEdited label: 3: Developer");
+mermaid_matrix_case!(native_mermaid_matrix_kanban,
+    "kanban\n todo[Todo]\n  task[Original]",
+    "kanban\n todo[Todo]\n  task[Edited label]");
+mermaid_matrix_case!(native_mermaid_matrix_mindmap,
+    "mindmap\n Root\n  Original\n  Other child",
+    "mindmap\n Root\n  Edited label\n  Other child");
+mermaid_matrix_case!(native_mermaid_matrix_packet,
+    "packet-beta\n0-7: \"Original\"\n8-15: \"TYPE\"",
+    "packet-beta\n0-7: \"Edited\"\n8-15: \"TYPE\"");
+mermaid_matrix_case!(native_mermaid_matrix_pie,
+    "pie\n\"Original\": 40\n\"Pending\": 60",
+    "pie\n\"Edited label\": 30\n\"Pending\": 70");
+mermaid_matrix_case!(native_mermaid_matrix_quadrant_chart,
+    "quadrantChart\nx-axis Low --> High\ny-axis Low --> High\nOriginal: [0.5, 0.5]",
+    "quadrantChart\nx-axis Low --> High\ny-axis Low --> High\nEdited: [0.7, 0.8]");
+mermaid_matrix_case!(native_mermaid_matrix_radar,
+    "radar-beta\naxis Speed,Quality,Cost\ncurve Original{1,2,3}",
+    "radar-beta\naxis Speed,Quality,Cost\ncurve Edited{3,2,1}");
+mermaid_matrix_case!(native_mermaid_matrix_railroad,
+    "railroad-beta\nrule = sequence(terminal(\"hello\"), nonterminal(\"other\")) ;\nother = terminal(\"world\") ;",
+    "railroad-beta\nrule = sequence(terminal(\"edited\"), nonterminal(\"other\")) ;\nother = terminal(\"world\") ;");
+mermaid_matrix_case!(native_mermaid_matrix_railroad_ebnf,
+    "railroad-ebnf-beta\nrule = \"original\" ;",
+    "railroad-ebnf-beta\nrule = \"edited\" ;");
+mermaid_matrix_case!(native_mermaid_matrix_railroad_abnf,
+    "railroad-abnf-beta\nrule = \"original\" ;",
+    "railroad-abnf-beta\nrule = \"edited\" ;");
+mermaid_matrix_case!(native_mermaid_matrix_railroad_peg,
+    "railroad-peg-beta\nrule <- \"original\" ;",
+    "railroad-peg-beta\nrule <- \"edited\" ;");
+mermaid_matrix_case!(native_mermaid_matrix_requirement,
+    "requirementDiagram\nrequirement req1 {\nid: 1\ntext: Original\nrisk: high\nverifymethod: analysis\n}",
+    "requirementDiagram\nrequirement req1 {\nid: 1\ntext: Edited label\nrisk: high\nverifymethod: analysis\n}");
+mermaid_matrix_case!(native_mermaid_matrix_sankey,
+    "sankey-beta\nSource,Destination,10",
+    "sankey-beta\nSource,Destination,20");
+mermaid_matrix_case!(native_mermaid_matrix_sequence,
+    "sequenceDiagram\nAlice->>Bob: Original\nBob-->>Alice: Reply",
+    "sequenceDiagram\nAlice->>Bob: Edited label\nBob-->>Alice: Reply");
+mermaid_matrix_case!(native_mermaid_matrix_state,
+    "stateDiagram-v2\n[*] --> Idle\nIdle --> Active: Original\nActive --> Idle: stop",
+    "stateDiagram-v2\n[*] --> Idle\nIdle --> Active: Edited label\nActive --> Idle: stop");
+mermaid_matrix_case!(native_mermaid_matrix_swimlane,
+    "swimlane-beta LR\nA[Original] --> B[End]",
+    "swimlane-beta LR\nA[Edited label] --> B[End]");
+mermaid_matrix_case!(native_mermaid_matrix_timeline,
+    "timeline\nsection Preparation\n2024 : Original\n2025 : Release",
+    "timeline\nsection Preparation\n2024 : Edited label\n2025 : Release");
+mermaid_matrix_case!(native_mermaid_matrix_tree_view,
+    "treeView-beta\n  \"packages\"\n    \"original\"\n      \"src\"",
+    "treeView-beta\n  \"packages\"\n    \"edited\"\n      \"src\"");
+mermaid_matrix_case!(native_mermaid_matrix_treemap,
+    "treemap-beta\n\"Root\"\n \"Original\": 40\n \"Pending\": 60",
+    "treemap-beta\n\"Root\"\n \"Edited label\": 30\n \"Pending\": 70");
+mermaid_matrix_case!(native_mermaid_matrix_usecase,
+    "usecase-beta\nactor Customer(\"Customer\")\nsystemBoundary \"Order system\"\n Checkout(\"Original\")\nend\nCustomer --> Checkout",
+    "usecase-beta\nactor Customer(\"Customer\")\nsystemBoundary \"Order system\"\n Checkout(\"Edited label\")\nend\nCustomer --> Checkout");
+mermaid_matrix_case!(native_mermaid_matrix_venn,
+    "venn-beta\nset A[\"Original\"]:10\nset B[\"Editor\"]:8\nunion A,B[\"Shared\"]:3",
+    "venn-beta\nset A[\"Edited label\"]:10\nset B[\"Editor\"]:8\nunion A,B[\"Shared\"]:3");
+mermaid_matrix_case!(native_mermaid_matrix_wardley,
+    "wardley-beta\ncomponent Original [0.6, 0.7]",
+    "wardley-beta\ncomponent Edited [0.5, 0.8]");
+mermaid_matrix_case!(native_mermaid_matrix_xychart,
+    "xychart-beta\nx-axis [Jan, Feb, Mar]\ny-axis \"Revenue\" 0 --> 100\nbar [20, 40, 80]",
+    "xychart-beta\nx-axis [Jan, Feb, Mar]\ny-axis \"Revenue\" 0 --> 100\nbar [40, 60, 80]");
+// zenuml remains the external comparison channel, not a 38th primary row.
+mermaid_matrix_case!(native_mermaid_matrix_zenuml,
+    "zenuml\nAlice->Bob: Original\nBob-->Alice: Reply",
+    "zenuml\nAlice->Bob: Edited label\nBob-->Alice: Reply");
+mermaid_matrix_case!(native_mermaid_matrix_unicode_html_labels,
+    "flowchart LR\nA[\"<b>中文</b><br/>标签 é 👩‍💻\"] --> B[End]",
+    "flowchart LR\nA[\"<b>中文更新</b><br/>标签 é 👩‍💻\"] --> B[End]");
+mermaid_matrix_case!(native_mermaid_matrix_strict_callback_is_inert,
+    "flowchart LR\nA[Original] --> B[End]\nclick A call arbitraryProjectFunction()",
+    "flowchart LR\nA[Edited label] --> B[End]\nclick A call arbitraryProjectFunction()");
+
+// Additional released syntax examples stay visible, rather than using a small
+// flowchart success to imply that every variant/label grammar was exercised.
+mermaid_matrix_case!(native_mermaid_matrix_graph_alias, "graph TD\nA[Original] --> B", "graph TD\nA[Edited label] --> B");
+mermaid_matrix_case!(native_mermaid_matrix_flowchart_elk_without_elk, "flowchart-elk TD\nA[Original] --> B", "flowchart-elk TD\nA[Edited label] --> B");
+mermaid_matrix_case!(native_mermaid_matrix_state_legacy, "stateDiagram\n[*] --> Original", "stateDiagram\n[*] --> Edited");
+mermaid_matrix_case!(native_mermaid_matrix_flowchart_html_unicode_labels,
+    "flowchart LR\nA[\"<b>中文 é 👩‍💻</b><br/>Long label\"] --> B[End]",
+    "flowchart LR\nA[\"<b>更新中文 é 👩‍💻</b><br/>Long edited label\"] --> B[End]");
+mermaid_matrix_case!(native_mermaid_matrix_flowchart_shapes_edges_styles,
+    "flowchart LR\nsubgraph group[Group]\nA@{ shape: rect, label: Original } ==> B{Decision}\nend\nB -. label .-> C((Done))\nclassDef task font-weight:bold\nclass A task",
+    "flowchart LR\nsubgraph group[Group]\nA@{ shape: rect, label: Edited } ==> B{Decision}\nend\nB -. changed .-> C((Done))\nclassDef task font-weight:bold\nclass A task");
+
+#[gpui_kit::test]
+fn native_mermaid_matrix_error_primary_is_not_successful_diagram(cx: &mut gpui_kit::TestAppContext) {
+    mermaid_matrix_workbench(cx, "error-primary-boundary", "error", "error\n%% retained edit", false);
+}
+
+#[gpui_kit::test]
+fn native_mermaid_matrix_unknown_and_empty_sources_retain_bytes(cx: &mut gpui_kit::TestAppContext) {
+    mermaid_matrix_workbench(cx, "empty-unknown-boundary", "", "unknownDiagram\nretained source", false);
+}
+
+#[gpui_kit::test]
+fn native_mermaid_matrix_external_file_and_network_resources_fail_closed(cx: &mut gpui_kit::TestAppContext) {
+    mermaid_matrix_workbench(cx, "external-resource-boundary",
+        "flowchart LR\nA@{ img: \"file:///private/mermaid-must-not-read.png\", label: \"File\" } --> B",
+        "flowchart LR\nA@{ img: \"https://example.test/mermaid-must-not-fetch.png\", label: \"Network\" } --> B", false);
+}
+
+mermaid_matrix_case!(native_mermaid_matrix_script_labels_are_inert_text,
+    "zenuml\nA->B: <script>throw new Error('must not execute')</script>",
+    "zenuml\nA->B: <script>fetch('https://example.test/must-not-fetch')</script>");
+mermaid_matrix_case!(native_mermaid_matrix_flowchart_math_labels,
+    "flowchart LR\nA[\"$$x^2 + y_1$$\"] --> B[End]",
+    "flowchart LR\nA[\"$$\\frac{x}{y} + \\alpha$$\"] --> B[End]");
+mermaid_matrix_case!(native_mermaid_matrix_flowchart_click_callbacks_are_inert,
+    "flowchart LR\nA[Original] --> B\nclick A mustNotExecute \"Callback\"",
+    "flowchart LR\nA[Edited label] --> B\nclick A mustNotExecute \"Changed callback\"");
