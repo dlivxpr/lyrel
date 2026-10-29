@@ -75,12 +75,20 @@ pub(super) fn install(mut root: Stateful<Div>, cx: &mut Context<LyrelApp>) -> St
         TransformToUppercase => Upper, TransformToLowercase => Lower, TransformToTitleCase => Title,
         TrimTrailingWhitespace => Trim, JoinLines => Join, RemoveSurroundingBrackets => Unwrap,
     );
-    root.on_action(cx.listener(|app, _: &gpui_kit::component::input::Search, window, cx| {
-        if !app.editor_markdown_search(false, window, cx) { cx.propagate(); }
-    }))
-    .on_action(cx.listener(|app, _: &gpui_kit::component::input::Replace, window, cx| {
-        if !app.editor_markdown_search(true, window, cx) { cx.propagate(); }
-    }))
+    root.on_action(
+        cx.listener(|app, _: &gpui_kit::component::input::Search, window, cx| {
+            if !app.editor_markdown_search(false, window, cx) {
+                cx.propagate();
+            }
+        }),
+    )
+    .on_action(
+        cx.listener(|app, _: &gpui_kit::component::input::Replace, window, cx| {
+            if !app.editor_markdown_search(true, window, cx) {
+                cx.propagate();
+            }
+        }),
+    )
 }
 
 struct Edit {
@@ -1003,18 +1011,25 @@ mod gpui_tests {
         );
     }
     #[gpui_kit::test]
-    fn markdown_workbench_shortcuts_keep_commands_selection_and_shared_undo(cx: &mut TestAppContext) {
+    fn markdown_workbench_shortcuts_keep_commands_selection_and_shared_undo(
+        cx: &mut TestAppContext,
+    ) {
         use crate::ui::code_editor::document_input::MarkdownWorkbench;
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("commands.md");
         std::fs::write(&path, "one\ntwo\nthree").unwrap();
         let (app, mut vcx, _streams) = harness_with_tabs(cx, 1);
         vcx.update(|_, cx| cx.set_global(MarkdownWorkbench));
-        app.update_in(&mut vcx, |app, window, cx| app.open_file_in_editor(&path, window, cx));
+        app.update_in(&mut vcx, |app, window, cx| {
+            app.open_file_in_editor(&path, window, cx)
+        });
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
         while !app.read_with(&vcx, |app, _| app.active_buffer().is_some()) {
             vcx.run_until_parked();
-            assert!(std::time::Instant::now() < deadline, "Markdown open did not settle");
+            assert!(
+                std::time::Instant::now() < deadline,
+                "Markdown open did not settle"
+            );
             std::thread::sleep(std::time::Duration::from_millis(5));
         }
         app.update_in(&mut vcx, |app, window, cx| {
@@ -1025,7 +1040,15 @@ mod gpui_tests {
         vcx.simulate_keystrokes("secondary-/");
         vcx.run_until_parked();
         app.read_with(&vcx, |app, cx| {
-            assert_eq!(app.active_buffer().unwrap().input.read(cx).text().to_string(), "one\n<!-- two -->\nthree");
+            assert_eq!(
+                app.active_buffer()
+                    .unwrap()
+                    .input
+                    .read(cx)
+                    .text()
+                    .to_string(),
+                "one\n<!-- two -->\nthree"
+            );
             assert!(app.active_buffer().unwrap().dirty);
         });
         vcx.simulate_keystrokes("secondary-z");
@@ -1033,7 +1056,15 @@ mod gpui_tests {
         vcx.simulate_keystrokes("alt-up");
         vcx.run_until_parked();
         app.read_with(&vcx, |app, cx| {
-            assert_eq!(app.active_buffer().unwrap().input.read(cx).text().to_string(), "two\none\nthree");
+            assert_eq!(
+                app.active_buffer()
+                    .unwrap()
+                    .input
+                    .read(cx)
+                    .text()
+                    .to_string(),
+                "two\none\nthree"
+            );
         });
         vcx.simulate_keystrokes("secondary-a");
         vcx.simulate_keystrokes("f o o space f o o");
@@ -1047,27 +1078,50 @@ mod gpui_tests {
         vcx.simulate_keystrokes("x");
         vcx.run_until_parked();
         app.read_with(&vcx, |app, cx| {
-            assert_eq!(app.active_buffer().unwrap().input.read(cx).text().to_string(), "x x");
+            assert_eq!(
+                app.active_buffer()
+                    .unwrap()
+                    .input
+                    .read(cx)
+                    .text()
+                    .to_string(),
+                "x x"
+            );
         });
         vcx.simulate_keystrokes("secondary-z");
         vcx.run_until_parked();
         app.read_with(&vcx, |app, cx| {
-            assert_eq!(app.active_buffer().unwrap().input.read(cx).text().to_string(), "foo foo");
+            assert_eq!(
+                app.active_buffer()
+                    .unwrap()
+                    .input
+                    .read(cx)
+                    .text()
+                    .to_string(),
+                "foo foo"
+            );
         });
     }
     #[gpui_kit::test]
-    fn markdown_explicit_commands_and_repeated_occurrences_keep_their_selection_scope(cx: &mut TestAppContext) {
+    fn markdown_explicit_commands_and_repeated_occurrences_keep_their_selection_scope(
+        cx: &mut TestAppContext,
+    ) {
         use crate::ui::code_editor::MarkdownWorkbench;
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("primary-command.md");
         std::fs::write(&path, "foo foo foo").unwrap();
         let (app, mut vcx, _streams) = harness_with_tabs(cx, 1);
         vcx.update(|_, cx| cx.set_global(MarkdownWorkbench));
-        app.update_in(&mut vcx, |app, window, cx| app.open_file_in_editor(&path, window, cx));
+        app.update_in(&mut vcx, |app, window, cx| {
+            app.open_file_in_editor(&path, window, cx)
+        });
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
         while !app.read_with(&vcx, |app, _| app.active_buffer().is_some()) {
             vcx.run_until_parked();
-            assert!(std::time::Instant::now() < deadline, "Markdown open did not settle");
+            assert!(
+                std::time::Instant::now() < deadline,
+                "Markdown open did not settle"
+            );
             std::thread::sleep(std::time::Duration::from_millis(5));
         }
         app.update_in(&mut vcx, |app, window, cx| {
@@ -1085,7 +1139,16 @@ mod gpui_tests {
         });
         vcx.dispatch_action(gpui_kit::component::input::Undo);
         vcx.run_until_parked();
-        app.read_with(&vcx, |app, cx| assert_eq!(app.active_editor_input().unwrap().read(cx).text().to_string(), "foo foo foo"));
+        app.read_with(&vcx, |app, cx| {
+            assert_eq!(
+                app.active_editor_input()
+                    .unwrap()
+                    .read(cx)
+                    .text()
+                    .to_string(),
+                "foo foo foo"
+            )
+        });
         app.update_in(&mut vcx, |app, window, cx| {
             let input = app.active_editor_input().unwrap();
             input.set_selected_range(0..3, cx);
@@ -1095,10 +1158,28 @@ mod gpui_tests {
         });
         vcx.simulate_keystrokes("x");
         vcx.run_until_parked();
-        app.read_with(&vcx, |app, cx| assert_eq!(app.active_editor_input().unwrap().read(cx).text().to_string(), "x x x"));
+        app.read_with(&vcx, |app, cx| {
+            assert_eq!(
+                app.active_editor_input()
+                    .unwrap()
+                    .read(cx)
+                    .text()
+                    .to_string(),
+                "x x x"
+            )
+        });
         vcx.dispatch_action(gpui_kit::component::input::Undo);
         vcx.run_until_parked();
-        app.read_with(&vcx, |app, cx| assert_eq!(app.active_editor_input().unwrap().read(cx).text().to_string(), "foo foo foo"));
+        app.read_with(&vcx, |app, cx| {
+            assert_eq!(
+                app.active_editor_input()
+                    .unwrap()
+                    .read(cx)
+                    .text()
+                    .to_string(),
+                "foo foo foo"
+            )
+        });
     }
     #[gpui_kit::test]
     fn markdown_source_commands_apply_and_undo_through_the_workbench(cx: &mut TestAppContext) {
@@ -1108,11 +1189,16 @@ mod gpui_tests {
         std::fs::write(&path, "initial").unwrap();
         let (app, mut vcx, _streams) = harness_with_tabs(cx, 1);
         vcx.update(|_, cx| cx.set_global(MarkdownWorkbench));
-        app.update_in(&mut vcx, |app, window, cx| app.open_file_in_editor(&path, window, cx));
+        app.update_in(&mut vcx, |app, window, cx| {
+            app.open_file_in_editor(&path, window, cx)
+        });
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
         while !app.read_with(&vcx, |app, _| app.active_buffer().is_some()) {
             vcx.run_until_parked();
-            assert!(std::time::Instant::now() < deadline, "Markdown open did not settle");
+            assert!(
+                std::time::Instant::now() < deadline,
+                "Markdown open did not settle"
+            );
             std::thread::sleep(std::time::Duration::from_millis(5));
         }
         for (command, before, selection, expected) in [
@@ -1141,10 +1227,30 @@ mod gpui_tests {
                 assert!(app.editor_apply_command(command, window, cx));
             });
             vcx.run_until_parked();
-            app.read_with(&vcx, |app, cx| assert_eq!(app.active_buffer().unwrap().input.read(cx).text().to_string(), expected));
+            app.read_with(&vcx, |app, cx| {
+                assert_eq!(
+                    app.active_buffer()
+                        .unwrap()
+                        .input
+                        .read(cx)
+                        .text()
+                        .to_string(),
+                    expected
+                )
+            });
             vcx.dispatch_action(gpui_kit::component::input::Undo);
             vcx.run_until_parked();
-            app.read_with(&vcx, |app, cx| assert_eq!(app.active_buffer().unwrap().input.read(cx).text().to_string(), before));
+            app.read_with(&vcx, |app, cx| {
+                assert_eq!(
+                    app.active_buffer()
+                        .unwrap()
+                        .input
+                        .read(cx)
+                        .text()
+                        .to_string(),
+                    before
+                )
+            });
         }
         app.update_in(&mut vcx, |app, window, cx| {
             let input = app.active_editor_input().unwrap();

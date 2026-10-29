@@ -717,7 +717,13 @@ impl LyrelApp {
 
     /// Shows a symbol the picker is on, leaving the keyboard in the picker.
     pub(crate) fn editor_symbol_preview(&mut self, line: u32, column: u32, cx: &mut Context<Self>) {
-        let Some(input) = self.editor.nav.preview.as_ref().and_then(|preview| preview.input.upgrade()) else {
+        let Some(input) = self
+            .editor
+            .nav
+            .preview
+            .as_ref()
+            .and_then(|preview| preview.input.upgrade())
+        else {
             return;
         };
         let offset = input
@@ -734,7 +740,9 @@ impl LyrelApp {
         let Some(f) = self.active_buffer() else {
             return;
         };
-        let Some(input) = self.active_editor_input() else { return; };
+        let Some(input) = self.active_editor_input() else {
+            return;
+        };
         let (origin, scroll) = {
             let state = input.read(cx);
             (state.cursor_position(), state.scroll_offset())
@@ -1399,6 +1407,7 @@ mod tests {
 pub(super) mod gpui_tests {
     use super::*;
     use crate::ui::app::test_window::harness_with_tabs;
+    use crate::ui::code_editor::MarkdownWorkbench;
     use crate::ui::editor_text::{EditorConfig, TextFormat};
     use gpui_kit::{Entity, TestAppContext, VisualTestContext};
 
@@ -1524,7 +1533,9 @@ pub(super) mod gpui_tests {
         std::fs::write(&path, "# One\nfirst\n\n# Two\nsecond\n").unwrap();
         let (app, mut vcx, _streams) = harness_with_tabs(cx, 1);
         vcx.update(|_, cx| cx.set_global(MarkdownWorkbench));
-        app.update_in(&mut vcx, |app, window, cx| app.open_file_in_editor(&path, window, cx));
+        app.update_in(&mut vcx, |app, window, cx| {
+            app.open_file_in_editor(&path, window, cx)
+        });
         let deadline = Instant::now() + Duration::from_secs(10);
         while !app.read_with(&vcx, |app, _| app.active_buffer().is_some()) {
             vcx.run_until_parked();

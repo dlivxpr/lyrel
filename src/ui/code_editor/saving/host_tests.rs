@@ -14,12 +14,18 @@ fn markdown_in_flight_save_closes_only_original_tab(cx: &mut TestAppContext) {
 
 fn in_flight_save_scenario(cx: &mut TestAppContext, markdown: bool) {
     let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join(if markdown { "in-flight.md" } else { "in-flight.txt" });
+    let path = dir.path().join(if markdown {
+        "in-flight.md"
+    } else {
+        "in-flight.txt"
+    });
     std::fs::write(&path, "before").unwrap();
     let host = FileHost::new(HostId(700));
     let release = host.pause_next_write();
     let (app, mut vcx, _streams) = harness_with_tabs(cx, 2);
-    if markdown { vcx.update(|_, cx| cx.set_global(MarkdownWorkbench)); }
+    if markdown {
+        vcx.update(|_, cx| cx.set_global(MarkdownWorkbench));
+    }
     app.update_in(&mut vcx, |app, window, cx| {
         app.editor_open_on_host(host.clone(), &path, window, cx)
     });
@@ -67,12 +73,22 @@ fn markdown_remote_save_as_and_later_saves_remain_on_original_host(cx: &mut Test
 
 fn remote_save_as_scenario(cx: &mut TestAppContext, markdown: bool) {
     let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join(if markdown { "same-name.md" } else { "same-name.txt" });
-    let target = dir.path().join(if markdown { "remote-save-as.md" } else { "remote-save-as.txt" });
+    let path = dir.path().join(if markdown {
+        "same-name.md"
+    } else {
+        "same-name.txt"
+    });
+    let target = dir.path().join(if markdown {
+        "remote-save-as.md"
+    } else {
+        "remote-save-as.txt"
+    });
     std::fs::write(&path, "unchanged local").unwrap();
     let host = FileHost::new(HostId(701));
     let (app, mut vcx, _streams) = harness_with_tabs(cx, 1);
-    if markdown { vcx.update(|_, cx| cx.set_global(MarkdownWorkbench)); }
+    if markdown {
+        vcx.update(|_, cx| cx.set_global(MarkdownWorkbench));
+    }
     app.update_in(&mut vcx, |app, window, cx| {
         app.open_file_in_editor(&path, window, cx)
     });
@@ -126,10 +142,22 @@ fn remote_save_as_scenario(cx: &mut TestAppContext, markdown: bool) {
     assert_eq!(host.writes.load(Ordering::SeqCst), 1);
     vcx.update(|window, cx| window.input("!", cx));
     settle(&mut vcx);
-    app.update_in(&mut vcx, |app, window, cx| app.editor_save_active(window, cx));
-    wait_until(&mut vcx, |vcx| app.read_with(vcx, |app, _| !app.active_buffer().unwrap().dirty && !app.active_buffer().unwrap().saving));
+    app.update_in(&mut vcx, |app, window, cx| {
+        app.editor_save_active(window, cx)
+    });
+    wait_until(&mut vcx, |vcx| {
+        app.read_with(vcx, |app, _| {
+            !app.active_buffer().unwrap().dirty && !app.active_buffer().unwrap().saving
+        })
+    });
     assert_eq!(host.writes.load(Ordering::SeqCst), 2);
-    app.read_with(&vcx, |app, _| assert!(app.editor.local_file(app.active_buffer().unwrap().id()).is_none()));
+    app.read_with(&vcx, |app, _| {
+        assert!(
+            app.editor
+                .local_file(app.active_buffer().unwrap().id())
+                .is_none()
+        )
+    });
 }
 
 #[gpui_kit::test]
@@ -152,7 +180,9 @@ fn replacement_group_scenario(cx: &mut TestAppContext, markdown: bool) {
     let host = FileHost::new(HostId(702));
     let release = host.pause_next_write();
     let (app, mut vcx, _streams) = harness_with_tabs(cx, 1);
-    if markdown { vcx.update(|_, cx| cx.set_global(MarkdownWorkbench)); }
+    if markdown {
+        vcx.update(|_, cx| cx.set_global(MarkdownWorkbench));
+    }
     app.update_in(&mut vcx, |app, window, cx| {
         app.open_file_in_editor(&left_path, window, cx);
     });
@@ -225,12 +255,18 @@ fn markdown_remote_save_as_rejects_identity_changed_while_bar_was_open(cx: &mut 
     let host = FileHost::new(HostId(703));
     let (app, mut vcx, _streams) = harness_with_tabs(cx, 1);
     vcx.update(|_, cx| cx.set_global(MarkdownWorkbench));
-    app.update_in(&mut vcx, |app, window, cx| app.editor_open_on_host(host.clone(), &path, window, cx));
-    wait_until(&mut vcx, |vcx| app.read_with(vcx, |app, _| app.active_buffer().is_some()));
+    app.update_in(&mut vcx, |app, window, cx| {
+        app.editor_open_on_host(host.clone(), &path, window, cx)
+    });
+    wait_until(&mut vcx, |vcx| {
+        app.read_with(vcx, |app, _| app.active_buffer().is_some())
+    });
     vcx.dispatch_action(EditorSaveAs);
     settle(&mut vcx);
     std::fs::rename(&path, &moved).unwrap();
-    app.update_in(&mut vcx, |app, _, cx| app.editor_path_moved(HostId(703), &path, &moved, cx));
+    app.update_in(&mut vcx, |app, _, cx| {
+        app.editor_path_moved(HostId(703), &path, &moved, cx)
+    });
     vcx.update(|window, cx| {
         window.press("secondary-a", cx);
         window.input(&target.display().to_string(), cx);

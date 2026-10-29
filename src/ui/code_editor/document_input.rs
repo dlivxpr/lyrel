@@ -1,7 +1,7 @@
 //! Workbench-facing content variant: Markdown never allocates an EditorState.
+use super::markdown::{Command, EditKind, Selection, SourcePresentation};
 use super::*;
 use gpui_kit::base::input::Rope;
-use markdown::{Command, EditKind, Selection, SourcePresentation};
 use std::cell::RefCell;
 
 #[derive(Clone)]
@@ -186,7 +186,10 @@ impl InputRead<'_> {
             .unwrap_or_else(|| self.source.unwrap().selection().range())
     }
     pub(crate) fn occurrence_range(&self) -> std::ops::Range<usize> {
-        self.source.map_or_else(|| self.selected_range(), SourcePresentation::occurrence_range)
+        self.source.map_or_else(
+            || self.selected_range(),
+            SourcePresentation::occurrence_range,
+        )
     }
     pub(crate) fn focus_handle(&self, cx: &gpui_kit::App) -> gpui_kit::FocusHandle {
         self.code
@@ -211,7 +214,14 @@ impl InputRead<'_> {
 /// Per-presentation storage contains only views, not another document authority.
 #[derive(Default)]
 pub(super) struct MarkdownPresentations(
-    RefCell<Vec<(TabId, split::GroupId, Entity<SourcePresentation>, Option<Entity<super::markdown_search::MarkdownSearch>>)>>,
+    RefCell<
+        Vec<(
+            TabId,
+            split::GroupId,
+            Entity<SourcePresentation>,
+            Option<Entity<super::markdown_search::MarkdownSearch>>,
+        )>,
+    >,
 );
 impl MarkdownPresentations {
     pub(super) fn view(
@@ -251,15 +261,32 @@ impl MarkdownPresentations {
             .find(|(t, g, _, _)| *t == tab && *g == group)
             .map(|(_, _, v, _)| v.clone())
     }
-    pub(super) fn search(&self, source: &Entity<SourcePresentation>) -> Option<Entity<super::markdown_search::MarkdownSearch>> {
-        self.0.borrow().iter().find(|(_, _, view, _)| view.entity_id() == source.entity_id())
+    pub(super) fn search(
+        &self,
+        source: &Entity<SourcePresentation>,
+    ) -> Option<Entity<super::markdown_search::MarkdownSearch>> {
+        self.0
+            .borrow()
+            .iter()
+            .find(|(_, _, view, _)| view.entity_id() == source.entity_id())
             .and_then(|(_, _, _, search)| search.clone())
     }
-    pub(super) fn open_search(&self, source: &Entity<SourcePresentation>, window: &mut Window, cx: &mut gpui_kit::App) -> Entity<super::markdown_search::MarkdownSearch> {
+    pub(super) fn open_search(
+        &self,
+        source: &Entity<SourcePresentation>,
+        window: &mut Window,
+        cx: &mut gpui_kit::App,
+    ) -> Entity<super::markdown_search::MarkdownSearch> {
         let mut views = self.0.borrow_mut();
-        let (_, _, _, search) = views.iter_mut().find(|(_, _, view, _)| view.entity_id() == source.entity_id())
+        let (_, _, _, search) = views
+            .iter_mut()
+            .find(|(_, _, view, _)| view.entity_id() == source.entity_id())
             .expect("source presentation is registered before receiving commands");
-        search.get_or_insert_with(|| cx.new(|cx| super::markdown_search::MarkdownSearch::new(source, window, cx))).clone()
+        search
+            .get_or_insert_with(|| {
+                cx.new(|cx| super::markdown_search::MarkdownSearch::new(source, window, cx))
+            })
+            .clone()
     }
     pub(super) fn retain(
         &self,

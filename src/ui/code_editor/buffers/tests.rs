@@ -570,10 +570,16 @@ fn markdown_external_writes_reload_clean_text_but_preserve_unsaved_edits(cx: &mu
 
 fn external_writes_scenario(cx: &mut TestAppContext, markdown: bool) {
     let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join(if markdown { "watched.md" } else { "watched.txt" });
+    let path = dir.path().join(if markdown {
+        "watched.md"
+    } else {
+        "watched.txt"
+    });
     std::fs::write(&path, "initial\n").unwrap();
     let (app, mut vcx, _streams) = harness_with_tabs(cx, 1);
-    if markdown { vcx.update(|_, cx| cx.set_global(MarkdownWorkbench)); }
+    if markdown {
+        vcx.update(|_, cx| cx.set_global(MarkdownWorkbench));
+    }
     app.update_in(&mut vcx, |app, window, cx| {
         app.open_file_in_editor(&path, window, cx)
     });
@@ -735,7 +741,9 @@ fn a_late_open_cannot_replace_a_newer_hosts_document_or_cursor(cx: &mut TestAppC
 }
 
 #[gpui_kit::test]
-fn markdown_session_restore_surfaces_failed_reads_without_losing_valid_files(cx: &mut TestAppContext) {
+fn markdown_session_restore_surfaces_failed_reads_without_losing_valid_files(
+    cx: &mut TestAppContext,
+) {
     let dir = tempfile::tempdir().unwrap();
     let valid = dir.path().join("restored.md");
     let missing = dir.path().join("unavailable.md");
@@ -746,10 +754,21 @@ fn markdown_session_restore_surfaces_failed_reads_without_losing_valid_files(cx:
         let tab = app.tabs[0].id();
         app.tab_code_mut_or_init();
         app.editor.restored.remove(&tab);
-        editor_session::put(cx, tab, TabEditor { files: vec![missing.clone(), valid.clone()], active: 1, visible: true, ..Default::default() });
+        editor_session::put(
+            cx,
+            tab,
+            TabEditor {
+                files: vec![missing.clone(), valid.clone()],
+                active: 1,
+                visible: true,
+                ..Default::default()
+            },
+        );
         app.editor_restore_active(window, cx);
     });
-    wait_until(&mut vcx, |vcx| app.read_with(vcx, |app, _| app.active_buffer().is_some()));
+    wait_until(&mut vcx, |vcx| {
+        app.read_with(vcx, |app, _| app.active_buffer().is_some())
+    });
     app.read_with(&vcx, |app, cx| {
         let file = app.active_buffer().unwrap();
         assert_eq!(file.path.file_name(), valid.file_name());
@@ -757,37 +776,81 @@ fn markdown_session_restore_surfaces_failed_reads_without_losing_valid_files(cx:
         assert!(file.input.code().is_none());
         assert_eq!(app.tab_code().unwrap().files.len(), 1);
     });
-    wait_until(&mut vcx, |vcx| app.read_with(vcx, |_, cx| {
-        crate::ui::notification_history::history(cx).read(cx).records()
-            .any(|record| record.message().contains("unavailable.md"))
-    }));
+    wait_until(&mut vcx, |vcx| {
+        app.read_with(vcx, |_, cx| {
+            crate::ui::notification_history::history(cx)
+                .read(cx)
+                .records()
+                .any(|record| record.message().contains("unavailable.md"))
+        })
+    });
 }
 
 #[gpui_kit::test]
 fn markdown_tab_uses_editorconfig_in_each_shared_presentation(cx: &mut TestAppContext) {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("indent.md");
-    std::fs::write(dir.path().join(".editorconfig"), "root = true\n[*.md]\nindent_style = space\nindent_size = 2\n").unwrap();
+    std::fs::write(
+        dir.path().join(".editorconfig"),
+        "root = true\n[*.md]\nindent_style = space\nindent_size = 2\n",
+    )
+    .unwrap();
     std::fs::write(&path, "first\nsecond\n").unwrap();
     let (app, mut vcx, _streams) = harness_with_tabs(cx, 1);
     vcx.update(|_, cx| cx.set_global(MarkdownWorkbench));
-    app.update_in(&mut vcx, |app, window, cx| app.open_file_in_editor(&path, window, cx));
+    app.update_in(&mut vcx, |app, window, cx| {
+        app.open_file_in_editor(&path, window, cx)
+    });
     wait_until(&mut vcx, |vcx| active_id(&app, vcx).is_some());
     vcx.update(|window, cx| {
         window.render_frame(cx);
         window.press("tab", cx);
     });
     vcx.run_until_parked();
-    app.read_with(&vcx, |app, cx| assert_eq!(app.active_buffer().unwrap().input.read(cx).text().to_string(), "  first\nsecond\n"));
-    app.update_in(&mut vcx, |app, window, cx| { assert!(app.editor_split(window, cx)); });
+    app.read_with(&vcx, |app, cx| {
+        assert_eq!(
+            app.active_buffer()
+                .unwrap()
+                .input
+                .read(cx)
+                .text()
+                .to_string(),
+            "  first\nsecond\n"
+        )
+    });
+    app.update_in(&mut vcx, |app, window, cx| {
+        assert!(app.editor_split(window, cx));
+    });
     vcx.update(|window, cx| window.render_frame(cx));
     app.update_in(&mut vcx, |app, window, cx| {
-        app.active_editor_input().unwrap().set_cursor_position(Position::new(1, 0), window, cx);
+        app.active_editor_input()
+            .unwrap()
+            .set_cursor_position(Position::new(1, 0), window, cx);
     });
     vcx.update(|window, cx| window.press("tab", cx));
     vcx.run_until_parked();
-    app.read_with(&vcx, |app, cx| assert_eq!(app.active_buffer().unwrap().input.read(cx).text().to_string(), "  first\n  second\n"));
+    app.read_with(&vcx, |app, cx| {
+        assert_eq!(
+            app.active_buffer()
+                .unwrap()
+                .input
+                .read(cx)
+                .text()
+                .to_string(),
+            "  first\n  second\n"
+        )
+    });
     vcx.dispatch_action(gpui_kit::component::input::Undo);
     vcx.run_until_parked();
-    app.read_with(&vcx, |app, cx| assert_eq!(app.active_buffer().unwrap().input.read(cx).text().to_string(), "  first\nsecond\n"));
+    app.read_with(&vcx, |app, cx| {
+        assert_eq!(
+            app.active_buffer()
+                .unwrap()
+                .input
+                .read(cx)
+                .text()
+                .to_string(),
+            "  first\nsecond\n"
+        )
+    });
 }

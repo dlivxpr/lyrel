@@ -1312,7 +1312,10 @@ impl LyrelApp {
         if !self.code_panel_visible() {
             return;
         }
-        if let Some(view) = self.active_editor_input().and_then(|input| input.markdown()).cloned() {
+        if let Some(view) = self
+            .active_editor_input()
+            .and_then(|input| input.markdown().cloned())
+        {
             view.update(cx, |view, cx| view.toggle_mode(window, cx));
             cx.notify();
             return;
@@ -1499,10 +1502,13 @@ impl LyrelApp {
         self.editor_has_focus(window, cx)
             || (self.code_panel_visible() && self.editor.empty_focus.is_focused(window))
             || self.editor.bar_has_focus(window, cx)
-            || self.active_editor_input().and_then(|input| {
-                let source = input.markdown()?;
-                self.active_buffer()?.presentations.search(source)
-            }).is_some_and(|search| search.read(cx).has_focus(window, cx))
+            || self
+                .active_editor_input()
+                .and_then(|input| {
+                    let source = input.markdown()?;
+                    self.active_buffer()?.presentations.search(source)
+                })
+                .is_some_and(|search| search.read(cx).has_focus(window, cx))
     }
 
     pub(crate) fn editor_save_active(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -2864,7 +2870,9 @@ impl LyrelApp {
         let wrap: Option<bool> = active.map(|f| f.wrap);
         let is_markdown = active.is_some_and(|f| f.language() == "markdown");
         let preview = active.is_some_and(|f| f.preview);
-        let native_live = self.active_editor_input().and_then(|input| input.markdown()).map(|view| view.read(cx).is_live());
+        let native_live = self
+            .active_editor_input()
+            .and_then(|input| input.markdown().map(|view| view.read(cx).is_live()));
         let indent: Option<SharedString> = active.map(|f| {
             let key = if f.indent.hard_tabs {
                 L10nKey::EditorIndentTabs
@@ -2908,7 +2916,11 @@ impl LyrelApp {
             )
             .when(is_markdown, |this| {
                 let label = if let Some(live) = native_live {
-                    t(if live { L10nKey::EditorMarkdownSource } else { L10nKey::EditorMarkdownLive })
+                    t(if live {
+                        L10nKey::EditorMarkdownSource
+                    } else {
+                        L10nKey::EditorMarkdownLive
+                    })
                 } else if preview {
                     t(L10nKey::EditorEdit)
                 } else {

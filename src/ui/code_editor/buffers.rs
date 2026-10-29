@@ -291,18 +291,26 @@ impl EditorBuffers {
                 if access(view).context_epoch != epoch || !valid(view, target, cx) {
                     return;
                 }
-                let loaded = loaded.into_iter().map(|(path, result)| match result {
-                    Ok(file) => Some(file),
-                    Err(error) => {
-                        if !preserve || language_for_path(&path) != "markdown" { return None; }
-                        let message = match error {
-                            EditorOpenError::Message(message) => message,
-                            EditorOpenError::NotText(path) => t_fmt(L10nKey::EditorBinaryFile, &[("path", &path.display().to_string())]),
-                        };
-                        window.notify_app(message, cx);
-                        None
-                    }
-                }).collect();
+                let loaded = loaded
+                    .into_iter()
+                    .map(|(path, result)| match result {
+                        Ok(file) => Some(file),
+                        Err(error) => {
+                            if !preserve || language_for_path(&path) != "markdown" {
+                                return None;
+                            }
+                            let message = match error {
+                                EditorOpenError::Message(message) => message,
+                                EditorOpenError::NotText(path) => t_fmt(
+                                    L10nKey::EditorBinaryFile,
+                                    &[("path", &path.display().to_string())],
+                                ),
+                            };
+                            window.notify_app(message, cx);
+                            None
+                        }
+                    })
+                    .collect();
                 landed(view, loaded, window, cx);
             },
         );

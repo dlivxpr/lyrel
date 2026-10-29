@@ -442,7 +442,9 @@ impl EditorPanelState {
         let id = match kind {
             BarKind::GoToLine { id } | BarKind::SaveAs { id } | BarKind::Rename { id, .. } => id,
         };
-        let Some(identity) = self.save_identity(id) else { return; };
+        let Some(identity) = self.save_identity(id) else {
+            return;
+        };
         self.dismiss_bar();
         let placeholder = match kind {
             BarKind::GoToLine { id } => {

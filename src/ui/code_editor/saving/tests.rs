@@ -157,10 +157,16 @@ fn markdown_conflict_drops_original_close_even_when_overwrite_is_accepted(cx: &m
 
 fn conflict_close_scenario(cx: &mut TestAppContext, markdown: bool) {
     let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join(if markdown { "conflict.md" } else { "conflict.txt" });
+    let path = dir.path().join(if markdown {
+        "conflict.md"
+    } else {
+        "conflict.txt"
+    });
     std::fs::write(&path, "on disk").unwrap();
     let (app, mut vcx, _streams) = harness_with_tabs(cx, 1);
-    if markdown { vcx.update(|_, cx| cx.set_global(MarkdownWorkbench)); }
+    if markdown {
+        vcx.update(|_, cx| cx.set_global(MarkdownWorkbench));
+    }
     app.update_in(&mut vcx, |app, window, cx| {
         app.open_file_in_editor(&path, window, cx)
     });
@@ -316,7 +322,9 @@ fn file_save_before_close_keeps_a_later_focused_editor_group(cx: &mut TestAppCon
 }
 
 #[gpui_kit::test]
-fn markdown_save_as_cancel_and_failed_unsaved_close_keep_edits_through_recovery(cx: &mut TestAppContext) {
+fn markdown_save_as_cancel_and_failed_unsaved_close_keep_edits_through_recovery(
+    cx: &mut TestAppContext,
+) {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("original.md");
     let occupied = dir.path().join("a-directory");
@@ -325,8 +333,12 @@ fn markdown_save_as_cancel_and_failed_unsaved_close_keep_edits_through_recovery(
     std::fs::create_dir(&occupied).unwrap();
     let (app, mut vcx, _streams) = harness_with_tabs(cx, 1);
     vcx.update(|_, cx| cx.set_global(MarkdownWorkbench));
-    app.update_in(&mut vcx, |app, window, cx| app.open_file_in_editor(&path, window, cx));
-    wait_until(&mut vcx, |vcx| app.read_with(vcx, |app, _| app.active_buffer().is_some()));
+    app.update_in(&mut vcx, |app, window, cx| {
+        app.open_file_in_editor(&path, window, cx)
+    });
+    wait_until(&mut vcx, |vcx| {
+        app.read_with(vcx, |app, _| app.active_buffer().is_some())
+    });
     vcx.update(|window, cx| {
         window.press("secondary-a", cx);
         window.input("unsaved Markdown", cx);
@@ -349,15 +361,26 @@ fn markdown_save_as_cancel_and_failed_unsaved_close_keep_edits_through_recovery(
     vcx.dispatch_action(EditorSaveAs);
     settle(&mut vcx);
     cx.simulate_new_path_selection(|_| Some(occupied.clone()));
-    wait_until(&mut vcx, |vcx| app.read_with(vcx, |app, _| app.active_buffer().is_some_and(|file| file.path == occupied && !file.saving)));
+    wait_until(&mut vcx, |vcx| {
+        app.read_with(vcx, |app, _| {
+            app.active_buffer()
+                .is_some_and(|file| file.path == occupied && !file.saving)
+        })
+    });
     vcx.dispatch_action(CloseActiveTab);
     settle(&mut vcx);
     vcx.simulate_prompt_answer(t(L10nKey::Save));
-    wait_until(&mut vcx, |vcx| app.read_with(vcx, |app, _| !app.active_buffer().unwrap().saving));
+    wait_until(&mut vcx, |vcx| {
+        app.read_with(vcx, |app, _| !app.active_buffer().unwrap().saving)
+    });
     vcx.dispatch_action(EditorSaveAs);
     settle(&mut vcx);
     cx.simulate_new_path_selection(|_| Some(recovered.clone()));
-    wait_until(&mut vcx, |vcx| app.read_with(vcx, |app, _| !app.active_buffer().unwrap().dirty && !app.active_buffer().unwrap().saving));
+    wait_until(&mut vcx, |vcx| {
+        app.read_with(vcx, |app, _| {
+            !app.active_buffer().unwrap().dirty && !app.active_buffer().unwrap().saving
+        })
+    });
     app.read_with(&vcx, |app, cx| {
         let file = app.active_buffer().unwrap();
         assert_eq!(file.id(), id);
@@ -365,5 +388,8 @@ fn markdown_save_as_cancel_and_failed_unsaved_close_keep_edits_through_recovery(
         assert_eq!(file.input.read(cx).text().to_string(), "unsaved Markdown");
     });
     assert_eq!(std::fs::read_to_string(&path).unwrap(), "original");
-    assert_eq!(std::fs::read_to_string(&recovered).unwrap(), "unsaved Markdown");
+    assert_eq!(
+        std::fs::read_to_string(&recovered).unwrap(),
+        "unsaved Markdown"
+    );
 }

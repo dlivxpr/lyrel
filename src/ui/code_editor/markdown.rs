@@ -7,8 +7,8 @@ use gpui_kit::base::{
 use std::ops::Range;
 use unicode_segmentation::UnicodeSegmentation as _;
 
-mod source;
 mod projection;
+mod source;
 pub(super) use source::SourcePresentation;
 #[cfg(test)]
 mod tests;
@@ -119,7 +119,9 @@ pub(crate) enum Command {
     },
     Select(Selection),
     Insert(String),
-    ParagraphBreak { hard: bool },
+    ParagraphBreak {
+        hard: bool,
+    },
     Replace {
         range: Range<usize>,
         text: String,
