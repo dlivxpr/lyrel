@@ -1904,11 +1904,12 @@ impl LyrelApp {
                 cx.read_from_clipboard().is_none(),
             )
             .menu(t(L10nKey::AppMenuSelectAll), Box::new(edit::SelectAll));
-        if f.input.markdown().is_some() {
+        if let Some(markdown) = input.markdown() {
             let menu = menu.menu(
                 t(L10nKey::EditorGoToLineAction),
                 Box::new(crate::core::actions::EditorGoToLine),
             );
+            let menu = markdown.read(cx).table_menu(menu);
             return this.editor_file_menu_items(menu, id, app, cx);
         }
         let menu = menu

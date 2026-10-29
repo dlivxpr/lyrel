@@ -2455,3 +2455,187 @@ fn local_image_references_follow_document_rename_without_moving_assets(
     assert!(!destination.join("existing.png").exists());
     assert_eq!(std::fs::read_to_string(moved).unwrap(), source);
 }
+
+#[gpui_kit::test]
+fn native_table_structure_actions_share_undo_and_save_reopen(
+    cx: &mut gpui_kit::TestAppContext,
+) {
+    use crate::ui::app::test_window::harness_with_tabs;
+    use gpui_kit::{Focusable as _, MouseButton, test::{TestEventExt as _, TestQueryExt as _, TestWindowExt as _}};
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("structure.md");
+    let original = "before  \r\n\n| **A** | B |\r\n| --- | ---: |\n| x\\|y | `z` |\r\n\n[ref]: target  ";
+    std::fs::write(&path, original).unwrap();
+    let (app, mut context, _streams) = harness_with_tabs(cx, 1);
+    context.update(|_, cx| cx.set_global(super::super::MarkdownWorkbench));
+    app.update_in(&mut context, |app, window, cx| app.open_file_in_editor(&path, window, cx));
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    let view = loop {
+        context.run_until_parked();
+        if let Some(view) = app.read_with(&context, |app, _| {
+            app.active_editor_input().and_then(|input| input.markdown().cloned())
+        }) { break view; }
+        assert!(std::time::Instant::now() < deadline);
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    };
+    context.dispatch_action(crate::core::actions::ToggleDocumentPreview);
+    settle_live_geometry(&view, &mut context);
+    context.dispatch_action(super::tables::DeleteRow);
+    context.run_until_parked();
+    view.read_with(&context, |view, cx| assert_eq!(view.document().read(cx).encode().unwrap(), original.as_bytes()));
+    let at = original.replace("\r\n", "\n").find("x\\|y").unwrap();
+    view.update_in(&mut context, |view, window, cx| {
+        view.select_range(at..at + 4, cx);
+        view.focus_handle(cx).focus(window, cx);
+    });
+    // The binding dispatches the same Action used by the native editor menu.
+    context.update(|window, cx| window.press("secondary-alt-shift-down", cx));
+    context.run_until_parked();
+    settle_live_geometry(&view, &mut context);
+    let after_row = "before  \r\n\n| **A** | B |\n| --- | ---: |\n| x\\|y | `z` |\n|  |  |\r\n\n[ref]: target  ";
+    view.read_with(&context, |view, cx| {
+        assert_eq!(view.document().read(cx).encode().unwrap(), after_row.as_bytes());
+        assert!(view.range_to_bounds(&view.selection().range(), cx).is_some());
+    });
+    context.update(|window, cx| assert!(view.read(cx).focus_handle(cx).is_focused(window)));
+    context.dispatch_action(gpui_kit::component::input::Undo);
+    context.run_until_parked();
+    view.read_with(&context, |view, cx| {
+        assert_eq!(view.document().read(cx).encode().unwrap(), original.as_bytes());
+        assert_eq!(view.selection(), Selection::new(at, at + 4));
+    });
+    context.dispatch_action(gpui_kit::component::input::Redo);
+    context.run_until_parked();
+    context.dispatch_action(super::tables::InsertColumnAfter);
+    context.run_until_parked();
+    context.update(|window, cx| window.click("markdown-table-commands", cx));
+    context.run_until_parked();
+    context.update(|window, cx| {
+        let item = window.find_by_label(crate::ui::i18n::t(crate::ui::i18n::L10nKey::EditorTableAlignCenter).as_ref());
+        window.pointer_down(item.bounds().center(), MouseButton::Left, cx);
+        window.pointer_up(item.bounds().center(), MouseButton::Left, cx);
+    });
+    context.run_until_parked();
+    let expected = "before  \r\n\n| **A** |  | B |\n| --- | :---: | ---: |\n| x\\|y |  | `z` |\n|  |  |  |\r\n\n[ref]: target  ";
+    settle_live_geometry(&view, &mut context);
+    view.read_with(&context, |view, cx| {
+        assert_eq!(view.document().read(cx).encode().unwrap(), expected.as_bytes());
+        assert!(view.range_to_bounds(&view.selection().range(), cx).is_some());
+    });
+    context.update(|window, cx| assert!(view.read(cx).focus_handle(cx).is_focused(window)));
+    let before_delete = view.read_with(&context, |view, _| view.selection());
+    context.dispatch_action(super::tables::DeleteColumn);
+    context.run_until_parked();
+    settle_live_geometry(&view, &mut context);
+    view.read_with(&context, |view, cx| {
+        assert_eq!(view.document().read(cx).encode().unwrap(), after_row.as_bytes());
+        assert!(view.range_to_bounds(&view.selection().range(), cx).is_some());
+    });
+    context.dispatch_action(gpui_kit::component::input::Undo);
+    context.run_until_parked();
+    view.read_with(&context, |view, cx| {
+        assert_eq!(view.document().read(cx).encode().unwrap(), expected.as_bytes());
+        assert_eq!(view.selection(), before_delete);
+    });
+    context.dispatch_action(super::tables::DeleteRow);
+    context.run_until_parked();
+    settle_live_geometry(&view, &mut context);
+    view.read_with(&context, |view, cx| {
+        assert_eq!(view.document().read(cx).encode().unwrap(), b"before  \r\n\n| **A** |  | B |\n| --- | :---: | ---: |\n| x\\|y |  | `z` |\r\n\n[ref]: target  ");
+        assert!(view.range_to_bounds(&view.selection().range(), cx).is_some());
+    });
+    context.dispatch_action(gpui_kit::component::input::Undo);
+    context.run_until_parked();
+    view.read_with(&context, |view, cx| {
+        assert_eq!(view.document().read(cx).encode().unwrap(), expected.as_bytes());
+        assert_eq!(view.selection(), before_delete);
+    });
+    context.dispatch_action(crate::core::actions::ToggleDocumentPreview);
+    context.dispatch_action(gpui_kit::component::input::Undo);
+    context.run_until_parked();
+    context.dispatch_action(gpui_kit::component::input::Redo);
+    context.dispatch_action(crate::core::actions::EditorSave);
+    loop {
+        context.run_until_parked();
+        if app.read_with(&context, |app, _| app.active_buffer().is_some_and(|file| !file.dirty && !file.saving)) { break; }
+        assert!(std::time::Instant::now() < deadline);
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    assert_eq!(std::fs::read(&path).unwrap(), expected.as_bytes());
+    app.update_in(&mut context, |app, window, cx| {
+        app.editor_close_file(0, window, cx);
+        app.open_file_in_editor(&path, window, cx);
+    });
+    loop {
+        context.run_until_parked();
+        if app.read_with(&context, |app, _| app.active_buffer().is_some()) { break; }
+        assert!(std::time::Instant::now() < deadline);
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    app.read_with(&context, |app, cx| {
+        let reopened = app.active_editor_input().unwrap().markdown().unwrap().read(cx);
+        assert_eq!(reopened.document().read(cx).encode().unwrap(), expected.as_bytes());
+    });
+}
+
+#[test]
+fn table_structure_commands_preserve_cells_boundaries_and_atomic_selection() {
+    use super::tables::Operation;
+    let original = "outside  \r\n\n| **A** | B |\r\n| --- | ---: |\n| x\\|y | `z` |\r\n\n[ref]: target";
+    let normalized = original.replace("\r\n", "\n");
+    let at = normalized.find("x\\|y").unwrap();
+    let prefix = "outside  \r\n\n";
+    let suffix = "\r\n\n[ref]: target";
+    for (operation, table) in [
+        (Operation::InsertRowBefore, "| **A** | B |\n| --- | ---: |\n|  |  |\n| x\\|y | `z` |"),
+        (Operation::InsertRowAfter, "| **A** | B |\n| --- | ---: |\n| x\\|y | `z` |\n|  |  |"),
+        (Operation::DeleteRow, "| **A** | B |\n| --- | ---: |"),
+        (Operation::InsertColumnBefore, "|  | **A** | B |\n| --- | --- | ---: |\n|  | x\\|y | `z` |"),
+        (Operation::InsertColumnAfter, "| **A** |  | B |\n| --- | --- | ---: |\n| x\\|y |  | `z` |"),
+        (Operation::DeleteColumn, "| B |\n| ---: |\n| `z` |"),
+        (Operation::AlignDefault, "| **A** | B |\n| --- | ---: |\n| x\\|y | `z` |"),
+        (Operation::AlignLeft, "| **A** | B |\n| :--- | ---: |\n| x\\|y | `z` |"),
+        (Operation::AlignCenter, "| **A** | B |\n| :---: | ---: |\n| x\\|y | `z` |"),
+        (Operation::AlignRight, "| **A** | B |\n| ---: | ---: |\n| x\\|y | `z` |"),
+    ] {
+        let mut document = MarkdownDocument::new(original.into(), TextFormat::default());
+        let selection = Selection::new(at, at + 4);
+        let mut state = PresentationState::new(selection);
+        document.command(&mut state, Command::Table(operation));
+        let expected = format!("{prefix}{table}{suffix}");
+        assert_eq!(document.encode().unwrap(), expected.as_bytes());
+        let after = state.selection();
+        // Typing at the command's selection must change a surviving real cell.
+        document.command(&mut state, Command::Insert("中".into()));
+        assert!(document.source().to_string().contains("中"));
+        document.command(&mut state, Command::Undo);
+        assert_eq!(state.selection(), after);
+        assert_eq!(document.encode().unwrap(), expected.as_bytes());
+        document.command(&mut state, Command::Undo);
+        assert_eq!(document.encode().unwrap(), original.as_bytes());
+        assert_eq!(state.selection(), selection);
+        document.command(&mut state, Command::Redo);
+        assert_eq!(document.encode().unwrap(), expected.as_bytes());
+        assert_eq!(state.selection(), after);
+    }
+    for (source, token, operation, expected) in [
+        ("| a | b |\n| --- | --- |\n| c | d |", "a", Operation::DeleteRow, "| c | d |\n| --- | --- |"),
+        ("| a | b |\n| --- | --- |\n| c | d |", "a", Operation::InsertRowBefore, "|  |  |\n| --- | --- |\n| a | b |\n| c | d |"),
+        ("| a |\n| --- |", "a", Operation::DeleteRow, "|  |\n| --- |"),
+        ("| a |\n| --- |\n| b |", "b", Operation::DeleteColumn, "|  |\n| --- |\n|  |"),
+        ("| a | b |\n| --- | --- |\n| c | d |", "d", Operation::DeleteColumn, "| a |\n| --- |\n| c |"),
+        ("| a | b |\n| --- | --- |\n| c |", "c", Operation::InsertColumnAfter, "| a |  | b |\n| --- | --- | --- |\n| c |  |  |"),
+    ] {
+        let mut document = MarkdownDocument::new(source.into(), TextFormat::default());
+        let mut state = PresentationState::new(Selection::caret(source.find(token).unwrap()));
+        let before = state.selection();
+        document.command(&mut state, Command::Table(operation));
+        assert_eq!(document.source().to_string(), expected);
+        document.command(&mut state, Command::Insert("X".into()));
+        assert!(document.source().to_string().contains(" X"));
+        document.command(&mut state, Command::Undo);
+        document.command(&mut state, Command::Undo);
+        assert_eq!(document.source().to_string(), source);
+        assert_eq!(state.selection(), before);
+    }
+}
