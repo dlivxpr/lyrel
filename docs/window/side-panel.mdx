@@ -354,6 +354,8 @@ MDX 的可视化编辑不等于执行 React 页面。以下组件需要专用原
 
 点击属性或正文只编辑；独立的「打开目标」标准按钮才主动导航，并沿原文档的 `FollowLink`／Host 路径解析相对目标。属性、子内容、source/live 切换、撤销及 Host 保存重开的消费者回归已加入；本切片未运行检查，Windows／macOS 的真实 IME、键盘焦点与原生像素仍待集成验收。
 
+当前第三阶段仍有明确依赖阻塞：正式 registry 的 `markdown 1.0.0` 在 quoted JSX 属性值以未结束字符实体结尾时，其 [mdast 属性编译路径](https://docs.rs/crate/markdown/1.0.0/source/src/to_mdast.rs) 调用的 [字符实体解码](https://docs.rs/crate/markdown/1.0.0/source/src/util/character_reference.rs) 可能越界 panic；逐字符编辑目标中的 `&#38;` 已在工作台消费者回归触发。此问题尚未修复，也未用改写解析输入、捕获 panic 或削弱字节断言绕过。现有发布版没有属性解码替换 hook，兼容修复发布或更换解析实现需要单独决策；这不构成 MDX 完整即时编辑已验收的声明。
+
 `docs/introduction.mdx` 中的卡片和步骤属于专用映射对象；`docs/index.mdx` 中的函数、条件表达式和 `.map()` 不会执行，因此不承诺还原该动态页面。组件描述与嵌套编辑可参考 [MDXEditor 的 JSX 编辑模型](https://mdxeditor.dev/editor/docs/jsx)，不引入其 Web 编辑运行时。
 
 #### 图片资源与网络访问
