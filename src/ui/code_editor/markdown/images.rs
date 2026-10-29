@@ -13,19 +13,33 @@ pub(super) fn definitions(root: &Node) -> Definitions {
     let mut values = HashMap::new();
     fn walk(node: &Node, values: &mut Definitions) {
         if let Node::Definition(value) = node {
-            values.entry(value.identifier.to_uppercase()).or_insert_with(|| (value.url.clone(), value.title.clone()));
+            values
+                .entry(value.identifier.to_uppercase())
+                .or_insert_with(|| (value.url.clone(), value.title.clone()));
         }
-        for child in node.children().into_iter().flatten() { walk(child, values); }
+        for child in node.children().into_iter().flatten() {
+            walk(child, values);
+        }
     }
     walk(root, &mut values);
     values
 }
 pub(super) fn image(node: &Node, definitions: &Definitions) -> Option<Image> {
     match node {
-        Node::Image(value) => Some(Image { url: value.url.clone(), alt: value.alt.clone(), title: value.title.clone() }),
-        Node::ImageReference(value) => definitions.get(&value.identifier.to_uppercase()).map(|(url, title)| Image {
-            url: url.clone(), alt: value.alt.clone(), title: title.clone(),
+        Node::Image(value) => Some(Image {
+            url: value.url.clone(),
+            alt: value.alt.clone(),
+            title: value.title.clone(),
         }),
+        Node::ImageReference(value) => {
+            definitions
+                .get(&value.identifier.to_uppercase())
+                .map(|(url, title)| Image {
+                    url: url.clone(),
+                    alt: value.alt.clone(),
+                    title: title.clone(),
+                })
+        }
         _ => None,
     }
 }
@@ -52,11 +66,12 @@ fn decode(bytes: &[u8]) -> anyhow::Result<Arc<RenderImage>> {
         Ok(image) => image.into_rgba8(),
         Err(raster_error) => {
             use resvg::{tiny_skia, usvg};
-            static FONTS: std::sync::LazyLock<Arc<usvg::fontdb::Database>> = std::sync::LazyLock::new(|| {
-                let mut fonts = usvg::fontdb::Database::new();
-                fonts.load_system_fonts();
-                Arc::new(fonts)
-            });
+            static FONTS: std::sync::LazyLock<Arc<usvg::fontdb::Database>> =
+                std::sync::LazyLock::new(|| {
+                    let mut fonts = usvg::fontdb::Database::new();
+                    fonts.load_system_fonts();
+                    Arc::new(fonts)
+                });
             let denied = Arc::new(std::sync::atomic::AtomicBool::new(false));
             let rejected = denied.clone();
             let options = usvg::Options {
@@ -72,27 +87,40 @@ fn decode(bytes: &[u8]) -> anyhow::Result<Arc<RenderImage>> {
             };
             let tree = usvg::Tree::from_data(bytes, &options)
                 .map_err(|_| anyhow::anyhow!("{raster_error}"))?;
-            anyhow::ensure!(!denied.load(std::sync::atomic::Ordering::Relaxed), "SVG references external resources; those resources were not loaded");
+            anyhow::ensure!(
+                !denied.load(std::sync::atomic::Ordering::Relaxed),
+                "SVG references external resources; those resources were not loaded"
+            );
             let size = tree.size();
             let scale = (2048. / size.width().max(size.height())).min(1.);
             let width = (size.width() * scale).ceil().max(1.) as u32;
             let height = (size.height() * scale).ceil().max(1.) as u32;
             let mut pixmap = tiny_skia::Pixmap::new(width, height)
                 .ok_or_else(|| anyhow::anyhow!("image allocation failed"))?;
-            resvg::render(&tree, tiny_skia::Transform::from_scale(scale, scale), &mut pixmap.as_mut());
+            resvg::render(
+                &tree,
+                tiny_skia::Transform::from_scale(scale, scale),
+                &mut pixmap.as_mut(),
+            );
             let mut bytes = pixmap.take();
             for pixel in bytes.chunks_exact_mut(4) {
                 let alpha = pixel[3] as u32;
                 if alpha != 0 {
-                    for channel in &mut pixel[..3] { *channel = ((*channel as u32 * 255) / alpha).min(255) as u8; }
+                    for channel in &mut pixel[..3] {
+                        *channel = ((*channel as u32 * 255) / alpha).min(255) as u8;
+                    }
                 }
             }
             image::RgbaImage::from_raw(width, height, bytes).unwrap()
         }
     };
     let mut pixels = pixels;
-    for pixel in pixels.pixels_mut() { pixel.0.swap(0, 2); }
-    Ok(Arc::new(RenderImage::new(smallvec::smallvec![image::Frame::new(pixels)])))
+    for pixel in pixels.pixels_mut() {
+        pixel.0.swap(0, 2);
+    }
+    Ok(Arc::new(RenderImage::new(smallvec::smallvec![
+        image::Frame::new(pixels)
+    ])))
 }
 impl super::MarkdownDocument {
     pub(super) fn sync_images(
@@ -104,12 +132,23 @@ impl super::MarkdownDocument {
         self.images.states.retain(|url, _| urls.contains(url));
         self.images.tasks.retain(|url, _| urls.contains(url));
         let mut changed = false;
-        let Some(resources) = self.resources().cloned() else { return; };
+        let Some(resources) = self.resources().cloned() else {
+            return;
+        };
         let revision = self.revision();
         for url in urls {
-            let state = self.images.states.entry(url.clone()).or_insert(State::Unloaded);
-            if matches!(state, State::Ready(_) | State::Loading(_)) || (external(&url) && !consent) { continue; }
-            if matches!(state, State::Failed(_)) && !consent { continue; }
+            let state = self
+                .images
+                .states
+                .entry(url.clone())
+                .or_insert(State::Unloaded);
+            if matches!(state, State::Ready(_) | State::Loading(_)) || (external(&url) && !consent)
+            {
+                continue;
+            }
+            if matches!(state, State::Failed(_)) && !consent {
+                continue;
+            }
             self.images.generation = self.images.generation.wrapping_add(1);
             let generation = self.images.generation;
             *state = State::Loading(generation);
@@ -153,7 +192,7 @@ impl super::MarkdownDocument {
                 };
                 let _ = document.update(cx, |document, cx| {
                     if !matches!(document.images.states.get(&url), Some(State::Loading(id)) if *id == generation) { return; }
-                    if !resources.is_current(document.resources()) || document.revision() != revision { 
+                    if !resources.is_current(document.resources()) || document.revision() != revision {
                         if resources.is_current(document.resources()) {
                             document.images.states.remove(&url);
                             cx.emit(super::DocumentEvent::ImagesChanged);
@@ -170,6 +209,8 @@ impl super::MarkdownDocument {
             });
             self.images.tasks.insert(task_url, task);
         }
-        if changed { cx.emit(super::DocumentEvent::ImagesChanged); }
+        if changed {
+            cx.emit(super::DocumentEvent::ImagesChanged);
+        }
     }
 }

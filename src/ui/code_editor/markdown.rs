@@ -8,19 +8,19 @@ use std::ops::Range;
 use unicode_segmentation::UnicodeSegmentation as _;
 
 mod images;
-pub(super) mod resources;
-mod mermaid;
 pub(super) mod links;
 mod lists;
 mod math;
+mod mermaid;
 mod projection;
 mod regions;
+pub(super) mod resources;
 mod source;
 mod tables;
-pub(crate) use tables::bindings as table_bindings;
 #[cfg(test)]
 pub(super) use source::FollowLink;
 pub(super) use source::SourcePresentation;
+pub(crate) use tables::bindings as table_bindings;
 #[cfg(test)]
 mod tests;
 
@@ -524,18 +524,28 @@ impl MarkdownDocument {
         match command {
             Command::Table(operation) => {
                 self.finish_composition(state, false);
-                if let Some((range, text, caret)) = tables::edit(&self.source.to_string(), state.selection, operation) {
+                if let Some((range, text, caret)) =
+                    tables::edit(&self.source.to_string(), state.selection, operation)
+                {
                     let removed = self.source_text(range.clone());
                     let inserted = SourceText::from_input(text, LineEnding::Lf);
                     if removed != inserted {
                         let before = state.selection;
                         self.replace(range.clone(), &inserted);
                         state.selection = Selection::caret(caret);
-                        self.record(Change {
-                            edits: smallvec::smallvec![ReplacedSource { start: range.start, removed, inserted }],
-                            before,
-                            after: state.selection,
-                        }, EditKind::Command, state.id);
+                        self.record(
+                            Change {
+                                edits: smallvec::smallvec![ReplacedSource {
+                                    start: range.start,
+                                    removed,
+                                    inserted
+                                }],
+                                before,
+                                after: state.selection,
+                            },
+                            EditKind::Command,
+                            state.id,
+                        );
                     }
                 }
             }
