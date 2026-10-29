@@ -39,6 +39,7 @@ impl<'a> FieldContext<'a> {
     pub(in super::super) fn state(&self) -> &ViewState { self.state }
     pub(in super::super) fn revision(&self) -> u64 { self.revision }
     pub(in super::super) fn grammar(&self) -> Grammar { self.grammar }
+    pub(in super::super) fn components(&self) -> &[Component] { &self.index.components }
 }
 
 /// Dedicated family modules attach here: choose the family from the positioned
@@ -78,6 +79,9 @@ fn render_component(context: &FieldContext<'_>, content: AnyElement, window: &mu
     if context.component.is_some_and(|component| super::cards::matches(&context.source.slice(component.name_range()).to_string())) {
         return super::cards::render(context, content, window, cx);
     }
+    if super::steps::matches(context) {
+        return super::steps::render(context, content, window, cx);
+    }
     render_generic(context, content, cx)
 }
 
@@ -106,17 +110,18 @@ pub(in super::super) fn render_generic(context: &FieldContext<'_>, content: AnyE
         let expansion = context.component.filter(|component| field == Field::Children && component.closing_name_range().is_none()).map(|component| {
             (component.source_range().end - 2..component.source_range().end, context.source.slice(component.name_range()).to_string(), component.is_flow())
         });
-        header = header.child(Button::new(SharedString::from(id)).ghost().xsmall()
+        header = header.child(div().on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+            .child(Button::new(SharedString::from(id)).ghost().xsmall()
             .label(t(key)).accessibility_label(accessibility)
-            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
             .on_click(cx.listener(move |this, _, window, cx| {
                 if this.document().read(cx).revision() != revision || this.document().read(cx).grammar() != grammar { return; }
+                this.command(Command::FinishComposition, window, cx);
                 if let Some((ending, name, block)) = &expansion {
                     this.command(Command::ExpandComponent { ending: ending.clone(), name: name.clone(), block: *block }, window, cx);
                 } else { this.command(Command::Select(Selection::new(range.start, range.end)), window, cx); }
                 this.focus_handle(cx).focus(window, cx);
                 cx.stop_propagation();
-            })));
+            }))));
     } else { header = header.child(t(key)); }
     div().w_full().child(header).child(content).into_any_element()
 }
