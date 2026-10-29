@@ -318,13 +318,17 @@ impl Leaf {
             .iter()
             .filter_map(|segment| segment.math.as_ref())
     }
-    pub fn math_source(&self, display: usize) -> Option<usize> {
-        self.segments
-            .iter()
-            .find(|segment| {
-                segment.math.is_some() && !segment.verbatim && segment.display.contains(&display)
-            })
-            .map(|segment| segment.source.start + 1)
+    pub fn atom_source(&self, display: usize) -> Option<usize> {
+        self.segments.iter().find_map(|segment| {
+            if segment.verbatim || !segment.display.contains(&display) { return None; }
+            if let Some(formula) = &segment.math {
+                Some(segment.source.start + formula.insertion_offset())
+            } else if segment.image.is_some() {
+                // Inline and reference images both start with ![. Activation
+                // enters their syntax without loading or following the target.
+                Some(segment.source.start + 2)
+            } else { None }
+        })
     }
     pub fn editing_math(&self, at: usize) -> bool {
         self.segments.iter().any(|segment| {

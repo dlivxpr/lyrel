@@ -260,125 +260,166 @@ pub(crate) enum Operation {
     AlignRight,
 }
 
-/// A structural command rewrites only the owning top-level GFM table. Cell
-/// fragments come from mdast source spans, never from their rendered labels.
-/// Deleting the sole row/column clears it, keeping a valid editable table;
-/// deleting a header promotes the next row. New cells are empty insertion sites.
+/// Parse only the revision-checked owning table and its container prefix.
+/// Row terminators travel with their rows; only inserted separators use the
+/// document convention. The document remains the sole representation owner.
 pub(super) fn edit(
-    source: &str,
+    input: &super::SourceText,
+    owner: Range<usize>,
     selection: super::Selection,
     operation: Operation,
-) -> Option<(Range<usize>, String, usize)> {
-    let mut options = markdown::ParseOptions::gfm();
-    options.constructs.frontmatter = true;
-    let root = markdown::to_mdast(source, &options).ok()?;
-    for node in root.children().into_iter().flatten() {
-        let Node::Table(table) = node else {
-            continue;
-        };
-        let position = node.position()?;
-        let range = position.start.offset..position.end.offset;
-        if selection.range().start < range.start || selection.range().end > range.end {
-            continue;
-        }
-        let mut active = None;
-        let mut rows = Vec::with_capacity(table.children.len() + 1);
-        for (row, row_node) in table.children.iter().enumerate() {
-            let mut cells = Vec::new();
-            for (column, cell) in row_node.children().into_iter().flatten().enumerate() {
-                let span = cell.position()?;
-                if column < table.align.len()
-                    && span.start.offset <= selection.head()
-                    && selection.head() <= span.end.offset
-                {
-                    active = Some((row, column));
-                }
-                let children = cell.children()?;
-                let raw = match (children.first(), children.last()) {
-                    (Some(first), Some(last)) => {
-                        &source[first.position()?.start.offset..last.position()?.end.offset]
-                    }
-                    _ => "",
-                };
-                cells.push(raw.to_owned());
-            }
-            cells.resize(cells.len().max(table.align.len()), String::new());
-            rows.push(cells);
-        }
-        let (mut row, mut column) = active?;
-        let mut aligns = table.align.clone();
-        match operation {
-            Operation::InsertRowBefore | Operation::InsertRowAfter => {
-                row += usize::from(matches!(operation, Operation::InsertRowAfter));
-                rows.insert(row, vec![String::new(); aligns.len()]);
-            }
-            Operation::DeleteRow => {
-                if rows.len() == 1 {
-                    rows[0].iter_mut().for_each(String::clear);
-                } else {
-                    rows.remove(row);
-                    row = row.min(rows.len() - 1);
-                }
-            }
-            Operation::InsertColumnBefore | Operation::InsertColumnAfter => {
-                column += usize::from(matches!(operation, Operation::InsertColumnAfter));
-                aligns.insert(column, AlignKind::None);
-                for cells in &mut rows {
-                    cells.insert(column, String::new());
-                }
-            }
-            Operation::DeleteColumn => {
-                if aligns.len() == 1 {
-                    for cells in &mut rows {
-                        cells[0].clear();
-                    }
-                } else {
-                    aligns.remove(column);
-                    for cells in &mut rows {
-                        cells.remove(column);
-                    }
-                    column = column.min(aligns.len() - 1);
-                }
-            }
-            alignment => {
-                aligns[column] = match alignment {
-                    Operation::AlignLeft => AlignKind::Left,
-                    Operation::AlignCenter => AlignKind::Center,
-                    Operation::AlignRight => AlignKind::Right,
-                    _ => AlignKind::None,
-                }
+    newline: super::LineEnding,
+) -> Option<(Range<usize>, super::SourceText, usize)> {
+    let source = &input.text;
+    let root = markdown::to_mdast(source, &markdown::ParseOptions::gfm()).ok()?;
+    fn owning<'a>(node: &'a Node, owner: &Range<usize>) -> Option<&'a markdown::mdast::Table> {
+        if let Node::Table(table) = node {
+            let position = node.position()?;
+            if position.start.offset == owner.start && position.end.offset == owner.end {
+                return Some(table);
             }
         }
-        let mut output = String::new();
-        let mut caret = 0;
-        for (row_ix, cells) in rows.iter().enumerate() {
-            if row_ix > 0 {
-                output.push('\n');
-            }
-            output.push('|');
-            for (column_ix, cell) in cells.iter().enumerate() {
-                output.push(' ');
-                if row_ix == row && column_ix == column {
-                    caret = range.start + output.len();
-                }
-                output.push_str(cell);
-                output.push_str(" |");
-            }
-            if row_ix == 0 {
-                output.push_str("\n|");
-                for align in &aligns {
-                    output.push_str(match align {
-                        AlignKind::Left => " :--- |",
-                        AlignKind::Right => " ---: |",
-                        AlignKind::Center => " :---: |",
-                        AlignKind::None => " --- |",
-                    });
-                }
-            }
-        }
-        return Some((range, output, caret));
+        node.children()?.iter().find_map(|child| owning(child, owner))
     }
-    None
+    // A table nested in a continued list can start beyond GFM's standalone
+    // indentation limit. Parse that table without its known container prefix,
+    // mapping every derived span back to this local source before editing.
+    let prefix_len = owner.start;
+    let mut plain = String::new();
+    let mut plain_starts = Vec::new();
+    let mut original_starts = Vec::new();
+    let standalone;
+    let (table, decontainered) = if let Some(table) = owning(&root, &owner) {
+        (table, false)
+    } else {
+        let mut at = 0;
+        for line in source.split_inclusive('\n') {
+            let content = line.get(prefix_len..)?;
+            plain_starts.push(plain.len());
+            original_starts.push(at + prefix_len);
+            plain.push_str(content);
+            at += line.len();
+        }
+        standalone = markdown::to_mdast(&plain, &markdown::ParseOptions::gfm()).ok()?;
+        let range = 0..plain.trim_end_matches('\n').len();
+        (owning(&standalone, &range)?, true)
+    };
+    let original = |at: usize| {
+        if decontainered {
+            let line = plain_starts.partition_point(|start| *start <= at) - 1;
+            original_starts[line] + at - plain_starts[line]
+        } else {
+            at
+        }
+    };
+    if selection.range().start < owner.start || selection.range().end > owner.end {
+        return None;
+    }
+    let mut starts = vec![0];
+    starts.extend(source.match_indices('\n').map(|(at, _)| at + 1));
+    let line = |at: usize| starts.partition_point(|start| *start <= at) - 1;
+    // Prefixes retain blockquote/list ownership on every physical row.
+    let header_line = line(owner.start);
+    let delimiter_line = header_line + 1;
+    let delimiter_start = starts[delimiter_line];
+    let delimiter = source[delimiter_start..].split('\n').next()?;
+    let delimiter_prefix = &delimiter[..delimiter.len() - delimiter.trim_start_matches([' ', '\t', '>']).len()];
+    let delimiter_ending = input.endings.get(delimiter_line).copied();
+    let mut active = None;
+    let mut rows = Vec::with_capacity(table.children.len() + 1);
+    for (row, node) in table.children.iter().enumerate() {
+        let position = node.position()?;
+        let row_start = original(position.start.offset);
+        let row_line = line(row_start);
+        let mut cells = Vec::new();
+        for (column, cell) in node.children()?.iter().enumerate() {
+            let span = cell.position()?;
+            if column < table.align.len() && original(span.start.offset) <= selection.head() && selection.head() <= original(span.end.offset) {
+                active = Some((row, column));
+            }
+            let children = cell.children()?;
+            cells.push(match (children.first(), children.last()) {
+                (Some(first), Some(last)) => source[original(first.position()?.start.offset)..original(last.position()?.end.offset)].to_owned(),
+                _ => String::new(),
+            });
+        }
+        cells.resize(cells.len().max(table.align.len()), String::new());
+        let row_prefix = if row == 0 { delimiter_prefix } else { &source[starts[row_line]..row_start] };
+        rows.push((cells, input.endings.get(row_line).copied(), row_prefix));
+    }
+    let (mut row, mut column) = active?;
+    let mut aligns = table.align.clone();
+    match operation {
+        Operation::InsertRowBefore | Operation::InsertRowAfter => {
+            row += usize::from(matches!(operation, Operation::InsertRowAfter));
+            rows.insert(row, (vec![String::new(); aligns.len()], Some(newline), delimiter_prefix));
+        }
+        Operation::DeleteRow => {
+            if rows.len() == 1 {
+                rows[0].0.iter_mut().for_each(String::clear);
+            } else {
+                rows.remove(row);
+                row = row.min(rows.len() - 1);
+            }
+        }
+        Operation::InsertColumnBefore | Operation::InsertColumnAfter => {
+            column += usize::from(matches!(operation, Operation::InsertColumnAfter));
+            aligns.insert(column, AlignKind::None);
+            for (cells, _, _) in &mut rows { cells.insert(column, String::new()); }
+        }
+        Operation::DeleteColumn => {
+            if aligns.len() == 1 {
+                for (cells, _, _) in &mut rows { cells[0].clear(); }
+            } else {
+                aligns.remove(column);
+                for (cells, _, _) in &mut rows { cells.remove(column); }
+                column = column.min(aligns.len() - 1);
+            }
+        }
+        alignment => {
+            aligns[column] = match alignment {
+                Operation::AlignLeft => AlignKind::Left,
+                Operation::AlignCenter => AlignKind::Center,
+                Operation::AlignRight => AlignKind::Right,
+                _ => AlignKind::None,
+            };
+        }
+    }
+    let final_newline = source.ends_with('\n');
+    let mut output = super::SourceText { text: String::new(), endings: Vec::new() };
+    let mut caret = 0;
+    let row_count = rows.len();
+    let terminate = |output: &mut super::SourceText, ending: Option<super::LineEnding>, last: bool| {
+        if !last || final_newline {
+            output.text.push('\n');
+            output.endings.push(ending.unwrap_or(newline));
+        }
+    };
+    for (row_ix, (cells, ending, row_prefix)) in rows.iter().enumerate() {
+        if row_ix > 0 { output.text.push_str(row_prefix); }
+        output.text.push('|');
+        for (column_ix, cell) in cells.iter().enumerate() {
+            output.text.push(' ');
+            if row_ix == row && column_ix == column { caret = owner.start + output.text.len(); }
+            output.text.push_str(cell);
+            output.text.push_str(" |");
+        }
+        terminate(&mut output, *ending, row_ix > 0 && row_ix + 1 == row_count);
+        if row_ix == 0 {
+            output.text.push_str(delimiter_prefix);
+            output.text.push('|');
+            for align in &aligns {
+                output.text.push_str(match align {
+                    AlignKind::Left => " :--- |",
+                    AlignKind::Right => " ---: |",
+                    AlignKind::Center => " :---: |",
+                    AlignKind::None => " --- |",
+                });
+            }
+            terminate(&mut output, delimiter_ending, row_count == 1);
+        }
+    }
+    Some((owner.start..source.len(), output, caret))
 }
 
 pub(crate) fn bindings(cx: &gpui_kit::App) -> Vec<gpui_kit::KeyBinding> {

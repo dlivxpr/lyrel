@@ -78,7 +78,7 @@ pub(super) fn render(
                     })
                     .count();
                 t_fmt(
-                    L10nKey::EditorMdxStepsSequence,
+                    if count == 1 { L10nKey::EditorMdxStepsSequenceSingular } else { L10nKey::EditorMdxStepsSequence },
                     &[("count", &count.to_string())],
                 )
             };

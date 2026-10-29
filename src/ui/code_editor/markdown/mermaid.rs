@@ -17,7 +17,6 @@ use merman::{
 use std::{
     borrow::Cow,
     collections::HashMap,
-    ops::Range,
     sync::{Arc, LazyLock},
     time::Duration,
 };
@@ -150,8 +149,7 @@ impl Style {
 #[derive(Clone, PartialEq)]
 struct Key {
     identity: EntityId,
-    revision: u64,
-    range: Range<usize>,
+    request: u64,
     source: String,
     style: Style,
 }
@@ -177,6 +175,8 @@ pub(super) struct State {
     entries: HashMap<u64, Entry>,
     control: Option<OperationControl>,
     pending: Option<Job>,
+    completed: Vec<Batch>,
+    next_request: u64,
 }
 impl Drop for State {
     fn drop(&mut self) {
@@ -189,15 +189,11 @@ impl State {
             control.cancel();
         }
         self.pending = None;
-        // A previous revision may reserve layout height, never successful status.
-        for entry in self.entries.values_mut() {
-            entry.pending = true;
-            entry.error = None;
-        }
+        self.completed.clear();
+        self.entries.clear();
     }
     pub(super) fn request(&mut self, projection: &Projection, identity: EntityId, style: Style) {
-        self.cancel();
-        let control = OperationControl::new();
+        let control = self.control.get_or_insert_with(OperationControl::new).clone();
         let mut requests = Vec::new();
         self.entries.retain(|id, _| {
             projection
@@ -209,53 +205,48 @@ impl State {
             if !matches!(leaf.kind, Kind::Mermaid(_)) {
                 continue;
             }
-            let key = Key {
-                identity,
-                revision: projection.revision,
-                range: leaf.range.clone(),
-                source: content(leaf).to_owned(),
-                style: style.clone(),
-            };
-            let image = self
-                .entries
-                .get(&leaf.id)
-                .and_then(|entry| entry.image.clone());
-            self.entries.insert(
-                leaf.id,
-                Entry {
-                    key: key.clone(),
-                    image,
-                    error: None,
-                    pending: true,
-                },
-            );
+            let source = content(leaf);
+            if self.entries.get(&leaf.id).is_some_and(|entry| {
+                entry.key.identity == identity && entry.key.source == source && entry.key.style == style
+            }) {
+                continue;
+            }
+            self.next_request = self.next_request.wrapping_add(1);
+            let key = Key { identity, request: self.next_request, source: source.to_owned(), style: style.clone() };
+            let image = self.entries.get(&leaf.id).and_then(|entry| entry.image.clone());
+            self.entries.insert(leaf.id, Entry { key: key.clone(), image, error: None, pending: true });
             requests.push((leaf.id, key));
         }
-        if !requests.is_empty() {
-            self.control = Some(control.clone());
+        if let Some(pending) = &mut self.pending {
+            pending.requests.retain(|(id, key)| self.entries.get(id).is_some_and(|entry| entry.key == *key));
+            pending.requests.extend(requests);
+        } else if !requests.is_empty() {
             self.pending = Some(Job { requests, control });
+        }
+        if self.pending.as_ref().is_some_and(|pending| pending.requests.is_empty()) {
+            self.pending = None;
         }
     }
     pub(super) fn take_job(&mut self) -> Option<Job> {
         self.pending.take()
     }
+    pub(super) fn complete(&mut self, batch: Batch) {
+        self.completed.push(batch);
+    }
     pub(super) fn install(
         &mut self,
-        batch: Batch,
         projection: &Projection,
         identity: EntityId,
         style: &Style,
     ) {
-        for (id, key, result) in batch.0 {
+        for (id, key, result) in self.completed.drain(..).flat_map(|batch| batch.0) {
             if key.identity != identity
-                || key.revision != projection.revision
                 || &key.style != style
             {
                 continue;
             }
             let Some(leaf) = projection.leaves.iter().find(|leaf| {
                 leaf.id == id
-                    && leaf.range == key.range
                     && matches!(leaf.kind, Kind::Mermaid(_))
                     && content(leaf) == key.source
             }) else {
@@ -292,7 +283,7 @@ impl State {
         let entry = self
             .entries
             .get(&leaf.id)
-            .filter(|entry| entry.key.range == leaf.range && entry.key.source == content(leaf));
+            .filter(|entry| entry.key.source == content(leaf));
         let pending = entry.is_none_or(|entry| entry.pending);
         let error = entry.and_then(|entry| entry.error.as_ref());
         let mut block = div().w_full().v_flex().gap_2();

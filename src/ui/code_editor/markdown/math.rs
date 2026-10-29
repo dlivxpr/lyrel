@@ -17,6 +17,21 @@ pub(super) struct Formula {
     raw: String,
 }
 impl Formula {
+    pub(super) fn insertion_offset(&self) -> usize {
+        let opening = self.raw.bytes().take_while(|byte| *byte == b'$').count();
+        let start = if self.block {
+            self.raw.find('\n').map_or(opening, |at| at + 1)
+        } else { opening };
+        let end = if self.block {
+            self.raw.rsplit_once('\n').and_then(|(before, last)| {
+                let closing = last.trim();
+                (closing.len() >= opening && closing.bytes().all(|byte| byte == b'$'))
+                    .then_some(before.len())
+            }).unwrap_or(self.raw.len()).max(start)
+        } else { self.raw.trim_end_matches('$').len().max(start) };
+        let body = &self.raw[start..end];
+        start + body.len() - body.trim_start_matches(char::is_whitespace).len()
+    }
     pub fn from_node(node: &Node, raw: &str) -> Option<Self> {
         match node {
             Node::InlineMath(value) => Some(Self {

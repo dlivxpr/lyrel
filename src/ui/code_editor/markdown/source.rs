@@ -97,7 +97,6 @@ impl SourcePresentation {
             }
             if let DocumentEvent::Edited(transaction) = event {
                 this.assets.rebase(transaction);
-                this.mermaid.cancel();
                 this.state.rebase(transaction);
                 if transaction.origin != this.state.id {
                     for selection in &mut this.extra_selections {
@@ -129,6 +128,7 @@ impl SourcePresentation {
                 this.sync_inline_reveal();
                 this.schedule_parse(cx);
                 this.schedule_math(cx);
+                this.schedule_mermaid(cx);
                 this.geometry = None;
                 cx.notify();
             }
@@ -313,13 +313,18 @@ impl SourcePresentation {
     }
     fn schedule_mermaid(&mut self, cx: &mut Context<Self>) {
         if !self.live || self.projection.revision != self.document.read(cx).revision() {
-            self.mermaid.cancel();
+            // A parse in flight must not cancel unchanged diagrams.
             return;
         }
         self.mermaid.request(
             &self.projection,
             self.document.entity_id(),
             super::mermaid::Style::current(cx),
+        );
+        self.mermaid.install(
+            &self.projection,
+            self.document.entity_id(),
+            &super::mermaid::Style::current(cx),
         );
         // One worker and one replaceable pending request per presentation.
         // Cancelling the control stops synchronous Merman work at checkpoints;
@@ -337,10 +342,12 @@ impl SourcePresentation {
                     .spawn(async move { job.run() })
                     .await;
                 let next = view.update(cx, |view, cx| {
+                    // Keep completed results until a current projection can
+                    // validate them; a parse gap must not strand pending work.
+                    view.mermaid.complete(batch);
                     if view.live && view.projection.revision == view.document.read(cx).revision() {
                         view.invalidate_layout(cx);
                         view.mermaid.install(
-                            batch,
                             &view.projection,
                             view.document.entity_id(),
                             &super::mermaid::Style::current(cx),
@@ -778,8 +785,10 @@ impl SourcePresentation {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.table_commands_enabled() {
-            self.command(Command::Table(operation), window, cx);
+        if self.table_commands_enabled() && self.projection.revision == self.document.read(cx).revision() {
+            let Some(leaf) = self.projection.leaf_at(self.state.selection.head()) else { return };
+            let Kind::TableCell(cell) = leaf.kind else { return };
+            self.command(Command::Table { operation, range: cell.table(), revision: self.projection.revision }, window, cx);
             self.focus.focus(window, cx);
         } else {
             cx.propagate();
@@ -1121,6 +1130,9 @@ impl SourcePresentation {
         self.caret_bounds(range.end, cx)
     }
     fn point_offset(&self, point: Point<Pixels>, cx: &App) -> Option<usize> {
+        self.point_offset_for(point, false, cx)
+    }
+    fn point_offset_for(&self, point: Point<Pixels>, activate: bool, cx: &App) -> Option<usize> {
         let (revision, geometry) = self.geometry.as_ref()?;
         let doc = self.document.read(cx);
         if *revision != doc.revision() {
@@ -1158,9 +1170,8 @@ impl SourcePresentation {
             .leaves
             .iter()
             .find(|mapped| mapped.id == *id)?;
-        let display = leaf
-            .atom_at(point)
-            .and_then(|atom| mapped.math_source(atom.start));
+        let display = activate.then(|| leaf.atom_at(point))
+            .flatten().and_then(|atom| mapped.atom_source(atom.start));
         Some(doc.boundary(
             display.unwrap_or_else(|| mapped.source_offset(leaf.index_for_position(point))),
             false,
@@ -1173,7 +1184,7 @@ impl SourcePresentation {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let Some(at) = self.point_offset(point, cx) else {
+        let Some(at) = self.point_offset_for(point, !extend, cx) else {
             return;
         };
         let anchor = if extend {

@@ -125,7 +125,7 @@ pub(crate) enum EditKind {
     Command,
 }
 pub(crate) enum Command {
-    Table(tables::Operation),
+    Table { operation: tables::Operation, range: Range<usize>, revision: u64 },
     Reload {
         text: String,
         format: TextFormat,
@@ -654,13 +654,23 @@ impl MarkdownDocument {
                     },
                 );
             }
-            Command::Table(operation) => {
+            Command::Table { operation, range, revision } => {
                 self.finish_composition(state, false);
-                if let Some((range, text, caret)) =
-                    tables::edit(&self.source.to_string(), state.selection, operation)
-                {
-                    let removed = self.source_text(range.clone());
-                    let inserted = SourceText::from_input(text, LineEnding::Lf);
+                if revision != self.revision || range.end > self.source.len() {
+                    return;
+                }
+                let start = self.source.line_start_offset(self.source.offset_to_point(range.start).row);
+                let end = range.end + usize::from(self.source.slice(range.end..self.source.len()).chars().next() == Some('\n'));
+                let local = self.source_text(start..end);
+                if let Some((range, inserted, caret)) = tables::edit(
+                    &local, range.start - start..range.end - start,
+                    Selection::new(state.selection.anchor.saturating_sub(start), state.selection.head.saturating_sub(start)),
+                    operation, self.format.line_ending,
+                ) {
+                    let range = range.start + start..range.end + start;
+                    let caret = caret + start;
+                    let mut removed = local;
+                    removed.text.drain(..range.start - start);
                     if removed != inserted {
                         let before = state.selection;
                         self.replace(range.clone(), &inserted);

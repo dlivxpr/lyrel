@@ -2445,6 +2445,7 @@ fn native_image_atoms_cross_one_boundary_and_source_edits_share_undo(
 ) {
     use crate::ui::app::test_window::harness_with_tabs;
     use gpui_kit::Focusable as _;
+    use gpui_kit::test::{TestEventExt as _, TestWindowExt as _};
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("images.md");
     let source = "before ![图](missing.png) after\n\n![引用][picture]\n\n[picture]: other.png\n";
@@ -2479,10 +2480,38 @@ fn native_image_atoms_cross_one_boundary_and_source_edits_share_undo(
     view.read_with(&context, |view, _| {
         assert_eq!(view.selection().range(), end..end)
     });
-    view.update_in(&mut context, |view, _, cx| {
-        view.select_range(start + "![图](".len()..end - 1, cx)
+    // Clicking the rendered atom must enter its original alt/source syntax.
+    settle_live_geometry(&view, &mut context);
+    let point = view.read_with(&context, |view, cx| {
+        let a = view.range_to_bounds(&(start..start), cx).unwrap().center();
+        let b = view.range_to_bounds(&(end..end), cx).unwrap().center();
+        gpui_kit::point((a.x + b.x) / 2., a.y)
     });
-    context.update(|window, cx| window.input("new.png", cx));
+    context.update(|window, cx| {
+        window.pointer_down(point, gpui_kit::MouseButton::Left, cx);
+        window.pointer_up(point, gpui_kit::MouseButton::Left, cx);
+        window.input("新", cx);
+    });
+    context.run_until_parked();
+    view.read_with(&context, |view, cx| {
+        assert_eq!(view.document().read(cx).encode().unwrap(), source.replacen("![图]", "![新图]", 1).as_bytes());
+    });
+    context.dispatch_action(gpui_kit::component::input::Undo);
+    context.run_until_parked();
+    settle_live_geometry(&view, &mut context);
+    context.update(|window, cx| {
+        let url_start = start + "![图](".len();
+        let a = view.read(cx).range_to_bounds(&(url_start..url_start), cx).unwrap().center();
+        let b = view.read(cx).range_to_bounds(&(end - 1..end - 1), cx).unwrap().center();
+        window.pointer_down(a, gpui_kit::MouseButton::Left, cx);
+        window.pointer_up(a, gpui_kit::MouseButton::Left, cx);
+        window.change_modifiers(gpui_kit::Modifiers::shift(), cx);
+        window.pointer_down(b, gpui_kit::MouseButton::Left, cx);
+        window.pointer_up(b, gpui_kit::MouseButton::Left, cx);
+        window.change_modifiers(gpui_kit::Modifiers::default(), cx);
+        assert_eq!(view.read(cx).selection().range(), url_start..end - 1);
+        window.input("new.png", cx);
+    });
     context.run_until_parked();
     view.read_with(&context, |view, cx| {
         assert_eq!(
@@ -2506,6 +2535,26 @@ fn native_image_atoms_cross_one_boundary_and_source_edits_share_undo(
     view.read_with(&context, |view, _| {
         assert_eq!(view.selection().range(), reference_end..reference_end)
     });
+    context.update(|window, cx| window.press("shift-left", cx));
+    context.run_until_parked();
+    view.read_with(&context, |view, _| assert_eq!(view.selection().range(), reference..reference_end));
+    context.update(|window, cx| window.press("shift-right", cx));
+    settle_live_geometry(&view, &mut context);
+    let point = view.read_with(&context, |view, cx| {
+        let a = view.range_to_bounds(&(reference..reference), cx).unwrap().center();
+        let b = view.range_to_bounds(&(reference_end..reference_end), cx).unwrap().center();
+        gpui_kit::point((a.x + b.x) / 2., a.y)
+    });
+    context.update(|window, cx| {
+        window.pointer_down(point, gpui_kit::MouseButton::Left, cx);
+        window.pointer_up(point, gpui_kit::MouseButton::Left, cx);
+        window.input("新", cx);
+    });
+    context.run_until_parked();
+    view.read_with(&context, |view, cx| assert_eq!(view.document().read(cx).encode().unwrap(), source.replacen("![引用]", "![新引用]", 1).as_bytes()));
+    context.dispatch_action(gpui_kit::component::input::Undo);
+    context.run_until_parked();
+    view.read_with(&context, |view, cx| assert_eq!(view.document().read(cx).encode().unwrap(), source.as_bytes()));
 }
 
 #[gpui_kit::test]
@@ -2513,6 +2562,7 @@ fn opening_native_images_never_contacts_http_until_loading_intent(
     cx: &mut gpui_kit::TestAppContext,
 ) {
     use crate::ui::app::test_window::harness_with_tabs;
+    use gpui_kit::test::{TestEventExt as _, TestWindowExt as _};
     use std::io::{Read as _, Write as _};
     use std::sync::{
         Arc,
@@ -2596,10 +2646,25 @@ fn opening_native_images_never_contacts_http_until_loading_intent(
         assert!(std::time::Instant::now() < deadline);
         std::thread::sleep(std::time::Duration::from_millis(5));
     }
+    let start = source.find("![private]").unwrap();
+    let end = source.find(" ![nested]").unwrap();
+    let point = view.read_with(&context, |view, cx| {
+        let a = view.range_to_bounds(&(start..start), cx).unwrap().center();
+        let b = view.range_to_bounds(&(end..end), cx).unwrap().center();
+        gpui_kit::point((a.x + b.x) / 2., a.y)
+    });
+    context.update(|window, cx| {
+        window.pointer_down(point, gpui_kit::MouseButton::Left, cx);
+        window.pointer_up(point, gpui_kit::MouseButton::Left, cx);
+    });
+    context.run_until_parked();
+    view.read_with(&context, |view, _| assert_eq!(view.selection(), Selection::caret(start + 2)));
+    view.update_in(&mut context, |view, _, cx| view.select_range(source.len()..source.len(), cx));
+    settle_live_geometry(&view, &mut context);
     assert_eq!(
         requests.load(Ordering::SeqCst),
         0,
-        "render, prefetch and size discovery must not request images"
+        "render, pointer activation, prefetch and size discovery must not request images"
     );
     let before = view.read_with(&context, |view, cx| {
         view.range_to_bounds(&(source.len()..source.len()), cx)
@@ -3035,6 +3100,41 @@ fn native_table_structure_actions_share_undo_and_save_reopen(cx: &mut gpui_kit::
 }
 
 #[test]
+fn table_commands_keep_mdx_owner_and_reject_stale_source_bounds() {
+    use super::projection::{Kind, Projection};
+    let source = "| outside |\n| --- |\n| keep |\n\n<Note>\n\n| inside |\r\n| --- |\n| value |\r\n\n</Note>\n\n```md\n| code |\n| --- |\n```";
+    let mut document = MarkdownDocument::new(source.into(), TextFormat::default());
+    let normalized = source.replace("\r\n", "\n");
+    let at = normalized.find("value").unwrap();
+    let projection = Projection::parse(&normalized, document.revision(), true, super::mdx::Grammar::Mdx);
+    let owner = projection.leaves.iter().find_map(|leaf| match leaf.kind {
+        Kind::TableCell(cell) if leaf.range.contains(&at) => Some(cell.table()),
+        _ => None,
+    }).expect("table inside the owning MDX component");
+    let mut state = PresentationState::new(Selection::caret(at));
+    document.command(&mut state, Command::Table { operation: super::tables::Operation::InsertColumnAfter, range: owner.clone(), revision: projection.revision });
+    let expected = source.replace("| inside |\r\n| --- |\n| value |", "| inside |  |\r\n| --- | --- |\n| value |  |");
+    assert_eq!(document.encode().unwrap(), expected.as_bytes());
+    document.command(&mut state, Command::Undo);
+    assert_eq!(document.encode().unwrap(), source.as_bytes());
+    let revision = document.revision();
+    document.command(&mut state, Command::Table { operation: super::tables::Operation::DeleteRow, range: owner, revision: projection.revision });
+    assert_eq!(document.revision(), revision);
+    assert_eq!(document.encode().unwrap(), source.as_bytes());
+    document.command(&mut state, Command::Redo);
+    assert_eq!(document.encode().unwrap(), expected.as_bytes());
+}
+
+fn table_command(document: &mut MarkdownDocument, state: &mut PresentationState, operation: super::tables::Operation) {
+    let projection = super::projection::Projection::parse(&document.source().to_string(), document.revision(), true, document.grammar());
+    let range = projection.leaves.iter().find_map(|leaf| match leaf.kind {
+        super::projection::Kind::TableCell(cell) if leaf.range.contains(&state.selection().head()) => Some(cell.table()),
+        _ => None,
+    }).expect("owning table cell");
+    document.command(state, Command::Table { operation, range, revision: projection.revision });
+}
+
+#[test]
 fn table_structure_commands_preserve_cells_boundaries_and_atomic_selection() {
     use super::tables::Operation;
     let original =
@@ -3042,47 +3142,47 @@ fn table_structure_commands_preserve_cells_boundaries_and_atomic_selection() {
     let normalized = original.replace("\r\n", "\n");
     let at = normalized.find("x\\|y").unwrap();
     let prefix = "outside  \r\n\n";
-    let suffix = "\r\n\n[ref]: target";
     for (operation, table) in [
         (
             Operation::InsertRowBefore,
-            "| **A** | B |\n| --- | ---: |\n|  |  |\n| x\\|y | `z` |",
+            "| **A** | B |\r\n| --- | ---: |\n|  |  |\n| x\\|y | `z` |",
         ),
         (
             Operation::InsertRowAfter,
-            "| **A** | B |\n| --- | ---: |\n| x\\|y | `z` |\n|  |  |",
+            "| **A** | B |\r\n| --- | ---: |\n| x\\|y | `z` |\r\n|  |  |",
         ),
-        (Operation::DeleteRow, "| **A** | B |\n| --- | ---: |"),
+        (Operation::DeleteRow, "| **A** | B |\r\n| --- | ---: |"),
         (
             Operation::InsertColumnBefore,
-            "|  | **A** | B |\n| --- | --- | ---: |\n|  | x\\|y | `z` |",
+            "|  | **A** | B |\r\n| --- | --- | ---: |\n|  | x\\|y | `z` |",
         ),
         (
             Operation::InsertColumnAfter,
-            "| **A** |  | B |\n| --- | --- | ---: |\n| x\\|y |  | `z` |",
+            "| **A** |  | B |\r\n| --- | --- | ---: |\n| x\\|y |  | `z` |",
         ),
-        (Operation::DeleteColumn, "| B |\n| ---: |\n| `z` |"),
+        (Operation::DeleteColumn, "| B |\r\n| ---: |\n| `z` |"),
         (
             Operation::AlignDefault,
-            "| **A** | B |\n| --- | ---: |\n| x\\|y | `z` |",
+            "| **A** | B |\r\n| --- | ---: |\n| x\\|y | `z` |",
         ),
         (
             Operation::AlignLeft,
-            "| **A** | B |\n| :--- | ---: |\n| x\\|y | `z` |",
+            "| **A** | B |\r\n| :--- | ---: |\n| x\\|y | `z` |",
         ),
         (
             Operation::AlignCenter,
-            "| **A** | B |\n| :---: | ---: |\n| x\\|y | `z` |",
+            "| **A** | B |\r\n| :---: | ---: |\n| x\\|y | `z` |",
         ),
         (
             Operation::AlignRight,
-            "| **A** | B |\n| ---: | ---: |\n| x\\|y | `z` |",
+            "| **A** | B |\r\n| ---: | ---: |\n| x\\|y | `z` |",
         ),
     ] {
         let mut document = MarkdownDocument::new(original.into(), TextFormat::default());
         let selection = Selection::new(at, at + 4);
         let mut state = PresentationState::new(selection);
-        document.command(&mut state, Command::Table(operation));
+        table_command(&mut document, &mut state, operation);
+        let suffix = if matches!(operation, Operation::DeleteRow | Operation::InsertRowAfter) { "\n\n[ref]: target" } else { "\r\n\n[ref]: target" };
         let expected = format!("{prefix}{table}{suffix}");
         assert_eq!(document.encode().unwrap(), expected.as_bytes());
         let after = state.selection();
@@ -3098,6 +3198,25 @@ fn table_structure_commands_preserve_cells_boundaries_and_atomic_selection() {
         document.command(&mut state, Command::Redo);
         assert_eq!(document.encode().unwrap(), expected.as_bytes());
         assert_eq!(state.selection(), after);
+    }
+    for (source, token, operation, expected) in [
+        ("| a |\r\n| --- |\n| b |\r\n| c |", "a", Operation::DeleteRow, "| b |\r\n| --- |\n| c |"),
+        ("| a |\r\n| --- |\n| b |", "b", Operation::InsertRowAfter, "| a |\r\n| --- |\n| b |\r\n|  |"),
+        ("| a |\r\n| --- |\n| b |", "b", Operation::DeleteRow, "| a |\r\n| --- |"),
+        ("- | a |\r\n  | --- |\n  | b |", "a", Operation::InsertRowBefore, "- |  |\r\n  | --- |\n  | a |\r\n  | b |"),
+        ("- parent\n  - child\n\n    | a |\r\n    | --- |\n    | b |", "b", Operation::InsertRowAfter, "- parent\n  - child\n\n    | a |\r\n    | --- |\n    | b |\r\n    |  |"),
+        ("> | a |\r\n>| --- |\n> | b |", "b", Operation::InsertColumnAfter, "> | a |  |\r\n>| --- | --- |\n> | b |  |"),
+    ] {
+        let format = TextFormat { line_ending: LineEnding::CrLf, ..TextFormat::default() };
+        let mut document = MarkdownDocument::new(source.into(), format);
+        let at = source.replace("\r\n", "\n").find(token).unwrap();
+        let mut state = PresentationState::new(Selection::caret(at));
+        table_command(&mut document, &mut state, operation);
+        assert_eq!(document.encode().unwrap(), expected.as_bytes());
+        document.command(&mut state, Command::Undo);
+        assert_eq!(document.encode().unwrap(), source.as_bytes());
+        document.command(&mut state, Command::Redo);
+        assert_eq!(document.encode().unwrap(), expected.as_bytes());
     }
     for (source, token, operation, expected) in [
         (
@@ -3135,7 +3254,7 @@ fn table_structure_commands_preserve_cells_boundaries_and_atomic_selection() {
         let mut document = MarkdownDocument::new(source.into(), TextFormat::default());
         let mut state = PresentationState::new(Selection::caret(source.find(token).unwrap()));
         let before = state.selection();
-        document.command(&mut state, Command::Table(operation));
+        table_command(&mut document, &mut state, operation);
         assert_eq!(document.source().to_string(), expected);
         document.command(&mut state, Command::Insert("X".into()));
         assert!(document.source().to_string().contains(" X"));
@@ -3144,6 +3263,82 @@ fn table_structure_commands_preserve_cells_boundaries_and_atomic_selection() {
         assert_eq!(document.source().to_string(), source);
         assert_eq!(state.selection(), before);
     }
+}
+
+#[gpui_kit::test]
+fn native_mermaid_unchanged_diagrams_stay_visible_during_prose_and_neighbor_edits(cx: &mut gpui_kit::TestAppContext) {
+    use crate::ui::app::test_window::harness_with_tabs;
+    use gpui_kit::Focusable as _;
+    use gpui_kit::test::TestWindowExt as _;
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("reuse.md");
+    let source = "prose\n\n```mermaid\nflowchart LR\nA[First] --> B[End]\n```\n\n```mermaid\nflowchart LR\nC[Second] --> D[End]\n```\n\ntail";
+    std::fs::write(&path, source).unwrap();
+    let (app, mut context, _streams) = harness_with_tabs(cx, 1);
+    context.update(|_, cx| cx.set_global(super::super::MarkdownWorkbench));
+    app.update_in(&mut context, |app, window, cx| app.open_file_in_editor(&path, window, cx));
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+    let view = loop {
+        context.run_until_parked();
+        if let Some(view) = app.read_with(&context, |app, _| app.active_editor_input().and_then(|input| input.markdown().cloned())) { break view; }
+        assert!(std::time::Instant::now() < deadline);
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    };
+    context.dispatch_action(crate::core::actions::ToggleDocumentPreview);
+    let first = source.find("```mermaid").unwrap();
+    let second = source.rfind("```mermaid").unwrap();
+    let image_id = |offset| format!("markdown-mermaid-image-{offset}");
+    let settle = |context: &mut gpui_kit::VisualTestContext, a, b| {
+        loop {
+            context.executor().advance_clock(std::time::Duration::from_millis(100));
+            context.run_until_parked();
+            if context.update(|window, cx| {
+                window.render_frame(cx);
+                window.try_find(image_id(a)).is_some() && window.try_find(image_id(b)).is_some()
+            }) { break; }
+            assert!(std::time::Instant::now() < deadline);
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+    };
+    settle(&mut context, first, second);
+    view.update_in(&mut context, |view, window, cx| {
+        view.select_range(0..0, cx);
+        view.focus_handle(cx).focus(window, cx);
+    });
+    context.update(|window, cx| window.input("new ", cx));
+    // Inspect before advancing the debounced parse/render workers, then after
+    // they settle. Neither unchanged native output may flash back to pending.
+    context.update(|window, cx| {
+        window.render_frame(cx);
+        assert!(window.try_find(image_id(first + 4)).is_some());
+        assert!(window.try_find(image_id(second + 4)).is_some());
+    });
+    settle(&mut context, first + 4, second + 4);
+    let at = source.find("First").unwrap() + 4;
+    view.update_in(&mut context, |view, window, cx| {
+        view.select_range(at..at + 5, cx);
+        view.focus_handle(cx).focus(window, cx);
+    });
+    context.update(|window, cx| window.input("Changed", cx));
+    context.update(|window, cx| {
+        window.render_frame(cx);
+        assert!(window.try_find(image_id(second + 6)).is_some(), "neighbor diagram must not enter pending");
+    });
+    // Ordinary typing while the changed diagram is running must retain both
+    // its request and the already usable neighboring output.
+    view.update_in(&mut context, |view, window, cx| {
+        view.select_range(0..0, cx);
+        view.focus_handle(cx).focus(window, cx);
+    });
+    context.update(|window, cx| window.input("x", cx));
+    context.update(|window, cx| {
+        window.render_frame(cx);
+        assert!(window.try_find(image_id(second + 7)).is_some());
+    });
+    settle(&mut context, first + 5, second + 7);
+    context.update(|_, cx| gpui_kit::component::Theme::update(cx, |theme| theme.font_size = gpui_kit::px(20.)));
+    settle(&mut context, first + 5, second + 7);
+    view.read_with(&context, |view, cx| assert_eq!(view.document().read(cx).encode().unwrap(), format!("xnew {}", source.replacen("First", "Changed", 1)).as_bytes()));
 }
 
 #[gpui_kit::test]
@@ -3898,6 +4093,80 @@ fn mixed_reverse_replacement_and_composition_share_history_and_original_bytes() 
     assert_eq!(document.source().to_string(), source);
     assert_eq!(other.selection(), Selection::new(end, start));
     assert_eq!(document.encode().unwrap(), original.as_bytes());
+}
+
+#[gpui_kit::test]
+fn native_formula_pointer_inserts_inside_delimiters_and_reopens(cx: &mut gpui_kit::TestAppContext) {
+    use crate::ui::app::test_window::harness_with_tabs;
+    use gpui_kit::test::{TestEventExt as _, TestWindowExt as _};
+    let directory = tempfile::tempdir().unwrap();
+    let (app, mut context, _streams) = harness_with_tabs(cx, 1);
+    context.update(|_, cx| cx.set_global(super::super::MarkdownWorkbench));
+    for (ix, formula) in ["$x$", "$$ x $$", "$$\nx\n$$", "$$$$  \n\n  x\n$$$$", "$$\n\n  x"].into_iter().enumerate() {
+        let path = directory.path().join(format!("pointer-{ix}.md"));
+        let source = format!("before\r\n\r\n{formula}\n\nafter  ");
+        std::fs::write(&path, &source).unwrap();
+        app.update_in(&mut context, |app, window, cx| app.open_file_in_editor(&path, window, cx));
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
+        let view = loop {
+            context.run_until_parked();
+            if let Some(view) = app.read_with(&context, |app, _| app.active_editor_input().and_then(|input| input.markdown().cloned())) { break view; }
+            assert!(std::time::Instant::now() < deadline);
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        };
+        let identity = view.read_with(&context, |view, _| view.document().entity_id());
+        context.dispatch_action(crate::core::actions::ToggleDocumentPreview);
+        settle_live_geometry(&view, &mut context);
+        let normalized = source.replace("\r\n", "\n");
+        let start = normalized.find('$').unwrap();
+        let end = if formula.ends_with('$') { normalized.rfind('$').unwrap() + 1 } else { normalized.len() };
+        let insertion = normalized.find('x').unwrap();
+        let point = view.read_with(&context, |view, cx| {
+            let a = view.range_to_bounds(&(start..start), cx).unwrap().center();
+            let b = view.range_to_bounds(&(end..end), cx).unwrap().center();
+            gpui_kit::point((a.x + b.x) / 2., a.y)
+        });
+        context.update(|window, cx| {
+            window.pointer_down(point, gpui_kit::MouseButton::Left, cx);
+            window.pointer_up(point, gpui_kit::MouseButton::Left, cx);
+        });
+        context.run_until_parked();
+        view.read_with(&context, |view, _| assert_eq!(view.selection(), Selection::caret(insertion)));
+        context.update(|window, cx| window.input("z+", cx));
+        context.run_until_parked();
+        let expected = source.replacen('x', "z+x", 1);
+        view.read_with(&context, |view, cx| assert_eq!(view.document().read(cx).encode().unwrap(), expected.as_bytes()));
+        context.dispatch_action(gpui_kit::component::input::Undo);
+        context.run_until_parked();
+        view.read_with(&context, |view, cx| assert_eq!(view.document().read(cx).encode().unwrap(), source.as_bytes()));
+        context.dispatch_action(gpui_kit::component::input::Redo);
+        context.dispatch_action(crate::core::actions::EditorSave);
+        loop {
+            context.run_until_parked();
+            if app.read_with(&context, |app, _| app.active_buffer().is_some_and(|file| !file.dirty && !file.saving)) { break; }
+            assert!(std::time::Instant::now() < deadline);
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        assert_eq!(std::fs::read(&path).unwrap(), expected.as_bytes());
+        app.update_in(&mut context, |app, window, cx| {
+            app.editor_close_file(0, window, cx);
+            app.open_file_in_editor(&path, window, cx);
+        });
+        loop {
+            context.run_until_parked();
+            let reopened = app.read_with(&context, |app, _| app.active_editor_input().and_then(|input| input.markdown().cloned()));
+            if let Some(reopened) = reopened {
+                if reopened.read_with(&context, |view, _| view.document().entity_id() != identity) {
+                    reopened.read_with(&context, |view, cx| assert_eq!(view.document().read(cx).encode().unwrap(), expected.as_bytes()));
+                    break;
+                }
+            }
+            assert!(std::time::Instant::now() < deadline);
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        app.update_in(&mut context, |app, window, cx| app.editor_close_file(0, window, cx));
+        context.run_until_parked();
+    }
 }
 
 #[gpui_kit::test]

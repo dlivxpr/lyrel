@@ -1607,6 +1607,7 @@ pub fn translate_zh(key: L10nKey) -> Option<&'static str> {
         L10nKey::EditorCardEditGroup => "编辑卡片组",
         L10nKey::EditorMdxStepsNumber => "步骤 {number}",
         L10nKey::EditorMdxStepsSequence => "操作流程 · {count} 个步骤",
+        L10nKey::EditorMdxStepsSequenceSingular => "操作流程 · {count} 个步骤",
         L10nKey::EditorMdxStepsEditTitle => "编辑步骤标题",
         L10nKey::EditorMdxStepsEditSource => "编辑步骤源码",
         L10nKey::EditorMdxStepsEditContainerSource => "编辑流程源码",
