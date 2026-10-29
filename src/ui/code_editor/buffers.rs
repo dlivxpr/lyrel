@@ -395,19 +395,24 @@ impl EditorBuffers {
         let cfg = cx.global::<crate::core::config::Config>();
         let wrap = cfg.editor_soft_wrap;
         let native_markdown = cx.try_global::<MarkdownWorkbench>().is_some()
-            && (untitled.is_some() || matches!(
-                path.extension()
-                    .and_then(|ext| ext.to_str())
-                    .map(str::to_ascii_lowercase)
-                    .as_deref(),
-                Some("md" | "markdown" | "mdx")
-            ));
+            && (untitled.is_some()
+                || matches!(
+                    path.extension()
+                        .and_then(|ext| ext.to_str())
+                        .map(str::to_ascii_lowercase)
+                        .as_deref(),
+                    Some("md" | "markdown" | "mdx")
+                ));
         let preview = !native_markdown && cfg.editor_markdown_preview && language == "markdown";
         let id = BufferId::new();
         let (input, popups, sub, observe) = if native_markdown {
             let document = cx.new(|_| markdown::MarkdownDocument::new(text, format));
             document.update(cx, |document, cx| {
-                document.set_resource_context(host.clone(), untitled.is_none().then(|| path.clone()), cx);
+                document.set_resource_context(
+                    host.clone(),
+                    untitled.is_none().then(|| path.clone()),
+                    cx,
+                );
             });
             let sub = cx.subscribe_in(
                 &document,
@@ -421,7 +426,7 @@ impl EditorBuffers {
                     | markdown::DocumentEvent::ResourceContextChanged
                     | markdown::DocumentEvent::ImagesChanged => cx.notify(),
                     markdown::DocumentEvent::FollowLink { .. }
-                    | markdown::DocumentEvent::RequestAssetLocation { .. } => {},
+                    | markdown::DocumentEvent::RequestAssetLocation { .. } => {}
                 },
             );
             let presentation = cx.new(|cx| markdown::SourcePresentation::new(document, wrap, cx));

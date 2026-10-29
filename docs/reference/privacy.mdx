@@ -44,6 +44,7 @@ Apple 没有为此定义用途说明字符串键。访问 `~/Library/Mail`、
 | **更新检查** | 启动时及之后每六小时分页请求本项目 GitHub releases API。默认会后台下载匹配的新 stable 包及校验和，安装仍需明确同意。`check_for_updates: false` 关闭自动检查，`auto_download_updates: false` 关闭后台下载。缺少安装包时不会回退到上游下载。 |
 | **远程服务器安装** | 为你连接的计算机下载 `lyrel-server` 二进制文件；对于 WSL，则复制安装包中已自带的文件。缺少安装包时不会回退到上游下载。 |
 | **GitHub 标签页** | 仅在你使用时：向 `api.github.com` 请求当前聚焦窗格所在仓库的议题、拉取请求、评论和已更改文件。即使仓库位于远程工作区，请求也会从本机发出；当你通过 `gh` 登录时，请求会携带 GitHub CLI 的令牌。 |
+| **隔离 Markdown 文件工作台** | HTTP(S) 图片初始不请求；选择“加载外部图片”后，当前文档中的外部图片通过本机 HTTP client 请求，可能跟随重定向。文件属于远端 Host 也不改变该 HTTP 请求来源。相对文件图片经文档所属 Host 读取；插入截图与拖放图片写入该 Host 的文档相邻 `assets/`。 |
 | **其他一切** | 不发送任何数据。没有遥测、没有分析，也无需账户。 |
 
 以上所有操作均遵循 `http_proxy` 设置。[更新 →](/reference/updates#proxies)
@@ -51,6 +52,10 @@ Apple 没有为此定义用途说明字符串键。访问 `~/Library/Mail`、
 GitHub 标签页本身不存储任何凭据。每次连接时，它都会从 `GH_TOKEN`、
 `GITHUB_TOKEN` 或 `gh auth token` 获取令牌，仅将结果保存在内存中，绝不写入磁盘或日志。议题和拉取请求正文中的图片仅在由 GitHub 托管时才会被获取（例如粘贴到议题中的截图，域名为 `*.githubusercontent.com`）；其他图片均显示为链接，因此打开议题不会让第三方图片托管方知道你阅读了该议题。
 [GitHub 标签页 →](/window/side-panel#github)
+
+`--markdown-workbench` 的文件图片策略独立于 GitHub 标签页，不把“GitHub 托管可加载”的规则套用到本地或 SSH 文档。加载状态与失败原因显示在文档内；SVG 中另外引用的外部图片被拒绝，不因用户批准顶层图片而递归批准其他资源。显式选择外部图片加载会向服务器披露访问，不代表后台默认联网。
+
+公式与 Mermaid 的原生渲染在本机后台计算，不需要 Node.js、Chromium 或项目 JavaScript。Mermaid 使用严格解析和 `resvg_safe` 输出；渲染资源不从文件或网络自动获取，普通文字标签可使用本机字体。MDX 项目组件、动态表达式、函数及 import/export 仅保留源码，不作为 React 页面执行。生产 Markdown 默认尚未切换；这些实现边界不等于完整离线、安全或跨平台验收。
 
 <a id="what-is-stored-and-where"></a>
 ## 存储哪些内容，以及存储在哪里

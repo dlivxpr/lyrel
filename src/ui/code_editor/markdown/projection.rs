@@ -173,17 +173,21 @@ impl Leaf {
                     // the same boundary instead of entering the image URL.
                     segment.source.start < range.start && range.start < segment.source.end
                         || segment.source.start < range.end && range.end < segment.source.end
-                }) || marked.is_some_and(|range| range.start < segment.source.end && range.end > segment.source.start);
+                }) || marked.is_some_and(|range| {
+                    range.start < segment.source.end && range.end > segment.source.start
+                });
                 changed |= segment.verbatim != revealed;
                 segment.verbatim = revealed;
             }
         }
         changed |= self.segments.iter().any(|segment| {
-            segment.image.is_none() && segment.math.is_none() && segment.verbatim
-                != (segment.raw.is_some()
-                    && marked.is_some_and(|range| {
-                        range.start < segment.source.end && range.end > segment.source.start
-                    }))
+            segment.image.is_none()
+                && segment.math.is_none()
+                && segment.verbatim
+                    != (segment.raw.is_some()
+                        && marked.is_some_and(|range| {
+                            range.start < segment.source.end && range.end > segment.source.start
+                        }))
         });
         if changed {
             self.rebuild(marked);
@@ -194,7 +198,9 @@ impl Leaf {
         self.spans
             .iter()
             .any(|span| span.source.start <= at && at <= span.source.end)
-            || self.segments.iter().any(|segment| segment.math.is_some() && segment.source.start <= at && at <= segment.source.end)
+            || self.segments.iter().any(|segment| {
+                segment.math.is_some() && segment.source.start <= at && at <= segment.source.end
+            })
     }
     pub fn marks(
         &self,
@@ -248,43 +254,67 @@ impl Leaf {
         marks
     }
     pub fn image_urls(&self) -> impl Iterator<Item = &str> {
-        self.segments.iter().filter_map(|segment| segment.image.as_ref().map(|image| image.url.as_str()))
+        self.segments
+            .iter()
+            .filter_map(|segment| segment.image.as_ref().map(|image| image.url.as_str()))
     }
-    pub fn inline_nodes(&self, marked: Option<&Range<usize>>, math: &super::math::State) -> Vec<gpui_kit::base::text::editor_host::InlineNode> {
-        use gpui_kit::base::text::editor_host::{InlineNode, ImageNode};
+    pub fn inline_nodes(
+        &self,
+        marked: Option<&Range<usize>>,
+        math: &super::math::State,
+    ) -> Vec<gpui_kit::base::text::editor_host::InlineNode> {
+        use gpui_kit::base::text::editor_host::{ImageNode, InlineNode};
         let marks = self.marks(marked);
-        self.segments.iter().filter(|segment| !segment.display.is_empty()).map(|segment| {
-            if let Some(image) = segment.image.as_ref().filter(|_| !segment.verbatim) {
-                let mut node = ImageNode::default();
-                node.url = image.url.clone().into();
-                node.alt = Some(image.alt.clone().into());
-                node.title = image.title.clone().map(Into::into);
-                // Reserve geometry before loading, so completion cannot move the
-                // caret or scroll anchor. Images fit inside this native atom.
-                node.width = Some(gpui_kit::rems(12.).into());
-                node.height = Some(gpui_kit::rems(8.).into());
-                InlineNode::image(node)
-            } else if let Some(formula) = segment.math.as_ref().filter(|_| !segment.verbatim) {
-                math.inline_node(formula)
-            } else {
-                let range = &segment.display;
-                InlineNode::new(self.text[range.clone()].to_owned()).marks(marks.iter().filter_map(|(mark_range, mark)| {
-                    let start = range.start.max(mark_range.start);
-                    let end = range.end.min(mark_range.end);
-                    (start < end).then(|| (start - range.start..end - range.start, mark.clone()))
-                }).collect())
-            }
-        }).collect()
+        self.segments
+            .iter()
+            .filter(|segment| !segment.display.is_empty())
+            .map(|segment| {
+                if let Some(image) = segment.image.as_ref().filter(|_| !segment.verbatim) {
+                    let mut node = ImageNode::default();
+                    node.url = image.url.clone().into();
+                    node.alt = Some(image.alt.clone().into());
+                    node.title = image.title.clone().map(Into::into);
+                    // Reserve geometry before loading, so completion cannot move the
+                    // caret or scroll anchor. Images fit inside this native atom.
+                    node.width = Some(gpui_kit::rems(12.).into());
+                    node.height = Some(gpui_kit::rems(8.).into());
+                    InlineNode::image(node)
+                } else if let Some(formula) = segment.math.as_ref().filter(|_| !segment.verbatim) {
+                    math.inline_node(formula)
+                } else {
+                    let range = &segment.display;
+                    InlineNode::new(self.text[range.clone()].to_owned()).marks(
+                        marks
+                            .iter()
+                            .filter_map(|(mark_range, mark)| {
+                                let start = range.start.max(mark_range.start);
+                                let end = range.end.min(mark_range.end);
+                                (start < end)
+                                    .then(|| (start - range.start..end - range.start, mark.clone()))
+                            })
+                            .collect(),
+                    )
+                }
+            })
+            .collect()
     }
     pub fn formulas(&self) -> impl Iterator<Item = &super::math::Formula> {
-        self.segments.iter().filter_map(|segment| segment.math.as_ref())
+        self.segments
+            .iter()
+            .filter_map(|segment| segment.math.as_ref())
     }
     pub fn math_source(&self, display: usize) -> Option<usize> {
-        self.segments.iter().find(|segment| segment.math.is_some() && !segment.verbatim && segment.display.contains(&display))
+        self.segments
+            .iter()
+            .find(|segment| {
+                segment.math.is_some() && !segment.verbatim && segment.display.contains(&display)
+            })
             .map(|segment| segment.source.start + 1)
     }
     pub fn editing_math(&self, at: usize) -> bool {
-        self.segments.iter().any(|segment| segment.math.is_some() && segment.source.start < at && at < segment.source.end)
+        self.segments.iter().any(|segment| {
+            segment.math.is_some() && segment.source.start < at && at < segment.source.end
+        })
     }
     fn same_inline(&self, other: &Self) -> bool {
         self.content == other.content
@@ -307,14 +337,22 @@ impl Leaf {
         self.push(range.clone(), &source[range]);
     }
     pub fn atomic_boundary(&self, at: usize, forward: bool) -> usize {
-        self.segments.iter().find(|segment| {
-            segment.source.start < at && at < segment.source.end
-                && !segment.display.is_empty()
-                && (segment.source.len() != segment.display.len()
-                    || segment.math.is_some() && !segment.verbatim)
-        }).map_or(at, |segment| {
-            if forward { segment.source.end } else { segment.source.start }
-        })
+        self.segments
+            .iter()
+            .find(|segment| {
+                segment.source.start < at
+                    && at < segment.source.end
+                    && !segment.display.is_empty()
+                    && (segment.source.len() != segment.display.len()
+                        || segment.math.is_some() && !segment.verbatim)
+            })
+            .map_or(at, |segment| {
+                if forward {
+                    segment.source.end
+                } else {
+                    segment.source.start
+                }
+            })
     }
     pub fn display_offset(&self, source: usize) -> usize {
         for span in &self.segments {
@@ -323,7 +361,9 @@ impl Leaf {
             }
             if source < span.source.end {
                 return span.display.start
-                    + if span.source.len() == span.display.len() && !(span.math.is_some() && !span.verbatim) {
+                    + if span.source.len() == span.display.len()
+                        && !(span.math.is_some() && !span.verbatim)
+                    {
                         source - span.source.start
                     } else {
                         0
@@ -358,7 +398,8 @@ impl Leaf {
                 },
                 |s| {
                     s.source.start
-                        + if s.source.len() == s.display.len() && !(s.math.is_some() && !s.verbatim) {
+                        + if s.source.len() == s.display.len() && !(s.math.is_some() && !s.verbatim)
+                        {
                             display.saturating_sub(s.display.start)
                         } else {
                             0
@@ -440,7 +481,16 @@ impl Projection {
                     if matches!(node, Node::List(_) | Node::Blockquote(_)) {
                         let start = source[..range.start].rfind('\n').map_or(0, |ix| ix + 1);
                         Self::gap(source, cursor..start, &mut leaves);
-                        Self::container(source, node, 0, 0, range.start, start..range.end, &image_definitions, &mut leaves);
+                        Self::container(
+                            source,
+                            node,
+                            0,
+                            0,
+                            range.start,
+                            start..range.end,
+                            &image_definitions,
+                            &mut leaves,
+                        );
                         cursor = range.end;
                         continue;
                     }
@@ -505,8 +555,19 @@ impl Projection {
             links,
         }
     }
-    fn container(source: &str, node: &Node, depth: usize, quotes: usize, owner: usize, container: Range<usize>, images: &std::sync::Arc<super::images::Definitions>, leaves: &mut Vec<Leaf>) {
-        let Some(position) = node.position() else { return; };
+    fn container(
+        source: &str,
+        node: &Node,
+        depth: usize,
+        quotes: usize,
+        owner: usize,
+        container: Range<usize>,
+        images: &std::sync::Arc<super::images::Definitions>,
+        leaves: &mut Vec<Leaf>,
+    ) {
+        let Some(position) = node.position() else {
+            return;
+        };
         let range = position.start.offset..position.end.offset;
         match node {
             Node::List(_) | Node::Blockquote(_) | Node::ListItem(_) => {
@@ -521,7 +582,16 @@ impl Projection {
                 };
                 if let Some(children) = node.children().filter(|children| !children.is_empty()) {
                     for child in children {
-                        Self::container(source, child, depth, quotes, owner, container.clone(), images, leaves);
+                        Self::container(
+                            source,
+                            child,
+                            depth,
+                            quotes,
+                            owner,
+                            container.clone(),
+                            images,
+                            leaves,
+                        );
                     }
                 } else {
                     let start = source[..range.start].rfind('\n').map_or(0, |ix| ix + 1);
@@ -563,17 +633,27 @@ impl Projection {
                 leaf.image_definitions = images.clone();
                 leaf.container = Some(container);
                 if prose {
-                    leaf.prefix(source, start..range.start);
-                    if let Some(children) = node.children() {
-                        for child in children {
-                            Self::inline(source, child, &mut leaf);
+                    let empty_prefix =
+                        super::lists::prefix_len(&source[start..range.end]) == range.end - start;
+                    if empty_prefix {
+                        leaf.prefix(source, start..range.end);
+                    } else {
+                        leaf.prefix(source, start..range.start);
+                        if let Some(children) = node.children() {
+                            for child in children {
+                                Self::inline(source, child, &mut leaf);
+                            }
                         }
                     }
-                    if leaf.segments.is_empty() { leaf.insertion = range.end; }
+                    if empty_prefix || leaf.segments.is_empty() {
+                        leaf.insertion = range.end;
+                    }
                 } else if kind == Kind::Math {
                     leaf.prefix(source, start..range.start);
                     Self::inline(source, node, &mut leaf);
-                } else { leaf.raw(source, start..range.end); }
+                } else {
+                    leaf.raw(source, start..range.end);
+                }
                 leaves.push(leaf);
             }
         }
