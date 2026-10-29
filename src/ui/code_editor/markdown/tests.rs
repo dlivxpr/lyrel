@@ -7539,3 +7539,55 @@ fn native_tabs_nested_ancestor_visibility_and_property_undo_restore_the_right_ch
         assert!(!has(window, "mdx-tabs-panel", "Inner"));
     });
 }
+
+#[gpui_kit::test]
+fn native_empty_quote_line_exits_one_level_and_undo_restores_source(
+    cx: &mut gpui_kit::TestAppContext,
+) {
+    use crate::ui::app::test_window::harness_with_tabs;
+    use gpui_kit::{Focusable as _, test::TestEventExt as _};
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("quote.md");
+    let original = "> first\n>\n> next\n\nkeep  ";
+    std::fs::write(&path, original).unwrap();
+    let (app, mut context, _streams) = harness_with_tabs(cx, 1);
+    context.update(|_, cx| cx.set_global(super::super::MarkdownWorkbench));
+    app.update_in(&mut context, |app, window, cx| {
+        app.open_file_in_editor(&path, window, cx)
+    });
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    let view = loop {
+        context.run_until_parked();
+        if let Some(view) = app.read_with(&context, |app, _| {
+            app.active_editor_input()
+                .and_then(|input| input.markdown().cloned())
+        }) {
+            break view;
+        }
+        assert!(std::time::Instant::now() < deadline);
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    };
+    context.dispatch_action(crate::core::actions::ToggleDocumentPreview);
+    settle_live_geometry(&view, &mut context);
+    let at = original.find("\n>\n").unwrap() + 2;
+    view.update_in(&mut context, |view, window, cx| {
+        view.select_range(at..at, cx);
+        view.focus_handle(cx).focus(window, cx);
+    });
+    context.update(|window, cx| window.press("enter", cx));
+    context.run_until_parked();
+    view.read_with(&context, |view, cx| {
+        assert_eq!(
+            view.document().read(cx).encode().unwrap(),
+            b"> first\n\n> next\n\nkeep  "
+        );
+    });
+    context.dispatch_action(gpui_kit::component::input::Undo);
+    view.read_with(&context, |view, cx| {
+        assert_eq!(
+            view.document().read(cx).encode().unwrap(),
+            original.as_bytes()
+        );
+        assert_eq!(view.selection(), Selection::caret(at));
+    });
+}

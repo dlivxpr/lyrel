@@ -705,7 +705,34 @@ impl Projection {
                     .last()
                     .filter(|previous| previous.range.end + 1 < start)
                 {
+                    let first = leaves.len();
                     Self::gap(source, previous.range.end..start, leaves);
+                    if quotes > 0 {
+                        for leaf in &mut leaves[first..] {
+                            let raw = &source[leaf.range.clone()];
+                            if raw.contains('>') && super::lists::prefix_len(raw) == raw.len() {
+                                let style = super::lists::style(
+                                    source,
+                                    leaf.range.start,
+                                    depth,
+                                    quotes,
+                                    owner,
+                                );
+                                let range = leaf.range.clone();
+                                *leaf = Leaf::new(
+                                    range.clone(),
+                                    if depth > 0 {
+                                        Kind::List(style)
+                                    } else {
+                                        Kind::Quote(style)
+                                    },
+                                );
+                                leaf.prefix(source, range.clone());
+                                leaf.insertion = range.end;
+                                leaf.container = Some(container.clone());
+                            }
+                        }
+                    }
                 }
                 let mut leaf = Leaf::new(start..range.end, kind);
                 leaf.image_definitions = images.clone();
@@ -1032,25 +1059,59 @@ impl Projection {
     /// Reveal one component's exact source in the existing leaf/input geometry.
     /// This derived presentation never replaces the document or its history.
     pub(super) fn component_sources(&mut self, source: &Rope, state: &super::mdx::ViewState) {
-        if !self.live || state.source_components.is_empty() { return; }
-        let ranges: Vec<_> = self.mdx.components.iter()
+        if !self.live || state.source_components.is_empty() {
+            return;
+        }
+        let ranges: Vec<_> = self
+            .mdx
+            .components
+            .iter()
             .filter(|component| state.source_components.contains(&component.id()))
-            .map(|component| component.source_range()).collect();
+            .map(|component| component.source_range())
+            .collect();
         for range in &ranges {
-            if ranges.iter().any(|outer| outer != range && outer.start <= range.start && range.end <= outer.end) { continue; }
-            let Some(first) = self.leaves.iter().position(|leaf| leaf.range.end > range.start && leaf.range.start < range.end) else { continue; };
-            let last = self.leaves.iter().rposition(|leaf| leaf.range.start < range.end && leaf.range.end >= range.start).unwrap();
-            if first == last && self.leaves[first].range == *range && self.leaves[first].kind == Kind::Mdx(super::mdx::Field::Dynamic) { continue; }
+            if ranges
+                .iter()
+                .any(|outer| outer != range && outer.start <= range.start && range.end <= outer.end)
+            {
+                continue;
+            }
+            let Some(first) = self
+                .leaves
+                .iter()
+                .position(|leaf| leaf.range.end > range.start && leaf.range.start < range.end)
+            else {
+                continue;
+            };
+            let last = self
+                .leaves
+                .iter()
+                .rposition(|leaf| leaf.range.start < range.end && leaf.range.end >= range.start)
+                .unwrap();
+            if first == last
+                && self.leaves[first].range == *range
+                && self.leaves[first].kind == Kind::Mdx(super::mdx::Field::Dynamic)
+            {
+                continue;
+            }
             let start = self.leaves[first].range.start.min(range.start);
             let end = self.leaves[last].range.end.max(range.end);
             let id = self.leaves[first].id;
             let mut replacement = Vec::with_capacity(3);
             for part in [start..range.start, range.clone(), range.end..end] {
-                if part.is_empty() { continue; }
+                if part.is_empty() {
+                    continue;
+                }
                 let mut leaf = Leaf::new(part.clone(), Kind::Mdx(super::mdx::Field::Dynamic));
                 leaf.push(part.clone(), &source.slice(part.clone()).to_string());
                 leaf.rebuild(None);
-                leaf.id = if part == *range { id } else { let id = self.next_id; self.next_id += 1; id };
+                leaf.id = if part == *range {
+                    id
+                } else {
+                    let id = self.next_id;
+                    self.next_id += 1;
+                    id
+                };
                 leaf.version = self.next_id;
                 self.next_id += 1;
                 replacement.push(leaf);

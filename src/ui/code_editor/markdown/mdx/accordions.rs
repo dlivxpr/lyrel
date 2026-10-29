@@ -133,22 +133,26 @@ pub(super) fn render(
                     div()
                         .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                         .child(
-                            Button::new("mdx-accordion-disclosure")
-                                .ghost()
-                                .small()
-                                .icon(if open {
-                                    IconName::ChevronDown
-                                } else {
-                                    IconName::ChevronRight
-                                })
-                                .label(title)
+                            gpui_kit::base::Button::new("mdx-accordion-disclosure")
+                                .flex()
+                                .items_center()
+                                .gap_1()
+                                .px_2()
+                                .py_1()
+                                .text_sm()
+                                .rounded_md()
+                                .focus_visible(|style| style.border_1().border_color(cx.theme().primary))
+                                .aria_expanded(open)
+                                .child(
+                                    gpui_kit::component::Icon::new(if open {
+                                        IconName::ChevronDown
+                                    } else {
+                                        IconName::ChevronRight
+                                    })
+                                    .small(),
+                                )
+                                .child(title)
                                 .accessibility_label(accessibility)
-                                .toggled(open)
-                                .tooltip(t(if open {
-                                    L10nKey::EditorMdxAccordionsCollapse
-                                } else {
-                                    L10nKey::EditorMdxAccordionsExpand
-                                }))
                                 .on_click(cx.listener(move |this, _, window, cx| {
                                     this.toggle_mdx_accordion(id, window, cx);
                                     cx.stop_propagation();
