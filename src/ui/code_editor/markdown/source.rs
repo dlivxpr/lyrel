@@ -2,7 +2,7 @@ use super::projection::{Kind, Projection};
 use super::*;
 use gpui_kit::TestSupportExt as _;
 use gpui_kit::base::text::editor_host::{
-    BlockNode, CodeBlock, FlowPosition, InlineNode, LeafGeometry, Paragraph, RenderContext, TextMark,
+    BlockNode, CodeBlock, FlowPosition, InlineNode, LeafGeometry, Paragraph, RenderContext,
     collect_leaf_geometry,
 };
 use gpui_kit::component::{ActiveTheme as _, input as actions};
@@ -71,6 +71,7 @@ impl SourcePresentation {
                     this.projection.rebase(doc.source(), transaction, this.live);
                     this.rendered_revision = None;
                 }
+                this.sync_inline_reveal();
                 this.schedule_parse(cx);
                 this.geometry = None;
                 cx.notify();
@@ -163,6 +164,7 @@ impl SourcePresentation {
                     && view.document.read(cx).revision() == revision
                 {
                     view.projection.install(projection);
+                    view.sync_inline_reveal();
                     view.state.selection = view.map_live_caret(view.state.selection, cx);
                     view.selection_notification = true;
                     view.rendered_revision = None;
@@ -181,10 +183,29 @@ impl SourcePresentation {
             && self.projection.revision == self.document.read(cx).revision()
         {
             if let Some(leaf) = self.projection.leaf_at(selection.head) {
+                if leaf.inline_position(selection.head) {
+                    return selection;
+                }
                 return Selection::caret(leaf.source_offset(leaf.display_offset(selection.head)));
             }
         }
         selection
+    }
+    fn sync_inline_reveal(&mut self) {
+        let marked = self.state.marked_range();
+        for leaf in &mut self.projection.leaves {
+            if leaf.contextual_reveal(
+                self.state.selection,
+                &self.extra_selections,
+                marked.as_ref(),
+            ) {
+                if let Some(cached) = self.blocks.get_mut(&leaf.id) {
+                    cached.version = u64::MAX;
+                }
+                self.geometry = None;
+                self.rendered_revision = None;
+            }
+        }
     }
     pub(crate) fn finish_active_composition(
         document: &Entity<MarkdownDocument>,
@@ -212,6 +233,7 @@ impl SourcePresentation {
         self.reveal_caret = true;
         self.reveal_at = Some(selection.head);
         self.selection_notification = true;
+        self.sync_inline_reveal();
         cx.notify();
     }
     pub(crate) fn set_search_matches(
@@ -241,6 +263,7 @@ impl SourcePresentation {
             cx.emit(DocumentEvent::PresentationChanged);
         });
         self.state.selection = self.map_live_caret(self.state.selection, cx);
+        self.sync_inline_reveal();
         cx.notify();
     }
     pub(crate) fn selection(&self) -> Selection {
@@ -387,6 +410,7 @@ impl SourcePresentation {
             }
             self.rendered_revision = None;
         }
+        self.sync_inline_reveal();
         if changed {
             self.geometry = None;
             self.schedule_parse(cx);
@@ -695,10 +719,14 @@ impl SourcePresentation {
     }
     fn enter(&mut self, hard: bool, window: &mut Window, cx: &mut Context<Self>) {
         let mut range = self.state.selection.range();
-        let region = self.live.then(|| self.projection.leaf_at(range.start)).flatten()
+        let region = self
+            .live
+            .then(|| self.projection.leaf_at(range.start))
+            .flatten()
             .filter(|leaf| !matches!(leaf.kind, Kind::Prose | Kind::Heading(_) | Kind::Rule));
         let command = if let Some(leaf) = region {
-            let (prefix, text) = super::regions::line_break(leaf.kind, &leaf.text, leaf.display_offset(range.start));
+            let (prefix, text) =
+                super::regions::line_break(leaf.kind, &leaf.text, leaf.display_offset(range.start));
             if range.is_empty() {
                 range.start -= prefix;
             }
@@ -735,7 +763,15 @@ impl SourcePresentation {
             return;
         };
         if super::regions::label(leaf.kind).is_some() {
-            self.command(if backward { Command::Backspace } else { Command::Delete }, window, cx);
+            self.command(
+                if backward {
+                    Command::Backspace
+                } else {
+                    Command::Delete
+                },
+                window,
+                cx,
+            );
             return;
         }
         let other = if backward && at <= leaf.content_start() {
@@ -982,24 +1018,8 @@ impl Render for SourcePresentation {
                         continue;
                     }
                     let mut paragraph = Paragraph::default().with_leaf_key(leaf.id);
-                    let marks = self
-                        .state
-                        .marked_range()
-                        .and_then(|range| {
-                            let start = range.start.max(leaf.range.start);
-                            let end = range.end.min(leaf.range.end);
-                            (start < end).then(|| {
-                                (
-                                    leaf.display_offset(start)..leaf.display_offset(end),
-                                    TextMark {
-                                        underline: true,
-                                        ..Default::default()
-                                    },
-                                )
-                            })
-                        })
-                        .into_iter()
-                        .collect();
+                    let marked = self.state.marked_range();
+                    let marks = leaf.marks(marked.as_ref());
                     paragraph.push(InlineNode::new(leaf.text.clone()).marks(marks));
                     cached.node = match leaf.kind {
                         Kind::Heading(level) if self.live => BlockNode::Heading {
@@ -1041,7 +1061,9 @@ impl Render for SourcePresentation {
                     .id(("markdown-block", leaf.id))
                     .w_full()
                     .when(
-                        self.live && super::regions::label(leaf.kind).is_some() && !leaf.text.is_empty(),
+                        self.live
+                            && super::regions::label(leaf.kind).is_some()
+                            && !leaf.text.is_empty(),
                         |block| {
                             block
                                 .font_family(cx.theme().mono_font_family.clone())
@@ -1050,7 +1072,8 @@ impl Render for SourcePresentation {
                                         .text_xs()
                                         .text_color(cx.theme().muted_foreground)
                                         .child(crate::ui::i18n::t(
-                                            super::regions::label(leaf.kind).expect("source region label"),
+                                            super::regions::label(leaf.kind)
+                                                .expect("source region label"),
                                         )),
                                 )
                         },

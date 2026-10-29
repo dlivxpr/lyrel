@@ -31,12 +31,18 @@ pub(super) fn classify(node: &Node, source: &str) -> Kind {
 
 fn contains_html(node: &Node) -> bool {
     matches!(node, Node::Html(_))
-        || node.children().is_some_and(|children| children.iter().any(contains_html))
+        || node
+            .children()
+            .is_some_and(|children| children.iter().any(contains_html))
 }
 
 pub(super) fn unfinished_metadata(source: &str, document_start: bool) -> bool {
-    document_start && source.starts_with("---\n")
-        && !source.lines().skip(1).any(|line| matches!(line, "---" | "..."))
+    document_start
+        && source.starts_with("---\n")
+        && !source
+            .lines()
+            .skip(1)
+            .any(|line| matches!(line, "---" | "..."))
 }
 
 pub(super) fn label(kind: Kind) -> Option<crate::ui::i18n::L10nKey> {
@@ -54,7 +60,9 @@ pub(super) fn label(kind: Kind) -> Option<crate::ui::i18n::L10nKey> {
 /// for a collapsed caret leaving an empty indented-code line.
 pub(super) fn line_break(kind: Kind, text: &str, offset: usize) -> (usize, String) {
     let start = text[..offset].rfind('\n').map_or(0, |ix| ix + 1);
-    let end = text[offset..].find('\n').map_or(text.len(), |ix| offset + ix);
+    let end = text[offset..]
+        .find('\n')
+        .map_or(text.len(), |ix| offset + ix);
     let line = &text[start..end];
     if let Kind::Code(Code::Fenced { marker, width }) = kind {
         let trimmed = line.trim_start();
@@ -67,6 +75,8 @@ pub(super) fn line_break(kind: Kind, text: &str, offset: usize) -> (usize, Strin
         return (offset - start, "\n".into());
     }
     let before = &text[start..offset];
-    let indent = &before[..before.find(|ch| !matches!(ch, ' ' | '\t')).unwrap_or(before.len())];
+    let indent = &before[..before
+        .find(|ch| !matches!(ch, ' ' | '\t'))
+        .unwrap_or(before.len())];
     (0, format!("\n{indent}"))
 }
