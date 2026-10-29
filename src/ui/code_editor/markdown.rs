@@ -9,6 +9,7 @@ use unicode_segmentation::UnicodeSegmentation as _;
 
 mod images;
 pub(super) mod resources;
+mod mermaid;
 pub(super) mod links;
 mod lists;
 mod projection;

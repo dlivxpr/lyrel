@@ -26,6 +26,7 @@ pub(super) enum Kind {
     Quote(super::lists::Structure),
     Rule,
     Code(super::regions::Code),
+    Mermaid(super::regions::Code),
     Metadata,
     Html,
     Source,

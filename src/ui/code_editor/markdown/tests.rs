@@ -2561,6 +2561,7 @@ fn native_table_structure_actions_share_undo_and_save_reopen(
         assert!(std::time::Instant::now() < deadline);
         std::thread::sleep(std::time::Duration::from_millis(5));
     }
+
     assert_eq!(std::fs::read(&path).unwrap(), expected.as_bytes());
     app.update_in(&mut context, |app, window, cx| {
         app.editor_close_file(0, window, cx);
@@ -2638,4 +2639,198 @@ fn table_structure_commands_preserve_cells_boundaries_and_atomic_selection() {
         assert_eq!(document.source().to_string(), source);
         assert_eq!(state.selection(), before);
     }
+}
+
+#[gpui_kit::test]
+fn native_mermaid_fence_edit_failure_history_and_save_keep_source_bytes(
+    cx: &mut gpui_kit::TestAppContext,
+) {
+    use crate::ui::app::test_window::harness_with_tabs;
+    use gpui_kit::test::TestWindowExt as _;
+    use gpui_kit::Focusable as _;
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("diagram.md");
+    let original = b"# Heading\r\n\r\n~~~~mermaid extra\r\nflowchart LR\r\nA[Start] --> B[End]\r\n~~~~\n\n[ref]: untouched  \r\ntail";
+    std::fs::write(&path, original).unwrap();
+    let source = String::from_utf8(original.to_vec()).unwrap().replace("\r\n", "\n");
+    let (app, mut context, _streams) = harness_with_tabs(cx, 1);
+    context.update(|_, cx| cx.set_global(super::super::MarkdownWorkbench));
+    app.update_in(&mut context, |app, window, cx| app.open_file_in_editor(&path, window, cx));
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+    let view = loop {
+        context.run_until_parked();
+        if let Some(view) = app.read_with(&context, |app, _| app.active_editor_input().and_then(|input| input.markdown().cloned())) {
+            break view;
+        }
+        assert!(std::time::Instant::now() < deadline);
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    };
+    let identity = view.read_with(&context, |view, _| view.document().entity_id());
+    context.dispatch_action(crate::core::actions::ToggleDocumentPreview);
+    let fence = source.find("~~~~mermaid").unwrap();
+    let image_id = format!("markdown-mermaid-image-{fence}");
+    let error_id = format!("markdown-mermaid-error-{fence}");
+    let settle = |context: &mut gpui_kit::VisualTestContext, id: &str| {
+        loop {
+            context.executor().advance_clock(std::time::Duration::from_millis(100));
+            context.run_until_parked();
+            let visible = context.update(|window, cx| {
+                window.render_frame(cx);
+                window.try_find(id.to_owned()).is_some()
+            });
+            if visible { break; }
+            assert!(std::time::Instant::now() < deadline, "Mermaid state did not settle: {id}");
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+    };
+    settle(&mut context, &image_id);
+    let original_size = context.update(|window, _| {
+        let size = window.find(image_id.clone()).bounds().size;
+        assert!(size.height > gpui_kit::px(20.));
+        size
+    });
+    context.update(|window, cx| {
+        use gpui_kit::test::{TestEventExt as _, TestQueryExt as _};
+        let label = crate::ui::i18n::t(crate::ui::i18n::L10nKey::EditorMarkdownMermaidEdit);
+        let point = window.find_by_label(label).bounds().center();
+        window.pointer_down(point, gpui_kit::MouseButton::Left, cx);
+        window.pointer_up(point, gpui_kit::MouseButton::Left, cx);
+        window.render_frame(cx);
+    });
+    view.read_with(&context, |view, cx| {
+        let body = source.find("flowchart").unwrap();
+        assert_eq!(view.selection(), Selection::caret(body));
+        assert!(view.range_to_bounds(&(body..body), cx).is_some());
+    });
+    let at = source.find("Start").unwrap();
+    view.update_in(&mut context, |view, window, cx| {
+        view.select_range(at..at + 5, cx);
+        view.focus_handle(cx).focus(window, cx);
+    });
+    context.update(|window, cx| window.input("Changed", cx));
+    settle(&mut context, &image_id);
+    context.update(|window, _| {
+        assert!(window.find(image_id.clone()).bounds().size.width > original_size.width,
+            "the longer edited label must update the actual native graph, not retain its old raster");
+    });
+    view.read_with(&context, |view, cx| {
+        assert_eq!(view.selection(), Selection::caret(at + 7));
+        assert_eq!(view.document().read(cx).source().to_string(), source.replacen("Start", "Changed", 1));
+    });
+    let graph = source.find("flowchart").unwrap();
+    view.update_in(&mut context, |view, window, cx| {
+        view.select_range(graph..graph + 9, cx);
+        view.focus_handle(cx).focus(window, cx);
+    });
+    context.update(|window, cx| window.input("not-a-diagram", cx));
+    settle(&mut context, &error_id);
+    view.read_with(&context, |view, cx| {
+        assert!(view.document().read(cx).source().to_string().contains("not-a-diagram LR"));
+        assert!(view.range_to_bounds(&(graph..graph), cx).is_some(), "failed source must remain editable");
+    });
+    context.dispatch_action(crate::core::actions::ToggleDocumentPreview);
+    context.dispatch_action(gpui_kit::component::input::Undo);
+    context.dispatch_action(gpui_kit::component::input::Undo);
+    context.run_until_parked();
+    view.read_with(&context, |view, cx| {
+        assert_eq!(view.document().entity_id(), identity);
+        assert_eq!(view.document().read(cx).source().to_string(), source);
+    });
+    context.dispatch_action(gpui_kit::component::input::Redo);
+    context.dispatch_action(crate::core::actions::ToggleDocumentPreview);
+    settle(&mut context, &image_id);
+    // Start work, replace its source before publication, and leave live mode.
+    // Neither its successful image nor its failure may land in source mode.
+    view.update_in(&mut context, |view, window, cx| {
+        view.select_range(graph..graph + 9, cx);
+        view.command(Command::Insert("invalid".into()), window, cx);
+        view.command(Command::Undo, window, cx);
+        view.toggle_mode(window, cx);
+    });
+    context.executor().advance_clock(std::time::Duration::from_secs(1));
+    context.run_until_parked();
+    context.update(|window, cx| {
+        window.render_frame(cx);
+        assert!(window.try_find(image_id.clone()).is_none());
+        assert!(window.try_find(error_id.clone()).is_none());
+    });
+    context.dispatch_action(crate::core::actions::EditorSave);
+    loop {
+        context.run_until_parked();
+        if app.read_with(&context, |app, _| app.active_buffer().is_some_and(|file| !file.dirty && !file.saving)) { break; }
+        assert!(std::time::Instant::now() < deadline);
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    let expected = String::from_utf8(original.to_vec()).unwrap().replacen("Start", "Changed", 1);
+    assert_eq!(std::fs::read(&path).unwrap(), expected.as_bytes());
+    app.update_in(&mut context, |app, window, cx| {
+        app.editor_close_file(0, window, cx);
+        app.open_file_in_editor(&path, window, cx);
+    });
+    loop {
+        context.run_until_parked();
+        if app.read_with(&context, |app, _| app.active_buffer().is_some()) { break; }
+        assert!(std::time::Instant::now() < deadline);
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    app.read_with(&context, |app, cx| {
+        let reopened = app.active_editor_input().unwrap().markdown().unwrap().read(cx);
+        assert_eq!(reopened.document().read(cx).source().to_string(), expected.replace("\r\n", "\n"));
+    });
+}
+
+#[gpui_kit::test]
+fn native_mermaid_resource_constructs_fail_visibly_but_url_label_text_renders(
+    cx: &mut gpui_kit::TestAppContext,
+) {
+    use crate::ui::app::test_window::harness_with_tabs;
+    use gpui_kit::test::TestWindowExt as _;
+    use gpui_kit::Focusable as _;
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("resources.md");
+    let original = "# Heading\n\n```mermaid\nflowchart LR\nA[\"url(https://example.test/label.png)\"] --> B\n```\n\ntail";
+    std::fs::write(&path, original).unwrap();
+    let (app, mut context, _streams) = harness_with_tabs(cx, 1);
+    context.update(|_, cx| cx.set_global(super::super::MarkdownWorkbench));
+    app.update_in(&mut context, |app, window, cx| app.open_file_in_editor(&path, window, cx));
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+    let view = loop {
+        context.run_until_parked();
+        if let Some(view) = app.read_with(&context, |app, _| app.active_editor_input().and_then(|input| input.markdown().cloned())) { break view; }
+        assert!(std::time::Instant::now() < deadline);
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    };
+    context.dispatch_action(crate::core::actions::ToggleDocumentPreview);
+    let fence = original.find("```mermaid").unwrap();
+    let start = original.find("flowchart").unwrap();
+    let end = original.find("\n```\n").unwrap();
+    let wait_for = |context: &mut gpui_kit::VisualTestContext, state: &str| {
+        loop {
+            context.executor().advance_clock(std::time::Duration::from_millis(100));
+            context.run_until_parked();
+            if context.update(|window, cx| {
+                window.render_frame(cx);
+                window.try_find(format!("markdown-mermaid-{state}-{fence}")).is_some()
+            }) { break; }
+            assert!(std::time::Instant::now() < deadline, "Mermaid {state} state did not settle");
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+    };
+    wait_for(&mut context, "image");
+    // The actual image construct, not arbitrary URL-looking label text, is
+    // refused before native rasterization. No resource loader is introduced.
+    let external = "flowchart LR\nA@{ img: \"https://example.test/private.png\", label: \"External\" } --> B";
+    view.update_in(&mut context, |view, window, cx| {
+        view.select_range(start..end, cx);
+        view.focus_handle(cx).focus(window, cx);
+        view.command(Command::Replace { range: start..end, text: external.into(), kind: EditKind::Command }, window, cx);
+    });
+    wait_for(&mut context, "error");
+    view.read_with(&context, |view, cx| {
+        assert_eq!(view.document().read(cx).source().to_string(), format!("{}{}{}", &original[..start], external, &original[end..]));
+        assert!(view.range_to_bounds(&(start..start), cx).is_some());
+    });
+    context.dispatch_action(gpui_kit::component::input::Undo);
+    wait_for(&mut context, "image");
+    view.read_with(&context, |view, cx| assert_eq!(view.document().read(cx).source().to_string(), original));
 }
