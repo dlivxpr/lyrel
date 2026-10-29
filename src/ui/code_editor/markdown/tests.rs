@@ -2551,6 +2551,18 @@ fn native_mixed_selection_drag_cut_history_and_mixed_ending_save_reopen(
         window.press("shift-right", cx);
         assert_eq!(view.read(cx).selection(), Selection::caret(image_end));
     });
+    let one_end = source.find("one").unwrap() + 3;
+    let two = source.find("two").unwrap();
+    for (from, to, key) in [(one_end, two, "shift-right"), (two, one_end, "shift-left")] {
+        view.update_in(&mut context, |view, _, cx| view.select_range(from..from, cx));
+        context.update(|window, cx| {
+            window.press(key, cx);
+            assert_eq!(view.read(cx).selection(), Selection::new(from, to));
+            window.press("secondary-c", cx);
+            assert_eq!(cx.read_from_clipboard().and_then(|item| item.text()), Some(" | ".into()));
+            assert_eq!(view.read(cx).document().read(cx).source().to_string(), source);
+        });
+    }
     // A new edit after undo replaces the cut/delete branch, not earlier history.
     view.update_in(&mut context, |view, _, cx| view.select_range(start..start + 5, cx));
     context.update(|window, cx| {
@@ -2564,6 +2576,7 @@ fn native_mixed_selection_drag_cut_history_and_mixed_ending_save_reopen(
         assert_eq!(view.document().read(cx).source().to_string(), source.replacen("alpha", "changed", 1));
         assert_eq!(view.selection(), Selection::caret(start + 7));
     });
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
     context.dispatch_action(crate::core::actions::EditorSave);
     loop {
         context.run_until_parked();
