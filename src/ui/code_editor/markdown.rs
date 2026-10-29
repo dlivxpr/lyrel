@@ -7,6 +7,8 @@ use gpui_kit::base::{
 use std::ops::Range;
 use unicode_segmentation::UnicodeSegmentation as _;
 
+mod images;
+pub(super) mod resources;
 mod projection;
 mod regions;
 mod source;
@@ -206,6 +208,8 @@ pub(crate) struct MarkdownDocument {
     // The marked range, original text and selection stay in that presentation.
     composition_owner: Option<gpui_kit::WeakEntity<SourcePresentation>>,
     pending_changes: smallvec::SmallVec<[SourceChange; 1]>,
+    resources: Option<resources::ResourceContext>,
+    images: images::Images,
 }
 impl MarkdownDocument {
     pub(crate) fn new(source: String, format: TextFormat) -> Self {
@@ -219,6 +223,8 @@ impl MarkdownDocument {
             typing_end: None,
             composition_owner: None,
             pending_changes: smallvec::SmallVec::new(),
+            resources: None,
+            images: images::Images::default(),
         }
     }
     pub(crate) fn source(&self) -> &Rope {
@@ -625,4 +631,6 @@ impl gpui_kit::EventEmitter<DocumentEvent> for MarkdownDocument {}
 pub(super) enum DocumentEvent {
     Edited(Transaction),
     PresentationChanged,
+    ResourceContextChanged,
+    ImagesChanged,
 }

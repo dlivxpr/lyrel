@@ -35,6 +35,7 @@ struct Segment {
     delimiter: Option<usize>,
     raw: Option<String>,
     verbatim: bool,
+    image: Option<super::images::Image>,
 }
 #[derive(Clone)]
 pub(super) struct Leaf {
@@ -48,6 +49,7 @@ pub(super) struct Leaf {
     content: String,
     spans: Vec<InlineSpan>,
     style: InlineStyle,
+    image_definitions: std::sync::Arc<super::images::Definitions>,
 }
 impl Leaf {
     fn new(range: Range<usize>, kind: Kind) -> Self {
@@ -62,6 +64,7 @@ impl Leaf {
             content: String::new(),
             spans: Vec::new(),
             style: InlineStyle::default(),
+            image_definitions: Default::default(),
         }
     }
     fn push(&mut self, source: Range<usize>, text: &str) {
@@ -100,16 +103,19 @@ impl Leaf {
             delimiter,
             raw,
             verbatim: false,
+            image: None,
         });
     }
     fn rebuild(&mut self, marked: Option<&Range<usize>>) {
         self.text.clear();
         for segment in &mut self.segments {
             let start = self.text.len();
-            segment.verbatim = segment.raw.is_some()
-                && marked.is_some_and(|range| {
-                    range.start < segment.source.end && range.end > segment.source.start
-                });
+            if segment.image.is_none() {
+                segment.verbatim = segment.raw.is_some()
+                    && marked.is_some_and(|range| {
+                        range.start < segment.source.end && range.end > segment.source.start
+                    });
+            }
             if segment.delimiter.is_none_or(|ix| self.spans[ix].revealed) {
                 self.text.push_str(if segment.verbatim {
                     segment.raw.as_deref().unwrap()
@@ -141,8 +147,19 @@ impl Leaf {
             changed |= revealed != span.revealed;
             span.revealed = revealed;
         }
+        for segment in &mut self.segments {
+            if segment.image.is_some() {
+                let revealed = std::iter::once(&selection).chain(extra).any(|selection| {
+                    let range = selection.range();
+                    if range.is_empty() { segment.source.start < range.start && range.start < segment.source.end }
+                    else { range.start < segment.source.end && range.end > segment.source.start }
+                }) || marked.is_some_and(|range| range.start < segment.source.end && range.end > segment.source.start);
+                changed |= segment.verbatim != revealed;
+                segment.verbatim = revealed;
+            }
+        }
         changed |= self.segments.iter().any(|segment| {
-            segment.verbatim
+            segment.image.is_none() && segment.verbatim
                 != (segment.raw.is_some()
                     && marked.is_some_and(|range| {
                         range.start < segment.source.end && range.end > segment.source.start
@@ -202,6 +219,33 @@ impl Leaf {
             }
         }
         marks
+    }
+    pub fn image_urls(&self) -> impl Iterator<Item = &str> {
+        self.segments.iter().filter_map(|segment| segment.image.as_ref().map(|image| image.url.as_str()))
+    }
+    pub fn inline_nodes(&self, marked: Option<&Range<usize>>) -> Vec<gpui_kit::base::text::editor_host::InlineNode> {
+        use gpui_kit::base::text::editor_host::{InlineNode, ImageNode};
+        let marks = self.marks(marked);
+        self.segments.iter().filter(|segment| !segment.display.is_empty()).map(|segment| {
+            if let Some(image) = segment.image.as_ref().filter(|_| !segment.verbatim) {
+                let mut node = ImageNode::default();
+                node.url = image.url.clone().into();
+                node.alt = Some(image.alt.clone().into());
+                node.title = image.title.clone().map(Into::into);
+                // Reserve geometry before loading, so completion cannot move the
+                // caret or scroll anchor. Images fit inside this native atom.
+                node.width = Some(gpui_kit::rems(12.).into());
+                node.height = Some(gpui_kit::rems(8.).into());
+                InlineNode::image(node)
+            } else {
+                let range = &segment.display;
+                InlineNode::new(self.text[range.clone()].to_owned()).marks(marks.iter().filter_map(|(mark_range, mark)| {
+                    let start = range.start.max(mark_range.start);
+                    let end = range.end.min(mark_range.end);
+                    (start < end).then(|| (start - range.start..end - range.start, mark.clone()))
+                }).collect())
+            }
+        }).collect()
     }
     fn same_inline(&self, other: &Self) -> bool {
         self.content == other.content
@@ -311,6 +355,7 @@ impl Projection {
                 leaf.raw(source, 0..source.len());
                 leaves.push(leaf);
             } else if let Ok(root) = markdown::to_mdast(source, &options) {
+                let image_definitions = std::sync::Arc::new(super::images::definitions(&root));
                 let mut cursor = 0;
                 for node in root.children().into_iter().flatten() {
                     let Some(position) = node.position() else {
@@ -320,6 +365,7 @@ impl Projection {
                     Self::gap(source, cursor..range.start, &mut leaves);
                     let kind = super::regions::classify(node, &source[range.clone()]);
                     let mut leaf = Leaf::new(range.clone(), kind);
+                    leaf.image_definitions = image_definitions.clone();
                     if matches!(kind, Kind::Prose | Kind::Heading(_)) {
                         if let Some(children) = node.children() {
                             for child in children {
@@ -390,6 +436,11 @@ impl Projection {
             return;
         };
         let range = position.start.offset..position.end.offset;
+        if let Some(image) = super::images::image(node, &leaf.image_definitions) {
+            leaf.push_normalized(range.clone(), "\u{FFFC}", &source[range]);
+            leaf.segments.last_mut().unwrap().image = Some(image);
+            return;
+        }
         match node {
             Node::Break(_) => leaf.push_normalized(range.clone(), "\n", &source[range]),
             Node::Text(_) => {
