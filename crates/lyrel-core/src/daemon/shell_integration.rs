@@ -2761,10 +2761,21 @@ builtin printf '\e]777;version;%s.%s\a' "${BASH_VERSINFO[0]}" "${BASH_VERSINFO[1
             eprintln!("skipping: pwsh not installed");
             return;
         };
-        let injection = setup(Some(&pwsh), &[], false).expect("powershell integration");
-        // From $HOME, so the title's `~` abbreviation is exercised rather than
-        // assumed — it is the half that silently did nothing on Unix.
-        let home = PathBuf::from(std::env::var("HOME").expect("HOME"));
+        let mut injection = setup(Some(&pwsh), &[], false).expect("powershell integration");
+        // CI can inherit a stale XDG_RUNTIME_DIR; PSReadLine's .NET history
+        // mutex requires a live owner-only directory, independently of input.
+        let home_dir = tempfile::tempdir().expect("PowerShell home");
+        let runtime_dir = tempfile::tempdir().expect("PowerShell runtime directory");
+        let home = home_dir.path().canonicalize().expect("canonical home");
+        for (key, path) in [
+            ("HOME", home.clone()),
+            ("XDG_CONFIG_HOME", home.join(".config")),
+            ("XDG_DATA_HOME", home.join(".local/share")),
+            ("XDG_RUNTIME_DIR", runtime_dir.path().to_path_buf()),
+        ] {
+            injection.env.insert(key.to_string(), path.to_string_lossy().into_owned());
+        }
+        // From HOME, retaining the real title's `~` contract.
         let text = prompt_cycle_over_pty(&pwsh, &injection, b"false\r", Some(&home));
 
         for mark in ["133;A", "133;B", "133;C", FAILED_COMMAND_MARK] {
