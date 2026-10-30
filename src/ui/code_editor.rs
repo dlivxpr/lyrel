@@ -31,7 +31,6 @@ mod document_input;
 pub(crate) mod markdown;
 mod markdown_search;
 use buffers::Loaded;
-pub(crate) use document_input::MarkdownWorkbench;
 use document_input::{EditorInput, MarkdownPresentations};
 mod gutter;
 mod nav;
@@ -134,13 +133,7 @@ pub(crate) struct OpenFile {
     save_pending: bool,
     reload_seq: u64,
     pub(crate) conflict: Option<DiskConflict>,
-    pub(crate) preview: bool,
     pub(crate) wrap: bool,
-    /// The rendered-Markdown pane's own scroll. Per file, so switching away
-    /// and back lands where you were reading — and so the pane can carry the
-    /// scrollbar every other scrolling surface in lyrel has. The editor itself
-    /// gets one from `Input`.
-    pub(crate) preview_scroll: gpui_kit::ScrollHandle,
     /// Git change markers — see `gutter`.
     gutter: gutter::BufferGutter,
     popups: Option<Entity<crate::ui::lsp::popups::EditorPopups>>,
@@ -392,6 +385,18 @@ impl EditorPanelState {
     }
 }
 
+#[derive(Clone, Copy)]
+pub(super) enum BufferKind {
+    Text,
+    Markdown,
+}
+
+pub(crate) fn is_markdown_path(path: &Path) -> bool {
+    path.extension().and_then(|ext| ext.to_str()).is_some_and(|ext| {
+        ["md", "markdown", "mdx"].iter().any(|candidate| ext.eq_ignore_ascii_case(candidate))
+    })
+}
+
 pub(crate) fn language_for_path(path: &Path) -> &'static str {
     if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
         let lowered = name.to_ascii_lowercase();
@@ -419,7 +424,7 @@ pub(crate) fn language_for_path(path: &Path) -> &'static str {
         "yaml" | "yml" => "yaml",
         "html" | "htm" => "html",
         "css" => "css",
-        "md" | "markdown" => "markdown",
+        "md" | "markdown" | "mdx" => "markdown",
         "sh" | "bash" | "zsh" => "bash",
         "c" | "h" => "c",
         "cpp" | "cc" | "cxx" | "hpp" | "hh" => "cpp",
@@ -1144,6 +1149,7 @@ impl LyrelApp {
         host: SharedHost,
         path: PathBuf,
         untitled: Option<u32>,
+        kind: BufferKind,
         text: String,
         format: TextFormat,
         config: EditorConfig,
@@ -1156,6 +1162,7 @@ impl LyrelApp {
             host,
             path,
             untitled,
+            kind,
             text,
             format,
             config,
@@ -1319,6 +1326,14 @@ impl LyrelApp {
 
     /// A new, empty, never-saved buffer, on the window's own machine.
     pub(crate) fn editor_new_file(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.editor_new_untitled(BufferKind::Text, window, cx);
+    }
+
+    pub(crate) fn editor_new_markdown_file(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.editor_new_untitled(BufferKind::Markdown, window, cx);
+    }
+
+    fn editor_new_untitled(&mut self, kind: BufferKind, window: &mut Window, cx: &mut Context<Self>) {
         let Some(host) = self.active_host(cx) else {
             return;
         };
@@ -1332,6 +1347,7 @@ impl LyrelApp {
             host,
             PathBuf::new(),
             Some(n),
+            kind,
             String::new(),
             TextFormat::default(),
             EditorConfig::default(),
@@ -1362,6 +1378,7 @@ impl LyrelApp {
             host,
             PathBuf::new(),
             Some(n),
+            BufferKind::Text,
             text,
             TextFormat::default(),
             EditorConfig::default(),
@@ -1449,7 +1466,7 @@ impl LyrelApp {
     pub(crate) fn focus_previous_content(&self, window: &mut Window, cx: &mut Context<Self>) {
         match self.status_document_context(window, cx) {
             Some(crate::ui::tab::OverlayTop::Code) => {
-                if self.active_buffer().is_some_and(|file| !file.preview) {
+                if self.active_buffer().is_some() {
                     self.focus_editor(window, cx);
                 } else {
                     self.editor.empty_focus.focus(window, cx);
@@ -1487,11 +1504,8 @@ impl LyrelApp {
         cx.notify();
     }
 
-    /// The status bar's Preview / Edit button, and `ToggleDocumentPreview`.
-    /// Acts on the active tab's open file, and only when that file is
-    /// Markdown and the code panel is on screen — anything else has no
-    /// rendered form to switch to. The new state is remembered for the next
-    /// Markdown file opened.
+    /// Switch the active native Markdown presentation between live editing and source.
+    /// `ToggleDocumentPreview` remains the action ID for existing custom keybindings.
     pub(crate) fn toggle_document_preview(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if !self.code_panel_visible() {
             return;
@@ -1502,21 +1516,7 @@ impl LyrelApp {
         {
             view.update(cx, |view, cx| view.toggle_mode(window, cx));
             cx.notify();
-            return;
         }
-        let Some(id) = self.tab_code().and_then(TabCode::active_id) else {
-            return;
-        };
-        let Some(f) = self.editor.buffers.get_mut(id) else {
-            return;
-        };
-        if f.language() != "markdown" {
-            return;
-        }
-        f.preview = !f.preview;
-        let preview = f.preview;
-        self.update_config(cx, |cfg| cfg.editor_markdown_preview = preview);
-        cx.notify();
     }
 
     /// The status bar's Wrap button, and `ToggleDocumentWrap`. Same reach as
@@ -1823,12 +1823,6 @@ impl LyrelApp {
     pub(crate) fn editor_go_to_line(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if !self.code_panel_visible() || self.active_buffer().is_none() {
             return;
-        }
-        if let Some(f) = self.tab_code().and_then(TabCode::active_id)
-            && let Some(f) = self.editor.buffers.get_mut(f)
-        {
-            // There is no line to land on in the rendered view.
-            f.preview = false;
         }
         let id = self.tab_code().and_then(TabCode::active_id).unwrap();
         self.editor_open_bar(BarKind::GoToLine { id }, String::new(), window, cx);
@@ -2761,36 +2755,6 @@ impl LyrelApp {
                     .context_menu(move |menu, _, cx| Self::editor_body_menu(menu, &app, id, cx))
                     .into_any_element()
             }
-            Some(f) if f.preview => {
-                let markdown = f.input.read(cx).text().to_string();
-                let scroll = f.preview_scroll.clone();
-                // The bar's wrapper takes its height from `flex_1`, so it needs
-                // a column with a definite height to grow inside — hand it one
-                // rather than dropping it straight into the overlay, or the
-                // pane sizes to its content and there is nothing left to
-                // scroll.
-                v_flex()
-                    .size_full()
-                    .child(crate::ui::scrollbar::with_vertical_scrollbar(
-                        ("editor-md-preview-scrollbar", slot),
-                        div()
-                            .id(("editor-md-preview", slot))
-                            .size_full()
-                            .overflow_y_scroll()
-                            .track_scroll(&scroll)
-                            .px_4()
-                            .py_3()
-                            .child(
-                                gpui_kit::component::text::TextView::markdown(
-                                    ("editor-md-preview-body", slot),
-                                    markdown,
-                                )
-                                .style(crate::ui::theme::markdown_style(cx)),
-                            ),
-                        &scroll,
-                    ))
-                    .into_any_element()
-            }
             Some(f) => {
                 let input = f.input.code().expect("ordinary editor variant").clone();
                 let id = f.id();
@@ -3077,8 +3041,6 @@ impl LyrelApp {
             ln_col.into()
         });
         let wrap: Option<bool> = active.map(|f| f.wrap);
-        let is_markdown = active.is_some_and(|f| f.language() == "markdown");
-        let preview = active.is_some_and(|f| f.preview);
         let native_live = self
             .active_editor_input()
             .and_then(|input| input.markdown().map(|view| view.read(cx).is_live()));
@@ -3123,18 +3085,12 @@ impl LyrelApp {
                         this.focus_editor(window, cx);
                     })),
             )
-            .when(is_markdown, |this| {
-                let label = if let Some(live) = native_live {
-                    t(if live {
-                        L10nKey::EditorMarkdownSource
-                    } else {
-                        L10nKey::EditorMarkdownLive
-                    })
-                } else if preview {
-                    t(L10nKey::EditorEdit)
+            .when_some(native_live, |this, live| {
+                let label = t(if live {
+                    L10nKey::EditorMarkdownSource
                 } else {
-                    t(L10nKey::EditorPreview)
-                };
+                    L10nKey::EditorMarkdownLive
+                });
                 this.child(
                     item("status-md-preview", label.into()).on_click(cx.listener(
                         |this, _, window, cx| {
@@ -3359,6 +3315,8 @@ mod tests {
             ("CMakeLists.txt", "cmake"),
             (".zshrc", "bash"),
             ("notes.md", "markdown"),
+            ("notes.mdx", "markdown"),
+            ("notes.MARKDOWN", "markdown"),
             ("query.SQL", "sql"),
             ("unknown.xyz", "text"),
             ("no_ext", "text"),

@@ -24,6 +24,78 @@ fn active_id(app: &Entity<LyrelApp>, vcx: &VisualTestContext) -> Option<BufferId
     app.read_with(vcx, |app, _| app.tab_code().and_then(TabCode::active_id))
 }
 
+fn start_active_markdown_in_source(app: &Entity<LyrelApp>, vcx: &mut VisualTestContext) {
+    app.update_in(vcx, |app, window, cx| {
+        let view = app.active_editor_input().unwrap().markdown().unwrap().clone();
+        view.update(cx, |view, cx| {
+            if view.is_live() {
+                view.toggle_mode(window, cx);
+            }
+            assert!(!view.is_live());
+        });
+    });
+}
+
+#[gpui_kit::test]
+fn production_markdown_opens_live_without_changing_code_or_plain_untitled(cx: &mut TestAppContext) {
+    use crate::core::actions::{EditorNewFile, EditorNewMarkdownFile};
+    let dir = tempfile::tempdir().unwrap();
+    let (app, mut vcx, _streams) = harness_with_tabs(cx, 1);
+    for extension in ["md", "MARKDOWN", "MDX"] {
+        let path = dir.path().join(format!("named.{extension}"));
+        std::fs::write(&path, "# Heading\n\nbody\n").unwrap();
+        app.update_in(&mut vcx, |app, window, cx| app.open_file_in_editor(&path, window, cx));
+        wait_until(&mut vcx, |vcx| app.read_with(vcx, |app, _| {
+            app.active_buffer().is_some_and(|file| file.path.file_name() == path.file_name())
+        }));
+        app.read_with(&vcx, |app, cx| {
+            let file = app.active_buffer().unwrap();
+            assert_eq!(file.language(), "markdown");
+            assert!(file.input.markdown().unwrap().read(cx).is_live());
+            assert_eq!(file.input.read(cx).text().to_string(), "# Heading\n\nbody\n");
+            assert!(!file.dirty);
+        });
+    }
+    let code = dir.path().join("main.rs");
+    std::fs::write(&code, "fn main() {}\n").unwrap();
+    app.update_in(&mut vcx, |app, window, cx| app.open_file_in_editor(&code, window, cx));
+    wait_until(&mut vcx, |vcx| app.read_with(vcx, |app, _| {
+        app.active_buffer().is_some_and(|file| file.input.code().is_some())
+    }));
+    app.update_in(&mut vcx, |app, window, cx| app.toggle_document_preview(window, cx));
+    app.read_with(&vcx, |app, cx| {
+        let file = app.active_buffer().unwrap();
+        assert_eq!(file.language(), "rust");
+        assert!(file.input.code().is_some());
+        assert_eq!(file.input.read(cx).text().to_string(), "fn main() {}\n");
+    });
+    vcx.dispatch_action(EditorNewFile);
+    vcx.run_until_parked();
+    app.read_with(&vcx, |app, _| {
+        let file = app.active_buffer().unwrap();
+        assert!(file.untitled.is_some());
+        assert!(file.path.as_os_str().is_empty());
+        assert!(file.input.code().is_some());
+    });
+    app.update_in(&mut vcx, |app, window, cx| app.editor_open_scrollback("# terminal output".into(), window, cx));
+    app.read_with(&vcx, |app, cx| {
+        let file = app.active_buffer().unwrap();
+        assert!(file.input.code().is_some());
+        assert_eq!(file.input.read(cx).text().to_string(), "# terminal output");
+    });
+    vcx.dispatch_action(EditorNewMarkdownFile);
+    vcx.run_until_parked();
+    app.read_with(&vcx, |app, cx| {
+        let file = app.active_buffer().unwrap();
+        assert!(file.untitled.is_some());
+        assert!(file.path.as_os_str().is_empty());
+        let view = file.input.markdown().unwrap().read(cx);
+        assert!(view.is_live());
+        assert_eq!(view.document().read(cx).source().to_string(), "");
+        assert!(!file.dirty);
+    });
+}
+
 #[gpui_kit::test]
 fn opening_across_tabs_shares_edits_and_closing_one_presentation_keeps_them(
     cx: &mut TestAppContext,
@@ -120,11 +192,11 @@ fn markdown_byte_fidelity_survives_host_save_local_edit_undo_and_reopen(cx: &mut
     std::fs::write(dir.path().join(".editorconfig"), "root = true\n[*]\ntrim_trailing_whitespace = true\ninsert_final_newline = true\nend_of_line = lf\n").unwrap();
     let host = FileHost::new(HostId(705));
     let (app, mut vcx, _streams) = harness_with_tabs(cx, 1);
-    vcx.update(|_, cx| cx.set_global(MarkdownWorkbench));
     app.update_in(&mut vcx, |app, window, cx| {
         app.editor_open_on_host(host.clone(), &path, window, cx);
     });
     wait_until(&mut vcx, |vcx| active_id(&app, vcx).is_some());
+    start_active_markdown_in_source(&app, &mut vcx);
     let save = |vcx: &mut VisualTestContext| {
         vcx.dispatch_action(EditorSave);
         wait_until(vcx, |vcx| {
@@ -155,6 +227,7 @@ fn markdown_byte_fidelity_survives_host_save_local_edit_undo_and_reopen(cx: &mut
         app.editor_open_on_host(host.clone(), &path, window, cx);
     });
     wait_until(&mut vcx, |vcx| active_id(&app, vcx).is_some());
+    start_active_markdown_in_source(&app, &mut vcx);
     save(&mut vcx);
     assert_eq!(std::fs::read(&path).unwrap(), edited);
     app.read_with(&vcx, |app, cx| {
@@ -189,7 +262,6 @@ fn markdown_supported_encodings_keep_bom_and_untouched_bytes_through_save_reopen
     ];
     let host = FileHost::new(HostId(706));
     let (app, mut vcx, _streams) = harness_with_tabs(cx, 1);
-    vcx.update(|_, cx| cx.set_global(MarkdownWorkbench));
     for (index, &(original, inserted, bom_len)) in fixtures.iter().enumerate() {
         let path = dir.path().join(format!("encoding-{index}.md"));
         std::fs::write(&path, original).unwrap();
@@ -197,6 +269,7 @@ fn markdown_supported_encodings_keep_bom_and_untouched_bytes_through_save_reopen
             app.editor_open_on_host(host.clone(), &path, window, cx)
         });
         wait_until(&mut vcx, |vcx| active_id(&app, vcx).is_some());
+        start_active_markdown_in_source(&app, &mut vcx);
         let save = |vcx: &mut VisualTestContext| {
             vcx.dispatch_action(crate::core::actions::EditorSave);
             wait_until(vcx, |vcx| {
@@ -236,6 +309,7 @@ fn markdown_supported_encodings_keep_bom_and_untouched_bytes_through_save_reopen
             app.editor_open_on_host(host.clone(), &path, window, cx);
         });
         wait_until(&mut vcx, |vcx| active_id(&app, vcx).is_some());
+        start_active_markdown_in_source(&app, &mut vcx);
         save(&mut vcx);
         assert_eq!(
             std::fs::read(&path).unwrap(),
@@ -255,11 +329,11 @@ fn markdown_encoding_failure_keeps_original_bytes_and_recoverable_edits(cx: &mut
     let original = b"caf\xe9  \r\nlast";
     std::fs::write(&path, original).unwrap();
     let (app, mut vcx, _streams) = harness_with_tabs(cx, 1);
-    vcx.update(|_, cx| cx.set_global(MarkdownWorkbench));
     app.update_in(&mut vcx, |app, window, cx| {
         app.open_file_in_editor(&path, window, cx)
     });
     wait_until(&mut vcx, |vcx| active_id(&app, vcx).is_some());
+    start_active_markdown_in_source(&app, &mut vcx);
     vcx.update(|window, cx| {
         window.render_frame(cx);
         window.input("🎉", cx);
@@ -292,7 +366,6 @@ fn markdown_declared_encoding_errors_are_visible_without_replacement_or_write(
 ) {
     let dir = tempfile::tempdir().unwrap();
     let (app, mut vcx, _streams) = harness_with_tabs(cx, 1);
-    vcx.update(|_, cx| cx.set_global(MarkdownWorkbench));
     let invalid: &[&[u8]] = &[
         b"\xef\xbb\xbfbroken\xff",
         b"\xff\xfea\0\x00\xd8",
@@ -300,7 +373,8 @@ fn markdown_declared_encoding_errors_are_visible_without_replacement_or_write(
         b"\xff\xfea",
     ];
     for (index, bytes) in invalid.iter().enumerate() {
-        let path = dir.path().join(format!("damaged-{index}.md"));
+        let name = format!("damaged-{index}.{}", ["md", "markdown", "MDX", "md"][index]);
+        let path = dir.path().join(&name);
         std::fs::write(&path, bytes).unwrap();
         app.update_in(&mut vcx, |app, window, cx| {
             app.open_file_in_editor(&path, window, cx)
@@ -311,7 +385,7 @@ fn markdown_declared_encoding_errors_are_visible_without_replacement_or_write(
                     .read(cx)
                     .records()
                     .any(|record| {
-                        record.message().contains(&format!("damaged-{index}.md"))
+                        record.message().contains(&name)
                             && record.message().contains("invalid source bytes")
                     })
             })
@@ -329,11 +403,11 @@ fn markdown_workbench_shares_native_source_history_and_host_save_across_groups(
     let path = dir.path().join("shared.mdx");
     std::fs::write(&path, "alpha\nbeta\n").unwrap();
     let (app, mut vcx, _streams) = harness_with_tabs(cx, 1);
-    vcx.update(|_, cx| cx.set_global(MarkdownWorkbench));
     app.update_in(&mut vcx, |app, window, cx| {
         app.open_file_in_editor(&path, window, cx)
     });
     wait_until(&mut vcx, |vcx| active_id(&app, vcx).is_some());
+    start_active_markdown_in_source(&app, &mut vcx);
     let id = active_id(&app, &vcx).unwrap();
     let first = app.read_with(&vcx, |app, _| {
         app.active_editor_input()
@@ -350,6 +424,7 @@ fn markdown_workbench_shares_native_source_history_and_host_save_across_groups(
     app.update_in(&mut vcx, |app, window, cx| {
         assert!(app.editor_split(window, cx));
     });
+    start_active_markdown_in_source(&app, &mut vcx);
     vcx.update(|window, cx| window.render_frame(cx));
     let second = app.read_with(&vcx, |app, _| {
         app.active_editor_input()
@@ -456,6 +531,7 @@ fn markdown_workbench_shares_native_source_history_and_host_save_across_groups(
         app.open_file_in_editor(&path, window, cx);
     });
     wait_until(&mut vcx, |vcx| active_id(&app, vcx).is_some());
+    start_active_markdown_in_source(&app, &mut vcx);
     app.read_with(&vcx, |app, cx| {
         let file = app.active_buffer().unwrap();
         assert_ne!(file.id(), id);
@@ -472,11 +548,11 @@ fn markdown_native_handler_converts_utf16_and_composition_undo(cx: &mut TestAppC
     let path = dir.path().join("ime.md");
     std::fs::write(&path, "A🎉Z").unwrap();
     let (app, mut vcx, _streams) = harness_with_tabs(cx, 1);
-    vcx.update(|_, cx| cx.set_global(MarkdownWorkbench));
     app.update_in(&mut vcx, |app, window, cx| {
         app.open_file_in_editor(&path, window, cx)
     });
     wait_until(&mut vcx, |vcx| active_id(&app, vcx).is_some());
+    start_active_markdown_in_source(&app, &mut vcx);
     let view = app.read_with(&vcx, |app, _| {
         app.active_editor_input()
             .unwrap()
@@ -578,9 +654,6 @@ fn external_writes_scenario(cx: &mut TestAppContext, markdown: bool) {
     });
     std::fs::write(&path, "initial\n").unwrap();
     let (app, mut vcx, _streams) = harness_with_tabs(cx, 1);
-    if markdown {
-        vcx.update(|_, cx| cx.set_global(MarkdownWorkbench));
-    }
     app.update_in(&mut vcx, |app, window, cx| {
         app.open_file_in_editor(&path, window, cx)
     });
@@ -747,10 +820,9 @@ fn markdown_session_restore_surfaces_failed_reads_without_losing_valid_files(
 ) {
     let dir = tempfile::tempdir().unwrap();
     let valid = dir.path().join("restored.md");
-    let missing = dir.path().join("unavailable.md");
+    let missing = dir.path().join("unavailable.mdx");
     std::fs::write(&valid, "# restored\n").unwrap();
     let (app, mut vcx, _streams) = harness_with_tabs(cx, 1);
-    vcx.update(|_, cx| cx.set_global(MarkdownWorkbench));
     app.update_in(&mut vcx, |app, window, cx| {
         let tab = app.tabs[0].id();
         app.tab_code_mut_or_init();
@@ -759,8 +831,8 @@ fn markdown_session_restore_surfaces_failed_reads_without_losing_valid_files(
             cx,
             tab,
             TabEditor {
-                files: vec![missing.clone(), valid.clone()],
-                active: 1,
+                files: vec![dir.path().join("unavailable-markdown.md"), missing.clone(), valid.clone()],
+                active: 2,
                 visible: true,
                 ..Default::default()
             },
@@ -779,10 +851,11 @@ fn markdown_session_restore_surfaces_failed_reads_without_losing_valid_files(
     });
     wait_until(&mut vcx, |vcx| {
         app.read_with(vcx, |_, cx| {
-            crate::ui::notification_history::history(cx)
-                .read(cx)
-                .records()
-                .any(|record| record.message().contains("unavailable.md"))
+            let history = crate::ui::notification_history::history(cx);
+            let history = history.read(cx);
+            ["unavailable-markdown.md", "unavailable.mdx"].iter().all(|name| {
+                history.records().any(|record| record.message().contains(*name))
+            })
         })
     });
 }
@@ -798,11 +871,11 @@ fn markdown_tab_uses_editorconfig_in_each_shared_presentation(cx: &mut TestAppCo
     .unwrap();
     std::fs::write(&path, "first\nsecond\n").unwrap();
     let (app, mut vcx, _streams) = harness_with_tabs(cx, 1);
-    vcx.update(|_, cx| cx.set_global(MarkdownWorkbench));
     app.update_in(&mut vcx, |app, window, cx| {
         app.open_file_in_editor(&path, window, cx)
     });
     wait_until(&mut vcx, |vcx| active_id(&app, vcx).is_some());
+    start_active_markdown_in_source(&app, &mut vcx);
     vcx.update(|window, cx| {
         window.render_frame(cx);
         window.press("tab", cx);
@@ -822,6 +895,7 @@ fn markdown_tab_uses_editorconfig_in_each_shared_presentation(cx: &mut TestAppCo
     app.update_in(&mut vcx, |app, window, cx| {
         assert!(app.editor_split(window, cx));
     });
+    start_active_markdown_in_source(&app, &mut vcx);
     vcx.update(|window, cx| window.render_frame(cx));
     app.update_in(&mut vcx, |app, window, cx| {
         app.active_editor_input()
@@ -889,11 +963,11 @@ fn markdown_screenshot_paste_creates_owned_unique_asset_and_survives_history_sav
     let host = FileHost::new(HostId(715));
     let png = screenshot_bytes();
     let (app, mut vcx, _streams) = harness_with_tabs(cx, 1);
-    vcx.update(|_, cx| cx.set_global(MarkdownWorkbench));
     app.update_in(&mut vcx, |app, window, cx| {
         app.editor_open_on_host(host.clone(), &path, window, cx);
     });
     wait_until(&mut vcx, |vcx| active_id(&app, vcx).is_some());
+    start_active_markdown_in_source(&app, &mut vcx);
     vcx.update(|window, cx| {
         cx.write_to_clipboard(ClipboardItem::new_image(&Image::from_bytes(
             ImageFormat::Png,
@@ -948,6 +1022,7 @@ fn markdown_screenshot_paste_creates_owned_unique_asset_and_survives_history_sav
         app.editor_open_on_host(host.clone(), &path, window, cx);
     });
     wait_until(&mut vcx, |vcx| active_id(&app, vcx).is_some());
+    start_active_markdown_in_source(&app, &mut vcx);
     app.read_with(&vcx, |app, cx| {
         assert_eq!(
             app.active_buffer()
@@ -1003,11 +1078,11 @@ fn markdown_external_drop_uses_owning_host_and_discard_keeps_the_resource(cx: &m
     std::fs::write(&incoming, &png).unwrap();
     let host = FileHost::new(HostId(716));
     let (app, mut vcx, _streams) = harness_with_tabs(cx, 1);
-    vcx.update(|_, cx| cx.set_global(MarkdownWorkbench));
     app.update_in(&mut vcx, |app, window, cx| {
         app.editor_open_on_host(host.clone(), &path, window, cx)
     });
     wait_until(&mut vcx, |vcx| active_id(&app, vcx).is_some());
+    start_active_markdown_in_source(&app, &mut vcx);
     drop_image(&mut vcx, &incoming);
     wait_until(&mut vcx, |vcx| {
         app.read_with(vcx, |app, cx| {
@@ -1046,11 +1121,11 @@ fn markdown_first_external_drop_into_unfocused_group_uses_that_presentation(
     std::fs::write(&incoming, &png).unwrap();
     let host = FileHost::new(HostId(722));
     let (app, mut vcx, _streams) = harness_with_tabs(cx, 1);
-    vcx.update(|_, cx| cx.set_global(MarkdownWorkbench));
     app.update_in(&mut vcx, |app, window, cx| {
         app.editor_open_on_host(host.clone(), &path, window, cx)
     });
     wait_until(&mut vcx, |vcx| active_id(&app, vcx).is_some());
+    start_active_markdown_in_source(&app, &mut vcx);
     let first = app.read_with(&vcx, |app, _| {
         app.active_editor_input()
             .unwrap()
@@ -1106,8 +1181,7 @@ fn markdown_untitled_image_cancel_is_unchanged_and_success_waits_for_document_sa
     let path = dir.path().join("chosen.md");
     let png = screenshot_bytes();
     let (app, mut vcx, _streams) = harness_with_tabs(cx, 1);
-    vcx.update(|_, cx| cx.set_global(MarkdownWorkbench));
-    app.update_in(&mut vcx, |app, window, cx| app.editor_new_file(window, cx));
+    app.update_in(&mut vcx, |app, window, cx| app.editor_new_markdown_file(window, cx));
     paste_screenshot(&mut vcx, &png);
     cx.simulate_new_path_selection(|_| None);
     vcx.run_until_parked();
@@ -1152,11 +1226,11 @@ fn markdown_failed_asset_write_has_no_link_and_late_write_cannot_touch_replaceme
     let host = FileHost::new(HostId(717));
     let png = screenshot_bytes();
     let (app, mut vcx, _streams) = harness_with_tabs(cx, 1);
-    vcx.update(|_, cx| cx.set_global(MarkdownWorkbench));
     app.update_in(&mut vcx, |app, window, cx| {
         app.editor_open_on_host(host.clone(), &path, window, cx)
     });
     wait_until(&mut vcx, |vcx| active_id(&app, vcx).is_some());
+    start_active_markdown_in_source(&app, &mut vcx);
     host.fail_next_write();
     paste_screenshot(&mut vcx, &png);
     wait_until(&mut vcx, |vcx| {
@@ -1237,11 +1311,11 @@ fn markdown_delayed_image_write_rebases_while_typing_without_losing_text(cx: &mu
     let host = FileHost::new(HostId(718));
     let png = screenshot_bytes();
     let (app, mut vcx, _streams) = harness_with_tabs(cx, 1);
-    vcx.update(|_, cx| cx.set_global(MarkdownWorkbench));
     app.update_in(&mut vcx, |app, window, cx| {
         app.editor_open_on_host(host.clone(), &path, window, cx)
     });
     wait_until(&mut vcx, |vcx| active_id(&app, vcx).is_some());
+    start_active_markdown_in_source(&app, &mut vcx);
     let release = host.pause_next_write();
     paste_screenshot(&mut vcx, &png);
     wait_until(&mut vcx, |_| host.entered.load(Ordering::SeqCst));
@@ -1286,7 +1360,6 @@ fn markdown_untitled_host_save_must_finish_before_assets_and_failed_save_never_c
     let chosen = dir.path().join("chosen.md");
     let host = FileHost::new(HostId(719));
     let (app, mut vcx, _streams) = harness_with_tabs(cx, 1);
-    vcx.update(|_, cx| cx.set_global(MarkdownWorkbench));
     app.update_in(&mut vcx, |app, window, cx| {
         let tab = app.tabs[0].id();
         let n = app.editor.buffers.next_untitled();
@@ -1294,6 +1367,7 @@ fn markdown_untitled_host_save_must_finish_before_assets_and_failed_save_never_c
             host.clone(),
             PathBuf::new(),
             Some(n),
+            BufferKind::Markdown,
             String::new(),
             TextFormat::default(),
             EditorConfig::default(),
@@ -1352,6 +1426,7 @@ fn markdown_untitled_host_save_must_finish_before_assets_and_failed_save_never_c
             host.clone(),
             PathBuf::new(),
             Some(n),
+            BufferKind::Markdown,
             String::new(),
             TextFormat::default(),
             EditorConfig::default(),
@@ -1429,11 +1504,11 @@ fn markdown_image_completion_never_replaces_text_typed_over_pending_selection(
     let host = FileHost::new(HostId(720));
     let png = screenshot_bytes();
     let (app, mut vcx, _streams) = harness_with_tabs(cx, 1);
-    vcx.update(|_, cx| cx.set_global(MarkdownWorkbench));
     app.update_in(&mut vcx, |app, window, cx| {
         app.editor_open_on_host(host.clone(), &path, window, cx)
     });
     wait_until(&mut vcx, |vcx| active_id(&app, vcx).is_some());
+    start_active_markdown_in_source(&app, &mut vcx);
     vcx.update(|window, cx| window.press("secondary-a", cx));
     let release = host.pause_next_write();
     paste_screenshot(&mut vcx, &png);
@@ -1487,11 +1562,11 @@ fn markdown_modifier_links_open_on_the_document_host_and_keep_delayed_group_inte
     .unwrap();
     let host = FileHost::mapped(HostId(709), dir.path());
     let (app, mut vcx, _streams) = harness_with_tabs(cx, 2);
-    vcx.update(|_, cx| cx.set_global(MarkdownWorkbench));
     app.update_in(&mut vcx, |app, window, cx| {
         app.editor_open_on_host(host.clone(), Path::new("/docs/start.md"), window, cx)
     });
     wait_until(&mut vcx, |vcx| active_id(&app, vcx).is_some());
+    start_active_markdown_in_source(&app, &mut vcx);
     let source_id = active_id(&app, &vcx).unwrap();
     let view = app.read_with(&vcx, |app, _| {
         app.active_editor_input()
@@ -1588,11 +1663,11 @@ fn markdown_late_link_read_cannot_land_after_its_source_group_is_replaced(cx: &m
     std::fs::write(dir.path().join("next.md"), "destination").unwrap();
     let host = FileHost::mapped(HostId(710), dir.path());
     let (app, mut vcx, _streams) = harness_with_tabs(cx, 1);
-    vcx.update(|_, cx| cx.set_global(MarkdownWorkbench));
     app.update_in(&mut vcx, |app, window, cx| {
         app.editor_open_on_host(host.clone(), Path::new("/start.md"), window, cx)
     });
     wait_until(&mut vcx, |vcx| active_id(&app, vcx).is_some());
+    start_active_markdown_in_source(&app, &mut vcx);
     let view = app.read_with(&vcx, |app, _| {
         app.active_editor_input()
             .unwrap()
@@ -1651,11 +1726,11 @@ fn markdown_local_relative_link_uses_its_document_directory(cx: &mut TestAppCont
             .unwrap()
     });
     let (app, mut vcx, _streams) = harness_with_tabs(cx, 1);
-    vcx.update(|_, cx| cx.set_global(MarkdownWorkbench));
     app.update_in(&mut vcx, |app, window, cx| {
         app.open_file_in_editor(&source, window, cx)
     });
     wait_until(&mut vcx, |vcx| active_id(&app, vcx).is_some());
+    start_active_markdown_in_source(&app, &mut vcx);
     let id = active_id(&app, &vcx).unwrap();
     let view = app.read_with(&vcx, |app, _| {
         app.active_editor_input()
@@ -1706,11 +1781,11 @@ fn markdown_external_image_drop_writes_and_reads_virtual_paths_only_on_owning_ho
     let host = FileHost::mapped(HostId(721), remote.path());
     let document = Path::new("/docs/owned.md");
     let (app, mut vcx, _streams) = harness_with_tabs(cx, 1);
-    vcx.update(|_, cx| cx.set_global(MarkdownWorkbench));
     app.update_in(&mut vcx, |app, window, cx| {
         app.editor_open_on_host(host.clone(), document, window, cx)
     });
     wait_until(&mut vcx, |vcx| active_id(&app, vcx).is_some());
+    start_active_markdown_in_source(&app, &mut vcx);
     drop_image(&mut vcx, &incoming);
     let inserted = "![capture](assets/capture.png)remote text";
     wait_until(&mut vcx, |vcx| {
@@ -1741,6 +1816,7 @@ fn markdown_external_image_drop_writes_and_reads_virtual_paths_only_on_owning_ho
         app.editor_open_on_host(host.clone(), document, window, cx);
     });
     wait_until(&mut vcx, |vcx| active_id(&app, vcx).is_some());
+    start_active_markdown_in_source(&app, &mut vcx);
     app.read_with(&vcx, |app, cx| {
         assert_eq!(app.active_buffer().unwrap().host.id(), HostId(721));
         assert_eq!(
@@ -1780,11 +1856,11 @@ fn markdown_late_image_layout_preserves_visible_caret_and_newer_edit(cx: &mut Te
     std::fs::write(dir.path().join("tall.png"), png).unwrap();
     let host = FileHost::new(HostId(722));
     let (app, mut vcx, _streams) = harness_with_tabs(cx, 1);
-    vcx.update(|_, cx| cx.set_global(MarkdownWorkbench));
     app.update_in(&mut vcx, |app, window, cx| {
         app.editor_open_on_host(host.clone(), &path, window, cx)
     });
     wait_until(&mut vcx, |vcx| active_id(&app, vcx).is_some());
+    start_active_markdown_in_source(&app, &mut vcx);
     let view = app.read_with(&vcx, |app, _| {
         app.active_editor_input()
             .unwrap()
@@ -1862,11 +1938,11 @@ fn mdx_unicode_reference_with_indented_definition_opens_on_its_document_host(
             .unwrap()
     });
     let (app, mut context, _streams) = harness_with_tabs(cx, 1);
-    context.update(|_, cx| cx.set_global(MarkdownWorkbench));
     app.update_in(&mut context, |app, window, cx| {
         app.open_file_in_editor(&path, window, cx)
     });
     wait_until(&mut context, |cx| active_id(&app, cx).is_some());
+    start_active_markdown_in_source(&app, &mut context);
     let source_id = active_id(&app, &context).unwrap();
     let view = app.read_with(&context, |app, _| {
         app.active_editor_input()

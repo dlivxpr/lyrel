@@ -160,7 +160,7 @@ impl SourcePresentation {
                 this.viewport.layout = None;
             }
         });
-        Self {
+        let mut view = Self {
             document,
             state: PresentationState::default(),
             focus: cx.focus_handle().tab_stop(true),
@@ -171,7 +171,7 @@ impl SourcePresentation {
             pointer_link: None,
             reveal_caret: false,
             wrap,
-            live: false,
+            live: true,
             projection,
             blocks: HashMap::new(),
             tables: super::tables::Layout::default(),
@@ -196,7 +196,9 @@ impl SourcePresentation {
             assets: assets::InsertionState::default(),
             _observe: observe,
             mdx_state: super::mdx::ViewState::default(),
-        }
+        };
+        view.schedule_parse(cx);
+        view
     }
     pub(crate) fn document(&self) -> &Entity<MarkdownDocument> {
         &self.document

@@ -346,7 +346,6 @@ impl LyrelApp {
 mod tests {
     use super::*;
     use crate::ui::app::test_window::harness_with_tabs;
-    use crate::ui::code_editor::MarkdownWorkbench;
     use gpui_kit::test::TestWindowExt as _;
     use gpui_kit::{TestAppContext, VisualTestContext};
 
@@ -365,7 +364,6 @@ mod tests {
         std::fs::write(&path, "中🎉 alpha\nAlpha omega alpha").unwrap();
         let (app, mut vcx, _streams) = harness_with_tabs(cx, 1);
         vcx.simulate_resize(gpui_kit::size(px(1600.), px(900.)));
-        vcx.update(|_, cx| cx.set_global(MarkdownWorkbench));
         app.update_in(&mut vcx, |app, window, cx| {
             app.open_file_in_editor(&path, window, cx)
         });
@@ -378,6 +376,7 @@ mod tests {
             );
             std::thread::sleep(std::time::Duration::from_millis(5));
         }
+        app.update_in(&mut vcx, |app, window, cx| app.toggle_document_preview(window, cx));
         vcx.dispatch_action(gpui_kit::component::input::Replace);
         settle(&mut vcx);
         vcx.update(|window, cx| window.input("alpha", cx));

@@ -142,6 +142,7 @@ actions!(
         EditorFocusLeftGroup,
         EditorFocusRightGroup,
         EditorNewFile,
+        EditorNewMarkdownFile,
         EditorGoToDefinition,
         EditorQuickFix,
         EditorRenameSymbol,

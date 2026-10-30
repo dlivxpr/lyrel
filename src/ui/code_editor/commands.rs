@@ -1014,12 +1014,10 @@ mod gpui_tests {
     fn markdown_workbench_shortcuts_keep_commands_selection_and_shared_undo(
         cx: &mut TestAppContext,
     ) {
-        use crate::ui::code_editor::document_input::MarkdownWorkbench;
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("commands.md");
         std::fs::write(&path, "one\ntwo\nthree").unwrap();
         let (app, mut vcx, _streams) = harness_with_tabs(cx, 1);
-        vcx.update(|_, cx| cx.set_global(MarkdownWorkbench));
         app.update_in(&mut vcx, |app, window, cx| {
             app.open_file_in_editor(&path, window, cx)
         });
@@ -1032,6 +1030,7 @@ mod gpui_tests {
             );
             std::thread::sleep(std::time::Duration::from_millis(5));
         }
+        app.update_in(&mut vcx, |app, window, cx| app.toggle_document_preview(window, cx));
         app.update_in(&mut vcx, |app, window, cx| {
             let input = app.active_buffer().unwrap().input.clone();
             input.set_selected_range(5..5, cx);
@@ -1106,12 +1105,10 @@ mod gpui_tests {
     fn markdown_explicit_commands_and_repeated_occurrences_keep_their_selection_scope(
         cx: &mut TestAppContext,
     ) {
-        use crate::ui::code_editor::MarkdownWorkbench;
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("primary-command.md");
         std::fs::write(&path, "foo foo foo").unwrap();
         let (app, mut vcx, _streams) = harness_with_tabs(cx, 1);
-        vcx.update(|_, cx| cx.set_global(MarkdownWorkbench));
         app.update_in(&mut vcx, |app, window, cx| {
             app.open_file_in_editor(&path, window, cx)
         });
@@ -1124,6 +1121,7 @@ mod gpui_tests {
             );
             std::thread::sleep(std::time::Duration::from_millis(5));
         }
+        app.update_in(&mut vcx, |app, window, cx| app.toggle_document_preview(window, cx));
         app.update_in(&mut vcx, |app, window, cx| {
             let input = app.active_editor_input().unwrap();
             input.set_selected_range(0..3, cx);
@@ -1183,12 +1181,10 @@ mod gpui_tests {
     }
     #[gpui_kit::test]
     fn markdown_source_commands_apply_and_undo_through_the_workbench(cx: &mut TestAppContext) {
-        use crate::ui::code_editor::MarkdownWorkbench;
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("inventory.md");
         std::fs::write(&path, "initial").unwrap();
         let (app, mut vcx, _streams) = harness_with_tabs(cx, 1);
-        vcx.update(|_, cx| cx.set_global(MarkdownWorkbench));
         app.update_in(&mut vcx, |app, window, cx| {
             app.open_file_in_editor(&path, window, cx)
         });
@@ -1201,6 +1197,7 @@ mod gpui_tests {
             );
             std::thread::sleep(std::time::Duration::from_millis(5));
         }
+        app.update_in(&mut vcx, |app, window, cx| app.toggle_document_preview(window, cx));
         for (command, before, selection, expected) in [
             (Command::Comment, "中", 0..3, "<!-- 中 -->"),
             (Command::BlockComment, "中", 0..3, "<!-- 中 -->"),

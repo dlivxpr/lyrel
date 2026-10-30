@@ -3,6 +3,54 @@ use super::*;
 use std::sync::atomic::Ordering;
 
 #[gpui_kit::test]
+fn native_untitled_save_as_suggests_markdown_and_keeps_its_document(cx: &mut TestAppContext) {
+    let dir = tempfile::tempdir().unwrap();
+    let target = dir.path().join("chosen.MDX");
+    let host = FileHost::new(HostId(729));
+    let (app, mut vcx, _streams) = harness_with_tabs(cx, 1);
+    let document = app.update_in(&mut vcx, |app, window, cx| {
+        let tab = app.tabs[0].id();
+        let n = app.editor.buffers.next_untitled();
+        let id = app.editor_new_buffer(
+            host.clone(), PathBuf::new(), Some(n), BufferKind::Markdown,
+            "# Author text\n".into(), TextFormat::default(), EditorConfig::default(),
+            editor_text::detect_indent("", "markdown"), None, window, cx,
+        );
+        app.editor_show_in_tab(tab, id, true, window, cx);
+        let file = app.active_buffer().unwrap();
+        assert!(file.path.as_os_str().is_empty());
+        let document = file.input.markdown().unwrap().read(cx).document().entity_id();
+        app.editor_save_as(id, window, cx);
+        document
+    });
+    settle(&mut vcx);
+    app.read_with(&vcx, |app, cx| {
+        let bar = app.editor.bar.as_ref().expect("remote Save As bar");
+        assert!(bar.input.read(cx).value().ends_with(".md"));
+        assert!(app.active_buffer().unwrap().path.as_os_str().is_empty());
+    });
+    vcx.update(|window, cx| {
+        window.press("secondary-a", cx);
+        window.input(&target.display().to_string(), cx);
+        window.press("enter", cx);
+    });
+    wait_until(&mut vcx, |vcx| app.read_with(vcx, |app, _| {
+        app.active_buffer().is_some_and(|file| file.path == target && !file.saving && file.untitled.is_none())
+    }));
+    app.read_with(&vcx, |app, cx| {
+        let file = app.active_buffer().unwrap();
+        assert_eq!(file.host.id(), HostId(729));
+        assert_eq!(file.language(), "markdown");
+        let view = file.input.markdown().unwrap().read(cx);
+        assert_eq!(view.document().entity_id(), document);
+        assert!(view.is_live());
+        assert!(!file.dirty);
+    });
+    assert_eq!(std::fs::read(&target).unwrap(), b"# Author text\n");
+    assert_eq!(host.writes.load(Ordering::SeqCst), 1);
+}
+
+#[gpui_kit::test]
 fn in_flight_save_closes_only_its_original_tab_after_focus_changes(cx: &mut TestAppContext) {
     in_flight_save_scenario(cx, false);
 }
@@ -23,9 +71,6 @@ fn in_flight_save_scenario(cx: &mut TestAppContext, markdown: bool) {
     let host = FileHost::new(HostId(700));
     let release = host.pause_next_write();
     let (app, mut vcx, _streams) = harness_with_tabs(cx, 2);
-    if markdown {
-        vcx.update(|_, cx| cx.set_global(MarkdownWorkbench));
-    }
     app.update_in(&mut vcx, |app, window, cx| {
         app.editor_open_on_host(host.clone(), &path, window, cx)
     });
@@ -86,9 +131,6 @@ fn remote_save_as_scenario(cx: &mut TestAppContext, markdown: bool) {
     std::fs::write(&path, "unchanged local").unwrap();
     let host = FileHost::new(HostId(701));
     let (app, mut vcx, _streams) = harness_with_tabs(cx, 1);
-    if markdown {
-        vcx.update(|_, cx| cx.set_global(MarkdownWorkbench));
-    }
     app.update_in(&mut vcx, |app, window, cx| {
         app.open_file_in_editor(&path, window, cx)
     });
@@ -180,9 +222,6 @@ fn replacement_group_scenario(cx: &mut TestAppContext, markdown: bool) {
     let host = FileHost::new(HostId(702));
     let release = host.pause_next_write();
     let (app, mut vcx, _streams) = harness_with_tabs(cx, 1);
-    if markdown {
-        vcx.update(|_, cx| cx.set_global(MarkdownWorkbench));
-    }
     app.update_in(&mut vcx, |app, window, cx| {
         app.open_file_in_editor(&left_path, window, cx);
     });
@@ -254,7 +293,6 @@ fn markdown_remote_save_as_rejects_identity_changed_while_bar_was_open(cx: &mut 
     std::fs::write(&path, "original").unwrap();
     let host = FileHost::new(HostId(703));
     let (app, mut vcx, _streams) = harness_with_tabs(cx, 1);
-    vcx.update(|_, cx| cx.set_global(MarkdownWorkbench));
     app.update_in(&mut vcx, |app, window, cx| {
         app.editor_open_on_host(host.clone(), &path, window, cx)
     });

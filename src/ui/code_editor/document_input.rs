@@ -316,7 +316,3 @@ impl MarkdownPresentations {
     }
 }
 
-/// Explicit launch gate, set only by --markdown-workbench (never persisted in config).
-#[derive(Default)]
-pub(crate) struct MarkdownWorkbench;
-impl gpui_kit::Global for MarkdownWorkbench {}

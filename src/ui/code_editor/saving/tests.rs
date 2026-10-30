@@ -164,9 +164,6 @@ fn conflict_close_scenario(cx: &mut TestAppContext, markdown: bool) {
     });
     std::fs::write(&path, "on disk").unwrap();
     let (app, mut vcx, _streams) = harness_with_tabs(cx, 1);
-    if markdown {
-        vcx.update(|_, cx| cx.set_global(MarkdownWorkbench));
-    }
     app.update_in(&mut vcx, |app, window, cx| {
         app.open_file_in_editor(&path, window, cx)
     });
@@ -332,7 +329,6 @@ fn markdown_save_as_cancel_and_failed_unsaved_close_keep_edits_through_recovery(
     std::fs::write(&path, "original").unwrap();
     std::fs::create_dir(&occupied).unwrap();
     let (app, mut vcx, _streams) = harness_with_tabs(cx, 1);
-    vcx.update(|_, cx| cx.set_global(MarkdownWorkbench));
     app.update_in(&mut vcx, |app, window, cx| {
         app.open_file_in_editor(&path, window, cx)
     });

@@ -728,11 +728,6 @@ impl LyrelApp {
         let Some(input) = self.active_editor_input() else {
             return;
         };
-        // A symbol is a place in the source; a rendered Markdown file shows
-        // the source to be taken to it.
-        if let Some(f) = self.editor.buffers.get_mut(id) {
-            f.preview = false;
-        }
         let (origin, scroll) = {
             let state = input.read(cx);
             (state.cursor_position(), state.scroll_offset())
@@ -956,8 +951,7 @@ impl LyrelApp {
             }
         };
         let file = (f.untitled.is_none()).then(|| f.path.clone());
-        // A rendered Markdown file keeps the path; its symbols are the source's.
-        let supported = !f.preview && f.untitled.is_none() && outline::supports(f.language());
+        let supported = f.untitled.is_none() && outline::supports(f.language());
         let chain: Vec<(SymbolKind, String)> = match supported {
             true => self
                 .editor_outline(id, false, cx)
@@ -1463,7 +1457,7 @@ mod tests {
 pub(super) mod gpui_tests {
     use super::*;
     use crate::ui::app::test_window::harness_with_tabs;
-    use crate::ui::code_editor::MarkdownWorkbench;
+    use super::super::BufferKind;
     use crate::ui::editor_text::{EditorConfig, TextFormat};
     use gpui_kit::{Entity, TestAppContext, VisualTestContext};
 
@@ -1495,6 +1489,7 @@ pub(super) mod gpui_tests {
                 host,
                 path,
                 None,
+                BufferKind::Text,
                 source(),
                 TextFormat::default(),
                 EditorConfig::default(),
@@ -1588,7 +1583,6 @@ pub(super) mod gpui_tests {
         let path = dir.path().join("symbols.md");
         std::fs::write(&path, "# One\nfirst\n\n# Two\nsecond\n").unwrap();
         let (app, mut vcx, _streams) = harness_with_tabs(cx, 1);
-        vcx.update(|_, cx| cx.set_global(MarkdownWorkbench));
         app.update_in(&mut vcx, |app, window, cx| {
             app.open_file_in_editor(&path, window, cx)
         });
@@ -1640,6 +1634,7 @@ pub(super) mod gpui_tests {
             host,
             path.to_path_buf(),
             None,
+            BufferKind::Text,
             source.into(),
             TextFormat::default(),
             EditorConfig::default(),
@@ -1656,7 +1651,6 @@ pub(super) mod gpui_tests {
     fn fresh_markdown_symbols_win_over_a_queued_breadcrumb_snapshot(cx: &mut TestAppContext) {
         use super::super::markdown::{Command, EditKind};
         let (app, mut vcx, _streams) = harness_with_tabs(cx, 1);
-        vcx.update(|_, cx| cx.set_global(MarkdownWorkbench));
         let original = "# Old\nbody\n\n# OldTarget\nbody\n";
         let current = "# Current\nbody\n\n\n\n# NewTarget\nbody\n";
         app.update_in(&mut vcx, |app, window, cx| {
@@ -1707,7 +1701,6 @@ pub(super) mod gpui_tests {
         cx: &mut TestAppContext,
     ) {
         let (app, mut vcx, _streams) = harness_with_tabs(cx, 1);
-        vcx.update(|_, cx| cx.set_global(MarkdownWorkbench));
         let path = Path::new("/nav-test/replaced.md");
         let replacement = "# Replacement\nbody\n\n\n# Reopened\nbody\n";
         app.update_in(&mut vcx, |app, window, cx| {

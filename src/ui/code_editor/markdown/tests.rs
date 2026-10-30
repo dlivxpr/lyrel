@@ -1,6 +1,15 @@
 use super::*;
 use gpui_kit::{EntityInputHandler as _, VisualContext as _, test::TestWindowExt as _};
 
+fn start_in_source(view: &gpui_kit::Entity<SourcePresentation>, cx: &mut gpui_kit::VisualTestContext) {
+    view.update_in(cx, |view, window, cx| {
+        if view.is_live() {
+            view.toggle_mode(window, cx);
+        }
+        assert!(!view.is_live(), "this scenario starts in source before exercising live mode");
+    });
+}
+
 #[test]
 fn presentations_share_history_and_new_edits_replace_the_redo_branch() {
     let mut document = MarkdownDocument::new("中🎉 e\u{301}\n".into(), TextFormat::default());
@@ -192,7 +201,6 @@ fn native_live_split_join_and_source_switch_keep_one_document_and_history(
     let path = directory.path().join("prose.md");
     std::fs::write(&path, "# Heading\n\nalpha beta\n\nlast\n").unwrap();
     let (app, mut view_context, _streams) = harness_with_tabs(cx, 1);
-    view_context.update(|_, cx| cx.set_global(super::super::MarkdownWorkbench));
     app.update_in(&mut view_context, |app, window, cx| {
         app.open_file_in_editor(&path, window, cx)
     });
@@ -203,6 +211,7 @@ fn native_live_split_join_and_source_switch_keep_one_document_and_history(
             app.active_editor_input()
                 .and_then(|input| input.markdown().cloned())
         }) {
+            start_in_source(&view, &mut view_context);
             break view;
         }
         assert!(
@@ -374,7 +383,6 @@ fn native_live_pointer_selection_cuts_raw_source_across_adjacent_prose(
     let path = directory.path().join("selection.md");
     std::fs::write(&path, "# Heading\n\nalpha beta\n\nlast\n").unwrap();
     let (app, mut view_context, _streams) = harness_with_tabs(cx, 1);
-    view_context.update(|_, cx| cx.set_global(super::super::MarkdownWorkbench));
     app.update_in(&mut view_context, |app, window, cx| {
         app.open_file_in_editor(&path, window, cx)
     });
@@ -385,6 +393,7 @@ fn native_live_pointer_selection_cuts_raw_source_across_adjacent_prose(
             app.active_editor_input()
                 .and_then(|input| input.markdown().cloned())
         }) {
+            start_in_source(&view, &mut view_context);
             break view;
         }
         assert!(std::time::Instant::now() < deadline);
@@ -452,7 +461,6 @@ fn native_live_break_mapping_resize_and_composition_keep_source_ranges(
     );
     std::fs::write(&path, &source).unwrap();
     let (app, mut view_context, _streams) = harness_with_tabs(cx, 1);
-    view_context.update(|_, cx| cx.set_global(super::super::MarkdownWorkbench));
     app.update_in(&mut view_context, |app, window, cx| {
         app.open_file_in_editor(&path, window, cx)
     });
@@ -463,6 +471,7 @@ fn native_live_break_mapping_resize_and_composition_keep_source_ranges(
             app.active_editor_input()
                 .and_then(|input| input.markdown().cloned())
         }) {
+            start_in_source(&view, &mut view_context);
             break view;
         }
         assert!(std::time::Instant::now() < deadline);
@@ -729,7 +738,6 @@ fn native_code_regions_keep_line_breaks_fences_and_shared_history(
     let source = "# Heading\n\n```rust\nlet x = 1;\n```\n\n    one\n    \n    two\n\nlast";
     std::fs::write(&path, source).unwrap();
     let (app, mut context, _streams) = harness_with_tabs(cx, 1);
-    context.update(|_, cx| cx.set_global(super::super::MarkdownWorkbench));
     app.update_in(&mut context, |app, window, cx| {
         app.open_file_in_editor(&path, window, cx)
     });
@@ -740,6 +748,7 @@ fn native_code_regions_keep_line_breaks_fences_and_shared_history(
             app.active_editor_input()
                 .and_then(|input| input.markdown().cloned())
         }) {
+            start_in_source(&view, &mut context);
             break view;
         }
         assert!(std::time::Instant::now() < deadline);
@@ -914,7 +923,6 @@ fn native_metadata_html_and_invalid_regions_edit_save_and_reopen_without_source_
     let source = "---\r\ntitle: demo\n---\r\n\n# Heading\n\n<script>neverRun()</script>\n\n<Unknown value={projectCode()} />\n\n[broken](\n";
     std::fs::write(&path, source).unwrap();
     let (app, mut context, _streams) = harness_with_tabs(cx, 1);
-    context.update(|_, cx| cx.set_global(super::super::MarkdownWorkbench));
     app.update_in(&mut context, |app, window, cx| {
         app.open_file_in_editor(&path, window, cx)
     });
@@ -925,6 +933,7 @@ fn native_metadata_html_and_invalid_regions_edit_save_and_reopen_without_source_
             app.active_editor_input()
                 .and_then(|input| input.markdown().cloned())
         }) {
+            start_in_source(&view, &mut context);
             break view;
         }
         assert!(std::time::Instant::now() < deadline);
@@ -1044,7 +1053,6 @@ fn native_inline_reveal_is_local_and_typing_preserves_delimiters_and_history(
     let original = "# Heading\n\nA **bold** and *soft* plus ~~gone~~ `code`.\n";
     std::fs::write(&path, original).unwrap();
     let (app, mut context, _streams) = harness_with_tabs(cx, 1);
-    context.update(|_, cx| cx.set_global(super::super::MarkdownWorkbench));
     app.update_in(&mut context, |app, window, cx| {
         app.open_file_in_editor(&path, window, cx)
     });
@@ -1055,6 +1063,7 @@ fn native_inline_reveal_is_local_and_typing_preserves_delimiters_and_history(
             app.active_editor_input()
                 .and_then(|input| input.markdown().cloned())
         }) {
+            start_in_source(&view, &mut context);
             break view;
         }
         assert!(std::time::Instant::now() < deadline);
@@ -1185,7 +1194,6 @@ fn native_nested_inline_boundaries_entities_and_composition_preserve_source(
     let original = "# Heading\n\n**outer _e\u{301} &amp; \\*_ ~~gone~~ `a\nb`** tail\n";
     std::fs::write(&path, original).unwrap();
     let (app, mut context, _streams) = harness_with_tabs(cx, 1);
-    context.update(|_, cx| cx.set_global(super::super::MarkdownWorkbench));
     app.update_in(&mut context, |app, window, cx| {
         app.open_file_in_editor(&path, window, cx)
     });
@@ -1196,6 +1204,7 @@ fn native_nested_inline_boundaries_entities_and_composition_preserve_source(
             app.active_editor_input()
                 .and_then(|input| input.markdown().cloned())
         }) {
+            start_in_source(&view, &mut context);
             break view;
         }
         assert!(std::time::Instant::now() < deadline);
@@ -1390,7 +1399,6 @@ fn native_nested_lists_tasks_quotes_share_input_history_and_host_save_reopen(
     std::fs::write(&path, original).unwrap();
     let normalized = original.replace("\r\n", "\n");
     let (app, mut context, _streams) = harness_with_tabs(cx, 1);
-    context.update(|_, cx| cx.set_global(super::super::MarkdownWorkbench));
     app.update_in(&mut context, |app, window, cx| {
         app.open_file_in_editor(&path, window, cx)
     });
@@ -1401,6 +1409,7 @@ fn native_nested_lists_tasks_quotes_share_input_history_and_host_save_reopen(
             app.active_editor_input()
                 .and_then(|input| input.markdown().cloned())
         }) {
+            start_in_source(&view, &mut context);
             break view;
         }
         assert!(std::time::Instant::now() < deadline);
@@ -1710,7 +1719,6 @@ fn native_table_cells_navigate_exit_edit_and_save_without_rewriting_neighbors(
     let source = original.replace("\r\n", "\n");
     std::fs::write(&path, original).unwrap();
     let (app, mut context, _streams) = harness_with_tabs(cx, 1);
-    context.update(|_, cx| cx.set_global(super::super::MarkdownWorkbench));
     app.update_in(&mut context, |app, window, cx| {
         app.open_file_in_editor(&path, window, cx)
     });
@@ -1721,6 +1729,7 @@ fn native_table_cells_navigate_exit_edit_and_save_without_rewriting_neighbors(
             app.active_editor_input()
                 .and_then(|input| input.markdown().cloned())
         }) {
+            start_in_source(&view, &mut context);
             break view;
         }
         assert!(std::time::Instant::now() < deadline);
@@ -1938,7 +1947,6 @@ fn native_table_cell_escapes_wrapping_unicode_and_preedit_share_the_document_map
     );
     std::fs::write(&path, &original).unwrap();
     let (app, mut context, _streams) = harness_with_tabs(cx, 1);
-    context.update(|_, cx| cx.set_global(super::super::MarkdownWorkbench));
     app.update_in(&mut context, |app, window, cx| {
         app.open_file_in_editor(&path, window, cx)
     });
@@ -1949,6 +1957,7 @@ fn native_table_cell_escapes_wrapping_unicode_and_preedit_share_the_document_map
             app.active_editor_input()
                 .and_then(|input| input.markdown().cloned())
         }) {
+            start_in_source(&view, &mut context);
             break view;
         }
         assert!(std::time::Instant::now() < deadline);
@@ -2136,7 +2145,6 @@ fn native_table_at_document_edges_transfers_focus_without_inserting_rows(
     let original = "| A | B |\n| --- | --- |\n| a | b |";
     std::fs::write(&path, original).unwrap();
     let (app, mut context, _streams) = harness_with_tabs(cx, 1);
-    context.update(|_, cx| cx.set_global(super::super::MarkdownWorkbench));
     app.update_in(&mut context, |app, window, cx| {
         app.open_file_in_editor(&path, window, cx)
     });
@@ -2147,6 +2155,7 @@ fn native_table_at_document_edges_transfers_focus_without_inserting_rows(
             app.active_editor_input()
                 .and_then(|input| input.markdown().cloned())
         }) {
+            start_in_source(&view, &mut context);
             break view;
         }
         assert!(std::time::Instant::now() < deadline);
@@ -2223,7 +2232,6 @@ fn native_links_edit_labels_and_reference_destinations_in_shared_history(
     let original = "# Heading\n\nstart [**文**](<next.md> 'title') [one][Ref] [two][Ref] <https://example.com> [Ref][] [Ref] <mail@example.com> www.example.net\n\n[Ref]: <old.md>  \"keep\"\n[Other]: untouched.md\n";
     std::fs::write(&path, original).unwrap();
     let (app, mut context, _streams) = harness_with_tabs(cx, 1);
-    context.update(|_, cx| cx.set_global(super::super::MarkdownWorkbench));
     app.update_in(&mut context, |app, window, cx| {
         app.open_file_in_editor(&path, window, cx)
     });
@@ -2234,6 +2242,7 @@ fn native_links_edit_labels_and_reference_destinations_in_shared_history(
             app.active_editor_input()
                 .and_then(|input| input.markdown().cloned())
         }) {
+            start_in_source(&view, &mut context);
             break view;
         }
         assert!(std::time::Instant::now() < deadline);
@@ -2425,7 +2434,7 @@ fn native_links_edit_labels_and_reference_destinations_in_shared_history(
             .unwrap()
             .clone()
     });
-    context.dispatch_action(crate::core::actions::ToggleDocumentPreview);
+    assert!(reopened.read_with(&context, |view, _| view.is_live()));
     settle_live_geometry(&reopened, &mut context);
     reopened.read_with(&context, |view, cx| {
         assert_eq!(
@@ -2451,7 +2460,6 @@ fn native_image_atoms_cross_one_boundary_and_source_edits_share_undo(
     let source = "before ![图](missing.png) after\n\n![引用][picture]\n\n[picture]: other.png\n";
     std::fs::write(&path, source).unwrap();
     let (app, mut context, _streams) = harness_with_tabs(cx, 1);
-    context.update(|_, cx| cx.set_global(super::super::MarkdownWorkbench));
     app.update_in(&mut context, |app, window, cx| {
         app.open_file_in_editor(&path, window, cx)
     });
@@ -2462,6 +2470,7 @@ fn native_image_atoms_cross_one_boundary_and_source_edits_share_undo(
             app.active_editor_input()
                 .and_then(|input| input.markdown().cloned())
         }) {
+            start_in_source(&view, &mut context);
             break view;
         }
         assert!(std::time::Instant::now() < deadline);
@@ -2634,7 +2643,6 @@ fn opening_native_images_never_contacts_http_until_loading_intent(
     std::fs::write(&path, &source).unwrap();
     let (app, mut context, _streams) = harness_with_tabs(cx, 1);
     context.update(|_, cx| {
-        cx.set_global(super::super::MarkdownWorkbench);
         cx.set_http_client(Arc::new(reqwest_client::ReqwestClient::new()));
     });
     app.update_in(&mut context, |app, window, cx| {
@@ -2647,6 +2655,7 @@ fn opening_native_images_never_contacts_http_until_loading_intent(
             app.active_editor_input()
                 .and_then(|input| input.markdown().cloned())
         }) {
+            start_in_source(&view, &mut context);
             break view;
         }
         assert!(std::time::Instant::now() < deadline);
@@ -2759,7 +2768,6 @@ fn native_document_images_read_owning_host_and_reject_old_link_results(
     std::fs::write(&path, source).unwrap();
     let host = FileHost::new(lyrel_core::host::HostId(114));
     let (app, mut context, _streams) = harness_with_tabs(cx, 1);
-    context.update(|_, cx| cx.set_global(super::super::MarkdownWorkbench));
     app.update_in(&mut context, |app, window, cx| {
         app.editor_open_on_host(host.clone(), &path, window, cx)
     });
@@ -2770,6 +2778,7 @@ fn native_document_images_read_owning_host_and_reject_old_link_results(
             app.active_editor_input()
                 .and_then(|input| input.markdown().cloned())
         }) {
+            start_in_source(&view, &mut context);
             break view;
         }
         assert!(std::time::Instant::now() < deadline);
@@ -2883,7 +2892,6 @@ fn local_image_references_follow_document_rename_without_moving_assets(
     std::fs::create_dir(&destination).unwrap();
     let moved = destination.join("renamed.md");
     let (app, mut context, _streams) = harness_with_tabs(cx, 1);
-    context.update(|_, cx| cx.set_global(super::super::MarkdownWorkbench));
     app.update_in(&mut context, |app, window, cx| {
         app.open_file_in_editor(&path, window, cx)
     });
@@ -2894,6 +2902,7 @@ fn local_image_references_follow_document_rename_without_moving_assets(
             app.active_editor_input()
                 .and_then(|input| input.markdown().cloned())
         }) {
+            start_in_source(&view, &mut context);
             break view;
         }
         assert!(std::time::Instant::now() < deadline);
@@ -2967,7 +2976,6 @@ fn native_table_structure_actions_share_undo_and_save_reopen(cx: &mut gpui_kit::
         "before  \r\n\n| **A** | B |\r\n| --- | ---: |\n| x\\|y | `z` |\r\n\n[ref]: target  ";
     std::fs::write(&path, original).unwrap();
     let (app, mut context, _streams) = harness_with_tabs(cx, 1);
-    context.update(|_, cx| cx.set_global(super::super::MarkdownWorkbench));
     app.update_in(&mut context, |app, window, cx| {
         app.open_file_in_editor(&path, window, cx)
     });
@@ -2978,6 +2986,7 @@ fn native_table_structure_actions_share_undo_and_save_reopen(cx: &mut gpui_kit::
             app.active_editor_input()
                 .and_then(|input| input.markdown().cloned())
         }) {
+            start_in_source(&view, &mut context);
             break view;
         }
         assert!(std::time::Instant::now() < deadline);
@@ -3447,7 +3456,6 @@ fn native_mermaid_unchanged_diagrams_stay_visible_during_prose_and_neighbor_edit
     let source = "prose\n\n```mermaid\nflowchart LR\nA[First] --> B[End]\n```\n\n```mermaid\nflowchart LR\nC[Second] --> D[End]\n```\n\ntail";
     std::fs::write(&path, source).unwrap();
     let (app, mut context, _streams) = harness_with_tabs(cx, 1);
-    context.update(|_, cx| cx.set_global(super::super::MarkdownWorkbench));
     app.update_in(&mut context, |app, window, cx| {
         app.open_file_in_editor(&path, window, cx)
     });
@@ -3458,6 +3466,7 @@ fn native_mermaid_unchanged_diagrams_stay_visible_during_prose_and_neighbor_edit
             app.active_editor_input()
                 .and_then(|input| input.markdown().cloned())
         }) {
+            start_in_source(&view, &mut context);
             break view;
         }
         assert!(std::time::Instant::now() < deadline);
@@ -3552,7 +3561,6 @@ fn native_mermaid_fence_edit_failure_history_and_save_keep_source_bytes(
         .unwrap()
         .replace("\r\n", "\n");
     let (app, mut context, _streams) = harness_with_tabs(cx, 1);
-    context.update(|_, cx| cx.set_global(super::super::MarkdownWorkbench));
     app.update_in(&mut context, |app, window, cx| {
         app.open_file_in_editor(&path, window, cx)
     });
@@ -3563,6 +3571,7 @@ fn native_mermaid_fence_edit_failure_history_and_save_keep_source_bytes(
             app.active_editor_input()
                 .and_then(|input| input.markdown().cloned())
         }) {
+            start_in_source(&view, &mut context);
             break view;
         }
         assert!(std::time::Instant::now() < deadline);
@@ -3751,7 +3760,6 @@ fn native_mermaid_resource_constructs_fail_visibly_but_url_label_text_renders(
     let original = "# Heading\n\n```mermaid\nflowchart LR\nA[\"url(https://example.test/label.png)\"] --> B\n```\n\ntail";
     std::fs::write(&path, original).unwrap();
     let (app, mut context, _streams) = harness_with_tabs(cx, 1);
-    context.update(|_, cx| cx.set_global(super::super::MarkdownWorkbench));
     app.update_in(&mut context, |app, window, cx| {
         app.open_file_in_editor(&path, window, cx)
     });
@@ -3762,6 +3770,7 @@ fn native_mermaid_resource_constructs_fail_visibly_but_url_label_text_renders(
             app.active_editor_input()
                 .and_then(|input| input.markdown().cloned())
         }) {
+            start_in_source(&view, &mut context);
             break view;
         }
         assert!(std::time::Instant::now() < deadline);
@@ -3842,7 +3851,6 @@ fn native_mixed_selection_drag_cut_history_and_mixed_ending_save_reopen(
         context.window_handle(),
         gpui_kit::size(gpui_kit::px(1100.), gpui_kit::px(1800.)),
     );
-    context.update(|_, cx| cx.set_global(super::super::MarkdownWorkbench));
     app.update_in(&mut context, |app, window, cx| {
         app.open_file_in_editor(&path, window, cx)
     });
@@ -3853,6 +3861,7 @@ fn native_mixed_selection_drag_cut_history_and_mixed_ending_save_reopen(
             app.active_editor_input()
                 .and_then(|input| input.markdown().cloned())
         }) {
+            start_in_source(&view, &mut context);
             break view;
         }
         assert!(std::time::Instant::now() < deadline);
@@ -4061,7 +4070,6 @@ fn native_mixed_shift_navigation_crosses_wrapped_rows_tables_and_image_atoms_bot
         context.window_handle(),
         gpui_kit::size(gpui_kit::px(720.), gpui_kit::px(1400.)),
     );
-    context.update(|_, cx| cx.set_global(super::super::MarkdownWorkbench));
     app.update_in(&mut context, |app, window, cx| {
         app.open_file_in_editor(&path, window, cx)
     });
@@ -4072,6 +4080,7 @@ fn native_mixed_shift_navigation_crosses_wrapped_rows_tables_and_image_atoms_bot
             app.active_editor_input()
                 .and_then(|input| input.markdown().cloned())
         }) {
+            start_in_source(&view, &mut context);
             break view;
         }
         assert!(std::time::Instant::now() < deadline);
@@ -4164,7 +4173,6 @@ fn native_word_selection_keeps_image_and_entity_source_boundaries(
     let source = "# Heading\n\nbefore ![图](missing.png) &amp; after\n\n| A | B |\n| --- | --- |\n| x | y |\n\ntail\n";
     std::fs::write(&path, source).unwrap();
     let (app, mut context, _streams) = harness_with_tabs(cx, 1);
-    context.update(|_, cx| cx.set_global(super::super::MarkdownWorkbench));
     app.update_in(&mut context, |app, window, cx| {
         app.open_file_in_editor(&path, window, cx)
     });
@@ -4175,6 +4183,7 @@ fn native_word_selection_keeps_image_and_entity_source_boundaries(
             app.active_editor_input()
                 .and_then(|input| input.markdown().cloned())
         }) {
+            start_in_source(&view, &mut context);
             break view;
         }
         assert!(std::time::Instant::now() < deadline);
@@ -4294,7 +4303,6 @@ fn native_formula_pointer_inserts_inside_delimiters_and_reopens(cx: &mut gpui_ki
     use gpui_kit::test::{TestEventExt as _, TestWindowExt as _};
     let directory = tempfile::tempdir().unwrap();
     let (app, mut context, _streams) = harness_with_tabs(cx, 1);
-    context.update(|_, cx| cx.set_global(super::super::MarkdownWorkbench));
     for (ix, formula) in [
         "$x$",
         "$$ x $$",
@@ -4318,6 +4326,7 @@ fn native_formula_pointer_inserts_inside_delimiters_and_reopens(cx: &mut gpui_ki
                 app.active_editor_input()
                     .and_then(|input| input.markdown().cloned())
             }) {
+                start_in_source(&view, &mut context);
                 break view;
             }
             assert!(std::time::Instant::now() < deadline);
@@ -4434,7 +4443,6 @@ fn native_math_renders_glyph_atoms_and_local_source_uses_document_history_and_sa
     );
     std::fs::write(&path, source.as_bytes()).unwrap();
     let (app, mut context, _streams) = harness_with_tabs(cx, 1);
-    context.update(|_, cx| cx.set_global(super::super::MarkdownWorkbench));
     app.update_in(&mut context, |app, window, cx| {
         app.open_file_in_editor(&path, window, cx)
     });
@@ -4445,6 +4453,7 @@ fn native_math_renders_glyph_atoms_and_local_source_uses_document_history_and_sa
             app.active_editor_input()
                 .and_then(|input| input.markdown().cloned())
         }) {
+            start_in_source(&view, &mut context);
             break view;
         }
         assert!(std::time::Instant::now() < deadline);
@@ -4702,7 +4711,6 @@ fn structured_math_syntax_matrix_edits_renders_and_reopens_through_workbench(
     ];
     let directory = tempfile::tempdir().unwrap();
     let (app, mut context, _streams) = harness_with_tabs(cx, 1);
-    context.update(|_, cx| cx.set_global(super::super::MarkdownWorkbench));
     let ready_bounds = |context: &mut gpui_kit::VisualTestContext, tex: &str| {
         let id = format!("markdown-math-ready-{tex}");
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
@@ -4751,6 +4759,7 @@ fn structured_math_syntax_matrix_edits_renders_and_reopens_through_workbench(
                     app.active_editor_input()
                         .and_then(|input| input.markdown().cloned())
                 }) {
+                    start_in_source(&view, &mut context);
                     break view;
                 }
                 assert!(
@@ -4874,6 +4883,7 @@ fn structured_math_syntax_matrix_edits_renders_and_reopens_through_workbench(
                         .and_then(|input| input.markdown().cloned())
                 }) {
                     if view.read_with(&context, |view, _| view.document().entity_id() != identity) {
+                        start_in_source(&view, &mut context);
                         break view;
                     }
                 }
@@ -4920,7 +4930,6 @@ fn structured_math_local_invalid_recovery_composition_and_selection_keep_one_his
     ];
     let directory = tempfile::tempdir().unwrap();
     let (app, mut context, _streams) = harness_with_tabs(cx, 1);
-    context.update(|_, cx| cx.set_global(super::super::MarkdownWorkbench));
     let await_output = |context: &mut gpui_kit::VisualTestContext, tex: &str, failed: bool| {
         let id = format!(
             "markdown-math-{}-{tex}",
@@ -4987,6 +4996,7 @@ fn structured_math_local_invalid_recovery_composition_and_selection_keep_one_his
                     app.active_editor_input()
                         .and_then(|input| input.markdown().cloned())
                 }) {
+                    start_in_source(&view, &mut context);
                     break view;
                 }
                 assert!(std::time::Instant::now() < deadline);
@@ -5195,6 +5205,7 @@ fn structured_math_local_invalid_recovery_composition_and_selection_keep_one_his
                     app.active_editor_input()
                         .and_then(|input| input.markdown().cloned())
                 }) {
+                    start_in_source(&view, &mut context);
                     break view;
                 }
                 assert!(std::time::Instant::now() < deadline);
@@ -5246,7 +5257,6 @@ fn mermaid_matrix_workbench(
         context.window_handle(),
         gpui_kit::size(gpui_kit::px(1200.), gpui_kit::px(1400.)),
     );
-    context.update(|_, cx| cx.set_global(super::super::MarkdownWorkbench));
     app.update_in(&mut context, |app, window, cx| {
         app.open_file_in_editor(&path, window, cx)
     });
@@ -5258,6 +5268,7 @@ fn mermaid_matrix_workbench(
                 app.active_editor_input()
                     .and_then(|input| input.markdown().cloned())
             }) {
+                start_in_source(&view, &mut context);
                 break view;
             }
             assert!(
@@ -5423,7 +5434,7 @@ fn mermaid_matrix_workbench(
         );
         std::thread::sleep(std::time::Duration::from_millis(5));
     }
-    context.dispatch_action(crate::core::actions::ToggleDocumentPreview);
+    assert!(app.read_with(&context, |app, cx| app.active_editor_input().unwrap().markdown().unwrap().read(cx).is_live()));
     settle(&mut context, rendered);
     assert_eq!(std::fs::read(&path).unwrap(), expected.as_bytes());
 }
@@ -5771,7 +5782,6 @@ fn native_generic_mdx_edits_names_properties_children_and_saves_without_executio
     std::fs::write(&path, source).unwrap();
     let host = FileHost::new(lyrel_core::host::HostId(724));
     let (app, mut context, _streams) = harness_with_tabs(cx, 1);
-    context.update(|_, cx| cx.set_global(super::super::MarkdownWorkbench));
     app.update_in(&mut context, |app, window, cx| {
         app.editor_open_on_host(host.clone(), &path, window, cx)
     });
@@ -5782,6 +5792,7 @@ fn native_generic_mdx_edits_names_properties_children_and_saves_without_executio
             app.active_editor_input()
                 .and_then(|input| input.markdown().cloned())
         }) {
+            start_in_source(&view, &mut context);
             break view;
         }
         assert!(std::time::Instant::now() < deadline);
@@ -6048,7 +6059,6 @@ fn native_mdx_grammar_follows_rename_save_as_and_recovers_invalid_property_sourc
     let source = "<Box title='keep'>\n\n# Child\n\n</Box>\n";
     std::fs::write(&path, source).unwrap();
     let (app, mut context, _streams) = harness_with_tabs(cx, 1);
-    context.update(|_, cx| cx.set_global(super::super::MarkdownWorkbench));
     app.update_in(&mut context, |app, window, cx| {
         app.open_file_in_editor(&path, window, cx)
     });
@@ -6059,6 +6069,7 @@ fn native_mdx_grammar_follows_rename_save_as_and_recovers_invalid_property_sourc
             app.active_editor_input()
                 .and_then(|input| input.markdown().cloned())
         }) {
+            start_in_source(&view, &mut context);
             break view;
         }
         assert!(std::time::Instant::now() < deadline);
@@ -6173,7 +6184,6 @@ fn native_nested_mdx_keeps_dynamic_source_and_expands_children_in_shared_history
     let original = "export const data = {\n  title: '} preserved',\n}\n\n<Outer flag {...data}>\n\n<Mystery title='&amp;' run={() => ({ text: '}' })} />\n\ntext **bold**\n\n</Outer>\n\nkeep  ";
     std::fs::write(&path, original).unwrap();
     let (app, mut context, _streams) = harness_with_tabs(cx, 1);
-    context.update(|_, cx| cx.set_global(super::super::MarkdownWorkbench));
     app.update_in(&mut context, |app, window, cx| {
         app.open_file_in_editor(&path, window, cx)
     });
@@ -6184,6 +6194,7 @@ fn native_nested_mdx_keeps_dynamic_source_and_expands_children_in_shared_history
             app.active_editor_input()
                 .and_then(|input| input.markdown().cloned())
         }) {
+            start_in_source(&view, &mut context);
             break view;
         }
         assert!(std::time::Instant::now() < deadline);
@@ -6288,7 +6299,6 @@ fn native_mdx_embedded_in_heading_exposes_property_edits_without_replacing_its_s
     let original = "# Heading **<Mystery title='keep' />** tail\n\nuntouched  ";
     std::fs::write(&path, original).unwrap();
     let (app, mut context, _streams) = harness_with_tabs(cx, 1);
-    context.update(|_, cx| cx.set_global(super::super::MarkdownWorkbench));
     app.update_in(&mut context, |app, window, cx| {
         app.open_file_in_editor(&path, window, cx)
     });
@@ -6299,6 +6309,7 @@ fn native_mdx_embedded_in_heading_exposes_property_edits_without_replacing_its_s
             app.active_editor_input()
                 .and_then(|input| input.markdown().cloned())
         }) {
+            start_in_source(&view, &mut context);
             break view;
         }
         assert!(std::time::Instant::now() < deadline);
@@ -6380,7 +6391,6 @@ fn native_cards_edit_properties_children_follow_host_links_and_save_reopen(
     std::fs::write(disk.join("cards.mdx"), original).unwrap();
     let host = FileHost::mapped(lyrel_core::host::HostId(726), directory.path());
     let (app, mut context, _streams) = harness_with_tabs(cx, 1);
-    context.update(|_, cx| cx.set_global(super::super::MarkdownWorkbench));
     app.update_in(&mut context, |app, window, cx| {
         app.editor_open_on_host(host.clone(), &path, window, cx)
     });
@@ -6391,6 +6401,7 @@ fn native_cards_edit_properties_children_follow_host_links_and_save_reopen(
             app.active_editor_input()
                 .and_then(|input| input.markdown().cloned())
         }) {
+            start_in_source(&view, &mut context);
             break view;
         }
         assert!(std::time::Instant::now() < deadline);
@@ -6586,7 +6597,6 @@ fn native_cards_add_missing_properties_expand_children_and_never_follow_dynamic_
     let original = "<CardGroup>\n\n<Card href={chooseDestination()} {...props} />  \r\n\n</CardGroup>\n\nkeep  ";
     std::fs::write(&path, original).unwrap();
     let (app, mut context, _streams) = harness_with_tabs(cx, 1);
-    context.update(|_, cx| cx.set_global(super::super::MarkdownWorkbench));
     app.update_in(&mut context, |app, window, cx| {
         app.open_file_in_editor(&path, window, cx)
     });
@@ -6597,6 +6607,7 @@ fn native_cards_add_missing_properties_expand_children_and_never_follow_dynamic_
             app.active_editor_input()
                 .and_then(|input| input.markdown().cloned())
         }) {
+            start_in_source(&view, &mut context);
             break view;
         }
         assert!(std::time::Instant::now() < deadline);
@@ -6726,7 +6737,6 @@ fn native_long_document_scroll_return_reflow_and_pending_parse_keep_selection_an
     source.push_str(&" wide 中e\u{301} 👩‍💻".repeat(3000));
     std::fs::write(&path, &source).unwrap();
     let (app, mut context, _streams) = harness_with_tabs(cx, 1);
-    context.update(|_, cx| cx.set_global(super::super::MarkdownWorkbench));
     app.update_in(&mut context, |app, window, cx| {
         app.open_file_in_editor(&path, window, cx)
     });
@@ -6737,6 +6747,7 @@ fn native_long_document_scroll_return_reflow_and_pending_parse_keep_selection_an
             app.active_editor_input()
                 .and_then(|input| input.markdown().cloned())
         }) {
+            start_in_source(&view, &mut context);
             break view;
         }
         assert!(std::time::Instant::now() < deadline);
@@ -6863,7 +6874,6 @@ fn native_theme_change_preserves_scrolled_reading_anchor_and_offscreen_selection
     let (app, mut context, _streams) = harness_with_tabs(cx, 1);
     context.simulate_resize(gpui_kit::size(px(1008.), px(901.)));
     context.update(|window, cx| {
-        cx.set_global(super::super::MarkdownWorkbench);
         let config = cx.global_mut::<crate::core::config::Config>();
         config.theme_follow_system = false;
         config.theme_preset = "light".into();
@@ -6879,6 +6889,7 @@ fn native_theme_change_preserves_scrolled_reading_anchor_and_offscreen_selection
             app.active_editor_input()
                 .and_then(|input| input.markdown().cloned())
         }) {
+            start_in_source(&view, &mut context);
             break view;
         }
         assert!(std::time::Instant::now() < deadline);
@@ -7031,7 +7042,6 @@ fn native_steps_edit_properties_nested_content_source_history_and_host_reopen(
         context.window_handle(),
         gpui_kit::size(gpui_kit::px(1200.), gpui_kit::px(1400.)),
     );
-    context.update(|_, cx| cx.set_global(super::super::MarkdownWorkbench));
     app.update_in(&mut context, |app, window, cx| {
         app.editor_open_on_host(host.clone(), &path, window, cx)
     });
@@ -7042,6 +7052,7 @@ fn native_steps_edit_properties_nested_content_source_history_and_host_reopen(
             app.active_editor_input()
                 .and_then(|input| input.markdown().cloned())
         }) {
+            start_in_source(&view, &mut context);
             break view;
         }
         assert!(std::time::Instant::now() < deadline);
@@ -7239,7 +7250,6 @@ fn native_steps_keyboard_source_activation_finishes_preedit_without_numbering_ed
         context.window_handle(),
         gpui_kit::size(gpui_kit::px(1200.), gpui_kit::px(1000.)),
     );
-    context.update(|_, cx| cx.set_global(super::super::MarkdownWorkbench));
     app.update_in(&mut context, |app, window, cx| {
         app.open_file_in_editor(&path, window, cx)
     });
@@ -7250,6 +7260,7 @@ fn native_steps_keyboard_source_activation_finishes_preedit_without_numbering_ed
             app.active_editor_input()
                 .and_then(|input| input.markdown().cloned())
         }) {
+            start_in_source(&view, &mut context);
             break view;
         }
         assert!(std::time::Instant::now() < deadline);
@@ -7354,7 +7365,6 @@ fn exercise_native_callout_consumer(cx: &mut gpui_kit::TestAppContext, name: &st
     std::fs::write(&path, &original).unwrap();
     let host = FileHost::new(lyrel_core::host::HostId(725));
     let (app, mut context, _streams) = harness_with_tabs(cx, 1);
-    context.update(|_, cx| cx.set_global(super::super::MarkdownWorkbench));
     app.update_in(&mut context, |app, window, cx| {
         app.editor_open_on_host(host.clone(), &path, window, cx)
     });
@@ -7365,6 +7375,7 @@ fn exercise_native_callout_consumer(cx: &mut gpui_kit::TestAppContext, name: &st
             app.active_editor_input()
                 .and_then(|input| input.markdown().cloned())
         }) {
+            start_in_source(&view, &mut context);
             break view;
         }
         assert!(std::time::Instant::now() < deadline);
@@ -7585,7 +7596,6 @@ fn native_accordions_preserve_hidden_children_focus_history_and_host_save(
     std::fs::write(&path, original).unwrap();
     let host = FileHost::new(lyrel_core::host::HostId(729));
     let (app, mut context, _streams) = harness_with_tabs(cx, 1);
-    context.update(|_, cx| cx.set_global(super::super::MarkdownWorkbench));
     app.update_in(&mut context, |app, window, cx| {
         app.editor_open_on_host(host.clone(), &path, window, cx)
     });
@@ -7596,6 +7606,7 @@ fn native_accordions_preserve_hidden_children_focus_history_and_host_save(
             app.active_editor_input()
                 .and_then(|input| input.markdown().cloned())
         }) {
+            start_in_source(&view, &mut context);
             break view;
         }
         assert!(std::time::Instant::now() < deadline);
@@ -7867,7 +7878,6 @@ fn native_tabs_switch_preserves_hidden_edits_history_composition_and_host_bytes(
     std::fs::write(&path, original).unwrap();
     let host = FileHost::new(lyrel_core::host::HostId(727));
     let (app, mut context, _streams) = harness_with_tabs(cx, 1);
-    context.update(|_, cx| cx.set_global(super::super::MarkdownWorkbench));
     app.update_in(&mut context, |app, window, cx| {
         app.editor_open_on_host(host.clone(), &path, window, cx)
     });
@@ -7878,6 +7888,7 @@ fn native_tabs_switch_preserves_hidden_edits_history_composition_and_host_bytes(
             app.active_editor_input()
                 .and_then(|input| input.markdown().cloned())
         }) {
+            start_in_source(&view, &mut context);
             break view;
         }
         assert!(std::time::Instant::now() < deadline);
@@ -8073,7 +8084,6 @@ fn native_tabs_nested_ancestor_visibility_and_property_undo_restore_the_right_ch
     let original = "<Tabs>\n\n<Tab title='Outer'>\n\n<Tabs>\n\n<Tab title='Inner'>\n\nvisible **inner**\n\n</Tab>\n\n<Tab title='Hidden'>\n\nkept hidden\n\n</Tab>\n\n</Tabs>\n\n</Tab>\n\n<Tab title='Other'>\n\nother child\n\n</Tab>\n\n</Tabs>\n\nkeep  ";
     std::fs::write(&path, original).unwrap();
     let (app, mut context, _streams) = harness_with_tabs(cx, 1);
-    context.update(|_, cx| cx.set_global(super::super::MarkdownWorkbench));
     app.update_in(&mut context, |app, window, cx| {
         app.open_file_in_editor(&path, window, cx)
     });
@@ -8084,6 +8094,7 @@ fn native_tabs_nested_ancestor_visibility_and_property_undo_restore_the_right_ch
             app.active_editor_input()
                 .and_then(|input| input.markdown().cloned())
         }) {
+            start_in_source(&view, &mut context);
             break view;
         }
         assert!(std::time::Instant::now() < deadline);
@@ -8217,7 +8228,6 @@ fn native_empty_quote_line_exits_one_level_and_undo_restores_source(
     let original = "> first\n>\n> next\n\nkeep  ";
     std::fs::write(&path, original).unwrap();
     let (app, mut context, _streams) = harness_with_tabs(cx, 1);
-    context.update(|_, cx| cx.set_global(super::super::MarkdownWorkbench));
     app.update_in(&mut context, |app, window, cx| {
         app.open_file_in_editor(&path, window, cx)
     });
@@ -8228,6 +8238,7 @@ fn native_empty_quote_line_exits_one_level_and_undo_restores_source(
             app.active_editor_input()
                 .and_then(|input| input.markdown().cloned())
         }) {
+            start_in_source(&view, &mut context);
             break view;
         }
         assert!(std::time::Instant::now() < deadline);
@@ -8346,7 +8357,6 @@ fn native_full_wide_table_reenters_distant_cells_with_wrapped_height_and_undo(
     source.push_str("\nUnchanged tail  ");
     std::fs::write(&path, &source).unwrap();
     let (app, mut context, _streams) = harness_with_tabs(cx, 1);
-    context.update(|_, cx| cx.set_global(super::super::MarkdownWorkbench));
     app.update_in(&mut context, |app, window, cx| {
         app.open_file_in_editor(&path, window, cx)
     });
@@ -8357,6 +8367,7 @@ fn native_full_wide_table_reenters_distant_cells_with_wrapped_height_and_undo(
             app.active_editor_input()
                 .and_then(|input| input.markdown().cloned())
         }) {
+            start_in_source(&view, &mut context);
             break view;
         }
         assert!(std::time::Instant::now() < deadline);

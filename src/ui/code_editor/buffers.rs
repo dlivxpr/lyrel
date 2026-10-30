@@ -224,12 +224,11 @@ impl EditorBuffers {
         }
         self.pending.insert(key.clone(), seq);
         let requested = path.to_path_buf();
-        let preserve = cx.try_global::<MarkdownWorkbench>().is_some();
         HostOps::run_in(
             host.clone(),
             window,
             cx,
-            move |h| load_file(h, requested, preserve),
+            move |h| load_file(h, requested),
             move |view, result, window, cx| {
                 let current = access(view).pending.get(&key).copied() == Some(seq);
                 if !current {
@@ -277,7 +276,6 @@ impl EditorBuffers {
         landed: impl FnOnce(&mut E, Vec<Option<Loaded>>, &mut Window, &mut Context<E>) + 'static,
     ) {
         let epoch = self.context_epoch;
-        let preserve = cx.try_global::<MarkdownWorkbench>().is_some();
         HostOps::run_in(
             host,
             window,
@@ -285,7 +283,7 @@ impl EditorBuffers {
             move |host| {
                 files
                     .into_iter()
-                    .map(|path| (path.clone(), load_file(host, path, preserve)))
+                    .map(|path| (path.clone(), load_file(host, path)))
                     .collect::<Vec<_>>()
             },
             move |view, loaded, window, cx| {
@@ -297,7 +295,7 @@ impl EditorBuffers {
                     .map(|(path, result)| match result {
                         Ok(file) => Some(file),
                         Err(error) => {
-                            if !preserve || language_for_path(&path) != "markdown" {
+                            if !is_markdown_path(&path) {
                                 return None;
                             }
                             let message = match error {
@@ -327,7 +325,6 @@ impl EditorBuffers {
     ) {
         let Some(position) = cursor else { return };
         let Some(file) = self.get_mut(id) else { return };
-        file.preview = false;
         let input = if let (Some(source), Some(group)) = (file.input.markdown(), target.group) {
             EditorInput::Markdown(file.presentations.view(source, target.tab, group, cx))
         } else {
@@ -357,6 +354,7 @@ impl EditorBuffers {
                 host,
                 loaded.path,
                 None,
+                BufferKind::Text,
                 loaded.text,
                 loaded.format,
                 loaded.config,
@@ -377,6 +375,7 @@ impl EditorBuffers {
         host: SharedHost,
         path: PathBuf,
         untitled: Option<u32>,
+        kind: BufferKind,
         text: String,
         format: TextFormat,
         config: EditorConfig,
@@ -394,16 +393,11 @@ impl EditorBuffers {
         };
         let cfg = cx.global::<crate::core::config::Config>();
         let wrap = cfg.editor_soft_wrap;
-        let native_markdown = cx.try_global::<MarkdownWorkbench>().is_some()
-            && (untitled.is_some()
-                || matches!(
-                    path.extension()
-                        .and_then(|ext| ext.to_str())
-                        .map(str::to_ascii_lowercase)
-                        .as_deref(),
-                    Some("md" | "markdown" | "mdx")
-                ));
-        let preview = !native_markdown && cfg.editor_markdown_preview && language == "markdown";
+        let native_markdown = if untitled.is_some() {
+            matches!(kind, BufferKind::Markdown)
+        } else {
+            is_markdown_path(&path)
+        };
         let id = BufferId::new();
         let (input, popups, sub, observe) = if native_markdown {
             let document = cx.new(|_| markdown::MarkdownDocument::new(text, format));
@@ -483,9 +477,7 @@ impl EditorBuffers {
             save_pending: false,
             reload_seq: 0,
             conflict: None,
-            preview,
             wrap,
-            preview_scroll: gpui_kit::ScrollHandle::new(),
             gutter: gutter::BufferGutter::default(),
             popups,
             _assets_sub: None,
@@ -704,14 +696,13 @@ impl EditorBuffers {
         let host_id = host.id();
         file.reload_seq = file.reload_seq.wrapping_add(1);
         let seq = file.reload_seq;
-        let preserve = file.input.markdown().is_some();
         HostOps::run_in(
             host,
             window,
             cx,
             move |h| {
                 let bytes = h.read_file(&target, MAX_FILE_BYTES)?;
-                let decoded = decode_file(&target, &bytes, preserve)?.ok_or_else(|| {
+                let decoded = decode_file(&target, &bytes)?.ok_or_else(|| {
                     std::io::Error::new(std::io::ErrorKind::InvalidData, "no longer text")
                 })?;
                 let mtime = h.stat(&target).ok().and_then(|meta| meta.mtime);
@@ -826,7 +817,6 @@ pub(super) struct Loaded {
 fn load_file(
     h: &dyn lyrel_core::host::Host,
     requested: PathBuf,
-    preserve: bool,
 ) -> Result<Loaded, EditorOpenError> {
     let path = h.canonicalize(&requested).unwrap_or(requested);
     let meta = h.stat(&path).map_err(|e| {
@@ -850,7 +840,7 @@ fn load_file(
             &[("path", &path.display().to_string()), ("e", &e.to_string())],
         ))
     })?;
-    let Some(decoded) = decode_file(&path, &bytes, preserve).map_err(|error| {
+    let Some(decoded) = decode_file(&path, &bytes).map_err(|error| {
         EditorOpenError::Message(t_fmt(
             L10nKey::EditorCantRead,
             &[
@@ -872,19 +862,8 @@ fn load_file(
     })
 }
 
-fn decode_file(
-    path: &Path,
-    bytes: &[u8],
-    preserve: bool,
-) -> std::io::Result<Option<editor_text::Decoded>> {
-    let markdown = matches!(
-        path.extension()
-            .and_then(|ext| ext.to_str())
-            .map(str::to_ascii_lowercase)
-            .as_deref(),
-        Some("md" | "markdown" | "mdx")
-    );
-    if preserve && markdown {
+fn decode_file(path: &Path, bytes: &[u8]) -> std::io::Result<Option<editor_text::Decoded>> {
+    if is_markdown_path(path) {
         editor_text::decode_source(bytes)
     } else {
         Ok(editor_text::decode(bytes))
