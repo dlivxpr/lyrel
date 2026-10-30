@@ -134,19 +134,17 @@ impl super::MarkdownDocument {
         self.images.tasks.retain(|url, _| urls.contains(url));
         let mut changed = self.images.states.len() != previous_len;
         let Some(resources) = self.resources().cloned() else {
-            if changed { cx.emit(super::DocumentEvent::ImagesChanged); }
+            if changed {
+                cx.emit(super::DocumentEvent::ImagesChanged);
+            }
             return;
         };
         let revision = self.revision();
         for url in urls {
-            let state = self
-                .images
-                .states
-                .entry(url.clone())
-                .or_insert_with(|| {
-                    changed = true;
-                    State::Unloaded
-                });
+            let state = self.images.states.entry(url.clone()).or_insert_with(|| {
+                changed = true;
+                State::Unloaded
+            });
             if matches!(state, State::Ready(_) | State::Loading(_)) || (external(&url) && !consent)
             {
                 continue;
