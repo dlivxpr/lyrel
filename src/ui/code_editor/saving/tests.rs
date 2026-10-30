@@ -322,7 +322,7 @@ fn file_save_before_close_keeps_a_later_focused_editor_group(cx: &mut TestAppCon
 fn markdown_save_as_cancel_and_failed_unsaved_close_keep_edits_through_recovery(
     cx: &mut TestAppContext,
 ) {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::ui::code_editor::test_host::canonical_tempdir();
     let path = dir.path().join("original.md");
     let occupied = dir.path().join("a-directory");
     let recovered = dir.path().join("recovered.md");

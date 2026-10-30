@@ -2846,7 +2846,7 @@ fn native_document_images_read_owning_host_and_reject_old_link_results(
     use crate::ui::code_editor::test_host::FileHost;
     use gpui_kit::Focusable as _;
     use std::sync::atomic::Ordering;
-    let directory = tempfile::tempdir().unwrap();
+    let directory = crate::ui::code_editor::test_host::canonical_tempdir();
     let path = directory.path().join("owned-images.md");
     let old = directory.path().join("old.png");
     let new = directory.path().join("new.png");
@@ -2972,7 +2972,7 @@ fn local_image_references_follow_document_rename_without_moving_assets(
     cx: &mut gpui_kit::TestAppContext,
 ) {
     use crate::ui::app::test_window::harness_with_tabs;
-    let directory = tempfile::tempdir().unwrap();
+    let directory = crate::ui::code_editor::test_host::canonical_tempdir();
     let path = directory.path().join("local-images.md");
     let asset = directory.path().join("existing.png");
     image::RgbaImage::from_pixel(2, 2, image::Rgba([0, 0, 255, 255]))
@@ -6151,7 +6151,7 @@ fn native_mdx_grammar_follows_rename_save_as_and_recovers_invalid_property_sourc
 ) {
     use crate::ui::app::test_window::harness_with_tabs;
     use gpui_kit::test::TestWindowExt as _;
-    let directory = tempfile::tempdir().unwrap();
+    let directory = crate::ui::code_editor::test_host::canonical_tempdir();
     let path = directory.path().join("grammar.md");
     let renamed = directory.path().join("grammar.mdx");
     let saved = directory.path().join("saved.md");

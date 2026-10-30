@@ -1,4 +1,4 @@
-use super::super::test_host::FileHost;
+use super::super::test_host::{FileHost, canonical_tempdir};
 use super::*;
 use crate::ui::app::test_window::harness_with_tabs;
 use gpui_kit::test::TestWindowExt as _;
@@ -1298,7 +1298,7 @@ fn markdown_untitled_image_cancel_is_unchanged_and_success_waits_for_document_sa
 fn markdown_failed_asset_write_has_no_link_and_late_write_cannot_touch_replacement(
     cx: &mut TestAppContext,
 ) {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = canonical_tempdir();
     let path = dir.path().join("pending.md");
     let replacement = dir.path().join("replacement.md");
     std::fs::write(&path, "original").unwrap();

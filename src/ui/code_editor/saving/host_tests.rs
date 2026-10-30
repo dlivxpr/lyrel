@@ -1,4 +1,4 @@
-use super::super::super::test_host::FileHost;
+use super::super::super::test_host::{FileHost, canonical_tempdir};
 use super::*;
 use std::sync::atomic::Ordering;
 
@@ -402,7 +402,7 @@ fn replacement_group_scenario(cx: &mut TestAppContext, markdown: bool) {
 
 #[gpui_kit::test]
 fn markdown_remote_save_as_rejects_identity_changed_while_bar_was_open(cx: &mut TestAppContext) {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = canonical_tempdir();
     let path = dir.path().join("original.md");
     let moved = dir.path().join("moved.md");
     let target = dir.path().join("stale-target.md");

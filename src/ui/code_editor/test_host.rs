@@ -10,6 +10,18 @@ use std::sync::{
 };
 use std::time::Duration;
 
+/// Match the path spelling retained by `EditorBuffers::open`, even when the
+/// runner's temporary directory uses a symlink, junction or Windows 8.3 name.
+pub(super) fn canonical_tempdir() -> tempfile::TempDir {
+    let root = std::thread::spawn(|| {
+        lyrel_core::host::local::LocalHost::new().canonicalize(&std::env::temp_dir())
+    })
+    .join()
+    .unwrap()
+    .unwrap();
+    tempfile::tempdir_in(root).unwrap()
+}
+
 /// Real filesystem adapter with a distinct Host identity and controllable
 /// read/write scheduling. Only scheduling is substituted; bytes and metadata
 /// still go through LocalHost, as in the existing settings Host fixtures.
