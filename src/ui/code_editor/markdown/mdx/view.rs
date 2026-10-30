@@ -94,6 +94,40 @@ pub(in super::super) fn visible_field(context: &FieldContext<'_>) -> bool {
     super::tabs::visible(context) && super::accordions::visible(context)
 }
 
+/// Inline components share their surrounding leaf; hide only their mapped
+/// slices, never the enclosing paragraph/cell or the authoritative document.
+pub(in super::super) fn hidden_inline_ranges(
+    projection: &Projection,
+    source: &gpui_kit::base::input::Rope,
+    state: &ViewState,
+) -> Vec<std::ops::Range<usize>> {
+    let mut hidden = Vec::new();
+    for component in &projection.mdx.components {
+        let range = component.source_range();
+        if !projection.leaves.iter().any(|leaf| !matches!(leaf.kind, Kind::Mdx(_))
+            && leaf.range.start <= range.start && range.end <= leaf.range.end) { continue; }
+        if projection.mdx.components.iter().any(|outer| state.source_components.contains(&outer.id())
+            && outer.source_range().start <= range.start && range.end <= outer.source_range().end) { continue; }
+        let context = FieldContext {
+            component: Some(component), property: None, field: None, source, state,
+            revision: projection.revision, grammar: projection.grammar,
+            index: &projection.mdx, range: range.clone(),
+        };
+        if !visible_field(&context) {
+            hidden.push(range);
+            continue;
+        }
+        let named = |name: &str| source.slice(component.name_range()).chars().eq(name.chars());
+        if named("Tabs") || named("Tab") || named("Accordion") || named("AccordionGroup") {
+            let children = component.children_range();
+            hidden.push(range.start..children.start);
+            hidden.push(children.end..range.end);
+            if state.collapsed.contains(&component.id()) { hidden.push(children); }
+        }
+    }
+    hidden
+}
+
 /// Dedicated family modules attach here: choose the family from the positioned
 /// component name, then decorate `content` using the same FieldContext. A normal
 /// Markdown child has field=None; metadata-only Children marks the child boundary.

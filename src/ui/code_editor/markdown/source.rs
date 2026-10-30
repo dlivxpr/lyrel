@@ -510,6 +510,22 @@ impl SourcePresentation {
         }
         selection
     }
+    fn sync_mdx_inline_visibility(&mut self, cx: &App) {
+        if !self.live { return; }
+        let hidden = super::mdx::view::hidden_inline_ranges(
+            &self.projection, self.document.read(cx).source(), &self.mdx_state,
+        );
+        let marked = self.state.marked_range();
+        for leaf in &mut self.projection.leaves {
+            if leaf.hide_ranges(&hidden, marked.as_ref()) {
+                if matches!(leaf.kind, Kind::TableCell(_)) { self.tables.invalidate_cell(leaf.id); }
+                if let Some(block) = self.blocks.get_mut(&leaf.id) { block.version = u64::MAX; }
+                self.geometry = None;
+                self.viewport.layout = None;
+                self.rendered_revision = None;
+            }
+        }
+    }
     fn sync_inline_reveal(&mut self) {
         let marked = self.state.marked_range();
         for leaf in &mut self.projection.leaves {
@@ -611,6 +627,7 @@ impl SourcePresentation {
     ) {
         self.command(Command::FinishComposition, window, cx);
         update(&mut self.mdx_state);
+        self.sync_mdx_inline_visibility(cx);
         self.viewport.anchor = None;
         self.viewport.layout = None;
         self.geometry = None;
@@ -719,6 +736,7 @@ impl SourcePresentation {
             self.geometry = None;
             self.rendered_revision = None;
         }
+        self.sync_mdx_inline_visibility(cx);
     }
     pub(super) fn activate_mdx_tab(
         &mut self,
@@ -2020,6 +2038,9 @@ impl Render for SourcePresentation {
             }
             self.rendered_revision = None;
             self.schedule_math(cx);
+        }
+        if self.live && self.rendered_revision != Some(self.document.read(cx).revision()) {
+            self.sync_mdx_inline_visibility(cx);
         }
         let view = cx.entity().downgrade();
         let ready = self
