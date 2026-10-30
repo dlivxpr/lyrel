@@ -418,6 +418,37 @@ fn markdown_declared_encoding_errors_are_visible_without_replacement_or_write(
 }
 
 #[gpui_kit::test]
+fn markdown_change_commands_target_focused_split_presentation(cx: &mut TestAppContext) {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("split-changes.md");
+    std::fs::write(&path, "one\nTWO\nthree\nfour\nfive\n").unwrap();
+    let (app, mut vcx, _streams) = harness_with_tabs(cx, 1);
+    app.update_in(&mut vcx, |app, window, cx| app.open_file_in_editor(&path, window, cx));
+    wait_until(&mut vcx, |vcx| active_id(&app, vcx).is_some());
+    start_active_markdown_in_source(&app, &mut vcx);
+    let first = app.read_with(&vcx, |app, _| app.active_editor_input().unwrap());
+    app.update_in(&mut vcx, |app, window, cx| { assert!(app.editor_split(window, cx)); });
+    start_active_markdown_in_source(&app, &mut vcx);
+    vcx.update(|window, cx| window.render_frame(cx));
+    let second = app.read_with(&vcx, |app, _| app.active_editor_input().unwrap());
+    app.update_in(&mut vcx, |app, window, cx| {
+        let id = app.active_buffer().unwrap().id();
+        app.editor.buffers.get_mut(id).unwrap().gutter.set_base_for_test("one\ntwo\nthree\nfour\n");
+        first.set_cursor_position(Position::new(0, 0), window, cx);
+        second.set_cursor_position(Position::new(1, 0), window, cx);
+        second.focus(window, cx);
+        assert!(app.editor_gutter_step(true, window, cx));
+        assert_eq!(second.read(cx).cursor_position().line, 4);
+        assert_eq!(first.read(cx).cursor_position().line, 0);
+        assert!(app.editor_gutter_revert_at_cursor(window, cx));
+        assert_eq!(second.read(cx).text().to_string(), "one\nTWO\nthree\nfour\n");
+        assert_eq!(first.read(cx).cursor_position().line, 0);
+    });
+    vcx.dispatch_action(gpui_kit::component::input::Undo);
+    app.read_with(&vcx, |_, cx| assert_eq!(second.read(cx).text().to_string(), "one\nTWO\nthree\nfour\nfive\n"));
+}
+
+#[gpui_kit::test]
 fn markdown_workbench_shares_native_source_history_and_host_save_across_groups(
     cx: &mut TestAppContext,
 ) {
