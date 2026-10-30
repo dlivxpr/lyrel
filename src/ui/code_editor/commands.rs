@@ -1104,6 +1104,82 @@ mod gpui_tests {
         });
     }
     #[gpui_kit::test]
+    fn markdown_line_commands_preserve_mixed_endings_and_undo(cx: &mut TestAppContext) {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("mixed-commands.md");
+        std::fs::write(&path, b"one\r\ntwo\nthree\r\n").unwrap();
+        let (app, mut vcx, _streams) = harness_with_tabs(cx, 1);
+        app.update_in(&mut vcx, |app, window, cx| app.open_file_in_editor(&path, window, cx));
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while !app.read_with(&vcx, |app, _| app.active_buffer().is_some()) {
+            vcx.run_until_parked();
+            assert!(std::time::Instant::now() < deadline);
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        app.update_in(&mut vcx, |app, window, cx| {
+            app.toggle_document_preview(window, cx);
+            let input = app.active_editor_input().unwrap();
+            input.set_selected_range(4..7, cx);
+            input.focus(window, cx);
+        });
+        vcx.dispatch_action(MoveLineUp);
+        app.read_with(&vcx, |app, cx| {
+            let input = app.active_editor_input().unwrap();
+            assert_eq!(input.markdown().unwrap().read(cx).document().read(cx).encode().unwrap(), b"two\none\r\nthree\r\n");
+        });
+        vcx.dispatch_action(gpui_kit::component::input::Undo);
+        vcx.dispatch_action(CopyLineDown);
+        app.read_with(&vcx, |app, cx| {
+            let input = app.active_editor_input().unwrap();
+            assert_eq!(input.markdown().unwrap().read(cx).document().read(cx).encode().unwrap(), b"one\r\ntwo\ntwo\nthree\r\n");
+        });
+        vcx.dispatch_action(gpui_kit::component::input::Undo);
+        app.read_with(&vcx, |app, cx| {
+            let input = app.active_editor_input().unwrap();
+            assert_eq!(input.markdown().unwrap().read(cx).document().read(cx).encode().unwrap(), b"one\r\ntwo\nthree\r\n");
+            assert_eq!(input.read(cx).selected_range(), 4..7);
+        });
+    }
+
+    #[gpui_kit::test]
+    fn markdown_repeated_multiline_indent_preserves_selection_and_undo(cx: &mut TestAppContext) {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("indent.md");
+        std::fs::write(&path, "one\ntwo\nthree").unwrap();
+        let (app, mut vcx, _streams) = harness_with_tabs(cx, 1);
+        app.update_in(&mut vcx, |app, window, cx| app.open_file_in_editor(&path, window, cx));
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while !app.read_with(&vcx, |app, _| app.active_buffer().is_some()) {
+            vcx.run_until_parked();
+            assert!(std::time::Instant::now() < deadline);
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        app.update_in(&mut vcx, |app, window, cx| {
+            app.toggle_document_preview(window, cx);
+            let input = app.active_editor_input().unwrap();
+            input.set_selected_range(0..7, cx);
+            input.focus(window, cx);
+        });
+        vcx.update(|window, cx| {
+            window.render_frame(cx);
+            window.press("tab", cx);
+            window.press("tab", cx);
+        });
+        app.read_with(&vcx, |app, cx| {
+            let input = app.active_editor_input().unwrap();
+            assert_eq!(input.read(cx).text().to_string(), "        one\n        two\nthree");
+            assert_eq!(input.read(cx).selected_range(), 8..23);
+        });
+        vcx.dispatch_action(gpui_kit::component::input::Undo);
+        vcx.dispatch_action(gpui_kit::component::input::Undo);
+        app.read_with(&vcx, |app, cx| {
+            let input = app.active_editor_input().unwrap();
+            assert_eq!(input.read(cx).text().to_string(), "one\ntwo\nthree");
+            assert_eq!(input.read(cx).selected_range(), 0..7);
+        });
+    }
+
+    #[gpui_kit::test]
     fn markdown_explicit_commands_and_repeated_occurrences_keep_their_selection_scope(
         cx: &mut TestAppContext,
     ) {
