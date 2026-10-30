@@ -98,12 +98,17 @@ impl MarkdownSearch {
         let query = if self.query_dirty {
             self.query_dirty = false;
             self.query.read(cx).value()
-        } else { self.matched_query.clone() };
-        let query_changed = self.matched_query != query || self.matched_case_sensitive != self.case_sensitive;
+        } else {
+            self.matched_query.clone()
+        };
+        let query_changed =
+            self.matched_query != query || self.matched_case_sensitive != self.case_sensitive;
         if self.matched_revision != Some(document.revision()) {
             // SearchMatcher exposes its compiled query publicly. Clear it only
             // when both inputs changed, so update does not scan the old query.
-            if query_changed { self.matcher.query = None; }
+            if query_changed {
+                self.matcher.query = None;
+            }
             self.matcher.update(document.source());
             self.matched_revision = Some(document.revision());
         }
@@ -185,7 +190,9 @@ impl MarkdownSearch {
     fn close(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.open = false;
         if let Some(source) = self.source.upgrade() {
-            source.update(cx, |view, cx| view.set_search_matches(std::rc::Rc::default(), cx));
+            source.update(cx, |view, cx| {
+                view.set_search_matches(std::rc::Rc::default(), cx)
+            });
             source.read(cx).focus_handle(cx).focus(window, cx);
         }
         cx.notify();

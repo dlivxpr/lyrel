@@ -114,7 +114,11 @@ pub(super) fn render(
                 .unwrap_or_else(|| t(L10nKey::EditorMdxAccordionsSection).to_string());
             let open = !context.state().collapsed.contains(&id);
             let accessibility = crate::ui::i18n::t_fmt(
-                if open { L10nKey::EditorAccordionCollapse } else { L10nKey::EditorAccordionExpand },
+                if open {
+                    L10nKey::EditorAccordionCollapse
+                } else {
+                    L10nKey::EditorAccordionExpand
+                },
                 &[("title", &title)],
             );
             div()

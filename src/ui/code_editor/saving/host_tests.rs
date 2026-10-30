@@ -79,15 +79,25 @@ fn text_save_as_markdown_reload_keeps_normalized_editor_codec(cx: &mut TestAppCo
 
 fn cross_extension_reload_scenario(cx: &mut TestAppContext, markdown: bool) {
     let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join(if markdown { "original.md" } else { "original.txt" });
-    let target = dir.path().join(if markdown { "renamed.txt" } else { "renamed.md" });
+    let path = dir.path().join(if markdown {
+        "original.md"
+    } else {
+        "original.txt"
+    });
+    let target = dir.path().join(if markdown {
+        "renamed.txt"
+    } else {
+        "renamed.md"
+    });
     std::fs::write(&path, "initial\n").unwrap();
     let host = FileHost::new(HostId(730));
     let (app, mut vcx, _streams) = harness_with_tabs(cx, 1);
     app.update_in(&mut vcx, |app, window, cx| {
         app.editor_open_on_host(host.clone(), &path, window, cx)
     });
-    wait_until(&mut vcx, |vcx| app.read_with(vcx, |app, _| app.active_buffer().is_some()));
+    wait_until(&mut vcx, |vcx| {
+        app.read_with(vcx, |app, _| app.active_buffer().is_some())
+    });
     vcx.dispatch_action(EditorSaveAs);
     settle(&mut vcx);
     vcx.update(|window, cx| {
@@ -95,25 +105,39 @@ fn cross_extension_reload_scenario(cx: &mut TestAppContext, markdown: bool) {
         window.input(&target.display().to_string(), cx);
         window.press("enter", cx);
     });
-    wait_until(&mut vcx, |vcx| app.read_with(vcx, |app, _| {
-        app.active_buffer().is_some_and(|file| file.path == target && !file.saving)
-    }));
+    wait_until(&mut vcx, |vcx| {
+        app.read_with(vcx, |app, _| {
+            app.active_buffer()
+                .is_some_and(|file| file.path == target && !file.saving)
+        })
+    });
     std::fs::write(&target, b"external\r\nsecond\nthird\r\nfourth").unwrap();
     app.update_in(&mut vcx, |app, window, cx| {
         let id = app.active_buffer().unwrap().id();
         app.editor_reload_from_disk(id, window, cx);
     });
-    wait_until(&mut vcx, |vcx| app.read_with(vcx, |app, cx| {
-        app.active_buffer().unwrap().input.read(cx).text().to_string().starts_with("external")
-    }));
+    wait_until(&mut vcx, |vcx| {
+        app.read_with(vcx, |app, cx| {
+            app.active_buffer()
+                .unwrap()
+                .input
+                .read(cx)
+                .text()
+                .to_string()
+                .starts_with("external")
+        })
+    });
     app.read_with(&vcx, |app, cx| {
         let input = &app.active_buffer().unwrap().input;
         assert_eq!(input.markdown().is_some(), markdown);
-        assert_eq!(input.read(cx).text().to_string(), if markdown {
-            "external\r\nsecond\nthird\r\nfourth"
-        } else {
-            "external\nsecond\nthird\nfourth"
-        });
+        assert_eq!(
+            input.read(cx).text().to_string(),
+            if markdown {
+                "external\r\nsecond\nthird\r\nfourth"
+            } else {
+                "external\nsecond\nthird\nfourth"
+            }
+        );
     });
     vcx.update(|window, cx| {
         window.render_frame(cx);
@@ -121,15 +145,23 @@ fn cross_extension_reload_scenario(cx: &mut TestAppContext, markdown: bool) {
         window.input("!", cx);
     });
     settle(&mut vcx);
-    app.update_in(&mut vcx, |app, window, cx| app.editor_save_active(window, cx));
-    wait_until(&mut vcx, |vcx| app.read_with(vcx, |app, _| {
-        app.active_buffer().is_some_and(|file| !file.dirty && !file.saving)
-    }));
-    assert_eq!(std::fs::read(&target).unwrap(), if markdown {
-        b"!external\r\nsecond\nthird\r\nfourth".as_slice()
-    } else {
-        b"!external\r\nsecond\r\nthird\r\nfourth".as_slice()
+    app.update_in(&mut vcx, |app, window, cx| {
+        app.editor_save_active(window, cx)
     });
+    wait_until(&mut vcx, |vcx| {
+        app.read_with(vcx, |app, _| {
+            app.active_buffer()
+                .is_some_and(|file| !file.dirty && !file.saving)
+        })
+    });
+    assert_eq!(
+        std::fs::read(&target).unwrap(),
+        if markdown {
+            b"!external\r\nsecond\nthird\r\nfourth".as_slice()
+        } else {
+            b"!external\r\nsecond\r\nthird\r\nfourth".as_slice()
+        }
+    );
 }
 
 #[gpui_kit::test]

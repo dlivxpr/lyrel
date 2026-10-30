@@ -937,9 +937,17 @@ impl LyrelApp {
     ) -> Option<AnyElement> {
         let f = self.editor.buffers.get(id)?;
         let code = self.tab_code()?;
-        let group = if code.focused_slot() == slot { code.group } else { code.split.as_ref()?.id };
+        let group = if code.focused_slot() == slot {
+            code.group
+        } else {
+            code.split.as_ref()?.id
+        };
         let tab = self.tabs.get(self.tabs.active_index())?.id();
-        let input = f.presentations.existing(tab, group).map(super::EditorInput::Markdown).unwrap_or_else(|| f.input.clone());
+        let input = f
+            .presentations
+            .existing(tab, group)
+            .map(super::EditorInput::Markdown)
+            .unwrap_or_else(|| f.input.clone());
         let caret = input.read(cx).cursor_position();
         let segments: Vec<String> = if f.untitled.is_some() {
             vec![f.label().to_string()]

@@ -744,11 +744,16 @@ fn native_prose_delete_does_not_merge_table_cells(cx: &mut gpui_kit::TestAppCont
         let path = directory.path().join("table-boundary.md");
         std::fs::write(&path, source).unwrap();
         let (app, mut context, _streams) = harness_with_tabs(cx, 1);
-        app.update_in(&mut context, |app, window, cx| app.open_file_in_editor(&path, window, cx));
+        app.update_in(&mut context, |app, window, cx| {
+            app.open_file_in_editor(&path, window, cx)
+        });
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
         let view = loop {
             context.run_until_parked();
-            if let Some(view) = app.read_with(&context, |app, _| app.active_editor_input().and_then(|input| input.markdown().cloned())) {
+            if let Some(view) = app.read_with(&context, |app, _| {
+                app.active_editor_input()
+                    .and_then(|input| input.markdown().cloned())
+            }) {
                 start_in_source(&view, &mut context);
                 break view;
             }
@@ -763,7 +768,10 @@ fn native_prose_delete_does_not_merge_table_cells(cx: &mut gpui_kit::TestAppCont
         });
         context.update(|window, cx| window.press(key, cx));
         view.read_with(&context, |view, cx| {
-            assert_eq!(view.document().read(cx).encode().unwrap(), source.as_bytes());
+            assert_eq!(
+                view.document().read(cx).encode().unwrap(),
+                source.as_bytes()
+            );
             assert_eq!(view.selection().range(), at..at);
         });
     }
@@ -778,11 +786,16 @@ fn native_mdx_table_renders_each_embedded_control_once(cx: &mut gpui_kit::TestAp
     let source = "| first | second |\n| --- | --- |\n| <Card title='A' /> | ordinary |\n| ordinary | <Card title='B' /> |";
     std::fs::write(&path, source).unwrap();
     let (app, mut context, _streams) = harness_with_tabs(cx, 1);
-    app.update_in(&mut context, |app, window, cx| app.open_file_in_editor(&path, window, cx));
+    app.update_in(&mut context, |app, window, cx| {
+        app.open_file_in_editor(&path, window, cx)
+    });
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
     let view = loop {
         context.run_until_parked();
-        if let Some(view) = app.read_with(&context, |app, _| app.active_editor_input().and_then(|input| input.markdown().cloned())) {
+        if let Some(view) = app.read_with(&context, |app, _| {
+            app.active_editor_input()
+                .and_then(|input| input.markdown().cloned())
+        }) {
             start_in_source(&view, &mut context);
             break view;
         }
@@ -793,9 +806,17 @@ fn native_mdx_table_renders_each_embedded_control_once(cx: &mut gpui_kit::TestAp
     settle_live_geometry(&view, &mut context);
     context.update(|window, cx| {
         window.render_frame(cx);
-        assert_eq!(window.find_all_by_label("Edit card component name").len(), 2);
+        assert_eq!(
+            window.find_all_by_label("Edit card component name").len(),
+            2
+        );
     });
-    view.read_with(&context, |view, cx| assert_eq!(view.document().read(cx).encode().unwrap(), source.as_bytes()));
+    view.read_with(&context, |view, cx| {
+        assert_eq!(
+            view.document().read(cx).encode().unwrap(),
+            source.as_bytes()
+        )
+    });
 }
 
 #[gpui_kit::test]

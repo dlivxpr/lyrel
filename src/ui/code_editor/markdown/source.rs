@@ -1470,14 +1470,17 @@ impl SourcePresentation {
         }
         let doc = self.document.read(cx);
         let selections: Vec<_> = std::iter::once(self.state.selection)
-            .chain(self.extra_selections.iter().copied()).collect();
+            .chain(self.extra_selections.iter().copied())
+            .collect();
         let mut rows = std::collections::BTreeSet::new();
         for selection in &selections {
             let selected = selection.range();
             let first = doc.source().offset_to_point(selected.start).row;
             let last = doc.source().offset_to_point(selected.end).row;
             for row in first..=last {
-                if row > first && doc.source().line_start_offset(row) == selected.end { break; }
+                if row > first && doc.source().line_start_offset(row) == selected.end {
+                    break;
+                }
                 rows.insert(row);
             }
         }
@@ -1508,15 +1511,22 @@ impl SourcePresentation {
             for selection in &mut selections {
                 for (range, text) in &edits {
                     let map = |at: usize| {
-                        if at < range.start { at }
-                        else if at >= range.end { at - range.len() + text.len() }
-                        else { range.start + text.len() }
+                        if at < range.start {
+                            at
+                        } else if at >= range.end {
+                            at - range.len() + text.len()
+                        } else {
+                            range.start + text.len()
+                        }
                     };
                     *selection = Selection::new(map(selection.anchor), map(selection.head));
                 }
             }
             self.command(
-                Command::BatchReplaceSelected { edits, selection: selections[0] },
+                Command::BatchReplaceSelected {
+                    edits,
+                    selection: selections[0],
+                },
                 window,
                 cx,
             );
@@ -1760,7 +1770,9 @@ impl SourcePresentation {
                         && (!other.text.is_empty() || other.kind == Kind::Rule)
                 })
                 .map(|other| {
-                    if matches!(other.kind, Kind::TableCell(_)) { return at..at; }
+                    if matches!(other.kind, Kind::TableCell(_)) {
+                        return at..at;
+                    }
                     if super::regions::label(other.kind).is_some() {
                         self.document.read(cx).previous(at)..at
                     } else {
@@ -1776,7 +1788,9 @@ impl SourcePresentation {
                         && (!other.text.is_empty() || other.kind == Kind::Rule)
                 })
                 .map(|other| {
-                    if matches!(other.kind, Kind::TableCell(_)) { return at..at; }
+                    if matches!(other.kind, Kind::TableCell(_)) {
+                        return at..at;
+                    }
                     if super::regions::label(other.kind).is_some() {
                         at..self.document.read(cx).next(at)
                     } else {
@@ -2007,13 +2021,26 @@ impl Render for SourcePresentation {
             self.schedule_math(cx);
         }
         let view = cx.entity().downgrade();
-        let ready = self.image_snapshot.get_or_insert_with(|| {
-            std::rc::Rc::new(self.document.read(cx).images.states.iter().filter_map(|(url, state)| {
-                if let super::images::State::Ready(image) = state {
-                    Some((url.clone(), image.clone()))
-                } else { None }
-            }).collect())
-        }).clone();
+        let ready = self
+            .image_snapshot
+            .get_or_insert_with(|| {
+                std::rc::Rc::new(
+                    self.document
+                        .read(cx)
+                        .images
+                        .states
+                        .iter()
+                        .filter_map(|(url, state)| {
+                            if let super::images::State::Ready(image) = state {
+                                Some((url.clone(), image.clone()))
+                            } else {
+                                None
+                            }
+                        })
+                        .collect(),
+                )
+            })
+            .clone();
         let context = RenderContext::from_app(cx)
             .with_body_font_size(window.rem_size())
             .with_markdown_extensions(super::math::extensions())

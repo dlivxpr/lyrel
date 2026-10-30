@@ -702,7 +702,9 @@ impl LyrelApp {
             return false;
         };
         let hunks = self.editor_gutter_hunks_now(id, cx);
-        let Some(input) = self.editor_input_for(id) else { return false; };
+        let Some(input) = self.editor_input_for(id) else {
+            return false;
+        };
         let line = input.read(cx).cursor_position().line as usize;
         let Some(ix) = step_hunk(&hunks, line, forward) else {
             return false;
@@ -722,7 +724,9 @@ impl LyrelApp {
         if f.gutter.base.is_none() || !enabled(cx) {
             return false;
         }
-        let Some(input) = self.editor_input_for(id) else { return false; };
+        let Some(input) = self.editor_input_for(id) else {
+            return false;
+        };
         let line = input.read(cx).cursor_position().line as usize;
         hunk_at_line(&f.gutter.hunks, line).is_some()
     }
@@ -737,7 +741,9 @@ impl LyrelApp {
             return false;
         };
         let hunks = self.editor_gutter_hunks_now(id, cx);
-        let Some(input) = self.editor_input_for(id) else { return false; };
+        let Some(input) = self.editor_input_for(id) else {
+            return false;
+        };
         let line = input.read(cx).cursor_position().line as usize;
         let Some(ix) = hunk_at_line(&hunks, line) else {
             return false;
@@ -758,7 +764,9 @@ impl LyrelApp {
         let Some(base) = f.gutter.base.clone() else {
             return false;
         };
-        let Some(input) = self.editor_input_for(id) else { return false; };
+        let Some(input) = self.editor_input_for(id) else {
+            return false;
+        };
         let text = input.read(cx).text().to_string();
         let (range, replacement) = revert_edit(&text, &base, hunk);
         let line = hunk.new.start;
@@ -863,7 +871,9 @@ impl LyrelApp {
             return false;
         };
         let hunks = self.editor_gutter_hunks_now(id, cx);
-        let Some(input) = self.editor_input_for(id) else { return false; };
+        let Some(input) = self.editor_input_for(id) else {
+            return false;
+        };
         let line = input.read(cx).cursor_position().line as usize;
         let ix = match hunk_at_line(&hunks, line) {
             Some(ix) => ix,
@@ -891,7 +901,9 @@ impl LyrelApp {
             return;
         };
         if f.gutter.peek.take().is_some() {
-            let Some(input) = self.editor_input_for(id) else { return; };
+            let Some(input) = self.editor_input_for(id) else {
+                return;
+            };
             input.focus(window, cx);
             cx.notify();
         }
