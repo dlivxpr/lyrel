@@ -58,7 +58,7 @@ pub(crate) struct SourcePresentation {
     math: super::math::State,
     extra_selections: Vec<Selection>,
     search_matches: std::rc::Rc<Vec<Range<usize>>>,
-    image_snapshot: Option<std::rc::Rc<HashMap<String, std::sync::Arc<RenderImage>>>>,
+    image_snapshot: Option<std::sync::Arc<HashMap<String, std::sync::Arc<RenderImage>>>>,
     accessibility_snapshot: Option<(u64, SharedString)>,
     indent: crate::ui::editor_text::Indent,
     viewport_height: Pixels,
@@ -2024,7 +2024,7 @@ impl Render for SourcePresentation {
         let ready = self
             .image_snapshot
             .get_or_insert_with(|| {
-                std::rc::Rc::new(
+                std::sync::Arc::new(
                     self.document
                         .read(cx)
                         .images
