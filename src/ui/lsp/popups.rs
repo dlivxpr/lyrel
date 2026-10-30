@@ -958,6 +958,7 @@ mod tests {
             name: "rust-analyzer",
             root,
         };
+        let buffer = crate::ui::code_editor::BufferId::new();
         cx.update(|cx| {
             LspStore::ensure(cx);
             let text = input.read(cx).text().clone();
@@ -993,7 +994,7 @@ mod tests {
                     version: 0,
                     owner: input.downgrade(),
                     popups: popup.downgrade(),
-                    owner_id: input.entity_id(),
+                    owner_id: buffer,
                     app_id: input.entity_id(),
                     app: WeakEntity::new_invalid(),
                     window: Some(window.into()),
@@ -1005,7 +1006,14 @@ mod tests {
                     problems: (0, 0),
                 },
             );
-            super::super::providers::install(&input, &popup, &path, WeakEntity::new_invalid(), cx);
+            super::super::providers::install(
+                buffer,
+                &input,
+                &popup,
+                &path,
+                WeakEntity::new_invalid(),
+                cx,
+            );
         });
         PopupSetup {
             window,

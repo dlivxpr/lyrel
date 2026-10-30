@@ -50,6 +50,7 @@ use self::client::{LspClient, ServerEvent};
 use self::convert::Encoding;
 use self::rpc::ResponseError;
 use self::servers::ServerSpec;
+use crate::ui::code_editor::BufferId;
 
 pub(crate) use self::editor::LspBuffer;
 
@@ -111,7 +112,7 @@ struct Doc {
     version: i32,
     owner: WeakEntity<EditorState>,
     popups: WeakEntity<popups::EditorPopups>,
-    owner_id: EntityId,
+    owner_id: BufferId,
     /// The window-level editor (`LyrelApp`) that holds the owning buffer.
     app_id: EntityId,
     app: WeakEntity<crate::ui::app::LyrelApp>,
@@ -301,7 +302,7 @@ impl LspStore {
                         || (doc.app_id == app_id
                             && !buffers
                                 .iter()
-                                .any(|b| b.input.entity_id() == doc.owner_id && &b.path == *path))
+                                .any(|b| b.id == doc.owner_id && &b.path == *path))
                 })
                 .map(|(path, _)| path.clone())
                 .collect();
@@ -318,7 +319,7 @@ impl LspStore {
 
     /// A buffer's text changed. The server hears about it after a pause, or
     /// before the next request, whichever comes first.
-    pub(crate) fn edited(input_id: EntityId, path: &Path, cx: &mut App) {
+    pub(crate) fn edited(input_id: BufferId, path: &Path, cx: &mut App) {
         let Some(store) = try_store_mut(cx) else {
             return;
         };
@@ -353,7 +354,7 @@ impl LspStore {
     }
 
     /// A buffer was written to disk.
-    pub(crate) fn saved(input_id: EntityId, path: &Path, cx: &mut App) {
+    pub(crate) fn saved(input_id: BufferId, path: &Path, cx: &mut App) {
         if cx.try_global::<LspStore>().is_none() {
             return;
         }
@@ -440,7 +441,7 @@ impl LspStore {
     /// [`Freshen`]) so the request that follows sees the text the caller sees.
     ///
     /// Only the buffer that owns the document may ask (`requester` is its
-    /// `InputState`'s id). The same file open in a second window is a second
+    /// document identity). The same file open in a second window is a second
     /// buffer whose text can differ from the owner's; letting it send that
     /// text would swap the document under the owner, and letting it ask
     /// against the owner's text would answer with positions for a text it
@@ -448,7 +449,7 @@ impl LspStore {
     /// has no language features until the owner closes and it takes over.
     pub(crate) fn context(
         path: &Path,
-        requester: EntityId,
+        requester: BufferId,
         sync: Freshen<'_>,
         window: Option<AnyWindowHandle>,
         cx: &mut App,
@@ -462,7 +463,7 @@ impl LspStore {
     fn context_for(
         &mut self,
         path: &Path,
-        requester: EntityId,
+        requester: BufferId,
         sync: Freshen<'_>,
         window: Option<AnyWindowHandle>,
     ) -> Option<DocContext> {
@@ -536,7 +537,7 @@ impl LspStore {
             version: 0,
             owner: buffer.input.downgrade(),
             popups: buffer.popups.downgrade(),
-            owner_id: buffer.input.entity_id(),
+            owner_id: buffer.id,
             app_id,
             app: buffer.app.clone(),
             window: None,
@@ -556,6 +557,7 @@ impl LspStore {
         }
         self.docs.insert(buffer.path.clone(), doc);
         providers::install(
+            buffer.id,
             &buffer.input,
             &buffer.popups,
             &buffer.path,

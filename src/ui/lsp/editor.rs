@@ -21,6 +21,7 @@ use crate::ui::i18n::{L10nKey, t, t_fmt};
 
 /// One buffer offered to the language servers.
 pub(crate) struct LspBuffer {
+    pub(crate) id: BufferId,
     pub(crate) input: Entity<EditorState>,
     pub(crate) popups: Entity<super::popups::EditorPopups>,
     pub(crate) path: PathBuf,
@@ -42,6 +43,7 @@ impl LyrelApp {
                 .local_files()
                 .into_iter()
                 .map(|f| LspBuffer {
+                    id: f.id,
                     input: f.input,
                     popups: f.popups,
                     path: f.path,
@@ -73,7 +75,7 @@ impl LyrelApp {
     /// A buffer's text changed.
     pub(crate) fn lsp_buffer_edited(&self, id: BufferId, cx: &mut Context<Self>) {
         if let Some(f) = self.editor.local_file(id) {
-            LspStore::edited(f.input.entity_id(), &f.path, cx);
+            LspStore::edited(f.id, &f.path, cx);
             self.lsp_signature_help_after_edit(&f, cx);
         }
     }
@@ -81,7 +83,7 @@ impl LyrelApp {
     /// A buffer was written to disk.
     pub(crate) fn lsp_buffer_saved(&self, id: BufferId, cx: &mut Context<Self>) {
         if let Some(f) = self.editor.local_file(id) {
-            LspStore::saved(f.input.entity_id(), &f.path, cx);
+            LspStore::saved(f.id, &f.path, cx);
         }
     }
 
@@ -95,7 +97,7 @@ impl LyrelApp {
         let text = f.input.read(cx).text().clone();
         let doc = LspStore::context(
             &f.path,
-            f.input.entity_id(),
+            f.id,
             Freshen::Text(&text),
             Some(window.window_handle()),
             cx,
@@ -289,7 +291,7 @@ impl LyrelApp {
         let text = f.input.read(cx).text().clone();
         let Some(doc) = LspStore::context(
             &f.path,
-            f.input.entity_id(),
+            f.id,
             Freshen::Text(&text),
             Some(window.window_handle()),
             cx,

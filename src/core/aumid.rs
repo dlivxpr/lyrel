@@ -207,11 +207,10 @@ fn decide_with(
 /// True when `exe` sits in a `cargo` build directory rather than an install.
 ///
 /// Two independent signals. The layout check is the offline half:
-/// `target[\<triple>]\{debug,release}\lyrel-app.exe`. `CACHEDIR.TAG` is the
-/// half that does not care about names — cargo writes it into every build
-/// directory precisely to mark the tree as derived, so it also covers a
-/// renamed `CARGO_TARGET_DIR` and the `target\...\deps\` binaries the test
-/// harness runs from.
+/// `target[\<triple>]\{debug,release}\[deps\]lyrel-app.exe`. A `CACHEDIR.TAG`
+/// ancestor also marks the tree as derived, covering renamed
+/// `CARGO_TARGET_DIR` directories when the marker is present. Standard cargo
+/// layouts must not depend on that optional marker.
 fn is_build_output(exe: &Path) -> bool {
     has_build_layout(exe)
         || exe
@@ -224,7 +223,12 @@ fn has_build_layout(exe: &Path) -> bool {
         dir.and_then(Path::file_name)
             .is_some_and(|n| n.eq_ignore_ascii_case(name))
     }
-    let profile = exe.parent();
+    let parent = exe.parent();
+    let profile = if named(parent, "deps") {
+        parent.and_then(Path::parent)
+    } else {
+        parent
+    };
     (named(profile, "debug") || named(profile, "release"))
         && exe.ancestors().any(|dir| named(Some(dir), "target"))
 }
@@ -437,6 +441,10 @@ mod tests {
             r"C:\src\lyrel\target\release\lyrel-app.exe",
             r"C:\src\lyrel\target\x86_64-pc-windows-msvc\release\lyrel-app.exe",
             r"C:\src\lyrel\TARGET\Debug\lyrel-app.exe",
+            r"C:\src\lyrel\target\debug\deps\lyrel_app-abc123.exe",
+            r"C:\src\lyrel\target\release\deps\lyrel_app-abc123.exe",
+            r"C:\src\lyrel\target\x86_64-pc-windows-msvc\release\deps\lyrel_app-abc123.exe",
+            r"C:\src\lyrel\TARGET\Debug\DEPS\lyrel_app-abc123.exe",
         ] {
             assert!(
                 super::has_build_layout(Path::new(exe)),
@@ -454,6 +462,8 @@ mod tests {
             r"D:\tools\lyrel\lyrel-app.exe",
             // A "release" *install* directory with no `target` above it.
             r"D:\lyrel\release\lyrel-app.exe",
+            r"D:\lyrel\debug\deps\lyrel-app.exe",
+            r"D:\lyrel\target\installed\deps\lyrel-app.exe",
         ] {
             let exe = Path::new(exe);
             assert!(!super::has_build_layout(exe), "{} misread", exe.display());
@@ -461,9 +471,8 @@ mod tests {
         }
     }
 
-    /// The test harness itself runs out of `target\...\deps\`, whose parent is
-    /// neither `debug` nor `release` — so this is the `CACHEDIR.TAG` half of
-    /// `is_build_output` proving itself against a real cargo layout.
+    /// The test harness itself runs out of `target\...\deps\`. It must count
+    /// as build output even when cargo has not left a `CACHEDIR.TAG` marker.
     #[test]
     fn the_test_binary_counts_as_build_output() {
         let exe = std::env::current_exe().expect("current exe");

@@ -311,11 +311,6 @@ pub struct Config {
     /// opens the way the last one was being read.
     #[serde(default)]
     pub editor_soft_wrap: bool,
-    /// Whether a Markdown file opens rendered rather than as source — the last
-    /// state of the Preview / Edit toggle, remembered the same way as
-    /// [`Self::editor_soft_wrap`]. Files that are not Markdown ignore it.
-    #[serde(default)]
-    pub editor_markdown_preview: bool,
     /// Whether the code editor starts language servers (rust-analyzer,
     /// typescript-language-server, …) for the files it opens, for
     /// diagnostics, completion, hover and go to definition. On by default;
@@ -833,7 +828,6 @@ impl Default for Config {
             scm_graph_expanded: false,
             scm_changes_tree: false,
             editor_soft_wrap: false,
-            editor_markdown_preview: false,
             editor_lsp: true,
             editor_git_gutter: true,
             sidebar_auto_grouping: true,
@@ -2714,6 +2708,24 @@ mod tests {
         assert_eq!(cfg.font_family, "Hack");
         assert_eq!(cfg.theme_preset, "light");
         assert!(cfg.keybindings.is_empty());
+    }
+
+    #[test]
+    fn retired_markdown_preview_is_ignored_and_omitted_from_normal_writes() {
+        for preview in [false, true] {
+            let cfg: Config = serde_json::from_value(serde_json::json!({
+                "editor_markdown_preview": preview,
+                "editor_soft_wrap": true,
+                "font_size": 20.0,
+            }))
+            .expect("retired preferences remain valid unknown keys");
+            assert!(cfg.editor_soft_wrap);
+            assert_eq!(cfg.font_size, 20.0);
+            let written = serde_json::to_value(&cfg).unwrap();
+            assert!(written.get("editor_markdown_preview").is_none());
+            assert_eq!(written["editor_soft_wrap"], true);
+            assert_eq!(written["font_size"], 20.0);
+        }
     }
 
     #[test]

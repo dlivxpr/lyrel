@@ -163,7 +163,7 @@ impl LyrelApp {
         };
         let Some(doc) = LspStore::context(
             &f.path,
-            f.input.entity_id(),
+            f.id,
             Freshen::Text(&text),
             Some(window.window_handle()),
             cx,
@@ -222,12 +222,12 @@ impl LyrelApp {
         cx: &mut Context<Self>,
     ) -> Option<crate::ui::search::LiveQuery> {
         let f = self.editor_active_local_file()?;
-        let doc = LspStore::context(&f.path, f.input.entity_id(), Freshen::Skip, None, cx)?;
+        let doc = LspStore::context(&f.path, f.id, Freshen::Skip, None, cx)?;
         doc.caps.workspace_symbol_provider.as_ref()?;
         let app = cx.entity().downgrade();
         let handle = window.window_handle();
         let path = f.path.clone();
-        let requester = f.input.entity_id();
+        let requester = f.id;
         Some(std::rc::Rc::new(move |query: &str, cx: &mut App| {
             let (app, path, query) = (app.clone(), path.clone(), query.to_owned());
             // Deferred: the query arrives from inside the search's own
@@ -245,7 +245,7 @@ impl LyrelApp {
     fn lsp_workspace_query(
         &mut self,
         path: &Path,
-        requester: gpui_kit::EntityId,
+        requester: crate::ui::code_editor::BufferId,
         query: String,
         window: &mut Window,
         cx: &mut Context<Self>,

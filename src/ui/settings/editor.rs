@@ -6,12 +6,8 @@ use super::*;
 impl SettingsWindow {
     pub(super) fn render_editor_group(&self, cx: &mut Context<Self>) -> AnyElement {
         let cfg = cx.global::<Config>();
-        let (git_gutter, lsp, soft_wrap, markdown) = (
-            cfg.editor_git_gutter,
-            cfg.editor_lsp,
-            cfg.editor_soft_wrap,
-            cfg.editor_markdown_preview,
-        );
+        let (git_gutter, lsp, soft_wrap) =
+            (cfg.editor_git_gutter, cfg.editor_lsp, cfg.editor_soft_wrap);
         let git_gutter =
             self.settings_switch("wt-editor-git-gutter", git_gutter, cx, |this, on, _, cx| {
                 this.set_editor_git_gutter(on, cx)
@@ -22,10 +18,6 @@ impl SettingsWindow {
         let soft_wrap =
             self.settings_switch("wt-editor-soft-wrap", soft_wrap, cx, |this, on, _, cx| {
                 this.set_editor_soft_wrap(on, cx)
-            });
-        let markdown =
-            self.settings_switch("wt-editor-markdown", markdown, cx, |this, on, _, cx| {
-                this.set_editor_markdown_preview(on, cx)
             });
         self.settings_group(
             Some(t(L10nKey::SettingsEditor)),
@@ -49,12 +41,6 @@ impl SettingsWindow {
                     soft_wrap,
                     cx,
                 ),
-                self.settings_row(
-                    t(L10nKey::SettingsEditorMarkdownPreview),
-                    t(L10nKey::SettingsEditorMarkdownPreviewDesc),
-                    markdown,
-                    cx,
-                ),
             ]
             .map(IntoElement::into_any_element),
             cx,
@@ -72,10 +58,5 @@ impl SettingsWindow {
     /// What new files open with; files already open keep their own Wrap.
     pub(crate) fn set_editor_soft_wrap(&mut self, on: bool, cx: &mut Context<Self>) {
         self.update_config(cx, |cfg| cfg.editor_soft_wrap = on);
-    }
-
-    /// What Markdown files open as; files already open keep their own mode.
-    pub(crate) fn set_editor_markdown_preview(&mut self, on: bool, cx: &mut Context<Self>) {
-        self.update_config(cx, |cfg| cfg.editor_markdown_preview = on);
     }
 }

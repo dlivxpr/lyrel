@@ -295,6 +295,7 @@ mod harness {
 
     pub(super) struct Setup {
         pub(super) window: WindowHandle<EditorState>,
+        pub(super) owner_id: BufferId,
         pub(super) owner: Entity<EditorState>,
         pub(super) other: Entity<EditorState>,
         pub(super) path: PathBuf,
@@ -312,6 +313,7 @@ mod harness {
                 .default_value("fn foo() {}\n")
         });
         let owner = window.root(cx).unwrap();
+        let owner_id = BufferId::new();
         let other = window
             .update(cx, |_, window, cx| {
                 cx.new(|cx| {
@@ -365,7 +367,7 @@ mod harness {
                     version: 0,
                     owner: owner.downgrade(),
                     popups: WeakEntity::new_invalid(),
-                    owner_id: owner.entity_id(),
+                    owner_id,
                     app_id: owner.entity_id(),
                     app: WeakEntity::new_invalid(),
                     window: Some(window.into()),
@@ -380,6 +382,7 @@ mod harness {
         });
         Setup {
             window,
+            owner_id,
             owner,
             other,
             path,
@@ -398,7 +401,7 @@ fn a_buffer_that_does_not_own_the_document_never_syncs(cx: &mut gpui_kit::TestAp
         let other_text = s.other.read(cx).text().clone();
         let refused = LspStore::context(
             &s.path,
-            s.other.entity_id(),
+            BufferId::new(),
             Freshen::Text(&other_text),
             None,
             cx,
@@ -406,13 +409,7 @@ fn a_buffer_that_does_not_own_the_document_never_syncs(cx: &mut gpui_kit::TestAp
         assert!(refused.is_none(), "a non-owner gets no server");
 
         let owner_text = gpui_kit::component::Rope::from("fn foo() { owner(); }\n");
-        let allowed = LspStore::context(
-            &s.path,
-            s.owner.entity_id(),
-            Freshen::Text(&owner_text),
-            None,
-            cx,
-        );
+        let allowed = LspStore::context(&s.path, s.owner_id, Freshen::Text(&owner_text), None, cx);
         assert!(allowed.is_some());
     });
     // The first thing the server hears is the owner's change: the other

@@ -27,6 +27,7 @@ use lsp_types::{
 use super::convert::{self, Encoding};
 use super::{DocContext, Freshen, LspStore};
 use crate::ui::app::LyrelApp;
+use crate::ui::code_editor::BufferId;
 
 /// Bound the visible menu only after matching and server ordering, so a useful
 /// candidate beyond the first page of an unfiltered response is not discarded.
@@ -39,11 +40,12 @@ pub(crate) struct LspProvider {
     actions_baseline: std::cell::RefCell<Option<std::collections::HashMap<PathBuf, Rope>>>,
     path: PathBuf,
     /// The buffer this provider serves — always the document's owner.
-    input: gpui_kit::EntityId,
+    buffer: BufferId,
     app: WeakEntity<LyrelApp>,
 }
 
 pub(super) fn install(
+    buffer: BufferId,
     input: &Entity<EditorState>,
     popups: &Entity<super::popups::EditorPopups>,
     path: &Path,
@@ -53,7 +55,7 @@ pub(super) fn install(
     let provider = Rc::new(LspProvider {
         actions_baseline: Default::default(),
         path: path.to_path_buf(),
-        input: input.entity_id(),
+        buffer,
         app,
     });
     popups.update(cx, |popups, cx| {
@@ -90,7 +92,7 @@ impl LspProvider {
     fn context(&self, sync: Freshen<'_>, window: &Window, cx: &mut App) -> Option<DocContext> {
         LspStore::context(
             &self.path,
-            self.input,
+            self.buffer,
             sync,
             Some(window.window_handle()),
             cx,
@@ -104,7 +106,7 @@ impl LspProvider {
     ) -> Task<Result<lsp_types::CompletionItem>> {
         // Resolving asks nothing of the text, which the caller may be in the
         // middle of changing: nothing is sent first.
-        let Some(doc) = LspStore::context(&self.path, self.input, Freshen::Skip, None, cx) else {
+        let Some(doc) = LspStore::context(&self.path, self.buffer, Freshen::Skip, None, cx) else {
             return Task::ready(Err(anyhow::anyhow!(
                 "language server document is no longer available"
             )));
@@ -140,7 +142,7 @@ impl LspProvider {
         text: &Rope,
         cx: &mut App,
     ) -> Task<Result<()>> {
-        let Some(doc) = LspStore::context(&self.path, self.input, Freshen::Text(text), None, cx)
+        let Some(doc) = LspStore::context(&self.path, self.buffer, Freshen::Text(text), None, cx)
         else {
             return Task::ready(Err(anyhow::anyhow!(
                 "language server document is no longer available"
@@ -493,7 +495,7 @@ impl LspProvider {
             .selection
             .map(|range| range.start)
             .unwrap_or_default();
-        let encoding = LspStore::context(&self.path, self.input, Freshen::Skip, None, cx)
+        let encoding = LspStore::context(&self.path, self.buffer, Freshen::Skip, None, cx)
             .map(|d| d.encoding)
             .unwrap_or_default();
         let app = self.app.clone();

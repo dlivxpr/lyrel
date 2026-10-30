@@ -348,16 +348,18 @@ impl TabNav {
 
 struct OutlineCache {
     language: &'static str,
-    parser: outline::OutlineParser,
-    text: gpui_kit::component::Rope,
+    parser: Option<outline::OutlineParser>,
+    text: Option<gpui_kit::component::Rope>,
     outline: Arc<Outline>,
     at: Instant,
+    task: Option<gpui_kit::Task<()>>,
 }
 
 /// Go to Symbol's preview: where the caret was before the picker started
 /// moving it, put back if the picker is dismissed.
 struct SymbolPreview {
     buffer: BufferId,
+    input: super::document_input::WeakEditorInput,
     origin: Position,
     scroll: gpui_kit::Point<gpui_kit::Pixels>,
 }
@@ -433,7 +435,8 @@ impl LyrelApp {
     /// Where the caret is in the buffer in front, if there is one.
     fn nav_here(&self, cx: &gpui_kit::App) -> Option<Sample> {
         let f = self.active_buffer()?;
-        let state = f.input.read(cx);
+        let input = self.active_editor_input()?;
+        let state = input.read(cx);
         Some(Sample {
             at: NavLocation {
                 host: f.host.id(),
@@ -546,14 +549,8 @@ impl LyrelApp {
                 .or_default()
                 .expect(target.clone(), at);
             self.editor_show_in_tab(tab, id, true, window, cx);
-            if let Some(f) = self.editor.buffers.get(id) {
-                place_cursor(
-                    f.input.clone(),
-                    target.pos,
-                    CURSOR_SCROLL_ATTEMPTS,
-                    window,
-                    cx,
-                );
+            if let Some(input) = self.editor_input_for(id) {
+                place_cursor(input, target.pos, CURSOR_SCROLL_ATTEMPTS, window, cx);
             }
             return true;
         }
@@ -590,9 +587,8 @@ impl LyrelApp {
         cx.notify();
     }
 
-    /// A buffer's outline. `fresh` rebuilds a stale one now; otherwise a text
-    /// that keeps changing is re-outlined at most every [`OUTLINE_THROTTLE`],
-    /// with a redraw scheduled for when it may be.
+    /// Breadcrumbs retain the last outline while native Markdown is parsed off
+    /// the UI thread. Explicit symbol navigation still requests current text.
     fn editor_outline(
         &mut self,
         id: BufferId,
@@ -605,38 +601,94 @@ impl LyrelApp {
         let f = self.editor.buffers.get(id)?;
         let language = f.language();
         let text = f.input.read(cx).text().clone();
+        let native_markdown = f.input.markdown().is_some();
         if !outline::supports(&language) {
             return None;
         }
         if let Some(cache) = self.editor.nav.outlines.get(&id) {
             let current =
-                cache.language == language && cache.text.len() == text.len() && cache.text == text;
+                cache.language == language && cache.text.as_ref().is_some_and(|old| old == &text);
             if current {
                 return Some(cache.outline.clone());
             }
-            if cache.language == language && !fresh && cache.at.elapsed() < OUTLINE_THROTTLE {
+            if cache.language == language
+                && !fresh
+                && (cache.task.is_some() || cache.at.elapsed() < OUTLINE_THROTTLE)
+            {
                 let stale = cache.outline.clone();
-                self.nav_schedule_refresh(cx);
+                if cache.task.is_none() {
+                    self.nav_schedule_refresh(cx);
+                }
                 return Some(stale);
             }
         }
-        let mut parser = self
+        let mut previous = self
             .editor
             .nav
             .outlines
             .remove(&id)
-            .filter(|cache| cache.language == language)
-            .map(|cache| cache.parser)
+            .filter(|cache| cache.language == language);
+        let mut parser = previous
+            .as_mut()
+            .and_then(|cache| cache.parser.take())
             .or_else(|| outline::OutlineParser::new(language))?;
+        if native_markdown && !fresh {
+            let (completed, stale) = previous
+                .map(|cache| (cache.text, cache.outline))
+                .unwrap_or_default();
+            let background = cx.background_executor().spawn(async move {
+                let outline = Arc::new(parser.parse(&text));
+                (parser, text, outline)
+            });
+            let task = cx.spawn(async move |app, cx| {
+                let (parser, text, outline) = background.await;
+                let _ = app.update(cx, |app, cx| {
+                    let current = app.editor.buffers.get(id).is_some_and(|file| {
+                        file.language() == language && file.input.read(cx).text() == &text
+                    });
+                    let Some(cache) = app
+                        .editor
+                        .nav
+                        .outlines
+                        .get_mut(&id)
+                        .filter(|cache| cache.language == language)
+                    else {
+                        return;
+                    };
+                    cache.parser = Some(parser);
+                    cache.task = None;
+                    if current {
+                        cache.text = Some(text);
+                        cache.outline = outline;
+                    }
+                    cx.notify();
+                });
+            });
+            self.editor.nav.outlines.insert(
+                id,
+                OutlineCache {
+                    language,
+                    parser: None,
+                    text: completed,
+                    outline: stale.clone(),
+                    at: Instant::now(),
+                    task: Some(task),
+                },
+            );
+            return Some(stale);
+        }
+        // A fresh request cancels the pending breadcrumb owner before replacing it.
+        drop(previous);
         let outline = Arc::new(parser.parse(&text));
         self.editor.nav.outlines.insert(
             id,
             OutlineCache {
                 language,
-                parser,
-                text,
+                parser: Some(parser),
+                text: Some(text),
                 outline: outline.clone(),
                 at: Instant::now(),
+                task: None,
             },
         );
         Some(outline)
@@ -673,12 +725,9 @@ impl LyrelApp {
             return;
         };
         let id = f.id();
-        let input = f.input.clone();
-        // A symbol is a place in the source; a rendered Markdown file shows
-        // the source to be taken to it.
-        if let Some(f) = self.editor.buffers.get_mut(id) {
-            f.preview = false;
-        }
+        let Some(input) = self.active_editor_input() else {
+            return;
+        };
         let (origin, scroll) = {
             let state = input.read(cx);
             (state.cursor_position(), state.scroll_offset())
@@ -692,6 +741,7 @@ impl LyrelApp {
         self.open_search(SearchTab::Symbols, "", window, cx);
         self.editor.nav.preview = Some(SymbolPreview {
             buffer: id,
+            input: input.downgrade(),
             origin,
             scroll,
         });
@@ -718,18 +768,20 @@ impl LyrelApp {
 
     /// Shows a symbol the picker is on, leaving the keyboard in the picker.
     pub(crate) fn editor_symbol_preview(&mut self, line: u32, column: u32, cx: &mut Context<Self>) {
-        let Some(buffer) = self.editor.nav.preview.as_ref().map(|p| p.buffer) else {
+        let Some(input) = self
+            .editor
+            .nav
+            .preview
+            .as_ref()
+            .and_then(|preview| preview.input.upgrade())
+        else {
             return;
         };
-        let Some(f) = self.editor.buffers.get(buffer) else {
-            return;
-        };
-        f.input.update(cx, |state, cx| {
-            let offset = state
-                .text()
-                .position_to_offset(&Position::new(line, column));
-            state.set_selected_range(offset..offset, cx);
-        });
+        let offset = input
+            .read(cx)
+            .text()
+            .position_to_offset(&Position::new(line, column));
+        input.set_selected_range(offset..offset, cx);
     }
 
     /// Begins a preview in the file in front for a picker someone else
@@ -739,12 +791,16 @@ impl LyrelApp {
         let Some(f) = self.active_buffer() else {
             return;
         };
+        let Some(input) = self.active_editor_input() else {
+            return;
+        };
         let (origin, scroll) = {
-            let state = f.input.read(cx);
+            let state = input.read(cx);
             (state.cursor_position(), state.scroll_offset())
         };
         self.editor.nav.preview = Some(SymbolPreview {
             buffer: f.id(),
+            input: input.downgrade(),
             origin,
             scroll,
         });
@@ -770,13 +826,11 @@ impl LyrelApp {
         let Some(preview) = self.editor.nav.preview.take() else {
             return;
         };
-        let Some(f) = self.editor.buffers.get(preview.buffer) else {
+        let Some(input) = preview.input.upgrade() else {
             return;
         };
-        f.input.update(cx, |state, cx| {
-            state.set_cursor_position(preview.origin, window, cx);
-            state.set_scroll_offset(preview.scroll, cx);
-        });
+        input.set_cursor_position(preview.origin, window, cx);
+        input.set_scroll_offset(preview.scroll, cx);
     }
 
     /// Puts the caret on a 0-based position in the buffer in front.
@@ -788,11 +842,11 @@ impl LyrelApp {
         cx: &mut Context<Self>,
     ) {
         self.editor.nav.preview = None;
-        let Some(f) = self.active_buffer() else {
+        let Some(input) = self.active_editor_input() else {
             return;
         };
         place_cursor(
-            f.input.clone(),
+            input,
             Position::new(line, column),
             CURSOR_SCROLL_ATTEMPTS,
             window,
@@ -882,7 +936,19 @@ impl LyrelApp {
         cx: &mut Context<Self>,
     ) -> Option<AnyElement> {
         let f = self.editor.buffers.get(id)?;
-        let caret = f.input.read(cx).cursor_position();
+        let code = self.tab_code()?;
+        let group = if code.focused_slot() == slot {
+            code.group
+        } else {
+            code.split.as_ref()?.id
+        };
+        let tab = self.tabs.get(self.tabs.active_index())?.id();
+        let input = f
+            .presentations
+            .existing(tab, group)
+            .map(super::EditorInput::Markdown)
+            .unwrap_or_else(|| f.input.clone());
+        let caret = input.read(cx).cursor_position();
         let segments: Vec<String> = if f.untitled.is_some() {
             vec![f.label().to_string()]
         } else {
@@ -897,8 +963,7 @@ impl LyrelApp {
             }
         };
         let file = (f.untitled.is_none()).then(|| f.path.clone());
-        // A rendered Markdown file keeps the path; its symbols are the source's.
-        let supported = !f.preview && f.untitled.is_none() && outline::supports(f.language());
+        let supported = f.untitled.is_none() && outline::supports(f.language());
         let chain: Vec<(SymbolKind, String)> = match supported {
             true => self
                 .editor_outline(id, false, cx)
@@ -1143,7 +1208,7 @@ mod tests {
     fn closed_untitled_buffers_can_be_dropped() {
         let mut h = NavHistory::default();
         let mut untitled = at("", 3);
-        untitled.buffer = Some(gpui_kit::EntityId::from(7u64));
+        untitled.buffer = Some(BufferId::new());
         h.push(untitled);
         h.push(at("a.rs", 0));
         h.retain(|l| l.buffer.is_none());
@@ -1402,6 +1467,7 @@ mod tests {
 
 #[cfg(test)]
 pub(super) mod gpui_tests {
+    use super::super::BufferKind;
     use super::*;
     use crate::ui::app::test_window::harness_with_tabs;
     use crate::ui::editor_text::{EditorConfig, TextFormat};
@@ -1435,6 +1501,7 @@ pub(super) mod gpui_tests {
                 host,
                 path,
                 None,
+                BufferKind::Text,
                 source(),
                 TextFormat::default(),
                 EditorConfig::default(),
@@ -1465,7 +1532,13 @@ pub(super) mod gpui_tests {
 
     pub(crate) fn put_caret(app: &Entity<LyrelApp>, vcx: &mut VisualTestContext, line: u32) {
         app.update_in(vcx, |app, window, cx| {
-            let input = app.active_buffer().unwrap().input.clone();
+            let input = app
+                .active_buffer()
+                .unwrap()
+                .input
+                .code()
+                .expect("ordinary code editor")
+                .clone();
             input.update(cx, |s, cx| {
                 s.set_cursor_position(Position::new(line, 4), window, cx)
             });
@@ -1512,6 +1585,157 @@ pub(super) mod gpui_tests {
                 app.editor.nav.tabs[&tab].history.back.is_empty(),
                 "looking is not jumping"
             );
+        });
+    }
+
+    #[gpui_kit::test]
+    fn markdown_symbol_preview_cancel_restores_only_its_original_group(cx: &mut TestAppContext) {
+        use gpui_kit::test::TestWindowExt as _;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("symbols.md");
+        std::fs::write(&path, "# One\nfirst\n\n# Two\nsecond\n").unwrap();
+        let (app, mut vcx, _streams) = harness_with_tabs(cx, 1);
+        app.update_in(&mut vcx, |app, window, cx| {
+            app.open_file_in_editor(&path, window, cx)
+        });
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while !app.read_with(&vcx, |app, _| app.active_buffer().is_some()) {
+            vcx.run_until_parked();
+            assert!(Instant::now() < deadline, "Markdown open did not settle");
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        vcx.update(|window, cx| window.render_frame(cx));
+        let first = app.update_in(&mut vcx, |app, window, cx| {
+            let input = app.active_editor_input().unwrap();
+            input.set_cursor_position(Position::new(1, 2), window, cx);
+            app.editor_split(window, cx);
+            input
+        });
+        vcx.update(|window, cx| window.render_frame(cx));
+        let second = app.update_in(&mut vcx, |app, window, cx| {
+            let input = app.active_editor_input().unwrap();
+            input.set_cursor_position(Position::new(4, 2), window, cx);
+            app.editor_go_to_symbol(window, cx);
+            input
+        });
+        vcx.run_until_parked();
+        vcx.simulate_keystrokes("up");
+        vcx.run_until_parked();
+        app.update_in(&mut vcx, |app, window, cx| {
+            app.editor_focus_group(true, window, cx);
+            app.close_search(window, cx);
+        });
+        vcx.run_until_parked();
+        app.read_with(&vcx, |app, cx| {
+            assert_eq!(first.read(cx).cursor_position(), Position::new(1, 2));
+            assert_eq!(second.read(cx).cursor_position(), Position::new(4, 2));
+            assert!(!app.active_buffer().unwrap().dirty);
+        });
+    }
+
+    fn open_md(
+        app: &mut LyrelApp,
+        path: &Path,
+        source: &str,
+        window: &mut Window,
+        cx: &mut Context<LyrelApp>,
+    ) -> BufferId {
+        let host = app.active_host(cx).expect("a host");
+        let tab = app.nav_tab().expect("a tab");
+        let id = app.editor_new_buffer(
+            host,
+            path.to_path_buf(),
+            None,
+            BufferKind::Text,
+            source.into(),
+            TextFormat::default(),
+            EditorConfig::default(),
+            crate::ui::editor_text::detect_indent(source, "markdown"),
+            None,
+            window,
+            cx,
+        );
+        app.editor_show_in_tab(tab, id, true, window, cx);
+        id
+    }
+
+    #[gpui_kit::test]
+    fn fresh_markdown_symbols_win_over_a_queued_breadcrumb_snapshot(cx: &mut TestAppContext) {
+        use super::super::markdown::{Command, EditKind};
+        let (app, mut vcx, _streams) = harness_with_tabs(cx, 1);
+        let original = "# Old\nbody\n\n# OldTarget\nbody\n";
+        let current = "# Current\nbody\n\n\n\n# NewTarget\nbody\n";
+        app.update_in(&mut vcx, |app, window, cx| {
+            let id = open_md(app, Path::new("/nav-test/race.md"), original, window, cx);
+            // Capture the old source before yielding to either executor.
+            app.render_editor_breadcrumbs_for(id, 0, true, window, cx);
+            let input = app.active_editor_input().unwrap();
+            input.markdown().unwrap().update(cx, |view, cx| {
+                view.command(
+                    Command::Replace {
+                        range: 0..original.len(),
+                        text: current.into(),
+                        kind: EditKind::Command,
+                    },
+                    window,
+                    cx,
+                );
+            });
+            input.set_cursor_position(Position::new(1, 2), window, cx);
+            app.editor_go_to_symbol(window, cx);
+        });
+        vcx.run_until_parked();
+        vcx.simulate_keystrokes("n e w t a r g e t");
+        assert_eq!(caret(&app, &mut vcx), Position::new(5, 2));
+        vcx.simulate_keystrokes("escape");
+        assert_eq!(caret(&app, &mut vcx), Position::new(1, 2));
+        app.read_with(&vcx, |app, cx| {
+            assert_eq!(
+                app.active_buffer()
+                    .unwrap()
+                    .input
+                    .read(cx)
+                    .text()
+                    .to_string(),
+                current
+            );
+        });
+        // The settled background work must not replace the next explicit query.
+        app.update_in(&mut vcx, |app, window, cx| {
+            app.editor_go_to_symbol(window, cx)
+        });
+        vcx.simulate_keystrokes("n e w t a r g e t enter");
+        assert_eq!(caret(&app, &mut vcx), Position::new(5, 2));
+    }
+
+    #[gpui_kit::test]
+    fn closed_markdown_breadcrumb_work_cannot_retarget_a_same_path_replacement(
+        cx: &mut TestAppContext,
+    ) {
+        let (app, mut vcx, _streams) = harness_with_tabs(cx, 1);
+        let path = Path::new("/nav-test/replaced.md");
+        let replacement = "# Replacement\nbody\n\n\n# Reopened\nbody\n";
+        app.update_in(&mut vcx, |app, window, cx| {
+            let closed = open_md(app, path, "# Departing\nbody\n", window, cx);
+            app.render_editor_breadcrumbs_for(closed, 0, true, window, cx);
+            app.editor_close_file(0, window, cx);
+            open_md(app, path, replacement, window, cx);
+            app.active_editor_input()
+                .unwrap()
+                .set_cursor_position(Position::new(1, 2), window, cx);
+        });
+        vcx.run_until_parked();
+        assert_eq!(caret(&app, &mut vcx), Position::new(1, 2));
+        app.update_in(&mut vcx, |app, window, cx| {
+            app.editor_go_to_symbol(window, cx)
+        });
+        vcx.simulate_keystrokes("r e o p e n e d enter");
+        assert_eq!(caret(&app, &mut vcx), Position::new(4, 2));
+        app.read_with(&vcx, |app, cx| {
+            let file = app.active_buffer().unwrap();
+            assert_eq!(file.path, path);
+            assert_eq!(file.input.read(cx).text().to_string(), replacement);
+            assert!(!file.dirty);
         });
     }
 
@@ -1583,7 +1807,13 @@ pub(super) mod gpui_tests {
         put_caret(&app, &mut vcx, 50);
         // Three lines typed at the top of the file.
         app.update_in(&mut vcx, |app, window, cx| {
-            let input = app.active_buffer().unwrap().input.clone();
+            let input = app
+                .active_buffer()
+                .unwrap()
+                .input
+                .code()
+                .expect("ordinary code editor")
+                .clone();
             input.update(cx, |s, cx| {
                 s.replace_text_in_range(Some(0..0), "//\n//\n//\n", window, cx);
                 // Typing took the caret to the top; back to where it was
@@ -1626,7 +1856,13 @@ pub(super) mod gpui_tests {
             before.replace("fn gamma()", "fn gamma_completed()")
         );
         app.update_in(&mut vcx, |app, window, cx| {
-            let input = app.active_buffer().unwrap().input.clone();
+            let input = app
+                .active_buffer()
+                .unwrap()
+                .input
+                .code()
+                .expect("ordinary code editor")
+                .clone();
             input.update(cx, |state, cx| {
                 state.replace_text_in_range(
                     Some(0..before.encode_utf16().count()),
@@ -1663,7 +1899,13 @@ pub(super) mod gpui_tests {
             before.replace("fn gamma()", "fn gamma_completed()")
         );
         app.update_in(&mut vcx, |app, window, cx| {
-            let input = app.active_buffer().unwrap().input.clone();
+            let input = app
+                .active_buffer()
+                .unwrap()
+                .input
+                .code()
+                .expect("ordinary code editor")
+                .clone();
             input.update(cx, |state, cx| {
                 state.replace_text_in_range(
                     Some(0..before.encode_utf16().count()),

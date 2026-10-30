@@ -318,9 +318,6 @@ impl SettingsWindow {
             L10nKey::SettingsEditorSoftWrap => {
                 self.set_editor_soft_wrap(defaults.editor_soft_wrap, cx)
             }
-            L10nKey::SettingsEditorMarkdownPreview => {
-                self.set_editor_markdown_preview(defaults.editor_markdown_preview, cx)
-            }
             L10nKey::SettingsNotifyOnCommandFinish => {
                 self.set_notify_mode(defaults.notify_on_command_finish, cx)
             }

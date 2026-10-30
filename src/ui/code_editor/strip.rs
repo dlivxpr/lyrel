@@ -580,7 +580,7 @@ mod tests {
     use super::*;
 
     fn ids(n: u64) -> Vec<BufferId> {
-        (1..=n).map(gpui_kit::EntityId::from).collect()
+        (0..n).map(|_| BufferId::new()).collect()
     }
 
     fn code(files: &[BufferId], active: usize) -> TabCode {

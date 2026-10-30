@@ -28,6 +28,7 @@ pub(super) enum BarKind {
 
 pub(super) struct EditorBar {
     kind: BarKind,
+    identity: SaveIdentity,
     input: Entity<InputState>,
     _sub: Subscription,
 }
@@ -107,6 +108,11 @@ impl EditorPanelState {
         self.prompt_epoch = self.prompt_epoch.wrapping_add(1);
         self.unsaved_prompt_open = false;
         self.waiters.clear();
+        for file in self.buffers.iter() {
+            if let Some((_, cancelled)) = &file.asset_location {
+                cancelled.set(true);
+            }
+        }
         self.dismiss_bar();
     }
 
@@ -119,6 +125,9 @@ impl EditorPanelState {
         cx: &mut Context<E>,
         bridge: EditorBridge<E>,
     ) {
+        if let Some(file) = self.buffers.get(id) {
+            file.input.finish_composition(window, cx);
+        }
         let Some(file) = self.buffers.get_mut(id) else {
             return;
         };
@@ -131,20 +140,27 @@ impl EditorPanelState {
             return;
         }
         let text = file.input.read(cx).text().to_string();
-        if let Some(fixed) = editor_text::apply_save_rules(&text, &file.config) {
-            let input = file.input.clone();
-            replace_buffer_text(&input, &fixed, window, cx);
+        if file.input.code().is_some() {
+            if let Some(fixed) = editor_text::apply_save_rules(&text, &file.config) {
+                let input = file.input.clone();
+                replace_buffer_text(&input, &fixed, window, cx);
+            }
         }
         let Some(file) = self.buffers.get_mut(id) else {
             return;
         };
         let text = file.input.read(cx).text().to_string();
-        let text = if text.contains("\r\n") {
+        let text = if file.input.code().is_some() && text.contains("\r\n") {
             text.replace("\r\n", "\n")
         } else {
             text
         };
-        let bytes = match editor_text::encode(&text, &file.format) {
+        let encoded = if let Some(source) = file.input.markdown() {
+            source.read(cx).document().read(cx).encode()
+        } else {
+            editor_text::encode(&text, &file.format(cx))
+        };
+        let bytes = match encoded {
             Ok(bytes) => bytes,
             Err(error) => {
                 self.offer_utf8(id, error.unmappable, window, cx, bridge);
@@ -159,7 +175,8 @@ impl EditorPanelState {
             _ => Some(file.disk_mtime),
         };
         let written = Fingerprint::of_str(&text);
-        let format = file.format;
+        let format = file.format(cx);
+        let representation = file.representation_fingerprint(cx);
         let host = file.host.clone();
         let target = file.path.clone();
         let directory = target.parent().map(Path::to_path_buf);
@@ -190,9 +207,11 @@ impl EditorPanelState {
                 }
                 match outcome {
                     SaveOutcome::Saved(mtime) => {
+                        file.asset_save_required = false;
                         file.disk_mtime = mtime;
                         file.saved = written;
                         file.saved_format = format;
+                        file.saved_representation = representation;
                         file.conflict = None;
                         editor.buffers.note_edit(id, cx);
                         (bridge.event)(
@@ -280,7 +299,7 @@ impl EditorPanelState {
         };
         let file = self.buffers.get(id).unwrap();
         let name = file.label();
-        let encoding = file.format.encoding_label();
+        let encoding = file.format(cx).encoding_label();
         self.saves_failed(id);
         let answer = window.prompt(
             PromptLevel::Warning,
@@ -304,10 +323,13 @@ impl EditorPanelState {
                 }
                 if matches!(choice, Ok(0)) {
                     let file = editor.buffers.get_mut(id).unwrap();
-                    file.format = TextFormat {
-                        line_ending: file.format.line_ending,
-                        ..TextFormat::default()
-                    };
+                    file.set_format(
+                        TextFormat {
+                            line_ending: file.format(cx).line_ending,
+                            ..TextFormat::default()
+                        },
+                        cx,
+                    );
                     editor.save(id, false, Path::new(""), window, cx, bridge);
                 } else {
                     (bridge.event)(view, EditorEvent::Focus, window, cx);
@@ -330,7 +352,12 @@ impl EditorPanelState {
         };
         let file = self.buffers.get(id).unwrap();
         let suggested = if file.untitled.is_some() {
-            PathBuf::from(format!("{}.txt", file.label()))
+            let extension = if file.input.markdown().is_some() {
+                "md"
+            } else {
+                "txt"
+            };
+            PathBuf::from(format!("{}.{extension}", file.label()))
         } else {
             PathBuf::from(file.label().to_string())
         };
@@ -407,12 +434,17 @@ impl EditorPanelState {
             return;
         }
         let file = self.buffers.get_mut(id).unwrap();
+        file.asset_save_required = true;
         file.path = path;
         file.untitled = None;
+        if let Some(view) = file.input.markdown() {
+            view.read(cx).document().clone().update(cx, |document, cx| {
+                document.set_resource_context(file.host.clone(), Some(file.path.clone()), cx);
+            });
+        }
         file.conflict = None;
         let language = file.language();
-        file.input
-            .update(cx, |input, cx| input.set_highlighter(language, cx));
+        file.input.set_highlighter(language, cx);
         self.save(id, true, Path::new(""), window, cx, bridge);
     }
 
@@ -424,6 +456,12 @@ impl EditorPanelState {
         cx: &mut Context<E>,
         bridge: EditorBridge<E>,
     ) {
+        let id = match kind {
+            BarKind::GoToLine { id } | BarKind::SaveAs { id } | BarKind::Rename { id, .. } => id,
+        };
+        let Some(identity) = self.save_identity(id) else {
+            return;
+        };
         self.dismiss_bar();
         let placeholder = match kind {
             BarKind::GoToLine { id } => {
@@ -468,6 +506,7 @@ impl EditorPanelState {
         input.update(cx, |input, cx| input.focus(window, cx));
         self.bar = Some(EditorBar {
             kind,
+            identity,
             input,
             _sub: sub,
         });
@@ -501,6 +540,12 @@ impl EditorPanelState {
         bridge: EditorBridge<E>,
     ) -> Option<EditorEvent> {
         let bar = self.bar.as_ref()?;
+        let identity = bar.identity.clone();
+        if !self.accepts_prompt(&identity) {
+            self.dismiss_bar();
+            return Some(EditorEvent::Focus);
+        }
+        let bar = self.bar.as_ref()?;
         let text = bar.input.read(cx).value().to_string();
         match bar.kind {
             BarKind::GoToLine { id } => {
@@ -518,7 +563,7 @@ impl EditorPanelState {
             }
             BarKind::SaveAs { id } => {
                 let path = PathBuf::from(text.trim());
-                let identity = self.save_identity(id)?;
+                let identity = bar.identity.clone();
                 let host = self.buffers.get(id)?.host.clone();
                 if path.as_os_str().is_empty() || !host.is_absolute(&path) {
                     return None;
@@ -678,6 +723,13 @@ impl EditorPanelState {
     }
 
     pub(super) fn saves_failed(&mut self, id: BufferId) {
+        if let Some((_, cancelled)) = self
+            .buffers
+            .get_mut(id)
+            .and_then(|file| file.asset_location.take())
+        {
+            cancelled.set(true);
+        }
         self.waiters.retain(|waiter| !waiter.ids.contains(&id));
     }
 

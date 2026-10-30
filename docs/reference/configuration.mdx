@@ -94,10 +94,13 @@ description: "lyrel 读取的每个配置键、类型及默认值。"
 | `document_ratio` | number | `0.5` | 停靠列相对于终端列的宽度比例（0.2–0.8）。预设宽度值为 `0.333`、`0.5`、`0.667`。 |
 | `scm_graph_expanded` | bool | `false` | 历史记录区域是否默认展开。 |
 | `editor_soft_wrap` | bool | `false` | 文件在代码面板中打开时是否启用自动换行。与状态栏的“自动换行”开关保持一致，保留上次设置的状态。 |
-| `editor_markdown_preview` | bool | `false` | Markdown 文件打开时是否显示渲染结果而非源码。同样与“预览 / 编辑”开关保持一致。 |
 | `show_tray_icon` | bool | `true` | 托盘 / 菜单栏状态图标。 |
 
 标签导航固定在左侧，窗口六按钮常驻。加载旧配置时精准移除 `tab_bar_position` 和 `auto_hide_titlebar_buttons`，不将整个配置重写为默认值；其他键（含当前版本不识别的键）、主题、字体、opacity、快捷键及工作区文件均保留。侧栏收起状态仍由 `sidebar_collapsed` 控制。
+
+`.md`、`.markdown`、`.mdx` 文件默认使用原生 Markdown 即时编辑；状态栏或 `ToggleDocumentPreview` 可在即时编辑与源码间切换，两种模式共用同一份文档和撤销历史。旧 `editor_markdown_preview` 键已退役，加载时作为未知键忽略，不会触发专门迁移；下次正常保存配置时不再写出。没有替代设置或只读预览偏好。
+
+“新建 Markdown 文档”（`EditorNewMarkdownFile`）显式创建未命名 Markdown 文档，另存为建议使用 `.md`。普通新建文本（包括编辑器中的 `Ctrl+N`）与终端回滚内容导出仍使用普通文本编辑器，不会静默变为 Markdown。外部 HTTP(S) 图片初始不请求，须在当前文档选择“加载外部图片”；详见[隐私与权限](/reference/privacy#what-leaves-your-machine)。
 
 <a id="terminal"></a>
 ## 终端
