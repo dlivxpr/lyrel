@@ -733,6 +733,72 @@ fn sparse_replacements_preserve_between_match_bytes_and_undo_as_one_command() {
 }
 
 #[gpui_kit::test]
+fn native_prose_delete_does_not_merge_table_cells(cx: &mut gpui_kit::TestAppContext) {
+    use crate::ui::app::test_window::harness_with_tabs;
+    use gpui_kit::{Focusable as _, test::TestWindowExt as _};
+    for (source, at, key) in [
+        ("| a |\n| --- |\n| b |\n\nX", 21, "backspace"),
+        ("X\n\n| a |\n| --- |", 1, "delete"),
+    ] {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("table-boundary.md");
+        std::fs::write(&path, source).unwrap();
+        let (app, mut context, _streams) = harness_with_tabs(cx, 1);
+        app.update_in(&mut context, |app, window, cx| app.open_file_in_editor(&path, window, cx));
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        let view = loop {
+            context.run_until_parked();
+            if let Some(view) = app.read_with(&context, |app, _| app.active_editor_input().and_then(|input| input.markdown().cloned())) {
+                start_in_source(&view, &mut context);
+                break view;
+            }
+            assert!(std::time::Instant::now() < deadline);
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        };
+        context.dispatch_action(crate::core::actions::ToggleDocumentPreview);
+        settle_live_geometry(&view, &mut context);
+        view.update_in(&mut context, |view, window, cx| {
+            view.select_range(at..at, cx);
+            view.focus_handle(cx).focus(window, cx);
+        });
+        context.update(|window, cx| window.press(key, cx));
+        view.read_with(&context, |view, cx| {
+            assert_eq!(view.document().read(cx).encode().unwrap(), source.as_bytes());
+            assert_eq!(view.selection().range(), at..at);
+        });
+    }
+}
+
+#[gpui_kit::test]
+fn native_mdx_table_renders_each_embedded_control_once(cx: &mut gpui_kit::TestAppContext) {
+    use crate::ui::app::test_window::harness_with_tabs;
+    use gpui_kit::test::{TestQueryExt as _, TestWindowExt as _};
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("table-components.mdx");
+    let source = "| first | second |\n| --- | --- |\n| <Card title='A' /> | ordinary |\n| ordinary | <Card title='B' /> |";
+    std::fs::write(&path, source).unwrap();
+    let (app, mut context, _streams) = harness_with_tabs(cx, 1);
+    app.update_in(&mut context, |app, window, cx| app.open_file_in_editor(&path, window, cx));
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    let view = loop {
+        context.run_until_parked();
+        if let Some(view) = app.read_with(&context, |app, _| app.active_editor_input().and_then(|input| input.markdown().cloned())) {
+            start_in_source(&view, &mut context);
+            break view;
+        }
+        assert!(std::time::Instant::now() < deadline);
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    };
+    context.dispatch_action(crate::core::actions::ToggleDocumentPreview);
+    settle_live_geometry(&view, &mut context);
+    context.update(|window, cx| {
+        window.render_frame(cx);
+        assert_eq!(window.find_all_by_label("Edit card component name").len(), 2);
+    });
+    view.read_with(&context, |view, cx| assert_eq!(view.document().read(cx).encode().unwrap(), source.as_bytes()));
+}
+
+#[gpui_kit::test]
 fn native_code_regions_keep_line_breaks_fences_and_shared_history(
     cx: &mut gpui_kit::TestAppContext,
 ) {
