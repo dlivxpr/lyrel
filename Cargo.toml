@@ -75,7 +75,7 @@ serde = { workspace = true }
 serde_json.workspace = true
 tempfile = "3"
 # Browser session import stays desktop-local; database recovery runs in memory.
-rusqlite = { version = "0.40.2", features = ["bundled"] }
+rusqlite = { version = "0.41.0", features = ["bundled"] }
 rusty-leveldb = "4.0.2"
 snap = "1"
 fs2 = "0.4"
