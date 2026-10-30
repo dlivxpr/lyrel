@@ -6838,6 +6838,148 @@ fn native_long_document_scroll_return_reflow_and_pending_parse_keep_selection_an
     });
 }
 
+#[gpui_kit::test]
+fn native_theme_change_preserves_scrolled_reading_anchor_and_offscreen_selection(
+    cx: &mut gpui_kit::TestAppContext,
+) {
+    use crate::ui::app::test_window::harness_with_tabs;
+    use gpui_kit::{Focusable as _, px};
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("reading-anchor.mdx");
+    let source = (0..120)
+        .map(|ix| {
+            let resources = if ix % 12 == 1 {
+                "$x_i^2+\\sqrt{y}$\n\n```mermaid\nflowchart LR\nA[开始] --> B[结束]\n```\n\n"
+            } else {
+                ""
+            };
+            format!(
+                "## Section-{ix:03}\n\n{}\n\n- first **item**\n- second `item`\n\n{resources}",
+                "锚点正文：中文阅读位置，e\u{301} 与 👩‍💻。这里是需要随窗口宽度换行的连续正文，用于检查字体变化后的光标和阅读锚点。".repeat(5)
+            )
+        })
+        .collect::<String>();
+    std::fs::write(&path, &source).unwrap();
+    let (app, mut context, _streams) = harness_with_tabs(cx, 1);
+    context.simulate_resize(gpui_kit::size(px(1008.), px(901.)));
+    context.update(|window, cx| {
+        cx.set_global(super::super::MarkdownWorkbench);
+        let config = cx.global_mut::<crate::core::config::Config>();
+        config.theme_follow_system = false;
+        config.theme_preset = "light".into();
+        crate::ui::theme::apply_theme(Some(window), cx);
+    });
+    app.update_in(&mut context, |app, window, cx| {
+        app.open_file_in_editor(&path, window, cx)
+    });
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
+    let view = loop {
+        context.run_until_parked();
+        if let Some(view) = app.read_with(&context, |app, _| {
+            app.active_editor_input()
+                .and_then(|input| input.markdown().cloned())
+        }) {
+            break view;
+        }
+        assert!(std::time::Instant::now() < deadline);
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    };
+    context.dispatch_action(crate::core::actions::ToggleDocumentPreview);
+    settle_live_geometry(&view, &mut context);
+    for (section, scroll) in [("Section-060", -1800.), ("Section-100", -100_000.)] {
+        let caret = source.find(section).unwrap();
+        view.update_in(&mut context, |view, window, cx| {
+            view.select_range(caret..caret, cx);
+            view.focus_handle(cx).focus(window, cx);
+        });
+        for _ in 0..8 {
+            context.update(|window, cx| window.render_frame(cx));
+            context.run_until_parked();
+        }
+        context.update(|window, cx| {
+            window.scroll(
+                "markdown-source",
+                gpui_kit::ScrollDelta::Pixels(gpui_kit::point(px(0.), px(scroll))),
+                cx,
+            );
+        });
+        for _ in 0..8 {
+            context.update(|window, cx| window.render_frame(cx));
+            context.run_until_parked();
+        }
+        let (anchor, before) = context.update(|window, cx| {
+            let viewport = window.find("markdown-source").bounds();
+            source
+                .match_indices("Section-")
+                .find_map(|(at, _)| {
+                    let bounds = view.read(cx).range_to_bounds(&(at..at), cx)?;
+                    (bounds.top() >= viewport.top() && bounds.bottom() < viewport.bottom())
+                        .then_some((at, bounds.top()))
+                })
+                .expect("a scrolled section heading is visible")
+        });
+        assert!(
+            anchor > caret,
+            "the reading position has left the caret behind"
+        );
+        context.update(|window, cx| {
+            cx.global_mut::<crate::core::config::Config>().theme_preset = "dark".into();
+            crate::ui::theme::apply_theme(Some(window), cx);
+        });
+        for _ in 0..8 {
+            context.update(|window, cx| window.render_frame(cx));
+            context.run_until_parked();
+        }
+        view.read_with(&context, |view, cx| {
+            let after = view
+                .range_to_bounds(&(anchor..anchor), cx)
+                .expect("the same reading anchor remains laid out")
+                .top();
+            assert!(
+                (after - before).abs() <= px(1.),
+                "theme-only change moved the reading anchor: {before:?} -> {after:?}"
+            );
+            assert_eq!(view.selection(), Selection::caret(caret));
+            assert_eq!(
+                view.document().read(cx).encode().unwrap(),
+                source.as_bytes()
+            );
+        });
+        for font_size in [12., 18., 16.] {
+            context.update(|_window, cx| {
+                cx.global_mut::<crate::core::config::Config>().ui_font_size = font_size;
+                gpui_kit::component::Theme::update(cx, |theme| theme.font_size = px(font_size));
+            });
+            for _ in 0..8 {
+                context.update(|window, cx| window.render_frame(cx));
+                context.run_until_parked();
+            }
+            context.update(|window, cx| {
+                let viewport = window.find("markdown-source").bounds();
+                let view = view.read(cx);
+                let bounds = view
+                    .range_to_bounds(&(anchor..anchor), cx)
+                    .expect("font reflow must materialize the original reading anchor");
+                assert!(
+                    bounds.bottom() >= viewport.top() && bounds.top() < viewport.bottom(),
+                    "font {font_size} reflow lost the reading position: {bounds:?}, viewport={viewport:?}"
+                );
+                if font_size >= 16. {
+                    assert!(
+                        (bounds.top() - before).abs() <= window.rem_size(),
+                        "font {font_size} moved {section} reading anchor: {before:?} -> {bounds:?}"
+                    );
+                }
+                assert_eq!(view.selection(), Selection::caret(caret));
+                assert_eq!(
+                    view.document().read(cx).encode().unwrap(),
+                    source.as_bytes()
+                );
+            });
+        }
+    }
+}
+
 #[test]
 fn wide_single_line_transactions_keep_chunk_crossing_graphemes_atomic() {
     let prefix = "wide ".repeat(20_000);

@@ -138,11 +138,26 @@ impl SourcePresentation {
             document.read(cx).revision(),
             document.read(cx).grammar(),
         );
-        let mermaid_theme = cx.observe_global::<gpui_kit::component::Theme>(|this, cx| {
+        let mut typography = (
+            cx.theme().font_family.clone(),
+            cx.theme().mono_font_family.clone(),
+            cx.theme().font_size,
+            cx.theme().mono_font_size,
+        );
+        let mermaid_theme = cx.observe_global::<gpui_kit::component::Theme>(move |this, cx| {
             this.schedule_mermaid(cx);
             cx.notify();
             this.invalidate_layout(cx);
-            this.viewport.layout = None;
+            let current = (
+                cx.theme().font_family.clone(),
+                cx.theme().mono_font_family.clone(),
+                cx.theme().font_size,
+                cx.theme().mono_font_size,
+            );
+            if current != typography {
+                typography = current;
+                this.viewport.layout = None;
+            }
         });
         Self {
             document,
@@ -1971,6 +1986,12 @@ impl Render for SourcePresentation {
         let top = -self.scroll.offset().y;
         let mut visible = None;
         let mut caret_row = None;
+        let reading_anchor = self
+            .viewport
+            .anchor
+            .filter(|_| !self.reveal_caret && self.scroll.offset() == self.viewport.offset)
+            .map(|(id, _)| id);
+        let mut anchor_row = None;
         let component_source = self.document.read(cx).source().clone();
         while ix < self.projection.leaves.len() {
             let leaf = &self.projection.leaves[ix];
@@ -2030,10 +2051,25 @@ impl Render for SourcePresentation {
             {
                 caret_row = Some((ix..end, y, height));
             }
+            if reading_anchor == Some(leaf.id) {
+                anchor_row = Some((ix..end, y, height));
+            }
             y += height;
             ix = end;
         }
         let mut visible = visible.unwrap_or(0..0);
+        if let Some((range, y, height)) = anchor_row {
+            if range.start < visible.start || range.end > visible.end {
+                // Remeasuring can move the old anchor outside the estimated
+                // viewport. Materialize it before prepaint corrects its position.
+                let offset = point(self.scroll.offset().x, -y);
+                self.scroll.set_offset(offset);
+                self.viewport.offset = offset;
+                visible = range;
+                before = y;
+                through = y + height;
+            }
+        }
         if self.reveal_caret {
             if let Some((range, y, height)) = caret_row {
                 if range.start < visible.start || range.end > visible.end {
@@ -2862,6 +2898,7 @@ impl Render for SourcePresentation {
             revision,
             color: cx.theme().selection,
             caret: cx.theme().caret,
+            preserve_reading_anchor: reading_anchor.is_some(),
         }
     }
 }
@@ -2929,6 +2966,7 @@ struct SourceElement {
     revision: u64,
     color: Hsla,
     caret: Hsla,
+    preserve_reading_anchor: bool,
 }
 impl IntoElement for SourceElement {
     type Element = Self;
@@ -3025,27 +3063,42 @@ impl Element for SourceElement {
             // Anchor a source leaf, not a document-wide pixel offset. Only
             // compensate layout changes, never an explicit user scroll.
             let offset = view.scroll.offset();
-            if offset == view.viewport.offset && !view.reveal_caret {
+            let mut preserve_anchor = false;
+            if self.preserve_reading_anchor && !view.reveal_caret {
                 if let Some((id, y)) = view.viewport.anchor {
                     if let Some((_, _, row)) =
                         view.viewport.frame.iter().find(|(key, _, _)| *key == id)
                     {
                         let delta = y - row.top();
-                        if delta.abs() > px(0.5) {
-                            view.scroll
-                                .set_offset(point(offset.x, (offset.y + delta).min(Pixels::ZERO)));
+                        // Keep a pending correction, but once it settles anchor
+                        // the top visible row instead of an overscan-only row.
+                        preserve_anchor = delta.abs() > px(0.5);
+                        let next_y =
+                            (offset.y + delta).clamp(-view.scroll.max_offset().y, Pixels::ZERO);
+                        if (next_y - offset.y).abs() > px(0.5) {
+                            view.scroll.set_offset(point(offset.x, next_y));
                             measured = true;
                         }
                     }
                 }
             }
-            view.viewport.anchor = view
-                .viewport
-                .frame
-                .iter()
-                .find(|(_, _, row)| row.bottom() > viewport.top())
-                .map(|(id, _, row)| (*id, row.top()));
-            view.viewport.offset = offset;
+            if !preserve_anchor {
+                view.viewport.anchor = view
+                    .viewport
+                    .frame
+                    .iter()
+                    .find(|(_, _, row)| {
+                        row.top() >= viewport.top() && row.top() < viewport.bottom()
+                    })
+                    .or_else(|| {
+                        view.viewport
+                            .frame
+                            .iter()
+                            .find(|(_, _, row)| row.bottom() > viewport.top())
+                    })
+                    .map(|(id, _, row)| (*id, row.top()));
+            }
+            view.viewport.offset = view.scroll.offset();
             if reflow {
                 view.invalidate_layout(cx);
             }
@@ -3108,6 +3161,11 @@ impl Element for SourceElement {
                         }
                     }
                 }
+            }
+            if view.scroll.offset() != offset {
+                // This frame was measured before the scroll correction. Async
+                // resources must not infer caret visibility from stale bounds.
+                view.geometry = None;
             }
         });
     }
