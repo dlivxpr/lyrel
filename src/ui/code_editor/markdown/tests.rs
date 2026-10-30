@@ -7959,7 +7959,7 @@ fn native_table_inline_disclosures_hide_content_without_losing_source(
     };
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("inline-disclosures.mdx");
-    let original = "| content |\n| --- |\n| <Tabs><Tab title='A'>alpha</Tab><Tab title='B'>bravo</Tab></Tabs> |\n| <Accordion title='Details'>secret</Accordion> |";
+    let original = "| content |\n| --- |\n| <Tabs><Tab title='A'>alpha</Tab><Tab title='B'>bravo</Tab><Tab title='C'></Tab></Tabs> |\n| <Accordion title='Details'>secret</Accordion> |";
     std::fs::write(&path, original).unwrap();
     let (app, mut context, _streams) = harness_with_tabs(cx, 1);
     app.update_in(&mut context, |app, window, cx| {
@@ -8021,6 +8021,24 @@ fn native_table_inline_disclosures_hide_content_without_losing_source(
             original.as_bytes()
         );
     });
+    context.update(|window, cx| {
+        let choice = window.find_all("mdx-tabs-choice").into_iter()
+            .find(|target| target.label() == Some("C")).unwrap().bounds().center();
+        window.pointer_down(choice, gpui_kit::MouseButton::Left, cx);
+        window.pointer_up(choice, gpui_kit::MouseButton::Left, cx);
+        window.input("empty child", cx);
+    });
+    view.read_with(&context, |view, cx| {
+        assert_eq!(
+            view.document().read(cx).encode().unwrap(),
+            original.replacen("title='C'>", "title='C'>empty child", 1).as_bytes()
+        );
+    });
+    context.dispatch_action(gpui_kit::component::input::Undo);
+    view.read_with(&context, |view, cx| {
+        assert_eq!(view.document().read(cx).encode().unwrap(), original.as_bytes());
+    });
+    settle_live_geometry(&view, &mut context);
     context.update(|window, cx| {
         let choice = window.find_all("mdx-tabs-choice").into_iter()
             .find(|target| target.label() == Some("B")).unwrap().bounds().center();
