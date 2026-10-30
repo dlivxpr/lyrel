@@ -1036,13 +1036,15 @@ impl Projection {
                 newer.mdx = std::mem::take(&mut self.mdx);
             }
         }
-        let old_by_start: std::collections::HashMap<_, _> = self
+        let mut old_by_start: std::collections::HashMap<_, _> = self
             .leaves
             .iter()
-            .map(|leaf| (leaf.range.start, leaf))
+            .map(|leaf| ((leaf.range.start, leaf.range.is_empty()), leaf))
             .collect();
         for leaf in &mut newer.leaves {
-            let old = old_by_start.get(&leaf.range.start).copied();
+            // A JSX children insertion boundary can share its start with the
+            // first content leaf, but never its native render/input identity.
+            let old = old_by_start.remove(&(leaf.range.start, leaf.range.is_empty()));
             leaf.id = old.map_or_else(
                 || {
                     let id = self.next_id;

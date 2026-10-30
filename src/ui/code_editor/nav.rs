@@ -348,10 +348,11 @@ impl TabNav {
 
 struct OutlineCache {
     language: &'static str,
-    parser: outline::OutlineParser,
-    text: gpui_kit::component::Rope,
+    parser: Option<outline::OutlineParser>,
+    text: Option<gpui_kit::component::Rope>,
     outline: Arc<Outline>,
     at: Instant,
+    task: Option<gpui_kit::Task<()>>,
 }
 
 /// Go to Symbol's preview: where the caret was before the picker started
@@ -586,9 +587,8 @@ impl LyrelApp {
         cx.notify();
     }
 
-    /// A buffer's outline. `fresh` rebuilds a stale one now; otherwise a text
-    /// that keeps changing is re-outlined at most every [`OUTLINE_THROTTLE`],
-    /// with a redraw scheduled for when it may be.
+    /// Breadcrumbs retain the last outline while native Markdown is parsed off
+    /// the UI thread. Explicit symbol navigation still requests current text.
     fn editor_outline(
         &mut self,
         id: BufferId,
@@ -601,38 +601,94 @@ impl LyrelApp {
         let f = self.editor.buffers.get(id)?;
         let language = f.language();
         let text = f.input.read(cx).text().clone();
+        let native_markdown = f.input.markdown().is_some();
         if !outline::supports(&language) {
             return None;
         }
         if let Some(cache) = self.editor.nav.outlines.get(&id) {
             let current =
-                cache.language == language && cache.text.len() == text.len() && cache.text == text;
+                cache.language == language && cache.text.as_ref().is_some_and(|old| old == &text);
             if current {
                 return Some(cache.outline.clone());
             }
-            if cache.language == language && !fresh && cache.at.elapsed() < OUTLINE_THROTTLE {
+            if cache.language == language
+                && !fresh
+                && (cache.task.is_some() || cache.at.elapsed() < OUTLINE_THROTTLE)
+            {
                 let stale = cache.outline.clone();
-                self.nav_schedule_refresh(cx);
+                if cache.task.is_none() {
+                    self.nav_schedule_refresh(cx);
+                }
                 return Some(stale);
             }
         }
-        let mut parser = self
+        let mut previous = self
             .editor
             .nav
             .outlines
             .remove(&id)
-            .filter(|cache| cache.language == language)
-            .map(|cache| cache.parser)
+            .filter(|cache| cache.language == language);
+        let mut parser = previous
+            .as_mut()
+            .and_then(|cache| cache.parser.take())
             .or_else(|| outline::OutlineParser::new(language))?;
+        if native_markdown && !fresh {
+            let (completed, stale) = previous
+                .map(|cache| (cache.text, cache.outline))
+                .unwrap_or_default();
+            let background = cx.background_executor().spawn(async move {
+                let outline = Arc::new(parser.parse(&text));
+                (parser, text, outline)
+            });
+            let task = cx.spawn(async move |app, cx| {
+                let (parser, text, outline) = background.await;
+                let _ = app.update(cx, |app, cx| {
+                    let current = app.editor.buffers.get(id).is_some_and(|file| {
+                        file.language() == language && file.input.read(cx).text() == &text
+                    });
+                    let Some(cache) = app
+                        .editor
+                        .nav
+                        .outlines
+                        .get_mut(&id)
+                        .filter(|cache| cache.language == language)
+                    else {
+                        return;
+                    };
+                    cache.parser = Some(parser);
+                    cache.task = None;
+                    if current {
+                        cache.text = Some(text);
+                        cache.outline = outline;
+                    }
+                    cx.notify();
+                });
+            });
+            self.editor.nav.outlines.insert(
+                id,
+                OutlineCache {
+                    language,
+                    parser: None,
+                    text: completed,
+                    outline: stale.clone(),
+                    at: Instant::now(),
+                    task: Some(task),
+                },
+            );
+            return Some(stale);
+        }
+        // A fresh request cancels the pending breadcrumb owner before replacing it.
+        drop(previous);
         let outline = Arc::new(parser.parse(&text));
         self.editor.nav.outlines.insert(
             id,
             OutlineCache {
                 language,
-                parser,
-                text,
+                parser: Some(parser),
+                text: Some(text),
                 outline: outline.clone(),
                 at: Instant::now(),
+                task: None,
             },
         );
         Some(outline)
@@ -1568,6 +1624,113 @@ pub(super) mod gpui_tests {
             assert_eq!(first.read(cx).cursor_position(), Position::new(1, 2));
             assert_eq!(second.read(cx).cursor_position(), Position::new(4, 2));
             assert!(!app.active_buffer().unwrap().dirty);
+        });
+    }
+
+    fn open_md(
+        app: &mut LyrelApp,
+        path: &Path,
+        source: &str,
+        window: &mut Window,
+        cx: &mut Context<LyrelApp>,
+    ) -> BufferId {
+        let host = app.active_host(cx).expect("a host");
+        let tab = app.nav_tab().expect("a tab");
+        let id = app.editor_new_buffer(
+            host,
+            path.to_path_buf(),
+            None,
+            source.into(),
+            TextFormat::default(),
+            EditorConfig::default(),
+            crate::ui::editor_text::detect_indent(source, "markdown"),
+            None,
+            window,
+            cx,
+        );
+        app.editor_show_in_tab(tab, id, true, window, cx);
+        id
+    }
+
+    #[gpui_kit::test]
+    fn fresh_markdown_symbols_win_over_a_queued_breadcrumb_snapshot(cx: &mut TestAppContext) {
+        use super::super::markdown::{Command, EditKind};
+        let (app, mut vcx, _streams) = harness_with_tabs(cx, 1);
+        vcx.update(|_, cx| cx.set_global(MarkdownWorkbench));
+        let original = "# Old\nbody\n\n# OldTarget\nbody\n";
+        let current = "# Current\nbody\n\n\n\n# NewTarget\nbody\n";
+        app.update_in(&mut vcx, |app, window, cx| {
+            let id = open_md(app, Path::new("/nav-test/race.md"), original, window, cx);
+            // Capture the old source before yielding to either executor.
+            app.render_editor_breadcrumbs_for(id, 0, true, window, cx);
+            let input = app.active_editor_input().unwrap();
+            input.markdown().unwrap().update(cx, |view, cx| {
+                view.command(
+                    Command::Replace {
+                        range: 0..original.len(),
+                        text: current.into(),
+                        kind: EditKind::Command,
+                    },
+                    window,
+                    cx,
+                );
+            });
+            input.set_cursor_position(Position::new(1, 2), window, cx);
+            app.editor_go_to_symbol(window, cx);
+        });
+        vcx.run_until_parked();
+        vcx.simulate_keystrokes("n e w t a r g e t");
+        assert_eq!(caret(&app, &mut vcx), Position::new(5, 2));
+        vcx.simulate_keystrokes("escape");
+        assert_eq!(caret(&app, &mut vcx), Position::new(1, 2));
+        app.read_with(&vcx, |app, cx| {
+            assert_eq!(
+                app.active_buffer()
+                    .unwrap()
+                    .input
+                    .read(cx)
+                    .text()
+                    .to_string(),
+                current
+            );
+        });
+        // The settled background work must not replace the next explicit query.
+        app.update_in(&mut vcx, |app, window, cx| {
+            app.editor_go_to_symbol(window, cx)
+        });
+        vcx.simulate_keystrokes("n e w t a r g e t enter");
+        assert_eq!(caret(&app, &mut vcx), Position::new(5, 2));
+    }
+
+    #[gpui_kit::test]
+    fn closed_markdown_breadcrumb_work_cannot_retarget_a_same_path_replacement(
+        cx: &mut TestAppContext,
+    ) {
+        let (app, mut vcx, _streams) = harness_with_tabs(cx, 1);
+        vcx.update(|_, cx| cx.set_global(MarkdownWorkbench));
+        let path = Path::new("/nav-test/replaced.md");
+        let replacement = "# Replacement\nbody\n\n\n# Reopened\nbody\n";
+        app.update_in(&mut vcx, |app, window, cx| {
+            let closed = open_md(app, path, "# Departing\nbody\n", window, cx);
+            app.render_editor_breadcrumbs_for(closed, 0, true, window, cx);
+            app.editor_close_file(0, window, cx);
+            open_md(app, path, replacement, window, cx);
+            app.active_editor_input()
+                .unwrap()
+                .set_cursor_position(Position::new(1, 2), window, cx);
+        });
+        vcx.run_until_parked();
+        assert_eq!(caret(&app, &mut vcx), Position::new(1, 2));
+        app.update_in(&mut vcx, |app, window, cx| {
+            app.editor_go_to_symbol(window, cx)
+        });
+        vcx.simulate_keystrokes("r e o p e n e d enter");
+        assert_eq!(caret(&app, &mut vcx), Position::new(4, 2));
+        app.read_with(&vcx, |app, cx| {
+            let file = app.active_buffer().unwrap();
+            assert_eq!(file.path, path);
+            assert_eq!(file.input.read(cx).text().to_string(), replacement);
+            assert!(!file.dirty);
         });
     }
 

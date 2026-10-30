@@ -8115,3 +8115,46 @@ fn native_empty_quote_line_exits_one_level_and_undo_restores_source(
         assert_eq!(view.selection(), Selection::caret(at));
     });
 }
+
+#[test]
+fn installed_mdx_children_boundary_never_aliases_its_inline_content() {
+    use super::projection::Projection;
+    use std::collections::HashSet;
+
+    let original = "<Tabs>\n<Tab title='One'>标签正文。</Tab>\n</Tabs>\n\n<Steps>\n<Step title='Step'>步骤正文。</Step>\n</Steps>\n";
+    let mut projection = Projection::parse(original, 0, false, super::mdx::Grammar::Mdx);
+    for (revision, source) in [
+        (0, original.to_owned()),
+        (1, original.replace("标签", "输入标签")),
+    ] {
+        projection.install(Projection::parse(
+            &source,
+            revision,
+            true,
+            super::mdx::Grammar::Mdx,
+        ));
+        let mut identities = HashSet::new();
+        for leaf in &projection.leaves {
+            assert!(
+                identities.insert(leaf.id),
+                "each native block needs its own render/input identity"
+            );
+        }
+        for text in ["标签正文。", "步骤正文。"] {
+            let at = source.find(text).unwrap();
+            let content = projection
+                .leaves
+                .iter()
+                .find(|leaf| leaf.range.contains(&at) && !leaf.range.is_empty())
+                .unwrap();
+            let boundary = projection
+                .leaves
+                .iter()
+                .find(|leaf| leaf.range.start == content.range.start && leaf.range.is_empty())
+                .unwrap();
+            assert_ne!(content.id, boundary.id);
+            assert_eq!(boundary.text, "");
+            assert!(content.text.ends_with(text));
+        }
+    }
+}
