@@ -1,3 +1,4 @@
+use crate::ui::i18n::L10nKey;
 use gpui_kit::TestSupportExt as _;
 use gpui_kit::base::text::editor_host::InlineNode;
 use gpui_kit::base::text::{

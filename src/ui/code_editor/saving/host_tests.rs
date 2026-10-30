@@ -132,12 +132,14 @@ fn cross_extension_reload_scenario(cx: &mut TestAppContext, markdown: bool) {
         assert_eq!(input.markdown().is_some(), markdown);
         assert_eq!(
             input.read(cx).text().to_string(),
-            if markdown {
-                "external\r\nsecond\nthird\r\nfourth"
-            } else {
-                "external\nsecond\nthird\nfourth"
-            }
+            "external\nsecond\nthird\nfourth"
         );
+        if let Some(view) = input.markdown() {
+            assert_eq!(
+                view.read(cx).document().read(cx).encode().unwrap(),
+                b"external\r\nsecond\nthird\r\nfourth"
+            );
+        }
     });
     vcx.update(|window, cx| {
         window.render_frame(cx);
