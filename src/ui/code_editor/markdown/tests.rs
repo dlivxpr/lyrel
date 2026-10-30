@@ -8010,7 +8010,17 @@ fn native_table_inline_disclosures_hide_content_without_losing_source(cx: &mut g
     context.dispatch_action(gpui_kit::component::input::Undo);
     view.read_with(&context, |view, cx| assert_eq!(view.document().read(cx).encode().unwrap(), original.as_bytes()));
     context.dispatch_action(gpui_kit::component::input::Redo);
-    settle_live_geometry(&view, &mut context);
+    let source_deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    loop {
+        context.executor().advance_clock(std::time::Duration::from_millis(100));
+        context.run_until_parked();
+        context.update(|window, cx| window.render_frame(cx));
+        if view.read_with(&context, |view, cx| {
+            !view.is_live() && view.range_to_bounds(&(alpha..alpha), cx).is_some()
+        }) { break; }
+        assert!(std::time::Instant::now() < source_deadline, "source geometry after toggle/undo/redo did not settle");
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
     view.read_with(&context, |view, cx| {
         assert!(!view.is_live());
         assert!(width(view, alpha, cx) > gpui_kit::px(0.));
