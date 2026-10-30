@@ -7955,7 +7955,6 @@ fn native_table_inline_disclosures_hide_content_without_losing_source(
 ) {
     use crate::ui::app::test_window::harness_with_tabs;
     use gpui_kit::{
-        Focusable as _,
         test::{TestEventExt as _, TestQueryExt as _, TestWindowExt as _},
     };
     let directory = tempfile::tempdir().unwrap();
@@ -8022,12 +8021,17 @@ fn native_table_inline_disclosures_hide_content_without_losing_source(
             original.as_bytes()
         );
     });
-    view.update_in(&mut context, |view, window, cx| {
-        view.select_range(bravo..bravo + 5, cx);
-        view.focus_handle(cx).focus(window, cx);
+    context.update(|window, cx| {
+        let choice = window.find_all("mdx-tabs-choice").into_iter()
+            .find(|target| target.label() == Some("B")).unwrap().bounds().center();
+        window.pointer_down(choice, gpui_kit::MouseButton::Left, cx);
+        window.pointer_up(choice, gpui_kit::MouseButton::Left, cx);
+        window.input("edited", cx);
     });
-    context.update(|window, cx| window.input("edited", cx));
-    let edited = original.replacen("bravo", "edited", 1);
+    let edited = original.replacen("bravo", "editedbravo", 1);
+    view.read_with(&context, |view, cx| {
+        assert_eq!(view.document().read(cx).encode().unwrap(), edited.as_bytes());
+    });
     context.dispatch_action(crate::core::actions::ToggleDocumentPreview);
     context.dispatch_action(gpui_kit::component::input::Undo);
     view.read_with(&context, |view, cx| {
