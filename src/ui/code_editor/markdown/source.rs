@@ -1,5 +1,6 @@
 use super::projection::{Kind, Projection};
 use super::*;
+use crate::ui::i18n::{L10nKey, t};
 use gpui_kit::TestSupportExt as _;
 use gpui_kit::base::StyledExt as _;
 use gpui_kit::base::text::editor_host::{
