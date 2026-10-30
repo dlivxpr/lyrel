@@ -74,7 +74,21 @@ fn a_debounce_batch_invalidates_every_host_without_dropping_events(cx: &mut Test
                 .unwrap();
         }
     });
-    pump(&mut vcx, Duration::from_millis(100));
+    // Native macOS tests use a real 200ms debounce; advancing the test clock
+    // does not shorten that timer. Wait for the transition, not 100ms of wall
+    // time which only happened to suffice with Windows' virtual clock.
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        pump(&mut vcx, Duration::from_millis(50));
+        let invalidated = app.update_in(&mut vcx, |app, _, _| {
+            [local, remote]
+                .into_iter()
+                .all(|host| app.file_tree.stale.contains(&(host, dir.clone())))
+        });
+        if invalidated || Instant::now() >= deadline {
+            break;
+        }
+    }
     app.update_in(&mut vcx, |app, _, _| {
         assert!(app.file_tree.stale.contains(&(local, dir.clone())));
         assert!(
