@@ -7950,6 +7950,81 @@ fn native_accordions_preserve_hidden_children_focus_history_and_host_save(
 }
 
 #[gpui_kit::test]
+fn native_table_inline_disclosures_hide_content_without_losing_source(cx: &mut gpui_kit::TestAppContext) {
+    use crate::ui::app::test_window::harness_with_tabs;
+    use gpui_kit::{Focusable as _, test::{TestEventExt as _, TestWindowExt as _, TestQueryExt as _}};
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("inline-disclosures.mdx");
+    let original = "| content |\n| --- |\n| <Tabs><Tab title='A'>alpha</Tab><Tab title='B'>bravo</Tab></Tabs> |\n| <Accordion title='Details'>secret</Accordion> |";
+    std::fs::write(&path, original).unwrap();
+    let (app, mut context, _streams) = harness_with_tabs(cx, 1);
+    app.update_in(&mut context, |app, window, cx| app.open_file_in_editor(&path, window, cx));
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    let view = loop {
+        context.run_until_parked();
+        if let Some(view) = app.read_with(&context, |app, _| app.active_editor_input().and_then(|input| input.markdown().cloned())) {
+            start_in_source(&view, &mut context);
+            break view;
+        }
+        assert!(std::time::Instant::now() < deadline);
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    };
+    context.dispatch_action(crate::core::actions::ToggleDocumentPreview);
+    settle_live_geometry(&view, &mut context);
+    let alpha = original.find("alpha").unwrap();
+    let bravo = original.find("bravo").unwrap();
+    let secret = original.find("secret").unwrap();
+    let width = |view: &SourcePresentation, at, cx: &gpui_kit::App| {
+        view.range_to_bounds(&(at..at + 5), cx).unwrap().size.width
+    };
+    context.update(|window, cx| {
+        window.render_frame(cx);
+        assert!(width(view.read(cx), alpha, cx) > gpui_kit::px(0.));
+        assert_eq!(width(view.read(cx), bravo, cx), gpui_kit::px(0.));
+        let choice = window.find_all("mdx-tabs-choice").into_iter().find(|target| target.label() == Some("B")).unwrap().bounds().center();
+        window.pointer_down(choice, gpui_kit::MouseButton::Left, cx);
+        window.pointer_up(choice, gpui_kit::MouseButton::Left, cx);
+    });
+    settle_live_geometry(&view, &mut context);
+    context.update(|window, cx| {
+        assert_eq!(width(view.read(cx), alpha, cx), gpui_kit::px(0.));
+        assert!(width(view.read(cx), bravo, cx) > gpui_kit::px(0.));
+        let disclosure = window.find_by_label("Collapse accordion: Details").bounds().center();
+        window.pointer_down(disclosure, gpui_kit::MouseButton::Left, cx);
+        window.pointer_up(disclosure, gpui_kit::MouseButton::Left, cx);
+    });
+    settle_live_geometry(&view, &mut context);
+    view.read_with(&context, |view, cx| {
+        assert_eq!(width(view, secret, cx), gpui_kit::px(0.));
+        assert_eq!(view.document().read(cx).encode().unwrap(), original.as_bytes());
+    });
+    view.update_in(&mut context, |view, window, cx| {
+        view.select_range(bravo..bravo + 5, cx);
+        view.focus_handle(cx).focus(window, cx);
+    });
+    context.update(|window, cx| window.input("edited", cx));
+    let edited = original.replacen("bravo", "edited", 1);
+    context.dispatch_action(crate::core::actions::ToggleDocumentPreview);
+    context.dispatch_action(gpui_kit::component::input::Undo);
+    view.read_with(&context, |view, cx| assert_eq!(view.document().read(cx).encode().unwrap(), original.as_bytes()));
+    context.dispatch_action(gpui_kit::component::input::Redo);
+    settle_live_geometry(&view, &mut context);
+    view.read_with(&context, |view, cx| {
+        assert!(!view.is_live());
+        assert!(width(view, alpha, cx) > gpui_kit::px(0.));
+        assert_eq!(view.document().read(cx).encode().unwrap(), edited.as_bytes());
+    });
+    context.dispatch_action(crate::core::actions::EditorSave);
+    loop {
+        context.run_until_parked();
+        if app.read_with(&context, |app, _| app.active_buffer().is_some_and(|file| !file.dirty && !file.saving)) { break; }
+        assert!(std::time::Instant::now() < deadline);
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    assert_eq!(std::fs::read(&path).unwrap(), edited.as_bytes());
+}
+
+#[gpui_kit::test]
 fn native_tabs_switch_preserves_hidden_edits_history_composition_and_host_bytes(
     cx: &mut gpui_kit::TestAppContext,
 ) {
