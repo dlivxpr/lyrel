@@ -1726,8 +1726,6 @@ pub fn translate_en(key: L10nKey) -> &'static str {
         L10nKey::EditorLnCol => "Ln {line}, Col {column}",
         L10nKey::EditorToggleLineEnding => "Switch line endings between LF and CRLF",
         L10nKey::StatusRemoteHost => "Remote host {id}",
-        L10nKey::EditorEdit => "Edit",
-        L10nKey::EditorPreview => "Preview",
         L10nKey::EditorMarkdownLive => "Live editing",
         L10nKey::EditorMarkdownSource => "Source",
         L10nKey::EditorMarkdownSourceRegion => {
@@ -1876,10 +1874,6 @@ pub fn translate_en(key: L10nKey) -> &'static str {
         L10nKey::SettingsEditorSoftWrapDesc => {
             "Open files with soft wrap on. The status bar's Wrap button changes it for one file."
         }
-        L10nKey::SettingsEditorMarkdownPreview => "Open Markdown rendered",
-        L10nKey::SettingsEditorMarkdownPreviewDesc => {
-            "Show Markdown files as a rendered preview rather than as source when they open."
-        }
         L10nKey::SettingsSearchEditorGitGutterKeywords => {
             "git gutter diff changes markers staged index scm vcs modified added deleted"
         }
@@ -1887,9 +1881,6 @@ pub fn translate_en(key: L10nKey) -> &'static str {
             "lsp language server diagnostics errors warnings completion rust-analyzer definition"
         }
         L10nKey::SettingsSearchEditorSoftWrapKeywords => "wrap soft wrap long lines editor",
-        L10nKey::SettingsSearchEditorMarkdownPreviewKeywords => {
-            "markdown preview rendered md readme"
-        }
         L10nKey::EditorGoToLinePlaceholder => "Line, or line:column (1–{total})",
         L10nKey::EditorGoToSymbolAction => "Go to Symbol in Editor…",
         L10nKey::EditorNavigateBack => "Go Back",
@@ -2400,7 +2391,8 @@ pub fn translate_en(key: L10nKey) -> &'static str {
         L10nKey::CmdDocumentWidthThird => "Document: Third Width",
         L10nKey::CmdDocumentWidthHalf => "Document: Half Width",
         L10nKey::CmdDocumentWidthTwoThirds => "Document: Two-Thirds Width",
-        L10nKey::CmdToggleDocumentPreview => "Document: Toggle Markdown Preview",
+        L10nKey::CmdToggleDocumentPreview => "Document: Toggle Markdown Live Editing / Source",
+        L10nKey::CmdNewMarkdownDocument => "New Markdown Document",
         L10nKey::CmdToggleDocumentWrap => "Document: Toggle Word Wrap",
         L10nKey::CmdEditorTransformUppercase => "Document: Transform to Uppercase",
         L10nKey::CmdEditorTransformLowercase => "Document: Transform to Lowercase",

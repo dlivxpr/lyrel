@@ -140,9 +140,11 @@ description: "所有默认快捷键，以及用于重新绑定的操作名称。
 | 智能体 | `ForkAgentSession`（加上 `Right` / `Left` / `Down` / `Up`）· `CopyAgentSessionId` · `LaunchAgent:<slug>`（每个智能体各有一个，例如 `LaunchAgent:omp`） |
 | Git | `ScmStageAll` · `ScmUnstageAll` · `ScmDiscardAll` · `ScmCommitAmend` · `ScmRefresh` · `ScmSync` · `ScmPush` · `ScmPull` · `ScmFetch` · `ScmCheckoutBranch` · `ScmCreateBranch` · `ScmToggleGraph` · `ToggleDiffViewMode` |
 | 面板 | `ShowRightPanelInfo` · `ShowRightPanelFiles` · `ShowRightPanelSearch` · `ShowRightPanelChanges` · `ShowRightPanelGitHub` |
-| 文档 | `ToggleDocumentFill` · `DocumentWidthThird` · `DocumentWidthHalf` · `DocumentWidthTwoThirds` · `ToggleDocumentPreview` · `ToggleDocumentWrap` |
+| 文档 | `EditorNewMarkdownFile`（新建 Markdown 文档）· `ToggleDocumentFill` · `DocumentWidthThird` · `DocumentWidthHalf` · `DocumentWidthTwoThirds` · `ToggleDocumentPreview`（切换 Markdown 即时编辑 / 源码）· `ToggleDocumentWrap` |
 | SSH | `ToggleSftp` · `ShowSshForwards` · `OpenSshProfiles` |
 | 应用 | `CloseWindow` · `About` · `CheckForUpdates` · `OpenDocumentation` · `OpenProject`（打开[项目主页](https://github.com/dlivxpr/lyrel)）· `ReportIssue` · `ShowAll` · `ZoomWindow` |
+
+`EditorNewMarkdownFile` 没有默认快捷键，可从全局搜索执行“新建 Markdown 文档”，也可自行绑定。它创建原生 Markdown 文档，另存为建议扩展名为 `.md`；普通文本新建（包括编辑器中的 `Ctrl+N`）与 `OpenScrollbackInEditor` 仍使用普通文本编辑器。`ToggleDocumentPreview` 保留原操作标识，现有自定义快捷键继续切换同一 Markdown 文档的即时编辑 / 源码，两种模式共用撤销历史。
 
 停放牌堆没有默认全局快捷键，可用 `RestoreParkedPane` 打开键盘预览。牌堆及「更多…」列表均支持
 方向键、<kbd>Home</kbd>／<kbd>End</kbd>；列表另支持 <kbd>Page Up</kbd>／<kbd>Page Down</kbd>。

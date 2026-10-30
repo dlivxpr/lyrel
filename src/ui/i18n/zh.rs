@@ -1582,8 +1582,6 @@ pub fn translate_zh(key: L10nKey) -> Option<&'static str> {
         L10nKey::EditorLnCol => "行 {line}，列 {column}",
         L10nKey::EditorToggleLineEnding => "在 LF 与 CRLF 换行符之间切换",
         L10nKey::StatusRemoteHost => "远端主机 {id}",
-        L10nKey::EditorEdit => "编辑",
-        L10nKey::EditorPreview => "预览",
         L10nKey::EditorMarkdownLive => "即时编辑",
         L10nKey::EditorMarkdownSource => "源码",
         L10nKey::EditorMarkdownSourceRegion => "源码 · 此结构尚未适配即时编辑",
@@ -1718,16 +1716,11 @@ pub fn translate_zh(key: L10nKey) -> Option<&'static str> {
         L10nKey::SettingsEditorSoftWrapDesc => {
             "打开文件时启用自动换行。状态栏的换行按钮可单独切换某个文件。"
         }
-        L10nKey::SettingsEditorMarkdownPreview => "以渲染形式打开 Markdown",
-        L10nKey::SettingsEditorMarkdownPreviewDesc => {
-            "打开 Markdown 文件时显示渲染后的预览而不是源码。"
-        }
         L10nKey::SettingsSearchEditorGitGutterKeywords => {
             "git 更改 标记 差异 暂存 修改 新增 删除 gutter diff"
         }
         L10nKey::SettingsSearchEditorLspKeywords => "lsp 语言服务器 诊断 错误 警告 补全 定义",
         L10nKey::SettingsSearchEditorSoftWrapKeywords => "换行 自动换行 长行 wrap",
-        L10nKey::SettingsSearchEditorMarkdownPreviewKeywords => "markdown 预览 渲染 md",
         L10nKey::EditorGoToLinePlaceholder => "行号，或 行:列（1–{total}）",
         L10nKey::EditorGoToSymbolAction => "跳转到编辑器中的符号…",
         L10nKey::EditorNavigateBack => "后退",
@@ -2196,7 +2189,8 @@ pub fn translate_zh(key: L10nKey) -> Option<&'static str> {
         L10nKey::CmdDocumentWidthThird => "文档：三分之一宽",
         L10nKey::CmdDocumentWidthHalf => "文档：一半宽",
         L10nKey::CmdDocumentWidthTwoThirds => "文档：三分之二宽",
-        L10nKey::CmdToggleDocumentPreview => "文档：切换 Markdown 预览",
+        L10nKey::CmdToggleDocumentPreview => "文档：切换 Markdown 即时编辑 / 源码",
+        L10nKey::CmdNewMarkdownDocument => "新建 Markdown 文档",
         L10nKey::CmdToggleDocumentWrap => "文档：切换自动换行",
         L10nKey::CmdEditorTransformUppercase => "文档：转换为大写",
         L10nKey::CmdEditorTransformLowercase => "文档：转换为小写",
