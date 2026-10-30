@@ -129,10 +129,12 @@ impl super::MarkdownDocument {
         consent: bool,
         cx: &mut gpui_kit::Context<Self>,
     ) {
+        let previous_len = self.images.states.len();
         self.images.states.retain(|url, _| urls.contains(url));
         self.images.tasks.retain(|url, _| urls.contains(url));
-        let mut changed = false;
+        let mut changed = self.images.states.len() != previous_len;
         let Some(resources) = self.resources().cloned() else {
+            if changed { cx.emit(super::DocumentEvent::ImagesChanged); }
             return;
         };
         let revision = self.revision();
@@ -141,7 +143,10 @@ impl super::MarkdownDocument {
                 .images
                 .states
                 .entry(url.clone())
-                .or_insert(State::Unloaded);
+                .or_insert_with(|| {
+                    changed = true;
+                    State::Unloaded
+                });
             if matches!(state, State::Ready(_) | State::Loading(_)) || (external(&url) && !consent)
             {
                 continue;
