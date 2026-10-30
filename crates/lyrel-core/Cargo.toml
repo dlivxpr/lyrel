@@ -135,7 +135,7 @@ ureq = { version = "3", default-features = false, features = [
 # installer, so it links no archive code.
 async_zip = { version = "0.0.19", default-features = false, features = ["deflate"], optional = true }
 
-russh = "=0.64.1"
+russh = "=0.65.0"
 russh-sftp = "=3.0.1"
 
 # tokio powers only the russh session engine — a single runtime `daemon::ssh`
