@@ -173,6 +173,13 @@ impl FileTreeState {
         host: SharedHost,
         opened_with: &HashSet<PathBuf>,
     ) -> Option<(smol::channel::Receiver<Vec<PathBuf>>, bool)> {
+        if !self
+            .watch_host
+            .as_ref()
+            .is_some_and(|current| Arc::ptr_eq(current, &host))
+        {
+            return None;
+        }
         self.watch_opening = false;
         let sub = match result {
             Ok(sub) => sub,
@@ -215,6 +222,10 @@ impl FileTreeState {
         }
         let mut touched = false;
         for dir in dirs_to_relist(paths, self.show_hidden) {
+            touched |= self.invalidate_dir(host, dir);
+        }
+        // Polling backends can report only the directory itself.
+        for dir in paths {
             touched |= self.invalidate_dir(host, dir);
         }
         Refresh {

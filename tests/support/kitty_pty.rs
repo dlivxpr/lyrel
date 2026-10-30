@@ -206,11 +206,11 @@ pub fn pty_sender() {
             )
             .unwrap();
         }
-        // Force a parser boundary and wait for its application-visible
-        // answer before the text marker. Layout updates from preceding
-        // ordinary text must already be queued ahead of KITTY_DONE.
+        // An unsupported-format query is answered in parser order without
+        // creating image work. A valid pixel query can be cancelled by resize;
+        // DSR instead requires a GUI consumer and cannot serve headless tests.
         output
-            .write_all(b"\x1b_Ga=q,i=4294967294,f=32,s=1,v=1;/wAA/w==\x1b\\")
+            .write_all(b"\x1b_Ga=q,i=4294967294,f=0\x1b\\")
             .unwrap();
         output.flush().unwrap();
         let mut barrier = Vec::new();
@@ -219,7 +219,10 @@ pub fn pty_sender() {
             input.read_exact(&mut byte).unwrap();
             barrier.push(byte[0]);
         }
-        assert_eq!(barrier, b"\x1b_Gi=4294967294;OK\x1b\\");
+        assert_eq!(
+            barrier,
+            b"\x1b_Gi=4294967294;ENOTSUPPORTED:Unsupported operation\x1b\\"
+        );
         // A non-digit terminates the serial even when older text remains
         // to its right. Never clear the row: that could delete a placement.
         // GPUI consumers observe the title after the cursor restore, not just

@@ -1,6 +1,6 @@
 use crate::ui::notification_history::NotificationWindowExt as _;
 use std::borrow::Cow;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -25,6 +25,17 @@ use gpui_kit::{
 };
 
 mod lifecycle;
+mod operations;
+pub(crate) mod selection;
+
+#[cfg(test)]
+mod selection_tests;
+
+#[cfg(test)]
+mod cwd_tests;
+
+#[cfg(test)]
+mod refresh_tests;
 
 pub(crate) use lifecycle::{IndexKey, searchable_roots};
 
@@ -225,6 +236,7 @@ pub(crate) struct FileTreeState {
     editing_subs: Vec<Subscription>,
     watch: Option<Arc<WatchSub>>,
     watch_host: Option<SharedHost>,
+    watch_generation: u64,
     watch_opening: bool,
     watch_busy: bool,
     watch_dirty: bool,
@@ -239,14 +251,15 @@ impl FileTreeState {
         cx.spawn_in(window, async move |app, cx| {
             while let Ok((host, first)) = rx.recv().await {
                 cx.background_executor().timer(REFRESH_DEBOUNCE).await;
-                let mut changed: HashSet<PathBuf> = first.into_iter().collect();
-                while let Ok((h, more)) = rx.try_recv() {
-                    if h == host {
-                        changed.extend(more);
-                    }
+                let mut changed =
+                    HashMap::from([(host, first.into_iter().collect::<HashSet<_>>())]);
+                while let Ok((host, more)) = rx.try_recv() {
+                    changed.entry(host).or_default().extend(more);
                 }
                 let ok = app.update(cx, |app, cx| {
-                    app.file_tree_apply_fs_events(host, &changed, cx);
+                    for (host, paths) in changed {
+                        app.file_tree_apply_fs_events(host, &paths, cx);
+                    }
                 });
                 if ok.is_err() {
                     break;
@@ -256,6 +269,7 @@ impl FileTreeState {
         .detach();
         Self {
             watch_host: None,
+            watch_generation: 0,
             children: ByHost::default(),
             loads: InFlight::default(),
             unreadable: HashSet::new(),
@@ -287,10 +301,13 @@ impl FileTreeState {
             .is_some_and(|opened_with| Arc::ptr_eq(opened_with, &host))
         {
             self.watch = None;
-            self.watch_host = None;
+            self.watch_host = Some(host.clone());
+            self.watch_generation += 1;
+            self.watch_opening = false;
             self.watch_busy = false;
             self.watch_dirty = false;
         }
+        let generation = self.watch_generation;
         if let Some(sub) = self.watch.clone() {
             if self.watch_busy {
                 self.watch_dirty = true;
@@ -301,7 +318,15 @@ impl FileTreeState {
                 host,
                 cx,
                 move |_| sub.set_dirs(&want),
-                |app: &mut LyrelApp, result: std::io::Result<()>, cx| {
+                move |app: &mut LyrelApp, result: std::io::Result<()>, cx| {
+                    if app.file_tree.watch_generation != generation {
+                        return;
+                    }
+                    if result.is_ok() {
+                        let dirs = app.file_tree.watched.clone();
+                        let host = app.file_tree.watch_host.as_ref().unwrap().id();
+                        app.file_tree_apply_fs_events(host, &dirs, cx);
+                    }
                     if app.file_tree.finish_watch_update(result) {
                         let want = app.file_tree.watched.clone();
                         let Some(host) = app.active_host(cx) else {
@@ -328,18 +353,26 @@ impl FileTreeState {
                 move |h| h.watch(&want).map(Arc::new)
             },
             move |app, result: std::io::Result<Arc<WatchSub>>, cx| {
+                if app.file_tree.watch_generation != generation {
+                    return;
+                }
                 let Some((events, retry)) =
                     app.file_tree
                         .finish_watch_open(result, opened_host, &opened_with)
                 else {
                     return;
                 };
+                app.file_tree_apply_fs_events(host_id, &opened_with, cx);
                 cx.spawn(async move |app, cx| {
                     while let Ok(batch) = events.recv().await {
                         let ok = app.update(cx, |app, _cx| {
+                            if app.file_tree.watch_generation != generation {
+                                return false;
+                            }
                             let _ = app.file_tree.events_tx.try_send((host_id, batch));
+                            true
                         });
-                        if ok.is_err() {
+                        if !matches!(ok, Ok(true)) {
                             break;
                         }
                     }
@@ -759,19 +792,36 @@ impl LyrelApp {
 
     pub(crate) fn file_tree_refresh_roots(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let id = self.spawn_host(cx);
-        let Some((host, mut roots)) = self.project_roots(cx) else {
+        let Some((host, mut roots)) = (if id.is_local() {
+            self.project_roots(cx)
+        } else {
+            // Browsing follows the foreground pane; search keeps project roots.
+            self.active_host(cx).map(|host| {
+                let cwd = self
+                    .tabs
+                    .get(self.tabs.active_index())
+                    .and_then(|tab| tab.detail_pane(window, cx))
+                    .and_then(|pane| {
+                        let pane = pane.read(cx);
+                        (pane.host_id() == id && pane.remote_context().is_none())
+                            .then(|| pane.files_cwd())
+                            .flatten()
+                    });
+                (host, cwd.into_iter().collect())
+            })
+        }) else {
             return;
         };
         let home = (roots.is_empty() && id.is_local())
             .then(|| std::env::var_os("HOME").map(PathBuf::from))
             .flatten();
         roots = lifecycle::browsable_roots(roots, home);
-        let _ = window;
         let Some(code) = self.tab_code_mut_or_init() else {
             return;
         };
         if roots != code.roots {
             code.roots = roots;
+            code.selected.clear();
             self.file_tree.invalidate_all();
             cx.notify();
         }
@@ -783,8 +833,8 @@ impl LyrelApp {
     /// one. `None` while a root is still being asked for (the ask is sent from
     /// here); an empty list where no pane has a directory on this host.
     ///
-    /// The tree and the Search tab both start from this, so what Search looks
-    /// through is always what the tree shows. Only the tree falls back to the
+    /// Search uses these project roots even when remote browsing follows the
+    /// foreground pane's subdirectory. Only local browsing falls back to the
     /// home directory — a folder to browse is harmless, a search of all of it
     /// is not.
     pub(crate) fn project_roots(
@@ -818,12 +868,17 @@ impl LyrelApp {
 
     fn file_tree_sync_watch(&mut self, host: SharedHost, cx: &mut Context<Self>) {
         let union: HashSet<PathBuf> = self
-            .tabs
-            .iter()
-            .filter_map(|t| t.code.as_deref())
+            .tab_code()
+            .into_iter()
             .flat_map(|c| c.roots.iter().chain(c.expanded.iter()).cloned())
             .collect();
-        if union != self.file_tree.watched {
+        if union != self.file_tree.watched
+            || !self
+                .file_tree
+                .watch_host
+                .as_ref()
+                .is_some_and(|watched_host| Arc::ptr_eq(watched_host, &host))
+        {
             self.file_tree.sync_watch(host, union, cx);
         }
     }
@@ -897,11 +952,13 @@ impl LyrelApp {
     }
 
     fn file_tree_toggle_expand(&mut self, dir: &Path, cx: &mut Context<Self>) {
+        let host = self.spawn_host(cx);
         let Some(code) = self.tab_code_mut() else {
             return;
         };
         if !code.expanded.remove(dir) {
             code.expanded.insert(dir.to_path_buf());
+            self.file_tree.invalidate_dir(host, dir);
         }
         cx.notify();
     }
@@ -913,8 +970,9 @@ impl LyrelApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        let host = self.spawn_host(cx);
         if let Some(code) = self.tab_code_mut() {
-            code.selected = Some(row_path.to_path_buf());
+            code.selected.single(host, row_path.to_path_buf());
         }
         let searching = !self.file_search.read(cx).value().trim().is_empty();
         if is_dir && searching {
@@ -970,6 +1028,7 @@ impl LyrelApp {
     /// outlives the render that fills them in.
 
     pub(crate) fn file_tree_reveal_path(&mut self, path: &Path, cx: &mut Context<Self>) -> bool {
+        let host = self.spawn_host(cx);
         let roots = self.tab_code().map(|c| c.roots.clone()).unwrap_or_default();
         let path = &self
             .file_tree
@@ -984,8 +1043,10 @@ impl LyrelApp {
         // been on screen has no code state at all, and the plain accessor
         // dropped the selection on the floor there — the first reveal in a
         // session landed on a row that was expanded but not highlighted.
-        if let Some(code) = self.tab_code_mut_or_init() {
-            code.selected = Some(path.to_path_buf());
+        if let Some(code) = self.tab_code_mut_or_init()
+            && !code.selected.contains(host, path)
+        {
+            code.selected.single(host, path.to_path_buf());
         }
         self.right_panel.tree_reveal = Some((
             path.to_path_buf(),
@@ -1053,24 +1114,31 @@ impl LyrelApp {
         cx: &mut Context<Self>,
     ) {
         let host = self.spawn_host(cx);
+        if self.file_tree_command_key(ev, window, cx) {
+            cx.stop_propagation();
+            return;
+        }
         let Some(code) = self.tab_code() else {
             return;
         };
         // Placeholder rows explain an absence; they are not files, so the
         // cursor must not be able to land on one.
-        let rows: Vec<TreeRow> = self
-            .file_tree
-            .visible_rows(host, &code.roots, &code.expanded)
-            .into_iter()
-            .filter(|r| r.note.is_none())
-            .collect();
+        let rows: Vec<TreeRow> = if self.file_tree_searching(cx) {
+            self.file_tree.search_rows()
+        } else {
+            self.file_tree
+                .visible_rows(host, &code.roots, &code.expanded)
+        }
+        .into_iter()
+        .filter(|r| r.note.is_none())
+        .collect();
         if rows.is_empty() {
             return;
         }
         let sel_ix = code
             .selected
-            .as_ref()
-            .and_then(|s| rows.iter().position(|r| r.entry.path == *s));
+            .cursor(host)
+            .and_then(|s| rows.iter().position(|r| r.entry.path == s));
         let key = ev.keystroke.key.as_str();
         match key {
             "up" | "down" => {
@@ -1081,7 +1149,8 @@ impl LyrelApp {
                 };
                 let path = rows[next].entry.path.clone();
                 if let Some(code) = self.tab_code_mut() {
-                    code.selected = Some(path);
+                    code.selected
+                        .click(host, &path, false, ev.keystroke.modifiers.shift, &rows);
                 }
                 cx.notify();
             }
@@ -1101,7 +1170,7 @@ impl LyrelApp {
                     if is_dir && expanded && !is_root {
                         code.expanded.remove(&path);
                     } else if parent_in_rows && let Some(parent) = path.parent() {
-                        code.selected = Some(parent.to_path_buf());
+                        code.selected.single(host, parent.to_path_buf());
                     }
                 }
                 cx.notify();
@@ -1235,7 +1304,7 @@ impl LyrelApp {
         };
         let rollback = self.file_tree.optimistic(id, &dir, &op, &row);
         if let Some(code) = self.tab_code_mut() {
-            code.selected = Some(new_path.clone());
+            code.selected.single(id, new_path.clone());
         }
 
         let target = new_path.clone();
@@ -1283,9 +1352,9 @@ impl LyrelApp {
                     }
                     Err(e) => {
                         if let Some(code) = app.tab_code_mut()
-                            && code.selected.as_deref() == Some(&*new_path)
+                            && code.selected.cursor(id) == Some(&*new_path)
                         {
-                            code.selected = None;
+                            code.selected.remove_tree(id, &new_path);
                         }
                         HostOps::notify_err(
                             window,
@@ -1347,92 +1416,6 @@ impl LyrelApp {
         );
     }
 
-    fn file_tree_delete(
-        &mut self,
-        path: PathBuf,
-        is_dir: bool,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        let name = path
-            .file_name()
-            .map(|n| n.to_string_lossy().to_string())
-            .unwrap_or_else(|| path.display().to_string());
-        let detail = if is_dir {
-            t(L10nKey::FileTreeDeleteFolderBody)
-        } else {
-            t(L10nKey::FileTreeDeleteFileBody)
-        };
-        let answer = window.prompt(
-            PromptLevel::Warning,
-            &t_fmt(L10nKey::FileTreeDeleteTitle, &[("name", &name)]),
-            Some(detail),
-            &crate::ui::confirm_answers(t(L10nKey::Delete), t(L10nKey::Cancel)),
-            cx,
-        );
-        cx.spawn_in(window, async move |app, cx| {
-            let Ok(0) = answer.await else { return };
-            let _ = app.update_in(cx, |app, window, cx| {
-                let Some(host) = app.active_host(cx) else {
-                    return;
-                };
-                let id = host.id();
-                let Some(parent) = path.parent().map(Path::to_path_buf) else {
-                    return;
-                };
-                let row = TreeEntry {
-                    name: name.clone(),
-                    path: path.clone(),
-                    is_dir,
-                    ignored: false,
-                };
-                let rollback = app
-                    .file_tree
-                    .optimistic(id, &parent, &TreeWrite::Delete, &row);
-                if let Some(code) = app.tab_code_mut()
-                    && code.selected.as_deref() == Some(&path)
-                {
-                    code.selected = None;
-                }
-                let target = path.clone();
-                // "Delete failed: Permission denied" leaves out the one thing
-                // you need in a tree of files, the same way "Save failed" used
-                // to in the editor.
-                let failed_name = name.clone();
-                HostOps::run_in(
-                    host,
-                    window,
-                    cx,
-                    move |h| {
-                        let canon = h.canonicalize(&target).unwrap_or_else(|_| target.clone());
-                        h.remove(&target, is_dir).map(|()| canon)
-                    },
-                    move |app, result: std::io::Result<PathBuf>, window, cx| {
-                        match app.file_tree.finish_write(id, &parent, result, rollback) {
-                            Ok(removed) => {
-                                app.editor_path_removed(id, &removed, cx);
-                            }
-                            Err(e) => {
-                                HostOps::notify_err(
-                                    window,
-                                    cx,
-                                    &t_fmt(
-                                        L10nKey::FileTreeDeleteFailed,
-                                        &[("name", &failed_name)],
-                                    ),
-                                    &e,
-                                );
-                            }
-                        }
-                        cx.notify();
-                    },
-                );
-                cx.notify();
-            });
-        })
-        .detach();
-    }
-
     /// Copy what was dropped on the tree into `dir`.
     ///
     /// The drop is the whole gesture: the panel does not ask where to put the
@@ -1463,19 +1446,57 @@ impl LyrelApp {
         let Some(host) = self.active_host(cx) else {
             return;
         };
+        self.file_tree_copy_between(
+            HostRegistry::local(cx),
+            host,
+            sources,
+            dir,
+            overwrite,
+            window,
+            cx,
+        );
+    }
+
+    pub(crate) fn file_tree_copy_between(
+        &mut self,
+        source: SharedHost,
+        host: SharedHost,
+        sources: Vec<PathBuf>,
+        dir: PathBuf,
+        overwrite: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let id = host.id();
         let asked_for = sources.clone();
         let target = dir.clone();
+        let destination = host.clone();
+        let source_again = source.clone();
         HostOps::run_in(
             host,
             window,
             cx,
-            move |h| file_copy::copy_into_dir(h, &sources, &target, overwrite),
+            move |h| {
+                if source.id().is_local() {
+                    file_copy::copy_into_dir(h, &sources, &target, overwrite)
+                } else {
+                    file_copy::copy_between_hosts(source.as_ref(), h, &sources, &target, overwrite)
+                }
+            },
             move |app, report: file_copy::DropReport, window, cx| {
                 app.file_tree.copied_into(id, &dir, &report);
                 if !report.conflicts.is_empty() {
-                    app.file_tree_confirm_replace(asked_for, dir, report.conflicts, window, cx);
-                } else if let Some((name, e)) = report.errors.first() {
+                    app.file_tree_confirm_replace(
+                        source_again,
+                        destination,
+                        asked_for,
+                        dir,
+                        report.conflicts,
+                        window,
+                        cx,
+                    );
+                }
+                if let Some((name, e)) = report.errors.first() {
                     // One notification for the drop, not one per file: a folder
                     // of unreadable files would otherwise bury the screen.
                     let context = match report.errors.len() {
@@ -1494,6 +1515,8 @@ impl LyrelApp {
 
     fn file_tree_confirm_replace(
         &mut self,
+        source: SharedHost,
+        destination: SharedHost,
         sources: Vec<PathBuf>,
         dir: PathBuf,
         conflicts: Vec<String>,
@@ -1517,7 +1540,7 @@ impl LyrelApp {
         cx.spawn_in(window, async move |app, cx| {
             let Ok(0) = answer.await else { return };
             let _ = app.update_in(cx, |app, window, cx| {
-                app.file_tree_copy_into(sources, dir, true, window, cx);
+                app.file_tree_copy_between(source, destination, sources, dir, true, window, cx);
             });
         })
         .detach();
@@ -1788,7 +1811,9 @@ impl LyrelApp {
     ) -> Vec<AnyElement> {
         let path = row.entry.path.clone();
         let is_dir = row.entry.is_dir;
-        let selected = self.tab_code().and_then(|c| c.selected.as_deref()) == Some(&*path);
+        let selected = self
+            .tab_code()
+            .is_some_and(|c| c.selected.contains(self.spawn_host(cx), &path));
         let muted = cx.theme().muted_foreground;
         let paths_are_local = self.spawn_host(cx).is_local();
 
@@ -1909,6 +1934,17 @@ impl LyrelApp {
         });
         let row_el = h_flex()
             .id(SharedString::from(format!("tree-{}", path.display())))
+            .map(|row| {
+                #[cfg(test)]
+                {
+                    use gpui_kit::test::TestSupportExt;
+                    row.test_support()
+                }
+                #[cfg(not(test))]
+                {
+                    row
+                }
+            })
             .role(gpui_kit::Role::TreeItem)
             .aria_label(SharedString::from(
                 path.file_name()
@@ -1979,9 +2015,12 @@ impl LyrelApp {
                 MouseButton::Left,
                 cx.listener({
                     let path = path.clone();
-                    move |this, _, window, cx| {
+                    move |this, ev: &gpui_kit::MouseDownEvent, window, cx| {
                         this.file_tree.focus_handle.focus(window, cx);
-                        this.file_tree_activate(&path, is_dir, window, cx);
+                        this.file_tree_select(&path, ev.modifiers, cx);
+                        if !selection::primary_modifier(ev.modifiers) && !ev.modifiers.shift {
+                            this.file_tree_activate(&path, is_dir, window, cx);
+                        }
                     }
                 }),
             )
@@ -1999,16 +2038,19 @@ impl LyrelApp {
                     });
                 }
             })
-            // The menu acts on the row it was opened on, so that row is the
-            // one lit while it is up (#942) — selected without being opened,
-            // the way Explorer and every editor's tree do it.
+            // A context menu preserves an existing multi-selection; an
+            // unselected target becomes the sole selection without opening.
             .on_mouse_down(
                 MouseButton::Right,
                 cx.listener({
                     let path = path.clone();
-                    move |this, _, _window, cx| {
+                    move |this, _, window, cx| {
+                        this.file_tree.focus_handle.focus(window, cx);
+                        let host = this.spawn_host(cx);
                         if let Some(code) = this.tab_code_mut() {
-                            code.selected = Some(path.clone());
+                            if !code.selected.contains(host, &path) {
+                                code.selected.single(host, path.clone());
+                            }
                         }
                         cx.notify();
                     }
@@ -2110,6 +2152,9 @@ impl LyrelApp {
         let danger = cx.theme().danger;
         let mut menu = menu.min_w(px(200.));
         let p = path.to_path_buf();
+        let can_delete = app
+            .upgrade()
+            .is_some_and(|app| !app.read(cx).file_tree_targets(cx, false).is_empty());
 
         if !is_dir {
             menu = menu.item(
@@ -2218,6 +2263,28 @@ impl LyrelApp {
             );
         }
 
+        menu = menu
+            .separator()
+            .item(PopupMenuItem::new(t(L10nKey::AppMenuCopy)).on_click({
+                let app = app.clone();
+                move |_, _, cx| {
+                    let _ = app.update(cx, |this, cx| this.file_tree_copy_selected(cx));
+                }
+            }))
+            .item(
+                PopupMenuItem::new(t(L10nKey::AppMenuPaste))
+                    .disabled(!Self::file_tree_can_paste(cx))
+                    .on_click({
+                        let app = app.clone();
+                        let target = p.clone();
+                        move |_, window, cx| {
+                            let _ = app.update(cx, |this, cx| {
+                                this.file_tree_paste(Some((target.clone(), is_dir)), window, cx)
+                            });
+                        }
+                    }),
+            );
+
         menu = menu.separator().item(
             PopupMenuItem::new(t(L10nKey::FileTreeContextCopyPath)).on_click({
                 // Only a path on this machine gets re-spelled: a remote
@@ -2259,7 +2326,7 @@ impl LyrelApp {
 
         menu = menu.separator().item(dotfiles_menu_item(show_hidden, app));
 
-        if !is_root {
+        if can_delete {
             menu = menu.separator().item(
                 PopupMenuItem::element(move |_window, _cx| {
                     div().text_color(danger).child(t(L10nKey::Delete))
@@ -2267,9 +2334,8 @@ impl LyrelApp {
                 .on_click({
                     let app = app.clone();
                     move |_, window, cx| {
-                        let p = p.clone();
                         let _ =
-                            app.update(cx, |this, cx| this.file_tree_delete(p, is_dir, window, cx));
+                            app.update(cx, |this, cx| this.file_tree_delete_selected(window, cx));
                     }
                 }),
             );
@@ -3835,15 +3901,13 @@ mod drop_gpui_tests {
         app.update_in(&mut vcx, |app, window, cx| {
             app.file_tree_drop_paths(vec![from.join("note.txt")], root.clone(), window, cx);
         });
-        wait_until(&mut vcx, "the copy never landed", |_| {
-            root.join("note.txt").exists()
-        });
+        wait_until(
+            &mut vcx,
+            "the copied file never contained the complete payload",
+            |_| std::fs::read(root.join("note.txt")).is_ok_and(|bytes| bytes == b"hello"),
+        );
         settle(&app, &mut vcx, &root);
 
-        assert_eq!(
-            std::fs::read_to_string(root.join("note.txt")).unwrap(),
-            "hello"
-        );
         assert_eq!(rows(&app, &mut vcx), before + 1, "the tree never caught up");
         let _ = std::fs::remove_dir_all(&root);
         let _ = std::fs::remove_dir_all(&from);

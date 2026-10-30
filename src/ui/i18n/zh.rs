@@ -1518,8 +1518,10 @@ pub fn translate_zh(key: L10nKey) -> Option<&'static str> {
         L10nKey::FileTreePlaceholderFolderName => "文件夹名",
         L10nKey::FileTreePlaceholderNewName => "新名称",
         L10nKey::FileTreeDeleteTitle => "删除“{name}”？",
-        L10nKey::FileTreeDeleteFolderBody => "该文件夹及其中的所有内容都将被删除，此操作无法撤销。",
-        L10nKey::FileTreeDeleteFileBody => "此操作无法撤销。",
+        L10nKey::FileTreeDeleteManyTitle => "删除 {n} 个项目？",
+        L10nKey::FileTreeDeleteSelectionBody => {
+            "以下目标及文件夹中的全部内容将在 {host} 上永久删除，此操作无法撤销。\n\n{targets}"
+        }
         L10nKey::SftpDeleteFolderBody => {
             "该文件夹及其中所有内容将在 {host} 上被删除。远端没有回收站。"
         }
