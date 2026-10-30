@@ -694,6 +694,7 @@ impl EditorBuffers {
         let expected = target.clone();
         let host = file.host.clone();
         let host_id = host.id();
+        let markdown = file.input.markdown().is_some();
         file.reload_seq = file.reload_seq.wrapping_add(1);
         let seq = file.reload_seq;
         HostOps::run_in(
@@ -702,7 +703,12 @@ impl EditorBuffers {
             cx,
             move |h| {
                 let bytes = h.read_file(&target, MAX_FILE_BYTES)?;
-                let decoded = decode_file(&target, &bytes)?.ok_or_else(|| {
+                let decoded = if markdown {
+                    editor_text::decode_source(&bytes)?
+                } else {
+                    editor_text::decode(&bytes)
+                }
+                .ok_or_else(|| {
                     std::io::Error::new(std::io::ErrorKind::InvalidData, "no longer text")
                 })?;
                 let mtime = h.stat(&target).ok().and_then(|meta| meta.mtime);

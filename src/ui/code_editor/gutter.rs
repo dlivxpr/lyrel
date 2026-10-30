@@ -702,10 +702,7 @@ impl LyrelApp {
             return false;
         };
         let hunks = self.editor_gutter_hunks_now(id, cx);
-        let Some(f) = self.editor.buffers.get(id) else {
-            return false;
-        };
-        let input = f.input.clone();
+        let Some(input) = self.editor_input_for(id) else { return false; };
         let line = input.read(cx).cursor_position().line as usize;
         let Some(ix) = step_hunk(&hunks, line, forward) else {
             return false;
@@ -725,7 +722,8 @@ impl LyrelApp {
         if f.gutter.base.is_none() || !enabled(cx) {
             return false;
         }
-        let line = f.input.read(cx).cursor_position().line as usize;
+        let Some(input) = self.editor_input_for(id) else { return false; };
+        let line = input.read(cx).cursor_position().line as usize;
         hunk_at_line(&f.gutter.hunks, line).is_some()
     }
 
@@ -739,10 +737,8 @@ impl LyrelApp {
             return false;
         };
         let hunks = self.editor_gutter_hunks_now(id, cx);
-        let Some(f) = self.editor.buffers.get(id) else {
-            return false;
-        };
-        let line = f.input.read(cx).cursor_position().line as usize;
+        let Some(input) = self.editor_input_for(id) else { return false; };
+        let line = input.read(cx).cursor_position().line as usize;
         let Some(ix) = hunk_at_line(&hunks, line) else {
             return false;
         };
@@ -762,7 +758,7 @@ impl LyrelApp {
         let Some(base) = f.gutter.base.clone() else {
             return false;
         };
-        let input = f.input.clone();
+        let Some(input) = self.editor_input_for(id) else { return false; };
         let text = input.read(cx).text().to_string();
         let (range, replacement) = revert_edit(&text, &base, hunk);
         let line = hunk.new.start;
@@ -867,10 +863,7 @@ impl LyrelApp {
             return false;
         };
         let hunks = self.editor_gutter_hunks_now(id, cx);
-        let Some(f) = self.editor.buffers.get(id) else {
-            return false;
-        };
-        let input = f.input.clone();
+        let Some(input) = self.editor_input_for(id) else { return false; };
         let line = input.read(cx).cursor_position().line as usize;
         let ix = match hunk_at_line(&hunks, line) {
             Some(ix) => ix,
@@ -898,7 +891,7 @@ impl LyrelApp {
             return;
         };
         if f.gutter.peek.take().is_some() {
-            let input = f.input.clone();
+            let Some(input) = self.editor_input_for(id) else { return; };
             input.focus(window, cx);
             cx.notify();
         }
@@ -931,7 +924,8 @@ impl LyrelApp {
         let position = match peek.anchor {
             PeekAnchor::Point(p) => p + gpui_kit::point(px(8.), px(4.)),
             PeekAnchor::Caret => {
-                let input = f.input.read(cx);
+                let input = self.editor_input_for(id)?;
+                let input = input.read(cx);
                 let caret = input.cursor();
                 let bounds = input.range_to_bounds(&(caret..caret))?;
                 bounds.bottom_left() + gpui_kit::point(px(0.), px(2.))

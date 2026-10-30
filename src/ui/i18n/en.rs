@@ -1728,6 +1728,20 @@ pub fn translate_en(key: L10nKey) -> &'static str {
         L10nKey::StatusRemoteHost => "Remote host {id}",
         L10nKey::EditorMarkdownLive => "Live editing",
         L10nKey::EditorMarkdownSource => "Source",
+        L10nKey::EditorMarkdownLiveLabel => "Markdown live editor",
+        L10nKey::EditorMarkdownSourceLabel => "Markdown source",
+        L10nKey::EditorMarkdownTaskLabel => "Toggle task: {text}",
+        L10nKey::EditorMarkdownFormulaLabel => "Formula: {tex}",
+        L10nKey::EditorMdxEditName => "Edit component name",
+        L10nKey::EditorMdxEditProperty => "Edit property: {name}",
+        L10nKey::EditorMdxEditChildren => "Edit component children",
+        L10nKey::EditorCardEditName => "Edit card component name",
+        L10nKey::EditorCardFollowLabel => "Open card destination: {target}",
+        L10nKey::EditorCardAddProperty => "Add card property: {name}",
+        L10nKey::EditorCardEditProperty => "Edit card property: {name}",
+        L10nKey::EditorCardEditGroupLabel => "Edit card group children",
+        L10nKey::EditorAccordionCollapse => "Collapse accordion: {title}",
+        L10nKey::EditorAccordionExpand => "Expand accordion: {title}",
         L10nKey::EditorMarkdownSourceRegion => {
             "Source · structure not yet adapted for live editing"
         }

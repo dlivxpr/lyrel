@@ -6,7 +6,7 @@ use super::super::{
     projection::{Kind, Leaf, Projection},
 };
 use super::{Component, Field, Grammar, Property, PropertyKind, ViewState};
-use crate::ui::i18n::{L10nKey, t};
+use crate::ui::i18n::{L10nKey, t, t_fmt};
 use gpui_kit::component::{
     ActiveTheme as _, Sizable as _,
     button::{Button, ButtonVariants as _},
@@ -57,10 +57,7 @@ impl<'a> FieldContext<'a> {
             revision: projection.revision,
             grammar: projection.grammar,
             index: &projection.mdx,
-            range: match leaf.kind {
-                Kind::TableCell(cell) => cell.table().start..cell.table().end,
-                _ => leaf.range.clone(),
-            },
+            range: leaf.range.clone(),
         }
     }
     pub(in super::super) fn component(&self) -> Option<&Component> {
@@ -149,6 +146,7 @@ fn render_embedded(
             index: context.index,
             range: component.source_range(),
         };
+        if !visible_field(&field_context(Field::Name, None)) { continue; }
         fields = fields.child(render_component(
             &field_context(Field::Name, None),
             div().into_any_element(),
@@ -235,7 +233,7 @@ pub(in super::super) fn render_generic(
             L10nKey::EditorMdxName,
             Some(component.name_range()),
             "mdx-name".to_owned(),
-            "Edit component name".to_owned(),
+            t(L10nKey::EditorMdxEditName).to_owned(),
         ),
         (Field::Property(kind), _, Some(property)) => {
             let name = property
@@ -250,14 +248,14 @@ pub(in super::super) fn render_generic(
                 key,
                 Some(property.value_range()),
                 format!("mdx-property-{}", name.as_deref().unwrap_or("spread")),
-                format!("Edit property: {}", name.as_deref().unwrap_or("spread")),
+                t_fmt(L10nKey::EditorMdxEditProperty, &[("name", name.as_deref().unwrap_or("spread"))]),
             )
         }
         (Field::Children, Some(component), _) => (
             L10nKey::EditorMdxChildren,
             Some(component.children_range().start..component.children_range().start),
             "mdx-children".to_owned(),
-            "Edit component children".to_owned(),
+            t(L10nKey::EditorMdxEditChildren).to_owned(),
         ),
         (Field::Closing, _, _) => (
             L10nKey::EditorMdxClosing,

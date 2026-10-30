@@ -173,6 +173,18 @@ pub(crate) enum Command {
         edits: Vec<(Range<usize>, String)>,
         kind: EditKind,
     },
+    BatchReplaceSelected {
+        edits: Vec<(Range<usize>, String)>,
+        selection: Selection,
+    },
+    /// Reorder/copy existing whole-line source, retaining each disk terminator.
+    ReplaceLines {
+        range: Range<usize>,
+        lines: Vec<Range<usize>>,
+        leading_newline: bool,
+        trailing_newline: bool,
+        selection: Selection,
+    },
     Backspace,
     Delete,
     Undo,
@@ -845,6 +857,41 @@ impl MarkdownDocument {
                     Command::ToggleTask { at } => lists::toggle(self, state, at),
                     Command::Replace { range, text, kind } => self.edit(state, range, text, kind),
                     Command::BatchReplace { edits, kind } => self.batch_edit(state, edits, kind),
+                    Command::BatchReplaceSelected { edits, selection } => {
+                        self.batch_edit_selected(state, edits, EditKind::Command, Some(selection));
+                    }
+                    Command::ReplaceLines { range, lines, leading_newline, trailing_newline, selection } => {
+                        let mut inserted = SourceText {
+                            text: if leading_newline { "\n".into() } else { String::new() },
+                            endings: if leading_newline { vec![self.format.line_ending] } else { Vec::new() },
+                        };
+                        let count = lines.len();
+                        for (index, line) in lines.into_iter().enumerate() {
+                            let mut part = self.source_text(line);
+                            if index + 1 < count || trailing_newline {
+                                if !part.text.ends_with('\n') {
+                                    part.text.push('\n');
+                                    part.endings.push(self.format.line_ending);
+                                }
+                            } else if part.text.ends_with('\n') {
+                                part.text.pop();
+                                part.endings.pop();
+                            }
+                            inserted.text.push_str(&part.text);
+                            inserted.endings.extend(part.endings);
+                        }
+                        let removed = self.source_text(range.clone());
+                        let before = state.selection;
+                        if removed != inserted {
+                            self.replace(range.clone(), &inserted);
+                            state.selection = selection;
+                            self.record(Change {
+                                edits: smallvec::smallvec![ReplacedSource { start: range.start, removed, inserted }],
+                                before,
+                                after: selection,
+                            }, EditKind::Command, state.id);
+                        }
+                    }
                     Command::Backspace | Command::Delete => {
                         let mut range = state.selection.range();
                         if range.is_empty() {

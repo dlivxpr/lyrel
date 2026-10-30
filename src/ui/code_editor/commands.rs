@@ -768,7 +768,7 @@ impl LyrelApp {
         } else {
             selected
         };
-        let Some(edit) = plan(&text, selected, language, tab_size, command) else {
+        let Some(edit) = plan(&text, selected.clone(), language, tab_size, command) else {
             return true;
         };
         // IDE commands deliberately affect the active selection only; typing
@@ -778,6 +778,20 @@ impl LyrelApp {
                 state.set_selected_range(edit.range, cx);
                 state.replace(edit.replacement, window, cx);
             });
+        } else if let Some(view) = input.markdown().filter(|_| matches!(command, Command::MoveUp | Command::MoveDown | Command::CopyUp | Command::CopyDown)) {
+            let selected_lines = whole_lines(&text, &selected);
+            let lines = match command {
+                Command::MoveUp => vec![selected_lines.clone(), edit.range.start..selected_lines.start],
+                Command::MoveDown => vec![selected_lines.end..edit.range.end, selected_lines.clone()],
+                _ => vec![selected_lines.clone()],
+            };
+            view.update(cx, |view, cx| view.command(super::markdown::Command::ReplaceLines {
+                range: edit.range,
+                lines,
+                leading_newline: matches!(command, Command::CopyDown) && !text[selected_lines].ends_with('\n'),
+                trailing_newline: edit.replacement.ends_with('\n'),
+                selection: super::markdown::Selection::new(edit.selection.start, edit.selection.end),
+            }, window, cx));
         } else {
             input.replace(edit.range, &edit.replacement, window, cx);
         }

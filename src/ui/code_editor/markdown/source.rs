@@ -57,7 +57,9 @@ pub(crate) struct SourcePresentation {
     _mermaid_theme: Subscription,
     math: super::math::State,
     extra_selections: Vec<Selection>,
-    search_matches: Vec<Range<usize>>,
+    search_matches: std::rc::Rc<Vec<Range<usize>>>,
+    image_snapshot: Option<std::rc::Rc<HashMap<String, std::sync::Arc<RenderImage>>>>,
+    accessibility_snapshot: Option<(u64, SharedString)>,
     indent: crate::ui::editor_text::Indent,
     viewport_height: Pixels,
     viewport: Viewport,
@@ -78,6 +80,7 @@ impl SourcePresentation {
                 event,
                 DocumentEvent::ResourceContextChanged | DocumentEvent::ImagesChanged
             ) {
+                this.image_snapshot = None;
                 if matches!(event, DocumentEvent::ResourceContextChanged) {
                     let document = this.document.read(cx);
                     if this.projection.grammar != document.grammar() {
@@ -184,7 +187,9 @@ impl SourcePresentation {
             _mermaid_theme: mermaid_theme,
             math: super::math::State::default(),
             extra_selections: Vec::new(),
-            search_matches: Vec::new(),
+            search_matches: std::rc::Rc::default(),
+            image_snapshot: None,
+            accessibility_snapshot: None,
             indent: crate::ui::editor_text::Indent {
                 hard_tabs: false,
                 size: 4,
@@ -555,7 +560,7 @@ impl SourcePresentation {
     }
     pub(crate) fn set_search_matches(
         &mut self,
-        matches: Vec<Range<usize>>,
+        matches: std::rc::Rc<Vec<Range<usize>>>,
         cx: &mut Context<Self>,
     ) {
         self.search_matches = matches;
@@ -1464,14 +1469,21 @@ impl SourcePresentation {
             return;
         }
         let doc = self.document.read(cx);
-        let start_row = doc.source().offset_to_point(selected.start).row;
-        let end_row = doc.source().offset_to_point(selected.end).row;
-        let mut edits = Vec::new();
-        for row in start_row..=end_row {
-            let start = doc.source().line_start_offset(row);
-            if row > start_row && start == selected.end {
-                break;
+        let selections: Vec<_> = std::iter::once(self.state.selection)
+            .chain(self.extra_selections.iter().copied()).collect();
+        let mut rows = std::collections::BTreeSet::new();
+        for selection in &selections {
+            let selected = selection.range();
+            let first = doc.source().offset_to_point(selected.start).row;
+            let last = doc.source().offset_to_point(selected.end).row;
+            for row in first..=last {
+                if row > first && doc.source().line_start_offset(row) == selected.end { break; }
+                rows.insert(row);
             }
+        }
+        let mut edits = Vec::new();
+        for row in rows {
+            let start = doc.source().line_start_offset(row);
             if outdent {
                 let end = doc.source().line_end_offset(row);
                 let line = doc.source().slice(start..end).to_string();
@@ -1491,14 +1503,24 @@ impl SourcePresentation {
             }
         }
         if !edits.is_empty() {
+            edits.sort_by_key(|(range, _)| std::cmp::Reverse(range.start));
+            let mut selections = selections;
+            for selection in &mut selections {
+                for (range, text) in &edits {
+                    let map = |at: usize| {
+                        if at < range.start { at }
+                        else if at >= range.end { at - range.len() + text.len() }
+                        else { range.start + text.len() }
+                    };
+                    *selection = Selection::new(map(selection.anchor), map(selection.head));
+                }
+            }
             self.command(
-                Command::BatchReplace {
-                    edits,
-                    kind: EditKind::Command,
-                },
+                Command::BatchReplaceSelected { edits, selection: selections[0] },
                 window,
                 cx,
             );
+            self.extra_selections = selections.into_iter().skip(1).collect();
         }
     }
     fn word_command(
@@ -1738,6 +1760,7 @@ impl SourcePresentation {
                         && (!other.text.is_empty() || other.kind == Kind::Rule)
                 })
                 .map(|other| {
+                    if matches!(other.kind, Kind::TableCell(_)) { return at..at; }
                     if super::regions::label(other.kind).is_some() {
                         self.document.read(cx).previous(at)..at
                     } else {
@@ -1753,6 +1776,7 @@ impl SourcePresentation {
                         && (!other.text.is_empty() || other.kind == Kind::Rule)
                 })
                 .map(|other| {
+                    if matches!(other.kind, Kind::TableCell(_)) { return at..at; }
                     if super::regions::label(other.kind).is_some() {
                         at..self.document.read(cx).next(at)
                     } else {
@@ -1983,20 +2007,13 @@ impl Render for SourcePresentation {
             self.schedule_math(cx);
         }
         let view = cx.entity().downgrade();
-        let ready: std::collections::HashMap<_, _> = self
-            .document
-            .read(cx)
-            .images
-            .states
-            .iter()
-            .filter_map(|(url, state)| {
+        let ready = self.image_snapshot.get_or_insert_with(|| {
+            std::rc::Rc::new(self.document.read(cx).images.states.iter().filter_map(|(url, state)| {
                 if let super::images::State::Ready(image) = state {
                     Some((url.clone(), image.clone()))
-                } else {
-                    None
-                }
-            })
-            .collect();
+                } else { None }
+            }).collect())
+        }).clone();
         let context = RenderContext::from_app(cx)
             .with_body_font_size(window.rem_size())
             .with_markdown_extensions(super::math::extensions())
@@ -2275,7 +2292,8 @@ impl Render for SourcePresentation {
                             let scroll = self.tables.scroll(cell).clone();
                             let (row, ids) = self.tables.row(&self.projection.leaves[global..end],
                                 -scroll.offset().x, table_width, self.wrap,
-                                self.state.marked_range().as_ref(), &self.math, &context, window, cx);
+                                self.state.marked_range().as_ref(), &self.math, &context,
+                                &self.projection, &component_source, &self.mdx_state, window, cx);
                             let view = cx.entity().downgrade();
                             let row = row.on_children_prepainted(move |bounds, _, cx| {
                                 let _ = view.update(cx, |view, _| {
@@ -2316,7 +2334,7 @@ impl Render for SourcePresentation {
                         } else {
                             rendered.into_any_element()
                         };
-                        let rendered = if self.live {
+                        let rendered = if self.live && !matches!(leaf.kind, Kind::TableCell(_)) {
                             let field = super::mdx::view::FieldContext::new(
                                 &self.projection,
                                 leaf,
@@ -2389,9 +2407,9 @@ impl Render for SourcePresentation {
                                                     leaf.id,
                                                 ))
                                                 .checked(checked)
-                                                .accessibility_label(format!(
-                                                    "Toggle task: {}",
-                                                    leaf.text
+                                                .accessibility_label(crate::ui::i18n::t_fmt(
+                                                    L10nKey::EditorMarkdownTaskLabel,
+                                                    &[("text", &leaf.text)],
                                                 ))
                                                 .on_change(cx.listener(
                                                     move |this, _, window, cx| {
@@ -2501,13 +2519,21 @@ impl Render for SourcePresentation {
                 })
                 .when(!self.wrap, |root| root.whitespace_nowrap())
                 .role(Role::TextInput)
-                .aria_label(if self.live {
-                    "Markdown live editor"
+                .aria_label(t(if self.live {
+                    L10nKey::EditorMarkdownLiveLabel
                 } else {
-                    "Markdown source"
-                })
+                    L10nKey::EditorMarkdownSourceLabel
+                }))
                 .when(window.is_a11y_active() || cfg!(test), |root| {
-                    root.aria_value(self.document.read(cx).source().to_string())
+                    let document = self.document.read(cx);
+                    let (revision, value) = self.accessibility_snapshot.get_or_insert_with(|| {
+                        (document.revision(), document.source().to_string().into())
+                    });
+                    if *revision != document.revision() {
+                        *revision = document.revision();
+                        *value = document.source().to_string().into();
+                    }
+                    root.aria_value(value.clone())
                 })
                 .on_a11y_action(AccessibleAction::Focus, {
                     let view = cx.entity();
@@ -3061,7 +3087,7 @@ impl Element for SourceElement {
                 .filter(|leaf| view.blocks.contains_key(&leaf.id))
                 .map(|leaf| {
                     let mut ranges = Vec::new();
-                    for range in &view.search_matches {
+                    for range in view.search_matches.iter() {
                         let start = range.start.max(leaf.range.start);
                         let end = range.end.min(leaf.range.end);
                         let mut color = self.color;

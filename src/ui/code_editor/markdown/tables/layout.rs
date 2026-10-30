@@ -187,8 +187,11 @@ impl Layout {
         marked: Option<&Range<usize>>,
         math: &math::State,
         context: &RenderContext,
+        projection: &super::super::projection::Projection,
+        source: &gpui_kit::base::input::Rope,
+        mdx_state: &super::super::mdx::ViewState,
         window: &mut Window,
-        cx: &mut App,
+        cx: &mut Context<super::super::SourcePresentation>,
     ) -> (Div, Vec<Option<u64>>) {
         let Kind::TableCell(first) = leaves[0].kind else {
             unreachable!()
@@ -221,7 +224,15 @@ impl Layout {
                 .find(|leaf| matches!(leaf.kind, Kind::TableCell(cell) if cell.column == column));
             children.push(match leaf {
                 Some(leaf) => {
-                    cell_element(leaf, Some(width), wrap, marked, math, context, window, cx)
+                    let field = super::super::mdx::view::FieldContext::new(projection, leaf, source, mdx_state);
+                    if super::super::mdx::view::visible_field(&field) {
+                        let content = cell_element(leaf, Some(width), wrap, marked, math, context, window, cx);
+                        div().w(width).min_w_0().flex_none().child(
+                            super::super::mdx::view::render_field(&field, content, window, cx)
+                        ).into_any_element()
+                    } else {
+                        div().w(width).flex_none().into_any_element()
+                    }
                 }
                 None => div().w(width).flex_none().into_any_element(),
             });

@@ -5,7 +5,7 @@ use super::{
     Field, PropertyKind,
     view::{self, FieldContext},
 };
-use crate::ui::i18n::{L10nKey, t};
+use crate::ui::i18n::{L10nKey, t, t_fmt};
 use gpui_kit::component::{
     ActiveTheme as _, Sizable as _,
     button::{Button, ButtonVariants as _},
@@ -69,7 +69,7 @@ pub(super) fn render(
                 "mdx-card-name",
                 L10nKey::EditorMdxName,
                 component.name_range(),
-                "Edit card component name",
+                t(L10nKey::EditorCardEditName),
                 cx,
             ));
             if !group {
@@ -92,9 +92,7 @@ pub(super) fn render(
                                         .ghost()
                                         .small()
                                         .label(t(L10nKey::EditorCardFollow))
-                                        .accessibility_label(format!(
-                                            "Open card destination: {target}"
-                                        ))
+                                        .accessibility_label(t_fmt(L10nKey::EditorCardFollowLabel, &[("target", &target)]))
                                         .on_click(cx.listener(move |this, _, window, cx| {
                                             if this.document().read(cx).revision() != revision
                                                 || this.document().read(cx).grammar() != grammar
@@ -143,7 +141,7 @@ pub(super) fn render(
                                     .ghost()
                                     .small()
                                     .label(t(*key))
-                                    .accessibility_label(format!("Add card property: {name}"))
+                                    .accessibility_label(t_fmt(L10nKey::EditorCardAddProperty, &[("name", name)]))
                                     .on_click(cx.listener(move |this, _, window, cx| {
                                         if this.document().read(cx).revision() != revision
                                             || this.document().read(cx).grammar() != grammar
@@ -223,7 +221,7 @@ pub(super) fn render(
                     SharedString::from(format!("mdx-card-{name}")),
                     key.expect("native property label"),
                     property.value_range(),
-                    format!("Edit card property: {name}"),
+                    t_fmt(L10nKey::EditorCardEditProperty, &[("name", &name)]),
                     cx,
                 ))
                 .child(content)
@@ -257,11 +255,11 @@ pub(super) fn render(
                             } else {
                                 L10nKey::EditorCardEditContent
                             }))
-                            .accessibility_label(if group {
-                                "Edit card group children"
+                            .accessibility_label(t(if group {
+                                L10nKey::EditorCardEditGroupLabel
                             } else {
-                                "Edit card content"
-                            })
+                                L10nKey::EditorCardEditContent
+                            }))
                             .on_click(cx.listener(
                                 move |this, _, window, cx| {
                                     if this.document().read(cx).revision() != revision

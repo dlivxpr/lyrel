@@ -113,13 +113,9 @@ pub(super) fn render(
                 .filter(|title| !title.is_empty())
                 .unwrap_or_else(|| t(L10nKey::EditorMdxAccordionsSection).to_string());
             let open = !context.state().collapsed.contains(&id);
-            let accessibility = format!(
-                "{}: {title}",
-                if open {
-                    "Collapse accordion"
-                } else {
-                    "Expand accordion"
-                }
+            let accessibility = crate::ui::i18n::t_fmt(
+                if open { L10nKey::EditorAccordionCollapse } else { L10nKey::EditorAccordionExpand },
+                &[("title", &title)],
             );
             div()
                 .id(("mdx-accordion", id.value()))
