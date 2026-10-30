@@ -162,15 +162,23 @@ impl Leaf {
         }
     }
     /// Hide presentation-only source slices while retaining their byte mapping.
-    pub(super) fn hide_ranges(&mut self, ranges: &[Range<usize>], marked: Option<&Range<usize>>) -> bool {
+    pub(super) fn hide_ranges(
+        &mut self,
+        ranges: &[Range<usize>],
+        marked: Option<&Range<usize>>,
+    ) -> bool {
         let mut changed = false;
         let mut index = 0;
         while index < self.segments.len() {
             let segment = &self.segments[index];
-            if segment.source.len() == segment.content.len() && segment.raw.is_none()
-                && segment.image.is_none() && segment.math.is_none()
+            if segment.source.len() == segment.content.len()
+                && segment.raw.is_none()
+                && segment.image.is_none()
+                && segment.math.is_none()
             {
-                if let Some(at) = ranges.iter().flat_map(|range| [range.start, range.end])
+                if let Some(at) = ranges
+                    .iter()
+                    .flat_map(|range| [range.start, range.end])
                     .find(|at| segment.source.start < *at && *at < segment.source.end)
                 {
                     let mut right = segment.clone();
@@ -184,12 +192,16 @@ impl Leaf {
                     continue;
                 }
             }
-            let hidden = ranges.iter().any(|range| range.start <= segment.source.start && segment.source.end <= range.end);
+            let hidden = ranges.iter().any(|range| {
+                range.start <= segment.source.start && segment.source.end <= range.end
+            });
             changed |= segment.hidden != hidden;
             self.segments[index].hidden = hidden;
             index += 1;
         }
-        if changed { self.rebuild(marked); }
+        if changed {
+            self.rebuild(marked);
+        }
         changed
     }
     pub fn contextual_reveal(

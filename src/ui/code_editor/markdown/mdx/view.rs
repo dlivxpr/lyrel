@@ -104,25 +104,48 @@ pub(in super::super) fn hidden_inline_ranges(
     let mut hidden = Vec::new();
     for component in &projection.mdx.components {
         let range = component.source_range();
-        if !projection.leaves.iter().any(|leaf| !matches!(leaf.kind, Kind::Mdx(_))
-            && leaf.range.start <= range.start && range.end <= leaf.range.end) { continue; }
-        if projection.mdx.components.iter().any(|outer| state.source_components.contains(&outer.id())
-            && outer.source_range().start <= range.start && range.end <= outer.source_range().end) { continue; }
+        if !projection.leaves.iter().any(|leaf| {
+            !matches!(leaf.kind, Kind::Mdx(_))
+                && leaf.range.start <= range.start
+                && range.end <= leaf.range.end
+        }) {
+            continue;
+        }
+        if projection.mdx.components.iter().any(|outer| {
+            state.source_components.contains(&outer.id())
+                && outer.source_range().start <= range.start
+                && range.end <= outer.source_range().end
+        }) {
+            continue;
+        }
         let context = FieldContext {
-            component: Some(component), property: None, field: None, source, state,
-            revision: projection.revision, grammar: projection.grammar,
-            index: &projection.mdx, range: range.clone(),
+            component: Some(component),
+            property: None,
+            field: None,
+            source,
+            state,
+            revision: projection.revision,
+            grammar: projection.grammar,
+            index: &projection.mdx,
+            range: range.clone(),
         };
         if !visible_field(&context) {
             hidden.push(range);
             continue;
         }
-        let named = |name: &str| source.slice(component.name_range()).chars().eq(name.chars());
+        let named = |name: &str| {
+            source
+                .slice(component.name_range())
+                .chars()
+                .eq(name.chars())
+        };
         if named("Tabs") || named("Tab") || named("Accordion") || named("AccordionGroup") {
             let children = component.children_range();
             hidden.push(range.start..children.start);
             hidden.push(children.end..range.end);
-            if state.collapsed.contains(&component.id()) { hidden.push(children); }
+            if state.collapsed.contains(&component.id()) {
+                hidden.push(children);
+            }
         }
     }
     hidden

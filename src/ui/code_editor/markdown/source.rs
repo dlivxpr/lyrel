@@ -511,15 +511,23 @@ impl SourcePresentation {
         selection
     }
     fn sync_mdx_inline_visibility(&mut self, cx: &App) {
-        if !self.live { return; }
+        if !self.live {
+            return;
+        }
         let hidden = super::mdx::view::hidden_inline_ranges(
-            &self.projection, self.document.read(cx).source(), &self.mdx_state,
+            &self.projection,
+            self.document.read(cx).source(),
+            &self.mdx_state,
         );
         let marked = self.state.marked_range();
         for leaf in &mut self.projection.leaves {
             if leaf.hide_ranges(&hidden, marked.as_ref()) {
-                if matches!(leaf.kind, Kind::TableCell(_)) { self.tables.invalidate_cell(leaf.id); }
-                if let Some(block) = self.blocks.get_mut(&leaf.id) { block.version = u64::MAX; }
+                if matches!(leaf.kind, Kind::TableCell(_)) {
+                    self.tables.invalidate_cell(leaf.id);
+                }
+                if let Some(block) = self.blocks.get_mut(&leaf.id) {
+                    block.version = u64::MAX;
+                }
                 self.geometry = None;
                 self.viewport.layout = None;
                 self.rendered_revision = None;
