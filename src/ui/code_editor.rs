@@ -238,7 +238,7 @@ pub(crate) struct TabCode {
     pub(crate) active: usize,
     pub(crate) roots: Vec<PathBuf>,
     pub(crate) expanded: std::collections::HashSet<PathBuf>,
-    pub(crate) selected: Option<PathBuf>,
+    pub(crate) selected: crate::ui::file_tree::selection::TreeSelection,
     /// The second editor group, when the editor is split — the one without
     /// the focus. `files` and `active` above are always the focused group's
     /// (see `split`).
@@ -258,7 +258,7 @@ impl TabCode {
             active: 0,
             roots: Vec::new(),
             expanded: std::collections::HashSet::new(),
-            selected: None,
+            selected: Default::default(),
             split: None,
             recent: Vec::new(),
         }

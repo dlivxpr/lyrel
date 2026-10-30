@@ -8,8 +8,8 @@
 //! Everything here runs on a `HostOps` worker thread, never on the UI thread,
 //! and the destination is reached through the [`Host`] the tree is listing —
 //! which is this machine for a local workspace and the far end of a control
-//! connection for a remote one. The *sources* are always local paths: a file
-//! drop from the desktop can only name files on the desktop's own machine.
+//! connection for a remote one. Desktop drops use the local source Host;
+//! clipboard copies retain the source Host instead of reinterpreting its paths.
 
 use std::io;
 use std::path::{Path, PathBuf};
@@ -70,6 +70,17 @@ pub(crate) fn copy_into_dir(
     dir: &Path,
     overwrite: bool,
 ) -> DropReport {
+    let local = lyrel_core::host::local::LocalHost::shared();
+    copy_between_hosts(local.as_ref(), host, sources, dir, overwrite)
+}
+
+pub(crate) fn copy_between_hosts(
+    source: &dyn Host,
+    host: &dyn Host,
+    sources: &[PathBuf],
+    dir: &Path,
+    overwrite: bool,
+) -> DropReport {
     let mut report = DropReport::default();
     let mut planned: Vec<(PathBuf, PathBuf, String)> = Vec::new();
 
@@ -83,17 +94,15 @@ pub(crate) fn copy_into_dir(
         // — since every row is both a drag source and a drop target — on
         // itself, which is where an abandoned drag lands. Both are misses, and
         // a miss is not worth a notification.
-        if src.parent() == Some(dir) || dir == src {
+        if source.id() == host.id() && (src.parent() == Some(dir) || dir == src) {
             continue;
         }
-        if dir.starts_with(src) {
+        if source.id() == host.id() && dir.starts_with(src) {
             report.fail(&name, t(L10nKey::FileDropIntoItself).to_string());
             continue;
         }
-        // The drag carries whatever `on_drag` put in it, and a row of a remote
-        // tree carries a path on the *far* machine. Reading it here would
-        // either fail or, worse, find a local file of the same name.
-        if !src.exists() {
+        // Resolve source existence on its own Host, never on the UI machine.
+        if !source.exists(src) {
             report.fail(&name, t(L10nKey::FileDropNotHere).to_string());
             continue;
         }
@@ -136,8 +145,8 @@ pub(crate) fn copy_into_dir(
         // copy lands beside it instead, and only takes its place once it is
         // whole.
         let done = match host.exists(&dest) {
-            true => copy_over(host, &src, dir, &dest, &name),
-            false => copy_tree(host, &src, &dest, 0),
+            true => copy_over(source, host, &src, dir, &dest, &name),
+            false => copy_tree(source, host, &src, &dest, 0),
         };
         match done {
             Ok(()) => report.copied.push(name),
@@ -157,9 +166,16 @@ pub(crate) fn copy_into_dir(
 /// case where even that fails it is still on disk under the name it was moved
 /// to — which the panel is told, so it is a name somebody can find rather than
 /// one they have to go looking for.
-fn copy_over(host: &dyn Host, src: &Path, dir: &Path, dest: &Path, name: &str) -> io::Result<()> {
+fn copy_over(
+    source: &dyn Host,
+    host: &dyn Host,
+    src: &Path,
+    dir: &Path,
+    dest: &Path,
+    name: &str,
+) -> io::Result<()> {
     let (staged, _) = free_name_beside(host, dir, "partial", name)?;
-    if let Err(e) = copy_tree(host, src, &staged, 0) {
+    if let Err(e) = copy_tree(source, host, src, &staged, 0) {
         let _ = host.remove(&staged, true);
         return Err(e);
     }
@@ -234,38 +250,57 @@ fn free_name_beside(
     ))
 }
 
-fn copy_tree(host: &dyn Host, src: &Path, dest: &Path, depth: usize) -> io::Result<()> {
+fn copy_tree(
+    source: &dyn Host,
+    host: &dyn Host,
+    src: &Path,
+    dest: &Path,
+    depth: usize,
+) -> io::Result<()> {
     if depth > MAX_DEPTH {
         return Err(io::Error::other(t_fmt(
             L10nKey::FileDropTooDeep,
             &[("n", &MAX_DEPTH.to_string())],
         )));
     }
-    let meta = std::fs::metadata(src)?;
-    if !meta.is_dir() {
-        return copy_file(host, src, dest, meta.len());
+    let meta = source.stat(src)?;
+    if !meta.is_dir {
+        return copy_file(source, host, src, dest, meta.len);
     }
     host.create_dir(dest, true)?;
-    for entry in std::fs::read_dir(src)? {
-        let entry = entry?;
-        let name = entry.file_name();
-        // `Host::join` builds paths out of `&str`, so a name that is not UTF-8
-        // would land under a lossy spelling of itself. Locally there is no
-        // reason to go through it at all; over the wire the path is a String
-        // either way, and lossy is the best that can be done.
-        let child = match host.id().is_local() {
-            true => dest.join(&name),
-            false => host.join(dest, &name.to_string_lossy()),
-        };
-        copy_tree(host, &entry.path(), &child, depth + 1)?;
+    if source.id().is_local() {
+        // Keep native names locally: Host directory entries carry UTF-8 wire
+        // names, whereas a local filesystem can also contain non-UTF-8 names.
+        for entry in std::fs::read_dir(src)? {
+            let entry = entry?;
+            let name = entry.file_name();
+            let child = if host.id().is_local() {
+                dest.join(&name)
+            } else {
+                host.join(dest, &name.to_string_lossy())
+            };
+            copy_tree(source, host, &entry.path(), &child, depth + 1)?;
+        }
+    } else {
+        for entry in source.read_dir(src, None)? {
+            let child_source = source.join(src, &entry.name);
+            let child = host.join(dest, &entry.name);
+            copy_tree(source, host, &child_source, &child, depth + 1)?;
+        }
     }
     Ok(())
 }
 
-fn copy_file(host: &dyn Host, src: &Path, dest: &Path, len: u64) -> io::Result<()> {
+fn copy_file(
+    source: &dyn Host,
+    host: &dyn Host,
+    src: &Path,
+    dest: &Path,
+    len: u64,
+) -> io::Result<()> {
     // One syscall path locally, and the one that keeps the mode bits:
     // `write_file` would drop the executable bit off every script copied in.
-    if host.id().is_local() {
+    if source.id().is_local() && host.id().is_local() {
         // Except onto a WSL share: `fs::copy` is `CopyFileEx` on Windows, which
         // brings a downloaded file's `Zone.Identifier` stream along, and the
         // share keeps that as a second file beside the first (#942). The
@@ -286,7 +321,7 @@ fn copy_file(host: &dyn Host, src: &Path, dest: &Path, len: u64) -> io::Result<(
             &[("limit", &(REMOTE_FILE_MAX / (1024 * 1024)).to_string())],
         )));
     }
-    let bytes = std::fs::read(src)?;
+    let bytes = source.read_file(src, REMOTE_FILE_MAX)?;
     host.write_file(dest, &bytes)?;
     Ok(())
 }

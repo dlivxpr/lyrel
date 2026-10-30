@@ -509,6 +509,9 @@ impl LyrelApp {
 
     pub(crate) fn toggle_right_panel(&mut self, cx: &mut Context<Self>) {
         let next = !self.right_panel_visible;
+        if !next {
+            self.sftp_retire_revalidation();
+        }
         self.right_panel_visible = next;
         self.update_config(cx, |cfg| cfg.right_panel_visible = next);
         cx.notify();
@@ -522,6 +525,9 @@ impl LyrelApp {
             self.panel_search.focus_pending = true;
         }
         let tab = shown_tab(tab);
+        if self.right_panel_tab != tab {
+            self.sftp_retire_revalidation();
+        }
         self.right_panel_tab = tab;
         self.right_panel_visible = true;
         self.update_config(cx, |cfg| {
@@ -859,9 +865,15 @@ impl LyrelApp {
                     .filter(|p| p.depth == 0)
                     .map(|p| p.name.trim_start_matches('-').to_string())
                     .filter(|name| !name.is_empty());
-                let shell = match view.shell_spec().map(|s| s.program.clone()) {
-                    Some(program) => crate::core::shells::default_shell_name(Some(&program)),
-                    None => root.unwrap_or_else(|| self.default_shell_label(cx)),
+                let shell = if view.ssh_spec().is_some() {
+                    // Native SSH does not report the remote login shell. The
+                    // local default (e.g. PowerShell) is not a remote fact.
+                    EMPTY.to_string()
+                } else {
+                    match view.shell_spec().map(|s| s.program.clone()) {
+                        Some(program) => crate::core::shells::default_shell_name(Some(&program)),
+                        None => root.unwrap_or_else(|| self.default_shell_label(cx)),
+                    }
                 };
                 rows.push(InfoRow::text(t(L10nKey::PanelShell), shell));
                 if let Some(ssh) = view.ssh_spec() {
