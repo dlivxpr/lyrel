@@ -5931,7 +5931,7 @@ dependencies = [
 
 [[package]]
 name = "lyrel"
-version = "0.2.3"
+version = "0.3.0"
 dependencies = [
  "aes-gcm",
  "anyhow",
@@ -6001,7 +6001,7 @@ dependencies = [
 
 [[package]]
 name = "lyrel-cli"
-version = "0.2.3"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -6015,7 +6015,7 @@ dependencies = [
 
 [[package]]
 name = "lyrel-core"
-version = "0.2.3"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "async_zip",
@@ -6066,7 +6066,7 @@ dependencies = [
 
 [[package]]
 name = "lyrel-server"
-version = "0.2.3"
+version = "0.3.0"
 dependencies = [
  "libc",
  "lyrel-core",
