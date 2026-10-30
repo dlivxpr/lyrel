@@ -7347,6 +7347,11 @@ fn native_steps_keyboard_source_activation_finishes_preedit_without_numbering_ed
             view.document().read(cx).encode().unwrap(),
             original.replacen("'One'", "'中文'", 1).as_bytes()
         );
+        let committed = original.replacen("'One'", "'中文'", 1);
+        assert_eq!(
+            view.selection().range(),
+            committed.find("<Step ").unwrap()..committed.find("</Step>").unwrap() + 7
+        );
     });
     context.dispatch_action(gpui_kit::component::input::Undo);
     view.read_with(&context, |view, cx| {
