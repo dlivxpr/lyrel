@@ -261,8 +261,8 @@ impl LyrelApp {
                 this.set_document_ratio(crate::core::config::DOCUMENT_RATIO_TWO_THIRDS, cx)
             }),
         )
-        .on_action(cx.listener(|this, _: &ToggleDocumentPreview, _window, cx| {
-            this.toggle_document_preview(cx)
+        .on_action(cx.listener(|this, _: &ToggleDocumentPreview, window, cx| {
+            this.toggle_document_preview(window, cx)
         }))
         .on_action(cx.listener(|this, _: &ToggleDocumentWrap, window, cx| {
             this.toggle_document_wrap(window, cx)
@@ -389,6 +389,9 @@ impl LyrelApp {
         .on_action(
             cx.listener(|this, _: &EditorNewFile, window, cx| this.editor_new_file(window, cx)),
         )
+        .on_action(cx.listener(|this, _: &EditorNewMarkdownFile, window, cx| {
+            this.editor_new_markdown_file(window, cx)
+        }))
         // The gutter's change markers. Each one lets the chord through
         // when the editor is not focused or has nothing to do.
         .on_action(cx.listener(|this, _: &EditorNextChange, window, cx| {

@@ -113,8 +113,7 @@ impl LyrelApp {
         };
         // Looked at without sending the edit: most keystrokes stop here, and
         // the server hears about them on the usual debounce.
-        let Some(doc) = LspStore::context(&f.path, f.input.entity_id(), Freshen::Skip, None, cx)
-        else {
+        let Some(doc) = LspStore::context(&f.path, f.id, Freshen::Skip, None, cx) else {
             return;
         };
         let Some(options) = doc.caps.signature_help_provider.as_ref() else {
@@ -128,9 +127,7 @@ impl LyrelApp {
         if !is_trigger && !visible {
             return;
         }
-        let Some(doc) =
-            LspStore::context(&f.path, f.input.entity_id(), Freshen::Text(&text), None, cx)
-        else {
+        let Some(doc) = LspStore::context(&f.path, f.id, Freshen::Text(&text), None, cx) else {
             return;
         };
         let context = lsp_types::SignatureHelpContext {

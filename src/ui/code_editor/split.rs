@@ -9,16 +9,15 @@
 //! exists. The header's strip is the focused group's; the other group shows
 //! its file in front and its breadcrumbs.
 //!
-//! **The same file in both groups.** A buffer is one `OpenFile` with one
-//! `InputState`, which is what the language servers, the gutter markers, the
-//! undo history and every hook in `code_editor.rs` key on. A second
-//! `InputState` mirroring the first would need every one of those attached to
-//! it twice, and edits copied back and forth without echoing — a lot of
-//! surface for two views of one text. So the text is drawn once: in the group
-//! with the focus. The other group shows a placeholder naming the file, and a
-//! click on it moves the focus (and with it the live editor) over. The caret
-//! and scroll of that file are therefore shared between the two groups; two
-//! *different* files each keep their own, being different buffers.
+//! **The same file in both groups.** Every buffer has a document-owned
+//! `BufferId`; language servers, gutter markers and async work retain that ID.
+//! Ordinary code still has one `EditorState`: the focused group draws it and
+//! the other shows the existing click-to-focus placeholder.
+//!
+//! Native Markdown instead retains a `SourcePresentation` for each tab/group
+//! relation. Both sides render together, sharing one `MarkdownDocument` and
+//! undo history but not caret, selection, focus or scrolling. Neither side
+//! mirrors text into another authoritative editor.
 //!
 //! A group whose last file closes goes away, and the split with it.
 
@@ -342,14 +341,28 @@ impl LyrelApp {
         let Some(other) = self.tab_code().and_then(TabCode::other_active_id) else {
             return;
         };
-        if self.tab_code().and_then(TabCode::active_id) == Some(other) {
+        let Some(code) = self.tab_code() else {
             return;
-        }
-        let focused = self.editor.buffers.get(other).is_some_and(|f| {
-            f.input
-                .read(cx)
-                .focus_handle(cx)
-                .contains_focused(window, cx)
+        };
+        let tab = self
+            .tabs
+            .get(self.tabs.active_index())
+            .expect("active editor tab")
+            .id();
+        let other_group = code.split.as_ref().expect("other editor group").id;
+        let focused = self.editor.buffers.get(other).is_some_and(|file| {
+            if file.input.markdown().is_some() {
+                file.presentations
+                    .existing(tab, other_group)
+                    .is_some_and(|view| view.read(cx).focus_handle(cx).contains_focused(window, cx))
+            } else if code.active_id() != Some(other) {
+                file.input
+                    .read(cx)
+                    .focus_handle(cx)
+                    .contains_focused(window, cx)
+            } else {
+                false
+            }
         });
         if focused && let Some(code) = self.tab_code_mut() {
             code.swap_focus();
@@ -436,7 +449,16 @@ impl LyrelApp {
         let same = other.is_some() && other == code.active_id();
         let other_slot = usize::from(focus_left);
         let (other_crumbs, other_body) = match other {
-            Some(id) if same => (None, self.render_editor_same_file(id, focus_left, cx)),
+            Some(id)
+                if same
+                    && self
+                        .editor
+                        .buffers
+                        .get(id)
+                        .is_some_and(|file| file.input.code().is_some()) =>
+            {
+                (None, self.render_editor_same_file(id, focus_left, cx))
+            }
             Some(id) => (
                 self.render_editor_breadcrumbs_for(id, other_slot, false, window, cx),
                 self.render_editor_body(Some(id), other_slot, cx),
@@ -518,7 +540,7 @@ mod tests {
     use super::*;
 
     fn ids(n: u64) -> Vec<BufferId> {
-        (1..=n).map(gpui_kit::EntityId::from).collect()
+        (0..n).map(|_| BufferId::new()).collect()
     }
 
     fn code(files: &[BufferId], active: usize) -> TabCode {
@@ -846,7 +868,16 @@ mod gpui_tests {
         // before anything is drawn.
         vcx.update(|window, cx| {
             let left = app.read(cx).tab_code().unwrap().other_active_id().unwrap();
-            let input = app.read(cx).editor.buffers.get(left).unwrap().input.clone();
+            let input = app
+                .read(cx)
+                .editor
+                .buffers
+                .get(left)
+                .unwrap()
+                .input
+                .code()
+                .expect("ordinary code editor")
+                .clone();
             input.update(cx, |state, cx| state.focus(window, cx));
             let before = app.read(cx).active_buffer().unwrap().path.clone();
             assert_eq!(
@@ -876,7 +907,16 @@ mod gpui_tests {
         vcx.run_until_parked();
         vcx.update(|window, cx| {
             let left = app.read(cx).tab_code().unwrap().other_active_id().unwrap();
-            let input = app.read(cx).editor.buffers.get(left).unwrap().input.clone();
+            let input = app
+                .read(cx)
+                .editor
+                .buffers
+                .get(left)
+                .unwrap()
+                .input
+                .code()
+                .expect("ordinary code editor")
+                .clone();
             input.update(cx, |state, cx| state.focus(window, cx));
             let node = window.focused(cx).unwrap();
             node.dispatch_action(&crate::core::actions::EditorGoToLine, window, cx);

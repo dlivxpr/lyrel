@@ -23,9 +23,8 @@ use gpui_kit::component::input::{Position, RopeExt as _};
 use gpui_kit::component::{ActiveTheme as _, IconName, Sizable as _, h_flex, v_flex};
 use gpui_kit::prelude::*;
 use gpui_kit::{
-    AnyElement, Bounds, Context, EntityInputHandler as _, HitboxBehavior, MouseButton,
-    MouseDownEvent, Pixels, Point, Task, Window, anchored, canvas, deferred, div, fill, point, px,
-    size,
+    AnyElement, Bounds, Context, HitboxBehavior, MouseButton, MouseDownEvent, Pixels, Point, Task,
+    Window, anchored, canvas, deferred, div, fill, point, px, size,
 };
 
 use super::{BufferId, TabCode};
@@ -403,7 +402,7 @@ impl LyrelApp {
             return None;
         }
         let file = self.editor.buffers.get(id)?;
-        let input = file.input.clone();
+        let input = file.input.code()?.clone();
         let hunks = file.gutter.hunks.clone();
         let app = cx.entity().downgrade();
         let prepaint_input = input.clone();
@@ -552,7 +551,7 @@ impl LyrelApp {
         if f.gutter.fetched.as_ref() == Some(&wanted) {
             return;
         }
-        let format = f.format;
+        let format = f.format(cx);
         if let Some(f) = self.editor.buffers.get_mut(id) {
             f.gutter.fetching = true;
         }
@@ -703,19 +702,16 @@ impl LyrelApp {
             return false;
         };
         let hunks = self.editor_gutter_hunks_now(id, cx);
-        let Some(f) = self.editor.buffers.get(id) else {
+        let Some(input) = self.editor_input_for(id) else {
             return false;
         };
-        let input = f.input.clone();
         let line = input.read(cx).cursor_position().line as usize;
         let Some(ix) = step_hunk(&hunks, line, forward) else {
             return false;
         };
         let last = input.read(cx).text().lines_len().saturating_sub(1);
         let target = hunks[ix].new.start.min(last);
-        input.update(cx, |state, cx| {
-            state.set_cursor_position(Position::new(target as u32, 0), window, cx);
-        });
+        input.set_cursor_position(Position::new(target as u32, 0), window, cx);
         true
     }
 
@@ -728,7 +724,10 @@ impl LyrelApp {
         if f.gutter.base.is_none() || !enabled(cx) {
             return false;
         }
-        let line = f.input.read(cx).cursor_position().line as usize;
+        let Some(input) = self.editor_input_for(id) else {
+            return false;
+        };
+        let line = input.read(cx).cursor_position().line as usize;
         hunk_at_line(&f.gutter.hunks, line).is_some()
     }
 
@@ -742,10 +741,10 @@ impl LyrelApp {
             return false;
         };
         let hunks = self.editor_gutter_hunks_now(id, cx);
-        let Some(f) = self.editor.buffers.get(id) else {
+        let Some(input) = self.editor_input_for(id) else {
             return false;
         };
-        let line = f.input.read(cx).cursor_position().line as usize;
+        let line = input.read(cx).cursor_position().line as usize;
         let Some(ix) = hunk_at_line(&hunks, line) else {
             return false;
         };
@@ -765,21 +764,19 @@ impl LyrelApp {
         let Some(base) = f.gutter.base.clone() else {
             return false;
         };
-        let input = f.input.clone();
+        let Some(input) = self.editor_input_for(id) else {
+            return false;
+        };
         let text = input.read(cx).text().to_string();
         let (range, replacement) = revert_edit(&text, &base, hunk);
-        let start16 = text[..range.start].encode_utf16().count();
-        let end16 = start16 + text[range.clone()].encode_utf16().count();
         let line = hunk.new.start;
         let from_peek = f.gutter.peek.is_some();
-        input.update(cx, |state, cx| {
-            state.replace_text_in_range(Some(start16..end16), &replacement, window, cx);
-            let last = state.text().lines_len().saturating_sub(1);
-            state.set_cursor_position(Position::new(line.min(last) as u32, 0), window, cx);
-            if from_peek {
-                state.focus(window, cx);
-            }
-        });
+        input.replace(range, &replacement, window, cx);
+        let last = input.read(cx).text().lines_len().saturating_sub(1);
+        input.set_cursor_position(Position::new(line.min(last) as u32, 0), window, cx);
+        if from_peek {
+            input.focus(window, cx);
+        }
         if let Some(f) = self.editor.buffers.get_mut(id) {
             f.gutter.peek = None;
             // The input's Change event lands after this returns; until then
@@ -874,10 +871,9 @@ impl LyrelApp {
             return false;
         };
         let hunks = self.editor_gutter_hunks_now(id, cx);
-        let Some(f) = self.editor.buffers.get(id) else {
+        let Some(input) = self.editor_input_for(id) else {
             return false;
         };
-        let input = f.input.clone();
         let line = input.read(cx).cursor_position().line as usize;
         let ix = match hunk_at_line(&hunks, line) {
             Some(ix) => ix,
@@ -887,9 +883,7 @@ impl LyrelApp {
                 };
                 let last = input.read(cx).text().lines_len().saturating_sub(1);
                 let target = hunks[ix].new.start.min(last);
-                input.update(cx, |state, cx| {
-                    state.set_cursor_position(Position::new(target as u32, 0), window, cx);
-                });
+                input.set_cursor_position(Position::new(target as u32, 0), window, cx);
                 ix
             }
         };
@@ -907,8 +901,10 @@ impl LyrelApp {
             return;
         };
         if f.gutter.peek.take().is_some() {
-            let input = f.input.clone();
-            input.update(cx, |state, cx| state.focus(window, cx));
+            let Some(input) = self.editor_input_for(id) else {
+                return;
+            };
+            input.focus(window, cx);
             cx.notify();
         }
     }
@@ -940,7 +936,8 @@ impl LyrelApp {
         let position = match peek.anchor {
             PeekAnchor::Point(p) => p + gpui_kit::point(px(8.), px(4.)),
             PeekAnchor::Caret => {
-                let input = f.input.read(cx);
+                let input = self.editor_input_for(id)?;
+                let input = input.read(cx);
                 let caret = input.cursor();
                 let bounds = input.range_to_bounds(&(caret..caret))?;
                 bounds.bottom_left() + gpui_kit::point(px(0.), px(2.))
@@ -1268,6 +1265,8 @@ mod tests {
                 .get(id)
                 .expect("the buffer")
                 .input
+                .code()
+                .expect("ordinary code editor")
                 .clone();
             input.update(cx, |state, cx| {
                 state.set_value("one\nTWO\nthree\nfour\nfive\n", window, cx);

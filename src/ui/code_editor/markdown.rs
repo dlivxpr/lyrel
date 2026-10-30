@@ -1,0 +1,975 @@
+//! Source-authoritative Markdown editing. Views retain only interaction state.
+use crate::ui::editor_text::{self, EncodeError, LineEnding, TextFormat};
+use gpui_kit::base::{
+    UndoHistory,
+    input::{Rope, RopeExt as _},
+};
+use std::ops::Range;
+use unicode_segmentation::UnicodeSegmentation as _;
+
+mod images;
+pub(super) mod links;
+mod lists;
+mod math;
+mod mdx;
+mod mermaid;
+mod parser;
+mod projection;
+mod regions;
+pub(super) mod resources;
+mod source;
+mod tables;
+#[cfg(test)]
+pub(super) use source::FollowLink;
+pub(super) use source::SourcePresentation;
+pub(crate) use tables::bindings as table_bindings;
+#[cfg(test)]
+mod tests;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct Selection {
+    anchor: usize,
+    head: usize,
+}
+impl Selection {
+    pub(crate) fn new(anchor: usize, head: usize) -> Self {
+        Self { anchor, head }
+    }
+    pub(crate) fn caret(at: usize) -> Self {
+        Self::new(at, at)
+    }
+    pub(crate) fn range(self) -> Range<usize> {
+        self.anchor.min(self.head)..self.anchor.max(self.head)
+    }
+    pub(crate) fn head(self) -> usize {
+        self.head
+    }
+    pub(crate) fn is_reversed(self) -> bool {
+        self.head < self.anchor
+    }
+}
+
+pub(crate) struct PresentationState {
+    id: u64,
+    selection: Selection,
+    composition: Option<Composition>,
+}
+impl Default for Selection {
+    fn default() -> Self {
+        Self::caret(0)
+    }
+}
+impl PresentationState {
+    pub(crate) fn new(selection: Selection) -> Self {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static NEXT: AtomicU64 = AtomicU64::new(1);
+        Self {
+            id: NEXT.fetch_add(1, Ordering::Relaxed),
+            selection,
+            composition: None,
+        }
+    }
+    pub(crate) fn selection(&self) -> Selection {
+        self.selection
+    }
+    pub(crate) fn marked_range(&self) -> Option<Range<usize>> {
+        self.composition.as_ref().map(|c| c.range.clone())
+    }
+    pub(crate) fn rebase(&mut self, transaction: &Transaction) {
+        if transaction.origin != self.id {
+            self.selection = transaction.map_selection(self.selection);
+        }
+    }
+}
+impl Default for PresentationState {
+    fn default() -> Self {
+        Self::new(Selection::default())
+    }
+}
+
+/// The source-position effects of one command, in application order. Other
+/// presentations use this result to keep their own anchors on the same text.
+pub(crate) struct Transaction {
+    revision: u64,
+    origin: u64,
+    edits: smallvec::SmallVec<[SourceChange; 1]>,
+}
+struct SourceChange {
+    range: Range<usize>,
+    inserted_len: usize,
+}
+impl Transaction {
+    pub(crate) fn revision(&self) -> u64 {
+        self.revision
+    }
+    pub(crate) fn map_selection(&self, mut selection: Selection) -> Selection {
+        for edit in &self.edits {
+            let map = |offset: usize| {
+                if offset <= edit.range.start {
+                    offset
+                } else if offset >= edit.range.end {
+                    offset - edit.range.len() + edit.inserted_len
+                } else {
+                    edit.range.start + edit.inserted_len
+                }
+            };
+            selection = Selection::new(map(selection.anchor), map(selection.head));
+        }
+        selection
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum EditKind {
+    Typing,
+    Paste,
+    Command,
+}
+pub(crate) enum Command {
+    Table {
+        operation: tables::Operation,
+        range: Range<usize>,
+        revision: u64,
+    },
+    Reload {
+        text: String,
+        format: TextFormat,
+    },
+    Select(Selection),
+    RenameComponent {
+        opening: Range<usize>,
+        closing: Option<Range<usize>>,
+        name: String,
+    },
+    ExpandComponent {
+        ending: Range<usize>,
+        name: String,
+        block: bool,
+    },
+    Insert(String),
+    ParagraphBreak {
+        hard: bool,
+    },
+    ListBreak {
+        hard: bool,
+        at: Option<usize>,
+    },
+    ListBackspace,
+    ListIndent {
+        outdent: bool,
+        width: usize,
+        at: Option<usize>,
+    },
+    ToggleTask {
+        at: usize,
+    },
+    Replace {
+        range: Range<usize>,
+        text: String,
+        kind: EditKind,
+    },
+    /// Non-overlapping ranges in the original source coordinate system.
+    BatchReplace {
+        edits: Vec<(Range<usize>, String)>,
+        kind: EditKind,
+    },
+    BatchReplaceSelected {
+        edits: Vec<(Range<usize>, String)>,
+        selection: Selection,
+    },
+    /// Reorder/copy existing whole-line source, retaining each disk terminator.
+    ReplaceLines {
+        range: Range<usize>,
+        lines: Vec<Range<usize>>,
+        leading_newline: bool,
+        trailing_newline: bool,
+        selection: Selection,
+    },
+    Backspace,
+    Delete,
+    Undo,
+    Redo,
+    Compose {
+        range: Option<Range<usize>>,
+        text: String,
+        selected: Option<Range<usize>>,
+    },
+    ComposePaired {
+        range: Range<usize>,
+        mirror: Range<usize>,
+        text: String,
+        selected: Option<Range<usize>>,
+    },
+    Commit(String),
+    FinishComposition,
+    CancelComposition,
+}
+
+struct Composition {
+    range: Range<usize>,
+    original: SourceText,
+    selection: Selection,
+    mirror: Option<CompositionMirror>,
+}
+struct CompositionMirror {
+    range: Range<usize>,
+    original_start: usize,
+    original: SourceText,
+}
+#[derive(Clone)]
+struct Change {
+    edits: smallvec::SmallVec<[ReplacedSource; 1]>,
+    before: Selection,
+    after: Selection,
+}
+#[derive(Clone)]
+struct ReplacedSource {
+    start: usize,
+    removed: SourceText,
+    inserted: SourceText,
+}
+
+/// LF is the editing coordinate system; each LF carries its own disk spelling.
+/// Undo and preedit own only the affected representation, never a second source.
+#[derive(Clone, PartialEq, Eq)]
+struct SourceText {
+    text: String,
+    endings: Vec<LineEnding>,
+}
+impl SourceText {
+    fn from_input(text: String, new_line: LineEnding) -> Self {
+        let endings = text
+            .match_indices('\n')
+            .map(|(at, _)| {
+                if at > 0 && text.as_bytes()[at - 1] == b'\r' {
+                    LineEnding::CrLf
+                } else {
+                    new_line
+                }
+            })
+            .collect();
+        let text = if text.contains("\r\n") {
+            text.replace("\r\n", "\n")
+        } else {
+            text
+        };
+        Self { text, endings }
+    }
+}
+
+/// One retained source, monotonically increasing revision and shared reversible history.
+/// Representation belongs here, not in a source or live rendering cache.
+pub(crate) struct MarkdownDocument {
+    source: Rope,
+    revision: u64,
+    format: TextFormat,
+    endings: Vec<LineEnding>,
+    history: UndoHistory<Change>,
+    typing_end: Option<(u64, usize)>,
+    // A weak input lease prevents another presentation editing through preedit.
+    // The marked range, original text and selection stay in that presentation.
+    composition_owner: Option<gpui_kit::WeakEntity<SourcePresentation>>,
+    pending_changes: smallvec::SmallVec<[SourceChange; 1]>,
+    resources: Option<resources::ResourceContext>,
+    images: images::Images,
+}
+impl MarkdownDocument {
+    pub(crate) fn new(source: String, format: TextFormat) -> Self {
+        let source = SourceText::from_input(source, LineEnding::Lf);
+        Self {
+            source: Rope::from(source.text),
+            endings: source.endings,
+            revision: 0,
+            format,
+            history: UndoHistory::new(),
+            typing_end: None,
+            composition_owner: None,
+            pending_changes: smallvec::SmallVec::new(),
+            resources: None,
+            images: images::Images::default(),
+        }
+    }
+    pub(crate) fn source(&self) -> &Rope {
+        &self.source
+    }
+    pub(crate) fn revision(&self) -> u64 {
+        self.revision
+    }
+    pub(crate) fn format(&self) -> TextFormat {
+        self.format
+    }
+    fn grammar(&self) -> mdx::Grammar {
+        mdx::Grammar::for_path(
+            self.resources
+                .as_ref()
+                .and_then(|resources| resources.path()),
+        )
+    }
+    pub(crate) fn set_format(&mut self, format: TextFormat) {
+        if format.line_ending != self.format.line_ending {
+            self.endings.fill(format.line_ending);
+        }
+        self.format = format;
+    }
+    pub(crate) fn representation_fingerprint(&self) -> u64 {
+        use std::hash::{Hash as _, Hasher as _};
+        let mut hash = std::collections::hash_map::DefaultHasher::new();
+        for ending in &self.endings {
+            matches!(ending, LineEnding::CrLf).hash(&mut hash);
+        }
+        hash.finish()
+    }
+    pub(crate) fn encode(&self) -> Result<Vec<u8>, EncodeError> {
+        let mut text = String::with_capacity(self.source.len() + self.endings.len());
+        let mut endings = self.endings.iter();
+        for chunk in self.source.chunks() {
+            for part in chunk.split_inclusive('\n') {
+                if let Some(line) = part.strip_suffix('\n') {
+                    text.push_str(line);
+                    if endings.next() == Some(&LineEnding::CrLf) {
+                        text.push('\r');
+                    }
+                    text.push('\n');
+                } else {
+                    text.push_str(part);
+                }
+            }
+        }
+        editor_text::encode(
+            &text,
+            &TextFormat {
+                line_ending: LineEnding::Lf,
+                ..self.format
+            },
+        )
+    }
+    fn source_text(&self, range: Range<usize>) -> SourceText {
+        let start = self.source.offset_to_point(range.start).row;
+        let end = self.source.offset_to_point(range.end).row;
+        SourceText {
+            text: self.source.slice(range).to_string(),
+            endings: self.endings[start..end].to_vec(),
+        }
+    }
+
+    // Query borrowed Rope chunks and supply preceding context only when Unicode
+    // requires it. Even a document with one extremely wide line stays zero-copy.
+    pub(crate) fn boundary(&self, at: usize, forward: bool) -> usize {
+        Self::source_boundary(&self.source, at, forward)
+    }
+    fn source_boundary(source: &Rope, at: usize, forward: bool) -> usize {
+        use unicode_segmentation::{GraphemeCursor, GraphemeIncomplete};
+        let at = at.min(source.len());
+        let at = if forward {
+            source.ceil_char_boundary(at)
+        } else {
+            source.floor_char_boundary(at)
+        };
+        let mut cursor = GraphemeCursor::new(at, source.len(), true);
+        let (mut chunk, mut start) = source.chunk(at);
+        let mut testing = true;
+        loop {
+            let result = if testing {
+                cursor.is_boundary(chunk, start).map(|boundary| {
+                    if boundary {
+                        Some(at)
+                    } else {
+                        testing = false;
+                        None
+                    }
+                })
+            } else if forward {
+                cursor.next_boundary(chunk, start)
+            } else {
+                cursor.prev_boundary(chunk, start)
+            };
+            match result {
+                Ok(Some(offset)) => return offset,
+                Ok(None) if testing => return at,
+                Ok(None) => {
+                    if cursor.cur_cursor() == 0 {
+                        return 0;
+                    }
+                    if cursor.cur_cursor() == source.len() {
+                        return source.len();
+                    }
+                }
+                Err(GraphemeIncomplete::PreContext(end)) => {
+                    let (context, base) = source.chunk(end - 1);
+                    cursor.provide_context(&context[..end - base], base);
+                }
+                Err(GraphemeIncomplete::NextChunk) => {
+                    (chunk, start) = source.chunk(start + chunk.len());
+                }
+                Err(GraphemeIncomplete::PrevChunk) => {
+                    (chunk, start) = source.chunk(start - 1);
+                }
+                Err(GraphemeIncomplete::InvalidOffset) => {
+                    unreachable!("Rope chunk must contain the grapheme cursor")
+                }
+            }
+        }
+    }
+    pub(crate) fn previous(&self, at: usize) -> usize {
+        if at == 0 {
+            return 0;
+        }
+        self.boundary(at - 1, false)
+    }
+    pub(crate) fn next(&self, at: usize) -> usize {
+        if at >= self.source.len() {
+            return self.source.len();
+        }
+        self.boundary(at + 1, true)
+    }
+    pub(crate) fn safe_range(&self, range: Range<usize>) -> Range<usize> {
+        self.boundary(range.start.min(range.end), false)
+            ..self.boundary(range.end.max(range.start), true)
+    }
+    pub(crate) fn utf16_offset(&self, byte: usize) -> usize {
+        self.source.byte_to_utf16_idx(byte.min(self.source.len()))
+    }
+    fn byte_offset(&self, utf16: usize, forward: bool) -> usize {
+        let utf16 = utf16.min(self.source.len_utf16());
+        let mut byte = self.source.utf16_to_byte_idx(utf16);
+        if forward && self.source.byte_to_utf16_idx(byte) < utf16 {
+            byte += self.source.char_at(byte).map_or(0, char::len_utf8);
+        }
+        byte
+    }
+    pub(crate) fn utf16_range(&self, range: Range<usize>) -> Range<usize> {
+        self.byte_offset(range.start, false)..self.byte_offset(range.end, true)
+    }
+    fn replace(&mut self, range: Range<usize>, text: &SourceText) {
+        let start = self.source.offset_to_point(range.start).row;
+        let end = self.source.offset_to_point(range.end).row;
+        self.endings
+            .splice(start..end, text.endings.iter().copied());
+        self.pending_changes.push(SourceChange {
+            range: range.clone(),
+            inserted_len: text.text.len(),
+        });
+        self.source.replace(range, &text.text);
+        self.revision = self.revision.wrapping_add(1);
+    }
+    fn record(&mut self, change: Change, kind: EditKind, owner: u64) {
+        let edit = &change.edits[0];
+        let grouped = kind == EditKind::Typing
+            && change.edits.len() == 1
+            && self.typing_end == Some((owner, edit.start))
+            && edit.removed.text.is_empty()
+            && change.before.range().is_empty();
+        if grouped {
+            self.history.start_grouping();
+        } else {
+            self.history.end_grouping();
+        }
+        self.typing_end = (kind == EditKind::Typing
+            && change.edits.len() == 1
+            && !edit.inserted.text.contains(['\n', '\r']))
+        .then_some((owner, edit.start + edit.inserted.text.len()));
+        self.history.push(change);
+        self.history.end_grouping();
+    }
+    fn edit(
+        &mut self,
+        state: &mut PresentationState,
+        range: Range<usize>,
+        text: String,
+        kind: EditKind,
+    ) {
+        let range = self.safe_range(range);
+        let removed = self.source_text(range.clone());
+        let text = SourceText::from_input(text, self.format.line_ending);
+        let before = state.selection;
+        let end = range.start + text.text.len();
+        if removed == text {
+            state.selection = Selection::caret(self.boundary(end, true));
+            self.typing_end = None;
+            return;
+        }
+        self.replace(range.clone(), &text);
+        state.selection = Selection::caret(self.boundary(end, true));
+        self.record(
+            Change {
+                edits: smallvec::smallvec![ReplacedSource {
+                    start: range.start,
+                    removed,
+                    inserted: text
+                }],
+                before,
+                after: state.selection,
+            },
+            kind,
+            state.id,
+        );
+    }
+    fn batch_edit(
+        &mut self,
+        state: &mut PresentationState,
+        edits: Vec<(Range<usize>, String)>,
+        kind: EditKind,
+    ) {
+        self.batch_edit_selected(state, edits, kind, None);
+    }
+    fn batch_edit_selected(
+        &mut self,
+        state: &mut PresentationState,
+        mut edits: Vec<(Range<usize>, String)>,
+        kind: EditKind,
+        selection: Option<Selection>,
+    ) {
+        for (range, _) in &mut edits {
+            *range = self.safe_range(range.clone());
+        }
+        edits.sort_by_key(|(range, _)| std::cmp::Reverse(range.start));
+        let before = state.selection;
+        let mut changes = smallvec::SmallVec::new();
+        for (range, text) in edits {
+            let removed = self.source_text(range.clone());
+            let inserted = SourceText::from_input(text, self.format.line_ending);
+            if removed == inserted {
+                continue;
+            }
+            self.replace(range.clone(), &inserted);
+            state.selection =
+                Selection::caret(self.boundary(range.start + inserted.text.len(), true));
+            changes.push(ReplacedSource {
+                start: range.start,
+                removed,
+                inserted,
+            });
+        }
+        if !changes.is_empty() {
+            if let Some(selection) = selection {
+                state.selection = selection;
+            }
+            self.record(
+                Change {
+                    edits: changes,
+                    before,
+                    after: state.selection,
+                },
+                kind,
+                state.id,
+            );
+        }
+    }
+    fn replace_preedit(
+        &mut self,
+        state: &mut PresentationState,
+        range: Range<usize>,
+        text: &SourceText,
+    ) {
+        if let Some(mirror) = state
+            .composition
+            .as_mut()
+            .and_then(|composition| composition.mirror.as_mut())
+        {
+            self.replace(mirror.range.clone(), text);
+            let start = mirror.range.start - range.len() + text.text.len();
+            mirror.range = start..start + text.text.len();
+        }
+        self.replace(range.clone(), text);
+        state.composition.as_mut().unwrap().range = range.start..range.start + text.text.len();
+    }
+    fn finish_composition(&mut self, state: &mut PresentationState, cancel: bool) {
+        let Some(composition) = state.composition.take() else {
+            return;
+        };
+        self.typing_end = None;
+        let inserted = self.source_text(composition.range.clone());
+        let mirror = composition.mirror.map(|mirror| {
+            let inserted = self.source_text(mirror.range.clone());
+            (mirror, inserted)
+        });
+        if cancel {
+            // Restore in reverse transaction order, so the original closing-tag
+            // coordinate is valid again after restoring the opening name.
+            if inserted != composition.original {
+                self.replace(composition.range, &composition.original);
+            }
+            if let Some((mirror, inserted)) = mirror {
+                if inserted != mirror.original {
+                    self.replace(
+                        mirror.original_start..mirror.original_start + inserted.text.len(),
+                        &mirror.original,
+                    );
+                }
+            }
+            state.selection = composition.selection;
+        } else if inserted != composition.original {
+            let mut edits = smallvec::SmallVec::new();
+            if let Some((mirror, inserted)) = mirror {
+                edits.push(ReplacedSource {
+                    start: mirror.original_start,
+                    removed: mirror.original,
+                    inserted,
+                });
+            }
+            edits.push(ReplacedSource {
+                start: composition.range.start,
+                removed: composition.original,
+                inserted,
+            });
+            self.record(
+                Change {
+                    edits,
+                    before: composition.selection,
+                    after: state.selection,
+                },
+                EditKind::Command,
+                state.id,
+            );
+        }
+    }
+    /// All editing consumers use this command boundary. Native ranges are converted
+    /// before dispatch; composition state is owned by the calling presentation.
+    pub(crate) fn command(
+        &mut self,
+        state: &mut PresentationState,
+        command: Command,
+    ) -> Transaction {
+        self.apply_command(state, command);
+        Transaction {
+            revision: self.revision,
+            origin: state.id,
+            edits: std::mem::take(&mut self.pending_changes),
+        }
+    }
+
+    fn apply_command(&mut self, state: &mut PresentationState, command: Command) {
+        match command {
+            Command::ComposePaired {
+                range,
+                mirror,
+                text,
+                selected,
+            } => {
+                self.finish_composition(state, false);
+                let range = self.safe_range(range);
+                let mirror = self.safe_range(mirror);
+                if mirror.start < range.end {
+                    return;
+                }
+                state.composition = Some(Composition {
+                    range: range.clone(),
+                    original: self.source_text(range.clone()),
+                    selection: state.selection,
+                    mirror: Some(CompositionMirror {
+                        original_start: mirror.start,
+                        original: self.source_text(mirror.clone()),
+                        range: mirror,
+                    }),
+                });
+                self.apply_command(
+                    state,
+                    Command::Compose {
+                        range: Some(range),
+                        text,
+                        selected,
+                    },
+                );
+            }
+            Command::Table {
+                operation,
+                range,
+                revision,
+            } => {
+                self.finish_composition(state, false);
+                if revision != self.revision || range.end > self.source.len() {
+                    return;
+                }
+                self.typing_end = None;
+                let start = self
+                    .source
+                    .line_start_offset(self.source.offset_to_point(range.start).row);
+                let end = range.end
+                    + usize::from(
+                        self.source
+                            .slice(range.end..self.source.len())
+                            .chars()
+                            .next()
+                            == Some('\n'),
+                    );
+                let local = self.source_text(start..end);
+                if let Some((range, inserted, caret)) = tables::edit(
+                    &local,
+                    range.start - start..range.end - start,
+                    Selection::new(
+                        state.selection.anchor.saturating_sub(start),
+                        state.selection.head.saturating_sub(start),
+                    ),
+                    operation,
+                    self.format.line_ending,
+                ) {
+                    let range = range.start + start..range.end + start;
+                    let caret = caret + start;
+                    let mut removed = local;
+                    removed.text.drain(..range.start - start);
+                    if removed != inserted {
+                        let before = state.selection;
+                        self.replace(range.clone(), &inserted);
+                        state.selection = Selection::caret(caret);
+                        self.record(
+                            Change {
+                                edits: smallvec::smallvec![ReplacedSource {
+                                    start: range.start,
+                                    removed,
+                                    inserted
+                                }],
+                                before,
+                                after: state.selection,
+                            },
+                            EditKind::Command,
+                            state.id,
+                        );
+                    }
+                }
+            }
+            Command::Compose {
+                range,
+                text,
+                selected,
+            } => {
+                self.typing_end = None;
+                if text.is_empty() {
+                    self.finish_composition(state, true);
+                    return;
+                }
+                let range = range
+                    .or_else(|| state.marked_range())
+                    .unwrap_or_else(|| state.selection.range());
+                let range = if state.marked_range().as_ref() == Some(&range) {
+                    range
+                } else {
+                    self.safe_range(range)
+                };
+                // A platform replacement outside the current preedit ends that
+                // composition rather than recording unrelated text as its inverse.
+                if state.composition.as_ref().is_some_and(|c| c.range != range) {
+                    self.finish_composition(state, false);
+                }
+                if state.composition.is_none() {
+                    state.composition = Some(Composition {
+                        range: range.clone(),
+                        original: self.source_text(range.clone()),
+                        selection: state.selection,
+                        mirror: None,
+                    });
+                }
+                let text = SourceText::from_input(text, self.format.line_ending);
+                self.replace_preedit(state, range.clone(), &text);
+                let selected = selected.unwrap_or_else(|| {
+                    let end = text.text.encode_utf16().count();
+                    end..end
+                });
+                let start16 = self.utf16_offset(range.start);
+                let bytes = self.utf16_range(start16 + selected.start..start16 + selected.end);
+                state.selection = if bytes.is_empty() {
+                    Selection::caret(self.boundary(bytes.end, true))
+                } else {
+                    Selection::new(
+                        self.boundary(bytes.start, false),
+                        self.boundary(bytes.end, true),
+                    )
+                };
+            }
+            Command::CancelComposition => self.finish_composition(state, true),
+            Command::FinishComposition => self.finish_composition(state, false),
+            Command::Commit(text) => {
+                if let Some(range) = state.marked_range() {
+                    let text = SourceText::from_input(text, self.format.line_ending);
+                    self.replace_preedit(state, range.clone(), &text);
+                    state.selection =
+                        Selection::caret(self.boundary(range.start + text.text.len(), true));
+                    self.finish_composition(state, false);
+                } else {
+                    self.edit(state, state.selection.range(), text, EditKind::Typing);
+                }
+            }
+            command => {
+                self.finish_composition(state, false);
+                match command {
+                    Command::Reload { text, format } => {
+                        let text = SourceText::from_input(text, LineEnding::Lf);
+                        self.replace(0..self.source.len(), &text);
+                        self.format = format;
+                        self.history = UndoHistory::new();
+                        self.typing_end = None;
+                        state.selection =
+                            Selection::caret(self.boundary(state.selection.head, false));
+                    }
+                    Command::Select(selection) => {
+                        self.typing_end = None;
+                        state.selection = Selection::new(
+                            self.boundary(selection.anchor, false),
+                            self.boundary(selection.head, false),
+                        );
+                    }
+                    Command::RenameComponent {
+                        opening,
+                        closing,
+                        name,
+                    } => {
+                        let after = Selection::caret(opening.start + name.len());
+                        let mut edits = Vec::with_capacity(2);
+                        if let Some(closing) = closing {
+                            edits.push((closing, name.clone()));
+                        }
+                        edits.push((opening, name));
+                        self.batch_edit_selected(state, edits, EditKind::Command, Some(after));
+                    }
+                    Command::ExpandComponent {
+                        ending,
+                        name,
+                        block,
+                    } => {
+                        let after = Selection::caret(ending.start + if block { 2 } else { 1 });
+                        let text = if block {
+                            format!(">\n\n</{name}>")
+                        } else {
+                            format!("></{name}>")
+                        };
+                        self.batch_edit_selected(
+                            state,
+                            vec![(ending, text)],
+                            EditKind::Command,
+                            Some(after),
+                        );
+                    }
+                    Command::Insert(text) => {
+                        self.edit(state, state.selection.range(), text, EditKind::Typing)
+                    }
+                    Command::ParagraphBreak { hard } => {
+                        self.edit(
+                            state,
+                            state.selection.range(),
+                            if hard { "  \n" } else { "\n\n" }.into(),
+                            EditKind::Command,
+                        );
+                    }
+                    Command::ListBreak { hard, at } => lists::line_break(self, state, hard, at),
+                    Command::ListBackspace => lists::backspace(self, state),
+                    Command::ListIndent { outdent, width, at } => {
+                        lists::indent(self, state, outdent, width, at)
+                    }
+                    Command::ToggleTask { at } => lists::toggle(self, state, at),
+                    Command::Replace { range, text, kind } => self.edit(state, range, text, kind),
+                    Command::BatchReplace { edits, kind } => self.batch_edit(state, edits, kind),
+                    Command::BatchReplaceSelected { edits, selection } => {
+                        self.batch_edit_selected(state, edits, EditKind::Command, Some(selection));
+                    }
+                    Command::ReplaceLines {
+                        range,
+                        lines,
+                        leading_newline,
+                        trailing_newline,
+                        selection,
+                    } => {
+                        let mut inserted = SourceText {
+                            text: if leading_newline {
+                                "\n".into()
+                            } else {
+                                String::new()
+                            },
+                            endings: if leading_newline {
+                                vec![self.format.line_ending]
+                            } else {
+                                Vec::new()
+                            },
+                        };
+                        let count = lines.len();
+                        for (index, line) in lines.into_iter().enumerate() {
+                            let mut part = self.source_text(line);
+                            if index + 1 < count || trailing_newline {
+                                if !part.text.ends_with('\n') {
+                                    part.text.push('\n');
+                                    part.endings.push(self.format.line_ending);
+                                }
+                            } else if part.text.ends_with('\n') {
+                                part.text.pop();
+                                part.endings.pop();
+                            }
+                            inserted.text.push_str(&part.text);
+                            inserted.endings.extend(part.endings);
+                        }
+                        let removed = self.source_text(range.clone());
+                        let before = state.selection;
+                        if removed != inserted {
+                            self.replace(range.clone(), &inserted);
+                            state.selection = selection;
+                            self.record(
+                                Change {
+                                    edits: smallvec::smallvec![ReplacedSource {
+                                        start: range.start,
+                                        removed,
+                                        inserted
+                                    }],
+                                    before,
+                                    after: selection,
+                                },
+                                EditKind::Command,
+                                state.id,
+                            );
+                        }
+                    }
+                    Command::Backspace | Command::Delete => {
+                        let mut range = state.selection.range();
+                        if range.is_empty() {
+                            if matches!(command, Command::Backspace) {
+                                range.start = self.previous(range.start);
+                            } else {
+                                range.end = self.next(range.end);
+                            }
+                        }
+                        self.edit(state, range, String::new(), EditKind::Command);
+                    }
+                    Command::Undo | Command::Redo => {
+                        self.typing_end = None;
+                        let undo = matches!(command, Command::Undo);
+                        let changes = if undo {
+                            self.history.undo()
+                        } else {
+                            self.history.redo()
+                        };
+                        if let Some(changes) = changes {
+                            for change in changes {
+                                let mut edits = change.edits;
+                                if undo {
+                                    edits.reverse();
+                                }
+                                for edit in edits {
+                                    let (old, new) = if undo {
+                                        (&edit.inserted, &edit.removed)
+                                    } else {
+                                        (&edit.removed, &edit.inserted)
+                                    };
+                                    self.replace(edit.start..edit.start + old.text.len(), new);
+                                }
+                                state.selection = if undo { change.before } else { change.after };
+                            }
+                        }
+                    }
+                    _ => unreachable!(),
+                }
+            }
+        }
+    }
+}
+impl gpui_kit::EventEmitter<DocumentEvent> for MarkdownDocument {}
+pub(super) enum DocumentEvent {
+    Edited(Transaction),
+    PresentationChanged,
+    RequestAssetLocation {
+        presentation: gpui_kit::WeakEntity<SourcePresentation>,
+        cancelled: std::rc::Rc<std::cell::Cell<bool>>,
+    },
+    ResourceContextChanged,
+    ImagesChanged,
+    FollowLink {
+        presentation: gpui_kit::EntityId,
+        revision: u64,
+        target: String,
+    },
+}

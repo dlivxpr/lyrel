@@ -573,6 +573,8 @@ pub fn translate_en(key: L10nKey) -> &'static str {
         L10nKey::SearchWorkspacesAndMachines => "Search workspaces, tabs, and machines…",
         L10nKey::SearchFonts => "Search fonts…",
         L10nKey::SearchFind => "Find…",
+        L10nKey::EditorSearchReplacement => "Replace…",
+        L10nKey::EditorSearchReplaceAll => "Replace All",
         L10nKey::SearchMatchCase => "Match case",
         L10nKey::SearchUseRegex => "Use regular expression",
         L10nKey::NewFolderName => "New folder name",
@@ -1675,6 +1677,12 @@ pub fn translate_en(key: L10nKey) -> &'static str {
         L10nKey::FileTreeContextRename => "Rename",
         L10nKey::FileTreeContextCopyPath => "Copy Path",
         L10nKey::FileTreeContextHideDotfiles => "Hide Dotfiles",
+        L10nKey::MarkdownImageChooseLocation => "Choose a save location before inserting the image",
+        L10nKey::MarkdownImageWriting => "Writing image to document assets…",
+        L10nKey::MarkdownImageWriteFailed => "Could not write image to document assets",
+        L10nKey::MarkdownImageSelectionChanged => {
+            "The image was saved, but the selected text changed. No link was inserted."
+        }
         L10nKey::FileTreeContextShowDotfiles => "Show Dotfiles",
         L10nKey::FileDropIntoItself => "A folder cannot be copied into itself.",
         L10nKey::FileDropNotHere => "Not on this machine.",
@@ -1718,8 +1726,113 @@ pub fn translate_en(key: L10nKey) -> &'static str {
         L10nKey::EditorLnCol => "Ln {line}, Col {column}",
         L10nKey::EditorToggleLineEnding => "Switch line endings between LF and CRLF",
         L10nKey::StatusRemoteHost => "Remote host {id}",
-        L10nKey::EditorEdit => "Edit",
-        L10nKey::EditorPreview => "Preview",
+        L10nKey::EditorMarkdownLive => "Live editing",
+        L10nKey::EditorMarkdownSource => "Source",
+        L10nKey::EditorMarkdownLiveLabel => "Markdown live editor",
+        L10nKey::EditorMarkdownSourceLabel => "Markdown source",
+        L10nKey::EditorMarkdownTaskLabel => "Toggle task: {text}",
+        L10nKey::EditorMarkdownFormulaLabel => "Formula: {tex}",
+        L10nKey::EditorMdxEditName => "Edit component name",
+        L10nKey::EditorMdxEditProperty => "Edit property: {name}",
+        L10nKey::EditorMdxEditChildren => "Edit component children",
+        L10nKey::EditorCardEditName => "Edit card component name",
+        L10nKey::EditorCardFollowLabel => "Open card destination: {target}",
+        L10nKey::EditorCardAddProperty => "Add card property: {name}",
+        L10nKey::EditorCardEditProperty => "Edit card property: {name}",
+        L10nKey::EditorCardEditGroupLabel => "Edit card group children",
+        L10nKey::EditorAccordionCollapse => "Collapse accordion: {title}",
+        L10nKey::EditorAccordionExpand => "Expand accordion: {title}",
+        L10nKey::EditorMarkdownSourceRegion => {
+            "Source · structure not yet adapted for live editing"
+        }
+        L10nKey::EditorMdxGeneric => "Generic JSX structure · not runtime output",
+        L10nKey::EditorMdxName => "Component name",
+        L10nKey::EditorMdxProperty => "Property",
+        L10nKey::EditorMdxDynamic => "Dynamic source · never executed",
+        L10nKey::EditorMdxChildren => "Children · continuous Markdown",
+        L10nKey::EditorMdxClosing => "End component",
+        L10nKey::EditorMdxParseError => "Invalid MDX · edit the retained source to recover",
+        L10nKey::EditorCard => "Card",
+        L10nKey::EditorCardGroup => "Card group",
+        L10nKey::EditorCardGroupOrder => "Cards remain in document reading order",
+        L10nKey::EditorCardTitle => "Edit title",
+        L10nKey::EditorCardDestination => "Edit destination",
+        L10nKey::EditorCardIcon => "Edit icon",
+        L10nKey::EditorCardDescription => "Edit description",
+        L10nKey::EditorCardColumns => "Edit columns",
+        L10nKey::EditorCardFollow => "Open destination",
+        L10nKey::EditorCardEditContent => "Edit card content",
+        L10nKey::EditorCardEditGroup => "Edit cards",
+        L10nKey::EditorMdxStepsNumber => "Step {number}",
+        L10nKey::EditorMdxStepsSequence => "Procedure · {count} steps",
+        L10nKey::EditorMdxStepsSequenceSingular => "Procedure · {count} step",
+        L10nKey::EditorMdxStepsEditTitle => "Edit step title",
+        L10nKey::EditorMdxStepsEditSource => "Edit step source",
+        L10nKey::EditorMdxStepsEditContainerSource => "Edit procedure source",
+        L10nKey::EditorMdxStepsEndStep => "End step",
+        L10nKey::EditorMdxStepsEndSequence => "End procedure",
+        L10nKey::EditorCalloutNote => "Note",
+        L10nKey::EditorCalloutTip => "Tip",
+        L10nKey::EditorCalloutInfo => "Information",
+        L10nKey::EditorCalloutWarning => "Warning",
+        L10nKey::EditorCalloutEditSource => "Edit callout source",
+        L10nKey::EditorCalloutReturnContent => "Return to callout content",
+        L10nKey::EditorMdxAccordionsGroup => "Accordion group",
+        L10nKey::EditorMdxAccordionsSection => "Accordion",
+        L10nKey::EditorMdxAccordionsExpand => "Expand accordion",
+        L10nKey::EditorMdxAccordionsCollapse => "Collapse accordion",
+        L10nKey::EditorMdxTabsGroup => "Tabs",
+        L10nKey::EditorMdxTabsUntitled => "Untitled tab",
+        L10nKey::EditorMdxTabsEmpty => "No Tab children. Edit children to add a tab.",
+        L10nKey::EditorMdxTabsKeyboard => "In content: Alt+Page Up / Page Down switches tabs",
+        L10nKey::EditorMarkdownCodeRegion => "Code source",
+        L10nKey::EditorMarkdownMermaidSource => "Mermaid source",
+        L10nKey::EditorMarkdownMermaidLoading => "Rendering diagram…",
+        L10nKey::EditorMarkdownMermaidEdit => "Edit diagram source",
+        L10nKey::EditorMarkdownMermaidError => {
+            "Diagram could not render. Source is retained and editable."
+        }
+        L10nKey::EditorMarkdownMermaidEmpty => {
+            "No Mermaid diagram detected. Enter a diagram in the retained source."
+        }
+        L10nKey::EditorMarkdownMermaidExternal => {
+            "External diagram resources are not allowed. Use self-contained labels and shapes."
+        }
+        L10nKey::EditorMarkdownMermaidRasterLimit => {
+            "Diagram exceeds the native image limit (4096 pixels per side or 8 million pixels). Simplify or split the diagram."
+        }
+        L10nKey::EditorMarkdownMetadataRegion => "Metadata source",
+        L10nKey::EditorMarkdownHtmlRegion => "HTML source · not executed or rendered as HTML/CSS",
+        L10nKey::EditorMarkdownMathLoading => "Rendering formula",
+        L10nKey::EditorMarkdownMathError => {
+            "Couldn’t render formula. Click to edit its source. Reason:"
+        }
+        L10nKey::EditorLoadImages => "Load document images",
+        L10nKey::EditorImageUnloaded => "Image not loaded",
+        L10nKey::EditorImageLoading => "Loading image",
+        L10nKey::EditorImageLoaded => "Image loaded",
+        L10nKey::EditorImageFailed => "Couldn’t load image",
+        L10nKey::EditorTableCommands => "Table…",
+        L10nKey::EditorTableInsertRowBefore => "Table: Insert row above",
+        L10nKey::EditorTableInsertRowAfter => "Table: Insert row below",
+        L10nKey::EditorTableDeleteRow => "Table: Delete row",
+        L10nKey::EditorTableInsertColumnBefore => "Table: Insert column before",
+        L10nKey::EditorTableInsertColumnAfter => "Table: Insert column after",
+        L10nKey::EditorTableDeleteColumn => "Table: Delete column",
+        L10nKey::EditorTableAlignDefault => "Table: Default alignment",
+        L10nKey::EditorTableAlignLeft => "Table: Align left",
+        L10nKey::EditorTableAlignCenter => "Table: Align center",
+        L10nKey::EditorTableAlignRight => "Table: Align right",
+        L10nKey::MarkdownEditLinkDestination => "Edit link destination",
+        L10nKey::MarkdownEditReferenceDestination => "Edit reference destination",
+        L10nKey::MarkdownFollowLink => "Open link",
+        L10nKey::MarkdownLinkOpenFailed => "Couldn’t open link: {reason}",
+        L10nKey::MarkdownLinkInvalidDestination => "The destination is not a valid path or URL",
+        L10nKey::MarkdownLinkUnsupportedScheme => {
+            "This link scheme is not supported on the document’s Host"
+        }
+        L10nKey::MarkdownLinkSaveFirst => "Save the document before opening a relative link",
+        L10nKey::MarkdownLinkRemotePath => "A remote destination must use a POSIX path",
         L10nKey::EditorWrapOn => "Wrap: on",
         L10nKey::EditorWrapOff => "Wrap: off",
         L10nKey::EditorFileTooLarge => "\"{path}\" is too large for the editor ({size} MB)",
@@ -1775,10 +1888,6 @@ pub fn translate_en(key: L10nKey) -> &'static str {
         L10nKey::SettingsEditorSoftWrapDesc => {
             "Open files with soft wrap on. The status bar's Wrap button changes it for one file."
         }
-        L10nKey::SettingsEditorMarkdownPreview => "Open Markdown rendered",
-        L10nKey::SettingsEditorMarkdownPreviewDesc => {
-            "Show Markdown files as a rendered preview rather than as source when they open."
-        }
         L10nKey::SettingsSearchEditorGitGutterKeywords => {
             "git gutter diff changes markers staged index scm vcs modified added deleted"
         }
@@ -1786,9 +1895,6 @@ pub fn translate_en(key: L10nKey) -> &'static str {
             "lsp language server diagnostics errors warnings completion rust-analyzer definition"
         }
         L10nKey::SettingsSearchEditorSoftWrapKeywords => "wrap soft wrap long lines editor",
-        L10nKey::SettingsSearchEditorMarkdownPreviewKeywords => {
-            "markdown preview rendered md readme"
-        }
         L10nKey::EditorGoToLinePlaceholder => "Line, or line:column (1–{total})",
         L10nKey::EditorGoToSymbolAction => "Go to Symbol in Editor…",
         L10nKey::EditorNavigateBack => "Go Back",
@@ -2299,7 +2405,8 @@ pub fn translate_en(key: L10nKey) -> &'static str {
         L10nKey::CmdDocumentWidthThird => "Document: Third Width",
         L10nKey::CmdDocumentWidthHalf => "Document: Half Width",
         L10nKey::CmdDocumentWidthTwoThirds => "Document: Two-Thirds Width",
-        L10nKey::CmdToggleDocumentPreview => "Document: Toggle Markdown Preview",
+        L10nKey::CmdToggleDocumentPreview => "Document: Toggle Markdown Live Editing / Source",
+        L10nKey::CmdNewMarkdownDocument => "New Markdown Document",
         L10nKey::CmdToggleDocumentWrap => "Document: Toggle Word Wrap",
         L10nKey::CmdEditorTransformUppercase => "Document: Transform to Uppercase",
         L10nKey::CmdEditorTransformLowercase => "Document: Transform to Lowercase",

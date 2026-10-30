@@ -9,8 +9,8 @@ const RELOAD_DEBOUNCE: std::time::Duration = std::time::Duration::from_millis(20
 /// a `root = true` somewhere above it is not one worth stalling an open for.
 const EDITORCONFIG_DEPTH: usize = 16;
 
-/// Buffer identity and I/O lifetime. Tabs only retain presentation IDs.
-/// This is ordinary editor state: the retained identity remains EditorState.
+/// Document identity and I/O lifetime. Tabs only retain presentation relations;
+/// replacing an editing presentation does not replace the document.
 pub(super) struct EditorBuffers {
     files: Vec<OpenFile>,
     next_untitled: u32,
@@ -40,7 +40,9 @@ struct WatchBatch {
 pub(super) struct OpenTarget {
     pub(super) workspace: WorkspaceId,
     pub(super) tab: TabId,
+    pub(super) group: Option<split::GroupId>,
     pub(super) window_host: HostId,
+    pub(super) origin: Option<(BufferId, u64)>,
 }
 
 pub(super) enum OpenResult {
@@ -186,11 +188,14 @@ impl EditorBuffers {
         let Some(file) = self.get_mut(id) else { return };
         // Every edit also retires reads/stat results prepared for older text.
         file.reload_seq = file.reload_seq.wrapping_add(1);
-        let text = file.input.read(cx).text();
+        let input = file.input.read(cx);
+        let text = input.text();
         let len = text.len();
         let same =
             len == file.saved.len && Fingerprint::of_chunks(len, text.chunks()) == file.saved;
-        file.dirty = !same || file.format != file.saved_format;
+        file.dirty = !same
+            || file.format(cx) != file.saved_format
+            || file.representation_fingerprint(cx) != file.saved_representation;
     }
 
     /// Loading is host-bound; the target guard runs before allocating a buffer.
@@ -214,7 +219,7 @@ impl EditorBuffers {
         let seq = self.open_seq;
         self.foreground.insert(target.tab, seq);
         if let Some(id) = self.at(host.id(), path) {
-            self.place_cursor(id, cursor, window, cx);
+            self.place_cursor(id, cursor, target, window, cx);
             return Some(id);
         }
         self.pending.insert(key.clone(), seq);
@@ -242,7 +247,7 @@ impl EditorBuffers {
                         let (id, created) =
                             access(view).install(host, loaded, window, cx, access, edited);
                         if front {
-                            access(view).place_cursor(id, cursor, window, cx);
+                            access(view).place_cursor(id, cursor, target, window, cx);
                         }
                         OpenResult::Opened { id, created, front }
                     }
@@ -278,13 +283,33 @@ impl EditorBuffers {
             move |host| {
                 files
                     .into_iter()
-                    .map(|path| load_file(host, path).ok())
-                    .collect()
+                    .map(|path| (path.clone(), load_file(host, path)))
+                    .collect::<Vec<_>>()
             },
             move |view, loaded, window, cx| {
                 if access(view).context_epoch != epoch || !valid(view, target, cx) {
                     return;
                 }
+                let loaded = loaded
+                    .into_iter()
+                    .map(|(path, result)| match result {
+                        Ok(file) => Some(file),
+                        Err(error) => {
+                            if !is_markdown_path(&path) {
+                                return None;
+                            }
+                            let message = match error {
+                                EditorOpenError::Message(message) => message,
+                                EditorOpenError::NotText(path) => t_fmt(
+                                    L10nKey::EditorBinaryFile,
+                                    &[("path", &path.display().to_string())],
+                                ),
+                            };
+                            window.notify_app(message, cx);
+                            None
+                        }
+                    })
+                    .collect();
                 landed(view, loaded, window, cx);
             },
         );
@@ -294,19 +319,18 @@ impl EditorBuffers {
         &mut self,
         id: BufferId,
         cursor: Option<Position>,
+        target: OpenTarget,
         window: &mut Window,
         cx: &mut gpui_kit::App,
     ) {
         let Some(position) = cursor else { return };
         let Some(file) = self.get_mut(id) else { return };
-        file.preview = false;
-        place_cursor(
-            file.input.clone(),
-            position,
-            CURSOR_SCROLL_ATTEMPTS,
-            window,
-            cx,
-        );
+        let input = if let (Some(source), Some(group)) = (file.input.markdown(), target.group) {
+            EditorInput::Markdown(file.presentations.view(source, target.tab, group, cx))
+        } else {
+            file.input.clone()
+        };
+        place_cursor(input, position, CURSOR_SCROLL_ATTEMPTS, window, cx);
     }
 
     pub(super) fn install<E: 'static>(
@@ -330,6 +354,7 @@ impl EditorBuffers {
                 host,
                 loaded.path,
                 None,
+                BufferKind::Text,
                 loaded.text,
                 loaded.format,
                 loaded.config,
@@ -350,6 +375,7 @@ impl EditorBuffers {
         host: SharedHost,
         path: PathBuf,
         untitled: Option<u32>,
+        kind: BufferKind,
         text: String,
         format: TextFormat,
         config: EditorConfig,
@@ -367,38 +393,83 @@ impl EditorBuffers {
         };
         let cfg = cx.global::<crate::core::config::Config>();
         let wrap = cfg.editor_soft_wrap;
-        let preview = cfg.editor_markdown_preview && language == "markdown";
-        let saved = Fingerprint::of_str(&text);
-        let input = cx.new(|cx| {
-            EditorState::new(window, cx)
-                .language(language)
-                .tab_size(tab_size(indent))
-                .line_number(true)
-                .searchable(true)
-                .replaceable(true)
-                .folding(true)
-                .soft_wrap(wrap)
-                .context_menu(false)
-                .default_value(text)
+        let native_markdown = if untitled.is_some() {
+            matches!(kind, BufferKind::Markdown)
+        } else {
+            is_markdown_path(&path)
+        };
+        let id = BufferId::new();
+        let (input, popups, sub, observe) = if native_markdown {
+            let document = cx.new(|_| markdown::MarkdownDocument::new(text, format));
+            document.update(cx, |document, cx| {
+                document.set_resource_context(
+                    host.clone(),
+                    untitled.is_none().then(|| path.clone()),
+                    cx,
+                );
+            });
+            let sub = cx.subscribe_in(
+                &document,
+                window,
+                move |view, _, event: &markdown::DocumentEvent, _, cx| match event {
+                    markdown::DocumentEvent::Edited(_) => {
+                        access(view).note_edit(id, cx);
+                        edited(view, id, cx);
+                    }
+                    markdown::DocumentEvent::PresentationChanged
+                    | markdown::DocumentEvent::ResourceContextChanged
+                    | markdown::DocumentEvent::ImagesChanged => cx.notify(),
+                    markdown::DocumentEvent::FollowLink { .. }
+                    | markdown::DocumentEvent::RequestAssetLocation { .. } => {}
+                },
+            );
+            let presentation = cx.new(|cx| markdown::SourcePresentation::new(document, wrap, cx));
+            presentation.update(cx, |view, cx| view.set_indent(indent, cx));
+            let observe = cx.observe(&presentation, |_, _, cx| cx.notify());
+            (EditorInput::Markdown(presentation), None, sub, observe)
+        } else {
+            let input = cx.new(|cx| {
+                EditorState::new(window, cx)
+                    .language(language)
+                    .tab_size(tab_size(indent))
+                    .line_number(true)
+                    .searchable(true)
+                    .replaceable(true)
+                    .folding(true)
+                    .soft_wrap(wrap)
+                    .context_menu(false)
+                    .default_value(text)
+            });
+            let popups = cx.new(|cx| crate::ui::lsp::popups::EditorPopups::new(&input, window, cx));
+            let sub = cx.subscribe_in(&input, window, move |view, _, ev, _, cx| {
+                if matches!(ev, InputEvent::Change) {
+                    access(view).note_edit(id, cx);
+                    edited(view, id, cx);
+                }
+            });
+            let observe = cx.observe(&input, |_, _, cx| cx.notify());
+            (EditorInput::Code(input), Some(popups), sub, observe)
+        };
+        let value = input.read(cx);
+        let saved = Fingerprint::of_chunks(value.text().len(), value.text().chunks());
+        let saved_representation = input.markdown().map(|view| {
+            view.read(cx)
+                .document()
+                .read(cx)
+                .representation_fingerprint()
         });
-        let popups = cx.new(|cx| crate::ui::lsp::popups::EditorPopups::new(&input, window, cx));
-        let id = input.entity_id();
-        let sub = cx.subscribe_in(&input, window, move |view, _, ev, _, cx| {
-            if matches!(ev, InputEvent::Change) {
-                access(view).note_edit(id, cx);
-                edited(view, id, cx);
-            }
-        });
-        let observe = cx.observe(&input, |_, _, cx| cx.notify());
         self.files.push(OpenFile {
+            id,
             path,
             untitled,
             host,
             input,
+            presentations: MarkdownPresentations::default(),
             dirty: false,
             saved,
-            format,
+            format: (!native_markdown).then_some(format),
             saved_format: format,
+            saved_representation,
             config,
             indent,
             disk_mtime: mtime,
@@ -406,13 +477,15 @@ impl EditorBuffers {
             save_pending: false,
             reload_seq: 0,
             conflict: None,
-            preview,
             wrap,
-            preview_scroll: gpui_kit::ScrollHandle::new(),
             gutter: gutter::BufferGutter::default(),
             popups,
+            _assets_sub: None,
+            asset_location: None,
+            asset_save_required: untitled.is_some(),
             _sub: sub,
             _observe: observe,
+            _links_sub: None,
         });
         id
     }
@@ -621,6 +694,7 @@ impl EditorBuffers {
         let expected = target.clone();
         let host = file.host.clone();
         let host_id = host.id();
+        let markdown = file.input.markdown().is_some();
         file.reload_seq = file.reload_seq.wrapping_add(1);
         let seq = file.reload_seq;
         HostOps::run_in(
@@ -629,7 +703,12 @@ impl EditorBuffers {
             cx,
             move |h| {
                 let bytes = h.read_file(&target, MAX_FILE_BYTES)?;
-                let decoded = editor_text::decode(&bytes).ok_or_else(|| {
+                let decoded = if markdown {
+                    editor_text::decode_source(&bytes)?
+                } else {
+                    editor_text::decode(&bytes)
+                }
+                .ok_or_else(|| {
                     std::io::Error::new(std::io::ErrorKind::InvalidData, "no longer text")
                 })?;
                 let mtime = h.stat(&target).ok().and_then(|meta| meta.mtime);
@@ -655,16 +734,33 @@ impl EditorBuffers {
                     }
                     Err(error) => {
                         log::warn!("editor: reload of {} failed: {error}", file.path.display());
+                        HostOps::notify_err(window, cx, &file.label(), &error);
                         return;
                     }
                 };
                 file.disk_mtime = mtime;
                 file.conflict = None;
-                file.saved = Fingerprint::of_str(&decoded.text);
-                file.format = decoded.format;
                 file.saved_format = decoded.format;
                 let input = file.input.clone();
-                replace_buffer_text(&input, &decoded.text, window, cx);
+                if let Some(source) = input.markdown() {
+                    source.update(cx, |source, cx| {
+                        source.command(
+                            markdown::Command::Reload {
+                                text: decoded.text,
+                                format: decoded.format,
+                            },
+                            window,
+                            cx,
+                        )
+                    });
+                } else {
+                    file.set_format(decoded.format, cx);
+                    replace_buffer_text(&input, &decoded.text, window, cx);
+                }
+                let file = access(view).get_mut(id).unwrap();
+                let value = file.input.read(cx);
+                file.saved = Fingerprint::of_chunks(value.text().len(), value.text().chunks());
+                file.saved_representation = file.representation_fingerprint(cx);
                 access(view).note_edit(id, cx);
                 edited(view, id, cx);
             },
@@ -691,10 +787,14 @@ impl EditorBuffers {
             } else {
                 to.join(rest)
             };
+            if let Some(view) = file.input.markdown() {
+                view.read(cx).document().clone().update(cx, |document, cx| {
+                    document.set_resource_context(file.host.clone(), Some(file.path.clone()), cx);
+                });
+            }
             file.reload_seq = file.reload_seq.wrapping_add(1);
-            file.input.update(cx, |state, cx| {
-                state.set_highlighter(language_for_path(&file.path), cx)
-            });
+            file.input
+                .set_highlighter(language_for_path(&file.path), cx);
             moved = true;
         }
         moved
@@ -746,7 +846,16 @@ fn load_file(
             &[("path", &path.display().to_string()), ("e", &e.to_string())],
         ))
     })?;
-    let Some(decoded) = editor_text::decode(&bytes) else {
+    let Some(decoded) = decode_file(&path, &bytes).map_err(|error| {
+        EditorOpenError::Message(t_fmt(
+            L10nKey::EditorCantRead,
+            &[
+                ("path", &path.display().to_string()),
+                ("e", &error.to_string()),
+            ],
+        ))
+    })?
+    else {
         return Err(EditorOpenError::NotText(path));
     };
     let config = read_editorconfig(h, &path);
@@ -757,6 +866,14 @@ fn load_file(
         mtime: meta.mtime,
         config,
     })
+}
+
+fn decode_file(path: &Path, bytes: &[u8]) -> std::io::Result<Option<editor_text::Decoded>> {
+    if is_markdown_path(path) {
+        editor_text::decode_source(bytes)
+    } else {
+        Ok(editor_text::decode(bytes))
+    }
 }
 
 /// Collects the `.editorconfig` files that apply to `path`, nearest first,

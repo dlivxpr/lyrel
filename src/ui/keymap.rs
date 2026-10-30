@@ -80,6 +80,7 @@ fn fixed_bindings(cx: &App) -> Vec<KeyBinding> {
         KeyBinding::new("tab", SendTab, Some("Terminal")),
         KeyBinding::new("shift-tab", SendBackTab, Some("Terminal")),
     ];
+    bindings.extend(crate::ui::code_editor::markdown::table_bindings(cx));
     // The switcher's footer tells you Tab is the way across to the tab column
     // once a query is in the box. gpui-component's Root binds `tab` to its
     // focus walker, actions are dispatched before key listeners, and the panel
@@ -183,6 +184,12 @@ fn fixed_bindings(cx: &App) -> Vec<KeyBinding> {
             cx,
         ));
     }
+    bindings.push(load_binding(
+        "secondary-enter",
+        ToggleMarkdownTask,
+        Some("Input && Markdown"),
+        cx,
+    ));
     bindings
 }
 
@@ -750,6 +757,7 @@ fn shipped_bindings() -> Vec<(&'static str, &'static str)> {
         ),
         // Unbound: ⌘N is New Window, and the editor's header has a + for it.
         ("EditorNewFile", ""),
+        ("EditorNewMarkdownFile", ""),
         // The language-server commands. Unbound here — a default on a bare
         // function key would take it from the shell — and bound instead in
         // the editor's own context by `fixed_bindings`.
@@ -1160,6 +1168,10 @@ fn authored_entry(action: &str) -> Option<(CommandGroup, String)> {
         "EditorNewFile" => (
             CommandGroup::Terminal,
             t(L10nKey::EditorNewFile).to_string(),
+        ),
+        "EditorNewMarkdownFile" => (
+            CommandGroup::Terminal,
+            t(L10nKey::CmdNewMarkdownDocument).to_string(),
         ),
         "EditorNextChange" => (
             CommandGroup::Terminal,
@@ -1954,6 +1966,7 @@ fn make_binding(action: &str, keystroke: &str, cx: &App) -> Option<KeyBinding> {
             cx,
         ),
         "EditorNewFile" => load_binding(keystroke, EditorNewFile, None, cx),
+        "EditorNewMarkdownFile" => load_binding(keystroke, EditorNewMarkdownFile, None, cx),
         "EditorGoToDefinition" => load_binding(keystroke, EditorGoToDefinition, None, cx),
         "EditorQuickFix" => load_binding(keystroke, EditorQuickFix, None, cx),
         "EditorRenameSymbol" => load_binding(keystroke, EditorRenameSymbol, None, cx),
@@ -2095,6 +2108,26 @@ mod tests {
                 "{action} has a slot but nothing to dispatch"
             );
         }
+    }
+
+    #[test]
+    fn new_markdown_document_is_discoverable_and_bindable_without_a_default_chord() {
+        assert_eq!(
+            default_bindings()
+                .into_iter()
+                .find(|(action, _)| *action == "EditorNewMarkdownFile"),
+            Some(("EditorNewMarkdownFile", ""))
+        );
+        for (locale, label) in [
+            ("en", "New Markdown Document"),
+            ("zh-CN", "新建 Markdown 文档"),
+        ] {
+            crate::ui::i18n::set_locale(locale);
+            assert_eq!(action_entry("EditorNewMarkdownFile").1, label);
+        }
+        let binding = make_binding("EditorNewMarkdownFile", "ctrl-alt-m")
+            .expect("an explicit user shortcut can create Markdown documents");
+        assert_eq!(binding.action().name(), EditorNewMarkdownFile.name());
     }
 
     #[test]
