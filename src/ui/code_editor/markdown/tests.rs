@@ -7975,7 +7975,9 @@ fn native_table_inline_disclosures_hide_content_without_losing_source(cx: &mut g
     let bravo = original.find("bravo").unwrap();
     let secret = original.find("secret").unwrap();
     let width = |view: &SourcePresentation, at, cx: &gpui_kit::App| {
-        view.range_to_bounds(&(at..at + 5), cx).unwrap().size.width
+        let start = view.range_to_bounds(&(at..at), cx).unwrap().origin;
+        let end = view.range_to_bounds(&(at + 5..at + 5), cx).unwrap().origin;
+        (end.x - start.x).abs() + (end.y - start.y).abs()
     };
     context.update(|window, cx| {
         window.render_frame(cx);
