@@ -59,6 +59,7 @@ pub(super) struct Leaf {
     pub deferred: bool,
     segments: Vec<Segment>,
     insertion: usize,
+    inline_insertions: smallvec::SmallVec<[usize; 1]>,
     content: String,
     container: Option<Range<usize>>,
     spans: Vec<InlineSpan>,
@@ -71,6 +72,7 @@ impl Leaf {
             id: 0,
             version: 0,
             insertion: range.start,
+            inline_insertions: smallvec::SmallVec::new(),
             range,
             text: String::new(),
             kind,
@@ -256,8 +258,14 @@ impl Leaf {
         }
         changed
     }
+    pub(super) fn set_inline_insertions(&mut self, insertions: &[usize]) -> bool {
+        let insertions = insertions.iter().copied().filter(|at| self.range.start <= *at && *at <= self.range.end);
+        if self.inline_insertions.iter().copied().eq(insertions.clone()) { return false; }
+        self.inline_insertions = insertions.collect();
+        true
+    }
     pub fn inline_position(&self, at: usize) -> bool {
-        self.spans
+        self.inline_insertions.contains(&at) || self.spans
             .iter()
             .any(|span| span.source.start <= at && at <= span.source.end)
             || self.segments.iter().any(|segment| {
@@ -453,6 +461,11 @@ impl Leaf {
         if self.deferred {
             return (self.range.start + display).min(self.range.end);
         }
+        if let Some(at) = self.inline_insertions.iter().rev()
+            .find(|at| self.display_offset(**at) == display)
+        {
+            return *at;
+        }
         // A shared visual edge belongs inside the preceding closing delimiter;
         // opening delimiters instead select the first visible content byte.
         if let Some(closing) = self.segments.iter().rev().find(|segment| {
@@ -506,6 +519,7 @@ impl Leaf {
         };
         self.range = shift(self.range.start)..shift(self.range.end);
         self.insertion = shift(self.insertion);
+        for at in &mut self.inline_insertions { *at = shift(*at); }
         if let Kind::List(style) | Kind::Quote(style) = &mut self.kind {
             style.start = shift(style.start);
         }

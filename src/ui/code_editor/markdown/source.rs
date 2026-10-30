@@ -514,14 +514,16 @@ impl SourcePresentation {
         if !self.live {
             return;
         }
-        let hidden = super::mdx::view::hidden_inline_ranges(
+        let (hidden, insertions) = super::mdx::view::inline_visibility(
             &self.projection,
             self.document.read(cx).source(),
             &self.mdx_state,
         );
         let marked = self.state.marked_range();
         for leaf in &mut self.projection.leaves {
-            if leaf.hide_ranges(&hidden, marked.as_ref()) {
+            let visibility_changed = leaf.hide_ranges(&hidden, marked.as_ref());
+            let insertions_changed = leaf.set_inline_insertions(&insertions);
+            if visibility_changed || insertions_changed {
                 if matches!(leaf.kind, Kind::TableCell(_)) {
                     self.tables.invalidate_cell(leaf.id);
                 }
@@ -799,7 +801,7 @@ impl SourcePresentation {
                             &self.mdx_state,
                         ))
                 })
-                .map_or(component.name_range().start, |leaf| leaf.content_start())
+                .map_or(range.start, |leaf| leaf.content_start())
         };
         self.command(Command::Select(Selection::caret(target)), window, cx);
         self.focus.focus(window, cx);

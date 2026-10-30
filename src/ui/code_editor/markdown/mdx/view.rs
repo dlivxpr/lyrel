@@ -96,12 +96,13 @@ pub(in super::super) fn visible_field(context: &FieldContext<'_>) -> bool {
 
 /// Inline components share their surrounding leaf; hide only their mapped
 /// slices, never the enclosing paragraph/cell or the authoritative document.
-pub(in super::super) fn hidden_inline_ranges(
+pub(in super::super) fn inline_visibility(
     projection: &Projection,
     source: &gpui_kit::base::input::Rope,
     state: &ViewState,
-) -> Vec<std::ops::Range<usize>> {
+) -> (Vec<std::ops::Range<usize>>, smallvec::SmallVec<[usize; 1]>) {
     let mut hidden = Vec::new();
+    let mut insertions = smallvec::SmallVec::new();
     for component in &projection.mdx.components {
         let range = component.source_range();
         if !projection.leaves.iter().any(|leaf| {
@@ -145,10 +146,12 @@ pub(in super::super) fn hidden_inline_ranges(
             hidden.push(children.end..range.end);
             if state.collapsed.contains(&component.id()) {
                 hidden.push(children);
+            } else if children.is_empty() && component.closing_name_range().is_some() {
+                insertions.push(children.start);
             }
         }
     }
-    hidden
+    (hidden, insertions)
 }
 
 /// Dedicated family modules attach here: choose the family from the positioned
