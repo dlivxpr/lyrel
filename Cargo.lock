@@ -8483,9 +8483,9 @@ dependencies = [
 
 [[package]]
 name = "ratex-svg"
-version = "0.1.14"
+version = "0.1.15"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5a0948b4d4926858332fe04471e861f54103e655a64f74cc1b3eac0c59bf67bb"
+checksum = "f7c973fd0f91efc8588780c3ab0596295a9ae26932fd9a70561d5403d626c2f6"
 dependencies = [
  "ab_glyph",
  "base64 0.22.1",
