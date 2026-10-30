@@ -3170,6 +3170,7 @@ impl Element for SourceElement {
             {
                 view.selection_notification = false;
                 window.notify_text_selection_changed(&view.focus);
+                window.invalidate_character_coordinates();
             }
             if view.reveal_caret && view.focus.is_focused(window) {
                 let at = view.reveal_at.unwrap_or(view.state.selection.head);

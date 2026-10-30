@@ -1,5 +1,5 @@
 use super::*;
-use gpui_kit::{VisualContext as _, test::TestWindowExt as _};
+use gpui_kit::{EntityInputHandler as _, VisualContext as _, test::TestWindowExt as _};
 
 #[test]
 fn presentations_share_history_and_new_edits_replace_the_redo_branch() {
@@ -8319,9 +8319,22 @@ fn native_full_wide_table_reenters_distant_cells_with_wrapped_height_and_undo(
     }
     source.push('\n');
     for row in 0..160 {
-        source.push('|');
+        if row != 3 {
+            source.push('|');
+        }
         for column in 0..120 {
-            source.push_str(&format!(" Cell-{row:03}-{column:03} |"));
+            match (row, column) {
+                (1, 0) => source.push_str("a|"),
+                (1, 1) => source.push_str("b|"),
+                (2, 1) => source.push_str(" |"),
+                (3, 0) => source.push_str("first|"),
+                (3, 1) => source.push_str("# x |"),
+                _ => source.push_str(&format!(" Cell-{row:03}-{column:03} |")),
+            }
+        }
+        if row == 159 {
+            source.pop(); // The last cell has neither padding nor an outer pipe.
+            source.pop();
         }
         source.push('\n');
     }
@@ -8353,10 +8366,16 @@ fn native_full_wide_table_reenters_distant_cells_with_wrapped_height_and_undo(
     view.update_in(&mut context, |view, _, cx| view.set_soft_wrap(true, cx));
     settle_live_geometry(&view, &mut context);
     let settle_at = |at, context: &mut gpui_kit::VisualTestContext| {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(40);
         view.update_in(context, |view, window, cx| {
             view.select_range(at..at, cx);
             view.focus_handle(cx).focus(window, cx);
         });
+        assert_eq!(
+            view.read_with(context, |view, _| view.selection()),
+            Selection::caret(at),
+            "explicit table caret target must not move before layout"
+        );
         loop {
             context
                 .executor()
@@ -8364,13 +8383,14 @@ fn native_full_wide_table_reenters_distant_cells_with_wrapped_height_and_undo(
             context.run_until_parked();
             let bounds = context.update(|window, cx| {
                 window.render_frame(cx);
+                let surface = window.find("markdown-source").bounds();
                 view.read(cx)
                     .range_to_bounds(&(at..at), cx)
                     .filter(|bounds| {
-                        bounds.left() >= gpui_kit::px(0.)
-                            && bounds.right() <= window.viewport_size().width
-                            && bounds.top() >= gpui_kit::px(0.)
-                            && bounds.bottom() <= window.viewport_size().height
+                        bounds.left() >= surface.left()
+                            && bounds.right() <= surface.right()
+                            && bounds.top() >= surface.top() + bounds.size.height
+                            && bounds.bottom() <= surface.bottom() - bounds.size.height
                     })
             });
             if let Some(bounds) = bounds {
@@ -8414,6 +8434,96 @@ fn native_full_wide_table_reenters_distant_cells_with_wrapped_height_and_undo(
         later_bounds.top() > first.top(),
         "the distant cell must wrap rather than use a fixed row height"
     );
+    context.update(|window, cx| {
+        use gpui_kit::{
+            ElementInputHandler,
+            test::{TestInput, TestWindowExt as _},
+        };
+        window.render_frame(cx);
+        let before = view.read(cx).range_to_bounds(&(start..start), cx).unwrap();
+        let previous = source.find("Cell-079-119").unwrap();
+        let previous_before = view
+            .read(cx)
+            .range_to_bounds(&(previous..previous), cx)
+            .unwrap();
+        let surface = window.find("markdown-source").bounds();
+        TestInput::new(ElementInputHandler::new(surface, view.clone()), window).compose_text(
+            None,
+            "zhong'wen",
+            Some(9..9),
+            cx,
+        );
+        // Do not advance the parse debounce: the first OS candidate query must
+        // use the edited cell, not a document-sized temporary source block.
+        window.render_frame(cx);
+        window.render_frame(cx);
+        let marked = view
+            .update(cx, |view, cx| view.marked_text_range(window, cx))
+            .unwrap();
+        let candidate = view
+            .update(cx, |view, cx| {
+                view.bounds_for_range(marked, surface, window, cx)
+            })
+            .unwrap();
+        let previous_after = view
+            .read(cx)
+            .range_to_bounds(&(previous..previous), cx)
+            .unwrap();
+        assert_eq!(
+            candidate.left() - previous_after.left(),
+            before.left() - previous_before.left(),
+            "preedit retains its table column relative to the previous row"
+        );
+        assert_eq!(
+            candidate.top() - previous_after.top(),
+            before.top() - previous_before.top(),
+            "first candidate retains its table row, including when the viewport scrolls"
+        );
+        TestInput::new(ElementInputHandler::new(surface, view.clone()), window)
+            .commit_text("中文", cx);
+    });
+    view.read_with(&context, |view, cx| {
+        assert_eq!(
+            view.document().read(cx).encode().unwrap(),
+            source
+                .replacen("Tall-080-119", "中文Tall-080-119", 1)
+                .as_bytes()
+        );
+    });
+    context.update(|window, cx| {
+        use gpui_kit::{
+            ElementInputHandler,
+            test::{TestInput, TestWindowExt as _},
+        };
+        let handler =
+            ElementInputHandler::new(window.find("markdown-source").bounds(), view.clone());
+        TestInput::new(handler, window).compose_text(None, "ce'shi", Some(6..6), cx);
+        window.press("escape", cx);
+    });
+    view.read_with(&context, |view, cx| {
+        assert_eq!(
+            view.document().read(cx).encode().unwrap(),
+            source
+                .replacen("Tall-080-119", "中文Tall-080-119", 1)
+                .as_bytes()
+        );
+    });
+    context.update(|window, cx| window.press("tab", cx));
+    view.read_with(&context, |view, _| {
+        assert_eq!(
+            view.selection(),
+            Selection::caret(source.find("Cell-081-000").unwrap() + "中文".len()),
+            "preedit updates must retain the next row's rebased source coordinate"
+        );
+    });
+    context.dispatch_action(gpui_kit::component::input::Undo);
+    settle_at(start, &mut context);
+    view.read_with(&context, |view, cx| {
+        assert_eq!(
+            view.document().read(cx).encode().unwrap(),
+            source.as_bytes()
+        );
+    });
     context.update(|window, cx| window.input("X", cx));
     context.run_until_parked();
     view.read_with(&context, |view, cx| {
@@ -8431,5 +8541,123 @@ fn native_full_wide_table_reenters_distant_cells_with_wrapped_height_and_undo(
             view.document().read(cx).encode().unwrap(),
             source.as_bytes()
         )
+    });
+    let dense = source.find("|a|b|").unwrap() + 2;
+    settle_at(dense, &mut context);
+    context.update(|window, cx| {
+        window.input("X", cx);
+        window.press("right", cx);
+        window.input("Y", cx);
+    });
+    view.read_with(&context, |view, cx| {
+        assert_eq!(
+            view.document().read(cx).encode().unwrap(),
+            source.replacen("|a|b|", "|aX|Yb|", 1).as_bytes()
+        );
+    });
+    context.dispatch_action(gpui_kit::component::input::Undo);
+    context.dispatch_action(gpui_kit::component::input::Undo);
+    let empty = source.find("Cell-002-000 | | Cell-002-002").unwrap() + "Cell-002-000 |".len();
+    settle_at(empty, &mut context);
+    context.update(|window, cx| {
+        use gpui_kit::{ElementInputHandler, test::TestInput};
+        let handler =
+            ElementInputHandler::new(window.find("markdown-source").bounds(), view.clone());
+        TestInput::new(handler, window).compose_text(None, "ni", Some(2..2), cx);
+        window.press("escape", cx);
+        window.press("tab", cx);
+    });
+    view.read_with(&context, |view, cx| {
+        assert_eq!(
+            view.selection(),
+            Selection::caret(source.find("Cell-002-002").unwrap())
+        );
+        assert_eq!(
+            view.document().read(cx).encode().unwrap(),
+            source.as_bytes()
+        );
+    });
+    let inline_heading = source.find("first|# x | Cell-003-002").unwrap() + "first|# ".len();
+    settle_at(inline_heading, &mut context);
+    context.update(|window, cx| {
+        window.input("Q", cx);
+        window.press("tab", cx);
+    });
+    view.read_with(&context, |view, cx| {
+        assert_eq!(
+            view.selection(),
+            Selection::caret(source.find("Cell-003-002").unwrap() + 1)
+        );
+        assert_eq!(
+            view.document().read(cx).encode().unwrap(),
+            source
+                .replacen("first|# x | Cell-003-002", "first|# Qx | Cell-003-002", 1)
+                .as_bytes()
+        );
+    });
+    context.dispatch_action(gpui_kit::component::input::Undo);
+    let end = source.find("Cell-159-119").unwrap() + "Cell-159-119".len();
+    settle_at(end, &mut context);
+    context.update(|window, cx| window.input("Z", cx));
+    context.dispatch_action(super::tables::AlignRight);
+    context.dispatch_action(gpui_kit::component::input::Undo);
+    view.read_with(&context, |view, cx| {
+        assert_eq!(
+            view.document().read(cx).encode().unwrap(),
+            source
+                .replacen("Cell-159-119", "Cell-159-119Z", 1)
+                .as_bytes(),
+            "alignment at the grown table end must be a separate undo transaction"
+        );
+    });
+    context.dispatch_action(gpui_kit::component::input::Undo);
+    view.read_with(&context, |view, cx| {
+        assert_eq!(
+            view.document().read(cx).encode().unwrap(),
+            source.as_bytes()
+        );
+    });
+    settle_at(end, &mut context);
+    context.update(|window, cx| {
+        cx.write_to_clipboard(gpui_kit::ClipboardItem::new_string("X\n".into()));
+        window.press("secondary-v", cx);
+        window.input("Y", cx);
+        window.render_frame(cx);
+        window.render_frame(cx);
+        let caret = end + "X\nY".len();
+        assert_eq!(view.read(cx).selection(), Selection::caret(caret));
+        let previous_line = view
+            .read(cx)
+            .range_to_bounds(&(end + 1..end + 1), cx)
+            .unwrap();
+        let next_line = view.read(cx).range_to_bounds(&(caret..caret), cx).unwrap();
+        assert!(
+            next_line.top() > previous_line.top(),
+            "the newly pasted line must map below the previous line before the background parse"
+        );
+    });
+    view.read_with(&context, |view, cx| {
+        assert_eq!(
+            view.document().read(cx).encode().unwrap(),
+            source
+                .replacen("Cell-159-119", "Cell-159-119X\nY", 1)
+                .as_bytes()
+        );
+    });
+    context.dispatch_action(gpui_kit::component::input::Undo);
+    view.read_with(&context, |view, cx| {
+        assert_eq!(
+            view.document().read(cx).encode().unwrap(),
+            source
+                .replacen("Cell-159-119", "Cell-159-119X\n", 1)
+                .as_bytes()
+        );
+    });
+    context.dispatch_action(gpui_kit::component::input::Undo);
+    view.read_with(&context, |view, cx| {
+        assert_eq!(
+            view.document().read(cx).encode().unwrap(),
+            source.as_bytes()
+        );
     });
 }

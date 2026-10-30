@@ -26,6 +26,20 @@ impl Cell {
         self.start = shift(self.start);
         self.end = shift(self.end);
     }
+    pub fn rebase(&mut self, transaction: &super::Transaction) {
+        self.start = transaction
+            .map_selection(super::Selection::caret(self.start))
+            .head();
+        for edit in &transaction.edits {
+            self.end = if self.end < edit.range.start {
+                self.end
+            } else if self.end >= edit.range.end {
+                self.end - edit.range.len() + edit.inserted_len
+            } else {
+                edit.range.start + edit.inserted_len
+            };
+        }
+    }
 }
 
 pub(super) fn project(

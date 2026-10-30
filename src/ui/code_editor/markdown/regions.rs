@@ -59,7 +59,7 @@ pub(super) fn label(kind: Kind) -> Option<crate::ui::i18n::L10nKey> {
         Kind::Mermaid(_) => Some(L10nKey::EditorMarkdownMermaidSource),
         Kind::Metadata => Some(L10nKey::EditorMarkdownMetadataRegion),
         Kind::Html => Some(L10nKey::EditorMarkdownHtmlRegion),
-        Kind::Source => Some(L10nKey::EditorMarkdownSourceRegion),
+        Kind::Source | Kind::PendingSource => Some(L10nKey::EditorMarkdownSourceRegion),
         _ => None,
     }
 }

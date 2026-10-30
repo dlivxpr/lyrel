@@ -1,4 +1,5 @@
 use super::{Rope, Transaction};
+use gpui_kit::base::input::RopeExt as _;
 use markdown::mdast::Node;
 use std::ops::Range;
 
@@ -31,6 +32,7 @@ pub(super) enum Kind {
     Metadata,
     Html,
     Source,
+    PendingSource,
     TableCell(super::tables::Cell),
     Mdx(super::mdx::Field),
 }
@@ -1021,7 +1023,19 @@ impl Projection {
             .leaves
             .partition_point(|leaf| leaf.range.start <= at)
             .saturating_sub(1);
-        self.leaves.get(ix)
+        let leaf = self.leaves.get(ix)?;
+        if leaf.range.start == at
+            && let Some(previous) = ix.checked_sub(1).and_then(|ix| self.leaves.get(ix))
+            && let (Kind::TableCell(left), Kind::TableCell(right)) = (previous.kind, leaf.kind)
+            && left.same_row(right)
+            && previous.range.end == at
+            && previous.content_end() == at
+        {
+            // In `a|b`, the separator is both cell ranges' boundary. Typing
+            // after `a` must not jump to the beginning of `b`.
+            return Some(previous);
+        }
+        Some(leaf)
     }
     pub fn install(&mut self, mut newer: Self) {
         if newer.error.is_some() && self.revision == newer.revision && self.grammar == newer.grammar
@@ -1132,6 +1146,149 @@ impl Projection {
             self.leaves.splice(first..=last, replacement);
         }
     }
+    fn rebase_table_cell(
+        &mut self,
+        source: &Rope,
+        transaction: &Transaction,
+        parse_limit: usize,
+    ) -> bool {
+        let [edit] = transaction.edits.as_slice() else {
+            return false;
+        };
+        let Some(index) = self.leaves.iter().position(|leaf| {
+            matches!(leaf.kind, Kind::TableCell(cell) if cell.table().len() > parse_limit)
+                && leaf.range.start <= edit.range.start
+                && edit.range.end <= leaf.range.end
+        }) else {
+            return false;
+        };
+        let Kind::TableCell(owner) = self.leaves[index].kind else {
+            return false;
+        };
+        let mut first = index;
+        let mut last = index + 1;
+        while first > 0
+            && matches!(self.leaves[first - 1].kind, Kind::TableCell(cell) if cell.same_row(owner))
+        {
+            first -= 1;
+        }
+        while last < self.leaves.len()
+            && matches!(self.leaves[last].kind, Kind::TableCell(cell) if cell.same_row(owner))
+        {
+            last += 1;
+        }
+        let map = |at| {
+            transaction
+                .map_selection(super::Selection::caret(at))
+                .head()
+        };
+        let right = |at| {
+            if edit.range.is_empty() && at == edit.range.start {
+                at + edit.inserted_len
+            } else {
+                map(at)
+            }
+        };
+        let header_row = source.offset_to_point(map(owner.table().start)).row;
+        let header_start = source.line_start_offset(header_row);
+        let header_end = source.line_end_offset(header_row + 1);
+        let row = source.offset_to_point(edit.range.start).row;
+        let row_start = source.line_start_offset(row);
+        let row_end = source.line_end_offset(row);
+        if edit.range.start + edit.inserted_len > row_end {
+            return false;
+        }
+        let prefix_len = if row == header_row {
+            0
+        } else {
+            header_end - header_start + 1
+        };
+        let fragment_len = if row == header_row {
+            header_end - header_start
+        } else {
+            prefix_len + row_end - row_start
+        };
+        if fragment_len > parse_limit {
+            return false;
+        }
+        // Reuse the original header/delimiter and one original body row. A
+        // body may omit outer pipes or cells, and '# x' is still inline text.
+        let mut fragment = String::with_capacity(fragment_len);
+        std::fmt::write(
+            &mut fragment,
+            format_args!("{}", source.slice(header_start..header_end)),
+        )
+        .unwrap();
+        if row != header_row {
+            fragment.push('\n');
+            std::fmt::write(
+                &mut fragment,
+                format_args!("{}", source.slice(row_start..row_end)),
+            )
+            .unwrap();
+        }
+        let parsed =
+            Self::parse_fragment(&fragment, transaction.revision(), true, false, self.grammar);
+        if parsed.error.is_some() {
+            return false;
+        }
+        let mut cells: Vec<_> = parsed
+            .leaves
+            .into_iter()
+            .filter(|leaf| {
+                matches!(leaf.kind, Kind::TableCell(_)) && leaf.range.start >= prefix_len
+            })
+            .collect();
+        if cells.len() != last - first {
+            return false;
+        }
+        for (replacement, old) in cells.iter_mut().zip(&self.leaves[first..last]) {
+            let Kind::TableCell(mut cell) = old.kind else {
+                return false;
+            };
+            cell.rebase(transaction);
+            // Synthetic table metadata starts at zero, unlike its inline spans.
+            replacement.kind = Kind::Prose;
+            replacement.shift(prefix_len, row_start);
+            replacement.kind = Kind::TableCell(cell);
+            replacement.image_definitions = old.image_definitions.clone();
+            replacement.container = old.container.as_ref().map(|r| map(r.start)..right(r.end));
+            replacement.id = old.id;
+            replacement.rebuild(None);
+            replacement.version = if old.text == replacement.text && old.same_inline(replacement) {
+                old.version
+            } else {
+                let version = self.next_id;
+                self.next_id += 1;
+                version
+            };
+        }
+        for (ix, leaf) in self.leaves.iter_mut().enumerate() {
+            if (first..last).contains(&ix) {
+                continue;
+            }
+            let offset = |at| if ix >= last { right(at) } else { map(at) };
+            leaf.range = offset(leaf.range.start)..offset(leaf.range.end);
+            leaf.insertion = offset(leaf.insertion);
+            if let Some(container) = &mut leaf.container {
+                *container = map(container.start)..right(container.end);
+            }
+            match &mut leaf.kind {
+                Kind::TableCell(cell) => cell.rebase(transaction),
+                Kind::List(style) | Kind::Quote(style) => style.start = offset(style.start),
+                _ => {}
+            }
+            for segment in &mut leaf.segments {
+                segment.source = offset(segment.source.start)..offset(segment.source.end);
+            }
+            for span in &mut leaf.spans {
+                span.source = offset(span.source.start)..offset(span.source.end);
+            }
+        }
+        self.leaves.splice(first..last, cells);
+        self.revision = transaction.revision();
+        true
+    }
     pub fn rebase(&mut self, source: &Rope, transaction: &Transaction, live: bool) {
         if transaction.edits.is_empty() {
             return;
@@ -1149,11 +1306,17 @@ impl Projection {
             .reduce(|a, b| a.start.min(b.start)..a.end.max(b.end))
             .unwrap();
         const INPUT_PARSE_LIMIT: usize = 32 * 1024;
+        if live && self.rebase_table_cell(source, transaction, INPUT_PARSE_LIMIT) {
+            return;
+        }
         let mut local_live = live;
         // Keep affected child leaves inside their original AST container while
         // reparsing, so a nested item cannot temporarily become indented code.
         for leaf in &self.leaves {
             if leaf.range.start <= old.end && leaf.range.end >= old.start {
+                if leaf.kind == Kind::PendingSource {
+                    local_live = false;
+                }
                 if let Some(container) = &leaf.container {
                     if container.len() <= INPUT_PARSE_LIMIT {
                         old.start = old.start.min(container.start);
@@ -1252,21 +1415,33 @@ impl Projection {
             // the visible chunks materialize from the authoritative Rope.
             let mut leaves = Vec::new();
             let mut at = start;
-            while at < end {
+            loop {
+                let line_end = source
+                    .line_end_offset(source.offset_to_point(at).row)
+                    .min(end);
                 let next = super::MarkdownDocument::source_boundary(
                     source,
-                    (at + INPUT_PARSE_LIMIT / 2).min(end),
+                    (at + INPUT_PARSE_LIMIT / 2).min(line_end),
                     true,
                 )
-                .min(end);
-                let mut leaf = Leaf::new(at..next, Kind::Source);
+                .min(line_end);
+                let mut leaf = Leaf::new(at..next, Kind::PendingSource);
                 leaf.deferred = true;
                 leaves.push(leaf);
-                at = next;
+                if next == end {
+                    break;
+                }
+                at = next + usize::from(next == line_end);
             }
             leaves
         };
         for leaf in &mut patch {
+            // A bounded fragment of an oversized structure is not standalone
+            // Markdown. Keep subsequent input in source lines until the full
+            // revision-checked parse restores its original context.
+            if live && !local_live {
+                leaf.kind = Kind::PendingSource;
+            }
             leaf.id = if let Some(ix) = identities
                 .iter()
                 .position(|(at, _)| leaf.range.contains(at) || leaf.range.end == *at)
