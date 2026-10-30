@@ -461,11 +461,6 @@ impl Leaf {
         if self.deferred {
             return (self.range.start + display).min(self.range.end);
         }
-        if let Some(at) = self.inline_insertions.iter().rev()
-            .find(|at| self.display_offset(**at) == display)
-        {
-            return *at;
-        }
         // A shared visual edge belongs inside the preceding closing delimiter;
         // opening delimiters instead select the first visible content byte.
         if let Some(closing) = self.segments.iter().rev().find(|segment| {
@@ -487,7 +482,10 @@ impl Leaf {
                         .iter()
                         .rev()
                         .find(|span| !span.display.is_empty())
-                        .map_or(self.insertion, |s| s.source.end)
+                        // Explicit component selections retain empty anchors via
+                        // inline_position. Ordinary display navigation prefers
+                        // visible source; an anchor is only the empty-leaf fallback.
+                        .map_or_else(|| self.inline_insertions.last().copied().unwrap_or(self.insertion), |s| s.source.end)
                 },
                 |s| {
                     s.source.start
