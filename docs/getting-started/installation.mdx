@@ -193,13 +193,13 @@ Windows Chromium Cookie 的 AES-GCM 解密使用正式 registry 的 `aes-gcm =0.
   [故障排查](/reference/troubleshooting)。
 </Warning>
 
-### 隔离 Markdown 工作台的原生渲染依赖
+### 原生 Markdown 编辑器的渲染依赖
 
 桌面包使用正式 registry 的 `merman =0.9.2`（`all-diagrams` 与 `complete-svg`，不启用 ELK），以及 `ratex-parser`、`ratex-layout`、`ratex-svg =0.1.14`；相关 RaTeX 字体与类型组件按 `Cargo.lock` 解析为 `0.1.15`。公式由嵌入 glyph paths 的 SVG 光栅化，Mermaid 仅走 `resvg_safe` 原生管线；不增加 Node.js 或 Chromium 运行时要求，也不把这些桌面依赖加入 `lyrel-core`、server 或 CLI。
 
-RaTeX 代码使用 MIT，内嵌的 20 个 KaTeX 字体 face 使用 SIL OFL 1.1，不可合并写成 MIT。根 `LICENSE` 保留 Merman 本体、翻译／适配来源、RaTeX、字体版权及 Reserved Font Names；同一文件继续进入桌面 `LICENSE.txt` 与 server 的 `--license` 输出。具体功能通过显式隔离入口验收，未切换生产默认；编译依赖不代表所有数学语法、图形家族、离线或平台输入已通过运行验收。
+RaTeX 代码使用 MIT，内嵌的 20 个 KaTeX 字体 face 使用 SIL OFL 1.1，不可合并写成 MIT。根 `LICENSE` 保留 Merman 本体、翻译／适配来源、RaTeX、字体版权及 Reserved Font Names；同一文件继续进入桌面 `LICENSE.txt` 与 server 的 `--license` 输出。生产 Markdown 已默认使用原生即时编辑，可切换源码；运行验收继续使用 `--config-dir` 隔离配置，不再需要 `--markdown-workbench`。编译依赖不代表所有数学语法、图形家族、离线或平台输入已通过运行验收；本轮未执行 macOS 验收，实际证据与边界见[Markdown 编辑器说明](/window/side-panel#markdown-editor-design)。
 
-隔离工作台的 `.mdx` 路径使用正式 `ox_content_parser`、`ox_content_ast`、`ox_content_allocator =3.4.0`，只解析源码、字节区间和表达式文本，不编译或执行项目 JavaScript。其公开 AST 转换为现有投影使用的 `mdast` 数据；普通 `.md` 继续使用正式 `markdown =1.0.0`，同一文档不会让两个解析器竞争。YAML/TOML 元数据作为原始前缀分区，后续 AST 区间重定位到同一源码，不做输入占位或改写。上述 Ox Content 版本声明 Rust `1.95.0`；这是新增依赖的构建下限，不是从本机版本推导的项目要求。Ox Content 及其新增字符串／arena 依赖的 MIT 版权与许可保留在根 `LICENSE`。
+原生 Markdown 编辑器的 `.mdx` 路径使用正式 `ox_content_parser`、`ox_content_ast`、`ox_content_allocator =3.4.0`，只解析源码、字节区间和表达式文本，不编译或执行项目 JavaScript。其公开 AST 转换为现有投影使用的 `mdast` 数据；普通 `.md` 继续使用正式 `markdown =1.0.0`，同一文档不会让两个解析器竞争。YAML/TOML 元数据作为原始前缀分区，后续 AST 区间重定位到同一源码，不做输入占位或改写。上述 Ox Content 版本声明 Rust `1.95.0`；这是新增依赖的构建下限，不是从本机版本推导的项目要求。Ox Content 及其新增字符串／arena 依赖的 MIT 版权与许可保留在根 `LICENSE`。
 
 
 
