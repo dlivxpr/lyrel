@@ -2773,7 +2773,9 @@ builtin printf '\e]777;version;%s.%s\a' "${BASH_VERSINFO[0]}" "${BASH_VERSINFO[1
             ("XDG_DATA_HOME", home.join(".local/share")),
             ("XDG_RUNTIME_DIR", runtime_dir.path().to_path_buf()),
         ] {
-            injection.env.insert(key.to_string(), path.to_string_lossy().into_owned());
+            injection
+                .env
+                .insert(key.to_string(), path.to_string_lossy().into_owned());
         }
         // From HOME, retaining the real title's `~` contract.
         let text = prompt_cycle_over_pty(&pwsh, &injection, b"false\r", Some(&home));
