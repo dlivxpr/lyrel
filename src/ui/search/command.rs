@@ -94,6 +94,7 @@ pub enum CommandKind {
     ToggleSftp,
     ShowSshForwards,
     ToggleCodePanel,
+    EditorNewMarkdownFile,
     ToggleDocumentFill,
     DocumentWidthThird,
     DocumentWidthHalf,
@@ -286,6 +287,7 @@ impl CommandKind {
             ToggleSftp => "ssh-remote-files",
             ShowSshForwards => "ssh-port-forwarding",
             ToggleCodePanel => "code-panel",
+            EditorNewMarkdownFile => "editor-new-markdown",
             ToggleDocumentFill => "document-fill",
             DocumentWidthThird => "document-width-third",
             DocumentWidthHalf => "document-width-half",
@@ -436,6 +438,7 @@ impl CommandKind {
             ToggleSftp => "ToggleSftp",
             ShowSshForwards => "ShowSshForwards",
             ToggleCodePanel => "ToggleCodePanel",
+            EditorNewMarkdownFile => "EditorNewMarkdownFile",
             ToggleDocumentFill => "ToggleDocumentFill",
             DocumentWidthThird => "DocumentWidthThird",
             DocumentWidthHalf => "DocumentWidthHalf",
@@ -719,6 +722,7 @@ impl Item {
                 ToggleRightPanel,
             ),
             Item::localized(L10nKey::CmdShowCodePanel, ToggleCodePanel),
+            Item::localized(L10nKey::CmdNewMarkdownDocument, EditorNewMarkdownFile),
             Item::localized(L10nKey::CmdGoToFile, QuickOpenFile),
             Item::localized(
                 if document_filled {
