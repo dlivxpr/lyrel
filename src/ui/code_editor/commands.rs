@@ -1030,7 +1030,9 @@ mod gpui_tests {
             );
             std::thread::sleep(std::time::Duration::from_millis(5));
         }
-        app.update_in(&mut vcx, |app, window, cx| app.toggle_document_preview(window, cx));
+        app.update_in(&mut vcx, |app, window, cx| {
+            app.toggle_document_preview(window, cx)
+        });
         app.update_in(&mut vcx, |app, window, cx| {
             let input = app.active_buffer().unwrap().input.clone();
             input.set_selected_range(5..5, cx);
@@ -1121,7 +1123,9 @@ mod gpui_tests {
             );
             std::thread::sleep(std::time::Duration::from_millis(5));
         }
-        app.update_in(&mut vcx, |app, window, cx| app.toggle_document_preview(window, cx));
+        app.update_in(&mut vcx, |app, window, cx| {
+            app.toggle_document_preview(window, cx)
+        });
         app.update_in(&mut vcx, |app, window, cx| {
             let input = app.active_editor_input().unwrap();
             input.set_selected_range(0..3, cx);
@@ -1197,7 +1201,9 @@ mod gpui_tests {
             );
             std::thread::sleep(std::time::Duration::from_millis(5));
         }
-        app.update_in(&mut vcx, |app, window, cx| app.toggle_document_preview(window, cx));
+        app.update_in(&mut vcx, |app, window, cx| {
+            app.toggle_document_preview(window, cx)
+        });
         for (command, before, selection, expected) in [
             (Command::Comment, "中", 0..3, "<!-- 中 -->"),
             (Command::BlockComment, "中", 0..3, "<!-- 中 -->"),

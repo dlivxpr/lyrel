@@ -12,14 +12,28 @@ fn native_untitled_save_as_suggests_markdown_and_keeps_its_document(cx: &mut Tes
         let tab = app.tabs[0].id();
         let n = app.editor.buffers.next_untitled();
         let id = app.editor_new_buffer(
-            host.clone(), PathBuf::new(), Some(n), BufferKind::Markdown,
-            "# Author text\n".into(), TextFormat::default(), EditorConfig::default(),
-            editor_text::detect_indent("", "markdown"), None, window, cx,
+            host.clone(),
+            PathBuf::new(),
+            Some(n),
+            BufferKind::Markdown,
+            "# Author text\n".into(),
+            TextFormat::default(),
+            EditorConfig::default(),
+            editor_text::detect_indent("", "markdown"),
+            None,
+            window,
+            cx,
         );
         app.editor_show_in_tab(tab, id, true, window, cx);
         let file = app.active_buffer().unwrap();
         assert!(file.path.as_os_str().is_empty());
-        let document = file.input.markdown().unwrap().read(cx).document().entity_id();
+        let document = file
+            .input
+            .markdown()
+            .unwrap()
+            .read(cx)
+            .document()
+            .entity_id();
         app.editor_save_as(id, window, cx);
         document
     });
@@ -34,9 +48,12 @@ fn native_untitled_save_as_suggests_markdown_and_keeps_its_document(cx: &mut Tes
         window.input(&target.display().to_string(), cx);
         window.press("enter", cx);
     });
-    wait_until(&mut vcx, |vcx| app.read_with(vcx, |app, _| {
-        app.active_buffer().is_some_and(|file| file.path == target && !file.saving && file.untitled.is_none())
-    }));
+    wait_until(&mut vcx, |vcx| {
+        app.read_with(vcx, |app, _| {
+            app.active_buffer()
+                .is_some_and(|file| file.path == target && !file.saving && file.untitled.is_none())
+        })
+    });
     app.read_with(&vcx, |app, cx| {
         let file = app.active_buffer().unwrap();
         assert_eq!(file.host.id(), HostId(729));

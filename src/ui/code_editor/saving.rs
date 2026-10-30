@@ -352,7 +352,11 @@ impl EditorPanelState {
         };
         let file = self.buffers.get(id).unwrap();
         let suggested = if file.untitled.is_some() {
-            let extension = if file.input.markdown().is_some() { "md" } else { "txt" };
+            let extension = if file.input.markdown().is_some() {
+                "md"
+            } else {
+                "txt"
+            };
             PathBuf::from(format!("{}.{extension}", file.label()))
         } else {
             PathBuf::from(file.label().to_string())

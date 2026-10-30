@@ -376,7 +376,9 @@ mod tests {
             );
             std::thread::sleep(std::time::Duration::from_millis(5));
         }
-        app.update_in(&mut vcx, |app, window, cx| app.toggle_document_preview(window, cx));
+        app.update_in(&mut vcx, |app, window, cx| {
+            app.toggle_document_preview(window, cx)
+        });
         vcx.dispatch_action(gpui_kit::component::input::Replace);
         settle(&mut vcx);
         vcx.update(|window, cx| window.input("alpha", cx));

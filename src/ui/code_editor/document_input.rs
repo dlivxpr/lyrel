@@ -315,4 +315,3 @@ impl MarkdownPresentations {
         }
     }
 }
-

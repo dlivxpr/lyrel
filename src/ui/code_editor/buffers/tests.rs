@@ -26,7 +26,12 @@ fn active_id(app: &Entity<LyrelApp>, vcx: &VisualTestContext) -> Option<BufferId
 
 fn start_active_markdown_in_source(app: &Entity<LyrelApp>, vcx: &mut VisualTestContext) {
     app.update_in(vcx, |app, window, cx| {
-        let view = app.active_editor_input().unwrap().markdown().unwrap().clone();
+        let view = app
+            .active_editor_input()
+            .unwrap()
+            .markdown()
+            .unwrap()
+            .clone();
         view.update(cx, |view, cx| {
             if view.is_live() {
                 view.toggle_mode(window, cx);
@@ -44,25 +49,40 @@ fn production_markdown_opens_live_without_changing_code_or_plain_untitled(cx: &m
     for extension in ["md", "MARKDOWN", "MDX"] {
         let path = dir.path().join(format!("named.{extension}"));
         std::fs::write(&path, "# Heading\n\nbody\n").unwrap();
-        app.update_in(&mut vcx, |app, window, cx| app.open_file_in_editor(&path, window, cx));
-        wait_until(&mut vcx, |vcx| app.read_with(vcx, |app, _| {
-            app.active_buffer().is_some_and(|file| file.path.file_name() == path.file_name())
-        }));
+        app.update_in(&mut vcx, |app, window, cx| {
+            app.open_file_in_editor(&path, window, cx)
+        });
+        wait_until(&mut vcx, |vcx| {
+            app.read_with(vcx, |app, _| {
+                app.active_buffer()
+                    .is_some_and(|file| file.path.file_name() == path.file_name())
+            })
+        });
         app.read_with(&vcx, |app, cx| {
             let file = app.active_buffer().unwrap();
             assert_eq!(file.language(), "markdown");
             assert!(file.input.markdown().unwrap().read(cx).is_live());
-            assert_eq!(file.input.read(cx).text().to_string(), "# Heading\n\nbody\n");
+            assert_eq!(
+                file.input.read(cx).text().to_string(),
+                "# Heading\n\nbody\n"
+            );
             assert!(!file.dirty);
         });
     }
     let code = dir.path().join("main.rs");
     std::fs::write(&code, "fn main() {}\n").unwrap();
-    app.update_in(&mut vcx, |app, window, cx| app.open_file_in_editor(&code, window, cx));
-    wait_until(&mut vcx, |vcx| app.read_with(vcx, |app, _| {
-        app.active_buffer().is_some_and(|file| file.input.code().is_some())
-    }));
-    app.update_in(&mut vcx, |app, window, cx| app.toggle_document_preview(window, cx));
+    app.update_in(&mut vcx, |app, window, cx| {
+        app.open_file_in_editor(&code, window, cx)
+    });
+    wait_until(&mut vcx, |vcx| {
+        app.read_with(vcx, |app, _| {
+            app.active_buffer()
+                .is_some_and(|file| file.input.code().is_some())
+        })
+    });
+    app.update_in(&mut vcx, |app, window, cx| {
+        app.toggle_document_preview(window, cx)
+    });
     app.read_with(&vcx, |app, cx| {
         let file = app.active_buffer().unwrap();
         assert_eq!(file.language(), "rust");
@@ -77,7 +97,9 @@ fn production_markdown_opens_live_without_changing_code_or_plain_untitled(cx: &m
         assert!(file.path.as_os_str().is_empty());
         assert!(file.input.code().is_some());
     });
-    app.update_in(&mut vcx, |app, window, cx| app.editor_open_scrollback("# terminal output".into(), window, cx));
+    app.update_in(&mut vcx, |app, window, cx| {
+        app.editor_open_scrollback("# terminal output".into(), window, cx)
+    });
     app.read_with(&vcx, |app, cx| {
         let file = app.active_buffer().unwrap();
         assert!(file.input.code().is_some());
@@ -831,7 +853,11 @@ fn markdown_session_restore_surfaces_failed_reads_without_losing_valid_files(
             cx,
             tab,
             TabEditor {
-                files: vec![dir.path().join("unavailable-markdown.md"), missing.clone(), valid.clone()],
+                files: vec![
+                    dir.path().join("unavailable-markdown.md"),
+                    missing.clone(),
+                    valid.clone(),
+                ],
                 active: 2,
                 visible: true,
                 ..Default::default()
@@ -853,9 +879,13 @@ fn markdown_session_restore_surfaces_failed_reads_without_losing_valid_files(
         app.read_with(vcx, |_, cx| {
             let history = crate::ui::notification_history::history(cx);
             let history = history.read(cx);
-            ["unavailable-markdown.md", "unavailable.mdx"].iter().all(|name| {
-                history.records().any(|record| record.message().contains(*name))
-            })
+            ["unavailable-markdown.md", "unavailable.mdx"]
+                .iter()
+                .all(|name| {
+                    history
+                        .records()
+                        .any(|record| record.message().contains(*name))
+                })
         })
     });
 }
@@ -1181,7 +1211,9 @@ fn markdown_untitled_image_cancel_is_unchanged_and_success_waits_for_document_sa
     let path = dir.path().join("chosen.md");
     let png = screenshot_bytes();
     let (app, mut vcx, _streams) = harness_with_tabs(cx, 1);
-    app.update_in(&mut vcx, |app, window, cx| app.editor_new_markdown_file(window, cx));
+    app.update_in(&mut vcx, |app, window, cx| {
+        app.editor_new_markdown_file(window, cx)
+    });
     paste_screenshot(&mut vcx, &png);
     cx.simulate_new_path_selection(|_| None);
     vcx.run_until_parked();

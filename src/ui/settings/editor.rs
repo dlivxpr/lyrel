@@ -6,11 +6,8 @@ use super::*;
 impl SettingsWindow {
     pub(super) fn render_editor_group(&self, cx: &mut Context<Self>) -> AnyElement {
         let cfg = cx.global::<Config>();
-        let (git_gutter, lsp, soft_wrap) = (
-            cfg.editor_git_gutter,
-            cfg.editor_lsp,
-            cfg.editor_soft_wrap,
-        );
+        let (git_gutter, lsp, soft_wrap) =
+            (cfg.editor_git_gutter, cfg.editor_lsp, cfg.editor_soft_wrap);
         let git_gutter =
             self.settings_switch("wt-editor-git-gutter", git_gutter, cx, |this, on, _, cx| {
                 this.set_editor_git_gutter(on, cx)

@@ -1455,9 +1455,9 @@ mod tests {
 
 #[cfg(test)]
 pub(super) mod gpui_tests {
+    use super::super::BufferKind;
     use super::*;
     use crate::ui::app::test_window::harness_with_tabs;
-    use super::super::BufferKind;
     use crate::ui::editor_text::{EditorConfig, TextFormat};
     use gpui_kit::{Entity, TestAppContext, VisualTestContext};
 

@@ -392,9 +392,13 @@ pub(super) enum BufferKind {
 }
 
 pub(crate) fn is_markdown_path(path: &Path) -> bool {
-    path.extension().and_then(|ext| ext.to_str()).is_some_and(|ext| {
-        ["md", "markdown", "mdx"].iter().any(|candidate| ext.eq_ignore_ascii_case(candidate))
-    })
+    path.extension()
+        .and_then(|ext| ext.to_str())
+        .is_some_and(|ext| {
+            ["md", "markdown", "mdx"]
+                .iter()
+                .any(|candidate| ext.eq_ignore_ascii_case(candidate))
+        })
 }
 
 pub(crate) fn language_for_path(path: &Path) -> &'static str {
@@ -1333,7 +1337,12 @@ impl LyrelApp {
         self.editor_new_untitled(BufferKind::Markdown, window, cx);
     }
 
-    fn editor_new_untitled(&mut self, kind: BufferKind, window: &mut Window, cx: &mut Context<Self>) {
+    fn editor_new_untitled(
+        &mut self,
+        kind: BufferKind,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let Some(host) = self.active_host(cx) else {
             return;
         };

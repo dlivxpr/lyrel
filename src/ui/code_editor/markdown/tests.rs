@@ -1,12 +1,18 @@
 use super::*;
 use gpui_kit::{EntityInputHandler as _, VisualContext as _, test::TestWindowExt as _};
 
-fn start_in_source(view: &gpui_kit::Entity<SourcePresentation>, cx: &mut gpui_kit::VisualTestContext) {
+fn start_in_source(
+    view: &gpui_kit::Entity<SourcePresentation>,
+    cx: &mut gpui_kit::VisualTestContext,
+) {
     view.update_in(cx, |view, window, cx| {
         if view.is_live() {
             view.toggle_mode(window, cx);
         }
-        assert!(!view.is_live(), "this scenario starts in source before exercising live mode");
+        assert!(
+            !view.is_live(),
+            "this scenario starts in source before exercising live mode"
+        );
     });
 }
 
@@ -5434,7 +5440,14 @@ fn mermaid_matrix_workbench(
         );
         std::thread::sleep(std::time::Duration::from_millis(5));
     }
-    assert!(app.read_with(&context, |app, cx| app.active_editor_input().unwrap().markdown().unwrap().read(cx).is_live()));
+    assert!(app.read_with(&context, |app, cx| {
+        app.active_editor_input()
+            .unwrap()
+            .markdown()
+            .unwrap()
+            .read(cx)
+            .is_live()
+    }));
     settle(&mut context, rendered);
     assert_eq!(std::fs::read(&path).unwrap(), expected.as_bytes());
 }

@@ -602,7 +602,6 @@ fn main() {
         }
     }
 
-
     apply_config_dir_arg(&args);
 
     let daemon = args
@@ -727,10 +726,7 @@ fn main() {
     // routing through a daemon that is not up yet would fail on every cold
     // start. Here the daemon is known to be running, so the probe is cheap and
     // a `Bool(true)` means a GUI actually received the request.
-    if open_path.is_none()
-        && daemon_result.is_ok()
-        && forward_open_path(None)
-    {
+    if open_path.is_none() && daemon_result.is_ok() && forward_open_path(None) {
         return;
     }
     if let Err(e) = daemon_result {
