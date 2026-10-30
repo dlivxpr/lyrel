@@ -7954,10 +7954,13 @@ fn native_table_inline_disclosures_hide_content_without_losing_source(
     cx: &mut gpui_kit::TestAppContext,
 ) {
     use crate::ui::app::test_window::harness_with_tabs;
-    use gpui_kit::test::{TestEventExt as _, TestQueryExt as _, TestWindowExt as _};
+    use gpui_kit::{
+        Focusable as _,
+        test::{TestEventExt as _, TestQueryExt as _, TestWindowExt as _},
+    };
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("inline-disclosures.mdx");
-    let original = "| content |\n| --- |\n| <Tabs><Tab title='A'>alpha</Tab><Tab title='B'>bravo</Tab><Tab title='C'></Tab></Tabs> |\n| <Accordion title='Details'>secret</Accordion> |";
+    let original = "| content |\n| --- |\n| <Tabs><Tab title='A'>alpha</Tab><Tab title='B'>bravo</Tab><Tab title='C'></Tab></Tabs> |\n| <Accordion title='Details'>secret</Accordion> |\n| <Accordion title='Empty'></Accordion>X |";
     std::fs::write(&path, original).unwrap();
     let (app, mut context, _streams) = harness_with_tabs(cx, 1);
     app.update_in(&mut context, |app, window, cx| {
@@ -8019,6 +8022,21 @@ fn native_table_inline_disclosures_hide_content_without_losing_source(
             original.as_bytes()
         );
     });
+    let adjacent = original.rfind('X').unwrap();
+    view.update_in(&mut context, |view, window, cx| {
+        view.select_range(adjacent + 1..adjacent + 1, cx);
+        view.focus_handle(cx).focus(window, cx);
+    });
+    context.update(|window, cx| {
+        window.press("left", cx);
+        window.input("before", cx);
+    });
+    view.read_with(&context, |view, cx| {
+        assert_eq!(view.document().read(cx).encode().unwrap(), original.replacen("</Accordion>X", "</Accordion>beforeX", 1).as_bytes());
+    });
+    context.dispatch_action(gpui_kit::component::input::Undo);
+    view.read_with(&context, |view, cx| assert_eq!(view.document().read(cx).encode().unwrap(), original.as_bytes()));
+    settle_live_geometry(&view, &mut context);
     context.update(|window, cx| {
         let choice = window
             .find_all("mdx-tabs-choice")
