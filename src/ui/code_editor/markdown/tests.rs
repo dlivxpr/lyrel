@@ -7955,7 +7955,6 @@ fn native_table_inline_disclosures_hide_content_without_losing_source(
 ) {
     use crate::ui::app::test_window::harness_with_tabs;
     use gpui_kit::{
-        Focusable as _,
         test::{TestEventExt as _, TestQueryExt as _, TestWindowExt as _},
     };
     let directory = tempfile::tempdir().unwrap();
