@@ -2207,7 +2207,6 @@ fn edit_link_destination_when_ready(
     context: &mut gpui_kit::VisualTestContext,
     expected: Range<usize>,
 ) {
-    use gpui_kit::test::TestWindowExt as _;
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
     loop {
         context
@@ -4658,8 +4657,8 @@ fn structured_math_syntax_matrix_edits_renders_and_reopens_through_workbench(
     cx: &mut gpui_kit::TestAppContext,
 ) {
     use crate::ui::app::test_window::harness_with_tabs;
+    use gpui_kit::Focusable as _;
     use gpui_kit::test::TestWindowExt as _;
-    use gpui_kit::{Focusable as _, VisualContext as _};
 
     // Each reference is a simpler expression with independently predictable
     // geometry. Literal TeX, a loading label, or one fixed placeholder cannot
@@ -4926,7 +4925,7 @@ fn structured_math_local_invalid_recovery_composition_and_selection_keep_one_his
 ) {
     use crate::ui::app::test_window::harness_with_tabs;
     use gpui_kit::test::{TestInput, TestWindowExt as _};
-    use gpui_kit::{ElementInputHandler, Focusable as _, VisualContext as _};
+    use gpui_kit::{ElementInputHandler, Focusable as _};
 
     let fixtures = [
         r"\begin{pmatrix}a_i^2&\text{old}\\\sqrt{x}&\sum_{i=1}^n i\end{pmatrix}",
@@ -8235,7 +8234,7 @@ fn native_empty_quote_line_exits_one_level_and_undo_restores_source(
     cx: &mut gpui_kit::TestAppContext,
 ) {
     use crate::ui::app::test_window::harness_with_tabs;
-    use gpui_kit::{Focusable as _, test::TestEventExt as _};
+    use gpui_kit::Focusable as _;
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("quote.md");
     let original = "> first\n>\n> next\n\nkeep  ";
