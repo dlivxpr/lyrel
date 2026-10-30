@@ -47,7 +47,7 @@ pub(crate) struct SourcePresentation {
     live: bool,
     projection: Projection,
     blocks: HashMap<u64, CachedBlock>,
-    tables: HashMap<u64, BlockNode>,
+    tables: super::tables::Layout,
     rendered_revision: Option<u64>,
     render_generation: u64,
     parse_task: Option<Task<()>>,
@@ -91,6 +91,7 @@ impl SourcePresentation {
                     }
                 }
                 this.refresh_images(false, cx);
+                this.tables.invalidate();
                 this.invalidate_layout(cx);
                 cx.notify();
                 return;
@@ -173,7 +174,7 @@ impl SourcePresentation {
             live: false,
             projection,
             blocks: HashMap::new(),
-            tables: HashMap::new(),
+            tables: super::tables::Layout::default(),
             rendered_revision: None,
             render_generation: 0,
             parse_task: None,
@@ -447,6 +448,7 @@ impl SourcePresentation {
                             view.math.outputs.insert(formula, output);
                         }
                     }
+                    view.tables.invalidate();
                     for cached in view.blocks.values_mut() {
                         cached.version = u64::MAX;
                     }
@@ -508,6 +510,10 @@ impl SourcePresentation {
                 &self.extra_selections,
                 marked.as_ref(),
             ) {
+                if matches!(leaf.kind, Kind::TableCell(_)) {
+                    self.tables.invalidate_cell(leaf.id);
+                    self.viewport.heights.clear();
+                }
                 if let Some(cached) = self.blocks.get_mut(&leaf.id) {
                     cached.version = u64::MAX;
                 }
@@ -1967,17 +1973,78 @@ impl Render for SourcePresentation {
         if self.math.style != Some(style) {
             self.math.style = Some(style);
             self.math.outputs.clear();
+            self.tables.invalidate();
             for cached in self.blocks.values_mut() {
                 cached.version = u64::MAX;
             }
             self.rendered_revision = None;
             self.schedule_math(cx);
         }
+        let view = cx.entity().downgrade();
+        let ready: std::collections::HashMap<_, _> = self
+            .document
+            .read(cx)
+            .images
+            .states
+            .iter()
+            .filter_map(|(url, state)| {
+                if let super::images::State::Ready(image) = state {
+                    Some((url.clone(), image.clone()))
+                } else {
+                    None
+                }
+            })
+            .collect();
+        let context = RenderContext::from_app(cx)
+            .with_body_font_size(window.rem_size())
+            .with_markdown_extensions(super::math::extensions())
+            .with_image_source(move |uri| {
+                ready.get(uri.as_ref()).map_or_else(
+                    || ImageSource::Custom(std::sync::Arc::new(|_, _| None)),
+                    |image| ImageSource::Render(image.clone()),
+                )
+            })
+            .on_link_click(move |_, event, _, cx| {
+                let _ = view.update(cx, |view, cx| {
+                    view.dragging = false;
+                    if let ClickEvent::Mouse(click) = event {
+                        if click.up.button == MouseButton::Left {
+                            view.finish_pointer_link(click.up.position, click.up.modifiers, cx);
+                        }
+                    }
+                });
+            });
+        let table_width = self
+            .viewport
+            .bounds
+            .map_or(window.viewport_size().width, |bounds| bounds.size.width)
+            - window.rem_size() * 1.5;
+        if self.tables.prepare(
+            &self.projection.leaves,
+            table_width,
+            self.wrap,
+            false,
+            self.state.marked_range().as_ref(),
+            &self.math,
+            &context,
+            window,
+            cx,
+        ) {
+            self.viewport.heights.clear();
+        }
+        if self.reveal_caret {
+            let at = self.reveal_at.unwrap_or(self.state.selection.head);
+            if let Some(leaf) = self.projection.leaf_at(at) {
+                if let Kind::TableCell(cell) = leaf.kind {
+                    self.tables.reveal(cell, table_width);
+                }
+            }
+        }
         if self.viewport.layout.is_none() {
             self.viewport.heights.clear();
         }
         // Heights are derived, versioned layout hints, never source ownership.
-        // Tables occupy one virtual row so cell geometry is collected together.
+        // A table row is one variable-height virtual item; columns are culled separately.
         let mut before = Pixels::ZERO;
         let mut through = Pixels::ZERO;
         let mut ix = 0;
@@ -1998,7 +2065,7 @@ impl Render for SourcePresentation {
             let mut end = ix + 1;
             if let Kind::TableCell(cell) = leaf.kind {
                 while end < self.projection.leaves.len()
-                    && matches!(self.projection.leaves[end].kind, Kind::TableCell(other) if other.table() == cell.table())
+                    && matches!(self.projection.leaves[end].kind, Kind::TableCell(other) if other.same_row(cell))
                 {
                     end += 1;
                 }
@@ -2157,84 +2224,8 @@ impl Render for SourcePresentation {
             }
             self.blocks
                 .retain(|_, cached| cached.seen == self.render_generation);
-            self.tables.clear();
-            let mut ix = visible.start;
-            while ix < visible.end {
-                let leaf = &self.projection.leaves[ix];
-                if let Kind::TableCell(cell) = leaf.kind {
-                    let end = ix + self.projection.leaves[ix..].iter().take_while(|leaf| {
-                        matches!(leaf.kind, Kind::TableCell(other) if other.table() == cell.table())
-                    }).count();
-                    self.tables.insert(
-                        leaf.id,
-                        super::tables::block(self.projection.leaves[ix..end].iter().filter_map(
-                            |leaf| {
-                                let Kind::TableCell(cell) = leaf.kind else {
-                                    return None;
-                                };
-                                Some((cell, &self.blocks[&leaf.id].node))
-                            },
-                        )),
-                    );
-                    ix = end;
-                } else {
-                    ix += 1;
-                }
-            }
             self.rendered_revision = Some(revision);
         }
-        let view = cx.entity().downgrade();
-        let ready: std::collections::HashMap<_, _> = self
-            .document
-            .read(cx)
-            .images
-            .states
-            .iter()
-            .filter_map(|(url, state)| {
-                if let super::images::State::Ready(image) = state {
-                    Some((url.clone(), image.clone()))
-                } else {
-                    None
-                }
-            })
-            .collect();
-        let context = RenderContext::from_app(cx)
-            .with_body_font_size(window.rem_size())
-            .with_markdown_extensions(super::math::extensions())
-            .with_image_source(move |uri| {
-                ready.get(uri.as_ref()).map_or_else(
-                    || ImageSource::Custom(std::sync::Arc::new(|_, _| None)),
-                    |image| ImageSource::Render(image.clone()),
-                )
-            })
-            .on_link_click(move |_, event, _, cx| {
-                let _ = view.update(cx, |view, cx| {
-                    view.dragging = false;
-                    if let ClickEvent::Mouse(click) = event {
-                        if click.up.button == MouseButton::Left {
-                            view.finish_pointer_link(click.up.position, click.up.modifiers, cx);
-                        }
-                    }
-                });
-            });
-        let context = if self.live && !self.tables.is_empty() {
-            let mut table_style = context.style().table().clone();
-            table_style.overflow.x = Some(Overflow::Scroll);
-            let mut cell_style = context.style().table_cell().clone();
-            cell_style.text.white_space = Some(if self.wrap {
-                WhiteSpace::Normal
-            } else {
-                WhiteSpace::Nowrap
-            });
-            let style = context
-                .style()
-                .clone()
-                .with_table(table_style)
-                .with_table_cell(cell_style);
-            context.with_style(style)
-        } else {
-            context
-        };
         let references: Vec<_> = self.projection.leaves[visible.clone()]
             .iter()
             .map(|leaf| &self.blocks[&leaf.id].node)
@@ -2270,24 +2261,40 @@ impl Render for SourcePresentation {
                         {
                             return None;
                         }
-                        if matches!(leaf.kind, Kind::TableCell(_))
-                            && !self.tables.contains_key(&leaf.id)
-                        {
-                            return None;
-                        }
-                        let node = self
-                            .tables
-                            .get(&leaf.id)
-                            .unwrap_or(&self.blocks[&leaf.id].node);
-                        let rendered = node.render_with_id(
-                            ("markdown-leaf", leaf.id),
-                            FlowPosition::at(&references, ix, ix + 1 == references.len())
-                                .first(true)
-                                .last(true),
-                            &context,
-                            window,
-                            cx,
-                        );
+                        let rendered = if let Kind::TableCell(cell) = leaf.kind {
+                            let global = visible.start + ix;
+                            if global > visible.start
+                                && matches!(self.projection.leaves[global - 1].kind, Kind::TableCell(other) if other.same_row(cell)) {
+                                return None;
+                            }
+                            let end = global + self.projection.leaves[global..].iter().take_while(|leaf| {
+                                matches!(leaf.kind, Kind::TableCell(other) if other.same_row(cell))
+                            }).count();
+                            let scroll = self.tables.scroll(cell).clone();
+                            let (row, ids) = self.tables.row(&self.projection.leaves[global..end],
+                                -scroll.offset().x, table_width, self.wrap,
+                                self.state.marked_range().as_ref(), &self.math, &context, window, cx);
+                            let view = cx.entity().downgrade();
+                            let row = row.on_children_prepainted(move |bounds, _, cx| {
+                                let _ = view.update(cx, |view, _| {
+                                    for (id, bounds) in ids.iter().zip(bounds) {
+                                        if let Some(id) = id { view.table_geometry.insert(*id, bounds); }
+                                    }
+                                });
+                            });
+                            div().w_full().relative()
+                                .child(div().id(("markdown-table-row", leaf.id)).w_full()
+                                    .overflow_hidden().track_scroll(&scroll).child(row))
+                                .child(gpui_kit::base::ScrollableMask::new(Axis::Horizontal, &scroll)
+                                    .id(("markdown-table-pan", leaf.id)))
+                                .into_any_element()
+                        } else {
+                            self.blocks[&leaf.id].node.render_with_id(
+                                ("markdown-leaf", leaf.id),
+                                FlowPosition::at(&references, ix, ix + 1 == references.len()).first(true).last(true),
+                                &context, window, cx,
+                            ).into_any_element()
+                        };
                         let rendered = if self.live && matches!(leaf.kind, Kind::Mermaid(_)) {
                             let selection = self.state.selection.range();
                             let active = selection.start <= leaf.range.end
@@ -2324,7 +2331,7 @@ impl Render for SourcePresentation {
                             version: leaf.version,
                             child: div()
                                 .id(("markdown-block", leaf.id))
-                                .w_full()
+                                .w(table_width)
                                 .when(
                                     self.live
                                         && super::regions::label(leaf.kind).is_some()
@@ -2898,6 +2905,8 @@ impl Render for SourcePresentation {
             revision,
             color: cx.theme().selection,
             caret: cx.theme().caret,
+            visible,
+            table_context: context,
             preserve_reading_anchor: reading_anchor.is_some(),
         }
     }
@@ -2967,6 +2976,8 @@ struct SourceElement {
     color: Hsla,
     caret: Hsla,
     preserve_reading_anchor: bool,
+    visible: Range<usize>,
+    table_context: RenderContext,
 }
 impl IntoElement for SourceElement {
     type Element = Self;
@@ -3001,7 +3012,45 @@ impl Element for SourceElement {
         window: &mut Window,
         cx: &mut App,
     ) {
-        self.view.update(cx, |view, _| view.viewport.frame.clear());
+        self.view.update(cx, |view, _| {
+            view.viewport.frame.clear();
+            view.table_geometry.clear();
+        });
+        let table_measurement_changed = self.view.update(cx, |view, cx| {
+            let width = view
+                .viewport
+                .bounds
+                .map_or(window.viewport_size().width, |bounds| bounds.size.width)
+                - window.rem_size() * 1.5;
+            let marked = view.state.marked_range();
+            let columns = view.tables.prepare(
+                &view.projection.leaves,
+                width,
+                view.wrap,
+                true,
+                marked.as_ref(),
+                &view.math,
+                &self.table_context,
+                window,
+                cx,
+            );
+            let rows = view.tables.measure_rows(
+                &view.projection.leaves[self.visible.clone()],
+                view.wrap,
+                marked.as_ref(),
+                &view.math,
+                &self.table_context,
+                window,
+                cx,
+            );
+            if columns {
+                view.viewport.heights.clear();
+            }
+            if columns || rows {
+                cx.notify();
+            }
+            columns || rows
+        });
         let decorations = {
             let view = self.view.read(cx);
             view.projection
@@ -3041,6 +3090,12 @@ impl Element for SourceElement {
         };
         let (_, geometry) = collect_leaf_geometry(decorations, || self.child.prepaint(window, cx));
         self.view.update(cx, |view, cx| {
+            if table_measurement_changed {
+                view.geometry = None;
+                view.viewport.bounds = Some(view.scroll.bounds());
+                view.viewport_height = view.scroll.bounds().size.height;
+                return;
+            }
             if view.document.read(cx).revision() != self.revision
                 || view.projection.revision != self.revision
             {
@@ -3106,7 +3161,6 @@ impl Element for SourceElement {
                 cx.notify();
             }
             let previous_caret = view.caret_bounds(view.state.selection.head, cx);
-            view.table_geometry = super::tables::geometry(&view.projection.leaves, &geometry);
             view.geometry = Some((self.revision, geometry));
             view.viewport_height = viewport.size.height;
             view.viewport.bounds = Some(viewport);
@@ -3144,6 +3198,7 @@ impl Element for SourceElement {
                         // the final offset, not the frame requesting that offset.
                         view.reveal_caret = false;
                         view.reveal_at = None;
+                        cx.notify();
                     } else {
                         let offset = view.scroll.offset();
                         let maximum = view.scroll.max_offset();

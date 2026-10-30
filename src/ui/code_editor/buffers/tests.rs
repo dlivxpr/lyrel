@@ -1034,6 +1034,71 @@ fn markdown_external_drop_uses_owning_host_and_discard_keeps_the_resource(cx: &m
 }
 
 #[gpui_kit::test]
+fn markdown_first_external_drop_into_unfocused_group_uses_that_presentation(
+    cx: &mut TestAppContext,
+) {
+    use gpui_kit::{ExternalPaths, FileDropEvent, InputEvent as _};
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("split-drop.md");
+    let incoming = dir.path().join("split.png");
+    let png = screenshot_bytes();
+    std::fs::write(&path, "first\nsecond\n").unwrap();
+    std::fs::write(&incoming, &png).unwrap();
+    let host = FileHost::new(HostId(722));
+    let (app, mut vcx, _streams) = harness_with_tabs(cx, 1);
+    vcx.update(|_, cx| cx.set_global(MarkdownWorkbench));
+    app.update_in(&mut vcx, |app, window, cx| {
+        app.editor_open_on_host(host.clone(), &path, window, cx)
+    });
+    wait_until(&mut vcx, |vcx| active_id(&app, vcx).is_some());
+    let first = app.read_with(&vcx, |app, _| {
+        app.active_editor_input()
+            .unwrap()
+            .markdown()
+            .unwrap()
+            .clone()
+    });
+    app.update_in(&mut vcx, |app, window, cx| {
+        app.active_editor_input()
+            .unwrap()
+            .set_cursor_position(Position::new(1, 0), window, cx);
+        assert!(app.editor_split(window, cx));
+    });
+    vcx.update(|window, cx| {
+        window.render_frame(cx);
+        let surfaces = window.find_all("markdown-source");
+        assert_eq!(surfaces.len(), 2);
+        let position = surfaces[0].bounds().center();
+        window.dispatch_event(
+            FileDropEvent::Entered {
+                position,
+                paths: ExternalPaths(vec![incoming.clone()].into()),
+            }
+            .to_platform_input(),
+            cx,
+        );
+        window.render_frame(cx);
+        window.dispatch_event(FileDropEvent::Submit { position }.to_platform_input(), cx);
+    });
+    wait_until(&mut vcx, |vcx| {
+        first.read_with(vcx, |view, cx| {
+            view.document().read(cx).source().to_string()
+                == "first\n![split](assets/split.png)second\n"
+        })
+    });
+    assert_eq!(
+        read_owned(&host, &dir.path().join("assets/split.png")).unwrap(),
+        png
+    );
+    app.read_with(&vcx, |app, _| {
+        assert_eq!(
+            app.active_editor_input().unwrap().markdown().unwrap(),
+            &first
+        )
+    });
+}
+
+#[gpui_kit::test]
 fn markdown_untitled_image_cancel_is_unchanged_and_success_waits_for_document_save(
     cx: &mut TestAppContext,
 ) {

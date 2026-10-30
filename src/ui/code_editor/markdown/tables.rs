@@ -1,7 +1,9 @@
 use super::projection::{Kind, Leaf, Projection};
-use gpui_kit::base::text::editor_host::{BlockNode, ColumnAlign, Paragraph, Table};
 use markdown::mdast::{AlignKind, Node};
 use std::ops::Range;
+
+mod layout;
+pub(super) use layout::Layout;
 
 /// Derived from the same mdast table that supplies the inline cell children.
 /// No cell owns text, focus, composition or undo state.
@@ -16,6 +18,9 @@ pub(super) struct Cell {
 impl Cell {
     pub fn table(self) -> Range<usize> {
         self.start..self.end
+    }
+    pub fn same_row(self, other: Self) -> bool {
+        self.start == other.start && self.row == other.row
     }
     pub fn shift(&mut self, shift: impl Fn(usize) -> usize) {
         self.start = shift(self.start);
@@ -62,29 +67,6 @@ pub(super) fn project(
         }
     }
     true
-}
-
-pub(super) fn block<'a>(cells: impl Iterator<Item = (Cell, &'a BlockNode)>) -> BlockNode {
-    let mut rows: Vec<Vec<Paragraph>> = Vec::new();
-    let mut aligns = Vec::new();
-    for (cell, node) in cells {
-        let BlockNode::Paragraph(paragraph) = node else {
-            continue;
-        };
-        while rows.len() <= cell.row {
-            rows.push(Vec::new());
-        }
-        if cell.row == 0 {
-            aligns.push(match cell.align {
-                AlignKind::Left => ColumnAlign::Left,
-                AlignKind::Right => ColumnAlign::Right,
-                AlignKind::Center => ColumnAlign::Center,
-                AlignKind::None => ColumnAlign::None,
-            });
-        }
-        rows[cell.row].push(paragraph.clone());
-    }
-    BlockNode::Table(Table::new(rows, aligns))
 }
 
 #[derive(Clone, Copy)]
@@ -182,52 +164,6 @@ pub(super) fn input(
         offset += ch.len_utf16();
     }
     (output, selected)
-}
-
-/// Leaf layout remains GPUI-owned. Extend short cells to their row's actual
-/// height and their column's measured extent so wrapped neighbors cannot win
-/// pointer placement merely because they have more lines of text.
-pub(super) fn geometry(
-    leaves: &[Leaf],
-    geometry: &std::collections::HashMap<u64, gpui_kit::base::text::editor_host::LeafGeometry>,
-) -> std::collections::HashMap<u64, gpui_kit::Bounds<gpui_kit::Pixels>> {
-    use gpui_kit::{Bounds, Pixels, point, size};
-    use std::collections::HashMap;
-    let mut rows: HashMap<(usize, usize), Bounds<Pixels>> = HashMap::new();
-    let mut columns: HashMap<(usize, usize), Bounds<Pixels>> = HashMap::new();
-    for leaf in leaves {
-        let Kind::TableCell(cell) = leaf.kind else {
-            continue;
-        };
-        let Some(layout) = geometry.get(&leaf.id) else {
-            continue;
-        };
-        let bounds = layout.bounds();
-        rows.entry((cell.start, cell.row))
-            .and_modify(|row| *row = row.union(&bounds))
-            .or_insert(bounds);
-        columns
-            .entry((cell.start, cell.column))
-            .and_modify(|column| *column = column.union(&bounds))
-            .or_insert(bounds);
-    }
-    leaves
-        .iter()
-        .filter_map(|leaf| {
-            let Kind::TableCell(cell) = leaf.kind else {
-                return None;
-            };
-            let row = rows.get(&(cell.start, cell.row))?;
-            let column = columns.get(&(cell.start, cell.column))?;
-            Some((
-                leaf.id,
-                Bounds::new(
-                    point(column.left(), row.top()),
-                    size(column.size.width, row.size.height),
-                ),
-            ))
-        })
-        .collect()
 }
 
 gpui_kit::actions!(

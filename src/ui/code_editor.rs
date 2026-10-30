@@ -1188,6 +1188,7 @@ impl LyrelApp {
                         cancelled,
                     } = event
                     {
+                        app.editor_split_follow_focus(window, cx);
                         let current = app
                             .active_editor_input()
                             .and_then(|input| input.markdown().cloned());

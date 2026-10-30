@@ -8300,3 +8300,136 @@ fn installed_mdx_children_boundary_never_aliases_its_inline_content() {
         }
     }
 }
+
+#[gpui_kit::test]
+fn native_full_wide_table_reenters_distant_cells_with_wrapped_height_and_undo(
+    cx: &mut gpui_kit::TestAppContext,
+) {
+    use crate::ui::app::test_window::harness_with_tabs;
+    use gpui_kit::Focusable as _;
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("full-wide-table.md");
+    let mut source = String::from("# Full table\n\n|");
+    for column in 0..120 {
+        source.push_str(&format!(" Header-{column} |"));
+    }
+    source.push_str("\n|");
+    for _ in 0..120 {
+        source.push_str(" --- |");
+    }
+    source.push('\n');
+    for row in 0..160 {
+        source.push('|');
+        for column in 0..120 {
+            source.push_str(&format!(" Cell-{row:03}-{column:03} |"));
+        }
+        source.push('\n');
+    }
+    source = source.replacen(
+        "Cell-080-119",
+        &format!("Tall-080-119 {}", "wrapped 中文 e\u{301} 🎉 ".repeat(24)),
+        1,
+    );
+    source.push_str("\nUnchanged tail  ");
+    std::fs::write(&path, &source).unwrap();
+    let (app, mut context, _streams) = harness_with_tabs(cx, 1);
+    context.update(|_, cx| cx.set_global(super::super::MarkdownWorkbench));
+    app.update_in(&mut context, |app, window, cx| {
+        app.open_file_in_editor(&path, window, cx)
+    });
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(40);
+    let view = loop {
+        context.run_until_parked();
+        if let Some(view) = app.read_with(&context, |app, _| {
+            app.active_editor_input()
+                .and_then(|input| input.markdown().cloned())
+        }) {
+            break view;
+        }
+        assert!(std::time::Instant::now() < deadline);
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    };
+    context.dispatch_action(crate::core::actions::ToggleDocumentPreview);
+    view.update_in(&mut context, |view, _, cx| view.set_soft_wrap(true, cx));
+    settle_live_geometry(&view, &mut context);
+    let settle_at = |at, context: &mut gpui_kit::VisualTestContext| {
+        view.update_in(context, |view, window, cx| {
+            view.select_range(at..at, cx);
+            view.focus_handle(cx).focus(window, cx);
+        });
+        loop {
+            context
+                .executor()
+                .advance_clock(std::time::Duration::from_millis(100));
+            context.run_until_parked();
+            let bounds = context.update(|window, cx| {
+                window.render_frame(cx);
+                view.read(cx)
+                    .range_to_bounds(&(at..at), cx)
+                    .filter(|bounds| {
+                        bounds.left() >= gpui_kit::px(0.)
+                            && bounds.right() <= window.viewport_size().width
+                            && bounds.top() >= gpui_kit::px(0.)
+                            && bounds.bottom() <= window.viewport_size().height
+                    })
+            });
+            if let Some(bounds) = bounds {
+                break bounds;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "wide-table cell {at} must enter the real viewport; offset={:?}; caret={:?}",
+                view.read_with(context, |view, _| view.scroll_offset()),
+                view.read_with(context, |view, cx| view.range_to_bounds(&(at..at), cx))
+            );
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+    };
+    for token in [
+        "Cell-000-000",
+        "Cell-159-119",
+        "Cell-080-000",
+        "Tall-080-119",
+    ] {
+        settle_at(source.find(token).unwrap(), &mut context);
+    }
+    let start = source.find("Tall-080-119").unwrap();
+    let later = start + "Tall-080-119 ".len() + "wrapped 中文 e\u{301} 🎉 ".len() * 8;
+    let first = settle_at(start, &mut context);
+    let later_bounds = view
+        .read_with(&context, |view, cx| {
+            view.range_to_bounds(&(later..later), cx)
+        })
+        .unwrap();
+    context.update(|window, cx| {
+        window.render_frame(cx);
+        window.render_frame(cx);
+        let next = source.find("Cell-081-119").unwrap();
+        assert!(
+            view.read(cx).range_to_bounds(&(next..next), cx).is_some(),
+            "a caret-only materialization must refill the surrounding continuous document"
+        );
+    });
+    assert!(
+        later_bounds.top() > first.top(),
+        "the distant cell must wrap rather than use a fixed row height"
+    );
+    context.update(|window, cx| window.input("X", cx));
+    context.run_until_parked();
+    view.read_with(&context, |view, cx| {
+        assert_eq!(
+            view.document().read(cx).encode().unwrap(),
+            source
+                .replacen("Tall-080-119", "XTall-080-119", 1)
+                .as_bytes()
+        )
+    });
+    context.dispatch_action(gpui_kit::component::input::Undo);
+    settle_at(source.find("Cell-000-000").unwrap(), &mut context);
+    view.read_with(&context, |view, cx| {
+        assert_eq!(
+            view.document().read(cx).encode().unwrap(),
+            source.as_bytes()
+        )
+    });
+}
