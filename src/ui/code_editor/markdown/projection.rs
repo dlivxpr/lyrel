@@ -259,15 +259,27 @@ impl Leaf {
         changed
     }
     pub(super) fn set_inline_insertions(&mut self, insertions: &[usize]) -> bool {
-        let insertions = insertions.iter().copied().filter(|at| self.range.start <= *at && *at <= self.range.end);
-        if self.inline_insertions.iter().copied().eq(insertions.clone()) { return false; }
+        let insertions = insertions
+            .iter()
+            .copied()
+            .filter(|at| self.range.start <= *at && *at <= self.range.end);
+        if self
+            .inline_insertions
+            .iter()
+            .copied()
+            .eq(insertions.clone())
+        {
+            return false;
+        }
         self.inline_insertions = insertions.collect();
         true
     }
     pub fn inline_position(&self, at: usize) -> bool {
-        self.inline_insertions.contains(&at) || self.spans
-            .iter()
-            .any(|span| span.source.start <= at && at <= span.source.end)
+        self.inline_insertions.contains(&at)
+            || self
+                .spans
+                .iter()
+                .any(|span| span.source.start <= at && at <= span.source.end)
             || self.segments.iter().any(|segment| {
                 (segment.math.is_some() || segment.image.is_some())
                     && segment.source.start <= at
@@ -485,7 +497,10 @@ impl Leaf {
                         // Explicit component selections retain empty anchors via
                         // inline_position. Ordinary display navigation prefers
                         // visible source; an anchor is only the empty-leaf fallback.
-                        .map_or_else(|| self.inline_insertions.last().copied().unwrap_or(self.insertion), |s| s.source.end)
+                        .map_or_else(
+                            || self.inline_insertions.last().copied().unwrap_or(self.insertion),
+                            |s| s.source.end,
+                        )
                 },
                 |s| {
                     s.source.start
@@ -517,7 +532,9 @@ impl Leaf {
         };
         self.range = shift(self.range.start)..shift(self.range.end);
         self.insertion = shift(self.insertion);
-        for at in &mut self.inline_insertions { *at = shift(*at); }
+        for at in &mut self.inline_insertions {
+            *at = shift(*at);
+        }
         if let Kind::List(style) | Kind::Quote(style) = &mut self.kind {
             style.start = shift(style.start);
         }

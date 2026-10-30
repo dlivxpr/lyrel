@@ -8038,8 +8038,13 @@ fn native_table_inline_disclosures_hide_content_without_losing_source(
     view.read_with(&context, |view, cx| assert_eq!(view.document().read(cx).encode().unwrap(), original.as_bytes()));
     settle_live_geometry(&view, &mut context);
     context.update(|window, cx| {
-        let choice = window.find_all("mdx-tabs-choice").into_iter()
-            .find(|target| target.label() == Some("C")).unwrap().bounds().center();
+        let choice = window
+            .find_all("mdx-tabs-choice")
+            .into_iter()
+            .find(|target| target.label() == Some("C"))
+            .unwrap()
+            .bounds()
+            .center();
         window.pointer_down(choice, gpui_kit::MouseButton::Left, cx);
         window.pointer_up(choice, gpui_kit::MouseButton::Left, cx);
         window.input("empty child", cx);
@@ -8047,24 +8052,37 @@ fn native_table_inline_disclosures_hide_content_without_losing_source(
     view.read_with(&context, |view, cx| {
         assert_eq!(
             view.document().read(cx).encode().unwrap(),
-            original.replacen("title='C'>", "title='C'>empty child", 1).as_bytes()
+            original
+                .replacen("title='C'>", "title='C'>empty child", 1)
+                .as_bytes()
         );
     });
     context.dispatch_action(gpui_kit::component::input::Undo);
     view.read_with(&context, |view, cx| {
-        assert_eq!(view.document().read(cx).encode().unwrap(), original.as_bytes());
+        assert_eq!(
+            view.document().read(cx).encode().unwrap(),
+            original.as_bytes()
+        );
     });
     settle_live_geometry(&view, &mut context);
     context.update(|window, cx| {
-        let choice = window.find_all("mdx-tabs-choice").into_iter()
-            .find(|target| target.label() == Some("B")).unwrap().bounds().center();
+        let choice = window
+            .find_all("mdx-tabs-choice")
+            .into_iter()
+            .find(|target| target.label() == Some("B"))
+            .unwrap()
+            .bounds()
+            .center();
         window.pointer_down(choice, gpui_kit::MouseButton::Left, cx);
         window.pointer_up(choice, gpui_kit::MouseButton::Left, cx);
         window.input("edited", cx);
     });
     let edited = original.replacen("bravo", "editedbravo", 1);
     view.read_with(&context, |view, cx| {
-        assert_eq!(view.document().read(cx).encode().unwrap(), edited.as_bytes());
+        assert_eq!(
+            view.document().read(cx).encode().unwrap(),
+            edited.as_bytes()
+        );
     });
     context.dispatch_action(crate::core::actions::ToggleDocumentPreview);
     context.dispatch_action(gpui_kit::component::input::Undo);
@@ -8077,13 +8095,20 @@ fn native_table_inline_disclosures_hide_content_without_losing_source(
     context.dispatch_action(gpui_kit::component::input::Redo);
     let source_deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
     loop {
-        context.executor().advance_clock(std::time::Duration::from_millis(100));
+        context
+            .executor()
+            .advance_clock(std::time::Duration::from_millis(100));
         context.run_until_parked();
         context.update(|window, cx| window.render_frame(cx));
         if view.read_with(&context, |view, cx| {
             !view.is_live() && view.range_to_bounds(&(alpha..alpha), cx).is_some()
-        }) { break; }
-        assert!(std::time::Instant::now() < source_deadline, "source geometry after toggle/undo/redo did not settle");
+        }) {
+            break;
+        }
+        assert!(
+            std::time::Instant::now() < source_deadline,
+            "source geometry after toggle/undo/redo did not settle"
+        );
         std::thread::sleep(std::time::Duration::from_millis(5));
     }
     view.read_with(&context, |view, cx| {
