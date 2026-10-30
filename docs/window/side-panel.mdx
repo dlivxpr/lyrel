@@ -343,6 +343,12 @@ Windows Debug 最终无探针二进制在相同硬件、100% 显示缩放、1435
 
 切换后的完整 `cargo test --locked` 为 4977 项通过、36 项显式忽略，`cargo build --locked` 与 `cargo fmt --check` 通过。Bash 环境缺少 `node`，原 shell 检查因此未运行完；用 Windows Node 执行同一 `host-boundary.cjs` 并读取原脚本 allowlist 后通过，扫描 270 个生产文件、排除 110 个测试文件。未执行的 ignored、Unix 专属及 macOS 实机用例不计为通过。
 
+最终双轴审查修复了跨扩展名显式重载 codec、聚焦分屏 change 导航、多行重复缩进、正文／表格删除边界、混合行尾行命令，以及表内 MDX 控件重复与隐藏正文。新增消费者先在原逻辑失败；reload 回归通过文档 `encode()` 核对磁盘表示，恢复旧 path decoder 的负控仍丢失 CRLF。表内空 Tab 的直接输入与邻接正文 Left 输入分别验证明确 children 插点和显示边界 affinity，不以手动重新定位掩盖控件返焦。搜索复用公开匹配结果；图片快照按资源 membership／状态事件失效，无障碍全文快照按 revision 更新，相关文案使用中英文翻译。
+
+最终 `cargo test --locked` 为 4985 项通过、36 项显式忽略；桌面 Debug 构建、格式与 Host 边界检查通过。最后的隔离实窗验证：直接点击非空／空 Tab 后输入、折叠后正文实际隐藏、空组件后的 X 按 Left 输入落组件外、跨模式撤销／重做、保存关闭与重开；完整 225 字节符合预期，SHA-256 为 `d6ade1c07b3d6c2e6d38335031c8effd99580999ebfb1464d7eab1d883ed64c5`。原生段首 Backspace 不再吞掉前表定界；移动行保留原 LF／CRLF；实际全选后连续两次 Tab 同时缩进三行。`.md` 另存为 `.txt` 后从冲突条显式重载，再聚焦原输入编辑保存，UTF-8 BOM、混合行尾与尾空格逐字节正确。上述本轮交互是原生文本注入／系统剪贴板，不冒称新的 OS IME、macOS 或性能采样结果。
+
+Standards 与 Spec 的最终定点复审未发现可证明剩余问题。曾提出的 `FinishComposition` 再次改写区间与另存为必须替换 kernel 两项经源码／消费者证据撤回；未为了使审查结论成立而引入有损迁移。首次仅对非空 Tab 的插点推演同样由直接输入消费者纠正，空 Tab 与邻接边界的实际失败另行修复。
+
 
 
 
