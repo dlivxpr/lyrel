@@ -860,10 +860,24 @@ impl MarkdownDocument {
                     Command::BatchReplaceSelected { edits, selection } => {
                         self.batch_edit_selected(state, edits, EditKind::Command, Some(selection));
                     }
-                    Command::ReplaceLines { range, lines, leading_newline, trailing_newline, selection } => {
+                    Command::ReplaceLines {
+                        range,
+                        lines,
+                        leading_newline,
+                        trailing_newline,
+                        selection,
+                    } => {
                         let mut inserted = SourceText {
-                            text: if leading_newline { "\n".into() } else { String::new() },
-                            endings: if leading_newline { vec![self.format.line_ending] } else { Vec::new() },
+                            text: if leading_newline {
+                                "\n".into()
+                            } else {
+                                String::new()
+                            },
+                            endings: if leading_newline {
+                                vec![self.format.line_ending]
+                            } else {
+                                Vec::new()
+                            },
                         };
                         let count = lines.len();
                         for (index, line) in lines.into_iter().enumerate() {
@@ -885,11 +899,19 @@ impl MarkdownDocument {
                         if removed != inserted {
                             self.replace(range.clone(), &inserted);
                             state.selection = selection;
-                            self.record(Change {
-                                edits: smallvec::smallvec![ReplacedSource { start: range.start, removed, inserted }],
-                                before,
-                                after: selection,
-                            }, EditKind::Command, state.id);
+                            self.record(
+                                Change {
+                                    edits: smallvec::smallvec![ReplacedSource {
+                                        start: range.start,
+                                        removed,
+                                        inserted
+                                    }],
+                                    before,
+                                    after: selection,
+                                },
+                                EditKind::Command,
+                                state.id,
+                            );
                         }
                     }
                     Command::Backspace | Command::Delete => {

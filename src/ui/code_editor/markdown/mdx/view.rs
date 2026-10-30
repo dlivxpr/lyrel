@@ -146,7 +146,9 @@ fn render_embedded(
             index: context.index,
             range: component.source_range(),
         };
-        if !visible_field(&field_context(Field::Name, None)) { continue; }
+        if !visible_field(&field_context(Field::Name, None)) {
+            continue;
+        }
         fields = fields.child(render_component(
             &field_context(Field::Name, None),
             div().into_any_element(),
@@ -248,7 +250,10 @@ pub(in super::super) fn render_generic(
                 key,
                 Some(property.value_range()),
                 format!("mdx-property-{}", name.as_deref().unwrap_or("spread")),
-                t_fmt(L10nKey::EditorMdxEditProperty, &[("name", name.as_deref().unwrap_or("spread"))]),
+                t_fmt(
+                    L10nKey::EditorMdxEditProperty,
+                    &[("name", name.as_deref().unwrap_or("spread"))],
+                ),
             )
         }
         (Field::Children, Some(component), _) => (

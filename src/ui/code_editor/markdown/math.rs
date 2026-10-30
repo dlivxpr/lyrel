@@ -101,7 +101,10 @@ impl State {
                 (formula.clone(), self.outputs.get(formula).cloned()),
             )
             .text("\u{fffc}")
-            .accessibility_label(crate::ui::i18n::t_fmt(L10nKey::EditorMarkdownFormulaLabel, &[("tex", &formula.tex)])),
+            .accessibility_label(crate::ui::i18n::t_fmt(
+                L10nKey::EditorMarkdownFormulaLabel,
+                &[("tex", &formula.tex)],
+            )),
         )
     }
 }
@@ -146,7 +149,10 @@ impl MarkdownPlugin for MathPlugin {
                             )))
                             .test_support()
                             .role(Role::Image)
-                            .aria_label(crate::ui::i18n::t_fmt(L10nKey::EditorMarkdownFormulaLabel, &[("tex", &formula.tex)]))
+                            .aria_label(crate::ui::i18n::t_fmt(
+                                L10nKey::EditorMarkdownFormulaLabel,
+                                &[("tex", &formula.tex)],
+                            ))
                             .child(img(image.clone()).w(px(width * font)).h(px(height * font))),
                     )
                     .with_baseline(px(baseline * font)),

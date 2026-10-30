@@ -224,12 +224,28 @@ impl Layout {
                 .find(|leaf| matches!(leaf.kind, Kind::TableCell(cell) if cell.column == column));
             children.push(match leaf {
                 Some(leaf) => {
-                    let field = super::super::mdx::view::FieldContext::new(projection, leaf, source, mdx_state);
+                    let field = super::super::mdx::view::FieldContext::new(
+                        projection, leaf, source, mdx_state,
+                    );
                     if super::super::mdx::view::visible_field(&field) {
-                        let content = cell_element(leaf, Some(width), wrap, marked, math, context, window, cx);
-                        div().w(width).min_w_0().flex_none().child(
-                            super::super::mdx::view::render_field(&field, content, window, cx)
-                        ).into_any_element()
+                        let content = cell_element(
+                            leaf,
+                            Some(width),
+                            wrap,
+                            marked,
+                            math,
+                            context,
+                            window,
+                            cx,
+                        );
+                        div()
+                            .w(width)
+                            .min_w_0()
+                            .flex_none()
+                            .child(super::super::mdx::view::render_field(
+                                &field, content, window, cx,
+                            ))
+                            .into_any_element()
                     } else {
                         div().w(width).flex_none().into_any_element()
                     }

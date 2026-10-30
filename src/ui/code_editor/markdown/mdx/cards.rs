@@ -92,7 +92,10 @@ pub(super) fn render(
                                         .ghost()
                                         .small()
                                         .label(t(L10nKey::EditorCardFollow))
-                                        .accessibility_label(t_fmt(L10nKey::EditorCardFollowLabel, &[("target", &target)]))
+                                        .accessibility_label(t_fmt(
+                                            L10nKey::EditorCardFollowLabel,
+                                            &[("target", &target)],
+                                        ))
                                         .on_click(cx.listener(move |this, _, window, cx| {
                                             if this.document().read(cx).revision() != revision
                                                 || this.document().read(cx).grammar() != grammar
@@ -141,7 +144,10 @@ pub(super) fn render(
                                     .ghost()
                                     .small()
                                     .label(t(*key))
-                                    .accessibility_label(t_fmt(L10nKey::EditorCardAddProperty, &[("name", name)]))
+                                    .accessibility_label(t_fmt(
+                                        L10nKey::EditorCardAddProperty,
+                                        &[("name", name)],
+                                    ))
                                     .on_click(cx.listener(move |this, _, window, cx| {
                                         if this.document().read(cx).revision() != revision
                                             || this.document().read(cx).grammar() != grammar
