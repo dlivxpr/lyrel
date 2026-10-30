@@ -107,7 +107,7 @@ pub(crate) fn sample_local() -> io::Result<HostMetrics> {
         sampler.system.refresh_cpu_usage();
         sampler
             .system
-            .refresh_memory_specifics(MemoryRefreshKind::new().with_ram());
+            .refresh_memory_specifics(MemoryRefreshKind::nothing().with_ram());
         let cpu = sampler.system.global_cpu_usage();
         let total = sampler.system.total_memory();
         let used = sampler.system.used_memory();
