@@ -1109,7 +1109,9 @@ mod gpui_tests {
         let path = dir.path().join("mixed-commands.md");
         std::fs::write(&path, b"one\r\ntwo\nthree\r\n").unwrap();
         let (app, mut vcx, _streams) = harness_with_tabs(cx, 1);
-        app.update_in(&mut vcx, |app, window, cx| app.open_file_in_editor(&path, window, cx));
+        app.update_in(&mut vcx, |app, window, cx| {
+            app.open_file_in_editor(&path, window, cx)
+        });
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
         while !app.read_with(&vcx, |app, _| app.active_buffer().is_some()) {
             vcx.run_until_parked();
@@ -1125,29 +1127,62 @@ mod gpui_tests {
         vcx.dispatch_action(MoveLineUp);
         app.read_with(&vcx, |app, cx| {
             let input = app.active_editor_input().unwrap();
-            assert_eq!(input.markdown().unwrap().read(cx).document().read(cx).encode().unwrap(), b"two\none\r\nthree\r\n");
+            assert_eq!(
+                input
+                    .markdown()
+                    .unwrap()
+                    .read(cx)
+                    .document()
+                    .read(cx)
+                    .encode()
+                    .unwrap(),
+                b"two\none\r\nthree\r\n"
+            );
         });
         vcx.dispatch_action(gpui_kit::component::input::Undo);
         vcx.dispatch_action(CopyLineDown);
         app.read_with(&vcx, |app, cx| {
             let input = app.active_editor_input().unwrap();
-            assert_eq!(input.markdown().unwrap().read(cx).document().read(cx).encode().unwrap(), b"one\r\ntwo\ntwo\nthree\r\n");
+            assert_eq!(
+                input
+                    .markdown()
+                    .unwrap()
+                    .read(cx)
+                    .document()
+                    .read(cx)
+                    .encode()
+                    .unwrap(),
+                b"one\r\ntwo\ntwo\nthree\r\n"
+            );
         });
         vcx.dispatch_action(gpui_kit::component::input::Undo);
         app.read_with(&vcx, |app, cx| {
             let input = app.active_editor_input().unwrap();
-            assert_eq!(input.markdown().unwrap().read(cx).document().read(cx).encode().unwrap(), b"one\r\ntwo\nthree\r\n");
+            assert_eq!(
+                input
+                    .markdown()
+                    .unwrap()
+                    .read(cx)
+                    .document()
+                    .read(cx)
+                    .encode()
+                    .unwrap(),
+                b"one\r\ntwo\nthree\r\n"
+            );
             assert_eq!(input.read(cx).selected_range(), 4..7);
         });
     }
 
     #[gpui_kit::test]
     fn markdown_repeated_multiline_indent_preserves_selection_and_undo(cx: &mut TestAppContext) {
+        use gpui_kit::test::TestWindowExt as _;
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("indent.md");
         std::fs::write(&path, "one\ntwo\nthree").unwrap();
         let (app, mut vcx, _streams) = harness_with_tabs(cx, 1);
-        app.update_in(&mut vcx, |app, window, cx| app.open_file_in_editor(&path, window, cx));
+        app.update_in(&mut vcx, |app, window, cx| {
+            app.open_file_in_editor(&path, window, cx)
+        });
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
         while !app.read_with(&vcx, |app, _| app.active_buffer().is_some()) {
             vcx.run_until_parked();
@@ -1167,7 +1202,10 @@ mod gpui_tests {
         });
         app.read_with(&vcx, |app, cx| {
             let input = app.active_editor_input().unwrap();
-            assert_eq!(input.read(cx).text().to_string(), "        one\n        two\nthree");
+            assert_eq!(
+                input.read(cx).text().to_string(),
+                "        one\n        two\nthree"
+            );
             assert_eq!(input.read(cx).selected_range(), 8..23);
         });
         vcx.dispatch_action(gpui_kit::component::input::Undo);
