@@ -8032,10 +8032,20 @@ fn native_table_inline_disclosures_hide_content_without_losing_source(
         window.input("before", cx);
     });
     view.read_with(&context, |view, cx| {
-        assert_eq!(view.document().read(cx).encode().unwrap(), original.replacen("</Accordion>X", "</Accordion>beforeX", 1).as_bytes());
+        assert_eq!(
+            view.document().read(cx).encode().unwrap(),
+            original
+                .replacen("</Accordion>X", "</Accordion>beforeX", 1)
+                .as_bytes()
+        );
     });
     context.dispatch_action(gpui_kit::component::input::Undo);
-    view.read_with(&context, |view, cx| assert_eq!(view.document().read(cx).encode().unwrap(), original.as_bytes()));
+    view.read_with(&context, |view, cx| {
+        assert_eq!(
+            view.document().read(cx).encode().unwrap(),
+            original.as_bytes()
+        )
+    });
     settle_live_geometry(&view, &mut context);
     context.update(|window, cx| {
         let choice = window

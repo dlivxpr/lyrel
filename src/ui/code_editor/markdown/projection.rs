@@ -498,7 +498,12 @@ impl Leaf {
                         // inline_position. Ordinary display navigation prefers
                         // visible source; an anchor is only the empty-leaf fallback.
                         .map_or_else(
-                            || self.inline_insertions.last().copied().unwrap_or(self.insertion),
+                            || {
+                                self.inline_insertions
+                                    .last()
+                                    .copied()
+                                    .unwrap_or(self.insertion)
+                            },
                             |s| s.source.end,
                         )
                 },
