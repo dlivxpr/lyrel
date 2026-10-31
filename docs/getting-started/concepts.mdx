@@ -371,7 +371,7 @@ direct／virtual 父子图随 `move` 同步移动，`erase` 使 virtual child �
 
 #### 正式 omp 接入：进程级图片策略与原生重放
 
-2026-10-31 读取上游最新正式 release 为 [v18.14.1](https://github.com/can1357/oh-my-pi/releases/tag/v18.14.1)，本机只读 `omp --version` 为 `omp/18.14.0`。本轮实现没有运行新版 native smoke；下述入口和消费者用例等待集中验收，不把版本查询或旧版记录写成新版像素通过。
+2026-10-31 读取上游最新正式 release 为 [v18.14.1](https://github.com/can1357/oh-my-pi/releases/tag/v18.14.1)，本机正式安装为 `omp/18.14.0`。中央在 synchronized ordering 修复后已通过三图身份／顺序几何和 disabled／protocol-off 的真实 PTY／rooted consumer，退出审计均为 `zeroInference=true`；budget 仍只有红色 assistant、toolResult、SVG 三种身份而超时。该失败没有删除或改判通过；下述 budget 输入修正与独立用例尚待中央执行，原生 Windows budget 像素仍未验收。
 
 在 lyrel 设置的 `agent_launch.omp` 使用字面量前缀，例如：
 
@@ -384,6 +384,8 @@ PI_FORCE_IMAGE_PROTOCOL=kitty PI_KITTY_PLACEHOLDERS=1 omp
 lyrel 不为未配置的 omp 强制添加图片选项，也不追加 `terminal.showImages: true` overlay。公开 `PI_FORCE_IMAGE_PROTOCOL=none/off`、`PI_KITTY_PLACEHOLDERS=0`、`PI_NO_KITTY_PLACEHOLDERS=1` 和上游 `terminal.showImages: false` 保持有效。显式选择启用模式是操作者的决定；公开环境选项和关闭项会作为非敏感启动上下文保留。`PI_NO_KITTY_PLACEHOLDERS=1` 优先于 placeholder opt-in。不要使用不存在的 `--image-protocol`，也不要使用已移除的 `PI_KITTY_IMAGE_TRANSMISSION`。
 
 v18.14.1 的原生 renderer 可从保存会话重建 assistant 图片、toolResult 图片及 `tui.renderSvg` 启用时 fenced SVG 的栅格图；PNG 直接显示，其他支持格式经上游转换。普通 SVG 字符串／链接／路径仍不由 lyrel 解释。上游默认 `tui.maxInlineImages=8`，每个 screen／alternate surface 独立计数；`0` 是上游取消该 cap，不代表 lyrel 无预算。默认宽限 100 列，高限 20 行并受 viewport 约束。超额旧图由上游 demotion 和 `d=I` 删除，lyrel 不偷偷恢复这些像素；后续原生 replay 合法重传另当别论。omp 使用原生 terminal scrollback，不套用 OpenCode 的分页／remount 假设；resize 的默认 `rebuild` 可重新发图。
+
+**上游 assistant 身份限制：**[18.14.0 的 `AssistantMessageComponent`](https://github.com/can1357/oh-my-pi/blob/v18.14.0/packages/tui/src/chat/assistant-message.ts#L2044-L2046) 与 [18.14.1 对应实现](https://github.com/can1357/oh-my-pi/blob/v18.14.1/packages/tui/src/chat/assistant-message.ts#L2044-L2046) 都以 `native:${contentIndex}` 作为 assistant 图片 key，而非消息身份。[`ImageBudget.acquireId`](https://github.com/can1357/oh-my-pi/blob/v18.14.0/packages/tui/src/components/image.ts#L282-L301) 会为相同 key 复用 ID，[transmit-once](https://github.com/can1357/oh-my-pi/blob/v18.14.0/packages/tui/src/components/image.ts#L553-L586) 则不会重新发送已登记 ID。因此不同 assistant 消息中相同 content slot 的图片会碰撞；旧 budget 输入的十条消息均把图片放在 slot 1，实际日志中十个标签齐全却只有第一张红色图片，此结果与源码路径一致。不能宣称这些版本能正确恢复任意跨多 assistant 消息的同 slot 图片，lyrel 不修改上游、不伪造新 ID 或补画未发送的像素。预算夹具改为**同一正式 assistant 消息内十个不同 image content slot**，再接 toolResult 和 SVG；仍验证十二张原生图片在 cap 8 下只保留后六张 assistant 加 toolResult／SVG，不将预期降低成三张。此输入修正的运行效果须由下述独立 budget 用例和原生窗口确认。
 
 来源：[公开环境变量与优先级](https://github.com/can1357/oh-my-pi/blob/v18.14.1/docs/environment-variables.md)、[设置覆盖层](https://github.com/can1357/oh-my-pi/blob/v18.14.1/docs/settings.md)、[原生 renderer 生命周期](https://github.com/can1357/oh-my-pi/blob/v18.14.1/docs/tui-core-renderer.md)、[ImageBudget](https://github.com/can1357/oh-my-pi/blob/v18.14.1/packages/tui/src/components/image.ts) 和[原生历史重建](https://github.com/can1357/oh-my-pi/blob/v18.14.1/packages/coding-agent/src/modes/utils/ui-helpers.ts)。
 
@@ -399,17 +401,19 @@ node scripts/omp-native-replay.mjs launch --root $fixture --lyrel-app (Resolve-P
 
 验收时确认三张实际图片：64×32 红底黑十字 assistant、64×32 粉底黑十字 toolResult，以及深蓝背景／橙色三角形的 240×80 SVG 原生栅格图；`fixture.json` 提供每张输入图片的 BGRA SHA-256 和几何身份。滚动离屏／返回并改变窗格宽度，记录具体资源／放置及三张图的顺序，不能只检查 `LYREL_*` 标签。输入 `/exit` 结束原生 TUI；检查 `version.txt` 和 `audit.json`，要求 `requests=[]`、消息数未增加、`modelUsage=0`、`zeroInference=true`。这只是原生应用重放，不能证明无发送者重传的 living-daemon 恢复。
 
-另用全新目录分别运行 `--case budget`（10 张不同 assistant 图，加 toolResult 和 figure，cap 仍为 8；前四张须被删除且滚动不可复活）、`--case disabled`、`--case protocol-off`；后两者必须无图。`--mode direct` 和 `--case placeholder-off` 可单独检查直接放置／硬关闭 placeholder，不将旧版 direct 重叠现象视作当前版已定位或已通过。退出并关闭本 fixture 的窗口／daemon 后，只清理所属目录：
+另用全新目录分别运行 `--case budget`（同一 assistant 消息内十张不同图片，加 toolResult 和 figure，cap 仍为 8；前四张红／绿／蓝／黄须被上游删除或 demote，滚动不可复活；后六张洋红／青／棕／紫／深绿／灰与粉色 toolResult、深蓝橙三角 figure 共八张须存在）、`--case disabled`、`--case protocol-off`；后两者必须无图。不能以十个 assistant 标签代替十张不同图片身份，也不能把上游同 slot 碰撞当成 lyrel 预算回收。`--mode direct` 和 `--case placeholder-off` 可单独检查直接放置／硬关闭 placeholder，不将旧版 direct 重叠现象视作当前版已定位或已通过。退出并关闭本 fixture 的窗口／daemon 后，只清理所属目录：
 
 ```powershell
 node scripts/omp-native-replay.mjs cleanup --root $fixture --lyrel-cli (Resolve-Path .\target\debug\lyrel.exe).Path
 ```
 
-集中消费者入口为 `cargo test --locked --bin lyrel-app graphics_consumer_released_omp_native_ -- --ignored --nocapture --test-threads=1`，先将 `LYREL_TEST_OMP` 设为正式可执行文件绝对路径；中央先运行 `node --check scripts/omp-native-replay.mjs`。它复用真实 PTY／独立 daemon → `RemoteTerminal` → rooted `TerminalView`，按真实解码像素、不同图片 ID／放置顺序和 cap 删除检查，不替代原生 GPU 像素。`--wait-ready` 只等待自有目录的 `consumer-ready` 文件，由 rooted consumer 挂载后释放；wrapper 不创建 readline／stdin stream，不向 TUI 注入 `LYREL_OMP_START`。原生 omp 独占继承的 ConPTY stdin。
+集中消费者入口为 `cargo test --locked --bin lyrel-app graphics_consumer_released_omp_native_ -- --ignored --nocapture --test-threads=1`，先将 `LYREL_TEST_OMP` 设为正式可执行文件绝对路径；中央先运行 `node --check scripts/omp-native-replay.mjs`。只验证剩余 budget 时使用 `cargo test --locked --bin lyrel-app graphics_consumer_released_omp_native_resume_budget -- --ignored --nocapture --test-threads=1`，无需重复已通过的 pictures／disabled 路径。budget 保留精确八图身份、不同原生 image ID、前四图不可复活、后六图／toolResult／SVG 及滚出返回 placement identity 不变的断言。它复用真实 PTY／独立 daemon → `RemoteTerminal` → rooted `TerminalView`，不替代原生 GPU 像素。`--wait-ready` 只等待自有目录的 `consumer-ready` 文件，由 rooted consumer 挂载后释放；wrapper 不创建 readline／stdin stream，不向 TUI 注入 `LYREL_OMP_START`。原生 omp 独占继承的 ConPTY stdin。
 
-失败时日志会输出 `LYREL_OMP_STAGE`，自有目录保留 `stages.jsonl`、每个公开 preflight 的状态／stdout／stderr、`running.json`、拒绝 endpoint 的 `requests.json`（若有请求）及退出 `audit.json`；consumer panic 同时打印阶段历史、pane／child／连接状态、完整 terminal text 和 graphics recovery diagnostics。`waiting-consumer`、公开 config／models、`native-spawned`、实际图片／transcript tail 和 exit/audit 是不同边界，不以子进程启动替代图片验收。
+原生 budget 使用新的 `$fixture`，将上方 `prepare` 改为 `node scripts/omp-native-replay.mjs prepare --root $fixture --omp (Get-Command omp).Source --case budget`，然后执行同一 `launch`。不输入 prompt；从尾部向上滚动遍历八图，再返回，确认前四张不复活、后六张 assistant 及 toolResult／SVG 的实际像素与顺序。退出后核验 `version.txt`、公开 cap preflight 为 8 与 `audit.json` 的零推理结果，再关闭和清理这个自有实例。不要把仅查询版本或 rooted paint 当作该原生步骤已经通过。
 
-本轮中央已观察正式安装 `18.14.0` 的两项 consumer 失败：disabled 未出现结束标记，pictures 没有解码图片；旧日志缺少 terminal text，不能据此断言上游无图片支持。本次移除 wrapper 对共享 ConPTY stdin 的读取并修正公开配置根语义，增加可定位诊断；**修复后未运行构建、测试或原生验收**。Windows 图片／重排／关闭策略、最新 release 的实际可执行验收仍待中央执行；macOS、真实 SSH 和其他 agent 均不由本段宣称通过。
+失败时日志会输出 `LYREL_OMP_STAGE`，自有目录保留 `stages.jsonl`、每个公开 preflight 的状态／stdout／stderr、`running.json`、拒绝 endpoint 的 `requests.json`（若有请求）及退出 `audit.json`；consumer panic 同时打印 `fixture.json` 的输入身份／几何、阶段历史、pane／child／连接状态、完整 terminal text 和 graphics recovery diagnostics。`waiting-consumer`、公开 config／models、`native-spawned`、实际图片／transcript tail 和 exit/audit 是不同边界，不以子进程启动替代图片验收。
+
+原真实失败记录为 `lyrel-139-omp-geometry-after.log`：pictures 与关闭策略通过，budget 解码身份只有 assistant 红色、toolResult、SVG，且十个 `LYREL_ASSISTANT_*` 标签均在终端文本中。源码已确认重复 content slot 的 key 复用；将这一冲突作为该三图现象的原因是与证据一致的诊断，**修正后的八图效果尚未运行验证**。本工作树不运行 build／test／lint／formatter 或操作 UI；不会将待中央执行的 budget、Windows 原生像素、最新 release 可执行文件或 macOS／真实 SSH 写成通过。
 
 无需升级全局安装即可另行验收 `18.14.1`：从[官方 release](https://github.com/can1357/oh-my-pi/releases/tag/v18.14.1) 下载 `omp-windows-x64.exe` 到新的临时目录，用 `Get-FileHash -Algorithm SHA256` 核对本次 GitHub asset digest `5b72f0e46e9cd441793d399d36f319a656f2e3c9a3f1997342e46fa885614913`，再把 `LYREL_TEST_OMP`／`prepare --omp` 指向该绝对路径。下载地址为 `https://github.com/can1357/oh-my-pi/releases/download/v18.14.1/omp-windows-x64.exe`；先运行该文件的 `--version` 并记录，不修改 PATH、全局配置或现有 omp。18.14.1 并非本修复的已证明前提，18.14.0 仍需执行同样的验收。
 
@@ -454,7 +458,7 @@ cargo test --locked -p lyrel-core pi_first_run_waits_for_settlement_and_resolves
 cargo test --locked --bin lyrel-app graphics_consumer_pi_native_ -- --ignored --nocapture --test-threads=1
 ```
 
-最后一条通过真实 PTY → 新建隔离 daemon → production `RemoteTerminal` → rooted `TerminalView`，比较两张图不同的 BGRA 地标、放置与真实 production paint claim，覆盖原生历史 top／bottom、`/new` 删除、再次原生启动重放，以及三种显式关闭和设置覆盖环境。GPUI 测试窗口不是最终 GPU 像素证据。
+最后一条已在 Windows 通过真实 PTY → 新建隔离 daemon → production `RemoteTerminal` → rooted `TerminalView`，比较两张图不同的 BGRA 地标、放置、图片处于对应 `read` 卡片和后续文本之间的几何与真实 production paint claim，覆盖原生历史 top／bottom、`/new` 删除、再次原生启动重放，以及三种显式关闭和设置覆盖环境。GPUI 测试窗口不是最终 GPU 像素证据。
 
 Windows 原生验收应先由中央构建当前合并提交，启动**另一个全新目录**的 `lyrel-app.exe --config-dir <isolated-dir>`，确认连接的是本轮 built daemon；不要对旧用户 daemon 复用／升级／停止。在该窗口新建自有 pane，运行：
 
@@ -468,7 +472,7 @@ node C:\path\to\lyrel\scripts\pi-image-replay.mjs --pi C:\path\to\official\pi.ex
 4. 分别以 `--policy env-none`、`--policy settings-none`、`--policy display-none` 启动单轮，保存 transcript 可见但不应显示图片；`--policy settings-kitty` 则在 `PI_IMAGE_PROTOCOL=none` 下由显式设置选择 Kitty。每轮只用 `Ctrl+D` 退出，不发送任务；夹具 180 秒硬截止仅结束自有 pi 子进程。
 5. 原生截图记录四象限／白心、关联文本及 pane 裁切；记录提交、pi 来源与实际版本、GUI／daemon PID、OS、GPU、显示缩放／刷新率及窗口尺寸。关闭全部自有窗口后，仅对同一 `<isolated-dir>` 执行 `lyrel-app.exe --config-dir <isolated-dir> --stop-daemon`，确认自有进程退出再清理自有目录。不要停止用户实例。
 
-**本票证据边界：**本轮只执行版本／官方资料只读核实；没有运行 build、tests、lint、formatter 或 native smoke。上面的全部 contract／Windows 像素、发送器 retention 及重传观察仍待中央执行；macOS 的 MacBook Air M5 原生验收与真实 SSH 也未执行。原生会话 replay 允许 pi 重传；同一个活 daemon 的 fresh GUI 恢复另有“发送器不输出”的独立合约，不能用本夹具的第二轮代替。
+**本票证据边界：**2026-10-31，正式 `pi 1.4.0` 在 Windows `10.0.26300`／RTX 5080／Debug／100% 缩放的隔离原生窗口通过二十张合成 tool-result 图片的两轮原生重放，观察尾图 19、顶部图 0 与翻页中段图 3 的四象限／白心及正确卡片位置。两轮 `/new` 后旧图消失，退出后同一保存文件由新 pi 重传，无手工重发／新 prompt；夹具输出两条 `PI_REPLAY_ROUND_n_NO_NEW_MESSAGES` 与 `PI_REPLAY_FIXTURE_DONE`。另分别原生验证 `env-none`、`settings-none`、`display-none` 无图，以及 `settings-kitty` 覆盖 `PI_IMAGE_PROTOCOL=none` 后正确显示。初次原生发现图片落入编辑区，已由统一 synchronized-update 流顺序修复；不以此前只核对像素的绿色用例掩盖几何问题。macOS MacBook Air M5 与真实 SSH 的三 agent 组合仍未执行。原生 replay 允许 pi 重传；同活 daemon 的 fresh GUI 恢复另有“发送器不输出”合约，不能用本夹具第二轮代替。
 
 
 #### OpenCode 2.2.0：公开历史图片预览与原生验收入口（#150）
@@ -519,7 +523,7 @@ cargo test --locked -p lyrel --bin lyrel-app opencode_replay_consumer_tests:: --
 
 consumer 用例复用真实 PTY → 独立真实 daemon → 生产 pane connection／`RemoteTerminal` → rooted `TerminalView`，断言实际解码 BGRA 主色、独立 instance 数量、两卡左右几何、production paint claim、原生分页／滚离返回／tab 卸载重挂载，以及退出后 fresh consumer 不复活被应用删除的图片。额外静态协议用例覆盖同色不同放置、同原点重叠放置、同 `i/p` 替换不增量及精确删除；它验证计数不会被集合或 bbox 合并掩盖，不替代真实 OpenCode 或最终 GPU 像素。失败／超时输出完整 placement key、resource、原生 ID、源裁剪、anchor、paint 矩形、paint claim、图形预算状态和终端文本，供中央定位真实协议路径。
 
-**本票证据边界：**中央已实际完成 546 条消息的公开 import／export prepare，disabled consumer 通过；enabled consumer 在首次两卡的“不重叠”断言失败，尚未到达其后的分页、remount、delete 验收。增强后的计数、容器边界、诊断与静态协议用例尚未执行，本工作树遵守约定未运行 build／test／lint／formatter 或操作前台。当前没有足够 geometry 证据归因生产缺陷，未猜测修改 production；中央须执行加强后的完整用例，不能以 disabled 通过、设置项或版本查询宣称 #150 已通过。Windows 最终像素及 macOS 实机结果也仍未验证。
+**本票证据边界：**2026-10-31，正式 OpenCode `2.2.0` 已通过两项真实 PTY／隔离 daemon／production rooted consumer 验收，精确比较独立 placement、源像素、卡片边界、历史分页、滚离返回、tab 卸载重挂载和退出后不复活；静态逐实例协议回归另行通过。原 enabled 重叠失败由统一 synchronized-update 流顺序修复（`6f20137`），不是放宽几何断言。Windows `10.0.26300`／RTX 5080／Debug／100% 缩放的自有原生窗口（2552×1384）实际显示首尾两卡各三张图片、对应色块／黑边／序号条及 `+1 more`，滚离后无残影、返回后恢复；`F6` 关闭后无图，`F7` 重开后六图正确重传。另以 `session.image_preview=false` 验证首尾分页均只有文本／附件标签。两轮退出均输出 `OPENCODE_REPLAY_VERIFIED: unchanged public export, zero model usage`，没有新 prompt 或私人历史。MacBook Air M5 与真实 SSH 的三 agent 组合仍待集成验收；原生应用重传不替代 living-daemon 无重传恢复证明。
 
 #### 当前实现：预算与历史回收（#44）
 
