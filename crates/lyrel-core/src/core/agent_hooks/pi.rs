@@ -1,6 +1,6 @@
 use super::HookTarget;
 
-/// earendil-works/pi 1.3.0 only. omp has a different lifecycle contract.
+/// earendil-works/pi 1.4.0 only. omp has a different lifecycle contract.
 pub(super) fn extension(target: &HookTarget) -> Option<String> {
     let exe = serde_json::to_string(&target.exe.to_string_lossy()).ok()?;
     Some(TEMPLATE.replace("__LYREL_EXE__", &exe))
@@ -11,7 +11,7 @@ import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-a
 import { spawnSync } from "node:child_process";
 
 const EXE = __LYREL_EXE__;
-const SCOPE_ENV = ["HOME", "USERPROFILE", "PI_CODING_AGENT_DIR", "PI_CODING_AGENT_SESSION_DIR"];
+const SCOPE_ENV = ["HOME", "USERPROFILE", "PI_CODING_AGENT_DIR", "PI_CODING_AGENT_SESSION_DIR", "PI_IMAGE_PROTOCOL"];
 
 export default function (pi: ExtensionAPI) {
   if (!process.env["LYREL"]) return;
@@ -131,6 +131,7 @@ const send = (name,event={}) => handlers.get(name)?.(event,ctx);
 const reports = () => readFileSync('reports.jsonl','utf8').trim().split('\n').map(JSON.parse);
 send('session_start'); send('before_agent_start'); send('agent_end');
 assert.equal(reports().some(e=>e.event==='stop'),false,'the first agent_end must never end a retriable run');
+assert.equal(reports()[0].session_scope.environment.PI_IMAGE_PROTOCOL,'none','native disabled image policy must survive resume binding');
 handlers.get('session_start')({}, {...ctx,mode:'rpc'});
 handlers.get('agent_settled')({aborted:false}, {...ctx,mode:'print'});
 assert.equal(reports().length,2,'non-TUI child sessions must not replace the pane owner');
@@ -158,6 +159,7 @@ process.stdout.write(reports().map(e=>JSON.stringify(e)).join('\n'));
             .env("LYREL", "1")
             .env("HOME", temp.path())
             .env("USERPROFILE", temp.path())
+            .env("PI_IMAGE_PROTOCOL", "none")
             .env_remove("LYREL_PI_BRIDGE_OWNER")
             .output()
             .unwrap();
