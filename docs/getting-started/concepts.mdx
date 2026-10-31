@@ -222,7 +222,7 @@ resize 去重与回显等待、viewport 重新发布和关闭次序；`remote/wr
 
 正常图片是第 1 帧（root）。`a=f,i=…` 或 `a=f,I=…` 追加与 root 同尺寸的完整帧，支持现有 RGB／RGBA／PNG、zlib 与分块路径；分块续块可带 `a=f`。`a=a,i=…,s=1,c=N` 停止并选择从 1 开始的帧，省略 `s` 的 `a=a,…,c=N` 也可手动选帧。同一图片的全部 direct／Unicode 放置共用选择结果，不为每个放置复制像素。未放置的 transmit-only 图片即使追加或选帧，也不显示。
 
-每帧拥有独立且不复用的 pane-local key、源内容、元数据与准入租约；`Select { key, frame, revision }` 只改变根资源的选择，不重复传输已保留的像素。恢复在同一次文字快照／live 切换中重放全部保留帧、帧关系、最新选择及放置；替换、删除、screen 清理和旧 worker 退休沿用同一代次约束。预算回收以整份帧序列为单位，不静默删去某个中间帧；追加失败保留已接受的全部帧和选择。资源上限 1,024 包含 root 与所有追加帧；单图片最多 256 帧（含 root），并仍受下表全部字节和元数据限制。当前默认预算不构成双窗格各 60 张 1080p 帧的容量承诺。
+每帧拥有独立且不复用的 pane-local key、源内容、元数据与准入租约；`Select { key, frame, revision }` 只改变根资源的选择，不重复传输已保留的像素。恢复在同一次文字快照／live 切换中重放全部保留帧、帧关系、最新选择及放置；替换、删除、screen 清理和旧 worker 退休沿用同一代次约束。预算回收以整份帧序列为单位，不静默删去某个中间帧；追加失败保留已接受的全部帧和选择。资源上限 1,024 包含 root 与所有追加帧；单图片最多 256 帧（含 root），并仍受下表全部字节和元数据限制。#146 的默认预算按双窗格各 60 张 1080p raw RGBA 帧推导；预算可容纳不等于原生呈现性能已经通过。
 
 #140 原始切片只验证完整帧与手动选帧。2026-10-31 在 Windows `10.0.26300`／RTX 5080 的 Debug 原生隔离窗口完成红／绿／蓝三帧切换：两处放置同步且白边、位置保持；发送器退出并打印 `uploads=3` 后关闭旧窗口，再附着同一 daemon（PID 不变、当时 pane `16`／control `16`），两处蓝帧及原位置恢复，未再次启动发送器。真实 PTY／daemon／rooted consumer 的完整帧与 detached append／replacement／delete／fresh 恢复用例通过；静态 daemon 图形回归 25 项、parser／Windows media 专项 17 项通过。这些历史结果不证明下述新增自动播放、双 pane 1080p 容量或 60 fps；macOS 原生仍待 MacBook Air M5。
 
@@ -254,21 +254,166 @@ Windows 原生入口仍为 `node scripts/kitty-frames.mjs`：先输入 `partial`
 
 
 
-当前默认值是保守的实现参数，单位为 MiB（`1 MiB = 1,048,576 bytes`），不是已经测得的完整系统峰值：
+##### 双窗格 1080p 容量与原生呈现测量（#146）
+
+`scripts/kitty-capacity.mjs` 复用 `kitty-playback.mjs` 的直接 Kitty APC 路径，只生成源像素并向所在真实 PTY 输出；不创建另一套 PTY、协议或 renderer。每个 pane 使用固定且不同的 seed／image ID，逐帧生成 60 张不同的 `1920 × 1080` 噪声与渐变 RGBA8 图片，不依赖压缩节省容量。源像素体积固定，传输是 `f=32` raw RGBA；Base64 与 APC 开销另计。生产者只保留一个 8,294,400-byte frame buffer，每次将 3,072 bytes 转为最多 4,096-byte Base64 块，并等待 stdout backpressure 和逐帧真实 `OK`；拒收或 60 秒 ACK 超时以非零状态退出，不把发送完成当成接受成功。
+
+在隔离的原生 lyrel 窗口中创建两个同时可见的 pane，从仓库根目录分别运行以下命令。manifest 路径只选择本次自有临时目录中的新文件；脚本使用 `wx`，不会覆盖旧证据。
+
+```powershell
+# 左 pane
+node scripts/kitty-capacity.mjs --pane 0 `
+  --manifest "$env:TEMP/lyrel146/left-source.json"
+# 右 pane，在另一个同时可见的 pane 中运行
+node scripts/kitty-capacity.mjs --pane 1 `
+  --manifest "$env:TEMP/lyrel146/right-source.json"
+```
+
+默认启动输出 `KITTY_CAPACITY_READY` 后等待命令，不自动加载。两个 pane 各输入 `load`，等待 `CAP146:<serial>:load:60:<wireBytes>`；再各输入 `start`。`17/17/16 ms` 的帧间隔重复 20 次，一圈正好 1,000 ms，避免将全为 17 ms 的约 58.8 fps 当作 60 fps。root 间隔由显式播放控制设置。播放由 daemon 推进；脚本没有播放 timer，也不在每一圈重发像素。
+
+| 命令 | 所走路径与观察点 |
+| --- | --- |
+| `load` | 上传完整 60 帧、放置并停在 root；首次完整 load 在完成标记前写入 manifest |
+| `start`／`stop` | daemon 无限循环／停止；不上传像素 |
+| `select N` | 停止并选择第 `1..60` 帧；画面条码为 `N-1` |
+| `edit N` | 以 `a=f,r=N,X=1` 上传新的完整 1080p 版本；保留 60 帧、placement 与原 gap，不先释放旧 owner 信用 |
+| `compose A B` | `a=c,r=A,c=B,C=1` 在同图像不同帧间整幅复制，无像素 payload；默认 `2 → 3`。目标条码随源一起复制，故只在独立 mutation 阶段采集，不污染基线时序 |
+| `replace` | `a=t` 完整替换 root 后重新追加 59 帧、重新放置并播放，检查旧序列与 atlas 的真实退休；不是缩小为一张替代图 |
+| `delete` | `a=d,d=I` 删除整份序列，随后用不保留资源的 query 作有序屏障；不得出现淘汰 notice 或 fresh 后复活 |
+| `input TEXT`／`stats` | 记录普通 PTY 输入 token／生产者计数；播放期间重复采样，`uploads`、`rawBytes`、`wireBytes` 不因循环增加，`stdoutBytes` 允许因诊断文本增加 |
+| `quit` | 退出发送器而不停止／删除 daemon 动画；确认发送器 PID 消失后检查继续播放及 fresh-window 恢复 |
+
+也可用 `--exit-after-start` 一次加载、启动并退出，随后在同一 pane 的 shell 输入普通命令。`--command start|stop|edit|compose|delete|replace|select|stats` 操作同一固定 ID 后退出；`--frame N` 指定单命令 `edit`／`select` 的帧。`--command load` 只加载并放置，不播放。Linux 远端真实 PTY 可运行相同 Node 脚本；重定向 stdin／stdout 不是预加载入口，脚本会拒绝。
+
+完整 `KITTY_CAPACITY_STATE` JSON 在原始 PTY Output 中给出 `commandSerial`、`phase`、生产者 PID、成功 ACK 数 `uploads`／`uploadedFrames`、`rawBytes`／`bytes`、仅 APC 的 `wireBytes`、全部 stdout 的 `stdoutBytes`、Node `rss/heapUsed/external/arrayBuffers` 与采样峰值。为避免诊断滚动图片锚点，完整 JSON 在固定首行禁折行输出；终端网格中读取第二行短标记 `CAP146:<serial>:<phase>:<uploads>:<wireBytes>`，不能从截断的网格 JSON 推断完整状态。`phase=load/start/stop/select/edit/compose/replace/delete/stats` 是命令完成屏障；`loading/loaded` 是 load 内进度。没有持续输出的 idle 阶段用于测量 daemon-owned 播放。
+
+manifest 将脚本实际字节的 `definition.sourceSha256`、`sourceBytes` 与 `fixtureIdentity` 分开记录，不将文件路径当身份。identity 覆盖源 SHA、seed、pane、尺寸、算法、条码及 gap；同脚本两 pane 的 source SHA 相同、fixture identity 不同。`records[].frameId` 为 `0..59`，`sha256` 是上传原始 RGBA bytes 的 SHA-256，`rawBytes=8294400`；不是 GPU BGRA 的哈希。首次成功 load 后 manifest 固定为基线，不因后续 mutation 重写。Node 的采样峰值只描述生产者，不是 OS 高水位，也不属于 daemon／desktop 的 owner 总量。
+
+设 `P = 1920 × 1080 × 4 = 8,294,400 bytes`、`F = 60`、`N = 2`，所有权推导如下：
+
+| 分配／准入阶段 | 原始字节公式与默认余量 |
+| --- | --- |
+| raw 源像素 | 单 pane `FP = 497,664,000 bytes = 474.61 MiB`；双 pane `NFP = 995,328,000 bytes = 949.22 MiB`。packet header 与 Base64 传输开销不在这个 raw 数中 |
+| daemon 编辑版本共存 | 每 pane `(F+1)P = 482.52 MiB`；双 pane `N(F+1)P = 965.04 MiB`，分别落在 512 MiB／1 GiB encoded 与 RGBA 权重上限内 |
+| daemon queue／work | queue 1,280 MiB 覆盖 1,024 MiB retained packet、两个最多 32 MiB 在途 packet 与 192 MiB 余量；work 每 pane 128 MiB／daemon 256 MiB 独立限制 raw 源／packet 共存、partial、decoder、组合及 snapshot 工作 |
+| 桌面整份 replay 准入 | 令 raw packet `E≈P`，1080p GPU page 票 `G=P`；单 pane `F(P+E+G)+3P≈183P=1447.56 MiB`，低于 1,536 MiB cache；双 pane 低于 3,072 MiB。不能假设 decoder 会在全部 offer 到达前释放预留 |
+| 桌面 source replay 峰值 | 每 pane `F(2P+256 KiB)=964.22 MiB`，低于 1,024 MiB；双 pane低于 2,048 MiB。source 是接收峰值，不是 daemon 的 encoded 上报值 |
+| 常驻派生及退休 | 解码后的 CPU BGRA 与 GPU page 各约 `NFP`；snapshot／旧 scene／已绘制 retired owner 在最后引用、tile 实际删除及 worker 退出前继续占票，不能在 delete 回执时提前归零 |
+
+512 MiB encoded 是按 raw 等价推导，不保证任意 padded PNG 都能装满 60 帧；超过平均约 8.39 MiB 的 encoded 内容仍可能拒收。第三个图形 pane、其他后台图片或更小预算的第二消费者也可能使新工作／附着拒绝。不要通过删除受保护帧、改变 gap／loops 或降低尺寸／帧数来达到容量目标。确定性小预算回归应分别覆盖 aggregate 竞争、临时峰值、snapshot、取消与 retirement，并检查只回收无引用／合格旧历史；它们不能替代以下完整原生测量。
+
+###### Windows 原生采集：仅自有 HWND
+
+中央验收使用 [PresentMon 2.6.0 控制台](https://github.com/GameTechDev/PresentMon/blob/v2.6.0/README-ConsoleApplication.md) 与 [ffmpeg 9.0.2 `gfxcapture`](https://github.com/FFmpeg/FFmpeg/blob/n9.0.2/libavfilter/vsrc_gfxcapture.c)。只捕获隔离窗口 HWND，不使用桌面／monitor／DDA 兜底，不采音频或网络内容。PresentMon 需要既有 Performance Log Users 权限或经确认的管理员运行；缺工具、缺 `gfxcapture` 或 access denied 时记录缺失前提，不自动下载、改组、提权或以 paint callback 替代。
+
+先在中央终端记录当前机器、工具、构建 commit／profile／二进制身份，不能复用旧 RTX 5080 观察作为通过。输出模式以实际 Windows 显示设置核实，记录 DPI、HDR／VRR、真实刷新率、pane client 尺寸与图片缩放矩形。
+
+```powershell
+$dir = Join-Path $env:TEMP 'lyrel146'
+New-Item -ItemType Directory -Force $dir | Out-Null
+Get-CimInstance Win32_OperatingSystem |
+  Select Caption,Version,BuildNumber,TotalVisibleMemorySize
+Get-CimInstance Win32_VideoController |
+  Select Name,DriverVersion,CurrentHorizontalResolution,`
+    CurrentVerticalResolution,CurrentRefreshRate
+nvidia-smi --query-gpu=name,driver_version,memory.total,memory.used --format=csv
+node --version
+ffmpeg -hide_banner -version
+ffmpeg -hide_banner -h filter=gfxcapture
+$pm = Join-Path $dir 'PresentMon-2.6.0-x64.exe'
+Get-FileHash -Algorithm SHA256 $pm
+```
+
+PresentMon 官方 2.6.0 x64 控制台资产 SHA-256 为 `b2a706bc6ad475749e3b7e3409263aa1e6906d45bdcf993f6dbc0f660188f1af`。以下从本次已由中央构建的 Release 二进制启动隔离实例，并仅取得该子进程窗口；若使用 Debug，必须在报告中替换路径并记录，不能混称 Release。
+
+```powershell
+$app = Start-Process 'target/release/lyrel-app.exe' `
+  -ArgumentList @('--config-dir', "$dir/config") -PassThru
+$appPid = $app.Id
+$deadline = (Get-Date).AddSeconds(30)
+do { Start-Sleep -Milliseconds 100; $app.Refresh() }
+until ($app.MainWindowHandle -ne 0 -or (Get-Date) -gt $deadline)
+if ($app.MainWindowHandle -eq 0) { throw 'Owned GUI HWND unavailable' }
+$hwnd = $app.MainWindowHandle.ToInt64()
+Get-Process -Id $appPid | Select Id,Path,MainWindowHandle
+```
+
+在该窗口两个 pane 完成 `load` 后，先各 `select 1`。条码位于源图 `(x=32,y=32,w=256,h=32)`，八个 `32 × 32` 黑白块按 MSB 在左表示 `0..59`，黑为 0、白为 255，白色 quiet border 在取样矩形之外。先截整窗校准图，根据实际图片缩放与 pane 坐标确定两个条码的捕获矩形；不要直接将源坐标当窗口坐标。用 `select 60` 验证最高编号，再恢复 `select 1`。
+
+```powershell
+ffmpeg -hide_banner -n -filter_complex `
+  "gfxcapture=hwnd=${hwnd}:max_framerate=1:capture_cursor=0:display_border=0,hwdownload,format=bgra" `
+  -frames:v 1 (Join-Path $dir 'calib.png')
+# 输入校准图中两个条码的物理像素矩形，顺序为 x,y,w,h
+$lIdX,$lIdY,$lIdW,$lIdH = (Read-Host '左条码 x,y,w,h') -split ',' |
+  ForEach-Object { [int]$_ }
+$rIdX,$rIdY,$rIdW,$rIdH = (Read-Host '右条码 x,y,w,h') -split ',' |
+  ForEach-Object { [int]$_ }
+```
+
+在第二个中央 PowerShell 窗口使用上述本次 `$appPid`／`$dir`／`$pm`，启动 PresentMon；并行启动下段 ffmpeg，再向两个自有 pane 输入 `start`。窗口须可见、无遮挡、非最小化，输入测量前再核验前台 HWND 确为该自有窗口。
+
+```powershell
+& $pm --process_id $appPid `
+  --output_file (Join-Path $dir 'presentmon.csv') `
+  --v2_metrics --qpc_time_ms --write_display_metadata `
+  --session_name lyrel146 --delay 2 --timed 30 --terminate_after_timed
+```
+
+WGC 输出条码而非整窗视频，保留其 QPC 合成 PTS。9.0.2 不支持 `dup_frames`；不要加 `-r` 或恒定帧率转换来补帧。若明确换成 9.1+，必须重新记录版本、核对行为并显式设置 `dup_frames=0`，不能将新版默认补帧当源图变化。
+
+```powershell
+$capture = "gfxcapture=hwnd=${hwnd}:max_framerate=240:" +
+  'capture_cursor=0:display_border=0,hwdownload,format=bgra,split=2[l][r]'
+$left = "[l]crop=${lIdW}:${lIdH}:${lIdX}:${lIdY},format=gray," +
+  "scale=8:1:flags=neighbor,lut=y='if(gt(val,128),255,0)'[lid]"
+$right = "[r]crop=${rIdW}:${rIdH}:${rIdX}:${rIdY},format=gray," +
+  "scale=8:1:flags=neighbor,lut=y='if(gt(val,128),255,0)'[rid]"
+$graph = $capture,$left,$right -join ';'
+ffmpeg -hide_banner -n -filter_complex $graph `
+  -map '[lid]' -fps_mode passthrough -f framemd5 -t 30 `
+    (Join-Path $dir 'left-id.md5') `
+  -map '[rid]' -fps_mode passthrough -f framemd5 -t 30 `
+    (Join-Path $dir 'right-id.md5')
+node scripts/kitty-capacity-analysis.mjs `
+  --presentmon "$dir/presentmon.csv" --left "$dir/left-id.md5" `
+  --right "$dir/right-id.md5" --refresh-hz 240
+```
+
+`--refresh-hz` 必须替换为本次实际刷新率。分析前校验 framemd5 的 frame size 为 8，所有哈希均能映射到八字节黑白条码；不能映射就中止重做校准。剔除启动／停止边缘时应在报告中公布共同稳态时间段，不从结果中挑选最优短片。逐 pane 报告图片变化间隔的 p50／p95／max、顺序跳号与超长重复停留，结合 PresentMon 实际 CSV 表头中的 `DisplayedTime`、`DisplayLatency`、`MsBetweenDisplayChange` 等可用列及 `NA` 行判读；不要传 `--exclude_dropped`。240 Hz 显示器合法显示同一 60 fps 图片约四次刷新，不应算作四次源帧重复。WGC 是窗口合成内容而非扫描输出，跳号也可能来自捕获；只有 WGC 图片身份与 PresentMon 显示时序交叉吻合才可支持约 60 fps，分析脚本不会自动判为通过。
+
+原生完整工作量还须逐项记录以下矩阵，fixture／daemon／desktop／driver 的内存分别采样：
+
+| 阶段 | 必须保留的证据 |
+| --- | --- |
+| 双 pane 加载与稳态 | 两份 source manifest、120 张不同的完整源帧、真实图像与两个 pane 几何；warm-up 后原生呈现分布、缺失／重复、PresentMon `NA` 比例 |
+| 输入 | 两 pane 播放时执行 `input` token，sender 退出后在 shell 输入普通命令；统计 ETW `AllInputToPhotonLatency`／`ClickToPhotonLatency` 的 N、NA 比例及 p50／p95／max；无非 NA 样本则明确指标不可用，不把 token 回执等同输入到显示延迟 |
+| 编辑／合成／全尺寸替换 | 满载时执行 `edit 2`、`compose 2 3`、`replace`；观察不可变版本、保留帧数、旧资源／atlas 局部退休及输入；mutation 单独采集，之后重载或 replace 恢复 60 个有序条码基线 |
+| 可见性 | 隐藏一个 pane 时另一个继续；两者都隐藏／滚出 viewport／断开时暂停，重新可见后从保留状态继续；分别记录隐藏与恢复，不能以最小化 WGC 画面证明屏幕可见播放 |
+| sender／GUI／reader 生命周期 | `quit` 后 source／wire bytes 不再增长；关闭自有旧窗口、附着同一活 daemon，无重新发送而恢复全部保留帧；旧 worker 退出前不提前返还租约 |
+| 删除／关闭／清理 | `delete`、pane close、window close、reset／历史过期后观察 source／cache／queue／metadata 与 GPU tile 真实释放，无主动删除 notice、无复活；只有合格历史淘汰才显示 notice |
+
+用 `Get-Process -Id` 分别采样 producer、daemon 与 desktop 的 `CPU/WorkingSet64/PrivateMemorySize64`，CPU 百分比由采样差值计算；GPU 计数器先发现本地化名称，再按自有 PID 过滤，并与 Task Manager／WPR 的整卡观察交叉核对，不能将设备总量全部归因 lyrel。采集后只清理本次创建的窗口、进程和临时证据，不删除用户数据。
+
+**当前结论：**此入口、所有权公式和测量命令不是运行结果。完整默认容量／小预算回归与 Windows 原生 PresentMon＋WGC、实际内存高水位、输入及清理矩阵均由 CENTRAL 集中验证，尚未据此宣称 native 60 fps 达标；未通过的验收项仍保留未通过，不缩减工作量。这里不提供 macOS 或真实 SSH 的完整工作量／原生性能通过证明。
+
+###### 默认所有权上限
+
+当前默认值按分配所有权核算，单位为 MiB（`1 MiB = 1,048,576 bytes`），不是已经测得的完整系统峰值：
 
 | 范围 | 默认上限与核算 |
 | --- | --- |
 | 单次直接传输 | 一个未完成传输；全部 Base64 合计最多 48 MiB，逐块解码后的 partial buffer 最多约 36 MiB，另加最终 quantum 的 3 字节预留；APC、partial、增长期旧／新分配及同批待处理内容纳入工作空间会计 |
 | 单图 | 每边最多 8,192 像素；编码内容及 RGBA 解码权重各最多 32 MiB。常规 `3840 × 2160 × 4 = 33,177,600 bytes`（约 31.64 MiB）的 4K 截图可落在单图限制内；PNG 压缩体小不豁免解码后限制 |
-| daemon 每窗格 | 实际编码分配合计 64 MiB、RGBA 权重 128 MiB、临时工作空间 128 MiB；最多 1,024 个资源元数据、4,096 个直接放置与虚拟 prototype，回收提示也占元数据配额 |
-| daemon 聚合 | 所有窗格实际编码分配合计 128 MiB、RGBA 权重 256 MiB、临时工作空间 256 MiB。RGBA 权重用于准入，不代表 daemon 另存整份 RGBA。raw zlib 用 64 KiB 输出 scratch、预留 256 KiB 校验空间；PNG 逐行校验 scratch 限 4 MiB。外层 zlib 的 PNG 逻辑展开限 32 MiB，按实际阶段预留 inflate state、增长期旧／新 source 分配，随后保留 normalized source 并另计 4 MiB decoder scratch；parser 仍持有的压缩输入独立占账，不再同时固定预留不共存的 100 MiB 工作空间 |
-| daemon 图形传输 | 已编码资源与在队列中的图形 packet 共享同份数据与租约，单独受 256 MiB 聚合池约束；资源被删除或回收后，仍在 writer 中的 packet 在最后引用释放前继续占账，不能提前归还信用 |
-| 桌面源内容 | 每窗格实际源内容及接收工作最多 64 MiB，整个桌面进程合计 256 MiB；本地与多个远端 daemon 共用同一池。空窗格不预留整份额度，也没有“四个图形窗格”的固定限制。每次 `GraphicsOffer` 按实际 packet 分配先预留 `2 × encoded bytes + 256 KiB` 接收峰值，提取帧后缩至实际源分配，decoder 输入释放后归还。仅在接收容量落在本次预留内时转移大帧所有权；先前大文字 Snapshot 或合并帧留下的超额容量不会带入图片源，已消费的闲置大缓冲会释放 |
-| 桌面派生缓存 | 每窗格 384 MiB，整个桌面进程 1,024 MiB。每份资源在接收前预留 `RGBA bytes + encoded bytes + GPU page bytes`，同一 store 的全部待解码／活动任务另共享最大 `3 × RGBA bytes` scratch；同 store 跨 reader 代次的 decoder 串行运行，保留单次解码原有 `4 × RGBA` 上界，不为不会并发执行的任务重复预留峰值。完成后保留实际 CPU 分配与 GPU page 票；queued／in-flight／decoded／painted-retired 与 snapshot 均持有相应租约，取消不提前归还活动 decoder 的票。GPU 票按当前图片实际 page rounding 上界计算：`4 × max(width, 1024) × max(height, 1024)`；正式 Windows DirectX／macOS Metal 路径的 image tile padding 为零，一个小图最多按独占 4 MiB page 预留，不把所有图当作最坏 64 MiB。Linux 只有 headless daemon，不将未支持的 Linux 桌面 wgpu 当作本产品的已交付渲染路径 |
-| 桌面消费者准入 | 每窗格 daemon 编码上限 64 MiB、RGBA 权重 128 MiB，仍同时受桌面的实际 source／derived 字节池限制。daemon 接受新资源及回复成功前，渲染消费者必须对 `GraphicsOffer` 返回实际字节预留的 `GraphicsGrant`；拒绝、取消、超时与断连释放未完成预留。不设两个驻留资源槽，小图可在真实字节预算内继续接收 |
+| daemon 每窗格 | 实际编码分配合计 512 MiB、RGBA 权重 512 MiB、临时工作空间 128 MiB；最多 1,024 个资源元数据、4,096 个直接放置与虚拟 prototype，回收提示也占元数据配额 |
+| daemon 聚合 | 所有窗格实际编码分配合计 1,024 MiB（1 GiB）、RGBA 权重 1,024 MiB（1 GiB）、临时工作空间 256 MiB。RGBA 权重用于准入，不代表 daemon 另存整份 RGBA。raw zlib 用 64 KiB 输出 scratch、预留 256 KiB 校验空间；PNG 逐行校验 scratch 限 4 MiB。外层 zlib 的 PNG 逻辑展开限 32 MiB，按实际阶段预留 inflate state、增长期旧／新 source 分配，随后保留 normalized source 并另计 4 MiB decoder scratch；parser 仍持有的压缩输入独立占账，不再同时固定预留不共存的 100 MiB 工作空间 |
+| daemon 图形传输 | 已编码资源与在队列中的图形 packet 共享同份数据与租约，单独受 1,280 MiB 聚合池约束；资源被删除或回收后，仍在 writer／snapshot 中的 packet 在最后引用释放前继续占账，不能提前归还信用。不要把 retained encoded 与 queue 当成两份像素副本 |
+| 桌面源内容 | 每窗格实际源内容及接收工作最多 1,024 MiB，整个桌面进程合计 2,048 MiB；本地与多个远端 daemon 共用同一池。空窗格不预留整份额度，也没有“四个图形窗格”的固定限制。每次 `GraphicsOffer` 按实际 packet 分配先预留 `2 × encoded bytes + 256 KiB` 接收峰值，提取帧后缩至实际源分配，decoder 输入释放后归还。仅在接收容量落在本次预留内时转移大帧所有权；先前大文字 Snapshot 或合并帧留下的超额容量不会带入图片源，已消费的闲置大缓冲会释放 |
+| 桌面派生缓存 | 每窗格 1,536 MiB，整个桌面进程 3,072 MiB。每份资源在接收前预留 `RGBA bytes + encoded bytes + GPU page bytes`，同一 store 的全部待解码／活动任务另共享最大 `3 × RGBA bytes` scratch；同 store 跨 reader 代次的 decoder 串行运行，保留单次解码原有 `4 × RGBA` 上界，不为不会并发执行的任务重复预留峰值。完成后保留实际 CPU 分配与 GPU page 票；queued／in-flight／decoded／painted-retired 与 snapshot 均持有相应租约，取消不提前归还活动 decoder 的票。GPU 票按当前图片实际 page rounding 上界计算：`4 × max(width, 1024) × max(height, 1024)`；正式 Windows DirectX／macOS Metal 路径的 image tile padding 为零，一个小图最多按独占 4 MiB page 预留，不把所有图当作最坏 64 MiB。Linux 只有 headless daemon，不将未支持的 Linux 桌面 wgpu 当作本产品的已交付渲染路径 |
+| 桌面消费者准入 | 向 daemon 上报每窗格编码上限 512 MiB、RGBA 权重 512 MiB，不复用 1,024 MiB 的本地 source 池大小；仍同时受桌面的实际 source／derived 字节池限制。daemon 接受新资源及回复成功前，渲染消费者必须对 `GraphicsOffer` 返回实际字节预留的 `GraphicsGrant`；拒绝、取消、超时与断连释放未完成预留。不设两个驻留资源槽，小图可在真实字节预算内继续接收 |
 | 保留元数据 | 每个资源或 placement 按 512 bytes 保守覆盖实际 owner、BTree／Arc 开销；daemon 与桌面分别使用独立的每 pane 4 MiB、aggregate 16 MiB 票池。无像素 notice 仍占票，旧 snapshot 也延续持票直到真正释放。新资源、新放置及 replay notice 分别准入，已有同 key 更新复用原票；元数据满额会拒绝新内容，不为无法释放元数据的历史位置做无效像素回收 |
 
-同一桌面的 source、derived 与 metadata 三个池的会计上限合计为 1,296 MiB；一个 daemon 的权威编码内容、临时工作空间、图形传输及 metadata 合计为 656 MiB。一个桌面连接一个 daemon 的这部分组合上限为 1,952 MiB；连接四个独立 daemon 时为 3,920 MiB，且远端 daemon 的内存在各自所属主机。这里没有将 daemon 的 RGBA 准入权重重复算作实际像素副本。这些是各分配阶段的保守会计范围，不是整进程 RSS、整机或 GPU 驱动峰值承诺：终端文字、其他界面、allocator、系统管道／socket buffer、驱动与平台缓存仍须另测。
+桌面的 source、derived 与 metadata 三池合计上限为 5,136 MiB；这些池覆盖不同阶段的保守预留，不代表它们始终同时分配到上限。daemon 的 encoded 与 queue 共享 packet 分配，RGBA 权重也不是另一份实际像素，不能将这几个数相加后声称实际常驻内存。多个远端 daemon 的权威内容位于各自所属主机；桌面 aggregate 池仍由全部连接共用。终端文字、其他界面、allocator、系统管道／socket buffer、GPU page 对齐、旧 scene 和驱动缓存均须另测，以上不承诺整进程 RSS、整机或 GPU 驱动峰值。
 
 容量不是可以忽略的提示。所有生产 pane 客户端声明有限上限；渲染消费者另按每份资源的真实成本授权，同一 pane 多消费者均须满足准入。等待授权不持有 `PaneState` 锁，删除、resize、清理与退出仍可取消旧工作；无 GUI 或 detached 时仍按 daemon 自身预算接收输出。新桌面不能容纳已经保留的图片时，附着会明确失败并保留 daemon 权威内容，不以静默漏图或虚构回收提示冒充恢复成功。只有精确确认原 pane 不存在才可创建替代 shell；graphics admission 拒绝、断连或附着未获完整答复不能替换仍存活的会话。旧 reader 及在途解码退出前不提前归还它们仍持有的信用。
 

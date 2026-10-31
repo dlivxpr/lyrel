@@ -23,6 +23,7 @@
 
 - Kitty 相对放置在既有 daemon Placement／pane transport 中保留 `P/Q` 父身份、signed `H/V` 及八链接有界图；支持 direct／实际 Unicode 单元父锚点、无光标移动、级联生命周期和 fresh consumer 恢复。Windows 五项真实 PTY／daemon／rooted view 回归及 `scripts/kitty-relative.mjs` 原生 geometry／recovery smoke 已通过；完整 DPI／性能、真实 SSH 组合及 macOS 不由此结果替代。
 - Kitty 间接媒体增加 Windows 本地 regular file、eligible 临时文件与 named shared memory；`O/S` 只限制实际图片区域，允许小区域位于大对象中。Windows 固定已验证本地磁盘 handle、拒绝网络／device／未知 reparse，并按对象 handle 删除临时 handoff；Unix 保留文件／POSIX shm 语义，macOS 按偏移附近有界映射，临时文件使用身份核验及 no-clobber 恢复避免删错替换对象。发送方 locality 每次接受及读取前重新证明，嵌套 SSH／WSL 或未知命名空间 fail-closed，直接传输不受影响；不新增图片磁盘缓存。Windows 真实 PTY／rooted consumer 与原生三类媒体红绿像素／安全应答 smoke 已通过，Linux headless 完整 features 回归通过；真实 SSH 图形组合及 macOS 仍待对应票验收。
+- Kitty 双 pane 1080p 容量（#146）按真实 allocation owner 提升默认有限预算：daemon 每 pane encoded／RGBA 权重各 512 MiB、aggregate 各 1 GiB，queue 1,280 MiB，work 保持 128／256 MiB；桌面 cache 为 1,536／3,072 MiB、source 为 1,024／2,048 MiB，向 daemon 上报每 pane encoded／RGBA 各 512 MiB。新增 `scripts/kitty-capacity.mjs`，通过既有真实 PTY／Kitty 路径逐帧产生两组固定 seed、各 60 张不同 1920×1080 raw RGBA 噪声帧与 8-bit frame ID 条码；单 frame buffer、逐帧 ACK／backpressure、路径独立的脚本 SHA-256／source manifest，以及 load／daemon start-stop／edit／compose／完整 replacement／delete／普通输入与 sender 退出入口。现有 concepts 公布 `P/F/N` 所有权公式、实际退休边界与 PresentMon 2.6.0＋ffmpeg 9.0.2 自有 HWND WGC 复现命令；预算、计数与脚本不等于 RSS／GPU 峰值或 native 60 fps 通过。完整容量回归及原生测量仍待 CENTRAL 集中验收，不提供 macOS／真实 SSH 完整工作量通过证明。
 
 ### 验证入口
 
