@@ -7,6 +7,14 @@
 
 ## [Unreleased]
 
+### 修复
+
+- OpenCode 集成按既有 `agent_launch` 的受检 Host／`XDG_CONFIG_HOME` 作用域定位 CLI 插件与配置，不再误写默认目录；保留显式 `session.image_preview=false`，不全局改设置或伪造终端身份。补充公开 `-s`／`--auto` 启动参数识别。
+
+### 验证入口
+
+- 新增正式 OpenCode 2.2.0 的隔离保存对话夹具与真实 PTY／daemon／rooted consumer 回归：公开 import／resume／export，无 prompt／推理，覆盖用户附件、tool-result、每卡三图、旧消息分页、滚出返回、native tab 删除与重挂载、disabled 策略。版本和公开接口已重新核对；新用例及 Windows 最终像素尚未执行，macOS 亦未验收，具体入口和预期见终端内联图片文档。
+
 ## [0.3.0] - 2026-10-31
 
 ### 新增

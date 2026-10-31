@@ -301,6 +301,53 @@ Windows 协议冒烟已在 pane `13` 的生产 CLI／daemon 上复验，使用�
 随后在上述 Windows 原生窗口，以隔离 HOME／profile／overlay 和公开 `--resume` 运行同一正式 `omp/18.12.6`：placeholder 模式实际显示受控 assistant 的 `480×100` fenced SVG，以及 toolResult 中真实隔离窗口的 `1280×804` PNG 截图；`/exit` 正常返回 shell。未修改 omp、未伪造 `TERM_PROGRAM`、未传入用户模型凭据，也没有提交 prompt 或执行推理。受控会话重放证明生产应用渲染和最终像素，不等于真实模型新生成的回答；真实 agent 交互、macOS 及远端 omp 仍未验收。direct 模式位置重叠保留为未解决的兼容缺口。公开 catalog 刷新不等于模型推理，本轮也不声明完全断网。
 
 
+#### OpenCode 2.2.0：公开历史图片预览与原生验收入口（#150）
+
+2026-10-31 重新读取本机 `opencode --version`，结果为 `opencode v2.2.0`；官方 [v2.2.0 release](https://github.com/anomalyco/opencode/releases/tag/v2.2.0) 为 2026-10-27 发布的非 prerelease，标签指向 `1097e2668b1e08ad63bdf0b1c4860b9bc01e420c`。这不是把 GitHub 的 `latest` 自动当作 2.x 基线，也不是原生图片已通过的声明。
+
+OpenCode 的 [公开 CLI 设置](https://opencode.ai/v2/docs/cli/config) 是 `session.image_preview`，与仅影响输入框的 `prompt.image_preview` 不同。默认不开启历史预览；CLI 从 `$XDG_CONFIG_HOME/opencode/cli.json`（未设置时为 `~/.config/opencode/cli.json`）读取，不读取项目局部 CLI 配置。`OPENCODE_CLI_CONFIG_CONTENT` 按对象深合并覆盖该文件，数组和标量替换，且变量存在期间保持权威；因此不得注入 `true` 覆盖用户明确的 `false`。
+
+lyrel 不强制打开该选项，也不增加 agent 专属图片渲染器。既有 `agent_launch` 可选择独立 CLI 配置目录；获准安装 OpenCode 集成时，同样使用该启动作用域的 `XDG_CONFIG_HOME` 和 Host，而不是误写默认目录。配置目录必须是目标 Host 上的绝对路径。示例中的目录应由你准备，只有明确需要图片时才在其中写入 `{"session":{"image_preview":true}}`：
+
+```json
+{
+  "agent_launch": {
+    "opencode": "XDG_CONFIG_HOME=C:/owned/opencode-config opencode --standalone"
+  }
+}
+```
+
+命令前的环境赋值沿用 lyrel 的启动设施；手动 PowerShell 启动时，应在仅拥有的子进程环境设置对应变量，不把 POSIX 赋值语法直接粘贴到 PowerShell。`--standalone` 选择私有 OpenCode server，不接管用户既有 service。`TERM_PROGRAM` 继续是 `lyrel`，不伪造 Kitty、WezTerm 等身份。仅需原生图片时不要求安装 lyrel 状态插件。
+
+该发布标签的 [SessionImages / UserMessage / ToolImages](https://github.com/anomalyco/opencode/blob/v2.2.0/packages/tui/src/routes/session/index.tsx) 已重新核对：用户附件从保存的 `image/*` 字节构造 data URI；tool-result 只选择 `type=file`、`mime=image/*` 且 `uri` 以 `data:image/` 开头的项，实际能否解码仍由原生图片节点决定。每个图片组／卡片最多内联前三张，其余显示 `+N more`；卡片高度按终端高度的四分之一限制在 4–8 行，使用 `fit=cover`。不能把第四张、URL、普通路径、Markdown 或 SVG 文本强行补成终端图片。打开默认只挂载约 40 个加权 transcript 行，较旧内容按约 60 行回填并经原生 API 分页；这些是本标签的实现值，升级需重新检查。
+
+**可运行夹具：**在隔离 lyrel 原生窗格中，先把窗格调到至少 120 列、60 行，再运行：
+
+```sh
+node scripts/opencode-image-replay.mjs --previews on
+node scripts/opencode-image-replay.mjs --previews off
+```
+
+需要已安装的 Node.js 和正式 OpenCode 2.2.0；可用 `--opencode <absolute-executable>` 指定已有程序，不自动安装或修改全局软件。夹具只创建自己拥有的临时 HOME／XDG／工作目录，清除凭据与用户 CLI overlay 的继承，使用公开 `session import` 保存合成对话，再以 `--standalone -s <id>` 恢复原生 TUI。其 546 条保存消息含首尾各一张用户附件卡和 tool-result 卡，中间 180 组问答用于强制旧消息分页；每卡四张 96×48 PNG，黑边／白色序号条和实心色块可识别图片。PNG 只作为合成会话中的图片来源，不另写磁盘图片缓存。夹具没有 `--prompt`、`run` 或模型调用；退出后公开 `session export` 核对消息逐项不变、cost/token 为零，输出 `OPENCODE_REPLAY_VERIFIED` 后清理本次临时目录。Node、OpenCode 或 native 图像缺失均是失败，不是跳过后通过。
+
+**原生 Windows 验收步骤与预期：**
+
+1. 初次打开在 `TAIL_USER` 卡上看到偏浅红、绿、蓝三张，在其下独立 `TAIL_TOOL` 卡看到偏浅青、黄、橙三张；黑边与 1／2／3 个白色条可分辨。每卡三张同排、从左到右、不重叠、不越出卡片，第四张洋红／紫色不应内联，应保留原生 `+1 more`。
+2. 用原生 `PageUp` 把尾卡滚出屏幕，再用 `End` 回到尾部，确认仍是对应六张和正确卡片位置，没有残影。用 `Home`／`Ctrl+G` 到旧历史，等待原生分页与挂载，在 `OLD_USER`／`OLD_TOOL` 检查深色版本的红绿蓝／青黄橙；随后 `End` 回尾，不能把旧卡图错误留在新卡。
+3. `F6` 使用公开 keybind 关闭 native tab，使图片节点卸载并删除；空页不得残留图片。`F7` 原生重开该 tab 后允许应用重新传输，检查尾卡图片再次正确出现。退出 `Ctrl+C` 后 shell 不得显示残留或“图片已淘汰”。这一步的应用重传不属于无重传 daemon 恢复。
+4. 对 `--previews off` 重复首尾分页；只能看到文本／附件标签，不得由 lyrel 自动变成图片。两轮均不提交 prompt、不重发或生成图片。记录版本、实际配置、GUI／daemon PID、Windows／DPI／窗格几何和对应截图，最终公开 export 核对结果也必须保留。
+
+中央自动化入口（必须显式运行 ignored 原生依赖用例，不能只运行默认套件）：
+
+```sh
+cargo test --locked -p lyrel-core opencode_scoped_launch_keeps_preview_policy_and_default_config_untouched -- --test-threads=1
+cargo test --locked -p lyrel --bin lyrel-app opencode_replay_consumer_tests:: -- --ignored --nocapture --test-threads=1
+```
+
+consumer 用例复用真实 PTY → 独立真实 daemon → 生产 pane connection／`RemoteTerminal` → rooted `TerminalView`，断言实际解码 BGRA 主色、两卡左右几何、production paint claim、原生分页／滚离返回／tab 卸载重挂载，以及退出后 fresh consumer 不复活被应用删除的图片。它不替代最终 GPU 像素。
+
+**本票证据边界：**已观察的只有版本／公开 help 和上述官方发布源码、配置文档；按中央统一执行约定，本工作树没有运行 build／test／lint／formatter，也没有执行新夹具或原生图片 smoke。上述自动化、Windows 最终像素／placement／分页／删除及 macOS 实机验收均尚未验证；不得据此宣布 #150 的原生验收通过。
+
 #### 当前实现：预算与历史回收（#44）
 
 - **最旧**在同一 daemon 内按资源准入单调序号确定，不按 GUI 最近访问时间、图片 ID 或墙钟排序；替换后是一个新版本。跨 daemon 的共享桌面池按资源首次成功接收的进程内单调序号排序，不假设远端主机共享墙钟。先回收无引用资源，再按对应范围的序号回收非可见历史。direct 的真实保留片段和 placeholder 的共享文本投影合并判定；活动屏 live rows 及必须保留的非活动主／备用屏内容受保护，隐藏或无 GUI 不会绕过预算。

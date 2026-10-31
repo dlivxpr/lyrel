@@ -1861,3 +1861,7 @@ fn graphics_consumer_contended_viewport_retries_refused_history_without_new_outp
         graphics_recovery_destroy(new, new_window, cx);
     });
 }
+
+mod opencode_replay_consumer_tests {
+    include!("opencode_replay_consumer_tests.rs");
+}
