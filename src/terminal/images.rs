@@ -24,7 +24,7 @@ pub struct RenderPlacement {
     pub painted: Arc<AtomicBool>,
     pub placement: Placement,
     pub anchor_row: i64,
-    pub anchor_col: usize,
+    pub anchor_col: i64,
     width_px: u32,
     height_px: u32,
     revision: u64,
@@ -908,7 +908,9 @@ impl ImageStore {
                 || (placement.screen == inner.screen
                     && displayed
                     && !placement.virtual_placement
-                    && placement.anchor_col < live_cols as u32
+                    && !placement.unresolved
+                    && placement.anchor_col < live_cols as i64
+                    && placement.anchor_col + i64::from(placement.span_cols) > 0
                     && row + i64::from(placement.clip_top) < live_rows as i64
                     && row + i64::from(placement.clip_bottom) > 0)
             {
@@ -993,7 +995,7 @@ impl ImageStore {
                 painted: resource.painted.clone(),
                 placement: anchored.placement.clone(),
                 anchor_row: anchored.placement.anchor_row,
-                anchor_col: anchored.placement.anchor_col as usize,
+                anchor_col: anchored.placement.anchor_col,
                 width_px: resource.width,
                 height_px: resource.height,
                 revision: anchored.revision,
@@ -1011,7 +1013,7 @@ impl ImageStore {
             .placements
             .values()
             .filter(|anchored| {
-                anchored.placement.screen == inner.screen && !anchored.placement.virtual_placement
+                anchored.placement.screen == inner.screen && !anchored.placement.virtual_placement && !anchored.placement.unresolved
             })
             .filter_map(|anchored| render(anchored, None))
             .collect();
@@ -1766,7 +1768,7 @@ mod tests {
         placement.w = 1;
         placement.h = 1;
         placement.anchor_row = row;
-        placement.anchor_col = col;
+        placement.anchor_col = i64::from(col);
         placement.span_rows = 1;
         placement.clip_bottom = 1;
         GraphicsUpdate::Place(placement)

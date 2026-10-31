@@ -99,8 +99,11 @@ impl GraphicsState {
     }
 
     pub(super) fn finish_layout(&mut self, screen_changed: bool) -> Vec<GraphicsEffect> {
+        self.prune_relative_orphans();
+        self.resolve_relative_geometry();
         self.refresh_retention();
         let mut effects = self.drain_evictions();
+        self.prune_relative_orphans();
         if !self.removed.is_empty() || !self.freed.is_empty() {
             effects.push(GraphicsEffect::Update(GraphicsUpdate::Remove {
                 placements: std::mem::take(&mut self.removed),
@@ -129,12 +132,115 @@ impl GraphicsState {
         effects
     }
 
+    /// All deletion routes (protocol, history, reflow, screen and reset) retire
+    /// descendants through the same authoritative placement graph.
+    fn prune_relative_orphans(&mut self) {
+        if !self.placements.values().any(|p| p.placement.parent.is_some_and(|parent| !self.placements.contains_key(&parent))) {
+            return;
+        }
+        // Fixed-size scratch is bounded by the existing placement quota. All
+        // missing-parent components are collected, not only the first branch.
+        let mut roots = [0u64; MAX_PLACEMENTS];
+        let mut count = 0;
+        for _ in 0..=8 {
+            let before = count;
+            for (&key, p) in &self.placements {
+                if p.placement.parent.is_some_and(|parent| {
+                    !self.placements.contains_key(&parent) || roots[..count].contains(&parent)
+                }) && !roots[..count].contains(&key) {
+                    roots[count] = key;
+                    count += 1;
+                }
+            }
+            if count == before { break; }
+        }
+        for key in &roots[..count] {
+            if let Some(p) = self.placements.remove(key) {
+                self.removed.push(*key);
+                self.dirty.remove(key);
+                let resource = p.placement.resource;
+                if !self.placements.values().any(|p| p.placement.resource == resource) {
+                    self.free_resource(resource);
+                }
+            }
+        }
+    }
+
+    fn resolve_relative_geometry(&mut self) {
+        if !self.placements.values().any(|p| p.placement.parent.is_some()) { return; }
+        let base = self.history_origin();
+        // Virtual coordinates come from actual retained placeholder cells, not
+        // from prototype creation or from the first visible desktop viewport.
+        let mut keys = [0u64; MAX_PLACEMENTS];
+        let count = self.placements.len();
+        for (slot, key) in keys.iter_mut().zip(self.placements.keys()) { *slot = *key; }
+        let mut anchors = [None::<(i64, i64)>; MAX_PLACEMENTS];
+        if self.placements.values().any(|p| p.placement.parent.is_some_and(|key| {
+            self.placements.get(&key).is_some_and(|p| p.placement.virtual_placement && p.placement.screen == self.screen)
+        })) {
+            for row in -(self.term.grid.history_size() as i32)..self.term.screen_lines() as i32 {
+                for slice in placeholder_row(&self.term.grid, Line(row)) {
+                    let Some(prototype) = placeholder_prototype(self.placements(), self.screen, &slice.run) else { continue };
+                    if slice.run.row >= prototype.span_rows || slice.run.col >= prototype.span_cols { continue; }
+                    let image = &self.resources[&prototype.resource].image;
+                    let mut run = slice.run;
+                    run.width = run.width.min(prototype.span_cols - run.col);
+                    if rio_vt::ansi::kitty_virtual::compute_run_geometry(&run, prototype.span_cols, prototype.span_rows,
+                        image.width, image.height, (prototype.x, prototype.y, prototype.w, prototype.h),
+                        f32::from(self.size.cell_w.max(1)), f32::from(self.size.cell_h.max(1)), 0., 0., 0, slice.column).is_none() { continue; }
+                    let point = (base + i64::from(row), slice.column as i64);
+                    let index = keys[..count].binary_search(&prototype.key).expect("retained prototype");
+                    anchors[index] = Some(match anchors[index] {
+                        Some(anchor) => (anchor.0.min(point.0), anchor.1.min(point.1)),
+                        None => point,
+                    });
+                }
+            }
+        }
+        for (&key, p) in &mut self.placements {
+            let p = &mut p.placement;
+            if p.screen != self.screen || !p.virtual_placement { continue; }
+            let index = keys[..count].binary_search(&key).expect("retained prototype");
+            let anchor = anchors[index];
+            let next = anchor.unwrap_or((p.anchor_row, p.anchor_col));
+            if (p.anchor_row, p.anchor_col, p.unresolved) != (next.0, next.1, anchor.is_none()) {
+                p.anchor_row = next.0;
+                p.anchor_col = next.1;
+                p.unresolved = anchor.is_none();
+                self.dirty.insert(key);
+            }
+        }
+        // No recursion and at most eight edges per accepted graph. Iteration
+        // also handles a replacement that points to a newer placement key.
+        for _ in 0..8 {
+            let mut changed = false;
+            for &key in &keys[..count] {
+                let p = &self.placements[&key].placement;
+                let Some(parent) = p.parent.and_then(|key| self.placements.get(&key)) else { continue };
+                if p.screen != self.screen { continue; }
+                let next = (parent.placement.anchor_row + i64::from(p.relative_y),
+                    parent.placement.anchor_col + i64::from(p.relative_x), parent.placement.unresolved);
+                if (p.anchor_row, p.anchor_col, p.unresolved) != next {
+                    let p = &mut self.placements.get_mut(&key).unwrap().placement;
+                    p.anchor_row = next.0;
+                    p.anchor_col = next.1;
+                    p.unresolved = next.2;
+                    p.clip_top = 0;
+                    p.clip_bottom = p.span_rows;
+                    self.dirty.insert(key);
+                    changed = true;
+                }
+            }
+            if !changed { break; }
+        }
+    }
+
     fn discard_placements(&mut self, mut selected: impl FnMut(&Placement) -> bool) {
         let mut affected = Vec::new();
         self.placements.retain(|key, p| {
             if selected(&p.placement) {
                 self.removed.push(*key);
-                affected.push(p.placement.resource);
+                affected.push((p.placement.resource, p.placement.parent.is_some()));
                 self.dirty.remove(key);
                 false
             } else {
@@ -143,8 +249,8 @@ impl GraphicsState {
         });
         affected.sort_unstable();
         affected.dedup();
-        for resource in affected {
-            if self.resources.get(&resource).is_some_and(|r| r.id == 0)
+        for (resource, relative) in affected {
+            if self.resources.get(&resource).is_some_and(|r| relative || r.id == 0)
                 && !self
                     .placements
                     .values()
@@ -160,12 +266,13 @@ impl GraphicsState {
         let oldest = self.term.grid.lines_evicted() as i64;
         self.discard_placements(|p| {
             !p.virtual_placement
+                && p.parent.is_none()
                 && p.screen == screen
                 && p.anchor_row + i64::from(p.clip_bottom) <= oldest
         });
         for (key, p) in &mut self.placements {
             let p = &mut p.placement;
-            if !p.virtual_placement && p.screen == screen {
+            if !p.virtual_placement && p.parent.is_none() && p.screen == screen {
                 let top = p
                     .clip_top
                     .max((oldest - p.anchor_row).clamp(0, i64::from(p.clip_bottom)) as u32);
@@ -191,7 +298,7 @@ impl GraphicsState {
             .placements
             .values()
             .map(|p| &p.placement)
-            .filter(|p| !p.virtual_placement)
+            .filter(|p| !p.virtual_placement && p.parent.is_none())
         {
             let marker = AtlasPlacement {
                 image_key: p.key,
@@ -230,11 +337,12 @@ impl GraphicsState {
         for marker in active.into_iter().chain(inactive) {
             if let Some(p) = self.placements.get_mut(&marker.image_key) {
                 p.placement.anchor_row = marker.abs_row - i64::from(p.placement.clip_top);
+                p.placement.anchor_col = marker.col as i64;
                 retained.insert(marker.image_key);
                 self.dirty.insert(marker.image_key);
             }
         }
-        self.discard_placements(|p| !p.virtual_placement && !retained.contains(&p.key));
+        self.discard_placements(|p| !p.virtual_placement && p.parent.is_none() && !retained.contains(&p.key));
         self.size = size;
         if grid_changed {
             self.region = 0..i32::from(size.rows.max(1));
@@ -298,7 +406,7 @@ impl GraphicsState {
         }
         for (key, p) in &mut self.placements {
             let p = &mut p.placement;
-            if p.screen != self.screen || p.virtual_placement {
+            if p.screen != self.screen || p.virtual_placement || p.parent.is_some() {
                 continue;
             }
             let pt = p.anchor_row + i64::from(p.clip_top);

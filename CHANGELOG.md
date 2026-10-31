@@ -7,6 +7,10 @@
 
 ## [Unreleased]
 
+### 新增
+
+- Kitty 相对放置在既有 daemon Placement／pane transport 中保留 `P/Q` 父身份、signed `H/V` 及八链接有界图；支持 direct／实际 Unicode 单元父锚点、无光标移动、级联生命周期和 fresh consumer 恢复。新增真实 PTY／daemon／rooted view 行为回归与 `scripts/kitty-relative.mjs` 原生几何／恢复入口；本轮子工单未执行构建、自动测试或 Windows／macOS 原生验收，证据边界见终端图片文档。
+
 ## [0.3.0] - 2026-10-31
 
 ### 新增

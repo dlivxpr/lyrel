@@ -2815,7 +2815,7 @@ mod gpui_tests {
         placement.w = 1;
         placement.h = 1;
         placement.anchor_row = row;
-        placement.anchor_col = col;
+        placement.anchor_col = i64::from(col);
         placement.span_cols = 4;
         placement.span_rows = 2;
         placement.clip_bottom = 2;
@@ -2857,6 +2857,7 @@ mod gpui_tests {
     include!("graphics_resize_consumer_tests.rs");
     include!("graphics_layout_consumer_tests.rs");
     include!("graphics_recovery_consumer_tests.rs");
+    include!("graphics_relative_consumer_tests.rs");
     include!("native_ssh_consumer_tests.rs");
     include!("lifecycle_consumer_tests.rs");
 

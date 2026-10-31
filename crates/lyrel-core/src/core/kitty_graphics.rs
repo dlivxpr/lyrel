@@ -673,6 +673,10 @@ pub struct Control {
     pub no_move: bool,
     /// `U=1` creates an invisible prototype referenced by Unicode grid cells.
     pub virtual_placement: bool,
+    pub parent_image: u32,
+    pub parent_placement: u32,
+    pub relative_x: i32,
+    pub relative_y: i32,
     pub invalid: bool,
     pub unsupported: bool,
 }
@@ -706,6 +710,10 @@ impl Default for Control {
             z: 0,
             no_move: false,
             virtual_placement: false,
+            parent_image: 0,
+            parent_placement: 0,
+            relative_x: 0,
+            relative_y: 0,
             invalid: false,
             unsupported: false,
         }
@@ -817,7 +825,14 @@ impl Control {
                     c.virtual_placement = val == b"1";
                     c.invalid |= val != b"0" && val != b"1";
                 }
-                b"P" | b"Q" | b"H" | b"V" => c.unsupported |= val != b"0",
+                b"P" => c.parent_image = num(),
+                b"Q" => c.parent_placement = num(),
+                b"H" | b"V" => match std::str::from_utf8(val)
+                    .ok().and_then(|s| s.parse::<i32>().ok()) {
+                    Some(offset) if key == b"H" => c.relative_x = offset,
+                    Some(offset) => c.relative_y = offset,
+                    None => c.invalid = true,
+                },
                 _ => {} // unknown key: ignore
             }
             if matches!(
@@ -837,6 +852,8 @@ impl Control {
                     | b"O"
                     | b"S"
                     | b"q"
+                    | b"P"
+                    | b"Q"
             ) && std::str::from_utf8(val)
                 .ok()
                 .and_then(|s| s.parse::<u32>().ok())
