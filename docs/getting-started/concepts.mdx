@@ -315,6 +315,61 @@ node scripts/omp-native-replay.mjs cleanup --root $fixture --lyrel-cli (Resolve-
 
 历史上 `omp/18.12.6` 曾在 Windows 隔离原生窗口验证 placeholder assistant SVG 和 toolResult PNG、无新 prompt；direct 重放当时观察到重叠。该记录仅属于旧版本，不替代以上新版验收。
 
+<a id="pi-native-image-replay"></a>
+#### 正式 pi 接入：公开进程设置与独立重放夹具（#149）
+
+这里的 **pi** 是 [earendil-works/pi](https://github.com/earendil-works/pi)，npm 包为 `@earendil-works/pi-coding-agent`，不是 omp。2026-10-31 重新查询 [GitHub 最新正式发行](https://github.com/earendil-works/pi/releases/tag/v1.4.0)、npm `version` 和本机 `pi --version`，三者均为 `1.4.0`。这是版本／公开接口核实，不是本轮原生图片验收通过。
+
+使用 lyrel 既有 `agent_launch` 的 literal 环境前缀，只为该次启动选择协议，不修改 `TERM_PROGRAM=lyrel`，也不修改 pi 全局配置：
+
+```json
+{
+  "agent_launch": {
+    "pi": "PI_IMAGE_PROTOCOL=kitty pi"
+  }
+}
+```
+
+有意关闭时可改为 `PI_IMAGE_PROTOCOL=none pi`。图片选择值随 Pi 原生 hook 的公开会话 scope 绑定、持久化及恢复；已绑定 scope 优先于启动默认值，启动显式赋值优先于 Host 环境。未配置时不替用户强制打开；不把 omp 的 `PI_FORCE_IMAGE_PROTOCOL`、`PI_KITTY_PLACEHOLDERS` 或 YAML overlay 当成 pi 接口。恢复指定文件使用 pi 的 `--session <path>`，不是 omp 的 `--resume <path>`；pi 的 `--resume` 打开选择器。
+
+上游 [terminal-setup.md](https://github.com/earendil-works/pi/blob/v1.4.0/packages/coding-agent/docs/terminal-setup.md) 和 [settings.md](https://github.com/earendil-works/pi/blob/v1.4.0/packages/coding-agent/docs/settings.md) 规定：
+
+- `PI_IMAGE_PROTOCOL=kitty|iterm2|none|auto` 是公开环境选项；`terminal.images: "kitty"|"iterm2"|false|"auto"` 是协议设置，**具体设置值优先于环境变量**；`auto` 不强制覆盖环境选择。
+- `terminal.images=false` 或 `terminal.showImages=false` 均不得由 lyrel 静默改为开启。后者是独立显示策略，不是 `images.blockImages`（后者限制发送给模型）。
+- 本票仅覆盖保存的 **toolResult 图片**。PNG 直接进入原生 Kitty 路径；JPEG／GIF／WebP 依赖 pi 原生 PNG 转码，不承诺文件动画播放。用户消息图片、assistant 中 SVG 正文／代码块栅格化、Markdown 图片链接及任意路径／URL 不在本票承诺内，lyrel 不补画这些内容。
+- pi 默认图片宽度为 60 cells；夹具显式用 12 cells。其 [fullscreen renderer](https://github.com/earendil-works/pi/blob/v1.4.0/packages/tui/src/tui-alt-screen.ts) 仅保留最多 16 个屏外 Kitty 图片、32 MiB transmission、64 MiB estimated decoded 内容；滚动重挂载可能复用上传或重传，超出这些上游保留边界会发送 `d=I`。这里不是 OpenCode 的“三张／组”规则。lyrel 尊重删除，不以隐藏像素副本绕过限额；以后有效重传才重新建立资源。
+
+##### 中央验证入口与原生像素步骤
+
+仓库夹具 `scripts/pi-image-replay.mjs` 只生成自己临时目录中的 version 3 合成会话，经实际正式 pi 的 `--session` 重放；不导入 pi 内部 renderer，不读用户历史，不复制凭据，不向 stdin 填入新 prompt。支持正式独立可执行文件或 npm `dist/cli.js`，执行前校验 `--version`；npm 入口另校验包名。独立发行文件的来源／校验和须与 [正式 release assets](https://github.com/earendil-works/pi/releases/tag/v1.4.0) 核对。夹具不安装或升级软件；需要 Node.js 22.19+ 和正式 Pi 1.4.0。`--offline`、禁用发现扩展／MCP／skills／context、空 HOME／agent-dir 及凭据环境 allowlist 隔离模型工作；退出时检查原合成会话没有新增 message、usage、compaction 或 branch summary，再删除自己的目录。
+
+合并后由中央执行，不能把 ignored 用例计为已通过：
+
+```powershell
+$env:LYREL_PI_GRAPHICS_CLI = 'C:\path\to\official\pi.exe'
+# npm 安装也可指向 @earendil-works/pi-coding-agent/dist/cli.js。
+node --check scripts/pi-image-replay.mjs
+cargo test --locked -p lyrel-core pi_resume_preserves_explicit_image_protocol_without_omp_options
+cargo test --locked -p lyrel-core pi_first_run_waits_for_settlement_and_resolves_only_its_own_dialog
+cargo test --locked --bin lyrel-app graphics_consumer_pi_native_ -- --ignored --nocapture --test-threads=1
+```
+
+最后一条通过真实 PTY → 新建隔离 daemon → production `RemoteTerminal` → rooted `TerminalView`，比较两张图不同的 BGRA 地标、放置与真实 production paint claim，覆盖原生历史 top／bottom、`/new` 删除、再次原生启动重放，以及三种显式关闭和设置覆盖环境。GPUI 测试窗口不是最终 GPU 像素证据。
+
+Windows 原生验收应先由中央构建当前合并提交，启动**另一个全新目录**的 `lyrel-app.exe --config-dir <isolated-dir>`，确认连接的是本轮 built daemon；不要对旧用户 daemon 复用／升级／停止。在该窗口新建自有 pane，运行：
+
+```powershell
+node C:\path\to\lyrel\scripts\pi-image-replay.mjs --pi C:\path\to\official\pi.exe --pictures 20 --rounds 2
+```
+
+1. 起始应看到第 19 张 `48×24` 合成图片，而非仅 `PI_REPLAY_PICTURE_19` 标签。四象限源 RGBA 从左上顺时针为 `(255,0,209,255)`、`(0,255,133,255)`、`(255,255,0,255)`、`(95,0,255,255)`，中心白色 `4×4` 方块；夹具进入 TUI 前输出每张源 RGBA SHA-256。
+2. `F5` 跳原生 transcript 顶部：第 0 张应为红／绿／黄／蓝四象限及白色中心；`F6` 回尾部。逐页 PageUp／PageDown 访问全部 20 张，超过 pi 的屏外保留数量后回访，核对各图身份和位置，没有串图、重叠残影或已删除像素复活。不要改成 lyrel 的 shell 历史滚动冒充原生 remount。
+3. 输入原生命令 `/new`，旧会话图片应消失。空编辑器按 `Ctrl+D` 退出首个 pi；夹具第二轮自动用同一个保存文件启动另一个 pi，图片须由发送器再次输出，不手工重发、不触发模型。第二轮再次 `/new`、`Ctrl+D`，应看到两条 `PI_REPLAY_ROUND_n_NO_NEW_MESSAGES` 及清理完成后的 `PI_REPLAY_FIXTURE_DONE`。
+4. 分别以 `--policy env-none`、`--policy settings-none`、`--policy display-none` 启动单轮，保存 transcript 可见但不应显示图片；`--policy settings-kitty` 则在 `PI_IMAGE_PROTOCOL=none` 下由显式设置选择 Kitty。每轮只用 `Ctrl+D` 退出，不发送任务；夹具 180 秒硬截止仅结束自有 pi 子进程。
+5. 原生截图记录四象限／白心、关联文本及 pane 裁切；记录提交、pi 来源与实际版本、GUI／daemon PID、OS、GPU、显示缩放／刷新率及窗口尺寸。关闭全部自有窗口后，仅对同一 `<isolated-dir>` 执行 `lyrel-app.exe --config-dir <isolated-dir> --stop-daemon`，确认自有进程退出再清理自有目录。不要停止用户实例。
+
+**本票证据边界：**本轮只执行版本／官方资料只读核实；没有运行 build、tests、lint、formatter 或 native smoke。上面的全部 contract／Windows 像素、发送器 retention 及重传观察仍待中央执行；macOS 的 MacBook Air M5 原生验收与真实 SSH 也未执行。原生会话 replay 允许 pi 重传；同一个活 daemon 的 fresh GUI 恢复另有“发送器不输出”的独立合约，不能用本夹具的第二轮代替。
+
 
 #### 当前实现：预算与历史回收（#44）
 
