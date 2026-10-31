@@ -508,7 +508,7 @@ cargo test --locked -p lyrel --bin lyrel-app opencode_replay_consumer_tests:: --
 
 consumer 用例复用真实 PTY → 独立真实 daemon → 生产 pane connection／`RemoteTerminal` → rooted `TerminalView`，断言实际解码 BGRA 主色、独立 instance 数量、两卡左右几何、production paint claim、原生分页／滚离返回／tab 卸载重挂载，以及退出后 fresh consumer 不复活被应用删除的图片。额外静态协议用例覆盖同色不同放置、同原点重叠放置、同 `i/p` 替换不增量及精确删除；它验证计数不会被集合或 bbox 合并掩盖，不替代真实 OpenCode 或最终 GPU 像素。失败／超时输出完整 placement key、resource、原生 ID、源裁剪、anchor、paint 矩形、paint claim、图形预算状态和终端文本，供中央定位真实协议路径。
 
-**本票证据边界：**中央已实际完成 546 条消息的公开 import／export prepare，disabled consumer 通过；enabled consumer 在首次两卡的“不重叠”断言失败，尚未到达其后的分页、remount、delete 验收。增强后的计数、容器边界、诊断与静态协议用例尚未执行，本工作树遵守约定未运行 build／test／lint／formatter 或操作前台。当前没有足够 geometry 证据归因生产缺陷，未猜测修改 production；中央须执行加强后的完整用例，不能以 disabled 通过、设置项或版本查询宣称 #150 已通过。Windows 最终像素及 macOS 实机结果也仍未验证。
+**本票证据边界：**2026-10-31，正式 OpenCode `2.2.0` 已通过两项真实 PTY／隔离 daemon／production rooted consumer 验收，精确比较独立 placement、源像素、卡片边界、历史分页、滚离返回、tab 卸载重挂载和退出后不复活；静态逐实例协议回归另行通过。原 enabled 重叠失败由统一 synchronized-update 流顺序修复（`6f20137`），不是放宽几何断言。Windows `10.0.26300`／RTX 5080／Debug／100% 缩放的自有原生窗口（2552×1384）实际显示首尾两卡各三张图片、对应色块／黑边／序号条及 `+1 more`，滚离后无残影、返回后恢复；`F6` 关闭后无图，`F7` 重开后六图正确重传。另以 `session.image_preview=false` 验证首尾分页均只有文本／附件标签。两轮退出均输出 `OPENCODE_REPLAY_VERIFIED: unchanged public export, zero model usage`，没有新 prompt 或私人历史。MacBook Air M5 与真实 SSH 的三 agent 组合仍待集成验收；原生应用重传不替代 living-daemon 无重传恢复证明。
 
 #### 当前实现：预算与历史回收（#44）
 
