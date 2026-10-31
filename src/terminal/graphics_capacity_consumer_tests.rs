@@ -158,16 +158,20 @@ fn graphics_consumer_fullsize_two_panes_retain_reuse_restore_mutate_and_release(
     }
     assert_eq!(identities.len(), 120);
     for consumer in &mut consumers { assert_eq!(consumer.command("start", cx).0, 60); }
-    let mut seen = [std::collections::BTreeSet::new(), std::collections::BTreeSet::new()];
+    let mut seen = [std::collections::BTreeMap::<u8, u32>::new(), std::collections::BTreeMap::<u8, u32>::new()];
+    let mut previous = [None, None];
     capacity_wait(cx, "both already-loaded animations reuse all sixty decoded versions", |cx| {
         for (index, consumer) in consumers.iter().enumerate() {
             let image = consumer.selected(cx);
             let data = image.data.as_ref().unwrap();
             let frame = capacity_barcode(data);
             assert!(std::sync::Arc::ptr_eq(data, &versions[index][&frame].upgrade().unwrap()), "playback rebuilt a retained pixel version");
-            seen[index].insert(frame);
+            if previous[index] != Some(frame) {
+                *seen[index].entry(frame).or_default() += 1;
+                previous[index] = Some(frame);
+            }
         }
-        seen.iter().all(|frames| frames.len() == 60)
+        seen.iter().all(|frames| frames.len() == 60 && frames.values().all(|visits| *visits >= 2))
     });
     // These are authority/reuse observations only, deliberately not an FPS claim.
     for consumer in &mut consumers {

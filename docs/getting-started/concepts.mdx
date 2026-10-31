@@ -317,6 +317,25 @@ manifest 将脚本实际字节的 `definition.sourceSha256`、`sourceBytes` 与 
 
 512 MiB encoded 是按 raw 等价推导，不保证任意 padded PNG 都能装满 60 帧；超过平均约 8.39 MiB 的 encoded 内容仍可能拒收。第三个图形 pane、其他后台图片或更小预算的第二消费者也可能使新工作／附着拒绝。不要通过删除受保护帧、改变 gap／loops 或降低尺寸／帧数来达到容量目标。确定性小预算回归应分别覆盖 aggregate 竞争、临时峰值、snapshot、取消与 retirement，并检查只回收无引用／合格旧历史；它们不能替代以下完整原生测量。
 
+parser 的源 `Work` 在准备阶段转交 `PreparedImage`，在等待桌面准入、提交、失败或取消期间持续覆盖实际源分配；packet 编码另占真实 pane 的 header scratch 与全局 packet 池，不把同一个 source lease 同时记两份。replay 的 packet 只克隆 `Arc`，共享原分配与租约；效果数组自身仍按容量预留 work。替换不预先减掉仍然存活的旧版本；新旧真实 owner 共存的峰值必须先符合预算。桌面 `Select`／绘制快照复用既有 `Arc<RenderImage>`，不会每 paint 解码；只删除退休 owner 对应的 atlas tile，不因一个 pane 的编辑清空整个窗口其他帧／pane 的纹理。
+
+中央自动化入口如下，必须保留 ignored 大工作量入口的显式运行结果，不能只跑默认测试后当作完整容量通过：
+
+```powershell
+node --check scripts/kitty-capacity.mjs
+node --test scripts/kitty-capacity-analysis.test.mjs
+cargo test --locked -p lyrel-core retention_ -- --test-threads=1
+cargo test --locked -p lyrel --bin lyrel-app terminal::images::tests:: -- --test-threads=1
+cargo test --locked -p lyrel-core `
+  core::graphics_state::retention_tests::retention_daemon_two_visible_panes_retain_and_replay_sixty_distinct_1080p_frames `
+  -- --ignored --exact --nocapture --test-threads=1
+cargo test --locked -p lyrel --bin lyrel-app `
+  terminal::view::tests::graphics_consumer_fullsize_two_panes_retain_reuse_restore_mutate_and_release `
+  -- --ignored --exact --nocapture --test-threads=1
+```
+
+最后一个入口从两个真实 Node PTY 经真实 daemon、生产 `RemoteTerminal` 与 rooted `TerminalView` 消费完整 120 张 1080p 源，逐帧将实际 BGRA 转回 RGBA 后比对 manifest SHA-256，跨循环检查保留版本身份，记录真实 source／cache／scratch／metadata owner，执行满载 edit／compose／replace、隐藏恢复、删除及 fresh replay。它使用 GPUI 测试窗口，不证明两个原生 pane 的最终 GPU 像素、显示时序或输入延迟；约 60 fps 仍必须执行以下实际原生采集。
+
 ###### Windows 原生采集：仅自有 HWND
 
 中央验收使用 [PresentMon 2.6.0 控制台](https://github.com/GameTechDev/PresentMon/blob/v2.6.0/README-ConsoleApplication.md) 与 [ffmpeg 9.0.2 `gfxcapture`](https://github.com/FFmpeg/FFmpeg/blob/n9.0.2/libavfilter/vsrc_gfxcapture.c)。只捕获隔离窗口 HWND，不使用桌面／monitor／DDA 兜底，不采音频或网络内容。PresentMon 需要既有 Performance Log Users 权限或经确认的管理员运行；缺工具、缺 `gfxcapture` 或 access denied 时记录缺失前提，不自动下载、改组、提权或以 paint callback 替代。
