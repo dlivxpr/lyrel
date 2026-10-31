@@ -7,6 +7,11 @@
 
 ## [Unreleased]
 
+### 修复
+
+- omp 的公开 `PI_FORCE_IMAGE_PROTOCOL`、Kitty placeholder opt-in／硬关闭项沿用非敏感启动上下文，在新启动和原生恢复中保持显式图片策略；不覆盖 `terminal.showImages: false`、不伪造终端身份、不修改全局 agent 配置。修复 Windows 快捷启动将字面量环境前缀当命令执行，以及恢复命令将子进程图片策略遗留在父 shell 的路径。
+- 补充 released omp 原生 `--resume` 的隔离合成会话与生产消费者用例，覆盖 assistant／toolResult 图片、原生 SVG 栅格图、8 张上游 cap 的删除和显式关闭；fixture 不提交 prompt，拒绝模型请求，并保留版本／消息数／请求审计。2026-10-31 只读检查为最新 release `18.14.1`、已安装 `18.14.0`；新增用例及新版原生 Windows／macOS 图片结果尚未集中验证。
+
 ## [0.3.0] - 2026-10-31
 
 ### 新增

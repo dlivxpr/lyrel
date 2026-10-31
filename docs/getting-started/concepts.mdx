@@ -275,30 +275,45 @@ GPUI 测试窗口没有配置 `HeadlessRenderer`，解码数据、几何或 pain
 - daemon 的资源引用查询与桌面视口使用共享行投影及 prototype 解析，不维护第二套占位符身份规则。桌面只投影当前 viewport 的真实行；隐藏窗格继续保留既有通知门控。当前 4,096 次放置上限合计计算直接放置和虚拟 prototype，不按显示单元扩增资源数。
 - 共享确定性 PTY fixture 的真实独立 daemon → `RemoteTerminal` → rooted `TerminalView`／production decoder／paint 回归已在 Windows 通过，覆盖身份、继承、源切片、混合路径、单元擦除／移动和屏幕切换；另有独立 CLI／ConPTY 的查询、仅上传、prototype、删除和后续文字冒烟。测试窗口无 `HeadlessRenderer`；本轮 Windows 原生及 SSH 图片观察与这些自动化分开记录，macOS 和完整平台矩阵仍未验收，不构成 tmux/screen 兼容承诺。
 
-#### 正式 omp 接入：Windows placeholder 原生重放已验证
+#### 正式 omp 接入：进程级图片策略与原生重放
 
-已实测正式 `omp/18.12.6`。该版本未自动识别 lyrel 时，使用应用公开的协议选择，不修改 `TERM_PROGRAM`。在 lyrel 的 PowerShell 窗格中启动新进程：
+2026-10-31 读取上游最新正式 release 为 [v18.14.1](https://github.com/can1357/oh-my-pi/releases/tag/v18.14.1)，本机只读 `omp --version` 为 `omp/18.14.0`。本轮实现没有运行新版 native smoke；下述入口和消费者用例等待集中验收，不把版本查询或旧版记录写成新版像素通过。
+
+在 lyrel 设置的 `agent_launch.omp` 使用字面量前缀，例如：
+
+```text
+PI_FORCE_IMAGE_PROTOCOL=kitty PI_KITTY_PLACEHOLDERS=1 omp
+```
+
+启动与恢复沿用现有 agent launch／Host session operation，不伪造 `TERM_PROGRAM`，不注入全局配置。已知公开前缀会按实际 shell 编码；PowerShell 的进程环境在 native 子进程退出后恢复，cmd 使用独立子 shell，POSIX 使用命令前缀。过去 Windows 快捷启动直接键入 `KEY=value omp`，以及恢复后变量留在 shell 的缺陷由同一入口修复。
+
+lyrel 不为未配置的 omp 强制添加图片选项，也不追加 `terminal.showImages: true` overlay。公开 `PI_FORCE_IMAGE_PROTOCOL=none/off`、`PI_KITTY_PLACEHOLDERS=0`、`PI_NO_KITTY_PLACEHOLDERS=1` 和上游 `terminal.showImages: false` 保持有效。显式选择启用模式是操作者的决定；公开环境选项和关闭项会作为非敏感启动上下文保留。`PI_NO_KITTY_PLACEHOLDERS=1` 优先于 placeholder opt-in。不要使用不存在的 `--image-protocol`，也不要使用已移除的 `PI_KITTY_IMAGE_TRANSMISSION`。
+
+v18.14.1 的原生 renderer 可从保存会话重建 assistant 图片、toolResult 图片及 `tui.renderSvg` 启用时 fenced SVG 的栅格图；PNG 直接显示，其他支持格式经上游转换。普通 SVG 字符串／链接／路径仍不由 lyrel 解释。上游默认 `tui.maxInlineImages=8`，每个 screen／alternate surface 独立计数；`0` 是上游取消该 cap，不代表 lyrel 无预算。默认宽限 100 列，高限 20 行并受 viewport 约束。超额旧图由上游 demotion 和 `d=I` 删除，lyrel 不偷偷恢复这些像素；后续原生 replay 合法重传另当别论。omp 使用原生 terminal scrollback，不套用 OpenCode 的分页／remount 假设；resize 的默认 `rebuild` 可重新发图。
+
+来源：[公开环境变量与优先级](https://github.com/can1357/oh-my-pi/blob/v18.14.1/docs/environment-variables.md)、[设置覆盖层](https://github.com/can1357/oh-my-pi/blob/v18.14.1/docs/settings.md)、[原生 renderer 生命周期](https://github.com/can1357/oh-my-pi/blob/v18.14.1/docs/tui-core-renderer.md)、[ImageBudget](https://github.com/can1357/oh-my-pi/blob/v18.14.1/packages/tui/src/components/image.ts) 和[原生历史重建](https://github.com/can1357/oh-my-pi/blob/v18.14.1/packages/coding-agent/src/modes/utils/ui-helpers.ts)。
+
+**可复现的隔离 native fixture（Windows）**：先再次查询 release 和 `omp --version`，使用已有正式安装，不自动安装／升级全局工具。在仓库根执行：
 
 ```powershell
-$env:PI_FORCE_IMAGE_PROTOCOL = 'kitty'
-$env:PI_KITTY_PLACEHOLDERS = '1'
-omp --config ./lyrel-images.yml
+$fixture = Join-Path $env:TEMP ('lyrel-omp-148-' + [guid]::NewGuid())
+node scripts/omp-native-replay.mjs prepare --root $fixture --omp (Get-Command omp).Source --case pictures
+node scripts/omp-native-replay.mjs launch --root $fixture --lyrel-app (Resolve-Path .\target\debug\lyrel-app.exe).Path
 ```
 
-`lyrel-images.yml` 仅固定本次进程的图片选项，不修改用户全局配置：
+每个新 fixture 使用独立 home／profile／workspace／overlay／lyrel 端点及合成 JSONL v3，启动真实 `omp --resume` TUI，不使用 render/gallery、模型代理回复或私有历史。子进程环境采用 allowlist，不继承凭据／broker／扩展；唯一选定模型指向只拒绝请求的 loopback endpoint，关闭 recap、自动 compaction 和标题生成。不提交任何新 prompt。公开 catalog 刷新不等于推理，本入口不宣称完全离线。
 
-```yaml
-terminal:
-  showImages: true
-tui:
-  renderSvg: true
+验收时确认三张实际图片：64×32 红底黑十字 assistant、64×32 粉底黑十字 toolResult，以及深蓝背景／橙色三角形的 240×80 SVG 原生栅格图；`fixture.json` 提供每张输入图片的 BGRA SHA-256 和几何身份。滚动离屏／返回并改变窗格宽度，记录具体资源／放置及三张图的顺序，不能只检查 `LYREL_*` 标签。输入 `/exit` 结束原生 TUI；检查 `version.txt` 和 `audit.json`，要求 `requests=[]`、消息数未增加、`modelUsage=0`、`zeroInference=true`。这只是原生应用重放，不能证明无发送者重传的 living-daemon 恢复。
+
+另用全新目录分别运行 `--case budget`（10 张不同 assistant 图，加 toolResult 和 figure，cap 仍为 8；前四张须被删除且滚动不可复活）、`--case disabled`、`--case protocol-off`；后两者必须无图。`--mode direct` 和 `--case placeholder-off` 可单独检查直接放置／硬关闭 placeholder，不将旧版 direct 重叠现象视作当前版已定位或已通过。退出并关闭本 fixture 的窗口／daemon 后，只清理所属目录：
+
+```powershell
+node scripts/omp-native-replay.mjs cleanup --root $fixture --lyrel-cli (Resolve-Path .\target\debug\lyrel.exe).Path
 ```
 
-`PI_KITTY_PLACEHOLDERS=1` 选择 Unicode 占位符，是本轮已验证的 omp 配置；`0` 的原生重放出现图片位置重叠，不推荐作为该版本 omp 的接入配置，根因尚未确认。这不改变 lyrel 对确定性 direct 协议夹具的支持。如果另有 `PI_NO_KITTY_PLACEHOLDERS=1`，它会优先硬关闭占位符。不要使用不存在的 `--image-protocol` 参数，也不要使用已移除的 `PI_KITTY_IMAGE_TRANSMISSION`。选项来源为该正式版本的 [environment-variables.md](https://github.com/can1357/oh-my-pi/blob/v18.12.6/docs/environment-variables.md) 与 [settings.md](https://github.com/can1357/oh-my-pi/blob/v18.12.6/docs/settings.md)。
+集中消费者入口为 `cargo test --locked graphics_consumer_released_omp_native_ -- --ignored --nocapture --test-threads=1`，先将 `LYREL_TEST_OMP` 设为正式可执行文件绝对路径。它复用真实 PTY／独立 daemon → `RemoteTerminal` → rooted `TerminalView`，按真实解码像素、不同图片 ID／放置顺序和 cap 删除检查，不替代原生 GPU 像素。新用例、native Windows 图片／重排／关闭策略、最新 release 的实际可执行验收尚未执行；macOS、真实 SSH 和其他 agent 均不由本段宣称通过。
 
-Windows 协议冒烟已在 pane `13` 的生产 CLI／daemon 上复验，使用完全临时的 home／profile／overlay 与合成 version 3 JSONL，通过公开 `--resume <path>` 启动真实 `omp/18.12.6` 交互 TUI。直接放置和占位符两轮均经真实 ConPTY、独立 daemon 与生产 `PaneClient` 收到 `240 × 80` SVG 栅格 PNG 和 `64 × 64` 合成 toolResult PNG 的独立资源／放置；后者的内容指纹与输入一致，占位符轮另有真实 `U+10EEEE` 单元。保留 `TERM_PROGRAM=lyrel`，未修改 omp 源码，也未使用丢弃图片字节的 `omp render` 或 gallery 代替。发送 `/exit` 后两轮进程及私有 daemon 均正常退出，无 socket 错误；合成会话没有新增 assistant、`model_usage` 或 `title_change`，没有提交新 prompt。临时 home／profile／会话／端点及冒烟脚本均已清理。
-
-随后在上述 Windows 原生窗口，以隔离 HOME／profile／overlay 和公开 `--resume` 运行同一正式 `omp/18.12.6`：placeholder 模式实际显示受控 assistant 的 `480×100` fenced SVG，以及 toolResult 中真实隔离窗口的 `1280×804` PNG 截图；`/exit` 正常返回 shell。未修改 omp、未伪造 `TERM_PROGRAM`、未传入用户模型凭据，也没有提交 prompt 或执行推理。受控会话重放证明生产应用渲染和最终像素，不等于真实模型新生成的回答；真实 agent 交互、macOS 及远端 omp 仍未验收。direct 模式位置重叠保留为未解决的兼容缺口。公开 catalog 刷新不等于模型推理，本轮也不声明完全断网。
+历史上 `omp/18.12.6` 曾在 Windows 隔离原生窗口验证 placeholder assistant SVG 和 toolResult PNG、无新 prompt；direct 重放当时观察到重叠。该记录仅属于旧版本，不替代以上新版验收。
 
 
 #### 当前实现：预算与历史回收（#44）
