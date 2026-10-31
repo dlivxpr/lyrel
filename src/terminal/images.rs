@@ -142,11 +142,10 @@ struct AnchoredPlacement {
 
 // Each offer reserves actual source bytes, decoder peak, CPU output, and a
 // whole minimum-rounded atlas page before the daemon accepts its upload.
-const PANE_CACHE_BYTES: usize = 384 * 1024 * 1024;
-const DESKTOP_CACHE_BYTES: usize = 1024 * 1024 * 1024;
-const PANE_SOURCE_BYTES: usize = 64 * 1024 * 1024;
-const DESKTOP_SOURCE_BYTES: usize = 256 * 1024 * 1024;
-const PANE_DECODED_CAPACITY: u64 = 128 * 1024 * 1024;
+const PANE_CACHE_BYTES: usize = 1536 * 1024 * 1024;
+const DESKTOP_CACHE_BYTES: usize = 3072 * 1024 * 1024;
+const PANE_SOURCE_BYTES: usize = 1024 * 1024 * 1024;
+const DESKTOP_SOURCE_BYTES: usize = 2048 * 1024 * 1024;
 const PANE_METADATA_BYTES: usize = lyrel_core::daemon::protocol::MAX_PANE_GRAPHICS_METADATA_BYTES;
 const DESKTOP_METADATA_BYTES: usize =
     lyrel_core::daemon::protocol::MAX_AGGREGATE_GRAPHICS_METADATA_BYTES;
@@ -518,6 +517,20 @@ impl ImageStore {
     }
 
     #[cfg(test)]
+    pub(super) fn allocation_observation(&self) -> serde_json::Value {
+        let inner = self.0.state.lock().unwrap();
+        serde_json::json!({
+            "cacheBytes": self.0.pane_budget.used.load(Ordering::Acquire),
+            "sourceBytes": self.0.pane_source.used.load(Ordering::Acquire),
+            "metadataBytes": self.0.pane_metadata.used.load(Ordering::Acquire),
+            "decodedFrames": inner.resources.values().filter(|resource| resource.decoded.is_some()).count(),
+            "retiredFrames": inner.retired.len(),
+            "pendingOffers": inner.offers.len(),
+            "scratchBytes": self.0.decode_scratch.state.lock().unwrap().reservation.bytes,
+        })
+    }
+
+    #[cfg(test)]
     pub(super) fn recovery_diagnostics(&self) -> String {
         let inner = self.0.state.lock().unwrap();
         let resources: Vec<_> = inner
@@ -549,7 +562,8 @@ impl ImageStore {
     }
 
     pub fn graphics_capacity(&self) -> (u64, u64) {
-        (PANE_SOURCE_BYTES as u64, PANE_DECODED_CAPACITY)
+        use lyrel_core::core::graphics_state::{MAX_PANE_DECODED_BYTES, MAX_PANE_ENCODED_BYTES};
+        (MAX_PANE_ENCODED_BYTES as u64, MAX_PANE_DECODED_BYTES as u64)
     }
 
     /// Atomically admit the actual resource footprint before its protocol ACK.
@@ -1126,31 +1140,35 @@ impl ImageStore {
         if retired.is_empty() {
             return;
         }
-        // Compaction must remove every terminal tile before returning an old
-        // page's ticket. Hidden tiles still release immediately, but only a
-        // displayed owner needs a new frame. Surviving CPU images register
-        // again when painted, including after their hidden pane returns.
+        // GPUI releases the tile identified by RenderImage, including its last
+        // atlas-page reference. Other panes and frame versions keep their
+        // registration and texture across an edit; never compact the window by
+        // re-uploading every surviving image.
         let mut invalidated_visible = false;
         WINDOW_IMAGES.with(|windows| {
-            let images = windows
-                .borrow_mut()
-                .remove(&window.window_handle().window_id());
-            for entry in images.into_iter().flatten() {
-                let Some(image) = entry.residency.upgrade() else {
-                    continue;
-                };
-                image.registered.store(false, Ordering::Release);
-                if image.gpu.lock().unwrap().is_none() {
-                    continue;
+            let mut windows = windows.borrow_mut();
+            let window_id = window.window_handle().window_id();
+            if let Some(images) = windows.get_mut(&window_id) {
+                images.retain(|entry| {
+                    let Some(image) = entry.residency.upgrade() else {
+                        return false;
+                    };
+                    if !retired.iter().any(|old| Arc::ptr_eq(old, &image)) {
+                        return true;
+                    }
+                    invalidated_visible |= entry
+                        .displayed
+                        .upgrade()
+                        .is_some_and(|displayed| displayed.load(Ordering::Relaxed));
+                    false
+                });
+                if images.is_empty() {
+                    windows.remove(&window_id);
                 }
-                invalidated_visible |= entry
-                    .displayed
-                    .upgrade()
-                    .is_some_and(|displayed| displayed.load(Ordering::Relaxed));
-                cx.drop_image(image.data.clone(), Some(window));
             }
         });
         for retired in retired {
+            retired.registered.store(false, Ordering::Release);
             cx.drop_image(retired.data.clone(), Some(window));
             retired.gpu.lock().unwrap().take();
         }
@@ -1879,6 +1897,130 @@ mod tests {
             std::thread::sleep(std::time::Duration::from_millis(5));
         }
         assert!(predicate(&store.snapshot()), "decode did not complete");
+    }
+
+    #[test]
+    fn default_replay_admits_two_sixty_frame_1080p_panes_and_replacement_peaks() {
+        let stores = [ImageStore::new(), ImageStore::new()];
+        for store in &stores {
+            // A fresh replay grants the complete snapshot before sending any
+            // pixels. Reserve honest raw packet sizes, not compressed fixtures.
+            for frame in 1..=61 {
+                assert!(store.offer(frame, frame, 1920, 1080, 8_294_400 + 256, OWNER_METADATA_BYTES));
+            }
+        }
+        for store in &stores {
+            store.cancel_unclaimed_offers();
+            assert_eq!(store.0.pane_budget.used.load(Ordering::Acquire), 0);
+            assert_eq!(store.0.pane_source.used.load(Ordering::Acquire), 0);
+            assert_eq!(store.0.pane_metadata.used.load(Ordering::Acquire), 0);
+        }
+    }
+
+    #[test]
+    fn selecting_retained_versions_across_loops_and_placements_never_redecodes() {
+        let store = ImageStore::new();
+        let decodes = Arc::new(AtomicUsize::new(0));
+        let (finished, completion) = std::sync::mpsc::channel();
+        let worker = DecodeWorker::spawn_with_decoder(store.clone(), || {}, {
+            let decodes = decodes.clone();
+            move |image| {
+                decodes.fetch_add(1, Ordering::AcqRel);
+                let result = decode(image);
+                finished.send(()).unwrap();
+                result
+            }
+        });
+        establish_screen(&worker);
+        for (key, number, red) in [(101, 1, 50), (102, 2, 150)] {
+            apply_resource(&worker, key, red);
+            worker.apply(GraphicsUpdate::Frame { key, root: 1, number });
+            completion.recv_timeout(std::time::Duration::from_secs(2)).unwrap();
+        }
+        apply_placement(&worker, placement(10, 1, 1, 0));
+        apply_placement(&worker, placement(11, 1, 2, 0));
+        let mut versions = BTreeMap::new();
+        for revision in 1..=120 {
+            let frame = if revision % 2 == 0 { 102 } else { 101 };
+            worker.apply(GraphicsUpdate::Select { key: 1, frame, revision });
+            wait_for(&store, |images| images.len() == 2);
+            let images = store.snapshot();
+            let data = images[0].data.as_ref().unwrap();
+            assert!(Arc::ptr_eq(data, images[1].data.as_ref().unwrap()));
+            if let Some(previous) = versions.get(&frame) {
+                assert!(Arc::ptr_eq(data, previous), "a later loop must reuse the retained decoded version");
+            } else {
+                versions.insert(frame, data.clone());
+            }
+        }
+        assert_eq!(decodes.load(Ordering::Acquire), 2);
+        drop(versions);
+        drop(worker);
+        store.clear();
+        assert_eq!(store.0.pane_budget.used.load(Ordering::Acquire), 0);
+    }
+
+    #[test]
+    fn snapshot_and_retired_owners_hold_reduced_budget_until_their_last_release() {
+        const PAGE: usize = 4 << 20;
+        with_test_cache_limits(PAGE + 1024, PAGE + 1024, || {
+            let store = ImageStore::new();
+            let worker = DecodeWorker::spawn(store.clone(), || {});
+            establish_screen(&worker);
+            apply_resource(&worker, 1, 50);
+            apply_placement(&worker, placement(10, 1, 1, 0));
+            wait_for(&store, |images| images.len() == 1);
+            let snapshot = store.snapshot();
+            assert!(store.claim_for_paint(&snapshot[0]));
+            worker.apply(GraphicsUpdate::Remove { placements: vec![10], resources: vec![1] });
+            assert!(!store.offer(2, 2, 1, 1, 100, OWNER_METADATA_BYTES));
+            let retired = store.take_retired();
+            assert_eq!(retired.len(), 1);
+            drop(retired);
+            assert!(!store.offer(2, 2, 1, 1, 100, OWNER_METADATA_BYTES), "paint snapshot still owns the residency");
+            drop(snapshot);
+            assert!(store.offer(2, 2, 1, 1, 100, OWNER_METADATA_BYTES));
+            store.cancel_offer(2);
+            drop(worker);
+            assert_eq!(store.0.pane_budget.used.load(Ordering::Acquire), 0);
+            assert_eq!(store.0.pane_source.used.load(Ordering::Acquire), 0);
+            assert_eq!(store.0.pane_metadata.used.load(Ordering::Acquire), 0);
+        });
+    }
+
+    #[gpui_kit::test]
+    fn retiring_one_pane_keeps_other_pane_registered_textures(cx: &mut gpui_kit::TestAppContext) {
+        let stores = [ImageStore::new(), ImageStore::new()];
+        let workers: Vec<_> = stores.iter().map(|store| DecodeWorker::spawn(store.clone(), || {})).collect();
+        for worker in &workers {
+            establish_screen(worker);
+            apply_resource(worker, 1, 50);
+            apply_placement(worker, placement(10, 1, 1, 0));
+            wait_for(&worker.store, |images| images.len() == 1);
+        }
+        let images: Vec<_> = stores.iter().map(ImageStore::snapshot).collect();
+        let displayed = Arc::new(AtomicBool::new(true));
+        let window = cx.add_window(|_, _| gpui_kit::EmptyView);
+        window.update(cx, |_, window, _| {
+            for (store, snapshot) in stores.iter().zip(&images) {
+                assert!(store.claim_for_paint(&snapshot[0]));
+                store.register_for_paint(&snapshot[0], window, &displayed);
+            }
+        }).unwrap();
+        workers[0].apply(GraphicsUpdate::Remove { placements: vec![10], resources: vec![1] });
+        window.update(cx, |_, window, cx| stores[0].release_retired(window, cx)).unwrap();
+        let old = images[0][0]._residency.as_ref().unwrap();
+        let survivor = images[1][0]._residency.as_ref().unwrap();
+        assert!(!old.registered.load(Ordering::Acquire));
+        assert!(old.gpu.lock().unwrap().is_none());
+        assert!(survivor.registered.load(Ordering::Acquire), "an unrelated pane edit must not force texture re-upload");
+        assert!(survivor.gpu.lock().unwrap().is_some());
+        window.update(cx, |_, window, cx| stores[1].release_all(window, cx)).unwrap();
+        drop(images);
+        drop(workers);
+        for store in &stores {
+            assert_eq!(store.0.pane_budget.used.load(Ordering::Acquire), 0);
+        }
     }
 
     #[test]
