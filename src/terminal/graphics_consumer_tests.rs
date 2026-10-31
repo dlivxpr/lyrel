@@ -352,6 +352,60 @@ fn graphics_build_rooted_consumer_at(
 }
 
 #[gpui_kit::test]
+fn graphics_consumer_synchronized_output_keeps_stream_ordered_image_anchors(
+    cx: &mut TestAppContext,
+) {
+    crate::core::config::pin_test_config_dir();
+    cx.executor().allow_parking();
+    let daemon = GraphicsDaemonProcess::start();
+    let pane = daemon.spawn();
+    cx.update(|cx| {
+        gpui_kit::component::init(cx);
+        cx.set_global(Config::default());
+    });
+    let (view, window) = graphics_rooted_consumer(cx, pane, daemon.stream(pane));
+    graphics_send_fixture(
+        &view,
+        cx,
+        1,
+        concat!(
+            "\x1b[?1049h\x1b[2J\x1b[H\x1b[?2026h",
+            "\x1b[4;3H\x1b_Ga=T,i=711,p=1,c=4,r=2,C=1,f=32,s=1,v=1,q=2;/wAA/w==\x1b\\",
+            "\x1b[8;12H\x1b_Ga=T,i=712,p=1,c=4,r=2,C=1,f=32,s=1,v=1,q=2;AP8A/w==\x1b\\",
+            "\x1b[?2026l"
+        )
+        .as_bytes(),
+    );
+    graphics_recovery_wait(cx, "synchronized pictures decoded", |cx| {
+        view.read_with(cx, |view, _| {
+            let images = graphics_visible_images(view);
+            images.len() == 2 && images.iter().all(|image| image.data.is_some())
+        })
+    });
+    graphics_assert_production_paint(window, &view, cx);
+    view.read_with(cx, |view, _| {
+        let images = graphics_visible_images(view);
+        for (id, col, row, bgra) in [
+            (711, 2, 3, [0, 0, 255, 255]),
+            (712, 11, 7, [0, 255, 0, 255]),
+        ] {
+            let image = images
+                .iter()
+                .find(|image| image.placement.image_id == id)
+                .unwrap();
+            assert_eq!(
+                (image.anchor_col, image.anchor_row),
+                (col, row),
+                "image {id} uses its in-stream cursor, not the previous synchronized batch"
+            );
+            assert_eq!(image.data.as_ref().unwrap().as_bytes(0).unwrap(), bgra);
+            assert!(image.painted.load(std::sync::atomic::Ordering::Acquire));
+        }
+    });
+    graphics_recovery_destroy(view, window, cx);
+}
+
+#[gpui_kit::test]
 fn graphics_consumer_real_pty_daemon_unicode_pixels_follow_cells_and_share_direct_resource(
     cx: &mut TestAppContext,
 ) {

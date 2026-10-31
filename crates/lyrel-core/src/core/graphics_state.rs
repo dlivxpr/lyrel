@@ -1028,6 +1028,13 @@ impl GraphicsState {
         let old = (self.screen, self.history_origin(), self.viewport_epoch);
         let mut processor = std::mem::take(&mut self.processor);
         processor.advance(self, bytes);
+        // Synchronized updates defer presentation, not protocol state. Kitty
+        // commands are lifted from this stream and must see every preceding
+        // cursor/screen/text mutation, even before the sender's ESU arrives.
+        // The desktop keeps its own synchronized presentation buffer.
+        if processor.sync_timeout().sync_timeout().is_some() {
+            processor.stop_sync(self);
+        }
         self.processor = processor;
         self.expire_history();
         self.finish_layout(
