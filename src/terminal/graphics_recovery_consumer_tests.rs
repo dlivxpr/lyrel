@@ -1450,6 +1450,12 @@ fn graphics_consumer_compose_rectangles_delete_frames_and_detached_recovery(cx: 
         graphics_recovery_pixels(&view, cx, 143, &moved);
     }
     graphics_send_fixture(&view, cx, 14309, b"\x1b_Ga=c,i=143,r=99,c=1,q=2\x1b\\\x1b_Ga=c,i=143,r=2,c=1,w=1,h=1,x=1,y=0,q=1\x1b\\");
+    graphics_send_fixture_with_replies(&view, cx, 14320, b"\x1b_Ga=c,i=143,r=2,c=1,w=1,h=1,x=0,y=1\x1b\\", 1);
+    view.read_with(cx, |view, _| assert_eq!(graphics_visible_images(view).len(), 2));
+    graphics_recovery_wait(cx, "translucent source-over pixels", |cx| view.read_with(cx, |view, _| {
+        graphics_visible_images(view).iter().all(|image| image.data.as_ref().is_some_and(|pixels|
+            pixels.as_bytes(0).unwrap()[8..12] == [13,8,198,167]))
+    }));
     // Delete the first frame: second frame becomes root, both placements stay.
     graphics_send_fixture(&view, cx, 14310, b"\x1b_Ga=d,d=f,i=143,r=1\x1b\\");
     let promoted = [0,0,255,128, 56,34,12,78, 70,80,90,255, 0,0,0,0];
