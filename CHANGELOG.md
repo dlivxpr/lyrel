@@ -30,6 +30,7 @@
 
 - native SSH 增加真实 Linux daemon 的动画／partial edit／compose／单帧删除／relative 与 Unicode 共享版本／隐藏多消费者／无 consumer 变更／fresh 恢复／replay-live cutover 契约，补充拒收／取消 grant／observer 控制权／不兼容方言及 Linux file／temp／POSIX shm 与 nested locality 实连入口。新增非 shipping `native_ssh_surface` 执行器，通过普通远程 workspace／machine tree 打开标准 GUI，复用同一全尺寸双 pane workload 并分别记录初始与 steady 的真实 SSH 图形有效负载计数；不新增 renderer／协议替身／GUI flag。当前 Linux 实连的 4 项 transport、4 项 rooted consumer，以及标准 GUI 的 relative／mutations／双 pane 1080p capacity 均已执行；每 pane 60 个 Resource 包后 steady／fresh 仅 Select 增长，fresh 恢复与 delete 实图通过。修复空 graphics replay 的 sampler 启动屏障和隐藏删除的剩余间隔，不宣称 SSH 60 fps 或 macOS 通过。
 - 正式 OpenCode 2.2.0 隔离保存对话夹具使用公开 import／resume／export，无 prompt／推理；完整目标保留用户附件、tool-result、每卡三图、旧消息分页、滚出返回、native tab 删除与重挂载及 disabled 策略。中央已完成 546 条消息 prepare 和 enabled／disabled consumer；独立 placement instance 计数保留官方 16×8／gap=1、容器文本与 viewport 边界，同色／同原点放置、同 ID 替换和精确删除均已覆盖。正式 2.2.0 的 production consumer 与 Windows 原生首尾六图、卡片几何、分页、滚离返回、tab 卸载／重挂载及显式禁图均通过，公开 export 未变、零模型用量；macOS 与真实 SSH 组合未验证。
+- #151 集成验收：`cargo test --workspace --locked`、WSL `cargo test --locked --workspace --exclude lyrel --all-features`、`cargo test --locked --features updater --bin lyrel-updater`、`cargo fmt --check` 与 Host 边界检查通过；WSL 使用隔离 Node `22.23.4` 执行 TypeScript bridge。正式 `omp/18.14.1` 的 pictures／budget／disabled 三项、pi `1.4.0` 两项和 OpenCode `2.2.0` 两项真实 PTY／生产消费者均通过，omp 审计零推理。真实 SSH 另执行 4 项 transport、4 项 rooted consumer 和原生 relative／mutations／capacity；ignored 用例只在显式列出的这些实跑中计入，macOS 由用户决定后续自行验证。
 
 ## [0.3.0] - 2026-10-31
 
