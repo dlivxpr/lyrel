@@ -10,6 +10,7 @@
 ### 修复
 
 - pi 图片接入（#149）区分 `earendil-works/pi` 与 omp，将公开 `PI_IMAGE_PROTOCOL` 纳入既有 Host／启动／会话 scope 与 Pi hook 报告，恢复时保留显式 `none`，不自动覆盖 `terminal.images=false` 或 `terminal.showImages=false`。2026-10-31 重新核实 GitHub／npm／本机正式版本均为 `1.4.0`；增加真实原生 `--session` 合成 toolResult PNG 夹具、production rooted consumer 的重挂载／删除／再次启动及 disabled precedence 入口。未运行本轮 contracts 或 Windows／macOS 原生像素验收，不将版本查询、flags 或历史 omp 证据写成 Pi 图片通过。
+- OpenCode 集成按既有 `agent_launch` 的受检 Host／`XDG_CONFIG_HOME` 作用域定位 CLI 插件与配置，不再误写默认目录；保留显式 `session.image_preview=false`，不全局改设置或伪造终端身份。补充公开 `-s`／`--auto` 启动参数识别。
 
 ### 新增
 
@@ -17,6 +18,10 @@
 
 - Kitty 相对放置在既有 daemon Placement／pane transport 中保留 `P/Q` 父身份、signed `H/V` 及八链接有界图；支持 direct／实际 Unicode 单元父锚点、无光标移动、级联生命周期和 fresh consumer 恢复。新增真实 PTY／daemon／rooted view 行为回归与 `scripts/kitty-relative.mjs` 原生几何／恢复入口；本轮子工单未执行构建、自动测试或 Windows／macOS 原生验收，证据边界见终端图片文档。
 - Kitty 间接媒体增加 Windows 本地 regular file、eligible 临时文件与 named shared memory；`O/S` 只限制实际图片区域，允许小区域位于大对象中。Windows 固定已验证本地磁盘 handle、拒绝网络／device／未知 reparse，并按对象 handle 删除临时 handoff；Unix 保留文件／POSIX shm 语义，macOS 按偏移附近有界映射，临时文件使用身份核验及 no-clobber 恢复避免删错替换对象。发送方 locality 每次接受及读取前重新证明，嵌套 SSH／WSL 或未知命名空间 fail-closed，直接传输不受影响；不新增图片磁盘缓存。提供真实 PTY／daemon／rooted consumer 回归与 Windows 自有原生 smoke 入口；本票子任务未执行中央测试或原生验收，平台通过范围仍待实际结果。
+
+### 验证入口
+
+- 新增正式 OpenCode 2.2.0 的隔离保存对话夹具与真实 PTY／daemon／rooted consumer 回归：公开 import／resume／export，无 prompt／推理，覆盖用户附件、tool-result、每卡三图、旧消息分页、滚出返回、native tab 删除与重挂载、disabled 策略。版本和公开接口已重新核对；新用例及 Windows 最终像素尚未执行，macOS 亦未验收，具体入口和预期见终端内联图片文档。
 
 ## [0.3.0] - 2026-10-31
 

@@ -237,7 +237,7 @@ fn parse_arguments(agent: HookAgent, args: &[String]) -> io::Result<ConfiguredSc
                         | "-r"
                 )
         } else {
-            values.contains(&key) || hermes_value
+            values.contains(&key) || hermes_value || (agent == HookAgent::OpenCode && key == "-s")
         };
         if takes_value {
             let value = if let Some(value) = inline {
@@ -268,6 +268,7 @@ fn parse_arguments(agent: HookAgent, args: &[String]) -> io::Result<ConfiguredSc
             }
         } else if !switches.contains(&key)
             && !(agent == HookAgent::Pi && crate::core::cli_agent::PI_SWITCHES.contains(&key))
+            && !(agent == HookAgent::OpenCode && key == "--auto")
             && !(agent == HookAgent::Hermes
                 && [
                     "--verbose",
