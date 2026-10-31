@@ -232,7 +232,11 @@ fn graphics_consumer_relative_layout_clips_and_expires_as_one_group(cx: &mut Tes
     let daemon = GraphicsDaemonProcess::start();
     let pane = daemon.spawn();
     let (view, window) = graphics_recovery_fresh(&daemon, pane, cx, 680);
-    graphics_send_fixture(&view, cx, 681, b"\x1b[2J\x1b[3J\x1b[8;5H\x1b_Ga=T,i=71,p=1,c=2,r=2,C=1,f=32,s=2,v=2,q=2;/wAA/wD/AP8AAP///////w==\x1b\\\x1b_Ga=p,i=71,p=2,P=71,Q=1,H=-6,V=1,c=4,r=2,x=1,w=1,X=1,Y=1,z=-2,q=2\x1b\\");
+    // Deliberately retain a nonzero absolute origin: ED3 discards history but
+    // does not renumber stable text rows, including on ConPTY.
+    let mut setup = graphics_resize_history();
+    setup.extend_from_slice(b"\x1b[2J\x1b[3J\x1b[8;5H\x1b_Ga=T,i=71,p=1,c=2,r=2,C=1,f=32,s=2,v=2,q=2;/wAA/wD/AP8AAP///////w==\x1b\\\x1b_Ga=p,i=71,p=2,P=71,Q=1,H=-6,V=1,c=4,r=2,x=1,w=1,X=1,Y=1,z=-2,q=2\x1b\\PARENT-ANCHOR");
+    graphics_send_fixture(&view, cx, 681, &setup);
     graphics_recovery_pixels(
         &view,
         cx,
@@ -241,8 +245,17 @@ fn graphics_consumer_relative_layout_clips_and_expires_as_one_group(cx: &mut Tes
             0, 0, 255, 255, 0, 255, 0, 255, 255, 0, 0, 255, 255, 255, 255, 255,
         ],
     );
-    view.read_with(cx, |view, _| {
+    let (parent_key, parent_row, child_row) = view.read_with(cx, |view, _| {
+        let term = view.terminal.term.lock();
+        assert_eq!((term.columns(), term.screen_lines()), (80, 24));
+        assert!(term.grid.lines_evicted() > 0);
+        drop(term);
+        assert_eq!(graphics_resize_text_row(view, "PARENT-ANCHOR"), Some(7));
         let images = graphics_visible_images(view);
+        let parent = images
+            .iter()
+            .find(|p| p.placement.placement_id == 1)
+            .unwrap();
         let child = images
             .iter()
             .find(|p| p.placement.placement_id == 2)
@@ -257,19 +270,34 @@ fn graphics_consumer_relative_layout_clips_and_expires_as_one_group(cx: &mut Tes
         assert_eq!(crop.origin, point(px(-19.), px(81.)));
         let (scaled, _) = child.paint_bounds(point(px(0.), px(0.)), px(15.), px(20.), 0, 0, 2.);
         assert_eq!(scaled.origin, point(px(-29.5), px(160.5)));
+        assert_eq!(child.placement.parent, Some(parent.placement.key));
+        assert_eq!(child.anchor_row - parent.anchor_row, 1);
+        (parent.placement.key, parent.anchor_row, child.anchor_row)
     });
     graphics_assert_production_paint(window, &view, cx);
     graphics_send_fixture(&view, cx, 682, b"\x1b[6;12r\x1b[12;1H\n");
     graphics_assert_production_paint(window, &view, cx);
     view.read_with(cx, |view, _| {
         let images = graphics_visible_images(view);
+        let parent = images
+            .iter()
+            .find(|p| p.placement.placement_id == 1)
+            .unwrap();
         let child = images
             .iter()
             .find(|p| p.placement.placement_id == 2)
             .unwrap();
+        assert_eq!(graphics_resize_text_row(view, "PARENT-ANCHOR"), Some(6));
+        assert_eq!(parent.placement.key, parent_key);
+        assert_eq!(parent.anchor_row, parent_row - 1);
+        assert_eq!(child.anchor_row, child_row - 1);
+        assert_eq!(child.placement.parent, Some(parent_key));
+        assert_eq!(child.anchor_row - parent.anchor_row, 1);
+        let (crop, _) = child.paint_bounds(point(px(0.), px(0.)), px(10.), px(10.), 0, 0, 1.);
         assert_eq!(
-            child.anchor_row, 7,
-            "regional scroll moves the parent once, not parent plus child"
+            crop.origin,
+            point(px(-19.), px(71.)),
+            "regional scroll moves the child to viewport row 7, not absolute row 7"
         );
     });
     graphics_assert_production_paint_at(window, &view, cx, TermSize::new(40, 24));
@@ -303,4 +331,124 @@ fn graphics_consumer_relative_layout_clips_and_expires_as_one_group(cx: &mut Tes
     graphics_assert_production_paint(fresh_window, &fresh, cx);
     graphics_recovery_destroy(fresh, fresh_window, cx);
     daemon.panes().kill(pane).unwrap();
+}
+
+#[gpui_kit::test]
+fn graphics_consumer_relative_selected_frames_retire_with_parent_and_history(
+    cx: &mut TestAppContext,
+) {
+    crate::core::config::pin_test_config_dir();
+    cx.executor().allow_parking();
+    cx.update(|cx| {
+        gpui_kit::component::init(cx);
+        cx.set_global(Config::default());
+    });
+    let daemon = GraphicsDaemonProcess::start();
+    for (index, lifecycle) in ["delete", "replace", "expire"].into_iter().enumerate() {
+        let serial = 700 + index * 20;
+        let pane = daemon.spawn();
+        let (view, window) = graphics_recovery_fresh(&daemon, pane, cx, serial);
+        graphics_send_fixture_with_replies(
+            &view,
+            cx,
+            serial + 1,
+            b"\x1b[2J\x1b[3J\x1b[6;5H\x1b_Ga=T,i=81,p=1,c=2,r=1,C=1,f=32,s=1,v=1;/wAA/w==\x1b\\\x1b_Ga=f,i=81,f=32,s=1,v=1;AP8A/w==\x1b\\\x1b_Ga=T,i=82,p=2,P=81,Q=1,H=3,V=2,c=2,r=1,f=32,s=1,v=1;AAD//w==\x1b\\\x1b_Ga=f,i=82,f=32,s=1,v=1;/////w==\x1b\\ANIMATED-PARENT",
+            4,
+        );
+        graphics_recovery_pixels(&view, cx, 81, &[0, 0, 255, 255]);
+        graphics_recovery_pixels(&view, cx, 82, &[255, 0, 0, 255]);
+        let (parent_key, parent_root, child_key, child_root) = view.read_with(cx, |view, _| {
+            let images = graphics_visible_images(view);
+            let parent = images.iter().find(|p| p.placement.image_id == 81).unwrap();
+            let child = images.iter().find(|p| p.placement.image_id == 82).unwrap();
+            (
+                parent.placement.key,
+                parent.placement.resource,
+                child.placement.key,
+                child.placement.resource,
+            )
+        });
+        graphics_send_fixture_with_replies(
+            &view,
+            cx,
+            serial + 2,
+            b"\x1b_Ga=a,i=81,s=1,c=2\x1b\\\x1b_Ga=a,i=82,s=1,c=2\x1b\\",
+            2,
+        );
+        graphics_recovery_pixels(&view, cx, 81, &[0, 255, 0, 255]);
+        graphics_recovery_pixels(&view, cx, 82, &[255, 255, 255, 255]);
+        graphics_assert_production_paint(window, &view, cx);
+        view.read_with(cx, |view, _| {
+            let images = graphics_visible_images(view);
+            assert_eq!(images.len(), 2);
+            let parent = images.iter().find(|p| p.placement.image_id == 81).unwrap();
+            let child = images.iter().find(|p| p.placement.image_id == 82).unwrap();
+            assert_eq!((parent.placement.key, parent.placement.resource), (parent_key, parent_root));
+            assert_eq!((child.placement.key, child.placement.resource), (child_key, child_root));
+            assert_eq!(child.placement.parent, Some(parent_key));
+            assert_eq!(graphics_resize_text_row(view, "ANIMATED-PARENT"), Some(5));
+            let (crop, _) = child.paint_bounds(point(px(0.), px(0.)), px(10.), px(10.), 0, 0, 1.);
+            assert_eq!(crop.origin, point(px(70.), px(70.)));
+        });
+        graphics_recovery_destroy(view, window, cx);
+
+        // The publisher changes while every desktop cache is gone. Both
+        // pictures had selected non-root frames, but graph identity and the
+        // retention group still belong to their original resource roots.
+        let mutation = match lifecycle {
+            "delete" => b"\x1b_Ga=d,d=i,i=81,p=1\x1b\\".to_vec(),
+            "replace" => b"\x1b[10;5H\x1b_Ga=T,i=81,p=9,c=2,r=1,C=1,f=32,s=1,v=1,q=2;/wD//w==\x1b\\\x1b_Ga=f,i=81,f=32,s=1,v=1,q=2;AP///w==\x1b\\\x1b_Ga=a,i=81,s=1,c=2,q=2\x1b\\REPLACED-PARENT".to_vec(),
+            "expire" => {
+                let mut bytes = b"\x1b[r\x1b[24;1H".to_vec();
+                bytes.extend_from_slice(&b"\r\n".repeat(10_100));
+                bytes
+            }
+            _ => unreachable!(),
+        };
+        graphics_recovery_detached_request(&daemon, pane, "SEND", serial + 3, &mutation);
+        let statistics = graphics_recovery_detached_request(&daemon, pane, "STAT", serial + 4, b"\0");
+        let (fresh, fresh_window) = graphics_recovery_fresh(&daemon, pane, cx, serial + 5);
+        if lifecycle == "replace" {
+            graphics_recovery_pixels(&fresh, cx, 81, &[255, 255, 0, 255]);
+        }
+        graphics_assert_production_paint(fresh_window, &fresh, cx);
+        fresh.read_with(cx, |view, _| {
+            let images = graphics_visible_images(view);
+            if lifecycle == "replace" {
+                assert_eq!(images.len(), 1, "retransmission must retire the old parent graph and every selected child frame");
+                let parent = &images[0];
+                assert_eq!((parent.placement.image_id, parent.placement.placement_id), (81, 9));
+                assert_ne!(parent.placement.resource, parent_root);
+                assert_ne!(parent.placement.key, parent_key);
+                assert_eq!(parent.placement.parent, None);
+                assert_eq!(graphics_resize_text_row(view, "REPLACED-PARENT"), Some(9));
+                let (crop, _) = parent.paint_bounds(point(px(0.), px(0.)), px(10.), px(10.), 0, 0, 1.);
+                assert_eq!(crop.origin, point(px(40.), px(90.)));
+            } else {
+                assert!(images.is_empty(), "{lifecycle} must not revive either selected frame on fresh attach");
+            }
+        });
+        let recovered_stats = graphics_recovery_stats(&fresh, cx, serial + 6);
+        assert!(statistics.contains(&format!("KITTY_STATS_{} {recovered_stats}", serial + 4)),
+            "fresh recovery must not request sender retransmission: {statistics}");
+        graphics_recovery_destroy(fresh, fresh_window, cx);
+
+        // No remaining child placement means its whole animation is gone,
+        // not merely hidden until an explicit frame selection/re-placement.
+        let (text, _) = graphics_recovery_exchange(
+            &daemon,
+            pane,
+            "SEND",
+            serial + 7,
+            b"\x1b_Ga=p,i=82,p=3\x1b\\\x1b_Ga=a,i=82,s=1,c=2\x1b\\",
+            2,
+        );
+        for reply in [
+            b"\x1b_Gi=82,p=3;ENOENT:Image not found\x1b\\".as_slice(),
+            b"\x1b_Gi=82;ENOENT:Image not found\x1b\\".as_slice(),
+        ] {
+            assert!(text.contains(&format!("KITTY_REPLY {} {}", serial + 7, graphics_pty_fixture::hex(reply))), "{lifecycle}: {text}");
+        }
+        daemon.panes().kill(pane).unwrap();
+    }
 }

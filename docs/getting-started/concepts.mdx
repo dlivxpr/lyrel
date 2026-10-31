@@ -312,7 +312,13 @@ GPUI 测试窗口没有配置 `HeadlessRenderer`，解码数据、几何或 pain
 
 新增 `graphics_consumer_relative_` 回归入口使用真实 PTY、独立 daemon、production
 RemoteTerminal 和 rooted TerminalView，检查像素身份、几何、八链接、错误、文字移动与 fresh 恢复。
-本次子工单按统一验证约定未运行构建或测试；上述是实现与验证入口，不是已通过的原生验收记录。
+区域滚动用例先制造并清理真实历史，再以父锚点文本、父子绝对坐标各移动一行、相对位移及
+实际 paint bounds 交叉检查：`anchor_row` 是包含已丢弃历史的稳定绝对行，不能直接当作视口行。
+`graphics_consumer_relative_selected_frames_retire_with_parent_and_history` 同时选中父、子动画的
+非 root 帧，检查放置仍引用原资源 root；销毁旧消费者后分别执行父放置删除、父图片重传替换和
+10,000 行历史过期，再用 fresh 消费者检查像素身份、几何、无重传恢复及子动画整体释放，不能
+只隐藏旧帧或通过再次选帧复活。上述为回归入口；本次修正按中央验证约定未运行构建、测试或
+原生 smoke，不是已通过的原生验收记录。
 在隔离开发实例的自有窗格运行 `node scripts/kitty-relative.mjs scene`，脚本退出后关闭并重开
 GUI，必须仍看到同一组图，且不要再次运行 `scene`。`move`、`erase`、`delete` 分别移动、
 擦除文本锚点和删除父放置；每步后可重开窗口检查几何与删除不复活。输出标记给出 1-based
