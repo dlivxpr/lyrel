@@ -804,18 +804,34 @@ impl DaemonPane {
                 loop {
                     let received = match delay {
                         Some(delay) => eviction_rx.recv_timeout(delay),
-                        None => eviction_rx.recv().map_err(|_| std::sync::mpsc::RecvTimeoutError::Disconnected),
+                        None => eviction_rx
+                            .recv()
+                            .map_err(|_| std::sync::mpsc::RecvTimeoutError::Disconnected),
                     };
-                    if matches!(received, Err(std::sync::mpsc::RecvTimeoutError::Disconnected)) { break; }
-                    let Some(state) = weak_state.upgrade() else { break; };
+                    if matches!(
+                        received,
+                        Err(std::sync::mpsc::RecvTimeoutError::Disconnected)
+                    ) {
+                        break;
+                    }
+                    let Some(state) = weak_state.upgrade() else {
+                        break;
+                    };
                     let mut state = state.lock().unwrap();
-                    let effects = state.graphics.as_mut().map(|graphics| {
-                        let mut effects = graphics.drain_evictions();
-                        effects.extend(graphics.advance_playback());
-                        effects
-                    }).unwrap_or_default();
+                    let effects = state
+                        .graphics
+                        .as_mut()
+                        .map(|graphics| {
+                            let mut effects = graphics.drain_evictions();
+                            effects.extend(graphics.advance_playback());
+                            effects
+                        })
+                        .unwrap_or_default();
                     publish_graphics_effects(&mut state, effects, &eviction_gate);
-                    delay = state.graphics.as_ref().and_then(GraphicsState::playback_delay);
+                    delay = state
+                        .graphics
+                        .as_ref()
+                        .and_then(GraphicsState::playback_delay);
                 }
             })
             .expect("spawn graphics eviction publisher");

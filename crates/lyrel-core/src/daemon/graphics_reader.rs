@@ -89,14 +89,24 @@ fn command(
         return display(state, control, gate, writer);
     }
     if !control.invalid && !control.unsupported && control.action == Action::Compose {
-        image = Some(Image { width: 0, height: 0, data: Vec::new(), format: crate::core::kitty_graphics::WireFormat::Rgba, compressed: false });
+        image = Some(Image {
+            width: 0,
+            height: 0,
+            data: Vec::new(),
+            format: crate::core::kitty_graphics::WireFormat::Rgba,
+            compressed: false,
+        });
     }
     if control.invalid
         || control.unsupported
         || image.is_none()
         || !matches!(
             control.action,
-            Action::Transmit | Action::TransmitAndDisplay | Action::Query | Action::Frame | Action::Compose
+            Action::Transmit
+                | Action::TransmitAndDisplay
+                | Action::Query
+                | Action::Frame
+                | Action::Compose
         )
     {
         let mut state = state.lock().unwrap();
@@ -120,14 +130,23 @@ fn command(
         };
         let frame = match graphics.capture_frame(&control) {
             Ok(frame) => frame,
-            Err(status) => { reply(writer, &control, status); return Vec::new(); }
+            Err(status) => {
+                reply(writer, &control, status);
+                return Vec::new();
+            }
         };
         let key = if resource {
             graphics.reserve_resource_key()
         } else {
             0
         };
-        (graphics.work_owner(), key, graphics.generation(), broker, frame)
+        (
+            graphics.work_owner(),
+            key,
+            graphics.generation(),
+            broker,
+            frame,
+        )
     };
     let prepared = match source_work {
         Some(work) => GraphicsState::prepare_image_budgeted(image, key, &control, frame, work),
@@ -368,7 +387,9 @@ pub(super) fn consume<'a>(
                         pass.extend(bytes);
                     }
                     Part::Graphics(Segment::Command { control, image }) => {
-                        let source_work = image.as_ref().map(|image| graphics.take_source_work(image.data.capacity()));
+                        let source_work = image
+                            .as_ref()
+                            .map(|image| graphics.take_source_work(image.data.capacity()));
                         pass.extend(command(state, control, image, source_work, gate, writer))
                     }
                     Part::Graphics(Segment::Reply(bytes))

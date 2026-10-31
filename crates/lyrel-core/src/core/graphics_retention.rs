@@ -60,7 +60,9 @@ pub(super) struct Resident {
 
 pub(super) struct Pin(Arc<Mutex<Resident>>);
 impl Drop for Pin {
-    fn drop(&mut self) { self.0.lock().unwrap().pins -= 1; }
+    fn drop(&mut self) {
+        self.0.lock().unwrap().pins -= 1;
+    }
 }
 struct Entry {
     owner: u64,
@@ -130,9 +132,10 @@ impl Retention {
             .collect();
         let absent = { slot.lock().unwrap().packet.is_none() };
         if absent
-            || slots
-                .iter()
-                .any(|slot| { let slot = slot.lock().unwrap(); slot.priority == Priority::Protected || slot.pins != 0 })
+            || slots.iter().any(|slot| {
+                let slot = slot.lock().unwrap();
+                slot.priority == Priority::Protected || slot.pins != 0
+            })
         {
             return false;
         }
@@ -193,7 +196,11 @@ impl Retention {
                         Vec::new(),
                     )
                 });
-                candidate.0 = candidate.0.max(if resident.pins != 0 { Priority::Protected } else { resident.priority });
+                candidate.0 = candidate.0.max(if resident.pins != 0 {
+                    Priority::Protected
+                } else {
+                    resident.priority
+                });
                 candidate.3 += packet.len();
                 candidate.4 += resident.decoded;
                 candidate.5.push(slot.clone());
@@ -317,9 +324,16 @@ impl Work {
     /// Transfer already reserved source ownership without releasing or charging
     /// the allocation twice at the parser/prepare boundary.
     pub(crate) fn split(&mut self, bytes: usize) -> Self {
-        assert!(bytes <= self.bytes, "source handoff exceeds its work reservation");
+        assert!(
+            bytes <= self.bytes,
+            "source handoff exceeds its work reservation"
+        );
         self.bytes -= bytes;
-        Self { retention: self.retention.clone(), owner: self.owner, bytes }
+        Self {
+            retention: self.retention.clone(),
+            owner: self.owner,
+            bytes,
+        }
     }
 
     pub(crate) fn temporary(&self) -> Self {

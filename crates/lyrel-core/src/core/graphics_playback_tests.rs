@@ -400,47 +400,98 @@ fn controlled_current_frame_edits_preserve_timing_and_follow_new_content_keys() 
 fn controlled_frame_mutations_preserve_wait_pause_gap_numbering_and_loop_progress() {
     for mode in [1, 2, 3] {
         for hidden in [false, true] {
-            let mut state = GraphicsState::new(WinSize { cols:20, rows:10, cell_w:8, cell_h:16 });
+            let mut state = GraphicsState::new(WinSize {
+                cols: 20,
+                rows: 10,
+                cell_w: 8,
+                cell_h: 16,
+            });
             let start = std::time::Instant::now();
             state.controlled_now = Some(start);
-            command(&mut state, "a=T,i=91,C=1,c=1,r=1", Some([255,0,0,255]));
-            command(&mut state, "a=f,i=91,z=80", Some([0,255,0,255]));
-            command(&mut state, "a=f,i=91,z=120", Some([0,0,255,255]));
+            command(&mut state, "a=T,i=91,C=1,c=1,r=1", Some([255, 0, 0, 255]));
+            command(&mut state, "a=f,i=91,z=80", Some([0, 255, 0, 255]));
+            command(&mut state, "a=f,i=91,z=120", Some([0, 0, 255, 255]));
             let (sender, _) = std::sync::mpsc::channel();
             let sender = Arc::new(sender);
-            let viewport = crate::daemon::protocol::GraphicsViewport { screen:0, epoch:0, top:None, cols:20, rows:10 };
+            let viewport = crate::daemon::protocol::GraphicsViewport {
+                screen: 0,
+                epoch: 0,
+                top: None,
+                cols: 20,
+                rows: 10,
+            };
             state.set_viewport(1, Arc::downgrade(&sender), viewport);
             command(&mut state, &format!("a=a,i=91,s={mode},c=2,v=3"), None);
-            let root = state.lookup(&Control { id:91, ..Control::default() }).unwrap();
+            let root = state
+                .lookup(&Control {
+                    id: 91,
+                    ..Control::default()
+                })
+                .unwrap();
             state.controlled_now = Some(start + Duration::from_millis(30));
-            if hidden { state.remove_viewport(1); }
+            if hidden {
+                state.remove_viewport(1);
+            }
             let before = state.playback_snapshot(root);
             command(&mut state, "a=c,i=91,r=3,c=2,C=1,z=999", None);
-            assert_eq!(selected(&state), [0,0,255,255]);
+            assert_eq!(selected(&state), [0, 0, 255, 255]);
             let after = state.playback_snapshot(root);
-            assert_eq!((after.state, after.completed, after.remaining_ms, after.paused),
-                (before.state, before.completed, before.remaining_ms, before.paused), "compose must not reinterpret z or reset current gap");
-            command(&mut state, "a=f,i=91,r=2,X=1", Some([9,8,7,255]));
-            assert_eq!(selected(&state), [9,8,7,255]);
-            assert_eq!(state.playback_snapshot(root).remaining_ms, before.remaining_ms);
+            assert_eq!(
+                (
+                    after.state,
+                    after.completed,
+                    after.remaining_ms,
+                    after.paused
+                ),
+                (
+                    before.state,
+                    before.completed,
+                    before.remaining_ms,
+                    before.paused
+                ),
+                "compose must not reinterpret z or reset current gap"
+            );
+            command(&mut state, "a=f,i=91,r=2,X=1", Some([9, 8, 7, 255]));
+            assert_eq!(selected(&state), [9, 8, 7, 255]);
+            assert_eq!(
+                state.playback_snapshot(root).remaining_ms,
+                before.remaining_ms
+            );
             // Remove a frame before current: selected content and its deadline survive.
             command(&mut state, "a=d,d=f,i=91,r=1", None);
-            assert_eq!(selected(&state), [9,8,7,255]);
-            assert_eq!(state.playback_snapshot(root).remaining_ms, before.remaining_ms);
-            assert_eq!(state.frame_key(root, 1), Some(state.resources[&root].selected));
-            command(&mut state, "a=f,i=91,z=160", Some([255,255,0,255]));
-            // Delete current root: next content becomes root and keeps its own gap.
+            assert_eq!(selected(&state), [9, 8, 7, 255]);
+            assert_eq!(
+                state.playback_snapshot(root).remaining_ms,
+                before.remaining_ms
+            );
+            assert_eq!(
+                state.frame_key(root, 1),
+                Some(state.resources[&root].selected)
+            );
+            command(&mut state, "a=f,i=91,z=160", Some([255, 255, 0, 255]));
+            // Visible playback starts the successor's gap; hidden playback keeps
+            // the exact suspended interval instead of restarting it on deletion.
             command(&mut state, "a=d,d=f,i=91,r=1", None);
-            assert_eq!(selected(&state), [0,0,255,255]);
-            assert_eq!(state.playback_snapshot(root).remaining_ms, 120);
+            assert_eq!(selected(&state), [0, 0, 255, 255]);
+            assert_eq!(
+                state.playback_snapshot(root).remaining_ms,
+                if hidden { before.remaining_ms } else { 120 }
+            );
             assert_eq!(state.playback_snapshot(root).state, mode as u8);
             assert_eq!(state.playback_snapshot(root).completed, before.completed);
             command(&mut state, "a=d,d=F,i=91,r=999", None);
-            assert_eq!(selected(&state), [0,0,255,255]);
+            assert_eq!(selected(&state), [0, 0, 255, 255]);
             command(&mut state, "a=d,d=f,i=91", None);
-            assert_eq!(selected(&state), [0,0,255,255]);
+            assert_eq!(selected(&state), [0, 0, 255, 255]);
             command(&mut state, "a=d,d=F,i=91", None);
-            assert!(state.lookup(&Control { id:91, ..Control::default() }).is_none());
+            assert!(
+                state
+                    .lookup(&Control {
+                        id: 91,
+                        ..Control::default()
+                    })
+                    .is_none()
+            );
             state.advance_playback();
             assert!(state.playback_delay().is_none());
         }
@@ -449,36 +500,52 @@ fn controlled_frame_mutations_preserve_wait_pause_gap_numbering_and_loop_progres
 
 #[test]
 fn controlled_loading_mutations_only_wake_for_a_successor_and_resume_after_hidden_append() {
-    let mut state = GraphicsState::new(WinSize { cols:20, rows:10, cell_w:8, cell_h:16 });
+    let mut state = GraphicsState::new(WinSize {
+        cols: 20,
+        rows: 10,
+        cell_w: 8,
+        cell_h: 16,
+    });
     let start = std::time::Instant::now();
     state.controlled_now = Some(start);
-    command(&mut state, "a=T,i=91,C=1,c=1,r=1", Some([255,0,0,255]));
-    command(&mut state, "a=f,i=91,z=50", Some([0,255,0,255]));
+    command(&mut state, "a=T,i=91,C=1,c=1,r=1", Some([255, 0, 0, 255]));
+    command(&mut state, "a=f,i=91,z=50", Some([0, 255, 0, 255]));
     command(&mut state, "a=a,i=91,s=2,c=2", None);
-    let root = state.lookup(&Control { id:91, ..Control::default() }).unwrap();
+    let root = state
+        .lookup(&Control {
+            id: 91,
+            ..Control::default()
+        })
+        .unwrap();
     let (sender, _) = std::sync::mpsc::channel();
     let sender = Arc::new(sender);
-    let viewport = crate::daemon::protocol::GraphicsViewport { screen:0, epoch:0, top:None, cols:20, rows:10 };
+    let viewport = crate::daemon::protocol::GraphicsViewport {
+        screen: 0,
+        epoch: 0,
+        top: None,
+        cols: 20,
+        rows: 10,
+    };
     state.set_viewport(1, Arc::downgrade(&sender), viewport);
     state.controlled_now = Some(start + Duration::from_millis(50));
     state.advance_playback();
     assert!(state.playback_snapshot(root).waiting);
     command(&mut state, "a=c,i=91,r=1,c=2,C=1", None);
     assert!(state.playback_snapshot(root).waiting);
-    command(&mut state, "a=f,i=91,r=2,X=1", Some([1,2,3,255]));
+    command(&mut state, "a=f,i=91,r=2,X=1", Some([1, 2, 3, 255]));
     assert!(state.playback_snapshot(root).waiting);
     command(&mut state, "a=d,d=f,i=91,r=1", None);
-    assert_eq!(selected(&state), [1,2,3,255]);
+    assert_eq!(selected(&state), [1, 2, 3, 255]);
     assert!(state.playback_snapshot(root).waiting);
     state.remove_viewport(1);
-    command(&mut state, "a=f,i=91,z=70", Some([0,0,255,255]));
+    command(&mut state, "a=f,i=91,z=70", Some([0, 0, 255, 255]));
     assert!(!state.playback_snapshot(root).waiting);
     state.controlled_now = Some(start + Duration::from_secs(900));
     state.advance_playback();
-    assert_eq!(selected(&state), [1,2,3,255]);
+    assert_eq!(selected(&state), [1, 2, 3, 255]);
     state.set_viewport(1, Arc::downgrade(&sender), viewport);
     state.advance_playback();
-    assert_eq!(selected(&state), [0,0,255,255]);
+    assert_eq!(selected(&state), [0, 0, 255, 255]);
     state.controlled_now = Some(start + Duration::from_secs(900) + Duration::from_millis(69));
     state.advance_playback();
     assert!(!state.playback_snapshot(root).waiting);
@@ -489,29 +556,55 @@ fn controlled_loading_mutations_only_wake_for_a_successor_and_resume_after_hidde
 
 #[test]
 fn controlled_current_deletion_preserves_nonzero_finite_loop_progress() {
-    let mut state = GraphicsState::new(WinSize { cols:20, rows:10, cell_w:8, cell_h:16 });
+    let mut state = GraphicsState::new(WinSize {
+        cols: 20,
+        rows: 10,
+        cell_w: 8,
+        cell_h: 16,
+    });
     let start = std::time::Instant::now();
     state.controlled_now = Some(start);
-    command(&mut state, "a=T,i=91,C=1,c=1,r=1", Some([255,0,0,255]));
-    command(&mut state, "a=f,i=91,z=80", Some([0,255,0,255]));
-    command(&mut state, "a=f,i=91,z=120", Some([0,0,255,255]));
+    command(&mut state, "a=T,i=91,C=1,c=1,r=1", Some([255, 0, 0, 255]));
+    command(&mut state, "a=f,i=91,z=80", Some([0, 255, 0, 255]));
+    command(&mut state, "a=f,i=91,z=120", Some([0, 0, 255, 255]));
     command(&mut state, "a=a,i=91,s=3,r=1,z=100,v=3", None);
-    let root = state.lookup(&Control { id:91, ..Control::default() }).unwrap();
+    let root = state
+        .lookup(&Control {
+            id: 91,
+            ..Control::default()
+        })
+        .unwrap();
     let (sender, _) = std::sync::mpsc::channel();
     let sender = Arc::new(sender);
-    state.set_viewport(1, Arc::downgrade(&sender), crate::daemon::protocol::GraphicsViewport { screen:0, epoch:0, top:None, cols:20, rows:10 });
+    state.set_viewport(
+        1,
+        Arc::downgrade(&sender),
+        crate::daemon::protocol::GraphicsViewport {
+            screen: 0,
+            epoch: 0,
+            top: None,
+            cols: 20,
+            rows: 10,
+        },
+    );
     state.controlled_now = Some(start + Duration::from_millis(300));
     state.advance_playback();
     assert_eq!(state.playback_snapshot(root).completed, 1);
-    assert_eq!(selected(&state), [255,0,0,255]);
+    assert_eq!(selected(&state), [255, 0, 0, 255]);
     command(&mut state, "a=d,d=f,i=91,r=1", None);
-    assert_eq!(selected(&state), [0,255,0,255]);
+    assert_eq!(selected(&state), [0, 255, 0, 255]);
     assert_eq!(state.playback_snapshot(root).completed, 1);
     state.controlled_now = Some(start + Duration::from_millis(380));
     state.advance_playback();
-    assert_eq!(selected(&state), [0,0,255,255]);
+    assert_eq!(selected(&state), [0, 0, 255, 255]);
     state.controlled_now = Some(start + Duration::from_millis(500));
     state.advance_playback();
-    assert_eq!((state.playback_snapshot(root).state, state.playback_snapshot(root).completed), (1,2));
-    assert_eq!(selected(&state), [0,0,255,255]);
+    assert_eq!(
+        (
+            state.playback_snapshot(root).state,
+            state.playback_snapshot(root).completed
+        ),
+        (1, 2)
+    );
+    assert_eq!(selected(&state), [0, 0, 255, 255]);
 }

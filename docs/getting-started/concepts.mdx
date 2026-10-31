@@ -264,7 +264,7 @@ stopped、loading、running 和全隐藏暂停都接受 append／edit／compose�
 
 Windows 自有原生入口：在本次构建的隔离 pane 运行 `node scripts/kitty-frame-mutations.mjs`，初始两处红／绿／蓝白框同步播放，第 4 帧黄色半透明 source 为 gapless。先输入 `compose`，绿色阶段应在 `(24,16)` 出现混合黄色矩形；再输入 `replace`，蓝色阶段相同位置应为半透明黄色，而非不透明混色。两项均不上传新像素，仍在播放。`edit` 在绿帧右下增加半透明品红；`current-delete` 在 running 中选择并删除绿帧，随后蓝帧接续，白框／位置不变。`delete-first`／`delete-last` 可继续删首／尾，剩一帧时 `delete-only` 用大写 `F` 删除资源及全部放置；`reset` 恢复场景。`loading` 到尾等待后 `append` 追加白帧；可切换隐藏 tab 后向同一自有 pane 发送变更，再返回检查两处一致。最后 `stats`、`quit`，确认 `KITTY_MUTATIONS_STOPPED`，销毁旧 GUI 并重新附着同一存活 daemon，不启动发送器，检查最终像素／删除和播放状态。记录上传数以区分无负载 compose／delete 与 edit／append。
 
-**本切片证据状态：**上述新增命令、回归与 native fixture 尚未由本任务运行；build／tests／lint／formatter 由中央统一执行，Windows 原生 smoke 也必须另记实际观察。本段不是通过声明，既有 #141／#142 的结果不能替代 #143；双 pane 1080p 容量、约 60 fps、真实 SSH 和 macOS 仍按各自入口验收。
+**本切片证据状态：**2026-10-31 中央已执行上述全部入口：`controlled_` 8 项、stale prepare／编号删除／临时峰值／refusal 各 1 项、两项真实 rooted consumer 和一项旧 decode／snapshot 退休回归均通过。Windows `10.0.26300`／RTX 5080／Debug／100% 缩放的自有原生窗口实际验证 `compose` 后两处绿帧混合黄矩形、`replace` 后蓝帧半透明黄矩形、绿帧叠加半透明品红，以及 running 当前删除、首／尾删除和 loading 追加；白框与两处位置保持。`compose`／`replace` 后上传数保持 4，`edit` 为 5，`append` 为 6。发送器退出后销毁窗口，fresh consumer 恢复唯一合成蓝 root，无重传；再以普通 Node 删除唯一帧，图片立即消失，第二个 fresh consumer 不复活。双 pane 1080p 容量、约 60 fps、真实 SSH 和 macOS 仍按各自入口验收。
 
 
 
@@ -429,7 +429,11 @@ node scripts/kitty-capacity-analysis.mjs `
 
 用 `Get-Process -Id` 分别采样 producer、daemon 与 desktop 的 `CPU/WorkingSet64/PrivateMemorySize64`，CPU 百分比由采样差值计算；GPU 计数器先发现本地化名称，再按自有 PID 过滤，并与 Task Manager／WPR 的整卡观察交叉核对，不能将设备总量全部归因 lyrel。采集后只清理本次创建的窗口、进程和临时证据，不删除用户数据。
 
-**当前结论：**此入口、所有权公式和测量命令不是运行结果。完整默认容量／小预算回归与 Windows 原生 PresentMon＋WGC、实际内存高水位、输入及清理矩阵均由 CENTRAL 集中验证，尚未据此宣称 native 60 fps 达标；未通过的验收项仍保留未通过，不缩减工作量。这里不提供 macOS 或真实 SSH 的完整工作量／原生性能通过证明。
+**2026-10-31 当前 integration 工作树的实测：**Windows `10.0.26300`、Core Ultra 7 265KF、RTX 5080（驱动 `32.0.16.2101`）、2560×1440／240 Hz、Debug 原生窗口中，两边各 60 张不同 1920×1080 raw RGBA 帧均加载成功。ffmpeg 9.0.2 的 240 Hz WGC 产生无法映射的条码，未用于通过结论；改用 120 Hz 采集同一 HWND 30 秒，全部样本均可映射到 0–59。左／右 pane 分别观察到 1,794／1,791 次图片变化，即 `59.83`／`59.73 changes/s`，p50 均 `16.67 ms`、p95 均 `25 ms`、最大 `41.67 ms`；重复 capture 样本为 134／137，源 ID 跳号下界为 6／9。两边均覆盖全部 60 个 ID，不能把剩余跳号全部归因 renderer 或 capture。
+
+同一工作负载执行了 ordinary-input token、edit、compose、完整 60 帧 replacement 和 delete；producer 退出后普通 shell 实际输出 `NATIVE_INPUT_OK`。32 次分进程采样中，两个 producer 的最大 Working Set 分别约 `62.8`／`62.3 MB`；daemon 最大 Working Set／Private Bytes 为 `1,042.5`／`1,021.8 MB`，desktop 为 `1,189.1`／`2,178.0 MB`。delete 后 daemon 降至 `45.4`／`22.8 MB`，desktop 降至 `200.3`／`429.6 MB`。整卡 `nvidia-smi` 采样为 3,166–3,522 MiB，只作设备背景观察，不归因给 lyrel。
+
+PresentMon 2.6.0 已运行但 ETW 返回 `access denied`，因此没有 PresentMon 显示时序或 input-to-photon 数据；ordinary-input 的完成也不冒充该延迟指标。完整默认容量、小预算所有权、完整 120 帧生产 daemon／rooted consumer 与上述原生 WGC 已分别通过；真实 SSH 的全尺寸 wire／fresh 结果见[远程图片文档](/remote/ssh#标准原生桌面与双-pane-全尺寸入口)。macOS 未验证。
 
 ###### 默认所有权上限
 

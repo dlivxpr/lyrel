@@ -875,7 +875,9 @@ fn graphics_consumer_cross_daemon_aggregate_rejects_without_losing_pixels_then_r
             for serial in 0..3 {
                 let daemon = &daemons[serial];
                 let pane = daemon.spawn();
-                let stream = daemon.stream_with_capacity(pane, 1024, 4);
+                // Replacement admission holds old and new decoded frames at once;
+                // desktop aggregate pressure, not an undersized daemon cap, is under test.
+                let stream = daemon.stream_with_capacity(pane, 1024, 8);
                 let (view, window) = graphics_rooted_consumer(cx, pane, stream);
                 graphics_send_fixture(
                     &view,
@@ -1045,10 +1047,19 @@ fn graphics_consumer_cross_daemon_aggregate_rejects_without_losing_pixels_then_r
                 }) {
                     break;
                 }
-                assert!(
-                    std::time::Instant::now() < deadline,
-                    "closing a pane must release actual residency so subsequent source admission succeeds"
-                );
+                if std::time::Instant::now() >= deadline {
+                    let (diagnostics, text, allocations) =
+                        terminals[1].1.read_with(cx, |view, _| {
+                            (
+                                view.terminal.images().recovery_diagnostics(),
+                                view.scrollback_text(),
+                                view.terminal.images().allocation_observation(),
+                            )
+                        });
+                    panic!(
+                        "closing a pane must release actual residency: diagnostics={diagnostics}; allocations={allocations}; text={text}"
+                    );
+                }
                 std::thread::sleep(std::time::Duration::from_millis(5));
             }
             terminals[1].1.read_with(cx, |view, _| {

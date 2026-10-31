@@ -6070,6 +6070,8 @@ version = "0.3.0"
 dependencies = [
  "libc",
  "lyrel-core",
+ "serde",
+ "serde_json",
  "tempfile",
  "windows-sys 0.61.2",
 ]

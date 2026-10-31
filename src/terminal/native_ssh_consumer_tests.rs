@@ -632,16 +632,21 @@ fn native_ssh_consumer_assert_animation_graph(
         assert_eq!(relative.placement.parent, Some(direct.placement.key));
         assert_eq!(virtual_child.placement.parent, Some(virtual_root.placement.key));
         assert!(virtual_root.placement.virtual_placement);
-        assert_eq!((direct.anchor_row, direct.anchor_col), (5, 4));
-        assert_eq!((relative.anchor_row, relative.anchor_col), (7, 7));
-        assert_eq!((virtual_child.anchor_row, virtual_child.anchor_col), (11, 7));
+        // Absolute rows retain the remote sender's pre-clear history origin;
+        // clearing saved scrollback cannot make established text identities zero-based.
+        let origin = direct.anchor_row - 5;
+        assert_eq!(direct.anchor_col, 4);
+        assert_eq!((relative.anchor_row, relative.anchor_col), (origin + 7, 7));
+        assert_eq!((virtual_child.anchor_row, virtual_child.anchor_col), (origin + 11, 7));
         shared.iter().map(|image| image.placement.clone()).collect()
     })
 }
 
 #[gpui_kit::test]
 #[ignore = "requires isolated real Linux native SSH; decoded/paint contracts, not GPU/FPS acceptance"]
-fn native_ssh_consumer_animation_mutations_visibility_and_detached_latest_graph(cx: &mut TestAppContext) {
+fn native_ssh_consumer_animation_mutations_visibility_and_detached_latest_graph(
+    cx: &mut TestAppContext,
+) {
     native_ssh_consumer_init(cx);
     let fixture = native_ssh_consumer_fixture();
     let host = fixture.connect_control();
@@ -660,9 +665,14 @@ fn native_ssh_consumer_animation_mutations_visibility_and_detached_latest_graph(
     native_ssh_consumer_assert_animation_graph(&view, cx, &root_bgra);
     // Partial frame clones frame two, then overwrites its first pixel. Edit
     // updates that exact immutable version; composition copies from frame one.
-    native_ssh_consumer_send(&fixture, &view, cx, 14702,
+    native_ssh_consumer_send(
+        &fixture,
+        &view,
+        cx,
+        14702,
         b"\x1b_Ga=f,i=147,c=2,X=1,s=1,v=1,z=60000;/wD//w==\x1b\\\x1b_Ga=a,i=147,s=1,c=3\x1b\\",
-        &[b"\x1b_Gi=147;OK\x1b\\", b"\x1b_Gi=147;OK\x1b\\"]);
+        &[b"\x1b_Gi=147;OK\x1b\\", b"\x1b_Gi=147;OK\x1b\\"],
+    );
     native_ssh_consumer_assert_animation_graph(&view, cx, &[255, 0, 255, 255, 255, 255, 255, 255]);
     native_ssh_consumer_send(&fixture, &view, cx, 14703,
         b"\x1b_Ga=f,i=147,r=3,X=1,x=1,s=1,v=1;AP///w==\x1b\\\x1b_Ga=c,i=147,r=1,c=3,X=1,Y=0,w=1,h=1,x=0,y=0,C=1\x1b\\",
@@ -673,40 +683,101 @@ fn native_ssh_consumer_animation_mutations_visibility_and_detached_latest_graph(
     // Hold old render handles across an edit/selection; stale pixel claims may
     // never be revived by a later paint or fresh reader.
     let stale = view.read_with(cx, |view, _| graphics_visible_images(view));
-    native_ssh_consumer_send(&fixture, &view, cx, 14704, b"\x1b_Ga=a,i=147,s=1,c=2\x1b\\", &[b"\x1b_Gi=147;OK\x1b\\"]);
-    view.read_with(cx, |view, _| assert!(stale.iter().all(|image| !view.terminal.images().claim_for_paint(image))));
+    native_ssh_consumer_send(
+        &fixture,
+        &view,
+        cx,
+        14704,
+        b"\x1b_Ga=a,i=147,s=1,c=2\x1b\\",
+        &[b"\x1b_Gi=147;OK\x1b\\"],
+    );
+    view.read_with(cx, |view, _| {
+        assert!(
+            stale
+                .iter()
+                .all(|image| !view.terminal.images().claim_for_paint(image))
+        )
+    });
     drop(stale);
     native_ssh_consumer_assert_animation_graph(&view, cx, &[255, 0, 0, 255, 255, 255, 255, 255]);
     // A second actual RemoteTerminal/rooted view contributes visibility but is
     // an Observe subscription: no resize/control ownership takeover.
     let (mut stream, _) = fixture.connect_pane();
-    ClientMsg::Observe { pane_id: pane, size: native_ssh_graphics_fixture::win_size() }.encode(&mut stream).unwrap();
+    ClientMsg::Observe {
+        pane_id: pane,
+        size: native_ssh_graphics_fixture::win_size(),
+    }
+    .encode(&mut stream)
+    .unwrap();
     stream.set_read_timeout(None).unwrap();
-    let (observer, observer_window) = graphics_build_rooted_consumer_at(cx, pane, stream, Vec::new(), TermSize::new(80, 24), PtySource::Raw);
+    let (observer, observer_window) = graphics_build_rooted_consumer_at(
+        cx,
+        pane,
+        stream,
+        Vec::new(),
+        TermSize::new(80, 24),
+        PtySource::Raw,
+    );
     graphics_recovery_stats(&view, cx, 14705);
     graphics_assert_production_paint(observer_window, &observer, cx);
-    native_ssh_consumer_assert_animation_graph(&observer, cx, &[255, 0, 0, 255, 255, 255, 255, 255]);
-    view.read_with(cx, |view, _| view.terminal.viewport_reporter().set_displayed(false));
-    native_ssh_consumer_send(&fixture, &view, cx, 14706, b"\x1b_Ga=a,i=147,s=3,c=2,r=2,z=60000,v=4\x1b\\", &[b"\x1b_Gi=147;OK\x1b\\"]);
+    native_ssh_consumer_assert_animation_graph(
+        &observer,
+        cx,
+        &[255, 0, 0, 255, 255, 255, 255, 255],
+    );
+    view.read_with(cx, |view, _| {
+        view.terminal.viewport_reporter().set_displayed(false)
+    });
+    native_ssh_consumer_send(
+        &fixture,
+        &view,
+        cx,
+        14706,
+        b"\x1b_Ga=a,i=147,s=3,c=2,r=2,z=60000,v=4\x1b\\",
+        &[b"\x1b_Gi=147;OK\x1b\\"],
+    );
     graphics_playback_wait(&observer, cx, |p| p.state == 3 && !p.paused);
-    observer.read_with(cx, |view, _| view.terminal.viewport_reporter().set_displayed(false));
+    observer.read_with(cx, |view, _| {
+        view.terminal.viewport_reporter().set_displayed(false)
+    });
     let paused = graphics_playback_wait(&view, cx, |p| p.state == 3 && p.paused);
     assert!(paused.remaining_ms > 0 && paused.remaining_ms <= 60000);
     assert_eq!((paused.loops, paused.completed), (3, 0));
     // Explicit edits/delete remain authoritative while every GUI is hidden.
-    native_ssh_consumer_send(&fixture, &view, cx, 14707, b"\x1b_Ga=d,d=f,i=147,r=2\x1b\\", &[]);
+    native_ssh_consumer_send(
+        &fixture,
+        &view,
+        cx,
+        14707,
+        b"\x1b_Ga=d,d=f,i=147,r=2\x1b\\",
+        &[],
+    );
     native_ssh_consumer_assert_animation_graph(&view, cx, &composed);
     let hidden = graphics_playback_wait(&view, cx, |p| p.paused);
-    assert_eq!((hidden.loops, hidden.completed), (paused.loops, paused.completed));
-    assert_eq!(hidden.remaining_ms, paused.remaining_ms, "hidden mutation preserves the suspended remaining gap");
+    assert_eq!(
+        (hidden.loops, hidden.completed),
+        (paused.loops, paused.completed)
+    );
+    assert_eq!(
+        hidden.remaining_ms, paused.remaining_ms,
+        "hidden mutation preserves the suspended remaining gap"
+    );
     graphics_recovery_destroy(observer, observer_window, cx);
     graphics_recovery_destroy(view, window, cx);
     let (resumed, resumed_window) = native_ssh_consumer_fresh(&fixture, pane, cx, 14770, 128 << 20);
     let restored = graphics_playback_wait(&resumed, cx, |p| p.state == 3 && !p.paused);
-    assert_eq!((restored.loops, restored.completed), (hidden.loops, hidden.completed));
-    assert!(restored.remaining_ms > 0 && restored.remaining_ms <= hidden.remaining_ms, "fresh consumer resumes the remaining interval, not a new full interval or a catch-up loop");
+    assert_eq!(
+        (restored.loops, restored.completed),
+        (hidden.loops, hidden.completed)
+    );
+    assert!(
+        restored.remaining_ms > 0 && restored.remaining_ms <= hidden.remaining_ms,
+        "fresh consumer resumes the remaining interval, not a new full interval or a catch-up loop"
+    );
     native_ssh_consumer_assert_animation_graph(&resumed, cx, &composed);
-    resumed.read_with(cx, |view, _| view.terminal.viewport_reporter().set_displayed(false));
+    resumed.read_with(cx, |view, _| {
+        view.terminal.viewport_reporter().set_displayed(false)
+    });
     graphics_playback_wait(&resumed, cx, |p| p.paused);
     graphics_recovery_destroy(resumed, resumed_window, cx);
     // Truly zero consumers: append, root edit, select and remove a separate
@@ -716,24 +787,50 @@ fn native_ssh_consumer_animation_mutations_visibility_and_detached_latest_graph(
         b"\x1b_Ga=f,i=147,f=32,s=2,v=1,q=2,z=60000;/////wAAAP8=\x1b\\\x1b_Ga=f,i=147,r=1,X=1,s=1,v=1,q=2;AQID/w==\x1b\\\x1b_Ga=a,i=147,s=1,c=3,q=2\x1b\\\x1b[16;1H\x1b_Ga=T,i=148,p=1,f=32,s=1,v=1,q=2;/wAA/w==\x1b\\\x1b_Ga=d,d=I,i=148,q=2\x1b\\DETACHED-SSH-LATEST");
     let (fresh, fresh_window) = native_ssh_consumer_fresh(&fixture, pane, cx, 14709, 128 << 20);
     let latest = [255, 255, 255, 255, 0, 0, 0, 255];
-    assert_eq!(native_ssh_consumer_assert_animation_graph(&fresh, cx, &latest), graph, "latest frame changes no parent/prototype/placement geometry");
+    assert_eq!(
+        native_ssh_consumer_assert_animation_graph(&fresh, cx, &latest),
+        graph,
+        "latest frame changes no parent/prototype/placement geometry"
+    );
     fresh.read_with(cx, |view, _| {
         assert!(view.scrollback_text().contains("DETACHED-SSH-LATEST"));
-        assert!(graphics_visible_images(view).iter().all(|image| image.placement.image_id != 148));
+        assert!(
+            graphics_visible_images(view)
+                .iter()
+                .all(|image| image.placement.image_id != 148)
+        );
     });
     let stopped = graphics_recovery_stats(&fresh, cx, 14710);
     graphics_recovery_destroy(fresh, fresh_window, cx);
     let (fresh, fresh_window) = native_ssh_consumer_fresh(&fixture, pane, cx, 14711, 128 << 20);
     native_ssh_consumer_assert_animation_graph(&fresh, cx, &latest);
-    assert_eq!(graphics_recovery_stats(&fresh, cx, 14712), stopped, "silent sender must not retransmit root or frames on fresh recovery");
+    assert_eq!(
+        graphics_recovery_stats(&fresh, cx, 14712),
+        stopped,
+        "silent sender must not retransmit root or frames on fresh recovery"
+    );
     assert_eq!(native_ssh_consumer_identity(&fixture, pane), identity);
     // Uppercase final-frame deletion releases the full relative/virtual graph.
-    native_ssh_consumer_send(&fixture, &fresh, cx, 14713, b"\x1b_Ga=d,d=f,i=147,r=3\x1b\\\x1b_Ga=d,d=f,i=147,r=2\x1b\\\x1b_Ga=d,d=F,i=147,r=1\x1b\\", &[]);
+    native_ssh_consumer_send(
+        &fixture,
+        &fresh,
+        cx,
+        14713,
+        b"\x1b_Ga=d,d=f,i=147,r=3\x1b\\\x1b_Ga=d,d=f,i=147,r=2\x1b\\\x1b_Ga=d,d=F,i=147,r=1\x1b\\",
+        &[],
+    );
     graphics_assert_production_paint(fresh_window, &fresh, cx);
-    fresh.read_with(cx, |view, _| assert!(graphics_visible_images(view).is_empty()));
+    fresh.read_with(cx, |view, _| {
+        assert!(graphics_visible_images(view).is_empty())
+    });
     graphics_recovery_destroy(fresh, fresh_window, cx);
     let (last, last_window) = native_ssh_consumer_fresh(&fixture, pane, cx, 14714, 128 << 20);
-    last.read_with(cx, |view, _| assert!(graphics_visible_images(view).is_empty(), "deleted frames/prototypes cannot resurrect"));
+    last.read_with(cx, |view, _| {
+        assert!(
+            graphics_visible_images(view).is_empty(),
+            "deleted frames/prototypes cannot resurrect"
+        )
+    });
     graphics_recovery_destroy(last, last_window, cx);
     fixture.kill_pane(pane);
 }
@@ -745,29 +842,78 @@ fn native_ssh_consumer_linux_file_temp_shm_pixels_and_silent_recovery(cx: &mut T
     let fixture = native_ssh_consumer_fixture();
     let host = fixture.connect_control();
     let desktop = tempfile::tempdir().unwrap();
-    let sentinel = desktop.path().join(format!("tty-graphics-protocol-{}.rgba", desktop.path().file_name().unwrap().to_string_lossy()));
+    let sentinel = desktop.path().join(format!(
+        "tty-graphics-protocol-{}.rgba",
+        desktop.path().file_name().unwrap().to_string_lossy()
+    ));
     std::fs::write(&sentinel, [91, 72, 53, 255]).unwrap();
-    let shell = fixture.install_script(&host, "kitty_ssh_media.mjs", include_bytes!("../../tests/support/kitty_ssh_media.mjs"), vec!["--desktop-path".into(), sentinel.to_string_lossy().into_owned()]);
+    let shell = fixture.install_script(
+        &host,
+        "kitty_ssh_media.mjs",
+        include_bytes!("../../tests/support/kitty_ssh_media.mjs"),
+        vec![
+            "--desktop-path".into(),
+            sentinel.to_string_lossy().into_owned(),
+        ],
+    );
     let pane = native_ssh_consumer_spawn(&fixture, shell);
     let identity = native_ssh_consumer_identity(&fixture, pane);
     // This sender intentionally does not implement STAT. Mount its real stream
     // directly and wait for its own correlated output after remote media ACKs.
     let (mut stream, _) = fixture.connect_pane();
-    ClientMsg::Attach { pane_id: pane, size: native_ssh_graphics_fixture::win_size(), allow_remote_clipboard_write: false }.encode(&mut stream).unwrap();
+    ClientMsg::Attach {
+        pane_id: pane,
+        size: native_ssh_graphics_fixture::win_size(),
+        allow_remote_clipboard_write: false,
+    }
+    .encode(&mut stream)
+    .unwrap();
     stream.set_read_timeout(None).unwrap();
-    let (view, window) = graphics_build_rooted_consumer_at(cx, pane, stream, Vec::new(), TermSize::new(80, 24), PtySource::Raw);
+    let (view, window) = graphics_build_rooted_consumer_at(
+        cx,
+        pane,
+        stream,
+        Vec::new(),
+        TermSize::new(80, 24),
+        PtySource::Raw,
+    );
     fixture.input(pane, b"RUN\n".to_vec());
-    graphics_recovery_wait(cx, "real Linux media sender never received its file/temp/shm ACKs", |cx| view.read_with(cx, |view, _| view.scrollback_text().contains("KITTY_REMOTE_MEDIA_OK")));
-    for id in 1471..=1473 { graphics_recovery_pixels(&view, cx, id, &[56, 34, 12, 255]); }
+    graphics_recovery_wait(
+        cx,
+        "real Linux media sender never received its file/temp/shm ACKs",
+        |cx| {
+            view.read_with(cx, |view, _| {
+                view.scrollback_text().contains("KITTY_REMOTE_MEDIA_OK")
+            })
+        },
+    );
+    for id in 1471..=1473 {
+        graphics_recovery_pixels(&view, cx, id, &[56, 34, 12, 255]);
+    }
     graphics_recovery_pixels(&view, cx, 1474, &[255, 0, 255, 255]);
     graphics_assert_production_paint(window, &view, cx);
     assert_eq!(std::fs::read(&sentinel).unwrap(), [91, 72, 53, 255]);
     graphics_recovery_destroy(view, window, cx);
     let (mut stream, _) = fixture.connect_pane();
-    ClientMsg::Attach { pane_id: pane, size: native_ssh_graphics_fixture::win_size(), allow_remote_clipboard_write: false }.encode(&mut stream).unwrap();
+    ClientMsg::Attach {
+        pane_id: pane,
+        size: native_ssh_graphics_fixture::win_size(),
+        allow_remote_clipboard_write: false,
+    }
+    .encode(&mut stream)
+    .unwrap();
     stream.set_read_timeout(None).unwrap();
-    let (fresh, window) = graphics_build_rooted_consumer_at(cx, pane, stream, Vec::new(), TermSize::new(80, 24), PtySource::Raw);
-    for id in 1471..=1473 { graphics_recovery_pixels(&fresh, cx, id, &[56, 34, 12, 255]); }
+    let (fresh, window) = graphics_build_rooted_consumer_at(
+        cx,
+        pane,
+        stream,
+        Vec::new(),
+        TermSize::new(80, 24),
+        PtySource::Raw,
+    );
+    for id in 1471..=1473 {
+        graphics_recovery_pixels(&fresh, cx, id, &[56, 34, 12, 255]);
+    }
     graphics_recovery_pixels(&fresh, cx, 1474, &[255, 0, 255, 255]);
     graphics_assert_production_paint(window, &fresh, cx);
     assert_eq!(native_ssh_consumer_identity(&fixture, pane), identity);

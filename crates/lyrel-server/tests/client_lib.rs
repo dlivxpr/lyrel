@@ -2747,7 +2747,10 @@ mod kitty_graphics {
                     }
                 }
                 GraphicsUpdate::Playback(playback) => {
-                    assert!(self.resources.contains_key(&playback.key) || self.evicted.contains_key(&playback.key));
+                    assert!(
+                        self.resources.contains_key(&playback.key)
+                            || self.evicted.contains_key(&playback.key)
+                    );
                 }
                 GraphicsUpdate::Evicted { key, width, height } => {
                     self.resources.remove(key);
@@ -4998,13 +5001,17 @@ mod kitty_graphics {
                 "host-local capability must actually attempt to read the named object"
             );
         }
-        for command in [
-            "a=q,i=732,p=5,f=1,s=1,v=1;AAAA",
-            "a=q,i=732,p=5,f=32,s=1,v=1,o=x;AAAA",
-            "a=c,i=732,p=5;AAAA",
+        for (command, error) in [
+            ("a=q,i=732,p=5,f=1,s=1,v=1;AAAA", "ENOTSUPPORTED"),
+            ("a=q,i=732,p=5,f=32,s=1,v=1,o=x;AAAA", "ENOTSUPPORTED"),
+            ("a=c,i=732,p=5;AAAA", "EINVAL"),
         ] {
             let reply = pane.send(format!("\x1b_G{command}\x1b\\").as_bytes(), 1);
-            assert!(reply[0].starts_with(b"\x1b_Gi=732,p=5;ENOTSUPPORTED:"));
+            assert!(
+                reply[0].starts_with(format!("\x1b_Gi=732,p=5;{error}:").as_bytes()),
+                "unexpected reply for {command}: {}",
+                String::from_utf8_lossy(&reply[0])
+            );
         }
         let invalid_ids = pane.send(b"\x1b_Ga=q,i=733,I=8,p=6,f=24,s=1,v=1;AAAA\x1b\\", 1);
         assert!(invalid_ids[0].starts_with(b"\x1b_Gi=733,I=8,p=6;EINVAL:"));

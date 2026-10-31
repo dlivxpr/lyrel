@@ -521,7 +521,9 @@ impl ImageStore {
         let inner = self.0.state.lock().unwrap();
         serde_json::json!({
             "cacheBytes": self.0.pane_budget.used.load(Ordering::Acquire),
+            "aggregateCacheBytes": self.0.aggregate_budget.used.load(Ordering::Acquire),
             "sourceBytes": self.0.pane_source.used.load(Ordering::Acquire),
+            "aggregateSourceBytes": self.0.aggregate_source.used.load(Ordering::Acquire),
             "metadataBytes": self.0.pane_metadata.used.load(Ordering::Acquire),
             "decodedFrames": inner.resources.values().filter(|resource| resource.decoded.is_some()).count(),
             "retiredFrames": inner.retired.len(),
@@ -1398,16 +1400,34 @@ impl ImageStore {
                     // pixel owner. A fresh replay can create this identity from
                     // the new version without retaining any old root pixels.
                     let version = &inner.resources[&key];
-                    let metadata = inner.resources.get(&root).map(|r| r.metadata.clone()).unwrap_or_else(|| version.metadata.clone());
+                    let metadata = inner
+                        .resources
+                        .get(&root)
+                        .map(|r| r.metadata.clone())
+                        .unwrap_or_else(|| version.metadata.clone());
                     let selected = inner.resources.get(&root).and_then(|r| r.selected);
                     let playback = inner.resources.get(&root).and_then(|r| r.playback.clone());
                     let shell = Resource {
-                        pending: None, decoded: None, width: version.width, height: version.height,
-                        evicted: false, revision: version.revision, painted: Arc::new(AtomicBool::new(false)),
-                        peak: None, scratch: None, source: None, received: 0, pressure_requested: false,
-                        metadata, root: None, selected, playback,
+                        pending: None,
+                        decoded: None,
+                        width: version.width,
+                        height: version.height,
+                        evicted: false,
+                        revision: version.revision,
+                        painted: Arc::new(AtomicBool::new(false)),
+                        peak: None,
+                        scratch: None,
+                        source: None,
+                        received: 0,
+                        pressure_requested: false,
+                        metadata,
+                        root: None,
+                        selected,
+                        playback,
                     };
-                    if let Some(old) = inner.resources.insert(root, shell) { retire(old, &mut inner.retired); }
+                    if let Some(old) = inner.resources.insert(root, shell) {
+                        retire(old, &mut inner.retired);
+                    }
                 }
                 if let Some(resource) = inner.resources.get_mut(&key) {
                     resource.root = Some(root);
@@ -1906,7 +1926,14 @@ mod tests {
             // A fresh replay grants the complete snapshot before sending any
             // pixels. Reserve honest raw packet sizes, not compressed fixtures.
             for frame in 1..=61 {
-                assert!(store.offer(frame, frame, 1920, 1080, 8_294_400 + 256, OWNER_METADATA_BYTES));
+                assert!(store.offer(
+                    frame,
+                    frame,
+                    1920,
+                    1080,
+                    8_294_400 + 256,
+                    OWNER_METADATA_BYTES
+                ));
             }
         }
         for store in &stores {
@@ -1934,21 +1961,34 @@ mod tests {
         establish_screen(&worker);
         for (key, number, red) in [(101, 1, 50), (102, 2, 150)] {
             apply_resource(&worker, key, red);
-            worker.apply(GraphicsUpdate::Frame { key, root: 1, number });
-            completion.recv_timeout(std::time::Duration::from_secs(2)).unwrap();
+            worker.apply(GraphicsUpdate::Frame {
+                key,
+                root: 1,
+                number,
+            });
+            completion
+                .recv_timeout(std::time::Duration::from_secs(2))
+                .unwrap();
         }
         apply_placement(&worker, placement(10, 1, 1, 0));
         apply_placement(&worker, placement(11, 1, 2, 0));
         let mut versions = BTreeMap::new();
         for revision in 1..=120 {
             let frame = if revision % 2 == 0 { 102 } else { 101 };
-            worker.apply(GraphicsUpdate::Select { key: 1, frame, revision });
+            worker.apply(GraphicsUpdate::Select {
+                key: 1,
+                frame,
+                revision,
+            });
             wait_for(&store, |images| images.len() == 2);
             let images = store.snapshot();
             let data = images[0].data.as_ref().unwrap();
             assert!(Arc::ptr_eq(data, images[1].data.as_ref().unwrap()));
             if let Some(previous) = versions.get(&frame) {
-                assert!(Arc::ptr_eq(data, previous), "a later loop must reuse the retained decoded version");
+                assert!(
+                    Arc::ptr_eq(data, previous),
+                    "a later loop must reuse the retained decoded version"
+                );
             } else {
                 versions.insert(frame, data.clone());
             }
@@ -1972,12 +2012,18 @@ mod tests {
             wait_for(&store, |images| images.len() == 1);
             let snapshot = store.snapshot();
             assert!(store.claim_for_paint(&snapshot[0]));
-            worker.apply(GraphicsUpdate::Remove { placements: vec![10], resources: vec![1] });
+            worker.apply(GraphicsUpdate::Remove {
+                placements: vec![10],
+                resources: vec![1],
+            });
             assert!(!store.offer(2, 2, 1, 1, 100, OWNER_METADATA_BYTES));
             let retired = store.take_retired();
             assert_eq!(retired.len(), 1);
             drop(retired);
-            assert!(!store.offer(2, 2, 1, 1, 100, OWNER_METADATA_BYTES), "paint snapshot still owns the residency");
+            assert!(
+                !store.offer(2, 2, 1, 1, 100, OWNER_METADATA_BYTES),
+                "paint snapshot still owns the residency"
+            );
             drop(snapshot);
             assert!(store.offer(2, 2, 1, 1, 100, OWNER_METADATA_BYTES));
             store.cancel_offer(2);
@@ -1991,7 +2037,10 @@ mod tests {
     #[gpui_kit::test]
     fn retiring_one_pane_keeps_other_pane_registered_textures(cx: &mut gpui_kit::TestAppContext) {
         let stores = [ImageStore::new(), ImageStore::new()];
-        let workers: Vec<_> = stores.iter().map(|store| DecodeWorker::spawn(store.clone(), || {})).collect();
+        let workers: Vec<_> = stores
+            .iter()
+            .map(|store| DecodeWorker::spawn(store.clone(), || {}))
+            .collect();
         for worker in &workers {
             establish_screen(worker);
             apply_resource(worker, 1, 50);
@@ -2001,21 +2050,33 @@ mod tests {
         let images: Vec<_> = stores.iter().map(ImageStore::snapshot).collect();
         let displayed = Arc::new(AtomicBool::new(true));
         let window = cx.add_window(|_, _| gpui_kit::EmptyView);
-        window.update(cx, |_, window, _| {
-            for (store, snapshot) in stores.iter().zip(&images) {
-                assert!(store.claim_for_paint(&snapshot[0]));
-                store.register_for_paint(&snapshot[0], window, &displayed);
-            }
-        }).unwrap();
-        workers[0].apply(GraphicsUpdate::Remove { placements: vec![10], resources: vec![1] });
-        window.update(cx, |_, window, cx| stores[0].release_retired(window, cx)).unwrap();
+        window
+            .update(cx, |_, window, _| {
+                for (store, snapshot) in stores.iter().zip(&images) {
+                    assert!(store.claim_for_paint(&snapshot[0]));
+                    store.register_for_paint(&snapshot[0], window, &displayed);
+                }
+            })
+            .unwrap();
+        workers[0].apply(GraphicsUpdate::Remove {
+            placements: vec![10],
+            resources: vec![1],
+        });
+        window
+            .update(cx, |_, window, cx| stores[0].release_retired(window, cx))
+            .unwrap();
         let old = images[0][0]._residency.as_ref().unwrap();
         let survivor = images[1][0]._residency.as_ref().unwrap();
         assert!(!old.registered.load(Ordering::Acquire));
         assert!(old.gpu.lock().unwrap().is_none());
-        assert!(survivor.registered.load(Ordering::Acquire), "an unrelated pane edit must not force texture re-upload");
+        assert!(
+            survivor.registered.load(Ordering::Acquire),
+            "an unrelated pane edit must not force texture re-upload"
+        );
         assert!(survivor.gpu.lock().unwrap().is_some());
-        window.update(cx, |_, window, cx| stores[1].release_all(window, cx)).unwrap();
+        window
+            .update(cx, |_, window, cx| stores[1].release_all(window, cx))
+            .unwrap();
         drop(images);
         drop(workers);
         for store in &stores {
@@ -2109,7 +2170,10 @@ mod tests {
             let entered = entered.clone();
             let release = release.clone();
             move |image| {
-                if first.swap(false, Ordering::SeqCst) { entered.wait(); release.wait(); }
+                if first.swap(false, Ordering::SeqCst) {
+                    entered.wait();
+                    release.wait();
+                }
                 decode(image)
             }
         });
@@ -2118,19 +2182,50 @@ mod tests {
         apply_placement(&worker, placement(10, 1, 3, 4));
         entered.wait();
         apply_resource(&worker, 2, 20);
-        worker.apply(GraphicsUpdate::Frame { key:2, root:1, number:1 });
-        worker.apply(GraphicsUpdate::Select { key:1, frame:2, revision:1 });
+        worker.apply(GraphicsUpdate::Frame {
+            key: 2,
+            root: 1,
+            number: 1,
+        });
+        worker.apply(GraphicsUpdate::Select {
+            key: 1,
+            frame: 2,
+            revision: 1,
+        });
         apply_resource(&worker, 3, 30);
-        worker.apply(GraphicsUpdate::Frame { key:3, root:1, number:1 });
-        worker.apply(GraphicsUpdate::Select { key:1, frame:3, revision:2 });
-        worker.apply(GraphicsUpdate::Remove { placements:vec![], resources:vec![2] });
+        worker.apply(GraphicsUpdate::Frame {
+            key: 3,
+            root: 1,
+            number: 1,
+        });
+        worker.apply(GraphicsUpdate::Select {
+            key: 1,
+            frame: 3,
+            revision: 2,
+        });
+        worker.apply(GraphicsUpdate::Remove {
+            placements: vec![],
+            resources: vec![2],
+        });
         release.wait();
-        wait_for(&store, |images| images.len() == 1 && images[0].data.as_ref().is_some_and(|data| data.as_bytes(0).unwrap() == [30,20,30,128]));
+        wait_for(&store, |images| {
+            images.len() == 1
+                && images[0]
+                    .data
+                    .as_ref()
+                    .is_some_and(|data| data.as_bytes(0).unwrap() == [30, 20, 30, 128])
+        });
         let snapshot = store.snapshot();
         assert!(store.claim_for_paint(&snapshot[0]));
-        worker.apply(GraphicsUpdate::Remove { placements:vec![10], resources:vec![1,3] });
+        worker.apply(GraphicsUpdate::Remove {
+            placements: vec![10],
+            resources: vec![1, 3],
+        });
         assert!(store.snapshot().is_empty());
-        assert!(!store.claim_for_paint(&snapshot[0]), "retained pixel ownership does not authorize a deleted placement");
+        assert!(
+            !store.claim_for_paint(&snapshot[0]),
+            "retained pixel ownership does not authorize a deleted placement"
+        );
         drop(worker);
         assert!(store.snapshot().is_empty());
     }

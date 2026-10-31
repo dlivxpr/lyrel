@@ -196,7 +196,11 @@ cargo test --locked -p lyrel-server --test native_ssh_surface \
 
 原生记录还必须包含 Windows/macOS 版本、Linux／OpenSSH／Node 与双方 build、窗口所在显示器／缩放／字体、连接条件、实际图像身份与卡片／几何、GUI 全关闭及 fresh 重开过程。记录 initial loading 与 steady 的时段、CPU／GPU／内存峰值和实际呈现节拍；静态截图、headless paint claim、Select 包数不能证明约 60 fps。MacBook Air M5、正式 agent 的跨 SSH 组合和未取得第二层端点的 nested 路径分别保留前提，不能用 Windows/WSL 的普通图形结果替代。
 
-**2026-10-31 新入口状态：**已添加上述执行器与契约，但本轮代码、真实 SSH、原生窗口与全尺寸采样尚未由该实现者执行；交由集成协调者集中运行。下列 `0.2.1`／pane `15` 是历史基线，不能视为当前 `0.3.0`／pane `17` 动画验收。
+**2026-10-31 当前 integration 验收：**Windows `10.0.26300` 经生产 native SSH router 连接 WSL2 Linux `6.18.54.1-microsoft-standard-WSL2` 的专用 OpenSSH 端点，双方为 `0.3.0`、pane `17`／control `16`，远端 Node `22.22.1`。四项真实 transport 与四项 rooted consumer 均通过，覆盖动画／partial／compose／delete、relative／Unicode 共享版本、隐藏与 detached 变更、fresh 恢复、capacity／取消／不兼容 peer，以及 Linux file／temp／POSIX-shm 和 nested locality refusal。标准 GUI 的 relative 场景实际显示 direct／relative／crop／virtual-child；关闭后 fresh GUI 恢复同一图形，wire 的 Resource 像素不增加。mutations 场景实际显示绿色混合矩形、蓝色替换矩形、全删除与 loading append。
+
+capacity 场景在两个远端 Linux PTY 各接受 60 张 1920×1080 raw RGBA 帧，Windows 标准 GUI 同时显示。每 pane 初始为 `resource_packets=60`、`resource_pixel_bytes=497664000`；steady 与 fresh-steady 仅 Select 增长，Resource 包和像素均不增长。关闭整个 GUI 后 fresh 进程在完整 replay／解码后恢复双图，delete 后双图消失。这里证明的是 retained-frame wire 行为与原生显示，不把 Select 计数当作 SSH 60 fps 呈现证明；60 fps 的本地 Windows WGC 结果见[容量与原生呈现测量](/getting-started/concepts#双窗格-1080p-容量与原生呈现测量146)。空 graphics replay 不附带 `Screen`，sampler 以首个真实 PTY Snapshot／Output 确认订阅，不注入伪造图形消息。macOS、正式 agent 的跨 SSH 组合和第二层 nested 端点仍未验证。
+
+下列 `0.2.1`／pane `15` 是历史基线，不能替代上述当前结果。
 
 **2026-10-25 已验证 pane `15` 自动化：**Windows `10.0.26300` → WSL2 Ubuntu
 `26.04.1 LTS`（Linux `6.18.54.1-microsoft-standard-WSL2`、Node `22.23.4`）；

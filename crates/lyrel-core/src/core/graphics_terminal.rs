@@ -48,11 +48,18 @@ impl GraphicsState {
         self.placeholder_placements_in_viewport(start, end, self.size.cols)
     }
 
-    pub(super) fn placeholder_placements_in_viewport(&self, start: i32, end: i32, cols: u16) -> BTreeSet<u64> {
+    pub(super) fn placeholder_placements_in_viewport(
+        &self,
+        start: i32,
+        end: i32,
+        cols: u16,
+    ) -> BTreeSet<u64> {
         let mut placements = BTreeSet::new();
         for row in start..end {
             for slice in placeholder_row(&self.term.grid, Line(row)) {
-                if slice.column >= cols as usize { continue; }
+                if slice.column >= cols as usize {
+                    continue;
+                }
                 if let Some(prototype) =
                     placeholder_prototype(self.placements(), self.screen, &slice.run)
                     && slice.run.row < prototype.span_rows

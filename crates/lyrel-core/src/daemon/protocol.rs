@@ -21,9 +21,16 @@ pub(crate) fn inject_graphics_queue_limit(bytes: usize) {
     assert!(GRAPHICS_QUEUE_LIMIT.set(bytes).is_ok());
 }
 
+#[cfg(test)]
+pub(crate) fn graphics_queue_usage() -> usize {
+    GRAPHICS_QUEUE_BYTES.load(std::sync::atomic::Ordering::Acquire)
+}
+
 fn graphics_queue_limit() -> usize {
     #[cfg(test)]
-    if let Some(&bytes) = GRAPHICS_QUEUE_LIMIT.get() { return bytes; }
+    if let Some(&bytes) = GRAPHICS_QUEUE_LIMIT.get() {
+        return bytes;
+    }
     MAX_DAEMON_GRAPHICS_QUEUE_BYTES
 }
 
@@ -204,8 +211,8 @@ pub fn negotiate_pane<S: Read + Write>(stream: &mut S) -> io::Result<DaemonVersi
             // with a finite source allowance. Rendering consumers additionally
             // grant each resource from their shared process-wide byte budget.
             ClientMsg::GraphicsCapacity {
-                encoded_bytes: 64 << 20,
-                decoded_bytes: 128 << 20,
+                encoded_bytes: crate::core::graphics_state::MAX_PANE_ENCODED_BYTES as u64,
+                decoded_bytes: crate::core::graphics_state::MAX_PANE_DECODED_BYTES as u64,
                 offers: false,
             }
             .encode(stream)?;
@@ -1958,6 +1965,18 @@ mod tests {
         cell_w: 8,
         cell_h: 17,
     };
+
+    #[test]
+    fn graphics_packet_shares_one_charge_until_last_owner_drops() {
+        let before = graphics_queue_usage();
+        let first = GraphicsPacket::try_encode(128, || vec![7; 128]).unwrap();
+        assert_eq!(graphics_queue_usage(), before + 128);
+        let second = first.clone();
+        drop(first);
+        assert_eq!(graphics_queue_usage(), before + 128);
+        drop(second);
+        assert_eq!(graphics_queue_usage(), before);
+    }
 
     #[test]
     fn full_session_round_trips_over_a_real_duplex_stream() {

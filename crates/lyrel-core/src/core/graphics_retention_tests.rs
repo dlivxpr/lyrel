@@ -1651,18 +1651,38 @@ fn retention_daemon_complete_frames_refusal_quiet_and_replacement_are_atomic() {
     // Refusal must keep the selected green frame and both accepted frames.
     let reply = consumer.exchange(b"\x1b_Ga=f,i=91,r=2,X=1,s=1,v=1,q=1;AAD//w==\x1b\\", 1);
     assert!(reply[0].starts_with(b"\x1b_Gi=91;ENOSPC:"));
-    assert!(!consumer.updates.iter().any(|update| matches!(update,
-        GraphicsUpdate::Resource { .. } | GraphicsUpdate::Remove { .. } | GraphicsUpdate::Evicted { .. } | GraphicsUpdate::Select { .. })));
-    assert_eq!(consumer.exchange(b"\x1b_Ga=a,i=91,s=1,c=2\x1b\\", 1), [b"\x1b_Gi=91;OK\x1b\\".to_vec()]);
-    assert!(consumer.updates.iter().any(|update| matches!(update,
-        GraphicsUpdate::Select { key, frame: selected, .. } if *key == root && *selected == frame)));
+    assert!(!consumer.updates.iter().any(|update| matches!(
+        update,
+        GraphicsUpdate::Resource { .. }
+            | GraphicsUpdate::Remove { .. }
+            | GraphicsUpdate::Evicted { .. }
+            | GraphicsUpdate::Select { .. }
+    )));
+    assert_eq!(
+        consumer.exchange(b"\x1b_Ga=a,i=91,s=1,c=2\x1b\\", 1),
+        [b"\x1b_Gi=91;OK\x1b\\".to_vec()]
+    );
+    assert!(
+        consumer.updates.iter().any(|update| matches!(update,
+        GraphicsUpdate::Select { key, frame: selected, .. } if *key == root && *selected == frame))
+    );
     let reply = consumer.exchange(b"\x1b_Ga=c,i=91,r=1,c=2,C=1,q=1\x1b\\", 1);
     assert!(reply[0].starts_with(b"\x1b_Gi=91;ENOSPC:"));
-    assert!(!consumer.updates.iter().any(|update| matches!(update,
-        GraphicsUpdate::Resource { .. } | GraphicsUpdate::Remove { .. } | GraphicsUpdate::Evicted { .. } | GraphicsUpdate::Select { .. })));
-    assert_eq!(consumer.exchange(b"\x1b_Ga=a,i=91,c=2\x1b\\", 1), [b"\x1b_Gi=91;OK\x1b\\".to_vec()]);
-    assert!(consumer.updates.iter().any(|update| matches!(update,
-        GraphicsUpdate::Select { key, frame: selected, .. } if *key == root && *selected == frame)));
+    assert!(!consumer.updates.iter().any(|update| matches!(
+        update,
+        GraphicsUpdate::Resource { .. }
+            | GraphicsUpdate::Remove { .. }
+            | GraphicsUpdate::Evicted { .. }
+            | GraphicsUpdate::Select { .. }
+    )));
+    assert_eq!(
+        consumer.exchange(b"\x1b_Ga=a,i=91,c=2\x1b\\", 1),
+        [b"\x1b_Gi=91;OK\x1b\\".to_vec()]
+    );
+    assert!(
+        consumer.updates.iter().any(|update| matches!(update,
+        GraphicsUpdate::Select { key, frame: selected, .. } if *key == root && *selected == frame))
+    );
     for (command, error) in [
         ("a=a,i=91,c=3", "ENOENT"),
         ("a=f,i=91,s=1,v=1;!", "EINVAL"),
@@ -1682,10 +1702,17 @@ fn retention_daemon_complete_frames_refusal_quiet_and_replacement_are_atomic() {
         consumer.exchange(b"\x1b_Ga=a,i=91,c=1\x1b\\", 1),
         [b"\x1b_Gi=91;OK\x1b\\".to_vec()]
     );
-    let refused = consumer.exchange(b"\x1b_Ga=T,i=91,p=2,c=1,r=1,f=32,s=1,v=1,C=1;/wAA/w==\x1b\\", 1);
+    let refused = consumer.exchange(
+        b"\x1b_Ga=T,i=91,p=2,c=1,r=1,f=32,s=1,v=1,C=1;/wAA/w==\x1b\\",
+        1,
+    );
     assert!(refused[0].starts_with(b"\x1b_Gi=91,p=2;ENOSPC:"));
-    assert!(!consumer.updates.iter().any(|update| matches!(update,
-        GraphicsUpdate::Remove { .. } | GraphicsUpdate::Evicted { .. } | GraphicsUpdate::Resource { .. })));
+    assert!(!consumer.updates.iter().any(|update| matches!(
+        update,
+        GraphicsUpdate::Remove { .. }
+            | GraphicsUpdate::Evicted { .. }
+            | GraphicsUpdate::Resource { .. }
+    )));
     // Replacing an entire two-frame root also needs old plus new capacity;
     // intentional deletion is what actually retires those accepted owners.
     consumer.idle(b"\x1b_Ga=d,d=I,i=91\x1b\\");
@@ -1738,10 +1765,20 @@ fn retention_daemon_complete_frame_limit_preserves_last_accepted_selection() {
 #[test]
 #[ignore = "isolated reduced-budget owner accounting child"]
 fn capacity_owner_fixture() {
-    let Ok(scenario) = std::env::var("LYREL_CAPACITY_OWNER_SCENARIO") else { return; };
+    let Ok(scenario) = std::env::var("LYREL_CAPACITY_OWNER_SCENARIO") else {
+        return;
+    };
     let mut limits = retention::Limits::default();
-    limits.pane_work = if scenario == "sources" { 4096 } else { 64 << 10 };
-    limits.daemon_work = if scenario == "sources" { 8192 } else { 128 << 10 };
+    limits.pane_work = if scenario == "sources" {
+        4096
+    } else {
+        64 << 10
+    };
+    limits.daemon_work = if scenario == "sources" {
+        8192
+    } else {
+        128 << 10
+    };
     if scenario == "handoff" {
         limits.pane_work = 8192;
         limits.daemon_work = 16384;
@@ -1756,6 +1793,12 @@ fn capacity_owner_fixture() {
         limits.pane_decoded = 8;
         limits.daemon_decoded = 12;
     }
+    if scenario == "snapshots" {
+        limits.pane_encoded = 1108;
+        limits.daemon_encoded = 3324 * 3;
+        limits.pane_decoded = 1024;
+        limits.daemon_decoded = 3072;
+    }
     retention::inject_limits(limits);
     if scenario == "snapshots" {
         crate::daemon::protocol::inject_graphics_queue_limit(3840);
@@ -1763,16 +1806,34 @@ fn capacity_owner_fixture() {
     let mut a = GraphicsState::new(size());
     let mut b = GraphicsState::new(size());
     let mut c = GraphicsState::new(size());
-    let raw = |width| Image { width, height: 1, data: vec![255; width as usize * 4], format: WireFormat::Rgba, compressed: false };
+    let raw = |width| Image {
+        width,
+        height: 1,
+        data: vec![255; width as usize * 4],
+        format: WireFormat::Rgba,
+        compressed: false,
+    };
     let prepare = |state: &mut GraphicsState| {
         let control = Control::parse(b"Ga=t,i=1,s=768,v=1").unwrap();
-        GraphicsState::prepare_image(raw(768), state.work_owner(), state.reserve_resource_key(), &control, None)
+        GraphicsState::prepare_image(
+            raw(768),
+            state.work_owner(),
+            state.reserve_resource_key(),
+            &control,
+            None,
+        )
     };
     if scenario == "sources" {
         let first = prepare(&mut a).expect("one live raw source fits");
-        assert!(prepare(&mut a).is_err(), "a pending source still consumes its pane work budget");
+        assert!(
+            prepare(&mut a).is_err(),
+            "a pending source still consumes its pane work budget"
+        );
         let second = prepare(&mut b).expect("another pane has independent work capacity");
-        assert!(prepare(&mut c).is_err(), "pending sources contend for actual aggregate work");
+        assert!(
+            prepare(&mut c).is_err(),
+            "pending sources contend for actual aggregate work"
+        );
         drop(first);
         let third = prepare(&mut c).expect("cancellation returns the source lease immediately");
         drop((second, third));
@@ -1782,60 +1843,150 @@ fn capacity_owner_fixture() {
         a.apply(control, Some(raw(1)));
         b.apply(control, Some(raw(1)));
         let (snapshot, snapshot_work) = a.replay().unwrap();
-        let rejected = a.apply(Control::parse(b"Ga=T,i=1,s=2,v=1,c=1,r=1,C=1").unwrap(), Some(raw(2)));
+        let rejected = a.apply(
+            Control::parse(b"Ga=T,i=1,s=2,v=1,c=1,r=1,C=1").unwrap(),
+            Some(raw(2)),
+        );
         assert!(rejected.iter().any(|effect| matches!(effect, GraphicsEffect::Reply(reply) if String::from_utf8_lossy(reply).contains("ENOSPC:"))), "old plus new owners must fit, including aggregate contention");
-        assert!(!rejected.iter().any(|effect| matches!(effect, GraphicsEffect::Frame(_) | GraphicsEffect::Update(GraphicsUpdate::Remove { .. } | GraphicsUpdate::Evicted { .. }))));
+        assert!(!rejected.iter().any(|effect| matches!(
+            effect,
+            GraphicsEffect::Frame(_)
+                | GraphicsEffect::Update(
+                    GraphicsUpdate::Remove { .. } | GraphicsUpdate::Evicted { .. }
+                )
+        )));
         let (after, after_work) = a.replay().unwrap();
-        let packets = |effects: &[GraphicsEffect]| effects.iter().filter_map(|effect| match effect { GraphicsEffect::Frame(packet) => Some(packet.clone()), _ => None }).collect::<Vec<_>>();
-        assert_eq!(packets(&snapshot), packets(&after), "refusal preserves accepted pixels and snapshots");
+        let packets = |effects: &[GraphicsEffect]| {
+            effects
+                .iter()
+                .filter_map(|effect| match effect {
+                    GraphicsEffect::Frame(packet) => Some(packet.clone()),
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            packets(&snapshot),
+            packets(&after),
+            "refusal preserves accepted pixels and snapshots"
+        );
         drop((snapshot, snapshot_work, after, after_work));
         b.apply(Control::parse(b"Ga=d,d=A").unwrap(), None);
-        assert!(a.apply(Control::parse(b"Ga=T,i=1,s=2,v=1,c=1,r=1,C=1").unwrap(), Some(raw(2))).iter().any(|effect| matches!(effect, GraphicsEffect::Frame(_))), "releasing another pane permits the old/new peak");
+        assert!(
+            a.apply(
+                Control::parse(b"Ga=T,i=1,s=2,v=1,c=1,r=1,C=1").unwrap(),
+                Some(raw(2))
+            )
+            .iter()
+            .any(|effect| matches!(effect, GraphicsEffect::Frame(_))),
+            "releasing another pane permits the old/new peak"
+        );
     } else if scenario == "snapshots" {
         let control = Control::parse(b"Ga=t,i=1,s=256,v=1").unwrap();
         for state in [&mut a, &mut b, &mut c] {
-            assert!(state.apply(control, Some(raw(256))).iter().any(|effect| matches!(effect, GraphicsEffect::Frame(_))));
+            assert!(
+                state
+                    .apply(control, Some(raw(256)))
+                    .iter()
+                    .any(|effect| matches!(effect, GraphicsEffect::Frame(_)))
+            );
         }
-        let (snapshot, snapshot_work) = a.replay().expect("snapshot shares canonical bytes rather than reserving another packet");
-        let (another, another_work) = a.replay().expect("multiple snapshots share one source allocation");
-        a.apply(Control::parse(b"Ga=d,d=A").unwrap(), None);
+        let (snapshot, snapshot_work) = a
+            .replay()
+            .expect("snapshot shares canonical bytes rather than reserving another packet");
+        let (another, another_work) = a
+            .replay()
+            .expect("multiple snapshots share one source allocation");
+        a.apply(Control::parse(b"Ga=d,d=I,i=1").unwrap(), None);
         let rejected = a.apply(control, Some(raw(256)));
         assert!(rejected.iter().any(|effect| matches!(effect, GraphicsEffect::Reply(reply) if String::from_utf8_lossy(reply).contains("ENOSPC:"))), "deleted canonical content still has a live snapshot packet owner");
         drop((snapshot, snapshot_work));
-        assert!(!a.apply(control, Some(raw(256))).iter().any(|effect| matches!(effect, GraphicsEffect::Frame(_))), "the last snapshot, not the first, releases shared bytes");
+        assert!(
+            !a.apply(control, Some(raw(256)))
+                .iter()
+                .any(|effect| matches!(effect, GraphicsEffect::Frame(_))),
+            "the last snapshot, not the first, releases shared bytes"
+        );
         drop((another, another_work));
-        assert!(a.apply(control, Some(raw(256))).iter().any(|effect| matches!(effect, GraphicsEffect::Frame(_))), "last-owner retirement returns packet capacity");
+        assert!(
+            a.apply(control, Some(raw(256)))
+                .iter()
+                .any(|effect| matches!(effect, GraphicsEffect::Frame(_))),
+            "last-owner retirement returns packet capacity"
+        );
     } else if scenario == "history" {
         let control = Control::parse(b"Ga=T,i=1,s=1,v=1,c=1,r=1,C=1").unwrap();
         a.apply(control, Some(raw(1)));
         a.output(&b"\r\n".repeat(40));
-        a.apply(Control::parse(b"Ga=T,i=2,s=1,v=1,c=1,r=1,C=1").unwrap(), Some(raw(1)));
+        a.apply(
+            Control::parse(b"Ga=T,i=2,s=1,v=1,c=1,r=1,C=1").unwrap(),
+            Some(raw(1)),
+        );
         b.apply(control, Some(raw(1)));
         let (before, before_work) = a.replay().unwrap();
         let request = Control::parse(b"Ga=T,i=3,s=2,v=1,c=1,r=1,C=1").unwrap();
         let rejected = a.apply(request, Some(raw(2)));
         assert!(rejected.iter().any(|effect| matches!(effect, GraphicsEffect::Reply(reply) if String::from_utf8_lossy(reply).contains("ENOSPC:"))));
-        assert!(!rejected.iter().any(|effect| matches!(effect, GraphicsEffect::Update(GraphicsUpdate::Evicted { .. } | GraphicsUpdate::Remove { .. }))));
+        assert!(!rejected.iter().any(|effect| matches!(
+            effect,
+            GraphicsEffect::Update(GraphicsUpdate::Evicted { .. } | GraphicsUpdate::Remove { .. })
+        )));
         let (after, after_work) = a.replay().unwrap();
-        let packets = |effects: &[GraphicsEffect]| effects.iter().filter_map(|effect| match effect { GraphicsEffect::Frame(packet) => Some(packet.clone()), _ => None }).collect::<Vec<_>>();
-        assert_eq!(packets(&before), packets(&after), "failed admission must not sacrifice even eligible history");
+        let packets = |effects: &[GraphicsEffect]| {
+            effects
+                .iter()
+                .filter_map(|effect| match effect {
+                    GraphicsEffect::Frame(packet) => Some(packet.clone()),
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            packets(&before),
+            packets(&after),
+            "failed admission must not sacrifice even eligible history"
+        );
         drop((before, before_work, after, after_work));
         b.apply(Control::parse(b"Ga=d,d=A").unwrap(), None);
         let accepted = a.apply(request, Some(raw(2)));
-        assert!(accepted.iter().any(|effect| matches!(effect, GraphicsEffect::Frame(_))));
-        assert_eq!(accepted.iter().filter(|effect| matches!(effect, GraphicsEffect::Update(GraphicsUpdate::Evicted { .. }))).count(), 1, "reclaim eligible nonvisible history, not the protected current frame");
+        assert!(
+            accepted
+                .iter()
+                .any(|effect| matches!(effect, GraphicsEffect::Frame(_)))
+        );
+        assert_eq!(
+            accepted
+                .iter()
+                .filter(|effect| matches!(
+                    effect,
+                    GraphicsEffect::Update(GraphicsUpdate::Evicted { .. })
+                ))
+                .count(),
+            1,
+            "reclaim eligible nonvisible history, not the protected current frame"
+        );
     } else if scenario == "handoff" {
-        use base64::Engine as _;
         use crate::core::kitty_graphics::{Event, GraphicsSniffer};
+        use base64::Engine as _;
         let mut sniffer = GraphicsSniffer::new_budgeted(false, a.work_owner());
         let payload = base64::engine::general_purpose::STANDARD.encode([255; 768]);
         let mut completed = None;
         for index in 0..4 {
-            let header = if index == 0 { "a=t,i=1,f=32,s=768,v=1," } else { "" };
-            let bytes = format!("\x1b_G{header}m={};{payload}\x1b\\", usize::from(index != 3));
+            let header = if index == 0 {
+                "a=t,i=1,f=32,s=768,v=1,"
+            } else {
+                ""
+            };
+            let bytes = format!(
+                "\x1b_G{header}m={};{payload}\x1b\\",
+                usize::from(index != 3)
+            );
             for event in sniffer.feed(bytes.as_bytes(), |_| {}) {
                 match event {
-                    Event::Command { control, image: Some(image) } => completed = Some((control, image)),
+                    Event::Command {
+                        control,
+                        image: Some(image),
+                    } => completed = Some((control, image)),
                     other => panic!("budgeted parser rejected its bounded source: {other:?}"),
                 }
             }
@@ -1843,23 +1994,62 @@ fn capacity_owner_fixture() {
         let pending = prepare(&mut a).unwrap();
         let (control, image) = completed.expect("chunked raw image completes");
         let work = sniffer.take_source_work(image.data.capacity());
-        let prepared = GraphicsState::prepare_image_budgeted(image, a.reserve_resource_key(), &control, None, work)
-            .expect("source handoff must neither lose its lease nor charge the same source twice");
+        let prepared = GraphicsState::prepare_image_budgeted(
+            image,
+            a.reserve_resource_key(),
+            &control,
+            None,
+            work,
+        )
+        .expect("source handoff must neither lose its lease nor charge the same source twice");
         drop((pending, prepared));
         assert!(prepare(&mut a).is_ok());
     } else if scenario == "timeline" {
-        a.apply(Control::parse(b"Ga=T,i=1,s=1,v=1,c=1,r=1,C=1").unwrap(), Some(raw(1)));
-        a.apply(Control::parse(b"Ga=f,i=1,s=1,v=1,z=17").unwrap(), Some(raw(1)));
-        a.apply(Control::parse(b"Ga=a,i=1,s=1,c=2,r=2,z=17,v=8").unwrap(), None);
+        a.apply(
+            Control::parse(b"Ga=T,i=1,s=1,v=1,c=1,r=1,C=1").unwrap(),
+            Some(raw(1)),
+        );
+        a.apply(
+            Control::parse(b"Ga=f,i=1,s=1,v=1,z=17").unwrap(),
+            Some(raw(1)),
+        );
+        a.apply(
+            Control::parse(b"Ga=a,i=1,s=1,c=2,r=2,z=17,v=8").unwrap(),
+            None,
+        );
         let (before, before_work) = a.replay().unwrap();
-        let effects = a.apply(Control::parse(b"Ga=f,i=1,r=2,X=1,s=1,v=1,z=99").unwrap(), Some(raw(1)));
+        let effects = a.apply(
+            Control::parse(b"Ga=f,i=1,r=2,X=1,s=1,v=1,z=99").unwrap(),
+            Some(raw(1)),
+        );
         assert!(effects.iter().any(|effect| matches!(effect, GraphicsEffect::Reply(reply) if String::from_utf8_lossy(reply).contains("ENOSPC:"))));
-        assert!(!effects.iter().any(|effect| matches!(effect, GraphicsEffect::Frame(_) | GraphicsEffect::Update(GraphicsUpdate::Select { .. } | GraphicsUpdate::Playback(_) | GraphicsUpdate::Remove { .. } | GraphicsUpdate::Evicted { .. }))));
+        assert!(!effects.iter().any(|effect| matches!(
+            effect,
+            GraphicsEffect::Frame(_)
+                | GraphicsEffect::Update(
+                    GraphicsUpdate::Select { .. }
+                        | GraphicsUpdate::Playback(_)
+                        | GraphicsUpdate::Remove { .. }
+                        | GraphicsUpdate::Evicted { .. }
+                )
+        )));
         let (after, after_work) = a.replay().unwrap();
-        let timeline = |effects: &[GraphicsEffect]| effects.iter().filter_map(|effect| match effect {
-            GraphicsEffect::Update(update @ (GraphicsUpdate::Playback(_) | GraphicsUpdate::Select { .. })) => Some(update.clone()), _ => None,
-        }).collect::<Vec<_>>();
-        assert_eq!(timeline(&before), timeline(&after), "failed edit cannot change accepted selection, frame gap or loop count");
+        let timeline = |effects: &[GraphicsEffect]| {
+            effects
+                .iter()
+                .filter_map(|effect| match effect {
+                    GraphicsEffect::Update(
+                        update @ (GraphicsUpdate::Playback(_) | GraphicsUpdate::Select { .. }),
+                    ) => Some(update.clone()),
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            timeline(&before),
+            timeline(&after),
+            "failed edit cannot change accepted selection, frame gap or loop count"
+        );
         assert!(timeline(&after).iter().any(|update| matches!(update, GraphicsUpdate::Playback(playback) if playback.remaining_ms == 17 && playback.loops == 7)));
         drop((before, before_work, after, after_work));
     } else {
@@ -1879,10 +2069,21 @@ fn retention_replacement_peak_refusal_keeps_accepted_content_and_snapshot() {
 
 fn run_capacity_owner_fixture(scenario: &str) {
     let status = std::process::Command::new(std::env::current_exe().unwrap())
-        .args(["--ignored", "--exact", "core::graphics_state::retention_tests::capacity_owner_fixture", "--nocapture", "--test-threads=1", "--"])
+        .args([
+            "--ignored",
+            "--exact",
+            "core::graphics_state::retention_tests::capacity_owner_fixture",
+            "--nocapture",
+            "--test-threads=1",
+            "--",
+        ])
         .env("LYREL_CAPACITY_OWNER_SCENARIO", scenario)
-        .status().unwrap();
-    assert!(status.success(), "isolated capacity owner scenario {scenario} failed: {status}");
+        .status()
+        .unwrap();
+    assert!(
+        status.success(),
+        "isolated capacity owner scenario {scenario} failed: {status}"
+    );
 }
 
 #[test]
@@ -1912,16 +2113,28 @@ fn retention_daemon_two_visible_panes_retain_and_replay_sixty_distinct_1080p_fra
     use std::io::Write as _;
 
     fn checksum(bytes: &[u8]) -> u64 {
-        bytes.iter().fold(0xcbf29ce484222325, |hash, byte| (hash ^ u64::from(*byte)).wrapping_mul(0x100000001b3))
+        bytes.iter().fold(0xcbf29ce484222325, |hash, byte| {
+            (hash ^ u64::from(*byte)).wrapping_mul(0x100000001b3)
+        })
     }
-    fn send_frame(consumer: &mut Consumer, path: &std::path::Path, seed: u32, control: &str) -> (u64, u64) {
+    fn send_frame(
+        consumer: &mut Consumer,
+        path: &std::path::Path,
+        seed: u32,
+        control: &str,
+    ) -> (u64, u64) {
         let mut random = seed;
         let mut pixels = Vec::with_capacity(1920 * 1080 * 4);
         for _ in 0..1920 * 1080 {
             random ^= random << 13;
             random ^= random >> 17;
             random ^= random << 5;
-            pixels.extend_from_slice(&[random as u8, (random >> 8) as u8, (random >> 16) as u8, 255]);
+            pixels.extend_from_slice(&[
+                random as u8,
+                (random >> 8) as u8,
+                (random >> 16) as u8,
+                255,
+            ]);
         }
         let expected = checksum(&pixels);
         let mut file = std::io::BufWriter::new(std::fs::File::create(path).unwrap());
@@ -1930,18 +2143,47 @@ fn retention_daemon_two_visible_panes_retain_and_replay_sixty_distinct_1080p_fra
         for (index, chunk) in chunks.enumerate() {
             let header = if index == 0 { control } else { "" };
             let more = usize::from(index + 1 != count);
-            write!(file, "\x1b_G{header}m={more};{}\x1b\\", base64::engine::general_purpose::STANDARD.encode(chunk)).unwrap();
+            write!(
+                file,
+                "\x1b_G{header}m={more};{}\x1b\\",
+                base64::engine::general_purpose::STANDARD.encode(chunk)
+            )
+            .unwrap();
         }
         file.flush().unwrap();
         drop((file, pixels));
         consumer.serial += 1;
         consumer.updates.clear();
         consumer.text.clear();
-        consumer.session.input(format!("FILE_SEND {} 1 {} 65521\n", consumer.serial, fixture::hex(path.to_str().unwrap().as_bytes())).as_bytes()).unwrap();
-        assert_eq!(consumer.finish_exchange(control.as_bytes()), [b"\x1b_Gi=146;OK\x1b\\".to_vec()]);
-        let (key, image) = consumer.updates.iter().find_map(|update| match update {
-            GraphicsUpdate::Resource { key, image } => Some((*key, image)), _ => None,
-        }).expect("full-size source traverses the actual PTY and daemon consumer stream");
+        consumer
+            .session
+            .input(
+                format!(
+                    "FILE_SEND {} 1 {} 65521\n",
+                    consumer.serial,
+                    fixture::hex(path.to_str().unwrap().as_bytes())
+                )
+                .as_bytes(),
+            )
+            .unwrap();
+        let reply = consumer.finish_exchange(control.as_bytes());
+        if reply != [b"\x1b_Gi=146;OK\x1b\\".to_vec()] {
+            panic!(
+                "[DEBUG-139-fullsize] frame {}: {:?}; graphics={:?}",
+                consumer.serial,
+                String::from_utf8_lossy(&reply.concat()),
+                consumer.updates
+            );
+        }
+        assert_eq!(reply, [b"\x1b_Gi=146;OK\x1b\\".to_vec()]);
+        let (key, image) = consumer
+            .updates
+            .iter()
+            .find_map(|update| match update {
+                GraphicsUpdate::Resource { key, image } => Some((*key, image)),
+                _ => None,
+            })
+            .expect("full-size source traverses the actual PTY and daemon consumer stream");
         assert_eq!((image.width, image.height), (1920, 1080));
         assert_eq!(checksum(&image.data), expected);
         (key, expected)
@@ -1959,24 +2201,49 @@ fn retention_daemon_two_visible_panes_retain_and_replay_sixty_distinct_1080p_fra
             } else {
                 "a=f,i=146,f=32,s=1920,v=1080,z=17,"
             };
-            let (key, hash) = send_frame(consumer, &path, 0x14600000 + pane as u32 * 1000 + number, control);
+            let (key, hash) = send_frame(
+                consumer,
+                &path,
+                0x14600000 + pane as u32 * 1000 + number,
+                control,
+            );
             assert!(expected[pane].insert(key, hash).is_none());
         }
     }
     for (pane, consumer) in consumers.iter_mut().enumerate() {
-        let (key, hash) = send_frame(consumer, &path, 0x14610000 + pane as u32, "a=f,i=146,r=30,X=1,f=32,s=1920,v=1080,z=17,");
-        let old = consumer.updates.iter().find_map(|update| match update {
-            GraphicsUpdate::Remove { resources, .. } => resources.first().copied(), _ => None,
-        }).expect("full-size replacement retires one immutable version");
+        let (key, hash) = send_frame(
+            consumer,
+            &path,
+            0x14610000 + pane as u32,
+            "a=f,i=146,r=30,X=1,f=32,s=1920,v=1080,z=17,",
+        );
+        let old = consumer
+            .updates
+            .iter()
+            .find_map(|update| match update {
+                GraphicsUpdate::Remove { resources, .. } => resources.first().copied(),
+                _ => None,
+            })
+            .expect("full-size replacement retires one immutable version");
         assert!(expected[pane].remove(&old).is_some());
         expected[pane].insert(key, hash);
-        assert_eq!(consumer.exchange(b"\x1b_Ga=a,i=146,s=1,c=60,r=60,z=17,v=4\x1b\\input_remains_responsive", 1), [b"\x1b_Gi=146;OK\x1b\\".to_vec()]);
+        assert_eq!(
+            consumer.exchange(
+                b"\x1b_Ga=a,i=146,s=1,c=60,r=60,z=17,v=4\x1b\\input_remains_responsive",
+                1
+            ),
+            [b"\x1b_Gi=146;OK\x1b\\".to_vec()]
+        );
         consumer.updates.clear();
         let pane_id = consumer.session.pane_id();
         let mut replay = daemon.panes().attach(pane_id, size()).unwrap();
-        replay.set_recv_timeout(Some(Duration::from_secs(60))).unwrap();
+        replay
+            .set_recv_timeout(Some(Duration::from_secs(60)))
+            .unwrap();
         let serial = 10000 + pane;
-        replay.input(format!("SEND {serial} 0 00 0\n").as_bytes()).unwrap();
+        replay
+            .input(format!("SEND {serial} 0 00 0\n").as_bytes())
+            .unwrap();
         let marker = format!("KITTY_DONE_{serial};\r");
         let mut text = Vec::new();
         let mut observed = BTreeMap::new();
@@ -1985,29 +2252,41 @@ fn retention_daemon_two_visible_panes_retain_and_replay_sixty_distinct_1080p_fra
         let mut playback = false;
         loop {
             match replay.recv().unwrap() {
-                DaemonMsg::Graphics(packet) => match GraphicsUpdate::decode_frame_owned(packet.into_vec()).unwrap() {
-                    GraphicsUpdate::Resource { key, image } => {
-                        assert_eq!((image.width, image.height), (1920, 1080));
-                        assert!(observed.insert(key, checksum(&image.data)).is_none());
+                DaemonMsg::Graphics(packet) => {
+                    match GraphicsUpdate::decode_frame_owned(packet.into_vec()).unwrap() {
+                        GraphicsUpdate::Resource { key, image } => {
+                            assert_eq!((image.width, image.height), (1920, 1080));
+                            assert!(observed.insert(key, checksum(&image.data)).is_none());
+                        }
+                        GraphicsUpdate::Frame { .. } => frames += 1,
+                        GraphicsUpdate::Place(_) => placement = true,
+                        GraphicsUpdate::Playback(state) => {
+                            assert_eq!((state.state, state.loops, state.remaining_ms), (1, 3, 17));
+                            playback = true;
+                        }
+                        GraphicsUpdate::Evicted { .. } => {
+                            panic!("accepted visible animation lost retained pixels")
+                        }
+                        _ => {}
                     }
-                    GraphicsUpdate::Frame { .. } => frames += 1,
-                    GraphicsUpdate::Place(_) => placement = true,
-                    GraphicsUpdate::Playback(state) => {
-                        assert_eq!((state.state, state.loops, state.remaining_ms), (1, 3, 17));
-                        playback = true;
-                    }
-                    GraphicsUpdate::Evicted { .. } => panic!("accepted visible animation lost retained pixels"),
-                    _ => {}
-                },
+                }
                 DaemonMsg::Snapshot(bytes) | DaemonMsg::Output(bytes) => {
                     text.extend(bytes);
-                    if text.windows(marker.len()).any(|part| part == marker.as_bytes()) { break; }
+                    if text
+                        .windows(marker.len())
+                        .any(|part| part == marker.as_bytes())
+                    {
+                        break;
+                    }
                 }
                 DaemonMsg::Error(error) => panic!("full-size replay rejected: {error}"),
                 _ => {}
             }
         }
-        assert_eq!(observed, expected[pane], "fresh consumer receives every distinct accepted full-size frame");
+        assert_eq!(
+            observed, expected[pane],
+            "fresh consumer receives every distinct accepted full-size frame"
+        );
         assert_eq!(observed.len(), 60);
         assert_eq!(frames, 59);
         assert!(placement && playback);

@@ -11,18 +11,23 @@ test('native source identities collapse other-pane compositor updates without ca
   assert.equal(result.duplicateCaptureSamples, 1);
   assert.equal(result.pictureChanges, 3);
   assert.equal(result.missingSourceFramesLowerBound, 0);
-  assert.deepEqual(result.changeIntervalsMs, { samples: 3, p50: 17, p95: 17, max: 17 });
+  assert.equal(result.changeIntervalsMs.samples, 3);
+  for (const key of ['p50', 'p95', 'max']) {
+    assert.ok(Math.abs(result.changeIntervalsMs[key] - 17) < 1e-9);
+  }
   assert.deepEqual(result.prolongedHolds, []);
-  assert.equal(result.pictureChangesPerSecond, 60);
+  assert.ok(Math.abs(result.pictureChangesPerSecond - 60) < 1e-9);
 });
 
 test('capture reports skipped source IDs and prolonged picture holds including wraparound', () => {
   const result = analyzeCapture(capture([[0, 58], [17, 59], [50, 1], [100, 2]]), 240);
   assert.equal(result.missingSourceFramesLowerBound, 1);
-  assert.deepEqual(result.prolongedHolds, [
-    { frame: 59, intervalMs: 33, expectedMs: 16 },
-    { frame: 1, intervalMs: 50, expectedMs: 17 },
+  assert.deepEqual(result.prolongedHolds.map(({ intervalMs, ...hold }) => hold), [
+    { frame: 59, expectedMs: 16 },
+    { frame: 1, expectedMs: 17 },
   ]);
+  assert.ok(Math.abs(result.prolongedHolds[0].intervalMs - 33) < 1e-9);
+  assert.ok(Math.abs(result.prolongedHolds[1].intervalMs - 50) < 1e-9);
 });
 
 test('invalid barcode, packet size, missing timebase and reordered timestamps fail closed', () => {
