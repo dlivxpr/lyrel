@@ -20,12 +20,10 @@
 //!
 //! - Direct (`t=d`, base64 inline) is always honored — it is the only medium
 //!   that survives lyrel's socket + SSH topology.
-//! - File (`t=f`/`t=t`) and shared memory (`t=s`) are honored only on a *local*
-//!   unix pane, where the name resolves on this host and the daemon can read it
-//!   without anything crossing a tunnel. Everywhere else — a remote pane, or a
-//!   non-unix host where [`MediumTransfer::resolve`] can't do the work — the
-//!   probe is answered *unsupported* so a sender like `terminal-browser` falls
-//!   back to `t=d` on its own rather than transmitting into a black hole.
+//! - File (`t=f`/`t=t`) and shared memory (`t=s`) require fresh proof that
+//!   the sender shares the responsible Windows/Unix daemon's host namespace.
+//!   Remote, nested SSH/WSL and unknown contexts are unsupported, never read
+//!   against desktop names; direct transfer remains available.
 //!
 //! Protocol reference: <https://sw.kovidgoyal.net/kitty/graphics-protocol/>
 
@@ -425,6 +423,21 @@ impl GraphicsSniffer {
         }
     }
 
+    /// Move the completed source's existing reservation to its prepared owner.
+    /// Other completed commands and partial transfers retain their own charge.
+    pub(crate) fn take_source_work(
+        &mut self,
+        capacity: usize,
+    ) -> super::graphics_state::retention::Work {
+        assert!(capacity <= self.parser.completed_bytes);
+        self.parser.completed_bytes -= capacity;
+        self.parser
+            .work
+            .as_mut()
+            .expect("completed source owns transfer work")
+            .split(capacity)
+    }
+
     /// Cache this PTY read's locality and irreversibly taint pending indirect
     /// data on remote/unknown reads. A later local read cannot promote it.
     pub fn set_local(&mut self, local: bool) {
@@ -586,8 +599,7 @@ pub enum Sniffed<'a> {
     Segments(Vec<Segment>),
 }
 
-/// The kitty action key (`a=`). Only the variants lyrel acts on are named; the
-/// rest of the protocol (frames, animation, compose) folds into `Other`.
+/// The published kitty action key (`a=`); unsupported operations remain explicit.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Action {
     /// `a=q` — query whether a transmission would succeed. We must reply.
@@ -600,6 +612,12 @@ pub enum Action {
     Display,
     /// `a=d` — delete image(s)/placement(s).
     Delete,
+    /// `a=f` — append a frame or edit a retained frame rectangle.
+    Frame,
+    /// `a=a` — stopped/manual frame selection.
+    Animation,
+    /// `a=c` — compose retained frame rectangles.
+    Compose,
     /// Any action we don't specifically handle.
     Other,
 }
@@ -673,6 +691,10 @@ pub struct Control {
     pub no_move: bool,
     /// `U=1` creates an invisible prototype referenced by Unicode grid cells.
     pub virtual_placement: bool,
+    pub parent_image: u32,
+    pub parent_placement: u32,
+    pub relative_x: i32,
+    pub relative_y: i32,
     pub invalid: bool,
     pub unsupported: bool,
 }
@@ -706,6 +728,10 @@ impl Default for Control {
             z: 0,
             no_move: false,
             virtual_placement: false,
+            parent_image: 0,
+            parent_placement: 0,
+            relative_x: 0,
+            relative_y: 0,
             invalid: false,
             unsupported: false,
         }
@@ -743,13 +769,16 @@ impl Control {
                         b"T" => Action::TransmitAndDisplay,
                         b"p" => Action::Display,
                         b"d" => Action::Delete,
+                        b"f" => Action::Frame,
+                        b"a" => Action::Animation,
+                        b"c" => Action::Compose,
                         _ => Action::Other,
                     }
                 }
                 b"f" => {
                     c.format = match val {
                         b"24" => WireFormat::Rgb,
-                        b"32" => WireFormat::Rgba,
+                        b"0" | b"32" => WireFormat::Rgba,
                         b"100" => WireFormat::Png,
                         _ => {
                             c.unsupported = true;
@@ -817,7 +846,16 @@ impl Control {
                     c.virtual_placement = val == b"1";
                     c.invalid |= val != b"0" && val != b"1";
                 }
-                b"P" | b"Q" | b"H" | b"V" => c.unsupported |= val != b"0",
+                b"P" => c.parent_image = num(),
+                b"Q" => c.parent_placement = num(),
+                b"H" | b"V" => match std::str::from_utf8(val)
+                    .ok()
+                    .and_then(|s| s.parse::<i32>().ok())
+                {
+                    Some(offset) if key == b"H" => c.relative_x = offset,
+                    Some(offset) => c.relative_y = offset,
+                    None => c.invalid = true,
+                },
                 _ => {} // unknown key: ignore
             }
             if matches!(
@@ -837,6 +875,8 @@ impl Control {
                     | b"O"
                     | b"S"
                     | b"q"
+                    | b"P"
+                    | b"Q"
             ) && std::str::from_utf8(val)
                 .ok()
                 .and_then(|s| s.parse::<u32>().ok())
@@ -978,6 +1018,13 @@ impl Image {
     }
 }
 
+#[cfg(unix)]
+#[path = "kitty_media_unix_temp.rs"]
+mod unix_temp;
+#[cfg(windows)]
+#[path = "kitty_media_windows.rs"]
+mod windows_media;
+
 impl MediumTransfer {
     /// Resolve the referenced bytes by reading the file or POSIX shm object,
     /// then unlinking an eligible temporary file or consumed shm object. Plain
@@ -987,7 +1034,6 @@ impl MediumTransfer {
     ///
     /// The result keeps the sender's wire format and compression flag; image
     /// validation and desktop decoding still use the ordinary bounded path.
-    #[cfg(unix)]
     pub fn resolve(&self) -> Option<Image> {
         let data = match self.medium {
             Medium::Shared => self.read_shared()?,
@@ -1004,33 +1050,22 @@ impl MediumTransfer {
         })
     }
 
-    #[cfg(not(unix))]
-    pub fn resolve(&self) -> Option<Image> {
-        None
-    }
-
-    #[cfg(unix)]
     fn bounded_region(&self, object_len: u64) -> Option<std::ops::Range<usize>> {
-        if object_len > MAX_IMAGE_BYTES as u64 {
-            return None;
-        }
-        let start = self.offset as usize;
-        let available = (object_len as usize).checked_sub(start)?;
+        let start = u64::from(self.offset);
+        let available = object_len.checked_sub(start)?;
         let len = if self.size == 0 {
             available
         } else {
-            let len = self.size as usize;
-            if len > available {
-                return None;
-            }
-            len
+            u64::from(self.size)
         };
-        Some(start..start + len)
+        if len > available || len > MAX_IMAGE_BYTES as u64 {
+            return None;
+        }
+        Some(usize::try_from(start).ok()?..usize::try_from(start.checked_add(len)?).ok()?)
     }
 
     /// Read only the requested bounded region. Descriptor reads, unlike mmap,
     /// fail safely if an untrusted sender truncates an object concurrently.
-    #[cfg(unix)]
     fn read_region(&self, mut file: std::fs::File) -> Option<Vec<u8>> {
         use std::io::{Read as _, Seek as _, SeekFrom};
         let meta = file.metadata().ok()?;
@@ -1048,35 +1083,25 @@ impl MediumTransfer {
     fn read_file(&self) -> Option<Vec<u8>> {
         use std::os::unix::ffi::OsStringExt;
         use std::os::unix::fs::OpenOptionsExt as _;
-        let path = std::path::PathBuf::from(std::ffi::OsString::from_vec(self.name.clone()));
-
-        // Read through a bounded reader, not `fs::read`. The name is attacker
-        // -reachable (any program that can write to the pty picks it), and
-        // `fs::read` on `/dev/zero` never returns — on the daemon *reader*
-        // thread, which would wedge the pane's whole output path. Refusing
-        // anything that isn't a regular file also keeps us off fifos and
-        // devices, where the open itself can block.
-        let meta = std::fs::metadata(&path).ok()?;
-        if !meta.is_file() {
+        let named = std::path::PathBuf::from(std::ffi::OsString::from_vec(self.name.clone()));
+        // Follow symlinks as specified, then reject sensitive/special targets
+        // before an open with possible device side effects.
+        let path = named.canonicalize().ok()?;
+        if ["/proc", "/sys", "/dev"]
+            .iter()
+            .any(|root| path.starts_with(root))
+            && !path.starts_with("/dev/shm")
+        {
             return None;
         }
-        // A path can change after metadata: nonblocking open plus a second
-        // descriptor-based check also closes the FIFO replacement race.
+        if !std::fs::metadata(&path).ok()?.is_file() {
+            return None;
+        }
         let file = std::fs::OpenOptions::new()
             .read(true)
-            .custom_flags(libc::O_NONBLOCK)
+            .custom_flags(libc::O_NONBLOCK | libc::O_NOFOLLOW)
             .open(&path)
             .ok()?;
-        let out = self.read_region(file)?;
-        // A temp file is the sender's one-shot handoff: remove it after reading
-        // so the browser's per-frame temp files don't pile up. A named `t=f`
-        // file is the sender's to manage; leave it.
-        //
-        // Only unlink inside a known temp directory. `name` is an arbitrary path
-        // out of an escape sequence — `cat`ing a hostile file is enough to send
-        // one — so an unqualified `remove_file` here would delete anything the
-        // user can, `~/.ssh/id_ed25519` included. The spec requires this check
-        // for exactly that reason.
         if self.medium == Medium::TempFile
             && path_is_in_temp_dir(&path)
             && path
@@ -1085,14 +1110,15 @@ impl MediumTransfer {
                 .windows(b"tty-graphics-protocol".len())
                 .any(|part| part == b"tty-graphics-protocol")
         {
-            let _ = std::fs::remove_file(&path);
+            return unix_temp::read_handoff(self, &path, file);
         }
-        Some(out)
+        self.read_region(file)
     }
 
     /// Darwin shm descriptors have no read operation or regular-file mode.
-    /// Unlike Linux/files, XNU permits only the initial ftruncate for a shm
-    /// object, so its checked size cannot shrink underneath this mapping.
+    /// XNU permits only the initial ftruncate and reports its length rounded up
+    /// to the VM page size, so that stable kernel-owned size cannot shrink
+    /// underneath this mapping.
     #[cfg(target_os = "macos")]
     fn read_shared_mapped(&self, file: std::fs::File) -> Option<Vec<u8>> {
         use std::os::fd::AsRawFd as _;
@@ -1100,9 +1126,14 @@ impl MediumTransfer {
         if region.is_empty() {
             return Some(Vec::new());
         }
-        // Map from zero so arbitrary byte offsets do not need page alignment.
-        // Both this prefix and the owned copy stay within MAX_IMAGE_BYTES;
-        // the parser reserves their combined peak before resolving the name.
+        // Align down, never map an attacker-selected prefix before O.
+        let page = usize::try_from(unsafe { libc::sysconf(libc::_SC_PAGESIZE) }).ok()?;
+        if page == 0 || page > 65536 {
+            return None;
+        }
+        let base = region.start / page * page;
+        let displacement = region.start - base;
+        let extent = displacement.checked_add(region.len())?;
         let mut out = Vec::with_capacity(region.len());
         // SAFETY: file comes only from shm_open; the kernel keeps the allocated
         // object alive through this descriptor and rejects subsequent truncates
@@ -1110,11 +1141,11 @@ impl MediumTransfer {
         let mapped = unsafe {
             libc::mmap(
                 std::ptr::null_mut(),
-                region.end,
+                extent,
                 libc::PROT_READ,
                 libc::MAP_SHARED,
                 file.as_raw_fd(),
-                0,
+                libc::off_t::try_from(base).ok()?,
             )
         };
         if mapped == libc::MAP_FAILED {
@@ -1125,12 +1156,12 @@ impl MediumTransfer {
         // overlap. No fallible operation occurs before releasing the mapping.
         unsafe {
             std::ptr::copy_nonoverlapping(
-                mapped.cast::<u8>().add(region.start),
+                mapped.cast::<u8>().add(displacement),
                 out.as_mut_ptr(),
                 region.len(),
             );
             out.set_len(region.len());
-            libc::munmap(mapped, region.end);
+            libc::munmap(mapped, extent);
         }
         Some(out)
     }
@@ -1166,6 +1197,26 @@ impl MediumTransfer {
             libc::shm_unlink(cname.as_ptr());
             out
         }
+    }
+
+    #[cfg(windows)]
+    fn read_file(&self) -> Option<Vec<u8>> {
+        windows_media::read_file(self)
+    }
+
+    #[cfg(windows)]
+    fn read_shared(&self) -> Option<Vec<u8>> {
+        windows_media::read_shared(self)
+    }
+
+    #[cfg(not(any(unix, windows)))]
+    fn read_file(&self) -> Option<Vec<u8>> {
+        None
+    }
+
+    #[cfg(not(any(unix, windows)))]
+    fn read_shared(&self) -> Option<Vec<u8>> {
+        None
     }
 }
 
@@ -1220,7 +1271,7 @@ pub enum Event {
 
 /// A file/shm transmission the daemon must resolve into pixels. The `name` is
 /// the (base64-decoded) payload the sender put after the `;`: a filesystem path
-/// for [`Medium::File`]/[`Medium::TempFile`], or a POSIX shm object name for
+/// for [`Medium::File`]/[`Medium::TempFile`], or a platform shm object name for
 /// [`Medium::Shared`]. `offset`/`size` bound the region to read (`size == 0`
 /// means "to end of object"). All the metadata needed to build the final
 /// [`Image`] rides along so the daemon does no parsing of its own.
@@ -1327,9 +1378,13 @@ impl GraphicsParser {
         if self.pending.is_some() {
             let header = command.split(|b| *b == b';').next().unwrap_or(command);
             let header = header.strip_prefix(b"G").unwrap_or(header);
-            let continuation = header
-                .split(|b| *b == b',')
-                .all(|pair| pair.starts_with(b"m=") || pair.starts_with(b"q=") || pair.is_empty());
+            let continuation = header.split(|b| *b == b',').all(|pair| {
+                pair.starts_with(b"m=")
+                    || pair.starts_with(b"q=")
+                    || pair.is_empty()
+                    || (pair == b"a=f"
+                        && self.pending.as_ref().unwrap().control.action == Action::Frame)
+            });
             if continuation {
                 // Kitty keeps the first chunk's quiet unless a later chunk
                 // supplies a nonzero override; an explicit q=0 is not a reset.
@@ -1356,10 +1411,10 @@ impl GraphicsParser {
             return response(&control, control.id, status).map(Event::Reply);
         }
         match control.action {
-            Action::Transmit | Action::TransmitAndDisplay | Action::Query => {
+            Action::Transmit | Action::TransmitAndDisplay | Action::Query | Action::Frame => {
                 self.accept_chunk(control, data, locality)
             }
-            Action::Display | Action::Delete => {
+            Action::Display | Action::Delete | Action::Animation | Action::Compose => {
                 if !data.is_empty() || control.more {
                     response(&control, control.id, "EINVAL:Unexpected placement payload")
                         .map(Event::Reply)
@@ -1383,7 +1438,7 @@ impl GraphicsParser {
         let first = self.pending.as_ref().map_or(control, |p| p.control);
         let fail = |status| response(&first, first.id, status).map(Event::Reply);
         if first.medium != Medium::Direct
-            && (!cfg!(unix)
+            && (!cfg!(any(unix, windows))
                 || self.pending.as_ref().is_some_and(|pending| !pending.local)
                 || locality() != Some(true))
         {
@@ -1476,7 +1531,18 @@ impl GraphicsParser {
             .unwrap()
             .resize(self.completed_bytes + pending.data.capacity());
         pending.data.resize(required, 0);
-        let decoded = BASE64.decode_slice(data, &mut pending.data[start..]);
+        // Intermediate chunks must be complete padded quanta. Only the final
+        // chunk can omit padding, and trailing nonzero bits remain invalid.
+        let final_base64 = base64::engine::GeneralPurpose::new(
+            &base64::alphabet::STANDARD,
+            base64::engine::general_purpose::GeneralPurposeConfig::new()
+                .with_decode_padding_mode(base64::engine::DecodePaddingMode::Indifferent),
+        );
+        let decoded = if control.more {
+            BASE64.decode_slice(data, &mut pending.data[start..])
+        } else {
+            final_base64.decode_slice(data, &mut pending.data[start..])
+        };
         let Ok(decoded) = decoded else {
             self.cancel_pending();
             return fail("EINVAL:Invalid base64 payload");
@@ -1489,8 +1555,11 @@ impl GraphicsParser {
         let retained = self.pending.as_ref().map_or(0, |p| p.data.capacity());
         let resolved = match first.medium {
             Medium::Direct => 0,
-            // Darwin needs a bounded shm map plus the owned wire-byte copy.
-            Medium::Shared if cfg!(target_os = "macos") => 2 * MAX_IMAGE_BYTES,
+            // Shared maps and their owned copy coexist. The extra 64 KiB
+            // covers alignment and page rounding, independently of O.
+            Medium::Shared if cfg!(any(target_os = "macos", windows)) => {
+                2 * MAX_IMAGE_BYTES + 65536
+            }
             _ => MAX_IMAGE_BYTES,
         };
         if !self
@@ -1501,6 +1570,10 @@ impl GraphicsParser {
         {
             self.cancel_pending();
             return fail("ENOSPC:Graphics transfer budget exhausted");
+        }
+        if first.medium != Medium::Direct && locality() != Some(true) {
+            self.cancel_pending();
+            return fail("ENOTSUPPORTED:Host-local transfer unavailable");
         }
         let Pending { control, data, .. } = self.pending.take()?;
         let event = self.finalize(control, data);
@@ -1792,6 +1865,68 @@ mod tests {
         };
         assert_eq!(exact.take_rgba8().unwrap(), [1, 2, 3, 4]);
         assert!(exact.data.is_empty());
+    }
+
+    #[test]
+    fn indirect_regions_bound_requested_bytes_not_container_size() {
+        let transfer = MediumTransfer {
+            medium: Medium::File,
+            name: Vec::new(),
+            offset: 100_000_003,
+            size: 4,
+            width: 1,
+            height: 1,
+            format: WireFormat::Rgba,
+            compressed: false,
+        };
+        assert_eq!(
+            transfer.bounded_region(200_000_000),
+            Some(100_000_003..100_000_007)
+        );
+        assert_eq!(transfer.bounded_region(100_000_006), None);
+        let mut rest = transfer.clone();
+        rest.size = 0;
+        assert_eq!(
+            rest.bounded_region(100_000_007),
+            Some(100_000_003..100_000_007)
+        );
+        assert_eq!(rest.bounded_region(200_000_000), None);
+        rest.offset = u32::MAX;
+        rest.size = 4;
+        assert_eq!(
+            rest.bounded_region(u64::from(u32::MAX) + 4),
+            Some(u32::MAX as usize..u32::MAX as usize + 4)
+        );
+    }
+
+    #[test]
+    fn locality_revoked_between_admission_and_io_never_reads_or_deletes_temp() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("tty-graphics-protocol-locality.rgba");
+        std::fs::write(&path, [1, 2, 3, 4]).unwrap();
+        let command = format!(
+            "Ga=q,i=145,t=t,f=32,s=1,v=1,S=4;{}",
+            BASE64.encode(path.to_str().unwrap())
+        );
+        for revoked in [Some(false), None] {
+            let mut parser = GraphicsParser::new_local(true);
+            let mut proofs = 0;
+            let result = parser.feed_with_locality(command.as_bytes(), &mut || {
+                proofs += 1;
+                if proofs == 1 { Some(true) } else { revoked }
+            });
+            assert_eq!(
+                result,
+                Some(Event::Reply(
+                    b"\x1b_Gi=145;ENOTSUPPORTED:Host-local transfer unavailable\x1b\\".to_vec()
+                ))
+            );
+            assert_eq!(std::fs::read(&path).unwrap(), [1, 2, 3, 4]);
+            assert!(matches!(
+                parser.feed(b"Ga=q,i=146,f=32,s=1,v=1;/wAA/w=="),
+                Some(Event::Command { image: Some(_), .. })
+            ));
+        }
     }
 
     #[test]

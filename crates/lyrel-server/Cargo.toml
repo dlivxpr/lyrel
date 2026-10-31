@@ -26,6 +26,10 @@ lyrel-core = { path = "../lyrel-core" }
 # Sandboxes for the suite: an empty directory per case, removed on drop. The
 # server is on this machine, so a local temp dir is a path in its namespace.
 tempfile = "3"
+# Native SSH acceptance writes standard desktop configuration and an owned
+# request/response manifest. These remain test-only dependencies.
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
 # `tests/daemon_stop.rs` probes and, on failure, kills the daemon it spawned;
 # a pid needs `kill(2)`, which `Child` cannot express once ownership has moved
 # to the thread collecting the exit.

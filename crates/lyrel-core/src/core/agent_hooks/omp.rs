@@ -37,7 +37,12 @@ pub(super) fn extension_path(target: &HookTarget) -> std::io::Result<std::path::
 
 pub(super) fn extension(target: &HookTarget) -> Option<String> {
     let exe = serde_json::to_string(&target.exe.display().to_string()).ok()?;
-    Some(include_str!("omp.ts").replace("__EXE__", &exe))
+    let scope = serde_json::to_string(crate::host::session_operations::OMP_SCOPE_ENV).ok()?;
+    Some(
+        include_str!("omp.ts")
+            .replace("__SCOPE_ENV__", &scope)
+            .replace("__EXE__", &exe),
+    )
 }
 
 /// OMP 18.12.1 extension finality, not Pi's agent_settled contract.

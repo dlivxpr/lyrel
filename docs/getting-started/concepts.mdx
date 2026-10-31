@@ -83,7 +83,7 @@ Unix 的 `daemon/pane/lifecycle/inherited.rs` 沿用 exec 继承的 descriptor�
 保持流内顺序、容量限制及慢接收者的背压；`subscriptions/layout.rs` 负责有界机器通知转发，落后超过原有 1024 条队列时，
 丢弃已过时的 backlog 并发送 `LayoutResync`，不另建 publication authority。这些 owner 不增加锁、输出消费者或第二份连接身份。
 Unix 的 socket 路径、私有权限、残留端点探测与监听属于 `host/server/unix.rs`；Windows 的认证 loopback TCP、
-`control.port` 与存活探测属于 `host/server/windows.rs`。现有公共入口直接暴露真实实现，协议仍为 CONTROL 16／PANE 15，
+`control.port` 与存活探测属于 `host/server/windows.rs`。现有公共入口直接暴露真实实现，当前协议为 CONTROL 16／PANE 17，
 协商、错误分类及断开前输出语义不变；Windows TCP、Unix socket、stdio 和真实 SSH 运行证据须分别记录。
 
 桌面的 `src/terminal/remote/reader.rs` 由 `ReaderTask` 管理单次 reader 生命周期，
@@ -209,29 +209,251 @@ resize 去重与回显等待、viewport 重新发布和关闭次序；`remote/wr
 
 #### 当前实现：资源、独立放置与传输边界（#40／#41）
 
-- `a=t` 只上传资源；后续 `a=p` 才创建显示。`a=T` 继续上传并显示。支持 PNG、raw RGB/RGBA、这三种格式的 `o=z`，以及分块传输。分块逐块校验 Base64，首部、负载和终止符跨 PTY 读取保持同一结果；PNG 外层 zlib 在 daemon 有界展开后保留为 PNG，raw 压缩内容仍以压缩形式传输到桌面。
+- `a=t` 只上传资源；后续 `a=p` 才创建显示。`a=T` 继续上传并显示。支持 PNG、raw RGB/RGBA、这三种格式的 `o=z`，以及分块传输。显式 `f=0` 等同默认 RGBA；只有最终块允许省略 Base64 padding，仍拒绝歧义长度或非零尾部位。首部、负载和终止符跨 PTY 读取保持同一结果；PNG 外层 zlib 在 daemon 有界展开后保留为 PNG，raw 压缩内容仍以压缩形式传输到桌面。
 - 同一资源的多次放置共享解码像素。`x/y/w/h` 指定源裁剪，`c/r` 指定显示区域；只指定一轴时按比例推导，指定两轴时保持比例放入区域。`X/Y` 为单元内像素偏移，`C=1` 禁止本次放置移动光标。
 - 图片 ID 在窗格内独立。非零图片 ID 与非零放置 ID 的组合替换同次放置；省略 `p` 或 `p=0` 时，每次放置独立。`I` 分配新的图片 ID，并让后续按编号的命令选择该编号最新的资源；同一命令不能同时指定 `i` 与 `I`。重新传输同一个 `i` 会移除其旧资源与全部旧放置，不会让旧位置显示新内容。
 - 静态删除支持 `a/i/n/c/p/q/r/x/y/z` 及大写形式。`d=p` 是按 `x/y` 指定的单元删除，不是按放置 ID 删除；定位单次放置使用 `d=i,i=…,p=…`。小写保留可复用资源；大写只在资源没有其他放置引用时回收数据。缺资源、非法放置和不支持的操作返回带身份的错误，并遵守 `q=1/2`。
-- daemon 持有唯一资源／放置状态，桌面只持有派生解码及绘制缓存。像素不进入持久文字回滚文件，不新增图片磁盘缓存。当前 pane 协议为 `15`（无像素回收元数据、消费者容量授权、连接视口、非活动屏实时引用及逐请求压力完成结果），`CONTROL_VERSION` 保持 `16`；新连接先在实际 pane endpoint 双向协商版本及有限容量，再新建、附着或观察会话；路由前缀先于协商。旧客户端在创建 shell／订阅输出前被明确拒绝，新客户端遇到旧 daemon／远端 server 报告版本并要求更新，不能静默忽略图片消息。独立版本探测不要求开启会话。
-- `a=q` 对实际图片内容进行校验，不存储、不替换资源；坏 PNG／zlib、无效像素长度、超限尺寸及不支持的操作不会回报成功。直接传输可跨主机；文件、临时文件及 POSIX shared memory 只在发送方确实共享负责 daemon 的 Unix 主机时接受，Windows 或跨主机上下文明确拒绝，不把远端路径解析到桌面。文件必须是 regular file，临时文件仅在临时目录且路径包含 `tty-graphics-protocol` 时允许协议删除；间接媒体按下述平台规则有界读取。
+- `a=q` 对实际图片内容进行校验，不存储、不替换资源；坏 PNG／zlib、无效像素长度、超限尺寸及不支持的操作不会回报成功。直接传输可跨主机；文件、临时文件及平台 shared memory 仅在发送方确实共享负责 daemon 的主机命名空间时接受，不把远端路径解析到桌面。Windows 支持本地磁盘 regular file、符合条件的临时文件及 named shared memory，Unix 保留 regular file／POSIX shm；具体安全限制与验收前提见下文。
+- daemon 持有唯一资源／放置／选帧和播放时间线，桌面只持有派生解码及绘制缓存。像素不进入持久文字回滚文件，不新增图片磁盘缓存。当前 pane 协议为 `17`（在 `16` 的不可变帧、原子选帧及相对放置关系上增加播放状态／剩余间隔／循环／暂停元数据，以及稳定 root 的新版像素），`CONTROL_VERSION` 保持 `16`；新连接先在实际 pane endpoint 双向协商版本及有限容量，再新建、附着或观察会话；路由前缀先于协商。旧客户端在创建 shell／订阅输出前被明确拒绝，新客户端遇到旧 daemon／远端 server 报告版本并要求更新，不能静默忽略图片消息。独立版本探测不要求开启会话。
 - 应答关联 `i/I/p` 并写回 PTY，不作为终端文本显示；`q=1` 只保留失败，`q=2` 全部静默，没有图片身份的请求不注入应答。续块仅以非零 `q` 覆盖首块的 quiet，显式 `q=0` 不解除此前的静默。删除中止未完成上传；损坏或取消的 APC 不会与后续命令拼成图片。拒收不创建放置、不移动光标，也不删除其他已接受资源。
+- synchronized update 只延迟桌面呈现，不延迟 daemon 的协议状态：处理外提的 Kitty 命令前，权威 Rio 镜像先应用前面的文字／光标／屏幕变化，避免同一 BSU／ESU 批次内的图片错误共用旧锚点。真实 PTY／daemon／rooted consumer 的两处异色图片回归已验证原逻辑失败、修复后通过；最终 agent 原生几何仍分别验收。
 
-当前默认值是保守的实现参数，单位为 MiB（`1 MiB = 1,048,576 bytes`），不是已经测得的完整系统峰值：
+##### 完整帧与手动选帧（#140）
+
+正常图片是第 1 帧（root）。`a=f,i=…` 或 `a=f,I=…` 追加与 root 同尺寸的完整帧，支持现有 RGB／RGBA／PNG、zlib 与分块路径；分块续块可带 `a=f`。`a=a,i=…,s=1,c=N` 停止并选择从 1 开始的帧，省略 `s` 的 `a=a,…,c=N` 也可手动选帧。同一图片的全部 direct／Unicode 放置共用选择结果，不为每个放置复制像素。未放置的 transmit-only 图片即使追加或选帧，也不显示。
+
+每帧拥有独立且不复用的 pane-local key、源内容、元数据与准入租约；`Select { key, frame, revision }` 只改变根资源的选择，不重复传输已保留的像素。恢复在同一次文字快照／live 切换中重放全部保留帧、帧关系、最新选择及放置；替换、删除、screen 清理和旧 worker 退休沿用同一代次约束。预算回收以整份帧序列为单位，不静默删去某个中间帧；追加失败保留已接受的全部帧和选择。资源上限 1,024 包含 root 与所有追加帧；单图片最多 256 帧（含 root），并仍受下表全部字节和元数据限制。#146 的默认预算按双窗格各 60 张 1080p raw RGBA 帧推导；预算可容纳不等于原生呈现性能已经通过。
+
+#140 原始切片只验证完整帧与手动选帧。2026-10-31 在 Windows `10.0.26300`／RTX 5080 的 Debug 原生隔离窗口完成红／绿／蓝三帧切换：两处放置同步且白边、位置保持；发送器退出并打印 `uploads=3` 后关闭旧窗口，再附着同一 daemon（PID 不变、当时 pane `16`／control `16`），两处蓝帧及原位置恢复，未再次启动发送器。真实 PTY／daemon／rooted consumer 的完整帧与 detached append／replacement／delete／fresh 恢复用例通过；静态 daemon 图形回归 25 项、parser／Windows media 专项 17 项通过。这些历史结果不证明下述新增自动播放、双 pane 1080p 容量或 60 fps；macOS 原生仍待 MacBook Air M5。
+
+原生入口：在隔离的 lyrel 原生 pane 中运行 `node scripts/kitty-frames.mjs`。输入 `1`／`2`／`3` 并回车，检查两处图片同时显示红／绿／蓝和白色边框；输入 `stats` 记录生产者 PID、上传数和字节。选定一帧后输入 `quit`，确认 `KITTY_FRAMES_STOPPED` 后不再运行发送器，关闭旧 GUI 并重新附着同一存活 daemon，检查原位置和所选像素恢复。另可在无桌面时向该自有 pane 输入 `white` 来追加／选择白帧，再重新附着；`delete` 删除整份序列。不要向用户已有 pane 注入这些命令；需分别记录构建、daemon／GUI 身份、截图及资源观察，脚本本身不证明原生验收通过。
+
+##### daemon 自动播放与可见性暂停（#141）
+
+`a=a,s=1` 停止并重置循环进度；`s=2` 使用 loading 模式，在尾帧间隔结束后等待新帧；`s=3` 正常循环。省略 `s` 不改变运行状态，`c=N` 显式选择帧。`v=0` 不改变循环设置，`v=1` 无限循环，`v=N` 播放 `N-1` 次；停止不会自行跳回 root。`r=N,z=M` 修改第 N 帧间隔：root 默认 0 ms，追加帧默认 40 ms；`z=0` 忽略，正数设置毫秒，负数设置 gapless。自动播放跳过 gapless 帧；全部帧均 gapless 时不忙循环，等待后续显式命令或新帧。
+
+播放时间线只在存活 daemon 中推进。每个连接报告当前 `screen/epoch` 的真实 viewport；direct、relative 和实际 Unicode placeholder 图共同决定任一资源是否仍有可见部分。一个可见消费者足以继续播放；全部隐藏、滚出 viewport、切换到非活动 screen、断开或关闭全部窗口时暂停，保留选帧、剩余间隔和循环进度，不计隐藏墙钟时间。上传、修改间隔、选帧和播放控制在暂停时仍生效。过期 epoch 或已退休连接不能恢复可见性。每次播放切换只传输 `Select` 和固定大小 `Playback` 元数据，不重发帧像素；元数据本身不触发整窗重绘。
+
+中央自动化入口：`cargo test --locked -p lyrel-core controlled_`，以及 `cargo test --locked -p lyrel --bin lyrel-app graphics_consumer_playback_loading_append_two_consumers_pause_and_fresh_restore -- --test-threads=1`。前者私有受控时间覆盖剩余间隔、有限循环、gapless、loading 尾等待、隐藏时追加／显式选帧、失效 viewport 和 reader；后者使用真实 PTY／daemon／production RemoteTerminal／rooted TerminalView，检查解码颜色、共享像素、冲突可见性的两个消费者及 fresh-store/window 恢复。Windows 已实际通过五项受控时间回归和一项双消费者回归。
+
+Windows 原生入口：在本次构建的隔离原生 pane 运行 `node scripts/kitty-playback.mjs`。默认两处红／绿／蓝白边图片以 500 ms 间隔同步；`stop` 停止，`play` 恢复无限循环，`finite` 重置后播放两次并停在尾帧；`loading` 从 root 顺序播放到尾并等待，`append` 追加白帧并解除等待，`gapless` 使绿帧不再自动显示。`1/2/3` 停止并手动选帧。2026-10-31 Windows `10.0.26300`／RTX 5080 Debug 原生窗口已观察两处同步切色、loading 蓝尾等待、append 后白帧、隐藏 tab 后返回及 sender 退出后的 fresh-window 继续播放。发送器 `uploads=4`，同一 daemon PID `22792`、pane `17`／control `16`；fresh 后未重启发送器。剩余间隔与循环进度由上述受控回归验证，静态截图不证明节拍或 60 fps。双 pane 容量、原生高帧率、真实 SSH 与 macOS 仍由后续票验收。
+
+##### 部分帧追加与不可变编辑（#142）
+
+`a=f` 的 `x/y/s/v` 是上传矩形的像素位置／尺寸，不能解释成放置几何。省略 `r` 时追加新帧：`c=N` 以已保留的第 N 帧为底图；省略 `c` 时以 `Y` 指定的 32-bit RGBA（高位到低位依次为 R/G/B/A，默认透明黑）填充画布。`r=N` 编辑现有第 N 帧，现有帧本身为底图，此时忽略 `c/Y`。默认使用 straight-alpha source-over；`X=1` 逐像素替换，包括半透明／全透明像素。PNG、raw RGB／RGBA、zlib 和分块均进入同一有界生产准备路径。
+
+矩形必须完全位于 root 尺寸内；不存在的帧／底图返回 `ENOENT`，越界和无效 `X` 返回 `EINVAL`，工作空间／保留／消费者配额不足返回 `ENOSPC`，并沿用 `i/I/p` 关联与 quiet 规则。失败不改变已接受像素、帧数、选择或放置。每次成功编辑产生新的不可变像素 key，root 身份和帧编号保持；所有放置和 fresh consumer 使用最新版本，不以同 key 覆盖绕过旧 worker／GPU owner 的退休。daemon 在 pane 锁内只捕获底图 packet 的共享所有权，在锁外按 PTY 顺序解码／合成，再检查代次并原子提交；旧／新内容与 decoder、RGBA、packet 副本的实际共存工作集均先准入，不能为编辑提前返还旧 owner 信用或逐帧淘汰既有序列。
+
+中央自动化入口：`cargo test --locked -p lyrel-core retention_daemon_complete_frames_refusal_quiet_and_replacement_are_atomic -- --test-threads=1`、`cargo test --locked -p lyrel-core prepared_root_edit_cannot_revive_deleted_replaced_or_newer_pixels -- --test-threads=1`、`cargo test --locked -p lyrel --bin lyrel-app graphics_consumer_partial_frames_edit_pixels_and_detached_versions -- --test-threads=1`。用例覆盖真实 raw／PNG／zlib、底图与背景、未修改区域、半透明 blend／overwrite、非破坏性拒绝、所有放置同步与 detached root 编辑后的全新窗口恢复；私有测试仅确定性控制 stale prepare／delete／replacement 边界。
+
+Windows 原生入口仍为 `node scripts/kitty-frames.mjs`：先输入 `partial`，两处绿色第 2 帧底图中应同时出现白色 L 边和红色半透明矩形，外围绿色／白框不变；再输入 `edit`，第 4 帧右下角应出现透明蓝矩形且其余已合成内容不变；输入 `root-edit`，第 1 帧变成红底上的黄色矩形并保持两处位置。输入 `stats` 记录后 `quit`，确认发送器停止，再关闭自有 GUI 并附着同一活 daemon，不重启发送器，检查最终选择及编辑像素恢复。先 `partial` 再 `edit`，脚本不会假造尚不存在的第 4 帧。播放中的组合变更另用下述 #143 入口验收。
+
+**证据边界：**Windows 已通过上述三项核心／真实消费者回归；修正拒收观测为真实 PTY 输出，避免完成标记覆盖网格回复造成误判，保留 exact error／quiet／像素不变检查。2026-10-31 的同一 Windows Debug 原生实例实际执行 `partial` → `edit` → `root-edit`：两处放置同步显示绿色底图上的混合红矩形、右下半透明蓝覆盖，以及红 root 上黄色矩形；外围与位置保持。发送器退出后销毁旧窗口、重开同一 daemon，最新 root 编辑像素无重传恢复。macOS、实际 SSH 及完整容量／呈现性能另行验收。
+
+集成 #141／#142 后，已通过的 `controlled_` 还覆盖当前 root／child 帧编辑后沿用剩余间隔与原 gap、显式 `z` 重设间隔，以及后续自动选帧使用最新不可变像素 key。两条路径共用 pane `17`；编辑成功先同步选中像素版本，再提交播放元数据，不以 timer tick 改写准入 priority 或准备期 pins。
+
+##### 帧矩形合成与单帧删除（#143）
+
+发布规格读取于 2026-10-31：[`a=c` 矩形合成](https://sw.kovidgoyal.net/kitty/graphics-protocol/#composing-animation-frames)。`r=N` 指定源帧，`c=M` 指定目标帧，均从 1 开始；`X/Y` 是源矩形起点，`x/y` 是目标起点，`w/h` 是共同的像素宽／高。宽／高省略或为 0 时取完整图片宽／高，不是从偏移到边缘的剩余长度。默认 straight-alpha source-over，`C=1` 替换像素（包含全透明／半透明值）；这些键不使用 placement 的光标语义。两端任一越界（包含算术溢出）或同一帧内两个矩形相交返回 `EINVAL`，缺图片／帧返回 `ENOENT`，预算不足返回 `ENOSPC`；应答沿用 `i/I/p` 和 quiet。有效的同帧不相交合成只解码一次；失败不改变已接受像素、选择、间隔或循环。
+
+`a=d,d=f/F,i=…`（也可用 `I`）通过 `r` 删除一帧。发布文档列出 `f/F` 选择器但未详细规定所有编号边界；这里明确采用 Kitty 发布版本的行为：`r=0`／省略删除第一帧，超出帧数删除尾帧。多帧时两种形式均实际移除指定帧，其后编号连续前移，root 的稳定图片身份与全部 placement 保持；删除第一帧将下一帧提升为 root，并保留该帧的像素与 gap。未删除的当前帧保持同一像素和剩余间隔；删除当前帧选择同编号的后继，删除尾部当前帧则选择前一帧，并使用新选中帧的 gap。循环设置与已完成循环数不重置；未删除帧的 gap 不改变。仅剩一帧时，小写 `f` 不移除最后像素／放置，大写 `F` 移除整个资源及放置。删除与既有静态选择器一样不发送成功回复。底图引用已在接收时形成独立不可变像素，删除源帧不会损坏已接受的引用结果。
+
+stopped、loading、running 和全隐藏暂停都接受 append／edit／compose／delete。合成或没有显式 `z` 的编辑不重设当前帧剩余间隔；loading 在尾部等待时，仅编辑／合成尾帧不会假造新后继，追加新帧才解除等待。隐藏时仍提交新像素／编号与显式控制，自动推进等到恢复可见性。准备时捕获源／目标 packet 的共享所有权与 root pin，在 pane 锁外预留并解码；提交核对不可变内容和 mutation 代次，防止 delete／renumber／replacement 后的旧准备工作回写。新旧像素、实际 packet 容量和 decoder scratch 均计入相应峰值；packet／snapshot／decoder 持有的旧 owner 在实际释放前仍占其租约，不以删除提前退还在途信用。不新增磁盘缓存、公开测试控制或第二渲染器，pane `17`／control `16` 不变。
+
+中央入口：`cargo test --locked -p lyrel-core controlled_ -- --test-threads=1`、`cargo test --locked -p lyrel-core prepared_compose_rejects_delete_renumber_edit_and_replacement_with_snapshot_owners -- --test-threads=1`、`cargo test --locked -p lyrel-core deletion_of_each_selected_position_keeps_independent_referenced_pixels_and_dense_numbers -- --test-threads=1`、`cargo test --locked -p lyrel-core retention_daemon_complete_frames_refusal_quiet_and_replacement_are_atomic -- --test-threads=1`；桌面使用 `cargo test --locked -p lyrel --bin lyrel-app graphics_consumer_compose_rectangles_delete_frames_and_detached_recovery -- --test-threads=1`、`cargo test --locked -p lyrel --bin lyrel-app graphics_consumer_mutations_running_loading_hidden_and_fresh -- --test-threads=1`，以及 `cargo test --locked -p lyrel --bin lyrel-app promoted_root_and_composed_version_retire_stale_frame_decode_and_snapshot_claims -- --test-threads=1`。真实消费者用例走 PTY → daemon → production RemoteTerminal → rooted TerminalView，检查矩形实际像素／未改区域、半透明、真实 PTY exact errors／quiet、删除与 detached／fresh 恢复；私有测试用于确定性时间与准备／解码／snapshot 竞态。
+
+Windows 自有原生入口：在本次构建的隔离 pane 运行 `node scripts/kitty-frame-mutations.mjs`，初始两处红／绿／蓝白框同步播放，第 4 帧黄色半透明 source 为 gapless。先输入 `compose`，绿色阶段应在 `(24,16)` 出现混合黄色矩形；再输入 `replace`，蓝色阶段相同位置应为半透明黄色，而非不透明混色。两项均不上传新像素，仍在播放。`edit` 在绿帧右下增加半透明品红；`current-delete` 在 running 中选择并删除绿帧，随后蓝帧接续，白框／位置不变。`delete-first`／`delete-last` 可继续删首／尾，剩一帧时 `delete-only` 用大写 `F` 删除资源及全部放置；`reset` 恢复场景。`loading` 到尾等待后 `append` 追加白帧；可切换隐藏 tab 后向同一自有 pane 发送变更，再返回检查两处一致。最后 `stats`、`quit`，确认 `KITTY_MUTATIONS_STOPPED`，销毁旧 GUI 并重新附着同一存活 daemon，不启动发送器，检查最终像素／删除和播放状态。记录上传数以区分无负载 compose／delete 与 edit／append。
+
+**本切片证据状态：**2026-10-31 中央已执行上述全部入口：`controlled_` 8 项、stale prepare／编号删除／临时峰值／refusal 各 1 项、两项真实 rooted consumer 和一项旧 decode／snapshot 退休回归均通过。Windows `10.0.26300`／RTX 5080／Debug／100% 缩放的自有原生窗口实际验证 `compose` 后两处绿帧混合黄矩形、`replace` 后蓝帧半透明黄矩形、绿帧叠加半透明品红，以及 running 当前删除、首／尾删除和 loading 追加；白框与两处位置保持。`compose`／`replace` 后上传数保持 4，`edit` 为 5，`append` 为 6。发送器退出后销毁窗口，fresh consumer 恢复唯一合成蓝 root，无重传；再以普通 Node 删除唯一帧，图片立即消失，第二个 fresh consumer 不复活。双 pane 1080p 容量、约 60 fps、真实 SSH 和 macOS 仍按各自入口验收。
+
+
+
+
+##### 双窗格 1080p 容量与原生呈现测量（#146）
+
+`scripts/kitty-capacity.mjs` 复用 `kitty-playback.mjs` 的直接 Kitty APC 路径，只生成源像素并向所在真实 PTY 输出；不创建另一套 PTY、协议或 renderer。每个 pane 使用固定且不同的 seed／image ID，逐帧生成 60 张不同的 `1920 × 1080` 噪声与渐变 RGBA8 图片，不依赖压缩节省容量。源像素体积固定，传输是 `f=32` raw RGBA；Base64 与 APC 开销另计。生产者只保留一个 8,294,400-byte frame buffer，每次将 3,072 bytes 转为最多 4,096-byte Base64 块，并等待 stdout backpressure 和逐帧真实 `OK`；拒收或 60 秒 ACK 超时以非零状态退出，不把发送完成当成接受成功。
+
+三个 agent replay 脚本共用 `scripts/graphics-fixture-utils.mjs` 的 PNG 编码，Kitty 发送脚本共用其中的 stdout 背压／4,096-byte Base64 分块；具体图案与协议首部仍由各脚本决定。复制 Kitty 脚本到远端时同时保留这个同目录模块；native SSH fixture 会上传二者并逐文件回读核验。capacity 的 version `2` source manifest 同时记录主脚本和共享模块的 SHA-256，不将提取前的历史证据冒称为新脚本重跑结果。
+
+在隔离的原生 lyrel 窗口中创建两个同时可见的 pane，从仓库根目录分别运行以下命令。manifest 路径只选择本次自有临时目录中的新文件；脚本使用 `wx`，不会覆盖旧证据。
+
+```powershell
+# 左 pane
+node scripts/kitty-capacity.mjs --pane 0 `
+  --manifest "$env:TEMP/lyrel146/left-source.json"
+# 右 pane，在另一个同时可见的 pane 中运行
+node scripts/kitty-capacity.mjs --pane 1 `
+  --manifest "$env:TEMP/lyrel146/right-source.json"
+```
+
+默认启动输出 `KITTY_CAPACITY_READY` 后等待命令，不自动加载。两个 pane 各输入 `load`，等待 `CAP146:<serial>:load:60:<wireBytes>`；再各输入 `start`。`17/17/16 ms` 的帧间隔重复 20 次，一圈正好 1,000 ms，避免将全为 17 ms 的约 58.8 fps 当作 60 fps。root 间隔由显式播放控制设置。播放由 daemon 推进；脚本没有播放 timer，也不在每一圈重发像素。
+
+| 命令 | 所走路径与观察点 |
+| --- | --- |
+| `load` | 上传完整 60 帧、放置并停在 root；首次完整 load 在完成标记前写入 manifest |
+| `start`／`stop` | daemon 无限循环／停止；不上传像素 |
+| `select N` | 停止并选择第 `1..60` 帧；画面条码为 `N-1` |
+| `edit N` | 以 `a=f,r=N,X=1` 上传新的完整 1080p 版本；保留 60 帧、placement 与原 gap，不先释放旧 owner 信用 |
+| `compose A B` | `a=c,r=A,c=B,C=1` 在同图像不同帧间整幅复制，无像素 payload；默认 `2 → 3`。目标条码随源一起复制，故只在独立 mutation 阶段采集，不污染基线时序 |
+| `replace` | `a=t` 完整替换 root 后重新追加 59 帧、重新放置并播放，检查旧序列与 atlas 的真实退休；不是缩小为一张替代图 |
+| `delete` | `a=d,d=I` 删除整份序列，随后用不保留资源的 query 作有序屏障；不得出现淘汰 notice 或 fresh 后复活 |
+| `input TEXT`／`stats` | 记录普通 PTY 输入 token／生产者计数；播放期间重复采样，`uploads`、`rawBytes`、`wireBytes` 不因循环增加，`stdoutBytes` 允许因诊断文本增加 |
+| `quit` | 退出发送器而不停止／删除 daemon 动画；确认发送器 PID 消失后检查继续播放及 fresh-window 恢复 |
+
+也可用 `--exit-after-start` 一次加载、启动并退出，随后在同一 pane 的 shell 输入普通命令。`--command start|stop|edit|compose|delete|replace|select|stats` 操作同一固定 ID 后退出；`--frame N` 指定单命令 `edit`／`select` 的帧。`--command load` 只加载并放置，不播放。Linux 远端真实 PTY 可运行相同 Node 脚本；重定向 stdin／stdout 不是预加载入口，脚本会拒绝。
+
+完整 `KITTY_CAPACITY_STATE` JSON 在原始 PTY Output 中给出 `commandSerial`、`phase`、生产者 PID、成功 ACK 数 `uploads`／`uploadedFrames`、`rawBytes`／`bytes`、仅 APC 的 `wireBytes`、全部 stdout 的 `stdoutBytes`、Node `rss/heapUsed/external/arrayBuffers` 与采样峰值。为避免诊断滚动图片锚点，完整 JSON 在固定首行禁折行输出；终端网格中读取第二行短标记 `CAP146:<serial>:<phase>:<uploads>:<wireBytes>`，不能从截断的网格 JSON 推断完整状态。`phase=load/start/stop/select/edit/compose/replace/delete/stats` 是命令完成屏障；`loading/loaded` 是 load 内进度。没有持续输出的 idle 阶段用于测量 daemon-owned 播放。
+
+manifest 将脚本实际字节的 `definition.sourceSha256`、`sourceBytes` 与 `fixtureIdentity` 分开记录，不将文件路径当身份。identity 覆盖源 SHA、seed、pane、尺寸、算法、条码及 gap；同脚本两 pane 的 source SHA 相同、fixture identity 不同。`records[].frameId` 为 `0..59`，`sha256` 是上传原始 RGBA bytes 的 SHA-256，`rawBytes=8294400`；不是 GPU BGRA 的哈希。首次成功 load 后 manifest 固定为基线，不因后续 mutation 重写。Node 的采样峰值只描述生产者，不是 OS 高水位，也不属于 daemon／desktop 的 owner 总量。
+
+设 `P = 1920 × 1080 × 4 = 8,294,400 bytes`、`F = 60`、`N = 2`，所有权推导如下：
+
+| 分配／准入阶段 | 原始字节公式与默认余量 |
+| --- | --- |
+| raw 源像素 | 单 pane `FP = 497,664,000 bytes = 474.61 MiB`；双 pane `NFP = 995,328,000 bytes = 949.22 MiB`。packet header 与 Base64 传输开销不在这个 raw 数中 |
+| daemon 编辑版本共存 | 每 pane `(F+1)P = 482.52 MiB`；双 pane `N(F+1)P = 965.04 MiB`，分别落在 512 MiB／1 GiB encoded 与 RGBA 权重上限内 |
+| daemon queue／work | queue 1,280 MiB 覆盖 1,024 MiB retained packet、两个最多 32 MiB 在途 packet 与 192 MiB 余量；work 每 pane 128 MiB／daemon 256 MiB 独立限制 raw 源／packet 共存、partial、decoder、组合及 snapshot 工作 |
+| 桌面整份 replay 准入 | 令 raw packet `E≈P`，1080p GPU page 票 `G=P`；单 pane `F(P+E+G)+3P≈183P=1447.56 MiB`，低于 1,536 MiB cache；双 pane 低于 3,072 MiB。不能假设 decoder 会在全部 offer 到达前释放预留 |
+| 桌面 source replay 峰值 | 每 pane `F(2P+256 KiB)=964.22 MiB`，低于 1,024 MiB；双 pane低于 2,048 MiB。source 是接收峰值，不是 daemon 的 encoded 上报值 |
+| 常驻派生及退休 | 解码后的 CPU BGRA 与 GPU page 各约 `NFP`；snapshot／旧 scene／已绘制 retired owner 在最后引用、tile 实际删除及 worker 退出前继续占票，不能在 delete 回执时提前归零 |
+
+512 MiB encoded 是按 raw 等价推导，不保证任意 padded PNG 都能装满 60 帧；超过平均约 8.39 MiB 的 encoded 内容仍可能拒收。第三个图形 pane、其他后台图片或更小预算的第二消费者也可能使新工作／附着拒绝。不要通过删除受保护帧、改变 gap／loops 或降低尺寸／帧数来达到容量目标。确定性小预算回归应分别覆盖 aggregate 竞争、临时峰值、snapshot、取消与 retirement，并检查只回收无引用／合格旧历史；它们不能替代以下完整原生测量。
+
+parser 的源 `Work` 在准备阶段转交 `PreparedImage`，在等待桌面准入、提交、失败或取消期间持续覆盖实际源分配；packet 编码另占真实 pane 的 header scratch 与全局 packet 池，不把同一个 source lease 同时记两份。replay 的 packet 只克隆 `Arc`，共享原分配与租约；效果数组自身仍按容量预留 work。替换不预先减掉仍然存活的旧版本；新旧真实 owner 共存的峰值必须先符合预算。桌面 `Select`／绘制快照复用既有 `Arc<RenderImage>`，不会每 paint 解码；只删除退休 owner 对应的 atlas tile，不因一个 pane 的编辑清空整个窗口其他帧／pane 的纹理。
+
+中央自动化入口如下，必须保留 ignored 大工作量入口的显式运行结果，不能只跑默认测试后当作完整容量通过：
+
+```powershell
+node --check scripts/kitty-capacity.mjs
+node --test scripts/kitty-capacity-analysis.test.mjs
+cargo test --locked -p lyrel-core retention_ -- --test-threads=1
+cargo test --locked -p lyrel --bin lyrel-app terminal::images::tests:: -- --test-threads=1
+cargo test --locked -p lyrel-core `
+  core::graphics_state::retention_tests::retention_daemon_two_visible_panes_retain_and_replay_sixty_distinct_1080p_frames `
+  -- --ignored --exact --nocapture --test-threads=1
+cargo test --locked -p lyrel --bin lyrel-app `
+  terminal::view::tests::graphics_consumer_fullsize_two_panes_retain_reuse_restore_mutate_and_release `
+  -- --ignored --exact --nocapture --test-threads=1
+```
+
+最后一个入口从两个真实 Node PTY 经真实 daemon、生产 `RemoteTerminal` 与 rooted `TerminalView` 消费完整 120 张 1080p 源，逐帧将实际 BGRA 转回 RGBA 后比对 manifest SHA-256，跨循环检查保留版本身份，记录真实 source／cache／scratch／metadata owner，执行满载 edit／compose／replace、隐藏恢复、删除及 fresh replay。它使用 GPUI 测试窗口，不证明两个原生 pane 的最终 GPU 像素、显示时序或输入延迟；约 60 fps 仍必须执行以下实际原生采集。
+
+###### Windows 原生采集：仅自有 HWND
+
+中央验收使用 [PresentMon 2.6.0 控制台](https://github.com/GameTechDev/PresentMon/blob/v2.6.0/README-ConsoleApplication.md) 与 [ffmpeg 9.0.2 `gfxcapture`](https://github.com/FFmpeg/FFmpeg/blob/n9.0.2/libavfilter/vsrc_gfxcapture.c)。只捕获隔离窗口 HWND，不使用桌面／monitor／DDA 兜底，不采音频或网络内容。PresentMon 需要既有 Performance Log Users 权限或经确认的管理员运行；缺工具、缺 `gfxcapture` 或 access denied 时记录缺失前提，不自动下载、改组、提权或以 paint callback 替代。
+
+先在中央终端记录当前机器、工具、构建 commit／profile／二进制身份，不能复用旧 RTX 5080 观察作为通过。输出模式以实际 Windows 显示设置核实，记录 DPI、HDR／VRR、真实刷新率、pane client 尺寸与图片缩放矩形。
+
+```powershell
+$dir = Join-Path $env:TEMP 'lyrel146'
+New-Item -ItemType Directory -Force $dir | Out-Null
+Get-CimInstance Win32_OperatingSystem |
+  Select Caption,Version,BuildNumber,TotalVisibleMemorySize
+Get-CimInstance Win32_VideoController |
+  Select Name,DriverVersion,CurrentHorizontalResolution,`
+    CurrentVerticalResolution,CurrentRefreshRate
+nvidia-smi --query-gpu=name,driver_version,memory.total,memory.used --format=csv
+node --version
+ffmpeg -hide_banner -version
+ffmpeg -hide_banner -h filter=gfxcapture
+$pm = Join-Path $dir 'PresentMon-2.6.0-x64.exe'
+Get-FileHash -Algorithm SHA256 $pm
+```
+
+PresentMon 官方 2.6.0 x64 控制台资产 SHA-256 为 `b2a706bc6ad475749e3b7e3409263aa1e6906d45bdcf993f6dbc0f660188f1af`。以下从本次已由中央构建的 Release 二进制启动隔离实例，并仅取得该子进程窗口；若使用 Debug，必须在报告中替换路径并记录，不能混称 Release。
+
+```powershell
+$app = Start-Process 'target/release/lyrel-app.exe' `
+  -ArgumentList @('--config-dir', "$dir/config") -PassThru
+$appPid = $app.Id
+$deadline = (Get-Date).AddSeconds(30)
+do { Start-Sleep -Milliseconds 100; $app.Refresh() }
+until ($app.MainWindowHandle -ne 0 -or (Get-Date) -gt $deadline)
+if ($app.MainWindowHandle -eq 0) { throw 'Owned GUI HWND unavailable' }
+$hwnd = $app.MainWindowHandle.ToInt64()
+Get-Process -Id $appPid | Select Id,Path,MainWindowHandle
+```
+
+在该窗口两个 pane 完成 `load` 后，先各 `select 1`。条码位于源图 `(x=32,y=32,w=256,h=32)`，八个 `32 × 32` 黑白块按 MSB 在左表示 `0..59`，黑为 0、白为 255，白色 quiet border 在取样矩形之外。先截整窗校准图，根据实际图片缩放与 pane 坐标确定两个条码的捕获矩形；不要直接将源坐标当窗口坐标。用 `select 60` 验证最高编号，再恢复 `select 1`。
+
+```powershell
+ffmpeg -hide_banner -n -filter_complex `
+  "gfxcapture=hwnd=${hwnd}:max_framerate=1:capture_cursor=0:display_border=0,hwdownload,format=bgra" `
+  -frames:v 1 (Join-Path $dir 'calib.png')
+# 输入校准图中两个条码的物理像素矩形，顺序为 x,y,w,h
+$lIdX,$lIdY,$lIdW,$lIdH = (Read-Host '左条码 x,y,w,h') -split ',' |
+  ForEach-Object { [int]$_ }
+$rIdX,$rIdY,$rIdW,$rIdH = (Read-Host '右条码 x,y,w,h') -split ',' |
+  ForEach-Object { [int]$_ }
+```
+
+在第二个中央 PowerShell 窗口使用上述本次 `$appPid`／`$dir`／`$pm`，启动 PresentMon；并行启动下段 ffmpeg，再向两个自有 pane 输入 `start`。窗口须可见、无遮挡、非最小化，输入测量前再核验前台 HWND 确为该自有窗口。
+
+```powershell
+& $pm --process_id $appPid `
+  --output_file (Join-Path $dir 'presentmon.csv') `
+  --v2_metrics --qpc_time_ms --write_display_metadata `
+  --session_name lyrel146 --delay 2 --timed 30 --terminate_after_timed
+```
+
+WGC 输出条码而非整窗视频，保留其 QPC 合成 PTS。9.0.2 不支持 `dup_frames`；不要加 `-r` 或恒定帧率转换来补帧。若明确换成 9.1+，必须重新记录版本、核对行为并显式设置 `dup_frames=0`，不能将新版默认补帧当源图变化。
+
+```powershell
+$capture = "gfxcapture=hwnd=${hwnd}:max_framerate=240:" +
+  'capture_cursor=0:display_border=0,hwdownload,format=bgra,split=2[l][r]'
+$left = "[l]crop=${lIdW}:${lIdH}:${lIdX}:${lIdY},format=gray," +
+  "scale=8:1:flags=neighbor,lut=y='if(gt(val,128),255,0)'[lid]"
+$right = "[r]crop=${rIdW}:${rIdH}:${rIdX}:${rIdY},format=gray," +
+  "scale=8:1:flags=neighbor,lut=y='if(gt(val,128),255,0)'[rid]"
+$graph = $capture,$left,$right -join ';'
+ffmpeg -hide_banner -n -filter_complex $graph `
+  -map '[lid]' -fps_mode passthrough -f framemd5 -t 30 `
+    (Join-Path $dir 'left-id.md5') `
+  -map '[rid]' -fps_mode passthrough -f framemd5 -t 30 `
+    (Join-Path $dir 'right-id.md5')
+node scripts/kitty-capacity-analysis.mjs `
+  --presentmon "$dir/presentmon.csv" --left "$dir/left-id.md5" `
+  --right "$dir/right-id.md5" --refresh-hz 240
+```
+
+`--refresh-hz` 必须替换为本次实际刷新率。分析前校验 framemd5 的 frame size 为 8，所有哈希均能映射到八字节黑白条码；不能映射就中止重做校准。剔除启动／停止边缘时应在报告中公布共同稳态时间段，不从结果中挑选最优短片。逐 pane 报告图片变化间隔的 p50／p95／max、顺序跳号与超长重复停留，结合 PresentMon 实际 CSV 表头中的 `DisplayedTime`、`DisplayLatency`、`MsBetweenDisplayChange` 等可用列及 `NA` 行判读；不要传 `--exclude_dropped`。240 Hz 显示器合法显示同一 60 fps 图片约四次刷新，不应算作四次源帧重复。WGC 是窗口合成内容而非扫描输出，跳号也可能来自捕获；只有 WGC 图片身份与 PresentMon 显示时序交叉吻合才可支持约 60 fps，分析脚本不会自动判为通过。
+
+原生完整工作量还须逐项记录以下矩阵，fixture／daemon／desktop／driver 的内存分别采样：
+
+| 阶段 | 必须保留的证据 |
+| --- | --- |
+| 双 pane 加载与稳态 | 两份 source manifest、120 张不同的完整源帧、真实图像与两个 pane 几何；warm-up 后原生呈现分布、缺失／重复、PresentMon `NA` 比例 |
+| 输入 | 两 pane 播放时执行 `input` token，sender 退出后在 shell 输入普通命令；统计 ETW `AllInputToPhotonLatency`／`ClickToPhotonLatency` 的 N、NA 比例及 p50／p95／max；无非 NA 样本则明确指标不可用，不把 token 回执等同输入到显示延迟 |
+| 编辑／合成／全尺寸替换 | 满载时执行 `edit 2`、`compose 2 3`、`replace`；观察不可变版本、保留帧数、旧资源／atlas 局部退休及输入；mutation 单独采集，之后重载或 replace 恢复 60 个有序条码基线 |
+| 可见性 | 隐藏一个 pane 时另一个继续；两者都隐藏／滚出 viewport／断开时暂停，重新可见后从保留状态继续；分别记录隐藏与恢复，不能以最小化 WGC 画面证明屏幕可见播放 |
+| sender／GUI／reader 生命周期 | `quit` 后 source／wire bytes 不再增长；关闭自有旧窗口、附着同一活 daemon，无重新发送而恢复全部保留帧；旧 worker 退出前不提前返还租约 |
+| 删除／关闭／清理 | `delete`、pane close、window close、reset／历史过期后观察 source／cache／queue／metadata 与 GPU tile 真实释放，无主动删除 notice、无复活；只有合格历史淘汰才显示 notice |
+
+用 `Get-Process -Id` 分别采样 producer、daemon 与 desktop 的 `CPU/WorkingSet64/PrivateMemorySize64`，CPU 百分比由采样差值计算；GPU 计数器先发现本地化名称，再按自有 PID 过滤，并与 Task Manager／WPR 的整卡观察交叉核对，不能将设备总量全部归因 lyrel。采集后只清理本次创建的窗口、进程和临时证据，不删除用户数据。
+
+**2026-11-01 提交 `13e6d59` 的 Debug 原生实测：**Windows `10.0.26300`、Core Ultra 7 265KF、RTX 5080（驱动 `32.0.16.2101`）、2560×1440／240 Hz，两边各 60 张不同 1920×1080 raw RGBA 帧均加载成功。ffmpeg 9.0.2 以 120 Hz WGC 采集同一 HWND 30 秒，全部样本均可映射到 0–59；左／右 pane 分别有 1,773／1,770 次图片变化，即 `59.12`／`59.02 changes/s`，p50 均 `16.67 ms`，p95 为 `25`／`33.33 ms`，最大 `91.67 ms`。重复 capture 样本为 135／138，源 ID 跳号下界为 26／29，不能把跳号全部归因 renderer 或 capture；两边均覆盖全部 60 个 ID。早期 240 Hz WGC 的无效条码未用于通过结论。
+
+经用户明确授权，仅本次以管理员权限运行 PresentMon 2.6.0。同一 30 秒窗口记录 1,941 个 present，6 个未显示（0.309%）；`DisplayedTime` p50 `16.658 ms`、p95 `20.841 ms`、最大 `22.101 ms`，`FrameTime` p50 `16.142 ms`、p95 `18.484 ms`、最大 `21.256 ms`，呈现模式为 `Composed: Flip`／DXGI。WGC 图片身份与 PresentMon 时序共同支持约 60 fps，不使用 callback 或 Select 计数替代。
+
+32 次分进程采样中，两个 producer 的最大 Working Set 为 `60.4`／`60.7 MB`；daemon 最大 Working Set／Private Bytes 为 `1,041.6`／`1,021.8 MB`，desktop 为 `1,185.1`／`2,173.4 MB`。另一轮完整 edit／compose／replacement／delete 后，daemon 降至 `45.4`／`22.8 MB`，desktop 降至 `200.3`／`429.6 MB`。整卡 GPU 采样只作背景，不归因给 lyrel。`AllInputToPhotonLatency`、`ClickToPhotonLatency` 与 `MsBetweenDisplayChange` 全部样本为 `NA`，因此不报告这些指标；ordinary-input token、producer 退出后的普通 shell 命令，以及正式 pi 与 24 张 1080p 压力图片同屏时的输入和保留画面均实际执行。1×／1.25×／1.5×／2× 的生产 consumer DPI／z-order 回归亦通过。真实 SSH 的全尺寸 wire／fresh 结果见[远程图片文档](/remote/ssh#标准原生桌面与双-pane-全尺寸入口)。macOS（#152）延期，未验证。
+
+###### 默认所有权上限
+
+当前默认值按分配所有权核算，单位为 MiB（`1 MiB = 1,048,576 bytes`），不是已经测得的完整系统峰值：
 
 | 范围 | 默认上限与核算 |
 | --- | --- |
 | 单次直接传输 | 一个未完成传输；全部 Base64 合计最多 48 MiB，逐块解码后的 partial buffer 最多约 36 MiB，另加最终 quantum 的 3 字节预留；APC、partial、增长期旧／新分配及同批待处理内容纳入工作空间会计 |
 | 单图 | 每边最多 8,192 像素；编码内容及 RGBA 解码权重各最多 32 MiB。常规 `3840 × 2160 × 4 = 33,177,600 bytes`（约 31.64 MiB）的 4K 截图可落在单图限制内；PNG 压缩体小不豁免解码后限制 |
-| daemon 每窗格 | 实际编码分配合计 64 MiB、RGBA 权重 128 MiB、临时工作空间 128 MiB；最多 1,024 个资源元数据、4,096 个直接放置与虚拟 prototype，回收提示也占元数据配额 |
-| daemon 聚合 | 所有窗格实际编码分配合计 128 MiB、RGBA 权重 256 MiB、临时工作空间 256 MiB。RGBA 权重用于准入，不代表 daemon 另存整份 RGBA。raw zlib 用 64 KiB 输出 scratch、预留 256 KiB 校验空间；PNG 逐行校验 scratch 限 4 MiB。外层 zlib 的 PNG 逻辑展开限 32 MiB，按实际阶段预留 inflate state、增长期旧／新 source 分配，随后保留 normalized source 并另计 4 MiB decoder scratch；parser 仍持有的压缩输入独立占账，不再同时固定预留不共存的 100 MiB 工作空间 |
-| daemon 图形传输 | 已编码资源与在队列中的图形 packet 共享同份数据与租约，单独受 256 MiB 聚合池约束；资源被删除或回收后，仍在 writer 中的 packet 在最后引用释放前继续占账，不能提前归还信用 |
-| 桌面源内容 | 每窗格实际源内容及接收工作最多 64 MiB，整个桌面进程合计 256 MiB；本地与多个远端 daemon 共用同一池。空窗格不预留整份额度，也没有“四个图形窗格”的固定限制。每次 `GraphicsOffer` 按实际 packet 分配先预留 `2 × encoded bytes + 256 KiB` 接收峰值，提取帧后缩至实际源分配，decoder 输入释放后归还。仅在接收容量落在本次预留内时转移大帧所有权；先前大文字 Snapshot 或合并帧留下的超额容量不会带入图片源，已消费的闲置大缓冲会释放 |
-| 桌面派生缓存 | 每窗格 384 MiB，整个桌面进程 1,024 MiB。每份资源在接收前预留 `RGBA bytes + encoded bytes + GPU page bytes`，同一 store 的全部待解码／活动任务另共享最大 `3 × RGBA bytes` scratch；同 store 跨 reader 代次的 decoder 串行运行，保留单次解码原有 `4 × RGBA` 上界，不为不会并发执行的任务重复预留峰值。完成后保留实际 CPU 分配与 GPU page 票；queued／in-flight／decoded／painted-retired 与 snapshot 均持有相应租约，取消不提前归还活动 decoder 的票。GPU 票按当前图片实际 page rounding 上界计算：`4 × max(width, 1024) × max(height, 1024)`；正式 Windows DirectX／macOS Metal 路径的 image tile padding 为零，一个小图最多按独占 4 MiB page 预留，不把所有图当作最坏 64 MiB。Linux 只有 headless daemon，不将未支持的 Linux 桌面 wgpu 当作本产品的已交付渲染路径 |
-| 桌面消费者准入 | 每窗格 daemon 编码上限 64 MiB、RGBA 权重 128 MiB，仍同时受桌面的实际 source／derived 字节池限制。daemon 接受新资源及回复成功前，渲染消费者必须对 `GraphicsOffer` 返回实际字节预留的 `GraphicsGrant`；拒绝、取消、超时与断连释放未完成预留。不设两个驻留资源槽，小图可在真实字节预算内继续接收 |
+| daemon 每窗格 | 实际编码分配合计 512 MiB、RGBA 权重 512 MiB、临时工作空间 128 MiB；最多 1,024 个资源元数据、4,096 个直接放置与虚拟 prototype，回收提示也占元数据配额 |
+| daemon 聚合 | 所有窗格实际编码分配合计 1,024 MiB（1 GiB）、RGBA 权重 1,024 MiB（1 GiB）、临时工作空间 256 MiB。RGBA 权重用于准入，不代表 daemon 另存整份 RGBA。raw zlib 用 64 KiB 输出 scratch、预留 256 KiB 校验空间；PNG 逐行校验 scratch 限 4 MiB。外层 zlib 的 PNG 逻辑展开限 32 MiB，按实际阶段预留 inflate state、增长期旧／新 source 分配，随后保留 normalized source 并另计 4 MiB decoder scratch；parser 仍持有的压缩输入独立占账，不再同时固定预留不共存的 100 MiB 工作空间 |
+| daemon 图形传输 | 已编码资源与在队列中的图形 packet 共享同份数据与租约，单独受 1,280 MiB 聚合池约束；资源被删除或回收后，仍在 writer／snapshot 中的 packet 在最后引用释放前继续占账，不能提前归还信用。不要把 retained encoded 与 queue 当成两份像素副本 |
+| 桌面源内容 | 每窗格实际源内容及接收工作最多 1,024 MiB，整个桌面进程合计 2,048 MiB；本地与多个远端 daemon 共用同一池。空窗格不预留整份额度，也没有“四个图形窗格”的固定限制。每次 `GraphicsOffer` 按实际 packet 分配先预留 `2 × encoded bytes + 256 KiB` 接收峰值，提取帧后缩至实际源分配，decoder 输入释放后归还。仅在接收容量落在本次预留内时转移大帧所有权；先前大文字 Snapshot 或合并帧留下的超额容量不会带入图片源，已消费的闲置大缓冲会释放 |
+| 桌面派生缓存 | 每窗格 1,536 MiB，整个桌面进程 3,072 MiB。每份资源在接收前预留 `RGBA bytes + encoded bytes + GPU page bytes`，同一 store 的全部待解码／活动任务另共享最大 `3 × RGBA bytes` scratch；同 store 跨 reader 代次的 decoder 串行运行，保留单次解码原有 `4 × RGBA` 上界，不为不会并发执行的任务重复预留峰值。完成后保留实际 CPU 分配与 GPU page 票；queued／in-flight／decoded／painted-retired 与 snapshot 均持有相应租约，取消不提前归还活动 decoder 的票。GPU 票按当前图片实际 page rounding 上界计算：`4 × max(width, 1024) × max(height, 1024)`；正式 Windows DirectX／macOS Metal 路径的 image tile padding 为零，一个小图最多按独占 4 MiB page 预留，不把所有图当作最坏 64 MiB。Linux 只有 headless daemon，不将未支持的 Linux 桌面 wgpu 当作本产品的已交付渲染路径 |
+| 桌面消费者准入 | 向 daemon 上报每窗格编码上限 512 MiB、RGBA 权重 512 MiB，不复用 1,024 MiB 的本地 source 池大小；仍同时受桌面的实际 source／derived 字节池限制。daemon 接受新资源及回复成功前，渲染消费者必须对 `GraphicsOffer` 返回实际字节预留的 `GraphicsGrant`；拒绝、取消、超时与断连释放未完成预留。不设两个驻留资源槽，小图可在真实字节预算内继续接收 |
 | 保留元数据 | 每个资源或 placement 按 512 bytes 保守覆盖实际 owner、BTree／Arc 开销；daemon 与桌面分别使用独立的每 pane 4 MiB、aggregate 16 MiB 票池。无像素 notice 仍占票，旧 snapshot 也延续持票直到真正释放。新资源、新放置及 replay notice 分别准入，已有同 key 更新复用原票；元数据满额会拒绝新内容，不为无法释放元数据的历史位置做无效像素回收 |
 
-同一桌面的 source、derived 与 metadata 三个池的会计上限合计为 1,296 MiB；一个 daemon 的权威编码内容、临时工作空间、图形传输及 metadata 合计为 656 MiB。一个桌面连接一个 daemon 的这部分组合上限为 1,952 MiB；连接四个独立 daemon 时为 3,920 MiB，且远端 daemon 的内存在各自所属主机。这里没有将 daemon 的 RGBA 准入权重重复算作实际像素副本。这些是各分配阶段的保守会计范围，不是整进程 RSS、整机或 GPU 驱动峰值承诺：终端文字、其他界面、allocator、系统管道／socket buffer、驱动与平台缓存仍须另测。
+桌面的 source、derived 与 metadata 三池合计上限为 5,136 MiB；这些池覆盖不同阶段的保守预留，不代表它们始终同时分配到上限。daemon 的 encoded 与 queue 共享 packet 分配，RGBA 权重也不是另一份实际像素，不能将这几个数相加后声称实际常驻内存。多个远端 daemon 的权威内容位于各自所属主机；桌面 aggregate 池仍由全部连接共用。终端文字、其他界面、allocator、系统管道／socket buffer、GPU page 对齐、旧 scene 和驱动缓存均须另测，以上不承诺整进程 RSS、整机或 GPU 驱动峰值。
 
 容量不是可以忽略的提示。所有生产 pane 客户端声明有限上限；渲染消费者另按每份资源的真实成本授权，同一 pane 多消费者均须满足准入。等待授权不持有 `PaneState` 锁，删除、resize、清理与退出仍可取消旧工作；无 GUI 或 detached 时仍按 daemon 自身预算接收输出。新桌面不能容纳已经保留的图片时，附着会明确失败并保留 daemon 权威内容，不以静默漏图或虚构回收提示冒充恢复成功。只有精确确认原 pane 不存在才可创建替代 shell；graphics admission 拒绝、断连或附着未获完整答复不能替换仍存活的会话。旧 reader 及在途解码退出前不提前归还它们仍持有的信用。
 
@@ -243,13 +465,21 @@ resize 去重与回显等待、viewport 重新发布和关闭次序；`remote/wr
 
 非活动屏不等于全部受保护：进入备用屏后，主屏仍属实时屏的图片保持保护，已离开实时屏且未被真实滚动视口引用的旧历史仍可回收。daemon 向桌面传递这一权威引用事实，避免跨 pane／跨 daemon 的桌面压力错误钉住非活动屏全部历史；direct 与 placeholder 使用相同优先级。
 
-本次 pane `15` 修复已通过完整默认成员检查：Windows 的 25 个 Rust suite 共 4,709 项通过，另有 CLI E2E 24 项通过，合计 4,733 项，34 项 ignored；Linux 原生 headless workspace 的 `--all-features` 检查中，24 个 Rust suite 共 2,286 项通过，另有 CLI E2E 24 项，合计 2,310 项，30 项 ignored。计数不重复包含子进程内部重跑的单个用例。随后显式执行真实 Windows→Linux SSH transport 1 项及 rooted consumer 2 项，均通过，不将其他 ignored 归为通过。Windows 使用已准备的官方 ConPTY，Linux 与 Host 边界检查使用原生 Node 22.23.4；格式及 Host 边界检查通过。以上覆盖集成 `a75257d` 的同一代码；macOS 自动化以匹配提交的 CI 为准。原生窗口／GPU 仍须分别取证，headless paint 不等同于最终 GPU 像素。
+历史 pane `15` 基线已通过完整默认成员检查：Windows 的 25 个 Rust suite 共 4,709 项通过，另有 CLI E2E 24 项通过，合计 4,733 项，34 项 ignored；Linux 原生 headless workspace 的 `--all-features` 检查中，24 个 Rust suite 共 2,286 项通过，另有 CLI E2E 24 项，合计 2,310 项，30 项 ignored。计数不重复包含子进程内部重跑的单个用例。随后显式执行真实 Windows→Linux SSH transport 1 项及 rooted consumer 2 项，均通过，不将其他 ignored 归为通过。Windows 使用已准备的官方 ConPTY，Linux 与 Host 边界检查使用原生 Node 22.23.4；格式及 Host 边界检查通过。以上仅覆盖历史集成 `a75257d`，不替代当前 pane `17` 的验收；macOS 自动化以匹配提交的 CI 为准。原生窗口／GPU 仍须分别取证，headless paint 不等同于最终 GPU 像素。
 
 此前的独立 Windows 生产 CLI／ConPTY 冒烟在私有 daemon 中发送 24 张 4K direct／placeholder 混合历史图片，普通输入仍可达，发送器与 daemon 均以 0 退出；当时没有桌面消费者，控制请求也未获回应。该历史结果不证明原生像素或 GPU 峰值，本轮新增的原生证据单独列在下方。
 
-本地主机的间接传输仍有平台边界：Linux 文件／POSIX shm 通过有界 descriptor read，普通文件不使用可能因并发截断触发 `SIGBUS` 的映射。macOS 的 POSIX shm FD 不提供 `read`／`write`，且对象仅允许初次 `ftruncate`；因此使用最多 32 MiB 的只读 `MAP_SHARED` 范围，复制所请求字节后立即释放映射，映射与副本合计先预留 64 MiB 临时工作额度。macOS 对象名最多 31 bytes，Linux 最多 255 bytes。以上不启用 Windows 间接传输，也不将远端路径解析到桌面主机。平台依据为 [Apple XNU 的 POSIX shm 实现](https://github.com/apple-oss-distributions/xnu/blob/main/bsd/kern/posix_shm.c)。
+本地主机间接媒体按 `O/S` 验证实际请求区域，而不是将整个容器长度当成图片长度：单次读取内容最多 32 MiB，`S=0` 读取偏移后的剩余内容（剩余内容超限即拒绝），允许从明显更大的对象读取小区域。Linux 文件／POSIX shm 使用有界 descriptor read，不用可能因并发截断触发 `SIGBUS` 的普通文件映射；macOS POSIX shm FD 不支持 `read/write`，仅允许初次 `ftruncate`，因此从页对齐的 `O` 附近映射所需范围，复制后立即释放。Windows named shm 只打开既有 `Local\\`／`Global\\` 或无前缀对象，从 allocation-granularity 对齐的偏移映射有界区域，失败不创建对象；关闭自己的 handle，不删除 Windows section。Windows 的 section 长度按内核页取整，发送方应以 `S` 指明有效内容，避免把尾部 padding 当成像素。省略 `S` 时只用有界探测确定余量，绝不以零长度调用映射整个对象。需要映射的平台在映射／副本分配前预留 `64 MiB + 64 KiB` 峰值，覆盖最多 32 MiB 内容、映射对齐及页舍入；对象整体大小与所请求映射额度分开。macOS 名字最多 31 bytes，Linux 最多 255 bytes。平台依据为 [Apple XNU](https://github.com/apple-oss-distributions/xnu/blob/main/bsd/kern/posix_shm.c) 与 [Microsoft MapViewOfFile](https://learn.microsoft.com/en-us/windows/win32/api/memoryapi/nf-memoryapi-mapviewoffile)。
 
-普通 SSH 子进程的间接媒体在接受及实际读取前重新核验前景进程组；同组本地父进程不能掩盖带远端命令的 SSH 子进程，无法证明本地时拒绝该传输。跨片段传输一旦经历远端或未知来源，后续本地片段不能恢复其读取权限；后续独立本地请求仍可正常使用。普通文字与直接传输不触发这项进程组扫描。文件／共享内存显式声明的读取长度超过偏移后实际可用范围时返回 `EBADF`，不将短内容截取成成功请求。
+文件路径按发布的 [Kitty transmission-medium 规范](https://sw.kovidgoyal.net/kitty/graphics-protocol/#the-transmission-medium) 跟随可验证的 symlink／junction 到最终 regular target；device、pipe、socket、UNC／网络盘、Windows ADS／DOS device namespace、未知或循环 reparse 拒绝。Windows 在逐段检查后固定本地 volume GUID、最终目录和文件 handle（不共享 delete），再次检查 regular/disk 类型；临时删除使用 [SetFileInformationByHandle](https://learn.microsoft.com/en-us/windows/win32/api/fileapi/nf-fileapi-setfileinformationbyhandle)，不重新按路径删除。Unix 的 eligible 临时对象在同一文件系统内原子捕获到权限 `0700` 的私有目录，核验已打开对象的 `dev/ino` 后读取及 unlink；捕获了路径替换对象则不读取／unlink 它，恢复使用 Linux `renameat2(RENAME_NOREPLACE)`／macOS `renameatx_np(RENAME_EXCL)`。恢复冲突或文件系统不支持 exclusive rename 时保留实际对象并在本地日志给出恢复路径，绝不递归清理未知对象，也不覆盖后来建立的目标。此过程不复制图片、不是图片磁盘缓存。临时删除仍要求最终目标位于已知临时目录且路径含 `tty-graphics-protocol`；未满足条件的 `t=t` 可读取但保留对象。缺失、不可访问、特殊路径、短区域及无法读取均返回同一 `EBADF:Failed to read image file`，不泄露失败分类。
+
+本轮审查修复进一步固定 Windows 最终文件身份：先用零访问权限的 handle 固定已验证对象，再经 `ReOpenFile` 获取同一对象的读取／`DELETE` 权限；删除权限不可用时仍复用该对象，不重新解析路径。此修复的新增回归由中央统一执行，下方既有原生媒体通过记录不视为修复后的重跑结果。
+
+普通 SSH 子进程的间接媒体在接受及实际读取前重新核验前景进程组及其后代；同组本地父进程或改变进程组的 SSH 子进程不能掩盖远端来源。ConPTY 没有 Unix 前景 pgid，Windows 每次间接命令重新枚举所属 shell 的完整进程树并查询 image path；检测到 SSH、WSL、容器／命名空间桥接或无法完成查询时 fail-closed，探测期间树发生变化也不授予权限。跨片段传输一旦经历远端／未知来源，后续本地片段不能恢复其权限；返回本地后的独立请求仍可使用。普通文字及 `t=d` 不触发扫描，不因间接媒体拒收而失效。受管理的远端 pane 不回退到桌面同名对象。
+
+#145 的 production seam 回归通过真实 PTY → 私有 daemon → pane connection／`RemoteTerminal` → rooted `TerminalView` 校验大对象非对齐区域、三类媒体、BGRA 身份、quiet／错误关联及拒收后续命令；symlink／junction 目标及非 eligible 临时文件保留用例亦已在 Windows 通过。2026-10-31 在 Windows `10.0.26300`／RTX 5080 的隔离原生窗口执行 `pwsh -NoProfile -File scripts/kitty-media-windows.ps1 -KeepVisible`，实际看到 regular file、temp file、named shm 三行均为左红右绿；脚本用 raw VT 字节读取关联应答，输出 `MEDIA_PROTOCOL_OK`，并确认普通文件保留、eligible 临时文件删除及特殊路径统一拒收。按 Enter 后三行图片消失、源对象清理并返回 shell。Linux headless workspace 的完整 `--all-features` 回归已通过；真实 native SSH 的 Linux file／temp／POSIX shm 验收见[远程图片记录](/remote/ssh#标准原生桌面与双-pane-全尺寸入口)，第二层 nested SSH 用例未执行。macOS（#152）延期，文件／POSIX shm 与最终原生观察不由 Windows 或 WSL 结果替代。
+
+上述媒体回归还覆盖 4 KiB 对象末尾的有效 8-byte 区域、跨 64 KiB 边界的非对齐区域，以及 `O=4092,S=8` 超出 4 KiB 对象时的统一拒收，Windows 已通过。错误回复直接从同一真实 pane 的 PTY Output 采集：fixture 的完成标记会覆盖终端网格中的回复前缀，不能把最终网格中找不到该前缀误判为 daemon 未回复。每个拒收断言保留媒体名、`O/S/q`、请求序号与真实输出诊断，仍检查具体 `EBADF`、图片／放置身份、quiet 抑制及未出现图片。
 
 #41 的真实 daemon-session 格式／压缩／应答／中断／49 MiB APC 拒收及后续输入回归、GPUI 真实 PNG／raw 解码与 paint 回归，以及退休 worker／继任连接回归已在 Windows 通过。本轮原生有效图、压力与恢复观察见下方；全部无效／超限格式的原生表现、其他 DPI 及 macOS 仍未穷尽验证。仅收到 frame 或派生状态不等同于原生像素验收。
 
@@ -275,30 +505,211 @@ GPUI 测试窗口没有配置 `HeadlessRenderer`，解码数据、几何或 pain
 - daemon 的资源引用查询与桌面视口使用共享行投影及 prototype 解析，不维护第二套占位符身份规则。桌面只投影当前 viewport 的真实行；隐藏窗格继续保留既有通知门控。当前 4,096 次放置上限合计计算直接放置和虚拟 prototype，不按显示单元扩增资源数。
 - 共享确定性 PTY fixture 的真实独立 daemon → `RemoteTerminal` → rooted `TerminalView`／production decoder／paint 回归已在 Windows 通过，覆盖身份、继承、源切片、混合路径、单元擦除／移动和屏幕切换；另有独立 CLI／ConPTY 的查询、仅上传、prototype、删除和后续文字冒烟。测试窗口无 `HeadlessRenderer`；本轮 Windows 原生及 SSH 图片观察与这些自动化分开记录，macOS 和完整平台矩阵仍未验收，不构成 tmux/screen 兼容承诺。
 
-#### 正式 omp 接入：Windows placeholder 原生重放已验证
+#### 相对放置（#144）
 
-已实测正式 `omp/18.12.6`。该版本未自动识别 lyrel 时，使用应用公开的协议选择，不修改 `TERM_PROGRAM`。在 lyrel 的 PowerShell 窗格中启动新进程：
+相对放置通过 `P=<image id>,Q=<placement id>` 引用同一 pane、同一屏幕的既有放置，
+`H`／`V` 是有符号 32-bit 单元位移，正值向右／向下。原点是父放置的左上单元，
+不是源裁剪区或像素偏移后的边缘。无论 `C` 是什么，相对放置都不移动光标。
+关系保存在 daemon 的既有 Placement 与 pane transport 中；桌面仅投影权威几何，
+不会为关系创建另一套图片资源。当前最大链长为八条链接，仍计入既有 4,096 次放置配额。
+
+不存在的父放置返回 `ENOPARENT`，环返回 `ECYCLE`，超出八条链接返回 `ETOODEEP`，
+相对虚拟子放置（`U=1,P!=0`）返回 `EINVAL`；错误沿用图片／放置身份及 `q=1/2` 抑制规则。
+拒绝请求不替换已接受的放置。相同图片／放置 ID 的重新放置保留父身份并移动后代；
+父放置被删除或过期时后代级联删除，失去最后放置的后代图片同时释放。
+图片重新传输的旧放置删除语义仍有效，不把新资源误当作旧父放置。
+
+虚拟 prototype 可以作为父放置，但不能同时作为相对子放置。其父锚点取真实、有效、
+仍保留的 Unicode 占位单元横纵坐标的独立最小值，不使用 prototype 创建时光标。
+没有匹配单元时子图不可见；文字插入、擦除、滚动、重排及历史截断会重新推导锚点。
+擦除单元不删除 prototype；协议删除 prototype 则删除其后代。屏幕切换、清屏与 reset
+沿用同一权威生命周期；新消费者从仍存活 daemon 恢复关系、原图及文本，不依赖旧窗口缓存。
+
+新增 `graphics_consumer_relative_` 回归入口使用真实 PTY、独立 daemon、production
+RemoteTerminal 和 rooted TerminalView，检查像素身份、几何、八链接、错误、文字移动与 fresh 恢复。
+区域滚动用例先制造并清理真实历史，再以父锚点文本、父子绝对坐标各移动一行、相对位移及
+实际 paint bounds 交叉检查：`anchor_row` 是包含已丢弃历史的稳定绝对行，不能直接当作视口行。
+`graphics_consumer_relative_selected_frames_retire_with_parent_and_history` 同时选中父、子动画的
+非 root 帧，检查放置仍引用原资源 root；销毁旧消费者后分别执行父放置删除、父图片重传替换和
+10,000 行历史过期，再用 fresh 消费者检查像素身份、几何、无重传恢复及子动画整体释放，不能
+只隐藏旧帧或通过再次选帧复活。上述五项 `graphics_consumer_relative_` 回归已在 Windows 通过。
+在隔离开发实例的自有窗格运行 `node scripts/kitty-relative.mjs scene`，脚本退出后关闭并重开
+GUI，必须仍看到同一组图，且不要再次运行 `scene`。`move`、`erase`、`delete` 分别移动、
+擦除文本锚点和删除父放置；每步后可重开窗口检查几何与删除不复活。输出标记给出 1-based
+预期单元位置。2026-10-31 在 Windows `10.0.26300`／RTX 5080 的隔离原生窗口实际执行上述流程：
+direct／virtual 父子图随 `move` 同步移动，`erase` 使 virtual child 消失，`delete` 后图片全部消失；
+发送器退出后关闭并重开 GUI，场景无重传恢复，删除结果也未复活。
+真实 SSH 的标准 GUI relative／fresh 恢复已通过，详见[远程图片验收记录](/remote/ssh#标准原生桌面与双-pane-全尺寸入口)。字体、OS DPI、显示器缩放及 pane resize 的完整原生矩阵仍未完成；正式 agent 的跨 SSH 组合未执行，macOS（#152）延期。
+
+#### 正式 omp 接入：进程级图片策略与原生重放
+
+2026-10-31 读取上游最新正式 release 为 [v18.14.1](https://github.com/can1357/oh-my-pi/releases/tag/v18.14.1)。最终 integration 使用本机正式 `omp/18.14.1` 执行 pictures、budget、disabled／protocol-off 的真实 PTY／rooted consumer，三项均通过；三次退出审计均为 `requests=[]`、消息 `5→5`、`modelUsage=0`、`zeroInference=true`。Windows 原生三图与完整 budget 像素证据来自下文记录的正式 `omp/18.14.0`，不将该原生结果外推到 18.14.1。
+
+在 lyrel 设置的 `agent_launch.omp` 使用字面量前缀，例如：
+
+```text
+PI_FORCE_IMAGE_PROTOCOL=kitty PI_KITTY_PLACEHOLDERS=1 omp
+```
+
+启动与恢复沿用现有 agent launch／Host session operation，不伪造 `TERM_PROGRAM`，不注入全局配置。已知公开前缀会按实际 shell 编码；未显式指定 shell 时，从目标 Host 的 `ShellInventory` 默认项解析，不用 Windows 桌面身份猜测远端 POSIX shell。PowerShell 的进程环境在 native 子进程退出后恢复，cmd 使用独立子 shell，POSIX 使用命令前缀。过去 Windows 快捷启动直接键入 `KEY=value omp`，以及恢复后变量留在 shell 的缺陷由同一入口修复。启动拒绝通过持久错误通知说明原因，并提示修改 `agent_launch` 或在新窗格手动启动；此审查修复不扩大已有原生验收声明。
+
+lyrel 不为未配置的 omp 强制添加图片选项，也不追加 `terminal.showImages: true` overlay。公开 `PI_FORCE_IMAGE_PROTOCOL=none/off`、`PI_KITTY_PLACEHOLDERS=0`、`PI_NO_KITTY_PLACEHOLDERS=1` 和上游 `terminal.showImages: false` 保持有效。显式选择启用模式是操作者的决定；公开环境选项和关闭项会作为非敏感启动上下文保留。`PI_NO_KITTY_PLACEHOLDERS=1` 优先于 placeholder opt-in。不要使用不存在的 `--image-protocol`，也不要使用已移除的 `PI_KITTY_IMAGE_TRANSMISSION`。
+
+v18.14.1 的原生 renderer 可从保存会话重建 assistant 图片、toolResult 图片及 `tui.renderSvg` 启用时 fenced SVG 的栅格图；PNG 直接显示，其他支持格式经上游转换。普通 SVG 字符串／链接／路径仍不由 lyrel 解释。上游默认 `tui.maxInlineImages=8`，每个 screen／alternate surface 独立计数；`0` 是上游取消该 cap，不代表 lyrel 无预算。默认宽限 100 列，高限 20 行并受 viewport 约束。超额旧图由上游 demotion 和 `d=I` 删除，lyrel 不偷偷恢复这些像素；后续原生 replay 合法重传另当别论。omp 使用原生 terminal scrollback，不套用 OpenCode 的分页／remount 假设；resize 的默认 `rebuild` 可重新发图。
+
+**上游 assistant 身份限制：**[18.14.0 的 `AssistantMessageComponent`](https://github.com/can1357/oh-my-pi/blob/v18.14.0/packages/tui/src/chat/assistant-message.ts#L2044-L2046) 与 [18.14.1 对应实现](https://github.com/can1357/oh-my-pi/blob/v18.14.1/packages/tui/src/chat/assistant-message.ts#L2044-L2046) 都以 `native:${contentIndex}` 作为 assistant 图片 key，而非消息身份。[`ImageBudget.acquireId`](https://github.com/can1357/oh-my-pi/blob/v18.14.0/packages/tui/src/components/image.ts#L282-L301) 会为相同 key 复用 ID，[transmit-once](https://github.com/can1357/oh-my-pi/blob/v18.14.0/packages/tui/src/components/image.ts#L553-L586) 则不会重新发送已登记 ID。因此不同 assistant 消息中相同 content slot 的图片会碰撞；旧 budget 输入的十条消息均把图片放在 slot 1，实际日志中十个标签齐全却只有第一张红色图片，此结果与源码路径一致。不能宣称这些版本能正确恢复任意跨多 assistant 消息的同 slot 图片，lyrel 不修改上游、不伪造新 ID 或补画未发送的像素。预算夹具改为**同一正式 assistant 消息内十个不同 image content slot**，再接 toolResult 和 SVG；仍验证十二张原生图片在 cap 8 下只保留后六张 assistant 加 toolResult／SVG，不将预期降低成三张。此输入修正的运行效果须由下述独立 budget 用例和原生窗口确认。
+
+来源：[公开环境变量与优先级](https://github.com/can1357/oh-my-pi/blob/v18.14.1/docs/environment-variables.md)、[设置覆盖层](https://github.com/can1357/oh-my-pi/blob/v18.14.1/docs/settings.md)、[原生 renderer 生命周期](https://github.com/can1357/oh-my-pi/blob/v18.14.1/docs/tui-core-renderer.md)、[ImageBudget](https://github.com/can1357/oh-my-pi/blob/v18.14.1/packages/tui/src/components/image.ts) 和[原生历史重建](https://github.com/can1357/oh-my-pi/blob/v18.14.1/packages/coding-agent/src/modes/utils/ui-helpers.ts)。
+
+**可复现的隔离 native fixture（Windows）**：先再次查询 release 和 `omp --version`，使用已有正式安装，不自动安装／升级全局工具。在仓库根执行：
 
 ```powershell
-$env:PI_FORCE_IMAGE_PROTOCOL = 'kitty'
-$env:PI_KITTY_PLACEHOLDERS = '1'
-omp --config ./lyrel-images.yml
+$fixture = Join-Path $env:TEMP ('lyrel-omp-148-' + [guid]::NewGuid())
+node scripts/omp-native-replay.mjs prepare --root $fixture --omp (Get-Command omp).Source --case pictures
+node scripts/omp-native-replay.mjs launch --root $fixture --lyrel-app (Resolve-Path .\target\debug\lyrel-app.exe).Path
 ```
 
-`lyrel-images.yml` 仅固定本次进程的图片选项，不修改用户全局配置：
+每个新 fixture 使用独立 home／默认 profile／workspace／overlay／lyrel 端点及合成 JSONL v3，启动真实 `omp --resume` TUI，不使用 render/gallery、模型代理回复或私有历史。子进程环境采用 allowlist，不继承凭据／broker／扩展；唯一选定模型指向只拒绝请求的 loopback endpoint，关闭 recap、自动 compaction 和标题生成。不提交任何新 prompt。`PI_CONFIG_DIR` 使用公开的目录名 `.omp`，`PI_CODING_AGENT_DIR` 指向自有 `agent`；启动前通过真实 `omp config path`、`config get ... --json` 和 `models lyrel-fixture --json --no-extensions` 检查目录、图片策略、SVG、cap 与模型可选性，失败立即中止，不回落到用户模型。公开 catalog 刷新不等于推理，本入口不宣称完全离线。
 
-```yaml
-terminal:
-  showImages: true
-tui:
-  renderSvg: true
+验收时确认三张实际图片：64×32 红底黑十字 assistant、64×32 粉底黑十字 toolResult，以及深蓝背景／橙色三角形的 240×80 SVG 原生栅格图；`fixture.json` 提供每张输入图片的 BGRA SHA-256 和几何身份。滚动离屏／返回并改变窗格宽度，记录具体资源／放置及三张图的顺序，不能只检查 `LYREL_*` 标签。输入 `/exit` 结束原生 TUI；检查 `version.txt` 和 `audit.json`，要求 `requests=[]`、消息数未增加、`modelUsage=0`、`zeroInference=true`。这只是原生应用重放，不能证明无发送者重传的 living-daemon 恢复。
+
+另用全新目录分别运行 `--case budget`（同一 assistant 消息内十张不同图片，加 toolResult 和 figure，cap 仍为 8；前四张红／绿／蓝／黄须被上游删除或 demote，滚动不可复活；后六张洋红／青／棕／紫／深绿／灰与粉色 toolResult、深蓝橙三角 figure 共八张须存在）、`--case disabled`、`--case protocol-off`；后两者必须无图。不能以十个 assistant 标签代替十张不同图片身份，也不能把上游同 slot 碰撞当成 lyrel 预算回收。`--mode direct` 和 `--case placeholder-off` 可单独检查直接放置／硬关闭 placeholder，不将旧版 direct 重叠现象视作当前版已定位或已通过。退出并关闭本 fixture 的窗口／daemon 后，只清理所属目录：
+
+```powershell
+node scripts/omp-native-replay.mjs cleanup --root $fixture --lyrel-cli (Resolve-Path .\target\debug\lyrel.exe).Path
 ```
 
-`PI_KITTY_PLACEHOLDERS=1` 选择 Unicode 占位符，是本轮已验证的 omp 配置；`0` 的原生重放出现图片位置重叠，不推荐作为该版本 omp 的接入配置，根因尚未确认。这不改变 lyrel 对确定性 direct 协议夹具的支持。如果另有 `PI_NO_KITTY_PLACEHOLDERS=1`，它会优先硬关闭占位符。不要使用不存在的 `--image-protocol` 参数，也不要使用已移除的 `PI_KITTY_IMAGE_TRANSMISSION`。选项来源为该正式版本的 [environment-variables.md](https://github.com/can1357/oh-my-pi/blob/v18.12.6/docs/environment-variables.md) 与 [settings.md](https://github.com/can1357/oh-my-pi/blob/v18.12.6/docs/settings.md)。
+集中消费者入口为 `cargo test --locked --bin lyrel-app graphics_consumer_released_omp_native_ -- --ignored --nocapture --test-threads=1`，先将 `LYREL_TEST_OMP` 设为正式可执行文件绝对路径；中央先运行 `node --check scripts/omp-native-replay.mjs`。只验证剩余 budget 时使用 `cargo test --locked --bin lyrel-app graphics_consumer_released_omp_native_resume_budget -- --ignored --nocapture --test-threads=1`，无需重复已通过的 pictures／disabled 路径。budget 保留精确八图身份、不同原生 image ID、前四图不可复活、后六图／toolResult／SVG 及滚出返回 placement identity 不变的断言。它复用真实 PTY／独立 daemon → `RemoteTerminal` → rooted `TerminalView`，不替代原生 GPU 像素。`--wait-ready` 只等待自有目录的 `consumer-ready` 文件，由 rooted consumer 挂载后释放；wrapper 不创建 readline／stdin stream，不向 TUI 注入 `LYREL_OMP_START`。原生 omp 独占继承的 ConPTY stdin。
 
-Windows 协议冒烟已在 pane `13` 的生产 CLI／daemon 上复验，使用完全临时的 home／profile／overlay 与合成 version 3 JSONL，通过公开 `--resume <path>` 启动真实 `omp/18.12.6` 交互 TUI。直接放置和占位符两轮均经真实 ConPTY、独立 daemon 与生产 `PaneClient` 收到 `240 × 80` SVG 栅格 PNG 和 `64 × 64` 合成 toolResult PNG 的独立资源／放置；后者的内容指纹与输入一致，占位符轮另有真实 `U+10EEEE` 单元。保留 `TERM_PROGRAM=lyrel`，未修改 omp 源码，也未使用丢弃图片字节的 `omp render` 或 gallery 代替。发送 `/exit` 后两轮进程及私有 daemon 均正常退出，无 socket 错误；合成会话没有新增 assistant、`model_usage` 或 `title_change`，没有提交新 prompt。临时 home／profile／会话／端点及冒烟脚本均已清理。
+原生 budget 使用新的 `$fixture`，将上方 `prepare` 改为 `node scripts/omp-native-replay.mjs prepare --root $fixture --omp (Get-Command omp).Source --case budget`，然后执行同一 `launch`。不输入 prompt；从尾部向上滚动遍历八图，再返回，确认前四张不复活、后六张 assistant 及 toolResult／SVG 的实际像素与顺序。退出后核验 `version.txt`、公开 cap preflight 为 8 与 `audit.json` 的零推理结果，再关闭和清理这个自有实例。不要把仅查询版本或 rooted paint 当作该原生步骤已经通过。
 
-随后在上述 Windows 原生窗口，以隔离 HOME／profile／overlay 和公开 `--resume` 运行同一正式 `omp/18.12.6`：placeholder 模式实际显示受控 assistant 的 `480×100` fenced SVG，以及 toolResult 中真实隔离窗口的 `1280×804` PNG 截图；`/exit` 正常返回 shell。未修改 omp、未伪造 `TERM_PROGRAM`、未传入用户模型凭据，也没有提交 prompt 或执行推理。受控会话重放证明生产应用渲染和最终像素，不等于真实模型新生成的回答；真实 agent 交互、macOS 及远端 omp 仍未验收。direct 模式位置重叠保留为未解决的兼容缺口。公开 catalog 刷新不等于模型推理，本轮也不声明完全断网。
+失败时日志会输出 `LYREL_OMP_STAGE`，自有目录保留 `stages.jsonl`、每个公开 preflight 的状态／stdout／stderr、`running.json`、拒绝 endpoint 的 `requests.json`（若有请求）及退出 `audit.json`；consumer panic 同时打印 `fixture.json` 的输入身份／几何、阶段历史、pane／child／连接状态、完整 terminal text 和 graphics recovery diagnostics。`waiting-consumer`、公开 config／models、`native-spawned`、实际图片／transcript tail 和 exit/audit 是不同边界，不以子进程启动替代图片验收。
+
+原真实失败记录为 `lyrel-139-omp-geometry-after.log`：pictures 与关闭策略通过，budget 解码身份只有 assistant 红色、toolResult、SVG，且十个标签齐全。正式上游相同 content slot 共享 key 的限制已保留在上文；修正夹具后，独立 budget 用例于 2026-10-31 通过，精确八种身份／八个原生 image ID、前四删除、后六保留、toolResult／SVG 与滚出返回 placement identity 均已执行，退出 `zeroInference=true`。同日 Windows `10.0.26300`／RTX 5080／Debug／100% 缩放的自有 2552×1384 原生窗口实际显示洋红、青、棕、紫、深绿、灰黑十字 assistant 图片、粉色黑十字 toolResult 和深蓝背景橙三角 SVG 栅格图；向上滚动旧四图只保留 demotion 标记，返回仍为保留的图。独立 `terminal.showImages=false` 与 `PI_FORCE_IMAGE_PROTOCOL=none` 原生场景均只有文本／附件标签和 SVG 源文本，没有图片。三轮 `/exit` 后审计均为 `requests=[]`、消息 `5→5`、`modelUsage=0`、`exitCode=0`、`zeroInference=true`。上述原生窗口执行版本为正式 `omp/18.14.0`；最终 integration 另以正式 `omp/18.14.1` 通过 pictures、budget、disabled／protocol-off 三项真实 PTY／rooted consumer 和零推理审计，但没有重跑 18.14.1 原生窗口，也不将 macOS／真实 SSH 写成通过。
+
+无需升级全局安装即可另行验收 `18.14.1`：从[官方 release](https://github.com/can1357/oh-my-pi/releases/tag/v18.14.1) 下载 `omp-windows-x64.exe` 到新的临时目录，用 `Get-FileHash -Algorithm SHA256` 核对本次 GitHub asset digest `5b72f0e46e9cd441793d399d36f319a656f2e3c9a3f1997342e46fa885614913`，再把 `LYREL_TEST_OMP`／`prepare --omp` 指向该绝对路径。下载地址为 `https://github.com/can1357/oh-my-pi/releases/download/v18.14.1/omp-windows-x64.exe`；先运行该文件的 `--version` 并记录，不修改 PATH、全局配置或现有 omp。18.14.1 并非本修复的已证明前提，不能把本次 18.14.0 结果外推到它。
+
+历史上 `omp/18.12.6` 曾在 Windows 隔离原生窗口验证 placeholder assistant SVG 和 toolResult PNG、无新 prompt；direct 重放当时观察到重叠。该记录仅属于旧版本，不替代以上新版验收。
+
+<a id="pi-native-image-replay"></a>
+#### 正式 pi 接入：公开进程设置与独立重放夹具（#149）
+
+这里的 **pi** 是 [earendil-works/pi](https://github.com/earendil-works/pi)，npm 包为 `@earendil-works/pi-coding-agent`，不是 omp。2026-10-31 重新查询 [GitHub 最新正式发行](https://github.com/earendil-works/pi/releases/tag/v1.4.0)、npm `version` 和本机 `pi --version`，三者均为 `1.4.0`。版本核实、两项真实 PTY／生产消费者通过结果，以及 Windows 原生二十图与关闭策略通过记录分别列在下文，不互相替代。
+
+使用 lyrel 既有 `agent_launch` 的 literal 环境前缀，只为该次启动选择协议，不修改 `TERM_PROGRAM=lyrel`，也不修改 pi 全局配置：
+
+```json
+{
+  "agent_launch": {
+    "pi": "PI_IMAGE_PROTOCOL=kitty pi"
+  }
+}
+```
+
+有意关闭时可改为 `PI_IMAGE_PROTOCOL=none pi`。图片选择值随 Pi 原生 hook 的公开会话 scope 绑定、持久化及恢复；已绑定 scope 优先于启动默认值，启动显式赋值优先于 Host 环境。未配置时不替用户强制打开；不把 omp 的 `PI_FORCE_IMAGE_PROTOCOL`、`PI_KITTY_PLACEHOLDERS` 或 YAML overlay 当成 pi 接口。恢复指定文件使用 pi 的 `--session <path>`，不是 omp 的 `--resume <path>`；pi 的 `--resume` 打开选择器。
+
+上游 [terminal-setup.md](https://github.com/earendil-works/pi/blob/v1.4.0/packages/coding-agent/docs/terminal-setup.md) 和 [settings.md](https://github.com/earendil-works/pi/blob/v1.4.0/packages/coding-agent/docs/settings.md) 规定：
+
+- `PI_IMAGE_PROTOCOL=kitty|iterm2|none|auto` 是公开环境选项；`terminal.images: "kitty"|"iterm2"|false|"auto"` 是协议设置，**具体设置值优先于环境变量**；`auto` 不强制覆盖环境选择。
+- `terminal.images=false` 或 `terminal.showImages=false` 均不得由 lyrel 静默改为开启。后者是独立显示策略，不是 `images.blockImages`（后者限制发送给模型）。
+- 本票仅覆盖保存的 **toolResult 图片**。PNG 直接进入原生 Kitty 路径；JPEG／GIF／WebP 依赖 pi 原生 PNG 转码，不承诺文件动画播放。用户消息图片、assistant 中 SVG 正文／代码块栅格化、Markdown 图片链接及任意路径／URL 不在本票承诺内，lyrel 不补画这些内容。
+- pi 默认图片宽度为 60 cells；夹具显式用 12 cells。其 [fullscreen renderer](https://github.com/earendil-works/pi/blob/v1.4.0/packages/tui/src/tui-alt-screen.ts) 仅保留最多 16 个屏外 Kitty 图片、32 MiB transmission、64 MiB estimated decoded 内容；滚动重挂载可能复用上传或重传，超出这些上游保留边界会发送 `d=I`。这里不是 OpenCode 的“三张／组”规则。lyrel 尊重删除，不以隐藏像素副本绕过限额；以后有效重传才重新建立资源。
+
+##### 中央验证入口与原生像素步骤
+
+仓库夹具 `scripts/pi-image-replay.mjs` 只生成自己临时目录中的 version 3 合成会话，经实际正式 pi 的 `--session` 重放；不导入 pi 内部 renderer，不读用户历史，不复制凭据，不向 stdin 填入新 prompt。支持正式独立可执行文件或 npm `dist/cli.js`，执行前校验 `--version`；npm 入口另校验包名。独立发行文件的来源／校验和须与 [正式 release assets](https://github.com/earendil-works/pi/releases/tag/v1.4.0) 核对。夹具不安装或升级软件；需要 Node.js 22.19+ 和正式 Pi 1.4.0。`--offline`、禁用发现扩展／MCP／skills／context、空 HOME／agent-dir 及凭据环境 allowlist 隔离模型工作；退出时检查原合成会话没有新增 message、usage、compaction 或 branch summary，再删除自己的目录。
+
+以下为中央复现入口；已执行结果见下文，未显式运行的 ignored 用例不能计为通过：
+
+```powershell
+$env:LYREL_PI_GRAPHICS_CLI = 'C:\path\to\official\pi.exe'
+# npm 安装也可指向 @earendil-works/pi-coding-agent/dist/cli.js。
+node --check scripts/pi-image-replay.mjs
+cargo test --locked -p lyrel-core pi_resume_preserves_explicit_image_protocol_without_omp_options
+cargo test --locked -p lyrel-core pi_first_run_waits_for_settlement_and_resolves_only_its_own_dialog
+cargo test --locked --bin lyrel-app graphics_consumer_pi_native_ -- --ignored --nocapture --test-threads=1
+```
+
+最后一条已在 Windows 通过真实 PTY → 新建隔离 daemon → production `RemoteTerminal` → rooted `TerminalView`，比较两张图不同的 BGRA 地标、放置、图片处于对应 `read` 卡片和后续文本之间的几何与真实 production paint claim，覆盖原生历史 top／bottom、`/new` 删除、再次原生启动重放，以及三种显式关闭和设置覆盖环境。GPUI 测试窗口不是最终 GPU 像素证据。
+
+Windows 原生验收应先由中央构建当前合并提交，启动**另一个全新目录**的 `lyrel-app.exe --config-dir <isolated-dir>`，确认连接的是本轮 built daemon；不要对旧用户 daemon 复用／升级／停止。在该窗口新建自有 pane，运行：
+
+```powershell
+node C:\path\to\lyrel\scripts\pi-image-replay.mjs --pi C:\path\to\official\pi.exe --pictures 20 --rounds 2
+```
+
+1. 起始应看到第 19 张 `48×24` 合成图片，而非仅 `PI_REPLAY_PICTURE_19` 标签。四象限源 RGBA 从左上顺时针为 `(255,0,209,255)`、`(0,255,133,255)`、`(255,255,0,255)`、`(95,0,255,255)`，中心白色 `4×4` 方块；夹具进入 TUI 前输出每张源 RGBA SHA-256。
+2. `F5` 跳原生 transcript 顶部：第 0 张应为红／绿／黄／蓝四象限及白色中心；`F6` 回尾部。逐页 PageUp／PageDown 访问全部 20 张，超过 pi 的屏外保留数量后回访，核对各图身份和位置，没有串图、重叠残影或已删除像素复活。不要改成 lyrel 的 shell 历史滚动冒充原生 remount。
+3. 输入原生命令 `/new`，旧会话图片应消失。空编辑器按 `Ctrl+D` 退出首个 pi；夹具第二轮自动用同一个保存文件启动另一个 pi，图片须由发送器再次输出，不手工重发、不触发模型。第二轮再次 `/new`、`Ctrl+D`，应看到两条 `PI_REPLAY_ROUND_n_NO_NEW_MESSAGES` 及清理完成后的 `PI_REPLAY_FIXTURE_DONE`。
+4. 分别以 `--policy env-none`、`--policy settings-none`、`--policy display-none` 启动单轮，保存 transcript 可见但不应显示图片；`--policy settings-kitty` 则在 `PI_IMAGE_PROTOCOL=none` 下由显式设置选择 Kitty。每轮只用 `Ctrl+D` 退出，不发送任务；夹具 180 秒硬截止仅结束自有 pi 子进程。
+5. 原生截图记录四象限／白心、关联文本及 pane 裁切；记录提交、pi 来源与实际版本、GUI／daemon PID、OS、GPU、显示缩放／刷新率及窗口尺寸。关闭全部自有窗口后，仅对同一 `<isolated-dir>` 执行 `lyrel-app.exe --config-dir <isolated-dir> --stop-daemon`，确认自有进程退出再清理自有目录。不要停止用户实例。
+
+**本票证据边界：**2026-10-31，正式 `pi 1.4.0` 在 Windows `10.0.26300`／RTX 5080／Debug／100% 缩放的隔离原生窗口通过二十张合成 tool-result 图片的两轮原生重放，观察尾图 19、顶部图 0 与翻页中段图 3 的四象限／白心及正确卡片位置。两轮 `/new` 后旧图消失，退出后同一保存文件由新 pi 重传，无手工重发／新 prompt；夹具输出两条 `PI_REPLAY_ROUND_n_NO_NEW_MESSAGES` 与 `PI_REPLAY_FIXTURE_DONE`。另分别原生验证 `env-none`、`settings-none`、`display-none` 无图，以及 `settings-kitty` 覆盖 `PI_IMAGE_PROTOCOL=none` 后正确显示。初次原生发现图片落入编辑区，已由统一 synchronized-update 流顺序修复；不以此前只核对像素的绿色用例掩盖几何问题。macOS MacBook Air M5 与真实 SSH 的三 agent 组合仍未执行。原生 replay 允许 pi 重传；同活 daemon 的 fresh GUI 恢复另有“发送器不输出”合约，不能用本夹具第二轮代替。
+
+
+#### OpenCode 2.2.0：公开历史图片预览与原生验收入口（#150）
+
+2026-10-31 重新读取本机 `opencode --version`，结果为 `opencode v2.2.0`；官方 [v2.2.0 release](https://github.com/anomalyco/opencode/releases/tag/v2.2.0) 为 2026-10-27 发布的非 prerelease，标签指向 `1097e2668b1e08ad63bdf0b1c4860b9bc01e420c`。这不是把 GitHub 的 `latest` 自动当作 2.x 基线，也不是原生图片已通过的声明。
+
+OpenCode 的 [公开 CLI 设置](https://opencode.ai/v2/docs/cli/config) 是 `session.image_preview`，与仅影响输入框的 `prompt.image_preview` 不同。默认不开启历史预览；CLI 从 `$XDG_CONFIG_HOME/opencode/cli.json`（未设置时为 `~/.config/opencode/cli.json`）读取，不读取项目局部 CLI 配置。`OPENCODE_CLI_CONFIG_CONTENT` 按对象深合并覆盖该文件，数组和标量替换，且变量存在期间保持权威；因此不得注入 `true` 覆盖用户明确的 `false`。
+
+lyrel 不强制打开该选项，也不增加 agent 专属图片渲染器。既有 `agent_launch` 可选择独立 CLI 配置目录；获准安装 OpenCode 集成时，同样使用该启动作用域的 `XDG_CONFIG_HOME` 和 Host，而不是误写默认目录。配置目录必须是目标 Host 上的绝对路径。示例中的目录应由你准备，只有明确需要图片时才在其中写入 `{"session":{"image_preview":true}}`：
+
+```json
+{
+  "agent_launch": {
+    "opencode": "XDG_CONFIG_HOME=C:/owned/opencode-config opencode --standalone"
+  }
+}
+```
+
+命令前的环境赋值沿用 lyrel 的启动设施；手动 PowerShell 启动时，应在仅拥有的子进程环境设置对应变量，不把 POSIX 赋值语法直接粘贴到 PowerShell。`--standalone` 选择私有 OpenCode server，不接管用户既有 service。`TERM_PROGRAM` 继续是 `lyrel`，不伪造 Kitty、WezTerm 等身份。仅需原生图片时不要求安装 lyrel 状态插件。
+
+该发布标签的 [SessionImages / UserMessage / ToolImages](https://github.com/anomalyco/opencode/blob/v2.2.0/packages/tui/src/routes/session/index.tsx) 已重新核对：用户附件从保存的 `image/*` 字节构造 data URI；tool-result 只选择 `type=file`、`mime=image/*` 且 `uri` 以 `data:image/` 开头的项，实际能否解码仍由原生图片节点决定。每个图片组／卡片最多内联前三张，其余显示 `+N more`；卡片高度按终端高度的四分之一限制在 4–8 行，使用 `fit=cover`。不能把第四张、URL、普通路径、Markdown 或 SVG 文本强行补成终端图片。打开默认只挂载约 40 个加权 transcript 行，较旧内容按约 60 行回填并经原生 API 分页；这些是本标签的实现值，升级需重新检查。
+
+几何依据继续来自该标签，而不是失败现场的坐标：120×60 窗格中，每个图片槽为 16×8 cells，相邻槽之间隔 1 cell；尾部 `+1 more` 占 8 cells，右侧保留 2 cells padding。其锁定的 [OpenTUI 0.7.0](https://github.com/anomalyco/opencode/blob/v2.2.0/package.json) 先按 `cover` 裁剪，再通过 [静态 Kitty placement](https://github.com/anomalyco/opentui/blob/v0.7.0/packages/native/src/terminal-image.zig) 发送显式 `i/p/c/r/x/y/w/h/C=1`，不依赖 lyrel 识别 agent 名。consumer 用例保留每个实际 placement 的独立记录，要求每种预期图片恰好一个 instance，总共六个；相同颜色／相同矩形也不能去重。几何检查使用 production paint 的实际 cell 尺寸，同时检查图片两两不重叠、每个槽与 viewport 边界，并以终端文本中的两处 `+1 more` 独立核对原生容器。
+
+**可运行夹具：**在隔离 lyrel 原生窗格中，先把窗格调到至少 120 列、60 行，再运行：
+
+```sh
+node scripts/opencode-image-replay.mjs --previews on
+node scripts/opencode-image-replay.mjs --previews off
+```
+
+需要已安装的 Node.js 和正式 OpenCode 2.2.0；可用 `--opencode <absolute-executable>` 指定已有程序，不自动安装或修改全局软件。夹具只创建自己拥有的临时 HOME／XDG／工作目录，清除凭据与用户 CLI overlay 的继承，使用公开 `session import` 保存合成对话，再以 `--standalone -s <id>` 恢复原生 TUI。其 546 条保存消息含首尾各一张用户附件卡和 tool-result 卡，中间 180 组问答用于强制旧消息分页；每卡四张 96×48 PNG，黑边／白色序号条和实心色块可识别图片。PNG 只作为合成会话中的图片来源，不另写磁盘图片缓存。夹具没有 `--prompt`、`run` 或模型调用；退出后公开 `session export` 核对消息逐项不变、cost/token 为零，输出 `OPENCODE_REPLAY_VERIFIED` 后清理本次临时目录。Node、OpenCode 或 native 图像缺失均是失败，不是跳过后通过。
+
+**原生 Windows 验收步骤与预期：**
+
+1. 初次打开在 `TAIL_USER` 卡上看到偏浅红、绿、蓝三张，在其下独立 `TAIL_TOOL` 卡看到偏浅青、黄、橙三张；黑边与 1／2／3 个白色条可分辨。每卡三张同排、从左到右、不重叠、不越出卡片，第四张洋红／紫色不应内联，应保留原生 `+1 more`。
+2. 用原生 `PageUp` 把尾卡滚出屏幕，再用 `End` 回到尾部，确认仍是对应六张和正确卡片位置，没有残影。用 `Home`／`Ctrl+G` 到旧历史，等待原生分页与挂载，在 `OLD_USER`／`OLD_TOOL` 检查深色版本的红绿蓝／青黄橙；随后 `End` 回尾，不能把旧卡图错误留在新卡。
+3. `F6` 使用公开 keybind 关闭 native tab，使图片节点卸载并删除；空页不得残留图片。`F7` 原生重开该 tab 后允许应用重新传输，检查尾卡图片再次正确出现。退出 `Ctrl+C` 后 shell 不得显示残留或“图片已淘汰”。这一步的应用重传不属于无重传 daemon 恢复。
+4. 对 `--previews off` 重复首尾分页；只能看到文本／附件标签，不得由 lyrel 自动变成图片。两轮均不提交 prompt、不重发或生成图片。记录版本、实际配置、GUI／daemon PID、Windows／DPI／窗格几何和对应截图，最终公开 export 核对结果也必须保留。
+
+中央自动化入口（必须显式运行 ignored 原生依赖用例，不能只运行默认套件）：
+
+```sh
+cargo test --locked -p lyrel-core opencode_scoped_launch_keeps_preview_policy_and_default_config_untouched -- --test-threads=1
+cargo test --locked -p lyrel --bin lyrel-app graphics_consumer_static_placements_count_coincident_instances_and_replace_by_id -- --nocapture --test-threads=1
+cargo test --locked -p lyrel --bin lyrel-app opencode_replay_consumer_tests:: -- --ignored --nocapture --test-threads=1
+```
+
+consumer 用例复用真实 PTY → 独立真实 daemon → 生产 pane connection／`RemoteTerminal` → rooted `TerminalView`，断言实际解码 BGRA 主色、独立 instance 数量、两卡左右几何、production paint claim、原生分页／滚离返回／tab 卸载重挂载，以及退出后 fresh consumer 不复活被应用删除的图片。额外静态协议用例覆盖同色不同放置、同原点重叠放置、同 `i/p` 替换不增量及精确删除；它验证计数不会被集合或 bbox 合并掩盖，不替代真实 OpenCode 或最终 GPU 像素。失败／超时输出完整 placement key、resource、原生 ID、源裁剪、anchor、paint 矩形、paint claim、图形预算状态和终端文本，供中央定位真实协议路径。
+
+**本票证据边界：**2026-10-31，正式 OpenCode `2.2.0` 已通过两项真实 PTY／隔离 daemon／production rooted consumer 验收，精确比较独立 placement、源像素、卡片边界、历史分页、滚离返回、tab 卸载重挂载和退出后不复活；静态逐实例协议回归另行通过。原 enabled 重叠失败由统一 synchronized-update 流顺序修复（`6f20137`），不是放宽几何断言。Windows `10.0.26300`／RTX 5080／Debug／100% 缩放的自有原生窗口（2552×1384）实际显示首尾两卡各三张图片、对应色块／黑边／序号条及 `+1 more`，滚离后无残影、返回后恢复；`F6` 关闭后无图，`F7` 重开后六图正确重传。另以 `session.image_preview=false` 验证首尾分页均只有文本／附件标签。两轮退出均输出 `OPENCODE_REPLAY_VERIFIED: unchanged public export, zero model usage`，没有新 prompt 或私人历史。MacBook Air M5 与真实 SSH 的三 agent 组合仍待集成验收；原生应用重传不替代 living-daemon 无重传恢复证明。
+
+#### 集成验收与仍未完成的运行门槛（#151）
+
+审查基线为 `72bb29f`。以下沿用该分支已有的最终 Windows／WSL／agent 记录，不表示本轮审查修复已重新构建或重跑：
+
+| 范围 | 已有执行记录 | 未执行或未完成 |
+| --- | --- | --- |
+| Windows／WSL 自动化 | Windows workspace、updater、格式与 Host 边界检查通过；WSL headless workspace `--all-features` 通过，bridge 使用隔离 Node `22.23.4` | 本轮审查修复后的中央统一验证 |
+| 正式 agent | `omp/18.14.1` 三项、pi `1.4.0` 两项、OpenCode `2.2.0` 两项真实 PTY／生产消费者通过；Windows 原生结果按上文各自版本记录 | `omp/18.14.1` 原生窗口、三 agent 的真实 SSH 组合；Kimi／Hermes 的图片专项集成未执行，不从现有识别／会话支持推定通过 |
+| native SSH | 四项基础 transport、四项 rooted consumer 和标准 GUI relative／mutations／双 pane 全尺寸 capacity 通过；随后第二层 nested 实连单独通过 | 基础命令含 `--skip nested_ssh`，nested 不计入四项基础计数；正式 agent 的跨 SSH 组合未执行 |
+| Windows 原生集成 | 双 pane 120 帧的 120 Hz WGC＋管理员 PresentMon 交叉记录约 60 fps；1×／1.25×／1.5×／2× 生产 consumer DPI／z-order 通过；正式 pi 与 24 张 1080p 压力图片同屏，保留画面正确 | input-to-photon／click-to-photon／MsBetweenDisplayChange 全部为 `NA`，不报告；`omp/18.14.1` 原生窗口、正式 agent 的跨 SSH 与 macOS 未执行 |
+| macOS | 无本轮通过声明 | #152 延期，不以 Windows／WSL 或 headless 结果代替 |
+
+后续执行须记录精确提交、实际命令及各自 executed／skipped 项；默认套件通过不自动覆盖上述 opt-in 和原生门槛。
 
 
 #### 当前实现：预算与历史回收（#44）
@@ -374,7 +785,7 @@ Windows → Linux 原生图片与无重传恢复已补充实测，见远程文�
 
 以下是 #39 的完整目标；尚未完成的平台与原生验收不能由局部实现或自动化结果替代：
 
-- 显示静态图片、透明背景及应用连续替换的画面，正确处理终端滚动、裁剪和重绘；不包含图片查看器、点击放大、复制／另存为或动画播放。
+- 显示静态图片、透明背景、应用连续替换的画面，以及 daemon 保留的帧、手动选帧和可见性暂停的自动播放；正确处理终端滚动、裁剪和重绘。新增播放路径的自动化与原生验证状态见 #141 小节。不包含图片查看器、点击放大或复制／另存为。
 - 图片属于窗格会话，不属于某个窗口。在历史保留范围和资源预算内，切换工作区、关闭后重开 GUI，以及重新连接同一存活 daemon 后，图片应恢复，无需应用重新发送。
 - 图片不新增磁盘持久化；daemon 结束后不保证历史图片恢复。智能体重新启动后主动重绘，是新的图片输出，不是 lyrel 恢复了旧图片。
 - 以 [Kitty graphics](https://sw.kovidgoyal.net/kitty/graphics-protocol/) 为支持协议，覆盖传输与独立放置、重复放置、裁剪、删除、Unicode 占位符，以及已有的传输并显示路径；SIXEL 与 iTerm2 inline images 不列为本次支持协议。

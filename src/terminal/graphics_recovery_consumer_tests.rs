@@ -13,11 +13,23 @@ fn graphics_consumer_progress(cx: &mut TestAppContext) {
 fn graphics_recovery_wait(
     cx: &mut TestAppContext,
     reason: &str,
-    mut ready: impl FnMut(&mut TestAppContext) -> bool,
+    ready: impl FnMut(&mut TestAppContext) -> bool,
 ) {
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    graphics_recovery_wait_with(cx, std::time::Duration::from_secs(30), ready, |_| reason.to_owned());
+}
+
+/// Native agent startup and full-size replay need longer deadlines and live
+/// diagnostics, but must pump the same production consumer lifecycle.
+#[track_caller]
+fn graphics_recovery_wait_with(
+    cx: &mut TestAppContext,
+    timeout: std::time::Duration,
+    mut ready: impl FnMut(&mut TestAppContext) -> bool,
+    mut diagnostics: impl FnMut(&mut TestAppContext) -> String,
+) {
+    let deadline = std::time::Instant::now() + timeout;
     while !ready(cx) {
-        assert!(std::time::Instant::now() < deadline, "{reason}");
+        assert!(std::time::Instant::now() < deadline, "{}", diagnostics(cx));
         graphics_consumer_progress(cx);
     }
 }
@@ -114,7 +126,10 @@ fn graphics_recovery_destroy(
         std::thread::sleep(std::time::Duration::from_millis(5));
     }
     cx.update(|cx| {
-        assert_eq!(crate::terminal::lifecycle::displayed_for_test(cx, entity_id), None);
+        assert_eq!(
+            crate::terminal::lifecycle::displayed_for_test(cx, entity_id),
+            None
+        );
     });
 }
 
@@ -1094,5 +1109,393 @@ fn graphics_consumer_three_4k_pngs_live_then_fresh_replay_without_sender_redraw(
         "fresh replay must keep the real sender PID, upload and byte counters unchanged"
     );
     graphics_recovery_destroy(fresh, fresh_window, cx);
+    daemon.panes().kill(pane).unwrap();
+}
+
+#[gpui_kit::test]
+fn graphics_consumer_complete_frames_manual_selection_and_detached_fresh_restore(
+    cx: &mut TestAppContext,
+) {
+    crate::core::config::pin_test_config_dir();
+    cx.executor().allow_parking();
+    cx.update(|cx| {
+        gpui_kit::component::init(cx);
+        cx.set_global(Config::default());
+    });
+    let daemon = GraphicsDaemonProcess::start();
+    let pane = daemon.spawn();
+    let (prior, window) = graphics_recovery_fresh(&daemon, pane, cx, 1100);
+    // Explicit default RGBA and an unpadded final quantum are equivalent inputs.
+    graphics_send_fixture_with_replies(&prior, cx, 1101,
+        b"\x1b_Ga=t,i=601,f=0,s=1,v=1;/wAA/w\x1b\\\x1b_Ga=f,i=601,f=32,s=1,v=1;AP8A/w==\x1b\\\x1b_Ga=f,i=601,f=24,s=1,v=1;AAD/\x1b\\", 3);
+    prior.read_with(cx, |view, _| {
+        assert!(graphics_visible_images(view).is_empty())
+    });
+    graphics_send_fixture_with_replies(&prior, cx, 1102,
+        b"\x1b[6;5H\x1b_Ga=p,i=601,p=1,c=2,r=1,C=1\x1b\\\x1b[8;9H\x1b_Ga=p,i=601,p=2,c=2,r=1,C=1\x1b\\", 2);
+    for (index, bgra) in [
+        (1, [0, 0, 255, 255]),
+        (2, [0, 255, 0, 255]),
+        (3, [255, 0, 0, 255]),
+    ] {
+        let old = prior.read_with(cx, |view, _| graphics_visible_images(view));
+        let command = format!("\x1b_Ga=a,i=601,s=1,c={index}\x1b\\");
+        graphics_send_fixture_with_replies(&prior, cx, 1102 + index, command.as_bytes(), 1);
+        graphics_recovery_pixels(&prior, cx, 601, &bgra);
+        graphics_assert_production_paint(window, &prior, cx);
+        prior.read_with(cx, |view, _| {
+            assert!(
+                old.iter()
+                    .all(|image| !view.terminal.images().claim_for_paint(image)),
+                "a selection revision invalidates every old frame claim before atlas allocation"
+            );
+            let images = graphics_visible_images(view);
+            assert_eq!(images.len(), 2);
+            assert!(
+                images
+                    .iter()
+                    .all(|image| image.data.as_ref().unwrap().as_bytes(0).unwrap() == bgra)
+            );
+            assert!(std::sync::Arc::ptr_eq(
+                images[0].data.as_ref().unwrap(),
+                images[1].data.as_ref().unwrap()
+            ));
+            assert_eq!((images[0].anchor_row, images[0].anchor_col), (5, 4));
+            assert_eq!((images[1].anchor_row, images[1].anchor_col), (7, 8));
+        });
+    }
+    let stopped = graphics_recovery_stats(&prior, cx, 1110);
+    graphics_recovery_destroy(prior, window, cx);
+    let (fresh, fresh_window) = graphics_recovery_fresh(&daemon, pane, cx, 1111);
+    graphics_recovery_pixels(&fresh, cx, 601, &[255, 0, 0, 255]);
+    assert_eq!(graphics_recovery_stats(&fresh, cx, 1112), stopped);
+    graphics_recovery_destroy(fresh, fresh_window, cx);
+    graphics_recovery_detached_request(&daemon, pane, "SEND", 1113,
+        b"\x1b_Ga=f,i=601,f=32,s=1,v=1,q=2;/////w==\x1b\\\x1b_Ga=a,i=601,s=1,c=4,q=2\x1b\\DETACHED-FRAME");
+    let (fresh, fresh_window) = graphics_recovery_fresh(&daemon, pane, cx, 1114);
+    graphics_recovery_pixels(&fresh, cx, 601, &[255, 255, 255, 255]);
+    graphics_assert_production_paint(fresh_window, &fresh, cx);
+    fresh.read_with(cx, |view, _| {
+        assert!(view.scrollback_text().contains("DETACHED-FRAME"))
+    });
+    graphics_recovery_destroy(fresh, fresh_window, cx);
+    graphics_recovery_detached_request(&daemon, pane, "SEND", 1120,
+        b"\x1b[10;5H\x1b_Ga=T,i=601,p=9,c=2,r=1,C=1,f=32,s=1,v=1,q=2;/wAA/w==\x1b\\\x1b_Ga=f,i=601,f=32,s=1,v=1,q=2;AP8A/w==\x1b\\\x1b_Ga=a,i=601,s=1,c=2,q=2\x1b\\DETACHED-REPLACEMENT");
+    let (fresh, fresh_window) = graphics_recovery_fresh(&daemon, pane, cx, 1121);
+    graphics_recovery_pixels(&fresh, cx, 601, &[0, 255, 0, 255]);
+    fresh.read_with(cx, |view, _| {
+        let images = graphics_visible_images(view);
+        assert_eq!(
+            images.len(),
+            1,
+            "replacement retires both prior placements and all old frame versions"
+        );
+        assert_eq!(images[0].placement.placement_id, 9);
+        assert_eq!(images[0].placement.screen, 0);
+        assert!(view.scrollback_text().contains("DETACHED-REPLACEMENT"));
+    });
+    graphics_recovery_destroy(fresh, fresh_window, cx);
+    graphics_recovery_detached_request(&daemon, pane, "SEND", 1115, b"\x1b_Ga=d,d=I,i=601\x1b\\");
+    let (fresh, fresh_window) = graphics_recovery_fresh(&daemon, pane, cx, 1116);
+    fresh.read_with(cx, |view, _| {
+        assert!(graphics_visible_images(view).is_empty())
+    });
+    graphics_recovery_destroy(fresh, fresh_window, cx);
+    daemon.panes().kill(pane).unwrap();
+}
+
+#[gpui_kit::test]
+fn graphics_consumer_partial_frames_edit_pixels_and_detached_versions(cx: &mut TestAppContext) {
+    use base64::Engine as _;
+    crate::core::config::pin_test_config_dir();
+    cx.executor().allow_parking();
+    cx.update(|cx| {
+        gpui_kit::component::init(cx);
+        cx.set_global(Config::default());
+    });
+    let daemon = GraphicsDaemonProcess::start();
+    let pane = daemon.spawn();
+    let (view, window) = graphics_recovery_fresh(&daemon, pane, cx, 14200);
+    let encode = |bytes: &[u8]| base64::engine::general_purpose::STANDARD.encode(bytes);
+    // Four distinct opaque root pixels, not a solid-color forwarding fixture.
+    let root = [
+        255, 0, 0, 255, 0, 255, 0, 255, 0, 0, 255, 255, 255, 255, 255, 255,
+    ];
+    let request = format!(
+        "\x1b_Ga=T,i=142,s=2,v=2,c=4,r=2,C=1;{}\x1b\\\x1b[6;1H\x1b_Ga=p,i=142,p=2,c=4,r=2,C=1\x1b\\",
+        encode(&root)
+    );
+    graphics_send_fixture_with_replies(&view, cx, 14201, request.as_bytes(), 2);
+    let request = format!(
+        "\x1b_Ga=f,i=142,c=1,x=1,y=0,s=1,v=1;{}\x1b\\\x1b_Ga=a,i=142,s=1,c=2\x1b\\",
+        encode(&[255, 0, 0, 128])
+    );
+    graphics_send_fixture_with_replies(&view, cx, 14202, request.as_bytes(), 2);
+    let blended = [
+        0, 0, 255, 255, 0, 127, 128, 255, 255, 0, 0, 255, 255, 255, 255, 255,
+    ];
+    graphics_recovery_pixels(&view, cx, 142, &blended);
+    let request = format!(
+        "\x1b_Ga=f,i=142,r=2,c=99,Y=4278190335,X=1,x=1,y=0,s=1,v=1;{}\x1b\\",
+        encode(&[12, 34, 56, 78])
+    );
+    graphics_send_fixture_with_replies(&view, cx, 14203, request.as_bytes(), 1);
+    let edited = [
+        0, 0, 255, 255, 56, 34, 12, 78, 255, 0, 0, 255, 255, 255, 255, 255,
+    ];
+    graphics_recovery_pixels(&view, cx, 142, &edited);
+    graphics_assert_production_paint(window, &view, cx);
+    view.read_with(cx, |view, _| {
+        let images = graphics_visible_images(view);
+        assert_eq!(images.len(), 2);
+        assert!(std::sync::Arc::ptr_eq(
+            images[0].data.as_ref().unwrap(),
+            images[1].data.as_ref().unwrap()
+        ));
+    });
+    let mut png = std::io::Cursor::new(Vec::new());
+    image::RgbaImage::from_pixel(1, 1, image::Rgba([255, 0, 0, 128]))
+        .write_to(&mut png, image::ImageFormat::Png)
+        .unwrap();
+    let request = format!(
+        "\x1b_Ga=f,i=142,f=100,x=0,y=1,Y=16711816;{}\x1b\\\x1b_Ga=a,i=142,c=3\x1b\\",
+        encode(&png.into_inner())
+    );
+    graphics_send_fixture_with_replies(&view, cx, 14210, request.as_bytes(), 2);
+    graphics_recovery_pixels(
+        &view,
+        cx,
+        142,
+        &[
+            0, 255, 0, 136, 0, 255, 0, 136, 0, 88, 167, 196, 0, 255, 0, 136,
+        ],
+    );
+    let compressed = [120, 156, 99, 102, 101, 111, 0, 0, 0, 173, 0, 144]; // zlib RGBA [3,5,7,128]
+    let request = format!(
+        "\x1b_Ga=f,i=142,r=3,o=z,X=1,x=1,y=1,s=1,v=1;{}\x1b\\",
+        encode(&compressed)
+    );
+    graphics_send_fixture_with_replies(&view, cx, 14211, request.as_bytes(), 1);
+    graphics_recovery_pixels(
+        &view,
+        cx,
+        142,
+        &[
+            0, 255, 0, 136, 0, 255, 0, 136, 0, 88, 167, 196, 7, 5, 3, 128,
+        ],
+    );
+    graphics_send_fixture_with_replies(&view, cx, 14212, b"\x1b_Ga=a,i=142,c=2\x1b\\", 1);
+    graphics_recovery_pixels(&view, cx, 142, &edited);
+    // Invalid quiet requests must not leak a reply into the next barrier.
+    graphics_send_fixture(
+        &view,
+        cx,
+        14213,
+        b"\x1b_Ga=f,i=142,r=99,q=2,s=1,v=1;AAAA/w==\x1b\\",
+    );
+    let corrupt = b"\x1b_Ga=f,i=142,r=2,f=100,q=1;bm90LWEtaW1hZ2U=\x1b\\";
+    let serial = 14214;
+    // KITTY_DONE overwrites KITTY_REPLY in the grid; inspect the actual PTY
+    // output through the same production observer used by media refusals.
+    let observer = daemon
+        .panes()
+        .observe(
+            pane,
+            crate::daemon::protocol::WinSize {
+                cols: 80,
+                rows: 24,
+                cell_w: 10,
+                cell_h: 20,
+            },
+        )
+        .unwrap();
+    observer
+        .set_recv_timeout(Some(std::time::Duration::from_secs(30)))
+        .unwrap();
+    view.read_with(cx, |view, _| {
+        view.terminal.write(
+            format!("SEND {serial} 1 {} 0\n", graphics_pty_fixture::hex(corrupt)).into_bytes(),
+        )
+    });
+    graphics_recovery_wait(cx, "corrupt PNG edit response", |cx| {
+        view.read_with(cx, |view, _| view.title == format!("KITTY_DONE_{serial};"))
+    });
+    let (text, _) = graphics_recovery_collect(observer, serial);
+    assert!(
+        text.contains(&format!(
+            "KITTY_REPLY {serial} {}",
+            graphics_pty_fixture::hex(b"\x1b_Gi=142;EINVAL:")
+        )),
+        "corrupt frame refusal PTY output={text:?}"
+    );
+    graphics_recovery_pixels(&view, cx, 142, &edited);
+    for (serial, controls) in [
+        (14204, "r=9"),
+        (14205, "r=2,x=2"),
+        (14206, "c=9"),
+        (14207, "r=2,X=2"),
+    ] {
+        let observer = daemon
+            .panes()
+            .observe(
+                pane,
+                crate::daemon::protocol::WinSize {
+                    cols: 80,
+                    rows: 24,
+                    cell_w: 10,
+                    cell_h: 20,
+                },
+            )
+            .unwrap();
+        observer
+            .set_recv_timeout(Some(std::time::Duration::from_secs(30)))
+            .unwrap();
+        let request = format!(
+            "\x1b_Ga=f,i=142,{controls},s=1,v=1;{}\x1b\\",
+            encode(&[1, 2, 3, 255])
+        );
+        let request = format!(
+            "SEND {serial} 1 {} 0\n",
+            graphics_pty_fixture::hex(request.as_bytes())
+        );
+        view.read_with(cx, |view, _| view.terminal.write(request.into_bytes()));
+        let marker = format!("KITTY_DONE_{serial};");
+        graphics_recovery_wait(cx, "invalid frame response", |cx| {
+            view.read_with(cx, |view, _| view.title == marker)
+        });
+        let (text, _) = graphics_recovery_collect(observer, serial);
+        let status: &[u8] = if serial == 14204 || serial == 14206 {
+            b"\x1b_Gi=142;ENOENT:"
+        } else {
+            b"\x1b_Gi=142;EINVAL:"
+        };
+        assert!(
+            text.contains(&format!(
+                "KITTY_REPLY {serial} {}",
+                graphics_pty_fixture::hex(status)
+            )),
+            "serial={serial}, controls={controls}; PTY output={text:?}"
+        );
+        graphics_recovery_pixels(&view, cx, 142, &edited);
+    }
+    graphics_recovery_destroy(view, window, cx);
+    // Editing the root while detached must keep placements and frame identity.
+    let request = format!(
+        "\x1b_Ga=f,i=142,r=1,X=1,s=1,v=1,q=2;{}\x1b\\\x1b_Ga=a,i=142,c=1,q=2\x1b\\",
+        encode(&[9, 8, 7, 255])
+    );
+    graphics_recovery_detached_request(&daemon, pane, "SEND", 14208, request.as_bytes());
+    let (fresh, window) = graphics_recovery_fresh(&daemon, pane, cx, 14209);
+    graphics_recovery_pixels(
+        &fresh,
+        cx,
+        142,
+        &[
+            7, 8, 9, 255, 0, 255, 0, 255, 255, 0, 0, 255, 255, 255, 255, 255,
+        ],
+    );
+    graphics_assert_production_paint(window, &fresh, cx);
+    fresh.read_with(cx, |view, _| {
+        assert_eq!(graphics_visible_images(view).len(), 2)
+    });
+    // One PTY read can contain edit -> reference -> edit. The append must
+    // capture the intermediate version, never coalesce to the final root.
+    let request = format!(
+        "\x1b_Ga=f,i=142,r=1,X=1,s=1,v=1;{}\x1b\\\x1b_Ga=f,i=142,c=1,X=1,x=1,y=1,s=1,v=1;{}\x1b\\\x1b_Ga=f,i=142,r=1,X=1,s=1,v=1;{}\x1b\\\x1b_Ga=a,i=142,c=4\x1b\\",
+        encode(&[1, 2, 3, 255]),
+        encode(&[255, 255, 0, 255]),
+        encode(&[4, 5, 6, 255])
+    );
+    graphics_send_fixture_with_replies(&fresh, cx, 14215, request.as_bytes(), 4);
+    let intermediate = [
+        3, 2, 1, 255, 0, 255, 0, 255, 255, 0, 0, 255, 0, 255, 255, 255,
+    ];
+    graphics_recovery_pixels(&fresh, cx, 142, &intermediate);
+    let stopped = graphics_recovery_stats(&fresh, cx, 14216);
+    graphics_recovery_destroy(fresh, window, cx);
+    let (fresh, window) = graphics_recovery_fresh(&daemon, pane, cx, 14217);
+    graphics_recovery_pixels(&fresh, cx, 142, &intermediate);
+    assert_eq!(
+        graphics_recovery_stats(&fresh, cx, 14218),
+        stopped,
+        "fresh replay must not make the inactive sender retransmit any pixel version"
+    );
+    graphics_assert_production_paint(window, &fresh, cx);
+    graphics_recovery_destroy(fresh, window, cx);
+    daemon.panes().kill(pane).unwrap();
+}
+
+#[gpui_kit::test]
+fn graphics_consumer_compose_rectangles_delete_frames_and_detached_recovery(cx: &mut TestAppContext) {
+    use base64::Engine as _;
+    let (daemon, pane, view, window) = graphics_layout_harness(cx);
+    let encode = |pixels: &[u8]| base64::engine::general_purpose::STANDARD.encode(pixels);
+    let root = [255,0,0,255, 0,255,0,255, 0,0,255,255, 255,255,255,255];
+    let source = [255,0,0,128, 12,34,56,78, 90,80,70,255, 0,0,0,0];
+    let request = format!("\x1b[5;1H\x1b_Ga=T,i=143,p=1,s=2,v=2,c=4,r=2,C=1;{}\x1b\\\x1b[8;1H\x1b_Ga=p,i=143,p=2,c=4,r=2,C=1\x1b\\\x1b_Ga=f,i=143,s=2,v=2,X=1;{}\x1b\\", encode(&root), encode(&source));
+    graphics_send_fixture_with_replies(&view, cx, 14300, request.as_bytes(), 3);
+    graphics_send_fixture_with_replies(&view, cx, 14301, b"\x1b_Ga=c,i=143,r=2,c=1,w=1,h=1,x=1,y=0\x1b\\", 1);
+    let blended = [0,0,255,255, 0,127,128,255, 255,0,0,255, 255,255,255,255];
+    graphics_recovery_pixels(&view, cx, 143, &blended);
+    graphics_send_fixture_with_replies(&view, cx, 14302, b"\x1b_Ga=c,i=143,r=2,c=1,X=1,Y=0,w=1,h=1,x=0,y=1,C=1\x1b\\", 1);
+    let replaced = [0,0,255,255, 0,127,128,255, 56,34,12,78, 255,255,255,255];
+    graphics_recovery_pixels(&view, cx, 143, &replaced);
+    // Same-frame non-overlapping rectangles are valid and capture old pixels.
+    graphics_send_fixture_with_replies(&view, cx, 14303, b"\x1b_Ga=c,i=143,r=1,c=1,X=0,Y=1,w=1,h=1,x=1,y=1,C=1\x1b\\", 1);
+    let moved = [0,0,255,255, 0,127,128,255, 56,34,12,78, 56,34,12,78];
+    graphics_recovery_pixels(&view, cx, 143, &moved);
+    for (serial, keys, status) in [
+        (14304, "r=99,c=1", "ENOENT:Animation frame not found"),
+        (14305, "r=1,c=99", "ENOENT:Animation frame not found"),
+        (14306, "r=1,c=1,w=1,h=1", "EINVAL:Overlapping frame rectangles"),
+        (14307, "r=2,c=1,X=1,w=2,h=1", "EINVAL:Frame rectangle outside image"),
+        (14308, "r=2,c=1,x=4294967295,w=1,h=1", "EINVAL:Frame rectangle outside image"),
+    ] {
+        let observer = daemon.panes().observe(pane, crate::daemon::protocol::WinSize { cols:80, rows:24, cell_w:10, cell_h:20 }).unwrap();
+        observer.set_recv_timeout(Some(std::time::Duration::from_secs(30))).unwrap();
+        let request = format!("\x1b_Ga=c,i=143,p=7,q=1,{keys}\x1b\\");
+        view.read_with(cx, |view, _| view.terminal.write(format!("SEND {serial} 1 {} 0\n", graphics_pty_fixture::hex(request.as_bytes())).into_bytes()));
+        graphics_recovery_wait(cx, "compose refusal", |cx| view.read_with(cx, |view, _| view.title == format!("KITTY_DONE_{serial};")));
+        let (text, _) = graphics_recovery_collect(observer, serial);
+        let expected = graphics_pty_fixture::hex(format!("\x1b_Gi=143,p=7;{status}\x1b\\").as_bytes());
+        assert!(text.contains(&format!("KITTY_REPLY {serial} {expected}")), "{text}");
+        graphics_recovery_pixels(&view, cx, 143, &moved);
+    }
+    graphics_send_fixture(&view, cx, 14309, b"\x1b_Ga=c,i=143,r=99,c=1,q=2\x1b\\\x1b_Ga=c,i=143,r=2,c=1,w=1,h=1,x=1,y=0,q=1\x1b\\");
+    graphics_send_fixture_with_replies(&view, cx, 14320, b"\x1b_Ga=c,i=143,r=2,c=1,w=1,h=1,x=0,y=1\x1b\\", 1);
+    view.read_with(cx, |view, _| assert_eq!(graphics_visible_images(view).len(), 2));
+    graphics_recovery_wait(cx, "translucent source-over pixels", |cx| view.read_with(cx, |view, _| {
+        graphics_visible_images(view).iter().all(|image| image.data.as_ref().is_some_and(|pixels|
+            pixels.as_bytes(0).unwrap()[8..12] == [13,8,198,167]))
+    }));
+    // Delete the first frame: second frame becomes root, both placements stay.
+    graphics_send_fixture(&view, cx, 14310, b"\x1b_Ga=d,d=f,i=143,r=1\x1b\\");
+    let promoted = [0,0,255,128, 56,34,12,78, 70,80,90,255, 0,0,0,0];
+    graphics_recovery_pixels(&view, cx, 143, &promoted);
+    graphics_assert_production_paint(window, &view, cx);
+    view.read_with(cx, |view, _| assert_eq!(graphics_visible_images(view).len(), 2));
+    // Lowercase only-frame deletion preserves reusable data and placements.
+    graphics_send_fixture(&view, cx, 14311, b"\x1b_Ga=d,d=f,i=143,r=999\x1b\\");
+    graphics_recovery_pixels(&view, cx, 143, &promoted);
+    let stopped = graphics_recovery_stats(&view, cx, 14312);
+    graphics_recovery_destroy(view, window, cx);
+    // Compose while invisible, append a reference, then delete the old base.
+    let request = format!("\x1b_Ga=f,i=143,c=1,s=1,v=1,X=1,q=2;{}\x1b\\\x1b_Ga=c,i=143,r=1,c=2,X=0,Y=1,w=1,h=1,x=1,y=0,C=1,q=2\x1b\\\x1b_Ga=d,d=f,i=143,r=1,q=2\x1b\\", encode(&[9,8,7,255]));
+    graphics_recovery_detached_request(&daemon, pane, "SEND", 14313, request.as_bytes());
+    let (fresh, window) = graphics_recovery_fresh(&daemon, pane, cx, 14314);
+    let detached = [7,8,9,255, 70,80,90,255, 70,80,90,255, 0,0,0,0];
+    graphics_recovery_pixels(&fresh, cx, 143, &detached);
+    let updated = graphics_recovery_stats(&fresh, cx, 14315);
+    assert_ne!(updated, stopped, "only the explicit detached frame upload changes producer counters");
+    graphics_recovery_destroy(fresh, window, cx);
+    let (fresh, window) = graphics_recovery_fresh(&daemon, pane, cx, 14316);
+    graphics_recovery_pixels(&fresh, cx, 143, &detached);
+    assert_eq!(graphics_recovery_stats(&fresh, cx, 14317), updated, "fresh client does not ask for retransmission");
+    graphics_send_fixture(&fresh, cx, 14318, b"\x1b_Ga=d,d=F,i=143\x1b\\");
+    graphics_recovery_wait(cx, "uppercase only-frame removal", |cx| fresh.read_with(cx, |view, _| graphics_visible_images(view).is_empty()));
+    graphics_recovery_destroy(fresh, window, cx);
+    let (fresh, window) = graphics_recovery_fresh(&daemon, pane, cx, 14319);
+    fresh.read_with(cx, |view, _| assert!(graphics_visible_images(view).is_empty()));
+    graphics_recovery_destroy(fresh, window, cx);
     daemon.panes().kill(pane).unwrap();
 }

@@ -38,35 +38,90 @@ pub(crate) fn foreground_name(procs: &[Proc], shell_pid: u32) -> Option<String> 
 }
 
 pub(crate) fn snapshot() -> Vec<Proc> {
-    use windows_sys::Win32::Foundation::{CloseHandle, INVALID_HANDLE_VALUE};
+    checked_snapshot().unwrap_or_default()
+}
+
+fn checked_snapshot() -> Option<Vec<Proc>> {
+    use windows_sys::Win32::Foundation::{
+        CloseHandle, ERROR_NO_MORE_FILES, GetLastError, INVALID_HANDLE_VALUE,
+    };
     use windows_sys::Win32::System::Diagnostics::ToolHelp::{
         CreateToolhelp32Snapshot, PROCESSENTRY32W, Process32FirstW, Process32NextW,
         TH32CS_SNAPPROCESS,
     };
-
     let mut out = Vec::new();
     unsafe {
         let snap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
         if snap == INVALID_HANDLE_VALUE {
-            return out;
+            return None;
         }
         let mut entry: PROCESSENTRY32W = std::mem::zeroed();
         entry.dwSize = std::mem::size_of::<PROCESSENTRY32W>() as u32;
-        if Process32FirstW(snap, &mut entry) != 0 {
-            loop {
-                out.push(Proc {
-                    pid: entry.th32ProcessID,
-                    parent: entry.th32ParentProcessID,
-                    name: exe_name(&entry.szExeFile),
-                });
-                if Process32NextW(snap, &mut entry) == 0 {
-                    break;
-                }
+        if Process32FirstW(snap, &mut entry) == 0 {
+            CloseHandle(snap);
+            return None;
+        }
+        loop {
+            out.push(Proc {
+                pid: entry.th32ProcessID,
+                parent: entry.th32ParentProcessID,
+                name: exe_name(&entry.szExeFile),
+            });
+            if Process32NextW(snap, &mut entry) == 0 {
+                let complete = GetLastError() == ERROR_NO_MORE_FILES;
+                CloseHandle(snap);
+                return complete.then_some(out);
             }
         }
-        CloseHandle(snap);
     }
-    out
+}
+
+/// ConPTY has no Unix foreground pgid. Inspect the complete owned shell tree
+/// at each indirect command instead; cached titles/remote UI facts are not proof.
+pub(crate) fn media_tree_is_local(root: u32) -> Option<bool> {
+    let first = checked_snapshot()?;
+    let local = classify_media_tree(&first, root, image_path)?;
+    if !local {
+        return Some(false);
+    }
+    // Refuse a fork/exit/PID reuse during probing rather than granting from a
+    // mixture of generations. Ordinary direct graphics never pay this cost.
+    let second = checked_snapshot()?;
+    let members = |table: &[Proc]| {
+        let mut ids = descendants(table, root);
+        ids.push(root);
+        let mut rows: Vec<_> = table
+            .iter()
+            .filter(|p| ids.contains(&p.pid))
+            .map(|p| (p.pid, p.parent, p.name.clone()))
+            .collect();
+        rows.sort();
+        rows
+    };
+    (members(&first) == members(&second)).then_some(true)
+}
+
+fn classify_media_tree(
+    procs: &[Proc],
+    root: u32,
+    mut image: impl FnMut(u32) -> Option<std::path::PathBuf>,
+) -> Option<bool> {
+    if root == 0 || !procs.iter().any(|p| p.pid == root) {
+        return None;
+    }
+    let mut ids = descendants(procs, root);
+    if ids.len() > 512 {
+        return None;
+    }
+    ids.push(root);
+    for pid in ids {
+        let path = image(pid)?;
+        let name = path.file_name()?.to_str()?;
+        if super::procinfo::media_namespace_bridge(name, true) {
+            return Some(false);
+        }
+    }
+    Some(true)
 }
 
 pub(crate) fn terminate(pid: u32) {
@@ -438,6 +493,7 @@ mod ctrl_c_tests {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::PathBuf;
 
     fn p(pid: u32, parent: u32, name: &str) -> Proc {
         Proc {
@@ -484,6 +540,44 @@ mod tests {
     fn descendants_empty_without_children() {
         let procs = vec![p(100, 1, "sh"), p(999, 1, "other")];
         assert!(descendants(&procs, 100).is_empty());
+    }
+
+    #[test]
+    fn media_locality_is_fresh_and_rejects_nested_namespace_bridges() {
+        let mut tree = vec![p(100, 1, "pwsh.exe"), p(200, 100, "python.exe")];
+        assert_eq!(
+            classify_media_tree(&tree, 100, |_| Some(PathBuf::from(r"C:\local\python.exe"))),
+            Some(true)
+        );
+        for bridge in [
+            "ssh.exe",
+            "wsl.exe",
+            "wslhost.exe",
+            "bash.exe",
+            "plink.exe",
+            "MOSH-CLIENT.EXE",
+            "NsEnter.exe",
+            "unshare",
+        ] {
+            tree.push(p(300, 200, bridge));
+            assert_eq!(
+                classify_media_tree(&tree, 100, |pid| Some(PathBuf::from(format!(
+                    r"C:\local\{}",
+                    tree.iter().find(|p| p.pid == pid).unwrap().name
+                )))),
+                Some(false)
+            );
+            tree.pop();
+        }
+        assert_eq!(classify_media_tree(&tree, 100, |_| None), None);
+        assert_eq!(
+            classify_media_tree(&tree, 999, |_| panic!("missing root")),
+            None
+        );
+        assert_eq!(
+            classify_media_tree(&tree, 100, |_| Some(PathBuf::from(r"C:\local\python.exe"))),
+            Some(true)
+        );
     }
 
     #[test]

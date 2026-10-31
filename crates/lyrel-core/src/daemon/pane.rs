@@ -798,9 +798,22 @@ impl DaemonPane {
         let weak_state = Arc::downgrade(&state);
         let eviction_gate = gate.clone();
         std::thread::Builder::new()
-            .name("lyrel-graphics-evictions".into())
+            .name("lyrel-graphics-timeline".into())
             .spawn(move || {
-                while eviction_rx.recv().is_ok() {
+                let mut delay = None;
+                loop {
+                    let received = match delay {
+                        Some(delay) => eviction_rx.recv_timeout(delay),
+                        None => eviction_rx
+                            .recv()
+                            .map_err(|_| std::sync::mpsc::RecvTimeoutError::Disconnected),
+                    };
+                    if matches!(
+                        received,
+                        Err(std::sync::mpsc::RecvTimeoutError::Disconnected)
+                    ) {
+                        break;
+                    }
                     let Some(state) = weak_state.upgrade() else {
                         break;
                     };
@@ -808,9 +821,17 @@ impl DaemonPane {
                     let effects = state
                         .graphics
                         .as_mut()
-                        .map(GraphicsState::drain_evictions)
+                        .map(|graphics| {
+                            let mut effects = graphics.drain_evictions();
+                            effects.extend(graphics.advance_playback());
+                            effects
+                        })
                         .unwrap_or_default();
                     publish_graphics_effects(&mut state, effects, &eviction_gate);
+                    delay = state
+                        .graphics
+                        .as_ref()
+                        .and_then(GraphicsState::playback_delay);
                 }
             })
             .expect("spawn graphics eviction publisher");
@@ -1939,7 +1960,7 @@ mod tests {
             }
         }
 
-        let probes_for = |groups: Vec<i32>| {
+        let probes_for = |groups: Vec<crate::daemon::procinfo::MediaProcessRoot>| {
             let state = Arc::new(Mutex::new(test_state(true)));
             let probes = Arc::new(std::sync::atomic::AtomicUsize::new(0));
             let counted = probes.clone();

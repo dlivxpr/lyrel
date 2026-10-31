@@ -2672,6 +2672,8 @@ mod kitty_graphics {
         resources: BTreeMap<u64, Arc<Image>>,
         evicted: BTreeMap<u64, (u32, u32)>,
         placements: BTreeMap<u64, Placement>,
+        frames: BTreeMap<u64, u64>,
+        selected: BTreeMap<u64, (u64, u64)>,
         serial: usize,
         updates: Vec<GraphicsUpdate>,
         last_output: Vec<u8>,
@@ -2709,6 +2711,8 @@ mod kitty_graphics {
                 resources: BTreeMap::new(),
                 evicted: BTreeMap::new(),
                 placements: BTreeMap::new(),
+                frames: BTreeMap::new(),
+                selected: BTreeMap::new(),
                 serial,
                 updates: Vec::new(),
                 last_output: Vec::new(),
@@ -2725,6 +2729,28 @@ mod kitty_graphics {
                         "resource keys cannot be reused"
                     );
                     self.resources.insert(*key, image.clone());
+                }
+                GraphicsUpdate::Frame { key, root, number } => {
+                    assert!(*number >= 2 && key != root);
+                    assert!(self.resources.contains_key(key) && self.resources.contains_key(root));
+                    assert!(self.frames.insert(*key, *root).is_none());
+                }
+                GraphicsUpdate::Select {
+                    key,
+                    frame,
+                    revision,
+                } => {
+                    assert!(self.resources.contains_key(key) || self.evicted.contains_key(key));
+                    assert!(self.resources.contains_key(frame) || self.evicted.contains_key(frame));
+                    if let Some((_, previous)) = self.selected.insert(*key, (*frame, *revision)) {
+                        assert!(*revision > previous, "selection revisions must advance");
+                    }
+                }
+                GraphicsUpdate::Playback(playback) => {
+                    assert!(
+                        self.resources.contains_key(&playback.key)
+                            || self.evicted.contains_key(&playback.key)
+                    );
                 }
                 GraphicsUpdate::Evicted { key, width, height } => {
                     self.resources.remove(key);
@@ -2755,6 +2781,8 @@ mod kitty_graphics {
                     for key in resources {
                         self.resources.remove(key);
                         self.evicted.remove(key);
+                        self.frames.remove(key);
+                        self.selected.remove(key);
                     }
                     assert!(
                         self.placements
@@ -2883,7 +2911,11 @@ mod kitty_graphics {
         }
 
         fn pixel(&self, placement: &Placement) -> Vec<u8> {
-            self.resources[&placement.resource].to_rgba8().unwrap()
+            let frame = self
+                .selected
+                .get(&placement.resource)
+                .map_or(placement.resource, |&(frame, _)| frame);
+            self.resources[&frame].to_rgba8().unwrap()
         }
     }
 
@@ -4959,19 +4991,27 @@ mod kitty_graphics {
                     .as_bytes(),
                 1,
             );
-            let error = if cfg!(unix) { "EBADF" } else { "ENOTSUPPORTED" };
+            let error = if cfg!(any(unix, windows)) {
+                "EBADF"
+            } else {
+                "ENOTSUPPORTED"
+            };
             assert!(
                 replies[0].starts_with(format!("\x1b_Gi=731,p=4;{error}:").as_bytes()),
                 "host-local capability must actually attempt to read the named object"
             );
         }
-        for command in [
-            "a=q,i=732,p=5,f=1,s=1,v=1;AAAA",
-            "a=q,i=732,p=5,f=32,s=1,v=1,o=x;AAAA",
-            "a=f,i=732,p=5;AAAA",
+        for (command, error) in [
+            ("a=q,i=732,p=5,f=1,s=1,v=1;AAAA", "ENOTSUPPORTED"),
+            ("a=q,i=732,p=5,f=32,s=1,v=1,o=x;AAAA", "ENOTSUPPORTED"),
+            ("a=c,i=732,p=5;AAAA", "EINVAL"),
         ] {
             let reply = pane.send(format!("\x1b_G{command}\x1b\\").as_bytes(), 1);
-            assert!(reply[0].starts_with(b"\x1b_Gi=732,p=5;ENOTSUPPORTED:"));
+            assert!(
+                reply[0].starts_with(format!("\x1b_Gi=732,p=5;{error}:").as_bytes()),
+                "unexpected reply for {command}: {}",
+                String::from_utf8_lossy(&reply[0])
+            );
         }
         let invalid_ids = pane.send(b"\x1b_Ga=q,i=733,I=8,p=6,f=24,s=1,v=1;AAAA\x1b\\", 1);
         assert!(invalid_ids[0].starts_with(b"\x1b_Gi=733,I=8,p=6;EINVAL:"));

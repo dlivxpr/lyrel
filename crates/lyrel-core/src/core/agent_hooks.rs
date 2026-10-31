@@ -523,8 +523,8 @@ impl HookAgent {
                     .map(|home| target.under(&home, &["plugins", "lyrel", "__init__.py"]));
             }
             HookAgent::OpenCode => target.under(
-                &target.xdg_config_dir(),
-                &["opencode", "plugins", "lyrel", "tui.ts"],
+                &target.opencode_config_dir_checked()?,
+                &["plugins", "lyrel", "tui.ts"],
             ),
             HookAgent::Pi => return target.pi_extension_path_checked(),
             HookAgent::OhMyPi => return omp::extension_path(target),
@@ -609,9 +609,6 @@ impl<'a> HookTarget<'a> {
         p
     }
 
-    fn under_home(&self, parts: &[&str]) -> PathBuf {
-        self.under(&self.home, parts)
-    }
     fn pi_extension_path_checked(&self) -> io::Result<PathBuf> {
         Ok(self.under(
             &self.pi_agent_dir_checked()?,
@@ -645,13 +642,26 @@ impl<'a> HookTarget<'a> {
         Ok(root)
     }
 
-    fn xdg_config_dir(&self) -> PathBuf {
-        if self.is_local()
-            && let Some(dir) = std::env::var_os("XDG_CONFIG_HOME").filter(|d| !d.is_empty())
+    fn opencode_config_dir_checked(&self) -> io::Result<PathBuf> {
+        let environment = self.agent_environment(HookAgent::OpenCode)?;
+        let home = self.agent_home(&environment)?;
+        let base = match environment
+            .get("XDG_CONFIG_HOME")
+            .filter(|value| !value.is_empty())
         {
-            return PathBuf::from(dir);
-        }
-        self.under_home(&[".config"])
+            Some(value) => {
+                let path = PathBuf::from(value);
+                if !self.host.is_absolute(&path) {
+                    return Err(io::Error::new(
+                        io::ErrorKind::Unsupported,
+                        "OpenCode CLI integration requires an absolute XDG_CONFIG_HOME on the selected Host",
+                    ));
+                }
+                path
+            }
+            None => self.under(&home, &[".config"]),
+        };
+        Ok(self.under(&base, &["opencode"]))
     }
 
     pub(crate) fn kimi_config_path_checked(&self) -> io::Result<PathBuf> {
@@ -751,7 +761,8 @@ pub fn hooks_state(target: &HookTarget, agent: HookAgent) -> HooksState {
     }
     if agent == HookAgent::OpenCode
         && target
-            .read(&opencode_legacy_path(target))
+            .opencode_config_dir_checked()
+            .and_then(|config| target.read(&target.under(&config, &["plugins", "lyrel.js"])))
             .is_ok_and(|c| owned_file_is_marked(&c, &agent.marker()))
     {
         return HooksState::Outdated;
@@ -796,8 +807,16 @@ pub fn hooks_diagnostic(target: &HookTarget, agent: HookAgent) -> Option<HooksDi
 }
 
 fn opencode_plugin_diagnostic(target: &HookTarget) -> Option<HooksDiagnostic> {
+    let config = match target.opencode_config_dir_checked() {
+        Ok(config) => config,
+        Err(error) => {
+            return Some(HooksDiagnostic::ScopeUnavailable {
+                error: error.to_string(),
+            });
+        }
+    };
     for name in ["cli.json", "cli.jsonc"] {
-        let path = target.under(&target.xdg_config_dir(), &["opencode", name]);
+        let path = target.under(&config, &[name]);
         let contents = match target.read(&path) {
             Ok(contents) => contents,
             Err(e) if e.kind() == io::ErrorKind::NotFound => continue,
@@ -844,11 +863,11 @@ fn opencode_plugin_diagnostic(target: &HookTarget) -> Option<HooksDiagnostic> {
     None
 }
 
-fn opencode_legacy_path(target: &HookTarget) -> PathBuf {
-    target.under(
-        &target.xdg_config_dir(),
-        &["opencode", "plugins", "lyrel.js"],
-    )
+fn opencode_legacy_path(target: &HookTarget) -> io::Result<PathBuf> {
+    Ok(target.under(
+        &target.opencode_config_dir_checked()?,
+        &["plugins", "lyrel.js"],
+    ))
 }
 
 /// What an install or uninstall actually did.
@@ -888,7 +907,7 @@ pub fn install_hooks(target: &HookTarget, agent: HookAgent) -> anyhow::Result<Ho
         owned_file_install(target, &path, &content, &agent.marker())?;
     }
     if agent == HookAgent::OpenCode {
-        let legacy = opencode_legacy_path(target);
+        let legacy = opencode_legacy_path(target)?;
         if target
             .read(&legacy)
             .is_ok_and(|c| owned_file_is_marked(&c, &agent.marker()))
@@ -906,7 +925,7 @@ pub fn uninstall_hooks(target: &HookTarget, agent: HookAgent) -> anyhow::Result<
     let path = agent.target_path(target)?;
     if agent == HookAgent::OpenCode {
         let current = owned_file_uninstall(target, &path, &agent.marker())?;
-        let legacy = opencode_legacy_path(target);
+        let legacy = opencode_legacy_path(target)?;
         if target
             .read(&legacy)
             .is_ok_and(|c| owned_file_is_marked(&c, &agent.marker()))
@@ -1316,6 +1335,65 @@ fn opencode_plugin_js(target: &HookTarget) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn generated_bridges_share_public_scope_keys_without_cross_agent_policies() {
+        let host = crate::host::local::LocalHost::new();
+        let target = HookTarget::local_for_exe(&*host, std::env::current_exe().unwrap()).unwrap();
+        for (agent, expected) in [
+            (
+                HookAgent::Pi,
+                vec![
+                    "HOME",
+                    "USERPROFILE",
+                    "PI_CODING_AGENT_DIR",
+                    "PI_CODING_AGENT_SESSION_DIR",
+                    "PI_IMAGE_PROTOCOL",
+                ],
+            ),
+            (
+                HookAgent::OhMyPi,
+                vec![
+                    "HOME",
+                    "USERPROFILE",
+                    "OMP_PROFILE",
+                    "PI_PROFILE",
+                    "PI_CONFIG_DIR",
+                    "PI_CODING_AGENT_DIR",
+                    "PI_CONFIG_FILES",
+                    "XDG_CONFIG_HOME",
+                    "XDG_DATA_HOME",
+                    "XDG_STATE_HOME",
+                    "XDG_CACHE_HOME",
+                    "PI_FORCE_IMAGE_PROTOCOL",
+                    "PI_KITTY_PLACEHOLDERS",
+                    "PI_NO_KITTY_PLACEHOLDERS",
+                ],
+            ),
+        ] {
+            let source = owned_file_content(&target, agent).unwrap();
+            let declaration = source
+                .lines()
+                .find_map(|line| line.strip_prefix("const SCOPE_ENV = "))
+                .unwrap();
+            let mut actual: Vec<String> =
+                serde_json::from_str(declaration.trim_end_matches(';')).unwrap();
+            let mut expected = expected;
+            actual.sort();
+            expected.sort();
+            assert_eq!(actual, expected, "{} bridge scope contract", agent.slug());
+            assert!(
+                actual
+                    .iter()
+                    .all(|key| crate::host::session_operations::SCOPE_ENV.contains(&key.as_str()))
+            );
+            assert!(
+                actual
+                    .iter()
+                    .all(|key| crate::host::is_agent_environment_key(key))
+            );
+        }
+    }
 
     #[test]
     fn omp_only_finishes_after_its_final_noncontinuing_agent_end() {
@@ -2069,12 +2147,66 @@ mod tests {
     }
 
     #[test]
+    fn opencode_scoped_launch_keeps_preview_policy_and_default_config_untouched() {
+        let directory = tempfile::tempdir().unwrap();
+        let home = directory.path().join("default-home");
+        let isolated = directory.path().join("isolated-config");
+        let host = FakeRemote::shared();
+        let default = HookTarget::remote(&*host, home.clone());
+        let default_cli = default.under(&home, &[".config", "opencode", "cli.json"]);
+        default
+            .write(
+                &default_cli,
+                br#"{"session":{"image_preview":false},"plugins":["-lyrel"]}"#,
+            )
+            .unwrap();
+        let scoped_cli = default.under(&isolated, &["opencode", "cli.json"]);
+        let disabled = r#"{"session":{"image_preview":false},"plugins":["*"]}"#;
+        default.write(&scoped_cli, disabled.as_bytes()).unwrap();
+        let command = format!(
+            "XDG_CONFIG_HOME='{}' opencode --standalone -s ses_fixture --auto",
+            isolated.display()
+        );
+        let target = HookTarget::remote(&*host, home.clone()).with_launch_commands(
+            &std::collections::HashMap::from([("opencode".into(), command)]),
+        );
+        install_hooks(&target, HookAgent::OpenCode).unwrap();
+        assert_eq!(
+            hooks_state(&target, HookAgent::OpenCode),
+            HooksState::Installed
+        );
+        assert!(
+            target
+                .read(&target.under(&isolated, &["opencode", "plugins", "lyrel", "tui.ts"]))
+                .is_ok()
+        );
+        assert_eq!(target.read(&scoped_cli).unwrap(), disabled);
+        assert_eq!(
+            default.read(&default_cli).unwrap(),
+            r#"{"session":{"image_preview":false},"plugins":["-lyrel"]}"#
+        );
+        assert!(!home.join(".config/opencode/plugins/lyrel/tui.ts").exists());
+        uninstall_hooks(&target, HookAgent::OpenCode).unwrap();
+        assert_eq!(target.read(&scoped_cli).unwrap(), disabled);
+        let ambiguous = HookTarget::remote(&*host, home).with_launch_commands(
+            &std::collections::HashMap::from([(
+                "opencode".into(),
+                "XDG_CONFIG_HOME=relative opencode".into(),
+            )]),
+        );
+        assert!(install_hooks(&ambiguous, HookAgent::OpenCode).is_err());
+    }
+
+    #[test]
     fn opencode_install_respects_disabled_plugins_and_preserves_user_files() {
         let dir =
             std::env::temp_dir().join(format!("lyrel-opencode-presence-{}", std::process::id()));
         let host = FakeRemote::shared();
         let target = HookTarget::remote(&*host, dir.clone());
-        let config = target.under(&target.xdg_config_dir(), &["opencode", "cli.json"]);
+        let config = target.under(
+            &target.opencode_config_dir_checked().unwrap(),
+            &["cli.json"],
+        );
         target
             .write(&config, br#"{"plugins":["*","-lyrel","user-plugin"]}"#)
             .unwrap();
@@ -2091,8 +2223,8 @@ mod tests {
             .write(&config, br#"{"plugins":["*","user-plugin"]}"#)
             .unwrap();
         let legacy = target.under(
-            &target.xdg_config_dir(),
-            &["opencode", "plugins", "lyrel.js"],
+            &target.opencode_config_dir_checked().unwrap(),
+            &["plugins", "lyrel.js"],
         );
         target
             .write(
@@ -2114,8 +2246,8 @@ mod tests {
             "upgrade removes only the marked legacy bridge"
         );
         let user = target.under(
-            &target.xdg_config_dir(),
-            &["opencode", "plugins", "lyrel", "user.ts"],
+            &target.opencode_config_dir_checked().unwrap(),
+            &["plugins", "lyrel", "user.ts"],
         );
         target.write(&user, b"user-owned").unwrap();
         uninstall_hooks(&target, HookAgent::OpenCode).unwrap();

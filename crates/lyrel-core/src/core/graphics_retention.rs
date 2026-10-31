@@ -6,8 +6,8 @@ use std::sync::{Arc, Mutex, OnceLock, Weak, mpsc::SyncSender};
 
 use super::{MAX_PANE_DECODED_BYTES, MAX_PANE_ENCODED_BYTES};
 
-pub const MAX_DAEMON_ENCODED_BYTES: usize = 128 << 20;
-pub const MAX_DAEMON_DECODED_BYTES: usize = 256 << 20;
+pub const MAX_DAEMON_ENCODED_BYTES: usize = 1024 << 20;
+pub const MAX_DAEMON_DECODED_BYTES: usize = 1024 << 20;
 pub const MAX_PANE_WORK_BYTES: usize = 128 << 20;
 pub const MAX_DAEMON_WORK_BYTES: usize = 256 << 20;
 pub use crate::daemon::protocol::{
@@ -55,9 +55,18 @@ pub(super) struct Resident {
     pub priority: Priority,
     pub announced: bool,
     pub wake: Option<SyncSender<()>>,
+    pins: u32,
+}
+
+pub(super) struct Pin(Arc<Mutex<Resident>>);
+impl Drop for Pin {
+    fn drop(&mut self) {
+        self.0.lock().unwrap().pins -= 1;
+    }
 }
 struct Entry {
     owner: u64,
+    group: u64,
     resident: Weak<Mutex<Resident>>,
 }
 #[derive(Default)]
@@ -83,6 +92,11 @@ impl Retention {
             })
             .clone()
     }
+    pub(super) fn pin(&self, resident: &Arc<Mutex<Resident>>) -> Pin {
+        let _registry = self.registry.lock().unwrap();
+        resident.lock().unwrap().pins += 1;
+        Pin(resident.clone())
+    }
     pub(super) fn protect<'a>(&self, residents: impl Iterator<Item = &'a Arc<Mutex<Resident>>>) {
         // Preserve registry -> resident lock order and the admission barrier,
         // but visit only this pane's existing owners, not every daemon entry.
@@ -100,20 +114,44 @@ impl Retention {
         registry.sequence
     }
     pub(super) fn reclaim_specific(&self, slot: &Arc<Mutex<Resident>>) -> bool {
-        let _registry = self.registry.lock().unwrap();
-        let mut resident = slot.lock().unwrap();
-        if resident.priority == Priority::Protected || resident.packet.is_none() {
+        let registry = self.registry.lock().unwrap();
+        let Some(group) = registry.entries.values().find_map(|entry| {
+            entry
+                .resident
+                .upgrade()
+                .filter(|resident| Arc::ptr_eq(resident, slot))
+                .map(|_| (entry.owner, entry.group))
+        }) else {
+            return false;
+        };
+        let slots: Vec<_> = registry
+            .entries
+            .values()
+            .filter(|entry| (entry.owner, entry.group) == group)
+            .filter_map(|entry| entry.resident.upgrade())
+            .collect();
+        let absent = { slot.lock().unwrap().packet.is_none() };
+        if absent
+            || slots.iter().any(|slot| {
+                let slot = slot.lock().unwrap();
+                slot.priority == Priority::Protected || slot.pins != 0
+            })
+        {
             return false;
         }
-        resident.packet = None;
-        if let Some(wake) = &resident.wake {
-            let _ = wake.try_send(());
+        for slot in slots {
+            let mut resident = slot.lock().unwrap();
+            resident.packet = None;
+            if let Some(wake) = &resident.wake {
+                let _ = wake.try_send(());
+            }
         }
         true
     }
     pub(super) fn admit(
         &self,
         owner: u64,
+        group: u64,
         decoded: usize,
         replacement: Option<&Arc<Mutex<Resident>>>,
         wake: Option<SyncSender<()>>,
@@ -126,14 +164,20 @@ impl Retention {
             .retain(|_, entry| entry.resident.strong_count() != 0);
         let mut total = (packet.len(), decoded);
         let mut pane = total;
-        let mut candidates = Vec::new();
+        let replaced_group = replacement.and_then(|old| {
+            registry.entries.values().find_map(|entry| {
+                entry
+                    .resident
+                    .upgrade()
+                    .filter(|slot| Arc::ptr_eq(old, slot))
+                    .map(|_| (entry.owner, entry.group))
+            })
+        });
+        let mut groups = BTreeMap::new();
         for (&sequence, entry) in &registry.entries {
             let Some(slot) = entry.resident.upgrade() else {
                 continue;
             };
-            if replacement.is_some_and(|old| Arc::ptr_eq(old, &slot)) {
-                continue;
-            }
             let resident = slot.lock().unwrap();
             if let Some(packet) = &resident.packet {
                 total.0 += packet.len();
@@ -142,18 +186,36 @@ impl Retention {
                     pane.0 += packet.len();
                     pane.1 += resident.decoded;
                 }
-                if resident.priority != Priority::Protected {
-                    candidates.push((
-                        resident.priority,
+                let candidate = groups.entry((entry.owner, entry.group)).or_insert_with(|| {
+                    (
+                        Priority::Unreferenced,
                         sequence,
                         entry.owner,
-                        packet.len(),
-                        resident.decoded,
-                        slot.clone(),
-                    ));
-                }
+                        0usize,
+                        0usize,
+                        Vec::new(),
+                    )
+                });
+                candidate.0 = candidate.0.max(if resident.pins != 0 {
+                    Priority::Protected
+                } else {
+                    resident.priority
+                });
+                candidate.3 += packet.len();
+                candidate.4 += resident.decoded;
+                candidate.5.push(slot.clone());
             }
         }
+        // The image being extended is never its own admission victim.
+        let mut candidates: Vec<_> = groups
+            .into_iter()
+            .filter(|((candidate_owner, candidate_group), candidate)| {
+                candidate.0 != Priority::Protected
+                    && replaced_group != Some((*candidate_owner, *candidate_group))
+                    && (*candidate_owner != owner || *candidate_group != group)
+            })
+            .map(|(_, candidate)| candidate)
+            .collect();
         candidates.sort_by_key(|c| (c.0, c.1));
         let fits = |pane: (usize, usize), total: (usize, usize)| {
             pane.0 <= capacity.0.min(self.limits.pane_encoded)
@@ -177,7 +239,7 @@ impl Retention {
             total.0 -= *encoded;
             total.1 -= *decoded;
             selected.insert(*sequence);
-            victims.push(slot.clone());
+            victims.extend(slot.iter().cloned());
         }
         for (_, sequence, candidate_owner, encoded, decoded, slot) in candidates {
             if fits(pane, total) {
@@ -192,7 +254,7 @@ impl Retention {
                 pane.0 -= encoded;
                 pane.1 -= decoded;
             }
-            victims.push(slot);
+            victims.extend(slot);
         }
         if !fits(pane, total) {
             return None;
@@ -215,11 +277,13 @@ impl Retention {
             priority: Priority::Protected,
             announced: false,
             wake,
+            pins: 0,
         }));
         registry.entries.insert(
             sequence,
             Entry {
                 owner,
+                group,
                 resident: Arc::downgrade(&slot),
             },
         );
@@ -257,6 +321,24 @@ pub(crate) struct Work {
     bytes: usize,
 }
 impl Work {
+    /// Transfer already reserved source ownership without releasing or charging
+    /// the allocation twice at the parser/prepare boundary.
+    pub(crate) fn split(&mut self, bytes: usize) -> Self {
+        assert!(
+            bytes <= self.bytes,
+            "source handoff exceeds its work reservation"
+        );
+        self.bytes -= bytes;
+        Self {
+            retention: self.retention.clone(),
+            owner: self.owner,
+            bytes,
+        }
+    }
+
+    pub(crate) fn temporary(&self) -> Self {
+        self.retention.work(self.owner)
+    }
     pub(crate) fn resize(&mut self, bytes: usize) -> bool {
         let mut registry = self.retention.registry.lock().unwrap();
         let pane = registry.work.get(&self.owner).copied().unwrap_or(0);

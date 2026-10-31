@@ -5,6 +5,7 @@ const ENV: &[&str] = &[
     "USERPROFILE",
     "PI_CODING_AGENT_DIR",
     "PI_CODING_AGENT_SESSION_DIR",
+    "PI_IMAGE_PROTOCOL",
 ];
 
 pub(super) fn prepare<H: Host + ?Sized>(
@@ -21,7 +22,7 @@ pub(super) fn prepare<H: Host + ?Sized>(
     {
         return Err(failure(
             SessionErrorKind::Unsupported,
-            "Pi has no omp profile or OpenCode connection selector; only Pi home and storage selectors can be replayed",
+            "Pi has no omp profile or OpenCode connection selector; only Pi home, storage and image protocol selectors can be replayed",
         ));
     }
     let mut argv = request.launch_argv.as_slice();

@@ -2123,6 +2123,7 @@ l10n_keys! {
     AppNoAgentSeenHere,
     AppAgentLaunchSaved,
     AppAgentLaunchArgsUnknown,
+    AppAgentLaunchRejected,
     AppCmdShellTitle,
     AppPlaceholderDescription,
     AppPlaceholderSshQuickConnect,
