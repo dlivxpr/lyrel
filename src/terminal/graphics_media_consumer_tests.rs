@@ -22,7 +22,15 @@ fn graphics_consumer_owned_media_large_regions_and_uniform_failures(cx: &mut Tes
     // Deliberately nonaligned, well beyond the image limit, in a larger object.
     // Expected BGRA is independent of sender/decoder implementation.
     let rgba = [255, 0, 0, 255, 0, 255, 0, 255];
-    for (serial, medium) in [(1, 'f'), (2, 't'), (3, 's')] {
+    for (serial, medium, offset, object_len) in [
+        (1, 'f', offset, object_len),
+        (2, 't', offset, object_len),
+        (3, 's', offset, object_len),
+        // Exact 4 KiB object end and a region crossing 64 KiB both retain all
+        // eight requested bytes; neither is an out-of-range read.
+        (4, 's', 4088, 4096),
+        (5, 's', 65533, 69632),
+    ] {
         let file = dir.path().join(format!("tty-graphics-protocol-{serial}.rgba"));
         let shared = (medium == 's').then(|| owned_media_fixture::SharedMedia::new(object_len, offset, &rgba));
         let name = if let Some(shared) = &shared { shared.name.clone() } else {
@@ -75,20 +83,42 @@ fn graphics_consumer_owned_media_large_regions_and_uniform_failures(cx: &mut Tes
     for (medium, name, region_offset, region_size) in failures {
         for quiet in [0, 1, 2] {
             serial += 1;
+            // The fixture prints KITTY_DONE over the start of KITTY_REPLY in
+            // the grid. Observe actual PTY output before sending, not that
+            // deliberately overwritten presentation of the sender's response.
+            let observer = daemon
+                .panes()
+                .observe(
+                    pane,
+                    crate::daemon::protocol::WinSize {
+                        cols: 80,
+                        rows: 24,
+                        cell_w: 10,
+                        cell_h: 20,
+                    },
+                )
+                .unwrap();
+            observer
+                .set_recv_timeout(Some(std::time::Duration::from_secs(30)))
+                .unwrap();
             let command = media_command(146, medium, &name, region_offset, region_size, quiet);
             let request = format!("SEND {serial} {} {} 1\n", usize::from(quiet != 2), graphics_pty_fixture::hex(&command));
             view.read_with(cx, |view, _| view.terminal.write(request.into_bytes()));
             let marker = format!("KITTY_DONE_{serial};");
             let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
             while !view.read_with(cx, |view, _| view.title == marker) {
-                assert!(std::time::Instant::now() < deadline, "media refusal stalled terminal");
+                assert!(std::time::Instant::now() < deadline, "media refusal stalled terminal: serial={serial}, medium={medium}, name={name:?}, O={region_offset}, S={region_size}, q={quiet}; output={:?}", view.read_with(cx, |view, _| view.scrollback_text()));
                 graphics_consumer_progress(cx);
             }
+            let (text, _) = graphics_recovery_collect(observer, serial);
             if quiet != 2 {
                 let expected = graphics_pty_fixture::hex(b"\x1b_Gi=146,p=9;EBADF:Failed to read image file\x1b\\");
-                assert!(view.read_with(cx, |view, _| view.scrollback_text().contains(&format!("KITTY_REPLY {serial} {expected}"))));
+                assert!(text.contains(&format!("KITTY_REPLY {serial} {expected}")), "wrong media refusal: serial={serial}, medium={medium}, name={name:?}, O={region_offset}, S={region_size}, q={quiet}; expected={expected}; PTY output={text:?}; grid={:?}", view.read_with(cx, |view, _| view.scrollback_text()));
             }
-            assert!(view.read_with(cx, |view, _| graphics_visible_images(view).is_empty()));
+            if quiet == 2 {
+                assert!(!text.contains(&format!("KITTY_REPLY {serial} ")), "quiet media refusal emitted a response: serial={serial}, medium={medium}, name={name:?}, O={region_offset}, S={region_size}, q={quiet}; PTY output={text:?}");
+            }
+            assert!(view.read_with(cx, |view, _| graphics_visible_images(view).is_empty()), "refused media became visible: serial={serial}, medium={medium}, name={name:?}, O={region_offset}, S={region_size}, q={quiet}");
         }
     }
     // Refusals must not poison ordinary text or a subsequent direct transfer.
