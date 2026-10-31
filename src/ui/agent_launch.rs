@@ -151,7 +151,63 @@ pub(crate) fn run_when_ready(slot: &PaneSlot, command: String, cx: &mut App) {
                     }
                     cx.background_executor().timer(PROMPT_POLL).await;
                 }
-                let _ = view.read_with(cx, |view, _| view.run_command_line(&command));
+                let Ok((host, shell)) = view.read_with(cx, |view, cx| {
+                    let shell = view.shell_spec().map(|spec| spec.program).or_else(|| {
+                        // Only local panes inherit the desktop's shell setting.
+                        (view.host_id().is_local() && view.ssh_spec().is_none())
+                            .then(|| {
+                                cx.global::<Config>()
+                                    .shell
+                                    .as_ref()
+                                    .map(|shell| shell.program.clone())
+                            })
+                            .flatten()
+                    });
+                    (view.host(cx), shell)
+                }) else {
+                    return;
+                };
+                let _ = view.update_in(cx, |_view, window, cx| {
+                    let Some(host) = host else {
+                        let error = "the launch host is disconnected".to_string();
+                        window.notify_app(
+                            crate::ui::notification_history::Notification::error(t_fmt(
+                                L10nKey::AppAgentLaunchRejected,
+                                &[("error", &error)],
+                            ))
+                            .autohide(false),
+                            cx,
+                        );
+                        return;
+                    };
+                    crate::ui::host_ops::HostOps::run_in(
+                        host,
+                        window,
+                        cx,
+                        move |host| {
+                            lyrel_core::host::session_operations::scoped_launch_command(
+                                host,
+                                &command,
+                                shell.as_deref(),
+                            )
+                            .map_err(|error| error.to_string())
+                        },
+                        |view, result, window, cx| match result {
+                            Ok(command) => view.run_command_line(&command),
+                            Err(error) => {
+                                log::error!("agent launch rejected: {error}");
+                                window.notify_app(
+                                    crate::ui::notification_history::Notification::error(t_fmt(
+                                        L10nKey::AppAgentLaunchRejected,
+                                        &[("error", &error)],
+                                    ))
+                                    .autohide(false),
+                                    cx,
+                                );
+                            }
+                        },
+                    );
+                });
             })
             .detach();
         }
@@ -281,6 +337,10 @@ impl LyrelApp {
                     .map(|shell| shell.program.clone())
                     .unwrap_or_else(crate::core::shells::login_shell),
             );
+        } else {
+            // A new remote pane uses that Host's default, not a saved shell
+            // selector or the Windows desktop's platform fallback.
+            scope.shell_program = None;
         }
         let request = SessionOperation {
             expected_host: host_id.0,
@@ -510,6 +570,46 @@ mod tests {
     }
 
     const NOW: u64 = 1_800_000_000;
+    #[gpui_kit::test]
+    fn refused_launch_is_visible_and_actionable(cx: &mut gpui_kit::TestAppContext) {
+        use crate::ui::notification_history::{Severity, history};
+        let (app, mut window, _streams) = crate::ui::app::test_window::harness_with_tabs(cx, 1);
+        window.update(|window, cx| window.notify_app("launch fixture ready", cx));
+        app.update_in(&mut window, |app, window, cx| {
+            let view = app
+                .tabs
+                .get(0)
+                .unwrap()
+                .pane
+                .focused_or_first(window, cx)
+                .unwrap();
+            run_when_ready(
+                &PaneSlot::Ready(view),
+                "PI_IMAGE_PROTOCOL=none SECRET=hidden pi".into(),
+                cx,
+            );
+        });
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(6);
+        loop {
+            window.executor().advance_clock(PROMPT_POLL);
+            window.run_until_parked();
+            let received = window.read(|cx| {
+                history(cx).read(cx).records().any(|record| {
+                    record.severity() == Severity::Error
+                        && record.message().contains("agent_launch")
+                })
+            });
+            if received {
+                break;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "launch refusal must be an actionable error notification"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+    }
+
     const DAY: u64 = 86_400;
 
     #[test]

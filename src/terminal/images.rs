@@ -24,11 +24,14 @@ pub struct RenderPlacement {
     pub painted: Arc<AtomicBool>,
     pub placement: Placement,
     pub anchor_row: i64,
-    pub anchor_col: usize,
+    pub anchor_col: i64,
     width_px: u32,
     height_px: u32,
     revision: u64,
     resource_revision: u64,
+    frame_key: u64,
+    selection_revision: u64,
+    pub playback: Option<lyrel_core::core::graphics_state::Playback>,
     history_origin: i64,
     placeholder: Option<(i32, PlaceholderSlice)>,
     _residency: Option<Arc<Residency>>,
@@ -139,11 +142,10 @@ struct AnchoredPlacement {
 
 // Each offer reserves actual source bytes, decoder peak, CPU output, and a
 // whole minimum-rounded atlas page before the daemon accepts its upload.
-const PANE_CACHE_BYTES: usize = 384 * 1024 * 1024;
-const DESKTOP_CACHE_BYTES: usize = 1024 * 1024 * 1024;
-const PANE_SOURCE_BYTES: usize = 64 * 1024 * 1024;
-const DESKTOP_SOURCE_BYTES: usize = 256 * 1024 * 1024;
-const PANE_DECODED_CAPACITY: u64 = 128 * 1024 * 1024;
+const PANE_CACHE_BYTES: usize = 1536 * 1024 * 1024;
+const DESKTOP_CACHE_BYTES: usize = 3072 * 1024 * 1024;
+const PANE_SOURCE_BYTES: usize = 1024 * 1024 * 1024;
+const DESKTOP_SOURCE_BYTES: usize = 2048 * 1024 * 1024;
 const PANE_METADATA_BYTES: usize = lyrel_core::daemon::protocol::MAX_PANE_GRAPHICS_METADATA_BYTES;
 const DESKTOP_METADATA_BYTES: usize =
     lyrel_core::daemon::protocol::MAX_AGGREGATE_GRAPHICS_METADATA_BYTES;
@@ -375,6 +377,12 @@ struct DecodedResource {
     residency: Arc<Residency>,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+struct FrameSelection {
+    key: u64,
+    revision: u64,
+}
+
 struct Resource {
     pending: Option<Arc<Image>>,
     decoded: Option<DecodedResource>,
@@ -389,6 +397,39 @@ struct Resource {
     received: u64,
     pressure_requested: bool,
     metadata: Arc<Reservation>,
+    root: Option<u64>,
+    selected: Option<FrameSelection>,
+    playback: Option<lyrel_core::core::graphics_state::Playback>,
+}
+
+impl Resource {
+    fn new(width: u32, height: u32, revision: u64, metadata: Arc<Reservation>) -> Self {
+        Self {
+            pending: None,
+            decoded: None,
+            width,
+            height,
+            evicted: false,
+            revision,
+            painted: Arc::new(AtomicBool::new(false)),
+            peak: None,
+            scratch: None,
+            source: None,
+            received: 0,
+            pressure_requested: false,
+            metadata,
+            root: None,
+            selected: None,
+            playback: None,
+        }
+    }
+
+    fn selection(&self, root: u64) -> FrameSelection {
+        self.selected.unwrap_or(FrameSelection {
+            key: root,
+            revision: 0,
+        })
+    }
 }
 
 #[derive(Default)]
@@ -512,6 +553,22 @@ impl ImageStore {
     }
 
     #[cfg(test)]
+    pub(super) fn allocation_observation(&self) -> serde_json::Value {
+        let inner = self.0.state.lock().unwrap();
+        serde_json::json!({
+            "cacheBytes": self.0.pane_budget.used.load(Ordering::Acquire),
+            "aggregateCacheBytes": self.0.aggregate_budget.used.load(Ordering::Acquire),
+            "sourceBytes": self.0.pane_source.used.load(Ordering::Acquire),
+            "aggregateSourceBytes": self.0.aggregate_source.used.load(Ordering::Acquire),
+            "metadataBytes": self.0.pane_metadata.used.load(Ordering::Acquire),
+            "decodedFrames": inner.resources.values().filter(|resource| resource.decoded.is_some()).count(),
+            "retiredFrames": inner.retired.len(),
+            "pendingOffers": inner.offers.len(),
+            "scratchBytes": self.0.decode_scratch.state.lock().unwrap().reservation.bytes,
+        })
+    }
+
+    #[cfg(test)]
     pub(super) fn recovery_diagnostics(&self) -> String {
         let inner = self.0.state.lock().unwrap();
         let resources: Vec<_> = inner
@@ -543,7 +600,8 @@ impl ImageStore {
     }
 
     pub fn graphics_capacity(&self) -> (u64, u64) {
-        (PANE_SOURCE_BYTES as u64, PANE_DECODED_CAPACITY)
+        use lyrel_core::core::graphics_state::{MAX_PANE_DECODED_BYTES, MAX_PANE_ENCODED_BYTES};
+        (MAX_PANE_ENCODED_BYTES as u64, MAX_PANE_DECODED_BYTES as u64)
     }
 
     /// Atomically admit the actual resource footprint before its protocol ACK.
@@ -908,7 +966,9 @@ impl ImageStore {
                 || (placement.screen == inner.screen
                     && displayed
                     && !placement.virtual_placement
-                    && placement.anchor_col < live_cols as u32
+                    && !placement.unresolved
+                    && placement.anchor_col < live_cols as i64
+                    && placement.anchor_col + i64::from(placement.span_cols) > 0
                     && row + i64::from(placement.clip_top) < live_rows as i64
                     && row + i64::from(placement.clip_bottom) > 0)
             {
@@ -959,7 +1019,11 @@ impl ImageStore {
             .resources
             .iter()
             .filter_map(|(&key, resource)| {
-                if protected.contains(&key) || resource.evicted || resource.pressure_requested {
+                if resource.root.is_some()
+                    || protected.contains(&key)
+                    || resource.evicted
+                    || resource.pressure_requested
+                {
                     return None;
                 }
                 Some((key, resource.received, !referenced.contains(&key)))
@@ -980,7 +1044,10 @@ impl ImageStore {
     ) -> Vec<RenderPlacement> {
         let inner = self.0.state.lock().unwrap();
         let render = |anchored: &AnchoredPlacement, placeholder| {
-            let resource = inner.resources.get(&anchored.placement.resource)?;
+            let root = inner.resources.get(&anchored.placement.resource)?;
+            let selection = root.selection(anchored.placement.resource);
+            let frame_key = selection.key;
+            let resource = inner.resources.get(&frame_key)?;
             if resource.decoded.is_none() && !resource.evicted {
                 return None;
             }
@@ -993,12 +1060,15 @@ impl ImageStore {
                 painted: resource.painted.clone(),
                 placement: anchored.placement.clone(),
                 anchor_row: anchored.placement.anchor_row,
-                anchor_col: anchored.placement.anchor_col as usize,
+                anchor_col: anchored.placement.anchor_col,
                 width_px: resource.width,
                 height_px: resource.height,
                 revision: anchored.revision,
                 history_origin: inner.history_origin,
                 resource_revision: resource.revision,
+                frame_key,
+                selection_revision: selection.revision,
+                playback: root.playback.clone(),
                 placeholder,
                 _residency: resource
                     .decoded
@@ -1011,7 +1081,9 @@ impl ImageStore {
             .placements
             .values()
             .filter(|anchored| {
-                anchored.placement.screen == inner.screen && !anchored.placement.virtual_placement
+                anchored.placement.screen == inner.screen
+                    && !anchored.placement.virtual_placement
+                    && !anchored.placement.unresolved
             })
             .filter_map(|anchored| render(anchored, None))
             .collect();
@@ -1061,6 +1133,16 @@ impl ImageStore {
             && inner
                 .resources
                 .get(&image.placement.resource)
+                .is_some_and(|root| {
+                    root.selection(image.placement.resource)
+                        == FrameSelection {
+                            key: image.frame_key,
+                            revision: image.selection_revision,
+                        }
+                })
+            && inner
+                .resources
+                .get(&image.frame_key)
                 .is_some_and(|resource| {
                     if image.evicted {
                         resource.evicted && resource.revision == image.resource_revision
@@ -1099,31 +1181,35 @@ impl ImageStore {
         if retired.is_empty() {
             return;
         }
-        // Compaction must remove every terminal tile before returning an old
-        // page's ticket. Hidden tiles still release immediately, but only a
-        // displayed owner needs a new frame. Surviving CPU images register
-        // again when painted, including after their hidden pane returns.
+        // GPUI releases the tile identified by RenderImage, including its last
+        // atlas-page reference. Other panes and frame versions keep their
+        // registration and texture across an edit; never compact the window by
+        // re-uploading every surviving image.
         let mut invalidated_visible = false;
         WINDOW_IMAGES.with(|windows| {
-            let images = windows
-                .borrow_mut()
-                .remove(&window.window_handle().window_id());
-            for entry in images.into_iter().flatten() {
-                let Some(image) = entry.residency.upgrade() else {
-                    continue;
-                };
-                image.registered.store(false, Ordering::Release);
-                if image.gpu.lock().unwrap().is_none() {
-                    continue;
+            let mut windows = windows.borrow_mut();
+            let window_id = window.window_handle().window_id();
+            if let Some(images) = windows.get_mut(&window_id) {
+                images.retain(|entry| {
+                    let Some(image) = entry.residency.upgrade() else {
+                        return false;
+                    };
+                    if !retired.iter().any(|old| Arc::ptr_eq(old, &image)) {
+                        return true;
+                    }
+                    invalidated_visible |= entry
+                        .displayed
+                        .upgrade()
+                        .is_some_and(|displayed| displayed.load(Ordering::Relaxed));
+                    false
+                });
+                if images.is_empty() {
+                    windows.remove(&window_id);
                 }
-                invalidated_visible |= entry
-                    .displayed
-                    .upgrade()
-                    .is_some_and(|displayed| displayed.load(Ordering::Relaxed));
-                cx.drop_image(image.data.clone(), Some(window));
             }
         });
         for retired in retired {
+            retired.registered.store(false, Ordering::Release);
             cx.drop_image(retired.data.clone(), Some(window));
             retired.gpu.lock().unwrap().take();
         }
@@ -1237,7 +1323,8 @@ impl ImageStore {
             .collect();
         let resources = std::mem::take(&mut inner.resources);
         for (key, resource) in resources {
-            if retained.contains(&key) {
+            if retained.contains(&key) || resource.root.is_some_and(|root| retained.contains(&root))
+            {
                 inner.resources.insert(key, resource);
             } else {
                 retire(resource, &mut inner.retired);
@@ -1309,30 +1396,89 @@ impl ImageStore {
                 source.shrink(image.data.capacity());
                 inner.next_revision = inner.next_revision.wrapping_add(1);
                 let revision = inner.next_revision;
+                let resource = Resource::new(image.width, image.height, revision, metadata);
                 let resource = Resource {
-                    width: image.width,
-                    height: image.height,
                     pending: Some(image),
-                    decoded: None,
-                    revision,
-                    evicted: false,
-                    painted: Arc::new(AtomicBool::new(false)),
                     peak: Some(peak),
                     scratch: offered.scratch.take(),
                     source: Some(source),
-                    metadata,
                     received: RECEIVE_SEQUENCE
                         .try_update(Ordering::AcqRel, Ordering::Acquire, |sequence| {
                             sequence.checked_add(1)
                         })
                         .expect("graphics receive sequence exhausted"),
-                    pressure_requested: false,
+                    ..resource
                 };
                 if let Some(old) = inner.resources.insert(key, resource) {
                     retire(old, &mut inner.retired);
                 }
                 drop(inner);
                 self.0.ready.notify_one();
+                false
+            }
+            GraphicsUpdate::Frame { key, root, number } => {
+                if key == root
+                    || number == 0
+                    || number > lyrel_core::core::graphics_state::MAX_ANIMATION_FRAMES
+                    || !inner.resources.contains_key(&key)
+                    || (number != 1 && !inner.resources.contains_key(&root))
+                {
+                    return false;
+                }
+                if number == 1 {
+                    // Keep the stable placement root, but retire its obsolete
+                    // pixel owner. A fresh replay can create this identity from
+                    // the new version without retaining any old root pixels.
+                    let version = &inner.resources[&key];
+                    let metadata = inner
+                        .resources
+                        .get(&root)
+                        .map(|r| r.metadata.clone())
+                        .unwrap_or_else(|| version.metadata.clone());
+                    let selected = inner.resources.get(&root).and_then(|r| r.selected);
+                    let playback = inner.resources.get(&root).and_then(|r| r.playback.clone());
+                    let shell = Resource {
+                        selected,
+                        playback,
+                        ..Resource::new(version.width, version.height, version.revision, metadata)
+                    };
+                    if let Some(old) = inner.resources.insert(root, shell) {
+                        retire(old, &mut inner.retired);
+                    }
+                }
+                if let Some(resource) = inner.resources.get_mut(&key) {
+                    resource.root = Some(root);
+                }
+                false
+            }
+            GraphicsUpdate::Select {
+                key,
+                frame,
+                revision,
+            } => {
+                if !inner.resources.contains_key(&frame) {
+                    return false;
+                }
+                let Some(root) = inner.resources.get_mut(&key) else {
+                    return false;
+                };
+                if root.selected.is_some_and(|old| revision <= old.revision) {
+                    return false;
+                }
+                root.selected = Some(FrameSelection {
+                    key: frame,
+                    revision,
+                });
+                true
+            }
+            GraphicsUpdate::Playback(playback) => {
+                if let Some(root) = inner.resources.get_mut(&playback.key)
+                    && root.playback.as_ref() != Some(&playback)
+                {
+                    root.playback = Some(playback);
+                }
+                // Clock metadata is not pixel damage and cannot request a
+                // whole-window repaint (including on hidden consumers).
                 false
             }
             GraphicsUpdate::Evicted { key, width, height } => {
@@ -1348,19 +1494,8 @@ impl ImageStore {
                 inner.next_revision = inner.next_revision.wrapping_add(1);
                 let revision = inner.next_revision;
                 let resource = Resource {
-                    pending: None,
-                    decoded: None,
-                    width,
-                    height,
                     evicted: true,
-                    revision,
-                    painted: Arc::new(AtomicBool::new(false)),
-                    peak: None,
-                    scratch: None,
-                    source: None,
-                    received: 0,
-                    pressure_requested: false,
-                    metadata,
+                    ..Resource::new(width, height, revision, metadata)
                 };
                 if let Some(old) = inner.resources.insert(key, resource) {
                     retire(old, &mut inner.retired);
@@ -1617,10 +1752,13 @@ impl DecodeWorker {
                             registered: AtomicBool::new(false),
                         }),
                     });
-                    inner
-                        .placements
-                        .values()
-                        .any(|placement| placement.placement.resource == key)
+                    inner.placements.values().any(|placement| {
+                        let root_key = placement.placement.resource;
+                        inner
+                            .resources
+                            .get(&root_key)
+                            .is_some_and(|root| root.selection(root_key).key == key)
+                    })
                 } else {
                     false
                 }
@@ -1766,7 +1904,7 @@ mod tests {
         placement.w = 1;
         placement.h = 1;
         placement.anchor_row = row;
-        placement.anchor_col = col;
+        placement.anchor_col = i64::from(col);
         placement.span_rows = 1;
         placement.clip_bottom = 1;
         GraphicsUpdate::Place(placement)
@@ -1788,6 +1926,258 @@ mod tests {
             std::thread::sleep(std::time::Duration::from_millis(5));
         }
         assert!(predicate(&store.snapshot()), "decode did not complete");
+    }
+
+    #[test]
+    fn default_replay_admits_two_sixty_frame_1080p_panes_and_replacement_peaks() {
+        let stores = [ImageStore::new(), ImageStore::new()];
+        for store in &stores {
+            // A fresh replay grants the complete snapshot before sending any
+            // pixels. Reserve honest raw packet sizes, not compressed fixtures.
+            for frame in 1..=61 {
+                assert!(store.offer(
+                    frame,
+                    frame,
+                    1920,
+                    1080,
+                    8_294_400 + 256,
+                    OWNER_METADATA_BYTES
+                ));
+            }
+        }
+        for store in &stores {
+            store.cancel_unclaimed_offers();
+            assert_eq!(store.0.pane_budget.used.load(Ordering::Acquire), 0);
+            assert_eq!(store.0.pane_source.used.load(Ordering::Acquire), 0);
+            assert_eq!(store.0.pane_metadata.used.load(Ordering::Acquire), 0);
+        }
+    }
+
+    #[test]
+    fn selected_non_root_and_fresh_replay_versions_wake_all_root_placements_after_decode() {
+        for fresh_replay in [false, true] {
+            let store = ImageStore::new();
+            let (started, decoding) = std::sync::mpsc::channel();
+            let (release, released) = std::sync::mpsc::channel();
+            let (woken, wake) = std::sync::mpsc::channel();
+            let worker = DecodeWorker::spawn_with_decoder(
+                store.clone(),
+                move || {
+                    woken.send(()).unwrap();
+                },
+                move |image| {
+                    started.send(()).unwrap();
+                    released
+                        .recv_timeout(std::time::Duration::from_secs(2))
+                        .unwrap();
+                    decode(image)
+                },
+            );
+            if !fresh_replay {
+                establish_screen(&worker);
+            }
+            let first_version = if fresh_replay { 100 } else { 1 };
+            apply_resource(&worker, first_version, 10);
+            decoding
+                .recv_timeout(std::time::Duration::from_secs(2))
+                .unwrap();
+            if fresh_replay {
+                worker.apply(GraphicsUpdate::Frame {
+                    key: first_version,
+                    root: 1,
+                    number: 1,
+                });
+            }
+            release.send(()).unwrap();
+            apply_resource(&worker, 101, 50);
+            decoding
+                .recv_timeout(std::time::Duration::from_secs(2))
+                .unwrap();
+            worker.apply(GraphicsUpdate::Frame {
+                key: 101,
+                root: 1,
+                number: 2,
+            });
+            apply_placement(&worker, placement(10, 1, 1, 0));
+            apply_placement(&worker, placement(11, 1, 2, 0));
+            worker.apply(GraphicsUpdate::Select {
+                key: 1,
+                frame: 101,
+                revision: 1,
+            });
+            if fresh_replay {
+                // Replay publishes retained resources, frame selection and
+                // placements before the first authoritative Screen.
+                establish_screen(&worker);
+            }
+            assert!(
+                store.snapshot().is_empty(),
+                "selected pixels are still decoding"
+            );
+            assert!(wake.try_recv().is_err());
+            release.send(()).unwrap();
+            wake.recv_timeout(std::time::Duration::from_secs(2))
+                .expect("selected version completion must repaint without another protocol update");
+            let images = store.snapshot();
+            assert_eq!(images.len(), 2);
+            assert!(
+                images
+                    .iter()
+                    .all(|image| image.frame_key == 101 && store.claim_for_paint(image))
+            );
+            assert!(Arc::ptr_eq(
+                images[0].data.as_ref().unwrap(),
+                images[1].data.as_ref().unwrap()
+            ));
+            assert_eq!(
+                images[0].data.as_ref().unwrap().as_bytes(0).unwrap(),
+                [30, 20, 50, 128]
+            );
+            assert!(
+                wake.try_recv().is_err(),
+                "one decode needs only one wake for all placements"
+            );
+        }
+    }
+
+    #[test]
+    fn selecting_retained_versions_across_loops_and_placements_never_redecodes() {
+        let store = ImageStore::new();
+        let decodes = Arc::new(AtomicUsize::new(0));
+        let (finished, completion) = std::sync::mpsc::channel();
+        let worker = DecodeWorker::spawn_with_decoder(store.clone(), || {}, {
+            let decodes = decodes.clone();
+            move |image| {
+                decodes.fetch_add(1, Ordering::AcqRel);
+                let result = decode(image);
+                finished.send(()).unwrap();
+                result
+            }
+        });
+        establish_screen(&worker);
+        for (key, number, red) in [(101, 1, 50), (102, 2, 150)] {
+            apply_resource(&worker, key, red);
+            worker.apply(GraphicsUpdate::Frame {
+                key,
+                root: 1,
+                number,
+            });
+            completion
+                .recv_timeout(std::time::Duration::from_secs(2))
+                .unwrap();
+        }
+        apply_placement(&worker, placement(10, 1, 1, 0));
+        apply_placement(&worker, placement(11, 1, 2, 0));
+        let mut versions = BTreeMap::new();
+        for revision in 1..=120 {
+            let frame = if revision % 2 == 0 { 102 } else { 101 };
+            worker.apply(GraphicsUpdate::Select {
+                key: 1,
+                frame,
+                revision,
+            });
+            wait_for(&store, |images| images.len() == 2);
+            let images = store.snapshot();
+            let data = images[0].data.as_ref().unwrap();
+            assert!(Arc::ptr_eq(data, images[1].data.as_ref().unwrap()));
+            if let Some(previous) = versions.get(&frame) {
+                assert!(
+                    Arc::ptr_eq(data, previous),
+                    "a later loop must reuse the retained decoded version"
+                );
+            } else {
+                versions.insert(frame, data.clone());
+            }
+        }
+        assert_eq!(decodes.load(Ordering::Acquire), 2);
+        drop(versions);
+        drop(worker);
+        store.clear();
+        assert_eq!(store.0.pane_budget.used.load(Ordering::Acquire), 0);
+    }
+
+    #[test]
+    fn snapshot_and_retired_owners_hold_reduced_budget_until_their_last_release() {
+        const PAGE: usize = 4 << 20;
+        with_test_cache_limits(PAGE + 1024, PAGE + 1024, || {
+            let store = ImageStore::new();
+            let worker = DecodeWorker::spawn(store.clone(), || {});
+            establish_screen(&worker);
+            apply_resource(&worker, 1, 50);
+            apply_placement(&worker, placement(10, 1, 1, 0));
+            wait_for(&store, |images| images.len() == 1);
+            let snapshot = store.snapshot();
+            assert!(store.claim_for_paint(&snapshot[0]));
+            worker.apply(GraphicsUpdate::Remove {
+                placements: vec![10],
+                resources: vec![1],
+            });
+            assert!(!store.offer(2, 2, 1, 1, 100, OWNER_METADATA_BYTES));
+            let retired = store.take_retired();
+            assert_eq!(retired.len(), 1);
+            drop(retired);
+            assert!(
+                !store.offer(2, 2, 1, 1, 100, OWNER_METADATA_BYTES),
+                "paint snapshot still owns the residency"
+            );
+            drop(snapshot);
+            assert!(store.offer(2, 2, 1, 1, 100, OWNER_METADATA_BYTES));
+            store.cancel_offer(2);
+            drop(worker);
+            assert_eq!(store.0.pane_budget.used.load(Ordering::Acquire), 0);
+            assert_eq!(store.0.pane_source.used.load(Ordering::Acquire), 0);
+            assert_eq!(store.0.pane_metadata.used.load(Ordering::Acquire), 0);
+        });
+    }
+
+    #[gpui_kit::test]
+    fn retiring_one_pane_keeps_other_pane_registered_textures(cx: &mut gpui_kit::TestAppContext) {
+        let stores = [ImageStore::new(), ImageStore::new()];
+        let workers: Vec<_> = stores
+            .iter()
+            .map(|store| DecodeWorker::spawn(store.clone(), || {}))
+            .collect();
+        for worker in &workers {
+            establish_screen(worker);
+            apply_resource(worker, 1, 50);
+            apply_placement(worker, placement(10, 1, 1, 0));
+            wait_for(&worker.store, |images| images.len() == 1);
+        }
+        let images: Vec<_> = stores.iter().map(ImageStore::snapshot).collect();
+        let displayed = Arc::new(AtomicBool::new(true));
+        let window = cx.add_window(|_, _| gpui_kit::EmptyView);
+        window
+            .update(cx, |_, window, _| {
+                for (store, snapshot) in stores.iter().zip(&images) {
+                    assert!(store.claim_for_paint(&snapshot[0]));
+                    store.register_for_paint(&snapshot[0], window, &displayed);
+                }
+            })
+            .unwrap();
+        workers[0].apply(GraphicsUpdate::Remove {
+            placements: vec![10],
+            resources: vec![1],
+        });
+        window
+            .update(cx, |_, window, cx| stores[0].release_retired(window, cx))
+            .unwrap();
+        let old = images[0][0]._residency.as_ref().unwrap();
+        let survivor = images[1][0]._residency.as_ref().unwrap();
+        assert!(!old.registered.load(Ordering::Acquire));
+        assert!(old.gpu.lock().unwrap().is_none());
+        assert!(
+            survivor.registered.load(Ordering::Acquire),
+            "an unrelated pane edit must not force texture re-upload"
+        );
+        assert!(survivor.gpu.lock().unwrap().is_some());
+        window
+            .update(cx, |_, window, cx| stores[1].release_all(window, cx))
+            .unwrap();
+        drop(images);
+        drop(workers);
+        for store in &stores {
+            assert_eq!(store.0.pane_budget.used.load(Ordering::Acquire), 0);
+        }
     }
 
     #[test]
@@ -1864,6 +2254,76 @@ mod tests {
             1,
             "cancelled decode never wakes or lands"
         );
+    }
+
+    #[test]
+    fn promoted_root_and_composed_version_retire_stale_frame_decode_and_snapshot_claims() {
+        let store = ImageStore::new();
+        let entered = Arc::new(Barrier::new(2));
+        let release = Arc::new(Barrier::new(2));
+        let first = Arc::new(AtomicBool::new(true));
+        let worker = DecodeWorker::spawn_with_decoder(store.clone(), || {}, {
+            let entered = entered.clone();
+            let release = release.clone();
+            move |image| {
+                if first.swap(false, Ordering::SeqCst) {
+                    entered.wait();
+                    release.wait();
+                }
+                decode(image)
+            }
+        });
+        establish_screen(&worker);
+        apply_resource(&worker, 1, 10);
+        apply_placement(&worker, placement(10, 1, 3, 4));
+        entered.wait();
+        apply_resource(&worker, 2, 20);
+        worker.apply(GraphicsUpdate::Frame {
+            key: 2,
+            root: 1,
+            number: 1,
+        });
+        worker.apply(GraphicsUpdate::Select {
+            key: 1,
+            frame: 2,
+            revision: 1,
+        });
+        apply_resource(&worker, 3, 30);
+        worker.apply(GraphicsUpdate::Frame {
+            key: 3,
+            root: 1,
+            number: 1,
+        });
+        worker.apply(GraphicsUpdate::Select {
+            key: 1,
+            frame: 3,
+            revision: 2,
+        });
+        worker.apply(GraphicsUpdate::Remove {
+            placements: vec![],
+            resources: vec![2],
+        });
+        release.wait();
+        wait_for(&store, |images| {
+            images.len() == 1
+                && images[0]
+                    .data
+                    .as_ref()
+                    .is_some_and(|data| data.as_bytes(0).unwrap() == [30, 20, 30, 128])
+        });
+        let snapshot = store.snapshot();
+        assert!(store.claim_for_paint(&snapshot[0]));
+        worker.apply(GraphicsUpdate::Remove {
+            placements: vec![10],
+            resources: vec![1, 3],
+        });
+        assert!(store.snapshot().is_empty());
+        assert!(
+            !store.claim_for_paint(&snapshot[0]),
+            "retained pixel ownership does not authorize a deleted placement"
+        );
+        drop(worker);
+        assert!(store.snapshot().is_empty());
     }
 
     #[test]

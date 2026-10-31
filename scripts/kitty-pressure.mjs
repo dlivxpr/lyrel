@@ -3,7 +3,7 @@
 // Placeholder marks are protocol test data from:
 // https://raw.githubusercontent.com/kovidgoyal/kitty/master/gen/rowcolumn-diacritics.txt
 import { deflateSync } from 'node:zlib';
-import { once } from 'node:events';
+import { base64Chunks, writeTerminal as emit } from './graphics-fixture-utils.mjs';
 
 const options = { images: 24, width: 3840, height: 2160, path: 'mixed', mode: 'history', delay: 100 };
 for (let i = 2; i < process.argv.length; i += 2) {
@@ -18,9 +18,6 @@ for (const key of ['images', 'width', 'height', 'delay']) {
 if (options.images > 4096 || options.width > 8192 || options.height > 8192 || options.width * options.height * 4 > 32 * 1024 * 1024) throw new Error('Fixture exceeds its bounded 32 MiB single-image allocation');
 if (!['direct', 'placeholder', 'mixed'].includes(options.path) || !['history', 'visible'].includes(options.mode)) throw new Error('Invalid path or mode');
 
-async function emit(text) {
-  if (!process.stdout.write(text)) await once(process.stdout, 'drain');
-}
 const marks = [0x305, 0x30d, 0x30e, 0x310, 0x312, 0x33d, 0x33e, 0x33f, 0x346, 0x34a, 0x34b, 0x34c, 0x350, 0x351, 0x352, 0x357].map(cp => String.fromCodePoint(cp));
 const cols = Math.min(60, Math.max(2, (process.stdout.columns || 80) - 2));
 const rows = 16;
@@ -41,10 +38,8 @@ for (let sequence = 0; sequence < options.images; sequence++) {
   const placeholder = options.path === 'placeholder' || (options.path === 'mixed' && sequence % 2 === 1);
   if (options.mode === 'visible') await emit('\x1b[3;1H');
   else await emit(`image ${sequence + 1}/${options.images} id=${id} path=${placeholder ? 'placeholder' : 'direct'}\r\n`);
-  for (let offset = 0; offset < encoded.length; offset += 4096) {
-    const chunk = encoded.slice(offset, offset + 4096);
-    const more = offset + chunk.length < encoded.length ? 1 : 0;
-    const header = offset === 0
+  for (const { chunk, first, more } of base64Chunks(encoded)) {
+    const header = first
       ? `a=T,i=${id},p=1,f=32,s=${options.width},v=${options.height},o=z,c=${cols},r=${rows},C=1,U=${placeholder ? 1 : 0},q=2,m=${more}`
       : `m=${more},q=2`;
     await emit(`\x1b_G${header};${chunk}\x1b\\`);

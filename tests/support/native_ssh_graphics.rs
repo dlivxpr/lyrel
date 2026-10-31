@@ -82,6 +82,7 @@ pub struct NativeSshFixture {
     bundled: Option<String>,
     control: Mutex<Option<Arc<RemoteHost>>>,
     panes: Mutex<Vec<u64>>,
+    workspaces: Mutex<Vec<lyrel_core::core::session::WorkspaceId>>,
 }
 
 impl NativeSshFixture {
@@ -185,6 +186,7 @@ impl NativeSshFixture {
             bundled,
             control: Mutex::new(None),
             panes: Mutex::new(Vec::new()),
+            workspaces: Mutex::new(Vec::new()),
         };
         fixture.await_ready();
         fixture
@@ -351,7 +353,11 @@ impl NativeSshFixture {
         encoded: u64,
         decoded: u64,
     ) -> (transport::Stream, DaemonVersion) {
-        assert!(encoded <= 64 << 20 && decoded <= 128 << 20);
+        assert!(
+            encoded <= lyrel_core::core::graphics_state::MAX_PANE_ENCODED_BYTES as u64
+                && decoded <= lyrel_core::core::graphics_state::MAX_PANE_DECODED_BYTES as u64,
+            "finite full-size production pane capacity"
+        );
         let mut stream = self.route(true);
         let version =
             protocol::negotiate_pane(&mut stream).expect("remote pane dialect negotiation");
@@ -366,22 +372,227 @@ impl NativeSshFixture {
         (stream, version)
     }
 
+    pub fn connect_unnegotiated_pane(&self) -> transport::Stream {
+        self.route(true)
+    }
+
+    /// The nested key/pin already exist on the disposable Linux host. Never
+    /// upload a desktop key or borrow ~/.ssh/config to manufacture this case.
+    pub fn nested_shell(&self, sender: ShellSpec) -> ShellSpec {
+        let identity = required("LYREL_TEST_SSH_NESTED_IDENTITY");
+        let known_hosts = required("LYREL_TEST_SSH_NESTED_KNOWN_HOSTS");
+        let host = required("LYREL_TEST_SSH_NESTED_HOST");
+        let port = required("LYREL_TEST_SSH_NESTED_PORT");
+        assert!(identity.starts_with('/') && known_hosts.starts_with('/'));
+        let quote = |text: &str| format!("'{}'", text.replace('\'', "'\\''"));
+        let mut command = quote(&sender.program);
+        for arg in &sender.args {
+            command.push(' ');
+            command.push_str(&quote(arg));
+        }
+        ShellSpec {
+            program: "/usr/bin/ssh".into(),
+            args: vec![
+                "-tt".into(),
+                "-F".into(),
+                "/dev/null".into(),
+                "-oBatchMode=yes".into(),
+                "-oIdentitiesOnly=yes".into(),
+                "-oStrictHostKeyChecking=yes".into(),
+                format!("-oUserKnownHostsFile={known_hosts}"),
+                "-i".into(),
+                identity,
+                "-p".into(),
+                port,
+                format!("{}@{host}", self.spec.user),
+                command,
+            ],
+            args_are_lyrel_defaults: false,
+        }
+    }
+
+    /// Prepare only this fixture's disposable standard desktop configuration.
+    /// The unmodified app restores its normal remote workspace/machine tree.
+    pub fn prepare_native_workspace(
+        &self,
+        host: &RemoteHost,
+        panes: [u64; 2],
+    ) -> (PathBuf, String) {
+        use lyrel_core::core::machine::{Axis, PaneSeed};
+        use lyrel_core::core::session::{
+            RemoteRef, RemoteTarget, WindowView, WindowViews, WorkspaceId,
+        };
+        use lyrel_core::core::ssh_profile::{AuthMode, SshProfile};
+        let workspace = WorkspaceId::new();
+        assert!(matches!(
+            host.client()
+                .call(ControlRequest::WorkspaceCreate {
+                    name: Some("Kitty native SSH acceptance".into()),
+                    workspace: Some(workspace)
+                })
+                .unwrap(),
+            ReplyOk::WorkspaceTree(_)
+        ));
+        self.workspaces.lock().unwrap().push(workspace);
+        host.client()
+            .call(ControlRequest::TabCreate {
+                workspace,
+                at: None,
+                pane: PaneSeed::bare(panes[0]),
+                tab: None,
+            })
+            .unwrap();
+        host.client()
+            .call(ControlRequest::PaneSplit {
+                workspace,
+                pane: panes[0],
+                axis: Axis::Horizontal,
+                ratio: 0.5,
+                new: PaneSeed::bare(panes[1]),
+                first: false,
+            })
+            .unwrap();
+        let mut profile = SshProfile::new("Kitty native SSH acceptance");
+        profile.host = self.spec.host.clone();
+        profile.port = self.spec.port;
+        profile.user = self.spec.user.clone();
+        profile.auth = AuthMode::PublicKey;
+        profile.identity_files = self.spec.identity_files.clone();
+        profile.verify_host_keys = Some(true);
+        profile.shell_integration = false;
+        profile.connect_timeout_s = Some(30);
+        let remote = RemoteRef::new(RemoteTarget::Profile { id: profile.id }, workspace);
+        let view = WindowView::on_remote(remote);
+        let views = WindowViews {
+            active: Some(view.id),
+            views: vec![view],
+        };
+        let config = self.local_config_dir();
+        for (name, value) in [
+            (
+                "servers.json",
+                serde_json::json!({ "ssh_profiles": [profile] }),
+            ),
+            ("views.json", serde_json::to_value(views).unwrap()),
+            (
+                "config.json",
+                serde_json::json!({ "restore_session": true, "show_tray_icon": false, "font_family": "Hack", "font_size": 15.0, "window_opacity": 1.0 }),
+            ),
+        ] {
+            std::fs::write(
+                config.join(name),
+                serde_json::to_vec_pretty(&value).unwrap(),
+            )
+            .unwrap();
+        }
+        (config, workspace.to_string())
+    }
+
+    pub fn native_app_command(&self, binary: &Path) -> Command {
+        let mut command = Command::new(binary);
+        command
+            .arg("--config-dir")
+            .arg(self.local_config_dir())
+            .env("HOME", self.root.path().join("home"))
+            .env("USERPROFILE", self.root.path().join("home"))
+            .env("LYREL_CONFIG_DIR", self.local_config_dir())
+            .env("LYREL_DATA_DIR", self.root.path().join("data"))
+            .env_remove("LYREL_CONTROL_SOCK")
+            .env_remove("LYREL_PANE")
+            .env_remove("LYREL_WS")
+            .env_remove("SSH_AUTH_SOCK")
+            .env_remove("SSH_AGENT_PID");
+        if let Some(bundled) = &self.bundled {
+            command.env("LYREL_BUNDLED_SERVER_DIR", bundled);
+        }
+        command
+    }
+
+    pub fn native_home(&self) -> PathBuf {
+        self.root.path().join("home")
+    }
+
     pub fn install_sender(&self, host: &RemoteHost) -> ShellSpec {
+        self.install_script(
+            host,
+            "kitty_remote_sender.mjs",
+            include_bytes!("kitty_remote_sender.mjs"),
+            Vec::new(),
+        )
+    }
+
+    /// Upload the exact checked-in fixture, never a reimplemented SSH variant.
+    pub fn install_script(
+        &self,
+        host: &RemoteHost,
+        name: &str,
+        body: &[u8],
+        args: Vec<String>,
+    ) -> ShellSpec {
         let directory = PathBuf::from(&self.remote_dir);
-        host.create_dir(&directory, false)
-            .expect("create unique private remote fixture directory");
-        let script = self.remote_path("kitty_remote_sender.mjs");
-        let body = include_bytes!("kitty_remote_sender.mjs");
-        host.write_file(&script, body)
-            .expect("upload real Linux PTY sender via production RemoteHost");
-        assert_eq!(
-            host.read_file(&script, body.len() as u64 + 1).unwrap(),
-            body
-        );
+        if !host.exists(&directory) {
+            host.create_dir(&directory, false)
+                .expect("create private remote fixture directory");
+        }
+        // Kitty scripts import the same checked-in utility locally and over SSH.
+        let helper = name.starts_with("kitty-").then_some((
+            "graphics-fixture-utils.mjs",
+            include_bytes!("../../scripts/graphics-fixture-utils.mjs").as_slice(),
+        ));
+        for (name, body) in helper.into_iter().chain(std::iter::once((name, body))) {
+            let script = self.remote_path(name);
+            host.write_file(&script, body)
+                .expect("upload checked-in fixture through RemoteHost");
+            assert_eq!(
+                host.read_file(&script, body.len() as u64 + 1).unwrap(),
+                body
+            );
+        }
+        let script = self.remote_path(name);
+        let mut argv = vec![script.to_string_lossy().into_owned()];
+        argv.extend(args);
         ShellSpec {
             program: self.node.clone(),
-            args: vec![script.to_string_lossy().into_owned()],
+            args: argv,
             args_are_lyrel_defaults: false,
+        }
+    }
+
+    /// Send input without subscribing a viewport: detached animation mutations
+    /// must really run with zero GUI/read-only consumers.
+    pub fn input(&self, pane: u64, bytes: Vec<u8>) {
+        let (mut stream, _) = self.connect_pane();
+        ClientMsg::SendInput {
+            pane_id: pane,
+            bytes,
+        }
+        .encode(&mut stream)
+        .unwrap();
+        assert!(
+            matches!(protocol::DaemonMsg::read(&mut stream).unwrap(), protocol::DaemonMsg::InputAck { pane_id } if pane_id == pane)
+        );
+    }
+
+    pub fn detached(&self, host: &RemoteHost, pane: u64, serial: usize, bytes: &[u8]) {
+        let gate = self.remote_path(&format!("detached-{serial}"));
+        let done = self.remote_path(&format!("detached-{serial}.done"));
+        self.input(
+            pane,
+            format!(
+                "WAIT {serial} 0 {} 7 {}\n",
+                hex(bytes),
+                hex(gate.to_str().unwrap().as_bytes())
+            )
+            .into_bytes(),
+        );
+        host.write_file(&gate, b"release").unwrap();
+        let deadline = Instant::now() + STREAM_WITHIN;
+        while !host.exists(&done) {
+            assert!(
+                Instant::now() < deadline,
+                "detached Linux mutation never reached its PTY ACK/text barrier"
+            );
+            std::thread::sleep(Duration::from_millis(10));
         }
     }
 
@@ -440,6 +651,11 @@ impl Drop for NativeSshFixture {
             }
         }
         if let Some(host) = self.control.lock().unwrap().take() {
+            for workspace in self.workspaces.lock().unwrap().drain(..) {
+                let _ = host
+                    .client()
+                    .call(ControlRequest::WorkspaceRemove { workspace });
+            }
             let _ = host.remove(Path::new(&self.remote_dir), true);
         }
         let _ = self.child.kill();

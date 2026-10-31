@@ -57,10 +57,10 @@ fn base_name(program: &str) -> &str {
 /// Which dialect the pane's shell speaks.
 ///
 /// `shell_program` is the pane's shell binary as `ShellSpec::program` reports
-/// it. `None` means the pane has not resolved one yet, and the platform is the
-/// only evidence there is: a Windows pane is overwhelmingly PowerShell, and
-/// everywhere else it is something POSIX. (WSL panes get their paths rewritten
-/// to `/mnt/...` before they reach here.)
+/// it. `None` falls back to this process's platform, so callers targeting a
+/// different Host must resolve that Host's shell before quoting a command.
+/// A local Windows pane defaults to PowerShell; other local platforms use POSIX.
+/// (WSL panes get their paths rewritten to `/mnt/...` before they reach here.)
 pub fn quoting_for(shell_program: Option<&str>) -> Quoting {
     let Some(base) = shell_program.map(base_name) else {
         return if cfg!(windows) {

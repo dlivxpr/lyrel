@@ -2,6 +2,7 @@ use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 use crate::core::cli_agent::CLIAgent;
+use crate::daemon::procinfo::MediaProcessRoot;
 use crate::daemon::protocol::RemoteContext;
 
 use super::output_marks::OscSniffer;
@@ -10,12 +11,13 @@ use super::{PaneFacts, SniffSignals, suppress_relayed_prompt_marks};
 const REMOTE_CONTEXT_POLL_INTERVAL: Duration = Duration::from_millis(500);
 
 pub(in super::super) struct ForegroundProbes {
-    /// One cheap ioctl per read; full process probes run only on a hop or interval.
-    pub group: Box<dyn Fn() -> Option<i32> + Send>,
+    /// Unix foreground PGID, or Windows shell-tree PID (ConPTY has no PGID).
+    /// Cheap per-read identity; full probes run only on a hop or interval.
+    pub group: Box<dyn Fn() -> Option<MediaProcessRoot> + Send>,
     pub remote: Box<dyn Fn() -> Option<RemoteContext> + Send>,
     pub agent: Box<dyn Fn() -> Option<Option<(CLIAgent, Vec<String>)>> + Send>,
     pub cwd: Box<dyn Fn() -> Option<PathBuf> + Send>,
-    pub local_group: fn(i32) -> Option<bool>,
+    pub local_group: fn(MediaProcessRoot) -> Option<bool>,
 }
 
 pub(in super::super) struct OutputObservation {
@@ -61,7 +63,7 @@ pub(in super::super) struct FactReader {
     sniffer: OscSniffer,
     probes: ForegroundProbes,
     next_remote_check: Instant,
-    last_group: Option<i32>,
+    last_group: Option<MediaProcessRoot>,
 }
 
 pub(in super::super) struct ReadProbe {
@@ -105,17 +107,17 @@ impl FactReader {
         }
     }
 
-    /// Cached pgids are facts, not permission: exec ssh can retain its group.
+    /// Cached process roots are facts, not permission: exec ssh can retain its group.
     /// Called afresh only when an indirect medium is accepted by the parser.
     pub(in super::super) fn indirect_media_locality(&self, before: &ReadProbe) -> Option<bool> {
         if before.managed {
             return Some(false);
         }
-        let pgid = (self.probes.group)()?;
+        let process_root = (self.probes.group)()?;
         if (self.probes.remote)().is_some() {
             Some(false)
         } else {
-            (self.probes.local_group)(pgid)
+            (self.probes.local_group)(process_root)
         }
     }
 

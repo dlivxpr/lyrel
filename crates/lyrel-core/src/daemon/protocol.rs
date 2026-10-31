@@ -5,13 +5,34 @@ use serde::{Deserialize, Serialize};
 
 pub const MAX_FRAME: usize = 64 * 1024 * 1024;
 
-pub const MAX_DAEMON_GRAPHICS_QUEUE_BYTES: usize = 256 << 20;
+pub const MAX_DAEMON_GRAPHICS_QUEUE_BYTES: usize = 1280 << 20;
 /// Conservative 64-bit resource/placement ownership, including map/Arc headers.
 pub const GRAPHICS_METADATA_ENTRY_BYTES: usize = 512;
 pub const MAX_PANE_GRAPHICS_METADATA_BYTES: usize = 4 << 20;
 pub const MAX_AGGREGATE_GRAPHICS_METADATA_BYTES: usize = 16 << 20;
 static GRAPHICS_QUEUE_BYTES: std::sync::atomic::AtomicUsize =
     std::sync::atomic::AtomicUsize::new(0);
+
+#[cfg(test)]
+static GRAPHICS_QUEUE_LIMIT: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
+
+#[cfg(test)]
+pub(crate) fn inject_graphics_queue_limit(bytes: usize) {
+    assert!(GRAPHICS_QUEUE_LIMIT.set(bytes).is_ok());
+}
+
+#[cfg(test)]
+pub(crate) fn graphics_queue_usage() -> usize {
+    GRAPHICS_QUEUE_BYTES.load(std::sync::atomic::Ordering::Acquire)
+}
+
+fn graphics_queue_limit() -> usize {
+    #[cfg(test)]
+    if let Some(&bytes) = GRAPHICS_QUEUE_LIMIT.get() {
+        return bytes;
+    }
+    MAX_DAEMON_GRAPHICS_QUEUE_BYTES
+}
 
 #[derive(Debug)]
 struct GraphicsQueueReservation(usize);
@@ -40,7 +61,7 @@ impl GraphicsPacket {
         GRAPHICS_QUEUE_BYTES
             .try_update(Ordering::AcqRel, Ordering::Acquire, |used| {
                 used.checked_add(bytes)
-                    .filter(|next| *next <= MAX_DAEMON_GRAPHICS_QUEUE_BYTES)
+                    .filter(|next| *next <= graphics_queue_limit())
             })
             .ok()?;
         let reservation = GraphicsQueueReservation(bytes);
@@ -95,7 +116,11 @@ const HEADER: usize = 5;
 /// v13 reports connection-local absolute viewports with layout epochs.
 /// v14 carries each placement/prototype's own last-active live protection.
 /// v15 completes each graphics pressure request on its requesting endpoint.
-pub const PROTOCOL_VERSION: u32 = 15;
+/// v16 carries immutable frames, atomic selection, relative-placement edges,
+/// and signed coordinates.
+/// v17 carries daemon-owned playback timelines, visibility pause metadata,
+/// and immutable replacement content for frame one (stable root identity).
+pub const PROTOCOL_VERSION: u32 = 17;
 
 pub const FEATURE_PANE_OWNER: &str = "pane-owner";
 /// Spawn remains provisional until its requester attaches on the same connection.
@@ -186,8 +211,8 @@ pub fn negotiate_pane<S: Read + Write>(stream: &mut S) -> io::Result<DaemonVersi
             // with a finite source allowance. Rendering consumers additionally
             // grant each resource from their shared process-wide byte budget.
             ClientMsg::GraphicsCapacity {
-                encoded_bytes: 64 << 20,
-                decoded_bytes: 128 << 20,
+                encoded_bytes: crate::core::graphics_state::MAX_PANE_ENCODED_BYTES as u64,
+                decoded_bytes: crate::core::graphics_state::MAX_PANE_DECODED_BYTES as u64,
                 offers: false,
             }
             .encode(stream)?;
@@ -1940,6 +1965,18 @@ mod tests {
         cell_w: 8,
         cell_h: 17,
     };
+
+    #[test]
+    fn graphics_packet_shares_one_charge_until_last_owner_drops() {
+        let before = graphics_queue_usage();
+        let first = GraphicsPacket::try_encode(128, || vec![7; 128]).unwrap();
+        assert_eq!(graphics_queue_usage(), before + 128);
+        let second = first.clone();
+        drop(first);
+        assert_eq!(graphics_queue_usage(), before + 128);
+        drop(second);
+        assert_eq!(graphics_queue_usage(), before);
+    }
 
     #[test]
     fn full_session_round_trips_over_a_real_duplex_stream() {

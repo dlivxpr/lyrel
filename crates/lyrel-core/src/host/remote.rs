@@ -449,7 +449,7 @@ impl Host for RemoteHost {
                 "update lyrel-server: this peer does not report its agent environment",
             )
         })?;
-        environment.retain(|key, _| crate::host::AGENT_ENVIRONMENT_KEYS.contains(&key.as_str()));
+        environment.retain(|key, _| crate::host::is_agent_environment_key(key));
         Ok(environment)
     }
 
@@ -1585,6 +1585,32 @@ mod tests {
         assert_eq!(inv.shells[0].program, "/usr/bin/zsh");
         assert_eq!(inv.shells[0].args, ["--no-rcs"]);
         assert!(!inv.shells[0].args_are_lyrel_defaults);
+    }
+
+    #[test]
+    fn scoped_launch_uses_the_remote_default_shell_not_the_desktop_platform() {
+        let (host, seen) = host_with_peer('/', |req| match req {
+            ControlRequest::Shells => Some((
+                ControlReply::Ok(ReplyOk::Shells(crate::core::shells::ShellInventory {
+                    shells: vec![crate::core::shells::DetectedShell {
+                        label: "Remote default".into(),
+                        program: "/usr/bin/bash".into(),
+                        args: vec![],
+                        args_are_lyrel_defaults: true,
+                        user_authored: false,
+                    }],
+                    default_name: "Remote default".into(),
+                })),
+                vec![],
+            )),
+            other => panic!("unexpected request {other:?}"),
+        });
+        let line = "PI_IMAGE_PROTOCOL=none pi --session '/remote/session with spaces.jsonl'";
+        assert_eq!(
+            crate::host::session_operations::scoped_launch_command(&*host, line, None).unwrap(),
+            line
+        );
+        assert_eq!(seen.recv().unwrap(), ControlRequest::Shells);
     }
 
     /// A remote host has no in-process answer, so the repo probe asks the

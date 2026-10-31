@@ -7,6 +7,10 @@ use serde::{Deserialize, Serialize};
 
 use super::kitty_graphics::{Image, WireFormat};
 
+#[path = "graphics_frames.rs"]
+mod frames;
+use frames::compose_frame;
+
 /// One derived display of a resource. Keys are pane-local and never reused.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[non_exhaustive]
@@ -26,7 +30,7 @@ pub struct Placement {
     pub z: i32,
     /// Stable text row, including rows evicted from the retained history ring.
     pub anchor_row: i64,
-    pub anchor_col: u32,
+    pub anchor_col: i64,
     /// Main screen is zero; alternate screen is one and cleared on entry.
     pub screen: u64,
     pub span_cols: u32,
@@ -36,9 +40,29 @@ pub struct Placement {
     pub clip_bottom: u32,
     /// Invisible prototype; grid cells, not this anchor, select its display.
     pub virtual_placement: bool,
+    /// Pane-local placement key, never a GUI-only identity or an image frame.
+    pub parent: Option<u64>,
+    pub relative_x: i32,
+    pub relative_y: i32,
+    /// True while a virtual root has no retained, valid placeholder cells.
+    pub unresolved: bool,
     /// This placement/prototype itself referenced real live content the last
     /// time its screen was active. Observer viewports never enter this fact.
     pub live: bool,
+}
+
+/// Pixel-free projection of the living daemon's animation timeline. The desktop
+/// retains this authority but never advances it with a second view-owned clock.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
+pub struct Playback {
+    pub key: u64,
+    pub state: u8,
+    pub remaining_ms: u64,
+    pub loops: u32,
+    pub completed: u32,
+    pub paused: bool,
+    pub waiting: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -47,6 +71,19 @@ pub enum GraphicsUpdate {
         key: u64,
         image: Arc<Image>,
     },
+    /// Atomic selection of an immutable full-frame resource. Placements retain
+    /// their root identity; a monotonic revision invalidates stale paint claims.
+    Select {
+        key: u64,
+        frame: u64,
+        revision: u64,
+    },
+    Frame {
+        key: u64,
+        root: u64,
+        number: u32,
+    },
+    Playback(Playback),
     Evicted {
         key: u64,
         width: u32,
@@ -73,6 +110,17 @@ enum Metadata {
         format: WireFormat,
         compressed: bool,
     },
+    Select {
+        key: u64,
+        frame: u64,
+        revision: u64,
+    },
+    Frame {
+        key: u64,
+        root: u64,
+        number: u32,
+    },
+    Playback(Playback),
     Evicted {
         key: u64,
         width: u32,
@@ -105,6 +153,27 @@ impl GraphicsUpdate {
                 },
                 &image.data,
             ),
+            Self::Select {
+                key,
+                frame,
+                revision,
+            } => (
+                Metadata::Select {
+                    key: *key,
+                    frame: *frame,
+                    revision: *revision,
+                },
+                &[],
+            ),
+            Self::Frame { key, root, number } => (
+                Metadata::Frame {
+                    key: *key,
+                    root: *root,
+                    number: *number,
+                },
+                &[],
+            ),
+            Self::Playback(playback) => (Metadata::Playback(playback.clone()), &[]),
             Self::Evicted { key, width, height } => (
                 Metadata::Evicted {
                     key: *key,
@@ -156,7 +225,13 @@ impl GraphicsUpdate {
 
     pub(crate) fn encode_packet(&self) -> Option<crate::daemon::protocol::GraphicsPacket> {
         let retention = retention::Retention::shared();
-        let mut header_work = retention.work(retention.owner());
+        self.encode_packet_budgeted(retention.work(retention.owner()))
+    }
+
+    fn encode_packet_budgeted(
+        &self,
+        mut header_work: retention::Work,
+    ) -> Option<crate::daemon::protocol::GraphicsPacket> {
         let header_bytes = match self {
             Self::Remove {
                 placements,
@@ -201,6 +276,19 @@ impl GraphicsUpdate {
                     }),
                 })
             }
+            Metadata::Select {
+                key,
+                frame: selected,
+                revision,
+            } if frame.len() == end => Some(Self::Select {
+                key,
+                frame: selected,
+                revision,
+            }),
+            Metadata::Frame { key, root, number } if frame.len() == end => {
+                Some(Self::Frame { key, root, number })
+            }
+            Metadata::Playback(playback) if frame.len() == end => Some(Self::Playback(playback)),
             Metadata::Evicted { key, width, height } if frame.len() == end => {
                 Some(Self::Evicted { key, width, height })
             }
@@ -241,13 +329,20 @@ use crate::daemon::protocol::WinSize;
 #[path = "graphics_terminal.rs"]
 mod terminal;
 
+#[path = "graphics_playback.rs"]
+mod playback;
+use playback::Animation;
+#[cfg(test)]
+#[path = "graphics_playback_tests.rs"]
+mod playback_tests;
+
 #[path = "graphics_placeholder.rs"]
 mod placeholder;
 pub use placeholder::{PlaceholderSlice, placeholder_prototype, placeholder_row};
 
 /// Encoded source and RGBA-equivalent bounds; these are independent scopes.
-pub const MAX_PANE_ENCODED_BYTES: usize = 64 << 20;
-pub const MAX_PANE_DECODED_BYTES: usize = 128 << 20;
+pub const MAX_PANE_ENCODED_BYTES: usize = 512 << 20;
+pub const MAX_PANE_DECODED_BYTES: usize = 512 << 20;
 /// Admits a 3840 × 2160 RGBA screenshot (33,177,600 bytes).
 pub const MAX_IMAGE_DECODED_BYTES: usize = 32 << 20;
 #[path = "graphics_retention.rs"]
@@ -259,6 +354,34 @@ pub use retention::{
 pub const MAX_IMAGE_DIMENSION: u32 = 8192;
 pub const MAX_RESOURCES: usize = 1024;
 pub const MAX_PLACEMENTS: usize = 4096;
+/// Root included. Each frame owns a separately admitted metadata/source lease.
+pub const MAX_ANIMATION_FRAMES: u32 = 256;
+
+const PNG_DECODER_SCRATCH: usize = 4 << 20;
+const ZLIB_DECODER_SCRATCH: usize = 256 << 10;
+
+fn decoder_scratch(image: &Image) -> usize {
+    if image.format == WireFormat::Png {
+        PNG_DECODER_SCRATCH
+    } else if image.compressed {
+        ZLIB_DECODER_SCRATCH
+    } else {
+        0
+    }
+}
+
+fn png_decoder(data: &[u8]) -> png::Decoder<std::io::Cursor<&[u8]>> {
+    let mut decoder = png::Decoder::new_with_limits(
+        std::io::Cursor::new(data),
+        png::Limits {
+            bytes: PNG_DECODER_SCRATCH,
+        },
+    );
+    decoder.set_ignore_text_chunk(true);
+    decoder.set_ignore_iccp_chunk(true);
+    decoder.ignore_checksums(false);
+    decoder
+}
 
 pub enum GraphicsEffect {
     Update(GraphicsUpdate),
@@ -275,6 +398,50 @@ struct Resource {
     screen: u64,
     priority: retention::Priority,
     _metadata: retention::MetadataTicket,
+    /// Child frames have no protocol image identity of their own.
+    root: Option<u64>,
+    frame_number: u32,
+    selected: u64,
+    revision: u64,
+    gap_ms: u32,
+    mutation: u64,
+    /// Pixel versions never reuse the stable root identity or an old worker key.
+    content_key: u64,
+    visible: bool,
+}
+
+impl Resource {
+    fn new(
+        image: &Image,
+        resident: Arc<std::sync::Mutex<retention::Resident>>,
+        metadata: retention::MetadataTicket,
+        key: u64,
+        screen: u64,
+    ) -> Self {
+        Self {
+            image: Image {
+                width: image.width,
+                height: image.height,
+                data: Vec::new(),
+                format: image.format,
+                compressed: image.compressed,
+            },
+            resident,
+            id: 0,
+            number: 0,
+            screen,
+            priority: retention::Priority::Unreferenced,
+            _metadata: metadata,
+            root: None,
+            frame_number: 1,
+            selected: key,
+            revision: 0,
+            mutation: 0,
+            gap_ms: 0,
+            content_key: key,
+            visible: false,
+        }
+    }
 }
 
 struct AnchoredPlacement {
@@ -291,12 +458,28 @@ pub(crate) struct PreparedImage {
     key: u64,
     metadata: Option<retention::MetadataTicket>,
     placement: Option<(u64, retention::MetadataTicket)>,
+    frame: Option<FramePreparation>,
     _work: retention::Work,
 }
 impl PreparedImage {
     pub(crate) fn placement_key(&self) -> Option<u64> {
         self.placement.as_ref().map(|(key, _)| *key)
     }
+}
+
+pub(crate) struct FramePreparation {
+    root: u64,
+    root_content: u64,
+    mutation: u64,
+    source: Option<crate::daemon::protocol::GraphicsPacket>,
+    base_key: Option<u64>,
+    target: Option<u64>,
+    number: u32,
+    width: u32,
+    height: u32,
+    base: Option<crate::daemon::protocol::GraphicsPacket>,
+    scratch: usize,
+    _pin: retention::Pin,
 }
 
 pub(crate) struct PreparedPlacement {
@@ -323,6 +506,10 @@ pub struct GraphicsState {
         ),
     >,
     resources: BTreeMap<u64, Resource>,
+    animations: BTreeMap<u64, Animation>,
+    playback_dirty: BTreeSet<u64>,
+    #[cfg(test)]
+    controlled_now: Option<std::time::Instant>,
     placements: BTreeMap<u64, AnchoredPlacement>,
     next_key: u64,
     next_image_id: u32,
@@ -357,6 +544,10 @@ impl GraphicsState {
             owner,
             wake: None,
             resources: BTreeMap::new(),
+            animations: BTreeMap::new(),
+            playback_dirty: BTreeSet::new(),
+            #[cfg(test)]
+            controlled_now: None,
             placements: BTreeMap::new(),
             next_key: 0,
             next_image_id: 0,
@@ -390,7 +581,8 @@ impl GraphicsState {
         self.refresh_retention();
         let reclaimed = self
             .resources
-            .get(&key)
+            .values()
+            .find(|resource| resource.content_key == key)
             .is_some_and(|resource| self.retention.reclaim_specific(&resource.resident));
         (reclaimed, self.drain_evictions())
     }
@@ -410,7 +602,7 @@ impl GraphicsState {
             let resident = resource.resident.lock().unwrap();
             offers.push(if let Some(packet) = &resident.packet {
                 (
-                    key,
+                    resource.content_key,
                     resource.image.width,
                     resource.image.height,
                     packet.len(),
@@ -440,7 +632,7 @@ impl GraphicsState {
             let resident = resource.resident.lock().unwrap();
             let expected = match &resident.packet {
                 Some(packet) => (
-                    key,
+                    resource.content_key,
                     resource.image.width,
                     resource.image.height,
                     packet.len(),
@@ -466,7 +658,10 @@ impl GraphicsState {
         if control.action == Action::Query || image.metadata.is_some() {
             return Ok(());
         }
-        let replaced = (control.id != 0).then(|| self.lookup(control)).flatten();
+        let replaced = (!matches!(control.action, Action::Frame | Action::Compose)
+            && control.id != 0)
+            .then(|| self.lookup(control))
+            .flatten();
         image.metadata = replaced
             .and_then(|key| self.resources.get(&key))
             .map(|r| r._metadata.clone())
@@ -491,6 +686,7 @@ impl GraphicsState {
         &mut self,
         control: &Control,
     ) -> Result<PreparedPlacement, &'static str> {
+        self.relative_parent(control, None)?;
         let resource = self
             .lookup(control)
             .filter(|key| {
@@ -504,19 +700,12 @@ impl GraphicsState {
             .ok_or("ENOENT:Image not found")?;
         self.geometry(control, &self.resources[&resource].image)
             .ok_or("EINVAL:Invalid placement rectangle")?;
-        let existing = (control.placement != 0)
-            .then(|| {
-                self.placements.iter().find(|(_, p)| {
-                    p.placement.resource == resource
-                        && p.placement.placement_id == control.placement
-                })
-            })
-            .flatten();
-        if let Some((&key, p)) = existing {
+        let existing = self.placement_replacement(resource, control.placement);
+        if let Some(key) = existing {
             return Ok(PreparedPlacement {
                 resource,
                 key,
-                metadata: p._metadata.clone(),
+                metadata: self.placements[&key]._metadata.clone(),
                 needs_offer: false,
             });
         }
@@ -569,6 +758,18 @@ impl GraphicsState {
         if control.action == Action::Query {
             return Ok(());
         }
+        if matches!(control.action, Action::Frame | Action::Compose) {
+            let frame = self
+                .capture_frame(control)?
+                .expect("frame action captures a canvas");
+            if image.width != frame.width || image.height != frame.height {
+                return Err("EINVAL:Frame canvas dimensions changed");
+            }
+            return Ok(());
+        }
+        if control.action == Action::TransmitAndDisplay {
+            self.relative_parent(control, self.lookup(control))?;
+        }
         if control.action == Action::TransmitAndDisplay && self.geometry(control, image).is_none() {
             return Err("EINVAL:Invalid placement rectangle");
         }
@@ -579,28 +780,165 @@ impl GraphicsState {
                 .placements
                 .values()
                 .any(|p| Some(p.placement.resource) == replaced);
-        if self.resources.len() - usize::from(replaced.is_some()) >= MAX_RESOURCES || placement_full
-        {
+        let replaced_count = replaced.map_or(0, |root| self.animation_frames(root).count());
+        if self.resources.len() - replaced_count >= MAX_RESOURCES || placement_full {
             return Err("ENOSPC:Pane graphics budget exhausted");
         }
         Ok(())
     }
 
+    /// Capture immutable source ownership only. Decode/composition happens in
+    /// prepare_image, outside the pane lock and in the PTY reader's order.
+    pub(crate) fn capture_frame(
+        &self,
+        c: &Control,
+    ) -> Result<Option<FramePreparation>, &'static str> {
+        if !matches!(c.action, Action::Frame | Action::Compose) {
+            return Ok(None);
+        }
+        let root = self.lookup(c).ok_or("ENOENT:Image not found")?;
+        let resource = &self.resources[&root];
+        if c.action == Action::Frame && c.offset_x > 1 {
+            return Err("EINVAL:Invalid frame composition mode");
+        }
+        let find = |number| self.frame_storage_key(root, number);
+        let compose = c.action == Action::Compose;
+        let target_number = if compose { c.cols } else { c.rows };
+        let target = if target_number == 0 && !compose {
+            None
+        } else {
+            Some(find(target_number).ok_or("ENOENT:Animation frame not found")?)
+        };
+        let base_key = if let Some(target) = target {
+            Some(target)
+        } else if c.cols != 0 {
+            Some(find(c.cols).ok_or("ENOENT:Animation base frame not found")?)
+        } else {
+            None
+        };
+        let source = if compose {
+            let key = find(c.rows).ok_or("ENOENT:Animation frame not found")?;
+            let width = if c.w == 0 { resource.image.width } else { c.w };
+            let height = if c.h == 0 { resource.image.height } else { c.h };
+            if [
+                (c.x, width, resource.image.width),
+                (c.offset_x, width, resource.image.width),
+                (c.y, height, resource.image.height),
+                (c.offset_y, height, resource.image.height),
+            ]
+            .iter()
+            .any(|&(start, size, limit)| start.checked_add(size).is_none_or(|end| end > limit))
+            {
+                return Err("EINVAL:Frame rectangle outside image");
+            }
+            if Some(key) == target
+                && c.x < c.offset_x + width
+                && c.offset_x < c.x + width
+                && c.y < c.offset_y + height
+                && c.offset_y < c.y + height
+            {
+                return Err("EINVAL:Overlapping frame rectangles");
+            }
+            Some(
+                self.resources[&key]
+                    .resident
+                    .lock()
+                    .unwrap()
+                    .packet
+                    .clone()
+                    .ok_or("ENOENT:Image data unavailable")?,
+            )
+        } else {
+            None
+        };
+        let base = base_key
+            .map(|key| {
+                self.resources[&key]
+                    .resident
+                    .lock()
+                    .unwrap()
+                    .packet
+                    .clone()
+                    .ok_or("ENOENT:Image data unavailable")
+            })
+            .transpose()?;
+        if resource.resident.lock().unwrap().packet.is_none() {
+            return Err("ENOENT:Image data unavailable");
+        }
+        let count = self.animation_frames(root).count() as u32;
+        if target.is_none()
+            && (count >= MAX_ANIMATION_FRAMES || self.resources.len() >= MAX_RESOURCES)
+        {
+            return Err("ENOSPC:Animation frame budget exhausted");
+        }
+        let scratch = base_key
+            .into_iter()
+            .chain(if compose { find(c.rows) } else { None })
+            .map(|key| decoder_scratch(&self.resources[&key].image))
+            .max()
+            .unwrap_or(0);
+        // A pinned root protects the entire retention group even if another
+        // consumer refreshes visibility while desktop admission is pending.
+        let pin = self.retention.pin(&resource.resident);
+        Ok(Some(FramePreparation {
+            root,
+            root_content: resource.content_key,
+            mutation: resource.mutation,
+            source,
+            base_key,
+            target,
+            number: if target.is_some() {
+                target_number
+            } else {
+                count + 1
+            },
+            width: resource.image.width,
+            height: resource.image.height,
+            base,
+            scratch,
+            _pin: pin,
+        }))
+    }
+
     pub(crate) fn prepare_image(
-        mut image: Image,
+        image: Image,
         owner: u64,
         key: u64,
         control: &Control,
+        frame: Option<FramePreparation>,
     ) -> Result<PreparedImage, &'static str> {
         let retention = retention::Retention::shared();
         let mut work = retention.work(owner);
-        let decoded_bytes = validate_image(&mut image, &mut work).map_err(|status| {
-            if control.medium == super::kitty_graphics::Medium::Direct {
-                status
-            } else {
-                "EBADF:Failed to read image file"
-            }
-        })?;
+        if !work.resize(image.data.capacity()) {
+            return Err("ENOSPC:Graphics source budget exhausted");
+        }
+        Self::prepare_image_budgeted(image, key, control, frame, work)
+    }
+
+    pub(crate) fn prepare_image_budgeted(
+        mut image: Image,
+        key: u64,
+        control: &Control,
+        frame: Option<FramePreparation>,
+        mut work: retention::Work,
+    ) -> Result<PreparedImage, &'static str> {
+        let mut decoded_bytes = if control.action == Action::Compose {
+            0
+        } else {
+            validate_image(&mut image, &mut work).map_err(|status| {
+                if control.medium == super::kitty_graphics::Medium::Direct {
+                    status
+                } else {
+                    "EBADF:Failed to read image file"
+                }
+            })?
+        };
+        if let Some(frame) = &frame {
+            compose_frame(&mut image, control, frame, &mut work)?;
+        }
+        if frame.is_some() {
+            decoded_bytes = image.width as usize * image.height as usize * 4;
+        }
         let image = Arc::new(image);
         let packet = if control.action != Action::Query {
             Some(
@@ -608,7 +946,7 @@ impl GraphicsState {
                     key,
                     image: image.clone(),
                 })
-                .encode_packet()
+                .encode_packet_budgeted(work.temporary())
                 .ok_or("ENOSPC:Graphics transport budget exhausted")?,
             )
         } else {
@@ -621,6 +959,7 @@ impl GraphicsState {
             key,
             metadata: None,
             placement: None,
+            frame,
             _work: work,
         })
     }
@@ -707,27 +1046,31 @@ impl GraphicsState {
         let screen = self.screen;
         let epoch = self.viewport_epoch;
         let visible_range = |viewport: &crate::daemon::protocol::GraphicsViewport| {
-            if viewport.epoch != epoch || viewport.screen != screen || viewport.rows == 0 {
+            if viewport.epoch != epoch
+                || viewport.screen != screen
+                || viewport.rows == 0
+                || viewport.cols == 0
+            {
                 return None;
             }
             let start = viewport.top.unwrap_or(top).clamp(oldest, top);
             Some((start, start + i64::from(viewport.rows), viewport.cols))
         };
         let mut observed_placeholders = BTreeSet::new();
-        for (start, end, _) in self
+        for (start, end, cols) in self
             .viewports
             .values()
             .filter_map(|(_, viewport)| visible_range(viewport))
         {
-            observed_placeholders.extend(
-                self.placeholder_placements_in(
-                    (start - top) as i32,
-                    (end.min(bottom) - top) as i32,
-                ),
-            );
+            observed_placeholders.extend(self.placeholder_placements_in_viewport(
+                (start - top) as i32,
+                (end.min(bottom) - top) as i32,
+                cols,
+            ));
         }
         for resource in self.resources.values_mut() {
             resource.priority = Priority::Unreferenced;
+            resource.visible = false;
         }
         for (&key, anchored) in &mut self.placements {
             let p = &mut anchored.placement;
@@ -736,7 +1079,9 @@ impl GraphicsState {
                     anchored.retained = retained_placeholders.contains(&key);
                     live_placeholders.contains(&key)
                 } else {
-                    p.anchor_col < u32::from(self.size.cols.max(1))
+                    !p.unresolved
+                        && p.anchor_col < i64::from(self.size.cols.max(1))
+                        && p.anchor_col + i64::from(p.span_cols) > 0
                         && p.anchor_row + i64::from(p.clip_top) < bottom
                         && p.anchor_row + i64::from(p.clip_bottom) > top
                 };
@@ -754,7 +1099,7 @@ impl GraphicsState {
             } else {
                 Priority::Unreferenced
             };
-            if p.screen == screen
+            let visible = p.screen == screen
                 && (if p.virtual_placement {
                     observed_placeholders.contains(&key)
                 } else {
@@ -762,23 +1107,31 @@ impl GraphicsState {
                         .values()
                         .filter_map(|(_, viewport)| visible_range(viewport))
                         .any(|(start, end, cols)| {
-                            p.anchor_col < u32::from(cols)
+                            !p.unresolved
+                                && p.anchor_col < i64::from(cols)
+                                && p.anchor_col + i64::from(p.span_cols) > 0
                                 && p.anchor_row + i64::from(p.clip_top) < end
                                 && p.anchor_row + i64::from(p.clip_bottom) > start
                         })
-                })
-            {
+                });
+            if visible {
                 priority = Priority::Protected;
             }
             if let Some(resource) = self.resources.get_mut(&p.resource) {
                 resource.priority = resource.priority.max(priority);
+                resource.visible |= visible;
             }
         }
         // Publish only complete reductions: another pane's admission must not
         // observe a live resource temporarily downgraded during the scan.
         for resource in self.resources.values() {
-            resource.resident.lock().unwrap().priority = resource.priority;
+            // Admission and pressure reclaim a frame sequence atomically.
+            resource.resident.lock().unwrap().priority = resource
+                .root
+                .and_then(|root| self.resources.get(&root))
+                .map_or(resource.priority, |root| root.priority);
         }
+        self.sync_playback_visibility();
     }
 
     /// Drain under the pane output lock before any later mutation. A removed
@@ -786,10 +1139,14 @@ impl GraphicsState {
     pub(crate) fn drain_evictions(&mut self) -> Vec<GraphicsEffect> {
         let mut effects = Vec::new();
         let mut obsolete = Vec::new();
+        let mut evicted_roots = BTreeSet::new();
         for (&key, resource) in &self.resources {
             let mut resident = resource.resident.lock().unwrap();
             if resident.packet.is_some() {
                 continue;
+            }
+            if resource.root.is_none() && !resident.announced {
+                evicted_roots.insert(key);
             }
             if resource.priority == retention::Priority::Unreferenced {
                 obsolete.push(key);
@@ -802,6 +1159,46 @@ impl GraphicsState {
                 }));
             }
         }
+        let mut children: Vec<_> = self
+            .resources
+            .iter()
+            .filter_map(|(&key, resource)| {
+                resource
+                    .root
+                    .filter(|root| evicted_roots.contains(root))
+                    .map(|_| key)
+            })
+            .collect();
+        for key in &children {
+            self.resources.remove(key);
+        }
+        children.extend(evicted_roots.iter().filter_map(|root| {
+            let key = self.resources[root].content_key;
+            (key != *root).then_some(key)
+        }));
+        if !children.is_empty() {
+            effects.push(GraphicsEffect::Update(GraphicsUpdate::Remove {
+                placements: Vec::new(),
+                resources: children,
+            }));
+        }
+        for root in evicted_roots {
+            let resource = self.resources.get_mut(&root).unwrap();
+            resource.content_key = root;
+            if resource.selected == root {
+                continue;
+            }
+            resource.selected = root;
+            resource.revision = resource
+                .revision
+                .checked_add(1)
+                .expect("graphics selection revision exhausted");
+            effects.push(GraphicsEffect::Update(GraphicsUpdate::Select {
+                key: root,
+                frame: root,
+                revision: resource.revision,
+            }));
+        }
         for key in obsolete {
             self.remove_resource(key, &mut effects);
         }
@@ -813,7 +1210,9 @@ impl GraphicsState {
         if self.resources.is_empty() {
             return Some((Vec::new(), work));
         }
-        let count = self.resources.len() + self.placements.len() + 1;
+        // A replaced root can emit both Frame and Select in addition to its
+        // resource packet. Reserve the upper bound before taking Arc snapshots.
+        let count = self.resources.len() * 3 + self.placements.len() + self.animations.len() + 1;
         if !work.resize(count * std::mem::size_of::<GraphicsEffect>()) {
             return None;
         }
@@ -829,6 +1228,29 @@ impl GraphicsState {
                     height: resource.image.height,
                 })
             });
+        }
+        for (&key, resource) in &self.resources {
+            if resource.root.is_some() || resource.content_key != key {
+                updates.push(GraphicsEffect::Update(GraphicsUpdate::Frame {
+                    key: resource.content_key,
+                    root: resource.root.unwrap_or(key),
+                    number: resource.frame_number,
+                }));
+            }
+        }
+        for (&key, resource) in &self.resources {
+            if resource.root.is_none() && resource.revision != 0 {
+                updates.push(GraphicsEffect::Update(GraphicsUpdate::Select {
+                    key,
+                    frame: resource.selected,
+                    revision: resource.revision,
+                }));
+            }
+        }
+        for &key in self.animations.keys() {
+            updates.push(GraphicsEffect::Update(GraphicsUpdate::Playback(
+                self.playback_snapshot(key),
+            )));
         }
         updates.extend(
             self.placements()
@@ -856,6 +1278,13 @@ impl GraphicsState {
         let old = (self.screen, self.history_origin(), self.viewport_epoch);
         let mut processor = std::mem::take(&mut self.processor);
         processor.advance(self, bytes);
+        // Synchronized updates defer presentation, not protocol state. Kitty
+        // commands are lifted from this stream and must see every preceding
+        // cursor/screen/text mutation, even before the sender's ESU arrives.
+        // The desktop keeps its own synchronized presentation buffer.
+        if processor.sync_timeout().sync_timeout().is_some() {
+            processor.stop_sync(self);
+        }
         self.processor = processor;
         self.expire_history();
         self.finish_layout(
@@ -875,7 +1304,8 @@ impl GraphicsState {
 
     fn lookup(&self, control: &Control) -> Option<u64> {
         self.resources.iter().rev().find_map(|(key, resource)| {
-            (resource.screen == self.screen
+            (resource.root.is_none()
+                && resource.screen == self.screen
                 && ((control.id != 0 && resource.id == control.id)
                     || (control.number != 0 && resource.number == control.number)))
                 .then_some(*key)
@@ -918,13 +1348,27 @@ impl GraphicsState {
             return effects;
         }
         match control.action {
-            Action::Transmit | Action::TransmitAndDisplay | Action::Query => {
+            Action::Transmit
+            | Action::TransmitAndDisplay
+            | Action::Query
+            | Action::Frame
+            | Action::Compose => {
                 let prepared = match prepared {
                     Some(prepared) => Ok(prepared),
-                    None => match image {
+                    None => match image.or_else(|| {
+                        (control.action == Action::Compose).then(|| Image {
+                            width: 0,
+                            height: 0,
+                            data: Vec::new(),
+                            format: WireFormat::Rgba,
+                            compressed: false,
+                        })
+                    }) {
                         Some(image) => {
                             let key = self.key();
-                            Self::prepare_image(image, self.owner, key, &control)
+                            self.capture_frame(&control).and_then(|frame| {
+                                Self::prepare_image(image, self.owner, key, &control, frame)
+                            })
                         }
                         None => Err("EINVAL:Missing image data"),
                     },
@@ -948,9 +1392,24 @@ impl GraphicsState {
                     metadata,
                     placement: placement_lease,
                     _work: _validation,
+                    frame,
                 } = prepared;
                 if control.action == Action::Query {
                     Self::reply(&mut effects, &control, control.id, "OK");
+                    return effects;
+                }
+                if let Some(frame) = frame {
+                    self.commit_frame(
+                        control,
+                        image,
+                        packet.unwrap(),
+                        decoded_bytes,
+                        key,
+                        metadata.unwrap(),
+                        frame,
+                        &mut effects,
+                    );
+                    effects.extend(self.finish_layout(false));
                     return effects;
                 }
                 if let Err(status) = self.check_prepared(&control, &image) {
@@ -970,6 +1429,7 @@ impl GraphicsState {
                 let packet = packet.expect("transmit preparation encodes its resource packet");
                 let Some(resident) = self.retention.admit(
                     self.owner,
+                    key,
                     decoded_bytes,
                     replacement.as_ref(),
                     self.wake.clone(),
@@ -998,23 +1458,13 @@ impl GraphicsState {
                 if let Some(old_key) = replaced {
                     self.remove_resource(old_key, &mut effects);
                 }
-                let metadata = Image {
-                    width: image.width,
-                    height: image.height,
-                    data: Vec::new(),
-                    format: image.format,
-                    compressed: image.compressed,
-                };
+                let resource = Resource::new(&image, resident, metadata_lease, key, self.screen);
                 self.resources.insert(
                     key,
                     Resource {
-                        image: metadata,
-                        resident,
                         id,
                         number: control.number,
-                        screen: self.screen,
-                        priority: retention::Priority::Unreferenced,
-                        _metadata: metadata_lease,
+                        ..resource
                     },
                 );
                 effects.push(GraphicsEffect::Frame(packet));
@@ -1039,11 +1489,223 @@ impl GraphicsState {
                     Self::reply(&mut effects, &control, control.id, "ENOENT:Image not found");
                 }
             }
+            Action::Animation => self.control_animation(&control, &mut effects),
             Action::Delete => self.delete(&control, &mut effects),
             Action::Other => unreachable!(),
         }
         effects.extend(self.finish_layout(false));
         effects
+    }
+
+    fn commit_frame(
+        &mut self,
+        control: Control,
+        image: Arc<Image>,
+        packet: crate::daemon::protocol::GraphicsPacket,
+        decoded: usize,
+        key: u64,
+        metadata: retention::MetadataTicket,
+        frame: FramePreparation,
+        effects: &mut Vec<GraphicsEffect>,
+    ) {
+        let root = frame.root;
+        let valid = self.lookup(&control) == Some(root)
+            && self.resources.get(&root).is_some_and(|resource| {
+                resource.content_key == frame.root_content && resource.mutation == frame.mutation
+            })
+            && frame
+                .target
+                .is_none_or(|target| self.resources.contains_key(&target))
+            && frame
+                .base_key
+                .is_none_or(|base| self.resources.contains_key(&base));
+        if !valid {
+            Self::reply(
+                effects,
+                &control,
+                control.id,
+                "EINVAL:Frame transfer cancelled by session change",
+            );
+            return;
+        }
+        self.refresh_retention();
+        // Charge old and new owners together; never reclaim this animation.
+        let Some(resident) = self.retention.admit(
+            self.owner,
+            root,
+            decoded,
+            None,
+            self.wake.clone(),
+            self.capacity,
+            packet.clone(),
+        ) else {
+            Self::reply(
+                effects,
+                &control,
+                control.id,
+                "ENOSPC:Graphics retention budget exhausted",
+            );
+            return;
+        };
+        effects.extend(self.drain_evictions());
+        let old_content = frame
+            .target
+            .map(|target| self.resources[&target].content_key);
+        self.resources.get_mut(&root).unwrap().mutation += 1;
+        let id = self.resources[&root].id;
+        let selected = old_content == Some(self.resources[&root].selected);
+        let target = frame.target.unwrap_or(key);
+        if target == root {
+            let resource = self.resources.get_mut(&root).unwrap();
+            resource.resident = resident;
+            resource.content_key = key;
+            resource.image = Image {
+                width: image.width,
+                height: image.height,
+                data: Vec::new(),
+                format: image.format,
+                compressed: false,
+            };
+        } else {
+            let gap_ms = frame
+                .target
+                .map_or(40, |target| self.resources[&target].gap_ms);
+            if let Some(target) = frame.target {
+                self.resources.remove(&target);
+            }
+            self.resources.insert(
+                key,
+                Resource {
+                    id,
+                    root: Some(root),
+                    frame_number: frame.number,
+                    gap_ms,
+                    ..Resource::new(&image, resident, metadata, key, self.screen)
+                },
+            );
+        }
+        effects.push(GraphicsEffect::Frame(packet));
+        effects.push(GraphicsEffect::Update(GraphicsUpdate::Frame {
+            key,
+            root,
+            number: frame.number,
+        }));
+        if selected {
+            let resource = self.resources.get_mut(&root).unwrap();
+            resource.selected = key;
+            resource.revision = resource
+                .revision
+                .checked_add(1)
+                .expect("graphics selection revision exhausted");
+            effects.push(GraphicsEffect::Update(GraphicsUpdate::Select {
+                key: root,
+                frame: key,
+                revision: resource.revision,
+            }));
+        }
+        if let Some(old) = old_content.filter(|old| *old != root) {
+            effects.push(GraphicsEffect::Update(GraphicsUpdate::Remove {
+                placements: Vec::new(),
+                resources: vec![old],
+            }));
+        }
+        self.frame_committed(
+            root,
+            if frame.target == Some(root) {
+                root
+            } else {
+                key
+            },
+            &control,
+            effects,
+        );
+        Self::reply(effects, &control, id, "OK");
+    }
+
+    /// Validate the prospective graph before quota admission or replacement.
+    /// A replacement may deepen existing descendants, so validate every path.
+    fn relative_parent(
+        &self,
+        c: &Control,
+        removed_resource: Option<u64>,
+    ) -> Result<Option<u64>, &'static str> {
+        if c.parent_image == 0 {
+            if c.parent_placement != 0 {
+                return Err("ENOPARENT:Parent placement not found");
+            }
+            return Ok(None);
+        }
+        if c.virtual_placement {
+            return Err("EINVAL:Virtual placement cannot be relative");
+        }
+        let parent = self
+            .placements
+            .values()
+            .rev()
+            .find(|p| {
+                p.placement.screen == self.screen
+                    && p.placement.image_id == c.parent_image
+                    && p.placement.placement_id == c.parent_placement
+                    && Some(p.placement.resource) != removed_resource
+            })
+            .map(|p| p.placement.key)
+            .ok_or("ENOPARENT:Parent placement not found")?;
+        let mut ancestor = Some(parent);
+        for _ in 0..=8 {
+            let Some(key) = ancestor else { break };
+            let p = &self.placements[&key].placement;
+            if Some(p.resource) == removed_resource {
+                return Err("ENOPARENT:Parent placement not found");
+            }
+            ancestor = p.parent;
+        }
+        // `I=` resolves to the same retained image as `i=`. Match that
+        // identity, just as place() does, before considering a replacement's
+        // prospective parent; the raw request may not contain an image id.
+        let replacement = self
+            .lookup(c)
+            .and_then(|resource| self.placement_replacement(resource, c.placement));
+        for start in self
+            .placements
+            .keys()
+            .copied()
+            .map(Some)
+            .chain(std::iter::once(None))
+        {
+            let mut current = start;
+            let mut visited = [0u64; 10];
+            let mut count = 0;
+            loop {
+                let next = if current.is_none() || current == replacement {
+                    Some(parent)
+                } else {
+                    self.placements
+                        .get(&current.unwrap())
+                        .and_then(|p| p.placement.parent)
+                };
+                let Some(next) = next else { break };
+                if visited[..count].contains(&next) {
+                    return Err("ECYCLE:Placement cycle");
+                }
+                if count == 8 {
+                    // Check for a cycle before depth refusal, including a long
+                    // descendant chain closed by this replacement.
+                    let mut cursor = Some(next);
+                    for _ in 0..=MAX_PLACEMENTS {
+                        let Some(key) = cursor else { break };
+                        if Some(key) == replacement {
+                            return Err("ECYCLE:Placement cycle");
+                        }
+                        cursor = self.placements.get(&key).and_then(|p| p.placement.parent);
+                    }
+                    return Err("ETOODEEP:Relative placement chain exceeds eight links");
+                }
+                visited[count] = next;
+                count += 1;
+                current = Some(next);
+            }
+        }
+        Ok(Some(parent))
     }
 
     /// Returns intersected source crop and its occupied grid span. Wire c/r
@@ -1090,6 +1752,16 @@ impl GraphicsState {
         Some((w, h, cols.max(1), rows.max(1)))
     }
 
+    fn placement_replacement(&self, resource: u64, placement: u32) -> Option<u64> {
+        if self.resources[&resource].id == 0 || placement == 0 {
+            return None;
+        }
+        self.placements.iter().find_map(|(&key, p)| {
+            (p.placement.resource == resource && p.placement.placement_id == placement)
+                .then_some(key)
+        })
+    }
+
     fn place(
         &mut self,
         resource_key: u64,
@@ -1098,20 +1770,19 @@ impl GraphicsState {
         reserved_metadata: Option<(u64, retention::MetadataTicket)>,
     ) {
         let resource = &self.resources[&resource_key];
+        let parent = match self.relative_parent(control, None) {
+            Ok(parent) => parent,
+            Err(status) => {
+                Self::reply(effects, control, resource.id, status);
+                return;
+            }
+        };
         let id = resource.id;
         let Some((w, h, span_cols, span_rows)) = self.geometry(control, &resource.image) else {
             Self::reply(effects, control, id, "EINVAL:Invalid placement rectangle");
             return;
         };
-        let replacement = (id != 0 && control.placement != 0)
-            .then(|| {
-                self.placements.iter().find_map(|(key, p)| {
-                    (p.placement.resource == resource_key
-                        && p.placement.placement_id == control.placement)
-                        .then_some(*key)
-                })
-            })
-            .flatten();
+        let replacement = self.placement_replacement(resource_key, control.placement);
         if replacement.is_none() && self.placements.len() >= MAX_PLACEMENTS {
             Self::reply(effects, control, id, "ENOSPC:Placement budget exhausted");
             return;
@@ -1151,13 +1822,17 @@ impl GraphicsState {
             offset_y: control.offset_y,
             z: control.z,
             anchor_row: self.history_origin() + i64::from(self.term.grid.cursor.pos.row.0),
-            anchor_col: self.term.grid.cursor.pos.col.0 as u32,
+            anchor_col: self.term.grid.cursor.pos.col.0 as i64,
             screen: self.screen,
             span_cols,
             span_rows,
             clip_top: 0,
             clip_bottom: span_rows,
             virtual_placement: control.virtual_placement,
+            parent,
+            relative_x: control.relative_x,
+            relative_y: control.relative_y,
+            unresolved: parent.is_some() || control.virtual_placement,
             live: !control.virtual_placement,
         };
         self.placements.insert(
@@ -1174,7 +1849,7 @@ impl GraphicsState {
             history_origin: self.history_origin(),
             epoch: self.viewport_epoch,
         }));
-        if !control.no_move && !control.virtual_placement {
+        if !control.no_move && !control.virtual_placement && parent.is_none() {
             // Kitty leaves the cursor on the placement's last row. Do not
             // encode a zero CUD: terminals interpret CSI 0 B as one row.
             let down = span_rows
@@ -1198,7 +1873,22 @@ impl GraphicsState {
         let Some(resource) = self.resources.remove(&key) else {
             return;
         };
+        let content_key = resource.content_key;
         drop(resource);
+        let mut versions = vec![content_key];
+        let mut resources = vec![key];
+        // The stable root is already detached; enumerate its remaining
+        // immutable owners once, including promoted content identities.
+        for (child, resource) in self.animation_frames(key) {
+            versions.push(resource.content_key);
+            resources.push(child);
+        }
+        for key in &resources {
+            self.resources.remove(key);
+        }
+        resources.extend(versions);
+        resources.sort_unstable();
+        resources.dedup();
         let placements: Vec<_> = self
             .placements
             .iter()
@@ -1209,12 +1899,16 @@ impl GraphicsState {
         }
         effects.push(GraphicsEffect::Update(GraphicsUpdate::Remove {
             placements,
-            resources: vec![key],
+            resources,
         }));
     }
 
     fn delete(&mut self, c: &Control, effects: &mut Vec<GraphicsEffect>) {
         let selector = if c.delete == 0 { b'a' } else { c.delete };
+        if selector.eq_ignore_ascii_case(&b'f') {
+            self.delete_frame(c, effects);
+            return;
+        }
         let target = selector.to_ascii_lowercase();
         if !matches!(
             target,
@@ -1241,7 +1935,7 @@ impl GraphicsState {
         let newest = self.lookup(c);
         let history = self.history_origin();
         let cursor_row = history + i64::from(self.term.grid.cursor.pos.row.0);
-        let cursor_col = self.term.grid.cursor.pos.col.0 as u32;
+        let cursor_col = self.term.grid.cursor.pos.col.0 as i64;
         let mut affected = Vec::new();
         let mut removed = Vec::new();
         self.placements.retain(|key, p| {
@@ -1259,12 +1953,12 @@ impl GraphicsState {
             let col = if target == b'c' {
                 cursor_col
             } else {
-                c.x.saturating_sub(1)
+                i64::from(c.x.saturating_sub(1))
             };
             let top = p.anchor_row + i64::from(p.clip_top);
             let bottom = p.anchor_row + i64::from(p.clip_bottom);
             let in_row = row >= top && row < bottom;
-            let in_col = col >= p.anchor_col && col < p.anchor_col.saturating_add(p.span_cols);
+            let in_col = col >= p.anchor_col && col < p.anchor_col + i64::from(p.span_cols);
             let selected = match target {
                 b'a' => top < history + i64::from(self.size.rows) && bottom > history,
                 b'i' | b'n' => {
@@ -1281,22 +1975,27 @@ impl GraphicsState {
             };
             if selected {
                 removed.push(*key);
-                affected.push(p.resource);
+                affected.push((p.resource, p.parent.is_some()));
             }
             !selected
         });
         if matches!(target, b'i' | b'n') && c.placement == 0 {
-            affected.extend(newest);
+            affected.extend(newest.map(|key| (key, false)));
         }
         if target == b'r' {
             affected.extend(self.resources.iter().filter_map(|(key, r)| {
-                (r.screen == self.screen && r.id >= c.x && r.id <= c.y).then_some(*key)
+                (r.screen == self.screen && r.id >= c.x && r.id <= c.y).then_some((*key, false))
             }));
         }
         affected.sort_unstable();
         affected.dedup();
-        let mut freed = Vec::new();
-        for key in affected {
+        if !removed.is_empty() {
+            effects.push(GraphicsEffect::Update(GraphicsUpdate::Remove {
+                placements: removed,
+                resources: Vec::new(),
+            }));
+        }
+        for (key, relative) in affected {
             if self
                 .placements
                 .values()
@@ -1305,18 +2004,12 @@ impl GraphicsState {
                 continue;
             }
             if let Some(resource) = self.resources.get(&key)
-                && (selector.is_ascii_uppercase() || resource.id == 0)
+                && resource.root.is_none()
+                && (relative || selector.is_ascii_uppercase() || resource.id == 0)
             {
                 let _ = resource;
-                self.resources.remove(&key);
-                freed.push(key);
+                self.remove_resource(key, effects);
             }
-        }
-        if !removed.is_empty() || !freed.is_empty() {
-            effects.push(GraphicsEffect::Update(GraphicsUpdate::Remove {
-                placements: removed,
-                resources: freed,
-            }));
         }
     }
 }
@@ -1325,14 +2018,21 @@ fn validate_image(image: &mut Image, work: &mut retention::Work) -> Result<usize
     if image.data.len() > MAX_IMAGE_BYTES {
         return Err("ENOSPC:Image payload too large");
     }
-    // The parser still charges the input for this read. Only a normalized PNG
-    // adds a second owned source; keep that source's capacity charged through
-    // PreparedImage, including while it is serialized/admitted.
-    let mut normalized_capacity = 0;
+    // The parser transfers the original source lease into prepare. Standalone
+    // callers reserve that same owner before validation; only a normalized PNG
+    // needs an additional, temporary allocation while the input still lives.
+    let mut source_capacity = image.data.capacity();
     if image.format == WireFormat::Png {
         if image.compressed {
-            image.data = inflate_png(&image.data, work)?;
-            normalized_capacity = image.data.capacity();
+            let mut inflate_work = work.temporary();
+            let normalized = inflate_png(&image.data, &mut inflate_work)?;
+            // Transfer the normalized allocation's charge before retiring the
+            // original source. No allocation is unowned between the two stages.
+            let normalized_work = inflate_work.split(normalized.capacity());
+            image.data = normalized;
+            source_capacity = image.data.capacity();
+            work.resize(0);
+            *work = normalized_work;
             image.compressed = false;
         }
         if image.data.get(..8) != Some(b"\x89PNG\r\n\x1a\n")
@@ -1370,16 +2070,10 @@ fn validate_image(image: &mut Image, work: &mut retention::Work) -> Result<usize
         // allocate. Validation discards each decoded row instead of allocating
         // a full second image in the daemon. Ignore ancillary metadata that is
         // irrelevant to terminal pixels and independently cap decoder scratch.
-        if !work.resize(normalized_capacity + (4 << 20)) {
+        if !work.resize(source_capacity + PNG_DECODER_SCRATCH) {
             return Err("ENOSPC:Graphics validation budget exhausted");
         }
-        let mut decoder = png::Decoder::new_with_limits(
-            std::io::Cursor::new(&image.data),
-            png::Limits { bytes: 4 << 20 },
-        );
-        decoder.set_ignore_text_chunk(true);
-        decoder.set_ignore_iccp_chunk(true);
-        decoder.ignore_checksums(false);
+        let decoder = png_decoder(&image.data);
         let mut reader = decoder.read_info().map_err(|_| "EINVAL:Invalid PNG data")?;
         while reader
             .next_row()
@@ -1394,7 +2088,7 @@ fn validate_image(image: &mut Image, work: &mut retention::Work) -> Result<usize
             bytes
         };
         if image.compressed {
-            if !work.resize(256 << 10) {
+            if !work.resize(source_capacity + ZLIB_DECODER_SCRATCH) {
                 return Err("ENOSPC:Graphics validation budget exhausted");
             }
             validate_zlib_pixels(&image.data, expected)?;
@@ -1402,9 +2096,9 @@ fn validate_image(image: &mut Image, work: &mut retention::Work) -> Result<usize
             return Err("EINVAL:Pixel payload does not match dimensions");
         }
     }
-    // Row decoding/inflate scratch is gone, but normalized source bytes stay
-    // alive until the prepared image and its packet have been consumed.
-    work.resize(normalized_capacity);
+    // Validation scratch is gone; keep the owned source charged through desktop
+    // admission, packet encoding and commit/cancellation.
+    work.resize(source_capacity);
     Ok(bytes)
 }
 

@@ -2388,6 +2388,9 @@ pub fn translate_zh(key: L10nKey) -> Option<&'static str> {
         }
         L10nKey::AppAgentLaunchSaved => "{name} 以后将以此命令启动：{command}",
         L10nKey::AppAgentLaunchArgsUnknown => "{name} 未报告其启动参数",
+        L10nKey::AppAgentLaunchRejected => {
+            "无法启动 agent：{error}。请在设置中修改 agent_launch，或在新窗格中手动启动。"
+        }
         L10nKey::AppCmdShellTitle => "Shell：{title}",
         L10nKey::AppPlaceholderDescription => "描述",
         L10nKey::AppPlaceholderSshQuickConnect => "user@host  或  user@host:port",

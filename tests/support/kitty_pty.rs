@@ -210,7 +210,7 @@ pub fn pty_sender() {
         // creating image work. A valid pixel query can be cancelled by resize;
         // DSR instead requires a GUI consumer and cannot serve headless tests.
         output
-            .write_all(b"\x1b_Ga=q,i=4294967294,f=0\x1b\\")
+            .write_all(b"\x1b_Ga=q,i=4294967294,f=7\x1b\\")
             .unwrap();
         output.flush().unwrap();
         let mut barrier = Vec::new();

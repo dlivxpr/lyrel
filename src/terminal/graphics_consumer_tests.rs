@@ -21,6 +21,8 @@ fn graphics_fixture_sender() {
     graphics_pty_fixture::pty_sender();
 }
 
+include!("graphics_media_consumer_tests.rs");
+
 struct GraphicsDaemonProcess {
     child: std::process::Child,
     dir: tempfile::TempDir,
@@ -347,6 +349,60 @@ fn graphics_build_rooted_consumer_at(
         })
         .unwrap();
     (view, window)
+}
+
+#[gpui_kit::test]
+fn graphics_consumer_synchronized_output_keeps_stream_ordered_image_anchors(
+    cx: &mut TestAppContext,
+) {
+    crate::core::config::pin_test_config_dir();
+    cx.executor().allow_parking();
+    let daemon = GraphicsDaemonProcess::start();
+    let pane = daemon.spawn();
+    cx.update(|cx| {
+        gpui_kit::component::init(cx);
+        cx.set_global(Config::default());
+    });
+    let (view, window) = graphics_rooted_consumer(cx, pane, daemon.stream(pane));
+    graphics_send_fixture(
+        &view,
+        cx,
+        1,
+        concat!(
+            "\x1b[?1049h\x1b[2J\x1b[H\x1b[?2026h",
+            "\x1b[4;3H\x1b_Ga=T,i=711,p=1,c=4,r=2,C=1,f=32,s=1,v=1,q=2;/wAA/w==\x1b\\",
+            "\x1b[8;12H\x1b_Ga=T,i=712,p=1,c=4,r=2,C=1,f=32,s=1,v=1,q=2;AP8A/w==\x1b\\",
+            "\x1b[?2026l"
+        )
+        .as_bytes(),
+    );
+    graphics_recovery_wait(cx, "synchronized pictures decoded", |cx| {
+        view.read_with(cx, |view, _| {
+            let images = graphics_visible_images(view);
+            images.len() == 2 && images.iter().all(|image| image.data.is_some())
+        })
+    });
+    graphics_assert_production_paint(window, &view, cx);
+    view.read_with(cx, |view, _| {
+        let images = graphics_visible_images(view);
+        for (id, col, row, bgra) in [
+            (711, 2, 3, [0, 0, 255, 255]),
+            (712, 11, 7, [0, 255, 0, 255]),
+        ] {
+            let image = images
+                .iter()
+                .find(|image| image.placement.image_id == id)
+                .unwrap();
+            assert_eq!(
+                (image.anchor_col, image.anchor_row),
+                (col, row),
+                "image {id} uses its in-stream cursor, not the previous synchronized batch"
+            );
+            assert_eq!(image.data.as_ref().unwrap().as_bytes(0).unwrap(), bgra);
+            assert!(image.painted.load(std::sync::atomic::Ordering::Acquire));
+        }
+    });
+    graphics_recovery_destroy(view, window, cx);
 }
 
 #[gpui_kit::test]
@@ -819,7 +875,9 @@ fn graphics_consumer_cross_daemon_aggregate_rejects_without_losing_pixels_then_r
             for serial in 0..3 {
                 let daemon = &daemons[serial];
                 let pane = daemon.spawn();
-                let stream = daemon.stream_with_capacity(pane, 1024, 4);
+                // Replacement admission holds old and new decoded frames at once;
+                // desktop aggregate pressure, not an undersized daemon cap, is under test.
+                let stream = daemon.stream_with_capacity(pane, 1024, 8);
                 let (view, window) = graphics_rooted_consumer(cx, pane, stream);
                 graphics_send_fixture(
                     &view,
@@ -989,10 +1047,19 @@ fn graphics_consumer_cross_daemon_aggregate_rejects_without_losing_pixels_then_r
                 }) {
                     break;
                 }
-                assert!(
-                    std::time::Instant::now() < deadline,
-                    "closing a pane must release actual residency so subsequent source admission succeeds"
-                );
+                if std::time::Instant::now() >= deadline {
+                    let (diagnostics, text, allocations) =
+                        terminals[1].1.read_with(cx, |view, _| {
+                            (
+                                view.terminal.images().recovery_diagnostics(),
+                                view.scrollback_text(),
+                                view.terminal.images().allocation_observation(),
+                            )
+                        });
+                    panic!(
+                        "closing a pane must release actual residency: diagnostics={diagnostics}; allocations={allocations}; text={text}"
+                    );
+                }
                 std::thread::sleep(std::time::Duration::from_millis(5));
             }
             terminals[1].1.read_with(cx, |view, _| {
@@ -1861,3 +1928,8 @@ fn graphics_consumer_contended_viewport_retries_refused_history_without_new_outp
         graphics_recovery_destroy(new, new_window, cx);
     });
 }
+
+mod opencode_replay_consumer_tests {
+    include!("opencode_replay_consumer_tests.rs");
+}
+include!("omp_replay_consumer_tests.rs");

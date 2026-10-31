@@ -2607,6 +2607,9 @@ pub fn translate_en(key: L10nKey) -> &'static str {
         L10nKey::AppAgentLaunchArgsUnknown => {
             "{name} did not report the arguments it was started with"
         }
+        L10nKey::AppAgentLaunchRejected => {
+            "Couldn’t launch the agent: {error}. Edit agent_launch in Settings, or start the agent manually in the new pane."
+        }
         L10nKey::AppCmdShellTitle => "Shell: {title}",
         L10nKey::AppPlaceholderDescription => "description",
         L10nKey::AppPlaceholderSshQuickConnect => "user@host  or  user@host:port",

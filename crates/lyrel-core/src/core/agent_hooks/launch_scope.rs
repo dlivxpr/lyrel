@@ -123,7 +123,7 @@ fn parse_arguments(agent: HookAgent, args: &[String]) -> io::Result<ConfiguredSc
     let mut omp_session_dir = None;
     for assignment in &args[..named] {
         let (key, value) = assignment.split_once('=').ok_or_else(error)?;
-        if !crate::host::AGENT_ENVIRONMENT_KEYS.contains(&key) || value.contains(['$', '`']) {
+        if !crate::host::is_agent_environment_key(key) || value.contains(['$', '`']) {
             return Err(error());
         }
         environment.insert(key.into(), value.into());
@@ -237,7 +237,7 @@ fn parse_arguments(agent: HookAgent, args: &[String]) -> io::Result<ConfiguredSc
                         | "-r"
                 )
         } else {
-            values.contains(&key) || hermes_value
+            values.contains(&key) || hermes_value || (agent == HookAgent::OpenCode && key == "-s")
         };
         if takes_value {
             let value = if let Some(value) = inline {
@@ -268,6 +268,7 @@ fn parse_arguments(agent: HookAgent, args: &[String]) -> io::Result<ConfiguredSc
             }
         } else if !switches.contains(&key)
             && !(agent == HookAgent::Pi && crate::core::cli_agent::PI_SWITCHES.contains(&key))
+            && !(agent == HookAgent::OpenCode && key == "--auto")
             && !(agent == HookAgent::Hermes
                 && [
                     "--verbose",

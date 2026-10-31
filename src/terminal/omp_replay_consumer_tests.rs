@@ -1,0 +1,367 @@
+// This file is included beside the existing production graphics consumer harness.
+struct OmpReplayFixture {
+    root: tempfile::TempDir,
+}
+
+impl OmpReplayFixture {
+    fn prepare(case: &str, mode: &str) -> Self {
+        let omp = std::env::var_os("LYREL_TEST_OMP")
+            .expect("set LYREL_TEST_OMP to an installed released omp executable");
+        let root = tempfile::tempdir().unwrap();
+        let status = std::process::Command::new("node")
+            .arg(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/scripts/omp-native-replay.mjs"
+            ))
+            .args(["prepare", "--root"])
+            .arg(root.path().join("owned"))
+            .arg("--omp")
+            .arg(omp)
+            .args(["--case", case, "--mode", mode])
+            .status()
+            .unwrap();
+        assert!(status.success(), "preparing public synthetic omp history");
+        Self { root }
+    }
+
+    fn spawn(&self, daemon: &GraphicsDaemonProcess) -> u64 {
+        let shell = crate::daemon::protocol::ShellSpec {
+            program: "node".into(),
+            args: vec![
+                concat!(env!("CARGO_MANIFEST_DIR"), "/scripts/omp-native-replay.mjs").into(),
+                "run".into(),
+                "--wait-ready".into(),
+                "--root".into(),
+                self.root
+                    .path()
+                    .join("owned")
+                    .to_string_lossy()
+                    .into_owned(),
+            ],
+            args_are_lyrel_defaults: false,
+        };
+        let session = daemon
+            .panes()
+            .spawn(
+                Some(self.root.path().to_path_buf()),
+                crate::daemon::protocol::WinSize {
+                    cols: 80,
+                    rows: 24,
+                    cell_w: 10,
+                    cell_h: 20,
+                },
+                Some(shell),
+                None,
+                None,
+            )
+            .unwrap();
+        let pane = session.pane_id();
+        session.detach().unwrap();
+        pane
+    }
+
+    fn stage(&self) -> Option<String> {
+        let bytes = std::fs::read(self.root.path().join("owned/stage.json")).ok()?;
+        let value: serde_json::Value = serde_json::from_slice(&bytes).ok()?;
+        value["stage"].as_str().map(str::to_owned)
+    }
+
+    fn diagnostics(&self, view: &Entity<TerminalView>, cx: &mut TestAppContext) -> String {
+        let terminal = view.update(cx, |view, _| {
+            view.terminal.poll_exited();
+            format!(
+                "pane={} child_exited={} disconnected={} text={:?} graphics={}",
+                view.pane_id,
+                view.terminal.child_exited(),
+                view.terminal.exited,
+                view.scrollback_text(),
+                view.terminal.images().recovery_diagnostics()
+            )
+        });
+        let mut result = format!("owned_root={} {terminal}", self.root.path().display());
+        for name in ["fixture.json", "stages.jsonl", "version.json", "config-path.json", "config-terminal.showImages.json", "config-tui.renderSvg.json", "config-tui.maxInlineImages.json", "models.json", "running.json", "requests.json", "audit.json"] {
+            if let Ok(text) = std::fs::read_to_string(self.root.path().join("owned").join(name)) {
+                result.push_str(&format!("\n{name}: {text}"));
+            }
+        }
+        result
+    }
+
+    #[track_caller]
+    fn assert_running(&self, view: &Entity<TerminalView>, cx: &mut TestAppContext, phase: &str) {
+        let failed = self.stage().as_deref() == Some("failed");
+        let exited = view.read_with(cx, |view, _| view.terminal.child_exited());
+        if failed || exited {
+            panic!("omp public-entry phase {phase} failed: {}", self.diagnostics(view, cx));
+        }
+    }
+
+    fn start(&self, view: &Entity<TerminalView>, cx: &mut TestAppContext) {
+        graphics_recovery_wait_with(
+            cx,
+            std::time::Duration::from_secs(30),
+            |cx| {
+                if self.stage().as_deref() == Some("waiting-consumer") { return true; }
+                self.assert_running(view, cx, "fixture readiness before native launch");
+                false
+            },
+            |cx| format!("omp fixture readiness timed out: {}", self.diagnostics(view, cx)),
+        );
+        // Readiness is not a prompt and must never share omp's ConPTY stdin.
+        let active: serde_json::Value = serde_json::from_slice(
+            &std::fs::read(self.root.path().join("owned/running.json")).unwrap()
+        ).unwrap();
+        assert!(active["childPid"].is_null(), "native child started before rooted readiness: {active}");
+        std::fs::write(self.root.path().join("owned/consumer-ready"), b"rooted production consumer mounted\n").unwrap();
+    }
+
+    fn finish(&self, view: &Entity<TerminalView>, cx: &mut TestAppContext) {
+        view.read_with(cx, |view, _| view.terminal.write(b"/exit\r".to_vec()));
+        let audit = self.root.path().join("owned/audit.json");
+        graphics_recovery_wait_with(
+            cx,
+            std::time::Duration::from_secs(30),
+            |cx| {
+                if self.stage().as_deref() == Some("failed") {
+                    panic!("omp public-entry phase native exit/audit failed: {}", self.diagnostics(view, cx));
+                }
+                audit.exists()
+            },
+            |cx| format!("omp native exit/audit timed out: {}", self.diagnostics(view, cx)),
+        );
+        let audit: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(audit).unwrap()).unwrap();
+        assert_eq!(audit["zeroInference"], true, "{audit}");
+        assert_eq!(audit["exitCode"], 0, "{audit}");
+        eprintln!("released omp replay evidence: {audit}");
+    }
+}
+
+impl Drop for OmpReplayFixture {
+    fn drop(&mut self) {
+        // A failed assertion must not strand this fixture's native TUI child.
+        let active = self.root.path().join("owned/running.json");
+        let Ok(bytes) = std::fs::read(active) else {
+            return;
+        };
+        let Ok(value) = serde_json::from_slice::<serde_json::Value>(&bytes) else {
+            return;
+        };
+        let Some(pid) = value["pid"].as_u64() else {
+            return;
+        };
+        if cfg!(windows) {
+            let _ = std::process::Command::new("taskkill")
+                .args(["/PID", &pid.to_string(), "/T", "/F"])
+                .status();
+        } else {
+            let _ = std::process::Command::new("kill")
+                .args(["-TERM", &pid.to_string()])
+                .status();
+        }
+    }
+}
+
+#[derive(Debug, PartialEq, Eq)]
+struct OmpReplayPictureIdentity {
+    image_id: u32,
+    placement_id: u32,
+    anchor_row: i64,
+    anchor_col: i64,
+}
+
+impl OmpReplayPictureIdentity {
+    fn from_image(image: &crate::terminal::images::RenderPlacement) -> Self {
+        Self {
+            image_id: image.placement.image_id,
+            placement_id: image.placement.placement_id,
+            anchor_row: image.anchor_row,
+            anchor_col: image.anchor_col,
+        }
+    }
+}
+
+fn omp_replay_scan(
+    view: &Entity<TerminalView>,
+    window: gpui_kit::AnyWindowHandle,
+    cx: &mut TestAppContext,
+) -> std::collections::BTreeMap<Vec<u8>, OmpReplayPictureIdentity> {
+    let mut found = std::collections::BTreeMap::new();
+    let history = view.read_with(cx, |view, _| view.terminal.term.lock().grid.history_size());
+    view.update(cx, |view, cx| {
+        view.scroll(-100_000, None, &Modifiers::default(), cx)
+    });
+    for _ in 0..=(history / 12 + 2) {
+        graphics_assert_production_paint(window, view, cx);
+        view.read_with(cx, |view, _| {
+            for image in graphics_visible_images(view) {
+                let Some(data) = &image.data else {
+                    continue;
+                };
+                let bytes = data.as_bytes(0).unwrap();
+                if bytes.len() == 64 * 32 * 4 {
+                    assert_eq!(&bytes[(16 * 64 + 32) * 4..][..4], &[0, 0, 0, 255]);
+                    found.insert(
+                        bytes[..4].to_vec(),
+                        OmpReplayPictureIdentity::from_image(&image),
+                    );
+                } else if bytes
+                    .chunks_exact(4)
+                    .any(|pixel| pixel == [86, 52, 18, 255])
+                    && bytes
+                        .chunks_exact(4)
+                        .any(|pixel| pixel == [0, 128, 255, 255])
+                {
+                    found.insert(
+                        b"rasterized-svg".to_vec(),
+                        OmpReplayPictureIdentity::from_image(&image),
+                    );
+                }
+                if image.painted.load(std::sync::atomic::Ordering::Acquire) {
+                    let (crop, _) =
+                        image.paint_bounds(point(px(0.), px(0.)), px(10.), px(20.), history, 0, 1.);
+                    assert!(crop.size.width > px(0.) && crop.size.height > px(0.));
+                }
+            }
+        });
+        view.update(cx, |view, cx| {
+            view.scroll(12, None, &Modifiers::default(), cx)
+        });
+    }
+    found
+}
+
+fn omp_replay_assert_resume(cx: &mut TestAppContext, cases: &[&str]) {
+    crate::core::config::pin_test_config_dir();
+    cx.executor().allow_parking();
+    cx.update(|cx| {
+        gpui_kit::component::init(cx);
+        cx.set_global(Config::default());
+    });
+    for &case in cases {
+        let fixture = OmpReplayFixture::prepare(case, "placeholders");
+        let daemon = GraphicsDaemonProcess::start();
+        let pane = fixture.spawn(&daemon);
+        let (view, window) =
+            graphics_build_rooted_consumer(cx, pane, daemon.stream(pane), Vec::new());
+        graphics_assert_production_paint(window, &view, cx);
+        fixture.start(&view, cx);
+        let expected = if case == "budget" { 8 } else { 3 };
+        let mut found = std::collections::BTreeMap::new();
+        graphics_recovery_wait_with(
+            cx,
+            std::time::Duration::from_secs(90),
+            |cx| {
+                found = omp_replay_scan(&view, window, cx);
+                if found.len() == expected && found.contains_key(b"rasterized-svg".as_slice()) { return true; }
+                fixture.assert_running(&view, cx, &format!("{case} decoded identities: {found:?}"));
+                false
+            },
+            |cx| format!("omp {case} identities timed out: {}", fixture.diagnostics(&view, cx)),
+        );
+        assert_eq!(
+            found
+                .values()
+                .map(|identity| identity.image_id)
+                .collect::<std::collections::BTreeSet<_>>()
+                .len(),
+            expected,
+            "each expected native picture must own a distinct image id: {found:?}"
+        );
+        assert!(
+            found.contains_key([192, 128, 240, 255].as_slice()),
+            "native tool-result pixels"
+        );
+        if case == "pictures" {
+            let assistant = found.get([0, 0, 255, 255].as_slice()).unwrap();
+            let tool = found.get([192, 128, 240, 255].as_slice()).unwrap();
+            let figure = found.get(b"rasterized-svg".as_slice()).unwrap();
+            assert_ne!(assistant.image_id, tool.image_id);
+            assert_ne!(tool.image_id, figure.image_id);
+            assert!(
+                assistant.anchor_row < tool.anchor_row && tool.anchor_row < figure.anchor_row,
+                "ordered native image placements: {found:?}"
+            );
+        } else {
+            for color in [
+                [0, 0, 255, 255],
+                [0, 255, 0, 255],
+                [255, 0, 0, 255],
+                [0, 255, 255, 255],
+            ] {
+                assert!(
+                    !found.contains_key(color.as_slice()),
+                    "upstream d=I demotion must not revive old image"
+                );
+            }
+            for color in [
+                [255, 0, 255, 255],
+                [255, 255, 0, 255],
+                [0, 96, 192, 255],
+                [192, 0, 96, 255],
+                [96, 128, 0, 255],
+                [128, 128, 128, 255],
+            ] {
+                assert!(
+                    found.contains_key(color.as_slice()),
+                    "wrong recent native image identity: {found:?}"
+                );
+            }
+            assert_eq!(
+                omp_replay_scan(&view, window, cx),
+                found,
+                "scroll-out/back must preserve deletion and exact placement identity"
+            );
+        }
+        fixture.finish(&view, cx);
+        graphics_recovery_destroy(view, window, cx);
+    }
+}
+
+#[gpui_kit::test]
+#[ignore = "requires LYREL_TEST_OMP, Node and a real released omp; never calls a model"]
+fn graphics_consumer_released_omp_native_resume_pictures(cx: &mut TestAppContext) {
+    omp_replay_assert_resume(cx, &["pictures"]);
+}
+
+#[gpui_kit::test]
+#[ignore = "requires LYREL_TEST_OMP, Node and a real released omp; never calls a model"]
+fn graphics_consumer_released_omp_native_resume_budget(cx: &mut TestAppContext) {
+    omp_replay_assert_resume(cx, &["budget"]);
+}
+
+#[gpui_kit::test]
+#[ignore = "requires LYREL_TEST_OMP; real native disabled-policy resume"]
+fn graphics_consumer_released_omp_native_disabled_policy(cx: &mut TestAppContext) {
+    crate::core::config::pin_test_config_dir();
+    cx.executor().allow_parking();
+    cx.update(|cx| {
+        gpui_kit::component::init(cx);
+        cx.set_global(Config::default());
+    });
+    for case in ["disabled", "protocol-off"] {
+        let fixture = OmpReplayFixture::prepare(case, "placeholders");
+        let daemon = GraphicsDaemonProcess::start();
+        let pane = fixture.spawn(&daemon);
+        let (view, window) =
+            graphics_build_rooted_consumer(cx, pane, daemon.stream(pane), Vec::new());
+        graphics_assert_production_paint(window, &view, cx);
+        fixture.start(&view, cx);
+        graphics_recovery_wait_with(
+            cx,
+            std::time::Duration::from_secs(90),
+            |cx| {
+                if view.read_with(cx, |view, _| view.scrollback_text().contains("LYREL_REPLAY_END")) { return true; }
+                fixture.assert_running(&view, cx, &format!("{case} saved transcript tail"));
+                false
+            },
+            |cx| format!("omp {case} transcript timed out: {}", fixture.diagnostics(&view, cx)),
+        );
+        assert!(
+            omp_replay_scan(&view, window, cx).is_empty(),
+            "explicit disabled is authoritative"
+        );
+        fixture.finish(&view, cx);
+        graphics_recovery_destroy(view, window, cx);
+    }
+}
