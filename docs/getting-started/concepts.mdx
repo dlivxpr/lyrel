@@ -353,7 +353,7 @@ node scripts/omp-native-replay.mjs prepare --root $fixture --omp (Get-Command om
 node scripts/omp-native-replay.mjs launch --root $fixture --lyrel-app (Resolve-Path .\target\debug\lyrel-app.exe).Path
 ```
 
-每个新 fixture 使用独立 home／profile／workspace／overlay／lyrel 端点及合成 JSONL v3，启动真实 `omp --resume` TUI，不使用 render/gallery、模型代理回复或私有历史。子进程环境采用 allowlist，不继承凭据／broker／扩展；唯一选定模型指向只拒绝请求的 loopback endpoint，关闭 recap、自动 compaction 和标题生成。不提交任何新 prompt。公开 catalog 刷新不等于推理，本入口不宣称完全离线。
+每个新 fixture 使用独立 home／默认 profile／workspace／overlay／lyrel 端点及合成 JSONL v3，启动真实 `omp --resume` TUI，不使用 render/gallery、模型代理回复或私有历史。子进程环境采用 allowlist，不继承凭据／broker／扩展；唯一选定模型指向只拒绝请求的 loopback endpoint，关闭 recap、自动 compaction 和标题生成。不提交任何新 prompt。`PI_CONFIG_DIR` 使用公开的目录名 `.omp`，`PI_CODING_AGENT_DIR` 指向自有 `agent`；启动前通过真实 `omp config path`、`config get ... --json` 和 `models lyrel-fixture --json --no-extensions` 检查目录、图片策略、SVG、cap 与模型可选性，失败立即中止，不回落到用户模型。公开 catalog 刷新不等于推理，本入口不宣称完全离线。
 
 验收时确认三张实际图片：64×32 红底黑十字 assistant、64×32 粉底黑十字 toolResult，以及深蓝背景／橙色三角形的 240×80 SVG 原生栅格图；`fixture.json` 提供每张输入图片的 BGRA SHA-256 和几何身份。滚动离屏／返回并改变窗格宽度，记录具体资源／放置及三张图的顺序，不能只检查 `LYREL_*` 标签。输入 `/exit` 结束原生 TUI；检查 `version.txt` 和 `audit.json`，要求 `requests=[]`、消息数未增加、`modelUsage=0`、`zeroInference=true`。这只是原生应用重放，不能证明无发送者重传的 living-daemon 恢复。
 
@@ -363,7 +363,13 @@ node scripts/omp-native-replay.mjs launch --root $fixture --lyrel-app (Resolve-P
 node scripts/omp-native-replay.mjs cleanup --root $fixture --lyrel-cli (Resolve-Path .\target\debug\lyrel.exe).Path
 ```
 
-集中消费者入口为 `cargo test --locked graphics_consumer_released_omp_native_ -- --ignored --nocapture --test-threads=1`，先将 `LYREL_TEST_OMP` 设为正式可执行文件绝对路径。它复用真实 PTY／独立 daemon → `RemoteTerminal` → rooted `TerminalView`，按真实解码像素、不同图片 ID／放置顺序和 cap 删除检查，不替代原生 GPU 像素。新用例、native Windows 图片／重排／关闭策略、最新 release 的实际可执行验收尚未执行；macOS、真实 SSH 和其他 agent 均不由本段宣称通过。
+集中消费者入口为 `cargo test --locked --bin lyrel-app graphics_consumer_released_omp_native_ -- --ignored --nocapture --test-threads=1`，先将 `LYREL_TEST_OMP` 设为正式可执行文件绝对路径；中央先运行 `node --check scripts/omp-native-replay.mjs`。它复用真实 PTY／独立 daemon → `RemoteTerminal` → rooted `TerminalView`，按真实解码像素、不同图片 ID／放置顺序和 cap 删除检查，不替代原生 GPU 像素。`--wait-ready` 只等待自有目录的 `consumer-ready` 文件，由 rooted consumer 挂载后释放；wrapper 不创建 readline／stdin stream，不向 TUI 注入 `LYREL_OMP_START`。原生 omp 独占继承的 ConPTY stdin。
+
+失败时日志会输出 `LYREL_OMP_STAGE`，自有目录保留 `stages.jsonl`、每个公开 preflight 的状态／stdout／stderr、`running.json`、拒绝 endpoint 的 `requests.json`（若有请求）及退出 `audit.json`；consumer panic 同时打印阶段历史、pane／child／连接状态、完整 terminal text 和 graphics recovery diagnostics。`waiting-consumer`、公开 config／models、`native-spawned`、实际图片／transcript tail 和 exit/audit 是不同边界，不以子进程启动替代图片验收。
+
+本轮中央已观察正式安装 `18.14.0` 的两项 consumer 失败：disabled 未出现结束标记，pictures 没有解码图片；旧日志缺少 terminal text，不能据此断言上游无图片支持。本次移除 wrapper 对共享 ConPTY stdin 的读取并修正公开配置根语义，增加可定位诊断；**修复后未运行构建、测试或原生验收**。Windows 图片／重排／关闭策略、最新 release 的实际可执行验收仍待中央执行；macOS、真实 SSH 和其他 agent 均不由本段宣称通过。
+
+无需升级全局安装即可另行验收 `18.14.1`：从[官方 release](https://github.com/can1357/oh-my-pi/releases/tag/v18.14.1) 下载 `omp-windows-x64.exe` 到新的临时目录，用 `Get-FileHash -Algorithm SHA256` 核对本次 GitHub asset digest `5b72f0e46e9cd441793d399d36f319a656f2e3c9a3f1997342e46fa885614913`，再把 `LYREL_TEST_OMP`／`prepare --omp` 指向该绝对路径。下载地址为 `https://github.com/can1357/oh-my-pi/releases/download/v18.14.1/omp-windows-x64.exe`；先运行该文件的 `--version` 并记录，不修改 PATH、全局配置或现有 omp。18.14.1 并非本修复的已证明前提，18.14.0 仍需执行同样的验收。
 
 历史上 `omp/18.12.6` 曾在 Windows 隔离原生窗口验证 placeholder assistant SVG 和 toolResult PNG、无新 prompt；direct 重放当时观察到重叠。该记录仅属于旧版本，不替代以上新版验收。
 

@@ -60,15 +60,64 @@ impl OmpReplayFixture {
         pane
     }
 
+    fn stage(&self) -> Option<String> {
+        let bytes = std::fs::read(self.root.path().join("owned/stage.json")).ok()?;
+        let value: serde_json::Value = serde_json::from_slice(&bytes).ok()?;
+        value["stage"].as_str().map(str::to_owned)
+    }
+
+    fn diagnostics(&self, view: &Entity<TerminalView>, cx: &mut TestAppContext) -> String {
+        let terminal = view.update(cx, |view, _| {
+            view.terminal.poll_exited();
+            format!(
+                "pane={} child_exited={} disconnected={} text={:?} graphics={}",
+                view.pane_id,
+                view.terminal.child_exited(),
+                view.terminal.exited,
+                view.scrollback_text(),
+                view.terminal.images().recovery_diagnostics()
+            )
+        });
+        let mut result = format!("owned_root={} {terminal}", self.root.path().display());
+        for name in ["stages.jsonl", "version.json", "config-path.json", "config-terminal.showImages.json", "config-tui.renderSvg.json", "config-tui.maxInlineImages.json", "models.json", "running.json", "requests.json", "audit.json"] {
+            if let Ok(text) = std::fs::read_to_string(self.root.path().join("owned").join(name)) {
+                result.push_str(&format!("\n{name}: {text}"));
+            }
+        }
+        result
+    }
+
+    #[track_caller]
+    fn assert_running(&self, view: &Entity<TerminalView>, cx: &mut TestAppContext, phase: &str, deadline: std::time::Instant) {
+        let failed = self.stage().as_deref() == Some("failed");
+        let exited = view.read_with(cx, |view, _| view.terminal.child_exited());
+        if failed || exited || std::time::Instant::now() >= deadline {
+            panic!("omp public-entry phase {phase} failed: {}", self.diagnostics(view, cx));
+        }
+    }
+
+    fn start(&self, view: &Entity<TerminalView>, cx: &mut TestAppContext) {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+        while self.stage().as_deref() != Some("waiting-consumer") {
+            self.assert_running(view, cx, "fixture readiness before native launch", deadline);
+            graphics_consumer_progress(cx);
+        }
+        // Readiness is not a prompt and must never share omp's ConPTY stdin.
+        let active: serde_json::Value = serde_json::from_slice(
+            &std::fs::read(self.root.path().join("owned/running.json")).unwrap()
+        ).unwrap();
+        assert!(active["childPid"].is_null(), "native child started before rooted readiness: {active}");
+        std::fs::write(self.root.path().join("owned/consumer-ready"), b"rooted production consumer mounted\n").unwrap();
+    }
+
     fn finish(&self, view: &Entity<TerminalView>, cx: &mut TestAppContext) {
         view.read_with(cx, |view, _| view.terminal.write(b"/exit\r".to_vec()));
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
         let audit = self.root.path().join("owned/audit.json");
         while !audit.exists() {
-            assert!(
-                std::time::Instant::now() < deadline,
-                "native omp did not exit and audit"
-            );
+            if self.stage().as_deref() == Some("failed") || std::time::Instant::now() >= deadline {
+                panic!("omp public-entry phase native exit/audit failed: {}", self.diagnostics(view, cx));
+            }
             graphics_consumer_progress(cx);
             std::thread::sleep(std::time::Duration::from_millis(10));
         }
@@ -181,9 +230,7 @@ fn graphics_consumer_released_omp_native_resume_pictures_and_budget(cx: &mut Tes
         let (view, window) =
             graphics_build_rooted_consumer(cx, pane, daemon.stream(pane), Vec::new());
         graphics_assert_production_paint(window, &view, cx);
-        view.read_with(cx, |view, _| {
-            view.terminal.write(b"LYREL_OMP_START\r".to_vec())
-        });
+        fixture.start(&view, cx);
         let expected = if case == "budget" { 8 } else { 3 };
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(90);
         let found = loop {
@@ -192,10 +239,7 @@ fn graphics_consumer_released_omp_native_resume_pictures_and_budget(cx: &mut Tes
             if found.len() == expected && found.contains_key(b"rasterized-svg".as_slice()) {
                 break found;
             }
-            assert!(
-                std::time::Instant::now() < deadline,
-                "missing actual decoded native pictures: {found:?}"
-            );
+            fixture.assert_running(&view, cx, &format!("{case} decoded identities: {found:?}"), deadline);
             std::thread::sleep(std::time::Duration::from_millis(20));
         };
         assert!(
@@ -264,9 +308,7 @@ fn graphics_consumer_released_omp_native_disabled_policy(cx: &mut TestAppContext
         let (view, window) =
             graphics_build_rooted_consumer(cx, pane, daemon.stream(pane), Vec::new());
         graphics_assert_production_paint(window, &view, cx);
-        view.read_with(cx, |view, _| {
-            view.terminal.write(b"LYREL_OMP_START\r".to_vec())
-        });
+        fixture.start(&view, cx);
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(90);
         loop {
             graphics_consumer_progress(cx);
@@ -276,10 +318,7 @@ fn graphics_consumer_released_omp_native_disabled_policy(cx: &mut TestAppContext
             if ready {
                 break;
             }
-            assert!(
-                std::time::Instant::now() < deadline,
-                "native disabled replay did not finish"
-            );
+            fixture.assert_running(&view, cx, &format!("{case} saved transcript tail"), deadline);
             std::thread::sleep(std::time::Duration::from_millis(20));
         }
         assert!(
