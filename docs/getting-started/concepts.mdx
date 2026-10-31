@@ -266,6 +266,8 @@ resize 去重与回显等待、viewport 重新发布和关闭次序；`remote/wr
 
 #145 提供两项 production seam 回归：`graphics_consumer_owned_media_large_regions_and_uniform_failures` 通过真实 PTY → 私有 daemon → pane connection／`RemoteTerminal` → rooted `TerminalView` 校验大对象非对齐区域、三类媒体、BGRA 身份、quiet／错误关联及拒收后续命令；`graphics_consumer_regular_symlink_target_and_unmarked_temp_are_preserved` 覆盖本地 symlink／junction 目标及非 eligible 临时文件保留。原生 Windows 自有 fixture 入口是在自行新建的隔离 pane 中执行 `pwsh -NoProfile -File scripts/kitty-media-windows.ps1 -KeepVisible`：应显示三行红／绿图片并返回协议结果，按 Enter 删除 fixture 图片及自有源对象；需已构建本次源码、官方 ConPTY、PowerShell 7、可用 named section 权限。rooted paint／像素断言不等同最终 GPU 像素。子任务按统一验证约定未运行构建、测试或原生 smoke，不能将入口存在写成验收通过；中央须执行 Windows 回归及实窗观察，Linux／WSL 原生回归、真实嵌套 SSH／WSL 组合另行运行。macOS 文件／POSIX shm 与最终原生观察仍须在 MacBook 对应环境完成，不由 Windows 或 WSL 结果替代。
 
+上述媒体回归还覆盖 4 KiB 对象末尾的有效 8-byte 区域、跨 64 KiB 边界的非对齐区域，以及 `O=4092,S=8` 超出 4 KiB 对象时的统一拒收。错误回复直接从同一真实 pane 的 PTY Output 采集：fixture 的完成标记会覆盖终端网格中的回复前缀，不能把最终网格中找不到该前缀误判为 daemon 未回复。每个拒收断言保留媒体名、`O/S/q`、请求序号与真实输出诊断，仍检查具体 `EBADF`、图片／放置身份、quiet 抑制及未出现图片；这些用例与修正后的观测方式仍须由中央运行验证，不能据源码存在宣称通过。
+
 #41 的真实 daemon-session 格式／压缩／应答／中断／49 MiB APC 拒收及后续输入回归、GPUI 真实 PNG／raw 解码与 paint 回归，以及退休 worker／继任连接回归已在 Windows 通过。本轮原生有效图、压力与恢复观察见下方；全部无效／超限格式的原生表现、其他 DPI 及 macOS 仍未穷尽验证。仅收到 frame 或派生状态不等同于原生像素验收。
 
 #### 当前实现：终端布局与屏幕生命周期（#42）
