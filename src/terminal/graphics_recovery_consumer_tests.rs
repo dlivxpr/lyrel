@@ -1096,3 +1096,71 @@ fn graphics_consumer_three_4k_pngs_live_then_fresh_replay_without_sender_redraw(
     graphics_recovery_destroy(fresh, fresh_window, cx);
     daemon.panes().kill(pane).unwrap();
 }
+
+#[gpui_kit::test]
+fn graphics_consumer_complete_frames_manual_selection_and_detached_fresh_restore(
+    cx: &mut TestAppContext,
+) {
+    crate::core::config::pin_test_config_dir();
+    cx.executor().allow_parking();
+    cx.update(|cx| {
+        gpui_kit::component::init(cx);
+        cx.set_global(Config::default());
+    });
+    let daemon = GraphicsDaemonProcess::start();
+    let pane = daemon.spawn();
+    let (prior, window) = graphics_recovery_fresh(&daemon, pane, cx, 1100);
+    // Explicit default RGBA and an unpadded final quantum are equivalent inputs.
+    graphics_send_fixture_with_replies(&prior, cx, 1101,
+        b"\x1b_Ga=t,i=601,f=0,s=1,v=1;/wAA/w\x1b\\\x1b_Ga=f,i=601,f=32,s=1,v=1;AP8A/w==\x1b\\\x1b_Ga=f,i=601,f=24,s=1,v=1;AAD/\x1b\\", 3);
+    prior.read_with(cx, |view, _| assert!(graphics_visible_images(view).is_empty()));
+    graphics_send_fixture_with_replies(&prior, cx, 1102,
+        b"\x1b[6;5H\x1b_Ga=p,i=601,p=1,c=2,r=1,C=1\x1b\\\x1b[8;9H\x1b_Ga=p,i=601,p=2,c=2,r=1,C=1\x1b\\", 2);
+    for (index, bgra) in [(1, [0, 0, 255, 255]), (2, [0, 255, 0, 255]), (3, [255, 0, 0, 255])] {
+        let old = prior.read_with(cx, |view, _| graphics_visible_images(view));
+        let command = format!("\x1b_Ga=a,i=601,s=1,c={index}\x1b\\");
+        graphics_send_fixture_with_replies(&prior, cx, 1102 + index, command.as_bytes(), 1);
+        graphics_recovery_pixels(&prior, cx, 601, &bgra);
+        graphics_assert_production_paint(window, &prior, cx);
+        prior.read_with(cx, |view, _| {
+            assert!(old.iter().all(|image| !view.terminal.images().claim_for_paint(image)),
+                "a selection revision invalidates every old frame claim before atlas allocation");
+            let images = graphics_visible_images(view);
+            assert_eq!(images.len(), 2);
+            assert!(images.iter().all(|image| image.data.as_ref().unwrap().as_bytes(0).unwrap() == bgra));
+            assert!(std::sync::Arc::ptr_eq(images[0].data.as_ref().unwrap(), images[1].data.as_ref().unwrap()));
+            assert_eq!((images[0].anchor_row, images[0].anchor_col), (5, 4));
+            assert_eq!((images[1].anchor_row, images[1].anchor_col), (7, 8));
+        });
+    }
+    let stopped = graphics_recovery_stats(&prior, cx, 1110);
+    graphics_recovery_destroy(prior, window, cx);
+    let (fresh, fresh_window) = graphics_recovery_fresh(&daemon, pane, cx, 1111);
+    graphics_recovery_pixels(&fresh, cx, 601, &[255, 0, 0, 255]);
+    assert_eq!(graphics_recovery_stats(&fresh, cx, 1112), stopped);
+    graphics_recovery_destroy(fresh, fresh_window, cx);
+    graphics_recovery_detached_request(&daemon, pane, "SEND", 1113,
+        b"\x1b_Ga=f,i=601,f=32,s=1,v=1,q=2;/////w==\x1b\\\x1b_Ga=a,i=601,s=1,c=4,q=2\x1b\\DETACHED-FRAME");
+    let (fresh, fresh_window) = graphics_recovery_fresh(&daemon, pane, cx, 1114);
+    graphics_recovery_pixels(&fresh, cx, 601, &[255, 255, 255, 255]);
+    graphics_assert_production_paint(fresh_window, &fresh, cx);
+    fresh.read_with(cx, |view, _| assert!(view.scrollback_text().contains("DETACHED-FRAME")));
+    graphics_recovery_destroy(fresh, fresh_window, cx);
+    graphics_recovery_detached_request(&daemon, pane, "SEND", 1120,
+        b"\x1b[10;5H\x1b_Ga=T,i=601,p=9,c=2,r=1,C=1,f=32,s=1,v=1,q=2;/wAA/w==\x1b\\\x1b_Ga=f,i=601,f=32,s=1,v=1,q=2;AP8A/w==\x1b\\\x1b_Ga=a,i=601,s=1,c=2,q=2\x1b\\DETACHED-REPLACEMENT");
+    let (fresh, fresh_window) = graphics_recovery_fresh(&daemon, pane, cx, 1121);
+    graphics_recovery_pixels(&fresh, cx, 601, &[0, 255, 0, 255]);
+    fresh.read_with(cx, |view, _| {
+        let images = graphics_visible_images(view);
+        assert_eq!(images.len(), 1, "replacement retires both prior placements and all old frame versions");
+        assert_eq!(images[0].placement.placement_id, 9);
+        assert_eq!(images[0].placement.screen, 0);
+        assert!(view.scrollback_text().contains("DETACHED-REPLACEMENT"));
+    });
+    graphics_recovery_destroy(fresh, fresh_window, cx);
+    graphics_recovery_detached_request(&daemon, pane, "SEND", 1115, b"\x1b_Ga=d,d=I,i=601\x1b\\");
+    let (fresh, fresh_window) = graphics_recovery_fresh(&daemon, pane, cx, 1116);
+    fresh.read_with(cx, |view, _| assert!(graphics_visible_images(view).is_empty()));
+    graphics_recovery_destroy(fresh, fresh_window, cx);
+    daemon.panes().kill(pane).unwrap();
+}

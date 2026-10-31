@@ -58,6 +58,7 @@ pub(super) struct Resident {
 }
 struct Entry {
     owner: u64,
+    group: u64,
     resident: Weak<Mutex<Resident>>,
 }
 #[derive(Default)]
@@ -100,20 +101,27 @@ impl Retention {
         registry.sequence
     }
     pub(super) fn reclaim_specific(&self, slot: &Arc<Mutex<Resident>>) -> bool {
-        let _registry = self.registry.lock().unwrap();
-        let mut resident = slot.lock().unwrap();
-        if resident.priority == Priority::Protected || resident.packet.is_none() {
-            return false;
-        }
-        resident.packet = None;
-        if let Some(wake) = &resident.wake {
-            let _ = wake.try_send(());
+        let registry = self.registry.lock().unwrap();
+        let Some(group) = registry.entries.values().find_map(|entry|
+            entry.resident.upgrade().filter(|resident| Arc::ptr_eq(resident, slot))
+                .map(|_| (entry.owner, entry.group))) else { return false; };
+        let slots: Vec<_> = registry.entries.values()
+            .filter(|entry| (entry.owner, entry.group) == group)
+            .filter_map(|entry| entry.resident.upgrade()).collect();
+        let absent = { slot.lock().unwrap().packet.is_none() };
+        if absent || slots.iter().any(|slot|
+            slot.lock().unwrap().priority == Priority::Protected) { return false; }
+        for slot in slots {
+            let mut resident = slot.lock().unwrap();
+            resident.packet = None;
+            if let Some(wake) = &resident.wake { let _ = wake.try_send(()); }
         }
         true
     }
     pub(super) fn admit(
         &self,
         owner: u64,
+        group: u64,
         decoded: usize,
         replacement: Option<&Arc<Mutex<Resident>>>,
         wake: Option<SyncSender<()>>,
@@ -126,14 +134,13 @@ impl Retention {
             .retain(|_, entry| entry.resident.strong_count() != 0);
         let mut total = (packet.len(), decoded);
         let mut pane = total;
-        let mut candidates = Vec::new();
+        let replaced_group = replacement.and_then(|old| registry.entries.values().find_map(|entry|
+            entry.resident.upgrade().filter(|slot| Arc::ptr_eq(old, slot))
+                .map(|_| (entry.owner, entry.group))));
+        let mut groups = BTreeMap::new();
         for (&sequence, entry) in &registry.entries {
-            let Some(slot) = entry.resident.upgrade() else {
-                continue;
-            };
-            if replacement.is_some_and(|old| Arc::ptr_eq(old, &slot)) {
-                continue;
-            }
+            if replaced_group == Some((entry.owner, entry.group)) { continue; }
+            let Some(slot) = entry.resident.upgrade() else { continue; };
             let resident = slot.lock().unwrap();
             if let Some(packet) = &resident.packet {
                 total.0 += packet.len();
@@ -142,18 +149,19 @@ impl Retention {
                     pane.0 += packet.len();
                     pane.1 += resident.decoded;
                 }
-                if resident.priority != Priority::Protected {
-                    candidates.push((
-                        resident.priority,
-                        sequence,
-                        entry.owner,
-                        packet.len(),
-                        resident.decoded,
-                        slot.clone(),
-                    ));
-                }
+                let candidate = groups.entry((entry.owner, entry.group)).or_insert_with(||
+                    (Priority::Unreferenced, sequence, entry.owner, 0usize, 0usize, Vec::new()));
+                candidate.0 = candidate.0.max(resident.priority);
+                candidate.3 += packet.len();
+                candidate.4 += resident.decoded;
+                candidate.5.push(slot.clone());
             }
         }
+        // The image being extended is never its own admission victim.
+        let mut candidates: Vec<_> = groups.into_iter()
+            .filter(|((candidate_owner, candidate_group), candidate)|
+                candidate.0 != Priority::Protected && (*candidate_owner != owner || *candidate_group != group))
+            .map(|(_, candidate)| candidate).collect();
         candidates.sort_by_key(|c| (c.0, c.1));
         let fits = |pane: (usize, usize), total: (usize, usize)| {
             pane.0 <= capacity.0.min(self.limits.pane_encoded)
@@ -177,7 +185,7 @@ impl Retention {
             total.0 -= *encoded;
             total.1 -= *decoded;
             selected.insert(*sequence);
-            victims.push(slot.clone());
+            victims.extend(slot.iter().cloned());
         }
         for (_, sequence, candidate_owner, encoded, decoded, slot) in candidates {
             if fits(pane, total) {
@@ -192,7 +200,7 @@ impl Retention {
                 pane.0 -= encoded;
                 pane.1 -= decoded;
             }
-            victims.push(slot);
+            victims.extend(slot);
         }
         if !fits(pane, total) {
             return None;
@@ -220,6 +228,7 @@ impl Retention {
             sequence,
             Entry {
                 owner,
+                group,
                 resident: Arc::downgrade(&slot),
             },
         );

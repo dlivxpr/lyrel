@@ -7,6 +7,11 @@
 
 ## [Unreleased]
 
+### 新增
+
+- Kitty 图片支持 daemon 持有的完整帧追加、停止／手动选帧和同一存活 daemon 的 fresh-client 恢复；同资源全部放置共用选择与像素，帧序列按整体回收并沿用有限源内容／派生／元数据准入。pane 协议升级为 `16`，control 不变；兼容显式 `f=0` 与无歧义的最终块无 padding Base64。新增真实 PTY／daemon／rooted consumer 回归及 `scripts/kitty-frames.mjs` 原生入口；自动播放和 partial-frame 操作不在此切片，原生及中央自动化验证仍待执行。
+
+
 ## [0.3.0] - 2026-10-31
 
 ### 新增

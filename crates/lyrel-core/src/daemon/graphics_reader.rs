@@ -92,7 +92,7 @@ fn command(
         || image.is_none()
         || !matches!(
             control.action,
-            Action::Transmit | Action::TransmitAndDisplay | Action::Query
+            Action::Transmit | Action::TransmitAndDisplay | Action::Query | Action::Frame
         )
     {
         let mut state = state.lock().unwrap();
