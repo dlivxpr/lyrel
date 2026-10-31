@@ -81,6 +81,7 @@ fn command(
     state: &Arc<Mutex<PaneState>>,
     control: Control,
     image: Option<Image>,
+    source_work: Option<crate::core::graphics_state::retention::Work>,
     gate: &OutputGate,
     writer: &Arc<Mutex<Box<dyn Write + Send>>>,
 ) -> Vec<u8> {
@@ -105,7 +106,7 @@ fn command(
     let image = image.unwrap();
     let resource = control.action != Action::Query;
     let mut admissions = Vec::with_capacity(2);
-    let (owner, key, generation, broker, frame) = {
+    let (key, generation, broker, frame) = {
         let mut state = state.lock().unwrap();
         if !state.alive {
             return Vec::new();
@@ -123,9 +124,12 @@ fn command(
         } else {
             0
         };
-        (graphics.work_owner(), key, graphics.generation(), broker, frame)
+        (key, graphics.generation(), broker, frame)
     };
-    let mut image = match GraphicsState::prepare_image(image, owner, key, &control, frame) {
+    let mut image = match GraphicsState::prepare_image_budgeted(
+        image, key, &control, frame,
+        source_work.expect("parsed image transfers its source reservation"),
+    ) {
         Ok(image) => image,
         Err(status) => {
             reply(writer, &control, status);
@@ -358,7 +362,8 @@ pub(super) fn consume<'a>(
                         pass.extend(bytes);
                     }
                     Part::Graphics(Segment::Command { control, image }) => {
-                        pass.extend(command(state, control, image, gate, writer))
+                        let source_work = image.as_ref().map(|image| graphics.take_source_work(image.data.capacity()));
+                        pass.extend(command(state, control, image, source_work, gate, writer))
                     }
                     Part::Graphics(Segment::Reply(bytes))
                     | Part::Clipboard(ClipboardEvent::Reply(bytes)) => {

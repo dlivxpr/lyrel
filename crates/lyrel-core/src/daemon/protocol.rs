@@ -5,13 +5,27 @@ use serde::{Deserialize, Serialize};
 
 pub const MAX_FRAME: usize = 64 * 1024 * 1024;
 
-pub const MAX_DAEMON_GRAPHICS_QUEUE_BYTES: usize = 256 << 20;
+pub const MAX_DAEMON_GRAPHICS_QUEUE_BYTES: usize = 1280 << 20;
 /// Conservative 64-bit resource/placement ownership, including map/Arc headers.
 pub const GRAPHICS_METADATA_ENTRY_BYTES: usize = 512;
 pub const MAX_PANE_GRAPHICS_METADATA_BYTES: usize = 4 << 20;
 pub const MAX_AGGREGATE_GRAPHICS_METADATA_BYTES: usize = 16 << 20;
 static GRAPHICS_QUEUE_BYTES: std::sync::atomic::AtomicUsize =
     std::sync::atomic::AtomicUsize::new(0);
+
+#[cfg(test)]
+static GRAPHICS_QUEUE_LIMIT: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
+
+#[cfg(test)]
+pub(crate) fn inject_graphics_queue_limit(bytes: usize) {
+    assert!(GRAPHICS_QUEUE_LIMIT.set(bytes).is_ok());
+}
+
+fn graphics_queue_limit() -> usize {
+    #[cfg(test)]
+    if let Some(&bytes) = GRAPHICS_QUEUE_LIMIT.get() { return bytes; }
+    MAX_DAEMON_GRAPHICS_QUEUE_BYTES
+}
 
 #[derive(Debug)]
 struct GraphicsQueueReservation(usize);
@@ -40,7 +54,7 @@ impl GraphicsPacket {
         GRAPHICS_QUEUE_BYTES
             .try_update(Ordering::AcqRel, Ordering::Acquire, |used| {
                 used.checked_add(bytes)
-                    .filter(|next| *next <= MAX_DAEMON_GRAPHICS_QUEUE_BYTES)
+                    .filter(|next| *next <= graphics_queue_limit())
             })
             .ok()?;
         let reservation = GraphicsQueueReservation(bytes);

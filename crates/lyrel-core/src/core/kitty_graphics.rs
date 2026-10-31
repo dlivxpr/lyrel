@@ -423,6 +423,14 @@ impl GraphicsSniffer {
         }
     }
 
+    /// Move the completed source's existing reservation to its prepared owner.
+    /// Other completed commands and partial transfers retain their own charge.
+    pub(crate) fn take_source_work(&mut self, capacity: usize) -> super::graphics_state::retention::Work {
+        assert!(capacity <= self.parser.completed_bytes);
+        self.parser.completed_bytes -= capacity;
+        self.parser.work.as_mut().expect("completed source owns transfer work").split(capacity)
+    }
+
     /// Cache this PTY read's locality and irreversibly taint pending indirect
     /// data on remote/unknown reads. A later local read cannot promote it.
     pub fn set_local(&mut self, local: bool) {
