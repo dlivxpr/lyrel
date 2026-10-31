@@ -31,6 +31,7 @@ pub struct RenderPlacement {
     resource_revision: u64,
     frame_key: u64,
     selection_revision: u64,
+    pub playback: Option<lyrel_core::core::graphics_state::Playback>,
     history_origin: i64,
     placeholder: Option<(i32, PlaceholderSlice)>,
     _residency: Option<Arc<Residency>>,
@@ -393,6 +394,7 @@ struct Resource {
     metadata: Arc<Reservation>,
     root: Option<u64>,
     selected: Option<(u64, u64)>,
+    playback: Option<lyrel_core::core::graphics_state::Playback>,
 }
 
 #[derive(Default)]
@@ -1014,6 +1016,7 @@ impl ImageStore {
                 resource_revision: resource.revision,
                 frame_key,
                 selection_revision,
+                playback: root.playback.clone(),
                 placeholder,
                 _residency: resource
                     .decoded
@@ -1354,6 +1357,7 @@ impl ImageStore {
                     pressure_requested: false,
                     root: None,
                     selected: None,
+                    playback: None,
                 };
                 if let Some(old) = inner.resources.insert(key, resource) {
                     retire(old, &mut inner.retired);
@@ -1392,6 +1396,16 @@ impl ImageStore {
                 root.selected = Some((frame, revision));
                 true
             }
+            GraphicsUpdate::Playback(playback) => {
+                if let Some(root) = inner.resources.get_mut(&playback.key)
+                    && root.playback.as_ref() != Some(&playback)
+                {
+                    root.playback = Some(playback);
+                }
+                // Clock metadata is not pixel damage and cannot request a
+                // whole-window repaint (including on hidden consumers).
+                false
+            }
             GraphicsUpdate::Evicted { key, width, height } => {
                 let offered_metadata = take_metadata_offer(&mut inner, generation, key);
                 let metadata = inner
@@ -1420,6 +1434,7 @@ impl ImageStore {
                     metadata,
                     root: None,
                     selected: None,
+                    playback: None,
                 };
                 if let Some(old) = inner.resources.insert(key, resource) {
                     retire(old, &mut inner.retired);

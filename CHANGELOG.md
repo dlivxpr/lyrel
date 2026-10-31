@@ -17,6 +17,7 @@
 ### 新增
 
 - Kitty 图片支持 daemon 持有的完整帧追加、停止／手动选帧和同一存活 daemon 的 fresh-client 恢复；同资源全部放置共用选择与像素，帧序列按整体回收并沿用有限源内容／派生／元数据准入。pane 协议升级为 `16`，control 不变；兼容显式 `f=0` 与无歧义的最终块无 padding Base64。真实 PTY／daemon／rooted consumer 及 Windows Debug 原生窗口已验证三帧同步切换和发送器退出后的 fresh-window 恢复；自动播放、partial-frame、完整容量／性能和 macOS 不由此切片宣称通过。
+- Kitty 自动播放由 daemon 保存 stopped／loading／running、frame gap、有限／无限循环和剩余间隔；聚合当前连接 viewport 的 direct／relative／Unicode 可见性，全隐藏或断开时暂停，显式命令仍生效。循环复用保留像素，只发布选帧／播放元数据，pane 升级为 `17`，control 保持 `16`。新增私有受控时间、真实双消费者／fresh-window 回归及 `scripts/kitty-playback.mjs` Windows 原生入口；本票未执行中央测试或原生验收，不宣称新增用例、60 fps 或 macOS 已通过。
 
 - Kitty 相对放置在既有 daemon Placement／pane transport 中保留 `P/Q` 父身份、signed `H/V` 及八链接有界图；支持 direct／实际 Unicode 单元父锚点、无光标移动、级联生命周期和 fresh consumer 恢复。新增真实 PTY／daemon／rooted view 行为回归与 `scripts/kitty-relative.mjs` 原生几何／恢复入口；本轮子工单未执行构建、自动测试或 Windows／macOS 原生验收，证据边界见终端图片文档。
 - Kitty 间接媒体增加 Windows 本地 regular file、eligible 临时文件与 named shared memory；`O/S` 只限制实际图片区域，允许小区域位于大对象中。Windows 固定已验证本地磁盘 handle、拒绝网络／device／未知 reparse，并按对象 handle 删除临时 handoff；Unix 保留文件／POSIX shm 语义，macOS 按偏移附近有界映射，临时文件使用身份核验及 no-clobber 恢复避免删错替换对象。发送方 locality 每次接受及读取前重新证明，嵌套 SSH／WSL 或未知命名空间 fail-closed，直接传输不受影响；不新增图片磁盘缓存。提供真实 PTY／daemon／rooted consumer 回归与 Windows 自有原生 smoke 入口；本票子任务未执行中央测试或原生验收，平台通过范围仍待实际结果。

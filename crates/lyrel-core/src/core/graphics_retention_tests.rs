@@ -1649,7 +1649,6 @@ fn retention_daemon_complete_frames_refusal_quiet_and_replacement_are_atomic() {
     assert!(consumer.text.windows(11).any(|text| text == b"beforeafter"));
     for (command, error) in [
         ("a=a,i=91,c=3", "ENOENT"),
-        ("a=a,i=91,s=3", "ENOTSUPPORTED"),
         ("a=f,i=91,s=1,v=1;!", "EINVAL"),
         ("a=f,i=91,s=1,v=1,m=1;AP8", "EINVAL"),
     ] {

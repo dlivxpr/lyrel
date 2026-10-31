@@ -45,9 +45,14 @@ impl GraphicsState {
     }
 
     pub(super) fn placeholder_placements_in(&self, start: i32, end: i32) -> BTreeSet<u64> {
+        self.placeholder_placements_in_viewport(start, end, self.size.cols)
+    }
+
+    pub(super) fn placeholder_placements_in_viewport(&self, start: i32, end: i32, cols: u16) -> BTreeSet<u64> {
         let mut placements = BTreeSet::new();
         for row in start..end {
             for slice in placeholder_row(&self.term.grid, Line(row)) {
+                if slice.column >= cols as usize { continue; }
                 if let Some(prototype) =
                     placeholder_prototype(self.placements(), self.screen, &slice.run)
                     && slice.run.row < prototype.span_rows
@@ -103,6 +108,7 @@ impl GraphicsState {
         self.resolve_relative_geometry();
         self.refresh_retention();
         let mut effects = self.drain_evictions();
+        effects.extend(self.drain_playback_metadata());
         self.prune_relative_orphans();
         if !self.removed.is_empty() || !self.freed.is_empty() {
             effects.push(GraphicsEffect::Update(GraphicsUpdate::Remove {
