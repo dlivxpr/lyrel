@@ -95,7 +95,8 @@ const HEADER: usize = 5;
 /// v13 reports connection-local absolute viewports with layout epochs.
 /// v14 carries each placement/prototype's own last-active live protection.
 /// v15 completes each graphics pressure request on its requesting endpoint.
-/// v16 carries immutable animation frame relationships and atomic selection.
+/// v16 carries immutable frames, atomic selection, relative-placement edges,
+/// and signed coordinates.
 pub const PROTOCOL_VERSION: u32 = 16;
 
 pub const FEATURE_PANE_OWNER: &str = "pane-owner";

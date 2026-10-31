@@ -26,7 +26,7 @@ pub struct Placement {
     pub z: i32,
     /// Stable text row, including rows evicted from the retained history ring.
     pub anchor_row: i64,
-    pub anchor_col: u32,
+    pub anchor_col: i64,
     /// Main screen is zero; alternate screen is one and cleared on entry.
     pub screen: u64,
     pub span_cols: u32,
@@ -36,6 +36,12 @@ pub struct Placement {
     pub clip_bottom: u32,
     /// Invisible prototype; grid cells, not this anchor, select its display.
     pub virtual_placement: bool,
+    /// Pane-local placement key, never a GUI-only identity or an image frame.
+    pub parent: Option<u64>,
+    pub relative_x: i32,
+    pub relative_y: i32,
+    /// True while a virtual root has no retained, valid placeholder cells.
+    pub unresolved: bool,
     /// This placement/prototype itself referenced real live content the last
     /// time its screen was active. Observer viewports never enter this fact.
     pub live: bool,
@@ -518,6 +524,7 @@ impl GraphicsState {
         &mut self,
         control: &Control,
     ) -> Result<PreparedPlacement, &'static str> {
+        self.relative_parent(control, None)?;
         let resource = self
             .lookup(control)
             .filter(|key| {
@@ -616,6 +623,9 @@ impl GraphicsState {
                 return Err("ENOSPC:Animation frame budget exhausted");
             }
             return Ok(());
+        }
+        if control.action == Action::TransmitAndDisplay {
+            self.relative_parent(control, self.lookup(control))?;
         }
         if control.action == Action::TransmitAndDisplay && self.geometry(control, image).is_none() {
             return Err("EINVAL:Invalid placement rectangle");
@@ -786,7 +796,8 @@ impl GraphicsState {
                     anchored.retained = retained_placeholders.contains(&key);
                     live_placeholders.contains(&key)
                 } else {
-                    p.anchor_col < u32::from(self.size.cols.max(1))
+                    !p.unresolved && p.anchor_col < i64::from(self.size.cols.max(1))
+                        && p.anchor_col + i64::from(p.span_cols) > 0
                         && p.anchor_row + i64::from(p.clip_top) < bottom
                         && p.anchor_row + i64::from(p.clip_bottom) > top
                 };
@@ -812,7 +823,8 @@ impl GraphicsState {
                         .values()
                         .filter_map(|(_, viewport)| visible_range(viewport))
                         .any(|(start, end, cols)| {
-                            p.anchor_col < u32::from(cols)
+                            !p.unresolved && p.anchor_col < i64::from(cols)
+                                && p.anchor_col + i64::from(p.span_cols) > 0
                                 && p.anchor_row + i64::from(p.clip_top) < end
                                 && p.anchor_row + i64::from(p.clip_bottom) > start
                         })
@@ -1176,6 +1188,72 @@ impl GraphicsState {
         Self::reply(effects, control, id, "OK");
     }
 
+    /// Validate the prospective graph before quota admission or replacement.
+    /// A replacement may deepen existing descendants, so validate every path.
+    fn relative_parent(&self, c: &Control, removed_resource: Option<u64>) -> Result<Option<u64>, &'static str> {
+        if c.parent_image == 0 {
+            if c.parent_placement != 0 {
+                return Err("ENOPARENT:Parent placement not found");
+            }
+            return Ok(None);
+        }
+        if c.virtual_placement {
+            return Err("EINVAL:Virtual placement cannot be relative");
+        }
+        let parent = self.placements.values().rev().find(|p| {
+            p.placement.screen == self.screen
+                && p.placement.image_id == c.parent_image
+                && p.placement.placement_id == c.parent_placement
+                && Some(p.placement.resource) != removed_resource
+        }).map(|p| p.placement.key).ok_or("ENOPARENT:Parent placement not found")?;
+        let mut ancestor = Some(parent);
+        for _ in 0..=8 {
+            let Some(key) = ancestor else { break };
+            let p = &self.placements[&key].placement;
+            if Some(p.resource) == removed_resource {
+                return Err("ENOPARENT:Parent placement not found");
+            }
+            ancestor = p.parent;
+        }
+        let replacement = self.placements.values().find(|p| {
+            p.placement.screen == self.screen && c.id != 0 && c.placement != 0
+                && p.placement.image_id == c.id && p.placement.placement_id == c.placement
+        }).map(|p| p.placement.key);
+        for start in self.placements.keys().copied().map(Some).chain(std::iter::once(None)) {
+            let mut current = start;
+            let mut visited = [0u64; 10];
+            let mut count = 0;
+            loop {
+                let next = if current.is_none() || current == replacement {
+                    Some(parent)
+                } else {
+                    self.placements.get(&current.unwrap()).and_then(|p| p.placement.parent)
+                };
+                let Some(next) = next else { break };
+                if visited[..count].contains(&next) {
+                    return Err("ECYCLE:Placement cycle");
+                }
+                if count == 8 {
+                    // Check for a cycle before depth refusal, including a long
+                    // descendant chain closed by this replacement.
+                    let mut cursor = Some(next);
+                    for _ in 0..=MAX_PLACEMENTS {
+                        let Some(key) = cursor else { break };
+                        if Some(key) == replacement {
+                            return Err("ECYCLE:Placement cycle");
+                        }
+                        cursor = self.placements.get(&key).and_then(|p| p.placement.parent);
+                    }
+                    return Err("ETOODEEP:Relative placement chain exceeds eight links");
+                }
+                visited[count] = next;
+                count += 1;
+                current = Some(next);
+            }
+        }
+        Ok(Some(parent))
+    }
+
     /// Returns intersected source crop and its occupied grid span. Wire c/r
     /// retain the sender's request so the desktop can use its actual cell size.
     fn geometry(&self, c: &Control, image: &Image) -> Option<(u32, u32, u32, u32)> {
@@ -1228,6 +1306,13 @@ impl GraphicsState {
         reserved_metadata: Option<(u64, retention::MetadataTicket)>,
     ) {
         let resource = &self.resources[&resource_key];
+        let parent = match self.relative_parent(control, None) {
+            Ok(parent) => parent,
+            Err(status) => {
+                Self::reply(effects, control, resource.id, status);
+                return;
+            }
+        };
         let id = resource.id;
         let Some((w, h, span_cols, span_rows)) = self.geometry(control, &resource.image) else {
             Self::reply(effects, control, id, "EINVAL:Invalid placement rectangle");
@@ -1281,13 +1366,17 @@ impl GraphicsState {
             offset_y: control.offset_y,
             z: control.z,
             anchor_row: self.history_origin() + i64::from(self.term.grid.cursor.pos.row.0),
-            anchor_col: self.term.grid.cursor.pos.col.0 as u32,
+            anchor_col: self.term.grid.cursor.pos.col.0 as i64,
             screen: self.screen,
             span_cols,
             span_rows,
             clip_top: 0,
             clip_bottom: span_rows,
             virtual_placement: control.virtual_placement,
+            parent,
+            relative_x: control.relative_x,
+            relative_y: control.relative_y,
+            unresolved: parent.is_some() || control.virtual_placement,
             live: !control.virtual_placement,
         };
         self.placements.insert(
@@ -1304,7 +1393,7 @@ impl GraphicsState {
             history_origin: self.history_origin(),
             epoch: self.viewport_epoch,
         }));
-        if !control.no_move && !control.virtual_placement {
+        if !control.no_move && !control.virtual_placement && parent.is_none() {
             // Kitty leaves the cursor on the placement's last row. Do not
             // encode a zero CUD: terminals interpret CSI 0 B as one row.
             let down = span_rows
@@ -1375,7 +1464,7 @@ impl GraphicsState {
         let newest = self.lookup(c);
         let history = self.history_origin();
         let cursor_row = history + i64::from(self.term.grid.cursor.pos.row.0);
-        let cursor_col = self.term.grid.cursor.pos.col.0 as u32;
+        let cursor_col = self.term.grid.cursor.pos.col.0 as i64;
         let mut affected = Vec::new();
         let mut removed = Vec::new();
         self.placements.retain(|key, p| {
@@ -1393,12 +1482,12 @@ impl GraphicsState {
             let col = if target == b'c' {
                 cursor_col
             } else {
-                c.x.saturating_sub(1)
+                i64::from(c.x.saturating_sub(1))
             };
             let top = p.anchor_row + i64::from(p.clip_top);
             let bottom = p.anchor_row + i64::from(p.clip_bottom);
             let in_row = row >= top && row < bottom;
-            let in_col = col >= p.anchor_col && col < p.anchor_col.saturating_add(p.span_cols);
+            let in_col = col >= p.anchor_col && col < p.anchor_col + i64::from(p.span_cols);
             let selected = match target {
                 b'a' => top < history + i64::from(self.size.rows) && bottom > history,
                 b'i' | b'n' => {
@@ -1415,21 +1504,21 @@ impl GraphicsState {
             };
             if selected {
                 removed.push(*key);
-                affected.push(p.resource);
+                affected.push((p.resource, p.parent.is_some()));
             }
             !selected
         });
         if matches!(target, b'i' | b'n') && c.placement == 0 {
-            affected.extend(newest);
+            affected.extend(newest.map(|key| (key, false)));
         }
         if target == b'r' {
             affected.extend(self.resources.iter().filter_map(|(key, r)| {
-                (r.screen == self.screen && r.id >= c.x && r.id <= c.y).then_some(*key)
+                (r.screen == self.screen && r.id >= c.x && r.id <= c.y).then_some((*key, false))
             }));
         }
         affected.sort_unstable();
         affected.dedup();
-        for key in affected {
+        for (key, relative) in affected {
             if self
                 .placements
                 .values()
@@ -1439,7 +1528,7 @@ impl GraphicsState {
             }
             if let Some(resource) = self.resources.get(&key)
                 && resource.root.is_none()
-                && (selector.is_ascii_uppercase() || resource.id == 0)
+                && (relative || selector.is_ascii_uppercase() || resource.id == 0)
             {
                 let _ = resource;
                 self.remove_resource(key, effects);
