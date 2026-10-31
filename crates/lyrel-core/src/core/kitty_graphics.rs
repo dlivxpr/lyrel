@@ -586,8 +586,7 @@ pub enum Sniffed<'a> {
     Segments(Vec<Segment>),
 }
 
-/// The kitty action key (`a=`). Only the variants lyrel acts on are named; the
-/// rest of the protocol (frames, animation, compose) folds into `Other`.
+/// The published kitty action key (`a=`); unsupported operations remain explicit.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Action {
     /// `a=q` — query whether a transmission would succeed. We must reply.
@@ -600,6 +599,10 @@ pub enum Action {
     Display,
     /// `a=d` — delete image(s)/placement(s).
     Delete,
+    /// `a=f` — append a complete frame to an existing image.
+    Frame,
+    /// `a=a` — stopped/manual frame selection.
+    Animation,
     /// Any action we don't specifically handle.
     Other,
 }
@@ -743,13 +746,15 @@ impl Control {
                         b"T" => Action::TransmitAndDisplay,
                         b"p" => Action::Display,
                         b"d" => Action::Delete,
+                        b"f" => Action::Frame,
+                        b"a" => Action::Animation,
                         _ => Action::Other,
                     }
                 }
                 b"f" => {
                     c.format = match val {
                         b"24" => WireFormat::Rgb,
-                        b"32" => WireFormat::Rgba,
+                        b"0" | b"32" => WireFormat::Rgba,
                         b"100" => WireFormat::Png,
                         _ => {
                             c.unsupported = true;
@@ -1329,7 +1334,8 @@ impl GraphicsParser {
             let header = header.strip_prefix(b"G").unwrap_or(header);
             let continuation = header
                 .split(|b| *b == b',')
-                .all(|pair| pair.starts_with(b"m=") || pair.starts_with(b"q=") || pair.is_empty());
+                .all(|pair| pair.starts_with(b"m=") || pair.starts_with(b"q=") || pair.is_empty()
+                    || (pair == b"a=f" && self.pending.as_ref().unwrap().control.action == Action::Frame));
             if continuation {
                 // Kitty keeps the first chunk's quiet unless a later chunk
                 // supplies a nonzero override; an explicit q=0 is not a reset.
@@ -1356,10 +1362,10 @@ impl GraphicsParser {
             return response(&control, control.id, status).map(Event::Reply);
         }
         match control.action {
-            Action::Transmit | Action::TransmitAndDisplay | Action::Query => {
+            Action::Transmit | Action::TransmitAndDisplay | Action::Query | Action::Frame => {
                 self.accept_chunk(control, data, locality)
             }
-            Action::Display | Action::Delete => {
+            Action::Display | Action::Delete | Action::Animation => {
                 if !data.is_empty() || control.more {
                     response(&control, control.id, "EINVAL:Unexpected placement payload")
                         .map(Event::Reply)
@@ -1476,7 +1482,18 @@ impl GraphicsParser {
             .unwrap()
             .resize(self.completed_bytes + pending.data.capacity());
         pending.data.resize(required, 0);
-        let decoded = BASE64.decode_slice(data, &mut pending.data[start..]);
+        // Intermediate chunks must be complete padded quanta. Only the final
+        // chunk can omit padding, and trailing nonzero bits remain invalid.
+        let final_base64 = base64::engine::GeneralPurpose::new(
+            &base64::alphabet::STANDARD,
+            base64::engine::general_purpose::GeneralPurposeConfig::new()
+                .with_decode_padding_mode(base64::engine::DecodePaddingMode::Indifferent),
+        );
+        let decoded = if control.more {
+            BASE64.decode_slice(data, &mut pending.data[start..])
+        } else {
+            final_base64.decode_slice(data, &mut pending.data[start..])
+        };
         let Ok(decoded) = decoded else {
             self.cancel_pending();
             return fail("EINVAL:Invalid base64 payload");

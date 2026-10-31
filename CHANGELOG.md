@@ -11,6 +11,11 @@
 
 - pi 图片接入（#149）区分 `earendil-works/pi` 与 omp，将公开 `PI_IMAGE_PROTOCOL` 纳入既有 Host／启动／会话 scope 与 Pi hook 报告，恢复时保留显式 `none`，不自动覆盖 `terminal.images=false` 或 `terminal.showImages=false`。2026-10-31 重新核实 GitHub／npm／本机正式版本均为 `1.4.0`；增加真实原生 `--session` 合成 toolResult PNG 夹具、production rooted consumer 的重挂载／删除／再次启动及 disabled precedence 入口。未运行本轮 contracts 或 Windows／macOS 原生像素验收，不将版本查询、flags 或历史 omp 证据写成 Pi 图片通过。
 
+### 新增
+
+- Kitty 图片支持 daemon 持有的完整帧追加、停止／手动选帧和同一存活 daemon 的 fresh-client 恢复；同资源全部放置共用选择与像素，帧序列按整体回收并沿用有限源内容／派生／元数据准入。pane 协议升级为 `16`，control 不变；兼容显式 `f=0` 与无歧义的最终块无 padding Base64。新增真实 PTY／daemon／rooted consumer 回归及 `scripts/kitty-frames.mjs` 原生入口；自动播放和 partial-frame 操作不在此切片，原生及中央自动化验证仍待执行。
+
+
 ## [0.3.0] - 2026-10-31
 
 ### 新增

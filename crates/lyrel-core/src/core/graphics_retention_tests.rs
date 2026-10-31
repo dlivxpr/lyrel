@@ -1605,3 +1605,72 @@ fn retention_daemon_large_outer_zlib_png_uses_bounded_live_work_and_recovers() {
     }
     consumer.exit();
 }
+
+#[test]
+fn retention_daemon_complete_frames_refusal_quiet_and_replacement_are_atomic() {
+    let daemon = Daemon::start();
+    let mut consumer = daemon.spawn();
+    let root = consumer.red("a=T,i=91,p=1,c=1,r=1,C=1");
+    let reply = consumer.exchange(b"\x1b_Ga=f,i=91,f=0,s=1,v=1,m=1;AP8A\x1b\\\x1b_Ga=f,m=0;/w\x1b\\", 1);
+    assert_eq!(reply, [b"\x1b_Gi=91;OK\x1b\\".to_vec()]);
+    let frame = consumer.updates.iter().find_map(|update| match update {
+        GraphicsUpdate::Frame { key, root: parent, number: 2 } if *parent == root => Some(*key),
+        _ => None,
+    }).expect("second complete frame is retained under the root");
+    assert_eq!(consumer.exchange(b"\x1b_Ga=a,i=91,s=1,c=2\x1b\\", 1),
+        [b"\x1b_Gi=91;OK\x1b\\".to_vec()]);
+    assert!(consumer.updates.iter().any(|update| matches!(update,
+        GraphicsUpdate::Select { key, frame: selected, .. } if *key == root && *selected == frame)));
+    // Two RGBA pixels fill this isolated daemon's pane budget. A refused
+    // third frame cannot evict a previously accepted frame of this animation.
+    let reply = consumer.exchange(b"before\x1b_Ga=f,i=91,s=1,v=1,q=1;AAD//w==\x1b\\after", 1);
+    assert!(reply[0].starts_with(b"\x1b_Gi=91;ENOSPC:"));
+    assert!(!consumer.updates.iter().any(|update| matches!(update,
+        GraphicsUpdate::Remove { .. } | GraphicsUpdate::Evicted { .. } | GraphicsUpdate::Resource { .. })));
+    assert!(consumer.text.windows(11).any(|text| text == b"beforeafter"));
+    for (command, error) in [
+        ("a=a,i=91,c=3", "ENOENT"),
+        ("a=a,i=91,s=3", "ENOTSUPPORTED"),
+        ("a=f,i=91,s=1,v=1;!", "EINVAL"),
+        ("a=f,i=91,s=1,v=1,m=1;AP8", "EINVAL"),
+    ] {
+        let reply = consumer.exchange(format!("\x1b_G{command}\x1b\\").as_bytes(), 1);
+        assert!(reply[0].starts_with(format!("\x1b_Gi=91;{error}:").as_bytes()));
+        assert!(!consumer.updates.iter().any(|update| matches!(update, GraphicsUpdate::Select { .. })));
+    }
+    consumer.idle(b"\x1b_Ga=a,i=91,c=3,q=2\x1b\\\x1b_Ga=f,i=91,s=1,v=1,q=2;!\x1b\\usable");
+    assert_eq!(consumer.exchange(b"\x1b_Ga=a,i=91,c=1\x1b\\", 1),
+        [b"\x1b_Gi=91;OK\x1b\\".to_vec()]);
+    consumer.red("a=T,i=91,p=2,c=1,r=1,C=1");
+    assert!(consumer.updates.iter().any(|update| matches!(update,
+        GraphicsUpdate::Remove { resources, .. } if resources.contains(&root) && resources.contains(&frame))));
+    let reply = consumer.exchange(b"\x1b_Ga=a,i=91,c=2\x1b\\", 1);
+    assert!(reply[0].starts_with(b"\x1b_Gi=91;ENOENT:"));
+    consumer.exit();
+}
+
+#[test]
+fn retention_daemon_complete_frame_limit_preserves_last_accepted_selection() {
+    let daemon = Daemon::with_limits(0, true);
+    let mut consumer = daemon.spawn();
+    let root = consumer.red("a=t,I=92");
+    let mut commands = Vec::new();
+    for _ in 1..MAX_ANIMATION_FRAMES {
+        commands.extend_from_slice(b"\x1b_Ga=f,I=92,f=32,s=1,v=1,q=2;AP8A/w==\x1b\\");
+    }
+    consumer.idle(&commands);
+    let last = consumer.updates.iter().find_map(|update| match update {
+        GraphicsUpdate::Frame { key, root: parent, number } if *parent == root && *number == MAX_ANIMATION_FRAMES => Some(*key),
+        _ => None,
+    }).expect("all accepted frames have bounded stable identities");
+    let reply = consumer.exchange(b"\x1b_Ga=f,I=92,f=32,s=1,v=1;AAD//w==\x1b\\", 1);
+    assert!(String::from_utf8_lossy(&reply[0]).contains("I=92;ENOSPC:"));
+    assert!(!consumer.updates.iter().any(|update| matches!(update,
+        GraphicsUpdate::Remove { .. } | GraphicsUpdate::Evicted { .. } | GraphicsUpdate::Resource { .. })));
+    let select = format!("\x1b_Ga=a,I=92,s=1,c={}\x1b\\", MAX_ANIMATION_FRAMES);
+    let reply = consumer.exchange(select.as_bytes(), 1);
+    assert!(String::from_utf8_lossy(&reply[0]).contains("I=92;OK"));
+    assert!(consumer.updates.iter().any(|update| matches!(update,
+        GraphicsUpdate::Select { key, frame, .. } if *key == root && *frame == last)));
+    consumer.exit();
+}

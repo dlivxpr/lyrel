@@ -335,8 +335,13 @@ impl GraphicsState {
     }
 
     fn free_resource(&mut self, key: u64) {
-        if let Some(resource) = self.resources.remove(&key) {
-            drop(resource);
+        let children: Vec<_> = self.resources.iter().filter_map(|(&child, resource)|
+            (resource.root == Some(key)).then_some(child)).collect();
+        for child in children {
+            self.resources.remove(&child);
+            self.freed.push(child);
+        }
+        if self.resources.remove(&key).is_some() {
             self.freed.push(key);
         }
     }

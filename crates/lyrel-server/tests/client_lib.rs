@@ -4968,7 +4968,7 @@ mod kitty_graphics {
         for command in [
             "a=q,i=732,p=5,f=1,s=1,v=1;AAAA",
             "a=q,i=732,p=5,f=32,s=1,v=1,o=x;AAAA",
-            "a=f,i=732,p=5;AAAA",
+            "a=c,i=732,p=5;AAAA",
         ] {
             let reply = pane.send(format!("\x1b_G{command}\x1b\\").as_bytes(), 1);
             assert!(reply[0].starts_with(b"\x1b_Gi=732,p=5;ENOTSUPPORTED:"));
