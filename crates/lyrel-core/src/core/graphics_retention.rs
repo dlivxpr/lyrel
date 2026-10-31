@@ -55,6 +55,12 @@ pub(super) struct Resident {
     pub priority: Priority,
     pub announced: bool,
     pub wake: Option<SyncSender<()>>,
+    pins: u32,
+}
+
+pub(super) struct Pin(Arc<Mutex<Resident>>);
+impl Drop for Pin {
+    fn drop(&mut self) { self.0.lock().unwrap().pins -= 1; }
 }
 struct Entry {
     owner: u64,
@@ -83,6 +89,11 @@ impl Retention {
                 })
             })
             .clone()
+    }
+    pub(super) fn pin(&self, resident: &Arc<Mutex<Resident>>) -> Pin {
+        let _registry = self.registry.lock().unwrap();
+        resident.lock().unwrap().pins += 1;
+        Pin(resident.clone())
     }
     pub(super) fn protect<'a>(&self, residents: impl Iterator<Item = &'a Arc<Mutex<Resident>>>) {
         // Preserve registry -> resident lock order and the admission barrier,
@@ -121,7 +132,7 @@ impl Retention {
         if absent
             || slots
                 .iter()
-                .any(|slot| slot.lock().unwrap().priority == Priority::Protected)
+                .any(|slot| { let slot = slot.lock().unwrap(); slot.priority == Priority::Protected || slot.pins != 0 })
         {
             return false;
         }
@@ -185,7 +196,7 @@ impl Retention {
                         Vec::new(),
                     )
                 });
-                candidate.0 = candidate.0.max(resident.priority);
+                candidate.0 = candidate.0.max(if resident.pins != 0 { Priority::Protected } else { resident.priority });
                 candidate.3 += packet.len();
                 candidate.4 += resident.decoded;
                 candidate.5.push(slot.clone());
@@ -261,6 +272,7 @@ impl Retention {
             priority: Priority::Protected,
             announced: false,
             wake,
+            pins: 0,
         }));
         registry.entries.insert(
             sequence,

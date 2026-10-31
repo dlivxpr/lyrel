@@ -105,7 +105,7 @@ fn command(
     let image = image.unwrap();
     let resource = control.action != Action::Query;
     let mut admissions = Vec::with_capacity(2);
-    let (owner, key, generation, broker) = {
+    let (owner, key, generation, broker, frame) = {
         let mut state = state.lock().unwrap();
         if !state.alive {
             return Vec::new();
@@ -114,14 +114,18 @@ fn command(
         let Some(graphics) = state.graphics.as_mut() else {
             return Vec::new();
         };
+        let frame = match graphics.capture_frame(&control) {
+            Ok(frame) => frame,
+            Err(status) => { reply(writer, &control, status); return Vec::new(); }
+        };
         let key = if resource {
             graphics.reserve_resource_key()
         } else {
             0
         };
-        (graphics.work_owner(), key, graphics.generation(), broker)
+        (graphics.work_owner(), key, graphics.generation(), broker, frame)
     };
-    let mut image = match GraphicsState::prepare_image(image, owner, key, &control) {
+    let mut image = match GraphicsState::prepare_image(image, owner, key, &control, frame) {
         Ok(image) => image,
         Err(status) => {
             reply(writer, &control, status);

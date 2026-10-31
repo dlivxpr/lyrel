@@ -214,7 +214,7 @@ resize 去重与回显等待、viewport 重新发布和关闭次序；`remote/wr
 - 图片 ID 在窗格内独立。非零图片 ID 与非零放置 ID 的组合替换同次放置；省略 `p` 或 `p=0` 时，每次放置独立。`I` 分配新的图片 ID，并让后续按编号的命令选择该编号最新的资源；同一命令不能同时指定 `i` 与 `I`。重新传输同一个 `i` 会移除其旧资源与全部旧放置，不会让旧位置显示新内容。
 - 静态删除支持 `a/i/n/c/p/q/r/x/y/z` 及大写形式。`d=p` 是按 `x/y` 指定的单元删除，不是按放置 ID 删除；定位单次放置使用 `d=i,i=…,p=…`。小写保留可复用资源；大写只在资源没有其他放置引用时回收数据。缺资源、非法放置和不支持的操作返回带身份的错误，并遵守 `q=1/2`。
 - `a=q` 对实际图片内容进行校验，不存储、不替换资源；坏 PNG／zlib、无效像素长度、超限尺寸及不支持的操作不会回报成功。直接传输可跨主机；文件、临时文件及平台 shared memory 仅在发送方确实共享负责 daemon 的主机命名空间时接受，不把远端路径解析到桌面。Windows 支持本地磁盘 regular file、符合条件的临时文件及 named shared memory，Unix 保留 regular file／POSIX shm；具体安全限制与验收前提见下文。
-- daemon 持有唯一资源／放置／选帧状态，桌面只持有派生解码及绘制缓存。像素不进入持久文字回滚文件，不新增图片磁盘缓存。当前 pane 协议为 `16`（无像素回收元数据、消费者容量授权、连接视口、非活动屏实时引用、逐请求压力完成结果、不可变完整帧关系与原子选帧，以及相对放置权威关系／有符号坐标），`CONTROL_VERSION` 保持 `16`；新连接先在实际 pane endpoint 双向协商版本及有限容量，再新建、附着或观察会话；路由前缀先于协商。旧客户端在创建 shell／订阅输出前被明确拒绝，新客户端遇到旧 daemon／远端 server 报告版本并要求更新，不能静默忽略图片消息。独立版本探测不要求开启会话。
+- daemon 持有唯一资源／放置／选帧状态，桌面只持有派生解码及绘制缓存。像素不进入持久文字回滚文件，不新增图片磁盘缓存。当前 pane 协议为 `17`（无像素回收元数据、消费者容量授权、连接视口、非活动屏实时引用、逐请求压力完成结果、不可变帧关系与原子选帧、稳定 root 的新版像素，以及相对放置权威关系／有符号坐标），`CONTROL_VERSION` 保持 `16`；新连接先在实际 pane endpoint 双向协商版本及有限容量，再新建、附着或观察会话；路由前缀先于协商。旧客户端在创建 shell／订阅输出前被明确拒绝，新客户端遇到旧 daemon／远端 server 报告版本并要求更新，不能静默忽略图片消息。独立版本探测不要求开启会话。
 - 应答关联 `i/I/p` 并写回 PTY，不作为终端文本显示；`q=1` 只保留失败，`q=2` 全部静默，没有图片身份的请求不注入应答。续块仅以非零 `q` 覆盖首块的 quiet，显式 `q=0` 不解除此前的静默。删除中止未完成上传；损坏或取消的 APC 不会与后续命令拼成图片。拒收不创建放置、不移动光标，也不删除其他已接受资源。
 
 ##### 完整帧与手动选帧（#140）
@@ -223,9 +223,22 @@ resize 去重与回显等待、viewport 重新发布和关闭次序；`remote/wr
 
 每帧拥有独立且不复用的 pane-local key、源内容、元数据与准入租约；`Select { key, frame, revision }` 只改变根资源的选择，不重复传输已保留的像素。恢复在同一次文字快照／live 切换中重放全部保留帧、帧关系、最新选择及放置；替换、删除、screen 清理和旧 worker 退休沿用同一代次约束。预算回收以整份帧序列为单位，不静默删去某个中间帧；追加失败保留已接受的全部帧和选择。资源上限 1,024 包含 root 与所有追加帧；单图片最多 256 帧（含 root），并仍受下表全部字节和元数据限制。当前默认预算不构成双窗格各 60 张 1080p 帧的容量承诺。
 
-此切片不实现自动播放、帧 gap／循环、partial-frame 编辑、合成或单帧删除；这些命令明确返回不支持，不把它们伪装成成功。2026-10-31 在 Windows `10.0.26300`／RTX 5080 的 Debug 原生隔离窗口完成红／绿／蓝三帧切换：两处放置同步且白边、位置保持；发送器退出并打印 `uploads=3` 后关闭旧窗口，再附着同一 daemon（PID 不变、pane `16`／control `16`），两处蓝帧及原位置恢复，未再次启动发送器。真实 PTY／daemon／rooted consumer 的完整帧与 detached append／replacement／delete／fresh 恢复用例通过；静态 daemon 图形回归 25 项、parser／Windows media 专项 17 项通过。上述是功能与无重传恢复证据，不证明自动播放、双 pane 1080p 容量或 60 fps；macOS 原生仍待 MacBook Air M5。
+此前 #140 仅交付完整帧与手动选帧，未以该票的证据宣称自动播放、gap／循环、partial-frame 编辑、合成或单帧删除通过。2026-10-31 在 Windows `10.0.26300`／RTX 5080 的 Debug 原生隔离窗口完成红／绿／蓝三帧切换：两处放置同步且白边、位置保持；发送器退出并打印 `uploads=3` 后关闭旧窗口，再附着同一 daemon（PID 不变、当时 pane `16`／control `16`），两处蓝帧及原位置恢复，未再次启动发送器。真实 PTY／daemon／rooted consumer 的完整帧与 detached append／replacement／delete／fresh 恢复用例通过；静态 daemon 图形回归 25 项、parser／Windows media 专项 17 项通过。上述是完整帧功能与无重传恢复证据，不证明后续 partial-frame、自动播放、双 pane 1080p 容量或 60 fps；macOS 原生仍待 MacBook Air M5。
 
 原生入口：在隔离的 lyrel 原生 pane 中运行 `node scripts/kitty-frames.mjs`。输入 `1`／`2`／`3` 并回车，检查两处图片同时显示红／绿／蓝和白色边框；输入 `stats` 记录生产者 PID、上传数和字节。选定一帧后输入 `quit`，确认 `KITTY_FRAMES_STOPPED` 后不再运行发送器，关闭旧 GUI 并重新附着同一存活 daemon，检查原位置和所选像素恢复。另可在无桌面时向该自有 pane 输入 `white` 来追加／选择白帧，再重新附着；`delete` 删除整份序列。不要向用户已有 pane 注入这些命令；需分别记录构建、daemon／GUI 身份、截图及资源观察，脚本本身不证明原生验收通过。
+
+##### 部分帧追加与不可变编辑（#142）
+
+`a=f` 的 `x/y/s/v` 是上传矩形的像素位置／尺寸，不能解释成放置几何。省略 `r` 时追加新帧：`c=N` 以已保留的第 N 帧为底图；省略 `c` 时以 `Y` 指定的 32-bit RGBA（高位到低位依次为 R/G/B/A，默认透明黑）填充画布。`r=N` 编辑现有第 N 帧，现有帧本身为底图，此时忽略 `c/Y`。默认使用 straight-alpha source-over；`X=1` 逐像素替换，包括半透明／全透明像素。PNG、raw RGB／RGBA、zlib 和分块均进入同一有界生产准备路径。
+
+矩形必须完全位于 root 尺寸内；不存在的帧／底图返回 `ENOENT`，越界和无效 `X` 返回 `EINVAL`，工作空间／保留／消费者配额不足返回 `ENOSPC`，并沿用 `i/I/p` 关联与 quiet 规则。失败不改变已接受像素、帧数、选择或放置。每次成功编辑产生新的不可变像素 key，root 身份和帧编号保持；所有放置和 fresh consumer 使用最新版本，不以同 key 覆盖绕过旧 worker／GPU owner 的退休。daemon 在 pane 锁内只捕获底图 packet 的共享所有权，在锁外按 PTY 顺序解码／合成，再检查代次并原子提交；旧／新内容与 decoder、RGBA、packet 副本的实际共存工作集均先准入，不能为编辑提前返还旧 owner 信用或逐帧淘汰既有序列。
+
+中央自动化入口：`cargo test --locked -p lyrel-core retention_daemon_complete_frames_refusal_quiet_and_replacement_are_atomic -- --test-threads=1`、`cargo test --locked -p lyrel-core prepared_root_edit_cannot_revive_deleted_replaced_or_newer_pixels -- --test-threads=1`、`cargo test --locked -p lyrel --bin lyrel-app graphics_consumer_partial_frames_edit_pixels_and_detached_versions -- --test-threads=1`。用例覆盖真实 raw／PNG／zlib、底图与背景、未修改区域、半透明 blend／overwrite、非破坏性拒绝、所有放置同步与 detached root 编辑后的全新窗口恢复；私有测试仅确定性控制 stale prepare／delete／replacement 边界。
+
+Windows 原生入口仍为 `node scripts/kitty-frames.mjs`：先输入 `partial`，两处绿色第 2 帧底图中应同时出现白色 L 边和红色半透明矩形，外围绿色／白框不变；再输入 `edit`，第 4 帧右下角应出现透明蓝矩形且其余已合成内容不变；输入 `root-edit`，第 1 帧变成红底上的黄色矩形并保持两处位置。输入 `stats` 记录后 `quit`，确认发送器停止，再关闭自有 GUI 并附着同一活 daemon，不重启发送器，检查最终选择及编辑像素恢复。先 `partial` 再 `edit`，脚本不会假造尚不存在的第 4 帧。后续播放时编辑、`a=c` 和单帧删除属于后续 mutation 验收。
+
+**证据边界：**本子工单未运行 build、test、lint、formatter 或原生 GUI；以上新增用例和 Windows 操作仍待中央实际执行，不能沿用 #140 的完整帧通过记录宣称部分帧／编辑已通过。macOS、实际 SSH 及完整容量／呈现性能另行验收。
+
 
 
 当前默认值是保守的实现参数，单位为 MiB（`1 MiB = 1,048,576 bytes`），不是已经测得的完整系统峰值：
