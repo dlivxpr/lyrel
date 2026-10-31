@@ -609,6 +609,8 @@ pub enum Action {
     Frame,
     /// `a=a` — stopped/manual frame selection.
     Animation,
+    /// `a=c` — compose retained frame rectangles.
+    Compose,
     /// Any action we don't specifically handle.
     Other,
 }
@@ -762,6 +764,7 @@ impl Control {
                         b"d" => Action::Delete,
                         b"f" => Action::Frame,
                         b"a" => Action::Animation,
+                        b"c" => Action::Compose,
                         _ => Action::Other,
                     }
                 }
@@ -1403,7 +1406,7 @@ impl GraphicsParser {
             Action::Transmit | Action::TransmitAndDisplay | Action::Query | Action::Frame => {
                 self.accept_chunk(control, data, locality)
             }
-            Action::Display | Action::Delete | Action::Animation => {
+            Action::Display | Action::Delete | Action::Animation | Action::Compose => {
                 if !data.is_empty() || control.more {
                     response(&control, control.id, "EINVAL:Unexpected placement payload")
                         .map(Event::Reply)

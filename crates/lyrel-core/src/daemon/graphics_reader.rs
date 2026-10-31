@@ -80,7 +80,7 @@ fn reply(writer: &Arc<Mutex<Box<dyn Write + Send>>>, control: &Control, status: 
 fn command(
     state: &Arc<Mutex<PaneState>>,
     control: Control,
-    image: Option<Image>,
+    mut image: Option<Image>,
     source_work: Option<crate::core::graphics_state::retention::Work>,
     gate: &OutputGate,
     writer: &Arc<Mutex<Box<dyn Write + Send>>>,
@@ -88,12 +88,15 @@ fn command(
     if !control.invalid && !control.unsupported && control.action == Action::Display {
         return display(state, control, gate, writer);
     }
+    if !control.invalid && !control.unsupported && control.action == Action::Compose {
+        image = Some(Image { width: 0, height: 0, data: Vec::new(), format: crate::core::kitty_graphics::WireFormat::Rgba, compressed: false });
+    }
     if control.invalid
         || control.unsupported
         || image.is_none()
         || !matches!(
             control.action,
-            Action::Transmit | Action::TransmitAndDisplay | Action::Query | Action::Frame
+            Action::Transmit | Action::TransmitAndDisplay | Action::Query | Action::Frame | Action::Compose
         )
     {
         let mut state = state.lock().unwrap();
@@ -106,7 +109,7 @@ fn command(
     let image = image.unwrap();
     let resource = control.action != Action::Query;
     let mut admissions = Vec::with_capacity(2);
-    let (key, generation, broker, frame) = {
+    let (owner, key, generation, broker, frame) = {
         let mut state = state.lock().unwrap();
         if !state.alive {
             return Vec::new();
@@ -124,12 +127,15 @@ fn command(
         } else {
             0
         };
-        (key, graphics.generation(), broker, frame)
+        (graphics.work_owner(), key, graphics.generation(), broker, frame)
     };
-    let mut image = match GraphicsState::prepare_image_budgeted(
-        image, key, &control, frame,
-        source_work.expect("parsed image transfers its source reservation"),
-    ) {
+    let prepared = match source_work {
+        Some(work) => GraphicsState::prepare_image_budgeted(image, key, &control, frame, work),
+        // a=c has no incoming source; its retained packet clones keep their
+        // canonical leases, and composition reserves new work for this pane.
+        None => GraphicsState::prepare_image(image, owner, key, &control, frame),
+    };
+    let mut image = match prepared {
         Ok(image) => image,
         Err(status) => {
             reply(writer, &control, status);

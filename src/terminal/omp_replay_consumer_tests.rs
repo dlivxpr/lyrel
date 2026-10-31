@@ -79,7 +79,7 @@ impl OmpReplayFixture {
             )
         });
         let mut result = format!("owned_root={} {terminal}", self.root.path().display());
-        for name in ["stages.jsonl", "version.json", "config-path.json", "config-terminal.showImages.json", "config-tui.renderSvg.json", "config-tui.maxInlineImages.json", "models.json", "running.json", "requests.json", "audit.json"] {
+        for name in ["fixture.json", "stages.jsonl", "version.json", "config-path.json", "config-terminal.showImages.json", "config-tui.renderSvg.json", "config-tui.maxInlineImages.json", "models.json", "running.json", "requests.json", "audit.json"] {
             if let Ok(text) = std::fs::read_to_string(self.root.path().join("owned").join(name)) {
                 result.push_str(&format!("\n{name}: {text}"));
             }
@@ -214,16 +214,14 @@ fn omp_replay_scan(
     found
 }
 
-#[gpui_kit::test]
-#[ignore = "requires LYREL_TEST_OMP, Node and a real released omp; never calls a model"]
-fn graphics_consumer_released_omp_native_resume_pictures_and_budget(cx: &mut TestAppContext) {
+fn omp_replay_assert_resume(cx: &mut TestAppContext, cases: &[&str]) {
     crate::core::config::pin_test_config_dir();
     cx.executor().allow_parking();
     cx.update(|cx| {
         gpui_kit::component::init(cx);
         cx.set_global(Config::default());
     });
-    for case in ["pictures", "budget"] {
+    for &case in cases {
         let fixture = OmpReplayFixture::prepare(case, "placeholders");
         let daemon = GraphicsDaemonProcess::start();
         let pane = fixture.spawn(&daemon);
@@ -242,6 +240,15 @@ fn graphics_consumer_released_omp_native_resume_pictures_and_budget(cx: &mut Tes
             fixture.assert_running(&view, cx, &format!("{case} decoded identities: {found:?}"), deadline);
             std::thread::sleep(std::time::Duration::from_millis(20));
         };
+        assert_eq!(
+            found
+                .values()
+                .map(|identity| identity.0)
+                .collect::<std::collections::BTreeSet<_>>()
+                .len(),
+            expected,
+            "each expected native picture must own a distinct image id: {found:?}"
+        );
         assert!(
             found.contains_key([192, 128, 240, 255].as_slice()),
             "native tool-result pixels"
@@ -290,6 +297,18 @@ fn graphics_consumer_released_omp_native_resume_pictures_and_budget(cx: &mut Tes
         fixture.finish(&view, cx);
         graphics_recovery_destroy(view, window, cx);
     }
+}
+
+#[gpui_kit::test]
+#[ignore = "requires LYREL_TEST_OMP, Node and a real released omp; never calls a model"]
+fn graphics_consumer_released_omp_native_resume_pictures(cx: &mut TestAppContext) {
+    omp_replay_assert_resume(cx, &["pictures"]);
+}
+
+#[gpui_kit::test]
+#[ignore = "requires LYREL_TEST_OMP, Node and a real released omp; never calls a model"]
+fn graphics_consumer_released_omp_native_resume_budget(cx: &mut TestAppContext) {
+    omp_replay_assert_resume(cx, &["budget"]);
 }
 
 #[gpui_kit::test]
