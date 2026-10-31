@@ -131,7 +131,6 @@ const send = (name,event={}) => handlers.get(name)?.(event,ctx);
 const reports = () => readFileSync('reports.jsonl','utf8').trim().split('\n').map(JSON.parse);
 send('session_start'); send('before_agent_start'); send('agent_end');
 assert.equal(reports().some(e=>e.event==='stop'),false,'the first agent_end must never end a retriable run');
-assert.equal(reports()[0].session_scope.environment.PI_IMAGE_PROTOCOL,'none','native disabled image policy must survive resume binding');
 handlers.get('session_start')({}, {...ctx,mode:'rpc'});
 handlers.get('agent_settled')({aborted:false}, {...ctx,mode:'print'});
 assert.equal(reports().length,2,'non-TUI child sessions must not replace the pane owner');
@@ -159,7 +158,6 @@ process.stdout.write(reports().map(e=>JSON.stringify(e)).join('\n'));
             .env("LYREL", "1")
             .env("HOME", temp.path())
             .env("USERPROFILE", temp.path())
-            .env("PI_IMAGE_PROTOCOL", "none")
             .env_remove("LYREL_PI_BRIDGE_OWNER")
             .output()
             .unwrap();

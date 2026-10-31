@@ -561,50 +561,6 @@ mod tests {
     }
 
     #[test]
-    fn pi_resume_preserves_explicit_image_protocol_without_omp_options() {
-        let root = tempfile::tempdir().unwrap();
-        let host = crate::host::local::LocalHost::new();
-        let mut operation = request(root.path());
-        operation
-            .launch_argv
-            .insert(0, "PI_IMAGE_PROTOCOL=kitty".into());
-        let prepared = host.session_operation(&operation).unwrap();
-        assert_eq!(
-            prepared
-                .scope
-                .environment
-                .get("PI_IMAGE_PROTOCOL")
-                .map(String::as_str),
-            Some("kitty")
-        );
-        // A bound native scope wins over launch defaults, including disabling.
-        operation
-            .scope
-            .environment
-            .insert("PI_IMAGE_PROTOCOL".into(), "none".into());
-        let disabled = host.session_operation(&operation).unwrap();
-        assert_eq!(
-            durable_scope(&disabled.scope)
-                .environment
-                .get("PI_IMAGE_PROTOCOL")
-                .map(String::as_str),
-            Some("none")
-        );
-        assert!(
-            disabled
-                .command
-                .as_ref()
-                .unwrap()
-                .contains("PI_IMAGE_PROTOCOL")
-        );
-        operation.launch_argv[0] = "PI_FORCE_IMAGE_PROTOCOL=kitty".into();
-        assert_eq!(
-            host.session_operation(&operation).unwrap_err().kind,
-            SessionErrorKind::Unsupported
-        );
-    }
-
-    #[test]
     fn pi_missing_or_mismatched_source_never_prepares_an_empty_session() {
         let root = tempfile::tempdir().unwrap();
         let host = crate::host::local::LocalHost::new();

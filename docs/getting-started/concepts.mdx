@@ -223,7 +223,7 @@ resize 去重与回显等待、viewport 重新发布和关闭次序；`remote/wr
 
 每帧拥有独立且不复用的 pane-local key、源内容、元数据与准入租约；`Select { key, frame, revision }` 只改变根资源的选择，不重复传输已保留的像素。恢复在同一次文字快照／live 切换中重放全部保留帧、帧关系、最新选择及放置；替换、删除、screen 清理和旧 worker 退休沿用同一代次约束。预算回收以整份帧序列为单位，不静默删去某个中间帧；追加失败保留已接受的全部帧和选择。资源上限 1,024 包含 root 与所有追加帧；单图片最多 256 帧（含 root），并仍受下表全部字节和元数据限制。当前默认预算不构成双窗格各 60 张 1080p 帧的容量承诺。
 
-此切片不实现自动播放、帧 gap／循环、partial-frame 编辑、合成或单帧删除；这些命令明确返回不支持，不把它们伪装成成功。原生 Windows／macOS 呈现及 fresh-client 取证尚未执行，新增自动化用例也须由集成验证统一运行，不能把现有静态图片的历史证据算作完整帧验收。
+此切片不实现自动播放、帧 gap／循环、partial-frame 编辑、合成或单帧删除；这些命令明确返回不支持，不把它们伪装成成功。2026-10-31 在 Windows `10.0.26300`／RTX 5080 的 Debug 原生隔离窗口完成红／绿／蓝三帧切换：两处放置同步且白边、位置保持；发送器退出并打印 `uploads=3` 后关闭旧窗口，再附着同一 daemon（PID 不变、pane `16`／control `16`），两处蓝帧及原位置恢复，未再次启动发送器。真实 PTY／daemon／rooted consumer 的完整帧与 detached append／replacement／delete／fresh 恢复用例通过；静态 daemon 图形回归 25 项、parser／Windows media 专项 17 项通过。上述是功能与无重传恢复证据，不证明自动播放、双 pane 1080p 容量或 60 fps；macOS 原生仍待 MacBook Air M5。
 
 原生入口：在隔离的 lyrel 原生 pane 中运行 `node scripts/kitty-frames.mjs`。输入 `1`／`2`／`3` 并回车，检查两处图片同时显示红／绿／蓝和白色边框；输入 `stats` 记录生产者 PID、上传数和字节。选定一帧后输入 `quit`，确认 `KITTY_FRAMES_STOPPED` 后不再运行发送器，关闭旧 GUI 并重新附着同一存活 daemon，检查原位置和所选像素恢复。另可在无桌面时向该自有 pane 输入 `white` 来追加／选择白帧，再重新附着；`delete` 删除整份序列。不要向用户已有 pane 注入这些命令；需分别记录构建、daemon／GUI 身份、截图及资源观察，脚本本身不证明原生验收通过。
 
