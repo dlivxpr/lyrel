@@ -23,11 +23,19 @@ fn graphics_layout_wait_image(view: &Entity<TerminalView>, cx: &mut TestAppConte
     graphics_recovery_wait_with(
         cx,
         std::time::Duration::from_secs(30),
-        |cx| view.read_with(cx, |view, _| {
-            graphics_visible_images(view).iter().any(|image| image.placement.image_id == id)
-        }),
-        |cx| format!("production image i={id} did not become visible; {}",
-            view.read_with(cx, |view, _| view.terminal.images().recovery_diagnostics())),
+        |cx| {
+            view.read_with(cx, |view, _| {
+                graphics_visible_images(view)
+                    .iter()
+                    .any(|image| image.placement.image_id == id)
+            })
+        },
+        |cx| {
+            format!(
+                "production image i={id} did not become visible; {}",
+                view.read_with(cx, |view, _| view.terminal.images().recovery_diagnostics())
+            )
+        },
     );
 }
 
@@ -225,6 +233,70 @@ fn graphics_consumer_real_daemon_resize_keeps_clipped_texture_slice(cx: &mut Tes
     graphics_send_fixture(&view, cx, 6, b"\x1b[0m");
     assert!(view.read_with(cx, |view, _| graphics_visible_images(view).is_empty()));
     graphics_assert_production_paint(window, &view, cx);
+    daemon.panes().kill(pane).unwrap();
+}
+
+#[gpui_kit::test]
+fn graphics_consumer_dpi_changes_and_z_order_keep_actual_pixels_and_paint_geometry(
+    cx: &mut TestAppContext,
+) {
+    let (daemon, pane, view, window) = graphics_layout_harness(cx);
+    graphics_send_fixture(&view, cx, 1,
+        b"\x1b[6;5H\x1b_Ga=T,i=71,p=1,z=-1,c=2,r=2,C=1,f=32,s=1,v=1,q=2;/wAA/w==\x1b\\\x1b[6;5H\x1b_Ga=T,i=72,p=2,z=1,c=2,r=2,C=1,f=32,s=1,v=1,q=2;AP8A/w==\x1b\\");
+    graphics_layout_wait_image(&view, cx, 72);
+    for scale in [1., 1.25, 1.5, 2.] {
+        cx.simulate_window_scale_factor_change(window, scale);
+        graphics_assert_production_paint(window, &view, cx);
+        let actual_scale = window
+            .update(cx, |_, window, _| window.scale_factor())
+            .unwrap();
+        view.read_with(cx, |view, _| {
+            let images = graphics_visible_images(view);
+            assert_eq!(images.len(), 2);
+            assert_eq!(images[0].placement.image_id, 71);
+            assert_eq!(
+                images[1].placement.image_id, 72,
+                "positive z must paint green above red at scale {scale}"
+            );
+            assert_eq!(
+                images[0].data.as_ref().unwrap().as_bytes(0).unwrap(),
+                [0, 0, 255, 255]
+            );
+            assert_eq!(
+                images[1].data.as_ref().unwrap().as_bytes(0).unwrap(),
+                [0, 255, 0, 255]
+            );
+            assert!(
+                images
+                    .iter()
+                    .all(|image| image.painted.load(std::sync::atomic::Ordering::Acquire))
+            );
+            assert_eq!(actual_scale, scale);
+        });
+    }
+    graphics_send_fixture(&view, cx, 2,
+        b"\x1b[6;5H\x1b_Ga=p,i=71,p=1,z=2,c=2,r=2,C=1,q=2\x1b\\\x1b[6;5H\x1b_Ga=p,i=72,p=2,z=-2,c=2,r=2,C=1,q=2\x1b\\");
+    graphics_assert_production_paint(window, &view, cx);
+    view.read_with(cx, |view, _| {
+        let images = graphics_visible_images(view);
+        assert_eq!(images[0].placement.image_id, 72);
+        assert_eq!(
+            images[1].placement.image_id, 71,
+            "z=2 must move red above z=-2"
+        );
+        assert!(
+            images
+                .iter()
+                .all(|image| image.painted.load(std::sync::atomic::Ordering::Acquire))
+        );
+    });
+    graphics_send_fixture(
+        &view,
+        cx,
+        3,
+        b"\x1b_Ga=d,d=I,i=71,q=2\x1b\\\x1b_Ga=d,d=I,i=72,q=2\x1b\\",
+    );
+    assert!(view.read_with(cx, |view, _| graphics_visible_images(view).is_empty()));
     daemon.panes().kill(pane).unwrap();
 }
 

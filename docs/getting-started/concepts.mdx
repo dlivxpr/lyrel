@@ -431,11 +431,11 @@ node scripts/kitty-capacity-analysis.mjs `
 
 用 `Get-Process -Id` 分别采样 producer、daemon 与 desktop 的 `CPU/WorkingSet64/PrivateMemorySize64`，CPU 百分比由采样差值计算；GPU 计数器先发现本地化名称，再按自有 PID 过滤，并与 Task Manager／WPR 的整卡观察交叉核对，不能将设备总量全部归因 lyrel。采集后只清理本次创建的窗口、进程和临时证据，不删除用户数据。
 
-**2026-10-31 当前 integration 工作树的实测：**Windows `10.0.26300`、Core Ultra 7 265KF、RTX 5080（驱动 `32.0.16.2101`）、2560×1440／240 Hz、Debug 原生窗口中，两边各 60 张不同 1920×1080 raw RGBA 帧均加载成功。ffmpeg 9.0.2 的 240 Hz WGC 产生无法映射的条码，未用于通过结论；改用 120 Hz 采集同一 HWND 30 秒，全部样本均可映射到 0–59。左／右 pane 分别观察到 1,794／1,791 次图片变化，即 `59.83`／`59.73 changes/s`，p50 均 `16.67 ms`、p95 均 `25 ms`、最大 `41.67 ms`；重复 capture 样本为 134／137，源 ID 跳号下界为 6／9。两边均覆盖全部 60 个 ID，不能把剩余跳号全部归因 renderer 或 capture。
+**2026-11-01 提交 `13e6d59` 的 Debug 原生实测：**Windows `10.0.26300`、Core Ultra 7 265KF、RTX 5080（驱动 `32.0.16.2101`）、2560×1440／240 Hz，两边各 60 张不同 1920×1080 raw RGBA 帧均加载成功。ffmpeg 9.0.2 以 120 Hz WGC 采集同一 HWND 30 秒，全部样本均可映射到 0–59；左／右 pane 分别有 1,773／1,770 次图片变化，即 `59.12`／`59.02 changes/s`，p50 均 `16.67 ms`，p95 为 `25`／`33.33 ms`，最大 `91.67 ms`。重复 capture 样本为 135／138，源 ID 跳号下界为 26／29，不能把跳号全部归因 renderer 或 capture；两边均覆盖全部 60 个 ID。早期 240 Hz WGC 的无效条码未用于通过结论。
 
-同一工作负载执行了 ordinary-input token、edit、compose、完整 60 帧 replacement 和 delete；producer 退出后普通 shell 实际输出 `NATIVE_INPUT_OK`。32 次分进程采样中，两个 producer 的最大 Working Set 分别约 `62.8`／`62.3 MB`；daemon 最大 Working Set／Private Bytes 为 `1,042.5`／`1,021.8 MB`，desktop 为 `1,189.1`／`2,178.0 MB`。delete 后 daemon 降至 `45.4`／`22.8 MB`，desktop 降至 `200.3`／`429.6 MB`。整卡 `nvidia-smi` 采样为 3,166–3,522 MiB，只作设备背景观察，不归因给 lyrel。
+经用户明确授权，仅本次以管理员权限运行 PresentMon 2.6.0。同一 30 秒窗口记录 1,941 个 present，6 个未显示（0.309%）；`DisplayedTime` p50 `16.658 ms`、p95 `20.841 ms`、最大 `22.101 ms`，`FrameTime` p50 `16.142 ms`、p95 `18.484 ms`、最大 `21.256 ms`，呈现模式为 `Composed: Flip`／DXGI。WGC 图片身份与 PresentMon 时序共同支持约 60 fps，不使用 callback 或 Select 计数替代。
 
-PresentMon 2.6.0 已运行但 ETW 返回 `access denied`，因此没有 PresentMon 显示时序或 input-to-photon 数据；ordinary-input 的完成也不冒充该延迟指标。完整默认容量、小预算所有权、完整 120 帧生产 daemon／rooted consumer 与上述原生 WGC 已分别通过；**约 60 fps 的原生呈现认证仍未完成**，不能仅凭 WGC 的图片变化率判为通过。真实 SSH 的全尺寸 wire／fresh 结果见[远程图片文档](/remote/ssh#标准原生桌面与双-pane-全尺寸入口)。macOS（#152）延期，未验证。
+32 次分进程采样中，两个 producer 的最大 Working Set 为 `60.4`／`60.7 MB`；daemon 最大 Working Set／Private Bytes 为 `1,041.6`／`1,021.8 MB`，desktop 为 `1,185.1`／`2,173.4 MB`。另一轮完整 edit／compose／replacement／delete 后，daemon 降至 `45.4`／`22.8 MB`，desktop 降至 `200.3`／`429.6 MB`。整卡 GPU 采样只作背景，不归因给 lyrel。`AllInputToPhotonLatency`、`ClickToPhotonLatency` 与 `MsBetweenDisplayChange` 全部样本为 `NA`，因此不报告这些指标；ordinary-input token、producer 退出后的普通 shell 命令，以及正式 pi 与 24 张 1080p 压力图片同屏时的输入和保留画面均实际执行。1×／1.25×／1.5×／2× 的生产 consumer DPI／z-order 回归亦通过。真实 SSH 的全尺寸 wire／fresh 结果见[远程图片文档](/remote/ssh#标准原生桌面与双-pane-全尺寸入口)。macOS（#152）延期，未验证。
 
 ###### 默认所有权上限
 
@@ -706,7 +706,7 @@ consumer 用例复用真实 PTY → 独立真实 daemon → 生产 pane connecti
 | Windows／WSL 自动化 | Windows workspace、updater、格式与 Host 边界检查通过；WSL headless workspace `--all-features` 通过，bridge 使用隔离 Node `22.23.4` | 本轮审查修复后的中央统一验证 |
 | 正式 agent | `omp/18.14.1` 三项、pi `1.4.0` 两项、OpenCode `2.2.0` 两项真实 PTY／生产消费者通过；Windows 原生结果按上文各自版本记录 | `omp/18.14.1` 原生窗口、三 agent 的真实 SSH 组合；Kimi／Hermes 的图片专项集成未执行，不从现有识别／会话支持推定通过 |
 | native SSH | 四项基础 transport、四项 rooted consumer 和标准 GUI relative／mutations／双 pane 全尺寸 capacity 通过；随后第二层 nested 实连单独通过 | 基础命令含 `--skip nested_ssh`，nested 不计入四项基础计数；正式 agent 的跨 SSH 组合未执行 |
-| Windows 原生集成 | 100% 缩放的图片、卡片几何、字体变化、透明合成及上文独立双 pane WGC 记录 | PresentMon 显示时序与 input-to-photon、125%／150%／200% DPI、完整 z-order 矩阵、agent 与高负载图形 pane 并发资源竞争 |
+| Windows 原生集成 | 双 pane 120 帧的 120 Hz WGC＋管理员 PresentMon 交叉记录约 60 fps；1×／1.25×／1.5×／2× 生产 consumer DPI／z-order 通过；正式 pi 与 24 张 1080p 压力图片同屏，保留画面正确 | input-to-photon／click-to-photon／MsBetweenDisplayChange 全部为 `NA`，不报告；`omp/18.14.1` 原生窗口、正式 agent 的跨 SSH 与 macOS 未执行 |
 | macOS | 无本轮通过声明 | #152 延期，不以 Windows／WSL 或 headless 结果代替 |
 
 后续执行须记录精确提交、实际命令及各自 executed／skipped 项；默认套件通过不自动覆盖上述 opt-in 和原生门槛。
