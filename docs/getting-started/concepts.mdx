@@ -234,9 +234,9 @@ resize 去重与回显等待、viewport 重新发布和关闭次序；`remote/wr
 
 播放时间线只在存活 daemon 中推进。每个连接报告当前 `screen/epoch` 的真实 viewport；direct、relative 和实际 Unicode placeholder 图共同决定任一资源是否仍有可见部分。一个可见消费者足以继续播放；全部隐藏、滚出 viewport、切换到非活动 screen、断开或关闭全部窗口时暂停，保留选帧、剩余间隔和循环进度，不计隐藏墙钟时间。上传、修改间隔、选帧和播放控制在暂停时仍生效。过期 epoch 或已退休连接不能恢复可见性。每次播放切换只传输 `Select` 和固定大小 `Playback` 元数据，不重发帧像素；元数据本身不触发整窗重绘。
 
-中央自动化入口：`cargo test --locked -p lyrel-core controlled_`，以及 `cargo test --locked -p lyrel --bin lyrel-app graphics_consumer_playback_loading_append_two_consumers_pause_and_fresh_restore -- --test-threads=1`。前者私有受控时间覆盖剩余间隔、有限循环、gapless、loading 尾等待、隐藏时追加／显式选帧、失效 viewport 和 reader；后者使用真实 PTY／daemon／production RemoteTerminal／rooted TerminalView，检查解码颜色、共享像素、冲突可见性的两个消费者及 fresh-store/window 恢复。新增用例尚未运行，不能视为通过证据。
+中央自动化入口：`cargo test --locked -p lyrel-core controlled_`，以及 `cargo test --locked -p lyrel --bin lyrel-app graphics_consumer_playback_loading_append_two_consumers_pause_and_fresh_restore -- --test-threads=1`。前者私有受控时间覆盖剩余间隔、有限循环、gapless、loading 尾等待、隐藏时追加／显式选帧、失效 viewport 和 reader；后者使用真实 PTY／daemon／production RemoteTerminal／rooted TerminalView，检查解码颜色、共享像素、冲突可见性的两个消费者及 fresh-store/window 恢复。Windows 已实际通过五项受控时间回归和一项双消费者回归。
 
-Windows 原生入口：在本次构建的隔离原生 pane 运行 `node scripts/kitty-playback.mjs`。默认两处红／绿／蓝白边图片以 500 ms 间隔同步；`stop` 停止，`play` 恢复无限循环，`finite` 重置后播放两次并停在尾帧；`loading` 从 root 顺序播放到尾并等待，`append` 追加白帧并解除等待，`gapless` 使绿帧不再自动显示。`1/2/3` 停止并手动选帧。记录 `stats` 的上传数／字节；隐藏、滚出、切备用屏及关闭全部 GUI 后恢复，检查颜色／剩余节拍不因隐藏时间跳过，且上传数不变。可用同一 pane 的第二 observer 检查一方隐藏不暂停另一方。`quit` 结束发送器；保留同一 daemon 重开 fresh GUI，检查序列和原位置恢复。脚本不是验收结果；本票尚未执行构建、自动化或 Windows/macOS 原生步骤，60 fps 与双 pane 容量另有集成门槛。
+Windows 原生入口：在本次构建的隔离原生 pane 运行 `node scripts/kitty-playback.mjs`。默认两处红／绿／蓝白边图片以 500 ms 间隔同步；`stop` 停止，`play` 恢复无限循环，`finite` 重置后播放两次并停在尾帧；`loading` 从 root 顺序播放到尾并等待，`append` 追加白帧并解除等待，`gapless` 使绿帧不再自动显示。`1/2/3` 停止并手动选帧。2026-10-31 Windows `10.0.26300`／RTX 5080 Debug 原生窗口已观察两处同步切色、loading 蓝尾等待、append 后白帧、隐藏 tab 后返回及 sender 退出后的 fresh-window 继续播放。发送器 `uploads=4`，同一 daemon PID `22792`、pane `17`／control `16`；fresh 后未重启发送器。剩余间隔与循环进度由上述受控回归验证，静态截图不证明节拍或 60 fps。双 pane 容量、原生高帧率、真实 SSH 与 macOS 仍由后续票验收。
 
 ##### 部分帧追加与不可变编辑（#142）
 
@@ -248,9 +248,9 @@ Windows 原生入口：在本次构建的隔离原生 pane 运行 `node scripts/
 
 Windows 原生入口仍为 `node scripts/kitty-frames.mjs`：先输入 `partial`，两处绿色第 2 帧底图中应同时出现白色 L 边和红色半透明矩形，外围绿色／白框不变；再输入 `edit`，第 4 帧右下角应出现透明蓝矩形且其余已合成内容不变；输入 `root-edit`，第 1 帧变成红底上的黄色矩形并保持两处位置。输入 `stats` 记录后 `quit`，确认发送器停止，再关闭自有 GUI 并附着同一活 daemon，不重启发送器，检查最终选择及编辑像素恢复。先 `partial` 再 `edit`，脚本不会假造尚不存在的第 4 帧。后续播放时编辑、`a=c` 和单帧删除属于后续 mutation 验收。
 
-**证据边界：**本子工单未运行 build、test、lint、formatter 或原生 GUI；以上新增用例和 Windows 操作仍待中央实际执行，不能沿用 #140 的完整帧通过记录宣称部分帧／编辑已通过。macOS、实际 SSH 及完整容量／呈现性能另行验收。
+**证据边界：**Windows 已通过上述三项核心／真实消费者回归；修正拒收观测为真实 PTY 输出，避免完成标记覆盖网格回复造成误判，保留 exact error／quiet／像素不变检查。2026-10-31 的同一 Windows Debug 原生实例实际执行 `partial` → `edit` → `root-edit`：两处放置同步显示绿色底图上的混合红矩形、右下半透明蓝覆盖，以及红 root 上黄色矩形；外围与位置保持。发送器退出后销毁旧窗口、重开同一 daemon，最新 root 编辑像素无重传恢复。macOS、实际 SSH 及完整容量／呈现性能另行验收。
 
-集成 #141／#142 后，`controlled_` 还覆盖当前 root／child 帧编辑后沿用剩余间隔与原 gap、显式 `z` 重设间隔，以及后续自动选帧使用最新不可变像素 key。两条路径共用 pane `17`；编辑成功先同步选中像素版本，再提交播放元数据，不以 timer tick 改写准入 priority 或准备期 pins。该集成回归尚未执行，不作为新能力通过证据。
+集成 #141／#142 后，已通过的 `controlled_` 还覆盖当前 root／child 帧编辑后沿用剩余间隔与原 gap、显式 `z` 重设间隔，以及后续自动选帧使用最新不可变像素 key。两条路径共用 pane `17`；编辑成功先同步选中像素版本，再提交播放元数据，不以 timer tick 改写准入 priority 或准备期 pins。
 
 
 
