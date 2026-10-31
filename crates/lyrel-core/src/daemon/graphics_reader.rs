@@ -80,19 +80,22 @@ fn reply(writer: &Arc<Mutex<Box<dyn Write + Send>>>, control: &Control, status: 
 fn command(
     state: &Arc<Mutex<PaneState>>,
     control: Control,
-    image: Option<Image>,
+    mut image: Option<Image>,
     gate: &OutputGate,
     writer: &Arc<Mutex<Box<dyn Write + Send>>>,
 ) -> Vec<u8> {
     if !control.invalid && !control.unsupported && control.action == Action::Display {
         return display(state, control, gate, writer);
     }
+    if !control.invalid && !control.unsupported && control.action == Action::Compose {
+        image = Some(Image { width: 0, height: 0, data: Vec::new(), format: crate::core::kitty_graphics::WireFormat::Rgba, compressed: false });
+    }
     if control.invalid
         || control.unsupported
         || image.is_none()
         || !matches!(
             control.action,
-            Action::Transmit | Action::TransmitAndDisplay | Action::Query | Action::Frame
+            Action::Transmit | Action::TransmitAndDisplay | Action::Query | Action::Frame | Action::Compose
         )
     {
         let mut state = state.lock().unwrap();

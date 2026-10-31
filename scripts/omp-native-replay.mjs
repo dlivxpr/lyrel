@@ -90,11 +90,17 @@ if (action === 'prepare') {
   append({role:'user',content:[{type:'text',text:'Synthetic saved input; do not submit a new prompt.'}],timestamp:now});
   const identities = [];
   const count = scenario === 'budget' ? 10 : 1;
+  // Released 18.14.0/18.14.1 keys assistant images by content slot (`native:${i}`),
+  // not by message. Ten separate slot-1 messages alias one transmit-once image.
+  // Put all ten assistant pictures in one native message to exercise 12 distinct
+  // images against the real eight-image budget, without patching the renderer.
+  const assistantContent = [];
   for (let index = 0; index < count; index++) {
     const image = png(palette[index]);
     identities.push({name:`assistant-${index + 1}`,rgb:palette[index],width:64,height:32,bgraSha256:image.bgraHash});
-    append(assistant([{type:'text',text:`LYREL_ASSISTANT_${index + 1}`},{type:'image',mimeType:'image/png',data:image.bytes.toString('base64')} ]));
+    assistantContent.push({type:'text',text:`LYREL_ASSISTANT_${index + 1}`},{type:'image',mimeType:'image/png',data:image.bytes.toString('base64')});
   }
+  append(assistant(assistantContent));
   const toolImage = png([240,128,192]);
   identities.push({name:'tool-result',rgb:[240,128,192],width:64,height:32,bgraSha256:toolImage.bgraHash});
   append(assistant([{type:'toolCall',id:'lyrel-picture-read',name:'read',arguments:{path:'synthetic-picture.png'}}], 'toolUse'));
