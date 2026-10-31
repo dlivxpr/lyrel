@@ -1656,6 +1656,13 @@ fn retention_daemon_complete_frames_refusal_quiet_and_replacement_are_atomic() {
     assert_eq!(consumer.exchange(b"\x1b_Ga=a,i=91,s=1,c=2\x1b\\", 1), [b"\x1b_Gi=91;OK\x1b\\".to_vec()]);
     assert!(consumer.updates.iter().any(|update| matches!(update,
         GraphicsUpdate::Select { key, frame: selected, .. } if *key == root && *selected == frame)));
+    let reply = consumer.exchange(b"\x1b_Ga=c,i=91,r=1,c=2,C=1,q=1\x1b\\", 1);
+    assert!(reply[0].starts_with(b"\x1b_Gi=91;ENOSPC:"));
+    assert!(!consumer.updates.iter().any(|update| matches!(update,
+        GraphicsUpdate::Resource { .. } | GraphicsUpdate::Remove { .. } | GraphicsUpdate::Evicted { .. } | GraphicsUpdate::Select { .. })));
+    assert_eq!(consumer.exchange(b"\x1b_Ga=a,i=91,c=2\x1b\\", 1), [b"\x1b_Gi=91;OK\x1b\\".to_vec()]);
+    assert!(consumer.updates.iter().any(|update| matches!(update,
+        GraphicsUpdate::Select { key, frame: selected, .. } if *key == root && *selected == frame)));
     for (command, error) in [
         ("a=a,i=91,c=3", "ENOENT"),
         ("a=f,i=91,s=1,v=1;!", "EINVAL"),
