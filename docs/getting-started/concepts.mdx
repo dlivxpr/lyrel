@@ -439,7 +439,7 @@ cargo test --locked -p lyrel-core pi_first_run_waits_for_settlement_and_resolves
 cargo test --locked --bin lyrel-app graphics_consumer_pi_native_ -- --ignored --nocapture --test-threads=1
 ```
 
-最后一条通过真实 PTY → 新建隔离 daemon → production `RemoteTerminal` → rooted `TerminalView`，比较两张图不同的 BGRA 地标、放置与真实 production paint claim，覆盖原生历史 top／bottom、`/new` 删除、再次原生启动重放，以及三种显式关闭和设置覆盖环境。GPUI 测试窗口不是最终 GPU 像素证据。
+最后一条已在 Windows 通过真实 PTY → 新建隔离 daemon → production `RemoteTerminal` → rooted `TerminalView`，比较两张图不同的 BGRA 地标、放置、图片处于对应 `read` 卡片和后续文本之间的几何与真实 production paint claim，覆盖原生历史 top／bottom、`/new` 删除、再次原生启动重放，以及三种显式关闭和设置覆盖环境。GPUI 测试窗口不是最终 GPU 像素证据。
 
 Windows 原生验收应先由中央构建当前合并提交，启动**另一个全新目录**的 `lyrel-app.exe --config-dir <isolated-dir>`，确认连接的是本轮 built daemon；不要对旧用户 daemon 复用／升级／停止。在该窗口新建自有 pane，运行：
 
@@ -453,7 +453,7 @@ node C:\path\to\lyrel\scripts\pi-image-replay.mjs --pi C:\path\to\official\pi.ex
 4. 分别以 `--policy env-none`、`--policy settings-none`、`--policy display-none` 启动单轮，保存 transcript 可见但不应显示图片；`--policy settings-kitty` 则在 `PI_IMAGE_PROTOCOL=none` 下由显式设置选择 Kitty。每轮只用 `Ctrl+D` 退出，不发送任务；夹具 180 秒硬截止仅结束自有 pi 子进程。
 5. 原生截图记录四象限／白心、关联文本及 pane 裁切；记录提交、pi 来源与实际版本、GUI／daemon PID、OS、GPU、显示缩放／刷新率及窗口尺寸。关闭全部自有窗口后，仅对同一 `<isolated-dir>` 执行 `lyrel-app.exe --config-dir <isolated-dir> --stop-daemon`，确认自有进程退出再清理自有目录。不要停止用户实例。
 
-**本票证据边界：**本轮只执行版本／官方资料只读核实；没有运行 build、tests、lint、formatter 或 native smoke。上面的全部 contract／Windows 像素、发送器 retention 及重传观察仍待中央执行；macOS 的 MacBook Air M5 原生验收与真实 SSH 也未执行。原生会话 replay 允许 pi 重传；同一个活 daemon 的 fresh GUI 恢复另有“发送器不输出”的独立合约，不能用本夹具的第二轮代替。
+**本票证据边界：**2026-10-31，正式 `pi 1.4.0` 在 Windows `10.0.26300`／RTX 5080／Debug／100% 缩放的隔离原生窗口通过二十张合成 tool-result 图片的两轮原生重放，观察尾图 19、顶部图 0 与翻页中段图 3 的四象限／白心及正确卡片位置。两轮 `/new` 后旧图消失，退出后同一保存文件由新 pi 重传，无手工重发／新 prompt；夹具输出两条 `PI_REPLAY_ROUND_n_NO_NEW_MESSAGES` 与 `PI_REPLAY_FIXTURE_DONE`。另分别原生验证 `env-none`、`settings-none`、`display-none` 无图，以及 `settings-kitty` 覆盖 `PI_IMAGE_PROTOCOL=none` 后正确显示。初次原生发现图片落入编辑区，已由统一 synchronized-update 流顺序修复；不以此前只核对像素的绿色用例掩盖几何问题。macOS MacBook Air M5 与真实 SSH 的三 agent 组合仍未执行。原生 replay 允许 pi 重传；同活 daemon 的 fresh GUI 恢复另有“发送器不输出”合约，不能用本夹具第二轮代替。
 
 
 #### OpenCode 2.2.0：公开历史图片预览与原生验收入口（#150）
