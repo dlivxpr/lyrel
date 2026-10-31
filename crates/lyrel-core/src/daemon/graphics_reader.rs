@@ -81,6 +81,7 @@ fn command(
     state: &Arc<Mutex<PaneState>>,
     control: Control,
     mut image: Option<Image>,
+    source_work: Option<crate::core::graphics_state::retention::Work>,
     gate: &OutputGate,
     writer: &Arc<Mutex<Box<dyn Write + Send>>>,
 ) -> Vec<u8> {
@@ -128,7 +129,13 @@ fn command(
         };
         (graphics.work_owner(), key, graphics.generation(), broker, frame)
     };
-    let mut image = match GraphicsState::prepare_image(image, owner, key, &control, frame) {
+    let prepared = match source_work {
+        Some(work) => GraphicsState::prepare_image_budgeted(image, key, &control, frame, work),
+        // a=c has no incoming source; its retained packet clones keep their
+        // canonical leases, and composition reserves new work for this pane.
+        None => GraphicsState::prepare_image(image, owner, key, &control, frame),
+    };
+    let mut image = match prepared {
         Ok(image) => image,
         Err(status) => {
             reply(writer, &control, status);
@@ -361,7 +368,8 @@ pub(super) fn consume<'a>(
                         pass.extend(bytes);
                     }
                     Part::Graphics(Segment::Command { control, image }) => {
-                        pass.extend(command(state, control, image, gate, writer))
+                        let source_work = image.as_ref().map(|image| graphics.take_source_work(image.data.capacity()));
+                        pass.extend(command(state, control, image, source_work, gate, writer))
                     }
                     Part::Graphics(Segment::Reply(bytes))
                     | Part::Clipboard(ClipboardEvent::Reply(bytes)) => {
