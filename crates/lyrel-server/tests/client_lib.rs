@@ -2746,6 +2746,9 @@ mod kitty_graphics {
                         assert!(*revision > previous, "selection revisions must advance");
                     }
                 }
+                GraphicsUpdate::Playback(playback) => {
+                    assert!(self.resources.contains_key(&playback.key) || self.evicted.contains_key(&playback.key));
+                }
                 GraphicsUpdate::Evicted { key, width, height } => {
                     self.resources.remove(key);
                     self.evicted.insert(*key, (*width, *height));

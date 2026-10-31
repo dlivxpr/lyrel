@@ -97,7 +97,8 @@ const HEADER: usize = 5;
 /// v15 completes each graphics pressure request on its requesting endpoint.
 /// v16 carries immutable frames, atomic selection, relative-placement edges,
 /// and signed coordinates.
-pub const PROTOCOL_VERSION: u32 = 16;
+/// v17 carries daemon-owned playback timelines and visibility pause metadata.
+pub const PROTOCOL_VERSION: u32 = 17;
 
 pub const FEATURE_PANE_OWNER: &str = "pane-owner";
 /// Spawn remains provisional until its requester attaches on the same connection.

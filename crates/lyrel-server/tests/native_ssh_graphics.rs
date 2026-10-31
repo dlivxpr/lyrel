@@ -102,6 +102,7 @@ impl State {
                 }
             }
             GraphicsUpdate::Screen { screen, .. } => self.screen = screen,
+            GraphicsUpdate::Playback(playback) => assert!(self.resources.contains_key(&playback.key) || self.evicted.contains_key(&playback.key)),
         }
     }
 

@@ -47,6 +47,20 @@ pub struct Placement {
     pub live: bool,
 }
 
+/// Pixel-free projection of the living daemon's animation timeline. The desktop
+/// retains this authority but never advances it with a second view-owned clock.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
+pub struct Playback {
+    pub key: u64,
+    pub state: u8,
+    pub remaining_ms: u64,
+    pub loops: u32,
+    pub completed: u32,
+    pub paused: bool,
+    pub waiting: bool,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum GraphicsUpdate {
     Resource {
@@ -65,6 +79,7 @@ pub enum GraphicsUpdate {
         root: u64,
         number: u32,
     },
+    Playback(Playback),
     Evicted {
         key: u64,
         width: u32,
@@ -101,6 +116,7 @@ enum Metadata {
         root: u64,
         number: u32,
     },
+    Playback(Playback),
     Evicted {
         key: u64,
         width: u32,
@@ -153,6 +169,7 @@ impl GraphicsUpdate {
                 },
                 &[],
             ),
+            Self::Playback(playback) => (Metadata::Playback(playback.clone()), &[]),
             Self::Evicted { key, width, height } => (
                 Metadata::Evicted {
                     key: *key,
@@ -261,6 +278,7 @@ impl GraphicsUpdate {
             Metadata::Frame { key, root, number } if frame.len() == end => {
                 Some(Self::Frame { key, root, number })
             }
+            Metadata::Playback(playback) if frame.len() == end => Some(Self::Playback(playback)),
             Metadata::Evicted { key, width, height } if frame.len() == end => {
                 Some(Self::Evicted { key, width, height })
             }
@@ -300,6 +318,13 @@ use crate::daemon::protocol::WinSize;
 
 #[path = "graphics_terminal.rs"]
 mod terminal;
+
+#[path = "graphics_playback.rs"]
+mod playback;
+use playback::Animation;
+#[cfg(test)]
+#[path = "graphics_playback_tests.rs"]
+mod playback_tests;
 
 #[path = "graphics_placeholder.rs"]
 mod placeholder;
@@ -342,6 +367,9 @@ struct Resource {
     frame_number: u32,
     selected: u64,
     revision: u64,
+    gap_ms: u32,
+    content_key: u64,
+    visible: bool,
 }
 
 struct AnchoredPlacement {
@@ -390,6 +418,10 @@ pub struct GraphicsState {
         ),
     >,
     resources: BTreeMap<u64, Resource>,
+    animations: BTreeMap<u64, Animation>,
+    playback_dirty: BTreeSet<u64>,
+    #[cfg(test)]
+    controlled_now: Option<std::time::Instant>,
     placements: BTreeMap<u64, AnchoredPlacement>,
     next_key: u64,
     next_image_id: u32,
@@ -424,6 +456,10 @@ impl GraphicsState {
             owner,
             wake: None,
             resources: BTreeMap::new(),
+            animations: BTreeMap::new(),
+            playback_dirty: BTreeSet::new(),
+            #[cfg(test)]
+            controlled_now: None,
             placements: BTreeMap::new(),
             next_key: 0,
             next_image_id: 0,
@@ -648,9 +684,8 @@ impl GraphicsState {
                 || control.rows != 0
                 || control.offset_x > 1
                 || control.offset_y != 0
-                || control.z != 0
             {
-                return Err("ENOTSUPPORTED:Partial frame editing and timing unavailable");
+                return Err("ENOTSUPPORTED:Partial frame editing unavailable");
             }
             if image.width != resource.image.width || image.height != resource.image.height {
                 return Err("EINVAL:Complete frame dimensions must match root");
@@ -817,27 +852,29 @@ impl GraphicsState {
         let screen = self.screen;
         let epoch = self.viewport_epoch;
         let visible_range = |viewport: &crate::daemon::protocol::GraphicsViewport| {
-            if viewport.epoch != epoch || viewport.screen != screen || viewport.rows == 0 {
+            if viewport.epoch != epoch || viewport.screen != screen || viewport.rows == 0 || viewport.cols == 0 {
                 return None;
             }
             let start = viewport.top.unwrap_or(top).clamp(oldest, top);
             Some((start, start + i64::from(viewport.rows), viewport.cols))
         };
         let mut observed_placeholders = BTreeSet::new();
-        for (start, end, _) in self
+        for (start, end, cols) in self
             .viewports
             .values()
             .filter_map(|(_, viewport)| visible_range(viewport))
         {
             observed_placeholders.extend(
-                self.placeholder_placements_in(
+                self.placeholder_placements_in_viewport(
                     (start - top) as i32,
                     (end.min(bottom) - top) as i32,
+                    cols,
                 ),
             );
         }
         for resource in self.resources.values_mut() {
             resource.priority = Priority::Unreferenced;
+            resource.visible = false;
         }
         for (&key, anchored) in &mut self.placements {
             let p = &mut anchored.placement;
@@ -866,7 +903,7 @@ impl GraphicsState {
             } else {
                 Priority::Unreferenced
             };
-            if p.screen == screen
+            let visible = p.screen == screen
                 && (if p.virtual_placement {
                     observed_placeholders.contains(&key)
                 } else {
@@ -880,12 +917,13 @@ impl GraphicsState {
                                 && p.anchor_row + i64::from(p.clip_top) < end
                                 && p.anchor_row + i64::from(p.clip_bottom) > start
                         })
-                })
-            {
+                });
+            if visible {
                 priority = Priority::Protected;
             }
             if let Some(resource) = self.resources.get_mut(&p.resource) {
                 resource.priority = resource.priority.max(priority);
+                resource.visible |= visible;
             }
         }
         // Publish only complete reductions: another pane's admission must not
@@ -897,6 +935,7 @@ impl GraphicsState {
                 .and_then(|root| self.resources.get(&root))
                 .map_or(resource.priority, |root| root.priority);
         }
+        self.sync_playback_visibility();
     }
 
     /// Drain under the pane output lock before any later mutation. A removed
@@ -970,7 +1009,7 @@ impl GraphicsState {
         if self.resources.is_empty() {
             return Some((Vec::new(), work));
         }
-        let count = self.resources.len() * 2 + self.placements.len() + 1;
+        let count = self.resources.len() * 2 + self.placements.len() + self.animations.len() + 1;
         if !work.resize(count * std::mem::size_of::<GraphicsEffect>()) {
             return None;
         }
@@ -1001,6 +1040,9 @@ impl GraphicsState {
                     revision: resource.revision,
                 }));
             }
+        }
+        for &key in self.animations.keys() {
+            updates.push(GraphicsEffect::Update(GraphicsUpdate::Playback(self.playback_snapshot(key))));
         }
         updates.extend(
             self.placements()
@@ -1213,6 +1255,9 @@ impl GraphicsState {
                         }),
                         selected: key,
                         revision: 0,
+                        gap_ms: if root.is_some() { 40 } else { 0 },
+                        content_key: key,
+                        visible: false,
                     },
                 );
                 effects.push(GraphicsEffect::Frame(packet));
@@ -1222,6 +1267,7 @@ impl GraphicsState {
                         root,
                         number: self.resources[&key].frame_number,
                     }));
+                    self.frame_committed(root, key, &control, &mut effects);
                 }
                 if control.action == Action::TransmitAndDisplay {
                     self.place(key, &control, &mut effects, placement_lease);
@@ -1244,7 +1290,7 @@ impl GraphicsState {
                     Self::reply(&mut effects, &control, control.id, "ENOENT:Image not found");
                 }
             }
-            Action::Animation => self.select_frame(&control, &mut effects),
+            Action::Animation => self.control_animation(&control, &mut effects),
             Action::Delete => self.delete(&control, &mut effects),
             Action::Other => unreachable!(),
         }
@@ -1252,52 +1298,6 @@ impl GraphicsState {
         effects
     }
 
-    fn select_frame(&mut self, control: &Control, effects: &mut Vec<GraphicsEffect>) {
-        let Some(root) = self.lookup(control) else {
-            Self::reply(effects, control, control.id, "ENOENT:Image not found");
-            return;
-        };
-        let id = self.resources[&root].id;
-        if control.width > 1 || control.height != 0 || control.rows != 0 || control.z != 0 {
-            Self::reply(
-                effects,
-                control,
-                id,
-                "ENOTSUPPORTED:Automatic playback and timing unavailable",
-            );
-            return;
-        }
-        let frame = if control.cols == 0 {
-            Some(self.resources[&root].selected)
-        } else if control.cols == 1 {
-            Some(root)
-        } else {
-            self.resources.iter().find_map(|(&key, resource)| {
-                (resource.root == Some(root) && resource.frame_number == control.cols)
-                    .then_some(key)
-            })
-        };
-        let Some(frame) = frame.filter(|frame| {
-            self.resources
-                .get(frame)
-                .is_some_and(|resource| resource.resident.lock().unwrap().packet.is_some())
-        }) else {
-            Self::reply(effects, control, id, "ENOENT:Animation frame not found");
-            return;
-        };
-        let resource = self.resources.get_mut(&root).unwrap();
-        resource.selected = frame;
-        resource.revision = resource
-            .revision
-            .checked_add(1)
-            .expect("graphics selection revision exhausted");
-        effects.push(GraphicsEffect::Update(GraphicsUpdate::Select {
-            key: root,
-            frame,
-            revision: resource.revision,
-        }));
-        Self::reply(effects, control, id, "OK");
-    }
 
     /// Validate the prospective graph before quota admission or replacement.
     /// A replacement may deepen existing descendants, so validate every path.
