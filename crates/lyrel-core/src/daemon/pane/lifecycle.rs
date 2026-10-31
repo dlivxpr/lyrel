@@ -259,9 +259,14 @@ impl PaneBackend {
             ForegroundProbes {
                 group: Box::new(move || {
                     #[cfg(windows)]
-                    { let _ = &group_master; shell_pid.and_then(|pid| i32::try_from(pid).ok()) }
+                    {
+                        let _ = &group_master;
+                        shell_pid.and_then(|pid| i32::try_from(pid).ok())
+                    }
                     #[cfg(not(windows))]
-                    { pty_foreground_pgid(&group_master) }
+                    {
+                        pty_foreground_pgid(&group_master)
+                    }
                 }),
                 remote: Box::new(move || foreground_remote_context(&remote_master)),
                 agent: Box::new(move || foreground_agent(&agent_master)),

@@ -46,6 +46,8 @@ struct State {
     resources: BTreeMap<u64, Arc<Image>>,
     placements: BTreeMap<u64, Placement>,
     evicted: BTreeMap<u64, (u32, u32)>,
+    frames: BTreeMap<u64, u64>,
+    selected: BTreeMap<u64, (u64, u64)>,
     screen: u64,
 }
 
@@ -57,6 +59,22 @@ impl State {
                     self.resources.insert(key, image).is_none(),
                     "recovery/live resource duplicated"
                 );
+            }
+            GraphicsUpdate::Frame { key, root, number } => {
+                assert!(number >= 2 && key != root);
+                assert!(self.resources.contains_key(&key) && self.resources.contains_key(&root));
+                assert!(self.frames.insert(key, root).is_none());
+            }
+            GraphicsUpdate::Select {
+                key,
+                frame,
+                revision,
+            } => {
+                assert!(self.resources.contains_key(&key) || self.evicted.contains_key(&key));
+                assert!(self.resources.contains_key(&frame) || self.evicted.contains_key(&frame));
+                if let Some((_, previous)) = self.selected.insert(key, (frame, revision)) {
+                    assert!(revision > previous, "selection revisions must advance");
+                }
             }
             GraphicsUpdate::Place(p) => {
                 assert!(
@@ -79,6 +97,8 @@ impl State {
                 for key in resources {
                     self.resources.remove(&key);
                     self.evicted.remove(&key);
+                    self.frames.remove(&key);
+                    self.selected.remove(&key);
                 }
             }
             GraphicsUpdate::Screen { screen, .. } => self.screen = screen,
@@ -93,7 +113,11 @@ impl State {
     }
 
     fn pixels(&self, p: &Placement) -> Vec<u8> {
-        self.resources[&p.resource].to_rgba8().unwrap()
+        let frame = self
+            .selected
+            .get(&p.resource)
+            .map_or(p.resource, |&(frame, _)| frame);
+        self.resources[&frame].to_rgba8().unwrap()
     }
 }
 

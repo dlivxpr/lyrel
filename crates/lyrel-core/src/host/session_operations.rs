@@ -649,7 +649,10 @@ pub fn scoped_launch_command(
     let Ok(mut argv) = crate::core::cli_agent::parse_command_argv(line) else {
         return Ok(line.into());
     };
-    if !argv.first().is_some_and(|arg| arg.split_once('=').is_some_and(|(key, _)| SCOPE_ENV.contains(&key))) {
+    if !argv.first().is_some_and(|arg| {
+        arg.split_once('=')
+            .is_some_and(|(key, _)| SCOPE_ENV.contains(&key))
+    }) {
         return Ok(line.into());
     }
     let mut scope = SessionScope {
@@ -658,13 +661,19 @@ pub fn scoped_launch_command(
     };
     while let Some((key, value)) = argv.first().and_then(|arg| arg.split_once('=')) {
         if !SCOPE_ENV.contains(&key) {
-            return Err(failure(SessionErrorKind::Unsupported, "launch accepts only documented non-secret scope selectors"));
+            return Err(failure(
+                SessionErrorKind::Unsupported,
+                "launch accepts only documented non-secret scope selectors",
+            ));
         }
         scope.environment.insert(key.into(), value.into());
         argv.remove(0);
     }
     if argv.is_empty() {
-        return Err(failure(SessionErrorKind::Command, "launch environment has no executable"));
+        return Err(failure(
+            SessionErrorKind::Command,
+            "launch environment has no executable",
+        ));
     }
     command_line(&argv, &scope)
 }
@@ -699,14 +708,23 @@ pub(crate) fn command_line(
         let mut save = String::new();
         let mut restore = String::new();
         for key in scope.environment.keys() {
-            save.push_str(&format!("$__lyrelEnv['{key}']=[Environment]::GetEnvironmentVariable('{key}','Process'); "));
-            restore.push_str(&format!("[Environment]::SetEnvironmentVariable('{key}',$__lyrelEnv['{key}'],'Process'); "));
+            save.push_str(&format!(
+                "$__lyrelEnv['{key}']=[Environment]::GetEnvironmentVariable('{key}','Process'); "
+            ));
+            restore.push_str(&format!(
+                "[Environment]::SetEnvironmentVariable('{key}',$__lyrelEnv['{key}'],'Process'); "
+            ));
         }
         for (key, value) in &scope.environment {
-            save.push_str(&format!("[Environment]::SetEnvironmentVariable('{key}','{}','Process'); ", value.replace('\'', "''")));
+            save.push_str(&format!(
+                "[Environment]::SetEnvironmentVariable('{key}','{}','Process'); ",
+                value.replace('\'', "''")
+            ));
         }
         // Scriptblock-local bookkeeping, with restoration even on launch failure.
-        return Ok(format!("& {{ $__lyrelEnv=@{{}}; {save}try {{ {command} }} finally {{ {restore} }} }}"));
+        return Ok(format!(
+            "& {{ $__lyrelEnv=@{{}}; {save}try {{ {command} }} finally {{ {restore} }} }}"
+        ));
     }
     for (key, value) in &scope.environment {
         command = match quoting {
@@ -941,33 +959,65 @@ mod tests {
         let output = dir.path().join("policy.txt");
         let executable = std::env::current_exe().unwrap();
         let shell = if cfg!(windows) { "pwsh" } else { "sh" };
-        let line = format!("PI_FORCE_IMAGE_PROTOCOL=none PI_KITTY_PLACEHOLDERS=0 PI_NO_KITTY_PLACEHOLDERS=1 {}",
-            [executable.to_string_lossy().into_owned(), "--ignored".into(), "--exact".into(),
-             "host::session_operations::tests::omp_policy_child".into(), "--nocapture".into()]
-                .iter().map(|arg| quote_for_shell(arg, Some(shell))).collect::<Vec<_>>().join(" "));
+        let line = format!(
+            "PI_FORCE_IMAGE_PROTOCOL=none PI_KITTY_PLACEHOLDERS=0 PI_NO_KITTY_PLACEHOLDERS=1 {}",
+            [
+                executable.to_string_lossy().into_owned(),
+                "--ignored".into(),
+                "--exact".into(),
+                "host::session_operations::tests::omp_policy_child".into(),
+                "--nocapture".into()
+            ]
+            .iter()
+            .map(|arg| quote_for_shell(arg, Some(shell)))
+            .collect::<Vec<_>>()
+            .join(" ")
+        );
         let child = scoped_launch_command(&line, Some(shell)).unwrap();
         let line = if cfg!(windows) {
-            format!("{child}; [IO.File]::AppendAllText($env:LYREL_POLICY_OUTPUT, '|' + $env:PI_FORCE_IMAGE_PROTOCOL)")
+            format!(
+                "{child}; [IO.File]::AppendAllText($env:LYREL_POLICY_OUTPUT, '|' + $env:PI_FORCE_IMAGE_PROTOCOL)"
+            )
         } else {
-            format!("{child}; printf '|%s' \"$PI_FORCE_IMAGE_PROTOCOL\" >> \"$LYREL_POLICY_OUTPUT\"")
+            format!(
+                "{child}; printf '|%s' \"$PI_FORCE_IMAGE_PROTOCOL\" >> \"$LYREL_POLICY_OUTPUT\""
+            )
         };
         let mut command = Command::new(shell);
-        if cfg!(windows) { command.args(["-NoProfile", "-Command"]); } else { command.arg("-c"); }
-        let status = command.arg(line).env("LYREL_POLICY_OUTPUT", &output)
-            .env("PI_FORCE_IMAGE_PROTOCOL", "parent-policy").status().unwrap();
+        if cfg!(windows) {
+            command.args(["-NoProfile", "-Command"]);
+        } else {
+            command.arg("-c");
+        }
+        let status = command
+            .arg(line)
+            .env("LYREL_POLICY_OUTPUT", &output)
+            .env("PI_FORCE_IMAGE_PROTOCOL", "parent-policy")
+            .status()
+            .unwrap();
         assert!(status.success());
-        assert_eq!(std::fs::read_to_string(output).unwrap(), "none,0,1|parent-policy");
+        assert_eq!(
+            std::fs::read_to_string(output).unwrap(),
+            "none,0,1|parent-policy"
+        );
     }
 
     #[test]
     #[ignore = "owned subprocess for public process-scoped launch behavior"]
     fn omp_policy_child() {
-        let Some(output) = std::env::var_os("LYREL_POLICY_OUTPUT") else { return; };
-        std::fs::write(output, format!("{},{},{}",
-            std::env::var("PI_FORCE_IMAGE_PROTOCOL").unwrap(),
-            std::env::var("PI_KITTY_PLACEHOLDERS").unwrap(),
-            std::env::var("PI_NO_KITTY_PLACEHOLDERS").unwrap(),
-        )).unwrap();
+        let Some(output) = std::env::var_os("LYREL_POLICY_OUTPUT") else {
+            return;
+        };
+        std::fs::write(
+            output,
+            format!(
+                "{},{},{}",
+                std::env::var("PI_FORCE_IMAGE_PROTOCOL").unwrap(),
+                std::env::var("PI_KITTY_PLACEHOLDERS").unwrap(),
+                std::env::var("PI_NO_KITTY_PLACEHOLDERS").unwrap(),
+            ),
+        )
+        .unwrap();
     }
 
     fn operation(cwd: PathBuf) -> SessionOperation {

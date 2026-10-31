@@ -831,7 +831,9 @@ impl Control {
                 b"P" => c.parent_image = num(),
                 b"Q" => c.parent_placement = num(),
                 b"H" | b"V" => match std::str::from_utf8(val)
-                    .ok().and_then(|s| s.parse::<i32>().ok()) {
+                    .ok()
+                    .and_then(|s| s.parse::<i32>().ok())
+                {
                     Some(offset) if key == b"H" => c.relative_x = offset,
                     Some(offset) => c.relative_y = offset,
                     None => c.invalid = true,
@@ -998,12 +1000,12 @@ impl Image {
     }
 }
 
-#[cfg(windows)]
-#[path = "kitty_media_windows.rs"]
-mod windows_media;
 #[cfg(unix)]
 #[path = "kitty_media_unix_temp.rs"]
 mod unix_temp;
+#[cfg(windows)]
+#[path = "kitty_media_windows.rs"]
+mod windows_media;
 
 impl MediumTransfer {
     /// Resolve the referenced bytes by reading the file or POSIX shm object,
@@ -1033,7 +1035,11 @@ impl MediumTransfer {
     fn bounded_region(&self, object_len: u64) -> Option<std::ops::Range<usize>> {
         let start = u64::from(self.offset);
         let available = object_len.checked_sub(start)?;
-        let len = if self.size == 0 { available } else { u64::from(self.size) };
+        let len = if self.size == 0 {
+            available
+        } else {
+            u64::from(self.size)
+        };
         if len > available || len > MAX_IMAGE_BYTES as u64 {
             return None;
         }
@@ -1063,13 +1069,27 @@ impl MediumTransfer {
         // Follow symlinks as specified, then reject sensitive/special targets
         // before an open with possible device side effects.
         let path = named.canonicalize().ok()?;
-        if ["/proc", "/sys", "/dev"].iter().any(|root| path.starts_with(root))
-            && !path.starts_with("/dev/shm") { return None; }
-        if !std::fs::metadata(&path).ok()?.is_file() { return None; }
-        let file = std::fs::OpenOptions::new().read(true)
-            .custom_flags(libc::O_NONBLOCK | libc::O_NOFOLLOW).open(&path).ok()?;
-        if self.medium == Medium::TempFile && path_is_in_temp_dir(&path)
-            && path.as_os_str().as_encoded_bytes().windows(b"tty-graphics-protocol".len())
+        if ["/proc", "/sys", "/dev"]
+            .iter()
+            .any(|root| path.starts_with(root))
+            && !path.starts_with("/dev/shm")
+        {
+            return None;
+        }
+        if !std::fs::metadata(&path).ok()?.is_file() {
+            return None;
+        }
+        let file = std::fs::OpenOptions::new()
+            .read(true)
+            .custom_flags(libc::O_NONBLOCK | libc::O_NOFOLLOW)
+            .open(&path)
+            .ok()?;
+        if self.medium == Medium::TempFile
+            && path_is_in_temp_dir(&path)
+            && path
+                .as_os_str()
+                .as_encoded_bytes()
+                .windows(b"tty-graphics-protocol".len())
                 .any(|part| part == b"tty-graphics-protocol")
         {
             return unix_temp::read_handoff(self, &path, file);
@@ -1089,7 +1109,9 @@ impl MediumTransfer {
         }
         // Align down, never map an attacker-selected prefix before O.
         let page = usize::try_from(unsafe { libc::sysconf(libc::_SC_PAGESIZE) }).ok()?;
-        if page == 0 || page > 65536 { return None; }
+        if page == 0 || page > 65536 {
+            return None;
+        }
         let base = region.start / page * page;
         let displacement = region.start - base;
         let extent = displacement.checked_add(region.len())?;
@@ -1169,10 +1191,14 @@ impl MediumTransfer {
     }
 
     #[cfg(not(any(unix, windows)))]
-    fn read_file(&self) -> Option<Vec<u8>> { None }
+    fn read_file(&self) -> Option<Vec<u8>> {
+        None
+    }
 
     #[cfg(not(any(unix, windows)))]
-    fn read_shared(&self) -> Option<Vec<u8>> { None }
+    fn read_shared(&self) -> Option<Vec<u8>> {
+        None
+    }
 }
 
 /// Whether `path` sits inside a directory the platform hands out for temp files,
@@ -1333,10 +1359,13 @@ impl GraphicsParser {
         if self.pending.is_some() {
             let header = command.split(|b| *b == b';').next().unwrap_or(command);
             let header = header.strip_prefix(b"G").unwrap_or(header);
-            let continuation = header
-                .split(|b| *b == b',')
-                .all(|pair| pair.starts_with(b"m=") || pair.starts_with(b"q=") || pair.is_empty()
-                    || (pair == b"a=f" && self.pending.as_ref().unwrap().control.action == Action::Frame));
+            let continuation = header.split(|b| *b == b',').all(|pair| {
+                pair.starts_with(b"m=")
+                    || pair.starts_with(b"q=")
+                    || pair.is_empty()
+                    || (pair == b"a=f"
+                        && self.pending.as_ref().unwrap().control.action == Action::Frame)
+            });
             if continuation {
                 // Kitty keeps the first chunk's quiet unless a later chunk
                 // supplies a nonzero override; an explicit q=0 is not a reset.
@@ -1509,7 +1538,9 @@ impl GraphicsParser {
             Medium::Direct => 0,
             // Shared maps and their owned copy coexist. The extra 64 KiB
             // covers alignment and page rounding, independently of O.
-            Medium::Shared if cfg!(any(target_os = "macos", windows)) => 2 * MAX_IMAGE_BYTES + 65536,
+            Medium::Shared if cfg!(any(target_os = "macos", windows)) => {
+                2 * MAX_IMAGE_BYTES + 65536
+            }
             _ => MAX_IMAGE_BYTES,
         };
         if !self
@@ -1829,15 +1860,24 @@ mod tests {
             format: WireFormat::Rgba,
             compressed: false,
         };
-        assert_eq!(transfer.bounded_region(200_000_000), Some(100_000_003..100_000_007));
+        assert_eq!(
+            transfer.bounded_region(200_000_000),
+            Some(100_000_003..100_000_007)
+        );
         assert_eq!(transfer.bounded_region(100_000_006), None);
         let mut rest = transfer.clone();
         rest.size = 0;
-        assert_eq!(rest.bounded_region(100_000_007), Some(100_000_003..100_000_007));
+        assert_eq!(
+            rest.bounded_region(100_000_007),
+            Some(100_000_003..100_000_007)
+        );
         assert_eq!(rest.bounded_region(200_000_000), None);
         rest.offset = u32::MAX;
         rest.size = 4;
-        assert_eq!(rest.bounded_region(u64::from(u32::MAX) + 4), Some(u32::MAX as usize..u32::MAX as usize + 4));
+        assert_eq!(
+            rest.bounded_region(u64::from(u32::MAX) + 4),
+            Some(u32::MAX as usize..u32::MAX as usize + 4)
+        );
     }
 
     #[test]
@@ -1845,7 +1885,10 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("tty-graphics-protocol-locality.rgba");
         std::fs::write(&path, [1, 2, 3, 4]).unwrap();
-        let command = format!("Ga=q,i=145,t=t,f=32,s=1,v=1,S=4;{}", BASE64.encode(path.to_str().unwrap()));
+        let command = format!(
+            "Ga=q,i=145,t=t,f=32,s=1,v=1,S=4;{}",
+            BASE64.encode(path.to_str().unwrap())
+        );
         for revoked in [Some(false), None] {
             let mut parser = GraphicsParser::new_local(true);
             let mut proofs = 0;
@@ -1853,9 +1896,17 @@ mod tests {
                 proofs += 1;
                 if proofs == 1 { Some(true) } else { revoked }
             });
-            assert_eq!(result, Some(Event::Reply(b"\x1b_Gi=145;ENOTSUPPORTED:Host-local transfer unavailable\x1b\\".to_vec())));
+            assert_eq!(
+                result,
+                Some(Event::Reply(
+                    b"\x1b_Gi=145;ENOTSUPPORTED:Host-local transfer unavailable\x1b\\".to_vec()
+                ))
+            );
             assert_eq!(std::fs::read(&path).unwrap(), [1, 2, 3, 4]);
-            assert!(matches!(parser.feed(b"Ga=q,i=146,f=32,s=1,v=1;/wAA/w=="), Some(Event::Command { image: Some(_), .. })));
+            assert!(matches!(
+                parser.feed(b"Ga=q,i=146,f=32,s=1,v=1;/wAA/w=="),
+                Some(Event::Command { image: Some(_), .. })
+            ));
         }
     }
 

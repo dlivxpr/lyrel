@@ -5,10 +5,10 @@ use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle};
 use std::path::{Component, Path, PathBuf, Prefix};
 
 use windows_sys::Win32::Storage::FileSystem::{
-    DELETE, FILE_ATTRIBUTE_DIRECTORY, FILE_ATTRIBUTE_REPARSE_POINT,
-    FILE_DISPOSITION_INFO, FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT,
-    FILE_SHARE_READ, FILE_SHARE_WRITE, FILE_TYPE_DISK, FileDispositionInfo,
-    GetDriveTypeW, GetFileType, GetVolumeNameForVolumeMountPointW, SetFileInformationByHandle,
+    DELETE, FILE_ATTRIBUTE_DIRECTORY, FILE_ATTRIBUTE_REPARSE_POINT, FILE_DISPOSITION_INFO,
+    FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT, FILE_SHARE_READ, FILE_SHARE_WRITE,
+    FILE_TYPE_DISK, FileDispositionInfo, GetDriveTypeW, GetFileType,
+    GetVolumeNameForVolumeMountPointW, SetFileInformationByHandle,
 };
 use windows_sys::Win32::System::Diagnostics::Debug::ReadProcessMemory;
 use windows_sys::Win32::System::Memory::{
@@ -27,9 +27,19 @@ fn wide(text: &std::ffi::OsStr) -> Vec<u16> {
 // Reject namespaces, UNC, ADS and DOS devices *before* metadata/open. A mapped
 // network drive is not a local disk even if its name starts with a drive letter.
 fn disk_path(path: &Path) -> Option<PathBuf> {
+    // GetFullPathNameW, used by absolute(), strips trailing dots/spaces from
+    // non-verbatim names. Reject that ambiguity before normalization can hide it.
+    if path.components().any(|component| match component {
+        Component::Normal(name) => name.to_str().is_none_or(|name| name.ends_with(['.', ' '])),
+        _ => false,
+    }) {
+        return None;
+    }
     let path = std::path::absolute(path).ok()?;
     let mut components = path.components();
-    let Component::Prefix(prefix) = components.next()? else { return None };
+    let Component::Prefix(prefix) = components.next()? else {
+        return None;
+    };
     let root = match prefix.kind() {
         Prefix::Disk(drive) | Prefix::VerbatimDisk(drive) => format!("{}:\\", char::from(drive)),
         Prefix::Verbatim(volume) => {
@@ -42,9 +52,16 @@ fn disk_path(path: &Path) -> Option<PathBuf> {
     };
     let root = wide(std::ffi::OsStr::new(&root));
     // DRIVE_REMOVABLE=2, DRIVE_FIXED=3, DRIVE_RAMDISK=6.
-    if !matches!(unsafe { GetDriveTypeW(root.as_ptr()) }, 2 | 3 | 6) { return None; }
+    if !matches!(unsafe { GetDriveTypeW(root.as_ptr()) }, 2 | 3 | 6) {
+        return None;
+    }
     let mut volume = [0_u16; 64];
-    if unsafe { GetVolumeNameForVolumeMountPointW(root.as_ptr(), volume.as_mut_ptr(), volume.len() as u32) } == 0 { return None; }
+    if unsafe {
+        GetVolumeNameForVolumeMountPointW(root.as_ptr(), volume.as_mut_ptr(), volume.len() as u32)
+    } == 0
+    {
+        return None;
+    }
     let len = volume.iter().position(|&c| c == 0)?;
     // All subsequent metadata/opens use the local volume GUID, not a mutable
     // drive-letter mapping that could be redirected to an SMB share.
@@ -52,15 +69,32 @@ fn disk_path(path: &Path) -> Option<PathBuf> {
     for component in components {
         match component {
             Component::RootDir | Component::CurDir => {}
-            Component::ParentDir => { if !clean.pop() { return None; } }
+            Component::ParentDir => {
+                if !clean.pop() {
+                    return None;
+                }
+            }
             Component::Normal(name) => {
                 let name = name.to_str()?;
-                if name.contains([':', '\0']) || name.ends_with(['.', ' ']) { return None; }
+                if name.contains([':', '\0']) || name.ends_with(['.', ' ']) {
+                    return None;
+                }
                 let base = name.split('.').next()?.to_ascii_uppercase();
-                if matches!(base.as_str(), "CON" | "PRN" | "AUX" | "NUL" | "CONIN$" | "CONOUT$")
-                    || base.strip_prefix("COM").or_else(|| base.strip_prefix("LPT"))
-                        .is_some_and(|n| matches!(n, "1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9" | "¹" | "²" | "³"))
-                { return None; }
+                if matches!(
+                    base.as_str(),
+                    "CON" | "PRN" | "AUX" | "NUL" | "CONIN$" | "CONOUT$"
+                ) || base
+                    .strip_prefix("COM")
+                    .or_else(|| base.strip_prefix("LPT"))
+                    .is_some_and(|n| {
+                        matches!(
+                            n,
+                            "1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9" | "¹" | "²" | "³"
+                        )
+                    })
+                {
+                    return None;
+                }
                 clean.push(name);
             }
             _ => return None,
@@ -80,20 +114,34 @@ fn resolve_disk_path(path: &Path) -> Option<PathBuf> {
         let components: Vec<_> = path.components().collect();
         for (index, component) in components.iter().enumerate() {
             cursor.push(component.as_os_str());
-            if !matches!(component, Component::Normal(_)) { continue; }
+            if !matches!(component, Component::Normal(_)) {
+                continue;
+            }
             let meta = std::fs::symlink_metadata(&cursor).ok()?;
             if meta.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
                 let target = std::fs::read_link(&cursor).ok()?;
-                let mut replacement = if target.is_absolute() { target } else { cursor.parent()?.join(target) };
-                for rest in &components[index + 1..] { replacement.push(rest.as_os_str()); }
+                let mut replacement = if target.is_absolute() {
+                    target
+                } else {
+                    cursor.parent()?.join(target)
+                };
+                for rest in &components[index + 1..] {
+                    replacement.push(rest.as_os_str());
+                }
                 path = disk_path(&replacement)?;
-                if path.as_os_str().len() > 32760 { return None; }
+                if path.as_os_str().len() > 32760 {
+                    return None;
+                }
                 changed = true;
                 break;
             }
-            if index + 1 < components.len() && !meta.is_dir() { return None; }
+            if index + 1 < components.len() && !meta.is_dir() {
+                return None;
+            }
         }
-        if !changed { return Some(path); }
+        if !changed {
+            return Some(path);
+        }
     }
     None
 }
@@ -113,46 +161,74 @@ impl LockedPath {
         let components: Vec<_> = path.components().collect();
         for component in &components[..components.len().checked_sub(1)?] {
             cursor.push(component.as_os_str());
-            if !matches!(component, Component::Normal(_) | Component::RootDir) { continue; }
-            let directory = OpenOptions::new().access_mode(0)
+            if !matches!(component, Component::Normal(_) | Component::RootDir) {
+                continue;
+            }
+            let directory = OpenOptions::new()
+                .access_mode(0)
                 .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE)
                 .custom_flags(FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT)
-                .open(&cursor).ok()?;
+                .open(&cursor)
+                .ok()?;
             let attr = directory.metadata().ok()?.file_attributes();
-            if attr & FILE_ATTRIBUTE_DIRECTORY == 0 || attr & FILE_ATTRIBUTE_REPARSE_POINT != 0 { return None; }
+            if attr & FILE_ATTRIBUTE_DIRECTORY == 0 || attr & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
+                return None;
+            }
             directories.push(directory);
         }
-        Some(Self { path, _directories: directories })
+        Some(Self {
+            path,
+            _directories: directories,
+        })
     }
 
     fn eligible_temp(&self) -> bool {
-        self.path.to_string_lossy().contains("tty-graphics-protocol")
+        self.path
+            .to_string_lossy()
+            .contains("tty-graphics-protocol")
             && resolve_disk_path(&std::env::temp_dir()).is_some_and(|root| {
                 let mut path = self.path.components();
-                root.components().all(|part| path.next().is_some_and(|actual|
-                    actual.as_os_str().to_string_lossy().eq_ignore_ascii_case(&part.as_os_str().to_string_lossy())))
-                    && path.next().is_some()
+                root.components().all(|part| {
+                    path.next().is_some_and(|actual| {
+                        actual
+                            .as_os_str()
+                            .to_string_lossy()
+                            .eq_ignore_ascii_case(&part.as_os_str().to_string_lossy())
+                    })
+                }) && path.next().is_some()
             })
     }
 
     fn file(&self, delete: bool) -> Option<File> {
         let before = std::fs::symlink_metadata(&self.path).ok()?;
-        if !before.is_file() || before.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 { return None; }
-        let file = OpenOptions::new().read(true)
-            .access_mode(windows_sys::Win32::Foundation::GENERIC_READ | if delete { DELETE } else { 0 })
+        if !before.is_file() || before.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
+            return None;
+        }
+        let file = OpenOptions::new()
+            .read(true)
+            .access_mode(
+                windows_sys::Win32::Foundation::GENERIC_READ | if delete { DELETE } else { 0 },
+            )
             .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE)
             .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT)
-            .open(&self.path).ok()?;
+            .open(&self.path)
+            .ok()?;
         let meta = file.metadata().ok()?;
-        if !meta.is_file() || meta.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0
-            || unsafe { GetFileType(file.as_raw_handle()) } != FILE_TYPE_DISK { return None; }
+        if !meta.is_file()
+            || meta.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0
+            || unsafe { GetFileType(file.as_raw_handle()) } != FILE_TYPE_DISK
+        {
+            return None;
+        }
         Some(file)
     }
 }
 
 pub(super) fn read_file(transfer: &MediumTransfer) -> Option<Vec<u8>> {
     let name = std::str::from_utf8(&transfer.name).ok()?;
-    if name.is_empty() || name.contains('\0') { return None; }
+    if name.is_empty() || name.contains('\0') {
+        return None;
+    }
     let locked = LockedPath::open(Path::new(name))?;
     let delete = transfer.medium == Medium::TempFile && locked.eligible_temp();
     // Lack of DELETE permission must not turn a readable image into a failure.
@@ -162,20 +238,40 @@ pub(super) fn read_file(transfer: &MediumTransfer) -> Option<Vec<u8>> {
         let info = FILE_DISPOSITION_INFO { DeleteFile: true };
         // This exact opened object, never a second path lookup. Failure retains
         // the sender's object and does not invalidate the successful read.
-        unsafe { SetFileInformationByHandle(file.as_raw_handle(), FileDispositionInfo,
-            (&info as *const FILE_DISPOSITION_INFO).cast(), std::mem::size_of_val(&info) as u32); }
+        unsafe {
+            SetFileInformationByHandle(
+                file.as_raw_handle(),
+                FileDispositionInfo,
+                (&info as *const FILE_DISPOSITION_INFO).cast(),
+                std::mem::size_of_val(&info) as u32,
+            );
+        }
     }
     Some(out)
 }
 
 struct View(MEMORY_MAPPED_VIEW_ADDRESS);
 impl Drop for View {
-    fn drop(&mut self) { unsafe { UnmapViewOfFile(self.0); } }
+    fn drop(&mut self) {
+        unsafe {
+            UnmapViewOfFile(self.0);
+        }
+    }
 }
 
 fn map(handle: &OwnedHandle, base: u64, extent: usize) -> Option<View> {
-    if extent == 0 { return None; }
-    let mapped = unsafe { MapViewOfFile(handle.as_raw_handle(), FILE_MAP_READ, (base >> 32) as u32, base as u32, extent) };
+    if extent == 0 {
+        return None;
+    }
+    let mapped = unsafe {
+        MapViewOfFile(
+            handle.as_raw_handle(),
+            FILE_MAP_READ,
+            (base >> 32) as u32,
+            base as u32,
+            extent,
+        )
+    };
     (!mapped.Value.is_null()).then_some(View(mapped))
 }
 
@@ -183,32 +279,52 @@ pub(super) fn read_shared(transfer: &MediumTransfer) -> Option<Vec<u8>> {
     let name = std::str::from_utf8(&transfer.name).ok()?;
     // Only the documented local/global named-object namespace, no paths or
     // private object-manager namespaces. Windows closes, never unlinks, shm.
-    let component = name.strip_prefix("Local\\").or_else(|| name.strip_prefix("Global\\")).unwrap_or(name);
-    if component.is_empty() || component.contains(['\\', '/', '\0', ':']) || name.len() > 4096 { return None; }
-    let raw = unsafe { OpenFileMappingW(FILE_MAP_READ, 0, wide(std::ffi::OsStr::new(name)).as_ptr()) };
-    if raw.is_null() { return None; }
+    let component = name
+        .strip_prefix("Local\\")
+        .or_else(|| name.strip_prefix("Global\\"))
+        .unwrap_or(name);
+    if component.is_empty() || component.contains(['\\', '/', '\0', ':']) || name.len() > 4096 {
+        return None;
+    }
+    let raw =
+        unsafe { OpenFileMappingW(FILE_MAP_READ, 0, wide(std::ffi::OsStr::new(name)).as_ptr()) };
+    if raw.is_null() {
+        return None;
+    }
     let handle = unsafe { OwnedHandle::from_raw_handle(raw) };
     let mut info: SYSTEM_INFO = unsafe { std::mem::zeroed() };
-    unsafe { GetSystemInfo(&mut info); }
+    unsafe {
+        GetSystemInfo(&mut info);
+    }
     let granularity = usize::try_from(info.dwAllocationGranularity).ok()?;
-    if granularity == 0 || granularity > 65536 { return None; }
+    if granularity == 0 || granularity > 65536 {
+        return None;
+    }
     let offset = transfer.offset as usize;
     let base = offset / granularity * granularity;
     let displacement = offset - base;
     let len = if transfer.size != 0 {
         let len = transfer.size as usize;
-        if len > MAX_IMAGE_BYTES { return None; }
+        if len > MAX_IMAGE_BYTES {
+            return None;
+        }
         len
     } else {
         // Never use MapViewOfFile(..., 0): that maps an unbounded object. Probe
         // the end using bounded views, one live view at a time, then map only
         // the accepted region. Windows sections have page-rounded extents.
         let fits = |len: usize| map(&handle, base as u64, displacement + len).is_some();
-        if !fits(1) || fits(MAX_IMAGE_BYTES + 1) { return None; }
+        if !fits(1) || fits(MAX_IMAGE_BYTES + 1) {
+            return None;
+        }
         let (mut low, mut high) = (1, MAX_IMAGE_BYTES);
         while low < high {
             let middle = low + (high - low + 1) / 2;
-            if fits(middle) { low = middle; } else { high = middle - 1; }
+            if fits(middle) {
+                low = middle;
+            } else {
+                high = middle - 1;
+            }
         }
         low
     };
@@ -218,8 +334,15 @@ pub(super) fn read_shared(transfer: &MediumTransfer) -> Option<Vec<u8>> {
     let mut copied = 0;
     // The OS copy validates accessibility and reports in-page errors instead
     // of exposing a Rust slice to attacker-controlled file-backed mappings.
-    let ok = unsafe { ReadProcessMemory(GetCurrentProcess(),
-        mapped.0.Value.cast::<u8>().add(displacement).cast(), out.as_mut_ptr().cast(), len, &mut copied) };
+    let ok = unsafe {
+        ReadProcessMemory(
+            GetCurrentProcess(),
+            mapped.0.Value.cast::<u8>().add(displacement).cast(),
+            out.as_mut_ptr().cast(),
+            len,
+            &mut copied,
+        )
+    };
     (ok != 0 && copied == len).then_some(out)
 }
 
@@ -229,7 +352,16 @@ mod tests {
 
     #[test]
     fn windows_names_reject_devices_network_streams_and_namespaces_before_open() {
-        for name in [r"\\server\share\a", r"\\.\pipe\test", r"\\?\UNC\host\share\a", r"C:\a:stream", r"C:\NUL.png", r"C:\COM1", r"C:\LPT¹.txt", r"C:\a.\image"] {
+        for name in [
+            r"\\server\share\a",
+            r"\\.\pipe\test",
+            r"\\?\UNC\host\share\a",
+            r"C:\a:stream",
+            r"C:\NUL.png",
+            r"C:\COM1",
+            r"C:\LPT¹.txt",
+            r"C:\a.\image",
+        ] {
             assert!(disk_path(Path::new(name)).is_none(), "{name}");
         }
     }
@@ -246,8 +378,17 @@ mod tests {
         assert!(std::fs::rename(&path, parent.join("other")).is_err());
         assert!(std::fs::rename(&parent, dir.path().join("replaced")).is_err());
         let info = FILE_DISPOSITION_INFO { DeleteFile: true };
-        assert_ne!(unsafe { SetFileInformationByHandle(file.as_raw_handle(), FileDispositionInfo,
-            (&info as *const FILE_DISPOSITION_INFO).cast(), std::mem::size_of_val(&info) as u32) }, 0);
+        assert_ne!(
+            unsafe {
+                SetFileInformationByHandle(
+                    file.as_raw_handle(),
+                    FileDispositionInfo,
+                    (&info as *const FILE_DISPOSITION_INFO).cast(),
+                    std::mem::size_of_val(&info) as u32,
+                )
+            },
+            0
+        );
         drop(file);
         drop(locked);
         assert!(!path.exists());

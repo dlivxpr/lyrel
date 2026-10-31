@@ -965,7 +965,11 @@ impl ImageStore {
             .resources
             .iter()
             .filter_map(|(&key, resource)| {
-                if resource.root.is_some() || protected.contains(&key) || resource.evicted || resource.pressure_requested {
+                if resource.root.is_some()
+                    || protected.contains(&key)
+                    || resource.evicted
+                    || resource.pressure_requested
+                {
                     return None;
                 }
                 Some((key, resource.received, !referenced.contains(&key)))
@@ -987,7 +991,8 @@ impl ImageStore {
         let inner = self.0.state.lock().unwrap();
         let render = |anchored: &AnchoredPlacement, placeholder| {
             let root = inner.resources.get(&anchored.placement.resource)?;
-            let (frame_key, selection_revision) = root.selected.unwrap_or((anchored.placement.resource, 0));
+            let (frame_key, selection_revision) =
+                root.selected.unwrap_or((anchored.placement.resource, 0));
             let resource = inner.resources.get(&frame_key)?;
             if resource.decoded.is_none() && !resource.evicted {
                 return None;
@@ -1021,7 +1026,9 @@ impl ImageStore {
             .placements
             .values()
             .filter(|anchored| {
-                anchored.placement.screen == inner.screen && !anchored.placement.virtual_placement && !anchored.placement.unresolved
+                anchored.placement.screen == inner.screen
+                    && !anchored.placement.virtual_placement
+                    && !anchored.placement.unresolved
             })
             .filter_map(|anchored| render(anchored, None))
             .collect();
@@ -1068,8 +1075,13 @@ impl ImageStore {
                 .is_some_and(|placement| placement.revision == image.revision)
             && inner.screen == image.placement.screen
             && inner.history_origin == image.history_origin
-            && inner.resources.get(&image.placement.resource).is_some_and(|root|
-                root.selected.unwrap_or((image.placement.resource, 0)) == (image.frame_key, image.selection_revision))
+            && inner
+                .resources
+                .get(&image.placement.resource)
+                .is_some_and(|root| {
+                    root.selected.unwrap_or((image.placement.resource, 0))
+                        == (image.frame_key, image.selection_revision)
+                })
             && inner
                 .resources
                 .get(&image.frame_key)
@@ -1249,7 +1261,8 @@ impl ImageStore {
             .collect();
         let resources = std::mem::take(&mut inner.resources);
         for (key, resource) in resources {
-            if retained.contains(&key) || resource.root.is_some_and(|root| retained.contains(&root)) {
+            if retained.contains(&key) || resource.root.is_some_and(|root| retained.contains(&root))
+            {
                 inner.resources.insert(key, resource);
             } else {
                 retire(resource, &mut inner.retired);
@@ -1350,8 +1363,11 @@ impl ImageStore {
                 false
             }
             GraphicsUpdate::Frame { key, root, number } => {
-                if key == root || number < 2 || number > lyrel_core::core::graphics_state::MAX_ANIMATION_FRAMES
-                    || !inner.resources.contains_key(&root) {
+                if key == root
+                    || number < 2
+                    || number > lyrel_core::core::graphics_state::MAX_ANIMATION_FRAMES
+                    || !inner.resources.contains_key(&root)
+                {
                     return false;
                 }
                 if let Some(resource) = inner.resources.get_mut(&key) {
@@ -1359,10 +1375,20 @@ impl ImageStore {
                 }
                 false
             }
-            GraphicsUpdate::Select { key, frame, revision } => {
-                if !inner.resources.contains_key(&frame) { return false; }
-                let Some(root) = inner.resources.get_mut(&key) else { return false; };
-                if root.selected.is_some_and(|(_, old)| revision <= old) { return false; }
+            GraphicsUpdate::Select {
+                key,
+                frame,
+                revision,
+            } => {
+                if !inner.resources.contains_key(&frame) {
+                    return false;
+                }
+                let Some(root) = inner.resources.get_mut(&key) else {
+                    return false;
+                };
+                if root.selected.is_some_and(|(_, old)| revision <= old) {
+                    return false;
+                }
                 root.selected = Some((frame, revision));
                 true
             }

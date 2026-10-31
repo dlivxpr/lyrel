@@ -135,7 +135,11 @@ impl GraphicsState {
     /// All deletion routes (protocol, history, reflow, screen and reset) retire
     /// descendants through the same authoritative placement graph.
     fn prune_relative_orphans(&mut self) {
-        if !self.placements.values().any(|p| p.placement.parent.is_some_and(|parent| !self.placements.contains_key(&parent))) {
+        if !self.placements.values().any(|p| {
+            p.placement
+                .parent
+                .is_some_and(|parent| !self.placements.contains_key(&parent))
+        }) {
             return;
         }
         // Fixed-size scratch is bounded by the existing placement quota. All
@@ -147,19 +151,26 @@ impl GraphicsState {
             for (&key, p) in &self.placements {
                 if p.placement.parent.is_some_and(|parent| {
                     !self.placements.contains_key(&parent) || roots[..count].contains(&parent)
-                }) && !roots[..count].contains(&key) {
+                }) && !roots[..count].contains(&key)
+                {
                     roots[count] = key;
                     count += 1;
                 }
             }
-            if count == before { break; }
+            if count == before {
+                break;
+            }
         }
         for key in &roots[..count] {
             if let Some(p) = self.placements.remove(key) {
                 self.removed.push(*key);
                 self.dirty.remove(key);
                 let resource = p.placement.resource;
-                if !self.placements.values().any(|p| p.placement.resource == resource) {
+                if !self
+                    .placements
+                    .values()
+                    .any(|p| p.placement.resource == resource)
+                {
                     self.free_resource(resource);
                 }
             }
@@ -167,29 +178,65 @@ impl GraphicsState {
     }
 
     fn resolve_relative_geometry(&mut self) {
-        if !self.placements.values().any(|p| p.placement.parent.is_some()) { return; }
+        if !self
+            .placements
+            .values()
+            .any(|p| p.placement.parent.is_some())
+        {
+            return;
+        }
         let base = self.history_origin();
         // Virtual coordinates come from actual retained placeholder cells, not
         // from prototype creation or from the first visible desktop viewport.
         let mut keys = [0u64; MAX_PLACEMENTS];
         let count = self.placements.len();
-        for (slot, key) in keys.iter_mut().zip(self.placements.keys()) { *slot = *key; }
+        for (slot, key) in keys.iter_mut().zip(self.placements.keys()) {
+            *slot = *key;
+        }
         let mut anchors = [None::<(i64, i64)>; MAX_PLACEMENTS];
-        if self.placements.values().any(|p| p.placement.parent.is_some_and(|key| {
-            self.placements.get(&key).is_some_and(|p| p.placement.virtual_placement && p.placement.screen == self.screen)
-        })) {
+        if self.placements.values().any(|p| {
+            p.placement.parent.is_some_and(|key| {
+                self.placements.get(&key).is_some_and(|p| {
+                    p.placement.virtual_placement && p.placement.screen == self.screen
+                })
+            })
+        }) {
             for row in -(self.term.grid.history_size() as i32)..self.term.screen_lines() as i32 {
                 for slice in placeholder_row(&self.term.grid, Line(row)) {
-                    let Some(prototype) = placeholder_prototype(self.placements(), self.screen, &slice.run) else { continue };
-                    if slice.run.row >= prototype.span_rows || slice.run.col >= prototype.span_cols { continue; }
+                    let Some(prototype) =
+                        placeholder_prototype(self.placements(), self.screen, &slice.run)
+                    else {
+                        continue;
+                    };
+                    if slice.run.row >= prototype.span_rows || slice.run.col >= prototype.span_cols
+                    {
+                        continue;
+                    }
                     let image = &self.resources[&prototype.resource].image;
                     let mut run = slice.run;
                     run.width = run.width.min(prototype.span_cols - run.col);
-                    if rio_vt::ansi::kitty_virtual::compute_run_geometry(&run, prototype.span_cols, prototype.span_rows,
-                        image.width, image.height, (prototype.x, prototype.y, prototype.w, prototype.h),
-                        f32::from(self.size.cell_w.max(1)), f32::from(self.size.cell_h.max(1)), 0., 0., 0, slice.column).is_none() { continue; }
+                    if rio_vt::ansi::kitty_virtual::compute_run_geometry(
+                        &run,
+                        prototype.span_cols,
+                        prototype.span_rows,
+                        image.width,
+                        image.height,
+                        (prototype.x, prototype.y, prototype.w, prototype.h),
+                        f32::from(self.size.cell_w.max(1)),
+                        f32::from(self.size.cell_h.max(1)),
+                        0.,
+                        0.,
+                        0,
+                        slice.column,
+                    )
+                    .is_none()
+                    {
+                        continue;
+                    }
                     let point = (base + i64::from(row), slice.column as i64);
-                    let index = keys[..count].binary_search(&prototype.key).expect("retained prototype");
+                    let index = keys[..count]
+                        .binary_search(&prototype.key)
+                        .expect("retained prototype");
                     anchors[index] = Some(match anchors[index] {
                         Some(anchor) => (anchor.0.min(point.0), anchor.1.min(point.1)),
                         None => point,
@@ -199,8 +246,12 @@ impl GraphicsState {
         }
         for (&key, p) in &mut self.placements {
             let p = &mut p.placement;
-            if p.screen != self.screen || !p.virtual_placement { continue; }
-            let index = keys[..count].binary_search(&key).expect("retained prototype");
+            if p.screen != self.screen || !p.virtual_placement {
+                continue;
+            }
+            let index = keys[..count]
+                .binary_search(&key)
+                .expect("retained prototype");
             let anchor = anchors[index];
             let next = anchor.unwrap_or((p.anchor_row, p.anchor_col));
             if (p.anchor_row, p.anchor_col, p.unresolved) != (next.0, next.1, anchor.is_none()) {
@@ -216,10 +267,17 @@ impl GraphicsState {
             let mut changed = false;
             for &key in &keys[..count] {
                 let p = &self.placements[&key].placement;
-                let Some(parent) = p.parent.and_then(|key| self.placements.get(&key)) else { continue };
-                if p.screen != self.screen { continue; }
-                let next = (parent.placement.anchor_row + i64::from(p.relative_y),
-                    parent.placement.anchor_col + i64::from(p.relative_x), parent.placement.unresolved);
+                let Some(parent) = p.parent.and_then(|key| self.placements.get(&key)) else {
+                    continue;
+                };
+                if p.screen != self.screen {
+                    continue;
+                }
+                let next = (
+                    parent.placement.anchor_row + i64::from(p.relative_y),
+                    parent.placement.anchor_col + i64::from(p.relative_x),
+                    parent.placement.unresolved,
+                );
                 if (p.anchor_row, p.anchor_col, p.unresolved) != next {
                     let p = &mut self.placements.get_mut(&key).unwrap().placement;
                     p.anchor_row = next.0;
@@ -231,7 +289,9 @@ impl GraphicsState {
                     changed = true;
                 }
             }
-            if !changed { break; }
+            if !changed {
+                break;
+            }
         }
     }
 
@@ -250,7 +310,10 @@ impl GraphicsState {
         affected.sort_unstable();
         affected.dedup();
         for (resource, relative) in affected {
-            if self.resources.get(&resource).is_some_and(|r| relative || r.id == 0)
+            if self
+                .resources
+                .get(&resource)
+                .is_some_and(|r| relative || r.id == 0)
                 && !self
                     .placements
                     .values()
@@ -342,7 +405,9 @@ impl GraphicsState {
                 self.dirty.insert(marker.image_key);
             }
         }
-        self.discard_placements(|p| !p.virtual_placement && p.parent.is_none() && !retained.contains(&p.key));
+        self.discard_placements(|p| {
+            !p.virtual_placement && p.parent.is_none() && !retained.contains(&p.key)
+        });
         self.size = size;
         if grid_changed {
             self.region = 0..i32::from(size.rows.max(1));
@@ -443,8 +508,11 @@ impl GraphicsState {
     }
 
     fn free_resource(&mut self, key: u64) {
-        let children: Vec<_> = self.resources.iter().filter_map(|(&child, resource)|
-            (resource.root == Some(key)).then_some(child)).collect();
+        let children: Vec<_> = self
+            .resources
+            .iter()
+            .filter_map(|(&child, resource)| (resource.root == Some(key)).then_some(child))
+            .collect();
         for child in children {
             self.resources.remove(&child);
             self.freed.push(child);

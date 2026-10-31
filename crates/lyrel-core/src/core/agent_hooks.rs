@@ -609,9 +609,6 @@ impl<'a> HookTarget<'a> {
         p
     }
 
-    fn under_home(&self, parts: &[&str]) -> PathBuf {
-        self.under(&self.home, parts)
-    }
     fn pi_extension_path_checked(&self) -> io::Result<PathBuf> {
         Ok(self.under(
             &self.pi_agent_dir_checked()?,
@@ -648,7 +645,10 @@ impl<'a> HookTarget<'a> {
     fn opencode_config_dir_checked(&self) -> io::Result<PathBuf> {
         let environment = self.agent_environment(HookAgent::OpenCode)?;
         let home = self.agent_home(&environment)?;
-        let base = match environment.get("XDG_CONFIG_HOME").filter(|value| !value.is_empty()) {
+        let base = match environment
+            .get("XDG_CONFIG_HOME")
+            .filter(|value| !value.is_empty())
+        {
             Some(value) => {
                 let path = PathBuf::from(value);
                 if !self.host.is_absolute(&path) {
@@ -809,7 +809,11 @@ pub fn hooks_diagnostic(target: &HookTarget, agent: HookAgent) -> Option<HooksDi
 fn opencode_plugin_diagnostic(target: &HookTarget) -> Option<HooksDiagnostic> {
     let config = match target.opencode_config_dir_checked() {
         Ok(config) => config,
-        Err(error) => return Some(HooksDiagnostic::ScopeUnavailable { error: error.to_string() }),
+        Err(error) => {
+            return Some(HooksDiagnostic::ScopeUnavailable {
+                error: error.to_string(),
+            });
+        }
     };
     for name in ["cli.json", "cli.jsonc"] {
         let path = target.under(&config, &[name]);
@@ -2091,24 +2095,45 @@ mod tests {
         let host = FakeRemote::shared();
         let default = HookTarget::remote(&*host, home.clone());
         let default_cli = default.under(&home, &[".config", "opencode", "cli.json"]);
-        default.write(&default_cli, br#"{"session":{"image_preview":false},"plugins":["-lyrel"]}"#).unwrap();
+        default
+            .write(
+                &default_cli,
+                br#"{"session":{"image_preview":false},"plugins":["-lyrel"]}"#,
+            )
+            .unwrap();
         let scoped_cli = default.under(&isolated, &["opencode", "cli.json"]);
         let disabled = r#"{"session":{"image_preview":false},"plugins":["*"]}"#;
         default.write(&scoped_cli, disabled.as_bytes()).unwrap();
-        let command = format!("XDG_CONFIG_HOME='{}' opencode --standalone -s ses_fixture --auto", isolated.display());
+        let command = format!(
+            "XDG_CONFIG_HOME='{}' opencode --standalone -s ses_fixture --auto",
+            isolated.display()
+        );
         let target = HookTarget::remote(&*host, home.clone()).with_launch_commands(
             &std::collections::HashMap::from([("opencode".into(), command)]),
         );
         install_hooks(&target, HookAgent::OpenCode).unwrap();
-        assert_eq!(hooks_state(&target, HookAgent::OpenCode), HooksState::Installed);
-        assert!(target.read(&target.under(&isolated, &["opencode", "plugins", "lyrel", "tui.ts"])).is_ok());
+        assert_eq!(
+            hooks_state(&target, HookAgent::OpenCode),
+            HooksState::Installed
+        );
+        assert!(
+            target
+                .read(&target.under(&isolated, &["opencode", "plugins", "lyrel", "tui.ts"]))
+                .is_ok()
+        );
         assert_eq!(target.read(&scoped_cli).unwrap(), disabled);
-        assert_eq!(default.read(&default_cli).unwrap(), r#"{"session":{"image_preview":false},"plugins":["-lyrel"]}"#);
+        assert_eq!(
+            default.read(&default_cli).unwrap(),
+            r#"{"session":{"image_preview":false},"plugins":["-lyrel"]}"#
+        );
         assert!(!home.join(".config/opencode/plugins/lyrel/tui.ts").exists());
         uninstall_hooks(&target, HookAgent::OpenCode).unwrap();
         assert_eq!(target.read(&scoped_cli).unwrap(), disabled);
         let ambiguous = HookTarget::remote(&*host, home).with_launch_commands(
-            &std::collections::HashMap::from([("opencode".into(), "XDG_CONFIG_HOME=relative opencode".into())]),
+            &std::collections::HashMap::from([(
+                "opencode".into(),
+                "XDG_CONFIG_HOME=relative opencode".into(),
+            )]),
         );
         assert!(install_hooks(&ambiguous, HookAgent::OpenCode).is_err());
     }
@@ -2119,7 +2144,10 @@ mod tests {
             std::env::temp_dir().join(format!("lyrel-opencode-presence-{}", std::process::id()));
         let host = FakeRemote::shared();
         let target = HookTarget::remote(&*host, dir.clone());
-        let config = target.under(&target.opencode_config_dir_checked().unwrap(), &["cli.json"]);
+        let config = target.under(
+            &target.opencode_config_dir_checked().unwrap(),
+            &["cli.json"],
+        );
         target
             .write(&config, br#"{"plugins":["*","-lyrel","user-plugin"]}"#)
             .unwrap();

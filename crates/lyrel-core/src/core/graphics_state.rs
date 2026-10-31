@@ -55,8 +55,16 @@ pub enum GraphicsUpdate {
     },
     /// Atomic selection of an immutable full-frame resource. Placements retain
     /// their root identity; a monotonic revision invalidates stale paint claims.
-    Select { key: u64, frame: u64, revision: u64 },
-    Frame { key: u64, root: u64, number: u32 },
+    Select {
+        key: u64,
+        frame: u64,
+        revision: u64,
+    },
+    Frame {
+        key: u64,
+        root: u64,
+        number: u32,
+    },
     Evicted {
         key: u64,
         width: u32,
@@ -83,8 +91,16 @@ enum Metadata {
         format: WireFormat,
         compressed: bool,
     },
-    Select { key: u64, frame: u64, revision: u64 },
-    Frame { key: u64, root: u64, number: u32 },
+    Select {
+        key: u64,
+        frame: u64,
+        revision: u64,
+    },
+    Frame {
+        key: u64,
+        root: u64,
+        number: u32,
+    },
     Evicted {
         key: u64,
         width: u32,
@@ -117,12 +133,25 @@ impl GraphicsUpdate {
                 },
                 &image.data,
             ),
-            Self::Select { key, frame, revision } => (
-                Metadata::Select { key: *key, frame: *frame, revision: *revision },
+            Self::Select {
+                key,
+                frame,
+                revision,
+            } => (
+                Metadata::Select {
+                    key: *key,
+                    frame: *frame,
+                    revision: *revision,
+                },
                 &[],
             ),
             Self::Frame { key, root, number } => (
-                Metadata::Frame { key: *key, root: *root, number: *number }, &[],
+                Metadata::Frame {
+                    key: *key,
+                    root: *root,
+                    number: *number,
+                },
+                &[],
             ),
             Self::Evicted { key, width, height } => (
                 Metadata::Evicted {
@@ -220,9 +249,15 @@ impl GraphicsUpdate {
                     }),
                 })
             }
-            Metadata::Select { key, frame: selected, revision } if frame.len() == end => {
-                Some(Self::Select { key, frame: selected, revision })
-            }
+            Metadata::Select {
+                key,
+                frame: selected,
+                revision,
+            } if frame.len() == end => Some(Self::Select {
+                key,
+                frame: selected,
+                revision,
+            }),
             Metadata::Frame { key, root, number } if frame.len() == end => {
                 Some(Self::Frame { key, root, number })
             }
@@ -499,7 +534,8 @@ impl GraphicsState {
             return Ok(());
         }
         let replaced = (control.action != Action::Frame && control.id != 0)
-            .then(|| self.lookup(control)).flatten();
+            .then(|| self.lookup(control))
+            .flatten();
         image.metadata = replaced
             .and_then(|key| self.resources.get(&key))
             .map(|r| r._metadata.clone())
@@ -606,8 +642,13 @@ impl GraphicsState {
         if control.action == Action::Frame {
             let root = self.lookup(control).ok_or("ENOENT:Image not found")?;
             let resource = &self.resources[&root];
-            if control.x != 0 || control.y != 0 || control.cols != 0 || control.rows != 0
-                || control.offset_x > 1 || control.offset_y != 0 || control.z != 0
+            if control.x != 0
+                || control.y != 0
+                || control.cols != 0
+                || control.rows != 0
+                || control.offset_x > 1
+                || control.offset_y != 0
+                || control.z != 0
             {
                 return Err("ENOTSUPPORTED:Partial frame editing and timing unavailable");
             }
@@ -617,8 +658,14 @@ impl GraphicsState {
             if resource.resident.lock().unwrap().packet.is_none() {
                 return Err("ENOENT:Image data unavailable");
             }
-            if self.resources.values().filter(|r| r.root == Some(root)).count() + 1
-                >= MAX_ANIMATION_FRAMES as usize || self.resources.len() >= MAX_RESOURCES
+            if self
+                .resources
+                .values()
+                .filter(|r| r.root == Some(root))
+                .count()
+                + 1
+                >= MAX_ANIMATION_FRAMES as usize
+                || self.resources.len() >= MAX_RESOURCES
             {
                 return Err("ENOSPC:Animation frame budget exhausted");
             }
@@ -637,10 +684,13 @@ impl GraphicsState {
                 .placements
                 .values()
                 .any(|p| Some(p.placement.resource) == replaced);
-        let replaced_count = replaced.map_or(0, |root| self.resources.iter()
-            .filter(|(key, resource)| **key == root || resource.root == Some(root)).count());
-        if self.resources.len() - replaced_count >= MAX_RESOURCES || placement_full
-        {
+        let replaced_count = replaced.map_or(0, |root| {
+            self.resources
+                .iter()
+                .filter(|(key, resource)| **key == root || resource.root == Some(root))
+                .count()
+        });
+        if self.resources.len() - replaced_count >= MAX_RESOURCES || placement_full {
             return Err("ENOSPC:Pane graphics budget exhausted");
         }
         Ok(())
@@ -796,7 +846,8 @@ impl GraphicsState {
                     anchored.retained = retained_placeholders.contains(&key);
                     live_placeholders.contains(&key)
                 } else {
-                    !p.unresolved && p.anchor_col < i64::from(self.size.cols.max(1))
+                    !p.unresolved
+                        && p.anchor_col < i64::from(self.size.cols.max(1))
                         && p.anchor_col + i64::from(p.span_cols) > 0
                         && p.anchor_row + i64::from(p.clip_top) < bottom
                         && p.anchor_row + i64::from(p.clip_bottom) > top
@@ -823,7 +874,8 @@ impl GraphicsState {
                         .values()
                         .filter_map(|(_, viewport)| visible_range(viewport))
                         .any(|(start, end, cols)| {
-                            !p.unresolved && p.anchor_col < i64::from(cols)
+                            !p.unresolved
+                                && p.anchor_col < i64::from(cols)
                                 && p.anchor_col + i64::from(p.span_cols) > 0
                                 && p.anchor_row + i64::from(p.clip_top) < end
                                 && p.anchor_row + i64::from(p.clip_bottom) > start
@@ -840,7 +892,8 @@ impl GraphicsState {
         // observe a live resource temporarily downgraded during the scan.
         for resource in self.resources.values() {
             // Admission and pressure reclaim a frame sequence atomically.
-            resource.resident.lock().unwrap().priority = resource.root
+            resource.resident.lock().unwrap().priority = resource
+                .root
                 .and_then(|root| self.resources.get(&root))
                 .map_or(resource.priority, |root| root.priority);
         }
@@ -857,7 +910,9 @@ impl GraphicsState {
             if resident.packet.is_some() {
                 continue;
             }
-            if resource.root.is_none() && !resident.announced { evicted_roots.insert(key); }
+            if resource.root.is_none() && !resident.announced {
+                evicted_roots.insert(key);
+            }
             if resource.priority == retention::Priority::Unreferenced {
                 obsolete.push(key);
             } else if !resident.announced {
@@ -869,21 +924,39 @@ impl GraphicsState {
                 }));
             }
         }
-        let children: Vec<_> = self.resources.iter().filter_map(|(&key, resource)|
-            resource.root.filter(|root| evicted_roots.contains(root)).map(|_| key)).collect();
-        for key in &children { self.resources.remove(key); }
+        let children: Vec<_> = self
+            .resources
+            .iter()
+            .filter_map(|(&key, resource)| {
+                resource
+                    .root
+                    .filter(|root| evicted_roots.contains(root))
+                    .map(|_| key)
+            })
+            .collect();
+        for key in &children {
+            self.resources.remove(key);
+        }
         if !children.is_empty() {
             effects.push(GraphicsEffect::Update(GraphicsUpdate::Remove {
-                placements: Vec::new(), resources: children,
+                placements: Vec::new(),
+                resources: children,
             }));
         }
         for root in evicted_roots {
             let resource = self.resources.get_mut(&root).unwrap();
-            if resource.selected == root { continue; }
+            if resource.selected == root {
+                continue;
+            }
             resource.selected = root;
-            resource.revision = resource.revision.checked_add(1).expect("graphics selection revision exhausted");
+            resource.revision = resource
+                .revision
+                .checked_add(1)
+                .expect("graphics selection revision exhausted");
             effects.push(GraphicsEffect::Update(GraphicsUpdate::Select {
-                key: root, frame: root, revision: resource.revision,
+                key: root,
+                frame: root,
+                revision: resource.revision,
             }));
         }
         for key in obsolete {
@@ -917,11 +990,15 @@ impl GraphicsState {
         for (&key, resource) in &self.resources {
             if let Some(root) = resource.root {
                 updates.push(GraphicsEffect::Update(GraphicsUpdate::Frame {
-                    key, root, number: resource.frame_number,
+                    key,
+                    root,
+                    number: resource.frame_number,
                 }));
             } else if resource.revision != 0 {
                 updates.push(GraphicsEffect::Update(GraphicsUpdate::Select {
-                    key, frame: resource.selected, revision: resource.revision,
+                    key,
+                    frame: resource.selected,
+                    revision: resource.revision,
                 }));
             }
         }
@@ -970,7 +1047,8 @@ impl GraphicsState {
 
     fn lookup(&self, control: &Control) -> Option<u64> {
         self.resources.iter().rev().find_map(|(key, resource)| {
-            (resource.root.is_none() && resource.screen == self.screen
+            (resource.root.is_none()
+                && resource.screen == self.screen
                 && ((control.id != 0 && resource.id == control.id)
                     || (control.number != 0 && resource.number == control.number)))
                 .then_some(*key)
@@ -1052,7 +1130,11 @@ impl GraphicsState {
                     Self::reply(&mut effects, &control, control.id, status);
                     return effects;
                 }
-                let root = if control.action == Action::Frame { self.lookup(&control) } else { None };
+                let root = if control.action == Action::Frame {
+                    self.lookup(&control)
+                } else {
+                    None
+                };
                 let replaced = if control.action != Action::Frame && control.id != 0 {
                     self.lookup(&control)
                 } else {
@@ -1115,8 +1197,13 @@ impl GraphicsState {
                         priority: retention::Priority::Unreferenced,
                         _metadata: metadata_lease,
                         root,
-                        frame_number: root.map_or(1, |root| self.resources.values()
-                            .filter(|r| r.root == Some(root)).count() as u32 + 2),
+                        frame_number: root.map_or(1, |root| {
+                            self.resources
+                                .values()
+                                .filter(|r| r.root == Some(root))
+                                .count() as u32
+                                + 2
+                        }),
                         selected: key,
                         revision: 0,
                     },
@@ -1124,7 +1211,9 @@ impl GraphicsState {
                 effects.push(GraphicsEffect::Frame(packet));
                 if let Some(root) = root {
                     effects.push(GraphicsEffect::Update(GraphicsUpdate::Frame {
-                        key, root, number: self.resources[&key].frame_number,
+                        key,
+                        root,
+                        number: self.resources[&key].frame_number,
                     }));
                 }
                 if control.action == Action::TransmitAndDisplay {
@@ -1163,7 +1252,12 @@ impl GraphicsState {
         };
         let id = self.resources[&root].id;
         if control.width > 1 || control.height != 0 || control.rows != 0 || control.z != 0 {
-            Self::reply(effects, control, id, "ENOTSUPPORTED:Automatic playback and timing unavailable");
+            Self::reply(
+                effects,
+                control,
+                id,
+                "ENOTSUPPORTED:Automatic playback and timing unavailable",
+            );
             return;
         }
         let frame = if control.cols == 0 {
@@ -1171,26 +1265,40 @@ impl GraphicsState {
         } else if control.cols == 1 {
             Some(root)
         } else {
-            self.resources.iter().find_map(|(&key, resource)|
-                (resource.root == Some(root) && resource.frame_number == control.cols).then_some(key))
+            self.resources.iter().find_map(|(&key, resource)| {
+                (resource.root == Some(root) && resource.frame_number == control.cols)
+                    .then_some(key)
+            })
         };
-        let Some(frame) = frame.filter(|frame| self.resources.get(frame)
-            .is_some_and(|resource| resource.resident.lock().unwrap().packet.is_some())) else {
+        let Some(frame) = frame.filter(|frame| {
+            self.resources
+                .get(frame)
+                .is_some_and(|resource| resource.resident.lock().unwrap().packet.is_some())
+        }) else {
             Self::reply(effects, control, id, "ENOENT:Animation frame not found");
             return;
         };
         let resource = self.resources.get_mut(&root).unwrap();
         resource.selected = frame;
-        resource.revision = resource.revision.checked_add(1).expect("graphics selection revision exhausted");
+        resource.revision = resource
+            .revision
+            .checked_add(1)
+            .expect("graphics selection revision exhausted");
         effects.push(GraphicsEffect::Update(GraphicsUpdate::Select {
-            key: root, frame, revision: resource.revision,
+            key: root,
+            frame,
+            revision: resource.revision,
         }));
         Self::reply(effects, control, id, "OK");
     }
 
     /// Validate the prospective graph before quota admission or replacement.
     /// A replacement may deepen existing descendants, so validate every path.
-    fn relative_parent(&self, c: &Control, removed_resource: Option<u64>) -> Result<Option<u64>, &'static str> {
+    fn relative_parent(
+        &self,
+        c: &Control,
+        removed_resource: Option<u64>,
+    ) -> Result<Option<u64>, &'static str> {
         if c.parent_image == 0 {
             if c.parent_placement != 0 {
                 return Err("ENOPARENT:Parent placement not found");
@@ -1200,12 +1308,18 @@ impl GraphicsState {
         if c.virtual_placement {
             return Err("EINVAL:Virtual placement cannot be relative");
         }
-        let parent = self.placements.values().rev().find(|p| {
-            p.placement.screen == self.screen
-                && p.placement.image_id == c.parent_image
-                && p.placement.placement_id == c.parent_placement
-                && Some(p.placement.resource) != removed_resource
-        }).map(|p| p.placement.key).ok_or("ENOPARENT:Parent placement not found")?;
+        let parent = self
+            .placements
+            .values()
+            .rev()
+            .find(|p| {
+                p.placement.screen == self.screen
+                    && p.placement.image_id == c.parent_image
+                    && p.placement.placement_id == c.parent_placement
+                    && Some(p.placement.resource) != removed_resource
+            })
+            .map(|p| p.placement.key)
+            .ok_or("ENOPARENT:Parent placement not found")?;
         let mut ancestor = Some(parent);
         for _ in 0..=8 {
             let Some(key) = ancestor else { break };
@@ -1215,11 +1329,24 @@ impl GraphicsState {
             }
             ancestor = p.parent;
         }
-        let replacement = self.placements.values().find(|p| {
-            p.placement.screen == self.screen && c.id != 0 && c.placement != 0
-                && p.placement.image_id == c.id && p.placement.placement_id == c.placement
-        }).map(|p| p.placement.key);
-        for start in self.placements.keys().copied().map(Some).chain(std::iter::once(None)) {
+        let replacement = self
+            .placements
+            .values()
+            .find(|p| {
+                p.placement.screen == self.screen
+                    && c.id != 0
+                    && c.placement != 0
+                    && p.placement.image_id == c.id
+                    && p.placement.placement_id == c.placement
+            })
+            .map(|p| p.placement.key);
+        for start in self
+            .placements
+            .keys()
+            .copied()
+            .map(Some)
+            .chain(std::iter::once(None))
+        {
             let mut current = start;
             let mut visited = [0u64; 10];
             let mut count = 0;
@@ -1227,7 +1354,9 @@ impl GraphicsState {
                 let next = if current.is_none() || current == replacement {
                     Some(parent)
                 } else {
-                    self.placements.get(&current.unwrap()).and_then(|p| p.placement.parent)
+                    self.placements
+                        .get(&current.unwrap())
+                        .and_then(|p| p.placement.parent)
                 };
                 let Some(next) = next else { break };
                 if visited[..count].contains(&next) {
@@ -1419,9 +1548,14 @@ impl GraphicsState {
         };
         drop(resource);
         let mut resources = vec![key];
-        resources.extend(self.resources.iter().filter_map(|(&child, resource)|
-            (resource.root == Some(key)).then_some(child)));
-        for key in &resources { self.resources.remove(key); }
+        resources.extend(
+            self.resources
+                .iter()
+                .filter_map(|(&child, resource)| (resource.root == Some(key)).then_some(child)),
+        );
+        for key in &resources {
+            self.resources.remove(key);
+        }
         let placements: Vec<_> = self
             .placements
             .iter()
@@ -1518,6 +1652,12 @@ impl GraphicsState {
         }
         affected.sort_unstable();
         affected.dedup();
+        if !removed.is_empty() {
+            effects.push(GraphicsEffect::Update(GraphicsUpdate::Remove {
+                placements: removed,
+                resources: Vec::new(),
+            }));
+        }
         for (key, relative) in affected {
             if self
                 .placements
@@ -1533,12 +1673,6 @@ impl GraphicsState {
                 let _ = resource;
                 self.remove_resource(key, effects);
             }
-        }
-        if !removed.is_empty() {
-            effects.push(GraphicsEffect::Update(GraphicsUpdate::Remove {
-                placements: removed,
-                resources: Vec::new(),
-            }));
         }
     }
 }

@@ -39,6 +39,7 @@ pub(crate) fn foreground_group_is_local(pgid: i32) -> Option<bool> {
     })
 }
 
+#[cfg(any(not(windows), test))]
 fn group_media_locality(
     pgid: u32,
     table: &HashMap<u32, Row>,
@@ -49,18 +50,37 @@ fn group_media_locality(
         let mut ancestor = row;
         let mut relevant = row.pgid == pgid;
         for _ in 0..MAX_TREE {
-            if relevant { break; }
-            let Some(parent) = table.get(&ancestor.ppid) else { break; };
-            if parent.ppid == ancestor.ppid { break; }
+            if relevant {
+                break;
+            }
+            let Some(parent) = table.get(&ancestor.ppid) else {
+                break;
+            };
+            if parent.ppid == ancestor.ppid {
+                break;
+            }
             ancestor = parent;
             relevant = ancestor.pgid == pgid;
         }
-        if !relevant { continue; }
+        if !relevant {
+            continue;
+        }
         found = true;
         let argv = argv_for(pid)?;
         let program = argv.first()?;
         let name = std::path::Path::new(program).file_name()?;
-        if matches!(name.to_str()?, "ssh" | "ssh.exe" | "wsl" | "wsl.exe" | "mosh-client" | "docker" | "podman" | "nsenter" | "unshare") {
+        if matches!(
+            name.to_str()?,
+            "ssh"
+                | "ssh.exe"
+                | "wsl"
+                | "wsl.exe"
+                | "mosh-client"
+                | "docker"
+                | "podman"
+                | "nsenter"
+                | "unshare"
+        ) {
             return Some(false);
         }
     }
