@@ -2858,6 +2858,7 @@ mod gpui_tests {
     include!("graphics_layout_consumer_tests.rs");
     include!("graphics_recovery_consumer_tests.rs");
     include!("graphics_playback_consumer_tests.rs");
+    include!("graphics_capacity_consumer_tests.rs");
     include!("pi_replay_consumer_tests.rs");
     include!("graphics_relative_consumer_tests.rs");
     include!("native_ssh_consumer_tests.rs");

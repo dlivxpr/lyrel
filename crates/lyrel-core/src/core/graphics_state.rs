@@ -225,7 +225,10 @@ impl GraphicsUpdate {
 
     pub(crate) fn encode_packet(&self) -> Option<crate::daemon::protocol::GraphicsPacket> {
         let retention = retention::Retention::shared();
-        let mut header_work = retention.work(retention.owner());
+        self.encode_packet_budgeted(retention.work(retention.owner()))
+    }
+
+    fn encode_packet_budgeted(&self, mut header_work: retention::Work) -> Option<crate::daemon::protocol::GraphicsPacket> {
         let header_bytes = match self {
             Self::Remove {
                 placements,
@@ -335,8 +338,8 @@ mod placeholder;
 pub use placeholder::{PlaceholderSlice, placeholder_prototype, placeholder_row};
 
 /// Encoded source and RGBA-equivalent bounds; these are independent scopes.
-pub const MAX_PANE_ENCODED_BYTES: usize = 64 << 20;
-pub const MAX_PANE_DECODED_BYTES: usize = 128 << 20;
+pub const MAX_PANE_ENCODED_BYTES: usize = 512 << 20;
+pub const MAX_PANE_DECODED_BYTES: usize = 512 << 20;
 /// Admits a 3840 × 2160 RGBA screenshot (33,177,600 bytes).
 pub const MAX_IMAGE_DECODED_BYTES: usize = 32 << 20;
 #[path = "graphics_retention.rs"]
@@ -784,7 +787,7 @@ impl GraphicsState {
     }
 
     pub(crate) fn prepare_image(
-        mut image: Image,
+        image: Image,
         owner: u64,
         key: u64,
         control: &Control,
@@ -792,6 +795,19 @@ impl GraphicsState {
     ) -> Result<PreparedImage, &'static str> {
         let retention = retention::Retention::shared();
         let mut work = retention.work(owner);
+        if !work.resize(image.data.capacity()) {
+            return Err("ENOSPC:Graphics source budget exhausted");
+        }
+        Self::prepare_image_budgeted(image, key, control, frame, work)
+    }
+
+    pub(crate) fn prepare_image_budgeted(
+        mut image: Image,
+        key: u64,
+        control: &Control,
+        frame: Option<FramePreparation>,
+        mut work: retention::Work,
+    ) -> Result<PreparedImage, &'static str> {
         let mut decoded_bytes = if control.action == Action::Compose { 0 } else {
             validate_image(&mut image, &mut work).map_err(|status| {
                 if control.medium == super::kitty_graphics::Medium::Direct { status }
@@ -809,7 +825,7 @@ impl GraphicsState {
                     key,
                     image: image.clone(),
                 })
-                .encode_packet()
+                .encode_packet_budgeted(work.temporary())
                 .ok_or("ENOSPC:Graphics transport budget exhausted")?,
             )
         } else {
@@ -1071,7 +1087,9 @@ impl GraphicsState {
         if self.resources.is_empty() {
             return Some((Vec::new(), work));
         }
-        let count = self.resources.len() * 2 + self.placements.len() + self.animations.len() + 1;
+        // A replaced root can emit both Frame and Select in addition to its
+        // resource packet. Reserve the upper bound before taking Arc snapshots.
+        let count = self.resources.len() * 3 + self.placements.len() + self.animations.len() + 1;
         if !work.resize(count * std::mem::size_of::<GraphicsEffect>()) {
             return None;
         }
@@ -1805,14 +1823,21 @@ fn validate_image(image: &mut Image, work: &mut retention::Work) -> Result<usize
     if image.data.len() > MAX_IMAGE_BYTES {
         return Err("ENOSPC:Image payload too large");
     }
-    // The parser still charges the input for this read. Only a normalized PNG
-    // adds a second owned source; keep that source's capacity charged through
-    // PreparedImage, including while it is serialized/admitted.
-    let mut normalized_capacity = 0;
+    // The parser transfers the original source lease into prepare. Standalone
+    // callers reserve that same owner before validation; only a normalized PNG
+    // needs an additional, temporary allocation while the input still lives.
+    let mut source_capacity = image.data.capacity();
     if image.format == WireFormat::Png {
         if image.compressed {
-            image.data = inflate_png(&image.data, work)?;
-            normalized_capacity = image.data.capacity();
+            let mut inflate_work = work.temporary();
+            let normalized = inflate_png(&image.data, &mut inflate_work)?;
+            // Transfer the normalized allocation's charge before retiring the
+            // original source. No allocation is unowned between the two stages.
+            let normalized_work = inflate_work.split(normalized.capacity());
+            image.data = normalized;
+            source_capacity = image.data.capacity();
+            work.resize(0);
+            *work = normalized_work;
             image.compressed = false;
         }
         if image.data.get(..8) != Some(b"\x89PNG\r\n\x1a\n")
@@ -1850,7 +1875,7 @@ fn validate_image(image: &mut Image, work: &mut retention::Work) -> Result<usize
         // allocate. Validation discards each decoded row instead of allocating
         // a full second image in the daemon. Ignore ancillary metadata that is
         // irrelevant to terminal pixels and independently cap decoder scratch.
-        if !work.resize(normalized_capacity + (4 << 20)) {
+        if !work.resize(source_capacity + (4 << 20)) {
             return Err("ENOSPC:Graphics validation budget exhausted");
         }
         let mut decoder = png::Decoder::new_with_limits(
@@ -1874,7 +1899,7 @@ fn validate_image(image: &mut Image, work: &mut retention::Work) -> Result<usize
             bytes
         };
         if image.compressed {
-            if !work.resize(256 << 10) {
+            if !work.resize(source_capacity + (256 << 10)) {
                 return Err("ENOSPC:Graphics validation budget exhausted");
             }
             validate_zlib_pixels(&image.data, expected)?;
@@ -1882,9 +1907,9 @@ fn validate_image(image: &mut Image, work: &mut retention::Work) -> Result<usize
             return Err("EINVAL:Pixel payload does not match dimensions");
         }
     }
-    // Row decoding/inflate scratch is gone, but normalized source bytes stay
-    // alive until the prepared image and its packet have been consumed.
-    work.resize(normalized_capacity);
+    // Validation scratch is gone; keep the owned source charged through desktop
+    // admission, packet encoding and commit/cancellation.
+    work.resize(source_capacity);
     Ok(bytes)
 }
 
