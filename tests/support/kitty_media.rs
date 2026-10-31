@@ -3,6 +3,8 @@ pub struct SharedMedia {
     pub name: String,
     #[cfg(windows)]
     _handle: std::os::windows::io::OwnedHandle,
+    #[cfg(windows)]
+    object_len: usize,
     #[cfg(unix)]
     name_c: std::ffi::CString,
 }
@@ -25,7 +27,7 @@ impl SharedMedia {
             assert!(!view.Value.is_null());
             std::ptr::copy_nonoverlapping(bytes.as_ptr(), view.Value.cast::<u8>().add(offset), bytes.len());
             assert_ne!(UnmapViewOfFile(view), 0);
-            Self { name, _handle: handle }
+            Self { name, _handle: handle, object_len }
         }
         #[cfg(unix)]
         unsafe {
@@ -42,6 +44,22 @@ impl SharedMedia {
             assert_eq!(libc::munmap(mapped, object_len), 0);
             Self { name, name_c }
         }
+    }
+
+    #[cfg(windows)]
+    pub fn len(&self) -> u64 {
+        self.object_len as u64
+    }
+
+    #[cfg(unix)]
+    pub fn len(&self) -> u64 {
+        use std::os::fd::FromRawFd;
+        // Darwin reports the stable allocation length rounded to its VM page,
+        // not the original ftruncate argument. Test the actual public bound.
+        let fd = unsafe { libc::shm_open(self.name_c.as_ptr(), libc::O_RDONLY, 0) };
+        assert!(fd >= 0, "shm_open length: {}", std::io::Error::last_os_error());
+        let file = unsafe { std::fs::File::from_raw_fd(fd) };
+        file.metadata().unwrap().len()
     }
 }
 

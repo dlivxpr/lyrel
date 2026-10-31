@@ -1116,8 +1116,9 @@ impl MediumTransfer {
     }
 
     /// Darwin shm descriptors have no read operation or regular-file mode.
-    /// Unlike Linux/files, XNU permits only the initial ftruncate for a shm
-    /// object, so its checked size cannot shrink underneath this mapping.
+    /// XNU permits only the initial ftruncate and reports its length rounded up
+    /// to the VM page size, so that stable kernel-owned size cannot shrink
+    /// underneath this mapping.
     #[cfg(target_os = "macos")]
     fn read_shared_mapped(&self, file: std::fs::File) -> Option<Vec<u8>> {
         use std::os::fd::AsRawFd as _;

@@ -73,7 +73,7 @@ fn graphics_consumer_owned_media_large_regions_and_uniform_failures(cx: &mut Tes
     let shared_short = owned_media_fixture::SharedMedia::new(4096, 13, &rgba);
     let mut failures: Vec<_> = names.into_iter().map(|name| ('f', name, 2, 8)).collect();
     failures.push(('f', large.to_str().unwrap().to_owned(), 0, 0));
-    failures.push(('s', shared_short.name.clone(), 4092, 8));
+    failures.push(('s', shared_short.name.clone(), shared_short.len() - 4, 8));
     failures.push(('s', "malformed/shared/name".into(), 0, 8));
     failures.push(('s', format!("missing-{}", uuid::Uuid::new_v4()), 0, 8));
     let mut serial = 30;

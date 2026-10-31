@@ -23,8 +23,11 @@ impl Drop for Capture {
             if !self.consumed {
                 // Exclusive rename preserves the original object (including
                 // symlinks/directories) without unlinking or overwriting it.
+                // musl has no renameat2 wrapper; the raw syscall keeps the same
+                // no-clobber guarantee on both glibc and musl.
                 #[cfg(target_os = "linux")]
-                let restored = libc::renameat2(
+                let restored = libc::syscall(
+                    libc::SYS_renameat2,
                     self.directory.as_raw_fd(),
                     c"object".as_ptr(),
                     self.parent.as_raw_fd(),
