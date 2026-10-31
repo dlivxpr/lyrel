@@ -97,7 +97,8 @@ const HEADER: usize = 5;
 /// v15 completes each graphics pressure request on its requesting endpoint.
 /// v16 carries immutable frames, atomic selection, relative-placement edges,
 /// and signed coordinates.
-/// v17 carries daemon-owned playback timelines and visibility pause metadata.
+/// v17 carries daemon-owned playback timelines, visibility pause metadata,
+/// and immutable replacement content for frame one (stable root identity).
 pub const PROTOCOL_VERSION: u32 = 17;
 
 pub const FEATURE_PANE_OWNER: &str = "pane-owner";

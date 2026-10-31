@@ -1368,11 +1368,28 @@ impl ImageStore {
             }
             GraphicsUpdate::Frame { key, root, number } => {
                 if key == root
-                    || number < 2
+                    || number == 0
                     || number > lyrel_core::core::graphics_state::MAX_ANIMATION_FRAMES
-                    || !inner.resources.contains_key(&root)
+                    || !inner.resources.contains_key(&key)
+                    || (number != 1 && !inner.resources.contains_key(&root))
                 {
                     return false;
+                }
+                if number == 1 {
+                    // Keep the stable placement root, but retire its obsolete
+                    // pixel owner. A fresh replay can create this identity from
+                    // the new version without retaining any old root pixels.
+                    let version = &inner.resources[&key];
+                    let metadata = inner.resources.get(&root).map(|r| r.metadata.clone()).unwrap_or_else(|| version.metadata.clone());
+                    let selected = inner.resources.get(&root).and_then(|r| r.selected);
+                    let playback = inner.resources.get(&root).and_then(|r| r.playback.clone());
+                    let shell = Resource {
+                        pending: None, decoded: None, width: version.width, height: version.height,
+                        evicted: false, revision: version.revision, painted: Arc::new(AtomicBool::new(false)),
+                        peak: None, scratch: None, source: None, received: 0, pressure_requested: false,
+                        metadata, root: None, selected, playback,
+                    };
+                    if let Some(old) = inner.resources.insert(root, shell) { retire(old, &mut inner.retired); }
                 }
                 if let Some(resource) = inner.resources.get_mut(&key) {
                     resource.root = Some(root);

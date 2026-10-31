@@ -597,7 +597,7 @@ pub enum Action {
     Display,
     /// `a=d` — delete image(s)/placement(s).
     Delete,
-    /// `a=f` — append a complete frame to an existing image.
+    /// `a=f` — append a frame or edit a retained frame rectangle.
     Frame,
     /// `a=a` — stopped/manual frame selection.
     Animation,

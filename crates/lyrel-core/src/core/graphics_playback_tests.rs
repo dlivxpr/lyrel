@@ -172,3 +172,43 @@ fn controlled_virtual_relative_visibility_and_all_gapless_scheduling_are_bounded
     state.output(b"\x1b[6;5H\x1b[X");
     assert!(state.playback_snapshot(child).paused, "erasing the only real virtual anchor withdraws the child");
 }
+
+#[test]
+fn controlled_current_frame_edits_preserve_timing_and_follow_new_content_keys() {
+    let mut state = GraphicsState::new(WinSize { cols: 20, rows: 10, cell_w: 8, cell_h: 16 });
+    let start = std::time::Instant::now();
+    state.controlled_now = Some(start);
+    command(&mut state, "a=T,i=91,C=1,c=1,r=1", Some([255, 0, 0, 255]));
+    command(&mut state, "a=f,i=91,z=70", Some([0, 255, 0, 255]));
+    command(&mut state, "a=a,i=91,s=3,r=1,z=100", None);
+    let root = state.lookup(&Control { id: 91, ..Control::default() }).unwrap();
+    let (sender, _) = std::sync::mpsc::channel();
+    let sender = Arc::new(sender);
+    state.set_viewport(1, Arc::downgrade(&sender), crate::daemon::protocol::GraphicsViewport {
+        screen: 0, epoch: 0, top: None, cols: 20, rows: 10,
+    });
+    state.controlled_now = Some(start + Duration::from_millis(20));
+    command(&mut state, "a=f,i=91,r=1,X=1", Some([255, 255, 0, 255]));
+    assert_eq!(selected(&state), [255, 255, 0, 255]);
+    assert_eq!(state.playback_snapshot(root).remaining_ms, 80);
+    state.controlled_now = Some(start + Duration::from_millis(100));
+    state.advance_playback();
+    assert_eq!(selected(&state), [0, 255, 0, 255]);
+    state.controlled_now = Some(start + Duration::from_millis(110));
+    command(&mut state, "a=f,i=91,r=2,X=1", Some([0, 0, 255, 255]));
+    assert_eq!(selected(&state), [0, 0, 255, 255]);
+    assert_eq!(state.playback_snapshot(root).remaining_ms, 60);
+    state.controlled_now = Some(start + Duration::from_millis(169));
+    state.advance_playback();
+    assert_eq!(selected(&state), [0, 0, 255, 255]);
+    state.controlled_now = Some(start + Duration::from_millis(170));
+    state.advance_playback();
+    assert_eq!(selected(&state), [255, 255, 0, 255]);
+    state.controlled_now = Some(start + Duration::from_millis(175));
+    command(&mut state, "a=f,i=91,r=1,X=1,z=25", Some([255, 0, 255, 255]));
+    assert_eq!(selected(&state), [255, 0, 255, 255]);
+    assert_eq!(state.playback_snapshot(root).remaining_ms, 25);
+    state.controlled_now = Some(start + Duration::from_millis(200));
+    state.advance_playback();
+    assert_eq!(selected(&state), [0, 0, 255, 255]);
+}
