@@ -110,7 +110,7 @@ lyrel 通过 [russh](https://github.com/Eugeny/russh) 自行处理 SSH 协议。
 负责 PTY 的远端 daemon 按自己的能力与路径读取，不在桌面文件系统上查找同名路径。
 这与下方 OSC 5522 **剪贴板**功能不同，也不要求开启远程剪贴板权限。
 
-当前本地与远端共用 pane 协议 `15`，`CONTROL_VERSION` 保持 `16`；连接前须双向确认匹配方言，旧 daemon／远端 server 需要更新。桌面视口在 grid 锁竞争时保留一个合并唤醒，取得锁后重新采样最新状态；首次 Screen 与重连后重新报告，发送积压仍按既有连接错误边界处理。桌面压力由资源所属 daemon 核验全部消费者保护后逐请求完成，只向请求 endpoint 返回结果。拒绝后可由后续准入需求重新请求，不依赖另一消费者隐藏／detach 后的新文字，也不新增自动重试定时器。
+当前本地与远端共用 pane 协议 `17`，`CONTROL_VERSION` 保持 `16`；连接前须双向确认匹配方言，旧 daemon／远端 server 需要更新。动画帧、partial edit、composition、单帧删除、父子图与 playback 都由远端同一存活 daemon 持有。桌面视口在 grid 锁竞争时保留一个合并唤醒，取得锁后重新采样最新状态；首次 Screen 与重连后重新报告，发送积压仍按既有连接错误边界处理。桌面压力由资源所属 daemon 核验全部消费者保护后逐请求完成，只向请求 endpoint 返回结果。拒绝后可由后续准入需求重新请求，不依赖另一消费者隐藏／detach 后的新文字，也不新增自动重试定时器。
 
 远端 daemon 的编码资源、元数据、partial／校验工作，与桌面的 source、派生像素、
 解码工作及 atlas／GPU 分别计账；SSH 重连不豁免任何预算。恢复仅限同一存活 daemon
@@ -139,9 +139,8 @@ shell／control 报告的 HOME 与 SFTP `Realpath(".")` 必须同属该隔离目
 | `LYREL_TEST_SSH_LOCAL_SERVER` | rooted GPUI 用例所需的同一提交本机 `lyrel-server` 绝对路径 |
 
 ```bash
-cargo test --locked -p lyrel-server --test native_ssh_graphics \
-  native_ssh_graphics_replies_recovery_limits_and_host_local_media \
-  -- --ignored --exact --nocapture --test-threads=1
+cargo test --locked -p lyrel-server --test native_ssh_graphics native_ssh_graphics_ \
+  -- --ignored --nocapture --test-threads=1 --skip nested_ssh
 cargo test --locked -p lyrel --bin lyrel-app native_ssh_consumer_ \
   -- --ignored --nocapture --test-threads=1
 ```
@@ -149,6 +148,55 @@ cargo test --locked -p lyrel --bin lyrel-app native_ssh_consumer_ \
 夹具使用临时本机配置、固定主机公钥和明确的测试身份；未知主机不会自动接受，
 缺少前提会使显式用例失败。结束时仅移除本次创建的 pane 与唯一生产者目录；
 远端 daemon 由测试端点的维护者管理，用例不停止它或删除整个远端 HOME。
+
+该 transport 目标分别包含基础恢复／压力、已加载帧的实际网络像素计数、准入拒收／部分 grant 取消／observer 控制权／不兼容方言，以及 Linux regular file／eligible temp／POSIX shm 的正向读取和生命周期。rooted consumer 另检查 full／partial／edit／compose／frame delete 的实际 BGRA、direct／relative／Unicode 同版本图、隐藏多消费者、真正无消费者时的变更、fresh 恢复及 replay/live cutover。它们是执行入口，不是通过声明。
+
+嵌套用例额外要求 Linux 主机已有专用第二层端点及 `LYREL_TEST_SSH_NESTED_HOST`、`LYREL_TEST_SSH_NESTED_PORT`、`LYREL_TEST_SSH_NESTED_IDENTITY`、`LYREL_TEST_SSH_NESTED_KNOWN_HOSTS`。后两项是 **Linux 上**的绝对路径，不能上传桌面私钥、借用个人 SSH 配置或关闭固定 pin 验证。第二层使用真实 `/usr/bin/ssh -tt -F /dev/null`，间接媒体必须返回 `ENOTSUPPORTED`，直接 RGBA 仍须成功。缺少这组前提时，先单独执行非 nested 用例；不得把过滤掉的 nested 用例记为通过。
+
+```bash
+cargo test --locked -p lyrel-server --test native_ssh_graphics \
+  native_ssh_graphics_nested_ssh_refuses_indirect_and_preserves_direct \
+  -- --ignored --exact --nocapture --test-threads=1
+```
+
+该 loopback nested 夹具要求第二层端点可访问第一层相同的隔离 Linux 文件系统，既有 fixture 脚本路径与自有媒体目录在两层均有效；它证明真实 SSH 前景进程带来的 locality 撤销，不冒称支持任意跨主机文件映射。regular／temp／shm 与桌面哨兵使用相同唯一 basename、不同像素；只检查 EBADF 拒绝一个不存在的 Linux 路径不足以替代这项隔离证明。
+
+### 标准原生桌面与双 pane 全尺寸入口
+
+`native_ssh_surface` 是 opt-in 测试执行器，不增加 shipping feature、GUI 参数、测试 renderer 或假协议。它通过真实远端 control 请求创建唯一 workspace、tab 与两 pane 的 split tree，写入本次临时配置下标准 `servers.json`／`views.json`，然后启动普通 `lyrel-app --config-dir ...`。实际窗口走标准 machine／workspace／RootApp／TerminalView 路径。
+
+除上表 SSH 前提外，提供：
+
+| 环境变量 | 内容 |
+| --- | --- |
+| `LYREL_TEST_SSH_NATIVE_APP` | 同一提交、已构建的本机 `lyrel-app` 绝对路径 |
+| `LYREL_TEST_SSH_NATIVE_OUTPUT` | 本任务拥有的已存在绝对证据目录；执行器只在其下新建唯一子目录 |
+| `LYREL_TEST_SSH_NATIVE_SCENE` | `frames`／`partial`／`playback`／`mutations`／`relative`／`capacity` |
+
+先取得桌面操作许可，再执行；这条命令会打开真实窗口并最多等待 1800 秒：
+
+```bash
+cargo test --locked -p lyrel-server --test native_ssh_surface \
+  native_ssh_graphics_standard_app_surface -- --ignored --exact --nocapture --test-threads=1
+```
+
+`NATIVE_SSH_SURFACE` 输出唯一证据目录；`session.json` 记录精确 daemon instance／PID、build／方言、端点条件、workspace／pane 与本机隔离 HOME。不要把 manifest 的“启动成功”当作像素证据。通过在该目录原子写入 `request.json` 控制**仅这两个自有 pane**，每次递增 `serial` 并等待 `ack.json` 对应确认：
+
+```json
+{"serial":1,"action":"input","pane":0,"input":"load\n"}
+```
+
+- `input` 原样发送指定 `pane: 0|1` 的命令；两个 pane 的 load 完成后分别发送 `start\n`。`capacity` 原样上传并运行 `scripts/kitty-capacity.mjs --pane 0|1`，每 pane 固定 60 个 distinct `1920×1080` raw RGBA 帧，包含固定 seed／frame-ID barcode。不能传小尺寸替代。读取 `pane-0.pty.log`／`pane-1.pty.log` 中真实 `KITTY_CAPACITY_STATE`，要求两边各 `uploads=60` 和 `rawBytes=497664000`；任何 `ENOSPC` 都是验收失败。
+- `sample` 加 `label`（ASCII 字母数字或 `-`）写出实际 SSH pane 协议累计计数：`graphics_bytes`、`resource_pixel_bytes`、`resource_packets`、`select_packets`。先在开始 load 前采 `before-load`，两 pane 全部加载后采 `loaded`，播放稳定后采 `steady`；steady 差值必须没有新增 Resource 像素且 Select 持续增长。它测的是真实 SSH channel 中图形协议有效负载，不冒称包含加密封装的 TCP 总字节，也不以发送端 stdout 计数替代网络观察。
+
+`partial` 与 `frames` 复用同一个 `scripts/kitty-frames.mjs`，依次发送 `partial\n`、`edit\n`、`root-edit\n`，不是另一套缩小媒体实现；`mutations` 复用 #143 的 `compose`／`replace`／`edit`／`current-delete`／`delete-first`／`delete-last`／`delete-only`／`loading`／`append` 命令。
+- sampler 是 read-only Observe，只报告 `rows=0`，不控制 resize、不保持图形可见；关闭全部普通 GUI 后的暂停不会被采样器伪装成可见。隐藏 pane、切换 tab／screen、滚出与恢复、相对／virtual 链及剩余间隔仍须在正常 UI 路径逐项观察。
+- `reopen` 只在旧自有 GUI 进程已真正退出后重新启动普通 app；不重启 sender。发送 `quit\n` 后 wrapper 保留同一真实 PTY 的 shell，便于验证 sender 已停止且仍从同一 daemon 恢复。可再发 `restart-router` 后 `reopen` 检查本机 router 硬重建；该操作不停止 Linux daemon。
+- `stop` 结束执行器，只退休自己创建的 GUI／workspace／pane／producer 目录与本机 router；证据目录保留。不要向用户安装的窗口、daemon 或 HOME 投递命令。
+
+原生记录还必须包含 Windows/macOS 版本、Linux／OpenSSH／Node 与双方 build、窗口所在显示器／缩放／字体、连接条件、实际图像身份与卡片／几何、GUI 全关闭及 fresh 重开过程。记录 initial loading 与 steady 的时段、CPU／GPU／内存峰值和实际呈现节拍；静态截图、headless paint claim、Select 包数不能证明约 60 fps。MacBook Air M5、正式 agent 的跨 SSH 组合和未取得第二层端点的 nested 路径分别保留前提，不能用 Windows/WSL 的普通图形结果替代。
+
+**2026-10-31 新入口状态：**已添加上述执行器与契约，但本轮代码、真实 SSH、原生窗口与全尺寸采样尚未由该实现者执行；交由集成协调者集中运行。下列 `0.2.1`／pane `15` 是历史基线，不能视为当前 `0.3.0`／pane `17` 动画验收。
 
 **2026-10-25 已验证 pane `15` 自动化：**Windows `10.0.26300` → WSL2 Ubuntu
 `26.04.1 LTS`（Linux `6.18.54.1-microsoft-standard-WSL2`、Node `22.23.4`）；

@@ -28,6 +28,7 @@
 
 ### 验证入口
 
+- native SSH 增加真实 Linux daemon 的动画／partial edit／compose／单帧删除／relative 与 Unicode 共享版本／隐藏多消费者／无 consumer 变更／fresh 恢复／replay-live cutover 契约，补充拒收／取消 grant／observer 控制权／不兼容方言及 Linux file／temp／POSIX shm 与 nested locality 实连入口。新增非 shipping `native_ssh_surface` 执行器，通过普通远程 workspace／machine tree 打开标准 GUI，复用同一全尺寸双 pane workload 并分别记录初始与 steady 的真实 SSH 图形有效负载计数；不新增 renderer／协议替身／GUI flag。当前新增入口尚未运行，不以历史 pane 15 静态结果宣称 pane 17 动画、容量、60 fps 或 macOS 验收。
 - 正式 OpenCode 2.2.0 隔离保存对话夹具使用公开 import／resume／export，无 prompt／推理；完整目标保留用户附件、tool-result、每卡三图、旧消息分页、滚出返回、native tab 删除与重挂载及 disabled 策略。中央已完成 546 条消息 prepare，disabled consumer 通过；enabled 在首次卡片重叠检查失败，后续阶段未到达。加强后的用例按独立 placement instance 计数，不再合并同色 bbox，并保留官方 16×8／gap=1、容器文本与 viewport 边界及完整几何诊断；新增同色／同原点放置、同 ID 替换和精确删除的生产消费者用例。新增诊断尚未运行，不能据此声称生产几何或 Windows／macOS 最终像素已修复。
 
 ## [0.3.0] - 2026-10-31
