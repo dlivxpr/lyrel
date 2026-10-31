@@ -10,12 +10,17 @@
 ### 修复
 
 - pi 图片接入（#149）区分 `earendil-works/pi` 与 omp，将公开 `PI_IMAGE_PROTOCOL` 纳入既有 Host／启动／会话 scope 与 Pi hook 报告，恢复时保留显式 `none`，不自动覆盖 `terminal.images=false` 或 `terminal.showImages=false`。2026-10-31 重新核实 GitHub／npm／本机正式版本均为 `1.4.0`；增加真实原生 `--session` 合成 toolResult PNG 夹具、production rooted consumer 的重挂载／删除／再次启动及 disabled precedence 入口。未运行本轮 contracts 或 Windows／macOS 原生像素验收，不将版本查询、flags 或历史 omp 证据写成 Pi 图片通过。
+- OpenCode 集成按既有 `agent_launch` 的受检 Host／`XDG_CONFIG_HOME` 作用域定位 CLI 插件与配置，不再误写默认目录；保留显式 `session.image_preview=false`，不全局改设置或伪造终端身份。补充公开 `-s`／`--auto` 启动参数识别。
 
 ### 新增
 
 - Kitty 图片支持 daemon 持有的完整帧追加、停止／手动选帧和同一存活 daemon 的 fresh-client 恢复；同资源全部放置共用选择与像素，帧序列按整体回收并沿用有限源内容／派生／元数据准入。pane 协议升级为 `16`，control 不变；兼容显式 `f=0` 与无歧义的最终块无 padding Base64。新增真实 PTY／daemon／rooted consumer 回归及 `scripts/kitty-frames.mjs` 原生入口；自动播放和 partial-frame 操作不在此切片，原生及中央自动化验证仍待执行。
 
 - Kitty 相对放置在既有 daemon Placement／pane transport 中保留 `P/Q` 父身份、signed `H/V` 及八链接有界图；支持 direct／实际 Unicode 单元父锚点、无光标移动、级联生命周期和 fresh consumer 恢复。新增真实 PTY／daemon／rooted view 行为回归与 `scripts/kitty-relative.mjs` 原生几何／恢复入口；本轮子工单未执行构建、自动测试或 Windows／macOS 原生验收，证据边界见终端图片文档。
+
+### 验证入口
+
+- 新增正式 OpenCode 2.2.0 的隔离保存对话夹具与真实 PTY／daemon／rooted consumer 回归：公开 import／resume／export，无 prompt／推理，覆盖用户附件、tool-result、每卡三图、旧消息分页、滚出返回、native tab 删除与重挂载、disabled 策略。版本和公开接口已重新核对；新用例及 Windows 最终像素尚未执行，macOS 亦未验收，具体入口和预期见终端内联图片文档。
 
 ## [0.3.0] - 2026-10-31
 
