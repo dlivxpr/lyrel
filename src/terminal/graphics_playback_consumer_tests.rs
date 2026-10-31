@@ -66,3 +66,52 @@ fn graphics_consumer_playback_loading_append_two_consumers_pause_and_fresh_resto
     graphics_recovery_destroy(fresh, fresh_window, cx);
     daemon.panes().kill(pane).unwrap();
 }
+
+#[gpui_kit::test]
+fn graphics_consumer_mutations_running_loading_hidden_and_fresh(cx: &mut TestAppContext) {
+    let (daemon, pane, view, window) = graphics_layout_harness(cx);
+    graphics_send_fixture_with_replies(&view, cx, 14330,
+        b"\x1b[5;1H\x1b_Ga=T,i=143,p=1,s=1,v=1,c=2,r=1,C=1;/wAA/w==\x1b\\\x1b_Ga=f,i=143,s=1,v=1,z=60000;AP8A/w==\x1b\\\x1b_Ga=f,i=143,s=1,v=1,z=60000;AAD//w==\x1b\\\x1b[8;1H\x1b_Ga=p,i=143,p=2,c=2,r=1,C=1\x1b\\\x1b_Ga=a,i=143,s=3,c=2,v=4\x1b\\", 5);
+    graphics_playback_wait(&view, cx, |p| p.state == 3 && !p.paused);
+    graphics_recovery_pixels(&view, cx, 143, &[0,255,0,255]);
+    graphics_send_fixture_with_replies(&view, cx, 14331, b"\x1b_Ga=c,i=143,r=1,c=2,C=1\x1b\\", 1);
+    graphics_recovery_pixels(&view, cx, 143, &[0,0,255,255]);
+    graphics_send_fixture_with_replies(&view, cx, 14332, b"\x1b_Ga=f,i=143,r=2,s=1,v=1,X=1;//8A/w==\x1b\\", 1);
+    graphics_recovery_pixels(&view, cx, 143, &[0,255,255,255]);
+    graphics_send_fixture(&view, cx, 14333, b"\x1b_Ga=d,d=f,i=143,r=2\x1b\\");
+    graphics_recovery_pixels(&view, cx, 143, &[255,0,0,255]);
+    graphics_playback_wait(&view, cx, |p| p.state == 3 && p.loops == 3 && p.completed == 0);
+    graphics_assert_production_paint(window, &view, cx);
+    view.read_with(cx, |view, _| view.terminal.viewport_reporter().set_displayed(false));
+    graphics_playback_wait(&view, cx, |p| p.paused);
+    graphics_send_fixture_with_replies(&view, cx, 14334,
+        b"\x1b_Ga=f,i=143,s=1,v=1;/////w==\x1b\\\x1b_Ga=c,i=143,r=1,c=3,C=1\x1b\\", 2);
+    graphics_send_fixture(&view, cx, 14335, b"\x1b_Ga=d,d=f,i=143,r=1\x1b\\");
+    graphics_recovery_pixels(&view, cx, 143, &[255,0,0,255]);
+    let paused = graphics_playback_wait(&view, cx, |p| p.state == 3 && p.paused);
+    assert_eq!((paused.loops, paused.completed), (3,0));
+    view.read_with(cx, |view, _| view.terminal.viewport_reporter().set_displayed(true));
+    graphics_playback_wait(&view, cx, |p| !p.paused);
+    graphics_send_fixture_with_replies(&view, cx, 14336, b"\x1b_Ga=a,i=143,s=2,c=2,r=2,z=-1\x1b\\", 1);
+    graphics_playback_wait(&view, cx, |p| p.state == 2 && p.waiting);
+    graphics_recovery_pixels(&view, cx, 143, &[0,0,255,255]);
+    graphics_send_fixture_with_replies(&view, cx, 14337, b"\x1b_Ga=f,i=143,s=1,v=1,z=40;/////w==\x1b\\", 1);
+    graphics_playback_wait(&view, cx, |p| p.state == 2 && p.waiting);
+    graphics_recovery_pixels(&view, cx, 143, &[255,255,255,255]);
+    graphics_send_fixture(&view, cx, 14338, b"\x1b_Ga=d,d=f,i=143,r=2\x1b\\\x1b_Ga=d,d=F,i=143,r=2\x1b\\");
+    graphics_recovery_pixels(&view, cx, 143, &[255,0,0,255]);
+    let stopped = graphics_recovery_stats(&view, cx, 14339);
+    graphics_recovery_destroy(view, window, cx);
+    let (fresh, window) = graphics_recovery_fresh(&daemon, pane, cx, 14340);
+    graphics_recovery_pixels(&fresh, cx, 143, &[255,0,0,255]);
+    graphics_playback_wait(&fresh, cx, |p| p.state == 2 && p.waiting);
+    assert_eq!(graphics_recovery_stats(&fresh, cx, 14341), stopped);
+    fresh.read_with(cx, |view, _| {
+        let images = graphics_visible_images(view);
+        assert_eq!(images.len(), 2);
+        assert!(std::sync::Arc::ptr_eq(images[0].data.as_ref().unwrap(), images[1].data.as_ref().unwrap()));
+    });
+    graphics_assert_production_paint(window, &fresh, cx);
+    graphics_recovery_destroy(fresh, window, cx);
+    daemon.panes().kill(pane).unwrap();
+}

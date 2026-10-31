@@ -10,16 +10,17 @@
 ### 修复
 
 - omp 的公开 `PI_FORCE_IMAGE_PROTOCOL`、Kitty placeholder opt-in／硬关闭项沿用非敏感启动上下文，在新启动和原生恢复中保持显式图片策略；不覆盖 `terminal.showImages: false`、不伪造终端身份、不修改全局 agent 配置。修复 Windows 快捷启动将字面量环境前缀当命令执行，以及恢复命令将子进程图片策略遗留在父 shell 的路径。
-- 补充 released omp 原生 `--resume` 的隔离合成会话与生产消费者用例，覆盖 assistant／toolResult 图片、原生 SVG 栅格图、8 张上游 cap 的删除和显式关闭；fixture 不提交 prompt，拒绝模型请求，并保留版本／消息数／请求审计。2026-10-31 只读检查为最新 release `18.14.1`、已安装 `18.14.0`；新增用例及新版原生 Windows／macOS 图片结果尚未集中验证。
+- 补充 released omp 原生 `--resume` 的隔离合成会话与生产消费者用例，覆盖 assistant／toolResult 图片、原生 SVG 栅格图、8 张上游 cap 删除与显式关闭。正式 `18.14.0` 的中央三图几何／关闭策略及独立八图预算回归通过；Windows 原生八图身份、旧图 demotion、滚动及两种关闭策略通过，三轮审计均消息未增、零请求／模型用量。上游 `18.14.0`／`18.14.1` 的 assistant 按 content slot 共享 key，跨消息同 slot 会碰撞；预算夹具使用同一正式消息的不同 slot，不修改代理或生产 renderer，不宣称绕过此上游限制。最新 release `18.14.1`、macOS 与真实 SSH 组合未验收。
 - pi 图片接入（#149）区分 `earendil-works/pi` 与 omp，将公开 `PI_IMAGE_PROTOCOL` 纳入既有 Host／启动／会话 scope 与 Pi hook 报告，恢复时保留显式 `none`，不自动覆盖 `terminal.images=false` 或 `terminal.showImages=false`。正式 `1.4.0` 的真实 PTY／rooted 卡片像素和几何、删除／重挂载／重传及显式关闭优先级回归通过；Windows 原生二十图合成会话两轮重放、历史导航、删除、零新增消息与四种图片策略通过。无新 prompt／推理、不读私人历史；macOS 与真实 SSH 的 agent 组合仍待对应集成验收。
-- OpenCode 集成按既有 `agent_launch` 的受检 Host／`XDG_CONFIG_HOME` 作用域定位 CLI 插件与配置，不再误写默认目录；保留显式 `session.image_preview=false`，不全局改设置或伪造终端身份。补充公开 `-s`／`--auto` 启动参数识别。
-- 修复 synchronized update 中 Kitty 命令先于暂存文字执行、导致多图共用旧光标锚点的问题：daemon 权威镜像按流顺序及时应用文本，桌面保留自己的同步呈现。新增真实 PTY／daemon／rooted consumer 回归先失败后通过；三种正式 agent 的最终原生几何不由该最小回归替代。
+- OpenCode 集成按既有 `agent_launch` 的受检 Host／`XDG_CONFIG_HOME` 作用域定位 CLI 插件与配置，不再误写默认目录；保留显式 `session.image_preview=false`，不全局改设置或伪造终端身份。补充公开 `-s`／`--auto` 启动参数识别。正式 `2.2.0` 的 production consumer 与 Windows 原生首尾六图、卡片几何、分页、滚离返回、tab 卸载／重挂载及显式禁图均通过，公开 export 未变、零模型用量；MacBook Air M5 与真实 SSH 的 agent 组合尚未验收。
+- 修复 synchronized update 中 Kitty 命令先于暂存文字执行、导致多图共用旧光标锚点的问题：daemon 权威镜像按流顺序及时应用文本，桌面保留自己的同步呈现。真实 PTY／daemon／rooted consumer 回归先失败后通过；pi、OpenCode 的卡片几何和 Windows 原生图片随后实测通过，omp 的中央三图几何通过，完整预算／原生组合仍按独立门槛验收。
 
 ### 新增
 
 - Kitty 图片支持 daemon 持有的完整帧追加、停止／手动选帧和同一存活 daemon 的 fresh-client 恢复；同资源全部放置共用选择与像素，帧序列按整体回收并沿用有限源内容／派生／元数据准入。pane 协议升级为 `16`，control 不变；兼容显式 `f=0` 与无歧义的最终块无 padding Base64。真实 PTY／daemon／rooted consumer 及 Windows Debug 原生窗口已验证三帧同步切换和发送器退出后的 fresh-window 恢复；自动播放、partial-frame、完整容量／性能和 macOS 不由此切片宣称通过。
 - Kitty 自动播放由 daemon 保存 stopped／loading／running、frame gap、有限／无限循环和剩余间隔；聚合当前连接 viewport 的 direct／relative／Unicode 可见性，全隐藏或断开时暂停，显式命令仍生效。循环复用保留像素，只发布选帧／播放元数据，pane 升级为 `17`，control 保持 `16`。Windows 五项受控时间、一项真实双消费者／fresh-window 回归与原生播放／loading／追加／隐藏返回／发送器停止后恢复已验证；不据此宣称双 pane 1080p、60 fps 或 macOS 通过。
 - Kitty `a=f` 增加 partial append／retained frame edit：支持 prior-frame 底图、32-bit RGBA 背景、像素矩形、alpha／overwrite、raw／PNG／zlib，使用锁外有界准备与新不可变内容 key 原子提交，保留全部 placement 及 fresh-consumer 最新版本。Windows 核心事务拒收、stale prepare 竞态、真实生产消费者像素／恢复回归和原生局部追加／编辑／root 编辑与无重传恢复通过；播放中合成／单帧删除、完整容量／高帧率、真实 SSH 和 macOS 由后续票验收。
+- Kitty `a=c` 支持 retained source／target 矩形 alpha／replace 与同帧非重叠复制；`d=f/F` 支持首／中／当前／尾／唯一帧删除、稳定 root 提升、连续编号及 placement／gap／loop 保持。复用锁外有界 immutable preparation／commit，旧代次不能在删除／替换后复活；增加真实 PTY／daemon／rooted consumer、受控时间和准备／解码／snapshot 竞态入口，以及独立 `scripts/kitty-frame-mutations.mjs` 原生播放中合成／删除夹具。本轮新增检查及 Windows 原生 smoke 尚未执行，不把既有播放／部分帧结果当作 #143 或容量／60 fps／macOS 验收。
 
 - Kitty 相对放置在既有 daemon Placement／pane transport 中保留 `P/Q` 父身份、signed `H/V` 及八链接有界图；支持 direct／实际 Unicode 单元父锚点、无光标移动、级联生命周期和 fresh consumer 恢复。Windows 五项真实 PTY／daemon／rooted view 回归及 `scripts/kitty-relative.mjs` 原生 geometry／recovery smoke 已通过；完整 DPI／性能、真实 SSH 组合及 macOS 不由此结果替代。
 - Kitty 间接媒体增加 Windows 本地 regular file、eligible 临时文件与 named shared memory；`O/S` 只限制实际图片区域，允许小区域位于大对象中。Windows 固定已验证本地磁盘 handle、拒绝网络／device／未知 reparse，并按对象 handle 删除临时 handoff；Unix 保留文件／POSIX shm 语义，macOS 按偏移附近有界映射，临时文件使用身份核验及 no-clobber 恢复避免删错替换对象。发送方 locality 每次接受及读取前重新证明，嵌套 SSH／WSL 或未知命名空间 fail-closed，直接传输不受影响；不新增图片磁盘缓存。Windows 真实 PTY／rooted consumer 与原生三类媒体红绿像素／安全应答 smoke 已通过，Linux headless 完整 features 回归通过；真实 SSH 图形组合及 macOS 仍待对应票验收。

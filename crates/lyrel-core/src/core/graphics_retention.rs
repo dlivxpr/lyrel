@@ -6,8 +6,8 @@ use std::sync::{Arc, Mutex, OnceLock, Weak, mpsc::SyncSender};
 
 use super::{MAX_PANE_DECODED_BYTES, MAX_PANE_ENCODED_BYTES};
 
-pub const MAX_DAEMON_ENCODED_BYTES: usize = 128 << 20;
-pub const MAX_DAEMON_DECODED_BYTES: usize = 256 << 20;
+pub const MAX_DAEMON_ENCODED_BYTES: usize = 1024 << 20;
+pub const MAX_DAEMON_DECODED_BYTES: usize = 1024 << 20;
 pub const MAX_PANE_WORK_BYTES: usize = 128 << 20;
 pub const MAX_DAEMON_WORK_BYTES: usize = 256 << 20;
 pub use crate::daemon::protocol::{
@@ -172,9 +172,6 @@ impl Retention {
         });
         let mut groups = BTreeMap::new();
         for (&sequence, entry) in &registry.entries {
-            if replaced_group == Some((entry.owner, entry.group)) {
-                continue;
-            }
             let Some(slot) = entry.resident.upgrade() else {
                 continue;
             };
@@ -207,6 +204,7 @@ impl Retention {
             .into_iter()
             .filter(|((candidate_owner, candidate_group), candidate)| {
                 candidate.0 != Priority::Protected
+                    && replaced_group != Some((*candidate_owner, *candidate_group))
                     && (*candidate_owner != owner || *candidate_group != group)
             })
             .map(|(_, candidate)| candidate)
@@ -316,6 +314,17 @@ pub(crate) struct Work {
     bytes: usize,
 }
 impl Work {
+    /// Transfer already reserved source ownership without releasing or charging
+    /// the allocation twice at the parser/prepare boundary.
+    pub(crate) fn split(&mut self, bytes: usize) -> Self {
+        assert!(bytes <= self.bytes, "source handoff exceeds its work reservation");
+        self.bytes -= bytes;
+        Self { retention: self.retention.clone(), owner: self.owner, bytes }
+    }
+
+    pub(crate) fn temporary(&self) -> Self {
+        self.retention.work(self.owner)
+    }
     pub(crate) fn resize(&mut self, bytes: usize) -> bool {
         let mut registry = self.retention.registry.lock().unwrap();
         let pane = registry.work.get(&self.owner).copied().unwrap_or(0);

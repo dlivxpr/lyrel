@@ -2100,6 +2100,42 @@ mod tests {
     }
 
     #[test]
+    fn promoted_root_and_composed_version_retire_stale_frame_decode_and_snapshot_claims() {
+        let store = ImageStore::new();
+        let entered = Arc::new(Barrier::new(2));
+        let release = Arc::new(Barrier::new(2));
+        let first = Arc::new(AtomicBool::new(true));
+        let worker = DecodeWorker::spawn_with_decoder(store.clone(), || {}, {
+            let entered = entered.clone();
+            let release = release.clone();
+            move |image| {
+                if first.swap(false, Ordering::SeqCst) { entered.wait(); release.wait(); }
+                decode(image)
+            }
+        });
+        establish_screen(&worker);
+        apply_resource(&worker, 1, 10);
+        apply_placement(&worker, placement(10, 1, 3, 4));
+        entered.wait();
+        apply_resource(&worker, 2, 20);
+        worker.apply(GraphicsUpdate::Frame { key:2, root:1, number:1 });
+        worker.apply(GraphicsUpdate::Select { key:1, frame:2, revision:1 });
+        apply_resource(&worker, 3, 30);
+        worker.apply(GraphicsUpdate::Frame { key:3, root:1, number:1 });
+        worker.apply(GraphicsUpdate::Select { key:1, frame:3, revision:2 });
+        worker.apply(GraphicsUpdate::Remove { placements:vec![], resources:vec![2] });
+        release.wait();
+        wait_for(&store, |images| images.len() == 1 && images[0].data.as_ref().is_some_and(|data| data.as_bytes(0).unwrap() == [30,20,30,128]));
+        let snapshot = store.snapshot();
+        assert!(store.claim_for_paint(&snapshot[0]));
+        worker.apply(GraphicsUpdate::Remove { placements:vec![10], resources:vec![1,3] });
+        assert!(store.snapshot().is_empty());
+        assert!(!store.claim_for_paint(&snapshot[0]), "retained pixel ownership does not authorize a deleted placement");
+        drop(worker);
+        assert!(store.snapshot().is_empty());
+    }
+
+    #[test]
     fn deferred_resources_keep_every_referenced_version_and_latest_placement_revision() {
         let store = ImageStore::new();
         let entered = Arc::new(Barrier::new(2));

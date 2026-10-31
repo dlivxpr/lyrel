@@ -24,7 +24,7 @@ impl GraphicsState {
         if let Some(wake) = &self.wake { let _ = wake.try_send(()); }
     }
 
-    fn frame_key(&self, root: u64, number: u32) -> Option<u64> {
+    pub(super) fn frame_key(&self, root: u64, number: u32) -> Option<u64> {
         if number == 1 { return self.resources.get(&root).map(|r| r.content_key); }
         self.resources.values().find_map(|resource| {
             (resource.root == Some(root) && resource.frame_number == number).then_some(resource.content_key)
@@ -37,7 +37,7 @@ impl GraphicsState {
         })
     }
 
-    fn select_content(&mut self, root: u64, frame: u64, effects: &mut Vec<GraphicsEffect>) {
+    pub(super) fn select_content(&mut self, root: u64, frame: u64, effects: &mut Vec<GraphicsEffect>) {
         let resource = self.resources.get_mut(&root).unwrap();
         resource.selected = frame;
         resource.revision = resource.revision.checked_add(1).expect("graphics selection revision exhausted");
@@ -83,19 +83,45 @@ impl GraphicsState {
     }
 
     pub(super) fn frame_committed(&mut self, root: u64, key: u64, control: &Control, effects: &mut Vec<GraphicsEffect>) {
-        if control.z != 0 { self.resources.get_mut(&key).unwrap().gap_ms = control.z.max(0) as u32; }
+        let gap_changed = control.action == Action::Frame && control.z != 0;
+        if gap_changed { self.resources.get_mut(&key).unwrap().gap_ms = control.z.max(0) as u32; }
         let now = self.playback_now();
         let content = self.resources[&key].content_key;
         let gap = self.resources[&key].gap_ms;
         let selected = self.resources[&root].selected;
+        let selected_number = self.frame_resource(root, selected).unwrap().frame_number;
+        let has_next = self.resources.values().any(|r| r.root == Some(root) && r.frame_number > selected_number);
         if let Some(animation) = self.animations.get_mut(&root) {
-            if animation.waiting {
+            if animation.waiting && (has_next || (animation.mode == 3 && gap_changed)) {
                 animation.waiting = false;
                 animation.remaining = Duration::ZERO;
                 animation.deadline = (animation.visible && animation.mode != 1).then_some(now);
-            } else if selected == content && control.z != 0 {
+            } else if !animation.waiting && selected == content && gap_changed {
                 animation.remaining = Duration::from_millis(u64::from(gap));
                 animation.deadline = (animation.visible && animation.mode != 1).then_some(now + animation.remaining);
+            }
+            self.playback_dirty.insert(root);
+            effects.extend(self.drain_playback_metadata());
+            self.wake_playback();
+        }
+    }
+
+    pub(super) fn frame_deleted(&mut self, root: u64, replaced_current: bool, effects: &mut Vec<GraphicsEffect>) {
+        let now = self.playback_now();
+        let selected = self.resources[&root].selected;
+        let frame = self.frame_resource(root, selected).unwrap();
+        let gap = Duration::from_millis(u64::from(frame.gap_ms));
+        let has_next = self.resources.values().any(|r| r.root == Some(root) && r.frame_number > frame.frame_number);
+        if let Some(animation) = self.animations.get_mut(&root) {
+            if animation.waiting {
+                if has_next {
+                    animation.waiting = false;
+                    animation.remaining = Duration::ZERO;
+                    animation.deadline = (animation.visible && animation.mode != 1).then_some(now);
+                }
+            } else if replaced_current {
+                animation.remaining = gap;
+                animation.deadline = (animation.visible && animation.mode != 1).then_some(now + gap);
             }
             self.playback_dirty.insert(root);
             effects.extend(self.drain_playback_metadata());

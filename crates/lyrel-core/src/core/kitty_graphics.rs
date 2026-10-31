@@ -423,6 +423,14 @@ impl GraphicsSniffer {
         }
     }
 
+    /// Move the completed source's existing reservation to its prepared owner.
+    /// Other completed commands and partial transfers retain their own charge.
+    pub(crate) fn take_source_work(&mut self, capacity: usize) -> super::graphics_state::retention::Work {
+        assert!(capacity <= self.parser.completed_bytes);
+        self.parser.completed_bytes -= capacity;
+        self.parser.work.as_mut().expect("completed source owns transfer work").split(capacity)
+    }
+
     /// Cache this PTY read's locality and irreversibly taint pending indirect
     /// data on remote/unknown reads. A later local read cannot promote it.
     pub fn set_local(&mut self, local: bool) {
@@ -601,6 +609,8 @@ pub enum Action {
     Frame,
     /// `a=a` — stopped/manual frame selection.
     Animation,
+    /// `a=c` — compose retained frame rectangles.
+    Compose,
     /// Any action we don't specifically handle.
     Other,
 }
@@ -754,6 +764,7 @@ impl Control {
                         b"d" => Action::Delete,
                         b"f" => Action::Frame,
                         b"a" => Action::Animation,
+                        b"c" => Action::Compose,
                         _ => Action::Other,
                     }
                 }
@@ -1395,7 +1406,7 @@ impl GraphicsParser {
             Action::Transmit | Action::TransmitAndDisplay | Action::Query | Action::Frame => {
                 self.accept_chunk(control, data, locality)
             }
-            Action::Display | Action::Delete | Action::Animation => {
+            Action::Display | Action::Delete | Action::Animation | Action::Compose => {
                 if !data.is_empty() || control.more {
                     response(&control, control.id, "EINVAL:Unexpected placement payload")
                         .map(Event::Reply)

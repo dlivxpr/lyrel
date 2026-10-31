@@ -225,7 +225,10 @@ impl GraphicsUpdate {
 
     pub(crate) fn encode_packet(&self) -> Option<crate::daemon::protocol::GraphicsPacket> {
         let retention = retention::Retention::shared();
-        let mut header_work = retention.work(retention.owner());
+        self.encode_packet_budgeted(retention.work(retention.owner()))
+    }
+
+    fn encode_packet_budgeted(&self, mut header_work: retention::Work) -> Option<crate::daemon::protocol::GraphicsPacket> {
         let header_bytes = match self {
             Self::Remove {
                 placements,
@@ -335,8 +338,8 @@ mod placeholder;
 pub use placeholder::{PlaceholderSlice, placeholder_prototype, placeholder_row};
 
 /// Encoded source and RGBA-equivalent bounds; these are independent scopes.
-pub const MAX_PANE_ENCODED_BYTES: usize = 64 << 20;
-pub const MAX_PANE_DECODED_BYTES: usize = 128 << 20;
+pub const MAX_PANE_ENCODED_BYTES: usize = 512 << 20;
+pub const MAX_PANE_DECODED_BYTES: usize = 512 << 20;
 /// Admits a 3840 × 2160 RGBA screenshot (33,177,600 bytes).
 pub const MAX_IMAGE_DECODED_BYTES: usize = 32 << 20;
 #[path = "graphics_retention.rs"]
@@ -372,6 +375,7 @@ struct Resource {
     selected: u64,
     revision: u64,
     gap_ms: u32,
+    mutation: u64,
     /// Pixel versions never reuse the stable root identity or an old worker key.
     content_key: u64,
     visible: bool,
@@ -403,6 +407,8 @@ impl PreparedImage {
 pub(crate) struct FramePreparation {
     root: u64,
     root_content: u64,
+    mutation: u64,
+    source: Option<crate::daemon::protocol::GraphicsPacket>,
     base_key: Option<u64>,
     target: Option<u64>,
     number: u32,
@@ -588,7 +594,7 @@ impl GraphicsState {
         if control.action == Action::Query || image.metadata.is_some() {
             return Ok(());
         }
-        let replaced = (control.action != Action::Frame && control.id != 0)
+        let replaced = (!matches!(control.action, Action::Frame | Action::Compose) && control.id != 0)
             .then(|| self.lookup(control))
             .flatten();
         image.metadata = replaced
@@ -694,7 +700,7 @@ impl GraphicsState {
         if control.action == Action::Query {
             return Ok(());
         }
-        if control.action == Action::Frame {
+        if matches!(control.action, Action::Frame | Action::Compose) {
             let frame = self.capture_frame(control)?.expect("frame action captures a canvas");
             if image.width != frame.width || image.height != frame.height {
                 return Err("EINVAL:Frame canvas dimensions changed");
@@ -729,18 +735,35 @@ impl GraphicsState {
     /// Capture immutable source ownership only. Decode/composition happens in
     /// prepare_image, outside the pane lock and in the PTY reader's order.
     pub(crate) fn capture_frame(&self, c: &Control) -> Result<Option<FramePreparation>, &'static str> {
-        if c.action != Action::Frame { return Ok(None); }
+        if !matches!(c.action, Action::Frame | Action::Compose) { return Ok(None); }
         let root = self.lookup(c).ok_or("ENOENT:Image not found")?;
         let resource = &self.resources[&root];
-        if c.offset_x > 1 { return Err("EINVAL:Invalid frame composition mode"); }
+        if c.action == Action::Frame && c.offset_x > 1 { return Err("EINVAL:Invalid frame composition mode"); }
         let find = |number| self.resources.iter().find_map(|(&key, r)| {
             ((key == root || r.root == Some(root)) && r.frame_number == number).then_some(key)
         });
-        let target = if c.rows == 0 { None } else {
-            Some(find(c.rows).ok_or("ENOENT:Animation frame not found")?)
+        let compose = c.action == Action::Compose;
+        let target_number = if compose { c.cols } else { c.rows };
+        let target = if target_number == 0 && !compose { None } else {
+            Some(find(target_number).ok_or("ENOENT:Animation frame not found")?)
         };
         let base_key = if let Some(target) = target { Some(target) } else if c.cols != 0 {
             Some(find(c.cols).ok_or("ENOENT:Animation base frame not found")?)
+        } else { None };
+        let source = if compose {
+            let key = find(c.rows).ok_or("ENOENT:Animation frame not found")?;
+            let width = if c.w == 0 { resource.image.width } else { c.w };
+            let height = if c.h == 0 { resource.image.height } else { c.h };
+            if [(c.x, width, resource.image.width), (c.offset_x, width, resource.image.width),
+                (c.y, height, resource.image.height), (c.offset_y, height, resource.image.height)]
+                .iter().any(|&(start, size, limit)| start.checked_add(size).is_none_or(|end| end > limit)) {
+                return Err("EINVAL:Frame rectangle outside image");
+            }
+            if Some(key) == target && c.x < c.offset_x + width && c.offset_x < c.x + width
+                && c.y < c.offset_y + height && c.offset_y < c.y + height {
+                return Err("EINVAL:Overlapping frame rectangles");
+            }
+            Some(self.resources[&key].resident.lock().unwrap().packet.clone().ok_or("ENOENT:Image data unavailable")?)
         } else { None };
         let base = base_key.map(|key| self.resources[&key].resident.lock().unwrap().packet.clone()
             .ok_or("ENOENT:Image data unavailable")).transpose()?;
@@ -751,19 +774,20 @@ impl GraphicsState {
         if target.is_none() && (count >= MAX_ANIMATION_FRAMES || self.resources.len() >= MAX_RESOURCES) {
             return Err("ENOSPC:Animation frame budget exhausted");
         }
-        let scratch = base_key.map_or(0, |key| {
+        let scratch = base_key.into_iter().chain(if compose { find(c.rows) } else { None }).map(|key| {
             let image = &self.resources[&key].image;
             if image.format == WireFormat::Png { 4 << 20 } else if image.compressed { 256 << 10 } else { 0 }
-        });
+        }).max().unwrap_or(0);
         // A pinned root protects the entire retention group even if another
         // consumer refreshes visibility while desktop admission is pending.
         let pin = self.retention.pin(&resource.resident);
-        Ok(Some(FramePreparation { root, root_content: resource.content_key, base_key, target, number: if target.is_some() { c.rows } else { count + 1 },
+        Ok(Some(FramePreparation { root, root_content: resource.content_key, mutation: resource.mutation, source,
+            base_key, target, number: if target.is_some() { target_number } else { count + 1 },
             width: resource.image.width, height: resource.image.height, base, scratch, _pin: pin }))
     }
 
     pub(crate) fn prepare_image(
-        mut image: Image,
+        image: Image,
         owner: u64,
         key: u64,
         control: &Control,
@@ -771,13 +795,25 @@ impl GraphicsState {
     ) -> Result<PreparedImage, &'static str> {
         let retention = retention::Retention::shared();
         let mut work = retention.work(owner);
-        let mut decoded_bytes = validate_image(&mut image, &mut work).map_err(|status| {
-            if control.medium == super::kitty_graphics::Medium::Direct {
-                status
-            } else {
-                "EBADF:Failed to read image file"
-            }
-        })?;
+        if !work.resize(image.data.capacity()) {
+            return Err("ENOSPC:Graphics source budget exhausted");
+        }
+        Self::prepare_image_budgeted(image, key, control, frame, work)
+    }
+
+    pub(crate) fn prepare_image_budgeted(
+        mut image: Image,
+        key: u64,
+        control: &Control,
+        frame: Option<FramePreparation>,
+        mut work: retention::Work,
+    ) -> Result<PreparedImage, &'static str> {
+        let mut decoded_bytes = if control.action == Action::Compose { 0 } else {
+            validate_image(&mut image, &mut work).map_err(|status| {
+                if control.medium == super::kitty_graphics::Medium::Direct { status }
+                else { "EBADF:Failed to read image file" }
+            })?
+        };
         if let Some(frame) = &frame {
             compose_frame(&mut image, control, frame, &mut work)?;
         }
@@ -789,7 +825,7 @@ impl GraphicsState {
                     key,
                     image: image.clone(),
                 })
-                .encode_packet()
+                .encode_packet_budgeted(work.temporary())
                 .ok_or("ENOSPC:Graphics transport budget exhausted")?,
             )
         } else {
@@ -1051,7 +1087,9 @@ impl GraphicsState {
         if self.resources.is_empty() {
             return Some((Vec::new(), work));
         }
-        let count = self.resources.len() * 2 + self.placements.len() + self.animations.len() + 1;
+        // A replaced root can emit both Frame and Select in addition to its
+        // resource packet. Reserve the upper bound before taking Arc snapshots.
+        let count = self.resources.len() * 3 + self.placements.len() + self.animations.len() + 1;
         if !work.resize(count * std::mem::size_of::<GraphicsEffect>()) {
             return None;
         }
@@ -1185,10 +1223,12 @@ impl GraphicsState {
             return effects;
         }
         match control.action {
-            Action::Transmit | Action::TransmitAndDisplay | Action::Query | Action::Frame => {
+            Action::Transmit | Action::TransmitAndDisplay | Action::Query | Action::Frame | Action::Compose => {
                 let prepared = match prepared {
                     Some(prepared) => Ok(prepared),
-                    None => match image {
+                    None => match image.or_else(|| (control.action == Action::Compose).then(|| Image {
+                        width: 0, height: 0, data: Vec::new(), format: WireFormat::Rgba, compressed: false,
+                    })) {
                         Some(image) => {
                             let key = self.key();
                             self.capture_frame(&control).and_then(|frame| Self::prepare_image(image, self.owner, key, &control, frame))
@@ -1293,6 +1333,7 @@ impl GraphicsState {
                         frame_number: 1,
                         selected: key,
                         revision: 0,
+                        mutation: 0,
                         gap_ms: 0,
                         content_key: key,
                         visible: false,
@@ -1333,7 +1374,7 @@ impl GraphicsState {
         effects: &mut Vec<GraphicsEffect>) {
         let root = frame.root;
         let valid = self.lookup(&control) == Some(root)
-            && self.resources.get(&root).is_some_and(|resource| resource.content_key == frame.root_content)
+            && self.resources.get(&root).is_some_and(|resource| resource.content_key == frame.root_content && resource.mutation == frame.mutation)
             && frame.target.is_none_or(|target| self.resources.contains_key(&target))
             && frame.base_key.is_none_or(|base| self.resources.contains_key(&base));
         if !valid {
@@ -1348,6 +1389,7 @@ impl GraphicsState {
         };
         effects.extend(self.drain_evictions());
         let old_content = frame.target.map(|target| self.resources[&target].content_key);
+        self.resources.get_mut(&root).unwrap().mutation += 1;
         let id = self.resources[&root].id;
         let selected = old_content == Some(self.resources[&root].selected);
         let target = frame.target.unwrap_or(key);
@@ -1355,13 +1397,14 @@ impl GraphicsState {
             let resource = self.resources.get_mut(&root).unwrap();
             resource.resident = resident;
             resource.content_key = key;
+            resource.image = Image { width: image.width, height: image.height, data: Vec::new(), format: image.format, compressed: false };
         } else {
             let gap_ms = frame.target.map_or(40, |target| self.resources[&target].gap_ms);
             if let Some(target) = frame.target { self.resources.remove(&target); }
             self.resources.insert(key, Resource {
                 image: Image { width: image.width, height: image.height, data: Vec::new(), format: image.format, compressed: false },
                 resident, id, number: 0, screen: self.screen, priority: retention::Priority::Unreferenced,
-                _metadata: metadata, root: Some(root), frame_number: frame.number, selected: key, revision: 0, content_key: key,
+                _metadata: metadata, root: Some(root), frame_number: frame.number, selected: key, revision: 0, mutation: 0, content_key: key,
                 gap_ms, visible: false,
             });
         }
@@ -1667,6 +1710,10 @@ impl GraphicsState {
 
     fn delete(&mut self, c: &Control, effects: &mut Vec<GraphicsEffect>) {
         let selector = if c.delete == 0 { b'a' } else { c.delete };
+        if selector.eq_ignore_ascii_case(&b'f') {
+            self.delete_frame(c, effects);
+            return;
+        }
         let target = selector.to_ascii_lowercase();
         if !matches!(
             target,
@@ -1776,14 +1823,21 @@ fn validate_image(image: &mut Image, work: &mut retention::Work) -> Result<usize
     if image.data.len() > MAX_IMAGE_BYTES {
         return Err("ENOSPC:Image payload too large");
     }
-    // The parser still charges the input for this read. Only a normalized PNG
-    // adds a second owned source; keep that source's capacity charged through
-    // PreparedImage, including while it is serialized/admitted.
-    let mut normalized_capacity = 0;
+    // The parser transfers the original source lease into prepare. Standalone
+    // callers reserve that same owner before validation; only a normalized PNG
+    // needs an additional, temporary allocation while the input still lives.
+    let mut source_capacity = image.data.capacity();
     if image.format == WireFormat::Png {
         if image.compressed {
-            image.data = inflate_png(&image.data, work)?;
-            normalized_capacity = image.data.capacity();
+            let mut inflate_work = work.temporary();
+            let normalized = inflate_png(&image.data, &mut inflate_work)?;
+            // Transfer the normalized allocation's charge before retiring the
+            // original source. No allocation is unowned between the two stages.
+            let normalized_work = inflate_work.split(normalized.capacity());
+            image.data = normalized;
+            source_capacity = image.data.capacity();
+            work.resize(0);
+            *work = normalized_work;
             image.compressed = false;
         }
         if image.data.get(..8) != Some(b"\x89PNG\r\n\x1a\n")
@@ -1821,7 +1875,7 @@ fn validate_image(image: &mut Image, work: &mut retention::Work) -> Result<usize
         // allocate. Validation discards each decoded row instead of allocating
         // a full second image in the daemon. Ignore ancillary metadata that is
         // irrelevant to terminal pixels and independently cap decoder scratch.
-        if !work.resize(normalized_capacity + (4 << 20)) {
+        if !work.resize(source_capacity + (4 << 20)) {
             return Err("ENOSPC:Graphics validation budget exhausted");
         }
         let mut decoder = png::Decoder::new_with_limits(
@@ -1845,7 +1899,7 @@ fn validate_image(image: &mut Image, work: &mut retention::Work) -> Result<usize
             bytes
         };
         if image.compressed {
-            if !work.resize(256 << 10) {
+            if !work.resize(source_capacity + (256 << 10)) {
                 return Err("ENOSPC:Graphics validation budget exhausted");
             }
             validate_zlib_pixels(&image.data, expected)?;
@@ -1853,9 +1907,9 @@ fn validate_image(image: &mut Image, work: &mut retention::Work) -> Result<usize
             return Err("EINVAL:Pixel payload does not match dimensions");
         }
     }
-    // Row decoding/inflate scratch is gone, but normalized source bytes stay
-    // alive until the prepared image and its packet have been consumed.
-    work.resize(normalized_capacity);
+    // Validation scratch is gone; keep the owned source charged through desktop
+    // admission, packet encoding and commit/cancellation.
+    work.resize(source_capacity);
     Ok(bytes)
 }
 

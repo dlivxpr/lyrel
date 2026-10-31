@@ -80,19 +80,23 @@ fn reply(writer: &Arc<Mutex<Box<dyn Write + Send>>>, control: &Control, status: 
 fn command(
     state: &Arc<Mutex<PaneState>>,
     control: Control,
-    image: Option<Image>,
+    mut image: Option<Image>,
+    source_work: Option<crate::core::graphics_state::retention::Work>,
     gate: &OutputGate,
     writer: &Arc<Mutex<Box<dyn Write + Send>>>,
 ) -> Vec<u8> {
     if !control.invalid && !control.unsupported && control.action == Action::Display {
         return display(state, control, gate, writer);
     }
+    if !control.invalid && !control.unsupported && control.action == Action::Compose {
+        image = Some(Image { width: 0, height: 0, data: Vec::new(), format: crate::core::kitty_graphics::WireFormat::Rgba, compressed: false });
+    }
     if control.invalid
         || control.unsupported
         || image.is_none()
         || !matches!(
             control.action,
-            Action::Transmit | Action::TransmitAndDisplay | Action::Query | Action::Frame
+            Action::Transmit | Action::TransmitAndDisplay | Action::Query | Action::Frame | Action::Compose
         )
     {
         let mut state = state.lock().unwrap();
@@ -125,7 +129,13 @@ fn command(
         };
         (graphics.work_owner(), key, graphics.generation(), broker, frame)
     };
-    let mut image = match GraphicsState::prepare_image(image, owner, key, &control, frame) {
+    let prepared = match source_work {
+        Some(work) => GraphicsState::prepare_image_budgeted(image, key, &control, frame, work),
+        // a=c has no incoming source; its retained packet clones keep their
+        // canonical leases, and composition reserves new work for this pane.
+        None => GraphicsState::prepare_image(image, owner, key, &control, frame),
+    };
+    let mut image = match prepared {
         Ok(image) => image,
         Err(status) => {
             reply(writer, &control, status);
@@ -358,7 +368,8 @@ pub(super) fn consume<'a>(
                         pass.extend(bytes);
                     }
                     Part::Graphics(Segment::Command { control, image }) => {
-                        pass.extend(command(state, control, image, gate, writer))
+                        let source_work = image.as_ref().map(|image| graphics.take_source_work(image.data.capacity()));
+                        pass.extend(command(state, control, image, source_work, gate, writer))
                     }
                     Part::Graphics(Segment::Reply(bytes))
                     | Part::Clipboard(ClipboardEvent::Reply(bytes)) => {
