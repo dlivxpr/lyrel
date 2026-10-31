@@ -2,7 +2,7 @@
 // Owned native workload; use only an isolated lyrel pane, never a user's session.
 // Same direct Kitty APC/PTY path as kitty-playback.mjs; no PTY or renderer here.
 import { createHash } from 'node:crypto';
-import { once } from 'node:events';
+import { base64Chunks, writeTerminal } from './graphics-fixture-utils.mjs';
 import { readFile, writeFile } from 'node:fs/promises';
 
 const usage = 'node scripts/kitty-capacity.mjs --pane 0|1 [--command load|start|stop|edit|compose|delete|replace|stats|select] [--frame 1..60] [--exit-after-start] [--manifest PATH]';
@@ -30,7 +30,8 @@ const imageId = 146000 + options.pane;
 const source = await readFile(new URL(import.meta.url));
 const sha256 = bytes => createHash('sha256').update(bytes).digest('hex');
 const sourceSha256 = sha256(source);
-const definition = { version: 1, sourceSha256, pane: options.pane, seed, imageId, width, height, frameCount, format: 'RGBA8', algorithm: 'xorshift32-rgb-gradient-v1', barcode: { x: 32, y: 32, width: 256, height: 32, bits: 8, msbFirst: true }, gapMs: [17, 17, 16] };
+const helperSha256 = sha256(await readFile(new URL('./graphics-fixture-utils.mjs', import.meta.url)));
+const definition = { version: 2, sourceSha256, helperSha256, pane: options.pane, seed, imageId, width, height, frameCount, format: 'RGBA8', algorithm: 'xorshift32-rgb-gradient-v1', barcode: { x: 32, y: 32, width: 256, height: 32, bits: 8, msbFirst: true }, gapMs: [17, 17, 16] };
 const fixtureIdentity = sha256(JSON.stringify(definition));
 const records = [];
 const counters = { attemptedUploads: 0, uploads: 0, rawBytes: 0, wireBytes: 0, stdoutBytes: 0, protocolCommands: 0, acknowledgedCommands: 0 };
@@ -57,7 +58,7 @@ async function emit(text) {
   const length = Buffer.byteLength(text);
   counters.stdoutBytes += length;
   if (text.includes('\x1b_G')) counters.wireBytes += length;
-  if (!process.stdout.write(text)) await once(process.stdout, 'drain');
+  await writeTerminal(text);
   if (interrupted) throw new Error('Interrupted; accepted frames remain daemon-owned; delete explicitly if desired');
 }
 async function status(event, extra = {}) {
@@ -158,11 +159,8 @@ async function upload(frame, action, version = 0, target = null) {
   const digest = sha256(pixels);
   counters.attemptedUploads++;
   await acknowledged(async () => {
-    for (let offset = 0; offset < pixels.length; offset += 3072) {
-      // 3072 raw bytes = 4096 Base64 bytes: never allocate a whole encoded frame.
-      const chunk = pixels.subarray(offset, Math.min(offset + 3072, pixels.length)).toString('base64');
-      const more = Number(offset + 3072 < pixels.length);
-      const header = offset === 0
+    for (const { chunk, first, more } of base64Chunks(pixels)) {
+      const header = first
         ? `a=${action},i=${imageId},f=32,s=${width},v=${height},${target === null ? `z=${gap(frame)},` : `r=${target},X=1,`}q=0,m=${more}`
         : `${action === 'f' ? 'a=f,' : ''}m=${more}`;
       await emit(`\x1b_G${header};${chunk}\x1b\\`);

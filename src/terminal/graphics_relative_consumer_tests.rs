@@ -161,6 +161,44 @@ fn graphics_consumer_relative_validation_is_correlated_quiet_and_atomic(cx: &mut
 }
 
 #[gpui_kit::test]
+fn graphics_consumer_relative_numbered_replacements_reject_direct_and_indirect_cycles(cx: &mut TestAppContext) {
+    let (daemon, pane, view, window) = graphics_layout_harness(cx);
+    graphics_send_fixture_with_replies(&view, cx, 652,
+        b"\x1b[6;5H\x1b_Ga=T,I=73,p=1,c=1,r=1,C=1,f=32,s=1,v=1;/wAA/w==\x1b\\", 1);
+    graphics_recovery_wait(cx, "numbered image must decode", |cx| {
+        view.read_with(cx, |view, _| graphics_visible_images(view).len() == 1)
+    });
+    let image_id = view.read_with(cx, |view, _| graphics_visible_images(view)[0].placement.image_id);
+    let child = format!("\x1b_Ga=p,I=73,p=2,P={image_id},Q=1,H=2,V=1,c=1,r=1\x1b\\");
+    graphics_send_fixture_with_replies(&view, cx, 653, child.as_bytes(), 1);
+    graphics_recovery_wait(cx, "numbered child must be projected", |cx| {
+        view.read_with(cx, |view, _| graphics_visible_images(view).len() == 2)
+    });
+    let anchors = |cx: &mut TestAppContext| view.read_with(cx, |view, _| {
+        graphics_visible_images(view).into_iter().map(|image| {
+            (image.placement.placement_id, image.anchor_row, image.anchor_col)
+        }).collect::<Vec<_>>()
+    });
+    let before = anchors(cx);
+    for (index, parent) in [1, 2].into_iter().enumerate() {
+        let serial = 654 + index;
+        let request = format!("\x1b_Ga=p,I=73,p=1,P={image_id},Q={parent},H=3,V=4,c=1,r=1\x1b\\");
+        let (text, _) = graphics_recovery_exchange(&daemon, pane, "SEND", serial, request.as_bytes(), 1);
+        // Admission errors correlate by the requested public number, not an
+        // invented image id; the exact protocol status must not become OK.
+        let reply = b"\x1b_GI=73,p=1;ECYCLE:Placement cycle\x1b\\";
+        assert!(text.contains(&format!("KITTY_REPLY {serial} {}", graphics_pty_fixture::hex(reply))), "{text}");
+        for pass in 0..3 {
+            graphics_send_fixture(&view, cx, 660 + index * 3 + pass, b"\x1b[1;1Hcycle rejected");
+            assert_eq!(anchors(cx), before, "rejected cycles must not accumulate relative offsets");
+            graphics_assert_production_paint(window, &view, cx);
+        }
+    }
+    graphics_recovery_destroy(view, window, cx);
+    daemon.panes().kill(pane).unwrap();
+}
+
+#[gpui_kit::test]
 fn graphics_consumer_relative_virtual_parent_follows_real_text_and_detached_deletion(
     cx: &mut TestAppContext,
 ) {

@@ -49,17 +49,18 @@ fn native_wait(
     description: &str,
     ready: impl Fn(&TerminalView) -> bool,
 ) {
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(90);
-    loop {
-        if view.read_with(cx, |view, _| ready(view)) { return; }
-        assert!(std::time::Instant::now() < deadline,
+    graphics_recovery_wait_with(
+        cx,
+        std::time::Duration::from_secs(90),
+        |cx| view.read_with(cx, |view, _| ready(view)),
+        |cx| view.read_with(cx, |view, _| format!(
             "OpenCode {description}; child_exited={}; instances={:#?}; graphics={}; text={}",
-            view.read_with(cx, |view, _| view.terminal.child_exited()),
-            view.read_with(cx, |view, _| native_pictures(view, 1.)),
-            view.read_with(cx, |view, _| view.terminal.images().recovery_diagnostics()),
-            view.read_with(cx, |view, _| view.scrollback_text()));
-        graphics_consumer_progress(cx);
-    }
+            view.terminal.child_exited(),
+            native_pictures(view, 1.),
+            view.terminal.images().recovery_diagnostics(),
+            view.scrollback_text()
+        )),
+    );
 }
 
 // Colors are independent BGRA literals from the fixture's published legend.

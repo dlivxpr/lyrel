@@ -74,24 +74,18 @@ fn pi_replay_wait(
     description: &str,
     ready: impl Fn(&TerminalView) -> bool,
 ) {
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(45);
-    loop {
-        if view.read_with(cx, |view, _| ready(view)) {
-            return;
-        }
-        assert!(
-            std::time::Instant::now() < deadline,
-            "Pi public-entry phase {description} timed out: {}",
-            view.read_with(cx, |view, _| format!(
-                "child_exited={} disconnected={} text={:?} graphics={}",
-                view.terminal.child_exited(),
-                view.terminal.exited,
-                view.scrollback_text(),
-                view.terminal.images().recovery_diagnostics()
-            ))
-        );
-        graphics_consumer_progress(cx);
-    }
+    graphics_recovery_wait_with(
+        cx,
+        std::time::Duration::from_secs(45),
+        |cx| view.read_with(cx, |view, _| ready(view)),
+        |cx| view.read_with(cx, |view, _| format!(
+            "Pi public-entry phase {description} timed out: child_exited={} disconnected={} text={:?} graphics={}",
+            view.terminal.child_exited(),
+            view.terminal.exited,
+            view.scrollback_text(),
+            view.terminal.images().recovery_diagnostics()
+        )),
+    );
 }
 
 fn pi_replay_pixels(

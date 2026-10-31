@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // Owned native fixture; run only in an isolated lyrel pane.
 // https://sw.kovidgoyal.net/kitty/graphics-protocol/ (2026-10-31).
-import { once } from 'node:events';
+import { base64Chunks, writeTerminal } from './graphics-fixture-utils.mjs';
 import { createInterface } from 'node:readline';
 
 if (!process.stdout.isTTY || !process.stdin.isTTY) {
@@ -14,7 +14,7 @@ let uploads = 0;
 let bytes = 0;
 async function emit(text) {
   bytes += Buffer.byteLength(text);
-  if (!process.stdout.write(text)) await once(process.stdout, 'drain');
+  await writeTerminal(text);
 }
 async function control(keys) { await emit(`\x1b_Ga=a,i=${id},q=2,${keys}\x1b\\`); }
 async function frame(color, gap = 500) {
@@ -26,10 +26,8 @@ async function frame(color, gap = 500) {
     }
   }
   const encoded = pixels.toString('base64');
-  for (let offset = 0; offset < encoded.length; offset += 4096) {
-    const chunk = encoded.slice(offset, offset + 4096);
-    const more = offset + chunk.length < encoded.length ? 1 : 0;
-    const header = offset === 0
+  for (const { chunk, first, more } of base64Chunks(encoded)) {
+    const header = first
       ? `a=${uploads === 0 ? 't' : 'f'},i=${id},f=32,s=${width},v=${height},z=${gap},q=2,m=${more}`
       : `${uploads === 0 ? '' : 'a=f,'}q=2,m=${more}`;
     await emit(`\x1b_G${header};${chunk}\x1b\\`);

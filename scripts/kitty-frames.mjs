@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // Owned native smoke fixture: run inside an isolated lyrel pane only.
 // Protocol baseline: https://sw.kovidgoyal.net/kitty/graphics-protocol/ (2026-10-31).
-import { once } from 'node:events';
+import { base64Chunks, writeTerminal } from './graphics-fixture-utils.mjs';
 import { createInterface } from 'node:readline';
 
 if (!process.stdout.isTTY || !process.stdin.isTTY) {
@@ -15,7 +15,7 @@ let frames = 0;
 let bytes = 0;
 async function emit(text) {
   bytes += Buffer.byteLength(text);
-  if (!process.stdout.write(text)) await once(process.stdout, 'drain');
+  await writeTerminal(text);
 }
 async function upload(action, color) {
   const pixels = Buffer.alloc(width * height * 4);
@@ -27,10 +27,8 @@ async function upload(action, color) {
     }
   }
   const encoded = pixels.toString('base64').replace(/=+$/, '');
-  for (let offset = 0; offset < encoded.length; offset += 4096) {
-    const chunk = encoded.slice(offset, offset + 4096);
-    const more = offset + chunk.length < encoded.length ? 1 : 0;
-    const header = offset === 0
+  for (const { chunk, first, more } of base64Chunks(encoded)) {
+    const header = first
       ? `a=${action},i=${id},f=0,s=${width},v=${height},q=2,m=${more}`
       : `${action === 'f' ? 'a=f,' : ''}q=2,m=${more}`;
     await emit(`\x1b_G${header};${chunk}\x1b\\`);
@@ -45,10 +43,8 @@ async function patch(controls, color) {
     pixels.set(x < 4 || y < 4 ? [255,255,255,255] : color, (y * w + x) * 4);
   }
   const encoded = pixels.toString('base64');
-  for (let offset = 0; offset < encoded.length; offset += 4096) {
-    const chunk = encoded.slice(offset, offset + 4096);
-    const more = Number(offset + chunk.length < encoded.length);
-    await emit(`\x1b_Ga=f,${offset === 0 ? `i=${id},f=32,s=${w},v=${h},${controls},` : ''}q=2,m=${more};${chunk}\x1b\\`);
+  for (const { chunk, first, more } of base64Chunks(encoded)) {
+    await emit(`\x1b_Ga=f,${first ? `i=${id},f=32,s=${w},v=${h},${controls},` : ''}q=2,m=${more};${chunk}\x1b\\`);
   }
   uploads++;
   if (!controls.split(',').some(field => field.startsWith('r='))) frames++;

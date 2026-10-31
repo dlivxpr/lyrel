@@ -20,16 +20,55 @@ const MAX_PROCS: usize = 64;
 /// found; only the list handed to the panel is cut back to `MAX_PROCS`.
 const MAX_TREE: usize = 512;
 
+/// Windows inspects an owned shell tree by PID; Unix inspects a foreground PGID.
 #[cfg(windows)]
-pub(crate) fn foreground_group_is_local(root: i32) -> Option<bool> {
-    crate::daemon::winproc::media_tree_is_local(u32::try_from(root).ok()?)
+pub(crate) type MediaProcessRoot = u32;
+#[cfg(not(windows))]
+pub(crate) type MediaProcessRoot = i32;
+
+/// Shared namespace/transport bridges, plus Windows-only WSL entry points.
+/// Executable-name classification is deliberately conservative at this boundary.
+pub(crate) fn media_namespace_bridge(program: &str, windows: bool) -> bool {
+    let name = program.rsplit(['/', '\\']).next().unwrap_or(program);
+    let cut = name.len().saturating_sub(4);
+    let name = if name
+        .get(cut..)
+        .is_some_and(|suffix| suffix.eq_ignore_ascii_case(".exe"))
+    {
+        &name[..cut]
+    } else {
+        name
+    };
+    const SHARED: &[&str] = &[
+        "ssh",
+        "wsl",
+        "plink",
+        "mosh",
+        "mosh-client",
+        "docker",
+        "podman",
+        "nsenter",
+        "unshare",
+    ];
+    SHARED
+        .iter()
+        .any(|bridge| name.eq_ignore_ascii_case(bridge))
+        || (windows
+            && ["wslhost", "wslrelay", "bash"]
+                .iter()
+                .any(|bridge| name.eq_ignore_ascii_case(bridge)))
+}
+
+#[cfg(windows)]
+pub(crate) fn foreground_group_is_local(root: MediaProcessRoot) -> Option<bool> {
+    crate::daemon::winproc::media_tree_is_local(root)
 }
 
 /// Media permission is stricter than the UI's interactive SSH context. An SSH
 /// child can share a local wrapper's foreground pgid and run a remote command.
 /// Called only at the indirect-media boundary, never by ordinary PTY output.
 #[cfg(not(windows))]
-pub(crate) fn foreground_group_is_local(pgid: i32) -> Option<bool> {
+pub(crate) fn foreground_group_is_local(pgid: MediaProcessRoot) -> Option<bool> {
     if pgid <= 0 {
         return None;
     }
@@ -69,18 +108,7 @@ fn group_media_locality(
         let argv = argv_for(pid)?;
         let program = argv.first()?;
         let name = std::path::Path::new(program).file_name()?;
-        if matches!(
-            name.to_str()?,
-            "ssh"
-                | "ssh.exe"
-                | "wsl"
-                | "wsl.exe"
-                | "mosh-client"
-                | "docker"
-                | "podman"
-                | "nsenter"
-                | "unshare"
-        ) {
+        if media_namespace_bridge(name.to_str()?, false) {
             return Some(false);
         }
     }
@@ -1092,6 +1120,33 @@ mod tests {
             group_media_locality(100, &table, |pid| commands.get(&pid).cloned()),
             Some(false)
         );
+    }
+
+    #[test]
+    fn foreground_group_media_rejects_shared_bridge_names_case_insensitively() {
+        let mut table = HashMap::from([(100, row(1, "python3")), (200, row(100, "bridge"))]);
+        for process in table.values_mut() {
+            process.pgid = 100;
+        }
+        for bridge in [
+            "SSH.EXE",
+            "PlInK",
+            "mosh-client",
+            "docker.exe",
+            "podman",
+            "nsenter",
+            "unshare",
+        ] {
+            assert_eq!(
+                group_media_locality(100, &table, |pid| Some(vec![if pid == 100 {
+                    "python3".into()
+                } else {
+                    format!("/usr/bin/{bridge}")
+                }])),
+                Some(false),
+                "{bridge} cannot authorize host-local media"
+            );
+        }
     }
 
     #[test]

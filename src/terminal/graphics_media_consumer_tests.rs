@@ -38,12 +38,9 @@ fn graphics_consumer_owned_media_large_regions_and_uniform_failures(cx: &mut Tes
             file.to_str().unwrap().to_owned()
         };
         graphics_send_fixture_with_replies(&view, cx, serial, &media_command(145, medium, &name, offset as u64, if medium == 't' { 0 } else { 8 }, 0), 1);
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
-        loop {
-            if view.read_with(cx, |view, _| graphics_visible_images(view).iter().any(|image| image.placement.image_id == 145 && image.data.is_some())) { break; }
-            assert!(std::time::Instant::now() < deadline, "production media decode timed out");
-            graphics_consumer_progress(cx);
-        }
+        graphics_recovery_wait(cx, "production media decode timed out", |cx| {
+            view.read_with(cx, |view, _| graphics_visible_images(view).iter().any(|image| image.placement.image_id == 145 && image.data.is_some()))
+        });
         graphics_assert_production_paint(window, &view, cx);
         view.read_with(cx, |view, _| {
             let images = graphics_visible_images(view);
@@ -153,11 +150,9 @@ fn graphics_consumer_regular_symlink_target_and_unmarked_temp_are_preserved(cx: 
     }
     let name = link.join("sender-owned.rgba");
     graphics_send_fixture_with_replies(&view, cx, 1, &media_command(145, 't', name.to_str().unwrap(), 0, 8, 0), 1);
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
-    while !view.read_with(cx, |view, _| graphics_visible_images(view).iter().any(|image| image.data.is_some())) {
-        assert!(std::time::Instant::now() < deadline);
-        graphics_consumer_progress(cx);
-    }
+    graphics_recovery_wait(cx, "resolved media target must decode", |cx| {
+        view.read_with(cx, |view, _| graphics_visible_images(view).iter().any(|image| image.data.is_some()))
+    });
     graphics_assert_production_paint(window, &view, cx);
     view.read_with(cx, |view, _| {
         let images = graphics_visible_images(view);

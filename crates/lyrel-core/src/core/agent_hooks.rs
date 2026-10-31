@@ -1337,6 +1337,65 @@ mod tests {
     use super::*;
 
     #[test]
+    fn generated_bridges_share_public_scope_keys_without_cross_agent_policies() {
+        let host = crate::host::local::LocalHost::new();
+        let target = HookTarget::local_for_exe(&*host, std::env::current_exe().unwrap()).unwrap();
+        for (agent, expected) in [
+            (
+                HookAgent::Pi,
+                vec![
+                    "HOME",
+                    "USERPROFILE",
+                    "PI_CODING_AGENT_DIR",
+                    "PI_CODING_AGENT_SESSION_DIR",
+                    "PI_IMAGE_PROTOCOL",
+                ],
+            ),
+            (
+                HookAgent::OhMyPi,
+                vec![
+                    "HOME",
+                    "USERPROFILE",
+                    "OMP_PROFILE",
+                    "PI_PROFILE",
+                    "PI_CONFIG_DIR",
+                    "PI_CODING_AGENT_DIR",
+                    "PI_CONFIG_FILES",
+                    "XDG_CONFIG_HOME",
+                    "XDG_DATA_HOME",
+                    "XDG_STATE_HOME",
+                    "XDG_CACHE_HOME",
+                    "PI_FORCE_IMAGE_PROTOCOL",
+                    "PI_KITTY_PLACEHOLDERS",
+                    "PI_NO_KITTY_PLACEHOLDERS",
+                ],
+            ),
+        ] {
+            let source = owned_file_content(&target, agent).unwrap();
+            let declaration = source
+                .lines()
+                .find_map(|line| line.strip_prefix("const SCOPE_ENV = "))
+                .unwrap();
+            let mut actual: Vec<String> =
+                serde_json::from_str(declaration.trim_end_matches(';')).unwrap();
+            let mut expected = expected;
+            actual.sort();
+            expected.sort();
+            assert_eq!(actual, expected, "{} bridge scope contract", agent.slug());
+            assert!(
+                actual
+                    .iter()
+                    .all(|key| crate::host::session_operations::SCOPE_ENV.contains(&key.as_str()))
+            );
+            assert!(
+                actual
+                    .iter()
+                    .all(|key| crate::host::is_agent_environment_key(key))
+            );
+        }
+    }
+
+    #[test]
     fn omp_only_finishes_after_its_final_noncontinuing_agent_end() {
         use crate::core::cli_agent::{
             AgentOutcome, AgentSessionState, AgentStatus, parse_agent_event_body,

@@ -1,7 +1,7 @@
 #!/usr/bin/env node
-// 只在自有隔离 lyrel 原生 pane 运行；不操作其他 pane/daemon。
-// 发布规格：https://sw.kovidgoyal.net/kitty/graphics-protocol/（2026-10-31）。
-import { once } from 'node:events';
+// Run only in an owned isolated native lyrel pane; never touch other panes/daemons.
+// Protocol baseline: https://sw.kovidgoyal.net/kitty/graphics-protocol/ (2026-10-31).
+import { base64Chunks, writeTerminal } from './graphics-fixture-utils.mjs';
 import { createInterface } from 'node:readline';
 if (!process.stdin.isTTY || !process.stdout.isTTY) throw new Error('Run inside an owned native lyrel pane');
 const id = 139143;
@@ -9,7 +9,7 @@ const width = 96, height = 64;
 let uploads = 0, bytes = 0, frames = [];
 async function emit(text) {
   bytes += Buffer.byteLength(text);
-  if (!process.stdout.write(text)) await once(process.stdout, 'drain');
+  await writeTerminal(text);
 }
 async function command(keys) { await emit(`\x1b_Gi=${id},q=2,${keys}\x1b\\`); }
 async function upload(name, color, { edit = 0, gap = 700 } = {}) {
@@ -21,9 +21,8 @@ async function upload(name, color, { edit = 0, gap = 700 } = {}) {
   }
   const action = frames.length ? 'f' : 't';
   const encoded = pixels.toString('base64');
-  for (let pos = 0; pos < encoded.length; pos += 4096) {
-    const chunk = encoded.slice(pos, pos + 4096), more = +(pos + chunk.length < encoded.length);
-    const header = pos ? `${action === 'f' ? 'a=f,' : ''}m=${more},q=2`
+  for (const { chunk, first, more } of base64Chunks(encoded)) {
+    const header = !first ? `${action === 'f' ? 'a=f,' : ''}m=${more},q=2`
       : `a=${action},i=${id},s=${w},v=${h},f=32,m=${more},q=2,${edit ? `r=${edit},x=48,y=32,X=1` : `z=${gap},X=1`}`;
     await emit(`\x1b_G${header};${chunk}\x1b\\`);
   }

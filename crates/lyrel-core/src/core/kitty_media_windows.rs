@@ -4,11 +4,12 @@ use std::os::windows::fs::{MetadataExt, OpenOptionsExt};
 use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle};
 use std::path::{Component, Path, PathBuf, Prefix};
 
+use windows_sys::Win32::Foundation::{GENERIC_READ, INVALID_HANDLE_VALUE};
 use windows_sys::Win32::Storage::FileSystem::{
     DELETE, FILE_ATTRIBUTE_DIRECTORY, FILE_ATTRIBUTE_REPARSE_POINT, FILE_DISPOSITION_INFO,
-    FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT, FILE_SHARE_READ, FILE_SHARE_WRITE,
-    FILE_TYPE_DISK, FileDispositionInfo, GetDriveTypeW, GetFileType,
-    GetVolumeNameForVolumeMountPointW, SetFileInformationByHandle,
+    FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT, FILE_SHARE_DELETE, FILE_SHARE_READ,
+    FILE_SHARE_WRITE, FILE_TYPE_DISK, FileDispositionInfo, GetDriveTypeW, GetFileType,
+    GetVolumeNameForVolumeMountPointW, ReOpenFile, SetFileInformationByHandle,
 };
 use windows_sys::Win32::System::Diagnostics::Debug::ReadProcessMemory;
 use windows_sys::Win32::System::Memory::{
@@ -148,6 +149,9 @@ fn resolve_disk_path(path: &Path) -> Option<PathBuf> {
 
 struct LockedPath {
     path: PathBuf,
+    // Pin the verified leaf independently of its name, including across a
+    // failed DELETE-access request and the subsequent read-only fallback.
+    object: File,
     // No FILE_SHARE_DELETE: resolved ancestors cannot become junctions between
     // validation and open/delete. FileSystem checks are repeated on each handle.
     _directories: Vec<File>,
@@ -176,8 +180,22 @@ impl LockedPath {
             }
             directories.push(directory);
         }
+        let object = OpenOptions::new()
+            .access_mode(0)
+            .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE)
+            .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT)
+            .open(&path)
+            .ok()?;
+        let meta = object.metadata().ok()?;
+        if !meta.is_file()
+            || meta.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0
+            || unsafe { GetFileType(object.as_raw_handle()) } != FILE_TYPE_DISK
+        {
+            return None;
+        }
         Some(Self {
             path,
+            object,
             _directories: directories,
         })
     }
@@ -200,19 +218,20 @@ impl LockedPath {
     }
 
     fn file(&self, delete: bool) -> Option<File> {
-        let before = std::fs::symlink_metadata(&self.path).ok()?;
-        if !before.is_file() || before.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
+        // ReOpenFile upgrades access to this verified object, never a new
+        // lookup of a name that may now identify an unrelated replacement.
+        let raw = unsafe {
+            ReOpenFile(
+                self.object.as_raw_handle(),
+                GENERIC_READ | if delete { DELETE } else { 0 },
+                FILE_SHARE_READ | FILE_SHARE_WRITE,
+                FILE_FLAG_OPEN_REPARSE_POINT,
+            )
+        };
+        if raw == INVALID_HANDLE_VALUE {
             return None;
         }
-        let file = OpenOptions::new()
-            .read(true)
-            .access_mode(
-                windows_sys::Win32::Foundation::GENERIC_READ | if delete { DELETE } else { 0 },
-            )
-            .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE)
-            .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT)
-            .open(&self.path)
-            .ok()?;
+        let file = unsafe { File::from_raw_handle(raw) };
         let meta = file.metadata().ok()?;
         if !meta.is_file()
             || meta.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0
@@ -364,6 +383,76 @@ mod tests {
         ] {
             assert!(disk_path(Path::new(name)).is_none(), "{name}");
         }
+    }
+
+    #[test]
+    fn validated_handoff_reads_and_deletes_original_after_identity_swap() {
+        use std::io::Read as _;
+
+        for delete in [false, true] {
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join("tty-graphics-protocol.rgba");
+            let original = dir.path().join("original.rgba");
+            std::fs::write(&path, [1, 2, 3, 4]).unwrap();
+            let locked = LockedPath::open(&path).unwrap();
+            assert!(locked.eligible_temp());
+
+            // Replace the name after validation but before acquiring read/DELETE access.
+            std::fs::rename(&path, &original).unwrap();
+            std::fs::write(&path, [9, 8, 7, 6]).unwrap();
+            let mut file = locked.file(delete).unwrap();
+            let mut bytes = Vec::new();
+            file.read_to_end(&mut bytes).unwrap();
+            assert_eq!(bytes, [1, 2, 3, 4]);
+            if delete {
+                let info = FILE_DISPOSITION_INFO { DeleteFile: true };
+                assert_ne!(
+                    unsafe {
+                        SetFileInformationByHandle(
+                            file.as_raw_handle(),
+                            FileDispositionInfo,
+                            (&info as *const FILE_DISPOSITION_INFO).cast(),
+                            std::mem::size_of_val(&info) as u32,
+                        )
+                    },
+                    0
+                );
+            }
+            drop(file);
+            drop(locked);
+            assert_eq!(std::fs::read(&path).unwrap(), [9, 8, 7, 6]);
+            assert_eq!(original.exists(), !delete);
+        }
+    }
+
+    #[test]
+    fn delete_access_fallback_reads_verified_object_not_replacement() {
+        use std::io::Read as _;
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("tty-graphics-protocol.rgba");
+        let original = dir.path().join("original.rgba");
+        std::fs::write(&path, [1, 2, 3, 4]).unwrap();
+        let locked = LockedPath::open(&path).unwrap();
+        std::fs::rename(&path, &original).unwrap();
+        std::fs::write(&path, [9, 8, 7, 6]).unwrap();
+
+        // Another reader permits reads but deterministically denies DELETE access.
+        let reader = OpenOptions::new()
+            .read(true)
+            .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE)
+            .open(&original)
+            .unwrap();
+        assert!(locked.file(true).is_none());
+        let mut file = locked.file(true).or_else(|| locked.file(false)).unwrap();
+        let mut bytes = Vec::new();
+        file.read_to_end(&mut bytes).unwrap();
+        assert_eq!(bytes, [1, 2, 3, 4]);
+        drop(file);
+        drop(reader);
+        drop(locked);
+        assert_eq!(std::fs::read(&original).unwrap(), [1, 2, 3, 4]);
+        assert_eq!(std::fs::read(&path).unwrap(), [9, 8, 7, 6]);
     }
 
     #[test]

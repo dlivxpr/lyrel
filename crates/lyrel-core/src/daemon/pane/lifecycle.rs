@@ -261,7 +261,7 @@ impl PaneBackend {
                     #[cfg(windows)]
                     {
                         let _ = &group_master;
-                        shell_pid.and_then(|pid| i32::try_from(pid).ok())
+                        shell_pid
                     }
                     #[cfg(not(windows))]
                     {

@@ -13,11 +13,23 @@ fn graphics_consumer_progress(cx: &mut TestAppContext) {
 fn graphics_recovery_wait(
     cx: &mut TestAppContext,
     reason: &str,
-    mut ready: impl FnMut(&mut TestAppContext) -> bool,
+    ready: impl FnMut(&mut TestAppContext) -> bool,
 ) {
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    graphics_recovery_wait_with(cx, std::time::Duration::from_secs(30), ready, |_| reason.to_owned());
+}
+
+/// Native agent startup and full-size replay need longer deadlines and live
+/// diagnostics, but must pump the same production consumer lifecycle.
+#[track_caller]
+fn graphics_recovery_wait_with(
+    cx: &mut TestAppContext,
+    timeout: std::time::Duration,
+    mut ready: impl FnMut(&mut TestAppContext) -> bool,
+    mut diagnostics: impl FnMut(&mut TestAppContext) -> String,
+) {
+    let deadline = std::time::Instant::now() + timeout;
     while !ready(cx) {
-        assert!(std::time::Instant::now() < deadline, "{reason}");
+        assert!(std::time::Instant::now() < deadline, "{}", diagnostics(cx));
         graphics_consumer_progress(cx);
     }
 }

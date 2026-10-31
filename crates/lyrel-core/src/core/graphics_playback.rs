@@ -3,6 +3,12 @@
 use super::*;
 use std::time::{Duration, Instant};
 
+// The timeline keeps the public Kitty wire values; names distinguish state
+// transitions from frame numbers and loop counts without a second wire model.
+const STOPPED: u8 = 1;
+const LOADING: u8 = 2;
+const RUNNING: u8 = 3;
+
 pub(super) struct Animation {
     pub(super) mode: u8,
     loops: u32,
@@ -28,21 +34,33 @@ impl GraphicsState {
         }
     }
 
-    pub(super) fn frame_key(&self, root: u64, number: u32) -> Option<u64> {
-        if number == 1 {
-            return self.resources.get(&root).map(|r| r.content_key);
-        }
-        self.resources.values().find_map(|resource| {
-            (resource.root == Some(root) && resource.frame_number == number)
-                .then_some(resource.content_key)
+    pub(super) fn animation_frames(&self, root: u64) -> impl Iterator<Item = (u64, &Resource)> {
+        self.resources.iter().filter_map(move |(&key, resource)| {
+            (key == root || resource.root == Some(root)).then_some((key, resource))
         })
     }
 
+    fn frame_by_number(&self, root: u64, number: u32) -> Option<(u64, &Resource)> {
+        if number == 1 {
+            return self.resources.get(&root).map(|resource| (root, resource));
+        }
+        self.animation_frames(root)
+            .find(|(_, resource)| resource.frame_number == number)
+    }
+
+    /// Storage identity can differ from immutable content after root promotion.
+    pub(super) fn frame_storage_key(&self, root: u64, number: u32) -> Option<u64> {
+        self.frame_by_number(root, number).map(|(key, _)| key)
+    }
+
+    pub(super) fn frame_key(&self, root: u64, number: u32) -> Option<u64> {
+        self.frame_by_number(root, number)
+            .map(|(_, resource)| resource.content_key)
+    }
+
     fn frame_resource(&self, root: u64, content: u64) -> Option<&Resource> {
-        self.resources.iter().find_map(|(&key, resource)| {
-            ((key == root || resource.root == Some(root)) && resource.content_key == content)
-                .then_some(resource)
-        })
+        self.animation_frames(root)
+            .find_map(|(_, resource)| (resource.content_key == content).then_some(resource))
     }
 
     pub(super) fn select_content(
@@ -106,7 +124,7 @@ impl GraphicsState {
                 continue;
             }
             if visible {
-                if animation.mode != 1 && !animation.waiting {
+                if animation.mode != STOPPED && !animation.waiting {
                     animation.deadline = Some(now + animation.remaining);
                 }
             } else if let Some(deadline) = animation.deadline.take() {
@@ -147,18 +165,18 @@ impl GraphicsState {
         let selected = self.resources[&root].selected;
         let selected_number = self.frame_resource(root, selected).unwrap().frame_number;
         let has_next = self
-            .resources
-            .values()
-            .any(|r| r.root == Some(root) && r.frame_number > selected_number);
+            .animation_frames(root)
+            .any(|(_, frame)| frame.frame_number > selected_number);
         if let Some(animation) = self.animations.get_mut(&root) {
-            if animation.waiting && (has_next || (animation.mode == 3 && gap_changed)) {
+            if animation.waiting && (has_next || (animation.mode == RUNNING && gap_changed)) {
                 animation.waiting = false;
                 animation.remaining = Duration::ZERO;
-                animation.deadline = (animation.visible && animation.mode != 1).then_some(now);
+                animation.deadline =
+                    (animation.visible && animation.mode != STOPPED).then_some(now);
             } else if !animation.waiting && selected == content && gap_changed {
                 animation.remaining = Duration::from_millis(u64::from(gap));
-                animation.deadline =
-                    (animation.visible && animation.mode != 1).then_some(now + animation.remaining);
+                animation.deadline = (animation.visible && animation.mode != STOPPED)
+                    .then_some(now + animation.remaining);
             }
             self.playback_dirty.insert(root);
             effects.extend(self.drain_playback_metadata());
@@ -177,19 +195,19 @@ impl GraphicsState {
         let frame = self.frame_resource(root, selected).unwrap();
         let gap = Duration::from_millis(u64::from(frame.gap_ms));
         let has_next = self
-            .resources
-            .values()
-            .any(|r| r.root == Some(root) && r.frame_number > frame.frame_number);
+            .animation_frames(root)
+            .any(|(_, next)| next.frame_number > frame.frame_number);
         if let Some(animation) = self.animations.get_mut(&root) {
             if animation.waiting {
                 if has_next {
                     animation.waiting = false;
                     animation.remaining = Duration::ZERO;
-                    animation.deadline = (animation.visible && animation.mode != 1).then_some(now);
+                    animation.deadline =
+                        (animation.visible && animation.mode != STOPPED).then_some(now);
                 }
             } else if replaced_current && animation.visible {
                 animation.remaining = gap;
-                animation.deadline = (animation.mode != 1).then_some(now + gap);
+                animation.deadline = (animation.mode != STOPPED).then_some(now + gap);
             }
             self.playback_dirty.insert(root);
             effects.extend(self.drain_playback_metadata());
@@ -207,7 +225,7 @@ impl GraphicsState {
             return;
         };
         let id = self.resources[&root].id;
-        if control.width > 3 {
+        if control.width > u32::from(RUNNING) {
             Self::reply(effects, control, id, "EINVAL:Invalid animation state");
             return;
         }
@@ -245,7 +263,7 @@ impl GraphicsState {
             Duration::from_millis(u64::from(self.frame_resource(root, frame).unwrap().gap_ms));
         let visible = self.resources[&root].visible;
         let animation = self.animations.entry(root).or_insert(Animation {
-            mode: 1,
+            mode: STOPPED,
             loops: 0,
             completed: 0,
             remaining: gap,
@@ -261,13 +279,13 @@ impl GraphicsState {
             animation.waiting = false;
             animation.deadline = None;
         }
-        if animation.mode == 3 && animation.waiting && control.z != 0 {
+        if animation.mode == RUNNING && animation.waiting && control.z != 0 {
             animation.waiting = false;
             animation.remaining = Duration::ZERO;
             animation.deadline = None;
         }
         if control.width != 0 {
-            if control.width == 1 {
+            if control.width == u32::from(STOPPED) {
                 if let Some(deadline) = animation.deadline.take() {
                     animation.remaining = deadline.saturating_duration_since(now);
                 }
@@ -278,7 +296,7 @@ impl GraphicsState {
             }
             animation.mode = control.width as u8;
         }
-        if animation.mode != 1
+        if animation.mode != STOPPED
             && animation.visible
             && !animation.waiting
             && animation.deadline.is_none()
@@ -309,20 +327,18 @@ impl GraphicsState {
             let mut presented = selected;
             let before = (animation.mode, animation.completed, animation.waiting);
             let cycle_ms: u64 = self
-                .resources
-                .iter()
-                .filter(|(key, resource)| **key == root || resource.root == Some(root))
-                .map(|(_, r)| u64::from(r.gap_ms))
+                .animation_frames(root)
+                .map(|(_, frame)| u64::from(frame.gap_ms))
                 .sum();
             if cycle_ms == 0 && animation.deadline.is_some() {
-                if animation.mode == 3 && animation.loops != 0 {
+                if animation.mode == RUNNING && animation.loops != 0 {
                     animation.completed = animation.loops;
-                    animation.mode = 1;
+                    animation.mode = STOPPED;
                 } else {
                     animation.waiting = true;
                 }
                 animation.deadline = None;
-            } else if animation.mode == 3
+            } else if animation.mode == RUNNING
                 && let Some(deadline) = animation.deadline
             {
                 let cycles = now.saturating_duration_since(deadline).as_millis()
@@ -344,16 +360,14 @@ impl GraphicsState {
             while animation.deadline.is_some_and(|deadline| deadline <= now) {
                 let current = self.frame_resource(root, frame).unwrap();
                 let next = self
-                    .resources
-                    .iter()
-                    .filter(|(key, resource)| **key == root || resource.root == Some(root))
+                    .animation_frames(root)
                     .filter(|(_, resource)| resource.frame_number > current.frame_number)
                     .min_by_key(|(_, resource)| resource.frame_number)
                     .map(|(_, resource)| resource.content_key);
                 let next = if let Some(next) = next {
                     next
                 } else {
-                    if animation.mode == 2 {
+                    if animation.mode == LOADING {
                         animation.waiting = true;
                         animation.remaining = Duration::ZERO;
                         animation.deadline = None;
@@ -361,7 +375,7 @@ impl GraphicsState {
                     }
                     animation.completed = animation.completed.saturating_add(1);
                     if animation.loops != 0 && animation.completed >= animation.loops {
-                        animation.mode = 1;
+                        animation.mode = STOPPED;
                         animation.deadline = None;
                         animation.remaining = Duration::ZERO;
                         break;

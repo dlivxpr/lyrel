@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // Run only in a disposable lyrel pane; this never reads histories or writes images to disk.
-import { once } from 'node:events';
+import { writeTerminal } from './graphics-fixture-utils.mjs';
 if (!process.stdout.isTTY) throw new Error('Run directly in an isolated lyrel terminal');
 const stage = process.argv[2] || 'scene';
 const apc = header => `\x1b_G${header},q=2\x1b\\`;
@@ -33,4 +33,4 @@ switch (stage) {
     break;
   default: throw new Error('Usage: node scripts/kitty-relative.mjs [scene|move|erase|delete]');
 }
-if (!process.stdout.write(bytes)) await once(process.stdout, 'drain');
+await writeTerminal(bytes);

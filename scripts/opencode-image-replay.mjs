@@ -7,7 +7,7 @@ import { randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { deflateSync } from 'node:zlib';
+import { encodePng } from './graphics-fixture-utils.mjs';
 
 const VERSION = '2.2.0';
 const args = process.argv.slice(2);
@@ -55,22 +55,6 @@ function run(root, command, interactive = false) {
   return result.stdout ?? '';
 }
 
-function crc32(bytes) {
-  let crc = 0xffffffff;
-  for (const byte of bytes) {
-    crc ^= byte;
-    for (let bit = 0; bit < 8; bit++) crc = (crc >>> 1) ^ (0xedb88320 & -(crc & 1));
-  }
-  return (crc ^ 0xffffffff) >>> 0;
-}
-function chunk(name, bytes) {
-  const type = Buffer.from(name);
-  const header = Buffer.alloc(4);
-  header.writeUInt32BE(bytes.length);
-  const checksum = Buffer.alloc(4);
-  checksum.writeUInt32BE(crc32(Buffer.concat([type, bytes])));
-  return Buffer.concat([header, type, bytes, checksum]);
-}
 function picture(rgb, ordinal) {
   const width = 96, height = 48;
   const rows = Buffer.alloc((width * 4 + 1) * height);
@@ -82,10 +66,7 @@ function picture(rgb, ordinal) {
     const color = border ? [0, 0, 0] : bar ? [255, 255, 255] : rgb;
     rows.set([...color, 255], y * (width * 4 + 1) + 1 + x * 4);
   }
-  const header = Buffer.alloc(13);
-  header.writeUInt32BE(width); header.writeUInt32BE(height, 4); header[8] = 8; header[9] = 6;
-  return Buffer.concat([Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]),
-    chunk('IHDR', header), chunk('IDAT', deflateSync(rows)), chunk('IEND', Buffer.alloc(0))]).toString('base64');
+  return encodePng(width, height, rows).toString('base64');
 }
 
 function transcript(directory) {

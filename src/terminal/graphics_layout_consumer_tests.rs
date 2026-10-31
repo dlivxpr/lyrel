@@ -20,22 +20,15 @@ fn graphics_layout_harness(
 }
 
 fn graphics_layout_wait_image(view: &Entity<TerminalView>, cx: &mut TestAppContext, id: u32) {
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
-    loop {
-        if view.read_with(cx, |view, _| {
-            graphics_visible_images(view)
-                .iter()
-                .any(|image| image.placement.image_id == id)
-        }) {
-            break;
-        }
-        assert!(
-            std::time::Instant::now() < deadline,
-            "production image i={id} did not become visible; {}",
-            view.read_with(cx, |view, _| view.terminal.images().recovery_diagnostics())
-        );
-        graphics_consumer_progress(cx);
-    }
+    graphics_recovery_wait_with(
+        cx,
+        std::time::Duration::from_secs(30),
+        |cx| view.read_with(cx, |view, _| {
+            graphics_visible_images(view).iter().any(|image| image.placement.image_id == id)
+        }),
+        |cx| format!("production image i={id} did not become visible; {}",
+            view.read_with(cx, |view, _| view.terminal.images().recovery_diagnostics())),
+    );
 }
 
 fn graphics_assert_production_paint(

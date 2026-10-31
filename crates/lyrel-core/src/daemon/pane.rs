@@ -1960,7 +1960,7 @@ mod tests {
             }
         }
 
-        let probes_for = |groups: Vec<i32>| {
+        let probes_for = |groups: Vec<crate::daemon::procinfo::MediaProcessRoot>| {
             let state = Arc::new(Mutex::new(test_state(true)));
             let probes = Arc::new(std::sync::atomic::AtomicUsize::new(0));
             let counted = probes.clone();

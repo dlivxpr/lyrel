@@ -48,6 +48,32 @@ impl GraphicsState {
         self.placeholder_placements_in_viewport(start, end, self.size.cols)
     }
 
+    /// Visibility protection and relative anchors must use the same valid
+    /// source slice, not merely a matching placeholder id in the text grid.
+    fn projected_placeholder(&self, mut slice: PlaceholderSlice) -> Option<&Placement> {
+        let prototype = placeholder_prototype(self.placements(), self.screen, &slice.run)?;
+        if slice.run.row >= prototype.span_rows || slice.run.col >= prototype.span_cols {
+            return None;
+        }
+        let image = &self.resources[&prototype.resource].image;
+        slice.run.width = slice.run.width.min(prototype.span_cols - slice.run.col);
+        rio_vt::ansi::kitty_virtual::compute_run_geometry(
+            &slice.run,
+            prototype.span_cols,
+            prototype.span_rows,
+            image.width,
+            image.height,
+            (prototype.x, prototype.y, prototype.w, prototype.h),
+            f32::from(self.size.cell_w.max(1)),
+            f32::from(self.size.cell_h.max(1)),
+            0.,
+            0.,
+            0,
+            slice.column,
+        )?;
+        Some(prototype)
+    }
+
     pub(super) fn placeholder_placements_in_viewport(
         &self,
         start: i32,
@@ -60,32 +86,8 @@ impl GraphicsState {
                 if slice.column >= cols as usize {
                     continue;
                 }
-                if let Some(prototype) =
-                    placeholder_prototype(self.placements(), self.screen, &slice.run)
-                    && slice.run.row < prototype.span_rows
-                    && slice.run.col < prototype.span_cols
-                {
-                    let image = &self.resources[&prototype.resource].image;
-                    let mut run = slice.run;
-                    run.width = run.width.min(prototype.span_cols - run.col);
-                    if rio_vt::ansi::kitty_virtual::compute_run_geometry(
-                        &run,
-                        prototype.span_cols,
-                        prototype.span_rows,
-                        image.width,
-                        image.height,
-                        (prototype.x, prototype.y, prototype.w, prototype.h),
-                        f32::from(self.size.cell_w.max(1)),
-                        f32::from(self.size.cell_h.max(1)),
-                        0.,
-                        0.,
-                        0,
-                        slice.column,
-                    )
-                    .is_some()
-                    {
-                        placements.insert(prototype.key);
-                    }
+                if let Some(prototype) = self.projected_placeholder(slice) {
+                    placements.insert(prototype.key);
                 }
             }
         }
@@ -216,37 +218,11 @@ impl GraphicsState {
         }) {
             for row in -(self.term.grid.history_size() as i32)..self.term.screen_lines() as i32 {
                 for slice in placeholder_row(&self.term.grid, Line(row)) {
-                    let Some(prototype) =
-                        placeholder_prototype(self.placements(), self.screen, &slice.run)
-                    else {
+                    let column = slice.column;
+                    let Some(prototype) = self.projected_placeholder(slice) else {
                         continue;
                     };
-                    if slice.run.row >= prototype.span_rows || slice.run.col >= prototype.span_cols
-                    {
-                        continue;
-                    }
-                    let image = &self.resources[&prototype.resource].image;
-                    let mut run = slice.run;
-                    run.width = run.width.min(prototype.span_cols - run.col);
-                    if rio_vt::ansi::kitty_virtual::compute_run_geometry(
-                        &run,
-                        prototype.span_cols,
-                        prototype.span_rows,
-                        image.width,
-                        image.height,
-                        (prototype.x, prototype.y, prototype.w, prototype.h),
-                        f32::from(self.size.cell_w.max(1)),
-                        f32::from(self.size.cell_h.max(1)),
-                        0.,
-                        0.,
-                        0,
-                        slice.column,
-                    )
-                    .is_none()
-                    {
-                        continue;
-                    }
-                    let point = (base + i64::from(row), slice.column as i64);
+                    let point = (base + i64::from(row), column as i64);
                     let index = keys[..count]
                         .binary_search(&prototype.key)
                         .expect("retained prototype");
@@ -522,9 +498,8 @@ impl GraphicsState {
 
     fn free_resource(&mut self, key: u64) {
         let children: Vec<_> = self
-            .resources
-            .iter()
-            .filter_map(|(&child, resource)| (resource.root == Some(key)).then_some(child))
+            .animation_frames(key)
+            .filter_map(|(child, _)| (child != key).then_some(child))
             .collect();
         for child in children {
             self.resources.remove(&child);

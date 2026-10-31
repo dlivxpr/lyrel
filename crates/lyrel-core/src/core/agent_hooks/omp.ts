@@ -4,7 +4,8 @@ import { getActiveProfile } from "@oh-my-pi/pi-utils";
 import { spawnSync } from "node:child_process";
 
 const EXE = __EXE__;
-const SCOPE_ENV = ["HOME", "USERPROFILE", "OMP_PROFILE", "PI_PROFILE", "PI_CONFIG_DIR", "PI_CODING_AGENT_DIR", "PI_CONFIG_FILES", "XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_STATE_HOME", "XDG_CACHE_HOME", "PI_FORCE_IMAGE_PROTOCOL", "PI_KITTY_PLACEHOLDERS", "PI_NO_KITTY_PLACEHOLDERS"];
+// Injected from session_operations::OMP_SCOPE_ENV, not a second policy list.
+const SCOPE_ENV = __SCOPE_ENV__;
 
 export default function (omp: ExtensionAPI) {
   if (!process.env.LYREL) return;

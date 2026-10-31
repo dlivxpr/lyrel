@@ -123,7 +123,7 @@ fn parse_arguments(agent: HookAgent, args: &[String]) -> io::Result<ConfiguredSc
     let mut omp_session_dir = None;
     for assignment in &args[..named] {
         let (key, value) = assignment.split_once('=').ok_or_else(error)?;
-        if !crate::host::AGENT_ENVIRONMENT_KEYS.contains(&key) || value.contains(['$', '`']) {
+        if !crate::host::is_agent_environment_key(key) || value.contains(['$', '`']) {
             return Err(error());
         }
         environment.insert(key.into(), value.into());

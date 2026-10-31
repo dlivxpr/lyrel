@@ -15,13 +15,15 @@ lyrel 能识别窗格中运行的编程智能体，并围绕它们提供功能�
 
 | 智能体 | 正式命令 | 本次实施基线 |
 |---|---|---|
-| omp（Oh My Pi） | `omp` | 18.12.1 |
+| omp（Oh My Pi） | `omp` | 会话桥基线 18.12.1；图片消费者 18.14.1、Windows 原生 18.14.0 已通过 |
 | Kimi Code | `kimi` | 2.2.0 |
-| pi | `pi` | 会话桥基线 1.3.0；图片公开接口重新核实 1.4.0，待中央原生验收 |
-| OpenCode 2.x | `opencode`、`opencode2` | 2.0.32 |
+| pi | `pi` | 会话桥基线 1.3.0；图片 1.4.0 的真实消费者、Windows 原生二十图与关闭策略已通过 |
+| OpenCode 2.x | `opencode`、`opencode2` | 会话桥基线 2.0.32；图片 2.2.0 的真实消费者与 Windows 原生已通过 |
 | Hermes | `hermes` | 0.22.2 |
 
 omp 与 pi 是独立产品，不共用命令身份、配置或会话来源。Kimi 指现行官方 Kimi Code，不迁移归档产品的数据。OpenCode 只维护 2.x；不会在每次启动前强制探测版本，同名 1.x 仍可能被名称识别，但不加载旧集成、不把不适用接口当作成功。
+
+图片专项结果不等同于所有原生集成门槛已完成。Kimi Code／Hermes 若在原生会话中实际输出受支持的 Kitty 图形，会按普通发送者处理；这不构成历史对话图片回放承诺，本轮也未执行其图片专项集成。三种图片 agent 的真实 SSH 组合、完整 DPI／z-order／资源竞争矩阵，以及延期的 macOS（#152）均不由上表通过记录替代，详见[集成验收边界](/getting-started/concepts#集成验收与仍未完成的运行门槛151)。
 
 pi 图片接入使用自己的 `PI_IMAGE_PROTOCOL` 与 `terminal.images`／`terminal.showImages`，不套用 omp 选项。可在现有 `agent_launch` 配置 `"pi": "PI_IMAGE_PROTOCOL=kitty pi"`，只影响子进程；明确关闭的原生显示策略仍优先。保存的 toolResult 图片、隔离重放夹具及版本／像素证据边界见[终端图片兼容说明](/getting-started/concepts#pi-native-image-replay)。
 
@@ -76,6 +78,8 @@ omp**、**智能体：pi** 等，按使用频率从高到低排列——在其�
 在这里指定的包装脚本（如上面的 `work-pi`）无需添加 `agent_commands` 条目，就会被识别为对应智能体。
 要保留某个正在运行的智能体所使用的启动参数，请右键单击其窗格，选择**将当前启动参数设为默认值**；
 lyrel 会将这些参数写入 `agent_launch`，但会去掉用于恢复会话的参数以及任何提示词。
+
+快捷启动和恢复会使用目标 Host 的实际 shell；未显式指定 shell 时，从该 Host 的 `ShellInventory` 默认项解析，不按桌面操作系统猜测远端 shell。命令被拒绝时，界面保留错误通知并说明恢复方式：修改 `agent_launch`，或在新窗格手动启动；不会只记录日志后留下无说明的空 shell。公开图片策略仍只影响对应子进程，恢复时保留显式关闭项。
 
 在远程工作区中，lyrel 无法读取远程计算机的 `PATH`，因此只会提供它已在该远程计算机上见过运行的智能体：
 手动启动一次，智能体就会加入列表。本地 `agent_launch` 中指定的包装脚本，只有在远程

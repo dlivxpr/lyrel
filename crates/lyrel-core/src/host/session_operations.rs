@@ -286,6 +286,15 @@ pub(crate) fn prepare<H: Host + ?Sized>(
             "session persistence is disabled",
         ));
     }
+    // Resolve an unspecified shell on the executing Host, never on the client.
+    let mut resolved;
+    let request = if request.scope.shell_program.is_none() {
+        resolved = request.clone();
+        resolved.scope.shell_program = Some(default_shell_program(host)?);
+        &resolved
+    } else {
+        request
+    };
     match request.agent {
         CLIAgent::OhMyPi => omp(request),
         CLIAgent::Pi => pi::prepare(host, request),
@@ -295,28 +304,26 @@ pub(crate) fn prepare<H: Host + ?Sized>(
     }
 }
 
-pub(crate) const SCOPE_ENV: &[&str] = &[
-    "HOME",
-    "USERPROFILE",
-    "OMP_PROFILE",
-    "PI_PROFILE",
-    "PI_CONFIG_DIR",
-    "PI_CODING_AGENT_DIR",
-    "PI_CODING_AGENT_SESSION_DIR",
-    "PI_IMAGE_PROTOCOL",
-    "PI_CONFIG_FILES",
-    "PI_FORCE_IMAGE_PROTOCOL",
-    "PI_KITTY_PLACEHOLDERS",
-    "PI_NO_KITTY_PLACEHOLDERS",
-    "XDG_CONFIG_HOME",
-    "XDG_DATA_HOME",
-    "XDG_STATE_HOME",
-    "XDG_CACHE_HOME",
-    "KIMI_CODE_HOME",
-    "OPENCODE_DB",
-    "HERMES_HOME",
-    "HERMES_RUNTIME_DIR",
-];
+// One source for replay, Host discovery and the generated Pi/OMP bridges.
+// The macro only concatenates static slices; no runtime registry or allocation.
+macro_rules! scope_environment_keys {
+    (common: [$($common:literal),* $(,)?], pi: [$($pi:literal),* $(,)?], omp: [$($omp:literal),* $(,)?], other: [$($other:literal),* $(,)?]) => {
+        pub(crate) const PI_SCOPE_ENV: &[&str] = &[$($common,)* $($pi,)*];
+        pub(crate) const OMP_SCOPE_ENV: &[&str] = &[$($common,)* $($omp,)*];
+        pub(crate) const SCOPE_ENV: &[&str] = &[$($common,)* $($pi,)* $($omp,)* $($other,)*];
+    };
+}
+
+scope_environment_keys! {
+    common: ["HOME", "USERPROFILE", "PI_CODING_AGENT_DIR"],
+    pi: ["PI_CODING_AGENT_SESSION_DIR", "PI_IMAGE_PROTOCOL"],
+    omp: [
+        "OMP_PROFILE", "PI_PROFILE", "PI_CONFIG_DIR", "PI_CONFIG_FILES",
+        "XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_STATE_HOME", "XDG_CACHE_HOME",
+        "PI_FORCE_IMAGE_PROTOCOL", "PI_KITTY_PLACEHOLDERS", "PI_NO_KITTY_PLACEHOLDERS",
+    ],
+    other: ["KIMI_CODE_HOME", "OPENCODE_DB", "HERMES_HOME", "HERMES_RUNTIME_DIR"]
+}
 
 fn omp(request: &SessionOperation) -> Result<PreparedSession, SessionOperationError> {
     let mut scope = request.scope.clone();
@@ -331,18 +338,8 @@ fn omp(request: &SessionOperation) -> Result<PreparedSession, SessionOperationEr
         ));
     }
     let mut argv = request.launch_argv.clone();
-    while let Some((key, value)) = argv.first().and_then(|arg| arg.split_once('=')) {
-        if !SCOPE_ENV.contains(&key) {
-            return Err(failure(
-                SessionErrorKind::Unsupported,
-                "only documented scope environment assignments can be replayed",
-            ));
-        }
-        if !request.scope.environment.contains_key(key) {
-            scope.environment.insert(key.into(), value.into());
-        }
-        argv.remove(0);
-    }
+    let prefix = scope_environment_prefix(&argv, &mut scope.environment)?;
+    argv.drain(..prefix);
     if argv.is_empty() {
         argv.push("omp".into());
     }
@@ -640,9 +637,55 @@ fn resolve(cwd: &Path, path: &Path) -> PathBuf {
     }
 }
 
+fn default_shell_program<H: Host + ?Sized>(host: &H) -> Result<String, SessionOperationError> {
+    let inventory = host.shells().map_err(|error| {
+        failure(
+            SessionErrorKind::Launch,
+            format!("cannot resolve the launch host's default shell: {error}"),
+        )
+    })?;
+    inventory
+        .shells
+        .into_iter()
+        .find(|shell| shell.label == inventory.default_name && !shell.program.trim().is_empty())
+        .map(|shell| shell.program)
+        .ok_or_else(|| {
+            failure(
+                SessionErrorKind::Launch,
+                "the launch host did not identify its default shell",
+            )
+        })
+}
+
+/// Consume only literal public selectors. Explicit session scope wins over the
+/// launch prefix; within the prefix, the last assignment wins like a shell.
+fn scope_environment_prefix(
+    argv: &[String],
+    environment: &mut BTreeMap<String, String>,
+) -> Result<usize, SessionOperationError> {
+    let prefix = argv.iter().take_while(|arg| arg.contains('=')).count();
+    for arg in &argv[..prefix] {
+        let (key, _) = arg.split_once('=').unwrap();
+        if !SCOPE_ENV.contains(&key) {
+            return Err(failure(
+                SessionErrorKind::Unsupported,
+                "launch accepts only documented non-secret scope selectors",
+            ));
+        }
+    }
+    for arg in argv[..prefix].iter().rev() {
+        let (key, value) = arg.split_once('=').unwrap();
+        if !environment.contains_key(key) {
+            environment.insert(key.into(), value.into());
+        }
+    }
+    Ok(prefix)
+}
+
 /// Render literal public environment prefixes for the pane's actual shell.
 /// Ordinary shell programs/wrappers are left intact; no image policy is added.
-pub fn scoped_launch_command(
+pub fn scoped_launch_command<H: Host + ?Sized>(
+    host: &H,
     line: &str,
     shell: Option<&str>,
 ) -> Result<String, SessionOperationError> {
@@ -656,19 +699,14 @@ pub fn scoped_launch_command(
         return Ok(line.into());
     }
     let mut scope = SessionScope {
-        shell_program: shell.map(str::to_owned),
+        shell_program: Some(match shell {
+            Some(shell) => shell.to_owned(),
+            None => default_shell_program(host)?,
+        }),
         ..Default::default()
     };
-    while let Some((key, value)) = argv.first().and_then(|arg| arg.split_once('=')) {
-        if !SCOPE_ENV.contains(&key) {
-            return Err(failure(
-                SessionErrorKind::Unsupported,
-                "launch accepts only documented non-secret scope selectors",
-            ));
-        }
-        scope.environment.insert(key.into(), value.into());
-        argv.remove(0);
-    }
+    let prefix = scope_environment_prefix(&argv, &mut scope.environment)?;
+    argv.drain(..prefix);
     if argv.is_empty() {
         return Err(failure(
             SessionErrorKind::Command,
@@ -954,6 +992,53 @@ mod tests {
     use crate::host::local::LocalHost;
 
     #[test]
+    fn scoped_launch_uses_target_shell_and_preserves_prepared_posix_resume() {
+        let host = LocalHost::new();
+        let line = "PI_IMAGE_PROTOCOL=none pi --session '/remote/My Sessions/source.jsonl'";
+        let command = scoped_launch_command(&*host, line, Some("/bin/bash")).unwrap();
+        assert_eq!(
+            command,
+            "PI_IMAGE_PROTOCOL=none pi --session '/remote/My Sessions/source.jsonl'"
+        );
+        assert_eq!(
+            scoped_launch_command(&*host, &command, Some("/bin/bash")).unwrap(),
+            command
+        );
+        let powershell = scoped_launch_command(&*host, line, Some("pwsh.exe")).unwrap();
+        assert!(powershell.contains(
+            "[Environment]::SetEnvironmentVariable('PI_IMAGE_PROTOCOL','none','Process')"
+        ));
+        assert!(powershell.contains("finally"));
+    }
+
+    #[test]
+    fn scoped_launch_prefix_uses_last_assignment_and_rejects_unknown_selectors() {
+        let host = LocalHost::new();
+        assert_eq!(
+            scoped_launch_command(
+                &*host,
+                "PI_FORCE_IMAGE_PROTOCOL=kitty PI_FORCE_IMAGE_PROTOCOL=none omp",
+                Some("sh")
+            )
+            .unwrap(),
+            "PI_FORCE_IMAGE_PROTOCOL=none omp"
+        );
+        assert!(
+            scoped_launch_command(
+                &*host,
+                "PI_IMAGE_PROTOCOL=none SECRET=hidden pi",
+                Some("sh")
+            )
+            .is_err()
+        );
+        assert!(scoped_launch_command(&*host, "PI_IMAGE_PROTOCOL=none", Some("sh")).is_err());
+        assert_eq!(
+            scoped_launch_command(&*host, "custom-wrapper pi", None).unwrap(),
+            "custom-wrapper pi"
+        );
+    }
+
+    #[test]
     fn omp_picture_policy_reaches_child_without_changing_parent_shell() {
         let dir = tempfile::tempdir().unwrap();
         let output = dir.path().join("policy.txt");
@@ -973,7 +1058,7 @@ mod tests {
             .collect::<Vec<_>>()
             .join(" ")
         );
-        let child = scoped_launch_command(&line, Some(shell)).unwrap();
+        let child = scoped_launch_command(&*LocalHost::new(), &line, Some(shell)).unwrap();
         let line = if cfg!(windows) {
             format!(
                 "{child}; [IO.File]::AppendAllText($env:LYREL_POLICY_OUTPUT, '|' + $env:PI_FORCE_IMAGE_PROTOCOL)"

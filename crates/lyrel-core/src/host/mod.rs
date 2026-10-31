@@ -14,30 +14,12 @@ use std::thread::ThreadId;
 
 pub use crate::core::shells::ShellInventory;
 
-/// Non-secret selectors only. Never expose arbitrary environment lookups over a Host.
-pub(crate) const AGENT_ENVIRONMENT_KEYS: &[&str] = &[
-    "HOME",
-    "USERPROFILE",
+/// Discovery-only non-secret selectors, in addition to the durable scope keys.
+/// Never expose arbitrary environment lookups over a Host.
+const AGENT_DISCOVERY_ENV: &[&str] = &[
     "APPDATA",
     "LOCALAPPDATA",
-    "XDG_CONFIG_HOME",
-    "XDG_DATA_HOME",
-    "XDG_STATE_HOME",
-    "XDG_CACHE_HOME",
-    "PI_CONFIG_DIR",
-    "PI_CODING_AGENT_DIR",
-    "PI_CODING_AGENT_SESSION_DIR",
-    "PI_FORCE_IMAGE_PROTOCOL",
-    "PI_KITTY_PLACEHOLDERS",
-    "PI_NO_KITTY_PLACEHOLDERS",
-    "PI_IMAGE_PROTOCOL",
-    "OMP_PROFILE",
-    "PI_PROFILE",
-    "KIMI_CODE_HOME",
-    "HERMES_HOME",
     "HERMES_DATA_DIR_SUFFIX",
-    "HERMES_RUNTIME_DIR",
-    "OPENCODE_DB",
     "OPENCODE_CONFIG_DIR",
     "OPENCODE_CONFIG",
     "PI_PACKAGE_DIR",
@@ -46,9 +28,14 @@ pub(crate) const AGENT_ENVIRONMENT_KEYS: &[&str] = &[
     "LYREL_HOST_OS",
 ];
 
+pub(crate) fn is_agent_environment_key(key: &str) -> bool {
+    session_operations::SCOPE_ENV.contains(&key) || AGENT_DISCOVERY_ENV.contains(&key)
+}
+
 pub(crate) fn local_agent_environment() -> std::collections::BTreeMap<String, String> {
-    let mut environment: std::collections::BTreeMap<String, String> = AGENT_ENVIRONMENT_KEYS
+    let mut environment: std::collections::BTreeMap<String, String> = session_operations::SCOPE_ENV
         .iter()
+        .chain(AGENT_DISCOVERY_ENV)
         .filter_map(|key| std::env::var(key).ok().map(|value| ((*key).into(), value)))
         .collect();
     // Host metadata, not a user-supplied override or arbitrary environment RPC.

@@ -88,20 +88,25 @@ impl OmpReplayFixture {
     }
 
     #[track_caller]
-    fn assert_running(&self, view: &Entity<TerminalView>, cx: &mut TestAppContext, phase: &str, deadline: std::time::Instant) {
+    fn assert_running(&self, view: &Entity<TerminalView>, cx: &mut TestAppContext, phase: &str) {
         let failed = self.stage().as_deref() == Some("failed");
         let exited = view.read_with(cx, |view, _| view.terminal.child_exited());
-        if failed || exited || std::time::Instant::now() >= deadline {
+        if failed || exited {
             panic!("omp public-entry phase {phase} failed: {}", self.diagnostics(view, cx));
         }
     }
 
     fn start(&self, view: &Entity<TerminalView>, cx: &mut TestAppContext) {
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
-        while self.stage().as_deref() != Some("waiting-consumer") {
-            self.assert_running(view, cx, "fixture readiness before native launch", deadline);
-            graphics_consumer_progress(cx);
-        }
+        graphics_recovery_wait_with(
+            cx,
+            std::time::Duration::from_secs(30),
+            |cx| {
+                if self.stage().as_deref() == Some("waiting-consumer") { return true; }
+                self.assert_running(view, cx, "fixture readiness before native launch");
+                false
+            },
+            |cx| format!("omp fixture readiness timed out: {}", self.diagnostics(view, cx)),
+        );
         // Readiness is not a prompt and must never share omp's ConPTY stdin.
         let active: serde_json::Value = serde_json::from_slice(
             &std::fs::read(self.root.path().join("owned/running.json")).unwrap()
@@ -112,15 +117,18 @@ impl OmpReplayFixture {
 
     fn finish(&self, view: &Entity<TerminalView>, cx: &mut TestAppContext) {
         view.read_with(cx, |view, _| view.terminal.write(b"/exit\r".to_vec()));
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
         let audit = self.root.path().join("owned/audit.json");
-        while !audit.exists() {
-            if self.stage().as_deref() == Some("failed") || std::time::Instant::now() >= deadline {
-                panic!("omp public-entry phase native exit/audit failed: {}", self.diagnostics(view, cx));
-            }
-            graphics_consumer_progress(cx);
-            std::thread::sleep(std::time::Duration::from_millis(10));
-        }
+        graphics_recovery_wait_with(
+            cx,
+            std::time::Duration::from_secs(30),
+            |cx| {
+                if self.stage().as_deref() == Some("failed") {
+                    panic!("omp public-entry phase native exit/audit failed: {}", self.diagnostics(view, cx));
+                }
+                audit.exists()
+            },
+            |cx| format!("omp native exit/audit timed out: {}", self.diagnostics(view, cx)),
+        );
         let audit: serde_json::Value =
             serde_json::from_slice(&std::fs::read(audit).unwrap()).unwrap();
         assert_eq!(audit["zeroInference"], true, "{audit}");
@@ -154,11 +162,30 @@ impl Drop for OmpReplayFixture {
     }
 }
 
+#[derive(Debug, PartialEq, Eq)]
+struct OmpReplayPictureIdentity {
+    image_id: u32,
+    placement_id: u32,
+    anchor_row: i64,
+    anchor_col: i64,
+}
+
+impl OmpReplayPictureIdentity {
+    fn from_image(image: &crate::terminal::images::RenderPlacement) -> Self {
+        Self {
+            image_id: image.placement.image_id,
+            placement_id: image.placement.placement_id,
+            anchor_row: image.anchor_row,
+            anchor_col: image.anchor_col,
+        }
+    }
+}
+
 fn omp_replay_scan(
     view: &Entity<TerminalView>,
     window: gpui_kit::AnyWindowHandle,
     cx: &mut TestAppContext,
-) -> std::collections::BTreeMap<Vec<u8>, (u32, u32, i64, i64)> {
+) -> std::collections::BTreeMap<Vec<u8>, OmpReplayPictureIdentity> {
     let mut found = std::collections::BTreeMap::new();
     let history = view.read_with(cx, |view, _| view.terminal.term.lock().grid.history_size());
     view.update(cx, |view, cx| {
@@ -176,12 +203,7 @@ fn omp_replay_scan(
                     assert_eq!(&bytes[(16 * 64 + 32) * 4..][..4], &[0, 0, 0, 255]);
                     found.insert(
                         bytes[..4].to_vec(),
-                        (
-                            image.placement.image_id,
-                            image.placement.placement_id,
-                            image.anchor_row,
-                            image.anchor_col,
-                        ),
+                        OmpReplayPictureIdentity::from_image(&image),
                     );
                 } else if bytes
                     .chunks_exact(4)
@@ -192,12 +214,7 @@ fn omp_replay_scan(
                 {
                     found.insert(
                         b"rasterized-svg".to_vec(),
-                        (
-                            image.placement.image_id,
-                            image.placement.placement_id,
-                            image.anchor_row,
-                            image.anchor_col,
-                        ),
+                        OmpReplayPictureIdentity::from_image(&image),
                     );
                 }
                 if image.painted.load(std::sync::atomic::Ordering::Acquire) {
@@ -230,20 +247,22 @@ fn omp_replay_assert_resume(cx: &mut TestAppContext, cases: &[&str]) {
         graphics_assert_production_paint(window, &view, cx);
         fixture.start(&view, cx);
         let expected = if case == "budget" { 8 } else { 3 };
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(90);
-        let found = loop {
-            graphics_consumer_progress(cx);
-            let found = omp_replay_scan(&view, window, cx);
-            if found.len() == expected && found.contains_key(b"rasterized-svg".as_slice()) {
-                break found;
-            }
-            fixture.assert_running(&view, cx, &format!("{case} decoded identities: {found:?}"), deadline);
-            std::thread::sleep(std::time::Duration::from_millis(20));
-        };
+        let mut found = std::collections::BTreeMap::new();
+        graphics_recovery_wait_with(
+            cx,
+            std::time::Duration::from_secs(90),
+            |cx| {
+                found = omp_replay_scan(&view, window, cx);
+                if found.len() == expected && found.contains_key(b"rasterized-svg".as_slice()) { return true; }
+                fixture.assert_running(&view, cx, &format!("{case} decoded identities: {found:?}"));
+                false
+            },
+            |cx| format!("omp {case} identities timed out: {}", fixture.diagnostics(&view, cx)),
+        );
         assert_eq!(
             found
                 .values()
-                .map(|identity| identity.0)
+                .map(|identity| identity.image_id)
                 .collect::<std::collections::BTreeSet<_>>()
                 .len(),
             expected,
@@ -257,10 +276,10 @@ fn omp_replay_assert_resume(cx: &mut TestAppContext, cases: &[&str]) {
             let assistant = found.get([0, 0, 255, 255].as_slice()).unwrap();
             let tool = found.get([192, 128, 240, 255].as_slice()).unwrap();
             let figure = found.get(b"rasterized-svg".as_slice()).unwrap();
-            assert_ne!(assistant.0, tool.0);
-            assert_ne!(tool.0, figure.0);
+            assert_ne!(assistant.image_id, tool.image_id);
+            assert_ne!(tool.image_id, figure.image_id);
             assert!(
-                assistant.2 < tool.2 && tool.2 < figure.2,
+                assistant.anchor_row < tool.anchor_row && tool.anchor_row < figure.anchor_row,
                 "ordered native image placements: {found:?}"
             );
         } else {
@@ -328,18 +347,16 @@ fn graphics_consumer_released_omp_native_disabled_policy(cx: &mut TestAppContext
             graphics_build_rooted_consumer(cx, pane, daemon.stream(pane), Vec::new());
         graphics_assert_production_paint(window, &view, cx);
         fixture.start(&view, cx);
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(90);
-        loop {
-            graphics_consumer_progress(cx);
-            let ready = view.read_with(cx, |view, _| {
-                view.scrollback_text().contains("LYREL_REPLAY_END")
-            });
-            if ready {
-                break;
-            }
-            fixture.assert_running(&view, cx, &format!("{case} saved transcript tail"), deadline);
-            std::thread::sleep(std::time::Duration::from_millis(20));
-        }
+        graphics_recovery_wait_with(
+            cx,
+            std::time::Duration::from_secs(90),
+            |cx| {
+                if view.read_with(cx, |view, _| view.scrollback_text().contains("LYREL_REPLAY_END")) { return true; }
+                fixture.assert_running(&view, cx, &format!("{case} saved transcript tail"));
+                false
+            },
+            |cx| format!("omp {case} transcript timed out: {}", fixture.diagnostics(&view, cx)),
+        );
         assert!(
             omp_replay_scan(&view, window, cx).is_empty(),
             "explicit disabled is authoritative"

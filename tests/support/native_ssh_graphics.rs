@@ -513,22 +513,12 @@ impl NativeSshFixture {
     }
 
     pub fn install_sender(&self, host: &RemoteHost) -> ShellSpec {
-        let directory = PathBuf::from(&self.remote_dir);
-        host.create_dir(&directory, false)
-            .expect("create unique private remote fixture directory");
-        let script = self.remote_path("kitty_remote_sender.mjs");
-        let body = include_bytes!("kitty_remote_sender.mjs");
-        host.write_file(&script, body)
-            .expect("upload real Linux PTY sender via production RemoteHost");
-        assert_eq!(
-            host.read_file(&script, body.len() as u64 + 1).unwrap(),
-            body
-        );
-        ShellSpec {
-            program: self.node.clone(),
-            args: vec![script.to_string_lossy().into_owned()],
-            args_are_lyrel_defaults: false,
-        }
+        self.install_script(
+            host,
+            "kitty_remote_sender.mjs",
+            include_bytes!("kitty_remote_sender.mjs"),
+            Vec::new(),
+        )
     }
 
     /// Upload the exact checked-in fixture, never a reimplemented SSH variant.
@@ -544,13 +534,21 @@ impl NativeSshFixture {
             host.create_dir(&directory, false)
                 .expect("create private remote fixture directory");
         }
+        // Kitty scripts import the same checked-in utility locally and over SSH.
+        let helper = name.starts_with("kitty-").then_some((
+            "graphics-fixture-utils.mjs",
+            include_bytes!("../../scripts/graphics-fixture-utils.mjs").as_slice(),
+        ));
+        for (name, body) in helper.into_iter().chain(std::iter::once((name, body))) {
+            let script = self.remote_path(name);
+            host.write_file(&script, body)
+                .expect("upload checked-in fixture through RemoteHost");
+            assert_eq!(
+                host.read_file(&script, body.len() as u64 + 1).unwrap(),
+                body
+            );
+        }
         let script = self.remote_path(name);
-        host.write_file(&script, body)
-            .expect("upload checked-in fixture through RemoteHost");
-        assert_eq!(
-            host.read_file(&script, body.len() as u64 + 1).unwrap(),
-            body
-        );
         let mut argv = vec![script.to_string_lossy().into_owned()];
         argv.extend(args);
         ShellSpec {

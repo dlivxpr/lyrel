@@ -3,7 +3,7 @@ import { createHash } from "node:crypto";
 import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
-import { deflateSync } from "node:zlib";
+import { encodePng } from './graphics-fixture-utils.mjs';
 
 // Only fixture data is authored/read here. The released native CLI owns replay and
 // all terminal output; no imports from Pi internals and no escape-sequence proxy.
@@ -34,20 +34,6 @@ if (version.error || version.status !== 0 || version.stdout.trim() !== "1.4.0") 
 }
 const pkg = { name: "@earendil-works/pi-coding-agent", version: version.stdout.trim() };
 
-const crcTable = Uint32Array.from({ length: 256 }, (_, n) => {
-  for (let k = 0; k < 8; k++) n = n & 1 ? 0xedb88320 ^ (n >>> 1) : n >>> 1;
-  return n >>> 0;
-});
-function chunk(type, bytes) {
-  const body = Buffer.concat([Buffer.from(type), bytes]);
-  let crc = 0xffffffff;
-  for (const b of body) crc = crcTable[(crc ^ b) & 255] ^ (crc >>> 8);
-  const result = Buffer.alloc(body.length + 8);
-  result.writeUInt32BE(bytes.length);
-  body.copy(result, 4);
-  result.writeUInt32BE((crc ^ 0xffffffff) >>> 0, result.length - 4);
-  return result;
-}
 function picture(index) {
   const width = 48, height = 24;
   const rgba = Buffer.alloc(width * height * 4);
@@ -62,10 +48,7 @@ function picture(index) {
     }
     rgba.copy(scan, y * (width * 4 + 1) + 1, y * width * 4, (y + 1) * width * 4);
   }
-  const ihdr = Buffer.alloc(13);
-  ihdr.writeUInt32BE(width); ihdr.writeUInt32BE(height, 4);
-  ihdr[8] = 8; ihdr[9] = 6;
-  const png = Buffer.concat([Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]), chunk("IHDR", ihdr), chunk("IDAT", deflateSync(scan)), chunk("IEND", Buffer.alloc(0))]);
+  const png = encodePng(width, height, scan);
   return { data: png.toString("base64"), rgbaSha256: createHash("sha256").update(rgba).digest("hex") };
 }
 

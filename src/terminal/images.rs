@@ -377,6 +377,12 @@ struct DecodedResource {
     residency: Arc<Residency>,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+struct FrameSelection {
+    key: u64,
+    revision: u64,
+}
+
 struct Resource {
     pending: Option<Arc<Image>>,
     decoded: Option<DecodedResource>,
@@ -392,8 +398,38 @@ struct Resource {
     pressure_requested: bool,
     metadata: Arc<Reservation>,
     root: Option<u64>,
-    selected: Option<(u64, u64)>,
+    selected: Option<FrameSelection>,
     playback: Option<lyrel_core::core::graphics_state::Playback>,
+}
+
+impl Resource {
+    fn new(width: u32, height: u32, revision: u64, metadata: Arc<Reservation>) -> Self {
+        Self {
+            pending: None,
+            decoded: None,
+            width,
+            height,
+            evicted: false,
+            revision,
+            painted: Arc::new(AtomicBool::new(false)),
+            peak: None,
+            scratch: None,
+            source: None,
+            received: 0,
+            pressure_requested: false,
+            metadata,
+            root: None,
+            selected: None,
+            playback: None,
+        }
+    }
+
+    fn selection(&self, root: u64) -> FrameSelection {
+        self.selected.unwrap_or(FrameSelection {
+            key: root,
+            revision: 0,
+        })
+    }
 }
 
 #[derive(Default)]
@@ -1009,8 +1045,8 @@ impl ImageStore {
         let inner = self.0.state.lock().unwrap();
         let render = |anchored: &AnchoredPlacement, placeholder| {
             let root = inner.resources.get(&anchored.placement.resource)?;
-            let (frame_key, selection_revision) =
-                root.selected.unwrap_or((anchored.placement.resource, 0));
+            let selection = root.selection(anchored.placement.resource);
+            let frame_key = selection.key;
             let resource = inner.resources.get(&frame_key)?;
             if resource.decoded.is_none() && !resource.evicted {
                 return None;
@@ -1031,7 +1067,7 @@ impl ImageStore {
                 history_origin: inner.history_origin,
                 resource_revision: resource.revision,
                 frame_key,
-                selection_revision,
+                selection_revision: selection.revision,
                 playback: root.playback.clone(),
                 placeholder,
                 _residency: resource
@@ -1098,8 +1134,11 @@ impl ImageStore {
                 .resources
                 .get(&image.placement.resource)
                 .is_some_and(|root| {
-                    root.selected.unwrap_or((image.placement.resource, 0))
-                        == (image.frame_key, image.selection_revision)
+                    root.selection(image.placement.resource)
+                        == FrameSelection {
+                            key: image.frame_key,
+                            revision: image.selection_revision,
+                        }
                 })
             && inner
                 .resources
@@ -1357,27 +1396,18 @@ impl ImageStore {
                 source.shrink(image.data.capacity());
                 inner.next_revision = inner.next_revision.wrapping_add(1);
                 let revision = inner.next_revision;
+                let resource = Resource::new(image.width, image.height, revision, metadata);
                 let resource = Resource {
-                    width: image.width,
-                    height: image.height,
                     pending: Some(image),
-                    decoded: None,
-                    revision,
-                    evicted: false,
-                    painted: Arc::new(AtomicBool::new(false)),
                     peak: Some(peak),
                     scratch: offered.scratch.take(),
                     source: Some(source),
-                    metadata,
                     received: RECEIVE_SEQUENCE
                         .try_update(Ordering::AcqRel, Ordering::Acquire, |sequence| {
                             sequence.checked_add(1)
                         })
                         .expect("graphics receive sequence exhausted"),
-                    pressure_requested: false,
-                    root: None,
-                    selected: None,
-                    playback: None,
+                    ..resource
                 };
                 if let Some(old) = inner.resources.insert(key, resource) {
                     retire(old, &mut inner.retired);
@@ -1408,22 +1438,9 @@ impl ImageStore {
                     let selected = inner.resources.get(&root).and_then(|r| r.selected);
                     let playback = inner.resources.get(&root).and_then(|r| r.playback.clone());
                     let shell = Resource {
-                        pending: None,
-                        decoded: None,
-                        width: version.width,
-                        height: version.height,
-                        evicted: false,
-                        revision: version.revision,
-                        painted: Arc::new(AtomicBool::new(false)),
-                        peak: None,
-                        scratch: None,
-                        source: None,
-                        received: 0,
-                        pressure_requested: false,
-                        metadata,
-                        root: None,
                         selected,
                         playback,
+                        ..Resource::new(version.width, version.height, version.revision, metadata)
                     };
                     if let Some(old) = inner.resources.insert(root, shell) {
                         retire(old, &mut inner.retired);
@@ -1445,10 +1462,13 @@ impl ImageStore {
                 let Some(root) = inner.resources.get_mut(&key) else {
                     return false;
                 };
-                if root.selected.is_some_and(|(_, old)| revision <= old) {
+                if root.selected.is_some_and(|old| revision <= old.revision) {
                     return false;
                 }
-                root.selected = Some((frame, revision));
+                root.selected = Some(FrameSelection {
+                    key: frame,
+                    revision,
+                });
                 true
             }
             GraphicsUpdate::Playback(playback) => {
@@ -1474,22 +1494,8 @@ impl ImageStore {
                 inner.next_revision = inner.next_revision.wrapping_add(1);
                 let revision = inner.next_revision;
                 let resource = Resource {
-                    pending: None,
-                    decoded: None,
-                    width,
-                    height,
                     evicted: true,
-                    revision,
-                    painted: Arc::new(AtomicBool::new(false)),
-                    peak: None,
-                    scratch: None,
-                    source: None,
-                    received: 0,
-                    pressure_requested: false,
-                    metadata,
-                    root: None,
-                    selected: None,
-                    playback: None,
+                    ..Resource::new(width, height, revision, metadata)
                 };
                 if let Some(old) = inner.resources.insert(key, resource) {
                     retire(old, &mut inner.retired);
@@ -1746,10 +1752,13 @@ impl DecodeWorker {
                             registered: AtomicBool::new(false),
                         }),
                     });
-                    inner
-                        .placements
-                        .values()
-                        .any(|placement| placement.placement.resource == key)
+                    inner.placements.values().any(|placement| {
+                        let root_key = placement.placement.resource;
+                        inner
+                            .resources
+                            .get(&root_key)
+                            .is_some_and(|root| root.selection(root_key).key == key)
+                    })
                 } else {
                     false
                 }
@@ -1941,6 +1950,93 @@ mod tests {
             assert_eq!(store.0.pane_budget.used.load(Ordering::Acquire), 0);
             assert_eq!(store.0.pane_source.used.load(Ordering::Acquire), 0);
             assert_eq!(store.0.pane_metadata.used.load(Ordering::Acquire), 0);
+        }
+    }
+
+    #[test]
+    fn selected_non_root_and_fresh_replay_versions_wake_all_root_placements_after_decode() {
+        for fresh_replay in [false, true] {
+            let store = ImageStore::new();
+            let (started, decoding) = std::sync::mpsc::channel();
+            let (release, released) = std::sync::mpsc::channel();
+            let (woken, wake) = std::sync::mpsc::channel();
+            let worker = DecodeWorker::spawn_with_decoder(
+                store.clone(),
+                move || {
+                    woken.send(()).unwrap();
+                },
+                move |image| {
+                    started.send(()).unwrap();
+                    released
+                        .recv_timeout(std::time::Duration::from_secs(2))
+                        .unwrap();
+                    decode(image)
+                },
+            );
+            if !fresh_replay {
+                establish_screen(&worker);
+            }
+            let first_version = if fresh_replay { 100 } else { 1 };
+            apply_resource(&worker, first_version, 10);
+            decoding
+                .recv_timeout(std::time::Duration::from_secs(2))
+                .unwrap();
+            if fresh_replay {
+                worker.apply(GraphicsUpdate::Frame {
+                    key: first_version,
+                    root: 1,
+                    number: 1,
+                });
+            }
+            release.send(()).unwrap();
+            apply_resource(&worker, 101, 50);
+            decoding
+                .recv_timeout(std::time::Duration::from_secs(2))
+                .unwrap();
+            worker.apply(GraphicsUpdate::Frame {
+                key: 101,
+                root: 1,
+                number: 2,
+            });
+            apply_placement(&worker, placement(10, 1, 1, 0));
+            apply_placement(&worker, placement(11, 1, 2, 0));
+            worker.apply(GraphicsUpdate::Select {
+                key: 1,
+                frame: 101,
+                revision: 1,
+            });
+            if fresh_replay {
+                // Replay publishes retained resources, frame selection and
+                // placements before the first authoritative Screen.
+                establish_screen(&worker);
+            }
+            assert!(
+                store.snapshot().is_empty(),
+                "selected pixels are still decoding"
+            );
+            assert!(wake.try_recv().is_err());
+            release.send(()).unwrap();
+            wake.recv_timeout(std::time::Duration::from_secs(2))
+                .expect("selected version completion must repaint without another protocol update");
+            let images = store.snapshot();
+            assert_eq!(images.len(), 2);
+            assert!(
+                images
+                    .iter()
+                    .all(|image| image.frame_key == 101 && store.claim_for_paint(image))
+            );
+            assert!(Arc::ptr_eq(
+                images[0].data.as_ref().unwrap(),
+                images[1].data.as_ref().unwrap()
+            ));
+            assert_eq!(
+                images[0].data.as_ref().unwrap().as_bytes(0).unwrap(),
+                [30, 20, 50, 128]
+            );
+            assert!(
+                wake.try_recv().is_err(),
+                "one decode needs only one wake for all placements"
+            );
         }
     }
 

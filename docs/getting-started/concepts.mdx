@@ -83,7 +83,7 @@ Unix 的 `daemon/pane/lifecycle/inherited.rs` 沿用 exec 继承的 descriptor�
 保持流内顺序、容量限制及慢接收者的背压；`subscriptions/layout.rs` 负责有界机器通知转发，落后超过原有 1024 条队列时，
 丢弃已过时的 backlog 并发送 `LayoutResync`，不另建 publication authority。这些 owner 不增加锁、输出消费者或第二份连接身份。
 Unix 的 socket 路径、私有权限、残留端点探测与监听属于 `host/server/unix.rs`；Windows 的认证 loopback TCP、
-`control.port` 与存活探测属于 `host/server/windows.rs`。现有公共入口直接暴露真实实现，协议仍为 CONTROL 16／PANE 15，
+`control.port` 与存活探测属于 `host/server/windows.rs`。现有公共入口直接暴露真实实现，当前协议为 CONTROL 16／PANE 17，
 协商、错误分类及断开前输出语义不变；Windows TCP、Unix socket、stdio 和真实 SSH 运行证据须分别记录。
 
 桌面的 `src/terminal/remote/reader.rs` 由 `ReaderTask` 管理单次 reader 生命周期，
@@ -273,6 +273,8 @@ Windows 自有原生入口：在本次构建的隔离 pane 运行 `node scripts/
 
 `scripts/kitty-capacity.mjs` 复用 `kitty-playback.mjs` 的直接 Kitty APC 路径，只生成源像素并向所在真实 PTY 输出；不创建另一套 PTY、协议或 renderer。每个 pane 使用固定且不同的 seed／image ID，逐帧生成 60 张不同的 `1920 × 1080` 噪声与渐变 RGBA8 图片，不依赖压缩节省容量。源像素体积固定，传输是 `f=32` raw RGBA；Base64 与 APC 开销另计。生产者只保留一个 8,294,400-byte frame buffer，每次将 3,072 bytes 转为最多 4,096-byte Base64 块，并等待 stdout backpressure 和逐帧真实 `OK`；拒收或 60 秒 ACK 超时以非零状态退出，不把发送完成当成接受成功。
 
+三个 agent replay 脚本共用 `scripts/graphics-fixture-utils.mjs` 的 PNG 编码，Kitty 发送脚本共用其中的 stdout 背压／4,096-byte Base64 分块；具体图案与协议首部仍由各脚本决定。复制 Kitty 脚本到远端时同时保留这个同目录模块；native SSH fixture 会上传二者并逐文件回读核验。capacity 的 version `2` source manifest 同时记录主脚本和共享模块的 SHA-256，不将提取前的历史证据冒称为新脚本重跑结果。
+
 在隔离的原生 lyrel 窗口中创建两个同时可见的 pane，从仓库根目录分别运行以下命令。manifest 路径只选择本次自有临时目录中的新文件；脚本使用 `wx`，不会覆盖旧证据。
 
 ```powershell
@@ -433,7 +435,7 @@ node scripts/kitty-capacity-analysis.mjs `
 
 同一工作负载执行了 ordinary-input token、edit、compose、完整 60 帧 replacement 和 delete；producer 退出后普通 shell 实际输出 `NATIVE_INPUT_OK`。32 次分进程采样中，两个 producer 的最大 Working Set 分别约 `62.8`／`62.3 MB`；daemon 最大 Working Set／Private Bytes 为 `1,042.5`／`1,021.8 MB`，desktop 为 `1,189.1`／`2,178.0 MB`。delete 后 daemon 降至 `45.4`／`22.8 MB`，desktop 降至 `200.3`／`429.6 MB`。整卡 `nvidia-smi` 采样为 3,166–3,522 MiB，只作设备背景观察，不归因给 lyrel。
 
-PresentMon 2.6.0 已运行但 ETW 返回 `access denied`，因此没有 PresentMon 显示时序或 input-to-photon 数据；ordinary-input 的完成也不冒充该延迟指标。完整默认容量、小预算所有权、完整 120 帧生产 daemon／rooted consumer 与上述原生 WGC 已分别通过；真实 SSH 的全尺寸 wire／fresh 结果见[远程图片文档](/remote/ssh#标准原生桌面与双-pane-全尺寸入口)。macOS 未验证。
+PresentMon 2.6.0 已运行但 ETW 返回 `access denied`，因此没有 PresentMon 显示时序或 input-to-photon 数据；ordinary-input 的完成也不冒充该延迟指标。完整默认容量、小预算所有权、完整 120 帧生产 daemon／rooted consumer 与上述原生 WGC 已分别通过；**约 60 fps 的原生呈现认证仍未完成**，不能仅凭 WGC 的图片变化率判为通过。真实 SSH 的全尺寸 wire／fresh 结果见[远程图片文档](/remote/ssh#标准原生桌面与双-pane-全尺寸入口)。macOS（#152）延期，未验证。
 
 ###### 默认所有权上限
 
@@ -463,7 +465,7 @@ PresentMon 2.6.0 已运行但 ETW 返回 `access denied`，因此没有 PresentM
 
 非活动屏不等于全部受保护：进入备用屏后，主屏仍属实时屏的图片保持保护，已离开实时屏且未被真实滚动视口引用的旧历史仍可回收。daemon 向桌面传递这一权威引用事实，避免跨 pane／跨 daemon 的桌面压力错误钉住非活动屏全部历史；direct 与 placeholder 使用相同优先级。
 
-本次 pane `15` 修复已通过完整默认成员检查：Windows 的 25 个 Rust suite 共 4,709 项通过，另有 CLI E2E 24 项通过，合计 4,733 项，34 项 ignored；Linux 原生 headless workspace 的 `--all-features` 检查中，24 个 Rust suite 共 2,286 项通过，另有 CLI E2E 24 项，合计 2,310 项，30 项 ignored。计数不重复包含子进程内部重跑的单个用例。随后显式执行真实 Windows→Linux SSH transport 1 项及 rooted consumer 2 项，均通过，不将其他 ignored 归为通过。Windows 使用已准备的官方 ConPTY，Linux 与 Host 边界检查使用原生 Node 22.23.4；格式及 Host 边界检查通过。以上覆盖集成 `a75257d` 的同一代码；macOS 自动化以匹配提交的 CI 为准。原生窗口／GPU 仍须分别取证，headless paint 不等同于最终 GPU 像素。
+历史 pane `15` 基线已通过完整默认成员检查：Windows 的 25 个 Rust suite 共 4,709 项通过，另有 CLI E2E 24 项通过，合计 4,733 项，34 项 ignored；Linux 原生 headless workspace 的 `--all-features` 检查中，24 个 Rust suite 共 2,286 项通过，另有 CLI E2E 24 项，合计 2,310 项，30 项 ignored。计数不重复包含子进程内部重跑的单个用例。随后显式执行真实 Windows→Linux SSH transport 1 项及 rooted consumer 2 项，均通过，不将其他 ignored 归为通过。Windows 使用已准备的官方 ConPTY，Linux 与 Host 边界检查使用原生 Node 22.23.4；格式及 Host 边界检查通过。以上仅覆盖历史集成 `a75257d`，不替代当前 pane `17` 的验收；macOS 自动化以匹配提交的 CI 为准。原生窗口／GPU 仍须分别取证，headless paint 不等同于最终 GPU 像素。
 
 此前的独立 Windows 生产 CLI／ConPTY 冒烟在私有 daemon 中发送 24 张 4K direct／placeholder 混合历史图片，普通输入仍可达，发送器与 daemon 均以 0 退出；当时没有桌面消费者，控制请求也未获回应。该历史结果不证明原生像素或 GPU 峰值，本轮新增的原生证据单独列在下方。
 
@@ -471,9 +473,11 @@ PresentMon 2.6.0 已运行但 ETW 返回 `access denied`，因此没有 PresentM
 
 文件路径按发布的 [Kitty transmission-medium 规范](https://sw.kovidgoyal.net/kitty/graphics-protocol/#the-transmission-medium) 跟随可验证的 symlink／junction 到最终 regular target；device、pipe、socket、UNC／网络盘、Windows ADS／DOS device namespace、未知或循环 reparse 拒绝。Windows 在逐段检查后固定本地 volume GUID、最终目录和文件 handle（不共享 delete），再次检查 regular/disk 类型；临时删除使用 [SetFileInformationByHandle](https://learn.microsoft.com/en-us/windows/win32/api/fileapi/nf-fileapi-setfileinformationbyhandle)，不重新按路径删除。Unix 的 eligible 临时对象在同一文件系统内原子捕获到权限 `0700` 的私有目录，核验已打开对象的 `dev/ino` 后读取及 unlink；捕获了路径替换对象则不读取／unlink 它，恢复使用 Linux `renameat2(RENAME_NOREPLACE)`／macOS `renameatx_np(RENAME_EXCL)`。恢复冲突或文件系统不支持 exclusive rename 时保留实际对象并在本地日志给出恢复路径，绝不递归清理未知对象，也不覆盖后来建立的目标。此过程不复制图片、不是图片磁盘缓存。临时删除仍要求最终目标位于已知临时目录且路径含 `tty-graphics-protocol`；未满足条件的 `t=t` 可读取但保留对象。缺失、不可访问、特殊路径、短区域及无法读取均返回同一 `EBADF:Failed to read image file`，不泄露失败分类。
 
+本轮审查修复进一步固定 Windows 最终文件身份：先用零访问权限的 handle 固定已验证对象，再经 `ReOpenFile` 获取同一对象的读取／`DELETE` 权限；删除权限不可用时仍复用该对象，不重新解析路径。此修复的新增回归由中央统一执行，下方既有原生媒体通过记录不视为修复后的重跑结果。
+
 普通 SSH 子进程的间接媒体在接受及实际读取前重新核验前景进程组及其后代；同组本地父进程或改变进程组的 SSH 子进程不能掩盖远端来源。ConPTY 没有 Unix 前景 pgid，Windows 每次间接命令重新枚举所属 shell 的完整进程树并查询 image path；检测到 SSH、WSL、容器／命名空间桥接或无法完成查询时 fail-closed，探测期间树发生变化也不授予权限。跨片段传输一旦经历远端／未知来源，后续本地片段不能恢复其权限；返回本地后的独立请求仍可使用。普通文字及 `t=d` 不触发扫描，不因间接媒体拒收而失效。受管理的远端 pane 不回退到桌面同名对象。
 
-#145 的 production seam 回归通过真实 PTY → 私有 daemon → pane connection／`RemoteTerminal` → rooted `TerminalView` 校验大对象非对齐区域、三类媒体、BGRA 身份、quiet／错误关联及拒收后续命令；symlink／junction 目标及非 eligible 临时文件保留用例亦已在 Windows 通过。2026-10-31 在 Windows `10.0.26300`／RTX 5080 的隔离原生窗口执行 `pwsh -NoProfile -File scripts/kitty-media-windows.ps1 -KeepVisible`，实际看到 regular file、temp file、named shm 三行均为左红右绿；脚本用 raw VT 字节读取关联应答，输出 `MEDIA_PROTOCOL_OK`，并确认普通文件保留、eligible 临时文件删除及特殊路径统一拒收。按 Enter 后三行图片消失、源对象清理并返回 shell。Linux headless workspace 的完整 `--all-features` 回归已通过；真实嵌套 SSH／WSL 的完整图形组合仍由 #147 验收。macOS 文件／POSIX shm 与最终原生观察仍须在 MacBook 对应环境完成，不由 Windows 或 WSL 结果替代。
+#145 的 production seam 回归通过真实 PTY → 私有 daemon → pane connection／`RemoteTerminal` → rooted `TerminalView` 校验大对象非对齐区域、三类媒体、BGRA 身份、quiet／错误关联及拒收后续命令；symlink／junction 目标及非 eligible 临时文件保留用例亦已在 Windows 通过。2026-10-31 在 Windows `10.0.26300`／RTX 5080 的隔离原生窗口执行 `pwsh -NoProfile -File scripts/kitty-media-windows.ps1 -KeepVisible`，实际看到 regular file、temp file、named shm 三行均为左红右绿；脚本用 raw VT 字节读取关联应答，输出 `MEDIA_PROTOCOL_OK`，并确认普通文件保留、eligible 临时文件删除及特殊路径统一拒收。按 Enter 后三行图片消失、源对象清理并返回 shell。Linux headless workspace 的完整 `--all-features` 回归已通过；真实 native SSH 的 Linux file／temp／POSIX shm 验收见[远程图片记录](/remote/ssh#标准原生桌面与双-pane-全尺寸入口)，第二层 nested SSH 用例未执行。macOS（#152）延期，文件／POSIX shm 与最终原生观察不由 Windows 或 WSL 结果替代。
 
 上述媒体回归还覆盖 4 KiB 对象末尾的有效 8-byte 区域、跨 64 KiB 边界的非对齐区域，以及 `O=4092,S=8` 超出 4 KiB 对象时的统一拒收，Windows 已通过。错误回复直接从同一真实 pane 的 PTY Output 采集：fixture 的完成标记会覆盖终端网格中的回复前缀，不能把最终网格中找不到该前缀误判为 daemon 未回复。每个拒收断言保留媒体名、`O/S/q`、请求序号与真实输出诊断，仍检查具体 `EBADF`、图片／放置身份、quiet 抑制及未出现图片。
 
@@ -535,7 +539,7 @@ GUI，必须仍看到同一组图，且不要再次运行 `scene`。`move`、`er
 预期单元位置。2026-10-31 在 Windows `10.0.26300`／RTX 5080 的隔离原生窗口实际执行上述流程：
 direct／virtual 父子图随 `move` 同步移动，`erase` 使 virtual child 消失，`delete` 后图片全部消失；
 发送器退出后关闭并重开 GUI，场景无重传恢复，删除结果也未复活。
-字体、OS DPI、显示器缩放及 pane resize 的完整原生矩阵、macOS 与真实 SSH 仍由后续集成票验收。
+真实 SSH 的标准 GUI relative／fresh 恢复已通过，详见[远程图片验收记录](/remote/ssh#标准原生桌面与双-pane-全尺寸入口)。字体、OS DPI、显示器缩放及 pane resize 的完整原生矩阵仍未完成；正式 agent 的跨 SSH 组合未执行，macOS（#152）延期。
 
 #### 正式 omp 接入：进程级图片策略与原生重放
 
@@ -547,7 +551,7 @@ direct／virtual 父子图随 `move` 同步移动，`erase` 使 virtual child �
 PI_FORCE_IMAGE_PROTOCOL=kitty PI_KITTY_PLACEHOLDERS=1 omp
 ```
 
-启动与恢复沿用现有 agent launch／Host session operation，不伪造 `TERM_PROGRAM`，不注入全局配置。已知公开前缀会按实际 shell 编码；PowerShell 的进程环境在 native 子进程退出后恢复，cmd 使用独立子 shell，POSIX 使用命令前缀。过去 Windows 快捷启动直接键入 `KEY=value omp`，以及恢复后变量留在 shell 的缺陷由同一入口修复。
+启动与恢复沿用现有 agent launch／Host session operation，不伪造 `TERM_PROGRAM`，不注入全局配置。已知公开前缀会按实际 shell 编码；未显式指定 shell 时，从目标 Host 的 `ShellInventory` 默认项解析，不用 Windows 桌面身份猜测远端 POSIX shell。PowerShell 的进程环境在 native 子进程退出后恢复，cmd 使用独立子 shell，POSIX 使用命令前缀。过去 Windows 快捷启动直接键入 `KEY=value omp`，以及恢复后变量留在 shell 的缺陷由同一入口修复。启动拒绝通过持久错误通知说明原因，并提示修改 `agent_launch` 或在新窗格手动启动；此审查修复不扩大已有原生验收声明。
 
 lyrel 不为未配置的 omp 强制添加图片选项，也不追加 `terminal.showImages: true` overlay。公开 `PI_FORCE_IMAGE_PROTOCOL=none/off`、`PI_KITTY_PLACEHOLDERS=0`、`PI_NO_KITTY_PLACEHOLDERS=1` 和上游 `terminal.showImages: false` 保持有效。显式选择启用模式是操作者的决定；公开环境选项和关闭项会作为非敏感启动上下文保留。`PI_NO_KITTY_PLACEHOLDERS=1` 优先于 placeholder opt-in。不要使用不存在的 `--image-protocol`，也不要使用已移除的 `PI_KITTY_IMAGE_TRANSMISSION`。
 
@@ -590,7 +594,7 @@ node scripts/omp-native-replay.mjs cleanup --root $fixture --lyrel-cli (Resolve-
 <a id="pi-native-image-replay"></a>
 #### 正式 pi 接入：公开进程设置与独立重放夹具（#149）
 
-这里的 **pi** 是 [earendil-works/pi](https://github.com/earendil-works/pi)，npm 包为 `@earendil-works/pi-coding-agent`，不是 omp。2026-10-31 重新查询 [GitHub 最新正式发行](https://github.com/earendil-works/pi/releases/tag/v1.4.0)、npm `version` 和本机 `pi --version`，三者均为 `1.4.0`。这是版本／公开接口核实，不是本轮原生图片验收通过。
+这里的 **pi** 是 [earendil-works/pi](https://github.com/earendil-works/pi)，npm 包为 `@earendil-works/pi-coding-agent`，不是 omp。2026-10-31 重新查询 [GitHub 最新正式发行](https://github.com/earendil-works/pi/releases/tag/v1.4.0)、npm `version` 和本机 `pi --version`，三者均为 `1.4.0`。版本核实、两项真实 PTY／生产消费者通过结果，以及 Windows 原生二十图与关闭策略通过记录分别列在下文，不互相替代。
 
 使用 lyrel 既有 `agent_launch` 的 literal 环境前缀，只为该次启动选择协议，不修改 `TERM_PROGRAM=lyrel`，也不修改 pi 全局配置：
 
@@ -615,7 +619,7 @@ node scripts/omp-native-replay.mjs cleanup --root $fixture --lyrel-cli (Resolve-
 
 仓库夹具 `scripts/pi-image-replay.mjs` 只生成自己临时目录中的 version 3 合成会话，经实际正式 pi 的 `--session` 重放；不导入 pi 内部 renderer，不读用户历史，不复制凭据，不向 stdin 填入新 prompt。支持正式独立可执行文件或 npm `dist/cli.js`，执行前校验 `--version`；npm 入口另校验包名。独立发行文件的来源／校验和须与 [正式 release assets](https://github.com/earendil-works/pi/releases/tag/v1.4.0) 核对。夹具不安装或升级软件；需要 Node.js 22.19+ 和正式 Pi 1.4.0。`--offline`、禁用发现扩展／MCP／skills／context、空 HOME／agent-dir 及凭据环境 allowlist 隔离模型工作；退出时检查原合成会话没有新增 message、usage、compaction 或 branch summary，再删除自己的目录。
 
-合并后由中央执行，不能把 ignored 用例计为已通过：
+以下为中央复现入口；已执行结果见下文，未显式运行的 ignored 用例不能计为通过：
 
 ```powershell
 $env:LYREL_PI_GRAPHICS_CLI = 'C:\path\to\official\pi.exe'
@@ -692,6 +696,21 @@ cargo test --locked -p lyrel --bin lyrel-app opencode_replay_consumer_tests:: --
 consumer 用例复用真实 PTY → 独立真实 daemon → 生产 pane connection／`RemoteTerminal` → rooted `TerminalView`，断言实际解码 BGRA 主色、独立 instance 数量、两卡左右几何、production paint claim、原生分页／滚离返回／tab 卸载重挂载，以及退出后 fresh consumer 不复活被应用删除的图片。额外静态协议用例覆盖同色不同放置、同原点重叠放置、同 `i/p` 替换不增量及精确删除；它验证计数不会被集合或 bbox 合并掩盖，不替代真实 OpenCode 或最终 GPU 像素。失败／超时输出完整 placement key、resource、原生 ID、源裁剪、anchor、paint 矩形、paint claim、图形预算状态和终端文本，供中央定位真实协议路径。
 
 **本票证据边界：**2026-10-31，正式 OpenCode `2.2.0` 已通过两项真实 PTY／隔离 daemon／production rooted consumer 验收，精确比较独立 placement、源像素、卡片边界、历史分页、滚离返回、tab 卸载重挂载和退出后不复活；静态逐实例协议回归另行通过。原 enabled 重叠失败由统一 synchronized-update 流顺序修复（`6f20137`），不是放宽几何断言。Windows `10.0.26300`／RTX 5080／Debug／100% 缩放的自有原生窗口（2552×1384）实际显示首尾两卡各三张图片、对应色块／黑边／序号条及 `+1 more`，滚离后无残影、返回后恢复；`F6` 关闭后无图，`F7` 重开后六图正确重传。另以 `session.image_preview=false` 验证首尾分页均只有文本／附件标签。两轮退出均输出 `OPENCODE_REPLAY_VERIFIED: unchanged public export, zero model usage`，没有新 prompt 或私人历史。MacBook Air M5 与真实 SSH 的三 agent 组合仍待集成验收；原生应用重传不替代 living-daemon 无重传恢复证明。
+
+#### 集成验收与仍未完成的运行门槛（#151）
+
+审查基线为 `72bb29f`。以下沿用该分支已有的最终 Windows／WSL／agent 记录，不表示本轮审查修复已重新构建或重跑：
+
+| 范围 | 已有执行记录 | 未执行或未完成 |
+| --- | --- | --- |
+| Windows／WSL 自动化 | Windows workspace、updater、格式与 Host 边界检查通过；WSL headless workspace `--all-features` 通过，bridge 使用隔离 Node `22.23.4` | 本轮审查修复后的中央统一验证 |
+| 正式 agent | `omp/18.14.1` 三项、pi `1.4.0` 两项、OpenCode `2.2.0` 两项真实 PTY／生产消费者通过；Windows 原生结果按上文各自版本记录 | `omp/18.14.1` 原生窗口、三 agent 的真实 SSH 组合；Kimi／Hermes 的图片专项集成未执行，不从现有识别／会话支持推定通过 |
+| native SSH | 四项基础 transport、四项 rooted consumer 和标准 GUI relative／mutations／双 pane 全尺寸 capacity 通过；随后第二层 nested 实连单独通过 | 基础命令含 `--skip nested_ssh`，nested 不计入四项基础计数；正式 agent 的跨 SSH 组合未执行 |
+| Windows 原生集成 | 100% 缩放的图片、卡片几何、字体变化、透明合成及上文独立双 pane WGC 记录 | PresentMon 显示时序与 input-to-photon、125%／150%／200% DPI、完整 z-order 矩阵、agent 与高负载图形 pane 并发资源竞争 |
+| macOS | 无本轮通过声明 | #152 延期，不以 Windows／WSL 或 headless 结果代替 |
+
+后续执行须记录精确提交、实际命令及各自 executed／skipped 项；默认套件通过不自动覆盖上述 opt-in 和原生门槛。
+
 
 #### 当前实现：预算与历史回收（#44）
 

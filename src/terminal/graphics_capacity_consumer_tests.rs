@@ -12,16 +12,14 @@ struct CapacityConsumer {
 fn capacity_wait(
     cx: &mut TestAppContext,
     reason: &str,
-    mut ready: impl FnMut(&mut TestAppContext) -> bool,
+    ready: impl FnMut(&mut TestAppContext) -> bool,
 ) {
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(600);
-    while !ready(cx) {
-        assert!(
-            std::time::Instant::now() < deadline,
-            "full-size production consumer: {reason}"
-        );
-        graphics_consumer_progress(cx);
-    }
+    graphics_recovery_wait_with(
+        cx,
+        std::time::Duration::from_secs(600),
+        ready,
+        |_| format!("full-size production consumer: {reason}"),
+    );
 }
 
 impl CapacityConsumer {

@@ -116,21 +116,8 @@ fn classify_media_tree(
     ids.push(root);
     for pid in ids {
         let path = image(pid)?;
-        let name = path.file_name()?.to_str()?.to_ascii_lowercase();
-        if matches!(
-            name.as_str(),
-            "ssh.exe"
-                | "ssh"
-                | "wsl.exe"
-                | "wsl"
-                | "wslhost.exe"
-                | "wslrelay.exe"
-                | "bash.exe"
-                | "plink.exe"
-                | "mosh.exe"
-                | "docker.exe"
-                | "podman.exe"
-        ) {
+        let name = path.file_name()?.to_str()?;
+        if super::procinfo::media_namespace_bridge(name, true) {
             return Some(false);
         }
     }
@@ -562,7 +549,16 @@ mod tests {
             classify_media_tree(&tree, 100, |_| Some(PathBuf::from(r"C:\local\python.exe"))),
             Some(true)
         );
-        for bridge in ["ssh.exe", "wsl.exe", "wslhost.exe", "bash.exe", "plink.exe"] {
+        for bridge in [
+            "ssh.exe",
+            "wsl.exe",
+            "wslhost.exe",
+            "bash.exe",
+            "plink.exe",
+            "MOSH-CLIENT.EXE",
+            "NsEnter.exe",
+            "unshare",
+        ] {
             tree.push(p(300, 200, bridge));
             assert_eq!(
                 classify_media_tree(&tree, 100, |pid| Some(PathBuf::from(format!(

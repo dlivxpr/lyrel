@@ -31,15 +31,7 @@ pub(super) fn compose_frame(
     let peak = (patch_bytes * 2)
         .max(patch_bytes + canvas_bytes * base_copies + frame.base.as_ref().map_or(0, |p| p.len()))
         .checked_add(image.data.capacity())
-        .and_then(|n| {
-            n.checked_add(frame.scratch.max(if image.format == WireFormat::Png {
-                4 << 20
-            } else if image.compressed {
-                256 << 10
-            } else {
-                0
-            }))
-        })
+        .and_then(|n| n.checked_add(frame.scratch.max(decoder_scratch(image))))
         .ok_or("ENOSPC:Frame work size overflow")?;
     if !work.resize(peak) {
         return Err("ENOSPC:Frame composition budget exhausted");
@@ -181,12 +173,7 @@ impl GraphicsState {
         let Some(root) = self.lookup(c) else {
             return;
         };
-        let count = self
-            .resources
-            .values()
-            .filter(|r| r.root == Some(root))
-            .count() as u32
-            + 1;
+        let count = self.animation_frames(root).count() as u32;
         if count == 1 {
             if c.delete == b'F' {
                 self.remove_resource(root, effects);
@@ -196,21 +183,11 @@ impl GraphicsState {
         // The published deletion selector follows Kitty's clamped 1-based r:
         // omitted/zero removes the first; beyond the sequence removes the last.
         let number = c.rows.max(1).min(count);
-        let target = self
-            .resources
-            .iter()
-            .find_map(|(&key, r)| {
-                ((key == root || r.root == Some(root)) && r.frame_number == number).then_some(key)
-            })
-            .unwrap();
+        let target = self.frame_storage_key(root, number).unwrap();
         let old = self.resources[&target].content_key;
         let selected = self.resources[&root].selected;
         if target == root {
-            let next = self
-                .resources
-                .iter()
-                .find_map(|(&key, r)| (r.root == Some(root) && r.frame_number == 2).then_some(key))
-                .unwrap();
+            let next = self.frame_storage_key(root, 2).unwrap();
             let promoted = self.resources.remove(&next).unwrap();
             let resource = self.resources.get_mut(&root).unwrap();
             resource.image = promoted.image;
@@ -225,6 +202,8 @@ impl GraphicsState {
         } else {
             self.resources.remove(&target);
         }
+        // Renumber mutable children only: the stable root stays frame one
+        // even after its immutable pixel owner has been promoted.
         self.resources.get_mut(&root).unwrap().mutation += 1;
         for resource in self
             .resources
@@ -275,12 +254,7 @@ fn decode_pixels(image: &mut Image) -> Result<Vec<u8>, &'static str> {
     if image.format != WireFormat::Png {
         return image.take_rgba8().ok_or("EINVAL:Invalid frame pixels");
     }
-    let mut decoder = png::Decoder::new_with_limits(
-        std::io::Cursor::new(&image.data),
-        png::Limits { bytes: 4 << 20 },
-    );
-    decoder.set_ignore_text_chunk(true);
-    decoder.set_ignore_iccp_chunk(true);
+    let mut decoder = png_decoder(&image.data);
     decoder.set_transformations(png::Transformations::EXPAND | png::Transformations::STRIP_16);
     let mut reader = decoder
         .read_info()

@@ -4,7 +4,7 @@ import { createServer } from 'node:http';
 import { mkdirSync, readFileSync, writeFileSync, appendFileSync, existsSync, rmSync, realpathSync, lstatSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { spawn, spawnSync } from 'node:child_process';
-import { deflateSync } from 'node:zlib';
+import { encodePng } from './graphics-fixture-utils.mjs';
 import { fileURLToPath } from 'node:url';
 import { isatty } from 'node:tty';
 
@@ -38,20 +38,6 @@ function load() {
   }
   return value;
 }
-function crc32(bytes) {
-  let crc = 0xffffffff;
-  for (const byte of bytes) {
-    crc ^= byte;
-    for (let bit = 0; bit < 8; bit++) crc = (crc >>> 1) ^ ((crc & 1) ? 0xedb88320 : 0);
-  }
-  return (crc ^ 0xffffffff) >>> 0;
-}
-function chunk(type, data) {
-  const name = Buffer.from(type);
-  const length = Buffer.alloc(4); length.writeUInt32BE(data.length);
-  const crc = Buffer.alloc(4); crc.writeUInt32BE(crc32(Buffer.concat([name, data])));
-  return Buffer.concat([length, name, data, crc]);
-}
 function png(rgb) {
   const width = 64, height = 32;
   const scan = Buffer.alloc(height * (1 + width * 4));
@@ -62,9 +48,7 @@ function png(rgb) {
     scan.set([...color, 255], y * (1 + width * 4) + 1 + x * 4);
     bgra.set([color[2], color[1], color[0], 255], (y * width + x) * 4);
   }
-  const header = Buffer.alloc(13);
-  header.writeUInt32BE(width); header.writeUInt32BE(height, 4); header[8] = 8; header[9] = 6;
-  const bytes = Buffer.concat([Buffer.from([137,80,78,71,13,10,26,10]), chunk('IHDR', header), chunk('IDAT', deflateSync(scan)), chunk('IEND', Buffer.alloc(0))]);
+  const bytes = encodePng(width, height, scan);
   return { bytes, bgraHash: createHash('sha256').update(bgra).digest('hex') };
 }
 const palette = [[255,0,0],[0,255,0],[0,0,255],[255,255,0],[255,0,255],[0,255,255],[192,96,0],[96,0,192],[0,128,96],[128,128,128]];

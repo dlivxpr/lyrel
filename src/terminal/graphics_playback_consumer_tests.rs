@@ -2,14 +2,14 @@ fn graphics_playback_wait(
     view: &Entity<TerminalView>, cx: &mut TestAppContext,
     predicate: impl Fn(&lyrel_core::core::graphics_state::Playback) -> bool,
 ) -> lyrel_core::core::graphics_state::Playback {
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
-    loop {
-        if let Some(playback) = view.read_with(cx, |view, _| {
+    let mut observed = None;
+    graphics_recovery_wait(cx, "production consumer did not observe authoritative playback transition", |cx| {
+        observed = view.read_with(cx, |view, _| {
             graphics_visible_images(view).into_iter().find_map(|image| image.playback.filter(|p| predicate(p)))
-        }) { return playback; }
-        assert!(std::time::Instant::now() < deadline, "production consumer did not observe authoritative playback transition");
-        graphics_consumer_progress(cx);
-    }
+        });
+        observed.is_some()
+    });
+    observed.unwrap()
 }
 
 #[gpui_kit::test]
