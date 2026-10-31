@@ -264,9 +264,9 @@ resize 去重与回显等待、viewport 重新发布和关闭次序；`remote/wr
 
 普通 SSH 子进程的间接媒体在接受及实际读取前重新核验前景进程组及其后代；同组本地父进程或改变进程组的 SSH 子进程不能掩盖远端来源。ConPTY 没有 Unix 前景 pgid，Windows 每次间接命令重新枚举所属 shell 的完整进程树并查询 image path；检测到 SSH、WSL、容器／命名空间桥接或无法完成查询时 fail-closed，探测期间树发生变化也不授予权限。跨片段传输一旦经历远端／未知来源，后续本地片段不能恢复其权限；返回本地后的独立请求仍可使用。普通文字及 `t=d` 不触发扫描，不因间接媒体拒收而失效。受管理的远端 pane 不回退到桌面同名对象。
 
-#145 提供两项 production seam 回归：`graphics_consumer_owned_media_large_regions_and_uniform_failures` 通过真实 PTY → 私有 daemon → pane connection／`RemoteTerminal` → rooted `TerminalView` 校验大对象非对齐区域、三类媒体、BGRA 身份、quiet／错误关联及拒收后续命令；`graphics_consumer_regular_symlink_target_and_unmarked_temp_are_preserved` 覆盖本地 symlink／junction 目标及非 eligible 临时文件保留。原生 Windows 自有 fixture 入口是在自行新建的隔离 pane 中执行 `pwsh -NoProfile -File scripts/kitty-media-windows.ps1 -KeepVisible`：应显示三行红／绿图片并返回协议结果，按 Enter 删除 fixture 图片及自有源对象；需已构建本次源码、官方 ConPTY、PowerShell 7、可用 named section 权限。rooted paint／像素断言不等同最终 GPU 像素。子任务按统一验证约定未运行构建、测试或原生 smoke，不能将入口存在写成验收通过；中央须执行 Windows 回归及实窗观察，Linux／WSL 原生回归、真实嵌套 SSH／WSL 组合另行运行。macOS 文件／POSIX shm 与最终原生观察仍须在 MacBook 对应环境完成，不由 Windows 或 WSL 结果替代。
+#145 的 production seam 回归通过真实 PTY → 私有 daemon → pane connection／`RemoteTerminal` → rooted `TerminalView` 校验大对象非对齐区域、三类媒体、BGRA 身份、quiet／错误关联及拒收后续命令；symlink／junction 目标及非 eligible 临时文件保留用例亦已在 Windows 通过。2026-10-31 在 Windows `10.0.26300`／RTX 5080 的隔离原生窗口执行 `pwsh -NoProfile -File scripts/kitty-media-windows.ps1 -KeepVisible`，实际看到 regular file、temp file、named shm 三行均为左红右绿；脚本用 raw VT 字节读取关联应答，输出 `MEDIA_PROTOCOL_OK`，并确认普通文件保留、eligible 临时文件删除及特殊路径统一拒收。按 Enter 后三行图片消失、源对象清理并返回 shell。Linux headless workspace 的完整 `--all-features` 回归已通过；真实嵌套 SSH／WSL 的完整图形组合仍由 #147 验收。macOS 文件／POSIX shm 与最终原生观察仍须在 MacBook 对应环境完成，不由 Windows 或 WSL 结果替代。
 
-上述媒体回归还覆盖 4 KiB 对象末尾的有效 8-byte 区域、跨 64 KiB 边界的非对齐区域，以及 `O=4092,S=8` 超出 4 KiB 对象时的统一拒收。错误回复直接从同一真实 pane 的 PTY Output 采集：fixture 的完成标记会覆盖终端网格中的回复前缀，不能把最终网格中找不到该前缀误判为 daemon 未回复。每个拒收断言保留媒体名、`O/S/q`、请求序号与真实输出诊断，仍检查具体 `EBADF`、图片／放置身份、quiet 抑制及未出现图片；这些用例与修正后的观测方式仍须由中央运行验证，不能据源码存在宣称通过。
+上述媒体回归还覆盖 4 KiB 对象末尾的有效 8-byte 区域、跨 64 KiB 边界的非对齐区域，以及 `O=4092,S=8` 超出 4 KiB 对象时的统一拒收，Windows 已通过。错误回复直接从同一真实 pane 的 PTY Output 采集：fixture 的完成标记会覆盖终端网格中的回复前缀，不能把最终网格中找不到该前缀误判为 daemon 未回复。每个拒收断言保留媒体名、`O/S/q`、请求序号与真实输出诊断，仍检查具体 `EBADF`、图片／放置身份、quiet 抑制及未出现图片。
 
 #41 的真实 daemon-session 格式／压缩／应答／中断／49 MiB APC 拒收及后续输入回归、GPUI 真实 PNG／raw 解码与 paint 回归，以及退休 worker／继任连接回归已在 Windows 通过。本轮原生有效图、压力与恢复观察见下方；全部无效／超限格式的原生表现、其他 DPI 及 macOS 仍未穷尽验证。仅收到 frame 或派生状态不等同于原生像素验收。
 
@@ -319,13 +319,14 @@ RemoteTerminal 和 rooted TerminalView，检查像素身份、几何、八链接
 `graphics_consumer_relative_selected_frames_retire_with_parent_and_history` 同时选中父、子动画的
 非 root 帧，检查放置仍引用原资源 root；销毁旧消费者后分别执行父放置删除、父图片重传替换和
 10,000 行历史过期，再用 fresh 消费者检查像素身份、几何、无重传恢复及子动画整体释放，不能
-只隐藏旧帧或通过再次选帧复活。上述为回归入口；本次修正按中央验证约定未运行构建、测试或
-原生 smoke，不是已通过的原生验收记录。
+只隐藏旧帧或通过再次选帧复活。上述五项 `graphics_consumer_relative_` 回归已在 Windows 通过。
 在隔离开发实例的自有窗格运行 `node scripts/kitty-relative.mjs scene`，脚本退出后关闭并重开
 GUI，必须仍看到同一组图，且不要再次运行 `scene`。`move`、`erase`、`delete` 分别移动、
 擦除文本锚点和删除父放置；每步后可重开窗口检查几何与删除不复活。输出标记给出 1-based
-预期单元位置。字体、OS DPI、显示器缩放及 pane resize 后仍须原生检查实际像素；
-Windows 原生 geometry／recovery、macOS 及真实 SSH 的本票验收仍待集中执行。
+预期单元位置。2026-10-31 在 Windows `10.0.26300`／RTX 5080 的隔离原生窗口实际执行上述流程：
+direct／virtual 父子图随 `move` 同步移动，`erase` 使 virtual child 消失，`delete` 后图片全部消失；
+发送器退出后关闭并重开 GUI，场景无重传恢复，删除结果也未复活。
+字体、OS DPI、显示器缩放及 pane resize 的完整原生矩阵、macOS 与真实 SSH 仍由后续集成票验收。
 
 #### 正式 omp 接入：进程级图片策略与原生重放
 
