@@ -1237,6 +1237,18 @@ fn graphics_consumer_partial_frames_edit_pixels_and_detached_versions(cx: &mut T
     graphics_recovery_pixels(&fresh, cx, 142, &[7,8,9,255, 0,255,0,255, 255,0,0,255, 255,255,255,255]);
     graphics_assert_production_paint(window, &fresh, cx);
     fresh.read_with(cx, |view, _| assert_eq!(graphics_visible_images(view).len(), 2));
+    // One PTY read can contain edit -> reference -> edit. The append must
+    // capture the intermediate version, never coalesce to the final root.
+    let request = format!("\x1b_Ga=f,i=142,r=1,X=1,s=1,v=1;{}\x1b\\\x1b_Ga=f,i=142,c=1,X=1,x=1,y=1,s=1,v=1;{}\x1b\\\x1b_Ga=f,i=142,r=1,X=1,s=1,v=1;{}\x1b\\\x1b_Ga=a,i=142,c=4\x1b\\", encode(&[1,2,3,255]), encode(&[255,255,0,255]), encode(&[4,5,6,255]));
+    graphics_send_fixture_with_replies(&fresh, cx, 14215, request.as_bytes(), 4);
+    let intermediate = [3,2,1,255, 0,255,0,255, 255,0,0,255, 0,255,255,255];
+    graphics_recovery_pixels(&fresh, cx, 142, &intermediate);
+    let stopped = graphics_recovery_stats(&fresh, cx, 14216);
+    graphics_recovery_destroy(fresh, window, cx);
+    let (fresh, window) = graphics_recovery_fresh(&daemon, pane, cx, 14217);
+    graphics_recovery_pixels(&fresh, cx, 142, &intermediate);
+    assert_eq!(graphics_recovery_stats(&fresh, cx, 14218), stopped, "fresh replay must not make the inactive sender retransmit any pixel version");
+    graphics_assert_production_paint(window, &fresh, cx);
     graphics_recovery_destroy(fresh, window, cx);
     daemon.panes().kill(pane).unwrap();
 }
