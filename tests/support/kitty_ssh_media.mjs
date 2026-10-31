@@ -2,16 +2,20 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-if (process.platform !== 'linux' || !process.stdin.isTTY || !process.env.LYREL_PANE) throw new Error('requires the real Linux daemon PTY');
+if (process.platform !== 'linux' || !process.stdin.isTTY) throw new Error('requires the real Linux daemon PTY');
 const nested = process.argv.includes('--nested');
 const desktopArg = process.argv.indexOf('--desktop-path');
 const desktopPath = desktopArg < 0 ? undefined : process.argv[desktopArg + 1];
 const root = path.dirname(fileURLToPath(import.meta.url));
-const regular = path.join(root, `regular-${process.pid}.rgba`);
-const temporary = path.join(root, `tty-graphics-protocol-${process.pid}.rgba`);
-const shmName = `/lyrel-ssh147-${process.pid}`;
+const basename = desktopPath ? path.basename(desktopPath.replaceAll('\\', '/')) : `tty-graphics-protocol-${process.pid}.rgba`;
+const tempRoot = path.join(root, `media-temp-${process.pid}`);
+fs.mkdirSync(tempRoot, { mode: 0o700 });
+const regular = path.join(root, basename);
+const temporary = path.join(tempRoot, basename);
+const shmName = `/${basename}`;
 const shm = `/dev/shm${shmName}`;
 const pixels = Buffer.from([12, 34, 56, 255]);
+const created = [];
 let buffered = Buffer.alloc(0);
 let wake;
 process.stdin.setRawMode(true);
@@ -37,7 +41,7 @@ async function request(id, controls, payload, expected = 'OK') {
   if (!reply.startsWith(`\x1b_Gi=${id}`) || !(expected === 'OK' ? reply.endsWith(';OK\x1b\\') : reply.includes(`;${expected}:`))) throw new Error(`remote media ${id}: ${JSON.stringify(reply)}`);
 }
 try {
-  for (const name of [regular, temporary, shm]) fs.writeFileSync(name, pixels, { flag: 'wx', mode: 0o600 });
+  for (const name of [regular, temporary, shm]) { fs.writeFileSync(name, pixels, { flag: 'wx', mode: 0o600 }); created.push(name); }
   await out(`\r\nKITTY_READY\r\nKITTY_MEDIA_OBJECTS ${JSON.stringify({ regular, temporary, shmName, shm, nested })}\r\n`);
   if ((await take(Buffer.from('\n'))).toString().trim() !== 'RUN') throw new Error('expected RUN');
   const expected = nested ? 'ENOTSUPPORTED' : 'OK';
@@ -56,5 +60,6 @@ try {
 } finally {
   process.stdin.setRawMode(false);
   process.stdin.pause();
-  for (const name of [regular, temporary, shm]) fs.rmSync(name, { force: true });
+  for (const name of created) fs.rmSync(name, { force: true });
+  fs.rmdirSync(tempRoot);
 }

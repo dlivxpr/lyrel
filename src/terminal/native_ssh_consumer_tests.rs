@@ -701,6 +701,14 @@ fn native_ssh_consumer_animation_mutations_visibility_and_detached_latest_graph(
     assert_eq!(hidden.remaining_ms, paused.remaining_ms, "hidden mutation preserves the suspended remaining gap");
     graphics_recovery_destroy(observer, observer_window, cx);
     graphics_recovery_destroy(view, window, cx);
+    let (resumed, resumed_window) = native_ssh_consumer_fresh(&fixture, pane, cx, 14770, 128 << 20);
+    let restored = graphics_playback_wait(&resumed, cx, |p| p.state == 3 && !p.paused);
+    assert_eq!((restored.loops, restored.completed), (hidden.loops, hidden.completed));
+    assert!(restored.remaining_ms > 0 && restored.remaining_ms <= hidden.remaining_ms, "fresh consumer resumes the remaining interval, not a new full interval or a catch-up loop");
+    native_ssh_consumer_assert_animation_graph(&resumed, cx, &composed);
+    resumed.read_with(cx, |view, _| view.terminal.viewport_reporter().set_displayed(false));
+    graphics_playback_wait(&resumed, cx, |p| p.paused);
+    graphics_recovery_destroy(resumed, resumed_window, cx);
     // Truly zero consumers: append, root edit, select and remove a separate
     // graph while no desktop store/window exists. Gate uses a private Linux
     // file after the sender's actual query ACK, never an observing viewport.
@@ -727,5 +735,44 @@ fn native_ssh_consumer_animation_mutations_visibility_and_detached_latest_graph(
     let (last, last_window) = native_ssh_consumer_fresh(&fixture, pane, cx, 14714, 128 << 20);
     last.read_with(cx, |view, _| assert!(graphics_visible_images(view).is_empty(), "deleted frames/prototypes cannot resurrect"));
     graphics_recovery_destroy(last, last_window, cx);
+    fixture.kill_pane(pane);
+}
+
+#[gpui_kit::test]
+#[ignore = "requires real Linux native SSH, writable /dev/shm; decoder/production paint, not native GPU evidence"]
+fn native_ssh_consumer_linux_file_temp_shm_pixels_and_silent_recovery(cx: &mut TestAppContext) {
+    native_ssh_consumer_init(cx);
+    let fixture = native_ssh_consumer_fixture();
+    let host = fixture.connect_control();
+    let desktop = tempfile::tempdir().unwrap();
+    let sentinel = desktop.path().join(format!("tty-graphics-protocol-{}.rgba", desktop.path().file_name().unwrap().to_string_lossy()));
+    std::fs::write(&sentinel, [91, 72, 53, 255]).unwrap();
+    let shell = fixture.install_script(&host, "kitty_ssh_media.mjs", include_bytes!("../../tests/support/kitty_ssh_media.mjs"), vec!["--desktop-path".into(), sentinel.to_string_lossy().into_owned()]);
+    let pane = native_ssh_consumer_spawn(&fixture, shell);
+    let identity = native_ssh_consumer_identity(&fixture, pane);
+    // This sender intentionally does not implement STAT. Mount its real stream
+    // directly and wait for its own correlated output after remote media ACKs.
+    let (mut stream, _) = fixture.connect_pane();
+    ClientMsg::Attach { pane_id: pane, size: native_ssh_graphics_fixture::win_size(), allow_remote_clipboard_write: false }.encode(&mut stream).unwrap();
+    stream.set_read_timeout(None).unwrap();
+    let (view, window) = graphics_build_rooted_consumer_at(cx, pane, stream, Vec::new(), TermSize::new(80, 24), PtySource::Raw);
+    fixture.input(pane, b"RUN\n".to_vec());
+    graphics_recovery_wait(cx, "real Linux media sender never received its file/temp/shm ACKs", |cx| view.read_with(cx, |view, _| view.scrollback_text().contains("KITTY_REMOTE_MEDIA_OK")));
+    for id in 1471..=1473 { graphics_recovery_pixels(&view, cx, id, &[56, 34, 12, 255]); }
+    graphics_recovery_pixels(&view, cx, 1474, &[255, 0, 255, 255]);
+    graphics_assert_production_paint(window, &view, cx);
+    assert_eq!(std::fs::read(&sentinel).unwrap(), [91, 72, 53, 255]);
+    graphics_recovery_destroy(view, window, cx);
+    let (mut stream, _) = fixture.connect_pane();
+    ClientMsg::Attach { pane_id: pane, size: native_ssh_graphics_fixture::win_size(), allow_remote_clipboard_write: false }.encode(&mut stream).unwrap();
+    stream.set_read_timeout(None).unwrap();
+    let (fresh, window) = graphics_build_rooted_consumer_at(cx, pane, stream, Vec::new(), TermSize::new(80, 24), PtySource::Raw);
+    for id in 1471..=1473 { graphics_recovery_pixels(&fresh, cx, id, &[56, 34, 12, 255]); }
+    graphics_recovery_pixels(&fresh, cx, 1474, &[255, 0, 255, 255]);
+    graphics_assert_production_paint(window, &fresh, cx);
+    assert_eq!(native_ssh_consumer_identity(&fixture, pane), identity);
+    assert_eq!(std::fs::read(&sentinel).unwrap(), [91, 72, 53, 255]);
+    graphics_recovery_destroy(fresh, window, cx);
+    fixture.input(pane, b"QUIT\n".to_vec());
     fixture.kill_pane(pane);
 }

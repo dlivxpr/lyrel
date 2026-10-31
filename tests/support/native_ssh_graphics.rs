@@ -82,6 +82,7 @@ pub struct NativeSshFixture {
     bundled: Option<String>,
     control: Mutex<Option<Arc<RemoteHost>>>,
     panes: Mutex<Vec<u64>>,
+    workspaces: Mutex<Vec<lyrel_core::core::session::WorkspaceId>>,
 }
 
 impl NativeSshFixture {
@@ -185,6 +186,7 @@ impl NativeSshFixture {
             bundled,
             control: Mutex::new(None),
             panes: Mutex::new(Vec::new()),
+            workspaces: Mutex::new(Vec::new()),
         };
         fixture.await_ready();
         fixture
@@ -351,7 +353,7 @@ impl NativeSshFixture {
         encoded: u64,
         decoded: u64,
     ) -> (transport::Stream, DaemonVersion) {
-        assert!(encoded <= 64 << 20 && decoded <= 128 << 20);
+        assert!(encoded <= 512 << 20 && decoded <= 512 << 20, "finite full-size production pane capacity");
         let mut stream = self.route(true);
         let version =
             protocol::negotiate_pane(&mut stream).expect("remote pane dialect negotiation");
@@ -379,7 +381,7 @@ impl NativeSshFixture {
         let port = required("LYREL_TEST_SSH_NESTED_PORT");
         assert!(identity.starts_with('/') && known_hosts.starts_with('/'));
         let quote = |text: &str| format!("'{}'", text.replace('\'', "'\\''"));
-        let mut command = format!("env LYREL_PANE=nested-fixture {}", quote(&sender.program));
+        let mut command = quote(&sender.program);
         for arg in &sender.args { command.push(' '); command.push_str(&quote(arg)); }
         ShellSpec {
             program: "/usr/bin/ssh".into(),
@@ -396,6 +398,7 @@ impl NativeSshFixture {
         use lyrel_core::core::ssh_profile::{AuthMode, SshProfile};
         let workspace = WorkspaceId::new();
         assert!(matches!(host.client().call(ControlRequest::WorkspaceCreate { name: Some("Kitty native SSH acceptance".into()), workspace: Some(workspace) }).unwrap(), ReplyOk::WorkspaceTree(_)));
+        self.workspaces.lock().unwrap().push(workspace);
         host.client().call(ControlRequest::TabCreate { workspace, at: None, pane: PaneSeed::bare(panes[0]), tab: None }).unwrap();
         host.client().call(ControlRequest::PaneSplit { workspace, pane: panes[0], axis: Axis::Horizontal, ratio: 0.5, new: PaneSeed::bare(panes[1]), first: false }).unwrap();
         let mut profile = SshProfile::new("Kitty native SSH acceptance");
@@ -544,6 +547,9 @@ impl Drop for NativeSshFixture {
             }
         }
         if let Some(host) = self.control.lock().unwrap().take() {
+            for workspace in self.workspaces.lock().unwrap().drain(..) {
+                let _ = host.client().call(ControlRequest::WorkspaceRemove { workspace });
+            }
             let _ = host.remove(Path::new(&self.remote_dir), true);
         }
         let _ = self.child.kill();
