@@ -7,6 +7,10 @@
 
 ## [Unreleased]
 
+### 修复
+
+- pi 图片接入（#149）区分 `earendil-works/pi` 与 omp，将公开 `PI_IMAGE_PROTOCOL` 纳入既有 Host／启动／会话 scope 与 Pi hook 报告，恢复时保留显式 `none`，不自动覆盖 `terminal.images=false` 或 `terminal.showImages=false`。2026-10-31 重新核实 GitHub／npm／本机正式版本均为 `1.4.0`；增加真实原生 `--session` 合成 toolResult PNG 夹具、production rooted consumer 的重挂载／删除／再次启动及 disabled precedence 入口。未运行本轮 contracts 或 Windows／macOS 原生像素验收，不将版本查询、flags 或历史 omp 证据写成 Pi 图片通过。
+
 ## [0.3.0] - 2026-10-31
 
 ### 新增
