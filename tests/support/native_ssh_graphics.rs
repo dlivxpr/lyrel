@@ -353,7 +353,7 @@ impl NativeSshFixture {
         encoded: u64,
         decoded: u64,
     ) -> (transport::Stream, DaemonVersion) {
-        assert!(encoded <= 512 << 20 && decoded <= 512 << 20, "finite full-size production pane capacity");
+        assert!(encoded <= lyrel_core::core::graphics_state::MAX_PANE_ENCODED_BYTES as u64 && decoded <= lyrel_core::core::graphics_state::MAX_PANE_DECODED_BYTES as u64, "finite full-size production pane capacity");
         let mut stream = self.route(true);
         let version =
             protocol::negotiate_pane(&mut stream).expect("remote pane dialect negotiation");
