@@ -415,7 +415,7 @@ Markdown/MDX 普通保存不执行全文整理；严格解码保留编码、BOM 
 
 `gpui-kit-markdown-editor` 作为交互与架构参考，不直接集成其 `0.1.1` 发布版：该版本固定 `gpui-pre =0.3.9`，而 lyrel 使用 `0.3.10`；它还明确存在首次保存改变列表紧凑度、空段落消失、缺少源码偏移映射，以及 Windows/macOS 原生输入未验证等限制，见 [发布版依赖与限制](https://docs.rs/crate/gpui-kit-markdown-editor/0.1.1)。不以 Git 依赖、第三方源码复制或构建补丁绕过仓库依赖约束。
 
-原生实现使用正式 [RaTeX 0.1.14](https://docs.rs/ratex-svg/0.1.14/ratex_svg/) 的 `parse → layout → glyph SVG` 路径，以及 [Merman 0.9.2](https://docs.rs/crate/merman/0.9.2) 的 `all-diagrams`／`complete-svg` 与完整 `resvg_safe` 管线，不启用 ELK。两者由 resvg 光栅化为原生图像，不依赖 Node.js、Chromium 或项目 JavaScript；MiTeX／Typst 未加入产品依赖。
+原生实现使用正式 [RaTeX 0.1.15](https://docs.rs/ratex-svg/0.1.15/ratex_svg/) 的 `parse → layout → glyph SVG` 路径，以及 [Merman 0.9.2](https://docs.rs/crate/merman/0.9.2) 的 `all-diagrams`／`complete-svg` 与完整 `resvg_safe` 管线，不启用 ELK。两者由 resvg 光栅化为原生图像，不依赖 Node.js、Chromium 或项目 JavaScript；MiTeX／Typst 未加入产品依赖。
 
 依赖、字体与第三方许可以正式发布包和 `Cargo.lock` 为准，见[源码构建依赖](/getting-started/installation)。消费者、Windows 实窗、真实 SSH 与离线证据分别记录，不把其中一种当作其他平台或完整上游语法通过。
 
