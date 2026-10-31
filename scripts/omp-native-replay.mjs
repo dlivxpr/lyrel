@@ -1,12 +1,12 @@
 // Released omp native replay fixture. Only synthetic public JSONL v3 inputs.
 import { createHash, randomUUID } from 'node:crypto';
 import { createServer } from 'node:http';
-import { mkdirSync, readFileSync, writeFileSync, rmSync, realpathSync, lstatSync } from 'node:fs';
+import { mkdirSync, readFileSync, writeFileSync, appendFileSync, existsSync, rmSync, realpathSync, lstatSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { spawn, spawnSync } from 'node:child_process';
 import { deflateSync } from 'node:zlib';
-import { createInterface } from 'node:readline';
 import { fileURLToPath } from 'node:url';
+import { isatty } from 'node:tty';
 
 const [action, ...args] = process.argv.slice(2);
 const option = (name, fallback) => {
@@ -20,6 +20,17 @@ if (!args.includes('--root')) throw new Error('Required: --root <new isolated di
 const manifestPath = join(root, 'fixture.json');
 const marker = 'lyrel-owned-omp-replay-148';
 const json = (path, value) => writeFileSync(path, JSON.stringify(value, null, 2));
+let lastStage;
+function stage(name, detail = {}) {
+  const value = {stage:name,time:new Date().toISOString(),pid:process.pid,...detail};
+  lastStage = name;
+  json(join(root,'stage.json'),value);
+  appendFileSync(join(root,'stages.jsonl'),JSON.stringify(value) + '\n');
+  console.error(`LYREL_OMP_STAGE ${JSON.stringify(value)}`);
+}
+process.on('uncaughtExceptionMonitor', error => {
+  if (action === 'run') stage('failed',{during:lastStage,error:error.stack ?? String(error)});
+});
 function load() {
   const value = JSON.parse(readFileSync(manifestPath, 'utf8'));
   if (value.owner !== marker || realpathSync(root) !== value.root || lstatSync(root).isSymbolicLink()) {
@@ -95,25 +106,31 @@ if (action === 'prepare') {
   const environment = {
     HOME:join(root,'home'),USERPROFILE:join(root,'home'),APPDATA:join(root,'config'),LOCALAPPDATA:join(root,'data'),
     XDG_CONFIG_HOME:join(root,'config'),XDG_DATA_HOME:join(root,'data'),XDG_STATE_HOME:join(root,'state'),XDG_CACHE_HOME:join(root,'cache'),
-    TEMP:join(root,'tmp'),TMP:join(root,'tmp'),OMP_PROFILE:'default',PI_CONFIG_DIR:join(root,'config'),PI_CODING_AGENT_DIR:join(root,'agent'),
+    TEMP:join(root,'tmp'),TMP:join(root,'tmp'),OMP_PROFILE:'default',PI_CONFIG_DIR:'.omp',PI_CODING_AGENT_DIR:join(root,'agent'),
     PI_FORCE_IMAGE_PROTOCOL:scenario === 'protocol-off' ? 'off' : 'kitty',PI_KITTY_PLACEHOLDERS:mode === 'direct' ? '0' : '1',PI_NO_TITLE:'1',
   };
   if (scenario === 'placeholder-off') environment.PI_NO_KITTY_PLACEHOLDERS = '1';
   const manifest = {owner:marker,root:canonical,omp,scenario,mode,session,overlay,environment,identities,initialMessages:entries.length - 1,
     figure:{backgroundRgb:[18,52,86],triangleRgb:[255,128,0]},upstreamReviewed:'18.14.1',latestReleaseObserved:'2026-10-31',
-    argv:['--config',overlay,'--model','lyrel-fixture/never-infer','--no-extensions','--no-skills','--no-rules','--no-lsp','--no-tools','--resume',session]};
+    argv:['--config',overlay,'--model','lyrel-fixture/never-infer','--no-extensions','--no-skills','--no-rules','--no-context-files','--no-lsp','--no-tools','--resume',session]};
   json(manifestPath, manifest);
   json(join(root,'lyrel','config.json'), {shell:{program:process.execPath,args:[fileURLToPath(import.meta.url),'run','--root',canonical]},restore_windows:false});
   console.log(JSON.stringify(manifest));
 } else if (action === 'run') {
   const manifest = load();
+  // Never read stdin in this wrapper: a pending Windows console/readline read
+  // can compete with the native child even after pause(). Only omp owns stdin.
+  json(join(root,'running.json'), {pid:process.pid,childPid:null});
+  stage('run-entered',{scenario:manifest.scenario,omp:manifest.omp,session:manifest.session});
   if (args.includes('--wait-ready')) {
-    console.log('LYREL_OMP_WAIT');
-    const lines = createInterface({input:process.stdin,terminal:false});
-    await new Promise((resolve,reject) => {
-      lines.on('line', line => { if (line.trim() === 'LYREL_OMP_START') { lines.close(); process.stdin.pause(); resolve(); } });
-      lines.on('close', () => { if (process.stdin.readableEnded) reject(new Error('Fixture input closed before consumer readiness')); });
-    });
+    const gate = join(root,'consumer-ready');
+    stage('waiting-consumer',{gate});
+    const deadline = Date.now() + 30000;
+    while (!existsSync(gate)) {
+      if (Date.now() >= deadline) throw new Error('Rooted consumer did not release the owned readiness gate');
+      await new Promise(resolve => setTimeout(resolve,20));
+    }
+    stage('consumer-ready');
   }
   // Deliberately allow-list OS/terminal plumbing; no provider keys, proxy, profile,
   // extensions, private stores, dotenv overlays or credential-command variables.
@@ -121,18 +138,39 @@ if (action === 'prepare') {
   const environment = {};
   for (const [key,value] of Object.entries(process.env)) if (allowed.some(name => name.toLowerCase() === key.toLowerCase())) environment[key] = value;
   Object.assign(environment, manifest.environment);
-  const version = spawnSync(manifest.omp, ['--version'], {env:environment,cwd:join(root,'workspace'),encoding:'utf8',timeout:30000});
-  if (version.status !== 0) throw new Error(`omp --version failed: ${version.stderr || version.error}`);
-  writeFileSync(join(root,'version.txt'), version.stdout);
+  // A TUI must inherit a real console, not wrapper-created stdin/stdout pipes.
+  if (!isatty(0) || !isatty(1)) throw new Error('Native omp replay requires inherited TTY stdin and stdout');
+  const inspect = (name, argv, extraEnvironment = {}) => {
+    stage(name,{argv});
+    const result = spawnSync(manifest.omp,argv,{env:{...environment,...extraEnvironment},cwd:join(root,'workspace'),encoding:'utf8',timeout:30000,maxBuffer:4 << 20});
+    json(join(root,`${name}.json`),{argv,status:result.status,signal:result.signal,error:result.error?.message,stdout:result.stdout,stderr:result.stderr});
+    if (result.status !== 0) throw new Error(`${name}: status=${result.status} signal=${result.signal} error=${result.error?.message ?? ''} stderr=${result.stderr} stdout=${result.stdout}`);
+    return result.stdout.trim();
+  };
+  const version = inspect('version',['--version']);
+  writeFileSync(join(root,'version.txt'),version + '\n');
+  const configPath = inspect('config-path',['config','path']);
+  const expectedConfig = join(root,'agent');
+  if (resolve(configPath).toLowerCase() !== resolve(expectedConfig).toLowerCase()) throw new Error(`Public config path ${configPath} is not owned ${expectedConfig}`);
+  for (const [key,expected] of [['terminal.showImages',manifest.scenario !== 'disabled'],['tui.renderSvg',true],['tui.maxInlineImages',8]]) {
+    const {value:actual} = JSON.parse(inspect(`config-${key}`,['config','get',key,'--json'],{PI_CONFIG_FILES:manifest.overlay}));
+    if (actual !== expected) throw new Error(`Public setting ${key}: expected ${expected}, got ${JSON.stringify(actual)}`);
+  }
   const requests = [];
   const server = createServer((request,response) => {
     requests.push({method:request.method,url:request.url});
+    json(join(root,'requests.json'),requests);
+    stage('inference-forbidden',{method:request.method,url:request.url});
     response.writeHead(503); response.end('LYREL fixture forbids inference');
   });
   await new Promise(resolve => server.listen(0,'127.0.0.1',resolve));
   json(join(root,'agent','models.yml'), {providers:{'lyrel-fixture':{baseUrl:`http://127.0.0.1:${server.address().port}/v1`,api:'openai-completions',auth:'none',models:[{id:'never-infer',name:'Never infer (fixture)',reasoning:false,input:['text','image'],cost:{input:0,output:0,cacheRead:0,cacheWrite:0},contextWindow:128000,maxTokens:1024}]}}});
+  const listing = JSON.parse(inspect('models',['models','lyrel-fixture','--json','--no-extensions','--config',manifest.overlay]));
+  if (listing.models?.length !== 1 || listing.models[0].selector !== 'lyrel-fixture/never-infer') throw new Error(`Owned public provider was not selectable: ${JSON.stringify(listing)}`);
+  stage('native-launch',{version,argv:manifest.argv,modelsPath:join(root,'agent','models.yml'),baseUrl:`http://127.0.0.1:${server.address().port}/v1`,stdinTTY:isatty(0),stdoutTTY:isatty(1)});
   const child = spawn(manifest.omp, manifest.argv, {env:environment,cwd:join(root,'workspace'),stdio:'inherit'});
   json(join(root,'running.json'), {pid:process.pid,childPid:child.pid});
+  child.once('spawn',() => stage('native-spawned',{childPid:child.pid}));
   const stop = () => {
     if (child.exitCode !== null || !child.pid) return;
     if (process.platform === 'win32') spawnSync('taskkill',['/PID',String(child.pid),'/T','/F'],{stdio:'ignore'});
@@ -141,12 +179,14 @@ if (action === 'prepare') {
   process.on('SIGINT',stop); process.on('SIGTERM',stop); process.on('exit',stop);
   try {
     const code = await new Promise((resolve,reject) => {child.once('error',reject); child.once('exit',code => resolve(code));});
+    stage('native-exited',{exitCode:code});
     const records = readFileSync(manifest.session,'utf8').trim().split('\n').map(line => JSON.parse(line));
     const messages = records.filter(record => record.type === 'message').length;
     const modelUsage = records.filter(record => record.type === 'model_usage').length;
-    const audit = {version:version.stdout.trim(),requests,messages,initialMessages:manifest.initialMessages,modelUsage,exitCode:code,
+    const audit = {version,requests,messages,initialMessages:manifest.initialMessages,modelUsage,exitCode:code,
       zeroInference:requests.length === 0 && messages === manifest.initialMessages && modelUsage === 0};
     json(join(root,'audit.json'),audit);
+    stage('audited',audit);
     if (!audit.zeroInference || code !== 0) process.exitCode = 1;
     console.error(`\nLYREL_OMP_REPLAY_AUDIT ${JSON.stringify(audit)}`);
   } finally {
