@@ -20,9 +20,15 @@ const MAX_PROCS: usize = 64;
 /// found; only the list handed to the panel is cut back to `MAX_PROCS`.
 const MAX_TREE: usize = 512;
 
+#[cfg(windows)]
+pub(crate) fn foreground_group_is_local(root: i32) -> Option<bool> {
+    crate::daemon::winproc::media_tree_is_local(u32::try_from(root).ok()?)
+}
+
 /// Media permission is stricter than the UI's interactive SSH context. An SSH
 /// child can share a local wrapper's foreground pgid and run a remote command.
 /// Called only at the indirect-media boundary, never by ordinary PTY output.
+#[cfg(not(windows))]
 pub(crate) fn foreground_group_is_local(pgid: i32) -> Option<bool> {
     if pgid <= 0 {
         return None;
@@ -40,14 +46,21 @@ fn group_media_locality(
 ) -> Option<bool> {
     let mut found = false;
     for (&pid, row) in table {
-        if row.pgid != pgid {
-            continue;
+        let mut ancestor = row;
+        let mut relevant = row.pgid == pgid;
+        for _ in 0..MAX_TREE {
+            if relevant { break; }
+            let Some(parent) = table.get(&ancestor.ppid) else { break; };
+            if parent.ppid == ancestor.ppid { break; }
+            ancestor = parent;
+            relevant = ancestor.pgid == pgid;
         }
+        if !relevant { continue; }
         found = true;
         let argv = argv_for(pid)?;
         let program = argv.first()?;
         let name = std::path::Path::new(program).file_name()?;
-        if name == "ssh" {
+        if matches!(name.to_str()?, "ssh" | "ssh.exe" | "wsl" | "wsl.exe" | "mosh-client" | "docker" | "podman" | "nsenter" | "unshare") {
             return Some(false);
         }
     }
