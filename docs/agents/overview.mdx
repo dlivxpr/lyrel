@@ -17,11 +17,13 @@ lyrel 能识别窗格中运行的编程智能体，并围绕它们提供功能�
 |---|---|---|
 | omp（Oh My Pi） | `omp` | 18.12.1 |
 | Kimi Code | `kimi` | 2.2.0 |
-| pi | `pi` | 1.3.0 |
+| pi | `pi` | 会话桥基线 1.3.0；图片公开接口重新核实 1.4.0，待中央原生验收 |
 | OpenCode 2.x | `opencode`、`opencode2` | 2.0.32 |
 | Hermes | `hermes` | 0.22.2 |
 
 omp 与 pi 是独立产品，不共用命令身份、配置或会话来源。Kimi 指现行官方 Kimi Code，不迁移归档产品的数据。OpenCode 只维护 2.x；不会在每次启动前强制探测版本，同名 1.x 仍可能被名称识别，但不加载旧集成、不把不适用接口当作成功。
+
+pi 图片接入使用自己的 `PI_IMAGE_PROTOCOL` 与 `terminal.images`／`terminal.showImages`，不套用 omp 选项。可在现有 `agent_launch` 配置 `"pi": "PI_IMAGE_PROTOCOL=kitty pi"`，只影响子进程；明确关闭的原生显示策略仍优先。保存的 toolResult 图片、隔离重放夹具及版本／像素证据边界见[终端图片兼容说明](/getting-started/concepts#pi-native-image-replay)。
 
 当前已知运行限制：
 

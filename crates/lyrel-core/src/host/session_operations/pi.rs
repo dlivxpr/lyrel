@@ -5,6 +5,7 @@ const ENV: &[&str] = &[
     "USERPROFILE",
     "PI_CODING_AGENT_DIR",
     "PI_CODING_AGENT_SESSION_DIR",
+    "PI_IMAGE_PROTOCOL",
 ];
 
 pub(super) fn prepare<H: Host + ?Sized>(
@@ -21,7 +22,7 @@ pub(super) fn prepare<H: Host + ?Sized>(
     {
         return Err(failure(
             SessionErrorKind::Unsupported,
-            "Pi has no omp profile or OpenCode connection selector; only Pi home and storage selectors can be replayed",
+            "Pi has no omp profile or OpenCode connection selector; only Pi home, storage and image protocol selectors can be replayed",
         ));
     }
     let mut argv = request.launch_argv.as_slice();
@@ -556,6 +557,32 @@ mod tests {
                 .target_id
                 .as_deref(),
             Some("real-source")
+        );
+    }
+
+    #[test]
+    fn pi_resume_preserves_explicit_image_protocol_without_omp_options() {
+        let root = tempfile::tempdir().unwrap();
+        let host = crate::host::local::LocalHost::new();
+        let mut operation = request(root.path());
+        operation.launch_argv.insert(0, "PI_IMAGE_PROTOCOL=kitty".into());
+        let prepared = host.session_operation(&operation).unwrap();
+        assert_eq!(
+            prepared.scope.environment.get("PI_IMAGE_PROTOCOL").map(String::as_str),
+            Some("kitty")
+        );
+        // A bound native scope wins over launch defaults, including disabling.
+        operation.scope.environment.insert("PI_IMAGE_PROTOCOL".into(), "none".into());
+        let disabled = host.session_operation(&operation).unwrap();
+        assert_eq!(
+            durable_scope(&disabled.scope).environment.get("PI_IMAGE_PROTOCOL").map(String::as_str),
+            Some("none")
+        );
+        assert!(disabled.command.as_ref().unwrap().contains("PI_IMAGE_PROTOCOL"));
+        operation.launch_argv[0] = "PI_FORCE_IMAGE_PROTOCOL=kitty".into();
+        assert_eq!(
+            host.session_operation(&operation).unwrap_err().kind,
+            SessionErrorKind::Unsupported
         );
     }
 

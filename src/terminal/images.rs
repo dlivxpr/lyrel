@@ -24,11 +24,13 @@ pub struct RenderPlacement {
     pub painted: Arc<AtomicBool>,
     pub placement: Placement,
     pub anchor_row: i64,
-    pub anchor_col: usize,
+    pub anchor_col: i64,
     width_px: u32,
     height_px: u32,
     revision: u64,
     resource_revision: u64,
+    frame_key: u64,
+    selection_revision: u64,
     history_origin: i64,
     placeholder: Option<(i32, PlaceholderSlice)>,
     _residency: Option<Arc<Residency>>,
@@ -389,6 +391,8 @@ struct Resource {
     received: u64,
     pressure_requested: bool,
     metadata: Arc<Reservation>,
+    root: Option<u64>,
+    selected: Option<(u64, u64)>,
 }
 
 #[derive(Default)]
@@ -908,7 +912,9 @@ impl ImageStore {
                 || (placement.screen == inner.screen
                     && displayed
                     && !placement.virtual_placement
-                    && placement.anchor_col < live_cols as u32
+                    && !placement.unresolved
+                    && placement.anchor_col < live_cols as i64
+                    && placement.anchor_col + i64::from(placement.span_cols) > 0
                     && row + i64::from(placement.clip_top) < live_rows as i64
                     && row + i64::from(placement.clip_bottom) > 0)
             {
@@ -959,7 +965,7 @@ impl ImageStore {
             .resources
             .iter()
             .filter_map(|(&key, resource)| {
-                if protected.contains(&key) || resource.evicted || resource.pressure_requested {
+                if resource.root.is_some() || protected.contains(&key) || resource.evicted || resource.pressure_requested {
                     return None;
                 }
                 Some((key, resource.received, !referenced.contains(&key)))
@@ -980,7 +986,9 @@ impl ImageStore {
     ) -> Vec<RenderPlacement> {
         let inner = self.0.state.lock().unwrap();
         let render = |anchored: &AnchoredPlacement, placeholder| {
-            let resource = inner.resources.get(&anchored.placement.resource)?;
+            let root = inner.resources.get(&anchored.placement.resource)?;
+            let (frame_key, selection_revision) = root.selected.unwrap_or((anchored.placement.resource, 0));
+            let resource = inner.resources.get(&frame_key)?;
             if resource.decoded.is_none() && !resource.evicted {
                 return None;
             }
@@ -993,12 +1001,14 @@ impl ImageStore {
                 painted: resource.painted.clone(),
                 placement: anchored.placement.clone(),
                 anchor_row: anchored.placement.anchor_row,
-                anchor_col: anchored.placement.anchor_col as usize,
+                anchor_col: anchored.placement.anchor_col,
                 width_px: resource.width,
                 height_px: resource.height,
                 revision: anchored.revision,
                 history_origin: inner.history_origin,
                 resource_revision: resource.revision,
+                frame_key,
+                selection_revision,
                 placeholder,
                 _residency: resource
                     .decoded
@@ -1011,7 +1021,7 @@ impl ImageStore {
             .placements
             .values()
             .filter(|anchored| {
-                anchored.placement.screen == inner.screen && !anchored.placement.virtual_placement
+                anchored.placement.screen == inner.screen && !anchored.placement.virtual_placement && !anchored.placement.unresolved
             })
             .filter_map(|anchored| render(anchored, None))
             .collect();
@@ -1058,9 +1068,11 @@ impl ImageStore {
                 .is_some_and(|placement| placement.revision == image.revision)
             && inner.screen == image.placement.screen
             && inner.history_origin == image.history_origin
+            && inner.resources.get(&image.placement.resource).is_some_and(|root|
+                root.selected.unwrap_or((image.placement.resource, 0)) == (image.frame_key, image.selection_revision))
             && inner
                 .resources
-                .get(&image.placement.resource)
+                .get(&image.frame_key)
                 .is_some_and(|resource| {
                     if image.evicted {
                         resource.evicted && resource.revision == image.resource_revision
@@ -1237,7 +1249,7 @@ impl ImageStore {
             .collect();
         let resources = std::mem::take(&mut inner.resources);
         for (key, resource) in resources {
-            if retained.contains(&key) {
+            if retained.contains(&key) || resource.root.is_some_and(|root| retained.contains(&root)) {
                 inner.resources.insert(key, resource);
             } else {
                 retire(resource, &mut inner.retired);
@@ -1327,6 +1339,8 @@ impl ImageStore {
                         })
                         .expect("graphics receive sequence exhausted"),
                     pressure_requested: false,
+                    root: None,
+                    selected: None,
                 };
                 if let Some(old) = inner.resources.insert(key, resource) {
                     retire(old, &mut inner.retired);
@@ -1334,6 +1348,23 @@ impl ImageStore {
                 drop(inner);
                 self.0.ready.notify_one();
                 false
+            }
+            GraphicsUpdate::Frame { key, root, number } => {
+                if key == root || number < 2 || number > lyrel_core::core::graphics_state::MAX_ANIMATION_FRAMES
+                    || !inner.resources.contains_key(&root) {
+                    return false;
+                }
+                if let Some(resource) = inner.resources.get_mut(&key) {
+                    resource.root = Some(root);
+                }
+                false
+            }
+            GraphicsUpdate::Select { key, frame, revision } => {
+                if !inner.resources.contains_key(&frame) { return false; }
+                let Some(root) = inner.resources.get_mut(&key) else { return false; };
+                if root.selected.is_some_and(|(_, old)| revision <= old) { return false; }
+                root.selected = Some((frame, revision));
+                true
             }
             GraphicsUpdate::Evicted { key, width, height } => {
                 let offered_metadata = take_metadata_offer(&mut inner, generation, key);
@@ -1361,6 +1392,8 @@ impl ImageStore {
                     received: 0,
                     pressure_requested: false,
                     metadata,
+                    root: None,
+                    selected: None,
                 };
                 if let Some(old) = inner.resources.insert(key, resource) {
                     retire(old, &mut inner.retired);
@@ -1766,7 +1799,7 @@ mod tests {
         placement.w = 1;
         placement.h = 1;
         placement.anchor_row = row;
-        placement.anchor_col = col;
+        placement.anchor_col = i64::from(col);
         placement.span_rows = 1;
         placement.clip_bottom = 1;
         GraphicsUpdate::Place(placement)

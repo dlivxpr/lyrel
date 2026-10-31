@@ -303,6 +303,7 @@ pub(crate) const SCOPE_ENV: &[&str] = &[
     "PI_CONFIG_DIR",
     "PI_CODING_AGENT_DIR",
     "PI_CODING_AGENT_SESSION_DIR",
+    "PI_IMAGE_PROTOCOL",
     "PI_CONFIG_FILES",
     "XDG_CONFIG_HOME",
     "XDG_DATA_HOME",

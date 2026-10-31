@@ -27,6 +27,7 @@ pub(crate) const AGENT_ENVIRONMENT_KEYS: &[&str] = &[
     "PI_CONFIG_DIR",
     "PI_CODING_AGENT_DIR",
     "PI_CODING_AGENT_SESSION_DIR",
+    "PI_IMAGE_PROTOCOL",
     "OMP_PROFILE",
     "PI_PROFILE",
     "KIMI_CODE_HOME",

@@ -209,13 +209,24 @@ resize 去重与回显等待、viewport 重新发布和关闭次序；`remote/wr
 
 #### 当前实现：资源、独立放置与传输边界（#40／#41）
 
-- `a=t` 只上传资源；后续 `a=p` 才创建显示。`a=T` 继续上传并显示。支持 PNG、raw RGB/RGBA、这三种格式的 `o=z`，以及分块传输。分块逐块校验 Base64，首部、负载和终止符跨 PTY 读取保持同一结果；PNG 外层 zlib 在 daemon 有界展开后保留为 PNG，raw 压缩内容仍以压缩形式传输到桌面。
+- `a=t` 只上传资源；后续 `a=p` 才创建显示。`a=T` 继续上传并显示。支持 PNG、raw RGB/RGBA、这三种格式的 `o=z`，以及分块传输。显式 `f=0` 等同默认 RGBA；只有最终块允许省略 Base64 padding，仍拒绝歧义长度或非零尾部位。首部、负载和终止符跨 PTY 读取保持同一结果；PNG 外层 zlib 在 daemon 有界展开后保留为 PNG，raw 压缩内容仍以压缩形式传输到桌面。
 - 同一资源的多次放置共享解码像素。`x/y/w/h` 指定源裁剪，`c/r` 指定显示区域；只指定一轴时按比例推导，指定两轴时保持比例放入区域。`X/Y` 为单元内像素偏移，`C=1` 禁止本次放置移动光标。
 - 图片 ID 在窗格内独立。非零图片 ID 与非零放置 ID 的组合替换同次放置；省略 `p` 或 `p=0` 时，每次放置独立。`I` 分配新的图片 ID，并让后续按编号的命令选择该编号最新的资源；同一命令不能同时指定 `i` 与 `I`。重新传输同一个 `i` 会移除其旧资源与全部旧放置，不会让旧位置显示新内容。
 - 静态删除支持 `a/i/n/c/p/q/r/x/y/z` 及大写形式。`d=p` 是按 `x/y` 指定的单元删除，不是按放置 ID 删除；定位单次放置使用 `d=i,i=…,p=…`。小写保留可复用资源；大写只在资源没有其他放置引用时回收数据。缺资源、非法放置和不支持的操作返回带身份的错误，并遵守 `q=1/2`。
-- daemon 持有唯一资源／放置状态，桌面只持有派生解码及绘制缓存。像素不进入持久文字回滚文件，不新增图片磁盘缓存。当前 pane 协议为 `15`（无像素回收元数据、消费者容量授权、连接视口、非活动屏实时引用及逐请求压力完成结果），`CONTROL_VERSION` 保持 `16`；新连接先在实际 pane endpoint 双向协商版本及有限容量，再新建、附着或观察会话；路由前缀先于协商。旧客户端在创建 shell／订阅输出前被明确拒绝，新客户端遇到旧 daemon／远端 server 报告版本并要求更新，不能静默忽略图片消息。独立版本探测不要求开启会话。
 - `a=q` 对实际图片内容进行校验，不存储、不替换资源；坏 PNG／zlib、无效像素长度、超限尺寸及不支持的操作不会回报成功。直接传输可跨主机；文件、临时文件及平台 shared memory 仅在发送方确实共享负责 daemon 的主机命名空间时接受，不把远端路径解析到桌面。Windows 支持本地磁盘 regular file、符合条件的临时文件及 named shared memory，Unix 保留 regular file／POSIX shm；具体安全限制与验收前提见下文。
+- daemon 持有唯一资源／放置／选帧状态，桌面只持有派生解码及绘制缓存。像素不进入持久文字回滚文件，不新增图片磁盘缓存。当前 pane 协议为 `16`（无像素回收元数据、消费者容量授权、连接视口、非活动屏实时引用、逐请求压力完成结果、不可变完整帧关系与原子选帧，以及相对放置权威关系／有符号坐标），`CONTROL_VERSION` 保持 `16`；新连接先在实际 pane endpoint 双向协商版本及有限容量，再新建、附着或观察会话；路由前缀先于协商。旧客户端在创建 shell／订阅输出前被明确拒绝，新客户端遇到旧 daemon／远端 server 报告版本并要求更新，不能静默忽略图片消息。独立版本探测不要求开启会话。
 - 应答关联 `i/I/p` 并写回 PTY，不作为终端文本显示；`q=1` 只保留失败，`q=2` 全部静默，没有图片身份的请求不注入应答。续块仅以非零 `q` 覆盖首块的 quiet，显式 `q=0` 不解除此前的静默。删除中止未完成上传；损坏或取消的 APC 不会与后续命令拼成图片。拒收不创建放置、不移动光标，也不删除其他已接受资源。
+
+##### 完整帧与手动选帧（#140）
+
+正常图片是第 1 帧（root）。`a=f,i=…` 或 `a=f,I=…` 追加与 root 同尺寸的完整帧，支持现有 RGB／RGBA／PNG、zlib 与分块路径；分块续块可带 `a=f`。`a=a,i=…,s=1,c=N` 停止并选择从 1 开始的帧，省略 `s` 的 `a=a,…,c=N` 也可手动选帧。同一图片的全部 direct／Unicode 放置共用选择结果，不为每个放置复制像素。未放置的 transmit-only 图片即使追加或选帧，也不显示。
+
+每帧拥有独立且不复用的 pane-local key、源内容、元数据与准入租约；`Select { key, frame, revision }` 只改变根资源的选择，不重复传输已保留的像素。恢复在同一次文字快照／live 切换中重放全部保留帧、帧关系、最新选择及放置；替换、删除、screen 清理和旧 worker 退休沿用同一代次约束。预算回收以整份帧序列为单位，不静默删去某个中间帧；追加失败保留已接受的全部帧和选择。资源上限 1,024 包含 root 与所有追加帧；单图片最多 256 帧（含 root），并仍受下表全部字节和元数据限制。当前默认预算不构成双窗格各 60 张 1080p 帧的容量承诺。
+
+此切片不实现自动播放、帧 gap／循环、partial-frame 编辑、合成或单帧删除；这些命令明确返回不支持，不把它们伪装成成功。原生 Windows／macOS 呈现及 fresh-client 取证尚未执行，新增自动化用例也须由集成验证统一运行，不能把现有静态图片的历史证据算作完整帧验收。
+
+原生入口：在隔离的 lyrel 原生 pane 中运行 `node scripts/kitty-frames.mjs`。输入 `1`／`2`／`3` 并回车，检查两处图片同时显示红／绿／蓝和白色边框；输入 `stats` 记录生产者 PID、上传数和字节。选定一帧后输入 `quit`，确认 `KITTY_FRAMES_STOPPED` 后不再运行发送器，关闭旧 GUI 并重新附着同一存活 daemon，检查原位置和所选像素恢复。另可在无桌面时向该自有 pane 输入 `white` 来追加／选择白帧，再重新附着；`delete` 删除整份序列。不要向用户已有 pane 注入这些命令；需分别记录构建、daemon／GUI 身份、截图及资源观察，脚本本身不证明原生验收通过。
+
 
 当前默认值是保守的实现参数，单位为 MiB（`1 MiB = 1,048,576 bytes`），不是已经测得的完整系统峰值：
 
@@ -279,6 +290,35 @@ GPUI 测试窗口没有配置 `HeadlessRenderer`，解码数据、几何或 pain
 - daemon 的资源引用查询与桌面视口使用共享行投影及 prototype 解析，不维护第二套占位符身份规则。桌面只投影当前 viewport 的真实行；隐藏窗格继续保留既有通知门控。当前 4,096 次放置上限合计计算直接放置和虚拟 prototype，不按显示单元扩增资源数。
 - 共享确定性 PTY fixture 的真实独立 daemon → `RemoteTerminal` → rooted `TerminalView`／production decoder／paint 回归已在 Windows 通过，覆盖身份、继承、源切片、混合路径、单元擦除／移动和屏幕切换；另有独立 CLI／ConPTY 的查询、仅上传、prototype、删除和后续文字冒烟。测试窗口无 `HeadlessRenderer`；本轮 Windows 原生及 SSH 图片观察与这些自动化分开记录，macOS 和完整平台矩阵仍未验收，不构成 tmux/screen 兼容承诺。
 
+#### 相对放置（#144）
+
+相对放置通过 `P=<image id>,Q=<placement id>` 引用同一 pane、同一屏幕的既有放置，
+`H`／`V` 是有符号 32-bit 单元位移，正值向右／向下。原点是父放置的左上单元，
+不是源裁剪区或像素偏移后的边缘。无论 `C` 是什么，相对放置都不移动光标。
+关系保存在 daemon 的既有 Placement 与 pane transport 中；桌面仅投影权威几何，
+不会为关系创建另一套图片资源。当前最大链长为八条链接，仍计入既有 4,096 次放置配额。
+
+不存在的父放置返回 `ENOPARENT`，环返回 `ECYCLE`，超出八条链接返回 `ETOODEEP`，
+相对虚拟子放置（`U=1,P!=0`）返回 `EINVAL`；错误沿用图片／放置身份及 `q=1/2` 抑制规则。
+拒绝请求不替换已接受的放置。相同图片／放置 ID 的重新放置保留父身份并移动后代；
+父放置被删除或过期时后代级联删除，失去最后放置的后代图片同时释放。
+图片重新传输的旧放置删除语义仍有效，不把新资源误当作旧父放置。
+
+虚拟 prototype 可以作为父放置，但不能同时作为相对子放置。其父锚点取真实、有效、
+仍保留的 Unicode 占位单元横纵坐标的独立最小值，不使用 prototype 创建时光标。
+没有匹配单元时子图不可见；文字插入、擦除、滚动、重排及历史截断会重新推导锚点。
+擦除单元不删除 prototype；协议删除 prototype 则删除其后代。屏幕切换、清屏与 reset
+沿用同一权威生命周期；新消费者从仍存活 daemon 恢复关系、原图及文本，不依赖旧窗口缓存。
+
+新增 `graphics_consumer_relative_` 回归入口使用真实 PTY、独立 daemon、production
+RemoteTerminal 和 rooted TerminalView，检查像素身份、几何、八链接、错误、文字移动与 fresh 恢复。
+本次子工单按统一验证约定未运行构建或测试；上述是实现与验证入口，不是已通过的原生验收记录。
+在隔离开发实例的自有窗格运行 `node scripts/kitty-relative.mjs scene`，脚本退出后关闭并重开
+GUI，必须仍看到同一组图，且不要再次运行 `scene`。`move`、`erase`、`delete` 分别移动、
+擦除文本锚点和删除父放置；每步后可重开窗口检查几何与删除不复活。输出标记给出 1-based
+预期单元位置。字体、OS DPI、显示器缩放及 pane resize 后仍须原生检查实际像素；
+Windows 原生 geometry／recovery、macOS 及真实 SSH 的本票验收仍待集中执行。
+
 #### 正式 omp 接入：Windows placeholder 原生重放已验证
 
 已实测正式 `omp/18.12.6`。该版本未自动识别 lyrel 时，使用应用公开的协议选择，不修改 `TERM_PROGRAM`。在 lyrel 的 PowerShell 窗格中启动新进程：
@@ -303,6 +343,61 @@ tui:
 Windows 协议冒烟已在 pane `13` 的生产 CLI／daemon 上复验，使用完全临时的 home／profile／overlay 与合成 version 3 JSONL，通过公开 `--resume <path>` 启动真实 `omp/18.12.6` 交互 TUI。直接放置和占位符两轮均经真实 ConPTY、独立 daemon 与生产 `PaneClient` 收到 `240 × 80` SVG 栅格 PNG 和 `64 × 64` 合成 toolResult PNG 的独立资源／放置；后者的内容指纹与输入一致，占位符轮另有真实 `U+10EEEE` 单元。保留 `TERM_PROGRAM=lyrel`，未修改 omp 源码，也未使用丢弃图片字节的 `omp render` 或 gallery 代替。发送 `/exit` 后两轮进程及私有 daemon 均正常退出，无 socket 错误；合成会话没有新增 assistant、`model_usage` 或 `title_change`，没有提交新 prompt。临时 home／profile／会话／端点及冒烟脚本均已清理。
 
 随后在上述 Windows 原生窗口，以隔离 HOME／profile／overlay 和公开 `--resume` 运行同一正式 `omp/18.12.6`：placeholder 模式实际显示受控 assistant 的 `480×100` fenced SVG，以及 toolResult 中真实隔离窗口的 `1280×804` PNG 截图；`/exit` 正常返回 shell。未修改 omp、未伪造 `TERM_PROGRAM`、未传入用户模型凭据，也没有提交 prompt 或执行推理。受控会话重放证明生产应用渲染和最终像素，不等于真实模型新生成的回答；真实 agent 交互、macOS 及远端 omp 仍未验收。direct 模式位置重叠保留为未解决的兼容缺口。公开 catalog 刷新不等于模型推理，本轮也不声明完全断网。
+
+<a id="pi-native-image-replay"></a>
+#### 正式 pi 接入：公开进程设置与独立重放夹具（#149）
+
+这里的 **pi** 是 [earendil-works/pi](https://github.com/earendil-works/pi)，npm 包为 `@earendil-works/pi-coding-agent`，不是 omp。2026-10-31 重新查询 [GitHub 最新正式发行](https://github.com/earendil-works/pi/releases/tag/v1.4.0)、npm `version` 和本机 `pi --version`，三者均为 `1.4.0`。这是版本／公开接口核实，不是本轮原生图片验收通过。
+
+使用 lyrel 既有 `agent_launch` 的 literal 环境前缀，只为该次启动选择协议，不修改 `TERM_PROGRAM=lyrel`，也不修改 pi 全局配置：
+
+```json
+{
+  "agent_launch": {
+    "pi": "PI_IMAGE_PROTOCOL=kitty pi"
+  }
+}
+```
+
+有意关闭时可改为 `PI_IMAGE_PROTOCOL=none pi`。图片选择值随 Pi 原生 hook 的公开会话 scope 绑定、持久化及恢复；已绑定 scope 优先于启动默认值，启动显式赋值优先于 Host 环境。未配置时不替用户强制打开；不把 omp 的 `PI_FORCE_IMAGE_PROTOCOL`、`PI_KITTY_PLACEHOLDERS` 或 YAML overlay 当成 pi 接口。恢复指定文件使用 pi 的 `--session <path>`，不是 omp 的 `--resume <path>`；pi 的 `--resume` 打开选择器。
+
+上游 [terminal-setup.md](https://github.com/earendil-works/pi/blob/v1.4.0/packages/coding-agent/docs/terminal-setup.md) 和 [settings.md](https://github.com/earendil-works/pi/blob/v1.4.0/packages/coding-agent/docs/settings.md) 规定：
+
+- `PI_IMAGE_PROTOCOL=kitty|iterm2|none|auto` 是公开环境选项；`terminal.images: "kitty"|"iterm2"|false|"auto"` 是协议设置，**具体设置值优先于环境变量**；`auto` 不强制覆盖环境选择。
+- `terminal.images=false` 或 `terminal.showImages=false` 均不得由 lyrel 静默改为开启。后者是独立显示策略，不是 `images.blockImages`（后者限制发送给模型）。
+- 本票仅覆盖保存的 **toolResult 图片**。PNG 直接进入原生 Kitty 路径；JPEG／GIF／WebP 依赖 pi 原生 PNG 转码，不承诺文件动画播放。用户消息图片、assistant 中 SVG 正文／代码块栅格化、Markdown 图片链接及任意路径／URL 不在本票承诺内，lyrel 不补画这些内容。
+- pi 默认图片宽度为 60 cells；夹具显式用 12 cells。其 [fullscreen renderer](https://github.com/earendil-works/pi/blob/v1.4.0/packages/tui/src/tui-alt-screen.ts) 仅保留最多 16 个屏外 Kitty 图片、32 MiB transmission、64 MiB estimated decoded 内容；滚动重挂载可能复用上传或重传，超出这些上游保留边界会发送 `d=I`。这里不是 OpenCode 的“三张／组”规则。lyrel 尊重删除，不以隐藏像素副本绕过限额；以后有效重传才重新建立资源。
+
+##### 中央验证入口与原生像素步骤
+
+仓库夹具 `scripts/pi-image-replay.mjs` 只生成自己临时目录中的 version 3 合成会话，经实际正式 pi 的 `--session` 重放；不导入 pi 内部 renderer，不读用户历史，不复制凭据，不向 stdin 填入新 prompt。支持正式独立可执行文件或 npm `dist/cli.js`，执行前校验 `--version`；npm 入口另校验包名。独立发行文件的来源／校验和须与 [正式 release assets](https://github.com/earendil-works/pi/releases/tag/v1.4.0) 核对。夹具不安装或升级软件；需要 Node.js 22.19+ 和正式 Pi 1.4.0。`--offline`、禁用发现扩展／MCP／skills／context、空 HOME／agent-dir 及凭据环境 allowlist 隔离模型工作；退出时检查原合成会话没有新增 message、usage、compaction 或 branch summary，再删除自己的目录。
+
+合并后由中央执行，不能把 ignored 用例计为已通过：
+
+```powershell
+$env:LYREL_PI_GRAPHICS_CLI = 'C:\path\to\official\pi.exe'
+# npm 安装也可指向 @earendil-works/pi-coding-agent/dist/cli.js。
+node --check scripts/pi-image-replay.mjs
+cargo test --locked -p lyrel-core pi_resume_preserves_explicit_image_protocol_without_omp_options
+cargo test --locked -p lyrel-core pi_first_run_waits_for_settlement_and_resolves_only_its_own_dialog
+cargo test --locked --bin lyrel-app graphics_consumer_pi_native_ -- --ignored --nocapture --test-threads=1
+```
+
+最后一条通过真实 PTY → 新建隔离 daemon → production `RemoteTerminal` → rooted `TerminalView`，比较两张图不同的 BGRA 地标、放置与真实 production paint claim，覆盖原生历史 top／bottom、`/new` 删除、再次原生启动重放，以及三种显式关闭和设置覆盖环境。GPUI 测试窗口不是最终 GPU 像素证据。
+
+Windows 原生验收应先由中央构建当前合并提交，启动**另一个全新目录**的 `lyrel-app.exe --config-dir <isolated-dir>`，确认连接的是本轮 built daemon；不要对旧用户 daemon 复用／升级／停止。在该窗口新建自有 pane，运行：
+
+```powershell
+node C:\path\to\lyrel\scripts\pi-image-replay.mjs --pi C:\path\to\official\pi.exe --pictures 20 --rounds 2
+```
+
+1. 起始应看到第 19 张 `48×24` 合成图片，而非仅 `PI_REPLAY_PICTURE_19` 标签。四象限源 RGBA 从左上顺时针为 `(255,0,209,255)`、`(0,255,133,255)`、`(255,255,0,255)`、`(95,0,255,255)`，中心白色 `4×4` 方块；夹具进入 TUI 前输出每张源 RGBA SHA-256。
+2. `F5` 跳原生 transcript 顶部：第 0 张应为红／绿／黄／蓝四象限及白色中心；`F6` 回尾部。逐页 PageUp／PageDown 访问全部 20 张，超过 pi 的屏外保留数量后回访，核对各图身份和位置，没有串图、重叠残影或已删除像素复活。不要改成 lyrel 的 shell 历史滚动冒充原生 remount。
+3. 输入原生命令 `/new`，旧会话图片应消失。空编辑器按 `Ctrl+D` 退出首个 pi；夹具第二轮自动用同一个保存文件启动另一个 pi，图片须由发送器再次输出，不手工重发、不触发模型。第二轮再次 `/new`、`Ctrl+D`，应看到两条 `PI_REPLAY_ROUND_n_NO_NEW_MESSAGES` 及清理完成后的 `PI_REPLAY_FIXTURE_DONE`。
+4. 分别以 `--policy env-none`、`--policy settings-none`、`--policy display-none` 启动单轮，保存 transcript 可见但不应显示图片；`--policy settings-kitty` 则在 `PI_IMAGE_PROTOCOL=none` 下由显式设置选择 Kitty。每轮只用 `Ctrl+D` 退出，不发送任务；夹具 180 秒硬截止仅结束自有 pi 子进程。
+5. 原生截图记录四象限／白心、关联文本及 pane 裁切；记录提交、pi 来源与实际版本、GUI／daemon PID、OS、GPU、显示缩放／刷新率及窗口尺寸。关闭全部自有窗口后，仅对同一 `<isolated-dir>` 执行 `lyrel-app.exe --config-dir <isolated-dir> --stop-daemon`，确认自有进程退出再清理自有目录。不要停止用户实例。
+
+**本票证据边界：**本轮只执行版本／官方资料只读核实；没有运行 build、tests、lint、formatter 或 native smoke。上面的全部 contract／Windows 像素、发送器 retention 及重传观察仍待中央执行；macOS 的 MacBook Air M5 原生验收与真实 SSH 也未执行。原生会话 replay 允许 pi 重传；同一个活 daemon 的 fresh GUI 恢复另有“发送器不输出”的独立合约，不能用本夹具的第二轮代替。
 
 
 #### 当前实现：预算与历史回收（#44）
@@ -378,7 +473,7 @@ Windows → Linux 原生图片与无重传恢复已补充实测，见远程文�
 
 以下是 #39 的完整目标；尚未完成的平台与原生验收不能由局部实现或自动化结果替代：
 
-- 显示静态图片、透明背景及应用连续替换的画面，正确处理终端滚动、裁剪和重绘；不包含图片查看器、点击放大、复制／另存为或动画播放。
+- 显示静态图片、透明背景、应用连续替换的画面，以及 daemon 保留的完整帧与手动选帧；正确处理终端滚动、裁剪和重绘。不包含图片查看器、点击放大、复制／另存为或自动动画播放。
 - 图片属于窗格会话，不属于某个窗口。在历史保留范围和资源预算内，切换工作区、关闭后重开 GUI，以及重新连接同一存活 daemon 后，图片应恢复，无需应用重新发送。
 - 图片不新增磁盘持久化；daemon 结束后不保证历史图片恢复。智能体重新启动后主动重绘，是新的图片输出，不是 lyrel 恢复了旧图片。
 - 以 [Kitty graphics](https://sw.kovidgoyal.net/kitty/graphics-protocol/) 为支持协议，覆盖传输与独立放置、重复放置、裁剪、删除、Unicode 占位符，以及已有的传输并显示路径；SIXEL 与 iTerm2 inline images 不列为本次支持协议。
