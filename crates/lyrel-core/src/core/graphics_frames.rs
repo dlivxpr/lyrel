@@ -24,7 +24,8 @@ pub(super) fn compose_frame(image: &mut Image, control: &Control, frame: &FrameP
         let Some(GraphicsUpdate::Resource { image, .. }) = GraphicsUpdate::decode_frame_owned(packet.to_vec()) else {
             return Err("EINVAL:Invalid retained frame data");
         };
-        decode_pixels(&image)?
+        let mut image = Arc::into_inner(image).expect("decoded packet has one source owner");
+        decode_pixels(&mut image)?
     } else {
         control.offset_y.to_be_bytes().repeat(canvas_bytes / 4)
     };
@@ -55,9 +56,9 @@ fn blend(destination: &mut [u8], source: &[u8]) {
     destination[3] = ((total + 127) / 255) as u8;
 }
 
-fn decode_pixels(image: &Image) -> Result<Vec<u8>, &'static str> {
+fn decode_pixels(image: &mut Image) -> Result<Vec<u8>, &'static str> {
     if image.format != WireFormat::Png {
-        return image.to_rgba8().ok_or("EINVAL:Invalid frame pixels");
+        return image.take_rgba8().ok_or("EINVAL:Invalid frame pixels");
     }
     let mut decoder = png::Decoder::new_with_limits(std::io::Cursor::new(&image.data), png::Limits { bytes: 4 << 20 });
     decoder.set_ignore_text_chunk(true);
