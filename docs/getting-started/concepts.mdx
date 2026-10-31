@@ -443,6 +443,8 @@ lyrel 不强制打开该选项，也不增加 agent 专属图片渲染器。既�
 
 该发布标签的 [SessionImages / UserMessage / ToolImages](https://github.com/anomalyco/opencode/blob/v2.2.0/packages/tui/src/routes/session/index.tsx) 已重新核对：用户附件从保存的 `image/*` 字节构造 data URI；tool-result 只选择 `type=file`、`mime=image/*` 且 `uri` 以 `data:image/` 开头的项，实际能否解码仍由原生图片节点决定。每个图片组／卡片最多内联前三张，其余显示 `+N more`；卡片高度按终端高度的四分之一限制在 4–8 行，使用 `fit=cover`。不能把第四张、URL、普通路径、Markdown 或 SVG 文本强行补成终端图片。打开默认只挂载约 40 个加权 transcript 行，较旧内容按约 60 行回填并经原生 API 分页；这些是本标签的实现值，升级需重新检查。
 
+几何依据继续来自该标签，而不是失败现场的坐标：120×60 窗格中，每个图片槽为 16×8 cells，相邻槽之间隔 1 cell；尾部 `+1 more` 占 8 cells，右侧保留 2 cells padding。其锁定的 [OpenTUI 0.7.0](https://github.com/anomalyco/opencode/blob/v2.2.0/package.json) 先按 `cover` 裁剪，再通过 [静态 Kitty placement](https://github.com/anomalyco/opentui/blob/v0.7.0/packages/native/src/terminal-image.zig) 发送显式 `i/p/c/r/x/y/w/h/C=1`，不依赖 lyrel 识别 agent 名。consumer 用例保留每个实际 placement 的独立记录，要求每种预期图片恰好一个 instance，总共六个；相同颜色／相同矩形也不能去重。几何检查使用 production paint 的实际 cell 尺寸，同时检查图片两两不重叠、每个槽与 viewport 边界，并以终端文本中的两处 `+1 more` 独立核对原生容器。
+
 **可运行夹具：**在隔离 lyrel 原生窗格中，先把窗格调到至少 120 列、60 行，再运行：
 
 ```sh
@@ -463,12 +465,13 @@ node scripts/opencode-image-replay.mjs --previews off
 
 ```sh
 cargo test --locked -p lyrel-core opencode_scoped_launch_keeps_preview_policy_and_default_config_untouched -- --test-threads=1
+cargo test --locked -p lyrel --bin lyrel-app graphics_consumer_static_placements_count_coincident_instances_and_replace_by_id -- --nocapture --test-threads=1
 cargo test --locked -p lyrel --bin lyrel-app opencode_replay_consumer_tests:: -- --ignored --nocapture --test-threads=1
 ```
 
-consumer 用例复用真实 PTY → 独立真实 daemon → 生产 pane connection／`RemoteTerminal` → rooted `TerminalView`，断言实际解码 BGRA 主色、两卡左右几何、production paint claim、原生分页／滚离返回／tab 卸载重挂载，以及退出后 fresh consumer 不复活被应用删除的图片。它不替代最终 GPU 像素。
+consumer 用例复用真实 PTY → 独立真实 daemon → 生产 pane connection／`RemoteTerminal` → rooted `TerminalView`，断言实际解码 BGRA 主色、独立 instance 数量、两卡左右几何、production paint claim、原生分页／滚离返回／tab 卸载重挂载，以及退出后 fresh consumer 不复活被应用删除的图片。额外静态协议用例覆盖同色不同放置、同原点重叠放置、同 `i/p` 替换不增量及精确删除；它验证计数不会被集合或 bbox 合并掩盖，不替代真实 OpenCode 或最终 GPU 像素。失败／超时输出完整 placement key、resource、原生 ID、源裁剪、anchor、paint 矩形、paint claim、图形预算状态和终端文本，供中央定位真实协议路径。
 
-**本票证据边界：**已观察的只有版本／公开 help 和上述官方发布源码、配置文档；按中央统一执行约定，本工作树没有运行 build／test／lint／formatter，也没有执行新夹具或原生图片 smoke。上述自动化、Windows 最终像素／placement／分页／删除及 macOS 实机验收均尚未验证；不得据此宣布 #150 的原生验收通过。
+**本票证据边界：**中央已实际完成 546 条消息的公开 import／export prepare，disabled consumer 通过；enabled consumer 在首次两卡的“不重叠”断言失败，尚未到达其后的分页、remount、delete 验收。增强后的计数、容器边界、诊断与静态协议用例尚未执行，本工作树遵守约定未运行 build／test／lint／formatter 或操作前台。当前没有足够 geometry 证据归因生产缺陷，未猜测修改 production；中央须执行加强后的完整用例，不能以 disabled 通过、设置项或版本查询宣称 #150 已通过。Windows 最终像素及 macOS 实机结果也仍未验证。
 
 #### 当前实现：预算与历史回收（#44）
 

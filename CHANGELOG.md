@@ -23,7 +23,7 @@
 
 ### 验证入口
 
-- 新增正式 OpenCode 2.2.0 的隔离保存对话夹具与真实 PTY／daemon／rooted consumer 回归：公开 import／resume／export，无 prompt／推理，覆盖用户附件、tool-result、每卡三图、旧消息分页、滚出返回、native tab 删除与重挂载、disabled 策略。版本和公开接口已重新核对；新用例及 Windows 最终像素尚未执行，macOS 亦未验收，具体入口和预期见终端内联图片文档。
+- 正式 OpenCode 2.2.0 隔离保存对话夹具使用公开 import／resume／export，无 prompt／推理；完整目标保留用户附件、tool-result、每卡三图、旧消息分页、滚出返回、native tab 删除与重挂载及 disabled 策略。中央已完成 546 条消息 prepare，disabled consumer 通过；enabled 在首次卡片重叠检查失败，后续阶段未到达。加强后的用例按独立 placement instance 计数，不再合并同色 bbox，并保留官方 16×8／gap=1、容器文本与 viewport 边界及完整几何诊断；新增同色／同原点放置、同 ID 替换和精确删除的生产消费者用例。新增诊断尚未运行，不能据此声称生产几何或 Windows／macOS 最终像素已修复。
 
 ## [0.3.0] - 2026-10-31
 
