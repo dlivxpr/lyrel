@@ -9,6 +9,8 @@
 
 ### 修复
 
+- omp 的公开 `PI_FORCE_IMAGE_PROTOCOL`、Kitty placeholder opt-in／硬关闭项沿用非敏感启动上下文，在新启动和原生恢复中保持显式图片策略；不覆盖 `terminal.showImages: false`、不伪造终端身份、不修改全局 agent 配置。修复 Windows 快捷启动将字面量环境前缀当命令执行，以及恢复命令将子进程图片策略遗留在父 shell 的路径。
+- 补充 released omp 原生 `--resume` 的隔离合成会话与生产消费者用例，覆盖 assistant／toolResult 图片、原生 SVG 栅格图、8 张上游 cap 的删除和显式关闭；fixture 不提交 prompt，拒绝模型请求，并保留版本／消息数／请求审计。2026-10-31 只读检查为最新 release `18.14.1`、已安装 `18.14.0`；新增用例及新版原生 Windows／macOS 图片结果尚未集中验证。
 - pi 图片接入（#149）区分 `earendil-works/pi` 与 omp，将公开 `PI_IMAGE_PROTOCOL` 纳入既有 Host／启动／会话 scope 与 Pi hook 报告，恢复时保留显式 `none`，不自动覆盖 `terminal.images=false` 或 `terminal.showImages=false`。2026-10-31 重新核实 GitHub／npm／本机正式版本均为 `1.4.0`；增加真实原生 `--session` 合成 toolResult PNG 夹具、production rooted consumer 的重挂载／删除／再次启动及 disabled precedence 入口。未运行本轮 contracts 或 Windows／macOS 原生像素验收，不将版本查询、flags 或历史 omp 证据写成 Pi 图片通过。
 - OpenCode 集成按既有 `agent_launch` 的受检 Host／`XDG_CONFIG_HOME` 作用域定位 CLI 插件与配置，不再误写默认目录；保留显式 `session.image_preview=false`，不全局改设置或伪造终端身份。补充公开 `-s`／`--auto` 启动参数识别。
 

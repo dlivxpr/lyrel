@@ -1865,3 +1865,4 @@ fn graphics_consumer_contended_viewport_retries_refused_history_without_new_outp
 mod opencode_replay_consumer_tests {
     include!("opencode_replay_consumer_tests.rs");
 }
+include!("omp_replay_consumer_tests.rs");

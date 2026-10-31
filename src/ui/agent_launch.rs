@@ -151,7 +151,16 @@ pub(crate) fn run_when_ready(slot: &PaneSlot, command: String, cx: &mut App) {
                     }
                     cx.background_executor().timer(PROMPT_POLL).await;
                 }
-                let _ = view.read_with(cx, |view, _| view.run_command_line(&command));
+                let _ = view.read_with(cx, |view, _| {
+                    let shell = view.shell_spec().map(|spec| spec.program);
+                    match lyrel_core::host::session_operations::scoped_launch_command(
+                        &command,
+                        shell.as_deref(),
+                    ) {
+                        Ok(command) => view.run_command_line(&command),
+                        Err(error) => log::error!("agent launch rejected: {error}"),
+                    }
+                });
             })
             .detach();
         }
