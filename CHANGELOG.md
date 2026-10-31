@@ -7,6 +7,10 @@
 
 ## [Unreleased]
 
+### 新增
+
+- Kitty 间接媒体增加 Windows 本地 regular file、eligible 临时文件与 named shared memory；`O/S` 只限制实际图片区域，允许小区域位于大对象中。Windows 固定已验证本地磁盘 handle、拒绝网络／device／未知 reparse，并按对象 handle 删除临时 handoff；Unix 保留文件／POSIX shm 语义，macOS 按偏移附近有界映射，临时文件使用身份核验及 no-clobber 恢复避免删错替换对象。发送方 locality 每次接受及读取前重新证明，嵌套 SSH／WSL 或未知命名空间 fail-closed，直接传输不受影响；不新增图片磁盘缓存。提供真实 PTY／daemon／rooted consumer 回归与 Windows 自有原生 smoke 入口；本票子任务未执行中央测试或原生验收，平台通过范围仍待实际结果。
+
 ## [0.3.0] - 2026-10-31
 
 ### 新增
