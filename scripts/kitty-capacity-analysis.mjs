@@ -11,6 +11,15 @@ export function distribution(values) {
   return { samples: sorted.length, p50: percentile(0.5), p95: percentile(0.95), max: sorted.at(-1) };
 }
 
+function histogramMs(values) {
+  const buckets = new Map();
+  for (const value of values.filter(Number.isFinite)) {
+    const lower = Math.floor(value);
+    buckets.set(lower, (buckets.get(lower) ?? 0) + 1);
+  }
+  return [...buckets].sort(([a], [b]) => a - b).map(([lower, samples]) => ({ fromMs: lower, toMs: lower + 1, samples }));
+}
+
 export function parseCsv(text) {
   const rows = [];
   let row = [], field = '', quoted = false;
@@ -68,6 +77,7 @@ export function analyzePresentMon(text) {
       runtimes: [...new Set(group.map((row) => row.PresentRuntime).filter(Boolean))],
       presentModes: [...new Set(group.map((row) => row.PresentMode).filter(Boolean))],
       displayedTimeMs: metric('DisplayedTime'),
+      displayedTimeHistogramMs: histogramMs(group.map((row) => numeric(row.DisplayedTime, 'DisplayedTime'))),
       frameTimeMs: metric('FrameTime'),
       displayChangeMs: metric('MsBetweenDisplayChange'),
       inputToPhotonMs: metric('AllInputToPhotonLatency'),
@@ -133,6 +143,7 @@ export function analyzeCapture(text, refreshHz = 60) {
     // A second pane/text update can repeat this pane's barcode in WGC. Collapse
     // those samples instead of falsely calling each compositor update a dropped frame.
     changeIntervalsMs: distribution(intervals),
+    changeIntervalHistogramMs: histogramMs(intervals),
     pictureChangesPerSecond: observedMs > 0 ? (runs.length - 1) * 1000 / observedMs : null,
     missingSourceFramesLowerBound: missingLowerBound,
     prolongedHolds: holds,

@@ -81,13 +81,16 @@ impl CapacityConsumer {
         })
     }
 
-    fn restore(self, daemon: &GraphicsDaemonProcess, cx: &mut TestAppContext) -> Self {
+    fn restore(self, daemon: &GraphicsDaemonProcess, cx: &mut TestAppContext, frames: usize) -> Self {
         let Self { pane, view, window, serial, image_id, manifest } = self;
         // End old derived ownership before the complete replay's peak offers.
         graphics_recovery_destroy(view, window, cx);
         let (view, window) = graphics_build_rooted_consumer(cx, pane, daemon.stream_with_capacity(pane, 512 << 20, 512 << 20), Vec::new());
         let mut restored = Self { pane, view, window, serial, image_id, manifest };
-        restored.wait_loaded(cx);
+        capacity_wait(cx, "fresh replay retains exactly the accepted frame owners", |cx| restored.view.read_with(cx, |view, _| {
+            let usage = view.terminal.images().allocation_observation();
+            usage["decodedFrames"] == frames && usage["pendingOffers"] == 0 && usage["sourceBytes"] == 0 && usage["scratchBytes"] == 0
+        }));
         restored.command("stats", cx);
         graphics_assert_production_paint(restored.window, &restored.view, cx);
         restored
@@ -183,9 +186,10 @@ fn graphics_consumer_fullsize_two_panes_retain_reuse_restore_mutate_and_release(
         consumer.command("compose 1 2", cx);
         consumer.wait_loaded(cx);
     }
-    consumers = consumers.into_iter().map(|consumer| consumer.restore(&daemon, cx)).collect();
+    consumers = consumers.into_iter().map(|consumer| consumer.restore(&daemon, cx, 60)).collect();
     for consumer in &mut consumers {
         consumer.command("replace", cx);
+        consumer.wait_loaded(cx);
         consumer.command("delete", cx);
         capacity_wait(cx, "intentional delete releases all real owners without eviction notice", |cx| {
             consumer.window.update(cx, |_, window, cx| consumer.view.read(cx).terminal.images().release_retired(window, cx)).unwrap();
@@ -196,6 +200,10 @@ fn graphics_consumer_fullsize_two_panes_retain_reuse_restore_mutate_and_release(
                 usage["cacheBytes"] == 0 && usage["sourceBytes"] == 0 && usage["metadataBytes"] == 0
             })
         });
+    }
+    consumers = consumers.into_iter().map(|consumer| consumer.restore(&daemon, cx, 0)).collect();
+    for consumer in &consumers {
+        assert!(consumer.view.read_with(cx, |view, _| graphics_visible_images(view).is_empty()), "intentional deletion cannot revive pictures or historical notices after replay");
     }
     for consumer in consumers {
         daemon.panes().kill(consumer.pane).unwrap();
