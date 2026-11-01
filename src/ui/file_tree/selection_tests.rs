@@ -3,7 +3,9 @@ mod host;
 use super::render_idle_gpui_tests::{files_panel_on, serial, settle};
 use super::*;
 use gpui_kit::test::{TestEventExt, TestQueryExt, TestWindowExt};
-use gpui_kit::{ClipboardEntry, ClipboardItem, Modifiers, TestAppContext, VisualTestContext};
+use gpui_kit::{
+    ClipboardEntry, ClipboardItem, Focusable as _, Modifiers, TestAppContext, VisualTestContext,
+};
 
 fn primary() -> Modifiers {
     Modifiers {
@@ -44,7 +46,17 @@ fn selected(app: &Entity<LyrelApp>, vcx: &mut VisualTestContext) -> Vec<PathBuf>
     })
 }
 
-fn wait(vcx: &mut VisualTestContext, mut done: impl FnMut(&mut VisualTestContext) -> bool) {
+#[track_caller]
+fn wait(vcx: &mut VisualTestContext, done: impl FnMut(&mut VisualTestContext) -> bool) {
+    wait_for(vcx, "the file operation", done);
+}
+
+#[track_caller]
+fn wait_for(
+    vcx: &mut VisualTestContext,
+    stage: &str,
+    mut done: impl FnMut(&mut VisualTestContext) -> bool,
+) {
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
     loop {
         vcx.background_executor.run_until_parked();
@@ -53,7 +65,7 @@ fn wait(vcx: &mut VisualTestContext, mut done: impl FnMut(&mut VisualTestContext
         }
         assert!(
             std::time::Instant::now() < deadline,
-            "the file operation never completed"
+            "{stage} never completed"
         );
         std::thread::sleep(std::time::Duration::from_millis(10));
     }
@@ -167,8 +179,36 @@ fn inline_creation_and_rename_at_the_viewport_edge_keep_the_intended_directory(
         );
         window.input("created.txt", cx);
     });
+    app.update_in(&mut vcx, |app, window, cx| {
+        let input = app
+            .file_tree
+            .editing
+            .as_ref()
+            .expect("new-file input remains active")
+            .input()
+            .read(cx);
+        assert!(
+            input.focus_handle(cx).is_focused(window),
+            "the scrolled-away new-file input lost focus"
+        );
+        assert_eq!(
+            input.value().to_string(),
+            "created.txt",
+            "new-file input must retain the typed name"
+        );
+    });
     key(&mut vcx, "enter");
-    wait(&mut vcx, |_| child.exists());
+    wait_for(&mut vcx, "creating dir-079/created.txt", |_| child.exists());
+    let expected_child = lyrel_core::core::path_spelling::local_spelling_buf(
+        std::fs::canonicalize(&child).unwrap(),
+    );
+    wait_for(&mut vcx, "opening the newly created file in the editor", |vcx| {
+        app.read_with(vcx, |app, _| {
+            app.editor_active_location().is_some_and(|(host, path)| {
+                host == HostId::LOCAL && path == expected_child
+            })
+        })
+    });
     settle(&app, &mut vcx, root.path());
     assert!(!root.path().join("created.txt").exists());
     assert!(!root.path().join("dir-078/created.txt").exists());
@@ -182,19 +222,45 @@ fn inline_creation_and_rename_at_the_viewport_edge_keep_the_intended_directory(
             cx,
         );
     });
-    wait(&mut vcx, |vcx| {
-        vcx.update(|window, cx| {
-            window.render_frame(cx);
-            window.try_find(id(&child)).is_some_and(|row| row.visible())
-        })
-    });
+    wait_for(
+        &mut vcx,
+        "scrolling the created file back into view for rename",
+        |vcx| {
+            vcx.update(|window, cx| {
+                window.render_frame(cx);
+                window.try_find(id(&child)).is_some_and(|row| row.visible())
+            })
+        },
+    );
     click(&mut vcx, &child, primary());
     vcx.update(|window, cx| window.right_click(id(&child), cx));
     menu_item(&mut vcx, L10nKey::FileTreeContextRename);
     key(&mut vcx, "secondary-a");
     vcx.update(|window, cx| window.input("renamed.txt", cx));
+    app.update_in(&mut vcx, |app, window, cx| {
+        let input = app
+            .file_tree
+            .editing
+            .as_ref()
+            .expect("rename input remains active")
+            .input()
+            .read(cx);
+        assert!(
+            input.focus_handle(cx).is_focused(window),
+            "the rename input lost focus"
+        );
+        assert_eq!(
+            input.value().to_string(),
+            "renamed.txt",
+            "Select All must replace the original file name"
+        );
+    });
     key(&mut vcx, "enter");
-    wait(&mut vcx, |_| renamed.exists() && !child.exists());
+    wait_for(
+        &mut vcx,
+        "renaming created.txt to renamed.txt in dir-079",
+        |_| renamed.exists() && !child.exists(),
+    );
     assert_eq!(std::fs::read(&renamed).unwrap(), Vec::<u8>::new());
 }
 
