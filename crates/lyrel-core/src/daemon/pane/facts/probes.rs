@@ -165,7 +165,9 @@ pub(in super::super) fn foreground_title(
     shell_pid: Option<u32>,
     request: &super::MetadataRequest,
 ) -> String {
-    shell_pid.map(|pid| request.foreground_title(pid)).unwrap_or_default()
+    shell_pid
+        .map(|pid| request.foreground_title(pid))
+        .unwrap_or_default()
 }
 
 #[cfg(not(any(target_os = "macos", target_os = "linux", windows)))]

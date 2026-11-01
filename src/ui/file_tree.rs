@@ -1,10 +1,10 @@
 use crate::ui::notification_history::NotificationWindowExt as _;
 use std::borrow::Cow;
+use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
-use std::cell::RefCell;
 use std::rc::Rc;
+use std::sync::Arc;
 
 use crate::core::config::RightPanelTab;
 use crate::core::git::status::{DecoStatus, DirRollup, StatusIndex};
@@ -523,8 +523,19 @@ impl FileTreeState {
         }
     }
 
-    fn sync_search(&mut self, host: HostId, query: &str, roots: &[PathBuf], cx: &mut Context<LyrelApp>) {
-        if !self.search.context.as_ref().is_some_and(|(id, held)| *id == host && held == roots) {
+    fn sync_search(
+        &mut self,
+        host: HostId,
+        query: &str,
+        roots: &[PathBuf],
+        cx: &mut Context<LyrelApp>,
+    ) {
+        if !self
+            .search
+            .context
+            .as_ref()
+            .is_some_and(|(id, held)| *id == host && held == roots)
+        {
             self.search.restart();
             self.search.hits.clear();
             self.search.context = Some((host, roots.to_vec()));
@@ -580,7 +591,6 @@ impl FileTreeState {
         })
         .detach();
     }
-
 }
 
 /// The rows a search puts in the column, and the note that stands for whatever
@@ -1157,21 +1167,30 @@ impl LyrelApp {
         };
         // Placeholder rows explain an absence; they are not files, so the
         // cursor must not be able to land on one.
-        let rows = self.file_tree.logical_rows(host, &code.roots, &code.expanded, self.file_tree_searching(cx));
+        let rows = self.file_tree.logical_rows(
+            host,
+            &code.roots,
+            &code.expanded,
+            self.file_tree_searching(cx),
+        );
         if rows.is_empty() {
             return;
         }
-        let sel_ix = code
-            .selected
-            .cursor(host)
-            .and_then(|s| rows.iter().position(|r| r.note.is_none() && r.entry.path == s));
+        let sel_ix = code.selected.cursor(host).and_then(|s| {
+            rows.iter()
+                .position(|r| r.note.is_none() && r.entry.path == s)
+        });
         let key = ev.keystroke.key.as_str();
         match key {
             "up" | "down" => {
                 let next = match (sel_ix, key) {
                     (None, _) => rows.iter().position(|r| r.note.is_none()),
                     (Some(i), "up") => rows[..i].iter().rposition(|r| r.note.is_none()).or(Some(i)),
-                    (Some(i), _) => rows[i + 1..].iter().position(|r| r.note.is_none()).map(|n| i + 1 + n).or(Some(i)),
+                    (Some(i), _) => rows[i + 1..]
+                        .iter()
+                        .position(|r| r.note.is_none())
+                        .map(|n| i + 1 + n)
+                        .or(Some(i)),
                 };
                 let Some(next) = next else { return };
                 let path = rows[next].entry.path.clone();
@@ -1179,7 +1198,8 @@ impl LyrelApp {
                     code.selected
                         .click(host, &path, false, ev.keystroke.modifiers.shift, &rows);
                 }
-                self.right_panel.tree_reveal = Some((path, crate::ui::right_panel::TREE_REVEAL_RENDERS));
+                self.right_panel.tree_reveal =
+                    Some((path, crate::ui::right_panel::TREE_REVEAL_RENDERS));
                 cx.notify();
             }
             "left" => {
@@ -1658,7 +1678,8 @@ impl LyrelApp {
         {
             cx.notify();
         }
-        let (roots, expanded) = self.tab_code()
+        let (roots, expanded) = self
+            .tab_code()
             .map(|code| (code.roots.clone(), code.expanded.clone()))
             .unwrap_or_default();
         let query = self.file_tree_query(cx);
@@ -1673,7 +1694,9 @@ impl LyrelApp {
         if !searching && let Some(host) = &host {
             self.file_tree.request_loads(host, &roots, &expanded, cx);
         }
-        let logical = self.file_tree.logical_rows(host_id, &roots, &expanded, searching);
+        let logical = self
+            .file_tree
+            .logical_rows(host_id, &roots, &expanded, searching);
         // Sync even with an empty field, so clearing it retires search results.
         let contents = self.panel_search_section(window, cx);
         let rows = self.sync_tree_layout(Rc::clone(&logical), contents, searching, cx);
@@ -1687,7 +1710,10 @@ impl LyrelApp {
                 if self.file_tree.geometry.is_some() {
                     self.file_tree.list.scroll_to_reveal_item(ix);
                 } else {
-                    self.file_tree.list.scroll_to(gpui_kit::ListOffset { item_ix: ix, offset_in_item: px(0.) });
+                    self.file_tree.list.scroll_to(gpui_kit::ListOffset {
+                        item_ix: ix,
+                        offset_in_item: px(0.),
+                    });
                 }
                 // ListState can locate unpainted rows using its size estimate;
                 // a found logical row needs only one reveal, never a scroll lock.
@@ -1702,43 +1728,67 @@ impl LyrelApp {
                 let child = match &rows[ix] {
                     PresentedRow::Tree(n) => {
                         let row = &logical[*n];
-                        v_flex().children(this.render_tree_row(row, row_decoration(&decor, &row.entry), window, cx))
+                        v_flex()
+                            .children(this.render_tree_row(
+                                row,
+                                row_decoration(&decor, &row.entry),
+                                window,
+                                cx,
+                            ))
                             .into_any_element()
                     }
                     PresentedRow::Names(found) => search_section_heading(
-                        t(L10nKey::PanelFilesNameMatches), Some(found.to_string()), cx),
+                        t(L10nKey::PanelFilesNameMatches),
+                        Some(found.to_string()),
+                        cx,
+                    ),
                     PresentedRow::Contents(row) => this.render_panel_search_row(row, cx),
                     PresentedRow::Gap => div().h(px(SEARCH_SECTION_GAP)).into_any_element(),
-                    PresentedRow::Blank => div().px(px(ROW_INSET)).py_4().text_xs()
+                    PresentedRow::Blank => div()
+                        .px(px(ROW_INSET))
+                        .py_4()
+                        .text_xs()
                         .text_color(cx.theme().muted_foreground)
-                        .child(t(L10nKey::OpenFileFromTree)).into_any_element(),
+                        .child(t(L10nKey::OpenFileFromTree))
+                        .into_any_element(),
                 };
                 // List owns scrolling; each measured item owns horizontal inset.
                 div().px(px(CONTENT_INSET)).child(child).into_any_element()
-            }).unwrap_or_else(|_| div().into_any_element())
-        }).size_full().pb(px(TREE_PAD_BOTTOM));
+            })
+            .unwrap_or_else(|_| div().into_any_element())
+        })
+        .size_full()
+        .pb(px(TREE_PAD_BOTTOM));
         let app = cx.entity().downgrade();
         let font = cx.theme().font_family.clone();
         let previous_geometry = self.file_tree.geometry.clone();
-        let geometry = gpui_kit::canvas(|_, _, _| (), move |bounds, _, window, cx| {
-            let key = (bounds.size.width, window.rem_size(), font.clone());
-            if previous_geometry.as_ref() == Some(&key) {
-                return;
-            }
-            let app = app.clone();
-            cx.defer(move |cx| {
-                let _ = app.update(cx, |app, cx| {
-                    if app.file_tree.geometry.as_ref() != Some(&key) {
-                        app.file_tree.geometry = Some(key);
-                        // GPUI invalidates sizes when width changes. Seed lazy
-                        // extents again after that layout; never measure_all.
-                        app.file_tree.list.remeasure();
-                        app.file_tree.list.clone().with_uniform_item_height(px(TREE_ROW_H));
-                        cx.notify();
-                    }
+        let geometry = gpui_kit::canvas(
+            |_, _, _| (),
+            move |bounds, _, window, cx| {
+                let key = (bounds.size.width, window.rem_size(), font.clone());
+                if previous_geometry.as_ref() == Some(&key) {
+                    return;
+                }
+                let app = app.clone();
+                cx.defer(move |cx| {
+                    let _ = app.update(cx, |app, cx| {
+                        if app.file_tree.geometry.as_ref() != Some(&key) {
+                            app.file_tree.geometry = Some(key);
+                            // GPUI invalidates sizes when width changes. Seed lazy
+                            // extents again after that layout; never measure_all.
+                            app.file_tree.list.remeasure();
+                            app.file_tree
+                                .list
+                                .clone()
+                                .with_uniform_item_height(px(TREE_ROW_H));
+                            cx.notify();
+                        }
+                    });
                 });
-            });
-        }).absolute().inset_0();
+            },
+        )
+        .absolute()
+        .inset_0();
         let column = v_flex()
             .id("right-panel-tree-rows")
             .relative()
@@ -1751,7 +1801,9 @@ impl LyrelApp {
                     column.test_support()
                 }
                 #[cfg(not(test))]
-                { column }
+                {
+                    column
+                }
             })
             .track_focus(&self.file_tree.focus_handle)
             .on_key_down(cx.listener(|this, ev: &KeyDownEvent, window, cx| {
@@ -1805,7 +1857,6 @@ impl LyrelApp {
         order_innermost_first(&mut decor);
         decor
     }
-
 
     fn render_tree_row(
         &self,

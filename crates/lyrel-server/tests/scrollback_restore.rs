@@ -171,7 +171,10 @@ impl Instance {
     /// new shell, asked to open showing what the dead one had.
     fn spawn_restoring(&self, dead: u64) -> (u64, Vec<u8>) {
         let (pane_id, segments) = self.spawn_restoring_segments(dead);
-        (pane_id, segments.into_iter().flat_map(|s| s.bytes).collect())
+        (
+            pane_id,
+            segments.into_iter().flat_map(|s| s.bytes).collect(),
+        )
     }
 
     fn spawn_restoring_segments(
@@ -423,7 +426,7 @@ fn a_screen_comes_back_when_the_tree_still_names_its_pane() {
 /// suffix, including cuts through UTF-8/escape bytes, at the original sizes.
 #[test]
 fn a_bounded_restart_preserves_the_live_replay_suffix_and_geometry() {
-    use lyrel_core::daemon::scrollback::{Segment, SNAPSHOT_CAP, decode, trim_to};
+    use lyrel_core::daemon::scrollback::{SNAPSHOT_CAP, Segment, decode, trim_to};
 
     let instance = Instance::new();
     let running = instance.start();
@@ -454,14 +457,13 @@ fn a_bounded_restart_preserves_the_live_replay_suffix_and_geometry() {
     #[cfg(unix)]
     args.push(script_path.to_str().unwrap().into());
     #[cfg(windows)]
-    args.push(
-        std::fs::read_to_string(&script_path)
-            .unwrap()
-            .replace(
-                "$PSScriptRoot",
-                &format!("'{}'", instance.path().display().to_string().replace('\'', "''")),
-            ),
-    );
+    args.push(std::fs::read_to_string(&script_path).unwrap().replace(
+        "$PSScriptRoot",
+        &format!(
+            "'{}'",
+            instance.path().display().to_string().replace('\'', "''")
+        ),
+    ));
     let mut session = instance
         .panes()
         .spawn(
@@ -481,17 +483,16 @@ fn a_bounded_restart_preserves_the_live_replay_suffix_and_geometry() {
     collect_until(&mut session, b"READY_FOR_OUTPUT");
     session.input(b"1\r").unwrap();
     collect_until(&mut session, b"FIRST_OUTPUT_DONE");
-    let narrow = WinSize {
-        cols: 71,
-        ..size()
-    };
+    let narrow = WinSize { cols: 71, ..size() };
     session.resize(narrow).unwrap();
     session.input(b"2\r").unwrap();
     collect_until(&mut session, b"SECOND_OUTPUT_DONE");
     session.detach().unwrap();
 
     let mut fresh = instance.panes().attach(pane, narrow).unwrap();
-    fresh.set_recv_timeout(Some(Duration::from_secs(2))).unwrap();
+    fresh
+        .set_recv_timeout(Some(Duration::from_secs(2)))
+        .unwrap();
     let mut geometry = size();
     let mut expected = Vec::new();
     while let Ok(msg) = fresh.recv() {

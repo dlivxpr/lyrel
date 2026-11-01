@@ -76,9 +76,15 @@ impl LyrelApp {
         cx: &App,
     ) -> Rc<Vec<PresentedRow>> {
         let edit = self.file_tree.editing.as_ref().map(|edit| match edit {
-            TreeEdit::NewFile { dir, input } => (TreeEditKind::NewFile, dir.clone(), input.entity_id()),
-            TreeEdit::NewFolder { dir, input } => (TreeEditKind::NewFolder, dir.clone(), input.entity_id()),
-            TreeEdit::Rename { path, input } => (TreeEditKind::Rename, path.clone(), input.entity_id()),
+            TreeEdit::NewFile { dir, input } => {
+                (TreeEditKind::NewFile, dir.clone(), input.entity_id())
+            }
+            TreeEdit::NewFolder { dir, input } => {
+                (TreeEditKind::NewFolder, dir.clone(), input.entity_id())
+            }
+            TreeEdit::Rename { path, input } => {
+                (TreeEditKind::Rename, path.clone(), input.entity_id())
+            }
         });
         if let Some(held) = &self.file_tree.layout
             && Rc::ptr_eq(&held.logical, &logical)
@@ -89,7 +95,9 @@ impl LyrelApp {
         }
         let mut rows = Vec::new();
         if searching && !logical.is_empty() {
-            rows.push(PresentedRow::Names(logical.iter().filter(|r| r.note.is_none()).count()));
+            rows.push(PresentedRow::Names(
+                logical.iter().filter(|r| r.note.is_none()).count(),
+            ));
         }
         if logical.is_empty() && !searching {
             rows.push(PresentedRow::Blank);
@@ -107,18 +115,29 @@ impl LyrelApp {
             }
             _ => a == b,
         };
-        let prefix = old.iter().zip(&rows).take_while(|(a, b)| same(a, b)).count();
+        let prefix = old
+            .iter()
+            .zip(&rows)
+            .take_while(|(a, b)| same(a, b))
+            .count();
         let rest = old.len().min(rows.len()) - prefix;
-        let suffix = old[old.len() - rest..].iter().rev()
+        let suffix = old[old.len() - rest..]
+            .iter()
+            .rev()
             .zip(rows[rows.len() - rest..].iter().rev())
-            .take_while(|(a, b)| same(a, b)).count();
+            .take_while(|(a, b)| same(a, b))
+            .count();
         // Splice preserves the logical top row when entries are inserted above
         // the viewport. Unlike reset, it does not undo deliberate scrolling.
         let list = &self.file_tree.list;
         let top = list.logical_scroll_top();
         let anchor = old.get(top.item_ix).and_then(|old| {
-            rows.iter().position(|row| same(old, row))
-                .map(|item_ix| gpui_kit::ListOffset { item_ix, offset_in_item: top.offset_in_item })
+            rows.iter()
+                .position(|row| same(old, row))
+                .map(|item_ix| gpui_kit::ListOffset {
+                    item_ix,
+                    offset_in_item: top.offset_in_item,
+                })
         });
         list.splice(prefix..old.len() - suffix, rows.len() - prefix - suffix);
         if held.is_some_and(|held| held.edit != edit) {
@@ -126,7 +145,9 @@ impl LyrelApp {
                 if let PresentedRow::Tree(n) = row {
                     let path = &logical[*n].entry.path;
                     if edit.as_ref().is_some_and(|(_, edited, _)| edited == path)
-                        || held.and_then(|held| held.edit.as_ref()).is_some_and(|(_, edited, _)| edited == path)
+                        || held
+                            .and_then(|held| held.edit.as_ref())
+                            .is_some_and(|(_, edited, _)| edited == path)
                     {
                         // The same domain row now measures a different height.
                         list.splice(ix..ix + 1, 1);
@@ -161,7 +182,12 @@ impl LyrelApp {
             list.scroll_to(gpui_kit::ListOffset { item_ix: ix, offset_in_item: px(0.) });
         }
         let rows = Rc::new(rows);
-        self.file_tree.layout = Some(TreeLayout { logical, contents, edit, rows: Rc::clone(&rows) });
+        self.file_tree.layout = Some(TreeLayout {
+            logical,
+            contents,
+            edit,
+            rows: Rc::clone(&rows),
+        });
         rows
     }
 }

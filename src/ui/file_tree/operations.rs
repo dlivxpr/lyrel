@@ -19,7 +19,12 @@ impl LyrelApp {
     ) {
         let host = self.spawn_host(cx);
         let Some(code) = self.tab_code() else { return };
-        let rows = self.file_tree.logical_rows(host, &code.roots, &code.expanded, self.file_tree_searching(cx));
+        let rows = self.file_tree.logical_rows(
+            host,
+            &code.roots,
+            &code.expanded,
+            self.file_tree_searching(cx),
+        );
         if let Some(code) = self.tab_code_mut() {
             code.selected.click(
                 host,
@@ -167,8 +172,15 @@ impl LyrelApp {
                 }
                 "a" => {
                     let host = self.spawn_host(cx);
-                    let Some(code) = self.tab_code() else { return true };
-                    let rows = self.file_tree.logical_rows(host, &code.roots, &code.expanded, self.file_tree_searching(cx));
+                    let Some(code) = self.tab_code() else {
+                        return true;
+                    };
+                    let rows = self.file_tree.logical_rows(
+                        host,
+                        &code.roots,
+                        &code.expanded,
+                        self.file_tree_searching(cx),
+                    );
                     if let Some(code) = self.tab_code_mut() {
                         code.selected.clear();
                         for row in rows.iter() {

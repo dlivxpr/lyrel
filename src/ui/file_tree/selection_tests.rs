@@ -129,7 +129,10 @@ fn keyboard_range_selection_reveals_offscreen_files_and_keeps_them_operable(
         assert!(row.bottom() <= window.viewport_size().height);
     });
     key(&mut vcx, "up");
-    assert_eq!(selected(&app, &mut vcx), vec![root.path().join("file-158.txt")]);
+    assert_eq!(
+        selected(&app, &mut vcx),
+        vec![root.path().join("file-158.txt")]
+    );
     key(&mut vcx, "enter");
     wait(&mut vcx, |vcx| {
         app.read_with(vcx, |app, _| app.tab_code().unwrap().active_id().is_some())
@@ -157,7 +160,11 @@ fn inline_creation_and_rename_at_the_viewport_edge_keep_the_intended_directory(
     vcx.update(|window, cx| window.right_click(id(&destination), cx));
     menu_item(&mut vcx, L10nKey::FileTreeContextNewFile);
     vcx.update(|window, cx| {
-        window.scroll("right-panel-tree-rows", gpui_kit::ScrollDelta::Pixels(gpui_kit::point(px(0.), px(100_000.))), cx);
+        window.scroll(
+            "right-panel-tree-rows",
+            gpui_kit::ScrollDelta::Pixels(gpui_kit::point(px(0.), px(100_000.))),
+            cx,
+        );
         window.input("created.txt", cx);
     });
     key(&mut vcx, "enter");
@@ -194,7 +201,11 @@ fn external_drop_targets_the_scrolled_empty_directory_not_its_neighbor(cx: &mut 
     key(&mut vcx, "right");
     settle(&app, &mut vcx, root.path());
     let position = vcx.update(|window, cx| {
-        window.scroll("right-panel-tree-rows", gpui_kit::ScrollDelta::Pixels(gpui_kit::point(px(0.), px(-200.))), cx);
+        window.scroll(
+            "right-panel-tree-rows",
+            gpui_kit::ScrollDelta::Pixels(gpui_kit::point(px(0.), px(-200.))),
+            cx,
+        );
         window.render_frame(cx);
         let row = window.find(id(&destination)).bounds();
         // The note immediately below the last directory is its empty child
@@ -207,7 +218,10 @@ fn external_drop_targets_the_scrolled_empty_directory_not_its_neighbor(cx: &mut 
     });
     vcx.simulate_event(gpui_kit::FileDropEvent::Submit { position });
     wait(&mut vcx, |_| destination.join("payload.txt").exists());
-    assert_eq!(std::fs::read_to_string(destination.join("payload.txt")).unwrap(), "drop bytes");
+    assert_eq!(
+        std::fs::read_to_string(destination.join("payload.txt")).unwrap(),
+        "drop bytes"
+    );
     assert!(payload.exists());
     assert!(!root.path().join("payload.txt").exists());
     assert!(!root.path().join("dir-078/payload.txt").exists());
@@ -216,7 +230,11 @@ fn external_drop_targets_the_scrolled_empty_directory_not_its_neighbor(cx: &mut 
     std::fs::write(&background, "root bytes").unwrap();
     let position = vcx.update(|window, cx| {
         window.render_frame(cx);
-        window.scroll("right-panel-tree-rows", gpui_kit::ScrollDelta::Pixels(gpui_kit::point(px(0.), px(-100_000.))), cx);
+        window.scroll(
+            "right-panel-tree-rows",
+            gpui_kit::ScrollDelta::Pixels(gpui_kit::point(px(0.), px(-100_000.))),
+            cx,
+        );
         window.render_frame(cx);
         let bounds = window.find("right-panel-tree-rows").bounds();
         gpui_kit::point(bounds.center().x, bounds.bottom() - px(4.))
@@ -227,7 +245,10 @@ fn external_drop_targets_the_scrolled_empty_directory_not_its_neighbor(cx: &mut 
     });
     vcx.simulate_event(gpui_kit::FileDropEvent::Submit { position });
     wait(&mut vcx, |_| root.path().join("background.txt").exists());
-    assert_eq!(std::fs::read_to_string(root.path().join("background.txt")).unwrap(), "root bytes");
+    assert_eq!(
+        std::fs::read_to_string(root.path().join("background.txt")).unwrap(),
+        "root bytes"
+    );
     assert!(!destination.join("background.txt").exists());
 }
 
@@ -244,11 +265,15 @@ fn late_ancestor_listing_reveals_the_file_and_external_insertions_keep_the_scrol
     }
     let target = nested.join("file-090.txt");
     let (app, mut vcx, _pane) = files_panel_on(cx, root.path());
-    app.update_in(&mut vcx, |app, window, cx| app.file_tree_show(&target, window, cx));
+    app.update_in(&mut vcx, |app, window, cx| {
+        app.file_tree_show(&target, window, cx)
+    });
     wait(&mut vcx, |vcx| {
         vcx.update(|window, cx| {
             window.render_frame(cx);
-            window.try_find(id(&target)).is_some_and(|row| row.visible())
+            window
+                .try_find(id(&target))
+                .is_some_and(|row| row.visible())
         })
     });
     settle(&app, &mut vcx, root.path());
@@ -264,7 +289,11 @@ fn late_ancestor_listing_reveals_the_file_and_external_insertions_keep_the_scrol
         window.render_frame(cx);
         assert_eq!(window.find(id(&target)).bounds().origin.y, before.origin.y);
         // A deliberate scroll must not be pulled back by a completed reveal.
-        window.scroll("right-panel-tree-rows", gpui_kit::ScrollDelta::Pixels(gpui_kit::point(px(0.), px(100_000.))), cx);
+        window.scroll(
+            "right-panel-tree-rows",
+            gpui_kit::ScrollDelta::Pixels(gpui_kit::point(px(0.), px(100_000.))),
+            cx,
+        );
         window.render_frame(cx);
         assert!(window.try_find(id(&target)).is_none());
     });
@@ -272,7 +301,9 @@ fn late_ancestor_listing_reveals_the_file_and_external_insertions_keep_the_scrol
 }
 
 #[gpui_kit::test]
-fn project_switches_show_fresh_rows_without_reusing_another_projects_files(cx: &mut TestAppContext) {
+fn project_switches_show_fresh_rows_without_reusing_another_projects_files(
+    cx: &mut TestAppContext,
+) {
     let _serial = serial();
     let first = temp();
     let second = temp();
@@ -282,19 +313,29 @@ fn project_switches_show_fresh_rows_without_reusing_another_projects_files(cx: &
     std::fs::write(&second_file, "second bytes").unwrap();
     let (app, mut vcx, mut pane) = files_panel_on(cx, first.path());
     for round in 0..3 {
-        crate::daemon::protocol::DaemonMsg::Cwd(second.path().to_path_buf()).encode(&mut pane).unwrap();
-        wait(&mut vcx, |vcx| vcx.update(|window, cx| {
-            window.render_frame(cx);
-            window.try_find(id(&second_file)).is_some_and(|row| row.visible())
-        }));
+        crate::daemon::protocol::DaemonMsg::Cwd(second.path().to_path_buf())
+            .encode(&mut pane)
+            .unwrap();
+        wait(&mut vcx, |vcx| {
+            vcx.update(|window, cx| {
+                window.render_frame(cx);
+                window
+                    .try_find(id(&second_file))
+                    .is_some_and(|row| row.visible())
+            })
+        });
         vcx.update(|window, _| assert!(window.try_find(id(&first_file)).is_none()));
         let added = first.path().join(format!("external-{round}.txt"));
         std::fs::write(&added, "changed while inactive").unwrap();
-        crate::daemon::protocol::DaemonMsg::Cwd(first.path().to_path_buf()).encode(&mut pane).unwrap();
-        wait(&mut vcx, |vcx| vcx.update(|window, cx| {
-            window.render_frame(cx);
-            window.try_find(id(&added)).is_some_and(|row| row.visible())
-        }));
+        crate::daemon::protocol::DaemonMsg::Cwd(first.path().to_path_buf())
+            .encode(&mut pane)
+            .unwrap();
+        wait(&mut vcx, |vcx| {
+            vcx.update(|window, cx| {
+                window.render_frame(cx);
+                window.try_find(id(&added)).is_some_and(|row| row.visible())
+            })
+        });
         vcx.update(|window, _| {
             assert!(window.find(id(&first_file)).visible());
             assert!(window.try_find(id(&second_file)).is_none());
