@@ -3220,6 +3220,118 @@ mod render_idle_gpui_tests {
     }
 
     #[gpui_kit::test]
+    fn unchanged_refresh_stays_quiet_but_external_changes_reach_the_panel(cx: &mut TestAppContext) {
+        let _serial = serial();
+        let temp = tempfile::tempdir().unwrap();
+        let root = lyrel_core::core::path_spelling::local_spelling_buf(
+            std::fs::canonicalize(temp.path()).unwrap(),
+        );
+        git(&root, &["init", "--quiet"]);
+        std::fs::write(root.join("before.txt"), "before\n").unwrap();
+        let (app, mut vcx, _pane) = scm_panel_on(cx, &root, |app, cx| {
+            app.scm.pane_repo().is_some_and(|repo| {
+                status_of(cx, repo.host, &repo.root)
+                    .is_some_and(|status| status.untracked().count() == 1)
+            })
+        });
+        let (repo, host, _) = app.update_in(&mut vcx, |app, _, cx| {
+            app.scm.repository_context(cx).unwrap().into_parts()
+        });
+
+        // Render quiescence alone does not mean the real Host read has
+        // finished: an equal result can land without drawing. Drain that
+        // setup work before bumping its epoch, or the bump supersedes it and
+        // the retry waits on a virtual debounce timer while the measured
+        // loop below deliberately advances only real time.
+        let deadline = Instant::now() + Duration::from_secs(30);
+        let mut fresh_since = None;
+        loop {
+            render_probe::arm(BUDGET);
+            vcx.executor().advance_clock(Duration::from_millis(300));
+            vcx.run_until_parked();
+            let fresh = vcx.update(|_, cx| {
+                let data = cx.global::<crate::terminal::git_data::ScmData>();
+                !data.is_stale(repo.host, &repo.root)
+                    && !data.is_change_pending(repo.host, &repo.root)
+            });
+            if fresh && render_probe::draws() == 0 {
+                if fresh_since.get_or_insert_with(Instant::now).elapsed()
+                    >= Duration::from_millis(400)
+                {
+                    break;
+                }
+            } else {
+                fresh_since = None;
+            }
+            assert!(Instant::now() < deadline, "SCM setup never became fresh");
+            std::thread::sleep(Duration::from_millis(20));
+        }
+
+        // A completed status read is not itself a content change. Exercise
+        // the real Host probe, not a hand-inserted cache value.
+        for _ in 0..3 {
+            render_probe::arm(BUDGET);
+            let requested_epoch = app.update_in(&mut vcx, |app, _, cx| {
+                let data = cx.global_mut::<crate::terminal::git_data::ScmData>();
+                data.bump(repo.host, &repo.root);
+                let epoch = data.epoch(repo.host, &repo.root);
+                app.scm_refresh(host.clone(), repo.root.clone(), cx);
+                epoch
+            });
+            let deadline = Instant::now() + Duration::from_secs(30);
+            loop {
+                vcx.run_until_parked();
+                if vcx.update(|_, cx| {
+                    !cx.global::<crate::terminal::git_data::ScmData>()
+                        .is_stale(repo.host, &repo.root)
+                }) {
+                    break;
+                }
+                assert!(
+                    Instant::now() < deadline,
+                    "the refresh never completed: requested epoch={requested_epoch}, current={:?}",
+                    vcx.update(|_, cx| {
+                        let data = cx.global::<crate::terminal::git_data::ScmData>();
+                        (
+                            data.epoch(repo.host, &repo.root),
+                            data.is_stale(repo.host, &repo.root),
+                            data.is_change_pending(repo.host, &repo.root),
+                            data.is_subscribed(repo.host, &repo.root),
+                        )
+                    })
+                );
+                std::thread::sleep(Duration::from_millis(20));
+            }
+            vcx.run_until_parked();
+            assert_eq!(render_probe::draws(), 0, "unchanged status owes no frame");
+        }
+
+        // Keeping an equal snapshot must not suppress the next real change,
+        // including the decoration index consumed by the Files panel.
+        std::fs::write(root.join("after.txt"), "after\n").unwrap();
+        app.update_in(&mut vcx, |app, _, cx| {
+            cx.global_mut::<crate::terminal::git_data::ScmData>()
+                .bump(repo.host, &repo.root);
+            app.scm_refresh(host.clone(), repo.root.clone(), cx);
+        });
+        let deadline = Instant::now() + Duration::from_secs(30);
+        loop {
+            vcx.run_until_parked();
+            if vcx.debug_bounds("scm-row-Untracked-after.txt").is_some() {
+                break;
+            }
+            assert!(Instant::now() < deadline, "the new change never appeared");
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        vcx.update(|_, cx| {
+            let status = status_of(cx, repo.host, &repo.root).unwrap();
+            assert_eq!(status.total_entries, 2);
+            let index = crate::terminal::git_data::index_of(cx, repo.host, &repo.root).unwrap();
+            assert_eq!(index.file("after.txt"), Some(DecoStatus::Untracked));
+        });
+    }
+
+    #[gpui_kit::test]
     fn a_directory_with_no_repository_reaches_render_idle(cx: &mut TestAppContext) {
         let _serial = serial();
         let root = scratch("bare");

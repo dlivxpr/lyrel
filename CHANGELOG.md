@@ -9,6 +9,11 @@
 
 ### 修复
 
+- 文件树及文件名／内容搜索按视口和有界预渲染区构建行，保留完整逻辑列表、跨屏选择、异步定位与 Host 文件操作；行内创建／重命名输入的键盘事件不再串到树导航。
+- Windows pane 列表在一次请求内共享新鲜进程表，将昂贵探测移出 registry 锁；ID／存活维护路径不查询前景标题，不将显示快照用于安全授权。
+- 终端持久化直接复制现有 256 KiB 存储后缀，避免先克隆完整 8 MiB 回放；保留字节、几何、标题与标记的一致性，以及 live attachment／Unix handoff 语义。
+- SCM 无变化刷新复用状态和文件装饰；编辑器导航按 Rope 分块比较未变化文本，保留 Unicode、多行差异、撤销／重做与外部刷新行为。性能及原生验收按独立工单记录，不将局部归因或自动测试视作完整跨平台通过。
+
 - omp 的公开 `PI_FORCE_IMAGE_PROTOCOL`、Kitty placeholder opt-in／硬关闭项沿用非敏感启动上下文，在新启动和原生恢复中保持显式图片策略；不覆盖 `terminal.showImages: false`、不伪造终端身份、不修改全局 agent 配置。修复 Windows 快捷启动将字面量环境前缀当命令执行，以及恢复命令将子进程图片策略遗留在父 shell 的路径。
 - 补充 released omp 原生 `--resume` 的隔离合成会话与生产消费者用例，覆盖 assistant／toolResult 图片、原生 SVG 栅格图、8 张上游 cap 删除与显式关闭。正式 `18.14.0` 的中央三图几何／关闭策略及独立八图预算回归通过；Windows 原生八图身份、旧图 demotion、滚动及两种关闭策略通过，三轮审计均消息未增、零请求／模型用量。上游 `18.14.0`／`18.14.1` 的 assistant 按 content slot 共享 key，跨消息同 slot 会碰撞；预算夹具使用同一正式消息的不同 slot，不修改代理或生产 renderer，不宣称绕过此上游限制。最终 integration 另以正式 `18.14.1` 通过三项真实 PTY／生产消费者和零推理审计；18.14.1 原生窗口、真实 SSH agent 组合未执行，macOS（#152）延期。
 - pi 图片接入（#149）区分 `earendil-works/pi` 与 omp，将公开 `PI_IMAGE_PROTOCOL` 纳入既有 Host／启动／会话 scope 与 Pi hook 报告，恢复时保留显式 `none`，不自动覆盖 `terminal.images=false` 或 `terminal.showImages=false`。正式 `1.4.0` 的真实 PTY／rooted 卡片像素和几何、删除／重挂载／重传及显式关闭优先级回归通过；Windows 原生二十图合成会话两轮重放、历史导航、删除、零新增消息与四种图片策略通过。无新 prompt／推理、不读私人历史；macOS 与真实 SSH 的 agent 组合仍待对应集成验收。

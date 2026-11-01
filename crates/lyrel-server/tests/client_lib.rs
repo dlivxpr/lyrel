@@ -418,7 +418,13 @@ fn pane_lists_keep_fresh_foreground_titles_associated_during_other_pane_exits() 
         )
         .unwrap();
     let mut second = panes
-        .spawn(None, size(), Some(interactive_shell()), Some("metadata-second".into()), None)
+        .spawn(
+            None,
+            size(),
+            Some(interactive_shell()),
+            Some("metadata-second".into()),
+            None,
+        )
         .unwrap();
     first.set_recv_timeout(Some(STREAM_WITHIN)).unwrap();
     second.set_recv_timeout(Some(STREAM_WITHIN)).unwrap();
@@ -426,26 +432,42 @@ fn pane_lists_keep_fresh_foreground_titles_associated_during_other_pane_exits() 
     let second_id = second.pane_id();
     // ConPTY may insert OSC titles between the newline and command output.
     // Split each marker in the command so its echo cannot satisfy readiness.
-    first.input(if cfg!(windows) {
-        b"echo LYREL_FIRST_REA^DY\r"
-    } else {
-        b"printf 'LYREL_FIRST_%s\\n' READY\r"
-    }).unwrap();
+    first
+        .input(if cfg!(windows) {
+            b"echo LYREL_FIRST_REA^DY\r"
+        } else {
+            b"printf 'LYREL_FIRST_%s\\n' READY\r"
+        })
+        .unwrap();
     assert!(collect_until(&mut first, b"LYREL_FIRST_READY\r\n").1.is_none());
-    second.input(if cfg!(windows) {
-        b"echo LYREL_SECOND_REA^DY\r"
-    } else {
-        b"printf 'LYREL_SECOND_%s\\n' READY\r"
-    }).unwrap();
+    second
+        .input(if cfg!(windows) {
+            b"echo LYREL_SECOND_REA^DY\r"
+        } else {
+            b"printf 'LYREL_SECOND_%s\\n' READY\r"
+        })
+        .unwrap();
     assert!(collect_until(&mut second, b"LYREL_SECOND_READY\r\n").1.is_none());
     let initial = panes.list().unwrap();
-    let idle_title = initial.iter().find(|p| p.pane_id == first_id).unwrap().title.clone();
-    let second_title = initial.iter().find(|p| p.pane_id == second_id).unwrap().title.clone();
-    first.input(if cfg!(windows) {
-        b"ping.exe -t 127.0.0.1\r"
-    } else {
-        b"sleep 60\r"
-    }).unwrap();
+    let idle_title = initial
+        .iter()
+        .find(|p| p.pane_id == first_id)
+        .unwrap()
+        .title
+        .clone();
+    let second_title = initial
+        .iter()
+        .find(|p| p.pane_id == second_id)
+        .unwrap()
+        .title
+        .clone();
+    first
+        .input(if cfg!(windows) {
+            b"ping.exe -t 127.0.0.1\r"
+        } else {
+            b"sleep 60\r"
+        })
+        .unwrap();
     let foreground = if cfg!(windows) { "ping.exe" } else { "sleep" };
     let deadline = Instant::now() + STREAM_WITHIN;
     loop {
@@ -460,21 +482,32 @@ fn pane_lists_keep_fresh_foreground_titles_associated_during_other_pane_exits() 
         if a.title.eq_ignore_ascii_case(foreground) {
             break;
         }
-        assert!(Instant::now() < deadline, "foreground title never refreshed: {listed:?}");
+        assert!(
+            Instant::now() < deadline,
+            "foreground title never refreshed: {listed:?}"
+        );
         std::thread::sleep(Duration::from_millis(25));
     }
     std::thread::scope(|scope| {
         scope.spawn(|| {
             for _ in 0..8 {
-                let mut transient = panes.spawn(None, size(), Some(one_shot_shell("exit 0")), None, None).unwrap();
+                let mut transient = panes
+                    .spawn(None, size(), Some(one_shot_shell("exit 0")), None, None)
+                    .unwrap();
                 transient.set_recv_timeout(Some(STREAM_WITHIN)).unwrap();
                 drain_until_exit(&mut transient);
             }
         });
         for _ in 0..16 {
             let listed = panes.list().unwrap();
-            assert!(listed.iter().any(|p| p.pane_id == first_id && p.alive && p.title.eq_ignore_ascii_case(foreground)));
-            assert!(listed.iter().any(|p| p.pane_id == second_id && p.alive && p.title == second_title));
+            assert!(listed.iter().any(|p| p.pane_id == first_id
+                && p.alive
+                && p.title.eq_ignore_ascii_case(foreground)));
+            assert!(
+                listed
+                    .iter()
+                    .any(|p| p.pane_id == second_id && p.alive && p.title == second_title)
+            );
             panes.version().unwrap();
         }
     });
@@ -482,18 +515,30 @@ fn pane_lists_keep_fresh_foreground_titles_associated_during_other_pane_exits() 
     let deadline = Instant::now() + STREAM_WITHIN;
     loop {
         let listed = panes.list().unwrap();
-        if listed.iter().any(|p| p.pane_id == first_id && p.title == idle_title && p.alive) {
+        if listed
+            .iter()
+            .any(|p| p.pane_id == first_id && p.title == idle_title && p.alive)
+        {
             break;
         }
-        assert!(Instant::now() < deadline, "idle title never returned: {listed:?}");
+        assert!(
+            Instant::now() < deadline,
+            "idle title never returned: {listed:?}"
+        );
         std::thread::sleep(Duration::from_millis(25));
     }
-    first.input(if cfg!(windows) {
-        b"echo LYREL_METADATA_INPUT_STILL_WOR^KS\r"
-    } else {
-        b"printf 'LYREL_METADATA_INPUT_STILL_%s\\n' WORKS\r"
-    }).unwrap();
-    assert!(collect_until(&mut first, b"LYREL_METADATA_INPUT_STILL_WORKS\r\n").1.is_none());
+    first
+        .input(if cfg!(windows) {
+            b"echo LYREL_METADATA_INPUT_STILL_WOR^KS\r"
+        } else {
+            b"printf 'LYREL_METADATA_INPUT_STILL_%s\\n' WORKS\r"
+        })
+        .unwrap();
+    assert!(
+        collect_until(&mut first, b"LYREL_METADATA_INPUT_STILL_WORKS\r\n")
+            .1
+            .is_none()
+    );
     second.input(b"exit\r").unwrap();
     drain_until_exit(&mut second);
     let deadline = Instant::now() + STREAM_WITHIN;
@@ -503,7 +548,10 @@ fn pane_lists_keep_fresh_foreground_titles_associated_during_other_pane_exits() 
         if !listed.iter().any(|p| p.pane_id == second_id && p.alive) {
             break;
         }
-        assert!(Instant::now() < deadline, "exited pane remained alive: {listed:?}");
+        assert!(
+            Instant::now() < deadline,
+            "exited pane remained alive: {listed:?}"
+        );
         std::thread::sleep(Duration::from_millis(25));
     }
     panes.kill(first_id).unwrap();
@@ -521,16 +569,28 @@ fn pane_list_preserves_fresh_osc_titles_without_changing_foreground_metadata() {
             args_are_lyrel_defaults: false,
         }
     } else {
-        one_shot_shell("printf '\\033]0;first-osc\\007OSC_READY\\n'; read first; printf '\\033]0;second-osc\\007OSC_UPDATED\\n'; read second")
+        one_shot_shell(
+            "printf '\\033]0;first-osc\\007OSC_READY\\n'; read first; printf '\\033]0;second-osc\\007OSC_UPDATED\\n'; read second",
+        )
     };
     let mut session = panes.spawn(None, size(), Some(shell), None, None).unwrap();
     session.set_recv_timeout(Some(STREAM_WITHIN)).unwrap();
     assert!(collect_until(&mut session, b"OSC_READY").1.is_none());
-    let before = panes.list().unwrap().into_iter().find(|p| p.pane_id == session.pane_id()).unwrap();
+    let before = panes
+        .list()
+        .unwrap()
+        .into_iter()
+        .find(|p| p.pane_id == session.pane_id())
+        .unwrap();
     assert_eq!(before.osc_title.as_deref(), Some("first-osc"));
     session.input(b"update\r").unwrap();
     assert!(collect_until(&mut session, b"OSC_UPDATED").1.is_none());
-    let after = panes.list().unwrap().into_iter().find(|p| p.pane_id == session.pane_id()).unwrap();
+    let after = panes
+        .list()
+        .unwrap()
+        .into_iter()
+        .find(|p| p.pane_id == session.pane_id())
+        .unwrap();
     assert_eq!(after.osc_title.as_deref(), Some("second-osc"));
     assert_eq!(before.title, after.title);
     assert!(after.alive);
