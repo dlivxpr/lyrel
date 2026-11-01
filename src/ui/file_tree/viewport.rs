@@ -63,7 +63,7 @@ pub(super) enum PresentedRow {
 pub(super) struct TreeLayout {
     logical: Rc<Vec<TreeRow>>,
     contents: Rc<Vec<crate::ui::panel_search::PanelSearchRow>>,
-    edit: Option<(TreeEditKind, PathBuf)>,
+    edit: Option<(TreeEditKind, PathBuf, gpui_kit::EntityId)>,
     rows: Rc<Vec<PresentedRow>>,
 }
 
@@ -76,9 +76,9 @@ impl LyrelApp {
         cx: &App,
     ) -> Rc<Vec<PresentedRow>> {
         let edit = self.file_tree.editing.as_ref().map(|edit| match edit {
-            TreeEdit::NewFile { dir, .. } => (TreeEditKind::NewFile, dir.clone()),
-            TreeEdit::NewFolder { dir, .. } => (TreeEditKind::NewFolder, dir.clone()),
-            TreeEdit::Rename { path, .. } => (TreeEditKind::Rename, path.clone()),
+            TreeEdit::NewFile { dir, input } => (TreeEditKind::NewFile, dir.clone(), input.entity_id()),
+            TreeEdit::NewFolder { dir, input } => (TreeEditKind::NewFolder, dir.clone(), input.entity_id()),
+            TreeEdit::Rename { path, input } => (TreeEditKind::Rename, path.clone(), input.entity_id()),
         });
         if let Some(held) = &self.file_tree.layout
             && Rc::ptr_eq(&held.logical, &logical)
@@ -125,8 +125,8 @@ impl LyrelApp {
             for (ix, row) in rows.iter().enumerate() {
                 if let PresentedRow::Tree(n) = row {
                     let path = &logical[*n].entry.path;
-                    if edit.as_ref().is_some_and(|(_, edited)| edited == path)
-                        || held.and_then(|held| held.edit.as_ref()).is_some_and(|(_, edited)| edited == path)
+                    if edit.as_ref().is_some_and(|(_, edited, _)| edited == path)
+                        || held.and_then(|held| held.edit.as_ref()).is_some_and(|(_, edited, _)| edited == path)
                     {
                         // The same domain row now measures a different height.
                         list.splice(ix..ix + 1, 1);
@@ -151,7 +151,7 @@ impl LyrelApp {
         if let Some(anchor) = anchor {
             list.scroll_to(anchor);
         }
-        if let Some((_, path)) = &edit
+        if let Some((_, path, _)) = &edit
             && held.map(|held| &held.edit) != Some(&edit)
             && let Some(ix) = rows.iter().position(|row| matches!(row,
                 PresentedRow::Tree(n) if logical[*n].note.is_none() && logical[*n].entry.path == *path))

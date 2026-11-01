@@ -156,7 +156,10 @@ fn inline_creation_and_rename_at_the_viewport_edge_keep_the_intended_directory(
     assert_eq!(selected(&app, &mut vcx), vec![destination.clone()]);
     vcx.update(|window, cx| window.right_click(id(&destination), cx));
     menu_item(&mut vcx, L10nKey::FileTreeContextNewFile);
-    vcx.update(|window, cx| window.input("created.txt", cx));
+    vcx.update(|window, cx| {
+        window.scroll("right-panel-tree-rows", gpui_kit::ScrollDelta::Pixels(gpui_kit::point(px(0.), px(100_000.))), cx);
+        window.input("created.txt", cx);
+    });
     key(&mut vcx, "enter");
     wait(&mut vcx, |_| child.exists());
     settle(&app, &mut vcx, root.path());
@@ -266,6 +269,39 @@ fn late_ancestor_listing_reveals_the_file_and_external_insertions_keep_the_scrol
         assert!(window.try_find(id(&target)).is_none());
     });
     assert_eq!(selected(&app, &mut vcx), vec![target]);
+}
+
+#[gpui_kit::test]
+fn project_switches_show_fresh_rows_without_reusing_another_projects_files(cx: &mut TestAppContext) {
+    let _serial = serial();
+    let first = temp();
+    let second = temp();
+    let first_file = first.path().join("first.txt");
+    let second_file = second.path().join("second.txt");
+    std::fs::write(&first_file, "first bytes").unwrap();
+    std::fs::write(&second_file, "second bytes").unwrap();
+    let (app, mut vcx, mut pane) = files_panel_on(cx, first.path());
+    for round in 0..3 {
+        crate::daemon::protocol::DaemonMsg::Cwd(second.path().to_path_buf()).encode(&mut pane).unwrap();
+        wait(&mut vcx, |vcx| vcx.update(|window, cx| {
+            window.render_frame(cx);
+            window.try_find(id(&second_file)).is_some_and(|row| row.visible())
+        }));
+        vcx.update(|window, _| assert!(window.try_find(id(&first_file)).is_none()));
+        let added = first.path().join(format!("external-{round}.txt"));
+        std::fs::write(&added, "changed while inactive").unwrap();
+        crate::daemon::protocol::DaemonMsg::Cwd(first.path().to_path_buf()).encode(&mut pane).unwrap();
+        wait(&mut vcx, |vcx| vcx.update(|window, cx| {
+            window.render_frame(cx);
+            window.try_find(id(&added)).is_some_and(|row| row.visible())
+        }));
+        vcx.update(|window, _| {
+            assert!(window.find(id(&first_file)).visible());
+            assert!(window.try_find(id(&second_file)).is_none());
+        });
+        click(&mut vcx, &added, primary());
+        assert_eq!(selected(&app, &mut vcx), vec![added]);
+    }
 }
 
 #[gpui_kit::test]
