@@ -766,6 +766,84 @@ fn external_writes_scenario(cx: &mut TestAppContext, markdown: bool) {
 }
 
 #[gpui_kit::test]
+fn unchanged_text_refresh_preserves_selection_and_saved_undo_history(cx: &mut TestAppContext) {
+    use gpui_kit::component::input::{Redo, Undo};
+
+    let dir = canonical_tempdir();
+    let path = dir.path().join("unchanged.txt");
+    std::fs::write(&path, "alpha\nbeta\n").unwrap();
+    let (app, mut vcx, _streams) = harness_with_tabs(cx, 1);
+    app.update_in(&mut vcx, |app, window, cx| {
+        app.open_file_in_editor_at(&path, Some(1), Some(1), window, cx);
+    });
+    wait_until(&mut vcx, |vcx| {
+        app.read_with(vcx, |app, _| {
+            app.active_buffer().is_some_and(|file| file.path == path)
+                && app.editor.buffers.watch.is_some()
+        })
+    });
+    vcx.update(|window, cx| {
+        window.render_frame(cx);
+        window.input("NEW161", cx);
+    });
+    vcx.dispatch_action(crate::core::actions::EditorSave);
+    wait_until(&mut vcx, |vcx| {
+        app.read_with(vcx, |app, _| {
+            app.active_buffer()
+                .is_some_and(|file| !file.dirty && !file.saving)
+        })
+    });
+    assert_eq!(std::fs::read(&path).unwrap(), b"NEW161alpha\nbeta\n");
+    vcx.update(|window, cx| {
+        window.press("ctrl-home", cx);
+        for _ in 0..3 {
+            window.press("shift-right", cx);
+        }
+    });
+    let selection = app.read_with(&vcx, |app, cx| {
+        app.active_buffer().unwrap().input.read(cx).selected_range()
+    });
+    assert_eq!(selection, 0..3);
+
+    // A changed mtime requires a real Host read even though the bytes are
+    // identical. Wait for that version to land, not a fixed timer delay.
+    let modified = std::time::SystemTime::now() + Duration::from_secs(10);
+    std::fs::OpenOptions::new()
+        .write(true)
+        .open(&path)
+        .unwrap()
+        .set_modified(modified)
+        .unwrap();
+    let expected = MTime::from_system_time(std::fs::metadata(&path).unwrap().modified().unwrap());
+    wait_until(&mut vcx, |vcx| {
+        app.read_with(vcx, |app, _| {
+            app.active_buffer().unwrap().disk_mtime == Some(expected)
+        })
+    });
+    app.read_with(&vcx, |app, cx| {
+        let file = app.active_buffer().unwrap();
+        assert_eq!(file.input.read(cx).text().to_string(), "NEW161alpha\nbeta\n");
+        assert_eq!(file.input.read(cx).selected_range(), selection);
+        assert!(!file.dirty);
+        assert!(file.conflict.is_none());
+    });
+    vcx.dispatch_action(Undo);
+    vcx.run_until_parked();
+    app.read_with(&vcx, |app, cx| {
+        let file = app.active_buffer().unwrap();
+        assert_eq!(file.input.read(cx).text().to_string(), "alpha\nbeta\n");
+        assert!(file.dirty);
+    });
+    vcx.dispatch_action(Redo);
+    vcx.run_until_parked();
+    app.read_with(&vcx, |app, cx| {
+        let file = app.active_buffer().unwrap();
+        assert_eq!(file.input.read(cx).text().to_string(), "NEW161alpha\nbeta\n");
+        assert!(!file.dirty);
+    });
+}
+
+#[gpui_kit::test]
 fn an_open_finishing_after_its_tab_closed_does_not_land_in_the_next_tab(cx: &mut TestAppContext) {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("late.txt");
