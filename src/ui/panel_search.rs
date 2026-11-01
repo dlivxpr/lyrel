@@ -838,6 +838,11 @@ mod gpui_tests {
             .unwrap();
         }
         let target = root.join("needle-119.txt");
+        // LocalHost stores canonical paths in the normal local spelling, not
+        // std::fs::canonicalize's Windows verbatim-prefix spelling.
+        let expected_target = lyrel_core::core::path_spelling::local_spelling_buf(
+            std::fs::canonicalize(&target).unwrap(),
+        );
         let (app, mut vcx, _pane) = search_panel_on(cx, root);
         type_query(&app, &mut vcx, "needle");
         assert!(matches!(landed(&app, &mut vcx), Outcome::Found(_)));
@@ -862,14 +867,19 @@ mod gpui_tests {
         loop {
             vcx.background_executor.run_until_parked();
             if app.read_with(&vcx, |app, _| {
-                app.editor_active_location()
-                    .is_some_and(|(_, path)| path == target)
+                app.editor_active_location().is_some_and(|(host, path)| {
+                    host == crate::ui::host_ops::HostId::LOCAL && path == expected_target
+                })
             }) {
                 break;
             }
             assert!(
                 std::time::Instant::now() < deadline,
-                "the search hit opened the wrong file"
+                "the search hit opened the wrong file: expected {expected_target:?}, got {:?}",
+                app.read_with(&vcx, |app, _| {
+                    app.editor_active_location()
+                        .map(|(host, path)| (host, path.to_path_buf()))
+                })
             );
             std::thread::sleep(Duration::from_millis(10));
         }
