@@ -1157,6 +1157,13 @@ impl LyrelApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        // Inline inputs are descendants of this container, but their Enter,
+        // selection and navigation keys must never activate a tree row too.
+        // In particular, Enter must not collapse the create destination before
+        // the input's PressEnter finishes creating its child.
+        if !self.file_tree.focus_handle.is_focused(window) {
+            return;
+        }
         let host = self.spawn_host(cx);
         if self.file_tree_command_key(ev, window, cx) {
             cx.stop_propagation();
