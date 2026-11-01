@@ -172,6 +172,22 @@ fn inline_creation_and_rename_at_the_viewport_edge_keep_the_intended_directory(
     settle(&app, &mut vcx, root.path());
     assert!(!root.path().join("created.txt").exists());
     assert!(!root.path().join("dir-078/created.txt").exists());
+    // Creation completed while the user deliberately kept the tree scrolled
+    // away. Opening an editor does not request a tree reveal; scroll back to
+    // the directory before issuing the next row's context-menu command.
+    vcx.update(|window, cx| {
+        window.scroll(
+            "right-panel-tree-rows",
+            gpui_kit::ScrollDelta::Pixels(gpui_kit::point(px(0.), px(-100_000.))),
+            cx,
+        );
+    });
+    wait(&mut vcx, |vcx| {
+        vcx.update(|window, cx| {
+            window.render_frame(cx);
+            window.try_find(id(&child)).is_some_and(|row| row.visible())
+        })
+    });
     click(&mut vcx, &child, primary());
     vcx.update(|window, cx| window.right_click(id(&child), cx));
     menu_item(&mut vcx, L10nKey::FileTreeContextRename);
@@ -317,6 +333,10 @@ fn project_switches_show_fresh_rows_without_reusing_another_projects_files(
             .encode(&mut pane)
             .unwrap();
         wait(&mut vcx, |vcx| {
+            // files_cwd follows the foreground coordinator's cached cwd after
+            // startup. Drive its production timer, not only wall-clock sleep.
+            vcx.executor()
+                .advance_clock(std::time::Duration::from_millis(300));
             vcx.update(|window, cx| {
                 window.render_frame(cx);
                 window
@@ -331,6 +351,8 @@ fn project_switches_show_fresh_rows_without_reusing_another_projects_files(
             .encode(&mut pane)
             .unwrap();
         wait(&mut vcx, |vcx| {
+            vcx.executor()
+                .advance_clock(std::time::Duration::from_millis(300));
             vcx.update(|window, cx| {
                 window.render_frame(cx);
                 window.try_find(id(&added)).is_some_and(|row| row.visible())
