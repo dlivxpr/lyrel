@@ -1374,7 +1374,12 @@ mod tests {
 
     #[test]
     fn saved_places_survive_unicode_edits_across_different_rope_chunks() {
-        let before = Rope::from("一α😀\n".repeat(1500).as_str());
+        // Distinct lines make the saved place's identity unambiguous even when
+        // the exact multiline diff has to align edits at both ends of the file.
+        let source = (0..1500)
+            .map(|line| format!("{line}: 一α😀\n"))
+            .collect::<String>();
+        let before = Rope::from(source.as_str());
         let mut after = before.clone();
         after.insert(0, "prefix\n");
         let prefix_only = after.clone();
@@ -1394,7 +1399,13 @@ mod tests {
             let mut history = NavHistory::default();
             history.push(at("unicode.txt", from));
             history.shift(&at("unicode.txt", 0), &NavEdit::between(old, new));
-            assert_eq!(history.go_back(None), Some(at("unicode.txt", expected)));
+            assert_eq!(
+                history.go_back(None),
+                Some(at("unicode.txt", expected)),
+                "saved line {from} should follow its unchanged numbered content to {expected}; old/new bytes: {}/{}",
+                old.len(),
+                new.len(),
+            );
         }
     }
 
