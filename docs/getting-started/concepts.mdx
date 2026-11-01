@@ -400,7 +400,9 @@ $rIdX,$rIdY,$rIdW,$rIdH = (Read-Host '右条码 x,y,w,h') -split ',' |
   --session_name lyrel146 --delay 2 --timed 30 --terminate_after_timed
 ```
 
-WGC 输出条码而非整窗视频，保留其 QPC 合成 PTS。9.0.2 不支持 `dup_frames`；不要加 `-r` 或恒定帧率转换来补帧。若明确换成 9.1+，必须重新记录版本、核对行为并显式设置 `dup_frames=0`，不能将新版默认补帧当源图变化。
+WGC 输出条码而非整窗视频。[FFmpeg 9.0.2 的 `gfxcapture` 实现](https://github.com/FFmpeg/FFmpeg/blob/n9.0.2/libavfilter/vsrc_gfxcapture_winrt.cpp#L1459-L1463)在取得 `SystemRelativeTime` 后减去首帧时间，因此保存的 PTS 只有相对时间，`-copyts` 不能恢复 QPC epoch。它可用于图片变化间隔，不能直接与机器 QPC、输入调用或 UTC 相减来计算输入延迟。保留 `showinfo` 的源 PTS，并与可能量化的 framemd5 时间基准分开记录。
+
+9.0.2 不支持 `dup_frames`；不要加 `-r` 或恒定帧率转换来补帧。若明确换成 9.1+，必须重新记录版本、核对行为并显式设置 `dup_frames=0`，不能将新版默认补帧当源图变化。
 
 ```powershell
 $capture = "gfxcapture=hwnd=${hwnd}:max_framerate=240:" +
