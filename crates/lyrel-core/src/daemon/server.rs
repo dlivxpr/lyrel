@@ -96,7 +96,7 @@ impl Registry {
         // creation/exit can proceed; this has never promised an atomic view.
         let panes = self.all();
         let request = crate::daemon::pane::facts::MetadataRequest::default();
-        panes.iter().map(|pane| pane.info(&request)).collect()
+        panes.iter().map(|pane| pane.info_for_request(&request)).collect()
     }
 }
 

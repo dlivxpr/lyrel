@@ -1168,7 +1168,11 @@ impl DaemonPane {
         self.state.lock().unwrap().alive
     }
 
-    pub(crate) fn info(&self, request: &MetadataRequest) -> PaneInfo {
+    pub fn info(&self) -> PaneInfo {
+        self.info_for_request(&MetadataRequest::default())
+    }
+
+    pub(crate) fn info_for_request(&self, request: &MetadataRequest) -> PaneInfo {
         let (cwd, osc_title, alive) = {
             let st = self.state.lock().unwrap();
             (
