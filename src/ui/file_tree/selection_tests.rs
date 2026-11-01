@@ -199,16 +199,18 @@ fn inline_creation_and_rename_at_the_viewport_edge_keep_the_intended_directory(
     });
     key(&mut vcx, "enter");
     wait_for(&mut vcx, "creating dir-079/created.txt", |_| child.exists());
-    let expected_child = lyrel_core::core::path_spelling::local_spelling_buf(
-        std::fs::canonicalize(&child).unwrap(),
-    );
-    wait_for(&mut vcx, "opening the newly created file in the editor", |vcx| {
-        app.read_with(vcx, |app, _| {
-            app.editor_active_location().is_some_and(|(host, path)| {
-                host == HostId::LOCAL && path == expected_child
+    let expected_child =
+        lyrel_core::core::path_spelling::local_spelling_buf(std::fs::canonicalize(&child).unwrap());
+    wait_for(
+        &mut vcx,
+        "opening the newly created file in the editor",
+        |vcx| {
+            app.read_with(vcx, |app, _| {
+                app.editor_active_location()
+                    .is_some_and(|(host, path)| host == HostId::LOCAL && path == expected_child)
             })
-        })
-    });
+        },
+    );
     settle(&app, &mut vcx, root.path());
     assert!(!root.path().join("created.txt").exists());
     assert!(!root.path().join("dir-078/created.txt").exists());
