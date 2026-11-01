@@ -223,9 +223,11 @@ impl PaneBackend {
         foreground_cwd(&pty.master, pty.shell_pid)
     }
 
-    pub(super) fn foreground_title(&self) -> String {
+    pub(super) fn foreground_title(&self, request: &super::facts::MetadataRequest) -> String {
         self.pty()
-            .map(|pty| super::facts::probes::foreground_title(&pty.master, pty.shell_pid))
+            .map(|pty| {
+                super::facts::probes::foreground_title(&pty.master, pty.shell_pid, request)
+            })
             .unwrap_or_default()
     }
 
