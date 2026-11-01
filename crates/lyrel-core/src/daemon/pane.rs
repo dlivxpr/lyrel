@@ -1205,9 +1205,9 @@ impl DaemonPane {
     /// that stopped producing at that moment would keep the stale copy for
     /// good, because its mark would never move again.
     /// The mark alone, for deciding whether a snapshot is worth taking:
-    /// [`scrollback_snapshot`](Self::scrollback_snapshot) clones the whole
-    /// ring under the state lock, which is a lot to pay every tick for the
-    /// answer "nothing changed". A pane that moves between this read and the
+    /// [`scrollback_snapshot`](Self::scrollback_snapshot) copies the bounded
+    /// storage suffix under the state lock, which is still unnecessary every
+    /// tick for the answer "nothing changed". A pane that moves between this read and the
     /// snapshot is fine — the snapshot returns its own mark, and that pair is
     /// what gets recorded.
     pub fn scrollback_mark(&self) -> u64 {
@@ -1218,8 +1218,7 @@ impl DaemonPane {
         &self,
     ) -> (Vec<crate::daemon::scrollback::Segment>, Option<String>, u64) {
         let st = self.state.lock().unwrap();
-        let mut segments = st.ring.snapshot();
-        crate::daemon::scrollback::trim_to(&mut segments, crate::daemon::scrollback::SNAPSHOT_CAP);
+        let segments = st.ring.persistence_snapshot();
         (
             segments,
             st.facts.osc_title().map(str::to_owned),

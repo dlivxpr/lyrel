@@ -181,6 +181,8 @@ impl ReplayRing {
             .expect("ring always has a tail")
     }
 
+    /// Full live history for Unix process handoff, not disk persistence.
+    #[cfg_attr(not(unix), allow(dead_code))]
     pub(super) fn snapshot(&self) -> Vec<crate::daemon::scrollback::Segment> {
         self.segments
             .iter()
@@ -190,6 +192,35 @@ impl ReplayRing {
                 bytes: seg.to_vec(),
             })
             .collect()
+    }
+
+    /// Copy the same byte suffix as `snapshot` followed by `trim_to`, without
+    /// allocating the discarded live history. Storage deliberately keeps its
+    /// existing raw-byte cut; live replay's escape/UTF-8 boundary is unchanged.
+    pub(super) fn persistence_snapshot(&self) -> Vec<crate::daemon::scrollback::Segment> {
+        let mut skip = self
+            .len
+            .saturating_sub(crate::daemon::scrollback::SNAPSHOT_CAP);
+        let mut segments = Vec::new();
+        for seg in &self.segments {
+            if seg.bytes.is_empty() {
+                continue;
+            }
+            if skip >= seg.bytes.len() {
+                skip -= seg.bytes.len();
+                continue;
+            }
+            let (a, b) = seg.bytes.as_slices();
+            let mut bytes = Vec::with_capacity(seg.bytes.len() - skip);
+            bytes.extend_from_slice(&a[skip.min(a.len())..]);
+            bytes.extend_from_slice(&b[skip.saturating_sub(a.len())..]);
+            segments.push(crate::daemon::scrollback::Segment {
+                size: seg.size,
+                bytes,
+            });
+            skip = 0;
+        }
+        segments
     }
 
     fn tail(&mut self) -> &mut RingSegment {
@@ -596,5 +627,73 @@ mod tests {
                 .unwrap()
                 .ends_with("seg11 ")
         );
+    }
+
+    #[test]
+    fn persisted_suffix_replays_exact_bytes_and_geometry_at_each_cut() {
+        use crate::daemon::scrollback::{SNAPSHOT_CAP, decode, encode};
+
+        let boundary = "\x1b]133;C\x07下一步\x1b[31mend\x1b[0m".as_bytes();
+        for cut in 0..=boundary.len() {
+            let mut ring = ReplayRing::new(ws(100, 24));
+            // Force the storage cap (not the live replay cap) through every
+            // byte of an escape sequence and UTF-8 character.
+            ring.append(boundary);
+            ring.append(&vec![b'x'; SNAPSHOT_CAP - boundary.len() + cut - 4]);
+            ring.resize(ws(71, 30));
+            ring.append(b"tail");
+            // An empty current-size tail must not become a stored segment.
+            ring.resize(ws(90, 40));
+            let mark = ring.appended_mark();
+            let stored = ring.persistence_snapshot();
+            let (saved, title) = decode(&encode(&stored, Some("恢复标题"))).unwrap();
+            assert_eq!(title.as_deref(), Some("恢复标题"));
+            let restored = ReplayRing::seeded(saved, ws(90, 40));
+            let mut messages = Vec::new();
+            restored.replay(&mut |msg| messages.push(msg));
+            let mut first = boundary[cut..].to_vec();
+            first.extend(vec![b'x'; SNAPSHOT_CAP - boundary.len() + cut - 4]);
+            assert!(matches!(&messages[0], DaemonMsg::Size(s) if *s == ws(100, 24)));
+            assert!(
+                matches!(&messages[1], DaemonMsg::Snapshot(b) if *b == first),
+                "cut {cut}"
+            );
+            assert!(matches!(&messages[2], DaemonMsg::Size(s) if *s == ws(71, 30)));
+            assert!(matches!(&messages[3], DaemonMsg::Snapshot(b) if b == b"tail"));
+            assert!(matches!(&messages[4], DaemonMsg::Size(s) if *s == ws(90, 40)));
+            assert!(matches!(&messages[5], DaemonMsg::Snapshot(b) if b.is_empty()));
+            assert_eq!(messages.len(), 6);
+            assert_eq!(
+                ring.appended_mark(),
+                mark,
+                "saving must not consume live output"
+            );
+            assert!(
+                ring.flatten().starts_with(boundary),
+                "the live replay must remain complete"
+            );
+        }
+    }
+
+    #[test]
+    fn persisted_wrapped_history_keeps_both_deque_slices_in_order() {
+        use crate::daemon::scrollback::{SNAPSHOT_CAP, decode, encode};
+
+        let mut ring = ReplayRing::new(ws(80, 24));
+        ring.append(&vec![b'a'; RING_CAP]);
+        for _ in 0..64 {
+            ring.append(&vec![b'c'; SNAPSHOT_CAP / 2]);
+        }
+        ring.append(&vec![b'd'; SNAPSHOT_CAP / 2]);
+        let stored = ring.persistence_snapshot();
+        let (saved, _) = decode(&encode(&stored, None)).unwrap();
+        let restored = ReplayRing::seeded(saved, ws(80, 24));
+        let mut messages = Vec::new();
+        restored.replay(&mut |msg| messages.push(msg));
+        let mut expected = vec![b'c'; SNAPSHOT_CAP / 2];
+        expected.extend(vec![b'd'; SNAPSHOT_CAP / 2]);
+        assert!(matches!(&messages[0], DaemonMsg::Size(s) if *s == ws(80, 24)));
+        assert!(matches!(&messages[1], DaemonMsg::Snapshot(b) if *b == expected));
+        assert_eq!(messages.len(), 2);
     }
 }
