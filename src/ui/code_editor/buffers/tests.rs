@@ -767,7 +767,7 @@ fn external_writes_scenario(cx: &mut TestAppContext, markdown: bool) {
 
 #[gpui_kit::test]
 fn unchanged_text_refresh_preserves_selection_and_saved_undo_history(cx: &mut TestAppContext) {
-    use gpui_kit::component::input::{Redo, Undo};
+    use gpui_kit::component::input::{MoveToStart, Redo, Undo};
 
     let dir = canonical_tempdir();
     let path = dir.path().join("unchanged.txt");
@@ -794,8 +794,8 @@ fn unchanged_text_refresh_preserves_selection_and_saved_undo_history(cx: &mut Te
         })
     });
     assert_eq!(std::fs::read(&path).unwrap(), b"NEW161alpha\nbeta\n");
+    vcx.dispatch_action(MoveToStart);
     vcx.update(|window, cx| {
-        window.press("ctrl-home", cx);
         for _ in 0..3 {
             window.press("shift-right", cx);
         }
