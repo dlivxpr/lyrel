@@ -217,6 +217,25 @@ fn inline_creation_and_rename_at_the_viewport_edge_keep_the_intended_directory(
     // Creation completed while the user deliberately kept the tree scrolled
     // away. Opening an editor does not request a tree reveal; scroll back to
     // the directory before issuing the next row's context-menu command.
+    let before_scroll = app.update_in(&mut vcx, |app, _, cx| {
+        let code = app.tab_code().unwrap();
+        let rows = app.file_tree.logical_rows(
+            app.spawn_host(cx),
+            &code.roots,
+            &code.expanded,
+            app.file_tree_searching(cx),
+        );
+        format!(
+            "host={:?}, roots={:?}, parent_expanded={}, target_logical={:?}, count={}, scroll={:?}, geometry={:?}",
+            app.spawn_host(cx),
+            code.roots,
+            code.expanded.contains(&destination),
+            rows.iter().position(|row| row.note.is_none() && row.entry.path == child),
+            app.file_tree.list.item_count(),
+            app.file_tree.list.logical_scroll_top(),
+            app.file_tree.geometry,
+        )
+    });
     vcx.update(|window, cx| {
         window.scroll(
             "right-panel-tree-rows",
@@ -224,12 +243,25 @@ fn inline_creation_and_rename_at_the_viewport_edge_keep_the_intended_directory(
             cx,
         );
     });
+    let returning_to_child = std::time::Instant::now();
     wait_for(
         &mut vcx,
         "scrolling the created file back into view for rename",
         |vcx| {
             vcx.update(|window, cx| {
                 window.render_frame(cx);
+                if returning_to_child.elapsed() >= std::time::Duration::from_secs(20) {
+                    let visible: Vec<_> = window
+                        .find_all_by_role(gpui_kit::Role::TreeItem)
+                        .into_iter()
+                        .filter(|row| row.visible())
+                        .map(|row| (row.bounds(), row.label().map(str::to_owned)))
+                        .collect();
+                    let after_scroll = app.read(cx).file_tree.list.logical_scroll_top();
+                    panic!(
+                        "scrolling the created file back into view for rename never completed; before={before_scroll}; after_scroll={after_scroll:?}; visible={visible:?}"
+                    );
+                }
                 window.try_find(id(&child)).is_some_and(|row| row.visible())
             })
         },
