@@ -439,7 +439,11 @@ fn pane_lists_keep_fresh_foreground_titles_associated_during_other_pane_exits() 
             b"printf 'LYREL_FIRST_%s\\n' READY\r"
         })
         .unwrap();
-    assert!(collect_until(&mut first, b"LYREL_FIRST_READY\r\n").1.is_none());
+    assert!(
+        collect_until(&mut first, b"LYREL_FIRST_READY\r\n")
+            .1
+            .is_none()
+    );
     second
         .input(if cfg!(windows) {
             b"echo LYREL_SECOND_REA^DY\r"
@@ -447,7 +451,11 @@ fn pane_lists_keep_fresh_foreground_titles_associated_during_other_pane_exits() 
             b"printf 'LYREL_SECOND_%s\\n' READY\r"
         })
         .unwrap();
-    assert!(collect_until(&mut second, b"LYREL_SECOND_READY\r\n").1.is_none());
+    assert!(
+        collect_until(&mut second, b"LYREL_SECOND_READY\r\n")
+            .1
+            .is_none()
+    );
     let initial = panes.list().unwrap();
     let idle_title = initial
         .iter()
