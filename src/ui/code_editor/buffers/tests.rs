@@ -822,7 +822,10 @@ fn unchanged_text_refresh_preserves_selection_and_saved_undo_history(cx: &mut Te
     });
     app.read_with(&vcx, |app, cx| {
         let file = app.active_buffer().unwrap();
-        assert_eq!(file.input.read(cx).text().to_string(), "NEW161alpha\nbeta\n");
+        assert_eq!(
+            file.input.read(cx).text().to_string(),
+            "NEW161alpha\nbeta\n"
+        );
         assert_eq!(file.input.read(cx).selected_range(), selection);
         assert!(!file.dirty);
         assert!(file.conflict.is_none());
@@ -838,7 +841,10 @@ fn unchanged_text_refresh_preserves_selection_and_saved_undo_history(cx: &mut Te
     vcx.run_until_parked();
     app.read_with(&vcx, |app, cx| {
         let file = app.active_buffer().unwrap();
-        assert_eq!(file.input.read(cx).text().to_string(), "NEW161alpha\nbeta\n");
+        assert_eq!(
+            file.input.read(cx).text().to_string(),
+            "NEW161alpha\nbeta\n"
+        );
         assert!(!file.dirty);
     });
 }

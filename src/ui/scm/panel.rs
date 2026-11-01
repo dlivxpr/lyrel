@@ -3220,9 +3220,7 @@ mod render_idle_gpui_tests {
     }
 
     #[gpui_kit::test]
-    fn unchanged_refresh_stays_quiet_but_external_changes_reach_the_panel(
-        cx: &mut TestAppContext,
-    ) {
+    fn unchanged_refresh_stays_quiet_but_external_changes_reach_the_panel(cx: &mut TestAppContext) {
         let _serial = serial();
         let temp = tempfile::tempdir().unwrap();
         let root = lyrel_core::core::path_spelling::local_spelling_buf(
