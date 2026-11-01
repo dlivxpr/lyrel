@@ -131,14 +131,20 @@ impl LyrelApp {
         // the viewport. Unlike reset, it does not undo deliberate scrolling.
         let list = &self.file_tree.list;
         let top = list.logical_scroll_top();
-        let anchor = old.get(top.item_ix).and_then(|old| {
-            rows.iter()
-                .position(|row| same(old, row))
-                .map(|item_ix| gpui_kit::ListOffset {
-                    item_ix,
-                    offset_in_item: top.offset_in_item,
-                })
-        });
+        let anchor = if top.item_ix == 0 && top.offset_in_item == px(0.) {
+            // Pending rows may have no surviving identity. Inserting results
+            // must not move a reader at the origin to the end of the insertion.
+            Some(top)
+        } else {
+            old.get(top.item_ix).and_then(|old| {
+                rows.iter()
+                    .position(|row| same(old, row))
+                    .map(|item_ix| gpui_kit::ListOffset {
+                        item_ix,
+                        offset_in_item: top.offset_in_item,
+                    })
+            })
+        };
         list.splice(prefix..old.len() - suffix, rows.len() - prefix - suffix);
         if held.is_some_and(|held| held.edit != edit) {
             for (ix, row) in rows.iter().enumerate() {

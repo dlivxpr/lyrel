@@ -844,9 +844,35 @@ mod gpui_tests {
             std::fs::canonicalize(&target).unwrap(),
         );
         let (app, mut vcx, _pane) = search_panel_on(cx, root);
-        type_query(&app, &mut vcx, "needle");
+        vcx.update(|window, cx| window.input("needle", cx));
         assert!(matches!(landed(&app, &mut vcx), Outcome::Found(_)));
         assert_eq!(groups(&app, &mut vcx).len(), 120);
+        let first = target.with_file_name("needle-000.txt");
+        let first: SharedString = format!("tree-{}", first.display()).into();
+        let last: SharedString = format!("tree-{}", target.display()).into();
+        let deadline = std::time::Instant::now() + Duration::from_secs(20);
+        loop {
+            vcx.background_executor.run_until_parked();
+            let names_visible = vcx.update(|window, cx| {
+                window.render_frame(cx);
+                window.try_find(first.clone()).is_some() || window.try_find(last.clone()).is_some()
+            });
+            if names_visible {
+                break;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "file-name results never appeared"
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        vcx.update(|window, cx| {
+            window.render_frame(cx);
+            assert!(
+                window.try_find(first).is_some_and(|row| row.visible()),
+                "the first file-name match must stay visible when asynchronous results arrive"
+            );
+        });
         let group: SharedString = format!("panel-search-file-{}", target.display()).into();
         let hit: SharedString = format!("panel-search-hit-{}-1-1", target.display()).into();
         vcx.update(|window, cx| {
