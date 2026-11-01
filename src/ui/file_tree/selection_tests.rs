@@ -105,6 +105,170 @@ fn ctrl_click_toggles_real_tree_rows_without_opening_and_shift_extends(cx: &mut 
 }
 
 #[gpui_kit::test]
+fn keyboard_range_selection_reveals_offscreen_files_and_keeps_them_operable(
+    cx: &mut TestAppContext,
+) {
+    let _serial = serial();
+    let root = temp();
+    for n in 0..160 {
+        std::fs::write(root.path().join(format!("file-{n:03}.txt")), "content").unwrap();
+    }
+    let first = root.path().join("file-000.txt");
+    let last = root.path().join("file-159.txt");
+    let (app, mut vcx, _pane) = files_panel_on(cx, root.path());
+    click(&mut vcx, &first, primary());
+    for _ in 0..159 {
+        key(&mut vcx, "shift-down");
+    }
+    assert_eq!(selected(&app, &mut vcx).len(), 160);
+    vcx.update(|window, cx| {
+        window.render_frame(cx);
+        let row = window.find(id(&last)).bounds();
+        assert!(row.size.height > px(0.));
+        assert!(row.origin.y >= px(0.));
+        assert!(row.bottom() <= window.viewport_size().height);
+    });
+    key(&mut vcx, "up");
+    assert_eq!(selected(&app, &mut vcx), vec![root.path().join("file-158.txt")]);
+    key(&mut vcx, "enter");
+    wait(&mut vcx, |vcx| {
+        app.read_with(vcx, |app, _| app.tab_code().unwrap().active_id().is_some())
+    });
+}
+
+#[gpui_kit::test]
+fn inline_creation_and_rename_at_the_viewport_edge_keep_the_intended_directory(
+    cx: &mut TestAppContext,
+) {
+    let _serial = serial();
+    let root = temp();
+    for n in 0..80 {
+        std::fs::create_dir(root.path().join(format!("dir-{n:03}"))).unwrap();
+    }
+    let destination = root.path().join("dir-079");
+    let child = destination.join("created.txt");
+    let renamed = destination.join("renamed.txt");
+    let (app, mut vcx, _pane) = files_panel_on(cx, root.path());
+    click(&mut vcx, root.path(), primary());
+    for _ in 0..80 {
+        key(&mut vcx, "down");
+    }
+    assert_eq!(selected(&app, &mut vcx), vec![destination.clone()]);
+    vcx.update(|window, cx| window.right_click(id(&destination), cx));
+    menu_item(&mut vcx, L10nKey::FileTreeContextNewFile);
+    vcx.update(|window, cx| window.input("created.txt", cx));
+    key(&mut vcx, "enter");
+    wait(&mut vcx, |_| child.exists());
+    settle(&app, &mut vcx, root.path());
+    assert!(!root.path().join("created.txt").exists());
+    assert!(!root.path().join("dir-078/created.txt").exists());
+    click(&mut vcx, &child, primary());
+    vcx.update(|window, cx| window.right_click(id(&child), cx));
+    menu_item(&mut vcx, L10nKey::FileTreeContextRename);
+    key(&mut vcx, "secondary-a");
+    vcx.update(|window, cx| window.input("renamed.txt", cx));
+    key(&mut vcx, "enter");
+    wait(&mut vcx, |_| renamed.exists() && !child.exists());
+    assert_eq!(std::fs::read(&renamed).unwrap(), Vec::<u8>::new());
+}
+
+#[gpui_kit::test]
+fn external_drop_targets_the_scrolled_empty_directory_not_its_neighbor(cx: &mut TestAppContext) {
+    let _serial = serial();
+    let root = temp();
+    let source = temp();
+    let payload = source.path().join("payload.txt");
+    std::fs::write(&payload, "drop bytes").unwrap();
+    for n in 0..80 {
+        std::fs::create_dir(root.path().join(format!("dir-{n:03}"))).unwrap();
+    }
+    let destination = root.path().join("dir-079");
+    let (app, mut vcx, _pane) = files_panel_on(cx, root.path());
+    click(&mut vcx, root.path(), primary());
+    for _ in 0..80 {
+        key(&mut vcx, "down");
+    }
+    key(&mut vcx, "right");
+    settle(&app, &mut vcx, root.path());
+    let position = vcx.update(|window, cx| {
+        window.scroll("right-panel-tree-rows", gpui_kit::ScrollDelta::Pixels(gpui_kit::point(px(0.), px(-200.))), cx);
+        window.render_frame(cx);
+        let row = window.find(id(&destination)).bounds();
+        // The note immediately below the last directory is its empty child
+        // area, and must not fall through to the root background target.
+        gpui_kit::point(row.center().x, row.bottom() + px(TREE_ROW_H / 2.))
+    });
+    vcx.simulate_event(gpui_kit::FileDropEvent::Entered {
+        position,
+        paths: ExternalPaths(vec![payload.clone()].into()),
+    });
+    vcx.simulate_event(gpui_kit::FileDropEvent::Submit { position });
+    wait(&mut vcx, |_| destination.join("payload.txt").exists());
+    assert_eq!(std::fs::read_to_string(destination.join("payload.txt")).unwrap(), "drop bytes");
+    assert!(payload.exists());
+    assert!(!root.path().join("payload.txt").exists());
+    assert!(!root.path().join("dir-078/payload.txt").exists());
+    settle(&app, &mut vcx, root.path());
+    let background = source.path().join("background.txt");
+    std::fs::write(&background, "root bytes").unwrap();
+    let position = vcx.update(|window, cx| {
+        window.render_frame(cx);
+        window.scroll("right-panel-tree-rows", gpui_kit::ScrollDelta::Pixels(gpui_kit::point(px(0.), px(-100_000.))), cx);
+        window.render_frame(cx);
+        let bounds = window.find("right-panel-tree-rows").bounds();
+        gpui_kit::point(bounds.center().x, bounds.bottom() - px(4.))
+    });
+    vcx.simulate_event(gpui_kit::FileDropEvent::Entered {
+        position,
+        paths: ExternalPaths(vec![background].into()),
+    });
+    vcx.simulate_event(gpui_kit::FileDropEvent::Submit { position });
+    wait(&mut vcx, |_| root.path().join("background.txt").exists());
+    assert_eq!(std::fs::read_to_string(root.path().join("background.txt")).unwrap(), "root bytes");
+    assert!(!destination.join("background.txt").exists());
+}
+
+#[gpui_kit::test]
+fn late_ancestor_listing_reveals_the_file_and_external_insertions_keep_the_scroll_anchor(
+    cx: &mut TestAppContext,
+) {
+    let _serial = serial();
+    let root = temp();
+    let nested = root.path().join("nested/deeper");
+    std::fs::create_dir_all(&nested).unwrap();
+    for n in 0..120 {
+        std::fs::write(nested.join(format!("file-{n:03}.txt")), "bytes").unwrap();
+    }
+    let target = nested.join("file-090.txt");
+    let (app, mut vcx, _pane) = files_panel_on(cx, root.path());
+    app.update_in(&mut vcx, |app, window, cx| app.file_tree_show(&target, window, cx));
+    wait(&mut vcx, |vcx| {
+        vcx.update(|window, cx| {
+            window.render_frame(cx);
+            window.try_find(id(&target)).is_some_and(|row| row.visible())
+        })
+    });
+    settle(&app, &mut vcx, root.path());
+    assert_eq!(selected(&app, &mut vcx), vec![target.clone()]);
+    let before = vcx.update(|window, _| window.find(id(&target)).bounds());
+    let inserted = nested.join("before-all.txt");
+    std::fs::write(&inserted, "new bytes").unwrap();
+    app.update_in(&mut vcx, |app, _, cx| {
+        app.file_tree_apply_fs_events(HostId::LOCAL, &HashSet::from([inserted.clone()]), cx);
+    });
+    settle(&app, &mut vcx, root.path());
+    vcx.update(|window, cx| {
+        window.render_frame(cx);
+        assert_eq!(window.find(id(&target)).bounds().origin.y, before.origin.y);
+        // A deliberate scroll must not be pulled back by a completed reveal.
+        window.scroll("right-panel-tree-rows", gpui_kit::ScrollDelta::Pixels(gpui_kit::point(px(0.), px(100_000.))), cx);
+        window.render_frame(cx);
+        assert!(window.try_find(id(&target)).is_none());
+    });
+    assert_eq!(selected(&app, &mut vcx), vec![target]);
+}
+
+#[gpui_kit::test]
 fn keyboard_copy_paste_copies_all_bytes_and_replacement_requires_confirmation(
     cx: &mut TestAppContext,
 ) {

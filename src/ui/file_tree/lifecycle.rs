@@ -128,7 +128,11 @@ impl FileTreeState {
         ok: bool,
         hits: Vec<TreeEntry>,
     ) -> bool {
-        self.search.accept(generation, ok, hits)
+        let accepted = self.search.accept(generation, ok, hits);
+        if accepted {
+            self.invalidate_rows();
+        }
+        accepted
     }
 
     pub(crate) fn cancel_edit(&mut self) {
@@ -144,12 +148,16 @@ impl FileTreeState {
         entries: Vec<TreeEntry>,
         active_host: Option<HostId>,
     ) -> Landed {
-        if readable {
-            self.unreadable.remove(key);
+        let note_changed = if readable {
+            self.unreadable.remove(key)
         } else {
-            self.unreadable.insert(key.clone());
+            self.unreadable.insert(key.clone())
+        };
+        if note_changed {
+            self.invalidate_rows();
         }
         let mut landed = self.land_load(key, key.0, dir, entries);
+        landed.changed |= note_changed;
         // Invalidated work remains visible. Only its replacement is conditional
         // on the current Host; an inactive Host refreshes on its next display.
         landed.superseded = landed.superseded && active_host == Some(key.0);
