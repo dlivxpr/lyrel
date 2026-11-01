@@ -424,10 +424,20 @@ fn pane_lists_keep_fresh_foreground_titles_associated_during_other_pane_exits() 
     second.set_recv_timeout(Some(STREAM_WITHIN)).unwrap();
     let first_id = first.pane_id();
     let second_id = second.pane_id();
-    first.input(b"echo LYREL_FIRST_READY\r").unwrap();
-    assert!(collect_until(&mut first, b"\r\nLYREL_FIRST_READY\r\n").1.is_none());
-    second.input(b"echo LYREL_SECOND_READY\r").unwrap();
-    assert!(collect_until(&mut second, b"\r\nLYREL_SECOND_READY\r\n").1.is_none());
+    // ConPTY may insert OSC titles between the newline and command output.
+    // Split each marker in the command so its echo cannot satisfy readiness.
+    first.input(if cfg!(windows) {
+        b"echo LYREL_FIRST_REA^DY\r"
+    } else {
+        b"printf 'LYREL_FIRST_%s\\n' READY\r"
+    }).unwrap();
+    assert!(collect_until(&mut first, b"LYREL_FIRST_READY\r\n").1.is_none());
+    second.input(if cfg!(windows) {
+        b"echo LYREL_SECOND_REA^DY\r"
+    } else {
+        b"printf 'LYREL_SECOND_%s\\n' READY\r"
+    }).unwrap();
+    assert!(collect_until(&mut second, b"LYREL_SECOND_READY\r\n").1.is_none());
     let initial = panes.list().unwrap();
     let idle_title = initial.iter().find(|p| p.pane_id == first_id).unwrap().title.clone();
     let second_title = initial.iter().find(|p| p.pane_id == second_id).unwrap().title.clone();
@@ -478,8 +488,12 @@ fn pane_lists_keep_fresh_foreground_titles_associated_during_other_pane_exits() 
         assert!(Instant::now() < deadline, "idle title never returned: {listed:?}");
         std::thread::sleep(Duration::from_millis(25));
     }
-    first.input(b"echo LYREL_METADATA_INPUT_STILL_WORKS\r").unwrap();
-    assert!(collect_until(&mut first, b"LYREL_METADATA_INPUT_STILL_WORKS").1.is_none());
+    first.input(if cfg!(windows) {
+        b"echo LYREL_METADATA_INPUT_STILL_WOR^KS\r"
+    } else {
+        b"printf 'LYREL_METADATA_INPUT_STILL_%s\\n' WORKS\r"
+    }).unwrap();
+    assert!(collect_until(&mut first, b"LYREL_METADATA_INPUT_STILL_WORKS\r\n").1.is_none());
     second.input(b"exit\r").unwrap();
     drain_until_exit(&mut second);
     let deadline = Instant::now() + STREAM_WITHIN;
