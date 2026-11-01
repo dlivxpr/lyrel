@@ -1377,8 +1377,15 @@ mod tests {
         let before = Rope::from("一α😀\n".repeat(1500).as_str());
         let mut after = before.clone();
         after.insert(0, "prefix\n");
+        let prefix_only = after.clone();
         after.insert(after.len(), "tail\n");
+        let mut tail_only = before.clone();
+        tail_only.insert(tail_only.len(), "tail\n");
         for (old, new, from, expected) in [
+            (&before, &prefix_only, 700, 701),
+            (&prefix_only, &before, 701, 700),
+            (&before, &tail_only, 700, 700),
+            (&tail_only, &before, 700, 700),
             (&before, &after, 700, 701),
             (&before, &after, 1499, 1500),
             (&after, &before, 701, 700),
