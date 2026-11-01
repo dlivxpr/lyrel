@@ -41,32 +41,90 @@ struct NavEdit {
     at_line_start: bool,
 }
 
+/// Compare borrowed chunks without decoding every scalar in unchanged text.
+/// The iterators and the slice comparisons run in the same direction; chunk
+/// boundaries may differ after an edit, so consume only the shorter remainder.
+fn matching_chunk_bytes<'a>(
+    mut left: impl Iterator<Item = &'a str>,
+    mut right: impl Iterator<Item = &'a str>,
+    limit: usize,
+    reverse: bool,
+) -> usize {
+    let mut a: &[u8] = &[];
+    let mut b: &[u8] = &[];
+    let mut matched = 0;
+    while matched < limit {
+        while a.is_empty() {
+            let Some(chunk) = left.next() else {
+                return matched;
+            };
+            a = chunk.as_bytes();
+        }
+        while b.is_empty() {
+            let Some(chunk) = right.next() else {
+                return matched;
+            };
+            b = chunk.as_bytes();
+        }
+        let len = a.len().min(b.len()).min(limit - matched);
+        let (a_part, b_part) = if reverse {
+            (&a[a.len() - len..], &b[b.len() - len..])
+        } else {
+            (&a[..len], &b[..len])
+        };
+        if a_part != b_part {
+            return matched
+                + if reverse {
+                    a_part
+                        .iter()
+                        .rev()
+                        .zip(b_part.iter().rev())
+                        .take_while(|(a, b)| a == b)
+                        .count()
+                } else {
+                    a_part
+                        .iter()
+                        .zip(b_part.iter())
+                        .take_while(|(a, b)| a == b)
+                        .count()
+                };
+        }
+        matched += len;
+        if reverse {
+            a = &a[..a.len() - len];
+            b = &b[..b.len() - len];
+        } else {
+            a = &a[len..];
+            b = &b[len..];
+        }
+    }
+    matched
+}
+
 impl NavEdit {
     /// Edits use the old snapshot's coordinates, last first, so shifting a
     /// location through them never changes the coordinates of an earlier edit.
     fn between(old: &Rope, new: &Rope) -> SmallVec<[Self; 1]> {
-        let mut start = 0;
-        for (a, b) in old.chars().zip(new.chars()) {
-            if a != b {
-                break;
-            }
-            start += a.len_utf8();
-        }
+        let shared = old.len().min(new.len());
+        let start = old.floor_char_boundary(matching_chunk_bytes(
+            old.chunks(),
+            new.chunks(),
+            shared,
+            false,
+        ));
         if start == old.len() && start == new.len() {
             return SmallVec::new();
         }
-        let mut suffix = 0;
-        let max_suffix = old.len().min(new.len()) - start;
-        for (a, b) in old
-            .chars_at(old.len())
-            .reversed()
-            .zip(new.chars_at(new.len()).reversed())
-        {
-            if a != b || suffix + a.len_utf8() > max_suffix {
-                break;
-            }
-            suffix += a.len_utf8();
-        }
+        let suffix = matching_chunk_bytes(
+            old.chunks_at(old.len()).0.reversed(),
+            new.chunks_at(new.len()).0.reversed(),
+            shared - start,
+            true,
+        );
+        // Byte matches may stop inside a shared UTF-8 encoding. Trim to scalar
+        // boundaries before slicing; equal prefix/suffix bytes have the same
+        // boundaries on both sides, even when their chunk layouts differ.
+        let suffix = old.len() - old.ceil_char_boundary(old.len() - suffix);
         let at = old.offset_to_point(start);
         let edit = Self {
             start_line: at.row,
@@ -1301,6 +1359,9 @@ mod tests {
             ("α\nβ\nγ\nδ\nε\n", "β\nγ\nε\n", 2, 1),
             ("α\nβ\nγ\nδ\n", "注\nα\nβ\n🙂\nγ\nδ\n", 1, 2),
             ("α\nβ\nγ\n", "α改\nβ\nγ改\n", 1, 1),
+            // Equal leading/trailing UTF-8 bytes are not equal scalar values.
+            ("Ā\ntarget\n", "Ă\ninserted\ntarget\n", 1, 2),
+            ("X\n\u{80}\ntarget\n", "X\nnew\nÀ\ntarget\n", 2, 3),
         ] {
             let edits = NavEdit::between(&Rope::from(old), &Rope::from(new));
             let mut history = NavHistory::default();
@@ -1308,6 +1369,32 @@ mod tests {
             history.shift(&at("a.rs", 0), &edits);
             let target = history.go_back(Some(at("other.rs", 0))).unwrap();
             assert_eq!(target.pos.line, expected, "{old:?} -> {new:?}");
+        }
+    }
+
+    #[test]
+    fn saved_places_survive_unicode_edits_across_different_rope_chunks() {
+        let before = Rope::from("一α😀\n".repeat(1500).as_str());
+        let mut after = before.clone();
+        after.insert(0, "prefix\n");
+        let prefix_only = after.clone();
+        after.insert(after.len(), "tail\n");
+        let mut tail_only = before.clone();
+        tail_only.insert(tail_only.len(), "tail\n");
+        for (old, new, from, expected) in [
+            (&before, &prefix_only, 700, 701),
+            (&prefix_only, &before, 701, 700),
+            (&before, &tail_only, 700, 700),
+            (&tail_only, &before, 700, 700),
+            (&before, &after, 700, 701),
+            (&before, &after, 1499, 1500),
+            (&after, &before, 701, 700),
+            (&after, &before, 1500, 1499),
+        ] {
+            let mut history = NavHistory::default();
+            history.push(at("unicode.txt", from));
+            history.shift(&at("unicode.txt", 0), &NavEdit::between(old, new));
+            assert_eq!(history.go_back(None), Some(at("unicode.txt", expected)));
         }
     }
 
