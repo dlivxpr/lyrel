@@ -3238,14 +3238,45 @@ mod render_idle_gpui_tests {
             app.scm.repository_context(cx).unwrap().into_parts()
         });
 
+        // Render quiescence alone does not mean the real Host read has
+        // finished: an equal result can land without drawing. Drain that
+        // setup work before bumping its epoch, or the bump supersedes it and
+        // the retry waits on a virtual debounce timer while the measured
+        // loop below deliberately advances only real time.
+        let deadline = Instant::now() + Duration::from_secs(30);
+        let mut fresh_since = None;
+        loop {
+            render_probe::arm(BUDGET);
+            vcx.executor().advance_clock(Duration::from_millis(300));
+            vcx.run_until_parked();
+            let fresh = vcx.update(|_, cx| {
+                let data = cx.global::<crate::terminal::git_data::ScmData>();
+                !data.is_stale(repo.host, &repo.root)
+                    && !data.is_change_pending(repo.host, &repo.root)
+            });
+            if fresh && render_probe::draws() == 0 {
+                if fresh_since.get_or_insert_with(Instant::now).elapsed()
+                    >= Duration::from_millis(400)
+                {
+                    break;
+                }
+            } else {
+                fresh_since = None;
+            }
+            assert!(Instant::now() < deadline, "SCM setup never became fresh");
+            std::thread::sleep(Duration::from_millis(20));
+        }
+
         // A completed status read is not itself a content change. Exercise
         // the real Host probe, not a hand-inserted cache value.
         for _ in 0..3 {
             render_probe::arm(BUDGET);
-            app.update_in(&mut vcx, |app, _, cx| {
-                cx.global_mut::<crate::terminal::git_data::ScmData>()
-                    .bump(repo.host, &repo.root);
+            let requested_epoch = app.update_in(&mut vcx, |app, _, cx| {
+                let data = cx.global_mut::<crate::terminal::git_data::ScmData>();
+                data.bump(repo.host, &repo.root);
+                let epoch = data.epoch(repo.host, &repo.root);
                 app.scm_refresh(host.clone(), repo.root.clone(), cx);
+                epoch
             });
             let deadline = Instant::now() + Duration::from_secs(30);
             loop {
@@ -3256,7 +3287,19 @@ mod render_idle_gpui_tests {
                 }) {
                     break;
                 }
-                assert!(Instant::now() < deadline, "the refresh never completed");
+                assert!(
+                    Instant::now() < deadline,
+                    "the refresh never completed: requested epoch={requested_epoch}, current={:?}",
+                    vcx.update(|_, cx| {
+                        let data = cx.global::<crate::terminal::git_data::ScmData>();
+                        (
+                            data.epoch(repo.host, &repo.root),
+                            data.is_stale(repo.host, &repo.root),
+                            data.is_change_pending(repo.host, &repo.root),
+                            data.is_subscribed(repo.host, &repo.root),
+                        )
+                    })
+                );
                 std::thread::sleep(Duration::from_millis(20));
             }
             vcx.run_until_parked();
