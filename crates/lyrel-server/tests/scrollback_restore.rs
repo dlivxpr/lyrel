@@ -170,6 +170,14 @@ impl Instance {
     /// The `Spawn` a window sends for a pane whose `Attach` found nothing: a
     /// new shell, asked to open showing what the dead one had.
     fn spawn_restoring(&self, dead: u64) -> (u64, Vec<u8>) {
+        let (pane_id, segments) = self.spawn_restoring_segments(dead);
+        (pane_id, segments.into_iter().flat_map(|s| s.bytes).collect())
+    }
+
+    fn spawn_restoring_segments(
+        &self,
+        dead: u64,
+    ) -> (u64, Vec<lyrel_core::daemon::scrollback::Segment>) {
         let mut stream =
             transport::connect_endpoint_at(&self.endpoint()).expect("connect to spawn");
         lyrel_core::daemon::protocol::negotiate_pane(&mut stream).expect("matching pane protocol");
@@ -200,11 +208,16 @@ impl Instance {
         stream
             .set_read_timeout(Some(Duration::from_secs(2)))
             .expect("bound the drain");
-        let mut replayed = Vec::new();
+        let mut replayed: Vec<lyrel_core::daemon::scrollback::Segment> = Vec::new();
+        let mut geometry = size();
         while let Ok(msg) = DaemonMsg::read(&mut stream) {
             match msg {
+                DaemonMsg::Size(size) => geometry = size,
                 DaemonMsg::Snapshot(bytes) | DaemonMsg::Output(bytes) => {
-                    replayed.extend_from_slice(&bytes)
+                    replayed.push(lyrel_core::daemon::scrollback::Segment {
+                        size: geometry,
+                        bytes,
+                    });
                 }
                 _ => {}
             }
@@ -402,5 +415,113 @@ fn a_screen_comes_back_when_the_tree_still_names_its_pane() {
         windows_contain(&replayed, MARKER),
         "a pane the tree still names came back blank; the client received {:?}",
         String::from_utf8_lossy(&replayed)
+    );
+}
+
+/// A real PTY produces more than the storage budget at two geometries. A
+/// reconnect sees the full live replay; a restart must see its exact bounded
+/// suffix, including cuts through UTF-8/escape bytes, at the original sizes.
+#[test]
+fn a_bounded_restart_preserves_the_live_replay_suffix_and_geometry() {
+    use lyrel_core::daemon::scrollback::{Segment, SNAPSHOT_CAP, decode, trim_to};
+
+    let instance = Instance::new();
+    let running = instance.start();
+    let chunk = format!("{}\x1b[31m下一步\x1b[0m\r\n", "x".repeat(4070));
+    #[cfg(unix)]
+    let (script_name, program, args, script) = (
+        "output.sh",
+        "/bin/sh",
+        Vec::<String>::new(),
+        format!(
+            "printf 'READY_FOR_OUTPUT'; read first\ni=0; while [ $i -lt 70 ]; do printf '%s' '{chunk}'; i=$((i+1)); done\nprintf 'FIRST_OUTPUT_DONE'; read second\ni=0; while [ $i -lt 16 ]; do printf '%s' '{chunk}'; i=$((i+1)); done\nprintf 'SECOND_OUTPUT_DONE'; read final\n"
+        ),
+    );
+    #[cfg(windows)]
+    let (script_name, program, args, script) = (
+        "output.ps1",
+        "powershell.exe",
+        vec!["-NoLogo".into(), "-NoProfile".into(), "-Command".into()],
+        "$out=[Console]::OpenStandardOutput(); function Emit([string]$s) { $b=[Text.Encoding]::UTF8.GetBytes($s); $out.Write($b,0,$b.Length); $out.Flush() }\nEmit 'READY_FOR_OUTPUT'; $null=[Console]::ReadLine()\n$chunk=[Text.Encoding]::UTF8.GetString([IO.File]::ReadAllBytes((Join-Path $PSScriptRoot 'chunk.bin')))\nfor($i=0;$i -lt 70;$i++) { Emit $chunk }\nEmit 'FIRST_OUTPUT_DONE'; $null=[Console]::ReadLine()\nfor($i=0;$i -lt 16;$i++) { Emit $chunk }\nEmit 'SECOND_OUTPUT_DONE'; $null=[Console]::ReadLine()\n".to_string(),
+    );
+    // PowerShell 5 defaults to the system script encoding; keep its source
+    // ASCII-only and load the terminal's UTF-8 fixture separately.
+    #[cfg(windows)]
+    std::fs::write(instance.path().join("chunk.bin"), chunk.as_bytes()).unwrap();
+    let script_path = instance.path().join(script_name);
+    std::fs::write(&script_path, script).unwrap();
+    let mut args = args;
+    #[cfg(unix)]
+    args.push(script_path.to_str().unwrap().into());
+    #[cfg(windows)]
+    args.push(
+        std::fs::read_to_string(&script_path)
+            .unwrap()
+            .replace(
+                "$PSScriptRoot",
+                &format!("'{}'", instance.path().display().to_string().replace('\'', "''")),
+            ),
+    );
+    let mut session = instance
+        .panes()
+        .spawn(
+            None,
+            size(),
+            Some(ShellSpec {
+                program: program.into(),
+                args,
+                args_are_lyrel_defaults: false,
+            }),
+            None,
+            None,
+        )
+        .unwrap();
+    session.set_recv_timeout(Some(STREAM_WITHIN)).unwrap();
+    let pane = session.pane_id();
+    collect_until(&mut session, b"READY_FOR_OUTPUT");
+    session.input(b"1\r").unwrap();
+    collect_until(&mut session, b"FIRST_OUTPUT_DONE");
+    let narrow = WinSize {
+        cols: 71,
+        ..size()
+    };
+    session.resize(narrow).unwrap();
+    session.input(b"2\r").unwrap();
+    collect_until(&mut session, b"SECOND_OUTPUT_DONE");
+    session.detach().unwrap();
+
+    let mut fresh = instance.panes().attach(pane, narrow).unwrap();
+    fresh.set_recv_timeout(Some(Duration::from_secs(2))).unwrap();
+    let mut geometry = size();
+    let mut expected = Vec::new();
+    while let Ok(msg) = fresh.recv() {
+        match msg {
+            DaemonMsg::Size(size) => geometry = size,
+            DaemonMsg::Snapshot(bytes) if !bytes.is_empty() => expected.push(Segment {
+                size: geometry,
+                bytes,
+            }),
+            DaemonMsg::Exited { .. } => panic!("the fixture must remain alive"),
+            _ => {}
+        }
+    }
+    assert!(expected.iter().map(|s| s.bytes.len()).sum::<usize>() > SNAPSHOT_CAP);
+    trim_to(&mut expected, SNAPSHOT_CAP);
+    assert!(expected.iter().any(|s| s.size == size()));
+    assert!(expected.iter().any(|s| s.size == narrow));
+    fresh.detach().unwrap();
+    instance.stop(running);
+
+    let stored = instance.snapshot_of(pane).expect("shutdown snapshot");
+    let (saved, _) = decode(&stored).expect("the stored snapshot is readable");
+    assert_eq!(
+        saved, expected,
+        "persistence must retain the exact live suffix"
+    );
+    let _restarted = instance.start();
+    let (_, restored) = instance.spawn_restoring_segments(pane);
+    assert!(
+        restored.starts_with(&expected),
+        "restore must preserve bytes and geometry before the new-shell reset"
     );
 }

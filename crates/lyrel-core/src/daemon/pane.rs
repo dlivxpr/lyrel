@@ -25,7 +25,7 @@ mod launch;
 mod lifecycle;
 use lifecycle::{DeathReporter, PaneBackend, PtyLaunch, PtyParts, join_bounded};
 mod replay;
-use facts::{FactReader, ForegroundProbes, PaneFacts};
+use facts::{FactReader, ForegroundProbes, MetadataRequest, PaneFacts};
 pub mod subscriptions;
 #[cfg(test)]
 mod test_support;
@@ -1169,6 +1169,10 @@ impl DaemonPane {
     }
 
     pub fn info(&self) -> PaneInfo {
+        self.info_for_request(&MetadataRequest::default())
+    }
+
+    pub(crate) fn info_for_request(&self, request: &MetadataRequest) -> PaneInfo {
         let (cwd, osc_title, alive) = {
             let st = self.state.lock().unwrap();
             (
@@ -1180,7 +1184,7 @@ impl DaemonPane {
         PaneInfo {
             pane_id: self.id,
             cwd: cwd.or_else(|| self.backend.foreground_cwd()),
-            title: self.backend.foreground_title(),
+            title: self.backend.foreground_title(request),
             osc_title,
             alive,
             owner: self.owner.clone(),
@@ -1201,9 +1205,9 @@ impl DaemonPane {
     /// that stopped producing at that moment would keep the stale copy for
     /// good, because its mark would never move again.
     /// The mark alone, for deciding whether a snapshot is worth taking:
-    /// [`scrollback_snapshot`](Self::scrollback_snapshot) clones the whole
-    /// ring under the state lock, which is a lot to pay every tick for the
-    /// answer "nothing changed". A pane that moves between this read and the
+    /// [`scrollback_snapshot`](Self::scrollback_snapshot) copies the bounded
+    /// storage suffix under the state lock, which is still unnecessary every
+    /// tick for the answer "nothing changed". A pane that moves between this read and the
     /// snapshot is fine — the snapshot returns its own mark, and that pair is
     /// what gets recorded.
     pub fn scrollback_mark(&self) -> u64 {
@@ -1214,8 +1218,7 @@ impl DaemonPane {
         &self,
     ) -> (Vec<crate::daemon::scrollback::Segment>, Option<String>, u64) {
         let st = self.state.lock().unwrap();
-        let mut segments = st.ring.snapshot();
-        crate::daemon::scrollback::trim_to(&mut segments, crate::daemon::scrollback::SNAPSHOT_CAP);
+        let segments = st.ring.persistence_snapshot();
         (
             segments,
             st.facts.osc_title().map(str::to_owned),

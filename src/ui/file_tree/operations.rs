@@ -18,14 +18,8 @@ impl LyrelApp {
         cx: &mut Context<Self>,
     ) {
         let host = self.spawn_host(cx);
-        let rows = if self.file_tree_searching(cx) {
-            self.file_tree.search_rows()
-        } else if let Some(code) = self.tab_code() {
-            self.file_tree
-                .visible_rows(host, &code.roots, &code.expanded)
-        } else {
-            return;
-        };
+        let Some(code) = self.tab_code() else { return };
+        let rows = self.file_tree.logical_rows(host, &code.roots, &code.expanded, self.file_tree_searching(cx));
         if let Some(code) = self.tab_code_mut() {
             code.selected.click(
                 host,
@@ -173,17 +167,11 @@ impl LyrelApp {
                 }
                 "a" => {
                     let host = self.spawn_host(cx);
-                    let rows = if self.file_tree_searching(cx) {
-                        self.file_tree.search_rows()
-                    } else if let Some(code) = self.tab_code() {
-                        self.file_tree
-                            .visible_rows(host, &code.roots, &code.expanded)
-                    } else {
-                        return true;
-                    };
+                    let Some(code) = self.tab_code() else { return true };
+                    let rows = self.file_tree.logical_rows(host, &code.roots, &code.expanded, self.file_tree_searching(cx));
                     if let Some(code) = self.tab_code_mut() {
                         code.selected.clear();
-                        for row in &rows {
+                        for row in rows.iter() {
                             if row.note.is_none() && !row.is_root {
                                 code.selected
                                     .click(host, &row.entry.path, true, false, &rows);
