@@ -94,6 +94,10 @@ fn main() {
             pane::parked_shells_keep_cli_identity_input_capture_and_close_scope,
         ),
         (
+            "repeated_pane_pressure_preserves_detached_history_and_closes_only_owned_panes",
+            pane::repeated_pane_pressure_preserves_detached_history_and_closes_only_owned_panes,
+        ),
+        (
             "send_enter_submits_in_a_paste_aware_raw_mode_tui",
             send::send_enter_submits_in_a_paste_aware_raw_mode_tui,
         ),
