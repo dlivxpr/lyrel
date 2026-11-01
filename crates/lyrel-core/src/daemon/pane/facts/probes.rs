@@ -152,6 +152,7 @@ pub(in super::super) fn foreground_agent(
 pub(in super::super) fn foreground_title(
     master: &Mutex<Option<Box<dyn MasterPty + Send>>>,
     _shell_pid: Option<u32>,
+    _request: &super::MetadataRequest,
 ) -> String {
     pty_foreground_pgid(master)
         .and_then(crate::daemon::procinfo::proc_name)
@@ -162,18 +163,16 @@ pub(in super::super) fn foreground_title(
 pub(in super::super) fn foreground_title(
     _master: &Mutex<Option<Box<dyn MasterPty + Send>>>,
     shell_pid: Option<u32>,
+    request: &super::MetadataRequest,
 ) -> String {
-    let Some(pid) = shell_pid else {
-        return String::new();
-    };
-    let procs = crate::daemon::winproc::snapshot();
-    crate::daemon::winproc::foreground_name(&procs, pid).unwrap_or_default()
+    shell_pid.map(|pid| request.foreground_title(pid)).unwrap_or_default()
 }
 
 #[cfg(not(any(target_os = "macos", target_os = "linux", windows)))]
 pub(in super::super) fn foreground_title(
     _master: &Mutex<Option<Box<dyn MasterPty + Send>>>,
     _shell_pid: Option<u32>,
+    _request: &super::MetadataRequest,
 ) -> String {
     String::new()
 }
