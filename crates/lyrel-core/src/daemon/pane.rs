@@ -25,7 +25,7 @@ mod launch;
 mod lifecycle;
 use lifecycle::{DeathReporter, PaneBackend, PtyLaunch, PtyParts, join_bounded};
 mod replay;
-use facts::{FactReader, ForegroundProbes, PaneFacts};
+use facts::{FactReader, ForegroundProbes, MetadataRequest, PaneFacts};
 pub mod subscriptions;
 #[cfg(test)]
 mod test_support;
@@ -1168,7 +1168,7 @@ impl DaemonPane {
         self.state.lock().unwrap().alive
     }
 
-    pub fn info(&self) -> PaneInfo {
+    pub(crate) fn info(&self, request: &MetadataRequest) -> PaneInfo {
         let (cwd, osc_title, alive) = {
             let st = self.state.lock().unwrap();
             (
@@ -1180,7 +1180,7 @@ impl DaemonPane {
         PaneInfo {
             pane_id: self.id,
             cwd: cwd.or_else(|| self.backend.foreground_cwd()),
-            title: self.backend.foreground_title(),
+            title: self.backend.foreground_title(request),
             osc_title,
             alive,
             owner: self.owner.clone(),
