@@ -340,6 +340,8 @@ impl GitSubscriptions {
 /// decoration index pre-built off-thread and the panic case folded in.
 enum ProbeLanding {
     Status(Arc<WorkingTreeStatus>, Arc<StatusIndex>),
+    /// The probe confirmed the immutable snapshot captured at dispatch.
+    Unchanged,
     NotARepo,
     Unreachable,
 }
@@ -653,6 +655,7 @@ impl LyrelApp {
         let at = data.epoch(id, &root);
         let sub_gen = data.generation(id, &root);
         let wipe = data.wipe;
+        let held = data.status_for(id, &root);
 
         let probe_root = root.clone();
         let this = cx.weak_entity();
@@ -668,8 +671,16 @@ impl LyrelApp {
                 }));
                 match probe {
                     Ok(StatusProbe::Status(status)) => {
-                        let index = StatusIndex::build(&status);
-                        ProbeLanding::Status(Arc::new(*status), Arc::new(index))
+                        // Single-flight protects this repository's snapshot.
+                        // Compare off-thread before deriving decorations: an
+                        // unchanged probe must keep both published identities
+                        // or identity-based observers will still repaint.
+                        if held.as_ref().is_some_and(|held| **held == *status) {
+                            ProbeLanding::Unchanged
+                        } else {
+                            let index = StatusIndex::build(&status);
+                            ProbeLanding::Status(Arc::new(*status), Arc::new(index))
+                        }
                     }
                     Ok(StatusProbe::NotARepo) => ProbeLanding::NotARepo,
                     Ok(StatusProbe::Unreachable) | Err(_) => ProbeLanding::Unreachable,
@@ -693,14 +704,13 @@ impl LyrelApp {
                 let mut not_a_repo = false;
                 let changed = match result {
                     ProbeLanding::Status(status, index) => {
-                        let same = data
-                            .status
-                            .get(id, root.as_path())
-                            .is_some_and(|held| **held == *status);
+                        // The worker already compared against the snapshot
+                        // held when this single-flight probe started.
                         data.status.insert(id, root.clone(), status);
                         data.index.insert(id, root.clone(), index);
-                        !same
+                        true
                     }
+                    ProbeLanding::Unchanged => false,
                     // Not a repository — a perfectly ordinary answer, and one
                     // that has to be recorded like any other. `read_at` below
                     // is what stops the next frame asking again: a pane whose
