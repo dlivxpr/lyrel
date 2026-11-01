@@ -87,13 +87,16 @@ impl Registry {
         self.panes.lock().unwrap().values().cloned().collect()
     }
 
+    fn ids(&self) -> std::collections::HashSet<u64> {
+        self.panes.lock().unwrap().keys().copied().collect()
+    }
+
     fn list(&self) -> Vec<crate::daemon::protocol::PaneInfo> {
-        self.panes
-            .lock()
-            .unwrap()
-            .values()
-            .map(|p| p.info())
-            .collect()
+        // Keep ownership, not the registry lock, while probing the OS. Pane
+        // creation/exit can proceed; this has never promised an atomic view.
+        let panes = self.all();
+        let request = crate::daemon::pane::facts::MetadataRequest::default();
+        panes.iter().map(|pane| pane.info_for_request(&request)).collect()
     }
 }
 
@@ -162,10 +165,10 @@ fn spawn_orphan_sweep(registry: Arc<Registry>) {
                     .flat_map(|t| t.root.pane_ids())
                     .collect();
                 let orphans: std::collections::HashSet<u64> = registry
-                    .list()
+                    .all()
                     .into_iter()
-                    .filter(|p| p.alive && !referenced.contains(&p.pane_id))
-                    .map(|p| p.pane_id)
+                    .filter(|pane| pane.alive() && !referenced.contains(&pane.id))
+                    .map(|pane| pane.id)
                     .collect();
                 for id in orphans.intersection(&previous) {
                     log::info!(
@@ -189,8 +192,7 @@ fn spawn_orphan_sweep(registry: Arc<Registry>) {
 /// snapshot of a pane that is very much alive, and the writer would put it
 /// back seconds later.
 fn restorable_pane_ids(registry: &Registry) -> std::collections::HashSet<u64> {
-    let mut ids: std::collections::HashSet<u64> =
-        registry.list().into_iter().map(|p| p.pane_id).collect();
+    let mut ids = registry.ids();
     if let Some(store) = crate::core::machine::observed_store() {
         let machine = store.machine();
         ids.extend(
@@ -701,7 +703,7 @@ fn run_with(registry: Arc<Registry>, alone: bool) -> anyhow::Result<()> {
         registry.seed_ids_past(&store.machine());
         let probe = registry.clone();
         store.set_liveness_probe(Arc::new(move |id| {
-            probe.get(id).is_some_and(|pane| pane.info().alive)
+            probe.get(id).is_some_and(|pane| pane.alive())
         }));
     }
 
