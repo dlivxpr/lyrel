@@ -1790,6 +1790,28 @@ mod tests {
         );
     }
 
+    #[test]
+    fn retired_repositories_keep_live_network_limits_but_release_idle_counters() {
+        let mut data = ScmData::default();
+        let host = HostId::from_connection_key("network-only-retired");
+        data.subs.declare(9100, ScmWatcher::Panel, Some((host, root())));
+        let first = data.take_network_slot(host, &root()).unwrap();
+        let second = data.take_network_slot(host, &root()).unwrap();
+        data.release_window(9100);
+        assert!(data.hosts().contains(&host), "a running network owner remains discoverable");
+        data.clear_host(host);
+        data.subs.declare(9101, ScmWatcher::Panel, Some((host, root())));
+        assert!(data.take_network_slot(host, &root()).is_none(), "reconnect must share the live counter, not double the limit");
+        drop(first);
+        let replacement = data.take_network_slot(host, &root()).unwrap();
+        assert!(data.take_network_slot(host, &root()).is_none());
+        drop(second);
+        drop(replacement);
+        data.release_window(9101);
+        assert!(data.network.get(host, &root()).is_none(), "last owner release drops an idle counter");
+        assert!(!data.hosts().contains(&host));
+    }
+
     // -- disconnect -------------------------------------------------------
 
     #[test]

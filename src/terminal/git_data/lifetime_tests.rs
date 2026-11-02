@@ -364,3 +364,42 @@ fn a_dead_host_is_forgotten_after_its_last_repository_owner_left(cx: &mut TestAp
         assert_eq!(app.scm.active_repo().unwrap().host, live, "the dead override cannot survive until reconnect");
     });
 }
+
+fn discover_repository(vcx: &mut VisualTestContext, host: &dyn Host, root: &Path) {
+    let crate::terminal::git_status::RepoProbe::Repo(snapshot) = crate::terminal::git_status::probe_repo(host, root) else {
+        panic!("the real Host must discover this test repository");
+    };
+    vcx.update(|_, cx| {
+        cx.default_global::<crate::terminal::git_status::GitStatusCache>().finish_probe(host.id(), root, Some(snapshot));
+    });
+}
+
+#[gpui_kit::test]
+fn displayed_non_repository_roots_stay_quiet_until_existing_discovery_finds_git(cx: &mut TestAppContext) {
+    let dir = tempfile::tempdir().unwrap();
+    let root = lyrel_core::core::path_spelling::local_spelling_buf(std::fs::canonicalize(dir.path()).unwrap());
+    let host = GatedHost::new(HostId::LOCAL);
+    let (app, mut vcx, _streams) = crate::ui::app::test_window::harness_with_tabs(cx, 1);
+    vcx.update(|_, cx| { crate::ui::host_registry::HostRegistry::insert(cx, host.clone()); });
+    for known_negative in [false, true] {
+        app.update_in(&mut vcx, |app, window, cx| {
+            if known_negative {
+                cx.default_global::<crate::terminal::git_status::GitStatusCache>().finish_probe(host.id(), &root, None);
+            }
+            app.right_panel_visible = true;
+            app.right_panel_tab = crate::core::config::RightPanelTab::Files;
+            app.tab_code_mut_or_init().unwrap().roots = vec![root.clone()];
+            app.scm_sync_watchers(window, cx);
+            assert!(cx.try_global::<ScmData>().is_none_or(ScmData::is_quiet), "unknown and non-Git display roots must not start recurring SCM Git/RPC work");
+        });
+    }
+    let output = std::process::Command::new("git").args(["init", "--quiet"]).current_dir(&root).output().unwrap();
+    assert!(output.status.success());
+    std::fs::write(root.join("new-repository.txt"), "discovered\n").unwrap();
+    discover_repository(&mut vcx, host.as_ref(), &root);
+    app.update_in(&mut vcx, |app, window, cx| app.scm_sync_watchers(window, cx));
+    pump(&mut vcx, |cx| fresh(cx, host.id(), &root));
+    vcx.update(|_, cx| {
+        assert_eq!(index_of(cx, host.id(), &root).unwrap().file("new-repository.txt"), Some(crate::core::git::status::DecoStatus::Untracked));
+    });
+}
