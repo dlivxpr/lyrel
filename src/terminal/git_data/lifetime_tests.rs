@@ -250,16 +250,26 @@ fn displayed_tree_roots_keep_all_live_indexes_and_release_only_removed_roots(cx:
         subscribe(&mut vcx, 4001, ScmWatcher::Panel, host.id(), root);
         app.update_in(&mut vcx, |app, _, cx| app.scm_refresh(host.clone(), root.clone(), cx));
         pump(&mut vcx, |cx| fresh(cx, host.id(), root));
+        discover_repository(&mut vcx, host.as_ref(), root);
         // Separate windows can hold different roots through the same watcher.
         subscribe(&mut vcx, if root == &first { 4002 } else { 4003 }, ScmWatcher::Editor, host.id(), root);
     }
-    use crate::core::session::{RemoteRef, RemoteTarget, WorkspaceId, WorkspaceStore};
+    use crate::core::session::{RemoteRef, RemoteTarget, WindowView, WindowViews, WorkspaceId, WorkspaceStore};
     let target = RemoteTarget::Alias { alias: "scm-lifetime-tree-host".into() };
     let remote = GatedHost::new(target.host_id());
+    let remote_workspace = WindowView::on_remote(RemoteRef::new(target.clone(), WorkspaceId::new()));
+    let remote_workspace_id = remote_workspace.id;
+    app.update_in(&mut vcx, |app, _, cx| {
+        let mut local_workspace = WindowView::default();
+        local_workspace.id = app.workspace;
+        WorkspaceStore::install_for_test(cx, WindowViews { views: vec![local_workspace, remote_workspace], active: None });
+        assert_eq!(app.spawn_host(cx), host.id());
+    });
     vcx.update(|_, cx| { crate::ui::host_registry::HostRegistry::insert(cx, remote.clone()); });
     subscribe(&mut vcx, 4004, ScmWatcher::Panel, remote.id(), &second);
     app.update_in(&mut vcx, |app, _, cx| app.scm_refresh(remote.clone(), second.clone(), cx));
     pump(&mut vcx, |cx| fresh(cx, remote.id(), &second));
+    discover_repository(&mut vcx, remote.as_ref(), &second);
     // 4001 moved between projects; the first root is held by 4002.
     app.update_in(&mut vcx, |app, window, cx| {
         app.right_panel_visible = true;
@@ -286,7 +296,8 @@ fn displayed_tree_roots_keep_all_live_indexes_and_release_only_removed_roots(cx:
         // Real filesystem bytes are shared only by this scheduling fixture;
         // SCM ownership and landing identities must remain Host-specific.
         let local_workspace = app.workspace;
-        app.workspace = WorkspaceStore::claim_remote(cx, RemoteRef::new(target.clone(), WorkspaceId::new()));
+        app.workspace = remote_workspace_id;
+        assert_eq!(app.spawn_host(cx), remote.id(), "the fixture must really switch Host authority");
         app.rebind_host(host.id(), cx);
         app.scm_sync_watchers(window, cx);
         cx.global_mut::<ScmData>().release_window(4004);
@@ -294,6 +305,7 @@ fn displayed_tree_roots_keep_all_live_indexes_and_release_only_removed_roots(cx:
         assert!(index_of(cx, remote.id(), &second).is_some());
 
         app.workspace = local_workspace;
+        assert_eq!(app.spawn_host(cx), host.id());
         app.rebind_host(remote.id(), cx);
         app.scm_sync_watchers(window, cx);
         assert!(index_of(cx, remote.id(), &second).is_none());
@@ -324,5 +336,104 @@ fn clearing_another_host_does_not_discard_a_live_pending_status(cx: &mut TestApp
         assert_eq!(status_of(cx, local.id(), &root).unwrap().total_entries, 1);
         assert_eq!(index_of(cx, local.id(), &root).unwrap().file("before.txt"), Some(crate::core::git::status::DecoStatus::Untracked));
         assert!(status_of(cx, other, &root).is_none());
+    });
+}
+
+#[gpui_kit::test]
+fn a_dead_host_is_forgotten_after_its_last_repository_owner_left(cx: &mut TestAppContext) {
+    use crate::ui::scm::state::RepoKey;
+    let (app, mut vcx) = crate::ui::app::test_window::harness(cx);
+    let root = PathBuf::from("/same-wire-path");
+    let dead = HostId::from_connection_key("scm-retired-host");
+    let live = HostId::LOCAL;
+    vcx.update(|_, cx| { crate::ui::host_registry::HostRegistry::insert(cx, GatedHost::new(dead)); });
+    subscribe(&mut vcx, 8300, ScmWatcher::Panel, dead, &root);
+    app.update_in(&mut vcx, |app, _, cx| {
+        app.scm.follow_pane(RepoKey { host: live, root: root.clone() });
+        app.scm.select_repository(RepoKey { host: dead, root: root.clone() }, 0);
+        for host in [dead, live] {
+            app.scm.roots.insert((host, root.clone()), (Instant::now(), Some(root.clone())));
+            app.scm.root_lookups.insert((host, root.clone()));
+        }
+        cx.global_mut::<ScmData>().release_window(8300);
+        assert!(cx.global::<ScmData>().hosts().is_empty());
+        crate::ui::host_registry::HostRegistry::remove(cx, dead);
+        app.scm_forget_lost_hosts(cx);
+        assert!(!app.scm.roots.contains_key(&(dead, root.clone())));
+        assert!(!app.scm.root_lookups.contains(&(dead, root.clone())));
+        assert!(app.scm.roots.contains_key(&(live, root.clone())));
+        assert!(app.scm.root_lookups.contains(&(live, root.clone())));
+        assert_eq!(app.scm.active_repo().unwrap().host, live, "the dead override cannot survive until reconnect");
+    });
+}
+
+fn discover_repository(vcx: &mut VisualTestContext, host: &dyn Host, root: &Path) {
+    let crate::terminal::git_status::RepoProbe::Repo(snapshot) = crate::terminal::git_status::probe_repo(host, root) else {
+        panic!("the real Host must discover this test repository");
+    };
+    vcx.update(|_, cx| {
+        cx.default_global::<crate::terminal::git_status::GitStatusCache>().finish_probe(host.id(), root, Some(snapshot));
+    });
+}
+
+#[gpui_kit::test]
+fn displayed_non_repository_roots_stay_quiet_until_existing_discovery_finds_git(cx: &mut TestAppContext) {
+    let dir = tempfile::tempdir().unwrap();
+    let root = lyrel_core::core::path_spelling::local_spelling_buf(std::fs::canonicalize(dir.path()).unwrap());
+    let host = GatedHost::new(HostId::LOCAL);
+    let (app, mut vcx, _streams) = crate::ui::app::test_window::harness_with_tabs(cx, 1);
+    vcx.update(|_, cx| { crate::ui::host_registry::HostRegistry::insert(cx, host.clone()); });
+    for known_negative in [false, true] {
+        app.update_in(&mut vcx, |app, window, cx| {
+            if known_negative {
+                cx.default_global::<crate::terminal::git_status::GitStatusCache>().finish_probe(host.id(), &root, None);
+            }
+            app.right_panel_visible = true;
+            app.right_panel_tab = crate::core::config::RightPanelTab::Files;
+            app.tab_code_mut_or_init().unwrap().roots = vec![root.clone()];
+            app.scm_sync_watchers(window, cx);
+            assert!(cx.try_global::<ScmData>().is_none_or(ScmData::is_quiet), "unknown and non-Git display roots must not start recurring SCM Git/RPC work");
+        });
+    }
+    let output = std::process::Command::new("git").args(["init", "--quiet"]).current_dir(&root).output().unwrap();
+    assert!(output.status.success());
+    std::fs::write(root.join("new-repository.txt"), "discovered\n").unwrap();
+    let nested = root.join("nested");
+    std::fs::create_dir(&nested).unwrap();
+    discover_repository(&mut vcx, host.as_ref(), &nested);
+    app.update_in(&mut vcx, |app, window, cx| {
+        app.tab_code_mut_or_init().unwrap().roots = vec![root.clone()];
+        app.scm_sync_watchers(window, cx);
+        assert!(cx.try_global::<ScmData>().is_some_and(|data| data.is_subscribed(host.id(), &root)), "a root discovered from below must activate its displayed working tree");
+    });
+    pump(&mut vcx, |cx| fresh(cx, host.id(), &root));
+    app.update_in(&mut vcx, |app, window, cx| {
+        let previous = index_of(cx, host.id(), &root).unwrap();
+        app.tab_code_mut_or_init().unwrap().roots = vec![nested, root.clone(), root.clone()];
+        app.scm_sync_watchers(window, cx);
+        assert_eq!(cx.global::<ScmData>().subs.count(host.id(), &root), 1, "multiple display roots in one working tree share one owner");
+        assert!(Arc::ptr_eq(&previous, &index_of(cx, host.id(), &root).unwrap()), "alias roots do not retire the live decoration snapshot");
+    });
+    vcx.update(|_, cx| {
+        assert_eq!(index_of(cx, host.id(), &root).unwrap().file("new-repository.txt"), Some(crate::core::git::status::DecoStatus::Untracked));
+    });
+}
+
+#[gpui_kit::test]
+fn a_network_write_finishing_after_the_last_holder_retires_its_idle_counter(cx: &mut TestAppContext) {
+    let (app, mut vcx) = crate::ui::app::test_window::harness(cx);
+    let root = PathBuf::from("/network-retired-root");
+    let slot = vcx.update(|_, cx| {
+        let data = cx.default_global::<ScmData>();
+        data.subscriptions().declare(9200, ScmWatcher::Panel, Some((HostId::LOCAL, root.clone())));
+        let slot = data.take_network_slot(HostId::LOCAL, &root).unwrap();
+        data.release_window(9200);
+        assert_eq!(data.network_slots(HostId::LOCAL, &root), 1);
+        slot
+    });
+    drop(slot);
+    app.update_in(&mut vcx, |app, window, cx| {
+        app.scm_sync_watchers(window, cx);
+        assert!(cx.global::<ScmData>().hosts().is_empty(), "completed unowned writes must not retain historical Host/root counters");
     });
 }

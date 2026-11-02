@@ -15,7 +15,7 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 
 use gpui_kit::{Context, Window};
@@ -24,6 +24,14 @@ use crate::core::git::ops::{GitOp, GitOpError, GitOpErrorKind, GitOpOutcome, run
 use crate::core::git::status::{StatusIndex, StatusProbe, WorkingTreeStatus, probe_status};
 use crate::ui::app::LyrelApp;
 use crate::ui::host_ops::{ByHost, Host, HostId, HostOps, InFlight, SharedHost, WatchSub};
+
+/// One process-wide scalar, not a tombstone per visited repository. Both a
+/// new subscription lifetime and a refresh receive a never-reused identity.
+fn next_refresh_epoch() -> u64 {
+    static NEXT: AtomicU64 = AtomicU64::new(1);
+    NEXT.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |next| next.checked_add(1))
+        .expect("SCM refresh identities exhausted")
+}
 
 /// How many network operations one (host, repository) pair may have in flight.
 ///
@@ -233,8 +241,6 @@ pub enum ScmWatcher {
 pub struct GitSubscriptions {
     refs: ByHost<PathBuf, u32>,
     sub_gen: ByHost<PathBuf, u64>,
-    /// Unique live identities; retired roots need no generation tombstone.
-    next_generation: u64,
     /// Per window, then per watcher. Every window reconciles this one global
     /// every frame, so a watcher is only "the same one" within its window:
     /// keyed by the watcher alone, two windows whose file trees sit in
@@ -249,8 +255,7 @@ impl GitSubscriptions {
     /// Take a hold, and report the generation results must carry to be kept.
     pub fn acquire(&mut self, host: HostId, root: &Path) -> u64 {
         if !self.is_subscribed(host, root) {
-            self.next_generation += 1;
-            self.sub_gen.insert(host, root.to_path_buf(), self.next_generation);
+            self.sub_gen.insert(host, root.to_path_buf(), next_refresh_epoch());
         }
         let next = self.count(host, root) + 1;
         self.refs.insert(host, root.to_path_buf(), next);
@@ -439,7 +444,7 @@ impl ScmData {
     }
 
     pub fn epoch(&self, host: HostId, root: &Path) -> u64 {
-        self.epoch.get(host, root).copied().unwrap_or(0)
+        self.epoch.get(host, root).copied().unwrap_or(0).max(self.subs.generation(host, root))
     }
 
     /// Whether what we hold was read before the last thing that changed it.
@@ -462,8 +467,7 @@ impl ScmData {
     /// A real change also ends a failure's rest: whatever made the epoch move
     /// is evidence the host is alive again.
     pub fn bump(&mut self, host: HostId, root: &Path) {
-        let next = self.epoch(host, root) + 1;
-        self.epoch.insert(host, root.to_path_buf(), next);
+        self.epoch.insert(host, root.to_path_buf(), next_refresh_epoch());
         self.failed_at.remove(host, root);
         self.probes.invalidate(&(host, root.to_path_buf()));
     }
@@ -488,7 +492,10 @@ impl ScmData {
     /// Which hosts we are holding anything for. Used to notice the ones that
     /// have since disappeared from the registry.
     pub fn hosts(&self) -> Vec<HostId> {
-        let mut hosts: Vec<HostId> = self.epoch.keys().map(|(host, _)| host).collect();
+        let mut hosts: Vec<HostId> = self.epoch.keys()
+            .chain(self.subs.refs.keys())
+            .chain(self.network.keys())
+            .map(|(host, _)| host).collect();
         hosts.sort_unstable();
         hosts.dedup();
         hosts
@@ -629,6 +636,17 @@ impl ScmData {
         self.read_at.remove(host, root);
         self.failed_at.remove(host, root);
         self.probes.retain(|(held_host, held_root)| *held_host != host || held_root != root);
+        if self.network_slots(host, root) == 0 {
+            self.network.remove(host, root);
+        }
+    }
+
+    /// Only completed, unowned counters are copied for retirement. Active
+    /// writes and current repositories keep the same counter allocation.
+    fn idle_network(&self) -> Vec<(HostId, PathBuf)> {
+        self.network.keys()
+            .filter(|(host, root)| !self.is_subscribed(*host, root) && self.network_slots(*host, root) == 0)
+            .map(|(host, root)| (host, root.clone())).collect()
     }
 
     /// Record an invalidation. `Some(seq)` means a burst opened and the caller
@@ -880,39 +898,75 @@ impl LyrelApp {
     /// it is stated rather than remembered, and running it twice costs nothing.
     pub(crate) fn scm_sync_watchers(&mut self, window: &Window, cx: &mut Context<Self>) {
         self.scm_forget_lost_hosts(cx);
+        let idle = cx.try_global::<ScmData>().map(ScmData::idle_network).unwrap_or_default();
+        if !idle.is_empty() {
+            let data = cx.global_mut::<ScmData>();
+            for (host, root) in idle {
+                data.network.remove(host, &root);
+            }
+        }
 
-        let mut tree_targets: Vec<_> = if self.file_tree_on_screen(cx) {
-            let host = self.spawn_host(cx);
-            self.tab_code()
-                .map(|code| code.roots.iter().cloned().map(|root| (host, root)).collect())
-                .unwrap_or_default()
+        let window_key = cx.entity_id().as_u64();
+        let tree_host = self.spawn_host(cx);
+        let tree_roots = if self.file_tree_on_screen(cx) {
+            self.tab_code().map_or(&[][..], |code| code.roots.as_slice())
         } else {
-            Vec::new()
+            &[]
         };
-        tree_targets.sort_unstable();
-        tree_targets.dedup();
+        let git_cache = cx.try_global::<crate::terminal::git_status::GitStatusCache>();
+        let repository_roots = || tree_roots.iter().filter_map(move |root| {
+            git_cache.and_then(|cache| cache.repo_root_for(tree_host, root))
+        });
+        let held_tree = cx.try_global::<ScmData>()
+            .and_then(|data| data.subs.held.get(&(window_key, ScmWatcher::FileTree)))
+            .map_or(&[][..], Vec::as_slice);
+        // Display roots may be plain directories or subdirectories. Existing
+        // discovery is the sole authority for which working trees need SCM.
+        // Unknown/non-Git roots retain their ordinary file-tree discovery, not
+        // a recurring failed SCM watch. Compare borrowed known repos as a set.
+        let tree_unchanged = repository_roots().all(|root| held_tree.iter().any(|(host, held)| *host == tree_host && held.as_path() == root))
+            && held_tree.iter().all(|(host, root)| *host == tree_host && repository_roots().any(|known| known == root.as_path()));
+        let tree_targets = (!tree_unchanged).then(|| {
+            let mut targets = Vec::with_capacity(tree_roots.len());
+            for root in repository_roots() {
+                if !targets.iter().any(|(_, held): &(HostId, PathBuf)| held.as_path() == root) {
+                    targets.push((tree_host, root.to_path_buf()));
+                }
+            }
+            targets
+        });
         let panel = self.scm_panel_target(window, cx);
         let github = self.github_metadata_target(window, cx);
         let editor = self.scm_editor_target(cx);
         let wanted = [
             (ScmWatcher::Panel, panel.as_slice()),
             (ScmWatcher::GitHub, github.as_slice()),
-            (ScmWatcher::FileTree, tree_targets.as_slice()),
             (ScmWatcher::Editor, editor.as_slice()),
+            (ScmWatcher::FileTree, tree_targets.as_deref().unwrap_or_default()),
         ];
+        // An omitted watcher keeps its existing holds without cloning them.
+        let wanted = &wanted[..if tree_targets.is_some() { 4 } else { 3 }];
         // Avoid global-observer effects in a frame with no SCM consumers.
         if wanted.iter().all(|(_, targets)| targets.is_empty())
             && cx.try_global::<ScmData>().is_none_or(ScmData::is_quiet)
         {
             return;
         }
-        let window_key = cx.entity_id().as_u64();
-        let data = cx.default_global::<ScmData>();
-        for (host, root) in data.subs.reconcile(window_key, &wanted) {
-            data.release_repository(host, &root);
+        let changed = cx.try_global::<ScmData>().is_none_or(|data| {
+            wanted.iter().any(|(who, targets)| {
+                data.subs.held.get(&(window_key, *who)).map_or(&[][..], Vec::as_slice) != *targets
+            })
+        });
+        if changed {
+            let data = cx.default_global::<ScmData>();
+            for (host, root) in data.subs.reconcile(window_key, wanted) {
+                data.release_repository(host, &root);
+            }
         }
 
-        for (host, root) in cx.default_global::<ScmData>().unwatched(Instant::now()) {
+        let unwatched = cx.try_global::<ScmData>()
+            .map(|data| data.unwatched(Instant::now())).unwrap_or_default();
+        for (host, root) in unwatched {
             let Some(shared) = crate::ui::host_registry::HostRegistry::get(cx, host) else {
                 continue;
             };
@@ -980,23 +1034,18 @@ impl LyrelApp {
     /// keeps showing the branch and the file list the machine had at the
     /// moment it fell off, with no way to tell that from live data.
     fn scm_forget_lost_hosts(&mut self, cx: &mut Context<Self>) {
-        let held = match cx.try_global::<ScmData>() {
-            Some(data) => data.hosts(),
-            None => return,
-        };
-        if held.is_empty() {
-            return;
-        }
         let live = crate::ui::host_registry::HostRegistry::ids(cx);
-        for host in held.into_iter().filter(|h| !live.contains(h)) {
+        let held = cx.try_global::<ScmData>().map(ScmData::hosts).unwrap_or_default();
+        for host in held.into_iter().filter(|host| !live.contains(host)) {
             cx.default_global::<ScmData>().clear_host(host);
             cx.default_global::<crate::terminal::git_status::GitStatusCache>()
                 .clear_host(host);
-            // The panel's own per-cwd caches too — `roots` grows one entry
-            // per directory ever visited on the dead link otherwise.
-            self.scm.forget_host(host);
-            self.github.remotes.retain(|repo, _| repo.host != host);
         }
+        // Derived panel state has its own owner and can outlive the last
+        // subscription. Inspect it in place, never copy historical roots to
+        // discover a dead Host through the now-retired ScmData epochs.
+        self.scm.forget_lost_hosts(&live);
+        self.github.remotes.retain(|repo, _| live.contains(&repo.host));
     }
 
     /// Open a `.git` watch: resolve the directories, then subscribe to them.
@@ -1345,7 +1394,7 @@ mod tests {
         let mut data = ScmData::default();
         let other = HostId::from_connection_key("somewhere-else");
         data.bump(HostId::LOCAL, &root());
-        assert_eq!(data.epoch(HostId::LOCAL, &root()), 1);
+        assert_ne!(data.epoch(HostId::LOCAL, &root()), 0);
         assert_eq!(
             data.epoch(other, &root()),
             0,
@@ -1763,6 +1812,41 @@ mod tests {
             data.take_network_slot(HostId::LOCAL, Path::new("/other"))
                 .is_some()
         );
+    }
+
+    #[test]
+    fn retired_repositories_keep_live_network_limits_but_release_idle_counters() {
+        let mut data = ScmData::default();
+        let host = HostId::from_connection_key("network-only-retired");
+        data.subs.declare(9100, ScmWatcher::Panel, Some((host, root())));
+        let first = data.take_network_slot(host, &root()).unwrap();
+        let second = data.take_network_slot(host, &root()).unwrap();
+        data.release_window(9100);
+        assert!(data.hosts().contains(&host), "a running network owner remains discoverable");
+        data.subs.declare(9101, ScmWatcher::Panel, Some((host, root())));
+        assert!(data.take_network_slot(host, &root()).is_none(), "resubscribing on the same live Host must share the counter, not double the limit");
+        drop(first);
+        let replacement = data.take_network_slot(host, &root()).unwrap();
+        assert!(data.take_network_slot(host, &root()).is_none());
+        drop(second);
+        drop(replacement);
+        data.release_window(9101);
+        assert!(data.network.get(host, &root()).is_none(), "last owner release drops an idle counter");
+        assert!(!data.hosts().contains(&host));
+    }
+
+    #[test]
+    fn a_disconnected_hosts_old_network_guards_do_not_own_reconnected_slots() {
+        let mut data = ScmData::default();
+        let host = HostId::from_connection_key("network-disconnected");
+        let old = data.take_network_slot(host, &root()).unwrap();
+        data.clear_host(host);
+        assert!(!data.hosts().contains(&host));
+        let _first = data.take_network_slot(host, &root()).unwrap();
+        let _second = data.take_network_slot(host, &root()).unwrap();
+        assert!(data.take_network_slot(host, &root()).is_none());
+        drop(old);
+        assert!(data.take_network_slot(host, &root()).is_none(), "old guards cannot release the new connection's slots");
     }
 
     // -- disconnect -------------------------------------------------------

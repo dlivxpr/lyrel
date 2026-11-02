@@ -909,15 +909,16 @@ impl DaemonPane {
                                 let mut media_locality = || facts_reader.indirect_media_locality(&before);
                                 graphics_reader::extract(raw, &mut clipboard, &mut graphics, &mut media_locality)
                             };
-                            // A client's output marker is a readiness barrier for
-                            // pane metadata. Parse and commit these exact slices
-                            // before consume can publish any of their bytes.
-                            let observation = facts_reader.observe(extracted.output(), &foreground_running, before);
+                            // Parse once from the stripped slices, without joining ordinary
+                            // output. Only cheap OSC metadata precedes the readiness marker;
+                            // shell/agent scope and foreground probes follow publication.
+                            let mut observation = facts_reader.parse(extracted.output());
+                            let metadata = observation.take_metadata();
 
                             let tr1 = trace.then(std::time::Instant::now);
                             // Fact snapshots are conditional; ordinary output does not allocate.
                             let mut st = state.lock().unwrap();
-                            let change = st.with_facts(|facts, emit| facts.apply_output(observation, emit));
+                            let change = st.with_facts(|facts, emit| facts.apply_output(metadata, emit));
                             graphics.set_local(st.facts.remote().is_none());
                             if let Some(tr1) = tr1 {
                                 tr_disp_t += tr1.elapsed();
@@ -925,8 +926,16 @@ impl DaemonPane {
                             let pane = st.id;
                             let alive = st.alive;
                             drop(st);
-                            change.publish(pane, alive, shutting_down.load(Ordering::SeqCst));
                             graphics_reader::consume(extracted, &state, &gate, &writer, controller, &mut graphics);
+                            change.publish(pane, alive, shutting_down.load(Ordering::SeqCst));
+                            let observation = facts_reader.observe(observation, &foreground_running, before);
+                            let mut st = state.lock().unwrap();
+                            let change = st.with_facts(|facts, emit| facts.apply_output(observation, emit));
+                            graphics.set_local(st.facts.remote().is_none());
+                            let pane = st.id;
+                            let alive = st.alive;
+                            drop(st);
+                            change.publish(pane, alive, shutting_down.load(Ordering::SeqCst));
                             let da1_owed = detached_device_attribute_queries(&mut state.lock().unwrap());
                             answer_device_attributes(&writer, da1_owed);
                         }

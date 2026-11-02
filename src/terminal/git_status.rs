@@ -300,6 +300,12 @@ impl GitStatusCache {
                         removed,
                     },
                 );
+                // File-tree display roots can come from a pane below this
+                // directory. A successful probe proves the root itself too;
+                // keep that fact in this same authority, not another cache.
+                if cwd.as_ref() != snap.root.as_path() {
+                    self.roots.insert(host, snap.root.clone(), Some(snap.root.clone()));
+                }
                 self.homes.insert(host, snap.root.clone(), snap.home);
                 self.roots.insert(host, cwd.to_path_buf(), Some(snap.root));
             }

@@ -1028,18 +1028,24 @@ fn adopting_a_workspace_discards_a_pending_open_without_losing_dirty_documents(
         Arc::strong_count(&older) == 1
             || app.read_with(vcx, |app, _| app.editor.buffers.at(older.id(), path).is_some())
     });
-    app.read_with(&vcx, |app, _| {
+    vcx.update(|window, cx| window.render_frame(cx));
+    app.read_with(&vcx, |app, cx| {
         assert_eq!(app.workspace, next_workspace);
-        assert!(app.editor_active_location().is_none());
-        assert!(app.tab_code().is_none_or(|code| code.files.is_empty()));
-        assert!(app.editor.buffers.at(older.id(), path).is_none());
+        assert!(app.editor.buffers.at(older.id(), path).is_none(), "the old navigation must not land");
+        assert!(app.tab_code().unwrap().files.contains(&dirty), "the new quiet tab adopts the dirty orphan");
+        let file = app.editor.buffers.get(dirty).unwrap();
+        assert_eq!(file.path, dirty_path);
+        assert!(file.dirty);
+        assert_eq!(file.input.read(cx).text().to_string(), "DIRTY161keep me\n");
     });
     // Open only after the old callback has finished: a newer request must not
     // be what invalidates the stale request on behalf of the transition.
     app.update_in(&mut vcx, |app, window, cx| {
         app.editor_open_on_host_at(newer, path, Some(Position::new(1, 4)), window, cx);
     });
-    wait_until(&mut vcx, |vcx| active_id(&app, vcx).is_some());
+    wait_until(&mut vcx, |vcx| {
+        app.read_with(vcx, |app, _| app.editor_active_location().is_some_and(|(host, location)| host == HostId(73) && location == path))
+    });
     app.read_with(&vcx, |app, cx| {
         let file = app.active_buffer().unwrap();
         assert_eq!(file.host.id(), HostId(73));
@@ -1048,7 +1054,10 @@ fn adopting_a_workspace_discards_a_pending_open_without_losing_dirty_documents(
             "new workspace\nsecond line\n"
         );
         assert_eq!(file.input.read(cx).cursor_position(), Position::new(1, 4));
-        assert_eq!(app.tab_code().unwrap().files.len(), 1);
+        let files = &app.tab_code().unwrap().files;
+        assert!(files.contains(&dirty));
+        assert!(files.contains(&file.id()));
+        assert!(app.editor.buffers.at(older.id(), path).is_none());
         assert_eq!(app.editor_unsaved(), vec![dirty]);
     });
     app.update_in(&mut vcx, |app, window, cx| {

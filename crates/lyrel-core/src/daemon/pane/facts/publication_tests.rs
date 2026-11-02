@@ -108,53 +108,115 @@ fn a_pane_title_reaches_the_machine_tree() {
 }
 
 #[test]
-fn output_readiness_cannot_overtake_its_osc_facts() {
+fn output_readiness_cannot_overtake_its_osc_facts_or_wait_for_process_probes() {
     use super::super::test_support::drain;
+    use std::time::Duration;
 
-    // The process probe runs inside the real reader's observation phase.
-    // Looking at the subscriber here deterministically catches publication
-    // before observation, without racing a list request against the reader.
     let mut pane = test_state(true);
     let (sender, receiver) = mpsc::channel();
     attach_subscriber(&mut pane, sender);
     drain(&receiver);
-    let receiver = Arc::new(Mutex::new(receiver));
-    let during_probe = receiver.clone();
+    let (entered_tx, entered) = mpsc::channel();
+    let (release, release_rx) = mpsc::channel();
     let state = Arc::new(Mutex::new(pane));
-    DaemonPane::spawn_reader(
+    let bytes = b"\x1b]0;first-osc\x07\x1b]7;file:///work/ready\x07\x1b]133;A\x07OSC_READY\r\n";
+    let reader = DaemonPane::spawn_reader(
         state.clone(),
         Arc::new(AtomicBool::new(false)),
         Arc::new(OutputGate::new()),
-        Box::new(std::io::Cursor::new(b"\x1b]0;first-osc\x07OSC_READY\r\n")),
+        Box::new(std::io::Cursor::new(bytes)),
         null_writer(),
-        || false,
+        move || {
+            entered_tx.send(()).unwrap();
+            release_rx.recv_timeout(Duration::from_secs(10)).unwrap();
+            true
+        },
         ForegroundProbes {
             group: Box::new(|| None),
             remote: Box::new(|| None),
             agent: Box::new(|| Some(None)),
-            cwd: Box::new(move || {
-                assert!(
-                    during_probe.lock().unwrap().try_recv().is_err(),
-                    "output was published before its facts were observed"
-                );
-                None
-            }),
+            cwd: Box::new(|| None),
             local_group: |_| Some(true),
         },
         Arc::new(DeathReporter::new(|| {})),
-    )
-    .join()
-    .unwrap();
-    assert_eq!(state.lock().unwrap().facts.osc_title(), Some("first-osc"));
-    let output: Vec<_> = receiver
-        .lock()
-        .unwrap()
-        .try_iter()
-        .filter_map(|message| match message {
-            DaemonMsg::Output(bytes) => Some(bytes),
-            _ => None,
-        })
-        .flatten()
-        .collect();
-    assert_eq!(output, b"\x1b]0;first-osc\x07OSC_READY\r\n");
+    );
+    entered.recv_timeout(Duration::from_secs(10)).unwrap();
+    // The real reader is now paused in a foreground probe, not racing this
+    // client. Its marker must already be consumable with the matching OSC facts.
+    let output: Vec<_> = receiver.try_iter().filter_map(|message| match message {
+        DaemonMsg::Output(bytes) => Some(bytes),
+        _ => None,
+    }).flatten().collect();
+    let facts = {
+        let pane = state.lock().unwrap();
+        (pane.facts.osc_title().map(str::to_string), pane.facts.cwd().map(Path::to_path_buf))
+    };
+    // Always release the real worker before assertions, including a RED run.
+    release.send(()).unwrap();
+    reader.join().unwrap();
+    assert_eq!(output, bytes);
+    assert_eq!(facts.0.as_deref(), Some("first-osc"));
+    assert_eq!(facts.1.as_deref(), Some(Path::new("/work/ready")));
+    let pane = state.lock().unwrap();
+    assert!(!pane.facts.shell.at_prompt, "relayed prompts stay suppressed after the probe");
+    assert!(pane.facts.shell.mark_at_prompt);
+}
+
+#[test]
+fn output_readiness_does_not_wait_for_machine_subscribers() {
+    use super::super::test_support::drain;
+    use crate::core::machine::{
+        LayoutDelta, MACHINE_FILE, MachineStore, OBSERVE_SLOT, PaneSeed,
+        publish_observations, withdraw_observations,
+    };
+    use std::time::Duration;
+
+    const PANE: u64 = 79;
+    let _slot = OBSERVE_SLOT.lock().unwrap_or_else(|error| error.into_inner());
+    let dir = tempfile::tempdir().unwrap();
+    let store = MachineStore::open(dir.path().join(MACHINE_FILE));
+    let workspace = store.workspace_create(None, None, None).unwrap();
+    store.tab_create(workspace.id, None, PaneSeed::bare(PANE), None, None).unwrap();
+    publish_observations(&store);
+    let (entered_tx, entered) = mpsc::channel();
+    let (release, release_rx) = mpsc::channel();
+    let release_rx = Mutex::new(release_rx);
+    let paused = AtomicBool::new(false);
+    let _subscription = store.subscribe(Arc::new(move |_, delta| {
+        if let LayoutDelta::PaneFacts { pane } = delta
+            && pane.id == PANE && pane.osc_title.as_deref() == Some("published-osc")
+            && !paused.swap(true, Ordering::SeqCst)
+        {
+            entered_tx.send(()).unwrap();
+            release_rx.lock().unwrap().recv_timeout(Duration::from_secs(10)).unwrap();
+        }
+    }));
+    let mut pane = test_state(true);
+    pane.id = PANE;
+    let (sender, receiver) = mpsc::channel();
+    attach_subscriber(&mut pane, sender);
+    drain(&receiver);
+    let state = Arc::new(Mutex::new(pane));
+    let bytes = b"\x1b]0;published-osc\x07MACHINE_READY\r\n";
+    let reader = DaemonPane::spawn_reader(
+        state.clone(), Arc::new(AtomicBool::new(false)), Arc::new(OutputGate::new()),
+        Box::new(std::io::Cursor::new(bytes)), null_writer(), || false,
+        ForegroundProbes {
+            group: Box::new(|| None), remote: Box::new(|| None),
+            agent: Box::new(|| Some(None)), cwd: Box::new(|| None),
+            local_group: |_| Some(true),
+        },
+        Arc::new(DeathReporter::new(|| {})),
+    );
+    entered.recv_timeout(Duration::from_secs(10)).unwrap();
+    let output: Vec<_> = receiver.try_iter().filter_map(|message| match message {
+        DaemonMsg::Output(bytes) => Some(bytes), _ => None,
+    }).flatten().collect();
+    let title = state.lock().unwrap().facts.osc_title().map(str::to_string);
+    release.send(()).unwrap();
+    reader.join().unwrap();
+    withdraw_observations();
+    assert_eq!(output, bytes, "a slow machine client cannot hold pane output");
+    assert_eq!(title.as_deref(), Some("published-osc"));
+    assert_eq!(store.pane(PANE).unwrap().osc_title.as_deref(), Some("published-osc"));
 }

@@ -28,6 +28,21 @@ pub(in super::super) struct OutputObservation {
 }
 
 impl OutputObservation {
+    /// Only OSC title/cwd are safe to publish before foreground observation.
+    /// Shell/agent marks still need suppression and the original Host scope.
+    pub(in super::super) fn take_metadata(&mut self) -> Self {
+        Self {
+            signals: SniffSignals {
+                cwd: self.signals.cwd.take(),
+                title: self.signals.title.take(),
+                ..Default::default()
+            },
+            remote: None,
+            agent: None,
+            cwd: None,
+        }
+    }
+
     pub(super) fn may_change_facts(&self) -> bool {
         self.signals.cwd.is_some()
             || self.signals.title.is_some()
@@ -121,13 +136,26 @@ impl FactReader {
         }
     }
 
-    pub(in super::super) fn observe<'a>(
+    pub(in super::super) fn parse<'a>(
         &mut self,
         bytes: impl IntoIterator<Item = &'a [u8]>,
+    ) -> OutputObservation {
+        OutputObservation {
+            signals: self.sniffer.feed_parts(bytes),
+            remote: None,
+            agent: None,
+            cwd: None,
+        }
+    }
+
+    /// Output has already been published. No process probe delays its bytes.
+    pub(in super::super) fn observe(
+        &mut self,
+        observation: OutputObservation,
         foreground_running: &impl Fn() -> bool,
         mut before: ReadProbe,
     ) -> OutputObservation {
-        let mut signals = self.sniffer.feed_parts(bytes);
+        let mut signals = observation.signals;
         // Most reads contain no mark, so do not pay for a foreground syscall.
         if signals.shell.iter().any(|shell| shell.at_prompt) && foreground_running() {
             suppress_relayed_prompt_marks(&mut signals.shell);
