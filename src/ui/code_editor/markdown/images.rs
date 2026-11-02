@@ -267,4 +267,39 @@ mod tests {
         let image = br#"<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16"><text x="0" y="12">text</text></svg>"#;
         let _ = decode_with_fonts(image, &fonts);
     }
+
+    #[test]
+    fn svg_text_matches_default_font_selection_and_unicode_fallback() {
+        use resvg::{tiny_skia, usvg};
+
+        let fonts: std::sync::LazyLock<Arc<usvg::fontdb::Database>> =
+            std::sync::LazyLock::new(|| {
+                let mut fonts = usvg::fontdb::Database::new();
+                fonts.load_system_fonts();
+                Arc::new(fonts)
+            });
+        let nested = r#"<svg xmlns="http://www.w3.org/2000/svg" width="100" height="40"><text x="0" y="24" font-size="20">中λЖé</text></svg>"#;
+        let nested = percent_encoding::utf8_percent_encode(nested, percent_encoding::NON_ALPHANUMERIC);
+        let source = format!(
+            r#"<svg xmlns="http://www.w3.org/2000/svg" width="400" height="80"><rect width="400" height="80" fill="white"/><text x="4" y="26" font-family="missing-lyrel-font, serif" font-size="20">ASCII λЖé 中</text><text x="4" y="60" font-family="monospace" font-size="20">fallback Ω العربية</text><image x="280" y="0" width="100" height="40" href="data:image/svg+xml,{nested}"/></svg>"#
+        );
+        let actual = decode_with_fonts(source.as_bytes(), &fonts).unwrap();
+
+        // The former eager fontdb + official default resolver is an independent
+        // rendering reference, including font selection inside a nested SVG.
+        let options = usvg::Options {
+            fontdb: Arc::clone(&fonts),
+            ..Default::default()
+        };
+        let tree = usvg::Tree::from_data(source.as_bytes(), &options).unwrap();
+        let mut expected = tiny_skia::Pixmap::new(400, 80).unwrap();
+        resvg::render(&tree, tiny_skia::Transform::identity(), &mut expected.as_mut());
+        let expected: Vec<u8> = expected
+            .data()
+            .chunks_exact(4)
+            .flat_map(|pixel| [pixel[2], pixel[1], pixel[0], pixel[3]])
+            .collect();
+        assert!(expected.chunks_exact(4).any(|pixel| pixel != [255, 255, 255, 255]));
+        assert_eq!(actual.as_bytes(0).unwrap(), expected);
+    }
 }
