@@ -121,13 +121,13 @@ impl FactReader {
         }
     }
 
-    pub(in super::super) fn observe(
+    pub(in super::super) fn observe<'a>(
         &mut self,
-        bytes: &[u8],
+        bytes: impl IntoIterator<Item = &'a [u8]>,
         foreground_running: &impl Fn() -> bool,
         mut before: ReadProbe,
     ) -> OutputObservation {
-        let mut signals = self.sniffer.feed(bytes);
+        let mut signals = self.sniffer.feed_parts(bytes);
         // Most reads contain no mark, so do not pay for a foreground syscall.
         if signals.shell.iter().any(|shell| shell.at_prompt) && foreground_running() {
             suppress_relayed_prompt_marks(&mut signals.shell);

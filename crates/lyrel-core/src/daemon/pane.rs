@@ -905,14 +905,14 @@ impl DaemonPane {
                                 clipboard.set_controller(controller, st.subscriptions.clipboard_allowed());
                                 controller
                             };
-                            let mut media_locality = || facts_reader.indirect_media_locality(&before);
-                            let passthrough = graphics_reader::consume(raw, &mut clipboard, &mut graphics, &state, &gate, &writer, controller, &mut media_locality);
-                            let bytes: &[u8] = &passthrough;
-                            let observation = facts_reader.observe(bytes, &foreground_running, before);
-                            let mut st = state.lock().unwrap();
-                            let da1_owed = detached_device_attribute_queries(&mut st);
-                            drop(st);
-
+                            let extracted = {
+                                let mut media_locality = || facts_reader.indirect_media_locality(&before);
+                                graphics_reader::extract(raw, &mut clipboard, &mut graphics, &mut media_locality)
+                            };
+                            // A client's output marker is a readiness barrier for
+                            // pane metadata. Parse and commit these exact slices
+                            // before consume can publish any of their bytes.
+                            let observation = facts_reader.observe(extracted.output(), &foreground_running, before);
 
                             let tr1 = trace.then(std::time::Instant::now);
                             // Fact snapshots are conditional; ordinary output does not allocate.
@@ -925,8 +925,10 @@ impl DaemonPane {
                             let pane = st.id;
                             let alive = st.alive;
                             drop(st);
-                            answer_device_attributes(&writer, da1_owed);
                             change.publish(pane, alive, shutting_down.load(Ordering::SeqCst));
+                            graphics_reader::consume(extracted, &state, &gate, &writer, controller, &mut graphics);
+                            let da1_owed = detached_device_attribute_queries(&mut state.lock().unwrap());
+                            answer_device_attributes(&writer, da1_owed);
                         }
                         Err(err) if err.kind() == std::io::ErrorKind::Interrupted => continue,
                         Err(_) => break,
@@ -1476,16 +1478,23 @@ mod tests {
             let gate = OutputGate::new();
             let mut passthrough = Vec::new();
             for chunk in chunks {
-                passthrough.extend_from_slice(&graphics_reader::consume(
+                let extracted = graphics_reader::extract(
                     chunk,
                     &mut clipboard,
                     &mut graphics,
+                    &mut || panic!("plain output must not probe host-media locality"),
+                );
+                for bytes in extracted.output() {
+                    passthrough.extend_from_slice(bytes);
+                }
+                graphics_reader::consume(
+                    extracted,
                     &state,
                     &gate,
                     &writer,
                     Some(1),
-                    &mut || panic!("plain output must not probe host-media locality"),
-                ));
+                    &mut graphics,
+                );
             }
             let recorded = state.lock().unwrap().ring.flatten();
             assert_eq!(

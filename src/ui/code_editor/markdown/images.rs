@@ -61,21 +61,40 @@ pub(super) fn external(url: &str) -> bool {
     url::Url::parse(url).is_ok_and(|url| matches!(url.scheme(), "http" | "https"))
 }
 fn decode(bytes: &[u8]) -> anyhow::Result<Arc<RenderImage>> {
+    static FONTS: std::sync::LazyLock<Arc<resvg::usvg::fontdb::Database>> =
+        std::sync::LazyLock::new(|| {
+            let mut fonts = resvg::usvg::fontdb::Database::new();
+            fonts.load_system_fonts();
+            Arc::new(fonts)
+        });
+    decode_with_fonts(bytes, &FONTS)
+}
+
+fn decode_with_fonts(
+    bytes: &[u8],
+    fonts: &std::sync::LazyLock<Arc<resvg::usvg::fontdb::Database>>,
+) -> anyhow::Result<Arc<RenderImage>> {
     // Decode off the UI thread; the image hook returns already prepared pixels.
     let pixels = match image::load_from_memory(bytes) {
         Ok(image) => image.into_rgba8(),
         Err(raster_error) => {
             use resvg::{tiny_skia, usvg};
-            static FONTS: std::sync::LazyLock<Arc<usvg::fontdb::Database>> =
-                std::sync::LazyLock::new(|| {
-                    let mut fonts = usvg::fontdb::Database::new();
-                    fonts.load_system_fonts();
-                    Arc::new(fonts)
-                });
             let denied = Arc::new(std::sync::atomic::AtomicBool::new(false));
             let rejected = denied.clone();
+            let select_font = usvg::FontResolver::default_font_selector();
             let options = usvg::Options {
-                fontdb: FONTS.clone(),
+                // A text-free SVG must not wait for the machine-wide font scan
+                // before it can reject an external image reference. usvg invokes
+                // this resolver only when it actually needs to lay out text.
+                font_resolver: usvg::FontResolver {
+                    select_font: Box::new(move |font, database| {
+                        if database.is_empty() {
+                            *database = Arc::clone(fonts);
+                        }
+                        select_font(font, database)
+                    }),
+                    ..Default::default()
+                },
                 image_href_resolver: usvg::ImageHrefResolver {
                     resolve_data: usvg::ImageHrefResolver::default_data_resolver(),
                     resolve_string: Box::new(move |_, _| {
@@ -215,5 +234,37 @@ impl super::MarkdownDocument {
         if changed {
             cx.emit(super::DocumentEvent::ImagesChanged);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn text_free_svg_completes_without_initializing_system_fonts() {
+        // A controlled cold font loader makes the unwanted dependency fail
+        // immediately rather than relying on a machine's font-scan duration.
+        let fonts: std::sync::LazyLock<Arc<resvg::usvg::fontdb::Database>> =
+            std::sync::LazyLock::new(|| panic!("text-free SVG must not scan system fonts"));
+        let image = br##"<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16"><rect width="16" height="16" fill="#f00"/></svg>"##;
+        assert!(decode_with_fonts(image, &fonts).is_ok());
+        let external = br#"<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16"><image href="http://127.0.0.1/private.png" width="16" height="16"/></svg>"#;
+        let error = decode_with_fonts(external, &fonts)
+            .err()
+            .expect("external SVG image must be rejected");
+        assert_eq!(
+            error.to_string(),
+            "SVG references external resources; those resources were not loaded"
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "SVG text requires fonts")]
+    fn svg_text_still_initializes_the_font_database() {
+        let fonts: std::sync::LazyLock<Arc<resvg::usvg::fontdb::Database>> =
+            std::sync::LazyLock::new(|| panic!("SVG text requires fonts"));
+        let image = br#"<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16"><text x="0" y="12">text</text></svg>"#;
+        let _ = decode_with_fonts(image, &fonts);
     }
 }
