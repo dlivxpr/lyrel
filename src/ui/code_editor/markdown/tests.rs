@@ -2765,7 +2765,13 @@ fn opening_native_images_never_contacts_http_until_loading_intent(
             Some(crate::ui::i18n::t(crate::ui::i18n::L10nKey::EditorImageUnloaded).as_ref())
         );
     });
+    // File open, live projection and Host image decoding are separate async
+    // phases. Do not spend the image wait's allowance on the preceding phases.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
     loop {
+        context
+            .executor()
+            .advance_clock(std::time::Duration::from_millis(100));
         context.run_until_parked();
         if context.update(|window, cx| {
             window.render_frame(cx);
@@ -2774,7 +2780,18 @@ fn opening_native_images_never_contacts_http_until_loading_intent(
         }) {
             break;
         }
-        assert!(std::time::Instant::now() < deadline);
+        assert!(
+            std::time::Instant::now() < deadline,
+            "local SVG must reach its failed state without requesting external content; status: {:?}, requests: {}",
+            context.update(|window, cx| {
+                window.render_frame(cx);
+                window
+                    .find("markdown-image:vector.svg")
+                    .label()
+                    .map(str::to_owned)
+            }),
+            requests.load(Ordering::SeqCst),
+        );
         std::thread::sleep(std::time::Duration::from_millis(5));
     }
     let start = source.find("![private]").unwrap();
@@ -2806,7 +2823,11 @@ fn opening_native_images_never_contacts_http_until_loading_intent(
             .expect("caret geometry before loading")
     });
     context.update(|window, cx| window.click("markdown-load-images", cx));
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
     loop {
+        context
+            .executor()
+            .advance_clock(std::time::Duration::from_millis(100));
         context.run_until_parked();
         let failed = context.update(|window, cx| {
             window.render_frame(cx);
@@ -2822,7 +2843,11 @@ fn opening_native_images_never_contacts_http_until_loading_intent(
         if failed {
             break;
         }
-        assert!(std::time::Instant::now() < deadline);
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the explicit load must finish the HTTP request; requests: {}",
+            requests.load(Ordering::SeqCst),
+        );
         std::thread::sleep(std::time::Duration::from_millis(5));
     }
     assert_eq!(requests.load(Ordering::SeqCst), 1);
