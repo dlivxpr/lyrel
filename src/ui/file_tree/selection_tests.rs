@@ -301,11 +301,10 @@ fn external_drop_targets_the_scrolled_empty_directory_not_its_neighbor(cx: &mut 
         paths: ExternalPaths(vec![payload.clone()].into()),
     });
     vcx.simulate_event(gpui_kit::FileDropEvent::Submit { position });
-    wait(&mut vcx, |_| destination.join("payload.txt").exists());
-    assert_eq!(
-        std::fs::read_to_string(destination.join("payload.txt")).unwrap(),
-        "drop bytes"
-    );
+    wait_for(&mut vcx, "the dropped file's complete bytes", |_| {
+        std::fs::read_to_string(destination.join("payload.txt"))
+            .is_ok_and(|text| text == "drop bytes")
+    });
     assert!(payload.exists());
     assert!(!root.path().join("payload.txt").exists());
     assert!(!root.path().join("dir-078/payload.txt").exists());
@@ -328,11 +327,10 @@ fn external_drop_targets_the_scrolled_empty_directory_not_its_neighbor(cx: &mut 
         paths: ExternalPaths(vec![background].into()),
     });
     vcx.simulate_event(gpui_kit::FileDropEvent::Submit { position });
-    wait(&mut vcx, |_| root.path().join("background.txt").exists());
-    assert_eq!(
-        std::fs::read_to_string(root.path().join("background.txt")).unwrap(),
-        "root bytes"
-    );
+    wait_for(&mut vcx, "the background drop's complete bytes", |_| {
+        std::fs::read_to_string(root.path().join("background.txt"))
+            .is_ok_and(|text| text == "root bytes")
+    });
     assert!(!destination.join("background.txt").exists());
 }
 

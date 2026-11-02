@@ -12,7 +12,7 @@
 mod model;
 
 use std::collections::HashSet;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::time::Duration;
 
@@ -122,14 +122,31 @@ pub(crate) enum Body {
     Failed(String),
 }
 
-#[derive(Clone, PartialEq)]
+#[derive(Clone)]
 pub(crate) enum PanelSearchRow {
     Heading(Option<String>),
     Note(Body),
     Searching,
-    File(usize, PathBuf),
-    Hit(usize, usize, u32, u32),
+    // Indexes locate current render data; only path and hit coordinates identify
+    // a row across refreshes. One shared path per group also serves all its hits.
+    File(usize, Rc<Path>),
+    Hit(usize, usize, Rc<Path>, u32, u32),
     Truncated,
+}
+
+impl PartialEq for PanelSearchRow {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::Heading(a), Self::Heading(b)) => a == b,
+            (Self::Note(a), Self::Note(b)) => a == b,
+            (Self::Searching, Self::Searching) | (Self::Truncated, Self::Truncated) => true,
+            (Self::File(_, a), Self::File(_, b)) => a == b,
+            (Self::Hit(_, _, a, line_a, col_a), Self::Hit(_, _, b, line_b, col_b)) => {
+                a == b && line_a == line_b && col_a == col_b
+            }
+            _ => false,
+        }
+    }
 }
 
 impl LyrelApp {
@@ -313,10 +330,11 @@ impl LyrelApp {
                 }
                 if let Some(landed) = self.panel_search.run.landed() {
                     for (file, group) in landed.groups.iter().enumerate() {
-                        rows.push(PanelSearchRow::File(file, group.path.clone()));
+                        let path: Rc<Path> = Rc::from(group.path.as_path());
+                        rows.push(PanelSearchRow::File(file, Rc::clone(&path)));
                         if !self.panel_search.collapsed.contains(&group.path) {
                             rows.extend(group.hits.iter().enumerate().map(|(n, hit)| {
-                                PanelSearchRow::Hit(file, n, hit.line, hit.column)
+                                PanelSearchRow::Hit(file, n, Rc::clone(&path), hit.line, hit.column)
                             }));
                         }
                     }
@@ -909,6 +927,163 @@ mod gpui_tests {
             );
             std::thread::sleep(Duration::from_millis(10));
         }
+    }
+
+    #[gpui_kit::test]
+    fn same_query_refresh_preserves_scrolled_content_identity_after_preceding_insertions(
+        cx: &mut TestAppContext,
+    ) {
+        use gpui_kit::test::TestWindowExt;
+        let _serial = serial();
+        let temp =
+            tempfile::tempdir_in(std::fs::canonicalize(std::env::temp_dir()).unwrap()).unwrap();
+        let root = temp.path();
+        for n in 0..100 {
+            std::fs::write(
+                root.join(format!("file-{n:03}.txt")),
+                "plain first line\n  needle original\nneedle trailing\n",
+            )
+            .unwrap();
+        }
+        let target = root.join("file-060.txt");
+        let expected_target = lyrel_core::core::path_spelling::local_spelling_buf(
+            std::fs::canonicalize(&target).unwrap(),
+        );
+        let hit: SharedString = format!("panel-search-hit-{}-2-3", target.display()).into();
+        let group: SharedString = format!("panel-search-file-{}", target.display()).into();
+        let (app, mut vcx, _pane) = search_panel_on(cx, root);
+        vcx.update(|window, cx| window.input("needle", cx));
+        assert!(matches!(landed(&app, &mut vcx), Outcome::Found(_)));
+        assert_eq!(groups(&app, &mut vcx).len(), 100);
+
+        // Reach a real, non-terminal viewport through the list's wheel handler.
+        // Its first row must be the domain object under test, not a surviving
+        // header or neighbour that could accidentally preserve its position.
+        let align_at_top = |vcx: &mut VisualTestContext, row: SharedString| {
+            for _ in 0..100 {
+                let visible = vcx.update(|window, cx| {
+                    window.render_frame(cx);
+                    if window
+                        .try_find(row.clone())
+                        .is_some_and(|row| row.visible())
+                    {
+                        return true;
+                    }
+                    window.scroll(
+                        "right-panel-tree-rows",
+                        gpui_kit::ScrollDelta::Pixels(gpui_kit::point(px(0.), px(-200.))),
+                        cx,
+                    );
+                    false
+                });
+                if visible {
+                    break;
+                }
+            }
+            vcx.update(|window, cx| {
+                window.render_frame(cx);
+                let top = window.find("right-panel-tree-rows").bounds().origin.y;
+                let before = window
+                    .try_find(row.clone())
+                    .expect("initial wheel scrolling must reach the intended content row")
+                    .bounds()
+                    .origin
+                    .y;
+                window.scroll(
+                    "right-panel-tree-rows",
+                    gpui_kit::ScrollDelta::Pixels(gpui_kit::point(px(0.), top - before)),
+                    cx,
+                );
+                window.render_frame(cx);
+                let target = window
+                    .try_find(row)
+                    .expect("initial alignment must retain the intended content row")
+                    .bounds();
+                assert_eq!(
+                    target.origin.y, top,
+                    "the intended row owns the scroll anchor before refresh"
+                );
+                target.origin.y
+            })
+        };
+        let hit_y = align_at_top(&mut vcx, hit.clone());
+
+        // Add a hit before line 2 without moving its path/line/column. Its
+        // mutable hit index changes, but the reader must stay at the same hit.
+        let refreshed = "needle inserted\n  needle refreshed\nneedle trailing\n";
+        std::fs::write(&target, refreshed).unwrap();
+        vcx.update(|window, cx| window.press("enter", cx));
+        assert!(matches!(landed(&app, &mut vcx), Outcome::Found(_)));
+        assert_eq!(groups(&app, &mut vcx)[60].1, vec![1, 2, 3]);
+        vcx.update(|window, cx| {
+            window.render_frame(cx);
+            let row = window
+                .try_find(hit.clone())
+                .expect("hit insertion refresh lost the previously visible path/line/column");
+            assert!(row.visible(), "hit insertion refresh hid the scroll anchor");
+            assert_eq!(
+                row.bounds().origin.y,
+                hit_y,
+                "hit insertion moved the scroll anchor"
+            );
+        });
+
+        // A new preceding file changes file indexes too. Exercise the file
+        // header anchor separately before opening its existing line-2 hit.
+        vcx.update(|window, cx| {
+            window.scroll(
+                "right-panel-tree-rows",
+                gpui_kit::ScrollDelta::Pixels(gpui_kit::point(px(0.), px(200.))),
+                cx,
+            );
+        });
+        let group_y = align_at_top(&mut vcx, group.clone());
+        std::fs::write(root.join("before-all.txt"), "needle new file\n").unwrap();
+        vcx.update(|window, cx| window.press("enter", cx));
+        assert!(matches!(landed(&app, &mut vcx), Outcome::Found(_)));
+        assert_eq!(groups(&app, &mut vcx).len(), 101);
+        vcx.update(|window, cx| {
+            window.render_frame(cx);
+            let row = window
+                .try_find(group)
+                .expect("file insertion refresh lost the previously visible file header");
+            assert!(
+                row.visible(),
+                "file insertion refresh hid the scroll anchor"
+            );
+            assert_eq!(
+                row.bounds().origin.y,
+                group_y,
+                "file insertion moved the scroll anchor"
+            );
+            window.click(hit, cx);
+        });
+        let deadline = std::time::Instant::now() + Duration::from_secs(20);
+        loop {
+            vcx.background_executor.run_until_parked();
+            if app.read_with(&vcx, |app, _| {
+                app.editor_active_location().is_some_and(|(host, path)| {
+                    host == crate::ui::host_ops::HostId::LOCAL && path == expected_target
+                })
+            }) {
+                break;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "the refreshed hit opened the wrong file"
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        app.read_with(&vcx, |app, cx| {
+            let file = app
+                .editor
+                .local_file(app.tab_code().unwrap().active_id().unwrap())
+                .expect("the hit opened a local code editor");
+            let input = file.input.read(cx);
+            let cursor = input.cursor_position();
+            assert_eq!((cursor.line, cursor.character), (1, 2));
+            assert_eq!(input.text().to_string(), refreshed);
+        });
     }
 
     #[gpui_kit::test]
