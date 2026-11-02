@@ -253,9 +253,17 @@ fn displayed_tree_roots_keep_all_live_indexes_and_release_only_removed_roots(cx:
         // Separate windows can hold different roots through the same watcher.
         subscribe(&mut vcx, if root == &first { 4002 } else { 4003 }, ScmWatcher::Editor, host.id(), root);
     }
-    use crate::core::session::{RemoteRef, RemoteTarget, WorkspaceId, WorkspaceStore};
+    use crate::core::session::{RemoteRef, RemoteTarget, WindowView, WindowViews, WorkspaceId, WorkspaceStore};
     let target = RemoteTarget::Alias { alias: "scm-lifetime-tree-host".into() };
     let remote = GatedHost::new(target.host_id());
+    let remote_workspace = WindowView::on_remote(RemoteRef::new(target.clone(), WorkspaceId::new()));
+    let remote_workspace_id = remote_workspace.id;
+    app.update_in(&mut vcx, |app, _, cx| {
+        let mut local_workspace = WindowView::default();
+        local_workspace.id = app.workspace;
+        WorkspaceStore::install_for_test(cx, WindowViews { views: vec![local_workspace, remote_workspace], active: None });
+        assert_eq!(app.spawn_host(cx), host.id());
+    });
     vcx.update(|_, cx| { crate::ui::host_registry::HostRegistry::insert(cx, remote.clone()); });
     subscribe(&mut vcx, 4004, ScmWatcher::Panel, remote.id(), &second);
     app.update_in(&mut vcx, |app, _, cx| app.scm_refresh(remote.clone(), second.clone(), cx));
@@ -286,7 +294,8 @@ fn displayed_tree_roots_keep_all_live_indexes_and_release_only_removed_roots(cx:
         // Real filesystem bytes are shared only by this scheduling fixture;
         // SCM ownership and landing identities must remain Host-specific.
         let local_workspace = app.workspace;
-        app.workspace = WorkspaceStore::claim_remote(cx, RemoteRef::new(target.clone(), WorkspaceId::new()));
+        app.workspace = remote_workspace_id;
+        assert_eq!(app.spawn_host(cx), remote.id(), "the fixture must really switch Host authority");
         app.rebind_host(host.id(), cx);
         app.scm_sync_watchers(window, cx);
         cx.global_mut::<ScmData>().release_window(4004);
@@ -294,6 +303,7 @@ fn displayed_tree_roots_keep_all_live_indexes_and_release_only_removed_roots(cx:
         assert!(index_of(cx, remote.id(), &second).is_some());
 
         app.workspace = local_workspace;
+        assert_eq!(app.spawn_host(cx), host.id());
         app.rebind_host(remote.id(), cx);
         app.scm_sync_watchers(window, cx);
         assert!(index_of(cx, remote.id(), &second).is_none());
@@ -324,5 +334,33 @@ fn clearing_another_host_does_not_discard_a_live_pending_status(cx: &mut TestApp
         assert_eq!(status_of(cx, local.id(), &root).unwrap().total_entries, 1);
         assert_eq!(index_of(cx, local.id(), &root).unwrap().file("before.txt"), Some(crate::core::git::status::DecoStatus::Untracked));
         assert!(status_of(cx, other, &root).is_none());
+    });
+}
+
+#[gpui_kit::test]
+fn a_dead_host_is_forgotten_after_its_last_repository_owner_left(cx: &mut TestAppContext) {
+    use crate::ui::scm::state::RepoKey;
+    let (app, mut vcx) = crate::ui::app::test_window::harness(cx);
+    let root = PathBuf::from("/same-wire-path");
+    let dead = HostId::from_connection_key("scm-retired-host");
+    let live = HostId::LOCAL;
+    vcx.update(|_, cx| { crate::ui::host_registry::HostRegistry::insert(cx, GatedHost::new(dead)); });
+    subscribe(&mut vcx, 8300, ScmWatcher::Panel, dead, &root);
+    app.update_in(&mut vcx, |app, _, cx| {
+        app.scm.follow_pane(RepoKey { host: live, root: root.clone() });
+        app.scm.select_repository(RepoKey { host: dead, root: root.clone() }, 0);
+        for host in [dead, live] {
+            app.scm.roots.insert((host, root.clone()), (Instant::now(), Some(root.clone())));
+            app.scm.root_lookups.insert((host, root.clone()));
+        }
+        cx.global_mut::<ScmData>().release_window(8300);
+        assert!(cx.global::<ScmData>().hosts().is_empty());
+        crate::ui::host_registry::HostRegistry::remove(cx, dead);
+        app.scm_forget_lost_hosts(cx);
+        assert!(!app.scm.roots.contains_key(&(dead, root.clone())));
+        assert!(!app.scm.root_lookups.contains(&(dead, root.clone())));
+        assert!(app.scm.roots.contains_key(&(live, root.clone())));
+        assert!(app.scm.root_lookups.contains(&(live, root.clone())));
+        assert_eq!(app.scm.active_repo().unwrap().host, live, "the dead override cannot survive until reconnect");
     });
 }
