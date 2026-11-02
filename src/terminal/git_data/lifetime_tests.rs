@@ -398,7 +398,6 @@ fn displayed_non_repository_roots_stay_quiet_until_existing_discovery_finds_git(
     let output = std::process::Command::new("git").args(["init", "--quiet"]).current_dir(&root).output().unwrap();
     assert!(output.status.success());
     std::fs::write(root.join("new-repository.txt"), "discovered\n").unwrap();
-    discover_repository(&mut vcx, host.as_ref(), &root);
     let nested = root.join("nested");
     std::fs::create_dir(&nested).unwrap();
     discover_repository(&mut vcx, host.as_ref(), &nested);
