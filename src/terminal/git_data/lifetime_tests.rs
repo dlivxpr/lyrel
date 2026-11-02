@@ -250,6 +250,7 @@ fn displayed_tree_roots_keep_all_live_indexes_and_release_only_removed_roots(cx:
         subscribe(&mut vcx, 4001, ScmWatcher::Panel, host.id(), root);
         app.update_in(&mut vcx, |app, _, cx| app.scm_refresh(host.clone(), root.clone(), cx));
         pump(&mut vcx, |cx| fresh(cx, host.id(), root));
+        discover_repository(&mut vcx, host.as_ref(), root);
         // Separate windows can hold different roots through the same watcher.
         subscribe(&mut vcx, if root == &first { 4002 } else { 4003 }, ScmWatcher::Editor, host.id(), root);
     }
@@ -268,6 +269,7 @@ fn displayed_tree_roots_keep_all_live_indexes_and_release_only_removed_roots(cx:
     subscribe(&mut vcx, 4004, ScmWatcher::Panel, remote.id(), &second);
     app.update_in(&mut vcx, |app, _, cx| app.scm_refresh(remote.clone(), second.clone(), cx));
     pump(&mut vcx, |cx| fresh(cx, remote.id(), &second));
+    discover_repository(&mut vcx, remote.as_ref(), &second);
     // 4001 moved between projects; the first root is held by 4002.
     app.update_in(&mut vcx, |app, window, cx| {
         app.right_panel_visible = true;
@@ -397,9 +399,35 @@ fn displayed_non_repository_roots_stay_quiet_until_existing_discovery_finds_git(
     assert!(output.status.success());
     std::fs::write(root.join("new-repository.txt"), "discovered\n").unwrap();
     discover_repository(&mut vcx, host.as_ref(), &root);
-    app.update_in(&mut vcx, |app, window, cx| app.scm_sync_watchers(window, cx));
+    let nested = root.join("nested");
+    std::fs::create_dir(&nested).unwrap();
+    discover_repository(&mut vcx, host.as_ref(), &nested);
+    app.update_in(&mut vcx, |app, window, cx| {
+        app.tab_code_mut_or_init().unwrap().roots = vec![nested, root.clone(), root.clone()];
+        app.scm_sync_watchers(window, cx);
+        assert_eq!(cx.global::<ScmData>().subs.count(host.id(), &root), 1, "multiple display roots in one working tree share one owner");
+    });
     pump(&mut vcx, |cx| fresh(cx, host.id(), &root));
     vcx.update(|_, cx| {
         assert_eq!(index_of(cx, host.id(), &root).unwrap().file("new-repository.txt"), Some(crate::core::git::status::DecoStatus::Untracked));
+    });
+}
+
+#[gpui_kit::test]
+fn a_network_write_finishing_after_the_last_holder_retires_its_idle_counter(cx: &mut TestAppContext) {
+    let (app, mut vcx) = crate::ui::app::test_window::harness(cx);
+    let root = PathBuf::from("/network-retired-root");
+    let slot = vcx.update(|_, cx| {
+        let data = cx.default_global::<ScmData>();
+        data.subscriptions().declare(9200, ScmWatcher::Panel, Some((HostId::LOCAL, root.clone())));
+        let slot = data.take_network_slot(HostId::LOCAL, &root).unwrap();
+        data.release_window(9200);
+        assert_eq!(data.network_slots(HostId::LOCAL, &root), 1);
+        slot
+    });
+    drop(slot);
+    app.update_in(&mut vcx, |app, window, cx| {
+        app.scm_sync_watchers(window, cx);
+        assert!(cx.global::<ScmData>().hosts().is_empty(), "completed unowned writes must not retain historical Host/root counters");
     });
 }
