@@ -8,7 +8,7 @@
 //! stops.
 //!
 //! The bar never touches the terminal. [`set_offset`](ScrollbarHandle::set_offset)
-//! only records the row it wants; `TerminalView::sync_scrollbar` applies that on
+//! only records the row it wants; `TerminalView::sync_frame_facts` applies that on
 //! the next render and reports back where the grid actually ended up.
 
 use std::cell::Cell;

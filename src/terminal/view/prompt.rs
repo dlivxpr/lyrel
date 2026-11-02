@@ -30,7 +30,7 @@ impl TerminalView {
         col: usize,
         cols: usize,
     ) -> Option<(usize, usize)> {
-        if !self.input_active() || self.history.search().is_some() {
+        if !self.frame_input_active() || self.history.search().is_some() {
             return None;
         }
         match input_start(col, cols.max(1)) {
@@ -40,21 +40,14 @@ impl TerminalView {
     }
 
     pub(in crate::terminal) fn input_scroll_rows(&self) -> usize {
-        if !self.input_active() || self.history.search().is_some() {
+        if !self.frame_input_active() || self.history.search().is_some() {
             return 0;
         }
-        let Some((crow, ccol)) = self.cursor_cell() else {
+        let Some((crow, ccol)) = self.frame.cursor else {
             return 0;
         };
-        let (rows, cols, offset) = {
-            let term = self.terminal.term.lock();
-            (
-                term.screen_lines(),
-                term.columns(),
-                term.grid.display_offset(),
-            )
-        };
-        if offset != 0 {
+        let (rows, cols) = (self.frame.rows, self.frame.cols);
+        if self.frame.display_offset != 0 {
             return 0;
         }
         let chars: Vec<char> = self.input.editor().text().chars().collect();
@@ -148,7 +141,7 @@ impl TerminalView {
         focused: bool,
         cx: &mut Context<Self>,
     ) -> impl IntoElement + use<> {
-        let (crow, ccol) = self.cursor_cell().unwrap_or((0, 0));
+        let (crow, ccol) = self.frame.cursor.unwrap_or((0, 0));
         let cx_left = px(GRID_PAD_X) + self.cell_width * (ccol as f32);
         let shift = self.input_scroll_rows();
         let cy_top = px(GRID_PAD_Y) + self.line_height * (crow as f32 - shift as f32);
@@ -279,7 +272,7 @@ impl TerminalView {
         // The prompt's row, then the input's. Starting below the prompt leaves
         // that row empty — the prompt shows through it — and the input begins
         // at column 0 of the next.
-        let cols = self.terminal.term.lock().columns().max(1);
+        let cols = self.frame.cols.max(1);
         let (start_row, start_col) = input_start(ccol, cols);
         let mut lines: Vec<Vec<gpui_kit::AnyElement>> =
             (0..start_row).map(|_| Vec::new()).collect();

@@ -182,6 +182,17 @@ impl ShellParts {
     }
 }
 
+#[derive(Default)]
+struct FrameFacts {
+    alt_screen: bool,
+    mouse_mode: bool,
+    has_selection: bool,
+    cursor: Option<(usize, usize)>,
+    rows: usize,
+    cols: usize,
+    display_offset: usize,
+}
+
 fn cwd_is_on_host(pane_runs_remotely: bool, host_is_local: bool) -> bool {
     match pane_runs_remotely {
         false => host_is_local,
@@ -221,14 +232,10 @@ pub struct TerminalView {
     /// pane* when the next one starts.
     pub(super) grid_buf: Vec<RenderCell>,
     pub(super) grid_snap: Option<GridSnapshot>,
-    /// Terminal mode and selection as of the last frame that got the lock.
-    /// What the *frame* declares — the keymap context it publishes, whether it
-    /// draws a selection — is read from here, so drawing never queues behind
-    /// the pane's reader for two bits it can be one frame late about.
-    /// Everything with a decision to make (a keystroke asking whether a
-    /// full-screen program owns the screen) still asks the terminal itself.
-    frame_alt_screen: bool,
-    frame_has_selection: bool,
+    /// Render-only grid facts from the last successful nonblocking read.
+    /// Input routing still reads the live terminal rather than this snapshot.
+    frame: FrameFacts,
+    grid_retry: Option<gpui_kit::Task<()>>,
     pub(super) selection_scroll: super::selection_scroll::SelectionScroll,
     pub title: String,
     /// A title the pane has been told about but has not adopted yet — see
@@ -707,8 +714,8 @@ impl TerminalView {
             grid_slack: px(0.),
             grid_buf: Vec::new(),
             grid_snap: None,
-            frame_alt_screen: false,
-            frame_has_selection: false,
+            frame: FrameFacts::default(),
+            grid_retry: None,
             selection_scroll: super::selection_scroll::SelectionScroll::default(),
             title: DEFAULT_TITLE.to_string(),
             pending_title: None,
@@ -793,11 +800,13 @@ impl TerminalView {
         } else {
             1.
         };
-        self.terminal.resize(
+        if self.terminal.resize(
             TermSize::new(cols, rows),
             (cell_width.as_f32() * scale).round().max(1.) as u16,
             (line_height.as_f32() * scale).round().max(1.) as u16,
-        );
+        ) {
+            self.retry_grid_when_available(cx);
+        }
         if cols_changed && self.search.is_some() {
             self.refresh_matches_after_output(cx);
         }
@@ -1231,8 +1240,8 @@ impl TerminalView {
     /// the draw off the lock; a selection that appears while the reader holds
     /// it is drawn one frame later.
     fn any_selection(&self) -> bool {
-        self.frame_has_selection
-            || (self.input_active() && self.input.editor().selected_text().is_some())
+        self.frame.has_selection
+            || (self.frame_input_active() && self.input.editor().selected_text().is_some())
     }
 
     fn jump_to_prompt(&mut self) {
@@ -1257,6 +1266,10 @@ impl TerminalView {
                 .lock()
                 .mode()
                 .intersects(Mode::MOUSE_MODE)
+    }
+
+    pub(super) fn frame_mouse_mode(&self) -> bool {
+        self.report_mouse && self.frame.mouse_mode
     }
 
     fn write_mouse(&self, base: u8, mods: &Modifiers, col: usize, row: usize, pressed: bool) {
@@ -1742,49 +1755,56 @@ impl TerminalView {
         running
     }
 
-    /// Settle up with the scrollback bar for this frame: move the viewport
-    /// where a drag asked for, then tell the bar where the grid ended up.
-    ///
-    /// Both halves belong here rather than in the handle, so the bar — which
-    /// runs from a mouse handler, with no pane to call into — never reaches
-    /// into the terminal behind the pane's back.
-    fn sync_scrollbar(&mut self) {
+    /// Apply pending scroll and sample all render facts under the same guard.
+    /// Only the first frame, which has no valid fallback yet, waits for a grid.
+    fn sync_frame_facts(&mut self) -> bool {
+        let mut term = if self.grid_snap.is_none() {
+            self.terminal.term.lock()
+        } else if let Some(term) = self.terminal.term.try_lock() {
+            term
+        } else {
+            return false;
+        };
         if let Some(target) = self.scroll_handle.take_pending() {
-            let mut term = self.terminal.term.lock();
             self.selection_scroll.scroll_to(&mut term, target);
         }
-        // Not worth a wait: the scrollbar is a picture of where the grid is,
-        // and a frame that cannot have the lock keeps the picture it drew last
-        // time rather than parking the whole window to refresh a thumb.
-        let Some(term) = self.terminal.term.try_lock() else {
-            return;
+        let cursor = term.cursor().pos;
+        let row = cursor.row.0 + term.display_offset() as i32;
+        self.frame = FrameFacts {
+            alt_screen: term.mode().contains(Mode::ALT_SCREEN),
+            mouse_mode: term.mode().intersects(Mode::MOUSE_MODE),
+            has_selection: term.selection.is_some(),
+            cursor: (row >= 0).then_some((row as usize, cursor.col.0)),
+            rows: term.screen_lines(),
+            cols: term.columns(),
+            display_offset: term.grid.display_offset(),
         };
         let grid = GridScroll {
             history: term.grid.history_size(),
-            display_offset: term.grid.display_offset(),
-            screen_lines: term.screen_lines(),
+            display_offset: self.frame.display_offset,
+            screen_lines: self.frame.rows,
             line_height: self.line_height.as_f32(),
         };
         drop(term);
         self.scroll_handle.sync(grid);
         self.terminal.viewport_reporter().report();
+        true
     }
 
-    /// Re-read the two things the frame itself declares — the terminal mode its
-    /// keymap context is built from, and whether there is a selection to draw.
-    ///
-    /// One `try_lock` at the top of the frame, not one per reader: every
-    /// caller inside `render` would otherwise take the lock separately, and
-    /// each of those is another chance to sit behind the pane's reader with the
-    /// whole window's frame in hand. Failing to get it leaves the previous
-    /// frame's answers in place, which is the same bargain the grid makes in
-    /// [`TerminalElement::build_grid`].
-    fn sync_frame_facts(&mut self) {
-        let Some(term) = self.terminal.term.try_lock() else {
+    /// A quiet read-only holder need not post Wakeup when it releases the grid.
+    /// One off-thread waiter coalesces all missed samples without polling frames.
+    pub(super) fn retry_grid_when_available(&mut self, cx: &mut Context<Self>) {
+        if self.grid_retry.is_some() {
             return;
-        };
-        self.frame_alt_screen = term.mode().contains(Mode::ALT_SCREEN);
-        self.frame_has_selection = term.selection.is_some();
+        }
+        let term = self.terminal.term.clone();
+        self.grid_retry = Some(cx.spawn(async move |this, cx| {
+            cx.background_spawn(async move { drop(term.lock()) }).await;
+            let _ = this.update(cx, |view, cx| {
+                view.grid_retry = None;
+                view.lifecycle.notify_output(cx);
+            });
+        }));
     }
 
     /// The scrollback bar, laid down the right edge of the grid.
@@ -4870,6 +4890,333 @@ mod gpui_tests {
             "with the lock free, a frame builds without being told to wait"
         );
         assert_eq!(buf.len(), 24 * 80);
+    }
+
+    #[gpui_kit::test]
+    fn first_prompt_keeps_its_real_caret_after_a_quiet_grid_holder_releases(
+        cx: &mut TestAppContext,
+    ) {
+        let (window, _placeholder, _placeholder_daemon) = rooted_harness(cx);
+        cx.update(|cx| {
+            let config = cx.global_mut::<Config>();
+            config.prompt_cursor_style = crate::core::config::PromptCursorStyle::Block;
+            config.cursor_blink = false;
+        });
+        // Prepare a real pane off-screen so no earlier frame can supply fallback facts.
+        let (view, mut daemon) = window
+            .update(cx, |_, window, cx| quiet_test_pane(2, window, cx))
+            .unwrap();
+        DaemonMsg::Prompt {
+            active: true,
+            at_prompt: true,
+            last_exit: None,
+        }
+        .encode(&mut daemon)
+        .unwrap();
+        DaemonMsg::Output(b"\x1b[4;11H".to_vec())
+            .encode(&mut daemon)
+            .unwrap();
+        for _ in 0..200 {
+            if view.read_with(cx, |view, _| {
+                view.terminal.at_prompt() && view.cursor_cell() == Some((3, 10))
+            }) {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        window
+            .update(cx, |_, window, cx| {
+                let focus = view.read(cx).focus_handle.clone();
+                focus.focus(window, cx);
+            })
+            .unwrap();
+        let composed_metrics = view.read_with(cx, |view, _| (view.cell_width, view.line_height));
+        assert!(view.read_with(cx, |view, _| view.grid_snap.is_none()));
+        let term = view.read_with(cx, |view, _| view.terminal.term.clone());
+        let (acquired, ready) = std::sync::mpsc::sync_channel(0);
+        let holder = std::thread::spawn(move || {
+            let _held = term.lock();
+            acquired.send(()).unwrap();
+            std::thread::sleep(std::time::Duration::from_millis(500));
+        });
+        ready.recv().unwrap();
+        window
+            .update(cx, |root, window, cx| {
+                *root = gpui_kit::component::Root::new(view.clone(), window, cx);
+            })
+            .unwrap();
+        let mut vcx = gpui_kit::VisualTestContext::from_window(window.into(), cx);
+        vcx.update(|window, cx| {
+            if view.read(cx).grid_snap.is_none() {
+                window.refresh();
+                window.draw(cx).clear(cx);
+            }
+            let view = view.read(cx);
+            assert_eq!(view.cursor_cell(), Some((3, 10)));
+            let scale = window.scale_factor();
+            let expected = gpui_kit::point(
+                gpui_kit::ScaledPixels((GRID_PAD_X + composed_metrics.0.as_f32() * 10.5) * scale),
+                gpui_kit::ScaledPixels((GRID_PAD_Y + composed_metrics.1.as_f32() * 3.5) * scale),
+            );
+            let caret = cx.theme().caret;
+            assert!(
+                window.painted_quads().iter().any(|quad| {
+                    quad.bounds.contains(&expected) && quad.background.as_solid() == Some(caret)
+                }),
+                "the first prompt caret must paint at row 4, column 11, not the default origin; composed={composed_metrics:?}, painted={:?}, expected={expected:?}, focused={}, caret_quads={:?}",
+                (view.cell_width, view.line_height),
+                view.focus_handle.is_focused(window),
+                window.painted_quads().iter()
+                    .filter(|quad| quad.background.as_solid() == Some(caret))
+                    .map(|quad| quad.bounds)
+                    .collect::<Vec<_>>()
+            );
+        });
+        holder.join().unwrap();
+    }
+
+    #[gpui_kit::test]
+    fn pending_scroll_recovers_after_a_quiet_grid_holder_releases(cx: &mut TestAppContext) {
+        use gpui_kit::component::scroll::ScrollbarHandle as _;
+
+        let (window, view, _daemon) = rooted_harness(cx);
+        cx.update(|cx| cx.global_mut::<Config>().cursor_blink = false);
+        let mut vcx = gpui_kit::VisualTestContext::from_window(window.into(), cx);
+        vcx.update(|window, cx| {
+            window.refresh();
+            window.draw(cx).clear(cx);
+        });
+        print(cx, &view, filler(160));
+        view.update(cx, |view, _| {
+            view.selection_scroll
+                .scroll_to(&mut view.terminal.term.lock(), 1);
+        });
+        vcx.update(|window, cx| {
+            window.refresh();
+            window.draw(cx).clear(cx);
+        });
+        vcx.run_until_parked();
+        view.read_with(cx, |view, _| {
+            let history = view.terminal.term.lock().grid.history_size();
+            assert!(history > 10);
+            view.scroll_handle.set_offset(gpui_kit::point(
+                px(0.),
+                -(view.line_height * (history - 10) as f32),
+            ));
+        });
+        let term = view.read_with(cx, |view, _| view.terminal.term.clone());
+        let (acquired, ready) = std::sync::mpsc::sync_channel(0);
+        let (release, released) = std::sync::mpsc::channel();
+        let holder = std::thread::spawn(move || {
+            let _held = term.lock();
+            acquired.send(()).unwrap();
+            released
+                .recv_timeout(std::time::Duration::from_secs(3))
+                .unwrap();
+        });
+        ready.recv().unwrap();
+        vcx.update(|window, cx| {
+            window.refresh();
+            window.draw(cx).clear(cx);
+        });
+        release.send(()).unwrap();
+        holder.join().unwrap();
+        // No output/Wakeup or additional scroll follows the quiet holder's release.
+        for _ in 0..10 {
+            vcx.executor()
+                .advance_clock(std::time::Duration::from_millis(16));
+            vcx.run_until_parked();
+        }
+        assert_eq!(
+            view.read_with(cx, |view, _| view
+                .terminal
+                .term
+                .lock()
+                .grid
+                .display_offset()),
+            10,
+            "the pending user scroll must recover without waiting for unrelated output or input"
+        );
+    }
+
+    #[gpui_kit::test]
+    fn a_contended_same_size_resize_recovers_without_quiet_holder_wakeup(cx: &mut TestAppContext) {
+        let (window, view, _daemon) = rooted_harness(cx);
+        cx.update(|cx| cx.global_mut::<Config>().cursor_blink = false);
+        assert!(
+            !crate::daemon::spawn::local_daemon_supports(
+                crate::daemon::protocol::FEATURE_RESIZE_ECHO
+            ),
+            "the isolated socket fixture must use the non-echo resize contract"
+        );
+        let mut vcx = gpui_kit::VisualTestContext::from_window(window.into(), cx);
+        vcx.update(|window, cx| {
+            window.refresh();
+            window.draw(cx).clear(cx);
+        });
+        vcx.run_until_parked();
+        let (desired, cell, line, scale) = vcx.update(|window, cx| {
+            let view = view.read(cx);
+            (
+                view.terminal.size(),
+                view.cell_width,
+                view.line_height,
+                window.scale_factor(),
+            )
+        });
+        assert!(desired.cols > 2 && desired.rows > 2);
+        let term = view.read_with(cx, |view, _| view.terminal.term.clone());
+        // A replay segment can leave a different grid behind the cached request.
+        term.lock()
+            .resize(TermSize::new(desired.cols - 1, desired.rows - 1));
+        let (acquired, ready) = std::sync::mpsc::sync_channel(0);
+        let (release, released) = std::sync::mpsc::channel();
+        let holder = std::thread::spawn(move || {
+            let _held = term.lock();
+            acquired.send(()).unwrap();
+            released
+                .recv_timeout(std::time::Duration::from_secs(3))
+                .unwrap();
+        });
+        ready.recv().unwrap();
+        // This is the production prepaint request, after render's facts read.
+        view.update(cx, |view, cx| {
+            view.set_grid_size(desired.cols, desired.rows, cell, line, scale, cx);
+        });
+        release.send(()).unwrap();
+        holder.join().unwrap();
+        for _ in 0..10 {
+            vcx.executor()
+                .advance_clock(std::time::Duration::from_millis(16));
+            vcx.run_until_parked();
+        }
+        let actual = view.read_with(cx, |view, _| {
+            let grid = view.terminal.term.lock();
+            (grid.columns(), grid.screen_lines())
+        });
+        assert_eq!(
+            actual,
+            (desired.cols, desired.rows),
+            "a quiet holder must not strand a same-size grid reconciliation until unrelated input"
+        );
+    }
+
+    #[gpui_kit::test]
+    fn a_busy_pane_paints_before_its_reader_releases_the_grid(cx: &mut TestAppContext) {
+        assert_paints_while_grid_is_held(cx, false);
+    }
+
+    #[gpui_kit::test]
+    fn a_busy_prompt_paints_before_its_reader_releases_the_grid(cx: &mut TestAppContext) {
+        assert_paints_while_grid_is_held(cx, true);
+    }
+
+    fn assert_paints_while_grid_is_held(cx: &mut TestAppContext, at_prompt: bool) {
+        let (window, view, mut daemon) = rooted_harness(cx);
+        if at_prompt {
+            DaemonMsg::Prompt {
+                active: true,
+                at_prompt: true,
+                last_exit: None,
+            }
+            .encode(&mut daemon)
+            .unwrap();
+            for _ in 0..200 {
+                if view.read_with(cx, |view, _| view.terminal.at_prompt()) {
+                    break;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(5));
+            }
+            assert!(view.read_with(cx, |view, _| view.input_active()));
+        }
+        let mut vcx = gpui_kit::VisualTestContext::from_window(window.into(), cx);
+        vcx.update(|window, cx| {
+            window.refresh();
+            window.draw(cx).clear(cx);
+        });
+        assert!(view.read_with(cx, |view, _| view.grid_snap.is_some()));
+
+        let term = view.read_with(cx, |view, _| view.terminal.term.clone());
+        let (acquired, ready) = std::sync::mpsc::sync_channel(0);
+        let (painted, release) = std::sync::mpsc::channel();
+        let reader = std::thread::spawn(move || {
+            let held = term.lock();
+            acquired.send(()).unwrap();
+            let painted_while_held = release
+                .recv_timeout(std::time::Duration::from_secs(3))
+                .is_ok();
+            drop(held);
+            painted_while_held
+        });
+        ready.recv().unwrap();
+        vcx.update(|window, cx| {
+            window.refresh();
+            window.draw(cx).clear(cx);
+        });
+        let _ = painted.send(());
+        assert!(
+            reader.join().unwrap(),
+            "a complete steady-state frame must finish while the reader still owns the grid"
+        );
+    }
+
+    #[gpui_kit::test]
+    fn prompt_upkeep_does_not_replay_typeahead_into_a_new_alt_screen(cx: &mut TestAppContext) {
+        let (window, mut daemon) = harness(cx);
+        DaemonMsg::Prompt {
+            active: true,
+            at_prompt: true,
+            last_exit: None,
+        }
+        .encode(&mut daemon)
+        .unwrap();
+        DaemonMsg::Output(b"\x1b]133;B\x07".to_vec())
+            .encode(&mut daemon)
+            .unwrap();
+        for _ in 0..200 {
+            if window
+                .update(cx, |view, _, _| {
+                    view.terminal.at_prompt() && view.terminal.zle_reading()
+                })
+                .unwrap()
+            {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        window
+            .update(cx, |view, _, _| {
+                assert!(view.input_active() && view.terminal.zle_reading());
+                assert!(view.sync_frame_facts());
+                view.input
+                    .record_for_test(RawInput::Text("shell-only"), false);
+            })
+            .unwrap();
+
+        // The reader advances after frame composition but before prompt upkeep.
+        DaemonMsg::Output(b"\x1b[?1049h".to_vec())
+            .encode(&mut daemon)
+            .unwrap();
+        for _ in 0..200 {
+            if window
+                .update(cx, |view, _, _| view.on_alt_screen())
+                .unwrap()
+            {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        window
+            .update(cx, |view, _, _| {
+                assert!(view.on_alt_screen());
+                view.sync_prompt_input();
+            })
+            .unwrap();
+        assert_eq!(
+            next_input_until_timeout(&mut daemon),
+            None,
+            "a new fullscreen owner must not receive a synthesized Ctrl-U or a shell draft"
+        );
     }
 
     #[gpui_kit::test]

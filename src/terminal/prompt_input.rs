@@ -148,12 +148,15 @@ impl PromptInput {
         anchor.is_some()
     }
     fn handoff_active(&self, terminal: &RemoteTerminal) -> bool {
+        self.handoff_active_on_screen(terminal, Self::alt(terminal))
+    }
+    fn handoff_active_on_screen(&self, terminal: &RemoteTerminal, alt_screen: bool) -> bool {
         self.handoff == Some(terminal.prompt_cycle())
             && self
                 .interrupt_seq
                 .is_none_or(|seq| terminal.prompt_seq() <= seq)
             && terminal.at_prompt()
-            && !Self::alt(terminal)
+            && !alt_screen
     }
     fn interrupt_handoff(&mut self, terminal: &RemoteTerminal) {
         self.interrupt_seq = Some(terminal.prompt_seq());
@@ -161,16 +164,34 @@ impl PromptInput {
     fn alt(terminal: &RemoteTerminal) -> bool {
         terminal.term.lock().mode().contains(Mode::ALT_SCREEN)
     }
-    fn shell_vi(terminal: &RemoteTerminal) -> bool {
-        terminal.shell_vi_mode() && terminal.at_prompt() && !Self::alt(terminal)
+    fn shell_vi(terminal: &RemoteTerminal, alt_screen: bool) -> bool {
+        terminal.shell_vi_mode() && terminal.at_prompt() && !alt_screen
     }
     pub(super) fn shell_owns_prompt(&self, terminal: &RemoteTerminal) -> bool {
-        !self.enabled || Self::shell_vi(terminal) || self.handoff_active(terminal)
+        self.shell_owns_prompt_on_screen(terminal, self.enabled && Self::alt(terminal))
+    }
+    pub(super) fn shell_owns_prompt_on_screen(
+        &self,
+        terminal: &RemoteTerminal,
+        alt_screen: bool,
+    ) -> bool {
+        !self.enabled
+            || Self::shell_vi(terminal, alt_screen)
+            || self.handoff_active_on_screen(terminal, alt_screen)
     }
     pub(super) fn inactive_reason(
         &self,
         terminal: &RemoteTerminal,
         search_focused: bool,
+    ) -> Option<&'static str> {
+        let alt_screen = self.enabled && !terminal.exited && !search_focused && Self::alt(terminal);
+        self.inactive_reason_on_screen(terminal, search_focused, alt_screen)
+    }
+    pub(super) fn inactive_reason_on_screen(
+        &self,
+        terminal: &RemoteTerminal,
+        search_focused: bool,
+        alt_screen: bool,
     ) -> Option<&'static str> {
         if !self.enabled {
             return Some("the inline prompt editor is turned off");
@@ -181,16 +202,16 @@ impl PromptInput {
         if search_focused {
             return Some("the search field holds the keyboard");
         }
-        if Self::alt(terminal) {
+        if alt_screen {
             return Some("the pane is on the alternate screen");
         }
         if terminal.foreground_agent().is_some() {
             return Some("the foreground agent owns input");
         }
-        if Self::shell_vi(terminal) {
+        if Self::shell_vi(terminal, alt_screen) {
             return Some("the shell prompt is in vi mode");
         }
-        if self.handoff_active(terminal) {
+        if self.handoff_active_on_screen(terminal, alt_screen) {
             return Some("this prompt's line was already handed to the shell");
         }
         if !terminal.at_prompt() {
@@ -199,15 +220,24 @@ impl PromptInput {
         None
     }
     fn blocked(terminal: &RemoteTerminal) -> bool {
-        Self::alt(terminal)
-            || terminal.foreground_agent().is_some()
-            || terminal.agent_session().is_some()
+        Self::blocked_on_screen(terminal, Self::alt(terminal))
+    }
+    fn blocked_on_screen(terminal: &RemoteTerminal, alt_screen: bool) -> bool {
+        alt_screen || terminal.foreground_agent().is_some() || terminal.agent_session().is_some()
     }
     pub(super) fn sync_owner(&mut self, terminal: &RemoteTerminal) {
+        // Output wakeups and render upkeep must not wait for the PTY reader.
+        // Actual keystrokes still use blocked()/alt() against the live grid.
+        let Some(term) = terminal.term.try_lock() else {
+            return;
+        };
+        self.sync_owner_on_screen(terminal, term.mode().contains(Mode::ALT_SCREEN));
+    }
+    pub(super) fn sync_owner_on_screen(&mut self, terminal: &RemoteTerminal, alt_screen: bool) {
         sync_typeahead_owner_state(
             &mut self.typeahead,
             &mut self.last_blocked,
-            Self::blocked(terminal),
+            Self::blocked_on_screen(terminal, alt_screen),
         );
     }
     pub(super) fn observe(&mut self, terminal: &RemoteTerminal, input: RawInput<'_>) {

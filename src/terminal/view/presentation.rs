@@ -8,17 +8,12 @@ use gpui_kit::TestSupportExt as _;
 use gpui_kit::component::ActiveTheme as _;
 impl Render for TerminalView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        self.sync_frame_facts();
-        self.sync_typeahead_owner();
-        self.sync_scrollbar();
+        if !self.sync_frame_facts() {
+            self.retry_grid_when_available(cx);
+        }
         self.sync_composer(window, cx);
-        if self.shell_owns_prompt() {
-            self.input.settle_shell_owner(&self.terminal);
-        } else if self.input_active() {
-            self.input.engage_hold_into_editor();
-            if self.terminal.zle_reading() {
-                self.input.flush_typeahead(&self.terminal);
-            }
+        if !self.sync_prompt_input() {
+            self.retry_grid_when_available(cx);
         }
         let entity = cx.entity();
         let search_bar = self
@@ -28,14 +23,14 @@ impl Render for TerminalView {
 
         let focused = self.focus_handle.is_focused(window);
         let input_bar = self
-            .input_active()
+            .frame_input_active()
             .then(|| self.render_input_bar(focused, cx));
         let completion_menu = self
-            .input_active()
+            .frame_input_active()
             .then(|| self.render_completion_menu(cx))
             .flatten();
         let reverse_search_menu = self
-            .input_active()
+            .frame_input_active()
             .then(|| self.render_reverse_search_menu(cx))
             .flatten();
         let (composer_docked, composer_over) = match self.render_composer(window, cx) {
