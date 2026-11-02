@@ -574,16 +574,9 @@ fn displayed_non_repository_roots_stay_quiet_until_existing_discovery_finds_git(
         std::fs::canonicalize(dir.path()).unwrap(),
     );
     let host = GatedHost::new(HostId::LOCAL);
-    let (app, mut vcx, _streams) = crate::ui::app::test_window::harness_with_tabs(cx, 1);
+    let (app, mut vcx, mut stream) = crate::ui::app::test_window::harness_with_pane(cx);
     vcx.update(|_, cx| {
         crate::ui::host_registry::HostRegistry::insert(cx, host.clone());
-    });
-    app.update_in(&mut vcx, |app, _, cx| {
-        let leaf = app.tabs[0].pane.first_leaf().unwrap();
-        let pane = leaf.terminal().unwrap();
-        pane.update(cx, |pane, _| {
-            pane.set_git_status_cwd_for_test(Some(root.clone()));
-        });
     });
     for known_negative in [false, true] {
         app.update_in(&mut vcx, |app, window, cx| {
@@ -611,6 +604,21 @@ fn displayed_non_repository_roots_stay_quiet_until_existing_discovery_finds_git(
     let nested = root.join("nested");
     std::fs::create_dir(&nested).unwrap();
     discover_repository(&mut vcx, host.as_ref(), &nested);
+    crate::daemon::protocol::DaemonMsg::Cwd(root.clone())
+        .encode(&mut stream)
+        .unwrap();
+    pump(&mut vcx, |cx| {
+        app.read(cx).tabs[0]
+            .pane
+            .first_leaf()
+            .unwrap()
+            .terminal()
+            .unwrap()
+            .read(cx)
+            .cwd()
+            .as_deref()
+            == Some(root.as_path())
+    });
     app.update_in(&mut vcx, |app, window, cx| {
         app.tab_code_mut_or_init().unwrap().roots = vec![root.clone()];
         app.scm_sync_watchers(window, cx);
