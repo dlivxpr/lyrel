@@ -579,7 +579,8 @@ fn displayed_non_repository_roots_stay_quiet_until_existing_discovery_finds_git(
         crate::ui::host_registry::HostRegistry::insert(cx, host.clone());
     });
     app.update_in(&mut vcx, |app, _, cx| {
-        let pane = app.tabs[0].pane.first_leaf().unwrap().terminal().unwrap();
+        let leaf = app.tabs[0].pane.first_leaf().unwrap();
+        let pane = leaf.terminal().unwrap();
         pane.update(cx, |pane, _| {
             pane.set_git_status_cwd_for_test(Some(root.clone()));
         });
