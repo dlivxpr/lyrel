@@ -1,5 +1,5 @@
 use super::*;
-use gpui_kit::{AppContext as _, TestAppContext, VisualTestContext};
+use gpui_kit::{TestAppContext, VisualTestContext};
 use lyrel_core::host::{
     ContentLimits, ContentQuery, ContentResults, Entry, Meta, Output, SearchHit,
 };
@@ -550,9 +550,13 @@ fn a_dead_host_is_forgotten_after_its_last_repository_owner_left(cx: &mut TestAp
 }
 
 fn discover_repository(vcx: &mut VisualTestContext, host: &dyn Host, root: &Path) {
-    let crate::terminal::git_status::RepoProbe::Repo(snapshot) =
-        crate::terminal::git_status::probe_repo(host, root)
-    else {
+    let probe = std::thread::scope(|scope| {
+        scope
+            .spawn(|| crate::terminal::git_status::probe_repo(host, root))
+            .join()
+            .unwrap()
+    });
+    let crate::terminal::git_status::RepoProbe::Repo(snapshot) = probe else {
         panic!("the real Host must discover this test repository");
     };
     vcx.update(|_, cx| {
@@ -573,6 +577,12 @@ fn displayed_non_repository_roots_stay_quiet_until_existing_discovery_finds_git(
     let (app, mut vcx, _streams) = crate::ui::app::test_window::harness_with_tabs(cx, 1);
     vcx.update(|_, cx| {
         crate::ui::host_registry::HostRegistry::insert(cx, host.clone());
+    });
+    app.update_in(&mut vcx, |app, _, cx| {
+        let pane = app.tabs[0].pane.first_leaf().unwrap().terminal().unwrap();
+        pane.update(cx, |pane, _| {
+            pane.set_git_status_cwd_for_test(Some(root.clone()));
+        });
     });
     for known_negative in [false, true] {
         app.update_in(&mut vcx, |app, window, cx| {
