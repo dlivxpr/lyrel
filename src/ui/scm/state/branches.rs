@@ -28,7 +28,10 @@ impl ScmPanelState {
     pub(crate) fn load_branches(&mut self, repo: &RepoKey, cx: &mut Context<LyrelApp>) {
         let epoch = repo.refresh_epoch(cx);
         if self.branches.get(repo).is_some_and(|(at, _)| *at == epoch)
-            || self.branches_loading.get(repo).is_some_and(|(at, _)| *at == epoch)
+            || self
+                .branches_loading
+                .get(repo)
+                .is_some_and(|(at, _)| *at == epoch)
         {
             return;
         }
@@ -203,16 +206,41 @@ mod tests {
         use crate::terminal::git_data::{ScmData, ScmWatcher};
         let dir = tempfile::tempdir().unwrap();
         let git = |args: &[&str]| {
-            let output = std::process::Command::new("git").current_dir(dir.path()).args(args).output().unwrap();
-            assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+            let output = std::process::Command::new("git")
+                .current_dir(dir.path())
+                .args(args)
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "{}",
+                String::from_utf8_lossy(&output.stderr)
+            );
         };
         git(&["init", "--quiet", "--initial-branch=main"]);
-        git(&["-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "--quiet", "--allow-empty", "-m", "initial"]);
+        git(&[
+            "-c",
+            "user.name=Test",
+            "-c",
+            "user.email=test@example.invalid",
+            "commit",
+            "--quiet",
+            "--allow-empty",
+            "-m",
+            "initial",
+        ]);
         let (app, mut vcx) = crate::ui::app::test_window::harness(cx);
-        let repo = RepoKey { host: HostId::LOCAL, root: dir.path().to_path_buf() };
+        let repo = RepoKey {
+            host: HostId::LOCAL,
+            root: dir.path().to_path_buf(),
+        };
         for clear_host in [false, true] {
             let retired = app.update(&mut vcx, |app, cx| {
-                cx.default_global::<ScmData>().subscriptions().declare(8100, ScmWatcher::Panel, Some((repo.host, repo.root.clone())));
+                cx.default_global::<ScmData>().subscriptions().declare(
+                    8100,
+                    ScmWatcher::Panel,
+                    Some((repo.host, repo.root.clone())),
+                );
                 let epoch = repo.refresh_epoch(cx);
                 let initial = app.scm.begin_branch_load(repo.clone(), epoch);
                 app.scm.apply_branches(initial, Some("main\n".into()), cx);
@@ -220,14 +248,31 @@ mod tests {
             });
             vcx.update(|_, cx| {
                 let data = cx.global_mut::<ScmData>();
-                if clear_host { data.clear_host(repo.host); } else { data.release_window(8100); }
+                if clear_host {
+                    data.clear_host(repo.host);
+                } else {
+                    data.release_window(8100);
+                }
             });
-            let branch = if clear_host { "reconnected" } else { "reopened" };
+            let branch = if clear_host {
+                "reconnected"
+            } else {
+                "reopened"
+            };
             git(&["branch", branch]);
             app.update(&mut vcx, |app, cx| {
-                cx.global_mut::<ScmData>().subscriptions().declare(8100, ScmWatcher::Panel, Some((repo.host, repo.root.clone())));
-                app.scm.apply_branches(retired, Some("obsolete\n".into()), cx);
-                assert_eq!(app.scm.branches(&repo), ["main"], "the retired result cannot land");
+                cx.global_mut::<ScmData>().subscriptions().declare(
+                    8100,
+                    ScmWatcher::Panel,
+                    Some((repo.host, repo.root.clone())),
+                );
+                app.scm
+                    .apply_branches(retired, Some("obsolete\n".into()), cx);
+                assert_eq!(
+                    app.scm.branches(&repo),
+                    ["main"],
+                    "the retired result cannot land"
+                );
                 // Exercise the actual cache freshness fast path and Host reader.
                 app.scm.load_branches(&repo, cx);
             });
@@ -235,11 +280,25 @@ mod tests {
             loop {
                 app.update(&mut vcx, |app, cx| app.scm.load_branches(&repo, cx));
                 vcx.run_until_parked();
-                if app.read_with(&vcx, |app, _| app.scm.branches(&repo).iter().any(|name| name == branch)) { break; }
-                assert!(std::time::Instant::now() < deadline, "reopened branch list stayed stale");
+                if app.read_with(&vcx, |app, _| {
+                    app.scm.branches(&repo).iter().any(|name| name == branch)
+                }) {
+                    break;
+                }
+                assert!(
+                    std::time::Instant::now() < deadline,
+                    "reopened branch list stayed stale"
+                );
                 std::thread::yield_now();
             }
-            app.read_with(&vcx, |app, _| assert!(!app.scm.branches(&repo).iter().any(|name| name == "obsolete")));
+            app.read_with(&vcx, |app, _| {
+                assert!(
+                    !app.scm
+                        .branches(&repo)
+                        .iter()
+                        .any(|name| name == "obsolete")
+                )
+            });
             vcx.update(|_, cx| cx.global_mut::<ScmData>().release_window(8100));
         }
     }

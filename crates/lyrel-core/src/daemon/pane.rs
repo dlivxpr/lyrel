@@ -1487,23 +1487,14 @@ mod tests {
             let gate = OutputGate::new();
             let mut passthrough = Vec::new();
             for chunk in chunks {
-                let extracted = graphics_reader::extract(
-                    chunk,
-                    &mut clipboard,
-                    &mut graphics,
-                    &mut || panic!("plain output must not probe host-media locality"),
-                );
+                let extracted =
+                    graphics_reader::extract(chunk, &mut clipboard, &mut graphics, &mut || {
+                        panic!("plain output must not probe host-media locality")
+                    });
                 for bytes in extracted.output() {
                     passthrough.extend_from_slice(bytes);
                 }
-                graphics_reader::consume(
-                    extracted,
-                    &state,
-                    &gate,
-                    &writer,
-                    Some(1),
-                    &mut graphics,
-                );
+                graphics_reader::consume(extracted, &state, &gate, &writer, Some(1), &mut graphics);
             }
             let recorded = state.lock().unwrap().ring.flatten();
             assert_eq!(

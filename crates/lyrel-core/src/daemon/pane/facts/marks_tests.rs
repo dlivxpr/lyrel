@@ -646,7 +646,8 @@ fn apply_signals_updates_state() {
 
 #[test]
 fn one_observation_preserves_utf8_and_escape_state_across_output_slices() {
-    let bytes = "\x1b]0;旧\x07\x1b]133;C\x07\x1b]2;新标题\x1b\\\x1b]133;D;0\x07\x1b]0;提示符\x07".as_bytes();
+    let bytes = "\x1b]0;旧\x07\x1b]133;C\x07\x1b]2;新标题\x1b\\\x1b]133;D;0\x07\x1b]0;提示符\x07"
+        .as_bytes();
     for cut in 0..=bytes.len() {
         let mut sniffer = OscSniffer::new();
         let signals = sniffer.feed_parts([&bytes[..cut], &bytes[cut..]]);

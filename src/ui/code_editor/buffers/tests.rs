@@ -1026,13 +1026,21 @@ fn adopting_a_workspace_discards_a_pending_open_without_losing_dirty_documents(
     // finish; an installed stale buffer is also a completed, failing outcome.
     wait_until(&mut vcx, |vcx| {
         Arc::strong_count(&older) == 1
-            || app.read_with(vcx, |app, _| app.editor.buffers.at(older.id(), path).is_some())
+            || app.read_with(vcx, |app, _| {
+                app.editor.buffers.at(older.id(), path).is_some()
+            })
     });
     vcx.update(|window, cx| window.render_frame(cx));
     app.read_with(&vcx, |app, cx| {
         assert_eq!(app.workspace, next_workspace);
-        assert!(app.editor.buffers.at(older.id(), path).is_none(), "the old navigation must not land");
-        assert!(app.tab_code().unwrap().files.contains(&dirty), "the new quiet tab adopts the dirty orphan");
+        assert!(
+            app.editor.buffers.at(older.id(), path).is_none(),
+            "the old navigation must not land"
+        );
+        assert!(
+            app.tab_code().unwrap().files.contains(&dirty),
+            "the new quiet tab adopts the dirty orphan"
+        );
         let file = app.editor.buffers.get(dirty).unwrap();
         assert_eq!(file.path, dirty_path);
         assert!(file.dirty);
@@ -1044,7 +1052,10 @@ fn adopting_a_workspace_discards_a_pending_open_without_losing_dirty_documents(
         app.editor_open_on_host_at(newer, path, Some(Position::new(1, 4)), window, cx);
     });
     wait_until(&mut vcx, |vcx| {
-        app.read_with(vcx, |app, _| app.editor_active_location().is_some_and(|(host, location)| host == HostId(73) && location == path))
+        app.read_with(vcx, |app, _| {
+            app.editor_active_location()
+                .is_some_and(|(host, location)| host == HostId(73) && location == path)
+        })
     });
     app.read_with(&vcx, |app, cx| {
         let file = app.active_buffer().unwrap();
@@ -1121,7 +1132,9 @@ fn rebinding_a_host_discards_a_pending_open_without_losing_dirty_documents(
     release.send(()).unwrap();
     wait_until(&mut vcx, |vcx| {
         Arc::strong_count(&older) == 1
-            || app.read_with(vcx, |app, _| app.editor.buffers.at(older.id(), path).is_some())
+            || app.read_with(vcx, |app, _| {
+                app.editor.buffers.at(older.id(), path).is_some()
+            })
     });
     app.read_with(&vcx, |app, cx| {
         assert_eq!((app.workspace, app.tabs[0].id()), context);

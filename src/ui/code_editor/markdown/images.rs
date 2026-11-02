@@ -279,7 +279,8 @@ mod tests {
                 Arc::new(fonts)
             });
         let nested = r#"<svg xmlns="http://www.w3.org/2000/svg" width="100" height="40"><text x="0" y="24" font-size="20">中λЖé</text></svg>"#;
-        let nested = percent_encoding::utf8_percent_encode(nested, percent_encoding::NON_ALPHANUMERIC);
+        let nested =
+            percent_encoding::utf8_percent_encode(nested, percent_encoding::NON_ALPHANUMERIC);
         let source = format!(
             r#"<svg xmlns="http://www.w3.org/2000/svg" width="400" height="80"><rect width="400" height="80" fill="white"/><text x="4" y="26" font-family="missing-lyrel-font, serif" font-size="20">ASCII λЖé 中</text><text x="4" y="60" font-family="monospace" font-size="20">fallback Ω العربية</text><image x="280" y="0" width="100" height="40" href="data:image/svg+xml,{nested}"/></svg>"#
         );
@@ -293,13 +294,21 @@ mod tests {
         };
         let tree = usvg::Tree::from_data(source.as_bytes(), &options).unwrap();
         let mut expected = tiny_skia::Pixmap::new(400, 80).unwrap();
-        resvg::render(&tree, tiny_skia::Transform::identity(), &mut expected.as_mut());
+        resvg::render(
+            &tree,
+            tiny_skia::Transform::identity(),
+            &mut expected.as_mut(),
+        );
         let expected: Vec<u8> = expected
             .data()
             .chunks_exact(4)
             .flat_map(|pixel| [pixel[2], pixel[1], pixel[0], pixel[3]])
             .collect();
-        assert!(expected.chunks_exact(4).any(|pixel| pixel != [255, 255, 255, 255]));
+        assert!(
+            expected
+                .chunks_exact(4)
+                .any(|pixel| pixel != [255, 255, 255, 255])
+        );
         assert_eq!(actual.as_bytes(0).unwrap(), expected);
     }
 }

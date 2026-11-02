@@ -360,14 +360,25 @@ impl ScmPanelState {
         self.branches_loading.retain(|repo, _| keep(repo.host));
         let history_hosts = [
             self.graph.page_key.as_ref().map(|(repo, _, _)| repo.host),
-            self.graph.loading_key.as_ref().map(|(repo, _, _, _)| repo.host),
+            self.graph
+                .loading_key
+                .as_ref()
+                .map(|(repo, _, _, _)| repo.host),
             self.graph.failed_key.as_ref().map(|(repo, _, _)| repo.host),
             self.detail.as_ref().map(|detail| detail.repo.host),
         ];
-        for host in history_hosts.into_iter().flatten().filter(|host| !keep(*host)) {
+        for host in history_hosts
+            .into_iter()
+            .flatten()
+            .filter(|host| !keep(*host))
+        {
             self.invalidate_history_host(host);
         }
-        if self.repo_override.as_ref().is_some_and(|repo| !keep(repo.host)) {
+        if self
+            .repo_override
+            .as_ref()
+            .is_some_and(|repo| !keep(repo.host))
+        {
             self.repo_override = None;
             self.override_tab = None;
         }
