@@ -221,6 +221,43 @@ fn a_detail_refresh_cannot_land_after_its_repository_epoch_changes(cx: &mut Test
     });
 }
 
+#[gpui_kit::test]
+fn reopening_a_repository_rejects_retired_graph_and_detail_results(cx: &mut TestAppContext) {
+    use crate::terminal::git_data::ScmWatcher;
+    let (app, mut vcx) = harness(cx);
+    for clear_host in [false, true] {
+        app.update(&mut vcx, |app, cx| {
+            let repo = repo("/reopened-history");
+            cx.default_global::<ScmData>().subscriptions().declare(8200, ScmWatcher::Panel, Some((repo.host, repo.root.clone())));
+            app.scm.follow_pane(repo.clone());
+            let epoch = repo.refresh_epoch(cx);
+            let old = app.scm.begin_graph_load(&repo, epoch).unwrap();
+            app.scm.open_detail(repo.clone(), "deadbeef".into(), None, cx);
+            let (old_detail, _) = app.scm.begin_detail_load(cx).unwrap();
+            let data = cx.global_mut::<ScmData>();
+            if clear_host { data.clear_host(repo.host); } else { data.release_window(8200); }
+            data.subscriptions().declare(8200, ScmWatcher::Panel, Some((repo.host, repo.root.clone())));
+            app.scm.apply_graph(old, Some(empty_page()), cx);
+            app.scm.apply_detail(old_detail, None, Some(Vec::new()), cx);
+            assert!(app.scm.graph().page.is_none(), "old history must not become the reopened graph");
+            assert!(!app.scm.detail().unwrap().loaded, "old files must not settle the reopened detail");
+            let current = app.scm.begin_graph_load(&repo, repo.refresh_epoch(cx)).unwrap();
+            assert!(app.scm.apply_graph(current, Some(empty_page()), cx));
+            let (current_detail, _) = app.scm.begin_detail_load(cx).unwrap();
+            assert!(app.scm.apply_detail(current_detail, None, Some(Vec::new()), cx));
+            assert!(app.scm.detail().unwrap().loaded);
+
+            // A settled page/detail also cannot be treated as fresh after hiding.
+            cx.global_mut::<ScmData>().release_window(8200);
+            cx.global_mut::<ScmData>().subscriptions().declare(8200, ScmWatcher::Panel, Some((repo.host, repo.root.clone())));
+            assert!(app.scm.begin_graph_load(&repo, repo.refresh_epoch(cx)).is_some());
+            assert!(app.scm.begin_detail_load(cx).is_some(), "the retained detail must refresh on reopen");
+            cx.global_mut::<ScmData>().release_window(8200);
+            app.scm = ScmPanelState::default();
+        });
+    }
+}
+
 #[test]
 fn load_more_growth_stops_at_the_cap() {
     assert_eq!(next_page_request(0), GRAPH_PAGE * 2);
