@@ -2756,6 +2756,40 @@ fn opening_native_images_never_contacts_http_until_loading_intent(
     context.dispatch_action(crate::core::actions::ToggleDocumentPreview);
     settle_live_geometry(&view, &mut context);
     let status_id = format!("markdown-image:{url}");
+    let wait_for_failure = |url: &str, context: &mut gpui_kit::VisualTestContext| {
+        let (completed, completion) = smol::channel::bounded(1);
+        let url = url.to_owned();
+        let subscription = view.update_in(context, |view, _, cx| {
+            let document = view.document().clone();
+            let publish = move |document: &MarkdownDocument| {
+                let error = match document.images.states.get(&url) {
+                    Some(super::images::State::Failed(error)) => Some(error.clone()),
+                    Some(super::images::State::Ready(_)) => None,
+                    _ => return,
+                };
+                let _ = completed.try_send(error);
+            };
+            publish(document.read(cx));
+            cx.subscribe(&document, move |_, document, event, cx| {
+                if matches!(event, DocumentEvent::ImagesChanged) {
+                    publish(document.read(cx));
+                }
+            })
+        });
+        // Queue quiescence is not Host I/O completion. Follow the same
+        // ImagesChanged consumer boundary as the native presentation, while
+        // continuing to drive its foreground executor and real worker wakeups.
+        context.executor().allow_parking();
+        let error = context.foreground_executor().block_test(smol::future::race(
+            async { completion.recv().await.expect("image consumer dropped") },
+            async {
+                smol::Timer::after(std::time::Duration::from_secs(10)).await;
+                panic!("image operation did not publish a terminal state");
+            },
+        ));
+        drop(subscription);
+        error.expect("image must report its loading error, not silently succeed")
+    };
     context.update(|window, cx| {
         window.render_frame(cx);
         assert_eq!(
@@ -2765,35 +2799,17 @@ fn opening_native_images_never_contacts_http_until_loading_intent(
             Some(crate::ui::i18n::t(crate::ui::i18n::L10nKey::EditorImageUnloaded).as_ref())
         );
     });
-    // File open, live projection and Host image decoding are separate async
-    // phases. Do not spend the image wait's allowance on the preceding phases.
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
-    loop {
-        context
-            .executor()
-            .advance_clock(std::time::Duration::from_millis(100));
-        context.run_until_parked();
-        if context.update(|window, cx| {
-            window.render_frame(cx);
-            window.find("markdown-image:vector.svg").label()
-                == Some(crate::ui::i18n::t(crate::ui::i18n::L10nKey::EditorImageFailed).as_ref())
-        }) {
-            break;
-        }
-        assert!(
-            std::time::Instant::now() < deadline,
-            "local SVG must reach its failed state without requesting external content; status: {:?}, requests: {}",
-            context.update(|window, cx| {
-                window.render_frame(cx);
-                window
-                    .find("markdown-image:vector.svg")
-                    .label()
-                    .map(str::to_owned)
-            }),
-            requests.load(Ordering::SeqCst),
+    assert_eq!(
+        wait_for_failure("vector.svg", &mut context),
+        "SVG references external resources; those resources were not loaded"
+    );
+    context.update(|window, cx| {
+        window.render_frame(cx);
+        assert_eq!(
+            window.find("markdown-image:vector.svg").label(),
+            Some(crate::ui::i18n::t(crate::ui::i18n::L10nKey::EditorImageFailed).as_ref())
         );
-        std::thread::sleep(std::time::Duration::from_millis(5));
-    }
+    });
     let start = source.find("![private]").unwrap();
     let end = source.find(" ![nested]").unwrap();
     let point = view.read_with(&context, |view, cx| {
@@ -2823,33 +2839,16 @@ fn opening_native_images_never_contacts_http_until_loading_intent(
             .expect("caret geometry before loading")
     });
     context.update(|window, cx| window.click("markdown-load-images", cx));
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
-    loop {
-        context
-            .executor()
-            .advance_clock(std::time::Duration::from_millis(100));
-        context.run_until_parked();
-        let failed = context.update(|window, cx| {
-            window.render_frame(cx);
+    assert!(wait_for_failure(&url, &mut context).contains("HTTP 404"));
+    context.update(|window, cx| {
+        window.render_frame(cx);
+        assert_eq!(
             window
                 .find(gpui_kit::SharedString::from(status_id.clone()))
-                .label()
-                .is_some_and(|label| {
-                    label.starts_with(crate::ui::i18n::t(
-                        crate::ui::i18n::L10nKey::EditorImageFailed,
-                    ))
-                })
-        });
-        if failed {
-            break;
-        }
-        assert!(
-            std::time::Instant::now() < deadline,
-            "the explicit load must finish the HTTP request; requests: {}",
-            requests.load(Ordering::SeqCst),
+                .label(),
+            Some(crate::ui::i18n::t(crate::ui::i18n::L10nKey::EditorImageFailed).as_ref())
         );
-        std::thread::sleep(std::time::Duration::from_millis(5));
-    }
+    });
     assert_eq!(requests.load(Ordering::SeqCst), 1);
     view.read_with(&context, |view, cx| {
         assert_eq!(view.document().read(cx).source().to_string(), source);

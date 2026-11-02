@@ -106,3 +106,55 @@ fn a_pane_title_reaches_the_machine_tree() {
 
     withdraw_observations();
 }
+
+#[test]
+fn output_readiness_cannot_overtake_its_osc_facts() {
+    use super::super::test_support::drain;
+
+    // The process probe runs inside the real reader's observation phase.
+    // Looking at the subscriber here deterministically catches publication
+    // before observation, without racing a list request against the reader.
+    let mut pane = test_state(true);
+    let (sender, receiver) = mpsc::channel();
+    attach_subscriber(&mut pane, sender);
+    drain(&receiver);
+    let receiver = Arc::new(Mutex::new(receiver));
+    let during_probe = receiver.clone();
+    let state = Arc::new(Mutex::new(pane));
+    DaemonPane::spawn_reader(
+        state.clone(),
+        Arc::new(AtomicBool::new(false)),
+        Arc::new(OutputGate::new()),
+        Box::new(std::io::Cursor::new(b"\x1b]0;first-osc\x07OSC_READY\r\n")),
+        null_writer(),
+        || false,
+        ForegroundProbes {
+            group: Box::new(|| None),
+            remote: Box::new(|| None),
+            agent: Box::new(|| Some(None)),
+            cwd: Box::new(move || {
+                assert!(
+                    during_probe.lock().unwrap().try_recv().is_err(),
+                    "output was published before its facts were observed"
+                );
+                None
+            }),
+            local_group: |_| Some(true),
+        },
+        Arc::new(DeathReporter::new(|| {})),
+    )
+    .join()
+    .unwrap();
+    assert_eq!(state.lock().unwrap().facts.osc_title(), Some("first-osc"));
+    let output: Vec<_> = receiver
+        .lock()
+        .unwrap()
+        .try_iter()
+        .filter_map(|message| match message {
+            DaemonMsg::Output(bytes) => Some(bytes),
+            _ => None,
+        })
+        .flatten()
+        .collect();
+    assert_eq!(output, b"\x1b]0;first-osc\x07OSC_READY\r\n");
+}

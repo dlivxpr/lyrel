@@ -643,3 +643,17 @@ fn apply_signals_updates_state() {
     (&mut st).with_facts(|facts, emit| apply_signals(facts, SniffSignals::default(), emit));
     assert_eq!(st.facts.cwd, Some(PathBuf::from("/tmp/x")));
 }
+
+#[test]
+fn one_observation_preserves_utf8_and_escape_state_across_output_slices() {
+    let bytes = "\x1b]0;旧\x07\x1b]133;C\x07\x1b]2;新标题\x1b\\\x1b]133;D;0\x07\x1b]0;提示符\x07".as_bytes();
+    for cut in 0..=bytes.len() {
+        let mut sniffer = OscSniffer::new();
+        let signals = sniffer.feed_parts([&bytes[..cut], &bytes[cut..]]);
+        assert_eq!(signals.title.as_deref(), Some("提示符"), "cut {cut}");
+        assert_eq!(signals.shell.len(), 2, "cut {cut}");
+        assert!(!signals.shell[0].at_prompt, "cut {cut}");
+        assert!(signals.shell[1].at_prompt, "cut {cut}");
+        assert_eq!(signals.shell[1].last_exit_code, Some(0), "cut {cut}");
+    }
+}
