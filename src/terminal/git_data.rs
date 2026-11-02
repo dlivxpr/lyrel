@@ -636,6 +636,17 @@ impl ScmData {
         self.read_at.remove(host, root);
         self.failed_at.remove(host, root);
         self.probes.retain(|(held_host, held_root)| *held_host != host || held_root != root);
+        if self.network_slots(host, root) == 0 {
+            self.network.remove(host, root);
+        }
+    }
+
+    /// Only completed, unowned counters are copied for retirement. Active
+    /// writes and current repositories keep the same counter allocation.
+    fn idle_network(&self) -> Vec<(HostId, PathBuf)> {
+        self.network.keys()
+            .filter(|(host, root)| !self.is_subscribed(*host, root) && self.network_slots(*host, root) == 0)
+            .map(|(host, root)| (host, root.clone())).collect()
     }
 
     /// Record an invalidation. `Some(seq)` means a burst opened and the caller
@@ -887,6 +898,13 @@ impl LyrelApp {
     /// it is stated rather than remembered, and running it twice costs nothing.
     pub(crate) fn scm_sync_watchers(&mut self, window: &Window, cx: &mut Context<Self>) {
         self.scm_forget_lost_hosts(cx);
+        let idle = cx.try_global::<ScmData>().map(ScmData::idle_network).unwrap_or_default();
+        if !idle.is_empty() {
+            let data = cx.global_mut::<ScmData>();
+            for (host, root) in idle {
+                data.network.remove(host, &root);
+            }
+        }
 
         let window_key = cx.entity_id().as_u64();
         let tree_host = self.spawn_host(cx);
@@ -895,18 +913,24 @@ impl LyrelApp {
         } else {
             &[]
         };
+        let git_cache = cx.try_global::<crate::terminal::git_status::GitStatusCache>();
+        let repository_roots = || tree_roots.iter().filter_map(move |root| {
+            git_cache.and_then(|cache| cache.repo_root_for(tree_host, root))
+        });
         let held_tree = cx.try_global::<ScmData>()
             .and_then(|data| data.subs.held.get(&(window_key, ScmWatcher::FileTree)))
             .map_or(&[][..], Vec::as_slice);
-        // The existing holds are the only retained authority. Compare borrowed
-        // roots as a set, so ordering or duplicate display roots cost no copies.
-        let tree_unchanged = tree_roots.iter().all(|root| held_tree.iter().any(|(host, held)| *host == tree_host && held == root))
-            && held_tree.iter().all(|(host, root)| *host == tree_host && tree_roots.contains(root));
+        // Display roots may be plain directories or subdirectories. Existing
+        // discovery is the sole authority for which working trees need SCM.
+        // Unknown/non-Git roots retain their ordinary file-tree discovery, not
+        // a recurring failed SCM watch. Compare borrowed known repos as a set.
+        let tree_unchanged = repository_roots().all(|root| held_tree.iter().any(|(host, held)| *host == tree_host && held.as_path() == root))
+            && held_tree.iter().all(|(host, root)| *host == tree_host && repository_roots().any(|known| known == root.as_path()));
         let tree_targets = (!tree_unchanged).then(|| {
             let mut targets = Vec::with_capacity(tree_roots.len());
-            for root in tree_roots {
-                if !targets.iter().any(|(_, held)| held == root) {
-                    targets.push((tree_host, root.clone()));
+            for root in repository_roots() {
+                if !targets.iter().any(|(_, held): &(HostId, PathBuf)| held.as_path() == root) {
+                    targets.push((tree_host, root.to_path_buf()));
                 }
             }
             targets
@@ -1799,9 +1823,8 @@ mod tests {
         let second = data.take_network_slot(host, &root()).unwrap();
         data.release_window(9100);
         assert!(data.hosts().contains(&host), "a running network owner remains discoverable");
-        data.clear_host(host);
         data.subs.declare(9101, ScmWatcher::Panel, Some((host, root())));
-        assert!(data.take_network_slot(host, &root()).is_none(), "reconnect must share the live counter, not double the limit");
+        assert!(data.take_network_slot(host, &root()).is_none(), "resubscribing on the same live Host must share the counter, not double the limit");
         drop(first);
         let replacement = data.take_network_slot(host, &root()).unwrap();
         assert!(data.take_network_slot(host, &root()).is_none());
@@ -1810,6 +1833,20 @@ mod tests {
         data.release_window(9101);
         assert!(data.network.get(host, &root()).is_none(), "last owner release drops an idle counter");
         assert!(!data.hosts().contains(&host));
+    }
+
+    #[test]
+    fn a_disconnected_hosts_old_network_guards_do_not_own_reconnected_slots() {
+        let mut data = ScmData::default();
+        let host = HostId::from_connection_key("network-disconnected");
+        let old = data.take_network_slot(host, &root()).unwrap();
+        data.clear_host(host);
+        assert!(!data.hosts().contains(&host));
+        let _first = data.take_network_slot(host, &root()).unwrap();
+        let _second = data.take_network_slot(host, &root()).unwrap();
+        assert!(data.take_network_slot(host, &root()).is_none());
+        drop(old);
+        assert!(data.take_network_slot(host, &root()).is_none(), "old guards cannot release the new connection's slots");
     }
 
     // -- disconnect -------------------------------------------------------
