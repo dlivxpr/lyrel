@@ -28,7 +28,7 @@ impl ScmPanelState {
     pub(crate) fn load_branches(&mut self, repo: &RepoKey, cx: &mut Context<LyrelApp>) {
         let epoch = repo.refresh_epoch(cx);
         if self.branches.get(repo).is_some_and(|(at, _)| *at == epoch)
-            || self.branches_loading.contains_key(repo)
+            || self.branches_loading.get(repo).is_some_and(|(at, _)| *at == epoch)
         {
             return;
         }
@@ -59,7 +59,7 @@ impl ScmPanelState {
     fn begin_branch_load(&mut self, repo: RepoKey, epoch: u64) -> BranchLoad {
         self.branch_generation = self.branch_generation.wrapping_add(1);
         self.branches_loading
-            .insert(repo.clone(), self.branch_generation);
+            .insert(repo.clone(), (epoch, self.branch_generation));
         BranchLoad {
             repo,
             epoch,
@@ -68,7 +68,7 @@ impl ScmPanelState {
     }
 
     fn apply_branches(&mut self, load: BranchLoad, out: Option<String>, cx: &App) -> bool {
-        if self.branches_loading.get(&load.repo) != Some(&load.generation) {
+        if self.branches_loading.get(&load.repo) != Some(&(load.epoch, load.generation)) {
             return false;
         }
         self.branches_loading.remove(&load.repo);
@@ -161,7 +161,7 @@ mod tests {
             };
             let mut scm = ScmPanelState::default();
             let old = scm.begin_branch_load(repo.clone(), 0);
-            scm.forget_host(repo.host);
+            scm.forget_lost_hosts(&[]);
             let new = scm.begin_branch_load(repo.clone(), 0);
             assert!(!scm.apply_branches(old, Some("obsolete\n".into()), cx));
             assert!(scm.apply_branches(new, Some("main\n topic \n".into()), cx));
@@ -233,6 +233,7 @@ mod tests {
             });
             let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
             loop {
+                app.update(&mut vcx, |app, cx| app.scm.load_branches(&repo, cx));
                 vcx.run_until_parked();
                 if app.read_with(&vcx, |app, _| app.scm.branches(&repo).iter().any(|name| name == branch)) { break; }
                 assert!(std::time::Instant::now() < deadline, "reopened branch list stayed stale");

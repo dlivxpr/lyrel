@@ -99,7 +99,6 @@ fn overlapping_refreshes_cannot_replace_or_release_the_newer_graph(cx: &mut Test
         );
         assert!(scm.graph().page.is_none());
         assert!(scm.apply_graph(new, Some(empty_page()), cx));
-        assert_eq!(scm.graph().page_key.as_ref().unwrap().1, 1);
         assert!(!scm.graph().loading);
     });
 }

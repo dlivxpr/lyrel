@@ -15,7 +15,7 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 
 use gpui_kit::{Context, Window};
@@ -24,6 +24,14 @@ use crate::core::git::ops::{GitOp, GitOpError, GitOpErrorKind, GitOpOutcome, run
 use crate::core::git::status::{StatusIndex, StatusProbe, WorkingTreeStatus, probe_status};
 use crate::ui::app::LyrelApp;
 use crate::ui::host_ops::{ByHost, Host, HostId, HostOps, InFlight, SharedHost, WatchSub};
+
+/// One process-wide scalar, not a tombstone per visited repository. Both a
+/// new subscription lifetime and a refresh receive a never-reused identity.
+fn next_refresh_epoch() -> u64 {
+    static NEXT: AtomicU64 = AtomicU64::new(1);
+    NEXT.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |next| next.checked_add(1))
+        .expect("SCM refresh identities exhausted")
+}
 
 /// How many network operations one (host, repository) pair may have in flight.
 ///
@@ -233,8 +241,6 @@ pub enum ScmWatcher {
 pub struct GitSubscriptions {
     refs: ByHost<PathBuf, u32>,
     sub_gen: ByHost<PathBuf, u64>,
-    /// Unique live identities; retired roots need no generation tombstone.
-    next_generation: u64,
     /// Per window, then per watcher. Every window reconciles this one global
     /// every frame, so a watcher is only "the same one" within its window:
     /// keyed by the watcher alone, two windows whose file trees sit in
@@ -249,8 +255,7 @@ impl GitSubscriptions {
     /// Take a hold, and report the generation results must carry to be kept.
     pub fn acquire(&mut self, host: HostId, root: &Path) -> u64 {
         if !self.is_subscribed(host, root) {
-            self.next_generation += 1;
-            self.sub_gen.insert(host, root.to_path_buf(), self.next_generation);
+            self.sub_gen.insert(host, root.to_path_buf(), next_refresh_epoch());
         }
         let next = self.count(host, root) + 1;
         self.refs.insert(host, root.to_path_buf(), next);
@@ -439,7 +444,7 @@ impl ScmData {
     }
 
     pub fn epoch(&self, host: HostId, root: &Path) -> u64 {
-        self.epoch.get(host, root).copied().unwrap_or(0)
+        self.epoch.get(host, root).copied().unwrap_or(0).max(self.subs.generation(host, root))
     }
 
     /// Whether what we hold was read before the last thing that changed it.
@@ -462,8 +467,7 @@ impl ScmData {
     /// A real change also ends a failure's rest: whatever made the epoch move
     /// is evidence the host is alive again.
     pub fn bump(&mut self, host: HostId, root: &Path) {
-        let next = self.epoch(host, root) + 1;
-        self.epoch.insert(host, root.to_path_buf(), next);
+        self.epoch.insert(host, root.to_path_buf(), next_refresh_epoch());
         self.failed_at.remove(host, root);
         self.probes.invalidate(&(host, root.to_path_buf()));
     }
@@ -488,7 +492,10 @@ impl ScmData {
     /// Which hosts we are holding anything for. Used to notice the ones that
     /// have since disappeared from the registry.
     pub fn hosts(&self) -> Vec<HostId> {
-        let mut hosts: Vec<HostId> = self.epoch.keys().map(|(host, _)| host).collect();
+        let mut hosts: Vec<HostId> = self.epoch.keys()
+            .chain(self.subs.refs.keys())
+            .chain(self.network.keys())
+            .map(|(host, _)| host).collect();
         hosts.sort_unstable();
         hosts.dedup();
         hosts
@@ -881,38 +888,61 @@ impl LyrelApp {
     pub(crate) fn scm_sync_watchers(&mut self, window: &Window, cx: &mut Context<Self>) {
         self.scm_forget_lost_hosts(cx);
 
-        let mut tree_targets: Vec<_> = if self.file_tree_on_screen(cx) {
-            let host = self.spawn_host(cx);
-            self.tab_code()
-                .map(|code| code.roots.iter().cloned().map(|root| (host, root)).collect())
-                .unwrap_or_default()
+        let window_key = cx.entity_id().as_u64();
+        let tree_host = self.spawn_host(cx);
+        let tree_roots = if self.file_tree_on_screen(cx) {
+            self.tab_code().map_or(&[][..], |code| code.roots.as_slice())
         } else {
-            Vec::new()
+            &[]
         };
-        tree_targets.sort_unstable();
-        tree_targets.dedup();
+        let held_tree = cx.try_global::<ScmData>()
+            .and_then(|data| data.subs.held.get(&(window_key, ScmWatcher::FileTree)))
+            .map_or(&[][..], Vec::as_slice);
+        // The existing holds are the only retained authority. Compare borrowed
+        // roots as a set, so ordering or duplicate display roots cost no copies.
+        let tree_unchanged = tree_roots.iter().all(|root| held_tree.iter().any(|(host, held)| *host == tree_host && held == root))
+            && held_tree.iter().all(|(host, root)| *host == tree_host && tree_roots.contains(root));
+        let tree_targets = (!tree_unchanged).then(|| {
+            let mut targets = Vec::with_capacity(tree_roots.len());
+            for root in tree_roots {
+                if !targets.iter().any(|(_, held)| held == root) {
+                    targets.push((tree_host, root.clone()));
+                }
+            }
+            targets
+        });
         let panel = self.scm_panel_target(window, cx);
         let github = self.github_metadata_target(window, cx);
         let editor = self.scm_editor_target(cx);
         let wanted = [
             (ScmWatcher::Panel, panel.as_slice()),
             (ScmWatcher::GitHub, github.as_slice()),
-            (ScmWatcher::FileTree, tree_targets.as_slice()),
             (ScmWatcher::Editor, editor.as_slice()),
+            (ScmWatcher::FileTree, tree_targets.as_deref().unwrap_or_default()),
         ];
+        // An omitted watcher keeps its existing holds without cloning them.
+        let wanted = &wanted[..if tree_targets.is_some() { 4 } else { 3 }];
         // Avoid global-observer effects in a frame with no SCM consumers.
         if wanted.iter().all(|(_, targets)| targets.is_empty())
             && cx.try_global::<ScmData>().is_none_or(ScmData::is_quiet)
         {
             return;
         }
-        let window_key = cx.entity_id().as_u64();
-        let data = cx.default_global::<ScmData>();
-        for (host, root) in data.subs.reconcile(window_key, &wanted) {
-            data.release_repository(host, &root);
+        let changed = cx.try_global::<ScmData>().is_none_or(|data| {
+            wanted.iter().any(|(who, targets)| {
+                data.subs.held.get(&(window_key, *who)).map_or(&[][..], Vec::as_slice) != *targets
+            })
+        });
+        if changed {
+            let data = cx.default_global::<ScmData>();
+            for (host, root) in data.subs.reconcile(window_key, wanted) {
+                data.release_repository(host, &root);
+            }
         }
 
-        for (host, root) in cx.default_global::<ScmData>().unwatched(Instant::now()) {
+        let unwatched = cx.try_global::<ScmData>()
+            .map(|data| data.unwatched(Instant::now())).unwrap_or_default();
+        for (host, root) in unwatched {
             let Some(shared) = crate::ui::host_registry::HostRegistry::get(cx, host) else {
                 continue;
             };
@@ -980,23 +1010,18 @@ impl LyrelApp {
     /// keeps showing the branch and the file list the machine had at the
     /// moment it fell off, with no way to tell that from live data.
     fn scm_forget_lost_hosts(&mut self, cx: &mut Context<Self>) {
-        let held = match cx.try_global::<ScmData>() {
-            Some(data) => data.hosts(),
-            None => return,
-        };
-        if held.is_empty() {
-            return;
-        }
         let live = crate::ui::host_registry::HostRegistry::ids(cx);
-        for host in held.into_iter().filter(|h| !live.contains(h)) {
+        let held = cx.try_global::<ScmData>().map(ScmData::hosts).unwrap_or_default();
+        for host in held.into_iter().filter(|host| !live.contains(host)) {
             cx.default_global::<ScmData>().clear_host(host);
             cx.default_global::<crate::terminal::git_status::GitStatusCache>()
                 .clear_host(host);
-            // The panel's own per-cwd caches too — `roots` grows one entry
-            // per directory ever visited on the dead link otherwise.
-            self.scm.forget_host(host);
-            self.github.remotes.retain(|repo, _| repo.host != host);
         }
+        // Derived panel state has its own owner and can outlive the last
+        // subscription. Inspect it in place, never copy historical roots to
+        // discover a dead Host through the now-retired ScmData epochs.
+        self.scm.forget_lost_hosts(&live);
+        self.github.remotes.retain(|repo, _| live.contains(&repo.host));
     }
 
     /// Open a `.git` watch: resolve the directories, then subscribe to them.
@@ -1345,7 +1370,7 @@ mod tests {
         let mut data = ScmData::default();
         let other = HostId::from_connection_key("somewhere-else");
         data.bump(HostId::LOCAL, &root());
-        assert_eq!(data.epoch(HostId::LOCAL, &root()), 1);
+        assert_ne!(data.epoch(HostId::LOCAL, &root()), 0);
         assert_eq!(
             data.epoch(other, &root()),
             0,
