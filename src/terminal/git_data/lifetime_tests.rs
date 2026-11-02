@@ -402,11 +402,18 @@ fn displayed_non_repository_roots_stay_quiet_until_existing_discovery_finds_git(
     std::fs::create_dir(&nested).unwrap();
     discover_repository(&mut vcx, host.as_ref(), &nested);
     app.update_in(&mut vcx, |app, window, cx| {
+        app.tab_code_mut_or_init().unwrap().roots = vec![root.clone()];
+        app.scm_sync_watchers(window, cx);
+        assert!(cx.try_global::<ScmData>().is_some_and(|data| data.is_subscribed(host.id(), &root)), "a root discovered from below must activate its displayed working tree");
+    });
+    pump(&mut vcx, |cx| fresh(cx, host.id(), &root));
+    app.update_in(&mut vcx, |app, window, cx| {
+        let previous = index_of(cx, host.id(), &root).unwrap();
         app.tab_code_mut_or_init().unwrap().roots = vec![nested, root.clone(), root.clone()];
         app.scm_sync_watchers(window, cx);
         assert_eq!(cx.global::<ScmData>().subs.count(host.id(), &root), 1, "multiple display roots in one working tree share one owner");
+        assert!(Arc::ptr_eq(&previous, &index_of(cx, host.id(), &root).unwrap()), "alias roots do not retire the live decoration snapshot");
     });
-    pump(&mut vcx, |cx| fresh(cx, host.id(), &root));
     vcx.update(|_, cx| {
         assert_eq!(index_of(cx, host.id(), &root).unwrap().file("new-repository.txt"), Some(crate::core::git::status::DecoStatus::Untracked));
     });
