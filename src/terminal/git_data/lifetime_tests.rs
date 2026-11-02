@@ -87,6 +87,7 @@ fn repository() -> (tempfile::TempDir, PathBuf) {
 fn pump(vcx: &mut VisualTestContext, mut done: impl FnMut(&gpui_kit::App) -> bool) {
     let deadline = Instant::now() + Duration::from_secs(30);
     loop {
+        vcx.executor().advance_clock(Duration::from_millis(300));
         vcx.run_until_parked();
         if vcx.update(|_, cx| done(cx)) { return; }
         assert!(Instant::now() < deadline, "SCM consumer did not settle");
@@ -100,6 +101,14 @@ fn subscribe(vcx: &mut VisualTestContext, window: u64, who: ScmWatcher, host: Ho
     });
 }
 
+fn fresh(cx: &gpui_kit::App, host: HostId, root: &Path) -> bool {
+    let Some(data) = cx.try_global::<ScmData>() else { return false; };
+    status_of(cx, host, root).is_some()
+        && !data.is_stale(host, root)
+        && !data.probes.is_pending(&(host, root.to_path_buf()))
+        && !data.is_change_pending(host, root)
+}
+
 #[gpui_kit::test]
 fn status_and_index_live_until_the_last_window_holder_leaves(cx: &mut TestAppContext) {
     let (_temp, root) = repository();
@@ -110,7 +119,7 @@ fn status_and_index_live_until_the_last_window_holder_leaves(cx: &mut TestAppCon
     subscribe(&mut vcx, 1003, ScmWatcher::Editor, host.id(), &root);
     subscribe(&mut vcx, 1004, ScmWatcher::GitHub, host.id(), &root);
     app.update_in(&mut vcx, |app, _, cx| app.scm_refresh(host.clone(), root.clone(), cx));
-    pump(&mut vcx, |cx| status_of(cx, host.id(), &root).is_some());
+    pump(&mut vcx, |cx| fresh(cx, host.id(), &root));
     let (status, index) = vcx.update(|_, cx| (status_of(cx, host.id(), &root).unwrap(), index_of(cx, host.id(), &root).unwrap()));
     for owner in [1001, 1002, 1003] {
         vcx.update(|_, cx| cx.global_mut::<ScmData>().release_window(owner));
@@ -135,7 +144,8 @@ fn status_and_index_live_until_the_last_window_holder_leaves(cx: &mut TestAppCon
     std::fs::write(root.join("after.txt"), "after\n").unwrap();
     subscribe(&mut vcx, 1005, ScmWatcher::Editor, host.id(), &root);
     app.update_in(&mut vcx, |app, _, cx| app.scm_refresh(host.clone(), root.clone(), cx));
-    pump(&mut vcx, |cx| status_of(cx, host.id(), &root).is_some_and(|status| status.total_entries == 2));
+    pump(&mut vcx, |cx| fresh(cx, host.id(), &root)
+        && status_of(cx, host.id(), &root).is_some_and(|status| status.total_entries == 2));
     vcx.update(|_, cx| {
         assert_eq!(index_of(cx, host.id(), &root).unwrap().file("after.txt"), Some(crate::core::git::status::DecoStatus::Untracked));
         assert!(!cx.global::<ScmData>().is_stale(host.id(), &root));
@@ -145,6 +155,11 @@ fn status_and_index_live_until_the_last_window_holder_leaves(cx: &mut TestAppCon
 fn late_read_cannot_release_a_new_read(cx: &mut TestAppContext, clear_host: bool) {
     let (_temp, root) = repository();
     let (app, mut vcx) = crate::ui::app::test_window::harness(cx);
+    let local = GatedHost::new(HostId::LOCAL);
+    subscribe(&mut vcx, 2100, ScmWatcher::FileTree, local.id(), &root);
+    app.update_in(&mut vcx, |app, _, cx| app.scm_refresh(local.clone(), root.clone(), cx));
+    pump(&mut vcx, |cx| fresh(cx, local.id(), &root));
+    let local_snapshot = vcx.update(|_, cx| status_of(cx, local.id(), &root).unwrap());
     let id = HostId::from_connection_key("scm-lifetime-gated");
     let host = GatedHost::new(id);
     vcx.update(|_, cx| { crate::ui::host_registry::HostRegistry::insert(cx, host.clone()); });
@@ -158,12 +173,16 @@ fn late_read_cannot_release_a_new_read(cx: &mut TestAppContext, clear_host: bool
     });
     std::fs::write(root.join("after.txt"), "after\n").unwrap();
     subscribe(&mut vcx, 2002, ScmWatcher::Editor, id, &root);
-    let fresh = host.pause_status();
+    let fresh_read = host.pause_status();
     app.update_in(&mut vcx, |app, _, cx| app.scm_refresh(host.clone(), root.clone(), cx));
-    pump(&mut vcx, |_| fresh.entered.try_recv().is_ok());
+    pump(&mut vcx, |_| fresh_read.entered.try_recv().is_ok());
 
     // Observe the real landing, not just completion of the worker's Git call.
-    vcx.run_until_parked();
+    pump(&mut vcx, |cx| {
+        let data = cx.global::<ScmData>();
+        !data.is_change_pending(id, &root)
+            && data.watches.values().all(|watch| !watch.opening)
+    });
     let landed = Arc::new(AtomicUsize::new(0));
     let observed = landed.clone();
     let _subscription = vcx.update(|_, cx| cx.observe_global::<ScmData>(move |_| { observed.fetch_add(1, Ordering::SeqCst); }));
@@ -173,9 +192,11 @@ fn late_read_cannot_release_a_new_read(cx: &mut TestAppContext, clear_host: bool
         assert!(status_of(cx, id, &root).is_none(), "old context must not publish a status");
         assert!(index_of(cx, id, &root).is_none());
         assert!(cx.global::<ScmData>().probes.is_pending(&(id, root.clone())), "old landing must not release the reconnected read");
+        assert!(Arc::ptr_eq(&local_snapshot, &status_of(cx, local.id(), &root).unwrap()), "identical wire paths on another Host remain independent");
     });
-    fresh.release.send(()).unwrap();
-    pump(&mut vcx, |cx| status_of(cx, id, &root).is_some_and(|status| status.total_entries == 2));
+    fresh_read.release.send(()).unwrap();
+    pump(&mut vcx, |cx| fresh(cx, id, &root)
+        && status_of(cx, id, &root).is_some_and(|status| status.total_entries == 2));
     vcx.update(|_, cx| {
         assert_eq!(index_of(cx, id, &root).unwrap().file("after.txt"), Some(crate::core::git::status::DecoStatus::Untracked));
         assert!(!cx.global::<ScmData>().is_stale(id, &root));
@@ -190,4 +211,118 @@ fn last_holder_release_rejects_late_status_without_finishing_the_reacquired_read
 #[gpui_kit::test]
 fn host_clear_rejects_late_status_without_finishing_the_reconnected_read(cx: &mut TestAppContext) {
     late_read_cannot_release_a_new_read(cx, true);
+}
+
+#[gpui_kit::test]
+fn repeated_project_visits_release_old_status_and_decoration_owners(cx: &mut TestAppContext) {
+    let (app, mut vcx) = crate::ui::app::test_window::harness(cx);
+    let host = GatedHost::new(HostId::LOCAL);
+    let mut old = Vec::new();
+    let mut directories = Vec::new();
+    for visit in 0..8 {
+        let (temp, root) = repository();
+        directories.push(temp);
+        subscribe(&mut vcx, 3000 + visit, ScmWatcher::Panel, host.id(), &root);
+        app.update_in(&mut vcx, |app, _, cx| app.scm_refresh(host.clone(), root.clone(), cx));
+        pump(&mut vcx, |cx| fresh(cx, host.id(), &root));
+        old.push(vcx.update(|_, cx| (
+            Arc::downgrade(&status_of(cx, host.id(), &root).unwrap()),
+            Arc::downgrade(&index_of(cx, host.id(), &root).unwrap()),
+        )));
+        vcx.update(|_, cx| cx.global_mut::<ScmData>().release_window(3000 + visit));
+        vcx.update(|_, cx| {
+            assert!(status_of(cx, host.id(), &root).is_none());
+            assert!(index_of(cx, host.id(), &root).is_none());
+            assert!(cx.global::<ScmData>().known_status(host.id(), &root).is_none());
+        });
+        assert!(old.iter().all(|(status, index)| status.upgrade().is_none() && index.upgrade().is_none()));
+    }
+}
+
+#[gpui_kit::test]
+fn displayed_tree_roots_keep_all_live_indexes_and_release_only_removed_roots(cx: &mut TestAppContext) {
+    let (_first, first) = repository();
+    let (_second, second) = repository();
+    let (app, mut vcx, _streams) = crate::ui::app::test_window::harness_with_tabs(cx, 1);
+    let host = GatedHost::new(HostId::LOCAL);
+    app.update_in(&mut vcx, |app, _, _| app.right_panel_visible = false);
+    for root in [&first, &second] {
+        subscribe(&mut vcx, 4001, ScmWatcher::Panel, host.id(), root);
+        app.update_in(&mut vcx, |app, _, cx| app.scm_refresh(host.clone(), root.clone(), cx));
+        pump(&mut vcx, |cx| fresh(cx, host.id(), root));
+        // Separate windows can hold different roots through the same watcher.
+        subscribe(&mut vcx, if root == &first { 4002 } else { 4003 }, ScmWatcher::Editor, host.id(), root);
+    }
+    use crate::core::session::{RemoteRef, RemoteTarget, WorkspaceId, WorkspaceStore};
+    let target = RemoteTarget::Alias { alias: "scm-lifetime-tree-host".into() };
+    let remote = GatedHost::new(target.host_id());
+    vcx.update(|_, cx| { crate::ui::host_registry::HostRegistry::insert(cx, remote.clone()); });
+    subscribe(&mut vcx, 4004, ScmWatcher::Panel, remote.id(), &second);
+    app.update_in(&mut vcx, |app, _, cx| app.scm_refresh(remote.clone(), second.clone(), cx));
+    pump(&mut vcx, |cx| fresh(cx, remote.id(), &second));
+    // 4001 moved between projects; the first root is held by 4002.
+    app.update_in(&mut vcx, |app, window, cx| {
+        app.right_panel_visible = true;
+        app.right_panel_tab = crate::core::config::RightPanelTab::Files;
+        app.tab_code_mut_or_init().unwrap().roots = vec![first.clone(), second.clone()];
+        app.scm_sync_watchers(window, cx);
+        let data = cx.global_mut::<ScmData>();
+        for owner in [4001, 4002, 4003] { data.release_window(owner); }
+        assert!(data.status_for(host.id(), &first).is_some());
+        assert!(data.index_for(host.id(), &second).is_some());
+        assert!(data.needs_status(host.id(), &first));
+        let generation = data.generation(host.id(), &second);
+
+        // Removing one root must not retire the other root's live read identity.
+        app.tab_code_mut_or_init().unwrap().roots = vec![second.clone()];
+        app.scm_sync_watchers(window, cx);
+        let data = cx.global::<ScmData>();
+        assert!(data.status_for(host.id(), &first).is_none());
+        assert!(data.index_for(host.id(), &first).is_none());
+        assert!(data.index_for(host.id(), &second).is_some());
+        assert_eq!(data.generation(host.id(), &second), generation);
+
+        // The displayed wire path stays the same while the window changes Host.
+        // Real filesystem bytes are shared only by this scheduling fixture;
+        // SCM ownership and landing identities must remain Host-specific.
+        let local_workspace = app.workspace;
+        app.workspace = WorkspaceStore::claim_remote(cx, RemoteRef::new(target.clone(), WorkspaceId::new()));
+        app.rebind_host(host.id(), cx);
+        app.scm_sync_watchers(window, cx);
+        cx.global_mut::<ScmData>().release_window(4004);
+        assert!(index_of(cx, host.id(), &second).is_none());
+        assert!(index_of(cx, remote.id(), &second).is_some());
+
+        app.workspace = local_workspace;
+        app.rebind_host(remote.id(), cx);
+        app.scm_sync_watchers(window, cx);
+        assert!(index_of(cx, remote.id(), &second).is_none());
+        assert!(status_of(cx, host.id(), &second).is_none(), "rebound local root must read fresh");
+        assert_ne!(cx.global::<ScmData>().generation(host.id(), &second), generation);
+
+        app.right_panel_visible = false;
+        app.scm_sync_watchers(window, cx);
+        assert!(index_of(cx, host.id(), &second).is_none());
+    });
+}
+
+#[gpui_kit::test]
+fn clearing_another_host_does_not_discard_a_live_pending_status(cx: &mut TestAppContext) {
+    let (_temp, root) = repository();
+    let (app, mut vcx) = crate::ui::app::test_window::harness(cx);
+    let local = GatedHost::new(HostId::LOCAL);
+    let other = HostId::from_connection_key("scm-unrelated-host");
+    subscribe(&mut vcx, 5001, ScmWatcher::Panel, local.id(), &root);
+    subscribe(&mut vcx, 5002, ScmWatcher::Panel, other, &root);
+    let pending = local.pause_status();
+    app.update_in(&mut vcx, |app, _, cx| app.scm_refresh(local.clone(), root.clone(), cx));
+    pump(&mut vcx, |_| pending.entered.try_recv().is_ok());
+    vcx.update(|_, cx| cx.global_mut::<ScmData>().clear_host(other));
+    pending.release.send(()).unwrap();
+    pump(&mut vcx, |cx| fresh(cx, local.id(), &root));
+    vcx.update(|_, cx| {
+        assert_eq!(status_of(cx, local.id(), &root).unwrap().total_entries, 1);
+        assert_eq!(index_of(cx, local.id(), &root).unwrap().file("before.txt"), Some(crate::core::git::status::DecoStatus::Untracked));
+        assert!(status_of(cx, other, &root).is_none());
+    });
 }

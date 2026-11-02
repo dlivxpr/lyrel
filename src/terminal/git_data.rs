@@ -233,6 +233,8 @@ pub enum ScmWatcher {
 pub struct GitSubscriptions {
     refs: ByHost<PathBuf, u32>,
     sub_gen: ByHost<PathBuf, u64>,
+    /// Unique live identities; retired roots need no generation tombstone.
+    next_generation: u64,
     /// Per window, then per watcher. Every window reconciles this one global
     /// every frame, so a watcher is only "the same one" within its window:
     /// keyed by the watcher alone, two windows whose file trees sit in
@@ -240,12 +242,16 @@ pub struct GitSubscriptions {
     /// and each hand-over dropped the repository's watch and opened it again —
     /// four round trips to a remote machine, several times a second, for as
     /// long as both windows were open.
-    held: HashMap<(u64, ScmWatcher), (HostId, PathBuf)>,
+    held: HashMap<(u64, ScmWatcher), Vec<(HostId, PathBuf)>>,
 }
 
 impl GitSubscriptions {
     /// Take a hold, and report the generation results must carry to be kept.
     pub fn acquire(&mut self, host: HostId, root: &Path) -> u64 {
+        if !self.is_subscribed(host, root) {
+            self.next_generation += 1;
+            self.sub_gen.insert(host, root.to_path_buf(), self.next_generation);
+        }
         let next = self.count(host, root) + 1;
         self.refs.insert(host, root.to_path_buf(), next);
         self.generation(host, root)
@@ -259,8 +265,7 @@ impl GitSubscriptions {
             return;
         }
         self.refs.remove(host, root);
-        let next = self.generation(host, root) + 1;
-        self.sub_gen.insert(host, root.to_path_buf(), next);
+        self.sub_gen.remove(host, root);
     }
 
     pub fn generation(&self, host: HostId, root: &Path) -> u64 {
@@ -285,23 +290,44 @@ impl GitSubscriptions {
         who: ScmWatcher,
         target: Option<(HostId, PathBuf)>,
     ) -> Option<(HostId, PathBuf)> {
-        let key = (window, who);
-        let previous = self.held.get(&key).cloned();
-        if previous == target {
-            return None;
-        }
-        match &target {
-            Some((host, root)) => {
-                self.acquire(*host, root);
-                self.held.insert(key, (*host, root.clone()));
+        self.reconcile(window, &[(who, target.as_slice())]).pop()
+    }
+
+    fn reconcile(
+        &mut self,
+        window: u64,
+        wanted: &[(ScmWatcher, &[(HostId, PathBuf)])],
+    ) -> Vec<(HostId, PathBuf)> {
+        // Acquire every new holder before releasing any old one. A panel/tree
+        // handover in the same frame keeps its published snapshot and identity.
+        for (who, targets) in wanted {
+            for (host, root) in targets.iter() {
+                if !self.held.get(&(window, *who)).is_some_and(|previous| {
+                    previous.iter().any(|(h, r)| h == host && r == root)
+                }) {
+                    self.acquire(*host, root);
+                }
             }
-            None => {
-                self.held.remove(&key);
+        }
+        let mut dropped = Vec::new();
+        for (who, targets) in wanted {
+            let key = (window, *who);
+            if self.held.get(&key).is_some_and(|held| held.as_slice() == *targets) {
+                continue;
+            }
+            for (host, root) in self.held.remove(&key).unwrap_or_default() {
+                if !targets.iter().any(|(h, r)| *h == host && *r == root) {
+                    self.release(host, &root);
+                    if !self.is_subscribed(host, &root) {
+                        dropped.push((host, root));
+                    }
+                }
+            }
+            if !targets.is_empty() {
+                self.held.insert(key, targets.to_vec());
             }
         }
-        let (host, root) = previous?;
-        self.release(host, &root);
-        (!self.is_subscribed(host, &root)).then_some((host, root))
+        dropped
     }
 
     /// Give back everything a closed window held, reporting the repositories
@@ -314,14 +340,17 @@ impl GitSubscriptions {
             .map(|(_, who)| *who)
             .collect();
         mine.into_iter()
-            .filter_map(|who| self.declare(window, who, None))
+            .flat_map(|who| self.reconcile(window, &[(who, &[])]))
             .collect()
     }
 
     fn clear_host(&mut self, host: HostId) {
         self.refs.clear_host(host);
         self.sub_gen.clear_host(host);
-        self.held.retain(|_, (held, _)| *held != host);
+        self.held.retain(|_, targets| {
+            targets.retain(|(held, _)| *held != host);
+            !targets.is_empty()
+        });
     }
 
     fn is_empty(&self) -> bool {
@@ -381,12 +410,6 @@ pub struct ScmData {
     /// rather than a [`ByHost`] because this one is mutated in place.
     watches: HashMap<(HostId, PathBuf), RepoWatch>,
     subs: GitSubscriptions,
-    /// Bumped by [`ScmData::clear_host`]. A probe that was in flight across a
-    /// disconnect is holding a picture of a machine we have stopped believing,
-    /// and neither the epoch nor the generation can say so: the disconnect
-    /// wipes both back to their defaults, which is exactly what the in-flight
-    /// read recorded on the way out.
-    wipe: u64,
 }
 
 impl gpui_kit::Global for ScmData {}
@@ -460,7 +483,6 @@ impl ScmData {
         // (its work panicked, say) would otherwise hold `begin` false for
         // this key for the life of the process.
         self.probes.retain(|(held, _)| *held != host);
-        self.wipe += 1;
     }
 
     /// Which hosts we are holding anything for. Used to notice the ones that
@@ -516,8 +538,9 @@ impl ScmData {
         self.subs
             .held
             .iter()
-            .any(|((_, who), (held_host, held_root))| {
-                *who != ScmWatcher::GitHub && *held_host == host && held_root == root
+            .any(|((_, who), targets)| {
+                *who != ScmWatcher::GitHub
+                    && targets.iter().any(|(held_host, held_root)| *held_host == host && held_root == root)
             })
     }
 
@@ -530,7 +553,7 @@ impl ScmData {
     /// A window is gone: whatever it was holding open, it holds no longer.
     pub fn release_window(&mut self, window: u64) {
         for (host, root) in self.subs.release_window(window) {
-            self.drop_watch(host, &root);
+            self.release_repository(host, &root);
         }
     }
 
@@ -596,11 +619,16 @@ impl ScmData {
         watch.sub = sub;
     }
 
-    /// Stop everything a repository was costing: the watch closes when the
-    /// last `Arc` goes, and the burst is cleared so a timer still asleep on it
-    /// wakes to `Idle`.
-    fn drop_watch(&mut self, host: HostId, root: &Path) {
+    /// Release reconstructible data once the last live consumer leaves.
+    /// Network slots belong to running writes, not visible subscribers.
+    fn release_repository(&mut self, host: HostId, root: &Path) {
         self.watches.remove(&(host, root.to_path_buf()));
+        self.status.remove(host, root);
+        self.index.remove(host, root);
+        self.epoch.remove(host, root);
+        self.read_at.remove(host, root);
+        self.failed_at.remove(host, root);
+        self.probes.retain(|(held_host, held_root)| *held_host != host || held_root != root);
     }
 
     /// Record an invalidation. `Some(seq)` means a burst opened and the caller
@@ -649,12 +677,11 @@ impl LyrelApp {
         let id = host.id();
         let key = (id, root.clone());
         let data = cx.default_global::<ScmData>();
-        if !data.is_stale(id, &root) || !data.probes.begin(key.clone()) {
+        if !data.is_subscribed(id, &root) || !data.is_stale(id, &root) || !data.probes.begin(key.clone()) {
             return;
         }
         let at = data.epoch(id, &root);
         let sub_gen = data.generation(id, &root);
-        let wipe = data.wipe;
         let held = data.status_for(id, &root);
 
         let probe_root = root.clone();
@@ -693,10 +720,12 @@ impl LyrelApp {
                 // worth showing (stale beats blank) but something has to ask
                 // again, and nothing else will — the trigger that bumped found
                 // this probe already running and declined to start its own.
-                let superseded = !data.probes.finish(&key);
-                if data.wipe != wipe || data.generation(id, &root) != sub_gen {
+                // Check identity before touching single-flight bookkeeping:
+                // an old landing must not finish a reacquired repository's read.
+                if data.generation(id, &root) != sub_gen {
                     return;
                 }
+                let superseded = !data.probes.finish(&key);
                 // Only a definitive answer counts as a read; an unreachable
                 // host leaves what is cached (stale beats blank) and rests
                 // before the next try — see `is_stale`.
@@ -852,29 +881,35 @@ impl LyrelApp {
     pub(crate) fn scm_sync_watchers(&mut self, window: &Window, cx: &mut Context<Self>) {
         self.scm_forget_lost_hosts(cx);
 
+        let mut tree_targets: Vec<_> = if self.file_tree_on_screen(cx) {
+            let host = self.spawn_host(cx);
+            self.tab_code()
+                .map(|code| code.roots.iter().cloned().map(|root| (host, root)).collect())
+                .unwrap_or_default()
+        } else {
+            Vec::new()
+        };
+        tree_targets.sort_unstable();
+        tree_targets.dedup();
+        let panel = self.scm_panel_target(window, cx);
+        let github = self.github_metadata_target(window, cx);
+        let editor = self.scm_editor_target(cx);
         let wanted = [
-            (ScmWatcher::Panel, self.scm_panel_target(window, cx)),
-            (ScmWatcher::GitHub, self.github_metadata_target(window, cx)),
-            (ScmWatcher::FileTree, self.scm_tree_target(window, cx)),
-            (ScmWatcher::Editor, self.scm_editor_target(cx)),
+            (ScmWatcher::Panel, panel.as_slice()),
+            (ScmWatcher::GitHub, github.as_slice()),
+            (ScmWatcher::FileTree, tree_targets.as_slice()),
+            (ScmWatcher::Editor, editor.as_slice()),
         ];
-        // Nothing to watch and nothing being watched, which is every frame of
-        // a window whose panel is on another tab. Taking the global mutably
-        // here would queue a global-observer effect per frame for no reason.
-        if wanted.iter().all(|(_, t)| t.is_none())
+        // Avoid global-observer effects in a frame with no SCM consumers.
+        if wanted.iter().all(|(_, targets)| targets.is_empty())
             && cx.try_global::<ScmData>().is_none_or(ScmData::is_quiet)
         {
             return;
         }
         let window_key = cx.entity_id().as_u64();
-        for (who, target) in wanted {
-            let dropped = cx
-                .default_global::<ScmData>()
-                .subscriptions()
-                .declare(window_key, who, target);
-            if let Some((host, root)) = dropped {
-                cx.default_global::<ScmData>().drop_watch(host, &root);
-            }
+        let data = cx.default_global::<ScmData>();
+        for (host, root) in data.subs.reconcile(window_key, &wanted) {
+            data.release_repository(host, &root);
         }
 
         for (host, root) in cx.default_global::<ScmData>().unwatched(Instant::now()) {
@@ -901,29 +936,6 @@ impl LyrelApp {
         }
         if let Some(repo) = self.scm.active_repo() {
             return Some((repo.host, repo.root.clone()));
-        }
-        let leaf = self
-            .tabs
-            .get(self.tabs.active_index())?
-            .detail_pane(window, cx)?;
-        let view = leaf.read(cx);
-        let host = view.host_id();
-        let root = cx
-            .try_global::<crate::terminal::git_status::GitStatusCache>()?
-            .repo_root_for(host, view.git_status_cwd()?)?;
-        Some((host, root.to_path_buf()))
-    }
-
-    /// The repository the file tree is decorating, while it is on screen.
-    ///
-    /// The tree can be rooted at several repositories at once but a watcher
-    /// holds one; the active pane's is the one whose decorations the user is
-    /// looking at, and it is the one the panel would pick too — so the two
-    /// subscriptions usually collapse onto the same repository and cost one
-    /// watch between them.
-    fn scm_tree_target(&self, window: &Window, cx: &gpui_kit::App) -> Option<(HostId, PathBuf)> {
-        if !self.file_tree_on_screen(cx) {
-            return None;
         }
         let leaf = self
             .tabs
@@ -998,7 +1010,6 @@ impl LyrelApp {
             return;
         }
         let sub_gen = cx.default_global::<ScmData>().generation(id, &root);
-        let wipe = cx.default_global::<ScmData>().wipe;
         let probe_root = root.clone();
         HostOps::run(
             host,
@@ -1020,7 +1031,7 @@ impl LyrelApp {
                 .unwrap_or(None)
             },
             move |app, sub: Option<Arc<WatchSub>>, cx| {
-                app.scm_watch_opened(id, root, sub_gen, wipe, sub, cx)
+                app.scm_watch_opened(id, root, sub_gen, sub, cx)
             },
         );
     }
@@ -1030,21 +1041,13 @@ impl LyrelApp {
         host: HostId,
         root: PathBuf,
         sub_gen: u64,
-        wipe: u64,
         sub: Option<Arc<WatchSub>>,
         cx: &mut Context<Self>,
     ) {
         let data = cx.default_global::<ScmData>();
-        // Letting go while the watch was opening leaves the only `Arc` here,
-        // so returning closes it. `wipe` closes the one gap `generation`
-        // cannot: a disconnect resets generations to their default, so a
-        // watch opened against the *previous* connection could otherwise be
-        // installed for the re-subscribed repository.
-        if data.wipe != wipe
-            || data.generation(host, &root) != sub_gen
-            || !data.is_subscribed(host, &root)
-        {
-            data.finish_watch_open(host, &root, None, Instant::now());
+        // A retired generation cannot install its watch or clear a newer
+        // generation's opening state. Returning drops its subscription Arc.
+        if data.generation(host, &root) != sub_gen || !data.is_subscribed(host, &root) {
             return;
         }
         let events = sub.as_ref().map(|sub| sub.events().clone());
@@ -1061,9 +1064,16 @@ impl LyrelApp {
             // and working out which paths imply which parts of the answer
             // would be a second, worse copy of what `git status` already does.
             while events.recv().await.is_ok() {
-                if app
-                    .update(cx, |app, cx| app.scm_invalidate(host, &root, cx))
-                    .is_err()
+                if !app
+                    .update(cx, |app, cx| {
+                        let data = cx.global::<ScmData>();
+                        if data.generation(host, &root) != sub_gen || !data.is_subscribed(host, &root) {
+                            return false;
+                        }
+                        app.scm_invalidate(host, &root, cx);
+                        true
+                    })
+                    .is_ok_and(|current| current)
                 {
                     return;
                 }
@@ -1708,7 +1718,7 @@ mod tests {
         data.subscriptions().acquire(HostId::LOCAL, &root());
         data.note_change(HostId::LOCAL, &root(), Instant::now());
         data.subscriptions().release(HostId::LOCAL, &root());
-        data.drop_watch(HostId::LOCAL, &root());
+        data.release_repository(HostId::LOCAL, &root());
         assert_eq!(
             data.poll_debounce(HostId::LOCAL, &root(), Instant::now()),
             DebounceStep::Idle,
@@ -1768,7 +1778,7 @@ mod tests {
         data.read_at.insert(gone, root(), 7);
         data.subscriptions().acquire(HostId::LOCAL, &root());
 
-        let wipe = data.wipe;
+        let generation = data.generation(gone, &root());
         data.clear_host(gone);
 
         assert!(data.status_for(gone, &root()).is_none());
@@ -1778,7 +1788,7 @@ mod tests {
             data.poll_debounce(gone, &root(), Instant::now()),
             DebounceStep::Idle
         );
-        assert_ne!(data.wipe, wipe, "a probe in flight across the drop is void");
+        assert_ne!(data.generation(gone, &root()), generation, "a probe in flight across the drop is void");
         assert!(
             data.is_subscribed(HostId::LOCAL, &root()),
             "the same path on this machine is a different repository"
