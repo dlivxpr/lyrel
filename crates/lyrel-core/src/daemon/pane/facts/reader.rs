@@ -30,8 +30,11 @@ pub(in super::super) struct OutputObservation {
 impl OutputObservation {
     /// Only OSC title/cwd are safe to publish before foreground observation.
     /// Shell/agent marks still need suppression and the original Host scope.
-    pub(in super::super) fn take_metadata(&mut self) -> Self {
-        Self {
+    pub(in super::super) fn take_metadata(&mut self) -> Option<Self> {
+        if self.signals.cwd.is_none() && self.signals.title.is_none() {
+            return None;
+        }
+        Some(Self {
             signals: SniffSignals {
                 cwd: self.signals.cwd.take(),
                 title: self.signals.title.take(),
@@ -40,7 +43,7 @@ impl OutputObservation {
             remote: None,
             agent: None,
             cwd: None,
-        }
+        })
     }
 
     pub(super) fn may_change_facts(&self) -> bool {

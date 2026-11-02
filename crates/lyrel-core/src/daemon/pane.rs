@@ -913,21 +913,21 @@ impl DaemonPane {
                             // output. Only cheap OSC metadata precedes the readiness marker;
                             // shell/agent scope and foreground probes follow publication.
                             let mut observation = facts_reader.parse(extracted.output());
-                            let metadata = observation.take_metadata();
 
                             let tr1 = trace.then(std::time::Instant::now);
-                            // Fact snapshots are conditional; ordinary output does not allocate.
-                            let mut st = state.lock().unwrap();
-                            let change = st.with_facts(|facts, emit| facts.apply_output(metadata, emit));
-                            graphics.set_local(st.facts.remote().is_none());
+                            // Plain output adds no pre-publication facts lock or apply.
+                            let metadata_change = observation.take_metadata().map(|metadata| {
+                                let mut st = state.lock().unwrap();
+                                let change = st.with_facts(|facts, emit| facts.apply_output(metadata, emit));
+                                (change, st.id, st.alive)
+                            });
                             if let Some(tr1) = tr1 {
                                 tr_disp_t += tr1.elapsed();
                             }
-                            let pane = st.id;
-                            let alive = st.alive;
-                            drop(st);
                             graphics_reader::consume(extracted, &state, &gate, &writer, controller, &mut graphics);
-                            change.publish(pane, alive, shutting_down.load(Ordering::SeqCst));
+                            if let Some((change, pane, alive)) = metadata_change {
+                                change.publish(pane, alive, shutting_down.load(Ordering::SeqCst));
+                            }
                             let observation = facts_reader.observe(observation, &foreground_running, before);
                             let mut st = state.lock().unwrap();
                             let change = st.with_facts(|facts, emit| facts.apply_output(observation, emit));
