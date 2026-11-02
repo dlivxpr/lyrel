@@ -148,7 +148,8 @@ impl PromptInput {
         anchor.is_some()
     }
     fn handoff_active(&self, terminal: &RemoteTerminal) -> bool {
-        self.handoff_active_on_screen(terminal, Self::alt(terminal))
+        // Read the live grid only after the report identifies a handoff candidate.
+        self.handoff_active_on_screen(terminal, false) && !Self::alt(terminal)
     }
     fn handoff_active_on_screen(&self, terminal: &RemoteTerminal, alt_screen: bool) -> bool {
         self.handoff == Some(terminal.prompt_cycle())
@@ -168,7 +169,9 @@ impl PromptInput {
         terminal.shell_vi_mode() && terminal.at_prompt() && !alt_screen
     }
     pub(super) fn shell_owns_prompt(&self, terminal: &RemoteTerminal) -> bool {
-        self.shell_owns_prompt_on_screen(terminal, self.enabled && Self::alt(terminal))
+        !self.enabled
+            || (Self::shell_vi(terminal, false) && !Self::alt(terminal))
+            || self.handoff_active(terminal)
     }
     pub(super) fn shell_owns_prompt_on_screen(
         &self,
