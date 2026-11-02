@@ -186,5 +186,7 @@ fn live_shell_ownership_without_candidates_does_not_wait_for_alt_screen_grid() {
 
 #[test]
 fn live_ctrl_c_ownership_without_candidates_does_not_wait_for_alt_screen_grid() {
-    assert_alt_screen_ownership_without_candidates_does_not_wait_for_grid(PromptInput::handoff_active);
+    assert_alt_screen_ownership_without_candidates_does_not_wait_for_grid(
+        PromptInput::handoff_active,
+    );
 }
