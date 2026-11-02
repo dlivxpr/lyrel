@@ -1288,6 +1288,10 @@ pub(crate) fn shell_quote(argv: &[String]) -> String {
 }
 
 #[cfg(test)]
+#[path = "git_data/lifetime_tests.rs"]
+mod lifetime_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
 
