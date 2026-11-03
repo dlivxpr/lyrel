@@ -260,8 +260,12 @@ fn late_read_cannot_release_a_new_read(cx: &mut TestAppContext, clear_host: bool
         }
     });
     std::fs::write(root.join("after.txt"), "after\n").unwrap();
-    // Both Host facades read the same real directory. Let its legitimate local
-    // watcher publish the new file before testing the remote stale landing.
+    // Both Host facades read the same real directory. Refresh the local view
+    // explicitly so this late-result test does not depend on watcher timing.
+    app.update_in(&mut vcx, |app, _, cx| {
+        app.scm_invalidate(local.id(), &root, cx);
+        app.scm_refresh(local.clone(), root.clone(), cx);
+    });
     pump(&mut vcx, |cx| {
         fresh(cx, local.id(), &root)
             && status_of(cx, local.id(), &root).is_some_and(|status| status.total_entries == 2)
