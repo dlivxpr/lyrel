@@ -2711,12 +2711,28 @@ fn opening_native_images_never_contacts_http_until_loading_intent(
             Err(std::sync::mpsc::TryRecvError::Empty)
         ) {
             if let Ok((mut stream, _)) = listener.accept() {
+                stream.set_nonblocking(false).unwrap();
                 counted.fetch_add(1, Ordering::SeqCst);
                 stream
                     .set_read_timeout(Some(std::time::Duration::from_secs(2)))
                     .unwrap();
                 let mut request = [0; 4096];
-                let _ = stream.read(&mut request);
+                let mut received = 0;
+                loop {
+                    let count = stream.read(&mut request[received..]).unwrap();
+                    assert_ne!(count, 0, "HTTP request ended before its headers");
+                    received += count;
+                    if request[..received]
+                        .windows(4)
+                        .any(|bytes| bytes == b"\r\n\r\n")
+                    {
+                        break;
+                    }
+                    assert!(
+                        received < request.len(),
+                        "HTTP fixture headers exceed 4 KiB"
+                    );
+                }
                 stream
                     .write_all(
                         b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
@@ -2839,7 +2855,8 @@ fn opening_native_images_never_contacts_http_until_loading_intent(
             .expect("caret geometry before loading")
     });
     context.update(|window, cx| window.click("markdown-load-images", cx));
-    assert!(wait_for_failure(&url, &mut context).contains("HTTP 404"));
+    let error = wait_for_failure(&url, &mut context);
+    assert!(error.contains("HTTP 404"), "{error}");
     context.update(|window, cx| {
         window.render_frame(cx);
         assert_eq!(
