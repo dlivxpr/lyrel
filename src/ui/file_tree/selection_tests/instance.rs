@@ -328,17 +328,26 @@ fn host_instance_directory_late_read_stays_out_of_another_host(cx: &mut TestAppC
     let new_id = other_target().host_id();
     let fixture = Replacement::new("old.txt", "new.txt", new_id);
     let old_instance = InstanceTicket::of(&fixture.old);
-    let mut gate = fixture.old.pause(ReadKind::Directory);
+    let mut old_gate = fixture.old.pause(ReadKind::Directory);
     let (app, mut vcx, _stream) = fixture.window(cx);
-    until(&mut vcx, "old directory read", |_| gate.entered());
+    until(&mut vcx, "old directory read", |_| old_gate.entered());
+    let mut new_gate = fixture.new.pause(ReadKind::Directory);
     activate(&app, &mut vcx, fixture.new.clone());
-    until(&mut vcx, "new Host listing", |vcx| {
-        listed(&app, vcx, new_id, "new.txt")
-    });
+    until(&mut vcx, "new Host directory read", |_| new_gate.entered());
+    // Keep the new Host's listing (including watch-triggered refreshes) in
+    // flight until the retired callback is observed. Otherwise a new callback
+    // can overwrite the probe's latest Directory landing in the same UI turn.
     let before = checkpoint(&app, &vcx, ReadKind::Directory);
-    gate.release();
+    old_gate.release();
     until(&mut vcx, "old Host callback", |vcx| {
         landed_since(&app, vcx, ReadKind::Directory, old_instance, before)
+    });
+    vcx.update(|window, _| {
+        assert!(window.try_find(id(Path::new("/repo/old.txt"))).is_none());
+    });
+    new_gate.release();
+    until(&mut vcx, "new Host listing", |vcx| {
+        listed(&app, vcx, new_id, "new.txt")
     });
     assert_rows(&mut vcx, "new.txt", "old.txt");
 }
