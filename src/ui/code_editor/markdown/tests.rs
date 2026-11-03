@@ -8609,6 +8609,207 @@ fn native_empty_quote_line_exits_one_level_and_undo_restores_source(
     });
 }
 
+fn assert_inline_text_marks(
+    nodes: &[gpui_kit::base::text::editor_host::InlineNode],
+    expected: &[(&str, gpui_kit::base::text::editor_host::TextMark)],
+) {
+    let mut text = String::new();
+    let mut actual = Vec::new();
+    for node in nodes {
+        if node.as_image().is_some() || node.as_custom().is_some() {
+            continue;
+        }
+        text.push_str(node.text());
+        for (range, mark) in node.mark_runs() {
+            actual.extend(node.text()[range.clone()].chars().map(|ch| (ch, mark.clone())));
+        }
+    }
+    assert_eq!(text, expected.iter().map(|(text, _)| *text).collect::<String>());
+    let expected: Vec<_> = expected
+        .iter()
+        .flat_map(|(text, mark)| text.chars().map(|ch| (ch, mark.clone())))
+        .collect();
+    assert_eq!(actual, expected);
+}
+
+#[test]
+fn inline_nodes_preserve_unicode_styles_links_and_cross_segment_marked_ranges() {
+    use gpui_kit::base::text::editor_host::{LinkMark, TextMark};
+
+    let source = "前中🎉e\u{301} **粗体** *斜* ~~删~~ `码` [链](https://example.test) 尾";
+    let projection = super::projection::Projection::parse(
+        source,
+        0,
+        true,
+        super::mdx::Grammar::Markdown,
+    );
+    assert!(projection.error.is_none());
+    assert_eq!(projection.leaves.len(), 1);
+    let leaf = &projection.leaves[0];
+    let math = super::math::State::default();
+    for marked in [
+        None,
+        Some(source.find('中').unwrap()..source.find('尾').unwrap()),
+    ] {
+        let base = TextMark {
+            underline: marked.is_some(),
+            ..Default::default()
+        };
+        assert_inline_text_marks(
+            &leaf.inline_nodes(marked.as_ref(), &math),
+            &[
+                ("前", TextMark::default()),
+                ("中🎉e\u{301} ", base.clone()),
+                (
+                    "粗体",
+                    TextMark {
+                        bold: true,
+                        ..base.clone()
+                    },
+                ),
+                (" ", base.clone()),
+                (
+                    "斜",
+                    TextMark {
+                        italic: true,
+                        ..base.clone()
+                    },
+                ),
+                (" ", base.clone()),
+                (
+                    "删",
+                    TextMark {
+                        strikethrough: true,
+                        ..base.clone()
+                    },
+                ),
+                (" ", base.clone()),
+                (
+                    "码",
+                    TextMark {
+                        code: true,
+                        ..base.clone()
+                    },
+                ),
+                (" ", base.clone()),
+                (
+                    "链",
+                    TextMark {
+                        link: Some(LinkMark {
+                            url: "https://example.test".into(),
+                            ..Default::default()
+                        }),
+                        ..base.clone()
+                    },
+                ),
+                (" ", base),
+                ("尾", TextMark::default()),
+            ],
+        );
+    }
+}
+
+#[test]
+fn inline_nodes_preserve_normalized_and_composing_raw_line_breaks_and_entities() {
+    use gpui_kit::base::text::editor_host::TextMark;
+
+    let source = "前\n中  \n后 &amp; 尾";
+    let mut projection = super::projection::Projection::parse(
+        source,
+        0,
+        true,
+        super::mdx::Grammar::Markdown,
+    );
+    assert!(projection.error.is_none());
+    assert_eq!(projection.leaves.len(), 1);
+    let leaf = &mut projection.leaves[0];
+    let math = super::math::State::default();
+    assert_inline_text_marks(
+        &leaf.inline_nodes(None, &math),
+        &[("前 中\n后 & 尾", TextMark::default())],
+    );
+    let marked = 0..source.len();
+    assert!(leaf.contextual_reveal(Selection::caret(0), &[], Some(&marked)));
+    assert_inline_text_marks(
+        &leaf.inline_nodes(Some(&marked), &math),
+        &[(
+            source,
+            TextMark {
+                underline: true,
+                ..Default::default()
+            },
+        )],
+    );
+    assert!(leaf.contextual_reveal(Selection::caret(0), &[], None));
+    assert_inline_text_marks(
+        &leaf.inline_nodes(None, &math),
+        &[("前 中\n后 & 尾", TextMark::default())],
+    );
+}
+
+#[test]
+fn inline_nodes_preserve_image_math_atoms_and_verbatim_marks_between_styled_text() {
+    use gpui_kit::base::text::editor_host::TextMark;
+
+    let source = "**前 ![图](missing.png \"标题\") 中 $x$ 尾**";
+    let mut projection = super::projection::Projection::parse(
+        source,
+        0,
+        true,
+        super::mdx::Grammar::Markdown,
+    );
+    assert!(projection.error.is_none());
+    assert_eq!(projection.leaves.len(), 1);
+    let leaf = &mut projection.leaves[0];
+    let math = super::math::State::default();
+    let bold = TextMark {
+        bold: true,
+        ..Default::default()
+    };
+    let nodes = leaf.inline_nodes(None, &math);
+    assert_inline_text_marks(&nodes, &[("前  中  尾", bold.clone())]);
+    let images: Vec<_> = nodes.iter().filter_map(|node| node.as_image()).collect();
+    assert_eq!(images.len(), 1);
+    assert_eq!(images[0].url.as_ref(), "missing.png");
+    assert_eq!(images[0].alt.as_deref(), Some("图"));
+    assert_eq!(images[0].title.as_deref(), Some("标题"));
+    assert!(images[0].width.is_some());
+    assert!(images[0].height.is_some());
+    let formulas: Vec<_> = nodes
+        .iter()
+        .filter(|node| node.as_custom().is_some())
+        .collect();
+    assert_eq!(formulas.len(), 1);
+    assert_eq!(formulas[0].text(), "\u{fffc}");
+
+    let marked = 0..source.len();
+    assert!(leaf.contextual_reveal(Selection::caret(0), &[], Some(&marked)));
+    let nodes = leaf.inline_nodes(Some(&marked), &math);
+    assert!(
+        nodes
+            .iter()
+            .all(|node| node.as_image().is_none() && node.as_custom().is_none())
+    );
+    assert_inline_text_marks(
+        &nodes,
+        &[(
+            source,
+            TextMark {
+                underline: true,
+                ..bold.clone()
+            },
+        )],
+    );
+    assert!(leaf.contextual_reveal(Selection::caret(0), &[], None));
+    let nodes = leaf.inline_nodes(None, &math);
+    assert_eq!(nodes.iter().filter(|node| node.as_image().is_some()).count(), 1);
+    assert_eq!(
+        nodes.iter().filter(|node| node.as_custom().is_some()).count(),
+        1
+    );
+    assert_inline_text_marks(&nodes, &[("前  中  尾", bold)]);
+}
+
 #[test]
 fn installed_mdx_children_boundary_never_aliases_its_inline_content() {
     use super::projection::Projection;
