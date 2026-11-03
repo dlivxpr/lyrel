@@ -5,6 +5,7 @@ use super::*;
 use crate::core::session::{RemoteRef, RemoteTarget, WindowView, WorkspaceId, WorkspaceStore};
 use crate::terminal::PaneWorkspace;
 use crate::ui::app::test_window::harness_with_pane;
+use crate::ui::file_tree::read_probe::{InstanceTicket, Landing};
 use crate::ui::search::files::FileList;
 use std::time::{Duration, Instant};
 
@@ -33,6 +34,57 @@ fn window_at_repo(
         .encode(&mut stream)
         .expect("the consumer pane receives its cwd");
     (app, vcx, stream)
+}
+
+struct Replacement {
+    old_dir: tempfile::TempDir,
+    new_dir: tempfile::TempDir,
+    old: Arc<NamespaceHost>,
+    new: Arc<NamespaceHost>,
+}
+
+impl Replacement {
+    fn new(old_name: &str, new_name: &str, new_id: HostId) -> Self {
+        let old_dir = backing(old_name);
+        let new_dir = backing(new_name);
+        let old = NamespaceHost::new(HostId::LOCAL, old_dir.path());
+        let new = NamespaceHost::new(new_id, new_dir.path());
+        Self {
+            old_dir,
+            new_dir,
+            old,
+            new,
+        }
+    }
+
+    fn window(
+        &self,
+        cx: &mut TestAppContext,
+    ) -> (
+        Entity<LyrelApp>,
+        VisualTestContext,
+        crate::daemon::transport::Stream,
+    ) {
+        let (app, mut vcx, stream) = window_at_repo(cx);
+        activate(&app, &mut vcx, self.old.clone());
+        (app, vcx, stream)
+    }
+}
+
+fn checkpoint(app: &Entity<LyrelApp>, vcx: &VisualTestContext, kind: ReadKind) -> Option<Landing> {
+    app.read_with(vcx, |app, _| app.file_tree.read_probe.checkpoint(kind))
+}
+
+fn landed_since(
+    app: &Entity<LyrelApp>,
+    vcx: &VisualTestContext,
+    kind: ReadKind,
+    host: InstanceTicket,
+    before: Option<Landing>,
+) -> bool {
+    app.read_with(vcx, |app, _| {
+        app.file_tree.read_probe.landed_since(kind, host, before)
+    })
 }
 
 fn other_target() -> RemoteTarget {
@@ -127,30 +179,127 @@ fn assert_rows(vcx: &mut VisualTestContext, present: &str, absent: &str) {
 }
 
 #[gpui_kit::test]
+fn host_instance_quick_open_without_cwd_shows_no_roots(cx: &mut TestAppContext) {
+    let _serial = serial();
+    let root = backing("must-not-walk.txt");
+    let host = NamespaceHost::new(HostId::LOCAL, root.path());
+    let (app, mut vcx, _stream) = harness_with_pane(cx);
+    app.update_in(&mut vcx, |app, window, cx| {
+        HostRegistry::insert(cx, host.clone());
+        assert!(app.file_project_cwds(cx).is_empty());
+        assert!(!app.file_tree.host_matches(&(host.clone() as SharedHost)));
+        app.quick_open_file(window, cx);
+    });
+    vcx.run_until_parked();
+    app.read_with(&vcx, |app, cx| {
+        app.search.view().unwrap().read(cx).assert_no_file_roots(cx);
+    });
+    assert_eq!(
+        host.read_count(ReadKind::Index),
+        0,
+        "no roots must not dispatch a walk"
+    );
+}
+
+fn search_file_rows(app: &Entity<LyrelApp>, vcx: &VisualTestContext) -> Vec<PathBuf> {
+    app.read_with(vcx, |app, cx| {
+        app.search.view().unwrap().read(cx).file_rows(cx)
+    })
+}
+
+#[gpui_kit::test]
+fn host_instance_go_to_file_after_hidden_reconnect_uses_current_adapter(cx: &mut TestAppContext) {
+    let _serial = serial();
+    let fixture = Replacement::new("needle-old.txt", "needle-new.txt", HostId::LOCAL);
+    // Both namespaces own the exact same wire path, with different contents.
+    std::fs::write(
+        fixture.old_dir.path().join("repo/needle-shared.txt"),
+        "retired adapter\n",
+    )
+    .unwrap();
+    std::fs::write(
+        fixture.new_dir.path().join("repo/needle-shared.txt"),
+        "current adapter\n",
+    )
+    .unwrap();
+    let (app, mut vcx, _stream) = fixture.window(cx);
+    until(&mut vcx, "initial listing", |vcx| {
+        listed(&app, vcx, HostId::LOCAL, "needle-old.txt")
+    });
+    app.update_in(&mut vcx, |app, window, cx| {
+        app.open_search(crate::ui::search::SearchTab::Files, "needle", window, cx)
+    });
+    until(&mut vcx, "landed old Files source", |vcx| {
+        search_file_rows(&app, vcx).contains(&PathBuf::from("/repo/needle-old.txt"))
+    });
+    app.update_in(&mut vcx, |app, window, cx| {
+        app.close_search(window, cx);
+        app.open_search(crate::ui::search::SearchTab::Actions, "needle", window, cx);
+    });
+    let mut gate = fixture.new.pause(ReadKind::Index);
+    activate(&app, &mut vcx, fixture.new.clone());
+    app.update_in(&mut vcx, |app, window, cx| {
+        app.file_tree_host_rebound(window, cx)
+    });
+    assert_eq!(fixture.new.read_count(ReadKind::Index), 0);
+    app.update_in(&mut vcx, |app, window, cx| app.quick_open_file(window, cx));
+    // Check the open consumer immediately, before the replacement can land.
+    assert!(
+        search_file_rows(&app, &vcx).is_empty(),
+        "Go to File retained retired file rows"
+    );
+    until(&mut vcx, "replacement Files walk", |_| gate.entered());
+    gate.release();
+    until(&mut vcx, "current Files source", |vcx| {
+        let rows = search_file_rows(&app, vcx);
+        rows.contains(&PathBuf::from("/repo/needle-new.txt"))
+            && !rows.contains(&PathBuf::from("/repo/needle-old.txt"))
+    });
+    // Narrow the same consumer with real input, then confirm its file row.
+    vcx.update(|window, cx| {
+        window.press(
+            if cfg!(target_os = "macos") {
+                "cmd-a"
+            } else {
+                "ctrl-a"
+            },
+            cx,
+        );
+        window.input("needle-shared.txt", cx);
+    });
+    until(&mut vcx, "shared path row", |vcx| {
+        search_file_rows(&app, vcx) == [PathBuf::from("/repo/needle-shared.txt")]
+    });
+    vcx.update(|window, cx| window.press("enter", cx));
+    until(&mut vcx, "current adapter file opens", |vcx| {
+        app.read_with(vcx, |app, cx| {
+            app.editor_active_local_file().is_some_and(|file| {
+                file.path == Path::new("/repo/needle-shared.txt")
+                    && file.input.read(cx).text().to_string() == "current adapter\n"
+            })
+        })
+    });
+    assert_eq!(fixture.new.read_count(ReadKind::Index), 1);
+}
+
+#[gpui_kit::test]
 fn host_instance_directory_late_read_cannot_release_reconnected_request(cx: &mut TestAppContext) {
     let _serial = serial();
-    let old_dir = backing("old.txt");
-    let new_dir = backing("new.txt");
-    let old = NamespaceHost::new(HostId::LOCAL, old_dir.path());
-    let old_instance = Arc::as_ptr(&old) as *const () as usize;
-    let new = NamespaceHost::new(HostId::LOCAL, new_dir.path());
-    let mut old_gate = old.pause(ReadKind::Directory);
-    let (app, mut vcx, _stream) = window_at_repo(cx);
-    activate(&app, &mut vcx, old);
+    let fixture = Replacement::new("old.txt", "new.txt", HostId::LOCAL);
+    let old_instance = InstanceTicket::of(&fixture.old);
+    let mut old_gate = fixture.old.pause(ReadKind::Directory);
+    let (app, mut vcx, _stream) = fixture.window(cx);
     until(&mut vcx, "old directory read", |_| old_gate.entered());
-    let mut new_gate = new.pause(ReadKind::Directory);
-    activate(&app, &mut vcx, new);
+    let mut new_gate = fixture.new.pause(ReadKind::Directory);
+    activate(&app, &mut vcx, fixture.new.clone());
     // The replacement must start despite the identical HostId and path.
     until(&mut vcx, "replacement directory read", |_| {
         new_gate.entered()
     });
-    let before = app.read_with(&vcx, |app, _| app.file_tree.read_landings[0]);
+    let before = checkpoint(&app, &vcx, ReadKind::Directory);
     old_gate.release();
     until(&mut vcx, "retired directory callback", |vcx| {
-        app.read_with(vcx, |app, _| {
-            app.file_tree.read_landings[0] > before
-                && app.file_tree.read_landing_hosts[0] == Some(old_instance)
-        })
+        landed_since(&app, vcx, ReadKind::Directory, old_instance, before)
     });
     app.read_with(&vcx, |app, _| {
         assert!(
@@ -176,42 +325,31 @@ fn host_instance_directory_late_read_cannot_release_reconnected_request(cx: &mut
 #[gpui_kit::test]
 fn host_instance_directory_late_read_stays_out_of_another_host(cx: &mut TestAppContext) {
     let _serial = serial();
-    let old_dir = backing("old.txt");
-    let new_dir = backing("new.txt");
-    let old = NamespaceHost::new(HostId::LOCAL, old_dir.path());
-    let old_instance = Arc::as_ptr(&old) as *const () as usize;
     let new_id = other_target().host_id();
-    let new = NamespaceHost::new(new_id, new_dir.path());
-    let mut gate = old.pause(ReadKind::Directory);
-    let (app, mut vcx, _stream) = window_at_repo(cx);
-    activate(&app, &mut vcx, old);
+    let fixture = Replacement::new("old.txt", "new.txt", new_id);
+    let old_instance = InstanceTicket::of(&fixture.old);
+    let mut gate = fixture.old.pause(ReadKind::Directory);
+    let (app, mut vcx, _stream) = fixture.window(cx);
     until(&mut vcx, "old directory read", |_| gate.entered());
-    activate(&app, &mut vcx, new);
+    activate(&app, &mut vcx, fixture.new.clone());
     until(&mut vcx, "new Host listing", |vcx| {
         listed(&app, vcx, new_id, "new.txt")
     });
-    let before = app.read_with(&vcx, |app, _| app.file_tree.read_landings[0]);
+    let before = checkpoint(&app, &vcx, ReadKind::Directory);
     gate.release();
     until(&mut vcx, "old Host callback", |vcx| {
-        app.read_with(vcx, |app, _| {
-            app.file_tree.read_landings[0] > before
-                && app.file_tree.read_landing_hosts[0] == Some(old_instance)
-        })
+        landed_since(&app, vcx, ReadKind::Directory, old_instance, before)
     });
     assert_rows(&mut vcx, "new.txt", "old.txt");
 }
 
 fn late_searches(cx: &mut TestAppContext, replacement_id: HostId) {
     let _serial = serial();
-    let old_dir = backing("needle-old.txt");
-    let new_dir = backing("needle-new.txt");
-    let old = NamespaceHost::new(HostId::LOCAL, old_dir.path());
-    let old_instance = Arc::as_ptr(&old) as *const () as usize;
-    let new = NamespaceHost::new(replacement_id, new_dir.path());
-    let mut names = old.pause(ReadKind::Names);
-    let mut contents = old.pause(ReadKind::Contents);
-    let (app, mut vcx, _stream) = window_at_repo(cx);
-    activate(&app, &mut vcx, old);
+    let fixture = Replacement::new("needle-old.txt", "needle-new.txt", replacement_id);
+    let old_instance = InstanceTicket::of(&fixture.old);
+    let mut names = fixture.old.pause(ReadKind::Names);
+    let mut contents = fixture.old.pause(ReadKind::Contents);
+    let (app, mut vcx, _stream) = fixture.window(cx);
     until(&mut vcx, "initial listing", |vcx| {
         listed(&app, vcx, HostId::LOCAL, "needle-old.txt")
     });
@@ -223,7 +361,7 @@ fn late_searches(cx: &mut TestAppContext, replacement_id: HostId) {
     until(&mut vcx, "both old search reads", |_| {
         names.entered() && contents.entered()
     });
-    activate(&app, &mut vcx, new);
+    activate(&app, &mut vcx, fixture.new.clone());
     until(&mut vcx, "replacement name and content searches", |vcx| {
         app.read_with(vcx, |app, _| {
             app.file_tree
@@ -240,21 +378,13 @@ fn late_searches(cx: &mut TestAppContext, replacement_id: HostId) {
                 })
         })
     });
-    let before = app.read_with(&vcx, |app, _| {
-        (
-            app.file_tree.read_landings[1],
-            app.panel_search.read_landings,
-        )
-    });
+    let before_names = checkpoint(&app, &vcx, ReadKind::Names);
+    let before_contents = checkpoint(&app, &vcx, ReadKind::Contents);
     names.release();
     contents.release();
     until(&mut vcx, "both retired search callbacks", |vcx| {
-        app.read_with(vcx, |app, _| {
-            app.file_tree.read_landings[1] > before.0
-                && app.panel_search.read_landings > before.1
-                && app.file_tree.read_landing_hosts[1] == Some(old_instance)
-                && app.panel_search.read_landing_host == Some(old_instance)
-        })
+        landed_since(&app, vcx, ReadKind::Names, old_instance, before_names)
+            && landed_since(&app, vcx, ReadKind::Contents, old_instance, before_contents)
     });
     app.read_with(&vcx, |app, _| {
         assert_eq!(
@@ -316,20 +446,16 @@ fn index_names(app: &Entity<LyrelApp>, vcx: &VisualTestContext) -> Vec<String> {
 #[gpui_kit::test]
 fn host_instance_quick_open_reconnect_rewalks_unchanged_roots(cx: &mut TestAppContext) {
     let _serial = serial();
-    let old_dir = backing("old.txt");
-    let new_dir = backing("new.txt");
-    let old = NamespaceHost::new(HostId::LOCAL, old_dir.path());
-    let old_instance = Arc::as_ptr(&old) as *const () as usize;
-    let new = NamespaceHost::new(HostId::LOCAL, new_dir.path());
-    let mut gate = old.pause(ReadKind::Index);
-    let (app, mut vcx, _stream) = window_at_repo(cx);
-    activate(&app, &mut vcx, old);
+    let fixture = Replacement::new("old.txt", "new.txt", HostId::LOCAL);
+    let old_instance = InstanceTicket::of(&fixture.old);
+    let mut gate = fixture.old.pause(ReadKind::Index);
+    let (app, mut vcx, _stream) = fixture.window(cx);
     until(&mut vcx, "initial directory", |vcx| {
         listed(&app, vcx, HostId::LOCAL, "old.txt")
     });
     app.update_in(&mut vcx, |app, window, cx| app.quick_open_file(window, cx));
     until(&mut vcx, "old quick-open walk", |_| gate.entered());
-    activate(&app, &mut vcx, new);
+    activate(&app, &mut vcx, fixture.new.clone());
     // The production successful-reconnect notification must refresh the
     // already-open consumer even though neither query nor cwd changed.
     app.update_in(&mut vcx, |app, window, cx| {
@@ -338,13 +464,10 @@ fn host_instance_quick_open_reconnect_rewalks_unchanged_roots(cx: &mut TestAppCo
     until(&mut vcx, "new quick-open walk", |vcx| {
         index_names(&app, vcx) == ["new.txt"]
     });
-    let before = app.read_with(&vcx, |app, _| app.file_tree.read_landings[3]);
+    let before = checkpoint(&app, &vcx, ReadKind::Index);
     gate.release();
     until(&mut vcx, "retired quick-open callback", |vcx| {
-        app.read_with(vcx, |app, _| {
-            app.file_tree.read_landings[3] > before
-                && app.file_tree.read_landing_hosts[3] == Some(old_instance)
-        })
+        landed_since(&app, vcx, ReadKind::Index, old_instance, before)
     });
     assert_eq!(index_names(&app, &vcx), ["new.txt"]);
     vcx.update(|window, cx| window.press("enter", cx));
@@ -369,7 +492,7 @@ fn host_instance_quick_open_reconnect_rewalks_unchanged_roots(cx: &mut TestAppCo
     activate(
         &app,
         &mut vcx,
-        NamespaceHost::new(HostId::LOCAL, old_dir.path()),
+        NamespaceHost::new(HostId::LOCAL, fixture.old_dir.path()),
     );
     app.update_in(&mut vcx, |app, window, cx| {
         app.file_tree_host_rebound(window, cx)
@@ -384,34 +507,27 @@ fn host_instance_repo_root_late_read_cannot_release_reconnected_resolution(
     cx: &mut TestAppContext,
 ) {
     let _serial = serial();
-    let old_dir = backing("old.txt");
-    let new_dir = backing("new.txt");
+    let fixture = Replacement::new("old.txt", "new.txt", HostId::LOCAL);
     // Only the retired namespace has a repository at its namespace root.
     assert!(
         std::process::Command::new("git")
             .args(["init", "--quiet"])
-            .arg(old_dir.path())
+            .arg(fixture.old_dir.path())
             .status()
             .unwrap()
             .success()
     );
-    let old = NamespaceHost::new(HostId::LOCAL, old_dir.path());
-    let old_instance = Arc::as_ptr(&old) as *const () as usize;
-    let new = NamespaceHost::new(HostId::LOCAL, new_dir.path());
-    let mut old_gate = old.pause(ReadKind::Root);
-    let (app, mut vcx, _stream) = window_at_repo(cx);
-    activate(&app, &mut vcx, old);
+    let old_instance = InstanceTicket::of(&fixture.old);
+    let mut old_gate = fixture.old.pause(ReadKind::Root);
+    let (app, mut vcx, _stream) = fixture.window(cx);
     until(&mut vcx, "old root read", |_| old_gate.entered());
-    let mut new_gate = new.pause(ReadKind::Root);
-    activate(&app, &mut vcx, new);
+    let mut new_gate = fixture.new.pause(ReadKind::Root);
+    activate(&app, &mut vcx, fixture.new.clone());
     until(&mut vcx, "new root read", |_| new_gate.entered());
-    let before = app.read_with(&vcx, |app, _| app.file_tree.read_landings[2]);
+    let before = checkpoint(&app, &vcx, ReadKind::Root);
     old_gate.release();
     until(&mut vcx, "retired root callback", |vcx| {
-        app.read_with(vcx, |app, _| {
-            app.file_tree.read_landings[2] > before
-                && app.file_tree.read_landing_hosts[2] == Some(old_instance)
-        })
+        landed_since(&app, vcx, ReadKind::Root, old_instance, before)
     });
     app.read_with(&vcx, |app, _| {
         assert!(

@@ -397,6 +397,8 @@ pub enum SearchEvent {
     /// Run this and leave the search open: what it changed is already
     /// reflected in the rows.
     RunInPlace(CommandKind),
+    /// Files was entered in place; refresh its current Host-backed source.
+    RefreshFiles,
     Dismiss,
     SessionError(lyrel_core::host::session_operations::SessionOperationError),
     /// Show the theme at this preset index without persisting it: the theme
@@ -586,6 +588,7 @@ impl SearchView {
         if self.in_sub_list() {
             return;
         }
+        let entering_files = tab == SearchTab::Files && self.tab != tab;
         self.tab = tab;
         if let Some(query) = query {
             self.set_query(query, window, cx);
@@ -598,6 +601,9 @@ impl SearchView {
             state.set_selected_index(first, window, cx);
             state.scroll_to_item(IndexPath::default(), ScrollStrategy::Top, window, cx);
         });
+        if entering_files {
+            cx.emit(SearchEvent::RefreshFiles);
+        }
         cx.notify();
     }
 
@@ -772,6 +778,29 @@ impl SearchView {
     #[cfg(test)]
     pub(crate) fn symbol_count(&self) -> usize {
         self.catalog.symbols.len()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn assert_no_file_roots(&self, cx: &App) {
+        let delegate = self.list.read(cx).delegate();
+        assert!(matches!(delegate.catalog.files, FileList::NoRoots));
+        assert_eq!(delegate.row_count(), 0);
+        assert!(delegate.selected_item().is_none());
+    }
+
+    #[cfg(test)]
+    pub(crate) fn file_rows(&self, cx: &App) -> Vec<std::path::PathBuf> {
+        self.list
+            .read(cx)
+            .delegate()
+            .sections
+            .iter()
+            .flat_map(|section| &section.rows)
+            .filter_map(|row| match &row.item()?.kind {
+                CommandKind::OpenFile { path, .. } => Some(path.clone()),
+                _ => None,
+            })
+            .collect()
     }
 
     /// The tab showing — or, in a row's own list, the one Escape returns to.

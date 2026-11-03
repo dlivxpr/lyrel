@@ -37,6 +37,9 @@ use crate::ui::right_panel::{META, ROW_FILL_RADIUS, ROW_GLYPH, ROW_INSET, TEXT_M
 
 use model::{FileGroup, Outcome, SearchKey, SearchRun};
 
+#[cfg(test)]
+use crate::ui::file_tree::read_probe::{InstanceTicket, ReadKind};
+
 /// How long typing has to pause before the search goes out. A little longer
 /// than the name search's: every keystroke that does get through reads files.
 const DEBOUNCE: Duration = Duration::from_millis(250);
@@ -64,10 +67,6 @@ pub(crate) struct PanelSearchState {
     pub(crate) focus_pending: bool,
     _input_sub: Subscription,
     rows: Option<(Body, Rc<Vec<PanelSearchRow>>)>,
-    #[cfg(test)]
-    pub(crate) read_landings: usize,
-    #[cfg(test)]
-    pub(crate) read_landing_host: Option<usize>,
 }
 
 impl PanelSearchState {
@@ -93,10 +92,6 @@ impl PanelSearchState {
             focus_pending: false,
             _input_sub: sub,
             rows: None,
-            #[cfg(test)]
-            read_landings: 0,
-            #[cfg(test)]
-            read_landing_host: None,
         }
     }
 
@@ -217,7 +212,7 @@ impl LyrelApp {
                     return;
                 }
                 #[cfg(test)]
-                let landing_host = std::sync::Arc::as_ptr(&host) as *const () as usize;
+                let landing_host = InstanceTicket::of(&host);
                 let authority = app.file_tree.read_authority(&host);
                 let SearchKey { roots, query, .. } = key;
                 HostOps::run(
@@ -232,10 +227,9 @@ impl LyrelApp {
                     },
                     move |app, outcome, cx| {
                         #[cfg(test)]
-                        {
-                            app.panel_search.read_landings += 1;
-                            app.panel_search.read_landing_host = Some(landing_host);
-                        }
+                        app.file_tree
+                            .read_probe
+                            .record(ReadKind::Contents, landing_host);
                         if !authority.is_current(&app.file_tree, cx) {
                             return;
                         }

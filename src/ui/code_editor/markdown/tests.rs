@@ -8815,6 +8815,87 @@ fn inline_nodes_preserve_image_math_atoms_and_verbatim_marks_between_styled_text
 }
 
 #[test]
+fn inline_nodes_preserve_local_marks_and_text_order_on_both_sides_of_mixed_atoms() {
+    use gpui_kit::base::text::editor_host::{LinkMark, TextMark};
+
+    let source =
+        "前 **粗** &amp; ![图](missing.png) 中 `码` $x$ [链](https://example.test) e\u{301}🎉尾";
+    let projection =
+        super::projection::Projection::parse(source, 0, true, super::mdx::Grammar::Markdown);
+    assert!(projection.error.is_none());
+    assert_eq!(projection.leaves.len(), 1);
+    let leaf = &projection.leaves[0];
+    let math = super::math::State::default();
+    for marked in [
+        None,
+        Some(source.find('粗').unwrap()..source.find('尾').unwrap()),
+    ] {
+        let base = TextMark {
+            underline: marked.is_some(),
+            ..Default::default()
+        };
+        let nodes = leaf.inline_nodes(marked.as_ref(), &math);
+        let image = nodes
+            .iter()
+            .position(|node| node.as_image().is_some())
+            .unwrap();
+        let formula = nodes
+            .iter()
+            .position(|node| node.as_custom().is_some())
+            .unwrap();
+        assert!(image < formula);
+        assert_eq!(nodes[image].as_image().unwrap().alt.as_deref(), Some("图"));
+        assert_eq!(nodes[formula].text(), "\u{fffc}");
+        assert_inline_text_marks(
+            &nodes[..image],
+            &[
+                ("前 ", TextMark::default()),
+                (
+                    "粗",
+                    TextMark {
+                        bold: true,
+                        ..base.clone()
+                    },
+                ),
+                (" & ", base.clone()),
+            ],
+        );
+        assert_inline_text_marks(
+            &nodes[image + 1..formula],
+            &[
+                (" 中 ", base.clone()),
+                (
+                    "码",
+                    TextMark {
+                        code: true,
+                        ..base.clone()
+                    },
+                ),
+                (" ", base.clone()),
+            ],
+        );
+        assert_inline_text_marks(
+            &nodes[formula + 1..],
+            &[
+                (" ", base.clone()),
+                (
+                    "链",
+                    TextMark {
+                        link: Some(LinkMark {
+                            url: "https://example.test".into(),
+                            ..Default::default()
+                        }),
+                        ..base.clone()
+                    },
+                ),
+                (" e\u{301}🎉", base),
+                ("尾", TextMark::default()),
+            ],
+        );
+    }
+}
+
+#[test]
 fn installed_mdx_children_boundary_never_aliases_its_inline_content() {
     use super::projection::Projection;
     use std::collections::HashSet;

@@ -24,6 +24,9 @@ use crate::ui::file_tree::{IndexKey, searchable_roots};
 use crate::ui::host_ops::{Host, HostOps};
 use crate::ui::i18n::{L10nKey, t_fmt};
 
+#[cfg(test)]
+use crate::ui::file_tree::read_probe::{InstanceTicket, ReadKind};
+
 /// How many entries one walk may return, directories included. A project
 /// past this is mostly generated or vendored files, and a list the size of
 /// the cap is already more than anyone scrolls; the walk is breadth-first, so
@@ -387,13 +390,27 @@ impl LyrelApp {
     /// What the Files tab opens on: the last walk, if it was of the folders
     /// the panes are in now.
     pub(crate) fn file_list_now(&self, cx: &App) -> FileList {
+        let key = self.file_index_key(cx);
+        if key.cwds().is_empty() {
+            return FileList::NoRoots;
+        }
         if !self
             .active_host(cx)
             .is_some_and(|host| self.file_tree.host_matches(&host))
         {
             return FileList::Indexing;
         }
-        self.file_tree.file_list(&self.file_index_key(cx))
+        self.file_tree.file_list(&key)
+    }
+
+    /// In-place entry and reconnect also replace retired catalog rows when
+    /// the current source needs no walk, including a workspace with no roots.
+    pub(crate) fn refresh_search_files(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.refresh_file_index(window, cx);
+        if let Some(view) = self.search.view() {
+            let files = self.file_list_now(cx);
+            view.update(cx, |view, cx| view.set_files(files, window, cx));
+        }
     }
 
     /// Walks the project again, unless a walk of it just landed or is
@@ -416,7 +433,7 @@ impl LyrelApp {
             .flatten();
         let cwds = key.cwds().to_vec();
         #[cfg(test)]
-        let landing_host = Arc::as_ptr(&host) as *const () as usize;
+        let landing_host = InstanceTicket::of(&host);
         let authority = self.file_tree.read_authority(&host);
         HostOps::run_in(
             host,
@@ -425,9 +442,9 @@ impl LyrelApp {
             move |h| walk(h, &cwds, home.as_deref()),
             move |app, list, window, cx| {
                 #[cfg(test)]
-                {
-                    app.file_tree.record_index_landing(landing_host);
-                }
+                app.file_tree
+                    .read_probe
+                    .record(ReadKind::Index, landing_host);
                 if !authority.is_current(&app.file_tree, cx) {
                     return;
                 }

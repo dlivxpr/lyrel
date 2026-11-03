@@ -349,18 +349,53 @@ impl Leaf {
     ) -> Vec<gpui_kit::base::text::editor_host::InlineNode> {
         use gpui_kit::base::text::editor_host::{ImageNode, InlineNode};
         let marks = self.marks(marked);
-        // marks() emits ordered, disjoint ranges contained in each nonempty
-        // segment. Advancing across image/math atoms as well keeps matching
-        // O(segments + marks), without rescanning unrelated marks for text runs.
-        let mut mark_index = 0;
-        self.segments
+        let mut segments = self
+            .segments
             .iter()
             .filter(|segment| !segment.display.is_empty())
-            .map(|segment| {
-                let first_mark = mark_index;
-                while mark_index < marks.len() && marks[mark_index].0.start < segment.display.end {
-                    mark_index += 1;
+            .peekable();
+        // A text-only leaf already has the complete text and byte-relative
+        // marks needed by Paragraph. Pass them through without rebuilding a
+        // marked InlineNode per segment (and repeatedly merging highlights).
+        if segments
+            .clone()
+            .all(|segment| segment.verbatim || segment.image.is_none() && segment.math.is_none())
+        {
+            return if self.text.is_empty() {
+                Vec::new()
+            } else {
+                vec![InlineNode::new(self.text.clone()).marks(marks)]
+            };
+        }
+
+        let mut marks = marks.into_iter().peekable();
+        let mut nodes = Vec::new();
+        while let Some(segment) = segments.next() {
+            let text_run = segment.verbatim || segment.image.is_none() && segment.math.is_none();
+            let mut range = segment.display.clone();
+            if text_run {
+                while let Some(next) = segments.peek() {
+                    if !next.verbatim && (next.image.is_some() || next.math.is_some()) {
+                        break;
+                    }
+                    range.end = next.display.end;
+                    segments.next();
                 }
+            }
+            // marks() emits ordered, disjoint ranges contained in each
+            // segment. Move each mark once, rebasing only text runs; atoms
+            // consume their marks too, keeping traversal O(segments + marks).
+            let mut run_marks = Vec::new();
+            while marks.peek().is_some_and(|(mark, _)| mark.start < range.end) {
+                let (mark_range, mark) = marks.next().unwrap();
+                if text_run {
+                    run_marks.push((
+                        mark_range.start - range.start..mark_range.end - range.start,
+                        mark,
+                    ));
+                }
+            }
+            nodes.push(
                 if let Some(image) = segment.image.as_ref().filter(|_| !segment.verbatim) {
                     let mut node = ImageNode::default();
                     node.url = image.url.clone().into();
@@ -374,21 +409,11 @@ impl Leaf {
                 } else if let Some(formula) = segment.math.as_ref().filter(|_| !segment.verbatim) {
                     math.inline_node(formula)
                 } else {
-                    let range = &segment.display;
-                    InlineNode::new(self.text[range.clone()].to_owned()).marks(
-                        marks[first_mark..mark_index]
-                            .iter()
-                            .filter_map(|(mark_range, mark)| {
-                                let start = range.start.max(mark_range.start);
-                                let end = range.end.min(mark_range.end);
-                                (start < end)
-                                    .then(|| (start - range.start..end - range.start, mark.clone()))
-                            })
-                            .collect(),
-                    )
-                }
-            })
-            .collect()
+                    InlineNode::new(self.text[range].to_owned()).marks(run_marks)
+                },
+            );
+        }
+        nodes
     }
     pub fn formulas(&self) -> impl Iterator<Item = &super::math::Formula> {
         self.segments
