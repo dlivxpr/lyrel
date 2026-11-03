@@ -5,7 +5,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, mpsc};
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 pub(super) enum ReadKind {
     Directory,
     Names,
@@ -75,7 +75,7 @@ impl NamespaceHost {
     fn land_after_gate(&self, kind: ReadKind) {
         let paused = {
             let mut reads = self.paused.lock().unwrap();
-            reads.iter().position(|read| std::mem::discriminant(&read.kind) == std::mem::discriminant(&kind))
+            reads.iter().position(|read| read.kind == kind)
                 .map(|at| reads.remove(at))
         };
         if let Some(paused) = paused {

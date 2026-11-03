@@ -924,6 +924,18 @@ impl LyrelApp {
         }
     }
 
+    pub(crate) fn file_tree_host_rebound(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(view) = self.search.view()
+            && view.read(cx).tab() == crate::ui::search::SearchTab::Files
+        {
+            // refresh_file_index synchronizes adapter authority before any
+            // cache lookup. Hidden consumers start no work at reconnect time.
+            self.refresh_file_index(window, cx);
+            let files = self.file_list_now(cx);
+            view.update(cx, |view, cx| view.set_files(files, window, cx));
+        }
+    }
+
     pub(crate) fn file_tree_refresh_roots(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let id = self.spawn_host(cx);
         let Some((host, mut roots)) = (if id.is_local() {

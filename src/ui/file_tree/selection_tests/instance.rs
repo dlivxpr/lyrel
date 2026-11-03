@@ -207,8 +207,9 @@ fn host_instance_quick_open_reconnect_rewalks_unchanged_roots(cx: &mut TestAppCo
     app.update_in(&mut vcx, |app, window, cx| app.quick_open_file(window, cx));
     until(&mut vcx, "old quick-open walk", |_| gate.entered());
     activate(&app, &mut vcx, new);
-    // Exercise the real quick-open refresh, with exactly the same cwd key.
-    app.update_in(&mut vcx, |app, window, cx| app.refresh_file_index(window, cx));
+    // The production successful-reconnect notification must refresh the
+    // already-open consumer even though neither query nor cwd changed.
+    app.update_in(&mut vcx, |app, window, cx| app.file_tree_host_rebound(window, cx));
     until(&mut vcx, "new quick-open walk", |vcx| index_names(&app, vcx) == ["new.txt"]);
     let before = app.read_with(&vcx, |app, _| app.file_tree.read_landings[3]);
     gate.release();
@@ -222,10 +223,15 @@ fn host_instance_quick_open_reconnect_rewalks_unchanged_roots(cx: &mut TestAppCo
             host == HostId::LOCAL && path == Path::new("/repo").join("new.txt")
         }))
     });
+    app.update_in(&mut vcx, |app, window, cx| {
+        if app.search.view().is_none() {
+            app.quick_open_file(window, cx);
+        }
+    });
     // Also retire a freshly landed walk, not just an in-flight one. Its age
     // must not suppress reading another adapter with the same cwd key.
     activate(&app, &mut vcx, NamespaceHost::new(HostId::LOCAL, old_dir.path()));
-    app.update_in(&mut vcx, |app, window, cx| app.refresh_file_index(window, cx));
+    app.update_in(&mut vcx, |app, window, cx| app.file_tree_host_rebound(window, cx));
     until(&mut vcx, "replacement of fresh cached index", |vcx| index_names(&app, vcx) == ["old.txt"]);
 }
 
