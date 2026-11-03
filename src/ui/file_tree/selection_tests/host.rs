@@ -1,18 +1,11 @@
+pub(super) use crate::ui::file_tree::read_probe::ReadKind;
+use std::collections::HashMap;
 use lyrel_core::host::{Entry, Host, HostId, Meta, Output, SearchHit, SharedHost, WatchSub};
 use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, mpsc};
-
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub(super) enum ReadKind {
-    Directory,
-    Names,
-    Contents,
-    Index,
-    Root,
-}
 
 pub(super) struct ReadGate {
     entered: Arc<AtomicBool>,
@@ -50,6 +43,7 @@ pub(super) struct NamespaceHost {
     root: PathBuf,
     local: SharedHost,
     paused: Mutex<Vec<PausedRead>>,
+    reads: Mutex<HashMap<ReadKind, usize>>,
 }
 
 impl NamespaceHost {
@@ -59,6 +53,7 @@ impl NamespaceHost {
             root: lyrel_core::core::path_spelling::local_spelling_buf(root.to_path_buf()),
             local: lyrel_core::host::local::LocalHost::new(),
             paused: Mutex::new(Vec::new()),
+            reads: Mutex::new(HashMap::new()),
         })
     }
     pub(super) fn pause(&self, kind: ReadKind) -> ReadGate {
@@ -73,6 +68,14 @@ impl NamespaceHost {
             entered,
             release: Some(release),
         }
+    }
+
+    pub(super) fn read_count(&self, kind: ReadKind) -> usize {
+        self.reads.lock().unwrap().get(&kind).copied().unwrap_or(0)
+    }
+
+    fn start_read(&self, kind: ReadKind) {
+        *self.reads.lock().unwrap().entry(kind).or_default() += 1;
     }
 
     fn land_after_gate(&self, kind: ReadKind) {
@@ -122,6 +125,7 @@ impl Host for NamespaceHost {
         }
     }
     fn read_dir(&self, path: &Path, root: Option<&Path>) -> io::Result<Vec<Entry>> {
+        self.start_read(ReadKind::Directory);
         let result = self.local.read_dir(
             &self.path(path),
             root.map(|root| self.path(root)).as_deref(),
@@ -148,6 +152,12 @@ impl Host for NamespaceHost {
         dirs: usize,
         hidden: bool,
     ) -> io::Result<Vec<SearchHit>> {
+        let kind = if query.is_empty() {
+            ReadKind::Index
+        } else {
+            ReadKind::Names
+        };
+        self.start_read(kind);
         let result = self
             .local
             .search(
@@ -163,11 +173,7 @@ impl Host for NamespaceHost {
                 }
                 hits
             });
-        self.land_after_gate(if query.is_empty() {
-            ReadKind::Index
-        } else {
-            ReadKind::Names
-        });
+        self.land_after_gate(kind);
         result
     }
     fn search_content(
@@ -176,6 +182,7 @@ impl Host for NamespaceHost {
         query: &lyrel_core::host::ContentQuery,
         limits: &lyrel_core::host::ContentLimits,
     ) -> io::Result<lyrel_core::host::ContentResults> {
+        self.start_read(ReadKind::Contents);
         let mut results = self.local.search_content(
             &roots.iter().map(|path| self.path(path)).collect::<Vec<_>>(),
             query,
@@ -203,6 +210,7 @@ impl Host for NamespaceHost {
         self.local.remove(&self.path(path), recursive)
     }
     fn repo_root(&self, path: &Path) -> io::Result<Option<PathBuf>> {
+        self.start_read(ReadKind::Root);
         let result = self
             .local
             .repo_root(&self.path(path))

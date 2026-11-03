@@ -41,6 +41,11 @@ mod cwd_tests;
 #[cfg(test)]
 mod refresh_tests;
 
+#[cfg(test)]
+pub(crate) mod read_probe;
+#[cfg(test)]
+use read_probe::{InstanceTicket, ReadKind, ReadProbe};
+
 pub(crate) use lifecycle::{IndexKey, searchable_roots};
 
 // The tree is laid out the way every other list in this panel is: the column
@@ -253,9 +258,7 @@ pub(crate) struct FileTreeState {
     /// so it outlives the search it was walked for.
     quick_open: lifecycle::FileIndexStore,
     #[cfg(test)]
-    read_landings: [usize; 4],
-    #[cfg(test)]
-    read_landing_hosts: [Option<usize>; 4],
+    pub(crate) read_probe: ReadProbe,
     pub(crate) show_hidden: bool,
     editing: Option<TreeEdit>,
     editing_subs: Vec<Subscription>,
@@ -317,9 +320,7 @@ impl FileTreeState {
             search: SearchState::default(),
             quick_open: Default::default(),
             #[cfg(test)]
-            read_landings: [0; 4],
-            #[cfg(test)]
-            read_landing_hosts: [None; 4],
+            read_probe: ReadProbe::default(),
             show_hidden: false,
             editing: None,
             editing_subs: Vec::new(),
@@ -514,7 +515,7 @@ impl FileTreeState {
         let id = host.id();
         let key: DirKey = (id, dir.clone());
         #[cfg(test)]
-        let landing_host = Arc::as_ptr(host) as *const () as usize;
+        let landing_host = InstanceTicket::of(host);
         let authority = self.read_authority(host);
         HostOps::run(
             host.clone(),
@@ -540,10 +541,7 @@ impl FileTreeState {
             },
             move |app, (readable, entries), cx| {
                 #[cfg(test)]
-                {
-                    app.file_tree.read_landings[0] += 1;
-                    app.file_tree.read_landing_hosts[0] = Some(landing_host);
-                }
+                app.file_tree.read_probe.record(ReadKind::Directory, landing_host);
                 if !authority.is_current(&app.file_tree, cx) {
                     return;
                 }
@@ -634,7 +632,7 @@ impl FileTreeState {
                     return;
                 }
                 #[cfg(test)]
-                let landing_host = Arc::as_ptr(&host) as *const () as usize;
+                let landing_host = InstanceTicket::of(&host);
                 let authority = app.file_tree.read_authority(&host);
                 HostOps::run(
                     host,
@@ -661,10 +659,7 @@ impl FileTreeState {
                     },
                     move |app, (ok, hits), cx| {
                         #[cfg(test)]
-                        {
-                            app.file_tree.read_landings[1] += 1;
-                            app.file_tree.read_landing_hosts[1] = Some(landing_host);
-                        }
+                        app.file_tree.read_probe.record(ReadKind::Names, landing_host);
                         if !authority.is_current(&app.file_tree, cx) {
                             return;
                         }
@@ -931,7 +926,10 @@ impl LyrelApp {
 
     pub(crate) fn file_tree_host_rebound(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if let Some(view) = self.search.view()
-            && view.read(cx).tab() == crate::ui::search::SearchTab::Files
+            && matches!(
+                view.read(cx).tab(),
+                crate::ui::search::SearchTab::All | crate::ui::search::SearchTab::Files
+            )
         {
             // refresh_file_index synchronizes adapter authority before any
             // cache lookup. Hidden consumers start no work at reconnect time.

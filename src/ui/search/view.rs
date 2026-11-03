@@ -774,6 +774,29 @@ impl SearchView {
         self.catalog.symbols.len()
     }
 
+    #[cfg(test)]
+    pub(crate) fn assert_no_file_roots(&self, cx: &App) {
+        let delegate = self.list.read(cx).delegate();
+        assert!(matches!(delegate.catalog.files, FileList::NoRoots));
+        assert_eq!(delegate.row_count(), 0);
+        assert!(delegate.selected_item().is_none());
+    }
+
+    #[cfg(test)]
+    pub(crate) fn file_rows(&self, cx: &App) -> Vec<std::path::PathBuf> {
+        self.list
+            .read(cx)
+            .delegate()
+            .sections
+            .iter()
+            .flat_map(|section| &section.rows)
+            .filter_map(|row| match &row.item()?.kind {
+                CommandKind::OpenFile { path, .. } => Some(path.clone()),
+                _ => None,
+            })
+            .collect()
+    }
+
     /// The tab showing — or, in a row's own list, the one Escape returns to.
     pub(crate) fn tab(&self) -> SearchTab {
         self.tab
