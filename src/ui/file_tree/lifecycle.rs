@@ -71,6 +71,11 @@ pub(crate) fn searchable_roots(resolved: Vec<PathBuf>, home: Option<&Path>) -> V
 }
 
 impl FileTreeState {
+    #[cfg(test)]
+    pub(crate) fn record_index_landing(&mut self) {
+        self.read_landings[3] += 1;
+    }
+
     pub(super) fn resolve_project_roots(
         &mut self,
         host: &SharedHost,
@@ -112,6 +117,8 @@ impl FileTreeState {
                 }
             },
             move |app, (root, real), cx| {
+                #[cfg(test)]
+                { app.file_tree.read_landings[2] += 1; }
                 app.file_tree.finish_repo_root(&key, cwd, root, real);
                 cx.notify();
             },

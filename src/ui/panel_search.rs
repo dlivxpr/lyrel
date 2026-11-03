@@ -64,6 +64,8 @@ pub(crate) struct PanelSearchState {
     pub(crate) focus_pending: bool,
     _input_sub: Subscription,
     rows: Option<(Body, Rc<Vec<PanelSearchRow>>)>,
+    #[cfg(test)]
+    pub(crate) read_landings: usize,
 }
 
 impl PanelSearchState {
@@ -89,6 +91,8 @@ impl PanelSearchState {
             focus_pending: false,
             _input_sub: sub,
             rows: None,
+            #[cfg(test)]
+            read_landings: 0,
         }
     }
 
@@ -210,6 +214,8 @@ impl LyrelApp {
                         ))
                     },
                     move |app, outcome, cx| {
+                        #[cfg(test)]
+                        { app.panel_search.read_landings += 1; }
                         if app.panel_search.run.accept(generation, outcome) {
                             app.panel_search.rows = None;
                             cx.notify();

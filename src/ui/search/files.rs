@@ -414,6 +414,8 @@ impl LyrelApp {
             cx,
             move |h| walk(h, &cwds, home.as_deref()),
             move |app, list, window, cx| {
+                #[cfg(test)]
+                { app.file_tree.record_index_landing(); }
                 if !app
                     .file_tree
                     .finish_file_index(generation, key.clone(), list)

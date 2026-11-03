@@ -237,6 +237,8 @@ pub(crate) struct FileTreeState {
     /// (`ui::search::files`). Kept here, beside the tree it is a flat copy of,
     /// so it outlives the search it was walked for.
     quick_open: lifecycle::FileIndexStore,
+    #[cfg(test)]
+    read_landings: [usize; 4],
     pub(crate) show_hidden: bool,
     editing: Option<TreeEdit>,
     editing_subs: Vec<Subscription>,
@@ -297,6 +299,8 @@ impl FileTreeState {
             repo_root_loads: InFlight::default(),
             search: SearchState::default(),
             quick_open: Default::default(),
+            #[cfg(test)]
+            read_landings: [0; 4],
             show_hidden: false,
             editing: None,
             editing_subs: Vec::new(),
@@ -476,6 +480,8 @@ impl FileTreeState {
                 }
             },
             move |app, (readable, entries), cx| {
+                #[cfg(test)]
+                { app.file_tree.read_landings[0] += 1; }
                 let host = app.active_host(cx);
                 let landed = app.file_tree.finish_listing(
                     &key,
@@ -582,6 +588,8 @@ impl FileTreeState {
                         (ok, hits)
                     },
                     move |app, (ok, hits), cx| {
+                        #[cfg(test)]
+                        { app.file_tree.read_landings[1] += 1; }
                         if app.file_tree.finish_search(generation, ok, hits) {
                             cx.notify();
                         }
