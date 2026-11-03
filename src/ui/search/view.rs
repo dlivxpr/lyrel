@@ -654,6 +654,18 @@ impl SearchView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        let unchanged = match (&self.catalog.files, &files) {
+            (FileList::Ready(before), FileList::Ready(after)) => {
+                std::sync::Arc::ptr_eq(before, after)
+            }
+            (FileList::NoRoots, FileList::NoRoots)
+            | (FileList::Indexing, FileList::Indexing)
+            | (FileList::Failed, FileList::Failed) => true,
+            _ => false,
+        };
+        if unchanged {
+            return;
+        }
         self.update_catalog(|catalog| catalog.files = files, window, cx);
     }
 
