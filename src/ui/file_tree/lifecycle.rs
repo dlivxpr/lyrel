@@ -71,6 +71,12 @@ pub(crate) fn searchable_roots(resolved: Vec<PathBuf>, home: Option<&Path>) -> V
 }
 
 impl FileTreeState {
+    #[cfg(test)]
+    pub(crate) fn record_index_landing(&mut self, host: usize) {
+        self.read_landings[3] += 1;
+        self.read_landing_hosts[3] = Some(host);
+    }
+
     pub(super) fn resolve_project_roots(
         &mut self,
         host: &SharedHost,
@@ -100,6 +106,9 @@ impl FileTreeState {
         if !self.repo_root_loads.begin(key.clone()) {
             return;
         }
+        #[cfg(test)]
+        let landing_host = Arc::as_ptr(host) as *const () as usize;
+        let authority = self.read_authority(host);
         HostOps::run(
             host.clone(),
             cx,
@@ -112,6 +121,14 @@ impl FileTreeState {
                 }
             },
             move |app, (root, real), cx| {
+                #[cfg(test)]
+                {
+                    app.file_tree.read_landings[2] += 1;
+                    app.file_tree.read_landing_hosts[2] = Some(landing_host);
+                }
+                if !authority.is_current(&app.file_tree, cx) {
+                    return;
+                }
                 app.file_tree.finish_repo_root(&key, cwd, root, real);
                 cx.notify();
             },
@@ -295,6 +312,12 @@ impl FileTreeState {
         if !report.copied.is_empty() {
             self.invalidate_dir(host, dir);
         }
+    }
+
+    pub(super) fn retire_file_index(&mut self) {
+        self.quick_open.generation += 1;
+        self.quick_open.walking = None;
+        self.quick_open.last = None;
     }
 
     pub(crate) fn file_list(&self, key: &IndexKey) -> FileList {

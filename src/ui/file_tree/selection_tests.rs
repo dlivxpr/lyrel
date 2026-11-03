@@ -1,4 +1,5 @@
 mod host;
+mod instance;
 
 use super::render_idle_gpui_tests::{files_panel_on, serial, settle};
 use super::*;

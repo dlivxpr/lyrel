@@ -349,10 +349,18 @@ impl Leaf {
     ) -> Vec<gpui_kit::base::text::editor_host::InlineNode> {
         use gpui_kit::base::text::editor_host::{ImageNode, InlineNode};
         let marks = self.marks(marked);
+        // marks() emits ordered, disjoint ranges contained in each nonempty
+        // segment. Advancing across image/math atoms as well keeps matching
+        // O(segments + marks), without rescanning unrelated marks for text runs.
+        let mut mark_index = 0;
         self.segments
             .iter()
             .filter(|segment| !segment.display.is_empty())
             .map(|segment| {
+                let first_mark = mark_index;
+                while mark_index < marks.len() && marks[mark_index].0.start < segment.display.end {
+                    mark_index += 1;
+                }
                 if let Some(image) = segment.image.as_ref().filter(|_| !segment.verbatim) {
                     let mut node = ImageNode::default();
                     node.url = image.url.clone().into();
@@ -368,7 +376,7 @@ impl Leaf {
                 } else {
                     let range = &segment.display;
                     InlineNode::new(self.text[range.clone()].to_owned()).marks(
-                        marks
+                        marks[first_mark..mark_index]
                             .iter()
                             .filter_map(|(mark_range, mark)| {
                                 let start = range.start.max(mark_range.start);

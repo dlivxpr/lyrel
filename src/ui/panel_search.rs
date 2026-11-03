@@ -64,6 +64,10 @@ pub(crate) struct PanelSearchState {
     pub(crate) focus_pending: bool,
     _input_sub: Subscription,
     rows: Option<(Body, Rc<Vec<PanelSearchRow>>)>,
+    #[cfg(test)]
+    pub(crate) read_landings: usize,
+    #[cfg(test)]
+    pub(crate) read_landing_host: Option<usize>,
 }
 
 impl PanelSearchState {
@@ -89,7 +93,17 @@ impl PanelSearchState {
             focus_pending: false,
             _input_sub: sub,
             rows: None,
+            #[cfg(test)]
+            read_landings: 0,
+            #[cfg(test)]
+            read_landing_host: None,
         }
+    }
+
+    pub(crate) fn host_changed(&mut self) {
+        self.run.retarget(None);
+        self.collapsed.clear();
+        self.rows = None;
     }
 
     fn query(&self, cx: &App) -> ContentQuery {
@@ -198,6 +212,13 @@ impl LyrelApp {
                     cx.notify();
                     return;
                 };
+                app.file_tree_sync_host(&host, cx);
+                if !app.panel_search.run.is_current(generation) {
+                    return;
+                }
+                #[cfg(test)]
+                let landing_host = std::sync::Arc::as_ptr(&host) as *const () as usize;
+                let authority = app.file_tree.read_authority(&host);
                 let SearchKey { roots, query, .. } = key;
                 HostOps::run(
                     host,
@@ -210,6 +231,14 @@ impl LyrelApp {
                         ))
                     },
                     move |app, outcome, cx| {
+                        #[cfg(test)]
+                        {
+                            app.panel_search.read_landings += 1;
+                            app.panel_search.read_landing_host = Some(landing_host);
+                        }
+                        if !authority.is_current(&app.file_tree, cx) {
+                            return;
+                        }
                         if app.panel_search.run.accept(generation, outcome) {
                             app.panel_search.rows = None;
                             cx.notify();
