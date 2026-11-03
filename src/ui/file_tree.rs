@@ -3319,7 +3319,7 @@ mod render_idle_gpui_tests {
         let dir = std::env::temp_dir().join(format!("lyrel-idle-{name}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
-        std::fs::canonicalize(&dir).unwrap()
+        lyrel_core::core::path_spelling::local_spelling_buf(std::fs::canonicalize(&dir).unwrap())
     }
 
     pub(super) fn files_panel_on(
