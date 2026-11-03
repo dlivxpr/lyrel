@@ -240,7 +240,6 @@ fn late_read_cannot_release_a_new_read(cx: &mut TestAppContext, clear_host: bool
         app.scm_refresh(local.clone(), root.clone(), cx)
     });
     pump(&mut vcx, |cx| fresh(cx, local.id(), &root));
-    let local_snapshot = vcx.update(|_, cx| status_of(cx, local.id(), &root).unwrap());
     let id = HostId::from_connection_key("scm-lifetime-gated");
     let host = GatedHost::new(id);
     vcx.update(|_, cx| {
@@ -261,6 +260,12 @@ fn late_read_cannot_release_a_new_read(cx: &mut TestAppContext, clear_host: bool
         }
     });
     std::fs::write(root.join("after.txt"), "after\n").unwrap();
+    // Both Host facades read the same real directory. Let its legitimate local
+    // watcher publish the new file before testing the remote stale landing.
+    pump(&mut vcx, |cx| {
+        fresh(cx, local.id(), &root)
+            && status_of(cx, local.id(), &root).is_some_and(|status| status.total_entries == 2)
+    });
     subscribe(&mut vcx, 2002, ScmWatcher::Editor, id, &root);
     let fresh_read = host.pause_status();
     app.update_in(&mut vcx, |app, _, cx| {
@@ -294,9 +299,14 @@ fn late_read_cannot_release_a_new_read(cx: &mut TestAppContext, clear_host: bool
                 .is_pending(&(id, root.clone())),
             "old landing must not release the reconnected read"
         );
-        assert!(
-            Arc::ptr_eq(&local_snapshot, &status_of(cx, local.id(), &root).unwrap()),
-            "identical wire paths on another Host remain independent"
+        assert_eq!(
+            status_of(cx, local.id(), &root).unwrap().total_entries,
+            2,
+            "an old remote result must not overwrite the current local status"
+        );
+        assert_eq!(
+            index_of(cx, local.id(), &root).unwrap().file("after.txt"),
+            Some(crate::core::git::status::DecoStatus::Untracked)
         );
     });
     fresh_read.release.send(()).unwrap();
