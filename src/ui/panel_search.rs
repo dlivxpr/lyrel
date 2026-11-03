@@ -66,6 +66,8 @@ pub(crate) struct PanelSearchState {
     rows: Option<(Body, Rc<Vec<PanelSearchRow>>)>,
     #[cfg(test)]
     pub(crate) read_landings: usize,
+    #[cfg(test)]
+    pub(crate) read_landing_host: Option<usize>,
 }
 
 impl PanelSearchState {
@@ -93,6 +95,8 @@ impl PanelSearchState {
             rows: None,
             #[cfg(test)]
             read_landings: 0,
+            #[cfg(test)]
+            read_landing_host: None,
         }
     }
 
@@ -212,6 +216,8 @@ impl LyrelApp {
                 if !app.panel_search.run.is_current(generation) {
                     return;
                 }
+                #[cfg(test)]
+                let landing_host = std::sync::Arc::as_ptr(&host) as *const () as usize;
                 let authority = app.file_tree.read_authority(&host);
                 let SearchKey { roots, query, .. } = key;
                 HostOps::run(
@@ -226,7 +232,10 @@ impl LyrelApp {
                     },
                     move |app, outcome, cx| {
                         #[cfg(test)]
-                        { app.panel_search.read_landings += 1; }
+                        {
+                            app.panel_search.read_landings += 1;
+                            app.panel_search.read_landing_host = Some(landing_host);
+                        }
                         if !authority.is_current(&app.file_tree, cx) {
                             return;
                         }

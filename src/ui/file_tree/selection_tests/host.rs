@@ -88,7 +88,10 @@ impl NamespaceHost {
             .join(path.to_string_lossy().trim_start_matches('/'))
     }
     fn wire(&self, path: PathBuf) -> PathBuf {
-        Path::new("/").join(path.strip_prefix(&self.root).unwrap_or(&path))
+        match path.strip_prefix(&self.root) {
+            Ok(relative) => PathBuf::from(format!("/{}", relative.to_string_lossy().replace('\\', "/"))),
+            Err(_) => path,
+        }
     }
 }
 
@@ -97,10 +100,10 @@ impl Host for NamespaceHost {
         self.id
     }
     fn separator(&self) -> char {
-        '/'
+        if self.root == Path::new("/") { self.local.separator() } else { '/' }
     }
     fn is_absolute(&self, path: &Path) -> bool {
-        path.to_string_lossy().starts_with('/')
+        if self.root == Path::new("/") { self.local.is_absolute(path) } else { path.to_string_lossy().starts_with('/') }
     }
     fn read_dir(&self, path: &Path, root: Option<&Path>) -> io::Result<Vec<Entry>> {
         let result = self.local.read_dir(

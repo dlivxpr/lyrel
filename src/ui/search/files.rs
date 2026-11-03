@@ -412,6 +412,8 @@ impl LyrelApp {
             .then(|| std::env::var_os("HOME").map(PathBuf::from))
             .flatten();
         let cwds = key.cwds().to_vec();
+        #[cfg(test)]
+        let landing_host = Arc::as_ptr(&host) as *const () as usize;
         let authority = self.file_tree.read_authority(&host);
         HostOps::run_in(
             host,
@@ -420,7 +422,7 @@ impl LyrelApp {
             move |h| walk(h, &cwds, home.as_deref()),
             move |app, list, window, cx| {
                 #[cfg(test)]
-                { app.file_tree.record_index_landing(); }
+                { app.file_tree.record_index_landing(landing_host); }
                 if !authority.is_current(&app.file_tree, cx) {
                     return;
                 }

@@ -254,6 +254,8 @@ pub(crate) struct FileTreeState {
     quick_open: lifecycle::FileIndexStore,
     #[cfg(test)]
     read_landings: [usize; 4],
+    #[cfg(test)]
+    read_landing_hosts: [Option<usize>; 4],
     pub(crate) show_hidden: bool,
     editing: Option<TreeEdit>,
     editing_subs: Vec<Subscription>,
@@ -316,6 +318,8 @@ impl FileTreeState {
             quick_open: Default::default(),
             #[cfg(test)]
             read_landings: [0; 4],
+            #[cfg(test)]
+            read_landing_hosts: [None; 4],
             show_hidden: false,
             editing: None,
             editing_subs: Vec::new(),
@@ -504,6 +508,8 @@ impl FileTreeState {
     ) {
         let id = host.id();
         let key: DirKey = (id, dir.clone());
+        #[cfg(test)]
+        let landing_host = Arc::as_ptr(host) as *const () as usize;
         let authority = self.read_authority(host);
         HostOps::run(
             host.clone(),
@@ -529,7 +535,10 @@ impl FileTreeState {
             },
             move |app, (readable, entries), cx| {
                 #[cfg(test)]
-                { app.file_tree.read_landings[0] += 1; }
+                {
+                    app.file_tree.read_landings[0] += 1;
+                    app.file_tree.read_landing_hosts[0] = Some(landing_host);
+                }
                 if !authority.is_current(&app.file_tree, cx) {
                     return;
                 }
@@ -619,6 +628,8 @@ impl FileTreeState {
                 if !app.file_tree.search_is_current(generation) {
                     return;
                 }
+                #[cfg(test)]
+                let landing_host = Arc::as_ptr(&host) as *const () as usize;
                 let authority = app.file_tree.read_authority(&host);
                 HostOps::run(
                     host,
@@ -645,7 +656,10 @@ impl FileTreeState {
                     },
                     move |app, (ok, hits), cx| {
                         #[cfg(test)]
-                        { app.file_tree.read_landings[1] += 1; }
+                        {
+                            app.file_tree.read_landings[1] += 1;
+                            app.file_tree.read_landing_hosts[1] = Some(landing_host);
+                        }
                         if !authority.is_current(&app.file_tree, cx) {
                             return;
                         }

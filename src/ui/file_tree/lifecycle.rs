@@ -72,8 +72,9 @@ pub(crate) fn searchable_roots(resolved: Vec<PathBuf>, home: Option<&Path>) -> V
 
 impl FileTreeState {
     #[cfg(test)]
-    pub(crate) fn record_index_landing(&mut self) {
+    pub(crate) fn record_index_landing(&mut self, host: usize) {
         self.read_landings[3] += 1;
+        self.read_landing_hosts[3] = Some(host);
     }
 
     pub(super) fn resolve_project_roots(
@@ -105,6 +106,8 @@ impl FileTreeState {
         if !self.repo_root_loads.begin(key.clone()) {
             return;
         }
+        #[cfg(test)]
+        let landing_host = Arc::as_ptr(host) as *const () as usize;
         let authority = self.read_authority(host);
         HostOps::run(
             host.clone(),
@@ -119,7 +122,10 @@ impl FileTreeState {
             },
             move |app, (root, real), cx| {
                 #[cfg(test)]
-                { app.file_tree.read_landings[2] += 1; }
+                {
+                    app.file_tree.read_landings[2] += 1;
+                    app.file_tree.read_landing_hosts[2] = Some(landing_host);
+                }
                 if !authority.is_current(&app.file_tree, cx) {
                     return;
                 }
