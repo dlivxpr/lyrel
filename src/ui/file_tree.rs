@@ -172,6 +172,21 @@ impl TreeEdit {
 
 type DirKey = (HostId, PathBuf);
 
+/// One adapter lifetime, not just its stable machine id. Only in-flight work
+/// holds tickets; the tree retains only the current watch Host.
+pub(crate) struct ReadAuthority {
+    host: SharedHost,
+    generation: u64,
+}
+
+impl ReadAuthority {
+    pub(crate) fn is_current(&self, tree: &FileTreeState, cx: &App) -> bool {
+        self.generation == tree.watch_generation
+            && HostRegistry::lookup(cx, self.host.id())
+                .is_some_and(|host| Arc::ptr_eq(&host, &self.host))
+    }
+}
+
 #[derive(Default)]
 struct SearchState {
     generation: u64,
@@ -318,34 +333,65 @@ impl FileTreeState {
         }
     }
 
+    pub(crate) fn host_matches(&self, host: &SharedHost) -> bool {
+        self.watch_host.as_ref().is_some_and(|held| Arc::ptr_eq(held, host))
+    }
+
+    pub(crate) fn read_authority(&self, host: &SharedHost) -> ReadAuthority {
+        ReadAuthority { host: host.clone(), generation: self.watch_generation }
+    }
+
+    fn sync_host(&mut self, host: &SharedHost) -> bool {
+        if self.host_matches(host) {
+            return false;
+        }
+        let had_host = self.watch_host.is_some();
+        self.watch_host = Some(host.clone());
+        self.watch_generation += 1;
+        self.watch = None;
+        self.watch_opening = false;
+        self.watch_busy = false;
+        self.watch_dirty = false;
+        self.watched.clear();
+        if had_host {
+            // Evict only the authority being acquired. Other Hosts' browsing
+            // data and tab-owned selection/expansion/editing remain untouched.
+            let id = host.id();
+            self.children.clear_host(id);
+            self.repo_roots.clear_host(id);
+            self.root_aliases.clear_host(id);
+            // Every old ticket uses the retired generation. Drop its pending
+            // ownership now; a late callback must not finish a replacement key.
+            self.loads = InFlight::default();
+            self.repo_root_loads = InFlight::default();
+            self.stale.retain(|(host, _)| *host != id);
+            self.unreadable.retain(|(host, _)| *host != id);
+            self.search.restart();
+            self.search.context = None;
+            self.search.hits.clear();
+            self.retire_file_index();
+            self.invalidate_rows();
+        }
+        true
+    }
+
     fn sync_watch(&mut self, host: SharedHost, dirs: HashSet<PathBuf>, cx: &mut Context<LyrelApp>) {
+        self.sync_host(&host);
         self.watched = dirs;
         let want: Vec<PathBuf> = self.watched.iter().cloned().collect();
-        if !self
-            .watch_host
-            .as_ref()
-            .is_some_and(|opened_with| Arc::ptr_eq(opened_with, &host))
-        {
-            self.watch = None;
-            self.watch_host = Some(host.clone());
-            self.watch_generation += 1;
-            self.watch_opening = false;
-            self.watch_busy = false;
-            self.watch_dirty = false;
-        }
-        let generation = self.watch_generation;
         if let Some(sub) = self.watch.clone() {
             if self.watch_busy {
                 self.watch_dirty = true;
                 return;
             }
             self.watch_busy = true;
+            let authority = self.read_authority(&host);
             HostOps::run(
                 host,
                 cx,
                 move |_| sub.set_dirs(&want),
                 move |app: &mut LyrelApp, result: std::io::Result<()>, cx| {
-                    if app.file_tree.watch_generation != generation {
+                    if !authority.is_current(&app.file_tree, cx) {
                         return;
                     }
                     if result.is_ok() {
@@ -371,6 +417,7 @@ impl FileTreeState {
         let host_id = host.id();
         let opened_host = Arc::clone(&host);
         let opened_with = self.watched.clone();
+        let authority = self.read_authority(&host);
         HostOps::run(
             host,
             cx,
@@ -379,7 +426,7 @@ impl FileTreeState {
                 move |h| h.watch(&want).map(Arc::new)
             },
             move |app, result: std::io::Result<Arc<WatchSub>>, cx| {
-                if app.file_tree.watch_generation != generation {
+                if !authority.is_current(&app.file_tree, cx) {
                     return;
                 }
                 let Some((events, retry)) =
@@ -391,8 +438,8 @@ impl FileTreeState {
                 app.file_tree_apply_fs_events(host_id, &opened_with, cx);
                 cx.spawn(async move |app, cx| {
                     while let Ok(batch) = events.recv().await {
-                        let ok = app.update(cx, |app, _cx| {
-                            if app.file_tree.watch_generation != generation {
+                        let ok = app.update(cx, |app, cx| {
+                            if !authority.is_current(&app.file_tree, cx) {
                                 return false;
                             }
                             let _ = app.file_tree.events_tx.try_send((host_id, batch));
@@ -457,6 +504,7 @@ impl FileTreeState {
     ) {
         let id = host.id();
         let key: DirKey = (id, dir.clone());
+        let authority = self.read_authority(host);
         HostOps::run(
             host.clone(),
             cx,
@@ -482,6 +530,9 @@ impl FileTreeState {
             move |app, (readable, entries), cx| {
                 #[cfg(test)]
                 { app.file_tree.read_landings[0] += 1; }
+                if !authority.is_current(&app.file_tree, cx) {
+                    return;
+                }
                 let host = app.active_host(cx);
                 let landed = app.file_tree.finish_listing(
                     &key,
@@ -564,6 +615,11 @@ impl FileTreeState {
                 let Some(host) = HostRegistry::lookup(cx, host) else {
                     return;
                 };
+                app.file_tree_sync_host(&host, cx);
+                if !app.file_tree.search_is_current(generation) {
+                    return;
+                }
+                let authority = app.file_tree.read_authority(&host);
                 HostOps::run(
                     host,
                     cx,
@@ -590,6 +646,9 @@ impl FileTreeState {
                     move |app, (ok, hits), cx| {
                         #[cfg(test)]
                         { app.file_tree.read_landings[1] += 1; }
+                        if !authority.is_current(&app.file_tree, cx) {
+                            return;
+                        }
                         if app.file_tree.finish_search(generation, ok, hits) {
                             cx.notify();
                         }
@@ -842,6 +901,15 @@ impl LyrelApp {
         HostRegistry::lookup(cx, self.spawn_host(cx))
     }
 
+    /// All file readers share the watch's adapter identity, including when the
+    /// Files tab is hidden. Synchronize before inspecting a cache or dispatching.
+    pub(crate) fn file_tree_sync_host(&mut self, host: &SharedHost, cx: &mut Context<Self>) {
+        if self.file_tree.sync_host(host) {
+            self.panel_search.host_changed();
+            cx.notify();
+        }
+    }
+
     pub(crate) fn file_tree_refresh_roots(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let id = self.spawn_host(cx);
         let Some((host, mut roots)) = (if id.is_local() {
@@ -864,6 +932,7 @@ impl LyrelApp {
         }) else {
             return;
         };
+        self.file_tree_sync_host(&host, cx);
         let home = (roots.is_empty() && id.is_local())
             .then(|| std::env::var_os("HOME").map(PathBuf::from))
             .flatten();
@@ -894,6 +963,7 @@ impl LyrelApp {
         cx: &mut Context<Self>,
     ) -> Option<(SharedHost, Vec<PathBuf>)> {
         let host = self.active_host(cx)?;
+        self.file_tree_sync_host(&host, cx);
         let cwds = self.file_project_cwds(cx);
         let roots = self.file_tree.resolve_project_roots(&host, &cwds, cx)?;
         Some((host, roots))
@@ -995,6 +1065,7 @@ impl LyrelApp {
             let Some(shared) = self.active_host(cx) else {
                 return;
             };
+            self.file_tree_sync_host(&shared, cx);
             let (roots, expanded) = match self.tab_code() {
                 Some(code) => (code.roots.clone(), code.expanded.clone()),
                 None => return,

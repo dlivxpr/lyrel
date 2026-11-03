@@ -387,6 +387,9 @@ impl LyrelApp {
     /// What the Files tab opens on: the last walk, if it was of the folders
     /// the panes are in now.
     pub(crate) fn file_list_now(&self, cx: &App) -> FileList {
+        if !self.active_host(cx).is_some_and(|host| self.file_tree.host_matches(&host)) {
+            return FileList::Indexing;
+        }
         self.file_tree.file_list(&self.file_index_key(cx))
     }
 
@@ -397,6 +400,7 @@ impl LyrelApp {
         let Some(host) = self.active_host(cx) else {
             return;
         };
+        self.file_tree_sync_host(&host, cx);
         let Some(generation) = self.file_tree.begin_file_index(&key) else {
             return;
         };
@@ -408,6 +412,7 @@ impl LyrelApp {
             .then(|| std::env::var_os("HOME").map(PathBuf::from))
             .flatten();
         let cwds = key.cwds().to_vec();
+        let authority = self.file_tree.read_authority(&host);
         HostOps::run_in(
             host,
             window,
@@ -416,6 +421,9 @@ impl LyrelApp {
             move |app, list, window, cx| {
                 #[cfg(test)]
                 { app.file_tree.record_index_landing(); }
+                if !authority.is_current(&app.file_tree, cx) {
+                    return;
+                }
                 if !app
                     .file_tree
                     .finish_file_index(generation, key.clone(), list)

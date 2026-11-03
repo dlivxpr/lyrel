@@ -96,6 +96,12 @@ impl PanelSearchState {
         }
     }
 
+    pub(crate) fn host_changed(&mut self) {
+        self.run.retarget(None);
+        self.collapsed.clear();
+        self.rows = None;
+    }
+
     fn query(&self, cx: &App) -> ContentQuery {
         ContentQuery {
             pattern: self.input.read(cx).value().to_string(),
@@ -202,6 +208,11 @@ impl LyrelApp {
                     cx.notify();
                     return;
                 };
+                app.file_tree_sync_host(&host, cx);
+                if !app.panel_search.run.is_current(generation) {
+                    return;
+                }
+                let authority = app.file_tree.read_authority(&host);
                 let SearchKey { roots, query, .. } = key;
                 HostOps::run(
                     host,
@@ -216,6 +227,9 @@ impl LyrelApp {
                     move |app, outcome, cx| {
                         #[cfg(test)]
                         { app.panel_search.read_landings += 1; }
+                        if !authority.is_current(&app.file_tree, cx) {
+                            return;
+                        }
                         if app.panel_search.run.accept(generation, outcome) {
                             app.panel_search.rows = None;
                             cx.notify();
