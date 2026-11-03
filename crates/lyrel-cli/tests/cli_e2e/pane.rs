@@ -22,6 +22,22 @@ pub(super) fn repeated_pane_pressure_preserves_detached_history_and_closes_only_
         cell_h: 16,
     };
     let mut live = Vec::new();
+    // Kill is fire-and-forget on another connection. Observe its registry
+    // removal before an Attach can prove the explicitly closed pane is gone.
+    let await_closed = |closed: &[u64]| {
+        let deadline = Instant::now() + CLOSE_WITHIN;
+        loop {
+            let listed = panes.list().unwrap();
+            if listed.iter().all(|entry| !closed.contains(&entry.pane_id)) {
+                return;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "closed panes {closed:?} remain in the registry: {listed:?}"
+            );
+            std::thread::sleep(Duration::from_millis(50));
+        }
+    };
     for _ in 0..2 {
         for count in [1, 16, 1, 32, 1] {
             while live.len() < count {
@@ -54,6 +70,7 @@ pub(super) fn repeated_pane_pressure_preserves_detached_history_and_closes_only_
             }
             for pane in live.drain(count..) {
                 daemon.run_ok(&["pane", "close", &format!("%{pane}")]);
+                await_closed(&[pane]);
                 assert!(
                     panes.attach(pane, size).is_err(),
                     "an explicitly closed pane must not be recoverable as a live session"
@@ -84,6 +101,7 @@ pub(super) fn repeated_pane_pressure_preserves_detached_history_and_closes_only_
         }
     }
     daemon.run_ok(&["ws", "rm", workspace]);
+    await_closed(&live);
     let listed = daemon.run_json(&["pane", "ls", "--all"]);
     assert!(listed["panes"].as_array().unwrap().is_empty(), "{listed}");
     assert_eq!(listed["orphans"].as_u64(), Some(0), "{listed}");
