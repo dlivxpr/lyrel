@@ -10,6 +10,7 @@
 ### 依赖升级
 
 - #170：仅通过 `gpui-kit =0.9.0` 的官方 `gpui-fast` feature 切换桌面后端，锁文件采用 Fast `0.1.13` 家族；保留语言／测试支持、HTTP `=0.3.11`、Rio `0.5.28`、单一终端帧所有权与原平台完整委派，不新增直接 engine 依赖、产品 Pre 回退或热路径探针。开发 profile 优化 Fast 链；macOS CI／Release 显式选择并记录实际 SDK 26+，默认 deployment target 与 bundle 继续为 macOS 15。原生行为、终端 retention、材质与同条件 Release 性能由集中检查点实际验收，未执行项不记为通过；macOS 原生结果仍由 #167 提供。
+- #170 Windows 检查点已完成完整 Debug 套件（`5155 passed / 55 ignored`）、Release 构建、原生终端／Markdown 输入复制查找／主题字体缩放／窗口恢复／正式 HTTP 检查与 GUI 重开保留 daemon 会话。临时生产 Root／TerminalView retention 诊断未发现静态 pane 每帧重建，保留现有 buffer owner／paint phase；原生透明空白采样与升级前逐通道一致。以上不替代最终 Rio 组合、全部性能门槛或 #167 macOS 实机证据。
 
 ### 修复
 

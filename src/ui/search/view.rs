@@ -10,9 +10,9 @@ use gpui_kit::component::{
     v_flex,
 };
 use gpui_kit::{
-    Action, App, ClickEvent, Context, Entity, EventEmitter, Focusable as _, FontWeight, IntoElement,
-    MouseButton, MouseDownEvent, ScrollStrategy, Subscription, Task, TestSupportExt as _, Window,
-    div, prelude::*, px, rems,
+    Action, App, ClickEvent, Context, Entity, EventEmitter, Focusable as _, FontWeight,
+    IntoElement, MouseButton, MouseDownEvent, ScrollStrategy, Subscription, Task,
+    TestSupportExt as _, Window, div, prelude::*, px, rems,
 };
 
 use super::command::{CommandKind, Item};

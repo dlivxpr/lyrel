@@ -32,8 +32,8 @@ use gpui_kit::{
     FontId, FontMetrics, FontRun, ForegroundExecutor, GlyphId, GraphicalEnvironment, Hsla, Keymap,
     LineLayout, Menu, MenuItem, MissingGlyphSink, OwnedMenu, PathPromptOptions, Pixels, Platform,
     PlatformDisplay, PlatformGestures, PlatformInfo, PlatformKeyboardLayout,
-    PlatformKeyboardMapper, PlatformTextSystem, PlatformWindow, PowerMode, RenderGlyphParams, Result,
-    ScreenCaptureSource, Size, SystemNotification, SystemNotificationResponse, Task,
+    PlatformKeyboardMapper, PlatformTextSystem, PlatformWindow, PowerMode, RenderGlyphParams,
+    Result, ScreenCaptureSource, Size, SystemNotification, SystemNotificationResponse, Task,
     TextRenderingMode, ThermalState, WindowAppearance, WindowButtonLayout, WindowParams,
     WindowingRequest,
 };

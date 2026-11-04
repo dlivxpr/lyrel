@@ -637,9 +637,9 @@ pub(crate) fn default_window_opacity(backdrop: WindowBackdrop, blur: bool) -> f3
 /// Tint above the shared workspace background, not another native material.
 /// Any translucent window needs translucent sidebars: that includes plain
 /// transparency, Windows Auto with an opacity override, and macOS native blur.
-/// Retains the existing Windows alpha budget from the previous native gate.
-/// Fast's current blend state must be checked with controlled backgrounds before
-/// changing that compensation; see docs/design-system.md.
+/// Preserves the pre-upgrade Windows tint budget. Controlled native black/white
+/// samples match Pre 0.3.10 and Fast 0.1.13 at opacity 0.88, but do not prove the
+/// historical 85% transmission claim; see docs/design-system.md.
 /// With an opaque window the original semantic surface remains fully opaque.
 /// `theme.sidebar` itself stays solid for components on the settings overlay.
 pub(crate) fn workspace_surface_color(cx: &App) -> Hsla {
