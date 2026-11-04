@@ -1543,6 +1543,7 @@ l10n_keys! {
     ScmNetworkBusy,
     ScmCommitNeedsMessage,
     ScmDetailFilesFailed,
+    ScmStatusUnavailable,
     ScmTimeNow,
     ScmTimeMinutes,
     ScmTimeHours,

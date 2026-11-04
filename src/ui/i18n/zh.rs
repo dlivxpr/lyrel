@@ -1830,6 +1830,7 @@ pub fn translate_zh(key: L10nKey) -> Option<&'static str> {
         L10nKey::ScmNetworkBusy => "这个仓库还有一个网络操作在进行中",
         L10nKey::ScmCommitNeedsMessage => "先写一条提交信息",
         L10nKey::ScmDetailFilesFailed => "无法读取文件列表",
+        L10nKey::ScmStatusUnavailable => "无法读取仓库状态",
         L10nKey::ScmTimeNow => "刚刚",
         L10nKey::ScmTimeMinutes => "{n}分",
         L10nKey::ScmTimeHours => "{n}时",

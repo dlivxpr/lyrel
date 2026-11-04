@@ -231,6 +231,147 @@ fn status_and_index_live_until_the_last_window_holder_leaves(cx: &mut TestAppCon
     });
 }
 
+#[gpui_kit::test]
+fn global_stage_works_after_the_hidden_panel_releases_its_status(cx: &mut TestAppContext) {
+    use crate::ui::scm::{actions::ScmIntent, state::RepoKey};
+    let (_temp, root) = repository();
+    let (app, mut vcx) = crate::ui::app::test_window::harness(cx);
+    let host = GatedHost::new(HostId::LOCAL);
+    vcx.update(|_, cx| {
+        crate::ui::host_registry::HostRegistry::insert(cx, host.clone());
+    });
+    subscribe(&mut vcx, 1050, ScmWatcher::Panel, host.id(), &root);
+    app.update_in(&mut vcx, |app, _, cx| {
+        app.scm.follow_pane(RepoKey {
+            host: host.id(),
+            root: root.clone(),
+        });
+        app.right_panel_visible = false;
+        app.scm_refresh(host.clone(), root.clone(), cx);
+    });
+    pump(&mut vcx, |cx| fresh(cx, host.id(), &root));
+    vcx.update(|_, cx| {
+        cx.global_mut::<ScmData>().release_window(1050);
+        assert!(status_of(cx, host.id(), &root).is_none());
+    });
+    app.update_in(&mut vcx, |app, window, cx| {
+        app.run_scm_action(ScmIntent::StageAll, window, cx);
+    });
+    let deadline = Instant::now() + Duration::from_secs(30);
+    loop {
+        vcx.run_until_parked();
+        let staged = std::process::Command::new("git")
+            .args(["diff", "--cached", "--name-only"])
+            .current_dir(&root)
+            .output()
+            .unwrap();
+        assert!(staged.status.success());
+        if staged.stdout == b"before.txt\n" {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "the global StageAll command did not stage the hidden repository"
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    app.update_in(&mut vcx, |app, window, cx| {
+        app.scm_sync_watchers(window, cx);
+        assert!(!app.right_panel_visible);
+        assert!(status_of(cx, host.id(), &root).is_none());
+        assert!(index_of(cx, host.id(), &root).is_none());
+    });
+}
+
+#[gpui_kit::test]
+fn hidden_global_commit_and_push_reaches_the_remote_without_retaining_status(
+    cx: &mut TestAppContext,
+) {
+    use crate::ui::scm::{actions::ScmIntent, state::RepoKey};
+    let (_temp, root) = repository();
+    let remote = tempfile::tempdir().unwrap();
+    let git = |args: &[&str]| {
+        let output = std::process::Command::new("git")
+            .args(args)
+            .current_dir(&root)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        output.stdout
+    };
+    git(&["symbolic-ref", "HEAD", "refs/heads/main"]);
+    git(&["config", "user.name", "SCM Test"]);
+    git(&["config", "user.email", "scm-test@example.invalid"]);
+    git(&["config", "commit.gpgsign", "false"]);
+    git(&["init", "--quiet", "--bare", remote.path().to_str().unwrap()]);
+    git(&["remote", "add", "origin", remote.path().to_str().unwrap()]);
+    git(&["add", "--", "before.txt"]);
+    let (app, mut vcx) = crate::ui::app::test_window::harness(cx);
+    let host = GatedHost::new(HostId::LOCAL);
+    vcx.update(|_, cx| {
+        crate::ui::host_registry::HostRegistry::insert(cx, host.clone());
+    });
+    subscribe(&mut vcx, 1051, ScmWatcher::Panel, host.id(), &root);
+    app.update_in(&mut vcx, |app, _, cx| {
+        app.scm.follow_pane(RepoKey {
+            host: host.id(),
+            root: root.clone(),
+        });
+        app.right_panel_visible = false;
+        app.scm_refresh(host.clone(), root.clone(), cx);
+    });
+    pump(&mut vcx, |cx| fresh(cx, host.id(), &root));
+    app.update_in(&mut vcx, |app, window, cx| {
+        let repo = app.scm.active_repo().unwrap().clone();
+        let status = status_of(cx, host.id(), &root).unwrap();
+        let input = app.scm.commit_input(&repo, &status, 1..=5, window, cx);
+        input.update(cx, |input, cx| {
+            input.set_value("Hidden command commit", window, cx)
+        });
+        cx.global_mut::<ScmData>().release_window(1051);
+        assert!(status_of(cx, host.id(), &root).is_none());
+        app.run_scm_action(ScmIntent::CommitAndPush, window, cx);
+    });
+    let deadline = Instant::now() + Duration::from_secs(30);
+    loop {
+        vcx.run_until_parked();
+        let output = std::process::Command::new("git")
+            .args([
+                "--git-dir",
+                remote.path().to_str().unwrap(),
+                "show",
+                "refs/heads/main:before.txt",
+            ])
+            .output()
+            .unwrap();
+        if output.status.success() {
+            assert_eq!(output.stdout, b"before\n");
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "the hidden commit follow-up did not publish its new content"
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert_eq!(
+        git(&["log", "-1", "--format=%s"]),
+        b"Hidden command commit\n"
+    );
+    assert!(git(&["status", "--porcelain"]).is_empty());
+    app.update_in(&mut vcx, |app, window, cx| {
+        app.scm_sync_watchers(window, cx);
+        assert!(!app.right_panel_visible);
+        assert!(status_of(cx, host.id(), &root).is_none());
+        assert!(index_of(cx, host.id(), &root).is_none());
+        assert!(!cx.global::<ScmData>().is_subscribed(host.id(), &root));
+    });
+}
+
 fn late_read_cannot_release_a_new_read(cx: &mut TestAppContext, clear_host: bool) {
     let (_temp, root) = repository();
     let (app, mut vcx) = crate::ui::app::test_window::harness(cx);

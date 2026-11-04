@@ -1200,10 +1200,32 @@ impl LyrelApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let Some(status) = status_of(cx, host.id(), &root) else {
+        self.with_scm_status(
+            host.clone(),
+            root.clone(),
+            window,
+            cx,
+            move |app, status, window, cx| {
+                app.run_git_op_prepared(host, root, op, then, status.head.clone(), window, cx);
+            },
+        );
+    }
+
+    pub(crate) fn run_git_op_prepared(
+        &mut self,
+        host: SharedHost,
+        root: PathBuf,
+        op: GitOp,
+        then: Option<crate::ui::scm::actions::ScmFollowUp>,
+        head: crate::core::git::status::HeadState,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if !crate::ui::host_registry::HostRegistry::lookup(cx, host.id())
+            .is_some_and(|current| Arc::ptr_eq(&current, &host))
+        {
             return;
-        };
-        let head = status.head.clone();
+        }
         let id = host.id();
 
         // The guard rides into the work closure rather than being released in
