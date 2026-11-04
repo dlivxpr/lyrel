@@ -13,6 +13,7 @@
 
 ### 修复
 
+- #170 首次 Fast 编译发现搜索行的 `IntoElement` derive 仅从 Fast prelude 导入，展开后引用未声明的 `gpui::` 路径；改为显式使用 Kit 根提供的官方 facade-aware derive，保留原搜索行、ListDelegate、选择与无障碍行为，不添加 engine 依赖、alias 或手写 trait shim。修复后的编译与原有行为套件由集中检查点验证。
 - #169 检查点修复真实 PTY 图片消费者、共享 retention 及原生 SSH 消费者的启动等待：同时从首个 `Snapshot` 与后续 `Output` 读取原有就绪标记，避免快速 sender 在订阅安装前已输出时误超时。保留真实 daemon／PTY、标记、原期限及后续像素／几何断言，不修改生产协议、不增加重试或跳过；本轮回归结果由集中验收记录。
 - OpenCode 原生 API 启动失败保留底层 OS error，便于区分缺失文件、权限和资源错误；Unix shell 夹具改由独立写入进程持有可写描述符，避免并发 fork 继承后触发 Linux `ETXTBSY`。大 JSON 的真实 shell／Host 历史回归与私有文件捕获保持不变，不增加生产重试或跳过测试。
 - 修复隐藏 SCM、最后持有者回收状态后，全局暂存、提交与推送等命令静默失效的问题；缓存缺失时通过原 Host 后台读取本次命令所需状态，不恢复常驻缓存或监听，读取失败显示通知，过期连接的结果不能触发操作。保留原确认、网络并发上限及组合命令顺序。
