@@ -1,12 +1,11 @@
-//! macOS platform wrapper: the home of lyrel's `font_thicken` switch now that
-//! the published gpui 0.3.9 has no `set_glyph_dilation` entry point (the fork
-//! carried one; gpui-pre-apple only reads the user's `AppleFontSmoothing`
-//! preference).
+//! macOS platform wrapper: the home of lyrel's `font_thicken` switch.
+//! Kit selects gpui-fast-apple, which only reads the user's
+//! `AppleFontSmoothing` preference and exposes no dilation setter.
 //!
 //! The switch must reach the rasterizer to mean anything: gpui asks the
 //! platform text system for a dilation per glyph color
 //! (`Window::paint_glyph` → `TextSystem::glyph_dilation_for_color`,
-//! gpui-pre-0.3.9 window.rs:4847), the value rides in `RenderGlyphParams`
+//! gpui-fast 0.1.13's glyph paint path), the value rides in `RenderGlyphParams`
 //! into both the sprite-atlas cache key and `rasterize_glyph`, so returning 0
 //! there is exactly the fork's `GLYPH_DILATION = false` behavior — stroke
 //! thickening off for lyrel's text, nothing else touched. In particular the

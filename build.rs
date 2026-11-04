@@ -4,6 +4,10 @@ fn main() {
         matches!(target_os.as_str(), "windows" | "macos"),
         "lyrel desktop supports Windows and macOS only; for Linux use cargo build --workspace --exclude lyrel (lyrel-core, lyrel-server and lyrel-cli remain supported)"
     );
+    if target_os == "macos" {
+        // Keep the desktop runtime floor independent of the SDK selected for Fast.
+        println!("cargo:rustc-link-arg-bin=lyrel-app=-mmacosx-version-min=15.0");
+    }
     #[cfg(windows)]
     {
         println!("cargo:rerun-if-changed=assets/favicon.ico");

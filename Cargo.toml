@@ -142,7 +142,7 @@ plist = "1"
 # gpui's own clipboard code, so pinning it here adds no new native code.
 image = "0.25"
 
-# The published transport matches gpui-pre's HTTP types behind gpui-kit.
+# The published transport shares gpui-pre-http-client types with Fast through Kit.
 # Its library name is `reqwest_client`; it owns its Tokio runtime.
 gpui-pre-reqwest-client = "=0.3.11"
 ureq = { version = "3", default-features = false, features = ["rustls", "win-system-proxy", "socks-proxy"] }
@@ -298,8 +298,8 @@ edition = "2024"
 version = "0.3.0"
 
 [workspace.dependencies]
-# The public facade supplies component, base, assets and platform layers.
-gpui-kit = "=0.9.0"
+# The public facade selects Fast consistently for component, base, assets and platform.
+gpui-kit = { version = "=0.9.0", features = ["gpui-fast"] }
 
 # 正式 Rio VT parser + grid 同时供 GUI 镜像、CLI capture 和 daemon 图片状态使用。
 # 共享版本保证三个消费者的光标与字符单元语义一致；PTY 仍由 portable-pty 驱动。
@@ -342,6 +342,12 @@ smol = { opt-level = 3 }
 gpui-pre = { opt-level = 3 }
 gpui-pre-platform = { opt-level = 3 }
 gpui-pre-macros = { opt-level = 3 }
+gpui-fast = { opt-level = 3 }
+gpui-fast-platform = { opt-level = 3 }
+gpui-fast-macros = { opt-level = 3 }
+gpui-fast-windows = { opt-level = 3 }
+gpui-fast-macos = { opt-level = 3 }
+gpui-fast-apple = { opt-level = 3 }
 # The VT parser + grid run on every PTY byte; at opt-level 0 a `cat bigfile`
 # crawls under `cargo dev`.
 rio-vt = { opt-level = 3 }

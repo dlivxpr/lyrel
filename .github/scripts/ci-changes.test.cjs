@@ -69,6 +69,7 @@ for (const [name, files, expected] of [
   ['CLI manifests can alter workspace resolution and require all Rust targets', { 'crates/lyrel-cli/Cargo.toml': '[package]\nname = "lyrel-cli"' }, [true, true, true, false]],
   ['unknown and embedded skill inputs are not treated as documentation', { 'skills/example/SKILL.md': '# Skill' }, [true, true, true, false]],
   ['shared binary assertions also validate the release pipeline', { '.github/scripts/assert-static.sh': 'exit 1' }, [true, true, true, true]],
+  ['desktop SDK selection also validates release packaging', { '.github/scripts/select-macos-sdk.sh': 'exit 1' }, [true, true, true, true]],
 ]) {
   test(name, (t) => {
     const repo = repository(t);

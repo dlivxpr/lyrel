@@ -8,8 +8,8 @@ lyrel 是一款可以持续运行的终端。关闭窗口、重启机器，
 或换到另一台笔记本电脑——你启动的 shell 依然在那里，
 留在其中工作的编程智能体也一样。
 
-它使用 Rust 编写，通过 [GPUI Kit](https://gpui-kit.com/) 的 `gpui-pre` 路线在 GPU 上渲染；
-Kit 内部仍基于 GPUI。GUI 与 CLI 统一使用正式 `rio-vt 0.5.28` 解析 VT，
+它使用 Rust 编写，通过 [GPUI Kit](https://gpui-kit.com/) 的官方 `gpui-fast` feature 在 GPU 上渲染；
+Kit 统一选择 GPUI Fast 与组件／平台层。GUI 与 CLI 统一使用正式 `rio-vt 0.5.28` 解析 VT，
 daemon、PTY 与终端绘制仍由 lyrel 管理。
 
 <a id="what-makes-it-different"></a>

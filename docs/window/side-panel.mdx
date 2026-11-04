@@ -423,7 +423,7 @@ Markdown/MDX 普通保存不执行全文整理；严格解码保留编码、BOM 
 
 自建源码保真的 Markdown 编辑模块，复用 GPUI Kit 的公开渲染接口，不直接采用会重新序列化文档的富文本模型。当前锁定的 `gpui-kit 0.9.0` 包含 `gpui_kit::base::text::editor_host`；它提供块渲染与文字几何信息，但不提供完整编辑内核。文档身份、源码映射、编辑事务、撤销、选择、焦点、原生输入法接入和无障碍仍由编辑模块负责，见 [GPUI Kit 的 editor host 职责](https://github.com/longbridge/gpui-kit/blob/main/docs/ARCHITECTURE.md)。
 
-`gpui-kit-markdown-editor` 作为交互与架构参考，不直接集成其 `0.1.1` 发布版：该版本固定 `gpui-pre =0.3.9`，而 lyrel 此检查点使用 `0.3.11`；它还明确存在首次保存改变列表紧凑度、空段落消失、缺少源码偏移映射，以及 Windows/macOS 原生输入未验证等限制，见 [发布版依赖与限制](https://docs.rs/crate/gpui-kit-markdown-editor/0.1.1)。不以 Git 依赖、第三方源码复制或构建补丁绕过仓库依赖约束。
+`gpui-kit-markdown-editor` 作为交互与架构参考，不直接集成其 `0.1.1` 发布版：该版本固定 `gpui-pre =0.3.9`，而 lyrel 已通过 Kit 选择 `gpui-fast 0.1.13`；它还明确存在首次保存改变列表紧凑度、空段落消失、缺少源码偏移映射，以及 Windows/macOS 原生输入未验证等限制，见 [发布版依赖与限制](https://docs.rs/crate/gpui-kit-markdown-editor/0.1.1)。不以 Git 依赖、第三方源码复制或构建补丁绕过仓库依赖约束。
 
 原生实现使用正式 [RaTeX 0.1.15](https://docs.rs/ratex-svg/0.1.15/ratex_svg/) 的 `parse → layout → glyph SVG` 路径，以及 [Merman 0.9.2](https://docs.rs/crate/merman/0.9.2) 的 `all-diagrams`／`complete-svg` 与完整 `resvg_safe` 管线，不启用 ELK。两者由 resvg 光栅化为原生图像，不依赖 Node.js、Chromium 或项目 JavaScript；MiTeX／Typst 未加入产品依赖。
 

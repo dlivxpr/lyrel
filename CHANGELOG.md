@@ -7,6 +7,10 @@
 
 ## [Unreleased]
 
+### 依赖升级
+
+- #170：仅通过 `gpui-kit =0.9.0` 的官方 `gpui-fast` feature 切换桌面后端，锁文件采用 Fast `0.1.13` 家族；保留语言／测试支持、HTTP `=0.3.11`、Rio `0.5.28`、单一终端帧所有权与原平台完整委派，不新增直接 engine 依赖、产品 Pre 回退或热路径探针。开发 profile 优化 Fast 链；macOS CI／Release 显式选择并记录实际 SDK 26+，默认 deployment target 与 bundle 继续为 macOS 15。原生行为、终端 retention、材质与同条件 Release 性能由集中检查点实际验收，未执行项不记为通过；macOS 原生结果仍由 #167 提供。
+
 ### 修复
 
 - #169 检查点修复真实 PTY 图片消费者、共享 retention 及原生 SSH 消费者的启动等待：同时从首个 `Snapshot` 与后续 `Output` 读取原有就绪标记，避免快速 sender 在订阅安装前已输出时误超时。保留真实 daemon／PTY、标记、原期限及后续像素／几何断言，不修改生产协议、不增加重试或跳过；本轮回归结果由集中验收记录。
