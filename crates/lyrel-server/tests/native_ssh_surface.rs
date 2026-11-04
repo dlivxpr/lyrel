@@ -44,7 +44,7 @@ fn spawn(fixture: &NativeSshFixture, shell: ShellSpec) -> u64 {
     let mut text = Vec::new();
     loop {
         match DaemonMsg::read(&mut stream).unwrap() {
-            DaemonMsg::Output(bytes) => text.extend(bytes),
+            DaemonMsg::Snapshot(bytes) | DaemonMsg::Output(bytes) => text.extend(bytes),
             DaemonMsg::Exited { code } => {
                 panic!("native scene exited before its real PTY startup: {code:?}")
             }
