@@ -147,8 +147,14 @@ impl Daemon {
             .unwrap();
         let mut text = Vec::new();
         while !text.windows(11).any(|part| part == b"KITTY_READY") {
-            if let DaemonMsg::Output(bytes) = session.recv().unwrap() {
-                text.extend(bytes);
+            // Startup bytes already in the ring arrive in the first replay.
+            match session.recv().unwrap() {
+                DaemonMsg::Snapshot(bytes) | DaemonMsg::Output(bytes) => text.extend(bytes),
+                DaemonMsg::Error(error) => panic!("retention sender failed: {error}"),
+                DaemonMsg::Exited { code } => {
+                    panic!("retention sender exited before KITTY_READY: {code:?}")
+                }
+                _ => {}
             }
         }
         Consumer {

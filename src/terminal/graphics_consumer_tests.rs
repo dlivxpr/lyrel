@@ -159,8 +159,14 @@ impl GraphicsDaemonProcess {
             .windows(b"KITTY_READY".len())
             .any(|part| part == b"KITTY_READY")
         {
-            if let DaemonMsg::Output(bytes) = session.recv().unwrap() {
-                text.extend(bytes);
+            // The child may print before its first subscriber attaches.
+            match session.recv().unwrap() {
+                DaemonMsg::Snapshot(bytes) | DaemonMsg::Output(bytes) => text.extend(bytes),
+                DaemonMsg::Error(error) => panic!("graphics sender failed: {error}"),
+                DaemonMsg::Exited { code } => {
+                    panic!("graphics sender exited before KITTY_READY: {code:?}")
+                }
+                _ => {}
             }
         }
         let id = session.pane_id();

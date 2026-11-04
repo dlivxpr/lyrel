@@ -57,7 +57,7 @@ fn native_ssh_consumer_spawn(
         .any(|part| part == b"KITTY_READY")
     {
         match DaemonMsg::read(&mut stream).unwrap() {
-            DaemonMsg::Output(bytes) => text.extend(bytes),
+            DaemonMsg::Snapshot(bytes) | DaemonMsg::Output(bytes) => text.extend(bytes),
             DaemonMsg::Error(error) => panic!("remote sender failed: {error}"),
             DaemonMsg::Exited { .. } => panic!("remote sender exited before KITTY_READY"),
             _ => {}
