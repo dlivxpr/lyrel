@@ -108,7 +108,7 @@ pub(crate) struct ScmPanelState {
     /// Anything that could have moved a ref bumps the epoch, so the list in
     /// the switcher is never older than the last operation.
     branches: HashMap<RepoKey, (u64, Vec<String>)>,
-    branches_loading: HashMap<RepoKey, u64>,
+    branches_loading: HashMap<RepoKey, (u64, u64)>,
     branch_generation: u64,
     /// The inline "name your branch" input, present only while it is open.
     new_branch: Option<Entity<InputState>>,
@@ -350,14 +350,35 @@ impl ScmPanelState {
     /// `roots` and friends grow one entry per directory ever visited on a
     /// link that no longer exists. Drafts survive on purpose: a reconnect
     /// brings the same repositories back, and unsent messages with them.
-    pub(crate) fn forget_host(&mut self, host: HostId) {
-        self.roots.retain(|(h, _), _| *h != host);
-        self.root_lookups.retain(|(h, _)| *h != host);
-        self.probe_attempt.retain(|(h, _), _| *h != host);
-        self.branches.retain(|k, _| k.host != host);
-        self.branches_loading.retain(|k, _| k.host != host);
-        self.invalidate_history_host(host);
-        if self.repo_override.as_ref().is_some_and(|k| k.host == host) {
+    /// The panel, not ScmData's live watches, owns these retained results.
+    pub(crate) fn forget_lost_hosts(&mut self, live: &[HostId]) {
+        let keep = |host| live.contains(&host);
+        self.roots.retain(|(host, _), _| keep(*host));
+        self.root_lookups.retain(|(host, _)| keep(*host));
+        self.probe_attempt.retain(|(host, _), _| keep(*host));
+        self.branches.retain(|repo, _| keep(repo.host));
+        self.branches_loading.retain(|repo, _| keep(repo.host));
+        let history_hosts = [
+            self.graph.page_key.as_ref().map(|(repo, _, _)| repo.host),
+            self.graph
+                .loading_key
+                .as_ref()
+                .map(|(repo, _, _, _)| repo.host),
+            self.graph.failed_key.as_ref().map(|(repo, _, _)| repo.host),
+            self.detail.as_ref().map(|detail| detail.repo.host),
+        ];
+        for host in history_hosts
+            .into_iter()
+            .flatten()
+            .filter(|host| !keep(*host))
+        {
+            self.invalidate_history_host(host);
+        }
+        if self
+            .repo_override
+            .as_ref()
+            .is_some_and(|repo| !keep(repo.host))
+        {
             self.repo_override = None;
             self.override_tab = None;
         }
@@ -485,6 +506,8 @@ pub(crate) struct CommitDetailView {
     /// view asking again forever after a commit git could not resolve: the
     /// pair says "nothing is in flight and nothing is coming".
     pub(crate) loaded: bool,
+    /// Dispatch identity also dates settled details across hide/reopen.
+    epoch: Option<u64>,
     /// `None` until a read lands, and still `None` afterwards for a commit
     /// that is not in this repository.
     pub(crate) commit: Option<Arc<Commit>>,
@@ -511,6 +534,7 @@ impl CommitDetailView {
             oid,
             loading: false,
             loaded: false,
+            epoch: None,
             commit: seed.map(Arc::new),
             files: None,
             files_failed: false,
@@ -556,7 +580,7 @@ mod tests {
         state.drafts.insert(local.clone(), "local wip".into());
         state.drafts.insert(remote.clone(), "remote wip".into());
         state.select_repository(remote.clone(), 1);
-        state.forget_host(remote.host);
+        state.forget_lost_hosts(&[local.host]);
         assert_eq!(state.draft(&local), "local wip");
         assert_eq!(state.draft(&remote), "remote wip");
         state.select_repository(remote.clone(), 1);

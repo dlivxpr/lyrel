@@ -485,7 +485,10 @@ fn echoing_route() -> PaneRoute {
 
 fn wait_for(term: &RemoteTerminal, needle: &str) -> bool {
     for _ in 0..600 {
-        if all_text(term).contains(needle) {
+        if all_text(term)
+            .lines()
+            .any(|line| line.trim_matches(|ch: char| ch.is_whitespace() || ch == '\0') == needle)
+        {
             return true;
         }
         std::thread::sleep(std::time::Duration::from_millis(25));
@@ -505,38 +508,25 @@ fn wait_for_columns(term: &RemoteTerminal, expected: usize) -> bool {
     false
 }
 
-/// Types `line` at the pane until the grid echoes `needle` back, and
-/// answers whether it ever did.
-///
-/// One write is not enough for the *first* command a fresh pane is given.
-/// `spawn` returning means the pty exists, not that the shell behind it
-/// has started, printed a prompt, or begun reading — and on Windows the
-/// ConPTY has not necessarily connected the child to its input pipe yet,
-/// so bytes typed into that window reach nobody at all. On a loaded runner
-/// the window is wide: both cases showed up on Windows CI as a grid that
-/// was still completely empty after 15s, so not even a prompt had been
-/// printed, let alone an echo.
-///
-/// Retyping is safe for everything asserted here: a line that did land and
-/// was merely slow simply runs twice, and every assertion is a `contains`.
-/// The later commands in these tests keep their single `write_input` —
-/// by then the shell has echoed once, which is proof it is reading.
-fn type_until_echoed(
-    pane: &lyrel_core::daemon::pane::DaemonPane,
-    line: &[u8],
-    term: &RemoteTerminal,
-    needle: &str,
-) -> bool {
-    for _ in 0..15 {
-        pane.write_input(line);
-        for _ in 0..80 {
-            if all_text(term).contains(needle) {
-                return true;
-            }
-            std::thread::sleep(std::time::Duration::from_millis(25));
-        }
+/// Readiness and command markers come from the shell, not terminal input echo.
+/// No user profile or prompt command participates in replay/seat acceptance.
+fn replay_shell() -> crate::daemon::protocol::ShellSpec {
+    let (program, args) = if cfg!(windows) {
+        ("cmd.exe", vec!["/d", "/q", "/k", "echo LYREL-REPLAY-READY"])
+    } else {
+        (
+            "/bin/sh",
+            vec![
+                "-c",
+                "unset ENV BASH_ENV; printf 'LYREL-REPLAY-READY\\n'; exec /bin/sh -i",
+            ],
+        )
+    };
+    crate::daemon::protocol::ShellSpec {
+        program: program.into(),
+        args: args.into_iter().map(str::to_owned).collect(),
+        args_are_lyrel_defaults: false,
     }
-    false
 }
 
 /// Switching workspaces drops every pane and attaches to the same daemon
@@ -545,11 +535,12 @@ fn type_until_echoed(
 #[test]
 fn a_pane_re_attached_after_a_switch_gets_its_screen_back() {
     crate::core::config::pin_test_config_dir();
+    let work = tempfile::tempdir().unwrap();
     let pane = lyrel_core::daemon::pane::DaemonPane::spawn(
         7711,
-        std::env::current_dir().ok(),
+        Some(work.path().to_path_buf()),
         ws(80, 24),
-        None,
+        Some(replay_shell()),
         None,
         None,
         None,
@@ -560,6 +551,16 @@ fn a_pane_re_attached_after_a_switch_gets_its_screen_back() {
 
     // The window this pane is shown in, attaching for the first time.
     let (epoch, mut first, forward) = attach_client(&pane);
+    assert!(
+        wait_for(&first, "LYREL-REPLAY-READY"),
+        "the isolated replay shell did not become ready; grid={:?}; replay={:?}",
+        all_text(&first),
+        pane.scrollback_snapshot()
+            .0
+            .iter()
+            .map(|segment| String::from_utf8_lossy(&segment.bytes).into_owned())
+            .collect::<Vec<_>>()
+    );
     // What the first paint does, from the same side it does it on: the
     // pane is not 80x24 on screen, so the real geometry goes down the link
     // and the grid waits for the daemon to echo it back.
@@ -568,13 +569,9 @@ fn a_pane_re_attached_after_a_switch_gets_its_screen_back() {
         wait_for_columns(&first, 120),
         "the initial resize was not acknowledged before preparing the replay"
     );
+    pane.write_input(b"echo BEFORE-THE-SWITCH\r");
     assert!(
-        type_until_echoed(
-            &pane,
-            b"echo BEFORE-THE-SWITCH\r",
-            &first,
-            "BEFORE-THE-SWITCH"
-        ),
+        wait_for(&first, "BEFORE-THE-SWITCH"),
         "the pane never echoed the first command; grid held:\n{}",
         all_text(&first)
     );
@@ -586,8 +583,32 @@ fn a_pane_re_attached_after_a_switch_gets_its_screen_back() {
     drop(forward);
 
     // The pane keeps working while the window is showing another workspace.
-    pane.write_input(b"echo DURING-THE-SWITCH\r");
-    std::thread::sleep(std::time::Duration::from_millis(600));
+    // The escaped input cannot itself satisfy the retained output marker.
+    pane.write_input(if cfg!(windows) {
+        b"echo DURING-THE-^SWITCH\r"
+    } else {
+        b"echo DURING-THE-\\SWITCH\r"
+    });
+    let mut retained = false;
+    for _ in 0..600 {
+        let (segments, _, _) = pane.scrollback_snapshot();
+        let bytes: Vec<u8> = segments
+            .into_iter()
+            .flat_map(|segment| segment.bytes)
+            .collect();
+        if bytes
+            .windows(b"DURING-THE-SWITCH".len())
+            .any(|bytes| bytes == b"DURING-THE-SWITCH")
+        {
+            retained = true;
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(25));
+    }
+    assert!(
+        retained,
+        "the isolated shell did not produce its hidden replay marker"
+    );
 
     // Switching back: a brand new view, attaching at the hardcoded size.
     //
@@ -638,11 +659,12 @@ fn a_pane_re_attached_after_a_switch_gets_its_screen_back() {
 #[test]
 fn the_later_of_two_racing_attaches_keeps_the_screen_and_the_seat() {
     crate::core::config::pin_test_config_dir();
+    let work = tempfile::tempdir().unwrap();
     let pane = lyrel_core::daemon::pane::DaemonPane::spawn(
         7712,
-        std::env::current_dir().ok(),
+        Some(work.path().to_path_buf()),
         ws(80, 24),
-        None,
+        Some(replay_shell()),
         None,
         None,
         None,
@@ -652,13 +674,24 @@ fn the_later_of_two_racing_attaches_keeps_the_screen_and_the_seat() {
     .expect("a pty-backed pane");
 
     let (first_epoch, mut first, first_forward) = attach_client(&pane);
+    assert!(
+        wait_for(&first, "LYREL-REPLAY-READY"),
+        "the isolated replay shell did not become ready; grid={:?}; replay={:?}",
+        all_text(&first),
+        pane.scrollback_snapshot()
+            .0
+            .iter()
+            .map(|segment| String::from_utf8_lossy(&segment.bytes).into_owned())
+            .collect::<Vec<_>>()
+    );
     first.resize(TermSize::new(120, 40), 8, 17);
     assert!(
         wait_for_columns(&first, 120),
         "the initial resize was not acknowledged before preparing the replay"
     );
+    pane.write_input(b"echo RACED-OUTPUT\r");
     assert!(
-        type_until_echoed(&pane, b"echo RACED-OUTPUT\r", &first, "RACED-OUTPUT"),
+        wait_for(&first, "RACED-OUTPUT"),
         "the pane never echoed; grid held:\n{}",
         all_text(&first)
     );

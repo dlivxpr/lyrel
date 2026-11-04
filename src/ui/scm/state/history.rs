@@ -308,10 +308,19 @@ impl ScmPanelState {
             self.detail_generation = self.detail_generation.wrapping_add(1);
         }
         let detail = self.detail.as_mut()?;
-        if detail.loading || detail.loaded {
+        let epoch = detail.repo.refresh_epoch(cx);
+        if (detail.loading || detail.loaded) && detail.epoch == Some(epoch) {
             return None;
         }
         let (repo, host, epoch) = detail.repo.context(cx)?.into_parts();
+        if detail.epoch.is_some_and(|previous| previous != epoch) {
+            detail.loaded = false;
+            detail.commit = None;
+            detail.files = None;
+            detail.files_failed = false;
+        }
+        self.detail_generation = self.detail_generation.wrapping_add(1);
+        detail.epoch = Some(epoch);
         detail.loading = true;
         Some((
             DetailLoad {

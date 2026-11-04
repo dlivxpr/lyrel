@@ -292,7 +292,7 @@ impl TerminalView {
         // chord that must not be a frame late (`AlternatePaste`) asks the
         // terminal again in `alternate_paste`, which is what that comment
         // below is about.
-        if self.frame_alt_screen {
+        if self.frame.alt_screen {
             context.add("alt_screen");
         }
         context
@@ -364,6 +364,12 @@ impl TerminalView {
         self.input_inactive_reason().is_none()
     }
 
+    pub(in crate::terminal) fn frame_input_active(&self) -> bool {
+        self.input
+            .inactive_reason_on_screen(&self.terminal, self.search_focused, self.frame.alt_screen)
+            .is_none()
+    }
+
     /// Moves this pane between lyrel's inline editor and the shell's own line
     /// editor while it is live.
     ///
@@ -404,6 +410,33 @@ impl TerminalView {
 
     pub(super) fn sync_typeahead_owner(&mut self) {
         self.input.sync_owner(&self.terminal);
+    }
+
+    pub(super) fn sync_prompt_input(&mut self) -> bool {
+        let Some(term) = self.terminal.term.try_lock() else {
+            return false;
+        };
+        let alt_screen = term.mode().contains(Mode::ALT_SCREEN);
+        self.input.sync_owner_on_screen(&self.terminal, alt_screen);
+        if self
+            .input
+            .shell_owns_prompt_on_screen(&self.terminal, alt_screen)
+        {
+            self.input.settle_shell_owner(&self.terminal);
+        } else if self
+            .input
+            .inactive_reason_on_screen(&self.terminal, self.search_focused, alt_screen)
+            .is_none()
+        {
+            self.input.engage_hold_into_editor();
+            if self.terminal.zle_reading() {
+                self.input.flush_typeahead(&self.terminal);
+            }
+        }
+        // Queuing input uses the nonblocking writer, so the owner stays stable
+        // through the decision and enqueue without waiting for PTY I/O here.
+        drop(term);
+        true
     }
 
     pub(super) fn write_gap_text(

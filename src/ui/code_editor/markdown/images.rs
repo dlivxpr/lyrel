@@ -61,21 +61,40 @@ pub(super) fn external(url: &str) -> bool {
     url::Url::parse(url).is_ok_and(|url| matches!(url.scheme(), "http" | "https"))
 }
 fn decode(bytes: &[u8]) -> anyhow::Result<Arc<RenderImage>> {
+    static FONTS: std::sync::LazyLock<Arc<resvg::usvg::fontdb::Database>> =
+        std::sync::LazyLock::new(|| {
+            let mut fonts = resvg::usvg::fontdb::Database::new();
+            fonts.load_system_fonts();
+            Arc::new(fonts)
+        });
+    decode_with_fonts(bytes, &FONTS)
+}
+
+fn decode_with_fonts(
+    bytes: &[u8],
+    fonts: &std::sync::LazyLock<Arc<resvg::usvg::fontdb::Database>>,
+) -> anyhow::Result<Arc<RenderImage>> {
     // Decode off the UI thread; the image hook returns already prepared pixels.
     let pixels = match image::load_from_memory(bytes) {
         Ok(image) => image.into_rgba8(),
         Err(raster_error) => {
             use resvg::{tiny_skia, usvg};
-            static FONTS: std::sync::LazyLock<Arc<usvg::fontdb::Database>> =
-                std::sync::LazyLock::new(|| {
-                    let mut fonts = usvg::fontdb::Database::new();
-                    fonts.load_system_fonts();
-                    Arc::new(fonts)
-                });
             let denied = Arc::new(std::sync::atomic::AtomicBool::new(false));
             let rejected = denied.clone();
+            let select_font = usvg::FontResolver::default_font_selector();
             let options = usvg::Options {
-                fontdb: FONTS.clone(),
+                // A text-free SVG must not wait for the machine-wide font scan
+                // before it can reject an external image reference. usvg invokes
+                // this resolver only when it actually needs to lay out text.
+                font_resolver: usvg::FontResolver {
+                    select_font: Box::new(move |font, database| {
+                        if database.is_empty() {
+                            *database = Arc::clone(fonts);
+                        }
+                        select_font(font, database)
+                    }),
+                    ..Default::default()
+                },
                 image_href_resolver: usvg::ImageHrefResolver {
                     resolve_data: usvg::ImageHrefResolver::default_data_resolver(),
                     resolve_string: Box::new(move |_, _| {
@@ -215,5 +234,81 @@ impl super::MarkdownDocument {
         if changed {
             cx.emit(super::DocumentEvent::ImagesChanged);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn text_free_svg_completes_without_initializing_system_fonts() {
+        // A controlled cold font loader makes the unwanted dependency fail
+        // immediately rather than relying on a machine's font-scan duration.
+        let fonts: std::sync::LazyLock<Arc<resvg::usvg::fontdb::Database>> =
+            std::sync::LazyLock::new(|| panic!("text-free SVG must not scan system fonts"));
+        let image = br##"<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16"><rect width="16" height="16" fill="#f00"/></svg>"##;
+        assert!(decode_with_fonts(image, &fonts).is_ok());
+        let external = br#"<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16"><image href="http://127.0.0.1/private.png" width="16" height="16"/></svg>"#;
+        let error = decode_with_fonts(external, &fonts)
+            .err()
+            .expect("external SVG image must be rejected");
+        assert_eq!(
+            error.to_string(),
+            "SVG references external resources; those resources were not loaded"
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "SVG text requires fonts")]
+    fn svg_text_still_initializes_the_font_database() {
+        let fonts: std::sync::LazyLock<Arc<resvg::usvg::fontdb::Database>> =
+            std::sync::LazyLock::new(|| panic!("SVG text requires fonts"));
+        let image = br#"<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16"><text x="0" y="12">text</text></svg>"#;
+        let _ = decode_with_fonts(image, &fonts);
+    }
+
+    #[test]
+    fn svg_text_matches_default_font_selection_and_unicode_fallback() {
+        use resvg::{tiny_skia, usvg};
+
+        let fonts: std::sync::LazyLock<Arc<usvg::fontdb::Database>> =
+            std::sync::LazyLock::new(|| {
+                let mut fonts = usvg::fontdb::Database::new();
+                fonts.load_system_fonts();
+                Arc::new(fonts)
+            });
+        let nested = r#"<svg xmlns="http://www.w3.org/2000/svg" width="100" height="40"><text x="0" y="24" font-size="20">中λЖé</text></svg>"#;
+        let nested =
+            percent_encoding::utf8_percent_encode(nested, percent_encoding::NON_ALPHANUMERIC);
+        let source = format!(
+            r#"<svg xmlns="http://www.w3.org/2000/svg" width="400" height="80"><rect width="400" height="80" fill="white"/><text x="4" y="26" font-family="missing-lyrel-font, serif" font-size="20">ASCII λЖé 中</text><text x="4" y="60" font-family="monospace" font-size="20">fallback Ω العربية</text><image x="280" y="0" width="100" height="40" href="data:image/svg+xml,{nested}"/></svg>"#
+        );
+        let actual = decode_with_fonts(source.as_bytes(), &fonts).unwrap();
+
+        // The former eager fontdb + official default resolver is an independent
+        // rendering reference, including font selection inside a nested SVG.
+        let options = usvg::Options {
+            fontdb: Arc::clone(&fonts),
+            ..Default::default()
+        };
+        let tree = usvg::Tree::from_data(source.as_bytes(), &options).unwrap();
+        let mut expected = tiny_skia::Pixmap::new(400, 80).unwrap();
+        resvg::render(
+            &tree,
+            tiny_skia::Transform::identity(),
+            &mut expected.as_mut(),
+        );
+        let expected: Vec<u8> = expected
+            .data()
+            .chunks_exact(4)
+            .flat_map(|pixel| [pixel[2], pixel[1], pixel[0], pixel[3]])
+            .collect();
+        assert!(
+            expected
+                .chunks_exact(4)
+                .any(|pixel| pixel != [255, 255, 255, 255])
+        );
+        assert_eq!(actual.as_bytes(0).unwrap(), expected);
     }
 }

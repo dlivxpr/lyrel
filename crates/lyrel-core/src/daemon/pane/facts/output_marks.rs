@@ -52,38 +52,48 @@ impl OscSniffer {
         }
     }
 
+    #[cfg(test)]
     pub(super) fn feed(&mut self, bytes: &[u8]) -> SniffSignals {
+        self.feed_parts(std::iter::once(bytes))
+    }
+
+    pub(super) fn feed_parts<'a>(
+        &mut self,
+        parts: impl IntoIterator<Item = &'a [u8]>,
+    ) -> SniffSignals {
         let mut signals = SniffSignals::default();
         let shell = &mut self.shell;
         let title_life = &mut self.title_life;
         let notes = &mut self.notes;
-        self.tok.feed(bytes, |payload| {
-            // In stream order, so that a shell which re-titles itself right
-            // after the `D` mark gets the last word over the retirement.
-            if title_life.saw(payload) == crate::core::osc::TitleEffect::Retire {
-                signals.title = Some(String::new());
-            }
-            if let Some(path) = parse_osc7(payload) {
-                signals.cwd = Some(path);
-            } else if let Some(title) = parse_osc_title(payload) {
-                signals.title = Some(title);
-            } else if let Some(rest) = payload.strip_prefix(b"133;") {
-                if handle_osc133(shell, rest) {
-                    match signals.shell.last_mut() {
-                        Some(last) if last.at_prompt == shell.at_prompt => {
-                            *last = shell.clone();
+        for bytes in parts {
+            self.tok.feed(bytes, |payload| {
+                // In stream order, so that a shell which re-titles itself right
+                // after the `D` mark gets the last word over the retirement.
+                if title_life.saw(payload) == crate::core::osc::TitleEffect::Retire {
+                    signals.title = Some(String::new());
+                }
+                if let Some(path) = parse_osc7(payload) {
+                    signals.cwd = Some(path);
+                } else if let Some(title) = parse_osc_title(payload) {
+                    signals.title = Some(title);
+                } else if let Some(rest) = payload.strip_prefix(b"133;") {
+                    if handle_osc133(shell, rest) {
+                        match signals.shell.last_mut() {
+                            Some(last) if last.at_prompt == shell.at_prompt => {
+                                *last = shell.clone();
+                            }
+                            _ => signals.shell.push(shell.clone()),
                         }
-                        _ => signals.shell.push(shell.clone()),
+                    }
+                } else if let Some(event) = crate::core::cli_agent::parse_agent_event(payload) {
+                    signals.agent_events.push(event);
+                } else if let Some((title, body)) = notes.parse(payload) {
+                    if title.as_deref() != Some(crate::core::cli_agent::AGENT_EVENT_SENTINEL) {
+                        signals.notification = Some(body);
                     }
                 }
-            } else if let Some(event) = crate::core::cli_agent::parse_agent_event(payload) {
-                signals.agent_events.push(event);
-            } else if let Some((title, body)) = notes.parse(payload) {
-                if title.as_deref() != Some(crate::core::cli_agent::AGENT_EVENT_SENTINEL) {
-                    signals.notification = Some(body);
-                }
-            }
-        });
+            });
+        }
         signals
     }
 }

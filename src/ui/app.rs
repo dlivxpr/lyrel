@@ -4107,6 +4107,7 @@ impl LyrelApp {
             }
             // Done inside the search, which stays open on the list it was.
             SearchEvent::RunInPlace(kind) => self.run_command(kind.clone(), window, cx),
+            SearchEvent::RefreshFiles => self.refresh_search_files(window, cx),
             SearchEvent::Dismiss => self.close_search(window, cx),
             SearchEvent::SessionError(error) => {
                 self.notify_session_operation_error(error.clone(), window, cx)

@@ -2711,12 +2711,28 @@ fn opening_native_images_never_contacts_http_until_loading_intent(
             Err(std::sync::mpsc::TryRecvError::Empty)
         ) {
             if let Ok((mut stream, _)) = listener.accept() {
+                stream.set_nonblocking(false).unwrap();
                 counted.fetch_add(1, Ordering::SeqCst);
                 stream
                     .set_read_timeout(Some(std::time::Duration::from_secs(2)))
                     .unwrap();
                 let mut request = [0; 4096];
-                let _ = stream.read(&mut request);
+                let mut received = 0;
+                loop {
+                    let count = stream.read(&mut request[received..]).unwrap();
+                    assert_ne!(count, 0, "HTTP request ended before its headers");
+                    received += count;
+                    if request[..received]
+                        .windows(4)
+                        .any(|bytes| bytes == b"\r\n\r\n")
+                    {
+                        break;
+                    }
+                    assert!(
+                        received < request.len(),
+                        "HTTP fixture headers exceed 4 KiB"
+                    );
+                }
                 stream
                     .write_all(
                         b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
@@ -2756,6 +2772,40 @@ fn opening_native_images_never_contacts_http_until_loading_intent(
     context.dispatch_action(crate::core::actions::ToggleDocumentPreview);
     settle_live_geometry(&view, &mut context);
     let status_id = format!("markdown-image:{url}");
+    let wait_for_failure = |url: &str, context: &mut gpui_kit::VisualTestContext| {
+        let (completed, completion) = smol::channel::bounded(1);
+        let url = url.to_owned();
+        let subscription = view.update_in(context, |view, _, cx| {
+            let document = view.document().clone();
+            let publish = move |document: &MarkdownDocument| {
+                let error = match document.images.states.get(&url) {
+                    Some(super::images::State::Failed(error)) => Some(error.clone()),
+                    Some(super::images::State::Ready(_)) => None,
+                    _ => return,
+                };
+                let _ = completed.try_send(error);
+            };
+            publish(document.read(cx));
+            cx.subscribe(&document, move |_, document, event, cx| {
+                if matches!(event, DocumentEvent::ImagesChanged) {
+                    publish(document.read(cx));
+                }
+            })
+        });
+        // Queue quiescence is not Host I/O completion. Follow the same
+        // ImagesChanged consumer boundary as the native presentation, while
+        // continuing to drive its foreground executor and real worker wakeups.
+        context.executor().allow_parking();
+        let error = context.foreground_executor().block_test(smol::future::race(
+            async { completion.recv().await.expect("image consumer dropped") },
+            async {
+                smol::Timer::after(std::time::Duration::from_secs(10)).await;
+                panic!("image operation did not publish a terminal state");
+            },
+        ));
+        drop(subscription);
+        error.expect("image must report its loading error, not silently succeed")
+    };
     context.update(|window, cx| {
         window.render_frame(cx);
         assert_eq!(
@@ -2765,18 +2815,17 @@ fn opening_native_images_never_contacts_http_until_loading_intent(
             Some(crate::ui::i18n::t(crate::ui::i18n::L10nKey::EditorImageUnloaded).as_ref())
         );
     });
-    loop {
-        context.run_until_parked();
-        if context.update(|window, cx| {
-            window.render_frame(cx);
-            window.find("markdown-image:vector.svg").label()
-                == Some(crate::ui::i18n::t(crate::ui::i18n::L10nKey::EditorImageFailed).as_ref())
-        }) {
-            break;
-        }
-        assert!(std::time::Instant::now() < deadline);
-        std::thread::sleep(std::time::Duration::from_millis(5));
-    }
+    assert_eq!(
+        wait_for_failure("vector.svg", &mut context),
+        "SVG references external resources; those resources were not loaded"
+    );
+    context.update(|window, cx| {
+        window.render_frame(cx);
+        assert_eq!(
+            window.find("markdown-image:vector.svg").label(),
+            Some(crate::ui::i18n::t(crate::ui::i18n::L10nKey::EditorImageFailed).as_ref())
+        );
+    });
     let start = source.find("![private]").unwrap();
     let end = source.find(" ![nested]").unwrap();
     let point = view.read_with(&context, |view, cx| {
@@ -2806,25 +2855,17 @@ fn opening_native_images_never_contacts_http_until_loading_intent(
             .expect("caret geometry before loading")
     });
     context.update(|window, cx| window.click("markdown-load-images", cx));
-    loop {
-        context.run_until_parked();
-        let failed = context.update(|window, cx| {
-            window.render_frame(cx);
+    let error = wait_for_failure(&url, &mut context);
+    assert!(error.contains("HTTP 404"), "{error}");
+    context.update(|window, cx| {
+        window.render_frame(cx);
+        assert_eq!(
             window
                 .find(gpui_kit::SharedString::from(status_id.clone()))
-                .label()
-                .is_some_and(|label| {
-                    label.starts_with(crate::ui::i18n::t(
-                        crate::ui::i18n::L10nKey::EditorImageFailed,
-                    ))
-                })
-        });
-        if failed {
-            break;
-        }
-        assert!(std::time::Instant::now() < deadline);
-        std::thread::sleep(std::time::Duration::from_millis(5));
-    }
+                .label(),
+            Some(crate::ui::i18n::t(crate::ui::i18n::L10nKey::EditorImageFailed).as_ref())
+        );
+    });
     assert_eq!(requests.load(Ordering::SeqCst), 1);
     view.read_with(&context, |view, cx| {
         assert_eq!(view.document().read(cx).source().to_string(), source);
@@ -8566,6 +8607,292 @@ fn native_empty_quote_line_exits_one_level_and_undo_restores_source(
         );
         assert_eq!(view.selection(), Selection::caret(at));
     });
+}
+
+fn assert_inline_text_marks(
+    nodes: &[gpui_kit::base::text::editor_host::InlineNode],
+    expected: &[(&str, gpui_kit::base::text::editor_host::TextMark)],
+) {
+    let mut text = String::new();
+    let mut actual = Vec::new();
+    for node in nodes {
+        if node.as_image().is_some() || node.as_custom().is_some() {
+            continue;
+        }
+        text.push_str(node.text());
+        for (range, mark) in node.mark_runs() {
+            actual.extend(
+                node.text()[range.clone()]
+                    .chars()
+                    .map(|ch| (ch, mark.clone())),
+            );
+        }
+    }
+    assert_eq!(
+        text,
+        expected.iter().map(|(text, _)| *text).collect::<String>()
+    );
+    let expected: Vec<_> = expected
+        .iter()
+        .flat_map(|(text, mark)| text.chars().map(|ch| (ch, mark.clone())))
+        .collect();
+    assert_eq!(actual, expected);
+}
+
+#[test]
+fn inline_nodes_preserve_unicode_styles_links_and_cross_segment_marked_ranges() {
+    use gpui_kit::base::text::editor_host::{LinkMark, TextMark};
+
+    let source = "前中🎉e\u{301} **粗体** *斜* ~~删~~ `码` [链](https://example.test) 尾";
+    let projection =
+        super::projection::Projection::parse(source, 0, true, super::mdx::Grammar::Markdown);
+    assert!(projection.error.is_none());
+    assert_eq!(projection.leaves.len(), 1);
+    let leaf = &projection.leaves[0];
+    let math = super::math::State::default();
+    for marked in [
+        None,
+        Some(source.find('中').unwrap()..source.find('尾').unwrap()),
+    ] {
+        let base = TextMark {
+            underline: marked.is_some(),
+            ..Default::default()
+        };
+        assert_inline_text_marks(
+            &leaf.inline_nodes(marked.as_ref(), &math),
+            &[
+                ("前", TextMark::default()),
+                ("中🎉e\u{301} ", base.clone()),
+                (
+                    "粗体",
+                    TextMark {
+                        bold: true,
+                        ..base.clone()
+                    },
+                ),
+                (" ", base.clone()),
+                (
+                    "斜",
+                    TextMark {
+                        italic: true,
+                        ..base.clone()
+                    },
+                ),
+                (" ", base.clone()),
+                (
+                    "删",
+                    TextMark {
+                        strikethrough: true,
+                        ..base.clone()
+                    },
+                ),
+                (" ", base.clone()),
+                (
+                    "码",
+                    TextMark {
+                        code: true,
+                        ..base.clone()
+                    },
+                ),
+                (" ", base.clone()),
+                (
+                    "链",
+                    TextMark {
+                        link: Some(LinkMark {
+                            url: "https://example.test".into(),
+                            ..Default::default()
+                        }),
+                        ..base.clone()
+                    },
+                ),
+                (" ", base),
+                ("尾", TextMark::default()),
+            ],
+        );
+    }
+}
+
+#[test]
+fn inline_nodes_preserve_normalized_and_composing_raw_line_breaks_and_entities() {
+    use gpui_kit::base::text::editor_host::TextMark;
+
+    let source = "前\n中  \n后 &amp; 尾";
+    let mut projection =
+        super::projection::Projection::parse(source, 0, true, super::mdx::Grammar::Markdown);
+    assert!(projection.error.is_none());
+    assert_eq!(projection.leaves.len(), 1);
+    let leaf = &mut projection.leaves[0];
+    let math = super::math::State::default();
+    assert_inline_text_marks(
+        &leaf.inline_nodes(None, &math),
+        &[("前 中\n后 & 尾", TextMark::default())],
+    );
+    let marked = 0..source.len();
+    assert!(leaf.contextual_reveal(Selection::caret(0), &[], Some(&marked)));
+    assert_inline_text_marks(
+        &leaf.inline_nodes(Some(&marked), &math),
+        &[(
+            source,
+            TextMark {
+                underline: true,
+                ..Default::default()
+            },
+        )],
+    );
+    assert!(leaf.contextual_reveal(Selection::caret(0), &[], None));
+    assert_inline_text_marks(
+        &leaf.inline_nodes(None, &math),
+        &[("前 中\n后 & 尾", TextMark::default())],
+    );
+}
+
+#[test]
+fn inline_nodes_preserve_image_math_atoms_and_verbatim_marks_between_styled_text() {
+    use gpui_kit::base::text::editor_host::TextMark;
+
+    let source = "**前 ![图](missing.png \"标题\") 中 $x$ 尾**";
+    let mut projection =
+        super::projection::Projection::parse(source, 0, true, super::mdx::Grammar::Markdown);
+    assert!(projection.error.is_none());
+    assert_eq!(projection.leaves.len(), 1);
+    let leaf = &mut projection.leaves[0];
+    let math = super::math::State::default();
+    let bold = TextMark {
+        bold: true,
+        ..Default::default()
+    };
+    let nodes = leaf.inline_nodes(None, &math);
+    assert_inline_text_marks(&nodes, &[("前  中  尾", bold.clone())]);
+    let images: Vec<_> = nodes.iter().filter_map(|node| node.as_image()).collect();
+    assert_eq!(images.len(), 1);
+    assert_eq!(images[0].url.as_ref(), "missing.png");
+    assert_eq!(images[0].alt.as_deref(), Some("图"));
+    assert_eq!(images[0].title.as_deref(), Some("标题"));
+    assert!(images[0].width.is_some());
+    assert!(images[0].height.is_some());
+    let formulas: Vec<_> = nodes
+        .iter()
+        .filter(|node| node.as_custom().is_some())
+        .collect();
+    assert_eq!(formulas.len(), 1);
+    assert_eq!(formulas[0].text(), "\u{fffc}");
+
+    let marked = 0..source.len();
+    assert!(leaf.contextual_reveal(Selection::caret(0), &[], Some(&marked)));
+    let nodes = leaf.inline_nodes(Some(&marked), &math);
+    assert!(
+        nodes
+            .iter()
+            .all(|node| node.as_image().is_none() && node.as_custom().is_none())
+    );
+    assert_inline_text_marks(
+        &nodes,
+        &[(
+            source,
+            TextMark {
+                underline: true,
+                ..bold.clone()
+            },
+        )],
+    );
+    assert!(leaf.contextual_reveal(Selection::caret(0), &[], None));
+    let nodes = leaf.inline_nodes(None, &math);
+    assert_eq!(
+        nodes
+            .iter()
+            .filter(|node| node.as_image().is_some())
+            .count(),
+        1
+    );
+    assert_eq!(
+        nodes
+            .iter()
+            .filter(|node| node.as_custom().is_some())
+            .count(),
+        1
+    );
+    assert_inline_text_marks(&nodes, &[("前  中  尾", bold)]);
+}
+
+#[test]
+fn inline_nodes_preserve_local_marks_and_text_order_on_both_sides_of_mixed_atoms() {
+    use gpui_kit::base::text::editor_host::{LinkMark, TextMark};
+
+    let source =
+        "前 **粗** &amp; ![图](missing.png) 中 `码` $x$ [链](https://example.test) e\u{301}🎉尾";
+    let projection =
+        super::projection::Projection::parse(source, 0, true, super::mdx::Grammar::Markdown);
+    assert!(projection.error.is_none());
+    assert_eq!(projection.leaves.len(), 1);
+    let leaf = &projection.leaves[0];
+    let math = super::math::State::default();
+    for marked in [
+        None,
+        Some(source.find('粗').unwrap()..source.find('尾').unwrap()),
+    ] {
+        let base = TextMark {
+            underline: marked.is_some(),
+            ..Default::default()
+        };
+        let nodes = leaf.inline_nodes(marked.as_ref(), &math);
+        let image = nodes
+            .iter()
+            .position(|node| node.as_image().is_some())
+            .unwrap();
+        let formula = nodes
+            .iter()
+            .position(|node| node.as_custom().is_some())
+            .unwrap();
+        assert!(image < formula);
+        assert_eq!(nodes[image].as_image().unwrap().alt.as_deref(), Some("图"));
+        assert_eq!(nodes[formula].text(), "\u{fffc}");
+        assert_inline_text_marks(
+            &nodes[..image],
+            &[
+                ("前 ", TextMark::default()),
+                (
+                    "粗",
+                    TextMark {
+                        bold: true,
+                        ..base.clone()
+                    },
+                ),
+                (" & ", base.clone()),
+            ],
+        );
+        assert_inline_text_marks(
+            &nodes[image + 1..formula],
+            &[
+                (" 中 ", base.clone()),
+                (
+                    "码",
+                    TextMark {
+                        code: true,
+                        ..base.clone()
+                    },
+                ),
+                (" ", base.clone()),
+            ],
+        );
+        assert_inline_text_marks(
+            &nodes[formula + 1..],
+            &[
+                (" ", base.clone()),
+                (
+                    "链",
+                    TextMark {
+                        link: Some(LinkMark {
+                            url: "https://example.test".into(),
+                            ..Default::default()
+                        }),
+                        ..base.clone()
+                    },
+                ),
+                (" e\u{301}🎉", base),
+                ("尾", TextMark::default()),
+            ],
+        );
+    }
 }
 
 #[test]

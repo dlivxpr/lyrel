@@ -4,18 +4,34 @@ use crate::core::clipboard::{
     Event as ClipboardEvent, Segment as ClipboardSegment, Sniffed as ClipboardSniffed,
 };
 use crate::core::kitty_graphics::{Action, Control, Image, Segment, Sniffed, response};
-use std::borrow::Cow;
 
-enum Part {
+pub(super) enum Part {
     Graphics(Segment),
     Clipboard(ClipboardEvent),
 }
-enum Extracted<'a> {
+pub(super) enum Extracted<'a> {
     Plain(&'a [u8]),
     Parts(Vec<Part>),
 }
 
-fn extract<'a>(
+impl Extracted<'_> {
+    /// The exact ordinary PTY bytes, in stream order, before any subscriber
+    /// can receive them. Iterate borrowed slices instead of joining a read.
+    pub(super) fn output(&self) -> impl Iterator<Item = &[u8]> {
+        let (plain, parts): (Option<&[u8]>, &[Part]) = match self {
+            Self::Plain(bytes) => (Some(bytes), &[]),
+            Self::Parts(parts) => (None, parts),
+        };
+        plain
+            .into_iter()
+            .chain(parts.iter().filter_map(|part| match part {
+                Part::Graphics(Segment::Output(bytes)) => Some(bytes.as_slice()),
+                _ => None,
+            }))
+    }
+}
+
+pub(super) fn extract<'a>(
     raw: &'a [u8],
     clipboard: &mut ClipboardSniffer,
     graphics: &mut GraphicsSniffer,
@@ -363,34 +379,29 @@ fn publish_command(
     pass
 }
 
-pub(super) fn consume<'a>(
-    raw: &'a [u8],
-    clipboard: &mut ClipboardSniffer,
-    graphics: &mut GraphicsSniffer,
+pub(super) fn consume(
+    extracted: Extracted<'_>,
     state: &Arc<Mutex<PaneState>>,
     gate: &OutputGate,
     writer: &Arc<Mutex<Box<dyn Write + Send>>>,
     controller: Option<u64>,
-    locality: &mut impl FnMut() -> Option<bool>,
-) -> Cow<'a, [u8]> {
-    match extract(raw, clipboard, graphics, locality) {
+    graphics: &mut GraphicsSniffer,
+) {
+    match extracted {
         Extracted::Plain(bytes) => {
             text(state, bytes, gate, writer);
-            Cow::Borrowed(bytes)
         }
         Extracted::Parts(parts) => {
-            let mut pass = Vec::new();
             for part in parts {
                 match part {
                     Part::Graphics(Segment::Output(bytes)) => {
                         text(state, &bytes, gate, writer);
-                        pass.extend(bytes);
                     }
                     Part::Graphics(Segment::Command { control, image }) => {
                         let source_work = image
                             .as_ref()
                             .map(|image| graphics.take_source_work(image.data.capacity()));
-                        pass.extend(command(state, control, image, source_work, gate, writer))
+                        command(state, control, image, source_work, gate, writer);
                     }
                     Part::Graphics(Segment::Reply(bytes))
                     | Part::Clipboard(ClipboardEvent::Reply(bytes)) => {
@@ -416,7 +427,6 @@ pub(super) fn consume<'a>(
                     }
                 }
             }
-            Cow::Owned(pass)
         }
     }
 }

@@ -493,7 +493,7 @@ fn the_scrollbar_moves_the_viewport_and_follows_it_back(cx: &mut TestAppContext)
 
     window
         .update(cx, |view, _, _| {
-            view.sync_scrollbar();
+            view.sync_frame_facts();
             let history = view.terminal.term.lock().grid.history_size();
             assert!(history > 0, "the test needs a scrollback to scroll");
             let row = view.line_height.as_f32();
@@ -515,7 +515,7 @@ fn the_scrollbar_moves_the_viewport_and_follows_it_back(cx: &mut TestAppContext)
                 "the bar does not reach into the terminal itself"
             );
 
-            view.sync_scrollbar();
+            view.sync_frame_facts();
             let offset = view.terminal.term.lock().grid.display_offset();
             assert_eq!(
                 offset,

@@ -110,13 +110,10 @@ impl TerminalView {
         if matches.is_empty() {
             return None;
         }
-        let (srow, _) = self.cursor_cell()?;
+        let (srow, _) = self.frame.cursor?;
 
         const MAX_ROWS: usize = 10;
-        let (total_rows, total_cols) = {
-            let term = self.terminal.term.lock();
-            (term.screen_lines(), term.columns())
-        };
+        let (total_rows, total_cols) = (self.frame.rows, self.frame.cols);
         let (place_above, visible, first) =
             menu_layout(total_rows, srow, matches.len(), rs.selected(), MAX_ROWS);
         let hidden_above = first;

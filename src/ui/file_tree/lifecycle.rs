@@ -100,6 +100,9 @@ impl FileTreeState {
         if !self.repo_root_loads.begin(key.clone()) {
             return;
         }
+        #[cfg(test)]
+        let landing_host = InstanceTicket::of(host);
+        let authority = self.read_authority(host);
         HostOps::run(
             host.clone(),
             cx,
@@ -112,6 +115,13 @@ impl FileTreeState {
                 }
             },
             move |app, (root, real), cx| {
+                #[cfg(test)]
+                app.file_tree
+                    .read_probe
+                    .record(ReadKind::Root, landing_host);
+                if !authority.is_current(&app.file_tree, cx) {
+                    return;
+                }
                 app.file_tree.finish_repo_root(&key, cwd, root, real);
                 cx.notify();
             },
@@ -128,7 +138,11 @@ impl FileTreeState {
         ok: bool,
         hits: Vec<TreeEntry>,
     ) -> bool {
-        self.search.accept(generation, ok, hits)
+        let accepted = self.search.accept(generation, ok, hits);
+        if accepted {
+            self.invalidate_rows();
+        }
+        accepted
     }
 
     pub(crate) fn cancel_edit(&mut self) {
@@ -144,12 +158,16 @@ impl FileTreeState {
         entries: Vec<TreeEntry>,
         active_host: Option<HostId>,
     ) -> Landed {
-        if readable {
-            self.unreadable.remove(key);
+        let note_changed = if readable {
+            self.unreadable.remove(key)
         } else {
-            self.unreadable.insert(key.clone());
+            self.unreadable.insert(key.clone())
+        };
+        if note_changed {
+            self.invalidate_rows();
         }
         let mut landed = self.land_load(key, key.0, dir, entries);
+        landed.changed |= note_changed;
         // Invalidated work remains visible. Only its replacement is conditional
         // on the current Host; an inactive Host refreshes on its next display.
         landed.superseded = landed.superseded && active_host == Some(key.0);
@@ -287,6 +305,12 @@ impl FileTreeState {
         if !report.copied.is_empty() {
             self.invalidate_dir(host, dir);
         }
+    }
+
+    pub(super) fn retire_file_index(&mut self) {
+        self.quick_open.generation += 1;
+        self.quick_open.walking = None;
+        self.quick_open.last = None;
     }
 
     pub(crate) fn file_list(&self, key: &IndexKey) -> FileList {

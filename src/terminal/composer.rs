@@ -1283,26 +1283,31 @@ impl TerminalView {
         let (found, backdrop, screen_lines, offset) = if !open {
             (None, None, 0, 0)
         } else {
-            let mut palette = self.terminal.palette;
-            if let Some(active) = cx.try_global::<super::palette::ActivePalette>() {
-                palette[..16].copy_from_slice(&active.ansi16);
-            }
-            let term = self.terminal.term.lock();
-            let found = agent
-                .filter(|a| covers(*a))
-                .and_then(|a| input_area(a, &screen_rows(&term), term.columns()));
-            // The row over the input is the screen around it: the input's own
-            // rows can be shaded apart from it.
-            let backdrop = found
-                .as_ref()
-                .and_then(|area| row_backdrop(&term, area.top.saturating_sub(1), &palette))
-                .map(|rgb| (rgb, self.cell_width * term.columns() as f32));
-            (
-                found,
-                backdrop,
-                term.screen_lines(),
-                term.grid.display_offset(),
-            )
+            let sampled = self.terminal.term.try_lock().map(|term| {
+                let mut palette = self.terminal.palette;
+                if let Some(active) = cx.try_global::<super::palette::ActivePalette>() {
+                    palette[..16].copy_from_slice(&active.ansi16);
+                }
+                let found = agent
+                    .filter(|a| covers(*a))
+                    .and_then(|a| input_area(a, &screen_rows(&term), term.columns()));
+                // The row over the input is the screen around it, not its own shade.
+                let backdrop = found
+                    .as_ref()
+                    .and_then(|area| row_backdrop(&term, area.top.saturating_sub(1), &palette))
+                    .map(|rgb| (rgb, self.cell_width * term.columns() as f32));
+                (
+                    found,
+                    backdrop,
+                    term.screen_lines(),
+                    term.grid.display_offset(),
+                )
+            });
+            let Some(sampled) = sampled else {
+                self.retry_grid_when_available(cx);
+                return;
+            };
+            sampled
         };
         let Some(c) = self.composer.as_mut() else {
             return;

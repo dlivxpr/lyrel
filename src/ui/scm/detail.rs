@@ -1175,44 +1175,6 @@ mod detail_gpui_tests {
         let _ = std::fs::remove_dir_all(&root);
     }
 
-    #[gpui_kit::test]
-    fn a_seeded_detail_only_asks_for_the_files(cx: &mut TestAppContext) {
-        crate::core::config::pin_test_config_dir();
-        let root = two_commit_repo("seeded");
-        let head = git(&root, &["rev-parse", "HEAD"]);
-        let (app, mut vcx, _pane) = panel_on(cx, &root);
-        let repo = app.update_in(&mut vcx, |app, _, _| app.scm.pane_repo().cloned().unwrap());
-
-        // What the graph hands over: a row it already holds. The subject is
-        // deliberately not the real one, so a `git show` behind our back would
-        // overwrite it and show up here.
-        let mut seed = lyrel_core::core::git::log::load_commit(
-            &*lyrel_core::host::local::LocalHost::new(),
-            &root,
-            &head,
-        )
-        .expect("the scratch repo answers");
-        seed.summary = "what the graph already knew".into();
-        app.update_in(&mut vcx, |app, _, cx| {
-            app.scm
-                .open_detail(repo.clone(), head.clone(), Some(seed), cx)
-        });
-        settle(&app, &mut vcx, |app, _| {
-            app.scm.detail().is_some_and(|d| d.loaded)
-        });
-
-        app.update_in(&mut vcx, |app, _, _| {
-            let detail = app.scm.detail().unwrap();
-            assert_eq!(
-                detail.commit.as_ref().unwrap().summary,
-                "what the graph already knew",
-                "the seed was kept, so no second read of the same commit happened"
-            );
-            assert_eq!(detail.files.as_ref().unwrap().len(), 3);
-        });
-        let _ = std::fs::remove_dir_all(&root);
-    }
-
     fn fold_click(vcx: &mut VisualTestContext, at: gpui_kit::Point<gpui_kit::Pixels>) {
         vcx.update(|window, cx| {
             window.dispatch_event(

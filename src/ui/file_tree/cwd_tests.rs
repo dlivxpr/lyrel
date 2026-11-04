@@ -44,6 +44,8 @@ fn remote_browsing_follows_the_foreground_cwd_not_repository_roots(cx: &mut Test
         WorkspaceStore::install_for_test(cx, views);
         app.workspace = window_workspace;
         HostRegistry::insert(cx, host.clone());
+        let shared = app.active_host(cx).unwrap();
+        app.file_tree.sync_watch(shared, HashSet::new(), cx);
         let left = app.tabs[0]
             .pane
             .first_leaf()

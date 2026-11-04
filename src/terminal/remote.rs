@@ -910,7 +910,8 @@ impl RemoteTerminal {
         false
     }
 
-    pub fn resize(&mut self, size: TermSize, cell_w: u16, cell_h: u16) {
+    /// Returns whether a quiet grid reconciliation needs a follow-up frame.
+    pub fn resize(&mut self, size: TermSize, cell_w: u16, cell_h: u16) -> bool {
         self.connection.resize(
             &self.term,
             &self.proxy,
@@ -920,7 +921,7 @@ impl RemoteTerminal {
             &self.local_conpty,
             &self.shell_state,
             &self.images,
-        );
+        )
     }
 
     pub fn foreground_cwd(&self) -> Option<PathBuf> {

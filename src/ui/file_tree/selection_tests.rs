@@ -1,9 +1,12 @@
 mod host;
+mod instance;
 
 use super::render_idle_gpui_tests::{files_panel_on, serial, settle};
 use super::*;
 use gpui_kit::test::{TestEventExt, TestQueryExt, TestWindowExt};
-use gpui_kit::{ClipboardEntry, ClipboardItem, Modifiers, TestAppContext, VisualTestContext};
+use gpui_kit::{
+    ClipboardEntry, ClipboardItem, Focusable as _, Modifiers, TestAppContext, VisualTestContext,
+};
 
 fn primary() -> Modifiers {
     Modifiers {
@@ -44,7 +47,17 @@ fn selected(app: &Entity<LyrelApp>, vcx: &mut VisualTestContext) -> Vec<PathBuf>
     })
 }
 
-fn wait(vcx: &mut VisualTestContext, mut done: impl FnMut(&mut VisualTestContext) -> bool) {
+#[track_caller]
+fn wait(vcx: &mut VisualTestContext, done: impl FnMut(&mut VisualTestContext) -> bool) {
+    wait_for(vcx, "the file operation", done);
+}
+
+#[track_caller]
+fn wait_for(
+    vcx: &mut VisualTestContext,
+    stage: &str,
+    mut done: impl FnMut(&mut VisualTestContext) -> bool,
+) {
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
     loop {
         vcx.background_executor.run_until_parked();
@@ -53,7 +66,7 @@ fn wait(vcx: &mut VisualTestContext, mut done: impl FnMut(&mut VisualTestContext
         }
         assert!(
             std::time::Instant::now() < deadline,
-            "the file operation never completed"
+            "{stage} never completed"
         );
         std::thread::sleep(std::time::Duration::from_millis(10));
     }
@@ -102,6 +115,323 @@ fn ctrl_click_toggles_real_tree_rows_without_opening_and_shift_extends(cx: &mut 
         app.read_with(vcx, |app, _| app.tab_code().unwrap().active_id().is_some())
     });
     assert_eq!(selected(&app, &mut vcx), vec![b]);
+}
+
+#[gpui_kit::test]
+fn keyboard_range_selection_reveals_offscreen_files_and_keeps_them_operable(
+    cx: &mut TestAppContext,
+) {
+    let _serial = serial();
+    let root = temp();
+    for n in 0..160 {
+        std::fs::write(root.path().join(format!("file-{n:03}.txt")), "content").unwrap();
+    }
+    let first = root.path().join("file-000.txt");
+    let last = root.path().join("file-159.txt");
+    let (app, mut vcx, _pane) = files_panel_on(cx, root.path());
+    click(&mut vcx, &first, primary());
+    for _ in 0..159 {
+        key(&mut vcx, "shift-down");
+    }
+    assert_eq!(selected(&app, &mut vcx).len(), 160);
+    vcx.update(|window, cx| {
+        window.render_frame(cx);
+        let row = window.find(id(&last)).bounds();
+        assert!(row.size.height > px(0.));
+        assert!(row.origin.y >= px(0.));
+        assert!(row.bottom() <= window.viewport_size().height);
+    });
+    key(&mut vcx, "up");
+    assert_eq!(
+        selected(&app, &mut vcx),
+        vec![root.path().join("file-158.txt")]
+    );
+    key(&mut vcx, "enter");
+    wait(&mut vcx, |vcx| {
+        app.read_with(vcx, |app, _| app.tab_code().unwrap().active_id().is_some())
+    });
+}
+
+#[gpui_kit::test]
+fn inline_creation_and_rename_at_the_viewport_edge_keep_the_intended_directory(
+    cx: &mut TestAppContext,
+) {
+    let _serial = serial();
+    let root = temp();
+    for n in 0..80 {
+        std::fs::create_dir(root.path().join(format!("dir-{n:03}"))).unwrap();
+    }
+    let destination = root.path().join("dir-079");
+    let child = destination.join("created.txt");
+    let renamed = destination.join("renamed.txt");
+    let (app, mut vcx, _pane) = files_panel_on(cx, root.path());
+    click(&mut vcx, root.path(), primary());
+    for _ in 0..80 {
+        key(&mut vcx, "down");
+    }
+    assert_eq!(selected(&app, &mut vcx), vec![destination.clone()]);
+    vcx.update(|window, cx| window.right_click(id(&destination), cx));
+    menu_item(&mut vcx, L10nKey::FileTreeContextNewFile);
+    vcx.update(|window, cx| {
+        window.scroll(
+            "right-panel-tree-rows",
+            gpui_kit::ScrollDelta::Pixels(gpui_kit::point(px(0.), px(100_000.))),
+            cx,
+        );
+        window.input("created.txt", cx);
+    });
+    app.update_in(&mut vcx, |app, window, cx| {
+        let input = app
+            .file_tree
+            .editing
+            .as_ref()
+            .expect("new-file input remains active")
+            .input()
+            .read(cx);
+        assert!(
+            input.focus_handle(cx).is_focused(window),
+            "the scrolled-away new-file input lost focus"
+        );
+        assert_eq!(
+            input.value().to_string(),
+            "created.txt",
+            "new-file input must retain the typed name"
+        );
+    });
+    key(&mut vcx, "enter");
+    wait_for(&mut vcx, "creating dir-079/created.txt", |_| child.exists());
+    let expected_child =
+        lyrel_core::core::path_spelling::local_spelling_buf(std::fs::canonicalize(&child).unwrap());
+    wait_for(
+        &mut vcx,
+        "opening the newly created file in the editor",
+        |vcx| {
+            app.read_with(vcx, |app, _| {
+                app.editor_active_location()
+                    .is_some_and(|(host, path)| host == HostId::LOCAL && path == expected_child)
+            })
+        },
+    );
+    settle(&app, &mut vcx, root.path());
+    assert!(!root.path().join("created.txt").exists());
+    assert!(!root.path().join("dir-078/created.txt").exists());
+    // Creation completed while the user deliberately kept the tree scrolled
+    // away. Opening an editor does not request a tree reveal; scroll back to
+    // the directory before issuing the next row's context-menu command.
+    vcx.update(|window, cx| {
+        window.scroll(
+            "right-panel-tree-rows",
+            gpui_kit::ScrollDelta::Pixels(gpui_kit::point(px(0.), px(-100_000.))),
+            cx,
+        );
+    });
+    wait_for(
+        &mut vcx,
+        "scrolling the created file back into view for rename",
+        |vcx| {
+            vcx.update(|window, cx| {
+                window.render_frame(cx);
+                window.try_find(id(&child)).is_some_and(|row| row.visible())
+            })
+        },
+    );
+    click(&mut vcx, &child, primary());
+    vcx.update(|window, cx| window.right_click(id(&child), cx));
+    menu_item(&mut vcx, L10nKey::FileTreeContextRename);
+    key(&mut vcx, "secondary-a");
+    vcx.update(|window, cx| window.input("renamed.txt", cx));
+    app.update_in(&mut vcx, |app, window, cx| {
+        let input = app
+            .file_tree
+            .editing
+            .as_ref()
+            .expect("rename input remains active")
+            .input()
+            .read(cx);
+        assert!(
+            input.focus_handle(cx).is_focused(window),
+            "the rename input lost focus"
+        );
+        assert_eq!(
+            input.value().to_string(),
+            "renamed.txt",
+            "Select All must replace the original file name"
+        );
+    });
+    key(&mut vcx, "enter");
+    wait_for(
+        &mut vcx,
+        "renaming created.txt to renamed.txt in dir-079",
+        |_| renamed.exists() && !child.exists(),
+    );
+    assert_eq!(std::fs::read(&renamed).unwrap(), Vec::<u8>::new());
+}
+
+#[gpui_kit::test]
+fn external_drop_targets_the_scrolled_empty_directory_not_its_neighbor(cx: &mut TestAppContext) {
+    let _serial = serial();
+    let root = temp();
+    let source = temp();
+    let payload = source.path().join("payload.txt");
+    std::fs::write(&payload, "drop bytes").unwrap();
+    for n in 0..80 {
+        std::fs::create_dir(root.path().join(format!("dir-{n:03}"))).unwrap();
+    }
+    let destination = root.path().join("dir-079");
+    let (app, mut vcx, _pane) = files_panel_on(cx, root.path());
+    click(&mut vcx, root.path(), primary());
+    for _ in 0..80 {
+        key(&mut vcx, "down");
+    }
+    key(&mut vcx, "right");
+    settle(&app, &mut vcx, root.path());
+    let position = vcx.update(|window, cx| {
+        window.scroll(
+            "right-panel-tree-rows",
+            gpui_kit::ScrollDelta::Pixels(gpui_kit::point(px(0.), px(-200.))),
+            cx,
+        );
+        window.render_frame(cx);
+        let row = window.find(id(&destination)).bounds();
+        // The note immediately below the last directory is its empty child
+        // area, and must not fall through to the root background target.
+        gpui_kit::point(row.center().x, row.bottom() + px(TREE_ROW_H / 2.))
+    });
+    vcx.simulate_event(gpui_kit::FileDropEvent::Entered {
+        position,
+        paths: ExternalPaths(vec![payload.clone()].into()),
+    });
+    vcx.simulate_event(gpui_kit::FileDropEvent::Submit { position });
+    wait_for(&mut vcx, "the dropped file's complete bytes", |_| {
+        std::fs::read_to_string(destination.join("payload.txt"))
+            .is_ok_and(|text| text == "drop bytes")
+    });
+    assert!(payload.exists());
+    assert!(!root.path().join("payload.txt").exists());
+    assert!(!root.path().join("dir-078/payload.txt").exists());
+    settle(&app, &mut vcx, root.path());
+    let background = source.path().join("background.txt");
+    std::fs::write(&background, "root bytes").unwrap();
+    let position = vcx.update(|window, cx| {
+        window.render_frame(cx);
+        window.scroll(
+            "right-panel-tree-rows",
+            gpui_kit::ScrollDelta::Pixels(gpui_kit::point(px(0.), px(-100_000.))),
+            cx,
+        );
+        window.render_frame(cx);
+        let bounds = window.find("right-panel-tree-rows").bounds();
+        gpui_kit::point(bounds.center().x, bounds.bottom() - px(4.))
+    });
+    vcx.simulate_event(gpui_kit::FileDropEvent::Entered {
+        position,
+        paths: ExternalPaths(vec![background].into()),
+    });
+    vcx.simulate_event(gpui_kit::FileDropEvent::Submit { position });
+    wait_for(&mut vcx, "the background drop's complete bytes", |_| {
+        std::fs::read_to_string(root.path().join("background.txt"))
+            .is_ok_and(|text| text == "root bytes")
+    });
+    assert!(!destination.join("background.txt").exists());
+}
+
+#[gpui_kit::test]
+fn late_ancestor_listing_reveals_the_file_and_external_insertions_keep_the_scroll_anchor(
+    cx: &mut TestAppContext,
+) {
+    let _serial = serial();
+    let root = temp();
+    let nested = root.path().join("nested/deeper");
+    std::fs::create_dir_all(&nested).unwrap();
+    for n in 0..120 {
+        std::fs::write(nested.join(format!("file-{n:03}.txt")), "bytes").unwrap();
+    }
+    let target = nested.join("file-090.txt");
+    let (app, mut vcx, _pane) = files_panel_on(cx, root.path());
+    app.update_in(&mut vcx, |app, window, cx| {
+        app.file_tree_show(&target, window, cx)
+    });
+    wait(&mut vcx, |vcx| {
+        vcx.update(|window, cx| {
+            window.render_frame(cx);
+            window
+                .try_find(id(&target))
+                .is_some_and(|row| row.visible())
+        })
+    });
+    settle(&app, &mut vcx, root.path());
+    assert_eq!(selected(&app, &mut vcx), vec![target.clone()]);
+    let before = vcx.update(|window, _| window.find(id(&target)).bounds());
+    let inserted = nested.join("before-all.txt");
+    std::fs::write(&inserted, "new bytes").unwrap();
+    app.update_in(&mut vcx, |app, _, cx| {
+        app.file_tree_apply_fs_events(HostId::LOCAL, &HashSet::from([inserted.clone()]), cx);
+    });
+    settle(&app, &mut vcx, root.path());
+    vcx.update(|window, cx| {
+        window.render_frame(cx);
+        assert_eq!(window.find(id(&target)).bounds().origin.y, before.origin.y);
+        // A deliberate scroll must not be pulled back by a completed reveal.
+        window.scroll(
+            "right-panel-tree-rows",
+            gpui_kit::ScrollDelta::Pixels(gpui_kit::point(px(0.), px(100_000.))),
+            cx,
+        );
+        window.render_frame(cx);
+        assert!(window.try_find(id(&target)).is_none());
+    });
+    assert_eq!(selected(&app, &mut vcx), vec![target]);
+}
+
+#[gpui_kit::test]
+fn project_switches_show_fresh_rows_without_reusing_another_projects_files(
+    cx: &mut TestAppContext,
+) {
+    let _serial = serial();
+    let first = temp();
+    let second = temp();
+    let first_file = first.path().join("first.txt");
+    let second_file = second.path().join("second.txt");
+    std::fs::write(&first_file, "first bytes").unwrap();
+    std::fs::write(&second_file, "second bytes").unwrap();
+    let (app, mut vcx, mut pane) = files_panel_on(cx, first.path());
+    for round in 0..3 {
+        crate::daemon::protocol::DaemonMsg::Cwd(second.path().to_path_buf())
+            .encode(&mut pane)
+            .unwrap();
+        wait(&mut vcx, |vcx| {
+            // files_cwd follows the foreground coordinator's cached cwd after
+            // startup. Drive its production timer, not only wall-clock sleep.
+            vcx.executor()
+                .advance_clock(std::time::Duration::from_millis(300));
+            vcx.update(|window, cx| {
+                window.render_frame(cx);
+                window
+                    .try_find(id(&second_file))
+                    .is_some_and(|row| row.visible())
+            })
+        });
+        vcx.update(|window, _| assert!(window.try_find(id(&first_file)).is_none()));
+        let added = first.path().join(format!("external-{round}.txt"));
+        std::fs::write(&added, "changed while inactive").unwrap();
+        crate::daemon::protocol::DaemonMsg::Cwd(first.path().to_path_buf())
+            .encode(&mut pane)
+            .unwrap();
+        wait(&mut vcx, |vcx| {
+            vcx.executor()
+                .advance_clock(std::time::Duration::from_millis(300));
+            vcx.update(|window, cx| {
+                window.render_frame(cx);
+                window.try_find(id(&added)).is_some_and(|row| row.visible())
+            })
+        });
+        vcx.update(|window, _| {
+            assert!(window.find(id(&first_file)).visible());
+            assert!(window.try_find(id(&second_file)).is_none());
+        });
+        click(&mut vcx, &added, primary());
+        assert_eq!(selected(&app, &mut vcx), vec![added]);
+    }
 }
 
 #[gpui_kit::test]

@@ -469,7 +469,7 @@ impl Element for TerminalElement {
         let focused = self.view.read(cx).focus_handle.is_focused(window);
         let cursor_visible = self.view.read(cx).cursor_visible();
         let bell_flash = self.view.read(cx).bell_flash;
-        let editor_active = self.view.read(cx).input_active();
+        let editor_active = self.view.read(cx).frame_input_active();
         // The pane leaf stores its per-frame dim here (see `TerminalView::dim`).
         // Blending the palette and paint colours toward the window background is
         // what actually dims the pane; the pane no longer wraps the terminal in
@@ -512,6 +512,9 @@ impl Element for TerminalElement {
         if let Some(snap) = &built {
             let snap = snap.clone();
             self.view.update(cx, |view, _| view.grid_snap = Some(snap));
+        } else {
+            self.view
+                .update(cx, |view, cx| view.retry_grid_when_available(cx));
         }
         // `must_block` above is exactly the condition under which `build_grid`
         // is not allowed to come back empty, so one of the two is always here.
@@ -742,7 +745,7 @@ impl Element for TerminalElement {
         let view = self.view.read(cx);
         if view.links.hovered().is_some_and(|link| link.is_armed()) {
             window.set_cursor_style(CursorStyle::PointingHand, &prepaint.hitbox);
-        } else if !view.mouse_mode() {
+        } else if !view.frame_mouse_mode() {
             window.set_cursor_style(CursorStyle::IBeam, &prepaint.hitbox);
         }
 

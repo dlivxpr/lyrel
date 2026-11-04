@@ -173,6 +173,13 @@ Git 的新增/修改标记种子为绿 `#2F8A52` / `#4CC27A`、琥珀 `#B7791F` 
 - `element/snapshot.rs` 在同一次 grid snapshot 中解析 cell、选择、搜索与链接标记；
   稳态继续使用 `try_lock`，无法取得 grid 时不修改旧 buffer，由管线重画上一有效帧。
   只有首帧或 resize 后旧 buffer 尺寸不匹配时保留原有阻塞获取例外。
+- `TerminalView` 持有的 `FrameFacts` 统一提供绘制模式、选择、光标及 prompt／菜单几何；首帧先取得有效事实，
+  后续在同一 guard 内应用 scrollbar 的待处理位置并采样。稳态 render／paint 不为这些投影等待 PTY reader。
+  facts、composer、输入维护、同尺寸 resize 核验或实际 grid 构建因锁忙而跳过时，共用每 pane 唯一的后台等待任务；
+  grid 可用后经 `TerminalLifecycle::notify_output` 请求重绘，不轮询帧、不等待后续输出，也不唤醒隐藏 pane。
+  同尺寸请求实际校正过 grid 后再绘制一帧，使帧首事实与校正后的几何重新一致；尺寸和 cell metrics 未变且 grid 已匹配时不重发 resize。
+  提示符所有权同步、settle／flush 的判断与非阻塞 writer 入队使用交接点同一个实时 grid guard，
+  不根据缓存绘制模式向 shell 交接输入；实际按键、鼠标协议及提示符输入路由仍读取实时终端状态。
 - `element/colors.rs` 负责 ANSI／truecolor、主题颜色与 pane dim 的解析；
   cell 样式复用只属于当前 snapshot，不跨调色板或主题变化保留解析结果。
 - `element/text.rs` 与其私有 `segment`、`powerline` 模块负责字体、Unicode cluster、

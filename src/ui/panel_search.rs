@@ -12,9 +12,11 @@
 mod model;
 
 use std::collections::HashSet;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::rc::Rc;
 use std::time::Duration;
 
+use gpui_kit::TestSupportExt as _;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::input::{InputEvent, InputState};
 use gpui_kit::component::{
@@ -34,6 +36,9 @@ use crate::ui::i18n::{L10nKey, t, t_fmt};
 use crate::ui::right_panel::{META, ROW_FILL_RADIUS, ROW_GLYPH, ROW_INSET, TEXT_MONO};
 
 use model::{FileGroup, Outcome, SearchKey, SearchRun};
+
+#[cfg(test)]
+use crate::ui::file_tree::read_probe::{InstanceTicket, ReadKind};
 
 /// How long typing has to pause before the search goes out. A little longer
 /// than the name search's: every keystroke that does get through reads files.
@@ -61,6 +66,7 @@ pub(crate) struct PanelSearchState {
     /// brought forward, which happens where there is no `Window` to focus with.
     pub(crate) focus_pending: bool,
     _input_sub: Subscription,
+    rows: Option<(Body, Rc<Vec<PanelSearchRow>>)>,
 }
 
 impl PanelSearchState {
@@ -85,7 +91,14 @@ impl PanelSearchState {
             collapsed: HashSet::new(),
             focus_pending: false,
             _input_sub: sub,
+            rows: None,
         }
+    }
+
+    pub(crate) fn host_changed(&mut self) {
+        self.run.retarget(None);
+        self.collapsed.clear();
+        self.rows = None;
     }
 
     fn query(&self, cx: &App) -> ContentQuery {
@@ -100,7 +113,8 @@ impl PanelSearchState {
 }
 
 /// What the body of the tab says, worked out before anything is drawn.
-enum Body {
+#[derive(Clone, PartialEq)]
+pub(crate) enum Body {
     /// An SSH pane's files are SFTP's, and a search cannot run there.
     SshPane,
     /// The active tab has no directory on its host.
@@ -117,6 +131,33 @@ enum Body {
     Failed(String),
 }
 
+#[derive(Clone)]
+pub(crate) enum PanelSearchRow {
+    Heading(Option<String>),
+    Note(Body),
+    Searching,
+    // Indexes locate current render data; only path and hit coordinates identify
+    // a row across refreshes. One shared path per group also serves all its hits.
+    File(usize, Rc<Path>),
+    Hit(usize, usize, Rc<Path>, u32, u32),
+    Truncated,
+}
+
+impl PartialEq for PanelSearchRow {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::Heading(a), Self::Heading(b)) => a == b,
+            (Self::Note(a), Self::Note(b)) => a == b,
+            (Self::Searching, Self::Searching) | (Self::Truncated, Self::Truncated) => true,
+            (Self::File(_, a), Self::File(_, b)) => a == b,
+            (Self::Hit(_, _, a, line_a, col_a), Self::Hit(_, _, b, line_b, col_b)) => {
+                a == b && line_a == line_b && col_a == col_b
+            }
+            _ => false,
+        }
+    }
+}
+
 impl LyrelApp {
     /// Enter in the field: search again now, even for the same query — the
     /// files may have changed under it.
@@ -124,6 +165,7 @@ impl LyrelApp {
         let Some((generation, key)) = self.panel_search.run.refresh() else {
             return;
         };
+        self.panel_search.rows = None;
         self.panel_search_spawn(generation, key, Duration::ZERO, cx);
         cx.notify();
     }
@@ -132,6 +174,7 @@ impl LyrelApp {
     fn panel_search_sync(&mut self, key: Option<SearchKey>, cx: &mut Context<Self>) {
         if self.panel_search.run.wanted() != key.as_ref() {
             self.panel_search.collapsed.clear();
+            self.panel_search.rows = None;
         }
         if let Some(generation) = self.panel_search.run.retarget(key.clone())
             && let Some(key) = key
@@ -160,9 +203,17 @@ impl LyrelApp {
                         generation,
                         Outcome::Failed(t(L10nKey::PanelSearchHostGone).to_string()),
                     );
+                    app.panel_search.rows = None;
                     cx.notify();
                     return;
                 };
+                app.file_tree_sync_host(&host, cx);
+                if !app.panel_search.run.is_current(generation) {
+                    return;
+                }
+                #[cfg(test)]
+                let landing_host = InstanceTicket::of(&host);
+                let authority = app.file_tree.read_authority(&host);
                 let SearchKey { roots, query, .. } = key;
                 HostOps::run(
                     host,
@@ -175,7 +226,15 @@ impl LyrelApp {
                         ))
                     },
                     move |app, outcome, cx| {
+                        #[cfg(test)]
+                        app.file_tree
+                            .read_probe
+                            .record(ReadKind::Contents, landing_host);
+                        if !authority.is_current(&app.file_tree, cx) {
+                            return;
+                        }
                         if app.panel_search.run.accept(generation, outcome) {
+                            app.panel_search.rows = None;
                             cx.notify();
                         }
                     },
@@ -278,19 +337,96 @@ impl LyrelApp {
         &mut self,
         window: &mut Window,
         cx: &mut Context<Self>,
-    ) -> Vec<AnyElement> {
+    ) -> Rc<Vec<PanelSearchRow>> {
         let body = self.panel_search_body(window, cx);
-        if matches!(body, Body::Idle(_)) {
-            return Vec::new();
+        if let Some((held, rows)) = &self.panel_search.rows
+            && *held == body
+        {
+            return Rc::clone(rows);
         }
-        let tally = self.panel_search_tally(&body);
-        let mut rows = vec![crate::ui::file_tree::search_section_heading(
-            t(L10nKey::PanelSearchInContents),
-            tally,
-            cx,
-        )];
-        rows.extend(self.panel_search_rows(body, cx));
+        let mut rows = Vec::new();
+        if !matches!(body, Body::Idle(_)) {
+            rows.push(PanelSearchRow::Heading(self.panel_search_tally(&body)));
+            if matches!(body, Body::Results) {
+                if self.panel_search.run.running() {
+                    rows.push(PanelSearchRow::Searching);
+                }
+                if let Some(landed) = self.panel_search.run.landed() {
+                    for (file, group) in landed.groups.iter().enumerate() {
+                        let path: Rc<Path> = Rc::from(group.path.as_path());
+                        rows.push(PanelSearchRow::File(file, Rc::clone(&path)));
+                        if !self.panel_search.collapsed.contains(&group.path) {
+                            rows.extend(group.hits.iter().enumerate().map(|(n, hit)| {
+                                PanelSearchRow::Hit(file, n, Rc::clone(&path), hit.line, hit.column)
+                            }));
+                        }
+                    }
+                    if matches!(&landed.outcome, Outcome::Found(found) if found.truncated) {
+                        rows.push(PanelSearchRow::Truncated);
+                    }
+                }
+            } else {
+                rows.push(PanelSearchRow::Note(body.clone()));
+            }
+        }
+        let rows = Rc::new(rows);
+        self.panel_search.rows = Some((body, Rc::clone(&rows)));
         rows
+    }
+
+    pub(crate) fn render_panel_search_row(
+        &self,
+        row: &PanelSearchRow,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        match row {
+            PanelSearchRow::Heading(tally) => crate::ui::file_tree::search_section_heading(
+                t(L10nKey::PanelSearchInContents),
+                tally.clone(),
+                cx,
+            ),
+            PanelSearchRow::Note(body) => v_flex()
+                .children(self.panel_search_rows(body.clone(), cx))
+                .into_any_element(),
+            PanelSearchRow::Searching => div()
+                .px(px(ROW_INSET))
+                .pb(px(4.))
+                .text_size(rems(META))
+                .text_color(cx.theme().muted_foreground)
+                .child(t(L10nKey::PanelSearchSearching))
+                .into_any_element(),
+            PanelSearchRow::Truncated => div()
+                .px(px(ROW_INSET))
+                .pt(px(6.))
+                .text_size(rems(META))
+                .italic()
+                .text_color(cx.theme().muted_foreground)
+                .child(t(L10nKey::PanelSearchTruncated))
+                .into_any_element(),
+            PanelSearchRow::File(index, _) => {
+                let group = &self
+                    .panel_search
+                    .run
+                    .landed()
+                    .expect("presented search result")
+                    .groups[*index];
+                self.panel_search_file_row(
+                    group,
+                    self.panel_search.collapsed.contains(&group.path),
+                    cx,
+                )
+            }
+            PanelSearchRow::Hit(file, n, ..) => {
+                let hit = &self
+                    .panel_search
+                    .run
+                    .landed()
+                    .expect("presented search result")
+                    .groups[*file]
+                    .hits[*n];
+                self.panel_search_hit_row(hit, cx)
+            }
+        }
     }
 
     /// The heading's trailing count: hits, once there are some to count.
@@ -355,7 +491,7 @@ impl LyrelApp {
             .into_any_element()
     }
 
-    fn panel_search_rows(&mut self, body: Body, cx: &mut Context<Self>) -> Vec<AnyElement> {
+    fn panel_search_rows(&self, body: Body, cx: &mut Context<Self>) -> Vec<AnyElement> {
         let danger = cx.theme().danger;
         let note = |text: String, hint: Option<String>, ink: Option<gpui_kit::Hsla>, cx: &App| {
             let muted = cx.theme().muted_foreground;
@@ -422,62 +558,13 @@ impl LyrelApp {
                 Some(danger),
                 cx,
             )),
-            Body::Results => rows.extend(self.panel_search_results(cx)),
-        }
-        rows
-    }
-
-    fn panel_search_results(&self, cx: &mut Context<Self>) -> Vec<AnyElement> {
-        let Some(landed) = self.panel_search.run.landed() else {
-            return Vec::new();
-        };
-        let Outcome::Found(found) = &landed.outcome else {
-            return Vec::new();
-        };
-        let muted = cx.theme().muted_foreground;
-        // The heading above carries the tally; the only thing left to say
-        // here is that a newer answer is on its way.
-        let mut rows: Vec<AnyElement> = Vec::new();
-        if self.panel_search.run.running() {
-            rows.push(
-                div()
-                    .flex_none()
-                    .px(px(ROW_INSET))
-                    .pb(px(4.))
-                    .text_size(rems(META))
-                    .text_color(muted)
-                    .child(t(L10nKey::PanelSearchSearching))
-                    .into_any_element(),
-            );
-        }
-        for (index, group) in landed.groups.iter().enumerate() {
-            let collapsed = self.panel_search.collapsed.contains(&group.path);
-            rows.push(self.panel_search_file_row(index, group, collapsed, cx));
-            if !collapsed {
-                for (n, hit) in group.hits.iter().enumerate() {
-                    rows.push(self.panel_search_hit_row(index, n, hit, cx));
-                }
-            }
-        }
-        if found.truncated {
-            rows.push(
-                div()
-                    .flex_none()
-                    .px(px(ROW_INSET))
-                    .pt(px(6.))
-                    .text_size(rems(META))
-                    .italic()
-                    .text_color(muted)
-                    .child(t(L10nKey::PanelSearchTruncated))
-                    .into_any_element(),
-            );
+            Body::Results => unreachable!("result rows use the viewport renderer"),
         }
         rows
     }
 
     fn panel_search_file_row(
         &self,
-        index: usize,
         group: &FileGroup,
         collapsed: bool,
         cx: &mut Context<Self>,
@@ -486,7 +573,11 @@ impl LyrelApp {
         let muted = cx.theme().muted_foreground;
         let path = group.path.clone();
         h_flex()
-            .id(("panel-search-file", index))
+            .id(SharedString::from(format!(
+                "panel-search-file-{}",
+                group.path.display()
+            )))
+            .test_support()
             .flex_none()
             .items_center()
             .gap(px(ROW_GAP))
@@ -558,19 +649,14 @@ impl LyrelApp {
                     if !folded.remove(&path) {
                         folded.insert(path.clone());
                     }
+                    this.panel_search.rows = None;
                     cx.notify();
                 }),
             )
             .into_any_element()
     }
 
-    fn panel_search_hit_row(
-        &self,
-        file: usize,
-        n: usize,
-        hit: &ContentHit,
-        cx: &mut Context<Self>,
-    ) -> AnyElement {
+    fn panel_search_hit_row(&self, hit: &ContentHit, cx: &mut Context<Self>) -> AnyElement {
         let sf = cx.global::<crate::ui::presets::Surfaces>().popover;
         let mark = HighlightStyle {
             background_color: Some(cx.theme().yellow.opacity(0.35)),
@@ -595,7 +681,13 @@ impl LyrelApp {
             &[("line", &line.to_string()), ("column", &column.to_string())],
         );
         div()
-            .id(("panel-search-hit", file * 1_000_000 + n))
+            .id(SharedString::from(format!(
+                "panel-search-hit-{}-{}-{}",
+                hit.path.display(),
+                hit.line,
+                hit.column
+            )))
+            .test_support()
             .flex_none()
             .flex()
             .items_center()
@@ -768,6 +860,253 @@ mod gpui_tests {
         });
         assert!(focused, "the Search tab opened without focusing its field");
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[gpui_kit::test]
+    fn scrolled_content_groups_fold_and_open_the_intended_file_below_name_matches(
+        cx: &mut TestAppContext,
+    ) {
+        use gpui_kit::test::TestWindowExt;
+        let _serial = serial();
+        let temp =
+            tempfile::tempdir_in(std::fs::canonicalize(std::env::temp_dir()).unwrap()).unwrap();
+        let root = temp.path();
+        for n in 0..120 {
+            std::fs::write(
+                root.join(format!("needle-{n:03}.txt")),
+                "needle in content\n",
+            )
+            .unwrap();
+        }
+        let target = root.join("needle-119.txt");
+        // LocalHost stores canonical paths in the normal local spelling, not
+        // std::fs::canonicalize's Windows verbatim-prefix spelling.
+        let expected_target = lyrel_core::core::path_spelling::local_spelling_buf(
+            std::fs::canonicalize(&target).unwrap(),
+        );
+        let (app, mut vcx, _pane) = search_panel_on(cx, root);
+        vcx.update(|window, cx| window.input("needle", cx));
+        assert!(matches!(landed(&app, &mut vcx), Outcome::Found(_)));
+        assert_eq!(groups(&app, &mut vcx).len(), 120);
+        let first = target.with_file_name("needle-000.txt");
+        let first: SharedString = format!("tree-{}", first.display()).into();
+        let last: SharedString = format!("tree-{}", target.display()).into();
+        let deadline = std::time::Instant::now() + Duration::from_secs(20);
+        loop {
+            vcx.background_executor.run_until_parked();
+            let names_visible = vcx.update(|window, cx| {
+                window.render_frame(cx);
+                window.try_find(first.clone()).is_some() || window.try_find(last.clone()).is_some()
+            });
+            if names_visible {
+                break;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "file-name results never appeared"
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        vcx.update(|window, cx| {
+            window.render_frame(cx);
+            assert!(
+                window.try_find(first).is_some_and(|row| row.visible()),
+                "the first file-name match must stay visible when asynchronous results arrive"
+            );
+        });
+        let group: SharedString = format!("panel-search-file-{}", target.display()).into();
+        let hit: SharedString = format!("panel-search-hit-{}-1-1", target.display()).into();
+        vcx.update(|window, cx| {
+            window.render_frame(cx);
+            window.scroll(
+                "right-panel-tree-rows",
+                gpui_kit::ScrollDelta::Pixels(gpui_kit::point(px(0.), px(-100_000.))),
+                cx,
+            );
+            window.render_frame(cx);
+            assert!(window.find(hit.clone()).visible());
+            window.click(group.clone(), cx);
+            assert!(window.try_find(hit.clone()).is_none());
+            window.click(group, cx);
+            window.click(hit, cx);
+        });
+        let deadline = std::time::Instant::now() + Duration::from_secs(20);
+        loop {
+            vcx.background_executor.run_until_parked();
+            if app.read_with(&vcx, |app, _| {
+                app.editor_active_location().is_some_and(|(host, path)| {
+                    host == crate::ui::host_ops::HostId::LOCAL && path == expected_target
+                })
+            }) {
+                break;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "the search hit opened the wrong file: expected {expected_target:?}, got {:?}",
+                app.read_with(&vcx, |app, _| {
+                    app.editor_active_location()
+                        .map(|(host, path)| (host, path.to_path_buf()))
+                })
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    }
+
+    #[gpui_kit::test]
+    fn same_query_refresh_preserves_scrolled_content_identity_after_preceding_insertions(
+        cx: &mut TestAppContext,
+    ) {
+        use gpui_kit::test::TestWindowExt;
+        let _serial = serial();
+        let temp =
+            tempfile::tempdir_in(std::fs::canonicalize(std::env::temp_dir()).unwrap()).unwrap();
+        let root = temp.path();
+        for n in 0..100 {
+            std::fs::write(
+                root.join(format!("file-{n:03}.txt")),
+                "plain first line\n  needle original\nneedle trailing\n",
+            )
+            .unwrap();
+        }
+        let target = root.join("file-060.txt");
+        let expected_target = lyrel_core::core::path_spelling::local_spelling_buf(
+            std::fs::canonicalize(&target).unwrap(),
+        );
+        let hit: SharedString = format!("panel-search-hit-{}-2-3", target.display()).into();
+        let group: SharedString = format!("panel-search-file-{}", target.display()).into();
+        let (app, mut vcx, _pane) = search_panel_on(cx, root);
+        vcx.update(|window, cx| window.input("needle", cx));
+        assert!(matches!(landed(&app, &mut vcx), Outcome::Found(_)));
+        assert_eq!(groups(&app, &mut vcx).len(), 100);
+
+        // Reach a real, non-terminal viewport through the list's wheel handler.
+        // Its first row must be the domain object under test, not a surviving
+        // header or neighbour that could accidentally preserve its position.
+        let align_at_top = |vcx: &mut VisualTestContext, row: SharedString| {
+            for _ in 0..100 {
+                let visible = vcx.update(|window, cx| {
+                    window.render_frame(cx);
+                    if window
+                        .try_find(row.clone())
+                        .is_some_and(|row| row.visible())
+                    {
+                        return true;
+                    }
+                    window.scroll(
+                        "right-panel-tree-rows",
+                        gpui_kit::ScrollDelta::Pixels(gpui_kit::point(px(0.), px(-200.))),
+                        cx,
+                    );
+                    false
+                });
+                if visible {
+                    break;
+                }
+            }
+            vcx.update(|window, cx| {
+                window.render_frame(cx);
+                let top = window.find("right-panel-tree-rows").bounds().origin.y;
+                let before = window
+                    .try_find(row.clone())
+                    .expect("initial wheel scrolling must reach the intended content row")
+                    .bounds()
+                    .origin
+                    .y;
+                window.scroll(
+                    "right-panel-tree-rows",
+                    gpui_kit::ScrollDelta::Pixels(gpui_kit::point(px(0.), top - before)),
+                    cx,
+                );
+                window.render_frame(cx);
+                let target = window
+                    .try_find(row)
+                    .expect("initial alignment must retain the intended content row")
+                    .bounds();
+                assert_eq!(
+                    target.origin.y, top,
+                    "the intended row owns the scroll anchor before refresh"
+                );
+                target.origin.y
+            })
+        };
+        let hit_y = align_at_top(&mut vcx, hit.clone());
+
+        // Add a hit before line 2 without moving its path/line/column. Its
+        // mutable hit index changes, but the reader must stay at the same hit.
+        let refreshed = "needle inserted\n  needle refreshed\nneedle trailing\n";
+        std::fs::write(&target, refreshed).unwrap();
+        vcx.update(|window, cx| window.press("enter", cx));
+        assert!(matches!(landed(&app, &mut vcx), Outcome::Found(_)));
+        assert_eq!(groups(&app, &mut vcx)[60].1, vec![1, 2, 3]);
+        vcx.update(|window, cx| {
+            window.render_frame(cx);
+            let row = window
+                .try_find(hit.clone())
+                .expect("hit insertion refresh lost the previously visible path/line/column");
+            assert!(row.visible(), "hit insertion refresh hid the scroll anchor");
+            assert_eq!(
+                row.bounds().origin.y,
+                hit_y,
+                "hit insertion moved the scroll anchor"
+            );
+        });
+
+        // A new preceding file changes file indexes too. Exercise the file
+        // header anchor separately before opening its existing line-2 hit.
+        vcx.update(|window, cx| {
+            window.scroll(
+                "right-panel-tree-rows",
+                gpui_kit::ScrollDelta::Pixels(gpui_kit::point(px(0.), px(200.))),
+                cx,
+            );
+        });
+        let group_y = align_at_top(&mut vcx, group.clone());
+        std::fs::write(root.join("before-all.txt"), "needle new file\n").unwrap();
+        vcx.update(|window, cx| window.press("enter", cx));
+        assert!(matches!(landed(&app, &mut vcx), Outcome::Found(_)));
+        assert_eq!(groups(&app, &mut vcx).len(), 101);
+        vcx.update(|window, cx| {
+            window.render_frame(cx);
+            let row = window
+                .try_find(group)
+                .expect("file insertion refresh lost the previously visible file header");
+            assert!(
+                row.visible(),
+                "file insertion refresh hid the scroll anchor"
+            );
+            assert_eq!(
+                row.bounds().origin.y,
+                group_y,
+                "file insertion moved the scroll anchor"
+            );
+            window.click(hit, cx);
+        });
+        let deadline = std::time::Instant::now() + Duration::from_secs(20);
+        loop {
+            vcx.background_executor.run_until_parked();
+            if app.read_with(&vcx, |app, _| {
+                app.editor_active_location().is_some_and(|(host, path)| {
+                    host == crate::ui::host_ops::HostId::LOCAL && path == expected_target
+                })
+            }) {
+                break;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "the refreshed hit opened the wrong file"
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        app.read_with(&vcx, |app, cx| {
+            let file = app
+                .editor
+                .local_file(app.tab_code().unwrap().active_id().unwrap())
+                .expect("the hit opened a local code editor");
+            let input = file.input.read(cx);
+            let cursor = input.cursor_position();
+            assert_eq!((cursor.line, cursor.character), (1, 2));
+            assert_eq!(input.text().to_string(), refreshed);
+        });
     }
 
     #[gpui_kit::test]

@@ -25,7 +25,7 @@ mod launch;
 mod lifecycle;
 use lifecycle::{DeathReporter, PaneBackend, PtyLaunch, PtyParts, join_bounded};
 mod replay;
-use facts::{FactReader, ForegroundProbes, PaneFacts};
+use facts::{FactReader, ForegroundProbes, MetadataRequest, PaneFacts};
 pub mod subscriptions;
 #[cfg(test)]
 mod test_support;
@@ -905,28 +905,39 @@ impl DaemonPane {
                                 clipboard.set_controller(controller, st.subscriptions.clipboard_allowed());
                                 controller
                             };
-                            let mut media_locality = || facts_reader.indirect_media_locality(&before);
-                            let passthrough = graphics_reader::consume(raw, &mut clipboard, &mut graphics, &state, &gate, &writer, controller, &mut media_locality);
-                            let bytes: &[u8] = &passthrough;
-                            let observation = facts_reader.observe(bytes, &foreground_running, before);
-                            let mut st = state.lock().unwrap();
-                            let da1_owed = detached_device_attribute_queries(&mut st);
-                            drop(st);
-
+                            let extracted = {
+                                let mut media_locality = || facts_reader.indirect_media_locality(&before);
+                                graphics_reader::extract(raw, &mut clipboard, &mut graphics, &mut media_locality)
+                            };
+                            // Parse once from the stripped slices, without joining ordinary
+                            // output. Only cheap OSC metadata precedes the readiness marker;
+                            // shell/agent scope and foreground probes follow publication.
+                            let mut observation = facts_reader.parse(extracted.output());
 
                             let tr1 = trace.then(std::time::Instant::now);
-                            // Fact snapshots are conditional; ordinary output does not allocate.
-                            let mut st = state.lock().unwrap();
-                            let change = st.with_facts(|facts, emit| facts.apply_output(observation, emit));
-                            graphics.set_local(st.facts.remote().is_none());
+                            // Plain output adds no pre-publication facts lock or apply.
+                            let metadata_change = observation.take_metadata().map(|metadata| {
+                                let mut st = state.lock().unwrap();
+                                let change = st.with_facts(|facts, emit| facts.apply_output(metadata, emit));
+                                (change, st.id, st.alive)
+                            });
                             if let Some(tr1) = tr1 {
                                 tr_disp_t += tr1.elapsed();
                             }
+                            graphics_reader::consume(extracted, &state, &gate, &writer, controller, &mut graphics);
+                            if let Some((change, pane, alive)) = metadata_change {
+                                change.publish(pane, alive, shutting_down.load(Ordering::SeqCst));
+                            }
+                            let observation = facts_reader.observe(observation, &foreground_running, before);
+                            let mut st = state.lock().unwrap();
+                            let change = st.with_facts(|facts, emit| facts.apply_output(observation, emit));
+                            graphics.set_local(st.facts.remote().is_none());
                             let pane = st.id;
                             let alive = st.alive;
                             drop(st);
-                            answer_device_attributes(&writer, da1_owed);
                             change.publish(pane, alive, shutting_down.load(Ordering::SeqCst));
+                            let da1_owed = detached_device_attribute_queries(&mut state.lock().unwrap());
+                            answer_device_attributes(&writer, da1_owed);
                         }
                         Err(err) if err.kind() == std::io::ErrorKind::Interrupted => continue,
                         Err(_) => break,
@@ -1169,6 +1180,10 @@ impl DaemonPane {
     }
 
     pub fn info(&self) -> PaneInfo {
+        self.info_for_request(&MetadataRequest::default())
+    }
+
+    pub(crate) fn info_for_request(&self, request: &MetadataRequest) -> PaneInfo {
         let (cwd, osc_title, alive) = {
             let st = self.state.lock().unwrap();
             (
@@ -1180,7 +1195,7 @@ impl DaemonPane {
         PaneInfo {
             pane_id: self.id,
             cwd: cwd.or_else(|| self.backend.foreground_cwd()),
-            title: self.backend.foreground_title(),
+            title: self.backend.foreground_title(request),
             osc_title,
             alive,
             owner: self.owner.clone(),
@@ -1201,9 +1216,9 @@ impl DaemonPane {
     /// that stopped producing at that moment would keep the stale copy for
     /// good, because its mark would never move again.
     /// The mark alone, for deciding whether a snapshot is worth taking:
-    /// [`scrollback_snapshot`](Self::scrollback_snapshot) clones the whole
-    /// ring under the state lock, which is a lot to pay every tick for the
-    /// answer "nothing changed". A pane that moves between this read and the
+    /// [`scrollback_snapshot`](Self::scrollback_snapshot) copies the bounded
+    /// storage suffix under the state lock, which is still unnecessary every
+    /// tick for the answer "nothing changed". A pane that moves between this read and the
     /// snapshot is fine — the snapshot returns its own mark, and that pair is
     /// what gets recorded.
     pub fn scrollback_mark(&self) -> u64 {
@@ -1214,8 +1229,7 @@ impl DaemonPane {
         &self,
     ) -> (Vec<crate::daemon::scrollback::Segment>, Option<String>, u64) {
         let st = self.state.lock().unwrap();
-        let mut segments = st.ring.snapshot();
-        crate::daemon::scrollback::trim_to(&mut segments, crate::daemon::scrollback::SNAPSHOT_CAP);
+        let segments = st.ring.persistence_snapshot();
         (
             segments,
             st.facts.osc_title().map(str::to_owned),
@@ -1473,16 +1487,14 @@ mod tests {
             let gate = OutputGate::new();
             let mut passthrough = Vec::new();
             for chunk in chunks {
-                passthrough.extend_from_slice(&graphics_reader::consume(
-                    chunk,
-                    &mut clipboard,
-                    &mut graphics,
-                    &state,
-                    &gate,
-                    &writer,
-                    Some(1),
-                    &mut || panic!("plain output must not probe host-media locality"),
-                ));
+                let extracted =
+                    graphics_reader::extract(chunk, &mut clipboard, &mut graphics, &mut || {
+                        panic!("plain output must not probe host-media locality")
+                    });
+                for bytes in extracted.output() {
+                    passthrough.extend_from_slice(bytes);
+                }
+                graphics_reader::consume(extracted, &state, &gate, &writer, Some(1), &mut graphics);
             }
             let recorded = state.lock().unwrap().ring.flatten();
             assert_eq!(
