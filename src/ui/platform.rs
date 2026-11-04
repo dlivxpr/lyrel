@@ -33,7 +33,7 @@ use gpui_kit::{
     FontId, FontMetrics, FontRun, ForegroundExecutor, GlyphId, GraphicalEnvironment, Hsla, Keymap,
     LineLayout, Menu, MenuItem, MissingGlyphSink, OwnedMenu, PathPromptOptions, Pixels, Platform,
     PlatformDisplay, PlatformGestures, PlatformInfo, PlatformKeyboardLayout,
-    PlatformKeyboardMapper, PlatformTextSystem, PlatformWindow, RenderGlyphParams, Result,
+    PlatformKeyboardMapper, PlatformTextSystem, PlatformWindow, PowerMode, RenderGlyphParams, Result,
     ScreenCaptureSource, Size, SystemNotification, SystemNotificationResponse, Task,
     TextRenderingMode, ThermalState, WindowAppearance, WindowButtonLayout, WindowParams,
     WindowingRequest,
@@ -371,6 +371,14 @@ impl Platform for LyrelPlatform {
         self.inner.prevent_idle_sleep(reason)
     }
 
+    fn power_mode(&self) -> PowerMode {
+        self.inner.power_mode()
+    }
+
+    fn on_power_mode_change(&self, callback: Box<dyn FnMut()>) {
+        self.inner.on_power_mode_change(callback)
+    }
+
     fn set_app_identity(&self, identifier: &str, name: &str) {
         self.inner.set_app_identity(identifier, name)
     }
@@ -444,6 +452,16 @@ impl Platform for LyrelPlatform {
 
     fn write_credentials(&self, url: &str, username: &str, password: &[u8]) -> Task<Result<()>> {
         self.inner.write_credentials(url, username, password)
+    }
+
+    fn write_credentials_if_not_exists(
+        &self,
+        url: &str,
+        username: &str,
+        password: &[u8],
+    ) -> Task<Result<bool>> {
+        self.inner
+            .write_credentials_if_not_exists(url, username, password)
     }
 
     fn read_credentials(&self, url: &str) -> Task<Result<Option<(String, Vec<u8>)>>> {
