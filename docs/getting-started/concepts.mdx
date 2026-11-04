@@ -195,6 +195,8 @@ macOS 原生验收延期到 [#166 专门性能后续工单](https://github.com/d
 
 用户最新决定是非必要不做前台测试，后台测试通过即可交付；前台问题留待实际使用反馈。本次不再要求真实手动输入、负载下 PresentMon／WGC 或恢复显示时延分布，也不启动需要 UAC 的采集。此前 [#164 软件级证据约定](https://github.com/dlivxpr/lyrel/issues/164#issuecomment-6620225249) 仅说明已有记录的解释边界，不再构成交付门槛。脚本输入、PTY 接收、截图、paint 次数和 CI 均不冒称最终显示或物理光子时延证据。
 
+最终后台收尾见 [PR #165 验证记录](https://github.com/dlivxpr/lyrel/pull/165#issuecomment-6631041242)：Windows 完整 GUI 套件 3,006 项通过、20 项 ignored，SCM 生命周期 11 项及真实 PTY 重挂载 8 项通过；Linux headless 完整 features 测试、构建和真实 CLI／daemon／PTY 冒烟通过。提交 `65d6349` 的七项适用 CI 检查全部通过，`release-validation` 按工作流条件跳过。收尾只删除可重建的中间缓存和已归档的冗余 Git 引用，原始测量、失败记录、源码／补丁、PDB 与测量二进制保留；这些后台结果不补造前台时延或 macOS 原生验收。
+
 ### 内部职责归属
 
 这些模块将状态与转换规则放在一起，而不只是把协调器的方法分散到文件中：
