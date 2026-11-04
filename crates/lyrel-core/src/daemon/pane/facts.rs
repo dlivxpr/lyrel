@@ -9,6 +9,22 @@ mod reader;
 use output_marks::{ShellState, SniffSignals};
 pub(super) use reader::{FactReader, ForegroundProbes};
 
+/// Display-only process evidence, discarded after one pane-list request.
+/// Locality, ownership and termination must keep using their own fresh probes.
+#[derive(Default)]
+pub(crate) struct MetadataRequest {
+    #[cfg(windows)]
+    processes: std::cell::OnceCell<Vec<crate::daemon::winproc::Proc>>,
+}
+
+impl MetadataRequest {
+    #[cfg(windows)]
+    pub(super) fn foreground_title(&self, shell_pid: u32) -> String {
+        let processes = self.processes.get_or_init(crate::daemon::winproc::snapshot);
+        crate::daemon::winproc::foreground_name(processes, shell_pid).unwrap_or_default()
+    }
+}
+
 /// Foreground observations and the transition rules which give them meaning.
 /// Kept under the existing PaneState mutex; never takes the PTY master lock.
 #[derive(Default)]

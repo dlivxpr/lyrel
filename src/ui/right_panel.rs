@@ -278,7 +278,6 @@ pub(crate) struct RightPanelState {
         std::collections::HashSet<u16>,
     >,
     pub(crate) scroll: gpui_kit::ScrollHandle,
-    pub(crate) tree_scroll: gpui_kit::ScrollHandle,
     /// A path the tree should scroll onto, and how many more renders it may
     /// take to get there. The row is usually not drawn yet when the request is
     /// made — its parents were only just expanded and their listings are still

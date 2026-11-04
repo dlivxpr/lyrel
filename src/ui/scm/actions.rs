@@ -7,6 +7,7 @@
 use gpui_kit::{Context, PromptButton, PromptLevel, Window};
 
 use lyrel_core::core::git::ops::{Destructive, GitOp, PullMode};
+use lyrel_core::core::git::status::{StatusProbe, WorkingTreeStatus, probe_status};
 
 use crate::core::config::DiffViewMode;
 use crate::ui::app::LyrelApp;
@@ -108,24 +109,37 @@ impl LyrelApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.scm_op_then(repo, op, None, window, cx);
+        let Some(host) = HostRegistry::get(cx, repo.host) else {
+            return;
+        };
+        self.with_scm_status(
+            host,
+            repo.root.clone(),
+            window,
+            cx,
+            move |app, status, window, cx| {
+                app.scm_op_prepared(repo, op, None, status, window, cx);
+            },
+        );
     }
 
-    /// [`scm_op`], with something to run once this operation has succeeded.
+    /// Confirm and dispatch using the status already read for this command.
     /// Cancelling the confirmation drops the follow-up along with the op.
-    pub(crate) fn scm_op_then(
+    fn scm_op_prepared(
         &mut self,
         repo: RepoKey,
         op: GitOp,
         then: Option<ScmFollowUp>,
+        status: &WorkingTreeStatus,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         let Some(host) = HostRegistry::get(cx, repo.host) else {
             return;
         };
+        let head = status.head.clone();
         let Some(loss) = op.destructive() else {
-            self.run_git_op(host, repo.root, op, then, window, cx);
+            self.run_git_op_prepared(host, repo.root, op, then, head, window, cx);
             return;
         };
         let answer = window.prompt(
@@ -138,10 +152,57 @@ impl LyrelApp {
         cx.spawn_in(window, async move |app, cx| {
             let Ok(1) = answer.await else { return };
             let _ = app.update_in(cx, |app, window, cx| {
-                app.run_git_op(host, repo.root, op, then, window, cx)
+                app.run_git_op_prepared(host, repo.root, op, then, head, window, cx)
             });
         })
         .detach();
+    }
+
+    /// Hidden repositories may have no retained status. Borrow one for this
+    /// command only, without recreating a cache owner or background watch.
+    pub(crate) fn with_scm_status(
+        &mut self,
+        host: crate::ui::host_ops::SharedHost,
+        root: std::path::PathBuf,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+        ready: impl FnOnce(&mut Self, &WorkingTreeStatus, &mut Window, &mut Context<Self>) + 'static,
+    ) {
+        if !HostRegistry::lookup(cx, host.id())
+            .is_some_and(|current| std::sync::Arc::ptr_eq(&current, &host))
+        {
+            return;
+        }
+        if let Some(status) = crate::terminal::git_data::status_of(cx, host.id(), &root) {
+            ready(self, &status, window, cx);
+            return;
+        }
+        let expected = host.clone();
+        crate::ui::host_ops::HostOps::run_in(
+            host,
+            window,
+            cx,
+            move |host| probe_status(host, &root),
+            move |app, result, window, cx| {
+                if !HostRegistry::lookup(cx, expected.id())
+                    .is_some_and(|current| std::sync::Arc::ptr_eq(&current, &expected))
+                {
+                    return;
+                }
+                match result {
+                    StatusProbe::Status(status) => ready(app, &status, window, cx),
+                    StatusProbe::NotARepo | StatusProbe::Unreachable => {
+                        crate::ui::notification_history::NotificationWindowExt::notify_app(
+                            window,
+                            crate::ui::notification_history::Notification::error(t(
+                                L10nKey::ScmStatusUnavailable,
+                            )),
+                            cx,
+                        );
+                    }
+                }
+            },
+        );
     }
 
     pub(crate) fn run_scm_action(
@@ -214,30 +275,38 @@ impl LyrelApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let Some(status) = crate::terminal::git_data::status_of(cx, repo.host, &repo.root) else {
+        let Some(host) = HostRegistry::get(cx, repo.host) else {
             return;
         };
-        let op = match self.scm.prepare_commit(&repo, &status, amend, cx) {
-            Ok(op) => op,
-            Err(reason) => {
-                // Buttons expose this as disabled + tooltip; actions need the
-                // same reason in a toast. Rejection also drops the follow-up.
-                crate::ui::notification_history::NotificationWindowExt::notify_app(
-                    window,
-                    t(reason).to_string(),
-                    cx,
-                );
-                return;
-            }
-        };
-        // The amend toggle is *not* cleared here: `run_git_op` clears it
-        // through `ScmPanelState::commit_dispatched` — after the amend
-        // confirmation, not before it — so a cancelled prompt leaves the
-        // toggle and the armed flag exactly as the user set them. Clearing
-        // here made Cancel quietly switch amend off, and the next Commit
-        // became the new-commit the user had just declined to risk. See
-        // `ScmPanelState::commit_landed`.
-        self.scm_op_then(repo, op, then, window, cx);
+        self.with_scm_status(
+            host,
+            repo.root.clone(),
+            window,
+            cx,
+            move |app, status, window, cx| {
+                let op = match app.scm.prepare_commit(&repo, status, amend, cx) {
+                    Ok(op) => op,
+                    Err(reason) => {
+                        // Buttons expose this as disabled + tooltip; actions need the
+                        // same reason in a toast. Rejection also drops the follow-up.
+                        crate::ui::notification_history::NotificationWindowExt::notify_app(
+                            window,
+                            t(reason).to_string(),
+                            cx,
+                        );
+                        return;
+                    }
+                };
+                // The amend toggle is *not* cleared here: `run_git_op` clears it
+                // through `ScmPanelState::commit_dispatched` — after the amend
+                // confirmation, not before it — so a cancelled prompt leaves the
+                // toggle and the armed flag exactly as the user set them. Clearing
+                // here made Cancel quietly switch amend off, and the next Commit
+                // became the new-commit the user had just declined to risk. See
+                // `ScmPanelState::commit_landed`.
+                app.scm_op_prepared(repo, op, then, status, window, cx);
+            },
+        );
     }
 
     /// Park everything, including the files git does not track yet.
@@ -280,42 +349,49 @@ impl LyrelApp {
     /// batch as an unmatched pathspec. What is staged stays staged, which is
     /// also what the button's own group implies.
     fn scm_discard_all(&mut self, repo: RepoKey, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(status) = crate::terminal::git_data::status_of(cx, repo.host, &repo.root) else {
-            return;
-        };
-        let (first, second) = match &discard_all_ops(&status)[..] {
-            [] => return,
-            [one] => (one.clone(), None),
-            [a, b, ..] => (a.clone(), Some(b.clone())),
-        };
         let Some(host) = HostRegistry::get(cx, repo.host) else {
             return;
         };
-        // Its own prompt rather than `scm_op_then`'s: that one names the file
-        // when an op carries a single path, and "Discard changes to a.rs?"
-        // would be the wrong question for a click that also sweeps the
-        // untracked files.
-        let answer = window.prompt(
-            PromptLevel::Warning,
-            &t(L10nKey::ScmDiscardAllConfirm).to_string(),
-            None,
-            &guarded_answers(t(L10nKey::ScmDiscard)),
+        self.with_scm_status(
+            host.clone(),
+            repo.root.clone(),
+            window,
             cx,
-        );
-        cx.spawn_in(window, async move |app, cx| {
-            let Ok(1) = answer.await else { return };
-            let _ = app.update_in(cx, |app, window, cx| {
-                app.run_git_op(
-                    host,
-                    repo.root,
-                    first,
-                    second.map(ScmFollowUp::Op),
-                    window,
+            move |_, status, window, cx| {
+                let (first, second) = match &discard_all_ops(status)[..] {
+                    [] => return,
+                    [one] => (one.clone(), None),
+                    [a, b, ..] => (a.clone(), Some(b.clone())),
+                };
+                // Its own prompt rather than `scm_op_prepared`'s: that one names the file
+                // when an op carries a single path, and "Discard changes to a.rs?"
+                // would be the wrong question for a click that also sweeps the
+                // untracked files.
+                let answer = window.prompt(
+                    PromptLevel::Warning,
+                    &t(L10nKey::ScmDiscardAllConfirm).to_string(),
+                    None,
+                    &guarded_answers(t(L10nKey::ScmDiscard)),
                     cx,
-                )
-            });
-        })
-        .detach();
+                );
+                let head = status.head.clone();
+                cx.spawn_in(window, async move |app, cx| {
+                    let Ok(1) = answer.await else { return };
+                    let _ = app.update_in(cx, |app, window, cx| {
+                        app.run_git_op_prepared(
+                            host,
+                            repo.root,
+                            first,
+                            second.map(ScmFollowUp::Op),
+                            head,
+                            window,
+                            cx,
+                        )
+                    });
+                })
+                .detach();
+            },
+        );
     }
 
     /// Push the current branch to its upstream, or publish it if it has none.
@@ -326,19 +402,31 @@ impl LyrelApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let Some(status) = crate::terminal::git_data::status_of(cx, repo.host, &repo.root) else {
+        let Some(host) = HostRegistry::get(cx, repo.host) else {
             return;
         };
+        self.with_scm_status(
+            host,
+            repo.root.clone(),
+            window,
+            cx,
+            move |app, status, window, cx| {
+                app.scm_push_prepared(repo, force_with_lease, status, window, cx);
+            },
+        );
+    }
+
+    fn scm_push_prepared(
+        &mut self,
+        repo: RepoKey,
+        force_with_lease: bool,
+        status: &WorkingTreeStatus,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let name = match crate::ui::scm::panel::pushable_branch(&status.head) {
             Ok(name) => name.to_string(),
             Err(reason) => {
-                // "A swallowed click on Push looks exactly like a push that
-                // finished instantly" — git_data.rs says it out loud about
-                // the busy slot, and the same holds here. The tile and the
-                // menu disable themselves, but the key binding, the palette
-                // and the follow-up half of "Commit and Push" all land in
-                // this guard, so the toast is the only place they can say
-                // why nothing moved (#545).
                 crate::ui::notification_history::NotificationWindowExt::notify_app(
                     window,
                     t(reason).to_string(),
@@ -351,15 +439,16 @@ impl LyrelApp {
             Some((remote, branch)) => (remote.to_string(), branch.to_string()),
             None => ("origin".to_string(), name),
         };
-        let set_upstream = status.upstream.is_none();
-        self.scm_op(
+        self.scm_op_prepared(
             repo,
             GitOp::Push {
                 remote,
                 branch,
-                set_upstream,
+                set_upstream: status.upstream.is_none(),
                 force_with_lease,
             },
+            None,
+            status,
             window,
             cx,
         );
@@ -373,21 +462,31 @@ impl LyrelApp {
     ///
     /// A branch with no upstream has nothing to pull, so sync is a publish.
     pub(crate) fn scm_sync(&mut self, repo: RepoKey, window: &mut Window, cx: &mut Context<Self>) {
-        let has_upstream = crate::terminal::git_data::status_of(cx, repo.host, &repo.root)
-            .is_some_and(|s| s.upstream.is_some());
-        if has_upstream {
-            self.scm_op_then(
-                repo,
-                GitOp::Pull {
-                    mode: PullMode::FfOnly,
-                },
-                Some(ScmFollowUp::Push),
-                window,
-                cx,
-            );
-        } else {
-            self.scm_push(repo, false, window, cx);
-        }
+        let Some(host) = HostRegistry::get(cx, repo.host) else {
+            return;
+        };
+        self.with_scm_status(
+            host,
+            repo.root.clone(),
+            window,
+            cx,
+            move |app, status, window, cx| {
+                if status.upstream.is_some() {
+                    app.scm_op_prepared(
+                        repo,
+                        GitOp::Pull {
+                            mode: PullMode::FfOnly,
+                        },
+                        Some(ScmFollowUp::Push),
+                        status,
+                        window,
+                        cx,
+                    );
+                } else {
+                    app.scm_push_prepared(repo, false, status, window, cx);
+                }
+            },
+        );
     }
 
     /// Run the second half of a compound verb, from the first half's landing.

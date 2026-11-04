@@ -1548,10 +1548,10 @@ fn api(
         .env_remove("LYREL")
         .env_remove(crate::daemon::pane::LYREL_PANE_ENV);
     crate::core::proc::hide_console(&mut command);
-    let mut child = command.spawn().map_err(|_| {
+    let mut child = command.spawn().map_err(|error| {
         failure(
             SessionErrorKind::Command,
-            "cannot start the captured OpenCode API CLI",
+            format!("cannot start the captured OpenCode API CLI: {error}"),
         )
     })?;
     let stderr = child.stderr.take().unwrap();
@@ -1764,11 +1764,43 @@ mod tests {
     fn cli_request(cwd: &Path, script: &str) -> SessionOperation {
         use std::os::unix::fs::PermissionsExt;
         let executable = cwd.join("opencode");
-        std::fs::write(&executable, format!("#!/bin/sh\n{script}\n")).unwrap();
+        // Other tests can fork while this fixture is written. A writer owned by
+        // the test process can leak into such a child until exec (even with
+        // CLOEXEC), making this script fail to exec with ETXTBSY on Linux.
+        // Keep that writable descriptor entirely inside a separate shell.
+        assert!(
+            Command::new("/bin/sh")
+                .args([
+                    "-c",
+                    "umask 077; printf '#!/bin/sh\\n%s\\n' \"$1\" > \"$2\"",
+                    "opencode-fixture",
+                ])
+                .arg(script)
+                .arg(&executable)
+                .status()
+                .unwrap()
+                .success()
+        );
         std::fs::set_permissions(&executable, std::fs::Permissions::from_mode(0o700)).unwrap();
         let mut request = request(cwd);
         request.launch_argv = vec![executable.to_string_lossy().into_owned()];
         request
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn opencode_history_preserves_the_native_spawn_error() {
+        let cwd = tempfile::tempdir().unwrap();
+        let mut request = request(cwd.path());
+        request.launch_argv = vec![cwd.path().join("opencode").to_string_lossy().into_owned()];
+        let error = LocalHost::new().opencode_sessions(&request).unwrap_err();
+        assert_eq!(error.kind, SessionErrorKind::Command);
+        assert!(
+            error
+                .message
+                .contains("cannot start the captured OpenCode API CLI")
+        );
+        assert!(error.message.contains("os error 2"), "{}", error.message);
     }
 
     #[cfg(unix)]
@@ -2398,18 +2430,21 @@ esac
     #[cfg(unix)]
     #[test]
     fn opencode_effective_scope_prefers_bound_scope_then_launch_environment_then_host() {
-        use std::os::unix::fs::PermissionsExt;
         let cwd = tempfile::tempdir().unwrap();
-        let executable = cwd.path().join("opencode");
         // External CLI boundary: returned titles make the effective process
         // environment observable through real Host history metadata.
-        std::fs::write(&executable, "#!/bin/sh\ncase \"$2\" in\nGET) printf '%s\\n' '{\"paths\":{\"/api/info\":{\"get\":{\"operationId\":\"server.info\"}}}}' ;;\nserver.info) printf '%s\\n' '{\"pid\":55,\"urls\":[\"http://127.0.0.1:12345/\"]}' ;;\nsession.list) printf '{\"data\":[{\"id\":\"ses_fixture\",\"projectID\":\"proj_fixture\",\"title\":\"%s\",\"location\":{\"directory\":\"%s\"},\"time\":{\"created\":1690000000000,\"updated\":1700000000000}}],\"cursor\":{}}\\n' \"$HOME\" \"$PWD\" ;;\nesac\n").unwrap();
-        std::fs::set_permissions(&executable, std::fs::Permissions::from_mode(0o700)).unwrap();
-        let mut request = request(cwd.path());
+        let mut request = cli_request(
+            cwd.path(),
+            r#"case "$2" in
+GET) printf '%s\n' '{"paths":{"/api/info":{"get":{"operationId":"server.info"}}}}' ;;
+server.info) printf '%s\n' '{"pid":55,"urls":["http://127.0.0.1:12345/"]}' ;;
+session.list) printf '{"data":[{"id":"ses_fixture","projectID":"proj_fixture","title":"%s","location":{"directory":"%s"},"time":{"created":1690000000000,"updated":1700000000000}}],"cursor":{}}\n' "$HOME" "$PWD" ;;
+esac"#,
+        );
         request.launch_argv = vec![
             "HOME=/explicit-launch-home".into(),
             "OPENCODE_DB=/explicit-launch-store.db".into(),
-            executable.to_string_lossy().into_owned(),
+            request.launch_argv.remove(0),
         ];
         let found = LocalHost::new().opencode_sessions(&request).unwrap();
         assert_eq!(found[0].title, "/explicit-launch-home");

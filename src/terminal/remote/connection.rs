@@ -220,6 +220,7 @@ impl PaneConnection {
         }
     }
 
+    /// Whether steady-state reconciliation needs another frame after this call.
     pub(super) fn resize(
         &mut self,
         term: &Arc<FairMutex<Crosswords<EventProxy>>>,
@@ -230,7 +231,7 @@ impl PaneConnection {
         local_conpty: &AtomicBool,
         shell: &Mutex<ShellState>,
         images: &crate::terminal::images::ImageStore,
-    ) {
+    ) -> bool {
         images.set_cell_metrics(cell_w, cell_h);
         let echoed = self.resize_echoed();
         // The cell size has to be part of the early-out, not just cols/rows: it
@@ -239,7 +240,8 @@ impl PaneConnection {
         // exactly the same. Comparing only `size` there would skip the resize
         // and leave a pixel-aware child rendering for the old framebuffer.
         let cell = (cell_w, cell_h);
-        if self.synced_size && size == self.size && cell == self.synced_cell {
+        let same_request = self.synced_size && size == self.size && cell == self.synced_cell;
+        if same_request {
             // Already asked for, so the only question is whether the grid got
             // there. It is not enough to trust the request (#893): on an
             // echoing route the grid moves only when the daemon's `Size` comes
@@ -248,25 +250,19 @@ impl PaneConnection {
             // the child still drawing for the old size — with every later
             // frame asking for the same size and being skipped here, until a
             // divider drag asked for a different one.
-            if echoed {
-                // Disagreement while an echo can still be on its way is just
-                // the echo (or a replay segment mid-apply) not having landed
-                // yet. Asked first because it needs no lock.
-                if self
+            // An echo may still be on its way; this check needs no grid lock.
+            if echoed
+                && self
                     .resize_sent_at
                     .is_some_and(|at| at.elapsed() < RESIZE_ECHO_GRACE)
-                {
-                    return;
-                }
-                // Tried rather than waited for, as the painter does: this runs
-                // every frame, and a held lock is the reader mid-batch — the
-                // next frame asks again.
-                match term.try_lock() {
-                    Some(term) if !grid_holds(&term, size) => {}
-                    _ => return,
-                }
-            } else if grid_holds(&term.lock(), size) {
-                return;
+            {
+                return false;
+            }
+            // Both routes retry a busy reader on a later frame.
+            match term.try_lock() {
+                Some(term) if !grid_holds(&term, size) => {}
+                Some(_) => return false,
+                None => return true,
             }
         }
         self.synced_size = true;
@@ -291,6 +287,7 @@ impl PaneConnection {
         let win = win_size(size, cell_w, cell_h);
         self.link.send(ClientMsg::Resize(win));
         self.resize_sent_at = Some(std::time::Instant::now());
+        same_request
     }
 }
 

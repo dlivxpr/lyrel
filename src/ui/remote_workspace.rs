@@ -2236,6 +2236,15 @@ fn refresh_window_shells(cx: &mut gpui_kit::App, workspace: WorkspaceId) {
         return;
     };
     app.update(cx, |app, cx| app.refresh_shells(cx));
+    if let Some(handle) = crate::ui::windows::WindowRegistry::window_for(cx, workspace) {
+        let _ = handle.update(cx, |_, window, cx| {
+            app.update(cx, |app, cx| {
+                if app.workspace == workspace {
+                    app.file_tree_host_rebound(window, cx);
+                }
+            });
+        });
+    }
 }
 
 /// Detaches every pane of `workspace`'s window from its daemon. A detach ends

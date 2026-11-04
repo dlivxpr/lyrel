@@ -1992,6 +1992,7 @@ pub fn translate_en(key: L10nKey) -> &'static str {
         L10nKey::ScmNetworkBusy => "Another network operation is still running for this repository",
         L10nKey::ScmCommitNeedsMessage => "Write a commit message first",
         L10nKey::ScmDetailFilesFailed => "The file list could not be read",
+        L10nKey::ScmStatusUnavailable => "Could not read the repository status",
         L10nKey::ScmTimeNow => "now",
         L10nKey::ScmTimeMinutes => "{n}m",
         L10nKey::ScmTimeHours => "{n}h",

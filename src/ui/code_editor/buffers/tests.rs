@@ -766,6 +766,90 @@ fn external_writes_scenario(cx: &mut TestAppContext, markdown: bool) {
 }
 
 #[gpui_kit::test]
+fn unchanged_text_refresh_preserves_selection_and_saved_undo_history(cx: &mut TestAppContext) {
+    use gpui_kit::component::input::{MoveToStart, Redo, Undo};
+
+    let dir = canonical_tempdir();
+    let path = dir.path().join("unchanged.txt");
+    std::fs::write(&path, "alpha\nbeta\n").unwrap();
+    let (app, mut vcx, _streams) = harness_with_tabs(cx, 1);
+    app.update_in(&mut vcx, |app, window, cx| {
+        app.open_file_in_editor_at(&path, Some(1), Some(1), window, cx);
+    });
+    wait_until(&mut vcx, |vcx| {
+        app.read_with(vcx, |app, _| {
+            app.active_buffer().is_some_and(|file| file.path == path)
+                && app.editor.buffers.watch.is_some()
+        })
+    });
+    vcx.update(|window, cx| {
+        window.render_frame(cx);
+        window.input("NEW161", cx);
+    });
+    vcx.dispatch_action(crate::core::actions::EditorSave);
+    wait_until(&mut vcx, |vcx| {
+        app.read_with(vcx, |app, _| {
+            app.active_buffer()
+                .is_some_and(|file| !file.dirty && !file.saving)
+        })
+    });
+    assert_eq!(std::fs::read(&path).unwrap(), b"NEW161alpha\nbeta\n");
+    vcx.dispatch_action(MoveToStart);
+    vcx.update(|window, cx| {
+        for _ in 0..3 {
+            window.press("shift-right", cx);
+        }
+    });
+    let selection = app.read_with(&vcx, |app, cx| {
+        app.active_buffer().unwrap().input.read(cx).selected_range()
+    });
+    assert_eq!(selection, 0..3);
+
+    // A changed mtime requires a real Host read even though the bytes are
+    // identical. Wait for that version to land, not a fixed timer delay.
+    let modified = std::time::SystemTime::now() + Duration::from_secs(10);
+    std::fs::OpenOptions::new()
+        .write(true)
+        .open(&path)
+        .unwrap()
+        .set_modified(modified)
+        .unwrap();
+    let expected = MTime::from_system_time(std::fs::metadata(&path).unwrap().modified().unwrap());
+    wait_until(&mut vcx, |vcx| {
+        app.read_with(vcx, |app, _| {
+            app.active_buffer().unwrap().disk_mtime == Some(expected)
+        })
+    });
+    app.read_with(&vcx, |app, cx| {
+        let file = app.active_buffer().unwrap();
+        assert_eq!(
+            file.input.read(cx).text().to_string(),
+            "NEW161alpha\nbeta\n"
+        );
+        assert_eq!(file.input.read(cx).selected_range(), selection);
+        assert!(!file.dirty);
+        assert!(file.conflict.is_none());
+    });
+    vcx.dispatch_action(Undo);
+    vcx.run_until_parked();
+    app.read_with(&vcx, |app, cx| {
+        let file = app.active_buffer().unwrap();
+        assert_eq!(file.input.read(cx).text().to_string(), "alpha\nbeta\n");
+        assert!(file.dirty);
+    });
+    vcx.dispatch_action(Redo);
+    vcx.run_until_parked();
+    app.read_with(&vcx, |app, cx| {
+        let file = app.active_buffer().unwrap();
+        assert_eq!(
+            file.input.read(cx).text().to_string(),
+            "NEW161alpha\nbeta\n"
+        );
+        assert!(!file.dirty);
+    });
+}
+
+#[gpui_kit::test]
 fn an_open_finishing_after_its_tab_closed_does_not_land_in_the_next_tab(cx: &mut TestAppContext) {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("late.txt");
@@ -881,6 +965,215 @@ fn a_late_open_cannot_replace_a_newer_hosts_document_or_cursor(cx: &mut TestAppC
             2,
             "the older request may finish only in the background"
         );
+    });
+}
+
+#[gpui_kit::test]
+fn adopting_a_workspace_discards_a_pending_open_without_losing_dirty_documents(
+    cx: &mut TestAppContext,
+) {
+    use crate::core::session::{Session, WorkspaceStore};
+    use crate::terminal::view::quiet_test_pane;
+    use crate::ui::pane::{Pane, PaneSlot};
+    use crate::ui::tab::Tab;
+
+    let old_root = canonical_tempdir();
+    let new_root = canonical_tempdir();
+    let path = Path::new("/navigation.txt");
+    std::fs::write(old_root.path().join("navigation.txt"), "old workspace\n").unwrap();
+    std::fs::write(
+        new_root.path().join("navigation.txt"),
+        "new workspace\nsecond line\n",
+    )
+    .unwrap();
+    let dirty_path = old_root.path().join("unsaved.txt");
+    std::fs::write(&dirty_path, "keep me\n").unwrap();
+    let older = FileHost::mapped(HostId(72), old_root.path());
+    let newer = FileHost::mapped(HostId(73), new_root.path());
+    let (app, mut vcx, mut streams) = harness_with_tabs(cx, 1);
+    app.update_in(&mut vcx, |app, window, cx| {
+        app.open_file_in_editor(&dirty_path, window, cx);
+    });
+    wait_until(&mut vcx, |vcx| active_id(&app, vcx).is_some());
+    let dirty = active_id(&app, &vcx).unwrap();
+    vcx.update(|window, cx| {
+        window.render_frame(cx);
+        window.input("DIRTY161", cx);
+    });
+    wait_until(&mut vcx, |vcx| {
+        app.read_with(vcx, |app, _| app.editor_unsaved() == vec![dirty])
+    });
+    let release = older.pause_next_read();
+    app.update_in(&mut vcx, |app, window, cx| {
+        app.editor_open_on_host_at(older.clone(), path, Some(Position::new(0, 1)), window, cx);
+    });
+    wait_until(&mut vcx, |_| older.entered.load(Ordering::SeqCst));
+    let next_workspace = app.update_in(&mut vcx, |app, window, cx| {
+        let next = WorkspaceStore::claim(cx, None);
+        assert_ne!(app.workspace, next);
+        app.adopt_workspace(next, Session::default(), window, cx);
+        // As in harness_with_tabs, provide a quiet terminal presentation, not
+        // a shell or daemon, for the newly adopted empty workspace.
+        let (view, stream) = quiet_test_pane(2, window, cx);
+        app.tabs.push(Tab::new(Pane::leaf(PaneSlot::Ready(view))));
+        app.tabs.select(0);
+        streams.push(stream);
+        next
+    });
+    release.send(()).unwrap();
+    // Invalidation itself clears pending, so it cannot acknowledge completion.
+    // The request owns Host clones until both its worker and landing callback
+    // finish; an installed stale buffer is also a completed, failing outcome.
+    wait_until(&mut vcx, |vcx| {
+        Arc::strong_count(&older) == 1
+            || app.read_with(vcx, |app, _| {
+                app.editor.buffers.at(older.id(), path).is_some()
+            })
+    });
+    vcx.update(|window, cx| window.render_frame(cx));
+    app.read_with(&vcx, |app, cx| {
+        assert_eq!(app.workspace, next_workspace);
+        assert!(
+            app.editor.buffers.at(older.id(), path).is_none(),
+            "the old navigation must not land"
+        );
+        assert!(
+            app.tab_code().unwrap().files.contains(&dirty),
+            "the new quiet tab adopts the dirty orphan"
+        );
+        let file = app.editor.buffers.get(dirty).unwrap();
+        assert_eq!(file.path, dirty_path);
+        assert!(file.dirty);
+        assert_eq!(file.input.read(cx).text().to_string(), "DIRTY161keep me\n");
+    });
+    // Open only after the old callback has finished: a newer request must not
+    // be what invalidates the stale request on behalf of the transition.
+    app.update_in(&mut vcx, |app, window, cx| {
+        app.editor_open_on_host_at(newer, path, Some(Position::new(1, 4)), window, cx);
+    });
+    wait_until(&mut vcx, |vcx| {
+        app.read_with(vcx, |app, _| {
+            app.editor_active_location()
+                .is_some_and(|(host, location)| host == HostId(73) && location == path)
+        })
+    });
+    app.read_with(&vcx, |app, cx| {
+        let file = app.active_buffer().unwrap();
+        assert_eq!(file.host.id(), HostId(73));
+        assert_eq!(
+            file.input.read(cx).text().to_string(),
+            "new workspace\nsecond line\n"
+        );
+        assert_eq!(file.input.read(cx).cursor_position(), Position::new(1, 4));
+        let files = &app.tab_code().unwrap().files;
+        assert!(files.contains(&dirty));
+        assert!(files.contains(&file.id()));
+        assert!(app.editor.buffers.at(older.id(), path).is_none());
+        assert_eq!(app.editor_unsaved(), vec![dirty]);
+    });
+    app.update_in(&mut vcx, |app, window, cx| {
+        app.open_file_in_editor(&dirty_path, window, cx);
+    });
+    app.read_with(&vcx, |app, cx| {
+        let file = app.active_buffer().unwrap();
+        assert_eq!(file.id(), dirty);
+        assert!(file.dirty);
+        assert_eq!(file.input.read(cx).text().to_string(), "DIRTY161keep me\n");
+    });
+}
+
+#[gpui_kit::test]
+fn rebinding_a_host_discards_a_pending_open_without_losing_dirty_documents(
+    cx: &mut TestAppContext,
+) {
+    use crate::ui::host_registry::HostRegistry;
+
+    let old_root = canonical_tempdir();
+    let new_root = canonical_tempdir();
+    let path = Path::new("/navigation.txt");
+    std::fs::write(old_root.path().join("navigation.txt"), "old connection\n").unwrap();
+    std::fs::write(
+        new_root.path().join("navigation.txt"),
+        "new connection\nsecond line\n",
+    )
+    .unwrap();
+    let dirty_path = old_root.path().join("unsaved.txt");
+    std::fs::write(&dirty_path, "keep me\n").unwrap();
+    let older = FileHost::mapped(HostId::LOCAL, old_root.path());
+    let newer = FileHost::mapped(HostId::LOCAL, new_root.path());
+    let (app, mut vcx, _streams) = harness_with_tabs(cx, 1);
+    app.update_in(&mut vcx, |app, window, cx| {
+        app.open_file_in_editor(&dirty_path, window, cx);
+    });
+    wait_until(&mut vcx, |vcx| active_id(&app, vcx).is_some());
+    let dirty = active_id(&app, &vcx).unwrap();
+    vcx.update(|window, cx| {
+        window.render_frame(cx);
+        window.input("DIRTY161", cx);
+    });
+    wait_until(&mut vcx, |vcx| {
+        app.read_with(vcx, |app, _| app.editor_unsaved() == vec![dirty])
+    });
+    let release = older.pause_next_read();
+    let context = app.update_in(&mut vcx, |app, window, cx| {
+        HostRegistry::insert(cx, older.clone());
+        app.open_file_in_editor_at(path, Some(1), Some(2), window, cx);
+        (app.workspace, app.tabs[0].id())
+    });
+    wait_until(&mut vcx, |_| older.entered.load(Ordering::SeqCst));
+    app.update_in(&mut vcx, |app, _, cx| {
+        let previous = app.spawn_host(cx);
+        // A reconnect replaces the adapter without changing machine identity.
+        // Keep the same workspace/tab too, so target identity guards alone
+        // cannot stand in for rebind_host retiring its in-flight requests.
+        HostRegistry::insert(cx, newer.clone());
+        app.rebind_host(previous, cx);
+    });
+    release.send(()).unwrap();
+    wait_until(&mut vcx, |vcx| {
+        Arc::strong_count(&older) == 1
+            || app.read_with(vcx, |app, _| {
+                app.editor.buffers.at(older.id(), path).is_some()
+            })
+    });
+    app.read_with(&vcx, |app, cx| {
+        assert_eq!((app.workspace, app.tabs[0].id()), context);
+        assert_eq!(app.tab_code().unwrap().files.len(), 1);
+        assert!(app.editor.buffers.at(older.id(), path).is_none());
+        let file = app.active_buffer().unwrap();
+        assert_eq!(file.id(), dirty);
+        assert!(file.dirty);
+        assert_eq!(file.input.read(cx).text().to_string(), "DIRTY161keep me\n");
+    });
+    // Do not issue a replacement open until the stale request has settled.
+    app.update_in(&mut vcx, |app, window, cx| {
+        app.open_file_in_editor_at(path, Some(2), Some(5), window, cx);
+    });
+    wait_until(&mut vcx, |vcx| {
+        app.read_with(vcx, |app, _| {
+            app.active_buffer().is_some_and(|file| file.id() != dirty)
+        })
+    });
+    app.read_with(&vcx, |app, cx| {
+        let file = app.active_buffer().unwrap();
+        assert_eq!(file.host.id(), HostId::LOCAL);
+        assert_eq!(file.path, path);
+        assert_eq!(
+            file.input.read(cx).text().to_string(),
+            "new connection\nsecond line\n"
+        );
+        assert_eq!(file.input.read(cx).cursor_position(), Position::new(1, 4));
+        assert_eq!(app.tab_code().unwrap().files.len(), 2);
+        assert_eq!(app.editor_unsaved(), vec![dirty]);
+    });
+    app.update_in(&mut vcx, |app, window, cx| {
+        app.open_file_in_editor(&dirty_path, window, cx);
+    });
+    app.read_with(&vcx, |app, cx| {
+        let file = app.active_buffer().unwrap();
+        assert_eq!(file.id(), dirty);
+        assert!(file.dirty);
+        assert_eq!(file.input.read(cx).text().to_string(), "DIRTY161keep me\n");
     });
 }
 

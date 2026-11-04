@@ -160,13 +160,10 @@ impl TerminalView {
         if items.is_empty() {
             return None;
         }
-        let (srow, scol) = self.cursor_cell()?;
+        let (srow, scol) = self.frame.cursor?;
 
         const MAX_ROWS: usize = 10;
-        let (total_rows, total_cols) = {
-            let term = self.terminal.term.lock();
-            (term.screen_lines(), term.columns())
-        };
+        let (total_rows, total_cols) = (self.frame.rows, self.frame.cols);
         // Anchored to where the input starts, which is a row below the prompt
         // when the prompt left it too little room.
         let (start_row, scol) = input_start(scol, total_cols.max(1));
