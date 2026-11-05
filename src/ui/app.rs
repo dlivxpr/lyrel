@@ -5155,7 +5155,7 @@ pub(crate) mod test_window {
             let mut streams = Vec::new();
             for i in 0..n {
                 let (view, stream) = quiet_test_pane(i as u64 + 1, window, cx);
-                LyrelApp::watch_pane_focus(&view.focus_handle(cx), view.entity_id(), window, cx);
+                LyrelApp::watch_terminal(&view, window, cx);
                 app.tabs
                     .push(super::Tab::new(Pane::leaf(PaneSlot::Ready(view))));
                 streams.push(stream);
