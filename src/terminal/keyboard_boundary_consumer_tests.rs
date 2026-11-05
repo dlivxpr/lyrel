@@ -76,7 +76,8 @@ fn keyboard_boundary_real_pty_case(cx: &mut TestAppContext, prior_mode: &str) {
     });
     window.update(cx, |_, window, cx| {
         window.activate_window();
-        view.read(cx).focus_handle.focus(window, cx);
+        let focus = view.read(cx).focus_handle.clone();
+        focus.focus(window, cx);
     }).unwrap();
     {
         let mut visual = gpui_kit::VisualTestContext::from_window(window, cx);
@@ -172,7 +173,8 @@ fn keyboard_boundary_replay_keys(
     });
     window.update(cx, |_, window, cx| {
         window.activate_window();
-        view.read(cx).focus_handle.focus(window,cx);
+        let focus = view.read(cx).focus_handle.clone();
+        focus.focus(window, cx);
     }).unwrap();
     {
         let mut visual = gpui_kit::VisualTestContext::from_window(window, cx);
