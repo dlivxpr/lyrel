@@ -329,13 +329,13 @@ todo = "deny"
 type_complexity = "allow"
 
 [profile.dev]
+# Keep debug/test dependency code and unwind records bounded without linker overrides.
+opt-level = 1
 codegen-units = 16
 debug = "limited"
 split-debuginfo = "unpacked"
 
 [profile.dev.package]
-# Keep desktop debug/test code and unwind records compact without linker overrides.
-lyrel = { opt-level = 1 }
 resvg = { opt-level = 3 }
 rustybuzz = { opt-level = 3 }
 taffy = { opt-level = 3 }
