@@ -160,7 +160,7 @@ Windows Chromium Cookie 的 AES-GCM 解密使用正式 registry 的 `aes-gcm =0.
   <Tab title="macOS">
     GPUI Fast `0.1.13` 需要完整 Xcode 提供 macOS SDK 26+；runner 的 `macos-15` 标签不能证明 SDK 版本。CI 与 Release 桌面构建共用 `.github/scripts/select-macos-sdk.sh`：优先核对显式 `DEVELOPER_DIR`，否则检查当前工具链及 `/Applications/Xcode*.app`，仅选择实际 SDK 版本至少为 26 的工具链。日志输出 Xcode 版本、实际 SDK 版本／路径、clang／metal 路径与 `MACOSX_DEPLOYMENT_TARGET=15.0`；缺少兼容 Xcode／SDK／clang 时直接失败，不下载工具链或修改全局 `xcode-select`。Kit 启用 `runtime_shaders`，因此离线 `metal` 编译器缺失只记录，不作为该配置的构建前提。本地构建前在同一 Bash 中 source 该脚本，或明确提供满足相同要求的 `DEVELOPER_DIR`／`SDKROOT`。根 `build.rs` 的 `lyrel-app` linker 参数与 bundle 的 `LSMinimumSystemVersion` 均为 `15.0`；独立 headless server 不经桌面 SDK 选择脚本、不修改其运行时下限。SDK 日志不是实际 Mac 运行、IME 或签名验收。
 
-    桌面 crate 的 Debug／测试使用 `opt-level = 1`，减少未优化代码及展开信息的体积；依赖继续沿用各自的开发优化级别。保留 Apple 默认的 compact unwind／DWARF 选择、panic 展开和回溯，不使用禁用 compact unwind 或屏蔽 linker diagnostics 的参数；Release 配置不变。
+    工作区及依赖的 Debug／测试默认使用 `opt-level = 1`，减少未优化代码及展开信息的体积；现有渲染／解析热路径依赖继续使用显式级别 `3`。保留 Apple 默认的 compact unwind／DWARF 选择、panic 展开和回溯，不使用禁用 compact unwind 或屏蔽 linker diagnostics 的参数；Release 配置不变。
 
     ```bash
     git clone https://github.com/dlivxpr/lyrel
