@@ -687,6 +687,7 @@ impl LyrelApp {
         let hover = gpui_kit::rgb(cx.global::<crate::ui::presets::Surfaces>().window.hover);
         let row = h_flex().id("diff-overlay-header");
         row.flex_shrink_0()
+            .min_w_0()
             // Keep document header geometry aligned with its own content.
             .title_strip_row(HAIRLINE_W, hairline(cx))
             .pl(px(crate::ui::window_chrome::CONTENT_INSET))
@@ -709,7 +710,9 @@ impl LyrelApp {
                 // A revision is an identifier, not a name: it belongs in the
                 // same monospace the patch below it is set in.
                 div()
-                    .flex_shrink_0()
+                    .min_w_0()
+                    .flex_shrink(1.)
+                    .truncate()
                     .text_size(rems(TEXT_MONO))
                     .font_weight(FontWeight::MEDIUM)
                     .font_family(self.font_family.clone())
@@ -725,7 +728,9 @@ impl LyrelApp {
                 // line and truncate the name with empty space beside it.
                 div()
                     .when(subject_takes_the_slack, |d| d.flex_1().min_w_0().truncate())
-                    .when(!subject_takes_the_slack, |d| d.flex_shrink_0())
+                    .when(!subject_takes_the_slack, |d| {
+                        d.min_w_0().flex_shrink(1.).truncate()
+                    })
                     .text_size(rems(TEXT))
                     .font_weight(FontWeight::MEDIUM)
                     .child(subject.text)
@@ -843,6 +848,12 @@ impl LyrelApp {
                     bar.when(!chrome.is_dock(), |bar| {
                         bar.child(
                             div()
+                                // Fill can be narrower than this summary's
+                                // intrinsic width. Yield the text slot before
+                                // moving the existing switches offscreen.
+                                .min_w_0()
+                                .flex_shrink(999.)
+                                .truncate()
                                 .text_size(rems(META))
                                 .font_features(tabular())
                                 .text_color(cx.theme().muted_foreground)
@@ -3078,6 +3089,107 @@ mod overlay_gpui_tests {
             // The card is what carries the rows, so open it.
             overlay.expanded.insert("a.rs".to_string(), true);
         });
+    }
+
+    #[gpui_kit::test]
+    fn document_geometry_diff_header_controls_preserve_the_patch_across_scales(
+        cx: &mut TestAppContext,
+    ) {
+        use crate::core::config::DocumentLayout;
+
+        let (app, mut vcx, _panes) = test_window::harness_with_tabs(cx, 1);
+        let source = DiffSource::Patch {
+            id: "geometry190".into(),
+            label: None,
+        };
+        show(&app, &mut vcx, source.clone());
+        let snapshot = app.read_with(&vcx, |app, _| {
+            let DiffLoad::Ready(snapshot) = &app.tabs[0].diff_overlay.as_ref().unwrap().load else {
+                panic!("ready fixture patch");
+            };
+            snapshot.clone()
+        });
+        for scale in [1., 1.25, 1.5, 1.75, 2.] {
+            vcx.simulate_scale_factor_change(scale);
+            for width in [1440., 1289., 720., 560., 1600.] {
+                vcx.simulate_resize(gpui_kit::size(px(width), px(900.)));
+                vcx.run_until_parked();
+                vcx.update(|window, cx| window.render_frame(cx));
+                let layout = vcx
+                    .debug_bounds("document-layout-switch")
+                    .expect("Dock / Fill track");
+                let view = vcx
+                    .debug_bounds("diff-overlay-view")
+                    .expect("Split / Unified track");
+                assert!((layout.center().y - view.center().y).abs() * scale <= px(1.));
+                assert!(view.right() <= layout.left());
+                if let Some(column) = vcx.debug_bounds("document-column") {
+                    let content = vcx
+                        .debug_bounds("document-content")
+                        .expect("docked diff content");
+                    assert!(
+                        (content.size.width - (column.size.width - px(1.))).abs() * scale <= px(1.),
+                        "scale={scale}, width={width}: column={column:?}, content={content:?}"
+                    );
+                }
+                // Native windows and restored bounds have a 720pt floor. Keep
+                // the sub-minimum fallback scenario without claiming its
+                // controls form a supported native surface.
+                if width < 720. {
+                    assert!(vcx.debug_bounds("document-column").is_none());
+                    assert_eq!(
+                        app.read_with(&vcx, |app, cx| app.document_layout(cx)),
+                        DocumentLayout::Dock
+                    );
+                    continue;
+                }
+                for (choice, mode) in [
+                    (L10nKey::DiffViewUnified, DiffViewMode::Unified),
+                    (L10nKey::DiffViewSplit, DiffViewMode::Split),
+                ] {
+                    let button = vcx
+                        .debug_bounds(t(choice))
+                        .expect("existing diff view choice");
+                    assert!(
+                        button.left() >= px(0.) && button.right() <= px(width),
+                        "scale={scale}, width={width}, choice={}: button={button:?}, layout={layout:?}, view={view:?}",
+                        t(choice)
+                    );
+                    vcx.simulate_click(button.center(), gpui_kit::Modifiers::none());
+                    vcx.run_until_parked();
+                    assert_eq!(vcx.update(|_, cx| cx.global::<Config>().diff_view), mode);
+                }
+                for (choice, intended) in [
+                    (L10nKey::DocumentFill, DocumentLayout::Fill),
+                    (L10nKey::DocumentDock, DocumentLayout::Dock),
+                ] {
+                    let button = vcx
+                        .debug_bounds(t(choice))
+                        .expect("existing document layout choice");
+                    assert!(button.left() >= px(0.) && button.right() <= px(width));
+                    vcx.update(|window, _| {
+                        let close = window.find("diff-overlay-close").bounds();
+                        assert!(close.left() >= px(0.) && close.right() <= px(width));
+                    });
+                    vcx.simulate_click(button.center(), gpui_kit::Modifiers::none());
+                    vcx.run_until_parked();
+                    app.read_with(&vcx, |app, cx| {
+                        assert_eq!(app.document_layout(cx), intended);
+                        let overlay = app.tabs[0].diff_overlay.as_ref().unwrap();
+                        assert_eq!(overlay.source, source);
+                        assert_eq!(overlay.expanded.get("a.rs"), Some(&true));
+                        let DiffLoad::Ready(current) = &overlay.load else {
+                            panic!("layout and view choices retain the patch");
+                        };
+                        assert!(Arc::ptr_eq(current, &snapshot));
+                    });
+                }
+            }
+        }
+        vcx.simulate_resize(gpui_kit::size(px(720.), px(900.)));
+        vcx.update(|window, cx| window.click("diff-overlay-close", cx));
+        vcx.run_until_parked();
+        assert!(app.read_with(&vcx, |app, _| app.tabs[0].diff_overlay.is_none()));
     }
 
     /// Returning to the terminal docks the current diff instead of closing or
