@@ -5,7 +5,7 @@
 
 use std::collections::HashMap;
 
-use super::{Item, PullRefs, RepoSlug};
+use super::{Item, PullRefs};
 
 /// One lane of the connector column; siblings have separate lanes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -49,9 +49,18 @@ fn local_refs<'a>(item: &'a Item, repository: &str) -> Option<&'a PullRefs> {
 /// A missing head is a root; duplicate heads use the first listed PR. Walks
 /// visit every row once, including cycles; a cyclic component has no trunk.
 /// Branch names are case-sensitive, repository names are case-insensitive.
-pub fn stack_order(items: &[Item], repository: &RepoSlug) -> Vec<StackRow> {
-    let repository = repository.full();
-    let refs = |ix: usize| local_refs(&items[ix], &repository);
+pub fn stack_order(items: &[Item]) -> Vec<StackRow> {
+    // A /pulls page belongs to one base repository. Its canonical API name
+    // can differ from the configured remote after a repository rename.
+    let repository = items
+        .iter()
+        .filter_map(|item| {
+            item.pull
+                .as_ref()
+                .and_then(|refs| refs.base_repository.as_deref())
+        })
+        .find(|name| !name.is_empty());
+    let refs = |ix: usize| repository.and_then(|name| local_refs(&items[ix], name));
     let mut by_head = HashMap::with_capacity(items.len());
     for ix in 0..items.len() {
         if let Some(pull) = refs(ix) {

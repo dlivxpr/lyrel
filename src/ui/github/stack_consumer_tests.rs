@@ -224,3 +224,27 @@ fn stacked_pull_label_filter_retains_flat_presentation_and_existing_links(cx: &m
     );
     test_window::quiesce(&mut vcx, Some(temp.path()));
 }
+
+#[gpui_kit::test]
+fn stacked_pull_uses_the_canonical_api_repository_not_an_old_remote_name(cx: &mut TestAppContext) {
+    let mut pulls = vec![
+        stack_pull(1, "a", "main", "acme/renamed"),
+        stack_pull(2, "b", "a", "acme/renamed"),
+    ];
+    for pull in &mut pulls {
+        pull["base"]["repo"]["full_name"] = serde_json::json!("acme/renamed");
+    }
+    let fake = Arc::new(StackFake {
+        pulls: Mutex::new(pulls),
+    });
+    let (temp, _app, mut vcx, _pane) = stack_panel(cx, fake);
+    vcx.update(|window, cx| {
+        window.render_frame(cx);
+        assert!(
+            window.find("panel-github-item-2").bounds().top()
+                < window.find("panel-github-item-1").bounds().top()
+        );
+        assert_eq!(window.find("panel-github-trunk-1").label(), Some("main"));
+    });
+    test_window::quiesce(&mut vcx, Some(temp.path()));
+}

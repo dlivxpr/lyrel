@@ -548,7 +548,7 @@ impl LyrelApp {
                         entry.selected = entry
                             .selected
                             .filter(|number| items.iter().any(|i| i.number == *number));
-                        entry.rows = Arc::new(stack_order(&items, &q.slug));
+                        entry.rows = Arc::new(stack_order(&items));
                         entry.items = Arc::new(items);
                         entry.next_page = got.next_page;
                         entry.error = None;
