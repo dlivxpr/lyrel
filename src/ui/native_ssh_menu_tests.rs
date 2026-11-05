@@ -1,9 +1,7 @@
 // Production host-menu pointer path, backed by the isolated native SSH Host.
 use super::*;
 use gpui_kit::test::{TestEventExt as _, TestQueryExt as _, TestWindowExt as _};
-use gpui_kit::VisualContext as _;
 use lyrel_core::daemon::control::{ControlRequest, ReplyOk};
-use lyrel_core::host::Host as _;
 
 #[gpui_kit::test]
 #[ignore = "requires isolated pinned native SSH/SFTP and same-commit server; run alone"]

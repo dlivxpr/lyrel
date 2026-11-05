@@ -1,7 +1,6 @@
 // Real pinned SSH workspace ownership through the rooted workbench supervisor.
 use super::*;
 use gpui_kit::{TestAppContext, VisualContext as _};
-use lyrel_core::host::Host as _;
 
 fn wait_for_link(cx: &mut TestAppContext, host: HostId) {
     let deadline = Instant::now() + Duration::from_secs(90);
@@ -92,17 +91,17 @@ fn native_ssh_workspace_reconnect_yields_to_active_client(cx: &mut TestAppContex
     let other = fixture.connect_control_as(&target.connection_key(), "isolated-active-client", "isolated-other-desktop");
     owned.0 = other.clone();
     assert!(matches!(other.client().call(ControlRequest::WorkspaceAttach { id: remote_id.to_string() }).unwrap(), ReplyOk::Attached { .. }));
-    assert_eq!(attachment(&other, remote_id).token, "isolated-active-client");
+    assert_eq!(attachment(&other, remote_id).hostname, "isolated-other-desktop");
     cx.update(|cx| launch_attempt(cx, host, target.clone()));
     wait_for_link(cx, host);
-    assert_eq!(attachment(&other, remote_id).token, "isolated-active-client", "automatic reconnect stole the active client's workspace");
+    assert_eq!(attachment(&other, remote_id).hostname, "isolated-other-desktop", "automatic reconnect stole the active client's workspace");
     cx.update(|cx| {
         assert_eq!(RemoteLinks::status_of(cx, workspace), Some(RemoteStatus::Preempted { by: "isolated-other-desktop".into() }));
         pump_attachments(cx, host);
     });
     cx.background_executor.run_until_parked();
     cx.run_until_parked();
-    assert_eq!(attachment(&other, remote_id).token, "isolated-active-client", "the next supervisor pass stole the yielded workspace");
+    assert_eq!(attachment(&other, remote_id).hostname, "isolated-other-desktop", "the next supervisor pass stole the yielded workspace");
     cx.update(|cx| {
         RemoteLinks::retry_now(cx, workspace);
         pump_attachments(cx, host);
@@ -110,7 +109,7 @@ fn native_ssh_workspace_reconnect_yields_to_active_client(cx: &mut TestAppContex
     let deadline = Instant::now() + Duration::from_secs(30);
     loop {
         cx.run_until_parked();
-        if attachment(&other, remote_id).token != "isolated-active-client" {
+        if attachment(&other, remote_id).hostname != "isolated-other-desktop" {
             break;
         }
         assert!(Instant::now() < deadline, "explicit Take Back failed to acquire the workspace");

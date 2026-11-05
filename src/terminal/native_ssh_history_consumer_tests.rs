@@ -91,14 +91,28 @@ fn native_ssh_workspace_history_uses_remote_home_and_isolates_inner_hop(cx: &mut
         assert_eq!(view.input.editor().text(), "echo REMOTE_HOME_ONLY_185");
     });
 
-    let nested = history_pane(&fixture, fixture.nested_shell(shell), host, cx);
+    let mut nested_shell = fixture.nested_shell(shell);
+    // Production intentionally excludes `ssh host command` from interactive
+    // remote history scopes. Open a real login shell instead of remote cat.
+    nested_shell.args.pop();
+    let quote = |text: &str| format!("'{}'", text.replace('\'', "'\\''"));
+    let command = std::iter::once(&nested_shell.program).chain(nested_shell.args.iter())
+        .map(|arg| quote(arg)).collect::<Vec<_>>().join(" ");
+    // A real user starts ssh from their existing shell. Making ssh itself
+    // the pane's root shell suppresses the daemon's foreground-child detector.
+    let nested = history_pane(&fixture, crate::daemon::protocol::ShellSpec {
+        program: "/bin/bash".into(), args: vec!["--noprofile".into(), "--norc".into(), "-i".into(), "-c".into(), format!("{command}; :")],
+        args_are_lyrel_defaults: false,
+    }, host.clone(), cx);
     let deadline = Instant::now() + Duration::from_secs(30);
     loop {
         cx.run_until_parked();
         if nested.read_with(cx, |view, _| view.remote_context().is_some()) {
             break;
         }
-        assert!(Instant::now() < deadline, "the real inner SSH hop was not detected by the daemon");
+        assert!(Instant::now() < deadline, "real inner SSH hop missing: {:?}; screen={}",
+            host.pane_procs(nested.read_with(cx, |view, _| view.pane_id)),
+            nested.read_with(cx, |view, _| view.scrollback_text()));
         std::thread::sleep(Duration::from_millis(10));
     }
     nested.update(cx, |view, cx| view.follow_history_scope(cx));
