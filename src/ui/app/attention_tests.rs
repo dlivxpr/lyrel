@@ -213,6 +213,10 @@ fn attention_binding_preserves_user_chords_and_plain_terminal_control_u(cx: &mut
     });
     vcx.simulate_keystrokes("secondary-shift-u");
     assert_focused(&app, 1, &mut vcx);
+    // NextTab wraps to the ordinary pane; the attention action would stay on
+    // the sole waiting pane, so this distinguishes the configured winner.
+    vcx.simulate_keystrokes("secondary-shift-u");
+    assert_focused(&app, 0, &mut vcx);
     vcx.update(|_, cx| {
         let cfg = cx.global_mut::<Config>();
         cfg.keybindings.remove("NextTab");
