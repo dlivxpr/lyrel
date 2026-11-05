@@ -15,6 +15,14 @@
 
 ### 修复
 
+- 空会话不再保存／重复恢复只有提示符和控制序列的旧屏幕；仍恢复布局并保留真实输出。Windows 默认 cmd 启动不再制造可累积的空恢复画面。
+- SSH 的 SFTP 文件栏统一为可展开／收起的目录树，保留当前浏览根、嵌套多选与后台刷新；上传分别提供文件和文件夹选择，目录行可指定上传目标。
+- 多选删除确认的路径列表改为独立滚动，操作按钮保持可见；Markdown 表格操作栏按当前表格左上角定位，随切换、滚动与缩放更新。
+- 通知历史新增原文完整详情、选择与整条复制，并在界面说明收录范围；应用 Toast 历史与系统通知、终端输出、原始日志明确区分。
+- Windows 产品描述统一为 `lyrel`，发布者／公司名为 `dlivxpr`；macOS bundle 同步标明项目作者并保留上游来源，不将元数据当作签名或公证证明。macOS 设置页移除重复的右上角关闭按钮，保留原生交通灯与未保存检查。
+- omp 桥优先使用所属 daemon 注入的当前 hook 可执行文件，Windows helper 正确处理继承 ConPTY 的 stdin；保留真实失败诊断。恢复、切换及重命名从正式会话元数据同步非空标题，不再长期停留在 `cmd.exe`。
+- 修复主分支 CI `41987369719` 的桌面测试编译挤占执行期限：以同参数 `--no-run` 独立编译全部测试目标，执行仍保留 20 分钟超时、完整用例与原有断言；不因预期 panic 日志修改产品代码。
+
 - #168 审查修复：同步 hold 的等面积 resize 与 ESU／期限早于有序 `Size` 的过渡均保留 committed 行列与命中几何，竞争 fallback 不按新列数解释旧帧；relink 首个 hold 没有旧 snapshot 时按新 surface 呈现空帧，避免残留几何越界。可见复制按 committed 默认／自定义 tab stops 去除 NUL 展开后缀，保留 stop 后间隔、TBC／RIS／resize 增长、内部空行与折行空格；丢弃尾空行／全空选区的多余分隔，Lines 单独保留一个末尾换行。presented 拖选不再争抢实时 reader 锁。真实 Root／TerminalView 回归覆盖过渡、剪贴板及 Unicode／空白边界；held 不复刻上游旧 LeadingSpacer 复制读入前行字符的 quirk，normal 路径保持不变。受控持锁探针完成 red／green 后移出永久测试，原生和完整平台验收仍由集中检查点负责。
 - #168／#172：Windows 非默认配置实例在启动、配置重载或语言切换时不再刷新当前账号的全局 Explorer 菜单标签；以 Windows 返回的实际默认 RoamingAppData／lyrel 为边界，默认实例与显式指定同一默认目录的行为保留，不改变注册／卸载。含修复的真实隔离实窗前后，两项真实 HKCU 键及子键的全部值／原生时间戳和用户 PATH 原始值种类／哈希均未变，只读比较、没有恢复注册项。原生 SSH 验收夹具同时明确关闭 PATH 安装／更新并隔离平台、agent 配置与继承端点，不改变生产默认配置。
 - #171：在实际终端 snapshot／paint 发布点保留上次 committed 文字、光标、图片及可见交互，避免焦点／主题／光标重绘泄漏半帧。reader 通过现有链路读取期限独立执行 150 ms fail-safe，处理每次 BSU 重启、结束、resize／reset、命令边界、replay／relink 与退出。协议回复、输入模式及 daemon 图片锚点继续实时推进；CLI `capture --plain` 无 GUI 也捕获已收到的未闭合同步输出。补充 Root paint、可见复制、安静流期限、分片和真实 CLI／daemon／PTY 回归；未执行的测试、原生与性能项目保留为集中验收项，macOS 交由 #167。
@@ -60,6 +68,8 @@
 - Kitty 双 pane 1080p 容量（#146）按真实 allocation owner 提升默认有限预算：daemon 每 pane encoded／RGBA 权重各 512 MiB、aggregate 各 1 GiB，queue 1,280 MiB，work 保持 128／256 MiB；桌面 cache 为 1,536／3,072 MiB、source 为 1,024／2,048 MiB，向 daemon 上报每 pane encoded／RGBA 各 512 MiB。新增 `scripts/kitty-capacity.mjs`，通过既有真实 PTY／Kitty 路径逐帧产生两组固定 seed、各 60 张不同 1920×1080 raw RGBA 噪声帧与 8-bit frame ID 条码；单 frame buffer、逐帧 ACK／backpressure、路径独立的脚本 SHA-256／source manifest，以及 load／daemon start-stop／edit／compose／完整 replacement／delete／普通输入与 sender 退出入口。现有 concepts 公布 `P/F/N` 所有权公式、实际退休边界与 PresentMon 2.6.0＋ffmpeg 9.0.2 自有 HWND WGC 复现命令；完整容量、小预算所有权和 120 帧生产 consumer 已通过。Windows 原生 120 Hz WGC 30 秒实测左右分别为 59.12／59.02 次图片变化每秒，p50 16.67 ms、p95 25／33.33 ms、最大 91.67 ms；源 ID 跳号下界 26／29，重复 capture 135／138，并分别记录分进程内存及 delete 后释放。经用户授权的一次管理员 PresentMon 记录 1,941 个 present、6 个未显示，DisplayedTime p50 16.658 ms／p95 20.841 ms；与 120 Hz WGC 共同通过约 60 fps 原生验收。input-to-photon 指标全部 NA，不冒充输入延迟；真实 SSH 全尺寸加载／steady／fresh 另已验证，macOS 未验证。
 
 ### 验证入口
+
+- 本轮十项问题通过 Windows GUI 后台消费者 `3026 passed / 21 ignored`、core（串行）及 server 完整 all-features、Linux headless 完整 features、Release 和真实 ZIP／Inno 包校验。真实固定公钥 SSH／SFTP 的树状点击、文件／目录选择及指定子目录上传逐字节回读通过；真实 Windows ConPTY 的六项恢复回归与正式 `omp/18.16.0` 恢复身份／标题、陈旧桥路径修复通过，最终恢复审计零请求且消息数不变。单次并行 workspace 曾在未改动的端口转发用例出现 `AddrInUse`，串行 core 通过，不将其记为单次全 workspace 绿灯。CI 修复通过 95 项自动化、actionlint 与实际测试目标预编译；未推送／重跑远端 CI。macOS 实机由用户后续自行检查，未将 Windows／后台消费者结果当作原生 macOS 验收。
 
 - #172 最终生产候选 `ead83a2` 已实际通过 Windows 格式、locked workspace all-features（5166 顶层标准测试、另 CLI E2E 26，56 ignored 不算通过）、updater 及 Release；updater 30 项已含于标准总数，8 个嵌套 helper 不重复累计。真实 musl server、Windows ZIP／Inno 包布局／版本／ConPTY 与三个自有 exe 的 VC++ runtime 检查通过，没有运行安装器或发布。
 - #172 最终 Release 的本地 ConPTY 分片／Unicode／alternate-screen、可见选择复制、同步期 CLI live／GUI held、静默释放、编辑器／Markdown／Diff、明暗与自定义主题／字号／侧栏／窗口控件、同 daemon／PTY 重开及真实 pinned-key SSH 双图片／新 GUI 恢复取得原生证据。同条件重复采样的已测成本／内存 median 均未超过 5% 退化；load 基线仅一个独立 cohort、旧 baseline 未重新交错运行，指标不等于 GPU 或物理延迟，不保证提速。真实 IME、隔离 LSP、远端编辑输入／保存、部分快捷键与焦点恢复等仍 blocked／unverified；维护者决定以实现交付收尾并随 PR 合并关闭 #168／#172，不将这些项目记作通过。完整身份、原始证据和边界见 `docs/design-system.md`，macOS 仍由 #167 单独验收。

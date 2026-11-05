@@ -19,6 +19,9 @@ impl Cell {
     pub fn table(self) -> Range<usize> {
         self.start..self.end
     }
+    pub fn is_header(self) -> bool {
+        self.row == 0
+    }
     pub fn same_row(self, other: Self) -> bool {
         self.start == other.start && self.row == other.row
     }

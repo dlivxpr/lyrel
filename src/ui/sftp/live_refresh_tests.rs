@@ -154,6 +154,121 @@ fn visible_sftp_polling_observes_external_create_rename_and_delete(cx: &mut Test
         );
     });
 
+    // The real row gesture discloses children, not a replacement browser root.
+    // Reopening must re-list, while the sibling keeps the same remote identity.
+    let folder = PathBuf::from(remote_join(&cwd, "expandable"));
+    host.create_dir(&folder, false).unwrap();
+    host.write_file(
+        &PathBuf::from(remote_join(&folder.to_string_lossy(), "first.txt")),
+        b"first child",
+    )
+    .unwrap();
+    tick(&mut vcx);
+    {
+        use gpui_kit::test::TestWindowExt;
+        let folder_id = SharedString::from(format!("sftp-row-{}", folder.display()));
+        vcx.update(|window, cx| {
+            window.render_frame(cx);
+            window.click(folder_id.clone(), cx);
+        });
+        vcx.background_executor.run_until_parked();
+        app.update_in(&mut vcx, |app, _, _| {
+            assert_eq!(
+                app.sftp_panel.cwd, cwd,
+                "directory clicks must not navigate"
+            );
+            assert!(
+                app.sftp_panel
+                    .visible_rows("")
+                    .iter()
+                    .any(
+                        |(path, _, depth)| path == &remote_join(&cwd, "expandable/first.txt")
+                            && *depth == 1
+                    )
+            );
+        });
+        vcx.update(|window, cx| window.click(folder_id.clone(), cx));
+        host.write_file(
+            &PathBuf::from(remote_join(&folder.to_string_lossy(), "second.txt")),
+            b"second child",
+        )
+        .unwrap();
+        vcx.update(|window, cx| window.click(folder_id.clone(), cx));
+        vcx.background_executor.run_until_parked();
+        app.update_in(&mut vcx, |app, _, _| {
+            assert_eq!(app.sftp_panel.cwd, cwd);
+            assert!(
+                app.sftp_panel
+                    .visible_rows("")
+                    .iter()
+                    .any(
+                        |(path, _, depth)| path == &remote_join(&cwd, "expandable/second.txt")
+                            && *depth == 1
+                    )
+            );
+        });
+        vcx.update(|window, cx| window.click(folder_id, cx));
+    }
+    // Respond through the platform picker seam, then assert real remote bytes.
+    // This catches folder-only file prompts and root-vs-child destination bugs.
+    let upload = tempfile::tempdir().unwrap();
+    let file = upload.path().join("picked.txt");
+    let bundle = upload.path().join("bundle");
+    std::fs::write(&file, b"picked file bytes").unwrap();
+    std::fs::create_dir(&bundle).unwrap();
+    std::fs::write(bundle.join("nested.txt"), b"picked folder bytes").unwrap();
+    for (directories, selected, relative, expected) in [
+        (false, file, "picked.txt", b"picked file bytes".as_slice()),
+        (
+            true,
+            bundle,
+            "bundle/nested.txt",
+            b"picked folder bytes".as_slice(),
+        ),
+    ] {
+        app.update_in(&mut vcx, |app, window, cx| {
+            app.sftp_pick_upload(
+                directories,
+                Some(folder.to_string_lossy().into_owned()),
+                window,
+                cx,
+            );
+        });
+        assert!(cx.did_prompt_for_paths());
+        cx.simulate_path_prompt_response(|options| {
+            assert_eq!(options.files, !directories);
+            assert_eq!(options.directories, directories);
+            assert!(options.multiple);
+            Some(vec![selected])
+        });
+        vcx.background_executor.run_until_parked();
+        let deadline = std::time::Instant::now() + native_fixture::STREAM_WITHIN;
+        loop {
+            if host
+                .read_file(
+                    &PathBuf::from(remote_join(&folder.to_string_lossy(), relative)),
+                    1024,
+                )
+                .is_ok_and(|bytes| bytes == expected)
+            {
+                break;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "picked upload did not reach its exact remote child directory"
+            );
+            tick(&mut vcx);
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert!(
+            host.stat(&PathBuf::from(remote_join(&cwd, relative)))
+                .is_err(),
+            "upload must not land in browser root"
+        );
+    }
+    host.remove(&folder, true).unwrap();
+    tick(&mut vcx);
+
     // A separate production RemoteHost changes Linux files; no GUI refresh call.
     let created = PathBuf::from(remote_join(&cwd, "agent-created.txt"));
     let renamed = PathBuf::from(remote_join(&cwd, "agent-renamed.txt"));

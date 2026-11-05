@@ -291,7 +291,7 @@ fn restored_screen(
     // file stays: a snapshot holding nothing is not a screen to hand over, but
     // it is still a file nobody will read again.
     crate::daemon::scrollback::forget(request.pane_id);
-    if segments.is_empty() {
+    if !crate::daemon::pane::has_restorable_output(&segments) {
         return None;
     }
     log::info!(

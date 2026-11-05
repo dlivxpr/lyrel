@@ -973,37 +973,38 @@ impl SettingsWindow {
                 )
                 .on_double_click(|_, window, _| window.titlebar_double_click()),
             )
-            .child(
-                div()
-                    .id("settings-close")
-                    .absolute()
-                    // On the chrome line rather than in the middle of the band:
-                    // the band spends a point of its height below its contents,
-                    // so `TITLE_BAR_HEIGHT / 2` is not where the rest sits.
-                    .top(crate::ui::window_chrome::title_strip_centre() - px(CLOSE_TILE / 2.))
-                    .right(px(12.))
-                    .size(px(CLOSE_TILE))
-                    .rounded(px(6.))
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .occlude()
-                    .cursor_pointer()
-                    .hover(move |s| s.bg(tk.k05))
-                    .child(
-                        Icon::empty()
-                            .path("icons/settings/close.svg")
-                            .size(px(10.))
-                            .text_color(tk.k45),
-                    )
-                    .tooltip(|window, cx| {
-                        gpui_kit::component::tooltip::Tooltip::new(t(L10nKey::Close))
-                            .build(window, cx)
-                    })
-                    .on_click(
-                        cx.listener(|this, _, window, cx| this.close_settings_checked(window, cx)),
-                    ),
-            )
+            .when(!cfg!(target_os = "macos"), |root| {
+                root.child(
+                    div()
+                        .id("settings-close")
+                        .absolute()
+                        // Windows keeps the page's close command; macOS uses
+                        // its native traffic lights and checked close handler.
+                        .top(crate::ui::window_chrome::title_strip_centre() - px(CLOSE_TILE / 2.))
+                        .right(px(12.))
+                        .size(px(CLOSE_TILE))
+                        .rounded(px(6.))
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .occlude()
+                        .cursor_pointer()
+                        .hover(move |s| s.bg(tk.k05))
+                        .child(
+                            Icon::empty()
+                                .path("icons/settings/close.svg")
+                                .size(px(10.))
+                                .text_color(tk.k45),
+                        )
+                        .tooltip(|window, cx| {
+                            gpui_kit::component::tooltip::Tooltip::new(t(L10nKey::Close))
+                                .build(window, cx)
+                        })
+                        .on_click(cx.listener(|this, _, window, cx| {
+                            this.close_settings_checked(window, cx)
+                        })),
+                )
+            })
             .when(!searching && section == SettingsSection::Skills, |root| {
                 root.children(self.render_skills_overlay(cx))
             })

@@ -5,7 +5,12 @@ pub fn translate_en(key: L10nKey) -> &'static str {
         L10nKey::TerminalImageEvicted => "Image evicted",
         L10nKey::NotificationInbox => "Notifications",
         L10nKey::NotificationClearHistory => "Clear notification history",
-        L10nKey::NotificationScope => "Received app notifications on this computer · latest 500",
+        L10nKey::NotificationScope => {
+            "App toasts on this computer: success, information, warnings and errors · latest 500. Excludes system notifications, terminal output and events while the GUI is closed."
+        }
+        L10nKey::NotificationDetails => "Full message",
+        L10nKey::NotificationBack => "Back to notifications",
+        L10nKey::NotificationCopy => "Copy message",
         L10nKey::NotificationEmpty => {
             "No notifications. New application notifications will appear here."
         }
@@ -1598,7 +1603,8 @@ pub fn translate_en(key: L10nKey) -> &'static str {
         L10nKey::SftpTooltipMore => "More",
         L10nKey::SftpMenuNewFolder => "New Folder",
         L10nKey::SftpMenuNewFile => "New File",
-        L10nKey::SftpMenuUpload => "Upload…",
+        L10nKey::SftpMenuUploadFiles => "Upload files…",
+        L10nKey::SftpMenuUploadFolders => "Upload folders…",
         L10nKey::SftpMenuGotoShellCwd => "Go to Shell Directory",
         L10nKey::SftpMenuHideTransferHistory => "Hide Transfer History",
         L10nKey::SftpMenuTransferHistory => "Transfer History",

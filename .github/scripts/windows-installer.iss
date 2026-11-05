@@ -28,9 +28,12 @@
 ; lyrel 使用独立 AppId；后续升级保持此值，不接管其他产品的安装。
 AppId={{E57DD2B4-E65D-4F13-9E2E-8D929125780A}
 AppName=lyrel
+AppVerName=lyrel
+; 安装列表只显示产品名；版本和架构分别保留在版本字段与资产名中。
+UninstallDisplayName=lyrel
 AppVersion={#AppVersion}
 VersionInfoVersion={#VersionInfoVersion}
-AppPublisher=lyrel contributors
+AppPublisher=dlivxpr
 AppPublisherURL=https://github.com/dlivxpr/lyrel
 AppSupportURL=https://github.com/dlivxpr/lyrel/issues
 AppUpdatesURL=https://github.com/dlivxpr/lyrel/releases

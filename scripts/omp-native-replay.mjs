@@ -100,9 +100,19 @@ if (action === 'prepare') {
     PI_FORCE_IMAGE_PROTOCOL:scenario === 'protocol-off' ? 'off' : 'kitty',PI_KITTY_PLACEHOLDERS:mode === 'direct' ? '0' : '1',PI_NO_TITLE:'1',
   };
   if (scenario === 'placeholder-off') environment.PI_NO_KITTY_PLACEHOLDERS = '1';
+  const bridgeRunner = option('--bridge-runner');
+  let bridge;
+  if (bridgeRunner) {
+    bridge = join(root, 'lyrel-status-bridge.ts');
+    const template = readFileSync(new URL('../crates/lyrel-core/src/core/agent_hooks/omp.ts', import.meta.url), 'utf8');
+    const scope = ['HOME', 'USERPROFILE', 'OMP_PROFILE', 'PI_CONFIG_DIR', 'PI_CODING_AGENT_DIR'];
+    writeFileSync(bridge, template.replace('__EXE__', JSON.stringify(resolve(bridgeRunner))).replace('__SCOPE_ENV__', JSON.stringify(scope)));
+    delete environment.PI_NO_TITLE;
+  }
   const manifest = {owner:marker,root:canonical,omp,scenario,mode,session,overlay,environment,identities,initialMessages:entries.length - 1,
     figure:{backgroundRgb:[18,52,86],triangleRgb:[255,128,0]},upstreamReviewed:'18.14.1',latestReleaseObserved:'2026-10-31',
     argv:['--config',overlay,'--model','lyrel-fixture/never-infer','--no-extensions','--no-skills','--no-rules','--no-context-files','--no-lsp','--no-tools','--resume',session]};
+  if (bridge) manifest.argv.push('--extension', bridge);
   json(manifestPath, manifest);
   json(join(root,'lyrel','config.json'), {shell:{program:process.execPath,args:[fileURLToPath(import.meta.url),'run','--root',canonical]},restore_windows:false});
   console.log(JSON.stringify(manifest));
@@ -124,7 +134,7 @@ if (action === 'prepare') {
   }
   // Deliberately allow-list OS/terminal plumbing; no provider keys, proxy, profile,
   // extensions, private stores, dotenv overlays or credential-command variables.
-  const allowed = ['PATH','PATHEXT','SystemRoot','SYSTEMROOT','WINDIR','COMSPEC','TERM','TERM_PROGRAM','TERM_PROGRAM_VERSION','COLORTERM','LYREL','LYREL_PANE_ID','ConEmuANSI','WT_SESSION'];
+  const allowed = ['PATH','PATHEXT','SystemRoot','SYSTEMROOT','WINDIR','COMSPEC','TERM','TERM_PROGRAM','TERM_PROGRAM_VERSION','COLORTERM','LYREL','LYREL_PANE','LYREL_CONFIG_DIR','LYREL_AGENT_HOOK_EXE','ConEmuANSI','WT_SESSION'];
   const environment = {};
   for (const [key,value] of Object.entries(process.env)) if (allowed.some(name => name.toLowerCase() === key.toLowerCase())) environment[key] = value;
   Object.assign(environment, manifest.environment);
@@ -218,4 +228,4 @@ if (action === 'prepare') {
   const stopped = spawnSync(resolve(cli), ['server','stop'], {env:environment,encoding:'utf8',timeout:30000});
   if (stopped.status !== 0) throw new Error(`Owned daemon shutdown failed: ${stopped.stderr || stopped.error}`);
   rmSync(root,{recursive:true});
-} else throw new Error('Usage: node scripts/omp-native-replay.mjs prepare|run|launch|cleanup --root <directory> [--omp <absolute executable>] [--lyrel-app <absolute executable>] [--lyrel-cli <absolute executable>] [--case pictures|budget|disabled|protocol-off|placeholder-off] [--mode placeholders|direct]');
+} else throw new Error('Usage: node scripts/omp-native-replay.mjs prepare|run|launch|cleanup --root <directory> [--omp <absolute executable>] [--bridge-runner <absolute hook executable>] [--lyrel-app <absolute executable>] [--lyrel-cli <absolute executable>] [--case pictures|budget|disabled|protocol-off|placeholder-off] [--mode placeholders|direct]');

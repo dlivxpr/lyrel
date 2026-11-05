@@ -62,6 +62,7 @@ pub(crate) struct TextPrompt {
     detail: Option<String>,
     answers: Vec<PromptButton>,
     focus: FocusHandle,
+    scroll: gpui_kit::ScrollHandle,
 }
 
 impl TextPrompt {
@@ -76,6 +77,7 @@ impl TextPrompt {
             detail: detail.map(str::to_string).filter(|d| !d.trim().is_empty()),
             answers: answers.to_vec(),
             focus: cx.focus_handle(),
+            scroll: gpui_kit::ScrollHandle::new(),
         }
     }
 
@@ -167,7 +169,18 @@ impl Render for TextPrompt {
                     cx.emit(PromptResponse(ix));
                     cx.stop_propagation();
                 }),
-            );
+            )
+            .map(|element| {
+                #[cfg(test)]
+                {
+                    use gpui_kit::test::TestSupportExt;
+                    element.test_support()
+                }
+                #[cfg(not(test))]
+                {
+                    element
+                }
+            });
             match self.stands_apart(ix) {
                 true => apart.push(button),
                 false => packed.push(button),
@@ -179,10 +192,28 @@ impl Render for TextPrompt {
         // answers under it. The title wraps: cut short, a question no longer
         // asks anything.
         let text = v_flex()
+            .id("prompt-content")
+            .map(|element| {
+                #[cfg(test)]
+                {
+                    use gpui_kit::test::TestSupportExt;
+                    element.test_support()
+                }
+                #[cfg(not(test))]
+                {
+                    element
+                }
+            })
+            .min_h_0()
+            .overflow_y_scroll()
+            .overflow_x_scroll()
+            .track_scroll(&self.scroll)
             .gap(px(4.))
             .min_w_0()
+            .max_w_full()
             .child(
                 div()
+                    .flex_none()
                     .text_size(rems(TEXT))
                     .line_height(rems(TEXT * 1.4))
                     .font_weight(gpui_kit::FontWeight::SEMIBOLD)
@@ -190,6 +221,21 @@ impl Render for TextPrompt {
             )
             .children(self.detail.clone().map(|detail| {
                 div()
+                    .id("prompt-detail")
+                    .map(|element| {
+                        #[cfg(test)]
+                        {
+                            use gpui_kit::test::TestSupportExt;
+                            element.test_support()
+                        }
+                        #[cfg(not(test))]
+                        {
+                            element
+                        }
+                    })
+                    .flex_none()
+                    .min_w_0()
+                    .max_w_full()
                     .text_size(rems(TAB_TEXT))
                     .line_height(rems(TAB_TEXT * 1.45))
                     .text_color(muted)
@@ -200,6 +246,19 @@ impl Render for TextPrompt {
         // with longer labels than the width was sized for — wraps onto a
         // second line, still flush right, rather than running off the edge.
         let answers = h_flex()
+            .id("prompt-answers")
+            .map(|element| {
+                #[cfg(test)]
+                {
+                    use gpui_kit::test::TestSupportExt;
+                    element.test_support()
+                }
+                #[cfg(not(test))]
+                {
+                    element
+                }
+            })
+            .flex_none()
             .flex_wrap()
             .justify_end()
             .items_center()
@@ -212,19 +271,20 @@ impl Render for TextPrompt {
             0..=2 => ALERT_W,
             _ => ALERT_W_WIDE,
         };
+        // The content may be arbitrarily long; only it scrolls. Keep the
+        // answers outside that viewport and reserve the window's lower inset.
+        let top = (window.viewport_size().height.as_f32() * 0.22).clamp(16., ALERT_TOP);
+        let max_height = (window.viewport_size().height.as_f32() - top - 16.).max(0.);
         let card = dialog::card("prompt-card", self.message.clone(), width, cx)
             .max_w(gpui_kit::relative(0.9))
+            .max_h(px(max_height))
+            .min_h_0()
             .gap(px(16.))
             .pt(px(20.))
             .px(px(20.))
             .pb(px(16.))
             .child(text)
             .child(answers);
-
-        // Lower than the switcher's drop: an alert is read, not typed into,
-        // and v5 sets it at eye height. A short window pulls it up rather
-        // than pushing the buttons off the bottom.
-        let top = (window.viewport_size().height.as_f32() * 0.22).clamp(16., ALERT_TOP);
 
         div()
             .id("text-prompt")
@@ -266,7 +326,7 @@ impl Render for TextPrompt {
 #[cfg(test)]
 mod tests {
     use super::TextPrompt;
-    use gpui_kit::{AppContext as _, PromptButton, TestAppContext};
+    use gpui_kit::{AppContext as _, PromptButton, TestAppContext, VisualContext as _};
 
     fn prompt(cx: &mut TestAppContext, answers: &[PromptButton]) -> gpui_kit::Entity<TextPrompt> {
         cx.update(|cx| {
@@ -380,5 +440,53 @@ mod tests {
         p.read_with(cx, |p, _| {
             assert_eq!(p.answer_for_key("escape"), None);
         });
+    }
+    #[gpui_kit::test]
+    fn large_delete_scope_scrolls_without_moving_answers_outside_a_small_window(
+        cx: &mut TestAppContext,
+    ) {
+        use gpui_kit::test::TestWindowExt;
+        use gpui_kit::{px, size};
+        let (_app, mut vcx) = crate::ui::app::test_window::harness(cx);
+        cx.simulate_window_resize(vcx.window_handle(), size(px(480.), px(320.)));
+        let detail = format!(
+            "fixture-host\n{}",
+            (0..500)
+                .map(|n| { format!("/fixture/{}/file-{n:03}.txt", "long-path-".repeat(20)) })
+                .collect::<Vec<_>>()
+                .join("\n")
+        );
+        let mut answer = vcx.update(|window, cx| {
+            super::install(cx);
+            window.prompt(
+                gpui_kit::PromptLevel::Warning,
+                "Delete 500 items?",
+                Some(&detail),
+                &crate::ui::confirm_answers("Delete", "Cancel"),
+                cx,
+            )
+        });
+        vcx.run_until_parked();
+        vcx.update(|window, cx| {
+            window.render_frame(cx);
+            let footer = window.find("prompt-answers").bounds();
+            let content = window.find("prompt-content").bounds();
+            let detail_before = window.find("prompt-detail").bounds();
+            assert!(content.size.height > px(0.));
+            assert!(content.bottom() <= footer.top());
+            assert!(footer.bottom() <= window.viewport_size().height);
+            window.scroll(
+                "prompt-content",
+                gpui_kit::ScrollDelta::Pixels(gpui_kit::point(px(0.), px(-100_000.))),
+                cx,
+            );
+            window.render_frame(cx);
+            assert_eq!(window.find("prompt-answers").bounds(), footer);
+            assert!(window.find("prompt-detail").bounds().top() < detail_before.top());
+            // Click the safe answer at its real bounds: it must remain operable.
+            window.click(("prompt-answer", 1usize), cx);
+        });
+        vcx.run_until_parked();
+        assert_eq!(answer.try_recv().ok().flatten(), Some(1));
     }
 }

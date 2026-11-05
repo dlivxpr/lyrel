@@ -219,6 +219,22 @@ fn build_shell_command(
         None => default_shell_name(&cmd),
     };
 
+    let passive_cmd_prompt = cfg!(windows)
+        && std::path::Path::new(&resolved_program)
+            .file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(|name| {
+                name.eq_ignore_ascii_case("cmd.exe") || name.eq_ignore_ascii_case("cmd")
+            })
+        && configured
+            .as_ref()
+            .is_none_or(|chosen| chosen.args.is_empty());
+    if passive_cmd_prompt {
+        // A command supplied to /K suppresses cmd's own startup logo without
+        // disabling AutoRun or changing exit semantics. User argv is untouched.
+        cmd.args(["/K", "rem"]);
+    }
+
     let integration = shell_integration::setup(
         Some(&resolved_program),
         configured.as_ref().map_or(&[][..], |c| c.args.as_slice()),
@@ -230,6 +246,18 @@ fn build_shell_command(
     let integration_dir = integration.as_ref().and_then(|i| i.dir.clone());
     let launched = launched_shell_program(&cmd, &resolved_program);
     apply_common_command_setup(&mut cmd, initial_cwd, pane, workspace, &launched);
+    if passive_cmd_prompt {
+        let prompt = cmd
+            .get_env("PROMPT")
+            .map(|value| value.to_string_lossy().into_owned())
+            .unwrap_or_else(|| "$P$G".to_string());
+        // Passive screen boundaries only: cmd has no command-start/end hooks,
+        // so these must not enable OSC 133 shell/agent/input-editor semantics.
+        cmd.env(
+            "PROMPT",
+            format!("$E]777;lyrel-prompt;A$E\\{prompt}$E]777;lyrel-prompt;B$E\\"),
+        );
+    }
     Ok((cmd, integration_dir))
 }
 
@@ -492,6 +520,12 @@ fn pane_environment(
     if let Some(dir) = config_dir_env() {
         env.push((LYREL_CONFIG_DIR_ENV.to_string(), dir));
     }
+    if let Ok(executable) = std::env::current_exe() {
+        env.push((
+            crate::core::agent_hooks::LYREL_AGENT_HOOK_EXE_ENV.to_string(),
+            executable.to_string_lossy().into_owned(),
+        ));
+    }
     // Names the pane's own history file; the integration snippet is what
     // decides to use it, once the user's rc has said where their history was.
     if let Some((key, value)) = crate::daemon::history::env_for(pane, shell) {
@@ -527,7 +561,10 @@ fn pane_environment(
     env.extend(
         extra_env
             .iter()
-            .filter(|(k, _)| !names_capability_env(k))
+            .filter(|(k, _)| {
+                !names_capability_env(k)
+                    && !k.eq_ignore_ascii_case(crate::core::agent_hooks::LYREL_AGENT_HOOK_EXE_ENV)
+            })
             .map(|(k, v)| (k.clone(), v.clone())),
     );
     env
@@ -622,6 +659,28 @@ mod tests {
         cmd.env("ARGV0", "./lyrel-26.9.5-linux-x86_64.AppImage");
         apply_common_command_setup(&mut cmd, &None, 1, None, "sh");
         assert_eq!(cmd.get_env("ARGV0"), None);
+    }
+
+    #[test]
+    fn pane_hook_runner_belongs_to_the_serving_host_not_user_environment() {
+        let key = crate::core::agent_hooks::LYREL_AGENT_HOOK_EXE_ENV;
+        let extras = std::collections::HashMap::from([
+            (key.to_string(), "wrong-host-runner".to_string()),
+            (
+                key.to_ascii_lowercase(),
+                "case-insensitive-wrong-runner".to_string(),
+            ),
+        ]);
+        let environment = pane_environment(&extras, false, 1, None, "sh");
+        let runners: Vec<_> = environment
+            .iter()
+            .filter(|(name, _)| name.eq_ignore_ascii_case(key))
+            .collect();
+        assert_eq!(runners.len(), 1);
+        assert_eq!(
+            std::path::Path::new(&runners[0].1),
+            std::env::current_exe().unwrap()
+        );
     }
 
     #[cfg(unix)]

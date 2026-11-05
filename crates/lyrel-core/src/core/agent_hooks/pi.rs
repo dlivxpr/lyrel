@@ -130,7 +130,7 @@ import { spawnSync } from 'node:child_process';
 import bridge from './bridge.ts';
 const handlers = new Map();
 bridge({on(name, fn) { handlers.set(name, fn); }});
-const child = spawnSync(process.execPath, ['--input-type=module','--eval', `import bridge from './bridge.ts'; bridge({on(){throw new Error('nested Pi must not register pane hooks')}});`], {encoding:'utf8'});
+const child = spawnSync(process.execPath, ['--experimental-strip-types','--input-type=module','--eval', `import bridge from './bridge.ts'; bridge({on(){throw new Error('nested Pi must not register pane hooks')}});`], {encoding:'utf8'});
 assert.equal(child.status,0,child.stderr);
 const ctx = {mode:'tui',sessionManager:{getSessionId:()=> 'real-pi-source', getSessionFile:()=> '/store/source.jsonl',getSessionDir:()=> '/store',getCwd:()=> '/project'}, ui:{notify(){}}};
 const send = (name,event={}) => handlers.get(name)?.(event,ctx);
@@ -159,7 +159,12 @@ assert.equal(reports().at(-1).result.outcome,'interrupted');
 process.stdout.write(reports().map(e=>JSON.stringify(e)).join('\n'));
 "#;
         let output = std::process::Command::new(node)
-            .args(["--input-type=module", "--eval", script])
+            .args([
+                "--experimental-strip-types",
+                "--input-type=module",
+                "--eval",
+                script,
+            ])
             .current_dir(temp.path())
             .env("LYREL", "1")
             .env("HOME", temp.path())

@@ -13,6 +13,10 @@ fn main() {
         println!("cargo:rerun-if-changed=assets/favicon.ico");
         let mut res = winresource::WindowsResource::new();
         res.set_icon("assets/favicon.ico");
+        // 产品／发布者元数据不等同于 Authenticode 证书身份。
+        res.set("ProductName", "lyrel");
+        res.set("FileDescription", "lyrel");
+        res.set("CompanyName", "dlivxpr");
         if let Err(e) = res.compile() {
             println!("cargo:warning=failed to embed Windows icon: {e}");
         }

@@ -180,19 +180,14 @@ jobs:
             "target/${{ matrix.target }}/debug/lyrel-server.exe" `
             "target/${{ matrix.target }}/debug/lyrel-updater.exe"
 
-      # `cargo test` has no timeout of its own, so one hung test is
-      # indistinguishable from a slow suite until the job hits GitHub's six-hour
-      # limit. The suite intermittently hangs here — roughly one run in ten, on
-      # any branch, while the same commit passes on a re-run — and every time it
-      # did, the job held a runner slot for hours and reported nothing.
-      #
-      # Seen on Windows three times and on Linux once, so it is not a
-      # platform-specific test: `Build` succeeds, `Test` starts, and nothing
-      # further is ever written.
-      #
-      # The step's honest budget is small: ~75s warm and ~3.5 min when this step
-      # also has to compile the test targets, on every platform. 20 minutes is
-      # pure headroom, so a trip means a hang, not a slow runner.
+      # 测试 feature 会重编译 GPUI 和测试目标，普通 build 不能预热这部分。
+      # main CI 41987369719 在测试步骤内编译耗时 7m21s，挤占了原本用于
+      # 执行的 20 分钟；超时前测试仍持续完成，没有失败断言。
+      # 分离编译与执行，不跳过用例，也不放宽卡死保护。
+      - name: Compile desktop and headless tests
+        if: runner.os != 'Linux'
+        timeout-minutes: 20
+        run: cargo test --locked --features updater --target ${{ matrix.target }} --no-run
       - name: Test desktop and headless
         if: runner.os != 'Linux'
         timeout-minutes: 20

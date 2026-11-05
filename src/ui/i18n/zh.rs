@@ -5,7 +5,12 @@ pub fn translate_zh(key: L10nKey) -> Option<&'static str> {
         L10nKey::TerminalImageEvicted => "图片已淘汰",
         L10nKey::NotificationInbox => "通知",
         L10nKey::NotificationClearHistory => "清空通知历史",
-        L10nKey::NotificationScope => "本机已收到的应用通知 · 最近 500 条",
+        L10nKey::NotificationScope => {
+            "收录本机应用的成功、信息、警告与错误提示，保留最近 500 条；不含系统通知、终端输出和 GUI 关闭期间的事件。"
+        }
+        L10nKey::NotificationDetails => "完整内容",
+        L10nKey::NotificationBack => "返回通知列表",
+        L10nKey::NotificationCopy => "复制消息",
         L10nKey::NotificationEmpty => "暂无通知。新的应用通知会显示在这里。",
         L10nKey::NotificationSourceUnavailable => "来源已不可用",
         L10nKey::NotificationUnread => "未读",
@@ -1467,7 +1472,8 @@ pub fn translate_zh(key: L10nKey) -> Option<&'static str> {
         L10nKey::SftpTooltipMore => "更多",
         L10nKey::SftpMenuNewFolder => "新建文件夹",
         L10nKey::SftpMenuNewFile => "新建文件",
-        L10nKey::SftpMenuUpload => "上传…",
+        L10nKey::SftpMenuUploadFiles => "上传文件…",
+        L10nKey::SftpMenuUploadFolders => "上传文件夹…",
         L10nKey::SftpMenuGotoShellCwd => "转到 shell 目录",
         L10nKey::SftpMenuHideTransferHistory => "隐藏传输历史",
         L10nKey::SftpMenuTransferHistory => "传输历史",

@@ -3,7 +3,9 @@ import type { ExtensionAPI, ExtensionContext } from "@oh-my-pi/pi-coding-agent";
 import { getActiveProfile } from "@oh-my-pi/pi-utils";
 import { spawnSync } from "node:child_process";
 
-const EXE = __EXE__;
+// The pane's daemon owns the executable on this Host. An installed extension
+// can outlive the installation path that generated it (upgrade/portable move).
+const EXE = process.env.LYREL_AGENT_HOOK_EXE || __EXE__;
 // Injected from session_operations::OMP_SCOPE_ENV, not a second policy list.
 const SCOPE_ENV = __SCOPE_ENV__;
 
@@ -11,6 +13,20 @@ export default function (omp: ExtensionAPI) {
   if (!process.env.LYREL) return;
   let warned = false;
   let lastAssistant: {stopReason: string; errorMessage?: string} | undefined;
+  let titleWatch: Timer | undefined;
+  let lastTitle: {sessionId: string; title: string} | undefined;
+  function syncTitle(ctx: ExtensionContext) {
+    if (ctx.agent.kind !== "main") return;
+    const sessionId = ctx.sessionManager.getSessionId();
+    const title = ctx.sessionManager.getSessionName()?.replace(/[\u0000-\u001f\u007f-\u009f]/g, "").trim();
+    if (!title) { lastTitle = undefined; return; }
+    if (lastTitle?.sessionId === sessionId && lastTitle.title === title) return;
+    lastTitle = {sessionId, title};
+    ctx.ui.setTitle(title);
+    // OMP's Windows title API uses SetConsoleTitleW. Mirror this metadata once
+    // into the pane stream too, rather than relying on a conhost title event.
+    if (process.platform === "win32" && process.stdout.isTTY) process.stdout.write(`\x1b]2;${title}\x07`);
+  }
   function emit(event: string, ctx: ExtensionContext, extra: Record<string, unknown> = {}) {
     // Child extension factories bind independent contexts; module globals do not identify the pane.
     if (ctx.agent.kind !== "main") return;
@@ -32,7 +48,8 @@ export default function (omp: ExtensionAPI) {
     if (result.error || result.status !== 0 || !session_id) {
       if (!warned) {
         warned = true;
-        ctx.ui.notify("lyrel OMP status bridge unavailable; status and session identity may be stale. Check the selected host integration and daemon.", "warning");
+        const reason = !session_id ? "missing session identity" : result.error?.message ?? (result.signal ? `signal ${result.signal}` : `exit ${result.status}`);
+        ctx.ui.notify(`lyrel OMP status bridge unavailable (${reason}); status and session identity may be stale. Check the selected host integration and daemon.`, "warning");
       }
     }
   }
@@ -40,6 +57,12 @@ export default function (omp: ExtensionAPI) {
     return sessionId === ctx.sessionManager.getSessionId();
   }
   function started(ctx: ExtensionContext) {
+    if (ctx.agent.kind !== "main") return;
+    if (titleWatch !== undefined) ctx.clearTimer(titleWatch);
+    syncTitle(ctx);
+    // There is no public title-change extension event. A managed, deduplicated
+    // watch covers /rename and automatic names without owning every OSC title.
+    titleWatch = ctx.setInterval(() => syncTitle(ctx), 1000);
     lastAssistant = undefined;
     emit("session-start", ctx);
     const review = ctx.getPendingPlanReview();

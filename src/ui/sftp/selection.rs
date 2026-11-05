@@ -12,21 +12,26 @@ pub(super) fn primary(modifiers: gpui_kit::Modifiers) -> bool {
 impl LyrelApp {
     pub(super) fn sftp_select_entry(
         &mut self,
-        entry: &SftpEntry,
+        entry: &tree::SftpTarget,
         modifiers: gpui_kit::Modifiers,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         self.sftp_panel.focus_handle.focus(window, cx);
         let filter = self.sftp_panel.filter_input.read(cx).value();
-        let rows = sorted_filtered_entries(&self.sftp_panel.entries, &filter);
+        let rows = self
+            .sftp_panel
+            .visible_rows(&filter)
+            .into_iter()
+            .map(|(path, _, _)| path)
+            .collect::<Vec<_>>();
         let range = modifiers
             .shift
             .then(|| {
                 let anchor = self.sftp_panel.selection_anchor.as_ref()?;
                 Some((
-                    rows.iter().position(|e| &e.name == anchor)?,
-                    rows.iter().position(|e| e.name == entry.name)?,
+                    rows.iter().position(|path| path == anchor)?,
+                    rows.iter().position(|path| path == &entry.path)?,
                 ))
             })
             .flatten();
@@ -36,28 +41,41 @@ impl LyrelApp {
             }
             self.sftp_panel
                 .selected
-                .extend(rows[a.min(b)..=a.max(b)].iter().map(|e| e.name.clone()));
+                .extend(rows[a.min(b)..=a.max(b)].iter().cloned());
         } else if primary(modifiers) {
-            if !self.sftp_panel.selected.remove(&entry.name) {
-                self.sftp_panel.selected.insert(entry.name.clone());
+            if !self.sftp_panel.selected.remove(&entry.path) {
+                self.sftp_panel.selected.insert(entry.path.clone());
             }
-            self.sftp_panel.selection_anchor = Some(entry.name.clone());
+            self.sftp_panel.selection_anchor = Some(entry.path.clone());
         } else {
             self.sftp_panel.selected.clear();
-            self.sftp_panel.selected.insert(entry.name.clone());
-            self.sftp_panel.selection_anchor = Some(entry.name.clone());
+            self.sftp_panel.selected.insert(entry.path.clone());
+            self.sftp_panel.selection_anchor = Some(entry.path.clone());
         }
         cx.notify();
     }
 
-    fn sftp_selection_paths(&self) -> Vec<PathBuf> {
-        self.sftp_panel
-            .entries
+    pub(super) fn sftp_selection_paths(&self) -> Vec<PathBuf> {
+        let rows = self.sftp_panel.all_rows();
+        let selected = rows
             .iter()
-            .filter(|entry| {
-                self.sftp_panel.selected.contains(&entry.name) && safe_local_name(&entry.name)
+            .filter(|(path, entry, _)| {
+                self.sftp_panel.selected.contains(path) && safe_local_name(&entry.name)
             })
-            .map(|entry| PathBuf::from(remote_join(&self.sftp_panel.cwd, &entry.name)))
+            .map(|(path, _, _)| path.as_str())
+            .collect::<Vec<_>>();
+        selected
+            .iter()
+            .copied()
+            .filter(|path| {
+                !selected.iter().copied().any(|parent| {
+                    *path != parent
+                        && path
+                            .strip_prefix(parent)
+                            .is_some_and(|suffix| suffix.starts_with('/'))
+                })
+            })
+            .map(PathBuf::from)
             .collect()
     }
 
@@ -106,11 +124,12 @@ impl LyrelApp {
                 }
                 "a" => {
                     let filter = self.sftp_panel.filter_input.read(cx).value();
-                    self.sftp_panel.selected =
-                        sorted_filtered_entries(&self.sftp_panel.entries, &filter)
-                            .iter()
-                            .map(|entry| entry.name.clone())
-                            .collect();
+                    self.sftp_panel.selected = self
+                        .sftp_panel
+                        .visible_rows(&filter)
+                        .into_iter()
+                        .map(|(path, _, _)| path)
+                        .collect();
                     cx.notify();
                     true
                 }
@@ -206,11 +225,9 @@ impl LyrelApp {
                                 Ok(()) => {
                                     app.editor_path_removed(id, &path, cx);
                                     if app.sftp_panel.nav_gen == generation {
-                                        if let Some(name) =
-                                            path.file_name().and_then(|name| name.to_str())
-                                        {
-                                            app.sftp_panel.selected.remove(name);
-                                        }
+                                        app.sftp_panel
+                                            .selected
+                                            .remove(&path.to_string_lossy().into_owned());
                                     }
                                 }
                                 Err(error) => HostOps::notify_err(

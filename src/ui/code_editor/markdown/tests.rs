@@ -3097,6 +3097,130 @@ fn local_image_references_follow_document_rename_without_moving_assets(
 }
 
 #[gpui_kit::test]
+fn native_table_toolbar_tracks_its_table_across_selection_scroll_and_zoom(
+    cx: &mut gpui_kit::TestAppContext,
+) {
+    use crate::ui::app::test_window::harness_with_tabs;
+    use gpui_kit::{Focusable as _, ScrollDelta, point, px};
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("table-toolbar.md");
+    let mut source = String::from("# Heading\n\nBefore the first table.\n\n");
+    for table in ["First", "Second"] {
+        source.push('|');
+        for column in 0..24 {
+            source.push_str(&format!(" {table}-H{column:02} |"));
+        }
+        source.push_str("\n|");
+        for _ in 0..24 {
+            source.push_str(" --- |");
+        }
+        source.push_str("\n|");
+        for column in 0..24 {
+            source.push_str(&format!(" {table}-C{column:02} |"));
+        }
+        source.push_str("\n\nBetween or after tables.\n\n");
+    }
+    source.push_str(&"Scrollable tail.\n\n".repeat(60));
+    std::fs::write(&path, &source).unwrap();
+    let (app, mut context, _streams) = harness_with_tabs(cx, 1);
+    app.update_in(&mut context, |app, window, cx| {
+        app.open_file_in_editor(&path, window, cx)
+    });
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    let view = loop {
+        context.run_until_parked();
+        if let Some(view) = app.read_with(&context, |app, _| {
+            app.active_editor_input()
+                .and_then(|input| input.markdown().cloned())
+        }) {
+            start_in_source(&view, &mut context);
+            break view;
+        }
+        assert!(std::time::Instant::now() < deadline);
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    };
+    context.dispatch_action(crate::core::actions::ToggleDocumentPreview);
+    view.update_in(&mut context, |view, _, cx| view.set_soft_wrap(false, cx));
+    settle_live_geometry(&view, &mut context);
+    let settle = |context: &mut gpui_kit::VisualTestContext| {
+        for _ in 0..8 {
+            context.run_until_parked();
+            context.update(|window, cx| window.render_frame(cx));
+        }
+    };
+    for font_size in [16., 20., 24.] {
+        context.update(|_, cx| {
+            cx.global_mut::<crate::core::config::Config>().ui_font_size = font_size;
+            gpui_kit::component::Theme::update(cx, |theme| theme.font_size = px(font_size));
+        });
+        for table in ["First", "Second", "First"] {
+            for column in [0, 23] {
+                let at = source.find(&format!("{table}-C{column:02}")).unwrap();
+                let header = source.find(&format!("{table}-H{column:02}")).unwrap();
+                view.update_in(&mut context, |view, window, cx| {
+                    view.select_range(at..at, cx);
+                    view.focus_handle(cx).focus(window, cx);
+                });
+                settle(&mut context);
+                let before = context.update(|window, cx| {
+                    let toolbar = window.find("markdown-table-commands").bounds();
+                    let heading = view.read(cx).range_to_bounds(&(0..0), cx).unwrap();
+                    let header = view
+                        .read(cx)
+                        .range_to_bounds(&(header..header), cx)
+                        .unwrap();
+                    let surface = window.find("markdown-source").bounds();
+                    assert!(toolbar.top() > heading.bottom(), "not a page-level toolbar");
+                    assert!(toolbar.bottom() <= header.top());
+                    assert!(header.top() - toolbar.bottom() < window.rem_size());
+                    assert!(toolbar.left() >= surface.left());
+                    assert!(toolbar.left() - surface.left() < window.rem_size());
+                    assert_eq!(window.find_all("markdown-table-commands").len(), 1);
+                    (toolbar, header)
+                });
+                context.update(|window, cx| {
+                    window.scroll(
+                        "markdown-source",
+                        ScrollDelta::Pixels(point(px(0.), -window.rem_size())),
+                        cx,
+                    );
+                });
+                settle(&mut context);
+                context.update(|window, cx| {
+                    let toolbar = window.find("markdown-table-commands").bounds();
+                    let header = view
+                        .read(cx)
+                        .range_to_bounds(&(header..header), cx)
+                        .unwrap();
+                    assert!(
+                        toolbar.top() < before.0.top(),
+                        "toolbar scrolls with its table"
+                    );
+                    assert_eq!(
+                        toolbar.top() - before.0.top(),
+                        header.top() - before.1.top()
+                    );
+                    assert_eq!(toolbar.left(), before.0.left());
+                });
+                view.update_in(&mut context, |view, _, cx| {
+                    view.set_scroll_offset(point(px(0.), px(0.)), cx)
+                });
+                settle(&mut context);
+            }
+        }
+    }
+    view.update_in(&mut context, |view, _, cx| view.select_range(0..0, cx));
+    settle(&mut context);
+    context.update(|window, cx| {
+        assert!(window.try_find("markdown-table-commands").is_none());
+        assert_eq!(
+            view.read(cx).document().read(cx).encode().unwrap(),
+            source.as_bytes()
+        );
+    });
+}
+
+#[gpui_kit::test]
 fn native_table_structure_actions_share_undo_and_save_reopen(cx: &mut gpui_kit::TestAppContext) {
     use crate::ui::app::test_window::harness_with_tabs;
     use gpui_kit::{
