@@ -29,9 +29,6 @@ mod terminal_pty_fixture {
         env!("CARGO_MANIFEST_DIR"),
         "/../../tests/support/kitty_pty.rs"
     ));
-}
-
-mod sync_capture_fixture {
     include!(concat!(
         env!("CARGO_MANIFEST_DIR"),
         "/../../tests/support/synchronized_capture.rs"
