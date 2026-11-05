@@ -948,11 +948,10 @@ impl<'a> Installer<'a> {
             asset::INSTALL_DIR_COMPONENTS.join("/"),
             asset::binary_name(self.dialect.control, self.dialect.protocol)
         );
-        // `sh -c`, because the login shell over there need not be a POSIX one.
         let script = format!(
             r#"b="$HOME/{binary}"; if [ -f "$b" ] && [ -x "$b" ] && "$b" --stdio --bridge </dev/null >/dev/null 2>&1; then printf '{QUICK_PROVE_MARK}%s\n' "$b"; {RUNNING_EXE_COMMAND}; fi"#
         );
-        format!("sh -c {}", shell_quote(&script))
+        under_sh(&script)
     }
 
     fn quick_verdict(&self, stdout: &str) -> Option<ProvedServer> {
@@ -1013,7 +1012,7 @@ impl<'a> Installer<'a> {
     fn running_server_exe(&self, platform: RemotePlatform) -> Option<String> {
         match platform {
             RemotePlatform::Unix => {
-                let out = self.ops.run(RUNNING_EXE_COMMAND).ok()?;
+                let out = self.ops.run(&under_sh(RUNNING_EXE_COMMAND)).ok()?;
                 let exe = out.stdout.trim();
                 (!exe.is_empty()).then(|| exe.to_string())
             }
@@ -1386,7 +1385,7 @@ impl<'a> Installer<'a> {
         let script = match paths.platform {
             RemotePlatform::Unix => {
                 let settle = self.ops.launch_settle(&paths.binary);
-                launch_script(&paths.binary, &log, settle)
+                under_sh(&launch_script(&paths.binary, &log, settle))
             }
             RemotePlatform::Windows => {
                 windows_host::launch_command(&paths.binary, &log.log, &log.exit, &log.nonce)
@@ -1465,7 +1464,7 @@ impl<'a> Installer<'a> {
         // saw was the timeout below, and it blames a daemon for not stopping
         // when nothing had asked it to.
         let stop = match paths.platform {
-            RemotePlatform::Unix => TERMINATE_RUNNING_COMMAND.to_string(),
+            RemotePlatform::Unix => under_sh(TERMINATE_RUNNING_COMMAND),
             RemotePlatform::Windows => windows_host::stop_command(&paths.binary),
         };
         let stop_failure = match self.ops.run(&stop) {
@@ -1529,13 +1528,15 @@ impl<'a> Installer<'a> {
 /// the loop at top level the trailing `true` never ran and every one of these
 /// was a silent no-op on every Mac. That is what left `restart_daemon` waiting
 /// out its ten seconds for a daemon nobody had asked to stop.
-const RUNNING_EXE_COMMAND: &str = r#"if [ -d /proc ]; then for p in /proc/[0-9]*; do e=$(readlink "$p/exe" 2>/dev/null) || continue; case "$e" in */lyrel-server-*) printf '%s' "${e% (deleted)}"; break;; esac; done; else ps -xwwo pid=,comm= 2>/dev/null | while read -r pid e; do case "$e" in */lyrel-server-*) printf '%s' "$e"; break;; esac; done; fi; true"#;
+const RUNNING_EXE_COMMAND: &str = r#"if [ -d /proc ]; then for p in /proc/[0-9]*; do e=$(readlink "$p/exe" 2>/dev/null) || continue; case "$e" in */lyrel-server-*) tr '\000' '\n' 2>/dev/null <"$p/cmdline" | grep -qx -e --daemon || continue; printf '%s' "${e% (deleted)}"; break;; esac; done; else ps -xwwo pid=,comm= 2>/dev/null | while read -r pid e; do case "$e" in */lyrel-server-*) case "$(ps -p "$pid" -wwo args= 2>/dev/null)" in "$e --daemon"|"$e --daemon "*) printf '%s' "$e"; break;; esac;; esac; done; fi; true"#;
 
 /// Starts the line [`Installer::quick_prove`]'s script prints once the server
 /// answered, so nothing a login script prints can pass for it.
 const QUICK_PROVE_MARK: &str = "lyrel-quick-prove ";
 
-const TERMINATE_RUNNING_COMMAND: &str = r#"if [ -d /proc ]; then for p in /proc/[0-9]*; do e=$(readlink "$p/exe" 2>/dev/null) || continue; case "$e" in */lyrel-server-*) kill -TERM "${p#/proc/}" 2>/dev/null; break;; esac; done; else ps -xwwo pid=,comm= 2>/dev/null | while read -r pid e; do case "$e" in */lyrel-server-*) kill -TERM "$pid" 2>/dev/null; break;; esac; done; fi; true"#;
+// A server executable can also be a stdio/pane bridge. Only --daemon is a
+// restart target, including daemons left over from another protocol dialect.
+const TERMINATE_RUNNING_COMMAND: &str = r#"if [ -d /proc ]; then for p in /proc/[0-9]*; do e=$(readlink "$p/exe" 2>/dev/null) || continue; case "$e" in */lyrel-server-*) tr '\000' '\n' 2>/dev/null <"$p/cmdline" | grep -qx -e --daemon && kill -TERM "${p#/proc/}" 2>/dev/null;; esac; done; else ps -xwwo pid=,comm= 2>/dev/null | while read -r pid e; do case "$e" in */lyrel-server-*) case "$(ps -p "$pid" -wwo args= 2>/dev/null)" in "$e --daemon"|"$e --daemon "*) kill -TERM "$pid" 2>/dev/null;; esac;; esac; done; fi; true"#;
 
 /// The two files a launch writes beside the server binary. Named here because
 /// `is_first_install` reads the same directory and must not mistake one of
@@ -1768,8 +1769,25 @@ pub fn server_stdio_command(binary: &str) -> String {
     }
 }
 
+/// A word read identically by POSIX shells and fish. Fish interprets backslash
+/// escapes even inside single quotes, so backslashes must sit outside them.
 pub(crate) fn shell_quote(s: &str) -> String {
-    format!("'{}'", s.replace('\'', r"'\''"))
+    let mut quoted = String::with_capacity(s.len() + 2);
+    quoted.push('\'');
+    for c in s.chars() {
+        match c {
+            '\'' => quoted.push_str(r"'\''"),
+            '\\' => quoted.push_str(r"'\\'"),
+            c => quoted.push(c),
+        }
+    }
+    quoted.push('\'');
+    quoted
+}
+
+/// SSH exec is first parsed by the login shell, which can be fish rather than sh.
+fn under_sh(script: &str) -> String {
+    format!("sh -c {}", shell_quote(script))
 }
 
 fn connection_label(conn: &SshConnection) -> String {
