@@ -2095,6 +2095,7 @@ fn quiet_unfinished_synchronized_frame_paints_without_more_output(cx: &mut TestA
 
 #[gpui_kit::test]
 fn presentation_boundaries_publish_received_text_without_a_later_pty_frame(cx: &mut TestAppContext) {
+    use crate::daemon::protocol::WinSize;
     crate::core::config::pin_test_config_dir();
     cx.executor().allow_parking();
     cx.update(|cx| {
