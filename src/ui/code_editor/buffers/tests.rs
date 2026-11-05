@@ -57,7 +57,7 @@ fn terminal_citation_spellings_keep_first_line_navigation(cx: &mut TestAppContex
         "(citation.txt:3:1),\r\n",
         "(citation.txt(3,1)),\r\n",
         "(citation.txt#L3-L5),\r\n",
-        "(\"citation.txt\":3-5),\r\n",
+        "(\"citation.txt:3-5\"),\r\n",
         "({absolute}:3-5),\r\n",
     ] {
         terminal_citation_click_opens_the_editor(cx, output, false);
@@ -141,7 +141,7 @@ fn terminal_citation_click_opens_the_editor(cx: &mut TestAppContext, output: &st
     vcx.simulate_mouse_move(at, None, modifier);
     if remote {
         wait_until(&mut vcx, |vcx| {
-            pane.update_in(vcx, |pane, _, cx| pane.refresh_link_hover(true, cx))
+            pane.update_in(vcx, |pane, _, cx| pane.hover_link_at(2, 0, true, cx))
         });
     }
     vcx.simulate_mouse_down(at, MouseButton::Left, modifier);
