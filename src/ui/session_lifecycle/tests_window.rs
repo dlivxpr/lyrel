@@ -71,3 +71,107 @@ fn dispatching_close_window_takes_the_window_down_with_its_registration(cx: &mut
              which is what takes the window out of the registry"
     );
 }
+
+fn registered_tabs(
+    cx: &mut TestAppContext,
+) -> (
+    gpui_kit::Entity<LyrelApp>,
+    VisualTestContext,
+    Vec<crate::daemon::transport::Stream>,
+) {
+    let (app, mut vcx, streams) = crate::ui::app::test_window::harness_with_tabs(cx, 2);
+    app.update_in(&mut vcx, |app, window, cx| {
+        WindowRegistry::init(cx);
+        let weak = cx.entity().downgrade();
+        WindowRegistry::register(cx, app.workspace, window.window_handle(), weak);
+        app.focus_active(window, cx);
+    });
+    vcx.run_until_parked();
+    (app, vcx, streams)
+}
+
+#[gpui_kit::test]
+fn close_window_shortcut_keeps_the_native_tab_close_distinct(cx: &mut TestAppContext) {
+    let (app, mut vcx, _streams) = registered_tabs(cx);
+    let kept = app.read_with(&vcx, |app, _| app.tabs[1].id());
+
+    let tab_chord = if cfg!(target_os = "macos") {
+        "secondary-w"
+    } else {
+        "secondary-shift-w"
+    };
+    vcx.simulate_keystrokes(tab_chord);
+    vcx.run_until_parked();
+    app.read_with(&vcx, |app, _| {
+        assert_eq!(
+            app.tabs.len(),
+            1,
+            "the native tab chord closes only the active tab"
+        );
+        assert_eq!(app.tabs[0].id(), kept);
+    });
+    assert_eq!(vcx.update(|_, cx| WindowRegistry::count(cx)), 1);
+
+    #[cfg(target_os = "macos")]
+    {
+        vcx.simulate_keystrokes("secondary-shift-w");
+        drop(vcx);
+        cx.run_until_parked();
+        assert!(cx.update(|cx| cx.windows().is_empty()));
+        assert!(cx.update(|cx| WindowRegistry::open_windows(cx).is_empty()));
+    }
+}
+
+#[gpui_kit::test]
+fn close_window_override_keeps_unsaved_confirmation_and_cancellation(cx: &mut TestAppContext) {
+    use crate::core::actions::EditorNewFile;
+    use crate::core::config::KeybindingOverride;
+    use crate::ui::i18n::{L10nKey, t};
+    use gpui_kit::test::TestWindowExt as _;
+
+    let (app, mut vcx, _streams) = registered_tabs(cx);
+    vcx.update(|_, cx| {
+        cx.global_mut::<Config>().keybindings.insert(
+            "CloseWindow".to_string(),
+            KeybindingOverride::Exact(vec!["secondary-alt-f9".to_string()]),
+        );
+        crate::ui::keymap::rebind(cx);
+    });
+    vcx.dispatch_action(EditorNewFile);
+    vcx.run_until_parked();
+    vcx.update(|window, cx| window.input("keep these edits", cx));
+    vcx.run_until_parked();
+
+    #[cfg(target_os = "macos")]
+    {
+        vcx.simulate_keystrokes("secondary-shift-w");
+        vcx.run_until_parked();
+        assert!(
+            !vcx.has_pending_prompt(),
+            "the override retires the default key"
+        );
+        assert_eq!(vcx.update(|_, cx| WindowRegistry::count(cx)), 1);
+    }
+
+    vcx.simulate_keystrokes("secondary-alt-f9");
+    vcx.run_until_parked();
+    assert!(vcx.has_pending_prompt());
+    vcx.simulate_prompt_answer(t(L10nKey::Cancel));
+    vcx.run_until_parked();
+    assert_eq!(vcx.update(|_, cx| WindowRegistry::count(cx)), 1);
+    app.read_with(&vcx, |app, cx| {
+        let file = app.active_buffer().expect("Cancel keeps the document open");
+        assert!(file.dirty);
+        assert_eq!(file.input.read(cx).text().to_string(), "keep these edits");
+        assert_eq!(app.tabs.len(), 2, "closing a window must not close a tab");
+    });
+
+    vcx.simulate_keystrokes("secondary-alt-f9");
+    vcx.run_until_parked();
+    assert!(vcx.has_pending_prompt());
+    vcx.simulate_prompt_answer(t(L10nKey::EditorDiscard));
+    drop(vcx);
+    cx.run_until_parked();
+    assert!(cx.update(|cx| cx.windows().is_empty()));
+    assert!(cx.update(|cx| WindowRegistry::open_windows(cx).is_empty()));
+}

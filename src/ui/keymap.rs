@@ -461,7 +461,7 @@ fn shipped_bindings() -> Vec<(&'static str, &'static str)> {
         // shipping unbound: the palette and the Keybindings page both carry
         // this, so a key is one line of config away.
         ("NewWindow", per_platform("secondary-n", "")),
-        ("CloseWindow", ""),
+        ("CloseWindow", per_platform("secondary-shift-w", "")),
         (
             "CloseActiveTab",
             per_platform("secondary-w", "secondary-shift-w"),
