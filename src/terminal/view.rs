@@ -300,6 +300,8 @@ pub struct TerminalView {
     git_prompt_cycle: u64,
     pub(super) input: super::prompt_input::PromptInput,
     history: TerminalHistory,
+    /// Native shell-channel history waits for this pane's SSH connection.
+    native_history_seed_pending: bool,
     completion: TerminalCompletion,
     integration_notice: Option<String>,
     integration_notice_shown: bool,
@@ -752,6 +754,7 @@ impl TerminalView {
             git_prompt_cycle: 0,
             input: super::prompt_input::PromptInput::new(prompt_editor),
             history: TerminalHistory::new(),
+            native_history_seed_pending: false,
             completion: TerminalCompletion::default(),
             integration_notice: None,
             integration_notice_shown: false,

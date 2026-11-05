@@ -47,7 +47,8 @@ fn native_ssh_host_menu_disconnect_preserves_other_window(cx: &mut gpui_kit::Tes
     vcx.update(|window, cx| {
         window.render_frame(cx);
         let more = ("switcher-row-more", workspace.element_key() as usize);
-        window.hover(more, cx);
+        let more_position = window.find(more).bounds().center();
+        window.pointer_move(more_position, None, cx);
         window.click(more, cx);
         let disconnect = window.find_by_label("Disconnect").bounds().center();
         window.pointer_down(disconnect, gpui_kit::MouseButton::Left, cx);

@@ -191,6 +191,7 @@ cargo test --locked -p lyrel-server --test native_ssh_lifecycle \
 原生 shell-channel 历史用例开启 shell integration，并先确认真实连接和 prompt editor 已激活；
 只连通关闭 shell integration 的窗格，不能证明 lyrel 的历史播种正常。
 隔离 SSH 服务报告的 `SHELL` 必须与实际执行者一致，不能用广告 bash、强制执行 fish 的夹具判定产品失败。
+更正服务端 shell 前提后，使用新的自有本机 router daemon 验收；同一 daemon 对相同连接 key 的 shell probe 会缓存，关标签页或切换 profile 开关不代表重新探测。
 
 ```sh
 cargo test --locked -p lyrel --bin lyrel-app native_ssh_connected_shell_seeds_remote_history -- --ignored --test-threads=1 --nocapture

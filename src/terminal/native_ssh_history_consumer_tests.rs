@@ -135,7 +135,7 @@ fn native_ssh_connected_shell_seeds_remote_history(cx: &mut TestAppContext) {
     let host = fixture.connect_control();
     let path = host.join(&host.home(), ".bash_history");
     assert!(!host.exists(&path), "refuse to overwrite pre-existing fixture history");
-    host.write_file(&path, b"echo NATIVE_SFTP_ONLY_185\n").unwrap();
+    host.write_file(&path, b"echo LYREL185_NATIVE_HISTORY_SEED\n").unwrap();
     let _history = RemoteHistoryFile(host, path);
     let endpoint = fixture.local_config_dir().join(if cfg!(windows) { "daemon.port" } else { "daemon.sock" });
     let mut stream = crate::daemon::transport::connect_endpoint_at(&endpoint).unwrap();
@@ -183,15 +183,15 @@ fn native_ssh_connected_shell_seeds_remote_history(cx: &mut TestAppContext) {
         let seeded = view.update(cx, |view, cx| {
             assert!(view.host_id.is_local(), "the original native shell pane is not a remote-daemon workspace");
             view.follow_history_scope(cx);
-            view.history.entries().iter().any(|entry| entry == "echo NATIVE_SFTP_ONLY_185")
+            view.history.entries().iter().any(|entry| entry == "echo LYREL185_NATIVE_HISTORY_SEED")
         });
         if seeded { break; }
         assert!(Instant::now() < deadline, "connected native shell never seeded the far-end history through its own SFTP connection");
         std::thread::sleep(Duration::from_millis(10));
     }
     view.update(cx, |view, cx| {
-        view.input.editor_mut().set("echo NATIVE_SFTP_ONLY");
+        view.input.editor_mut().set("echo LYREL185_NATIVE_HISTORY");
         view.handle_editor_key(&key("up"), cx);
-        assert_eq!(view.input.editor().text(), "echo NATIVE_SFTP_ONLY_185");
+        assert_eq!(view.input.editor().text(), "echo LYREL185_NATIVE_HISTORY_SEED");
     });
 }
