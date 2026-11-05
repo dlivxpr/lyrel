@@ -185,7 +185,11 @@ Git 的新增/修改标记种子为绿 `#2F8A52` / `#4CC27A`、琥珀 `#B7791F` 
   提示符所有权同步、settle／flush 的判断与非阻塞 writer 入队使用交接点同一个实时 grid guard，
   不根据缓存绘制模式向 shell 交接输入；实际按键、鼠标协议及提示符输入路由仍读取实时终端状态。
   同步期间的选择与复制读取 committed cells：Tab 只跳过实际 tab stop 之前的 NUL 展开空白，
-  stop 之后的真实 NUL 间隔仍为空格；按行选择保留末尾换行，普通／折行／宽字符／组合字符边界与正常 Rio 选择一致。
+  stop 之后的真实 NUL 间隔仍为空格；尾空行／全空选区不凭空加入换行，内部空行与 soft-wrap 间隔保留，
+  按行选择单独保留一个末尾换行。普通可达边界以正常 Rio 复制与独立可见字面量共同核验。
+  已知例外：正式 Rio `0.5.28`／`0.5.29` 的 normal copy 在 Simple 选区仅终止于 `LeadingSpacer` 时，
+  上游补偿分支会读入前一物理行的首字符；本次不改 normal 路径，也不将该旧 quirk 复制进 held 路径。
+  held 只序列化 committed 实际可见选区，不引入前行字符或未选中的下一行 wide base，不宣称所有边界字节无例外等价。
   GUI 通过原有 `ParseBridge` 回调记录一维 stop 元数据，涵盖 HTS／TBC／RIS 与 resize 后新增的默认 stops，
   复用原有光标元数据 mutex 并在同一 VT guard 内采样到 cell 的 bool；不克隆整表、不建立第二个 grid／解析器或新锁。
   已进入 presented 状态的拖选更新不获取实时 grid 锁；只在采用或更新 live selection 时取原有锁。

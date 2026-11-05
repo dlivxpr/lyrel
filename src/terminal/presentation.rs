@@ -124,7 +124,13 @@ impl<'a> PresentedGrid<'a> {
         if self.cells.is_empty() {
             return 0;
         }
-        let ix = self.lead(row.min(self.rows() - 1) * self.cols + col.min(self.cols - 1));
+        let ix = row.min(self.rows() - 1) * self.cols + col.min(self.cols - 1);
+        // A leading spacer still belongs to this physical row. Simple
+        // selection must preserve that row's break before the wide glyph.
+        if self.cells[ix].wide == Wide::LeadingSpacer {
+            return ix + usize::from(!left);
+        }
+        let ix = self.lead(ix);
         ix + if left {
             0
         } else if self.cells[ix].wide == Wide::Wide {
@@ -247,14 +253,26 @@ impl<'a> PresentedGrid<'a> {
         clicks: usize,
         cfg: &crate::core::config::Config,
     ) -> Range<usize> {
+        if row >= self.rows() || col >= self.cols {
+            return 0..0;
+        }
+        if clicks >= 3 {
+            // Lines can include a completely blank row or a lone leading
+            // spacer, neither of which has a character-to-cell click point.
+            let mut first = row;
+            while first > 0 && self.wraps(first - 1) {
+                first -= 1;
+            }
+            let mut last = row;
+            while last + 1 < self.rows() && self.wraps(last) {
+                last += 1;
+            }
+            return first * self.cols..(last + 1) * self.cols;
+        }
         let Some((text, points, click)) = self.logical_line(col, row, false) else {
             return 0..0;
         };
         let chars: Vec<_> = text.chars().collect();
-        if clicks >= 3 {
-            return self.index(points[0]) / self.cols * self.cols
-                ..(self.index(*points.last().unwrap()) / self.cols + 1) * self.cols;
-        }
         if cfg.smart_select
             && let Some((_, runs)) = self.hyperlink(col, row)
         {
@@ -299,10 +317,12 @@ impl<'a> PresentedGrid<'a> {
         let start = self.cells.iter().position(|cell| cell.selected)?;
         let end = self.cells.iter().rposition(|cell| cell.selected)?;
         let mut text = String::new();
+        let mut pending_spaces = 0;
+        let mut pending_breaks = 0;
         for row in start / self.cols..=end / self.cols {
             let from = start.max(row * self.cols);
             let to = (end + 1).min((row + 1) * self.cols);
-            let line_start = text.len();
+            let mut row_has_content = false;
             let mut tab_suffix = false;
             for cell in &self.cells[from..to] {
                 if cell.spacer || !cell.selected {
@@ -314,17 +334,30 @@ impl<'a> PresentedGrid<'a> {
                     continue;
                 }
                 tab_suffix = cell.c == '\t';
+                if matches!(cell.c, ' ' | '\0')
+                    && cell.marks.as_deref().is_none_or(|marks| marks.is_empty())
+                {
+                    pending_spaces += 1;
+                    continue;
+                }
+                // Only later content commits blanks. This keeps embedded
+                // blank rows and wrap gaps, but drops trailing empty rows.
+                text.extend(std::iter::repeat_n('\n', pending_breaks));
+                pending_breaks = 0;
+                text.extend(std::iter::repeat_n(' ', pending_spaces));
+                pending_spaces = 0;
                 text.push(if cell.c == '\0' { ' ' } else { cell.c });
                 if let Some(marks) = &cell.marks {
                     text.extend(marks.iter());
                 }
+                row_has_content = true;
             }
-            if !self.wraps(row) {
-                let trimmed = text[line_start..].trim_end_matches(' ').len();
-                text.truncate(line_start + trimmed);
-                if row < end / self.cols {
-                    text.push('\n');
-                }
+            let wraps = self.wraps(row);
+            if !row_has_content || !wraps {
+                pending_breaks += 1;
+            }
+            if !wraps {
+                pending_spaces = 0;
             }
         }
         if lines {

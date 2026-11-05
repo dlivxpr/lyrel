@@ -15,7 +15,7 @@
 
 ### 修复
 
-- #168 审查修复：同步 hold 的等面积 resize 与 ESU／期限早于有序 `Size` 的过渡均保留 committed 行列与命中几何，竞争 fallback 不按新列数解释旧帧；relink 首个 hold 没有旧 snapshot 时按新 surface 呈现空帧，避免残留几何越界。可见复制按 committed 默认／自定义 tab stops 去除 NUL 展开后缀，保留 stop 后间隔、TBC／RIS／resize 增长语义与按行选择末尾换行；presented 拖选不再争抢实时 reader 锁。新增真实 Root／TerminalView 的过渡、剪贴板、普通／折行／宽字／组合边界回归；受控持锁探针完成 red／green 后移出永久测试，原生和完整平台验收仍由集中检查点负责。
+- #168 审查修复：同步 hold 的等面积 resize 与 ESU／期限早于有序 `Size` 的过渡均保留 committed 行列与命中几何，竞争 fallback 不按新列数解释旧帧；relink 首个 hold 没有旧 snapshot 时按新 surface 呈现空帧，避免残留几何越界。可见复制按 committed 默认／自定义 tab stops 去除 NUL 展开后缀，保留 stop 后间隔、TBC／RIS／resize 增长、内部空行与折行空格；丢弃尾空行／全空选区的多余分隔，Lines 单独保留一个末尾换行。presented 拖选不再争抢实时 reader 锁。真实 Root／TerminalView 回归覆盖过渡、剪贴板及 Unicode／空白边界；held 不复刻上游旧 LeadingSpacer 复制读入前行字符的 quirk，normal 路径保持不变。受控持锁探针完成 red／green 后移出永久测试，原生和完整平台验收仍由集中检查点负责。
 - #171：在实际终端 snapshot／paint 发布点保留上次 committed 文字、光标、图片及可见交互，避免焦点／主题／光标重绘泄漏半帧。reader 通过现有链路读取期限独立执行 150 ms fail-safe，处理每次 BSU 重启、结束、resize／reset、命令边界、replay／relink 与退出。协议回复、输入模式及 daemon 图片锚点继续实时推进；CLI `capture --plain` 无 GUI 也捕获已收到的未闭合同步输出。补充 Root paint、可见复制、安静流期限、分片和真实 CLI／daemon／PTY 回归；未执行的测试、原生与性能项目保留为集中验收项，macOS 交由 #167。
 - #171 组合回归反馈修正共享 Unicode／换行场景：显式设置 DECAWM，使 Windows raw sender 与 Unix 使用相同 autowrap 前提，不改生产解析或屏蔽字符差异；呈现行提取沿用 renderer 与既有测试的 packed NUL→空格约定，保留内部分栏，仅由逻辑范围比较裁掉行尾填充，不改生产字形。可见图片删除改为检查实际 TerminalElement 的存活像素、新 paint 和已提交 display list，不再要求无关祖先 view 的 render 计数增加。隐藏 pane 的无重绘与返回当前像素断言保留，修复后的完整结果仍由集中验收记录。
 - #170 首次 Fast 编译发现搜索行的 `IntoElement` derive 仅从 Fast prelude 导入，展开后引用未声明的 `gpui::` 路径；改为显式使用 Kit 根提供的官方 facade-aware derive，保留原搜索行、ListDelegate、选择与无障碍行为，不添加 engine 依赖、alias 或手写 trait shim。修复后的编译与原有行为套件由集中检查点验证。

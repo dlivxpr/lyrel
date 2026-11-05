@@ -2328,29 +2328,61 @@ fn synchronized_copy_preserves_live_tab_line_wrap_and_unicode_semantics(cx: &mut
     let (view, window) = graphics_build_rooted_consumer_at(
         cx, 176, client, Vec::new(), TermSize::new(80, 24), PtySource::Raw,
     );
-    DaemonMsg::Output("\x1b[?7h\x1b[2J\x1b[Ha\tb\x1b[2;1Hplain  text\x1b[3;79H界e\u{301}Z\x1b[5;1HAe\u{301}中B".as_bytes().to_vec())
+    DaemonMsg::Output("\x1b[?7h\x1b[2J\x1b[Ha\tb\x1b[2;1Hplain  text\x1b[3;79H界e\u{301}Z\x1b[5;1HAe\u{301}中B\x1b[7;1Ha\x1b[10;1Hb\x1b[11;1Htail   suffix\x1b[12;1Htrail   \x1b[13;80H中e\u{301}B\x1b[15;1H   indented\x1b[16;1Hhard-a\x1b[17;1Hhard-b\x1b[21;78Ha   b".as_bytes().to_vec())
         .encode(&mut sender).unwrap();
     graphics_recovery_wait(cx, "copy fixture did not paint", |cx| {
         view.read_with(cx, |view, _| view.grid_snap.is_some()
             && sync_presented_row(view, 4).starts_with("Ae\u{301}中B"))
     });
+    let wrapped_line = format!("{}界e\u{301}Z\n", " ".repeat(78));
+    let leading_wrapped_line = format!("\n{}中e\u{301}B\n", " ".repeat(79));
+    let wrapped_space_line = format!("{}a   b\n", " ".repeat(77));
     let cases = [
         ("tab", (0,0), (8,0), 1, "a\tb"),
         ("line", (0,0), (8,0), 3, "a\tb\n"),
+        ("tab filler selection starts after Tab", (2,0), (8,0), 1, "      b"),
+        ("selection ends within tab run", (0,0), (3,0), 1, "a\t"),
         ("plain", (0,1), (10,1), 1, "plain  text"),
         ("wrap", (78,2), (1,3), 1, "界e\u{301}Z"),
+        ("wrapped Lines", (78,2), (1,3), 3, wrapped_line.as_str()),
+        ("soft wrap preserves cross-row spaces", (77,20), (1,21), 1, "a   b"),
+        ("Lines soft wrap preserves cross-row spaces", (77,20), (1,21), 3, wrapped_space_line.as_str()),
         ("wide and combining boundaries", (1,4), (3,4), 1, "e\u{301}中"),
+        ("starts at wide trailing spacer", (3,4), (4,4), 1, "中B"),
+        ("ends at wide trailing spacer", (0,4), (3,4), 1, "Ae\u{301}中"),
+        ("combining cell only", (1,4), (1,4), 1, "e\u{301}"),
+        ("Simple trailing blank rows", (0,6), (79,8), 1, "a"),
+        ("Lines trailing blank rows", (0,6), (79,8), 3, "a\n"),
+        ("embedded blank rows stay", (0,6), (0,9), 1, "a\n\n\nb"),
+        ("Rio trims selected trailing spaces", (0,10), (6,10), 1, "tail"),
+        ("right padding is not text", (0,10), (79,10), 1, "tail   suffix"),
+        ("terminal trailing spaces", (0,11), (79,11), 1, "trail"),
+        ("starts at wide leading spacer", (79,12), (3,13), 1, "\n中e\u{301}B"),
+        ("Lines starts at wide leading spacer", (79,12), (3,13), 3, leading_wrapped_line.as_str()),
+        ("Lines ends at wide leading spacer", (78,12), (79,12), 3, leading_wrapped_line.as_str()),
+        ("leading whitespace stays", (0,14), (10,14), 1, "   indented"),
+        ("hard line break", (0,15), (5,16), 1, "hard-a\nhard-b"),
+        ("Simple all blank rows", (0,17), (79,18), 1, ""),
+        ("Lines all blank rows", (0,17), (79,18), 3, "\n"),
     ];
     // Establish Rio's ordinary consumer result against independent literals
     // before any hidden state exists, not by copying the live partial grid.
+    let mut live_copies = Vec::new();
+    let mut failures = Vec::new();
     for &(label, (start_col,start_row), (end_col,end_row), clicks, expected) in &cases {
         view.update(cx, |view, cx| {
+            cx.write_to_clipboard(gpui_kit::ClipboardItem::new_string("copy-sentinel".to_owned()));
             view.on_select_start(start_col, start_row, true, clicks, false, cx);
             view.on_select_update(end_col, end_row, false, cx);
             view.on_select_end(cx);
             view.copy_selection(cx);
         });
-        assert_eq!(cx.update(|cx| cx.read_from_clipboard().and_then(|item| item.text())).as_deref(), Some(expected), "live {label}");
+        let clipboard_expected = if expected.is_empty() { "copy-sentinel" } else { expected };
+        let live = cx.update(|cx| cx.read_from_clipboard().and_then(|item| item.text()));
+        if live.as_deref() != Some(clipboard_expected) {
+            failures.push(format!("live {label}: literal={expected:?}, clipboard={live:?}"));
+        }
+        live_copies.push(live);
     }
     // Preserve a live Lines selection in the committed picture as well as
     // exercising Lines gestures started after the hold below.
@@ -2381,24 +2413,35 @@ fn synchronized_copy_preserves_live_tab_line_wrap_and_unicode_semantics(cx: &mut
         window.refresh();
         window.draw(cx).clear(cx);
     }).unwrap();
-    let mut failures = Vec::new();
     view.update(cx, |view, cx| view.copy_selection(cx));
     let copied = cx.update(|cx| cx.read_from_clipboard().and_then(|item| item.text()));
     if copied.as_deref() != Some("a\tb\n") {
         failures.push(format!("committed live Lines: {copied:?}"));
     }
-    for &(label, (start_col,start_row), (end_col,end_row), clicks, expected) in &cases {
+    for (case_index, &(label, (start_col,start_row), (end_col,end_row), clicks, expected)) in cases.iter().enumerate() {
         view.update(cx, |view, cx| {
+            cx.write_to_clipboard(gpui_kit::ClipboardItem::new_string("copy-sentinel".to_owned()));
             view.on_select_start(start_col, start_row, true, clicks, false, cx);
             view.on_select_update(end_col, end_row, false, cx);
             view.on_select_end(cx);
             view.copy_selection(cx);
         });
         let copied = cx.update(|cx| cx.read_from_clipboard().and_then(|item| item.text()));
-        if copied.as_deref() != Some(expected) {
-            failures.push(format!("held {label}: expected {expected:?}, got {copied:?}"));
+        if copied != live_copies[case_index] {
+            failures.push(format!("held {label}: literal={expected:?}, live={:?}, held={copied:?}", live_copies[case_index]));
         }
     }
+    // Rio's pre-existing end-LeadingSpacer copy quirk reads the preceding
+    // row. The held contract copies only the visible selected placeholders,
+    // not that unrelated character or the unselected next-row wide glyph.
+    view.update(cx, |view, cx| {
+        cx.write_to_clipboard(gpui_kit::ClipboardItem::new_string("copy-sentinel".to_owned()));
+        view.on_select_start(78,12,true,1,false,cx);
+        view.on_select_update(79,12,false,cx);
+        view.on_select_end(cx);
+        view.copy_selection(cx);
+    });
+    assert_eq!(cx.update(|cx| cx.read_from_clipboard().and_then(|item| item.text())).as_deref(), Some("copy-sentinel"));
     graphics_recovery_destroy(view, window, cx);
     assert!(failures.is_empty(), "{}", failures.join("\n"));
 }
