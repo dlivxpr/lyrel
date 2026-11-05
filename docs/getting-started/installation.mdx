@@ -224,7 +224,7 @@ Windows Chromium Cookie 的 AES-GCM 解密使用正式 registry 的 `aes-gcm =0.
 
 该源码的空关注历史和多按钮回归各在真实消费者中执行一项；后者通过实际 daemon／PTY 验证交错按键报告。Windows 原生窗口另已确认空关注提示的历史回看、复制与持久化，以及窗外按下不误报、合法跨 pane 拖动只由原 pane 上报；自动化工具把多按钮原生手势串行化，因此不把单按钮原生结果当成交错手势的证据。无 `/proc` 的参数顺序与真实停止在两个独立私有 PID namespace 中分别用 `sh`／fish 执行；这不替代原生 macOS `ps`。公开 updater `verify-portable` 正常与拒绝场景、独进程 symlink watcher、同源固定 pin SSH 安装／重启和四个 Root SSH consumer 分别留证，不操作已安装应用或用户会话。
 
-未测项仍需自己的前提：Windows DA1 应用实收、隔离 Windows 身份下的 stored-toast activation、两个独立原生 GUI 进程，以及原生 macOS 快捷键、FSEvents、交通灯、不同 DPI 像素、opener／zombie 和更新后 adoption。既有同进程双窗口、Root、WSL 或 headless 结果不能替代这些原生边界；后续修正版本也不能回填旧命令的退出码。
+未测项仍需自己的前提：Windows DA1 应用实收、隔离 Windows 身份下的 stored-toast activation，以及原生 macOS 快捷键、FSEvents、交通灯、不同 DPI 像素、opener／zombie 和更新后 adoption。#185 的两个原生窗口属于同一 GUI 进程，工作区竞争与重连另由两个独立 Control client 和 Root 验证；未执行的独立 GUI 进程组合不是新增的验收硬门槛。Root、WSL 或 headless 结果不能替代缺失的原生平台边界；后续修正版本也不能回填旧命令的退出码。
 
 ### 原生 Markdown 编辑器的渲染依赖
 
