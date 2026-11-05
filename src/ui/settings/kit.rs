@@ -12,6 +12,7 @@
 
 use std::rc::Rc;
 
+use gpui_kit::TestSupportExt as _;
 use gpui_kit::component::input::{Input, InputState};
 use gpui_kit::component::{ActiveTheme as _, Icon, h_flex, v_flex};
 use gpui_kit::{
@@ -344,6 +345,7 @@ impl RenderOnce for Btn {
         let resting_primary = kind == BtnKind::Primary && (self.disabled || self.dimmed);
         let base = h_flex()
             .id(self.id)
+            .test_support()
             .flex_shrink_0()
             .items_center()
             .gap(px(6.))
