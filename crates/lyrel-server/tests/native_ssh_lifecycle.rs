@@ -1,6 +1,6 @@
 //! Real native shell-channel lifetime, separate from routed remote-daemon PTYs.
 #[path = "../../../tests/support/native_ssh_graphics.rs"]
-mod fixture;
+pub mod fixture;
 
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};

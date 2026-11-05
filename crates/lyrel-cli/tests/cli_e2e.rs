@@ -31,6 +31,13 @@ mod terminal_pty_fixture {
     ));
 }
 
+mod sync_capture_fixture {
+    include!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../tests/support/synchronized_capture.rs"
+    ));
+}
+
 const DAEMON_ENV: &str = "LYREL_CLI_E2E_DAEMON";
 const PASTE_AWARE_FIXTURE_ARG: &str = "--lyrel-e2e-paste-aware-fixture";
 const CAPTURE_TAIL_FIXTURE_ARG: &str = "--lyrel-e2e-capture-tail-fixture";

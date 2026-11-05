@@ -7,6 +7,11 @@ fn main() {
     if target_os == "macos" {
         // Keep the desktop runtime floor independent of the SDK selected for Fast.
         println!("cargo:rustc-link-arg-bin=lyrel-app=-mmacosx-version-min=15.0");
+        if matches!(std::env::var("PROFILE").as_deref(), Ok("debug")) {
+            // Debug/test images exceed compact unwind's 24-bit DWARF offsets.
+            // Keep full unwind records rather than suppressing linker diagnostics.
+            println!("cargo:rustc-link-arg=-Wl,-no_compact_unwind,-keep_dwarf_unwind");
+        }
     }
     #[cfg(windows)]
     {

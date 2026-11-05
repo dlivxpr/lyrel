@@ -11,12 +11,7 @@ use crate::daemon::protocol::{ClientMsg, DaemonMsg, ForwardStatus, ShellSpec, Ss
 use crate::terminal::PaneWorkspace;
 use crate::ui::app::{LyrelApp, test_window::harness_with_tabs};
 
-mod native_fixture {
-    include!(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/tests/support/native_ssh_graphics.rs"
-    ));
-}
+use crate::native_ssh_graphics_fixture as native_fixture;
 
 struct NativePane(u64);
 impl Drop for NativePane {

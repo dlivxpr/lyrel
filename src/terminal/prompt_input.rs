@@ -905,7 +905,7 @@ impl PromptInput {
         self.drag_word = None;
         gesture
     }
-    #[cfg(test)]
+    #[cfg(all(test, target_os = "windows"))]
     pub(super) fn reset_handoff(&mut self) {
         self.handoff = None;
     }

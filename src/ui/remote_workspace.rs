@@ -2628,7 +2628,6 @@ mod tests {
     fn a_late_success_does_not_publish_a_retired_windows_connection(
         cx: &mut gpui_kit::TestAppContext,
     ) {
-        use gpui_kit::VisualContext as _;
         use lyrel_core::host::Host as _;
 
         let (app, mut vcx) = crate::ui::app::test_window::harness(cx);

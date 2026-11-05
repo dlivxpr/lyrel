@@ -1365,6 +1365,7 @@ fn sync_native_appearance(_dark: Option<bool>) {}
 mod tests {
     use super::*;
     use gpui_kit::TestAppContext;
+    #[cfg(target_os = "windows")]
     use gpui_kit::point;
 
     #[gpui_kit::test]

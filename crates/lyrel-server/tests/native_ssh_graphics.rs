@@ -1,7 +1,7 @@
 //! Explicit live-endpoint coverage: production local router -> pinned native SSH
 //! -> Linux daemon -> real Linux PTY. This is not native-window/GPU evidence.
 #[path = "../../../tests/support/native_ssh_graphics.rs"]
-mod fixture;
+pub mod fixture;
 
 use std::collections::{BTreeMap, VecDeque};
 use std::io::Write;
