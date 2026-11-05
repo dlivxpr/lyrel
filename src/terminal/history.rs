@@ -42,6 +42,38 @@ pub struct History {
     pub meta: HashMap<String, EntryMeta>,
 }
 
+impl History {
+    /// A shell seed predates commands already recorded by the live view.
+    /// Overlapping snapshots are not additional executions of the command.
+    pub(super) fn prepend_seed(&mut self, mut seed: History) {
+        let present: HashSet<&str> = self.entries.iter().map(String::as_str).collect();
+        seed.entries.retain(|line| !present.contains(line.as_str()));
+        seed.entries.append(&mut self.entries);
+        self.entries = seed.entries;
+        for (line, count) in seed.counts {
+            self.counts.entry(line).and_modify(|known| *known = (*known).max(count)).or_insert(count);
+        }
+        for (line, dirs) in seed.cwds {
+            self.cwds.entry(line).or_default().extend(dirs);
+        }
+        for (line, meta) in seed.meta {
+            self.meta.entry(line).and_modify(|known| {
+                if meta.ts > known.ts {
+                    *known = meta;
+                }
+            }).or_insert(meta);
+        }
+        self.entries.sort_by_key(|line| self.meta.get(line).and_then(|meta| meta.ts));
+        if self.entries.len() > MAX_ENTRIES {
+            self.entries.drain(..self.entries.len() - MAX_ENTRIES);
+            let retained: HashSet<&str> = self.entries.iter().map(String::as_str).collect();
+            self.counts.retain(|line, _| retained.contains(line.as_str()));
+            self.cwds.retain(|line, _| retained.contains(line.as_str()));
+            self.meta.retain(|line, _| retained.contains(line.as_str()));
+        }
+    }
+}
+
 #[derive(Clone, Default, PartialEq, Eq, Debug)]
 pub enum Scope {
     #[default]
@@ -113,6 +145,12 @@ pub fn load_with_shell_files(scope: &Scope, shell_files: Vec<(String, Vec<u8>)>)
         raw.extend(content.lines().map(parse_own_line));
         stamp_missing(&mut raw[start..], file_mtime_secs(&path));
     }
+    normalize(raw)
+}
+
+pub(super) fn from_shell_file(name: &str, bytes: &[u8]) -> History {
+    let mut raw = Vec::new();
+    parse_history_file(name, bytes, &mut raw);
     normalize(raw)
 }
 
