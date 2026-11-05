@@ -226,6 +226,8 @@ Windows Chromium Cookie 的 AES-GCM 解密使用正式 registry 的 `aes-gcm =0.
 
 CI run `42111994380` 的 Windows／macOS production 与测试构建通过，但同样五个 stacked-PR consumer 在收尾报 `the window never stopped drawing`：fixture 发给 pane 的 CWD 已 canonicalize，等待 cache 时却查询未经规范化的 `TempDir::path()`。原 frozen 程序在私有 `TMP` junction 下复现相同失败；修正仅让五个消费者保留并复用同一 canonical CWD，在同一别名场景实际 `5 passed`、退出 `0`，保留全部业务断言、`30s` 期限和 quiet-hold 条件。该 test-only 修正不改变产品或扩大 CI 通过范围；新提交的远端结果另记，不将旧 run 改为成功。
 
+后续 `95229a4e` 的远端 Windows 标准测试 `5220 passed`、Linux headless 标准测试 `2350 passed` 及 CLI E2E `29 passed`；macOS retry 的生产构建与 GUI `3110 passed`（含原五项 stacked-PR）通过，但后续 agent-hook 的 socket-only 消费者失败。旧 fixture 在 shell 第一条命令执行 hook，早于 `Spawned` 所承诺的 registry-ready 屏障；在真实发布窗口放大后捕获 `no such pane` 与 TTY fallback。修正仅让该 fixture 通过真实 PTY 在 `Spawned` 后释放 hook，同窗口与移除注入后四项消费者均通过，独立 CLI／daemon／PTY／hook 正负 smoke 也通过；生产源码、归属校验、fallback、断言和期限不变。新的 macOS 完整结果仍按提交另记，不能以 Linux smoke 代替。桌面 CI 原有的 `--nocapture` 会被自定义 CLI E2E runner 当作名称过滤器，因此该 CI 中未执行的 CLI 用例不计通过；前述本地 Windows CLI `28 passed` 与 Linux CLI `29 passed` 均为独立实际运行证据。
+
 该源码的空关注历史和多按钮回归各在真实消费者中执行一项；后者通过实际 daemon／PTY 验证交错按键报告。Windows 原生窗口另已确认空关注提示的历史回看、复制与持久化，以及窗外按下不误报、合法跨 pane 拖动只由原 pane 上报；自动化工具把多按钮原生手势串行化，因此不把单按钮原生结果当成交错手势的证据。无 `/proc` 的参数顺序与真实停止在两个独立私有 PID namespace 中分别用 `sh`／fish 执行；这不替代原生 macOS `ps`。公开 updater `verify-portable` 正常与拒绝场景、独进程 symlink watcher、同源固定 pin SSH 安装／重启和四个 Root SSH consumer 分别留证，不操作已安装应用或用户会话。
 
 未测项仍需自己的前提：Windows DA1 应用实收、隔离 Windows 身份下的 stored-toast activation，以及原生 macOS 快捷键、FSEvents、交通灯、不同 DPI 像素、opener／zombie 和更新后 adoption。#185 的两个原生窗口属于同一 GUI 进程，工作区竞争与重连另由两个独立 Control client 和 Root 验证；未执行的独立 GUI 进程组合不是新增的验收硬门槛。Root、WSL 或 headless 结果不能替代缺失的原生平台边界；后续修正版本也不能回填旧命令的退出码。
