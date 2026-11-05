@@ -3097,8 +3097,11 @@ impl LyrelApp {
                             })),
                     )
                     .children(tab.waited.clone().map(|waited| {
-                        div().flex_shrink_0().text_size(gpui_kit::rems(11. / 16.))
-                            .text_color(muted).child(waited)
+                        div()
+                            .flex_shrink_0()
+                            .text_size(gpui_kit::rems(11. / 16.))
+                            .text_color(muted)
+                            .child(waited)
                     }))
                     .when(tab.active, |r| {
                         r.child(

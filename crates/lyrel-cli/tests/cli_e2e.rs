@@ -82,7 +82,10 @@ fn main() {
     }
 
     let tests: &[(&str, fn(&Daemon))] = &[
-        ("agents_report_continuous_state_age", agents::agents_report_continuous_state_age),
+        (
+            "agents_report_continuous_state_age",
+            agents::agents_report_continuous_state_age,
+        ),
         (
             "retired_executable_names_still_run_as_ordinary_pty_commands",
             pane::retired_executable_names_still_run_as_ordinary_pty_commands,

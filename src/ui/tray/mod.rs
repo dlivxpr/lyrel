@@ -77,12 +77,23 @@ pub(crate) struct AgentRow {
 /// Waiting first, oldest known spell first, then completed unread results.
 /// Repeated invocation cycles from a current queue member; otherwise start at the head.
 pub(crate) fn next_needing_attention(rows: &[AgentRow], current: Option<u64>) -> Option<u64> {
-    let mut queue: Vec<_> = rows.iter().filter(|row| {
-        row.status == AgentStatus::Waiting || (row.status == AgentStatus::Done && row.unread)
-    }).collect();
-    queue.sort_by_key(|row| (row.status != AgentStatus::Waiting, row.since_ms.is_none(), row.since_ms));
+    let mut queue: Vec<_> = rows
+        .iter()
+        .filter(|row| {
+            row.status == AgentStatus::Waiting || (row.status == AgentStatus::Done && row.unread)
+        })
+        .collect();
+    queue.sort_by_key(|row| {
+        (
+            row.status != AgentStatus::Waiting,
+            row.since_ms.is_none(),
+            row.since_ms,
+        )
+    });
     let at = current.and_then(|id| queue.iter().position(|row| row.leaf_id == id));
-    at.and_then(|ix| queue.get(ix + 1)).or_else(|| queue.first()).map(|row| row.leaf_id)
+    at.and_then(|ix| queue.get(ix + 1))
+        .or_else(|| queue.first())
+        .map(|row| row.leaf_id)
 }
 
 pub(crate) fn reveal_pane(leaf_id: u64, cx: &mut App) {

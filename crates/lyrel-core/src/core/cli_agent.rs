@@ -804,9 +804,9 @@ impl AgentSessionState {
 
     /// Remote clocks may be ahead; elapsed time must not wrap negative.
     pub fn status_age_secs(&self, now_ms: u64) -> Option<u64> {
-        self.since_ms.map(|since| now_ms.saturating_sub(since) / 1000)
+        self.since_ms
+            .map(|since| now_ms.saturating_sub(since) / 1000)
     }
-
 
     pub fn apply_event(&mut self, ev: &AgentEvent) {
         // A status set before the first hook came from a desktop notification

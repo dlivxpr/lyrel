@@ -479,9 +479,11 @@ impl LyrelApp {
             this.copy_agent_session_id(this.tabs.active_index(), window, cx)
         }))
         .on_action(cx.listener(|this, _: &NewAgentTab, window, cx| this.new_agent_tab(window, cx)))
-        .on_action(cx.listener(|this, _: &FocusNextAgentNeedingAttention, window, cx| {
-            this.focus_next_agent_needing_attention(window, cx)
-        }))
+        .on_action(
+            cx.listener(|this, _: &FocusNextAgentNeedingAttention, window, cx| {
+                this.focus_next_agent_needing_attention(window, cx)
+            }),
+        )
         .on_action(cx.listener(|this, action: &LaunchAgent, window, cx| {
             this.launch_agent(action.agent, SpawnWhere::NewTab, window, cx)
         }))

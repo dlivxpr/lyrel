@@ -1826,7 +1826,9 @@ fn make_binding(action: &str, keystroke: &str, cx: &App) -> Option<KeyBinding> {
         "ForkAgentSessionUp" => load_binding(keystroke, ForkAgentSessionUp, None, cx),
         "CopyAgentSessionId" => load_binding(keystroke, CopyAgentSessionId, None, cx),
         "NewAgentTab" => load_binding(keystroke, NewAgentTab, None, cx),
-        "FocusNextAgentNeedingAttention" => load_binding(keystroke, FocusNextAgentNeedingAttention, None, cx),
+        "FocusNextAgentNeedingAttention" => {
+            load_binding(keystroke, FocusNextAgentNeedingAttention, None, cx)
+        }
         "SplitRight" => load_binding(keystroke, SplitRight, None, cx),
         "SplitDown" => load_binding(keystroke, SplitDown, None, cx),
         "MovePaneToTab" => load_binding(keystroke, MovePaneToTab, None, cx),

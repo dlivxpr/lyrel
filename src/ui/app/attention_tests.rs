@@ -19,18 +19,39 @@ fn pane(app: &Entity<LyrelApp>, ix: usize, vcx: &mut VisualTestContext) -> Entit
     app.update(vcx, |app, _| app.tabs[ix].pane.terminals()[0].clone())
 }
 
-fn report(view: &Entity<TerminalView>, stream: &mut Stream, status: AgentStatus,
-          since_ms: Option<u64>, unread: bool, vcx: &mut VisualTestContext) {
-    let state = AgentSessionState { status, since_ms, rich: true, turns: 1, ..Default::default() };
-    DaemonMsg::Agent(Some(CLIAgent::OhMyPi)).encode(stream).unwrap();
-    DaemonMsg::AgentStatus(Some(state.clone())).encode(stream).unwrap();
+fn report(
+    view: &Entity<TerminalView>,
+    stream: &mut Stream,
+    status: AgentStatus,
+    since_ms: Option<u64>,
+    unread: bool,
+    vcx: &mut VisualTestContext,
+) {
+    let state = AgentSessionState {
+        status,
+        since_ms,
+        rich: true,
+        turns: 1,
+        ..Default::default()
+    };
+    DaemonMsg::Agent(Some(CLIAgent::OhMyPi))
+        .encode(stream)
+        .unwrap();
+    DaemonMsg::AgentStatus(Some(state.clone()))
+        .encode(stream)
+        .unwrap();
     let deadline = Instant::now() + Duration::from_secs(10);
     loop {
         vcx.background_executor.run_until_parked();
-        if view.read_with(vcx, |view, _| view.agent_session() == Some(state.clone()) && view.agent().is_some()) {
+        if view.read_with(vcx, |view, _| {
+            view.agent_session() == Some(state.clone()) && view.agent().is_some()
+        }) {
             break;
         }
-        assert!(Instant::now() < deadline, "agent report never reached production TerminalView");
+        assert!(
+            Instant::now() < deadline,
+            "agent report never reached production TerminalView"
+        );
         std::thread::sleep(Duration::from_millis(5));
     }
     if unread {
@@ -41,12 +62,19 @@ fn report(view: &Entity<TerminalView>, stream: &mut Stream, status: AgentStatus,
 fn assert_focused(app: &Entity<LyrelApp>, ix: usize, vcx: &mut VisualTestContext) {
     app.update_in(vcx, |app, window, cx| {
         assert_eq!(app.tabs.active_index(), ix);
-        assert!(app.tabs[ix].pane.terminals()[0].read(cx).focus_handle.is_focused(window));
+        assert!(
+            app.tabs[ix].pane.terminals()[0]
+                .read(cx)
+                .focus_handle
+                .is_focused(window)
+        );
     });
 }
 
 #[gpui_kit::test]
-fn attention_keyboard_visits_oldest_waits_across_windows_then_unread_results(cx: &mut TestAppContext) {
+fn attention_keyboard_visits_oldest_waits_across_windows_then_unread_results(
+    cx: &mut TestAppContext,
+) {
     let (a, mut av, mut ast) = harness_with_tabs(cx, 3);
     let (b, mut bv, mut bst) = harness_with_tabs(cx, 2);
     crate::ui::i18n::set_locale("en");
@@ -59,11 +87,42 @@ fn attention_keyboard_visits_oldest_waits_across_windows_then_unread_results(cx:
     let oldest = pane(&b, 0, &mut bv);
     let unknown = pane(&b, 1, &mut bv);
     let now = crate::core::config::unix_now().saturating_mul(1000);
-    report(&newer, &mut ast[1], AgentStatus::Waiting, Some(now.saturating_sub(60_000)), false, &mut av);
-    report(&done, &mut ast[2], AgentStatus::Done, Some(1), true, &mut av);
-    report(&oldest, &mut bst[0], AgentStatus::Waiting, Some(now.saturating_sub(180_000)), false, &mut bv);
-    report(&unknown, &mut bst[1], AgentStatus::Waiting, None, false, &mut bv);
-    a.update_in(&mut av, |app, window, cx| { app.tabs.select(0); a0.read(cx).focus_handle.focus(window, cx); });
+    report(
+        &newer,
+        &mut ast[1],
+        AgentStatus::Waiting,
+        Some(now.saturating_sub(60_000)),
+        false,
+        &mut av,
+    );
+    report(
+        &done,
+        &mut ast[2],
+        AgentStatus::Done,
+        Some(1),
+        true,
+        &mut av,
+    );
+    report(
+        &oldest,
+        &mut bst[0],
+        AgentStatus::Waiting,
+        Some(now.saturating_sub(180_000)),
+        false,
+        &mut bv,
+    );
+    report(
+        &unknown,
+        &mut bst[1],
+        AgentStatus::Waiting,
+        None,
+        false,
+        &mut bv,
+    );
+    a.update_in(&mut av, |app, window, cx| {
+        app.tabs.select(0);
+        a0.read(cx).focus_handle.focus(window, cx);
+    });
     av.background_executor.run_until_parked();
 
     av.simulate_keystrokes("secondary-shift-u");
@@ -78,7 +137,10 @@ fn attention_keyboard_visits_oldest_waits_across_windows_then_unread_results(cx:
     bv.simulate_keystrokes("secondary-shift-u");
     av.background_executor.run_until_parked();
     assert_focused(&a, 2, &mut av);
-    assert!(!done.read_with(&av, |view, _| view.agent_result_unread()), "revealing a completed result marks it read");
+    assert!(
+        !done.read_with(&av, |view, _| view.agent_result_unread()),
+        "revealing a completed result marks it read"
+    );
     av.simulate_keystrokes("secondary-shift-u");
     bv.background_executor.run_until_parked();
     assert_focused(&b, 0, &mut bv);
@@ -95,7 +157,14 @@ fn attention_keyboard_visits_oldest_waits_across_windows_then_unread_results(cx:
         assert_eq!(tabs[1].waited, None);
         assert_eq!(rows[1].since_ms, None);
     });
-    report(&unknown, &mut bst[1], AgentStatus::Waiting, Some(u64::MAX), false, &mut bv);
+    report(
+        &unknown,
+        &mut bst[1],
+        AgentStatus::Waiting,
+        Some(u64::MAX),
+        false,
+        &mut bv,
+    );
     b.update(&mut bv, |app, cx| {
         assert_eq!(app.agent_rows(cx)[1].waited.as_deref(), Some("waiting <1m"));
     });
@@ -109,20 +178,37 @@ fn attention_binding_preserves_user_chords_and_plain_terminal_control_u(cx: &mut
     register(&app, &mut vcx);
     let first = pane(&app, 0, &mut vcx);
     let waiting = pane(&app, 1, &mut vcx);
-    report(&waiting, &mut streams[1], AgentStatus::Waiting, Some(1), false, &mut vcx);
-    app.update_in(&mut vcx, |_, window, cx| first.read(cx).focus_handle.focus(window, cx));
+    report(
+        &waiting,
+        &mut streams[1],
+        AgentStatus::Waiting,
+        Some(1),
+        false,
+        &mut vcx,
+    );
+    app.update_in(&mut vcx, |_, window, cx| {
+        first.read(cx).focus_handle.focus(window, cx)
+    });
     vcx.background_executor.run_until_parked();
     vcx.simulate_keystrokes("ctrl-u");
-    streams[0].set_read_timeout(Some(Duration::from_secs(1))).unwrap();
+    streams[0]
+        .set_read_timeout(Some(Duration::from_secs(1)))
+        .unwrap();
     loop {
         match ClientMsg::read(&mut streams[0]) {
-            Ok(ClientMsg::Input(bytes)) => { assert_eq!(bytes, b"\x15"); break; }
+            Ok(ClientMsg::Input(bytes)) => {
+                assert_eq!(bytes, b"\x15");
+                break;
+            }
             Ok(_) => {}
             Err(error) => panic!("plain Ctrl+U never reached the terminal: {error}"),
         }
     }
     vcx.update(|_, cx| {
-        cx.global_mut::<Config>().keybindings.insert("NextTab".into(), KeybindingOverride::Add("secondary-shift-u".into()));
+        cx.global_mut::<Config>().keybindings.insert(
+            "NextTab".into(),
+            KeybindingOverride::Add("secondary-shift-u".into()),
+        );
         crate::ui::keymap::rebind(cx);
     });
     vcx.simulate_keystrokes("secondary-shift-u");
@@ -130,10 +216,16 @@ fn attention_binding_preserves_user_chords_and_plain_terminal_control_u(cx: &mut
     vcx.update(|_, cx| {
         let cfg = cx.global_mut::<Config>();
         cfg.keybindings.remove("NextTab");
-        cfg.keybindings.insert("FocusNextAgentNeedingAttention".into(), KeybindingOverride::Exact(vec!["f6".into()]));
+        cfg.keybindings.insert(
+            "FocusNextAgentNeedingAttention".into(),
+            KeybindingOverride::Exact(vec!["f6".into()]),
+        );
         crate::ui::keymap::rebind(cx);
     });
-    app.update_in(&mut vcx, |app, window, cx| { app.tabs.select(0); first.read(cx).focus_handle.focus(window, cx); });
+    app.update_in(&mut vcx, |app, window, cx| {
+        app.tabs.select(0);
+        first.read(cx).focus_handle.focus(window, cx);
+    });
     vcx.background_executor.run_until_parked();
     vcx.simulate_keystrokes("f6");
     assert_focused(&app, 1, &mut vcx);

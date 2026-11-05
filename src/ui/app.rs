@@ -857,7 +857,8 @@ impl LyrelApp {
                 let session = view.agent_session();
                 let status = session.as_ref().map_or(AgentStatus::Idle, |s| s.status);
                 let since_ms = session.as_ref().and_then(|s| s.since_ms);
-                let waited = session.as_ref()
+                let waited = session
+                    .as_ref()
                     .filter(|s| s.status == AgentStatus::Waiting)
                     .and_then(|s| s.status_age_secs(now_ms))
                     .map(crate::ui::home::waiting_for);
@@ -907,13 +908,19 @@ impl LyrelApp {
         if !seen_self {
             rows.extend(self.agent_rows(cx));
         }
-        let current = self.focused_leaf(window, cx).map(|leaf| leaf.entity_id().as_u64());
+        let current = self
+            .focused_leaf(window, cx)
+            .map(|leaf| leaf.entity_id().as_u64());
         let Some(leaf_id) = crate::ui::tray::next_needing_attention(&rows, current) else {
             window.push_notification(t(L10nKey::AppNoAgentNeedsAttention), cx);
             return;
         };
         if self.owns_leaf(leaf_id) {
-            self.handle_tray_action(crate::ui::tray::TrayAction::RevealPane { leaf_id }, window, cx);
+            self.handle_tray_action(
+                crate::ui::tray::TrayAction::RevealPane { leaf_id },
+                window,
+                cx,
+            );
         } else {
             cx.defer(move |cx| crate::ui::tray::reveal_pane(leaf_id, cx));
         }

@@ -814,8 +814,11 @@ impl Item {
         let agents = [
             Item::localized(L10nKey::CmdNewAgentTab, NewAgentTab)
                 .with_subtitle(t(L10nKey::CmdNewAgentTabSubtitle)),
-            Item::localized(L10nKey::CmdNextAgentNeedingAttention, FocusNextAgentNeedingAttention)
-                .with_subtitle(t(L10nKey::CmdNextAgentNeedingAttentionSubtitle)),
+            Item::localized(
+                L10nKey::CmdNextAgentNeedingAttention,
+                FocusNextAgentNeedingAttention,
+            )
+            .with_subtitle(t(L10nKey::CmdNextAgentNeedingAttentionSubtitle)),
             Item::localized(L10nKey::CmdAgentSendSelection, SendSelectionToAgent)
                 .with_subtitle(t(L10nKey::CmdAgentSendSelectionSubtitle)),
             Item::localized(L10nKey::CmdAgentSendGitDiffForReview, SendGitDiffToAgent)

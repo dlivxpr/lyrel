@@ -480,7 +480,9 @@ fn apply_agent_signals(
             emit(DaemonMsg::Agent(st.agent));
         }
         let previous = st.agent_session.as_ref().map(|session| session.status);
-        let session = st.agent_session.get_or_insert_with(AgentSessionState::default);
+        let session = st
+            .agent_session
+            .get_or_insert_with(AgentSessionState::default);
         session.apply_event(event);
         session.note_transition(previous, now_ms);
         if event.agent == Some(crate::core::cli_agent::CLIAgent::Kimi)

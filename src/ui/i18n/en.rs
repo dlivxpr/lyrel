@@ -2373,7 +2373,9 @@ pub fn translate_en(key: L10nKey) -> &'static str {
         L10nKey::CmdNewAgentTab => "New Agent Tab",
         L10nKey::CmdNewAgentTabSubtitle => "open the coding agent you used last in a new tab",
         L10nKey::CmdNextAgentNeedingAttention => "Agent: Go to Next Needing Attention",
-        L10nKey::CmdNextAgentNeedingAttentionSubtitle => "waiting agents first, oldest first, then finished turns you have not read",
+        L10nKey::CmdNextAgentNeedingAttentionSubtitle => {
+            "waiting agents first, oldest first, then finished turns you have not read"
+        }
         L10nKey::AppNoAgentNeedsAttention => "No agent in your open windows needs you.",
         L10nKey::AgentWaitingFor => "waiting {age}",
         L10nKey::AgeUnderMinute => "<1m",

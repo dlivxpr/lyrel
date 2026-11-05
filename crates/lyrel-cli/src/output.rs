@@ -325,7 +325,9 @@ pub fn agents_table(states: &[PaneAgentState]) -> String {
                     .map(|a| format!("{a:?}").to_lowercase())
                     .unwrap_or_else(|| "-".to_string()),
                 format!("{:?}", s.state.status).to_lowercase(),
-                s.state.status_age_secs(now_ms).map_or_else(|| "-".to_string(), status_age),
+                s.state
+                    .status_age_secs(now_ms)
+                    .map_or_else(|| "-".to_string(), status_age),
                 s.state.message.clone().unwrap_or_else(|| "-".to_string()),
             ]
         })

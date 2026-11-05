@@ -709,7 +709,9 @@ impl Tab {
 
     pub(crate) fn agent_waited(&self, now_ms: u64, cx: &App) -> Option<String> {
         use crate::core::cli_agent::AgentStatus;
-        self.pane.terminals().into_iter()
+        self.pane
+            .terminals()
+            .into_iter()
             .filter_map(|leaf| leaf.read(cx).agent_session())
             .filter(|session| session.status == AgentStatus::Waiting)
             .filter_map(|session| session.status_age_secs(now_ms))
