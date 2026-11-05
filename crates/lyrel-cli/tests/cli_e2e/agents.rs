@@ -41,7 +41,9 @@ pub(super) fn agents_report_continuous_state_age(daemon: &Daemon) {
     // Foreground probing must agree with the synthetic OMP hooks. An unnamed
     // test runner is correctly treated as a non-agent and its state cleared.
     let fixture_dir = tempfile::tempdir().unwrap();
-    let executable = fixture_dir.path().join(if cfg!(windows) { "omp.exe" } else { "omp" });
+    let executable = fixture_dir
+        .path()
+        .join(if cfg!(windows) { "omp.exe" } else { "omp" });
     std::fs::copy(std::env::current_exe().unwrap(), &executable).unwrap();
     let mut session = PaneClient::at(daemon.pane_endpoint())
         .spawn(
@@ -67,15 +69,29 @@ pub(super) fn agents_report_continuous_state_age(daemon: &Daemon) {
     // or the timestamp whose semantics the assertions verify.
     let mut output = Vec::new();
     let mut waiting = false;
-    while !waiting || !output.windows(b"AGENT_AGE_READY".len()).any(|bytes| bytes == b"AGENT_AGE_READY") {
-        let remaining = deadline.checked_duration_since(Instant::now())
+    while !waiting
+        || !output
+            .windows(b"AGENT_AGE_READY".len())
+            .any(|bytes| bytes == b"AGENT_AGE_READY")
+    {
+        let remaining = deadline
+            .checked_duration_since(Instant::now())
             .expect("the fixture must publish Waiting within the original deadline");
         session.set_recv_timeout(Some(remaining)).unwrap();
-        match session.recv().expect("receive the fixture's committed agent state") {
-            DaemonMsg::Output(bytes) | DaemonMsg::Snapshot(bytes) => output.extend_from_slice(&bytes),
-            DaemonMsg::AgentStatus(Some(state)) => waiting = state.status == lyrel_core::core::cli_agent::AgentStatus::Waiting,
+        match session
+            .recv()
+            .expect("receive the fixture's committed agent state")
+        {
+            DaemonMsg::Output(bytes) | DaemonMsg::Snapshot(bytes) => {
+                output.extend_from_slice(&bytes)
+            }
+            DaemonMsg::AgentStatus(Some(state)) => {
+                waiting = state.status == lyrel_core::core::cli_agent::AgentStatus::Waiting
+            }
             DaemonMsg::AgentStatus(None) => waiting = false,
-            DaemonMsg::Exited { code } => panic!("the agent fixture exited before readiness: {code:?}"),
+            DaemonMsg::Exited { code } => {
+                panic!("the agent fixture exited before readiness: {code:?}")
+            }
             _ => {}
         }
     }
@@ -84,10 +100,19 @@ pub(super) fn agents_report_continuous_state_age(daemon: &Daemon) {
     let address = format!("%{pane}");
     let state = || {
         let report = daemon.run_json(&["agents"]);
-        report["agents"].as_array().unwrap().iter()
+        report["agents"]
+            .as_array()
+            .unwrap()
+            .iter()
             .find(|entry| entry["pane_id"].as_u64() == Some(pane))
-            .unwrap_or_else(|| panic!("the identity-matched agent must remain listed; pane={pane}; report={report}"))
-            .get("state").unwrap().clone()
+            .unwrap_or_else(|| {
+                panic!(
+                    "the identity-matched agent must remain listed; pane={pane}; report={report}"
+                )
+            })
+            .get("state")
+            .unwrap()
+            .clone()
     };
     let waiting = state();
     assert_eq!(waiting["status"], "waiting");
