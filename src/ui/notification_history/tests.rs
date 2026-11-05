@@ -84,14 +84,25 @@ fn empty_attention_keyboard_result_is_readable_and_copyable_in_history(cx: &mut 
     let weak = app.downgrade();
     app.update_in(&mut window, |app, window, cx| {
         crate::ui::windows::WindowRegistry::init(cx);
-        crate::ui::windows::WindowRegistry::register(cx, app.workspace, window.window_handle(), weak);
-        let focus = app.tabs[0].pane.terminals()[0].read(cx).focus_handle.clone();
+        crate::ui::windows::WindowRegistry::register(
+            cx,
+            app.workspace,
+            window.window_handle(),
+            weak,
+        );
+        let focus = app.tabs[0].pane.terminals()[0]
+            .read(cx)
+            .focus_handle
+            .clone();
         focus.focus(window, cx);
     });
     settle(&mut window);
     window.simulate_keystrokes("secondary-shift-u");
     settle(&mut window);
-    assert_eq!(messages(&window), [t(L10nKey::AppNoAgentNeedsAttention).to_string()]);
+    assert_eq!(
+        messages(&window),
+        [t(L10nKey::AppNoAgentNeedsAttention).to_string()]
+    );
     assert_eq!(window.read(|cx| history(cx).read(cx).unread_count()), 1);
     restart(&mut window, &dir);
     let id = window.read(|cx| history(cx).read(cx).records().next().unwrap().id());
@@ -104,7 +115,9 @@ fn empty_attention_keyboard_result_is_readable_and_copyable_in_history(cx: &mut 
         assert!(window.find("notification-detail-message").visible());
         window.click("notification-detail-copy", cx);
         assert_eq!(
-            cx.read_from_clipboard().and_then(|item| item.text()).as_deref(),
+            cx.read_from_clipboard()
+                .and_then(|item| item.text())
+                .as_deref(),
             Some(t(L10nKey::AppNoAgentNeedsAttention).as_ref())
         );
     });

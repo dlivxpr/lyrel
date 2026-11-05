@@ -339,12 +339,25 @@ fn ps_fallback_finds_and_stops_daemon_with_reordered_arguments() {
                 .args(&args)
                 .env("HOME", &ops.home)
                 .env("LYREL_CONFIG_DIR", &config)
-                .stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null())
-                .spawn().unwrap(),
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .spawn()
+                .unwrap(),
         );
         let deadline = Instant::now() + Duration::from_secs(3);
-        while !ops.run(&format!("{} --stdio --bridge </dev/null", shell_quote(&paths.binary))).unwrap().success() {
-            assert!(Instant::now() < deadline, "fixture daemon must serve: {args:?}");
+        while !ops
+            .run(&format!(
+                "{} --stdio --bridge </dev/null",
+                shell_quote(&paths.binary)
+            ))
+            .unwrap()
+            .success()
+        {
+            assert!(
+                Instant::now() < deadline,
+                "fixture daemon must serve: {args:?}"
+            );
             std::thread::sleep(Duration::from_millis(10));
         }
         let bridge_args = ["--stdio", "--bridge", "--daemonish", "/tmp/--daemon/config"];
@@ -353,13 +366,22 @@ fn ps_fallback_finds_and_stops_daemon_with_reordered_arguments() {
                 .args(bridge_args)
                 .env("HOME", &ops.home)
                 .env("LYREL_CONFIG_DIR", &config)
-                .stdin(Stdio::piped()).stdout(Stdio::null()).stderr(Stdio::null())
-                .spawn().unwrap(),
+                .stdin(Stdio::piped())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .spawn()
+                .unwrap(),
         );
         // Model Darwin ps's two output shapes, listing the live bridge first.
         // Model only the absent /proc capability; the complete production
         // discovery/stop logic still runs in the actual POSIX shell.
-        let listing = format!("{} {}\n{} {}\n", bridge.0.id(), paths.binary, daemon.0.id(), paths.binary);
+        let listing = format!(
+            "{} {}\n{} {}\n",
+            bridge.0.id(),
+            paths.binary,
+            daemon.0.id(),
+            paths.binary
+        );
         let daemon_args = format!("{} {}", paths.binary, args.join(" "));
         let bridge_args = format!("{} {}", paths.binary, bridge_args.join(" "));
         std::fs::write(&ps, format!(
@@ -370,22 +392,45 @@ fn ps_fallback_finds_and_stops_daemon_with_reordered_arguments() {
         let run = |command: &str| {
             ops.command()
                 .env("PATH", format!("{}:/usr/bin:/bin", ps_dir.display()))
-                .args(["-c", &under_sh(&command.replacen("[ -d /proc ]", "false", 1))])
-                .output().unwrap()
+                .args([
+                    "-c",
+                    &under_sh(&command.replacen("[ -d /proc ]", "false", 1)),
+                ])
+                .output()
+                .unwrap()
         };
         let found = run(RUNNING_EXE_COMMAND);
-        assert!(found.status.success(), "{}", String::from_utf8_lossy(&found.stderr));
-        assert_eq!(String::from_utf8_lossy(&found.stdout), paths.binary, "ps must find daemon for {args:?}, not the bridge");
+        assert!(
+            found.status.success(),
+            "{}",
+            String::from_utf8_lossy(&found.stderr)
+        );
+        assert_eq!(
+            String::from_utf8_lossy(&found.stdout),
+            paths.binary,
+            "ps must find daemon for {args:?}, not the bridge"
+        );
         let stopped = run(TERMINATE_RUNNING_COMMAND);
-        assert!(stopped.status.success(), "{}", String::from_utf8_lossy(&stopped.stderr));
+        assert!(
+            stopped.status.success(),
+            "{}",
+            String::from_utf8_lossy(&stopped.stderr)
+        );
         let deadline = Instant::now() + Duration::from_secs(3);
         while daemon.0.try_wait().unwrap().is_none() {
-            assert!(Instant::now() < deadline, "ps must stop daemon for {args:?}");
+            assert!(
+                Instant::now() < deadline,
+                "ps must stop daemon for {args:?}"
+            );
             std::thread::sleep(Duration::from_millis(10));
         }
         if let Some(status) = bridge.0.try_wait().unwrap() {
             use std::os::unix::process::ExitStatusExt as _;
-            assert_ne!(status.signal(), Some(15), "restart must not signal the bridge");
+            assert_ne!(
+                status.signal(),
+                Some(15),
+                "restart must not signal the bridge"
+            );
         }
     }
 }
