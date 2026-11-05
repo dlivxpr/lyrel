@@ -15,6 +15,9 @@ pub(crate) mod test_support;
 #[cfg(test)]
 mod transfer_tests;
 
+#[cfg(all(test, target_os = "linux"))]
+mod native_install_tests;
+
 pub use connect::ProcessStream;
 
 pub use auth::{AUTH_DECLINED, is_auth_declined};
