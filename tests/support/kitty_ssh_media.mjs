@@ -1,4 +1,5 @@
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -8,8 +9,7 @@ const desktopArg = process.argv.indexOf('--desktop-path');
 const desktopPath = desktopArg < 0 ? undefined : process.argv[desktopArg + 1];
 const root = path.dirname(fileURLToPath(import.meta.url));
 const basename = desktopPath ? path.basename(desktopPath.replaceAll('\\', '/')) : `tty-graphics-protocol-${process.pid}.rgba`;
-const tempRoot = path.join(root, `media-temp-${process.pid}`);
-fs.mkdirSync(tempRoot, { mode: 0o700 });
+const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'lyrel-media-'));
 const regular = path.join(root, basename);
 const temporary = path.join(tempRoot, basename);
 const shmName = `/${basename}`;
