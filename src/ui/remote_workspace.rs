@@ -3936,4 +3936,8 @@ mod tests {
             assert!(!links.suspended.contains(&host));
         });
     }
+
+    mod native_ssh_workspace_tests {
+        include!("native_ssh_workspace_tests.rs");
+    }
 }

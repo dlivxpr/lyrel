@@ -258,3 +258,7 @@ fn equally_named_history_scopes_never_restore_another_hosts_commands(cx: &mut Te
         assert_eq!(view.input.editor().text(), "echo first-host", "the original Host still has its own cached list");
     }).unwrap();
 }
+
+mod native_ssh_history_consumer_tests {
+    include!("native_ssh_history_consumer_tests.rs");
+}

@@ -178,6 +178,33 @@ cargo test --locked -p lyrel-server --test native_ssh_lifecycle \
 
 同轮生产 SFTP `Realpath(".")` 与 control HOME 一致；独立 OpenSSH SFTP oracle 对 `4122` bytes 的 UTF-8／二进制 payload 完成 upload／rename／download，前后 SHA-256 相同，只清理本次对象。该 oracle 不冒充生产 SFTP 全操作覆盖；完整 stdio Host 契约另已在 Linux 全 feature 套件实跑。首次同文件系统的 `2` 项失败及隔离后的 temp 夹具 `1` 项失败均保留，只有修正真实前提／夹具后才记录上述通过。这里只证明 Linux headless／真实 SSH 行为，不证明 GUI GPU、真实 Kerberos 认证、Windows 或 macOS 原生验收。
 
+### 连接、历史与工作区所有权验收
+
+历史必须分别检查两条生产路径：远端 daemon 工作区通过对应 `Host` 读取其 HOME；
+单个原生 SSH shell-channel 窗格则通过自己的 SFTP 连接读取远端历史。
+在工作区内再次执行 `ssh` 后，不得把工作区主机或本机历史播种到内层 scope。
+这些场景与工作区重连所有权是独立的，不能用一次 SSH 连接成功代替。
+
+以下 rooted 消费者复用上述固定 key／pin、隔离 HOME 与同提交本机 server 前提。
+每条命令须分别启动测试进程，因为配置覆盖是进程级且只写一次；内跳用例还需要上文的
+`LYREL_TEST_SSH_NESTED_*`，不会使用个人 SSH 配置。
+原生 shell-channel 历史用例开启 shell integration，并先确认真实连接和 prompt editor 已激活；
+只连通关闭 shell integration 的窗格，不能证明 lyrel 的历史播种正常。
+隔离 SSH 服务报告的 `SHELL` 必须与实际执行者一致，不能用广告 bash、强制执行 fish 的夹具判定产品失败。
+
+```sh
+cargo test --locked -p lyrel --bin lyrel-app native_ssh_connected_shell_seeds_remote_history -- --ignored --test-threads=1 --nocapture
+cargo test --locked -p lyrel --bin lyrel-app native_ssh_workspace_history_uses_remote_home_and_isolates_inner_hop -- --ignored --test-threads=1 --nocapture
+cargo test --locked -p lyrel --bin lyrel-app native_ssh_workspace_reconnect_yields_to_active_client -- --ignored --test-threads=1 --nocapture
+cargo test --locked -p lyrel --bin lyrel-app native_ssh_host_menu_disconnect_preserves_other_window -- --ignored --test-threads=1 --nocapture
+```
+
+所有权用例在真实传输中断后，由另一个真实 control 客户端取得工作区，再让 rooted 工作台执行生产重连，
+检查工作区是否仍归活动客户端、窗口是否显示被接管，以及显式 **Take Back** 是否仍可取得控制权。
+这不是两个独立原生 GUI 进程的验收。菜单用例经过生产工作区行更多菜单与真实 pointer down/up，
+检查断开后无关 rooted 窗口的工作区与标签仍有效；原生窗口仍须另做同一旅程验收。
+测试入口和夹具就绪不代表这些场景已经通过；须分别记录 rooted、真实 SSH 与原生窗口证据。
+
 ### 标准原生桌面与双 pane 全尺寸入口
 
 `native_ssh_surface` 是 opt-in 测试执行器，不增加 shipping feature、GUI 参数、测试 renderer 或假协议。它通过真实远端 control 请求创建唯一 workspace、tab 与两 pane 的 split tree，写入本次临时配置下标准 `servers.json`／`views.json`，然后启动普通 `lyrel-app --config-dir ...`。实际窗口走标准 machine／workspace／RootApp／TerminalView 路径。
