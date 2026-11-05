@@ -527,12 +527,14 @@ impl Element for TerminalElement {
             || (built.is_err() && previous.as_ref().is_some_and(|snap| snap.held));
         let mut snap = match built {
             Ok(snap) => {
-                self.view.update(cx, |view, _| view.selection_scroll.clear_presented());
+                self.view
+                    .update(cx, |view, _| view.selection_scroll.clear_presented());
                 snap
             }
             Err(unavailable) => {
                 if matches!(unavailable, SnapshotUnavailable::Contended) {
-                    self.view.update(cx, |view, cx| view.retry_grid_when_available(cx));
+                    self.view
+                        .update(cx, |view, cx| view.retry_grid_when_available(cx));
                 }
                 if let Some(previous) = previous {
                     previous
@@ -546,7 +548,8 @@ impl Element for TerminalElement {
                 }
             }
         };
-        if held && buf.len() != geom.rows * geom.cols
+        if held
+            && buf.len() != geom.rows * geom.cols
             && let Some(previous_geom) = self.view.read(cx).cell_geom
         {
             // Until the ordered resize reaches the VT, keep the old frame's
@@ -642,15 +645,14 @@ impl Element for TerminalElement {
                     window.scale_factor(),
                 );
                 let visible = bounds.intersect(&window.content_mask().bounds);
-                if visible.size.width <= px(0.)
-                    || visible.size.height <= px(0.)
-                {
+                if visible.size.width <= px(0.) || visible.size.height <= px(0.) {
                     continue;
                 }
                 // Authorization was captured with the committed text under the
                 // stream-position guard. Later live placement changes cannot
                 // tear this picture; its existing charged leases remain pinned.
-                img.painted.store(true, std::sync::atomic::Ordering::Release);
+                img.painted
+                    .store(true, std::sync::atomic::Ordering::Release);
                 image_store.register_for_paint(img, window, &displayed);
                 window.paint_layer(visible, |window| {
                     if let Some(data) = &img.data {

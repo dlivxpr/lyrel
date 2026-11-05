@@ -14,11 +14,10 @@ use rio_vt::selection::SelectionRange;
 use super::colors::{dim_cell, dim_fg, resolve, to_hsla};
 use super::decorations::{cursor_style_from_shape, link_underline_color};
 use super::{
-    GridCursor, GridSnapshot, PaintColors, RenderCell, SnapshotUnavailable, TerminalElement, UnderlineKind,
-    osc8_underline,
+    GridCursor, GridSnapshot, PaintColors, RenderCell, SnapshotUnavailable, TerminalElement,
+    UnderlineKind, osc8_underline,
 };
 use crate::core::config::Config;
-
 
 // A viewport owns its palette and theme for one locked grid snapshot. Reuse
 // only the preceding resolved style; character extras and selection remain
@@ -60,7 +59,9 @@ impl<'a, T: rio_vt::event::EventListener> CellPainter<'a, T> {
                 spacer: true,
                 wide: cell.wide(),
                 wrapped: cell.contains_cell_flag(rio_vt::crosswords::square::CellFlags::WRAPLINE),
-                selected: self.selection.is_some_and(|selection| selection.contains(position)),
+                selected: self
+                    .selection
+                    .is_some_and(|selection| selection.contains(position)),
                 ..RenderCell::default()
             };
         }
@@ -329,7 +330,12 @@ impl TerminalElement {
             // Text, cursor, placeholder runs and the daemon-owned placement
             // display list are acquired at one stream position. The reader
             // applies graphics under this same terminal guard.
-            let images = self.view.read(cx).terminal.images().commit_with_placeholders(&placeholders);
+            let images = self
+                .view
+                .read(cx)
+                .terminal
+                .images()
+                .commit_with_placeholders(&placeholders);
             drop(term);
             let (any_match, any_current) =
                 self.flag_search_matches(buf, rows, cols, display_offset, cx);
@@ -347,7 +353,6 @@ impl TerminalElement {
                 images,
             });
         }
-
     }
 
     fn flag_hovered_link(
@@ -796,18 +801,54 @@ mod tests {
         let terminal = cx.update(|cx| view.read(cx).terminal.term.clone());
         let (rows, cols) = {
             let mut term = terminal.lock();
-            rio_vt::performer::handler::Processor::default().advance(&mut *term, b"\x1b[?2026h\x1b[Hfirst-hidden");
+            rio_vt::performer::handler::Processor::default()
+                .advance(&mut *term, b"\x1b[?2026h\x1b[Hfirst-hidden");
             (term.screen_lines(), term.columns())
         };
         let element = TerminalElement::new(view);
         let mut cells = Vec::new();
         cx.update(|cx| {
             let colors = PaintColors::resolve(cx.theme(), cx);
-            assert!(matches!(element.build_grid(&colors, &mut cells, rows, cols, false, cx, 1., Rgba::default(), true), Err(SnapshotUnavailable::Synchronized)));
-            assert!(cells.is_empty(), "must_block is not permission to publish a partial first frame");
+            assert!(matches!(
+                element.build_grid(
+                    &colors,
+                    &mut cells,
+                    rows,
+                    cols,
+                    false,
+                    cx,
+                    1.,
+                    Rgba::default(),
+                    true
+                ),
+                Err(SnapshotUnavailable::Synchronized)
+            ));
+            assert!(
+                cells.is_empty(),
+                "must_block is not permission to publish a partial first frame"
+            );
             terminal.lock().end_sync_update();
-            let frame = element.build_grid(&colors, &mut cells, rows, cols, false, cx, 1., Rgba::default(), true).unwrap();
-            assert!(cells.iter().take(12).map(|cell| cell.c).collect::<String>().starts_with("first-hidden"));
+            let frame = element
+                .build_grid(
+                    &colors,
+                    &mut cells,
+                    rows,
+                    cols,
+                    false,
+                    cx,
+                    1.,
+                    Rgba::default(),
+                    true,
+                )
+                .unwrap();
+            assert!(
+                cells
+                    .iter()
+                    .take(12)
+                    .map(|cell| cell.c)
+                    .collect::<String>()
+                    .starts_with("first-hidden")
+            );
             assert!(frame.cursor.is_some());
         });
     }

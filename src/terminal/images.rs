@@ -46,7 +46,9 @@ pub(super) struct CommittedImages(Vec<RenderPlacement>);
 
 impl std::ops::Deref for CommittedImages {
     type Target = [RenderPlacement];
-    fn deref(&self) -> &Self::Target { &self.0 }
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
 }
 
 impl Drop for CommittedImages {
@@ -1210,10 +1212,17 @@ impl ImageStore {
 
     fn take_retired(&self) -> Vec<Arc<Residency>> {
         let mut inner = self.0.state.lock().unwrap();
-        if inner.retired.iter().all(|image| image.presented.load(Ordering::Acquire) == 0) {
+        if inner
+            .retired
+            .iter()
+            .all(|image| image.presented.load(Ordering::Acquire) == 0)
+        {
             return std::mem::take(&mut inner.retired);
         }
-        inner.retired.extract_if(.., |image| image.presented.load(Ordering::Acquire) == 0).collect()
+        inner
+            .retired
+            .extract_if(.., |image| image.presented.load(Ordering::Acquire) == 0)
+            .collect()
     }
 
     #[cfg(test)]

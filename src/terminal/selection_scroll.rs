@@ -68,14 +68,27 @@ impl SelectionScroll {
         }
     }
 
-    pub(super) fn adopt_presented(&mut self, cells: &[super::element::RenderCell], cols: usize, cfg: &Config) {
-        if self.presented.is_some() { return; }
+    pub(super) fn adopt_presented(
+        &mut self,
+        cells: &[super::element::RenderCell],
+        cols: usize,
+        cfg: &Config,
+    ) {
+        if self.presented.is_some() {
+            return;
+        }
         let (col, row, left, clicks) = self.gesture.unwrap_or((0, 0, true, 1));
         let grid = super::presentation::PresentedGrid::new(cells, cols, 0);
-        let range = match (cells.iter().position(|cell| cell.selected), cells.iter().rposition(|cell| cell.selected)) {
+        let range = match (
+            cells.iter().position(|cell| cell.selected),
+            cells.iter().rposition(|cell| cell.selected),
+        ) {
             (Some(start), Some(end)) => start..end + 1,
             _ if clicks > 1 => grid.click_range(col, row, clicks, cfg),
-            _ => { let at = grid.boundary(col, row, left); at..at }
+            _ => {
+                let at = grid.boundary(col, row, left);
+                at..at
+            }
         };
         self.presented = Some(super::presentation::PresentedSelection::new(range, clicks));
     }
@@ -99,9 +112,14 @@ impl SelectionScroll {
             let at = grid.boundary(col, row, left);
             at..at
         };
-        if shift { self.adopt_presented(cells, cols, cfg); }
+        if shift {
+            self.adopt_presented(cells, cols, cfg);
+        }
         self.gesture = Some((col, row, left, clicks));
-        if shift && clicks == 1 && let Some(selection) = self.presented.as_mut() {
+        if shift
+            && clicks == 1
+            && let Some(selection) = self.presented.as_mut()
+        {
             selection.update(target);
         } else {
             self.presented = Some(PresentedSelection::new(target, clicks));
@@ -122,7 +140,9 @@ impl SelectionScroll {
         left: bool,
         cfg: &Config,
     ) -> bool {
-        let Some(selection) = self.presented.as_mut() else { return false; };
+        let Some(selection) = self.presented.as_mut() else {
+            return false;
+        };
         let grid = super::presentation::PresentedGrid::new(cells, cols, 0);
         let target = if selection.clicks() > 1 {
             grid.click_range(col, row, selection.clicks(), cfg)
@@ -134,7 +154,10 @@ impl SelectionScroll {
         selection.apply(cells)
     }
 
-    pub(super) fn select_all_presented(&mut self, cells: &mut [super::element::RenderCell]) -> bool {
+    pub(super) fn select_all_presented(
+        &mut self,
+        cells: &mut [super::element::RenderCell],
+    ) -> bool {
         let selection = super::presentation::PresentedSelection::new(0..cells.len(), 1);
         let selected = selection.apply(cells);
         self.presented = Some(selection);

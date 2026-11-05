@@ -3125,7 +3125,8 @@ mod kitty_graphics {
         let daemon = Daemon::start();
         let _control = daemon.control("graphics-unfinished-sync");
         let mut original = Consumer::spawn(&daemon);
-        let stream = "\x1b[?2026h\x1b[7;4H宽e\u{301}\x1b_Ga=T,i=901,p=1,f=32,s=1,v=1,C=1;/wAA/w==\x1b\\";
+        let stream =
+            "\x1b[?2026h\x1b[7;4H宽e\u{301}\x1b_Ga=T,i=901,p=1,f=32,s=1,v=1,C=1;/wAA/w==\x1b\\";
         assert_eq!(
             original.exchange("SEND", &hex(stream.as_bytes()), 1, 1),
             [b"\x1b_Gi=901,p=1;OK\x1b\\".to_vec()]
@@ -3136,7 +3137,10 @@ mod kitty_graphics {
         let placement = original.placements.values().next().unwrap().clone();
         assert_eq!((placement.anchor_row, placement.anchor_col), (6, 6));
         assert_eq!(original.pixel(&placement), [255, 0, 0, 255]);
-        assert!(windows_contain(&original.last_output, "宽e\u{301}".as_bytes()));
+        assert!(windows_contain(
+            &original.last_output,
+            "宽e\u{301}".as_bytes()
+        ));
         if cfg!(unix) {
             assert!(windows_contain(&original.last_output, b"\x1b[?2026h"));
             assert!(!windows_contain(&original.last_output, b"\x1b[?2026l"));
@@ -3151,10 +3155,16 @@ mod kitty_graphics {
         restored.stats();
         assert_eq!(restored.placements[&placement.key], placement);
         assert_eq!(restored.pixel(&placement), [255, 0, 0, 255]);
-        assert!(windows_contain(&restored.last_output, "宽e\u{301}".as_bytes()));
+        assert!(windows_contain(
+            &restored.last_output,
+            "宽e\u{301}".as_bytes()
+        ));
 
         assert_eq!(
-            restored.send(b"\x1b[?2026l\x1b[8;2H\x1b_Ga=p,i=901,p=2,C=1\x1b\\after_sync", 1),
+            restored.send(
+                b"\x1b[?2026l\x1b[8;2H\x1b_Ga=p,i=901,p=2,C=1\x1b\\after_sync",
+                1
+            ),
             [b"\x1b_Gi=901,p=2;OK\x1b\\".to_vec()]
         );
         let next = restored

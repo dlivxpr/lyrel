@@ -17,7 +17,11 @@ impl TerminalView {
         match ev {
             PaneEvent::Wakeup => {
                 if !self.lifecycle.is_displayed()
-                    && self.terminal.term.try_lock().is_some_and(|term| !term.synchronized_output())
+                    && self
+                        .terminal
+                        .term
+                        .try_lock()
+                        .is_some_and(|term| !term.synchronized_output())
                 {
                     // Hidden panes do not paint. Retire their derived display
                     // leases here rather than pinning old pixels/metadata until

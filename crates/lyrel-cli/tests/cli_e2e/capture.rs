@@ -75,10 +75,8 @@ pub(super) fn capture_plain_reads_unfinished_synchronized_output_without_a_gui(d
     let mut serial = 0;
     let mut send = |pane: &mut lyrel_core::client::PaneSession, bytes: &[u8]| {
         serial += 1;
-        pane.input(
-            format!("SEND {serial} 0 {} 1\n", terminal_pty_fixture::hex(bytes)).as_bytes(),
-        )
-        .unwrap();
+        pane.input(format!("SEND {serial} 0 {} 1\n", terminal_pty_fixture::hex(bytes)).as_bytes())
+            .unwrap();
         // The child completes a daemon query/reply barrier before DONE. This
         // establishes received/parsed output without a wall-clock sleep, and
         // does not close the synchronized update. Each byte is written and
@@ -87,14 +85,20 @@ pub(super) fn capture_plain_reads_unfinished_synchronized_output_without_a_gui(d
     };
 
     let text = terminal_pty_fixture::SYNC_CAPTURE_TEXT;
-    send(&mut pane, &terminal_pty_fixture::synchronized_capture_frame());
+    send(
+        &mut pane,
+        &terminal_pty_fixture::synchronized_capture_frame(),
+    );
     let raw = daemon.run_ok(&["capture", &address, "--scrollback"]);
     // Unix PTYs preserve the marker. ConPTY can consume/rewrite terminal
     // controls before lyrel receives them, so its text result alone is not
     // evidence that a GUI held a 2026 frame. Record that observation boundary.
     if cfg!(unix) {
         assert!(raw.contains("\x1b[?2026h"), "missing begin marker: {raw:?}");
-        assert!(!raw.contains("\x1b[?2026l"), "unexpected end marker: {raw:?}");
+        assert!(
+            !raw.contains("\x1b[?2026l"),
+            "unexpected end marker: {raw:?}"
+        );
     } else if !raw.contains("\x1b[?2026h") {
         eprintln!("ConPTY did not preserve CSI ?2026h; this run proves received-text capture only");
     }
@@ -107,7 +111,9 @@ pub(super) fn capture_plain_reads_unfinished_synchronized_output_without_a_gui(d
     // changing barrier row or full scrollback against a viewport.
     send(&mut pane, b"\x1b[?2026l");
     let settled = daemon.run_json(&["capture", &address, "--plain"]);
-    let settled = settled["text"].as_str().expect("settled plain capture text");
+    let settled = settled["text"]
+        .as_str()
+        .expect("settled plain capture text");
     assert!(settled.lines().any(|line| line == text), "{settled:?}");
 
     pane.resize(WinSize {
@@ -125,7 +131,9 @@ pub(super) fn capture_plain_reads_unfinished_synchronized_output_without_a_gui(d
         }
     }
     let resized = daemon.run_json(&["capture", &address, "--plain", "--scrollback"]);
-    let resized = resized["text"].as_str().expect("capture after quiet resize");
+    let resized = resized["text"]
+        .as_str()
+        .expect("capture after quiet resize");
     assert!(resized.lines().any(|line| line == text), "{resized:?}");
 
     let next = terminal_pty_fixture::SYNC_NEXT_TEXT;
@@ -134,9 +142,14 @@ pub(super) fn capture_plain_reads_unfinished_synchronized_output_without_a_gui(d
         format!("\x1b[?2026h\x1b[8;1H{next}\x1b[?2026l\r\nafter_sync").as_bytes(),
     );
     let continued = daemon.run_json(&["capture", &address, "--plain", "--scrollback"]);
-    let continued = continued["text"].as_str().expect("capture after successive update");
+    let continued = continued["text"]
+        .as_str()
+        .expect("capture after successive update");
     assert!(continued.lines().any(|line| line == next), "{continued:?}");
-    assert!(continued.lines().any(|line| line == "after_sync"), "{continued:?}");
+    assert!(
+        continued.lines().any(|line| line == "after_sync"),
+        "{continued:?}"
+    );
 
     pane.input(b"EXIT 4294967293 0 00 0\n").unwrap();
     loop {

@@ -368,7 +368,9 @@ fn unfinished_synchronized_output_keeps_daemon_queries_and_image_anchors_live() 
                 .updates
                 .iter()
                 .find_map(|update| match update {
-                    GraphicsUpdate::Place(placement) if placement.image_id == 171 => Some(placement),
+                    GraphicsUpdate::Place(placement) if placement.image_id == 171 => {
+                        Some(placement)
+                    }
                     _ => None,
                 })
                 .expect("the daemon publishes the image before ESU");

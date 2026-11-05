@@ -965,7 +965,10 @@ fn presentation_deadline<T: EventListener>(term: &Crosswords<T>) -> Option<rio_v
         .map(|started| started + PRESENTATION_TIMEOUT)
 }
 
-fn expire_presentation<T: EventListener>(term: &mut Crosswords<T>, now: rio_vt::time::Instant) -> bool {
+fn expire_presentation<T: EventListener>(
+    term: &mut Crosswords<T>,
+    now: rio_vt::time::Instant,
+) -> bool {
     if presentation_deadline(term).is_some_and(|deadline| deadline <= now) {
         term.end_sync_update();
         true
@@ -1042,7 +1045,10 @@ fn feed_grid<T: EventListener + Clone>(
             at = end;
         }
         let Some((_, cut)) = next else { break };
-        if matches!(cut, ReaderCut::RetireTitle | ReaderCut::Command(CommandMark::Finished)) {
+        if matches!(
+            cut,
+            ReaderCut::RetireTitle | ReaderCut::Command(CommandMark::Finished)
+        ) {
             // A completed command must not leave its last picture held until
             // another command produces output. All bytes are already parsed.
             grid.end_sync_update();

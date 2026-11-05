@@ -1154,7 +1154,8 @@ impl TerminalView {
     }
 
     pub fn selection_text(&self) -> Option<String> {
-        self.visible_selection_text().filter(|text| !text.trim().is_empty())
+        self.visible_selection_text()
+            .filter(|text| !text.trim().is_empty())
     }
 
     fn holds_presented_grid(&self) -> bool {
@@ -1164,13 +1165,21 @@ impl TerminalView {
 
     fn presented_grid(&self) -> Option<super::presentation::PresentedGrid<'_>> {
         let geom = self.cell_geom?;
-        let offset = self.grid_snap.as_ref().map_or(0, |snap| snap.display_offset);
-        Some(super::presentation::PresentedGrid::new(&self.grid_buf, geom.cols, offset))
+        let offset = self
+            .grid_snap
+            .as_ref()
+            .map_or(0, |snap| snap.display_offset);
+        Some(super::presentation::PresentedGrid::new(
+            &self.grid_buf,
+            geom.cols,
+            offset,
+        ))
     }
 
     fn visible_selection_text(&self) -> Option<String> {
         let term = self.terminal.term.lock();
-        if term.synchronized_output() || self.grid_snap.as_ref().is_some_and(|snap| snap.held)
+        if term.synchronized_output()
+            || self.grid_snap.as_ref().is_some_and(|snap| snap.held)
             || self.selection_scroll.has_presented()
         {
             return self.presented_grid()?.selected_text();
@@ -1188,7 +1197,9 @@ impl TerminalView {
     fn clear_visible_selection(&mut self) {
         self.terminal.term.lock().selection = None;
         self.selection_scroll.clear_presented();
-        for cell in &mut self.grid_buf { cell.selected = false; }
+        for cell in &mut self.grid_buf {
+            cell.selected = false;
+        }
         self.set_presented_selection(false);
     }
 
@@ -1269,10 +1280,15 @@ impl TerminalView {
     }
 
     fn has_selection(&self) -> bool {
-        if self.selection_scroll.has_presented() { return true; }
+        if self.selection_scroll.has_presented() {
+            return true;
+        }
         let term = self.terminal.term.lock();
         if term.synchronized_output() || self.grid_snap.as_ref().is_some_and(|snap| snap.held) {
-            return self.grid_snap.as_ref().is_some_and(|snap| snap.any_selected);
+            return self
+                .grid_snap
+                .as_ref()
+                .is_some_and(|snap| snap.any_selected);
         }
         term.selection.is_some()
     }
@@ -1290,9 +1306,16 @@ impl TerminalView {
         let mut term = self.terminal.term.lock();
         self.selection_scroll.jump_to_prompt(&mut term);
         drop(term);
-        if self.selection_scroll.has_presented() || self.grid_snap.as_ref().is_some_and(|snap| snap.held && snap.any_selected) {
+        if self.selection_scroll.has_presented()
+            || self
+                .grid_snap
+                .as_ref()
+                .is_some_and(|snap| snap.held && snap.any_selected)
+        {
             self.selection_scroll.clear_presented();
-            for cell in &mut self.grid_buf { cell.selected = false; }
+            for cell in &mut self.grid_buf {
+                cell.selected = false;
+            }
             self.set_presented_selection(false);
         }
         self.terminal.viewport_reporter().report();
@@ -1302,7 +1325,9 @@ impl TerminalView {
         let mut term = self.terminal.term.lock();
         if term.synchronized_output() || self.grid_snap.as_ref().is_some_and(|snap| snap.held) {
             drop(term);
-            let selected = self.selection_scroll.select_all_presented(&mut self.grid_buf);
+            let selected = self
+                .selection_scroll
+                .select_all_presented(&mut self.grid_buf);
             self.set_presented_selection(selected);
             cx.notify();
             return;
@@ -1651,7 +1676,14 @@ impl TerminalView {
             drop(term);
             if let Some(geom) = self.cell_geom {
                 let selected = self.selection_scroll.start_presented(
-                    &mut self.grid_buf, geom.cols, col, row, left, clicks, shift, cx.global::<Config>(),
+                    &mut self.grid_buf,
+                    geom.cols,
+                    col,
+                    row,
+                    left,
+                    clicks,
+                    shift,
+                    cx.global::<Config>(),
                 );
                 self.set_presented_selection(selected);
                 cx.notify();
@@ -1680,13 +1712,19 @@ impl TerminalView {
             && !self.selection_scroll.has_presented()
             && let Some(geom) = self.cell_geom
         {
-            self.selection_scroll.adopt_presented(&self.grid_buf, geom.cols, cx.global::<Config>());
+            self.selection_scroll
+                .adopt_presented(&self.grid_buf, geom.cols, cx.global::<Config>());
         }
         if self.selection_scroll.has_presented() {
             drop(term);
             if let Some(geom) = self.cell_geom {
                 let selected = self.selection_scroll.update_presented(
-                    &mut self.grid_buf, geom.cols, col, row, left, cx.global::<Config>(),
+                    &mut self.grid_buf,
+                    geom.cols,
+                    col,
+                    row,
+                    left,
+                    cx.global::<Config>(),
                 );
                 self.set_presented_selection(selected);
                 cx.notify();

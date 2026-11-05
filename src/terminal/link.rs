@@ -229,7 +229,13 @@ impl LinkInteraction {
         self.hover_resolved(col, row, armed, result)
     }
 
-    pub(super) fn hover_resolved(&mut self, col: usize, row: usize, armed: bool, result: LinkAt) -> (bool, bool) {
+    pub(super) fn hover_resolved(
+        &mut self,
+        col: usize,
+        row: usize,
+        armed: bool,
+        result: LinkAt,
+    ) -> (bool, bool) {
         self.last_cell = Some((col, row));
         self.modifier_down = armed;
         let next = match result {
@@ -327,10 +333,16 @@ impl LinkInteraction {
         include_loopback: bool,
         cached_root: impl FnOnce(HostId, &Path) -> Option<PathBuf>,
     ) -> LinkAt {
-        self.resolve_line(link_line_at(grid, col, row), include_files, include_loopback, cached_root, |points| {
-            let term = grid.lock();
-            super::smart_select::row_runs(&term, points)
-        })
+        self.resolve_line(
+            link_line_at(grid, col, row),
+            include_files,
+            include_loopback,
+            cached_root,
+            |points| {
+                let term = grid.lock();
+                super::smart_select::row_runs(&term, points)
+            },
+        )
     }
 
     pub(super) fn resolve_line(
