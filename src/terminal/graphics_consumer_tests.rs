@@ -7,6 +7,10 @@ mod graphics_pty_fixture {
         env!("CARGO_MANIFEST_DIR"),
         "/tests/support/synchronized_capture.rs"
     ));
+    include!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/support/theme_pty.rs"
+    ));
 }
 
 #[test]
@@ -26,6 +30,7 @@ fn graphics_fixture_sender() {
 }
 
 include!("graphics_media_consumer_tests.rs");
+include!("theme_query_consumer_tests.rs");
 
 struct GraphicsDaemonProcess {
     child: std::process::Child,

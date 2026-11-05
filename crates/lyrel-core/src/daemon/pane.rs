@@ -1325,6 +1325,37 @@ fn answer_device_attributes(writer: &Mutex<Box<dyn Write + Send>>, owed: usize) 
     }
 }
 
+/// Drain every live query while holding the same lock that publishes its
+/// output. An attaching client replays without replies; an attached client
+/// owns the live answer, even if it disconnects before the PTY write happens.
+fn detached_color_scheme_queries(st: &mut PaneState) -> usize {
+    let asked = st.modes.take_color_scheme_queries();
+    if st.subscriptions.controller_epoch().is_some() {
+        0
+    } else {
+        asked
+    }
+}
+
+fn answer_color_scheme_queries(writer: &Mutex<Box<dyn Write + Send>>, owed: usize) {
+    if owed == 0 {
+        return;
+    }
+    // This is the GUI's established appearance hint, including its light
+    // fallback. Read it only for an owed reply, outside the pane state lock.
+    let reply: &[u8] = if crate::core::machine::appearance().dark {
+        b"\x1b[?997;1n"
+    } else {
+        b"\x1b[?997;2n"
+    };
+    if let Ok(mut writer) = writer.lock() {
+        for _ in 0..owed {
+            let _ = writer.write_all(reply);
+        }
+        let _ = writer.flush();
+    }
+}
+
 /// How long the pty stays at the transient size of a [`redraw_nudge`]. Two
 /// size changes in one breath reach a program as one `SIGWINCH` (the kernel
 /// does not queue them), and a program that reads the size only once it gets
