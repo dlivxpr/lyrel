@@ -1528,7 +1528,7 @@ impl<'a> Installer<'a> {
 /// the loop at top level the trailing `true` never ran and every one of these
 /// was a silent no-op on every Mac. That is what left `restart_daemon` waiting
 /// out its ten seconds for a daemon nobody had asked to stop.
-const RUNNING_EXE_COMMAND: &str = r#"if [ -d /proc ]; then for p in /proc/[0-9]*; do e=$(readlink "$p/exe" 2>/dev/null) || continue; case "$e" in */lyrel-server-*) tr '\000' '\n' 2>/dev/null <"$p/cmdline" | grep -qx -e --daemon || continue; printf '%s' "${e% (deleted)}"; break;; esac; done; else ps -xwwo pid=,comm= 2>/dev/null | while read -r pid e; do case "$e" in */lyrel-server-*) case "$(ps -p "$pid" -wwo args= 2>/dev/null)" in "$e --daemon"|"$e --daemon "*) printf '%s' "$e"; break;; esac;; esac; done; fi; true"#;
+const RUNNING_EXE_COMMAND: &str = r#"if [ -d /proc ]; then for p in /proc/[0-9]*; do e=$(readlink "$p/exe" 2>/dev/null) || continue; case "$e" in */lyrel-server-*) tr '\000' '\n' 2>/dev/null <"$p/cmdline" | grep -qx -e --daemon || continue; printf '%s' "${e% (deleted)}"; break;; esac; done; else ps -xwwo pid=,comm= 2>/dev/null | while read -r pid e; do case "$e" in */lyrel-server-*) a=$(ps -p "$pid" -wwo args= 2>/dev/null); case " ${a#"$e"} " in *" --daemon "*) printf '%s' "$e"; break;; esac;; esac; done; fi; true"#;
 
 /// Starts the line [`Installer::quick_prove`]'s script prints once the server
 /// answered, so nothing a login script prints can pass for it.
@@ -1536,7 +1536,9 @@ const QUICK_PROVE_MARK: &str = "lyrel-quick-prove ";
 
 // A server executable can also be a stdio/pane bridge. Only --daemon is a
 // restart target, including daemons left over from another protocol dialect.
-const TERMINATE_RUNNING_COMMAND: &str = r#"if [ -d /proc ]; then for p in /proc/[0-9]*; do e=$(readlink "$p/exe" 2>/dev/null) || continue; case "$e" in */lyrel-server-*) tr '\000' '\n' 2>/dev/null <"$p/cmdline" | grep -qx -e --daemon && kill -TERM "${p#/proc/}" 2>/dev/null;; esac; done; else ps -xwwo pid=,comm= 2>/dev/null | while read -r pid e; do case "$e" in */lyrel-server-*) case "$(ps -p "$pid" -wwo args= 2>/dev/null)" in "$e --daemon"|"$e --daemon "*) kill -TERM "$pid" 2>/dev/null;; esac;; esac; done; fi; true"#;
+// Strip ps's executable path before matching a whitespace-delimited argument,
+// regardless of option order; a path segment or --daemonish is not --daemon.
+const TERMINATE_RUNNING_COMMAND: &str = r#"if [ -d /proc ]; then for p in /proc/[0-9]*; do e=$(readlink "$p/exe" 2>/dev/null) || continue; case "$e" in */lyrel-server-*) tr '\000' '\n' 2>/dev/null <"$p/cmdline" | grep -qx -e --daemon && kill -TERM "${p#/proc/}" 2>/dev/null;; esac; done; else ps -xwwo pid=,comm= 2>/dev/null | while read -r pid e; do case "$e" in */lyrel-server-*) a=$(ps -p "$pid" -wwo args= 2>/dev/null); case " ${a#"$e"} " in *" --daemon "*) kill -TERM "$pid" 2>/dev/null;; esac;; esac; done; fi; true"#;
 
 /// The two files a launch writes beside the server binary. Named here because
 /// `is_first_install` reads the same directory and must not mistake one of
