@@ -21,6 +21,8 @@ mod send;
 mod server;
 #[path = "cli_e2e/tab.rs"]
 mod tab;
+#[path = "cli_e2e/theme.rs"]
+mod theme;
 #[path = "cli_e2e/workspace.rs"]
 mod workspace;
 #[path = "cli_e2e/worktree.rs"]
@@ -35,12 +37,17 @@ mod terminal_pty_fixture {
         env!("CARGO_MANIFEST_DIR"),
         "/../../tests/support/synchronized_capture.rs"
     ));
+    include!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../tests/support/theme_pty.rs"
+    ));
 }
 
 const DAEMON_ENV: &str = "LYREL_CLI_E2E_DAEMON";
 const PASTE_AWARE_FIXTURE_ARG: &str = "--lyrel-e2e-paste-aware-fixture";
 const CAPTURE_TAIL_FIXTURE_ARG: &str = "--lyrel-e2e-capture-tail-fixture";
 const TERMINAL_PTY_FIXTURE_ARG: &str = "--lyrel-e2e-terminal-pty-fixture";
+const THEME_PTY_FIXTURE_ARG: &str = "--lyrel-e2e-theme-pty-fixture";
 const PASTE_AWARE_TEXT: &str = "lyrel paste aware input";
 const PASTE_BURST_WINDOW: Duration = Duration::from_millis(120);
 const READY_WITHIN: Duration = Duration::from_secs(30);
@@ -50,6 +57,10 @@ const CLOSE_WITHIN: Duration = Duration::from_secs(5);
 fn main() {
     if std::env::args().any(|arg| arg == agents::FIXTURE_ARG) {
         agents::fixture();
+        return;
+    }
+    if std::env::args().any(|arg| arg == THEME_PTY_FIXTURE_ARG) {
+        terminal_pty_fixture::theme_query_sender();
         return;
     }
     if std::env::args().any(|arg| arg == TERMINAL_PTY_FIXTURE_ARG) {
@@ -85,6 +96,15 @@ fn main() {
         (
             "agents_report_continuous_state_age",
             agents::agents_report_continuous_state_age,
+        ),
+        (
+            "detached_theme_queries_obey_hint_and_client_ownership",
+            theme::detached_theme_queries_obey_hint_and_client_ownership,
+        ),
+        #[cfg(unix)]
+        (
+            "detached_theme_queries_survive_public_handoff_refold",
+            theme::detached_theme_queries_survive_public_handoff_refold,
         ),
         (
             "retired_executable_names_still_run_as_ordinary_pty_commands",
