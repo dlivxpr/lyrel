@@ -81,7 +81,10 @@ fn empty_attention_keyboard_result_is_readable_and_copyable_in_history(cx: &mut 
     let (app, mut window, _streams) = harness_with_tabs(cx, 1);
     let dir = isolated(&mut window);
     crate::ui::i18n::set_locale("en");
+    let weak = app.downgrade();
     app.update_in(&mut window, |app, window, cx| {
+        crate::ui::windows::WindowRegistry::init(cx);
+        crate::ui::windows::WindowRegistry::register(cx, app.workspace, window.window_handle(), weak);
         let focus = app.tabs[0].pane.terminals()[0].read(cx).focus_handle.clone();
         focus.focus(window, cx);
     });
