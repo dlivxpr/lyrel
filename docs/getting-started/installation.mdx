@@ -187,6 +187,8 @@ Windows Chromium Cookie 的 AES-GCM 解密使用正式 registry 的 `aes-gcm =0.
     仅构建无 GUI 的 core、server 与 CLI，不需要 X11／Wayland／桌面字体开发库。
     以下完整 feature 验证包含既有 Unix GSSAPI，需要 MIT Kerberos 开发包；GSSAPI 仍按平台与 feature 启用，不表示 Windows 新增该认证能力。
 
+    完整测试还需要 **Linux 原生 Node.js 22.19+，且实际支持内置 TypeScript type stripping**。先执行 `node -p 'process.execPath'`、`node --version` 与 `node -p 'process.features.typescript'`；最后一项应为 `strip`（或显式启用转换时的 `transform`）。仅版本号达标不够：本轮 Ubuntu 的 `/usr/bin/node` 虽为 `22.22.1`，该能力仍为 `false`，Pi 桥的真实 `.ts` 导入失败。改用校验过官方 SHA-256 的同版本 Linux 原生发行包、仅在验证进程的 `PATH` 中选择它后，完整范围通过；不跳过 Pi 测试、不使用 Windows `node.exe`、不增加产品转译 fallback。参阅 [Node.js type stripping](https://nodejs.org/docs/latest-v22.x/api/typescript.html#type-stripping)。
+
     ```bash
     sudo apt-get install -y pkg-config cmake clang libzstd-dev libssl-dev libkrb5-dev
     LIBGSSAPI_IMPL=mit cargo build --release --locked --workspace --exclude lyrel --all-features
@@ -194,6 +196,12 @@ Windows Chromium Cookie 的 AES-GCM 解密使用正式 registry 的 `aes-gcm =0.
     ```
 
     不需要可选客户端功能时，可省略 `--all-features`；独立静态 server 使用下文的 musl 构建入口。
+
+    资源受限时使用 `-j1`；若继承的 wrapper 不可用，可仅对本次命令设置 `RUSTC_WRAPPER= CARGO_BUILD_RUSTC_WRAPPER=`，不要改用户全局 Cargo 配置。完整测试会复制真实 runner 并创建 Unix socket，`TMPDIR` 与 target 必须有足够空间；本轮 `/tmp` 是有限 tmpfs，实际 ENOSPC 后将任务自有 target 迁至原生 ext4，并仅在进程中设置较短的自有 `TMPDIR`。不要删除用户缓存或通过缩小测试范围绕过资源失败。项目仍使用 stable Rust，不把本轮 Rust/Cargo `1.99.1` 固定为项目要求。
+
+    **2026-11-05 Linux headless 验收（[#173](https://github.com/dlivxpr/lyrel/issues/173)）：**在 Ubuntu `26.04.1`／WSL2 `x86_64` 上，`5df2f286` 的上述完整 feature 范围 Debug build、tests 与 Release build 均实际 exit `0`；标准测试 `2340 passed`，自定义真实 CLI E2E `26 passed`，另有 `39 ignored`，不把嵌套 fixture 的 `8` 个子进程结果重复加总。Unix daemon／PTY／Host／stdio、未闭合同步与静默 capture、Unicode／wrap／resize／scrollback／cursor、query／replay／会话生命周期已实跑。正常及全 feature 图均无 GPUI、Rio 窗口／GPU／PTY 栈，四个 Rio VT／graphics／Unicode／grapheme-width 包统一为 `0.5.29`，VT defaults 仍关闭。`31712d8e` 只修正 SSH 测试夹具的真实 temp 目录；其受影响的真实 SSH `5` 项与 native lifecycle `1` 项重新编译并全部通过，生产源码、lockfile 与上述 Release 产物不变，不能把它写成另一次完整 workspace 构建。
+
+    与 `069eade7` 的同机、同 Release flags、同原生 Node、实际 `120×30` 几何比较，按 `B1/C1/C2/B2` 保留重复 raw 样本；producer drain、small／large capture、daemon RSS 与绝对 idle CPU 未出现超过噪声的可重复 `>5%` 成本退化。producer drain 中位数变化为 `+1.87%`，不是 paint、FPS 或物理延迟；四次约 `10 s` idle 均为 `0` CPU ticks（`100 Hz`）。完整样本、离群值、忽略项及历史失败分别记录于 #173 的交接证据，不据此宣称 GPU、真实 Kerberos 认证或 Windows／macOS 原生验收通过。GSSAPI-enabled build／动态链接通过不等于有 KDC／principal 的认证已通过。
   </Tab>
 </Tabs>
 
