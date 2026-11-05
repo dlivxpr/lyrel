@@ -1,12 +1,7 @@
 // Real native router -> SSH/SFTP -> Linux daemon -> production TerminalView.
 // These ignored UI integration tests inspect decoder BGRA, TerminalElement paint
 // claims and geometry. They do not certify native-window/GPU output on any OS.
-mod native_ssh_graphics_fixture {
-    include!(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/tests/support/native_ssh_graphics.rs"
-    ));
-}
+use crate::native_ssh_graphics_fixture;
 
 fn native_ssh_consumer_fixture() -> native_ssh_graphics_fixture::NativeSshFixture {
     let binary = std::env::var_os("LYREL_TEST_SSH_LOCAL_SERVER").expect(

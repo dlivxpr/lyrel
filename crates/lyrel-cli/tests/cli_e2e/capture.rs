@@ -84,10 +84,10 @@ pub(super) fn capture_plain_reads_unfinished_synchronized_output_without_a_gui(d
         collect_pane_output_until(pane, format!("KITTY_DONE_{serial};\r").as_bytes());
     };
 
-    let text = terminal_pty_fixture::SYNC_CAPTURE_TEXT;
+    let text = sync_capture_fixture::SYNC_CAPTURE_TEXT;
     send(
         &mut pane,
-        &terminal_pty_fixture::synchronized_capture_frame(),
+        &sync_capture_fixture::synchronized_capture_frame(),
     );
     let raw = daemon.run_ok(&["capture", &address, "--scrollback"]);
     // Unix PTYs preserve the marker. ConPTY can consume/rewrite terminal
@@ -136,7 +136,7 @@ pub(super) fn capture_plain_reads_unfinished_synchronized_output_without_a_gui(d
         .expect("capture after quiet resize");
     assert!(resized.lines().any(|line| line == text), "{resized:?}");
 
-    let next = terminal_pty_fixture::SYNC_NEXT_TEXT;
+    let next = sync_capture_fixture::SYNC_NEXT_TEXT;
     send(
         &mut pane,
         format!("\x1b[?2026h\x1b[8;1H{next}\x1b[?2026l\r\nafter_sync").as_bytes(),

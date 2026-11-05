@@ -160,6 +160,8 @@ Windows Chromium Cookie 的 AES-GCM 解密使用正式 registry 的 `aes-gcm =0.
   <Tab title="macOS">
     GPUI Fast `0.1.13` 需要完整 Xcode 提供 macOS SDK 26+；runner 的 `macos-15` 标签不能证明 SDK 版本。CI 与 Release 桌面构建共用 `.github/scripts/select-macos-sdk.sh`：优先核对显式 `DEVELOPER_DIR`，否则检查当前工具链及 `/Applications/Xcode*.app`，仅选择实际 SDK 版本至少为 26 的工具链。日志输出 Xcode 版本、实际 SDK 版本／路径、clang／metal 路径与 `MACOSX_DEPLOYMENT_TARGET=15.0`；缺少兼容 Xcode／SDK／clang 时直接失败，不下载工具链或修改全局 `xcode-select`。Kit 启用 `runtime_shaders`，因此离线 `metal` 编译器缺失只记录，不作为该配置的构建前提。本地构建前在同一 Bash 中 source 该脚本，或明确提供满足相同要求的 `DEVELOPER_DIR`／`SDKROOT`。根 `build.rs` 的 `lyrel-app` linker 参数与 bundle 的 `LSMinimumSystemVersion` 均为 `15.0`；独立 headless server 不经桌面 SDK 选择脚本、不修改其运行时下限。SDK 日志不是实际 Mac 运行、IME 或签名验收。
 
+    macOS 的 Debug／测试可执行文件使用完整 DWARF 展开信息（`-no_compact_unwind -keep_dwarf_unwind`），避免大型未优化二进制的展开区超过 compact unwind 的 24 位偏移上限。保留 panic 展开、析构及回溯，不关闭 linker diagnostics；此选择仅用于 Cargo 的 `debug` profile，Release 不变。
+
     ```bash
     git clone https://github.com/dlivxpr/lyrel
     cd lyrel
@@ -283,8 +285,8 @@ Windows 桌面与 server 均只发布 x86-64。
 
 | 平台 | 桌面包 | server 资产 |
 | --- | --- | --- |
-| macOS | `lyrel-0.3.0-macos-arm64.{dmg,zip}` | `lyrel-server-macos-aarch64` |
-| Windows | `lyrel-0.3.0-windows-x86_64.zip`、对应 `-setup.exe` | `lyrel-server-windows-x86_64.zip` |
+| macOS | `lyrel-0.3.1-macos-arm64.{dmg,zip}` | `lyrel-server-macos-aarch64` |
+| Windows | `lyrel-0.3.1-windows-x86_64.zip`、对应 `-setup.exe` | `lyrel-server-windows-x86_64.zip` |
 | Linux | 不提供桌面包 | `lyrel-server-linux-{aarch64,x86_64}-musl` |
 
 server 将同一份项目许可证及第三方声明内嵌到二进制中，可运行

@@ -29,7 +29,7 @@ use crate::ui::host_ops::{ByHost, Host, HostId, HostOps, InFlight, SharedHost, W
 /// new subscription lifetime and a refresh receive a never-reused identity.
 fn next_refresh_epoch() -> u64 {
     static NEXT: AtomicU64 = AtomicU64::new(1);
-    NEXT.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |next| {
+    NEXT.try_update(Ordering::Relaxed, Ordering::Relaxed, |next| {
         next.checked_add(1)
     })
     .expect("SCM refresh identities exhausted")
@@ -288,6 +288,7 @@ impl GitSubscriptions {
         self.count(host, root) > 0
     }
 
+    #[cfg(test)]
     /// State what `who` wants right now — safe to call every frame.
     ///
     /// Returns the repository that just lost its last holder, if any, so the
@@ -546,6 +547,7 @@ impl ScmData {
             .unwrap_or(0)
     }
 
+    #[cfg(test)]
     pub fn subscriptions(&mut self) -> &mut GitSubscriptions {
         &mut self.subs
     }

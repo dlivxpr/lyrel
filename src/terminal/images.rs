@@ -27,10 +27,15 @@ pub struct RenderPlacement {
     pub anchor_col: i64,
     width_px: u32,
     height_px: u32,
+    #[cfg(test)]
     revision: u64,
+    #[cfg(test)]
     resource_revision: u64,
+    #[cfg(test)]
     frame_key: u64,
+    #[cfg(test)]
     selection_revision: u64,
+    #[cfg(test)]
     pub playback: Option<lyrel_core::core::graphics_state::Playback>,
     history_origin: i64,
     placeholder: Option<(i32, PlaceholderSlice)>,
@@ -159,6 +164,7 @@ impl RenderPlacement {
 
 struct AnchoredPlacement {
     placement: Placement,
+    #[cfg(test)]
     revision: u64,
     metadata: Arc<Reservation>,
 }
@@ -1060,6 +1066,7 @@ impl ImageStore {
         self.snapshot_with_placeholders(&[])
     }
 
+    #[cfg(test)]
     /// Runs are derived from the same locked grid snapshot as terminal text.
     /// A prototype itself never appears in the display list.
     pub fn snapshot_with_placeholders(
@@ -1111,11 +1118,16 @@ impl ImageStore {
                 anchor_col: anchored.placement.anchor_col,
                 width_px: resource.width,
                 height_px: resource.height,
+                #[cfg(test)]
                 revision: anchored.revision,
                 history_origin: inner.history_origin,
+                #[cfg(test)]
                 resource_revision: resource.revision,
+                #[cfg(test)]
                 frame_key,
+                #[cfg(test)]
                 selection_revision: selection.revision,
+                #[cfg(test)]
                 playback: root.playback.clone(),
                 placeholder,
                 _residency: resource
@@ -1165,6 +1177,7 @@ impl ImageStore {
         images
     }
 
+    #[cfg(test)]
     /// Check both placement revision and resource revision under the same lock
     /// that removal/completion uses, before allocating an atlas tile.
     /// Resource/placement replay precedes the authoritative Screen. Decoding
@@ -1571,12 +1584,16 @@ impl ImageStore {
                 let Some(metadata) = metadata else {
                     return false;
                 };
-                inner.next_revision = inner.next_revision.wrapping_add(1);
-                let revision = inner.next_revision;
+                #[cfg(test)]
+                let revision = {
+                    inner.next_revision = inner.next_revision.wrapping_add(1);
+                    inner.next_revision
+                };
                 inner.placements.insert(
                     placement.key,
                     AnchoredPlacement {
                         placement,
+                        #[cfg(test)]
                         revision,
                         metadata,
                     },

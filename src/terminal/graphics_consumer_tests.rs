@@ -5,6 +5,13 @@ mod graphics_pty_fixture {
     ));
 }
 
+mod sync_capture_fixture {
+    include!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/support/synchronized_capture.rs"
+    ));
+}
+
 #[test]
 #[ignore = "isolated daemon subprocess for the production GPUI consumer tests"]
 fn graphics_fixture_daemon() {
@@ -1947,7 +1954,9 @@ fn sync_presented_row(view: &TerminalView, row: usize) -> String {
     view.grid_buf[row * cols..(row + 1) * cols]
         .iter()
         .filter(|cell| !cell.spacer)
-        .flat_map(|cell| std::iter::once(cell.c).chain(cell.marks.as_deref().unwrap_or(&[]).iter().copied()))
+        .flat_map(|cell| {
+            std::iter::once(cell.c).chain(cell.marks.as_deref().unwrap_or(&[]).iter().copied())
+        })
         // Packed untouched cells paint as blanks. Preserve their columns;
         // only the caller deciding a logical range may trim trailing padding.
         .map(|ch| if ch == '\0' { ' ' } else { ch })
@@ -1955,9 +1964,7 @@ fn sync_presented_row(view: &TerminalView, row: usize) -> String {
 }
 
 #[gpui_kit::test]
-fn synchronized_frame_holds_text_and_caret_across_unrelated_root_redraws(
-    cx: &mut TestAppContext,
-) {
+fn synchronized_frame_holds_text_and_caret_across_unrelated_root_redraws(cx: &mut TestAppContext) {
     use lyrel_core::core::kitty_graphics::{GraphicsUpdate, Image, WireFormat};
     crate::core::config::pin_test_config_dir();
     cx.executor().allow_parking();
@@ -1967,55 +1974,109 @@ fn synchronized_frame_holds_text_and_caret_across_unrelated_root_redraws(
     });
     let (client, mut sender) = test_stream_pair();
     let (view, window) = graphics_build_rooted_consumer_at(
-        cx, 171, client, Vec::new(), TermSize::new(80, 24), PtySource::Raw,
+        cx,
+        171,
+        client,
+        Vec::new(),
+        TermSize::new(80, 24),
+        PtySource::Raw,
     );
     DaemonMsg::Output("\x1b[2J\x1b[Hcommitted\x1b[2;1H宽e\u{301}\x1b[3;1H\x1b]8;;https://old.example/x\x1b\\visible-link\x1b]8;;\x1b\\\x1b[3;5H".as_bytes().to_vec())
         .encode(&mut sender).unwrap();
     let images = view.read_with(cx, |view, _| view.terminal.images());
-    send_admitted_graphics(&images, &mut sender, GraphicsUpdate::Resource {
-        key: 171,
-        image: std::sync::Arc::new(Image { width: 1, height: 1, format: WireFormat::Rgba,
-            compressed: false, data: vec![255, 0, 0, 255] }),
-    });
+    send_admitted_graphics(
+        &images,
+        &mut sender,
+        GraphicsUpdate::Resource {
+            key: 171,
+            image: std::sync::Arc::new(Image {
+                width: 1,
+                height: 1,
+                format: WireFormat::Rgba,
+                compressed: false,
+                data: vec![255, 0, 0, 255],
+            }),
+        },
+    );
     let mut placement = graphics_placement(172, 171, 4, 3);
     placement.x = 0;
     send_admitted_graphics(&images, &mut sender, GraphicsUpdate::Place(placement));
-    send_graphics(&mut sender, GraphicsUpdate::Screen { screen: 0, history_origin: 0, epoch: 0 });
+    send_graphics(
+        &mut sender,
+        GraphicsUpdate::Screen {
+            screen: 0,
+            history_origin: 0,
+            epoch: 0,
+        },
+    );
     graphics_recovery_wait(cx, "the initial committed frame was not painted", |cx| {
-        view.read_with(cx, |view, _| view.grid_snap.as_ref().is_some_and(|snap| snap.images.len() == 1)
-            && sync_presented_row(view, 0).starts_with("committed"))
+        view.read_with(cx, |view, _| {
+            view.grid_snap
+                .as_ref()
+                .is_some_and(|snap| snap.images.len() == 1)
+                && sync_presented_row(view, 0).starts_with("committed")
+        })
     });
-    let painted = view.read_with(cx, |view, _| view.grid_snap.as_ref().unwrap().images[0].painted.clone());
+    let painted = view.read_with(cx, |view, _| {
+        view.grid_snap.as_ref().unwrap().images[0].painted.clone()
+    });
     // A protocol query after the replacement proves bytes are parsed inside
     // the hold; it also distinguishes the removed parser-buffering behavior.
-    sender.set_read_timeout(Some(std::time::Duration::from_secs(5))).unwrap();
-    DaemonMsg::Output(b"\x1b[?2026h".to_vec()).encode(&mut sender).unwrap();
+    sender
+        .set_read_timeout(Some(std::time::Duration::from_secs(5)))
+        .unwrap();
+    DaemonMsg::Output(b"\x1b[?2026h".to_vec())
+        .encode(&mut sender)
+        .unwrap();
     // A non-output frame flushes BSU before the next parser advance.
-    DaemonMsg::Cwd(std::path::PathBuf::from("/sync-fixture")).encode(&mut sender).unwrap();
+    DaemonMsg::Cwd(std::path::PathBuf::from("/sync-fixture"))
+        .encode(&mut sender)
+        .unwrap();
     DaemonMsg::Output(b"\x1b[Hpartial\x1b[K\x1b[2;1Hhidden\x1b[K\x1b[3;1H\x1b]8;;https://new.example/x\x1b\\visible-link\x1b]8;;\x1b\\\x1b[7;9H".to_vec()).encode(&mut sender).unwrap();
-    send_graphics(&mut sender, GraphicsUpdate::Remove { placements: vec![172], resources: vec![171] });
-    DaemonMsg::Output(b"\x1b[6n".to_vec()).encode(&mut sender).unwrap();
+    send_graphics(
+        &mut sender,
+        GraphicsUpdate::Remove {
+            placements: vec![172],
+            resources: vec![171],
+        },
+    );
+    DaemonMsg::Output(b"\x1b[6n".to_vec())
+        .encode(&mut sender)
+        .unwrap();
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
     loop {
         let parsed = view.read_with(cx, |view, _| {
             let mut term = view.terminal.term.lock();
-            if term.grid[Line(0)][Column(0)].c() != 'p' { return false; }
-            assert!(term.synchronized_output(), "the pre-deadline observation must still be held");
+            if term.grid[Line(0)][Column(0)].c() != 'p' {
+                return false;
+            }
+            assert!(
+                term.synchronized_output(),
+                "the pre-deadline observation must still be held"
+            );
             // Control only this atomicity test's clock origin. The separate
             // quiet-stream regression uses the real 150 ms reader deadline.
-            term.sync_update_started = Some(rio_vt::time::Instant::now() + std::time::Duration::from_secs(5));
+            term.sync_update_started =
+                Some(rio_vt::time::Instant::now() + std::time::Duration::from_secs(5));
             true
         });
-        if parsed { break; }
-        assert!(std::time::Instant::now() < deadline, "live parsing stalled behind BSU");
+        if parsed {
+            break;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "live parsing stalled behind BSU"
+        );
         std::thread::yield_now();
     }
     let mut replies = sender.try_clone().unwrap();
     let (reply_tx, reply_rx) = std::sync::mpsc::channel();
-    let reader = std::thread::spawn(move || loop {
-        if let ClientMsg::Input(bytes) = ClientMsg::read(&mut replies).unwrap() {
-            reply_tx.send(bytes).unwrap();
-            break;
+    let reader = std::thread::spawn(move || {
+        loop {
+            if let ClientMsg::Input(bytes) = ClientMsg::read(&mut replies).unwrap() {
+                reply_tx.send(bytes).unwrap();
+                break;
+            }
         }
     });
     let mut reply = None;
@@ -2026,14 +2087,16 @@ fn synchronized_frame_holds_text_and_caret_across_unrelated_root_redraws(
     reader.join().unwrap();
     assert_eq!(reply.unwrap(), b"\x1b[7;9R");
     painted.store(false, std::sync::atomic::Ordering::Release);
-    window.update(cx, |_, window, cx| {
-        view.update(cx, |view, cx| {
-            view.focus_handle.focus(window, cx);
-            cx.notify();
-        });
-        window.refresh();
-        window.draw(cx).clear(cx);
-    }).unwrap();
+    window
+        .update(cx, |_, window, cx| {
+            view.update(cx, |view, cx| {
+                view.focus_handle.focus(window, cx);
+                cx.notify();
+            });
+            window.refresh();
+            window.draw(cx).clear(cx);
+        })
+        .unwrap();
     view.read_with(cx, |view, _| {
         assert!(sync_presented_row(view, 0).starts_with("committed"));
         assert_eq!(view.grid_snap.as_ref().unwrap().painted_cursor().map(|(r,c,_)| (r,c)), Some((2,4)));
@@ -2051,23 +2114,43 @@ fn synchronized_frame_holds_text_and_caret_across_unrelated_root_redraws(
         view.copy_selection(cx);
         assert_eq!(view.selection_text().as_deref(), Some("committed"));
     });
-    assert_eq!(cx.update(|cx| cx.read_from_clipboard().and_then(|item| item.text())).as_deref(), Some("committed"));
+    assert_eq!(
+        cx.update(|cx| cx.read_from_clipboard().and_then(|item| item.text()))
+            .as_deref(),
+        Some("committed")
+    );
     view.update(cx, |view, cx| {
         view.on_select_start(1, 1, true, 1, false, cx);
         view.on_select_update(2, 1, false, cx);
         view.on_select_end(cx);
         view.copy_selection(cx);
     });
-    assert_eq!(cx.update(|cx| cx.read_from_clipboard().and_then(|item| item.text())).as_deref(), Some("宽e\u{301}"));
-    window.update(cx, |_, window, cx| {
-        view.update(cx, |view, cx| assert!(view.open_link_at(2, 2, window, cx)));
-    }).unwrap();
+    assert_eq!(
+        cx.update(|cx| cx.read_from_clipboard().and_then(|item| item.text()))
+            .as_deref(),
+        Some("宽e\u{301}")
+    );
+    window
+        .update(cx, |_, window, cx| {
+            view.update(cx, |view, cx| assert!(view.open_link_at(2, 2, window, cx)));
+        })
+        .unwrap();
     assert_eq!(cx.opened_url().as_deref(), Some("https://old.example/x"));
-    DaemonMsg::Output(b"\x1b[?2026l".to_vec()).encode(&mut sender).unwrap();
+    DaemonMsg::Output(b"\x1b[?2026l".to_vec())
+        .encode(&mut sender)
+        .unwrap();
     graphics_recovery_wait(cx, "ESU did not publish the coherent frame", |cx| {
-        view.read_with(cx, |view, _| sync_presented_row(view, 0).starts_with("partial")
-            && view.grid_snap.as_ref().unwrap().images.is_empty()
-            && view.grid_snap.as_ref().unwrap().painted_cursor().map(|(r,c,_)| (r,c)) == Some((6,8)))
+        view.read_with(cx, |view, _| {
+            sync_presented_row(view, 0).starts_with("partial")
+                && view.grid_snap.as_ref().unwrap().images.is_empty()
+                && view
+                    .grid_snap
+                    .as_ref()
+                    .unwrap()
+                    .painted_cursor()
+                    .map(|(r, c, _)| (r, c))
+                    == Some((6, 8))
+        })
     });
 }
 
@@ -2081,23 +2164,43 @@ fn quiet_unfinished_synchronized_frame_paints_without_more_output(cx: &mut TestA
     });
     let (client, mut sender) = test_stream_pair();
     let (view, _window) = graphics_build_rooted_consumer_at(
-        cx, 172, client, Vec::new(), TermSize::new(80, 24), PtySource::Raw,
+        cx,
+        172,
+        client,
+        Vec::new(),
+        TermSize::new(80, 24),
+        PtySource::Raw,
     );
     DaemonMsg::Output(b"\x1b[?2026h\x1b[Hquiet-first-frame".to_vec())
-        .encode(&mut sender).unwrap();
-    graphics_recovery_wait(cx, "a quiet first synchronized frame remained suspended", |cx| {
-        view.read_with(cx, |view, _| view.grid_snap.is_some()
-            && sync_presented_row(view, 0).starts_with("quiet-first-frame"))
+        .encode(&mut sender)
+        .unwrap();
+    graphics_recovery_wait(
+        cx,
+        "a quiet first synchronized frame remained suspended",
+        |cx| {
+            view.read_with(cx, |view, _| {
+                view.grid_snap.is_some()
+                    && sync_presented_row(view, 0).starts_with("quiet-first-frame")
+            })
+        },
+    );
+    view.read_with(cx, |view, _| {
+        assert!(!view.terminal.term.lock().synchronized_output())
     });
-    view.read_with(cx, |view, _| assert!(!view.terminal.term.lock().synchronized_output()));
-    DaemonMsg::Output(b"\r\nafter-timeout".to_vec()).encode(&mut sender).unwrap();
+    DaemonMsg::Output(b"\r\nafter-timeout".to_vec())
+        .encode(&mut sender)
+        .unwrap();
     graphics_recovery_wait(cx, "output after timeout was lost", |cx| {
-        view.read_with(cx, |view, _| sync_presented_row(view, 1).starts_with("after-timeout"))
+        view.read_with(cx, |view, _| {
+            sync_presented_row(view, 1).starts_with("after-timeout")
+        })
     });
 }
 
 #[gpui_kit::test]
-fn presentation_boundaries_publish_received_text_without_a_later_pty_frame(cx: &mut TestAppContext) {
+fn presentation_boundaries_publish_received_text_without_a_later_pty_frame(
+    cx: &mut TestAppContext,
+) {
     use crate::daemon::protocol::WinSize;
     crate::core::config::pin_test_config_dir();
     cx.executor().allow_parking();
@@ -2107,23 +2210,53 @@ fn presentation_boundaries_publish_received_text_without_a_later_pty_frame(cx: &
     });
     let cases = [
         ("replay", DaemonMsg::Snapshot(Vec::new()), "received"),
-        ("resize", DaemonMsg::Size(WinSize { cols: 79, rows: 24, cell_w: 10, cell_h: 20 }), "received"),
+        (
+            "resize",
+            DaemonMsg::Size(WinSize {
+                cols: 79,
+                rows: 24,
+                cell_w: 10,
+                cell_h: 20,
+            }),
+            "received",
+        ),
         ("reset", DaemonMsg::Output(b"\x1bcreset".to_vec()), "reset"),
-        ("command", DaemonMsg::Output(b"\x1b]133;D;0\x07".to_vec()), "received"),
-        ("prompt", DaemonMsg::Prompt { active: true, at_prompt: true, last_exit: Some(0) }, "received"),
+        (
+            "command",
+            DaemonMsg::Output(b"\x1b]133;D;0\x07".to_vec()),
+            "received",
+        ),
+        (
+            "prompt",
+            DaemonMsg::Prompt {
+                active: true,
+                at_prompt: true,
+                last_exit: Some(0),
+            },
+            "received",
+        ),
         ("exit", DaemonMsg::Exited { code: Some(0) }, "received"),
     ];
     for (label, boundary, expected) in cases {
         let (client, mut sender) = test_stream_pair();
         let (view, window) = graphics_build_rooted_consumer_at(
-            cx, 173, client, Vec::new(), TermSize::new(80, 24), PtySource::Raw,
+            cx,
+            173,
+            client,
+            Vec::new(),
+            TermSize::new(80, 24),
+            PtySource::Raw,
         );
-        DaemonMsg::Output(b"\x1b[?2026h\x1b[Hreceived".to_vec()).encode(&mut sender).unwrap();
+        DaemonMsg::Output(b"\x1b[?2026h\x1b[Hreceived".to_vec())
+            .encode(&mut sender)
+            .unwrap();
         boundary.encode(&mut sender).unwrap();
         graphics_recovery_wait(cx, label, |cx| {
-            view.read_with(cx, |view, _| view.grid_snap.is_some()
-                && sync_presented_row(view, 0).starts_with(expected)
-                && !view.terminal.term.lock().synchronized_output())
+            view.read_with(cx, |view, _| {
+                view.grid_snap.is_some()
+                    && sync_presented_row(view, 0).starts_with(expected)
+                    && !view.terminal.term.lock().synchronized_output()
+            })
         });
         graphics_recovery_destroy(view, window, cx);
     }
@@ -2139,26 +2272,54 @@ fn reconnect_replay_replaces_an_open_picture_without_inheriting_its_hold(cx: &mu
     });
     let (client, mut old_sender) = test_stream_pair();
     let (view, window) = graphics_build_rooted_consumer_at(
-        cx, 174, client, Vec::new(), TermSize::new(80, 24), PtySource::Raw,
+        cx,
+        174,
+        client,
+        Vec::new(),
+        TermSize::new(80, 24),
+        PtySource::Raw,
     );
-    DaemonMsg::Output(b"\x1b[Hbefore-reconnect".to_vec()).encode(&mut old_sender).unwrap();
+    DaemonMsg::Output(b"\x1b[Hbefore-reconnect".to_vec())
+        .encode(&mut old_sender)
+        .unwrap();
     graphics_recovery_wait(cx, "baseline", |cx| {
-        view.read_with(cx, |view, _| view.grid_snap.is_some() && sync_presented_row(view, 0).starts_with("before-reconnect"))
+        view.read_with(cx, |view, _| {
+            view.grid_snap.is_some() && sync_presented_row(view, 0).starts_with("before-reconnect")
+        })
     });
-    DaemonMsg::Output(b"\x1b[?2026h\x1b[Hunfinished-old-link".to_vec()).encode(&mut old_sender).unwrap();
+    DaemonMsg::Output(b"\x1b[?2026h\x1b[Hunfinished-old-link".to_vec())
+        .encode(&mut old_sender)
+        .unwrap();
     let (client, mut sender) = test_stream_pair();
     view.update(cx, |view, cx| {
-        view.adopt_relink(client, Vec::new(), &crate::terminal::PaneRoute::Local, TermSize::new(80,24), 10,20, cx).unwrap();
+        view.adopt_relink(
+            client,
+            Vec::new(),
+            &crate::terminal::PaneRoute::Local,
+            TermSize::new(80, 24),
+            10,
+            20,
+            cx,
+        )
+        .unwrap();
     });
-    DaemonMsg::Snapshot(b"\x1b[?2026h\x1b[Hreplayed-new-link\x1b[6n".to_vec()).encode(&mut sender).unwrap();
+    DaemonMsg::Snapshot(b"\x1b[?2026h\x1b[Hreplayed-new-link\x1b[6n".to_vec())
+        .encode(&mut sender)
+        .unwrap();
     graphics_recovery_wait(cx, "fresh replay kept an old presentation hold", |cx| {
-        view.read_with(cx, |view, _| view.grid_snap.is_some()
-            && sync_presented_row(view, 0).starts_with("replayed-new-link")
-            && !view.terminal.term.lock().synchronized_output())
+        view.read_with(cx, |view, _| {
+            view.grid_snap.is_some()
+                && sync_presented_row(view, 0).starts_with("replayed-new-link")
+                && !view.terminal.term.lock().synchronized_output()
+        })
     });
-    DaemonMsg::Output(b"\r\nnew-live-output".to_vec()).encode(&mut sender).unwrap();
+    DaemonMsg::Output(b"\r\nnew-live-output".to_vec())
+        .encode(&mut sender)
+        .unwrap();
     graphics_recovery_wait(cx, "live output after replay", |cx| {
-        view.read_with(cx, |view, _| sync_presented_row(view, 1).starts_with("new-live-output"))
+        view.read_with(cx, |view, _| {
+            sync_presented_row(view, 1).starts_with("new-live-output")
+        })
     });
     graphics_recovery_destroy(view, window, cx);
 }
@@ -2173,38 +2334,96 @@ fn gui_and_cli_shared_synchronized_ranges_converge_at_the_same_geometry(cx: &mut
         gpui_kit::component::init(cx);
         cx.set_global(Config::default());
     });
-    let source = if cfg!(windows) { PtySource::LocalConpty } else { PtySource::Raw };
-    let (view, window) = graphics_build_rooted_consumer_at(
-        cx, pane, daemon.stream(pane), Vec::new(), TermSize::new(40,24), source,
-    );
-    graphics_assert_production_paint_at(window, &view, cx, TermSize::new(40,24));
-    graphics_send_fixture(&view, cx, 171, &graphics_pty_fixture::synchronized_capture_frame());
-    let visible_range = |view: &TerminalView, first: usize| {
-        format!("{}{}", sync_presented_row(view, first).trim_end(), sync_presented_row(view, first + 1).trim_end())
+    let source = if cfg!(windows) {
+        PtySource::LocalConpty
+    } else {
+        PtySource::Raw
     };
-    graphics_recovery_wait_with(cx, std::time::Duration::from_secs(30), |cx| {
-        view.read_with(cx, |view, _| view.grid_snap.is_some()
-            && visible_range(view, 3) == graphics_pty_fixture::SYNC_CAPTURE_TEXT)
-    }, |cx| {
-        view.read_with(cx, |view, _| {
+    let (view, window) = graphics_build_rooted_consumer_at(
+        cx,
+        pane,
+        daemon.stream(pane),
+        Vec::new(),
+        TermSize::new(40, 24),
+        source,
+    );
+    graphics_assert_production_paint_at(window, &view, cx, TermSize::new(40, 24));
+    graphics_send_fixture(
+        &view,
+        cx,
+        171,
+        &sync_capture_fixture::synchronized_capture_frame(),
+    );
+    let visible_range = |view: &TerminalView, first: usize| {
+        format!(
+            "{}{}",
+            sync_presented_row(view, first).trim_end(),
+            sync_presented_row(view, first + 1).trim_end()
+        )
+    };
+    graphics_recovery_wait_with(
+        cx,
+        std::time::Duration::from_secs(30),
+        |cx| {
+            view.read_with(cx, |view, _| {
+                view.grid_snap.is_some()
+                    && visible_range(view, 3) == sync_capture_fixture::SYNC_CAPTURE_TEXT
+            })
+        },
+        |cx| {
+            view.read_with(cx, |view, _| {
             let term = view.terminal.term.lock();
             format!("quiet GUI did not converge to the CLI's shared Unicode/wrap range; expected={:?}; painted_rows={:?}; painted_geometry={:?}; live_geometry={}x{}; live_wrap={}; synchronized={}",
-                graphics_pty_fixture::SYNC_CAPTURE_TEXT,
+                sync_capture_fixture::SYNC_CAPTURE_TEXT,
                 view.grid_snap.as_ref().map(|_| (sync_presented_row(view, 3), sync_presented_row(view, 4))),
                 view.cell_geom.map(|geometry| (geometry.cols, geometry.rows)),
                 term.columns(), term.screen_lines(), term.mode().contains(rio_vt::crosswords::Mode::LINE_WRAP), term.synchronized_output())
         })
-    });
+        },
+    );
     graphics_send_fixture(&view, cx, 172, b"\x1b[?2026l");
-    graphics_recovery_wait(cx, "settled GUI frame diverged from the shared capture range", |cx| {
-        view.read_with(cx, |view, _| visible_range(view, 3) == graphics_pty_fixture::SYNC_CAPTURE_TEXT
-            && view.grid_snap.as_ref().unwrap().painted_cursor().map(|(r,c,_)| (r,c)) == Some((4,22)))
-    });
-    graphics_send_fixture(&view, cx, 173, format!("\x1b[?2026h\x1b[8;1H{}\x1b[?2026l", graphics_pty_fixture::SYNC_NEXT_TEXT).as_bytes());
-    graphics_recovery_wait(cx, "successive GUI update lost the shared capture range", |cx| {
-        view.read_with(cx, |view, _| visible_range(view, 7) == graphics_pty_fixture::SYNC_NEXT_TEXT
-            && view.grid_snap.as_ref().unwrap().painted_cursor().map(|(r,c,_)| (r,c)) == Some((8,6)))
-    });
+    graphics_recovery_wait(
+        cx,
+        "settled GUI frame diverged from the shared capture range",
+        |cx| {
+            view.read_with(cx, |view, _| {
+                visible_range(view, 3) == sync_capture_fixture::SYNC_CAPTURE_TEXT
+                    && view
+                        .grid_snap
+                        .as_ref()
+                        .unwrap()
+                        .painted_cursor()
+                        .map(|(r, c, _)| (r, c))
+                        == Some((4, 22))
+            })
+        },
+    );
+    graphics_send_fixture(
+        &view,
+        cx,
+        173,
+        format!(
+            "\x1b[?2026h\x1b[8;1H{}\x1b[?2026l",
+            sync_capture_fixture::SYNC_NEXT_TEXT
+        )
+        .as_bytes(),
+    );
+    graphics_recovery_wait(
+        cx,
+        "successive GUI update lost the shared capture range",
+        |cx| {
+            view.read_with(cx, |view, _| {
+                visible_range(view, 7) == sync_capture_fixture::SYNC_NEXT_TEXT
+                    && view
+                        .grid_snap
+                        .as_ref()
+                        .unwrap()
+                        .painted_cursor()
+                        .map(|(r, c, _)| (r, c))
+                        == Some((8, 6))
+            })
+        },
+    );
     daemon.panes().kill(pane).unwrap();
     graphics_recovery_destroy(view, window, cx);
 }
@@ -2218,50 +2437,89 @@ fn synchronized_resize_consumer(cx: &mut TestAppContext, finish_before_size: Opt
     });
     let (client, _initial_sender) = test_stream_pair();
     let (view, window) = graphics_build_rooted_consumer_at(
-        cx, 175, client, Vec::new(), TermSize::new(80, 24), PtySource::Raw,
+        cx,
+        175,
+        client,
+        Vec::new(),
+        TermSize::new(80, 24),
+        PtySource::Raw,
     );
     let (client, mut sender) = test_stream_pair();
     view.update(cx, |view, cx| {
-        view.adopt_relink(client, Vec::new(), &crate::terminal::PaneRoute::Remote {
-            header: Box::new(crate::daemon::router::RouteHeader::wsl("resize-fixture")),
-            resize_echo: true,
-        }, TermSize::new(80, 24), 10, 20, cx).unwrap();
+        view.adopt_relink(
+            client,
+            Vec::new(),
+            &crate::terminal::PaneRoute::Remote {
+                header: Box::new(crate::daemon::router::RouteHeader::wsl("resize-fixture")),
+                resize_echo: true,
+            },
+            TermSize::new(80, 24),
+            10,
+            20,
+            cx,
+        )
+        .unwrap();
     });
     DaemonMsg::Output(b"\x1b[2J\x1b[Hbefore\x1b[2;1Hrow-two\x1b[3;5H".to_vec())
-        .encode(&mut sender).unwrap();
+        .encode(&mut sender)
+        .unwrap();
     graphics_recovery_wait(cx, "committed rows were not painted", |cx| {
-        view.read_with(cx, |view, _| view.grid_snap.is_some()
-            && sync_presented_row(view, 1).starts_with("row-two"))
+        view.read_with(cx, |view, _| {
+            view.grid_snap.is_some() && sync_presented_row(view, 1).starts_with("row-two")
+        })
     });
-    DaemonMsg::Output(b"\x1b[?2026h".to_vec()).encode(&mut sender).unwrap();
-    DaemonMsg::Cwd(std::path::PathBuf::from("/resize-hold")).encode(&mut sender).unwrap();
-    DaemonMsg::Output(b"\x1b[Hpartial".to_vec()).encode(&mut sender).unwrap();
+    DaemonMsg::Output(b"\x1b[?2026h".to_vec())
+        .encode(&mut sender)
+        .unwrap();
+    DaemonMsg::Cwd(std::path::PathBuf::from("/resize-hold"))
+        .encode(&mut sender)
+        .unwrap();
+    DaemonMsg::Output(b"\x1b[Hpartial".to_vec())
+        .encode(&mut sender)
+        .unwrap();
     // The reader remains real; move only this test's deadline so its held
     // picture can be observed independently of the 150 ms quiet-stream case.
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
     loop {
         if view.read_with(cx, |view, _| {
             let mut term = view.terminal.term.lock();
-            if term.grid[Line(0)][Column(0)].c() != 'p' { return false; }
+            if term.grid[Line(0)][Column(0)].c() != 'p' {
+                return false;
+            }
             assert!(term.synchronized_output());
-            term.sync_update_started = Some(rio_vt::time::Instant::now() + std::time::Duration::from_secs(30));
+            term.sync_update_started =
+                Some(rio_vt::time::Instant::now() + std::time::Duration::from_secs(30));
             true
-        }) { break; }
+        }) {
+            break;
+        }
         assert!(std::time::Instant::now() < deadline, "hold was not parsed");
         std::thread::yield_now();
     }
     let target = graphics_window_geometry(window, &view, cx, TermSize::new(96, 20)).0;
     cx.simulate_window_resize(window, target);
-    window.update(cx, |_, window, cx| {
-        window.refresh();
-        window.draw(cx).clear(cx);
-    }).unwrap();
+    window
+        .update(cx, |_, window, cx| {
+            window.refresh();
+            window.draw(cx).clear(cx);
+        })
+        .unwrap();
     view.read_with(cx, |view, _| {
-        assert_eq!(sync_presented_row(view, 1).trim_end(), "row-two",
-            "equal area resize must not reinterpret the committed second row");
+        assert_eq!(
+            sync_presented_row(view, 1).trim_end(),
+            "row-two",
+            "equal area resize must not reinterpret the committed second row"
+        );
         let geom = view.cell_geom.unwrap();
         assert_eq!((geom.cols, geom.rows), (80, 24));
-        assert_eq!(view.grid_snap.as_ref().unwrap().painted_cursor().map(|(r,c,_)| (r,c)), Some((2,4)));
+        assert_eq!(
+            view.grid_snap
+                .as_ref()
+                .unwrap()
+                .painted_cursor()
+                .map(|(r, c, _)| (r, c)),
+            Some((2, 4))
+        );
     });
     view.update(cx, |view, cx| {
         view.on_select_start(0, 1, true, 1, false, cx);
@@ -2269,35 +2527,66 @@ fn synchronized_resize_consumer(cx: &mut TestAppContext, finish_before_size: Opt
         view.on_select_end(cx);
         view.copy_selection(cx);
     });
-    assert_eq!(cx.update(|cx| cx.read_from_clipboard().and_then(|item| item.text())).as_deref(), Some("row-two"));
+    assert_eq!(
+        cx.update(|cx| cx.read_from_clipboard().and_then(|item| item.text()))
+            .as_deref(),
+        Some("row-two")
+    );
     if let Some(timeout) = finish_before_size {
         if timeout {
             view.read_with(cx, |view, _| {
-                view.terminal.term.lock().sync_update_started = Some(rio_vt::time::Instant::now() - std::time::Duration::from_secs(1));
+                view.terminal.term.lock().sync_update_started =
+                    Some(rio_vt::time::Instant::now() - std::time::Duration::from_secs(1));
             });
         } else {
-            DaemonMsg::Output(b"\x1b[?2026l".to_vec()).encode(&mut sender).unwrap();
+            DaemonMsg::Output(b"\x1b[?2026l".to_vec())
+                .encode(&mut sender)
+                .unwrap();
         }
         graphics_recovery_wait(cx, "hold did not end before the ordered Size", |cx| {
-            view.read_with(cx, |view, _| !view.terminal.term.lock().synchronized_output())
+            view.read_with(cx, |view, _| {
+                !view.terminal.term.lock().synchronized_output()
+            })
         });
-        window.update(cx, |_, window, cx| {
-            window.refresh();
-            window.draw(cx).clear(cx);
-        }).unwrap();
+        window
+            .update(cx, |_, window, cx| {
+                window.refresh();
+                window.draw(cx).clear(cx);
+            })
+            .unwrap();
         view.read_with(cx, |view, _| {
-            assert_eq!(sync_presented_row(view, 1).trim_end(), "row-two", "ending the hold must not readdress old-width VT cells");
+            assert_eq!(
+                sync_presented_row(view, 1).trim_end(),
+                "row-two",
+                "ending the hold must not readdress old-width VT cells"
+            );
             let geom = view.cell_geom.unwrap();
-            assert_eq!((geom.cols, geom.rows), (80,24));
-            assert!(sync_presented_row(view, 0).starts_with("before"), "pending resize must retain one coherent committed picture");
+            assert_eq!((geom.cols, geom.rows), (80, 24));
+            assert!(
+                sync_presented_row(view, 0).starts_with("before"),
+                "pending resize must retain one coherent committed picture"
+            );
         });
     }
-    DaemonMsg::Size(crate::daemon::protocol::WinSize { cols: 96, rows: 20, cell_w: 10, cell_h: 20 })
-        .encode(&mut sender).unwrap();
-    graphics_recovery_wait(cx, "ordered resize did not release the old addressing", |cx| {
-        view.read_with(cx, |view, _| view.cell_geom.is_some_and(|geom| (geom.cols, geom.rows) == (96,20))
-            && !view.grid_snap.as_ref().unwrap().held)
-    });
+    DaemonMsg::Size(crate::daemon::protocol::WinSize {
+        cols: 96,
+        rows: 20,
+        cell_w: 10,
+        cell_h: 20,
+    })
+    .encode(&mut sender)
+    .unwrap();
+    graphics_recovery_wait(
+        cx,
+        "ordered resize did not release the old addressing",
+        |cx| {
+            view.read_with(cx, |view, _| {
+                view.cell_geom
+                    .is_some_and(|geom| (geom.cols, geom.rows) == (96, 20))
+                    && !view.grid_snap.as_ref().unwrap().held
+            })
+        },
+    );
     graphics_recovery_destroy(view, window, cx);
 }
 
@@ -2326,61 +2615,141 @@ fn synchronized_copy_preserves_live_tab_line_wrap_and_unicode_semantics(cx: &mut
     });
     let (client, mut sender) = test_stream_pair();
     let (view, window) = graphics_build_rooted_consumer_at(
-        cx, 176, client, Vec::new(), TermSize::new(80, 24), PtySource::Raw,
+        cx,
+        176,
+        client,
+        Vec::new(),
+        TermSize::new(80, 24),
+        PtySource::Raw,
     );
     DaemonMsg::Output("\x1b[?7h\x1b[2J\x1b[Ha\tb\x1b[2;1Hplain  text\x1b[3;79H界e\u{301}Z\x1b[5;1HAe\u{301}中B\x1b[7;1Ha\x1b[10;1Hb\x1b[11;1Htail   suffix\x1b[12;1Htrail   \x1b[13;80H中e\u{301}B\x1b[15;1H   indented\x1b[16;1Hhard-a\x1b[17;1Hhard-b\x1b[21;78Ha   b".as_bytes().to_vec())
         .encode(&mut sender).unwrap();
     graphics_recovery_wait(cx, "copy fixture did not paint", |cx| {
-        view.read_with(cx, |view, _| view.grid_snap.is_some()
-            && sync_presented_row(view, 4).starts_with("Ae\u{301}中B"))
+        view.read_with(cx, |view, _| {
+            view.grid_snap.is_some() && sync_presented_row(view, 4).starts_with("Ae\u{301}中B")
+        })
     });
     let wrapped_line = format!("{}界e\u{301}Z\n", " ".repeat(78));
     let leading_wrapped_line = format!("\n{}中e\u{301}B\n", " ".repeat(79));
     let wrapped_space_line = format!("{}a   b\n", " ".repeat(77));
     let cases = [
-        ("tab", (0,0), (8,0), 1, "a\tb"),
-        ("line", (0,0), (8,0), 3, "a\tb\n"),
-        ("tab filler selection starts after Tab", (2,0), (8,0), 1, "      b"),
-        ("selection ends within tab run", (0,0), (3,0), 1, "a\t"),
-        ("plain", (0,1), (10,1), 1, "plain  text"),
-        ("wrap", (78,2), (1,3), 1, "界e\u{301}Z"),
-        ("wrapped Lines", (78,2), (1,3), 3, wrapped_line.as_str()),
-        ("soft wrap preserves cross-row spaces", (77,20), (1,21), 1, "a   b"),
-        ("Lines soft wrap preserves cross-row spaces", (77,20), (1,21), 3, wrapped_space_line.as_str()),
-        ("wide and combining boundaries", (1,4), (3,4), 1, "e\u{301}中"),
-        ("starts at wide trailing spacer", (3,4), (4,4), 1, "中B"),
-        ("ends at wide trailing spacer", (0,4), (3,4), 1, "Ae\u{301}中"),
-        ("combining cell only", (1,4), (1,4), 1, "e\u{301}"),
-        ("Simple trailing blank rows", (0,6), (79,8), 1, "a"),
-        ("Lines trailing blank rows", (0,6), (79,8), 3, "a\n"),
-        ("embedded blank rows stay", (0,6), (0,9), 1, "a\n\n\nb"),
-        ("Rio trims selected trailing spaces", (0,10), (6,10), 1, "tail"),
-        ("right padding is not text", (0,10), (79,10), 1, "tail   suffix"),
-        ("terminal trailing spaces", (0,11), (79,11), 1, "trail"),
-        ("starts at wide leading spacer", (79,12), (3,13), 1, "\n中e\u{301}B"),
-        ("Lines starts at wide leading spacer", (79,12), (3,13), 3, leading_wrapped_line.as_str()),
-        ("Lines ends at wide leading spacer", (78,12), (79,12), 3, leading_wrapped_line.as_str()),
-        ("leading whitespace stays", (0,14), (10,14), 1, "   indented"),
-        ("hard line break", (0,15), (5,16), 1, "hard-a\nhard-b"),
-        ("Simple all blank rows", (0,17), (79,18), 1, ""),
-        ("Lines all blank rows", (0,17), (79,18), 3, "\n"),
+        ("tab", (0, 0), (8, 0), 1, "a\tb"),
+        ("line", (0, 0), (8, 0), 3, "a\tb\n"),
+        (
+            "tab filler selection starts after Tab",
+            (2, 0),
+            (8, 0),
+            1,
+            "      b",
+        ),
+        ("selection ends within tab run", (0, 0), (3, 0), 1, "a\t"),
+        ("plain", (0, 1), (10, 1), 1, "plain  text"),
+        ("wrap", (78, 2), (1, 3), 1, "界e\u{301}Z"),
+        ("wrapped Lines", (78, 2), (1, 3), 3, wrapped_line.as_str()),
+        (
+            "soft wrap preserves cross-row spaces",
+            (77, 20),
+            (1, 21),
+            1,
+            "a   b",
+        ),
+        (
+            "Lines soft wrap preserves cross-row spaces",
+            (77, 20),
+            (1, 21),
+            3,
+            wrapped_space_line.as_str(),
+        ),
+        (
+            "wide and combining boundaries",
+            (1, 4),
+            (3, 4),
+            1,
+            "e\u{301}中",
+        ),
+        ("starts at wide trailing spacer", (3, 4), (4, 4), 1, "中B"),
+        (
+            "ends at wide trailing spacer",
+            (0, 4),
+            (3, 4),
+            1,
+            "Ae\u{301}中",
+        ),
+        ("combining cell only", (1, 4), (1, 4), 1, "e\u{301}"),
+        ("Simple trailing blank rows", (0, 6), (79, 8), 1, "a"),
+        ("Lines trailing blank rows", (0, 6), (79, 8), 3, "a\n"),
+        ("embedded blank rows stay", (0, 6), (0, 9), 1, "a\n\n\nb"),
+        (
+            "Rio trims selected trailing spaces",
+            (0, 10),
+            (6, 10),
+            1,
+            "tail",
+        ),
+        (
+            "right padding is not text",
+            (0, 10),
+            (79, 10),
+            1,
+            "tail   suffix",
+        ),
+        ("terminal trailing spaces", (0, 11), (79, 11), 1, "trail"),
+        (
+            "starts at wide leading spacer",
+            (79, 12),
+            (3, 13),
+            1,
+            "\n中e\u{301}B",
+        ),
+        (
+            "Lines starts at wide leading spacer",
+            (79, 12),
+            (3, 13),
+            3,
+            leading_wrapped_line.as_str(),
+        ),
+        (
+            "Lines ends at wide leading spacer",
+            (78, 12),
+            (79, 12),
+            3,
+            leading_wrapped_line.as_str(),
+        ),
+        (
+            "leading whitespace stays",
+            (0, 14),
+            (10, 14),
+            1,
+            "   indented",
+        ),
+        ("hard line break", (0, 15), (5, 16), 1, "hard-a\nhard-b"),
+        ("Simple all blank rows", (0, 17), (79, 18), 1, ""),
+        ("Lines all blank rows", (0, 17), (79, 18), 3, "\n"),
     ];
     // Establish Rio's ordinary consumer result against independent literals
     // before any hidden state exists, not by copying the live partial grid.
     let mut live_copies = Vec::new();
     let mut failures = Vec::new();
-    for &(label, (start_col,start_row), (end_col,end_row), clicks, expected) in &cases {
+    for &(label, (start_col, start_row), (end_col, end_row), clicks, expected) in &cases {
         view.update(cx, |view, cx| {
-            cx.write_to_clipboard(gpui_kit::ClipboardItem::new_string("copy-sentinel".to_owned()));
+            cx.write_to_clipboard(gpui_kit::ClipboardItem::new_string(
+                "copy-sentinel".to_owned(),
+            ));
             view.on_select_start(start_col, start_row, true, clicks, false, cx);
             view.on_select_update(end_col, end_row, false, cx);
             view.on_select_end(cx);
             view.copy_selection(cx);
         });
-        let clipboard_expected = if expected.is_empty() { "copy-sentinel" } else { expected };
+        let clipboard_expected = if expected.is_empty() {
+            "copy-sentinel"
+        } else {
+            expected
+        };
         let live = cx.update(|cx| cx.read_from_clipboard().and_then(|item| item.text()));
         if live.as_deref() != Some(clipboard_expected) {
-            failures.push(format!("live {label}: literal={expected:?}, clipboard={live:?}"));
+            failures.push(format!(
+                "live {label}: literal={expected:?}, clipboard={live:?}"
+            ));
         }
         live_copies.push(live);
     }
@@ -2390,37 +2759,59 @@ fn synchronized_copy_preserves_live_tab_line_wrap_and_unicode_semantics(cx: &mut
         view.on_select_start(0, 0, true, 3, false, cx);
         view.on_select_end(cx);
     });
-    window.update(cx, |_, window, cx| {
-        window.refresh();
-        window.draw(cx).clear(cx);
-    }).unwrap();
-    DaemonMsg::Output(b"\x1b[?2026h".to_vec()).encode(&mut sender).unwrap();
-    DaemonMsg::Cwd(std::path::PathBuf::from("/copy-hold")).encode(&mut sender).unwrap();
-    DaemonMsg::Output(b"\x1b[2J\x1b[Hhidden-partial".to_vec()).encode(&mut sender).unwrap();
+    window
+        .update(cx, |_, window, cx| {
+            window.refresh();
+            window.draw(cx).clear(cx);
+        })
+        .unwrap();
+    DaemonMsg::Output(b"\x1b[?2026h".to_vec())
+        .encode(&mut sender)
+        .unwrap();
+    DaemonMsg::Cwd(std::path::PathBuf::from("/copy-hold"))
+        .encode(&mut sender)
+        .unwrap();
+    DaemonMsg::Output(b"\x1b[2J\x1b[Hhidden-partial".to_vec())
+        .encode(&mut sender)
+        .unwrap();
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
     loop {
         if view.read_with(cx, |view, _| {
             let mut term = view.terminal.term.lock();
-            if term.grid[Line(0)][Column(0)].c() != 'h' { return false; }
+            if term.grid[Line(0)][Column(0)].c() != 'h' {
+                return false;
+            }
             assert!(term.synchronized_output());
-            term.sync_update_started = Some(rio_vt::time::Instant::now() + std::time::Duration::from_secs(30));
+            term.sync_update_started =
+                Some(rio_vt::time::Instant::now() + std::time::Duration::from_secs(30));
             true
-        }) { break; }
-        assert!(std::time::Instant::now() < deadline, "hidden copy fixture was not parsed");
+        }) {
+            break;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "hidden copy fixture was not parsed"
+        );
         std::thread::yield_now();
     }
-    window.update(cx, |_, window, cx| {
-        window.refresh();
-        window.draw(cx).clear(cx);
-    }).unwrap();
+    window
+        .update(cx, |_, window, cx| {
+            window.refresh();
+            window.draw(cx).clear(cx);
+        })
+        .unwrap();
     view.update(cx, |view, cx| view.copy_selection(cx));
     let copied = cx.update(|cx| cx.read_from_clipboard().and_then(|item| item.text()));
     if copied.as_deref() != Some("a\tb\n") {
         failures.push(format!("committed live Lines: {copied:?}"));
     }
-    for (case_index, &(label, (start_col,start_row), (end_col,end_row), clicks, expected)) in cases.iter().enumerate() {
+    for (case_index, &(label, (start_col, start_row), (end_col, end_row), clicks, expected)) in
+        cases.iter().enumerate()
+    {
         view.update(cx, |view, cx| {
-            cx.write_to_clipboard(gpui_kit::ClipboardItem::new_string("copy-sentinel".to_owned()));
+            cx.write_to_clipboard(gpui_kit::ClipboardItem::new_string(
+                "copy-sentinel".to_owned(),
+            ));
             view.on_select_start(start_col, start_row, true, clicks, false, cx);
             view.on_select_update(end_col, end_row, false, cx);
             view.on_select_end(cx);
@@ -2428,20 +2819,29 @@ fn synchronized_copy_preserves_live_tab_line_wrap_and_unicode_semantics(cx: &mut
         });
         let copied = cx.update(|cx| cx.read_from_clipboard().and_then(|item| item.text()));
         if copied != live_copies[case_index] {
-            failures.push(format!("held {label}: literal={expected:?}, live={:?}, held={copied:?}", live_copies[case_index]));
+            failures.push(format!(
+                "held {label}: literal={expected:?}, live={:?}, held={copied:?}",
+                live_copies[case_index]
+            ));
         }
     }
     // Rio's pre-existing end-LeadingSpacer copy quirk reads the preceding
     // row. The held contract copies only the visible selected placeholders,
     // not that unrelated character or the unselected next-row wide glyph.
     view.update(cx, |view, cx| {
-        cx.write_to_clipboard(gpui_kit::ClipboardItem::new_string("copy-sentinel".to_owned()));
-        view.on_select_start(78,12,true,1,false,cx);
-        view.on_select_update(79,12,false,cx);
+        cx.write_to_clipboard(gpui_kit::ClipboardItem::new_string(
+            "copy-sentinel".to_owned(),
+        ));
+        view.on_select_start(78, 12, true, 1, false, cx);
+        view.on_select_update(79, 12, false, cx);
         view.on_select_end(cx);
         view.copy_selection(cx);
     });
-    assert_eq!(cx.update(|cx| cx.read_from_clipboard().and_then(|item| item.text())).as_deref(), Some("copy-sentinel"));
+    assert_eq!(
+        cx.update(|cx| cx.read_from_clipboard().and_then(|item| item.text()))
+            .as_deref(),
+        Some("copy-sentinel")
+    );
     graphics_recovery_destroy(view, window, cx);
     assert!(failures.is_empty(), "{}", failures.join("\n"));
 }
@@ -2456,27 +2856,67 @@ fn synchronized_relink_first_hold_uses_new_empty_surface_geometry(cx: &mut TestA
     });
     let (client, _initial_sender) = test_stream_pair();
     let (view, window) = graphics_build_rooted_consumer_at(
-        cx, 177, client, Vec::new(), TermSize::new(80, 24), PtySource::Raw,
+        cx,
+        177,
+        client,
+        Vec::new(),
+        TermSize::new(80, 24),
+        PtySource::Raw,
     );
     let route = crate::terminal::PaneRoute::Remote {
-        header: Box::new(crate::daemon::router::RouteHeader::wsl("first-hold-fixture")),
+        header: Box::new(crate::daemon::router::RouteHeader::wsl(
+            "first-hold-fixture",
+        )),
         resize_echo: true,
     };
     let (client, mut old_sender) = test_stream_pair();
-    view.update(cx, |view,cx| view.adopt_relink(client,Vec::new(),&route,TermSize::new(80,24),10,20,cx).unwrap());
-    DaemonMsg::Output(b"\x1b[Hprevious-link".to_vec()).encode(&mut old_sender).unwrap();
-    graphics_recovery_wait(cx, "old link did not paint", |cx| {
-        view.read_with(cx, |view, _| view.grid_snap.is_some() && sync_presented_row(view, 0).starts_with("previous-link"))
+    view.update(cx, |view, cx| {
+        view.adopt_relink(
+            client,
+            Vec::new(),
+            &route,
+            TermSize::new(80, 24),
+            10,
+            20,
+            cx,
+        )
+        .unwrap()
     });
-    let target = graphics_window_geometry(window, &view, cx, TermSize::new(40,12)).0;
+    DaemonMsg::Output(b"\x1b[Hprevious-link".to_vec())
+        .encode(&mut old_sender)
+        .unwrap();
+    graphics_recovery_wait(cx, "old link did not paint", |cx| {
+        view.read_with(cx, |view, _| {
+            view.grid_snap.is_some() && sync_presented_row(view, 0).starts_with("previous-link")
+        })
+    });
+    let target = graphics_window_geometry(window, &view, cx, TermSize::new(40, 12)).0;
     cx.simulate_window_resize(window, target);
     let (client, mut sender) = test_stream_pair();
     view.update(cx, |view, cx| {
-        assert_eq!(view.cell_geom.map(|geom| (geom.cols,geom.rows)), Some((80,24)));
-        view.adopt_relink(client, Vec::new(), &route, TermSize::new(40,12),10,20,cx).unwrap();
-        DaemonMsg::Output(b"\x1b[?2026h".to_vec()).encode(&mut sender).unwrap();
-        DaemonMsg::Cwd(std::path::PathBuf::from("/first-hold")).encode(&mut sender).unwrap();
-        DaemonMsg::Output(b"\x1b[Hhidden-new-link".to_vec()).encode(&mut sender).unwrap();
+        assert_eq!(
+            view.cell_geom.map(|geom| (geom.cols, geom.rows)),
+            Some((80, 24))
+        );
+        view.adopt_relink(
+            client,
+            Vec::new(),
+            &route,
+            TermSize::new(40, 12),
+            10,
+            20,
+            cx,
+        )
+        .unwrap();
+        DaemonMsg::Output(b"\x1b[?2026h".to_vec())
+            .encode(&mut sender)
+            .unwrap();
+        DaemonMsg::Cwd(std::path::PathBuf::from("/first-hold"))
+            .encode(&mut sender)
+            .unwrap();
+        DaemonMsg::Output(b"\x1b[Hhidden-new-link".to_vec())
+            .encode(&mut sender)
+            .unwrap();
         // Stay in this one real consumer update until its production reader
         // parses the first BSU. No empty old-bounds frame may precede it.
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
@@ -2484,30 +2924,47 @@ fn synchronized_relink_first_hold_uses_new_empty_surface_geometry(cx: &mut TestA
             let mut term = view.terminal.term.lock();
             if term.grid[Line(0)][Column(0)].c() == 'h' {
                 assert!(term.synchronized_output());
-                term.sync_update_started = Some(rio_vt::time::Instant::now() + std::time::Duration::from_secs(30));
+                term.sync_update_started =
+                    Some(rio_vt::time::Instant::now() + std::time::Duration::from_secs(30));
                 break;
             }
             drop(term);
-            assert!(std::time::Instant::now() < deadline, "first held replay was not parsed");
+            assert!(
+                std::time::Instant::now() < deadline,
+                "first held replay was not parsed"
+            );
             std::thread::yield_now();
         }
         assert!(view.grid_snap.is_none());
         assert!(view.grid_buf.is_empty());
     });
-    window.update(cx, |_, window, cx| {
-        window.refresh();
-        window.draw(cx).clear(cx);
-    }).unwrap();
+    window
+        .update(cx, |_, window, cx| {
+            window.refresh();
+            window.draw(cx).clear(cx);
+        })
+        .unwrap();
     view.read_with(cx, |view, _| {
         let geom = view.cell_geom.unwrap();
-        assert_eq!((geom.cols,geom.rows), (40,12));
-        assert_eq!(view.grid_buf.len(), 40*12);
-        assert!(sync_presented_row(view, 0).trim().is_empty(), "no previous picture exists on the new link");
+        assert_eq!((geom.cols, geom.rows), (40, 12));
+        assert_eq!(view.grid_buf.len(), 40 * 12);
+        assert!(
+            sync_presented_row(view, 0).trim().is_empty(),
+            "no previous picture exists on the new link"
+        );
     });
-    DaemonMsg::Size(crate::daemon::protocol::WinSize { cols: 40, rows: 12, cell_w: 10, cell_h: 20 })
-        .encode(&mut sender).unwrap();
+    DaemonMsg::Size(crate::daemon::protocol::WinSize {
+        cols: 40,
+        rows: 12,
+        cell_w: 10,
+        cell_h: 20,
+    })
+    .encode(&mut sender)
+    .unwrap();
     graphics_recovery_wait(cx, "new link did not settle", |cx| {
-        view.read_with(cx, |view, _| sync_presented_row(view, 0).starts_with("hidden-new-link"))
+        view.read_with(cx, |view, _| {
+            sync_presented_row(view, 0).starts_with("hidden-new-link")
+        })
     });
     graphics_recovery_destroy(view, window, cx);
 }
@@ -2521,59 +2978,160 @@ fn synchronized_copy_preserves_tabstop_gaps_custom_clear_reset_and_growth(cx: &m
         cx.set_global(Config::default());
     });
     let cases = [
-        ("default stop gap", "", "a\t\x1b[1;12Hb", 0, 11, "a\t   b", false),
-        ("custom HTS", "\x1b[1;6H\x1bH\x1b[H", "a\t\x1b[1;10Hb", 0, 9, "a\t    b", false),
-        ("Rio no-op set_tabs preserves HTS", "\x1b[1;6H\x1bH\x1b[?5W\x1b[H", "a\t\x1b[1;10Hb", 0, 9, "a\t    b", false),
-        ("clear current TBC", "\x1b[1;6H\x1bH\x1b[g\x1b[H", "a\t\x1b[1;12Hb", 0, 11, "a\t   b", false),
-        ("clear all TBC", "\x1b[3g", "a\t\x1b[1;12Hb", 0, 11, "a\tb", false),
-        ("RIS restores defaults", "\x1b[3g\x1bc", "a\t\x1b[1;12Hb", 0, 11, "a\t   b", false),
-        ("resize adds default stops", "\x1b[3g\x1b[1;6H\x1bH", "\x1b[1;82Ha\t\x1b[1;92Hb", 81, 91, "a\t   b", true),
+        (
+            "default stop gap",
+            "",
+            "a\t\x1b[1;12Hb",
+            0,
+            11,
+            "a\t   b",
+            false,
+        ),
+        (
+            "custom HTS",
+            "\x1b[1;6H\x1bH\x1b[H",
+            "a\t\x1b[1;10Hb",
+            0,
+            9,
+            "a\t    b",
+            false,
+        ),
+        (
+            "Rio no-op set_tabs preserves HTS",
+            "\x1b[1;6H\x1bH\x1b[?5W\x1b[H",
+            "a\t\x1b[1;10Hb",
+            0,
+            9,
+            "a\t    b",
+            false,
+        ),
+        (
+            "clear current TBC",
+            "\x1b[1;6H\x1bH\x1b[g\x1b[H",
+            "a\t\x1b[1;12Hb",
+            0,
+            11,
+            "a\t   b",
+            false,
+        ),
+        (
+            "clear all TBC",
+            "\x1b[3g",
+            "a\t\x1b[1;12Hb",
+            0,
+            11,
+            "a\tb",
+            false,
+        ),
+        (
+            "RIS restores defaults",
+            "\x1b[3g\x1bc",
+            "a\t\x1b[1;12Hb",
+            0,
+            11,
+            "a\t   b",
+            false,
+        ),
+        (
+            "resize adds default stops",
+            "\x1b[3g\x1b[1;6H\x1bH",
+            "\x1b[1;82Ha\t\x1b[1;92Hb",
+            81,
+            91,
+            "a\t   b",
+            true,
+        ),
     ];
     let mut failures = Vec::new();
     for (label, setup, text, start, end, expected, grow) in cases {
         let (client, mut sender) = test_stream_pair();
-        let size = TermSize::new(if grow {96} else {80},24);
-        let (view, window) = graphics_build_rooted_consumer_at(cx,178,client,Vec::new(),size,PtySource::Raw);
+        let size = TermSize::new(if grow { 96 } else { 80 }, 24);
+        let (view, window) =
+            graphics_build_rooted_consumer_at(cx, 178, client, Vec::new(), size, PtySource::Raw);
         if grow {
-            DaemonMsg::Size(crate::daemon::protocol::WinSize { cols: 80, rows: 24, cell_w: 10, cell_h: 20 }).encode(&mut sender).unwrap();
+            DaemonMsg::Size(crate::daemon::protocol::WinSize {
+                cols: 80,
+                rows: 24,
+                cell_w: 10,
+                cell_h: 20,
+            })
+            .encode(&mut sender)
+            .unwrap();
         }
-        DaemonMsg::Output(setup.as_bytes().to_vec()).encode(&mut sender).unwrap();
+        DaemonMsg::Output(setup.as_bytes().to_vec())
+            .encode(&mut sender)
+            .unwrap();
         if grow {
-            DaemonMsg::Size(crate::daemon::protocol::WinSize { cols: 96, rows: 24, cell_w: 10, cell_h: 20 }).encode(&mut sender).unwrap();
+            DaemonMsg::Size(crate::daemon::protocol::WinSize {
+                cols: 96,
+                rows: 24,
+                cell_w: 10,
+                cell_h: 20,
+            })
+            .encode(&mut sender)
+            .unwrap();
         }
-        DaemonMsg::Output(text.as_bytes().to_vec()).encode(&mut sender).unwrap();
+        DaemonMsg::Output(text.as_bytes().to_vec())
+            .encode(&mut sender)
+            .unwrap();
         graphics_recovery_wait(cx, "tab fixture did not paint", |cx| {
-            view.read_with(cx, |view, _| view.grid_snap.is_some() && view.grid_buf.get(end).is_some_and(|cell| cell.c == 'b'))
+            view.read_with(cx, |view, _| {
+                view.grid_snap.is_some() && view.grid_buf.get(end).is_some_and(|cell| cell.c == 'b')
+            })
         });
         view.update(cx, |view, cx| {
-            view.on_select_start(start,0,true,1,false,cx);
-            view.on_select_update(end,0,false,cx);
+            view.on_select_start(start, 0, true, 1, false, cx);
+            view.on_select_update(end, 0, false, cx);
             view.on_select_end(cx);
             view.copy_selection(cx);
         });
         let live = cx.update(|cx| cx.read_from_clipboard().and_then(|item| item.text()));
         assert_eq!(live.as_deref(), Some(expected), "live Rio oracle: {label}");
-        window.update(cx, |_,window,cx| { window.refresh(); window.draw(cx).clear(cx); }).unwrap();
-        DaemonMsg::Output(b"\x1b[?2026h".to_vec()).encode(&mut sender).unwrap();
-        DaemonMsg::Cwd(std::path::PathBuf::from("/tab-hold")).encode(&mut sender).unwrap();
+        window
+            .update(cx, |_, window, cx| {
+                window.refresh();
+                window.draw(cx).clear(cx);
+            })
+            .unwrap();
+        DaemonMsg::Output(b"\x1b[?2026h".to_vec())
+            .encode(&mut sender)
+            .unwrap();
+        DaemonMsg::Cwd(std::path::PathBuf::from("/tab-hold"))
+            .encode(&mut sender)
+            .unwrap();
         // Hidden tab configuration must not replace the committed stop map.
-        DaemonMsg::Output(b"\x1b[3g\x1b[1;4H\x1bH\x1b[Hhidden-partial".to_vec()).encode(&mut sender).unwrap();
+        DaemonMsg::Output(b"\x1b[3g\x1b[1;4H\x1bH\x1b[Hhidden-partial".to_vec())
+            .encode(&mut sender)
+            .unwrap();
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
         loop {
             if view.read_with(cx, |view, _| {
                 let mut term = view.terminal.term.lock();
-                if term.grid[Line(0)][Column(0)].c() != 'h' { return false; }
+                if term.grid[Line(0)][Column(0)].c() != 'h' {
+                    return false;
+                }
                 assert!(term.synchronized_output());
-                term.sync_update_started = Some(rio_vt::time::Instant::now() + std::time::Duration::from_secs(30));
+                term.sync_update_started =
+                    Some(rio_vt::time::Instant::now() + std::time::Duration::from_secs(30));
                 true
-            }) { break; }
-            assert!(std::time::Instant::now() < deadline, "hidden stop change was not parsed");
+            }) {
+                break;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "hidden stop change was not parsed"
+            );
             std::thread::yield_now();
         }
-        window.update(cx, |_,window,cx| { window.refresh(); window.draw(cx).clear(cx); }).unwrap();
-        view.update(cx, |view,cx| {
-            view.on_select_start(start,0,true,1,false,cx);
-            view.on_select_update(end,0,false,cx);
+        window
+            .update(cx, |_, window, cx| {
+                window.refresh();
+                window.draw(cx).clear(cx);
+            })
+            .unwrap();
+        view.update(cx, |view, cx| {
+            view.on_select_start(start, 0, true, 1, false, cx);
+            view.on_select_update(end, 0, false, cx);
             view.on_select_end(cx);
             view.copy_selection(cx);
         });
@@ -2581,7 +3139,7 @@ fn synchronized_copy_preserves_tabstop_gaps_custom_clear_reset_and_growth(cx: &m
         if held != live {
             failures.push(format!("{label}: live={live:?}, held={held:?}"));
         }
-        graphics_recovery_destroy(view,window,cx);
+        graphics_recovery_destroy(view, window, cx);
     }
     assert!(failures.is_empty(), "{}", failures.join("\n"));
 }

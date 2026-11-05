@@ -507,7 +507,7 @@ mod gpui_tests {
         title_strip_rule_and_pad, traffic_light_position,
     };
     #[cfg(target_os = "macos")]
-    use super::{TITLE_BAR_LEAD, TRAFFIC_LIGHT_INSET, TRAFFIC_LIGHTS_W};
+    use super::{TRAFFIC_LIGHT_INSET, TRAFFIC_LIGHTS_W};
     use crate::core::actions::{ActivateTab1, ActivateTab2};
     use crate::core::config::RightPanelTab;
     use crate::daemon::protocol::ClientMsg;

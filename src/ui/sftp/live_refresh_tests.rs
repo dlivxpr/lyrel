@@ -6,15 +6,7 @@ use crate::ui::app::test_window::harness_with_pane;
 use gpui_kit::{Entity, TestAppContext, VisualTestContext};
 use lyrel_core::host::Host as _;
 
-// The shared real-endpoint fixture also serves graphics consumers; this test
-// intentionally needs only its router, native pane and RemoteHost helpers.
-#[allow(dead_code)]
-mod native_fixture {
-    include!(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/tests/support/native_ssh_graphics.rs"
-    ));
-}
+use crate::native_ssh_graphics_fixture as native_fixture;
 
 struct NativePane(u64);
 

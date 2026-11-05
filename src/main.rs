@@ -8,6 +8,10 @@ mod daemon;
 mod terminal;
 mod ui;
 
+#[cfg(test)]
+#[path = "../tests/support/native_ssh_graphics.rs"]
+pub mod native_ssh_graphics_fixture;
+
 use crate::core::config::Config;
 use crate::ui::assets::Assets;
 use crate::ui::keymap;

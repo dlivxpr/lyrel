@@ -7,6 +7,8 @@
 
 ## [Unreleased]
 
+## [0.3.1] - 2026-11-05
+
 ### 依赖升级
 
 - #171：`rio-vt`／`rio-graphics`／`rio-unicode` 原子升级到正式 registry 的精确 `=0.5.29`，同步锁定传递 `rio-grapheme-width 0.5.29`，保留关闭 VT 默认 features、原 PTY／daemon 和无 GPUI 的共享核心。所有消费者迁到立即解析、终端侧同步状态；完整 Fast／Rio 组合由集中检查点重新构建与验收，不沿用 #170 的结果冒称已通过。
@@ -66,6 +68,12 @@
 - Kitty 相对放置在既有 daemon Placement／pane transport 中保留 `P/Q` 父身份、signed `H/V` 及八链接有界图；支持 direct／实际 Unicode 单元父锚点、无光标移动、级联生命周期和 fresh consumer 恢复。Windows 五项真实 PTY／daemon／rooted view 回归及 `scripts/kitty-relative.mjs` 原生 geometry／recovery smoke 已通过；真实 native SSH 的 rooted consumer 和标准 GUI relative／fresh 恢复也已通过。完整 DPI／性能、正式 agent 的真实 SSH 组合未完成，macOS（#152）延期。
 - Kitty 间接媒体增加 Windows 本地 regular file、eligible 临时文件与 named shared memory；`O/S` 只限制实际图片区域，允许小区域位于大对象中。Windows 固定已验证本地磁盘 handle、拒绝网络／device／未知 reparse，并按对象 handle 删除临时 handoff；Unix 保留文件／POSIX shm 语义，macOS 按偏移附近有界映射，临时文件使用身份核验及 no-clobber 恢复避免删错替换对象。发送方 locality 每次接受及读取前重新证明，嵌套 SSH／WSL 或未知命名空间 fail-closed，直接传输不受影响；不新增图片磁盘缓存。Windows 真实 PTY／rooted consumer 与原生三类媒体红绿像素／安全应答 smoke 已通过，Linux headless 完整 features 与 native SSH 三类 Linux 媒体回归通过；第二层 nested SSH 已验证 indirect media 拒绝、direct RGBA 成功及桌面同名对象不变，macOS（#152）延期。
 - Kitty 双 pane 1080p 容量（#146）按真实 allocation owner 提升默认有限预算：daemon 每 pane encoded／RGBA 权重各 512 MiB、aggregate 各 1 GiB，queue 1,280 MiB，work 保持 128／256 MiB；桌面 cache 为 1,536／3,072 MiB、source 为 1,024／2,048 MiB，向 daemon 上报每 pane encoded／RGBA 各 512 MiB。新增 `scripts/kitty-capacity.mjs`，通过既有真实 PTY／Kitty 路径逐帧产生两组固定 seed、各 60 张不同 1920×1080 raw RGBA 噪声帧与 8-bit frame ID 条码；单 frame buffer、逐帧 ACK／backpressure、路径独立的脚本 SHA-256／source manifest，以及 load／daemon start-stop／edit／compose／完整 replacement／delete／普通输入与 sender 退出入口。现有 concepts 公布 `P/F/N` 所有权公式、实际退休边界与 PresentMon 2.6.0＋ffmpeg 9.0.2 自有 HWND WGC 复现命令；完整容量、小预算所有权和 120 帧生产 consumer 已通过。Windows 原生 120 Hz WGC 30 秒实测左右分别为 59.12／59.02 次图片变化每秒，p50 16.67 ms、p95 25／33.33 ms、最大 91.67 ms；源 ID 跳号下界 26／29，重复 capture 135／138，并分别记录分进程内存及 delete 后释放。经用户授权的一次管理员 PresentMon 记录 1,941 个 present、6 个未显示，DisplayedTime p50 16.658 ms／p95 20.841 ms；与 120 Hz WGC 共同通过约 60 fps 原生验收。input-to-photon 指标全部 NA，不冒充输入延迟；真实 SSH 全尺寸加载／steady／fresh 另已验证，macOS 未验证。
+
+### 维护
+
+- 发布前清理构建警告：SCM 原子身份分配迁到 `try_update`；SCM／图片检查辅助接口及其元数据仅编入测试；桌面 SSH 回归共用唯一夹具入口，同步捕获数据仅由实际消费者编译，保留全部回归断言。macOS 专属测试移除无用导入，Windows handoff 辅助接口按平台限定，不新增 lint 屏蔽。
+- macOS Debug／测试二进制保留完整 DWARF 展开信息，不再尝试将超过 16 MiB 的展开区编码进 compact unwind；panic、析构与回溯仍保留，Release 的链接／签名配置不变。
+- 修复基线 `2187893` 的 CI `42000861816` 已通过 Windows／macOS／Linux 构建测试、独立 server 与真实发布打包验证；本版版本变更与警告清理仍以其自身提交的 CI 和 Release 结果为准，不沿用该基线冒称重新验证。
 
 ### 验证入口
 

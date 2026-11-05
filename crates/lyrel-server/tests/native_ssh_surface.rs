@@ -1,7 +1,7 @@
 //! Opt-in native acceptance driver. The GUI is the unmodified production app:
 //! standard config -> remote workspace -> machine tree -> rooted TerminalViews.
 #[path = "../../../tests/support/native_ssh_graphics.rs"]
-mod fixture;
+pub mod fixture;
 
 use std::path::{Path, PathBuf};
 use std::process::Child;
