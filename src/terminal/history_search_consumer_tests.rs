@@ -54,6 +54,213 @@ fn metafied_zsh_history_is_searchable_and_submits_the_original_command(cx: &mut 
     );
 }
 
+/// Exercise the window keymap, not just the prompt editor's key handler. On a
+/// Windows runner the Mac key/focus policy is modeled explicitly; this is not
+/// native macOS acceptance.
+#[gpui_kit::test]
+fn reverse_search_cmd_enter_owns_dispatch_only_while_searching(cx: &mut TestAppContext) {
+    use crate::core::config::KeybindingOverride;
+    use gpui_kit::{OperatingSystem, PlatformInfo, PlatformTarget};
+
+    cx.set_platform_info(PlatformInfo {
+        os: OperatingSystem::Mac,
+        target: PlatformTarget::Native,
+    });
+    let (app, mut vcx, mut daemon) = crate::ui::app::test_window::harness_with_pane(cx);
+    vcx.update(|_, cx| {
+        // Reproduce the Mac default on every build target, through the same
+        // config/rebind path users use rather than a synthetic action handler.
+        cx.global_mut::<Config>().keybindings.insert(
+            "ToggleFullscreen".into(),
+            KeybindingOverride::Exact(vec!["cmd-enter".into()]),
+        );
+        crate::ui::keymap::rebind(cx);
+    });
+    let pane = app.update_in(&mut vcx, |app, window, cx| {
+        let pane = app.tabs[0]
+            .pane
+            .first_leaf()
+            .unwrap()
+            .terminal()
+            .unwrap()
+            .clone();
+        pane.update(cx, |view, cx| {
+            seed_history(view, vec!["echo SELECTED".into(), "echo OTHER".into()]);
+            window.focus(&view.focus_handle, cx);
+        });
+        pane
+    });
+    DaemonMsg::Prompt {
+        active: true,
+        at_prompt: true,
+        last_exit: None,
+    }
+    .encode(&mut daemon)
+    .unwrap();
+    for _ in 0..200 {
+        vcx.run_until_parked();
+        if pane.read_with(&vcx, |view, _| view.input_active()) {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    assert!(pane.read_with(&vcx, |view, _| view.input_active()));
+
+    vcx.simulate_keystrokes("cmd-enter");
+    vcx.run_until_parked();
+    vcx.update(|window, _| {
+        assert!(
+            window.is_fullscreen(),
+            "outside search fullscreen still wins"
+        )
+    });
+    assert_eq!(next_input_until_timeout(&mut daemon), None);
+    vcx.simulate_keystrokes("cmd-enter");
+    vcx.run_until_parked();
+    vcx.update(|window, _| assert!(!window.is_fullscreen()));
+
+    vcx.simulate_keystrokes("ctrl-r");
+    vcx.simulate_input("SELECTED");
+    vcx.run_until_parked();
+    pane.read_with(&vcx, |view, _| {
+        assert_eq!(
+            view.history
+                .search()
+                .and_then(|search| search.selected_line(view.history.entries())),
+            Some("echo SELECTED")
+        );
+    });
+    vcx.simulate_keystrokes("cmd-enter");
+    vcx.run_until_parked();
+    vcx.update(|window, _| {
+        assert!(
+            !window.is_fullscreen(),
+            "reverse-search Cmd+Enter must not toggle fullscreen"
+        );
+    });
+    assert_eq!(
+        next_input_until_timeout(&mut daemon),
+        Some(b"echo SELECTED\r".to_vec())
+    );
+    assert_eq!(
+        next_input_until_timeout(&mut daemon),
+        None,
+        "submit exactly once"
+    );
+    pane.read_with(&vcx, |view, _| {
+        assert!(view.history.search().is_none());
+        assert!(view.input.editor().is_empty());
+    });
+
+    DaemonMsg::Prompt {
+        active: true,
+        at_prompt: true,
+        last_exit: Some(0),
+    }
+    .encode(&mut daemon)
+    .unwrap();
+    for _ in 0..200 {
+        vcx.run_until_parked();
+        if pane.read_with(&vcx, |view, _| view.input_active()) {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    assert!(pane.read_with(&vcx, |view, _| view.input_active()));
+    vcx.simulate_input("DRAFT_MUST_NOT_RUN");
+    vcx.simulate_keystrokes("ctrl-r");
+    vcx.simulate_input("NO_MATCH_FOR_THIS_QUERY");
+    vcx.run_until_parked();
+    assert!(pane.read_with(&vcx, |view, _| {
+        view.history.search().unwrap().matches().is_empty()
+    }));
+    vcx.simulate_keystrokes("cmd-enter");
+    vcx.run_until_parked();
+    assert_eq!(
+        next_input_until_timeout(&mut daemon),
+        None,
+        "no selection cannot submit the draft"
+    );
+    pane.read_with(&vcx, |view, _| {
+        assert!(view.history.search().is_none());
+        assert_eq!(view.input.editor().text(), "DRAFT_MUST_NOT_RUN");
+    });
+
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("editor.txt");
+    std::fs::write(&path, "EDITOR").unwrap();
+    app.update_in(&mut vcx, |app, window, cx| {
+        app.open_file_in_editor(&path, window, cx)
+    });
+    for _ in 0..200 {
+        vcx.run_until_parked();
+        if app.read_with(&vcx, |app, _| app.editor_active_local_file().is_some()) {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    assert!(app.read_with(&vcx, |app, _| app.editor_active_local_file().is_some()));
+    vcx.simulate_keystrokes("cmd-enter");
+    vcx.run_until_parked();
+    app.read_with(&vcx, |app, cx| {
+        assert_eq!(
+            app.editor_active_local_file()
+                .unwrap()
+                .input
+                .read(cx)
+                .text()
+                .to_string(),
+            "EDITOR\n"
+        );
+    });
+    vcx.update(|window, _| assert!(!window.is_fullscreen(), "the editor keeps InsertLineBelow"));
+    assert_eq!(next_input_until_timeout(&mut daemon), None);
+}
+
+#[cfg(windows)]
+#[gpui_kit::test]
+fn reverse_search_cmd_enter_does_not_add_a_windows_binding(cx: &mut TestAppContext) {
+    let (app, mut vcx, mut daemon) = crate::ui::app::test_window::harness_with_pane(cx);
+    let pane = app.update_in(&mut vcx, |app, window, cx| {
+        let pane = app.tabs[0].pane.terminals()[0].clone();
+        pane.update(cx, |view, cx| {
+            seed_history(view, vec!["echo WINDOWS_SELECTED".into()]);
+            window.focus(&view.focus_handle, cx);
+        });
+        pane
+    });
+    DaemonMsg::Prompt {
+        active: true,
+        at_prompt: true,
+        last_exit: None,
+    }
+    .encode(&mut daemon)
+    .unwrap();
+    for _ in 0..200 {
+        vcx.run_until_parked();
+        if pane.read_with(&vcx, |view, _| view.input_active()) {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    assert!(pane.read_with(&vcx, |view, _| view.input_active()));
+    vcx.simulate_keystrokes("ctrl-r cmd-enter");
+    vcx.run_until_parked();
+    assert!(pane.read_with(&vcx, |view, _| view.history.search().is_some()));
+    assert_eq!(next_input_until_timeout(&mut daemon), None);
+    vcx.simulate_keystrokes("ctrl-enter");
+    vcx.run_until_parked();
+    pane.read_with(&vcx, |view, _| {
+        assert!(view.history.search().is_none());
+        assert_eq!(view.input.editor().text(), "echo WINDOWS_SELECTED");
+    });
+    assert_eq!(
+        next_input_until_timeout(&mut daemon),
+        None,
+        "Ctrl+Enter only accepts on Windows"
+    );
+}
+
 #[gpui_kit::test]
 fn ctrl_r_fuzzy_search_accepts_into_the_editor(cx: &mut TestAppContext) {
     let (window, _daemon) = harness(cx);

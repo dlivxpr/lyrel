@@ -71,7 +71,8 @@ actions!(
         ClearScrollback,
         InsertNewline,
         InsertNewlineFallback,
-        ToggleComposer
+        ToggleComposer,
+        RunReverseSearchSelection
     ]
 );
 
@@ -3064,6 +3065,7 @@ mod gpui_tests {
     }
 
     include!("graphics_consumer_tests.rs");
+    include!("history_search_pty_consumer_tests.rs");
     include!("graphics_resize_consumer_tests.rs");
     include!("graphics_layout_consumer_tests.rs");
     include!("graphics_recovery_consumer_tests.rs");

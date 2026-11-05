@@ -4,7 +4,7 @@ use crate::core::actions::*;
 use crate::core::config::{Config, KeybindingOverride};
 use crate::terminal::view::{
     AlternatePaste, ClearScrollback, CopyText, FindInTerminal, FindNext, FindPrevious,
-    InsertNewline, InsertNewlineFallback, PasteText, ToggleComposer,
+    InsertNewline, InsertNewlineFallback, PasteText, RunReverseSearchSelection, ToggleComposer,
 };
 use crate::ui::i18n::{L10nKey, t, t_fmt};
 use crate::ui::palette;
@@ -80,6 +80,16 @@ fn fixed_bindings(cx: &App) -> Vec<KeyBinding> {
         KeyBinding::new("tab", SendTab, Some("Terminal")),
         KeyBinding::new("shift-tab", SendBackTab, Some("Terminal")),
     ];
+    // Actions dispatch before key listeners: the open history menu must win
+    // over macOS's window-wide Cmd+Enter fullscreen binding, only here.
+    if cx.platform_info().os == gpui_kit::OperatingSystem::Mac {
+        bindings.push(load_binding(
+            "cmd-enter",
+            RunReverseSearchSelection,
+            Some("Terminal && reverse_search"),
+            cx,
+        ));
+    }
     bindings.extend(crate::ui::code_editor::markdown::table_bindings(cx));
     // The switcher's footer tells you Tab is the way across to the tab column
     // once a query is in the box. gpui-component's Root binds `tab` to its
