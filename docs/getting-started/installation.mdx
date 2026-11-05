@@ -160,7 +160,7 @@ Windows Chromium Cookie 的 AES-GCM 解密使用正式 registry 的 `aes-gcm =0.
   <Tab title="macOS">
     GPUI Fast `0.1.13` 需要完整 Xcode 提供 macOS SDK 26+；runner 的 `macos-15` 标签不能证明 SDK 版本。CI 与 Release 桌面构建共用 `.github/scripts/select-macos-sdk.sh`：优先核对显式 `DEVELOPER_DIR`，否则检查当前工具链及 `/Applications/Xcode*.app`，仅选择实际 SDK 版本至少为 26 的工具链。日志输出 Xcode 版本、实际 SDK 版本／路径、clang／metal 路径与 `MACOSX_DEPLOYMENT_TARGET=15.0`；缺少兼容 Xcode／SDK／clang 时直接失败，不下载工具链或修改全局 `xcode-select`。Kit 启用 `runtime_shaders`，因此离线 `metal` 编译器缺失只记录，不作为该配置的构建前提。本地构建前在同一 Bash 中 source 该脚本，或明确提供满足相同要求的 `DEVELOPER_DIR`／`SDKROOT`。根 `build.rs` 的 `lyrel-app` linker 参数与 bundle 的 `LSMinimumSystemVersion` 均为 `15.0`；独立 headless server 不经桌面 SDK 选择脚本、不修改其运行时下限。SDK 日志不是实际 Mac 运行、IME 或签名验收。
 
-    macOS 的 Debug／测试可执行文件使用完整 DWARF 展开信息（`-no_compact_unwind -keep_dwarf_unwind`），避免大型未优化二进制的展开区超过 compact unwind 的 24 位偏移上限。保留 panic 展开、析构及回溯，不关闭 linker diagnostics；此选择仅用于 Cargo 的 `debug` profile，Release 不变。
+    桌面 crate 的 Debug／测试使用 `opt-level = 1`，减少未优化代码及展开信息的体积；依赖继续沿用各自的开发优化级别。保留 Apple 默认的 compact unwind／DWARF 选择、panic 展开和回溯，不使用禁用 compact unwind 或屏蔽 linker diagnostics 的参数；Release 配置不变。
 
     ```bash
     git clone https://github.com/dlivxpr/lyrel
@@ -294,7 +294,7 @@ server 将同一份项目许可证及第三方声明内嵌到二进制中，可�
 Windows server ZIP 另保留随包的 `LICENSE.txt` 与 `LICENSE-ConPTY.txt`。
 
 macOS／Windows server 在对应工具链中使用 `cargo build --release --locked -p lyrel-server --target <target>`；
-Linux musl server 按 release workflow 使用 Zig `0.16.0` 与 cargo-zigbuild。Actions 在临时 Python venv 中安装官方 PyPI 的 `ziglang==0.16.0`，通过 `CARGO_ZIGBUILD_PYTHON_PATH` 指向该解释器，不依赖旧 Node.js runtime 的 Zig setup action：
+Linux musl server 按 release workflow 使用 Zig `0.17.0` 与 cargo-zigbuild，避免 `0.16.0` 内置 libc++ 的 nullability 警告。Actions 在临时 Python venv 中安装官方 PyPI 的 `ziglang==0.17.0`，通过 `CARGO_ZIGBUILD_PYTHON_PATH` 指向该解释器，不依赖旧 Node.js runtime 的 Zig setup action：
 
 ```bash
 CXXFLAGS_x86_64_unknown_linux_musl=-DSIMDUTF_IMPLEMENTATION_ICELAKE=0 \
