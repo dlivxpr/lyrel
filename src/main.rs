@@ -990,6 +990,9 @@ mod config_reload_tests {
     fn symlinked_config_directory_reloads_live_bindings(cx: &mut TestAppContext) {
         use std::time::{Duration, Instant};
 
+        // notify wakes the executor from a real OS thread, not the test scheduler.
+        cx.executor().allow_parking();
+
         eprintln!(
             "native watcher backend: {}",
             std::any::type_name::<notify::RecommendedWatcher>()
