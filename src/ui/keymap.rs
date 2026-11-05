@@ -484,6 +484,7 @@ fn shipped_bindings() -> Vec<(&'static str, &'static str)> {
         // Linux terminal and in this prompt editor's Ctrl+A family, so it ships
         // unbound there rather than on a chord nobody would guess.
         ("NewAgentTab", per_platform("secondary-shift-a", "")),
+        ("FocusNextAgentNeedingAttention", "secondary-shift-u"),
         ("StopWorkspace", ""),
         ("DeleteWorkspace", ""),
         ("RenameWorkspace", ""),
@@ -1229,6 +1230,10 @@ fn authored_entry(action: &str) -> Option<(CommandGroup, String)> {
             t(L10nKey::CmdCopySessionId).to_string(),
         ),
         "NewAgentTab" => (CommandGroup::Agents, t(L10nKey::CmdNewAgentTab).to_string()),
+        "FocusNextAgentNeedingAttention" => (
+            CommandGroup::Agents,
+            t(L10nKey::CmdNextAgentNeedingAttention).to_string(),
+        ),
         "TogglePalette" => (
             CommandGroup::Application,
             t(L10nKey::AppMenuSearchEverywhere).to_string(),
@@ -1821,6 +1826,7 @@ fn make_binding(action: &str, keystroke: &str, cx: &App) -> Option<KeyBinding> {
         "ForkAgentSessionUp" => load_binding(keystroke, ForkAgentSessionUp, None, cx),
         "CopyAgentSessionId" => load_binding(keystroke, CopyAgentSessionId, None, cx),
         "NewAgentTab" => load_binding(keystroke, NewAgentTab, None, cx),
+        "FocusNextAgentNeedingAttention" => load_binding(keystroke, FocusNextAgentNeedingAttention, None, cx),
         "SplitRight" => load_binding(keystroke, SplitRight, None, cx),
         "SplitDown" => load_binding(keystroke, SplitDown, None, cx),
         "MovePaneToTab" => load_binding(keystroke, MovePaneToTab, None, cx),

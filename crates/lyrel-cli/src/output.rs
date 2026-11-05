@@ -313,6 +313,9 @@ pub fn agents_table(states: &[PaneAgentState]) -> String {
     if states.is_empty() {
         return "no agents running\n".to_string();
     }
+    let now_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |duration| duration.as_millis() as u64);
     let rows: Vec<Vec<String>> = states
         .iter()
         .map(|s| {
@@ -322,11 +325,21 @@ pub fn agents_table(states: &[PaneAgentState]) -> String {
                     .map(|a| format!("{a:?}").to_lowercase())
                     .unwrap_or_else(|| "-".to_string()),
                 format!("{:?}", s.state.status).to_lowercase(),
+                s.state.status_age_secs(now_ms).map_or_else(|| "-".to_string(), status_age),
                 s.state.message.clone().unwrap_or_else(|| "-".to_string()),
             ]
         })
         .collect();
-    table(&["PANE", "AGENT", "STATUS", "MESSAGE"], &rows)
+    table(&["PANE", "AGENT", "STATUS", "FOR", "MESSAGE"], &rows)
+}
+
+fn status_age(secs: u64) -> String {
+    match secs {
+        s if s < 60 => format!("{s}s"),
+        s if s < 3_600 => format!("{}m", s / 60),
+        s if s < 86_400 => format!("{}h", s / 3_600),
+        s => format!("{}d", s / 86_400),
+    }
 }
 
 pub fn status_lines(status: &ServerStatus) -> String {

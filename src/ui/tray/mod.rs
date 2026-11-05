@@ -69,6 +69,24 @@ pub(crate) struct AgentRow {
     pub agent: crate::core::cli_agent::CLIAgent,
     pub status: AgentStatus,
     pub detail: String,
+    pub since_ms: Option<u64>,
+    pub unread: bool,
+    pub waited: Option<String>,
+}
+
+/// Waiting first, oldest known spell first, then completed unread results.
+/// Repeated invocation cycles from a current queue member; otherwise start at the head.
+pub(crate) fn next_needing_attention(rows: &[AgentRow], current: Option<u64>) -> Option<u64> {
+    let mut queue: Vec<_> = rows.iter().filter(|row| {
+        row.status == AgentStatus::Waiting || (row.status == AgentStatus::Done && row.unread)
+    }).collect();
+    queue.sort_by_key(|row| (row.status != AgentStatus::Waiting, row.since_ms.is_none(), row.since_ms));
+    let at = current.and_then(|id| queue.iter().position(|row| row.leaf_id == id));
+    at.and_then(|ix| queue.get(ix + 1)).or_else(|| queue.first()).map(|row| row.leaf_id)
+}
+
+pub(crate) fn reveal_pane(leaf_id: u64, cx: &mut App) {
+    dispatch(TrayAction::RevealPane { leaf_id }, cx);
 }
 
 #[derive(Clone, Default, PartialEq, Eq)]
@@ -140,7 +158,11 @@ pub(crate) fn menu_spec(snap: &TraySnapshot) -> Vec<SpecItem> {
     for a in &snap.agents {
         let state = match a.status {
             AgentStatus::Waiting => {
-                format!(" — {}", t(crate::ui::i18n::L10nKey::TrayAgentNeedsInput))
+                let needs = t(L10nKey::TrayAgentNeedsInput);
+                match &a.waited {
+                    Some(waited) => format!(" — {needs} · {waited}"),
+                    None => format!(" — {needs}"),
+                }
             }
             AgentStatus::Working => {
                 format!(" — {}", t(crate::ui::i18n::L10nKey::PanelAgentWorking))
@@ -220,6 +242,9 @@ mod tests {
                 agent: crate::core::cli_agent::CLIAgent::OhMyPi,
                 status,
                 detail: "lyrel @ main".into(),
+                since_ms: None,
+                unread: false,
+                waited: None,
             }],
             notify_mode: NotifyMode::Unfocused,
         }

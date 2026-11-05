@@ -664,6 +664,10 @@ pub struct AgentSessionState {
     pub turns: u64,
     #[serde(default)]
     pub readout: AgentReadout,
+    /// Unix milliseconds when the daemon entered this effective status.
+    /// Absent on older peers: unknown, never an inferred zero-age spell.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub since_ms: Option<u64>,
 }
 
 /// What an agent says about how it is set up — what the message composer's
@@ -791,6 +795,18 @@ impl AgentSessionState {
     pub fn mid_turn(&self) -> bool {
         matches!(self.status, AgentStatus::Working | AgentStatus::Waiting)
     }
+    /// Called by the daemon after each event, not once per output batch.
+    pub fn note_transition(&mut self, before: Option<AgentStatus>, now_ms: u64) {
+        if before != Some(self.status) {
+            self.since_ms = Some(now_ms);
+        }
+    }
+
+    /// Remote clocks may be ahead; elapsed time must not wrap negative.
+    pub fn status_age_secs(&self, now_ms: u64) -> Option<u64> {
+        self.since_ms.map(|since| now_ms.saturating_sub(since) / 1000)
+    }
+
 
     pub fn apply_event(&mut self, ev: &AgentEvent) {
         // A status set before the first hook came from a desktop notification

@@ -51,6 +51,7 @@ pub(super) fn handshake<R: Read>(
     // "nothing is listening" rather than as "I cannot tell you".
     if services.panes.is_some() {
         features.push(feature::PANE_PROCS.to_string());
+        features.push(feature::AGENT_STATE_AGE.to_string());
     }
     if services.machine.is_some() {
         features.push(feature::MACHINE_TREE.to_string());

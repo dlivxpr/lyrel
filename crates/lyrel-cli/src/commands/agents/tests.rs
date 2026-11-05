@@ -139,3 +139,21 @@ fn agents_json_keeps_the_existing_agents_shape_when_there_is_no_diagnostic() {
     assert_eq!(json, json!({ "agents": [reporting] }));
     assert!(json.get("diagnostics").is_none());
 }
+
+#[test]
+fn agents_for_column_keeps_missing_age_unknown_and_future_clocks_non_negative() {
+    use lyrel_core::daemon::control::PaneAgentState;
+    let old: PaneAgentState = serde_json::from_value(json!({
+        "pane_id":7, "state":{"status":"waiting"}
+    })).unwrap();
+    let future: PaneAgentState = serde_json::from_value(json!({
+        "pane_id":8, "state":{"status":"done", "since_ms":u64::MAX}
+    })).unwrap();
+    let mut backend = mock();
+    backend.replies.push_back(ReplyOk::AgentStates(vec![old, future]));
+    let rendered = human(run_cli(&["lyrel", "agents"], &Context::default(), &mut backend));
+    let cells: Vec<Vec<_>> = rendered.lines().map(|line| line.split_whitespace().collect()).collect();
+    assert_eq!(cells[0], ["PANE", "AGENT", "STATUS", "FOR", "MESSAGE"]);
+    assert_eq!(cells[1], ["%7", "-", "waiting", "-", "-"]);
+    assert_eq!(cells[2], ["%8", "-", "done", "0s", "-"]);
+}

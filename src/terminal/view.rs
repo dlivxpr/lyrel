@@ -2848,6 +2848,7 @@ mod gpui_tests {
                 request_resume_status: Default::default(),
                 pending_stop: false,
                 readout: Default::default(),
+                since_ms: None,
             }))
             .encode(daemon)
             .unwrap();
@@ -2907,6 +2908,7 @@ mod gpui_tests {
             request_resume_status: Default::default(),
             pending_stop: false,
             readout: Default::default(),
+            since_ms: None,
         }))
         .encode(&mut daemon)
         .unwrap();

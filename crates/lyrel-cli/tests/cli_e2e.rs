@@ -7,6 +7,8 @@ use lyrel_core::client::{ControlClient, PaneClient};
 use lyrel_core::daemon::control::ControlHello;
 use lyrel_core::daemon::protocol::{DaemonMsg, PROTOCOL_VERSION, ShellSpec, WinSize};
 
+#[path = "cli_e2e/agents.rs"]
+mod agents;
 #[path = "cli_e2e/capture.rs"]
 mod capture;
 #[path = "cli_e2e/execution.rs"]
@@ -46,6 +48,10 @@ const SETTLE_WITHIN: Duration = Duration::from_secs(60);
 const CLOSE_WITHIN: Duration = Duration::from_secs(5);
 
 fn main() {
+    if std::env::args().any(|arg| arg == agents::FIXTURE_ARG) {
+        agents::fixture();
+        return;
+    }
     if std::env::args().any(|arg| arg == TERMINAL_PTY_FIXTURE_ARG) {
         terminal_pty_fixture::pty_sender();
         return;
@@ -76,6 +82,7 @@ fn main() {
     }
 
     let tests: &[(&str, fn(&Daemon))] = &[
+        ("agents_report_continuous_state_age", agents::agents_report_continuous_state_age),
         (
             "retired_executable_names_still_run_as_ordinary_pty_commands",
             pane::retired_executable_names_still_run_as_ordinary_pty_commands,
@@ -181,6 +188,11 @@ fn main() {
 
     let mut failed = 0;
     for (name, test) in tests {
+        if let Some(filter) = std::env::args().nth(1)
+            && !name.contains(&filter)
+        {
+            continue;
+        }
         let daemon = Daemon::start();
         let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| test(&daemon)));
         drop(daemon);

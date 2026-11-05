@@ -190,6 +190,7 @@ pub(crate) struct TabRow {
     pub(crate) agent: Option<crate::core::cli_agent::CLIAgent>,
     pub(crate) status: Option<crate::core::cli_agent::AgentStatus>,
     pub(crate) unread: usize,
+    pub(crate) waited: Option<String>,
     pub(crate) ssh: Option<u32>,
     pub(crate) active: bool,
     /// Branch and diff counts, the same line the tab sidebar shows. Only this
@@ -1002,6 +1003,7 @@ impl LyrelApp {
     /// in strip order; other workspaces' tabs come in the order they have.
     pub(crate) fn tab_rows_for(&self, id: WorkspaceId, mru: bool, cx: &App) -> Vec<TabRow> {
         if id == self.workspace {
+            let now_ms = crate::core::config::unix_now().saturating_mul(1000);
             let order = match mru {
                 true => self.tabs.by_mru(),
                 false => (0..self.tabs.len()).collect(),
@@ -1029,6 +1031,7 @@ impl LyrelApp {
                         agent: tab.agent(cx),
                         status: tab.agent_status(cx),
                         unread: tab.agent_unread_count(cx),
+                        waited: tab.agent_waited(now_ms, cx),
                         ssh: self.tab_ssh_dot(tab, cx),
                         active: i == self.tabs.active_index(),
                         git: tab.git_status(None, cx),
@@ -1074,6 +1077,7 @@ impl LyrelApp {
                 agent: v.agent,
                 status: v.status,
                 unread: 0,
+                waited: None,
                 ssh: None,
                 active: Some(v.id) == active,
                 git: git(v.cwd.as_deref()),
@@ -3092,6 +3096,10 @@ impl LyrelApp {
                                     .child(meta)
                             })),
                     )
+                    .children(tab.waited.clone().map(|waited| {
+                        div().flex_shrink_0().text_size(gpui_kit::rems(11. / 16.))
+                            .text_color(muted).child(waited)
+                    }))
                     .when(tab.active, |r| {
                         r.child(
                             div()
@@ -3800,6 +3808,7 @@ mod tests {
             agent: None,
             status: None,
             unread: 0,
+            waited: None,
             ssh: None,
             active: false,
             git: None,
