@@ -357,8 +357,8 @@ fn ps_fallback_finds_and_stops_daemon_with_reordered_arguments() {
                 .spawn().unwrap(),
         );
         // Model Darwin ps's two output shapes, listing the live bridge first.
-        // Only the environment predicate is overridden: the production filter
-        // and kill command below are executed intact by the real login shell.
+        // Model only the absent /proc capability; the complete production
+        // discovery/stop logic still runs in the actual POSIX shell.
         let listing = format!("{} {}\n{} {}\n", bridge.0.id(), paths.binary, daemon.0.id(), paths.binary);
         let daemon_args = format!("{} {}", paths.binary, args.join(" "));
         let bridge_args = format!("{} {}", paths.binary, bridge_args.join(" "));
@@ -367,11 +367,10 @@ fn ps_fallback_finds_and_stops_daemon_with_reordered_arguments() {
             shell_quote(&listing), bridge.0.id(), shell_quote(&bridge_args), daemon.0.id(), shell_quote(&daemon_args),
         )).unwrap();
         std::fs::set_permissions(&ps, std::fs::Permissions::from_mode(0o755)).unwrap();
-        let absent_proc = r#"[() { if /usr/bin/[ "$#" -eq 2 ] && /usr/bin/[ "$1" = -d ] && /usr/bin/[ "$2" = /proc ]; then return 1; fi; /usr/bin/[ "$@"; };"#;
         let run = |command: &str| {
             ops.command()
                 .env("PATH", format!("{}:/usr/bin:/bin", ps_dir.display()))
-                .args(["-c", &under_sh(&format!("{absent_proc} {command}"))])
+                .args(["-c", &under_sh(&command.replacen("[ -d /proc ]", "false", 1))])
                 .output().unwrap()
         };
         let found = run(RUNNING_EXE_COMMAND);
