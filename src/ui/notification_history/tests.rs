@@ -82,10 +82,8 @@ fn empty_attention_keyboard_result_is_readable_and_copyable_in_history(cx: &mut 
     let dir = isolated(&mut window);
     crate::ui::i18n::set_locale("en");
     app.update_in(&mut window, |app, window, cx| {
-        app.tabs[0].pane.terminals()[0]
-            .read(cx)
-            .focus_handle
-            .focus(window, cx);
+        let focus = app.tabs[0].pane.terminals()[0].read(cx).focus_handle.clone();
+        focus.focus(window, cx);
     });
     settle(&mut window);
     window.simulate_keystrokes("secondary-shift-u");
