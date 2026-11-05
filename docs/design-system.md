@@ -210,7 +210,7 @@ Git 的新增/修改标记种子为绿 `#2F8A52` / `#4CC27A`、琥珀 `#B7791F` 
 - `element/colors.rs` 负责 ANSI／truecolor、主题颜色与 pane dim 的解析；
   cell 样式复用只属于当前 snapshot，不跨调色板或主题变化保留解析结果。
 - `element/text.rs` 与其私有 `segment`、`powerline` 模块负责字体、Unicode cluster、
-  宽字符、组合字符、fallback ink fitting 与原生分隔符；单元格列位置与裁切预算不变。
+  宽字符、组合字符、fallback ink fitting 与原生分隔符；单元格列位置不变，glyph 裁切遵循上面的兼容空白借位规则。
 - `element/decorations.rs` 绘制背景、选择／搜索填充、特殊下划线、cursor 与 IME preedit；
   所有阶段借用同一 buffer，不能为了模块交接增加每帧 clone、allocation 或 lock。
 
