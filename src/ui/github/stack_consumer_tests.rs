@@ -73,29 +73,22 @@ fn stacked_pull_keyboard_keeps_identity_across_regroup_refresh_and_removal(
     vcx.update(|window, cx| {
         window.render_frame(cx);
         window.click("panel-github-open-repo", cx);
+        // The panel's left edge is an occluding resize handle, not list
+        // whitespace. Hit the actual inset between that edge and the row.
+        let list = window.find("panel-github-rows-acme/widgets").bounds();
+        let first = window.find("panel-github-item-3").bounds();
         window.click_at(
             "panel-github-rows-acme/widgets",
-            gpui_kit::point(gpui_kit::px(1.), gpui_kit::px(1.)),
+            gpui_kit::point((first.left() - list.left()) / 2., first.center().y - list.top()),
             cx,
         );
         assert_eq!(
             window.find("panel-github-rows-acme/widgets").focused(),
             Some(true),
-            "clicking the list gutter must give its keyboard region focus; query selections: {:?}",
-            app.read(cx).github.lists.iter()
-                .map(|(query, cache)| (query, cache.selected))
-                .collect::<Vec<_>>()
+            "clicking the list gutter must give its keyboard region focus"
         );
         window.press("down", cx);
-        assert_eq!(
-            window.find("panel-github-item-3").selected(),
-            Some(true),
-            "after Down: list focus={:?}, query selections={:?}",
-            window.find("panel-github-rows-acme/widgets").focused(),
-            app.read(cx).github.lists.iter()
-                .map(|(query, cache)| (query, cache.selected))
-                .collect::<Vec<_>>()
-        );
+        assert_eq!(window.find("panel-github-item-3").selected(), Some(true));
         window.press("down", cx);
         assert_eq!(window.find("panel-github-item-2").selected(), Some(true));
     });
@@ -123,9 +116,11 @@ fn stacked_pull_keyboard_keeps_identity_across_regroup_refresh_and_removal(
         window.render_frame(cx);
         assert_eq!(window.find("panel-github-item-2").selected(), Some(true));
         assert_eq!(window.find("panel-github-item-1").selected(), Some(false));
+        let list = window.find("panel-github-rows-acme/widgets").bounds();
+        let first = window.find("panel-github-item-99").bounds();
         window.click_at(
             "panel-github-rows-acme/widgets",
-            gpui_kit::point(gpui_kit::px(1.), gpui_kit::px(1.)),
+            gpui_kit::point((first.left() - list.left()) / 2., first.center().y - list.top()),
             cx,
         );
         window.press("enter", cx);
@@ -176,9 +171,11 @@ fn stacked_pull_keyboard_keeps_identity_across_regroup_refresh_and_removal(
     vcx.update(|window, cx| {
         window.render_frame(cx);
         assert!(window.try_find("panel-github-item-2").is_none());
+        let list = window.find("panel-github-rows-acme/widgets").bounds();
+        let first = window.find("panel-github-item-99").bounds();
         window.click_at(
             "panel-github-rows-acme/widgets",
-            gpui_kit::point(gpui_kit::px(1.), gpui_kit::px(1.)),
+            gpui_kit::point((first.left() - list.left()) / 2., first.center().y - list.top()),
             cx,
         );
         window.press("enter", cx);
