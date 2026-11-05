@@ -778,7 +778,7 @@ fn switch_cell(
     label: &'static str,
     live: bool,
     cx: &gpui_kit::App,
-) -> gpui_kit::Stateful<gpui_kit::Div> {
+) -> impl IntoElement + gpui_kit::StatefulInteractiveElement + use<> {
     let sf = cx.global::<crate::ui::presets::Surfaces>().sidebar;
     h_flex()
         .id(id)

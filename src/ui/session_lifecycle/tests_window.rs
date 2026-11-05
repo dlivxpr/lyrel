@@ -141,6 +141,11 @@ fn close_window_override_keeps_unsaved_confirmation_and_cancellation(cx: &mut Te
     vcx.run_until_parked();
     vcx.update(|window, cx| window.input("keep these edits", cx));
     vcx.run_until_parked();
+    let edited = app.read_with(&vcx, |app, _| {
+        app.tab_code()
+            .and_then(|code| code.active_id())
+            .expect("the edited document is open")
+    });
 
     #[cfg(target_os = "macos")]
     {
@@ -159,11 +164,23 @@ fn close_window_override_keeps_unsaved_confirmation_and_cancellation(cx: &mut Te
     vcx.simulate_prompt_answer(t(L10nKey::Cancel));
     vcx.run_until_parked();
     assert_eq!(vcx.update(|_, cx| WindowRegistry::count(cx)), 1);
-    app.read_with(&vcx, |app, cx| {
-        let file = app.active_buffer().expect("Cancel keeps the document open");
-        assert!(file.dirty);
-        assert_eq!(file.input.read(cx).text().to_string(), "keep these edits");
+    app.read_with(&vcx, |app, _| {
+        assert_eq!(
+            app.tab_code().and_then(|code| code.active_id()),
+            Some(edited),
+            "Cancel keeps the same document open"
+        );
+        assert_eq!(app.editor_unsaved(), vec![edited]);
         assert_eq!(app.tabs.len(), 2, "closing a window must not close a tab");
+    });
+    vcx.update(|window, cx| {
+        window.press("secondary-a", cx);
+        window.press("secondary-c", cx);
+        assert_eq!(
+            cx.read_from_clipboard().and_then(|item| item.text()).as_deref(),
+            Some("keep these edits"),
+            "Cancel preserves the document text and restores its input focus"
+        );
     });
 
     vcx.simulate_keystrokes("secondary-alt-f9");
