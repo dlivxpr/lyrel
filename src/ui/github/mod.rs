@@ -28,6 +28,7 @@
 //! request pinned over the list follows a `git switch`.
 
 pub(crate) mod detail;
+pub(crate) mod rows;
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -35,6 +36,7 @@ use std::time::{Duration, Instant};
 
 use gpui_kit::{Context, Window};
 use lyrel_core::core::github::api::{self, ListQuery};
+use lyrel_core::core::github::stack::{StackRow, stack_order};
 use lyrel_core::core::github::{
     ApiError, Detail, GitHubRemote, Item, Kind, RepoSlug, StateFilter, Transport,
 };
@@ -85,6 +87,9 @@ pub(crate) enum RemoteLookup {
 #[derive(Default)]
 pub(crate) struct ListCache {
     pub(crate) items: Arc<Vec<Item>>,
+    pub(crate) rows: Arc<Vec<StackRow>>,
+    /// A PR/issue number in this query, never a display-row position.
+    pub(crate) selected: Option<u64>,
     pub(crate) next_page: Option<u32>,
     pub(crate) loading: bool,
     /// Whether any answer has landed yet — tells "loading" from "empty".
@@ -140,7 +145,6 @@ pub(crate) struct BranchPullCache {
     pub(crate) fetched: Option<Instant>,
 }
 
-#[derive(Default)]
 pub(crate) struct GitHubPanelState {
     pub(crate) connection: Option<Connection>,
     pub(crate) connecting: bool,
@@ -161,6 +165,8 @@ pub(crate) struct GitHubPanelState {
     pub(crate) open: Option<(RepoSlug, u64)>,
     pub(crate) list_scroll: gpui_kit::ScrollHandle,
     pub(crate) detail_scroll: gpui_kit::ScrollHandle,
+    pub(crate) list_focus: gpui_kit::FocusHandle,
+    pub(crate) list_anchor: gpui_kit::ScrollAnchor,
     /// The list row under the pointer, by number: the one that shows its
     /// labels and age.
     pub(crate) hovered: Option<u64>,
@@ -168,6 +174,36 @@ pub(crate) struct GitHubPanelState {
     pub(crate) branch_pulls: HashMap<BranchPullKey, BranchPullCache>,
     /// The long sections of a detail the user unfolded.
     pub(crate) unfolded: std::collections::HashSet<(RepoSlug, u64, Fold)>,
+}
+
+impl GitHubPanelState {
+    pub(crate) fn new(cx: &mut gpui_kit::App) -> Self {
+        let list_scroll = gpui_kit::ScrollHandle::new();
+        Self {
+            connection: None,
+            connecting: false,
+            connector: None,
+            remotes: HashMap::new(),
+            remote_request: 0,
+            metadata_seen: None,
+            metadata_watch: None,
+            remote_pick: HashMap::new(),
+            kind: Kind::default(),
+            state: StateFilter::default(),
+            label: None,
+            lists: HashMap::new(),
+            details: HashMap::new(),
+            open: None,
+            list_anchor: gpui_kit::ScrollAnchor::for_handle(list_scroll.clone()),
+            list_scroll,
+            list_focus: cx.focus_handle().tab_stop(true),
+            detail_scroll: gpui_kit::ScrollHandle::new(),
+            hovered: None,
+            branches: HashMap::new(),
+            branch_pulls: HashMap::new(),
+            unfolded: Default::default(),
+        }
+    }
 }
 
 /// A detail section that folds when it runs long.
@@ -509,6 +545,10 @@ impl LyrelApp {
                         if items.is_empty() && page < EMPTY_PAGES_FOLLOWED {
                             follow = got.next_page;
                         }
+                        entry.selected = entry
+                            .selected
+                            .filter(|number| items.iter().any(|i| i.number == *number));
+                        entry.rows = Arc::new(stack_order(&items, &q.slug));
                         entry.items = Arc::new(items);
                         entry.next_page = got.next_page;
                         entry.error = None;
@@ -848,8 +888,70 @@ impl LyrelApp {
         cx.notify();
     }
 
-    pub(crate) fn github_close_detail(&mut self, cx: &mut Context<Self>) {
+    pub(crate) fn github_close_detail(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.github.open = None;
+        window.focus(&self.github.list_focus, cx);
+        cx.notify();
+    }
+
+    pub(crate) fn github_list_key_down(
+        &mut self,
+        query: &ListQuery,
+        event: &gpui_kit::KeyDownEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let modifiers = event.keystroke.modifiers;
+        if !self.github.list_focus.is_focused(window)
+            || modifiers.control
+            || modifiers.platform
+            || modifiers.alt
+            || modifiers.shift
+        {
+            return;
+        }
+        let Some(cache) = self.github.lists.get_mut(query) else {
+            return;
+        };
+        let number = |row: &StackRow| match row {
+            StackRow::Item { source_ix, .. } => Some(cache.items[*source_ix].number),
+            StackRow::Trunk { .. } => None,
+        };
+        let current = cache
+            .rows
+            .iter()
+            .position(|row| number(row).is_some_and(|n| Some(n) == cache.selected));
+        let key = event.keystroke.key.as_str();
+        let next = match key {
+            "home" => cache.rows.iter().find_map(number),
+            "end" => cache.rows.iter().rev().find_map(number),
+            "up" => match current {
+                Some(ix) => cache.rows[..ix]
+                    .iter()
+                    .rev()
+                    .find_map(number)
+                    .or(cache.selected),
+                None => cache.rows.iter().rev().find_map(number),
+            },
+            "down" => match current {
+                Some(ix) => cache.rows[ix + 1..]
+                    .iter()
+                    .find_map(number)
+                    .or(cache.selected),
+                None => cache.rows.iter().find_map(number),
+            },
+            "enter" => {
+                if let Some(number) = current.and(cache.selected) {
+                    self.github_open_detail(query.slug.clone(), number, cx);
+                    cx.stop_propagation();
+                }
+                return;
+            }
+            _ => return,
+        };
+        cache.selected = next;
+        self.github.list_anchor.scroll_to(window, cx);
+        cx.stop_propagation();
         cx.notify();
     }
 }
