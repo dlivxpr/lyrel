@@ -33,6 +33,8 @@ include!("graphics_media_consumer_tests.rs");
 include!("theme_query_consumer_tests.rs");
 include!("mouse_reporting_consumer_tests.rs");
 
+include!("keyboard_boundary_consumer_tests.rs");
+
 struct GraphicsDaemonProcess {
     child: std::process::Child,
     dir: tempfile::TempDir,
@@ -40,8 +42,13 @@ struct GraphicsDaemonProcess {
 
 impl GraphicsDaemonProcess {
     fn start() -> Self {
+        Self::start_with(|_, _| {})
+    }
+
+    fn start_with(configure: impl FnOnce(&mut std::process::Command, &std::path::Path)) -> Self {
         let dir = tempfile::TempDir::new().unwrap();
-        let child = std::process::Command::new(std::env::current_exe().unwrap())
+        let mut command = std::process::Command::new(std::env::current_exe().unwrap());
+        command
             .args(["--ignored", "--exact"])
             .arg(format!(
                 "{}::graphics_fixture_daemon",
@@ -57,9 +64,9 @@ impl GraphicsDaemonProcess {
             .env("LYREL_CONTROL_SOCK", dir.path().join("control.sock"))
             .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .spawn()
-            .unwrap();
+            .stderr(std::process::Stdio::null());
+        configure(&mut command, dir.path());
+        let child = command.spawn().unwrap();
         let daemon = Self { child, dir };
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
         loop {

@@ -17,10 +17,10 @@ fn stale_mode_resets_target_only_the_dirty_bits() {
     assert!(text.contains("\x1b[?25h"));
     assert!(text.contains("\x1b[?1002l"));
     assert!(text.contains("\x1b[?1006l"));
-    assert!(text.ends_with("\x1b[=0;1u"));
+    assert!(!text.contains("u"), "keyboard stacks are cleared by the caller");
 
     let kitty = Mode::SHOW_CURSOR | Mode::DISAMBIGUATE_ESC_CODES;
-    assert_eq!(stale_mode_resets(kitty), b"\x1b[=0;1u");
+    assert!(stale_mode_resets(kitty).is_empty());
 }
 
 #[test]
