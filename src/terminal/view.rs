@@ -5001,6 +5001,7 @@ mod gpui_tests {
                     1.,
                     gpui_kit::Rgba::default(),
                     must_block,
+                    false,
                 )
             })
         };

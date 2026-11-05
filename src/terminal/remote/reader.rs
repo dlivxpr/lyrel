@@ -7,8 +7,8 @@ use super::{
 };
 use std::collections::VecDeque;
 use std::io::Read as _;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 
 use crate::core::osc::Note;
@@ -231,7 +231,7 @@ impl FrameReader {
             color_scheme_updates,
         } = signals;
         let mut awaiting_replay = awaiting_replay;
-        *proxy.parse_state.paint_cursor.lock().unwrap() = None;
+        proxy.parse_state.presentation.lock().unwrap().cursor = None;
         color_scheme_updates.store(false, Ordering::Relaxed);
         let trace = std::env::var("LYREL_TRACE").is_ok_and(|v| !v.is_empty() && v != "0");
         let mut tr_last = std::time::Instant::now();
@@ -286,7 +286,7 @@ impl FrameReader {
                         });
                         let mut cuts_left = cuts.len();
                         if local_conpty.load(Ordering::Relaxed) {
-                            *proxy.parse_state.paint_cursor.lock().unwrap() = None;
+                            proxy.parse_state.presentation.lock().unwrap().cursor = None;
                         }
                         {
                             let t0 = trace.then(std::time::Instant::now);
@@ -298,6 +298,7 @@ impl FrameReader {
                                 &out_batch,
                                 cuts,
                                 Some(&proxy.parse_state.history_limit),
+                                Some(&proxy.parse_state.presentation),
                                 &quit,
                                 |term, cut| {
                                     cuts_left -= 1;
@@ -305,8 +306,12 @@ impl FrameReader {
                                         ReaderCut::Parked(cut) => {
                                             let position = parked_cursor.apply(term, cut);
                                             if cursor_at_end && cuts_left == 0 {
-                                                *proxy.parse_state.paint_cursor.lock().unwrap() =
-                                                    position;
+                                                proxy
+                                                    .parse_state
+                                                    .presentation
+                                                    .lock()
+                                                    .unwrap()
+                                                    .cursor = position;
                                             }
                                         }
                                         ReaderCut::Command(mark) => {
@@ -325,7 +330,7 @@ impl FrameReader {
                             }
                         }
                         if cursor_at_end && term.lock().synchronized_output() {
-                            *proxy.parse_state.paint_cursor.lock().unwrap() = None;
+                            proxy.parse_state.presentation.lock().unwrap().cursor = None;
                         }
                         if let Ok(mut notes) = osc_notes.lock() {
                             osc.feed(&out_batch, &mut *notes);
@@ -434,7 +439,6 @@ impl FrameReader {
                     DaemonMsg::Size(ws) => {
                         image_decoder.store_metrics(ws.cell_w, ws.cell_h);
                         flush_batch!();
-                        *proxy.parse_state.paint_cursor.lock().unwrap() = None;
                         // A live echo lands just before the shell's
                         // SIGWINCH redraw; a replayed Size heads old
                         // bytes that nothing is going to repaint.
@@ -453,6 +457,9 @@ impl FrameReader {
                                 shell_redraws,
                                 conpty,
                             );
+                            let mut facts = proxy.parse_state.presentation.lock().unwrap();
+                            facts.cursor = None;
+                            facts.resize(term.columns());
                         }
                         proxy.send(PaneEvent::Wakeup);
                     }
@@ -460,7 +467,7 @@ impl FrameReader {
                         flush_batch!();
                         cursor_scan.reset();
                         parked_cursor.reset();
-                        *proxy.parse_state.paint_cursor.lock().unwrap() = None;
+                        proxy.parse_state.presentation.lock().unwrap().cursor = None;
                         proxy.parse_state.replaying.store(true, Ordering::Relaxed);
                         // The replay carries the command marks too, so
                         // a pane reattached after `nvim` exited in it
@@ -476,6 +483,7 @@ impl FrameReader {
                             &bytes,
                             cuts,
                             Some(&proxy.parse_state.history_limit),
+                            Some(&proxy.parse_state.presentation),
                             &quit,
                             |term, cut| match cut {
                                 ReaderCut::Command(mark) => command_cursor.apply(term, mark),
@@ -674,7 +682,8 @@ impl FrameReader {
                                     proxy.clone(),
                                     &mut keyboard,
                                     Some(proxy.parse_state.history_limit.load(Ordering::Relaxed)),
-                                );
+                                )
+                                .with_presentation(Some(&proxy.parse_state.presentation));
                                 processor.advance(&mut bridge, &resets);
                                 drop(bridge);
                             }
@@ -1008,6 +1017,7 @@ fn feed_grid<T: EventListener + Clone>(
     bytes: &[u8],
     cuts: Vec<(usize, ReaderCut)>,
     history_limit: Option<&AtomicUsize>,
+    presentation: Option<&Mutex<crate::terminal::presentation::ParsePresentation>>,
     quit: &AtomicBool,
     mut on_cut: impl FnMut(&mut Crosswords<T>, ReaderCut),
 ) -> Option<std::time::Duration> {
@@ -1038,7 +1048,8 @@ fn feed_grid<T: EventListener + Clone>(
                     proxy.clone(),
                     keyboard,
                     history_limit.map(|limit| limit.load(Ordering::Relaxed)),
-                );
+                )
+                .with_presentation(presentation);
                 processor.advance(&mut bridge, &bytes[at..end]);
             }
             held += end - at;

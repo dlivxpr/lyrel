@@ -175,6 +175,7 @@ impl TerminalElement {
         dim: f32,
         under: Rgba,
         must_block: bool,
+        has_previous: bool,
     ) -> Result<GridSnapshot, SnapshotUnavailable> {
         let mut cursor: Option<GridCursor> = None;
         let mut sliver: Option<Vec<RenderCell>> = None;
@@ -218,6 +219,12 @@ impl TerminalElement {
             if term.synchronized_output() {
                 return Err(SnapshotUnavailable::Synchronized);
             }
+            // A completed hold does not acknowledge a requested resize. Only
+            // the ordered Size changes the VT addressing; its Wakeup will
+            // publish the new frame without a contention retry loop.
+            if has_previous && (term.screen_lines(), term.columns()) != (rows, cols) {
+                return Err(SnapshotUnavailable::AwaitingSize);
+            }
             // After the lock, not before: an early return must leave the
             // previous frame's cells intact for the caller to paint again.
             buf.resize_with(rows * cols, RenderCell::default);
@@ -232,8 +239,12 @@ impl TerminalElement {
                 .as_ref()
                 .and_then(|selection| selection.to_range(&term));
 
+            let terminal = &self.view.read(cx).terminal;
+            let presentation = terminal.presentation_facts();
             let mut cur = term.cursor();
-            if let Some(position) = self.view.read(cx).terminal.paint_cursor_position() {
+            if terminal.is_local_conpty()
+                && let Some(position) = presentation.cursor
+            {
                 cur.pos = position;
             }
             let cursor_row = cur.pos.row.0 + display_offset;
@@ -273,7 +284,8 @@ impl TerminalElement {
                             _ => inverse_runs.push((col, 1)),
                         }
                     }
-                    let rendered = painter.snapshot(position, cell);
+                    let mut rendered = painter.snapshot(position, cell);
+                    rendered.tab_stop = presentation.is_tab_stop(col);
                     any_selected |= rendered.selected;
                     buf[row * cols + col] = if dim < 1. {
                         dim_cell(rendered, dim, under)
@@ -302,6 +314,7 @@ impl TerminalElement {
                 {
                     let position = Pos::new(line, Column(col));
                     let mut rc = painter.snapshot(position, cell);
+                    rc.tab_stop = presentation.is_tab_stop(col);
                     if dim < 1. {
                         rc = dim_cell(rc, dim, under);
                     }
@@ -310,6 +323,7 @@ impl TerminalElement {
                 }
                 sliver = Some(row_buf);
             }
+            drop(presentation);
 
             let row = cursor_row;
             let col = cur.pos.col.0;
@@ -765,7 +779,8 @@ mod tests {
                             cx,
                             1.,
                             Rgba::default(),
-                            true
+                            true,
+                            false,
                         )
                         .is_ok()
                 );
@@ -825,7 +840,8 @@ mod tests {
                     cx,
                     1.,
                     Rgba::default(),
-                    true
+                    true,
+                    false,
                 ),
                 Err(SnapshotUnavailable::Synchronized)
             ));
@@ -845,6 +861,7 @@ mod tests {
                     1.,
                     Rgba::default(),
                     true,
+                    false,
                 )
                 .unwrap();
             assert!(

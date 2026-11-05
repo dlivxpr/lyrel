@@ -2209,8 +2209,7 @@ fn gui_and_cli_shared_synchronized_ranges_converge_at_the_same_geometry(cx: &mut
     graphics_recovery_destroy(view, window, cx);
 }
 
-#[gpui_kit::test]
-fn synchronized_equal_area_resize_keeps_committed_cell_addressing(cx: &mut TestAppContext) {
+fn synchronized_resize_consumer(cx: &mut TestAppContext, finish_before_size: Option<bool>) {
     crate::core::config::pin_test_config_dir();
     cx.executor().allow_parking();
     cx.update(|cx| {
@@ -2271,6 +2270,28 @@ fn synchronized_equal_area_resize_keeps_committed_cell_addressing(cx: &mut TestA
         view.copy_selection(cx);
     });
     assert_eq!(cx.update(|cx| cx.read_from_clipboard().and_then(|item| item.text())).as_deref(), Some("row-two"));
+    if let Some(timeout) = finish_before_size {
+        if timeout {
+            view.read_with(cx, |view, _| {
+                view.terminal.term.lock().sync_update_started = Some(rio_vt::time::Instant::now() - std::time::Duration::from_secs(1));
+            });
+        } else {
+            DaemonMsg::Output(b"\x1b[?2026l".to_vec()).encode(&mut sender).unwrap();
+        }
+        graphics_recovery_wait(cx, "hold did not end before the ordered Size", |cx| {
+            view.read_with(cx, |view, _| !view.terminal.term.lock().synchronized_output())
+        });
+        window.update(cx, |_, window, cx| {
+            window.refresh();
+            window.draw(cx).clear(cx);
+        }).unwrap();
+        view.read_with(cx, |view, _| {
+            assert_eq!(sync_presented_row(view, 1).trim_end(), "row-two", "ending the hold must not readdress old-width VT cells");
+            let geom = view.cell_geom.unwrap();
+            assert_eq!((geom.cols, geom.rows), (80,24));
+            assert!(sync_presented_row(view, 0).starts_with("before"), "pending resize must retain one coherent committed picture");
+        });
+    }
     DaemonMsg::Size(crate::daemon::protocol::WinSize { cols: 96, rows: 20, cell_w: 10, cell_h: 20 })
         .encode(&mut sender).unwrap();
     graphics_recovery_wait(cx, "ordered resize did not release the old addressing", |cx| {
@@ -2278,6 +2299,21 @@ fn synchronized_equal_area_resize_keeps_committed_cell_addressing(cx: &mut TestA
             && !view.grid_snap.as_ref().unwrap().held)
     });
     graphics_recovery_destroy(view, window, cx);
+}
+
+#[gpui_kit::test]
+fn synchronized_equal_area_resize_keeps_committed_cell_addressing(cx: &mut TestAppContext) {
+    synchronized_resize_consumer(cx, None);
+}
+
+#[gpui_kit::test]
+fn synchronized_esu_before_size_keeps_committed_cell_addressing(cx: &mut TestAppContext) {
+    synchronized_resize_consumer(cx, Some(false));
+}
+
+#[gpui_kit::test]
+fn synchronized_timeout_before_size_keeps_committed_cell_addressing(cx: &mut TestAppContext) {
+    synchronized_resize_consumer(cx, Some(true));
 }
 
 #[gpui_kit::test]
@@ -2364,5 +2400,145 @@ fn synchronized_copy_preserves_live_tab_line_wrap_and_unicode_semantics(cx: &mut
         }
     }
     graphics_recovery_destroy(view, window, cx);
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+#[gpui_kit::test]
+fn synchronized_relink_first_hold_uses_new_empty_surface_geometry(cx: &mut TestAppContext) {
+    crate::core::config::pin_test_config_dir();
+    cx.executor().allow_parking();
+    cx.update(|cx| {
+        gpui_kit::component::init(cx);
+        cx.set_global(Config::default());
+    });
+    let (client, _initial_sender) = test_stream_pair();
+    let (view, window) = graphics_build_rooted_consumer_at(
+        cx, 177, client, Vec::new(), TermSize::new(80, 24), PtySource::Raw,
+    );
+    let route = crate::terminal::PaneRoute::Remote {
+        header: Box::new(crate::daemon::router::RouteHeader::wsl("first-hold-fixture")),
+        resize_echo: true,
+    };
+    let (client, mut old_sender) = test_stream_pair();
+    view.update(cx, |view,cx| view.adopt_relink(client,Vec::new(),&route,TermSize::new(80,24),10,20,cx).unwrap());
+    DaemonMsg::Output(b"\x1b[Hprevious-link".to_vec()).encode(&mut old_sender).unwrap();
+    graphics_recovery_wait(cx, "old link did not paint", |cx| {
+        view.read_with(cx, |view, _| view.grid_snap.is_some() && sync_presented_row(view, 0).starts_with("previous-link"))
+    });
+    let target = graphics_window_geometry(window, &view, cx, TermSize::new(40,12)).0;
+    cx.simulate_window_resize(window, target);
+    let (client, mut sender) = test_stream_pair();
+    view.update(cx, |view, cx| {
+        assert_eq!(view.cell_geom.map(|geom| (geom.cols,geom.rows)), Some((80,24)));
+        view.adopt_relink(client, Vec::new(), &route, TermSize::new(40,12),10,20,cx).unwrap();
+        DaemonMsg::Output(b"\x1b[?2026h".to_vec()).encode(&mut sender).unwrap();
+        DaemonMsg::Cwd(std::path::PathBuf::from("/first-hold")).encode(&mut sender).unwrap();
+        DaemonMsg::Output(b"\x1b[Hhidden-new-link".to_vec()).encode(&mut sender).unwrap();
+        // Stay in this one real consumer update until its production reader
+        // parses the first BSU. No empty old-bounds frame may precede it.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        loop {
+            let mut term = view.terminal.term.lock();
+            if term.grid[Line(0)][Column(0)].c() == 'h' {
+                assert!(term.synchronized_output());
+                term.sync_update_started = Some(rio_vt::time::Instant::now() + std::time::Duration::from_secs(30));
+                break;
+            }
+            drop(term);
+            assert!(std::time::Instant::now() < deadline, "first held replay was not parsed");
+            std::thread::yield_now();
+        }
+        assert!(view.grid_snap.is_none());
+        assert!(view.grid_buf.is_empty());
+    });
+    window.update(cx, |_, window, cx| {
+        window.refresh();
+        window.draw(cx).clear(cx);
+    }).unwrap();
+    view.read_with(cx, |view, _| {
+        let geom = view.cell_geom.unwrap();
+        assert_eq!((geom.cols,geom.rows), (40,12));
+        assert_eq!(view.grid_buf.len(), 40*12);
+        assert!(sync_presented_row(view, 0).trim().is_empty(), "no previous picture exists on the new link");
+    });
+    DaemonMsg::Size(crate::daemon::protocol::WinSize { cols: 40, rows: 12, cell_w: 10, cell_h: 20 })
+        .encode(&mut sender).unwrap();
+    graphics_recovery_wait(cx, "new link did not settle", |cx| {
+        view.read_with(cx, |view, _| sync_presented_row(view, 0).starts_with("hidden-new-link"))
+    });
+    graphics_recovery_destroy(view, window, cx);
+}
+
+#[gpui_kit::test]
+fn synchronized_copy_preserves_tabstop_gaps_custom_clear_reset_and_growth(cx: &mut TestAppContext) {
+    crate::core::config::pin_test_config_dir();
+    cx.executor().allow_parking();
+    cx.update(|cx| {
+        gpui_kit::component::init(cx);
+        cx.set_global(Config::default());
+    });
+    let cases = [
+        ("default stop gap", "", "a\t\x1b[1;12Hb", 0, 11, "a\t   b", false),
+        ("custom HTS", "\x1b[1;6H\x1bH\x1b[H", "a\t\x1b[1;10Hb", 0, 9, "a\t    b", false),
+        ("Rio no-op set_tabs preserves HTS", "\x1b[1;6H\x1bH\x1b[?5W\x1b[H", "a\t\x1b[1;10Hb", 0, 9, "a\t    b", false),
+        ("clear current TBC", "\x1b[1;6H\x1bH\x1b[g\x1b[H", "a\t\x1b[1;12Hb", 0, 11, "a\t   b", false),
+        ("clear all TBC", "\x1b[3g", "a\t\x1b[1;12Hb", 0, 11, "a\tb", false),
+        ("RIS restores defaults", "\x1b[3g\x1bc", "a\t\x1b[1;12Hb", 0, 11, "a\t   b", false),
+        ("resize adds default stops", "\x1b[3g\x1b[1;6H\x1bH", "\x1b[1;82Ha\t\x1b[1;92Hb", 81, 91, "a\t   b", true),
+    ];
+    let mut failures = Vec::new();
+    for (label, setup, text, start, end, expected, grow) in cases {
+        let (client, mut sender) = test_stream_pair();
+        let size = TermSize::new(if grow {96} else {80},24);
+        let (view, window) = graphics_build_rooted_consumer_at(cx,178,client,Vec::new(),size,PtySource::Raw);
+        if grow {
+            DaemonMsg::Size(crate::daemon::protocol::WinSize { cols: 80, rows: 24, cell_w: 10, cell_h: 20 }).encode(&mut sender).unwrap();
+        }
+        DaemonMsg::Output(setup.as_bytes().to_vec()).encode(&mut sender).unwrap();
+        if grow {
+            DaemonMsg::Size(crate::daemon::protocol::WinSize { cols: 96, rows: 24, cell_w: 10, cell_h: 20 }).encode(&mut sender).unwrap();
+        }
+        DaemonMsg::Output(text.as_bytes().to_vec()).encode(&mut sender).unwrap();
+        graphics_recovery_wait(cx, "tab fixture did not paint", |cx| {
+            view.read_with(cx, |view, _| view.grid_snap.is_some() && view.grid_buf.get(end).is_some_and(|cell| cell.c == 'b'))
+        });
+        view.update(cx, |view, cx| {
+            view.on_select_start(start,0,true,1,false,cx);
+            view.on_select_update(end,0,false,cx);
+            view.on_select_end(cx);
+            view.copy_selection(cx);
+        });
+        let live = cx.update(|cx| cx.read_from_clipboard().and_then(|item| item.text()));
+        assert_eq!(live.as_deref(), Some(expected), "live Rio oracle: {label}");
+        window.update(cx, |_,window,cx| { window.refresh(); window.draw(cx).clear(cx); }).unwrap();
+        DaemonMsg::Output(b"\x1b[?2026h".to_vec()).encode(&mut sender).unwrap();
+        DaemonMsg::Cwd(std::path::PathBuf::from("/tab-hold")).encode(&mut sender).unwrap();
+        // Hidden tab configuration must not replace the committed stop map.
+        DaemonMsg::Output(b"\x1b[3g\x1b[1;4H\x1bH\x1b[Hhidden-partial".to_vec()).encode(&mut sender).unwrap();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        loop {
+            if view.read_with(cx, |view, _| {
+                let mut term = view.terminal.term.lock();
+                if term.grid[Line(0)][Column(0)].c() != 'h' { return false; }
+                assert!(term.synchronized_output());
+                term.sync_update_started = Some(rio_vt::time::Instant::now() + std::time::Duration::from_secs(30));
+                true
+            }) { break; }
+            assert!(std::time::Instant::now() < deadline, "hidden stop change was not parsed");
+            std::thread::yield_now();
+        }
+        window.update(cx, |_,window,cx| { window.refresh(); window.draw(cx).clear(cx); }).unwrap();
+        view.update(cx, |view,cx| {
+            view.on_select_start(start,0,true,1,false,cx);
+            view.on_select_update(end,0,false,cx);
+            view.on_select_end(cx);
+            view.copy_selection(cx);
+        });
+        let held = cx.update(|cx| cx.read_from_clipboard().and_then(|item| item.text()));
+        if held != live {
+            failures.push(format!("{label}: live={live:?}, held={held:?}"));
+        }
+        graphics_recovery_destroy(view,window,cx);
+    }
     assert!(failures.is_empty(), "{}", failures.join("\n"));
 }

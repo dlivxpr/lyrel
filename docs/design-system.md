@@ -174,7 +174,9 @@ Git 的新增/修改标记种子为绿 `#2F8A52` / `#4CC27A`、琥珀 `#B7791F` 
   稳态继续使用 `try_lock`，无法取得 grid 时不修改旧 buffer，由管线重画上一有效帧。
   只有首帧或普通 resize 后旧帧行列不匹配时保留阻塞获取例外；不能只比较单元格总数。
   同步 hold 或竞争时复用的 committed cells 沿用原行列 addressing，即使新旧尺寸等面积也不重新解释；
-  已持有的同步帧在有序 `Size` 到达前只受新边界裁切，不等待实时 grid。
+  已持有的同步帧在有序 `Size` 到达前只受新边界裁切，不等待实时 grid；ESU 或期限先结束 hold
+  也不代表 resize 已生效。锁内 VT 行列尚未匹配时独立等待 `Size` 的既有 Wakeup，不启动竞争重试。
+  relink 后没有 previous snapshot 的首个 hold 按新 surface 分配空帧，不恢复上一连接残留的几何。
 - `TerminalView` 持有的 `FrameFacts` 统一提供绘制模式、选择、光标及 prompt／菜单几何；首帧先取得有效事实，
   后续在同一 guard 内应用 scrollbar 的待处理位置并采样。稳态 render／paint 不为这些投影等待 PTY reader。
   facts、composer、输入维护、同尺寸 resize 核验或实际 grid 构建因锁忙而跳过时，共用每 pane 唯一的后台等待任务；
@@ -182,8 +184,10 @@ Git 的新增/修改标记种子为绿 `#2F8A52` / `#4CC27A`、琥珀 `#B7791F` 
   同尺寸请求实际校正过 grid 后再绘制一帧，使帧首事实与校正后的几何重新一致；尺寸和 cell metrics 未变且 grid 已匹配时不重发 resize。
   提示符所有权同步、settle／flush 的判断与非阻塞 writer 入队使用交接点同一个实时 grid guard，
   不根据缓存绘制模式向 shell 交接输入；实际按键、鼠标协议及提示符输入路由仍读取实时终端状态。
-  同步期间的选择与复制读取 committed cells：Tab 不重复输出其后 NUL 展开空白，
-  按行选择保留末尾换行，普通／折行／宽字符／组合字符边界与正常 Rio 选择一致。
+  同步期间的选择与复制读取 committed cells：Tab 只跳过实际 tab stop 之前的 NUL 展开空白，
+  stop 之后的真实 NUL 间隔仍为空格；按行选择保留末尾换行，普通／折行／宽字符／组合字符边界与正常 Rio 选择一致。
+  GUI 通过原有 `ParseBridge` 回调记录一维 stop 元数据，涵盖 HTS／TBC／RIS 与 resize 后新增的默认 stops，
+  复用原有光标元数据 mutex 并在同一 VT guard 内采样到 cell 的 bool；不克隆整表、不建立第二个 grid／解析器或新锁。
   已进入 presented 状态的拖选更新不获取实时 grid 锁；只在采用或更新 live selection 时取原有锁。
 - `element/colors.rs` 负责 ANSI／truecolor、主题颜色与 pane dim 的解析；
   cell 样式复用只属于当前 snapshot，不跨调色板或主题变化保留解析结果。

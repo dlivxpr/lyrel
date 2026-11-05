@@ -65,6 +65,7 @@ pub(super) struct RenderCell {
     pub(super) selected: bool,
     pub(super) wide: rio_vt::crosswords::square::Wide,
     pub(super) wrapped: bool,
+    pub(super) tab_stop: bool,
     pub(super) hyperlink: Option<rio_vt::crosswords::square::Hyperlink>,
     match_hit: bool,
     match_current: bool,
@@ -88,6 +89,7 @@ impl Default for RenderCell {
             spacer: false,
             wide: rio_vt::crosswords::square::Wide::Narrow,
             wrapped: false,
+            tab_stop: false,
             hyperlink: None,
             selected: false,
             match_hit: false,
@@ -198,6 +200,7 @@ pub(super) struct GridCursor {
 pub(super) enum SnapshotUnavailable {
     Contended,
     Synchronized,
+    AwaitingSize,
 }
 
 #[derive(Default)]
@@ -526,10 +529,13 @@ impl Element for TerminalElement {
             dim,
             under,
             must_block,
+            previous.is_some(),
         );
-        let reused = built.is_err();
-        let held = matches!(&built, Err(SnapshotUnavailable::Synchronized))
-            || (built.is_err() && previous.as_ref().is_some_and(|snap| snap.held));
+        let reused = built.is_err() && previous.is_some();
+        let held = matches!(
+            &built,
+            Err(SnapshotUnavailable::Synchronized | SnapshotUnavailable::AwaitingSize)
+        ) || (built.is_err() && previous.as_ref().is_some_and(|snap| snap.held));
         let mut snap = match built {
             Ok(snap) => {
                 self.view

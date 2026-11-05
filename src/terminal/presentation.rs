@@ -1,11 +1,63 @@
-//! Borrowed access to the pane's already painted cells. This owns no grid or
-//! frame: pointer gestures and copy must not read the newer hidden VT state.
+//! Pane presentation facts and borrowed access to already painted cells.
+//! Pointer gestures and copy must not read the newer hidden VT state.
 use std::ops::Range;
 
 use rio_vt::crosswords::pos::{Column, Line, Pos};
 use rio_vt::crosswords::square::Wide;
 
 use super::element::RenderCell;
+
+/// The existing parse/paint metadata mutex also carries the one-dimensional
+/// tab map. Rio exposes tab mutations through Handler, but no tab-map reader.
+pub(super) struct ParsePresentation {
+    pub(super) cursor: Option<Pos>,
+    tab_stops: Vec<bool>,
+}
+
+impl ParsePresentation {
+    pub(super) fn new(cols: usize) -> Self {
+        let mut facts = Self {
+            cursor: None,
+            tab_stops: Vec::new(),
+        };
+        facts.resize(cols);
+        facts
+    }
+
+    pub(super) fn resize(&mut self, cols: usize) {
+        let previous = self.tab_stops.len();
+        self.tab_stops.resize(cols, false);
+        for col in previous..cols {
+            self.tab_stops[col] = col.is_multiple_of(8);
+        }
+    }
+
+    pub(super) fn reset_tabs(&mut self, cols: usize) {
+        self.resize(cols);
+        for (col, stop) in self.tab_stops.iter_mut().enumerate() {
+            *stop = col.is_multiple_of(8);
+        }
+    }
+
+    pub(super) fn set_tab_stop(&mut self, col: usize) {
+        self.tab_stops[col] = true;
+    }
+
+    pub(super) fn clear_tab_stop(&mut self, col: usize) {
+        self.tab_stops[col] = false;
+    }
+
+    pub(super) fn clear_all_tab_stops(&mut self) {
+        self.tab_stops.fill(false);
+    }
+
+    pub(super) fn is_tab_stop(&self, col: usize) -> bool {
+        self.tab_stops
+            .get(col)
+            .copied()
+            .unwrap_or_else(|| col.is_multiple_of(8))
+    }
+}
 
 pub(super) struct PresentedGrid<'a> {
     cells: &'a [RenderCell],
@@ -256,9 +308,9 @@ impl<'a> PresentedGrid<'a> {
                 if cell.spacer || !cell.selected {
                     continue;
                 }
-                // Tab already encodes its visual expansion; packed NUL cells
-                // following it must not become extra spaces in copied text.
-                if tab_suffix && cell.c == '\0' {
+                // A Tab encodes only the run up to the next committed stop.
+                // NUL cells at/after that stop are real gaps and stay spaces.
+                if tab_suffix && cell.c == '\0' && !cell.tab_stop {
                     continue;
                 }
                 tab_suffix = cell.c == '\t';
