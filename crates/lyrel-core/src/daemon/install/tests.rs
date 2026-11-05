@@ -236,11 +236,11 @@ impl RemoteOps for FakeRemote {
                 }),
             };
         }
-        if cmd == RUNNING_EXE_COMMAND {
+        if cmd == under_sh(RUNNING_EXE_COMMAND) {
             let exe = self.running_exe.lock().unwrap().clone().unwrap_or_default();
             return ok(&exe);
         }
-        if cmd == TERMINATE_RUNNING_COMMAND {
+        if cmd == under_sh(TERMINATE_RUNNING_COMMAND) {
             if self.stop_fails {
                 return Ok(ExecOutput {
                     status: Some(127),
@@ -1171,7 +1171,7 @@ fn restart_replaces_the_running_daemon() {
     let journal = remote.journal();
     let killed = journal
         .iter()
-        .position(|j| matches!(j, Journal::Exec(c) if c == TERMINATE_RUNNING_COMMAND))
+        .position(|j| matches!(j, Journal::Exec(c) if c == &under_sh(TERMINATE_RUNNING_COMMAND)))
         .expect("the old daemon is asked to stop");
     let launched = journal.iter().position(|j| *j == Journal::Launch).unwrap();
     assert!(killed < launched, "stop before start — one socket, not two");
@@ -1202,7 +1202,7 @@ fn a_restart_with_nothing_to_start_leaves_the_running_daemon_alone() {
         !remote
             .journal()
             .iter()
-            .any(|j| matches!(j, Journal::Exec(c) if c == TERMINATE_RUNNING_COMMAND)),
+            .any(|j| matches!(j, Journal::Exec(c) if c == &under_sh(TERMINATE_RUNNING_COMMAND))),
         "nothing was stopped: {:?}",
         remote.journal()
     );
@@ -1235,7 +1235,7 @@ fn replacing_installs_the_matching_server_and_then_restarts_into_it() {
     let journal = remote.journal();
     let killed = journal
         .iter()
-        .position(|j| matches!(j, Journal::Exec(c) if c == TERMINATE_RUNNING_COMMAND))
+        .position(|j| matches!(j, Journal::Exec(c) if c == &under_sh(TERMINATE_RUNNING_COMMAND)))
         .expect("the old daemon is asked to stop");
     let written = journal
         .iter()
@@ -1323,7 +1323,7 @@ fn a_forced_replace_uploads_over_a_same_dialect_server_and_restarts_into_it() {
     );
     let killed = journal
         .iter()
-        .position(|j| matches!(j, Journal::Exec(c) if c == TERMINATE_RUNNING_COMMAND))
+        .position(|j| matches!(j, Journal::Exec(c) if c == &under_sh(TERMINATE_RUNNING_COMMAND)))
         .expect("the old daemon is asked to stop");
     let launched = journal
         .iter()
@@ -1359,7 +1359,7 @@ fn a_forced_upload_that_speaks_the_wrong_dialect_leaves_the_running_server_alone
         !remote
             .journal()
             .iter()
-            .any(|j| matches!(j, Journal::Exec(c) if c == TERMINATE_RUNNING_COMMAND)),
+            .any(|j| matches!(j, Journal::Exec(c) if c == &under_sh(TERMINATE_RUNNING_COMMAND))),
         "and nothing was stopped"
     );
 }
@@ -1549,7 +1549,7 @@ fn the_probe_runs_clean_in_every_shell_this_machine_has() {
     for shell in shells {
         let out = std::process::Command::new(shell)
             .arg("-c")
-            .arg(RUNNING_EXE_COMMAND)
+            .arg(under_sh(RUNNING_EXE_COMMAND))
             .output()
             .unwrap_or_else(|e| panic!("{shell} would not run: {e}"));
         assert!(
@@ -2484,7 +2484,7 @@ mod proving_the_server_once_per_connection {
             vec![
                 "uname -sm".to_string(),
                 format!("{} --stdio --bridge < /dev/null", shell_quote(BINARY)),
-                RUNNING_EXE_COMMAND.to_string(),
+                under_sh(RUNNING_EXE_COMMAND),
             ],
             "the probe: what to install, is a daemon answering, and what build is serving"
         );
@@ -2793,3 +2793,7 @@ fn the_quick_probe_script_names_a_server_that_answers() {
         "a server that does not answer is not named"
     );
 }
+
+#[cfg(target_os = "linux")]
+#[path = "shell_tests.rs"]
+mod shell_acceptance;

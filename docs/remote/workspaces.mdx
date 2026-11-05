@@ -109,6 +109,8 @@ Windows ZIP 的扁平内容固定为 `lyrel-server.exe`、`conpty.dll`、`OpenCo
 
 Windows OpenSSH 的探测、上传和启动使用 Windows 路径及 PowerShell 适配，不要求 POSIX 工具；SFTP 与登录 shell 必须看见同一个文件系统。若 OpenSSH 的 `DefaultShell` 运行 WSL 而 SFTP 指向 Windows，安装会拒绝这种混合布局并说明原因。
 
+Unix SSH 主机的登录 shell 可以是 fish。安装器将启动、运行中 daemon 探测及停止脚本交给 `sh`，路径中的单引号和反斜杠会跨登录 shell 与内层脚本保留；不修改用户的登录 shell 或启动配置。重启只选择带独立 `--daemon` 参数的 lyrel server，跳过同一程序的 `--stdio`／pane bridge，并停止旧协议方言遗留的 daemon。若登录 shell 直接拒绝启动命令，错误会立即保留远端退出状态与 shell stderr，不再等候一个尚未启动的 daemon 超时；已启动进程自身的失败仍使用既有启动日志诊断。
+
 Windows 后台 server 仍由 WMI 脱离 SSH 会话启动：在目标主机的 PATH 中发现 PowerShell 7 或更新版本时，使用其绝对路径运行 supervisor；未发现时使用系统 Windows PowerShell 5.1，不额外安装运行时。WMI 创建的隐藏 `cmd.exe` 仅调用这个已选解释器，保留启动日志、退出码和原会话环境；选定后的启动失败明确报错，不静默重试其他解释器或修改系统安全策略。
 
 lyrel 使用独立的配置、凭据、会话、启动日志、临时文件及进程身份。连接、重启、替换和清理只处理 lyrel；不会查找或导入其他产品的数据，也不会按其他产品的 server 名称终止进程。远端 agent hook 的刷新只认 lyrel 程序入口；共享 agent 配置中的其他产品及用户 hook 保留，不因同样使用 `agent-hook` 子命令而被接管。
