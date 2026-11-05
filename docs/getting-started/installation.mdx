@@ -125,7 +125,7 @@ lyrel 独立初版为 `0.1.0`；缺少匹配包时不会回退下载上游安装
 
 Windows／macOS 使用 stable Rust 工具链与仓库已有锁文件运行 `cargo build --locked`；应用二进制文件名为 `lyrel-app`，CLI 为 `lyrel`，headless server 为 `lyrel-server`。Linux 使用下列排除根桌面包的命令，直接构建根包会明确拒绝。
 
-GUI 统一通过正式 `gpui-kit =0.9.0` 的官方 `gpui-fast` feature 选择 GPUI Fast，锁文件基线为 `0.1.13` 家族；Kit 同步选择 core、native platform、Base、Component 与 assets 的 Fast 类型。应用导入与测试宏仍经 `gpui_kit`，不直接依赖 engine、不增加 crate alias／patch 或双后端产品开关。GUI HTTP 保持 `gpui-pre-reqwest-client =0.3.11`，与 Fast 共用 `gpui-pre-http-client =0.3.11` 类型身份；保留 `tree-sitter-languages` 和测试专用 `test-support`。Rio 此检查点仍为 `0.5.28`，后续迁移由 [#171](https://github.com/dlivxpr/lyrel/issues/171) 跟踪；选择 Fast 不代表 [#168](https://github.com/dlivxpr/lyrel/issues/168) 的完整行为／性能或跨平台验收已经通过。
+GUI 统一通过正式 `gpui-kit =0.9.0` 的官方 `gpui-fast` feature 选择 GPUI Fast，锁文件基线为 `0.1.13` 家族；Kit 同步选择 core、native platform、Base、Component 与 assets 的 Fast 类型。应用导入与测试宏仍经 `gpui_kit`，不直接依赖 engine、不增加 crate alias／patch 或双后端产品开关。GUI HTTP 保持 `gpui-pre-reqwest-client =0.3.11`，与 Fast 共用 `gpui-pre-http-client =0.3.11` 类型身份；保留 `tree-sitter-languages` 和测试专用 `test-support`。当前 Rio 组合为 `=0.5.29`；完整 Kit／Fast／Rio 组合的构建、行为与性能必须重新验证，不能沿用仅 Fast 的检查点结果。[#168](https://github.com/dlivxpr/lyrel/issues/168) 的跨平台验收与 [#167](https://github.com/dlivxpr/lyrel/issues/167) 的真实 Mac 验收分别记录。
 
 `Cargo.lock` 会收录可选后端及其他平台的依赖；Kit 的 additive features 也会保留合法的 `gpui-pre` 上游构建链，不能以包名前缀判断当前公开类型。用 `cargo tree --locked -p lyrel --target x86_64-pc-windows-msvc -e features -i gpui-fast@0.1.13` 检查启用层；macOS 对应使用 `--target aarch64-apple-darwin -i gpui-fast-macos@0.1.13`，确认 `font-kit`，并另查 `-i gpui-pre-http-client@0.3.11`。Kit 使用兼容的 `0.1.x` 约束，更新锁文件时须复核 Fast 家族版本，不能意外漂移此基线。
 
@@ -135,7 +135,9 @@ GUI 统一通过正式 `gpui-kit =0.9.0` 的官方 `gpui-fast` feature 选择 GP
 
 Fast 的 development profile 为当前启用的 core、platform、macros 和 Windows／macOS／Apple backend 保留优化；运行性能只比较同条件 Release。官方 `GPUI_VIEW_RETENTION=0` 可在启动时关闭 view retention 以定位差异（默认开启），不是产品 backend 回退。正式二进制的 `LYREL_FPS=1` 只记录终端 paint 次数／耗时，不是 retention 命中率、GPU 帧延迟或物理输入延迟。官方 `Window::reset_layout_stats()`／`layout_stats()` 仅在 `test-support` 提供，包含 `views_built`、`views_reused`、`nodes_created`、`nodes_reused`、`style_writes` 及各 phase 时间；需要时在已有 rooted consumer 临时采样，不在生产热路径新增计数器。必须先测量终端 paint 中实体写入的实际失效影响，再决定是否修复；保留单一 frame buffer／metadata owner、已有生命周期与隐藏 pane 通知门控。
 
-GUI、CLI 与 daemon 的图片权威状态统一采用正式 `rio-vt =0.5.28`（不启用默认 features），保留 lyrel 自有 daemon、PTY 和渲染，不引入 Rio 的窗口或 GPU 后端。图片布局的零宽字符判定直接使用同一锁图中的 `rio-unicode =0.5.28`，不复制宽度表或 VT parser。`lyrel-core` 的 `terminal-width` feature 只控制输入栏／CLI 的测宽 API，不再决定 daemon 是否链接 VT 网格。第三方 Rust 依赖来自正式 registry，使用锁定归档及标准 Cargo 缓存，不修改下载源码或配置 source replacement。依赖包内部的上游快照和多版本副本仍以正式解析结果为准。
+GUI、CLI 与 daemon 的图片权威状态统一采用正式 `rio-vt =0.5.29`（`default-features = false`），`rio-graphics` 与 `rio-unicode` 同时精确固定为 `=0.5.29`，传递测宽依赖为同版 `rio-grapheme-width`。保留 lyrel 自有 daemon、PTY 和渲染，不引入 Rio 的 PTY event loop、窗口或 GPU 后端，不复制宽度表或 VT parser。`lyrel-core` 的 `terminal-width` feature 只控制输入栏／CLI 的测宽 API，不决定 daemon 是否链接 VT 网格。第三方 Rust 依赖来自正式 registry，使用锁定归档及标准 Cargo 缓存，不修改下载源码或配置 source replacement。用 `cargo tree --locked --workspace --target all -e features -i rio-vt@0.5.29 -i rio-graphics@0.5.29 -i rio-unicode@0.5.29 -i rio-grapheme-width@0.5.29` 核对共同类型身份和 feature 边界。
+
+Rio `0.5.29` 不再由 `Processor` 暂存同步输出；解析、协议应答和输入模式始终实时推进。桌面在实际 snapshot／paint 发布点保留上次完整文字、光标和图片 display list，结束标记或 lyrel 既有 **150 ms** fail-safe 才使新帧可发布；每次开始标记会重新计时。reader 自己推进静默链路的期限，不采用 Rio 默认的 1000 ms，也不新增设置。图形资源仍由 daemon 决定，桌面只保留已计入原预算的呈现 lease；隐藏 pane 不因输出新增重绘。CLI `capture --plain` 独立重建最新收到状态，不等待 GUI committed frame。此语义及新回归不等于候选已经通过构建／原生／性能验收，实际命令、退出码与证据由 #168 的集中检查点记录。
 
 图片传输在共享核心复用锁图中正式 registry 的 `png 0.18.1` 做逐行内容校验，zlib 继续使用 `miniz_oxide 0.9.1`；二者均为 Rust 实现，不新增平台 PNG／zlib 原生安装步骤。桌面仍使用既有 `image 0.25` 生成渲染像素；按原有 `Cargo.lock` 与 `--locked` 命令安装，不引入 Git/path/patch 第三方来源。
 

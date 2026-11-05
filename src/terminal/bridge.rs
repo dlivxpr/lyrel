@@ -17,7 +17,7 @@
 //!   must not read capabilities nothing here renders. DA2 keeps the exact
 //!   bytes the pane has always answered rather than Rio's version number.
 //! - `report_version` (XTVERSION): previously met with silence, and a pane
-//!   does not start answering "rio 0.5.28" because the parser changed.
+//!   does not start answering Rio's version because the parser changed.
 //! - `cells_size_pixels` / `text_area_size_pixels`: geometry is answered once
 //!   by the daemon using the controller's device-pixel resize metrics, including
 //!   when no GUI is attached. A local mirror must not send a second reply.

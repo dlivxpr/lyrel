@@ -24,9 +24,17 @@ mod workspace;
 #[path = "cli_e2e/worktree.rs"]
 mod worktree;
 
+mod terminal_pty_fixture {
+    include!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../tests/support/kitty_pty.rs"
+    ));
+}
+
 const DAEMON_ENV: &str = "LYREL_CLI_E2E_DAEMON";
 const PASTE_AWARE_FIXTURE_ARG: &str = "--lyrel-e2e-paste-aware-fixture";
 const CAPTURE_TAIL_FIXTURE_ARG: &str = "--lyrel-e2e-capture-tail-fixture";
+const TERMINAL_PTY_FIXTURE_ARG: &str = "--lyrel-e2e-terminal-pty-fixture";
 const PASTE_AWARE_TEXT: &str = "lyrel paste aware input";
 const PASTE_BURST_WINDOW: Duration = Duration::from_millis(120);
 const READY_WITHIN: Duration = Duration::from_secs(30);
@@ -34,6 +42,10 @@ const SETTLE_WITHIN: Duration = Duration::from_secs(60);
 const CLOSE_WITHIN: Duration = Duration::from_secs(5);
 
 fn main() {
+    if std::env::args().any(|arg| arg == TERMINAL_PTY_FIXTURE_ARG) {
+        terminal_pty_fixture::pty_sender();
+        return;
+    }
     if std::env::args().any(|arg| arg == CAPTURE_TAIL_FIXTURE_ARG) {
         for n in 1..=6 {
             println!("lyrel_e2e_tail_line_{n}");
@@ -124,6 +136,10 @@ fn main() {
         (
             "capture_plain_returns_text_not_escapes",
             capture::capture_plain_returns_text_not_escapes,
+        ),
+        (
+            "capture_plain_reads_unfinished_synchronized_output_without_a_gui",
+            capture::capture_plain_reads_unfinished_synchronized_output_without_a_gui,
         ),
         (
             "capture_still_answers_after_a_resize",

@@ -1939,3 +1939,259 @@ mod opencode_replay_consumer_tests {
     include!("opencode_replay_consumer_tests.rs");
 }
 include!("omp_replay_consumer_tests.rs");
+
+// Observe the cells/caret consumed by the production Element, not its live VT
+// grid or notification channel. A real stream pair keeps reader deadlines live.
+fn sync_presented_row(view: &TerminalView, row: usize) -> String {
+    let cols = view.cell_geom.expect("a production frame was painted").cols;
+    view.grid_buf[row * cols..(row + 1) * cols]
+        .iter()
+        .filter(|cell| !cell.spacer)
+        .flat_map(|cell| std::iter::once(cell.c).chain(cell.marks.as_deref().unwrap_or(&[]).iter().copied()))
+        .collect()
+}
+
+#[gpui_kit::test]
+fn synchronized_frame_holds_text_and_caret_across_unrelated_root_redraws(
+    cx: &mut TestAppContext,
+) {
+    use lyrel_core::core::kitty_graphics::{GraphicsUpdate, Image, WireFormat};
+    crate::core::config::pin_test_config_dir();
+    cx.executor().allow_parking();
+    cx.update(|cx| {
+        gpui_kit::component::init(cx);
+        cx.set_global(Config::default());
+    });
+    let (client, mut sender) = test_stream_pair();
+    let (view, window) = graphics_build_rooted_consumer_at(
+        cx, 171, client, Vec::new(), TermSize::new(80, 24), PtySource::Raw,
+    );
+    DaemonMsg::Output("\x1b[2J\x1b[Hcommitted\x1b[2;1H宽e\u{301}\x1b[3;1H\x1b]8;;https://old.example/x\x1b\\visible-link\x1b]8;;\x1b\\\x1b[3;5H".as_bytes().to_vec())
+        .encode(&mut sender).unwrap();
+    let images = view.read_with(cx, |view, _| view.terminal.images());
+    send_admitted_graphics(&images, &mut sender, GraphicsUpdate::Resource {
+        key: 171,
+        image: std::sync::Arc::new(Image { width: 1, height: 1, format: WireFormat::Rgba,
+            compressed: false, data: vec![255, 0, 0, 255] }),
+    });
+    let mut placement = graphics_placement(172, 171, 4, 3);
+    placement.x = 0;
+    send_admitted_graphics(&images, &mut sender, GraphicsUpdate::Place(placement));
+    send_graphics(&mut sender, GraphicsUpdate::Screen { screen: 0, history_origin: 0, epoch: 0 });
+    graphics_recovery_wait(cx, "the initial committed frame was not painted", |cx| {
+        view.read_with(cx, |view, _| view.grid_snap.as_ref().is_some_and(|snap| snap.images.len() == 1)
+            && sync_presented_row(view, 0).starts_with("committed"))
+    });
+    let painted = view.read_with(cx, |view, _| view.grid_snap.as_ref().unwrap().images[0].painted.clone());
+    // A protocol query after the replacement proves bytes are parsed inside
+    // the hold; it also distinguishes the removed parser-buffering behavior.
+    sender.set_read_timeout(Some(std::time::Duration::from_secs(5))).unwrap();
+    DaemonMsg::Output(b"\x1b[?2026h".to_vec()).encode(&mut sender).unwrap();
+    // A non-output frame flushes BSU before the next parser advance.
+    DaemonMsg::Cwd(std::path::PathBuf::from("/sync-fixture")).encode(&mut sender).unwrap();
+    DaemonMsg::Output(b"\x1b[Hpartial\x1b[K\x1b[2;1Hhidden\x1b[K\x1b[3;1H\x1b]8;;https://new.example/x\x1b\\visible-link\x1b]8;;\x1b\\\x1b[7;9H".to_vec()).encode(&mut sender).unwrap();
+    send_graphics(&mut sender, GraphicsUpdate::Remove { placements: vec![172], resources: vec![171] });
+    DaemonMsg::Output(b"\x1b[6n".to_vec()).encode(&mut sender).unwrap();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    loop {
+        let parsed = view.read_with(cx, |view, _| {
+            let mut term = view.terminal.term.lock();
+            if term.grid[Line(0)][Column(0)].c() != 'p' { return false; }
+            assert!(term.synchronized_output(), "the pre-deadline observation must still be held");
+            // Control only this atomicity test's clock origin. The separate
+            // quiet-stream regression uses the real 150 ms reader deadline.
+            term.sync_update_started = Some(rio_vt::time::Instant::now() + std::time::Duration::from_secs(5));
+            true
+        });
+        if parsed { break; }
+        assert!(std::time::Instant::now() < deadline, "live parsing stalled behind BSU");
+        std::thread::yield_now();
+    }
+    let mut replies = sender.try_clone().unwrap();
+    let (reply_tx, reply_rx) = std::sync::mpsc::channel();
+    let reader = std::thread::spawn(move || loop {
+        if let ClientMsg::Input(bytes) = ClientMsg::read(&mut replies).unwrap() {
+            reply_tx.send(bytes).unwrap();
+            break;
+        }
+    });
+    let mut reply = None;
+    graphics_recovery_wait(cx, "DSR did not advance inside a presentation hold", |_| {
+        reply = reply_rx.try_recv().ok();
+        reply.is_some()
+    });
+    reader.join().unwrap();
+    assert_eq!(reply.unwrap(), b"\x1b[7;9R");
+    painted.store(false, std::sync::atomic::Ordering::Release);
+    window.update(cx, |_, window, cx| {
+        view.update(cx, |view, cx| {
+            view.focus_handle.focus(window, cx);
+            cx.notify();
+        });
+        window.refresh();
+        window.draw(cx).clear(cx);
+    }).unwrap();
+    view.read_with(cx, |view, _| {
+        assert!(sync_presented_row(view, 0).starts_with("committed"));
+        assert_eq!(view.grid_snap.as_ref().unwrap().painted_cursor().map(|(r,c,_)| (r,c)), Some((2,4)));
+        assert!(view.scrollback_text().contains("partial"), "live parsing must advance ahead of the held picture");
+        let image = &view.grid_snap.as_ref().unwrap().images[0];
+        assert_eq!((image.anchor_row, image.anchor_col), (4, 3));
+        assert_eq!(image.data.as_ref().unwrap().as_bytes(0).unwrap(), &[0, 0, 255, 255]);
+        assert!(painted.load(std::sync::atomic::Ordering::Acquire), "the unrelated redraw must really paint the old image after its live resource was removed");
+        assert!(view.terminal.images().snapshot().is_empty(), "daemon-owned live removal must already be applied");
+    });
+    view.update(cx, |view, cx| {
+        view.on_select_start(0, 0, true, 1, false, cx);
+        view.on_select_update(8, 0, false, cx);
+        view.on_select_end(cx);
+        view.copy_selection(cx);
+        assert_eq!(view.selection_text().as_deref(), Some("committed"));
+    });
+    assert_eq!(cx.update(|cx| cx.read_from_clipboard().and_then(|item| item.text())).as_deref(), Some("committed"));
+    view.update(cx, |view, cx| {
+        view.on_select_start(1, 1, true, 1, false, cx);
+        view.on_select_update(2, 1, false, cx);
+        view.on_select_end(cx);
+        view.copy_selection(cx);
+    });
+    assert_eq!(cx.update(|cx| cx.read_from_clipboard().and_then(|item| item.text())).as_deref(), Some("宽e\u{301}"));
+    window.update(cx, |_, window, cx| {
+        view.update(cx, |view, cx| assert!(view.open_link_at(2, 2, window, cx)));
+    }).unwrap();
+    assert_eq!(cx.opened_url().as_deref(), Some("https://old.example/x"));
+    DaemonMsg::Output(b"\x1b[?2026l".to_vec()).encode(&mut sender).unwrap();
+    graphics_recovery_wait(cx, "ESU did not publish the coherent frame", |cx| {
+        view.read_with(cx, |view, _| sync_presented_row(view, 0).starts_with("partial")
+            && view.grid_snap.as_ref().unwrap().images.is_empty()
+            && view.grid_snap.as_ref().unwrap().painted_cursor().map(|(r,c,_)| (r,c)) == Some((6,8)))
+    });
+}
+
+#[gpui_kit::test]
+fn quiet_unfinished_synchronized_frame_paints_without_more_output(cx: &mut TestAppContext) {
+    crate::core::config::pin_test_config_dir();
+    cx.executor().allow_parking();
+    cx.update(|cx| {
+        gpui_kit::component::init(cx);
+        cx.set_global(Config::default());
+    });
+    let (client, mut sender) = test_stream_pair();
+    let (view, _window) = graphics_build_rooted_consumer_at(
+        cx, 172, client, Vec::new(), TermSize::new(80, 24), PtySource::Raw,
+    );
+    DaemonMsg::Output(b"\x1b[?2026h\x1b[Hquiet-first-frame".to_vec())
+        .encode(&mut sender).unwrap();
+    graphics_recovery_wait(cx, "a quiet first synchronized frame remained suspended", |cx| {
+        view.read_with(cx, |view, _| view.grid_snap.is_some()
+            && sync_presented_row(view, 0).starts_with("quiet-first-frame"))
+    });
+    view.read_with(cx, |view, _| assert!(!view.terminal.term.lock().synchronized_output()));
+    DaemonMsg::Output(b"\r\nafter-timeout".to_vec()).encode(&mut sender).unwrap();
+    graphics_recovery_wait(cx, "output after timeout was lost", |cx| {
+        view.read_with(cx, |view, _| sync_presented_row(view, 1).starts_with("after-timeout"))
+    });
+}
+
+#[gpui_kit::test]
+fn presentation_boundaries_publish_received_text_without_a_later_pty_frame(cx: &mut TestAppContext) {
+    crate::core::config::pin_test_config_dir();
+    cx.executor().allow_parking();
+    cx.update(|cx| {
+        gpui_kit::component::init(cx);
+        cx.set_global(Config::default());
+    });
+    let cases = [
+        ("replay", DaemonMsg::Snapshot(Vec::new()), "received"),
+        ("resize", DaemonMsg::Size(WinSize { cols: 79, rows: 24, cell_w: 10, cell_h: 20 }), "received"),
+        ("reset", DaemonMsg::Output(b"\x1bcreset".to_vec()), "reset"),
+        ("command", DaemonMsg::Output(b"\x1b]133;D;0\x07".to_vec()), "received"),
+        ("prompt", DaemonMsg::Prompt { active: true, at_prompt: true, last_exit: Some(0) }, "received"),
+        ("exit", DaemonMsg::Exited { code: Some(0) }, "received"),
+    ];
+    for (label, boundary, expected) in cases {
+        let (client, mut sender) = test_stream_pair();
+        let (view, window) = graphics_build_rooted_consumer_at(
+            cx, 173, client, Vec::new(), TermSize::new(80, 24), PtySource::Raw,
+        );
+        DaemonMsg::Output(b"\x1b[?2026h\x1b[Hreceived".to_vec()).encode(&mut sender).unwrap();
+        boundary.encode(&mut sender).unwrap();
+        graphics_recovery_wait(cx, label, |cx| {
+            view.read_with(cx, |view, _| view.grid_snap.is_some()
+                && sync_presented_row(view, 0).starts_with(expected)
+                && !view.terminal.term.lock().synchronized_output())
+        });
+        graphics_recovery_destroy(view, window, cx);
+    }
+}
+
+#[gpui_kit::test]
+fn reconnect_replay_replaces_an_open_picture_without_inheriting_its_hold(cx: &mut TestAppContext) {
+    crate::core::config::pin_test_config_dir();
+    cx.executor().allow_parking();
+    cx.update(|cx| {
+        gpui_kit::component::init(cx);
+        cx.set_global(Config::default());
+    });
+    let (client, mut old_sender) = test_stream_pair();
+    let (view, window) = graphics_build_rooted_consumer_at(
+        cx, 174, client, Vec::new(), TermSize::new(80, 24), PtySource::Raw,
+    );
+    DaemonMsg::Output(b"\x1b[Hbefore-reconnect".to_vec()).encode(&mut old_sender).unwrap();
+    graphics_recovery_wait(cx, "baseline", |cx| {
+        view.read_with(cx, |view, _| view.grid_snap.is_some() && sync_presented_row(view, 0).starts_with("before-reconnect"))
+    });
+    DaemonMsg::Output(b"\x1b[?2026h\x1b[Hunfinished-old-link".to_vec()).encode(&mut old_sender).unwrap();
+    let (client, mut sender) = test_stream_pair();
+    view.update(cx, |view, cx| {
+        view.adopt_relink(client, Vec::new(), &crate::terminal::PaneRoute::Local, TermSize::new(80,24), 10,20, cx).unwrap();
+    });
+    DaemonMsg::Snapshot(b"\x1b[?2026h\x1b[Hreplayed-new-link\x1b[6n".to_vec()).encode(&mut sender).unwrap();
+    graphics_recovery_wait(cx, "fresh replay kept an old presentation hold", |cx| {
+        view.read_with(cx, |view, _| view.grid_snap.is_some()
+            && sync_presented_row(view, 0).starts_with("replayed-new-link")
+            && !view.terminal.term.lock().synchronized_output())
+    });
+    DaemonMsg::Output(b"\r\nnew-live-output".to_vec()).encode(&mut sender).unwrap();
+    graphics_recovery_wait(cx, "live output after replay", |cx| {
+        view.read_with(cx, |view, _| sync_presented_row(view, 1).starts_with("new-live-output"))
+    });
+    graphics_recovery_destroy(view, window, cx);
+}
+
+#[gpui_kit::test]
+fn gui_and_cli_shared_synchronized_ranges_converge_at_the_same_geometry(cx: &mut TestAppContext) {
+    crate::core::config::pin_test_config_dir();
+    cx.executor().allow_parking();
+    let daemon = GraphicsDaemonProcess::start();
+    let pane = daemon.spawn();
+    cx.update(|cx| {
+        gpui_kit::component::init(cx);
+        cx.set_global(Config::default());
+    });
+    let source = if cfg!(windows) { PtySource::LocalConpty } else { PtySource::Raw };
+    let (view, window) = graphics_build_rooted_consumer_at(
+        cx, pane, daemon.stream(pane), Vec::new(), TermSize::new(40,24), source,
+    );
+    graphics_assert_production_paint_at(window, &view, cx, TermSize::new(40,24));
+    graphics_send_fixture(&view, cx, 171, &graphics_pty_fixture::synchronized_capture_frame());
+    let visible_range = |view: &TerminalView, first: usize| {
+        format!("{}{}", sync_presented_row(view, first).trim_end(), sync_presented_row(view, first + 1).trim_end())
+    };
+    graphics_recovery_wait(cx, "quiet GUI did not converge to the CLI's shared Unicode/wrap range", |cx| {
+        view.read_with(cx, |view, _| view.grid_snap.is_some()
+            && visible_range(view, 3) == graphics_pty_fixture::SYNC_CAPTURE_TEXT)
+    });
+    graphics_send_fixture(&view, cx, 172, b"\x1b[?2026l");
+    graphics_recovery_wait(cx, "settled GUI frame diverged from the shared capture range", |cx| {
+        view.read_with(cx, |view, _| visible_range(view, 3) == graphics_pty_fixture::SYNC_CAPTURE_TEXT
+            && view.grid_snap.as_ref().unwrap().painted_cursor().map(|(r,c,_)| (r,c)) == Some((4,22)))
+    });
+    graphics_send_fixture(&view, cx, 173, format!("\x1b[?2026h\x1b[8;1H{}\x1b[?2026l", graphics_pty_fixture::SYNC_NEXT_TEXT).as_bytes());
+    graphics_recovery_wait(cx, "successive GUI update lost the shared capture range", |cx| {
+        view.read_with(cx, |view, _| visible_range(view, 7) == graphics_pty_fixture::SYNC_NEXT_TEXT
+            && view.grid_snap.as_ref().unwrap().painted_cursor().map(|(r,c,_)| (r,c)) == Some((8,6)))
+    });
+    daemon.panes().kill(pane).unwrap();
+    graphics_recovery_destroy(view, window, cx);
+}

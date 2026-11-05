@@ -5,16 +5,9 @@ use rio_vt::event::VoidListener;
 const COLS: usize = 24;
 const ROWS: usize = 8;
 
-/// Feeds `chunks` through the same `Processor` the reader runs, then
-/// closes the way the reader closes a fully fed stream: if Rio is still
-/// holding a synchronized update, the consumer ends it (the replay path
-/// does this after every snapshot, the live loop at the armed deadline).
-/// Rio arms the timeout mid-`advance` when the parser completes a BSU,
-/// while buffering only engages at the next `advance` — so a cut inside
-/// a frame's closing `\x1b[?2026l` parks the escape's head in the parser
-/// and its tail in the sync buffer, whose scan can no longer match it.
-/// That update ends at the consumer's close-out, not with a lost ESU:
-/// the tail replays through the same parser and draws nothing.
+/// Feed exactly the same parser/bridge as the reader. Fully closed responses
+/// must finish at every split without a timeout or synthetic close-out masking
+/// a lost ESU; incoming bytes always reach the live grid immediately.
 fn parse(stage: &str, chunks: &[&[u8]]) -> Vec<String> {
     let mut term = test_term(TermSize::new(COLS, ROWS));
     let mut processor = Processor::default();
@@ -25,16 +18,8 @@ fn parse(stage: &str, chunks: &[&[u8]]) -> Vec<String> {
             chunk,
         );
     }
-    if processor.sync_timeout().sync_timeout().is_some() {
-        processor.stop_sync(&mut ParseBridge::new(
-            &mut term,
-            VoidListener,
-            &mut keyboard,
-            None,
-        ));
-    }
     assert!(
-        processor.sync_timeout().sync_timeout().is_none(),
+        !term.synchronized_output(),
         "{stage}: a fully fed response leaves no synchronized update armed"
     );
     let grid = &term.grid;
@@ -212,4 +197,62 @@ fn a_retired_reader_leaves_the_grid_alone() {
     );
     assert!(fed.is_none());
     assert_eq!(screen(&term.lock()), before);
+}
+
+#[test]
+fn unfinished_updates_parse_modes_and_unicode_at_every_byte_boundary() {
+    let bytes = "\x1b[?2026h\x1b[?1h\x1b[?2004h\x1b[H宽e\u{301}".as_bytes();
+    for cut in 0..=bytes.len() {
+        let mut term = fresh();
+        let mut processor = Processor::default();
+        let mut keyboard = KeyboardStacks::default();
+        for chunk in [&bytes[..cut], &bytes[cut..]] {
+            processor.advance(&mut ParseBridge::new(&mut term, VoidListener, &mut keyboard, None), chunk);
+        }
+        assert!(term.synchronized_output(), "split {cut}");
+        assert!(term.mode().contains(Mode::APP_CURSOR | Mode::BRACKETED_PASTE));
+        assert_eq!(term.grid[Line(0)][Column(0)].c(), '宽');
+        assert_eq!(term.grid[Line(0)][Column(2)].c(), 'e');
+        assert_eq!(term.grid.cursor.pos.col.0, 3);
+        let start = term.sync_update_started.unwrap();
+        assert_eq!(presentation_deadline(&term), Some(start + std::time::Duration::from_millis(150)));
+        processor.advance(&mut ParseBridge::new(&mut term, VoidListener, &mut keyboard, None), b"\x1b[?2026l!");
+        assert!(!term.synchronized_output());
+        assert_eq!(term.grid[Line(0)][Column(3)].c(), '!');
+    }
+}
+
+#[test]
+fn synchronized_presentation_deadline_restarts_and_lifecycle_boundaries_release_it() {
+    let mut term = fresh();
+    let mut processor = Processor::default();
+    let mut keyboard = KeyboardStacks::default();
+    processor.advance(&mut ParseBridge::new(&mut term, VoidListener, &mut keyboard, None), b"\x1b[?2026hfirst");
+    let first = term.sync_update_started.unwrap();
+    term.sync_update_started = first.checked_sub(std::time::Duration::from_secs(2));
+    processor.advance(&mut ParseBridge::new(&mut term, VoidListener, &mut keyboard, None), b"\x1b[?2026hsecond");
+    assert!(term.sync_update_started.unwrap() >= first, "every BSU re-arms the hold");
+    assert_eq!(term.grid[Line(0)][Column(5)].c(), 's');
+    term.resize(TermSize::new(COLS + 1, ROWS));
+    assert!(!term.synchronized_output(), "real resize releases live output");
+    assert!(presentation_deadline(&term).is_none());
+    processor.advance(&mut ParseBridge::new(&mut term, VoidListener, &mut keyboard, None), b"\x1b[?2026hhidden\x1bcreset");
+    assert!(!term.synchronized_output(), "RIS clears the old hold");
+    assert!(screen(&term)[0].starts_with("reset"));
+}
+
+#[test]
+fn presentation_timeout_releases_at_150ms_and_accepts_later_output() {
+    let mut term = fresh();
+    let mut processor = Processor::default();
+    let mut keyboard = KeyboardStacks::default();
+    processor.advance(&mut ParseBridge::new(&mut term, VoidListener, &mut keyboard, None), b"\x1b[?2026hquiet");
+    let started = term.sync_update_started.unwrap();
+    assert!(!expire_presentation(&mut term, started + std::time::Duration::from_millis(149)));
+    assert!(term.synchronized_output());
+    assert!(expire_presentation(&mut term, started + std::time::Duration::from_millis(150)));
+    assert!(!term.synchronized_output());
+    assert!(presentation_deadline(&term).is_none());
+    processor.advance(&mut ParseBridge::new(&mut term, VoidListener, &mut keyboard, None), b"-after");
+    assert!(screen(&term)[0].starts_with("quiet-after"));
 }

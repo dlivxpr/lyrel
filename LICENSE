@@ -587,7 +587,7 @@ resvg 0.46.0
 resvg 0.48.1
 rfc6979 0.6.0
 ring 0.17.14 (also applies: Apache-2.0 AND ISC)
-rio-unicode 0.5.28
+rio-unicode 0.5.29
 rle-decode-fast 1.0.3
 ropey 2.0.0-beta.1
 roxmltree 0.20.0
@@ -1213,15 +1213,15 @@ Copyright (c) 2022 sarah
 MIT License
 
 Copyright (c) 2019 Kornel
-- rio-graphics 0.5.28 / LICENSE
+- rio-graphics 0.5.29 / LICENSE
 MIT License
 
 Copyright (c) 2022-present Raphael Amorim
-- rio-unicode 0.5.28 / LICENSE
+- rio-unicode 0.5.29 / LICENSE
 MIT License
 
 Copyright (c) 2022-present Raphael Amorim
-- rio-vt 0.5.28 / LICENSE
+- rio-vt 0.5.29 / LICENSE
 MIT License
 
 Copyright (c) 2022-present Raphael Amorim
@@ -4084,7 +4084,7 @@ written authorization of the copyright holder.
 -------------------------------------------------------------------------------
 T070
 Applicable components and notice files:
-- rio-grapheme-width 0.5.28 / LICENSE
+- rio-grapheme-width 0.5.29 / LICENSE
 
 Original license or notice text:
 

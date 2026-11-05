@@ -47,6 +47,107 @@ pub(super) fn capture_plain_returns_text_not_escapes(daemon: &Daemon) {
     }
 }
 
+/// The only consumers are the pane protocol and the real CLI: no GUI can
+/// supply a cached presentation or release the open synchronized update.
+pub(super) fn capture_plain_reads_unfinished_synchronized_output_without_a_gui(daemon: &Daemon) {
+    let shell = ShellSpec {
+        program: std::env::current_exe().unwrap().display().to_string(),
+        args: vec![TERMINAL_PTY_FIXTURE_ARG.into()],
+        args_are_lyrel_defaults: false,
+    };
+    let mut pane = PaneClient::at(daemon.pane_endpoint())
+        .spawn(
+            None,
+            WinSize {
+                cols: 40,
+                rows: 24,
+                cell_w: 8,
+                cell_h: 16,
+            },
+            Some(shell),
+            Some("synchronized-capture-e2e".into()),
+            None,
+        )
+        .expect("spawn the shared raw PTY sender");
+    pane.set_recv_timeout(Some(SETTLE_WITHIN)).unwrap();
+    collect_pane_output_until(&mut pane, b"KITTY_READY");
+    let address = format!("%{}", pane.pane_id());
+    let mut serial = 0;
+    let mut send = |pane: &mut lyrel_core::client::PaneSession, bytes: &[u8]| {
+        serial += 1;
+        pane.input(
+            format!("SEND {serial} 0 {} 1\n", terminal_pty_fixture::hex(bytes)).as_bytes(),
+        )
+        .unwrap();
+        // The child completes a daemon query/reply barrier before DONE. This
+        // establishes received/parsed output without a wall-clock sleep, and
+        // does not close the synchronized update. Each byte is written and
+        // flushed separately; the PTY may coalesce adjacent writes.
+        collect_pane_output_until(pane, format!("KITTY_DONE_{serial};\r").as_bytes());
+    };
+
+    let text = terminal_pty_fixture::SYNC_CAPTURE_TEXT;
+    send(&mut pane, &terminal_pty_fixture::synchronized_capture_frame());
+    let raw = daemon.run_ok(&["capture", &address, "--scrollback"]);
+    // Unix PTYs preserve the marker. ConPTY can consume/rewrite terminal
+    // controls before lyrel receives them, so its text result alone is not
+    // evidence that a GUI held a 2026 frame. Record that observation boundary.
+    if cfg!(unix) {
+        assert!(raw.contains("\x1b[?2026h"), "missing begin marker: {raw:?}");
+        assert!(!raw.contains("\x1b[?2026l"), "unexpected end marker: {raw:?}");
+    } else if !raw.contains("\x1b[?2026h") {
+        eprintln!("ConPTY did not preserve CSI ?2026h; this run proves received-text capture only");
+    }
+    let live = daemon.run_json(&["capture", &address, "--plain"]);
+    let live = live["text"].as_str().expect("live plain capture text");
+    assert!(live.lines().any(|line| line == text), "{live:?}");
+
+    // Completion changes eligibility for GUI presentation, not the already
+    // received text. Compare the same logical content range, not the fixture's
+    // changing barrier row or full scrollback against a viewport.
+    send(&mut pane, b"\x1b[?2026l");
+    let settled = daemon.run_json(&["capture", &address, "--plain"]);
+    let settled = settled["text"].as_str().expect("settled plain capture text");
+    assert!(settled.lines().any(|line| line == text), "{settled:?}");
+
+    pane.resize(WinSize {
+        cols: 28,
+        rows: 24,
+        cell_w: 8,
+        cell_h: 16,
+    })
+    .unwrap();
+    loop {
+        match pane.recv().expect("wait for resize acknowledgement") {
+            DaemonMsg::Size(size) if size.cols == 28 && size.rows == 24 => break,
+            DaemonMsg::Exited { code } => panic!("sender exited during resize: {code:?}"),
+            _ => {}
+        }
+    }
+    let resized = daemon.run_json(&["capture", &address, "--plain", "--scrollback"]);
+    let resized = resized["text"].as_str().expect("capture after quiet resize");
+    assert!(resized.lines().any(|line| line == text), "{resized:?}");
+
+    let next = terminal_pty_fixture::SYNC_NEXT_TEXT;
+    send(
+        &mut pane,
+        format!("\x1b[?2026h\x1b[8;1H{next}\x1b[?2026l\r\nafter_sync").as_bytes(),
+    );
+    let continued = daemon.run_json(&["capture", &address, "--plain", "--scrollback"]);
+    let continued = continued["text"].as_str().expect("capture after successive update");
+    assert!(continued.lines().any(|line| line == next), "{continued:?}");
+    assert!(continued.lines().any(|line| line == "after_sync"), "{continued:?}");
+
+    pane.input(b"EXIT 4294967293 0 00 0\n").unwrap();
+    loop {
+        if let DaemonMsg::Exited { code } = pane.recv().expect("wait for sender exit") {
+            assert_eq!(code, Some(0), "raw PTY sender failed");
+            break;
+        }
+    }
+    let _ = pane.detach();
+}
+
 /// A resize with no new application output must not empty `capture` (#841).
 /// Use the finite PTY producer so shell prompt repaint and synthesized mode
 /// restoration do not turn raw-byte concatenation into a false contract.

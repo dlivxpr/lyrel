@@ -9,11 +9,13 @@
 
 ### 依赖升级
 
+- #171：`rio-vt`／`rio-graphics`／`rio-unicode` 原子升级到正式 registry 的精确 `=0.5.29`，同步锁定传递 `rio-grapheme-width 0.5.29`，保留关闭 VT 默认 features、原 PTY／daemon 和无 GPUI 的共享核心。所有消费者迁到立即解析、终端侧同步状态；完整 Fast／Rio 组合由集中检查点重新构建与验收，不沿用 #170 的结果冒称已通过。
 - #170：仅通过 `gpui-kit =0.9.0` 的官方 `gpui-fast` feature 切换桌面后端，锁文件采用 Fast `0.1.13` 家族；保留语言／测试支持、HTTP `=0.3.11`、Rio `0.5.28`、单一终端帧所有权与原平台完整委派，不新增直接 engine 依赖、产品 Pre 回退或热路径探针。开发 profile 优化 Fast 链；macOS CI／Release 显式选择并记录实际 SDK 26+，默认 deployment target 与 bundle 继续为 macOS 15。原生行为、终端 retention、材质与同条件 Release 性能由集中检查点实际验收，未执行项不记为通过；macOS 原生结果仍由 #167 提供。
 - #170 Windows 检查点已完成完整 Debug 套件（`5155 passed / 55 ignored`）、Release 构建、原生终端／Markdown 输入复制查找／主题字体缩放／窗口恢复／正式 HTTP 检查与 GUI 重开保留 daemon 会话。临时生产 Root／TerminalView retention 诊断未发现静态 pane 每帧重建，保留现有 buffer owner／paint phase；原生透明空白采样与升级前逐通道一致。以上不替代最终 Rio 组合、全部性能门槛或 #167 macOS 实机证据。
 
 ### 修复
 
+- #171：在实际终端 snapshot／paint 发布点保留上次 committed 文字、光标、图片及可见交互，避免焦点／主题／光标重绘泄漏半帧。reader 通过现有链路读取期限独立执行 150 ms fail-safe，处理每次 BSU 重启、结束、resize／reset、命令边界、replay／relink 与退出。协议回复、输入模式及 daemon 图片锚点继续实时推进；CLI `capture --plain` 无 GUI 也捕获已收到的未闭合同步输出。补充 Root paint、可见复制、安静流期限、分片和真实 CLI／daemon／PTY 回归；未执行的测试、原生与性能项目保留为集中验收项，macOS 交由 #167。
 - #170 首次 Fast 编译发现搜索行的 `IntoElement` derive 仅从 Fast prelude 导入，展开后引用未声明的 `gpui::` 路径；改为显式使用 Kit 根提供的官方 facade-aware derive，保留原搜索行、ListDelegate、选择与无障碍行为，不添加 engine 依赖、alias 或手写 trait shim。修复后的编译与原有行为套件由集中检查点验证。
 - #169 检查点修复真实 PTY 图片消费者、共享 retention 及原生 SSH 消费者的启动等待：同时从首个 `Snapshot` 与后续 `Output` 读取原有就绪标记，避免快速 sender 在订阅安装前已输出时误超时。保留真实 daemon／PTY、标记、原期限及后续像素／几何断言，不修改生产协议、不增加重试或跳过；本轮回归结果由集中验收记录。
 - OpenCode 原生 API 启动失败保留底层 OS error，便于区分缺失文件、权限和资源错误；Unix shell 夹具改由独立写入进程持有可写描述符，避免并发 fork 继承后触发 Linux `ETXTBSY`。大 JSON 的真实 shell／Host 历史回归与私有文件捕获保持不变，不增加生产重试或跳过测试。

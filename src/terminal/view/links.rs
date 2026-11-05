@@ -322,6 +322,19 @@ impl TerminalView {
         armed: bool,
         cx: &mut Context<Self>,
     ) -> bool {
+        if self.holds_presented_grid() {
+            let enabled = cx.global::<Config>().link_url;
+            let blank = self.presented_grid().is_none_or(|grid| grid.is_blank(col, row));
+            let result = if !enabled || (!armed && self.frame.alt_screen) || blank {
+                LinkAt::None
+            } else {
+                let include_loopback = self.can_forward_loopback(cx);
+                self.resolve_link_at(col, row, true, include_loopback, cx)
+            };
+            let (found, changed) = self.links.hover_resolved(col, row, armed, result);
+            if changed { cx.notify(); }
+            return found;
+        }
         if let Some(found) = self.links.cached_hover(col, row, armed) {
             return found;
         }
@@ -395,7 +408,20 @@ impl TerminalView {
         cx: &mut Context<Self>,
     ) -> LinkAt {
         self.sync_link_location();
-        let result = self.links.resolve(
+        let result = if self.holds_presented_grid() {
+            let Some(geom) = self.cell_geom else { return LinkAt::None; };
+            let offset = self.grid_snap.as_ref().map_or(0, |snap| snap.display_offset);
+            let grid = crate::terminal::presentation::PresentedGrid::new(&self.grid_buf, geom.cols, offset);
+            self.links.resolve_line(
+                grid.link_line(col, row), include_files, include_loopback,
+                |host, cwd| {
+                    cx.try_global::<crate::terminal::git_status::GitStatusCache>()
+                        .and_then(|cache| cache.repo_root_for(host, cwd))
+                        .map(std::path::Path::to_path_buf)
+                },
+                |points| grid.row_runs(points),
+            )
+        } else { self.links.resolve(
             &self.terminal.term,
             col,
             row,
@@ -406,7 +432,7 @@ impl TerminalView {
                     .and_then(|cache| cache.repo_root_for(host, cwd))
                     .map(std::path::Path::to_path_buf)
             },
-        );
+        ) };
         self.request_link_work(cx);
         self.flush_link_probes(cx);
         result

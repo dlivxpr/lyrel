@@ -38,6 +38,27 @@ pub struct RenderPlacement {
     _metadata: (Arc<Reservation>, Arc<Reservation>),
 }
 
+/// One committed display list, borrowing the existing resource/metadata leases.
+/// It is not graphics authority and never clones pixels. Retirement waits for
+/// this picture to be replaced, including lock-contention redraws after ESU.
+#[derive(Default)]
+pub(super) struct CommittedImages(Vec<RenderPlacement>);
+
+impl std::ops::Deref for CommittedImages {
+    type Target = [RenderPlacement];
+    fn deref(&self) -> &Self::Target { &self.0 }
+}
+
+impl Drop for CommittedImages {
+    fn drop(&mut self) {
+        for image in &self.0 {
+            if let Some(residency) = &image._residency {
+                residency.presented.fetch_sub(1, Ordering::Release);
+            }
+        }
+    }
+}
+
 impl RenderPlacement {
     /// Destination crop and the full texture's destination rectangle. Passing
     /// these separately to GPUI selects atlas UVs without copying source pixels.
@@ -350,6 +371,7 @@ struct Residency {
     _cpu: Reservation,
     gpu: Mutex<Option<Reservation>>,
     registered: AtomicBool,
+    presented: AtomicUsize,
 }
 
 struct WindowImage {
@@ -1042,7 +1064,31 @@ impl ImageStore {
         &self,
         rows: &[(i32, Vec<PlaceholderSlice>)],
     ) -> Vec<RenderPlacement> {
+        self.snapshot_placements(rows, false)
+    }
+
+    pub(super) fn commit_with_placeholders(
+        &self,
+        rows: &[(i32, Vec<PlaceholderSlice>)],
+    ) -> CommittedImages {
+        let images = self.snapshot_placements(rows, true);
+        for image in &images {
+            if let Some(residency) = &image._residency {
+                residency.presented.fetch_add(1, Ordering::Relaxed);
+            }
+        }
+        CommittedImages(images)
+    }
+
+    fn snapshot_placements(
+        &self,
+        rows: &[(i32, Vec<PlaceholderSlice>)],
+        committed: bool,
+    ) -> Vec<RenderPlacement> {
         let inner = self.0.state.lock().unwrap();
+        if committed && !inner.viewport_known {
+            return Vec::new();
+        }
         let render = |anchored: &AnchoredPlacement, placeholder| {
             let root = inner.resources.get(&anchored.placement.resource)?;
             let selection = root.selection(anchored.placement.resource);
@@ -1163,7 +1209,11 @@ impl ImageStore {
     }
 
     fn take_retired(&self) -> Vec<Arc<Residency>> {
-        std::mem::take(&mut self.0.state.lock().unwrap().retired)
+        let mut inner = self.0.state.lock().unwrap();
+        if inner.retired.iter().all(|image| image.presented.load(Ordering::Acquire) == 0) {
+            return std::mem::take(&mut inner.retired);
+        }
+        inner.retired.extract_if(.., |image| image.presented.load(Ordering::Acquire) == 0).collect()
     }
 
     #[cfg(test)]
@@ -1750,6 +1800,7 @@ impl DecodeWorker {
                             _cpu: reservation,
                             gpu: Mutex::new(Some(gpu)),
                             registered: AtomicBool::new(false),
+                            presented: AtomicUsize::new(0),
                         }),
                     });
                     inner.placements.values().any(|placement| {

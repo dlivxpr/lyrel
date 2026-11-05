@@ -30,6 +30,8 @@ pub(super) struct SelectionScroll {
     scroll_debt: f32,
     zoom_debt: f32,
     fraction: f32,
+    presented: Option<super::presentation::PresentedSelection>,
+    gesture: Option<(usize, usize, bool, usize)>,
 }
 
 #[derive(Clone, Copy)]
@@ -55,6 +57,90 @@ pub(super) enum WheelMotion {
 }
 
 impl SelectionScroll {
+    pub(super) fn has_presented(&self) -> bool {
+        self.presented.is_some()
+    }
+
+    pub(super) fn clear_presented(&mut self) {
+        if self.presented.take().is_some() {
+            self.selecting = false;
+            self.drag = None;
+        }
+    }
+
+    pub(super) fn adopt_presented(&mut self, cells: &[super::element::RenderCell], cols: usize, cfg: &Config) {
+        if self.presented.is_some() { return; }
+        let (col, row, left, clicks) = self.gesture.unwrap_or((0, 0, true, 1));
+        let grid = super::presentation::PresentedGrid::new(cells, cols, 0);
+        let range = match (cells.iter().position(|cell| cell.selected), cells.iter().rposition(|cell| cell.selected)) {
+            (Some(start), Some(end)) => start..end + 1,
+            _ if clicks > 1 => grid.click_range(col, row, clicks, cfg),
+            _ => { let at = grid.boundary(col, row, left); at..at }
+        };
+        self.presented = Some(super::presentation::PresentedSelection::new(range, clicks));
+    }
+
+    pub(super) fn start_presented(
+        &mut self,
+        cells: &mut [super::element::RenderCell],
+        cols: usize,
+        col: usize,
+        row: usize,
+        left: bool,
+        clicks: usize,
+        shift: bool,
+        cfg: &Config,
+    ) -> bool {
+        use super::presentation::{PresentedGrid, PresentedSelection};
+        let grid = PresentedGrid::new(cells, cols, 0);
+        let target = if clicks > 1 {
+            grid.click_range(col, row, clicks, cfg)
+        } else {
+            let at = grid.boundary(col, row, left);
+            at..at
+        };
+        if shift { self.adopt_presented(cells, cols, cfg); }
+        self.gesture = Some((col, row, left, clicks));
+        if shift && clicks == 1 && let Some(selection) = self.presented.as_mut() {
+            selection.update(target);
+        } else {
+            self.presented = Some(PresentedSelection::new(target, clicks));
+        }
+        self.selecting = true;
+        self.word = None;
+        self.drag = None;
+        self.cancel_animation();
+        self.presented.as_ref().unwrap().apply(cells)
+    }
+
+    pub(super) fn update_presented(
+        &mut self,
+        cells: &mut [super::element::RenderCell],
+        cols: usize,
+        col: usize,
+        row: usize,
+        left: bool,
+        cfg: &Config,
+    ) -> bool {
+        let Some(selection) = self.presented.as_mut() else { return false; };
+        let grid = super::presentation::PresentedGrid::new(cells, cols, 0);
+        let target = if selection.clicks() > 1 {
+            grid.click_range(col, row, selection.clicks(), cfg)
+        } else {
+            let at = grid.boundary(col, row, left);
+            at..at
+        };
+        selection.update(target);
+        selection.apply(cells)
+    }
+
+    pub(super) fn select_all_presented(&mut self, cells: &mut [super::element::RenderCell]) -> bool {
+        let selection = super::presentation::PresentedSelection::new(0..cells.len(), 1);
+        let selected = selection.apply(cells);
+        self.presented = Some(selection);
+        selected
+    }
+
     pub(super) fn fraction(&self) -> f32 {
         self.fraction
     }
@@ -77,6 +163,7 @@ impl SelectionScroll {
         shift: bool,
         cfg: &Config,
     ) {
+        self.gesture = Some((col, row, left, clicks));
         let point = Pos::new(
             Line(row as i32 - term.grid.display_offset() as i32),
             Column(col),

@@ -308,12 +308,12 @@ gpui-kit = { version = "=0.9.0", features = ["gpui-fast"] }
 # Sugarloaf renderer stay out (`default-features = false`), and the keyboard
 # mode stacks the daemon folds for replay stay in `lyrel-core`'s own
 # `term_modes`.
-rio-vt = { version = "=0.5.28", default-features = false }
+rio-vt = { version = "=0.5.29", default-features = false }
 # Scalar Unicode tables for preedit/copy helpers, matching Rio's pinned version.
-rio-unicode = "=0.5.28"
+rio-unicode = "=0.5.29"
 # Types only: the `Handler` surface names `rio_graphics::GraphicData` for the
 # sixel/iTerm2/kitty callbacks the parse bridge delegates. Same pin as rio-vt.
-rio-graphics = "=0.5.28"
+rio-graphics = "=0.5.29"
 
 anyhow = "1"
 log = "0.4"

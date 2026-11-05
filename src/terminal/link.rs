@@ -38,7 +38,7 @@ pub(super) enum LinkAt {
     None,
 }
 
-enum GridLink {
+pub(super) enum GridLink {
     Hyperlink(String, Vec<(Pos, Pos)>),
     Text(String, Vec<Pos>, usize),
 }
@@ -225,9 +225,14 @@ impl LinkInteraction {
         include_loopback: bool,
         cached_root: impl FnOnce(HostId, &Path) -> Option<PathBuf>,
     ) -> (bool, bool) {
+        let result = self.resolve(grid, col, row, true, include_loopback, cached_root);
+        self.hover_resolved(col, row, armed, result)
+    }
+
+    pub(super) fn hover_resolved(&mut self, col: usize, row: usize, armed: bool, result: LinkAt) -> (bool, bool) {
         self.last_cell = Some((col, row));
         self.modifier_down = armed;
-        let next = match self.resolve(grid, col, row, true, include_loopback, cached_root) {
+        let next = match result {
             LinkAt::Found(_, runs) => Some(HoveredLink { runs, armed }),
             _ => None,
         };
@@ -322,7 +327,21 @@ impl LinkInteraction {
         include_loopback: bool,
         cached_root: impl FnOnce(HostId, &Path) -> Option<PathBuf>,
     ) -> LinkAt {
-        let Some(line) = link_line_at(grid, col, row) else {
+        self.resolve_line(link_line_at(grid, col, row), include_files, include_loopback, cached_root, |points| {
+            let term = grid.lock();
+            super::smart_select::row_runs(&term, points)
+        })
+    }
+
+    pub(super) fn resolve_line(
+        &mut self,
+        line: Option<GridLink>,
+        include_files: bool,
+        include_loopback: bool,
+        cached_root: impl FnOnce(HostId, &Path) -> Option<PathBuf>,
+        row_runs: impl FnOnce(&[Pos]) -> Vec<(Pos, Pos)>,
+    ) -> LinkAt {
+        let Some(line) = line else {
             return LinkAt::None;
         };
         let (text, points, click_idx) = match line {
@@ -371,8 +390,7 @@ impl LinkInteraction {
         });
         match link {
             Some(link) => {
-                let term = grid.lock();
-                let runs = super::smart_select::row_runs(&term, &points[link.start..=link.end]);
+                let runs = row_runs(&points[link.start..=link.end]);
                 LinkAt::Found(link.target, runs)
             }
             None => match files

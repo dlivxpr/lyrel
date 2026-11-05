@@ -255,7 +255,11 @@ impl FrameReader {
             if let Some(reason) = reason {
                 log::warn!("a pane's link died: {reason}");
             }
-            term.lock().exit();
+            {
+                let mut term = term.lock();
+                term.end_sync_update();
+                term.exit();
+            }
             exited_flag.store(true, Ordering::SeqCst);
             proxy.send(PaneEvent::Wakeup);
             proxy.send(PaneEvent::Exit);
@@ -320,7 +324,7 @@ impl FrameReader {
                                 tr_adv_t += t0.elapsed() - waited;
                             }
                         }
-                        if cursor_at_end && processor.sync_timeout().sync_timeout().is_some() {
+                        if cursor_at_end && term.lock().synchronized_output() {
                             *proxy.parse_state.paint_cursor.lock().unwrap() = None;
                         }
                         if let Ok(mut notes) = osc_notes.lock() {
@@ -483,17 +487,14 @@ impl FrameReader {
                         if fed.is_none() {
                             return;
                         }
-                        if processor.sync_timeout().sync_timeout().is_some() {
+                        {
                             let mut term = term.lock();
                             if quit.load(Ordering::SeqCst) {
                                 return;
                             }
-                            processor.stop_sync(&mut ParseBridge::new(
-                                &mut term,
-                                proxy.clone(),
-                                &mut keyboard,
-                                Some(proxy.parse_state.history_limit.load(Ordering::Relaxed)),
-                            ));
+                            // Replay establishes a baseline, never a surviving
+                            // presentation hold from a historical stream.
+                            term.end_sync_update();
                         }
                         mode_tok.feed(&bytes, |payload| {
                             if let Some(mode) = payload.strip_prefix(b"133;V;") {
@@ -557,26 +558,25 @@ impl FrameReader {
                                 &update,
                                 lyrel_core::core::kitty_graphics::GraphicsUpdate::Screen { .. }
                             );
+                            let term = term.lock();
+                            if quit.load(Ordering::SeqCst) {
+                                return;
+                            }
+                            let changed = image_decoder.apply(update);
                             if screen {
-                                let term = term.lock();
-                                if quit.load(Ordering::SeqCst) {
-                                    return;
-                                }
-                                let changed = image_decoder.apply(update);
                                 image_decoder.sync_local_origin(
                                     term.grid.lines_evicted() as i64
                                         + term.grid.history_size() as i64,
                                 );
-                                if changed {
-                                    proxy.send(PaneEvent::Wakeup);
-                                }
-                                drop(term);
-                                // A hidden/startup report may have preceded the
-                                // first Screen that establishes its epoch. Retry
-                                // that desired viewport without waiting for paint.
-                                viewport_reporter.report();
-                            } else if image_decoder.apply(update) {
+                            }
+                            drop(term);
+                            if changed {
                                 proxy.send(PaneEvent::Wakeup);
+                            }
+                            if screen {
+                                // Retry the desired viewport after its first
+                                // authoritative Screen establishes the epoch.
+                                viewport_reporter.report();
                             }
                         }
                     }
@@ -665,6 +665,8 @@ impl FrameReader {
                             if quit.load(Ordering::SeqCst) {
                                 return;
                             }
+                            let released = term.synchronized_output();
+                            term.end_sync_update();
                             let resets = stale_mode_resets(term.mode());
                             if !resets.is_empty() {
                                 let mut bridge = ParseBridge::new(
@@ -675,7 +677,9 @@ impl FrameReader {
                                 );
                                 processor.advance(&mut bridge, &resets);
                                 drop(bridge);
-                                drop(term);
+                            }
+                            drop(term);
+                            if released || !resets.is_empty() {
                                 proxy.send(PaneEvent::Wakeup);
                             }
                         }
@@ -754,27 +758,20 @@ impl FrameReader {
             // parked on a silent link still notices `quit` promptly —
             // on Windows, `shutdown()` alone would never wake it.
             const QUIT_POLL: std::time::Duration = std::time::Duration::from_millis(500);
-            let timeout = match processor.sync_timeout().sync_timeout() {
-                Some(deadline) => {
-                    let left = deadline.saturating_duration_since(std::time::Instant::now());
-                    if left.is_zero() {
-                        let mut term = term.lock();
-                        if quit.load(Ordering::SeqCst) {
-                            return;
-                        }
-                        processor.stop_sync(&mut ParseBridge::new(
-                            &mut term,
-                            proxy.clone(),
-                            &mut keyboard,
-                            Some(proxy.parse_state.history_limit.load(Ordering::Relaxed)),
-                        ));
-                        drop(term);
-                        proxy.send(PaneEvent::Wakeup);
-                        continue;
-                    }
-                    left.min(QUIT_POLL)
+            let timeout = {
+                let mut term = term.lock();
+                if quit.load(Ordering::SeqCst) {
+                    return;
                 }
-                None => QUIT_POLL,
+                let now = rio_vt::time::Instant::now();
+                if expire_presentation(&mut term, now) {
+                    drop(term);
+                    proxy.send(PaneEvent::Wakeup);
+                    continue;
+                }
+                presentation_deadline(&term)
+                    .map(|deadline| deadline.saturating_duration_since(now).min(QUIT_POLL))
+                    .unwrap_or(QUIT_POLL)
             };
             let _ = stream.set_read_timeout(Some(timeout));
             if trace && tr_last.elapsed() >= std::time::Duration::from_secs(1) {
@@ -957,6 +954,26 @@ fn title_cuts(
     }
 }
 
+const PRESENTATION_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(150);
+
+/// Rio's terminal owns BSU/ESU/restart state. Its default deadline is 1000 ms;
+/// the embedding reader retains lyrel's established 150 ms fail-safe instead.
+fn presentation_deadline<T: EventListener>(term: &Crosswords<T>) -> Option<rio_vt::time::Instant> {
+    term.synchronized_output()
+        .then_some(term.sync_update_started)
+        .flatten()
+        .map(|started| started + PRESENTATION_TIMEOUT)
+}
+
+fn expire_presentation<T: EventListener>(term: &mut Crosswords<T>, now: rio_vt::time::Instant) -> bool {
+    if presentation_deadline(term).is_some_and(|deadline| deadline <= now) {
+        term.end_sync_update();
+        true
+    } else {
+        false
+    }
+}
+
 /// How much output the reader parses per hold of the grid lock. Every UI-thread
 /// handler that touches the grid — a scroll, a selection drag, a keystroke —
 /// queues on this lock, and one UI thread serves every window, so a hold is how
@@ -1025,18 +1042,10 @@ fn feed_grid<T: EventListener + Clone>(
             at = end;
         }
         let Some((_, cut)) = next else { break };
-        if matches!(cut, ReaderCut::RetireTitle)
-            && processor.sync_timeout().sync_timeout().is_some()
-        {
-            // A command boundary also closes any buffered part of that
-            // command before its title is retired. Otherwise delayed sync
-            // playback could set the finished title after the reset.
-            processor.stop_sync(&mut ParseBridge::new(
-                &mut grid,
-                proxy.clone(),
-                keyboard,
-                history_limit.map(|limit| limit.load(Ordering::Relaxed)),
-            ));
+        if matches!(cut, ReaderCut::RetireTitle | ReaderCut::Command(CommandMark::Finished)) {
+            // A completed command must not leave its last picture held until
+            // another command produces output. All bytes are already parsed.
+            grid.end_sync_update();
         }
         on_cut(&mut grid, cut);
         next = cuts.next();

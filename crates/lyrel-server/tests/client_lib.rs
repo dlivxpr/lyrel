@@ -3120,6 +3120,54 @@ mod kitty_graphics {
         }
     }
 
+    #[test]
+    fn daemon_graphics_unfinished_sync_parses_unicode_anchors_and_replays_without_a_gui() {
+        let daemon = Daemon::start();
+        let _control = daemon.control("graphics-unfinished-sync");
+        let mut original = Consumer::spawn(&daemon);
+        let stream = "\x1b[?2026h\x1b[7;4H宽e\u{301}\x1b_Ga=T,i=901,p=1,f=32,s=1,v=1,C=1;/wAA/w==\x1b\\";
+        assert_eq!(
+            original.exchange("SEND", &hex(stream.as_bytes()), 1, 1),
+            [b"\x1b_Gi=901,p=1;OK\x1b\\".to_vec()]
+        );
+        // Both the upload reply and the child's subsequent query/reply
+        // barrier completed before an end marker was sent. The daemon, not a
+        // GUI parser, must own the live text cursor and graphics anchor.
+        let placement = original.placements.values().next().unwrap().clone();
+        assert_eq!((placement.anchor_row, placement.anchor_col), (6, 6));
+        assert_eq!(original.pixel(&placement), [255, 0, 0, 255]);
+        assert!(windows_contain(&original.last_output, "宽e\u{301}".as_bytes()));
+        if cfg!(unix) {
+            assert!(windows_contain(&original.last_output, b"\x1b[?2026h"));
+            assert!(!windows_contain(&original.last_output, b"\x1b[?2026l"));
+        }
+        // ConPTY may remove 2026 before the daemon receives it. Windows still
+        // exercises real PTY Unicode/anchor/replay behavior, but only a stream
+        // preserving that marker establishes the unfinished-update boundary.
+        let (pane, serial) = (original.session.pane_id(), original.serial);
+        detach_consumer(original);
+        let mut restored =
+            Consumer::from_session(daemon.panes().attach(pane, size()).unwrap(), serial);
+        restored.stats();
+        assert_eq!(restored.placements[&placement.key], placement);
+        assert_eq!(restored.pixel(&placement), [255, 0, 0, 255]);
+        assert!(windows_contain(&restored.last_output, "宽e\u{301}".as_bytes()));
+
+        assert_eq!(
+            restored.send(b"\x1b[?2026l\x1b[8;2H\x1b_Ga=p,i=901,p=2,C=1\x1b\\after_sync", 1),
+            [b"\x1b_Gi=901,p=2;OK\x1b\\".to_vec()]
+        );
+        let next = restored
+            .placements
+            .values()
+            .find(|p| p.placement_id == 2)
+            .unwrap();
+        assert_eq!((next.anchor_row, next.anchor_col), (7, 1));
+        assert_eq!(next.resource, placement.resource);
+        assert!(windows_contain(&restored.last_output, b"after_sync"));
+        restored.exit();
+    }
+
     fn detach_consumer(consumer: Consumer) {
         let (input, mut output) = consumer.session.split();
         input.detach().unwrap();
