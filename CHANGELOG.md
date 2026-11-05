@@ -72,7 +72,8 @@
 ### 维护
 
 - 发布前清理构建警告：SCM 原子身份分配迁到 `try_update`；SCM／图片检查辅助接口及其元数据仅编入测试；桌面 SSH 回归共用唯一夹具入口，同步捕获数据仅由实际消费者编译，保留全部回归断言。macOS 专属测试移除无用导入，Windows handoff 辅助接口按平台限定，不新增 lint 屏蔽。
-- macOS Debug／测试二进制保留完整 DWARF 展开信息，不再尝试将超过 16 MiB 的展开区编码进 compact unwind；panic、析构与回溯仍保留，Release 的链接／签名配置不变。
+- 桌面 Debug／测试启用轻量优化，缩减未优化代码及展开信息；保留平台默认链接、panic 展开、析构和回溯，不关闭 compact unwind 或 linker diagnostics，Release 配置不变。候选 macOS CI 揭示手动 DWARF-only 选项导致预期 panic 用例中止，该选项已撤回，原用例与断言保持不变。
+- CI 与 Release 的 musl 交叉工具链同步固定到正式 Zig `0.17.0`，避免 `0.16.0` 自带 libc++ 的 nullability 警告；保留真实静态链接／平台断言与精确构建来源校验，不屏蔽 C++ 或 linker diagnostics。
 - 修复基线 `2187893` 的 CI `42000861816` 已通过 Windows／macOS／Linux 构建测试、独立 server 与真实发布打包验证；本版版本变更与警告清理仍以其自身提交的 CI 和 Release 结果为准，不沿用该基线冒称重新验证。
 
 ### 验证入口

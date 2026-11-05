@@ -293,7 +293,7 @@ jobs:
       - name: Install Zig
         run: |
           python3 -m venv "$RUNNER_TEMP/zig"
-          "$RUNNER_TEMP/zig/bin/python" -m pip install --disable-pip-version-check --only-binary=:all: ziglang==0.16.0
+          "$RUNNER_TEMP/zig/bin/python" -m pip install --disable-pip-version-check --only-binary=:all: ziglang==0.17.0
           "$RUNNER_TEMP/zig/bin/python" -m ziglang version
           echo "CARGO_ZIGBUILD_PYTHON_PATH=$RUNNER_TEMP/zig/bin/python" >> "$GITHUB_ENV"
 
