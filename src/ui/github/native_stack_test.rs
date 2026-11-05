@@ -80,6 +80,7 @@ fn native_stacked_pull_panel() {
             crate::ui::presets::load_registry(cx);
             crate::ui::theme::apply_theme(None, cx);
             crate::ui::keymap::init(cx);
+            crate::ui::windows::WindowRegistry::init(cx);
             cx.open_window(
                 WindowOptions {
                     window_bounds: Some(WindowBounds::Windowed(Bounds::new(
@@ -114,6 +115,13 @@ fn native_stacked_pull_panel() {
                         cx.set_global(NativeStackSocket { _socket: socket });
                         app
                     });
+                    let workspace = app.read(cx).workspace;
+                    crate::ui::windows::WindowRegistry::register(
+                        cx,
+                        workspace,
+                        window.window_handle(),
+                        app.downgrade(),
+                    );
                     window.set_window_title("lyrel #177 stacked PR fixture");
                     cx.new(|cx| gpui_kit::component::Root::new(app, window, cx))
                 },
