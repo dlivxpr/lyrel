@@ -262,9 +262,9 @@ pub struct TerminalView {
     /// for the far end's verdict.
     relink_inflight: bool,
     last_mouse_cell: Option<(usize, usize)>,
-    /// Only this pane's reported press owns the window-wide drag/release
-    /// stream. A sidebar or neighbouring pane's gesture is not ours.
-    mouse_grab: Option<MouseButton>,
+    /// Each reported left/middle/right press independently owns its drag/release.
+    /// A sidebar or neighbouring pane's gesture is not ours.
+    reported_mouse_buttons: u8,
     /// Where the grid sat in the window on the last frame, so an event that
     /// arrives with nothing but a window position — the wheel — can be told
     /// which cell it is over.
@@ -733,7 +733,7 @@ impl TerminalView {
             relink_abandoned: false,
             relink_inflight: false,
             last_mouse_cell: None,
-            mouse_grab: None,
+            reported_mouse_buttons: 0,
             cell_geom: None,
             report_mouse,
             links: LinkInteraction::default(),
@@ -1414,27 +1414,39 @@ impl TerminalView {
             _ => return,
         };
         self.last_mouse_cell = Some((col, row));
-        self.mouse_grab = self
-            .write_mouse(base, mods, col, row, true)
-            .then_some(button);
+        let mask = 1 << base;
+        if self.write_mouse(base, mods, col, row, true) {
+            self.reported_mouse_buttons |= mask;
+        } else {
+            self.reported_mouse_buttons &= !mask;
+        }
     }
 
     pub fn mouse_release(&mut self, button: MouseButton, col: usize, row: usize, mods: &Modifiers) {
-        if self.mouse_grab != Some(button) {
-            return;
-        }
-        self.mouse_grab = None;
         let base = match button {
             MouseButton::Left => 0,
             MouseButton::Middle => 1,
             MouseButton::Right => 2,
             _ => return,
         };
+        let mask = 1 << base;
+        if self.reported_mouse_buttons & mask == 0 {
+            return;
+        }
+        self.reported_mouse_buttons &= !mask;
         self.write_mouse(base, mods, col, row, false);
     }
 
     pub fn mouse_drag(&mut self, button: MouseButton, col: usize, row: usize, mods: &Modifiers) {
-        if self.mouse_grab != Some(button) || self.last_mouse_cell == Some((col, row)) {
+        let base = match button {
+            MouseButton::Left => 32,
+            MouseButton::Middle => 33,
+            MouseButton::Right => 34,
+            _ => return,
+        };
+        if self.reported_mouse_buttons & (1 << (base - 32)) == 0
+            || self.last_mouse_cell == Some((col, row))
+        {
             return;
         }
         let wants = self.report_mouse
@@ -1448,19 +1460,13 @@ impl TerminalView {
             return;
         }
         self.last_mouse_cell = Some((col, row));
-        let base = match button {
-            MouseButton::Left => 32,
-            MouseButton::Middle => 33,
-            MouseButton::Right => 34,
-            _ => return,
-        };
         self.write_mouse(base, mods, col, row, true);
     }
 
     /// A release may have gone to another window. A buttonless move proves
     /// that none of our reported presses still owns the pointer.
     pub(super) fn drop_mouse_grab(&mut self) {
-        self.mouse_grab = None;
+        self.reported_mouse_buttons = 0;
     }
 
     pub fn mouse_motion(&mut self, col: usize, row: usize, mods: &Modifiers) {

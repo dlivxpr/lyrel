@@ -912,7 +912,7 @@ impl LyrelApp {
             .focused_leaf(window, cx)
             .map(|leaf| leaf.entity_id().as_u64());
         let Some(leaf_id) = crate::ui::tray::next_needing_attention(&rows, current) else {
-            window.push_notification(t(L10nKey::AppNoAgentNeedsAttention), cx);
+            window.notify_app(t(L10nKey::AppNoAgentNeedsAttention), cx);
             return;
         };
         if self.owns_leaf(leaf_id) {
