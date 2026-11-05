@@ -231,7 +231,7 @@ Windows 终端回归在隔离配置实窗验证：`omp 18.12.4` 原生 `askDialo
 
 ### #172：Kit／Fast／Rio 组合的 Windows 验收记录
 
-本记录区分已通过的具体路径、被工具或环境阻塞的项目与尚未验证的范围，**不表示 #172 或跨平台验收已完成**。
+本记录区分已通过的具体路径、被工具或环境阻塞的项目与尚未验证的范围，**不表示完整 Windows 或跨平台验收已通过**。维护者决定本轮以实现交付收尾，#168／#172 随 PR 合并关闭；下述未验证项保留原状态，macOS 验收集中保留在 #167。
 原始证据保存在验收机外部目录 `C:/Users/dlivx/AppData/Local/Temp/lyrel-168/`，以下短路径均相对于该目录，不随仓库分发。
 
 #### 候选、环境与隔离
@@ -333,7 +333,7 @@ producer drain／workload elapsed／FPS 不等于 CPU paint、GPU frame time 或
 - **blocked：**真实 IME preedit／commit／candidate 没有可证明的后台路线；不主动申请前台，不用 Unicode 注入替代。隔离实例明确显示 `rust-analyzer not installed`，未出现补全候选；系统 shim 的版本输出不能替代该实例可用的 LSP，没有为验收安装工具。
 - **工具路线限制：**旧阶段后台 `Ctrl+End` 仅执行 End、`Ctrl+C` 插入 `c`，不算快捷键成功；后来通过真实菜单证明选择／复制。自绘字段的 `el.type`、`el.press` 曾自动 fallback 到工具许可的 takeover，Ctrl+F／Ctrl+S 的焦点归还未确认，不称全程纯后台或快捷键／焦点恢复通过；没有主动 `raise`／申请前台控制，失败路线和用户剪贴板恢复记录保留。
 - **unverified：**多 DPI、未测的材质激活状态／任意桌面对比度、所有嵌套对话框／通知交互及焦点恢复、物理输入／显示延迟、实际安装／系统注册／发布；不能把本轮有限像素矩阵或其他平台证据推广为完整通过。
-- macOS SDK／实窗／IME／Spaces／Retina／性能仍由 #167 真实 Mac 验收；Linux #173 独立记录，不因 Windows build 通过而推定 Unix 已验收。任何尚未证明的必需项目不因本记录已写入而关闭；任何正确性回归无论百分比均阻断验收。
+- macOS SDK／实窗／IME／Spaces／Retina／性能仍由 #167 真实 Mac 验收；Linux #173 独立记录，不因 Windows build 通过而推定 Unix 已验收。工单关闭仅表示维护者接受本轮实现交付，不将上述 blocked／unverified 项改记为 passed；任何正确性回归无论百分比均阻断对应验收。
 
 
 ### 根布局与窗口控件所有权
