@@ -78,8 +78,24 @@ fn stacked_pull_keyboard_keeps_identity_across_regroup_refresh_and_removal(
             gpui_kit::point(gpui_kit::px(1.), gpui_kit::px(1.)),
             cx,
         );
+        assert_eq!(
+            window.find("panel-github-rows-acme/widgets").focused(),
+            Some(true),
+            "clicking the list gutter must give its keyboard region focus; query selections: {:?}",
+            app.read(cx).github.lists.iter()
+                .map(|(query, cache)| (query, cache.selected))
+                .collect::<Vec<_>>()
+        );
         window.press("down", cx);
-        assert_eq!(window.find("panel-github-item-3").selected(), Some(true));
+        assert_eq!(
+            window.find("panel-github-item-3").selected(),
+            Some(true),
+            "after Down: list focus={:?}, query selections={:?}",
+            window.find("panel-github-rows-acme/widgets").focused(),
+            app.read(cx).github.lists.iter()
+                .map(|(query, cache)| (query, cache.selected))
+                .collect::<Vec<_>>()
+        );
         window.press("down", cx);
         assert_eq!(window.find("panel-github-item-2").selected(), Some(true));
     });
