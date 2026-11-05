@@ -77,7 +77,7 @@ pub(crate) fn stack_trunk(number: u64, base: &str, cx: &gpui_kit::App) -> AnyEle
     h_flex()
         .id(SharedString::from(format!("panel-github-trunk-{number}")))
         .test_support()
-        .role(gpui_kit::Role::StaticText)
+        .role(gpui_kit::Role::Label)
         .aria_label(base.to_string())
         .h(rems(HEIGHT / 16.))
         .px(rems(ROW_INSET / 16.))
