@@ -113,13 +113,24 @@ fn mouse_reporting_button(
     down: bool,
     modifiers: Modifiers,
 ) {
+    mouse_reporting_button_for(cx, window, position, MouseButton::Left, down, modifiers);
+}
+
+fn mouse_reporting_button_for(
+    cx: &mut TestAppContext,
+    window: gpui_kit::AnyWindowHandle,
+    position: gpui_kit::Point<Pixels>,
+    button: MouseButton,
+    down: bool,
+    modifiers: Modifiers,
+) {
     let event = if down {
         gpui_kit::PlatformInput::MouseDown(MouseDownEvent {
-            button: MouseButton::Left, position, modifiers, click_count: 1, first_mouse: false,
+            button, position, modifiers, click_count: 1, first_mouse: false,
         })
     } else {
         gpui_kit::PlatformInput::MouseUp(gpui_kit::MouseUpEvent {
-            button: MouseButton::Left, position, modifiers, click_count: 1,
+            button, position, modifiers, click_count: 1,
         })
     };
     mouse_reporting_event(cx, window, event);
@@ -241,4 +252,28 @@ fn mouse_reporting_only_the_pressed_pane_owns_real_pty_reports(cx: &mut TestAppC
     mouse_reporting_move(cx, window, at(ga, 4., 3.), Some(MouseButton::Left), plain);
     mouse_reporting_button(cx, window, at(ga, 4., 3.), false, plain);
     assert_eq!(mouse_reporting_checkpoint(cx, &panes, &dirs, 7), [Vec::<u8>::new(), Vec::new()]);
+
+    // Every reported button owns its release independently of other buttons.
+    for (offset, first, second, expected) in [
+        (0, MouseButton::Left, MouseButton::Right, b"\x1b[<0;3;4M\x1b[<2;3;4M\x1b[<2;3;4m\x1b[<0;3;4m"),
+        (1, MouseButton::Middle, MouseButton::Left, b"\x1b[<1;3;4M\x1b[<0;3;4M\x1b[<0;3;4m\x1b[<1;3;4m"),
+        (2, MouseButton::Right, MouseButton::Middle, b"\x1b[<2;3;4M\x1b[<1;3;4M\x1b[<1;3;4m\x1b[<2;3;4m"),
+    ] {
+        let position = at(ga, 2., 3.);
+        mouse_reporting_move(cx, window, position, None, plain);
+        mouse_reporting_button_for(cx, window, position, first, true, plain);
+        mouse_reporting_button_for(cx, window, position, second, true, plain);
+        mouse_reporting_button_for(cx, window, position, second, false, plain);
+        mouse_reporting_button_for(cx, window, position, first, false, plain);
+        assert_eq!(mouse_reporting_checkpoint(cx, &panes, &dirs, 8 + offset), [expected.to_vec(), Vec::new()]);
+    }
+
+    // A buttonless move retires all held owners, not merely the last press.
+    let position = at(ga, 2., 3.);
+    mouse_reporting_button_for(cx, window, position, MouseButton::Left, true, plain);
+    mouse_reporting_button_for(cx, window, position, MouseButton::Right, true, plain);
+    mouse_reporting_move(cx, window, side, None, plain);
+    mouse_reporting_button_for(cx, window, position, MouseButton::Right, false, plain);
+    mouse_reporting_button_for(cx, window, position, MouseButton::Left, false, plain);
+    assert_eq!(mouse_reporting_checkpoint(cx, &panes, &dirs, 11), [b"\x1b[<0;3;4M\x1b[<2;3;4M".to_vec(), Vec::new()]);
 }
