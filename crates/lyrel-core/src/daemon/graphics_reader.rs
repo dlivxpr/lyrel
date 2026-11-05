@@ -85,6 +85,9 @@ fn text(
         append_graphics_effects(effects, &mut Vec::new(), &mut frames, writer);
         fan_out_output(&mut state, bytes, frames, gate);
     }
+    let owed = detached_color_scheme_queries(&mut state);
+    drop(state);
+    answer_color_scheme_queries(writer, owed);
 }
 
 fn reply(writer: &Arc<Mutex<Box<dyn Write + Send>>>, control: &Control, status: &'static str) {

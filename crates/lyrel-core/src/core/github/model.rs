@@ -59,6 +59,7 @@ pub struct Label {
 
 /// One row of the list.
 #[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct Item {
     pub number: u64,
     pub title: String,
@@ -71,6 +72,19 @@ pub struct Item {
     pub created_at: i64,
     pub updated_at: i64,
     pub html_url: String,
+    /// Branch identity from `/pulls`; `/issues` does not include it.
+    pub pull: Option<PullRefs>,
+}
+
+/// The branches and repositories a pull request connects. Repository identity
+/// is required: an owner's branch label alone cannot distinguish their forks.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct PullRefs {
+    pub head_ref: String,
+    pub base_ref: String,
+    pub head_repository: Option<String>,
+    pub base_repository: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -394,6 +408,14 @@ pub(crate) struct RawBranchRef {
     name: String,
     #[serde(default)]
     sha: String,
+    #[serde(default)]
+    repo: Option<RawRepository>,
+}
+
+#[derive(Deserialize)]
+pub(crate) struct RawRepository {
+    #[serde(default)]
+    full_name: String,
 }
 
 #[derive(Deserialize)]
@@ -585,6 +607,7 @@ impl RawIssue {
             created_at: timestamp(&self.created_at),
             updated_at: timestamp(&self.updated_at),
             html_url: self.html_url,
+            pull: None,
         }
     }
 }
@@ -597,11 +620,25 @@ impl RawPull {
             self.merged_at.is_some(),
             self.draft.unwrap_or(false),
         );
-        let (head_ref, head_sha) = self.head.map(|h| (h.name, h.sha)).unwrap_or_default();
+        let head = self.head;
+        let base = self.base;
+        let refs = PullRefs {
+            head_ref: head.as_ref().map(|h| h.name.clone()).unwrap_or_default(),
+            base_ref: base.as_ref().map(|b| b.name.clone()).unwrap_or_default(),
+            head_repository: head
+                .as_ref()
+                .and_then(|h| h.repo.as_ref())
+                .map(|r| r.full_name.clone()),
+            base_repository: base
+                .as_ref()
+                .and_then(|b| b.repo.as_ref())
+                .map(|r| r.full_name.clone()),
+        };
+        let (head_ref, head_sha) = head.map(|h| (h.name, h.sha)).unwrap_or_default();
         let info = PullInfo {
             head_ref,
             head_sha,
-            base_ref: self.base.map(|b| b.name).unwrap_or_default(),
+            base_ref: base.map(|b| b.name).unwrap_or_default(),
             additions: self.additions.unwrap_or(0),
             deletions: self.deletions.unwrap_or(0),
             changed_files: self.changed_files.unwrap_or(0),
@@ -619,6 +656,7 @@ impl RawPull {
             created_at: timestamp(&self.created_at),
             updated_at: timestamp(&self.updated_at),
             html_url: self.html_url,
+            pull: Some(refs),
         };
         (item, info)
     }

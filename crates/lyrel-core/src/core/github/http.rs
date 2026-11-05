@@ -28,6 +28,9 @@ pub struct HttpTransport {
     agent: ureq::Agent,
     token: Option<Token>,
     etags: Etags,
+    // Only loopback HTTP fixtures can replace the production API authority.
+    #[cfg(test)]
+    api: Option<String>,
 }
 
 /// The last answer to each plain GET, by ETag. Re-asking with `If-None-Match`
@@ -64,9 +67,9 @@ impl HttpTransport {
         let mut builder = ureq::Agent::config_builder()
             .timeout_global(Some(TIMEOUT))
             .timeout_connect(Some(CONNECT_TIMEOUT))
-            // Never replay credentials after a redirect, including repository
-            // moves. This is ureq's default, kept explicit for token safety.
-            .redirect_auth_headers(ureq::config::RedirectAuthHeaders::Never)
+            // Renamed repositories redirect to /repositories/{id}. Preserve
+            // their token only on the same host, never on an HTTPS downgrade.
+            .redirect_auth_headers(ureq::config::RedirectAuthHeaders::SameHost)
             // 4xx/5xx come back as responses, so their headers (the rate
             // limit's reset time) can be read.
             .http_status_as_error(false)
@@ -74,10 +77,17 @@ impl HttpTransport {
         if let Some(proxy) = crate::daemon::install::proxy::resolve(API, manual_proxy) {
             builder = builder.proxy(Some(proxy));
         }
+        // Unit fixtures never use the developer's proxy configuration.
+        #[cfg(test)]
+        {
+            builder = builder.proxy(None);
+        }
         HttpTransport {
             agent: builder.build().into(),
             token,
             etags: Etags::default(),
+            #[cfg(test)]
+            api: None,
         }
     }
 }
@@ -108,9 +118,13 @@ impl HttpTransport {
         {
             return Err(ApiError::Decode("Expected a GitHub API path".into()));
         }
+        #[cfg(not(test))]
+        let api = API;
+        #[cfg(test)]
+        let api = self.api.as_deref().unwrap_or(API);
         let mut request = self
             .agent
-            .get(format!("{API}{path}"))
+            .get(format!("{api}{path}"))
             .header("Accept", accept)
             .header("X-GitHub-Api-Version", "2022-11-28");
         if let Some(token) = &self.token {
@@ -161,6 +175,9 @@ impl HttpTransport {
 
 #[cfg(test)]
 mod tests {
+    use super::super::api::{ListPage, ListQuery, list};
+    use super::super::model::{Kind, StateFilter};
+    use super::super::remote::RepoSlug;
     use super::*;
 
     #[test]
@@ -181,8 +198,10 @@ mod tests {
         }
     }
 
-    #[test]
-    fn redirects_never_forward_authorization_even_to_the_same_host() {
+    /// The real HTTP transport and list decoder read a private repository
+    /// through its old slug. The destination serves data only with the token;
+    /// a missing token produces GitHub's private-repository 404, not an echo.
+    fn renamed_repository(redirect_host: &str, status: u16) -> Result<ListPage, ApiError> {
         use std::io::{Read, Write};
         use std::net::{TcpListener, TcpStream};
         use std::time::Instant;
@@ -214,43 +233,94 @@ mod tests {
             (stream, String::from_utf8(bytes).unwrap())
         }
 
-        for redirect_host in ["127.0.0.1", "localhost"] {
-            let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-            listener.set_nonblocking(true).unwrap();
-            let address = listener.local_addr().unwrap();
-            let server = std::thread::spawn(move || {
-                let (mut first, initial) = receive(&listener);
-                write!(first, "HTTP/1.1 302 Found\r\nLocation: http://{redirect_host}:{}/destination\r\nContent-Length: 0\r\nConnection: close\r\n\r\n", address.port()).unwrap();
-                drop(first);
-                let (mut second, redirected) = receive(&listener);
-                second
-                    .write_all(
-                        b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok",
-                    )
-                    .unwrap();
-                (initial, redirected)
-            });
-            let http = HttpTransport::new(Token::new("synthetic-http-secret"), None);
-            // Exercise the production Agent's redirect policy against a local
-            // HTTP endpoint; only proxy discovery is disabled for isolation.
-            let response = http
-                .agent
-                .get(format!("http://{address}/initial"))
-                .header(
-                    "Authorization",
-                    format!("Bearer {}", http.token.as_ref().unwrap().expose()),
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let address = listener.local_addr().unwrap();
+        let location = format!(
+            "http://{redirect_host}:{}/repositories/123/issues?state=open&sort=updated&direction=desc&per_page=50&page=2",
+            address.port()
+        );
+        let same_host = redirect_host == "127.0.0.1";
+        let server = std::thread::spawn(move || {
+            let (mut first, initial) = receive(&listener);
+            assert!(initial.starts_with("GET /repos/acme/old/issues?state=open&sort=updated&direction=desc&per_page=50&page=2 HTTP/1.1\r\n"));
+            let expected = format!("{} {}", "Bearer", "synthetic-http-secret");
+            let authorized = |request: &str| {
+                request
+                    .lines()
+                    .filter_map(|line| line.split_once(':'))
+                    .any(|(name, value)| {
+                        name.eq_ignore_ascii_case("authorization") && value.trim() == expected
+                    })
+            };
+            assert!(
+                authorized(&initial),
+                "the original private request needs authentication"
+            );
+            write!(first, "HTTP/1.1 {status} Redirect\r\nLocation: {location}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n").unwrap();
+            drop(first);
+            let (mut second, redirected) = receive(&listener);
+            assert!(redirected.starts_with("GET /repositories/123/issues?state=open&sort=updated&direction=desc&per_page=50&page=2 HTTP/1.1\r\n"));
+            assert!(
+                redirected
+                    .lines()
+                    .any(|line| line.eq_ignore_ascii_case("accept: application/vnd.github+json"))
+            );
+            assert!(
+                redirected
+                    .lines()
+                    .any(|line| line.eq_ignore_ascii_case("x-github-api-version: 2022-11-28"))
+            );
+            if !same_host {
+                assert!(!redirected.to_ascii_lowercase().contains("authorization:"));
+                assert!(!redirected.contains("synthetic-http-secret"));
+            }
+            let (status, body) = if authorized(&redirected) {
+                (
+                    200,
+                    r#"[{"number":42,"title":"Private renamed repository","state":"open","html_url":"https://github.com/acme/new/issues/42"}]"#,
                 )
-                .config()
-                .proxy(None)
-                .build()
-                .call();
-            let (initial, redirected) = server.join().unwrap();
-            assert_eq!(response.unwrap().status().as_u16(), 200);
-            assert!(initial.to_ascii_lowercase().contains("authorization:"));
-            assert!(initial.contains(http.token.as_ref().unwrap().expose()));
-            assert!(!redirected.to_ascii_lowercase().contains("authorization:"));
-            assert!(!redirected.contains("synthetic-http-secret"));
+            } else {
+                (404, r#"{"message":"Not Found"}"#)
+            };
+            write!(second, "HTTP/1.1 {status} Result\r\nContent-Length: {}\r\nContent-Type: application/json\r\nLink: <https://api.github.com/repositories/123/issues?page=3>; rel=\"next\"\r\nConnection: close\r\n\r\n{body}", body.len()).unwrap();
+        });
+        let mut http = HttpTransport::new(Token::new("synthetic-http-secret"), None);
+        http.api = Some(format!("http://{address}"));
+        let result = list(
+            &http,
+            &ListQuery {
+                slug: RepoSlug {
+                    owner: "acme".into(),
+                    name: "old".into(),
+                },
+                kind: Kind::Issues,
+                state: StateFilter::Open,
+                label: None,
+            },
+            2,
+        );
+        server.join().unwrap();
+        result
+    }
+
+    #[test]
+    fn a_renamed_private_repository_returns_its_items_after_same_host_redirects() {
+        for status in [301, 302, 307, 308] {
+            let page = renamed_repository("127.0.0.1", status).unwrap();
+            assert_eq!(page.items.len(), 1);
+            assert_eq!(page.items[0].number, 42);
+            assert_eq!(page.items[0].title, "Private renamed repository");
+            assert_eq!(page.next_page, Some(3));
         }
+    }
+
+    #[test]
+    fn a_different_host_cannot_read_the_private_repository_with_our_token() {
+        assert_eq!(
+            renamed_repository("localhost", 301),
+            Err(ApiError::NotFound)
+        );
     }
 
     fn reply(body: &str) -> Reply {
