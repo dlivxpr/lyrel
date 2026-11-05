@@ -637,9 +637,9 @@ pub(crate) fn default_window_opacity(backdrop: WindowBackdrop, blur: bool) -> f3
 /// Tint above the shared workspace background, not another native material.
 /// Any translucent window needs translucent sidebars: that includes plain
 /// transparency, Windows Auto with an opacity override, and macOS native blur.
-/// Retains 85% of the terminal's native-background share. Windows needs an
-/// alpha budget because gpui-pre-windows 0.3.9 adds destination alpha (ONE)
-/// instead of using src-over attenuation; a fixed 0.15 saturates at opacity 0.85.
+/// Preserves the pre-upgrade Windows tint budget. Controlled native black/white
+/// samples match Pre 0.3.10 and Fast 0.1.13 at opacity 0.88, but do not prove the
+/// historical 85% transmission claim; see docs/design-system.md.
 /// With an opaque window the original semantic surface remains fully opaque.
 /// `theme.sidebar` itself stays solid for components on the settings overlay.
 pub(crate) fn workspace_surface_color(cx: &App) -> Hsla {

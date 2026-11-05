@@ -201,7 +201,11 @@ fn graphics_consumer_hidden_retired_atlas_does_not_wake_window_and_returns_curre
         }
     });
     cx.run_until_parked();
-    let baseline = renders.get();
+    let survivor_painted = view.read_with(cx, |view, _| {
+        let frame = view.grid_snap.as_ref().expect("the returned pane was painted");
+        frame.images.iter().find(|image| image.placement.image_id == 7).unwrap().painted.clone()
+    });
+    survivor_painted.store(false, std::sync::atomic::Ordering::Release);
     let request = format!(
         "SEND 3 0 {} 0\n",
         graphics_pty_fixture::hex(b"\x1b_Ga=d,d=I,i=8\x1b\\")
@@ -217,11 +221,26 @@ fn graphics_consumer_hidden_retired_atlas_does_not_wake_window_and_returns_curre
         cx.run_until_parked();
         std::thread::sleep(std::time::Duration::from_millis(5));
     }
-    cx.run_until_parked();
-    assert!(
-        renders.get() > baseline,
-        "visible atlas invalidation must still repaint"
-    );
+    // A TerminalView invalidation can repaint its own retained subtree without
+    // rebuilding GraphicsWindowRenderProbe. Observe the actual Element output,
+    // not an obsolete requirement to invalidate an unrelated ancestor/atlas.
+    // Deliberately do not use graphics_consumer_progress: refresh_windows would
+    // mask a missing visible-output notification.
+    loop {
+        cx.run_until_parked();
+        let repainted = view.read_with(cx, |view, _| {
+            view.grid_snap.as_ref().is_some_and(|frame| {
+                frame.images.len() == 1
+                    && frame.images[0].placement.image_id == 7
+                    && frame.images[0].data.as_ref().unwrap().as_bytes(0).unwrap() == [0, 255, 0, 255]
+                    && survivor_painted.load(std::sync::atomic::Ordering::Acquire)
+            })
+        });
+        if repainted { break; }
+        assert!(std::time::Instant::now() < deadline, "visible removal must repaint the surviving current pixels and remove image 8 from the committed display list");
+        cx.executor().advance_clock(std::time::Duration::from_millis(5));
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
     daemon.panes().kill(pane).unwrap();
 }
 

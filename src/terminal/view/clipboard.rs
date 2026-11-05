@@ -173,7 +173,7 @@ impl TerminalView {
     }
     pub fn copy_selection(&mut self, cx: &mut Context<Self>) {
         let cfg = cx.global::<Config>();
-        let text = self.terminal.term.lock().selection_to_string();
+        let text = self.visible_selection_text();
         if let Some(mut text) = text {
             if cfg.clipboard_trim_trailing_spaces {
                 text = trim_trailing_spaces(&text);
@@ -198,7 +198,7 @@ impl TerminalView {
         if self.has_selection() {
             self.copy_selection(cx);
             if clear_on_copy {
-                self.terminal.term.lock().selection = None;
+                self.clear_visible_selection();
                 cx.notify();
             }
             return true;
@@ -320,7 +320,7 @@ impl TerminalView {
             return;
         }
         self.terminal.write(vec![0x16]);
-        self.terminal.term.lock().selection = None;
+        self.clear_visible_selection();
         cx.notify();
     }
 

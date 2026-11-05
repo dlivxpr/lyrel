@@ -100,6 +100,8 @@ impl TerminalLifecycle {
                         // Admission can be waiting for this exact GPU lease. Even
                         // hidden panes return retired pages after this batch, not
                         // after some future visible frame or periodic cleanup.
+                        // Committed display leases alone defer their own tiles;
+                        // unrelated retired resources still return immediately.
                         event_images.release_retired(window, cx);
                     })
                     .is_err()

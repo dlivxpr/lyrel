@@ -147,8 +147,14 @@ impl Daemon {
             .unwrap();
         let mut text = Vec::new();
         while !text.windows(11).any(|part| part == b"KITTY_READY") {
-            if let DaemonMsg::Output(bytes) = session.recv().unwrap() {
-                text.extend(bytes);
+            // Startup bytes already in the ring arrive in the first replay.
+            match session.recv().unwrap() {
+                DaemonMsg::Snapshot(bytes) | DaemonMsg::Output(bytes) => text.extend(bytes),
+                DaemonMsg::Error(error) => panic!("retention sender failed: {error}"),
+                DaemonMsg::Exited { code } => {
+                    panic!("retention sender exited before KITTY_READY: {code:?}")
+                }
+                _ => {}
             }
         }
         Consumer {
@@ -318,6 +324,77 @@ impl Consumer {
             }
         }
     }
+}
+
+#[test]
+fn unfinished_synchronized_output_keeps_daemon_queries_and_image_anchors_live() {
+    let daemon = Daemon::start();
+    let mut consumer = daemon.spawn();
+    for (begin, end) in [
+        ("\x1b[?2026h", "\x1b[?2026l"),
+        ("\x1bP=1s\x1b\\", "\x1bP=2s\x1b\\"),
+    ] {
+        for fragment in [0, 1] {
+            // No ESU is sent until after both the protocol reply and the
+            // placement have crossed the actual daemon/PTY/pane boundary.
+            let bytes = format!(
+                "\x1bc{begin}\x1b[?1049h\x1b[6;5H宽e\u{301}\x1b[16t\
+                 \x1b_Ga=T,i=171,p=1,f=32,s=1,v=1,c=1,r=1,C=1;/wAA/w==\x1b\\"
+            );
+            consumer.serial += 1;
+            consumer.updates.clear();
+            consumer.text.clear();
+            consumer
+                .session
+                .input(
+                    format!(
+                        "SEND {} 2 {} {fragment}\n",
+                        consumer.serial,
+                        fixture::hex(bytes.as_bytes())
+                    )
+                    .as_bytes(),
+                )
+                .unwrap();
+            let replies = consumer.finish_exchange(bytes.as_bytes());
+            assert_eq!(
+                replies,
+                [
+                    b"\x1b[6;20;10t".to_vec(),
+                    b"\x1b_Gi=171,p=1;OK\x1b\\".to_vec(),
+                ],
+                "headless queries must not wait for a GUI frame or ESU"
+            );
+            let placement = consumer
+                .updates
+                .iter()
+                .find_map(|update| match update {
+                    GraphicsUpdate::Place(placement) if placement.image_id == 171 => {
+                        Some(placement)
+                    }
+                    _ => None,
+                })
+                .expect("the daemon publishes the image before ESU");
+            assert_eq!(
+                (placement.screen, placement.anchor_row, placement.anchor_col),
+                (1, 5, 7),
+                "the image uses preceding live screen, cursor, wide and combining text"
+            );
+            let resource = placement.resource;
+            consumer.idle(format!("{end}\x1b[9;3H").as_bytes());
+            assert_eq!(
+                consumer.exchange(b"\x1b_Ga=p,i=171,p=2,c=1,r=1,C=1\x1b\\", 1),
+                [b"\x1b_Gi=171,p=2;OK\x1b\\".to_vec()]
+            );
+            assert!(consumer.updates.iter().any(|update| matches!(
+                update,
+                GraphicsUpdate::Place(placement)
+                    if placement.resource == resource
+                        && placement.placement_id == 2
+                        && (placement.screen, placement.anchor_row, placement.anchor_col) == (1, 8, 2)
+            )), "ending synchronization preserves daemon resource authority and later cursor order");
+        }
+    }
+    consumer.exit();
 }
 
 #[test]

@@ -1284,6 +1284,9 @@ impl TerminalView {
             (None, None, 0, 0)
         } else {
             let sampled = self.terminal.term.try_lock().map(|term| {
+                if term.synchronized_output() {
+                    return None;
+                }
                 let mut palette = self.terminal.palette;
                 if let Some(active) = cx.try_global::<super::palette::ActivePalette>() {
                     palette[..16].copy_from_slice(&active.ansi16);
@@ -1296,18 +1299,21 @@ impl TerminalView {
                     .as_ref()
                     .and_then(|area| row_backdrop(&term, area.top.saturating_sub(1), &palette))
                     .map(|rgb| (rgb, self.cell_width * term.columns() as f32));
-                (
+                Some((
                     found,
                     backdrop,
                     term.screen_lines(),
                     term.grid.display_offset(),
-                )
+                ))
             });
-            let Some(sampled) = sampled else {
-                self.retry_grid_when_available(cx);
-                return;
-            };
-            sampled
+            match sampled {
+                Some(Some(sampled)) => sampled,
+                Some(None) => return,
+                None => {
+                    self.retry_grid_when_available(cx);
+                    return;
+                }
+            }
         };
         let Some(c) = self.composer.as_mut() else {
             return;

@@ -476,7 +476,16 @@ impl NativeSshFixture {
             ("views.json", serde_json::to_value(views).unwrap()),
             (
                 "config.json",
-                serde_json::json!({ "restore_session": true, "show_tray_icon": false, "font_family": "Hack", "font_size": 15.0, "window_opacity": 1.0 }),
+                serde_json::json!({
+                    "restore_session": true,
+                    "show_tray_icon": false,
+                    "install_cli_on_path": false,
+                    "check_for_updates": false,
+                    "auto_download_updates": false,
+                    "font_family": "Hack",
+                    "font_size": 15.0,
+                    "window_opacity": 1.0,
+                }),
             ),
         ] {
             std::fs::write(
@@ -489,17 +498,33 @@ impl NativeSshFixture {
     }
 
     pub fn native_app_command(&self, binary: &Path) -> Command {
+        let home = self.native_home();
         let mut command = Command::new(binary);
         command
             .arg("--config-dir")
             .arg(self.local_config_dir())
-            .env("HOME", self.root.path().join("home"))
-            .env("USERPROFILE", self.root.path().join("home"))
+            .env("HOME", &home)
+            .env("USERPROFILE", &home)
+            .env("APPDATA", home.join("AppData/Roaming"))
+            .env("LOCALAPPDATA", home.join("AppData/Local"))
+            .env("XDG_CONFIG_HOME", home.join(".config"))
+            .env("XDG_DATA_HOME", home.join(".local/share"))
+            .env("XDG_STATE_HOME", home.join(".local/state"))
+            .env("XDG_CACHE_HOME", home.join(".cache"))
+            .env("PI_CONFIG_DIR", home.join(".omp"))
+            .env("PI_CODING_AGENT_DIR", home.join(".pi/agent"))
+            .env("KIMI_CODE_HOME", home.join(".kimi-code"))
+            .env("HERMES_HOME", home.join(".hermes"))
             .env("LYREL_CONFIG_DIR", self.local_config_dir())
             .env("LYREL_DATA_DIR", self.root.path().join("data"))
             .env_remove("LYREL_CONTROL_SOCK")
+            .env_remove("LYREL_SOCKET")
             .env_remove("LYREL_PANE")
             .env_remove("LYREL_WS")
+            .env_remove("LYREL_SHELL_INTEGRATION")
+            .env_remove("LYREL_BUNDLED_SERVER_DIR")
+            .env_remove("PI_CONFIG_FILES")
+            .env_remove("PI_CODING_AGENT_SESSION_DIR")
             .env_remove("SSH_AUTH_SOCK")
             .env_remove("SSH_AGENT_PID");
         if let Some(bundled) = &self.bundled {

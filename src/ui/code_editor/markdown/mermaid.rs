@@ -99,7 +99,9 @@ impl Style {
         // This uses the host text stack (including Unicode fallback), not a
         // per-character width guess. SVG uses the matching named system font;
         // browser bbox/baseline and custom CSS font differences remain limits.
-        let text_system = WindowTextSystem::new(self.text_system.clone());
+        // Merman requires a Send + Sync callback. Keep its non-Sync layout
+        // cache local to this job and serialize callback access, not UI work.
+        let text_system = parking_lot::Mutex::new(WindowTextSystem::new(self.text_system.clone()));
         let family = self.family.clone();
         let measurer =
             DeterministicTextMeasurer::default().with_width_callback(move |text, style| {
@@ -120,6 +122,7 @@ impl Style {
                     Some("oblique") => FontStyle::Oblique,
                     _ => FontStyle::Normal,
                 };
+                let text_system = text_system.lock();
                 text.split('\n')
                     .map(|line| {
                         text_system

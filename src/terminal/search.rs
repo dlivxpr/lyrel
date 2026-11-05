@@ -162,7 +162,7 @@ impl TerminalView {
     }
 
     fn selected_search_seed(&self) -> Option<String> {
-        let text = self.terminal.term.lock().selection_to_string()?;
+        let text = self.selection_text()?;
         let trimmed = text.trim_matches(['\n', '\r']);
         if trimmed.is_empty() || trimmed.contains('\n') {
             None

@@ -113,6 +113,10 @@ jobs:
           path: lyrel
           persist-credentials: false
 
+      - name: Select and verify macOS SDK 26 or newer
+        working-directory: lyrel
+        run: bash .github/scripts/select-macos-sdk.sh
+
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: aarch64-apple-darwin

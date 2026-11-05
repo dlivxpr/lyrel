@@ -83,6 +83,7 @@ cat > "$APP/Contents/Info.plist" <<PLIST
     <key>CFBundleExecutable</key><string>lyrel-app</string>
     <key>CFBundleIconFile</key><string>lyrel</string>
     <key>CFBundlePackageType</key><string>APPL</string>
+    <key>LSMinimumSystemVersion</key><string>15.0</string>
     <key>NSHighResolutionCapable</key><true/>
     <key>NSPrincipalClass</key><string>NSApplication</string>
     <!-- LaunchServices has no global default-terminal setting. These declare

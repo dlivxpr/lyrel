@@ -46,7 +46,7 @@ Git 的新增/修改标记种子为绿 `#2F8A52` / `#4CC27A`、琥珀 `#B7791F` 
 
 - 原生材质属于整个窗口；终端、左侧标签栏和右侧面板共用现有窗口背景策略，不创建侧栏专属 blur 或子窗口。
 - 表面是否透明只取决于已解析的窗口不透明度，不取决于 Windows 下拉框是否显式选择材质。`Auto`、`Off` 的手动透明度以及 macOS 的本地模糊开关均使用同一规则。
-- 不透明度小于 `1` 时，两侧栏用各自语义底色提供相当于 `0.15` src-over tint 的桌面透出预算，保留终端区域桌面透出量的 `85%`。当前 `gpui-pre-windows 0.3.9` 的 DirectX 后端累加目标 alpha，Windows 实际绘制 alpha 必须为 `0.15 × (1 - opacity)`，不能再叠固定 `0.15`，否则常见的 `0.88` 窗口不透明度会使侧栏饱和为完全不透明；其他平台保持正常 src-over。它不是另一层原生模糊。不透明度为 `1` 或未启用透明度时，侧栏恢复完整不透明的语义底色。背景图片与渐变继续由窗口层绘制。
+- 不透明度小于 `1` 时，两侧栏使用各自语义底色作 tint，而非另一层原生模糊。Windows 保留已有 `0.15 × (1 - opacity)` 绘制 alpha，其他平台保留 `0.15` src-over 路径。本次隔离 Windows 原生黑／白背景对照中，原始 Pre `0.3.10`、Kit/Pre `0.3.11` 与 Fast `0.1.13` 在浅色、opacity `0.88`、backdrop `off` 的三处空白采样 RGB 完全一致：终端黑白差为 `31`，两侧栏为 `30`。这证明该场景保留了既有外观，不证明旧文档所称的 `85%` 透出目标；实测比例约为 `96.8%`，偏差在升级前已存在，本次不顺带改变。三者普通 DirectX alpha blend 均为 `ONE / INV_SRC_ALPHA`，不能再用更旧 `0.3.9` 的累加 alpha 解释当前行为。不透明度为 `1` 或未启用透明度时恢复完整不透明语义底色；背景图片与渐变继续由窗口层绘制。其他主题、材质与平台仍按以下规约分别验收。
 - `Neutrals.rail`、`Neutrals.sidebar` 及文字、分隔线、hover、selected、focus 角色仍由当前主题解析。控件、当前行和遮盖行尾文字的局部操作底可保持实色，以免标签与下方文字混叠；不得因此给整个侧栏重新加不透明底。
 - `theme.sidebar` 本身仍是不透明 token；设置、文件与 diff 等全窗口覆盖层维持其既有不透明策略，不能把工作区 tint 直接写回全局 token。
 - 材质切换不重置主题、界面或终端字体，也不重置用户的 opacity。优先级仍为配置 override、主题值、平台材质默认值；Windows `Auto` 不因更新自动变透明。
@@ -123,7 +123,7 @@ Git 的新增/修改标记种子为绿 `#2F8A52` / `#4CC27A`、琥珀 `#B7791F` 
   主题卡片为浅底无描边，展开时为 selected 阶；主题面板与内容同色、左缘细分隔线，标题立在标题栏带内。
   快捷键键帽为浅底无描边，行间 0.5px 分隔线。
 - **菜单与随处搜索**：亮度抬升、有限阴影；当前键盘行清楚，普通项不着色；小窗口内可滚动。
-- **框架菜单例外**：`gpui-kit 0.8.0` 的 `PopupMenu` 沿用正式框架默认几何，包括 2px full-bleed 分隔线、26px 行和默认 rem=16 时的 14px 字。应用自有设置菜单保持既有约束；不为恢复旧菜单几何复制框架私有实现。深色 Blurred 的细微像素差异及列表提示重测仍需按场景记录，不扩大为任意视觉或交互降级。
+- **框架菜单例外**：`gpui-kit 0.9.0` 的 `PopupMenu` 沿用正式框架默认几何，包括 2px full-bleed 分隔线、26px 行和默认 rem=16 时的 14px 字。应用自有设置菜单保持既有约束；不为恢复旧菜单几何复制框架私有实现。Fast 下深色 Blurred 的像素与列表提示须按本次场景重测，不沿用旧 backend 的原生结论，也不扩大为任意视觉或交互降级。
 - **工作区切换器**：760px 浮层，距顶 112px，圆角 12px；搜索行 48px（右侧 `esc` 键帽），
   主体 420px 分两栏、只用细线分隔，页脚 40px（左「新建工作区」幽灵按钮，右键帽提示
   ↑↓ 导航 / ↵ 打开 / ⌘↵ 新窗口）。左栏 340px 工作区行 52px：26px 首字母圆 + 8px 连接
@@ -172,7 +172,11 @@ Git 的新增/修改标记种子为绿 `#2F8A52` / `#4CC27A`、琥珀 `#B7791F` 
 
 - `element/snapshot.rs` 在同一次 grid snapshot 中解析 cell、选择、搜索与链接标记；
   稳态继续使用 `try_lock`，无法取得 grid 时不修改旧 buffer，由管线重画上一有效帧。
-  只有首帧或 resize 后旧 buffer 尺寸不匹配时保留原有阻塞获取例外。
+  只有首帧或普通 resize 后旧帧行列不匹配时保留阻塞获取例外；不能只比较单元格总数。
+  同步 hold 或竞争时复用的 committed cells 沿用原行列 addressing，即使新旧尺寸等面积也不重新解释；
+  已持有的同步帧在有序 `Size` 到达前只受新边界裁切，不等待实时 grid；ESU 或期限先结束 hold
+  也不代表 resize 已生效。锁内 VT 行列尚未匹配时独立等待 `Size` 的既有 Wakeup，不启动竞争重试。
+  relink 后没有 previous snapshot 的首个 hold 按新 surface 分配空帧，不恢复上一连接残留的几何。
 - `TerminalView` 持有的 `FrameFacts` 统一提供绘制模式、选择、光标及 prompt／菜单几何；首帧先取得有效事实，
   后续在同一 guard 内应用 scrollbar 的待处理位置并采样。稳态 render／paint 不为这些投影等待 PTY reader。
   facts、composer、输入维护、同尺寸 resize 核验或实际 grid 构建因锁忙而跳过时，共用每 pane 唯一的后台等待任务；
@@ -180,6 +184,15 @@ Git 的新增/修改标记种子为绿 `#2F8A52` / `#4CC27A`、琥珀 `#B7791F` 
   同尺寸请求实际校正过 grid 后再绘制一帧，使帧首事实与校正后的几何重新一致；尺寸和 cell metrics 未变且 grid 已匹配时不重发 resize。
   提示符所有权同步、settle／flush 的判断与非阻塞 writer 入队使用交接点同一个实时 grid guard，
   不根据缓存绘制模式向 shell 交接输入；实际按键、鼠标协议及提示符输入路由仍读取实时终端状态。
+  同步期间的选择与复制读取 committed cells：Tab 只跳过实际 tab stop 之前的 NUL 展开空白，
+  stop 之后的真实 NUL 间隔仍为空格；尾空行／全空选区不凭空加入换行，内部空行与 soft-wrap 间隔保留，
+  按行选择单独保留一个末尾换行。普通可达边界以正常 Rio 复制与独立可见字面量共同核验。
+  已知例外：正式 Rio `0.5.28`／`0.5.29` 的 normal copy 在 Simple 选区仅终止于 `LeadingSpacer` 时，
+  上游补偿分支会读入前一物理行的首字符；本次不改 normal 路径，也不将该旧 quirk 复制进 held 路径。
+  held 只序列化 committed 实际可见选区，不引入前行字符或未选中的下一行 wide base，不宣称所有边界字节无例外等价。
+  GUI 通过原有 `ParseBridge` 回调记录一维 stop 元数据，涵盖 HTS／TBC／RIS 与 resize 后新增的默认 stops，
+  复用原有光标元数据 mutex 并在同一 VT guard 内采样到 cell 的 bool；不克隆整表、不建立第二个 grid／解析器或新锁。
+  已进入 presented 状态的拖选更新不获取实时 grid 锁；只在采用或更新 live selection 时取原有锁。
 - `element/colors.rs` 负责 ANSI／truecolor、主题颜色与 pane dim 的解析；
   cell 样式复用只属于当前 snapshot，不跨调色板或主题变化保留解析结果。
 - `element/text.rs` 与其私有 `segment`、`powerline` 模块负责字体、Unicode cluster、
@@ -215,6 +228,113 @@ Windows 终端回归在隔离配置实窗验证：`omp 18.12.4` 原生 `askDialo
 退出后恢复 shell 历史、`Ctrl+L` 后重启 GUI／daemon 不复活已退出会话，以及本地 ConPTY
 分帧输出暂停时三行内容同时保留。Ask 通过临时扩展直接打开原生组件，未调用模型；
 流式场景使用确定性 PTY fixture，不代表已覆盖所有真实模型输出、macOS 或远端 SSH 渲染。
+
+### #172：Kit／Fast／Rio 组合的 Windows 验收记录
+
+本记录区分已通过的具体路径、被工具或环境阻塞的项目与尚未验证的范围，**不表示完整 Windows 或跨平台验收已通过**。维护者决定本轮以实现交付收尾，#168／#172 随 PR 合并关闭；下述未验证项保留原状态，macOS 验收集中保留在 #167。
+原始证据保存在验收机外部目录 `C:/Users/dlivx/AppData/Local/Temp/lyrel-168/`，以下短路径均相对于该目录，不随仓库分发。
+
+#### 候选、环境与隔离
+
+| 身份 | 实际记录 |
+| --- | --- |
+| 升级前 baseline | `069eade7bdd31e19f5381895c805ed962d767fdb`；Kit `0.8.1`／Pre `0.3.10`／Rio `0.5.28` |
+| 最终生产候选 | `ead83a2c483ae1a661a5bb8bcd23b8a62858245d`；Kit `=0.9.0`，仅由其 `gpui-fast` feature 选择 Fast／platform／Windows `0.1.13`，HTTP transport `=0.3.11`；三个 direct Rio 与 grapheme-width 为 `0.5.29`，VT defaults 仍关闭，正式 registry-only |
+| baseline lock SHA-256 | `80e68ed9886f3718a51449bddd4936a9917d33945d5c2d13a2e0bdff5b20ea53`（保留的 `baseline-Cargo.lock`） |
+| candidate lock SHA-256 | `1fd42a8afe7f62d8545e95a59ca1d9ff6b079a78746ecfe668322f7dcd3c4387` |
+| baseline GUI | `baseline-bin/lyrel-app.exe`，148,054,016 bytes，SHA-256 `88beec96dc9bf6fd8e4c5955e92fda9fc7786c2afa4285f58befedf96fcb1e5f` |
+| candidate GUI | `reviewed-final-bin/lyrel-app.exe`，153,307,136 bytes，SHA-256 `d9af8a843f0772457ac3ee7e01c5e0a792c8ef955503247d997aabd88274ef9e`；CLI／server／updater／ConPTY／许可证完整身份见 `reviewed-final-windows-build-identity.json` |
+| 验收机 | Windows 11 Pro for Workstations `10.0.26300`、Core Ultra 7 265KF（20 核／20 线程）、RTX 5080／驱动 `32.0.16.2101`、约 32 GiB RAM、卓越性能；Rust／Cargo `1.99.1`、原生 Node `26.13.0` |
+| 显示与条件 | Q27G4Z `2560×1440`、scale `1`；Release、实际 Light、119×35、terminal font `14`／UI font `16`，可见且不最小化，每轮采样前附着 AX；无 Cargo／测试／其他性能 cohort 并行 |
+
+最终候选包含 Explorer 隔离修复 `c51d3e8`、native SSH fixture 安全补丁 `5df2f28` 与后续 GUI reviewfix。
+`0e7ddc0`、`5df2f28`／`31712d8` 的旧 GUI／性能结果只作历史检查点，不替代最终候选；被取消的旧候选任务不算通过。
+Linux headless／SSH 与 musl 产物分别保留自己的 source commit，后续 GUI-only 修复未改变其 core／CLI／server／lock，不把这种源码等同性写成另一次实测。
+
+生产 GUI 只使用新建自有 root，关闭 `install_cli_on_path`、`check_for_updates`、`auto_download_updates`，重定向平台与 agent 配置命名空间并清除继承端点；没有操作普通用户 GUI／pane、修改账号或全局配置。
+`native-registry-isolation-comparison.json` 证明含 c51 的 production5df 实窗前后两项真实 HKCU Explorer 键、递归子键、全部值及原生 LastWriteFileTime 完全相同，前后 SHA-256 均为 `603e7a8e969c5ba66f2e2fba221c4edefc5b45e12a34edddeed91ed5a8e28361`；`native-user-path-comparison.json` 证明用户 PATH 原始值种类与哈希相同。全程只读比较，没有恢复注册项或泄露 PATH 内容；该中央隔离函数不受后续 GUI reviewfix 改变。
+
+#### 构建、测试与包：已通过的范围
+
+最终 `ead83a2` 实际执行以下命令，进程级清空 `RUSTC_WRAPPER`／`CARGO_BUILD_RUSTC_WRAPPER`、使用已核验的自有 ConPTY，未覆盖仓库 `+crt-static`：
+
+```powershell
+cargo fmt --check
+cargo test --locked --workspace --all-features -j1
+cargo build --release --locked --features updater -j1
+```
+
+三项 exit 均为 `0`。标准顶层测试 **5166 passed／0 failed／56 ignored**，另 CLI E2E **26 passed**；updater 的 30 项已包含在 5166 中，8 个嵌套 helper 不重复计数。
+完整 ignored 名单、Windows 上的 Unix-gated 0-test suites 与既有 warning 保留于 `windows-reviewed-ead83a2-allfeatures-release.log`；ignored 和 0-test 不算通过。
+复合检查／测试／Release 总耗时 1470.66 秒，不冒充纯 Release 耗时。精确结果见 `reviewed-final-windows-test-summary.json`。
+
+专用可丢弃 `wt-package168` 使用冻结 Windows binaries 与真实静态 musl server 执行现有 `bundle-windows.ps1 x86_64-pc-windows-msvc x86_64`、`verify-windows-package.ps1 x86_64`、`assert-no-vcruntime.ps1`，exit0；版本 `0.3.0`、x86_64、ZIP／Inno payload 布局及 GUI／CLI／updater 的 VC++ runtime import 检查通过。Microsoft 预编译 ConPTY 按脚本规定跳过自有链接检查，但包内版本、哈希与许可证独立核验。
+完整命令输出为 `reviewed-windows-package.log`，产物来源为 `package-reviewed-stage-identity.json`。没有运行安装器、系统注册、签名配置或发布；包生成／检查不等于实际安装验收。
+本轮保留的 ZIP 为 59,353,384 bytes、SHA-256 `f74049de23ec0328fa4443038182214938c1f1e392d98c298e1c4644b8996712`；setup.exe 为 41,502,033 bytes、SHA-256 `a9ae2cfaf8448f28fb0f06d77bef1cbff3d710213fb761e28ef41deb01c4ec1e`。这两个本地验收包未发布。
+
+musl server 来源 `90e8b7dded8702024a8fbc52e6a351e2d243db73`，与最终候选的 headless 源码／lock 相同；以 CI 的 `cargo zigbuild --release --locked -p lyrel-server --target x86_64-unknown-linux-musl -j1` 和 SIMD flag 实际构建，exit0，319.96 秒，`assert-static` exit0（无 PT_INTERP／DT_NEEDED／dynamic section）。14,665,264-byte 产物 SHA-256 为 `a8c1e6f4b5435853f7635e73e956a00bf412f50add2f6356c2fef3be576c26a8`；Zig linker warnings 与首轮 unsupported `--version` 前提失败保留在 `reviewed-musl-build-identity.json` 指向的 raw 目录，不用 GNU server 冒充 musl。
+
+#### 原生交互：实际通过与证据边界
+
+`native-reviewed-workflows/observations.json`、同目录 PNG／AX 与 `lifecycle.json` 记录最终 Release 的具体结果：
+
+| 路径 | 实际结果 |
+| --- | --- |
+| 启动、文字与 PTY | 原生 ConPTY 显示中文、宽字、组合字符；逐字节 UTF-8 分片保留中间与完成画面；alternate-screen TUI 显示后恢复原主屏，未只检查最终 repaint |
+| 可见选择／复制 | 终端实际双击选择，通过搜索命令 Copy＋Enter 得到与可见 `NATIVE_COPY_MARKER` 相同的剪贴板；生产编辑器用实际右键菜单 Select All／Copy，核对自有文档。不是只调用 action 或注入 `Ctrl+C` |
+| 同步呈现 | CLI 已包含 `PARTIAL_NATIVE_HIDDEN` 时，GUI 在相同 viewport 的真实 Search 浮层重绘下仍保留 committed 文字；结束后显示 `ATOMIC_NATIVE_END`。quiet 无后续输出时约 300 ms 截图已显示新文字；截图只给完成上界，精确 150 ms 期限另由真实 Root／reader 消费者回归证明，不是物理延迟测量 |
+| 编辑器／Markdown／Diff | 实际输入、菜单选区复制、Wrap:on、查找 `1/1`、自有文件保存；代表性 Markdown 表格／Mermaid、live／source 同文档与真实 Git unified Diff 保留像素／AX。没有把普通 Unicode 输入记作 IME |
+| 菜单与焦点 | 实际 Search／Copy 命令、编辑器 context menu 及 unsaved Save 对话框有可观察结果；不扩大为所有嵌套弹层、通知复制和快捷键／焦点恢复全通过 |
+| 主题、字号与布局 | Light／Dark／自有 `acceptance-midnight` YAML，UI font 18／terminal font 16、两侧栏拖拽与折叠、F11 往返、原生最大化／还原均有实窗证据；只测 scale1，不等于多 DPI 或所有透明材质通过 |
+| GUI 生命周期 | GUI 正常关闭 exit0 后 daemon 仍为 pid75540、原 Node PTY 仍为 pid73704；重新打开附着同一 daemon 与同一 PTY，未通过新建 shell 冒充恢复 |
+
+等面积 resize、ESU／timeout 早于 ordered Size、relink 首个 hold、Tab stops／Lines／空行／Unicode 可见复制、presented 拖选持锁完成性，另由既有生产 Root／TerminalView seam 完成 red→green；见 `handoff-review168.md`。
+最终完整日志明确包含 `gui_and_cli_shared_synchronized_ranges_converge_at_the_same_geometry`、`graphics_consumer_hidden_retired_atlas_does_not_wake_window_and_returns_current_pixels` 等通过结果，分别证明同几何收敛、隐藏返回当前像素与无多余窗口唤醒。可见图片删除／恢复和缓存失效消费者结果与实窗结果分别记录，不能把自动化 paint／计数断言扩大成原生 GPU、任意 hidden-pane 场景或物理输入延迟证明。
+
+Windows 到 owned Linux 42368／42369 的真实 SSH transport／Host 图形 5 项与 lifecycle 1 项已在 `31712d8` test exe 显式执行，全部 exit0，包括 nested SSH、不 skip；日志为 `windows-ssh-317/{graphics,lifecycle}.{log,err}` 与 `result.json`。后续 GUI-only 修复未改变该 core／server 路径。此处证明真实 Windows SSH，不代替最终生产 GUI 远程工作台的实窗结果。
+
+最终生产 GUI 的真实远程工作台另见 `native-reviewed-ssh/native-ssh147-aikhtS/observations.json`、PNG／AX、session／sample：固定 host-key pin 的 SSH 连接到 Linux daemon79893，实际 sender PTY 为 99059／99060，两个 `TerminalView` 独立显示左绿／右蓝，再均变蓝；新 GUI 进程恢复同一 daemon 与相同 sender PID，保留蓝色图片。远端文件树展开、远端中文 Markdown 表格读取通过，owned fixture 已停止。
+远端编辑输入／保存**未通过验收**：请求 `SSH_NATIVE_EDIT `，实际只观察到 `H_NATIVE_EDIT`；自动 takeover 后焦点归还未确认，AX／像素关闭尝试没有产生保存确认，草稿仅保存在证据目录。工具 delivery 问题已报告，现有证据不足以归因于生产回归，也不足以宣称无输入丢失；不把远端读取或 local 保存冒充远端写入通过。
+
+#### 原生材质：受控像素与往返
+
+最终 `ead83a2` 以自有 16px 黑白 checker 和全黑／全白背景，分别检查 Light 与通过真实 palette 选择的 Dark。
+`native-reviewed-materials/observations.json`、`captures-manifest.json`、`checker-stats.json` 与 `material-reviewed-final/{opaque-off,light-opacity-088-off}/pixels.json` 保留合成像素：
+
+- opaque／Off 时，背景 marker 黑白差为 255，两侧栏及终端空白 patch 的差均为 0；opacity0.88／Off 时 rail／terminal／sidebar 分别为 30／31／30，逐 RGB 与升级前 Pre0.3.10、Kit／Pre0.3.11、Fast 早期检查点相同。这里只证明保留原外观，不重新宣称旧文档的 85% 透出目标已实现。
+- 同一 96×96 终端空白 ROI 的 checker 标准差在 Light、Dark 的 Off 下均为 15.5，Blur 下均约为 0.302786；Off→Blur→Mica→Acrylic→Off 往返后恢复相同 Off mean／std。Mica／Acrylic 为恒定 patch，不能据此把 Mica 称为实时桌面 blur。
+- 最初五张文件名虽含 `dark`，实际为 Light；真正 Dark 是之后经原生 palette 选中后生成的 `verified-dark` 5–9，身份按 manifest／stats，而非文件名推定。字号始终保持 terminal14／UI16，结束恢复 opacity1／Auto；GUI 与背景进程均 exit0，无剩余本轮 GUI。
+
+上述结果只覆盖已测 scale1、主题与材质往返，不扩大为全部 DPI／激活状态、任意背景对比度或 macOS；完整 daemon／工作树收尾由父会话单独管理，不凭 GUI 退出推定全部资源已清理。
+
+
+#### 同条件 Release 性能
+
+`native-reviewed-perf-{0,1,2}/` 每轮保留独立 40 秒 load／20 秒 idle、producer raw 与像素；汇总见 `native-reviewed-performance-summary.json`、`reviewed-windows-performance-comparison.json`。
+每轮前后 `reviewed-performance-display-guards.json` 均确认 Q27G4Z／scale1；中途另有显示变化的记录未混入此批样本。旧 baseline 因已知 Explorer 标签写入风险不再重启，使用保留的匹配采样，不声称新做了交错 A/B。
+
+| 指标（GUI＋daemon 内存／CPU） | baseline median | candidate median | 成本变化 | 独立样本数 baseline／candidate |
+| --- | ---: | ---: | ---: | ---: |
+| producer drain，ms | 116.7022 | 118.5506 | +1.584% | 5／15 |
+| redraw workload elapsed，ms | 4843.6184 | 4852.0646 | +0.174% | 5／15 |
+| cold working set，bytes | 147705856 | 152086528 | +2.966% | 3／3 |
+| cold private，bytes | 140646400 | 137811968 | −2.015% | 3／3 |
+| load working set，bytes | 180166656 | 185876480 | +3.169% | 1／3 cohorts |
+| load private，bytes | 175075328 | 172591104 | −1.419% | 1／3 cohorts |
+| load CPU，CPU 秒／墙钟秒 | 0.091638 | 0.092809 | +1.278% | 1／3 cohorts |
+| idle CPU，CPU 秒／墙钟秒 | 0.017006 | 0.013913 | 绝对量评估 | 3／3 cohorts |
+
+已测成本／内存 median 均未出现大于 5% 的退化；drain baseline 范围 114.9517–120.1379 ms、candidate 114.4956–124.3944 ms，redraw 分别为 4532.3557–5030.0253 ms 与 4686.0219–5100.1093 ms，完整 spread 保留，不挑最快样本。
+idle CPU baseline 范围 0.014704–0.024773、candidate 0.010045–0.016247 CPU 秒／墙钟秒，按绝对用量和静态重复采样评估，不放大近零相对比例。load 基线只有一个独立 cohort，不能据此宣称该项已完成同等强度的重复噪声判别。
+producer drain／workload elapsed／FPS 不等于 CPU paint、GPU frame time 或物理显示延迟；没有保证提速，也没有 input-to-photon 数据。构建时间与 exe 尺寸单独报告，cache footprint 未测，不作为运行时改善证据。
+
+#### 仍阻塞或未验证
+
+- **blocked：**真实 IME preedit／commit／candidate 没有可证明的后台路线；不主动申请前台，不用 Unicode 注入替代。隔离实例明确显示 `rust-analyzer not installed`，未出现补全候选；系统 shim 的版本输出不能替代该实例可用的 LSP，没有为验收安装工具。
+- **工具路线限制：**旧阶段后台 `Ctrl+End` 仅执行 End、`Ctrl+C` 插入 `c`，不算快捷键成功；后来通过真实菜单证明选择／复制。自绘字段的 `el.type`、`el.press` 曾自动 fallback 到工具许可的 takeover，Ctrl+F／Ctrl+S 的焦点归还未确认，不称全程纯后台或快捷键／焦点恢复通过；没有主动 `raise`／申请前台控制，失败路线和用户剪贴板恢复记录保留。
+- **unverified：**多 DPI、未测的材质激活状态／任意桌面对比度、所有嵌套对话框／通知交互及焦点恢复、物理输入／显示延迟、实际安装／系统注册／发布；不能把本轮有限像素矩阵或其他平台证据推广为完整通过。
+- macOS SDK／实窗／IME／Spaces／Retina／性能仍由 #167 真实 Mac 验收；Linux #173 独立记录，不因 Windows build 通过而推定 Unix 已验收。工单关闭仅表示维护者接受本轮实现交付，不将上述 blocked／unverified 项改记为 passed；任何正确性回归无论百分比均阻断对应验收。
+
 
 ### 根布局与窗口控件所有权
 

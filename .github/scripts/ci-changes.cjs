@@ -19,6 +19,7 @@ const sharedReleaseInputs = new Set([
   '.github/scripts/assert-static.sh',
   '.github/scripts/assert-macho.sh',
   '.github/scripts/assert-no-vcruntime.ps1',
+  '.github/scripts/select-macos-sdk.sh',
   '.github/scripts/server-artifact.cjs',
   '.github/scripts/ci-server-reuse.cjs',
 ]);

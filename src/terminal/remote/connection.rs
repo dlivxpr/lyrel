@@ -163,6 +163,7 @@ impl PaneConnection {
                 &mut KeyboardStacks::default(),
                 Some(proxy.parse_state.history_limit.load(Ordering::Relaxed)),
             )
+            .with_presentation(Some(&proxy.parse_state.presentation))
             .reset_state();
         }
         // The grid was just reset, so every image anchor now points nowhere.
@@ -268,7 +269,7 @@ impl PaneConnection {
         self.synced_size = true;
         self.size = size;
         self.synced_cell = cell;
-        *proxy.parse_state.paint_cursor.lock().unwrap() = None;
+        proxy.parse_state.presentation.lock().unwrap().cursor = None;
         if !echoed {
             let local_conpty = local_conpty.load(Ordering::Relaxed);
             let shell_redraws = !local_conpty
@@ -276,12 +277,14 @@ impl PaneConnection {
                     .lock()
                     .map(|s| s.active && s.at_prompt)
                     .unwrap_or(false);
-            crate::terminal::prompt_reflow::resize(
-                &mut term.lock(),
-                size,
-                shell_redraws,
-                local_conpty,
-            );
+            let mut term = term.lock();
+            crate::terminal::prompt_reflow::resize(&mut term, size, shell_redraws, local_conpty);
+            proxy
+                .parse_state
+                .presentation
+                .lock()
+                .unwrap()
+                .resize(term.columns());
         }
 
         let win = win_size(size, cell_w, cell_h);

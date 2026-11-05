@@ -105,6 +105,10 @@ jobs:
           node-version: '22'
           package-manager-cache: false
 
+      - name: Select and verify macOS SDK 26 or newer
+        if: runner.os == 'macOS'
+        run: bash .github/scripts/select-macos-sdk.sh
+
       # GUI 使用 registry 的 gpui-kit；Windows SDK 由 runner 提供。
       # Linux headless 保留 GSSAPI 的 MIT Kerberos 构建依赖，不安装 GUI 库。
       - name: Install Linux system dependencies

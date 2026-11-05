@@ -17,7 +17,7 @@
 //!   must not read capabilities nothing here renders. DA2 keeps the exact
 //!   bytes the pane has always answered rather than Rio's version number.
 //! - `report_version` (XTVERSION): previously met with silence, and a pane
-//!   does not start answering "rio 0.5.28" because the parser changed.
+//!   does not start answering Rio's version because the parser changed.
 //! - `cells_size_pixels` / `text_area_size_pixels`: geometry is answered once
 //!   by the daemon using the controller's device-pixel resize metrics, including
 //!   when no GUI is attached. A local mirror must not send a second reply.
@@ -72,6 +72,7 @@ pub(super) struct ParseBridge<'a, T: EventListener> {
     proxy: T,
     keyboard: &'a mut KeyboardStacks,
     history_limit: Option<usize>,
+    presentation: Option<&'a std::sync::Mutex<super::presentation::ParsePresentation>>,
 }
 
 impl<'a, T: EventListener> ParseBridge<'a, T> {
@@ -86,7 +87,16 @@ impl<'a, T: EventListener> ParseBridge<'a, T> {
             proxy,
             keyboard,
             history_limit,
+            presentation: None,
         }
+    }
+
+    pub(super) fn with_presentation(
+        mut self,
+        presentation: Option<&'a std::sync::Mutex<super::presentation::ParsePresentation>>,
+    ) -> Self {
+        self.presentation = presentation;
+        self
     }
 
     fn reply(&self, text: impl Into<String>) {
@@ -253,6 +263,11 @@ impl<T: EventListener> Handler for ParseBridge<'_, T> {
 
     fn set_horizontal_tabstop(&mut self) {
         self.inner.set_horizontal_tabstop();
+        if let Some(presentation) = self.presentation {
+            let mut facts = presentation.lock().unwrap();
+            facts.resize(self.inner.columns());
+            facts.set_tab_stop(self.inner.grid.cursor.pos.col.0);
+        }
     }
 
     fn scroll_up(&mut self, rows: usize) {
@@ -308,12 +323,28 @@ impl<T: EventListener> Handler for ParseBridge<'_, T> {
     }
 
     fn clear_tabs(&mut self, mode: TabulationClearMode) {
+        if let Some(presentation) = self.presentation {
+            let mut facts = presentation.lock().unwrap();
+            facts.resize(self.inner.columns());
+            match &mode {
+                TabulationClearMode::Current => {
+                    facts.clear_tab_stop(self.inner.grid.cursor.pos.col.0)
+                }
+                TabulationClearMode::All => facts.clear_all_tab_stops(),
+            }
+        }
         self.inner.clear_tabs(mode);
     }
 
     fn reset_state(&mut self) {
         *self.keyboard = KeyboardStacks::default();
         self.inner.reset_state();
+        if let Some(presentation) = self.presentation {
+            presentation
+                .lock()
+                .unwrap()
+                .reset_tabs(self.inner.columns());
+        }
         if let Some(limit) = self.history_limit {
             self.inner.grid.update_history(limit);
         }

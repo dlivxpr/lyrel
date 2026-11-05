@@ -7,8 +7,20 @@
 
 ## [Unreleased]
 
+### 依赖升级
+
+- #171：`rio-vt`／`rio-graphics`／`rio-unicode` 原子升级到正式 registry 的精确 `=0.5.29`，同步锁定传递 `rio-grapheme-width 0.5.29`，保留关闭 VT 默认 features、原 PTY／daemon 和无 GPUI 的共享核心。所有消费者迁到立即解析、终端侧同步状态；完整 Fast／Rio 组合由集中检查点重新构建与验收，不沿用 #170 的结果冒称已通过。
+- #170：仅通过 `gpui-kit =0.9.0` 的官方 `gpui-fast` feature 切换桌面后端，锁文件采用 Fast `0.1.13` 家族；保留语言／测试支持、HTTP `=0.3.11`、Rio `0.5.28`、单一终端帧所有权与原平台完整委派，不新增直接 engine 依赖、产品 Pre 回退或热路径探针。开发 profile 优化 Fast 链；macOS CI／Release 显式选择并记录实际 SDK 26+，默认 deployment target 与 bundle 继续为 macOS 15。原生行为、终端 retention、材质与同条件 Release 性能由集中检查点实际验收，未执行项不记为通过；macOS 原生结果仍由 #167 提供。
+- #170 Windows 检查点已完成完整 Debug 套件（`5155 passed / 55 ignored`）、Release 构建、原生终端／Markdown 输入复制查找／主题字体缩放／窗口恢复／正式 HTTP 检查与 GUI 重开保留 daemon 会话。临时生产 Root／TerminalView retention 诊断未发现静态 pane 每帧重建，保留现有 buffer owner／paint phase；原生透明空白采样与升级前逐通道一致。以上不替代最终 Rio 组合、全部性能门槛或 #167 macOS 实机证据。
+
 ### 修复
 
+- #168 审查修复：同步 hold 的等面积 resize 与 ESU／期限早于有序 `Size` 的过渡均保留 committed 行列与命中几何，竞争 fallback 不按新列数解释旧帧；relink 首个 hold 没有旧 snapshot 时按新 surface 呈现空帧，避免残留几何越界。可见复制按 committed 默认／自定义 tab stops 去除 NUL 展开后缀，保留 stop 后间隔、TBC／RIS／resize 增长、内部空行与折行空格；丢弃尾空行／全空选区的多余分隔，Lines 单独保留一个末尾换行。presented 拖选不再争抢实时 reader 锁。真实 Root／TerminalView 回归覆盖过渡、剪贴板及 Unicode／空白边界；held 不复刻上游旧 LeadingSpacer 复制读入前行字符的 quirk，normal 路径保持不变。受控持锁探针完成 red／green 后移出永久测试，原生和完整平台验收仍由集中检查点负责。
+- #168／#172：Windows 非默认配置实例在启动、配置重载或语言切换时不再刷新当前账号的全局 Explorer 菜单标签；以 Windows 返回的实际默认 RoamingAppData／lyrel 为边界，默认实例与显式指定同一默认目录的行为保留，不改变注册／卸载。含修复的真实隔离实窗前后，两项真实 HKCU 键及子键的全部值／原生时间戳和用户 PATH 原始值种类／哈希均未变，只读比较、没有恢复注册项。原生 SSH 验收夹具同时明确关闭 PATH 安装／更新并隔离平台、agent 配置与继承端点，不改变生产默认配置。
+- #171：在实际终端 snapshot／paint 发布点保留上次 committed 文字、光标、图片及可见交互，避免焦点／主题／光标重绘泄漏半帧。reader 通过现有链路读取期限独立执行 150 ms fail-safe，处理每次 BSU 重启、结束、resize／reset、命令边界、replay／relink 与退出。协议回复、输入模式及 daemon 图片锚点继续实时推进；CLI `capture --plain` 无 GUI 也捕获已收到的未闭合同步输出。补充 Root paint、可见复制、安静流期限、分片和真实 CLI／daemon／PTY 回归；未执行的测试、原生与性能项目保留为集中验收项，macOS 交由 #167。
+- #171 组合回归反馈修正共享 Unicode／换行场景：显式设置 DECAWM，使 Windows raw sender 与 Unix 使用相同 autowrap 前提，不改生产解析或屏蔽字符差异；呈现行提取沿用 renderer 与既有测试的 packed NUL→空格约定，保留内部分栏，仅由逻辑范围比较裁掉行尾填充，不改生产字形。可见图片删除改为检查实际 TerminalElement 的存活像素、新 paint 和已提交 display list，不再要求无关祖先 view 的 render 计数增加。隐藏 pane 的无重绘与返回当前像素断言保留，修复后的完整结果仍由集中验收记录。
+- #170 首次 Fast 编译发现搜索行的 `IntoElement` derive 仅从 Fast prelude 导入，展开后引用未声明的 `gpui::` 路径；改为显式使用 Kit 根提供的官方 facade-aware derive，保留原搜索行、ListDelegate、选择与无障碍行为，不添加 engine 依赖、alias 或手写 trait shim。修复后的编译与原有行为套件由集中检查点验证。
+- #169 检查点修复真实 PTY 图片消费者、共享 retention 及原生 SSH 消费者的启动等待：同时从首个 `Snapshot` 与后续 `Output` 读取原有就绪标记，避免快速 sender 在订阅安装前已输出时误超时。保留真实 daemon／PTY、标记、原期限及后续像素／几何断言，不修改生产协议、不增加重试或跳过；本轮回归结果由集中验收记录。
 - OpenCode 原生 API 启动失败保留底层 OS error，便于区分缺失文件、权限和资源错误；Unix shell 夹具改由独立写入进程持有可写描述符，避免并发 fork 继承后触发 Linux `ETXTBSY`。大 JSON 的真实 shell／Host 历史回归与私有文件捕获保持不变，不增加生产重试或跳过测试。
 - 修复隐藏 SCM、最后持有者回收状态后，全局暂存、提交与推送等命令静默失效的问题；缓存缺失时通过原 Host 后台读取本次命令所需状态，不恢复常驻缓存或监听，读取失败显示通知，过期连接的结果不能触发操作。保留原确认、网络并发上限及组合命令顺序。
 - 终端重挂载与竞争 attach 的真实 PTY 回归改用显式无用户 profile 的 shell 和独立临时目录，先等待 shell 输出的就绪标记，再单次输入命令；完整输出行与隐藏期间已进入回放的数据取代命令文本回显和固定等待。保留屏幕、几何及控制席位断言，不修改生产重挂载逻辑、不增加重试或延长超时。
@@ -49,6 +61,9 @@
 
 ### 验证入口
 
+- #172 最终生产候选 `ead83a2` 已实际通过 Windows 格式、locked workspace all-features（5166 顶层标准测试、另 CLI E2E 26，56 ignored 不算通过）、updater 及 Release；updater 30 项已含于标准总数，8 个嵌套 helper 不重复累计。真实 musl server、Windows ZIP／Inno 包布局／版本／ConPTY 与三个自有 exe 的 VC++ runtime 检查通过，没有运行安装器或发布。
+- #172 最终 Release 的本地 ConPTY 分片／Unicode／alternate-screen、可见选择复制、同步期 CLI live／GUI held、静默释放、编辑器／Markdown／Diff、明暗与自定义主题／字号／侧栏／窗口控件、同 daemon／PTY 重开及真实 pinned-key SSH 双图片／新 GUI 恢复取得原生证据。同条件重复采样的已测成本／内存 median 均未超过 5% 退化；load 基线仅一个独立 cohort、旧 baseline 未重新交错运行，指标不等于 GPU 或物理延迟，不保证提速。真实 IME、隔离 LSP、远端编辑输入／保存、部分快捷键与焦点恢复等仍 blocked／unverified；维护者决定以实现交付收尾并随 PR 合并关闭 #168／#172，不将这些项目记作通过。完整身份、原始证据和边界见 `docs/design-system.md`，macOS 仍由 #167 单独验收。
+- #172 最终 scale1 的受控黑白／checker 像素验证 opaque、opacity0.88 的 Off 及 Light／Dark 的 Blur／Mica／Acrylic 往返，字号保留；终端／两侧栏透出逐 RGB 与升级前相同，Blur 降低同一空白 ROI 的 checker 方差。Mica 的恒定 patch 不解释为实时桌面 blur，不推广到多 DPI／任意背景或 macOS；最初文件名与实际主题不一致的样本按 manifest 明确区分。
 - native SSH 增加真实 Linux daemon 的动画／partial edit／compose／单帧删除／relative 与 Unicode 共享版本／隐藏多消费者／无 consumer 变更／fresh 恢复／replay-live cutover 契约，补充拒收／取消 grant／observer 控制权／不兼容方言及 Linux file／temp／POSIX shm 与 nested locality 实连入口。新增非 shipping `native_ssh_surface` 执行器，通过普通远程 workspace／machine tree 打开标准 GUI，复用同一全尺寸双 pane workload 并分别记录初始与 steady 的真实 SSH 图形有效负载计数；不新增 renderer／协议替身／GUI flag。当前 Linux 实连的 4 项 transport、4 项 rooted consumer，以及标准 GUI 的 relative／mutations／双 pane 1080p capacity 均已执行；该轮基础 transport 使用 `--skip nested_ssh`，随后第二层 nested 实连单独执行并通过，未将其混入四项基础计数。每 pane 60 个 Resource 包后 steady／fresh 仅 Select 增长，fresh 恢复与 delete 实图通过。修复空 graphics replay 的 sampler 启动屏障和隐藏删除的剩余间隔，不宣称 SSH 60 fps 或 macOS 通过。
 - 正式 OpenCode 2.2.0 隔离保存对话夹具使用公开 import／resume／export，无 prompt／推理；完整目标保留用户附件、tool-result、每卡三图、旧消息分页、滚出返回、native tab 删除与重挂载及 disabled 策略。中央已完成 546 条消息 prepare 和 enabled／disabled consumer；独立 placement instance 计数保留官方 16×8／gap=1、容器文本与 viewport 边界，同色／同原点放置、同 ID 替换和精确删除均已覆盖。正式 2.2.0 的 production consumer 与 Windows 原生首尾六图、卡片几何、分页、滚离返回、tab 卸载／重挂载及显式禁图均通过，公开 export 未变、零模型用量；macOS 与真实 SSH 组合未验证。
 - #151 集成验收：`cargo test --workspace --locked`、WSL `cargo test --locked --workspace --exclude lyrel --all-features`、`cargo test --locked --features updater --bin lyrel-updater`、`cargo fmt --check` 与 Host 边界检查通过；WSL 使用隔离 Node `22.23.4` 执行 TypeScript bridge。正式 `omp/18.14.1` 的 pictures／budget／disabled 三项、pi `1.4.0` 两项和 OpenCode `2.2.0` 两项真实 PTY／生产消费者均通过，omp 审计零推理。真实 SSH 另执行 4 项基础 transport、4 项 rooted consumer 和原生 relative／mutations／capacity，第二层 nested 单独实跑通过。审查修复后已重跑 Windows／WSL 全套件、三项正式 agent 组合和全尺寸场景；管理员 PresentMon＋WGC 交叉记录约 60 fps，1×／1.25×／1.5×／2× DPI／z-order 通过，正式 pi 与 24 张 1080p 压力图片同屏且保留画面正确。input-to-photon 全部 NA，Kimi／Hermes 仅承诺普通 Kitty 输出而非历史回放；正式 agent 跨 SSH 未执行，macOS（#152）由用户后续自行验证。
@@ -65,6 +80,7 @@
 
 ### 依赖升级
 
+- #169：GUI 锁定正式 `gpui-kit =0.9.0`、配套 `gpui-pre 0.3.11` 与 `gpui-pre-reqwest-client =0.3.11`，保留 Pre 中间检查点、语言能力与测试支持，不切换 Fast／Rio。适配后台 Mermaid 测宽缓存的并发回调边界，并补全 macOS 平台电源模式与原子凭据写入委派；保留已有 Root 和主题同步。构建、原生工作流与性能验收由 #168 分阶段记录，macOS 仍需 #167 实机证据，不沿用此前验收结论。
 - 合并 #131 的九项 minor／patch 升级，以及 #132 `rusqlite 0.41.0`、#133 `russh 0.65.0`、#134 `sysinfo 0.39.6`、#135 `parking_lot 0.13.0`；保持正式 registry 依赖和锁定构建，不引入第三方源码补丁。
 
 

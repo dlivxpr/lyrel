@@ -1,12 +1,11 @@
-//! macOS platform wrapper: the home of lyrel's `font_thicken` switch now that
-//! the published gpui 0.3.9 has no `set_glyph_dilation` entry point (the fork
-//! carried one; gpui-pre-apple only reads the user's `AppleFontSmoothing`
-//! preference).
+//! macOS platform wrapper: the home of lyrel's `font_thicken` switch.
+//! Kit selects gpui-fast-apple, which only reads the user's
+//! `AppleFontSmoothing` preference and exposes no dilation setter.
 //!
 //! The switch must reach the rasterizer to mean anything: gpui asks the
 //! platform text system for a dilation per glyph color
 //! (`Window::paint_glyph` → `TextSystem::glyph_dilation_for_color`,
-//! gpui-pre-0.3.9 window.rs:4847), the value rides in `RenderGlyphParams`
+//! gpui-fast 0.1.13's glyph paint path), the value rides in `RenderGlyphParams`
 //! into both the sprite-atlas cache key and `rasterize_glyph`, so returning 0
 //! there is exactly the fork's `GLYPH_DILATION = false` behavior — stroke
 //! thickening off for lyrel's text, nothing else touched. In particular the
@@ -33,8 +32,8 @@ use gpui_kit::{
     FontId, FontMetrics, FontRun, ForegroundExecutor, GlyphId, GraphicalEnvironment, Hsla, Keymap,
     LineLayout, Menu, MenuItem, MissingGlyphSink, OwnedMenu, PathPromptOptions, Pixels, Platform,
     PlatformDisplay, PlatformGestures, PlatformInfo, PlatformKeyboardLayout,
-    PlatformKeyboardMapper, PlatformTextSystem, PlatformWindow, RenderGlyphParams, Result,
-    ScreenCaptureSource, Size, SystemNotification, SystemNotificationResponse, Task,
+    PlatformKeyboardMapper, PlatformTextSystem, PlatformWindow, PowerMode, RenderGlyphParams,
+    Result, ScreenCaptureSource, Size, SystemNotification, SystemNotificationResponse, Task,
     TextRenderingMode, ThermalState, WindowAppearance, WindowButtonLayout, WindowParams,
     WindowingRequest,
 };
@@ -371,6 +370,14 @@ impl Platform for LyrelPlatform {
         self.inner.prevent_idle_sleep(reason)
     }
 
+    fn power_mode(&self) -> PowerMode {
+        self.inner.power_mode()
+    }
+
+    fn on_power_mode_change(&self, callback: Box<dyn FnMut()>) {
+        self.inner.on_power_mode_change(callback)
+    }
+
     fn set_app_identity(&self, identifier: &str, name: &str) {
         self.inner.set_app_identity(identifier, name)
     }
@@ -444,6 +451,16 @@ impl Platform for LyrelPlatform {
 
     fn write_credentials(&self, url: &str, username: &str, password: &[u8]) -> Task<Result<()>> {
         self.inner.write_credentials(url, username, password)
+    }
+
+    fn write_credentials_if_not_exists(
+        &self,
+        url: &str,
+        username: &str,
+        password: &[u8],
+    ) -> Task<Result<bool>> {
+        self.inner
+            .write_credentials_if_not_exists(url, username, password)
     }
 
     fn read_credentials(&self, url: &str) -> Task<Result<Option<(String, Vec<u8>)>>> {

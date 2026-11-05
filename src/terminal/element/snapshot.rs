@@ -14,8 +14,8 @@ use rio_vt::selection::SelectionRange;
 use super::colors::{dim_cell, dim_fg, resolve, to_hsla};
 use super::decorations::{cursor_style_from_shape, link_underline_color};
 use super::{
-    GridCursor, GridSnapshot, PaintColors, RenderCell, TerminalElement, UnderlineKind,
-    osc8_underline,
+    GridCursor, GridSnapshot, PaintColors, RenderCell, SnapshotUnavailable, TerminalElement,
+    UnderlineKind, osc8_underline,
 };
 use crate::core::config::Config;
 
@@ -57,6 +57,11 @@ impl<'a, T: rio_vt::event::EventListener> CellPainter<'a, T> {
         if matches!(cell.wide(), Wide::Spacer | Wide::LeadingSpacer) {
             return RenderCell {
                 spacer: true,
+                wide: cell.wide(),
+                wrapped: cell.contains_cell_flag(rio_vt::crosswords::square::CellFlags::WRAPLINE),
+                selected: self
+                    .selection
+                    .is_some_and(|selection| selection.contains(position)),
                 ..RenderCell::default()
             };
         }
@@ -122,6 +127,9 @@ impl<'a, T: rio_vt::event::EventListener> CellPainter<'a, T> {
             .map(|extra| extra.zerowidth.as_slice())
             .filter(|marks| !marks.is_empty())
             .map(Box::from);
+        rendered.wide = cell.wide();
+        rendered.wrapped = cell.contains_cell_flag(rio_vt::crosswords::square::CellFlags::WRAPLINE);
+        rendered.hyperlink = extras.and_then(|extra| extra.hyperlink.clone());
         // Placeholder identity is terminal data, not a font glyph. Even a
         // missing/deleted prototype leaves its cell background but no PUA ink.
         if rendered.c == '\u{10eeee}' {
@@ -167,12 +175,14 @@ impl TerminalElement {
         dim: f32,
         under: Rgba,
         must_block: bool,
-    ) -> Option<GridSnapshot> {
+        has_previous: bool,
+    ) -> Result<GridSnapshot, SnapshotUnavailable> {
         let mut cursor: Option<GridCursor> = None;
         let mut sliver: Option<Vec<RenderCell>> = None;
         let mut any_selected = false;
         let display_offset;
         let history_size;
+        let selection_is_lines;
         let mut placeholders = Vec::new();
         let prompt_shape = self.prompt_cursor_shape(cx);
         {
@@ -201,20 +211,40 @@ impl TerminalElement {
                 // where the previous grid is the wrong shape. Both are rare and
                 // neither is in the steady state.
                 None if must_block => term.lock(),
-                None => return None,
+                None => return Err(SnapshotUnavailable::Contended),
             };
+            // An unrelated focus/theme/caret repaint must reuse the complete
+            // preceding picture, even though Rio has already parsed newer cells.
+            // Check before touching the pane's sole retained cell buffer.
+            if term.synchronized_output() {
+                return Err(SnapshotUnavailable::Synchronized);
+            }
+            // A completed hold does not acknowledge a requested resize. Only
+            // the ordered Size changes the VT addressing; its Wakeup will
+            // publish the new frame without a contention retry loop.
+            if has_previous && (term.screen_lines(), term.columns()) != (rows, cols) {
+                return Err(SnapshotUnavailable::AwaitingSize);
+            }
             // After the lock, not before: an early return must leave the
             // previous frame's cells intact for the caller to paint again.
             buf.resize_with(rows * cols, RenderCell::default);
             display_offset = term.display_offset() as i32;
             history_size = term.grid.history_size();
+            selection_is_lines = term
+                .selection
+                .as_ref()
+                .is_some_and(|selection| selection.ty == rio_vt::selection::SelectionType::Lines);
             let selection = term
                 .selection
                 .as_ref()
                 .and_then(|selection| selection.to_range(&term));
 
+            let terminal = &self.view.read(cx).terminal;
+            let presentation = terminal.presentation_facts();
             let mut cur = term.cursor();
-            if let Some(position) = self.view.read(cx).terminal.paint_cursor_position() {
+            if terminal.is_local_conpty()
+                && let Some(position) = presentation.cursor
+            {
                 cur.pos = position;
             }
             let cursor_row = cur.pos.row.0 + display_offset;
@@ -254,7 +284,8 @@ impl TerminalElement {
                             _ => inverse_runs.push((col, 1)),
                         }
                     }
-                    let rendered = painter.snapshot(position, cell);
+                    let mut rendered = painter.snapshot(position, cell);
+                    rendered.tab_stop = presentation.is_tab_stop(col);
                     any_selected |= rendered.selected;
                     buf[row * cols + col] = if dim < 1. {
                         dim_cell(rendered, dim, under)
@@ -283,6 +314,7 @@ impl TerminalElement {
                 {
                     let position = Pos::new(line, Column(col));
                     let mut rc = painter.snapshot(position, cell);
+                    rc.tab_stop = presentation.is_tab_stop(col);
                     if dim < 1. {
                         rc = dim_cell(rc, dim, under);
                     }
@@ -291,6 +323,7 @@ impl TerminalElement {
                 }
                 sliver = Some(row_buf);
             }
+            drop(presentation);
 
             let row = cursor_row;
             let col = cur.pos.col.0;
@@ -313,21 +346,33 @@ impl TerminalElement {
                         .unwrap_or_else(|| cursor_style_from_shape(cur.content)),
                 });
             }
+            // Text, cursor, placeholder runs and the daemon-owned placement
+            // display list are acquired at one stream position. The reader
+            // applies graphics under this same terminal guard.
+            let images = self
+                .view
+                .read(cx)
+                .terminal
+                .images()
+                .commit_with_placeholders(&placeholders);
+            drop(term);
+            let (any_match, any_current) =
+                self.flag_search_matches(buf, rows, cols, display_offset, cx);
+            self.flag_hovered_link(buf, rows, cols, display_offset, cx);
+            return Ok(GridSnapshot {
+                cursor,
+                sliver,
+                any_selected,
+                selection_is_lines,
+                any_match,
+                any_current,
+                display_offset,
+                history_size,
+                scroll_shift: 0.,
+                held: false,
+                images,
+            });
         }
-
-        let (any_match, any_current) =
-            self.flag_search_matches(buf, rows, cols, display_offset, cx);
-        self.flag_hovered_link(buf, rows, cols, display_offset, cx);
-        Some(GridSnapshot {
-            cursor,
-            sliver,
-            any_selected,
-            any_match,
-            any_current,
-            display_offset,
-            history_size,
-            placeholders,
-        })
     }
 
     fn flag_hovered_link(
@@ -734,9 +779,10 @@ mod tests {
                             cx,
                             1.,
                             Rgba::default(),
-                            true
+                            true,
+                            false,
                         )
-                        .is_some()
+                        .is_ok()
                 );
             });
         };
@@ -764,5 +810,69 @@ mod tests {
             assert!(cell.marks.is_none());
             assert!(!cell.selected && !cell.link_hover && !cell.match_hit && !cell.match_current);
         }
+    }
+
+    #[gpui_kit::test]
+    fn first_snapshot_never_overrides_an_open_presentation_hold(cx: &mut gpui_kit::TestAppContext) {
+        let (app, mut vcx, _stream) = crate::ui::app::test_window::harness_with_pane(cx);
+        let view = app.update_in(&mut vcx, |app, _, _| match &app.tabs[0].pane.leaves()[0] {
+            crate::ui::pane::PaneSlot::Ready(view) => view.clone(),
+            _ => panic!("the fixture must have a terminal"),
+        });
+        let terminal = cx.update(|cx| view.read(cx).terminal.term.clone());
+        let (rows, cols) = {
+            let mut term = terminal.lock();
+            rio_vt::performer::handler::Processor::default()
+                .advance(&mut *term, b"\x1b[?2026h\x1b[Hfirst-hidden");
+            (term.screen_lines(), term.columns())
+        };
+        let element = TerminalElement::new(view);
+        let mut cells = Vec::new();
+        cx.update(|cx| {
+            let colors = PaintColors::resolve(cx.theme(), cx);
+            assert!(matches!(
+                element.build_grid(
+                    &colors,
+                    &mut cells,
+                    rows,
+                    cols,
+                    false,
+                    cx,
+                    1.,
+                    Rgba::default(),
+                    true,
+                    false,
+                ),
+                Err(SnapshotUnavailable::Synchronized)
+            ));
+            assert!(
+                cells.is_empty(),
+                "must_block is not permission to publish a partial first frame"
+            );
+            terminal.lock().end_sync_update();
+            let frame = element
+                .build_grid(
+                    &colors,
+                    &mut cells,
+                    rows,
+                    cols,
+                    false,
+                    cx,
+                    1.,
+                    Rgba::default(),
+                    true,
+                    false,
+                )
+                .unwrap();
+            assert!(
+                cells
+                    .iter()
+                    .take(12)
+                    .map(|cell| cell.c)
+                    .collect::<String>()
+                    .starts_with("first-hidden")
+            );
+            assert!(frame.cursor.is_some());
+        });
     }
 }

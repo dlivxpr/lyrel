@@ -107,8 +107,8 @@ pub struct EventProxy {
 struct ParseState {
     replaying: AtomicBool,
     history_limit: AtomicUsize,
-    /// ConPTY's transient visible caret, never a VT parsing position.
-    paint_cursor: Mutex<Option<rio_vt::crosswords::pos::Pos>>,
+    /// Cursor compensation and copy tab stops, sampled under the VT guard.
+    presentation: Mutex<super::presentation::ParsePresentation>,
 }
 
 impl EventProxy {
@@ -730,7 +730,7 @@ impl RemoteTerminal {
             parse_state: Arc::new(ParseState {
                 replaying: AtomicBool::new(false),
                 history_limit: AtomicUsize::new(user_config.scrollback_limit),
-                paint_cursor: Mutex::new(None),
+                presentation: Mutex::new(super::presentation::ParsePresentation::new(size.cols)),
             }),
         };
 
@@ -854,9 +854,16 @@ impl RemoteTerminal {
         self.local_conpty.load(Ordering::Relaxed)
     }
 
+    pub(super) fn presentation_facts(
+        &self,
+    ) -> std::sync::MutexGuard<'_, super::presentation::ParsePresentation> {
+        self.proxy.parse_state.presentation.lock().unwrap()
+    }
+
+    #[cfg(test)]
     pub(super) fn paint_cursor_position(&self) -> Option<rio_vt::crosswords::pos::Pos> {
         if self.is_local_conpty() {
-            *self.proxy.parse_state.paint_cursor.lock().unwrap()
+            self.proxy.parse_state.presentation.lock().unwrap().cursor
         } else {
             None
         }
@@ -906,7 +913,7 @@ impl RemoteTerminal {
         let history_origin = term.grid.lines_evicted() as i64 + term.grid.history_size() as i64;
         self.images
             .clear_presentation(history, rows, history_origin);
-        *self.proxy.parse_state.paint_cursor.lock().unwrap() = None;
+        self.proxy.parse_state.presentation.lock().unwrap().cursor = None;
         false
     }
 

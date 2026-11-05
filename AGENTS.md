@@ -90,7 +90,7 @@ Windows 下此 Bash 检查需 LF 工作树：CRLF 脚本会报 `$'\r': command n
 ## 运行时与工具偏好
 
 - Rust edition 2024，CI 使用 stable；仓库未固定具体 toolchain/MSRV。使用 Cargo 与现有 lockfile，不把本机 Rust 版本写成项目要求。
-- 第三方 Rust 依赖只使用正式 registry 发布包，不引入 Git、自定义第三方 path 或 `[patch]`；自有 workspace path 保留。不通过复制第三方内部实现、修改下载源码或构建时补丁绕过。GUI 经 `gpui-kit` 使用 `gpui-pre` 路线，GUI 与 CLI 共用正式 `rio-vt`；修改依赖前核对 manifest、锁文件与 `docs/getting-started/installation.mdx`，不启用 `gpui-fast`。
+- 第三方 Rust 依赖只使用正式 registry 发布包，不引入 Git、自定义第三方 path 或 `[patch]`；自有 workspace path 保留。不通过复制第三方内部实现、修改下载源码或构建时补丁绕过。GUI 仅经 `gpui-kit` 的官方 `gpui-fast` feature 选择 Fast，保留 Kit facade 导入与测试宏；GUI 与 CLI 共用正式 `rio-vt`。修改依赖前核对 manifest、锁文件与 `docs/getting-started/installation.mdx`，不添加直接 engine 依赖或双后端产品开关。
 - Git CLI 仍用于产品的 Git 工作流，不再是 Cargo Git 依赖的拉取前提。Windows MSVC 已设 `+crt-static`，不要用 `RUSTFLAGS` 意外覆盖；ConPTY 先运行 `pwsh scripts/prepare-conpty.ps1`，共享核心的构建脚本只消费准备结果。Linux headless 的 GSSAPI 依赖与 `LIBGSSAPI_IMPL=mit` 见 `.github/workflows/ci.yml`；Windows/macOS 连接 Linux 的 SSH/SFTP、Host/PTY 与 WSL 接线不可因桌面退役删除。
 - 默认配置目录为 Unix 的 `~/.config/lyrel`、Windows 的 `%APPDATA%\lyrel`；覆盖顺序为 `--config-dir`、`LYREL_CONFIG_DIR`、便携模式、默认目录。调试与测试使用隔离目录，避免影响已安装实例。产品注入的 `TERM_PROGRAM` 值为 `lyrel`；标准环境变量键保持原样。
 

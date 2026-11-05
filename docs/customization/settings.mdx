@@ -427,6 +427,8 @@ SSH 主机单独保存在同一目录下的 `servers.json`。[servers.json →](
 
 可通过 `--config-dir` 或 `LYREL_CONFIG_DIR` 将整个目录（包括配置、主题和状态）移至其他位置。配置目录的优先级为：`--config-dir` > `LYREL_CONFIG_DIR` > Windows 便携模式的 `data` 目录 > 平台默认目录。
 
+`--config-dir` 不会自动关闭 CLI 的 PATH 安装或更新检查／下载。隔离验证实例应显式设置 `install_cli_on_path: false`、`check_for_updates: false`、`auto_download_updates: false`，并使用自有平台与 agent 配置目录、清除继承的 pane／workspace／control 端点；不能只替换 lyrel 配置目录就视为全部副作用已隔离。
+
 你可以手动编辑此文件；少数选项只能在文件中设置。有关每个配置键、类型及默认值，请参阅[配置参考](/reference/configuration)。
 
 <a id="how-it-handles-mistakes"></a>
@@ -452,7 +454,11 @@ SSH 主机单独保存在同一目录下的 `servers.json`。[servers.json →](
 
 切换选择后界面立即更新，并保存选择模式；`system` 不会被当时解析出的语言覆盖。下次启动重新读取系统偏好，运行期间不监听系统语言变化。已有明确保存的 `en`／`zh-CN` 保持原选择；旧日语、俄语和其他无效值回退英文，其他配置继续加载，仅加载不强制重写配置文件。
 
-设置、应用菜单、托盘和已注册的 Explorer 菜单标签随语言更新；这不会新增 Explorer 菜单注册。CLI 输出始终保持英文，shell 字符环境、终端文字、编程语言与 LSP 行为不变。
+设置、应用菜单和托盘随语言更新。Windows 已注册的 Explorer 菜单属于当前 Windows 账号，仅默认配置实例刷新其标签，不新增注册。已解析配置目录必须等于 Windows 为当前账号返回的默认 RoamingAppData 下的 `lyrel` 目录；显式指定同一默认目录仍会刷新。
+
+通过 `--config-dir`、`LYREL_CONFIG_DIR`、便携模式或环境重定向到其他目录的实例不刷新全局标签；仅覆盖 `APPDATA` 不能把隔离实例变成默认实例，无法确定默认目录时也不刷新。已有显式注册／卸载行为不变。
+
+CLI 输出始终保持英文，shell 字符环境、终端文字、编程语言与 LSP 行为不变。
 
 ```json
 { "gui_language": "system" }
