@@ -60,19 +60,35 @@ pub(super) fn agents_report_continuous_state_age(daemon: &Daemon) {
     collect_pane_output_until(&mut session, b"AGENT_AGE_READY");
     let pane = session.pane_id();
     let address = format!("%{pane}");
-    let state = || {
+    let state = |session: &mut lyrel_core::client::PaneSession| {
         let report = daemon.run_json(&["agents"]);
-        report["agents"]
+        if let Some(entry) = report["agents"]
             .as_array()
             .unwrap()
             .iter()
             .find(|entry| entry["pane_id"].as_u64() == Some(pane))
-            .expect("real OSC hooks reach the CLI agent list")
-            .get("state")
-            .unwrap()
-            .clone()
+        {
+            return entry.get("state").unwrap().clone();
+        }
+        // Diagnose the public lifecycle, not a guessed delay: Output is sent
+        // before the daemon commits its foreground and hook observations.
+        session.set_recv_timeout(Some(Duration::from_millis(250))).unwrap();
+        let mut lifecycle = Vec::new();
+        for _ in 0..64 {
+            match session.recv() {
+                Ok(DaemonMsg::Agent(agent)) => lifecycle.push(format!("Agent({agent:?})")),
+                Ok(DaemonMsg::AgentStatus(state)) => lifecycle.push(format!("AgentStatus({state:?})")),
+                Ok(DaemonMsg::Exited { code }) => lifecycle.push(format!("Exited({code:?})")),
+                Ok(_) => {}
+                Err(error) => {
+                    lifecycle.push(format!("receive ended: {error}"));
+                    break;
+                }
+            }
+        }
+        panic!("real OSC hooks reach the CLI agent list; pane={pane}; report={report}; public lifecycle={lifecycle:?}");
     };
-    let waiting = state();
+    let waiting = state(&mut session);
     assert_eq!(waiting["status"], "waiting");
     let since = waiting["since_ms"]
         .as_u64()
@@ -97,7 +113,7 @@ pub(super) fn agents_report_continuous_state_age(daemon: &Daemon) {
         std::thread::sleep(Duration::from_millis(20));
         daemon.run_ok(&["send", &address, command, "--enter"]);
         collect_pane_output_until(&mut session, b"AGENT_AGE_READY");
-        let current = state();
+        let current = state(&mut session);
         assert_eq!(current["status"], "waiting");
         assert_eq!(current["since_ms"], since);
         assert_eq!(
@@ -107,14 +123,14 @@ pub(super) fn agents_report_continuous_state_age(daemon: &Daemon) {
     }
     daemon.run_ok(&["send", &address, "finish", "--enter"]);
     collect_pane_output_until(&mut session, b"AGENT_AGE_READY");
-    let done = state();
+    let done = state(&mut session);
     assert_eq!(done["status"], "done");
     let done_since = done["since_ms"].as_u64().unwrap();
     assert!(done_since > since);
     std::thread::sleep(Duration::from_millis(20));
     daemon.run_ok(&["send", &address, "batch", "--enter"]);
     collect_pane_output_until(&mut session, b"AGENT_AGE_READY");
-    let next = state();
+    let next = state(&mut session);
     assert_eq!(next["status"], "done");
     assert!(next["since_ms"].as_u64().unwrap() > done_since);
     assert_eq!(next["turns"].as_u64(), Some(2));
