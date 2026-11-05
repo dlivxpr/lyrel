@@ -303,6 +303,8 @@ pub struct TerminalView {
     git_prompt_cycle: u64,
     pub(super) input: super::prompt_input::PromptInput,
     history: TerminalHistory,
+    /// Native shell-channel history waits for this pane's SSH connection.
+    native_history_seed_pending: bool,
     pane_history_seed: Option<(crate::ui::host_ops::HostId, u64)>,
     completion: TerminalCompletion,
     integration_notice: Option<String>,
@@ -757,6 +759,7 @@ impl TerminalView {
             git_prompt_cycle: 0,
             input: super::prompt_input::PromptInput::new(prompt_editor),
             history: TerminalHistory::new(),
+            native_history_seed_pending: false,
             pane_history_seed: None,
             completion: TerminalCompletion::default(),
             integration_notice: None,

@@ -4756,3 +4756,8 @@ mod key_tests {
         }
     }
 }
+
+#[cfg(test)]
+mod native_ssh_menu_tests {
+    include!("native_ssh_menu_tests.rs");
+}

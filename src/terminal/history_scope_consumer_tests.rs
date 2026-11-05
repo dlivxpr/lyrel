@@ -282,3 +282,7 @@ fn a_command_recorded_while_history_loads_remains_searchable(cx: &mut TestAppCon
         );
     });
 }
+
+mod native_ssh_history_consumer_tests {
+    include!("native_ssh_history_consumer_tests.rs");
+}
