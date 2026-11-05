@@ -38,6 +38,11 @@ pub(super) fn fixture() {
 }
 
 pub(super) fn agents_report_continuous_state_age(daemon: &Daemon) {
+    // Foreground probing must agree with the synthetic OMP hooks. An unnamed
+    // test runner is correctly treated as a non-agent and its state cleared.
+    let fixture_dir = tempfile::tempdir().unwrap();
+    let executable = fixture_dir.path().join(if cfg!(windows) { "omp.exe" } else { "omp" });
+    std::fs::copy(std::env::current_exe().unwrap(), &executable).unwrap();
     let mut session = PaneClient::at(daemon.pane_endpoint())
         .spawn(
             None,
@@ -48,7 +53,7 @@ pub(super) fn agents_report_continuous_state_age(daemon: &Daemon) {
                 cell_h: 16,
             },
             Some(ShellSpec {
-                program: std::env::current_exe().unwrap().display().to_string(),
+                program: executable.display().to_string(),
                 args: vec![FIXTURE_ARG.into()],
                 args_are_lyrel_defaults: false,
             }),
@@ -56,39 +61,35 @@ pub(super) fn agents_report_continuous_state_age(daemon: &Daemon) {
             None,
         )
         .unwrap();
+    let deadline = Instant::now() + SETTLE_WITHIN;
+    // Output precedes fact publication, but split reads may publish state
+    // before the final marker. Observe both without depending on their order
+    // or the timestamp whose semantics the assertions verify.
+    let mut output = Vec::new();
+    let mut waiting = false;
+    while !waiting || !output.windows(b"AGENT_AGE_READY".len()).any(|bytes| bytes == b"AGENT_AGE_READY") {
+        let remaining = deadline.checked_duration_since(Instant::now())
+            .expect("the fixture must publish Waiting within the original deadline");
+        session.set_recv_timeout(Some(remaining)).unwrap();
+        match session.recv().expect("receive the fixture's committed agent state") {
+            DaemonMsg::Output(bytes) | DaemonMsg::Snapshot(bytes) => output.extend_from_slice(&bytes),
+            DaemonMsg::AgentStatus(Some(state)) => waiting = state.status == lyrel_core::core::cli_agent::AgentStatus::Waiting,
+            DaemonMsg::AgentStatus(None) => waiting = false,
+            DaemonMsg::Exited { code } => panic!("the agent fixture exited before readiness: {code:?}"),
+            _ => {}
+        }
+    }
     session.set_recv_timeout(Some(SETTLE_WITHIN)).unwrap();
-    collect_pane_output_until(&mut session, b"AGENT_AGE_READY");
     let pane = session.pane_id();
     let address = format!("%{pane}");
-    let state = |session: &mut lyrel_core::client::PaneSession| {
+    let state = || {
         let report = daemon.run_json(&["agents"]);
-        if let Some(entry) = report["agents"]
-            .as_array()
-            .unwrap()
-            .iter()
+        report["agents"].as_array().unwrap().iter()
             .find(|entry| entry["pane_id"].as_u64() == Some(pane))
-        {
-            return entry.get("state").unwrap().clone();
-        }
-        // Diagnose the public lifecycle, not a guessed delay: Output is sent
-        // before the daemon commits its foreground and hook observations.
-        session.set_recv_timeout(Some(Duration::from_millis(250))).unwrap();
-        let mut lifecycle = Vec::new();
-        for _ in 0..64 {
-            match session.recv() {
-                Ok(DaemonMsg::Agent(agent)) => lifecycle.push(format!("Agent({agent:?})")),
-                Ok(DaemonMsg::AgentStatus(state)) => lifecycle.push(format!("AgentStatus({state:?})")),
-                Ok(DaemonMsg::Exited { code }) => lifecycle.push(format!("Exited({code:?})")),
-                Ok(_) => {}
-                Err(error) => {
-                    lifecycle.push(format!("receive ended: {error}"));
-                    break;
-                }
-            }
-        }
-        panic!("real OSC hooks reach the CLI agent list; pane={pane}; report={report}; public lifecycle={lifecycle:?}");
+            .unwrap_or_else(|| panic!("the identity-matched agent must remain listed; pane={pane}; report={report}"))
+            .get("state").unwrap().clone()
     };
-    let waiting = state(&mut session);
+    let waiting = state();
     assert_eq!(waiting["status"], "waiting");
     let since = waiting["since_ms"]
         .as_u64()
@@ -113,7 +114,7 @@ pub(super) fn agents_report_continuous_state_age(daemon: &Daemon) {
         std::thread::sleep(Duration::from_millis(20));
         daemon.run_ok(&["send", &address, command, "--enter"]);
         collect_pane_output_until(&mut session, b"AGENT_AGE_READY");
-        let current = state(&mut session);
+        let current = state();
         assert_eq!(current["status"], "waiting");
         assert_eq!(current["since_ms"], since);
         assert_eq!(
@@ -123,14 +124,14 @@ pub(super) fn agents_report_continuous_state_age(daemon: &Daemon) {
     }
     daemon.run_ok(&["send", &address, "finish", "--enter"]);
     collect_pane_output_until(&mut session, b"AGENT_AGE_READY");
-    let done = state(&mut session);
+    let done = state();
     assert_eq!(done["status"], "done");
     let done_since = done["since_ms"].as_u64().unwrap();
     assert!(done_since > since);
     std::thread::sleep(Duration::from_millis(20));
     daemon.run_ok(&["send", &address, "batch", "--enter"]);
     collect_pane_output_until(&mut session, b"AGENT_AGE_READY");
-    let next = state(&mut session);
+    let next = state();
     assert_eq!(next["status"], "done");
     assert!(next["since_ms"].as_u64().unwrap() > done_since);
     assert_eq!(next["turns"].as_u64(), Some(2));
