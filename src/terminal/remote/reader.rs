@@ -689,13 +689,8 @@ impl FrameReader {
                                 processor.advance(&mut bridge, &resets);
                                 drop(bridge);
                             }
-                            ParseBridge::new(
-                                &mut term,
-                                proxy.clone(),
-                                &mut keyboard,
-                                None,
-                            )
-                            .clear_keyboard();
+                            ParseBridge::new(&mut term, proxy.clone(), &mut keyboard, None)
+                                .clear_keyboard();
                             drop(term);
                             if released || !resets.is_empty() {
                                 proxy.send(PaneEvent::Wakeup);

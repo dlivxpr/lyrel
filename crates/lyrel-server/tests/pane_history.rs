@@ -391,7 +391,11 @@ fn two_panes_do_not_see_each_others_commands() {
 
 fn zsh() -> Option<ShellSpec> {
     let program = std::env::var("LYREL_TEST_ZSH").unwrap_or_else(|_| "zsh".into());
-    if !Command::new(&program).arg("--version").output().is_ok_and(|out| out.status.success()) {
+    if !Command::new(&program)
+        .arg("--version")
+        .output()
+        .is_ok_and(|out| out.status.success())
+    {
         eprintln!("skipping: zsh unavailable; set LYREL_TEST_ZSH to an isolated executable");
         return None;
     }
@@ -410,20 +414,30 @@ fn zsh_history_journey(configured_zdotdir: bool) {
     let runtime = [
         ("LYREL_TEST_ZSH_FPATH", "fpath"),
         ("LYREL_TEST_ZSH_MODULE_PATH", "module_path"),
-    ].into_iter().filter_map(|(env, var)| {
-        std::env::var(env).ok().map(|path| format!("{var}=('{path}' ${var})\n"))
-    }).collect::<String>();
+    ]
+    .into_iter()
+    .filter_map(|(env, var)| {
+        std::env::var(env)
+            .ok()
+            .map(|path| format!("{var}=('{path}' ${var})\n"))
+    })
+    .collect::<String>();
     std::fs::write(user.join(".zshenv"), &runtime).unwrap();
     std::fs::write(
         dir.path().join(".zshenv"),
         format!("{runtime}export ZDOTDIR=\"$HOME/user zsh\"\n"),
-    ).unwrap();
+    )
+    .unwrap();
     std::fs::write(user.join(".zprofile"), "USER_STARTUP=profile\n").unwrap();
-    std::fs::write(user.join(".zshrc"), concat!(
-        "USER_STARTUP=$USER_STARTUP,rc\n",
-        "HISTFILE=\"$HOME/custom history\"\n",
-        "SAVEHIST=100\nHISTSIZE=100\nsetopt inc_append_history\nPS1='fixture> '\n",
-    )).unwrap();
+    std::fs::write(
+        user.join(".zshrc"),
+        concat!(
+            "USER_STARTUP=$USER_STARTUP,rc\n",
+            "HISTFILE=\"$HOME/custom history\"\n",
+            "SAVEHIST=100\nHISTSIZE=100\nsetopt inc_append_history\nPS1='fixture> '\n",
+        ),
+    )
+    .unwrap();
     std::fs::write(user.join(".zlogin"), "USER_STARTUP=$USER_STARTUP,login\n").unwrap();
     let origin = dir.path().join("custom history");
     std::fs::write(&origin, "echo custom_seed_command\n").unwrap();
@@ -433,30 +447,66 @@ fn zsh_history_journey(configured_zdotdir: bool) {
     }
     std::fs::write(dir.path().join("config.json"), config.to_string()).unwrap();
     let daemon = Daemon::from_dir(dir);
-    let mut session = daemon.panes().spawn(None, size(), Some(shell), None, None).unwrap();
+    let mut session = daemon
+        .panes()
+        .spawn(None, size(), Some(shell), None, None)
+        .unwrap();
     let pane = session.pane_id();
     session.set_recv_timeout(Some(STREAM_WITHIN)).unwrap();
     session.input(b"builtin printf '\\033]777;startup;%s;%s;%s\\a' \"$USER_STARTUP\" \"$LYREL_SHELL_INTEGRATION\" \"$ZDOTDIR\"\r").unwrap();
     let out = collect_until(&mut session, format!("{}\x07", user.display()).as_bytes());
     let text = String::from_utf8_lossy(&out);
-    assert!(text.contains("\x1b]777;startup;profile,rc,login;1;"), "user startup and integration must both run: {text:?}");
-    assert!(text.contains(user.to_str().unwrap()), "the live ZDOTDIR returns to the user's directory: {text:?}");
-    wait_until(|| daemon.pane_history(pane).is_some_and(|h| h.contains("echo custom_seed_command")), "the custom history was not seeded");
-    assert_eq!(std::fs::read_to_string(&origin).unwrap(), "echo custom_seed_command\n", "opening a pane must not rewrite its origin");
+    assert!(
+        text.contains("\x1b]777;startup;profile,rc,login;1;"),
+        "user startup and integration must both run: {text:?}"
+    );
+    assert!(
+        text.contains(user.to_str().unwrap()),
+        "the live ZDOTDIR returns to the user's directory: {text:?}"
+    );
+    wait_until(
+        || {
+            daemon
+                .pane_history(pane)
+                .is_some_and(|h| h.contains("echo custom_seed_command"))
+        },
+        "the custom history was not seeded",
+    );
+    assert_eq!(
+        std::fs::read_to_string(&origin).unwrap(),
+        "echo custom_seed_command\n",
+        "opening a pane must not rewrite its origin"
+    );
     session.input(b"echo custom_live_command\r").unwrap();
     collect_until(&mut session, b"\x1b]133;D;0;aid=lyrel");
     session.input(b"exit\r").unwrap();
     loop {
         match session.recv() {
             Ok(DaemonMsg::Exited { .. }) => break,
-            Ok(_) => {},
+            Ok(_) => {}
             Err(e) => panic!("the zsh pane ended before Exited: {e}"),
         }
     }
     drop(session);
-    wait_until(|| std::fs::read_to_string(&origin).unwrap().contains("echo custom_live_command"), "the custom origin did not receive the pane's commands");
-    assert_eq!(std::fs::read_to_string(&origin).unwrap().matches("echo custom_seed_command").count(), 1);
-    assert!(daemon.pane_history(pane).is_none(), "retiring the pane removes its private history");
+    wait_until(
+        || {
+            std::fs::read_to_string(&origin)
+                .unwrap()
+                .contains("echo custom_live_command")
+        },
+        "the custom origin did not receive the pane's commands",
+    );
+    assert_eq!(
+        std::fs::read_to_string(&origin)
+            .unwrap()
+            .matches("echo custom_seed_command")
+            .count(),
+        1
+    );
+    assert!(
+        daemon.pane_history(pane).is_none(),
+        "retiring the pane removes its private history"
+    );
 }
 
 #[test]

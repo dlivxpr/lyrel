@@ -61,7 +61,6 @@ impl LyrelApp {
         );
     }
 
-
     /// Bind a retained connecting slot. Creation errors are asynchronous and
     /// remain on PendingPane; callers place this identity before it can land.
     pub(crate) fn new_terminal(
