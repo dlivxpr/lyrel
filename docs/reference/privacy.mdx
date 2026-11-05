@@ -53,6 +53,8 @@ GitHub 标签页本身不存储任何凭据。每次连接时，它都会从 `GH
 `GITHUB_TOKEN` 或 `gh auth token` 获取令牌，仅将结果保存在内存中，绝不写入磁盘或日志。议题和拉取请求正文中的图片仅在由 GitHub 托管时才会被获取（例如粘贴到议题中的截图，域名为 `*.githubusercontent.com`）；其他图片均显示为链接，因此打开议题不会让第三方图片托管方知道你阅读了该议题。
 [GitHub 标签页 →](/window/side-panel#github)
 
+仓库重命名或转移后，GitHub API 的同域重定向会保留授权；重定向到其他域名或从 HTTPS 降级到 HTTP 时，不会转发令牌。
+
 原生 Markdown 编辑器的文件图片策略独立于 GitHub 标签页，不把“GitHub 托管可加载”的规则套用到本地或 SSH 文档。加载状态与失败原因显示在文档内；SVG 中另外引用的外部图片被拒绝，不因用户批准顶层图片而递归批准其他资源。显式选择外部图片加载会向服务器披露访问，不代表后台默认联网。
 
 公式与 Mermaid 的原生渲染在本机后台计算，不需要 Node.js、Chromium 或项目 JavaScript。Mermaid 使用严格解析和 `resvg_safe` 输出；渲染资源不从文件或网络自动获取，普通文字标签可使用本机字体。MDX 项目组件、动态表达式、函数及 import/export 仅保留源码，不作为 React 页面执行。生产 Markdown 默认使用原生即时编辑，可切换源码；这些实现边界不等于完整离线、安全或跨平台验收。具体证据与限制见[Markdown 编辑器说明](/window/side-panel#markdown-editor-design)；本轮未执行 macOS 验收，不能视为通过。
