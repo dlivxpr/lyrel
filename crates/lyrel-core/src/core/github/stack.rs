@@ -122,7 +122,9 @@ pub fn stack_order(items: &[Item]) -> Vec<StackRow> {
     let mut row_of = vec![0; items.len()];
     for (group, lanes) in groups {
         let bottom = group[group.len() - 1];
-        let trunk = group.len() > 1 && parent[bottom].is_none();
+        let trunk = group.len() > 1
+            && parent[bottom].is_none()
+            && refs(bottom).is_some_and(|pull| pull.base_ref != pull.head_ref);
         let mut cells = vec![vec![Cell::Empty; lanes]; group.len()];
         for (row, &ix) in group.iter().enumerate() {
             row_of[ix] = row;

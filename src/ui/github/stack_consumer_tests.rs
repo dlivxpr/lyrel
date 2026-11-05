@@ -20,12 +20,13 @@ fn stacked_pull_relationship_boundaries_are_deterministic_in_the_panel(cx: &mut 
             stack_pull(20, "loop-a", "loop-b", "acme/widgets"),
             stack_pull(21, "loop-b", "loop-a", "acme/widgets"),
             stack_pull(22, "self", "self", "acme/widgets"),
+            stack_pull(23, "self-child", "self", "acme/widgets"),
         ]),
     });
     let (temp, _app, mut vcx, _pane) = stack_panel(cx, fake);
     vcx.update(|window, cx| {
         window.render_frame(cx);
-        let order = [4, 3, 2, 1, 9, 11, 12, 13, 14, 15, 21, 20, 22];
+        let order = [4, 3, 2, 1, 9, 11, 12, 13, 14, 15, 21, 20, 23, 22];
         for pair in order.windows(2) {
             let before = window
                 .find(format!("panel-github-item-{}", pair[0]))
