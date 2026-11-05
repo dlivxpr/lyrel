@@ -208,20 +208,21 @@ fn attention_binding_preserves_user_chords_and_plain_terminal_control_u(cx: &mut
     }
     vcx.update(|_, cx| {
         cx.global_mut::<Config>().keybindings.insert(
-            "NextTab".into(),
+            "SelectNextTab".into(),
             KeybindingOverride::Add("secondary-shift-u".into()),
         );
         crate::ui::keymap::rebind(cx);
     });
     vcx.simulate_keystrokes("secondary-shift-u");
     assert_focused(&app, 1, &mut vcx);
-    // NextTab wraps to the ordinary pane; the attention action would stay on
-    // the sole waiting pane, so this distinguishes the configured winner.
+    // SelectNextTab commits immediately; NextTab opens an MRU chooser and
+    // requires confirmation. Wrapping distinguishes the configured winner
+    // from attention, which would stay on the sole waiting pane.
     vcx.simulate_keystrokes("secondary-shift-u");
     assert_focused(&app, 0, &mut vcx);
     vcx.update(|_, cx| {
         let cfg = cx.global_mut::<Config>();
-        cfg.keybindings.remove("NextTab");
+        cfg.keybindings.remove("SelectNextTab");
         cfg.keybindings.insert(
             "FocusNextAgentNeedingAttention".into(),
             KeybindingOverride::Exact(vec!["f6".into()]),
