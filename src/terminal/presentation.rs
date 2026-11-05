@@ -243,7 +243,7 @@ impl<'a> PresentedGrid<'a> {
                 }
     }
 
-    pub(super) fn selected_text(&self) -> Option<String> {
+    pub(super) fn selected_text(&self, lines: bool) -> Option<String> {
         let start = self.cells.iter().position(|cell| cell.selected)?;
         let end = self.cells.iter().rposition(|cell| cell.selected)?;
         let mut text = String::new();
@@ -251,10 +251,17 @@ impl<'a> PresentedGrid<'a> {
             let from = start.max(row * self.cols);
             let to = (end + 1).min((row + 1) * self.cols);
             let line_start = text.len();
+            let mut tab_suffix = false;
             for cell in &self.cells[from..to] {
                 if cell.spacer || !cell.selected {
                     continue;
                 }
+                // Tab already encodes its visual expansion; packed NUL cells
+                // following it must not become extra spaces in copied text.
+                if tab_suffix && cell.c == '\0' {
+                    continue;
+                }
+                tab_suffix = cell.c == '\t';
                 text.push(if cell.c == '\0' { ' ' } else { cell.c });
                 if let Some(marks) = &cell.marks {
                     text.extend(marks.iter());
@@ -267,6 +274,9 @@ impl<'a> PresentedGrid<'a> {
                     text.push('\n');
                 }
             }
+        }
+        if lines {
+            text.push('\n');
         }
         Some(text)
     }

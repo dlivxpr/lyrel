@@ -181,6 +181,7 @@ impl TerminalElement {
         let mut any_selected = false;
         let display_offset;
         let history_size;
+        let selection_is_lines;
         let mut placeholders = Vec::new();
         let prompt_shape = self.prompt_cursor_shape(cx);
         {
@@ -222,6 +223,10 @@ impl TerminalElement {
             buf.resize_with(rows * cols, RenderCell::default);
             display_offset = term.display_offset() as i32;
             history_size = term.grid.history_size();
+            selection_is_lines = term
+                .selection
+                .as_ref()
+                .is_some_and(|selection| selection.ty == rio_vt::selection::SelectionType::Lines);
             let selection = term
                 .selection
                 .as_ref()
@@ -344,6 +349,7 @@ impl TerminalElement {
                 cursor,
                 sliver,
                 any_selected,
+                selection_is_lines,
                 any_match,
                 any_current,
                 display_offset,

@@ -2208,3 +2208,161 @@ fn gui_and_cli_shared_synchronized_ranges_converge_at_the_same_geometry(cx: &mut
     daemon.panes().kill(pane).unwrap();
     graphics_recovery_destroy(view, window, cx);
 }
+
+#[gpui_kit::test]
+fn synchronized_equal_area_resize_keeps_committed_cell_addressing(cx: &mut TestAppContext) {
+    crate::core::config::pin_test_config_dir();
+    cx.executor().allow_parking();
+    cx.update(|cx| {
+        gpui_kit::component::init(cx);
+        cx.set_global(Config::default());
+    });
+    let (client, _initial_sender) = test_stream_pair();
+    let (view, window) = graphics_build_rooted_consumer_at(
+        cx, 175, client, Vec::new(), TermSize::new(80, 24), PtySource::Raw,
+    );
+    let (client, mut sender) = test_stream_pair();
+    view.update(cx, |view, cx| {
+        view.adopt_relink(client, Vec::new(), &crate::terminal::PaneRoute::Remote {
+            header: Box::new(crate::daemon::router::RouteHeader::wsl("resize-fixture")),
+            resize_echo: true,
+        }, TermSize::new(80, 24), 10, 20, cx).unwrap();
+    });
+    DaemonMsg::Output(b"\x1b[2J\x1b[Hbefore\x1b[2;1Hrow-two\x1b[3;5H".to_vec())
+        .encode(&mut sender).unwrap();
+    graphics_recovery_wait(cx, "committed rows were not painted", |cx| {
+        view.read_with(cx, |view, _| view.grid_snap.is_some()
+            && sync_presented_row(view, 1).starts_with("row-two"))
+    });
+    DaemonMsg::Output(b"\x1b[?2026h".to_vec()).encode(&mut sender).unwrap();
+    DaemonMsg::Cwd(std::path::PathBuf::from("/resize-hold")).encode(&mut sender).unwrap();
+    DaemonMsg::Output(b"\x1b[Hpartial".to_vec()).encode(&mut sender).unwrap();
+    // The reader remains real; move only this test's deadline so its held
+    // picture can be observed independently of the 150 ms quiet-stream case.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    loop {
+        if view.read_with(cx, |view, _| {
+            let mut term = view.terminal.term.lock();
+            if term.grid[Line(0)][Column(0)].c() != 'p' { return false; }
+            assert!(term.synchronized_output());
+            term.sync_update_started = Some(rio_vt::time::Instant::now() + std::time::Duration::from_secs(30));
+            true
+        }) { break; }
+        assert!(std::time::Instant::now() < deadline, "hold was not parsed");
+        std::thread::yield_now();
+    }
+    let target = graphics_window_geometry(window, &view, cx, TermSize::new(96, 20)).0;
+    cx.simulate_window_resize(window, target);
+    window.update(cx, |_, window, cx| {
+        window.refresh();
+        window.draw(cx).clear(cx);
+    }).unwrap();
+    view.read_with(cx, |view, _| {
+        assert_eq!(sync_presented_row(view, 1).trim_end(), "row-two",
+            "equal area resize must not reinterpret the committed second row");
+        let geom = view.cell_geom.unwrap();
+        assert_eq!((geom.cols, geom.rows), (80, 24));
+        assert_eq!(view.grid_snap.as_ref().unwrap().painted_cursor().map(|(r,c,_)| (r,c)), Some((2,4)));
+    });
+    view.update(cx, |view, cx| {
+        view.on_select_start(0, 1, true, 1, false, cx);
+        view.on_select_update(6, 1, false, cx);
+        view.on_select_end(cx);
+        view.copy_selection(cx);
+    });
+    assert_eq!(cx.update(|cx| cx.read_from_clipboard().and_then(|item| item.text())).as_deref(), Some("row-two"));
+    DaemonMsg::Size(crate::daemon::protocol::WinSize { cols: 96, rows: 20, cell_w: 10, cell_h: 20 })
+        .encode(&mut sender).unwrap();
+    graphics_recovery_wait(cx, "ordered resize did not release the old addressing", |cx| {
+        view.read_with(cx, |view, _| view.cell_geom.is_some_and(|geom| (geom.cols, geom.rows) == (96,20))
+            && !view.grid_snap.as_ref().unwrap().held)
+    });
+    graphics_recovery_destroy(view, window, cx);
+}
+
+#[gpui_kit::test]
+fn synchronized_copy_preserves_live_tab_line_wrap_and_unicode_semantics(cx: &mut TestAppContext) {
+    crate::core::config::pin_test_config_dir();
+    cx.executor().allow_parking();
+    cx.update(|cx| {
+        gpui_kit::component::init(cx);
+        cx.set_global(Config::default());
+    });
+    let (client, mut sender) = test_stream_pair();
+    let (view, window) = graphics_build_rooted_consumer_at(
+        cx, 176, client, Vec::new(), TermSize::new(80, 24), PtySource::Raw,
+    );
+    DaemonMsg::Output("\x1b[?7h\x1b[2J\x1b[Ha\tb\x1b[2;1Hplain  text\x1b[3;79H界e\u{301}Z\x1b[5;1HAe\u{301}中B".as_bytes().to_vec())
+        .encode(&mut sender).unwrap();
+    graphics_recovery_wait(cx, "copy fixture did not paint", |cx| {
+        view.read_with(cx, |view, _| view.grid_snap.is_some()
+            && sync_presented_row(view, 4).starts_with("Ae\u{301}中B"))
+    });
+    let cases = [
+        ("tab", (0,0), (8,0), 1, "a\tb"),
+        ("line", (0,0), (8,0), 3, "a\tb\n"),
+        ("plain", (0,1), (10,1), 1, "plain  text"),
+        ("wrap", (78,2), (1,3), 1, "界e\u{301}Z"),
+        ("wide and combining boundaries", (1,4), (3,4), 1, "e\u{301}中"),
+    ];
+    // Establish Rio's ordinary consumer result against independent literals
+    // before any hidden state exists, not by copying the live partial grid.
+    for &(label, (start_col,start_row), (end_col,end_row), clicks, expected) in &cases {
+        view.update(cx, |view, cx| {
+            view.on_select_start(start_col, start_row, true, clicks, false, cx);
+            view.on_select_update(end_col, end_row, false, cx);
+            view.on_select_end(cx);
+            view.copy_selection(cx);
+        });
+        assert_eq!(cx.update(|cx| cx.read_from_clipboard().and_then(|item| item.text())).as_deref(), Some(expected), "live {label}");
+    }
+    // Preserve a live Lines selection in the committed picture as well as
+    // exercising Lines gestures started after the hold below.
+    view.update(cx, |view, cx| {
+        view.on_select_start(0, 0, true, 3, false, cx);
+        view.on_select_end(cx);
+    });
+    window.update(cx, |_, window, cx| {
+        window.refresh();
+        window.draw(cx).clear(cx);
+    }).unwrap();
+    DaemonMsg::Output(b"\x1b[?2026h".to_vec()).encode(&mut sender).unwrap();
+    DaemonMsg::Cwd(std::path::PathBuf::from("/copy-hold")).encode(&mut sender).unwrap();
+    DaemonMsg::Output(b"\x1b[2J\x1b[Hhidden-partial".to_vec()).encode(&mut sender).unwrap();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    loop {
+        if view.read_with(cx, |view, _| {
+            let mut term = view.terminal.term.lock();
+            if term.grid[Line(0)][Column(0)].c() != 'h' { return false; }
+            assert!(term.synchronized_output());
+            term.sync_update_started = Some(rio_vt::time::Instant::now() + std::time::Duration::from_secs(30));
+            true
+        }) { break; }
+        assert!(std::time::Instant::now() < deadline, "hidden copy fixture was not parsed");
+        std::thread::yield_now();
+    }
+    window.update(cx, |_, window, cx| {
+        window.refresh();
+        window.draw(cx).clear(cx);
+    }).unwrap();
+    let mut failures = Vec::new();
+    view.update(cx, |view, cx| view.copy_selection(cx));
+    let copied = cx.update(|cx| cx.read_from_clipboard().and_then(|item| item.text()));
+    if copied.as_deref() != Some("a\tb\n") {
+        failures.push(format!("committed live Lines: {copied:?}"));
+    }
+    for &(label, (start_col,start_row), (end_col,end_row), clicks, expected) in &cases {
+        view.update(cx, |view, cx| {
+            view.on_select_start(start_col, start_row, true, clicks, false, cx);
+            view.on_select_update(end_col, end_row, false, cx);
+            view.on_select_end(cx);
+            view.copy_selection(cx);
+        });
+        let copied = cx.update(|cx| cx.read_from_clipboard().and_then(|item| item.text()));
+        if copied.as_deref() != Some(expected) {
+            failures.push(format!("held {label}: expected {expected:?}, got {copied:?}"));
+        }
+    }
+    graphics_recovery_destroy(view, window, cx);
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}

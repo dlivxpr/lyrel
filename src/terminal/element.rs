@@ -205,6 +205,7 @@ pub(super) struct GridSnapshot {
     cursor: Option<GridCursor>,
     sliver: Option<Vec<RenderCell>>,
     pub(super) any_selected: bool,
+    pub(super) selection_is_lines: bool,
     any_match: bool,
     any_current: bool,
     /// Scrollback state at snapshot time, so the paint pass can map a kitty
@@ -508,10 +509,13 @@ impl Element for TerminalElement {
             .view
             .update(cx, |view, _| std::mem::take(&mut view.grid_buf));
         let previous = self.view.update(cx, |view, _| view.grid_snap.take());
-        // The two frames with nothing to fall back on: the first one this pane
-        // ever paints, and the one after a resize, whose previous grid is the
-        // wrong shape to paint into these bounds. Those wait for the lock.
-        let must_block = previous.is_none() || buf.len() != geom.rows * geom.cols;
+        let previous_geom = self.view.read(cx).cell_geom;
+        let resized = previous_geom
+            .is_some_and(|previous| (previous.rows, previous.cols) != (geom.rows, geom.cols));
+        // A held picture remains paintable at its committed addressing even
+        // after resize. Only a missing frame or an ordinary resize waits.
+        let must_block =
+            previous.is_none() || (resized && !previous.as_ref().is_some_and(|snap| snap.held));
         let built = self.build_grid(
             &colors,
             &mut buf,
@@ -523,6 +527,7 @@ impl Element for TerminalElement {
             under,
             must_block,
         );
+        let reused = built.is_err();
         let held = matches!(&built, Err(SnapshotUnavailable::Synchronized))
             || (built.is_err() && previous.as_ref().is_some_and(|snap| snap.held));
         let mut snap = match built {
@@ -548,9 +553,9 @@ impl Element for TerminalElement {
                 }
             }
         };
-        if held
-            && buf.len() != geom.rows * geom.cols
-            && let Some(previous_geom) = self.view.read(cx).cell_geom
+        if reused
+            && resized
+            && let Some(previous_geom) = previous_geom
         {
             // Until the ordered resize reaches the VT, keep the old frame's
             // cell addressing too. New bounds may clip it, never reinterpret it.

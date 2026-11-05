@@ -1182,7 +1182,11 @@ impl TerminalView {
             || self.grid_snap.as_ref().is_some_and(|snap| snap.held)
             || self.selection_scroll.has_presented()
         {
-            return self.presented_grid()?.selected_text();
+            let lines = self
+                .grid_snap
+                .as_ref()
+                .is_some_and(|snap| snap.selection_is_lines);
+            return self.presented_grid()?.selected_text(lines);
         }
         term.selection_to_string()
     }
@@ -1191,6 +1195,7 @@ impl TerminalView {
         self.frame.has_selection = selected;
         if let Some(snap) = self.grid_snap.as_mut() {
             snap.any_selected = selected;
+            snap.selection_is_lines &= selected;
         }
     }
 
@@ -1329,6 +1334,9 @@ impl TerminalView {
                 .selection_scroll
                 .select_all_presented(&mut self.grid_buf);
             self.set_presented_selection(selected);
+            if let Some(snap) = self.grid_snap.as_mut() {
+                snap.selection_is_lines = false;
+            }
             cx.notify();
             return;
         }
@@ -1686,6 +1694,11 @@ impl TerminalView {
                     cx.global::<Config>(),
                 );
                 self.set_presented_selection(selected);
+                if !(shift && clicks == 1)
+                    && let Some(snap) = self.grid_snap.as_mut()
+                {
+                    snap.selection_is_lines = clicks >= 3;
+                }
                 cx.notify();
             }
             return;
@@ -1707,39 +1720,42 @@ impl TerminalView {
         if !self.selection_scroll.is_selecting() {
             return;
         }
-        let mut term = self.terminal.term.lock();
-        if (term.synchronized_output() || self.grid_snap.as_ref().is_some_and(|snap| snap.held))
-            && !self.selection_scroll.has_presented()
-            && let Some(geom) = self.cell_geom
-        {
-            self.selection_scroll
-                .adopt_presented(&self.grid_buf, geom.cols, cx.global::<Config>());
-        }
-        if self.selection_scroll.has_presented() {
-            drop(term);
-            if let Some(geom) = self.cell_geom {
-                let selected = self.selection_scroll.update_presented(
-                    &mut self.grid_buf,
+        if !self.selection_scroll.has_presented() {
+            let mut term = self.terminal.term.lock();
+            if (term.synchronized_output() || self.grid_snap.as_ref().is_some_and(|snap| snap.held))
+                && let Some(geom) = self.cell_geom
+            {
+                self.selection_scroll.adopt_presented(
+                    &self.grid_buf,
                     geom.cols,
+                    cx.global::<Config>(),
+                );
+            }
+            if !self.selection_scroll.has_presented() {
+                self.selection_scroll.update(
+                    &mut term,
                     col,
                     row,
                     left,
-                    cx.global::<Config>(),
+                    &cx.global::<Config>().word_separators,
                 );
-                self.set_presented_selection(selected);
+                drop(term);
                 cx.notify();
+                return;
             }
-            return;
         }
-        self.selection_scroll.update(
-            &mut term,
-            col,
-            row,
-            left,
-            &cx.global::<Config>().word_separators,
-        );
-        drop(term);
-        cx.notify();
+        if let Some(geom) = self.cell_geom {
+            let selected = self.selection_scroll.update_presented(
+                &mut self.grid_buf,
+                geom.cols,
+                col,
+                row,
+                left,
+                cx.global::<Config>(),
+            );
+            self.set_presented_selection(selected);
+            cx.notify();
+        }
     }
 
     pub fn select_autoscroll(
