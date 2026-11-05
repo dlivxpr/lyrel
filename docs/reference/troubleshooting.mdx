@@ -52,6 +52,8 @@ lyrel server logs
 
 这些内容只能恢复一次。如果一个窗格恢复后被关闭，然后再次打开，第二次就没有可恢复的内容了。这是设计行为，不是缺陷。
 
+只有提示符、终端控制序列或空白的会话不保存旧屏幕，也不显示“已恢复”分隔提示；标签页布局仍保留并启动新 shell。实际命令输出、未经过命令提交但已显示的有效内容仍可恢复，不以是否存在历史命令代替输出判断。
+
 <a id="the-background-server-is-still-running-build"></a>
 ## "The background server is still running &lt;build&gt;"
 

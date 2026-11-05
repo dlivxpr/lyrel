@@ -829,11 +829,16 @@ impl SourcePresentation {
         self.reveal_caret = false;
         cx.notify();
     }
-    fn table_commands_enabled(&self) -> bool {
-        self.live && self.state.composition.is_none() && self.extra_selections.is_empty()
-            && self.projection.leaf_at(self.state.selection.head()).is_some_and(|leaf| {
-                matches!(leaf.kind, Kind::TableCell(cell) if self.state.selection.range().start >= cell.table().start && self.state.selection.range().end <= cell.table().end)
-            })
+    fn active_table(&self) -> Option<super::tables::Cell> {
+        if !self.live || self.state.composition.is_some() || !self.extra_selections.is_empty() {
+            return None;
+        }
+        let Kind::TableCell(cell) = self.projection.leaf_at(self.state.selection.head())?.kind
+        else {
+            return None;
+        };
+        let selection = self.state.selection.range();
+        (selection.start >= cell.table().start && selection.end <= cell.table().end).then_some(cell)
     }
 
     fn table_command(
@@ -842,15 +847,9 @@ impl SourcePresentation {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.table_commands_enabled()
+        if let Some(cell) = self.active_table()
             && self.projection.revision == self.document.read(cx).revision()
         {
-            let Some(leaf) = self.projection.leaf_at(self.state.selection.head()) else {
-                return;
-            };
-            let Kind::TableCell(cell) = leaf.kind else {
-                return;
-            };
             self.command(
                 Command::Table {
                     operation,
@@ -875,7 +874,7 @@ impl SourcePresentation {
         if !self.live {
             return menu;
         }
-        let disabled = !self.table_commands_enabled();
+        let disabled = self.active_table().is_none();
         menu.separator()
             .menu_with_disabled(
                 t(L10nKey::EditorTableInsertRowBefore),
@@ -2308,6 +2307,7 @@ impl Render for SourcePresentation {
             .iter()
             .map(|leaf| &self.blocks[&leaf.id].node)
             .collect();
+        let active_table = self.active_table();
         let block = div()
             .w_full()
             .when_some(self.projection.error.as_ref(), |block, error| {
@@ -2361,11 +2361,30 @@ impl Render for SourcePresentation {
                                     }
                                 });
                             });
-                            div().w_full().relative()
-                                .child(div().id(("markdown-table-row", leaf.id)).w_full()
-                                    .overflow_hidden().track_scroll(&scroll).child(row))
-                                .child(gpui_kit::base::ScrollableMask::new(Axis::Horizontal, &scroll)
-                                    .id(("markdown-table-pan", leaf.id)))
+                            // The header owns the toolbar in document flow, outside the
+                            // table's horizontal scroll/mask but inside vertical scrolling.
+                            div().w_full().flex().flex_col()
+                                .when(cell.is_header() && active_table.is_some_and(|active| active.table() == cell.table()), |table| {
+                                    use gpui_kit::component::{Sizable as _, button::{Button, ButtonVariants as _}, menu::DropdownMenu as _};
+                                    let view = cx.entity().downgrade();
+                                    let focus = self.focus.clone();
+                                    table.child(gpui_kit::component::h_flex().flex_none()
+                                        .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                                        .child(Button::new("markdown-table-commands").small().ghost()
+                                            .label(crate::ui::i18n::t(crate::ui::i18n::L10nKey::EditorTableCommands))
+                                            .dropdown_menu(move |menu, _, cx| {
+                                                let menu = menu.action_context(focus.clone());
+                                                match view.upgrade() {
+                                                    Some(view) => view.read(cx).table_menu(menu),
+                                                    None => menu,
+                                                }
+                                            })))
+                                })
+                                .child(div().w_full().relative()
+                                    .child(div().id(("markdown-table-row", leaf.id)).w_full()
+                                        .overflow_hidden().track_scroll(&scroll).child(row))
+                                    .child(gpui_kit::base::ScrollableMask::new(Axis::Horizontal, &scroll)
+                                        .id(("markdown-table-pan", leaf.id))))
                                 .into_any_element()
                         } else {
                             self.blocks[&leaf.id].node.render_with_id(
@@ -2554,7 +2573,7 @@ impl Render for SourcePresentation {
         };
         let key_context = KeyContext::parse(if !self.focus.is_focused(window) {
             "Markdown"
-        } else if self.table_commands_enabled() {
+        } else if active_table.is_some() {
             "Input mode=editor Markdown MarkdownTable"
         } else {
             "Input mode=editor Markdown"
@@ -2901,22 +2920,6 @@ impl Render for SourcePresentation {
                         .flex_shrink_0().aria_label(status.clone()).text_sm().text_color(cx.theme().muted_foreground).child(status)
                 ))
                 .child(image_status)
-                .when(self.table_commands_enabled(), |root| {
-                    use gpui_kit::component::{Sizable as _, button::{Button, ButtonVariants as _}, menu::DropdownMenu as _};
-                    let view = cx.entity().downgrade();
-                    let focus = self.focus.clone();
-                    root.child(gpui_kit::component::h_flex().flex_none()
-                        .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-                        .child(Button::new("markdown-table-commands").small().ghost()
-                            .label(crate::ui::i18n::t(crate::ui::i18n::L10nKey::EditorTableCommands))
-                            .dropdown_menu(move |menu, _, cx| {
-                                let menu = menu.action_context(focus.clone());
-                                match view.upgrade() {
-                                    Some(view) => view.read(cx).table_menu(menu),
-                                    None => menu,
-                                }
-                            })))
-                })
                 .when(self.live && self.projection.links.at(self.state.selection.head()).is_some(), |root| {
                     use gpui_kit::component::button::{Button, ButtonVariants as _};
                     use gpui_kit::component::Sizable as _;

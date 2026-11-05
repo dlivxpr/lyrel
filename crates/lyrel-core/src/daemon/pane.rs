@@ -34,6 +34,7 @@ use launch::build_spawn_config;
 #[cfg(test)]
 use replay::RING_CAP;
 use replay::ReplayRing;
+pub(crate) use replay::has_restorable_output;
 use subscriptions::{GraphicsReplayAdmission, OutputGate, ReplayState, Subscriptions};
 
 struct PaneState {
@@ -1229,7 +1230,10 @@ impl DaemonPane {
         &self,
     ) -> (Vec<crate::daemon::scrollback::Segment>, Option<String>, u64) {
         let st = self.state.lock().unwrap();
-        let segments = st.ring.persistence_snapshot();
+        let mut segments = st.ring.persistence_snapshot();
+        if !has_restorable_output(&segments) {
+            segments.clear();
+        }
         (
             segments,
             st.facts.osc_title().map(str::to_owned),

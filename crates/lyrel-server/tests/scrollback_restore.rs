@@ -339,6 +339,56 @@ fn a_restarted_daemon_still_has_the_screen_when_the_window_asks() {
     );
 }
 
+#[cfg(windows)]
+#[test]
+fn an_empty_native_cmd_pane_does_not_accumulate_restored_screens() {
+    let instance = Instance::new();
+    let running = instance.start();
+    let mut session = instance
+        .panes()
+        .spawn(None, size(), Some(interactive_shell()), None, None)
+        .unwrap();
+    session.set_recv_timeout(Some(STREAM_WITHIN)).unwrap();
+    let dead = session.pane_id();
+    let live = collect_until(&mut session, b"777;lyrel-prompt;B");
+    assert!(!live.is_empty(), "the live shell still draws its prompt");
+    session.detach().unwrap();
+    instance.stop(running);
+    let saved = instance.snapshot_of(dead).unwrap();
+    let (segments, _) = lyrel_core::daemon::scrollback::decode(&saved).unwrap();
+    assert!(
+        segments.is_empty(),
+        "prompt decoration is not persisted as content"
+    );
+    instance.record_tab_on(dead);
+    let _restarted = instance.start();
+    let (_, replayed) = instance.spawn_restoring(dead);
+    assert!(!windows_contain(&replayed, b"the shell below is new"));
+}
+
+#[test]
+fn a_prompt_only_stored_screen_does_not_manufacture_a_restore_banner() {
+    let instance = Instance::new();
+    let dead = 900_001;
+    instance.record_tab_on(dead);
+    let directory = instance.path().join("scrollback");
+    std::fs::create_dir_all(&directory).unwrap();
+    let prompt = b"\x1b]133;A\x07old_empty_prompt\r\n> \x1b]133;B\x07";
+    let snapshot = lyrel_core::daemon::scrollback::encode(
+        &[lyrel_core::daemon::scrollback::Segment {
+            size: size(),
+            bytes: prompt.to_vec(),
+        }],
+        Some("old empty shell"),
+    );
+    std::fs::write(directory.join(format!("{dead}.bin")), snapshot).unwrap();
+    let _running = instance.start();
+    let (_, replayed) = instance.spawn_restoring(dead);
+    assert!(!windows_contain(&replayed, b"old_empty_prompt"));
+    assert!(!windows_contain(&replayed, b"the shell below is new"));
+    assert!(!windows_contain(&replayed, b"old empty shell"));
+}
+
 /// What a pane is running has to reach the tree, because that is the only
 /// place a window rebuilding the pane can read it from. Without it the rebuild
 /// falls back to the default shell, which is how a restart turns a bash pane

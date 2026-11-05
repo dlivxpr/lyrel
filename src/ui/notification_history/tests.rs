@@ -534,3 +534,72 @@ fn a_forgotten_remote_notification_cannot_reopen_as_a_local_workspace(cx: &mut T
         source.workspace
     );
 }
+
+#[gpui_kit::test]
+fn long_literal_messages_remain_readable_and_copyable_in_a_small_window(cx: &mut TestAppContext) {
+    use gpui_kit::{px, size};
+
+    let (_, mut window) = harness(cx);
+    let _dir = isolated(&mut window);
+    window.simulate_resize(size(px(720.), px(480.)));
+    let message = format!(
+        "SSH failure: **literal** <tag> & 中文\n{}\nEND_OF_NOTIFICATION",
+        "C:\\workspace\\deep-directory\\file.txt: permission denied\n".repeat(80)
+    );
+    let id = uuid::Uuid::new_v4();
+    // Exercise a persisted inbox record without an unrelated animated Toast.
+    window.update(|_, cx| {
+        history(cx).clone().update(cx, |inbox, cx| {
+            inbox.append(Record {
+                id,
+                timestamp: chrono::Utc::now().timestamp(),
+                severity: Severity::Error,
+                message: message.clone(),
+                source: None,
+                unread: true,
+            });
+            cx.notify();
+        });
+    });
+    settle(&mut window);
+    window.update(|window, cx| window.click("status-notifications", cx));
+    settle(&mut window);
+    window.update(|window, cx| window.click(format!("notification-detail-{id}"), cx));
+    settle(&mut window);
+    window.update(|window, cx| {
+        let viewport = window.find("notification-detail-scroll").bounds();
+        let message = window.find("notification-detail-message").bounds();
+        assert!(message.size.height > viewport.size.height);
+        assert!(message.top() >= viewport.top());
+        assert!(window.find("notification-detail-copy").bounds().bottom() <= viewport.top());
+        window.press("end", cx);
+    });
+    settle(&mut window);
+    window.update(|window, cx| {
+        let viewport = window.find("notification-detail-scroll").bounds();
+        assert!(
+            window.find("notification-detail-message").bounds().bottom()
+                <= viewport.bottom() + px(1.)
+        );
+        assert!(window.find("notification-detail-copy").visible());
+        window.click("notification-detail-copy", cx);
+        assert_eq!(
+            cx.read_from_clipboard()
+                .and_then(|item| item.text())
+                .as_deref(),
+            Some(message.as_str())
+        );
+        window.click("notification-detail-back", cx);
+    });
+    settle(&mut window);
+    window.update(|window, cx| {
+        assert!(window.find("notification-inbox").visible());
+        window.click(format!("notification-copy-{id}"), cx);
+        assert_eq!(
+            cx.read_from_clipboard()
+                .and_then(|item| item.text())
+                .as_deref(),
+            Some(message.as_str())
+        );
+    });
+}

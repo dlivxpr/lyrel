@@ -57,6 +57,19 @@ function Assert-BinaryVersion([string]$path, [string]$label) {
     }
 }
 
+# 读取真正分发的 PE 资源，不将公司元数据误当作签名证书 Subject。
+function Assert-ProductMetadata([string]$path, [string]$label) {
+    if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { Fail "$label is missing: $path"; return }
+    $info = (Get-Item -LiteralPath $path).VersionInfo
+    # Inno Setup reserves trailing spaces in its fixed-width version strings.
+    if ($info.ProductName.TrimEnd() -cne 'lyrel') {
+        Fail "$label reports ProductName '$($info.ProductName)', expected 'lyrel'"
+    }
+    if ($info.CompanyName.TrimEnd() -cne 'dlivxpr') {
+        Fail "$label reports CompanyName '$($info.CompanyName)', expected 'dlivxpr'"
+    }
+}
+
 # The CLI has no Windows version-resource contract. Check all three payload
 # executables by their PE Machine field, but keep version checks to GUI/updater.
 # Do not apply this to setup.exe: Inno's bootstrapper can legitimately be x86.
@@ -217,6 +230,8 @@ if (-not (Test-Path -LiteralPath $Zip)) {
 
         Assert-BinaryVersion (Join-Path $unzipped 'lyrel-app.exe') 'the portable lyrel-app.exe'
         Assert-BinaryVersion (Join-Path $unzipped 'lyrel-updater.exe') 'the portable lyrel-updater.exe'
+        Assert-ProductMetadata (Join-Path $unzipped 'lyrel-app.exe') 'the portable lyrel-app.exe'
+        Assert-ProductMetadata (Join-Path $unzipped 'lyrel-updater.exe') 'the portable lyrel-updater.exe'
         foreach ($binary in 'lyrel-app.exe', 'lyrel.exe', 'lyrel-updater.exe') {
             Assert-BinaryArchitecture (Join-Path $unzipped $binary) "the portable $binary"
         }
@@ -259,6 +274,8 @@ if (-not (Test-Path -LiteralPath $Stage -PathType Container)) {
     }
     Assert-BinaryVersion (Join-Path $Stage 'lyrel-app.exe') 'the installed lyrel-app.exe'
     Assert-BinaryVersion (Join-Path $Stage 'lyrel-updater.exe') 'the installed lyrel-updater.exe'
+    Assert-ProductMetadata (Join-Path $Stage 'lyrel-app.exe') 'the installed lyrel-app.exe'
+    Assert-ProductMetadata (Join-Path $Stage 'lyrel-updater.exe') 'the installed lyrel-updater.exe'
     foreach ($binary in 'lyrel-app.exe', 'lyrel.exe', 'lyrel-updater.exe') {
         Assert-BinaryArchitecture (Join-Path $Stage $binary) "the installed $binary"
     }
@@ -273,6 +290,7 @@ if (-not (Test-Path -LiteralPath $Stage -PathType Container)) {
 if (-not (Test-Path -LiteralPath $Setup -PathType Leaf)) {
     Fail "the Windows installer is missing: $Setup"
 } else {
+    Assert-ProductMetadata $Setup 'the Windows installer'
     $info = (Get-Item -LiteralPath $Setup).VersionInfo
     $actual = "$($info.FileMajorPart).$($info.FileMinorPart).$($info.FileBuildPart)"
     if ($actual -ne $VersionCore) {
@@ -282,7 +300,7 @@ if (-not (Test-Path -LiteralPath $Setup -PathType Leaf)) {
 
 if ($failures.Count -gt 0) {
     foreach ($failure in $failures) { Write-Output "::error::$failure" }
-    throw "the Windows release package would not be updatable in place ($($failures.Count) problem(s))"
+    throw "the Windows release package failed validation ($($failures.Count) problem(s))"
 }
 
-Write-Output "Windows package verified: payload layout, markers, architectures and versions match $Version ($Arch)"
+Write-Output "Windows package verified: payload layout, markers, architectures, product metadata and versions match $Version ($Arch)"

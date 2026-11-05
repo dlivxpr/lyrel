@@ -14,6 +14,7 @@ mod launch_scope;
 mod omp;
 
 pub const LYREL_ENV_MARKER: &str = "LYREL";
+pub const LYREL_AGENT_HOOK_EXE_ENV: &str = "LYREL_AGENT_HOOK_EXE";
 
 const MAX_STDIN: u64 = 64 * 1024;
 
@@ -49,8 +50,11 @@ pub fn run_agent_hook(agent: &str, event: &str) {
         }
     }
     let body = payload.to_string();
-    if !report_to_daemon(&body) {
-        write_to_controlling_tty(&hook_sequence(&body));
+    if let Err(error) = report_to_daemon(&body)
+        && !write_to_controlling_tty(&hook_sequence(&body))
+    {
+        eprintln!("lyrel: agent status delivery failed: {error}; controlling terminal unavailable");
+        std::process::exit(2);
     }
 }
 
@@ -65,16 +69,12 @@ pub fn run_agent_hook(agent: &str, event: &str) {
 /// environment points at no daemon, at a daemon that predates this message,
 /// or at a pane it does not run in (see `DaemonPane::report_agent_event`)
 /// falls back to the tty.
-fn report_to_daemon(body: &str) -> bool {
-    let Some(pane) = std::env::var(crate::daemon::pane::LYREL_PANE_ENV)
+fn report_to_daemon(body: &str) -> io::Result<()> {
+    let pane = std::env::var(crate::daemon::pane::LYREL_PANE_ENV)
         .ok()
         .and_then(|p| p.trim().parse::<u64>().ok())
-    else {
-        return false;
-    };
-    crate::client::PaneClient::local()
-        .report_agent_event(pane, std::process::id(), body)
-        .is_ok()
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "LYREL_PANE is unavailable"))?;
+    crate::client::PaneClient::local().report_agent_event(pane, std::process::id(), body)
 }
 
 #[cfg(not(unix))]

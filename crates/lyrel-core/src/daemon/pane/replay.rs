@@ -100,6 +100,49 @@ impl HeadCut {
     }
 }
 
+// Both integrated shells and passive cmd prompts use explicit stream boundaries;
+// output text and translated restore banners are never guessed from their words.
+/// Prompt decoration alone is not a previous screen worth restoring. Keep
+/// startup output, input echoes, command output and asynchronous output after
+/// B; only text between the shell's A/B marks is known to be a prompt.
+pub(crate) fn has_restorable_output(segments: &[crate::daemon::scrollback::Segment]) -> bool {
+    let mut marks = crate::core::osc::OscTokenizer::new(&[b"133", b"777"]);
+    let mut grammar = HeadCut::default();
+    let mut in_prompt = false;
+    for segment in segments {
+        let mut offset = 0;
+        let mut meaningful = false;
+        let mut scan = |bytes: &[u8], in_prompt: bool| {
+            for &byte in bytes {
+                meaningful |= !in_prompt
+                    && grammar == HeadCut::Ground
+                    && byte >= 0x20
+                    && byte != 0x7f
+                    && !byte.is_ascii_whitespace();
+                grammar.step(byte);
+            }
+        };
+        marks.feed_at(&segment.bytes, |end, payload| {
+            scan(&segment.bytes[offset..end], in_prompt);
+            offset = end;
+            match payload {
+                b"777;lyrel-prompt;A" => in_prompt = true,
+                b"777;lyrel-prompt;B" => in_prompt = false,
+                _ => match payload.strip_prefix(b"133;").and_then(|p| p.first()) {
+                    Some(b'A') => in_prompt = true,
+                    Some(b'B' | b'C' | b'D') => in_prompt = false,
+                    _ => {}
+                },
+            }
+        });
+        scan(&segment.bytes[offset..], in_prompt);
+        if meaningful {
+            return true;
+        }
+    }
+    false
+}
+
 impl ReplayRing {
     /// 自创建以来实际追加的字节标记，不计入恢复时提供的种子。
     pub(super) fn appended_mark(&self) -> u64 {
@@ -370,6 +413,43 @@ mod tests {
             rows,
             cell_w: 8,
             cell_h: 16,
+        }
+    }
+
+    #[test]
+    fn prompt_only_replay_is_not_a_restorable_screen_across_every_segment_split() {
+        let bytes = b"\x1b]0;shell\x07\x1b[?2004h\x1b]133;A\x07\x1b[32muser@host ~/project\r\n> \x1b[0m\x1b]133;B\x1b\\";
+        for cut in 0..=bytes.len() {
+            let segments = vec![
+                crate::daemon::scrollback::Segment {
+                    size: ws(80, 24),
+                    bytes: bytes[..cut].to_vec(),
+                },
+                crate::daemon::scrollback::Segment {
+                    size: ws(100, 30),
+                    bytes: bytes[cut..].to_vec(),
+                },
+            ];
+            assert!(!has_restorable_output(&segments), "split at {cut}");
+        }
+    }
+
+    #[test]
+    fn restore_keeps_real_output_without_requiring_a_submitted_command() {
+        for bytes in [
+            b"startup warning\r\n\x1b]133;A\x07> \x1b]133;B\x07".as_slice(),
+            b"\x1b]133;A\x07> \x1b]133;B\x07unfinished input".as_slice(),
+            b"\x1b]133;A\x07> \x1b]133;B\x07\r\nbackground job finished".as_slice(),
+            b"\x1b]133;C;echo answer;aid=lyrel\x07answer\r\n\x1b]133;D;0\x07".as_slice(),
+            b"\x1b[?1049hfull-screen application".as_slice(),
+            b"plain shell without integration".as_slice(),
+        ] {
+            assert!(has_restorable_output(&[
+                crate::daemon::scrollback::Segment {
+                    size: ws(80, 24),
+                    bytes: bytes.to_vec(),
+                }
+            ]));
         }
     }
 

@@ -29,6 +29,7 @@ use crate::ui::window_chrome::{CONTENT_INSET, TILE_GLYPH_SM, TILE_SIZE_SM};
 
 mod revalidation;
 mod selection;
+mod tree;
 
 #[cfg(test)]
 mod cwd_tests;
@@ -51,7 +52,8 @@ const TRAY_CHEVRON: f32 = 10.;
 enum SftpMenuAction {
     NewFolder,
     NewFile,
-    Upload,
+    UploadFiles,
+    UploadFolders,
     GotoShellCwd,
     ToggleHistory,
 }
@@ -181,6 +183,10 @@ pub(crate) struct SftpPanelState {
     /// browser following a pane switch. See [`sftp_start_dir`].
     pub(crate) panel_was_closed: bool,
     pub(crate) entries: Vec<SftpEntry>,
+    children: std::collections::HashMap<String, Result<Vec<SftpEntry>, String>>,
+    expanded: HashSet<String>,
+    child_loads: std::collections::HashMap<String, u64>,
+    child_generation: u64,
     selected: HashSet<String>,
     selection_anchor: Option<String>,
     focus_handle: gpui_kit::FocusHandle,
@@ -243,6 +249,10 @@ impl SftpPanelState {
             shell_cwds: std::collections::HashMap::new(),
             panel_was_closed: true,
             entries: Vec::new(),
+            children: std::collections::HashMap::new(),
+            expanded: HashSet::new(),
+            child_loads: std::collections::HashMap::new(),
+            child_generation: 0,
             selected: HashSet::new(),
             selection_anchor: None,
             focus_handle: cx.focus_handle(),
@@ -460,6 +470,7 @@ impl LyrelApp {
     pub(crate) fn sftp_close_browser(&mut self, cx: &mut Context<Self>) {
         self.sftp_panel.open_pane_id = None;
         self.sftp_panel.entries.clear();
+        self.sftp_panel.clear_tree();
         self.sftp_panel.selected.clear();
         self.sftp_panel.selection_anchor = None;
         self.sftp_panel.error = None;
@@ -504,6 +515,7 @@ impl LyrelApp {
         self.sftp_panel.open_workspace = self.pane_workspace(pane_id, window, cx);
         self.sftp_panel.nav_gen = self.sftp_panel.nav_gen.wrapping_add(1);
         self.sftp_panel.entries.clear();
+        self.sftp_panel.clear_tree();
         self.sftp_panel.selected.clear();
         self.sftp_panel.selection_anchor = None;
         self.sftp_panel.error = None;
@@ -584,6 +596,7 @@ impl LyrelApp {
             return;
         };
         self.sftp_panel.nav_gen = self.sftp_panel.nav_gen.wrapping_add(1);
+        self.sftp_panel.child_loads.clear();
         let generation = self.sftp_panel.nav_gen;
         self.sftp_panel.loading = true;
         cx.notify();
@@ -606,10 +619,12 @@ impl LyrelApp {
                         if this.sftp_panel.cwd != path {
                             this.sftp_panel.selected.clear();
                             this.sftp_panel.selection_anchor = None;
+                            this.sftp_panel.clear_tree();
                         }
                         this.sftp_panel.cwds.insert(key, path.clone());
                         this.sftp_panel.cwd = path;
                         this.sftp_panel.entries = entries;
+                        this.sftp_panel.prune_tree();
                         this.sftp_panel.error = None;
                         this.sftp_panel.editing_path = None;
                         this.sftp_panel.editing_path_sub.clear();
@@ -618,6 +633,7 @@ impl LyrelApp {
                         this.sftp_panel.error = Some(e);
                     }
                 }
+                this.sftp_refresh_expanded(cx);
                 cx.notify();
             });
         })
@@ -681,21 +697,17 @@ impl LyrelApp {
         cx.notify();
     }
 
-    /// A click on a row and the row menu's first item both land here.
-    /// A directory opens in place; a file opens in the built-in editor, the
-    /// way it already does on a local or remote-workspace tree (#656). What
-    /// the editor cannot hold — binary, oversized — gets the same toast the
-    /// local tree gives it; a single click must never start a transfer, so
-    /// downloading lives in the row menu and nowhere else.
-    pub(crate) fn sftp_open_entry(
+    /// Directories disclose their children without changing the browser root;
+    /// files open on the same remote Host as editing and transfers.
+    fn sftp_open_entry(
         &mut self,
-        entry: SftpEntry,
+        entry: tree::SftpTarget,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let target = remote_join(&self.sftp_panel.cwd, &entry.name);
+        let target = entry.path.clone();
         if is_dir_like(&entry) {
-            self.sftp_navigate(target, cx);
+            self.sftp_toggle_directory(target, cx);
         } else if let Some(host) = self.sftp_editor_host() {
             self.editor_open_on_host(host, Path::new(&target), window, cx);
         }
@@ -717,7 +729,7 @@ impl LyrelApp {
         )))
     }
 
-    pub(crate) fn sftp_download_entry(&mut self, entry: SftpEntry, cx: &mut Context<Self>) {
+    fn sftp_download_entry(&mut self, entry: tree::SftpTarget, cx: &mut Context<Self>) {
         let Some(pane_id) = self.sftp_panel.open_pane_id else {
             return;
         };
@@ -729,7 +741,7 @@ impl LyrelApp {
             cx.notify();
             return;
         }
-        let remote = remote_join(&self.sftp_panel.cwd, &entry.name);
+        let remote = entry.path.clone();
         // Downloading twice used to write over the first copy without a word.
         // Browsers answer this by numbering the second one; that keeps the
         // gesture one click and still cannot lose a file.
@@ -767,25 +779,25 @@ impl LyrelApp {
         self.sftp_start_polling(cx);
     }
 
-    pub(crate) fn sftp_delete_entry(
+    fn sftp_delete_entry(
         &mut self,
-        entry: SftpEntry,
+        entry: tree::SftpTarget,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if !self.sftp_panel.selected.contains(&entry.name) {
+        if !self.sftp_panel.selected.contains(&entry.path) {
             self.sftp_panel.selected.clear();
-            self.sftp_panel.selected.insert(entry.name);
+            self.sftp_panel.selected.insert(entry.path);
         }
         self.sftp_delete_selection(window, cx);
     }
 
-    pub(crate) fn sftp_follow_symlink(&mut self, entry: SftpEntry, cx: &mut Context<Self>) {
+    fn sftp_follow_symlink(&mut self, entry: tree::SftpTarget, cx: &mut Context<Self>) {
         let Some(pane_id) = self.sftp_panel.open_pane_id else {
             return;
         };
-        let cwd = self.sftp_panel.cwd.clone();
-        let path = remote_join(&cwd, &entry.name);
+        let cwd = remote_parent(&entry.path);
+        let path = entry.path.clone();
         let route = self.sftp_route();
         self.sftp_panel.nav_gen = self.sftp_panel.nav_gen.wrapping_add(1);
         let generation = self.sftp_panel.nav_gen;
@@ -904,7 +916,7 @@ impl LyrelApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let input = crate::ui::prefill::filled_box(name.clone(), window, cx);
+        let input = crate::ui::prefill::filled_box(remote_basename(&name), window, cx);
         let edit = SftpEdit::Rename {
             original: name,
             input: input.clone(),
@@ -912,15 +924,15 @@ impl LyrelApp {
         self.sftp_open_edit(input, edit, window, cx);
     }
 
-    pub(crate) fn sftp_begin_chmod(
+    fn sftp_begin_chmod(
         &mut self,
-        entry: SftpEntry,
+        entry: tree::SftpTarget,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         let octal = format!("{:o}", entry.permissions & 0o777);
         let readable = mode_string(entry.permissions);
-        let path = remote_join(&self.sftp_panel.cwd, &entry.name);
+        let path = entry.path.clone();
         let input = crate::ui::prefill::filled_box(octal, window, cx);
         let edit = SftpEdit::Chmod {
             path,
@@ -987,14 +999,14 @@ impl LyrelApp {
             }
             Some(SftpEdit::Rename { original, input }) => {
                 let name = input.read(cx).value().trim().to_string();
-                if name.is_empty() || name == *original {
+                if name.is_empty() || name == remote_basename(original) {
                     self.sftp_close_edit_in(window, cx);
                     cx.notify();
                     return;
                 }
                 Some(SftpOp::Rename {
-                    from: remote_join(&self.sftp_panel.cwd, original),
-                    to: remote_join(&self.sftp_panel.cwd, &name),
+                    from: original.clone(),
+                    to: remote_join(&remote_parent(original), &name),
                 })
             }
             Some(SftpEdit::Chmod { path, input, .. }) => {
@@ -1018,20 +1030,45 @@ impl LyrelApp {
         }
     }
 
-    pub(crate) fn sftp_pick_upload(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    fn sftp_pick_upload(
+        &mut self,
+        directories: bool,
+        into: Option<String>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         if self.sftp_panel.open_pane_id.is_none() {
             return;
         }
+        let generation = self.sftp_panel.nav_gen;
+        let directory = into.unwrap_or_else(|| self.sftp_panel.cwd.clone());
+        let route = self.sftp_route();
         let rx = cx.prompt_for_paths(PathPromptOptions {
-            files: true,
-            directories: true,
+            files: !directories,
+            directories,
             multiple: true,
             prompt: None,
         });
         cx.spawn_in(window, async move |this, cx| {
             if let Ok(Ok(Some(paths))) = rx.await {
+                let entries = cx
+                    .background_spawn(async move {
+                        route.list(&directory).map(|entries| (directory, entries))
+                    })
+                    .await;
                 let _ = this.update_in(cx, |this, window, cx| {
-                    this.sftp_upload_paths(paths, window, cx)
+                    if this.sftp_panel.nav_gen == generation {
+                        match entries {
+                            Ok((directory, entries)) => {
+                                let clashes = Self::sftp_upload_clashes(&paths, &entries);
+                                this.sftp_confirm_upload(paths, directory, clashes, window, cx);
+                            }
+                            Err(error) => {
+                                this.sftp_panel.error = Some(error);
+                                cx.notify();
+                            }
+                        }
+                    }
                 });
             }
         })
@@ -1044,16 +1081,31 @@ impl LyrelApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        // Uploading into the directory on screen used to overwrite whatever was
-        // already there without a word. The listing being shown is the answer —
-        // no extra round trip to the far side to find out.
-        let clashes: Vec<String> = paths
+        let clashes = Self::sftp_upload_clashes(&paths, &self.sftp_panel.entries);
+        self.sftp_confirm_upload(paths, self.sftp_panel.cwd.clone(), clashes, window, cx);
+    }
+
+    fn sftp_upload_clashes(paths: &[PathBuf], entries: &[SftpEntry]) -> Vec<String> {
+        paths
             .iter()
-            .filter_map(|p| p.file_name().map(|n| n.to_string_lossy().to_string()))
-            .filter(|name| self.sftp_panel.entries.iter().any(|e| &e.name == name))
-            .collect();
+            .filter_map(|path| {
+                path.file_name()
+                    .map(|name| name.to_string_lossy().into_owned())
+            })
+            .filter(|name| entries.iter().any(|entry| &entry.name == name))
+            .collect()
+    }
+
+    fn sftp_confirm_upload(
+        &mut self,
+        paths: Vec<PathBuf>,
+        directory: String,
+        clashes: Vec<String>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         if clashes.is_empty() {
-            self.sftp_upload_paths_confirmed(paths, cx);
+            self.sftp_upload_paths_confirmed(paths, directory, cx);
             return;
         }
         let names = match clashes.len() {
@@ -1072,18 +1124,27 @@ impl LyrelApp {
             &crate::ui::confirm_answers(t(L10nKey::Replace), t(L10nKey::Cancel)),
             cx,
         );
+        let generation = self.sftp_panel.nav_gen;
         cx.spawn_in(window, async move |this, cx| {
             let Ok(0) = answer.await else { return };
-            let _ = this.update(cx, |this, cx| this.sftp_upload_paths_confirmed(paths, cx));
+            let _ = this.update(cx, |this, cx| {
+                if this.sftp_panel.nav_gen == generation {
+                    this.sftp_upload_paths_confirmed(paths, directory, cx);
+                }
+            });
         })
         .detach();
     }
 
-    fn sftp_upload_paths_confirmed(&mut self, paths: Vec<PathBuf>, cx: &mut Context<Self>) {
+    fn sftp_upload_paths_confirmed(
+        &mut self,
+        paths: Vec<PathBuf>,
+        cwd: String,
+        cx: &mut Context<Self>,
+    ) {
         let Some(pane_id) = self.sftp_panel.open_pane_id else {
             return;
         };
-        let cwd = self.sftp_panel.cwd.clone();
         for path in paths {
             let name = path
                 .file_name()
@@ -1272,9 +1333,12 @@ impl LyrelApp {
                     .await;
                 let _ = this.update(cx, |this, cx| {
                     if this.sftp_files_visible(cx)
-                        && this.sftp_panel.apply_revalidation(&request, entries)
+                        && this.sftp_panel.revalidation_is_current(&request)
                     {
-                        cx.notify();
+                        if this.sftp_panel.apply_revalidation(&request, entries) {
+                            cx.notify();
+                        }
+                        this.sftp_refresh_expanded(cx);
                     }
                 });
             }
@@ -1379,7 +1443,11 @@ impl LyrelApp {
                             for (label, action) in [
                                 (t(L10nKey::SftpMenuNewFolder), SftpMenuAction::NewFolder),
                                 (t(L10nKey::SftpMenuNewFile), SftpMenuAction::NewFile),
-                                (t(L10nKey::SftpMenuUpload), SftpMenuAction::Upload),
+                                (t(L10nKey::SftpMenuUploadFiles), SftpMenuAction::UploadFiles),
+                                (
+                                    t(L10nKey::SftpMenuUploadFolders),
+                                    SftpMenuAction::UploadFolders,
+                                ),
                                 (
                                     t(L10nKey::SftpMenuGotoShellCwd),
                                     SftpMenuAction::GotoShellCwd,
@@ -1429,7 +1497,8 @@ impl LyrelApp {
         match action {
             SftpMenuAction::NewFolder => self.sftp_begin_new_folder(window, cx),
             SftpMenuAction::NewFile => self.sftp_begin_new_file(window, cx),
-            SftpMenuAction::Upload => self.sftp_pick_upload(window, cx),
+            SftpMenuAction::UploadFiles => self.sftp_pick_upload(false, None, window, cx),
+            SftpMenuAction::UploadFolders => self.sftp_pick_upload(true, None, window, cx),
             SftpMenuAction::GotoShellCwd => {
                 if let Some(pane_id) = self.sftp_panel.open_pane_id
                     && let Some(cwd) = self.pane_shell_cwd(pane_id, window, cx)
@@ -1609,7 +1678,7 @@ impl LyrelApp {
         }
 
         let filter = self.sftp_panel.filter_input.read(cx).value().to_string();
-        let entries = sorted_filtered_entries(&self.sftp_panel.entries, &filter);
+        let entries = self.sftp_panel.visible_rows(&filter);
 
         let show_go_up = self.sftp_panel.cwd != "/" && filter.trim().is_empty();
 
@@ -1631,8 +1700,21 @@ impl LyrelApp {
         if show_go_up {
             list = list.child(self.render_sftp_go_up_row(cx));
         }
-        for entry in entries {
-            list = list.child(self.render_sftp_row(entry, cx));
+        for (path, entry, depth) in entries {
+            list = list.child(self.render_sftp_row(&path, entry, depth, cx));
+            if self.sftp_panel.expanded.contains(&path) {
+                let status = match self.sftp_panel.children.get(&path) {
+                    None => Some((t(L10nKey::SftpLoading).to_string(), muted)),
+                    Some(Err(error)) => Some((error.clone(), danger)),
+                    Some(Ok(children)) if children.is_empty() => {
+                        Some((t(L10nKey::SftpEmptyDirectory).to_string(), muted))
+                    }
+                    _ => None,
+                };
+                if let Some((text, color)) = status {
+                    list = list.child(note(text.into(), color).pl(rems((depth + 1) as f32)));
+                }
+            }
         }
         container.child(list)
     }
@@ -1667,16 +1749,26 @@ impl LyrelApp {
             .into_any_element()
     }
 
-    fn render_sftp_row(&self, entry: &SftpEntry, cx: &mut Context<Self>) -> AnyElement {
+    fn render_sftp_row(
+        &self,
+        path: &str,
+        entry: &SftpEntry,
+        depth: usize,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
         // The file tree's row: every glyph in caption ink, the name in the
         // rail's title ink, the size a tabular caption at the trailing end.
         let name_ink = cx.theme().sidebar_foreground;
         let muted = cx.theme().muted_foreground;
         let list_hover = gpui_kit::rgb(cx.global::<crate::ui::presets::Surfaces>().popover.hover);
-        let selected = self.sftp_panel.selected.contains(&entry.name);
+        let selected = self.sftp_panel.selected.contains(path);
+        let expanded = self.sftp_panel.expanded.contains(path);
         let selected_fill =
             gpui_kit::rgb(cx.global::<crate::ui::presets::Surfaces>().popover.selected);
-        let entry = entry.clone();
+        let entry = tree::SftpTarget {
+            path: path.to_owned(),
+            entry: entry.clone(),
+        };
         let dir_like = is_dir_like(&entry);
         let icon = if dir_like {
             IconName::Folder
@@ -1694,24 +1786,37 @@ impl LyrelApp {
         } else {
             entry.name.clone()
         };
-        let row_id = SharedString::from(format!("sftp-row-{}", entry.name));
+        let row_id = SharedString::from(format!("sftp-row-{path}"));
 
         let open_entry = entry.clone();
         let menu_entry = entry.clone();
         let select_entry = entry.clone();
         let context_entry = entry.clone();
-        let menu_parent = self.sftp_panel.cwd.clone();
+        let menu_parent = remote_parent(&path);
         let app = cx.entity().downgrade();
 
         h_flex()
             .id(row_id)
+            .map(|element| {
+                #[cfg(test)]
+                {
+                    use gpui_kit::test::TestSupportExt;
+                    element.test_support()
+                }
+                #[cfg(not(test))]
+                {
+                    element
+                }
+            })
             .role(gpui_kit::Role::TreeItem)
             .aria_label(SharedString::from(entry.name.clone()))
+            .when(dir_like, |row| row.aria_expanded(expanded))
             .aria_selected(selected)
             .items_center()
             .gap(px(SFTP_ROW_GAP))
             .h(px(SFTP_ROW_H))
             .px(px(ROW_INSET))
+            .pl(rems((ROW_INSET + depth as f32 * 16.) / 16.))
             .rounded(ROW_FILL_RADIUS)
             .cursor_pointer()
             .when(selected, |row| row.bg(selected_fill))
@@ -1732,13 +1837,29 @@ impl LyrelApp {
                 gpui_kit::MouseButton::Right,
                 cx.listener(move |this, _, window, cx| {
                     this.sftp_panel.focus_handle.focus(window, cx);
-                    if !this.sftp_panel.selected.contains(&context_entry.name) {
+                    if !this.sftp_panel.selected.contains(&context_entry.path) {
                         this.sftp_panel.selected.clear();
-                        this.sftp_panel.selected.insert(context_entry.name.clone());
-                        this.sftp_panel.selection_anchor = Some(context_entry.name.clone());
+                        this.sftp_panel.selected.insert(context_entry.path.clone());
+                        this.sftp_panel.selection_anchor = Some(context_entry.path.clone());
                     }
                     cx.notify();
                 }),
+            )
+            .child(
+                div()
+                    .w(rems(TRAY_CHEVRON / 16.))
+                    .flex_none()
+                    .when(dir_like, |slot| {
+                        slot.child(
+                            Icon::new(if expanded {
+                                IconName::ChevronDown
+                            } else {
+                                IconName::ChevronRight
+                            })
+                            .size(rems(TRAY_CHEVRON / 16.))
+                            .text_color(muted),
+                        )
+                    }),
             )
             .child(Icon::new(icon).size(px(ROW_GLYPH)).text_color(muted))
             .child(
@@ -1761,7 +1882,7 @@ impl LyrelApp {
             .context_menu(move |menu, _window, cx| {
                 let danger = cx.theme().danger;
                 let paste_into = if dir_like {
-                    remote_join(&menu_parent, &menu_entry.name)
+                    menu_entry.path.clone()
                 } else {
                     menu_parent.clone()
                 };
@@ -1781,7 +1902,7 @@ impl LyrelApp {
 
     fn sftp_row_context_menu(
         menu: gpui_kit::component::menu::PopupMenu,
-        entry: &SftpEntry,
+        entry: &tree::SftpTarget,
         dir_like: bool,
         is_symlink: bool,
         danger: gpui_kit::Hsla,
@@ -1789,6 +1910,7 @@ impl LyrelApp {
         paste_into: String,
         can_paste: bool,
     ) -> gpui_kit::component::menu::PopupMenu {
+        let paste_destination = paste_into.clone();
         let mut menu = menu
             .min_w(px(180.))
             .item(PopupMenuItem::new(t(L10nKey::AppMenuCopy)).on_click({
@@ -1804,7 +1926,11 @@ impl LyrelApp {
                         let app = app.clone();
                         move |_, window, cx| {
                             let _ = app.update(cx, |app, cx| {
-                                app.sftp_paste_selection(Some(paste_into.clone()), window, cx)
+                                app.sftp_paste_selection(
+                                    Some(paste_destination.clone()),
+                                    window,
+                                    cx,
+                                )
                             });
                         }
                     }),
@@ -1824,6 +1950,20 @@ impl LyrelApp {
                 let _ = app.update(cx, |this, cx| this.sftp_open_entry(entry, window, cx));
             }
         }));
+        if dir_like {
+            for (label, directories) in [
+                (L10nKey::SftpMenuUploadFiles, false),
+                (L10nKey::SftpMenuUploadFolders, true),
+            ] {
+                let app = app.clone();
+                let destination = paste_into.clone();
+                menu = menu.item(PopupMenuItem::new(t(label)).on_click(move |_, window, cx| {
+                    let _ = app.update(cx, |app, cx| {
+                        app.sftp_pick_upload(directories, Some(destination.clone()), window, cx);
+                    });
+                }));
+            }
+        }
 
         // Editing is the double-click now, but a copy in ~/Downloads is still
         // a thing people come to this menu for.
@@ -1854,7 +1994,7 @@ impl LyrelApp {
         menu = menu
             .item(PopupMenuItem::new(t(L10nKey::SftpContextRename)).on_click({
                 let app = app.clone();
-                let name = entry.name.clone();
+                let name = entry.path.clone();
                 move |_, window, cx| {
                     let name = name.clone();
                     let _ = app.update(cx, |this, cx| this.sftp_begin_rename(name, window, cx));

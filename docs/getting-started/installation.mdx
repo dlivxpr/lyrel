@@ -25,6 +25,8 @@ lyrel，不接管其他产品的安装，也不自动读取、迁移或清理其
 
     lyrel 目前尚未提供已使用 Developer ID 证书签名并经 Apple 公证的构建，不能保证 Gatekeeper 会直接允许打开。
 
+    应用名称为 `lyrel`，bundle identity 为 `io.github.dlivxpr.lyrel`；Finder 的应用说明标明 `dlivxpr`，同时保留 l0ng-ai／Apache-2.0 来源。这是包元数据，不是 Apple Developer ID 签名或公证证明。
+
     <Note>
       GUI 支持从 macOS 15 起；构建所需的 macOS SDK 26+ 不改变运行时下限。本次 GPUI Fast 升级必须重新执行 [#167 原生实机验收](https://github.com/dlivxpr/lyrel/issues/167)，先前轮次的豁免不适用；构建、安装、输入与签名／公证分别记录，不推定兼容。
     </Note>
@@ -47,6 +49,8 @@ lyrel，不接管其他产品的安装，也不自动读取、迁移或清理其
     “同一份安装”仅指当前 lyrel 安装，不包括其他产品或副本。默认安装目录为
     `lyrel`，开始菜单和桌面快捷方式均指向 `lyrel-app.exe`，并使用
     `io.github.dlivxpr.lyrel` 作为 AUMID，供任务栏和通知识别应用。
+
+    安装包和应用文件的产品名为 `lyrel`，描述不再包含技术栈宣传文字，发布者／公司名为 `dlivxpr`。这些字段不替代代码签名；未签名安装包仍可能被 Windows 显示为“未知发布者”。
 
     安装程序提供一项默认关闭的可选安装任务：**将“在 lyrel 中打开”添加到文件夹右键菜单**。它会在 `HKCU` 下写入 shell 操作项，因此只影响你自己的 Windows 账户；卸载程序始终会移除这些操作项。
 
@@ -334,6 +338,8 @@ Node.js 22 显式安装，用于自动化回归、Host 检查和 pi 桥测试；
 分类入口为 `.github/scripts/ci-changes.cjs`；新增编译输入时同步检查允许跳过的路径。`LICENSE` 被 server 内嵌，`skills/` 等目录不能按 Markdown 后缀当作纯文档。分类使用 `--no-renames` 保留重命名两端，移出源码目录仍会验证删除的影响。检查名称由原来的 `changes`／`rustfmt`／`host boundary` 收敛为 `preflight`；设置合并门禁时使用新名称及所需平台检查，不引用已移除的名称。
 
 CI 的桌面 build 与 test 统一启用 `--features updater`，同一次默认 workspace 测试覆盖 GUI、core、CLI、server 和 updater；不另起一轮不同 feature 图的 updater 编译。Linux 仍验证完整 headless features，所有平台断言保持不变。
+
+桌面测试先独立运行同参数的 `cargo test --no-run` 编译全部测试目标，再执行原有完整测试。编译与执行各保留 20 分钟步骤上限；普通 `cargo build` 未启用的 test-support 依赖不再消耗测试执行预算。主分支 CI `41987369719` 的 macOS 步骤曾在该预算内编译 7 分 21 秒后继续通过用例，最终触及步骤超时；拆分不跳过测试、不延长执行上限，也不将预期 `#[should_panic]` 日志误判为失败断言。
 
 同一 SHA 的失败恢复只重跑失败 job，保留原有成功结果，不以本地新 HEAD 替换原提交，也不自动循环重试。先预览失败项，再显式执行：
 

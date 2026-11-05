@@ -83,6 +83,7 @@ cat > "$APP/Contents/Info.plist" <<PLIST
     <key>CFBundleExecutable</key><string>lyrel-app</string>
     <key>CFBundleIconFile</key><string>lyrel</string>
     <key>CFBundlePackageType</key><string>APPL</string>
+    <key>NSHumanReadableCopyright</key><string>lyrel by dlivxpr. Based on l0ng-ai/tty7 (Apache-2.0); see LICENSE.txt.</string>
     <key>LSMinimumSystemVersion</key><string>15.0</string>
     <key>NSHighResolutionCapable</key><true/>
     <key>NSPrincipalClass</key><string>NSApplication</string>

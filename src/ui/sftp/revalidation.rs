@@ -16,6 +16,16 @@ impl SftpRevalidation {
 }
 
 impl SftpPanelState {
+    pub(super) fn revalidation_is_current(&self, request: &SftpRevalidation) -> bool {
+        self.navigation_is_current(request.pane_id, request.nav_gen)
+            && self.poll_gen == request.poll_gen
+            && self.refresh_gen == request.refresh_gen
+            && self.cwd == request.cwd
+            && !self.loading
+            && self.editing.is_none()
+            && self.editing_path.is_none()
+    }
+
     pub(super) fn revalidation_request(&self) -> Option<SftpRevalidation> {
         if self.loading || self.editing.is_some() || self.editing_path.is_some() {
             return None;
@@ -36,14 +46,7 @@ impl SftpPanelState {
         request: &SftpRevalidation,
         reply: Result<Vec<SftpEntry>, String>,
     ) -> bool {
-        if !self.navigation_is_current(request.pane_id, request.nav_gen)
-            || self.poll_gen != request.poll_gen
-            || self.refresh_gen != request.refresh_gen
-            || self.cwd != request.cwd
-            || self.loading
-            || self.editing.is_some()
-            || self.editing_path.is_some()
-        {
+        if !self.revalidation_is_current(request) {
             return false;
         }
         let Ok(mut entries) = reply else { return false };
@@ -52,6 +55,7 @@ impl SftpPanelState {
             return false;
         }
         self.entries = entries;
+        self.prune_tree();
         self.error = None;
         true
     }
