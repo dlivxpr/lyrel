@@ -1,6 +1,55 @@
 use super::*;
 
 #[gpui_kit::test]
+fn metafied_zsh_history_is_searchable_and_submits_the_original_command(cx: &mut TestAppContext) {
+    let (window, view, mut daemon) = rooted_harness(cx);
+    // Command bytes captured from zsh 5.9 using EXTENDED_HISTORY and fc -W;
+    // only the timestamp is fixed. Do not synthesize the escapes under test.
+    let bytes = b": 1700000000:0;echo '\xe8\xaf\xbb\xe5\x83\xaf\x83\xb6\xe4\xbb\xa4\xe7\x83\xa9\x83\xac\xe5\xa4\xb1\xe8\xb4\xa5\xe3\x83\xa3\xbc\xf0\x83\xbf\x83\xb9\x82'\n";
+    let command = "echo '读取令牌失败ー🙂'";
+    let loaded = crate::terminal::history::load_with_shell_files(
+        &crate::terminal::history::Scope::remote("metafied-zsh-consumer"),
+        vec![(".zsh_history".into(), bytes.to_vec())],
+    );
+    assert_eq!(loaded.entries, [command]);
+    assert_eq!(
+        loaded.meta.get(command),
+        Some(&crate::terminal::history::EntryMeta {
+            ts: Some(1_700_000_000),
+            exit: None,
+        }),
+        "zsh elapsed seconds are not an exit status"
+    );
+    view.update(cx, |view, cx| {
+        view.history = TerminalHistory::from_loaded(loaded);
+        view.handle_editor_key(&key("ctrl-r"), cx);
+        view.commit_text("echo", cx);
+        assert_eq!(
+            view.history
+                .search()
+                .and_then(|search| search.selected_line(view.history.entries())),
+            Some(command)
+        );
+        view.handle_editor_key(&key("enter"), cx);
+        assert_eq!(view.input.editor().text(), command);
+        view.handle_editor_key(&key("ctrl-r"), cx);
+        cx.notify();
+    });
+    window.update(cx, |_, window, _| window.refresh()).unwrap();
+    cx.run_until_parked();
+    view.update(cx, |view, cx| {
+        view.handle_editor_key(&key("cmd-enter"), cx);
+        assert!(view.history.search().is_none());
+        assert!(view.input.editor().is_empty());
+    });
+    assert_eq!(
+        next_input_until_timeout(&mut daemon),
+        Some(format!("{command}\r").into_bytes()),
+        "history submission must preserve the original UTF-8 command exactly"
+    );
+}
+
+#[gpui_kit::test]
 fn ctrl_r_fuzzy_search_accepts_into_the_editor(cx: &mut TestAppContext) {
     let (window, _daemon) = harness(cx);
     window
