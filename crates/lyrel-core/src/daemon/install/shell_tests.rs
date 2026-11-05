@@ -313,3 +313,80 @@ fn real_process_discovery_and_restart_leave_a_bridge_alive() {
         "old daemon must have stopped"
     );
 }
+
+#[test]
+#[ignore = "requires an actual shell/server and a private Linux PID namespace"]
+fn ps_fallback_finds_and_stops_daemon_with_reordered_arguments() {
+    let temp = tempfile::tempdir().unwrap();
+    let ops = ShellRemote::new(&temp.path().join("home"));
+    let (release, user) = (release(), FakeUser::approving());
+    let installer = real_installer(&ops, &release, &user);
+    let paths = installer.paths_for(RemotePlatform::Unix, &ops.home);
+    ops.mkdir(&paths.bin_dir).unwrap();
+    ops.put(&paths.binary, &release.asset_bytes).unwrap();
+    ops.chmod(&paths.binary, 0o755).unwrap();
+    let config = format!("{}/config", ops.home);
+    let ps_dir = temp.path().join("ps-bin");
+    std::fs::create_dir(&ps_dir).unwrap();
+    let ps = ps_dir.join("ps");
+    for args in [
+        vec!["--daemon", "--config-dir", config.as_str()],
+        vec!["--config-dir", config.as_str(), "--daemon"],
+        vec!["--config-dir", config.as_str(), "--daemon", "--unused"],
+    ] {
+        let mut daemon = Process(
+            Command::new(&paths.binary)
+                .args(&args)
+                .env("HOME", &ops.home)
+                .env("LYREL_CONFIG_DIR", &config)
+                .stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null())
+                .spawn().unwrap(),
+        );
+        let deadline = Instant::now() + Duration::from_secs(3);
+        while !ops.run(&format!("{} --stdio --bridge </dev/null", shell_quote(&paths.binary))).unwrap().success() {
+            assert!(Instant::now() < deadline, "fixture daemon must serve: {args:?}");
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        let bridge_args = ["--stdio", "--bridge", "--daemonish", "/tmp/--daemon/config"];
+        let mut bridge = Process(
+            Command::new(&paths.binary)
+                .args(bridge_args)
+                .env("HOME", &ops.home)
+                .env("LYREL_CONFIG_DIR", &config)
+                .stdin(Stdio::piped()).stdout(Stdio::null()).stderr(Stdio::null())
+                .spawn().unwrap(),
+        );
+        // Model Darwin ps's two output shapes, listing the live bridge first.
+        // Only the environment predicate is overridden: the production filter
+        // and kill command below are executed intact by the real login shell.
+        let listing = format!("{} {}\n{} {}\n", bridge.0.id(), paths.binary, daemon.0.id(), paths.binary);
+        let daemon_args = format!("{} {}", paths.binary, args.join(" "));
+        let bridge_args = format!("{} {}", paths.binary, bridge_args.join(" "));
+        std::fs::write(&ps, format!(
+            "#!/bin/sh\ncase \"$*\" in\n'-xwwo pid=,comm=') printf '%s' {};;\n'-p {} -wwo args=') printf '%s' {};;\n'-p {} -wwo args=') printf '%s' {};;\n*) exit 2;;\nesac\n",
+            shell_quote(&listing), bridge.0.id(), shell_quote(&bridge_args), daemon.0.id(), shell_quote(&daemon_args),
+        )).unwrap();
+        std::fs::set_permissions(&ps, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let absent_proc = r#"[() { if /usr/bin/[ "$#" -eq 2 ] && /usr/bin/[ "$1" = -d ] && /usr/bin/[ "$2" = /proc ]; then return 1; fi; /usr/bin/[ "$@"; };"#;
+        let run = |command: &str| {
+            ops.command()
+                .env("PATH", format!("{}:/usr/bin:/bin", ps_dir.display()))
+                .args(["-c", &under_sh(&format!("{absent_proc} {command}"))])
+                .output().unwrap()
+        };
+        let found = run(RUNNING_EXE_COMMAND);
+        assert!(found.status.success(), "{}", String::from_utf8_lossy(&found.stderr));
+        assert_eq!(String::from_utf8_lossy(&found.stdout), paths.binary, "ps must find daemon for {args:?}, not the bridge");
+        let stopped = run(TERMINATE_RUNNING_COMMAND);
+        assert!(stopped.status.success(), "{}", String::from_utf8_lossy(&stopped.stderr));
+        let deadline = Instant::now() + Duration::from_secs(3);
+        while daemon.0.try_wait().unwrap().is_none() {
+            assert!(Instant::now() < deadline, "ps must stop daemon for {args:?}");
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        if let Some(status) = bridge.0.try_wait().unwrap() {
+            use std::os::unix::process::ExitStatusExt as _;
+            assert_ne!(status.signal(), Some(15), "restart must not signal the bridge");
+        }
+    }
+}
