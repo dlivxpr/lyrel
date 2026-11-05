@@ -1,4 +1,5 @@
 use crate::core::config::config_path;
+use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
@@ -101,7 +102,7 @@ pub fn load_with_shell_files(scope: &Scope, shell_files: Vec<(String, Vec<u8>)>)
     } else {
         let mut out = Vec::new();
         for (name, bytes) in &shell_files {
-            parse_history_file(name, &String::from_utf8_lossy(bytes), &mut out);
+            parse_history_file(name, bytes, &mut out);
         }
         out
     };
@@ -336,7 +337,7 @@ fn load_shell_history() -> Vec<Raw> {
         if let Ok(bytes) = std::fs::read(&path) {
             let name = path.file_name().unwrap_or_default().to_string_lossy();
             let start = out.len();
-            parse_history_file(&name, &String::from_utf8_lossy(&bytes), &mut out);
+            parse_history_file(&name, &bytes, &mut out);
             // bash (and a bare HISTFILE) often have no per-line timestamp.
             // Borrow the file's mtime so those entries can still be ordered
             // against zsh/fish/lyrel records that do carry one — otherwise a
@@ -366,13 +367,64 @@ fn stamp_missing(raw: &mut [Raw], ts: Option<u64>) {
     }
 }
 
+/// zsh stores Meta (0x83) followed by a byte xor 0x20 for NUL and
+/// bytes 0x83..=0xA2. Undo that before UTF-8 decoding, not after it has
+/// already replaced invalid sequences. Semantic port of tty7 57fda12.
+fn decode_history_file<'a>(name: &str, bytes: &'a [u8]) -> Cow<'a, str> {
+    const META: u8 = 0x83;
+    if !bytes.contains(&META) {
+        return String::from_utf8_lossy(bytes);
+    }
+    let zsh = name.ends_with("zsh_history")
+        || name == ".zhistory"
+        || (name != ".bash_history"
+            && name != FISH_HISTORY_FILE
+            && bytes.split(|&b| b == b'\n').any(is_zsh_extended_line));
+    if !zsh {
+        return String::from_utf8_lossy(bytes);
+    }
+    let mut decoded = Vec::with_capacity(bytes.len());
+    let mut input = bytes.iter().copied();
+    while let Some(byte) = input.next() {
+        if byte == META
+            && let Some(next) = input.next()
+        {
+            decoded.push(next ^ 0x20);
+        } else {
+            decoded.push(byte);
+        }
+    }
+    Cow::Owned(
+        String::from_utf8(decoded)
+            .unwrap_or_else(|error| String::from_utf8_lossy(error.as_bytes()).into_owned()),
+    )
+}
+
+/// A custom HISTFILE has no reliable name; require both numeric fields of
+/// zsh's extended-history header rather than guessing from a colon alone.
+fn is_zsh_extended_line(line: &[u8]) -> bool {
+    let Some(rest) = line.strip_prefix(b": ") else {
+        return false;
+    };
+    let Some(semi) = rest.iter().position(|&b| b == b';') else {
+        return false;
+    };
+    let mut fields = rest[..semi].split(|&b| b == b':');
+    let digits = |field: &[u8]| !field.is_empty() && field.iter().all(u8::is_ascii_digit);
+    matches!(
+        (fields.next(), fields.next(), fields.next()),
+        (Some(start), Some(elapsed), None) if digits(start) && digits(elapsed)
+    )
+}
+
 /// Which reader a history file gets, by file name. The remote side has only
 /// bytes and a name, so the choice has to hang off the name in both paths.
-fn parse_history_file(name: &str, content: &str, out: &mut Vec<Raw>) {
+fn parse_history_file(name: &str, bytes: &[u8], out: &mut Vec<Raw>) {
+    let content = decode_history_file(name, bytes);
     if name == FISH_HISTORY_FILE {
-        parse_fish_history(content, out);
+        parse_fish_history(&content, out);
     } else {
-        parse_shell_history(content, out);
+        parse_shell_history(&content, out);
     }
 }
 
@@ -1147,6 +1199,58 @@ mod tests {
             }),
             "zsh's second field is elapsed seconds, not an exit code"
         );
+    }
+
+    #[test]
+    fn metafied_zsh_history_keeps_metadata_order_and_duplicate_counts() {
+        crate::core::config::pin_test_config_dir();
+        // The escaped bytes for ー are from the real zsh 5.9 consumer fixture.
+        let bytes = b": 1700000000:7;echo \xe3\x83\xa3\xbc\n: 1700000001:2;pwd\n: 1700000002:0;echo \xe3\x83\xa3\xbc\n";
+        for name in [".zsh_history", ".zhistory", "custom-history"] {
+            let loaded = load_with_shell_files(
+                &Scope::remote(&format!("metafied-metadata-{name}")),
+                vec![(name.into(), bytes.to_vec())],
+            );
+            assert_eq!(loaded.entries, ["pwd", "echo ー"], "{name}");
+            assert_eq!(loaded.counts.get("echo ー"), Some(&2), "{name}");
+            assert_eq!(
+                loaded.meta.get("echo ー"),
+                Some(&EntryMeta {
+                    ts: Some(1_700_000_002),
+                    exit: None,
+                }),
+                "{name}"
+            );
+        }
+    }
+
+    #[test]
+    fn metafied_zsh_history_without_extended_headers_uses_the_known_name() {
+        crate::core::config::pin_test_config_dir();
+        for name in [".zsh_history", ".zhistory"] {
+            let loaded = load_with_shell_files(
+                &Scope::remote(&format!("metafied-plain-{name}")),
+                vec![(name.into(), b"echo \xe3\x83\xa3\xbc\n".to_vec())],
+            );
+            assert_eq!(loaded.entries, ["echo ー"], "{name}");
+        }
+    }
+
+    #[test]
+    fn metafied_zsh_decoding_never_unescapes_bash_or_fish_utf8() {
+        crate::core::config::pin_test_config_dir();
+        // ー is valid UTF-8 E3 83 BC. Its 0x83 must not be treated as Meta.
+        for (name, text) in [
+            (".bash_history", "echo ー\n: 1700000000:0;echo ー\n"),
+            (FISH_HISTORY_FILE, "- cmd: echo ー\n  when: 1700000000\n"),
+            ("custom-bash-history", "#1700000000\necho ー\n"),
+        ] {
+            let loaded = load_with_shell_files(
+                &Scope::remote(&format!("plain-utf8-{name}")),
+                vec![(name.into(), text.as_bytes().to_vec())],
+            );
+            assert_eq!(loaded.entries, ["echo ー"], "{name}");
+        }
     }
 
     #[test]
