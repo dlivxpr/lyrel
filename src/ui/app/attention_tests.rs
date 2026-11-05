@@ -121,7 +121,8 @@ fn attention_keyboard_visits_oldest_waits_across_windows_then_unread_results(
     );
     a.update_in(&mut av, |app, window, cx| {
         app.tabs.select(0);
-        a0.read(cx).focus_handle.focus(window, cx);
+        let focus = a0.read(cx).focus_handle.clone();
+        focus.focus(window, cx);
     });
     av.background_executor.run_until_parked();
 
@@ -187,7 +188,8 @@ fn attention_binding_preserves_user_chords_and_plain_terminal_control_u(cx: &mut
         &mut vcx,
     );
     app.update_in(&mut vcx, |_, window, cx| {
-        first.read(cx).focus_handle.focus(window, cx)
+        let focus = first.read(cx).focus_handle.clone();
+        focus.focus(window, cx);
     });
     vcx.background_executor.run_until_parked();
     vcx.simulate_keystrokes("ctrl-u");
@@ -228,14 +230,16 @@ fn attention_binding_preserves_user_chords_and_plain_terminal_control_u(cx: &mut
     });
     app.update_in(&mut vcx, |app, window, cx| {
         app.tabs.select(0);
-        first.read(cx).focus_handle.focus(window, cx);
+        let focus = first.read(cx).focus_handle.clone();
+        focus.focus(window, cx);
     });
     vcx.background_executor.run_until_parked();
     vcx.simulate_keystrokes("f6");
     assert_focused(&app, 1, &mut vcx);
     app.update_in(&mut vcx, |app, window, cx| {
         app.tabs.select(0);
-        first.read(cx).focus_handle.focus(window, cx);
+        let focus = first.read(cx).focus_handle.clone();
+        focus.focus(window, cx);
         app.open_search(SearchTab::Actions, "", window, cx);
     });
     vcx.run_until_parked();
