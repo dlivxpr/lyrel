@@ -26,7 +26,7 @@ lyrel，不接管其他产品的安装，也不自动读取、迁移或清理其
     lyrel 目前尚未提供已使用 Developer ID 证书签名并经 Apple 公证的构建，不能保证 Gatekeeper 会直接允许打开。
 
     <Note>
-      GUI 支持从 macOS 15 起；这项支持承诺不表示已取得各系统的构建、安装、输入或签名／公证证据。macOS 独立原生实机验收门已由用户免除，相应证据缺口记为已接受风险，而非已验证兼容。
+      GUI 支持从 macOS 15 起；构建所需的 macOS SDK 26+ 不改变运行时下限。本次 GPUI Fast 升级必须重新执行 [#167 原生实机验收](https://github.com/dlivxpr/lyrel/issues/167)，先前轮次的豁免不适用；构建、安装、输入与签名／公证分别记录，不推定兼容。
     </Note>
 
     应用内的“设为默认终端”会将 Unix 可执行文件的 Shell 处理程序及标准
@@ -125,13 +125,19 @@ lyrel 独立初版为 `0.1.0`；缺少匹配包时不会回退下载上游安装
 
 Windows／macOS 使用 stable Rust 工具链与仓库已有锁文件运行 `cargo build --locked`；应用二进制文件名为 `lyrel-app`，CLI 为 `lyrel`，headless server 为 `lyrel-server`。Linux 使用下列排除根桌面包的命令，直接构建根包会明确拒绝。
 
-GUI 统一通过正式 `gpui-kit =0.8.1` 使用 `gpui-pre =0.3.10` 配套链，GUI HTTP 同步使用 `gpui-pre-reqwest-client =0.3.10`，避免引入旧版 HTTP 类型链；保留 `tree-sitter-languages` 和测试专用 `test-support`，不启用 `gpui-fast`。具体传递包身份以 `Cargo.lock` 为准，registry 包内部的上游快照不等于应用仍维护旧 fork。
+GUI 统一通过正式 `gpui-kit =0.9.0` 的官方 `gpui-fast` feature 选择 GPUI Fast，锁文件基线为 `0.1.13` 家族；Kit 同步选择 core、native platform、Base、Component 与 assets 的 Fast 类型。应用导入与测试宏仍经 `gpui_kit`，不直接依赖 engine、不增加 crate alias／patch 或双后端产品开关。GUI HTTP 保持 `gpui-pre-reqwest-client =0.3.11`，与 Fast 共用 `gpui-pre-http-client =0.3.11` 类型身份；保留 `tree-sitter-languages` 和测试专用 `test-support`。当前 Rio 组合为 `=0.5.29`；完整 Kit／Fast／Rio 组合的构建、行为与性能必须重新验证，不能沿用仅 Fast 的检查点结果。[#168](https://github.com/dlivxpr/lyrel/issues/168) 的跨平台验收与 [#167](https://github.com/dlivxpr/lyrel/issues/167) 的真实 Mac 验收分别记录。
 
-`Cargo.lock` 会收录可选后端及其他平台的依赖，这不表示当前构建启用了它们。用 `cargo tree --locked -p lyrel -i gpui-pre` 检查实际后端链；未启用 `gpui-fast` 时，`cargo tree --locked -p lyrel -i gpui-fast` 没有依赖路径。
+`Cargo.lock` 会收录可选后端及其他平台的依赖；Kit 的 additive features 也会保留合法的 `gpui-pre` 上游构建链，不能以包名前缀判断当前公开类型。用 `cargo tree --locked -p lyrel --target x86_64-pc-windows-msvc -e features -i gpui-fast@0.1.13` 检查启用层；macOS 对应使用 `--target aarch64-apple-darwin -i gpui-fast-macos@0.1.13`，确认 `font-kit`，并另查 `-i gpui-pre-http-client@0.3.11`。Kit 使用兼容的 `0.1.x` 约束，更新锁文件时须复核 Fast 家族版本，不能意外漂移此基线。
 
-该版本修复文本选择、Markdown 表格、编辑器 Tab 布局、滚动与焦点，并提供文本样式、编辑器滚动条和 Diff 的定制 API。虽然 Kit 自身保留 `0.8.0` API 兼容性，其更新后的 GPUI 重导出 API 仍有变化：`Modifiers::secondary`／`secondary_key` 需要 `&App`，动态快捷键及 `secondary` 别名使用 `KeyBinding::load`／`Keystroke::parse_with_os`，格式化按 `cx.platform_info().os` 处理；滚动输入类型改为 `PlatformInput::Scroll`，事件新增 `source`。维护自定义 GPUI 代码时请核对[官方 `v0.8.1` 发布与迁移说明](https://github.com/longbridge/gpui-kit/releases/tag/v0.8.1)。
+自定义 `RenderOnce` 使用 `#[derive(IntoElement)]` 时，显式从 Kit 根导入 `use gpui_kit::IntoElement`（或使用完整 `#[derive(gpui_kit::IntoElement)]` 路径），不要只从 `prelude::*` 取得同名 derive。Kit 根保留了可解析 facade 路径的官方宏；Fast prelude 的同名宏仍生成 `gpui::` 路径，应用无需为它增加 engine 依赖或 alias。普通 trait／builder 仍可继续使用现有 prelude。
 
-GUI、CLI 与 daemon 的图片权威状态统一采用正式 `rio-vt =0.5.28`（不启用默认 features），保留 lyrel 自有 daemon、PTY 和渲染，不引入 Rio 的窗口或 GPU 后端。图片布局的零宽字符判定直接使用同一锁图中的 `rio-unicode =0.5.28`，不复制宽度表或 VT parser。`lyrel-core` 的 `terminal-width` feature 只控制输入栏／CLI 的测宽 API，不再决定 daemon 是否链接 VT 网格。第三方 Rust 依赖来自正式 registry，使用锁定归档及标准 Cargo 缓存，不修改下载源码或配置 source replacement。依赖包内部的上游快照和多版本副本仍以正式解析结果为准。
+`0.9.0` 将公开主题记录标为 `#[non_exhaustive]`：外部调用从 `Default`／现有构造器创建，再逐字段赋值，不能使用含 `..Default::default()` 的结构体字面量。`Window::text_system()` 现在返回 `&Rc<WindowTextSystem>`，窗口布局缓存不再可共享给并发回调；后台任务继续携带 `Arc<TextSystem>`，在任务内创建布局系统。Merman 的测宽回调要求 `Send + Sync`，因此该任务独有的布局缓存通过互斥访问保留复用，不捕获窗口的 `Rc`。`Animation` 使用 executor 时钟，测试动画推进使用 `advance_clock`，不靠墙钟休眠。保留每窗一个 `Root`、主题字段／tokens 与 Base 同步，以及 macOS 平台完整委派；维护自定义 GPUI 代码时核对[官方 `v0.9.0` 发布与迁移说明](https://github.com/longbridge/gpui-kit/releases/tag/v0.9.0)。本轮原生工作流、HTTP 与性能结果须单独记录；macOS 实机验收由 [#167](https://github.com/dlivxpr/lyrel/issues/167) 跟踪，先前轮次的未执行决定不适用于本次升级。
+
+Fast 的 development profile 为当前启用的 core、platform、macros 和 Windows／macOS／Apple backend 保留优化；运行性能只比较同条件 Release。官方 `GPUI_VIEW_RETENTION=0` 可在启动时关闭 view retention 以定位差异（默认开启），不是产品 backend 回退。正式二进制的 `LYREL_FPS=1` 只记录终端 paint 次数／耗时，不是 retention 命中率、GPU 帧延迟或物理输入延迟。官方 `Window::reset_layout_stats()`／`layout_stats()` 仅在 `test-support` 提供，包含 `views_built`、`views_reused`、`nodes_created`、`nodes_reused`、`style_writes` 及各 phase 时间；需要时在已有 rooted consumer 临时采样，不在生产热路径新增计数器。必须先测量终端 paint 中实体写入的实际失效影响，再决定是否修复；保留单一 frame buffer／metadata owner、已有生命周期与隐藏 pane 通知门控。
+
+GUI、CLI 与 daemon 的图片权威状态统一采用正式 `rio-vt =0.5.29`（`default-features = false`），`rio-graphics` 与 `rio-unicode` 同时精确固定为 `=0.5.29`，传递测宽依赖为同版 `rio-grapheme-width`。保留 lyrel 自有 daemon、PTY 和渲染，不引入 Rio 的 PTY event loop、窗口或 GPU 后端，不复制宽度表或 VT parser。`lyrel-core` 的 `terminal-width` feature 只控制输入栏／CLI 的测宽 API，不决定 daemon 是否链接 VT 网格。第三方 Rust 依赖来自正式 registry，使用锁定归档及标准 Cargo 缓存，不修改下载源码或配置 source replacement。用 `cargo tree --locked --workspace --target all -e features -i rio-vt@0.5.29 -i rio-graphics@0.5.29 -i rio-unicode@0.5.29 -i rio-grapheme-width@0.5.29` 核对共同类型身份和 feature 边界。
+
+Rio `0.5.29` 不再由 `Processor` 暂存同步输出；解析、协议应答和输入模式始终实时推进。桌面在实际 snapshot／paint 发布点保留上次完整文字、光标和图片 display list，结束标记或 lyrel 既有 **150 ms** fail-safe 才使新帧可发布；每次开始标记会重新计时。reader 自己推进静默链路的期限，不采用 Rio 默认的 1000 ms，也不新增设置。图形资源仍由 daemon 决定，桌面只保留已计入原预算的呈现 lease；隐藏 pane 不因输出新增重绘。CLI `capture --plain` 独立重建最新收到状态，不等待 GUI committed frame。此语义及新回归不等于候选已经通过构建／原生／性能验收，实际命令、退出码与证据由 #168 的集中检查点记录。
 
 图片传输在共享核心复用锁图中正式 registry 的 `png 0.18.1` 做逐行内容校验，zlib 继续使用 `miniz_oxide 0.9.1`；二者均为 Rust 实现，不新增平台 PNG／zlib 原生安装步骤。桌面仍使用既有 `image 0.25` 生成渲染像素；按原有 `Cargo.lock` 与 `--locked` 命令安装，不引入 Git/path/patch 第三方来源。
 
@@ -148,9 +154,12 @@ Windows Chromium Cookie 的 AES-GCM 解密使用正式 registry 的 `aes-gcm =0.
 
 <Tabs>
   <Tab title="macOS">
+    GPUI Fast `0.1.13` 需要完整 Xcode 提供 macOS SDK 26+；runner 的 `macos-15` 标签不能证明 SDK 版本。CI 与 Release 桌面构建共用 `.github/scripts/select-macos-sdk.sh`：优先核对显式 `DEVELOPER_DIR`，否则检查当前工具链及 `/Applications/Xcode*.app`，仅选择实际 SDK 版本至少为 26 的工具链。日志输出 Xcode 版本、实际 SDK 版本／路径、clang／metal 路径与 `MACOSX_DEPLOYMENT_TARGET=15.0`；缺少兼容 Xcode／SDK／clang 时直接失败，不下载工具链或修改全局 `xcode-select`。Kit 启用 `runtime_shaders`，因此离线 `metal` 编译器缺失只记录，不作为该配置的构建前提。本地构建前在同一 Bash 中 source 该脚本，或明确提供满足相同要求的 `DEVELOPER_DIR`／`SDKROOT`。根 `build.rs` 的 `lyrel-app` linker 参数与 bundle 的 `LSMinimumSystemVersion` 均为 `15.0`；独立 headless server 不经桌面 SDK 选择脚本、不修改其运行时下限。SDK 日志不是实际 Mac 运行、IME 或签名验收。
+
     ```bash
     git clone https://github.com/dlivxpr/lyrel
     cd lyrel
+    source .github/scripts/select-macos-sdk.sh
     cargo build --release --locked
     ```
   </Tab>
@@ -178,6 +187,8 @@ Windows Chromium Cookie 的 AES-GCM 解密使用正式 registry 的 `aes-gcm =0.
     仅构建无 GUI 的 core、server 与 CLI，不需要 X11／Wayland／桌面字体开发库。
     以下完整 feature 验证包含既有 Unix GSSAPI，需要 MIT Kerberos 开发包；GSSAPI 仍按平台与 feature 启用，不表示 Windows 新增该认证能力。
 
+    完整测试还需要 **Linux 原生 Node.js 22.19+，且实际支持内置 TypeScript type stripping**。先执行 `node -p 'process.execPath'`、`node --version` 与 `node -p 'process.features.typescript'`；最后一项应为 `strip`（或显式启用转换时的 `transform`）。仅版本号达标不够：本轮 Ubuntu 的 `/usr/bin/node` 虽为 `22.22.1`，该能力仍为 `false`，Pi 桥的真实 `.ts` 导入失败。改用校验过官方 SHA-256 的同版本 Linux 原生发行包、仅在验证进程的 `PATH` 中选择它后，完整范围通过；不跳过 Pi 测试、不使用 Windows `node.exe`、不增加产品转译 fallback。参阅 [Node.js type stripping](https://nodejs.org/docs/latest-v22.x/api/typescript.html#type-stripping)。
+
     ```bash
     sudo apt-get install -y pkg-config cmake clang libzstd-dev libssl-dev libkrb5-dev
     LIBGSSAPI_IMPL=mit cargo build --release --locked --workspace --exclude lyrel --all-features
@@ -185,6 +196,12 @@ Windows Chromium Cookie 的 AES-GCM 解密使用正式 registry 的 `aes-gcm =0.
     ```
 
     不需要可选客户端功能时，可省略 `--all-features`；独立静态 server 使用下文的 musl 构建入口。
+
+    资源受限时使用 `-j1`；若继承的 wrapper 不可用，可仅对本次命令设置 `RUSTC_WRAPPER= CARGO_BUILD_RUSTC_WRAPPER=`，不要改用户全局 Cargo 配置。完整测试会复制真实 runner 并创建 Unix socket，`TMPDIR` 与 target 必须有足够空间；本轮 `/tmp` 是有限 tmpfs，实际 ENOSPC 后将任务自有 target 迁至原生 ext4，并仅在进程中设置较短的自有 `TMPDIR`。不要删除用户缓存或通过缩小测试范围绕过资源失败。项目仍使用 stable Rust，不把本轮 Rust/Cargo `1.99.1` 固定为项目要求。
+
+    **2026-11-05 Linux headless 验收（[#173](https://github.com/dlivxpr/lyrel/issues/173)）：**在 Ubuntu `26.04.1`／WSL2 `x86_64` 上，`5df2f286` 的上述完整 feature 范围 Debug build、tests 与 Release build 均实际 exit `0`；标准测试 `2340 passed`，自定义真实 CLI E2E `26 passed`，另有 `39 ignored`，不把嵌套 fixture 的 `8` 个子进程结果重复加总。Unix daemon／PTY／Host／stdio、未闭合同步与静默 capture、Unicode／wrap／resize／scrollback／cursor、query／replay／会话生命周期已实跑。正常及全 feature 图均无 GPUI、Rio 窗口／GPU／PTY 栈，四个 Rio VT／graphics／Unicode／grapheme-width 包统一为 `0.5.29`，VT defaults 仍关闭。`31712d8e` 只修正 SSH 测试夹具的真实 temp 目录；其受影响的真实 SSH `5` 项与 native lifecycle `1` 项重新编译并全部通过，生产源码、lockfile 与上述 Release 产物不变，不能把它写成另一次完整 workspace 构建。
+
+    与 `069eade7` 的同机、同 Release flags、同原生 Node、实际 `120×30` 几何比较，按 `B1/C1/C2/B2` 保留重复 raw 样本；producer drain、small／large capture、daemon RSS 与绝对 idle CPU 未出现超过噪声的可重复 `>5%` 成本退化。producer drain 中位数变化为 `+1.87%`，不是 paint、FPS 或物理延迟；四次约 `10 s` idle 均为 `0` CPU ticks（`100 Hz`）。完整样本、离群值、忽略项及历史失败分别记录于 #173 的交接证据，不据此宣称 GPU、真实 Kerberos 认证或 Windows／macOS 原生验收通过。GSSAPI-enabled build／动态链接通过不等于有 KDC／principal 的认证已通过。
   </Tab>
 </Tabs>
 

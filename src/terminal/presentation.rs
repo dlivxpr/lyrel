@@ -1,0 +1,401 @@
+//! Pane presentation facts and borrowed access to already painted cells.
+//! Pointer gestures and copy must not read the newer hidden VT state.
+use std::ops::Range;
+
+use rio_vt::crosswords::pos::{Column, Line, Pos};
+use rio_vt::crosswords::square::Wide;
+
+use super::element::RenderCell;
+
+/// The existing parse/paint metadata mutex also carries the one-dimensional
+/// tab map. Rio exposes tab mutations through Handler, but no tab-map reader.
+pub(super) struct ParsePresentation {
+    pub(super) cursor: Option<Pos>,
+    tab_stops: Vec<bool>,
+}
+
+impl ParsePresentation {
+    pub(super) fn new(cols: usize) -> Self {
+        let mut facts = Self {
+            cursor: None,
+            tab_stops: Vec::new(),
+        };
+        facts.resize(cols);
+        facts
+    }
+
+    pub(super) fn resize(&mut self, cols: usize) {
+        let previous = self.tab_stops.len();
+        self.tab_stops.resize(cols, false);
+        for col in previous..cols {
+            self.tab_stops[col] = col.is_multiple_of(8);
+        }
+    }
+
+    pub(super) fn reset_tabs(&mut self, cols: usize) {
+        self.resize(cols);
+        for (col, stop) in self.tab_stops.iter_mut().enumerate() {
+            *stop = col.is_multiple_of(8);
+        }
+    }
+
+    pub(super) fn set_tab_stop(&mut self, col: usize) {
+        self.tab_stops[col] = true;
+    }
+
+    pub(super) fn clear_tab_stop(&mut self, col: usize) {
+        self.tab_stops[col] = false;
+    }
+
+    pub(super) fn clear_all_tab_stops(&mut self) {
+        self.tab_stops.fill(false);
+    }
+
+    pub(super) fn is_tab_stop(&self, col: usize) -> bool {
+        self.tab_stops
+            .get(col)
+            .copied()
+            .unwrap_or_else(|| col.is_multiple_of(8))
+    }
+}
+
+pub(super) struct PresentedGrid<'a> {
+    cells: &'a [RenderCell],
+    cols: usize,
+    offset: i32,
+}
+
+impl<'a> PresentedGrid<'a> {
+    pub(super) fn new(cells: &'a [RenderCell], cols: usize, offset: i32) -> Self {
+        Self {
+            cells,
+            cols: cols.max(1),
+            offset,
+        }
+    }
+
+    fn rows(&self) -> usize {
+        self.cells.len() / self.cols
+    }
+
+    pub(super) fn link_line(&self, col: usize, row: usize) -> Option<super::link::GridLink> {
+        if let Some((uri, runs)) = self.hyperlink(col, row) {
+            return Some(super::link::GridLink::Hyperlink(uri, runs));
+        }
+        let (text, points, click) = self.logical_line(col, row, true)?;
+        Some(super::link::GridLink::Text(text, points, click))
+    }
+
+    pub(super) fn row_runs(&self, points: &[Pos]) -> Vec<(Pos, Pos)> {
+        let mut runs: Vec<(Pos, Pos)> = Vec::new();
+        for &point in points {
+            let ix = self.index(point);
+            let end = if self
+                .cells
+                .get(ix)
+                .is_some_and(|cell| cell.wide == Wide::Wide)
+            {
+                Pos::new(point.row, Column((point.col.0 + 1).min(self.cols - 1)))
+            } else {
+                point
+            };
+            if let Some((_, previous)) = runs.last_mut()
+                && previous.row == point.row
+                && point.col.0 <= previous.col.0 + 1
+            {
+                previous.col = previous.col.max(end.col);
+            } else {
+                runs.push((point, end));
+            }
+        }
+        runs
+    }
+
+    fn lead(&self, ix: usize) -> usize {
+        let ix = ix.min(self.cells.len().saturating_sub(1));
+        match self.cells.get(ix).map(|cell| cell.wide) {
+            Some(Wide::Spacer) => ix.saturating_sub(1),
+            Some(Wide::LeadingSpacer) => (ix + 1).min(self.cells.len().saturating_sub(1)),
+            _ => ix,
+        }
+    }
+
+    pub(super) fn boundary(&self, col: usize, row: usize, left: bool) -> usize {
+        if self.cells.is_empty() {
+            return 0;
+        }
+        let ix = row.min(self.rows() - 1) * self.cols + col.min(self.cols - 1);
+        // A leading spacer still belongs to this physical row. Simple
+        // selection must preserve that row's break before the wide glyph.
+        if self.cells[ix].wide == Wide::LeadingSpacer {
+            return ix + usize::from(!left);
+        }
+        let ix = self.lead(ix);
+        ix + if left {
+            0
+        } else if self.cells[ix].wide == Wide::Wide {
+            2
+        } else {
+            1
+        }
+    }
+
+    fn wraps(&self, row: usize) -> bool {
+        self.cells
+            .get((row + 1) * self.cols - 1)
+            .is_some_and(|cell| cell.wrapped)
+    }
+
+    fn point(&self, ix: usize) -> Pos {
+        Pos::new(
+            Line((ix / self.cols) as i32 - self.offset),
+            Column(ix % self.cols),
+        )
+    }
+
+    fn index(&self, point: Pos) -> usize {
+        (point.row.0 + self.offset) as usize * self.cols + point.col.0
+    }
+
+    pub(super) fn is_blank(&self, col: usize, row: usize) -> bool {
+        self.cells
+            .get(row * self.cols + col)
+            .is_none_or(|cell| !cell.spacer && cell.c.is_whitespace())
+    }
+
+    /// A logical line and its character-to-cell mapping, allocated only for a
+    /// pointer action, never during paint. Hard joins match URL detection only.
+    pub(super) fn logical_line(
+        &self,
+        col: usize,
+        row: usize,
+        hard: bool,
+    ) -> Option<(String, Vec<Pos>, usize)> {
+        if row >= self.rows() || col >= self.cols {
+            return None;
+        }
+        let click = self.lead(row * self.cols + col);
+        let joins = |row: usize| {
+            self.wraps(row)
+                || (hard
+                    && row + 1 < self.rows()
+                    && super::search::is_url_char(self.cells[(row + 1) * self.cols - 1].c)
+                    && super::search::is_url_char(self.cells[(row + 1) * self.cols].c)
+                    && self.cells[(row + 1) * self.cols].c != '@')
+        };
+        let mut first = row;
+        while first > 0 && row - first < 32 && joins(first - 1) {
+            first -= 1;
+        }
+        let mut last = row;
+        while last + 1 < self.rows() && last - first < 32 && joins(last) {
+            last += 1;
+        }
+        let mut text = String::new();
+        let mut points = Vec::new();
+        let mut clicked = None;
+        for ix in first * self.cols..(last + 1) * self.cols {
+            let cell = &self.cells[ix];
+            if cell.spacer {
+                continue;
+            }
+            if ix == click {
+                clicked = Some(points.len());
+            }
+            text.push(if cell.c == '\0' { ' ' } else { cell.c });
+            points.push(self.point(ix));
+            if let Some(marks) = &cell.marks {
+                for &mark in marks.iter() {
+                    text.push(mark);
+                    points.push(self.point(ix));
+                }
+            }
+        }
+        Some((text, points, clicked?))
+    }
+
+    pub(super) fn hyperlink(&self, col: usize, row: usize) -> Option<(String, Vec<(Pos, Pos)>)> {
+        if row >= self.rows() || col >= self.cols {
+            return None;
+        }
+        let ix = self.lead(row * self.cols + col);
+        let uri = self.cells[ix].hyperlink.as_ref()?.uri();
+        let same = |at: usize| {
+            self.cells[self.lead(at)]
+                .hyperlink
+                .as_ref()
+                .is_some_and(|link| link.uri() == uri)
+        };
+        let mut start = ix;
+        while start > 0
+            && (start % self.cols != 0 || self.wraps(start / self.cols - 1))
+            && same(start - 1)
+        {
+            start -= 1;
+        }
+        let mut end = ix;
+        while end + 1 < self.cells.len()
+            && ((end + 1) % self.cols != 0 || self.wraps(end / self.cols))
+            && same(end + 1)
+        {
+            end += 1;
+        }
+        Some((
+            uri.to_owned(),
+            super::smart_select::grid_runs(self.point(start), self.point(end), self.cols),
+        ))
+    }
+
+    pub(super) fn click_range(
+        &self,
+        col: usize,
+        row: usize,
+        clicks: usize,
+        cfg: &crate::core::config::Config,
+    ) -> Range<usize> {
+        if row >= self.rows() || col >= self.cols {
+            return 0..0;
+        }
+        if clicks >= 3 {
+            // Lines can include a completely blank row or a lone leading
+            // spacer, neither of which has a character-to-cell click point.
+            let mut first = row;
+            while first > 0 && self.wraps(first - 1) {
+                first -= 1;
+            }
+            let mut last = row;
+            while last + 1 < self.rows() && self.wraps(last) {
+                last += 1;
+            }
+            return first * self.cols..(last + 1) * self.cols;
+        }
+        let Some((text, points, click)) = self.logical_line(col, row, false) else {
+            return 0..0;
+        };
+        let chars: Vec<_> = text.chars().collect();
+        if cfg.smart_select
+            && let Some((_, runs)) = self.hyperlink(col, row)
+        {
+            return self.index(runs[0].0)..self.index(runs.last().unwrap().1) + 1;
+        }
+        let smart = cfg
+            .smart_select
+            .then(|| {
+                super::smart_select::pair_range(&chars, click)
+                    .or_else(|| {
+                        super::smart_select::is_cjk(chars[click])
+                            .then(|| super::smart_select::cjk_word_range(&text, click))
+                            .flatten()
+                    })
+                    .or_else(|| {
+                        super::smart_select::smart_range(&text, &chars, click, &cfg.word_separators)
+                    })
+            })
+            .flatten();
+        let (start, end) = smart.unwrap_or_else(|| {
+            let mut start = click;
+            let mut end = click;
+            while start > 0 && !cfg.word_separators.contains(chars[start - 1]) {
+                start -= 1;
+            }
+            while end + 1 < chars.len() && !cfg.word_separators.contains(chars[end + 1]) {
+                end += 1;
+            }
+            (start, end)
+        });
+        let end = self.index(points[end]);
+        self.index(points[start])
+            ..end
+                + if self.cells[end].wide == Wide::Wide {
+                    2
+                } else {
+                    1
+                }
+    }
+
+    pub(super) fn selected_text(&self, lines: bool) -> Option<String> {
+        let start = self.cells.iter().position(|cell| cell.selected)?;
+        let end = self.cells.iter().rposition(|cell| cell.selected)?;
+        let mut text = String::new();
+        let mut pending_spaces = 0;
+        let mut pending_breaks = 0;
+        for row in start / self.cols..=end / self.cols {
+            let from = start.max(row * self.cols);
+            let to = (end + 1).min((row + 1) * self.cols);
+            let mut row_has_content = false;
+            let mut tab_suffix = false;
+            for cell in &self.cells[from..to] {
+                if cell.spacer || !cell.selected {
+                    continue;
+                }
+                // A Tab encodes only the run up to the next committed stop.
+                // NUL cells at/after that stop are real gaps and stay spaces.
+                if tab_suffix && cell.c == '\0' && !cell.tab_stop {
+                    continue;
+                }
+                tab_suffix = cell.c == '\t';
+                if matches!(cell.c, ' ' | '\0')
+                    && cell.marks.as_deref().is_none_or(|marks| marks.is_empty())
+                {
+                    pending_spaces += 1;
+                    continue;
+                }
+                // Only later content commits blanks. This keeps embedded
+                // blank rows and wrap gaps, but drops trailing empty rows.
+                text.extend(std::iter::repeat_n('\n', pending_breaks));
+                pending_breaks = 0;
+                text.extend(std::iter::repeat_n(' ', pending_spaces));
+                pending_spaces = 0;
+                text.push(if cell.c == '\0' { ' ' } else { cell.c });
+                if let Some(marks) = &cell.marks {
+                    text.extend(marks.iter());
+                }
+                row_has_content = true;
+            }
+            let wraps = self.wraps(row);
+            if !row_has_content || !wraps {
+                pending_breaks += 1;
+            }
+            if !wraps {
+                pending_spaces = 0;
+            }
+        }
+        if lines {
+            text.push('\n');
+        }
+        Some(text)
+    }
+}
+
+#[derive(Default)]
+pub(super) struct PresentedSelection {
+    anchor: Range<usize>,
+    target: Range<usize>,
+    clicks: usize,
+}
+
+impl PresentedSelection {
+    pub(super) fn new(anchor: Range<usize>, clicks: usize) -> Self {
+        Self {
+            target: anchor.clone(),
+            anchor,
+            clicks,
+        }
+    }
+
+    pub(super) fn update(&mut self, target: Range<usize>) {
+        self.target = target;
+    }
+
+    pub(super) fn clicks(&self) -> usize {
+        self.clicks
+    }
+
+    pub(super) fn apply(&self, cells: &mut [RenderCell]) -> bool {
+        let range = self.anchor.start.min(self.target.start)..self.anchor.end.max(self.target.end);
+        for (ix, cell) in cells.iter_mut().enumerate() {
+            cell.selected = range.contains(&ix);
+        }
+        !range.is_empty()
+    }
+}

@@ -682,7 +682,10 @@ impl TerminalView {
                     view.report_focus_change(focused);
                 },
                 foreground: |view, window, cx| view.poll_foreground(window, cx),
-                detach: |view| view.terminal.detach_link(),
+                detach: |view| {
+                    view.grid_snap = None;
+                    view.terminal.detach_link();
+                },
             },
         );
 
@@ -938,6 +941,9 @@ impl TerminalView {
         self.remote_clipboard_write_in_flight = None;
         self.terminal
             .adopt_relink(stream, buffered, route, size, cell_w, cell_h)?;
+        self.grid_snap = None;
+        self.grid_buf.clear();
+        self.selection_scroll.clear_presented();
         self.relink_abandoned = false;
         self.relink_inflight = false;
         self.title = self.default_title.clone();
@@ -1148,11 +1154,58 @@ impl TerminalView {
     }
 
     pub fn selection_text(&self) -> Option<String> {
-        self.terminal
-            .term
-            .lock()
-            .selection_to_string()
-            .filter(|t| !t.trim().is_empty())
+        self.visible_selection_text()
+            .filter(|text| !text.trim().is_empty())
+    }
+
+    fn holds_presented_grid(&self) -> bool {
+        self.terminal.term.lock().synchronized_output()
+            || self.grid_snap.as_ref().is_some_and(|snap| snap.held)
+    }
+
+    fn presented_grid(&self) -> Option<super::presentation::PresentedGrid<'_>> {
+        let geom = self.cell_geom?;
+        let offset = self
+            .grid_snap
+            .as_ref()
+            .map_or(0, |snap| snap.display_offset);
+        Some(super::presentation::PresentedGrid::new(
+            &self.grid_buf,
+            geom.cols,
+            offset,
+        ))
+    }
+
+    fn visible_selection_text(&self) -> Option<String> {
+        let term = self.terminal.term.lock();
+        if term.synchronized_output()
+            || self.grid_snap.as_ref().is_some_and(|snap| snap.held)
+            || self.selection_scroll.has_presented()
+        {
+            let lines = self
+                .grid_snap
+                .as_ref()
+                .is_some_and(|snap| snap.selection_is_lines);
+            return self.presented_grid()?.selected_text(lines);
+        }
+        term.selection_to_string()
+    }
+
+    fn set_presented_selection(&mut self, selected: bool) {
+        self.frame.has_selection = selected;
+        if let Some(snap) = self.grid_snap.as_mut() {
+            snap.any_selected = selected;
+            snap.selection_is_lines &= selected;
+        }
+    }
+
+    fn clear_visible_selection(&mut self) {
+        self.terminal.term.lock().selection = None;
+        self.selection_scroll.clear_presented();
+        for cell in &mut self.grid_buf {
+            cell.selected = false;
+        }
+        self.set_presented_selection(false);
     }
 
     pub fn send_agent_prompt(&self, prompt: &str) {
@@ -1232,7 +1285,17 @@ impl TerminalView {
     }
 
     fn has_selection(&self) -> bool {
-        self.terminal.term.lock().selection.is_some()
+        if self.selection_scroll.has_presented() {
+            return true;
+        }
+        let term = self.terminal.term.lock();
+        if term.synchronized_output() || self.grid_snap.as_ref().is_some_and(|snap| snap.held) {
+            return self
+                .grid_snap
+                .as_ref()
+                .is_some_and(|snap| snap.any_selected);
+        }
+        term.selection.is_some()
     }
 
     /// Whether *this frame* draws a selection. The grid half comes from
@@ -1248,11 +1311,35 @@ impl TerminalView {
         let mut term = self.terminal.term.lock();
         self.selection_scroll.jump_to_prompt(&mut term);
         drop(term);
+        if self.selection_scroll.has_presented()
+            || self
+                .grid_snap
+                .as_ref()
+                .is_some_and(|snap| snap.held && snap.any_selected)
+        {
+            self.selection_scroll.clear_presented();
+            for cell in &mut self.grid_buf {
+                cell.selected = false;
+            }
+            self.set_presented_selection(false);
+        }
         self.terminal.viewport_reporter().report();
     }
 
     pub fn select_all(&mut self, cx: &mut Context<Self>) {
         let mut term = self.terminal.term.lock();
+        if term.synchronized_output() || self.grid_snap.as_ref().is_some_and(|snap| snap.held) {
+            drop(term);
+            let selected = self
+                .selection_scroll
+                .select_all_presented(&mut self.grid_buf);
+            self.set_presented_selection(selected);
+            if let Some(snap) = self.grid_snap.as_mut() {
+                snap.selection_is_lines = false;
+            }
+            cx.notify();
+            return;
+        }
         self.selection_scroll.select_all(&mut term);
         drop(term);
         cx.notify();
@@ -1593,6 +1680,29 @@ impl TerminalView {
         cx: &mut Context<Self>,
     ) {
         let mut term = self.terminal.term.lock();
+        if term.synchronized_output() || self.grid_snap.as_ref().is_some_and(|snap| snap.held) {
+            drop(term);
+            if let Some(geom) = self.cell_geom {
+                let selected = self.selection_scroll.start_presented(
+                    &mut self.grid_buf,
+                    geom.cols,
+                    col,
+                    row,
+                    left,
+                    clicks,
+                    shift,
+                    cx.global::<Config>(),
+                );
+                self.set_presented_selection(selected);
+                if !(shift && clicks == 1)
+                    && let Some(snap) = self.grid_snap.as_mut()
+                {
+                    snap.selection_is_lines = clicks >= 3;
+                }
+                cx.notify();
+            }
+            return;
+        }
         self.selection_scroll.start(
             &mut term,
             col,
@@ -1610,16 +1720,42 @@ impl TerminalView {
         if !self.selection_scroll.is_selecting() {
             return;
         }
-        let mut term = self.terminal.term.lock();
-        self.selection_scroll.update(
-            &mut term,
-            col,
-            row,
-            left,
-            &cx.global::<Config>().word_separators,
-        );
-        drop(term);
-        cx.notify();
+        if !self.selection_scroll.has_presented() {
+            let mut term = self.terminal.term.lock();
+            if (term.synchronized_output() || self.grid_snap.as_ref().is_some_and(|snap| snap.held))
+                && let Some(geom) = self.cell_geom
+            {
+                self.selection_scroll.adopt_presented(
+                    &self.grid_buf,
+                    geom.cols,
+                    cx.global::<Config>(),
+                );
+            }
+            if !self.selection_scroll.has_presented() {
+                self.selection_scroll.update(
+                    &mut term,
+                    col,
+                    row,
+                    left,
+                    &cx.global::<Config>().word_separators,
+                );
+                drop(term);
+                cx.notify();
+                return;
+            }
+        }
+        if let Some(geom) = self.cell_geom {
+            let selected = self.selection_scroll.update_presented(
+                &mut self.grid_buf,
+                geom.cols,
+                col,
+                row,
+                left,
+                cx.global::<Config>(),
+            );
+            self.set_presented_selection(selected);
+            cx.notify();
+        }
     }
 
     pub fn select_autoscroll(
@@ -1629,6 +1765,9 @@ impl TerminalView {
         left: bool,
         cx: &mut Context<Self>,
     ) {
+        if self.selection_scroll.has_presented() {
+            return;
+        }
         let Some(epoch) = self.selection_scroll.autoscroll(overshoot, col, left) else {
             return;
         };
@@ -1765,6 +1904,11 @@ impl TerminalView {
         } else {
             return false;
         };
+        if term.synchronized_output() {
+            // Render facts belong to the same committed picture as the cells.
+            // Keyboard/mouse protocol routing still consults the live terminal.
+            return true;
+        }
         if let Some(target) = self.scroll_handle.take_pending() {
             self.selection_scroll.scroll_to(&mut term, target);
         }
@@ -4857,12 +5001,13 @@ mod gpui_tests {
                     1.,
                     gpui_kit::Rgba::default(),
                     must_block,
+                    false,
                 )
             })
         };
 
         assert!(
-            build(cx, &mut buf, true).is_some(),
+            build(cx, &mut buf, true).is_ok(),
             "the first frame has no previous grid to stand in for it, so it waits and builds"
         );
         assert_eq!(buf.len(), 24 * 80);
@@ -4876,7 +5021,7 @@ mod gpui_tests {
         drop(held);
 
         assert!(
-            refused.is_none(),
+            refused.is_err(),
             "a frame that cannot have the lock says so instead of waiting for it"
         );
         assert_eq!(
@@ -4886,7 +5031,7 @@ mod gpui_tests {
         );
 
         assert!(
-            build(cx, &mut buf, false).is_some(),
+            build(cx, &mut buf, false).is_ok(),
             "with the lock free, a frame builds without being told to wait"
         );
         assert_eq!(buf.len(), 24 * 80);

@@ -20,8 +20,9 @@
 //! - **Width.** A wide char owns two cells and its spacer must not become a
 //!   second character; combining marks belong to the cell they modify.
 //!
-//! So this parses, using the same crate and rev the GUI renders panes with —
-//! meaning `capture --plain` and the window agree about what a pane says.
+//! So this parses with the same terminal engine as the GUI. Capture reads the
+//! latest received state, which can lead a GUI frame held by synchronized output;
+//! once the update settles, equivalent content ranges agree.
 
 use lyrel_core::daemon::protocol::WinSize;
 use rio_vt::ansi::CursorShape;
@@ -102,9 +103,10 @@ fn render_segment(size: WinSize, bytes: &[u8]) -> String {
         0,
         10_000,
     );
-    // Spelled out because `Processor` is generic over its sync-timeout policy
-    // and nothing here pins it; the default is the one the GUI parses with.
-    let mut parser: Processor = Processor::default();
+    // Rio applies bytes immediately, including an unfinished synchronized
+    // update. Capture reads this live grid; it never waits for a GUI frame or
+    // forces a presentation timeout to make received text observable.
+    let mut parser = Processor::default();
     parser.advance(&mut term, bytes);
 
     let start = Pos::new(term.topmost_line(), Column(0));
@@ -172,6 +174,12 @@ mod tests {
              \x1b]133;C\x07a.txt\r\n\x1b]133;D;0\x07",
         );
         assert_eq!(text, "$ ls\na.txt");
+    }
+
+    #[test]
+    fn unfinished_synchronized_update_captures_received_text_without_an_end_marker() {
+        let text = plain(20, 5, "before\r\n\x1b[?2026hreceived now");
+        assert_eq!(text, "before\nreceived now");
     }
 
     #[test]

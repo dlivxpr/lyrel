@@ -213,7 +213,7 @@ cargo run --locked -p lyrel --bin lyrel-app -- \
 
 表格结构命令只处理当前 revision 投影确认的所属表格及必要容器前缀，不同步复制或解析全文；过期的表格范围不执行。已有表头、分隔行和正文行各自保留原始行终止符，行移动／表头提升时终止符随行移动；新增行使用文档的换行约定，无最终换行的表格仍不补末尾换行。行列操作、对齐及撤销／重做继续使用同一文档事务和 Host 保存路径。已经满足的对齐命令不创建虚假的源码历史项，但仍分隔命令前后的连续输入，撤销分别恢复两次输入。
 
-正文投影按文档语法使用唯一带源码位置的解析路径：普通 Markdown 使用与 `gpui-base 0.8.1` 相同的正式 `markdown 1.0.0`，MDX 使用正式 `ox_content_parser 3.4.0`，把公开字节区间 AST 转换为现有投影的 `mdast` 数据。同一文档不由两个解析器竞争，也不从渲染字符串反查源码。YAML/TOML 元数据作为原始前缀分区，后续区间回到同一源码坐标，不插入占位或改写解析输入。输入后只更新受影响块及其直接相邻上下文；完整解析在后台合并调度，落地前检查原文档 identity 与 revision。未完成或无效的输入保留在源文档中。稳定的块／leaf identity 复用原生渲染状态；选择、点击、原生输入法候选位置取自每帧重新收集的 `LeafGeometry`，宽度、字体、缩放和滚动改变后不复用旧布局几何。
+正文投影按文档语法使用唯一带源码位置的解析路径：普通 Markdown 使用与 `gpui-base 0.9.0` 相同的正式 `markdown 1.0.0`，MDX 使用正式 `ox_content_parser 3.4.0`，把公开字节区间 AST 转换为现有投影的 `mdast` 数据。同一文档不由两个解析器竞争，也不从渲染字符串反查源码。YAML/TOML 元数据作为原始前缀分区，后续区间回到同一源码坐标，不插入占位或改写解析输入。输入后只更新受影响块及其直接相邻上下文；完整解析在后台合并调度，落地前检查原文档 identity 与 revision。未完成或无效的输入保留在源文档中。稳定的块／leaf identity 复用原生渲染状态；选择、点击、原生输入法候选位置取自每帧重新收集的 `LeafGeometry`，宽度、字体、缩放和滚动改变后不复用旧布局几何。
 
 长文呈现仅构建视口及前后缓冲区的原生块；表格单元格作为同一布局行保留，离屏块使用带 leaf identity／version 的高度提示占位。缺少当前帧几何仅表示未布局，不删除源码、选择或历史。返回离屏位置先按源码定位所属块，再以新帧几何校正光标；宽度、字体与 rem 缩放改变后重测。晚到的图片、公式、图形与解析结果更新布局时，仍在视口中的光标继续保持可见，阅读位置按稳定 leaf 锚定；主动滚动不被旧锚点抵消。
 
@@ -421,9 +421,9 @@ Markdown/MDX 普通保存不执行全文整理；严格解码保留编码、BOM 
 
 #### 原生实现路线与候选依赖
 
-自建源码保真的 Markdown 编辑模块，复用 GPUI Kit 的公开渲染接口，不直接采用会重新序列化文档的富文本模型。当前锁定的 `gpui-kit 0.8.1` 已包含 `gpui_kit::base::text::editor_host`；它提供块渲染与文字几何信息，但不提供完整编辑内核。文档身份、源码映射、编辑事务、撤销、选择、焦点、原生输入法接入和无障碍仍由编辑模块负责，见 [GPUI Kit 的 editor host 职责](https://github.com/longbridge/gpui-kit/blob/main/docs/ARCHITECTURE.md)。
+自建源码保真的 Markdown 编辑模块，复用 GPUI Kit 的公开渲染接口，不直接采用会重新序列化文档的富文本模型。当前锁定的 `gpui-kit 0.9.0` 包含 `gpui_kit::base::text::editor_host`；它提供块渲染与文字几何信息，但不提供完整编辑内核。文档身份、源码映射、编辑事务、撤销、选择、焦点、原生输入法接入和无障碍仍由编辑模块负责，见 [GPUI Kit 的 editor host 职责](https://github.com/longbridge/gpui-kit/blob/main/docs/ARCHITECTURE.md)。
 
-`gpui-kit-markdown-editor` 作为交互与架构参考，不直接集成其 `0.1.1` 发布版：该版本固定 `gpui-pre =0.3.9`，而 lyrel 使用 `0.3.10`；它还明确存在首次保存改变列表紧凑度、空段落消失、缺少源码偏移映射，以及 Windows/macOS 原生输入未验证等限制，见 [发布版依赖与限制](https://docs.rs/crate/gpui-kit-markdown-editor/0.1.1)。不以 Git 依赖、第三方源码复制或构建补丁绕过仓库依赖约束。
+`gpui-kit-markdown-editor` 作为交互与架构参考，不直接集成其 `0.1.1` 发布版：该版本固定 `gpui-pre =0.3.9`，而 lyrel 已通过 Kit 选择 `gpui-fast 0.1.13`；它还明确存在首次保存改变列表紧凑度、空段落消失、缺少源码偏移映射，以及 Windows/macOS 原生输入未验证等限制，见 [发布版依赖与限制](https://docs.rs/crate/gpui-kit-markdown-editor/0.1.1)。不以 Git 依赖、第三方源码复制或构建补丁绕过仓库依赖约束。
 
 原生实现使用正式 [RaTeX 0.1.15](https://docs.rs/ratex-svg/0.1.15/ratex_svg/) 的 `parse → layout → glyph SVG` 路径，以及 [Merman 0.9.2](https://docs.rs/crate/merman/0.9.2) 的 `all-diagrams`／`complete-svg` 与完整 `resvg_safe` 管线，不启用 ELK。两者由 resvg 光栅化为原生图像，不依赖 Node.js、Chromium 或项目 JavaScript；MiTeX／Typst 未加入产品依赖。
 

@@ -416,6 +416,9 @@ impl TerminalView {
         let Some(term) = self.terminal.term.try_lock() else {
             return false;
         };
+        if term.synchronized_output() {
+            return true;
+        }
         let alt_screen = term.mode().contains(Mode::ALT_SCREEN);
         self.input.sync_owner_on_screen(&self.terminal, alt_screen);
         if self

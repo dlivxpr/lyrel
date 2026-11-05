@@ -16,6 +16,20 @@ impl TerminalView {
         }
         match ev {
             PaneEvent::Wakeup => {
+                if !self.lifecycle.is_displayed()
+                    && self
+                        .terminal
+                        .term
+                        .try_lock()
+                        .is_some_and(|term| !term.synchronized_output())
+                {
+                    // Hidden panes do not paint. Retire their derived display
+                    // leases here rather than pinning old pixels/metadata until
+                    // the tab is shown again; no redraw is scheduled.
+                    self.grid_snap = None;
+                    self.grid_buf.clear();
+                    self.selection_scroll.clear_presented();
+                }
                 // The grid moved under whatever the search bar last measured.
                 self.note_output_under_search(cx);
                 self.lifecycle.notify_output(cx);

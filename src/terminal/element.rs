@@ -51,8 +51,8 @@ enum UnderlineKind {
 
 #[derive(Clone)]
 pub(super) struct RenderCell {
-    c: char,
-    marks: Option<Box<[char]>>,
+    pub(super) c: char,
+    pub(super) marks: Option<Box<[char]>>,
     fg: Hsla,
     bg: Hsla,
     draw_bg: bool,
@@ -61,8 +61,12 @@ pub(super) struct RenderCell {
     strikeout: bool,
     underline: UnderlineKind,
     underline_color: Option<Hsla>,
-    spacer: bool,
-    selected: bool,
+    pub(super) spacer: bool,
+    pub(super) selected: bool,
+    pub(super) wide: rio_vt::crosswords::square::Wide,
+    pub(super) wrapped: bool,
+    pub(super) tab_stop: bool,
+    pub(super) hyperlink: Option<rio_vt::crosswords::square::Hyperlink>,
     match_hit: bool,
     match_current: bool,
     link_hover: bool,
@@ -83,6 +87,10 @@ impl Default for RenderCell {
             underline: UnderlineKind::None,
             underline_color: None,
             spacer: false,
+            wide: rio_vt::crosswords::square::Wide::Narrow,
+            wrapped: false,
+            tab_stop: false,
+            hyperlink: None,
             selected: false,
             match_hit: false,
             match_current: false,
@@ -188,19 +196,29 @@ pub(super) struct GridCursor {
     style: crate::core::config::CursorStyle,
 }
 
-#[derive(Clone)]
+#[derive(Debug)]
+pub(super) enum SnapshotUnavailable {
+    Contended,
+    Synchronized,
+    AwaitingSize,
+}
+
+#[derive(Default)]
 pub(super) struct GridSnapshot {
     cursor: Option<GridCursor>,
     sliver: Option<Vec<RenderCell>>,
-    any_selected: bool,
+    pub(super) any_selected: bool,
+    pub(super) selection_is_lines: bool,
     any_match: bool,
     any_current: bool,
     /// Scrollback state at snapshot time, so the paint pass can map a kitty
     /// image's absolute anchor row back to a screen row: screen_row =
     /// anchor_row - history_size + display_offset.
-    display_offset: i32,
+    pub(super) display_offset: i32,
     history_size: usize,
-    placeholders: Vec<(i32, Vec<lyrel_core::core::kitty_graphics::PlaceholderSlice>)>,
+    pub(super) images: super::images::CommittedImages,
+    scroll_shift: f32,
+    pub(super) held: bool,
 }
 
 impl GridSnapshot {
@@ -450,7 +468,7 @@ impl Element for TerminalElement {
 
         let frac = self.view.read(cx).selection_scroll.fraction().clamp(0., 1.);
         let input_shift = self.view.read(cx).input_scroll_rows();
-        let geom = CellGeom {
+        let mut geom = CellGeom {
             origin: point(
                 bounds.origin.x,
                 bounds.origin.y + prepaint.line_height * (frac - input_shift as f32),
@@ -493,11 +511,14 @@ impl Element for TerminalElement {
         let mut buf = self
             .view
             .update(cx, |view, _| std::mem::take(&mut view.grid_buf));
-        let previous = self.view.read(cx).grid_snap.clone();
-        // The two frames with nothing to fall back on: the first one this pane
-        // ever paints, and the one after a resize, whose previous grid is the
-        // wrong shape to paint into these bounds. Those wait for the lock.
-        let must_block = previous.is_none() || buf.len() != geom.rows * geom.cols;
+        let previous = self.view.update(cx, |view, _| view.grid_snap.take());
+        let previous_geom = self.view.read(cx).cell_geom;
+        let resized = previous_geom
+            .is_some_and(|previous| (previous.rows, previous.cols) != (geom.rows, geom.cols));
+        // A held picture remains paintable at its committed addressing even
+        // after resize. Only a missing frame or an ordinary resize waits.
+        let must_block =
+            previous.is_none() || (resized && !previous.as_ref().is_some_and(|snap| snap.held));
         let built = self.build_grid(
             &colors,
             &mut buf,
@@ -508,19 +529,51 @@ impl Element for TerminalElement {
             dim,
             under,
             must_block,
+            previous.is_some(),
         );
-        if let Some(snap) = &built {
-            let snap = snap.clone();
-            self.view.update(cx, |view, _| view.grid_snap = Some(snap));
-        } else {
-            self.view
-                .update(cx, |view, cx| view.retry_grid_when_available(cx));
-        }
-        // `must_block` above is exactly the condition under which `build_grid`
-        // is not allowed to come back empty, so one of the two is always here.
-        let Some(snap) = built.or(previous) else {
-            return;
+        let reused = built.is_err() && previous.is_some();
+        let held = matches!(
+            &built,
+            Err(SnapshotUnavailable::Synchronized | SnapshotUnavailable::AwaitingSize)
+        ) || (built.is_err() && previous.as_ref().is_some_and(|snap| snap.held));
+        let mut snap = match built {
+            Ok(snap) => {
+                self.view
+                    .update(cx, |view, _| view.selection_scroll.clear_presented());
+                snap
+            }
+            Err(unavailable) => {
+                if matches!(unavailable, SnapshotUnavailable::Contended) {
+                    self.view
+                        .update(cx, |view, cx| view.retry_grid_when_available(cx));
+                }
+                if let Some(previous) = previous {
+                    previous
+                } else {
+                    // The first received bytes may themselves start a hold.
+                    // There is no pre-update picture: present an empty surface,
+                    // never its partially parsed first frame.
+                    buf.resize_with(geom.rows * geom.cols, RenderCell::default);
+                    buf.fill_with(RenderCell::default);
+                    GridSnapshot::default()
+                }
+            }
         };
+        if reused
+            && resized
+            && let Some(previous_geom) = previous_geom
+        {
+            // Until the ordered resize reaches the VT, keep the old frame's
+            // cell addressing too. New bounds may clip it, never reinterpret it.
+            geom.rows = previous_geom.rows;
+            geom.cols = previous_geom.cols;
+        }
+        if held {
+            geom.origin.y = bounds.origin.y + prepaint.line_height * snap.scroll_shift;
+        } else {
+            snap.scroll_shift = frac - input_shift as f32;
+        }
+        snap.held = held;
         let cursor = snap.cursor;
         let sliver = snap.sliver.as_ref();
 
@@ -570,7 +623,7 @@ impl Element for TerminalElement {
         // drop anything scrolled out of the viewport.
         let image_store = self.view.read(cx).terminal.images();
         let displayed = self.view.read(cx).lifecycle.paint_visibility().clone();
-        let images = image_store.snapshot_with_placeholders(&snap.placeholders);
+        let images = &snap.images;
         let notice = images.iter().any(|image| image.evicted).then(|| {
             let text = SharedString::new_static(t(L10nKey::TerminalImageEvicted));
             window.text_system().shape_line(
@@ -603,12 +656,14 @@ impl Element for TerminalElement {
                     window.scale_factor(),
                 );
                 let visible = bounds.intersect(&window.content_mask().bounds);
-                if visible.size.width <= px(0.)
-                    || visible.size.height <= px(0.)
-                    || !image_store.claim_for_paint(img)
-                {
+                if visible.size.width <= px(0.) || visible.size.height <= px(0.) {
                     continue;
                 }
+                // Authorization was captured with the committed text under the
+                // stream-position guard. Later live placement changes cannot
+                // tear this picture; its existing charged leases remain pinned.
+                img.painted
+                    .store(true, std::sync::atomic::Ordering::Release);
                 image_store.register_for_paint(img, window, &displayed);
                 window.paint_layer(visible, |window| {
                     if let Some(data) = &img.data {
@@ -735,8 +790,19 @@ impl Element for TerminalElement {
             }
         });
 
+        // Cursor inversion is transient paint decoration, not retained data.
+        // Otherwise a held/contended redraw would invert the old cell twice.
+        if !editor_active
+            && focused
+            && cursor_visible
+            && let Some((row, col, crate::core::config::CursorStyle::Block)) = render_cursor
+        {
+            invert_cursor_cell(&mut buf, geom.cols, row, col, &colors);
+        }
+
         self.view.update(cx, |view, _| {
             view.grid_buf = buf;
+            view.grid_snap = Some(snap);
             view.cell_geom = Some(geom);
         });
 
