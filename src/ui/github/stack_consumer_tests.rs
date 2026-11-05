@@ -23,7 +23,7 @@ fn stacked_pull_relationship_boundaries_are_deterministic_in_the_panel(cx: &mut 
             stack_pull(23, "self-child", "self", "acme/widgets"),
         ]),
     });
-    let (temp, _app, mut vcx, _pane) = stack_panel(cx, fake);
+    let (_temp, root, _app, mut vcx, _pane) = stack_panel(cx, fake);
     vcx.update(|window, cx| {
         window.render_frame(cx);
         let order = [4, 3, 2, 1, 9, 11, 12, 13, 14, 15, 21, 20, 23, 22];
@@ -55,7 +55,7 @@ fn stacked_pull_relationship_boundaries_are_deterministic_in_the_panel(cx: &mut 
             "siblings need separate connector lanes, not a misleading linear chain"
         );
     });
-    test_window::quiesce(&mut vcx, Some(temp.path()));
+    test_window::quiesce(&mut vcx, Some(&root));
 }
 
 #[gpui_kit::test]
@@ -69,7 +69,7 @@ fn stacked_pull_keyboard_keeps_identity_across_regroup_refresh_and_removal(
             stack_pull(2, "b", "a", "acme/widgets"),
         ]),
     });
-    let (temp, app, mut vcx, _pane) = stack_panel(cx, fake.clone());
+    let (_temp, root, app, mut vcx, _pane) = stack_panel(cx, fake.clone());
     vcx.update(|window, cx| {
         window.render_frame(cx);
         window.click("panel-github-open-repo", cx);
@@ -79,7 +79,10 @@ fn stacked_pull_keyboard_keeps_identity_across_regroup_refresh_and_removal(
         let first = window.find("panel-github-item-3").bounds();
         window.click_at(
             "panel-github-rows-acme/widgets",
-            gpui_kit::point((first.left() - list.left()) / 2., first.center().y - list.top()),
+            gpui_kit::point(
+                (first.left() - list.left()) / 2.,
+                first.center().y - list.top(),
+            ),
             cx,
         );
         assert_eq!(
@@ -120,7 +123,10 @@ fn stacked_pull_keyboard_keeps_identity_across_regroup_refresh_and_removal(
         let first = window.find("panel-github-item-99").bounds();
         window.click_at(
             "panel-github-rows-acme/widgets",
-            gpui_kit::point((first.left() - list.left()) / 2., first.center().y - list.top()),
+            gpui_kit::point(
+                (first.left() - list.left()) / 2.,
+                first.center().y - list.top(),
+            ),
             cx,
         );
         window.press("enter", cx);
@@ -175,7 +181,10 @@ fn stacked_pull_keyboard_keeps_identity_across_regroup_refresh_and_removal(
         let first = window.find("panel-github-item-99").bounds();
         window.click_at(
             "panel-github-rows-acme/widgets",
-            gpui_kit::point((first.left() - list.left()) / 2., first.center().y - list.top()),
+            gpui_kit::point(
+                (first.left() - list.left()) / 2.,
+                first.center().y - list.top(),
+            ),
             cx,
         );
         window.press("enter", cx);
@@ -190,7 +199,7 @@ fn stacked_pull_keyboard_keeps_identity_across_regroup_refresh_and_removal(
         window.press("home", cx);
         assert_eq!(window.find("panel-github-item-99").selected(), Some(true));
     });
-    test_window::quiesce(&mut vcx, Some(temp.path()));
+    test_window::quiesce(&mut vcx, Some(&root));
 }
 
 #[gpui_kit::test]
@@ -202,7 +211,7 @@ fn stacked_pull_label_filter_retains_flat_presentation_and_existing_links(cx: &m
             stack_pull(2, "b", "a", "acme/widgets"),
         ]),
     });
-    let (temp, app, mut vcx, _pane) = stack_panel(cx, fake);
+    let (_temp, root, app, mut vcx, _pane) = stack_panel(cx, fake);
     vcx.update(|window, cx| {
         window.render_frame(cx);
         window.hover("panel-github-item-1", cx);
@@ -236,7 +245,7 @@ fn stacked_pull_label_filter_retains_flat_presentation_and_existing_links(cx: &m
         Some(2),
         "pointer opening also uses PR identity"
     );
-    test_window::quiesce(&mut vcx, Some(temp.path()));
+    test_window::quiesce(&mut vcx, Some(&root));
 }
 
 #[gpui_kit::test]
@@ -251,7 +260,7 @@ fn stacked_pull_uses_the_canonical_api_repository_not_an_old_remote_name(cx: &mu
     let fake = Arc::new(StackFake {
         pulls: Mutex::new(pulls),
     });
-    let (temp, _app, mut vcx, _pane) = stack_panel(cx, fake);
+    let (_temp, root, _app, mut vcx, _pane) = stack_panel(cx, fake);
     vcx.update(|window, cx| {
         window.render_frame(cx);
         assert!(
@@ -260,5 +269,5 @@ fn stacked_pull_uses_the_canonical_api_repository_not_an_old_remote_name(cx: &mu
         );
         assert_eq!(window.find("panel-github-trunk-1").label(), Some("main"));
     });
-    test_window::quiesce(&mut vcx, Some(temp.path()));
+    test_window::quiesce(&mut vcx, Some(&root));
 }

@@ -1477,6 +1477,7 @@ mod gpui_tests {
         fake: Arc<StackFake>,
     ) -> (
         tempfile::TempDir,
+        PathBuf,
         Entity<LyrelApp>,
         VisualTestContext,
         crate::daemon::transport::Stream,
@@ -1500,14 +1501,14 @@ mod gpui_tests {
             app.right_panel_tab = RightPanelTab::GitHub;
             cx.notify();
         });
-        DaemonMsg::Cwd(root).encode(&mut pane).unwrap();
+        DaemonMsg::Cwd(root.clone()).encode(&mut pane).unwrap();
         settle(&app, &mut vcx, "stack pull list", |app| {
             app.github
                 .lists
                 .iter()
                 .any(|(q, l)| q.kind == Kind::Pulls && l.loaded)
         });
-        (temp, app, vcx, pane)
+        (temp, root, app, vcx, pane)
     }
 
     #[gpui_kit::test]
@@ -1520,7 +1521,7 @@ mod gpui_tests {
                 stack_pull(2, "b", "a", "acme/widgets"),
             ]),
         });
-        let (temp, _app, mut vcx, _pane) = stack_panel(cx, fake);
+        let (_temp, root, _app, mut vcx, _pane) = stack_panel(cx, fake);
         vcx.update(|window, cx| {
             window.render_frame(cx);
             let y = |n| window.find(format!("panel-github-item-{n}")).bounds().top();
@@ -1529,7 +1530,7 @@ mod gpui_tests {
                 "stack must be contiguous and top-first, before the unrelated row"
             );
         });
-        test_window::quiesce(&mut vcx, Some(temp.path()));
+        test_window::quiesce(&mut vcx, Some(&root));
     }
 
     include!("github/native_stack_test.rs");
