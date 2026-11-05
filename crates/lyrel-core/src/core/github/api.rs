@@ -311,6 +311,7 @@ pub fn detail(t: &dyn Transport, slug: &RepoSlug, number: u64) -> Result<Detail,
         // `/pulls/{n}` is the one that knows about drafts; the issue's
         // labels and comment count are kept, which `/pulls` omits.
         item.state = pr_item.state;
+        item.pull = pr_item.pull;
         // Checks and reviews are the panel's summary, not the pull request
         // itself: one that cannot be read is left out rather than failing
         // the whole view (an old commit's checks can be gone, a token can be

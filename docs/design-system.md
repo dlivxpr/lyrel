@@ -163,6 +163,20 @@ Git 的新增/修改标记种子为绿 `#2F8A52` / `#4CC27A`、琥珀 `#B7791F` 
   选择文本或公式布局。Windows 隔离实窗已通过真实 `omp/18.12.6` 的分式、矩阵、分段函数
   合成会话重放；三行矩阵括号接缝的空白像素行从 6 降为 0。几何回归覆盖多行高与
   1×／1.25×／1.5×／2× 比例，不替代其他 OS DPI、字体和 macOS 的原生像素验收。
+  PUA 图标（Powerline 原生分隔符除外）可以向相邻空白借用绘制空间，但两格的显式背景、
+  选择状态、普通搜索命中与当前搜索命中必须一致；显式背景还须同色。非空文字、组合标记、
+  下划线、删除线或链接装饰占用的空白不能出借。主字体图标和 fallback 图标沿用同一兼容性
+  规则，fallback 保留既有 ink fitting；借位只改变 glyph 的绘制预算，不改 Rio 列宽、复制内容、
+  鼠标命中或滚动几何。对应语义移植来源为 tty7 `69536b361a2c9ea5711fc779c2bcba3b1efbdbd5`。
+
+  原生回归使用 `node scripts/terminal-icon-overhang.mjs`，在隔离配置和自有 pane 中分别检查
+  已安装的 primary Nerd Font 与普通主字体加 icon fallback。保持前七行说明不换行，比较
+  default／matching background 行的同一图标，再检查不兼容背景、非空邻格和装饰空白。
+  `q` 恢复 alternate screen 并退出，`s` 触发输出与重绘。Windows 可用
+  `scripts/measure-terminal-icon-overhang.ps1 -Screenshot <自有窗口PNG> -OriginX <首格X> -OriginY <首格Y> -CellWidth <单格宽> -LineHeight <行高> -VerifyMatching`
+  读取所保存 PNG 的坐标并断言 matching background 没有缩小可借位图标；没有实际超单格
+  glyph 时脚本明确失败，不把缺前提记为通过。该量尺不验证选择／搜索状态、滚动、命中、
+  系统字体 fallback 或 GPU 原始分辨率；这些必须另做真实界面验收并记录平台与 DPI。
 
 ### 终端帧绘制所有权
 
@@ -196,7 +210,7 @@ Git 的新增/修改标记种子为绿 `#2F8A52` / `#4CC27A`、琥珀 `#B7791F` 
 - `element/colors.rs` 负责 ANSI／truecolor、主题颜色与 pane dim 的解析；
   cell 样式复用只属于当前 snapshot，不跨调色板或主题变化保留解析结果。
 - `element/text.rs` 与其私有 `segment`、`powerline` 模块负责字体、Unicode cluster、
-  宽字符、组合字符、fallback ink fitting 与原生分隔符；单元格列位置与裁切预算不变。
+  宽字符、组合字符、fallback ink fitting 与原生分隔符；单元格列位置不变，glyph 裁切遵循上面的兼容空白借位规则。
 - `element/decorations.rs` 绘制背景、选择／搜索填充、特殊下划线、cursor 与 IME preedit；
   所有阶段借用同一 buffer，不能为了模块交接增加每帧 clone、allocation 或 lock。
 
