@@ -122,9 +122,15 @@ description: "所有默认快捷键，以及用于重新绑定的操作名称。
 | 操作 | macOS | Windows |
 |---|---|---|
 | 设置 | <kbd>⌘ ,</kbd> | <kbd>Ctrl ,</kbd> |
+| 关闭窗口（保留后台会话） | <kbd>⌘ ⇧ W</kbd> | — |
 | 键盘快捷键 | <kbd>⌘ /</kbd> | — |
 | 隐藏 lyrel · 隐藏其他应用 · 最小化 | <kbd>⌘ H</kbd> · <kbd>⌘ ⌥ H</kbd> · <kbd>⌘ M</kbd> | — |
 | 退出 | <kbd>⌘ Q</kbd> | <kbd>Ctrl ⇧ Q</kbd> |
+
+“关闭窗口”使用既有 `CloseWindow` 操作，与关闭窗格／标签页的 <kbd>⌘ W</kbd> 不同。
+它仍会询问如何处理未保存文档；取消后窗口和编辑内容保持不变。关闭窗口不终止 daemon 持有的
+shell、构建或智能体任务，重新打开工作区即可继续。Windows 没有新增默认绑定；各平台均可在
+设置或 `keybindings` 配置中覆盖或清除此操作的快捷键。
 
 <a id="actions-with-no-default-key"></a>
 ## 没有默认快捷键的操作
@@ -142,7 +148,7 @@ description: "所有默认快捷键，以及用于重新绑定的操作名称。
 | 面板 | `ShowRightPanelInfo` · `ShowRightPanelFiles` · `ShowRightPanelSearch` · `ShowRightPanelChanges` · `ShowRightPanelGitHub` |
 | 文档 | `EditorNewMarkdownFile`（新建 Markdown 文档）· `ToggleDocumentFill` · `DocumentWidthThird` · `DocumentWidthHalf` · `DocumentWidthTwoThirds` · `ToggleDocumentPreview`（切换 Markdown 即时编辑 / 源码）· `ToggleDocumentWrap` |
 | SSH | `ToggleSftp` · `ShowSshForwards` · `OpenSshProfiles` |
-| 应用 | `CloseWindow` · `About` · `CheckForUpdates` · `OpenDocumentation` · `OpenProject`（打开[项目主页](https://github.com/dlivxpr/lyrel)）· `ReportIssue` · `ShowAll` · `ZoomWindow` |
+| 应用 | `About` · `CheckForUpdates` · `OpenDocumentation` · `OpenProject`（打开[项目主页](https://github.com/dlivxpr/lyrel)）· `ReportIssue` · `ShowAll` · `ZoomWindow` |
 
 `EditorNewMarkdownFile` 没有默认快捷键，可从全局搜索执行“新建 Markdown 文档”，也可自行绑定。它创建原生 Markdown 文档，另存为建议扩展名为 `.md`；普通文本新建（包括编辑器中的 `Ctrl+N`）与 `OpenScrollbackInEditor` 仍使用普通文本编辑器。`ToggleDocumentPreview` 保留原操作标识，现有自定义快捷键继续切换同一 Markdown 文档的即时编辑 / 源码，两种模式共用撤销历史。
 
