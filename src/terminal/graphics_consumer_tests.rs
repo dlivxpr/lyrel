@@ -26,6 +26,7 @@ fn graphics_fixture_sender() {
 }
 
 include!("graphics_media_consumer_tests.rs");
+include!("mouse_reporting_consumer_tests.rs");
 
 struct GraphicsDaemonProcess {
     child: std::process::Child,
