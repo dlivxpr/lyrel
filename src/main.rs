@@ -829,9 +829,9 @@ fn main() {
 ///
 /// The one thing #548 is for — hand-editing config.json and having the new
 /// chord fire without a restart — crosses a file watcher, a debounce and a
-/// keymap rebuild, and used to be covered nowhere. These drive
-/// `apply_reloaded_config` directly, which is the whole body of the watcher's
-/// tick, so the reload path is exercised without waiting on the filesystem.
+/// keymap rebuild, and used to be covered nowhere. Most tests drive
+/// `apply_reloaded_config` directly; the isolated symlink acceptance also
+/// starts the real platform watcher and waits for its debounced reload.
 #[cfg(test)]
 mod config_reload_tests {
     use super::{apply_reloaded_config, is_theme_file};
@@ -979,6 +979,165 @@ mod config_reload_tests {
                 dispatched(cx, "ctrl-alt-9").is_empty(),
                 "the chord the fixed file dropped is retired"
             );
+        });
+    }
+
+    /// Run alone: the config directory override is process-wide and immutable.
+    /// This deliberately uses the platform's real notify backend rather than
+    /// calling the reload tick; Windows needs directory-symlink permission.
+    #[gpui_kit::test]
+    #[ignore = "real filesystem watcher and symlink; run this exact test in its own process"]
+    fn symlinked_config_directory_reloads_live_bindings(cx: &mut TestAppContext) {
+        use std::time::{Duration, Instant};
+
+        eprintln!(
+            "native watcher backend: {}",
+            std::any::type_name::<notify::RecommendedWatcher>()
+        );
+
+        let fixture = tempfile::tempdir().unwrap();
+        let target = fixture.path().join("real");
+        let linked = fixture.path().join("linked");
+        std::fs::create_dir(&target).unwrap();
+        #[cfg(windows)]
+        std::os::windows::fs::symlink_dir(&target, &linked)
+            .expect("the acceptance runner must permit real directory symlinks");
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(&target, &linked).unwrap();
+        assert!(std::fs::symlink_metadata(&linked).unwrap().is_symlink());
+        assert_eq!(
+            std::fs::canonicalize(&linked).unwrap(),
+            std::fs::canonicalize(&target).unwrap()
+        );
+        let original = r#"{"font_size":15,"keybindings":{"SplitRight":["ctrl-alt-9"]},"fixture_owned":"keep"}"#;
+        std::fs::write(target.join("config.json"), original).unwrap();
+        crate::core::config::set_config_dir(linked.clone());
+        assert_eq!(
+            crate::core::config::config_dir_path(),
+            Some(linked.clone()),
+            "run with --exact --ignored so no other test pins the config directory first"
+        );
+        cx.update(|cx| {
+            running_on(cx, Config::load());
+            assert_eq!(
+                dispatched(cx, "ctrl-alt-9"),
+                vec![SplitRight::name_for_type()]
+            );
+            assert!(dispatched(cx, "ctrl-alt-8").is_empty());
+            super::spawn_config_watcher(cx);
+        });
+        cx.run_until_parked();
+
+        let wait_for = |cx: &mut TestAppContext, ready: &dyn Fn(&App) -> bool| {
+            let deadline = Instant::now() + Duration::from_secs(10);
+            loop {
+                cx.executor().advance_clock(Duration::from_millis(20));
+                cx.run_until_parked();
+                if cx.update(|cx| ready(cx)) {
+                    return;
+                }
+                assert!(
+                    Instant::now() < deadline,
+                    "the real watcher never applied the edit"
+                );
+                std::thread::sleep(Duration::from_millis(10));
+            }
+        };
+
+        // An editor reached through the resolved target, not the watched alias.
+        let edited = r#"{"font_size":23,"keybindings":{"SplitRight":["ctrl-alt-8"]},"fixture_owned":"keep"}"#;
+        std::fs::write(target.join("config.json"), edited).unwrap();
+        wait_for(cx, &|cx| {
+            cx.global::<Config>().font_size == 23.0
+                && dispatched(cx, "ctrl-alt-8") == vec![SplitRight::name_for_type()]
+                && dispatched(cx, "ctrl-alt-9").is_empty()
+        });
+        assert_eq!(
+            std::fs::read_to_string(target.join("config.json")).unwrap(),
+            edited
+        );
+
+        // Editing through the alias works too, without replacing the live app.
+        std::fs::write(linked.join("config.json"), original).unwrap();
+        wait_for(cx, &|cx| {
+            cx.global::<Config>().font_size == 15.0
+                && dispatched(cx, "ctrl-alt-9") == vec![SplitRight::name_for_type()]
+                && dispatched(cx, "ctrl-alt-8").is_empty()
+        });
+        assert_eq!(
+            std::fs::read_to_string(target.join("config.json")).unwrap(),
+            original
+        );
+
+        let mut profile = crate::core::ssh_profile::SshProfile::new("symlink-fixture");
+        profile.host = "fixture.invalid".to_string();
+        let servers = serde_json::to_string(&serde_json::json!({
+            "ssh_profiles": [profile]
+        }))
+        .unwrap();
+        std::fs::write(target.join(crate::core::config::SERVERS_FILE), &servers).unwrap();
+        wait_for(cx, &|cx| {
+            cx.global::<Config>()
+                .ssh_profiles
+                .iter()
+                .any(|profile| profile.host == "fixture.invalid")
+        });
+
+        let themes = target.join("themes");
+        std::fs::create_dir(&themes).unwrap();
+        let mut theme = crate::ui::presets::builtins().remove(0);
+        theme.name = "Symlink theme".to_string();
+        std::fs::write(
+            themes.join("symlink-fixture.yaml"),
+            crate::ui::presets::to_yaml(&theme),
+        )
+        .unwrap();
+        wait_for(cx, &|cx| {
+            crate::ui::presets::all(cx)
+                .iter()
+                .any(|theme| theme.id == "symlink-fixture" && theme.name == "Symlink theme")
+        });
+
+        // A bad config cannot retire live bindings or stop theme reloads.
+        let broken = "{ not valid JSON";
+        std::fs::write(target.join("config.json"), broken).unwrap();
+        theme.name = "Theme while config is broken".to_string();
+        std::fs::write(
+            themes.join("symlink-fixture.yaml"),
+            crate::ui::presets::to_yaml(&theme),
+        )
+        .unwrap();
+        wait_for(cx, &|cx| {
+            crate::ui::presets::all(cx).iter().any(|theme| {
+                theme.id == "symlink-fixture" && theme.name == "Theme while config is broken"
+            })
+        });
+        cx.update(|cx| {
+            assert_eq!(cx.global::<Config>().font_size, 15.0);
+            assert_eq!(
+                dispatched(cx, "ctrl-alt-9"),
+                vec![SplitRight::name_for_type()]
+            );
+            assert_eq!(cx.global::<Config>().ssh_profiles.len(), 1);
+        });
+        assert_eq!(
+            std::fs::read_to_string(target.join("config.json")).unwrap(),
+            broken
+        );
+        assert_eq!(
+            std::fs::read_to_string(target.join("config.json.corrupt")).unwrap(),
+            broken
+        );
+        assert_eq!(
+            std::fs::read_to_string(target.join(crate::core::config::SERVERS_FILE)).unwrap(),
+            servers
+        );
+
+        std::fs::write(linked.join("config.json"), edited).unwrap();
+        wait_for(cx, &|cx| {
+            cx.global::<Config>().font_size == 23.0
+                && dispatched(cx, "ctrl-alt-8") == vec![SplitRight::name_for_type()]
+                && dispatched(cx, "ctrl-alt-9").is_empty()
         });
     }
 

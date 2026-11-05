@@ -177,6 +177,8 @@ pub mod feature {
     pub const SESSION_OPERATIONS: &str = "session-operations-v1";
     pub const AGENT_ENVIRONMENT: &str = "agent-environment";
     pub const HERMES_HISTORY: &str = "hermes-history-v1";
+    /// Optional since_ms in AgentStates; absent means unknown age.
+    pub const AGENT_STATE_AGE: &str = "agent-state-age";
     pub const HERMES_STATISTICS: &str = "hermes-statistics-v1";
     pub const OPENCODE_STATISTICS: &str = "opencode-statistics-v1";
 }
@@ -1947,6 +1949,7 @@ mod tests {
                     request_resume_status: Default::default(),
                     pending_stop: false,
                     readout: Default::default(),
+                    since_ms: None,
                 },
             }])),
             ControlReply::Ok(ReplyOk::AgentStates(Vec::new())),

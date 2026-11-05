@@ -130,6 +130,14 @@ impl KeyboardStacks {
         self.reload();
     }
 
+    /// Forget both screens' retained flags without changing the active screen.
+    /// A shell boundary ends the previous program's keyboard ownership.
+    pub fn clear(&mut self) {
+        self.primary.clear();
+        self.alternate.clear();
+        self.active = 0;
+    }
+
     /// The bytes that rebuild these stacks on a fresh emulator, around `dec`
     /// (mode sets that may include the switch to the alternate screen).
     ///
@@ -161,6 +169,16 @@ impl KeyboardStacks {
             out.extend_from_slice(format!("\x1b[={};1u", self.active).as_bytes());
         }
     }
+}
+
+/// Only the completion marker owned by lyrel's shell integration retires
+/// keyboard stacks. Generic OSC 133 from a transcript or nested TUI does not.
+pub fn shell_keyboard_boundary(payload: &[u8]) -> bool {
+    payload
+        .strip_prefix(b"133;D;")
+        .and_then(|rest| rest.strip_suffix(b";aid=lyrel"))
+        .and_then(|status| std::str::from_utf8(status).ok())
+        .is_some_and(|status| status.parse::<i32>().is_ok())
 }
 
 fn push_flags(out: &mut Vec<u8>, stack: &[u8]) {
@@ -394,7 +412,7 @@ impl TerminalModes {
                 State::Osc => match b {
                     0x07 => self.osc_end(),
                     0x1b => self.state = State::OscEsc,
-                    _ if self.params.len() < 5 => self.params.push(b),
+                    _ if self.params.len() < 64 => self.params.push(b),
                     _ => {}
                 },
                 State::OscEsc => match b {
@@ -412,8 +430,11 @@ impl TerminalModes {
     /// killed before it could send `?2031l`. A report after that would be
     /// typed into the shell's command line.
     fn osc_end(&mut self) {
-        if matches!(self.params.as_slice(), b"133;A" | b"133;B" | b"133;D") {
+        if matches!(self.params.get(..5), Some(b"133;A" | b"133;B" | b"133;D")) {
             self.on.retain(|m| *m != COLOR_SCHEME_UPDATES);
+        }
+        if shell_keyboard_boundary(&self.params) {
+            self.keyboard.clear();
         }
         self.params.clear();
         self.state = State::Text;
