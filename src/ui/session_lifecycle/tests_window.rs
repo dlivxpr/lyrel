@@ -177,7 +177,9 @@ fn close_window_override_keeps_unsaved_confirmation_and_cancellation(cx: &mut Te
         window.press("secondary-a", cx);
         window.press("secondary-c", cx);
         assert_eq!(
-            cx.read_from_clipboard().and_then(|item| item.text()).as_deref(),
+            cx.read_from_clipboard()
+                .and_then(|item| item.text())
+                .as_deref(),
             Some("keep these edits"),
             "Cancel preserves the document text and restores its input focus"
         );

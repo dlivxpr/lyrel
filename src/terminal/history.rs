@@ -51,23 +51,31 @@ impl History {
         seed.entries.append(&mut self.entries);
         self.entries = seed.entries;
         for (line, count) in seed.counts {
-            self.counts.entry(line).and_modify(|known| *known = (*known).max(count)).or_insert(count);
+            self.counts
+                .entry(line)
+                .and_modify(|known| *known = (*known).max(count))
+                .or_insert(count);
         }
         for (line, dirs) in seed.cwds {
             self.cwds.entry(line).or_default().extend(dirs);
         }
         for (line, meta) in seed.meta {
-            self.meta.entry(line).and_modify(|known| {
-                if meta.ts > known.ts {
-                    *known = meta;
-                }
-            }).or_insert(meta);
+            self.meta
+                .entry(line)
+                .and_modify(|known| {
+                    if meta.ts > known.ts {
+                        *known = meta;
+                    }
+                })
+                .or_insert(meta);
         }
-        self.entries.sort_by_key(|line| self.meta.get(line).and_then(|meta| meta.ts));
+        self.entries
+            .sort_by_key(|line| self.meta.get(line).and_then(|meta| meta.ts));
         if self.entries.len() > MAX_ENTRIES {
             self.entries.drain(..self.entries.len() - MAX_ENTRIES);
             let retained: HashSet<&str> = self.entries.iter().map(String::as_str).collect();
-            self.counts.retain(|line, _| retained.contains(line.as_str()));
+            self.counts
+                .retain(|line, _| retained.contains(line.as_str()));
             self.cwds.retain(|line, _| retained.contains(line.as_str()));
             self.meta.retain(|line, _| retained.contains(line.as_str()));
         }

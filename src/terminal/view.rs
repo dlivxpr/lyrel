@@ -1389,7 +1389,14 @@ impl TerminalView {
         self.report_mouse && self.frame.mouse_mode
     }
 
-    fn write_mouse(&self, base: u8, mods: &Modifiers, col: usize, row: usize, pressed: bool) -> bool {
+    fn write_mouse(
+        &self,
+        base: u8,
+        mods: &Modifiers,
+        col: usize,
+        row: usize,
+        pressed: bool,
+    ) -> bool {
         let sgr = self.terminal.term.lock().mode().contains(Mode::SGR_MOUSE);
         if let Some(msg) = encode_mouse(sgr, base, mods, col, row, pressed) {
             self.terminal.write(msg);

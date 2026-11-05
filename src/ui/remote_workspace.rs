@@ -1415,9 +1415,15 @@ fn pump_tick(cx: &mut gpui_kit::App) -> bool {
         log::info!("supervisor stopped: no open remote workspace ({forgotten} link(s) dropped)");
         return false;
     }
-    let open: std::collections::HashSet<_> = WorkspaceStore::all(cx).views.iter()
-        .filter(|view| view.open).map(|view| view.id).collect();
-    cx.default_global::<RemoteLinks>().held_before.retain(|id| open.contains(id));
+    let open: std::collections::HashSet<_> = WorkspaceStore::all(cx)
+        .views
+        .iter()
+        .filter(|view| view.open)
+        .map(|view| view.id)
+        .collect();
+    cx.default_global::<RemoteLinks>()
+        .held_before
+        .retain(|id| open.contains(id));
 
     prune_suspended(&mut cx.default_global::<RemoteLinks>().suspended, &bound);
     let suspended = cx.default_global::<RemoteLinks>().suspended.clone();
@@ -1586,9 +1592,15 @@ fn reclaims_due(cx: &mut gpui_kit::App, host: HostId) -> Vec<(WorkspaceId, Strin
 }
 
 #[derive(Clone, Copy)]
-enum Claim { Take, IfFree }
+enum Claim {
+    Take,
+    IfFree,
+}
 
-enum ClaimOutcome { Attached, HeldBy(String) }
+enum ClaimOutcome {
+    Attached,
+    HeldBy(String),
+}
 
 fn claim_for(links: &RemoteLinks, workspace: WorkspaceId) -> Claim {
     if links.held_before.contains(&workspace) && !links.reclaiming.contains_key(&workspace) {
@@ -1599,12 +1611,15 @@ fn claim_for(links: &RemoteLinks, workspace: WorkspaceId) -> Claim {
 }
 
 // f44068a: the same polite reconnect policy as the existing local link.
-fn claim_blocking(client: &crate::daemon::control::ControlClient, key: &str, claim: Claim)
-    -> Result<ClaimOutcome, String>
-{
+fn claim_blocking(
+    client: &crate::daemon::control::ControlClient,
+    key: &str,
+    claim: Claim,
+) -> Result<ClaimOutcome, String> {
     if matches!(claim, Claim::IfFree)
         && let Ok(workspace) = key.parse::<WorkspaceId>()
-        && let Ok(ReplyOk::WorkspaceTree(tree)) = client.call(ControlRequest::WorkspaceTree { workspace })
+        && let Ok(ReplyOk::WorkspaceTree(tree)) =
+            client.call(ControlRequest::WorkspaceTree { workspace })
         && let Some(holder) = tree.attachment
         && !holder.hostname.is_empty()
         && holder.hostname != remote_connect::client_hostname()
@@ -1624,7 +1639,9 @@ fn yield_after_reconnect(cx: &mut gpui_kit::App, host: HostId, workspace: Worksp
     links.reclaiming.remove(&workspace);
     links.pane_retries.remove(&workspace);
     links.preempted.insert(workspace, by);
-    RemoteLinks::mark(cx, host, |link| { link.attach_sent.insert(workspace); });
+    RemoteLinks::mark(cx, host, |link| {
+        link.attach_sent.insert(workspace);
+    });
     release_panes(cx, workspace);
     crate::ui::tree_sync::on_preempted(cx, workspace);
 }
@@ -1645,7 +1662,14 @@ fn pump_attachments(cx: &mut gpui_kit::App, host: HostId) {
                 .await;
             cx.update(|cx| match outcome {
                 Ok(ClaimOutcome::HeldBy(by)) => yield_after_reconnect(cx, host, workspace, by),
-                Ok(ClaimOutcome::Attached) => finish_reclaim(cx, host, workspace, Ok(ReplyOk::Attached { took_over_from: None })),
+                Ok(ClaimOutcome::Attached) => finish_reclaim(
+                    cx,
+                    host,
+                    workspace,
+                    Ok(ReplyOk::Attached {
+                        took_over_from: None,
+                    }),
+                ),
                 Err(error) => finish_reclaim(cx, host, workspace, Err(error)),
             });
         })
@@ -1887,8 +1911,10 @@ fn launch_attempt(cx: &mut gpui_kit::App, host: HostId, target: RemoteTarget) {
             return;
         }
     };
-    let claims: Vec<_> = workspaces_on(cx, host).into_iter()
-        .map(|(id, key)| (key, claim_for(cx.default_global::<RemoteLinks>(), id))).collect();
+    let claims: Vec<_> = workspaces_on(cx, host)
+        .into_iter()
+        .map(|(id, key)| (key, claim_for(cx.default_global::<RemoteLinks>(), id)))
+        .collect();
 
     RemoteLinks::mark(cx, host, |link| link.attempting = true);
     // Same bookkeeping the switcher's own connect does, and for the same
@@ -1977,7 +2003,9 @@ fn finish_attempt(
                 }
                 let reclaimed = {
                     let links = cx.default_global::<RemoteLinks>();
-                    if answer.is_some() { links.held_before.insert(id); }
+                    if answer.is_some() {
+                        links.held_before.insert(id);
+                    }
                     links.preempted.remove(&id).is_some() | links.reclaiming.remove(&id).is_some()
                 };
                 if answer.is_some() {
