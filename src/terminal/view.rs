@@ -303,6 +303,7 @@ pub struct TerminalView {
     git_prompt_cycle: u64,
     pub(super) input: super::prompt_input::PromptInput,
     history: TerminalHistory,
+    pane_history_seed: Option<(crate::ui::host_ops::HostId, u64)>,
     completion: TerminalCompletion,
     integration_notice: Option<String>,
     integration_notice_shown: bool,
@@ -756,6 +757,7 @@ impl TerminalView {
             git_prompt_cycle: 0,
             input: super::prompt_input::PromptInput::new(prompt_editor),
             history: TerminalHistory::new(),
+            pane_history_seed: None,
             completion: TerminalCompletion::default(),
             integration_notice: None,
             integration_notice_shown: false,
@@ -1223,6 +1225,26 @@ impl TerminalView {
 
     pub fn shell_spec(&self) -> Option<ShellSpec> {
         self.shell_spec.clone()
+    }
+
+    /// The shell this pane is running, for deciding what a line typed into it may
+    /// use. A pane spawned without an explicit shell got the configured one or,
+    /// failing that, the login shell — but only a local pane got this machine's;
+    /// a workspace pane's default lives on its host, so it stays unknown.
+    pub(crate) fn pane_shell_program(&self, cx: &App) -> Option<String> {
+        if let Some(spec) = self.shell_spec() {
+            return Some(spec.program);
+        }
+        if self.workspace().is_some()
+            || self.ssh_spec().is_some()
+            || self.remote_context().is_some()
+        {
+            return None;
+        }
+        Some(match &cx.global::<Config>().shell {
+            Some(shell) if !shell.program.trim().is_empty() => shell.program.clone(),
+            _ => crate::core::shells::login_shell(),
+        })
     }
 
     /// The shell binary this pane is running, for the path-quoting rules.

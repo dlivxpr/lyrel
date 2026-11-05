@@ -25,7 +25,7 @@ impl LyrelApp {
             return;
         };
         let mut scope = scope.unwrap_or_default();
-        scope.shell_program = Self::pane_shell_program(view, cx);
+        scope.shell_program = view.pane_shell_program(cx);
         let request = SessionOperation {
             expected_host: view.host_id().0,
             agent,
@@ -61,25 +61,6 @@ impl LyrelApp {
         );
     }
 
-    /// The shell `view` is running, for deciding what a line typed into it may
-    /// use. A pane spawned without an explicit shell got the configured one or,
-    /// failing that, the login shell — but only a local pane got this machine's;
-    /// a workspace pane's default lives on its host, so it stays unknown.
-    fn pane_shell_program(view: &TerminalView, cx: &App) -> Option<String> {
-        if let Some(spec) = view.shell_spec() {
-            return Some(spec.program);
-        }
-        if view.workspace().is_some()
-            || view.ssh_spec().is_some()
-            || view.remote_context().is_some()
-        {
-            return None;
-        }
-        Some(match &cx.global::<Config>().shell {
-            Some(shell) if !shell.program.trim().is_empty() => shell.program.clone(),
-            _ => crate::core::shells::login_shell(),
-        })
-    }
 
     /// Bind a retained connecting slot. Creation errors are asynchronous and
     /// remain on PendingPane; callers place this identity before it can land.
