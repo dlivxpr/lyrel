@@ -1948,6 +1948,9 @@ fn sync_presented_row(view: &TerminalView, row: usize) -> String {
         .iter()
         .filter(|cell| !cell.spacer)
         .flat_map(|cell| std::iter::once(cell.c).chain(cell.marks.as_deref().unwrap_or(&[]).iter().copied()))
+        // Packed untouched cells paint as blanks. Preserve their columns;
+        // only the caller deciding a logical range may trim trailing padding.
+        .map(|ch| if ch == '\0' { ' ' } else { ch })
         .collect()
 }
 
