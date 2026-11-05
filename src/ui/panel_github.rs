@@ -4,16 +4,19 @@
 //! [`crate::ui::github::detail`]. This file draws the chrome over the list —
 //! which repository, which kind, which state, which label — and the rows.
 
+use gpui_kit::TestSupportExt as _;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::menu::{DropdownMenu as _, PopupMenuItem};
 use gpui_kit::component::{ActiveTheme as _, Icon, IconName, Sizable as _, h_flex, v_flex};
 use gpui_kit::{AnyElement, Context, SharedString, Window, div, prelude::*, px, relative, rems};
 
+use lyrel_core::core::github::stack::{Cell, StackRow};
 use lyrel_core::core::github::{
     ApiError, CheckState, GitHubRemote, Item, ItemState, Kind, Label, RepoSlug, StateFilter,
 };
 
 use crate::ui::app::LyrelApp;
+use crate::ui::github::rows::{GLYPH, ROW_H, stack_glyph, stack_trunk};
 use crate::ui::github::{GhTarget, now_unix};
 use crate::ui::i18n::{L10nKey, t, t_fmt};
 use crate::ui::right_panel::{META, ROW_FILL_RADIUS, ROW_INSET, TAB_TEXT, TEXT, TEXT_INSET};
@@ -21,16 +24,12 @@ use crate::ui::scm::path::relative_time;
 use crate::ui::scm::state::RepoKey;
 use crate::ui::window_chrome::{CONTENT_INSET, TILE_GLYPH_XS, TILE_SIZE_XS};
 
-/// A list row: one line, the Source Control tab's row pitch.
-const ROW_H: f32 = 26.;
 /// How many label chips a hovered row shows before the age.
 const MAX_ROW_LABELS: usize = 3;
 /// The widest a hovered row lets its author get before truncating it.
 const AUTHOR_MAX_W: f32 = 96.;
 /// What a hovered row leaves of its title, however much meta it shows.
 const TITLE_MIN_W: f32 = 48.;
-/// The state glyph, and the column it sits in.
-const GLYPH: f32 = 14.;
 /// The pinned rows' height — the Info tab's row pitch.
 const PINNED_ROW_H: f32 = 28.;
 /// The segmented switches' cells.
@@ -431,7 +430,7 @@ impl LyrelApp {
             switch_cell(("panel-github-kind", i), label, k == kind, cx)
                 .on_click(cx.listener(move |this, _, _window, cx| {
                     this.github.kind = k;
-                    this.github.list_scroll = gpui_kit::ScrollHandle::new();
+                    this.github.list_scroll.set_offset(Default::default());
                     cx.notify();
                 }))
                 .into_any_element()
@@ -440,7 +439,7 @@ impl LyrelApp {
             switch_cell(("panel-github-state", i), label, s == state, cx)
                 .on_click(cx.listener(move |this, _, _window, cx| {
                     this.github.state = s;
-                    this.github.list_scroll = gpui_kit::ScrollHandle::new();
+                    this.github.list_scroll.set_offset(Default::default());
                     cx.notify();
                 }))
                 .into_any_element()
@@ -505,6 +504,8 @@ impl LyrelApp {
             return self.panel_empty(t(L10nKey::PanelLoading), None, cx);
         };
         let items = cache.items.clone();
+        let display_rows = cache.rows.clone();
+        let selected = cache.selected;
         let error = cache.error.clone();
         let next_page = cache.next_page;
         let loading = cache.loading;
@@ -532,9 +533,50 @@ impl LyrelApp {
             return body.into_any_element();
         }
         let now = now_unix();
-        let mut rows = v_flex().px(px(CONTENT_INSET));
-        for item in items.iter() {
-            rows = rows.child(self.github_item_row(slug, item, now, cx));
+        let key_query = query.clone();
+        let mut rows = v_flex()
+            .id(SharedString::from(format!(
+                "panel-github-rows-{}",
+                slug.full()
+            )))
+            .test_support()
+            .role(gpui_kit::Role::ListBox)
+            .aria_label(t(match query.kind {
+                Kind::Issues => L10nKey::GitHubIssues,
+                Kind::Pulls => L10nKey::GitHubPulls,
+            }))
+            .track_focus(&self.github.list_focus)
+            .focus_visible(|style| style.border_1().border_color(cx.theme().primary))
+            .on_mouse_down(
+                gpui_kit::MouseButton::Left,
+                cx.listener(|this, _, window, cx| {
+                    window.focus(&this.github.list_focus, cx);
+                }),
+            )
+            .on_key_down(cx.listener(move |this, event, window, cx| {
+                this.github_list_key_down(&key_query, event, window, cx);
+            }))
+            .px(rems(CONTENT_INSET / 16.));
+        for row in display_rows.iter() {
+            match row {
+                StackRow::Item { source_ix, cells } => {
+                    let item = &items[*source_ix];
+                    rows = rows.child(self.github_item_row(
+                        slug,
+                        item,
+                        cells,
+                        selected == Some(item.number),
+                        now,
+                        cx,
+                    ));
+                }
+                StackRow::Trunk { source_ix } => {
+                    let item = &items[*source_ix];
+                    if let Some(pull) = &item.pull {
+                        rows = rows.child(stack_trunk(item.number, &pull.base_ref, cx));
+                    }
+                }
+            }
         }
         body = body.child(rows);
         if let Some(page) = next_page {
@@ -565,6 +607,8 @@ impl LyrelApp {
         &self,
         slug: &RepoSlug,
         item: &Item,
+        cells: &[Cell],
+        selected: bool,
         now: i64,
         cx: &mut Context<Self>,
     ) -> AnyElement {
@@ -586,6 +630,7 @@ impl LyrelApp {
                     .id(SharedString::from(format!(
                         "panel-github-label-{number}-{i}"
                     )))
+                    .test_support()
                     .flex_none()
                     .cursor_pointer()
                     .tooltip(|window, cx| {
@@ -595,7 +640,7 @@ impl LyrelApp {
                     .on_click(cx.listener(move |this, _, _window, cx| {
                         cx.stop_propagation();
                         this.github.label = Some(name.clone());
-                        this.github.list_scroll = gpui_kit::ScrollHandle::new();
+                        this.github.list_scroll.set_offset(Default::default());
                         cx.notify();
                     }))
                     .child(label_chip(label, cx))
@@ -638,14 +683,20 @@ impl LyrelApp {
         });
         h_flex()
             .id(SharedString::from(format!("panel-github-item-{number}")))
+            .test_support()
+            .role(gpui_kit::Role::ListBoxOption)
+            .aria_label(format!("#{number} {}", item.title))
+            .aria_selected(selected)
+            .anchor_scroll(selected.then(|| self.github.list_anchor.clone()))
             .items_center()
-            .gap(px(8.))
-            .h(px(ROW_H))
+            .gap_2()
+            .h(rems(ROW_H / 16.))
             .w_full()
-            .px(px(ROW_INSET))
+            .px(rems(ROW_INSET / 16.))
             .rounded(ROW_FILL_RADIUS)
             .cursor_pointer()
-            .hover(|s| s.bg(gpui_kit::rgb(sf.hover)))
+            .when(selected, |r| r.bg(gpui_kit::rgb(sf.selected)))
+            .when(!selected, |r| r.hover(|s| s.bg(gpui_kit::rgb(sf.hover))))
             .tooltip(move |window, cx| {
                 gpui_kit::component::tooltip::Tooltip::new(title.clone()).build(window, cx)
             })
@@ -661,13 +712,18 @@ impl LyrelApp {
                 }
             }))
             .on_click(cx.listener(move |this, _, _window, cx| {
+                let query = this.github_query(&slug);
+                if let Some(cache) = this.github.lists.get_mut(&query) {
+                    cache.selected = Some(number);
+                }
                 this.github_open_detail(slug.clone(), number, cx);
             }))
-            .child(
-                div()
-                    .flex_none()
-                    .child(state_glyph(item.state, item.is_pr, cx)),
-            )
+            .child(stack_glyph(
+                number,
+                state_glyph(item.state, item.is_pr, cx),
+                cells,
+                cx,
+            ))
             .child(
                 div()
                     .flex_none()
@@ -679,7 +735,7 @@ impl LyrelApp {
             .child(
                 div()
                     .flex_1()
-                    .min_w(px(TITLE_MIN_W))
+                    .min_w(rems(TITLE_MIN_W / 16.))
                     .truncate()
                     .text_size(rems(TEXT))
                     .text_color(gpui_kit::rgb(sf.text_resting))
@@ -726,6 +782,7 @@ fn switch_cell(
     let sf = cx.global::<crate::ui::presets::Surfaces>().sidebar;
     h_flex()
         .id(id)
+        .test_support()
         .flex_none()
         .items_center()
         .h(px(SWITCH_H))
@@ -767,7 +824,7 @@ pub(crate) fn state_glyph(state: ItemState, is_pr: bool, cx: &gpui_kit::App) -> 
     gpui_kit::svg()
         .path(path)
         .flex_none()
-        .size(px(GLYPH))
+        .size(rems(GLYPH / 16.))
         .text_color(color)
         .into_any_element()
 }
@@ -1357,4 +1414,124 @@ mod gpui_tests {
         test_window::quiesce(&mut vcx, Some(&root));
         let _ = std::fs::remove_dir_all(&root);
     }
+
+    struct StackFake {
+        pulls: Mutex<Vec<serde_json::Value>>,
+    }
+
+    impl Transport for StackFake {
+        fn get(&self, path: &str) -> Result<Reply, ApiError> {
+            let body = if path.starts_with("/repos/acme/widgets/pulls?state=all") {
+                serde_json::json!([])
+            } else if path.starts_with("/repos/acme/widgets/pulls?")
+                || path.starts_with("/repos/acme/widgets/issues?")
+            {
+                serde_json::json!(*self.pulls.lock().unwrap())
+            } else if path.ends_with("/comments")
+                || path.ends_with("/files")
+                || path.ends_with("/reviews")
+                || path.contains("/comments?")
+                || path.contains("/files?")
+                || path.contains("/reviews?")
+            {
+                serde_json::json!([])
+            } else if let Some(number) = path.rsplit('/').next().and_then(|n| n.parse::<u64>().ok())
+            {
+                let mut item = self
+                    .pulls
+                    .lock()
+                    .unwrap()
+                    .iter()
+                    .find(|p| p["number"].as_u64() == Some(number))
+                    .cloned()
+                    .ok_or(ApiError::NotFound)?;
+                item["body"] = serde_json::json!("Controlled stacked PR fixture");
+                item
+            } else {
+                return Err(ApiError::NotFound);
+            };
+            Ok(Reply {
+                body: serde_json::to_vec(&body).unwrap(),
+                has_next: false,
+            })
+        }
+
+        fn authenticated(&self) -> bool {
+            false
+        }
+    }
+
+    fn stack_pull(number: u64, head: &str, base: &str, repository: &str) -> serde_json::Value {
+        serde_json::json!({
+            "number": number, "title": format!("Pull {number}"), "state": "open",
+            "head": {"ref": head, "repo": {"full_name": repository}},
+            "base": {"ref": base, "repo": {"full_name": "acme/widgets"}},
+            "pull_request": {},
+            "labels": [{"name": "stack"}],
+            "html_url": format!("https://github.com/acme/widgets/pull/{number}")
+        })
+    }
+
+    fn stack_panel(
+        cx: &mut TestAppContext,
+        fake: Arc<StackFake>,
+    ) -> (
+        tempfile::TempDir,
+        Entity<LyrelApp>,
+        VisualTestContext,
+        crate::daemon::transport::Stream,
+    ) {
+        let temp = tempfile::tempdir().unwrap();
+        let root = lyrel_core::core::path_spelling::local_spelling_buf(
+            std::fs::canonicalize(temp.path()).unwrap(),
+        );
+        git(&root, &["init", "--quiet"]);
+        git(
+            &root,
+            &["remote", "add", "origin", "https://github.com/acme/widgets"],
+        );
+        let (app, mut vcx, mut pane) = test_window::harness_with_pane(cx);
+        app.update_in(&mut vcx, |app, _, cx| {
+            app.github.connector = Some(Arc::new(move || Connection {
+                transport: fake.clone(),
+            }));
+            app.github.kind = Kind::Pulls;
+            app.right_panel_visible = true;
+            app.right_panel_tab = RightPanelTab::GitHub;
+            cx.notify();
+        });
+        DaemonMsg::Cwd(root).encode(&mut pane).unwrap();
+        settle(&app, &mut vcx, "stack pull list", |app| {
+            app.github
+                .lists
+                .iter()
+                .any(|(q, l)| q.kind == Kind::Pulls && l.loaded)
+        });
+        (temp, app, vcx, pane)
+    }
+
+    #[gpui_kit::test]
+    fn stacked_pull_rows_group_above_their_base_in_the_production_panel(cx: &mut TestAppContext) {
+        let fake = Arc::new(StackFake {
+            pulls: Mutex::new(vec![
+                stack_pull(1, "a", "main", "acme/widgets"),
+                stack_pull(9, "solo", "main", "acme/widgets"),
+                stack_pull(3, "c", "b", "acme/widgets"),
+                stack_pull(2, "b", "a", "acme/widgets"),
+            ]),
+        });
+        let (temp, _app, mut vcx, _pane) = stack_panel(cx, fake);
+        vcx.update(|window, cx| {
+            window.render_frame(cx);
+            let y = |n| window.find(format!("panel-github-item-{n}")).bounds().top();
+            assert!(
+                y(3) < y(2) && y(2) < y(1) && y(1) < y(9),
+                "stack must be contiguous and top-first, before the unrelated row"
+            );
+        });
+        test_window::quiesce(&mut vcx, Some(temp.path()));
+    }
+
+    include!("github/native_stack_test.rs");
+    include!("github/stack_consumer_tests.rs");
 }
