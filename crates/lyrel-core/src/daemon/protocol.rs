@@ -129,6 +129,8 @@ pub const FEATURE_SPAWN_CLAIM: &str = "spawn-claim";
 pub const FEATURE_AGENT_RESULTS: &str = "agent-results";
 /// Request identities and independently resolved concurrent human-input waits.
 pub const FEATURE_AGENT_REQUESTS: &str = "agent-requests";
+/// Optional daemon-clock timestamp in the existing AgentStatus JSON payload.
+pub const FEATURE_AGENT_STATE_AGE: &str = "agent-state-age";
 
 /// The daemon echoes a `DaemonMsg::Size` to the controlling subscriber, in
 /// stream order, when it applies a `ClientMsg::Resize`. A client that sees
@@ -178,6 +180,7 @@ impl DaemonVersion {
             FEATURE_UPDATE_SERVER.to_string(),
             FEATURE_AGENT_RESULTS.to_string(),
             FEATURE_AGENT_REQUESTS.to_string(),
+            FEATURE_AGENT_STATE_AGE.to_string(),
         ];
         if cfg!(unix) {
             features.push(FEATURE_HANDOFF.to_string());
@@ -2311,6 +2314,7 @@ mod tests {
                 request_resume_status: Default::default(),
                 pending_stop: false,
                 readout: Default::default(),
+                since_ms: Some(1_760_000_000_000),
             })),
             DaemonMsg::AgentStatus(None),
             DaemonMsg::LoopbackForward(LoopbackForward { local_port: 49152 }),
