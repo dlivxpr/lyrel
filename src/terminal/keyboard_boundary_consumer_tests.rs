@@ -26,20 +26,31 @@ fn keyboard_boundary_real_pty_case(cx: &mut TestAppContext, prior_mode: &str) {
         .to_string_lossy()
         .replace('\\', "/");
     let size = crate::daemon::protocol::WinSize {
-        cols: 80, rows: 24, cell_w: 10, cell_h: 20,
+        cols: 80,
+        rows: 24,
+        cell_w: 10,
+        cell_h: 20,
     };
-    let mut session = daemon.panes().spawn(
-        Some(daemon.dir.path().to_path_buf()), size,
-        Some(crate::daemon::protocol::ShellSpec {
-            program: bash.program,
-            args: Vec::new(),
-            args_are_lyrel_defaults: true,
-        }), None, None,
-    ).unwrap();
+    let session = daemon
+        .panes()
+        .spawn(
+            Some(daemon.dir.path().to_path_buf()),
+            size,
+            Some(crate::daemon::protocol::ShellSpec {
+                program: bash.program,
+                args: Vec::new(),
+                args_are_lyrel_defaults: true,
+            }),
+            None,
+            None,
+        )
+        .unwrap();
     let pane = session.pane_id();
     session.detach().unwrap();
     let mut observer = daemon.panes().observe(pane, size).unwrap();
-    observer.set_recv_timeout(Some(std::time::Duration::from_secs(30))).unwrap();
+    observer
+        .set_recv_timeout(Some(std::time::Duration::from_secs(30)))
+        .unwrap();
     cx.update(|cx| {
         gpui_kit::component::init(cx);
         cx.set_global(Config::default());
@@ -60,8 +71,10 @@ fn keyboard_boundary_real_pty_case(cx: &mut TestAppContext, prior_mode: &str) {
         })
     });
     let mut output = Vec::new();
-    while !output.windows(b"133;D;0;aid=lyrel\x07".len())
-        .any(|part| part == b"133;D;0;aid=lyrel\x07") {
+    while !output
+        .windows(b"133;D;0;aid=lyrel\x07".len())
+        .any(|part| part == b"133;D;0;aid=lyrel\x07")
+    {
         match observer.recv().unwrap() {
             DaemonMsg::Output(bytes) | DaemonMsg::Snapshot(bytes) => output.extend(bytes),
             DaemonMsg::Exited { code } => panic!("integrated Bash exited: {code:?}"),
@@ -74,11 +87,13 @@ fn keyboard_boundary_real_pty_case(cx: &mut TestAppContext, prior_mode: &str) {
     graphics_recovery_wait(cx, "next actual PTY program ready", |cx| {
         view.read_with(cx, |view, _| view.title == "KEYBOARD_RECORDER_READY")
     });
-    window.update(cx, |_, window, cx| {
-        window.activate_window();
-        let focus = view.read(cx).focus_handle.clone();
-        focus.focus(window, cx);
-    }).unwrap();
+    window
+        .update(cx, |_, window, cx| {
+            window.activate_window();
+            let focus = view.read(cx).focus_handle.clone();
+            focus.focus(window, cx);
+        })
+        .unwrap();
     {
         let mut visual = gpui_kit::VisualTestContext::from_window(window, cx);
         visual.simulate_keystrokes("escape ctrl-c");
@@ -109,7 +124,9 @@ fn keyboard_boundary_real_pty_shell_return_preserves_escape_and_ctrl_c(cx: &mut 
 }
 
 #[gpui_kit::test]
-fn keyboard_boundary_replay_and_relink_keep_only_the_current_program_modes(cx: &mut TestAppContext) {
+fn keyboard_boundary_replay_and_relink_keep_only_the_current_program_modes(
+    cx: &mut TestAppContext,
+) {
     crate::core::config::pin_test_config_dir();
     cx.executor().allow_parking();
     cx.update(|cx| {
@@ -118,34 +135,71 @@ fn keyboard_boundary_replay_and_relink_keep_only_the_current_program_modes(cx: &
         crate::ui::keymap::init(cx);
     });
     let scenarios: &[(&[u8], &[u8], &[u8])] = &[
-        (b"\x1b[>7u\x1b[?1049h\x1b[>7u\x1b[?1049l\x1b]133;D;130;aid=lyrel\x07", b"\x1b[?1049h", b"\x1b"),
-        (b"\x1b[>7u\x1b]133;D;0;aid=lyrel\x1b\\", b"\x1b[>1u\x1b[<u", b"\x1b"),
-        (b"\x1b[>7u\x1b]133;D;0;aid=lyrel\x07", b"\x1b[>1u", b"\x1b[27u"),
-        (b"\x1b[>1u\x1b]133;D;0\x07\x1b]133;A\x07\x1b]133;B\x07", b"", b"\x1b[27u"),
+        (
+            b"\x1b[>7u\x1b[?1049h\x1b[>7u\x1b[?1049l\x1b]133;D;130;aid=lyrel\x07",
+            b"\x1b[?1049h",
+            b"\x1b",
+        ),
+        (
+            b"\x1b[>7u\x1b]133;D;0;aid=lyrel\x1b\\",
+            b"\x1b[>1u\x1b[<u",
+            b"\x1b",
+        ),
+        (
+            b"\x1b[>7u\x1b]133;D;0;aid=lyrel\x07",
+            b"\x1b[>1u",
+            b"\x1b[27u",
+        ),
+        (
+            b"\x1b[>1u\x1b]133;D;0\x07\x1b]133;A\x07\x1b]133;B\x07",
+            b"",
+            b"\x1b[27u",
+        ),
         (b"\x1b[>1u\x1b]133;D;0;aid=other\x07", b"", b"\x1b[27u"),
     ];
     for &(history, live, expected) in scenarios {
         for relink in [false, true] {
             for evicted in [false, true] {
-            let mut modes = lyrel_core::core::term_modes::TerminalModes::new();
-            for byte in history {
-                modes.feed(&[*byte]);
-            }
-            let prelude = modes.restore_bytes().unwrap_or_default();
-            let replay = if evicted { prelude.as_slice() } else { history };
-            let (client, mut sender) = test_stream_pair();
-            let (view, window) = graphics_build_rooted_consumer_at(
-                cx, 188, client, Vec::new(), TermSize::new(80, 24), PtySource::Raw,
-            );
-            if relink {
-                let (client, fresh_sender) = test_stream_pair();
-                view.update(cx, |view, cx| {
-                    view.adopt_relink(client, Vec::new(), &crate::terminal::PaneRoute::Local,
-                        TermSize::new(80,24), 10,20,cx).unwrap();
-                });
-                sender = fresh_sender;
-            }
-            keyboard_boundary_replay_keys(cx, view, window, &mut sender, replay, live, expected);
+                let mut modes = lyrel_core::core::term_modes::TerminalModes::new();
+                for byte in history {
+                    modes.feed(&[*byte]);
+                }
+                let prelude = modes.restore_bytes().unwrap_or_default();
+                let replay = if evicted { prelude.as_slice() } else { history };
+                let (client, mut sender) = test_stream_pair();
+                let (view, window) = graphics_build_rooted_consumer_at(
+                    cx,
+                    188,
+                    client,
+                    Vec::new(),
+                    TermSize::new(80, 24),
+                    PtySource::Raw,
+                );
+                if relink {
+                    let (client, fresh_sender) = test_stream_pair();
+                    view.update(cx, |view, cx| {
+                        view.adopt_relink(
+                            client,
+                            Vec::new(),
+                            &crate::terminal::PaneRoute::Local,
+                            TermSize::new(80, 24),
+                            10,
+                            20,
+                            cx,
+                        )
+                        .unwrap();
+                    });
+                    sender = fresh_sender;
+                }
+                keyboard_boundary_replay_keys(
+                    cx,
+                    view,
+                    window,
+                    &mut sender,
+                    replay,
+                    live,
+                    expected,
+                );
             }
         }
     }
@@ -164,23 +218,34 @@ fn keyboard_boundary_replay_keys(
     for byte in history {
         DaemonMsg::Snapshot(vec![*byte]).encode(sender).unwrap();
     }
-    DaemonMsg::Prompt { active: true, at_prompt: false, last_exit: Some(0) }
-        .encode(sender).unwrap();
+    DaemonMsg::Prompt {
+        active: true,
+        at_prompt: false,
+        last_exit: Some(0),
+    }
+    .encode(sender)
+    .unwrap();
     DaemonMsg::Output([live, b"\x1b]2;KEYBOARD_REPLAY_READY\x07"].concat())
-        .encode(sender).unwrap();
+        .encode(sender)
+        .unwrap();
     graphics_recovery_wait(cx, "fragmented keyboard replay", |cx| {
         view.read_with(cx, |view, _| view.title == "KEYBOARD_REPLAY_READY")
     });
-    window.update(cx, |_, window, cx| {
-        window.activate_window();
-        let focus = view.read(cx).focus_handle.clone();
-        focus.focus(window, cx);
-    }).unwrap();
+    window
+        .update(cx, |_, window, cx| {
+            window.activate_window();
+            let focus = view.read(cx).focus_handle.clone();
+            focus.focus(window, cx);
+        })
+        .unwrap();
     {
         let mut visual = gpui_kit::VisualTestContext::from_window(window, cx);
         visual.simulate_keystrokes("escape");
     }
-    assert_eq!(next_input_until_timeout(sender).as_deref(), Some(expected),
-        "history={history:?}, live={live:?}");
+    assert_eq!(
+        next_input_until_timeout(sender).as_deref(),
+        Some(expected),
+        "history={history:?}, live={live:?}"
+    );
     graphics_recovery_destroy(view, window, cx);
 }
