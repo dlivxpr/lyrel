@@ -2179,9 +2179,18 @@ fn gui_and_cli_shared_synchronized_ranges_converge_at_the_same_geometry(cx: &mut
     let visible_range = |view: &TerminalView, first: usize| {
         format!("{}{}", sync_presented_row(view, first).trim_end(), sync_presented_row(view, first + 1).trim_end())
     };
-    graphics_recovery_wait(cx, "quiet GUI did not converge to the CLI's shared Unicode/wrap range", |cx| {
+    graphics_recovery_wait_with(cx, std::time::Duration::from_secs(30), |cx| {
         view.read_with(cx, |view, _| view.grid_snap.is_some()
             && visible_range(view, 3) == graphics_pty_fixture::SYNC_CAPTURE_TEXT)
+    }, |cx| {
+        view.read_with(cx, |view, _| {
+            let term = view.terminal.term.lock();
+            format!("quiet GUI did not converge to the CLI's shared Unicode/wrap range; expected={:?}; painted_rows={:?}; painted_geometry={:?}; live_geometry={}x{}; live_wrap={}; synchronized={}",
+                graphics_pty_fixture::SYNC_CAPTURE_TEXT,
+                view.grid_snap.as_ref().map(|_| (sync_presented_row(view, 3), sync_presented_row(view, 4))),
+                view.cell_geom.map(|geometry| (geometry.cols, geometry.rows)),
+                term.columns(), term.screen_lines(), term.mode().contains(rio_vt::crosswords::Mode::LINE_WRAP), term.synchronized_output())
+        })
     });
     graphics_send_fixture(&view, cx, 172, b"\x1b[?2026l");
     graphics_recovery_wait(cx, "settled GUI frame diverged from the shared capture range", |cx| {

@@ -16,6 +16,7 @@
 ### 修复
 
 - #171：在实际终端 snapshot／paint 发布点保留上次 committed 文字、光标、图片及可见交互，避免焦点／主题／光标重绘泄漏半帧。reader 通过现有链路读取期限独立执行 150 ms fail-safe，处理每次 BSU 重启、结束、resize／reset、命令边界、replay／relink 与退出。协议回复、输入模式及 daemon 图片锚点继续实时推进；CLI `capture --plain` 无 GUI 也捕获已收到的未闭合同步输出。补充 Root paint、可见复制、安静流期限、分片和真实 CLI／daemon／PTY 回归；未执行的测试、原生与性能项目保留为集中验收项，macOS 交由 #167。
+- #171 组合回归反馈修正共享 Unicode／换行场景：显式设置 DECAWM，使 Windows raw sender 与 Unix 使用相同 autowrap 前提，不改生产解析或屏蔽字符差异；可见图片删除改为检查实际 TerminalElement 的存活像素、新 paint 和已提交 display list，不再要求无关祖先 view 的 render 计数增加。隐藏 pane 的无重绘与返回当前像素断言保留，修复后的完整结果仍由集中验收记录。
 - #170 首次 Fast 编译发现搜索行的 `IntoElement` derive 仅从 Fast prelude 导入，展开后引用未声明的 `gpui::` 路径；改为显式使用 Kit 根提供的官方 facade-aware derive，保留原搜索行、ListDelegate、选择与无障碍行为，不添加 engine 依赖、alias 或手写 trait shim。修复后的编译与原有行为套件由集中检查点验证。
 - #169 检查点修复真实 PTY 图片消费者、共享 retention 及原生 SSH 消费者的启动等待：同时从首个 `Snapshot` 与后续 `Output` 读取原有就绪标记，避免快速 sender 在订阅安装前已输出时误超时。保留真实 daemon／PTY、标记、原期限及后续像素／几何断言，不修改生产协议、不增加重试或跳过；本轮回归结果由集中验收记录。
 - OpenCode 原生 API 启动失败保留底层 OS error，便于区分缺失文件、权限和资源错误；Unix shell 夹具改由独立写入进程持有可写描述符，避免并发 fork 继承后触发 Linux `ETXTBSY`。大 JSON 的真实 shell／Host 历史回归与私有文件捕获保持不变，不增加生产重试或跳过测试。
