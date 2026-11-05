@@ -646,7 +646,7 @@ pub struct Injection {
 
 const ZDOTDIR_PREFIX: &str = "lyrel-zdotdir-";
 
-fn is_our_zdotdir(path: &str) -> bool {
+pub(crate) fn is_our_zdotdir(path: &str) -> bool {
     Path::new(path)
         .file_name()
         .and_then(|n| n.to_str())
