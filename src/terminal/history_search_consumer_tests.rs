@@ -1,11 +1,16 @@
 use super::*;
 
+// Command bytes captured from zsh 5.9 using EXTENDED_HISTORY and fc -W;
+// only the timestamp is fixed. Do not synthesize the escapes under test.
+const METAFIED_ZSH_HISTORY: &[u8] = b": 1700000000:0;echo '\xe8\xaf\xbb\xe5\x83\xaf\x83\xb6\xe4\xbb\xa4\xe7\x83\xa9\x83\xac\xe5\xa4\xb1\xe8\xb4\xa5\xe3\x83\xa3\xbc\xf0\x83\xbf\x83\xb9\x82'\n";
+
+// Captured separately from the same zsh 5.9 with EXTENDED_HISTORY disabled.
+const PLAIN_METAFIED_ZSH_HISTORY: &[u8] = b"echo '\xe8\xaf\xbb\xe5\x83\xaf\x83\xb6\xe4\xbb\xa4\xe7\x83\xa9\x83\xac\xe5\xa4\xb1\xe8\xb4\xa5\xe3\x83\xa3\xbc\xf0\x83\xbf\x83\xb9\x82'\n";
+
 #[gpui_kit::test]
 fn metafied_zsh_history_is_searchable_and_submits_the_original_command(cx: &mut TestAppContext) {
     let (window, view, mut daemon) = rooted_harness(cx);
-    // Command bytes captured from zsh 5.9 using EXTENDED_HISTORY and fc -W;
-    // only the timestamp is fixed. Do not synthesize the escapes under test.
-    let bytes = b": 1700000000:0;echo '\xe8\xaf\xbb\xe5\x83\xaf\x83\xb6\xe4\xbb\xa4\xe7\x83\xa9\x83\xac\xe5\xa4\xb1\xe8\xb4\xa5\xe3\x83\xa3\xbc\xf0\x83\xbf\x83\xb9\x82'\n";
+    let bytes = METAFIED_ZSH_HISTORY;
     let command = "echo '读取令牌失败ー🙂'";
     let loaded = crate::terminal::history::load_with_shell_files(
         &crate::terminal::history::Scope::remote("metafied-zsh-consumer"),
@@ -269,3 +274,97 @@ fn reverse_search_menu_survives_a_real_render_pass(cx: &mut TestAppContext) {
             })
             .unwrap();
     }
+
+#[gpui_kit::test]
+fn custom_histfile_seed_reaches_the_owning_panes_reverse_search(cx: &mut TestAppContext) {
+    // Other consumers persist an application history file at the pinned path;
+    // this consumer needs the daemon's per-pane directory at that path. Use an
+    // isolated process instead of touching another test's history fixture.
+    if std::env::var_os("LYREL_CUSTOM_HISTORY_CONSUMER_CHILD").is_none() {
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", &format!("{}::custom_histfile_seed_reaches_the_owning_panes_reverse_search", module_path!().split_once("::").unwrap().1)])
+            .args(["--nocapture", "--test-threads=1", "--"])
+            .env("LYREL_CUSTOM_HISTORY_CONSUMER_CHILD", "1")
+            .output().unwrap();
+        assert!(output.status.success(), "isolated production history consumer failed:\n{}\n{}", String::from_utf8_lossy(&output.stdout), String::from_utf8_lossy(&output.stderr));
+        return;
+    }
+    let (_window, view, mut daemon) = rooted_harness(cx);
+    let pane = 184_001;
+    let path = crate::daemon::history::path_for(pane).unwrap();
+    let other = crate::daemon::history::path_for(pane + 1).unwrap();
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    let origin = tempfile::TempDir::new().unwrap();
+    let custom = origin.path().join("custom history");
+    let seed = [b"echo custom_histfile_seed_184\n".as_slice(), PLAIN_METAFIED_ZSH_HISTORY].concat();
+    std::fs::write(&custom, &seed).unwrap();
+    std::fs::write(&other, ": 1700000000:0;echo other_panes_private_seed_184\n").unwrap();
+    cx.update(|cx| {
+        let config = cx.global_mut::<Config>();
+        config.per_pane_history = true;
+        config.shell = Some(crate::core::config::ShellConfig { program: "/usr/bin/zsh".into(), args: Vec::new() });
+    });
+    view.update(cx, |view, cx| {
+        view.pane_id = pane;
+        // No pane override: the existing local default resolver knows zsh.
+        view.shell_spec = None;
+        view.follow_history_scope(cx);
+    });
+    cx.run_until_parked();
+    // The shell creates its private file after the view is constructed, once
+    // the user's rc has selected HISTFILE. The real zsh journey covers seeding.
+    std::fs::copy(&custom, &path).unwrap();
+    DaemonMsg::Prompt {
+        active: true,
+        at_prompt: true,
+        last_exit: None,
+    }.encode(&mut daemon).unwrap();
+    for _ in 0..200 {
+        if view.read_with(cx, |view, _| view.terminal.at_prompt()) { break; }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    view.update(cx, |view, cx| {
+        assert!(view.terminal.at_prompt());
+        view.follow_history_scope(cx);
+        view.input.editor_mut().set("echo recorded_during_pane_seed_184");
+        view.submit_command(cx);
+    });
+    for _ in 0..200 {
+        cx.run_until_parked();
+        let ready = view.update(cx, |view, cx| {
+            view.follow_history_scope(cx);
+            view.history.entries().iter().any(|line| line == "echo custom_histfile_seed_184")
+        });
+        if ready { break; }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    view.update(cx, |view, cx| {
+        view.handle_editor_key(&key("ctrl-r"), cx);
+        view.commit_text("custom_histfile_seed_184", cx);
+        assert_eq!(
+            view.history.search().and_then(|search| search.selected_line(view.history.entries())),
+            Some("echo custom_histfile_seed_184"),
+            "reverse search must consume this pane's existing custom-HISTFILE seed",
+        );
+        assert!(!view.history.entries().iter().any(|line| line.contains("other_panes_private_seed_184")));
+        view.history.cancel_search();
+        view.handle_editor_key(&key("ctrl-r"), cx);
+        view.commit_text("recorded_during_pane_seed_184", cx);
+        assert_eq!(
+            view.history.search().and_then(|search| search.selected_line(view.history.entries())),
+            Some("echo recorded_during_pane_seed_184"),
+            "loading the private seed must preserve commands submitted while it was reading",
+        );
+        view.history.cancel_search();
+        view.handle_editor_key(&key("ctrl-r"), cx);
+        view.commit_text("读取令牌", cx);
+        assert_eq!(
+            view.history.search().and_then(|search| search.selected_line(view.history.entries())),
+            Some("echo '读取令牌失败ー🙂'"),
+            "a pane-ID filename must not discard the actual zsh seed format",
+        );
+    });
+    assert_eq!(std::fs::read(&custom).unwrap(), seed);
+    std::fs::remove_file(path).unwrap();
+    std::fs::remove_file(other).unwrap();
+}

@@ -114,6 +114,11 @@ impl<'a, T: EventListener> ParseBridge<'a, T> {
         );
     }
 
+    pub(super) fn clear_keyboard(&mut self) {
+        self.keyboard.clear();
+        self.sync_keyboard();
+    }
+
     fn sync_screen(&mut self, was_alt: bool, mode: PrivateMode) {
         let is_alt = self
             .inner

@@ -32,10 +32,9 @@ impl TerminalView {
 
     pub(super) fn follow_history_scope(&mut self, cx: &mut Context<Self>) {
         let scope = self.desired_history_scope();
-        let Some(load) = self
-            .history
-            .change_scope(scope, self.host_id, self.history_prompt())
-        else {
+        let load = self.history.change_scope(scope, self.host_id, self.history_prompt());
+        self.follow_pane_history_seed(cx);
+        let Some(load) = load else {
             self.follow_native_history_seed(cx);
             return;
         };
@@ -87,6 +86,61 @@ impl TerminalView {
                 if view.history.accept_seed(load, view.host_id, seed) {
                     cx.notify();
                 }
+            }).ok();
+        }).detach();
+    }
+
+    fn follow_pane_history_seed(&mut self, cx: &mut Context<Self>) {
+        let owner = (self.host_id, self.pane_id);
+        if !cx.global::<Config>().per_pane_history
+            || !self.host_id.is_local()
+            || self.remote_context().is_some()
+            || !self.history.scope().is_local()
+            || !self.terminal.at_prompt()
+            || self.pane_history_seed == Some(owner)
+        {
+            return;
+        }
+        let Some(path) = crate::daemon::history::path_for(self.pane_id) else {
+            return;
+        };
+        let Some(host) = self.host(cx) else {
+            return;
+        };
+        // The shell finished the seed before reporting this prompt. Read only
+        // its private file, never another pane or the mutable .origin path.
+        let program = self.pane_shell_program(cx);
+        let name = match program.as_deref().and_then(|program| {
+            std::path::Path::new(program).file_stem()?.to_str()
+        }) {
+            Some("zsh") => ".zsh_history",
+            Some("bash") => ".bash_history",
+            _ => "pane-history",
+        };
+        let load = self.history.seed_load();
+        self.pane_history_seed = Some(owner);
+        cx.spawn(async move |this, cx| {
+            let seed = cx.background_spawn(async move {
+                host.read_file(&path, MAX_HISTORY_BYTES).ok().map(|bytes| {
+                    crate::terminal::history::from_shell_file(name, &bytes)
+                })
+            }).await;
+            this.update(cx, |view, cx| {
+                if view.pane_history_seed != Some(owner) {
+                    return;
+                }
+                if (view.host_id, view.pane_id) != owner {
+                    view.pane_history_seed = None;
+                    return;
+                }
+                let Some(seed) = seed else { return };
+                if view.remote_context().is_some()
+                    || !view.history.accept_seed(load, view.host_id, seed)
+                {
+                    view.pane_history_seed = None;
+                    return;
+                }
+                cx.notify();
             }).ok();
         }).detach();
     }

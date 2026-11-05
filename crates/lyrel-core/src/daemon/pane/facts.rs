@@ -422,6 +422,9 @@ fn apply_agent_signals(
         return;
     }
     let before = st.agent_session.clone();
+    let now_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |duration| duration.as_millis() as u64);
     let mut ended_session = false;
 
     for event in &events {
@@ -476,9 +479,12 @@ fn apply_agent_signals(
             st.agent = event.agent;
             emit(DaemonMsg::Agent(st.agent));
         }
-        st.agent_session
-            .get_or_insert_with(AgentSessionState::default)
-            .apply_event(event);
+        let previous = st.agent_session.as_ref().map(|session| session.status);
+        let session = st
+            .agent_session
+            .get_or_insert_with(AgentSessionState::default);
+        session.apply_event(event);
+        session.note_transition(previous, now_ms);
         if event.agent == Some(crate::core::cli_agent::CLIAgent::Kimi)
             && event.kind == AgentEventKind::SessionStart
         {
@@ -490,11 +496,13 @@ fn apply_agent_signals(
         && st.agent.is_some()
         && !st.agent_session.as_ref().is_some_and(|s| s.rich)
     {
+        let previous = st.agent_session.as_ref().map(|session| session.status);
         let sess = st
             .agent_session
             .get_or_insert_with(AgentSessionState::default);
         sess.status = AgentStatus::Waiting;
         sess.message = Some(body);
+        sess.note_transition(previous, now_ms);
     }
 
     if let (Some(sess), Some(argv)) = (&mut st.agent_session, &st.agent_argv)

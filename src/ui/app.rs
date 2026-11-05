@@ -848,15 +848,20 @@ impl LyrelApp {
 
     pub(crate) fn agent_rows(&self, cx: &App) -> Vec<crate::ui::tray::AgentRow> {
         use crate::core::cli_agent::AgentStatus;
+        let now_ms = crate::core::config::unix_now().saturating_mul(1000);
         let mut agents = Vec::new();
         for tab in &self.tabs {
             for leaf in tab.pane.terminals() {
                 let view = leaf.read(cx);
                 let Some(agent) = view.agent() else { continue };
-                let status = view
-                    .agent_session()
-                    .map(|s| s.status)
-                    .unwrap_or(AgentStatus::Idle);
+                let session = view.agent_session();
+                let status = session.as_ref().map_or(AgentStatus::Idle, |s| s.status);
+                let since_ms = session.as_ref().and_then(|s| s.since_ms);
+                let waited = session
+                    .as_ref()
+                    .filter(|s| s.status == AgentStatus::Waiting)
+                    .and_then(|s| s.status_age_secs(now_ms))
+                    .map(crate::ui::home::waiting_for);
                 let dir = view
                     .cwd()
                     .and_then(|p| p.file_name().map(|n| n.to_string_lossy().into_owned()));
@@ -871,10 +876,54 @@ impl LyrelApp {
                     agent,
                     status,
                     detail,
+                    since_ms,
+                    unread: view.agent_result_unread(),
+                    waited,
                 });
             }
         }
         agents
+    }
+
+    /// Use the tray's retained-pane identity and reveal route, including other windows.
+    pub(crate) fn focus_next_agent_needing_attention(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let me = cx.entity_id();
+        let mut rows = Vec::new();
+        let mut seen_self = false;
+        // Stable registry/tab/pane order breaks equal and unknown-age ties.
+        // Never read this entity through the registry while it is already leased.
+        for (_, weak) in crate::ui::windows::WindowRegistry::open_windows(cx) {
+            let Some(app) = weak.upgrade() else { continue };
+            if app.entity_id() == me {
+                seen_self = true;
+                rows.extend(self.agent_rows(cx));
+            } else {
+                rows.extend(app.read(cx).agent_rows(cx));
+            }
+        }
+        if !seen_self {
+            rows.extend(self.agent_rows(cx));
+        }
+        let current = self
+            .focused_leaf(window, cx)
+            .map(|leaf| leaf.entity_id().as_u64());
+        let Some(leaf_id) = crate::ui::tray::next_needing_attention(&rows, current) else {
+            window.push_notification(t(L10nKey::AppNoAgentNeedsAttention), cx);
+            return;
+        };
+        if self.owns_leaf(leaf_id) {
+            self.handle_tray_action(
+                crate::ui::tray::TrayAction::RevealPane { leaf_id },
+                window,
+                cx,
+            );
+        } else {
+            cx.defer(move |cx| crate::ui::tray::reveal_pane(leaf_id, cx));
+        }
     }
 
     pub(crate) fn handle_tray_action(
@@ -4279,6 +4328,7 @@ impl LyrelApp {
             HibernateTab => self.hibernate_tab(self.tabs.active_index(), window, cx),
             ForkAgentSession => self.fork_active_pane_session(ForkPlacement::NewTab, window, cx),
             NewAgentTab => self.new_agent_tab(window, cx),
+            FocusNextAgentNeedingAttention => self.focus_next_agent_needing_attention(window, cx),
             // Picked from the palette with ⌥ held, the way a New Tab menu row
             // is: a split beside the focused pane instead of a tab.
             LaunchAgent(agent) => {
@@ -5094,6 +5144,10 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+#[path = "app/attention_tests.rs"]
+mod attention_tests;
 
 #[cfg(test)]
 pub(crate) mod test_window {
