@@ -77,6 +77,39 @@ fn all_toast_severities_are_received_with_content_and_persisted_unread(cx: &mut 
 }
 
 #[gpui_kit::test]
+fn empty_attention_keyboard_result_is_readable_and_copyable_in_history(cx: &mut TestAppContext) {
+    let (app, mut window, _streams) = harness_with_tabs(cx, 1);
+    let dir = isolated(&mut window);
+    crate::ui::i18n::set_locale("en");
+    app.update_in(&mut window, |app, window, cx| {
+        app.tabs[0].pane.terminals()[0]
+            .read(cx)
+            .focus_handle
+            .focus(window, cx);
+    });
+    settle(&mut window);
+    window.simulate_keystrokes("secondary-shift-u");
+    settle(&mut window);
+    assert_eq!(messages(&window), [t(L10nKey::AppNoAgentNeedsAttention).to_string()]);
+    assert_eq!(window.read(|cx| history(cx).read(cx).unread_count()), 1);
+    restart(&mut window, &dir);
+    let id = window.read(|cx| history(cx).read(cx).records().next().unwrap().id());
+    window.update(|window, cx| window.click("status-notifications", cx));
+    settle(&mut window);
+    assert_eq!(window.read(|cx| history(cx).read(cx).unread_count()), 0);
+    window.update(|window, cx| window.click(format!("notification-detail-{id}"), cx));
+    settle(&mut window);
+    window.update(|window, cx| {
+        assert!(window.find("notification-detail-message").visible());
+        window.click("notification-detail-copy", cx);
+        assert_eq!(
+            cx.read_from_clipboard().and_then(|item| item.text()).as_deref(),
+            Some(t(L10nKey::AppNoAgentNeedsAttention).as_ref())
+        );
+    });
+}
+
+#[gpui_kit::test]
 fn two_windows_share_workspaces_read_state_clear_and_reopen(cx: &mut TestAppContext) {
     let (first_app, mut first) = harness(cx);
     let dir = isolated(&mut first);
