@@ -625,7 +625,18 @@ fn apply_common_command_setup(
 
     let dark = crate::core::machine::appearance().dark;
     for (k, v) in pane_environment(&extra_env, dark, pane, workspace, shell) {
-        cmd.env(k, v);
+        // A configured ZDOTDIR names the user's startup files, not a
+        // replacement for the integration redirector already on the command.
+        if k == "ZDOTDIR"
+            && cmd
+                .get_env("ZDOTDIR")
+                .and_then(|value| value.to_str())
+                .is_some_and(shell_integration::is_our_zdotdir)
+        {
+            cmd.env("LYREL_USER_ZDOTDIR", v);
+        } else {
+            cmd.env(k, v);
+        }
     }
 
     #[cfg(target_os = "macos")]

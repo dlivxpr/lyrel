@@ -1163,6 +1163,8 @@ pub(crate) struct RemoteLinks {
     /// times a second and the request's deadline is ten seconds, so without
     /// this one reclaim would be sent forty times.
     attaching: std::collections::HashSet<WorkspaceId>,
+    /// Survives transport loss; only an explicit open/Take Back may steal again.
+    held_before: std::collections::HashSet<WorkspaceId>,
     /// Machines the pump leaves alone until a person asks for them again:
     /// disconnected from the switcher, or — since #820 — an authentication
     /// the user closed the sheet on rather than answered.
@@ -1369,6 +1371,7 @@ impl RemoteLinks {
             links.preempted.remove(&workspace);
             links.reclaiming.remove(&workspace);
             links.attaching.remove(&workspace);
+            links.held_before.remove(&workspace);
         }
         remote_connect::HostLinks::remove(cx, host);
         cx.default_global::<RemoteLinks>().machines.remove(&host);
@@ -1407,10 +1410,20 @@ fn pump_tick(cx: &mut gpui_kit::App) -> bool {
         links.preempted.clear();
         links.reclaiming.clear();
         links.attaching.clear();
+        links.held_before.clear();
         links.suspended.clear();
         log::info!("supervisor stopped: no open remote workspace ({forgotten} link(s) dropped)");
         return false;
     }
+    let open: std::collections::HashSet<_> = WorkspaceStore::all(cx)
+        .views
+        .iter()
+        .filter(|view| view.open)
+        .map(|view| view.id)
+        .collect();
+    cx.default_global::<RemoteLinks>()
+        .held_before
+        .retain(|id| open.contains(id));
 
     prune_suspended(&mut cx.default_global::<RemoteLinks>().suspended, &bound);
     let suspended = cx.default_global::<RemoteLinks>().suspended.clone();
@@ -1578,24 +1591,87 @@ fn reclaims_due(cx: &mut gpui_kit::App, host: HostId) -> Vec<(WorkspaceId, Strin
     due
 }
 
+#[derive(Clone, Copy)]
+enum Claim {
+    Take,
+    IfFree,
+}
+
+enum ClaimOutcome {
+    Attached,
+    HeldBy(String),
+}
+
+fn claim_for(links: &RemoteLinks, workspace: WorkspaceId) -> Claim {
+    if links.held_before.contains(&workspace) && !links.reclaiming.contains_key(&workspace) {
+        Claim::IfFree
+    } else {
+        Claim::Take
+    }
+}
+
+// f44068a: the same polite reconnect policy as the existing local link.
+fn claim_blocking(
+    client: &crate::daemon::control::ControlClient,
+    key: &str,
+    claim: Claim,
+) -> Result<ClaimOutcome, String> {
+    if matches!(claim, Claim::IfFree)
+        && let Ok(workspace) = key.parse::<WorkspaceId>()
+        && let Ok(ReplyOk::WorkspaceTree(tree)) =
+            client.call(ControlRequest::WorkspaceTree { workspace })
+        && let Some(holder) = tree.attachment
+        && !holder.hostname.is_empty()
+        && holder.hostname != remote_connect::client_hostname()
+    {
+        return Ok(ClaimOutcome::HeldBy(holder.hostname));
+    }
+    match client.call(ControlRequest::WorkspaceAttach { id: key.to_owned() }) {
+        Ok(ReplyOk::Attached { .. }) => Ok(ClaimOutcome::Attached),
+        Ok(other) => Err(format!("WorkspaceAttach answered {other:?}")),
+        Err(error) => Err(error.to_string()),
+    }
+}
+
+fn yield_after_reconnect(cx: &mut gpui_kit::App, host: HostId, workspace: WorkspaceId, by: String) {
+    let links = cx.default_global::<RemoteLinks>();
+    links.attaching.remove(&workspace);
+    links.reclaiming.remove(&workspace);
+    links.pane_retries.remove(&workspace);
+    links.preempted.insert(workspace, by);
+    RemoteLinks::mark(cx, host, |link| {
+        link.attach_sent.insert(workspace);
+    });
+    release_panes(cx, workspace);
+    crate::ui::tree_sync::on_preempted(cx, workspace);
+}
+
 fn pump_attachments(cx: &mut gpui_kit::App, host: HostId) {
     let Some(link) = remote_connect::HostLinks::get(cx, host) else {
         return;
     };
     for (workspace, key) in reclaims_due(cx, host) {
+        let claim = claim_for(cx.default_global::<RemoteLinks>(), workspace);
         // Never on the UI thread: the request's deadline is ten seconds, and a
         // far end that has stopped answering would freeze every window.
         let client = Arc::clone(link.client());
         cx.spawn(async move |cx| {
             let outcome = cx
                 .background_executor()
-                .spawn(async move {
-                    client
-                        .call(ControlRequest::WorkspaceAttach { id: key })
-                        .map_err(|e| e.to_string())
-                })
+                .spawn(async move { claim_blocking(&client, &key, claim) })
                 .await;
-            cx.update(|cx| finish_reclaim(cx, host, workspace, outcome));
+            cx.update(|cx| match outcome {
+                Ok(ClaimOutcome::HeldBy(by)) => yield_after_reconnect(cx, host, workspace, by),
+                Ok(ClaimOutcome::Attached) => finish_reclaim(
+                    cx,
+                    host,
+                    workspace,
+                    Ok(ReplyOk::Attached {
+                        took_over_from: None,
+                    }),
+                ),
+                Err(error) => finish_reclaim(cx, host, workspace, Err(error)),
+            });
         })
         .detach();
     }
@@ -1611,7 +1687,10 @@ fn finish_reclaim(
         let links = cx.default_global::<RemoteLinks>();
         links.attaching.remove(&workspace);
         match &outcome {
-            Ok(_) => links.reclaiming.remove(&workspace).is_some(),
+            Ok(_) => {
+                links.held_before.insert(workspace);
+                links.reclaiming.remove(&workspace).is_some()
+            }
             // Put the takeover back on the strip. The user asked to undo it and
             // it did not happen, so the window is still read-only and the Take
             // Back button is still the only thing that can change that.
@@ -1832,9 +1911,9 @@ fn launch_attempt(cx: &mut gpui_kit::App, host: HostId, target: RemoteTarget) {
             return;
         }
     };
-    let keys: Vec<String> = workspaces_on(cx, host)
+    let claims: Vec<_> = workspaces_on(cx, host)
         .into_iter()
-        .map(|(_, key)| key)
+        .map(|(id, key)| (key, claim_for(cx.default_global::<RemoteLinks>(), id)))
         .collect();
 
     RemoteLinks::mark(cx, host, |link| link.attempting = true);
@@ -1861,21 +1940,11 @@ fn launch_attempt(cx: &mut gpui_kit::App, host: HostId, target: RemoteTarget) {
                 )?;
                 // What the far end was actually told, so the pump does not go
                 // on to send the same attach a second time over this link.
-                let mut sent: Vec<String> = Vec::new();
-                for key in &keys {
-                    match connected
-                        .host
-                        .client()
-                        .call(ControlRequest::WorkspaceAttach { id: key.clone() })
-                    {
-                        Ok(ReplyOk::Attached {
-                            took_over_from: Some(who),
-                        }) => {
-                            log::info!("took workspace {key} back from {who}");
-                            sent.push(key.clone());
-                        }
-                        Ok(_) => sent.push(key.clone()),
-                        Err(e) => log::warn!("could not attach to workspace {key}: {e}"),
+                let mut sent = Vec::new();
+                for (key, claim) in claims {
+                    match claim_blocking(connected.host.client(), &key, claim) {
+                        Ok(outcome) => sent.push((key, outcome)),
+                        Err(error) => log::warn!("could not attach to workspace {key}: {error}"),
                     }
                 }
                 Ok::<_, String>((connected, sent))
@@ -1890,7 +1959,7 @@ fn finish_attempt(
     cx: &mut gpui_kit::App,
     host: HostId,
     target: &RemoteTarget,
-    outcome: Result<(remote_connect::Connected, Vec<String>), String>,
+    outcome: Result<(remote_connect::Connected, Vec<(String, ClaimOutcome)>), String>,
 ) {
     // Nothing is being installed once the attempt is back, whichever way it
     // went. Retiring it here is what lets the failure — and the button that
@@ -1927,11 +1996,19 @@ fn finish_attempt(
                 });
             }
             for (id, key) in workspaces_on(cx, host) {
+                let answer = sent.iter().find(|(sent_key, _)| *sent_key == key);
+                if let Some((_, ClaimOutcome::HeldBy(by))) = answer {
+                    yield_after_reconnect(cx, host, id, by.clone());
+                    continue;
+                }
                 let reclaimed = {
                     let links = cx.default_global::<RemoteLinks>();
+                    if answer.is_some() {
+                        links.held_before.insert(id);
+                    }
                     links.preempted.remove(&id).is_some() | links.reclaiming.remove(&id).is_some()
                 };
-                if sent.contains(&key) {
+                if answer.is_some() {
                     RemoteLinks::mark(cx, host, |link| {
                         link.attach_sent.insert(id);
                     });
@@ -3935,5 +4012,9 @@ mod tests {
             );
             assert!(!links.suspended.contains(&host));
         });
+    }
+
+    mod native_ssh_workspace_tests {
+        include!("native_ssh_workspace_tests.rs");
     }
 }

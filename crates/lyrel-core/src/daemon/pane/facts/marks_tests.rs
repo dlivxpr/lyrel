@@ -508,6 +508,7 @@ fn opaque_notifications_only_fall_back_when_no_rich_state() {
         request_resume_status: AgentStatus::Idle,
         pending_stop: false,
         readout: Default::default(),
+        since_ms: None,
     });
     (&mut st)
         .with_facts(|facts, emit| apply_signals(facts, sniffer.feed(b"\x1b]9;noise\x07"), emit));

@@ -7,6 +7,10 @@ mod graphics_pty_fixture {
         env!("CARGO_MANIFEST_DIR"),
         "/tests/support/synchronized_capture.rs"
     ));
+    include!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/support/theme_pty.rs"
+    ));
 }
 
 #[test]
@@ -26,6 +30,10 @@ fn graphics_fixture_sender() {
 }
 
 include!("graphics_media_consumer_tests.rs");
+include!("theme_query_consumer_tests.rs");
+include!("mouse_reporting_consumer_tests.rs");
+
+include!("keyboard_boundary_consumer_tests.rs");
 
 struct GraphicsDaemonProcess {
     child: std::process::Child,
@@ -34,8 +42,13 @@ struct GraphicsDaemonProcess {
 
 impl GraphicsDaemonProcess {
     fn start() -> Self {
+        Self::start_with(|_, _| {})
+    }
+
+    fn start_with(configure: impl FnOnce(&mut std::process::Command, &std::path::Path)) -> Self {
         let dir = tempfile::TempDir::new().unwrap();
-        let child = std::process::Command::new(std::env::current_exe().unwrap())
+        let mut command = std::process::Command::new(std::env::current_exe().unwrap());
+        command
             .args(["--ignored", "--exact"])
             .arg(format!(
                 "{}::graphics_fixture_daemon",
@@ -51,9 +64,9 @@ impl GraphicsDaemonProcess {
             .env("LYREL_CONTROL_SOCK", dir.path().join("control.sock"))
             .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .spawn()
-            .unwrap();
+            .stderr(std::process::Stdio::null());
+        configure(&mut command, dir.path());
+        let child = command.spawn().unwrap();
         let daemon = Self { child, dir };
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
         loop {
@@ -868,6 +881,7 @@ fn graphics_consumer_real_daemon_budget_notices_share_direct_and_placeholder_his
 fn graphics_consumer_cross_daemon_aggregate_rejects_without_losing_pixels_then_releases_on_close(
     cx: &mut TestAppContext,
 ) {
+    use gpui_kit::test::TestWindowExt as _;
     crate::core::config::pin_test_config_dir();
     cx.executor().allow_parking();
     // Real atlas pages round a one-pixel image up to 1024² BGRA pixels.
@@ -957,6 +971,13 @@ fn graphics_consumer_cross_daemon_aggregate_rejects_without_losing_pixels_then_r
                 // The viewport and pressure travel to different daemons. Complete
                 // a real round trip on the history owner before the new offer.
                 graphics_send_fixture(&terminals[0].1, cx, 41, b"\x1b[0m");
+                // The PTY barrier orders the daemon viewport, not the old
+                // window's committed display lease. Present the scrolled frame
+                // before asking another daemon to reclaim that history.
+                terminals[0]
+                    .0
+                    .update(cx, |_, window, cx| window.render_frame(cx))
+                    .unwrap();
                 let request = format!(
                     "SEND_OK 5 1 {} 0\n",
                     graphics_pty_fixture::hex(
@@ -973,7 +994,7 @@ fn graphics_consumer_cross_daemon_aggregate_rejects_without_losing_pixels_then_r
                     for index in [0, 2] {
                         terminals[index]
                             .0
-                            .update(cx, |_, window, _| window.refresh())
+                            .update(cx, |_, window, cx| window.render_frame(cx))
                             .unwrap();
                     }
                     terminals[2].1.read_with(cx, |view, _| {

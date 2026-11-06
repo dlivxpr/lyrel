@@ -4,6 +4,7 @@
 
 use super::*;
 use crate::ui::settings::kit::{self, BtnKind, Tk, fs};
+use gpui_kit::TestSupportExt as _;
 
 /// How many hosts the page shows before "Show all".
 const RECENT_HOSTS: usize = 5;
@@ -66,6 +67,7 @@ impl SettingsWindow {
         let filter = s.ssh.filter.clone();
         let query = filter.read(cx).value().trim().to_lowercase();
         let show_all = s.ssh.show_all;
+        let scroll = s.ssh.list_scroll.clone();
         let collapsed = s.ssh.collapsed_groups.clone();
         let editing = s.ssh.form.as_ref().map(|f| f.editing);
         let cfg = cx.global::<Config>();
@@ -216,12 +218,12 @@ impl SettingsWindow {
                 })),
             );
 
+        let bounded = !query.is_empty() || show_all;
         let mut list = v_flex()
-            .id("ssh-host-list")
-            .mx(px(-10.))
+            .id("ssh-host-list-rows")
             .px(px(10.))
-            .when(!query.is_empty() || show_all, |l| {
-                l.max_h(px(360.)).overflow_y_scroll()
+            .when(bounded, |l| {
+                l.on_scroll(nested_settings_list_wheel(scroll.clone()))
             });
         if let Some(id) = adding {
             list = list.child(self.render_host_row(None, id, cx));
@@ -241,6 +243,8 @@ impl SettingsWindow {
         let footer = if !query.is_empty() {
             empty.then(|| {
                 div()
+                    .id("ssh-host-list-empty")
+                    .test_support()
                     .h(px(40.))
                     .flex()
                     .items_center()
@@ -251,6 +255,8 @@ impl SettingsWindow {
         } else if total == 0 && adding.is_none() {
             Some(
                 div()
+                    .id("ssh-host-list-empty")
+                    .test_support()
                     .h(px(40.))
                     .flex()
                     .items_center()
@@ -304,7 +310,16 @@ impl SettingsWindow {
             [v_flex()
                 .pt(px(2.))
                 .child(toolbar)
-                .child(list)
+                .child(
+                    div()
+                        .id("ssh-host-list")
+                        .test_support()
+                        .mx(px(-10.))
+                        .when(bounded, |l| {
+                            l.max_h(px(360.)).overflow_y_scroll().track_scroll(&scroll)
+                        })
+                        .child(list),
+                )
                 .children(footer)
                 .into_any_element()],
             cx,
@@ -445,6 +460,7 @@ impl SettingsWindow {
 
         let head = div()
             .id(SharedString::from(format!("ssh-host-{}", id.as_u128())))
+            .test_support()
             .role(gpui_kit::Role::Button)
             .aria_label(match address.is_empty() {
                 true => title.clone(),

@@ -37,6 +37,7 @@ fn a_reported_session_id_asks_the_window_to_save(cx: &mut TestAppContext) {
         request_resume_status: Default::default(),
         pending_stop: false,
         readout: Default::default(),
+        since_ms: None,
     }))
     .encode(&mut daemon)
     .unwrap();
@@ -108,6 +109,7 @@ fn report_agent_turn(
         request_resume_status: Default::default(),
         pending_stop: false,
         readout: Default::default(),
+        since_ms: None,
     };
     DaemonMsg::AgentStatus(Some(state.clone()))
         .encode(daemon)

@@ -119,6 +119,7 @@ impl SettingsWindow {
             agent_hooks_seq: 0,
             agent_hooks_note: None,
             agent_query,
+            agent_list_scroll: gpui_kit::ScrollHandle::new(),
             agent_show_all: false,
             agent_touched: std::collections::HashSet::new(),
             agent_busy: std::collections::HashSet::new(),

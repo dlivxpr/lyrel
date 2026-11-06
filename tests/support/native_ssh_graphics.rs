@@ -288,12 +288,26 @@ impl NativeSshFixture {
     }
 
     pub fn connect_control(&self) -> Arc<RemoteHost> {
+        self.connect_control_as(
+            "fixture:native-ssh-46",
+            "native-ssh-graphics-46",
+            "isolated-fixture",
+        )
+    }
+
+    /// Independent production control clients for ownership/takeover scenarios.
+    pub fn connect_control_as(
+        &self,
+        connection_key: &str,
+        token: &str,
+        hostname: &str,
+    ) -> Arc<RemoteHost> {
         let stream = self.route(false);
-        let hello = ControlHello::host_rpc("native-ssh-graphics-46", "isolated-fixture");
+        let hello = ControlHello::host_rpc(token, hostname);
         #[cfg(windows)]
-        let host = RemoteHost::over_tcp(stream, "fixture:native-ssh-46", &hello).unwrap();
+        let host = RemoteHost::over_tcp(stream, connection_key, &hello).unwrap();
         #[cfg(unix)]
-        let host = RemoteHost::over_unix(stream, "fixture:native-ssh-46", &hello).unwrap();
+        let host = RemoteHost::over_unix(stream, connection_key, &hello).unwrap();
         assert_eq!(
             host.peer().home,
             self.remote_home,

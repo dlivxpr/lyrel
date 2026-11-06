@@ -66,7 +66,17 @@ impl RemoteOps for SshRemoteOps {
         let cmd = cmd.to_string();
         self.block_on(async move {
             match tokio::time::timeout(LAUNCH_TIMEOUT, exec(&conn, &cmd)).await {
-                Ok(Ok(_)) => Ok(()),
+                Ok(Ok(out)) if out.success() => Ok(()),
+                Ok(Ok(out)) => Err(match out.status {
+                    Some(status) => format!(
+                        "the remote refused the daemon launch (exit status {status}): {}",
+                        out.failure_reason()
+                    ),
+                    None => format!(
+                        "the remote refused the daemon launch without an exit status: {}",
+                        out.failure_reason()
+                    ),
+                }),
                 Ok(Err(e)) => Err(e),
                 Err(_) => Err(format!(
                     "the remote did not accept the daemon launch within {LAUNCH_TIMEOUT:?}"
@@ -191,6 +201,20 @@ async fn exec(conn: &Arc<SshConnection>, cmd: &str) -> Result<ExecOutput, String
 mod tests {
     use super::*;
     use crate::daemon::ssh::test_support::{Exec, FakeSshd};
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_refused_launch_reports_the_shell_status_and_stderr() {
+        let sshd = FakeSshd::connect(Exec::Refuses, None).await;
+        let conn = sshd.conn.clone();
+        let error = tokio::task::spawn_blocking(move || {
+            SshRemoteOps::new(conn).spawn_detached("fixture launch")
+        })
+        .await
+        .unwrap()
+        .expect_err("a nonzero SSH command status must not become an accepted launch");
+        assert!(error.contains("126"), "{error}");
+        assert!(error.contains("fixture shell: launch denied"), "{error}");
+    }
 
     #[test]
     fn missing_files_are_recognised_across_server_wordings() {

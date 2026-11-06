@@ -17,7 +17,7 @@ pub fn unhex(text: &str) -> Vec<u8> {
         .collect()
 }
 
-fn raw_pty() {
+pub fn raw_pty() {
     #[cfg(unix)]
     unsafe {
         let mut mode = std::mem::zeroed();

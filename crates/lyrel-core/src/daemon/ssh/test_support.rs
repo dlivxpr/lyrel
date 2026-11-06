@@ -32,6 +32,8 @@ pub(crate) enum Exec {
     /// Success and nothing more: a command that never finishes. The server
     /// never closes, so only the client can.
     Hangs,
+    /// The login shell refused the launch before a daemon could be started.
+    Refuses,
 }
 
 /// How the server answers a request for the `sftp` subsystem.
@@ -160,14 +162,21 @@ impl server::Handler for Sshd {
         session: &mut Session,
     ) -> Result<(), Self::Error> {
         session.channel_success(channel)?;
-        if let Exec::Exits = self.exec {
-            session.data(channel, &b"ok\n"[..])?;
-            session.exit_status_request(channel, 0)?;
-            session.eof(channel)?;
-            session.close(channel)?;
-            self.channels.remove(&channel);
-            self.counts.closed.fetch_add(1, Ordering::SeqCst);
+        match self.exec {
+            Exec::Exits => {
+                session.data(channel, &b"ok\n"[..])?;
+                session.exit_status_request(channel, 0)?;
+            }
+            Exec::Refuses => {
+                session.extended_data(channel, 1, &b"fixture shell: launch denied\n"[..])?;
+                session.exit_status_request(channel, 126)?;
+            }
+            Exec::Hangs => return Ok(()),
         }
+        session.eof(channel)?;
+        session.close(channel)?;
+        self.channels.remove(&channel);
+        self.counts.closed.fetch_add(1, Ordering::SeqCst);
         Ok(())
     }
 

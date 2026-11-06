@@ -166,24 +166,21 @@ fn is_icon(c: char) -> bool {
 /// Whether the cell after an icon can lend it room, the way kitty lets a
 /// Private Use Area glyph followed by a space take two cells.
 ///
-/// Everything [`has_room_after`] lends, and one thing more: a blank that
-/// paints the *same* background as the icon's own cell. That is the space
-/// after every icon in a coloured prompt segment, and backgrounds are painted
-/// before any glyph, so the icon lands on its own colour. Held back to one
-/// cell there, a Nerd Font icon is shrunk to about two thirds of the text's
-/// height, which is #866.
+/// Backgrounds and highlight washes are painted before glyphs, so a blank
+/// with the same background and highlight state can share the icon's ink.
+/// Held to one cell, a Nerd Font icon is clipped or shrunk (#866). Borrowing
+/// across a highlight boundary would instead paint the icon in two states.
 fn lends_to_icon(row: &[RenderCell], start: usize, cells: usize) -> bool {
-    if has_room_after(row, start, cells) {
-        return true;
-    }
-    let (Some(icon), Some(next)) = (row.get(start), row.get(start + cells)) else {
+    let Some(icon) = row.get(start) else {
         return false;
     };
+    let Some(next) = row.get(start + cells) else {
+        return true;
+    };
     is_blank(next)
-        && !next.selected
-        && icon.draw_bg
-        && next.draw_bg
-        && next.bg == icon.bg
+        && next.selected == icon.selected
+        && next.draw_bg == icon.draw_bg
+        && (!icon.draw_bg || next.bg == icon.bg)
         && next.match_hit == icon.match_hit
         && next.match_current == icon.match_current
         && !GlyphStyle::of(next).draws_on_blanks()
@@ -609,21 +606,20 @@ pub(super) fn paint_glyphs(
             let bounds = ink_bounds(cx, &shaped, &text, font_size);
             let ink = bounds.map(|b| b.origin.x + b.size.width);
             let measured = ink_covers_segment(ink, &text);
-            let budget = seg_budget(
-                solo,
-                measured,
-                cells,
-                has_room_after(row_cells, start, cells),
-                geom.cell_width,
-            );
+            let private_icon = measured && text.chars().next().is_some_and(is_icon);
+            let room_after = if private_icon {
+                lends_to_icon(row_cells, start, cells)
+            } else {
+                has_room_after(row_cells, start, cells)
+            };
+            let budget = seg_budget(solo, measured, cells, room_after, geom.cell_width);
             let mut origin = point(x, y);
             let mut clip_width = budget;
             if let (Some(ink), Some(bounds)) = (ink, bounds) {
-                // Only a lone icon that a fallback face supplied is fitted:
-                // the primary's own icons were drawn for its cell already.
+                // Fit fallback icons to the primary's metrics; primary icons
+                // keep their native size and may spill into a compatible blank.
                 let icon = INK_BOUNDS_ARE_INK
-                    && measured
-                    && text.chars().next().is_some_and(is_icon)
+                    && private_icon
                     && shaped.runs.first().is_some_and(|r| {
                         r.font_id
                             != *primary_ids[face_ix].get_or_insert_with(|| {
@@ -631,9 +627,9 @@ pub(super) fn paint_glyphs(
                             })
                     });
                 let (scale, room) = if icon {
-                    let lend = lends_to_icon(row_cells, start, cells);
                     let height = font_size.min(geom.line_height);
-                    let (scale, spans) = icon_fit(bounds, geom.cell_width, cells, lend, height);
+                    let (scale, spans) =
+                        icon_fit(bounds, geom.cell_width, cells, room_after, height);
                     let room = size(geom.cell_width * spans as f32, geom.line_height);
                     (scale, Some((room, spans == cells)))
                 } else {

@@ -50,6 +50,9 @@ pub(crate) mod usage;
 #[cfg(test)]
 pub(crate) mod test_window;
 
+#[cfg(test)]
+mod scroll_tests;
+
 /// The settings nav, and the page's padding either side of its column.
 const NAV_W: f32 = 220.;
 const PAGE_PAD: f32 = 112.;
@@ -167,6 +170,25 @@ fn group_thousands(n: usize) -> String {
         out.push(c);
     }
     out
+}
+
+/// Plain overflow divs bubble wheel input to every enclosing scroller. Handle
+/// these two settings lists on their content child, before the viewport's own
+/// listener: reaching an edge consumes this event; starting there hands off.
+fn nested_settings_list_wheel(
+    scroll: gpui_kit::ScrollHandle,
+) -> impl Fn(&gpui_kit::ScrollEvent, &mut Window, &mut App) + 'static {
+    move |event, window, cx| {
+        let delta = event.delta.pixel_delta(window.line_height());
+        let dy = if delta.y == px(0.) { delta.x } else { delta.y };
+        let offset = scroll.offset();
+        let y = (offset.y + dy).clamp(-scroll.max_offset().y, px(0.));
+        if y != offset.y {
+            scroll.set_offset(gpui_kit::point(offset.x, y));
+            window.refresh();
+            cx.stop_propagation();
+        }
+    }
 }
 
 fn settings_row_id(label: &str, _desc: &str) -> SharedString {
@@ -348,6 +370,7 @@ pub(crate) struct SettingsState {
     pub(crate) agent_hooks_seq: u64,
     pub(crate) agent_hooks_note: Option<(crate::core::agent_hooks::HookAgent, String)>,
     pub(crate) agent_query: Entity<InputState>,
+    pub(crate) agent_list_scroll: gpui_kit::ScrollHandle,
     /// Every agent, not just the ones installed on the selected machine.
     pub(crate) agent_show_all: bool,
     /// Agents acted on since the list was last narrowed, kept in view so a row

@@ -113,7 +113,11 @@ fn a_relative_path_links_against_the_panes_own_directory(cx: &mut TestAppContext
 fn a_pane_whose_paths_are_elsewhere_does_not_link_local_files(cx: &mut TestAppContext) {
     let file = std::env::temp_dir().join(format!("lyrel-elsewhere-{}.txt", std::process::id()));
     std::fs::write(&file, b"local").expect("create local file");
-    let line = format!("open {} now\r\n", file.display());
+    let line = format!(
+        "open {} now\r\nopen {}:3-5 now\r\n",
+        file.display(),
+        file.display()
+    );
 
     let (window, mut daemon) = harness(cx);
     DaemonMsg::Output(line.clone().into_bytes())
@@ -145,6 +149,10 @@ fn a_pane_whose_paths_are_elsewhere_does_not_link_local_files(cx: &mut TestAppCo
             assert!(
                 !view.hover_link_at(6, 0, true, cx),
                 "the local copy of that path is not what the pane printed"
+            );
+            assert!(
+                !view.hover_link_at(6, 1, true, cx),
+                "a range citation cannot substitute this machine's copy either"
             );
         })
         .unwrap();

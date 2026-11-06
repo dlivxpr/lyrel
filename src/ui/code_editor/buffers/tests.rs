@@ -42,6 +42,126 @@ fn start_active_markdown_in_source(app: &Entity<LyrelApp>, vcx: &mut VisualTestC
 }
 
 #[gpui_kit::test]
+fn terminal_single_line_citation_click_opens_the_editor(cx: &mut TestAppContext) {
+    terminal_citation_click_opens_the_editor(cx, "(citation.txt:3),\r\n", false);
+}
+
+#[gpui_kit::test]
+fn terminal_range_citation_click_opens_the_editor_at_its_first_line(cx: &mut TestAppContext) {
+    terminal_citation_click_opens_the_editor(cx, "(citation.txt:3-5),\r\n", false);
+}
+
+#[gpui_kit::test]
+fn terminal_citation_spellings_keep_first_line_navigation(cx: &mut TestAppContext) {
+    for output in [
+        "(citation.txt:3:1),\r\n",
+        "(citation.txt(3,1)),\r\n",
+        "(citation.txt#L3-L5),\r\n",
+        "(\"citation.txt:3-5\"),\r\n",
+        "({absolute}:3-5),\r\n",
+    ] {
+        terminal_citation_click_opens_the_editor(cx, output, false);
+    }
+}
+
+#[gpui_kit::test]
+fn terminal_range_citation_opens_on_the_panes_host(cx: &mut TestAppContext) {
+    terminal_citation_click_opens_the_editor(cx, "(citation.txt:3-5),\r\n", true);
+}
+
+fn terminal_citation_click_opens_the_editor(cx: &mut TestAppContext, output: &str, remote: bool) {
+    use crate::daemon::protocol::DaemonMsg;
+    use gpui_kit::{Modifiers, MouseButton};
+    use rio_vt::crosswords::pos::{Column, Line};
+
+    let dir = canonical_tempdir();
+    let path = dir.path().join("citation.txt");
+    std::fs::write(&path, "first\nsecond\nrange starts here\nfourth\nfifth\n").unwrap();
+    let output = output.replace("{absolute}", &path.to_string_lossy());
+    let (app, mut vcx, mut streams) = harness_with_tabs(cx, 1);
+    let pane = app.read_with(&vcx, |app, _| app.tabs[0].pane.terminals()[0].clone());
+    let (cwd, expected_path, expected_host) = if remote {
+        use crate::core::session::{
+            RemoteRef, RemoteTarget, WindowView, WorkspaceId, WorkspaceStore,
+        };
+        use crate::terminal::PaneWorkspace;
+        use crate::ui::host_registry::HostRegistry;
+
+        let target = RemoteTarget::Alias {
+            alias: "range-citation-fixture".into(),
+        };
+        let host_id = target.host_id();
+        app.update_in(&mut vcx, |app, _, cx| {
+            let workspace = WorkspaceId::new();
+            let view = WindowView::on_remote(RemoteRef::new(target.clone(), workspace));
+            app.workspace = view.id;
+            let mut views = WorkspaceStore::all(cx).clone();
+            views.views.push(view);
+            WorkspaceStore::install_for_test(cx, views);
+            HostRegistry::insert(cx, FileHost::mapped(host_id, dir.path()));
+            pane.update(cx, |pane, _| {
+                pane.set_workspace(Some(PaneWorkspace {
+                    workspace,
+                    target,
+                    spec: None,
+                    label: None,
+                    resize_echo: false,
+                }));
+            });
+        });
+        (PathBuf::from("/"), PathBuf::from("/citation.txt"), host_id)
+    } else {
+        (dir.path().to_path_buf(), path.clone(), HostId::LOCAL)
+    };
+    DaemonMsg::Cwd(cwd.clone()).encode(&mut streams[0]).unwrap();
+    DaemonMsg::Output(output.as_bytes().to_vec())
+        .encode(&mut streams[0])
+        .unwrap();
+    wait_until(&mut vcx, |vcx| {
+        pane.read_with(vcx, |pane, _| {
+            pane.cwd().as_deref() == Some(cwd.as_path())
+                && pane.terminal.term.lock().grid[Line(0)][Column(0)].c() == '('
+        })
+    });
+    let at = vcx.update(|window, cx| {
+        window.render_frame(cx);
+        // The first row's path starts after `(`, inside the surface padding.
+        let bounds = window.find("terminal-surface").bounds();
+        let width = pane.read(cx).cell_width;
+        bounds.origin + gpui_kit::point(gpui_kit::px(8.) + width * 2., gpui_kit::px(6.))
+    });
+    let modifier = if cfg!(target_os = "macos") {
+        Modifiers {
+            platform: true,
+            ..Modifiers::none()
+        }
+    } else {
+        Modifiers::control()
+    };
+    vcx.simulate_mouse_move(at, None, modifier);
+    if remote {
+        wait_until(&mut vcx, |vcx| {
+            pane.update_in(vcx, |pane, _, cx| pane.hover_link_at(2, 0, true, cx))
+        });
+    }
+    vcx.simulate_mouse_down(at, MouseButton::Left, modifier);
+    vcx.simulate_mouse_up(at, MouseButton::Left, modifier);
+    wait_until(&mut vcx, |vcx| active_id(&app, vcx).is_some());
+    app.read_with(&vcx, |app, cx| {
+        let file = app
+            .active_buffer()
+            .expect("citation opens the production editor");
+        assert_eq!(file.path, expected_path);
+        assert_eq!(file.host.id(), expected_host);
+        assert_eq!(file.input.read(cx).cursor_position(), Position::new(2, 0));
+        assert_eq!(
+            file.input.read(cx).text().to_string(),
+            "first\nsecond\nrange starts here\nfourth\nfifth\n"
+        );
+    });
+}
+
+#[gpui_kit::test]
 fn production_markdown_opens_live_without_changing_code_or_plain_untitled(cx: &mut TestAppContext) {
     use crate::core::actions::{EditorNewFile, EditorNewMarkdownFile};
     let dir = tempfile::tempdir().unwrap();

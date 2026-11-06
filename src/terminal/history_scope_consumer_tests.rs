@@ -258,3 +258,31 @@ fn equally_named_history_scopes_never_restore_another_hosts_commands(cx: &mut Te
         assert_eq!(view.input.editor().text(), "echo first-host", "the original Host still has its own cached list");
     }).unwrap();
 }
+
+#[gpui_kit::test]
+fn a_command_recorded_while_history_loads_remains_searchable(cx: &mut TestAppContext) {
+    use crate::terminal::history::Scope;
+    let (_window, view, _daemon) = rooted_harness(cx);
+    view.update(cx, |view, cx| {
+        let scope = Scope::remote("history-loading-fixture");
+        let load = view.history.change_scope(scope.clone(), view.host_id, view.history_prompt()).unwrap();
+        view.input.editor_mut().set("echo recorded_during_history_load");
+        view.submit_command(cx);
+        let loaded = crate::terminal::history::load_with_shell_files(
+            &scope,
+            vec![(".bash_history".into(), b"echo seeded_before_load\n".to_vec())],
+        );
+        assert!(view.history.accept_load(load, view.host_id, loaded));
+        view.handle_editor_key(&key("ctrl-r"), cx);
+        view.commit_text("recorded_during_history_load", cx);
+        assert_eq!(
+            view.history.search().and_then(|search| search.selected_line(view.history.entries())),
+            Some("echo recorded_during_history_load"),
+            "a completed load must not erase commands submitted while it was reading",
+        );
+    });
+}
+
+mod native_ssh_history_consumer_tests {
+    include!("native_ssh_history_consumer_tests.rs");
+}

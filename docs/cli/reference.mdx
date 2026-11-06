@@ -228,10 +228,13 @@ JSON：`{"procs":[{"pid","name","depth","foreground"}],"ports":[{"port","pid","n
 ### `lyrel agents`
 
 列出所有正在运行已识别编程代理的窗格。表格：
-`PANE AGENT STATUS MESSAGE`，状态为 `idle` / `working` / `waiting` /
-`done` 之一。JSON：`{"agents":[...]}`；当代理的状态钩子缺失或过时时，
-还会附带 `"diagnostics"` 数组，这也解释了为何代理可能出现在列表中，
-状态却始终不变。
+`PANE AGENT STATUS FOR MESSAGE`，状态为 `idle` / `working` / `waiting` /
+`done` 之一。`FOR` 表示连续保持该状态的时长（如 `45s`、`3m`、`2h`、`4d`）；
+旧服务器未提供时间戳时显示 `-`，不会当作刚刚进入状态。
+JSON：`{"agents":[...]}`，每项的 `state.since_ms` 为进入状态时 daemon 时钟的 Unix 毫秒数；
+字段可缺省，远端时钟领先时显示的时长最低为零。重复同状态事件不重置时长。
+当代理的状态钩子缺失或过时时，还会附带 `"diagnostics"` 数组。
+表格新增 `FOR` 列，按固定列位置解析的脚本需要更新；自动化应优先使用 `--json`。
 
 <a id="lyrel-wait-pane---until-state---changed---timeout-secs---interval-ms"></a>
 ### `lyrel wait [%PANE] [--until STATE,…] [--changed] [--timeout SECS] [--interval MS]`

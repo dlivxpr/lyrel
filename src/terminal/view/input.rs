@@ -295,6 +295,9 @@ impl TerminalView {
         if self.frame.alt_screen {
             context.add("alt_screen");
         }
+        if self.history.search().is_some() && !self.search_focused && !self.composer_focused {
+            context.add("reverse_search");
+        }
         context
     }
 
@@ -514,6 +517,31 @@ impl TerminalView {
         self.lifecycle.show_cursor();
         self.jump_to_prompt();
         cx.notify();
+    }
+
+    pub(super) fn run_reverse_search_selection(&mut self, cx: &mut Context<Self>) {
+        // A frame-old context must not submit after focus or prompt ownership
+        // has moved to another input surface.
+        if !self.input_active()
+            || self.search_focused
+            || self.composer_focused
+            || self.history.search().is_none()
+        {
+            cx.propagate();
+            return;
+        }
+        let line = self
+            .history
+            .search()
+            .and_then(|search| search.selected_line(self.history.entries()))
+            .map(str::to_owned);
+        self.history.cancel_search();
+        if let Some(line) = line {
+            self.input.editor_mut().set(&line);
+            self.submit_command(cx);
+        } else {
+            cx.notify();
+        }
     }
 
     pub(super) fn handoff_line_to_shell(&mut self, chord: &[u8], cx: &mut Context<Self>) {

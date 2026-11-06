@@ -2175,9 +2175,22 @@ mod windows {
         }
         let bytes =
             fs::read(archive).map_err(|error| format!("reading {}: {error}", archive.display()))?;
-        let mut archive = smol::block_on(async_zip::base::read1::seek::ZipArchiveReader::open(
-            smol::io::Cursor::new(bytes),
-        ))
+        check_portable_zip_resources(&bytes)
+            .map_err(|error| format!("opening the portable ZIP: {error}"))?;
+        let options = async_zip::base::read1::ZipOptions {
+            max_cd_num_files: MAX_PORTABLE_ENTRIES as u64,
+            max_cd_num_files_load: MAX_PORTABLE_ENTRIES as u64,
+            max_cd_size_in_bytes: MAX_PORTABLE_EXPANDED_BYTES,
+            max_compressed_size_per_file: MAX_PORTABLE_EXPANDED_BYTES,
+            max_uncompressed_size_per_file: MAX_PORTABLE_EXPANDED_BYTES,
+            ..Default::default()
+        };
+        let mut archive = smol::block_on(
+            async_zip::base::read1::seek::ZipArchiveReader::open_with_options(
+                smol::io::Cursor::new(bytes),
+                options,
+            ),
+        )
         .map_err(|error| format!("opening the portable ZIP: {error}"))?;
         let entry_count = archive.cdrs().len();
         if entry_count > MAX_PORTABLE_ENTRIES {
@@ -2288,6 +2301,118 @@ mod windows {
             })?;
         }
         Ok(())
+    }
+
+    /// Resource admission only: read1 remains authoritative for ZIP format,
+    /// names, header consistency and EOF integrity. Its directory limits apply
+    /// to EOCD declarations, so also count actual records before it allocates
+    /// metadata for an archive whose EOCD understates the directory.
+    fn check_portable_zip_resources(bytes: &[u8]) -> Result<(), String> {
+        let malformed = || "invalid portable ZIP resource metadata".to_string();
+        let eocd = (bytes.len().saturating_sub(22 + u16::MAX as usize)..bytes.len())
+            .rev()
+            .find(|&offset| {
+                bytes.get(offset..offset + 4) == Some(b"PK\x05\x06")
+                    && portable_zip_field::<2>(bytes, offset + 20).is_ok_and(|length| {
+                        offset + 22 + u16::from_le_bytes(length) as usize == bytes.len()
+                    })
+            })
+            .ok_or_else(malformed)?;
+        let mut count = u16::from_le_bytes(portable_zip_field(bytes, eocd + 10)?) as u64;
+        let mut size = u32::from_le_bytes(portable_zip_field(bytes, eocd + 12)?) as u64;
+        let mut offset = u32::from_le_bytes(portable_zip_field(bytes, eocd + 16)?) as u64;
+        // A ZIP64 locator immediately precedes the EOCD. Follow it even when
+        // the legacy fields aren't sentinels, matching read1's selection.
+        if let Some(locator) = eocd.checked_sub(20)
+            && bytes.get(locator..locator + 4) == Some(b"PK\x06\x07")
+        {
+            let record = u64::from_le_bytes(portable_zip_field(bytes, locator + 8)?);
+            let record = usize::try_from(record).map_err(|_| malformed())?;
+            let header = bytes
+                .get(record..)
+                .and_then(|tail| tail.get(..56))
+                .ok_or_else(malformed)?;
+            if &header[..4] != b"PK\x06\x06" {
+                return Err(malformed());
+            }
+            count = u64::from_le_bytes(portable_zip_field(header, 32)?);
+            size = u64::from_le_bytes(portable_zip_field(header, 40)?);
+            offset = u64::from_le_bytes(portable_zip_field(header, 48)?);
+        }
+        let entry_limit =
+            || format!("number of files exceeds the maximum allowed ({MAX_PORTABLE_ENTRIES})");
+        let directory_limit = || {
+            format!(
+                "central directory size exceeds the maximum allowed ({MAX_PORTABLE_EXPANDED_BYTES})"
+            )
+        };
+        if count > MAX_PORTABLE_ENTRIES as u64 {
+            return Err(entry_limit());
+        }
+        if size > MAX_PORTABLE_EXPANDED_BYTES {
+            return Err(directory_limit());
+        }
+        let start = usize::try_from(offset).map_err(|_| malformed())?;
+        let mut remaining = bytes.get(start..).ok_or_else(malformed)?;
+        let mut actual_count = 0usize;
+        let mut actual_size = 0u64;
+        while remaining.starts_with(b"PK\x01\x02") {
+            actual_count += 1;
+            if actual_count > MAX_PORTABLE_ENTRIES {
+                return Err(entry_limit());
+            }
+            let header = remaining.get(..46).ok_or_else(malformed)?;
+            let name_size = u16::from_le_bytes(portable_zip_field(header, 28)?) as usize;
+            let extra_size = u16::from_le_bytes(portable_zip_field(header, 30)?) as usize;
+            let comment_size = u16::from_le_bytes(portable_zip_field(header, 32)?) as usize;
+            let record_size = 46 + name_size + extra_size + comment_size;
+            actual_size += record_size as u64;
+            if actual_size > MAX_PORTABLE_EXPANDED_BYTES {
+                return Err(directory_limit());
+            }
+            let record = remaining.get(..record_size).ok_or_else(malformed)?;
+            let mut compressed = u32::from_le_bytes(portable_zip_field(header, 20)?) as u64;
+            let mut uncompressed = u32::from_le_bytes(portable_zip_field(header, 24)?) as u64;
+            if compressed == u32::MAX as u64 || uncompressed == u32::MAX as u64 {
+                // Only the first two ZIP64 extended-information values affect
+                // resource admission; offsets and all other fields stay read1's.
+                let mut extra = &record[46 + name_size..46 + name_size + extra_size];
+                let zip64 = loop {
+                    let tag = u16::from_le_bytes(portable_zip_field(extra, 0)?);
+                    let length = u16::from_le_bytes(portable_zip_field(extra, 2)?) as usize;
+                    let field = extra.get(4..4 + length).ok_or_else(malformed)?;
+                    if tag == 1 {
+                        break field;
+                    }
+                    extra = extra.get(4 + length..).ok_or_else(malformed)?;
+                };
+                let mut index = 0;
+                if uncompressed == u32::MAX as u64 {
+                    uncompressed = u64::from_le_bytes(portable_zip_field(zip64, index)?);
+                    index += 8;
+                }
+                if compressed == u32::MAX as u64 {
+                    compressed = u64::from_le_bytes(portable_zip_field(zip64, index)?);
+                }
+            }
+            for (kind, size) in [("compressed", compressed), ("uncompressed", uncompressed)] {
+                if size > MAX_PORTABLE_EXPANDED_BYTES {
+                    return Err(format!(
+                        "{kind} size exceeds the maximum allowed ({MAX_PORTABLE_EXPANDED_BYTES})"
+                    ));
+                }
+            }
+            remaining = &remaining[record_size..];
+        }
+        Ok(())
+    }
+
+    fn portable_zip_field<const N: usize>(bytes: &[u8], offset: usize) -> Result<[u8; N], String> {
+        bytes
+            .get(offset..)
+            .and_then(|tail| tail.get(..N))
+            .and_then(|field| field.try_into().ok())
+            .ok_or_else(|| "invalid portable ZIP resource metadata".to_string())
     }
 
     fn validate_portable_relative_path(path: &Path) -> Result<(), String> {
@@ -3407,6 +3532,296 @@ mod windows {
             }
         }
 
+        #[test]
+        fn portable_archive_rejects_excess_entries_before_directory_parsing() {
+            let root = tempfile::tempdir().unwrap();
+            let archive = root.path().join("release.zip");
+            write_test_zip(&archive, &[("README.md", b"readme".to_vec())]);
+            let mut bytes = fs::read(&archive).unwrap();
+            // The fixture has no ZIP comment: the EOCD is the final 22 bytes.
+            let eocd = bytes.len() - 22;
+            assert_eq!(&bytes[eocd..eocd + 4], b"PK\x05\x06");
+            let directory = u32::from_le_bytes(bytes[eocd + 16..eocd + 20].try_into().unwrap());
+            let excessive = 4097u16.to_le_bytes();
+            bytes[eocd + 8..eocd + 10].copy_from_slice(&excessive);
+            bytes[eocd + 10..eocd + 12].copy_from_slice(&excessive);
+            // A late count check parses this damaged record first. Admission
+            // must reject the declared count before touching directory records.
+            bytes[directory as usize] = 0;
+            fs::write(&archive, bytes).unwrap();
+
+            let error = verify_written_portable_archive(root.path(), &archive).unwrap_err();
+            assert!(
+                error.contains("number of files exceeds the maximum allowed (4096)"),
+                "{error}"
+            );
+            assert!(!root.path().join("payload").exists());
+        }
+
+        #[test]
+        fn portable_archive_bounds_directory_entries_when_eocd_understates_them() {
+            let root = tempfile::tempdir().unwrap();
+            let archive = root.path().join("release.zip");
+            let entries = vec![("README.md", Vec::new()); 4097];
+            write_test_zip(&archive, &entries);
+            let mut bytes = fs::read(&archive).unwrap();
+            let eocd = bytes.len() - 22;
+            bytes[eocd + 8..eocd + 10].copy_from_slice(&1u16.to_le_bytes());
+            bytes[eocd + 10..eocd + 12].copy_from_slice(&1u16.to_le_bytes());
+            fs::write(&archive, bytes).unwrap();
+
+            let error = verify_written_portable_archive(root.path(), &archive).unwrap_err();
+            assert!(
+                error.contains("number of files exceeds the maximum allowed (4096)"),
+                "{error}"
+            );
+            assert!(!root.path().join("payload").exists());
+        }
+
+        #[test]
+        fn portable_archive_limits_directory_bytes_and_both_entry_sizes() {
+            for (kind, local_field, directory_field) in [
+                ("central directory", None, 12),
+                ("compressed", Some(18), 20),
+                ("uncompressed", Some(22), 24),
+            ] {
+                let root = tempfile::tempdir().unwrap();
+                let archive = root.path().join("release.zip");
+                write_test_zip(&archive, &[("README.md", b"readme".to_vec())]);
+                let mut bytes = fs::read(&archive).unwrap();
+                let eocd = bytes.len() - 22;
+                let directory =
+                    u32::from_le_bytes(bytes[eocd + 16..eocd + 20].try_into().unwrap()) as usize;
+                let excessive = 1_073_741_825u32.to_le_bytes();
+                if let Some(field) = local_field {
+                    bytes[field..field + 4].copy_from_slice(&excessive);
+                    bytes[directory + directory_field..directory + directory_field + 4]
+                        .copy_from_slice(&excessive);
+                } else {
+                    bytes[eocd + directory_field..eocd + directory_field + 4]
+                        .copy_from_slice(&excessive);
+                }
+                fs::write(&archive, bytes).unwrap();
+                let error = verify_written_portable_archive(root.path(), &archive).unwrap_err();
+                assert!(
+                    error.contains(&format!(
+                        "{kind} size exceeds the maximum allowed (1073741824)"
+                    )),
+                    "{error}"
+                );
+                assert!(!root.path().join("payload").exists());
+            }
+        }
+
+        #[test]
+        fn portable_archive_entry_size_ceiling_is_inclusive_and_total_is_cumulative() {
+            for (local_field, directory_field) in [(18, 20), (22, 24)] {
+                let root = tempfile::tempdir().unwrap();
+                let archive = root.path().join("release.zip");
+                write_test_zip(&archive, &[("README.md", b"readme".to_vec())]);
+                let mut bytes = fs::read(&archive).unwrap();
+                let eocd = bytes.len() - 22;
+                let directory =
+                    u32::from_le_bytes(bytes[eocd + 16..eocd + 20].try_into().unwrap()) as usize;
+                let ceiling = 1_073_741_824u32.to_le_bytes();
+                bytes[local_field..local_field + 4].copy_from_slice(&ceiling);
+                bytes[directory + directory_field..directory + directory_field + 4]
+                    .copy_from_slice(&ceiling);
+                fs::write(&archive, bytes).unwrap();
+                // Exact-ceiling metadata is admitted. The intentionally tiny
+                // body then fails integrity without allocating/writing 1 GiB.
+                let error = verify_written_portable_archive(root.path(), &archive).unwrap_err();
+                let expected = if directory_field == 20 {
+                    "expands past its declared size"
+                } else {
+                    "uncompressed size read"
+                };
+                assert!(error.contains(expected), "{error}");
+                assert!(!error.contains("maximum allowed"), "{error}");
+            }
+
+            let root = tempfile::tempdir().unwrap();
+            let archive = root.path().join("release.zip");
+            write_test_zip(
+                &archive,
+                &[("README.md", b"a".to_vec()), ("LICENSE.txt", Vec::new())],
+            );
+            let mut bytes = fs::read(&archive).unwrap();
+            let eocd = bytes.len() - 22;
+            let directory =
+                u32::from_le_bytes(bytes[eocd + 16..eocd + 20].try_into().unwrap()) as usize;
+            let second = directory + 46 + "README.md".len();
+            bytes[second + 24..second + 28].copy_from_slice(&1_073_741_824u32.to_le_bytes());
+            fs::write(&archive, bytes).unwrap();
+            let error = verify_written_portable_archive(root.path(), &archive).unwrap_err();
+            assert!(
+                error.contains("expands past the 1073741824 byte limit"),
+                "{error}"
+            );
+            assert_eq!(
+                fs::read(root.path().join("payload/README.md")).unwrap(),
+                b"a"
+            );
+            assert!(!root.path().join("payload/LICENSE.txt").exists());
+        }
+
+        #[test]
+        fn portable_archive_accepts_exactly_4096_entries() {
+            let root = tempfile::tempdir().unwrap();
+            let mut entries = complete_portable_entries();
+            let names: Vec<_> = (entries.len()..4096)
+                .map(|index| format!("completions/{index}.json"))
+                .collect();
+            entries.extend(names.iter().map(|name| (name.as_str(), b"{}".to_vec())));
+            verify_portable_entries(root.path(), &entries).unwrap();
+            assert!(root.path().join("payload/completions/4095.json").is_file());
+        }
+
+        #[test]
+        fn portable_archive_keeps_eof_crc_size_name_and_symlink_rejections() {
+            for kind in ["crc", "actual size", "utf8", "symlink", "separator"] {
+                let root = tempfile::tempdir().unwrap();
+                let archive = root.path().join("release.zip");
+                write_test_zip(&archive, &[("README.md", b"readme".to_vec())]);
+                let mut bytes = fs::read(&archive).unwrap();
+                let eocd = bytes.len() - 22;
+                let directory =
+                    u32::from_le_bytes(bytes[eocd + 16..eocd + 20].try_into().unwrap()) as usize;
+                let expected = match kind {
+                    "crc" => {
+                        bytes[30 + "README.md".len()] ^= 1;
+                        "CRC32"
+                    }
+                    "actual size" => {
+                        bytes[22..26].copy_from_slice(&7u32.to_le_bytes());
+                        bytes[directory + 24..directory + 28].copy_from_slice(&7u32.to_le_bytes());
+                        "uncompressed size read"
+                    }
+                    "utf8" => {
+                        bytes[30] = 0xff;
+                        bytes[directory + 46] = 0xff;
+                        "not valid UTF-8"
+                    }
+                    "symlink" => {
+                        bytes[directory + 5] = 3;
+                        bytes[directory + 38..directory + 42]
+                            .copy_from_slice(&(0o120777u32 << 16).to_le_bytes());
+                        "symbolic link"
+                    }
+                    "separator" => {
+                        bytes[30] = b'\\';
+                        bytes[directory + 46] = b'\\';
+                        "non-canonical separator"
+                    }
+                    _ => unreachable!(),
+                };
+                fs::write(&archive, bytes).unwrap();
+                let error = verify_written_portable_archive(root.path(), &archive).unwrap_err();
+                assert!(error.contains(expected), "{kind}: {error}");
+            }
+        }
+
+        #[test]
+        fn portable_archive_bounds_zip64_directory_declarations() {
+            for (field, value, expected) in [
+                (32, 4097, "number of files exceeds"),
+                (40, 1_073_741_825, "central directory size exceeds"),
+                (48, u64::MAX, "invalid portable ZIP resource metadata"),
+            ] {
+                let root = tempfile::tempdir().unwrap();
+                let archive = root.path().join("release.zip");
+                write_test_zip(&archive, &[("README.md", Vec::new())]);
+                let mut bytes = test_zip64(fs::read(&archive).unwrap());
+                let record = bytes.len() - 22 - 20 - 56;
+                bytes[record + field..record + field + 8].copy_from_slice(&value.to_le_bytes());
+                fs::write(&archive, bytes).unwrap();
+                let error = verify_written_portable_archive(root.path(), &archive).unwrap_err();
+                assert!(error.contains(expected), "{error}");
+                assert!(!root.path().join("payload").exists());
+            }
+        }
+
+        #[test]
+        fn portable_archive_bounds_zip64_entry_sizes_and_rejects_truncated_metadata() {
+            for (compressed, uncompressed, truncate, expected) in [
+                (1_073_741_825u64, 0u64, false, "compressed size exceeds"),
+                (0, 1_073_741_825, false, "uncompressed size exceeds"),
+                (0, 0, true, "invalid portable ZIP resource metadata"),
+            ] {
+                let root = tempfile::tempdir().unwrap();
+                let archive = root.path().join("release.zip");
+                write_test_zip(&archive, &[("README.md", Vec::new())]);
+                let mut bytes = fs::read(&archive).unwrap();
+                let eocd = bytes.len() - 22;
+                let directory =
+                    u32::from_le_bytes(bytes[eocd + 16..eocd + 20].try_into().unwrap()) as usize;
+                bytes[directory + 20..directory + 28].fill(0xff);
+                bytes[directory + 30..directory + 32].copy_from_slice(&20u16.to_le_bytes());
+                let mut extra = vec![1, 0, 16, 0];
+                extra.extend_from_slice(&uncompressed.to_le_bytes());
+                extra.extend_from_slice(&compressed.to_le_bytes());
+                if truncate {
+                    extra.truncate(8);
+                    extra[2..4].copy_from_slice(&u16::MAX.to_le_bytes());
+                }
+                let extra_len = extra.len();
+                bytes.splice(eocd..eocd, extra);
+                let eocd = eocd + extra_len;
+                let size = (46 + "README.md".len() + extra_len) as u32;
+                bytes[eocd + 12..eocd + 16].copy_from_slice(&size.to_le_bytes());
+                fs::write(&archive, bytes).unwrap();
+                let error = verify_written_portable_archive(root.path(), &archive).unwrap_err();
+                assert!(error.contains(expected), "{error}");
+                assert!(!root.path().join("payload").exists());
+            }
+        }
+
+        #[test]
+        fn portable_archive_accepts_zip64_and_eocd_signatures_in_comments() {
+            for zip64 in [false, true] {
+                let root = tempfile::tempdir().unwrap();
+                let archive = root.path().join("release.zip");
+                write_test_zip(&archive, &complete_portable_entries());
+                let mut bytes = fs::read(&archive).unwrap();
+                if zip64 {
+                    bytes = test_zip64(bytes);
+                }
+                let eocd = bytes.len() - 22;
+                let mut comment = b"PK\x05\x06".to_vec();
+                comment.resize(22, 0);
+                comment.extend_from_slice(b"comment");
+                bytes[eocd + 20..eocd + 22].copy_from_slice(&(comment.len() as u16).to_le_bytes());
+                bytes.extend(comment);
+                fs::write(&archive, bytes).unwrap();
+                verify_written_portable_archive(root.path(), &archive).unwrap();
+            }
+        }
+
+        fn test_zip64(mut bytes: Vec<u8>) -> Vec<u8> {
+            let eocd = bytes.len() - 22;
+            let count = u16::from_le_bytes(bytes[eocd + 10..eocd + 12].try_into().unwrap()) as u64;
+            let size = u32::from_le_bytes(bytes[eocd + 12..eocd + 16].try_into().unwrap()) as u64;
+            let offset = u32::from_le_bytes(bytes[eocd + 16..eocd + 20].try_into().unwrap()) as u64;
+            let ending = bytes.split_off(eocd);
+            let mut record = [0u8; 56];
+            record[..4].copy_from_slice(b"PK\x06\x06");
+            record[4..12].copy_from_slice(&44u64.to_le_bytes());
+            record[12..14].copy_from_slice(&45u16.to_le_bytes());
+            record[14..16].copy_from_slice(&45u16.to_le_bytes());
+            record[24..32].copy_from_slice(&count.to_le_bytes());
+            record[32..40].copy_from_slice(&count.to_le_bytes());
+            record[40..48].copy_from_slice(&size.to_le_bytes());
+            record[48..56].copy_from_slice(&offset.to_le_bytes());
+            bytes.extend(record);
+            let mut locator = [0u8; 20];
+            locator[..4].copy_from_slice(b"PK\x06\x07");
+            locator[8..16].copy_from_slice(&(eocd as u64).to_le_bytes());
+            locator[16..20].copy_from_slice(&1u32.to_le_bytes());
+            bytes.extend(locator);
+            bytes.extend(ending);
+            bytes
+        }
+
         /// lyrel-core's build script stages the pinned, already-verified
         /// ConPTY files beside every test executable; a real release package
         /// carries those same bytes. Fixtures read them from there rather
@@ -3458,13 +3873,18 @@ mod windows {
         fn verify_portable_entries(root: &Path, entries: &[(&str, Vec<u8>)]) -> Result<(), String> {
             let asset_name = format!("lyrel-{}-windows-x86_64.zip", env!("CARGO_PKG_VERSION"));
             let archive = root.join(&asset_name);
-            let manifest = root.join("checksums.txt");
             write_test_zip(&archive, entries);
-            write_manifest(&archive, &manifest, &asset_name);
+            verify_written_portable_archive(root, &archive)
+        }
+
+        fn verify_written_portable_archive(root: &Path, archive: &Path) -> Result<(), String> {
+            let asset_name = archive.file_name().unwrap().to_str().unwrap();
+            let manifest = root.join("checksums.txt");
+            write_manifest(archive, &manifest, asset_name);
             verify_portable_update(
-                &archive,
+                archive,
                 &manifest,
-                &asset_name,
+                asset_name,
                 env!("CARGO_PKG_VERSION"),
                 &root.join("payload"),
             )

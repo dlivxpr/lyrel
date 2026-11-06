@@ -216,6 +216,32 @@ Windows Chromium Cookie 的 AES-GCM 解密使用正式 registry 的 `aes-gcm =0.
   [故障排查](/reference/troubleshooting)。
 </Warning>
 
+### 固定上游迁移的验收边界（#175／#199）
+
+固定上游终点为 `8ad8841e4835e4e6c4e6f4d5a0a16541eaa9107f`，不自动追随新提交。[#199](https://github.com/dlivxpr/lyrel/issues/199) 保存 34 个提交及混合部分的处置、原始失败、产物哈希与逐平台运行结果；功能条目、构建成功和原生验收不是同一个结论。
+
+源码 `18c517f4814f8a37c05ec1e2d39eb0803cb2b34b` 的 Windows locked workspace Release 构建、格式、真实 Bash Host 边界与冻结产物 CRT 检查均退出 `0`；当次 Windows 完整 all-features 测试退出 `101`，有三个 GUI consumer 失败，不能据局部 green 宣称全套通过。相同源码在 WSL Ubuntu `26.04` 上的 Linux headless build、动态链接与完整 all-features 测试实际退出 `0`：标准测试 `2350 passed`、默认 `45 ignored`，真实 CLI E2E 另列 `29 passed`，八次嵌套 helper 不重复累计。Linux 使用校验过的官方原生 Node `22.22.1`，不更改全局安装；冻结的 GNU/glibc server 不冒充发行 musl 资产。
+
+同一产品源码、后续仅文档提交的 `d7ca1f211382af8cbe41983af950c26877888f6d`，在进程内设置 `RUST_TEST_THREADS=4` 后执行完整 `cargo test --locked --workspace --all-features`，实际退出 `0`：标准测试 `5220 passed`、默认 `64 ignored`，真实 CLI E2E 另列 `28 passed`，八次嵌套 helper 不重复累计；没有过滤用例、延长断言期限或修改产品。默认 20 路并发的诊断中，实际 `git remote -v` 从约 `0.1s` 增至 `4.3–8.7s`，统计页也触及既有 `5s` 期限；这支持本机全套真实 I/O 竞争的判断，不消除默认并发失败风险，也不回填原命令的退出码。并发设置只用于本次验证，不改全局环境或 CI。
+
+CI run `42111994380` 的 Windows／macOS production 与测试构建通过，但同样五个 stacked-PR consumer 在收尾报 `the window never stopped drawing`：fixture 发给 pane 的 CWD 已 canonicalize，等待 cache 时却查询未经规范化的 `TempDir::path()`。原 frozen 程序在私有 `TMP` junction 下复现相同失败；修正仅让五个消费者保留并复用同一 canonical CWD，在同一别名场景实际 `5 passed`、退出 `0`，保留全部业务断言、`30s` 期限和 quiet-hold 条件。该 test-only 修正不改变产品或扩大 CI 通过范围；新提交的远端结果另记，不将旧 run 改为成功。
+
+后续 `95229a4e` 的远端 Windows 标准测试 `5220 passed`、Linux headless 标准测试 `2350 passed` 及 CLI E2E `29 passed`；macOS retry 的生产构建与 GUI `3110 passed`（含原五项 stacked-PR）通过，但后续 agent-hook 的 socket-only 消费者失败。旧 fixture 在 shell 第一条命令执行 hook，早于 `Spawned` 所承诺的 registry-ready 屏障；在真实发布窗口放大后捕获 `no such pane` 与 TTY fallback。修正仅让该 fixture 通过真实 PTY 在 `Spawned` 后释放 hook，同窗口与移除注入后四项消费者均通过，独立 CLI／daemon／PTY／hook 正负 smoke 也通过；生产源码、归属校验、fallback、断言和期限不变。新的 macOS 完整结果仍按提交另记，不能以 Linux smoke 代替。桌面 CI 原有的 `--nocapture` 会被自定义 CLI E2E runner 当作名称过滤器，因此该 CI 中未执行的 CLI 用例不计通过；前述本地 Windows CLI `28 passed` 与 Linux CLI `29 passed` 均为独立实际运行证据。
+
+后续验收修正只涉及测试夹具：自定义 CLI E2E runner 仅忽略既有 `--nocapture` 输出选项，保留名称筛选；本地实际完整执行 `28` 项，并分别通过原筛选、选项前后两种筛选顺序及真实子进程退出码消费者，不将旧桌面 CI 的零用例退出回填为通过。Windows 原生 `ReadConsoleInputW` 应用在四种输入模式中实际读取两种 DA1 的精确回复，前后主题正控制排除注入泄漏；最初缺失的是控制客户端未完成 ConPTY 自身的启动 DA1。现有真实 E2E 启用 Windows 断言后先失败，仅让初始客户端回答 live 启动查询、禁止回答历史 replay 后，同一消费者通过，不改变 daemon／ConPTY／应用查询的回复。
+
+默认 20 路风险另外保留：`20` 个真实 Git producer 加三个原消费者、再加入四个真实统计 workflow 的两轮有界实验分别实际 `3 passed`／`7 passed`，但没有重现原失败；统计 scan worker 最大排队仅 `0.222ms`／`2.520ms`。这两轮不足以归因或消除完整套件失败，不证明“纯环境问题”，也不准入加锁、降并发、放宽期限或修改产品的投机修复。
+
+提交 `a614a51a` 的本地完整 `cargo test --locked --workspace --all-features -- --nocapture` 在默认 `20` 路、无 `RUST_TEST_THREADS` 下实际 exit `0`：标准 `5220 passed / 0 failed / 64 ignored`，自定义 CLI E2E 另有实际 `28 passed`，格式与 Host 边界也通过。首次临时 driver 额外注入 `XDG_STATE_HOME`，曾使明确使用默认 lock 位置的 skills fixture 找不到 source record；单例约 `0.15s` 也失败，仅撤掉这项 driver 注入后才获得完整通过。原错误环境与失败保留；这一新 green 不追溯修复原并发 red，也不改产品、用例、期限或并发。
+
+该提交的 CI `42150772767` 中，Windows 标准 `5220 passed`／实际 CLI `28 passed`、Linux headless 标准 `2350 passed`／实际 CLI `29 passed`，但 macOS GUI `3109 passed / 1 failed` 后提前结束，尚未执行该平台 CLI。SCM missing-commit 消费者先等待 loaded、再单独泵送绘制，旧完成态可被新 refresh epoch 合法失效；受控真实 epoch `3 → 4` 得到相同 `loaded=false / loading=true` 和原断言 red。修正仅使测试在当前帧完成后采样状态，移除跨帧的旧采样与无语义的“任意绘制发生”计数断言，保留 loaded／非 loading／缺失 commit 断言、真实 Git 读取及原 `30s` 期限。同一受控边界下五项真实 SCM 消费者均通过；诊断撤除后的结果与新提交 CI 另列，不能将旧 run 回填为成功。
+
+`cf40329c` 本地完整默认 `20` 路 workspace 再次实际通过标准 `5220`／实际 CLI `28`，格式和 Host 边界通过；其 CI `42156314788` 的原 SCM 消费者通过，Windows／Linux 继续通过，但 macOS cross-daemon 图形消费者的单次 SEND_OK 在历史资源释放前得到 ENOSPC，后续该平台 CLI 仍未执行。真实 PTY viewport 屏障不证明旧窗口已提交新帧并退休旧显示 lease；测试据此改为在跨源施压前实际呈现滚动后的窗口，在等待准入时也执行真实帧。保留生产 `1s` 准入、单次 offer、原 `30s` 测试期限及所有像素／额度／历史／关闭释放断言，不增加重试或扩大容量。隔离旧消费者本地通过，故不把这项调整写成已证明远端调度根因；新提交必须获得自己的实际 macOS CI 结果，原失败不回填。
+
+该源码的空关注历史和多按钮回归各在真实消费者中执行一项；后者通过实际 daemon／PTY 验证交错按键报告。Windows 原生窗口另已确认空关注提示的历史回看、复制与持久化，以及窗外按下不误报、合法跨 pane 拖动只由原 pane 上报；自动化工具把多按钮原生手势串行化，因此不把单按钮原生结果当成交错手势的证据。无 `/proc` 的参数顺序与真实停止在两个独立私有 PID namespace 中分别用 `sh`／fish 执行；这不替代原生 macOS `ps`。公开 updater `verify-portable` 正常与拒绝场景、独进程 symlink watcher、同源固定 pin SSH 安装／重启和四个 Root SSH consumer 分别留证，不操作已安装应用或用户会话。
+
+按用户调整，macOS 采用实际成功的 CI 为合并门槛，取消隔离 Windows 身份下的 stored-toast activation 原生验收；未执行不等于通过。原生 macOS 快捷键、FSEvents、交通灯、不同 DPI 像素、opener／zombie 和更新后 adoption 仍缺自身实机证据。#185 的两个原生窗口属于同一 GUI 进程，工作区竞争与重连另由两个独立 Control client 和 Root 验证；未执行的独立 GUI 进程组合不是新增验收硬门槛。Root、WSL 或 headless 结果不能替代缺失的原生平台边界；后续修正版本也不能回填旧命令的退出码。
+
 ### 原生 Markdown 编辑器的渲染依赖
 
 桌面包使用正式 registry 的 `merman =0.9.2`（`all-diagrams` 与 `complete-svg`，不启用 ELK），以及 `ratex-parser`、`ratex-layout`、`ratex-svg =0.1.15`；相关 RaTeX 字体与类型组件按 `Cargo.lock` 解析为 `0.1.15`。公式由嵌入 glyph paths 的 SVG 光栅化，Mermaid 仅走 `resvg_safe` 原生管线；不增加 Node.js 或 Chromium 运行时要求，也不把这些桌面依赖加入 `lyrel-core`、server 或 CLI。

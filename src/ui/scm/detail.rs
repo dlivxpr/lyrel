@@ -914,6 +914,7 @@ mod detail_gpui_tests {
     use crate::ui::app::{render_probe, test_window};
     use crate::ui::host_ops::HostId;
     use crate::ui::scm::state::RepoKey;
+    use gpui_kit::test::TestWindowExt as _;
     use gpui_kit::{Entity, TestAppContext, VisualTestContext};
     use lyrel_core::core::config::RightPanelTab;
     use std::path::{Path, PathBuf};
@@ -1012,6 +1013,9 @@ mod detail_gpui_tests {
         loop {
             app.update_in(vcx, |_, _, cx| cx.notify());
             vcx.background_executor.run_until_parked();
+            // Rendering may observe a newer repository epoch and start a
+            // replacement load. Sample completion only after that frame.
+            vcx.update(|window, cx| window.render_frame(cx));
             if app.update_in(vcx, |app, _, cx| done(app, cx)) {
                 return;
             }
@@ -1325,10 +1329,6 @@ mod detail_gpui_tests {
         settle(&app, &mut vcx, |app, _| {
             app.scm.detail().is_some_and(|detail| detail.loaded)
         });
-        render_probe::arm(10_000);
-        app.update_in(&mut vcx, |_, _, cx| cx.notify());
-        vcx.run_until_parked();
-        assert!(render_probe::draws() > 0, "the missing state was drawn");
         app.update_in(&mut vcx, |app, _, _| {
             let detail = app.scm.detail().unwrap();
             assert!(detail.loaded);

@@ -103,6 +103,18 @@ pub(crate) fn relative_time(now: u64, then: u64) -> String {
     }
 }
 
+/// Whole-unit waiting age, shared by the tray and workspace switcher.
+pub(crate) fn waiting_for(secs: u64) -> String {
+    let unit = |key, count: u64| t_fmt(key, &[("count", &count.to_string())]);
+    let age = match secs {
+        s if s < 60 => t(L10nKey::AgeUnderMinute).to_string(),
+        s if s < 3_600 => unit(L10nKey::AgeMinutes, s / 60),
+        s if s < DAY => unit(L10nKey::AgeHours, s / 3_600),
+        s => unit(L10nKey::AgeDays, s / DAY),
+    };
+    t_fmt(L10nKey::AgentWaitingFor, &[("age", &age)])
+}
+
 /// `home` belongs to the machine the workspace is on — every row here can
 /// name a directory on another one, and this machine's home says nothing
 /// about those (#580). `None` shows the path in full.

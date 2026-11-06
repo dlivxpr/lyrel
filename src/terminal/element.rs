@@ -303,6 +303,7 @@ impl TerminalElement {
                     }
                 }
                 view.update(cx, |v, cx| {
+                    v.drop_mouse_grab();
                     if inside {
                         if !mods.shift {
                             v.mouse_motion(col, row, &mods);
@@ -344,6 +345,9 @@ impl TerminalElement {
                     v.mouse_release(button, col, row, &mods);
                     return;
                 }
+                // Shift/mode changes can keep the release local, but must
+                // never let its reported press own a later gesture.
+                v.drop_mouse_grab();
                 v.on_select_end(cx);
             });
         });

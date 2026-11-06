@@ -357,7 +357,7 @@ impl LyrelApp {
             sftp_panel,
             right_panel: Default::default(),
             scm: crate::ui::scm::ScmPanelState::new(scm_graph_expanded),
-            github: Default::default(),
+            github: crate::ui::github::GitHubPanelState::new(cx),
             diff_probes_inflight: Default::default(),
             diff_probes_restale: Default::default(),
             file_tree,

@@ -6,6 +6,7 @@ use crate::core::agent_hooks::{HookAgent, HooksState};
 use super::kit::{self, BtnKind, Tk, fs};
 use super::shell::MenuEntry;
 use super::*;
+use gpui_kit::TestSupportExt as _;
 
 /// The agent the tab bar draws for this hook, so the two show the same mark.
 fn cli_agent(agent: HookAgent) -> crate::core::cli_agent::CLIAgent {
@@ -237,11 +238,11 @@ impl SettingsWindow {
                     )
                 });
                 let none = list.is_empty();
-                let mut col = v_flex()
-                    .id("agent-hook-list")
-                    .when(!query.is_empty() || show_all, |c| {
-                        c.max_h(px(416.)).overflow_y_scroll()
-                    });
+                let bounded = !query.is_empty() || show_all;
+                let scroll = s.agent_list_scroll.clone();
+                let mut col = v_flex().id("agent-hook-list-rows").when(bounded, |c| {
+                    c.on_scroll(nested_settings_list_wheel(scroll.clone()))
+                });
                 for (i, row) in list.into_iter().enumerate() {
                     let row_note = note
                         .as_ref()
@@ -256,10 +257,21 @@ impl SettingsWindow {
                         cx,
                     ));
                 }
-                body.push(col.into_any_element());
+                body.push(
+                    div()
+                        .id("agent-hook-list")
+                        .test_support()
+                        .when(bounded, |c| {
+                            c.max_h(px(416.)).overflow_y_scroll().track_scroll(&scroll)
+                        })
+                        .child(col)
+                        .into_any_element(),
+                );
                 if none {
                     body.push(
                         div()
+                            .id("agent-hook-list-empty")
+                            .test_support()
                             .h(px(44.))
                             .flex()
                             .items_center()
@@ -420,6 +432,7 @@ impl SettingsWindow {
 
         v_flex()
             .id(SharedString::from(format!("agent-row-{i}")))
+            .test_support()
             .anchor_scroll(self.first_hit_anchor(agent.display_name(), cx))
             .child(
                 h_flex()
