@@ -82,7 +82,8 @@ omp 与 pi 是独立产品。Kimi Code 不接管归档产品数据；OpenCode �
 <a id="documentation"></a>
 ## 文档
 
-完整文档位于 [**`docs/`**](docs/) —
+完整文档位于 [**`docs/`**](docs/)：
+[项目架构](docs/reference/architecture.mdx) ·
 [键盘快捷键](docs/reference/keyboard-shortcuts.mdx) ·
 [config.json](docs/reference/configuration.mdx) ·
 [CLI 参考](docs/cli/reference.mdx)。面向智能体的 CLI 接口也记录在
