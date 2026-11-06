@@ -92,6 +92,9 @@ fn main() {
         return;
     }
 
+    // Output is already uncaptured; CI's libtest flag is not a case filter.
+    let filter = std::env::args().skip(1).find(|arg| arg != "--nocapture");
+
     let tests: &[(&str, fn(&Daemon))] = &[
         (
             "agents_report_continuous_state_age",
@@ -211,8 +214,8 @@ fn main() {
 
     let mut failed = 0;
     for (name, test) in tests {
-        if let Some(filter) = std::env::args().nth(1)
-            && !name.contains(&filter)
+        if let Some(filter) = filter.as_deref()
+            && !name.contains(filter)
         {
             continue;
         }
