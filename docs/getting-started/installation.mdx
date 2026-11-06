@@ -232,6 +232,10 @@ CI run `42111994380` 的 Windows／macOS production 与测试构建通过，但�
 
 默认 20 路风险另外保留：`20` 个真实 Git producer 加三个原消费者、再加入四个真实统计 workflow 的两轮有界实验分别实际 `3 passed`／`7 passed`，但没有重现原失败；统计 scan worker 最大排队仅 `0.222ms`／`2.520ms`。这两轮不足以归因或消除完整套件失败，不证明“纯环境问题”，也不准入加锁、降并发、放宽期限或修改产品的投机修复。
 
+提交 `a614a51a` 的本地完整 `cargo test --locked --workspace --all-features -- --nocapture` 在默认 `20` 路、无 `RUST_TEST_THREADS` 下实际 exit `0`：标准 `5220 passed / 0 failed / 64 ignored`，自定义 CLI E2E 另有实际 `28 passed`，格式与 Host 边界也通过。首次临时 driver 额外注入 `XDG_STATE_HOME`，曾使明确使用默认 lock 位置的 skills fixture 找不到 source record；单例约 `0.15s` 也失败，仅撤掉这项 driver 注入后才获得完整通过。原错误环境与失败保留；这一新 green 不追溯修复原并发 red，也不改产品、用例、期限或并发。
+
+该提交的 CI `42150772767` 中，Windows 标准 `5220 passed`／实际 CLI `28 passed`、Linux headless 标准 `2350 passed`／实际 CLI `29 passed`，但 macOS GUI `3109 passed / 1 failed` 后提前结束，尚未执行该平台 CLI。SCM missing-commit 消费者先等待 loaded、再单独泵送绘制，旧完成态可被新 refresh epoch 合法失效；受控真实 epoch `3 → 4` 得到相同 `loaded=false / loading=true` 和原断言 red。修正仅使测试在当前帧完成后采样状态，移除跨帧的旧采样与无语义的“任意绘制发生”计数断言，保留 loaded／非 loading／缺失 commit 断言、真实 Git 读取及原 `30s` 期限。同一受控边界下五项真实 SCM 消费者均通过；诊断撤除后的结果与新提交 CI 另列，不能将旧 run 回填为成功。
+
 该源码的空关注历史和多按钮回归各在真实消费者中执行一项；后者通过实际 daemon／PTY 验证交错按键报告。Windows 原生窗口另已确认空关注提示的历史回看、复制与持久化，以及窗外按下不误报、合法跨 pane 拖动只由原 pane 上报；自动化工具把多按钮原生手势串行化，因此不把单按钮原生结果当成交错手势的证据。无 `/proc` 的参数顺序与真实停止在两个独立私有 PID namespace 中分别用 `sh`／fish 执行；这不替代原生 macOS `ps`。公开 updater `verify-portable` 正常与拒绝场景、独进程 symlink watcher、同源固定 pin SSH 安装／重启和四个 Root SSH consumer 分别留证，不操作已安装应用或用户会话。
 
 按用户调整，macOS 采用实际成功的 CI 为合并门槛，取消隔离 Windows 身份下的 stored-toast activation 原生验收；未执行不等于通过。原生 macOS 快捷键、FSEvents、交通灯、不同 DPI 像素、opener／zombie 和更新后 adoption 仍缺自身实机证据。#185 的两个原生窗口属于同一 GUI 进程，工作区竞争与重连另由两个独立 Control client 和 Root 验证；未执行的独立 GUI 进程组合不是新增验收硬门槛。Root、WSL 或 headless 结果不能替代缺失的原生平台边界；后续修正版本也不能回填旧命令的退出码。
