@@ -34,7 +34,7 @@ fn exercise_detached_queries(daemon: &Daemon, refold: bool) {
     session
         .set_recv_timeout(Some(Duration::from_secs(10)))
         .unwrap();
-    collect_pane_output_until(&mut session, b"THEME_READY");
+    await_theme_fixture_ready(&mut session);
     let pane = session.pane_id();
     session.detach().unwrap();
     let address = format!("%{pane}");
@@ -98,13 +98,7 @@ fn exercise_detached_queries(daemon: &Daemon, refold: bool) {
         return;
     }
     // Existing DA1 behavior uses the same real daemon/PTY boundary.
-    if cfg!(unix) {
-        query(b"\x1b[c\x1b[0c", 2, b"\x1b[?6c\x1b[?6c");
-    } else {
-        eprintln!(
-            "Windows DA1 application receipt is not established; use the raw Unix PTY case (native daemon trace counted and wrote both replies successfully)"
-        );
-    }
+    query(b"\x1b[c\x1b[0c", 2, b"\x1b[?6c\x1b[?6c");
     let hint = daemon.config_dir.join("appearance.json");
     std::fs::write(&hint, r#"{"dark":true}"#).unwrap();
     query(b"\x1b[?996n\x1b[?996n", 2, b"\x1b[?997;1n\x1b[?997;1n");
@@ -134,7 +128,37 @@ fn exercise_detached_queries(daemon: &Daemon, refold: bool) {
     query(b"\x1b[?99", usize::MAX, b"");
     attached.detach().unwrap();
     query(b"6n", 1, b"\x1b[?997;1n");
-    if cfg!(unix) {
-        query(b"\x1b[c", 1, b"\x1b[?6c");
+    query(b"\x1b[c", 1, b"\x1b[?6c");
+}
+
+fn await_theme_fixture_ready(session: &mut lyrel_core::client::PaneSession) {
+    let mut modes = lyrel_core::core::term_modes::TerminalModes::new();
+    let mut seen = Vec::new();
+    loop {
+        let (bytes, live) = match session.recv().expect("theme fixture startup stream") {
+            DaemonMsg::Output(bytes) => (bytes, true),
+            DaemonMsg::Snapshot(bytes) => (bytes, false),
+            DaemonMsg::Exited { code } => panic!("theme fixture exited during startup: {code:?}"),
+            _ => continue,
+        };
+        modes.feed(&bytes);
+        let queries = modes.take_device_attribute_queries();
+        if live {
+            // The spawn caller owns live replies until detach. ConPTY asks
+            // its own DA1 before the application is ready; leaving it pending
+            // consumes the first later daemon reply. Never answer replay.
+            for _ in 0..queries {
+                session
+                    .input(b"\x1b[?6c")
+                    .expect("answer frontend startup DA1");
+            }
+        }
+        seen.extend_from_slice(&bytes);
+        if seen
+            .windows(b"THEME_READY".len())
+            .any(|bytes| bytes == b"THEME_READY")
+        {
+            return;
+        }
     }
 }
