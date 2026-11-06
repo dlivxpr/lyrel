@@ -881,6 +881,7 @@ fn graphics_consumer_real_daemon_budget_notices_share_direct_and_placeholder_his
 fn graphics_consumer_cross_daemon_aggregate_rejects_without_losing_pixels_then_releases_on_close(
     cx: &mut TestAppContext,
 ) {
+    use gpui_kit::test::TestWindowExt as _;
     crate::core::config::pin_test_config_dir();
     cx.executor().allow_parking();
     // Real atlas pages round a one-pixel image up to 1024² BGRA pixels.
@@ -970,6 +971,13 @@ fn graphics_consumer_cross_daemon_aggregate_rejects_without_losing_pixels_then_r
                 // The viewport and pressure travel to different daemons. Complete
                 // a real round trip on the history owner before the new offer.
                 graphics_send_fixture(&terminals[0].1, cx, 41, b"\x1b[0m");
+                // The PTY barrier orders the daemon viewport, not the old
+                // window's committed display lease. Present the scrolled frame
+                // before asking another daemon to reclaim that history.
+                terminals[0]
+                    .0
+                    .update(cx, |_, window, cx| window.render_frame(cx))
+                    .unwrap();
                 let request = format!(
                     "SEND_OK 5 1 {} 0\n",
                     graphics_pty_fixture::hex(
@@ -986,7 +994,7 @@ fn graphics_consumer_cross_daemon_aggregate_rejects_without_losing_pixels_then_r
                     for index in [0, 2] {
                         terminals[index]
                             .0
-                            .update(cx, |_, window, _| window.refresh())
+                            .update(cx, |_, window, cx| window.render_frame(cx))
                             .unwrap();
                     }
                     terminals[2].1.read_with(cx, |view, _| {

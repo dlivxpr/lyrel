@@ -236,6 +236,8 @@ CI run `42111994380` 的 Windows／macOS production 与测试构建通过，但�
 
 该提交的 CI `42150772767` 中，Windows 标准 `5220 passed`／实际 CLI `28 passed`、Linux headless 标准 `2350 passed`／实际 CLI `29 passed`，但 macOS GUI `3109 passed / 1 failed` 后提前结束，尚未执行该平台 CLI。SCM missing-commit 消费者先等待 loaded、再单独泵送绘制，旧完成态可被新 refresh epoch 合法失效；受控真实 epoch `3 → 4` 得到相同 `loaded=false / loading=true` 和原断言 red。修正仅使测试在当前帧完成后采样状态，移除跨帧的旧采样与无语义的“任意绘制发生”计数断言，保留 loaded／非 loading／缺失 commit 断言、真实 Git 读取及原 `30s` 期限。同一受控边界下五项真实 SCM 消费者均通过；诊断撤除后的结果与新提交 CI 另列，不能将旧 run 回填为成功。
 
+`cf40329c` 本地完整默认 `20` 路 workspace 再次实际通过标准 `5220`／实际 CLI `28`，格式和 Host 边界通过；其 CI `42156314788` 的原 SCM 消费者通过，Windows／Linux 继续通过，但 macOS cross-daemon 图形消费者的单次 SEND_OK 在历史资源释放前得到 ENOSPC，后续该平台 CLI 仍未执行。真实 PTY viewport 屏障不证明旧窗口已提交新帧并退休旧显示 lease；测试据此改为在跨源施压前实际呈现滚动后的窗口，在等待准入时也执行真实帧。保留生产 `1s` 准入、单次 offer、原 `30s` 测试期限及所有像素／额度／历史／关闭释放断言，不增加重试或扩大容量。隔离旧消费者本地通过，故不把这项调整写成已证明远端调度根因；新提交必须获得自己的实际 macOS CI 结果，原失败不回填。
+
 该源码的空关注历史和多按钮回归各在真实消费者中执行一项；后者通过实际 daemon／PTY 验证交错按键报告。Windows 原生窗口另已确认空关注提示的历史回看、复制与持久化，以及窗外按下不误报、合法跨 pane 拖动只由原 pane 上报；自动化工具把多按钮原生手势串行化，因此不把单按钮原生结果当成交错手势的证据。无 `/proc` 的参数顺序与真实停止在两个独立私有 PID namespace 中分别用 `sh`／fish 执行；这不替代原生 macOS `ps`。公开 updater `verify-portable` 正常与拒绝场景、独进程 symlink watcher、同源固定 pin SSH 安装／重启和四个 Root SSH consumer 分别留证，不操作已安装应用或用户会话。
 
 按用户调整，macOS 采用实际成功的 CI 为合并门槛，取消隔离 Windows 身份下的 stored-toast activation 原生验收；未执行不等于通过。原生 macOS 快捷键、FSEvents、交通灯、不同 DPI 像素、opener／zombie 和更新后 adoption 仍缺自身实机证据。#185 的两个原生窗口属于同一 GUI 进程，工作区竞争与重连另由两个独立 Control client 和 Root 验证；未执行的独立 GUI 进程组合不是新增验收硬门槛。Root、WSL 或 headless 结果不能替代缺失的原生平台边界；后续修正版本也不能回填旧命令的退出码。

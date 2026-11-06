@@ -35,6 +35,7 @@
 
 - #175 固定审查 tty7 的 34 个提交，终点为 `8ad8841e4835e4e6c4e6f4d5a0a16541eaa9107f`，采用当前 lyrel 架构的局部语义移植；不恢复 gateway、Linux 桌面、旧 alacritty 引擎、已撤销的 New Tab 拆分或 README 宣传改动，不采用 CI `-D warnings` 与 query-table 重构。
 - #175 验收夹具：CLI E2E 忽略既有 `--nocapture` 输出选项但保留用例筛选，避免桌面 CI 零用例退出被误计为通过；Windows DA1 消费者在应用查询前完成真实 ConPTY 启动协商，恢复两种 DA1 的应用实收断言；SCM 消费者在最终绘制后等待当前 refresh epoch 的完成状态，不再将前一帧 loaded 跨异步阶段复用。保留业务断言与原期限，不修改生产回复或第三方代码。
+- #175 图形额度消费者在跨 daemon 施压前实际绘制已滚动的旧窗口，并在准入等待期间执行真实帧，而非仅排队 refresh；不把 PTY viewport 屏障当作显示 lease 已退休的证明，保留生产 `1s` 准入边界、单次 SEND_OK、真实像素／历史／关闭释放断言与原测试期限。
 - 上述条目记录实现范围，不表示所有原生平台已验收。#192 系统通知中心激活、#194 Unix opener 回收及 #197 更新后 adoption 未移植；按用户调整，macOS 采用实际成功的 CI 为合并门槛，取消隔离 Windows 身份下的 stored-toast 原生验收。未执行的 macOS 快捷键、FSEvents、交通灯、像素、更新／网络及 Windows 通知中心激活仍不计通过，默认 20 路完整套件的既有失败风险也不以窄场景通过抹除。
 
 
