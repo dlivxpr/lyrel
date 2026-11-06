@@ -56,7 +56,7 @@ impl Drop for Daemon {
 fn hook_shell(pane_env: &str) -> ShellSpec {
     let hook = PathBuf::from(env!("CARGO_BIN_EXE_lyrel-server"));
     let command = format!(
-        "printf '%s' '{{\"session_id\":\"s-1\",\"permission_mode\":\"plan\"}}' \
+        "read -r _; printf '%s' '{{\"session_id\":\"s-1\",\"permission_mode\":\"plan\"}}' \
          | {pane_env} '{}' agent-hook kimi prompt-submit; echo hook_ran; exec cat",
         hook.display()
     );
@@ -84,6 +84,11 @@ fn run_hook(pane_env: &str) -> (Vec<u8>, Option<AgentStatus>) {
     session
         .set_recv_timeout(Some(STREAM_WITHIN))
         .expect("bound the stream reads");
+    // Spawned is the registry-readiness barrier. A hook in the shell's first
+    // command can otherwise run before another connection can name this pane.
+    session
+        .input(b"\n")
+        .expect("release the hook after pane publication");
     let mut seen = Vec::new();
     let mut status = None;
     while !seen.windows(8).any(|w| w == b"hook_ran") {

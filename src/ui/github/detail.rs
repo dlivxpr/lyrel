@@ -10,6 +10,7 @@
 
 use std::sync::Arc;
 
+use gpui_kit::TestSupportExt as _;
 use gpui_kit::component::{ActiveTheme as _, Icon, IconName, Sizable as _, h_flex, v_flex};
 use gpui_kit::{AnyElement, Context, SharedString, Window, div, prelude::*, px, rems};
 
@@ -182,6 +183,7 @@ impl LyrelApp {
             .child(
                 h_flex()
                     .id("panel-github-back")
+                    .test_support()
                     .items_center()
                     .gap(px(2.))
                     .h(px(ROW_H - 4.))
@@ -190,7 +192,9 @@ impl LyrelApp {
                     .rounded(px(6.))
                     .cursor_pointer()
                     .hover(|s| s.bg(gpui_kit::rgb(sf.hover)))
-                    .on_click(cx.listener(|this, _, _window, cx| this.github_close_detail(cx)))
+                    .on_click(
+                        cx.listener(|this, _, window, cx| this.github_close_detail(window, cx)),
+                    )
                     .child(Icon::new(IconName::ChevronLeft).small().text_color(muted))
                     .child(
                         div()

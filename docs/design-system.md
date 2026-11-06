@@ -139,6 +139,7 @@ Git 的新增/修改标记种子为绿 `#2F8A52` / `#4CC27A`、琥珀 `#B7791F` 
 - **分屏与文档栏**：分屏分隔线静止时为一个设备像素的 divider 色细线，hover/拖动时变 1px 强调色；两侧栏边缘保留真正 resize 与拖动反馈，仅 hover 不显蓝线。文档栏位于窗口 chrome 下方，不提升到窗口标题栏。
   文件名保留正文字号与未保存标记，关闭为 26px / 6px 圆角图标块，下接 divider 细线。文档不另设底栏：真实行列、问题、自动换行、
   Markdown 即时编辑 / 源码、缩进、编码、换行符和语言统一放入窗口全局状态栏；操作使用紧凑 ghost Button，行列使用等宽数字。
+  最小支持窗口内，diff 标题与改动摘要在既有文本区域收缩并省略，保留 Split／Unified、Dock／Fill 和关闭控件的命中范围；不能以文字的固有宽度把这些既有操作挤到窗口外。裁切不改写标题、摘要或 patch 数据。
   `.md`、`.markdown`、`.mdx` 默认进入原生即时编辑，源码切换不创建第二份文档或撤销历史；不保留旧只读预览设置。“新建 Markdown 文档”是独立、无默认快捷键的命令，不替换普通文本新建或终端回滚内容导出。
 - **SFTP 浏览器**：行与本地文件树一致（26px、圆角 6、16px 图标辅助色、文件名侧栏标题色、大小等宽数字）；
   编辑框为无边框淡底井（圆角 7）；传输进度为正文色细条压在淡底轨道上，失败才转红。
@@ -163,6 +164,20 @@ Git 的新增/修改标记种子为绿 `#2F8A52` / `#4CC27A`、琥珀 `#B7791F` 
   选择文本或公式布局。Windows 隔离实窗已通过真实 `omp/18.12.6` 的分式、矩阵、分段函数
   合成会话重放；三行矩阵括号接缝的空白像素行从 6 降为 0。几何回归覆盖多行高与
   1×／1.25×／1.5×／2× 比例，不替代其他 OS DPI、字体和 macOS 的原生像素验收。
+  PUA 图标（Powerline 原生分隔符除外）可以向相邻空白借用绘制空间，但两格的显式背景、
+  选择状态、普通搜索命中与当前搜索命中必须一致；显式背景还须同色。非空文字、组合标记、
+  下划线、删除线或链接装饰占用的空白不能出借。主字体图标和 fallback 图标沿用同一兼容性
+  规则，fallback 保留既有 ink fitting；借位只改变 glyph 的绘制预算，不改 Rio 列宽、复制内容、
+  鼠标命中或滚动几何。对应语义移植来源为 tty7 `69536b361a2c9ea5711fc779c2bcba3b1efbdbd5`。
+
+  原生回归使用 `node scripts/terminal-icon-overhang.mjs`，在隔离配置和自有 pane 中分别检查
+  已安装的 primary Nerd Font 与普通主字体加 icon fallback。保持前七行说明不换行，比较
+  default／matching background 行的同一图标，再检查不兼容背景、非空邻格和装饰空白。
+  `q` 恢复 alternate screen 并退出，`s` 触发输出与重绘。Windows 可用
+  `scripts/measure-terminal-icon-overhang.ps1 -Screenshot <自有窗口PNG> -OriginX <首格X> -OriginY <首格Y> -CellWidth <单格宽> -LineHeight <行高> -VerifyMatching`
+  读取所保存 PNG 的坐标并断言 matching background 没有缩小可借位图标；没有实际超单格
+  glyph 时脚本明确失败，不把缺前提记为通过。该量尺不验证选择／搜索状态、滚动、命中、
+  系统字体 fallback 或 GPU 原始分辨率；这些必须另做真实界面验收并记录平台与 DPI。
 
 ### 终端帧绘制所有权
 
@@ -196,7 +211,7 @@ Git 的新增/修改标记种子为绿 `#2F8A52` / `#4CC27A`、琥珀 `#B7791F` 
 - `element/colors.rs` 负责 ANSI／truecolor、主题颜色与 pane dim 的解析；
   cell 样式复用只属于当前 snapshot，不跨调色板或主题变化保留解析结果。
 - `element/text.rs` 与其私有 `segment`、`powerline` 模块负责字体、Unicode cluster、
-  宽字符、组合字符、fallback ink fitting 与原生分隔符；单元格列位置与裁切预算不变。
+  宽字符、组合字符、fallback ink fitting 与原生分隔符；单元格列位置不变，glyph 裁切遵循上面的兼容空白借位规则。
 - `element/decorations.rs` 绘制背景、选择／搜索填充、特殊下划线、cursor 与 IME preedit；
   所有阶段借用同一 buffer，不能为了模块交接增加每帧 clone、allocation 或 lock。
 
@@ -221,6 +236,8 @@ Git 的新增/修改标记种子为绿 `#2F8A52` / `#4CC27A`、琥珀 `#B7791F` 
 `cargo test -p lyrel --bin lyrel-app --locked ui::` 覆盖内置主题的文字、语义色、
 交互状态对比度及已有 UI 行为。另需在真实窗口检查浅色/深色、宽/窄窗口、侧栏、文件、
 Git、设置、菜单与随处搜索。测试通过不能替代视觉层级检查。
+
+文档栏几何验收须经过生产窗口与文档消费者，而不只断言宽度计算函数：分别测量文档列、其内容盒与编辑器实际输入区域，确认内容铺满列内空间且右缘不越界；在窗口 resize、界面字号变化和 `1×`／`1.25×`／`1.5×`／`1.75×`／`2×` display scale 下检查。通过既有 Dock／Fill 与 diff 的 Split／Unified 控件往返切换，核对两组控件的垂直中心、未保存正文、焦点与 patch 状态不丢失；窄窗口临时填充后放宽应按原选择恢复。原生 Windows 与 macOS 的窗口 chrome、交通灯、全屏和实际 DPI 必须分别记录；GPUI test-platform 的 scale 模拟不是原生多 DPI 或 macOS 验收。
 
 0.8.0 的 Windows 实窗检查使用隔离配置与临时工作区，覆盖 Unicode 编辑保存、长文件查找与滚动、真实 `rust-analyzer` 补全候选与 Enter 接受、多行输入框增长、菜单、命令搜索、浅深主题、文档分隔线和宽窄布局。macOS 的触控板回弹、动量、原生焦点与渲染仍未验收；Windows 证据不能替代。Unicode 文本注入也不能替代真实中文 IME 预编辑与候选窗验收。
 

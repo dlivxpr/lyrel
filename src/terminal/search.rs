@@ -1570,8 +1570,16 @@ fn anchor_location(token: &str) -> Option<FileLocation> {
     })
 }
 
-/// `main.rs:10:2` and `main.rs:10`.
+/// `main.rs:10:2`, `main.rs:10`, and `main.rs:10-20` range citations.
 fn colon_location(token: &str) -> FileLocation {
+    if let Some((path, line)) = strip_line_range(token) {
+        return FileLocation {
+            path: path.to_string(),
+            line: Some(line),
+            column: None,
+            literal_too: false,
+        };
+    }
     let Some((prefix, last)) = strip_numeric_suffix(token) else {
         return FileLocation {
             path: token.to_string(),
@@ -1604,6 +1612,17 @@ fn strip_numeric_suffix(token: &str) -> Option<(&str, u32)> {
     }
     let value = suffix.parse().ok()?;
     Some((prefix, value))
+}
+
+/// Strip `:10-20`, retaining the range's first line (tty7 8ad8841).
+fn strip_line_range(token: &str) -> Option<(&str, u32)> {
+    let (prefix, suffix) = token.rsplit_once(':')?;
+    let (start, end) = suffix.split_once('-')?;
+    let digits = |s: &str| !s.is_empty() && s.bytes().all(|c| c.is_ascii_digit());
+    if prefix.is_empty() || !digits(start) || !digits(end) {
+        return None;
+    }
+    Some((prefix, start.parse().ok()?))
 }
 
 /// The line number written *next to* a path rather than onto it.
@@ -2880,6 +2899,7 @@ mod tests {
         for (line, loc) in [
             (r"C:\src\main.rs:10:2: error", (Some(10), Some(2))),
             ("c:/src/main.rs:10", (Some(10), None)),
+            (r"C:\src\main.rs:3-5", (Some(3), None)),
             (r"C:\src\main.rs(10,2): error C2065", (Some(10), Some(2))),
             ("c:/src/main.rs#L10", (Some(10), None)),
             (r#"File "C:\src\main.rs", line 7"#, (Some(7), None)),
@@ -2946,10 +2966,15 @@ mod tests {
     #[test]
     fn a_unc_share_is_a_link_that_stands_alone() {
         let want = r"\\server\share\team\a.png";
-        let line = r"copied to \\server\share\team\a.png";
-        let (got, start, end) = windows_link(line, "server", want);
-        assert_eq!(got, want);
-        assert_eq!((start, end), span_of(line, want));
+        for line in [
+            r"copied to \\server\share\team\a.png",
+            r"copied to \\server\share\team\a.png:3-5",
+        ] {
+            let (got, start, end) = windows_link(line, "server", want);
+            assert_eq!(got, want);
+            let written = line.strip_prefix("copied to ").unwrap();
+            assert_eq!((start, end), span_of(line, written));
+        }
     }
 
     /// Text that merely has a letter and a colon in it is not a drive path,

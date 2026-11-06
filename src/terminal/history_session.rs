@@ -106,6 +106,32 @@ impl TerminalHistory {
         &self.scope
     }
 
+    pub(super) fn seed_load(&self) -> HistoryLoad {
+        HistoryLoad {
+            scope: self.scope.clone(),
+            host: self.host,
+            generation: self.generation,
+        }
+    }
+
+    pub(super) fn accept_seed(&mut self, load: HistoryLoad, host: HostId, seed: History) -> bool {
+        if load.generation != self.generation
+            || load.scope != self.scope
+            || load.host != self.host
+            || load.host != host
+        {
+            return false;
+        }
+        self.data.prepend_seed(seed);
+        self.nav = None;
+        self.last_word = None;
+        self.rerank();
+        if let Some(search) = self.search.as_mut() {
+            search.refresh(&self.data.entries, &self.frecency);
+        }
+        true
+    }
+
     pub(super) fn change_scope(
         &mut self,
         scope: Scope,
@@ -167,7 +193,7 @@ impl TerminalHistory {
         {
             return false;
         }
-        self.data = data;
+        self.data.prepend_seed(data);
         self.ready = true;
         self.nav = None;
         self.last_word = None;

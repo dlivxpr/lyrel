@@ -7,6 +7,8 @@ use lyrel_core::client::{ControlClient, PaneClient};
 use lyrel_core::daemon::control::ControlHello;
 use lyrel_core::daemon::protocol::{DaemonMsg, PROTOCOL_VERSION, ShellSpec, WinSize};
 
+#[path = "cli_e2e/agents.rs"]
+mod agents;
 #[path = "cli_e2e/capture.rs"]
 mod capture;
 #[path = "cli_e2e/execution.rs"]
@@ -19,6 +21,8 @@ mod send;
 mod server;
 #[path = "cli_e2e/tab.rs"]
 mod tab;
+#[path = "cli_e2e/theme.rs"]
+mod theme;
 #[path = "cli_e2e/workspace.rs"]
 mod workspace;
 #[path = "cli_e2e/worktree.rs"]
@@ -33,12 +37,17 @@ mod terminal_pty_fixture {
         env!("CARGO_MANIFEST_DIR"),
         "/../../tests/support/synchronized_capture.rs"
     ));
+    include!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../tests/support/theme_pty.rs"
+    ));
 }
 
 const DAEMON_ENV: &str = "LYREL_CLI_E2E_DAEMON";
 const PASTE_AWARE_FIXTURE_ARG: &str = "--lyrel-e2e-paste-aware-fixture";
 const CAPTURE_TAIL_FIXTURE_ARG: &str = "--lyrel-e2e-capture-tail-fixture";
 const TERMINAL_PTY_FIXTURE_ARG: &str = "--lyrel-e2e-terminal-pty-fixture";
+const THEME_PTY_FIXTURE_ARG: &str = "--lyrel-e2e-theme-pty-fixture";
 const PASTE_AWARE_TEXT: &str = "lyrel paste aware input";
 const PASTE_BURST_WINDOW: Duration = Duration::from_millis(120);
 const READY_WITHIN: Duration = Duration::from_secs(30);
@@ -46,6 +55,14 @@ const SETTLE_WITHIN: Duration = Duration::from_secs(60);
 const CLOSE_WITHIN: Duration = Duration::from_secs(5);
 
 fn main() {
+    if std::env::args().any(|arg| arg == agents::FIXTURE_ARG) {
+        agents::fixture();
+        return;
+    }
+    if std::env::args().any(|arg| arg == THEME_PTY_FIXTURE_ARG) {
+        terminal_pty_fixture::theme_query_sender();
+        return;
+    }
     if std::env::args().any(|arg| arg == TERMINAL_PTY_FIXTURE_ARG) {
         terminal_pty_fixture::pty_sender();
         return;
@@ -75,7 +92,23 @@ fn main() {
         return;
     }
 
+    // Output is already uncaptured; CI's libtest flag is not a case filter.
+    let filter = std::env::args().skip(1).find(|arg| arg != "--nocapture");
+
     let tests: &[(&str, fn(&Daemon))] = &[
+        (
+            "agents_report_continuous_state_age",
+            agents::agents_report_continuous_state_age,
+        ),
+        (
+            "detached_theme_queries_obey_hint_and_client_ownership",
+            theme::detached_theme_queries_obey_hint_and_client_ownership,
+        ),
+        #[cfg(unix)]
+        (
+            "detached_theme_queries_survive_public_handoff_refold",
+            theme::detached_theme_queries_survive_public_handoff_refold,
+        ),
         (
             "retired_executable_names_still_run_as_ordinary_pty_commands",
             pane::retired_executable_names_still_run_as_ordinary_pty_commands,
@@ -181,6 +214,11 @@ fn main() {
 
     let mut failed = 0;
     for (name, test) in tests {
+        if let Some(filter) = filter.as_deref()
+            && !name.contains(filter)
+        {
+            continue;
+        }
         let daemon = Daemon::start();
         let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| test(&daemon)));
         drop(daemon);
