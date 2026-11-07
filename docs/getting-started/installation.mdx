@@ -149,9 +149,14 @@ Rio `0.5.29` 不再由 `Processor` 暂存同步输出；解析、协议应答和
 
 Windows Chromium Cookie 的 AES-GCM 解密使用正式 registry 的 `aes-gcm =0.11.1`，保留 `zeroize` feature。升级精确版本依赖时，须同步 `Cargo.toml` 与 `Cargo.lock`；仅更新锁文件会被 `--locked` 拒绝。
 
-整机 CPU／物理内存采样复用正式 registry 的锁定 `sysinfo =0.31.4`，只启用 `system`，
-只刷新 CPU 与 RAM，不枚举进程、磁盘或网络。采样位于共享核心，因此 Windows／macOS daemon 与 Linux headless server
+整机 CPU／物理内存采样使用正式 registry 的锁定 `sysinfo =0.40.1`，关闭默认 features、只启用 `system`，
+只刷新 CPU 与 RAM，不枚举进程、磁盘、网络或 GPU。采样位于共享核心，因此 Windows／macOS daemon 与 Linux headless server
 使用相同 Host／control 契约，不要求外部监控程序或新增系统服务。
+`System::new()` 与 `System::host_name()` 在该版本返回 `Result`：不支持的平台保留 `Unsupported`，
+其他初始化／主机名错误通过既有 Host 错误路径呈现，不用空主机名或零值冒充成功。
+CPU／RAM 的 refresh 方法仍返回 `()`，没有可传播的刷新错误；采样器校验公开值，无法独立辨别底层失败后仍有效的旧值。
+首轮 CPU 仅建立基线；请求共享每秒最多一次的快照，空闲超过十秒后重建基线。API 依据见
+[sysinfo 0.40.1 `System`](https://docs.rs/sysinfo/0.40.1/sysinfo/struct.System.html)。
 
 手动执行 `bash .github/scripts/check-host-boundary.sh` 时，需使用 LF 工作树，并让同一 Bash 的 `PATH` 可找到 Node.js 22.19+（与 pi 桥测试运行时一致）。检查器只用 Node.js 标准库解析 Rust 测试模块归属，不运行 Cargo、编译器或原生桌面；WSL 需使用 Linux Node，不能误用 `node.exe`。
 仅由 `#[cfg(test)]` 模块引用的外部 `mod` 与字面量 `include!("...")` 文件一并排除；同一文件只要也被生产代码引用，仍执行 Host 检查。未引用文件与无法确认的条件不因文件名含 `test` 而豁免。
