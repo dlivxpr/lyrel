@@ -232,6 +232,22 @@ GitHub 上的 Markdown 来自陌生人，因此渲染时有两项限制：只加
 
 本轮查证限于双方源码与现有文档，尚未构建或运行固定版本的 Zorite，也未新增编辑器交互或性能实测。上游依据：[连续文档模型](https://github.com/packetThrower/zorite/blob/9c09b8cce84e41ca20c403e5b381c448cde468c4/src/db.rs#L1-L9)、[格式标记与结构标记显隐](https://github.com/packetThrower/zorite/blob/9c09b8cce84e41ca20c403e5b381c448cde468c4/crates/zorite-editor/src/markdown_syntax.rs#L300-L390)、[回车处理](https://github.com/packetThrower/zorite/blob/9c09b8cce84e41ca20c403e5b381c448cde468c4/crates/zorite-editor/src/lib.rs#L2400-L2510)、[双格式剪贴板](https://github.com/packetThrower/zorite/blob/9c09b8cce84e41ca20c403e5b381c448cde468c4/src/clipboard.rs)、[原位公式编辑](https://github.com/packetThrower/zorite/blob/9c09b8cce84e41ca20c403e5b381c448cde468c4/src/app/math.rs)、[链接点击处理](https://github.com/packetThrower/zorite/blob/9c09b8cce84e41ca20c403e5b381c448cde468c4/crates/zorite-editor/src/lib.rs#L3380-L3475)。显隐以条件表达式为准：`always_hide` 和 `hide_prefix` 优先于选区揭示，不能据上游旧注释声称选中时所有标记都会出现。
 
+##### #205 固定版本对照记录（未完成，不解锁后继）
+
+2026-11-08 已在 Windows `10.0.26300` 构建并运行精确的 Zorite `9c09b8cce84e41ca20c403e5b381c448cde468c4`，未用正式版 `v0.13.0` 或 moving HEAD 替代。原始源码与锁文件未改；`cargo build --release --locked --bin zorite` 成功。首次构建因 vendored OpenSSL 找不到 `perl` 失败，随后在仓库外配置校验过的 Strawberry Perl portable，仅修改构建进程 PATH，同一命令成功。原始无探针二进制 SHA-256 为 `711637e157cb0a59f766f378ff8b08b8fb6e00021809ac2d6e99df1b7b95d7da`。其数据、`APPDATA`、`LOCALAPPDATA` 均隔离在任务自有目录，没有接管真实笔记或配置。
+
+改造前 lyrel `3d97debb93504441dfc580f9fdb2345d211e1a58` 的 `cargo build --release --locked --bin lyrel-app` 也已成功，原始二进制 SHA-256 为 `20198268490c690b35903147405016807f1edf0ba58ebd9e1f1f930f9fcd1dcc`。隔离原生窗口从文件树打开自有 Markdown，在标题插入一个 `S`，经关闭确认保存并从文件树重开；独立读回的 349 字节文件恰好是 348 字节原件加该一个字符，其他字节不变。此输入不是系统 IME，也不是快捷键验收。
+
+固定 reference 已实际观察普通正文与混合选区隐藏格式标记、空选区／混合选区上下文菜单、混合格式 Bold、Markdown 复制及持久化重开；另观察公式结构编辑入口及 LaTeX／导出／对齐菜单、代码语言菜单与复制、表格菜单／插行／样式／列宽拖拽、图片对象菜单与尺寸拖拽、拼写建议替换、混合方向文字呈现及嵌套标题折叠。上述证据只覆盖各自的鼠标／菜单路径，不代表完整操作 inventory 已经原生验收。
+
+新确认的适配是表内格式标记：该原始 Zorite 二进制在第一正文行 B 单元格直接显示字面 `**bold**`，而同页普通正文隐藏星号；当时鼠标右击的是 A 单元格，B 不是正在编辑的 cell。按本节既有优先级，lyrel 仍须遵守 #204 的格式标记隐藏不变式，不能将这条差异当作 #206／#209／#212／#214 的豁免，或改写为上游已有表内隐藏格式。后续须保留对应源文本、鼠标位置与两种呈现的对照证据。
+
+**当前阻塞与未完成项：**后台原生 `Ctrl+A` 被自动化投递成普通字符 `a`；reference 正文没有可代替真实修饰键的 AX editor 控件。工作代理申请前台控制得到 `no-ui`，主会话申请得到 `unanswered`，未取得必要授权，因此没有继续重试后台 Ctrl／Shift，也没有把菜单动作、文本注入或合成事件记为真实 shortcut／IME 通过。完整 empty/mixed/object-boundary、导航／删除／撤销、补全、剪贴板 flavors／真实目标等原生行仍未完成。
+
+两侧临时 callback→paint 探针仅位于仓库外的独立测量 worktree，已能构建，但尚未执行 A/A 噪声校准或配对采样；输入响应分布、滚动分布及 matched Release 基线均未产生，不报告性能通过。已生成并记录实际字节与结构：当前回归生成器的 1200 组混合样本 342,220 字节；另一个实际 1200 节、含 1200 处图片的混合样本 695,006 字节；120 列×160 正文行的完整表格 291,041 字节、19,320 单元格；单大段落／单大代码块分别 400,034／400,042 字节；24 图／48 公式／24 图形／24 Note 的 MDX 为 3,448 字节。这些新生成文件不是历史记录的 724,334／291,131 字节原件，不能混用标签或沿用历史 Debug 数字。
+
+详细静态 inventory、已批准差异台账与 #205–#233 映射、原始构建日志／退出码、环境／字体哈希、输入与持久化观察、完整 fixture 生成器及未执行的配对协议，保存在仓库外 `C:/Users/dlivx/AppData/Local/Temp/lyrel-204-CtjYLY/evidence205/`。入口为 `native-observations.md`、`source-editing-inventory.md`、`source-object-inventory.md`、`approved-differences.md`、`fixture-manifest.json`、`measurement-protocol.md` 和 `final-status.json`。复验时先取得必要原生输入前提、核验脚本中的独立数据路径和原始二进制哈希，再执行完整 inventory 与重复配对；临时探针不得进入产品。**#205 保持 open，不能凭源码清单、构建或有限观察解锁 #206。**
+
 #### 使用隔离配置复验
 
 复验时使用临时配置和工作区，不需要开发开关：
