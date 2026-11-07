@@ -323,8 +323,10 @@ pub fn restore_preamble(banner: Option<&str>) -> Vec<u8> {
 /// - `2004` is bracketed paste: a paste into a shell that does not know the
 ///   protocol arrives with `ESC[200~` typed around it.
 /// - `1` is DECCKM, which sends the arrow keys as `ESC O A` instead of `ESC[A`.
-/// - `CSI = 0 ; 1 u` sets the kitty keyboard flags to none, the same reset
-///   `stale_mode_resets` in the client uses.
+/// - `CSI = 0 ; 1 u` clears only effective kitty keyboard flags. Both retained
+///   stacks are retired by the new shell's owned completion/prompt boundary;
+///   the reader and shared `TerminalModes` perform that reset without an
+///   emulator dependency patch.
 ///
 /// Deliberately absent: `1007` (alternate scroll), which this emulator has *on*
 /// by default, so clearing it would walk away from the default rather than back
@@ -1320,6 +1322,37 @@ fn answer_device_attributes(writer: &Mutex<Box<dyn Write + Send>>, owed: usize) 
     if let Ok(mut writer) = writer.lock() {
         for _ in 0..owed {
             let _ = writer.write_all(DA1_REPLY);
+        }
+        let _ = writer.flush();
+    }
+}
+
+/// Drain every live query while holding the same lock that publishes its
+/// output. An attaching client replays without replies; an attached client
+/// owns the live answer, even if it disconnects before the PTY write happens.
+fn detached_color_scheme_queries(st: &mut PaneState) -> usize {
+    let asked = st.modes.take_color_scheme_queries();
+    if st.subscriptions.controller_epoch().is_some() {
+        0
+    } else {
+        asked
+    }
+}
+
+fn answer_color_scheme_queries(writer: &Mutex<Box<dyn Write + Send>>, owed: usize) {
+    if owed == 0 {
+        return;
+    }
+    // This is the GUI's established appearance hint, including its light
+    // fallback. Read it only for an owed reply, outside the pane state lock.
+    let reply: &[u8] = if crate::core::machine::appearance().dark {
+        b"\x1b[?997;1n"
+    } else {
+        b"\x1b[?997;2n"
+    };
+    if let Ok(mut writer) = writer.lock() {
+        for _ in 0..owed {
+            let _ = writer.write_all(reply);
         }
         let _ = writer.flush();
     }

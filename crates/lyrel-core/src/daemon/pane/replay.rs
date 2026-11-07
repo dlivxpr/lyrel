@@ -389,6 +389,9 @@ impl ReplayRing {
             modes.feed(a);
             modes.feed(b);
         }
+        // Refolded output is historical, not a new request to the daemon.
+        modes.take_color_scheme_queries();
+        modes.take_device_attribute_queries();
         modes
     }
 
