@@ -86,10 +86,11 @@ pub(crate) fn sample_local() -> io::Result<HostMetrics> {
         .as_ref()
         .is_none_or(|sampler| now.duration_since(sampler.refreshed) > IDLE_RESET)
     {
-        let hostname = System::host_name()
-            .filter(|name| !name.is_empty())
-            .ok_or_else(|| io::Error::other("host name is unavailable"))?;
-        let mut system = System::new();
+        let mut system = System::new().map_err(system_error)?;
+        let hostname = System::host_name().map_err(system_error)?;
+        if hostname.is_empty() {
+            return Err(io::Error::other("host name is unavailable"));
+        }
         // The first CPU refresh is a baseline, not a measurement of current use.
         system.refresh_cpu_usage();
         *shared = Some(Sampler {
@@ -102,7 +103,9 @@ pub(crate) fn sample_local() -> io::Result<HostMetrics> {
             refreshed: now,
         });
     }
-    let sampler = shared.as_mut().expect("initialized above");
+    let sampler = shared
+        .as_mut()
+        .ok_or_else(|| io::Error::other("whole-host sampler is unavailable"))?;
     if now.duration_since(sampler.refreshed) >= SAMPLE_INTERVAL {
         sampler.system.refresh_cpu_usage();
         sampler
@@ -111,8 +114,9 @@ pub(crate) fn sample_local() -> io::Result<HostMetrics> {
         let cpu = sampler.system.global_cpu_usage();
         let total = sampler.system.total_memory();
         let used = sampler.system.used_memory();
-        sampler.snapshot.state = if !sysinfo::IS_SUPPORTED_SYSTEM
-            || sampler.system.cpus().is_empty()
+        // sysinfo 0.40.1 refresh methods return (), so validate the exposed data.
+        // Unsupported platforms already fail System::new() instead of yielding zeros.
+        sampler.snapshot.state = if sampler.system.cpus().is_empty()
             || total == 0
             || used > total
             || !cpu.is_finite()
@@ -136,4 +140,13 @@ pub(crate) fn sample_local() -> io::Result<HostMetrics> {
         sampler.refreshed = now;
     }
     Ok(sampler.snapshot.clone())
+}
+
+fn system_error(error: sysinfo::Error) -> io::Error {
+    let kind = match &error {
+        sysinfo::Error::Unsupported => io::ErrorKind::Unsupported,
+        sysinfo::Error::Io(error) => error.kind(),
+        sysinfo::Error::Other(_) => io::ErrorKind::Other,
+    };
+    io::Error::new(kind, error)
 }
