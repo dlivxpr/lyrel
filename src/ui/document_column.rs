@@ -193,6 +193,7 @@ pub(crate) fn switch_track(
     let sf = cx.global::<crate::ui::presets::Surfaces>().window;
     h_flex()
         .id(id)
+        .when(cfg!(test), |track| track.debug_selector(move || id.into()))
         .occlude()
         .flex_none()
         .ml(px(SWITCH_LEAD))
@@ -223,6 +224,9 @@ where
     let dark = theme.mode.is_dark();
     div()
         .id(id)
+        .when(cfg!(test), |cell| {
+            cell.debug_selector(move || t(tip).into())
+        })
         // The glyph has no text for assistive technology to read. Use the
         // tooltip's localized name and expose the raised cell as a pressed
         // button; GPUI also routes accessible clicks to the on_click handler.
@@ -512,6 +516,9 @@ impl LyrelApp {
         Some(
             v_flex()
                 .id("document-column")
+                .when(cfg!(test), |column| {
+                    column.debug_selector(|| "document-column".into())
+                })
                 .relative()
                 .flex_none()
                 .w(px(width))
@@ -526,6 +533,9 @@ impl LyrelApp {
                 // half — and the grab with it — away.
                 .child(
                     div()
+                        .when(cfg!(test), |content| {
+                            content.debug_selector(|| "document-content".into())
+                        })
                         .flex_1()
                         .min_h_0()
                         .w_full()
@@ -788,7 +798,8 @@ mod gpui_tests {
     use crate::ui::app::test_window;
     use crate::ui::pane::{Pane, PaneSlot};
     use crate::ui::pending_pane::{PendingPane, PendingSpawn};
-    use gpui_kit::{Entity, TestAppContext, VisualTestContext, px, size};
+    use gpui_kit::test::TestWindowExt as _;
+    use gpui_kit::{Entity, Focusable as _, TestAppContext, VisualTestContext, px, size};
 
     /// One quiet tab. The pane is a *connecting* one so the harness needs no
     /// PTY and runs on every platform.
@@ -854,6 +865,103 @@ mod gpui_tests {
     /// What the active tab is actually doing.
     fn tab_layout(app: &Entity<LyrelApp>, vcx: &mut VisualTestContext) -> DocumentLayout {
         app.update_in(vcx, |app, _, cx| app.document_layout(cx))
+    }
+
+    /// Upstream d3887cd had a correctly sized column around a narrower editor;
+    /// width-calculator tests alone cannot detect that failure.
+    #[gpui_kit::test]
+    fn docked_editor_content_fills_its_column_across_scales_and_resize(cx: &mut TestAppContext) {
+        let (app, mut vcx) = window(cx, 1440.);
+        let dir = tempfile::TempDir::new().unwrap();
+        let path = dir.path().join("geometry190.txt");
+        std::fs::write(&path, "geometry190").unwrap();
+        app.update_in(&mut vcx, |app, window, cx| {
+            app.open_file_in_editor(&path, window, cx)
+        });
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        let editor = loop {
+            vcx.run_until_parked();
+            if let Some(file) = app.read_with(&vcx, |app, _| app.editor_active_local_file()) {
+                break file.input;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "fixture file must load"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        };
+        assert_eq!(
+            editor.read_with(&vcx, |editor, _| editor.value().to_string()),
+            "geometry190"
+        );
+        vcx.simulate_keystrokes("end");
+        vcx.simulate_keystrokes("x");
+        vcx.run_until_parked();
+        assert_eq!(
+            editor.read_with(&vcx, |editor, _| editor.value().to_string()),
+            "geometry190x"
+        );
+
+        for scale in [1., 1.25, 1.5, 1.75, 2.] {
+            vcx.simulate_scale_factor_change(scale);
+            for (width, font_size) in [(1440., 16.), (1289., 20.), (1600., 16.)] {
+                app.update_in(&mut vcx, |_, _, cx| {
+                    cx.global_mut::<Config>().ui_font_size = font_size;
+                    gpui_kit::component::Theme::update(cx, |theme| theme.font_size = px(font_size));
+                    cx.notify();
+                });
+                vcx.simulate_resize(size(px(width), px(900.)));
+                vcx.run_until_parked();
+                vcx.update(|window, cx| window.render_frame(cx));
+                let column = vcx.debug_bounds("document-column").expect("docked column");
+                let content = vcx
+                    .debug_bounds("document-content")
+                    .expect("document content");
+                let expected = dock_px(&app, &mut vcx).expect("room for both surfaces");
+                let tolerance = px(1. / scale);
+                assert!((column.size.width - px(expected)).abs() <= tolerance);
+                assert!(
+                    (content.size.width - (column.size.width - px(1.))).abs() <= tolerance,
+                    "scale={scale}, window={width}, font={font_size}: column={column:?}, content={content:?}"
+                );
+                assert!((content.right() - column.right()).abs() <= tolerance);
+                assert!(content.top() >= px(font_size * 3.));
+                let input = editor.read_with(&vcx, |editor, _| editor.input_bounds());
+                assert!(input.size.width > content.size.width - px(80.));
+                assert!(input.right() <= content.right() + tolerance);
+
+                for (choice, docked) in [
+                    (L10nKey::DocumentFill, false),
+                    (L10nKey::DocumentDock, true),
+                ] {
+                    let button = vcx.debug_bounds(t(choice)).expect("existing layout choice");
+                    assert!(button.left() >= content.left());
+                    assert!(button.right() <= content.right());
+                    vcx.simulate_click(button.center(), gpui_kit::Modifiers::none());
+                    vcx.run_until_parked();
+                    assert_eq!(dock_px(&app, &mut vcx).is_some(), docked);
+                    assert_eq!(
+                        editor.read_with(&vcx, |editor, _| editor.value().to_string()),
+                        "geometry190x"
+                    );
+                    assert!(app.update_in(&mut vcx, |_, window, cx| {
+                        editor.read(cx).focus_handle(cx).is_focused(window)
+                    }));
+                }
+            }
+        }
+
+        vcx.simulate_resize(size(px(560.), px(900.)));
+        vcx.run_until_parked();
+        assert_eq!(dock_px(&app, &mut vcx), None);
+        assert_eq!(tab_layout(&app, &mut vcx), DocumentLayout::Dock);
+        vcx.simulate_resize(size(px(1440.), px(900.)));
+        vcx.run_until_parked();
+        assert!(dock_px(&app, &mut vcx).is_some());
+        assert_eq!(
+            editor.read_with(&vcx, |editor, _| editor.value().to_string()),
+            "geometry190x"
+        );
     }
 
     /// Fill is one tab's answer, not the window's. Reading a long file in one

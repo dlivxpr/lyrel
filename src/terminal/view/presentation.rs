@@ -159,6 +159,9 @@ impl Render for TerminalView {
             .on_action(cx.listener(|this, _: &ToggleComposer, window, cx| {
                 this.toggle_composer(window, cx);
             }))
+            .on_action(cx.listener(|this, _: &RunReverseSearchSelection, _w, cx| {
+                this.run_reverse_search_selection(cx);
+            }))
             .on_action(cx.listener(|this, _: &SendTab, _w, cx| {
                 this.tab_pressed(true, cx);
             }))

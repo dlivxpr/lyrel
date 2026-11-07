@@ -319,6 +319,7 @@ impl FrameReader {
                                         }
                                         ReaderCut::Prompt(mark) => prompt_break.apply(term, mark),
                                         ReaderCut::RetireTitle => term.set_title(None),
+                                        ReaderCut::KeyboardBoundary => {}
                                     }
                                 },
                             ) else {
@@ -490,6 +491,7 @@ impl FrameReader {
                                 ReaderCut::Prompt(mark) => prompt_break.apply(term, mark),
                                 ReaderCut::RetireTitle => term.set_title(None),
                                 ReaderCut::Parked(_) => {}
+                                ReaderCut::KeyboardBoundary => {}
                             },
                         );
                         if fed.is_none() {
@@ -687,6 +689,8 @@ impl FrameReader {
                                 processor.advance(&mut bridge, &resets);
                                 drop(bridge);
                             }
+                            ParseBridge::new(&mut term, proxy.clone(), &mut keyboard, None)
+                                .clear_keyboard();
                             drop(term);
                             if released || !resets.is_empty() {
                                 proxy.send(PaneEvent::Wakeup);
@@ -864,9 +868,6 @@ fn stale_mode_resets(mode: Mode) -> Vec<u8> {
     if mode.contains(Mode::FOCUS_IN_OUT) {
         seq.extend_from_slice(b"\x1b[?1004l");
     }
-    if mode.intersects(Mode::KITTY_KEYBOARD_PROTOCOL) || mode.contains(Mode::ALT_SCREEN) {
-        seq.extend_from_slice(b"\x1b[=0;1u");
-    }
     seq
 }
 
@@ -923,6 +924,7 @@ enum ReaderCut {
     Command(CommandMark),
     Prompt(PromptMark),
     RetireTitle,
+    KeyboardBoundary,
 }
 
 /// Adds the batch's command marks to `cuts`, keeping them in stream order
@@ -930,6 +932,9 @@ enum ReaderCut {
 fn command_cuts(tok: &mut OscTokenizer, bytes: &[u8], cuts: &mut Vec<(usize, ReaderCut)>) {
     let before = cuts.len();
     tok.feed_at(bytes, |off, payload| {
+        if lyrel_core::core::term_modes::shell_keyboard_boundary(payload) {
+            cuts.push((off, ReaderCut::KeyboardBoundary));
+        }
         if let Some(mark) = CommandMark::parse(payload) {
             cuts.push((off, ReaderCut::Command(mark)));
         } else if let Some(mark) = PromptMark::parse(payload) {
@@ -1056,6 +1061,9 @@ fn feed_grid<T: EventListener + Clone>(
             at = end;
         }
         let Some((_, cut)) = next else { break };
+        if matches!(cut, ReaderCut::KeyboardBoundary) {
+            ParseBridge::new(&mut grid, proxy.clone(), keyboard, None).clear_keyboard();
+        }
         if matches!(
             cut,
             ReaderCut::RetireTitle | ReaderCut::Command(CommandMark::Finished)

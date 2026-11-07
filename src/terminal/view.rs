@@ -71,7 +71,8 @@ actions!(
         ClearScrollback,
         InsertNewline,
         InsertNewlineFallback,
-        ToggleComposer
+        ToggleComposer,
+        RunReverseSearchSelection
     ]
 );
 
@@ -261,6 +262,9 @@ pub struct TerminalView {
     /// for the far end's verdict.
     relink_inflight: bool,
     last_mouse_cell: Option<(usize, usize)>,
+    /// Each reported left/middle/right press independently owns its drag/release.
+    /// A sidebar or neighbouring pane's gesture is not ours.
+    reported_mouse_buttons: u8,
     /// Where the grid sat in the window on the last frame, so an event that
     /// arrives with nothing but a window position — the wheel — can be told
     /// which cell it is over.
@@ -300,6 +304,9 @@ pub struct TerminalView {
     git_prompt_cycle: u64,
     pub(super) input: super::prompt_input::PromptInput,
     history: TerminalHistory,
+    /// Native shell-channel history waits for this pane's SSH connection.
+    native_history_seed_pending: bool,
+    pane_history_seed: Option<(crate::ui::host_ops::HostId, u64)>,
     completion: TerminalCompletion,
     integration_notice: Option<String>,
     integration_notice_shown: bool,
@@ -726,6 +733,7 @@ impl TerminalView {
             relink_abandoned: false,
             relink_inflight: false,
             last_mouse_cell: None,
+            reported_mouse_buttons: 0,
             cell_geom: None,
             report_mouse,
             links: LinkInteraction::default(),
@@ -752,6 +760,8 @@ impl TerminalView {
             git_prompt_cycle: 0,
             input: super::prompt_input::PromptInput::new(prompt_editor),
             history: TerminalHistory::new(),
+            native_history_seed_pending: false,
+            pane_history_seed: None,
             completion: TerminalCompletion::default(),
             integration_notice: None,
             integration_notice_shown: false,
@@ -1221,6 +1231,26 @@ impl TerminalView {
         self.shell_spec.clone()
     }
 
+    /// The shell this pane is running, for deciding what a line typed into it may
+    /// use. A pane spawned without an explicit shell got the configured one or,
+    /// failing that, the login shell — but only a local pane got this machine's;
+    /// a workspace pane's default lives on its host, so it stays unknown.
+    pub(crate) fn pane_shell_program(&self, cx: &App) -> Option<String> {
+        if let Some(spec) = self.shell_spec() {
+            return Some(spec.program);
+        }
+        if self.workspace().is_some()
+            || self.ssh_spec().is_some()
+            || self.remote_context().is_some()
+        {
+            return None;
+        }
+        Some(match &cx.global::<Config>().shell {
+            Some(shell) if !shell.program.trim().is_empty() => shell.program.clone(),
+            _ => crate::core::shells::login_shell(),
+        })
+    }
+
     /// The shell binary this pane is running, for the path-quoting rules.
     ///
     /// `None` before the pane has resolved one, which [`crate::core::shell_quote::quote_for_shell`]
@@ -1359,10 +1389,20 @@ impl TerminalView {
         self.report_mouse && self.frame.mouse_mode
     }
 
-    fn write_mouse(&self, base: u8, mods: &Modifiers, col: usize, row: usize, pressed: bool) {
+    fn write_mouse(
+        &self,
+        base: u8,
+        mods: &Modifiers,
+        col: usize,
+        row: usize,
+        pressed: bool,
+    ) -> bool {
         let sgr = self.terminal.term.lock().mode().contains(Mode::SGR_MOUSE);
         if let Some(msg) = encode_mouse(sgr, base, mods, col, row, pressed) {
             self.terminal.write(msg);
+            true
+        } else {
+            false
         }
     }
 
@@ -1374,7 +1414,12 @@ impl TerminalView {
             _ => return,
         };
         self.last_mouse_cell = Some((col, row));
-        self.write_mouse(base, mods, col, row, true);
+        let mask = 1 << base;
+        if self.write_mouse(base, mods, col, row, true) {
+            self.reported_mouse_buttons |= mask;
+        } else {
+            self.reported_mouse_buttons &= !mask;
+        }
     }
 
     pub fn mouse_release(&mut self, button: MouseButton, col: usize, row: usize, mods: &Modifiers) {
@@ -1384,11 +1429,24 @@ impl TerminalView {
             MouseButton::Right => 2,
             _ => return,
         };
+        let mask = 1 << base;
+        if self.reported_mouse_buttons & mask == 0 {
+            return;
+        }
+        self.reported_mouse_buttons &= !mask;
         self.write_mouse(base, mods, col, row, false);
     }
 
     pub fn mouse_drag(&mut self, button: MouseButton, col: usize, row: usize, mods: &Modifiers) {
-        if self.last_mouse_cell == Some((col, row)) {
+        let base = match button {
+            MouseButton::Left => 32,
+            MouseButton::Middle => 33,
+            MouseButton::Right => 34,
+            _ => return,
+        };
+        if self.reported_mouse_buttons & (1 << (base - 32)) == 0
+            || self.last_mouse_cell == Some((col, row))
+        {
             return;
         }
         let wants = self.report_mouse
@@ -1402,13 +1460,13 @@ impl TerminalView {
             return;
         }
         self.last_mouse_cell = Some((col, row));
-        let base = match button {
-            MouseButton::Left => 32,
-            MouseButton::Middle => 33,
-            MouseButton::Right => 34,
-            _ => return,
-        };
         self.write_mouse(base, mods, col, row, true);
+    }
+
+    /// A release may have gone to another window. A buttonless move proves
+    /// that none of our reported presses still owns the pointer.
+    pub(super) fn drop_mouse_grab(&mut self) {
+        self.reported_mouse_buttons = 0;
     }
 
     pub fn mouse_motion(&mut self, col: usize, row: usize, mods: &Modifiers) {
@@ -2848,6 +2906,7 @@ mod gpui_tests {
                 request_resume_status: Default::default(),
                 pending_stop: false,
                 readout: Default::default(),
+                since_ms: None,
             }))
             .encode(daemon)
             .unwrap();
@@ -2907,6 +2966,7 @@ mod gpui_tests {
             request_resume_status: Default::default(),
             pending_stop: false,
             readout: Default::default(),
+            since_ms: None,
         }))
         .encode(&mut daemon)
         .unwrap();
@@ -3018,6 +3078,7 @@ mod gpui_tests {
     }
 
     include!("graphics_consumer_tests.rs");
+    include!("history_search_pty_consumer_tests.rs");
     include!("graphics_resize_consumer_tests.rs");
     include!("graphics_layout_consumer_tests.rs");
     include!("graphics_recovery_consumer_tests.rs");

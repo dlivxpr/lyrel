@@ -1,14 +1,14 @@
 ---
 title: "核心概念"
-description: "工作区、标签页、窗格——以及管理它们的后台服务器。"
+description: "理解机器、工作区、标签页、窗格与后台服务器的关系。"
 ---
 
-四个词就能解释 lyrel 的大部分功能。其中三个看得见；第四个则是前三个在重启后仍能恢复的原因。
+lyrel 按机器组织工作区，每个工作区包含标签页，每个标签页通过分屏布局组织窗格。后台服务器持有运行中的会话，窗口负责显示与交互；实现分层、状态归属和数据流见[项目架构](/reference/architecture)。
 
 <a id="pane"></a>
 ## 窗格
 
-一个**窗格**就是一个终端：一个连接到 PTY 的 shell（或程序）。它是 lyrel 中唯一真正运行程序的组件。
+一个**窗格**把 shell 或程序连接到伪终端（PTY），在工作台中呈现它的输入与输出。
 
 窗格在整个生命周期内都有固定的 ID，例如 `%42`。[CLI](/cli/overview) 通过这个 ID 定位窗格，窗格内部的 `$LYREL_PANE` 保存的也是这个 ID。
 
@@ -41,91 +41,11 @@ description: "工作区、标签页、窗格——以及管理它们的后台服
 
 - **在任何终端中都能使用 `lyrel`。** CLI 与同一个服务器通信，完全不需要运行 GUI。
 - **崩溃后可恢复已落盘的终端历史。** 每个窗格输出末尾的一段内容会按容量上限保存在磁盘上；GUI 目前只向支持 `restore-scrollback` 的本地 daemon 请求恢复这段内容。关闭 GUI 后重连仍存活的远端 daemon，会重新附着原 pane；远端 daemon 已重启、需要 GUI 重新创建 shell 时，目前不会请求回放其磁盘历史。历史回放不代表原 shell 进程跨 daemon 重启存活。
-- **停止所有进程需要明确操作。** 托盘菜单中的*退出并停止服务器…*是结束所有进程的唯一常规方式，而且操作前会发出警告。
+- **停止服务器需要明确操作。** 托盘菜单中的*退出并停止服务器…*会结束其管理的会话，并在操作前发出警告；关闭窗口不等于停止服务器。
 
-实现中，`lyrel-core` 的 `daemon/pane.rs` 中 `DaemonPane` 持有会话身份与生命周期权威；
-`daemon/pane/lifecycle.rs` 私有持有 PTY master／child、集成临时目录及原生 SSH channel handle，负责平台资源接入、进程探测、resize 和关闭。
-`daemon/pane/launch.rs` 仍是 shell、工作目录与环境准备的唯一实现，`daemon/pane/replay.rs` 仍负责有界输出缓冲及几何分段。
-`daemon/pane/subscriptions.rs` 拥有控制器／观察者身份、epoch、顺序回放、广播、剪贴板权限和各输出流的背压；
-`daemon/pane/subscriptions/capacity.rs` 拥有随连接存活的图形容量租约。
-桌面的 `src/terminal/paste.rs` 独立处理剪贴板文件／图片路径、远端私有暂存目录及上传生命周期；
-`TerminalView` 只负责输入投递和失败提示。这些内部职责拆分不改变协议、配置或会话恢复规则。
+后台服务器也称 Session Daemon。GUI 和 [CLI](/cli/overview) 通过同一套共享核心访问它；本地服务器与远端服务器分别管理各自机器上的会话。窗口中的终端网格、图片解码和绘制缓存不取代 daemon 的会话权威。
 
-Windows pane 列表在每个请求内按需共享一次新鲜进程表，在 registry 锁外查询标题与前景进程。请求结束即释放快照，不跨请求缓存；只需 pane ID 或存活状态的维护路径不查询标题。OSC 标题、工作目录、所属工作区和存活刷新策略不变；间接媒体授权、进程身份与终止操作继续使用各自的新鲜安全检查。
-
-磁盘持久化在同一次 pane 状态锁内直接复制既有 256 KiB 存储后缀，并读取对应几何、标题和输出标记，不再先克隆完整 8 MiB 回放环。保存字节、原子替换和周期不变；live attachment 与 Unix daemon handoff 仍使用原有完整回放，不能把磁盘后缀当作全部存活历史。
-
-新控制器先接收模式、文字／几何和图形回放，再接收对应状态与实时输出；接管只替换旧控制器，不替换观察者。
-观察者始终只读，其回放与实时输出共用独立预算：停止读取或已经断开的观察者会被移除，不能阻塞控制器输出。
-图形权威状态仍属于原 pane，回放准入不创建新的 shell，也不在容量不足时静默丢图。
-订阅转换与输出排序仍在原有 `PaneState` 锁内完成；图形授权等待在锁外进行，容量租约锁仍先于 pane 锁。
-退出协调位于 `daemon/pane/lifecycle/exit.rs`：reader 在转发 EOF 前的输出后报告退出，Windows 监视器在后台释放 ConPTY master，释放时不持有 master slot 锁。
-监视器沿用既有 2 秒排空窗口；继承输出管道的后代进程阻止 EOF 时，仍按原策略有界报告，不把窗口误当作无限排空保证。
-reader 与监视器共享同一个单次报告者；退出码探测继续使用有界 `try_lock`，主动 teardown 不额外广播 `Exited` 或竞争回收。
-Unix 的 `daemon/pane/lifecycle/inherited.rs` 沿用 exec 继承的 descriptor／child，恢复 close-on-exec、查询内核尺寸，并保留原进程组信号规则；不重启 shell。
-原生 SSH 关闭 shell channel，不使用本地 PTY 的信号或 ConPTY 排空规则。所有 facts／subscriptions／graphics 的退出转换仍分借同一 `PaneState` 锁，未增加锁或 UI join。
-相关回归分别归入 `lifecycle/tests.rs`、`lifecycle/exit/tests.rs` 和 `lifecycle/inherited/tests.rs`；真实 daemon 消费者继续覆盖最终输出与退出码，
-显式 `native_ssh_lifecycle` 集成用例复用隔离 SSH fixture，验证真实原生 shell channel 的最终输出、单次退出和主动关闭静默语义。
-这些是验证入口，不是本轮已执行的通过声明；Windows、Unix 与真实 SSH 的运行证据需要分别记录。
-
-控制连接继续从 `lyrel-core::host::server` 的 `serve`／`serve_with`／`serve_halves`／`serve_halves_with` 接入。
-私有 `host/server/connection.rs` 负责连接初始化与退出协调，`negotiation.rs` 负责 HELLO 和功能协商；
-握手成功后才建立机器订阅、连接身份、GUI 注册与可选的工作区附着，再进入请求读取循环。
-`attachments.rs` 的 `ConnectionIdentity` 私有持有连接 ID、客户端身份及共享 `AttachRegistry`，统一执行附着、分离、删除与 GUI 注册／注销；
-请求分发只调用这些语义操作，不直接修改附着表。接管仍在同一 handover 锁内先更新机器记录、再更新 live registry，
-释放锁后才向被替代者发送通知；只有专用连接会被关闭，共享 GUI／Host 连接可继续服务其他工作区。
-`output.rs` 的单一 `Sink` 同步串行化响应与事件，并负责输出退休，不增加输出消费者或锁。
-读取循环退出后，依次关闭工作池、清除 watch、释放工作区、注销 GUI、丢弃机器订阅、退休 Sink、关闭链接；
-不会等待最后一个 worker 持有的 `Arc<Conn>` 释放才清理连接。
-私有 `dispatch.rs` 保留逐项显式的 wire request 分发，借用同一连接的 Host、机器树与 `ConnectionIdentity`；
-`requests.rs` 的 `Requests` 私有持有在途 request ID 与取消标记，负责完成关联、错误编码和 blob 响应。
-取消只放弃回复，不强制终止已经开始的 Host 操作；完成时先释放在途表锁，再经原 `Sink` 输出，错误链与 CLI 退出结果不变。
-`pool.rs` 的 `Pool` 独立持有原有 FIFO 队列、worker 数与唤醒条件：最多 64 个 worker、1024 个排队请求，空闲保温 10 秒；
-连接退休关闭准入并丢弃尚未开始的工作；已经开始的 Host 操作可继续完成，不能因此推迟身份清理与 Sink 退休。
-`subscriptions/watch.rs` 的 `Watches` 拥有目录订阅及按 request ID 暂存的 receiver：只有 `WatchId` 回复成功写出后才转发事件，
-取消或回复失败则释放该订阅。`subscriptions/git.rs` 的 `GitStreams` 拥有原有并发 slot，chunk 仍同步写入同一个 `Sink`，
-保持流内顺序、容量限制及慢接收者的背压；`subscriptions/layout.rs` 负责有界机器通知转发，落后超过原有 1024 条队列时，
-丢弃已过时的 backlog 并发送 `LayoutResync`，不另建 publication authority。这些 owner 不增加锁、输出消费者或第二份连接身份。
-Unix 的 socket 路径、私有权限、残留端点探测与监听属于 `host/server/unix.rs`；Windows 的认证 loopback TCP、
-`control.port` 与存活探测属于 `host/server/windows.rs`。现有公共入口直接暴露真实实现，当前协议为 CONTROL 16／PANE 17，
-协商、错误分类及断开前输出语义不变；Windows TCP、Unix socket、stdio 和真实 SSH 运行证据须分别记录。
-
-桌面的 `src/terminal/remote/reader.rs` 由 `ReaderTask` 管理单次 reader 生命周期，
-私有 `FrameReader` 同时拥有 parser、键盘／终端模式、回放位置和帧缓冲；连接编排只启动或退休 reader。
-回放与实时文字、尺寸回显、剪贴板请求及图形更新仍由同一线程按流顺序消费，回放期间不重新回答历史查询或重放副作用。
-退休先设置取消栅栏并使旧 decoder 代次失效，不等待静默连接退出；图形权威仍在 daemon，桌面只维护派生缓存与视口报告。
-
-连接接入由 `src/terminal/remote/handshake.rs` 的 `PaneHandshake` 负责：路由、协议协商、
-图形容量通告、Spawn／Attach 的应答分类及预读字节移交集中在此处。只有明确的“pane 不存在”
-应答允许放弃原会话；静默、断流和图形 admission 失败不等于会话消失。本地、远程工作区与
-原生 SSH 仍分别保留原有 Host、PTY 来源及远程剪贴板授权规则。
-
-`remote/connection.rs` 的私有 `PaneConnection` 拥有 reader／writer 的配对、链接替换、
-resize 去重与回显等待、viewport 重新发布和关闭次序；`remote/writer.rs` 独立拥有写队列、
-背压与每条链接只报告一次的输入失败。替换时先退休旧 reader／decoder，再清理旧事件与
-剪贴板请求、重置呈现、安装 successor，随后替换 writer、重新发布 viewport 并同步当前尺寸。
-写入只入队，关闭最多等待既有短暂排空宽限，不在 UI 线程 join 静默 socket 线程。
-冷 attach 的 agent 回放仍是初始基线；relink 则沿用原视图的活动基线，不吞掉断线期间完成的状态变化。
-
-桌面终端的事件适配集中在 `src/terminal/view/events.rs`：`TerminalLifecycle` 仍唯一持有
-事件 receiver、批量唤醒、显示状态登记、时钟与释放任务，按同一顺序调用 `TerminalView::handle_event`。
-适配先处理退出事实、输入所有者、远端剪贴板队列和认证提示，再分派事件；不为各能力启动竞争消费者。
-普通输出通过 `TerminalLifecycle::notify_output` 只通知正在显示的 pane；隐藏 pane 仍消费输出、
-推进必要状态、解码图片并归还退役图形资源，不等待下一次可见绘制。transport 中断不能冒充进程退出，
-只有真实 child exit 才发出 `ChildExited`。
-
-`view/notices.rs` 负责标题稳定等待、铃声和通知的 GPUI 适配；`AgentActivity` 仍唯一维护 agent
-活动、Host／pane 读取标记和延迟 Done 通知的取消句柄，新状态会取消尚未投递的旧通知。
-退出时丢弃待采用的标题，避免定时器覆盖退出状态；程序通知仍在退出检查之前排空。
-`view/presentation.rs` 保留原 `TerminalView` 的 `Render`、焦点入口与覆盖层次序，
-`view/menus.rs` 组合通用命令，链接菜单仍由 Host-aware 链接适配提供；两者不接管 `TerminalElement` 的逐帧绘制。
-
-事件消费者回归位于 `view/events/consumer_tests.rs`，标题／铃声／提示回归位于
-`view/notices/tests.rs`；隐藏图片与窗口释放继续复用 `lifecycle_consumer_tests.rs`。
-跨能力的 socket-backed GPUI fixture 集中在私有 `view/test_support.rs`，专属图形 fixture 不混入其中。
-原生验收需使用隔离配置，对照可见／隐藏输出后的网格、通知计数与窗口重绘，再检查标题往返、
-连续铃声、agent 未读及延迟通知取消、断线与真实退出、菜单的禁用项与焦点交接。
-这些是待执行的验证入口，不是本轮通过声明；本机结果与 macOS、真实 SSH 等未验证前提分开记录。
+进程与线程边界、连接接管、终端回放和隐藏窗格的通知规则见[项目架构](/reference/architecture)。这里的“恢复”需区分重新附着存活会话与重建已经结束的 shell，不能将历史回放视为原进程存活。
 
 连接迁移后的原生验收必须使用专用配置与会话，以下步骤是验收流程，不代表已经执行：
 
@@ -199,50 +119,11 @@ macOS 原生验收延期到 [#166 专门性能后续工单](https://github.com/d
 
 ### 内部职责归属
 
-这些模块将状态与转换规则放在一起，而不只是把协调器的方法分散到文件中：
-
-| 能力 | 状态与行为所有者 | 协调器保留的工作 |
-|---|---|---|
-| 工作台 | `ui/tab` 的 `Tab`／`TabSet`、`session_lifecycle`、`pending_pane`、`window_chrome`、搜索与转发表单模块 | `LyrelApp` 组合窗口、执行跨能力导航并交接焦点 |
-| 文件树与文件索引 | `FileTreeState` 管理列表、在途读取、监视失效、写入结果和 Host-aware 根目录／索引 | 工作台提供 Host 与标签上下文，执行文档导航、错误通知和最终焦点；搜索不直接修改缓存 |
-| SCM | `ScmPanelState` 管理仓库、草稿、提交、分支、graph 与 detail 的转换 | 工作台适配 `ScmIntent`、提供当前仓库上下文，保留破坏性确认、Host 调度和文档／diff 导航 |
-| 窗口连接与创建 | `WindowConnection` 管理尝试身份和单 pending／parked 创建意图；`RemoteLinks` 独占机器监督、重连与 pane relink | 切换器保留筛选和表单，工作台执行已接受结果的跨能力导航，不复制目标身份或连接状态 |
-| 终端交互 | `PromptInput`、`TerminalHistory`、`TerminalCompletion`、`SelectionScroll`、`AgentActivity`、`LinkInteraction`、`TerminalLifecycle` | `TerminalView` 保留 GPUI 实体身份、绘制、事件适配与任务调度 |
-| 文档编辑 | `EditorBuffers` 管理 Host-aware 缓冲区与加载／监视；`EditorPanelState` 管理保存与未保存提示 | 工作台执行保存成功后捕获的关闭意图；退休分组不能转而关闭新的呈现 |
-| 布局同步 | `tree_sync/projection`、`reconcile`、`lifecycle::WindowSync` 分别拥有投影、操作排序、队列与恢复转换 | 原同步入口执行 I/O 与 GPUI 结果应用；`MachineMirrors` 仍独立 |
-| 连接与 daemon | `PaneConnection`、`LinkWriter`、`FrameReader` 与 daemon 的 facts／subscriptions／lifecycle | `RemoteTerminal` 装配客户端；`DaemonPane` 保留会话权威和原有锁内顺序 |
-| CLI | `crates/lyrel-cli/src/commands/` 按命令族处理目标、执行与输出 | 原 `execute`、`Outcome` 和 `Backend` 契约不变 |
-
-接口传递目标身份、Host、借用数据或语义结果，不向能力模块开放整个可变工作台。
-本次迁移没有改变协议版本、持久化格式、第三方依赖或平台范围；既有 settings、paste、launch 与 replay 实现仍是唯一入口。
-协调器并非零方法：视图组合、跨能力操作与单流排序仍需集中；SFTP 等未纳入独立所有权重写的功能不因主文件缩短就被视为已解耦。
+工作台按能力组织状态：标签页与布局、文件树、SCM、文档编辑、连接和终端各有所有者。`LyrelApp` 负责视图组合、跨能力导航和焦点交接；共享领域模型、Host、daemon 与 IPC 位于无 GUI 的 `lyrel-core`。源码入口与职责表见[模块与状态归属](/reference/architecture#state-ownership)。
 
 ### 工作台组合与延迟窗格
 
-`LyrelApp` 保留同一个窗口 Entity。私有 `app/initialization.rs` 组合已有能力所有者、恢复入口、订阅和窗口释放钩子，
-不会将构造期的上下文保存在另一个管理器中；`app/composition.rs` 是窗口与工作区视图的组合适配，
-继续只挂载一次 `WindowChrome`、终端、文档、右侧面板、状态栏和窗口浮层。
-`app/actions.rs` 按工作区、窗格、导航、文档、会话与应用命令绑定 Action，调用既有语义入口，
-不另设命令总线，也不拥有文件树、SCM 或连接策略。设置仍通过原 `settings_bridge` 应用。
-
-`app/pane_binding.rs` 把 shell、新建原生 SSH 和 attach-only 请求绑定到已有 `PendingPane`：
-同步返回的是已放置的 connecting slot，不是 shell 创建成功；真实失败、重试、取消、创建代次与资源释放仍由
-`pending_pane/creation.rs` 拥有。没有可执行的同步失败或同步 Ready 恢复分支，也不保留旧工厂的转发别名。
-`SessionRestore` 与树同步、sidecar 消费者使用同一个绑定入口，attach-only 失败不能生成替代 shell。
-
-创建请求捕获工作区与 slot Entity 身份。`PendingPane::take_installation` 在领取结果前同时核对原工作区和仍存在的 slot，
-关闭、替换或切换工作区后不能把晚到结果投递到邻近窗格。分屏仍由 `Tab::prepare_split` 捕获 tab／pane 目标；
-`TabSet` 与 `Tab` 继续拥有放置、呈现映射与焦点记忆，`SessionLifecycle` 继续拥有会话记录与离开规则。
-根只在合法安装之后绑定终端事件、执行该窗格的启动请求、保存会话，并在原 slot 仍持有焦点时交接给新终端；
-后台 landing 不能选中自己的标签页或夺走搜索、设置及其他内容的焦点。
-
-终端构造本身会设置焦点，因此安装适配在原 slot 未持有焦点时保存并恢复此前的焦点；此前没有焦点则保持未聚焦。
-这样既允许后台结果安装，又不打断仍打开的搜索；原 pending 仍持有焦点时，根继续把焦点交给安装后的终端。
-
-上述 interface 和测试入口不是运行通过声明。验收需在隔离原生窗口执行打开、分屏、切换、关闭重开与延迟创建，
-记录真实 pane／shell 身份、附着状态、焦点与晚到结果去向；自动化、Windows、macOS 和真实 SSH 的证据分别记录。
-
-
+窗格先显示 connecting slot，再异步创建或附着会话。结果必须仍属于原工作区和原 slot；关闭、替换或离开后，晚到结果不能落入其他窗格。后台完成不抢走当前焦点，attach-only 失败也不会启动替代 shell，详见[创建、重连与结果失效](/reference/architecture#async-lifecycle)。
 
 <Warning>
   重启服务器会结束该机器上所有窗格中的所有进程，包括 shell、智能体和 SSH 会话。布局会保留，并在恢复时启动新的 shell。未经询问，切勿代他人执行此操作。
@@ -255,10 +136,10 @@ macOS 原生验收延期到 [#166 专门性能后续工单](https://github.com/d
 |---|:--:|:--:|:--:|:--:|
 | shell 继续运行 | ✗ | ✓ | ✗ | ✗ |
 | 布局恢复 | ✗ | ✓ | ✓ | ✓ |
-| 屏幕上原有的内容恢复 | ✗ | ✓ | ✓ | ✓ <sup>1</sup> |
+| 文字历史可恢复 <sup>1</sup> | ✗ | ✓ | ✓ | ✓ |
 | 受支持的智能体会话恢复 | ✗ | ✓ | ✓ | ✓ |
 
-<sub><sup>1</sup> 每个窗格末尾的一段内容会按容量上限保存，并恢复一次。参见[会话恢复](/reference/troubleshooting#panes-came-back-empty)。</sub>
+<sub><sup>1</sup> 存活 daemon 可回放仍保留的历史；daemon 停止后，只能恢复已落盘的有界文字后缀，且当前 GUI 仅向本地 daemon 请求这类恢复。图片不落盘，不能据此保证重启后恢复。参见[会话恢复](/reference/troubleshooting#panes-came-back-empty)。</sub>
 
 ### 终端内联图片
 
@@ -889,13 +770,7 @@ lyrel -m devbox ls
 
 ### 机器树的事务与恢复
 
-daemon 是机器树的持久化权威，`lyrel-core::core::machine` 是 GUI、CLI 和 server 共用的 canonical interface。内部 `model` 与 `layout` 保存机器／工作区／标签页／窗格的领域定义和纯布局操作，`operations` 负责无副作用的校验与记录整理；`store` 中的 `MachineStore` 仍是唯一事务 interface，工作区、标签页、窗格、sidecar 与事实观察都不能绕过它另建 feature store。
-
-结构变更沿用 `notify_order` → `state` 的加锁顺序：在状态锁内完成修改和同步持久化，失败先回滚，再返回错误；只有成功接受后才释放状态锁并按原顺序通知订阅者，通知期间仍持有顺序锁。订阅列表只在复制回调时加锁，回调运行时不持有状态锁或订阅锁，发起操作的订阅者仍不接收自己的 delta。窗格事实和工作区活跃时间保留原有延迟写盘策略，由同一个 store 的弱引用定时线程刷新；它们不被改成异步发布，也不承诺每次通知前已经落盘。连接 attachment 仍只存在于内存，不随机器树写盘。
-
-`persistence` 负责现有 `machine.json` 格式、原子私有写入、三代间隔备份、损坏文件隔离与恢复；store 负责决定何时写入以及失败后的回滚／重试标记。有效主文件优先，损坏或不可读取时沿用现有备份恢复规则，不重建已有工作区／标签页／窗格 ID；启动读回的窗格等待原有复活流程。`paths` 负责 `LYREL_DATA_DIR` 优先于实例配置目录的解析及 daemon 启动时的既有旧目录接管规则，路径查询本身不移动数据。`appearance` 单独保存 GUI 最后应用的明暗提示，保持缺失／损坏时采用浅色默认值和未变化时不写盘的语义，不取得机器树写入权。
-
-窗口侧 `MachineMirrors` 仍独立维护客户端镜像：拉取期间的本地操作按原规则重放到返回的快照之上，避免旧快照撤销新操作。它不与 daemon store 合并，也不接管事务、持久化或恢复。
+daemon 的 `MachineStore` 是机器树的事务与持久化权威，窗口中的 `MachineMirrors` 只是客户端镜像。拉取期间发生的本地写入会重放到返回的快照上，避免旧快照撤销新操作；镜像不会替代 daemon 的事务或恢复，详见[状态归属](/reference/architecture#state-ownership)与[持久化和恢复](/reference/architecture#persistence)。
 
 <a id="the-three-environment-variables"></a>
 ## 三个环境变量
