@@ -12,7 +12,7 @@ description: "lyrel 向 shell 中注入了什么，以及它带来的功能。"
 
 | Shell | 注入方式 |
 |---|---|
-| **zsh** | 使用临时 `ZDOTDIR`，其中的文件先加载你的文件，再加载 lyrel 的文件。你的 `LYREL_USER_ZDOTDIR` 会被保留。 |
+| **zsh** | 使用临时 `ZDOTDIR`，其中的文件先加载你的文件，再加载 lyrel 的文件。继承的 `ZDOTDIR`、配置 `env.ZDOTDIR` 和 `.zshenv` 设置的目录均保留为用户配置目录；启动期间继续使用集成重定向器，首个提示符前恢复用户目录。 |
 | **bash** | 使用一个先加载你自己的配置文件的 rcfile。 |
 | **fish** | 使用 `-C` 初始化命令。 |
 | **PowerShell** | 使用经过编码的初始化命令，包装现有的 `prompt` 函数和 PSReadLine 的行读取器。 |

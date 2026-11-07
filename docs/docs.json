@@ -104,6 +104,7 @@
           {
             "group": "参考",
             "pages": [
+              "reference/architecture",
               "reference/configuration",
               "reference/keyboard-shortcuts",
               "reference/shell-integration",

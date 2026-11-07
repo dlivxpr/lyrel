@@ -32,12 +32,15 @@ impl TerminalView {
 
     pub(super) fn follow_history_scope(&mut self, cx: &mut Context<Self>) {
         let scope = self.desired_history_scope();
-        let Some(load) = self
+        let load = self
             .history
-            .change_scope(scope, self.host_id, self.history_prompt())
-        else {
+            .change_scope(scope, self.host_id, self.history_prompt());
+        self.follow_pane_history_seed(cx);
+        let Some(load) = load else {
+            self.follow_native_history_seed(cx);
             return;
         };
+        self.native_history_seed_pending = false;
         cx.notify();
         let shell_files = self.remote_shell_history_sources(cx);
         let loading = load.scope().clone();
@@ -58,8 +61,99 @@ impl TerminalView {
                 .await;
             this.update(cx, |view, cx| {
                 if view.history.accept_load(load, view.host_id, loaded) {
+                    view.native_history_seed_pending =
+                        view.remote_context().is_some_and(|context| {
+                            context.kind == crate::daemon::protocol::RemoteKind::NativeSsh
+                        });
+                    view.follow_native_history_seed(cx);
                     cx.notify();
                 }
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    fn follow_native_history_seed(&mut self, cx: &mut Context<Self>) {
+        if !self.native_history_seed_pending
+            || !matches!(
+                self.ssh_phase(),
+                Some(crate::daemon::protocol::SshPhase::Connected)
+            )
+        {
+            return;
+        }
+        self.native_history_seed_pending = false;
+        let load = self.history.seed_load();
+        let route = crate::ui::sftp::SftpRoute::new(self.pane_id, self.workspace.clone());
+        cx.spawn(async move |this, cx| {
+            let seed = cx
+                .background_spawn(async move { native_shell_history_seed(&route) })
+                .await;
+            this.update(cx, |view, cx| {
+                if view.history.accept_seed(load, view.host_id, seed) {
+                    cx.notify();
+                }
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    fn follow_pane_history_seed(&mut self, cx: &mut Context<Self>) {
+        let owner = (self.host_id, self.pane_id);
+        if !cx.global::<Config>().per_pane_history
+            || !self.host_id.is_local()
+            || self.remote_context().is_some()
+            || !self.history.scope().is_local()
+            || !self.terminal.at_prompt()
+            || self.pane_history_seed == Some(owner)
+        {
+            return;
+        }
+        let Some(path) = crate::daemon::history::path_for(self.pane_id) else {
+            return;
+        };
+        let Some(host) = self.host(cx) else {
+            return;
+        };
+        // The shell finished the seed before reporting this prompt. Read only
+        // its private file, never another pane or the mutable .origin path.
+        let program = self.pane_shell_program(cx);
+        let name = match program
+            .as_deref()
+            .and_then(|program| std::path::Path::new(program).file_stem()?.to_str())
+        {
+            Some("zsh") => ".zsh_history",
+            Some("bash") => ".bash_history",
+            _ => "pane-history",
+        };
+        let load = self.history.seed_load();
+        self.pane_history_seed = Some(owner);
+        cx.spawn(async move |this, cx| {
+            let seed = cx
+                .background_spawn(async move {
+                    host.read_file(&path, MAX_HISTORY_BYTES)
+                        .ok()
+                        .map(|bytes| crate::terminal::history::from_shell_file(name, &bytes))
+                })
+                .await;
+            this.update(cx, |view, cx| {
+                if view.pane_history_seed != Some(owner) {
+                    return;
+                }
+                if (view.host_id, view.pane_id) != owner {
+                    view.pane_history_seed = None;
+                    return;
+                }
+                let Some(seed) = seed else { return };
+                if view.remote_context().is_some()
+                    || !view.history.accept_seed(load, view.host_id, seed)
+                {
+                    view.pane_history_seed = None;
+                    return;
+                }
+                cx.notify();
             })
             .ok();
         })
@@ -230,6 +324,32 @@ impl TerminalView {
                 .children(footer(hidden_below, format!("↓ {hidden_below} more"))),
         )
     }
+}
+
+// 0ef08cf: a native shell channel owns its SSH/SFTP connection even while
+// its desktop HostId is local. Never substitute the workspace Host here.
+fn native_shell_history_seed(
+    route: &crate::ui::sftp::SftpRoute,
+) -> crate::terminal::history::History {
+    use crate::daemon::protocol::{SftpOp, SftpOpResult};
+    let home = match route.op(SftpOp::Realpath { path: ".".into() }) {
+        SftpOpResult::Link(home) => home,
+        _ => return crate::terminal::history::History::default(),
+    };
+    let mut seed = crate::terminal::history::History::default();
+    for relative in crate::terminal::history::shell_history_names() {
+        let path = crate::daemon::ssh::sftp::remote_join(&home, relative);
+        if let SftpOpResult::File { bytes, .. } = route.op(SftpOp::ReadFile {
+            path,
+            max_bytes: MAX_HISTORY_BYTES,
+        }) {
+            seed.prepend_seed(crate::terminal::history::from_shell_file(
+                &crate::daemon::ssh::sftp::remote_basename(relative),
+                &bytes,
+            ));
+        }
+    }
+    seed
 }
 
 #[cfg(test)]

@@ -167,10 +167,14 @@ CLI 的参数与别名由 `crates/lyrel-cli/src/cli.rs` 定义；
 ```bash
 cargo test --locked -p lyrel-cli --bin lyrel
 cargo test --locked -p lyrel-cli --test cli_e2e
+cargo test --locked -p lyrel-cli --test cli_e2e -- --nocapture
+cargo test --locked -p lyrel-cli --test cli_e2e -- --nocapture ls_on_an_empty_server
 ```
 
 E2E 覆盖创建工作区／窗格、send/capture、run 流式输出与退出码、exec 输出与退出码、
-服务器与配置路由、事件流和 worktree。runner 不是 libtest，不支持按测试名筛选。
+服务器与配置路由、事件流和 worktree。runner 不是 libtest：输出直接写入终端，接受 CI 的
+`--nocapture` 但不把它当作用例名；首个其余参数仍按名称子串筛选，可放在该选项前后。
+每个选中场景仍启动独立 daemon，用例失败时 runner 返回非零退出码。
 其中 exec、stdin／粘贴和 POSIX worktree 场景保留现有 Windows 提前返回约束；
 Windows 的 runner 成功不能证明这些场景已执行，需另在具备 shell integration 与 Git 的 Unix 环境运行。
 合并后还应使用独立配置启动编译后的 CLI／daemon，记录 create/send/capture 的实际输出，

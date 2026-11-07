@@ -4,7 +4,7 @@ use crate::core::actions::*;
 use crate::core::config::{Config, KeybindingOverride};
 use crate::terminal::view::{
     AlternatePaste, ClearScrollback, CopyText, FindInTerminal, FindNext, FindPrevious,
-    InsertNewline, InsertNewlineFallback, PasteText, ToggleComposer,
+    InsertNewline, InsertNewlineFallback, PasteText, RunReverseSearchSelection, ToggleComposer,
 };
 use crate::ui::i18n::{L10nKey, t, t_fmt};
 use crate::ui::palette;
@@ -80,6 +80,16 @@ fn fixed_bindings(cx: &App) -> Vec<KeyBinding> {
         KeyBinding::new("tab", SendTab, Some("Terminal")),
         KeyBinding::new("shift-tab", SendBackTab, Some("Terminal")),
     ];
+    // Actions dispatch before key listeners: the open history menu must win
+    // over macOS's window-wide Cmd+Enter fullscreen binding, only here.
+    if cx.platform_info().os == gpui_kit::OperatingSystem::Mac {
+        bindings.push(load_binding(
+            "cmd-enter",
+            RunReverseSearchSelection,
+            Some("Terminal && reverse_search"),
+            cx,
+        ));
+    }
     bindings.extend(crate::ui::code_editor::markdown::table_bindings(cx));
     // The switcher's footer tells you Tab is the way across to the tab column
     // once a query is in the box. gpui-component's Root binds `tab` to its
@@ -461,7 +471,7 @@ fn shipped_bindings() -> Vec<(&'static str, &'static str)> {
         // shipping unbound: the palette and the Keybindings page both carry
         // this, so a key is one line of config away.
         ("NewWindow", per_platform("secondary-n", "")),
-        ("CloseWindow", ""),
+        ("CloseWindow", per_platform("secondary-shift-w", "")),
         (
             "CloseActiveTab",
             per_platform("secondary-w", "secondary-shift-w"),
@@ -484,6 +494,7 @@ fn shipped_bindings() -> Vec<(&'static str, &'static str)> {
         // Linux terminal and in this prompt editor's Ctrl+A family, so it ships
         // unbound there rather than on a chord nobody would guess.
         ("NewAgentTab", per_platform("secondary-shift-a", "")),
+        ("FocusNextAgentNeedingAttention", "secondary-shift-u"),
         ("StopWorkspace", ""),
         ("DeleteWorkspace", ""),
         ("RenameWorkspace", ""),
@@ -1229,6 +1240,10 @@ fn authored_entry(action: &str) -> Option<(CommandGroup, String)> {
             t(L10nKey::CmdCopySessionId).to_string(),
         ),
         "NewAgentTab" => (CommandGroup::Agents, t(L10nKey::CmdNewAgentTab).to_string()),
+        "FocusNextAgentNeedingAttention" => (
+            CommandGroup::Agents,
+            t(L10nKey::CmdNextAgentNeedingAttention).to_string(),
+        ),
         "TogglePalette" => (
             CommandGroup::Application,
             t(L10nKey::AppMenuSearchEverywhere).to_string(),
@@ -1821,6 +1836,9 @@ fn make_binding(action: &str, keystroke: &str, cx: &App) -> Option<KeyBinding> {
         "ForkAgentSessionUp" => load_binding(keystroke, ForkAgentSessionUp, None, cx),
         "CopyAgentSessionId" => load_binding(keystroke, CopyAgentSessionId, None, cx),
         "NewAgentTab" => load_binding(keystroke, NewAgentTab, None, cx),
+        "FocusNextAgentNeedingAttention" => {
+            load_binding(keystroke, FocusNextAgentNeedingAttention, None, cx)
+        }
         "SplitRight" => load_binding(keystroke, SplitRight, None, cx),
         "SplitDown" => load_binding(keystroke, SplitDown, None, cx),
         "MovePaneToTab" => load_binding(keystroke, MovePaneToTab, None, cx),

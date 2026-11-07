@@ -18,7 +18,7 @@ SSH 窗格在远程机器上运行一个 shell。**远程工作区**则更进一
 从本地切到远端、从远端切回本地或切换两台远端机器时，旧主机的数字不会挂在新主机名称下。
 同一工作区内切标签页、聚焦 PiP 或终端窗格不会改变测量对象。多窗口访问同一主机共享采样，离开其最后一个终端工作流后停止轮询。
 
-指标使用 `host-metrics-v1` capability 和现有 control v16 消息；pane 协议仍为 v7。
+指标使用 `host-metrics-v1` capability 和 control v16 消息；当前 pane 协议独立演进为 v17，指标不要求改变 pane 协议。协议分工见[项目架构](/reference/architecture#ipc)。
 重连会重新核对服务器 instance，拒绝旧连接迟到的结果。缺少 capability 时保留正常控制连接，只将指标标为不可用。
 
 
@@ -99,7 +99,7 @@ owner 和目标 slot，通过弱窗口租约启动原 pending 流程；结果领
 
 Linux 二进制文件完全静态链接 musl，因此无论 glibc 版本新旧，都能在任何发行版上运行。macOS 二进制文件只链接每台 Mac 都已具备的库。无论哪种情况，都不会额外安装其他内容。
 
-二进制文件按其使用的通信协议版本命名，因此客户端和服务器协议不一致时，不会悄悄进入只能部分工作的状态——lyrel 会改为安装匹配的版本。应用版本以当前发布资产为准，不重置 IPC 协议；整机指标与共享窗格呈现使用 control v16，当前文件名为 `lyrel-server-c16p7`，Windows 加 `.exe`。stdio 连接使用该程序的 `--stdio` 入口；pane 连接沿用既有 `--pane` 参数。
+二进制文件按其使用的通信协议版本命名；客户端与服务器不匹配时，lyrel 安装匹配版本，不进入部分可用的状态。应用版本不重置 IPC 协议；当前 control 为 v16、pane 为 v17，文件名为 `lyrel-server-c16p17`，Windows 加 `.exe`。control 连接使用 `--stdio`，pane 连接使用 `--stdio --pane`，两者桥接到负责会话的 daemon。
 
 SSH 优先查找客户端旁的包内程序：`server/`、客户端目录本身，以及 macOS 的 `Resources/server/`；没有匹配资产时才从 `https://github.com/dlivxpr/lyrel/releases/download/v<version>/` 下载。Linux 资产是 `lyrel-server-linux-x86_64-musl` 或 `lyrel-server-linux-aarch64-musl`，macOS 是 `lyrel-server-macos-aarch64`（仅 Apple 芯片），Windows 是 `lyrel-server-windows-x86_64.zip`（仅 x64 主机；ARM64 主机会被拒绝）。下载必须通过同一 release 的 `checksums.txt` SHA-256 校验；缺 release、匹配包、校验和或校验失败都会终止安装，不猜选其他平台资产，也不回退上游。上传后的临时程序还必须报告匹配的 control／pane 协议，才能发布到最终路径并启动。
 
@@ -108,6 +108,9 @@ Windows ZIP 的扁平内容固定为 `lyrel-server.exe`、`conpty.dll`、`OpenCo
 在 Windows 上，WSL 仅使用随客户端提供的 Linux 服务器，不会因缺包转向网络下载。可通过 `LYREL_BUNDLED_SERVER_DIR` 指定本机服务器资产目录，文件名必须与上述平台资产完全一致；WSL 缺少匹配文件会报告 `MissingBundled` 及搜索位置，其他产品的 server 文件不能替代。
 
 Windows OpenSSH 的探测、上传和启动使用 Windows 路径及 PowerShell 适配，不要求 POSIX 工具；SFTP 与登录 shell 必须看见同一个文件系统。若 OpenSSH 的 `DefaultShell` 运行 WSL 而 SFTP 指向 Windows，安装会拒绝这种混合布局并说明原因。
+
+Unix SSH 主机的登录 shell 可以是 fish。安装器将启动、运行中 daemon 探测及停止脚本交给 `sh`，路径中的单引号和反斜杠会跨登录 shell 与内层脚本保留；不修改用户的登录 shell 或启动配置。重启只选择带独立 `--daemon` 参数的 lyrel server，跳过同一程序的 `--stdio`／pane bridge，并停止旧协议方言遗留的 daemon。若登录 shell 直接拒绝启动命令，错误会立即保留远端退出状态与 shell stderr，不再等候一个尚未启动的 daemon 超时；已启动进程自身的失败仍使用既有启动日志诊断。
+无 `/proc` 主机通过 `ps` 识别独立的 `--daemon` 参数，不要求该参数紧跟可执行文件；例如 `lyrel-server-c16p17 --config-dir <默认配置目录> --daemon` 仍可发现并停止。`--daemonish` 或路径中的同名片段不算 daemon 参数。
 
 Windows 后台 server 仍由 WMI 脱离 SSH 会话启动：在目标主机的 PATH 中发现 PowerShell 7 或更新版本时，使用其绝对路径运行 supervisor；未发现时使用系统 Windows PowerShell 5.1，不额外安装运行时。WMI 创建的隐藏 `cmd.exe` 仅调用这个已选解释器，保留启动日志、退出码和原会话环境；选定后的启动失败明确报错，不静默重试其他解释器或修改系统安全策略。
 
@@ -119,6 +122,9 @@ lyrel 使用独立的配置、凭据、会话、启动日志、临时文件及�
 远程工作区让持久化的价值加倍：无论笔记本电脑是否处于唤醒状态，窗格都会在远程机器上继续运行，而且你还可以从另一台客户端重新连接。
 
 窗口顶部的状态条会显示连接当前的状态——*正在连接*、*正在重新连接（第 3 次尝试）*、*已断开连接*或*已被其他人接管*。重新连接会自动进行；如果工作区已被另一台客户端接管，界面会明确显示接管者的名称，而不是争抢控制权。
+
+自动重连只在工作区无人持有时重新取得控制；此前窗口仍打开不代表可以夺回其他客户端正在使用的工作区。
+要主动取得控制，请使用 **Take Back**。明确断开机器后再次连接、或关闭工作区窗口后重新打开，仍属于用户发起的取得控制操作。
 
 ### 布局同步的职责
 
