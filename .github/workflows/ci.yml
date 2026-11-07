@@ -93,7 +93,7 @@ jobs:
     # Backstop under the per-step timeouts below. Without any timeout at all a
     # hung test runs to GitHub's six-hour job limit, which is how a 90-second
     # step turned into a six-hour one three times in a day.
-    timeout-minutes: 60
+    timeout-minutes: 90
     steps:
       - name: Checkout lyrel
         uses: actions/checkout@v7
@@ -183,10 +183,11 @@ jobs:
       # 测试 feature 会重编译 GPUI 和测试目标，普通 build 不能预热这部分。
       # main CI 41987369719 在测试步骤内编译耗时 7m21s，挤占了原本用于
       # 执行的 20 分钟；超时前测试仍持续完成，没有失败断言。
-      # 分离编译与执行，不跳过用例，也不放宽卡死保护。
+      # 分离编译与执行；冷缓存测试编译与普通 build 同给 30 分钟，
+      # 实际测试仍保留 20 分钟卡死保护，不跳过用例。
       - name: Compile desktop and headless tests
         if: runner.os != 'Linux'
-        timeout-minutes: 20
+        timeout-minutes: 30
         run: cargo test --locked --features updater --target ${{ matrix.target }} --no-run
       - name: Test desktop and headless
         if: runner.os != 'Linux'
