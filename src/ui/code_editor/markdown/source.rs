@@ -208,7 +208,11 @@ impl SourcePresentation {
                 this.cancel_reorder(cx);
                 this.spelling.invalidate();
                 this.pointer_link = None;
-                this.rebase_link_destination(transaction);
+                Self::rebase_link_destination(
+                    &mut this.link_destination,
+                    this.state.id,
+                    transaction,
+                );
                 this.rebase_formula(transaction, cx);
                 this.folds.rebase(transaction);
                 this.state.rebase(transaction);
@@ -1192,7 +1196,10 @@ impl SourcePresentation {
             self.goal_x = None;
         }
         self.input_generation = self.input_generation.wrapping_add(1);
-        if matches!(command, Command::Undo | Command::Redo | Command::Reload { .. }) {
+        if matches!(
+            command,
+            Command::Undo | Command::Redo | Command::Reload { .. }
+        ) {
             self.link_destination = None;
         }
         // A late unmark/blur from an idle presentation must not finish a
@@ -1415,7 +1422,7 @@ impl SourcePresentation {
         let changed = self.document.update(cx, |document, cx| {
             let revision = document.revision();
             let transaction = document.command(&mut self.state, command);
-            self.rebase_link_destination(&transaction);
+            Self::rebase_link_destination(&mut self.link_destination, self.state.id, &transaction);
             document.composition_owner = self.state.composition.as_ref().map(|_| own_view);
             let changed = document.revision() != revision;
             if changed {

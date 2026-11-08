@@ -258,6 +258,8 @@ GitHub 上的 Markdown 来自陌生人，因此渲染时有两项限制：只加
 
 本轮隔离 Windows 实窗已在默认即时编辑中追加中文与 emoji，经正常保存、源码／即时编辑切换、关闭和文件树重开，独立核对完整文件恰为原始 353 字节追加指定的 25 字节，BOM 与其余原始字节不变。此证据来自集中集成期间的临时 Debug 二进制，不替代最终合并二进制复验、真实系统 IME、SSH 编辑或性能结论。二进制 SHA-256 与操作证据位于仓库外 `native-core-1794151628130/native-local-core-smoke.json`。
 
+后续无探针 Debug 实窗已通过生产 Copy 检查 Windows 原始 `UnicodeText` 与 `HTML Format`；纯文本与所选源码的原始混合行尾相符，HTML 在新建 Word 文档中实际呈现标题、粗斜体、列表、代码正文、公式及链接文字。另在自有 Notepad 文件中粘贴并保存，完整正文与 Markdown 一致；Notepad 自身统一为 CRLF，不把其保存结果误报为混合行尾逐字节相同。该批证据为仓库外 `native-core-current-17941601/native-clipboard-formats.json`、`native-word-rich-paste.json` 与 `native-notepad-plain-paste.json`，不是最终 Release、系统 IME 或全量对象组合通过。
+
 正式 registry 当前的 `gpui-kit`／`gpui-base 0.9.0` 尚无正文任意 range foreground 与 soft-wrap 双 affinity 的公开接口：#209 的任意文字颜色呈现、#225 跨 soft-wrap 续行首 grapheme 的完整拼写波浪线仍未满足。不能以背景着色、重新绘字、私有 renderer 或 Git/path 补丁冒充完成；上游 `main` 上的未发布接口也不等于当前正式依赖已经可用。此缺口保留开放，其余已合入代码须按各自核心工作流实测，不据此宣布完整对齐。
 
 当前 RTL 表格核心消费者仍未通过：即使使用平台文字系统，第二列起点按 `Right` 仍停在同一列，不能把列顺序镜像当作完整的双向文字命中／导航能力。正式 `gpui-fast 0.1.13` 的 Windows glyph 回调不使用 DirectWrite 的 bidi 层级或 baseline origin，公开逐字节几何也不表达双 affinity；这条依赖边界仍需解决，不以改掉方向键断言或复制第三方 renderer 取得绿灯。`gpui-kit`／`gpui-base` 最新正式版本仍为 `0.9.0`，不能把未发布的上游接口当作已可用。

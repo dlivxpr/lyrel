@@ -47,22 +47,27 @@ impl SourcePresentation {
             .map(|source| source.range.clone())
     }
 
-    pub(super) fn rebase_link_destination(&mut self, transaction: &Transaction) {
-        let Some(source) = self.link_destination.as_mut() else {
+    pub(super) fn rebase_link_destination(
+        destination: &mut Option<Destination>,
+        owner: u64,
+        transaction: &Transaction,
+    ) {
+        let Some(source) = destination.as_mut() else {
             return;
         };
         if transaction.revision() <= source.revision {
             return; // This command or a newer one already applied the transaction.
         }
-        if transaction.origin != self.state.id
-            || source.revision.wrapping_add(transaction.edits.len() as u64) != transaction.revision()
+        if transaction.origin != owner
+            || source.revision.wrapping_add(transaction.edits.len() as u64)
+                != transaction.revision()
         {
-            self.link_destination = None;
+            *destination = None;
             return;
         }
         for edit in &transaction.edits {
             if edit.range.start < source.range.start || edit.range.end > source.range.end {
-                self.link_destination = None;
+                *destination = None;
                 return;
             }
             source.range.end = source.range.end - edit.range.len() + edit.inserted_len;
@@ -71,7 +76,11 @@ impl SourcePresentation {
         source.revision = transaction.revision();
     }
 
-    pub(super) fn exit_link_destination(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
+    pub(super) fn exit_link_destination(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
         let Some(source) = self.link_destination.take() else {
             return false;
         };
@@ -92,7 +101,10 @@ impl SourcePresentation {
         else {
             return;
         };
-        let return_to = self.link_destination.as_ref().map_or(self.state.selection, |source| source.return_to);
+        let return_to = self
+            .link_destination
+            .as_ref()
+            .map_or(self.state.selection, |source| source.return_to);
         self.link_destination = Some(Destination {
             revision: self.projection.revision,
             range: range.clone(),

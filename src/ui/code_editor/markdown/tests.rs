@@ -925,16 +925,27 @@ fn code_controls_preserve_fence_info_and_copy_only_body(cx: &mut gpui_kit::TestA
     view.read_with(&context, |view, cx| {
         assert_eq!(view.selection().range(), 0..normalized.len());
         assert_fences_hidden(view, cx, 0);
-        assert_eq!(view.document().read(cx).encode().unwrap(), original.as_bytes());
+        assert_eq!(
+            view.document().read(cx).encode().unwrap(),
+            original.as_bytes()
+        );
     });
     let after = normalized.find("after").unwrap() + 2;
     for (from, to) in [(2, after), (after, 2)] {
         context.update(|window, cx| {
-            let start = view.read(cx).range_to_bounds(&(from..from), cx).unwrap().center();
+            let start = view
+                .read(cx)
+                .range_to_bounds(&(from..from), cx)
+                .unwrap()
+                .center();
             window.pointer_down(start, gpui_kit::MouseButton::Left, cx);
             window.pointer_up(start, gpui_kit::MouseButton::Left, cx);
             window.change_modifiers(gpui_kit::Modifiers::shift(), cx);
-            let end = view.read(cx).range_to_bounds(&(to..to), cx).unwrap().center();
+            let end = view
+                .read(cx)
+                .range_to_bounds(&(to..to), cx)
+                .unwrap()
+                .center();
             window.pointer_down(end, gpui_kit::MouseButton::Left, cx);
             window.pointer_up(end, gpui_kit::MouseButton::Left, cx);
             window.change_modifiers(gpui_kit::Modifiers::none(), cx);
@@ -975,7 +986,10 @@ fn code_controls_preserve_fence_info_and_copy_only_body(cx: &mut gpui_kit::TestA
     settle_live_geometry(&view, &mut context);
     view.read_with(&context, |view, cx| {
         assert_fences_hidden(view, cx, 0);
-        assert_eq!(view.document().read(cx).encode().unwrap(), original.as_bytes());
+        assert_eq!(
+            view.document().read(cx).encode().unwrap(),
+            original.as_bytes()
+        );
     });
     view.update_in(&mut context, |view, window, cx| {
         view.select_range(body + 9..body + 9, cx);
@@ -1034,13 +1048,25 @@ fn code_controls_preserve_fence_info_and_copy_only_body(cx: &mut gpui_kit::TestA
                 .is_some()
         );
         assert!(view.read(cx).focus_handle(cx).is_focused(window));
-        let opening_start = view.read(cx).range_to_bounds(&(opening..opening), cx).unwrap();
-        let opening_end = view.read(cx).range_to_bounds(&(opening + 4..opening + 4), cx).unwrap();
+        let opening_start = view
+            .read(cx)
+            .range_to_bounds(&(opening..opening), cx)
+            .unwrap();
+        let opening_end = view
+            .read(cx)
+            .range_to_bounds(&(opening + 4..opening + 4), cx)
+            .unwrap();
         let body_start = view.read(cx).range_to_bounds(&(body..body), cx).unwrap();
         assert!(opening_end.left() > opening_start.left());
         assert!(body_start.top() > opening_start.top());
-        let closing_start = view.read(cx).range_to_bounds(&(closing..closing), cx).unwrap();
-        let closing_end = view.read(cx).range_to_bounds(&(closing + 4..closing + 4), cx).unwrap();
+        let closing_start = view
+            .read(cx)
+            .range_to_bounds(&(closing..closing), cx)
+            .unwrap();
+        let closing_end = view
+            .read(cx)
+            .range_to_bounds(&(closing + 4..closing + 4), cx)
+            .unwrap();
         assert!(closing_end.left() > closing_start.left());
     });
     let metadata_end = normalized.find("title=demo").unwrap() + "title=demo".len();
@@ -1052,12 +1078,18 @@ fn code_controls_preserve_fence_info_and_copy_only_body(cx: &mut gpui_kit::TestA
     let metadata_edited = original.replacen("title=demo", "title=demo2", 1);
     view.read_with(&context, |view, cx| {
         assert_eq!(view.document().entity_id(), identity);
-        assert_eq!(view.document().read(cx).encode().unwrap(), metadata_edited.as_bytes());
+        assert_eq!(
+            view.document().read(cx).encode().unwrap(),
+            metadata_edited.as_bytes()
+        );
     });
     context.update(|window, cx| {
-        let live = window.find_by_label(crate::ui::i18n::t(
-            crate::ui::i18n::L10nKey::MarkdownCodeLive,
-        )).bounds().center();
+        let live = window
+            .find_by_label(crate::ui::i18n::t(
+                crate::ui::i18n::L10nKey::MarkdownCodeLive,
+            ))
+            .bounds()
+            .center();
         window.pointer_down(live, gpui_kit::MouseButton::Left, cx);
         window.pointer_up(live, gpui_kit::MouseButton::Left, cx);
         assert!(view.read(cx).focus_handle(cx).is_focused(window));
@@ -1065,12 +1097,20 @@ fn code_controls_preserve_fence_info_and_copy_only_body(cx: &mut gpui_kit::TestA
     settle_live_geometry(&view, &mut context);
     view.read_with(&context, |view, cx| {
         assert_eq!(
-            view.range_to_bounds(&(opening..opening), cx).unwrap().origin,
-            view.range_to_bounds(&(body + 1..body + 1), cx).unwrap().origin
+            view.range_to_bounds(&(opening..opening), cx)
+                .unwrap()
+                .origin,
+            view.range_to_bounds(&(body + 1..body + 1), cx)
+                .unwrap()
+                .origin
         );
         assert_eq!(
-            view.range_to_bounds(&(closing + 1..closing + 1), cx).unwrap().origin,
-            view.range_to_bounds(&(closing + 5..closing + 5), cx).unwrap().origin
+            view.range_to_bounds(&(closing + 1..closing + 1), cx)
+                .unwrap()
+                .origin,
+            view.range_to_bounds(&(closing + 5..closing + 5), cx)
+                .unwrap()
+                .origin
         );
     });
     context.update(|window, cx| {
@@ -1083,15 +1123,23 @@ fn code_controls_preserve_fence_info_and_copy_only_body(cx: &mut gpui_kit::TestA
         window.pointer_up(source, gpui_kit::MouseButton::Left, cx);
         window.press("escape", cx);
         assert!(view.read(cx).focus_handle(cx).is_focused(window));
-        assert!(window.try_find_by_label(crate::ui::i18n::t(
-            crate::ui::i18n::L10nKey::MarkdownCodeLive,
-        )).is_none());
+        assert!(
+            window
+                .try_find_by_label(crate::ui::i18n::t(
+                    crate::ui::i18n::L10nKey::MarkdownCodeLive,
+                ))
+                .is_none()
+        );
     });
     settle_live_geometry(&view, &mut context);
     view.read_with(&context, |view, cx| {
         assert_eq!(
-            view.range_to_bounds(&(opening..opening), cx).unwrap().origin,
-            view.range_to_bounds(&(body + 1..body + 1), cx).unwrap().origin
+            view.range_to_bounds(&(opening..opening), cx)
+                .unwrap()
+                .origin,
+            view.range_to_bounds(&(body + 1..body + 1), cx)
+                .unwrap()
+                .origin
         );
     });
     // Local source edits participate in the same history as global Source and Live.
@@ -1101,7 +1149,10 @@ fn code_controls_preserve_fence_info_and_copy_only_body(cx: &mut gpui_kit::TestA
     view.read_with(&context, |view, cx| {
         assert!(!view.is_live());
         assert_eq!(view.document().entity_id(), identity);
-        assert_eq!(view.document().read(cx).encode().unwrap(), original.as_bytes());
+        assert_eq!(
+            view.document().read(cx).encode().unwrap(),
+            original.as_bytes()
+        );
     });
     context.dispatch_action(crate::core::actions::ToggleDocumentPreview);
     settle_live_geometry(&view, &mut context);
@@ -1117,7 +1168,10 @@ fn code_controls_preserve_fence_info_and_copy_only_body(cx: &mut gpui_kit::TestA
         )
     });
     settle_live_geometry(&view, &mut context);
-    let empty = metadata_edited.replace("\r\n", "\n").rfind("> ~~~").unwrap();
+    let empty = metadata_edited
+        .replace("\r\n", "\n")
+        .rfind("> ~~~")
+        .unwrap();
     view.update_in(&mut context, |view, window, cx| {
         view.select_range(empty..empty, cx);
         view.focus_handle(cx).focus(window, cx);

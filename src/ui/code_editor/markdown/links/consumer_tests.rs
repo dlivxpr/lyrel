@@ -5,7 +5,7 @@ fn ordinary_selections_keep_structure_and_link_syntax_zero_width(
     cx: &mut gpui_kit::TestAppContext,
 ) {
     use crate::ui::app::test_window::harness_with_tabs;
-    use gpui_kit::{Focusable as _, test::{TestEventExt as _, TestWindowExt as _}};
+    use gpui_kit::{Focusable as _, test::TestWindowExt as _};
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("selection.md");
     let original = "- [ ] task\n- item\n\n> quote\n\n[label](target.md) tail\n\n| left | right |\n| --- | --- |\n| body | value |\n";
@@ -18,7 +18,8 @@ fn ordinary_selections_keep_structure_and_link_syntax_zero_width(
     let view = loop {
         context.run_until_parked();
         if let Some(view) = app.read_with(&context, |app, _| {
-            app.active_editor_input().and_then(|input| input.markdown().cloned())
+            app.active_editor_input()
+                .and_then(|input| input.markdown().cloned())
         }) {
             start_in_source(&view, &mut context);
             break view;
@@ -31,11 +32,20 @@ fn ordinary_selections_keep_structure_and_link_syntax_zero_width(
     let destination = original.find("target.md").unwrap();
     let pairs = [
         (0, original.find("task").unwrap()),
-        (original.find("- item").unwrap(), original.find("item").unwrap()),
-        (original.find("> quote").unwrap(), original.find("quote").unwrap()),
+        (
+            original.find("- item").unwrap(),
+            original.find("item").unwrap(),
+        ),
+        (
+            original.find("> quote").unwrap(),
+            original.find("quote").unwrap(),
+        ),
         (label - 1, label),
         (label + 5, destination + "target.md)".len()),
-        (original.find("| left").unwrap(), original.find("left").unwrap()),
+        (
+            original.find("| left").unwrap(),
+            original.find("left").unwrap(),
+        ),
     ];
     for selection in [0, 1, 2, 3, 4] {
         view.update_in(&mut context, |view, window, cx| {
@@ -43,19 +53,37 @@ fn ordinary_selections_keep_structure_and_link_syntax_zero_width(
             view.focus_handle(cx).focus(window, cx);
         });
         match selection {
-            0 => context.update(|window, cx| window.press(if cfg!(target_os = "macos") { "cmd-a" } else { "ctrl-a" }, cx)),
-            1 => view.update_in(&mut context, |view, _, cx| view.select_range(original.len()..0, cx)),
+            0 => context.update(|window, cx| {
+                window.press(
+                    if cfg!(target_os = "macos") {
+                        "cmd-a"
+                    } else {
+                        "ctrl-a"
+                    },
+                    cx,
+                )
+            }),
+            1 => view.update_in(&mut context, |view, _, cx| {
+                view.select_range(original.len()..0, cx)
+            }),
             2 => view.update_in(&mut context, |view, _, cx| {
                 view.select_range(label..label + 5, cx);
                 view.add_selection(0..original.find("quote").unwrap() + 5, cx);
             }),
-            3 => view.update_in(&mut context, |view, _, cx| view.select_range(destination + 2..destination + 2, cx)),
+            3 => view.update_in(&mut context, |view, _, cx| {
+                view.select_range(destination + 2..destination + 2, cx)
+            }),
             _ => {
-                view.update_in(&mut context, |view, _, cx| view.select_range(label..label + 5, cx));
+                view.update_in(&mut context, |view, _, cx| {
+                    view.select_range(label..label + 5, cx)
+                });
                 context.update(|window, cx| {
                     use gpui_kit::test::TestInput;
                     let bounds = window.find("markdown-source").bounds();
-                    let mut input = TestInput::new(gpui_kit::ElementInputHandler::new(bounds, view.clone()), window);
+                    let mut input = TestInput::new(
+                        gpui_kit::ElementInputHandler::new(bounds, view.clone()),
+                        window,
+                    );
                     input.compose_text(None, "label", Some(5..5), cx);
                     assert!(input.marked_text_range(cx).is_some());
                 });
@@ -69,51 +97,109 @@ fn ordinary_selections_keep_structure_and_link_syntax_zero_width(
             for (hidden, visible) in pairs {
                 let hidden = view.range_to_bounds(&(hidden..hidden), cx).unwrap();
                 let visible = view.range_to_bounds(&(visible..visible), cx).unwrap();
-                assert_eq!(hidden, visible, "ordinary selection {selection} exposed syntax");
+                assert_eq!(
+                    hidden, visible,
+                    "ordinary selection {selection} exposed syntax"
+                );
             }
-            assert_eq!(view.document().read(cx).encode().unwrap(), original.as_bytes());
+            assert_eq!(
+                view.document().read(cx).encode().unwrap(),
+                original.as_bytes()
+            );
         });
         if selection == 4 {
             context.update(|window, cx| window.press("escape", cx));
             context.run_until_parked();
         }
     }
-    view.update_in(&mut context, |view, _, cx| view.select_range(label..label, cx));
-    edit_link_destination_when_ready(&view, &mut context, destination..destination + "target.md".len());
-    view.update_in(&mut context, |view, _, cx| view.select_range(label..label, cx));
+    view.update_in(&mut context, |view, _, cx| {
+        view.select_range(label..label, cx)
+    });
+    edit_link_destination_when_ready(
+        &view,
+        &mut context,
+        destination..destination + "target.md".len(),
+    );
+    view.update_in(&mut context, |view, _, cx| {
+        view.select_range(label..label, cx)
+    });
     settle_live_geometry(&view, &mut context);
     view.read_with(&context, |view, cx| {
-        assert_eq!(view.range_to_bounds(&(label + 5..label + 5), cx), view.range_to_bounds(&(destination + "target.md)".len()..destination + "target.md)".len()), cx));
+        assert_eq!(
+            view.range_to_bounds(&(label + 5..label + 5), cx),
+            view.range_to_bounds(
+                &(destination + "target.md)".len()..destination + "target.md)".len()),
+                cx
+            )
+        );
     });
-    edit_link_destination_when_ready(&view, &mut context, destination..destination + "target.md".len());
+    edit_link_destination_when_ready(
+        &view,
+        &mut context,
+        destination..destination + "target.md".len(),
+    );
     context.dispatch_action(crate::core::actions::ToggleDocumentPreview);
     context.dispatch_action(crate::core::actions::ToggleDocumentPreview);
     settle_live_geometry(&view, &mut context);
     view.read_with(&context, |view, cx| {
-        assert_eq!(view.range_to_bounds(&(label + 5..label + 5), cx), view.range_to_bounds(&(destination + "target.md)".len()..destination + "target.md)".len()), cx));
+        assert_eq!(
+            view.range_to_bounds(&(label + 5..label + 5), cx),
+            view.range_to_bounds(
+                &(destination + "target.md)".len()..destination + "target.md)".len()),
+                cx
+            )
+        );
     });
-    view.update_in(&mut context, |view, _, cx| view.select_range(label..label, cx));
-    edit_link_destination_when_ready(&view, &mut context, destination..destination + "target.md".len());
+    view.update_in(&mut context, |view, _, cx| {
+        view.select_range(label..label, cx)
+    });
+    edit_link_destination_when_ready(
+        &view,
+        &mut context,
+        destination..destination + "target.md".len(),
+    );
     context.update(|window, cx| window.input("changed.md", cx));
     settle_live_geometry(&view, &mut context);
     context.update(|window, cx| window.input("x", cx));
     settle_live_geometry(&view, &mut context);
     view.read_with(&context, |view, cx| {
-        let start = view.range_to_bounds(&(destination..destination), cx).unwrap();
-        let end = view.range_to_bounds(&(destination + "changed.mdx".len()..destination + "changed.mdx".len()), cx).unwrap();
-        assert!(end.left() > start.left(), "typing retains the explicit destination surface");
-        assert_eq!(view.document().read(cx).encode().unwrap(), original.replacen("target.md", "changed.mdx", 1).as_bytes());
+        let start = view
+            .range_to_bounds(&(destination..destination), cx)
+            .unwrap();
+        let end = view
+            .range_to_bounds(
+                &(destination + "changed.mdx".len()..destination + "changed.mdx".len()),
+                cx,
+            )
+            .unwrap();
+        assert!(
+            end.left() > start.left(),
+            "typing retains the explicit destination surface"
+        );
+        assert_eq!(
+            view.document().read(cx).encode().unwrap(),
+            original.replacen("target.md", "changed.mdx", 1).as_bytes()
+        );
     });
     context.update(|window, cx| window.press("escape", cx));
     settle_live_geometry(&view, &mut context);
     view.read_with(&context, |view, cx| {
         assert_eq!(view.selection(), Selection::caret(label));
-        assert_eq!(view.range_to_bounds(&(label + 5..label + 5), cx), view.range_to_bounds(&(destination + "changed.mdx)".len()..destination + "changed.mdx)".len()), cx));
+        assert_eq!(
+            view.range_to_bounds(&(label + 5..label + 5), cx),
+            view.range_to_bounds(
+                &(destination + "changed.mdx)".len()..destination + "changed.mdx)".len()),
+                cx
+            )
+        );
     });
     context.dispatch_action(gpui_kit::component::input::Undo);
     context.run_until_parked();
     view.read_with(&context, |view, cx| {
-        assert_ne!(view.document().read(cx).encode().unwrap(), original.replacen("target.md", "changed.mdx", 1).as_bytes());
+        assert_ne!(
+            view.document().read(cx).encode().unwrap(),
+            original.replacen("target.md", "changed.mdx", 1).as_bytes()
+        );
     });
     context.dispatch_action(crate::core::actions::ToggleDocumentPreview);
     context.dispatch_action(gpui_kit::component::input::Redo);
@@ -121,15 +207,27 @@ fn ordinary_selections_keep_structure_and_link_syntax_zero_width(
     settle_live_geometry(&view, &mut context);
     view.read_with(&context, |view, cx| {
         assert!(view.is_live());
-        assert_eq!(view.document().read(cx).encode().unwrap(), original.replacen("target.md", "changed.mdx", 1).as_bytes());
-        assert_eq!(view.range_to_bounds(&(label + 5..label + 5), cx), view.range_to_bounds(&(destination + "changed.mdx)".len()..destination + "changed.mdx)".len()), cx));
+        assert_eq!(
+            view.document().read(cx).encode().unwrap(),
+            original.replacen("target.md", "changed.mdx", 1).as_bytes()
+        );
+        assert_eq!(
+            view.range_to_bounds(&(label + 5..label + 5), cx),
+            view.range_to_bounds(
+                &(destination + "changed.mdx)".len()..destination + "changed.mdx)".len()),
+                cx
+            )
+        );
     });
     let edited = original.replacen("target.md", "changed.mdx", 1);
     context.dispatch_action(crate::core::actions::EditorSave);
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
     loop {
         context.run_until_parked();
-        if app.read_with(&context, |app, _| app.active_buffer().is_some_and(|file| !file.dirty && !file.saving)) {
+        if app.read_with(&context, |app, _| {
+            app.active_buffer()
+                .is_some_and(|file| !file.dirty && !file.saving)
+        }) {
             break;
         }
         assert!(std::time::Instant::now() < deadline);
@@ -143,7 +241,10 @@ fn ordinary_selections_keep_structure_and_link_syntax_zero_width(
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
     loop {
         context.run_until_parked();
-        if app.read_with(&context, |app, cx| app.active_editor_input().is_some_and(|input| input.read(cx).text().to_string() == edited)) {
+        if app.read_with(&context, |app, cx| {
+            app.active_editor_input()
+                .is_some_and(|input| input.read(cx).text().to_string() == edited)
+        }) {
             break;
         }
         assert!(std::time::Instant::now() < deadline);
@@ -358,9 +459,19 @@ fn links_selection_gestures_never_navigate_and_plain_click_edits(
     let destination = original.find("#heading").unwrap();
     settle_live_geometry(&view, &mut context);
     view.read_with(&context, |view, cx| {
-        let start = view.range_to_bounds(&(destination..destination), cx).unwrap();
-        let end = view.range_to_bounds(&(destination + "#heading".len()..destination + "#heading".len()), cx).unwrap();
-        assert!(end.left() > start.left(), "explicit menu destination must be visible");
+        let start = view
+            .range_to_bounds(&(destination..destination), cx)
+            .unwrap();
+        let end = view
+            .range_to_bounds(
+                &(destination + "#heading".len()..destination + "#heading".len()),
+                cx,
+            )
+            .unwrap();
+        assert!(
+            end.left() > start.left(),
+            "explicit menu destination must be visible"
+        );
     });
     context.update(|window, cx| {
         assert_eq!(

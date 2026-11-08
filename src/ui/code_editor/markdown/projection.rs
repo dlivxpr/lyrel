@@ -312,7 +312,8 @@ impl Leaf {
             // Ordinary selections and composition never expose structure or links.
             let revealed = !span.always_hidden
                 && source.is_some_and(|range| {
-                    span.source.start <= range.start && range.end <= span.source.end
+                    span.source.start <= range.start
+                        && range.end <= span.source.end
                         && (!range.is_empty()
                             || (span.source.start < range.start && range.end < span.source.end))
                 });
