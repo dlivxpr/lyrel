@@ -304,22 +304,18 @@ impl Leaf {
         selection: super::Selection,
         extra: &[super::Selection],
         marked: Option<&Range<usize>>,
+        source: Option<&Range<usize>>,
     ) -> bool {
         let mut changed = false;
         for span in &mut self.spans {
-            // Formatting is zero-width even while selected or composing.
-            // Structure prefixes and link syntax retain contextual source access.
+            // Only an explicit local-source command authorizes syntax display.
+            // Ordinary selections and composition never expose structure or links.
             let revealed = !span.always_hidden
-                && (std::iter::once(&selection).chain(extra).any(|selection| {
-                    let range = selection.range();
-                    if range.is_empty() {
-                        span.source.start < range.start && range.start < span.source.end
-                    } else {
-                        range.start < span.source.end && range.end > span.source.start
-                    }
-                }) || marked.is_some_and(|range| {
-                    range.start <= span.source.end && range.end >= span.source.start
-                }));
+                && source.is_some_and(|range| {
+                    span.source.start <= range.start && range.end <= span.source.end
+                        && (!range.is_empty()
+                            || (span.source.start < range.start && range.end < span.source.end))
+                });
             changed |= revealed != span.revealed;
             span.revealed = revealed;
         }
