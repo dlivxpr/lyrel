@@ -531,3 +531,165 @@ fn review_table_formula_session_remeasures_owning_row_before_source_commit(
     until(&mut context, |context| row_gap(context) <= before);
     assert_eq!(bytes(&view, &context), source.as_bytes());
 }
+
+#[gpui_kit::test]
+fn first_soft_wrapped_link_grapheme_hovers_edits_and_opens(cx: &mut gpui_kit::TestAppContext) {
+    use crate::ui::app::test_window::harness_with_tabs;
+    use gpui_kit::{
+        Focusable as _, Modifiers, MouseButton, TestAppContext, VisualContext as _, point, px, size,
+        test::{TestEventExt as _, TestWindowExt as _},
+    };
+    use std::time::{Duration, Instant};
+    use unicode_segmentation::UnicodeSegmentation as _;
+
+    let mut native_context = TestAppContext::build_with_text_system(
+        gpui_kit::TestDispatcher::new(0),
+        cx.test_function_name(),
+        gpui_kit::platform::current_platform(true).text_system(),
+    );
+    let cx = &mut native_context;
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("wrapped-link.md");
+    let target = directory.path().join("target.md");
+    let original = format!("[{}](target.md#ignored)\n\nkeep\n", "W ".repeat(100));
+    std::fs::write(&path, &original).unwrap();
+    std::fs::write(&target, "# Target title\n\nFirst paragraph\n").unwrap();
+    let (app, mut context, _streams) = harness_with_tabs(cx, 1);
+    app.update_in(&mut context, |app, window, cx| {
+        app.open_file_in_editor(&path, window, cx)
+    });
+    let deadline = Instant::now() + Duration::from_secs(15);
+    let view = loop {
+        context.run_until_parked();
+        if let Some(view) = app.read_with(&context, |app, _| {
+            app.active_editor_input()
+                .and_then(|input| input.markdown().cloned())
+        }) {
+            break view;
+        }
+        assert!(Instant::now() < deadline);
+        std::thread::sleep(Duration::from_millis(5));
+    };
+    view.update_in(&mut context, |view, window, cx| {
+        if !view.is_live() {
+            view.toggle_mode(window, cx);
+        }
+        view.set_soft_wrap(true, cx);
+        view.select_range(original.len()..original.len(), cx);
+        view.focus_handle(cx).focus(window, cx);
+    });
+    cx.simulate_window_resize(context.window_handle(), size(px(1000.), px(1800.)));
+    let deadline = Instant::now() + Duration::from_secs(15);
+    loop {
+        settle(&view, &mut context);
+        if view.read_with(&context, |view, cx| {
+            view.geometry_is_current(cx) && !view.projection.links.links.is_empty()
+        }) {
+            break;
+        }
+        assert!(Instant::now() < deadline, "link projection did not settle");
+    }
+    // Independently locate the real next-row leading W through native caret
+    // hit testing. Never derive the pointer from the link-region helper.
+    let (position, at) = view.read_with(&context, |view, cx| {
+        let link = &view.projection.links.links[0];
+        let leaf = view.projection.leaf_at(link.label.start).unwrap();
+        let geometry = &view.geometry.as_ref().unwrap().1[&leaf.id];
+        let reference = leaf.text.grapheme_indices(true)
+            .find_map(|(ix, text)| {
+                let a = geometry.position_for_index(ix);
+                let b = geometry.position_for_index(ix + text.len());
+                (text == "W" && a.y == b.y).then_some(b.x - a.x)
+            })
+            .unwrap();
+        let (ix, b) = leaf.text.grapheme_indices(true)
+            .find_map(|(ix, text)| {
+                let a = geometry.position_for_index(ix);
+                let b = geometry.position_for_index(ix + text.len());
+                (text == "W" && a.y != b.y).then_some((ix, b))
+            })
+            .expect("native link must exercise a whole-layout soft wrap");
+        let position = point(
+            geometry.bounds().left() + reference * 0.75,
+            b.y + geometry.caret_height() / 2.,
+        );
+        assert_eq!(geometry.index_for_position(position), ix + 1);
+        assert!(view.geometry_is_current(cx));
+        (position, leaf.source_offset(ix + 1))
+    });
+    context.update(|window, cx| window.pointer_move(position, None, cx));
+    context.update(|window, cx| window.pointer_move(position, None, cx));
+    context.run_until_parked();
+    context.executor().advance_clock(Duration::from_millis(400));
+    context.run_until_parked();
+    context.update(|window, cx| {
+        window.render_frame(cx);
+        assert!(window.try_find("markdown-link-preview").is_none());
+    });
+    let deadline = Instant::now() + Duration::from_secs(15);
+    loop {
+        context.executor().advance_clock(Duration::from_millis(100));
+        context.run_until_parked();
+        if context.update(|window, cx| {
+            window.render_frame(cx);
+            window.try_find("markdown-link-preview").is_some_and(|preview| {
+                preview.visible()
+                    && preview.label().is_some_and(|label| {
+                        label.contains("Target title") && label.contains("First paragraph")
+                    })
+            })
+        }) {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "first wrapped glyph did not open its preview"
+        );
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    context.update(|window, cx| {
+        window.pointer_down(position, MouseButton::Left, cx);
+        window.pointer_up(position, MouseButton::Left, cx);
+        assert_eq!(view.read(cx).selection(), Selection::caret(at));
+        window.input("X", cx);
+    });
+    settle(&view, &mut context);
+    view.read_with(&context, |view, cx| {
+        let mut edited = original.clone();
+        edited.insert(at, 'X');
+        assert_eq!(view.document().read(cx).encode().unwrap(), edited.as_bytes());
+    });
+    context.dispatch_action(gpui_kit::component::input::Undo);
+    settle(&view, &mut context);
+    context.dispatch_action(crate::core::actions::ToggleDocumentPreview);
+    context.dispatch_action(crate::core::actions::ToggleDocumentPreview);
+    settle(&view, &mut context);
+    view.read_with(&context, |view, cx| {
+        assert_eq!(view.document().read(cx).encode().unwrap(), original.as_bytes());
+    });
+    let modifiers = if cfg!(target_os = "macos") {
+        Modifiers {
+            platform: true,
+            ..Modifiers::none()
+        }
+    } else {
+        Modifiers::control()
+    };
+    context.simulate_mouse_down(position, MouseButton::Left, modifiers);
+    context.simulate_mouse_up(position, MouseButton::Left, modifiers);
+    let deadline = Instant::now() + Duration::from_secs(15);
+    loop {
+        context.run_until_parked();
+        if app.read_with(&context, |app, _| {
+            app.active_buffer().is_some_and(|buffer| buffer.path == target)
+        }) {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "modifier click did not open the owning LocalHost file"
+        );
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    assert_eq!(std::fs::read(&path).unwrap(), original.as_bytes());
+}

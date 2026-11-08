@@ -1,5 +1,46 @@
 use super::*;
 
+/// A grapheme's line box from the same geometry used to paint the text.
+/// Wrapped-start recovery is restricted to the left-aligned paragraph paths;
+/// table alignment and bidi paint origins need a richer upstream geometry API.
+pub(super) fn grapheme_line_box(
+    geometry: &LeafGeometry,
+    start: usize,
+    grapheme: &str,
+    recover_wrapped_start: bool,
+) -> Option<Bounds<Pixels>> {
+    if grapheme.contains(['\r', '\n']) {
+        return None;
+    }
+    let a = geometry.position_for_index(start);
+    let b = geometry.position_for_index(start + grapheme.len());
+    let (left, right, top) = if a.y == b.y {
+        (a.x.min(b.x), a.x.max(b.x), a.y)
+    } else {
+        if !recover_wrapped_start {
+            return None;
+        }
+        // Whole TextLayout resolves a shared wrap index to the previous row's
+        // end. Left-aligned rows all start at this actual paragraph origin,
+        // including list indentation and blockquote padding. InlineFlow instead
+        // resolves a fragment-end index to the next fragment: its next row's
+        // leading index is greater than `start`, so it must not be bridged.
+        let origin = geometry.position_for_index(0).x;
+        let next_start =
+            geometry.index_for_position(point(origin, b.y + geometry.caret_height() / 2.));
+        if next_start != start {
+            return None;
+        }
+        (origin, b.x, b.y)
+    };
+    (left < right).then(|| {
+        Bounds::new(
+            point(left, top),
+            size(right - left, geometry.caret_height()),
+        )
+    })
+}
+
 impl SourcePresentation {
     pub(super) fn geometry_is_current(&self, cx: &App) -> bool {
         self.geometry.as_ref().is_some_and(|(revision, _)| {

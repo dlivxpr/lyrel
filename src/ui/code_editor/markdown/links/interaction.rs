@@ -29,6 +29,56 @@ fn modifier(modifiers: Modifiers) -> bool {
         modifiers.control && !modifiers.platform && !modifiers.alt && !modifiers.shift
     }
 }
+
+fn link_grapheme_line_box(
+    geometry: &LeafGeometry,
+    start: usize,
+    grapheme: &str,
+    recover_wrapped_start: bool,
+) -> Option<Bounds<Pixels>> {
+    if let Some(bounds) = navigation::grapheme_line_box(
+        geometry,
+        start,
+        grapheme,
+        recover_wrapped_start,
+    ) {
+        return Some(bounds);
+    }
+    if grapheme.contains(['\r', '\n']) {
+        return None;
+    }
+    let a = geometry.position_for_index(start);
+    let b = geometry.position_for_index(start + grapheme.len());
+    if a.y == b.y {
+        return None;
+    }
+    // Unlike a whole-layout wrapped start, an InlineFlow fragment's final
+    // grapheme lives on a.y; the caret after it resolves to the next piece.
+    // Recover only that piece's advance, never bridge the two visual rows.
+    let origin = geometry.position_for_index(0).x;
+    if geometry.index_for_position(point(origin, b.y + geometry.caret_height() / 2.))
+        == start
+    {
+        return None;
+    }
+    let mut low = a.x;
+    let mut high = geometry.bounds().right().max(low);
+    for _ in 0..24 {
+        let middle = (low + high) / 2.;
+        if geometry.index_for_position(point(middle, a.y + geometry.caret_height() / 2.))
+            <= start
+        {
+            low = middle;
+        } else {
+            high = middle;
+        }
+    }
+    let width = (high - a.x) * 2.;
+    (width > Pixels::ZERO).then(|| {
+        Bounds::new(point(a.x, a.y), size(width, geometry.caret_height()))
+    })
+}
+
 impl SourcePresentation {
     pub(super) fn link_destination_range(&mut self) -> Option<Range<usize>> {
         let current = self.link_destination.as_ref().is_some_and(|source| {
@@ -118,79 +168,59 @@ impl SourcePresentation {
         self.focus.focus(window, cx);
     }
 
-    pub(in crate::ui::code_editor::markdown::source) fn link_label_regions(
-        &self,
-        link: &super::super::links::Link,
-        cx: &App,
-    ) -> Vec<Bounds<Pixels>> {
+    pub(in crate::ui::code_editor::markdown::source) fn link_label_regions<'a>(
+        &'a self,
+        link: &'a super::super::links::Link,
+        cx: &'a App,
+    ) -> impl Iterator<Item = Bounds<Pixels>> + 'a {
         use unicode_segmentation::UnicodeSegmentation as _;
-        if !self.geometry_is_current(cx) {
-            return Vec::new();
-        }
-        let Some((_, geometries)) = &self.geometry else {
-            return Vec::new();
-        };
-        let mut regions: Vec<Bounds<Pixels>> = Vec::new();
-        for leaf in &self.projection.leaves {
-            if leaf.range.end <= link.label.start || link.label.end <= leaf.range.start {
-                continue;
-            }
-            let Some(geometry) = geometries.get(&leaf.id) else {
-                continue;
-            };
-            let start = leaf.display_offset(link.label.start.max(leaf.range.start));
-            let end = leaf.display_offset(link.label.end.min(leaf.range.end));
-            for (offset, grapheme) in leaf.text[start..end].grapheme_indices(true) {
-                let ix = start + offset;
-                let a = geometry.position_for_index(ix);
-                if grapheme.chars().all(|ch| matches!(ch, '\r' | '\n')) {
-                    continue;
-                }
-                let b = geometry.position_for_index(ix + grapheme.len());
-                let right = if a.y == b.y {
-                    a.x.max(b.x)
-                } else {
-                    // The next caret belongs to the next visual row. Recover
-                    // this glyph's advance from the shaped hit-test midpoint,
-                    // not the leaf's (possibly much wider) bounding rectangle.
-                    let mut low = a.x;
-                    let mut high = geometry.bounds().right().max(low);
-                    for _ in 0..24 {
-                        let middle = (low + high) / 2.;
-                        if geometry
-                            .index_for_position(point(middle, a.y + geometry.caret_height() / 2.))
-                            <= ix
-                        {
-                            low = middle;
-                        } else {
-                            high = middle;
-                        }
-                    }
-                    a.x + (high - a.x) * 2.
-                };
-                let left = if a.y == b.y { a.x.min(b.x) } else { a.x };
-                let bounds = Bounds::new(
-                    point(left, a.y),
-                    size((right - left).max(Pixels::ZERO), geometry.caret_height()),
+        let geometries = self.geometry.as_ref()
+            .filter(|_| self.geometry_is_current(cx))
+            .map(|(_, geometries)| geometries);
+        // Leaves are source-ordered. Only the label's leaves participate; a
+        // pointer over a short link must not walk the rest of the document.
+        let first = self.projection.leaves.partition_point(|leaf| {
+            leaf.range.end <= link.label.start
+        });
+        let mut segments = self.projection.leaves[first..].iter()
+            .take_while(move |leaf| leaf.range.start < link.label.end)
+            .filter_map(move |leaf| {
+                let geometry = geometries?.get(&leaf.id)?;
+                let start = leaf.display_offset(link.label.start.max(leaf.range.start));
+                let end = leaf.display_offset(link.label.end.min(leaf.range.end));
+                let recover_wrapped_start = matches!(
+                    leaf.kind,
+                    Kind::Prose | Kind::Heading(_) | Kind::List(_) | Kind::Quote(_)
                 );
-                if let Some(previous) = regions.last_mut()
-                    && previous.top() == bounds.top()
-                    && bounds.left() <= previous.right()
-                    && previous.left() <= bounds.right()
+                Some(leaf.text[start..end].grapheme_indices(true).filter_map(
+                    move |(offset, grapheme)| {
+                        link_grapheme_line_box(geometry, start + offset, grapheme, recover_wrapped_start)
+                    },
+                ))
+            })
+            .flatten();
+        let mut pending: Option<Bounds<Pixels>> = None;
+        std::iter::from_fn(move || {
+            let mut region = pending.take().or_else(|| segments.next())?;
+            for bounds in segments.by_ref() {
+                if region.top() == bounds.top()
+                    && bounds.left() <= region.right()
+                    && region.left() <= bounds.right()
                 {
-                    *previous = previous.union(&bounds);
-                } else if bounds.size.width > Pixels::ZERO {
-                    regions.push(bounds);
+                    region = region.union(&bounds);
+                } else {
+                    pending = Some(bounds);
+                    return Some(region);
                 }
             }
-        }
-        regions
+            Some(region)
+        })
     }
     pub(in crate::ui::code_editor::markdown::source) fn pointer_link_at(
         &self,
         position: Point<Pixels>,
         cx: &App,
-    ) -> Option<(&super::super::links::Link, usize)> {
+    ) -> Option<(&super::super::links::Link, usize, Bounds<Pixels>)> {
         if self
             .viewport
             .bounds
@@ -206,13 +236,12 @@ impl SourcePresentation {
         }
         let at = self.point_offset(position, cx)?;
         let link = self.projection.links.at(at)?;
-        (link.label.start <= at
-            && at <= link.label.end
-            && self
-                .link_label_regions(link, cx)
-                .iter()
-                .any(|bounds| bounds.contains(&position)))
-        .then_some((link, at))
+        if at < link.label.start || at > link.label.end {
+            return None;
+        }
+        let region = self.link_label_regions(link, cx)
+            .find(|bounds| bounds.contains(&position))?;
+        Some((link, at, region))
     }
 
     pub(super) fn begin_pointer_link(&mut self, event: &MouseDownEvent, cx: &App) -> bool {
@@ -221,7 +250,7 @@ impl SourcePresentation {
         {
             return false;
         }
-        if let Some((link, at)) = self.pointer_link_at(event.position, cx) {
+        if let Some((link, at, _)) = self.pointer_link_at(event.position, cx) {
             self.pointer_link = Some(Gesture {
                 revision: self.projection.revision,
                 source: link.source.clone(),
@@ -280,7 +309,7 @@ impl SourcePresentation {
             && !gesture.moved(position, window)
             && same_owner
             && document.revision() == gesture.revision
-            && self.pointer_link_at(position, cx).is_some_and(|(link, _)| {
+            && self.pointer_link_at(position, cx).is_some_and(|(link, _, _)| {
                 link.source == gesture.source && link.target == gesture.target
             })
         {

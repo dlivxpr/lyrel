@@ -179,19 +179,19 @@ impl SourcePresentation {
         }
     }
     pub(super) fn hover_link(&mut self, event: &MouseMoveEvent, cx: &mut Context<Self>) {
-        let link = if event.pressed_button.is_none() {
-            self.pointer_link_at(event.position, cx)
-                .map(|(link, _)| link.clone())
-        } else {
-            None
+        let (same_link, region, link) = {
+            let hit = event.pressed_button.is_none()
+                .then(|| self.pointer_link_at(event.position, cx))
+                .flatten();
+            let same = self.embeds.hover.as_ref() == hit.as_ref().map(|(link, _, _)| *link);
+            let region = hit.as_ref().map(|(_, _, region)| *region);
+            let link = if same { None } else { hit.map(|(link, _, _)| link.clone()) };
+            (same, region, link)
         };
         let previous_position = self.embeds.hover_position;
         self.embeds.hover_position = event.position;
-        if self.embeds.hover.as_ref() == link.as_ref() {
-            if let Some(link) = &link
-                && !self.link_label_regions(link, cx).iter().any(|bounds| {
-                    bounds.contains(&previous_position) && bounds.contains(&event.position)
-                })
+        if same_link {
+            if region.is_some_and(|region| !region.contains(&previous_position))
             {
                 cx.notify();
             }
@@ -212,7 +212,6 @@ impl SourcePresentation {
         }
         let bounds = self
             .link_label_regions(link, cx)
-            .into_iter()
             .find(|bounds| bounds.contains(&self.embeds.hover_position))?;
         let entry = self
             .embeds

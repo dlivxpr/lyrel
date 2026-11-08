@@ -1,5 +1,6 @@
 //! Debounced spelling diagnostics and the standard keyboard-accessible menu.
 use super::*;
+use super::navigation::grapheme_line_box;
 use gpui_kit::component::menu::{PopupMenu, PopupMenuItem};
 #[path = "spelling_os.rs"]
 mod os;
@@ -30,47 +31,6 @@ impl State {
         self.menu = None;
         self.subscription = None;
     }
-}
-
-/// A grapheme's line box from the same geometry used to paint the text.
-/// Wrapped-start recovery is restricted to the left-aligned paragraph paths;
-/// table alignment and bidi paint origins need a richer upstream geometry API.
-fn spelling_segment(
-    geometry: &LeafGeometry,
-    start: usize,
-    grapheme: &str,
-    recover_wrapped_start: bool,
-) -> Option<Bounds<Pixels>> {
-    if grapheme.contains(['\r', '\n']) {
-        return None;
-    }
-    let a = geometry.position_for_index(start);
-    let b = geometry.position_for_index(start + grapheme.len());
-    let (left, right, top) = if a.y == b.y {
-        (a.x.min(b.x), a.x.max(b.x), a.y)
-    } else {
-        if !recover_wrapped_start {
-            return None;
-        }
-        // Whole TextLayout resolves a shared wrap index to the previous row's
-        // end. Left-aligned rows all start at this actual paragraph origin,
-        // including list indentation and blockquote padding. InlineFlow instead
-        // resolves a fragment-end index to the next fragment: its next row's
-        // leading index is greater than `start`, so it must not be bridged.
-        let origin = geometry.position_for_index(0).x;
-        let next_start =
-            geometry.index_for_position(point(origin, b.y + geometry.caret_height() / 2.));
-        if next_start != start {
-            return None;
-        }
-        (origin, b.x, b.y)
-    };
-    (left < right).then(|| {
-        Bounds::new(
-            point(left, top),
-            size(right - left, geometry.caret_height()),
-        )
-    })
 }
 
 impl SourcePresentation {
@@ -333,7 +293,7 @@ impl SourcePresentation {
                     };
                     let mut path = PathBuilder::stroke(unit);
                     for (offset, grapheme) in text.grapheme_indices(true) {
-                        let Some(segment) = spelling_segment(
+                        let Some(segment) = grapheme_line_box(
                             geometry,
                             start + offset,
                             grapheme,
@@ -368,7 +328,7 @@ impl SourcePresentation {
 
 #[cfg(test)]
 mod tests {
-    use super::{Diagnostic, SourcePresentation, spelling_segment};
+    use super::{Diagnostic, SourcePresentation, grapheme_line_box};
     use crate::ui::app::test_window::harness_with_tabs;
     use crate::ui::code_editor::markdown::projection::Kind;
     use gpui_kit::test::TestWindowExt as _;
@@ -507,7 +467,7 @@ mod tests {
                         if a.y == b.y {
                             continue;
                         }
-                        let segment = spelling_segment(geometry, ix, grapheme, true).expect(
+                        let segment = grapheme_line_box(geometry, ix, grapheme, true).expect(
                             "a whole paragraph's continuation starts with a spelling segment",
                         );
                         // Independent caret hit tests prove that the emitted
@@ -521,11 +481,26 @@ mod tests {
                             )),
                             ix
                         );
+                        let trailing = geometry.index_for_position(point(
+                            segment.right() - segment.size.width * 0.25,
+                            segment.center().y,
+                        ));
+                        // Native shaping can return the byte after the base
+                        // character but before its zero-advance combining mark.
+                        // It must still be this grapheme's visual trailing edge,
+                        // not a caret belonging to an adjacent glyph or row.
+                        assert!(leaf.text.is_char_boundary(trailing));
+                        assert!(ix < trailing && trailing <= ix + grapheme.len());
+                        assert_eq!(geometry.position_for_index(trailing), b);
                         assert_eq!(
-                            geometry.index_for_position(point(
-                                segment.right() - segment.size.width * 0.25,
-                                segment.center().y,
-                            )),
+                            super::super::navigation::hit_test_grapheme(
+                                &leaf.text,
+                                geometry,
+                                point(
+                                    segment.right() - segment.size.width * 0.25,
+                                    segment.center().y,
+                                ),
+                            ),
                             ix + grapheme.len()
                         );
                         // The same repeated grapheme on the first row is an
@@ -614,7 +589,7 @@ mod tests {
                 };
                 for (ix, grapheme) in leaf.text.grapheme_indices(true) {
                     if grapheme.contains(['\r', '\n']) {
-                        assert!(spelling_segment(geometry, ix, grapheme, true).is_none());
+                        assert!(grapheme_line_box(geometry, ix, grapheme, true).is_none());
                         hard_breaks += 1;
                         continue;
                     }
@@ -628,7 +603,7 @@ mod tests {
                     }
                     let a = geometry.position_for_index(ix);
                     let b = geometry.position_for_index(ix + grapheme.len());
-                    let segment = spelling_segment(geometry, ix, grapheme, true);
+                    let segment = grapheme_line_box(geometry, ix, grapheme, true);
                     if a.y != b.y {
                         assert_ne!(
                             geometry.index_for_position(point(
