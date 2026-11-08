@@ -7,7 +7,7 @@ use gpui_kit::test::{TestEventExt as _, TestQueryExt as _, TestWindowExt as _};
 fn table_presentation_drag_fit_scroll_edit_history_and_host_reopen(cx: &mut gpui_kit::TestAppContext) {
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("presentation.md");
-    let original = format!("Before  \r\n\r\n<!-- table:striped cols=400.0,420 -->\r\n| A | B |\n| --- | --- |\r\n| one | two |\n\r\nAfter  {}", "\n\nBelow".repeat(12));
+    let original = format!("Before  \r\n\r\n<!-- table:striped cols=400.0,420 -->\r\n| A | B |\n| --- | --- |\r\n| one | two |\n\r\n<!-- table:grid cols=120,160 -->\n| 123 **אב** | גד |\n| --- | --- |\n| שלום | עולם |\n\r\nAfter  {}", "\n\nBelow".repeat(12));
     std::fs::write(&path, &original).unwrap();
     let (app, mut context, _streams) = harness_with_tabs(cx, 1);
     app.update_in(&mut context, |app, window, cx| app.open_file_in_editor(&path, window, cx));
@@ -23,6 +23,31 @@ fn table_presentation_drag_fit_scroll_edit_history_and_host_reopen(cx: &mut gpui
     };
     context.dispatch_action(crate::core::actions::ToggleDocumentPreview);
     settle_live_geometry(&view, &mut context);
+    let normalized = original.replace("\r\n", "\n");
+    let rtl_first = normalized.find("אב").unwrap();
+    let rtl_second = normalized.find("גד").unwrap();
+    context.update(|window, cx| {
+        let first = view.read(cx).range_to_bounds(&(rtl_first..rtl_first + "אב".len()), cx).unwrap();
+        let second = view.read(cx).range_to_bounds(&(rtl_second..rtl_second + "גד".len()), cx).unwrap();
+        assert!(first.left() > second.right(), "RTL columns must mirror the source order");
+        window.pointer_down(first.center(), MouseButton::Left, cx);
+        window.pointer_up(first.center(), MouseButton::Left, cx);
+    });
+    view.read_with(&context, |view, _| assert!((rtl_first..=rtl_first + "אב".len()).contains(&view.selection().head())));
+    view.update_in(&mut context, |view, _, cx| view.select_range(rtl_second..rtl_second, cx));
+    settle_live_geometry(&view, &mut context);
+    context.update(|window, cx| window.press("right", cx));
+    context.run_until_parked();
+    let first_column = normalized.find("123").unwrap();
+    view.read_with(&context, |view, _| assert!((first_column..=rtl_first + "אב".len()).contains(&view.selection().head())));
+    context.update(|window, cx| window.press("left", cx));
+    context.run_until_parked();
+    view.read_with(&context, |view, _| assert!((rtl_second..=rtl_second + "גד".len()).contains(&view.selection().head())));
+    view.update_in(&mut context, |view, _, cx| view.select_range(rtl_second..rtl_second, cx));
+    context.update(|window, cx| window.press("tab", cx));
+    context.run_until_parked();
+    let body_first = normalized.find("שלום").unwrap();
+    view.read_with(&context, |view, _| assert!((body_first..=body_first + "שלום".len()).contains(&view.selection().head())));
     let at = original.replace("\r\n", "\n").find("one").unwrap();
     view.update_in(&mut context, |view, window, cx| {
         view.select_range(at..at, cx);
