@@ -11,12 +11,13 @@ impl SourcePresentation {
 
     pub(super) fn selectable_leaf(&self, leaf: &super::super::projection::Leaf, cx: &App) -> bool {
         !self.live
-            || super::super::mdx::view::visible_field(&super::super::mdx::view::FieldContext::new(
-                &self.projection,
-                leaf,
-                self.document.read(cx).source(),
-                &self.mdx_state,
-            ))
+            || (!self.folds.is_hidden(leaf.range.start)
+                && super::super::mdx::view::visible_field(&super::super::mdx::view::FieldContext::new(
+                    &self.projection,
+                    leaf,
+                    self.document.read(cx).source(),
+                    &self.mdx_state,
+                )))
     }
 
     pub(super) fn logical_line_edge(&self, at: usize, end: bool, cx: &App) -> usize {
@@ -276,6 +277,9 @@ impl SourcePresentation {
             }
         }
         ranges.extend(repairs);
+        for hidden in &self.folds.hidden {
+            subtract(&mut ranges, hidden.start.saturating_sub(1)..hidden.end);
+        }
         ranges.retain(|range| range.start < range.end);
         ranges.sort_by_key(|range| range.start);
         let mut merged = smallvec::SmallVec::<[Range<usize>; 4]>::new();

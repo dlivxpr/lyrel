@@ -22,6 +22,8 @@ mod link_interaction;
 mod assets;
 #[path = "image_edit.rs"]
 mod image_edit;
+#[path = "headings.rs"]
+pub(super) mod headings;
 #[path = "navigation.rs"]
 mod navigation;
 
@@ -111,6 +113,7 @@ pub(crate) struct SourcePresentation {
     _observe: Subscription,
     mdx_state: super::mdx::ViewState,
     properties: properties::State,
+    folds: headings::State,
 }
 impl SourcePresentation {
     pub(crate) fn new(
@@ -169,6 +172,8 @@ impl SourcePresentation {
             if let DocumentEvent::Edited(transaction) = event {
                 this.spelling.invalidate();
                 this.pointer_link = None;
+                this.assets.rebase(transaction);
+                this.folds.rebase(transaction);
                 this.state.rebase(transaction);
                 if transaction.origin != this.state.id {
                     for selection in &mut this.extra_selections {
@@ -197,6 +202,7 @@ impl SourcePresentation {
                     }
                     this.rendered_revision = None;
                 }
+                this.sync_block_folds();
                 this.sync_inline_reveal();
                 this.schedule_parse(cx);
                 this.schedule_spelling(cx);
@@ -283,6 +289,7 @@ impl SourcePresentation {
             _observe: observe,
             mdx_state: super::mdx::ViewState::default(),
             properties: properties::State::default(),
+            folds: headings::State::default(),
         };
         view.schedule_parse(cx);
         view
@@ -403,6 +410,7 @@ impl SourcePresentation {
                             );
                         }
                         view.reveal_mdx_selection(cx);
+                        view.sync_block_folds();
                         view.sync_inline_reveal();
                         view.state.selection = view.map_live_caret(view.state.selection, cx);
                         view.selection_notification = true;
@@ -624,11 +632,12 @@ impl SourcePresentation {
         if !self.live {
             return;
         }
-        let (hidden, insertions) = super::mdx::view::inline_visibility(
+        let (mut hidden, insertions) = super::mdx::view::inline_visibility(
             &self.projection,
             self.document.read(cx).source(),
             &self.mdx_state,
         );
+        hidden.extend(self.folds.hidden.iter().map(|range| range.start.saturating_sub(1)..range.end));
         let marked = self.state.marked_range();
         for leaf in &mut self.projection.leaves {
             if matches!(leaf.kind, Kind::Code(_)) {
@@ -651,6 +660,7 @@ impl SourcePresentation {
         }
     }
     fn sync_inline_reveal(&mut self) {
+        self.sync_block_folds();
         let marked = self.state.marked_range();
         for leaf in &mut self.projection.leaves {
             if leaf.contextual_reveal(
@@ -742,6 +752,8 @@ impl SourcePresentation {
             cx.emit(DocumentEvent::PresentationChanged);
         });
         self.reveal_mdx_selection(cx);
+        self.sync_block_folds();
+        self.sync_mdx_inline_visibility(cx);
         self.state.selection = self.map_live_caret(self.state.selection, cx);
         self.sync_inline_reveal();
         self.retire_native_composition(was_composing, cx);
@@ -1103,6 +1115,7 @@ impl SourcePresentation {
             }
             return;
         }
+        self.reveal_block_command(&command, cx);
         if !toggle_task {
             self.state.selection = self.map_live_caret(self.state.selection, cx);
         }
@@ -1350,6 +1363,7 @@ impl SourcePresentation {
             self.rendered_revision = None;
         }
         self.reveal_mdx_selection(cx);
+        self.sync_block_folds();
         self.sync_inline_reveal();
         if changed {
             self.geometry = None;
@@ -1915,6 +1929,9 @@ impl SourcePresentation {
         if self.enter_table(window, cx) {
             return;
         }
+        if self.block_enter(hard, window, cx) {
+            return;
+        }
         let mut range = self.state.selection.range();
         let structure = self
             .projection
@@ -2402,6 +2419,10 @@ impl Render for SourcePresentation {
                     end += 1;
                 }
             }
+            if self.live && self.folds.is_hidden(leaf.range.start) {
+                ix = end;
+                continue;
+            }
             if self.live
                 && !super::mdx::view::visible_field(&super::mdx::view::FieldContext::new(
                     &self.projection,
@@ -2580,6 +2601,9 @@ impl Render for SourcePresentation {
             })
             .child(div().h(before).flex_none());
         for (ix, leaf) in self.projection.leaves[visible.clone()].iter().enumerate() {
+            if self.live && self.folds.is_hidden(leaf.range.start) {
+                continue;
+            }
             if self.live
                 && !super::mdx::view::visible_field(&super::mdx::view::FieldContext::new(
                     &self.projection,
@@ -2721,6 +2745,7 @@ impl Render for SourcePresentation {
             };
             let rendered = if self.live { self.image_surface(leaf, rendered, cx) } else { rendered };
             let rendered = self.render_property_leaf(leaf, rendered, cx);
+            let rendered = self.decorate_block(leaf.range.start, rendered, cx);
             block = block.child(MeasuredBlock {
                 view: cx.entity(),
                 id: leaf.id,
@@ -2728,6 +2753,7 @@ impl Render for SourcePresentation {
                 child: div()
                     .id(("markdown-block", leaf.id))
                     .w(table_width)
+                    .children(self.block_disclosure(leaf.range.start, leaf.id, cx))
                     .when(self.live && matches!(leaf.kind, Kind::List(_)), |block| {
                         block.pb(rems(typography::LIST_GAP))
                     })
@@ -3287,6 +3313,7 @@ impl Render for SourcePresentation {
                             .on_click(cx.listener(|this, _, window, cx| this.open_properties(window, cx)))))
                         .when(self.properties.open, |root| root.child(self.render_properties(cx)))
                 })
+                .when(self.live, |root| root.child(self.block_toolbar(cx)))
                 .when(self.live, |root| root.child(self.table_insert_button(cx)))
                 .when(self.live && self.projection.links.at(self.state.selection.head()).is_some(), |root| {
                     use gpui_kit::component::button::{Button, ButtonVariants as _};
@@ -3355,6 +3382,7 @@ impl Render for SourcePresentation {
                 ));
         let root = self.code_actions(root, cx);
         let root = root.children(self.spelling_overlay(window, cx));
+        let root = self.block_actions(root, cx);
         SourceElement {
             child: root.into_any_element(),
             view: cx.entity(),
