@@ -72,4 +72,9 @@ fn formula_lossless_wrappers_scripts_and_matrix_keep_untouched_spelling() {
     assert!(changed.contains(r"\begin{bmatrix}"));
     assert!(changed.ends_with(r"\end{bmatrix}"));
     assert!(changed.contains(r"\mathrm{keep}+x^2_i"));
+    let wrapped_seed = Seed::parse(r"\begin{bmatrix}a&b\end{bmatrix}");
+    let mut wrapped = wrapped_seed.row.clone();
+    let mut cursor = Cursor::start();
+    cursor.wrap_sqrt(&mut wrapped, 0, 1);
+    assert_eq!(wrapped_seed.serialize(&wrapped), r"\sqrt{\begin{bmatrix}a&b\end{bmatrix}}");
 }

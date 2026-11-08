@@ -46,8 +46,9 @@ pub(super) struct Session {
 impl Session {
     fn new(range: Range<usize>, revision: u64, original: String, formula: super::super::math::Formula, end: bool) -> Self {
         let opening = original.bytes().take_while(|b| *b == b'$').count();
-        let closing = original.bytes().rev().take_while(|b| *b == b'$').count().min(original.len() - opening);
-        let body = opening..original.len() - closing;
+        let closing_end = original.trim_end_matches([' ', '\t']).len();
+        let closing = original[..closing_end].bytes().rev().take_while(|b| *b == b'$').count().min(closing_end - opening);
+        let body = opening..closing_end - closing;
         let seed = lossless::Seed::parse(&original[body.clone()]);
         let root = seed.row.clone();
         let cursor = Cursor { path: Vec::new(), index: if end { root.atoms.len() } else { 0 } };
@@ -110,7 +111,7 @@ impl Session {
         if let Some((path, lo, _)) = &selected { self.cursor = Cursor { path: path.clone(), index: *lo }; }
         let selection = selected.map(|(_, lo, hi)| (lo, hi));
         if !input::commit_command_selecting(&mut self.root, &mut self.cursor, &command, selection) {
-            self.delete_selection();
+            if let Some((lo, hi)) = selection { self.cursor.delete_range(&mut self.root, lo, hi); }
             // Unknown commands remain explicit opaque atoms rather than disappearing.
             self.cursor.insert(&mut self.root, Atom::Sym(format!("\\{command}")));
         }
@@ -300,7 +301,8 @@ impl SourcePresentation {
                 let (path, lo, hi) = common_row_selection(&anchor, &session.cursor);
                 if lo < hi {
                     session.cursor = Cursor { path, index: if horizontal < 0 { lo } else { hi } };
-                    session.refresh_geometry(false); window.notify_text_selection_changed(&self.focus); cx.notify(); return true;
+                    session.refresh_geometry(false);
+                    self.invalidate_formula_blocks(); window.notify_text_selection_changed(&self.focus); cx.notify(); return true;
                 }
             }
         }
@@ -311,9 +313,11 @@ impl SourcePresentation {
         else if horizontal < 0 { session.cursor.move_left(&session.root); }
         else { session.cursor.move_right(&session.root); }
         session.refresh_geometry(false);
-        if edge.is_none() && before == session.cursor && !extend {
+        let exit = edge.is_none() && before == session.cursor && !extend && session.cursor.path.is_empty();
+        self.invalidate_formula_blocks();
+        if exit {
             // A root boundary leaves the formula, not its source delimiters.
-            if session.cursor.path.is_empty() { self.finish_formula(true, horizontal < 0 || vertical < 0, window, cx); }
+            self.finish_formula(true, horizontal < 0 || vertical < 0, window, cx);
         } else { window.notify_text_selection_changed(&self.focus); cx.notify(); }
         true
     }
@@ -327,7 +331,8 @@ impl SourcePresentation {
                 let session = self.formula.as_mut().unwrap();
                 if key.modifiers.shift { session.anchor.get_or_insert_with(|| session.cursor.clone()); } else { session.anchor = None; }
                 session.cursor = Cursor { path: Vec::new(), index: if key.key == "end" { session.root.atoms.len() } else { 0 } };
-                session.refresh_geometry(false); window.notify_text_selection_changed(&self.focus); cx.notify(); true
+                session.refresh_geometry(false);
+                self.invalidate_formula_blocks(); window.notify_text_selection_changed(&self.focus); cx.notify(); true
             }
             "f6" => { window.focus_next(cx); true }
             "escape" => { self.command(Command::CancelComposition, window, cx); true }
@@ -343,7 +348,8 @@ impl SourcePresentation {
             }
             "a" if primary => {
                 let session = self.formula.as_mut().unwrap(); session.anchor = Some(Cursor::start());
-                session.cursor = Cursor { path: Vec::new(), index: session.root.atoms.len() }; session.refresh_geometry(false); cx.notify(); true
+                session.cursor = Cursor { path: Vec::new(), index: session.root.atoms.len() }; session.refresh_geometry(false);
+                self.invalidate_formula_blocks(); cx.notify(); true
             }
             "left" if !primary && !key.modifiers.alt => self.formula_move(-1, 0, key.modifiers.shift, None, window, cx),
             "right" if !primary && !key.modifiers.alt => self.formula_move(1, 0, key.modifiers.shift, None, window, cx),
@@ -414,6 +420,7 @@ impl SourcePresentation {
         } else { session.cursor = cursor; }
         session.anchor.get_or_insert_with(|| session.cursor.clone()); session.dragging = true;
         session.refresh_geometry(false);
+        self.invalidate_formula_blocks();
         self.dragging = false; self.focus.focus(window, cx); window.notify_text_selection_changed(&self.focus); cx.notify(); true
     }
     pub(super) fn formula_copy(&mut self, cut: bool, window: &mut Window, cx: &mut Context<Self>) -> bool {
@@ -421,7 +428,7 @@ impl SourcePresentation {
         if let Some(anchor) = &session.anchor {
             let (path, lo, hi) = common_row_selection(anchor, &session.cursor);
             let cursor = Cursor { path, index: lo };
-            let text = Row { atoms: cursor.row(&session.root).atoms[lo..hi].to_vec() }.to_latex();
+            let text = session.seed.selection_latex(cursor.row(&session.root), lo..hi);
             if lo != hi { cx.write_to_clipboard(ClipboardItem::new_string(text)); }
             if cut { session.delete_selection(); self.formula_changed(window, cx); }
         }
@@ -596,15 +603,18 @@ impl Element for Surface {
         }
         if current.focus.is_focused(window) { if let Some(caret) = session.caret_bounds(current, window, cx) { window.paint_quad(fill(caret, cx.theme().caret)); } }
         let weak = self.view.clone();
+        let session_id = self.session;
         window.on_mouse_event(move |event: &MouseMoveEvent, phase, window, cx| {
             if !phase.bubble() { return; }
             let _ = weak.update(cx, |view, cx| {
                 let Some(session) = &mut view.formula else { return; };
+                if session.id != session_id { return; }
                 if !session.dragging { return; }
                 if event.pressed_button != Some(MouseButton::Left) { session.dragging = false; return; }
                 let Some((bounds, _, font)) = session.frame else { return; };
                 session.cursor = geometry::cursor_at(&session.root, f32::from(event.position.x - bounds.left()) as f64 / f32::from(font) as f64, f32::from(event.position.y - bounds.top()) as f64 / f32::from(font) as f64);
                 session.refresh_geometry(false);
+                view.invalidate_formula_blocks();
                 view.input_generation = view.input_generation.wrapping_add(1);
                 window.notify_text_selection_changed(&view.focus); cx.notify();
             });

@@ -48,6 +48,10 @@ impl Seed {
 
     pub(super) fn serialize(&self, row: &Row) -> String { self.serialize_row(row, false) }
     pub(super) fn preview(&self, row: &Row) -> String { self.serialize_row(row, true) }
+    pub(super) fn selection_latex(&self, row: &Row, range: Range<usize>) -> String {
+        let selected = Row { atoms: row.atoms[range].to_vec() };
+        self.new_row_text(&selected, false, None)
+    }
     fn serialize_row(&self, row: &Row, placeholders: bool) -> String {
         if placeholders && row.is_empty() { return r"\square".into(); }
         if row == &self.row && (!placeholders || !row_has_empty(row)) { return self.raw.clone(); }
@@ -62,7 +66,7 @@ impl Seed {
         let mut out = self.raw[..start].to_string();
         for (ix, atom) in new[prefix..new.len() - suffix].iter().enumerate() {
             let seed = old.get(prefix + ix).filter(|_| prefix + ix < old.len() - suffix);
-            let text = seed.map_or_else(|| atom.to_latex(), |piece| self.atom_text(piece, atom, placeholders));
+            let text = seed.map_or_else(|| self.new_atom_text(atom, placeholders, None), |piece| self.atom_text(piece, atom, placeholders));
             // Only separate control words from a following ASCII letter.
             if needs_separator(&out, &text) { out.push(' '); }
             out.push_str(&text);
@@ -102,7 +106,47 @@ impl Seed {
                 text.replace_range(range.start - seed.range.start..range.end - seed.range.start, &replacement);
             }
             text
-        } else { atom.to_latex() }
+        } else { self.new_atom_text(atom, placeholders, Some(seed)) }
+    }
+    fn original_row(&self, row: &Row, preferred: Option<&Piece>) -> Option<&str> {
+        if row == &self.row { return Some(&self.raw); }
+        if row.is_empty() || row.atoms.len() > self.atoms.len() { return None; }
+        let matches = |at: usize| self.row.atoms[at..at + row.atoms.len()] == row.atoms[..];
+        let at = preferred.and_then(|piece| self.atoms.iter().position(|old| old.range == piece.range)).filter(|at| *at + row.atoms.len() <= self.atoms.len() && matches(*at))
+            .or_else(|| (0..=self.atoms.len() - row.atoms.len()).find(|at| matches(*at)));
+        at.map(|at| &self.raw[self.atoms[at].range.start..self.atoms[at + row.atoms.len() - 1].range.end])
+    }
+    fn new_row_text(&self, row: &Row, placeholders: bool, preferred: Option<&Piece>) -> String {
+        if placeholders && row.is_empty() { return r"\square".into(); }
+        if let Some(raw) = self.original_row(row, preferred).filter(|_| !placeholders || !row_has_empty(row)) { return raw.into(); }
+        let mut out = String::new();
+        for atom in &row.atoms {
+            let origin = preferred.filter(|piece| &piece.atom == atom).or_else(|| self.atoms.iter().find(|piece| &piece.atom == atom));
+            let text = origin.map_or_else(|| self.new_atom_text(atom, placeholders, None), |piece| self.atom_text(piece, atom, placeholders));
+            if needs_separator(&out, &text) { out.push(' '); }
+            out.push_str(&text);
+        }
+        out
+    }
+    fn new_atom_text(&self, atom: &Atom, placeholders: bool, preferred: Option<&Piece>) -> String {
+        let row = |row: &Row| self.new_row_text(row, placeholders, preferred);
+        match atom {
+            Atom::Frac { num, den } => format!(r"\frac{{{}}}{{{}}}", row(num), row(den)),
+            Atom::Sqrt { radicand, index } => match index { Some(index) => format!(r"\sqrt[{}]{{{}}}", row(index), row(radicand)), None => format!(r"\sqrt{{{}}}", row(radicand)) },
+            Atom::SupSub { sup, sub } => {
+                let mut out = String::new();
+                if let Some(sub) = sub { out.push_str(&format!("_{{{}}}", row(sub))); }
+                if let Some(sup) = sup { out.push_str(&format!("^{{{}}}", row(sup))); }
+                out
+            }
+            Atom::Accent { accent, base } => format!("{accent}{{{}}}", row(base)),
+            Atom::Delim { open, body, close } => format!(r"\left{open} {} \right{close}", row(body)),
+            Atom::Matrix { rows } => {
+                let body = rows.iter().map(|cells| cells.iter().map(row).collect::<Vec<_>>().join(" & ")).collect::<Vec<_>>().join(r" \\ ");
+                format!(r"\begin{{pmatrix}}{body}\end{{pmatrix}}")
+            }
+            Atom::Sym(_) => atom.to_latex(),
+        }
     }
 }
 
