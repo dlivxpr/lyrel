@@ -1,6 +1,7 @@
 //! Gutter reordering moves existing source fragments through the shared history.
 //! There is no block model or cross-presentation drag payload.
 use super::*;
+use gpui_kit::base::input::RopeExt as _;
 use gpui_kit::component::{Sizable as _, button::{Button, ButtonVariants as _}};
 use markdown::mdast::Node;
 
