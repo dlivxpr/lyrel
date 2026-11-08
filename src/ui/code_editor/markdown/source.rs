@@ -152,7 +152,6 @@ impl SourcePresentation {
             }
             if let DocumentEvent::Edited(transaction) = event {
                 this.pointer_link = None;
-                this.assets.rebase(transaction);
                 this.state.rebase(transaction);
                 if transaction.origin != this.state.id {
                     for selection in &mut this.extra_selections {

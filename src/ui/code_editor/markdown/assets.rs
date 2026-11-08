@@ -24,16 +24,10 @@ struct PendingInsertion {
     serial: u64,
     token: (EntityId, u64, u64, u64, Option<EntityId>),
     selection: Selection,
-    replaced: String,
     inputs: Option<Vec<IncomingImage>>,
     cancelled: std::rc::Rc<std::cell::Cell<bool>>,
 }
 impl InsertionState {
-    pub(super) fn rebase(&mut self, transaction: &Transaction) {
-        if let Some(pending) = &mut self.pending {
-            pending.selection = transaction.map_selection(pending.selection);
-        }
-    }
     pub(super) fn status(&self) -> Option<SharedString> {
         self.error.clone().or_else(|| {
             self.pending
@@ -83,12 +77,6 @@ impl SourcePresentation {
             serial: self.assets.serial,
             token: self.input_token(cx),
             selection: self.state.selection,
-            replaced: self
-                .document
-                .read(cx)
-                .source()
-                .slice(self.state.selection.range())
-                .to_string(),
             inputs: Some(inputs),
             cancelled: cancelled.clone(),
         });
@@ -153,19 +141,6 @@ impl SourcePresentation {
                 }
                 match result {
                     Ok(mut source) => {
-                        if !view
-                            .document
-                            .read(cx)
-                            .source()
-                            .slice(pending.selection.range())
-                            .chars()
-                            .eq(pending.replaced.chars())
-                        {
-                            view.assets.error =
-                                Some(t(L10nKey::MarkdownImageSelectionChanged).into());
-                            cx.notify();
-                            return;
-                        }
                         let document = view.document.read(cx);
                         let start = document.source().line_start_offset(document.source().offset_to_point(pending.selection.range().start).row);
                         let prefix = document.source().slice(start..pending.selection.range().start);
