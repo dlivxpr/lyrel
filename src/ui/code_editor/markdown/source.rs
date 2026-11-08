@@ -960,6 +960,12 @@ impl SourcePresentation {
             return menu;
         }
         let disabled = self.active_table().is_none();
+        let delete_row_disabled = self.active_table().is_none_or(|cell| cell.is_header());
+        let delete_column_disabled = self.active_table().is_none_or(|cell| {
+            !self.projection.leaves.iter().any(|leaf| {
+                matches!(leaf.kind, Kind::TableCell(other) if other.table() == cell.table() && other.column() != cell.column())
+            })
+        });
         menu.separator()
             .menu(t(L10nKey::EditorTableInsert), Box::new(InsertTable))
             .menu_with_disabled(
@@ -973,9 +979,14 @@ impl SourcePresentation {
                 disabled,
             )
             .menu_with_disabled(
+                t(L10nKey::EditorTableDuplicateRow),
+                Box::new(DuplicateRow),
+                disabled,
+            )
+            .menu_with_disabled(
                 t(L10nKey::EditorTableDeleteRow),
                 Box::new(DeleteRow),
-                disabled,
+                delete_row_disabled,
             )
             .menu_with_disabled(
                 t(L10nKey::EditorTableInsertColumnBefore),
@@ -990,6 +1001,11 @@ impl SourcePresentation {
             .menu_with_disabled(
                 t(L10nKey::EditorTableDeleteColumn),
                 Box::new(DeleteColumn),
+                delete_column_disabled,
+            )
+            .menu_with_disabled(
+                t(L10nKey::EditorTableDeleteTable),
+                Box::new(DeleteTable),
                 disabled,
             )
             .separator()
@@ -2900,6 +2916,8 @@ impl Render for SourcePresentation {
                 .on_action(cx.listener(|this, _: &super::tables::InsertTable, window, cx| this.insert_table(window, cx)))
                 .on_action(cx.listener(|this, _: &super::tables::InsertRowBefore, window, cx| this.table_command(super::tables::Operation::InsertRowBefore, window, cx)))
                 .on_action(cx.listener(|this, _: &super::tables::InsertRowAfter, window, cx| this.table_command(super::tables::Operation::InsertRowAfter, window, cx)))
+                .on_action(cx.listener(|this, _: &super::tables::DuplicateRow, window, cx| this.table_command(super::tables::Operation::DuplicateRow, window, cx)))
+                .on_action(cx.listener(|this, _: &super::tables::DeleteTable, window, cx| this.table_command(super::tables::Operation::DeleteTable, window, cx)))
                 .on_action(cx.listener(|this, _: &super::tables::DeleteRow, window, cx| this.table_command(super::tables::Operation::DeleteRow, window, cx)))
                 .on_action(cx.listener(|this, _: &super::tables::InsertColumnBefore, window, cx| this.table_command(super::tables::Operation::InsertColumnBefore, window, cx)))
                 .on_action(cx.listener(|this, _: &super::tables::InsertColumnAfter, window, cx| this.table_command(super::tables::Operation::InsertColumnAfter, window, cx)))

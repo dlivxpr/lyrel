@@ -1822,6 +1822,8 @@ pub fn translate_en(key: L10nKey) -> &'static str {
         L10nKey::EditorTableInsert => "Insert table",
         L10nKey::EditorTableInsertRowBefore => "Table: Insert row above",
         L10nKey::EditorTableInsertRowAfter => "Table: Insert row below",
+        L10nKey::EditorTableDuplicateRow => "Table: Duplicate row",
+        L10nKey::EditorTableDeleteTable => "Table: Delete table",
         L10nKey::EditorTableDeleteRow => "Table: Delete row",
         L10nKey::EditorTableInsertColumnBefore => "Table: Insert column before",
         L10nKey::EditorTableInsertColumnAfter => "Table: Insert column after",

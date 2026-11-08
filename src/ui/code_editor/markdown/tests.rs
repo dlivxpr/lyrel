@@ -3463,6 +3463,8 @@ fn native_table_structure_actions_share_undo_and_save_reopen(cx: &mut gpui_kit::
     context.run_until_parked();
     context.dispatch_action(super::tables::InsertColumnAfter);
     context.run_until_parked();
+    // Column insertion preserves the surviving caret cell; Tab targets the new one.
+    context.update(|window, cx| window.press("tab", cx));
     context.update(|window, cx| window.click("markdown-table-commands", cx));
     context.run_until_parked();
     context.update(|window, cx| {
@@ -3777,7 +3779,7 @@ fn table_structure_commands_preserve_cells_boundaries_and_atomic_selection() {
             "| a |\r\n| --- |\n| b |\r\n| c |",
             "a",
             Operation::DeleteRow,
-            "| b |\r\n| --- |\n| c |",
+            "| a |\r\n| --- |\n| b |\r\n| c |",
         ),
         (
             "| a |\r\n| --- |\n| b |",
@@ -3795,7 +3797,7 @@ fn table_structure_commands_preserve_cells_boundaries_and_atomic_selection() {
             "- | a |\r\n  | --- |\n  | b |",
             "a",
             Operation::InsertRowBefore,
-            "- |  |\r\n  | --- |\n  | a |\r\n  | b |",
+            "- | a |\r\n  | --- |\n  |  |\r\n  | b |",
         ),
         (
             "- parent\n  - child\n\n    | a |\r\n    | --- |\n    | b |",
@@ -3829,20 +3831,20 @@ fn table_structure_commands_preserve_cells_boundaries_and_atomic_selection() {
             "| a | b |\n| --- | --- |\n| c | d |",
             "a",
             Operation::DeleteRow,
-            "| c | d |\n| --- | --- |",
+            "| a | b |\n| --- | --- |\n| c | d |",
         ),
         (
             "| a | b |\n| --- | --- |\n| c | d |",
             "a",
             Operation::InsertRowBefore,
-            "|  |  |\n| --- | --- |\n| a | b |\n| c | d |",
+            "| a | b |\n| --- | --- |\n|  |  |\n| c | d |",
         ),
-        ("| a |\n| --- |", "a", Operation::DeleteRow, "|  |\n| --- |"),
+        ("| a |\n| --- |", "a", Operation::DeleteRow, "| a |\n| --- |"),
         (
             "| a |\n| --- |\n| b |",
             "b",
             Operation::DeleteColumn,
-            "|  |\n| --- |\n|  |",
+            "| a |\n| --- |\n| b |",
         ),
         (
             "| a | b |\n| --- | --- |\n| c | d |",
@@ -3869,6 +3871,32 @@ fn table_structure_commands_preserve_cells_boundaries_and_atomic_selection() {
         assert_eq!(document.source().to_string(), source);
         assert_eq!(state.selection(), before);
     }
+}
+
+#[test]
+fn table_structure_marker_width_and_mixed_endings_undo_atomically() {
+    use super::tables::Operation;
+    let original = "Before\r\n<!-- table:striped cols=80,120 -->\n| A  | `B` |\r\n| :---- | ----: |\n| one | two |\r\n\nAfter";
+    let mut document = MarkdownDocument::new(original.into(), TextFormat::default());
+    let source = original.replace("\r\n", "\n");
+    let at = source.find("one").unwrap() + 1;
+    let mut state = PresentationState::new(Selection::new(source.find("two").unwrap() + 3, at));
+    let before = state.selection();
+    table_command(&mut document, &mut state, Operation::InsertColumnBefore);
+    let expected = "Before\r\n<!-- table:striped cols=80,80,120 -->\n|  | A  | `B` |\r\n| --- | :---- | ----: |\n|  | one | two |\r\n\nAfter";
+    assert_eq!(document.encode().unwrap(), expected.as_bytes());
+    document.command(&mut state, Command::Insert("X".into()));
+    assert_eq!(document.encode().unwrap(), expected.replace("one", "oXne").as_bytes());
+    document.command(&mut state, Command::Undo);
+    document.command(&mut state, Command::Undo);
+    assert_eq!(document.encode().unwrap(), original.as_bytes());
+    assert_eq!(state.selection(), before);
+    document.command(&mut state, Command::Redo);
+    assert_eq!(document.encode().unwrap(), expected.as_bytes());
+    table_command(&mut document, &mut state, Operation::DeleteTable);
+    assert_eq!(document.encode().unwrap(), b"Before\r\n\nAfter");
+    document.command(&mut state, Command::Undo);
+    assert_eq!(document.encode().unwrap(), expected.as_bytes());
 }
 
 #[gpui_kit::test]
