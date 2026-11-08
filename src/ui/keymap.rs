@@ -91,6 +91,7 @@ fn fixed_bindings(cx: &App) -> Vec<KeyBinding> {
         ));
     }
     bindings.extend(crate::ui::code_editor::markdown::table_bindings(cx));
+    bindings.extend(crate::ui::code_editor::markdown::inline_format_bindings(cx));
     // The switcher's footer tells you Tab is the way across to the tab column
     // once a query is in the box. gpui-component's Root binds `tab` to its
     // focus walker, actions are dispatched before key listeners, and the panel

@@ -262,6 +262,10 @@ impl SourcePresentation {
     pub(super) fn formula_command(&mut self, command: &Command, window: &mut Window, cx: &mut Context<Self>) -> bool {
         if self.formula.is_none() { return false; }
         match command {
+            Command::Select(selection) => {
+                let selected = self.release_formula(cx.entity_id(), Some(*selection), cx).unwrap_or(*selection);
+                self.command(Command::Select(selected), window, cx); true
+            }
             Command::Reload { .. } => { self.finish_formula(false, false, window, cx); false }
             Command::Replace { text, kind: EditKind::Paste, .. } => { self.formula_paste(text, window, cx); true }
             Command::Insert(text) | Command::Commit(text) => { self.formula.as_mut().unwrap().insert_text(text); self.formula_changed(window, cx); true }

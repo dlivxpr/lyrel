@@ -1,7 +1,7 @@
 use super::projection::{Kind, Leaf, Projection};
 use crate::ui::i18n::{L10nKey, t};
 use gpui_kit::base::StyledExt as _;
-use gpui_kit::component::{ActiveTheme as _, button::ButtonVariants as _};
+use gpui_kit::component::ActiveTheme as _;
 use gpui_kit::prelude::*;
 use gpui_kit::*;
 use merman::resources::{InputResourcePolicy, ResourceProfile};
@@ -299,10 +299,9 @@ impl State {
         leaf: &Leaf,
         active: bool,
         source: AnyElement,
-        edit: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
+        controls: AnyElement,
         cx: &App,
     ) -> AnyElement {
-        use gpui_kit::component::button::Button;
         let entry = self
             .entries
             .get(&leaf.id)
@@ -362,19 +361,8 @@ impl State {
                     .children(diagnostic.cloned()),
             );
         }
-        block = block.child(
-            div()
-                // Do not let the source surface move the caret/reflow the
-                // button between its press and click. Source text still bubbles.
-                .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-                .child(
-                    Button::new(("markdown-mermaid-edit", leaf.id))
-                        .ghost()
-                        .label(t(L10nKey::EditorMarkdownMermaidEdit))
-                        .on_click(edit),
-                ),
-        );
-        if active || error.is_some() || entry.is_none() {
+        block = block.child(controls);
+        if active || pending || error.is_some() {
             block = block
                 .child(
                     div()
@@ -382,7 +370,12 @@ impl State {
                         .text_color(cx.theme().muted_foreground)
                         .child(t(L10nKey::EditorMarkdownMermaidSource)),
                 )
-                .child(source);
+                .child(
+                    div()
+                        .id(("markdown-mermaid-source", leaf.id))
+                        .test_support()
+                        .child(source),
+                );
         }
         block.into_any_element()
     }

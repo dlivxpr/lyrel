@@ -1,7 +1,7 @@
 use super::settle_live_geometry;
 use crate::ui::app::test_window::harness_with_tabs;
 use gpui_kit::{
-    VisualContext as _, px, size,
+    px, size,
     test::{TestEventExt as _, TestWindowExt as _},
 };
 
@@ -31,6 +31,10 @@ fn editable_document_typography_reflows_without_rewriting_source_or_history(
         assert!(std::time::Instant::now() < deadline);
         std::thread::sleep(std::time::Duration::from_millis(5));
     };
+    // Reflow is a Wrap-enabled workflow; do not depend on the saved preference.
+    if !app.read_with(&context, |app, _| app.active_buffer().unwrap().wrap) {
+        context.dispatch_action(crate::core::actions::ToggleDocumentWrap);
+    }
     let identity = view.read_with(&context, |view, _| view.document().entity_id());
     let settle = |context: &mut gpui_kit::VisualTestContext| {
         settle_live_geometry(&view, context);
