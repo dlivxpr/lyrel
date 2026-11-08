@@ -729,12 +729,15 @@ impl EditorBuffers {
                     return;
                 }
                 if input_lease.is_some_and(|lease| {
-                    file.input
-                        .markdown()
-                        .is_none_or(|view| view.read(cx).input_token(cx) != lease)
+                    file.input.markdown().is_none_or(|view| {
+                        let current = view.read(cx).input_token(cx);
+                        current.0 != lease.0 || current.1 != lease.1 || current.4 != lease.4
+                    })
                 }) {
-                    // A candidate, commit, focus handoff or replacement document
-                    // superseded the UTF-16/source coordinates of this request.
+                    // Reload owns document bytes, not native input coordinates.
+                    // Selection, scrolling and idle focus handoffs may retire an
+                    // input lease without making a clean disk read obsolete.
+                    // Still reject replaced documents, newer text and IME owners.
                     return;
                 }
                 let (decoded, mtime) = match result {

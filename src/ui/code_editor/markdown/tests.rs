@@ -4,6 +4,9 @@ use gpui_kit::{EntityInputHandler as _, VisualContext as _, test::TestWindowExt 
 #[path = "typography_tests.rs"]
 mod typography;
 
+#[path = "tables/consumer_tests.rs"]
+mod table_consumer;
+
 fn start_in_source(
     view: &gpui_kit::Entity<SourcePresentation>,
     cx: &mut gpui_kit::VisualTestContext,
@@ -1682,6 +1685,34 @@ fn native_nested_lists_tasks_quotes_share_input_history_and_host_save_reopen(
     context.dispatch_action(gpui_kit::component::input::Undo);
     context.dispatch_action(gpui_kit::component::input::Undo);
     context.run_until_parked();
+    // A pointer task toggle must not collapse a reverse text selection. Move
+    // the selected item out and undo through Source before testing its hit target.
+    settle_live_geometry(&view, &mut context);
+    let reverse = Selection::new(at, normalized.find("child").unwrap());
+    view.update_in(&mut context, |view, window, cx| {
+        view.command(Command::Select(reverse), window, cx);
+    });
+    context.update(|window, cx| window.press("shift-tab", cx));
+    context.run_until_parked();
+    view.read_with(&context, |view, cx| {
+        assert_eq!(
+            view.document().read(cx).source().to_string(),
+            "* root\n\n7) [ ] **child**\n+ neighbor\n\n> > *quote*\n"
+        );
+        assert_eq!(
+            view.selection(),
+            Selection::new(reverse.anchor - 2, reverse.head - 2)
+        );
+    });
+    context.dispatch_action(crate::core::actions::ToggleDocumentPreview);
+    context.dispatch_action(gpui_kit::component::input::Undo);
+    context.run_until_parked();
+    view.read_with(&context, |view, cx| {
+        assert!(!view.is_live());
+        assert_eq!(view.document().read(cx).source().to_string(), normalized);
+        assert_eq!(view.selection(), reverse);
+    });
+    context.dispatch_action(crate::core::actions::ToggleDocumentPreview);
     let selection = view.read_with(&context, |view, _| view.selection());
     settle_live_geometry(&view, &mut context);
     context.update(|window, cx| {
@@ -2060,7 +2091,7 @@ fn native_table_cells_navigate_exit_edit_and_save_without_rewriting_neighbors(
         (one, "backspace"),
         (one + 3, "delete"),
         (two, "escape"),
-        (name, "enter"),
+        (three, "enter"),
     ] {
         view.update_in(&mut context, |view, _, cx| view.select_range(at..at, cx));
         context.update(|window, cx| window.press(key, cx));
@@ -2435,6 +2466,31 @@ fn native_table_at_document_edges_transfers_focus_without_inserting_rows(
             );
         });
     }
+    view.update_in(&mut context, |view, window, cx| {
+        let at = original.find("b |").unwrap();
+        view.select_range(at..at, cx);
+        view.focus_handle(cx).focus(window, cx);
+    });
+    context.update(|window, cx| {
+        window.press("enter", cx);
+        window.input("Below", cx);
+    });
+    context.run_until_parked();
+    view.read_with(&context, |view, cx| {
+        assert_eq!(
+            view.document().read(cx).encode().unwrap(),
+            format!("{original}\n\nBelow").as_bytes()
+        );
+    });
+    context.dispatch_action(gpui_kit::component::input::Undo);
+    context.dispatch_action(gpui_kit::component::input::Undo);
+    context.run_until_parked();
+    view.read_with(&context, |view, cx| {
+        assert_eq!(
+            view.document().read(cx).encode().unwrap(),
+            original.as_bytes()
+        );
+    });
 }
 
 fn edit_link_destination_when_ready(
@@ -9753,7 +9809,7 @@ fn native_navigation_pointer_words_lines_and_stationary_offscreen_drag(
         context.update(|window, cx| window.render_frame(cx));
     }
     let extended = view.read_with(&context, |view, _| {
-        assert_eq!(view.selection().anchor(), 0);
+        assert_eq!(view.selection().anchor, 0);
         assert!(view.scroll_offset().y < gpui_kit::Pixels::ZERO);
         assert!(view.selection().head() > source.find("paragraph 5").unwrap());
         view.selection().head()
@@ -9786,7 +9842,7 @@ fn native_navigation_pointer_words_lines_and_stationary_offscreen_drag(
     }
     context.update(|window, cx| window.pointer_up(above, MouseButton::Left, cx));
     view.read_with(&context, |view, cx| {
-        assert_eq!(view.selection().anchor(), extended);
+        assert_eq!(view.selection().anchor, extended);
         assert!(view.selection().head() < extended);
         assert_eq!(
             view.document().read(cx).encode().unwrap(),
@@ -9794,3 +9850,6 @@ fn native_navigation_pointer_words_lines_and_stationary_offscreen_drag(
         );
     });
 }
+
+#[path = "links/consumer_tests.rs"]
+mod link_consumers;
