@@ -16,6 +16,7 @@ struct InlineStyle {
 struct InlineSpan {
     source: Range<usize>,
     revealed: bool,
+    always_hidden: bool,
     target: Option<gpui_kit::SharedString>,
 }
 
@@ -214,16 +215,19 @@ impl Leaf {
     ) -> bool {
         let mut changed = false;
         for span in &mut self.spans {
-            let revealed = std::iter::once(&selection).chain(extra).any(|selection| {
-                let range = selection.range();
-                if range.is_empty() {
-                    span.source.start < range.start && range.start < span.source.end
-                } else {
-                    range.start < span.source.end && range.end > span.source.start
-                }
-            }) || marked.is_some_and(|range| {
-                range.start <= span.source.end && range.end >= span.source.start
-            });
+            // Formatting is zero-width even while selected or composing.
+            // Structure prefixes and link syntax retain contextual source access.
+            let revealed = !span.always_hidden
+                && (std::iter::once(&selection).chain(extra).any(|selection| {
+                    let range = selection.range();
+                    if range.is_empty() {
+                        span.source.start < range.start && range.start < span.source.end
+                    } else {
+                        range.start < span.source.end && range.end > span.source.start
+                    }
+                }) || marked.is_some_and(|range| {
+                    range.start <= span.source.end && range.end >= span.source.start
+                }));
             changed |= revealed != span.revealed;
             span.revealed = revealed;
         }
@@ -454,6 +458,7 @@ impl Leaf {
         self.spans.push(InlineSpan {
             source: range.clone(),
             revealed: false,
+            always_hidden: false,
             target: None,
         });
         self.push_segment(range.clone(), &source[range], Some(ix), None);
@@ -984,13 +989,11 @@ impl Projection {
                             at += 1;
                         }
                     } else {
-                        leaf.push_normalized(
+                        // Keep source line feedback in the editing presentation.
+                        // External Markdown renderers may flow this soft break;
+                        // the source spelling remains a single untouched LF.
+                        leaf.push(
                             range.start + at..range.start + at + ch.len_utf8(),
-                            if ch == '\n' {
-                                " "
-                            } else {
-                                &rest[..ch.len_utf8()]
-                            },
                             &rest[..ch.len_utf8()],
                         );
                         at += ch.len_utf8();
@@ -1026,6 +1029,7 @@ impl Projection {
                 leaf.spans.push(InlineSpan {
                     source: range.clone(),
                     revealed: false,
+                    always_hidden: true,
                     target: None,
                 });
                 leaf.push_segment(
@@ -1058,6 +1062,7 @@ impl Projection {
                 leaf.spans.push(InlineSpan {
                     source: range.clone(),
                     revealed: false,
+                    always_hidden: true,
                     target: None,
                 });
                 let before = leaf.style;
@@ -1103,6 +1108,7 @@ impl Projection {
                 leaf.spans.push(InlineSpan {
                     source: range.clone(),
                     revealed: false,
+                    always_hidden: false,
                     target: None,
                 });
                 leaf.push_segment(
