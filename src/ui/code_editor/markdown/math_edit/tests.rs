@@ -1,18 +1,20 @@
 use crate::ui::app::test_window::harness_with_tabs;
 use gpui_kit::{
-    ElementInputHandler, TestAppContext,
+    ElementInputHandler, Focusable as _, TestAppContext,
     test::{TestInput, TestWindowExt as _},
 };
 
 #[gpui_kit::test]
 fn formula_structural_fraction_cancel_commit_and_shared_document_undo(cx: &mut TestAppContext) {
+    use crate::ui::code_editor::test_host::FileHost;
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("structural-formula.md");
     let source = "前 $\\frac{a}{b}+\\mathrm{keep}$ 后\r\n\r\n$$\nx_i^2\n$$\n";
     std::fs::write(&path, source).unwrap();
     let (app, mut context, _streams) = harness_with_tabs(cx, 1);
+    let host = FileHost::new(lyrel_core::host::HostId(219));
     app.update_in(&mut context, |app, window, cx| {
-        app.open_file_in_editor(&path, window, cx)
+        app.editor_open_on_host(host.clone(), &path, window, cx)
     });
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
     let view = loop {
@@ -44,17 +46,63 @@ fn formula_structural_fraction_cancel_commit_and_shared_document_undo(cx: &mut T
         assert!(std::time::Instant::now() < deadline);
         std::thread::sleep(std::time::Duration::from_millis(5));
     }
+    let identity = view.read_with(&context, |view, _| view.document().entity_id());
     context.update(|window, cx| {
         window.click(ready, cx);
-        window.press(
-            if cfg!(target_os = "macos") {
-                "cmd-home"
-            } else {
-                "ctrl-home"
-            },
-            cx,
+        assert!(window.find("markdown-formula-editor").visible());
+        assert!(view.read(cx).focus_handle(cx).is_focused(window));
+        let start = if cfg!(target_os = "macos") {
+            "cmd-up"
+        } else {
+            "ctrl-home"
+        };
+        let end = if cfg!(target_os = "macos") {
+            "cmd-down"
+        } else {
+            "ctrl-end"
+        };
+        let select_start = if cfg!(target_os = "macos") {
+            "cmd-shift-up"
+        } else {
+            "ctrl-shift-home"
+        };
+        let select_end = if cfg!(target_os = "macos") {
+            "cmd-shift-down"
+        } else {
+            "ctrl-shift-end"
+        };
+        window.press(start, cx);
+        window.press(select_end, cx);
+        window.press("secondary-c", cx);
+        assert_eq!(
+            cx.read_from_clipboard().unwrap().text().as_deref(),
+            Some(r"\frac{a}{b}+\mathrm{keep}")
         );
+        window.press(end, cx);
+        window.press(select_start, cx);
+        window.press("secondary-c", cx);
+        assert_eq!(
+            cx.read_from_clipboard().unwrap().text().as_deref(),
+            Some(r"\frac{a}{b}+\mathrm{keep}")
+        );
+        window.press("secondary-a", cx);
+        window.press("secondary-c", cx);
+        assert_eq!(
+            cx.read_from_clipboard().unwrap().text().as_deref(),
+            Some(r"\frac{a}{b}+\mathrm{keep}")
+        );
+        window.press(start, cx);
         window.press("right", cx); // Numerator, not a source byte inside \\frac.
+        // Both selection directions copy the numerator, never TeX command bytes.
+        window.press("shift-right", cx);
+        window.press("secondary-c", cx);
+        assert_eq!(cx.read_from_clipboard().unwrap().text().as_deref(), Some("a"));
+        window.press("right", cx);
+        window.press("shift-left", cx);
+        window.press("secondary-c", cx);
+        assert_eq!(cx.read_from_clipboard().unwrap().text().as_deref(), Some("a"));
+        window.press("left", cx);
+        assert!(window.find("markdown-formula-editor").visible());
         let bounds = window.find("markdown-source").bounds();
         let mut input = TestInput::new(ElementInputHandler::new(bounds, view.clone()), window);
         input.compose_text(None, "ni", Some(2..2), cx);
@@ -67,6 +115,8 @@ fn formula_structural_fraction_cancel_commit_and_shared_document_undo(cx: &mut T
             source.as_bytes()
         );
         window.press("escape", cx);
+        assert!(window.try_find("markdown-formula-editor").is_none());
+        assert!(view.read(cx).focus_handle(cx).is_focused(window));
     });
     view.read_with(&context, |view, cx| {
         assert_eq!(
@@ -78,9 +128,10 @@ fn formula_structural_fraction_cancel_commit_and_shared_document_undo(cx: &mut T
     context.update(|window, cx| {
         window.render_frame(cx);
         window.click(ready, cx);
+        assert!(window.find("markdown-formula-editor").visible());
         window.press(
             if cfg!(target_os = "macos") {
-                "cmd-home"
+                "cmd-up"
             } else {
                 "ctrl-home"
             },
@@ -89,6 +140,8 @@ fn formula_structural_fraction_cancel_commit_and_shared_document_undo(cx: &mut T
         window.press("right", cx);
         window.input("q", cx);
         window.press("enter", cx);
+        assert!(window.try_find("markdown-formula-editor").is_none());
+        assert!(view.read(cx).focus_handle(cx).is_focused(window));
     });
     let expected = source.replacen("{a}", "{qa}", 1);
     view.read_with(&context, |view, cx| {
@@ -108,10 +161,58 @@ fn formula_structural_fraction_cancel_commit_and_shared_document_undo(cx: &mut T
     context.dispatch_action(gpui_kit::component::input::Redo);
     context.run_until_parked();
     view.read_with(&context, |view, cx| {
+        assert_eq!(view.document().entity_id(), identity);
         assert_eq!(
             view.document().read(cx).encode().unwrap(),
             expected.as_bytes()
         )
+    });
+    context.dispatch_action(crate::core::actions::EditorSave);
+    loop {
+        context.run_until_parked();
+        if app.read_with(&context, |app, _| {
+            app.active_buffer()
+                .is_some_and(|file| !file.dirty && !file.saving)
+        }) {
+            break;
+        }
+        assert!(std::time::Instant::now() < deadline);
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    assert_eq!(std::fs::read(&path).unwrap(), expected.as_bytes());
+    assert!(host.writes.load(std::sync::atomic::Ordering::SeqCst) > 0);
+    app.update_in(&mut context, |app, window, cx| {
+        app.editor_close_file(0, window, cx);
+        app.editor_open_on_host(host.clone(), &path, window, cx);
+    });
+    loop {
+        context.run_until_parked();
+        if app.read_with(&context, |app, cx| {
+            app.active_editor_input().is_some_and(|input| {
+                input
+                    .markdown()
+                    .is_some_and(|view| view.read(cx).document().entity_id() != identity)
+            })
+        }) {
+            break;
+        }
+        assert!(std::time::Instant::now() < deadline);
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    app.read_with(&context, |app, cx| {
+        assert_eq!(app.active_buffer().unwrap().host.id(), lyrel_core::host::HostId(219));
+        assert_eq!(
+            app.active_editor_input()
+                .unwrap()
+                .markdown()
+                .unwrap()
+                .read(cx)
+                .document()
+                .read(cx)
+                .encode()
+                .unwrap(),
+            expected.as_bytes()
+        );
     });
 }
 
@@ -163,7 +264,6 @@ fn formula_lossless_wrappers_scripts_and_matrix_keep_untouched_spelling() {
 #[gpui_kit::test]
 fn formula_completion_alignment_context_history_and_host_reopen(cx: &mut TestAppContext) {
     use crate::ui::code_editor::test_host::FileHost;
-    use gpui_kit::Focusable as _;
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("formula-tools.md");
     let original = "\u{feff}before\r\n\r\n<!--  math:right   -->\n$$\n\\frac{a}{b}\n$$\n\nafter  ";
@@ -189,7 +289,6 @@ fn formula_completion_alignment_context_history_and_host_reopen(cx: &mut TestApp
         if !view.is_live() {
             view.toggle_mode(window, cx);
         }
-        view.focus_handle(cx).focus(window, cx);
     });
     loop {
         context
@@ -209,15 +308,18 @@ fn formula_completion_alignment_context_history_and_host_reopen(cx: &mut TestApp
     }
     context.update(|window, cx| {
         window.click("markdown-math-ready-\\frac{a}{b}", cx);
+        assert!(window.find("markdown-formula-editor").visible());
+        assert!(view.read(cx).focus_handle(cx).is_focused(window));
         window.press(
             if cfg!(target_os = "macos") {
-                "cmd-home"
+                "cmd-up"
             } else {
                 "ctrl-home"
             },
             cx,
         );
         window.press("right", cx);
+        assert!(window.find("markdown-formula-editor").visible());
         window.input("\\zzzzz", cx);
         window.press("escape", cx);
         window.input("\\", cx);
@@ -230,6 +332,14 @@ fn formula_completion_alignment_context_history_and_host_reopen(cx: &mut TestApp
         }
         window.press("down", cx);
         window.press("enter", cx);
+        window.press(
+            if cfg!(target_os = "macos") {
+                "cmd-up"
+            } else {
+                "ctrl-home"
+            },
+            cx,
+        );
         let mut input = TestInput::new(ElementInputHandler::new(bounds, view.clone()), window);
         assert_eq!(input.marked_text_range(cx), Some(0..2));
     });
@@ -245,13 +355,21 @@ fn formula_completion_alignment_context_history_and_host_reopen(cx: &mut TestApp
         window.press("down", cx);
         window.press("up", cx);
         window.press("enter", cx);
-        window.render_frame(cx);
+        assert!(window.find("markdown-formula-editor").visible());
         window.press("shift-f10", cx);
+    });
+    context.run_until_parked();
+    context.update(|window, cx| {
         window.render_frame(cx);
+        assert_eq!(window.find("popup-menu").focused(), Some(true));
         window.press("down", cx);
         window.press("enter", cx); // Copy LaTeX from the production context menu.
     });
-    context.update(|_, cx| {
+    context.run_until_parked();
+    context.update(|window, cx| {
+        window.render_frame(cx);
+        assert!(window.try_find("popup-menu").is_none());
+        assert!(view.read(cx).focus_handle(cx).is_focused(window));
         assert_eq!(
             cx.read_from_clipboard().unwrap().text().unwrap(),
             "\n\\frac{\\alpha a}{b}\n"
@@ -324,11 +442,21 @@ fn formula_completion_alignment_context_history_and_host_reopen(cx: &mut TestApp
     context.update(|window, cx| {
         window.render_frame(cx);
         window.press("shift-f10", cx);
+    });
+    context.run_until_parked();
+    context.update(|window, cx| {
         window.render_frame(cx);
+        assert_eq!(window.find("popup-menu").focused(), Some(true));
         for _ in 0..4 {
             window.press("down", cx);
         }
         window.press("enter", cx); // Align left via the same production menu.
+    });
+    context.run_until_parked();
+    context.update(|window, cx| {
+        window.render_frame(cx);
+        assert!(window.try_find("popup-menu").is_none());
+        assert!(view.read(cx).focus_handle(cx).is_focused(window));
     });
     context.dispatch_action(super::CommitFormula);
     let expected = original
@@ -395,6 +523,7 @@ fn formula_completion_alignment_context_history_and_host_reopen(cx: &mut TestApp
         std::thread::sleep(std::time::Duration::from_millis(5));
     }
     assert_eq!(std::fs::read(&path).unwrap(), expected.as_bytes());
+    assert!(host.writes.load(std::sync::atomic::Ordering::SeqCst) > 0);
     let identity = view.read_with(&context, |view, _| view.document().entity_id());
     app.update_in(&mut context, |app, window, cx| {
         app.editor_close_file(0, window, cx);
