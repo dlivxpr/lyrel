@@ -21,6 +21,9 @@ mod assets;
 #[path = "typography.rs"]
 mod typography;
 
+#[path = "composition.rs"]
+mod composition;
+
 struct CachedBlock {
     version: u64,
     seen: u64,
@@ -40,9 +43,11 @@ struct Viewport {
 pub(crate) struct SourcePresentation {
     document: Entity<MarkdownDocument>,
     state: PresentationState,
+    input_generation: u64,
     focus: FocusHandle,
     scroll: ScrollHandle,
     geometry: Option<(u64, HashMap<u64, LeafGeometry>)>,
+    candidate_frame: Option<composition::Frame>,
     table_geometry: HashMap<u64, Bounds<Pixels>>,
     dragging: bool,
     pointer_link: Option<(u64, String)>,
@@ -79,6 +84,23 @@ impl SourcePresentation {
         wrap: bool,
         cx: &mut Context<Self>,
     ) -> Self {
+        let owner_id = cx.entity_id();
+        cx.on_release(move |view, cx| {
+            // Platform handlers are weak. A last-owner release must still put
+            // retained preedit into the document's existing ordered history.
+            if view.state.composition.is_some()
+                && view.document.read(cx).composition_owner.as_ref()
+                    .is_some_and(|owner| owner.entity_id() == owner_id)
+            {
+                view.document.update(cx, |document, cx| {
+                    document.command(&mut view.state, Command::FinishComposition);
+                    document.composition_owner = None;
+                    cx.emit(DocumentEvent::PresentationChanged);
+                    cx.notify();
+                });
+            }
+        })
+        .detach();
         let observe = cx.subscribe(&document, |this, _, event: &DocumentEvent, cx| {
             if matches!(
                 event,
@@ -171,9 +193,11 @@ impl SourcePresentation {
         let mut view = Self {
             document,
             state: PresentationState::default(),
+            input_generation: 0,
             focus: cx.focus_handle().tab_stop(true),
             scroll: ScrollHandle::new(),
             geometry: None,
+            candidate_frame: None,
             table_geometry: HashMap::new(),
             dragging: false,
             pointer_link: None,
@@ -213,6 +237,19 @@ impl SourcePresentation {
     pub(crate) fn document(&self) -> &Entity<MarkdownDocument> {
         &self.document
     }
+    pub(crate) fn input_token(&self, cx: &App) -> (EntityId, u64, u64, u64, Option<EntityId>) {
+        let document = self.document.read(cx);
+        (
+            self.document.entity_id(),
+            document.revision(),
+            document.input_generation,
+            self.input_generation,
+            document.composition_owner.as_ref().map(WeakEntity::entity_id),
+        )
+    }
+    fn retire_native_composition(&self, completed: bool, cx: &mut Context<Self>) {
+        crate::ui::ime::retire_markdown_composition(&self.focus, self.input_token(cx), completed, cx);
+    }
     pub(crate) fn indent(&self) -> crate::ui::editor_text::Indent {
         self.indent
     }
@@ -228,6 +265,7 @@ impl SourcePresentation {
         self.live
     }
     pub(crate) fn toggle_mode(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.command(Command::FinishComposition, window, cx);
         self.live = !self.live;
         self.geometry = None;
         self.rendered_revision = None;
@@ -571,9 +609,14 @@ impl SourcePresentation {
             .as_ref()
             .and_then(WeakEntity::upgrade);
         if let Some(owner) = owner {
-            owner.update(cx, |view, cx| {
-                view.command(Command::FinishComposition, window, cx)
-            });
+            if owner.read(cx).document.entity_id() == document.entity_id() {
+                owner.update(cx, |view, cx| {
+                    view.command(Command::FinishComposition, window, cx)
+                });
+            } else {
+                // Never forward a lease retained by a replaced document.
+                document.update(cx, |document, _| document.composition_owner = None);
+            }
         }
     }
     pub(crate) fn add_selection(&mut self, range: Range<usize>, cx: &mut Context<Self>) {
@@ -598,26 +641,33 @@ impl SourcePresentation {
         cx.notify();
     }
     pub(crate) fn select_range(&mut self, range: Range<usize>, cx: &mut Context<Self>) {
+        self.input_generation = self.input_generation.wrapping_add(1);
+        let was_composing = self.is_composing();
         self.extra_selections.clear();
         self.reveal_caret = true;
         self.reveal_at = None;
         self.selection_notification = true;
-        if self.is_composing() {
+        if was_composing {
             for cached in self.blocks.values_mut() {
                 cached.version = u64::MAX;
             }
             self.rendered_revision = None;
         }
+        let owner_id = cx.entity_id();
         self.document.update(cx, |document, cx| {
             document.command(
                 &mut self.state,
                 Command::Select(Selection::new(range.start, range.end)),
             );
+            if document.composition_owner.as_ref().is_some_and(|owner| owner.entity_id() == owner_id) {
+                document.composition_owner = None;
+            }
             cx.emit(DocumentEvent::PresentationChanged);
         });
         self.reveal_mdx_selection(cx);
         self.state.selection = self.map_live_caret(self.state.selection, cx);
         self.sync_inline_reveal();
+        self.retire_native_composition(was_composing, cx);
         cx.notify();
     }
     pub(crate) fn selection(&self) -> Selection {
@@ -939,6 +989,17 @@ impl SourcePresentation {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        self.input_generation = self.input_generation.wrapping_add(1);
+        // A late unmark/blur from an idle presentation must not finish a
+        // different split's newly acquired composition.
+        if matches!(command, Command::FinishComposition | Command::CancelComposition)
+            && self.state.composition.is_none()
+        {
+            if self.focus.is_focused(window) {
+                self.retire_native_composition(false, cx);
+            }
+            return;
+        }
         self.state.selection = self.map_live_caret(self.state.selection, cx);
         let command = if self.live
             && self.extra_selections.is_empty()
@@ -1095,6 +1156,9 @@ impl SourcePresentation {
         });
         if let Some(selections) = after_extra {
             self.extra_selections = selections;
+        }
+        if self.state.composition.is_none() && self.focus.is_focused(window) {
+            self.retire_native_composition(marked_before.is_some(), cx);
         }
         if marked_before != self.state.marked_range() {
             let after = self.state.marked_range();
@@ -2003,18 +2067,35 @@ impl EntityInputHandler for SourcePresentation {
         &mut self,
         range: Range<usize>,
         _: Bounds<Pixels>,
-        _: &mut Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Option<Bounds<Pixels>> {
+        if !self.candidate_frame?.is_current(self, window, cx) {
+            return None;
+        }
         let range = self.document.read(cx).utf16_range(range);
-        self.caret_bounds(range.start, cx)
+        let at = if self.is_composing() {
+            self.state.selection.head()
+        } else {
+            range.start
+        };
+        let caret = self.caret_bounds(at, cx)?;
+        let viewport = self.scroll.bounds();
+        (caret.top() >= viewport.top()
+            && caret.bottom() <= viewport.bottom()
+            && caret.left() >= viewport.left()
+            && caret.left() <= viewport.right())
+            .then_some(caret)
     }
     fn character_index_for_point(
         &mut self,
         point: Point<Pixels>,
-        _: &mut Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Option<usize> {
+        if !self.candidate_frame?.is_current(self, window, cx) {
+            return None;
+        }
         Some(
             self.document
                 .read(cx)
@@ -3262,6 +3343,7 @@ impl Element for SourceElement {
             }
             let previous_caret = view.caret_bounds(view.state.selection.head, cx);
             view.geometry = Some((self.revision, geometry));
+            view.candidate_frame = Some(composition::Frame::new(view, window, cx));
             view.viewport_height = viewport.size.height;
             view.viewport.bounds = Some(viewport);
             if view.focus.is_focused(window)
@@ -3351,7 +3433,7 @@ impl Element for SourceElement {
         };
         window.handle_input(
             &focus,
-            ElementInputHandler::new(bounds, self.view.clone()),
+            composition::Input::new(&self.view, cx),
             cx,
         );
         let viewport = self.view.read(cx).scroll.bounds();
