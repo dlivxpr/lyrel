@@ -6,7 +6,8 @@ fn links_selection_gestures_never_navigate_and_plain_click_edits(
 ) {
     use crate::ui::app::test_window::harness_with_tabs;
     use gpui_kit::{
-        Focusable as _, Modifiers, MouseButton, MouseDownEvent, PlatformInput,
+        Focusable as _, KeyDownEvent, KeyUpEvent, Keystroke, Modifiers, MouseButton, MouseDownEvent,
+        PlatformInput,
         test::{TestEventExt as _, TestWindowExt as _},
     };
     let directory = tempfile::tempdir().unwrap();
@@ -141,13 +142,43 @@ fn links_selection_gestures_never_navigate_and_plain_click_edits(
     });
     context.update(|window, cx| {
         window.right_click("markdown-source", cx);
-        window.press("escape", cx);
+    });
+    // ContextMenu mounts its PopupMenu in a deferred app update.
+    context.run_until_parked();
+    let escape = context.update(|window, cx| {
+        window.render_frame(cx);
+        assert_eq!(window.find("popup-menu").focused(), Some(true));
+        assert_eq!(view.read(cx).selection(), Selection::caret(label));
+        let escape = Keystroke::parse_with_os("escape", cx.platform_info().os).unwrap();
+        window.dispatch_event(
+            PlatformInput::KeyDown(KeyDownEvent {
+                keystroke: escape.clone(),
+                is_held: false,
+                prefer_character_input: false,
+            }),
+            cx,
+        );
+        escape
+    });
+    // Match native event boundaries: let dismissal remove the menu before
+    // key-up can draw another frame of the still-open popup.
+    context.run_until_parked();
+    context.update(|window, cx| {
+        window.dispatch_event(PlatformInput::KeyUp(KeyUpEvent { keystroke: escape }), cx);
     });
     context.run_until_parked();
     context.update(|window, cx| {
+        window.render_frame(cx);
+        assert!(window.try_find("popup-menu").is_none());
         assert!(view.read(cx).focus_handle(cx).is_focused(window));
         assert_ne!(view.read(cx).selection(), Selection::caret(0));
+        assert_eq!(view.read(cx).selection(), Selection::caret(label));
         window.right_click("markdown-source", cx);
+    });
+    context.run_until_parked();
+    context.update(|window, cx| {
+        window.render_frame(cx);
+        assert_eq!(window.find("popup-menu").focused(), Some(true));
         let edit = window
             .within("popup-menu")
             .find_by_label(crate::ui::i18n::t(
@@ -185,6 +216,11 @@ fn links_selection_gestures_never_navigate_and_plain_click_edits(
     settle_live_geometry(&view, &mut context);
     context.update(|window, cx| {
         window.right_click("markdown-source", cx);
+    });
+    context.run_until_parked();
+    context.update(|window, cx| {
+        window.render_frame(cx);
+        assert_eq!(window.find("popup-menu").focused(), Some(true));
         let menu = window.within("popup-menu");
         let open = menu
             .find_by_label(crate::ui::i18n::t(
