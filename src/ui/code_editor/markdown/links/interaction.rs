@@ -184,10 +184,7 @@ impl SourcePresentation {
                 let geometry = geometries?.get(&leaf.id)?;
                 let start = leaf.display_offset(link.label.start.max(leaf.range.start));
                 let end = leaf.display_offset(link.label.end.min(leaf.range.end));
-                let recover_wrapped_start = matches!(
-                    leaf.kind,
-                    Kind::Prose | Kind::Heading(_) | Kind::List(_) | Kind::Quote(_)
-                );
+                let recover_wrapped_start = navigation::recover_wrapped_start(leaf.kind);
                 Some(leaf.text[start..end].grapheme_indices(true).filter_map(
                     move |(offset, grapheme)| {
                         link_grapheme_line_box(

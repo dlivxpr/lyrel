@@ -266,10 +266,7 @@ impl SourcePresentation {
             let Some(geometry) = geometry.get(&leaf.id) else {
                 continue;
             };
-            let recover_wrapped_start = matches!(
-                leaf.kind,
-                Kind::Prose | Kind::Heading(_) | Kind::List(_) | Kind::Quote(_)
-            );
+            let recover_wrapped_start = navigation::recover_wrapped_start(leaf.kind);
             let first = self.spelling.diagnostics.partition_point(|diagnostic| {
                 diagnostic
                     .ranges

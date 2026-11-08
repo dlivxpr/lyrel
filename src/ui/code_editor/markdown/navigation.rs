@@ -1,5 +1,13 @@
 use super::*;
 
+/// Only left-aligned paragraph kinds share the origin needed for recovery.
+pub(super) fn recover_wrapped_start(kind: Kind) -> bool {
+    matches!(
+        kind,
+        Kind::Prose | Kind::Heading(_) | Kind::List(_) | Kind::Quote(_)
+    )
+}
+
 /// A grapheme's line box from the same geometry used to paint the text.
 /// Wrapped-start recovery is restricted to the left-aligned paragraph paths;
 /// table alignment and bidi paint origins need a richer upstream geometry API.

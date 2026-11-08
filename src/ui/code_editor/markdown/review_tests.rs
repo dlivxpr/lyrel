@@ -534,7 +534,16 @@ fn review_table_formula_session_remeasures_owning_row_before_source_commit(
 
 #[gpui_kit::test]
 fn first_soft_wrapped_link_grapheme_hovers_edits_and_opens(cx: &mut gpui_kit::TestAppContext) {
-    use crate::ui::app::test_window::harness_with_tabs;
+    native_link_grapheme_hovers_edits_and_opens(cx, false);
+}
+
+#[gpui_kit::test]
+fn fragment_tail_link_grapheme_hovers_edits_and_opens(cx: &mut TestAppContext) {
+    native_link_grapheme_hovers_edits_and_opens(cx, true);
+}
+
+fn native_link_grapheme_hovers_edits_and_opens(cx: &mut TestAppContext, fragment_tail: bool) {
+    // Both boundary cases use the same real workbench, LocalHost and native text system.
     use gpui_kit::{
         Focusable as _, Modifiers, MouseButton, TestAppContext, VisualContext as _, point, px,
         size,
@@ -549,35 +558,24 @@ fn first_soft_wrapped_link_grapheme_hovers_edits_and_opens(cx: &mut gpui_kit::Te
         gpui_kit::platform::current_platform(true).text_system(),
     );
     let cx = &mut native_context;
-    let directory = tempfile::tempdir().unwrap();
-    let path = directory.path().join("wrapped-link.md");
-    let target = directory.path().join("target.md");
-    let original = format!("[{}](target.md#ignored)\n\nkeep\n", "W ".repeat(100));
-    std::fs::write(&path, &original).unwrap();
-    std::fs::write(&target, "# Target title\n\nFirst paragraph\n").unwrap();
-    let (app, mut context, _streams) = harness_with_tabs(cx, 1);
-    app.update_in(&mut context, |app, window, cx| {
-        app.open_file_in_editor(&path, window, cx)
-    });
-    let deadline = Instant::now() + Duration::from_secs(15);
-    let view = loop {
-        context.run_until_parked();
-        if let Some(view) = app.read_with(&context, |app, _| {
-            app.active_editor_input()
-                .and_then(|input| input.markdown().cloned())
-        }) {
-            break view;
-        }
-        assert!(Instant::now() < deadline);
-        std::thread::sleep(Duration::from_millis(5));
+    let glyph = if fragment_tail { "界" } else { "W" };
+    let original = if fragment_tail {
+        // CJK supplies visible, non-whitespace wrap boundaries. The embedded
+        // image makes this a real InlineFlow, not a whole TextLayout paragraph.
+        format!(
+            "[{}![alt](missing.png) after](target.md#ignored)\n\nkeep\n",
+            glyph.repeat(100)
+        )
+    } else {
+        format!("[{}](target.md#ignored)\n\nkeep\n", "W ".repeat(100))
     };
-    view.update_in(&mut context, |view, window, cx| {
-        if !view.is_live() {
-            view.toggle_mode(window, cx);
-        }
+    let (directory, path, app, mut context, _streams, view) = fixture!(cx, &original, true);
+    let identity = view.read_with(&context, |view, _| view.document().entity_id());
+    let target = directory.path().join("target.md");
+    std::fs::write(&target, "# Target title\n\nFirst paragraph\n").unwrap();
+    view.update_in(&mut context, |view, _, cx| {
         view.set_soft_wrap(true, cx);
         view.select_range(original.len()..original.len(), cx);
-        view.focus_handle(cx).focus(window, cx);
     });
     cx.simulate_window_resize(context.window_handle(), size(px(1000.), px(1800.)));
     let deadline = Instant::now() + Duration::from_secs(15);
@@ -590,11 +588,17 @@ fn first_soft_wrapped_link_grapheme_hovers_edits_and_opens(cx: &mut gpui_kit::Te
         }
         assert!(Instant::now() < deadline, "link projection did not settle");
     }
-    // Independently locate the real next-row leading W through native caret
-    // hit testing. Never derive the pointer from the link-region helper.
+    // Locate the pointer only through independent native caret geometry, not
+    // the link-region helper whose fragment-tail recovery is under test.
     let (position, at) = view.read_with(&context, |view, cx| {
         let link = &view.projection.links.links[0];
         let leaf = view.projection.leaf_at(link.label.start).unwrap();
+        if fragment_tail {
+            assert!(
+                leaf.image_urls().next().is_some(),
+                "link must contain an image atom"
+            );
+        }
         let geometry = &view.geometry.as_ref().unwrap().1[&leaf.id];
         let reference = leaf
             .text
@@ -602,25 +606,46 @@ fn first_soft_wrapped_link_grapheme_hovers_edits_and_opens(cx: &mut gpui_kit::Te
             .find_map(|(ix, text)| {
                 let a = geometry.position_for_index(ix);
                 let b = geometry.position_for_index(ix + text.len());
-                (text == "W" && a.y == b.y).then_some(b.x - a.x)
+                (text == glyph && a.y == b.y && b.x > a.x).then_some(b.x - a.x)
             })
             .unwrap();
-        let (ix, b) = leaf
+        let (ix, a, b) = leaf
             .text
             .grapheme_indices(true)
             .find_map(|(ix, text)| {
                 let a = geometry.position_for_index(ix);
                 let b = geometry.position_for_index(ix + text.len());
-                (text == "W" && a.y != b.y).then_some((ix, b))
+                (text == glyph && a.y != b.y && leaf.atom_source(ix).is_none())
+                    .then_some((ix, a, b))
             })
-            .expect("native link must exercise a whole-layout soft wrap");
-        let position = point(
-            geometry.bounds().left() + reference * 0.75,
-            b.y + geometry.caret_height() / 2.,
-        );
-        assert_eq!(geometry.index_for_position(position), ix + 1);
+            .expect("native link must exercise a visible grapheme across a caret row boundary");
+        let origin = geometry.position_for_index(0).x;
+        let next_start =
+            geometry.index_for_position(point(origin, b.y + geometry.caret_height() / 2.));
+        let (position, hit) = if fragment_tail {
+            assert_ne!(
+                next_start, ix,
+                "must be a fragment tail, not a whole-layout wrapped start"
+            );
+            assert!(a.y < b.y);
+            let position = point(a.x + reference * 0.25, a.y + geometry.caret_height() / 2.);
+            // The native hit and its caret both belong to the preceding piece's
+            // final visible glyph. Ordinary same-row glyphs cannot satisfy this.
+            assert_eq!(geometry.index_for_position(position), ix);
+            assert_eq!(geometry.position_for_index(ix).y, a.y);
+            assert_eq!(
+                geometry.index_for_position(point(a.x + reference * 0.75, position.y)),
+                ix + glyph.len()
+            );
+            (position, ix)
+        } else {
+            assert_eq!(next_start, ix);
+            let position = point(origin + reference * 0.75, b.y + geometry.caret_height() / 2.);
+            assert_eq!(geometry.index_for_position(position), ix + glyph.len());
+            (position, ix + glyph.len())
+        };
         assert!(view.geometry_is_current(cx));
-        (position, leaf.source_offset(ix + 1))
+        (position, leaf.source_offset(hit))
     });
     context.update(|window, cx| window.pointer_move(position, None, cx));
     context.update(|window, cx| window.pointer_move(position, None, cx));
@@ -650,7 +675,7 @@ fn first_soft_wrapped_link_grapheme_hovers_edits_and_opens(cx: &mut gpui_kit::Te
         }
         assert!(
             Instant::now() < deadline,
-            "first wrapped glyph did not open its preview"
+            "native boundary glyph did not open its preview"
         );
         std::thread::sleep(Duration::from_millis(5));
     }
@@ -658,6 +683,8 @@ fn first_soft_wrapped_link_grapheme_hovers_edits_and_opens(cx: &mut gpui_kit::Te
         window.pointer_down(position, MouseButton::Left, cx);
         window.pointer_up(position, MouseButton::Left, cx);
         assert_eq!(view.read(cx).selection(), Selection::caret(at));
+        assert_eq!(view.read(cx).document().entity_id(), identity);
+        assert_eq!(app.read(cx).active_buffer().unwrap().path, path);
         window.input("X", cx);
     });
     settle(&view, &mut context);
@@ -675,6 +702,7 @@ fn first_soft_wrapped_link_grapheme_hovers_edits_and_opens(cx: &mut gpui_kit::Te
     context.dispatch_action(crate::core::actions::ToggleDocumentPreview);
     settle(&view, &mut context);
     view.read_with(&context, |view, cx| {
+        assert_eq!(view.document().entity_id(), identity);
         assert_eq!(
             view.document().read(cx).encode().unwrap(),
             original.as_bytes()
