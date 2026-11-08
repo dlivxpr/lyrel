@@ -2875,3 +2875,6 @@ fn markdown_embed_fragment_source_history_and_host_roundtrip(cx: &mut TestAppCon
     assert_eq!(std::fs::read(directory.path().join("next.md")).unwrap(), target.as_bytes());
     assert_eq!(std::fs::read(directory.path().join("nested.md")).unwrap(), nested.as_bytes());
 }
+
+#[path = "../markdown/clipboard_tests.rs"]
+mod clipboard_tests;
