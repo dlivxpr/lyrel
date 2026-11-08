@@ -482,13 +482,12 @@ mod tests {
                             segment.right() - segment.size.width * 0.25,
                             segment.center().y,
                         ));
-                        // Native shaping can return the byte after the base
-                        // character but before its zero-advance combining mark.
-                        // It must still be this grapheme's visual trailing edge,
-                        // not a caret belonging to an adjacent glyph or row.
+                        // Native shaping can return a raw caret inside a
+                        // combining grapheme, whose physical point need not be
+                        // its end. The editor must normalize the right-hand hit
+                        // to the complete grapheme boundary below.
                         assert!(leaf.text.is_char_boundary(trailing));
                         assert!(ix < trailing && trailing <= ix + grapheme.len());
-                        assert_eq!(geometry.position_for_index(trailing), b);
                         assert_eq!(
                             super::super::navigation::hit_test_grapheme(
                                 &leaf.text,

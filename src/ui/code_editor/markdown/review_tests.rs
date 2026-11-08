@@ -563,11 +563,11 @@ fn native_link_grapheme_hovers_edits_and_opens(cx: &mut TestAppContext, fragment
         // CJK supplies visible, non-whitespace wrap boundaries. The embedded
         // image makes this a real InlineFlow, not a whole TextLayout paragraph.
         format!(
-            "[{}![alt](missing.png) after](target.md#ignored)\n\nkeep\n",
+            "[{}![alt](missing.png) after](target.md#target-title)\n\nkeep\n",
             glyph.repeat(100)
         )
     } else {
-        format!("[{}](target.md#ignored)\n\nkeep\n", "W ".repeat(100))
+        format!("[{}](target.md#target-title)\n\nkeep\n", "W ".repeat(100))
     };
     let (directory, path, app, mut context, _streams, view) = fixture!(cx, &original, true);
     let identity = view.read_with(&context, |view, _| view.document().entity_id());
