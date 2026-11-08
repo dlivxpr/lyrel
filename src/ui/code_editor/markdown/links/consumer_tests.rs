@@ -105,8 +105,12 @@ fn links_selection_gestures_never_navigate_and_plain_click_edits(
             );
         });
     }
+    // The explicit simulated gestures retain their modifiers in the window.
+    // Release them through the real event route before testing an ordinary click.
+    context.update(|window, cx| window.change_modifiers(Modifiers::none(), cx));
     settle_live_geometry(&view, &mut context);
     context.update(|window, cx| {
+        assert_eq!(window.modifiers(), Modifiers::none());
         let point = view
             .read(cx)
             .range_to_bounds(&(label + 1..label + 1), cx)
@@ -114,6 +118,7 @@ fn links_selection_gestures_never_navigate_and_plain_click_edits(
             .center();
         window.pointer_down(point, MouseButton::Left, cx);
         window.pointer_up(point, MouseButton::Left, cx);
+        assert_eq!(view.read(cx).selection(), Selection::caret(label + 1));
         window.input("X", cx);
     });
     context.run_until_parked();
@@ -125,14 +130,60 @@ fn links_selection_gestures_never_navigate_and_plain_click_edits(
     });
     context.dispatch_action(gpui_kit::component::input::Undo);
     settle_live_geometry(&view, &mut context);
+    view.read_with(&context, |view, cx| {
+        assert_eq!(
+            view.document().read(cx).encode().unwrap(),
+            original.as_bytes()
+        );
+    });
     view.update_in(&mut context, |view, _, cx| {
         view.select_range(label..label, cx)
     });
     context.update(|window, cx| {
         window.right_click("markdown-source", cx);
         window.press("escape", cx);
+    });
+    context.run_until_parked();
+    context.update(|window, cx| {
         assert!(view.read(cx).focus_handle(cx).is_focused(window));
         assert_ne!(view.read(cx).selection(), Selection::caret(0));
+        window.right_click("markdown-source", cx);
+        let edit = window
+            .within("popup-menu")
+            .find_by_label(crate::ui::i18n::t(
+                crate::ui::i18n::L10nKey::MarkdownEditLinkDestination,
+            ))
+            .bounds()
+            .center();
+        window.pointer_down(edit, MouseButton::Left, cx);
+        window.pointer_up(edit, MouseButton::Left, cx);
+    });
+    // Popup actions are deferred; let the edit command consume the menu's
+    // original selection before typing or selecting the label for Open link.
+    context.run_until_parked();
+    let destination = original.find("#heading").unwrap();
+    context.update(|window, cx| {
+        assert_eq!(
+            view.read(cx).selection().range(),
+            destination..destination + "#heading".len()
+        );
+        assert!(view.read(cx).focus_handle(cx).is_focused(window));
+        window.input("#missing", cx);
+    });
+    context.run_until_parked();
+    view.read_with(&context, |view, cx| {
+        assert_eq!(
+            view.document().read(cx).encode().unwrap(),
+            original.replacen("#heading", "#missing", 1).as_bytes()
+        );
+    });
+    context.dispatch_action(gpui_kit::component::input::Undo);
+    settle_live_geometry(&view, &mut context);
+    view.update_in(&mut context, |view, _, cx| {
+        view.select_range(label..label, cx)
+    });
+    settle_live_geometry(&view, &mut context);
+    context.update(|window, cx| {
         window.right_click("markdown-source", cx);
         let menu = window.within("popup-menu");
         let open = menu
@@ -144,6 +195,7 @@ fn links_selection_gestures_never_navigate_and_plain_click_edits(
         window.pointer_down(open, MouseButton::Left, cx);
         window.pointer_up(open, MouseButton::Left, cx);
     });
+    context.run_until_parked();
     view.read_with(&context, |view, cx| {
         assert_eq!(view.selection(), Selection::caret(0));
         assert_eq!(
