@@ -19,6 +19,7 @@ pub(super) struct Link {
 #[derive(Default)]
 pub(super) struct Index {
     pub links: Vec<Link>,
+    pub embeds: Vec<Link>,
     pub headings: Vec<(String, usize)>,
 }
 impl Index {
@@ -55,14 +56,17 @@ impl Index {
                         let body = start + opening.len();
                         let Some(end) = raw[body..].find(closing).map(|at| body + at) else { break; };
                         cursor = end + closing.len();
-                        if start > 0 && matches!(raw.as_bytes()[start - 1], b'\\' | b'!') { continue; }
+                        if start > 0 && raw.as_bytes()[start - 1] == b'\\' { continue; }
+                        let embed = start > 0 && raw.as_bytes()[start - 1] == b'!';
+                        if embed && start > 1 && raw.as_bytes()[start - 2] == b'\\' { continue; }
                         let inside = &raw[body..end];
                         let (target, label) = inside.split_once('|').unwrap_or((inside, inside));
                         if target.is_empty() || target.contains('\n') || (opening == "((" && !target.contains('#')) { continue; }
                         let destination = range.start + body..range.start + body + target.len();
                         let label_start = if label == inside { body } else { body + target.len() + 1 };
-                        index.links.push(Link {
-                            source: range.start + start..range.start + cursor,
+                        let references = if embed { &mut index.embeds } else { &mut index.links };
+                        references.push(Link {
+                            source: range.start + start - usize::from(embed)..range.start + cursor,
                             label: range.start + label_start..range.start + end,
                             destination,
                             target: target.to_owned(),
@@ -157,6 +161,36 @@ impl Index {
         let mut matches = self.headings.iter().filter(|(slug, _)| slug == fragment.as_ref());
         let at = matches.next()?.1;
         matches.next().is_none().then_some(at)
+    }
+    /// Resolve the same explicit anchor used for navigation. Headings include
+    /// their section; a literal id includes its positioned owning block only.
+    pub(super) fn fragment(&self, source: &str, root: &Node, fragment: Option<&str>) -> Result<Range<usize>, L10nKey> {
+        let Some(fragment) = fragment.filter(|value| !value.is_empty()) else { return Ok(0..source.len()); };
+        let decoded = percent_encoding::percent_decode_str(fragment).decode_utf8().map_err(|_| L10nKey::MarkdownLinkInvalidDestination)?;
+        let mut matches = self.headings.iter().filter(|(id, _)| id == decoded.as_ref());
+        let at = matches.next().map(|(_, at)| *at).ok_or(L10nKey::MarkdownLinkAnchorNotFound)?;
+        if matches.next().is_some() { return Err(L10nKey::MarkdownReferenceAmbiguous); }
+        let mut heading = None;
+        visit(root, &mut |node| {
+            if let Node::Heading(value) = node {
+                if value.position.as_ref().is_some_and(|position| position.start.offset == at) { heading = Some(value.depth); }
+            }
+        });
+        if let Some(depth) = heading {
+            let mut end = source.len();
+            visit(root, &mut |node| {
+                if let Node::Heading(value) = node {
+                    if let Some(position) = &value.position {
+                        if position.start.offset > at && value.depth <= depth { end = end.min(position.start.offset); }
+                    }
+                }
+            });
+            return Ok(at..end);
+        }
+        let block = root.children().into_iter().flatten().filter_map(Node::position)
+            .find(|position| position.start.offset <= at && at < position.end.offset)
+            .ok_or(L10nKey::MarkdownLinkAnchorNotFound)?;
+        Ok(block.start.offset..block.end.offset)
     }
 }
 fn visit(node: &Node, f: &mut impl FnMut(&Node)) {

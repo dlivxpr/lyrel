@@ -14,6 +14,7 @@ pub(super) struct State {
 }
 pub(super) struct Target {
     range: Range<usize>,
+    embed: bool,
     cursor: usize,
     revision: u64,
     resources: super::super::resources::ResourceContext,
@@ -57,7 +58,8 @@ impl SourcePresentation {
         let line = document.source().slice(start..end).to_string();
         let trigger = [("[[", false), ("((", true), ("#", false)].into_iter().filter_map(|(delimiter, anchors)| {
             let at = line.rfind(delimiter)?;
-            if at > 0 && matches!(line.as_bytes()[at - 1], b'\\' | b'!') { return None; }
+            if at > 0 && line.as_bytes()[at - 1] == b'\\' { return None; }
+            if at > 1 && line.as_bytes()[at - 1] == b'!' && line.as_bytes()[at - 2] == b'\\' { return None; }
             let query = &line[at + delimiter.len()..];
             if delimiter == "#" {
                 if at > 0 && !line[..at].chars().next_back().is_some_and(char::is_whitespace) { return None; }
@@ -68,6 +70,7 @@ impl SourcePresentation {
             Some((at, delimiter, anchors))
         }).min_by_key(|(at, _, _)| *at);
         let Some((at, delimiter, anchors)) = trigger else { return; };
+        let embed = delimiter != "#" && at > 0 && line.as_bytes()[at - 1] == b'!';
         // Positioned code/math/object regions retain their ordinary input behavior.
         if self.projection.leaf_at(end).is_some_and(|leaf| !leaf.accepts_reference(end)) { return; }
         let mut query = line[at + delimiter.len()..].to_owned();
@@ -77,7 +80,7 @@ impl SourcePresentation {
         let cancelled = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
         let closing = match delimiter { "[[" => "]]", "((" => "))", _ => "" };
         let suffix = document.source().chars_at(end).zip(closing.chars()).take_while(|(a, b)| a == b).count();
-        self.references.target = Some(Target { range: start + at..end + suffix, cursor: end, revision, resources, cancelled: cancelled.clone() });
+        self.references.target = Some(Target { range: start + at - usize::from(embed)..end + suffix, embed, cursor: end, revision, resources, cancelled: cancelled.clone() });
         self.references.status = Some(L10nKey::MarkdownReferenceLoading);
         let presentation = cx.weak_entity();
         let generation = self.references.generation;
@@ -121,15 +124,22 @@ impl SourcePresentation {
         let Some(list) = &self.references.list else { return self.references.target.is_some(); };
         let Some(item) = list.read(cx).selected_index().and_then(|ix| list.read(cx).delegate().items.get(ix.row)).cloned() else { return true; };
         let range = self.references.target.as_ref().unwrap().range.clone();
+        let embed = self.references.target.as_ref().unwrap().embed;
         let mut text = String::with_capacity(item.label().len() + item.destination().len() + 4);
-        text.push('[');
-        for ch in item.label().chars() {
-            if matches!(ch, '\\' | '[' | ']' | '*' | '_' | '`' | '~' | '<' | '>' | '&' | '|') { text.push('\\'); }
-            text.push(ch);
+        if embed {
+            text.push_str("![[");
+            text.push_str(item.destination());
+            text.push_str("]]");
+        } else {
+            text.push('[');
+            for ch in item.label().chars() {
+                if matches!(ch, '\\' | '[' | ']' | '*' | '_' | '`' | '~' | '<' | '>' | '&' | '|') { text.push('\\'); }
+                text.push(ch);
+            }
+            text.push_str("](");
+            text.push_str(item.destination());
+            text.push(')');
         }
-        text.push_str("](");
-        text.push_str(item.destination());
-        text.push(')');
         self.dismiss_references(cx);
         self.command(Command::Replace { range, text, kind: EditKind::Command }, window, cx);
         self.focus.focus(window, cx);

@@ -31,6 +31,9 @@ impl Cell {
     pub fn column(self) -> usize {
         self.column
     }
+    pub(super) fn alignment(self) -> AlignKind {
+        self.align
+    }
     pub fn shift(&mut self, shift: impl Fn(usize) -> usize) {
         self.start = shift(self.start);
         self.end = shift(self.end);

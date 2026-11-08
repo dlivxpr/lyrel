@@ -8,6 +8,7 @@ use std::ops::Range;
 use unicode_segmentation::UnicodeSegmentation as _;
 
 mod images;
+pub(super) mod embeds;
 pub(super) mod links;
 mod lists;
 mod math;
@@ -1003,6 +1004,12 @@ pub(super) enum DocumentEvent {
     },
     ResourceContextChanged,
     ImagesChanged,
+    RequestEmbeds {
+        presentation: gpui_kit::WeakEntity<SourcePresentation>,
+        generation: u64,
+        revision: u64,
+        resource_epoch: Option<(lyrel_core::host::HostId, u64)>,
+    },
     RequestReferences {
         presentation: gpui_kit::WeakEntity<SourcePresentation>,
         generation: u64,

@@ -399,11 +399,21 @@ fn content(leaf: &Leaf) -> &str {
 
 impl Job {
     pub(super) fn run(self) -> Batch {
+        self.run_with_budget(None)
+    }
+    pub(super) fn run_bounded(self, remaining: &mut usize) -> Batch {
+        self.run_with_budget(Some(remaining))
+    }
+    fn run_with_budget(self, mut remaining: Option<&mut usize>) -> Batch {
         let rasterizer = SvgRenderer::new(Arc::new(gpui_kit::assets::Assets));
         let mut batch = Vec::new();
         for (id, key) in self.requests {
             if self.control.is_cancelled() {
                 break;
+            }
+            if remaining.as_deref().is_some_and(|remaining| *remaining == 0) {
+                batch.push((id, key, Err(Failure::Limit)));
+                continue;
             }
             let renderer = Renderer::new()
                 .with_engine(key.style.engine())
@@ -451,6 +461,10 @@ impl Job {
                 if width > 4096. || height > 4096. || width.ceil() * height.ceil() > 8_000_000. {
                     return Err(Failure::Limit);
                 }
+                let bytes = (width.ceil() as usize).saturating_mul(height.ceil() as usize).saturating_mul(4);
+                if remaining.as_deref().is_some_and(|remaining| bytes > *remaining) {
+                    return Err(Failure::Limit);
+                }
                 if self.control.is_cancelled() {
                     return Err(Failure::Diagnostic("cancelled".into()));
                 }
@@ -469,6 +483,10 @@ impl Job {
             })();
             if self.control.is_cancelled() {
                 break;
+            }
+            if let (Some(remaining), Ok(image)) = (remaining.as_deref_mut(), &result) {
+                let size = image.size(0);
+                *remaining = remaining.saturating_sub((size.width.0 as usize).saturating_mul(size.height.0 as usize).saturating_mul(4));
             }
             batch.push((id, key, result));
         }

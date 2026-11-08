@@ -1267,6 +1267,9 @@ impl LyrelApp {
                     if let markdown::DocumentEvent::RequestReferences { presentation, generation, revision, resource_epoch, cancelled, query, anchors } = event {
                         app.editor_query_references(id, presentation.clone(), *generation, *revision, *resource_epoch, cancelled.clone(), query.clone(), *anchors, window, cx);
                     }
+                    if let markdown::DocumentEvent::RequestEmbeds { presentation, generation, revision, resource_epoch } = event {
+                        app.editor_refresh_embeds(id, presentation.clone(), *generation, *revision, *resource_epoch, window, cx);
+                    }
                 });
             if let Some(file) = self.editor.buffers.get_mut(id) {
                 file._links_sub = Some(subscription);
