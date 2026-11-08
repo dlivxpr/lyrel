@@ -196,6 +196,20 @@ fn formula_completion_alignment_context_history_and_host_reopen(cx: &mut TestApp
     context.dispatch_action(super::CommitFormula);
     let expected = original.replace("<!--  math:right   -->", "<!-- math:left -->").replace("{a}", "{\\alpha a}");
     view.read_with(&context, |view, cx| assert_eq!(view.document().read(cx).encode().unwrap(), expected.as_bytes()));
+    loop {
+        context.run_until_parked();
+        context.update(|window, cx| window.render_frame(cx));
+        if context.update(|window, _| window.try_find("markdown-math-ready-\\frac{\\alpha a}{b}").is_some()) { break; }
+        assert!(std::time::Instant::now() < deadline);
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    context.update(|window, cx| window.click("markdown-math-ready-\\frac{\\alpha a}{b}", cx));
+    context.dispatch_action(super::AlignFormulaCenter);
+    context.dispatch_action(super::CommitFormula);
+    let centered = expected.replace("<!-- math:left -->\n", "");
+    view.read_with(&context, |view, cx| assert_eq!(view.document().read(cx).encode().unwrap(), centered.as_bytes()));
+    context.dispatch_action(gpui_kit::component::input::Undo);
+    view.read_with(&context, |view, cx| assert_eq!(view.document().read(cx).encode().unwrap(), expected.as_bytes()));
     context.dispatch_action(gpui_kit::component::input::Undo);
     view.read_with(&context, |view, cx| assert_eq!(view.document().read(cx).encode().unwrap(), original.as_bytes()));
     context.dispatch_action(gpui_kit::component::input::Redo);

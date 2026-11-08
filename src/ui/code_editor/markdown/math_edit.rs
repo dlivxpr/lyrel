@@ -130,9 +130,9 @@ impl Session {
         if !self.preedit.is_empty() { return Vec::new(); }
         self.command.as_deref().map(input::command_matches).unwrap_or_default()
     }
-    fn accept_completion(&mut self, name: &str) {
-        if !self.preedit.is_empty() || !self.completions().contains(&name) { return; }
-        self.command = Some(name.into()); self.completion_ix = 0; self.commit_command();
+    fn accept_completion(&mut self, name: &str) -> bool {
+        if !self.preedit.is_empty() || !self.completions().contains(&name) { return false; }
+        self.command = Some(name.into()); self.completion_ix = 0; self.commit_command(); true
     }
     fn edits(&self, source: &Rope) -> Vec<(Range<usize>, String)> {
         let mut edits = Vec::new();
@@ -512,14 +512,14 @@ impl SourcePresentation {
             bar = bar.child(Button::new(SharedString::from(format!("formula-complete-{name}"))).small().ghost()
                 .label(format!("\\{name}")).selected(ix == selected)
                 .on_hover(cx.listener(move |view, hovered: &bool, _, cx| {
-                    if *hovered { if let Some(session) = &mut view.formula { if session.id == session_id && session.preedit.is_empty() { session.completion_ix = ix; cx.notify(); } } }
+                    if *hovered { if let Some(session) = &mut view.formula { if session.id == session_id && session.preedit.is_empty() && session.completion_ix != ix { session.completion_ix = ix; cx.notify(); } } }
                 }))
                 .on_click(cx.listener(move |view, _, window, cx| {
-                    if let Some(session) = &mut view.formula { if session.id == session_id { session.accept_completion(name); view.formula_changed(window, cx); } }
+                    if view.formula.as_mut().is_some_and(|session| session.id == session_id && session.accept_completion(name)) { view.formula_changed(window, cx); }
                     view.focus.focus(window, cx);
                 }))
                 .on_mouse_down(MouseButton::Left, cx.listener(move |view, _, window, cx| {
-                    if let Some(session) = &mut view.formula { if session.id == session_id { session.accept_completion(name); view.formula_changed(window, cx); } }
+                    if view.formula.as_mut().is_some_and(|session| session.id == session_id && session.accept_completion(name)) { view.formula_changed(window, cx); }
                     view.focus.focus(window, cx); cx.stop_propagation();
                 })));
         }
