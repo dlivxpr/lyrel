@@ -714,13 +714,13 @@ impl MarkdownDocument {
                         tables::Operation::InsertColumnBefore | tables::Operation::InsertColumnAfter | tables::Operation::DeleteColumn => {
                             tables::column_at(&local, header, state.selection.head.saturating_sub(start)).and_then(|column| {
                                 let column = column + usize::from(matches!(operation, tables::Operation::InsertColumnAfter));
-                                tables::metadata::column_edit(&self.source, range.start, column, !matches!(operation, tables::Operation::DeleteColumn))
+                                tables::metadata::column_edit(&self.source, start + header, column, !matches!(operation, tables::Operation::DeleteColumn))
                             })
                         }
                         _ => None,
                     };
                     if matches!(operation, tables::Operation::DeleteTable) {
-                        if let Some(marker) = tables::metadata::marker_range(&self.source, range.start) {
+                        if let Some(marker) = tables::metadata::marker_range(&self.source, start + header) {
                             range.start = marker.start;
                             caret = range.start;
                         }

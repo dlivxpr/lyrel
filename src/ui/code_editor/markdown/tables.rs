@@ -6,6 +6,7 @@ mod layout;
 pub(super) use layout::Layout;
 mod structure;
 pub(super) use structure::{column_at, edit};
+pub(super) mod metadata;
 
 /// Derived from the same mdast table that supplies the inline cell children.
 /// No cell owns text, focus, composition or undo state.
