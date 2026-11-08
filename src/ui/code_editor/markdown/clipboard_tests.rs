@@ -22,6 +22,19 @@ fn clipboard_mixed_selection_cut_history_paste_and_owned_reopen(cx: &mut TestApp
             .unwrap()
             .clone()
     });
+    // Opening a buffer installs the source projection first. Wait for the real
+    // Live layout to collapse both the list marker and the bold opener before
+    // asserting selection behavior at that shared visible boundary.
+    let settle_live = |context: &mut gpui_kit::VisualTestContext| {
+        wait_until(context, |context| {
+            context.update(|window, cx| window.render_frame(cx));
+            view.read_with(context, |view, cx| {
+                let start = view.range_to_bounds(&(5..5), cx);
+                view.is_live() && start.is_some() && start == view.range_to_bounds(&(10..10), cx)
+            })
+        });
+    };
+    settle_live(&mut context);
     view.update_in(&mut context, |view, window, cx| {
         view.focus_handle(cx).focus(window, cx);
         view.select_range(12..10, cx); // reverse partial selection inside bold
@@ -53,6 +66,40 @@ fn clipboard_mixed_selection_cut_history_paste_and_owned_reopen(cx: &mut TestApp
         assert_eq!(view.document().read(cx).encode().unwrap(), cut.as_bytes())
     });
     context.dispatch_action(gpui_kit::component::input::Undo);
+    settle_live(&mut context);
+    view.update_in(&mut context, |view, _, cx| view.select_range(10..26, cx));
+    context.dispatch_action(gpui_kit::component::input::Cut);
+    let block_cut = "Keep\r\n\nuntouched __spelling__\r\n";
+    context.update(|_, cx| {
+        let item = cx.read_from_clipboard().unwrap();
+        assert_eq!(item.text().unwrap(), "9. **alpha**\r\n42. beta");
+        let html = item.metadata().unwrap();
+        assert!(html.contains("<strong>alpha</strong>"), "{html}");
+        assert!(!html.contains("Keep"));
+        assert!(!html.contains("untouched"));
+    });
+    view.read_with(&context, |view, cx| {
+        assert_eq!(
+            view.document().read(cx).encode().unwrap(),
+            block_cut.as_bytes()
+        )
+    });
+    context.dispatch_action(gpui_kit::component::input::Undo);
+    view.read_with(&context, |view, cx| {
+        assert_eq!(
+            view.document().read(cx).encode().unwrap(),
+            original.as_bytes()
+        )
+    });
+    context.dispatch_action(gpui_kit::component::input::Redo);
+    view.read_with(&context, |view, cx| {
+        assert_eq!(
+            view.document().read(cx).encode().unwrap(),
+            block_cut.as_bytes()
+        )
+    });
+    context.dispatch_action(gpui_kit::component::input::Undo);
+    settle_live(&mut context);
     view.update_in(&mut context, |view, _, cx| view.select_range(10..26, cx));
     context.dispatch_action(CopyMarkdownOnly);
     context.update(|_, cx| {
