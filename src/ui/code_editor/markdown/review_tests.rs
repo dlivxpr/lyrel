@@ -257,7 +257,7 @@ fn review_formula_palette_wraps_selection_and_reload_preserves_uncommitted_input
             window,
             cx,
             |app| &mut app.editor.buffers,
-            super::super::EditorPanelState::buffer_edited,
+            crate::ui::code_editor::EditorPanelState::buffer_edited,
         );
     });
     until(&mut context, |context| {
