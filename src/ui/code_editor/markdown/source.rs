@@ -97,6 +97,7 @@ pub(crate) struct SourcePresentation {
     drag_frame_pending: bool,
     goal_x: Option<Pixels>,
     pointer_link: Option<link_interaction::Gesture>,
+    link_destination: Option<link_interaction::Destination>,
     reveal_caret: bool,
     wrap: bool,
     live: bool,
@@ -181,6 +182,7 @@ impl SourcePresentation {
                     this.schedule_spelling(cx);
                     this.cancel_reorder(cx);
                     this.pointer_link = None;
+                    this.link_destination = None;
                     this.dismiss_references(cx);
                     this.dismiss_slash(cx);
                     this.reset_embeds();
@@ -206,6 +208,7 @@ impl SourcePresentation {
                 this.cancel_reorder(cx);
                 this.spelling.invalidate();
                 this.pointer_link = None;
+                this.rebase_link_destination(transaction);
                 this.rebase_formula(transaction, cx);
                 this.folds.rebase(transaction);
                 this.state.rebase(transaction);
@@ -296,6 +299,7 @@ impl SourcePresentation {
             drag_frame_pending: false,
             goal_x: None,
             pointer_link: None,
+            link_destination: None,
             reveal_caret: false,
             wrap,
             live: true,
@@ -388,6 +392,7 @@ impl SourcePresentation {
         self.cancel_reorder(cx);
         self.properties = properties::State::default();
         self.live = !self.live;
+        self.link_destination = None;
         self.dismiss_references(cx);
         self.dismiss_slash(cx);
         self.reset_embeds();
@@ -731,11 +736,13 @@ impl SourcePresentation {
     fn sync_inline_reveal(&mut self) {
         self.sync_block_folds();
         let marked = self.state.marked_range();
+        let source = self.link_destination_range();
         for leaf in &mut self.projection.leaves {
             if leaf.contextual_reveal(
                 self.state.selection,
                 &self.extra_selections,
                 marked.as_ref(),
+                source.as_ref(),
             ) {
                 self.spelling.surface_generation = self.spelling.surface_generation.wrapping_add(1);
                 if matches!(leaf.kind, Kind::TableCell(_)) {
@@ -1185,6 +1192,9 @@ impl SourcePresentation {
             self.goal_x = None;
         }
         self.input_generation = self.input_generation.wrapping_add(1);
+        if matches!(command, Command::Undo | Command::Redo | Command::Reload { .. }) {
+            self.link_destination = None;
+        }
         // A late unmark/blur from an idle presentation must not finish a
         // different split's newly acquired composition.
         if matches!(
@@ -1405,6 +1415,7 @@ impl SourcePresentation {
         let changed = self.document.update(cx, |document, cx| {
             let revision = document.revision();
             let transaction = document.command(&mut self.state, command);
+            self.rebase_link_destination(&transaction);
             document.composition_owner = self.state.composition.as_ref().map(|_| own_view);
             let changed = document.revision() != revision;
             if changed {
@@ -3542,6 +3553,8 @@ impl Render for SourcePresentation {
                     if this.cancel_image_insertion(cx) { return; }
                     if this.state.composition.is_some() {
                         this.command(Command::CancelComposition, window, cx);
+                    } else if this.exit_link_destination(window, cx) {
+                        // Escape closes explicit destination source without editing the document.
                     } else if this.cancel_format_color(window, cx) {
                     } else if this.escape_document_properties(window, cx) {
                         // The document inspector returns focus without a source transaction.

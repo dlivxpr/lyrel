@@ -1,6 +1,13 @@
 //! Pointer activation is deliberately separate from the text-selection algorithm.
 use super::*;
 
+/// Local source permission belongs to one presentation and one revision.
+pub(super) struct Destination {
+    revision: u64,
+    range: Range<usize>,
+    return_to: Selection,
+}
+
 pub(super) struct Gesture {
     revision: u64,
     source: Range<usize>,
@@ -23,6 +30,56 @@ fn modifier(modifiers: Modifiers) -> bool {
     }
 }
 impl SourcePresentation {
+    pub(super) fn link_destination_range(&mut self) -> Option<Range<usize>> {
+        let current = self.link_destination.as_ref().is_some_and(|source| {
+            let selected = self.state.selection.range();
+            self.live
+                && self.extra_selections.is_empty()
+                && self.projection.revision == source.revision
+                && source.range.start <= selected.start
+                && selected.end <= source.range.end
+        });
+        if !current {
+            self.link_destination = None;
+        }
+        self.link_destination
+            .as_ref()
+            .map(|source| source.range.clone())
+    }
+
+    pub(super) fn rebase_link_destination(&mut self, transaction: &Transaction) {
+        let Some(source) = self.link_destination.as_mut() else {
+            return;
+        };
+        if transaction.revision() <= source.revision {
+            return; // This command or a newer one already applied the transaction.
+        }
+        if transaction.origin != self.state.id
+            || source.revision.wrapping_add(transaction.edits.len() as u64) != transaction.revision()
+        {
+            self.link_destination = None;
+            return;
+        }
+        for edit in &transaction.edits {
+            if edit.range.start < source.range.start || edit.range.end > source.range.end {
+                self.link_destination = None;
+                return;
+            }
+            source.range.end = source.range.end - edit.range.len() + edit.inserted_len;
+        }
+        source.return_to = transaction.map_selection(source.return_to);
+        source.revision = transaction.revision();
+    }
+
+    pub(super) fn exit_link_destination(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
+        let Some(source) = self.link_destination.take() else {
+            return false;
+        };
+        self.command(Command::Select(source.return_to), window, cx);
+        self.focus.focus(window, cx);
+        true
+    }
+
     pub(super) fn edit_link_destination(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.projection.revision != self.document.read(cx).revision() {
             return;
@@ -35,6 +92,12 @@ impl SourcePresentation {
         else {
             return;
         };
+        let return_to = self.link_destination.as_ref().map_or(self.state.selection, |source| source.return_to);
+        self.link_destination = Some(Destination {
+            revision: self.projection.revision,
+            range: range.clone(),
+            return_to,
+        });
         self.command(
             Command::Select(Selection::new(range.start, range.end)),
             window,
