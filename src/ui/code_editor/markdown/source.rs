@@ -17,6 +17,8 @@ actions!(markdown_links, [EditLinkDestination, FollowLink]);
 
 #[path = "assets.rs"]
 mod assets;
+#[path = "navigation.rs"]
+mod navigation;
 
 #[path = "typography.rs"]
 mod typography;
@@ -50,6 +52,11 @@ pub(crate) struct SourcePresentation {
     candidate_frame: Option<composition::Frame>,
     table_geometry: HashMap<u64, Bounds<Pixels>>,
     dragging: bool,
+    // Pointer and goal-x belong to this presentation, never the document.
+    drag_pointer: Option<Point<Pixels>>,
+    drag_origin: Option<(Selection, usize)>,
+    drag_frame_pending: bool,
+    goal_x: Option<Pixels>,
     pointer_link: Option<(u64, String)>,
     reveal_caret: bool,
     wrap: bool,
@@ -89,7 +96,11 @@ impl SourcePresentation {
             // Platform handlers are weak. A last-owner release must still put
             // retained preedit into the document's existing ordered history.
             if view.state.composition.is_some()
-                && view.document.read(cx).composition_owner.as_ref()
+                && view
+                    .document
+                    .read(cx)
+                    .composition_owner
+                    .as_ref()
                     .is_some_and(|owner| owner.entity_id() == owner_id)
             {
                 view.document.update(cx, |document, cx| {
@@ -200,6 +211,10 @@ impl SourcePresentation {
             candidate_frame: None,
             table_geometry: HashMap::new(),
             dragging: false,
+            drag_pointer: None,
+            drag_origin: None,
+            drag_frame_pending: false,
+            goal_x: None,
             pointer_link: None,
             reveal_caret: false,
             wrap,
@@ -244,11 +259,19 @@ impl SourcePresentation {
             document.revision(),
             document.input_generation,
             self.input_generation,
-            document.composition_owner.as_ref().map(WeakEntity::entity_id),
+            document
+                .composition_owner
+                .as_ref()
+                .map(WeakEntity::entity_id),
         )
     }
     fn retire_native_composition(&self, completed: bool, cx: &mut Context<Self>) {
-        crate::ui::ime::retire_markdown_composition(&self.focus, self.input_token(cx), completed, cx);
+        crate::ui::ime::retire_markdown_composition(
+            &self.focus,
+            self.input_token(cx),
+            completed,
+            cx,
+        );
     }
     pub(crate) fn indent(&self) -> crate::ui::editor_text::Indent {
         self.indent
@@ -659,7 +682,11 @@ impl SourcePresentation {
                 &mut self.state,
                 Command::Select(Selection::new(range.start, range.end)),
             );
-            if document.composition_owner.as_ref().is_some_and(|owner| owner.entity_id() == owner_id) {
+            if document
+                .composition_owner
+                .as_ref()
+                .is_some_and(|owner| owner.entity_id() == owner_id)
+            {
                 document.composition_owner = None;
             }
             cx.emit(DocumentEvent::PresentationChanged);
@@ -989,11 +1016,14 @@ impl SourcePresentation {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        self.goal_x = None;
         self.input_generation = self.input_generation.wrapping_add(1);
         // A late unmark/blur from an idle presentation must not finish a
         // different split's newly acquired composition.
-        if matches!(command, Command::FinishComposition | Command::CancelComposition)
-            && self.state.composition.is_none()
+        if matches!(
+            command,
+            Command::FinishComposition | Command::CancelComposition
+        ) && self.state.composition.is_none()
         {
             if self.focus.is_focused(window) {
                 self.retire_native_composition(false, cx);
@@ -1081,33 +1111,48 @@ impl SourcePresentation {
                 _ => None,
             };
             if let Some((text, kind)) = replacement {
-                let doc = self.document.read(cx);
-                let mut edits: Vec<_> = std::iter::once(self.state.selection)
-                    .chain(self.extra_selections.iter().copied())
-                    .map(|selection| {
-                        let mut range = selection.range();
-                        if range.is_empty() {
-                            if matches!(command, Command::Backspace) {
-                                range.start = doc.previous(range.start);
-                            }
-                            if matches!(command, Command::Delete) {
-                                range.end = doc.next(range.end);
-                            }
-                        }
-                        (range, text.clone())
-                    })
-                    .collect();
-                edits.sort_by_key(|(range, _)| range.start);
-                let mut delta: isize = 0;
-                let mut resulting = Vec::new();
-                for (range, text) in &edits {
-                    resulting.push(Selection::caret(
-                        (range.start as isize + delta) as usize + text.len(),
-                    ));
-                    delta += text.len() as isize - range.len() as isize;
+                let mut selections: Vec<_> = std::iter::once(self.state.selection)
+                    .chain(self.extra_selections.iter().copied()).collect();
+                selections.sort_by_key(|selection| selection.range().start);
+                let mut edits = Vec::new();
+                for selection in &selections {
+                    let mut range = selection.range();
+                    if range.is_empty() && matches!(command, Command::Backspace | Command::Delete) {
+                        range = self.visible_delete_range(range.start, matches!(command, Command::Backspace), cx);
+                    }
+                    if text.is_empty() {
+                        edits.extend(self.deletion_ranges(range, cx).into_iter().map(|range| (range, String::new())));
+                    } else {
+                        edits.push((range, text.clone()));
+                    }
                 }
-                after_extra = Some(resulting.into_iter().skip(1).collect());
-                Command::BatchReplace { edits, kind }
+                edits.sort_by_key(|(range, _)| range.start);
+                if text.is_empty() {
+                    let mut merged: Vec<(Range<usize>, String)> = Vec::new();
+                    for (range, text) in edits {
+                        if let Some((last, _)) = merged.last_mut().filter(|(last, _)| range.start <= last.end) {
+                            last.end = last.end.max(range.end);
+                        } else { merged.push((range, text)); }
+                    }
+                    edits = merged;
+                }
+                let map = |at: usize| {
+                    let mut delta = 0isize;
+                    for (range, text) in &edits {
+                        if at < range.start { break; }
+                        if at <= range.end { return (range.start as isize + delta) as usize + text.len(); }
+                        delta += text.len() as isize - range.len() as isize;
+                    }
+                    (at as isize + delta) as usize
+                };
+                let mut resulting = selections.iter().map(|selection| Selection::caret(map(selection.range().start)));
+                let primary = resulting.next().unwrap_or(self.state.selection);
+                after_extra = Some(resulting.collect());
+                if text.is_empty() {
+                    Command::BatchReplaceSelected { edits, selection: primary }
+                } else {
+                    Command::BatchReplace { edits, kind }
+                }
             } else {
                 if matches!(
                     command,
@@ -1120,6 +1165,19 @@ impl SourcePresentation {
         } else {
             command
         };
+        let command = if !self.is_composing() && self.extra_selections.is_empty() {
+            match command {
+                Command::Replace { range, text, .. } if text.is_empty() => self.deletion_command(range, cx),
+                Command::Backspace | Command::Delete => {
+                    let selection = self.state.selection.range();
+                    let range = if selection.is_empty() {
+                        self.visible_delete_range(selection.start, matches!(command, Command::Backspace), cx)
+                    } else { selection };
+                    self.deletion_command(range, cx)
+                }
+                command => command,
+            }
+        } else { command };
         let owner = self
             .document
             .read(cx)
@@ -1253,8 +1311,8 @@ impl SourcePresentation {
         });
     }
     fn caret_bounds(&self, byte: usize, cx: &App) -> Option<Bounds<Pixels>> {
-        let (revision, geometry) = self.geometry.as_ref()?;
-        if *revision != self.document.read(cx).revision() {
+        let (_, geometry) = self.geometry.as_ref()?;
+        if !self.geometry_is_current(cx) {
             return None;
         }
         let mapped = self.projection.leaf_at(byte)?;
@@ -1271,9 +1329,9 @@ impl SourcePresentation {
         self.point_offset_for(point, false, cx)
     }
     fn point_offset_for(&self, point: Point<Pixels>, activate: bool, cx: &App) -> Option<usize> {
-        let (revision, geometry) = self.geometry.as_ref()?;
+        let (_, geometry) = self.geometry.as_ref()?;
         let doc = self.document.read(cx);
-        if *revision != doc.revision() {
+        if !self.geometry_is_current(cx) {
             return None;
         }
         let (id, leaf) = geometry.iter().min_by(|(a_id, a), (b_id, b)| {
@@ -1345,37 +1403,19 @@ impl SourcePresentation {
     ) {
         let doc = self.document.read(cx);
         let current = doc.boundary(self.state.selection.head, false);
+        let goal_x = (vertical != 0).then(|| self.goal_x.or_else(|| {
+            self.caret_bounds(current, cx).map(|caret| caret.left() - self.scroll.offset().x)
+        })).flatten();
         let at = if let Some(end) = edge {
-            self.visual_line_edge(current, end, cx).unwrap_or_else(|| {
-                let row = doc.source().offset_to_point(current).row;
-                if end {
-                    doc.source().line_end_offset(row)
-                } else {
-                    doc.source().line_start_offset(row)
-                }
-            })
+            self.logical_line_edge(current, end, cx)
         } else if vertical != 0 {
             self.vertical_target(current, vertical as f32, cx)
-                .unwrap_or_else(|| {
-                    let point = doc.source().offset_to_point(current);
-                    let last = doc.source().offset_to_point(doc.source().len()).row;
-                    let row = if vertical < 0 {
-                        point.row.saturating_sub(1)
-                    } else {
-                        (point.row + 1).min(last)
-                    };
-                    let start = doc.source().line_start_offset(row);
-                    let end = doc.source().line_end_offset(row);
-                    doc.boundary((start + point.column as usize).min(end), false)
-                })
+                .unwrap_or_else(|| self.vertical_fallback(current, vertical < 0, cx))
         } else if !extend && !self.state.selection.range().is_empty() {
-            if horizontal < 0 {
-                self.state.selection.range().start
-            } else {
-                self.state.selection.range().end
-            }
+            self.visual_selection_edge(horizontal < 0, cx)
         } else if self.live {
-            self.visible_step(current, horizontal < 0, cx)
+            self.visual_horizontal_target(current, horizontal < 0, cx)
+                .unwrap_or_else(|| self.visible_step(current, horizontal < 0, cx))
         } else if horizontal < 0 {
             doc.previous(current)
         } else {
@@ -1388,16 +1428,18 @@ impl SourcePresentation {
             at
         };
         self.command(Command::Select(Selection::new(anchor, at)), window, cx);
+        self.goal_x = goal_x;
     }
     fn vertical_target(&self, at: usize, lines: f32, cx: &App) -> Option<usize> {
-        let (revision, geometry) = self.geometry.as_ref()?;
-        if *revision != self.document.read(cx).revision() {
+        let (_, geometry) = self.geometry.as_ref()?;
+        if !self.geometry_is_current(cx) {
             return None;
         }
         let mapped = self.projection.leaf_at(at)?;
         let current_id = mapped.id;
         let leaf = geometry.get(&mapped.id)?;
         let caret = leaf.position_for_index(mapped.display_offset(at));
+        let goal_x = self.goal_x.map_or(caret.x, |x| x + self.scroll.offset().x);
         let backward = lines < 0.;
         // A sample just past a short row can still hit that row when the next
         // block has a margin (or a tall image). Search the current frame's
@@ -1414,7 +1456,7 @@ impl SourcePresentation {
                         .y
                         + leaf.line_height() * 0.25
                 };
-                let display = leaf.index_for_position(point(caret.x, y));
+                let display = leaf.index_for_position(point(goal_x, y));
                 let position = leaf.position_for_index(display);
                 let dy = if backward {
                     caret.y - position.y
@@ -1425,7 +1467,7 @@ impl SourcePresentation {
                     (
                         mapped.source_offset(display),
                         dy,
-                        (position.x - caret.x).abs(),
+                        (position.x - goal_x).abs(),
                     )
                 })
             })
@@ -1437,8 +1479,8 @@ impl SourcePresentation {
             .map(|(at, _, _)| at)
     }
     fn visual_line_edge(&self, at: usize, end: bool, cx: &App) -> Option<usize> {
-        let (revision, geometry) = self.geometry.as_ref()?;
-        if *revision != self.document.read(cx).revision() {
+        let (_, geometry) = self.geometry.as_ref()?;
+        if !self.geometry_is_current(cx) {
             return None;
         }
         let mapped = self.projection.leaf_at(at)?;
@@ -1649,29 +1691,8 @@ impl SourcePresentation {
             );
             return;
         }
-        let doc = self.document.read(cx);
         let at = self.state.selection.head;
-        let row = doc.source().offset_to_point(at).row;
-        let start = doc.source().line_start_offset(row);
-        let end = doc.source().line_end_offset(row);
-        let line = doc.source().slice(start..end).to_string();
-        let target = if backward {
-            line.unicode_word_indices()
-                .rev()
-                .find(|(ix, _)| start + ix < at)
-                .map_or_else(|| doc.previous(start), |(ix, _)| start + ix)
-        } else {
-            line.unicode_word_indices()
-                .find(|(ix, word)| start + ix + word.len() > at)
-                .map_or_else(|| doc.next(end), |(ix, word)| start + ix + word.len())
-        };
-        let target = if self.live && self.projection.revision == doc.revision() {
-            self.projection
-                .leaf_at(target)
-                .map_or(target, |leaf| leaf.atomic_boundary(target, !backward))
-        } else {
-            target
-        };
+        let target = self.visible_word_target(at, backward, cx);
         if delete {
             self.command(
                 Command::Replace {
@@ -1705,6 +1726,10 @@ impl SourcePresentation {
         let Some(leaf) = self.projection.leaf_at(at) else {
             return at;
         };
+        if leaf.kind == Kind::Rule {
+            if backward && at > leaf.range.start { return leaf.range.start; }
+            if !backward && at < leaf.range.end { return leaf.range.end; }
+        }
         if leaf.deferred {
             let document = self.document.read(cx);
             return if backward {
@@ -1715,13 +1740,8 @@ impl SourcePresentation {
         }
         let display = leaf.display_offset(at);
         if backward {
-            if let Some((ix, _)) = leaf
-                .text
-                .grapheme_indices(true)
-                .rev()
-                .find(|(ix, _)| *ix < display)
-            {
-                return leaf.source_offset(ix);
+            if let Some(range) = navigation::adjacent_grapheme(&leaf.text, display, true) {
+                return leaf.source_offset(range.start);
             }
             self.projection
                 .leaves
@@ -1729,15 +1749,21 @@ impl SourcePresentation {
                 .rev()
                 // Adjacent table cells can share a source-range boundary.
                 .skip_while(|other| other.id != leaf.id)
-                .nth(1)
-                .map_or(leaf.content_start(), |other| other.content_end())
+                .filter(|other| self.selectable_leaf(other, cx))
+                .filter(|other| other.id != leaf.id)
+                .find_map(|other| {
+                    let end = other.content_end();
+                    if end < at { return Some(end); }
+                    if end == at {
+                        return other.text.grapheme_indices(true).next_back()
+                            .map(|(ix, _)| other.source_offset(ix)).filter(|target| *target < at);
+                    }
+                    None
+                })
+                .unwrap_or(leaf.content_start())
         } else {
-            if let Some((ix, _)) = leaf
-                .text
-                .grapheme_indices(true)
-                .find(|(ix, _)| *ix > display)
-            {
-                return leaf.source_offset(ix);
+            if let Some(range) = navigation::adjacent_grapheme(&leaf.text, display, false) {
+                return leaf.source_offset(range.end);
             }
             if display < leaf.text.len() {
                 return leaf.content_end();
@@ -1746,8 +1772,18 @@ impl SourcePresentation {
                 .leaves
                 .iter()
                 .skip_while(|other| other.id != leaf.id)
-                .nth(1)
-                .map_or(leaf.content_end(), |other| other.content_start())
+                .filter(|other| self.selectable_leaf(other, cx))
+                .filter(|other| other.id != leaf.id)
+                .find_map(|other| {
+                    let start = other.content_start();
+                    if start > at { return Some(start); }
+                    if start == at {
+                        return other.text.graphemes(true).next()
+                            .map(|text| other.source_offset(text.len())).filter(|target| *target > at);
+                    }
+                    None
+                })
+                .unwrap_or(leaf.content_end())
         }
     }
     fn enter(&mut self, hard: bool, window: &mut Window, cx: &mut Context<Self>) {
@@ -1828,6 +1864,11 @@ impl SourcePresentation {
             return;
         }
         let at = self.state.selection.head;
+        if let Some(range) = self.adjacent_block_atom(at, backward, cx) {
+            let command = self.deletion_command(range, cx);
+            self.command(command, window, cx);
+            return;
+        }
         let Some(leaf) = self.projection.leaf_at(at) else {
             return;
         };
@@ -1872,7 +1913,7 @@ impl SourcePresentation {
                     if super::regions::label(other.kind).is_some() {
                         self.document.read(cx).previous(at)..at
                     } else {
-                        other.content_end()..leaf.content_start()
+                        other.join_end()..leaf.join_start()
                     }
                 })
         } else if !backward && at >= leaf.content_end() {
@@ -1890,12 +1931,11 @@ impl SourcePresentation {
                     if super::regions::label(other.kind).is_some() {
                         at..self.document.read(cx).next(at)
                     } else {
-                        leaf.content_end()..other.content_start()
+                        leaf.join_end()..other.join_start()
                     }
                 })
         } else {
-            let next = self.visible_step(at, backward, cx);
-            Some(next.min(at)..next.max(at))
+            Some(self.visible_delete_range(at, backward, cx))
         };
         if let Some(range) = other.filter(|range| !range.is_empty()) {
             self.command(
@@ -2085,7 +2125,7 @@ impl EntityInputHandler for SourcePresentation {
             && caret.bottom() <= viewport.bottom()
             && caret.left() >= viewport.left()
             && caret.left() <= viewport.right())
-            .then_some(caret)
+        .then_some(caret)
     }
     fn character_index_for_point(
         &mut self,
@@ -2178,7 +2218,9 @@ impl Render for SourcePresentation {
             });
         let context = typography::context(context, self.live, cx);
         let table_width = typography::content_width(
-            self.viewport.bounds.map_or(window.viewport_size().width, |bounds| bounds.size.width),
+            self.viewport
+                .bounds
+                .map_or(window.viewport_size().width, |bounds| bounds.size.width),
             window.rem_size(),
             self.live,
         );
@@ -2771,20 +2813,17 @@ impl Render for SourcePresentation {
                             this.dragging = false;
                         } else {
                             this.dragging = true;
-                            this.select_point(event.position, event.modifiers.shift, window, cx);
+                            this.pointer_down(event, window, cx);
                         }
                         cx.stop_propagation();
                     }),
                 )
-                .on_mouse_move(cx.listener(|this, event: &MouseMoveEvent, window, cx| {
-                    if this.dragging {
-                        this.select_point(event.position, true, window, cx);
-                    }
-                }))
                 .on_mouse_up(
                     MouseButton::Left,
                     cx.listener(|this, event: &MouseUpEvent, _, cx| {
                         this.dragging = false;
+                        this.drag_pointer = None;
+                        this.drag_origin = None;
                         // editor_host may consume a rendered link's mouse-up.
                         // Otherwise the editing surface completes the same
                         // captured gesture; neither path navigates twice.
@@ -2795,6 +2834,8 @@ impl Render for SourcePresentation {
                     MouseButton::Left,
                     cx.listener(|this, _, _, _| {
                         this.dragging = false;
+                        this.drag_pointer = None;
+                        this.drag_origin = None;
                         this.pointer_link = None;
                     }),
                 )
@@ -3067,12 +3108,7 @@ impl Render for SourcePresentation {
                                         }
                                         this.focus.focus(window, cx);
                                         this.dragging = true;
-                                        this.select_point(
-                                            event.position,
-                                            event.modifiers.shift,
-                                            window,
-                                            cx,
-                                        );
+                                        this.pointer_down(event, window, cx);
                                         cx.stop_propagation();
                                     },
                                 ))
@@ -3199,7 +3235,9 @@ impl Element for SourceElement {
         });
         let table_measurement_changed = self.view.update(cx, |view, cx| {
             let width = typography::content_width(
-                view.viewport.bounds.map_or(window.viewport_size().width, |bounds| bounds.size.width),
+                view.viewport
+                    .bounds
+                    .map_or(window.viewport_size().width, |bounds| bounds.size.width),
                 window.rem_size(),
                 view.live,
             );
@@ -3284,8 +3322,13 @@ impl Element for SourceElement {
                 return;
             }
             let viewport = view.scroll.bounds();
-            let layout = typography::LayoutKey::new(viewport.size.width, view.live, view.wrap, window, cx);
-            let reflow = view.viewport.layout.as_ref().is_some_and(|old| old != &layout);
+            let layout =
+                typography::LayoutKey::new(viewport.size.width, view.live, view.wrap, window, cx);
+            let reflow = view
+                .viewport
+                .layout
+                .as_ref()
+                .is_some_and(|old| old != &layout);
             if reflow {
                 view.viewport.heights.clear();
             }
@@ -3418,6 +3461,19 @@ impl Element for SourceElement {
         cx: &mut App,
     ) {
         self.child.paint(window, cx);
+        let view = self.view.clone();
+        window.on_mouse_event(move |event: &MouseMoveEvent, phase, window, cx| {
+            if !phase.bubble() || !view.read(cx).dragging { return; }
+            view.update(cx, |view, cx| {
+                if event.pressed_button == Some(MouseButton::Left) {
+                    view.drag_to(event.position, window, cx);
+                } else {
+                    view.dragging = false;
+                    view.drag_pointer = None;
+                    view.drag_origin = None;
+                }
+            });
+        });
         let (focus, carets) = {
             let view = self.view.read(cx);
             let carets: Vec<_> = if view.focus.is_focused(window) {
@@ -3431,11 +3487,7 @@ impl Element for SourceElement {
             };
             (view.focus.clone(), carets)
         };
-        window.handle_input(
-            &focus,
-            composition::Input::new(&self.view, cx),
-            cx,
-        );
+        window.handle_input(&focus, composition::Input::new(&self.view, cx), cx);
         let viewport = self.view.read(cx).scroll.bounds();
         for caret in carets {
             if caret.top() >= viewport.top()

@@ -23,7 +23,8 @@ fn editable_document_typography_reflows_without_rewriting_source_or_history(
     let view = loop {
         context.run_until_parked();
         if let Some(view) = app.read_with(&context, |app, _| {
-            app.active_editor_input().and_then(|input| input.markdown().cloned())
+            app.active_editor_input()
+                .and_then(|input| input.markdown().cloned())
         }) {
             break view;
         }
@@ -55,7 +56,10 @@ fn editable_document_typography_reflows_without_rewriting_source_or_history(
         context.update(|window, cx| {
             let surface = window.find("markdown-source").bounds();
             let view = view.read(cx);
-            assert!(view.is_live(), "the default production consumer must be editable live");
+            assert!(
+                view.is_live(),
+                "the default production consumer must be editable live"
+            );
             let heading = view.range_to_bounds(&(2..2), cx).unwrap();
             let first = view.range_to_bounds(&(body..body), cx).unwrap();
             let second = view.range_to_bounds(&(next..next), cx).unwrap();
@@ -68,7 +72,10 @@ fn editable_document_typography_reflows_without_rewriting_source_or_history(
             let last = view.range_to_bounds(&(end..end), cx).unwrap();
             let lines = (last.top() - second.top()) / px(rem * 1.45);
             if let Some(wide) = wide_lines {
-                assert!(lines > wide, "narrower, larger text must reflow the editable content");
+                assert!(
+                    lines > wide,
+                    "narrower, larger text must reflow the editable content"
+                );
             } else {
                 wide_lines = Some(lines);
             }
@@ -82,7 +89,11 @@ fn editable_document_typography_reflows_without_rewriting_source_or_history(
     }
     // Use pointer + native text input, not a renderer-specific mutation seam.
     context.update(|window, cx| {
-        let target = view.read(cx).range_to_bounds(&(next..next), cx).unwrap().center();
+        let target = view
+            .read(cx)
+            .range_to_bounds(&(next..next), cx)
+            .unwrap()
+            .center();
         window.pointer_down(target, gpui_kit::MouseButton::Left, cx);
         window.pointer_up(target, gpui_kit::MouseButton::Left, cx);
         window.input("新", cx);
@@ -109,7 +120,8 @@ fn editable_document_typography_reflows_without_rewriting_source_or_history(
     loop {
         context.run_until_parked();
         if app.read_with(&context, |app, _| {
-            app.active_buffer().is_some_and(|file| !file.dirty && !file.saving)
+            app.active_buffer()
+                .is_some_and(|file| !file.dirty && !file.saving)
         }) {
             break;
         }
@@ -126,11 +138,15 @@ fn editable_document_typography_reflows_without_rewriting_source_or_history(
     loop {
         context.run_until_parked();
         if let Some(reopened) = app.read_with(&context, |app, _| {
-            app.active_editor_input().and_then(|input| input.markdown().cloned())
+            app.active_editor_input()
+                .and_then(|input| input.markdown().cloned())
         }) {
             reopened.read_with(&context, |view, cx| {
                 assert_ne!(view.document().entity_id(), identity);
-                assert_eq!(view.document().read(cx).encode().unwrap(), expected.as_bytes());
+                assert_eq!(
+                    view.document().read(cx).encode().unwrap(),
+                    expected.as_bytes()
+                );
             });
             break;
         }

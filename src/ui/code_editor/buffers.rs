@@ -695,7 +695,10 @@ impl EditorBuffers {
         let host = file.host.clone();
         let host_id = host.id();
         let markdown = file.input.markdown().is_some();
-        let input_lease = file.input.markdown().map(|view| view.read(cx).input_token(cx));
+        let input_lease = file
+            .input
+            .markdown()
+            .map(|view| view.read(cx).input_token(cx));
         file.reload_seq = file.reload_seq.wrapping_add(1);
         let seq = file.reload_seq;
         HostOps::run_in(

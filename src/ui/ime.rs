@@ -23,7 +23,16 @@ enum CompositionOwner {
 #[derive(Default)]
 struct CompositionOwners {
     inputs: HashMap<ElementId, CompositionOwner>,
-    markdown_cancellations: HashMap<ElementId, (gpui_kit::EntityId, u64, u64, u64, Option<gpui_kit::EntityId>)>,
+    markdown_cancellations: HashMap<
+        ElementId,
+        (
+            gpui_kit::EntityId,
+            u64,
+            u64,
+            u64,
+            Option<gpui_kit::EntityId>,
+        ),
+    >,
 }
 impl Global for CompositionOwners {}
 
@@ -34,7 +43,10 @@ pub(crate) fn install(cx: &mut App) {
     observe_inputs(cx, CompositionOwner::Editor);
     observe_inputs(cx, CompositionOwner::Markdown);
     Root::register_plugin(cx, |window, cx| CompositionFocus {
-        focus: window.is_window_active().then(|| window.focused(cx)).flatten(),
+        focus: window
+            .is_window_active()
+            .then(|| window.focused(cx))
+            .flatten(),
     });
 }
 
@@ -42,7 +54,13 @@ pub(crate) fn install(cx: &mut App) {
 /// Root's safe handler handoff instead of re-entering a borrowed presentation.
 pub(crate) fn retire_markdown_composition(
     focus: &FocusHandle,
-    token: (gpui_kit::EntityId, u64, u64, u64, Option<gpui_kit::EntityId>),
+    token: (
+        gpui_kit::EntityId,
+        u64,
+        u64,
+        u64,
+        Option<gpui_kit::EntityId>,
+    ),
     completed: bool,
     cx: &mut App,
 ) {
@@ -61,7 +79,10 @@ fn take_markdown_cancellation(focus: &FocusHandle, cx: &mut App) -> bool {
     let key = ElementId::from(focus);
     let (token, owner) = {
         let owners = cx.global_mut::<CompositionOwners>();
-        (owners.markdown_cancellations.remove(&key), owners.inputs.get(&key).cloned())
+        (
+            owners.markdown_cancellations.remove(&key),
+            owners.inputs.get(&key).cloned(),
+        )
     };
     match (token, owner) {
         (Some(token), Some(CompositionOwner::Markdown(owner))) => owner
@@ -101,7 +122,10 @@ struct CompositionFocus {
 
 impl RootPlugin for CompositionFocus {
     fn prepare(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let focus = window.is_window_active().then(|| window.focused(cx)).flatten();
+        let focus = window
+            .is_window_active()
+            .then(|| window.focused(cx))
+            .flatten();
         let mut retire = false;
         for handle in self.focus.iter().chain(focus.iter()) {
             retire |= take_markdown_cancellation(handle, cx);

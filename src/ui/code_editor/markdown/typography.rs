@@ -62,7 +62,9 @@ pub(super) fn context(context: RenderContext, live: bool, cx: &App) -> RenderCon
         return context;
     }
     let foreground = cx.theme().foreground;
-    let style = context.style().clone()
+    let style = context
+        .style()
+        .clone()
         // Editable blank lines already own paragraph spacing. Adding renderer
         // paragraph gaps would turn a single LF into an apparent blank line.
         .with_paragraph_gap(rems(0.))
@@ -91,9 +93,7 @@ pub(super) fn context(context: RenderContext, live: bool, cx: &App) -> RenderCon
                 .min_w(rems(15. / 16.))
                 .pr(rems(0.5)),
         )
-        .with_blockquote_style(
-            StyleRefinement::default().pl(rems(14. / 16.)),
-        );
+        .with_blockquote_style(StyleRefinement::default().pl(rems(14. / 16.)));
     context.with_style(style)
 }
 
@@ -114,7 +114,11 @@ pub(super) fn estimated_height(kind: Kind, lines: f32, live: bool, rem: Pixels) 
     if !live {
         return rem * (lines * 1.5 + 0.5);
     }
-    let scale = if let Kind::Heading(level) = kind { heading_scale(level) } else { 1. };
+    let scale = if let Kind::Heading(level) = kind {
+        heading_scale(level)
+    } else {
+        1.
+    };
     let padding = match kind {
         Kind::Code(_) | Kind::Mermaid(_) => 1.,
         Kind::List(_) => LIST_GAP,
