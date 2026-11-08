@@ -1373,6 +1373,8 @@ l10n_keys! {
     EditorMarkdownMermaidSource,
     EditorMarkdownMermaidLoading,
     EditorMarkdownMermaidEdit,
+    EditorMarkdownMermaidResult,
+    EditorMarkdownMermaidResultLabel,
     EditorMarkdownMermaidError,
     EditorMarkdownMermaidEmpty,
     EditorMarkdownMermaidExternal,
