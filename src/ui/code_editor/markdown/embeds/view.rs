@@ -139,20 +139,25 @@ impl SourcePresentation {
                 .entry(key)
                 .or_insert_with(|| (ScrollHandle::new(), cx.focus_handle().tab_stop(true)));
         }
-        let layout_changed = self.embeds.loaded.as_ref().map_or(
-            !loaded.entries.is_empty(),
-            |previous| {
-                previous.entries.len() != loaded.entries.len()
-                    || previous.entries.iter().zip(&loaded.entries).any(|(old, new)| {
-                        old.reference != new.reference
-                            || match (&old.result, &new.result) {
-                                (Ok(old), Ok(new)) => !Arc::ptr_eq(old, new),
-                                (Err(old), Err(new)) => old != new,
-                                _ => true,
-                            }
-                    })
-            },
-        );
+        let layout_changed =
+            self.embeds
+                .loaded
+                .as_ref()
+                .map_or(!loaded.entries.is_empty(), |previous| {
+                    previous.entries.len() != loaded.entries.len()
+                        || previous
+                            .entries
+                            .iter()
+                            .zip(&loaded.entries)
+                            .any(|(old, new)| {
+                                old.reference != new.reference
+                                    || match (&old.result, &new.result) {
+                                        (Ok(old), Ok(new)) => !Arc::ptr_eq(old, new),
+                                        (Err(old), Err(new)) => old != new,
+                                        _ => true,
+                                    }
+                            })
+                });
         self.embeds.loaded = Some(loaded);
         self.embeds.installed = Some(revision);
         // A hover excerpt changes only the popup. Clearing source geometry
@@ -234,8 +239,14 @@ impl SourcePresentation {
                         .anchor(Anchor::TopLeft)
                         .open_delay(std::time::Duration::from_millis(450))
                         .trigger(
-                            div().w(bounds.size.width).h(bounds.size.height)
-                                .on_mouse_move(cx.listener(|view, event: &MouseMoveEvent, _, cx| view.hover_link(event, cx))),
+                            div()
+                                .w(bounds.size.width)
+                                .h(bounds.size.height)
+                                .on_mouse_move(cx.listener(
+                                    |view, event: &MouseMoveEvent, _, cx| {
+                                        view.hover_link(event, cx)
+                                    },
+                                )),
                         )
                         .on_open_change(move |open, _, cx| {
                             let _ = view.update(cx, |view, cx| {

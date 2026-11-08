@@ -3,7 +3,7 @@ use super::{FollowLink, SourcePresentation};
 use crate::ui::app::test_window::harness_with_tabs;
 use crate::ui::code_editor::markdown::{Selection, projection::Kind};
 use gpui_kit::test::{TestEventExt as _, TestWindowExt as _};
-use gpui_kit::{Entity, Focusable as _, TestAppContext, VisualTestContext};
+use gpui_kit::{Entity, Focusable as _, TestAppContext, VisualContext as _, VisualTestContext};
 use std::time::{Duration, Instant};
 
 fn until(context: &mut VisualTestContext, mut ready: impl FnMut(&mut VisualTestContext) -> bool) {
@@ -366,7 +366,8 @@ fn review_link_hover_shows_host_excerpt_without_editing_source_and_dismisses(
     cx: &mut TestAppContext,
 ) {
     let source = "[preview](target.md#ignored)\n\nkeep\n";
-    let (dir, _path, _app, mut context, _streams, view) = fixture!(cx, source);
+    // Native temporary paths belong to LocalHost; non-local Host paths are POSIX.
+    let (dir, _path, _app, mut context, _streams, view) = fixture!(cx, source, true);
     std::fs::write(
         dir.path().join("target.md"),
         "# Target title\n\nFirst **paragraph** with $x$.\n\nsecond\n",
@@ -425,8 +426,12 @@ fn review_wrapped_link_hover_ignores_nonlabel_space_after_resize(cx: &mut TestAp
         "prefix before the link [{}\ntail](target.md#ignored) trailing prose\n\nkeep\n",
         "preview words ".repeat(12),
     );
-    let (dir, _path, _app, mut context, _streams, view) = fixture!(cx, &source);
-    std::fs::write(dir.path().join("target.md"), "# Target title\n\nFirst paragraph\n").unwrap();
+    let (dir, _path, _app, mut context, _streams, view) = fixture!(cx, &source, true);
+    std::fs::write(
+        dir.path().join("target.md"),
+        "# Target title\n\nFirst paragraph\n",
+    )
+    .unwrap();
     let at = source.find("tail]").unwrap() + 2;
     let label_start = source.find('[').unwrap() + 1;
     let label_end = source.find("](target").unwrap();
@@ -438,13 +443,21 @@ fn review_wrapped_link_hover_ignores_nonlabel_space_after_resize(cx: &mut TestAp
         );
         settle(&view, &mut context);
         let (label, gap) = view.read_with(&context, |view, cx| {
-            let start = view.range_to_bounds(&(label_start..label_start), cx).unwrap();
+            let start = view
+                .range_to_bounds(&(label_start..label_start), cx)
+                .unwrap();
             let end = view.range_to_bounds(&(label_end..label_end), cx).unwrap();
             let label = view.range_to_bounds(&(at..at), cx).unwrap().center();
             let gap = gpui_kit::point((start.left() + end.right()) / 2., end.center().y);
             assert!(start.top() < end.top(), "label must span visual rows");
-            assert!(gap.x > end.right(), "gap must be beyond the final label row");
-            assert!(start.union(&end).contains(&gap), "gap exposes the old union trigger");
+            assert!(
+                gap.x > end.right(),
+                "gap must be beyond the final label row"
+            );
+            assert!(
+                start.union(&end).contains(&gap),
+                "gap exposes the old union trigger"
+            );
             (label, gap)
         });
         context.update(|window, cx| window.pointer_move(gap, None, cx));
@@ -459,9 +472,14 @@ fn review_wrapped_link_hover_ignores_nonlabel_space_after_resize(cx: &mut TestAp
         context.update(|window, cx| window.pointer_move(label, None, cx));
         until(&mut context, |context| {
             context.update(|window, _| {
-                window.try_find("markdown-link-preview").is_some_and(|preview| {
-                    preview.visible() && preview.label().is_some_and(|text| text.contains("First paragraph"))
-                })
+                window
+                    .try_find("markdown-link-preview")
+                    .is_some_and(|preview| {
+                        preview.visible()
+                            && preview
+                                .label()
+                                .is_some_and(|text| text.contains("First paragraph"))
+                    })
             })
         });
         context.update(|window, cx| window.pointer_move(gap, None, cx));
