@@ -845,7 +845,7 @@ impl MarkdownDocument {
                         self.edit(
                             state,
                             state.selection.range(),
-                            if hard { "  \n" } else { "\n\n" }.into(),
+                            if hard { "  \n" } else { "\n" }.into(),
                             EditKind::Command,
                         );
                     }

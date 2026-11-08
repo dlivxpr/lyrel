@@ -322,6 +322,68 @@ fn native_live_single_newline_and_source_switch_keep_one_document_and_history(
     });
 }
 
+#[gpui_kit::test]
+fn native_empty_and_untitled_markdown_type_continuously_in_default_live_view(
+    cx: &mut gpui_kit::TestAppContext,
+) {
+    use crate::ui::app::test_window::harness_with_tabs;
+    use gpui_kit::test::TestWindowExt as _;
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("empty.md");
+    std::fs::write(&path, b"").unwrap();
+    let (app, mut context, _streams) = harness_with_tabs(cx, 1);
+    for untitled in [true, false] {
+        if untitled {
+            context.dispatch_action(crate::core::actions::EditorNewMarkdownFile);
+        } else {
+            app.update_in(&mut context, |app, window, cx| {
+                app.open_file_in_editor(&path, window, cx);
+            });
+        }
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        let view = loop {
+            context.run_until_parked();
+            if let Some(view) = app.read_with(&context, |app, _| {
+                app.active_editor_input().and_then(|input| input.markdown().cloned())
+            }) {
+                break view;
+            }
+            assert!(std::time::Instant::now() < deadline);
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        };
+        settle_live_geometry(&view, &mut context);
+        view.read_with(&context, |view, cx| {
+            assert!(view.is_live());
+            assert_eq!(view.document().read(cx).source().to_string(), "");
+        });
+        context.update(|window, cx| {
+            window.input("first", cx);
+            window.press("enter", cx);
+            window.input("second", cx);
+        });
+        settle_live_geometry(&view, &mut context);
+        view.read_with(&context, |view, cx| {
+            assert_eq!(view.document().read(cx).source().to_string(), "first\nsecond");
+            assert!(
+                view.range_to_bounds(&(6..6), cx).unwrap().top()
+                    > view.range_to_bounds(&(5..5), cx).unwrap().top()
+            );
+        });
+        for _ in 0..3 {
+            context.dispatch_action(gpui_kit::component::input::Undo);
+            context.run_until_parked();
+        }
+        app.read_with(&context, |app, cx| {
+            assert!(!app.active_buffer().unwrap().dirty);
+            assert_eq!(view.read(cx).document().read(cx).source().to_string(), "");
+        });
+        app.update_in(&mut context, |app, window, cx| {
+            app.editor_close_file(0, window, cx);
+        });
+    }
+    assert_eq!(std::fs::read(&path).unwrap(), b"");
+}
+
 fn settle_live_geometry(
     view: &gpui_kit::Entity<SourcePresentation>,
     cx: &mut gpui_kit::VisualTestContext,
@@ -1131,6 +1193,19 @@ fn native_inline_typing_and_selection_hide_formatting_and_preserve_source_histor
     };
     context.dispatch_action(crate::core::actions::ToggleDocumentPreview);
     settle_live_geometry(&view, &mut context);
+    context.dispatch_action(crate::core::actions::EditorSave);
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    loop {
+        context.run_until_parked();
+        if app.read_with(&context, |app, _| {
+            app.active_buffer().is_some_and(|file| !file.dirty && !file.saving)
+        }) {
+            break;
+        }
+        assert!(std::time::Instant::now() < deadline);
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    assert_eq!(std::fs::read(&path).unwrap(), persisted.as_bytes());
     context.update(|window, cx| {
         let presentation = view.read(cx);
         assert_eq!(
@@ -1259,7 +1334,8 @@ fn native_inline_typing_and_selection_hide_formatting_and_preserve_source_histor
     view.update_in(&mut context, |view, _, cx| view.select_range(13..21, cx));
     let selection = view.read_with(&context, |view, _| view.selection());
     context.dispatch_action(crate::core::actions::ToggleDocumentPreview);
-    settle_live_geometry(&view, &mut context);
+    context.run_until_parked();
+    context.update(|window, cx| window.render_frame(cx));
     view.read_with(&context, |view, cx| {
         assert!(!view.is_live());
         assert_eq!(view.selection(), selection);
