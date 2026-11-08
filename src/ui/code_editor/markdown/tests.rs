@@ -3890,7 +3890,7 @@ fn table_structure_commands_preserve_cells_boundaries_and_atomic_selection() {
             "| a | b |\n| --- | --- |\n| c |",
             "c",
             Operation::InsertColumnAfter,
-            "| a |  | b |\n| --- | --- | --- |\n| c |  |  |",
+            "| a |  | b |\n| --- | --- | --- |\n| c |  |",
         ),
     ] {
         let mut document = MarkdownDocument::new(source.into(), TextFormat::default());

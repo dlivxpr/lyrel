@@ -146,8 +146,10 @@ pub(in crate::ui::code_editor::markdown) fn edit(input: &SourceText, owner: Rang
             let at = column + usize::from(matches!(operation, Operation::InsertColumnAfter));
             for line in row_lines.iter().copied().chain(std::iter::once(delimiter)) {
                 let row = &mut rows[line];
+                if !insert && !delete && line != delimiter { continue; }
+                if delete && column >= cells(row).len() { continue; }
                 // Missing GFM body cells are virtual until a structural edit needs them.
-                while cells(row).len() < columns {
+                while insert && cells(row).len() < at {
                     let ranges = cells(row);
                     let end = ranges.last()?.end;
                     row.text.insert_str(end, " | ");
@@ -158,9 +160,16 @@ pub(in crate::ui::code_editor::markdown) fn edit(input: &SourceText, owner: Rang
                     if at < ranges.len() { row.text.insert_str(ranges[at].start, &format!("{value}|")); }
                     else { row.text.insert_str(ranges.last()?.end, &format!("|{value}")); }
                 } else if delete {
-                    let range = if column + 1 < ranges.len() { ranges[column].start..ranges[column + 1].start }
-                        else { ranges[column - 1].end..ranges[column].end };
-                    row.text.replace_range(range, "");
+                    if ranges.len() == 1 {
+                        let raw = &row.text[ranges[0].clone()];
+                        let start = ranges[0].start + raw.len() - raw.trim_start().len();
+                        let end = ranges[0].end - (raw.len() - raw.trim_end().len());
+                        if start < end { row.text.replace_range(start..end, ""); }
+                    } else {
+                        let range = if column + 1 < ranges.len() { ranges[column].start..ranges[column + 1].start }
+                            else { ranges[column - 1].end..ranges[column].end };
+                        row.text.replace_range(range, "");
+                    }
                 } else if line == delimiter {
                     let range = &ranges[column];
                     let raw = &row.text[range.clone()];
