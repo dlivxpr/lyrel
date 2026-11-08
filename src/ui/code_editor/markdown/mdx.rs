@@ -14,6 +14,8 @@ pub(super) mod callouts;
 pub(super) mod cards;
 mod steps;
 pub(super) mod tabs;
+#[cfg(test)]
+mod tests;
 pub(super) mod view;
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(super) enum Grammar {

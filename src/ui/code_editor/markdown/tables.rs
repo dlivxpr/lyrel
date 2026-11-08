@@ -104,9 +104,7 @@ impl Navigation {
             Self::Cell { backward }
             | Self::Row { backward }
             | Self::Exit { backward }
-            | Self::Boundary { backward } => {
-                backward
-            }
+            | Self::Boundary { backward } => backward,
         }
     }
 }
@@ -131,7 +129,11 @@ pub(super) fn navigate(
         return None;
     };
     if matches!(navigation, Navigation::Row { .. }) {
-        let row = if backward { cell.row.checked_sub(1) } else { Some(cell.row + 1) };
+        let row = if backward {
+            cell.row.checked_sub(1)
+        } else {
+            Some(cell.row + 1)
+        };
         if let Some(target) = leaves.iter().find(|leaf| {
             matches!(leaf.kind, Kind::TableCell(other)
                 if other.start == cell.start && Some(other.row) == row && other.column == cell.column)
@@ -167,14 +169,25 @@ pub(super) fn vertical(leaves: &[Leaf], at: usize, backward: bool) -> Option<usi
     let current = leaves.iter().find(|leaf| {
         matches!(leaf.kind, Kind::TableCell(_)) && leaf.range.start <= at && at <= leaf.range.end
     })?;
-    let Kind::TableCell(cell) = current.kind else { return None; };
-    let row = if backward { cell.row.checked_sub(1)? } else { cell.row + 1 };
+    let Kind::TableCell(cell) = current.kind else {
+        return None;
+    };
+    let row = if backward {
+        cell.row.checked_sub(1)?
+    } else {
+        cell.row + 1
+    };
     let target = leaves.iter().find(|leaf| {
         matches!(leaf.kind, Kind::TableCell(other)
             if other.start == cell.start && other.row == row && other.column == cell.column)
     })?;
-    let column = current.text[..current.display_offset(at)].graphemes(true).count();
-    let offset = target.text.grapheme_indices(true).nth(column)
+    let column = current.text[..current.display_offset(at)]
+        .graphemes(true)
+        .count();
+    let offset = target
+        .text
+        .grapheme_indices(true)
+        .nth(column)
         .map_or(target.text.len(), |(offset, _)| offset);
     Some(target.source_offset(offset))
 }
@@ -213,8 +226,12 @@ pub(super) fn input(
         // Native selections use UTF-16; preserve their affinity before any
         // inserted escape and collapse CRLF as one visible space.
         if let (Some(selection), Some(original)) = (&mut selected, &original_selection) {
-            if original.start >= offset { selection.start = output_offset; }
-            if original.end >= offset { selection.end = output_offset; }
+            if original.start >= offset {
+                selection.start = output_offset;
+            }
+            if original.end >= offset {
+                selection.end = output_offset;
+            }
         }
         offset += ch.len_utf16();
         if ch == '\r' && chars.peek() == Some(&'\n') {
@@ -231,8 +248,12 @@ pub(super) fn input(
         escaped = ch == '\\' && !escaped;
     }
     if let (Some(selection), Some(original)) = (&mut selected, &original_selection) {
-        if original.start >= offset { selection.start = output_offset; }
-        if original.end >= offset { selection.end = output_offset; }
+        if original.start >= offset {
+            selection.start = output_offset;
+        }
+        if original.end >= offset {
+            selection.end = output_offset;
+        }
     }
     (output, selected)
 }
