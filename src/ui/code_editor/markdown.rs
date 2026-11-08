@@ -468,9 +468,12 @@ impl MarkdownDocument {
             self.history.end_grouping();
         }
         self.typing_end = (kind == EditKind::Typing
-            && change.edits.len() == 1
-            && !edit.inserted.text.contains(['\n', '\r']))
-        .then_some((owner, edit.start + edit.inserted.text.len()));
+            && change.after.range().is_empty()
+            && change
+                .edits
+                .iter()
+                .all(|edit| !edit.inserted.text.contains(['\n', '\r'])))
+        .then_some((owner, change.after.head()));
         self.history.push(change);
         self.history.end_grouping();
     }

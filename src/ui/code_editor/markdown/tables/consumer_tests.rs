@@ -175,9 +175,40 @@ fn table_reverse_replacement_and_multi_caret_paste_preserve_structure(
     });
     context.dispatch_action(gpui_kit::component::input::Undo);
     context.run_until_parked();
-    view.read_with(&context, |view, _| {
-        assert_eq!(view.selection(), Selection::new(two + 3, one))
+    view.read_with(&context, |view, cx| {
+        assert_eq!(view.document().read(cx).encode().unwrap(), original.as_bytes());
+        assert_eq!(view.selection(), Selection::new(two + 3, one));
     });
+    context.dispatch_action(gpui_kit::component::input::Redo);
+    context.run_until_parked();
+    view.read_with(&context, |view, cx| {
+        assert_eq!(
+            view.document().read(cx).encode().unwrap(),
+            original.replace("one | two", "X\\|Y | ").as_bytes()
+        );
+        assert_eq!(view.selection(), Selection::caret(one + "X\\|Y".len()));
+    });
+    // A caret command ends the typing burst, including a sparse replacement.
+    context.update(|window, cx| window.press("left", cx));
+    context.update(|window, cx| window.input("Z", cx));
+    context.run_until_parked();
+    view.read_with(&context, |view, cx| {
+        assert_eq!(
+            view.document().read(cx).encode().unwrap(),
+            original.replace("one | two", "X\\|ZY | ").as_bytes()
+        );
+    });
+    context.dispatch_action(gpui_kit::component::input::Undo);
+    context.run_until_parked();
+    view.read_with(&context, |view, cx| {
+        assert_eq!(
+            view.document().read(cx).encode().unwrap(),
+            original.replace("one | two", "X\\|Y | ").as_bytes()
+        );
+        assert_eq!(view.selection(), Selection::caret(one + "X\\|".len()));
+    });
+    context.dispatch_action(gpui_kit::component::input::Undo);
+    context.run_until_parked();
     view.update_in(&mut context, |view, _, cx| {
         view.select_range(one..one + 3, cx);
         view.add_selection(two..two + 3, cx);

@@ -199,8 +199,9 @@ impl SourcePresentation {
             let (range, text) = edits.into_iter().next().unwrap();
             return Command::Replace { range, text, kind };
         }
-        let selection = Selection::caret(edits[0].0.start + edits[0].1.len());
-        Command::BatchReplaceSelected { edits, selection }
+        // The descending batch leaves the caret after the first cell's input.
+        // Preserve Typing so later native character callbacks join this edit.
+        Command::BatchReplace { edits, kind }
     }
 
     pub(super) fn table_arrow_target(
