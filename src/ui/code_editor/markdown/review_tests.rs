@@ -565,8 +565,7 @@ fn native_down_visits_each_soft_wrapped_row_without_skipping(cx: &mut TestAppCon
             .filter_map(|(ix, text)| {
                 let a = geometry.position_for_index(ix);
                 let b = geometry.position_for_index(ix + text.len());
-                (text == "W" && a.y < b.y)
-                    .then_some((leaf.source_offset(ix + text.len()), b.y))
+                (text == "W" && a.y < b.y).then_some((leaf.source_offset(ix + text.len()), b.y))
             })
             .take(2)
             .collect::<Vec<_>>();
@@ -579,7 +578,9 @@ fn native_down_visits_each_soft_wrapped_row_without_skipping(cx: &mut TestAppCon
         view.read_with(&context, |view, cx| {
             assert_eq!(view.selection(), Selection::caret(expected));
             assert_eq!(
-                view.range_to_bounds(&(expected..expected), cx).unwrap().top(),
+                view.range_to_bounds(&(expected..expected), cx)
+                    .unwrap()
+                    .top(),
                 top
             );
             assert_eq!(view.document().read(cx).revision(), 0);
