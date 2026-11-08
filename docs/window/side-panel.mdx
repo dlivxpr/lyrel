@@ -217,6 +217,8 @@ GitHub 上的 Markdown 来自陌生人，因此渲染时有两项限制：只加
 
 完整编辑体验对齐，不以部分高频操作、功能名称相同或静态排版截图代替。共同支持的场景以固定提交的 Zorite 软件行为为对照；lyrel 特有能力按现有契约验收。以下是验收面，不是任选的阶段性子集：
 
+负责人在实施会话中调整了测试要求：功能范围不变，验收精简为核心工作流；优先现有消费者回归、可复现脚本与后台测试，减少需要审批的前台操作。不再逐条穷举下表全部原生组合，也不以全量原生矩阵阻塞各实现票。以下各项仍是功能契约；报告区分核心实测、保留的历史证据与未验证组合，不把测试精简写成完整原生或跨平台通过。
+
 | 验收面 | 必须实际操作的路径 |
 | --- | --- |
 | 连续编辑 | 中文 IME 预编辑／候选位置／提交／取消，字素及词导航，软换行边界，跨结构选择／删除，Undo／Redo，源码往返 |
@@ -228,13 +230,13 @@ GitHub 上的 Markdown 来自陌生人，因此渲染时有两项限制：只加
 
 性能在同机、同窗口条件、同样本和相同测量边界下使用 Release 对照，记录输入响应与滚动，不能以工具调用耗时冒充输入到绘制时延。共同场景以不劣于 Zorite 为目标；lyrel 既有长文、宽表、多资源负载另与改造前比较，不得出现可复现退化。不得通过减少内容、切换源码、关闭功能或放宽保真取得更快结果；报告保留版本、负载和重复测量证据，不提前编造提升百分比。
 
-本次要求 Windows 完整原生交互及真实 SSH 验收；macOS 保持兼容，未实测部分明确记录。未完成项目仍为未完成，不以编译、单元测试、Unicode 注入或 headless 结果替代真实窗口、系统 IME、保存和重开。历史验收记录不自动满足新目标。
+本次重点验证 Windows 本机与真实 SSH 的核心路径；macOS 保持兼容，未实测部分明确记录。脚本／headless 可以证明事务、保存字节和 Host 隔离，但不能冒充真实窗口、系统 IME 或完整原生操作通过。需要实际窗口证明的核心变更合并批次验证，不重复申请逐条前台审批。
 
 规格准备阶段的历史状态：当时查证限于双方源码与现有文档，尚未构建或运行固定版本的 Zorite，也未新增编辑器交互或性能实测；后续已执行证据见下方 #205 对照记录，不以此历史状态描述当前进展。上游依据：[连续文档模型](https://github.com/packetThrower/zorite/blob/9c09b8cce84e41ca20c403e5b381c448cde468c4/src/db.rs#L1-L9)、[格式标记与结构标记显隐](https://github.com/packetThrower/zorite/blob/9c09b8cce84e41ca20c403e5b381c448cde468c4/crates/zorite-editor/src/markdown_syntax.rs#L300-L390)、[回车处理](https://github.com/packetThrower/zorite/blob/9c09b8cce84e41ca20c403e5b381c448cde468c4/crates/zorite-editor/src/lib.rs#L2400-L2510)、[双格式剪贴板](https://github.com/packetThrower/zorite/blob/9c09b8cce84e41ca20c403e5b381c448cde468c4/src/clipboard.rs)、[原位公式编辑](https://github.com/packetThrower/zorite/blob/9c09b8cce84e41ca20c403e5b381c448cde468c4/src/app/math.rs)、[链接点击处理](https://github.com/packetThrower/zorite/blob/9c09b8cce84e41ca20c403e5b381c448cde468c4/crates/zorite-editor/src/lib.rs#L3380-L3475)。显隐以条件表达式为准：`always_hide` 和 `hide_prefix` 优先于选区揭示，不能据上游旧注释声称选中时所有标记都会出现。
 
-##### #205 固定版本对照记录（未完成，不解锁后继）
+##### #205 固定版本对照记录（核心基线就绪，保留未验证范围）
 
-用户现已明确选择暂停在可后台验证的范围。完整原生操作 inventory 尚未完成，A/A 噪声校准、配对及性能采样均为 `N=0`。#204／#205 保持 open，不解锁 #206 或后继工单；本节不是功能完成或性能通过声明。
+按负责人最新的核心测试要求，固定版本原生运行、完整静态操作清单、差异台账、可复现 fixture 与改造前原始数据已可供后继实现使用，不再以穷举原生矩阵阻塞 #206。静态清单 285 条、冻结原生账本 186 行不是完整原生通过率。现存完整量测族含 680 个 run、6000 个输入及 1400 个滚动样本，另保留 66 个失败族 run；已执行 A/A 校准及交替配对，但严格排版／资源匹配未闭环，不能据此声明性能达标。
 
 2026-11-08 已在 Windows `10.0.26300` 构建并运行精确的 Zorite `9c09b8cce84e41ca20c403e5b381c448cde468c4`，未用正式版 `v0.13.0` 或 moving HEAD 替代。原始源码与锁文件未改；`cargo build --release --locked --bin zorite` 成功。首次构建因 vendored OpenSSL 找不到 `perl` 失败，随后在仓库外配置校验过的 Strawberry Perl portable，仅修改构建进程 PATH，同一命令成功。原始无探针二进制 SHA-256 为 `711637e157cb0a59f766f378ff8b08b8fb6e00021809ac2d6e99df1b7b95d7da`。其数据、`APPDATA`、`LOCALAPPDATA` 均隔离在任务自有目录，没有接管真实笔记或配置。
 
@@ -242,13 +244,15 @@ GitHub 上的 Markdown 来自陌生人，因此渲染时有两项限制：只加
 
 固定 reference 已实际观察普通正文与混合选区隐藏格式标记、空选区／混合选区上下文菜单、混合格式 Bold、Markdown 复制及持久化重开；另观察公式结构编辑入口及 LaTeX／导出／对齐菜单、代码语言菜单与复制、表格菜单／插行／样式／列宽拖拽、图片对象菜单与尺寸拖拽、拼写建议替换、混合方向文字呈现及嵌套标题折叠。上述证据只覆盖各自的鼠标／菜单路径，不代表完整操作 inventory 已经原生验收。
 
+恢复后已取得任务范围的原生控制授权，并实际执行六种格式快捷键的选区／空选区命令、混合与嵌套格式、撤销／重做、列表续行与空项退出、可见字符／grapheme 删除、表格 Tab／Shift+Tab／Enter／方向键、图片及公式边界删除、代码换行缩进、搜索前后匹配、slash 选择／关闭、属性提交及撤销、公式结构补全和 PNG／SVG 导出。原生 Copy 的 `UnicodeText`／`HTML Format` 已独立检查；真实 Word 粘贴显示格式，Notepad 保存字节保留 Markdown。真实 Microsoft Pinyin 候选、提交与取消已在 reference 执行；改造前 lyrel 另完成候选、提交“中”、保存、关闭及文件树重开，完整源码与保存字节一致。记录见 `resume-native-results.json`、`resume-native-clipboard.json` 及 `resume-*.png`，不扩张为尚未执行的完整矩阵通过。
+
 新确认的适配是表内格式标记：该原始 Zorite 二进制在第一正文行 B 单元格直接显示字面 `**bold**`，而同页普通正文隐藏星号；当时鼠标右击的是 A 单元格，B 不是正在编辑的 cell。按本节既有优先级，lyrel 仍须遵守 #204 的格式标记隐藏不变式，不能将这条差异当作 #206／#209／#212／#214 的豁免，或改写为上游已有表内隐藏格式。后续须保留对应源文本、鼠标位置与两种呈现的对照证据。
 
-**当前阻塞与未完成项：**后台原生 `Ctrl+A` 被自动化投递成普通字符 `a`；reference 正文没有可代替真实修饰键的 AX editor 控件。工作代理申请前台控制得到 `no-ui`，主会话申请得到 `unanswered`，未取得必要授权，因此没有继续重试后台 Ctrl／Shift，也没有把菜单动作、文本注入或合成事件记为真实 shortcut／IME 通过。完整 empty/mixed/object-boundary、导航／删除／撤销、补全、剪贴板 flavors／真实目标等原生行仍未完成。
+**历史输入前提与当前证据边界：**恢复后实际执行了真实 `Ctrl`／`Shift` 和系统 IME。媒体组旧失败含 `RefCell already borrowed` 与落点偏移，数据和原文恢复记录完整保留；后续独立直发诊断中 10 个 `X` 均落在预期文首，逐次校验源码并全部撤回，未记录运行时错误。该诊断不证明根因、不替换失败 run，也不计入性能配对。原生剩余组合改为明确列出的未验证范围，不再阻塞核心实现。reference 提交“中”后 Undo 回到字面 `zhong`、slash 插入清空此前历史等上游行为，不能放宽 lyrel 的组合输入与统一历史要求。
 
-两侧临时 callback→paint 探针仅在仓库外的独立测量 worktree 构建，源码已归档后移除测量 worktree，未进入产品。尚未执行 A/A 噪声校准或配对采样；输入响应分布、滚动分布及 matched Release 基线均未产生，不报告性能通过。已生成并记录实际字节与结构：当前回归生成器的 1200 组混合样本 342,220 字节；另一个实际 1200 节、含 1200 处图片的混合样本 695,006 字节；120 列×160 正文行的完整表格 291,041 字节、19,320 单元格；单大段落／单大代码块分别 400,034／400,042 字节；24 图／48 公式／24 图形／24 Note 的 MDX 为 3,448 字节。这些新生成文件不是历史记录的 724,334／291,131 字节原件，不能混用标签或沿用历史 Debug 数字。
+两侧临时 callback→paint 探针仅存在于仓库外，不进入产品。现有 A/A、AB/BA 与改造前大负载原始分布用于后续核心回归比较；不同 fixture、cache、条件不合并，工具调用耗时不算输入到绘制时延。reference 的 Arial／16 px／浅色设置已原生复核，但不证明代码叶字号、逐 glyph fallback、行高与对象布局匹配。回归样本分别为：1200 组混合样本 342,220 字节；1200 节且含 1200 处图片的混合样本 695,006 字节；120 列×160 正文行表格 291,041 字节、19,320 单元格；单大段落／单大代码块 400,034／400,042 字节；多资源 MDX 3,448 字节。不混用历史负载或 Debug 数据。
 
-详细静态 inventory、已批准差异台账与 #205–#233 映射、原始构建日志／退出码、环境／字体哈希、输入与持久化观察、完整 fixture 生成器及未执行的配对协议，保存在仓库外 `C:/Users/dlivx/AppData/Local/Temp/lyrel-204-CtjYLY/evidence205/`。入口为 `native-observations.md`、`source-editing-inventory.md`、`source-object-inventory.md`、`approved-differences.md`、`fixture-manifest.json`、`measurement-protocol.md` 和 `final-status.json`。复验时先取得必要原生输入前提、核验脚本中的独立数据路径和原始二进制哈希，再执行完整 inventory 与重复配对；临时探针不得进入产品。**#205 保持 open，不能凭源码清单、构建或有限观察解锁 #206。**
+仓库外证据目录为 `C:/Users/dlivx/AppData/Local/Temp/lyrel-204-CtjYLY/evidence205/`。操作／差异入口为 `offline-native-mapping/closure.json`、`approved-differences.md`；数据与限制入口为 `resume-resource-retained-baseline-summary.json`、`offline-baseline-index/baseline-index-resources-retained01.json`、`fixture-manifest.json`、`measurement-protocol.md`、`final-status.json`；独立输入诊断为 `resume-direct-native-diagnostic03.json`。新增 `core-verification-policy.json` 记录本次验收调整；后继票依据完整功能契约实现，按核心测试要求验证，不据此宣称全量矩阵或性能通过。
 
 #### 使用隔离配置复验
 
