@@ -157,10 +157,9 @@ impl SourcePresentation {
                     let mut high = geometry.bounds().right().max(low);
                     for _ in 0..24 {
                         let middle = (low + high) / 2.;
-                        if geometry.index_for_position(point(
-                            middle,
-                            a.y + geometry.caret_height() / 2.,
-                        )) <= ix
+                        if geometry
+                            .index_for_position(point(middle, a.y + geometry.caret_height() / 2.))
+                            <= ix
                         {
                             low = middle;
                         } else {
