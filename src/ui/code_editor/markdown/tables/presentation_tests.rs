@@ -143,4 +143,16 @@ fn table_presentation_drag_fit_scroll_edit_history_and_host_reopen(cx: &mut gpui
         std::thread::sleep(std::time::Duration::from_millis(5));
     }
     app.read_with(&context, |app, cx| assert_eq!(app.active_editor_input().unwrap().markdown().unwrap().read(cx).document().read(cx).encode().unwrap(), edited));
+    let reopened = app.read_with(&context, |app, _| app.active_editor_input().unwrap().markdown().unwrap().clone());
+    start_in_source(&reopened, &mut context);
+    context.dispatch_action(crate::core::actions::ToggleDocumentPreview);
+    settle_live_geometry(&reopened, &mut context);
+    context.update(|window, _| {
+        let handles = window.find_all_by_label("Resize table column");
+        assert_eq!(handles[1].bounds().center().x - handles[0].bounds().center().x, window.rem_size() * (420. / 16.));
+    });
+    reopened.read_with(&context, |view, cx| {
+        assert_eq!(view.document().read(cx).encode().unwrap(), edited);
+        assert_eq!(view.document().read(cx).revision(), 0);
+    });
 }
