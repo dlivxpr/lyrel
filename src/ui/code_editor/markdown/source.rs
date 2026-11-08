@@ -3296,8 +3296,8 @@ impl Render for SourcePresentation {
                     if view.move_image_resize(event.position, cx) { cx.stop_propagation(); }
                     else { view.hover_link(event, cx); }
                 }))
-                .on_hover(cx.listener(|view, hovered: &bool, _, cx| {
-                    if !*hovered { view.leave_link_hover(cx); }
+                .on_hover(cx.listener(|view, hovered: &bool, window, cx| {
+                    if !*hovered { view.leave_link_hover(window, cx); }
                 }))
                 .on_action(cx.listener(|this, _: &properties::EditDocumentProperties, window, cx| this.open_properties(window, cx)))
                 .on_action(cx.listener(|this, _: &properties::AddDocumentProperty, window, cx| this.add_document_property(false, window, cx)))

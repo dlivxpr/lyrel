@@ -118,6 +118,75 @@ impl SourcePresentation {
         self.focus.focus(window, cx);
     }
 
+    pub(in crate::ui::code_editor::markdown::source) fn link_label_regions(
+        &self,
+        link: &super::super::links::Link,
+        cx: &App,
+    ) -> Vec<Bounds<Pixels>> {
+        use unicode_segmentation::UnicodeSegmentation as _;
+        if !self.geometry_is_current(cx) {
+            return Vec::new();
+        }
+        let Some((_, geometries)) = &self.geometry else {
+            return Vec::new();
+        };
+        let mut regions: Vec<Bounds<Pixels>> = Vec::new();
+        for leaf in &self.projection.leaves {
+            if leaf.range.end <= link.label.start || link.label.end <= leaf.range.start {
+                continue;
+            }
+            let Some(geometry) = geometries.get(&leaf.id) else {
+                continue;
+            };
+            let start = leaf.display_offset(link.label.start.max(leaf.range.start));
+            let end = leaf.display_offset(link.label.end.min(leaf.range.end));
+            for (offset, grapheme) in leaf.text[start..end].grapheme_indices(true) {
+                let ix = start + offset;
+                let a = geometry.position_for_index(ix);
+                if grapheme.chars().all(|ch| matches!(ch, '\r' | '\n')) {
+                    continue;
+                }
+                let b = geometry.position_for_index(ix + grapheme.len());
+                let right = if a.y == b.y {
+                    a.x.max(b.x)
+                } else {
+                    // The next caret belongs to the next visual row. Recover
+                    // this glyph's advance from the shaped hit-test midpoint,
+                    // not the leaf's (possibly much wider) bounding rectangle.
+                    let mut low = a.x;
+                    let mut high = geometry.bounds().right().max(low);
+                    for _ in 0..24 {
+                        let middle = (low + high) / 2.;
+                        if geometry.index_for_position(point(
+                            middle,
+                            a.y + geometry.caret_height() / 2.,
+                        )) <= ix
+                        {
+                            low = middle;
+                        } else {
+                            high = middle;
+                        }
+                    }
+                    a.x + (high - a.x) * 2.
+                };
+                let left = if a.y == b.y { a.x.min(b.x) } else { a.x };
+                let bounds = Bounds::new(
+                    point(left, a.y),
+                    size((right - left).max(Pixels::ZERO), geometry.caret_height()),
+                );
+                if let Some(previous) = regions.last_mut()
+                    && previous.top() == bounds.top()
+                    && bounds.left() <= previous.right()
+                    && previous.left() <= bounds.right()
+                {
+                    *previous = previous.union(&bounds);
+                } else if bounds.size.width > Pixels::ZERO {
+                    regions.push(bounds);
+                }
+            }
+        }
+        regions
+    }
     pub(in crate::ui::code_editor::markdown::source) fn pointer_link_at(
         &self,
         position: Point<Pixels>,
@@ -138,7 +207,13 @@ impl SourcePresentation {
         }
         let at = self.point_offset(position, cx)?;
         let link = self.projection.links.at(at)?;
-        (link.label.start <= at && at <= link.label.end).then_some((link, at))
+        (link.label.start <= at
+            && at <= link.label.end
+            && self
+                .link_label_regions(link, cx)
+                .iter()
+                .any(|bounds| bounds.contains(&position)))
+        .then_some((link, at))
     }
 
     pub(super) fn begin_pointer_link(&mut self, event: &MouseDownEvent, cx: &App) -> bool {

@@ -977,6 +977,18 @@ fn markdown_pristine_formula_reload_allows_open_and_cursor_moves_during_disk_rea
                 .unwrap()
                 .clone()
         });
+        // external_change consumes a watcher event: use the opened buffer's
+        // canonical path and install that event's owning Host first.
+        let path = app.read_with(&context, |app, _| {
+            app.active_buffer().unwrap().path.clone()
+        });
+        app.update_in(&mut context, |app, _, cx| {
+            app.editor.buffers.rebuild_watch(
+                Some(host.clone()),
+                cx,
+                |app| &mut app.editor.buffers,
+            );
+        });
         view.update_in(&mut context, |view, window, cx| {
             if !view.is_live() {
                 view.toggle_mode(window, cx);

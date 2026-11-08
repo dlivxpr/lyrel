@@ -17,6 +17,7 @@ pub(super) struct State {
     controls: HashMap<(usize, String), (ScrollHandle, FocusHandle)>,
     task: Option<Task<()>>,
     hover: Option<super::super::links::Link>,
+    hover_position: Point<Pixels>,
     hover_open: bool,
 }
 impl SourcePresentation {
@@ -138,16 +139,38 @@ impl SourcePresentation {
                 .entry(key)
                 .or_insert_with(|| (ScrollHandle::new(), cx.focus_handle().tab_stop(true)));
         }
+        let layout_changed = self.embeds.loaded.as_ref().map_or(
+            !loaded.entries.is_empty(),
+            |previous| {
+                previous.entries.len() != loaded.entries.len()
+                    || previous.entries.iter().zip(&loaded.entries).any(|(old, new)| {
+                        old.reference != new.reference
+                            || match (&old.result, &new.result) {
+                                (Ok(old), Ok(new)) => !Arc::ptr_eq(old, new),
+                                (Err(old), Err(new)) => old != new,
+                                _ => true,
+                            }
+                    })
+            },
+        );
         self.embeds.loaded = Some(loaded);
         self.embeds.installed = Some(revision);
-        self.invalidate_layout(cx);
+        // A hover excerpt changes only the popup. Clearing source geometry
+        // would unmount its trigger while its delayed open is still pending.
+        if layout_changed {
+            self.invalidate_layout(cx);
+        }
         cx.notify();
     }
-    pub(super) fn leave_link_hover(&mut self, cx: &mut Context<Self>) {
-        if !self.embeds.hover_open && self.embeds.hover.take().is_some() {
-            self.embeds.generation = self.embeds.generation.wrapping_add(1);
-            self.embeds.pending = false;
-            cx.notify();
+    pub(super) fn leave_link_hover(&mut self, window: &Window, cx: &mut Context<Self>) {
+        // Installing the deferred trigger can end the document's hover without
+        // the pointer leaving the label. Do not destroy its pending 450ms timer.
+        if !self.embeds.hover_open && self.pointer_link_at(window.mouse_position(), cx).is_none() {
+            if self.embeds.hover.take().is_some() {
+                self.embeds.generation = self.embeds.generation.wrapping_add(1);
+                self.embeds.pending = false;
+                cx.notify();
+            }
         }
     }
     pub(super) fn hover_link(&mut self, event: &MouseMoveEvent, cx: &mut Context<Self>) {
@@ -157,15 +180,22 @@ impl SourcePresentation {
         } else {
             None
         };
-        if link.is_none() && self.embeds.hover_open {
-            return;
-        }
+        let previous_position = self.embeds.hover_position;
+        self.embeds.hover_position = event.position;
         if self.embeds.hover.as_ref() == link.as_ref() {
+            if let Some(link) = &link
+                && !self.link_label_regions(link, cx).iter().any(|bounds| {
+                    bounds.contains(&previous_position) && bounds.contains(&event.position)
+                })
+            {
+                cx.notify();
+            }
             return;
         }
         self.embeds.generation = self.embeds.generation.wrapping_add(1);
         self.embeds.pending = false;
         self.embeds.hover = link;
+        self.embeds.hover_open = false;
         self.request_embeds(cx);
         cx.notify();
     }
@@ -175,11 +205,10 @@ impl SourcePresentation {
         if !self.live || self.projection.revision != document.revision() {
             return None;
         }
-        // range_to_bounds is an IME caret contract: it returns only the range's end.
-        // A hover trigger must cover the rendered label, not that one-pixel caret.
-        let start = self.range_to_bounds(&(link.label.start..link.label.start), cx)?;
-        let end = self.range_to_bounds(&(link.label.end..link.label.end), cx)?;
-        let bounds = start.union(&end);
+        let bounds = self
+            .link_label_regions(link, cx)
+            .into_iter()
+            .find(|bounds| bounds.contains(&self.embeds.hover_position))?;
         let entry = self
             .embeds
             .loaded
@@ -204,7 +233,10 @@ impl SourcePresentation {
                     gpui_kit::component::hover_card::HoverCard::new("markdown-link-preview-card")
                         .anchor(Anchor::TopLeft)
                         .open_delay(std::time::Duration::from_millis(450))
-                        .trigger(div().w(bounds.size.width).h(bounds.size.height))
+                        .trigger(
+                            div().w(bounds.size.width).h(bounds.size.height)
+                                .on_mouse_move(cx.listener(|view, event: &MouseMoveEvent, _, cx| view.hover_link(event, cx))),
+                        )
                         .on_open_change(move |open, _, cx| {
                             let _ = view.update(cx, |view, cx| {
                                 if view.embeds.hover.as_ref() != Some(&expected) {
@@ -226,6 +258,9 @@ impl SourcePresentation {
                                 .w_80()
                                 .max_h(window.rem_size() * 20.)
                                 .overflow_y_scroll();
+                            // Preview content owns its pointer; moving into it
+                            // must not look like leaving the source label.
+                            body = body.on_mouse_move(|_, _, cx| cx.stop_propagation());
                             if let Some(fragment) = &fragment {
                                 body =
                                     body.role(Role::Group)

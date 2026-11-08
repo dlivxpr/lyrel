@@ -277,9 +277,12 @@ fn review_formula_cancel_after_plain_input_keeps_original_bytes_and_history(
         window.input("9", cx);
     });
     assert_eq!(bytes(&view, &context), source.as_bytes());
+    context.update(|window, cx| window.click("formula-cancel", cx));
+    // The toolbar dispatches an Action after this window update has returned.
+    until(&mut context, |context| {
+        context.update(|window, _| window.try_find("markdown-formula-editor").is_none())
+    });
     context.update(|window, cx| {
-        window.click("formula-cancel", cx);
-        assert!(window.try_find("markdown-formula-editor").is_none());
         assert!(view.read(cx).focus_handle(cx).is_focused(window));
     });
     assert_eq!(bytes(&view, &context), source.as_bytes());
@@ -413,6 +416,62 @@ fn review_link_hover_shows_host_excerpt_without_editing_source_and_dismisses(
     until(&mut context, |context| {
         context.update(|window, _| window.try_find("markdown-link-preview").is_none())
     });
+    assert_eq!(bytes(&view, &context), source.as_bytes());
+}
+
+#[gpui_kit::test]
+fn review_wrapped_link_hover_ignores_nonlabel_space_after_resize(cx: &mut TestAppContext) {
+    let source = format!(
+        "prefix before the link [{}\ntail](target.md#ignored) trailing prose\n\nkeep\n",
+        "preview words ".repeat(12),
+    );
+    let (dir, _path, _app, mut context, _streams, view) = fixture!(cx, &source);
+    std::fs::write(dir.path().join("target.md"), "# Target title\n\nFirst paragraph\n").unwrap();
+    let at = source.find("tail]").unwrap() + 2;
+    let label_start = source.find('[').unwrap() + 1;
+    let label_end = source.find("](target").unwrap();
+    select(&view, &mut context, source.len() - 1, source.len() - 1);
+    for width in [1100., 900.] {
+        cx.simulate_window_resize(
+            context.window_handle(),
+            gpui_kit::size(gpui_kit::px(width), gpui_kit::px(1400.)),
+        );
+        settle(&view, &mut context);
+        let (label, gap) = view.read_with(&context, |view, cx| {
+            let start = view.range_to_bounds(&(label_start..label_start), cx).unwrap();
+            let end = view.range_to_bounds(&(label_end..label_end), cx).unwrap();
+            let label = view.range_to_bounds(&(at..at), cx).unwrap().center();
+            let gap = gpui_kit::point((start.left() + end.right()) / 2., end.center().y);
+            assert!(start.top() < end.top(), "label must span visual rows");
+            assert!(gap.x > end.right(), "gap must be beyond the final label row");
+            assert!(start.union(&end).contains(&gap), "gap exposes the old union trigger");
+            (label, gap)
+        });
+        context.update(|window, cx| window.pointer_move(gap, None, cx));
+        context.run_until_parked();
+        context.executor().advance_clock(Duration::from_millis(600));
+        context.run_until_parked();
+        context.update(|window, cx| {
+            window.render_frame(cx);
+            assert!(window.try_find("markdown-link-preview").is_none());
+            window.pointer_move(label, None, cx);
+        });
+        context.update(|window, cx| window.pointer_move(label, None, cx));
+        until(&mut context, |context| {
+            context.update(|window, _| {
+                window.try_find("markdown-link-preview").is_some_and(|preview| {
+                    preview.visible() && preview.label().is_some_and(|text| text.contains("First paragraph"))
+                })
+            })
+        });
+        context.update(|window, cx| window.pointer_move(gap, None, cx));
+        until(&mut context, |context| {
+            context.update(|window, _| window.try_find("markdown-link-preview").is_none())
+        });
+        assert_eq!(bytes(&view, &context), source.as_bytes());
+    }
+    context.dispatch_action(gpui_kit::component::input::Undo);
+    context.dispatch_action(gpui_kit::component::input::Redo);
     assert_eq!(bytes(&view, &context), source.as_bytes());
 }
 

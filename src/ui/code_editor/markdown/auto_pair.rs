@@ -32,6 +32,16 @@ impl SourcePresentation {
             .iter()
             .filter(|leaf| leaf.range.start < range.end && range.start < leaf.range.end)
         {
+            // Blank insertion leaves are Source, not Prose. They may bridge
+            // paragraphs only while their selected bytes are whitespace.
+            if matches!(leaf.kind, Kind::Source)
+                && source
+                    .slice(leaf.range.clone())
+                    .chars()
+                    .all(char::is_whitespace)
+            {
+                continue;
+            }
             if !matches!(leaf.kind, Kind::Prose)
                 || !source
                     .slice(covered..leaf.range.start.max(covered))
