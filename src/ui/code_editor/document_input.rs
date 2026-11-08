@@ -296,7 +296,7 @@ impl MarkdownPresentations {
     ) {
         self.0.borrow_mut().retain(|(tab, group, view, _)| {
             let keep = live(*tab, *group);
-            if !keep && view.read(cx).is_composing() {
+            if !keep {
                 view.update(cx, |view, cx| {
                     view.command(Command::FinishComposition, window, cx)
                 });
