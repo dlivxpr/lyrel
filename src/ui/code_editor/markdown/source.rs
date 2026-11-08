@@ -1722,13 +1722,8 @@ impl SourcePresentation {
         }
         let display = leaf.display_offset(at);
         if backward {
-            if let Some((ix, _)) = leaf
-                .text
-                .grapheme_indices(true)
-                .rev()
-                .find(|(ix, _)| *ix < display)
-            {
-                return leaf.source_offset(ix);
+            if let Some(range) = navigation::adjacent_grapheme(&leaf.text, display, true) {
+                return leaf.source_offset(range.start);
             }
             self.projection
                 .leaves
@@ -1749,12 +1744,8 @@ impl SourcePresentation {
                 })
                 .unwrap_or(leaf.content_start())
         } else {
-            if let Some((ix, _)) = leaf
-                .text
-                .grapheme_indices(true)
-                .find(|(ix, _)| *ix > display)
-            {
-                return leaf.source_offset(ix);
+            if let Some(range) = navigation::adjacent_grapheme(&leaf.text, display, false) {
+                return leaf.source_offset(range.end);
             }
             if display < leaf.text.len() {
                 return leaf.content_end();

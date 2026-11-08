@@ -37,28 +37,51 @@ impl SourcePresentation {
         let leaf = self.projection.leaf_at(at)?;
         if leaf.deferred { return None; }
         let geometry = self.geometry.as_ref()?.1.get(&leaf.id)?;
+        if geometry.caret_height() <= Pixels::ZERO { return None; }
         let display = leaf.display_offset(at);
         let caret = geometry.position_for_index(display);
-        // Use shaped glyph positions rather than a second bidi resolver. This
-        // keeps mixed-direction motion consistent with the platform painter.
-        let next = leaf.text.grapheme_indices(true).map(|(ix, _)| ix)
-            .chain(std::iter::once(leaf.text.len()))
-            .filter(|ix| *ix != display)
-            .filter_map(|ix| {
-                let position = geometry.position_for_index(ix);
-                let dx = if backward { caret.x - position.x } else { position.x - caret.x };
-                ((position.y - caret.y).abs() < geometry.line_height() * 0.25 && dx > Pixels::ZERO)
-                    .then_some((ix, dx))
-            })
-            .min_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
-        if let Some((ix, _)) = next { return Some(leaf.source_offset(ix)); }
-        let mut row = leaf.text.grapheme_indices(true).map(|(ix, _)| ix)
-            .chain(std::iter::once(leaf.text.len()))
-            .map(|ix| geometry.position_for_index(ix))
-            .filter(|position| (position.y - caret.y).abs() < geometry.line_height() * 0.25);
-        let first = row.next()?;
-        let last = row.last().unwrap_or(first);
-        (first.x > last.x).then(|| self.visible_step(at, !backward, cx))
+        // Probe the current shaped row, then bisect its first caret transition.
+        // The number of geometry queries depends on coordinate precision, not
+        // the paragraph's grapheme count; atoms and bidi keep the same mapper.
+        let direction = if backward { -1. } else { 1. };
+        let y = caret.y + geometry.line_height() * 0.25;
+        let bounds = geometry.bounds();
+        let limit = if backward { bounds.left() } else { bounds.right() };
+        let distance = (limit - caret.x).abs();
+        let tolerance = geometry.caret_height() / 1024.;
+        let candidate = |distance| {
+            let ix = geometry.index_for_position(point(caret.x + distance * direction, y));
+            let ix = floor_grapheme(&leaf.text, ix);
+            let position = geometry.position_for_index(ix);
+            let dx = (position.x - caret.x) * direction;
+            (ix != display && dx > Pixels::ZERO
+                && (position.y - caret.y).abs() < geometry.line_height() * 0.25)
+                .then_some(ix)
+        };
+        let mut low = Pixels::ZERO;
+        let mut high = (geometry.caret_height() * 0.25).min(distance);
+        let mut next = candidate(high);
+        while next.is_none() && high < distance {
+            low = high;
+            high = (high * 2.).min(distance);
+            next = candidate(high);
+        }
+        if let Some(mut ix) = next {
+            for _ in 0..24 {
+                if high - low <= tolerance { break; }
+                let middle = (low + high) / 2.;
+                if let Some(nearest) = candidate(middle) {
+                    high = middle;
+                    ix = nearest;
+                } else { low = middle; }
+            }
+            return Some(leaf.source_offset(ix));
+        }
+        // At a visual edge, ask the same row's endpoints for its source-order
+        // direction rather than visiting every glyph to infer RTL/wrap exit.
+        let left = geometry.index_for_position(point(bounds.left(), y));
+        let right = geometry.index_for_position(point(bounds.right(), y));
+        (left > right).then(|| self.visible_step(at, !backward, cx))
     }
 
     pub(super) fn visual_selection_edge(&self, backward: bool, cx: &App) -> usize {
@@ -73,51 +96,37 @@ impl SourcePresentation {
 
     pub(super) fn visible_word_target(&self, at: usize, backward: bool, cx: &App) -> usize {
         let document = self.document.read(cx);
-        if self.live && self.projection.revision == document.revision() {
-            if let Some(leaf) = self.projection.leaf_at(at).filter(|leaf| !leaf.deferred) {
-                let display = leaf.display_offset(at);
-                let adjacent = if backward {
-                    leaf.text.grapheme_indices(true).rev().find(|(ix, _)| *ix < display)
-                        .map(|(ix, text)| ix..ix + text.len())
-                } else {
-                    leaf.text.grapheme_indices(true).find(|(ix, _)| *ix >= display)
-                        .map(|(ix, text)| ix..ix + text.len())
-                };
-                if let Some(adjacent) = adjacent {
-                    let source = leaf.visible_range(adjacent.clone());
-                    if source.len() != adjacent.len() || leaf.text[adjacent.clone()].contains('\u{fffc}') {
-                        return if backward { source.start } else { source.end };
-                    }
-                }
-                let row_start = leaf.text[..display].rfind('\n').map_or(0, |ix| ix + 1);
-                let row_end = leaf.text[display..].find('\n').map_or(leaf.text.len(), |ix| display + ix);
-                let row = &leaf.text[row_start..row_end];
-                let target = if backward {
-                    row.unicode_word_indices().rev().find(|(ix, _)| row_start + ix < display)
-                        .map(|(ix, _)| row_start + ix)
-                } else {
-                    row.unicode_word_indices().find(|(ix, word)| row_start + ix + word.len() > display)
-                        .map(|(ix, word)| row_start + ix + word.len())
-                };
-                let target = match (target, leaf.word_atom_target(display, backward)) {
-                    (Some(word), Some(atom)) => Some(if backward { word.max(atom) } else { word.min(atom) }),
-                    (word, atom) => word.or(atom),
-                };
-                if let Some(target) = target { return leaf.source_offset(target); }
-                return self.visible_step(at, backward, cx);
+        if !self.live || self.projection.revision != document.revision()
+            || self.projection.leaf_at(at).is_none_or(|leaf| leaf.deferred) {
+            return source_word_target(document, at, backward);
+        }
+        let leaf = self.projection.leaf_at(at).expect("current materialized leaf");
+        let display = leaf.display_offset(at);
+        if let Some(adjacent) = adjacent_grapheme(&leaf.text, display, backward) {
+            let source = leaf.visible_range(adjacent.clone());
+            if source.len() != adjacent.len() || leaf.text[adjacent].contains('\u{fffc}') {
+                return if backward { source.start } else { source.end };
             }
         }
-        let row = document.source().offset_to_point(at).row;
-        let start = document.source().line_start_offset(row);
-        let end = document.source().line_end_offset(row);
-        let line = document.source().slice(start..end).to_string();
-        if backward {
-            line.unicode_word_indices().rev().find(|(ix, _)| start + ix < at)
-                .map_or_else(|| document.previous(start), |(ix, _)| start + ix)
+        // Start at the caret in the requested direction. Do not scan the other
+        // half of a long logical line just to find its containing row first.
+        let target = if backward {
+            leaf.text[..display].unicode_word_indices().next_back()
+                .map(|(ix, _)| ix)
+                .filter(|ix| !leaf.text[*ix..display].contains('\n'))
         } else {
-            line.unicode_word_indices().find(|(ix, word)| start + ix + word.len() > at)
-                .map_or_else(|| document.next(end), |(ix, word)| start + ix + word.len())
-        }
+            leaf.text[display..].unicode_word_indices().next()
+                .map(|(ix, word)| display + ix + word.len())
+                .filter(|end| !leaf.text[display..*end].contains('\n'))
+        };
+        let atom = leaf.word_atom_target(display, backward).filter(|target| {
+            !leaf.text[display.min(*target)..display.max(*target)].contains('\n')
+        });
+        let target = match (target, atom) {
+            (Some(word), Some(atom)) => Some(if backward { word.max(atom) } else { word.min(atom) }),
+            (word, atom) => word.or(atom),
+        };
+        target.map_or_else(|| self.visible_step(at, backward, cx), |target| leaf.source_offset(target))
     }
 
     pub(super) fn visible_delete_range(&self, at: usize, backward: bool, cx: &App) -> Range<usize> {
@@ -125,25 +134,20 @@ impl SourcePresentation {
         if self.live && self.projection.revision == document.revision() {
             if let Some(leaf) = self.projection.leaf_at(at).filter(|leaf| !leaf.deferred) {
                 let display = leaf.display_offset(at);
-                let range = if backward {
-                    leaf.text.grapheme_indices(true).rev().find(|(ix, _)| *ix < display)
-                        .map(|(ix, text)| ix..ix + text.len())
-                } else {
-                    leaf.text.grapheme_indices(true).find(|(ix, _)| *ix >= display)
-                        .map(|(ix, text)| ix..ix + text.len())
-                };
-                if let Some(range) = range { return leaf.visible_range(range); }
+                if let Some(range) = adjacent_grapheme(&leaf.text, display, backward) {
+                    return leaf.visible_range(range);
+                }
                 if matches!(leaf.kind, Kind::TableCell(_)) { return at..at; }
             }
         }
         if backward { document.previous(at)..at } else { at..document.next(at) }
     }
 
-    pub(super) fn deletion_ranges(&self, range: Range<usize>, cx: &App) -> Vec<Range<usize>> {
+    pub(super) fn deletion_ranges(&self, range: Range<usize>, cx: &App) -> smallvec::SmallVec<[Range<usize>; 4]> {
         if !self.live || self.projection.revision != self.document.read(cx).revision() || range.is_empty() {
-            return vec![range];
+            return smallvec::smallvec![range];
         }
-        let mut ranges = vec![range.clone()];
+        let mut ranges = smallvec::smallvec![range.clone()];
         // A partially selected table retains its structural pipes, padding and
         // separator row. Selecting the complete table still deletes the object.
         let mut table_end = 0;
@@ -166,7 +170,7 @@ impl SourcePresentation {
             }
             subtract(&mut ranges, protected..table.end);
         }
-        let mut repairs = Vec::new();
+        let mut repairs = smallvec::SmallVec::<[Range<usize>; 4]>::new();
         for range in &ranges {
             let first = self.projection.leaves.partition_point(|leaf| leaf.range.end < range.start);
             for leaf in self.projection.leaves[first..].iter().take_while(|leaf| leaf.range.start <= range.end) {
@@ -176,7 +180,7 @@ impl SourcePresentation {
         ranges.extend(repairs);
         ranges.retain(|range| !range.is_empty());
         ranges.sort_by_key(|range| range.start);
-        let mut merged: Vec<Range<usize>> = Vec::new();
+        let mut merged = smallvec::SmallVec::<[Range<usize>; 4]>::new();
         for range in ranges {
             if let Some(last) = merged.last_mut().filter(|last| range.start <= last.end) {
                 last.end = last.end.max(range.end);
@@ -187,9 +191,16 @@ impl SourcePresentation {
 
     pub(super) fn deletion_command(&self, range: Range<usize>, cx: &App) -> Command {
         let at = range.start;
-        let ranges = self.deletion_ranges(range, cx);
+        let mut ranges = self.deletion_ranges(range, cx);
         if ranges.is_empty() {
             return Command::Select(Selection::caret(at));
+        }
+        if ranges.len() == 1 {
+            return Command::Replace {
+                range: ranges.pop().unwrap(),
+                text: String::new(),
+                kind: EditKind::Command,
+            };
         }
         let removed_before: usize = ranges.iter().map(|range| at.min(range.end).saturating_sub(range.start)).sum();
         Command::BatchReplaceSelected {
@@ -348,7 +359,7 @@ impl SourcePresentation {
     }
 }
 
-fn subtract(ranges: &mut Vec<Range<usize>>, protected: Range<usize>) {
+fn subtract(ranges: &mut smallvec::SmallVec<[Range<usize>; 4]>, protected: Range<usize>) {
     if protected.is_empty() { return; }
     let mut ix = 0;
     while ix < ranges.len() {
@@ -357,5 +368,74 @@ fn subtract(ranges: &mut Vec<Range<usize>>, protected: Range<usize>) {
         ranges.remove(ix);
         if range.start < protected.start { ranges.insert(ix, range.start..protected.start); ix += 1; }
         if protected.end < range.end { ranges.insert(ix, protected.end..range.end); ix += 1; }
+    }
+}
+
+fn floor_grapheme(text: &str, at: usize) -> usize {
+    let at = text.floor_char_boundary(at.min(text.len()));
+    let mut cursor = unicode_segmentation::GraphemeCursor::new(at, text.len(), true);
+    if cursor.is_boundary(text, 0).expect("complete leaf supplies grapheme context") {
+        at
+    } else {
+        cursor.prev_boundary(text, 0).expect("complete leaf supplies grapheme context").unwrap_or(0)
+    }
+}
+
+pub(super) fn adjacent_grapheme(text: &str, at: usize, backward: bool) -> Option<Range<usize>> {
+    let at = floor_grapheme(text, at);
+    let mut cursor = unicode_segmentation::GraphemeCursor::new(at, text.len(), true);
+    if backward {
+        cursor.prev_boundary(text, 0).expect("complete leaf supplies grapheme context").map(|start| start..at)
+    } else {
+        cursor.next_boundary(text, 0).expect("complete leaf supplies grapheme context").map(|end| at..end)
+    }
+}
+
+fn source_word_target(document: &MarkdownDocument, at: usize, backward: bool) -> usize {
+    let source = document.source();
+    let row = source.offset_to_point(at).row;
+    let row_start = source.line_start_offset(row);
+    let row_end = source.line_end_offset(row);
+    // ASCII space/tab are definite UAX word breaks. Keep complete intervening
+    // context, including apostrophes and arbitrary Extend/Format sequences;
+    // never infer words from alphanumeric classes or truncate at a byte budget.
+    let separator = |ch: char| matches!(ch, ' ' | '\t');
+    let mut start = at;
+    let mut seen = false;
+    for ch in source.chars_at(at).reversed() {
+        if start <= row_start { break; }
+        if separator(ch) && (seen || !backward) {
+            start -= ch.len_utf8();
+            break;
+        }
+        start -= ch.len_utf8();
+        seen |= !separator(ch);
+    }
+    let mut end = at;
+    let mut seen = false;
+    for ch in source.chars_at(at) {
+        if end >= row_end { break; }
+        if separator(ch) && (seen || backward) {
+            end += ch.len_utf8();
+            break;
+        }
+        end += ch.len_utf8();
+        seen |= !separator(ch);
+    }
+    let slice = source.slice(start..end);
+    let owned;
+    let text = if let Some(text) = slice.as_str() { text } else {
+        // A context crossing Rope chunks must remain contiguous for the public
+        // Unicode iterator. A pathological unbroken token can still require the
+        // legacy full context; correctness takes precedence over truncation.
+        owned = slice.to_string();
+        &owned
+    };
+    if backward {
+        text.unicode_word_indices().rev().find(|(ix, _)| start + ix < at)
+            .map_or_else(|| document.previous(row_start), |(ix, _)| start + ix)
+    } else {
+        text.unicode_word_indices().find(|(ix, word)| start + ix + word.len() > at)
+            .map_or_else(|| document.next(row_end), |(ix, word)| start + ix + word.len())
     }
 }

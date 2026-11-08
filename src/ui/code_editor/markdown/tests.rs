@@ -9499,6 +9499,7 @@ fn native_navigation_deletes_visible_nested_graphemes_without_orphan_markers(
     let combining = source.find("e\u{301}").unwrap();
     let emoji = source.find("👩‍💻").unwrap();
     for (selection, key, expected) in [
+        (Selection::caret(1), "backspace", " **e\u{301}** z\n\n***👩‍💻*** tail\n\nleft **one two** right\n"),
         (Selection::caret(combining + "e\u{301}".len()), "backspace", "a  z\n\n***👩‍💻*** tail\n\nleft **one two** right\n"),
         (Selection::caret(emoji), "delete", "a **e\u{301}** z\n\n tail\n\nleft **one two** right\n"),
         (Selection::new(source.find("left").unwrap() + 2, source.find("two").unwrap() + 1), "delete", "a **e\u{301}** z\n\n***👩‍💻*** tail\n\nlewo right\n"),
@@ -9527,8 +9528,8 @@ fn native_navigation_home_end_and_words_use_visible_logical_content(
     use gpui_kit::{Focusable as _, test::TestWindowExt as _};
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("navigation-words.md");
-    let source = "# Heading\n\n- **hello** world with enough text to wrap across several visual rows when narrow\n\nفارسی English עברית\n\nlast";
-    std::fs::write(&path, source).unwrap();
+    let source = format!("# Heading\n\n- **hello** world with enough text to wrap across several visual rows when narrow\n\nفارسی English עברית\n\nlast\n\n{}e\u{301} tail", "x".repeat(4096));
+    std::fs::write(&path, &source).unwrap();
     let (app, mut context, _streams) = harness_with_tabs(cx, 1);
     cx.simulate_window_resize(context.window_handle(), gpui_kit::size(gpui_kit::px(620.), gpui_kit::px(800.)));
     app.update_in(&mut context, |app, window, cx| app.open_file_in_editor(&path, window, cx));
@@ -9574,6 +9575,36 @@ fn native_navigation_home_end_and_words_use_visible_logical_content(
         assert_eq!(view.read(cx).selection(), Selection::new(rtl, rtl + "ف".len()));
         window.press("shift-right", cx);
         assert_eq!(view.read(cx).selection(), Selection::caret(rtl));
+    });
+    let token_start = source.rfind("\n\n").unwrap() + 2;
+    let token_end = source.rfind(" tail").unwrap();
+    let seam = view.read_with(&context, |view, cx| {
+        let mut offset = 0;
+        view.document().read(cx).source().chunks().find_map(|chunk| {
+            offset += chunk.len();
+            (token_start < offset && offset < token_end).then_some(offset)
+        }).expect("long token spans Rope chunks")
+    });
+    view.update_in(&mut context, |view, _, cx| view.select_range(seam..seam, cx));
+    context.run_until_parked();
+    context.update(|window, cx| {
+        window.render_frame(cx);
+        window.render_frame(cx);
+        window.press("right", cx);
+        assert_eq!(view.read(cx).selection(), Selection::caret(seam + 1));
+        window.press("left", cx);
+        assert_eq!(view.read(cx).selection(), Selection::caret(seam));
+    });
+    // Source word actions keep the complete Unicode word across real Rope
+    // chunks, including a combining sequence after a long unbroken token.
+    context.dispatch_action(crate::core::actions::ToggleDocumentPreview);
+    context.run_until_parked();
+    context.dispatch_action(gpui_kit::component::input::MoveToNextWord);
+    view.read_with(&context, |view, _| assert_eq!(view.selection(), Selection::caret(token_end)));
+    context.dispatch_action(gpui_kit::component::input::MoveToPreviousWord);
+    view.read_with(&context, |view, cx| {
+        assert_eq!(view.selection(), Selection::caret(token_start));
+        assert_eq!(view.document().read(cx).encode().unwrap(), source.as_bytes());
     });
 }
 

@@ -582,8 +582,8 @@ impl Leaf {
 
     /// Remove a paired wrapper only when its content is emptied or one side
     /// of its syntax is removed. Unselected text is never part of this repair.
-    pub(super) fn deletion_delimiters(&self, range: &Range<usize>) -> Vec<Range<usize>> {
-        let mut removed = Vec::new();
+    pub(super) fn deletion_delimiters(&self, range: &Range<usize>) -> smallvec::SmallVec<[Range<usize>; 4]> {
+        let mut removed = smallvec::SmallVec::new();
         for (ix, span) in self.spans.iter().enumerate() {
             if range.start >= span.source.end || span.source.start >= range.end {
                 continue;
