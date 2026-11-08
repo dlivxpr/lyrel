@@ -31,6 +31,50 @@ impl State {
         self.subscription = None;
     }
 }
+
+/// A grapheme's line box from the same geometry used to paint the text.
+/// Wrapped-start recovery is restricted to the left-aligned paragraph paths;
+/// table alignment and bidi paint origins need a richer upstream geometry API.
+fn spelling_segment(
+    geometry: &LeafGeometry,
+    start: usize,
+    grapheme: &str,
+    recover_wrapped_start: bool,
+) -> Option<Bounds<Pixels>> {
+    if grapheme.contains(['\r', '\n']) {
+        return None;
+    }
+    let a = geometry.position_for_index(start);
+    let b = geometry.position_for_index(start + grapheme.len());
+    let (left, right, top) = if a.y == b.y {
+        (a.x.min(b.x), a.x.max(b.x), a.y)
+    } else {
+        if !recover_wrapped_start {
+            return None;
+        }
+        // Whole TextLayout resolves a shared wrap index to the previous row's
+        // end. Left-aligned rows all start at this actual paragraph origin,
+        // including list indentation and blockquote padding. InlineFlow instead
+        // resolves a fragment-end index to the next fragment: its next row's
+        // leading index is greater than `start`, so it must not be bridged.
+        let origin = geometry.position_for_index(0).x;
+        let next_start = geometry.index_for_position(point(
+            origin,
+            b.y + geometry.caret_height() / 2.,
+        ));
+        if next_start != start {
+            return None;
+        }
+        (origin, b.x, b.y)
+    };
+    (left < right).then(|| {
+        Bounds::new(
+            point(left, top),
+            size(right - left, geometry.caret_height()),
+        )
+    })
+}
+
 impl SourcePresentation {
     pub(super) fn schedule_spelling(&mut self, cx: &mut Context<Self>) {
         self.spelling.invalidate();
@@ -264,6 +308,10 @@ impl SourcePresentation {
             let Some(geometry) = geometry.get(&leaf.id) else {
                 continue;
             };
+            let recover_wrapped_start = matches!(
+                leaf.kind,
+                Kind::Prose | Kind::Heading(_) | Kind::List(_) | Kind::Quote(_)
+            );
             let first = self.spelling.diagnostics.partition_point(|diagnostic| {
                 diagnostic
                     .ranges
@@ -287,14 +335,17 @@ impl SourcePresentation {
                     };
                     let mut path = PathBuilder::stroke(unit);
                     for (offset, grapheme) in text.grapheme_indices(true) {
-                        let a = geometry.position_for_index(start + offset);
-                        let b = geometry.position_for_index(start + offset + grapheme.len());
-                        if a.y != b.y || a.x == b.x {
+                        let Some(segment) = spelling_segment(
+                            geometry,
+                            start + offset,
+                            grapheme,
+                            recover_wrapped_start,
+                        ) else {
                             continue;
-                        }
-                        let left = a.x.min(b.x).max(viewport.left());
-                        let right = a.x.max(b.x).min(viewport.right());
-                        let y = a.y + geometry.caret_height();
+                        };
+                        let left = segment.left().max(viewport.left());
+                        let right = segment.right().min(viewport.right());
+                        let y = segment.bottom();
                         if y < viewport.top() || y + unit * 2. > viewport.bottom() || left >= right
                         {
                             continue;
@@ -319,10 +370,301 @@ impl SourcePresentation {
 
 #[cfg(test)]
 mod tests {
-    use super::Diagnostic;
+    use super::{Diagnostic, SourcePresentation, spelling_segment};
     use crate::ui::app::test_window::harness_with_tabs;
+    use crate::ui::code_editor::markdown::projection::Kind;
     use gpui_kit::test::TestWindowExt as _;
-    use gpui_kit::{TestAppContext, point};
+    use gpui_kit::{Entity, Pixels, TestAppContext, VisualTestContext, point, px, size};
+    use unicode_segmentation::UnicodeSegmentation as _;
+
+    fn settle_geometry(view: &Entity<SourcePresentation>, context: &mut VisualTestContext) {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        loop {
+            context
+                .executor()
+                .advance_clock(std::time::Duration::from_millis(100));
+            context.run_until_parked();
+            context.update(|window, cx| window.render_frame(cx));
+            if view.read_with(context, |view, cx| {
+                view.live
+                    && view.geometry_is_current(cx)
+                    && !view
+                        .projection
+                        .leaves
+                        .iter()
+                        .any(|leaf| matches!(leaf.kind, Kind::PendingSource))
+            }) {
+                return;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "spelling geometry did not settle"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+    }
+
+    macro_rules! spelling_fixture {
+        ($cx:expr, $original:expr) => {{
+            let directory = tempfile::tempdir().unwrap();
+            let path = directory.path().join("waves.md");
+            std::fs::write(&path, $original).unwrap();
+            let (app, mut context, streams) = harness_with_tabs($cx, 1);
+            app.update_in(&mut context, |app, window, cx| {
+                app.open_file_in_editor(&path, window, cx)
+            });
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+            let view = loop {
+                context.run_until_parked();
+                if let Some(view) = app.read_with(&context, |app, _| {
+                    app.active_editor_input()
+                        .and_then(|input| input.markdown().cloned())
+                }) {
+                    break view;
+                }
+                assert!(std::time::Instant::now() < deadline);
+                std::thread::sleep(std::time::Duration::from_millis(5));
+            };
+            view.update_in(&mut context, |view, window, cx| {
+                if !view.live {
+                    view.toggle_mode(window, cx);
+                }
+                view.set_soft_wrap(true, cx);
+                let end = view.document.read(cx).source().len();
+                view.select_range(end..end, cx);
+                view.focus.focus(window, cx);
+                view.spelling.invalidate();
+                view.set_spelling_diagnostics(
+                    vec![Diagnostic {
+                        ranges: vec![0..end],
+                        word: "deterministic OS diagnostic".into(),
+                    }],
+                    cx,
+                );
+            });
+            (directory, path, app, context, streams, view)
+        }};
+    }
+
+    #[gpui_kit::test]
+    fn spelling_wrapped_starts_follow_native_prose_heading_list_quote_and_zoom(
+        cx: &mut TestAppContext,
+    ) {
+        // Native font shaping, still in the real workbench's test window; this
+        // is not a GPU screenshot or an operating-system window acceptance.
+        let mut native_context = TestAppContext::build_with_text_system(
+            gpui_kit::TestDispatcher::new(0),
+            cx.test_function_name(),
+            gpui_kit::platform::current_platform(true).text_system(),
+        );
+        let cx = &mut native_context;
+        let original = format!(
+            "\u{feff}{}\r\n\r\n# {}\n\n- {}\r\n\r\n> {}\n\nkeep\r\n",
+            "W ".repeat(80),
+            "W ".repeat(80),
+            "田".repeat(140),
+            "e\u{301} ".repeat(100),
+        );
+        let (_directory, path, _app, mut context, _streams, view) =
+            spelling_fixture!(cx, original.as_bytes());
+        cx.simulate_window_resize(context.window_handle(), size(px(1000.), px(1800.)));
+        let revision = view.read_with(&context, |view, cx| view.document.read(cx).revision());
+        let mut previous_heights: Option<Vec<Pixels>> = None;
+        for rem in [16., 22.] {
+            context.update(|window, _| window.set_rem_size(px(rem)));
+            settle_geometry(&view, &mut context);
+            let heights = view.read_with(&context, |view, cx| {
+                assert!(view.geometry_is_current(cx));
+                let (_, geometries) = view.geometry.as_ref().unwrap();
+                let mut heights = Vec::new();
+                for kind in [Kind::Prose, Kind::Heading(1)] {
+                    let leaf = view
+                        .projection
+                        .leaves
+                        .iter()
+                        .find(|leaf| leaf.kind == kind)
+                        .unwrap();
+                    heights.push(geometries[&leaf.id].caret_height());
+                }
+                let mut covered = [false; 4];
+                for leaf in &view.projection.leaves {
+                    let slot = match leaf.kind {
+                        Kind::Prose if leaf.text.starts_with('W') => 0,
+                        Kind::Heading(1) => 1,
+                        Kind::List(_) => 2,
+                        Kind::Quote(_) => 3,
+                        _ => continue,
+                    };
+                    let geometry = &geometries[&leaf.id];
+                    let origin = geometry.bounds().left();
+                    assert_eq!(geometry.position_for_index(0).x, origin);
+                    for (ix, grapheme) in leaf.text.grapheme_indices(true) {
+                        if grapheme.chars().all(char::is_whitespace) {
+                            continue;
+                        }
+                        let a = geometry.position_for_index(ix);
+                        let b = geometry.position_for_index(ix + grapheme.len());
+                        if a.y == b.y {
+                            continue;
+                        }
+                        let segment = spelling_segment(geometry, ix, grapheme, true).expect(
+                            "a whole paragraph's continuation starts with a spelling segment",
+                        );
+                        // Independent caret hit tests prove that the emitted
+                        // segment belongs to this grapheme on the next row.
+                        assert_eq!(segment.left(), origin);
+                        assert_eq!(segment.top(), b.y);
+                        assert_eq!(
+                            geometry.index_for_position(point(
+                                segment.left() + segment.size.width * 0.25,
+                                segment.center().y,
+                            )),
+                            ix
+                        );
+                        assert_eq!(
+                            geometry.index_for_position(point(
+                                segment.right() - segment.size.width * 0.25,
+                                segment.center().y,
+                            )),
+                            ix + grapheme.len()
+                        );
+                        // The same repeated grapheme on the first row is an
+                        // independent, native-shaped full-advance reference.
+                        let reference = leaf
+                            .text
+                            .grapheme_indices(true)
+                            .find_map(|(start, text)| {
+                                let a = geometry.position_for_index(start);
+                                let b = geometry.position_for_index(start + text.len());
+                                (text == grapheme && a.y == b.y && b.x > a.x).then_some(b.x - a.x)
+                            })
+                            .unwrap();
+                        assert!((segment.size.width - reference).abs() < px(0.01));
+                        covered[slot] = true;
+                    }
+                }
+                assert_eq!(covered, [true; 4], "each real layout must exercise soft wrap");
+                assert_eq!(view.document.read(cx).encode().unwrap(), original.as_bytes());
+                assert_eq!(view.document.read(cx).revision(), revision);
+                heights
+            });
+            if let Some(previous) = previous_heights {
+                for (before, after) in previous.into_iter().zip(&heights) {
+                    assert!(*after > before, "zoom must produce fresh native geometry");
+                }
+            }
+            previous_heights = Some(heights);
+        }
+        context.dispatch_action(gpui_kit::component::input::Undo);
+        context.dispatch_action(gpui_kit::component::input::Redo);
+        context.run_until_parked();
+        view.read_with(&context, |view, cx| {
+            assert_eq!(view.document.read(cx).encode().unwrap(), original.as_bytes());
+            assert_eq!(view.document.read(cx).revision(), revision);
+        });
+        assert_eq!(std::fs::read(path).unwrap(), original.as_bytes());
+    }
+
+    #[gpui_kit::test]
+    fn spelling_native_hard_breaks_and_image_formula_fragments_do_not_bridge_rows(
+        cx: &mut TestAppContext,
+    ) {
+        let mut native_context = TestAppContext::build_with_text_system(
+            gpui_kit::TestDispatcher::new(0),
+            cx.test_function_name(),
+            gpui_kit::platform::current_platform(true).text_system(),
+        );
+        let cx = &mut native_context;
+        let original = format!(
+            "\u{feff}hard first  \r\nhard second\n\n{}![alt](missing.png){}\r\n\r\n{}$x${}\n\nkeep\r\n",
+            "image words ".repeat(25),
+            " after words".repeat(25),
+            "formula words ".repeat(25),
+            " after words".repeat(25),
+        );
+        let (_directory, path, _app, mut context, _streams, view) =
+            spelling_fixture!(cx, original.as_bytes());
+        cx.simulate_window_resize(context.window_handle(), size(px(1000.), px(1800.)));
+        settle_geometry(&view, &mut context);
+        let revision = view.read_with(&context, |view, cx| {
+            assert!(view.geometry_is_current(cx));
+            let (_, geometries) = view.geometry.as_ref().unwrap();
+            let mut hard_breaks = 0;
+            let mut fragmented = [false; 2];
+            let mut local_segments = [0; 2];
+            for leaf in &view.projection.leaves {
+                let Some(geometry) = geometries.get(&leaf.id) else {
+                    continue;
+                };
+                let slot = if leaf.image_urls().next().is_some() {
+                    Some(0)
+                } else if leaf.formulas().next().is_some() {
+                    Some(1)
+                } else {
+                    None
+                };
+                for (ix, grapheme) in leaf.text.grapheme_indices(true) {
+                    if grapheme.contains(['\r', '\n']) {
+                        assert!(spelling_segment(geometry, ix, grapheme, true).is_none());
+                        hard_breaks += 1;
+                        continue;
+                    }
+                    let Some(slot) = slot else {
+                        continue;
+                    };
+                    // Atoms retain their own native bounds; this regression is
+                    // about the surrounding InlineFlow text fragments.
+                    if leaf.atom_source(ix).is_some() {
+                        continue;
+                    }
+                    let a = geometry.position_for_index(ix);
+                    let b = geometry.position_for_index(ix + grapheme.len());
+                    let segment = spelling_segment(geometry, ix, grapheme, true);
+                    if a.y != b.y {
+                        assert_ne!(
+                            geometry.index_for_position(point(
+                                geometry.position_for_index(0).x,
+                                b.y + geometry.caret_height() / 2.,
+                            )),
+                            ix,
+                            "fragment-end index must not masquerade as a whole-leaf wrapped start"
+                        );
+                        assert!(
+                            segment.is_none(),
+                            "no line from a previous fragment to the next row"
+                        );
+                        fragmented[slot] = true;
+                    } else if a.x != b.x {
+                        let segment = segment
+                            .expect("inline fragment keeps its ordinary spelling segment");
+                        assert_eq!(segment.left(), a.x.min(b.x));
+                        assert_eq!(segment.right(), a.x.max(b.x));
+                        assert_eq!(segment.top(), a.y);
+                        local_segments[slot] += 1;
+                    }
+                }
+            }
+            assert!(
+                hard_breaks > 0,
+                "hard break must remain in native displayed geometry"
+            );
+            assert_eq!(
+                fragmented, [true; 2],
+                "image and formula must each exercise a fragment row boundary"
+            );
+            assert!(local_segments.into_iter().all(|count| count > 0));
+            assert_eq!(view.document.read(cx).encode().unwrap(), original.as_bytes());
+            view.document.read(cx).revision()
+        });
+        context.dispatch_action(gpui_kit::component::input::Undo);
+        context.dispatch_action(gpui_kit::component::input::Redo);
+        context.run_until_parked();
+        view.read_with(&context, |view, cx| {
+            assert_eq!(view.document.read(cx).encode().unwrap(), original.as_bytes());
+            assert_eq!(view.document.read(cx).revision(), revision);
+        });
+        assert_eq!(std::fs::read(path).unwrap(), original.as_bytes());
+    }
 
     #[gpui_kit::test]
     fn spelling_menu_keyboard_replacement_shares_history_and_saved_bytes(cx: &mut TestAppContext) {
