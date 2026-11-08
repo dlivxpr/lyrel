@@ -422,6 +422,7 @@ impl EditorBuffers {
                     | markdown::DocumentEvent::ImagesChanged => cx.notify(),
                     markdown::DocumentEvent::FollowLink { .. }
                     | markdown::DocumentEvent::RequestReferences { .. }
+                    | markdown::DocumentEvent::RequestEmbeds { .. }
                     | markdown::DocumentEvent::RequestAssetLocation { .. } => {}
                 },
             );

@@ -79,7 +79,7 @@ const MAX_BYTES: u64 = 32 * 1024 * 1024;
 pub(super) fn external(url: &str) -> bool {
     url::Url::parse(url).is_ok_and(|url| matches!(url.scheme(), "http" | "https"))
 }
-fn decode(bytes: &[u8]) -> anyhow::Result<Arc<RenderImage>> {
+pub(super) fn decode(bytes: &[u8]) -> anyhow::Result<Arc<RenderImage>> {
     static FONTS: std::sync::LazyLock<Arc<resvg::usvg::fontdb::Database>> =
         std::sync::LazyLock::new(|| {
             let mut fonts = resvg::usvg::fontdb::Database::new();

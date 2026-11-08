@@ -1979,6 +1979,16 @@ pub fn translate_en(key: L10nKey) -> &'static str {
         L10nKey::MarkdownReferenceAmbiguous => {
             "More than one file or anchor matches. Use an explicit path and a unique anchor."
         }
+        L10nKey::MarkdownReferenceMissing => "The reference target does not exist. Edit the source to choose another file.",
+        L10nKey::MarkdownEmbedChanged => "The target changed while being read. The fragment will refresh shortly.",
+        L10nKey::MarkdownEmbedReadonly => "Readonly fragment",
+        L10nKey::MarkdownEmbedSource => "Edit embed source",
+        L10nKey::MarkdownEmbedLoading => "Loading fragment…",
+        L10nKey::MarkdownEmbedCycle => "This embed forms a cycle. Its source remains editable.",
+        L10nKey::MarkdownEmbedDuplicate => "This fragment is already included above.",
+        L10nKey::MarkdownEmbedLimit => "Embed limit reached (3 levels, 64 references, 8 MiB of source, 4096 blocks or 32 MiB of rasters).",
+        L10nKey::MarkdownEmbedUnsupported => "Only workspace Markdown and MDX fragments can be embedded.",
+        L10nKey::MarkdownEmbedExternal => "External resources are not loaded inside readonly embeds.",
         L10nKey::EditorWrapOn => "Wrap: on",
         L10nKey::EditorWrapOff => "Wrap: off",
         L10nKey::EditorFileTooLarge => "\"{path}\" is too large for the editor ({size} MB)",

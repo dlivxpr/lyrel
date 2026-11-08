@@ -73,6 +73,11 @@ pub(super) struct Leaf {
     highlight_tint: gpui_kit::Hsla,
 }
 impl Leaf {
+    /// Embedded content has no document-navigation or editing affordances.
+    /// Keep labels and formatting, without leaving inert clickable link marks.
+    pub(super) fn readonly(&mut self) {
+        for segment in &mut self.segments { segment.style.link = None; }
+    }
     fn decorate_formats(&mut self, decorations: &[&super::source::formats::Decoration]) {
         use super::source::formats::{Decoration, Format};
         fn apply(part: &mut Segment, decoration: &Decoration, ix: usize) {

@@ -1298,6 +1298,9 @@ impl LyrelApp {
                             cx,
                         );
                     }
+                    if let markdown::DocumentEvent::RequestEmbeds { presentation, generation, revision, resource_epoch } = event {
+                        app.editor_refresh_embeds(id, presentation.clone(), *generation, *revision, *resource_epoch, window, cx);
+                    }
                 });
             if let Some(file) = self.editor.buffers.get_mut(id) {
                 file._links_sub = Some(subscription);

@@ -19,6 +19,8 @@ actions!(markdown_links, [EditLinkDestination, FollowLink]);
 mod link_interaction;
 #[path = "references.rs"]
 mod references;
+#[path = "embeds/view.rs"]
+mod embeds;
 
 #[path = "assets.rs"]
 mod assets;
@@ -121,6 +123,7 @@ pub(crate) struct SourcePresentation {
     selection_notification: bool,
     assets: assets::InsertionState,
     references: references::State,
+    embeds: embeds::State,
     formats: formats::State,
     code: code::State,
     image_resize: Option<image_edit::Resize>,
@@ -172,6 +175,7 @@ impl SourcePresentation {
                     this.cancel_reorder(cx);
                     this.pointer_link = None;
                     this.dismiss_references(cx);
+                    this.reset_embeds();
                     let document = this.document.read(cx);
                     if this.projection.grammar != document.grammar() {
                         this.projection.install(Projection::source(
@@ -314,6 +318,7 @@ impl SourcePresentation {
             selection_notification: false,
             assets: assets::InsertionState::default(),
             references: references::State::default(),
+            embeds: embeds::State::default(),
             code: code::State::default(),
             image_resize: None,
             reorder: None,
@@ -323,6 +328,7 @@ impl SourcePresentation {
             folds: headings::State::default(),
         };
         view.schedule_parse(cx);
+        view.start_embed_refresh(cx);
         view
     }
     pub(crate) fn document(&self) -> &Entity<MarkdownDocument> {
@@ -370,6 +376,7 @@ impl SourcePresentation {
         self.properties = properties::State::default();
         self.live = !self.live;
         self.dismiss_references(cx);
+        self.reset_embeds();
         self.geometry = None;
         self.rendered_revision = None;
         self.parse_pending = None;
@@ -451,6 +458,7 @@ impl SourcePresentation {
                         view.rendered_revision = None;
                         view.geometry = None;
                         view.refresh_images(false, cx);
+                        view.request_embeds(cx);
                         view.schedule_mermaid(cx);
                         view.schedule_math(cx);
                         view.tools_changed(cx);
@@ -2931,6 +2939,7 @@ impl Render for SourcePresentation {
                 rendered
             };
             let rendered = self.render_property_leaf(leaf, rendered, cx);
+            let rendered = self.render_embeds(leaf, rendered, window, cx);
             let rendered = self.decorate_block(leaf.range.start, rendered, cx);
             block = block.child(MeasuredBlock {
                 view: cx.entity(),

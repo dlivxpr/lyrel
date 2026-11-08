@@ -14,6 +14,7 @@ pub(super) struct State {
 }
 pub(super) struct Target {
     range: Range<usize>,
+    embed: bool,
     cursor: usize,
     revision: u64,
     resources: super::super::resources::ResourceContext,
@@ -99,7 +100,10 @@ impl SourcePresentation {
             .into_iter()
             .filter_map(|(delimiter, anchors)| {
                 let at = line.rfind(delimiter)?;
-                if at > 0 && matches!(line.as_bytes()[at - 1], b'\\' | b'!') {
+                if at > 0 && line.as_bytes()[at - 1] == b'\\' {
+                    return None;
+                }
+                if at > 1 && line.as_bytes()[at - 1] == b'!' && line.as_bytes()[at - 2] == b'\\' {
                     return None;
                 }
                 let query = &line[at + delimiter.len()..];
@@ -128,6 +132,7 @@ impl SourcePresentation {
         let Some((at, delimiter, anchors)) = trigger else {
             return;
         };
+        let embed = delimiter != "#" && at > 0 && line.as_bytes()[at - 1] == b'!';
         // Positioned code/math/object regions retain their ordinary input behavior.
         if self
             .projection
@@ -155,7 +160,8 @@ impl SourcePresentation {
             .take_while(|(a, b)| a == b)
             .count();
         self.references.target = Some(Target {
-            range: start + at..end + suffix,
+            range: start + at - usize::from(embed)..end + suffix,
+            embed,
             cursor: end,
             revision,
             resources,
@@ -260,20 +266,27 @@ impl SourcePresentation {
             return true;
         };
         let range = self.references.target.as_ref().unwrap().range.clone();
+        let embed = self.references.target.as_ref().unwrap().embed;
         let mut text = String::with_capacity(item.label().len() + item.destination().len() + 4);
-        text.push('[');
-        for ch in item.label().chars() {
-            if matches!(
-                ch,
-                '\\' | '[' | ']' | '*' | '_' | '`' | '~' | '<' | '>' | '&' | '|'
-            ) {
-                text.push('\\');
+        if embed {
+            text.push_str("![[");
+            text.push_str(item.destination());
+            text.push_str("]]");
+        } else {
+            text.push('[');
+            for ch in item.label().chars() {
+                if matches!(
+                    ch,
+                    '\\' | '[' | ']' | '*' | '_' | '`' | '~' | '<' | '>' | '&' | '|'
+                ) {
+                    text.push('\\');
+                }
+                text.push(ch);
             }
-            text.push(ch);
+            text.push_str("](");
+            text.push_str(item.destination());
+            text.push(')');
         }
-        text.push_str("](");
-        text.push_str(item.destination());
-        text.push(')');
         self.dismiss_references(cx);
         self.command(
             Command::Replace {
