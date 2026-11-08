@@ -1389,6 +1389,7 @@ l10n_keys! {
     EditorImageLoaded,
     EditorImageFailed,
     EditorTableCommands,
+    EditorTableInsert,
     EditorTableInsertRowBefore,
     EditorTableInsertRowAfter,
     EditorTableDeleteRow,

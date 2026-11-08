@@ -4,6 +4,9 @@ use gpui_kit::{EntityInputHandler as _, VisualContext as _, test::TestWindowExt 
 #[path = "typography_tests.rs"]
 mod typography;
 
+#[path = "tables/consumer_tests.rs"]
+mod table_consumer;
+
 fn start_in_source(
     view: &gpui_kit::Entity<SourcePresentation>,
     cx: &mut gpui_kit::VisualTestContext,
@@ -2060,7 +2063,7 @@ fn native_table_cells_navigate_exit_edit_and_save_without_rewriting_neighbors(
         (one, "backspace"),
         (one + 3, "delete"),
         (two, "escape"),
-        (name, "enter"),
+        (three, "enter"),
     ] {
         view.update_in(&mut context, |view, _, cx| view.select_range(at..at, cx));
         context.update(|window, cx| window.press(key, cx));
@@ -2435,6 +2438,25 @@ fn native_table_at_document_edges_transfers_focus_without_inserting_rows(
             );
         });
     }
+    view.update_in(&mut context, |view, window, cx| {
+        let at = original.find("b |").unwrap();
+        view.select_range(at..at, cx);
+        view.focus_handle(cx).focus(window, cx);
+    });
+    context.update(|window, cx| {
+        window.press("enter", cx);
+        window.input("Below", cx);
+    });
+    context.run_until_parked();
+    view.read_with(&context, |view, cx| {
+        assert_eq!(view.document().read(cx).encode().unwrap(), format!("{original}\n\nBelow").as_bytes());
+    });
+    context.dispatch_action(gpui_kit::component::input::Undo);
+    context.dispatch_action(gpui_kit::component::input::Undo);
+    context.run_until_parked();
+    view.read_with(&context, |view, cx| {
+        assert_eq!(view.document().read(cx).encode().unwrap(), original.as_bytes());
+    });
 }
 
 fn edit_link_destination_when_ready(

@@ -1821,6 +1821,7 @@ pub fn translate_en(key: L10nKey) -> &'static str {
         L10nKey::EditorImageLoaded => "Image loaded",
         L10nKey::EditorImageFailed => "Couldn’t load image",
         L10nKey::EditorTableCommands => "Table…",
+        L10nKey::EditorTableInsert => "Insert table",
         L10nKey::EditorTableInsertRowBefore => "Table: Insert row above",
         L10nKey::EditorTableInsertRowAfter => "Table: Insert row below",
         L10nKey::EditorTableDeleteRow => "Table: Delete row",
