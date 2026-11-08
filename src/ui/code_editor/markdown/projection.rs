@@ -761,6 +761,7 @@ impl Projection {
                             &image_definitions,
                             &mut leaves,
                         );
+                        super::tables::metadata::hide_markers(source, &mut leaves);
                     }
                     Err(reason) => {
                         error = Some(reason.to_string());

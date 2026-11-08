@@ -13,6 +13,7 @@ pub(super) struct Frame {
     window_size: Size<Pixels>,
     rem: Pixels,
     scale: f32,
+    table: Option<(u64, Point<Pixels>, u64)>,
 }
 
 impl Frame {
@@ -25,6 +26,10 @@ impl Frame {
             window_size: window.viewport_size(),
             rem: window.rem_size(),
             scale: window.scale_factor(),
+            table: view.projection.leaf_at(view.state.selection.head()).and_then(|leaf| {
+                let Kind::TableCell(cell) = leaf.kind else { return None; };
+                view.tables.geometry_state(cell)
+            }),
         }
     }
 
