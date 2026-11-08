@@ -466,24 +466,6 @@ impl Leaf {
     pub(super) fn raw(&mut self, source: &str, range: Range<usize>) {
         self.push(range.clone(), &source[range]);
     }
-    pub fn atomic_boundary(&self, at: usize, forward: bool) -> usize {
-        self.segments
-            .iter()
-            .find(|segment| {
-                segment.source.start < at
-                    && at < segment.source.end
-                    && !segment.display.is_empty()
-                    && (segment.source.len() != segment.display.len()
-                        || segment.math.is_some() && !segment.verbatim)
-            })
-            .map_or(at, |segment| {
-                if forward {
-                    segment.source.end
-                } else {
-                    segment.source.start
-                }
-            })
-    }
     pub(super) fn visible_fragments(&self) -> impl Iterator<Item = (Range<usize>, Range<usize>)> + '_ {
         self.segments.iter().filter(|segment| !segment.display.is_empty())
             .map(|segment| (segment.display.clone(), segment.source.clone()))
