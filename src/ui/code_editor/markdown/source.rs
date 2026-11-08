@@ -24,19 +24,19 @@ mod references;
 #[path = "slash.rs"]
 mod slash;
 
-#[path = "auto_pair.rs"]
-mod auto_pair;
-#[cfg(test)]
-#[path = "review_tests.rs"]
-mod review_tests;
 #[path = "assets.rs"]
 mod assets;
+#[path = "auto_pair.rs"]
+mod auto_pair;
 #[path = "headings.rs"]
 pub(super) mod headings;
 #[path = "image_edit.rs"]
 mod image_edit;
 #[path = "navigation.rs"]
 mod navigation;
+#[cfg(test)]
+#[path = "review_tests.rs"]
+mod review_tests;
 
 #[path = "typography.rs"]
 mod typography;
@@ -375,7 +375,10 @@ impl SourcePresentation {
     }
     pub(crate) fn reload_input(&self, cx: &App) -> (u64, bool) {
         let document = self.document.read(cx);
-        let pending = document.composition_owner.as_ref().and_then(|owner| owner.upgrade())
+        let pending = document
+            .composition_owner
+            .as_ref()
+            .and_then(|owner| owner.upgrade())
             .is_some_and(|owner| {
                 let owner = owner.read(cx);
                 owner.formula.is_some() || owner.state.composition.is_some()
@@ -1127,7 +1130,11 @@ impl SourcePresentation {
         });
         self.table_presentation_menu(menu)
             .separator()
-            .menu_with_disabled(t(L10nKey::EditorTableCopyMarkdown), Box::new(CopyTableAsMarkdown), disabled)
+            .menu_with_disabled(
+                t(L10nKey::EditorTableCopyMarkdown),
+                Box::new(CopyTableAsMarkdown),
+                disabled,
+            )
             .menu(t(L10nKey::EditorTableInsert), Box::new(InsertTable))
             .menu_with_disabled(
                 t(L10nKey::EditorTableInsertRowBefore),
@@ -4096,8 +4103,12 @@ impl Element for SourceElement {
                 return;
             }
             if !phase.bubble()
-                || (!view.read(cx).dragging && view.read(cx).pointer_link.is_none() && view.read(cx).reorder.is_none())
-            { return; }
+                || (!view.read(cx).dragging
+                    && view.read(cx).pointer_link.is_none()
+                    && view.read(cx).reorder.is_none())
+            {
+                return;
+            }
             view.update(cx, |view, cx| {
                 if view.reorder.is_some() {
                     if event.pressed_button == Some(MouseButton::Left) {

@@ -398,12 +398,20 @@ impl SourcePresentation {
         self.focus.focus(window, cx);
     }
     pub(super) fn edit_image(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.selected_image(cx).is_none() { return; }
+        if self.selected_image(cx).is_none() {
+            return;
+        }
         self.command(Command::FinishComposition, window, cx);
         let revision = self.document.read(cx).revision();
         let presentation = cx.weak_entity();
         let selection = self.state.selection;
-        self.document.update(cx, |_, cx| cx.emit(super::DocumentEvent::RequestImageEdit { presentation, revision, selection }));
+        self.document.update(cx, |_, cx| {
+            cx.emit(super::DocumentEvent::RequestImageEdit {
+                presentation,
+                revision,
+                selection,
+            })
+        });
     }
     pub(crate) fn open_image_editor(
         &mut self,
@@ -515,27 +523,28 @@ impl SourcePresentation {
                         window.refresh();
                         return false;
                     }
-                    let applied = owner_current(cx) && view
-                        .update(cx, |view, cx| {
-                            if view.document.read(cx).revision() != revision
-                                || view.document.entity_id() != identity
-                                || !view.live
-                                || !match &resources {
-                                    Some(resources) => {
-                                        resources.is_current(view.document.read(cx).resources())
+                    let applied = owner_current(cx)
+                        && view
+                            .update(cx, |view, cx| {
+                                if view.document.read(cx).revision() != revision
+                                    || view.document.entity_id() != identity
+                                    || !view.live
+                                    || !match &resources {
+                                        Some(resources) => {
+                                            resources.is_current(view.document.read(cx).resources())
+                                        }
+                                        None => view.document.read(cx).resources().is_none(),
                                     }
-                                    None => view.document.read(cx).resources().is_none(),
+                                {
+                                    return false;
                                 }
-                            {
-                                return false;
-                            }
-                            let Some(text) = object.edited(&alt, &source, width) else {
-                                return false;
-                            };
-                            view.replace_image(&object, text, window, cx);
-                            true
-                        })
-                        .unwrap_or(false);
+                                let Some(text) = object.edited(&alt, &source, width) else {
+                                    return false;
+                                };
+                                view.replace_image(&object, text, window, cx);
+                                true
+                            })
+                            .unwrap_or(false);
                     applied_state.set(applied);
                     if !applied {
                         *error.borrow_mut() = Some(t(L10nKey::MarkdownImageChanged).into());
@@ -546,7 +555,9 @@ impl SourcePresentation {
                 .on_close({
                     let focus = focus.clone();
                     move |_, window, cx| {
-                        if closed_after_apply.get() || close_owner_current(cx) { focus.focus(window, cx); }
+                        if closed_after_apply.get() || close_owner_current(cx) {
+                            focus.focus(window, cx);
+                        }
                     }
                 })
         });

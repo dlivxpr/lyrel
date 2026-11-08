@@ -256,7 +256,11 @@ impl SourcePresentation {
             let id: ElementId = if row == first {
                 ("markdown-reorder-grip", leaf.id).into()
             } else {
-                (SharedString::from(format!("markdown-reorder-grip-row-{}", leaf.id)), row - first).into()
+                (
+                    SharedString::from(format!("markdown-reorder-grip-row-{}", leaf.id)),
+                    row - first,
+                )
+                    .into()
             };
             grips.push(
                 Button::new(id)

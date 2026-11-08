@@ -423,7 +423,8 @@ impl EditorBuffers {
                     markdown::DocumentEvent::FollowLink { .. }
                     | markdown::DocumentEvent::RequestReferences { .. }
                     | markdown::DocumentEvent::RequestEmbeds { .. }
-                    | markdown::DocumentEvent::RequestAssetLocation { .. } => {}
+                    | markdown::DocumentEvent::RequestAssetLocation { .. }
+                    | markdown::DocumentEvent::RequestImageEdit { .. } => {}
                 },
             );
             let presentation = cx.new(|cx| markdown::SourcePresentation::new(document, wrap, cx));
@@ -664,8 +665,16 @@ impl EditorBuffers {
         let Some(file) = self.get_mut(id) else {
             return false;
         };
-        let pending = file.input.markdown().is_some_and(|view| view.read(cx).reload_input(cx).1);
-        match classify_external_change(file.saving, file.dirty || pending, file.disk_mtime, observed) {
+        let pending = file
+            .input
+            .markdown()
+            .is_some_and(|view| view.read(cx).reload_input(cx).1);
+        match classify_external_change(
+            file.saving,
+            file.dirty || pending,
+            file.disk_mtime,
+            observed,
+        ) {
             ExternalChange::Ignore => {}
             ExternalChange::Conflict => {
                 if let Observed::Present(mtime) = observed {
@@ -703,7 +712,10 @@ impl EditorBuffers {
             .input
             .markdown()
             .map(|view| view.read(cx).input_token(cx));
-        let pending_lease = file.input.markdown().map(|view| view.read(cx).reload_input(cx));
+        let pending_lease = file
+            .input
+            .markdown()
+            .map(|view| view.read(cx).reload_input(cx));
         file.reload_seq = file.reload_seq.wrapping_add(1);
         let seq = file.reload_seq;
         HostOps::run_in(
@@ -760,12 +772,13 @@ impl EditorBuffers {
                     }
                 };
                 if pending_lease.is_some_and(|lease| {
-                    lease.1 || file.input.markdown().is_none_or(|view| {
-                        let current = view.read(cx).reload_input(cx);
-                        current.1 || current.0 != lease.0
-                    })
+                    lease.1
+                        || file.input.markdown().is_none_or(|view| {
+                            let current = view.read(cx).reload_input(cx);
+                            current.1 || current.0 != lease.0
+                        })
                 }) {
-                    file.conflict = Some(mtime.map_or(DiskConflict::Deleted, DiskConflict::Changed));
+                    file.conflict = Some(DiskConflict::Changed(mtime));
                     cx.notify();
                     return;
                 }

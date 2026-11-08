@@ -647,16 +647,23 @@ impl Leaf {
         })
     }
     pub(super) fn accepts_pair(&self, range: &Range<usize>) -> bool {
-        matches!(self.kind, Kind::Prose | Kind::Heading(_) | Kind::List(_) | Kind::Quote(_) | Kind::TableCell(_))
-            && self.range.start <= range.start && range.end <= self.range.end
+        matches!(
+            self.kind,
+            Kind::Prose | Kind::Heading(_) | Kind::List(_) | Kind::Quote(_) | Kind::TableCell(_)
+        ) && self.range.start <= range.start
+            && range.end <= self.range.end
             && !self.segments.iter().any(|segment| {
                 let touches = if range.is_empty() {
                     segment.source.start <= range.start && range.start < segment.source.end
                 } else {
                     segment.source.start < range.end && range.start < segment.source.end
                 };
-                touches && (segment.style.code || segment.math.is_some() || segment.image.is_some()
-                    || segment.delimiter.is_some() || segment.hidden)
+                touches
+                    && (segment.style.code
+                        || segment.math.is_some()
+                        || segment.image.is_some()
+                        || segment.delimiter.is_some()
+                        || segment.hidden)
             })
     }
     pub(super) fn raw(&mut self, source: &str, range: Range<usize>) {

@@ -42,6 +42,12 @@ pub(crate) struct Marker {
     attributes_end: usize,
 }
 
+impl Marker {
+    pub(crate) fn range(&self) -> &Range<usize> {
+        &self.range
+    }
+}
+
 // Unknown attributes and malformed width lists remain ordinary editable HTML.
 // Retain ranges into the original spelling so a style command cannot normalize
 // widths, whitespace or another token as an incidental side effect.

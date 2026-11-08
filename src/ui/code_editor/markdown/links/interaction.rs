@@ -123,7 +123,13 @@ impl SourcePresentation {
         position: Point<Pixels>,
         cx: &App,
     ) -> Option<(&super::super::links::Link, usize)> {
-        if self.viewport.bounds.is_none_or(|bounds| !bounds.contains(&position)) { return None; }
+        if self
+            .viewport
+            .bounds
+            .is_none_or(|bounds| !bounds.contains(&position))
+        {
+            return None;
+        }
         if !self.live
             || self.state.composition.is_some()
             || self.projection.revision != self.document.read(cx).revision()

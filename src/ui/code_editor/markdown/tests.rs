@@ -2398,14 +2398,7 @@ fn native_table_cells_navigate_exit_edit_and_save_without_rewriting_neighbors(
         view.select_range(name..name, cx);
         view.focus_handle(cx).focus(window, cx);
     });
-    for at in [
-        value,
-        one,
-        two,
-        three,
-        empty,
-        empty,
-    ] {
+    for at in [value, one, two, three, empty, empty] {
         context.update(|window, cx| window.press("tab", cx));
         context.run_until_parked();
         view.read_with(&context, |view, cx| {
@@ -2419,14 +2412,7 @@ fn native_table_cells_navigate_exit_edit_and_save_without_rewriting_neighbors(
     view.update_in(&mut context, |view, _, cx| {
         view.select_range(empty..empty, cx)
     });
-    for at in [
-        three,
-        two,
-        one,
-        value,
-        name,
-        name,
-    ] {
+    for at in [three, two, one, value, name, name] {
         context.update(|window, cx| window.press("shift-tab", cx));
         context.run_until_parked();
         view.read_with(&context, |view, _| {

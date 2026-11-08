@@ -161,7 +161,9 @@ pub(super) fn navigate(
         leaves[ix + 1..].iter().find(eligible)
     };
     if matches!(navigation, Navigation::Cell { .. })
-        && target.is_none_or(|leaf| !matches!(leaf.kind, Kind::TableCell(other) if other.start == cell.start))
+        && target.is_none_or(
+            |leaf| !matches!(leaf.kind, Kind::TableCell(other) if other.start == cell.start),
+        )
     {
         return Some(Some(at));
     }

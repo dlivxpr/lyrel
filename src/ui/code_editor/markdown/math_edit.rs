@@ -546,8 +546,11 @@ impl SourcePresentation {
     fn invalidate_formula_cell(&mut self, range: &Range<usize>) {
         for leaf in &self.projection.leaves {
             if matches!(leaf.kind, Kind::TableCell(_))
-                && leaf.range.start <= range.start && range.end <= leaf.range.end
-            { self.tables.invalidate_cell(leaf.id); }
+                && leaf.range.start <= range.start
+                && range.end <= leaf.range.end
+            {
+                self.tables.invalidate_cell(leaf.id);
+            }
         }
     }
     pub(super) fn invalidate_formula_blocks(&mut self) {
@@ -1083,26 +1086,49 @@ impl SourcePresentation {
         self.focus.focus(window, cx);
     }
     fn formula_palette(&self, cx: &mut Context<Self>) -> AnyElement {
-        let Some(session) = &self.formula else { return Empty.into_any_element(); };
+        let Some(session) = &self.formula else {
+            return Empty.into_any_element();
+        };
         let session_id = session.id;
-        let mut palette = div().id("formula-symbol-palette").test_support().flex().flex_wrap().gap_1().w_64().max_h(rems(24.)).overflow_y_scroll();
+        let mut palette = div()
+            .id("formula-symbol-palette")
+            .test_support()
+            .flex()
+            .flex_wrap()
+            .gap_1()
+            .w_64()
+            .max_h(rems(24.))
+            .overflow_y_scroll();
         for &(glyph, name) in input::PALETTE {
-            let label = crate::ui::i18n::t_fmt(L10nKey::EditorFormulaInsertSymbol, &[("symbol", name)]);
-            palette = palette.child(Button::new(name).small().ghost().w_10().h_8().label(glyph)
-                .tooltip(label.clone()).accessibility_label(label)
-                .on_mouse_down(MouseButton::Left, |_, window, cx| { window.prevent_default(); cx.stop_propagation(); })
-                .on_click(cx.listener(move |view, _, window, cx| {
-                    if let Some(session) = view.formula.as_mut()
-                        && session.id == session_id && session.preedit.is_empty()
-                    {
-                        session.command = Some(name.into());
-                        session.completion_ix = 0;
-                        session.commit_command();
-                        view.formula_changed(window, cx);
-                        view.formula_tools.palette_open = false;
-                    }
-                    view.focus.focus(window, cx);
-                })));
+            let label =
+                crate::ui::i18n::t_fmt(L10nKey::EditorFormulaInsertSymbol, &[("symbol", name)]);
+            palette = palette.child(
+                Button::new(name)
+                    .small()
+                    .ghost()
+                    .w_10()
+                    .h_8()
+                    .label(glyph)
+                    .tooltip(label.clone())
+                    .accessibility_label(label)
+                    .on_mouse_down(MouseButton::Left, |_, window, cx| {
+                        window.prevent_default();
+                        cx.stop_propagation();
+                    })
+                    .on_click(cx.listener(move |view, _, window, cx| {
+                        if let Some(session) = view.formula.as_mut()
+                            && session.id == session_id
+                            && session.preedit.is_empty()
+                        {
+                            session.command = Some(name.into());
+                            session.completion_ix = 0;
+                            session.commit_command();
+                            view.formula_changed(window, cx);
+                            view.formula_tools.palette_open = false;
+                        }
+                        view.focus.focus(window, cx);
+                    })),
+            );
         }
         palette.into_any_element()
     }
@@ -1153,20 +1179,43 @@ impl SourcePresentation {
         let owner = cx.weak_entity();
         let session_id = session.id;
         let content_owner = owner.clone();
-        bar = bar.child(gpui_kit::component::popover::Popover::new(("formula-palette-popover", session_id))
-            .open(self.formula_tools.palette_open)
-            .on_open_change(move |open, _, cx| {
-                let _ = owner.update(cx, |view, cx| {
-                    if view.formula.as_ref().is_some_and(|session| session.id == session_id) {
-                        view.formula_tools.palette_open = *open; cx.notify();
-                    }
-                });
-            })
-            .trigger(Button::new("formula-symbols").small().ghost().label(t(L10nKey::EditorFormulaSymbols)))
-            .content(move |_, _, cx| content_owner.update(cx, |view, cx| {
-                if view.formula.as_ref().is_some_and(|session| session.id == session_id) { view.formula_palette(cx) }
-                else { Empty.into_any_element() }
-            }).unwrap_or_else(|_| Empty.into_any_element())));
+        bar = bar.child(
+            gpui_kit::component::popover::Popover::new(("formula-palette-popover", session_id))
+                .open(self.formula_tools.palette_open)
+                .on_open_change(move |open, _, cx| {
+                    let _ = owner.update(cx, |view, cx| {
+                        if view
+                            .formula
+                            .as_ref()
+                            .is_some_and(|session| session.id == session_id)
+                        {
+                            view.formula_tools.palette_open = *open;
+                            cx.notify();
+                        }
+                    });
+                })
+                .trigger(
+                    Button::new("formula-symbols")
+                        .small()
+                        .ghost()
+                        .label(t(L10nKey::EditorFormulaSymbols)),
+                )
+                .content(move |_, _, cx| {
+                    content_owner
+                        .update(cx, |view, cx| {
+                            if view
+                                .formula
+                                .as_ref()
+                                .is_some_and(|session| session.id == session_id)
+                            {
+                                view.formula_palette(cx)
+                            } else {
+                                Empty.into_any_element()
+                            }
+                        })
+                        .unwrap_or_else(|_| Empty.into_any_element())
+                }),
+        );
         if matrix {
             for (id, key, action) in [
                 (
