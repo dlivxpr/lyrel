@@ -497,6 +497,9 @@ impl SourcePresentation {
         }
         self.drag_frame_pending = true;
         let view = cx.entity().downgrade();
+        // on_next_frame creates frame demand without reading current_view().
+        // This path runs from input dispatch and frame callbacks, not drawing;
+        // the callback notifies this retained entity when scrolling changes.
         window.on_next_frame(move |window, cx| {
             let Some(view) = view.upgrade() else { return };
             view.update(cx, |view, cx| {
@@ -508,6 +511,8 @@ impl SourcePresentation {
                     return;
                 };
                 if view.geometry_is_current(cx) {
+                    // Hit testing consumes the geometry snapshot collected in
+                    // SourceElement::prepaint, never event-phase measurement.
                     // This callback alone decides whether another frame is
                     // needed; reaching the scroll limit must stop scheduling.
                     view.drag_frame_pending = true;
@@ -542,7 +547,6 @@ impl SourcePresentation {
                 }
             });
         });
-        window.request_animation_frame();
     }
 }
 

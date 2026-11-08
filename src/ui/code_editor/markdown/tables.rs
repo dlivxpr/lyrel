@@ -4,6 +4,8 @@ use std::ops::Range;
 
 mod layout;
 pub(super) use layout::Layout;
+mod structure;
+pub(super) use structure::{column_at, edit};
 pub(super) mod metadata;
 
 /// Derived from the same mdast table that supplies the inline cell children.
@@ -25,6 +27,9 @@ impl Cell {
     }
     pub fn same_row(self, other: Self) -> bool {
         self.start == other.start && self.row == other.row
+    }
+    pub fn column(self) -> usize {
+        self.column
     }
     pub fn shift(&mut self, shift: impl Fn(usize) -> usize) {
         self.start = shift(self.start);
@@ -79,8 +84,14 @@ pub(super) fn project(
             for child in cell.children().into_iter().flatten() {
                 Projection::inline(source, child, &mut leaf);
             }
-            // An empty cell still has one insertion point, between its padding.
-            leaf.empty_insertion(range.start + range.len() / 2);
+            // mdast includes the opening divider in each cell span, and the
+            // closing divider in the last cell. Only padding brackets the
+            // insertion point; syntax must not bias it toward the left edge.
+            let raw = &source[range.clone()];
+            let start = range.start + usize::from(raw.starts_with('|'));
+            let padding = &source[start..range.end];
+            let padding = padding.strip_suffix('|').unwrap_or(padding);
+            leaf.empty_insertion(start + padding.len() / 2);
             leaves.push(leaf);
         }
     }
@@ -100,9 +111,7 @@ impl Navigation {
             Self::Cell { backward }
             | Self::Row { backward }
             | Self::Exit { backward }
-            | Self::Boundary { backward } => {
-                backward
-            }
+            | Self::Boundary { backward } => backward,
         }
     }
 }
@@ -127,7 +136,11 @@ pub(super) fn navigate(
         return None;
     };
     if matches!(navigation, Navigation::Row { .. }) {
-        let row = if backward { cell.row.checked_sub(1) } else { Some(cell.row + 1) };
+        let row = if backward {
+            cell.row.checked_sub(1)
+        } else {
+            Some(cell.row + 1)
+        };
         if let Some(target) = leaves.iter().find(|leaf| {
             matches!(leaf.kind, Kind::TableCell(other)
                 if other.start == cell.start && Some(other.row) == row && other.column == cell.column)
@@ -163,14 +176,25 @@ pub(super) fn vertical(leaves: &[Leaf], at: usize, backward: bool) -> Option<usi
     let current = leaves.iter().find(|leaf| {
         matches!(leaf.kind, Kind::TableCell(_)) && leaf.range.start <= at && at <= leaf.range.end
     })?;
-    let Kind::TableCell(cell) = current.kind else { return None; };
-    let row = if backward { cell.row.checked_sub(1)? } else { cell.row + 1 };
+    let Kind::TableCell(cell) = current.kind else {
+        return None;
+    };
+    let row = if backward {
+        cell.row.checked_sub(1)?
+    } else {
+        cell.row + 1
+    };
     let target = leaves.iter().find(|leaf| {
         matches!(leaf.kind, Kind::TableCell(other)
             if other.start == cell.start && other.row == row && other.column == cell.column)
     })?;
-    let column = current.text[..current.display_offset(at)].graphemes(true).count();
-    let offset = target.text.grapheme_indices(true).nth(column)
+    let column = current.text[..current.display_offset(at)]
+        .graphemes(true)
+        .count();
+    let offset = target
+        .text
+        .grapheme_indices(true)
+        .nth(column)
         .map_or(target.text.len(), |(offset, _)| offset);
     Some(target.source_offset(offset))
 }
@@ -209,8 +233,12 @@ pub(super) fn input(
         // Native selections use UTF-16; preserve their affinity before any
         // inserted escape and collapse CRLF as one visible space.
         if let (Some(selection), Some(original)) = (&mut selected, &original_selection) {
-            if original.start >= offset { selection.start = output_offset; }
-            if original.end >= offset { selection.end = output_offset; }
+            if original.start >= offset {
+                selection.start = output_offset;
+            }
+            if original.end >= offset {
+                selection.end = output_offset;
+            }
         }
         offset += ch.len_utf16();
         if ch == '\r' && chars.peek() == Some(&'\n') {
@@ -227,8 +255,12 @@ pub(super) fn input(
         escaped = ch == '\\' && !escaped;
     }
     if let (Some(selection), Some(original)) = (&mut selected, &original_selection) {
-        if original.start >= offset { selection.start = output_offset; }
-        if original.end >= offset { selection.end = output_offset; }
+        if original.start >= offset {
+            selection.start = output_offset;
+        }
+        if original.end >= offset {
+            selection.end = output_offset;
+        }
     }
     (output, selected)
 }
@@ -239,6 +271,8 @@ gpui_kit::actions!(
         InsertTable,
         InsertRowBefore,
         InsertRowAfter,
+        DuplicateRow,
+        DeleteTable,
         DeleteRow,
         InsertColumnBefore,
         InsertColumnAfter,
@@ -254,6 +288,8 @@ gpui_kit::actions!(
 pub(crate) enum Operation {
     InsertRowBefore,
     InsertRowAfter,
+    DuplicateRow,
+    DeleteTable,
     DeleteRow,
     InsertColumnBefore,
     InsertColumnAfter,
@@ -264,200 +300,6 @@ pub(crate) enum Operation {
     AlignRight,
 }
 
-/// Parse only the revision-checked owning table and its container prefix.
-/// Row terminators travel with their rows; only inserted separators use the
-/// document convention. The document remains the sole representation owner.
-pub(super) fn edit(
-    input: &super::SourceText,
-    owner: Range<usize>,
-    selection: super::Selection,
-    operation: Operation,
-    newline: super::LineEnding,
-) -> Option<(Range<usize>, super::SourceText, usize)> {
-    let source = &input.text;
-    let root = markdown::to_mdast(source, &markdown::ParseOptions::gfm()).ok()?;
-    fn owning<'a>(node: &'a Node, owner: &Range<usize>) -> Option<&'a markdown::mdast::Table> {
-        if let Node::Table(table) = node {
-            let position = node.position()?;
-            if position.start.offset == owner.start && position.end.offset == owner.end {
-                return Some(table);
-            }
-        }
-        node.children()?
-            .iter()
-            .find_map(|child| owning(child, owner))
-    }
-    // A table nested in a continued list can start beyond GFM's standalone
-    // indentation limit. Parse that table without its known container prefix,
-    // mapping every derived span back to this local source before editing.
-    let prefix_len = owner.start;
-    let mut plain = String::new();
-    let mut plain_starts = Vec::new();
-    let mut original_starts = Vec::new();
-    let standalone;
-    let (table, decontainered) = if let Some(table) = owning(&root, &owner) {
-        (table, false)
-    } else {
-        let mut at = 0;
-        for line in source.split_inclusive('\n') {
-            let content = line.get(prefix_len..)?;
-            plain_starts.push(plain.len());
-            original_starts.push(at + prefix_len);
-            plain.push_str(content);
-            at += line.len();
-        }
-        standalone = markdown::to_mdast(&plain, &markdown::ParseOptions::gfm()).ok()?;
-        let range = 0..plain.trim_end_matches('\n').len();
-        (owning(&standalone, &range)?, true)
-    };
-    let original = |at: usize| {
-        if decontainered {
-            let line = plain_starts.partition_point(|start| *start <= at) - 1;
-            original_starts[line] + at - plain_starts[line]
-        } else {
-            at
-        }
-    };
-    if selection.range().start < owner.start || selection.range().end > owner.end {
-        return None;
-    }
-    let mut starts = vec![0];
-    starts.extend(source.match_indices('\n').map(|(at, _)| at + 1));
-    let line = |at: usize| starts.partition_point(|start| *start <= at) - 1;
-    // Prefixes retain blockquote/list ownership on every physical row.
-    let header_line = line(owner.start);
-    let delimiter_line = header_line + 1;
-    let delimiter_start = starts[delimiter_line];
-    let delimiter = source[delimiter_start..].split('\n').next()?;
-    let delimiter_prefix =
-        &delimiter[..delimiter.len() - delimiter.trim_start_matches([' ', '\t', '>']).len()];
-    let delimiter_ending = input.endings.get(delimiter_line).copied();
-    let mut active = None;
-    let mut rows = Vec::with_capacity(table.children.len() + 1);
-    for (row, node) in table.children.iter().enumerate() {
-        let position = node.position()?;
-        let row_start = original(position.start.offset);
-        let row_line = line(row_start);
-        let mut cells = Vec::new();
-        for (column, cell) in node.children()?.iter().enumerate() {
-            let span = cell.position()?;
-            if column < table.align.len()
-                && original(span.start.offset) <= selection.head()
-                && selection.head() <= original(span.end.offset)
-            {
-                active = Some((row, column));
-            }
-            let children = cell.children()?;
-            cells.push(match (children.first(), children.last()) {
-                (Some(first), Some(last)) => source[original(first.position()?.start.offset)
-                    ..original(last.position()?.end.offset)]
-                    .to_owned(),
-                _ => String::new(),
-            });
-        }
-        cells.resize(cells.len().max(table.align.len()), String::new());
-        let row_prefix = if row == 0 {
-            delimiter_prefix
-        } else {
-            &source[starts[row_line]..row_start]
-        };
-        rows.push((cells, input.endings.get(row_line).copied(), row_prefix));
-    }
-    let (mut row, mut column) = active?;
-    let mut aligns = table.align.clone();
-    match operation {
-        Operation::InsertRowBefore | Operation::InsertRowAfter => {
-            row += usize::from(matches!(operation, Operation::InsertRowAfter));
-            rows.insert(
-                row,
-                (
-                    vec![String::new(); aligns.len()],
-                    Some(newline),
-                    delimiter_prefix,
-                ),
-            );
-        }
-        Operation::DeleteRow => {
-            if rows.len() == 1 {
-                rows[0].0.iter_mut().for_each(String::clear);
-            } else {
-                rows.remove(row);
-                row = row.min(rows.len() - 1);
-            }
-        }
-        Operation::InsertColumnBefore | Operation::InsertColumnAfter => {
-            column += usize::from(matches!(operation, Operation::InsertColumnAfter));
-            aligns.insert(column, AlignKind::None);
-            for (cells, _, _) in &mut rows {
-                cells.insert(column, String::new());
-            }
-        }
-        Operation::DeleteColumn => {
-            if aligns.len() == 1 {
-                for (cells, _, _) in &mut rows {
-                    cells[0].clear();
-                }
-            } else {
-                aligns.remove(column);
-                for (cells, _, _) in &mut rows {
-                    cells.remove(column);
-                }
-                column = column.min(aligns.len() - 1);
-            }
-        }
-        alignment => {
-            aligns[column] = match alignment {
-                Operation::AlignLeft => AlignKind::Left,
-                Operation::AlignCenter => AlignKind::Center,
-                Operation::AlignRight => AlignKind::Right,
-                _ => AlignKind::None,
-            };
-        }
-    }
-    let final_newline = source.ends_with('\n');
-    let mut output = super::SourceText {
-        text: String::new(),
-        endings: Vec::new(),
-    };
-    let mut caret = 0;
-    let row_count = rows.len();
-    let terminate =
-        |output: &mut super::SourceText, ending: Option<super::LineEnding>, last: bool| {
-            if !last || final_newline {
-                output.text.push('\n');
-                output.endings.push(ending.unwrap_or(newline));
-            }
-        };
-    for (row_ix, (cells, ending, row_prefix)) in rows.iter().enumerate() {
-        if row_ix > 0 {
-            output.text.push_str(row_prefix);
-        }
-        output.text.push('|');
-        for (column_ix, cell) in cells.iter().enumerate() {
-            output.text.push(' ');
-            if row_ix == row && column_ix == column {
-                caret = owner.start + output.text.len();
-            }
-            output.text.push_str(cell);
-            output.text.push_str(" |");
-        }
-        terminate(&mut output, *ending, row_ix > 0 && row_ix + 1 == row_count);
-        if row_ix == 0 {
-            output.text.push_str(delimiter_prefix);
-            output.text.push('|');
-            for align in &aligns {
-                output.text.push_str(match align {
-                    AlignKind::Left => " :--- |",
-                    AlignKind::Right => " ---: |",
-                    AlignKind::Center => " :---: |",
-                    AlignKind::None => " --- |",
-                });
-            }
-            terminate(&mut output, delimiter_ending, row_count == 1);
-        }
-    }
-    Some((owner.start..source.len(), output, caret))
-}
 
 pub(crate) fn bindings(cx: &gpui_kit::App) -> Vec<gpui_kit::KeyBinding> {
     use super::source::table_presentation::*;
@@ -471,6 +313,7 @@ pub(crate) fn bindings(cx: &gpui_kit::App) -> Vec<gpui_kit::KeyBinding> {
     vec![
         bind("secondary-alt-shift-up", Box::new(InsertRowBefore)),
         bind("secondary-alt-shift-down", Box::new(InsertRowAfter)),
+        bind("secondary-alt-shift-d", Box::new(DuplicateRow)),
         bind("secondary-alt-shift-backspace", Box::new(DeleteRow)),
         bind("secondary-alt-shift-left", Box::new(InsertColumnBefore)),
         bind("secondary-alt-shift-right", Box::new(InsertColumnAfter)),

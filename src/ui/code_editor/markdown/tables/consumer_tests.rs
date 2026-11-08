@@ -1,7 +1,7 @@
 use super::{settle_live_geometry, start_in_source};
 use crate::ui::app::test_window::harness_with_tabs;
 use crate::ui::code_editor::markdown::{Command, Selection};
-use gpui_kit::{Focusable as _, VisualContext as _, test::{TestEventExt as _, TestWindowExt as _}};
+use gpui_kit::{Focusable as _, test::TestWindowExt as _};
 
 #[gpui_kit::test]
 fn table_authoring_insert_navigate_paste_undo_and_owning_host_reopen(
@@ -19,7 +19,8 @@ fn table_authoring_insert_navigate_paste_undo_and_owning_host_reopen(
     let view = loop {
         context.run_until_parked();
         if let Some(view) = app.read_with(&context, |app, _| {
-            app.active_editor_input().and_then(|input| input.markdown().cloned())
+            app.active_editor_input()
+                .and_then(|input| input.markdown().cloned())
         }) {
             start_in_source(&view, &mut context);
             break view;
@@ -37,7 +38,10 @@ fn table_authoring_insert_navigate_paste_undo_and_owning_host_reopen(
     settle_live_geometry(&view, &mut context);
     let inserted = "Before  \r\n\r\n|  |  |\r\n| --- | --- |\r\n|  |  |\r\n\r\nAfter  ";
     view.read_with(&context, |view, cx| {
-        assert_eq!(view.document().read(cx).encode().unwrap(), inserted.as_bytes());
+        assert_eq!(
+            view.document().read(cx).encode().unwrap(),
+            inserted.as_bytes()
+        );
         assert_eq!(view.selection(), Selection::caret(12));
     });
     context.update(|window, cx| window.input("Head", cx));
@@ -51,9 +55,13 @@ fn table_authoring_insert_navigate_paste_undo_and_owning_host_reopen(
         window.press("secondary-v", cx);
     });
     settle_live_geometry(&view, &mut context);
-    let expected = "Before  \r\n\r\n| Head | Last |\r\n| --- | --- |\r\n|  | x\\|y z\\|w |\r\n\r\nAfter  ";
+    let expected =
+        "Before  \r\n\r\n| Head | Last |\r\n| --- | --- |\r\n|  | x\\|y z\\|w |\r\n\r\nAfter  ";
     view.read_with(&context, |view, cx| {
-        assert_eq!(view.document().read(cx).encode().unwrap(), expected.as_bytes());
+        assert_eq!(
+            view.document().read(cx).encode().unwrap(),
+            expected.as_bytes()
+        );
     });
     // Vertical movement stays in column two; Shift+Tab still reaches empty cell one.
     context.update(|window, cx| window.press("up", cx));
@@ -78,13 +86,19 @@ fn table_authoring_insert_navigate_paste_undo_and_owning_host_reopen(
     context.run_until_parked();
     view.read_with(&context, |view, cx| {
         assert_eq!(view.document().entity_id(), identity);
-        assert_eq!(view.document().read(cx).encode().unwrap(), expected.replace("Below ", "").as_bytes());
+        assert_eq!(
+            view.document().read(cx).encode().unwrap(),
+            expected.replace("Below ", "").as_bytes()
+        );
     });
     context.dispatch_action(gpui_kit::component::input::Redo);
     context.dispatch_action(crate::core::actions::EditorSave);
     loop {
         context.run_until_parked();
-        if app.read_with(&context, |app, _| app.active_buffer().is_some_and(|file| !file.dirty && !file.saving)) {
+        if app.read_with(&context, |app, _| {
+            app.active_buffer()
+                .is_some_and(|file| !file.dirty && !file.saving)
+        }) {
             break;
         }
         assert!(std::time::Instant::now() < deadline);
@@ -104,8 +118,16 @@ fn table_authoring_insert_navigate_paste_undo_and_owning_host_reopen(
         std::thread::sleep(std::time::Duration::from_millis(5));
     }
     app.read_with(&context, |app, cx| {
-        let reopened = app.active_editor_input().unwrap().markdown().unwrap().read(cx);
-        assert_eq!(reopened.document().read(cx).encode().unwrap(), expected.as_bytes());
+        let reopened = app
+            .active_editor_input()
+            .unwrap()
+            .markdown()
+            .unwrap()
+            .read(cx);
+        assert_eq!(
+            reopened.document().read(cx).encode().unwrap(),
+            expected.as_bytes()
+        );
     });
 }
 
@@ -119,12 +141,15 @@ fn table_reverse_replacement_and_multi_caret_paste_preserve_structure(
     std::fs::write(&path, original).unwrap();
     let source = original.replace("\r\n", "\n");
     let (app, mut context, _streams) = harness_with_tabs(cx, 1);
-    app.update_in(&mut context, |app, window, cx| app.open_file_in_editor(&path, window, cx));
+    app.update_in(&mut context, |app, window, cx| {
+        app.open_file_in_editor(&path, window, cx)
+    });
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
     let view = loop {
         context.run_until_parked();
         if let Some(view) = app.read_with(&context, |app, _| {
-            app.active_editor_input().and_then(|input| input.markdown().cloned())
+            app.active_editor_input()
+                .and_then(|input| input.markdown().cloned())
         }) {
             start_in_source(&view, &mut context);
             break view;
@@ -143,11 +168,47 @@ fn table_reverse_replacement_and_multi_caret_paste_preserve_structure(
     context.update(|window, cx| window.input("X|Y", cx));
     context.run_until_parked();
     view.read_with(&context, |view, cx| {
-        assert_eq!(view.document().read(cx).encode().unwrap(), original.replace("one | two", "X\\|Y | ").as_bytes());
+        assert_eq!(
+            view.document().read(cx).encode().unwrap(),
+            original.replace("one | two", "X\\|Y | ").as_bytes()
+        );
     });
     context.dispatch_action(gpui_kit::component::input::Undo);
     context.run_until_parked();
-    view.read_with(&context, |view, _| assert_eq!(view.selection(), Selection::new(two + 3, one)));
+    view.read_with(&context, |view, cx| {
+        assert_eq!(view.document().read(cx).encode().unwrap(), original.as_bytes());
+        assert_eq!(view.selection(), Selection::new(two + 3, one));
+    });
+    context.dispatch_action(gpui_kit::component::input::Redo);
+    context.run_until_parked();
+    view.read_with(&context, |view, cx| {
+        assert_eq!(
+            view.document().read(cx).encode().unwrap(),
+            original.replace("one | two", "X\\|Y | ").as_bytes()
+        );
+        assert_eq!(view.selection(), Selection::caret(one + "X\\|Y".len()));
+    });
+    // A caret command ends the typing burst, including a sparse replacement.
+    context.update(|window, cx| window.press("left", cx));
+    context.update(|window, cx| window.input("Z", cx));
+    context.run_until_parked();
+    view.read_with(&context, |view, cx| {
+        assert_eq!(
+            view.document().read(cx).encode().unwrap(),
+            original.replace("one | two", "X\\|ZY | ").as_bytes()
+        );
+    });
+    context.dispatch_action(gpui_kit::component::input::Undo);
+    context.run_until_parked();
+    view.read_with(&context, |view, cx| {
+        assert_eq!(
+            view.document().read(cx).encode().unwrap(),
+            original.replace("one | two", "X\\|Y | ").as_bytes()
+        );
+        assert_eq!(view.selection(), Selection::caret(one + "X\\|".len()));
+    });
+    context.dispatch_action(gpui_kit::component::input::Undo);
+    context.run_until_parked();
     view.update_in(&mut context, |view, _, cx| {
         view.select_range(one..one + 3, cx);
         view.add_selection(two..two + 3, cx);
@@ -158,9 +219,100 @@ fn table_reverse_replacement_and_multi_caret_paste_preserve_structure(
     });
     context.run_until_parked();
     view.read_with(&context, |view, cx| {
-        assert_eq!(view.document().read(cx).encode().unwrap(), original.replace("one | two", "p\\|q | p\\|q").as_bytes());
+        assert_eq!(
+            view.document().read(cx).encode().unwrap(),
+            original.replace("one | two", "p\\|q | p\\|q").as_bytes()
+        );
     });
     context.dispatch_action(gpui_kit::component::input::Undo);
     context.run_until_parked();
-    view.read_with(&context, |view, cx| assert_eq!(view.document().read(cx).encode().unwrap(), original.as_bytes()));
+    view.read_with(&context, |view, cx| {
+        assert_eq!(
+            view.document().read(cx).encode().unwrap(),
+            original.as_bytes()
+        )
+    });
+}
+
+#[gpui_kit::test]
+fn table_structure_reverse_header_duplicate_and_minimum_save_reopen(
+    cx: &mut gpui_kit::TestAppContext,
+) {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("structure-boundaries.md");
+    let original = "Before  \r\n\n| **Head**  | `x\\|y` |\r\n| :----- | ----: |\n| body | tail |\r\n\nAfter  ";
+    std::fs::write(&path, original).unwrap();
+    let (app, mut context, _streams) = harness_with_tabs(cx, 1);
+    app.update_in(&mut context, |app, window, cx| app.open_file_in_editor(&path, window, cx));
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    let view = loop {
+        context.run_until_parked();
+        if let Some(view) = app.read_with(&context, |app, _| {
+            app.active_editor_input().and_then(|input| input.markdown().cloned())
+        }) {
+            start_in_source(&view, &mut context);
+            break view;
+        }
+        assert!(std::time::Instant::now() < deadline);
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    };
+    context.dispatch_action(crate::core::actions::ToggleDocumentPreview);
+    settle_live_geometry(&view, &mut context);
+    let source = original.replace("\r\n", "\n");
+    let head = source.find("Head").unwrap();
+    let end = source.find("x\\|y").unwrap() + 4;
+    let reverse = Selection::new(end, head + 2);
+    view.update_in(&mut context, |view, window, cx| {
+        view.command(Command::Select(reverse), window, cx);
+        view.focus_handle(cx).focus(window, cx);
+    });
+    // Header deletion must not promote a body row or create a history entry.
+    context.dispatch_action(crate::ui::code_editor::markdown::tables::DeleteRow);
+    context.run_until_parked();
+    view.read_with(&context, |view, cx| {
+        assert_eq!(view.document().read(cx).encode().unwrap(), original.as_bytes());
+        assert_eq!(view.selection(), reverse);
+    });
+    context.dispatch_action(crate::ui::code_editor::markdown::tables::DuplicateRow);
+    context.run_until_parked();
+    settle_live_geometry(&view, &mut context);
+    // Continue inside the duplicated formatted cell, not the header or delimiter.
+    context.update(|window, cx| window.input("X", cx));
+    context.run_until_parked();
+    let expected = "Before  \r\n\n| **Head**  | `x\\|y` |\r\n| :----- | ----: |\n| **HeXad**  | `x\\|y` |\r\n| body | tail |\r\n\nAfter  ";
+    view.read_with(&context, |view, cx| {
+        assert_eq!(view.document().read(cx).encode().unwrap(), expected.as_bytes());
+    });
+    context.dispatch_action(gpui_kit::component::input::Undo);
+    context.dispatch_action(gpui_kit::component::input::Undo);
+    context.run_until_parked();
+    view.read_with(&context, |view, cx| {
+        assert_eq!(view.document().read(cx).encode().unwrap(), original.as_bytes());
+        assert_eq!(view.selection(), reverse);
+    });
+    context.dispatch_action(crate::core::actions::ToggleDocumentPreview);
+    context.dispatch_action(gpui_kit::component::input::Redo);
+    context.dispatch_action(gpui_kit::component::input::Redo);
+    context.dispatch_action(crate::core::actions::EditorSave);
+    loop {
+        context.run_until_parked();
+        if app.read_with(&context, |app, _| app.active_buffer().is_some_and(|file| !file.dirty && !file.saving)) { break; }
+        assert!(std::time::Instant::now() < deadline);
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    assert_eq!(std::fs::read(&path).unwrap(), expected.as_bytes());
+    app.update_in(&mut context, |app, window, cx| {
+        app.editor_close_file(0, window, cx);
+        app.open_file_in_editor(&path, window, cx);
+    });
+    loop {
+        context.run_until_parked();
+        if app.read_with(&context, |app, _| app.active_buffer().is_some()) { break; }
+        assert!(std::time::Instant::now() < deadline);
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    app.read_with(&context, |app, cx| {
+        let reopened = app.active_editor_input().unwrap().markdown().unwrap().read(cx);
+        assert_eq!(reopened.document().read(cx).encode().unwrap(), expected.as_bytes());
+    });
 }
