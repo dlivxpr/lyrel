@@ -9481,12 +9481,15 @@ fn native_navigation_deletes_visible_nested_graphemes_without_orphan_markers(
     let source = original.replace("\r\n", "\n");
     std::fs::write(&path, original).unwrap();
     let (app, mut context, _streams) = harness_with_tabs(cx, 1);
-    app.update_in(&mut context, |app, window, cx| app.open_file_in_editor(&path, window, cx));
+    app.update_in(&mut context, |app, window, cx| {
+        app.open_file_in_editor(&path, window, cx)
+    });
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
     let view = loop {
         context.run_until_parked();
         if let Some(view) = app.read_with(&context, |app, _| {
-            app.active_editor_input().and_then(|input| input.markdown().cloned())
+            app.active_editor_input()
+                .and_then(|input| input.markdown().cloned())
         }) {
             start_in_source(&view, &mut context);
             break view;
@@ -9499,10 +9502,29 @@ fn native_navigation_deletes_visible_nested_graphemes_without_orphan_markers(
     let combining = source.find("e\u{301}").unwrap();
     let emoji = source.find("👩‍💻").unwrap();
     for (selection, key, expected) in [
-        (Selection::caret(1), "backspace", " **e\u{301}** z\n\n***👩‍💻*** tail\n\nleft **one two** right\n"),
-        (Selection::caret(combining + "e\u{301}".len()), "backspace", "a  z\n\n***👩‍💻*** tail\n\nleft **one two** right\n"),
-        (Selection::caret(emoji), "delete", "a **e\u{301}** z\n\n tail\n\nleft **one two** right\n"),
-        (Selection::new(source.find("left").unwrap() + 2, source.find("two").unwrap() + 1), "delete", "a **e\u{301}** z\n\n***👩‍💻*** tail\n\nlewo right\n"),
+        (
+            Selection::caret(1),
+            "backspace",
+            " **e\u{301}** z\n\n***👩‍💻*** tail\n\nleft **one two** right\n",
+        ),
+        (
+            Selection::caret(combining + "e\u{301}".len()),
+            "backspace",
+            "a  z\n\n***👩‍💻*** tail\n\nleft **one two** right\n",
+        ),
+        (
+            Selection::caret(emoji),
+            "delete",
+            "a **e\u{301}** z\n\n tail\n\nleft **one two** right\n",
+        ),
+        (
+            Selection::new(
+                source.find("left").unwrap() + 2,
+                source.find("two").unwrap() + 1,
+            ),
+            "delete",
+            "a **e\u{301}** z\n\n***👩‍💻*** tail\n\nlewo right\n",
+        ),
     ] {
         view.update_in(&mut context, |view, window, cx| {
             view.select_range(selection.range(), cx);
@@ -9510,12 +9532,17 @@ fn native_navigation_deletes_visible_nested_graphemes_without_orphan_markers(
         });
         context.update(|window, cx| window.press(key, cx));
         context.run_until_parked();
-        view.read_with(&context, |view, cx| assert_eq!(view.document().read(cx).source().to_string(), expected));
+        view.read_with(&context, |view, cx| {
+            assert_eq!(view.document().read(cx).source().to_string(), expected)
+        });
         context.dispatch_action(gpui_kit::component::input::Undo);
         settle_live_geometry(&view, &mut context);
         view.read_with(&context, |view, cx| {
             assert_eq!(view.document().read(cx).source().to_string(), source);
-            assert_eq!(view.document().read(cx).encode().unwrap(), original.as_bytes());
+            assert_eq!(
+                view.document().read(cx).encode().unwrap(),
+                original.as_bytes()
+            );
         });
     }
 }
@@ -9528,15 +9555,26 @@ fn native_navigation_home_end_and_words_use_visible_logical_content(
     use gpui_kit::{Focusable as _, test::TestWindowExt as _};
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("navigation-words.md");
-    let source = format!("# Heading\n\n- **hello** world with enough text to wrap across several visual rows when narrow\n\nفارسی English עברית\n\nlast\n\n{}e\u{301} tail", "x".repeat(4096));
+    let source = format!(
+        "# Heading\n\n- **hello** world with enough text to wrap across several visual rows when narrow\n\nفارسی English עברית\n\nlast\n\n{}e\u{301} tail",
+        "x".repeat(4096)
+    );
     std::fs::write(&path, &source).unwrap();
     let (app, mut context, _streams) = harness_with_tabs(cx, 1);
-    cx.simulate_window_resize(context.window_handle(), gpui_kit::size(gpui_kit::px(620.), gpui_kit::px(800.)));
-    app.update_in(&mut context, |app, window, cx| app.open_file_in_editor(&path, window, cx));
+    cx.simulate_window_resize(
+        context.window_handle(),
+        gpui_kit::size(gpui_kit::px(620.), gpui_kit::px(800.)),
+    );
+    app.update_in(&mut context, |app, window, cx| {
+        app.open_file_in_editor(&path, window, cx)
+    });
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
     let view = loop {
         context.run_until_parked();
-        if let Some(view) = app.read_with(&context, |app, _| app.active_editor_input().and_then(|input| input.markdown().cloned())) {
+        if let Some(view) = app.read_with(&context, |app, _| {
+            app.active_editor_input()
+                .and_then(|input| input.markdown().cloned())
+        }) {
             start_in_source(&view, &mut context);
             break view;
         }
@@ -9552,7 +9590,9 @@ fn native_navigation_home_end_and_words_use_visible_logical_content(
         view.focus_handle(cx).focus(window, cx);
     });
     context.dispatch_action(gpui_kit::component::input::SelectToNextWordEnd);
-    view.read_with(&context, |view, _| assert_eq!(view.selection(), Selection::new(hello, hello + 5)));
+    view.read_with(&context, |view, _| {
+        assert_eq!(view.selection(), Selection::new(hello, hello + 5))
+    });
     context.update(|window, cx| {
         window.press("end", cx);
         assert_eq!(view.read(cx).selection(), Selection::caret(line_end));
@@ -9560,19 +9600,30 @@ fn native_navigation_home_end_and_words_use_visible_logical_content(
         assert_eq!(view.read(cx).selection(), Selection::caret(hello));
     });
     let rtl = source.find("فارسی").unwrap();
-    view.update_in(&mut context, |view, _, cx| view.select_range(rtl + "فارسی ".len()..rtl + "فارسی ".len(), cx));
+    view.update_in(&mut context, |view, _, cx| {
+        view.select_range(rtl + "فارسی ".len()..rtl + "فارسی ".len(), cx)
+    });
     context.update(|window, cx| {
         window.press("home", cx);
         assert_eq!(view.read(cx).selection(), Selection::caret(rtl));
         window.press("end", cx);
-        assert_eq!(view.read(cx).selection(), Selection::caret(source.find("\n\nlast").unwrap()));
-        assert_eq!(view.read(cx).document().read(cx).source().to_string(), source);
+        assert_eq!(
+            view.read(cx).selection(),
+            Selection::caret(source.find("\n\nlast").unwrap())
+        );
+        assert_eq!(
+            view.read(cx).document().read(cx).source().to_string(),
+            source
+        );
     });
     settle_live_geometry(&view, &mut context);
     view.update_in(&mut context, |view, _, cx| view.select_range(rtl..rtl, cx));
     context.update(|window, cx| {
         window.press("shift-left", cx);
-        assert_eq!(view.read(cx).selection(), Selection::new(rtl, rtl + "ف".len()));
+        assert_eq!(
+            view.read(cx).selection(),
+            Selection::new(rtl, rtl + "ف".len())
+        );
         window.press("shift-right", cx);
         assert_eq!(view.read(cx).selection(), Selection::caret(rtl));
     });
@@ -9580,12 +9631,19 @@ fn native_navigation_home_end_and_words_use_visible_logical_content(
     let token_end = source.rfind(" tail").unwrap();
     let seam = view.read_with(&context, |view, cx| {
         let mut offset = 0;
-        view.document().read(cx).source().chunks().find_map(|chunk| {
-            offset += chunk.len();
-            (token_start < offset && offset < token_end).then_some(offset)
-        }).expect("long token spans Rope chunks")
+        view.document()
+            .read(cx)
+            .source()
+            .chunks()
+            .find_map(|chunk| {
+                offset += chunk.len();
+                (token_start < offset && offset < token_end).then_some(offset)
+            })
+            .expect("long token spans Rope chunks")
     });
-    view.update_in(&mut context, |view, _, cx| view.select_range(seam..seam, cx));
+    view.update_in(&mut context, |view, _, cx| {
+        view.select_range(seam..seam, cx)
+    });
     context.run_until_parked();
     context.update(|window, cx| {
         window.render_frame(cx);
@@ -9600,11 +9658,16 @@ fn native_navigation_home_end_and_words_use_visible_logical_content(
     context.dispatch_action(crate::core::actions::ToggleDocumentPreview);
     context.run_until_parked();
     context.dispatch_action(gpui_kit::component::input::MoveToNextWord);
-    view.read_with(&context, |view, _| assert_eq!(view.selection(), Selection::caret(token_end)));
+    view.read_with(&context, |view, _| {
+        assert_eq!(view.selection(), Selection::caret(token_end))
+    });
     context.dispatch_action(gpui_kit::component::input::MoveToPreviousWord);
     view.read_with(&context, |view, cx| {
         assert_eq!(view.selection(), Selection::caret(token_start));
-        assert_eq!(view.document().read(cx).encode().unwrap(), source.as_bytes());
+        assert_eq!(
+            view.document().read(cx).encode().unwrap(),
+            source.as_bytes()
+        );
     });
 }
 
@@ -9613,19 +9676,32 @@ fn native_navigation_pointer_words_lines_and_stationary_offscreen_drag(
     cx: &mut gpui_kit::TestAppContext,
 ) {
     use crate::ui::app::test_window::harness_with_tabs;
-    use gpui_kit::{Focusable as _, MouseButton, test::{TestEventExt as _, TestWindowExt as _}};
+    use gpui_kit::{
+        Focusable as _, MouseButton,
+        test::{TestEventExt as _, TestWindowExt as _},
+    };
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("navigation-pointer.md");
     let mut source = String::from("first **café** e\u{301} 👩‍💻\n\n");
-    for ix in 0..24 { source.push_str(&format!("paragraph {ix} 中 فارسی text\n\n")); }
+    for ix in 0..24 {
+        source.push_str(&format!("paragraph {ix} 中 فارسی text\n\n"));
+    }
     std::fs::write(&path, &source).unwrap();
     let (app, mut context, _streams) = harness_with_tabs(cx, 1);
-    cx.simulate_window_resize(context.window_handle(), gpui_kit::size(gpui_kit::px(800.), gpui_kit::px(480.)));
-    app.update_in(&mut context, |app, window, cx| app.open_file_in_editor(&path, window, cx));
+    cx.simulate_window_resize(
+        context.window_handle(),
+        gpui_kit::size(gpui_kit::px(800.), gpui_kit::px(480.)),
+    );
+    app.update_in(&mut context, |app, window, cx| {
+        app.open_file_in_editor(&path, window, cx)
+    });
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
     let view = loop {
         context.run_until_parked();
-        if let Some(view) = app.read_with(&context, |app, _| app.active_editor_input().and_then(|input| input.markdown().cloned())) {
+        if let Some(view) = app.read_with(&context, |app, _| {
+            app.active_editor_input()
+                .and_then(|input| input.markdown().cloned())
+        }) {
             start_in_source(&view, &mut context);
             break view;
         }
@@ -9635,14 +9711,27 @@ fn native_navigation_pointer_words_lines_and_stationary_offscreen_drag(
     context.dispatch_action(crate::core::actions::ToggleDocumentPreview);
     settle_live_geometry(&view, &mut context);
     let cafe = source.find("café").unwrap();
-    for (clicks, expected) in [(2, cafe..cafe + "café".len()), (3, 0..source.find('\n').unwrap() + 1)] {
+    for (clicks, expected) in [
+        (2, cafe..cafe + "café".len()),
+        (3, 0..source.find('\n').unwrap() + 1),
+    ] {
         context.update(|window, cx| {
             window.render_frame(cx);
-            let at = view.read(cx).range_to_bounds(&(cafe + 1..cafe + 1), cx).unwrap().center();
-            window.dispatch_event(gpui_kit::PlatformInput::MouseDown(gpui_kit::MouseDownEvent {
-                button: MouseButton::Left, position: at, modifiers: gpui_kit::Modifiers::none(),
-                click_count: clicks, first_mouse: false,
-            }), cx);
+            let at = view
+                .read(cx)
+                .range_to_bounds(&(cafe + 1..cafe + 1), cx)
+                .unwrap()
+                .center();
+            window.dispatch_event(
+                gpui_kit::PlatformInput::MouseDown(gpui_kit::MouseDownEvent {
+                    button: MouseButton::Left,
+                    position: at,
+                    modifiers: gpui_kit::Modifiers::none(),
+                    click_count: clicks,
+                    first_mouse: false,
+                }),
+                cx,
+            );
             window.pointer_up(at, MouseButton::Left, cx);
             assert_eq!(view.read(cx).selection().range(), expected);
         });
@@ -9670,24 +9759,38 @@ fn native_navigation_pointer_words_lines_and_stationary_offscreen_drag(
         view.selection().head()
     });
     context.update(|window, cx| window.pointer_up(outside, MouseButton::Left, cx));
-    for _ in 0..3 { context.update(|window, cx| window.render_frame(cx)); }
+    for _ in 0..3 {
+        context.update(|window, cx| window.render_frame(cx));
+    }
     view.read_with(&context, |view, cx| {
         assert_eq!(view.selection(), Selection::new(0, extended));
-        assert_eq!(view.document().read(cx).encode().unwrap(), source.as_bytes());
+        assert_eq!(
+            view.document().read(cx).encode().unwrap(),
+            source.as_bytes()
+        );
     });
     let above = context.update(|window, cx| {
-        let at = view.read(cx).range_to_bounds(&(extended..extended), cx).unwrap().center();
+        let at = view
+            .read(cx)
+            .range_to_bounds(&(extended..extended), cx)
+            .unwrap()
+            .center();
         let surface = window.find("markdown-source").bounds();
         let above = gpui_kit::point(at.x, surface.top() - window.rem_size() * 2.);
         window.pointer_down(at, MouseButton::Left, cx);
         window.pointer_move(above, Some(MouseButton::Left), cx);
         above
     });
-    for _ in 0..16 { context.update(|window, cx| window.render_frame(cx)); }
+    for _ in 0..16 {
+        context.update(|window, cx| window.render_frame(cx));
+    }
     context.update(|window, cx| window.pointer_up(above, MouseButton::Left, cx));
     view.read_with(&context, |view, cx| {
         assert_eq!(view.selection().anchor(), extended);
         assert!(view.selection().head() < extended);
-        assert_eq!(view.document().read(cx).encode().unwrap(), source.as_bytes());
+        assert_eq!(
+            view.document().read(cx).encode().unwrap(),
+            source.as_bytes()
+        );
     });
 }

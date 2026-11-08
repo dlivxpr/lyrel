@@ -1112,16 +1112,25 @@ impl SourcePresentation {
             };
             if let Some((text, kind)) = replacement {
                 let mut selections: Vec<_> = std::iter::once(self.state.selection)
-                    .chain(self.extra_selections.iter().copied()).collect();
+                    .chain(self.extra_selections.iter().copied())
+                    .collect();
                 selections.sort_by_key(|selection| selection.range().start);
                 let mut edits = Vec::new();
                 for selection in &selections {
                     let mut range = selection.range();
                     if range.is_empty() && matches!(command, Command::Backspace | Command::Delete) {
-                        range = self.visible_delete_range(range.start, matches!(command, Command::Backspace), cx);
+                        range = self.visible_delete_range(
+                            range.start,
+                            matches!(command, Command::Backspace),
+                            cx,
+                        );
                     }
                     if text.is_empty() {
-                        edits.extend(self.deletion_ranges(range, cx).into_iter().map(|range| (range, String::new())));
+                        edits.extend(
+                            self.deletion_ranges(range, cx)
+                                .into_iter()
+                                .map(|range| (range, String::new())),
+                        );
                     } else {
                         edits.push((range, text.clone()));
                     }
@@ -1130,26 +1139,40 @@ impl SourcePresentation {
                 if text.is_empty() {
                     let mut merged: Vec<(Range<usize>, String)> = Vec::new();
                     for (range, text) in edits {
-                        if let Some((last, _)) = merged.last_mut().filter(|(last, _)| range.start <= last.end) {
+                        if let Some((last, _)) = merged
+                            .last_mut()
+                            .filter(|(last, _)| range.start <= last.end)
+                        {
                             last.end = last.end.max(range.end);
-                        } else { merged.push((range, text)); }
+                        } else {
+                            merged.push((range, text));
+                        }
                     }
                     edits = merged;
                 }
                 let map = |at: usize| {
                     let mut delta = 0isize;
                     for (range, text) in &edits {
-                        if at < range.start { break; }
-                        if at <= range.end { return (range.start as isize + delta) as usize + text.len(); }
+                        if at < range.start {
+                            break;
+                        }
+                        if at <= range.end {
+                            return (range.start as isize + delta) as usize + text.len();
+                        }
                         delta += text.len() as isize - range.len() as isize;
                     }
                     (at as isize + delta) as usize
                 };
-                let mut resulting = selections.iter().map(|selection| Selection::caret(map(selection.range().start)));
+                let mut resulting = selections
+                    .iter()
+                    .map(|selection| Selection::caret(map(selection.range().start)));
                 let primary = resulting.next().unwrap_or(self.state.selection);
                 after_extra = Some(resulting.collect());
                 if text.is_empty() {
-                    Command::BatchReplaceSelected { edits, selection: primary }
+                    Command::BatchReplaceSelected {
+                        edits,
+                        selection: primary,
+                    }
                 } else {
                     Command::BatchReplace { edits, kind }
                 }
@@ -1167,17 +1190,27 @@ impl SourcePresentation {
         };
         let command = if !self.is_composing() && self.extra_selections.is_empty() {
             match command {
-                Command::Replace { range, text, .. } if text.is_empty() => self.deletion_command(range, cx),
+                Command::Replace { range, text, .. } if text.is_empty() => {
+                    self.deletion_command(range, cx)
+                }
                 Command::Backspace | Command::Delete => {
                     let selection = self.state.selection.range();
                     let range = if selection.is_empty() {
-                        self.visible_delete_range(selection.start, matches!(command, Command::Backspace), cx)
-                    } else { selection };
+                        self.visible_delete_range(
+                            selection.start,
+                            matches!(command, Command::Backspace),
+                            cx,
+                        )
+                    } else {
+                        selection
+                    };
                     self.deletion_command(range, cx)
                 }
                 command => command,
             }
-        } else { command };
+        } else {
+            command
+        };
         let owner = self
             .document
             .read(cx)
@@ -1403,9 +1436,14 @@ impl SourcePresentation {
     ) {
         let doc = self.document.read(cx);
         let current = doc.boundary(self.state.selection.head, false);
-        let goal_x = (vertical != 0).then(|| self.goal_x.or_else(|| {
-            self.caret_bounds(current, cx).map(|caret| caret.left() - self.scroll.offset().x)
-        })).flatten();
+        let goal_x = (vertical != 0)
+            .then(|| {
+                self.goal_x.or_else(|| {
+                    self.caret_bounds(current, cx)
+                        .map(|caret| caret.left() - self.scroll.offset().x)
+                })
+            })
+            .flatten();
         let at = if let Some(end) = edge {
             self.logical_line_edge(current, end, cx)
         } else if vertical != 0 {
@@ -1727,8 +1765,12 @@ impl SourcePresentation {
             return at;
         };
         if leaf.kind == Kind::Rule {
-            if backward && at > leaf.range.start { return leaf.range.start; }
-            if !backward && at < leaf.range.end { return leaf.range.end; }
+            if backward && at > leaf.range.start {
+                return leaf.range.start;
+            }
+            if !backward && at < leaf.range.end {
+                return leaf.range.end;
+            }
         }
         if leaf.deferred {
             let document = self.document.read(cx);
@@ -1753,10 +1795,16 @@ impl SourcePresentation {
                 .filter(|other| other.id != leaf.id)
                 .find_map(|other| {
                     let end = other.content_end();
-                    if end < at { return Some(end); }
+                    if end < at {
+                        return Some(end);
+                    }
                     if end == at {
-                        return other.text.grapheme_indices(true).next_back()
-                            .map(|(ix, _)| other.source_offset(ix)).filter(|target| *target < at);
+                        return other
+                            .text
+                            .grapheme_indices(true)
+                            .next_back()
+                            .map(|(ix, _)| other.source_offset(ix))
+                            .filter(|target| *target < at);
                     }
                     None
                 })
@@ -1776,10 +1824,16 @@ impl SourcePresentation {
                 .filter(|other| other.id != leaf.id)
                 .find_map(|other| {
                     let start = other.content_start();
-                    if start > at { return Some(start); }
+                    if start > at {
+                        return Some(start);
+                    }
                     if start == at {
-                        return other.text.graphemes(true).next()
-                            .map(|text| other.source_offset(text.len())).filter(|target| *target > at);
+                        return other
+                            .text
+                            .graphemes(true)
+                            .next()
+                            .map(|text| other.source_offset(text.len()))
+                            .filter(|target| *target > at);
                     }
                     None
                 })
@@ -3463,7 +3517,9 @@ impl Element for SourceElement {
         self.child.paint(window, cx);
         let view = self.view.clone();
         window.on_mouse_event(move |event: &MouseMoveEvent, phase, window, cx| {
-            if !phase.bubble() || !view.read(cx).dragging { return; }
+            if !phase.bubble() || !view.read(cx).dragging {
+                return;
+            }
             view.update(cx, |view, cx| {
                 if event.pressed_button == Some(MouseButton::Left) {
                     view.drag_to(event.position, window, cx);
