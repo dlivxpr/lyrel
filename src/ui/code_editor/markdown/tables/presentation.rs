@@ -48,6 +48,7 @@ impl SourcePresentation {
         );
         self.command(
             Command::BatchReplaceSelected {
+                kind: EditKind::Command,
                 edits: vec![(range, text)],
                 selection,
             },

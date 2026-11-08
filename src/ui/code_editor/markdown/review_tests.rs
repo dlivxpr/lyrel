@@ -135,6 +135,33 @@ fn review_auto_pair_reference_prose_fence_and_shared_source_history(cx: &mut Tes
 }
 
 #[gpui_kit::test]
+fn review_auto_pair_wraps_paragraphs_without_rewriting_source_or_crossing_raw_objects(
+    cx: &mut TestAppContext,
+) {
+    let source = "alpha one\r\n\r\nbeta two\n\n`raw`\n";
+    let (_dir, _path, _app, mut context, _streams, view) = fixture!(cx, source);
+    let normalized = source.replace("\r\n", "\n");
+    let end = normalized.find("two").unwrap();
+    select(&view, &mut context, end, 6);
+    context.update(|window, cx| window.input("(", cx));
+    let wrapped = "alpha (one\r\n\r\nbeta )two\n\n`raw`\n";
+    assert_eq!(bytes(&view, &context), wrapped.as_bytes());
+    context.dispatch_action(gpui_kit::component::input::Undo);
+    assert_eq!(bytes(&view, &context), source.as_bytes());
+    context.dispatch_action(gpui_kit::component::input::Redo);
+    assert_eq!(bytes(&view, &context), wrapped.as_bytes());
+    context.dispatch_action(gpui_kit::component::input::Undo);
+    settle(&view, &mut context);
+    let raw = normalized.find("raw").unwrap();
+    select(&view, &mut context, 6, raw + 1);
+    context.update(|window, cx| window.input("(", cx));
+    // Crossing an inline-code object remains ordinary replacement, not pairing.
+    assert_eq!(bytes(&view, &context), b"alpha (aw`\n");
+    context.dispatch_action(gpui_kit::component::input::Undo);
+    assert_eq!(bytes(&view, &context), source.as_bytes());
+}
+
+#[gpui_kit::test]
 fn review_table_copy_keeps_metadata_codec_selection_and_history(cx: &mut TestAppContext) {
     let source = "before\r\n\r\n<!-- table:striped cols=120,240 -->\r\n| A | B |\n| --- | --- |\r\n| one | two |\n\nafter";
     let (_dir, _path, _app, mut context, _streams, view) = fixture!(cx, source);
@@ -146,6 +173,10 @@ fn review_table_copy_keeps_metadata_codec_selection_and_history(cx: &mut TestApp
         assert_eq!(
             cx.read_from_clipboard().unwrap().text().unwrap(),
             "<!-- table:striped cols=120,240 -->\r\n| A | B |\n| --- | --- |\r\n| one | two |"
+        );
+        assert_eq!(
+            cx.read_from_clipboard().unwrap().metadata().unwrap(),
+            "<table><tr><td>A</td><td>B</td></tr><tr><td>one</td><td>two</td></tr></table>"
         );
         assert_eq!(view.read(cx).selection(), Selection::caret(at));
         assert_eq!(view.read(cx).document().read(cx).revision(), 0);
@@ -166,8 +197,18 @@ fn review_same_document_heading_and_explicit_anchor_follow_without_host_open(
         let at = source.find(label).unwrap();
         select(&view, &mut context, at, at);
         context.dispatch_action(FollowLink);
-        view.read_with(&context, |view, _| {
-            assert_eq!(view.selection(), Selection::caret(target))
+        settle(&view, &mut context);
+        view.read_with(&context, |view, cx| {
+            assert!(view.selection().range().is_empty());
+            let destination = view.range_to_bounds(&(target..target), cx).unwrap();
+            assert_eq!(
+                view.range_to_bounds(&view.selection().range(), cx),
+                Some(destination),
+                "navigation lands at the visible target, regardless of hidden marker coordinates"
+            );
+            if label == "heading" {
+                assert_ne!(Some(destination), view.range_to_bounds(&(0..0), cx));
+            }
         });
         app.read_with(&context, |app, _| {
             assert_eq!(app.editor.buffers.iter().count(), 1)
@@ -220,6 +261,33 @@ fn review_image_width_form_accepts_modal_input_but_rejects_external_source_chang
         bytes(&view, &context),
         "![external](image.svg)\n".as_bytes()
     );
+}
+
+#[gpui_kit::test]
+fn review_formula_cancel_after_plain_input_keeps_original_bytes_and_history(
+    cx: &mut TestAppContext,
+) {
+    let source = "$x^2 + 1$\r\n\r\nkeep\n";
+    let (_dir, _path, app, mut context, _streams, view) = fixture!(cx, source);
+    until(&mut context, |context| {
+        context.update(|window, _| window.try_find("markdown-math-ready-x^2 + 1").is_some())
+    });
+    context.update(|window, cx| {
+        window.click("markdown-math-ready-x^2 + 1", cx);
+        window.input("9", cx);
+    });
+    assert_eq!(bytes(&view, &context), source.as_bytes());
+    context.update(|window, cx| {
+        window.click("formula-cancel", cx);
+        assert!(window.try_find("markdown-formula-editor").is_none());
+        assert!(view.read(cx).focus_handle(cx).is_focused(window));
+    });
+    assert_eq!(bytes(&view, &context), source.as_bytes());
+    app.read_with(&context, |app, _| assert!(!app.active_buffer().unwrap().dirty));
+    context.dispatch_action(gpui_kit::component::input::Undo);
+    assert_eq!(bytes(&view, &context), source.as_bytes());
+    context.dispatch_action(gpui_kit::component::input::Redo);
+    assert_eq!(bytes(&view, &context), source.as_bytes());
 }
 
 #[gpui_kit::test]
@@ -310,6 +378,13 @@ fn review_link_hover_shows_host_excerpt_without_editing_source_and_dismisses(
     context.update(|window, cx| {
         window.render_frame(cx);
         window.pointer_move(position, None, cx);
+    });
+    context.run_until_parked();
+    context.executor().advance_clock(Duration::from_millis(400));
+    context.run_until_parked();
+    context.update(|window, cx| {
+        window.render_frame(cx);
+        assert!(window.try_find("markdown-link-preview").is_none());
     });
     until(&mut context, |context| {
         context.update(|window, _| {

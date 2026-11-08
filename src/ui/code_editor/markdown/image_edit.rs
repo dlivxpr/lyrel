@@ -389,6 +389,7 @@ impl SourcePresentation {
         let selection = Selection::new(object.range.start, object.range.start + text.len());
         self.command(
             Command::BatchReplaceSelected {
+                kind: EditKind::Command,
                 edits: vec![(object.range.clone(), text)],
                 selection,
             },

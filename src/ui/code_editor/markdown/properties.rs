@@ -367,6 +367,7 @@ impl SourcePresentation {
                                             if this.document.read(cx).revision() == revision {
                                                 this.command(
                                                     Command::BatchReplaceSelected {
+                                                        kind: EditKind::Command,
                                                         edits: vec![(
                                                             remove.clone(),
                                                             String::new(),
@@ -760,7 +761,7 @@ impl SourcePresentation {
                 .map_selection(self.state.selection)
             };
             self.command(
-                Command::BatchReplaceSelected { edits, selection },
+                Command::BatchReplaceSelected { edits, selection, kind: EditKind::Command },
                 window,
                 cx,
             );
@@ -1074,6 +1075,7 @@ impl SourcePresentation {
                                     if this.document.read(cx).revision() == revision {
                                         this.command(
                                             Command::BatchReplaceSelected {
+                                                kind: EditKind::Command,
                                                 edits: vec![(remove.clone(), String::new())],
                                                 selection: Selection::caret(remove.start),
                                             },
@@ -1123,6 +1125,7 @@ impl SourcePresentation {
                                     if this.document.read(cx).revision() == revision {
                                         this.command(
                                             Command::BatchReplaceSelected {
+                                                kind: EditKind::Command,
                                                 edits: vec![(remove.clone(), String::new())],
                                                 selection: Selection::caret(remove.start),
                                             },

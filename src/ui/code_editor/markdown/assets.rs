@@ -172,6 +172,7 @@ impl SourcePresentation {
                         let caret = pending.selection.range().start + source.len();
                         view.command(
                             Command::BatchReplaceSelected {
+                                kind: EditKind::Command,
                                 edits: vec![(pending.selection.range(), source)],
                                 selection: Selection::caret(caret),
                             },

@@ -954,6 +954,78 @@ fn markdown_reload_started_before_formula_input_reports_conflict_without_losing_
 }
 
 #[gpui_kit::test]
+fn markdown_pristine_formula_reload_allows_open_and_cursor_moves_during_disk_read(
+    cx: &mut TestAppContext,
+) {
+    use gpui_kit::Focusable as _;
+    for opened_before_read in [true, false] {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("pristine-formula.md");
+        let original = "$x$\r\n\r\nkeep\n";
+        let loaded = "$y$\r\n\r\nexternal\n";
+        std::fs::write(&path, original).unwrap();
+        let host = FileHost::new(HostId(2043));
+        let (app, mut context, _streams) = harness_with_tabs(cx, 1);
+        app.update_in(&mut context, |app, window, cx| {
+            app.editor_open_on_host(host.clone(), &path, window, cx)
+        });
+        wait_until(&mut context, |cx| active_id(&app, cx).is_some());
+        let view = app.read_with(&context, |app, _| {
+            app.active_editor_input().unwrap().markdown().unwrap().clone()
+        });
+        view.update_in(&mut context, |view, window, cx| {
+            if !view.is_live() {
+                view.toggle_mode(window, cx);
+            }
+            view.focus_handle(cx).focus(window, cx);
+        });
+        wait_until(&mut context, |context| {
+            context.update(|window, cx| {
+                window.render_frame(cx);
+                window.try_find("markdown-math-ready-x").is_some()
+            })
+        });
+        if opened_before_read {
+            context.update(|window, cx| window.click("markdown-math-ready-x", cx));
+        }
+        std::fs::write(&path, loaded).unwrap();
+        let release = host.pause_next_read();
+        app.update_in(&mut context, |app, window, cx| {
+            app.editor.buffers.external_change(
+                &path, window, cx, |app| &mut app.editor.buffers,
+                crate::ui::code_editor::EditorPanelState::buffer_edited,
+            );
+        });
+        wait_until(&mut context, |_| host.entered.load(Ordering::SeqCst));
+        context.update(|window, cx| {
+            if !opened_before_read {
+                window.click("markdown-math-ready-x", cx);
+            }
+            window.press("secondary-a", cx);
+            window.press("left", cx);
+        });
+        release.send(()).unwrap();
+        wait_until(&mut context, |context| {
+            view.read_with(context, |view, cx| view.document().read(cx).encode().unwrap() == loaded.as_bytes())
+        });
+        app.read_with(&context, |app, _| {
+            let file = app.active_buffer().unwrap();
+            assert!(file.conflict.is_none());
+            assert!(!file.dirty);
+        });
+        context.update(|window, cx| {
+            window.render_frame(cx);
+            assert!(window.try_find("markdown-formula-editor").is_none());
+        });
+        context.dispatch_action(gpui_kit::component::input::Undo);
+        view.read_with(&context, |view, cx| {
+            assert_eq!(view.document().read(cx).encode().unwrap(), loaded.as_bytes());
+        });
+        assert_eq!(std::fs::read(&path).unwrap(), loaded.as_bytes());
+    }
+}
+
+#[gpui_kit::test]
 fn markdown_clean_reload_survives_selection_and_group_handoff_without_overwriting_disk(
     cx: &mut TestAppContext,
 ) {
@@ -2785,15 +2857,15 @@ fn markdown_reference_completion_keyboard_history_and_owning_host_anchor(cx: &mu
             window.try_find("markdown-reference-completions").is_some()
         })
     });
+    let partial = view.read_with(&context, |view, cx| {
+        view.document().read(cx).encode().unwrap()
+    });
     context.update(|window, cx| {
         window.press("escape", cx);
         assert!(view.read(cx).focus_handle(cx).is_focused(window));
     });
     view.read_with(&context, |view, cx| {
-        assert_eq!(
-            view.document().read(cx).encode().unwrap(),
-            b"Keep\r\n\r\n[[next#det"
-        )
+        assert_eq!(view.document().read(cx).encode().unwrap(), partial)
     });
     context.dispatch_action(gpui_kit::component::input::ShowCompletions);
     wait_until(&mut context, |cx| {
@@ -2813,10 +2885,15 @@ fn markdown_reference_completion_keyboard_history_and_owning_host_anchor(cx: &mu
     });
     context.dispatch_action(gpui_kit::component::input::Undo);
     view.read_with(&context, |view, cx| {
-        assert_eq!(
-            view.document().read(cx).encode().unwrap(),
-            b"Keep\r\n\r\n[[next#det"
-        )
+        assert_eq!(view.document().read(cx).encode().unwrap(), partial)
+    });
+    context.dispatch_action(gpui_kit::component::input::Undo);
+    view.read_with(&context, |view, cx| {
+        assert_eq!(view.document().read(cx).encode().unwrap(), b"Keep\r\n\r\n");
+    });
+    context.dispatch_action(gpui_kit::component::input::Redo);
+    view.read_with(&context, |view, cx| {
+        assert_eq!(view.document().read(cx).encode().unwrap(), partial);
     });
     context.dispatch_action(gpui_kit::component::input::Redo);
     view.read_with(&context, |view, cx| {

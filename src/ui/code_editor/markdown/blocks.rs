@@ -1,6 +1,6 @@
 //! Positioned block commands. Only prefix/wrapper spans are rewritten; body
 //! bytes and their original per-line terminators stay in MarkdownDocument.
-use super::{Command, Selection};
+use super::{Command, EditKind, Selection};
 use markdown::mdast::Node;
 use std::ops::Range;
 
@@ -32,6 +32,7 @@ impl Conversion {
             *range = range.start + base..range.end + base;
         }
         Command::BatchReplaceSelected {
+            kind: EditKind::Command,
             edits: self.edits,
             selection: Selection::caret(base + self.caret),
         }

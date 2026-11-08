@@ -720,6 +720,7 @@ impl SourcePresentation {
         self.dismiss_slash(cx);
         self.command(
             Command::BatchReplaceSelected {
+                kind: EditKind::Command,
                 edits: vec![(range, text)],
                 selection,
             },

@@ -55,6 +55,7 @@ impl SourcePresentation {
         let selection = Selection::caret(range.start + leading + 2);
         self.command(
             Command::BatchReplaceSelected {
+                kind: EditKind::Command,
                 edits: vec![(range, text)],
                 selection,
             },
@@ -277,6 +278,7 @@ impl SourcePresentation {
             };
             self.command(
                 Command::BatchReplaceSelected {
+                    kind: EditKind::Command,
                     edits: vec![(end..end, newline.into())],
                     selection: Selection::caret(end + newline.len()),
                 },

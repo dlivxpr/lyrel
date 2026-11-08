@@ -417,7 +417,7 @@ impl SourcePresentation {
         {
             range.start = marker.range().start;
         }
-        self.copy_markdown_ranges(vec![range], false, true, window, cx);
+        self.copy_markdown_ranges(vec![range], false, false, window, cx);
     }
     fn copy_markdown_ranges(
         &mut self,
@@ -527,6 +527,7 @@ impl SourcePresentation {
             let at = ranges[0].start;
             self.command(
                 Command::BatchReplaceSelected {
+                    kind: EditKind::Command,
                     edits: ranges
                         .into_iter()
                         .map(|range| (range, String::new()))

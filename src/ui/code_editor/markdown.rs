@@ -146,6 +146,7 @@ pub(crate) enum Command {
         format: TextFormat,
     },
     Select(Selection),
+    SkipPairedCloser(usize),
     RenameComponent {
         opening: Range<usize>,
         closing: Option<Range<usize>>,
@@ -184,6 +185,7 @@ pub(crate) enum Command {
         kind: EditKind,
     },
     BatchReplaceSelected {
+        kind: EditKind,
         edits: Vec<(Range<usize>, String)>,
         selection: Selection,
     },
@@ -874,6 +876,11 @@ impl MarkdownDocument {
                             self.boundary(selection.head, false),
                         );
                     }
+                    Command::SkipPairedCloser(at) => {
+                        let continued = self.typing_end == Some((state.id, state.selection.head()));
+                        state.selection = Selection::caret(self.boundary(at, true));
+                        self.typing_end = continued.then_some((state.id, state.selection.head()));
+                    }
                     Command::RenameComponent {
                         opening,
                         closing,
@@ -924,8 +931,8 @@ impl MarkdownDocument {
                     Command::ToggleTask { at } => lists::toggle(self, state, at),
                     Command::Replace { range, text, kind } => self.edit(state, range, text, kind),
                     Command::BatchReplace { edits, kind } => self.batch_edit(state, edits, kind),
-                    Command::BatchReplaceSelected { edits, selection } => {
-                        self.batch_edit_selected(state, edits, EditKind::Command, Some(selection));
+                    Command::BatchReplaceSelected { edits, selection, kind } => {
+                        self.batch_edit_selected(state, edits, kind, Some(selection));
                     }
                     Command::ReplaceLines {
                         range,

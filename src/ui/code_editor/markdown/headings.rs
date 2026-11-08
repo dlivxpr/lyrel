@@ -438,6 +438,7 @@ impl SourcePresentation {
         let text = if end == source.len() { "\n\n" } else { "\n" };
         self.command(
             Command::BatchReplaceSelected {
+                kind: EditKind::Command,
                 edits: vec![(end..end, text.into())],
                 selection: Selection::caret(end + text.len()),
             },

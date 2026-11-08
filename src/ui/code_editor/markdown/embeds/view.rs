@@ -175,7 +175,11 @@ impl SourcePresentation {
         if !self.live || self.projection.revision != document.revision() {
             return None;
         }
-        let bounds = self.range_to_bounds(&link.label, cx)?;
+        // range_to_bounds is an IME caret contract: it returns only the range's end.
+        // A hover trigger must cover the rendered label, not that one-pixel caret.
+        let start = self.range_to_bounds(&(link.label.start..link.label.start), cx)?;
+        let end = self.range_to_bounds(&(link.label.end..link.label.end), cx)?;
+        let bounds = start.union(&end);
         let entry = self
             .embeds
             .loaded

@@ -381,7 +381,8 @@ impl SourcePresentation {
             .and_then(|owner| owner.upgrade())
             .is_some_and(|owner| {
                 let owner = owner.read(cx);
-                owner.formula.is_some() || owner.state.composition.is_some()
+                owner.document.entity_id() == self.document.entity_id()
+                    && (owner.formula_has_pending_input(cx) || owner.state.composition.is_some())
             });
         (document.pending_input_generation, pending)
     }
@@ -1389,6 +1390,7 @@ impl SourcePresentation {
                 after_extra = Some(resulting.collect());
                 if text.is_empty() {
                     Command::BatchReplaceSelected {
+                        kind: EditKind::Command,
                         edits,
                         selection: primary,
                     }
@@ -1935,6 +1937,7 @@ impl SourcePresentation {
             }
             self.command(
                 Command::BatchReplaceSelected {
+                    kind: EditKind::Command,
                     edits,
                     selection: selections[0],
                 },

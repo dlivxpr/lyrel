@@ -136,6 +136,15 @@ impl Session {
     fn dirty(&self) -> bool {
         self.root != self.seed.row
     }
+    fn has_pending_input(&self, source: &Rope) -> bool {
+        self.dirty()
+            || !self.preedit.is_empty()
+            || self.command.is_some()
+            || self.formula.block && self.alignment.is_some_and(|align| {
+                alignment::edit(source, self.range.start, align)
+                    .is_some_and(|(range, text)| source.slice(range).to_string() != text)
+            })
+    }
     fn refresh_geometry(&mut self, changed: bool) {
         if changed {
             let list = ratex_layout::to_display_list(&geometry::layout_row(&self.root));
@@ -319,6 +328,11 @@ impl Session {
 }
 
 impl SourcePresentation {
+    pub(super) fn formula_has_pending_input(&self, cx: &App) -> bool {
+        self.formula.as_ref().is_some_and(|session| {
+            session.has_pending_input(self.document.read(cx).source())
+        })
+    }
     pub(super) fn sync_formula_surface(&mut self, cx: &Context<Self>) {
         self.math.editor = self.formula.as_ref().map(|session| {
             (
@@ -526,6 +540,7 @@ impl SourcePresentation {
                 });
             self.command(
                 Command::BatchReplaceSelected {
+                    kind: EditKind::Command,
                     edits,
                     selection: Selection::caret(if backward { before } else { after }),
                 },
@@ -619,7 +634,13 @@ impl SourcePresentation {
                 self.command(Command::Select(selected), window, cx);
                 true
             }
-            Command::Reload { .. } => true,
+            Command::Reload { .. } => {
+                if self.formula_has_pending_input(cx) {
+                    return true;
+                }
+                self.finish_formula(false, false, window, cx);
+                false
+            }
             Command::Replace {
                 text,
                 kind: EditKind::Paste,
@@ -874,9 +895,11 @@ impl SourcePresentation {
     }
     pub(super) fn formula_changed(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.input_generation = self.input_generation.wrapping_add(1);
-        self.document.update(cx, |document, _| {
-            document.pending_input_generation = document.pending_input_generation.wrapping_add(1);
-        });
+        if self.formula_has_pending_input(cx) {
+            self.document.update(cx, |document, _| {
+                document.pending_input_generation = document.pending_input_generation.wrapping_add(1);
+            });
+        }
         if let Some(session) = &mut self.formula {
             session.generation = session.generation.wrapping_add(1);
             session.refresh_geometry(true);
@@ -1148,7 +1171,13 @@ impl SourcePresentation {
             .items_center()
             .gap_1()
             .px_3()
-            .py_1();
+            .py_1()
+            .on_mouse_down(MouseButton::Left, |_, window, cx| {
+                // Tool activation must not bubble into the document's pointer selection,
+                // which releases (and commits) the active formula before Cancel runs.
+                window.prevent_default();
+                cx.stop_propagation();
+            });
         for (id, key, action) in [
             (
                 "formula-commit",
@@ -1171,7 +1200,8 @@ impl SourcePresentation {
                     .small()
                     .ghost()
                     .label(t(key))
-                    .on_click(cx.listener(move |_, _, window, cx| {
+                    .on_click(cx.listener(move |view, _, window, cx| {
+                        view.focus.focus(window, cx);
                         window.dispatch_action(action.boxed_clone(), cx)
                     })),
             );

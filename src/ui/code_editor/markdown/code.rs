@@ -334,6 +334,7 @@ impl SourcePresentation {
             let at = fence.body.start - fence.language.len() + language.len();
             self.command(
                 Command::BatchReplaceSelected {
+                    kind: EditKind::Command,
                     edits: vec![(fence.language.clone(), language.to_owned())],
                     selection: Selection::caret(at),
                 },
@@ -512,6 +513,7 @@ impl SourcePresentation {
                 let (text, _, caret) = body_input(&text, &prefix, first, terminal, None);
                 (
                     Command::BatchReplaceSelected {
+                        kind: EditKind::Command,
                         edits: vec![(range.clone(), text)],
                         selection: Selection::caret(range.start + caret),
                     },
@@ -521,6 +523,7 @@ impl SourcePresentation {
             Command::BatchReplaceSelected {
                 mut edits,
                 selection,
+                kind,
             } if edits.len() == 1 && !edits[0].1.is_empty() => {
                 let (_, original) = edits.pop().unwrap();
                 let relative = selection
@@ -545,6 +548,7 @@ impl SourcePresentation {
                     .unwrap_or(text.len());
                 (
                     Command::BatchReplaceSelected {
+                        kind,
                         edits: vec![(range.clone(), text)],
                         selection: Selection::caret(range.start + caret),
                     },
@@ -634,6 +638,7 @@ impl SourcePresentation {
         if !edits.is_empty() {
             self.command(
                 Command::BatchReplaceSelected {
+                    kind: EditKind::Command,
                     edits,
                     selection: mapped,
                 },

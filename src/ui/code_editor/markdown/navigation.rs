@@ -313,6 +313,7 @@ impl SourcePresentation {
             .map(|range| at.min(range.end).saturating_sub(range.start))
             .sum();
         Command::BatchReplaceSelected {
+            kind: EditKind::Command,
             edits: ranges
                 .into_iter()
                 .map(|range| (range, String::new()))

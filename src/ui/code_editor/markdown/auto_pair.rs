@@ -17,6 +17,28 @@ fn word(ch: char) -> bool {
 }
 
 impl SourcePresentation {
+    fn accepts_body_pair(&self, range: &Range<usize>, cx: &App) -> bool {
+        let Some(first) = self.projection.leaf_at(range.start) else {
+            return false;
+        };
+        if range.end <= first.range.end {
+            return first.accepts_pair(range);
+        }
+        let source = self.document.read(cx).source();
+        let mut covered = range.start;
+        for leaf in self.projection.leaves.iter().filter(|leaf| {
+            leaf.range.start < range.end && range.start < leaf.range.end
+        }) {
+            if !matches!(leaf.kind, Kind::Prose)
+                || !source.slice(covered..leaf.range.start.max(covered)).chars().all(char::is_whitespace)
+                || !leaf.accepts_pair(&(range.start.max(leaf.range.start)..range.end.min(leaf.range.end)))
+            {
+                return false;
+            }
+            covered = range.end.min(leaf.range.end);
+        }
+        covered == range.end
+    }
     pub(super) fn auto_pair(&self, command: Command, cx: &App) -> Command {
         if !matches!(
             command,
@@ -41,7 +63,7 @@ impl SourcePresentation {
         let Some(leaf) = self.projection.leaf_at(range.start) else {
             return command;
         };
-        if !leaf.accepts_pair(&range) && !self.code_accepts_pair(&range, cx) {
+        if !self.accepts_body_pair(&range, cx) && !self.code_accepts_pair(&range, cx) {
             return command;
         }
         let document = self.document.read(cx);
@@ -50,7 +72,7 @@ impl SourcePresentation {
             .boundary(range.start.saturating_sub(4), false)
             .max(leaf.range.start);
         let prev = source.slice(start..range.start).chars().last();
-        let next = source.slice(range.end..leaf.range.end).chars().next();
+        let next = source.chars_at(range.end).next();
         if matches!(command, Command::Backspace) && range.is_empty() {
             if let (Some(open), Some(close)) = (prev, next)
                 && closer(open) == Some(close)
@@ -62,6 +84,7 @@ impl SourcePresentation {
                     ))
             {
                 return Command::BatchReplaceSelected {
+                    kind: EditKind::Command,
                     edits: vec![(
                         range.start - open.len_utf8()..range.end + close.len_utf8(),
                         String::new(),
@@ -89,7 +112,7 @@ impl SourcePresentation {
         }
         if range.is_empty() && matches!(ch, ')' | ']' | '}' | '>' | '\'' | '"') && next == Some(ch)
         {
-            return Command::Select(Selection::caret(range.start + ch.len_utf8()));
+            return Command::SkipPairedCloser(range.start + ch.len_utf8());
         }
         let Some(close) = closer(ch) else {
             return command;
@@ -101,10 +124,19 @@ impl SourcePresentation {
         {
             return command;
         }
-        let inner = source.slice(range.clone()).to_string();
-        let caret = range.start + ch.len_utf8() + inner.len();
+        let caret = range.end + ch.len_utf8();
+        let (edits, kind) = if range.is_empty() {
+            (vec![(range, format!("{ch}{close}"))], EditKind::Typing)
+        } else {
+            // Insert at the edges: selected source and each disk line ending stay untouched.
+            (
+                vec![(range.start..range.start, ch.to_string()), (range.end..range.end, close.to_string())],
+                EditKind::Command,
+            )
+        };
         Command::BatchReplaceSelected {
-            edits: vec![(range, format!("{ch}{inner}{close}"))],
+            edits,
+            kind,
             selection: Selection::caret(caret),
         }
     }

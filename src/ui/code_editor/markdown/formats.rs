@@ -1,5 +1,5 @@
 //! Explicit inline commands. Source spelling and the document history remain authoritative.
-use super::{Command, Selection, SourcePresentation};
+use super::{Command, EditKind, Selection, SourcePresentation};
 use crate::ui::i18n::L10nKey;
 use gpui_kit::{Action, App, Context, KeyBinding, KeyBindingContextPredicate, Window};
 use markdown::mdast::Node;
@@ -629,7 +629,7 @@ fn edit(
     if source[body.end..owner.end] != close {
         edits.push((body.end..owner.end, close));
     }
-    (!edits.is_empty()).then_some(Command::BatchReplaceSelected { edits, selection })
+    (!edits.is_empty()).then_some(Command::BatchReplaceSelected { edits, selection, kind: EditKind::Command })
 }
 
 fn coverage(root: &Node, decorations: &[Decoration]) -> Vec<(Format, Range<usize>)> {
