@@ -131,8 +131,11 @@ impl SourcePresentation {
             }
             menu
         });
-        self.formula_tools.subscription = Some(cx.subscribe_in(&menu, window, |view, _, _: &DismissEvent, window, cx| {
-            view.formula_tools.menu = None; view.focus.focus(window, cx); cx.notify();
+        self.formula_tools.subscription = Some(cx.subscribe_in(&menu, window, |view, menu, _: &DismissEvent, window, cx| {
+            let restore = menu.read(cx).focus_handle(cx).contains_focused(window, cx);
+            view.formula_tools.menu = None;
+            if restore { view.focus.focus(window, cx); }
+            cx.notify();
         }));
         self.formula_tools.menu = Some((menu.clone(), position));
         menu.read(cx).focus_handle(cx).focus(window, cx); cx.notify();
@@ -190,9 +193,11 @@ impl SourcePresentation {
         }).detach();
         cx.notify();
     }
-    fn finish_formula_export(&mut self, error: Option<String>, window: &mut Window, cx: &mut Context<Self>) {
+    fn finish_formula_export(&mut self, error: Option<String>, _: &mut Window, cx: &mut Context<Self>) {
         self.formula_tools.exporting = false; self.formula_tools.error = error;
-        self.focus.focus(window, cx); cx.notify();
+        // The OS dialog and PopupMenu restore their own focus. A late render or
+        // write result must not focus an old presentation over a newer preedit.
+        cx.notify();
     }
     pub(in crate::ui::code_editor::markdown::source) fn formula_overlay(&self, window: &Window) -> Option<AnyElement> {
         self.formula_tools.menu.as_ref().map(|(menu, position)| deferred(anchored().position(*position)
