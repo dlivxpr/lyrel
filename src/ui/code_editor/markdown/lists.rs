@@ -238,7 +238,10 @@ pub(super) fn line_break(
             } else {
                 prefix.content
             };
-            continuation.replace_range(marker.start..end, &" ".repeat(end - marker.start));
+            continuation.replace_range(
+                marker.start..end,
+                &" ".repeat(column(&text, end) - column(&text, marker.start)),
+            );
         }
     } else {
         if let Some(at) = prefix.task {
@@ -269,23 +272,42 @@ pub(super) fn line_break(
     );
 }
 
-fn outdent_width(indent: &str, width: usize) -> usize {
-    if indent.starts_with('\t') {
-        1
-    } else {
-        indent
-            .bytes()
-            .take(width)
-            .take_while(|byte| *byte == b' ')
-            .count()
-    }
+fn column(text: &str, end: usize) -> usize {
+    text.as_bytes()[..end].iter().fold(0, |column, byte| {
+        if *byte == b'\t' { column + 4 - column % 4 } else { column + 1 }
+    })
 }
 
-fn list_outdent_step(document: &MarkdownDocument, row: usize, prefix: &Prefix, width: usize) -> usize {
+fn outdent_edit(text: &str, indent: Range<usize>, width: usize) -> Option<(Range<usize>, String)> {
+    let mut at_column = column(text, indent.start);
+    let target = column(text, indent.end).saturating_sub(width).max(at_column);
+    for at in indent.clone() {
+        let next = if text.as_bytes()[at] == b'\t' {
+            at_column + 4 - at_column % 4
+        } else {
+            at_column + 1
+        };
+        if next > target {
+            return Some((at..indent.end, " ".repeat(target - at_column)));
+        }
+        at_column = next;
+    }
+    None
+}
+
+fn list_outdent_step(
+    document: &MarkdownDocument,
+    row: usize,
+    text: &str,
+    prefix: &Prefix,
+    width: usize,
+) -> usize {
     if prefix.indent.is_empty() {
         return 0;
     }
     let quotes = prefix.outer_quotes();
+    let current_column = column(text, prefix.indent.end);
+    let indentation_width = current_column - column(text, prefix.indent.start);
     for previous_row in (0..row).rev() {
         let (_, text, previous) = line(document, document.source().line_start_offset(previous_row));
         if text.trim().is_empty() {
@@ -295,14 +317,15 @@ fn list_outdent_step(document: &MarkdownDocument, row: usize, prefix: &Prefix, w
             break;
         }
         let indentation = previous.list_indent(&text, quotes);
-        if indentation.end < prefix.indent.end {
+        let previous_column = column(&text, indentation.end);
+        if previous_column < current_column {
             if previous.marker.is_some() && previous.outer_quotes() == quotes {
-                return (prefix.indent.end - indentation.end).min(prefix.indent.len());
+                return (current_column - previous_column).min(indentation_width);
             }
             break;
         }
     }
-    width.max(1).min(prefix.indent.len())
+    width.max(1).min(indentation_width)
 }
 
 pub(super) fn backspace(document: &mut MarkdownDocument, state: &mut PresentationState) {
@@ -371,14 +394,15 @@ pub(super) fn indent(
     if last_row > first_row && document.source().line_start_offset(last_row) == selected.end {
         last_row -= 1;
     }
-    let (_, _, first) = line(document, document.source().line_start_offset(first_row));
+    let (_, first_text, first) = line(document, document.source().line_start_offset(first_row));
     if !first.is_structure() {
         return;
     }
     let quotes = first.outer_quotes();
+    let first_column = column(&first_text, first.indent.end);
     let mut step = width.max(1);
     if first.marker.is_some() && outdent {
-        step = list_outdent_step(document, first_row, &first, width);
+        step = list_outdent_step(document, first_row, &first_text, &first, width);
     } else if first.marker.is_some() {
         // Match the preceding item's source convention, not EditorConfig's
         // unrelated indentation default. Existing markers are never rewritten.
@@ -392,16 +416,17 @@ pub(super) fn indent(
                 break;
             }
             let previous_indent = previous.list_indent(&text, quotes);
+            let previous_column = column(&text, previous_indent.end);
             if let Some(marker) = previous.marker.as_ref().filter(|_| previous.outer_quotes() == quotes) {
-                if previous_indent.end == first.indent.end {
-                    step = marker.len();
+                if previous_column == first_column {
+                    step = column(&text, marker.end) - column(&text, marker.start);
                     parent = true;
                     break;
                 }
             }
             // Do not reach through prose to an unrelated list farther above.
-            if (previous.marker.is_none() && previous_indent.end <= first.indent.end)
-                || previous_indent.end < first.indent.end
+            if (previous.marker.is_none() && previous_column <= first_column)
+                || previous_column < first_column
             {
                 break;
             }
@@ -412,18 +437,19 @@ pub(super) fn indent(
     }
     // The last explicitly selected item owns its descendants. Move that
     // subtree with it, stopping before the next sibling's untouched marker.
-    let (_, _, last) = line(document, document.source().line_start_offset(last_row));
-    let tail = if last.marker.is_none() && first.marker.is_some() {
+    let (_, last_text, last) = line(document, document.source().line_start_offset(last_row));
+    let (tail_text, tail) = if last.marker.is_none() && first.marker.is_some() {
         (first_row..last_row)
             .rev()
             .find_map(|row| {
-                let (_, _, prefix) = line(document, document.source().line_start_offset(row));
-                prefix.marker.is_some().then_some(prefix)
+                let (_, text, prefix) = line(document, document.source().line_start_offset(row));
+                prefix.marker.is_some().then_some((text, prefix))
             })
-            .unwrap_or(last)
+            .unwrap_or((last_text, last))
     } else {
-        last
+        (last_text, last)
     };
+    let tail_column = column(&tail_text, tail.indent.end);
     let mut row = last_row + 1;
     loop {
         let start = document.source().line_start_offset(row);
@@ -440,7 +466,7 @@ pub(super) fn indent(
             // Compare the actual next container's source column, not just its
             // quote count: an unindented quote after a list is not its child.
             candidate.outer_quotes() >= tail.outer_quotes()
-                && candidate.list_indent(&text, tail.outer_quotes()).end > tail.indent.end
+                && column(&text, candidate.list_indent(&text, tail.outer_quotes()).end) > tail_column
         } else {
             candidate.quotes.len() > tail.quotes.len()
                 || (candidate.quotes.len() == tail.quotes.len()
@@ -453,7 +479,7 @@ pub(super) fn indent(
         row += 1;
     }
     let mut edits = Vec::new();
-    let mut group_indent = first.indent.end;
+    let mut group_indent = first_column;
     for row in first_row..=last_row {
         let start = document.source().line_start_offset(row);
         let (_, text, prefix) = line(document, start);
@@ -465,28 +491,25 @@ pub(super) fn indent(
         } else {
             prefix.indent.clone()
         };
+        let indentation_column = column(&text, indentation.end);
         if outdent && first.marker.is_some() && prefix.marker.is_some()
-            && indentation.end < group_indent
+            && indentation_column < group_indent
         {
             // A shallower selected item begins a new subtree. A root item is
             // already outdented; leave its descendants at their existing level.
-            group_indent = indentation.end;
-            step = list_outdent_step(document, row, &prefix, width);
+            group_indent = indentation_column;
+            step = list_outdent_step(document, row, &text, &prefix, width);
         }
         if outdent {
             if first.marker.is_some() {
-                let remove = outdent_width(&text[indentation.clone()], step);
-                if remove > 0 {
-                    edits.push((
-                        start + indentation.start..start + indentation.start + remove,
-                        String::new(),
-                    ));
+                if let Some((range, replacement)) = outdent_edit(&text, indentation, step) {
+                    edits.push((start + range.start..start + range.end, replacement));
                 }
             } else if let Some(quote) = prefix.quotes.get(first.quotes.len().saturating_sub(1)) {
                 edits.push((start + quote.start..start + quote.end, String::new()));
             }
         } else {
-            let insertion = start + indentation.start;
+            let insertion = start + if first.marker.is_some() { indentation.end } else { indentation.start };
             edits.push((
                 insertion..insertion,
                 if first.marker.is_some() {
@@ -564,7 +587,7 @@ mod tests {
         );
         assert_eq!(
             state.selection(),
-            Selection::new(selection.anchor + 10, selection.head + 5)
+            Selection::new(selection.anchor + 5, selection.head + 5)
         );
         document.command(&mut state, Command::Undo);
         assert_eq!(document.source().to_string(), original);
@@ -577,6 +600,34 @@ mod tests {
         );
         document.command(&mut state, Command::Undo);
         assert_eq!(document.source().to_string(), original);
+    }
+
+    #[test]
+    fn mixed_tab_indentation_moves_one_structural_level_without_rewriting_markers() {
+        let original = "- root\n\t+ sibling\n\n\t009) target\n\t     * child\n- untouched";
+        let mut document = MarkdownDocument::new(original.into(), TextFormat::default());
+        let at = original.find("target").unwrap();
+        let mut state = PresentationState::new(Selection::caret(at));
+        document.command(
+            &mut state,
+            Command::ListIndent { outdent: false, width: 4, at: None },
+        );
+        assert_eq!(
+            document.source().to_string(),
+            "- root\n\t+ sibling\n\n\t  009) target\n\t       * child\n- untouched"
+        );
+        document.command(
+            &mut state,
+            Command::ListIndent { outdent: true, width: 4, at: None },
+        );
+        assert_eq!(document.source().to_string(), original);
+        assert_eq!(state.selection(), Selection::caret(at));
+        let mut document = MarkdownDocument::new("-\ttext".into(), TextFormat::default());
+        let mut state = PresentationState::new(Selection::caret(6));
+        document.command(&mut state, Command::ListBreak { hard: true, at: None });
+        assert_eq!(document.source().to_string(), "-\ttext  \n    ");
+        document.command(&mut state, Command::Undo);
+        assert_eq!(document.source().to_string(), "-\ttext");
     }
 
     #[test]
