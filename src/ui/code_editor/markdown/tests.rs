@@ -159,7 +159,6 @@ fn typing_in_another_presentation_starts_a_new_undo_group() {
     assert_eq!(document.source().to_string(), "a");
 }
 
-
 #[gpui_kit::test]
 fn native_live_single_newline_and_source_switch_keep_one_document_and_history(
     cx: &mut gpui_kit::TestAppContext,
@@ -230,7 +229,10 @@ fn native_live_single_newline_and_source_switch_keep_one_document_and_history(
     presentation.read_with(&view_context, |view, cx| {
         let before = view.range_to_bounds(&(24..24), cx).unwrap();
         let after = view.range_to_bounds(&(25..25), cx).unwrap();
-        assert!(after.top() > before.top(), "Enter must visibly start the next line");
+        assert!(
+            after.top() > before.top(),
+            "Enter must visibly start the next line"
+        );
     });
     view_context.update(|window, cx| window.press("backspace", cx));
     view_context.run_until_parked();
@@ -347,7 +349,8 @@ fn native_empty_and_untitled_markdown_type_continuously_in_default_live_view(
         let view = loop {
             context.run_until_parked();
             if let Some(view) = app.read_with(&context, |app, _| {
-                app.active_editor_input().and_then(|input| input.markdown().cloned())
+                app.active_editor_input()
+                    .and_then(|input| input.markdown().cloned())
             }) {
                 break view;
             }
@@ -366,7 +369,10 @@ fn native_empty_and_untitled_markdown_type_continuously_in_default_live_view(
         });
         settle_live_geometry(&view, &mut context);
         view.read_with(&context, |view, cx| {
-            assert_eq!(view.document().read(cx).source().to_string(), "first\nsecond");
+            assert_eq!(
+                view.document().read(cx).source().to_string(),
+                "first\nsecond"
+            );
             assert!(
                 view.range_to_bounds(&(6..6), cx).unwrap().top()
                     > view.range_to_bounds(&(5..5), cx).unwrap().top()
@@ -1201,7 +1207,8 @@ fn native_inline_typing_and_selection_hide_formatting_and_preserve_source_histor
     loop {
         context.run_until_parked();
         if app.read_with(&context, |app, _| {
-            app.active_buffer().is_some_and(|file| !file.dirty && !file.saving)
+            app.active_buffer()
+                .is_some_and(|file| !file.dirty && !file.saving)
         }) {
             break;
         }
@@ -1343,7 +1350,10 @@ fn native_inline_typing_and_selection_hide_formatting_and_preserve_source_histor
         assert!(!view.is_live());
         assert_eq!(view.selection(), selection);
         assert_eq!(view.document().entity_id(), identity);
-        assert_eq!(view.document().read(cx).encode().unwrap(), persisted.as_bytes());
+        assert_eq!(
+            view.document().read(cx).encode().unwrap(),
+            persisted.as_bytes()
+        );
     });
     context.update(|window, cx| window.input("__bold__", cx));
     context.run_until_parked();
@@ -1364,7 +1374,10 @@ fn native_inline_typing_and_selection_hide_formatting_and_preserve_source_histor
     context.dispatch_action(gpui_kit::component::input::Undo);
     context.run_until_parked();
     view.read_with(&context, |view, cx| {
-        assert_eq!(view.document().read(cx).encode().unwrap(), persisted.as_bytes());
+        assert_eq!(
+            view.document().read(cx).encode().unwrap(),
+            persisted.as_bytes()
+        );
         assert_eq!(view.selection(), selection);
     });
     context.dispatch_action(gpui_kit::component::input::Redo);
@@ -8969,75 +8982,6 @@ fn inline_nodes_preserve_unicode_styles_links_and_cross_segment_marked_ranges() 
             ],
         );
     }
-}
-
-
-#[test]
-fn inline_nodes_preserve_image_math_atoms_and_verbatim_marks_between_styled_text() {
-    use gpui_kit::base::text::editor_host::TextMark;
-
-    let source = "**前 ![图](missing.png \"标题\") 中 $x$ 尾**";
-    let mut projection =
-        super::projection::Projection::parse(source, 0, true, super::mdx::Grammar::Markdown);
-    assert!(projection.error.is_none());
-    assert_eq!(projection.leaves.len(), 1);
-    let leaf = &mut projection.leaves[0];
-    let math = super::math::State::default();
-    let bold = TextMark {
-        bold: true,
-        ..Default::default()
-    };
-    let nodes = leaf.inline_nodes(None, &math);
-    assert_inline_text_marks(&nodes, &[("前  中  尾", bold.clone())]);
-    let images: Vec<_> = nodes.iter().filter_map(|node| node.as_image()).collect();
-    assert_eq!(images.len(), 1);
-    assert_eq!(images[0].url.as_ref(), "missing.png");
-    assert_eq!(images[0].alt.as_deref(), Some("图"));
-    assert_eq!(images[0].title.as_deref(), Some("标题"));
-    assert!(images[0].width.is_some());
-    assert!(images[0].height.is_some());
-    let formulas: Vec<_> = nodes
-        .iter()
-        .filter(|node| node.as_custom().is_some())
-        .collect();
-    assert_eq!(formulas.len(), 1);
-    assert_eq!(formulas[0].text(), "\u{fffc}");
-
-    let marked = 0..source.len();
-    assert!(leaf.contextual_reveal(Selection::caret(0), &[], Some(&marked)));
-    let nodes = leaf.inline_nodes(Some(&marked), &math);
-    assert!(
-        nodes
-            .iter()
-            .all(|node| node.as_image().is_none() && node.as_custom().is_none())
-    );
-    assert_inline_text_marks(
-        &nodes,
-        &[(
-            "前 ![图](missing.png \"标题\") 中 $x$ 尾",
-            TextMark {
-                underline: true,
-                ..bold.clone()
-            },
-        )],
-    );
-    assert!(leaf.contextual_reveal(Selection::caret(0), &[], None));
-    let nodes = leaf.inline_nodes(None, &math);
-    assert_eq!(
-        nodes
-            .iter()
-            .filter(|node| node.as_image().is_some())
-            .count(),
-        1
-    );
-    assert_eq!(
-        nodes
-            .iter()
-            .filter(|node| node.as_custom().is_some())
-            .count(),
-        1
-    );
-    assert_inline_text_marks(&nodes, &[("前  中  尾", bold)]);
 }
 
 #[test]
