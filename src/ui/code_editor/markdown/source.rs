@@ -20,6 +20,8 @@ mod link_interaction;
 
 #[path = "assets.rs"]
 mod assets;
+#[path = "image_edit.rs"]
+mod image_edit;
 #[path = "navigation.rs"]
 mod navigation;
 
@@ -98,6 +100,7 @@ pub(crate) struct SourcePresentation {
     assets: assets::InsertionState,
     formats: formats::State,
     code: code::State,
+    image_resize: Option<image_edit::Resize>,
     _observe: Subscription,
     mdx_state: super::mdx::ViewState,
 }
@@ -156,7 +159,6 @@ impl SourcePresentation {
             }
             if let DocumentEvent::Edited(transaction) = event {
                 this.pointer_link = None;
-                this.assets.rebase(transaction);
                 this.state.rebase(transaction);
                 if transaction.origin != this.state.id {
                     for selection in &mut this.extra_selections {
@@ -265,6 +267,7 @@ impl SourcePresentation {
             selection_notification: false,
             assets: assets::InsertionState::default(),
             code: code::State::default(),
+            image_resize: None,
             _observe: observe,
             mdx_state: super::mdx::ViewState::default(),
         };
@@ -422,6 +425,8 @@ impl SourcePresentation {
         urls.dedup();
         self.document
             .update(cx, |document, cx| document.sync_images(urls, consent, cx));
+        let document = self.document.read(cx);
+        for leaf in &mut self.projection.leaves { leaf.image_dimensions(&document.images.states); }
     }
     fn schedule_mermaid(&mut self, cx: &mut Context<Self>) {
         if !self.live || self.projection.revision != self.document.read(cx).revision() {
@@ -1931,6 +1936,7 @@ impl SourcePresentation {
             );
             return;
         }
+        if self.delete_adjacent_image(backward, window, cx) { return; }
         let at = self.state.selection.head;
         if let Some(range) = self.adjacent_block_atom(at, backward, cx) {
             let command = self.deletion_command(range, cx);
@@ -2051,6 +2057,10 @@ impl SourcePresentation {
         let Some(item) = cx.read_from_clipboard() else {
             return;
         };
+        if let Some(paths) = item.entries().iter().find_map(|entry| match entry { ClipboardEntry::ExternalPaths(paths) => Some(paths), _ => None }) {
+            let inputs: Vec<_> = paths.paths().iter().filter(|path| assets::is_image_path(path)).cloned().map(assets::IncomingImage::File).collect();
+            if !inputs.is_empty() { self.insert_images(inputs, window, cx); return; }
+        }
         if item
             .entries()
             .iter()
@@ -2667,6 +2677,7 @@ impl Render for SourcePresentation {
             } else {
                 rendered
             };
+            let rendered = if self.live { self.image_surface(leaf, rendered, cx) } else { rendered };
             block = block.child(MeasuredBlock {
                 view: cx.entity(),
                 id: leaf.id,
@@ -2889,6 +2900,7 @@ impl Render for SourcePresentation {
                     }
                 })
                 .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
+                    if this.image_key(event, window, cx) { cx.stop_propagation(); return; }
                     let key = &event.keystroke;
                     if this.live && key.modifiers.alt && !key.modifiers.control && !key.modifiers.platform
                         && matches!(key.key.as_str(), "pageup" | "pagedown") {
@@ -2923,6 +2935,13 @@ impl Render for SourcePresentation {
                 .on_action(cx.listener(|this, _: &formats::CustomHighlightColor, window, cx| this.custom_format_color(formats::Format::HighlightColor, window, cx)))
                 .on_action(cx.listener(|this, _: &formats::ApplyCustomColor, window, cx| this.apply_format_color(window, cx)))
                 .on_action(cx.listener(|this, _: &formats::CancelCustomColor, window, cx| { this.cancel_format_color(window, cx); }))
+                .on_action(cx.listener(|view, _: &image_edit::EditImage, window, cx| view.edit_image(window, cx)))
+                .on_action(cx.listener(|view, _: &image_edit::PreviewImage, window, cx| view.preview_image(window, cx)))
+                .on_action(cx.listener(|view, _: &image_edit::DeleteImage, window, cx| view.delete_image(window, cx)))
+                .on_action(cx.listener(|view, _: &image_edit::FitImages, window, cx| view.fit_images(window, cx)))
+                .on_mouse_move(cx.listener(|view, event: &MouseMoveEvent, _, cx| {
+                    if view.move_image_resize(event.position, cx) { cx.stop_propagation(); }
+                }))
                 .on_action(cx.listener(|this, _: &mermaid_authoring::EditDiagramSource, window, cx| {
                     this.edit_mermaid_source(None, window, cx);
                 }))
@@ -2957,6 +2976,7 @@ impl Render for SourcePresentation {
                 .on_mouse_up(
                     MouseButton::Left,
                     cx.listener(|this, event: &MouseUpEvent, window, cx| {
+                        if this.finish_image_resize(false, window, cx) { cx.stop_propagation(); return; }
                         this.dragging = false;
                         this.drag_pointer = None;
                         this.drag_origin = None;
@@ -2968,7 +2988,8 @@ impl Render for SourcePresentation {
                 )
                 .on_mouse_up_out(
                     MouseButton::Left,
-                    cx.listener(|this, _, _, _| {
+                    cx.listener(|this, _, window, cx| {
+                        this.finish_image_resize(false, window, cx);
                         this.dragging = false;
                         this.drag_pointer = None;
                         this.drag_origin = None;
@@ -3178,6 +3199,8 @@ impl Render for SourcePresentation {
                     );
                 }))
                 .on_action(cx.listener(|this, _: &actions::Escape, window, cx| {
+                    if this.finish_image_resize(true, window, cx) { return; }
+                    if this.cancel_image_insertion(cx) { return; }
                     if this.state.composition.is_some() {
                         this.command(Command::CancelComposition, window, cx);
                     } else if this.cancel_format_color(window, cx) {
@@ -3197,6 +3220,7 @@ impl Render for SourcePresentation {
                 ))
                 .child(image_status)
                 .child(self.format_toolbar(window, cx))
+                .child(self.image_toolbar(cx))
                 .when(self.live, |root| root.child(self.table_insert_button(cx)))
                 .when(self.live && self.projection.links.at(self.state.selection.head()).is_some(), |root| {
                     use gpui_kit::component::button::{Button, ButtonVariants as _};

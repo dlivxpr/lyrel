@@ -1689,6 +1689,18 @@ pub fn translate_en(key: L10nKey) -> &'static str {
         L10nKey::MarkdownImageSelectionChanged => {
             "The image was saved, but the selected text changed. No link was inserted."
         }
+        L10nKey::MarkdownImageEdit => "Edit image…",
+        L10nKey::MarkdownImagePreview => "Preview image…",
+        L10nKey::MarkdownImageCommands => "Image commands",
+        L10nKey::MarkdownImageAlt => "Alternative text",
+        L10nKey::MarkdownImageSource => "Image source",
+        L10nKey::MarkdownImageWidth => "Width (px; empty for default)",
+        L10nKey::MarkdownImageFit => "Fit document images",
+        L10nKey::MarkdownImageDelete => "Delete image",
+        L10nKey::MarkdownImageResize => "Resize image",
+        L10nKey::MarkdownImageApply => "Apply image changes",
+        L10nKey::MarkdownImageInvalid => "Use single-line text and a positive whole-number width, or leave width empty.",
+        L10nKey::MarkdownImageChanged => "The document or editing context changed. Cancel and reopen image editing.",
         L10nKey::FileTreeContextShowDotfiles => "Show Dotfiles",
         L10nKey::FileDropIntoItself => "A folder cannot be copied into itself.",
         L10nKey::FileDropNotHere => "Not on this machine.",

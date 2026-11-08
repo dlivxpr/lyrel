@@ -398,6 +398,26 @@ impl Leaf {
             .iter()
             .filter_map(|segment| segment.image.as_ref().map(|image| image.url.as_str()))
     }
+    pub(super) fn image_objects(&self) -> impl Iterator<Item = (Range<usize>, &super::images::Image)> {
+        self.segments.iter().filter_map(|segment| segment.image.as_ref().map(|image| (segment.source.clone(), image)))
+    }
+    pub(super) fn resize_image(&mut self, range: &Range<usize>, width: Option<u32>) -> bool {
+        let Some(image) = self.segments.iter_mut().find(|segment| &segment.source == range).and_then(|segment| segment.image.as_mut()) else { return false; };
+        image.width = width;
+        self.version = self.version.wrapping_add(1);
+        true
+    }
+    pub(super) fn image_dimensions(&mut self, states: &std::collections::HashMap<String, super::images::State>) {
+        for segment in &mut self.segments {
+            if let Some(image) = &mut segment.image {
+                if let Some(super::images::State::Ready(ready)) = states.get(&image.url) {
+                    let size = ready.size(0);
+                    let dimensions = Some((size.width.0, size.height.0));
+                    if image.dimensions != dimensions { image.dimensions = dimensions; self.version = self.version.wrapping_add(1); }
+                }
+            }
+        }
+    }
     pub fn inline_nodes(
         &self,
         marked: Option<&Range<usize>>,
@@ -459,8 +479,11 @@ impl Leaf {
                     node.title = image.title.clone().map(Into::into);
                     // Reserve geometry before loading, so completion cannot move the
                     // caret or scroll anchor. Images fit inside this native atom.
-                    node.width = Some(gpui_kit::rems(12.).into());
-                    node.height = Some(gpui_kit::rems(8.).into());
+                    node.width = Some(image.width.map_or_else(|| gpui_kit::rems(12.).into(), |width| gpui_kit::px(width as f32).into()));
+                    node.height = Some(image.width.map_or_else(|| gpui_kit::rems(8.).into(), |width| {
+                        let ratio = image.dimensions.map_or(2. / 3., |(w, h)| h as f32 / w.max(1) as f32);
+                        gpui_kit::px(width as f32 * ratio).into()
+                    }));
                     InlineNode::image(node)
                 } else if let Some(formula) = segment.math.as_ref().filter(|_| !segment.verbatim) {
                     math.inline_node(formula)
@@ -1127,7 +1150,11 @@ impl Projection {
         let Some(position) = node.position() else {
             return;
         };
-        let range = position.start.offset..position.end.offset;
+        let mut range = position.start.offset..position.end.offset;
+        if let Some(end) = leaf.segments.last().filter(|segment| segment.image.is_some()).map(|segment| segment.source.end) {
+            range.start = range.start.max(end);
+            if range.start >= range.end { return; }
+        }
         if let Some(decoration) = super::source::formats::wrapper(source, node) {
             leaf.push(decoration.open.clone(), &source[decoration.open]);
             if let Some(children) = node.children() {
@@ -1140,7 +1167,11 @@ impl Projection {
             leaf.push(decoration.close.clone(), &source[decoration.close]);
             return;
         }
-        if let Some(image) = super::images::image(node, &leaf.image_definitions) {
+        if let Some(mut image) = super::images::image(node, &leaf.image_definitions) {
+            if let Some((length, width)) = super::images::width_suffix(&source[range.end..]) {
+                range.end += length;
+                image.width = Some(width);
+            }
             leaf.push_normalized(range.clone(), "\u{FFFC}", &source[range]);
             leaf.segments.last_mut().unwrap().image = Some(image);
             return;

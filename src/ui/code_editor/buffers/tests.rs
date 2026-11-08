@@ -1786,7 +1786,7 @@ fn markdown_untitled_image_cancel_is_unchanged_and_success_waits_for_document_sa
                 .read(cx)
                 .text()
                 .to_string()
-                == "![screenshot](assets/screenshot.png)"
+                == "![screenshot](assets/screenshot.png)\n"
         })
     });
     assert_eq!(std::fs::read(&path).unwrap(), b"");
@@ -1887,7 +1887,7 @@ fn markdown_failed_asset_write_has_no_link_and_late_write_cannot_touch_replaceme
 }
 
 #[gpui_kit::test]
-fn markdown_delayed_image_write_rebases_while_typing_without_losing_text(cx: &mut TestAppContext) {
+fn markdown_delayed_image_write_preserves_newer_typing_and_caret(cx: &mut TestAppContext) {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("typing.md");
     std::fs::write(&path, "original").unwrap();
@@ -1905,16 +1905,14 @@ fn markdown_delayed_image_write_rebases_while_typing_without_losing_text(cx: &mu
     vcx.update(|window, cx| window.input("typed", cx));
     vcx.run_until_parked();
     release.send(()).unwrap();
-    wait_until(&mut vcx, |vcx| {
-        app.read_with(vcx, |app, cx| {
-            app.active_buffer()
-                .unwrap()
-                .input
-                .read(cx)
-                .text()
-                .to_string()
-                == "![screenshot](assets/screenshot.png)typedoriginal"
-        })
+    wait_until(&mut vcx, |vcx| vcx.update(|window, cx| {
+        window.render_frame(cx);
+        window.try_find("markdown-image-insertion-status").is_none()
+    }));
+    app.read_with(&vcx, |app, cx| {
+        let input = &app.active_buffer().unwrap().input;
+        assert_eq!(input.read(cx).text().to_string(), "typedoriginal");
+        assert_eq!(input.markdown().unwrap().read(cx).selection().head(), 5);
     });
     vcx.dispatch_action(gpui_kit::component::input::Undo);
     vcx.run_until_parked();
@@ -1926,7 +1924,7 @@ fn markdown_delayed_image_write_rebases_while_typing_without_losing_text(cx: &mu
                 .read(cx)
                 .text()
                 .to_string(),
-            "typedoriginal"
+            "original"
         )
     });
     assert_eq!(
@@ -1990,7 +1988,7 @@ fn markdown_untitled_host_save_must_finish_before_assets_and_failed_save_never_c
                 .read(cx)
                 .text()
                 .to_string()
-                == "![screenshot](assets/screenshot.png)"
+                == "![screenshot](assets/screenshot.png)\n"
         })
     });
     assert_eq!(
@@ -2067,7 +2065,7 @@ fn markdown_untitled_host_save_must_finish_before_assets_and_failed_save_never_c
                 .read(cx)
                 .text()
                 .to_string()
-                == "![screenshot](assets/screenshot.png)"
+                == "![screenshot](assets/screenshot.png)\n"
         })
     });
     assert_eq!(read_owned(&host, &failed).unwrap(), b"");
