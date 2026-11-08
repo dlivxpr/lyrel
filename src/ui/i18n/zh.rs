@@ -1669,6 +1669,7 @@ pub fn translate_zh(key: L10nKey) -> Option<&'static str> {
         L10nKey::EditorImageLoaded => "图片已加载",
         L10nKey::EditorImageFailed => "图片加载失败",
         L10nKey::EditorTableCommands => "表格…",
+        L10nKey::EditorTableInsert => "插入表格",
         L10nKey::EditorTableInsertRowBefore => "表格：在上方插入行",
         L10nKey::EditorTableInsertRowAfter => "表格：在下方插入行",
         L10nKey::EditorTableDeleteRow => "表格：删除行",

@@ -26,6 +26,9 @@ mod typography;
 #[path = "composition.rs"]
 mod composition;
 
+#[path = "tables/authoring.rs"]
+mod table_authoring;
+
 struct CachedBlock {
     version: u64,
     seen: u64,
@@ -559,6 +562,7 @@ impl SourcePresentation {
                 }
                 let mapped = leaf.source_offset(leaf.display_offset(selection.head));
                 if mapped < selection.head
+                    && !matches!(leaf.kind, Kind::TableCell(_))
                     && self
                         .document
                         .read(cx)
@@ -957,6 +961,7 @@ impl SourcePresentation {
         }
         let disabled = self.active_table().is_none();
         menu.separator()
+            .menu(t(L10nKey::EditorTableInsert), Box::new(InsertTable))
             .menu_with_disabled(
                 t(L10nKey::EditorTableInsertRowBefore),
                 Box::new(InsertRowBefore),
@@ -1050,12 +1055,8 @@ impl SourcePresentation {
             command => command,
         };
         let cell_input = |range: &Range<usize>, text: String, selected| {
-            if self.live
-                && self.projection.leaf_at(range.start).is_some_and(|leaf| {
-                    matches!(leaf.kind, Kind::TableCell(_)) && range.end <= leaf.range.end
-                })
-            {
-                super::tables::input(self.document.read(cx).source(), range, text, selected)
+            if self.extra_selections.is_empty() {
+                self.table_input(range, text, selected, cx)
             } else {
                 (text, selected)
             }
@@ -1095,6 +1096,7 @@ impl SourcePresentation {
             }
             command => command,
         };
+        let command = self.protect_table_replacement(command, cx);
         let marked_before = self.state.marked_range();
         let mut after_extra = None;
         let command = if !self.extra_selections.is_empty() {
@@ -1132,7 +1134,7 @@ impl SourcePresentation {
                                 .map(|range| (range, String::new())),
                         );
                     } else {
-                        edits.push((range, text.clone()));
+                        edits.extend(self.table_replacement(range, text.clone(), cx));
                     }
                 }
                 edits.sort_by_key(|(range, _)| range.start);
@@ -1444,7 +1446,11 @@ impl SourcePresentation {
                 })
             })
             .flatten();
-        let at = if let Some(end) = edge {
+        let table_target = (edge.is_some() || vertical != 0 || extend || self.state.selection.range().is_empty())
+            .then(|| self.table_arrow_target(current, horizontal, vertical, edge, cx)).flatten();
+        let at = if let Some(target) = table_target {
+            target
+        } else if let Some(end) = edge {
             self.logical_line_edge(current, end, cx)
         } else if vertical != 0 {
             self.vertical_target(current, vertical as f32, cx)
@@ -1850,11 +1856,7 @@ impl SourcePresentation {
             self.command(Command::Insert("\n".into()), window, cx);
             return;
         }
-        if self.navigate_table(
-            super::tables::Navigation::Exit { backward: hard },
-            window,
-            cx,
-        ) {
+        if self.enter_table(window, cx) {
             return;
         }
         let mut range = self.state.selection.range();
@@ -2893,6 +2895,7 @@ impl Render for SourcePresentation {
                         this.pointer_link = None;
                     }),
                 )
+                .on_action(cx.listener(|this, _: &super::tables::InsertTable, window, cx| this.insert_table(window, cx)))
                 .on_action(cx.listener(|this, _: &super::tables::InsertRowBefore, window, cx| this.table_command(super::tables::Operation::InsertRowBefore, window, cx)))
                 .on_action(cx.listener(|this, _: &super::tables::InsertRowAfter, window, cx| this.table_command(super::tables::Operation::InsertRowAfter, window, cx)))
                 .on_action(cx.listener(|this, _: &super::tables::DeleteRow, window, cx| this.table_command(super::tables::Operation::DeleteRow, window, cx)))
@@ -3106,6 +3109,7 @@ impl Render for SourcePresentation {
                         .flex_shrink_0().aria_label(status.clone()).text_sm().text_color(cx.theme().muted_foreground).child(status)
                 ))
                 .child(image_status)
+                .when(self.live, |root| root.child(self.table_insert_button(cx)))
                 .when(self.live && self.projection.links.at(self.state.selection.head()).is_some(), |root| {
                     use gpui_kit::component::button::{Button, ButtonVariants as _};
                     use gpui_kit::component::Sizable as _;
