@@ -10006,21 +10006,30 @@ fn native_navigation_pointer_words_lines_and_stationary_offscreen_drag(
         window.pointer_move(outside, Some(MouseButton::Left), cx);
         outside
     });
+    // render_frame only draws. Deliver the platform frame tick as well so
+    // production on_next_frame callbacks run while the pointer stays still.
     for _ in 0..16 {
-        context.update(|window, cx| window.render_frame(cx));
+        context.update(|window, cx| {
+            window.simulate_next_frame(cx);
+            window.render_frame(cx);
+        });
     }
-    let extended = view.read_with(&context, |view, _| {
+    let (extended, offset) = view.read_with(&context, |view, _| {
         assert_eq!(view.selection().anchor, 0);
         assert!(view.scroll_offset().y < gpui_kit::Pixels::ZERO);
         assert!(view.selection().head() > source.find("paragraph 5").unwrap());
-        view.selection().head()
+        (view.selection().head(), view.scroll_offset())
     });
     context.update(|window, cx| window.pointer_up(outside, MouseButton::Left, cx));
     for _ in 0..3 {
-        context.update(|window, cx| window.render_frame(cx));
+        context.update(|window, cx| {
+            window.simulate_next_frame(cx);
+            window.render_frame(cx);
+        });
     }
     view.read_with(&context, |view, cx| {
         assert_eq!(view.selection(), Selection::new(0, extended));
+        assert_eq!(view.scroll_offset(), offset);
         assert_eq!(
             view.document().read(cx).encode().unwrap(),
             source.as_bytes()
@@ -10039,7 +10048,10 @@ fn native_navigation_pointer_words_lines_and_stationary_offscreen_drag(
         above
     });
     for _ in 0..16 {
-        context.update(|window, cx| window.render_frame(cx));
+        context.update(|window, cx| {
+            window.simulate_next_frame(cx);
+            window.render_frame(cx);
+        });
     }
     context.update(|window, cx| window.pointer_up(above, MouseButton::Left, cx));
     view.read_with(&context, |view, cx| {
@@ -10049,6 +10061,37 @@ fn native_navigation_pointer_words_lines_and_stationary_offscreen_drag(
             view.document().read(cx).encode().unwrap(),
             source.as_bytes()
         );
+    });
+    // A canceled offscreen gesture must not resume when focus returns while
+    // the mouse remains held. Exercise the same native pointer/frame route.
+    let (outside, selection, offset) = context.update(|window, cx| {
+        let head = view.read(cx).selection().head();
+        let at = view
+            .read(cx)
+            .range_to_bounds(&(head..head), cx)
+            .unwrap()
+            .center();
+        let outside = gpui_kit::point(
+            at.x,
+            window.find("markdown-source").bounds().bottom() + window.rem_size() * 2.,
+        );
+        window.pointer_down(at, MouseButton::Left, cx);
+        window.pointer_move(outside, Some(MouseButton::Left), cx);
+        window.blur(cx);
+        window.simulate_next_frame(cx);
+        window.render_frame(cx);
+        (outside, view.read(cx).selection(), view.read(cx).scroll_offset())
+    });
+    view.update_in(&mut context, |view, window, cx| {
+        view.focus_handle(cx).focus(window, cx);
+    });
+    context.update(|window, cx| {
+        window.pointer_move(outside, Some(MouseButton::Left), cx);
+        window.simulate_next_frame(cx);
+        window.render_frame(cx);
+        assert_eq!(view.read(cx).selection(), selection);
+        assert_eq!(view.read(cx).scroll_offset(), offset);
+        window.pointer_up(outside, MouseButton::Left, cx);
     });
 }
 
