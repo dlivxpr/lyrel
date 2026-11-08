@@ -265,7 +265,7 @@ impl SourcePresentation {
             document
                 .composition_owner
                 .as_ref()
-                .map(WeakEntity::entity_id),
+                .map(|owner| owner.entity_id()),
         )
     }
     fn retire_native_composition(&self, completed: bool, cx: &mut Context<Self>) {
@@ -1406,7 +1406,9 @@ impl SourcePresentation {
             .flatten()
             .and_then(|atom| mapped.atom_source(atom.start));
         Some(doc.boundary(
-            display.unwrap_or_else(|| mapped.source_offset(leaf.index_for_position(point))),
+            display.unwrap_or_else(|| {
+                mapped.source_offset(navigation::hit_test_grapheme(&mapped.text, leaf, point))
+            }),
             false,
         ))
     }
@@ -1500,7 +1502,7 @@ impl SourcePresentation {
                         .y
                         + leaf.line_height() * 0.25
                 };
-                let display = leaf.index_for_position(point(goal_x, y));
+                let display = navigation::hit_test_grapheme(&mapped.text, leaf, point(goal_x, y));
                 let position = leaf.position_for_index(display);
                 let dy = if backward {
                     caret.y - position.y
@@ -3512,7 +3514,7 @@ impl Element for SourceElement {
         &mut self,
         _: Option<&GlobalElementId>,
         _: Option<&InspectorElementId>,
-        bounds: Bounds<Pixels>,
+        _: Bounds<Pixels>,
         _: &mut (),
         _: &mut (),
         window: &mut Window,
