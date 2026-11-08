@@ -4522,6 +4522,7 @@ fn native_mixed_selection_drag_cut_history_and_mixed_ending_save_reopen(
     settle_live_geometry(&view, &mut context);
     let start = source.find("alpha").unwrap();
     let end = source.find("tail").unwrap() + 2;
+    let copied = "alpha \\* &amp; 中e\u{301} 👩‍💻\r\n\n* root\n  7) nested\r\n\n> quoted\n\n```rust\r\nlet x = 1;\n```\r\n\n| Name | Value |\n| :--- | ---: |\r\n| one | two |\n\n![引用][picture]\r\n\nta";
     for reverse in [false, true] {
         context.update(|window, cx| {
             window.render_frame(cx);
@@ -4550,7 +4551,7 @@ fn native_mixed_selection_drag_cut_history_and_mixed_ending_save_reopen(
             window.press("secondary-c", cx);
             assert_eq!(
                 cx.read_from_clipboard().and_then(|item| item.text()),
-                Some(source[start..end].into())
+                Some(copied.into())
             );
         });
     }
@@ -4585,7 +4586,7 @@ fn native_mixed_selection_drag_cut_history_and_mixed_ending_save_reopen(
         window.press("secondary-c", cx);
         assert_eq!(
             cx.read_from_clipboard().and_then(|item| item.text()),
-            Some(source[start..end].into())
+            Some(copied.into())
         );
         window.press("delete", cx);
     });
