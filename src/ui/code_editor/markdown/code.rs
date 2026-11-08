@@ -266,12 +266,8 @@ impl SourcePresentation {
                 continue;
             };
             leaf.materialize(self.document.read(cx).source());
-            let reveal = self.code.source == Some(leaf.id)
-                || fence.on_fence(self.state.selection)
-                || self
-                    .extra_selections
-                    .iter()
-                    .any(|selection| fence.on_fence(*selection));
+            // Selection may cross hidden syntax without entering local source mode.
+            let reveal = self.code.source == Some(leaf.id);
             let hidden = if reveal {
                 &[][..]
             } else {

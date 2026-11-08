@@ -896,7 +896,87 @@ fn code_controls_preserve_fence_info_and_copy_only_body(cx: &mut gpui_kit::TestA
         std::thread::sleep(std::time::Duration::from_millis(5));
     };
     settle_live_geometry(&view, &mut context);
-    let body = original.replace("\r\n", "\n").find("- literal").unwrap();
+    let normalized = original.replace("\r\n", "\n");
+    let body = normalized.find("- literal").unwrap();
+    let opening = normalized.find("~~~~rust").unwrap();
+    let closing = normalized[body..].find("~~~~").unwrap() + body;
+    let identity = view.read_with(&context, |view, _| view.document().entity_id());
+    let assert_fences_hidden = |view: &SourcePresentation, cx: &gpui_kit::App, added: usize| {
+        let caret = |at| view.range_to_bounds(&(at..at), cx).unwrap();
+        assert_eq!(
+            caret(opening).origin,
+            caret(body).origin,
+            "opening fence and info string must occupy no visible text geometry"
+        );
+        assert_eq!(caret(opening + 4).origin, caret(body).origin);
+        assert_eq!(
+            caret(closing + added).origin,
+            caret(closing + added + 4).origin,
+            "closing fence must occupy no visible text geometry"
+        );
+        assert!(caret(body + 2).left() > caret(body).left());
+    };
+    view.update_in(&mut context, |view, window, cx| {
+        view.select_range(body..body, cx);
+        view.focus_handle(cx).focus(window, cx);
+    });
+    context.update(|window, cx| window.press("secondary-a", cx));
+    settle_live_geometry(&view, &mut context);
+    view.read_with(&context, |view, cx| {
+        assert_eq!(view.selection().range(), 0..normalized.len());
+        assert_fences_hidden(view, cx, 0);
+        assert_eq!(view.document().read(cx).encode().unwrap(), original.as_bytes());
+    });
+    let after = normalized.find("after").unwrap() + 2;
+    for (from, to) in [(2, after), (after, 2)] {
+        context.update(|window, cx| {
+            let start = view.read(cx).range_to_bounds(&(from..from), cx).unwrap().center();
+            window.pointer_down(start, gpui_kit::MouseButton::Left, cx);
+            window.pointer_up(start, gpui_kit::MouseButton::Left, cx);
+            window.change_modifiers(gpui_kit::Modifiers::shift(), cx);
+            let end = view.read(cx).range_to_bounds(&(to..to), cx).unwrap().center();
+            window.pointer_down(end, gpui_kit::MouseButton::Left, cx);
+            window.pointer_up(end, gpui_kit::MouseButton::Left, cx);
+            window.change_modifiers(gpui_kit::Modifiers::none(), cx);
+        });
+        settle_live_geometry(&view, &mut context);
+        view.read_with(&context, |view, cx| {
+            assert_eq!(view.selection(), Selection::new(from, to));
+            assert_fences_hidden(view, cx, 0);
+        });
+    }
+    view.update_in(&mut context, |view, _, cx| {
+        view.select_range(body..body, cx);
+        view.add_selection(opening..closing + 4, cx);
+    });
+    settle_live_geometry(&view, &mut context);
+    view.read_with(&context, |view, cx| assert_fences_hidden(view, cx, 0));
+    view.update_in(&mut context, |view, window, cx| {
+        view.select_range(body..body, cx);
+        view.focus_handle(cx).focus(window, cx);
+    });
+    context.update(|window, cx| {
+        use gpui_kit::{ElementInputHandler, test::TestInput};
+        window.render_frame(cx);
+        let bounds = window.find("markdown-source").bounds();
+        let mut input = TestInput::new(ElementInputHandler::new(bounds, view.clone()), window);
+        input.compose_text(None, "ni", Some(2..2), cx);
+        assert!(input.marked_text_range(cx).is_some());
+    });
+    settle_live_geometry(&view, &mut context);
+    view.read_with(&context, |view, cx| assert_fences_hidden(view, cx, 2));
+    context.update(|window, cx| {
+        use gpui_kit::{ElementInputHandler, test::TestInput};
+        let bounds = window.find("markdown-source").bounds();
+        let mut input = TestInput::new(ElementInputHandler::new(bounds, view.clone()), window);
+        input.compose_text(None, "", Some(0..0), cx);
+        assert!(input.marked_text_range(cx).is_none());
+    });
+    settle_live_geometry(&view, &mut context);
+    view.read_with(&context, |view, cx| {
+        assert_fences_hidden(view, cx, 0);
+        assert_eq!(view.document().read(cx).encode().unwrap(), original.as_bytes());
+    });
     view.update_in(&mut context, |view, window, cx| {
         view.select_range(body + 9..body + 9, cx);
         view.focus_handle(cx).focus(window, cx);
@@ -953,20 +1033,91 @@ fn code_controls_preserve_fence_info_and_copy_only_body(cx: &mut gpui_kit::TestA
                 ))
                 .is_some()
         );
-        window.press("escape", cx);
+        assert!(view.read(cx).focus_handle(cx).is_focused(window));
+        let opening_start = view.read(cx).range_to_bounds(&(opening..opening), cx).unwrap();
+        let opening_end = view.read(cx).range_to_bounds(&(opening + 4..opening + 4), cx).unwrap();
+        let body_start = view.read(cx).range_to_bounds(&(body..body), cx).unwrap();
+        assert!(opening_end.left() > opening_start.left());
+        assert!(body_start.top() > opening_start.top());
+        let closing_start = view.read(cx).range_to_bounds(&(closing..closing), cx).unwrap();
+        let closing_end = view.read(cx).range_to_bounds(&(closing + 4..closing + 4), cx).unwrap();
+        assert!(closing_end.left() > closing_start.left());
+    });
+    let metadata_end = normalized.find("title=demo").unwrap() + "title=demo".len();
+    view.update_in(&mut context, |view, _, cx| {
+        view.select_range(metadata_end..metadata_end, cx);
+    });
+    context.update(|window, cx| window.input("2", cx));
+    settle_live_geometry(&view, &mut context);
+    let metadata_edited = original.replacen("title=demo", "title=demo2", 1);
+    view.read_with(&context, |view, cx| {
+        assert_eq!(view.document().entity_id(), identity);
+        assert_eq!(view.document().read(cx).encode().unwrap(), metadata_edited.as_bytes());
+    });
+    context.update(|window, cx| {
+        let live = window.find_by_label(crate::ui::i18n::t(
+            crate::ui::i18n::L10nKey::MarkdownCodeLive,
+        )).bounds().center();
+        window.pointer_down(live, gpui_kit::MouseButton::Left, cx);
+        window.pointer_up(live, gpui_kit::MouseButton::Left, cx);
         assert!(view.read(cx).focus_handle(cx).is_focused(window));
     });
+    settle_live_geometry(&view, &mut context);
+    view.read_with(&context, |view, cx| {
+        assert_eq!(
+            view.range_to_bounds(&(opening..opening), cx).unwrap().origin,
+            view.range_to_bounds(&(body + 1..body + 1), cx).unwrap().origin
+        );
+        assert_eq!(
+            view.range_to_bounds(&(closing + 1..closing + 1), cx).unwrap().origin,
+            view.range_to_bounds(&(closing + 5..closing + 5), cx).unwrap().origin
+        );
+    });
+    context.update(|window, cx| {
+        let source = window.find_all_by_label(crate::ui::i18n::t(
+            crate::ui::i18n::L10nKey::MarkdownCodeSource,
+        ))[0]
+            .bounds()
+            .center();
+        window.pointer_down(source, gpui_kit::MouseButton::Left, cx);
+        window.pointer_up(source, gpui_kit::MouseButton::Left, cx);
+        window.press("escape", cx);
+        assert!(view.read(cx).focus_handle(cx).is_focused(window));
+        assert!(window.try_find_by_label(crate::ui::i18n::t(
+            crate::ui::i18n::L10nKey::MarkdownCodeLive,
+        )).is_none());
+    });
+    settle_live_geometry(&view, &mut context);
+    view.read_with(&context, |view, cx| {
+        assert_eq!(
+            view.range_to_bounds(&(opening..opening), cx).unwrap().origin,
+            view.range_to_bounds(&(body + 1..body + 1), cx).unwrap().origin
+        );
+    });
+    // Local source edits participate in the same history as global Source and Live.
+    context.dispatch_action(crate::core::actions::ToggleDocumentPreview);
+    context.dispatch_action(gpui_kit::component::input::Undo);
+    context.run_until_parked();
+    view.read_with(&context, |view, cx| {
+        assert!(!view.is_live());
+        assert_eq!(view.document().entity_id(), identity);
+        assert_eq!(view.document().read(cx).encode().unwrap(), original.as_bytes());
+    });
+    context.dispatch_action(crate::core::actions::ToggleDocumentPreview);
+    settle_live_geometry(&view, &mut context);
+    context.dispatch_action(gpui_kit::component::input::Redo);
+    settle_live_geometry(&view, &mut context);
     context.dispatch_action(crate::core::actions::ToggleDocumentPreview);
     context.dispatch_action(crate::core::actions::ToggleDocumentPreview);
     context.run_until_parked();
     view.read_with(&context, |view, cx| {
         assert_eq!(
             view.document().read(cx).encode().unwrap(),
-            original.as_bytes()
+            metadata_edited.as_bytes()
         )
     });
     settle_live_geometry(&view, &mut context);
-    let empty = original.replace("\r\n", "\n").rfind("> ~~~").unwrap();
+    let empty = metadata_edited.replace("\r\n", "\n").rfind("> ~~~").unwrap();
     view.update_in(&mut context, |view, window, cx| {
         view.select_range(empty..empty, cx);
         view.focus_handle(cx).focus(window, cx);
@@ -976,7 +1127,7 @@ fn code_controls_preserve_fence_info_and_copy_only_body(cx: &mut gpui_kit::TestA
     view.read_with(&context, |view, cx| {
         assert_eq!(
             view.document().read(cx).encode().unwrap(),
-            original
+            metadata_edited
                 .replacen("> ~~~\r\n> ~~~", "> ~~~\r\n> abc\r\n> ~~~", 1)
                 .as_bytes()
         )
@@ -984,6 +1135,7 @@ fn code_controls_preserve_fence_info_and_copy_only_body(cx: &mut gpui_kit::TestA
     context.dispatch_action(gpui_kit::component::input::Undo);
     context.dispatch_action(gpui_kit::component::input::Redo);
     context.dispatch_action(crate::core::actions::EditorSave);
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
     loop {
         context.run_until_parked();
         if app.read_with(&context, |app, _| {
@@ -995,12 +1147,13 @@ fn code_controls_preserve_fence_info_and_copy_only_body(cx: &mut gpui_kit::TestA
         assert!(std::time::Instant::now() < deadline);
         std::thread::sleep(std::time::Duration::from_millis(5));
     }
-    let expected = original.replacen("> ~~~\r\n> ~~~", "> ~~~\r\n> abc\r\n> ~~~", 1);
+    let expected = metadata_edited.replacen("> ~~~\r\n> ~~~", "> ~~~\r\n> abc\r\n> ~~~", 1);
     assert_eq!(std::fs::read(&path).unwrap(), expected.as_bytes());
     app.update_in(&mut context, |app, window, cx| {
         app.editor_close_file(0, window, cx);
         app.open_file_in_editor(&path, window, cx);
     });
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
     loop {
         context.run_until_parked();
         if app.read_with(&context, |app, cx| {
