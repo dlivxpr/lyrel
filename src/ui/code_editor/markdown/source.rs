@@ -15,14 +15,14 @@ gpui_kit::actions!(markdown_images, [LoadImages]);
 
 actions!(markdown_links, [EditLinkDestination, FollowLink]);
 
+#[path = "embeds/view.rs"]
+mod embeds;
 #[path = "links/interaction.rs"]
 mod link_interaction;
 #[path = "references.rs"]
 mod references;
 #[path = "slash.rs"]
 mod slash;
-#[path = "embeds/view.rs"]
-mod embeds;
 
 #[path = "assets.rs"]
 mod assets;
@@ -454,6 +454,7 @@ impl SourcePresentation {
                     {
                         view.invalidate_layout(cx);
                         view.projection.install(projection);
+                        view.tables.invalidate_metadata();
                         if live {
                             view.projection.component_sources(
                                 view.document.read(cx).source(),

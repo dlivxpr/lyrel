@@ -1757,6 +1757,7 @@ pub fn translate_zh(key: L10nKey) -> Option<&'static str> {
         L10nKey::EditorTableAlignCenter => "表格：居中对齐",
         L10nKey::EditorTableAlignRight => "表格：右对齐",
         L10nKey::EditorTableFitColumn => "表格：按内容调整列宽",
+        L10nKey::EditorTableResizeColumn => "调整表格列宽",
         L10nKey::EditorTableWidenColumn => "表格：加宽当前列",
         L10nKey::EditorTableNarrowColumn => "表格：缩窄当前列",
         L10nKey::EditorTableStyleGrid => "表格样式：网格",
@@ -1834,7 +1835,9 @@ pub fn translate_zh(key: L10nKey) -> Option<&'static str> {
         L10nKey::MarkdownEmbedLoading => "正在加载片段…",
         L10nKey::MarkdownEmbedCycle => "此嵌入形成循环，仍可编辑其字面源码。",
         L10nKey::MarkdownEmbedDuplicate => "此片段已在上方嵌入。",
-        L10nKey::MarkdownEmbedLimit => "已达嵌入上限（3 层、64 个引用、8 MiB 源码、4096 个区块或 32 MiB 栅格图）。",
+        L10nKey::MarkdownEmbedLimit => {
+            "已达嵌入上限（3 层、64 个引用、8 MiB 源码、4096 个区块或 32 MiB 栅格图）。"
+        }
         L10nKey::MarkdownEmbedUnsupported => "只能嵌入工作区的 Markdown 或 MDX 片段。",
         L10nKey::MarkdownEmbedExternal => "只读嵌入不会加载外部资源。",
         L10nKey::EditorWrapOn => "自动换行：开",
