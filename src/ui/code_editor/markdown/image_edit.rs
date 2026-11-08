@@ -132,6 +132,12 @@ impl SourcePresentation {
                     let width = object.image.width.unwrap_or(f32::from(window.rem_size() * 12.) as u32).clamp(40, maximum);
                     view.image_resize = Some(Resize { object: object.clone(), revision: view.document.read(cx).revision(), token: view.input_token(cx), origin: event.position.x, original_width: width, width, maximum, resources: view.document.read(cx).resources().cloned() });
                 }))
+                .on_mouse_up(MouseButton::Left, cx.listener(|view, _, window, cx| {
+                    if view.finish_image_resize(false, window, cx) { cx.stop_propagation(); }
+                }))
+                .on_mouse_up_out(MouseButton::Left, cx.listener(|view, _, window, cx| {
+                    view.finish_image_resize(false, window, cx);
+                }))
                 .on_click(cx.listener(|view, event, window, cx| {
                     if !matches!(event, ClickEvent::Mouse(_)) { view.edit_image(window, cx); }
                 }))
