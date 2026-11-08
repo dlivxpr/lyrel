@@ -78,8 +78,14 @@ pub(super) fn project(
             for child in cell.children().into_iter().flatten() {
                 Projection::inline(source, child, &mut leaf);
             }
-            // An empty cell still has one insertion point, between its padding.
-            leaf.empty_insertion(range.start + range.len() / 2);
+            // mdast includes the opening divider in each cell span, and the
+            // closing divider in the last cell. Only padding brackets the
+            // insertion point; syntax must not bias it toward the left edge.
+            let raw = &source[range.clone()];
+            let start = range.start + usize::from(raw.starts_with('|'));
+            let padding = &source[start..range.end];
+            let padding = padding.strip_suffix('|').unwrap_or(padding);
+            leaf.empty_insertion(start + padding.len() / 2);
             leaves.push(leaf);
         }
     }
