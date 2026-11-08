@@ -61,7 +61,7 @@ impl SourcePresentation {
             let query = &line[at + delimiter.len()..];
             if delimiter == "#" {
                 if at > 0 && !line[..at].chars().next_back().is_some_and(char::is_whitespace) { return None; }
-                if line[..at].contains("[[") || line[..at].contains("((") || query.is_empty() { return None; }
+                if query.is_empty() { return None; }
             }
             if query.contains(['\n', ']', ')']) || query.starts_with(' ') { return None; }
             if anchors && query.chars().count() < 2 { return None; }

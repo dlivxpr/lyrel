@@ -2911,8 +2911,8 @@ impl Render for SourcePresentation {
                 .capture_action(cx.listener(|this, _: &actions::MoveDown, window, cx| {
                     if this.move_reference(true, window, cx) { cx.stop_propagation(); }
                 }))
-                .capture_action(cx.listener(|this, _: &actions::Enter, window, cx| {
-                    if this.accept_reference(window, cx) { cx.stop_propagation(); }
+                .capture_action(cx.listener(|this, action: &actions::Enter, window, cx| {
+                    if !action.shift && this.accept_reference(window, cx) { cx.stop_propagation(); }
                 }))
                 .capture_action(cx.listener(|this, _: &actions::IndentInline, window, cx| {
                     if this.accept_reference(window, cx) { cx.stop_propagation(); }
