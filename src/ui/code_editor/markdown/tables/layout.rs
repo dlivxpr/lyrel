@@ -395,7 +395,7 @@ fn content(
 fn cell_element(
     leaf: &Leaf,
     width: Option<Pixels>,
-    wrap: bool,
+    _wrap: bool,
     style: Style,
     marked: Option<&Range<usize>>,
     math: &math::State,
@@ -425,8 +425,9 @@ fn cell_element(
         .when(cell.align == markdown::mdast::AlignKind::Right, |cell| {
             cell.text_right()
         })
-        .when(wrap, |cell| cell.whitespace_normal())
-        .when(!wrap, |cell| cell.whitespace_nowrap())
+        // A chosen column width constrains its own cell independently of the
+        // source/prose soft-wrap preference; text must not cross other cells.
+        .whitespace_normal()
         .child(content(leaf, marked, math, context, window, cx))
         .into_any_element()
 }

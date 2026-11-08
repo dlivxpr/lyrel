@@ -3044,6 +3044,7 @@ impl Render for SourcePresentation {
                 .on_mouse_up(
                     MouseButton::Left,
                     cx.listener(|this, event: &MouseUpEvent, window, cx| {
+                        if this.tables.is_resizing() { this.update_table_resize(event.position, window, cx); }
                         this.finish_table_resize(window, cx);
                         if this.finish_image_resize(false, window, cx) { cx.stop_propagation(); return; }
                         this.dragging = false;
@@ -3057,7 +3058,8 @@ impl Render for SourcePresentation {
                 )
                 .on_mouse_up_out(
                     MouseButton::Left,
-                    cx.listener(|this, _, window, cx| {
+                    cx.listener(|this, event: &MouseUpEvent, window, cx| {
+                        if this.tables.is_resizing() { this.update_table_resize(event.position, window, cx); }
                         this.finish_table_resize(window, cx);
                         this.finish_image_resize(false, window, cx);
                         this.dragging = false;
