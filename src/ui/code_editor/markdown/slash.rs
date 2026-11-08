@@ -306,9 +306,11 @@ impl SourcePresentation {
         if !self.slash_current(self.slash.generation, cx) || !self.slash_has_focus(window, cx) { self.dismiss_slash(cx); return; }
         let range = self.slash.lease.as_ref().unwrap().range.clone();
         let selection = Selection::caret(range.start + caret);
+        let formula = text == "$$\n\n$$";
         self.dismiss_slash(cx);
         self.command(Command::BatchReplaceSelected { edits: vec![(range, text)], selection }, window, cx);
         self.focus.focus(window, cx);
+        if formula { self.begin_formula(selection.head(), false, window, cx); }
         if property {
             // This is the same production inspector as a property click. Parse
             // the new source first; an old frame must never supply its ranges.
@@ -326,8 +328,8 @@ impl SourcePresentation {
     fn insert_slash_table(&mut self, custom: bool, window: &mut Window, cx: &mut Context<Self>) {
         let Some(picker) = &self.slash.picker else { return; };
         let (rows, columns) = if custom {
-            let rows = picker.custom_rows.read(cx).value().parse::<usize>().ok();
-            let columns = picker.custom_columns.read(cx).value().parse::<usize>().ok();
+            let rows = picker.custom_rows.read(cx).value().trim().parse::<usize>().ok();
+            let columns = picker.custom_columns.read(cx).value().trim().parse::<usize>().ok();
             match (rows, columns) { (Some(rows), Some(columns)) if rows > 0 && columns > 0 => (rows.min(100), columns.min(100)), _ => { self.slash.picker.as_mut().unwrap().error = true; cx.notify(); return; } }
         } else { (picker.rows, picker.columns) };
         let mut text = String::new();
