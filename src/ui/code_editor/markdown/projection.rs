@@ -934,6 +934,7 @@ impl Projection {
                             &image_definitions,
                             &mut leaves,
                         );
+                        super::tables::metadata::hide_markers(source, &mut leaves);
                         let decorations = super::source::formats::decorations(source, &root);
                         let mut active = Vec::new();
                         let mut next = 0;

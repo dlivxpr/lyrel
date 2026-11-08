@@ -216,9 +216,7 @@ impl SourcePresentation {
             return None;
         }
         let leaf = self.projection.leaf_at(at)?;
-        if !matches!(leaf.kind, Kind::TableCell(_)) {
-            return None;
-        }
+        let Kind::TableCell(cell) = leaf.kind else { return None; };
         if let Some(end) = edge {
             return Some(if end {
                 leaf.content_end()
@@ -229,8 +227,14 @@ impl SourcePresentation {
         if vertical != 0 {
             return super::super::tables::vertical(&self.projection.leaves, at, vertical < 0);
         }
-        let backward = horizontal < 0;
-        if (backward && at <= leaf.content_start()) || (!backward && at >= leaf.content_end()) {
+        if horizontal != 0 && (at <= leaf.content_start() || at >= leaf.content_end()) {
+            // A logical endpoint can still have another visual caret in a
+            // mixed-bidi cell. Keep the shared glyph mapper authoritative.
+            if let Some(next) = self.visual_horizontal_target(at, horizontal < 0, cx)
+                && next != at && leaf.content_start() <= next && next <= leaf.content_end() {
+                return Some(next);
+            }
+            let backward = (horizontal < 0) ^ self.tables.is_rtl(cell);
             return super::super::tables::navigate(
                 &self.projection.leaves,
                 at,

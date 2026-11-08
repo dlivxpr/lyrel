@@ -47,6 +47,9 @@ pub(super) mod tools;
 #[path = "tables/authoring.rs"]
 mod table_authoring;
 
+#[path = "tables/presentation.rs"]
+pub(super) mod table_presentation;
+
 struct CachedBlock {
     version: u64,
     seen: u64,
@@ -1010,13 +1013,14 @@ impl SourcePresentation {
             return menu;
         }
         let disabled = self.active_table().is_none();
+        let alignment = self.active_table().map(|cell| self.tables.alignment(cell));
         let delete_row_disabled = self.active_table().is_none_or(|cell| cell.is_header());
         let delete_column_disabled = self.active_table().is_none_or(|cell| {
             !self.projection.leaves.iter().any(|leaf| {
                 matches!(leaf.kind, Kind::TableCell(other) if other.table() == cell.table() && other.column() != cell.column())
             })
         });
-        menu.separator()
+        self.table_presentation_menu(menu).separator()
             .menu(t(L10nKey::EditorTableInsert), Box::new(InsertTable))
             .menu_with_disabled(
                 t(L10nKey::EditorTableInsertRowBefore),
@@ -1059,23 +1063,27 @@ impl SourcePresentation {
                 disabled,
             )
             .separator()
-            .menu_with_disabled(
+            .menu_with_check_and_disabled(
                 t(L10nKey::EditorTableAlignDefault),
+                alignment == Some(markdown::mdast::AlignKind::None),
                 Box::new(AlignDefault),
                 disabled,
             )
-            .menu_with_disabled(
+            .menu_with_check_and_disabled(
                 t(L10nKey::EditorTableAlignLeft),
+                alignment == Some(markdown::mdast::AlignKind::Left),
                 Box::new(AlignLeft),
                 disabled,
             )
-            .menu_with_disabled(
+            .menu_with_check_and_disabled(
                 t(L10nKey::EditorTableAlignCenter),
+                alignment == Some(markdown::mdast::AlignKind::Center),
                 Box::new(AlignCenter),
                 disabled,
             )
-            .menu_with_disabled(
+            .menu_with_check_and_disabled(
                 t(L10nKey::EditorTableAlignRight),
+                alignment == Some(markdown::mdast::AlignKind::Right),
                 Box::new(AlignRight),
                 disabled,
             )
@@ -2371,8 +2379,11 @@ impl Render for SourcePresentation {
             window.rem_size(),
             self.live,
         );
+        let table_source = self.document.read(cx).source().clone();
         if self.tables.prepare(
             &self.projection.leaves,
+            &table_source,
+            self.projection.revision,
             table_width,
             self.wrap,
             false,
@@ -2642,7 +2653,8 @@ impl Render for SourcePresentation {
                 );
                 let view = cx.entity().downgrade();
                 let row = row.on_children_prepainted(move |bounds, _, cx| {
-                    let _ = view.update(cx, |view, _| {
+                    let _ = view.update(cx, |view, cx| {
+                        if view.document.read(cx).revision() != revision || view.projection.revision != revision { return; }
                         for (id, bounds) in ids.iter().zip(bounds) {
                             if let Some(id) = id {
                                 view.table_geometry.insert(*id, bounds);
@@ -2708,6 +2720,10 @@ impl Render for SourcePresentation {
                                     .id(("markdown-table-pan", leaf.id)),
                             ),
                     )
+                    .when(cell.is_header(), |table| table.child(div().w_full().h_2().relative()
+                        .child(gpui_kit::component::scroll::Scrollbar::horizontal(&scroll)
+                            .id(("markdown-table-scrollbar", leaf.id))
+                            .mode(gpui_kit::component::scroll::ScrollbarMode::Always))))
                     .into_any_element()
             } else {
                 self.blocks[&leaf.id]
@@ -3056,6 +3072,8 @@ impl Render for SourcePresentation {
                 .on_mouse_up(
                     MouseButton::Left,
                     cx.listener(|this, event: &MouseUpEvent, window, cx| {
+                        if this.tables.is_resizing() { this.update_table_resize(event.position, window, cx); }
+                        this.finish_table_resize(window, cx);
                         if this.finish_image_resize(false, window, cx) { cx.stop_propagation(); return; }
                         this.dragging = false;
                         this.drag_pointer = None;
@@ -3068,7 +3086,9 @@ impl Render for SourcePresentation {
                 )
                 .on_mouse_up_out(
                     MouseButton::Left,
-                    cx.listener(|this, _, window, cx| {
+                    cx.listener(|this, event: &MouseUpEvent, window, cx| {
+                        if this.tables.is_resizing() { this.update_table_resize(event.position, window, cx); }
+                        this.finish_table_resize(window, cx);
                         this.finish_image_resize(false, window, cx);
                         this.dragging = false;
                         this.drag_pointer = None;
@@ -3089,6 +3109,13 @@ impl Render for SourcePresentation {
                 .on_action(cx.listener(|this, _: &super::tables::AlignLeft, window, cx| this.table_command(super::tables::Operation::AlignLeft, window, cx)))
                 .on_action(cx.listener(|this, _: &super::tables::AlignCenter, window, cx| this.table_command(super::tables::Operation::AlignCenter, window, cx)))
                 .on_action(cx.listener(|this, _: &super::tables::AlignRight, window, cx| this.table_command(super::tables::Operation::AlignRight, window, cx)))
+                .on_action(cx.listener(|this, _: &table_presentation::FitColumn, window, cx| this.table_fit(None, window, cx)))
+                .on_action(cx.listener(|this, _: &table_presentation::WidenColumn, window, cx| this.table_fit(Some(16.), window, cx)))
+                .on_action(cx.listener(|this, _: &table_presentation::NarrowColumn, window, cx| this.table_fit(Some(-16.), window, cx)))
+                .on_action(cx.listener(|this, _: &table_presentation::StyleGrid, window, cx| this.table_style(super::tables::metadata::Style::Grid, window, cx)))
+                .on_action(cx.listener(|this, _: &table_presentation::StyleStriped, window, cx| this.table_style(super::tables::metadata::Style::Striped, window, cx)))
+                .on_action(cx.listener(|this, _: &table_presentation::StyleHeader, window, cx| this.table_style(super::tables::metadata::Style::Header, window, cx)))
+                .on_action(cx.listener(|this, _: &table_presentation::StyleMinimal, window, cx| this.table_style(super::tables::metadata::Style::Minimal, window, cx)))
                 .on_action(
                     cx.listener(|this, _: &actions::Copy, window, cx| this.copy(false, window, cx)),
                 )
@@ -3283,6 +3310,14 @@ impl Render for SourcePresentation {
                     );
                 }))
                 .on_action(cx.listener(|this, _: &actions::Escape, window, cx| {
+                    if this.tables.is_resizing() {
+                        this.tables.cancel_resize();
+                        this.geometry = None;
+                        this.viewport.heights.clear();
+                        this.focus.focus(window, cx);
+                        cx.notify();
+                        return;
+                    }
                     if this.finish_image_resize(true, window, cx) { return; }
                     if this.cancel_image_insertion(cx) { return; }
                     if this.state.composition.is_some() {
@@ -3501,6 +3536,7 @@ impl Element for SourceElement {
             view.table_geometry.clear();
         });
         let table_measurement_changed = self.view.update(cx, |view, cx| {
+            if view.document.read(cx).revision() != self.revision || view.projection.revision != self.revision { return false; }
             let width = typography::content_width(
                 view.viewport
                     .bounds
@@ -3509,8 +3545,11 @@ impl Element for SourceElement {
                 view.live,
             );
             let marked = view.state.marked_range();
+            let source = view.document.read(cx).source().clone();
             let columns = view.tables.prepare(
                 &view.projection.leaves,
+                &source,
+                view.projection.revision,
                 width,
                 view.wrap,
                 true,
@@ -3731,6 +3770,16 @@ impl Element for SourceElement {
         self.view.read(cx).paint_spelling(window, cx);
         let view = self.view.clone();
         window.on_mouse_event(move |event: &MouseMoveEvent, phase, window, cx| {
+            if phase.bubble() && view.read(cx).tables.is_resizing() {
+                view.update(cx, |view, cx| {
+                    if event.pressed_button == Some(MouseButton::Left) {
+                        view.update_table_resize(event.position, window, cx);
+                    } else {
+                        view.finish_table_resize(window, cx);
+                    }
+                });
+                return;
+            }
             if !phase.bubble() || (!view.read(cx).dragging && view.read(cx).pointer_link.is_none())
             {
                 return;

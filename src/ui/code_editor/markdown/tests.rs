@@ -10,6 +10,9 @@ mod typography;
 #[path = "tables/consumer_tests.rs"]
 mod table_consumer;
 
+#[path = "tables/presentation_tests.rs"]
+mod table_presentation;
+
 fn start_in_source(
     view: &gpui_kit::Entity<SourcePresentation>,
     cx: &mut gpui_kit::VisualTestContext,

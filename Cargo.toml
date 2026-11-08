@@ -61,6 +61,8 @@ memchr = "2"
 # emoji, and half a flag renders as a bare letter. Already in the tree via
 # gpui, so this pins no new code.
 unicode-segmentation = "1"
+# First-strong direction for native table geometry; already used by GPUI.
+unicode-bidi = "=0.3.18"
 # Markdown AST data stays compatible with gpui-base; MDX uses its own native parser.
 markdown = "=1.0.0"
 ox_content_allocator = "=3.4.0"
