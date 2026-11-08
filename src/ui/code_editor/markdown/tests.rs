@@ -857,6 +857,90 @@ fn native_mdx_table_renders_each_embedded_control_once(cx: &mut gpui_kit::TestAp
 }
 
 #[gpui_kit::test]
+fn code_controls_preserve_fence_info_and_copy_only_body(cx: &mut gpui_kit::TestAppContext) {
+    use crate::ui::app::test_window::harness_with_tabs;
+    use gpui_kit::Focusable as _;
+    use gpui_kit::test::TestWindowExt as _;
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("code-controls.md");
+    let original = "# Code\r\n\r\n~~~~rust  title=demo\r\n- literal\r\n~~~~\r\n\r\nafter\r\n\r\n> ~~~\r\n> ~~~";
+    std::fs::write(&path, original).unwrap();
+    let (app, mut context, _streams) = harness_with_tabs(cx, 1);
+    app.update_in(&mut context, |app, window, cx| app.open_file_in_editor(&path, window, cx));
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    let view = loop {
+        context.run_until_parked();
+        if let Some(view) = app.read_with(&context, |app, _| app.active_editor_input().and_then(|input| input.markdown().cloned())) {
+            break view;
+        }
+        assert!(std::time::Instant::now() < deadline);
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    };
+    settle_live_geometry(&view, &mut context);
+    let body = original.replace("\r\n", "\n").find("- literal").unwrap();
+    view.update_in(&mut context, |view, window, cx| {
+        view.select_range(body + 9..body + 9, cx);
+        view.focus_handle(cx).focus(window, cx);
+    });
+    context.update(|window, cx| window.press("enter", cx));
+    settle_live_geometry(&view, &mut context);
+    context.update(|window, cx| {
+        let copy = window.find_all_by_label(crate::ui::i18n::t(crate::ui::i18n::L10nKey::MarkdownCodeCopy))[0].bounds().center();
+        window.pointer_down(copy, gpui_kit::MouseButton::Left, cx);
+        window.pointer_up(copy, gpui_kit::MouseButton::Left, cx);
+        assert_eq!(cx.read_from_clipboard().unwrap().text().as_deref(), Some("- literal\n\n"));
+    });
+    context.dispatch_action(gpui_kit::component::input::Undo);
+    settle_live_geometry(&view, &mut context);
+    context.update(|window, cx| {
+        let language = window.find_by_label("rust").bounds().center();
+        window.pointer_down(language, gpui_kit::MouseButton::Left, cx);
+        window.pointer_up(language, gpui_kit::MouseButton::Left, cx);
+        window.press("down", cx);
+        window.press("enter", cx);
+    });
+    context.run_until_parked();
+    view.read_with(&context, |view, cx| {
+        assert_eq!(view.document().read(cx).encode().unwrap(), original.replacen("rust", "text", 1).as_bytes());
+    });
+    context.dispatch_action(gpui_kit::component::input::Undo);
+    context.dispatch_action(crate::core::actions::ToggleDocumentPreview);
+    context.dispatch_action(crate::core::actions::ToggleDocumentPreview);
+    context.run_until_parked();
+    view.read_with(&context, |view, cx| assert_eq!(view.document().read(cx).encode().unwrap(), original.as_bytes()));
+    settle_live_geometry(&view, &mut context);
+    let empty = original.replace("\r\n", "\n").rfind("> ~~~").unwrap();
+    view.update_in(&mut context, |view, window, cx| {
+        view.select_range(empty..empty, cx);
+        view.focus_handle(cx).focus(window, cx);
+    });
+    context.update(|window, cx| window.input("abc", cx));
+    context.run_until_parked();
+    view.read_with(&context, |view, cx| assert_eq!(view.document().read(cx).encode().unwrap(), original.replacen("> ~~~\r\n> ~~~", "> ~~~\r\n> abc\r\n> ~~~", 1).as_bytes()));
+    context.dispatch_action(gpui_kit::component::input::Undo);
+    context.dispatch_action(gpui_kit::component::input::Redo);
+    context.dispatch_action(crate::core::actions::EditorSave);
+    loop {
+        context.run_until_parked();
+        if app.read_with(&context, |app, _| app.active_buffer().is_some_and(|buffer| !buffer.dirty && !buffer.saving)) { break; }
+        assert!(std::time::Instant::now() < deadline);
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    let expected = original.replacen("> ~~~\r\n> ~~~", "> ~~~\r\n> abc\r\n> ~~~", 1);
+    assert_eq!(std::fs::read(&path).unwrap(), expected.as_bytes());
+    app.update_in(&mut context, |app, window, cx| {
+        app.editor_close_file(0, window, cx);
+        app.open_file_in_editor(&path, window, cx);
+    });
+    loop {
+        context.run_until_parked();
+        if app.read_with(&context, |app, cx| app.active_editor_input().and_then(|input| input.markdown()).is_some_and(|view| view.read(cx).document().read(cx).encode().unwrap() == expected.as_bytes())) { break; }
+        assert!(std::time::Instant::now() < deadline);
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+}
+
+#[gpui_kit::test]
 fn native_code_regions_keep_line_breaks_fences_and_shared_history(
     cx: &mut gpui_kit::TestAppContext,
 ) {
@@ -900,15 +984,9 @@ fn native_code_regions_keep_line_breaks_fences_and_shared_history(
             .read(cx)
             .range_to_bounds(&(code_at..code_at), cx)
             .unwrap();
-        let fence_at = source.find("```\n\n").unwrap();
-        let closing_fence = view
-            .read(cx)
-            .range_to_bounds(&(fence_at..fence_at), cx)
-            .unwrap();
-        assert!(
-            closing_fence.top() > code_line.top(),
-            "code newlines must retain distinct visual lines"
-        );
+        let last_code = code_at + "let x = 1;".len();
+        let last_code = view.read(cx).range_to_bounds(&(last_code..last_code), cx).unwrap();
+        assert_eq!(last_code.top(), code_line.top());
         let bounds = window.find("markdown-source").bounds();
         let mut input = TestInput::new(ElementInputHandler::new(bounds, view.clone()), window);
         input.compose_text(None, "ni", Some(2..2), cx);
@@ -924,7 +1002,6 @@ fn native_code_regions_keep_line_breaks_fences_and_shared_history(
         (source.find("let").unwrap() + 4, 0, "\n"),
         (source.find("one").unwrap() + 3, 0, "\n    "),
         (source.find("    \n").unwrap() + 4, 4, "\n"),
-        (source.find("```\n\n").unwrap() + 3, 0, "\n\n"),
     ] {
         view.update_in(&mut context, |view, window, cx| {
             view.select_range(at..at, cx);

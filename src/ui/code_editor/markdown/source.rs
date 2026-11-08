@@ -26,6 +26,9 @@ mod typography;
 #[path = "composition.rs"]
 mod composition;
 
+#[path = "code.rs"]
+mod code;
+
 struct CachedBlock {
     version: u64,
     seen: u64,
@@ -82,6 +85,7 @@ pub(crate) struct SourcePresentation {
     reveal_at: Option<usize>,
     selection_notification: bool,
     assets: assets::InsertionState,
+    code: code::State,
     _observe: Subscription,
     mdx_state: super::mdx::ViewState,
 }
@@ -91,6 +95,7 @@ impl SourcePresentation {
         wrap: bool,
         cx: &mut Context<Self>,
     ) -> Self {
+        code::init(cx);
         let owner_id = cx.entity_id();
         cx.on_release(move |view, cx| {
             // Platform handlers are weak. A last-owner release must still put
@@ -243,6 +248,7 @@ impl SourcePresentation {
             reveal_at: None,
             selection_notification: false,
             assets: assets::InsertionState::default(),
+            code: code::State::default(),
             _observe: observe,
             mdx_state: super::mdx::ViewState::default(),
         };
@@ -586,6 +592,9 @@ impl SourcePresentation {
         );
         let marked = self.state.marked_range();
         for leaf in &mut self.projection.leaves {
+            if matches!(leaf.kind, Kind::Code(_)) {
+                continue; // Code owns its derived fence/container visibility.
+            }
             let visibility_changed = leaf.hide_ranges(&hidden, marked.as_ref());
             let insertions_changed = leaf.set_inline_insertions(&insertions);
             if visibility_changed || insertions_changed {
@@ -1031,6 +1040,8 @@ impl SourcePresentation {
             return;
         }
         self.state.selection = self.map_live_caret(self.state.selection, cx);
+        self.sync_code(cx);
+        let (command, code_caret) = self.code_input(command, cx);
         let command = if self.live
             && self.extra_selections.is_empty()
             && self.projection.grammar == self.document.read(cx).grammar()
@@ -1245,6 +1256,9 @@ impl SourcePresentation {
             }
             changed
         });
+        if let Some(at) = code_caret {
+            self.state.selection = Selection::caret(at);
+        }
         if let Some(selections) = after_extra {
             self.extra_selections = selections;
         }
@@ -1587,6 +1601,9 @@ impl SourcePresentation {
         true
     }
     fn indent_selection(&mut self, outdent: bool, window: &mut Window, cx: &mut Context<Self>) {
+        if self.code_indent(outdent, window, cx) {
+            return;
+        }
         if self.navigate_table(
             super::tables::Navigation::Cell { backward: outdent },
             window,
@@ -1841,6 +1858,9 @@ impl SourcePresentation {
         }
     }
     fn enter(&mut self, hard: bool, window: &mut Window, cx: &mut Context<Self>) {
+        if self.code_enter(window, cx) {
+            return;
+        }
         if self.live
             && self
                 .projection
@@ -1902,6 +1922,9 @@ impl SourcePresentation {
         self.command(command, window, cx);
     }
     fn delete_prose(&mut self, backward: bool, window: &mut Window, cx: &mut Context<Self>) {
+        if self.code_delete(backward, window, cx) {
+            return;
+        }
         if !self.live
             || !self.state.selection.range().is_empty()
             || !self.extra_selections.is_empty()
@@ -2230,6 +2253,7 @@ impl Render for SourcePresentation {
         if self.live && self.rendered_revision != Some(self.document.read(cx).revision()) {
             self.sync_mdx_inline_visibility(cx);
         }
+        self.sync_code(cx);
         let view = cx.entity().downgrade();
         let ready = self
             .image_snapshot
@@ -2412,6 +2436,11 @@ impl Render for SourcePresentation {
         {
             self.render_generation += 1;
             for leaf in &self.projection.leaves[visible.clone()] {
+                let language = if self.live && self.blocks.get(&leaf.id).is_none_or(|cached| cached.version != leaf.version) {
+                    self.code_language(leaf, cx)
+                } else {
+                    None
+                };
                 let cached = self.blocks.entry(leaf.id).or_insert_with(|| CachedBlock {
                     version: u64::MAX,
                     seen: 0,
@@ -2420,7 +2449,7 @@ impl Render for SourcePresentation {
                 if cached.version != leaf.version {
                     if self.live && matches!(leaf.kind, Kind::Code(_) | Kind::Mermaid(_)) {
                         cached.node = BlockNode::CodeBlock(
-                            CodeBlock::from_code(leaf.text.clone(), None::<SharedString>)
+                            CodeBlock::from_code(leaf.text.clone(), language)
                                 .with_leaf_key(leaf.id),
                         );
                         cached.version = leaf.version;
@@ -2590,6 +2619,11 @@ impl Render for SourcePresentation {
                             )
                         } else {
                             rendered.into_any_element()
+                        };
+                        let rendered = if self.live && matches!(leaf.kind, Kind::Code(_)) {
+                            self.code_controls(leaf, rendered, cx)
+                        } else {
+                            rendered
                         };
                         let rendered = if self.live && !matches!(leaf.kind, Kind::TableCell(_)) {
                             let field = super::mdx::view::FieldContext::new(
@@ -3097,6 +3131,8 @@ impl Render for SourcePresentation {
                         this.command(Command::CancelComposition, window, cx);
                     } else if this.navigate_table(super::tables::Navigation::Exit { backward: false }, window, cx) {
                         // Escape leaves the table without changing its source.
+                    } else if this.exit_code(window, cx) {
+                        // Escape returns from local source, or leaves the code block.
                     } else {
                         cx.propagate();
                     }
@@ -3170,6 +3206,7 @@ impl Render for SourcePresentation {
                         ),
                     &self.scroll,
                 ));
+        let root = self.code_actions(root, cx);
         SourceElement {
             child: root.into_any_element(),
             view: cx.entity(),
