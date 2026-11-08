@@ -10080,7 +10080,11 @@ fn native_navigation_pointer_words_lines_and_stationary_offscreen_drag(
         window.blur(cx);
         window.simulate_next_frame(cx);
         window.render_frame(cx);
-        (outside, view.read(cx).selection(), view.read(cx).scroll_offset())
+        (
+            outside,
+            view.read(cx).selection(),
+            view.read(cx).scroll_offset(),
+        )
     });
     view.update_in(&mut context, |view, window, cx| {
         view.focus_handle(cx).focus(window, cx);
