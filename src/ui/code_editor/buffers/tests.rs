@@ -977,14 +977,9 @@ fn markdown_pristine_formula_reload_allows_open_and_cursor_moves_during_disk_rea
                 .unwrap()
                 .clone()
         });
-        // external_change consumes a watcher event: use the opened buffer's
-        // canonical path and install that event's owning Host first.
+        // Register the owning watch after the write: a real notification must
+        // not race the explicitly gated external_change request below.
         let path = app.read_with(&context, |app, _| app.active_buffer().unwrap().path.clone());
-        app.update_in(&mut context, |app, _, cx| {
-            app.editor
-                .buffers
-                .rebuild_watch(Some(host.clone()), cx, |app| &mut app.editor.buffers);
-        });
         view.update_in(&mut context, |view, window, cx| {
             if !view.is_live() {
                 view.toggle_mode(window, cx);
@@ -1000,9 +995,12 @@ fn markdown_pristine_formula_reload_allows_open_and_cursor_moves_during_disk_rea
         if opened_before_read {
             context.update(|window, cx| window.click("markdown-math-ready-x", cx));
         }
-        std::fs::write(&path, loaded).unwrap();
         let release = host.pause_next_read();
+        std::fs::write(&path, loaded).unwrap();
         app.update_in(&mut context, |app, window, cx| {
+            app.editor
+                .buffers
+                .rebuild_watch(Some(host.clone()), cx, |app| &mut app.editor.buffers);
             app.editor.buffers.external_change(
                 &path,
                 window,
