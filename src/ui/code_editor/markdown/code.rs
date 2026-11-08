@@ -384,6 +384,16 @@ impl SourcePresentation {
         self.command(Command::Select(Selection::caret(at)), window, cx);
         self.focus.focus(window, cx);
     }
+    pub(super) fn code_accepts_pair(&self, range: &Range<usize>, cx: &App) -> bool {
+        let Some(leaf) = self.projection.leaf_at(range.start) else { return false; };
+        if range.end > leaf.range.end { return false; }
+        if !matches!(leaf.kind, Kind::Code(_)) { return false; }
+        let Some(fence) = self.code_fence(leaf.id, self.projection.revision, cx) else {
+            return matches!(leaf.kind, Kind::Code(super::super::regions::Code::Indented));
+        };
+        range.start >= fence.body.start && range.end <= fence.body.end
+            && !fence.hidden.iter().any(|hidden| hidden.start < range.end && range.start < hidden.end)
+    }
     pub(super) fn code_input(&mut self, command: Command, cx: &App) -> (Command, Option<usize>) {
         if matches!(
             command,
@@ -405,6 +415,7 @@ impl SourcePresentation {
                 .marked_range()
                 .unwrap_or_else(|| self.state.selection.range()),
             Command::Insert(_) => self.state.selection.range(),
+            Command::BatchReplaceSelected { edits, .. } if edits.len() == 1 => edits[0].0.clone(),
             Command::Replace {
                 range,
                 kind: EditKind::Typing | EditKind::Paste,
@@ -444,6 +455,7 @@ impl SourcePresentation {
                 | Command::Commit(text)
                 | Command::Insert(text)
                 | Command::Replace { text, .. } => text,
+                Command::BatchReplaceSelected { edits, .. } => &edits[0].1,
                 _ => unreachable!(),
             };
             if !terminal && (fence.prefix.is_empty() || !text.contains('\n')) {
@@ -495,6 +507,18 @@ impl SourcePresentation {
                     },
                     None,
                 )
+            }
+            Command::BatchReplaceSelected { mut edits, selection } if edits.len() == 1 && !edits[0].1.is_empty() => {
+                let (_, original) = edits.pop().unwrap();
+                let relative = selection.head().saturating_sub(range.start).min(original.len());
+                let utf16 = original[..relative].encode_utf16().count();
+                let (text, selected, _) = body_input(&original, &prefix, first, terminal, Some(utf16..utf16));
+                let target16 = selected.unwrap().start;
+                let mut units = 0;
+                let caret = text.char_indices().find_map(|(at, ch)| {
+                    if units >= target16 { Some(at) } else { units += ch.len_utf16(); None }
+                }).unwrap_or(text.len());
+                (Command::BatchReplaceSelected { edits: vec![(range.clone(), text)], selection: Selection::caret(range.start + caret) }, None)
             }
             command => (command, None),
         }

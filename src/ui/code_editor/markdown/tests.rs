@@ -2404,7 +2404,7 @@ fn native_table_cells_navigate_exit_edit_and_save_without_rewriting_neighbors(
         two,
         three,
         empty,
-        source.find("After").unwrap() - 1,
+        empty,
     ] {
         context.update(|window, cx| window.press("tab", cx));
         context.run_until_parked();
@@ -2425,7 +2425,7 @@ fn native_table_cells_navigate_exit_edit_and_save_without_rewriting_neighbors(
         one,
         value,
         name,
-        source.find("| **Name").unwrap() - 1,
+        name,
     ] {
         context.update(|window, cx| window.press("shift-tab", cx));
         context.run_until_parked();
@@ -2768,7 +2768,7 @@ fn native_table_cell_escapes_wrapping_unicode_and_preedit_share_the_document_map
 }
 
 #[gpui_kit::test]
-fn native_table_at_document_edges_transfers_focus_without_inserting_rows(
+fn native_table_at_document_edges_keeps_focus_without_inserting_rows(
     cx: &mut gpui_kit::TestAppContext,
 ) {
     use crate::ui::app::test_window::harness_with_tabs;
@@ -2820,7 +2820,8 @@ fn native_table_at_document_edges_transfers_focus_without_inserting_rows(
         context.update(|window, cx| window.press(key, cx));
         context.run_until_parked();
         context.update(|window, cx| {
-            assert!(!view.read(cx).focus_handle(cx).is_focused(window));
+            assert!(view.read(cx).focus_handle(cx).is_focused(window));
+            assert_eq!(view.read(cx).selection(), Selection::caret(at));
             assert_eq!(
                 view.read(cx).document().read(cx).encode().unwrap(),
                 original.as_bytes()

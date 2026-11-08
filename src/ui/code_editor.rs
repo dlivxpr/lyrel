@@ -1315,11 +1315,48 @@ impl LyrelApp {
                             cx,
                         );
                     }
+                    if let markdown::DocumentEvent::RequestImageEdit { presentation, revision, selection } = event {
+                        app.editor_edit_markdown_image(id, presentation.clone(), *revision, *selection, window, cx);
+                    }
                 });
             if let Some(file) = self.editor.buffers.get_mut(id) {
                 file._links_sub = Some(subscription);
             }
         }
+    }
+
+    fn editor_edit_markdown_image(
+        &mut self,
+        id: BufferId,
+        presentation: gpui_kit::WeakEntity<markdown::SourcePresentation>,
+        revision: u64,
+        selection: markdown::Selection,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(view) = presentation.upgrade() else { return; };
+        if self.active_buffer().is_none_or(|file| file.id() != id)
+            || self.active_editor_input().is_none_or(|input| input.markdown().is_none_or(|active| active != &view))
+            || view.read(cx).document().read(cx).revision() != revision
+            || view.read(cx).selection() != selection
+        { return; }
+        let Some(tab) = self.tabs.get(self.tabs.active_index()).map(|tab| tab.id()) else { return; };
+        let Some(group) = self.tab_code().map(|code| code.group) else { return; };
+        let target = buffers::OpenTarget {
+            workspace: self.workspace, tab, group: Some(group), window_host: self.spawn_host(cx),
+            origin: Some((id, revision)), origin_epoch: self.editor_resource_epoch(id, cx),
+        };
+        let owner = cx.weak_entity();
+        let identity = view.entity_id();
+        let current = std::rc::Rc::new(move |cx: &gpui_kit::App| {
+            let Some(owner) = owner.upgrade() else { return false; };
+            let owner = owner.read(cx);
+            owner.editor_open_target_valid(target, cx)
+                && owner.tabs.get(owner.tabs.active_index()).is_some_and(|active| active.id() == tab)
+                && owner.tab_code().is_some_and(|code| code.group == group)
+                && owner.active_editor_input().is_some_and(|input| input.markdown().is_some_and(|active| active.entity_id() == identity))
+        });
+        view.update(cx, |view, cx| view.open_image_editor(current, window, cx));
     }
 
     #[allow(clippy::too_many_arguments)]

@@ -16,6 +16,8 @@ pub(super) struct State {
     loaded: Option<Arc<Loaded>>,
     controls: HashMap<(usize, String), (ScrollHandle, FocusHandle)>,
     task: Option<Task<()>>,
+    hover: Option<super::super::links::Link>,
+    hover_open: bool,
 }
 impl SourcePresentation {
     pub(super) fn start_embed_refresh(&mut self, cx: &mut Context<Self>) {
@@ -37,6 +39,8 @@ impl SourcePresentation {
         self.embeds.loaded = None;
         self.embeds.installed = None;
         self.embeds.controls.clear();
+        self.embeds.hover = None;
+        self.embeds.hover_open = false;
     }
     pub(super) fn request_embeds(&mut self, cx: &mut Context<Self>) {
         if !self.live
@@ -45,7 +49,7 @@ impl SourcePresentation {
         {
             return;
         }
-        if self.projection.links.embeds.is_empty() {
+        if self.projection.links.embeds.is_empty() && self.embeds.hover.is_none() {
             if self.embeds.loaded.is_some() {
                 self.reset_embeds();
             }
@@ -79,7 +83,7 @@ impl SourcePresentation {
         super::super::embeds::Request::new(
             self.document.read(cx).revision(),
             &self.projection.links.embeds,
-        )
+        ).with_preview(self.embeds.hover.clone())
     }
     pub(crate) fn previous_embeds(&self) -> Option<Arc<Loaded>> {
         self.embeds.loaded.clone()
@@ -137,6 +141,68 @@ impl SourcePresentation {
         self.embeds.installed = Some(revision);
         self.invalidate_layout(cx);
         cx.notify();
+    }
+    pub(super) fn leave_link_hover(&mut self, cx: &mut Context<Self>) {
+        if !self.embeds.hover_open && self.embeds.hover.take().is_some() {
+            self.embeds.generation = self.embeds.generation.wrapping_add(1);
+            self.embeds.pending = false;
+            cx.notify();
+        }
+    }
+    pub(super) fn hover_link(&mut self, event: &MouseMoveEvent, cx: &mut Context<Self>) {
+        let link = if event.pressed_button.is_none() {
+            self.pointer_link_at(event.position, cx).map(|(link, _)| link.clone())
+        } else { None };
+        if link.is_none() && self.embeds.hover_open { return; }
+        if self.embeds.hover.as_ref() == link.as_ref() { return; }
+        self.embeds.generation = self.embeds.generation.wrapping_add(1);
+        self.embeds.pending = false;
+        self.embeds.hover = link;
+        self.request_embeds(cx);
+        cx.notify();
+    }
+    pub(super) fn link_preview(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let link = self.embeds.hover.as_ref()?;
+        let document = self.document.read(cx);
+        if !self.live || self.projection.revision != document.revision() { return None; }
+        let bounds = self.range_to_bounds(&link.label, cx)?;
+        let entry = self.embeds.loaded.as_ref().filter(|_| self.embeds.installed == Some(document.revision()))
+            .and_then(|loaded| loaded.preview.as_ref())
+            .filter(|entry| entry.reference.source == link.source
+                && entry.reference.target == link.target.split('#').next().unwrap_or(""));
+        let fragment = entry.and_then(|entry| entry.result.as_ref().ok()).cloned();
+        let reason = entry.and_then(|entry| entry.result.as_ref().err()).copied();
+        let external = url::Url::parse(&link.target).ok()
+            .filter(|url| matches!(url.scheme(), "https" | "http" | "mailto"))
+            .map(|_| link.target.clone());
+        let view = cx.weak_entity();
+        let expected = link.clone();
+        Some(deferred(anchored().position(bounds.origin).child(
+            gpui_kit::component::hover_card::HoverCard::new("markdown-link-preview-card")
+                .anchor(Anchor::TopLeft)
+                .open_delay(std::time::Duration::from_millis(450))
+                .trigger(div().w(bounds.size.width).h(bounds.size.height))
+                .on_open_change(move |open, _, cx| {
+                    let _ = view.update(cx, |view, cx| {
+                        if view.embeds.hover.as_ref() != Some(&expected) { return; }
+                        view.embeds.hover_open = *open;
+                        if !open { view.embeds.hover = None; }
+                        cx.notify();
+                    });
+                })
+                .content(move |_, window, cx| {
+                    let mut body = div().id("markdown-link-preview").test_support().v_flex().gap_2()
+                        .w_80().max_h(window.rem_size() * 20.).overflow_y_scroll();
+                    if let Some(fragment) = &fragment {
+                        body = body.role(Role::Group).aria_label(SharedString::from(format!("{}\n{}", fragment.title, fragment.text)));
+                        body = body.child(div().font_weight(FontWeight::SEMIBOLD).child(fragment.title.clone()))
+                            .child(render_fragment(fragment, "markdown-link-preview", window, cx));
+                    } else {
+                        body = body.child(external.clone().unwrap_or_else(|| t(reason.unwrap_or(L10nKey::MarkdownReferenceLoading)).to_owned()));
+                    }
+                    body
+                })
+        )).into_any_element())
     }
     pub(super) fn render_embeds(
         &self,

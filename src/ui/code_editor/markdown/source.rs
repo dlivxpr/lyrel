@@ -24,6 +24,11 @@ mod references;
 #[path = "slash.rs"]
 mod slash;
 
+#[path = "auto_pair.rs"]
+mod auto_pair;
+#[cfg(test)]
+#[path = "review_tests.rs"]
+mod review_tests;
 #[path = "assets.rs"]
 mod assets;
 #[path = "headings.rs"]
@@ -367,6 +372,15 @@ impl SourcePresentation {
                 .as_ref()
                 .map(|owner| owner.entity_id()),
         )
+    }
+    pub(crate) fn reload_input(&self, cx: &App) -> (u64, bool) {
+        let document = self.document.read(cx);
+        let pending = document.composition_owner.as_ref().and_then(|owner| owner.upgrade())
+            .is_some_and(|owner| {
+                let owner = owner.read(cx);
+                owner.formula.is_some() || owner.state.composition.is_some()
+            });
+        (document.pending_input_generation, pending)
     }
     fn retire_native_composition(&self, completed: bool, cx: &mut Context<Self>) {
         crate::ui::ime::retire_markdown_composition(
@@ -1113,6 +1127,7 @@ impl SourcePresentation {
         });
         self.table_presentation_menu(menu)
             .separator()
+            .menu_with_disabled(t(L10nKey::EditorTableCopyMarkdown), Box::new(CopyTableAsMarkdown), disabled)
             .menu(t(L10nKey::EditorTableInsert), Box::new(InsertTable))
             .menu_with_disabled(
                 t(L10nKey::EditorTableInsertRowBefore),
@@ -1219,6 +1234,7 @@ impl SourcePresentation {
             self.state.selection = self.map_live_caret(self.state.selection, cx);
         }
         self.sync_code(cx);
+        let command = self.auto_pair(command, cx);
         let (command, code_caret) = self.code_input(command, cx);
         let command = if self.live
             && self.extra_selections.is_empty()
@@ -2131,6 +2147,13 @@ impl SourcePresentation {
                 cx,
             );
             return;
+        }
+        if backward {
+            let paired = self.auto_pair(Command::Backspace, cx);
+            if matches!(paired, Command::BatchReplaceSelected { .. }) {
+                self.command(paired, window, cx);
+                return;
+            }
         }
         if self.code_delete(backward, window, cx) {
             return;
@@ -3261,6 +3284,10 @@ impl Render for SourcePresentation {
                 .on_action(cx.listener(|view, _: &image_edit::FitImages, window, cx| view.fit_images(window, cx)))
                 .on_mouse_move(cx.listener(|view, event: &MouseMoveEvent, _, cx| {
                     if view.move_image_resize(event.position, cx) { cx.stop_propagation(); }
+                    else { view.hover_link(event, cx); }
+                }))
+                .on_hover(cx.listener(|view, hovered: &bool, _, cx| {
+                    if !*hovered { view.leave_link_hover(cx); }
                 }))
                 .on_action(cx.listener(|this, _: &properties::EditDocumentProperties, window, cx| this.open_properties(window, cx)))
                 .on_action(cx.listener(|this, _: &properties::AddDocumentProperty, window, cx| this.add_document_property(false, window, cx)))
@@ -3327,6 +3354,7 @@ impl Render for SourcePresentation {
                     }),
                 )
                 .on_action(cx.listener(|this, _: &super::tables::InsertTable, window, cx| this.insert_table(window, cx)))
+                .on_action(cx.listener(|this, _: &super::tables::CopyTableAsMarkdown, window, cx| this.copy_table_markdown(window, cx)))
                 .on_action(cx.listener(|this, _: &super::tables::InsertRowBefore, window, cx| this.table_command(super::tables::Operation::InsertRowBefore, window, cx)))
                 .on_action(cx.listener(|this, _: &super::tables::InsertRowAfter, window, cx| this.table_command(super::tables::Operation::InsertRowAfter, window, cx)))
                 .on_action(cx.listener(|this, _: &super::tables::DuplicateRow, window, cx| this.table_command(super::tables::Operation::DuplicateRow, window, cx)))
@@ -3689,6 +3717,7 @@ impl Render for SourcePresentation {
         let root = self.code_actions(root, cx);
         let root = root.children(self.spelling_overlay(window, cx));
         let root = root.children(self.formula_overlay(window));
+        let root = root.children(self.link_preview(cx));
         let root = self.block_actions(root, cx);
         let root = self.reorder_actions(root, cx);
         SourceElement {
@@ -4067,12 +4096,8 @@ impl Element for SourceElement {
                 return;
             }
             if !phase.bubble()
-                || (!view.read(cx).dragging
-                    && view.read(cx).pointer_link.is_none()
-                    && view.read(cx).reorder.is_none())
-            {
-                return;
-            }
+                || (!view.read(cx).dragging && view.read(cx).pointer_link.is_none() && view.read(cx).reorder.is_none())
+            { return; }
             view.update(cx, |view, cx| {
                 if view.reorder.is_some() {
                     if event.pressed_button == Some(MouseButton::Left) {

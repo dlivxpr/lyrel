@@ -7,6 +7,7 @@ pub(in crate::ui::code_editor::markdown::source) struct Tools {
     pub(super) menu: Option<(Entity<PopupMenu>, Point<Pixels>)>,
     subscription: Option<Subscription>,
     pub(super) exporting: bool,
+    pub(super) palette_open: bool,
     error: Option<String>,
 }
 #[derive(Clone)]

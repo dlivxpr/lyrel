@@ -274,6 +274,7 @@ pub(crate) struct MarkdownDocument {
     revision: u64,
     // Includes selection/lease changes that do not advance the source revision.
     input_generation: u64,
+    pending_input_generation: u64,
     format: TextFormat,
     endings: Vec<LineEnding>,
     history: UndoHistory<Change>,
@@ -293,6 +294,7 @@ impl MarkdownDocument {
             endings: source.endings,
             revision: 0,
             input_generation: 0,
+            pending_input_generation: 0,
             format,
             history: UndoHistory::new(),
             typing_end: None,
@@ -1026,6 +1028,11 @@ impl gpui_kit::EventEmitter<DocumentEvent> for MarkdownDocument {}
 pub(super) enum DocumentEvent {
     Edited(Transaction),
     PresentationChanged,
+    RequestImageEdit {
+        presentation: gpui_kit::WeakEntity<SourcePresentation>,
+        revision: u64,
+        selection: Selection,
+    },
     RequestAssetLocation {
         presentation: gpui_kit::WeakEntity<SourcePresentation>,
         cancelled: std::rc::Rc<std::cell::Cell<bool>>,

@@ -398,12 +398,26 @@ impl SourcePresentation {
         self.focus.focus(window, cx);
     }
     pub(super) fn edit_image(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.selected_image(cx).is_none() { return; }
+        self.command(Command::FinishComposition, window, cx);
+        let revision = self.document.read(cx).revision();
+        let presentation = cx.weak_entity();
+        let selection = self.state.selection;
+        self.document.update(cx, |_, cx| cx.emit(super::DocumentEvent::RequestImageEdit { presentation, revision, selection }));
+    }
+    pub(crate) fn open_image_editor(
+        &mut self,
+        owner_current: std::rc::Rc<dyn Fn(&App) -> bool>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let Some(object) = self.selected_image(cx) else {
             return;
         };
-        self.command(Command::FinishComposition, window, cx);
         let revision = self.document.read(cx).revision();
-        let token = self.input_token(cx);
+        let identity = self.document.entity_id();
+        // Native input tokens retire on modal focus handoff. The workbench
+        // owner, source revision and resource epoch are the semantic lease here.
         let resources = self.document.read(cx).resources().cloned();
         let alt = cx.new(|cx| InputState::new(window, cx).default_value(object.image.alt.clone()));
         let source =
@@ -419,6 +433,7 @@ impl SourcePresentation {
         });
         let initial_focus = std::cell::Cell::new(true);
         let error = std::rc::Rc::new(std::cell::RefCell::new(None::<SharedString>));
+        let committed = std::rc::Rc::new(std::cell::Cell::new(false));
         let view = cx.entity().downgrade();
         let focus = self.focus.clone();
         window.open_dialog(cx, move |dialog, window, cx| {
@@ -432,6 +447,10 @@ impl SourcePresentation {
             let width = width.clone();
             let resources = resources.clone();
             let message = error.borrow().clone();
+            let owner_current = owner_current.clone();
+            let close_owner_current = owner_current.clone();
+            let applied_state = committed.clone();
+            let closed_after_apply = committed.clone();
             let error = error.clone();
             dialog
                 .title(t(L10nKey::MarkdownImageEdit))
@@ -496,10 +515,11 @@ impl SourcePresentation {
                         window.refresh();
                         return false;
                     }
-                    let applied = view
+                    let applied = owner_current(cx) && view
                         .update(cx, |view, cx| {
                             if view.document.read(cx).revision() != revision
-                                || view.input_token(cx) != token
+                                || view.document.entity_id() != identity
+                                || !view.live
                                 || !match &resources {
                                     Some(resources) => {
                                         resources.is_current(view.document.read(cx).resources())
@@ -516,6 +536,7 @@ impl SourcePresentation {
                             true
                         })
                         .unwrap_or(false);
+                    applied_state.set(applied);
                     if !applied {
                         *error.borrow_mut() = Some(t(L10nKey::MarkdownImageChanged).into());
                         window.refresh();
@@ -524,7 +545,9 @@ impl SourcePresentation {
                 })
                 .on_close({
                     let focus = focus.clone();
-                    move |_, window, cx| focus.focus(window, cx)
+                    move |_, window, cx| {
+                        if closed_after_apply.get() || close_owner_current(cx) { focus.focus(window, cx); }
+                    }
                 })
         });
     }

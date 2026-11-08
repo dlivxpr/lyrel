@@ -41,17 +41,26 @@ impl Style {
 pub(crate) struct Request {
     revision: u64,
     references: Vec<links::Link>,
+    preview: Option<links::Link>,
 }
 impl Request {
     pub(super) fn new(revision: u64, references: &[links::Link]) -> Self {
         Self {
             revision,
             references: references.to_vec(),
+            preview: None,
         }
+    }
+}
+impl Request {
+    pub(super) fn with_preview(mut self, preview: Option<links::Link>) -> Self {
+        self.preview = preview;
+        self
     }
 }
 pub(crate) struct Loaded {
     pub(super) entries: Vec<Entry>,
+    pub(super) preview: Option<Entry>,
     stamp: u64,
     revision: u64,
     math_style: super::math::Style,
@@ -63,6 +72,7 @@ pub(super) struct Entry {
     pub(super) result: Result<Arc<Fragment>, L10nKey>,
 }
 pub(super) struct Fragment {
+    pub(super) title: String,
     pub(super) projection: Projection,
     pub(super) text: gpui_kit::SharedString,
     pub(super) blocks: Vec<BlockNode>,
@@ -78,6 +88,7 @@ struct Indexed {
 }
 struct Plan {
     source: Arc<str>,
+    title: String,
     path: PathBuf,
     range: Range<usize>,
     nested: Vec<(links::Link, Result<Plan, L10nKey>)>,
@@ -105,12 +116,29 @@ struct Resolver<'a> {
     bytes: usize,
     stamp: std::collections::hash_map::DefaultHasher,
 }
+// 与参考 hover card 一致：最多八个非空行、360 个字符，保留段落，跳过隐藏注释。
+fn preview_excerpt(source: &str) -> String {
+    let mut excerpt = String::new();
+    let mut lines = 0;
+    let mut chars = 0;
+    for line in source.lines().map(str::trim_end).filter(|line| !line.trim_start().starts_with("<!--")) {
+        if !line.is_empty() { lines += 1; if lines > 8 { break; } }
+        if !excerpt.is_empty() { excerpt.push('\n'); chars += 1; }
+        for ch in line.chars() {
+            if chars == 360 { excerpt.push('…'); return excerpt; }
+            excerpt.push(ch);
+            chars += 1;
+        }
+    }
+    excerpt
+}
 impl Resolver<'_> {
     fn target(
         &mut self,
         owner: &Path,
         reference: &links::Link,
         depth: usize,
+        preview: bool,
     ) -> Result<Plan, L10nKey> {
         if depth > 3 || self.remaining == 0 {
             return Err(L10nKey::MarkdownEmbedLimit);
@@ -197,15 +225,22 @@ impl Resolver<'_> {
             self.files.insert(path.clone(), indexed);
         }
         let indexed = &self.files[&path];
-        let range = indexed
-            .index
-            .fragment(&indexed.source, &indexed.root, Some(&fragment))?;
-        let source = indexed.source.clone();
+        let title = if preview {
+            indexed.root.children().into_iter().flatten()
+                .find(|node| matches!(node, markdown::mdast::Node::Heading(_)))
+                .map(|node| node.to_string())
+                .unwrap_or_else(|| path.file_stem().unwrap_or_default().to_string_lossy().into_owned())
+        } else { String::new() };
+        let source = if preview { Arc::from(preview_excerpt(&indexed.source)) } else { indexed.source.clone() };
+        let range = if preview { 0..source.len() } else {
+            indexed.index.fragment(&indexed.source, &indexed.root, Some(&fragment))?
+        };
         let references: Vec<_> = indexed
             .index
             .embeds
             .iter()
             .filter(|reference| {
+                !preview &&
                 range.start <= reference.source.start && reference.source.end <= range.end
             })
             .take(MAX_ITEMS + 1)
@@ -216,7 +251,7 @@ impl Resolver<'_> {
             .into_iter()
             .take(MAX_ITEMS + 1)
             .map(|mut reference| {
-                let result = self.target(&path, &reference, depth + 1);
+                let result = self.target(&path, &reference, depth + 1, false);
                 reference.source =
                     reference.source.start - range.start..reference.source.end - range.start;
                 reference.label =
@@ -229,6 +264,7 @@ impl Resolver<'_> {
         self.stack.pop();
         Ok(Plan {
             source,
+            title,
             path,
             range,
             nested,
@@ -445,6 +481,7 @@ impl Plan {
             })
             .collect();
         Ok(Arc::new(Fragment {
+            title: self.title,
             projection,
             text,
             blocks,
@@ -486,10 +523,15 @@ pub(crate) fn load(
         .into_iter()
         .take(MAX_ITEMS + 1)
         .map(|reference| {
-            let result = resolver.target(owner, &reference, 1);
+            let result = resolver.target(owner, &reference, 1, false);
             (reference, result)
         })
         .collect();
+    let preview = request.preview.map(|mut reference| {
+        reference.target = reference.target.split('#').next().unwrap_or("").to_owned();
+        let result = resolver.target(owner, &reference, 1, true);
+        (reference, result)
+    });
     // Error changes participate in cache invalidation, including disappearance,
     // ambiguity and permission recovery with unchanged owner bytes.
     fn hash_results(plans: &[(links::Link, Result<Plan, L10nKey>)], stamp: &mut impl Hasher) {
@@ -506,10 +548,12 @@ pub(crate) fn load(
         }
     }
     hash_results(&plans, &mut resolver.stamp);
+    if let Some(preview) = &preview { hash_results(std::slice::from_ref(preview), &mut resolver.stamp); }
     let stamp = resolver.stamp.finish();
     if let Some(previous) = previous.as_ref().filter(|previous| {
         previous.revision == request.revision
             && previous.stamp == stamp
+            && previous.preview.as_ref().map(|entry| &entry.reference) == preview.as_ref().map(|(reference, _)| reference)
             && previous.math_style == math_style
             && previous.diagram_style == diagram_style
             && previous.files.len() == resolver.files.len()
@@ -537,8 +581,13 @@ pub(crate) fn load(
             }),
         })
         .collect();
+    let preview = preview.map(|(reference, result)| Entry {
+        reference,
+        result: result.and_then(|plan| plan.prepare(host, math_style, &diagram_style, identity, &mut budget)),
+    });
     Arc::new(Loaded {
         entries,
+        preview,
         stamp,
         revision: request.revision,
         math_style,

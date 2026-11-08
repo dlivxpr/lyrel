@@ -886,6 +886,45 @@ fn external_writes_scenario(cx: &mut TestAppContext, markdown: bool) {
 }
 
 #[gpui_kit::test]
+fn markdown_reload_started_before_formula_input_reports_conflict_without_losing_session(cx: &mut TestAppContext) {
+    use gpui_kit::Focusable as _;
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("pending-formula.md");
+    let original = "$x$\n\nkeep\n";
+    std::fs::write(&path, original).unwrap();
+    let host = FileHost::new(HostId(2042));
+    let (app, mut context, _streams) = harness_with_tabs(cx, 1);
+    app.update_in(&mut context, |app, window, cx| app.editor_open_on_host(host.clone(), &path, window, cx));
+    wait_until(&mut context, |context| active_id(&app, context).is_some());
+    let view = app.read_with(&context, |app, _| app.active_editor_input().unwrap().markdown().unwrap().clone());
+    view.update_in(&mut context, |view, window, cx| {
+        if !view.is_live() { view.toggle_mode(window, cx); }
+        view.focus_handle(cx).focus(window, cx);
+    });
+    wait_until(&mut context, |context| context.update(|window, cx| {
+        window.render_frame(cx);
+        window.try_find("markdown-math-ready-x").is_some()
+    }));
+    std::fs::write(&path, format!("{original}external\n")).unwrap();
+    let release = host.pause_next_read();
+    app.update_in(&mut context, |app, window, cx| app.editor_reload_from_disk(app.active_buffer().unwrap().id(), window, cx));
+    wait_until(&mut context, |_| host.entered.load(Ordering::SeqCst));
+    context.update(|window, cx| {
+        window.click("markdown-math-ready-x", cx);
+        window.input("9", cx);
+    });
+    release.send(()).unwrap();
+    wait_until(&mut context, |context| app.read_with(context, |app, _| app.active_buffer().unwrap().conflict.is_some()));
+    context.update(|window, cx| {
+        assert!(window.find("markdown-formula-editor").visible());
+        assert_eq!(view.read(cx).document().read(cx).encode().unwrap(), original.as_bytes());
+        window.press("secondary-a", cx);
+        window.press("secondary-c", cx);
+        assert!(cx.read_from_clipboard().unwrap().text().unwrap().contains('9'));
+    });
+}
+
+#[gpui_kit::test]
 fn markdown_clean_reload_survives_selection_and_group_handoff_without_overwriting_disk(
     cx: &mut TestAppContext,
 ) {

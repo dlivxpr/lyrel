@@ -402,6 +402,25 @@ impl SourcePresentation {
             return;
         }
         let ranges = self.clipboard_ranges(cx);
+        self.copy_markdown_ranges(ranges, cut, plain, window, cx);
+    }
+    pub(super) fn copy_table_markdown(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(cell) = self.active_table() else { return; };
+        if self.projection.revision != self.document.read(cx).revision() { return; }
+        let mut range = cell.table();
+        if let Some(marker) = super::super::tables::metadata::read(self.document.read(cx).source(), range.start) {
+            range.start = marker.range.start;
+        }
+        self.copy_markdown_ranges(vec![range], false, true, window, cx);
+    }
+    fn copy_markdown_ranges(
+        &mut self,
+        ranges: Vec<Range<usize>>,
+        cut: bool,
+        plain: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         if ranges.is_empty() {
             return;
         }

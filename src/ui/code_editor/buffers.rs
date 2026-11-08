@@ -664,7 +664,8 @@ impl EditorBuffers {
         let Some(file) = self.get_mut(id) else {
             return false;
         };
-        match classify_external_change(file.saving, file.dirty, file.disk_mtime, observed) {
+        let pending = file.input.markdown().is_some_and(|view| view.read(cx).reload_input(cx).1);
+        match classify_external_change(file.saving, file.dirty || pending, file.disk_mtime, observed) {
             ExternalChange::Ignore => {}
             ExternalChange::Conflict => {
                 if let Observed::Present(mtime) = observed {
@@ -702,6 +703,7 @@ impl EditorBuffers {
             .input
             .markdown()
             .map(|view| view.read(cx).input_token(cx));
+        let pending_lease = file.input.markdown().map(|view| view.read(cx).reload_input(cx));
         file.reload_seq = file.reload_seq.wrapping_add(1);
         let seq = file.reload_seq;
         HostOps::run_in(
@@ -734,13 +736,13 @@ impl EditorBuffers {
                 if input_lease.is_some_and(|lease| {
                     file.input.markdown().is_none_or(|view| {
                         let current = view.read(cx).input_token(cx);
-                        current.0 != lease.0 || current.1 != lease.1 || current.4 != lease.4
+                        current.0 != lease.0 || current.1 != lease.1
                     })
                 }) {
                     // Reload owns document bytes, not native input coordinates.
                     // Selection, scrolling and idle focus handoffs may retire an
                     // input lease without making a clean disk read obsolete.
-                    // Still reject replaced documents, newer text and IME owners.
+                    // Pending formula/IME input is checked separately below.
                     return;
                 }
                 let (decoded, mtime) = match result {
@@ -757,6 +759,16 @@ impl EditorBuffers {
                         return;
                     }
                 };
+                if pending_lease.is_some_and(|lease| {
+                    lease.1 || file.input.markdown().is_none_or(|view| {
+                        let current = view.read(cx).reload_input(cx);
+                        current.1 || current.0 != lease.0
+                    })
+                }) {
+                    file.conflict = Some(mtime.map_or(DiskConflict::Deleted, DiskConflict::Changed));
+                    cx.notify();
+                    return;
+                }
                 file.disk_mtime = mtime;
                 file.conflict = None;
                 file.saved_format = decoded.format;

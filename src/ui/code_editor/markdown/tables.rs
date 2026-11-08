@@ -120,8 +120,8 @@ impl Navigation {
 }
 
 /// Tab visits actual cells in source row order (header first), never the
-/// delimiter row, and never creates rows. At either edge it selects the nearest
-/// document leaf outside the table; a document edge transfers workbench focus.
+/// delimiter row, and never creates rows. At either edge Tab keeps the current
+/// caret; it does not leave the table or transfer workbench focus.
 /// Enter visits the next row in the same column; at the last row it exits.
 /// Escape exits immediately. At a cell edge Backspace/Delete move without
 /// deleting table syntax. Source mode retains literal source editing.
@@ -160,6 +160,11 @@ pub(super) fn navigate(
     } else {
         leaves[ix + 1..].iter().find(eligible)
     };
+    if matches!(navigation, Navigation::Cell { .. })
+        && target.is_none_or(|leaf| !matches!(leaf.kind, Kind::TableCell(other) if other.start == cell.start))
+    {
+        return Some(Some(at));
+    }
     Some(target.map(|leaf| {
         if backward
             && (matches!(navigation, Navigation::Boundary { .. })
@@ -272,6 +277,7 @@ gpui_kit::actions!(
     markdown_table,
     [
         InsertTable,
+        CopyTableAsMarkdown,
         InsertRowBefore,
         InsertRowAfter,
         DuplicateRow,

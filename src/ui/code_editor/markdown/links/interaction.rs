@@ -118,11 +118,12 @@ impl SourcePresentation {
         self.focus.focus(window, cx);
     }
 
-    fn pointer_link_at(
+    pub(in crate::ui::code_editor::markdown::source) fn pointer_link_at(
         &self,
         position: Point<Pixels>,
         cx: &App,
     ) -> Option<(&super::super::links::Link, usize)> {
+        if self.viewport.bounds.is_none_or(|bounds| !bounds.contains(&position)) { return None; }
         if !self.live
             || self.state.composition.is_some()
             || self.projection.revision != self.document.read(cx).revision()
