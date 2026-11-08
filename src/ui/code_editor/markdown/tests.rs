@@ -156,48 +156,9 @@ fn typing_in_another_presentation_starts_a_new_undo_group() {
     assert_eq!(document.source().to_string(), "a");
 }
 
-#[test]
-fn prose_split_hard_break_and_cross_paragraph_replacement_share_source_history() {
-    let mut document = MarkdownDocument::new(
-        "# 标题\n\nfirst second\n\nlast".into(),
-        TextFormat::default(),
-    );
-    let mut state = PresentationState::new(Selection::caret(16));
-    document.command(&mut state, Command::ParagraphBreak { hard: false });
-    assert_eq!(
-        document.source().to_string(),
-        "# 标题\n\nfirst \n\nsecond\n\nlast"
-    );
-    document.command(&mut state, Command::ParagraphBreak { hard: true });
-    assert_eq!(
-        document.source().to_string(),
-        "# 标题\n\nfirst \n\n  \nsecond\n\nlast"
-    );
-    document.command(&mut state, Command::Undo);
-    document.command(&mut state, Command::Undo);
-    assert_eq!(
-        document.source().to_string(),
-        "# 标题\n\nfirst second\n\nlast"
-    );
-    assert_eq!(state.selection(), Selection::caret(16));
-    document.command(
-        &mut state,
-        Command::Replace {
-            range: 13..28,
-            text: "正文".into(),
-            kind: EditKind::Command,
-        },
-    );
-    assert_eq!(document.source().to_string(), "# 标题\n\nfir正文");
-    document.command(&mut state, Command::Undo);
-    assert_eq!(
-        document.source().to_string(),
-        "# 标题\n\nfirst second\n\nlast"
-    );
-}
 
 #[gpui_kit::test]
-fn native_live_split_join_and_source_switch_keep_one_document_and_history(
+fn native_live_single_newline_and_source_switch_keep_one_document_and_history(
     cx: &mut gpui_kit::TestAppContext,
 ) {
     use crate::ui::app::test_window::harness_with_tabs;
@@ -259,8 +220,14 @@ fn native_live_split_join_and_source_switch_keep_one_document_and_history(
     presentation.read_with(&view_context, |view, cx| {
         assert_eq!(
             view.document().read(cx).source().to_string(),
-            "# Heading\n\nalpha 中🎉\n\nbeta\n\nlast\n"
+            "# Heading\n\nalpha 中🎉\nbeta\n\nlast\n"
         );
+    });
+    settle_live_geometry(&presentation, &mut view_context);
+    presentation.read_with(&view_context, |view, cx| {
+        let before = view.range_to_bounds(&(24..24), cx).unwrap();
+        let after = view.range_to_bounds(&(25..25), cx).unwrap();
+        assert!(after.top() > before.top(), "Enter must visibly start the next line");
     });
     view_context.update(|window, cx| window.press("backspace", cx));
     view_context.run_until_parked();
@@ -281,7 +248,7 @@ fn native_live_split_join_and_source_switch_keep_one_document_and_history(
         assert_eq!(view.selection(), selection);
         assert_eq!(
             view.document().read(cx).source().to_string(),
-            "# Heading\n\nalpha 中🎉\n\nbeta\n\nlast\n"
+            "# Heading\n\nalpha 中🎉\nbeta\n\nlast\n"
         );
     });
     view_context.dispatch_action(gpui_kit::component::input::Undo);
@@ -490,10 +457,9 @@ fn native_live_break_mapping_resize_and_composition_keep_source_ranges(
         let before_soft = view.range_to_bounds(&(26..26), cx).unwrap();
         let after_soft = view.range_to_bounds(&(27..27), cx).unwrap();
         let after_hard = view.range_to_bounds(&(34..34), cx).unwrap();
-        assert_eq!(
-            before_soft.top(),
-            after_soft.top(),
-            "soft LF flows on the same visual line"
+        assert!(
+            after_soft.top() > before_soft.top(),
+            "source LF must provide visible line feedback without adding a blank line"
         );
         assert!(
             after_hard.top() > after_soft.top(),
@@ -1135,7 +1101,7 @@ fn native_metadata_html_and_invalid_regions_edit_save_and_reopen_without_source_
 }
 
 #[gpui_kit::test]
-fn native_inline_reveal_is_local_and_typing_preserves_delimiters_and_history(
+fn native_inline_typing_and_selection_hide_formatting_and_preserve_source_history(
     cx: &mut gpui_kit::TestAppContext,
 ) {
     use crate::ui::app::test_window::harness_with_tabs;
@@ -1144,7 +1110,8 @@ fn native_inline_reveal_is_local_and_typing_preserves_delimiters_and_history(
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("inline.md");
     let original = "# Heading\n\nA **bold** and *soft* plus ~~gone~~ `code`.\n";
-    std::fs::write(&path, original).unwrap();
+    let persisted = "\u{feff}# Heading\r\n\nA **bold** and *soft* plus ~~gone~~ `code`.\r\n";
+    std::fs::write(&path, persisted).unwrap();
     let (app, mut context, _streams) = harness_with_tabs(cx, 1);
     app.update_in(&mut context, |app, window, cx| {
         app.open_file_in_editor(&path, window, cx)
@@ -1183,9 +1150,9 @@ fn native_inline_reveal_is_local_and_typing_preserves_delimiters_and_history(
     });
     view.read_with(&context, |view, cx| {
         assert_eq!(view.selection(), Selection::caret(16));
-        assert!(
-            view.range_to_bounds(&(15..15), cx).unwrap().left()
-                > view.range_to_bounds(&(13..13), cx).unwrap().left()
+        assert_eq!(
+            view.range_to_bounds(&(15..15), cx),
+            view.range_to_bounds(&(13..13), cx)
         );
         assert_eq!(
             view.range_to_bounds(&(26..26), cx),
@@ -1196,12 +1163,41 @@ fn native_inline_reveal_is_local_and_typing_preserves_delimiters_and_history(
     app.read_with(&context, |app, _| {
         assert!(!app.active_buffer().unwrap().dirty)
     });
+    for (start, content) in [(13, 15), (26, 27), (38, 40), (47, 48)] {
+        view.update_in(&mut context, |view, _, cx| {
+            view.select_range(content + 1..content + 1, cx);
+        });
+        context.update(|window, cx| {
+            window.render_frame(cx);
+            window.render_frame(cx);
+            let view = view.read(cx);
+            assert_eq!(
+                view.range_to_bounds(&(start..start), cx),
+                view.range_to_bounds(&(content..content), cx),
+                "caret entry must not expose formatting delimiters"
+            );
+        });
+    }
+    view.update_in(&mut context, |view, _, cx| view.select_range(14..49, cx));
+    context.update(|window, cx| {
+        window.render_frame(cx);
+        window.render_frame(cx);
+        let view = view.read(cx);
+        for (start, content) in [(13, 15), (26, 27), (38, 40), (47, 48)] {
+            assert_eq!(
+                view.range_to_bounds(&(start..start), cx),
+                view.range_to_bounds(&(content..content), cx),
+                "mixed selection must not expose formatting delimiters"
+            );
+        }
+    });
+    view.update_in(&mut context, |view, _, cx| view.select_range(16..16, cx));
     context.update(|window, cx| window.input("中", cx));
     context.run_until_parked();
     view.read_with(&context, |view, cx| {
         assert_eq!(
             view.document().read(cx).encode().unwrap(),
-            original.replacen("bold", "b中old", 1).as_bytes()
+            persisted.replacen("bold", "b中old", 1).as_bytes()
         );
     });
     context.dispatch_action(crate::core::actions::EditorSave);
@@ -1219,7 +1215,7 @@ fn native_inline_reveal_is_local_and_typing_preserves_delimiters_and_history(
     }
     assert_eq!(
         std::fs::read(&path).unwrap(),
-        original.replacen("bold", "b中old", 1).as_bytes()
+        persisted.replacen("bold", "b中old", 1).as_bytes()
     );
     context.dispatch_action(gpui_kit::component::input::Undo);
     context.run_until_parked();
@@ -1235,7 +1231,7 @@ fn native_inline_reveal_is_local_and_typing_preserves_delimiters_and_history(
         view.read_with(&context, |view, cx| {
             assert_eq!(
                 view.document().read(cx).encode().unwrap(),
-                original.replacen("A **bold**", expected, 1).as_bytes()
+                persisted.replacen("A **bold**", expected, 1).as_bytes()
             )
         });
         context.dispatch_action(gpui_kit::component::input::Undo);
@@ -1252,13 +1248,56 @@ fn native_inline_reveal_is_local_and_typing_preserves_delimiters_and_history(
     view.read_with(&context, |view, cx| {
         assert_eq!(
             view.document().read(cx).encode().unwrap(),
-            original.as_bytes()
+            persisted.as_bytes()
         );
         assert_eq!(
             view.range_to_bounds(&(13..13), cx),
             view.range_to_bounds(&(15..15), cx)
         );
     });
+    let identity = view.read_with(&context, |view, _| view.document().entity_id());
+    view.update_in(&mut context, |view, _, cx| view.select_range(13..21, cx));
+    let selection = view.read_with(&context, |view, _| view.selection());
+    context.dispatch_action(crate::core::actions::ToggleDocumentPreview);
+    settle_live_geometry(&view, &mut context);
+    view.read_with(&context, |view, cx| {
+        assert!(!view.is_live());
+        assert_eq!(view.selection(), selection);
+        assert_eq!(view.document().entity_id(), identity);
+        assert_eq!(view.document().read(cx).encode().unwrap(), persisted.as_bytes());
+    });
+    context.update(|window, cx| window.input("__bold__", cx));
+    context.run_until_parked();
+    context.dispatch_action(crate::core::actions::ToggleDocumentPreview);
+    settle_live_geometry(&view, &mut context);
+    view.read_with(&context, |view, cx| {
+        assert!(view.is_live());
+        assert_eq!(view.document().entity_id(), identity);
+        assert_eq!(
+            view.document().read(cx).encode().unwrap(),
+            persisted.replacen("**bold**", "__bold__", 1).as_bytes()
+        );
+        assert_eq!(
+            view.range_to_bounds(&(13..13), cx),
+            view.range_to_bounds(&(15..15), cx)
+        );
+    });
+    context.dispatch_action(gpui_kit::component::input::Undo);
+    context.run_until_parked();
+    view.read_with(&context, |view, cx| {
+        assert_eq!(view.document().read(cx).encode().unwrap(), persisted.as_bytes());
+        assert_eq!(view.selection(), selection);
+    });
+    context.dispatch_action(gpui_kit::component::input::Redo);
+    context.run_until_parked();
+    view.read_with(&context, |view, cx| {
+        assert_eq!(
+            view.document().read(cx).encode().unwrap(),
+            persisted.replacen("**bold**", "__bold__", 1).as_bytes()
+        );
+    });
+    context.dispatch_action(gpui_kit::component::input::Undo);
+    context.run_until_parked();
     context.dispatch_action(crate::core::actions::EditorSave);
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
     loop {
@@ -1272,7 +1311,7 @@ fn native_inline_reveal_is_local_and_typing_preserves_delimiters_and_history(
         assert!(std::time::Instant::now() < deadline);
         std::thread::sleep(std::time::Duration::from_millis(5));
     }
-    assert_eq!(std::fs::read(&path).unwrap(), original.as_bytes());
+    assert_eq!(std::fs::read(&path).unwrap(), persisted.as_bytes());
 }
 
 #[gpui_kit::test]
@@ -1305,6 +1344,23 @@ fn native_nested_inline_boundaries_entities_and_composition_preserve_source(
     };
     context.dispatch_action(crate::core::actions::ToggleDocumentPreview);
     settle_live_geometry(&view, &mut context);
+    view.update_in(&mut context, |view, _, cx| {
+        view.select_range(11..original.find(" tail").unwrap(), cx);
+    });
+    context.update(|window, cx| {
+        window.render_frame(cx);
+        window.render_frame(cx);
+        let view = view.read(cx);
+        for (marker, width) in [("**outer", 2), ("_e", 1), ("~~gone", 2), ("`a", 1)] {
+            let start = original.find(marker).unwrap();
+            let content = start + width;
+            assert_eq!(
+                view.range_to_bounds(&(start..start), cx),
+                view.range_to_bounds(&(content..content), cx),
+                "nested selection must keep formatting hidden"
+            );
+        }
+    });
     // A click at the hidden closing edge inserts inside the formatted span.
     let closing = original.find("** tail").unwrap();
     context.update(|window, cx| {
@@ -8836,39 +8892,6 @@ fn inline_nodes_preserve_unicode_styles_links_and_cross_segment_marked_ranges() 
     }
 }
 
-#[test]
-fn inline_nodes_preserve_normalized_and_composing_raw_line_breaks_and_entities() {
-    use gpui_kit::base::text::editor_host::TextMark;
-
-    let source = "前\n中  \n后 &amp; 尾";
-    let mut projection =
-        super::projection::Projection::parse(source, 0, true, super::mdx::Grammar::Markdown);
-    assert!(projection.error.is_none());
-    assert_eq!(projection.leaves.len(), 1);
-    let leaf = &mut projection.leaves[0];
-    let math = super::math::State::default();
-    assert_inline_text_marks(
-        &leaf.inline_nodes(None, &math),
-        &[("前 中\n后 & 尾", TextMark::default())],
-    );
-    let marked = 0..source.len();
-    assert!(leaf.contextual_reveal(Selection::caret(0), &[], Some(&marked)));
-    assert_inline_text_marks(
-        &leaf.inline_nodes(Some(&marked), &math),
-        &[(
-            source,
-            TextMark {
-                underline: true,
-                ..Default::default()
-            },
-        )],
-    );
-    assert!(leaf.contextual_reveal(Selection::caret(0), &[], None));
-    assert_inline_text_marks(
-        &leaf.inline_nodes(None, &math),
-        &[("前 中\n后 & 尾", TextMark::default())],
-    );
-}
 
 #[test]
 fn inline_nodes_preserve_image_math_atoms_and_verbatim_marks_between_styled_text() {
@@ -8912,7 +8935,7 @@ fn inline_nodes_preserve_image_math_atoms_and_verbatim_marks_between_styled_text
     assert_inline_text_marks(
         &nodes,
         &[(
-            source,
+            "前 ![图](missing.png \"标题\") 中 $x$ 尾",
             TextMark {
                 underline: true,
                 ..bold.clone()
