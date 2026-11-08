@@ -4,6 +4,7 @@ use std::ops::Range;
 
 mod layout;
 pub(super) use layout::Layout;
+pub(super) mod metadata;
 
 /// Derived from the same mdast table that supplies the inline cell children.
 /// No cell owns text, focus, composition or undo state.
