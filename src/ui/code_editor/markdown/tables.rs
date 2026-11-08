@@ -90,14 +90,16 @@ pub(super) fn project(
 pub(super) enum Navigation {
     Cell { backward: bool },
     Exit { backward: bool },
+    Row { backward: bool },
     Boundary { backward: bool },
 }
 impl Navigation {
     pub fn backward(self) -> bool {
         match self {
-            Self::Cell { backward } | Self::Exit { backward } | Self::Boundary { backward } => {
-                backward
-            }
+            Self::Cell { backward }
+            | Self::Row { backward }
+            | Self::Exit { backward }
+            | Self::Boundary { backward } => backward,
         }
     }
 }
@@ -105,9 +107,9 @@ impl Navigation {
 /// Tab visits actual cells in source row order (header first), never the
 /// delimiter row, and never creates rows. At either edge it selects the nearest
 /// document leaf outside the table; a document edge transfers workbench focus.
-/// Escape/Enter exit forward immediately; Shift+Enter exits backward. At a
-/// cell edge Backspace/Delete move without deleting table syntax. Source mode
-/// retains ordinary indentation and literal source editing.
+/// Enter visits the next row in the same column; at the last row it exits.
+/// Escape exits immediately. At a cell edge Backspace/Delete move without
+/// deleting table syntax. Source mode retains literal source editing.
 pub(super) fn navigate(
     leaves: &[Leaf],
     at: usize,
@@ -121,6 +123,20 @@ pub(super) fn navigate(
     let Kind::TableCell(cell) = leaves[ix].kind else {
         return None;
     };
+    if matches!(navigation, Navigation::Row { .. }) {
+        let row = if backward {
+            cell.row.checked_sub(1)
+        } else {
+            Some(cell.row + 1)
+        };
+        if let Some(target) = leaves.iter().find(|leaf| {
+            matches!(leaf.kind, Kind::TableCell(other)
+                if other.start == cell.start && Some(other.row) == row && other.column == cell.column)
+        }) {
+            return Some(Some(target.content_start()));
+        }
+        return navigate(leaves, at, Navigation::Exit { backward });
+    }
     let eligible = |leaf: &&Leaf| {
         !exit || !matches!(leaf.kind, Kind::TableCell(other) if other.start == cell.start)
     };
@@ -141,6 +157,36 @@ pub(super) fn navigate(
     }))
 }
 
+/// Arrow movement preserves the visible grapheme column inside a cell. The
+/// separator has no leaf and therefore cannot become a vertical destination.
+pub(super) fn vertical(leaves: &[Leaf], at: usize, backward: bool) -> Option<usize> {
+    use unicode_segmentation::UnicodeSegmentation as _;
+    let current = leaves.iter().find(|leaf| {
+        matches!(leaf.kind, Kind::TableCell(_)) && leaf.range.start <= at && at <= leaf.range.end
+    })?;
+    let Kind::TableCell(cell) = current.kind else {
+        return None;
+    };
+    let row = if backward {
+        cell.row.checked_sub(1)?
+    } else {
+        cell.row + 1
+    };
+    let target = leaves.iter().find(|leaf| {
+        matches!(leaf.kind, Kind::TableCell(other)
+            if other.start == cell.start && other.row == row && other.column == cell.column)
+    })?;
+    let column = current.text[..current.display_offset(at)]
+        .graphemes(true)
+        .count();
+    let offset = target
+        .text
+        .grapheme_indices(true)
+        .nth(column)
+        .map_or(target.text.len(), |(offset, _)| offset);
+    Some(target.source_offset(offset))
+}
+
 /// A typed pipe is cell content, not a new column. Keep already escaped input
 /// unchanged and account for syntax bytes in platform composition selections.
 pub(super) fn input(
@@ -149,7 +195,7 @@ pub(super) fn input(
     text: String,
     selected: Option<Range<usize>>,
 ) -> (String, Option<Range<usize>>) {
-    if !text.contains('|') {
+    if !text.contains(['|', '\n', '\r']) {
         return (text, selected);
     }
     use gpui_kit::base::input::RopeExt as _;
@@ -166,19 +212,43 @@ pub(super) fn input(
         != 0;
     let mut output = String::with_capacity(text.len());
     let mut selected = selected;
-    let mut offset = 0;
     let original_selection = selected.clone();
-    for ch in text.chars() {
-        if ch == '|' && !escaped {
-            output.push('\\');
-            if let (Some(selection), Some(original)) = (&mut selected, &original_selection) {
-                selection.start += usize::from(offset < original.start);
-                selection.end += usize::from(offset < original.end);
+    let mut offset = 0;
+    let mut output_offset = 0;
+    let text = text.trim_end_matches(['\r', '\n']);
+    let mut chars = text.chars().peekable();
+    while let Some(ch) = chars.next() {
+        // Native selections use UTF-16; preserve their affinity before any
+        // inserted escape and collapse CRLF as one visible space.
+        if let (Some(selection), Some(original)) = (&mut selected, &original_selection) {
+            if original.start >= offset {
+                selection.start = output_offset;
+            }
+            if original.end >= offset {
+                selection.end = output_offset;
             }
         }
-        output.push(ch);
-        escaped = ch == '\\' && !escaped;
         offset += ch.len_utf16();
+        if ch == '\r' && chars.peek() == Some(&'\n') {
+            chars.next();
+            offset += 1;
+        }
+        let ch = if matches!(ch, '\r' | '\n') { ' ' } else { ch };
+        if ch == '|' && !escaped {
+            output.push('\\');
+            output_offset += 1;
+        }
+        output.push(ch);
+        output_offset += ch.len_utf16();
+        escaped = ch == '\\' && !escaped;
+    }
+    if let (Some(selection), Some(original)) = (&mut selected, &original_selection) {
+        if original.start >= offset {
+            selection.start = output_offset;
+        }
+        if original.end >= offset {
+            selection.end = output_offset;
+        }
     }
     (output, selected)
 }
@@ -186,6 +256,7 @@ pub(super) fn input(
 gpui_kit::actions!(
     markdown_table,
     [
+        InsertTable,
         InsertRowBefore,
         InsertRowAfter,
         DeleteRow,
