@@ -61,6 +61,7 @@ pub(super) struct Leaf {
     pub text: String,
     pub kind: Kind,
     pub deferred: bool,
+    pub(super) math_alignment: super::source::math_edit::alignment::Align,
     segments: Vec<Segment>,
     insertion: usize,
     inline_insertions: smallvec::SmallVec<[usize; 1]>,
@@ -127,6 +128,7 @@ impl Leaf {
             text: String::new(),
             kind,
             deferred: false,
+            math_alignment: Default::default(),
             segments: Vec::new(),
             content: String::new(),
             container: None,
@@ -886,6 +888,7 @@ impl Projection {
         } else {
             Self::source_lines(source, 0, &mut leaves);
         }
+        if live { super::source::math_edit::alignment::hide_markers(source, &mut leaves); }
         if leaves.is_empty() {
             leaves.push(Leaf::new(0..0, Kind::Prose));
         }

@@ -2,11 +2,17 @@
 //! `finish_formula` can write, through the owning MarkdownDocument command path.
 use super::*;
 use ratex_gpui::editor::{cursor::{Cursor, common_row_selection}, geometry, input, model::{Atom, Row}};
-use gpui_kit::component::{Sizable as _, button::{Button, ButtonVariants as _}};
+use gpui_kit::component::{Selectable as _, Sizable as _, button::{Button, ButtonVariants as _}};
 #[path = "math_edit/lossless.rs"]
 mod lossless;
+#[path = "math_edit/alignment.rs"]
+pub(in crate::ui::code_editor::markdown) mod alignment;
+#[path = "math_edit/context.rs"]
+mod context;
+pub(super) use context::Tools;
+use alignment::Align;
 
-actions!(markdown_formula, [CommitFormula, CancelFormula, EditFormulaSource, MatrixAddRow, MatrixRemoveRow, MatrixAddColumn, MatrixRemoveColumn]);
+actions!(markdown_formula, [CommitFormula, CancelFormula, EditFormulaSource, MatrixAddRow, MatrixRemoveRow, MatrixAddColumn, MatrixRemoveColumn, FormulaMenu, CopyFormulaLatex, ExportFormulaPng, ExportFormulaSvg, AlignFormulaLeft, AlignFormulaCenter, AlignFormulaRight]);
 
 #[derive(Clone)]
 pub(in crate::ui::code_editor::markdown) struct Editor {
@@ -29,6 +35,8 @@ pub(super) struct Session {
     preedit: String,
     preedit_selection: Range<usize>,
     command: Option<String>,
+    completion_ix: usize,
+    alignment: Option<Align>,
     generation: u64,
     rendered_generation: Option<u64>,
     id: u64,
@@ -52,7 +60,7 @@ impl Session {
         let seed = lossless::Seed::parse(&original[body.clone()]);
         let root = seed.row.clone();
         let cursor = Cursor { path: Vec::new(), index: if end { root.atoms.len() } else { 0 } };
-        let mut session = Self { range, revision, original, body, seed, root, cursor, anchor: None, preedit: String::new(), preedit_selection: 0..0, command: None, generation: 0, rendered_generation: None, id: 0, _blur: None, style: None, output: None, render_error: None, caret_cache: None, selection_cache: None, extent: (0., 0., 0.), frame: None, dragging: false, formula };
+        let mut session = Self { range, revision, original, body, seed, root, cursor, anchor: None, preedit: String::new(), preedit_selection: 0..0, command: None, completion_ix: 0, alignment: None, generation: 0, rendered_generation: None, id: 0, _blur: None, style: None, output: None, render_error: None, caret_cache: None, selection_cache: None, extent: (0., 0., 0.), frame: None, dragging: false, formula };
         session.refresh_geometry(true);
         session
     }
@@ -88,11 +96,11 @@ impl Session {
             }
             let ch = grapheme.chars().next().unwrap();
             if let Some(command) = &mut self.command {
-                if ch.is_ascii_alphabetic() { command.push(ch); continue; }
+                if ch.is_ascii_alphabetic() { command.push(ch); self.completion_ix = 0; continue; }
                 self.commit_command();
                 if matches!(ch, ' ' | '{') { continue; }
             }
-            if ch == '\\' { self.command = Some(String::new()); continue; }
+            if ch == '\\' { self.command = Some(String::new()); self.completion_ix = 0; continue; }
             if self.anchor.is_some() && matches!(ch, '/' | '(' | '{') {
                 let (path, lo, hi) = common_row_selection(self.anchor.as_ref().unwrap(), &self.cursor);
                 self.cursor = Cursor { path, index: lo };
@@ -107,14 +115,36 @@ impl Session {
     }
     fn commit_command(&mut self) {
         let Some(command) = self.command.take() else { return; };
+        let matches = input::command_matches(&command);
+        let command = matches.get(self.completion_ix).or_else(|| matches.first()).copied().unwrap_or(&command);
         let selected = self.anchor.take().map(|anchor| common_row_selection(&anchor, &self.cursor));
         if let Some((path, lo, _)) = &selected { self.cursor = Cursor { path: path.clone(), index: *lo }; }
         let selection = selected.map(|(_, lo, hi)| (lo, hi));
-        if !input::commit_command_selecting(&mut self.root, &mut self.cursor, &command, selection) {
+        if !input::commit_command_selecting(&mut self.root, &mut self.cursor, command, selection) {
             if let Some((lo, hi)) = selection { self.cursor.delete_range(&mut self.root, lo, hi); }
             // Unknown commands remain explicit opaque atoms rather than disappearing.
             self.cursor.insert(&mut self.root, Atom::Sym(format!("\\{command}")));
         }
+    }
+    fn completions(&self) -> Vec<&'static str> {
+        if !self.preedit.is_empty() { return Vec::new(); }
+        self.command.as_deref().map(input::command_matches).unwrap_or_default()
+    }
+    fn accept_completion(&mut self, name: &str) {
+        if !self.preedit.is_empty() || !self.completions().contains(&name) { return; }
+        self.command = Some(name.into()); self.completion_ix = 0; self.commit_command();
+    }
+    fn edits(&self, source: &Rope) -> Vec<(Range<usize>, String)> {
+        let mut edits = Vec::new();
+        if self.dirty() {
+            let (range, text) = minimal_edit(&self.original[self.body.clone()], &self.latex());
+            edits.push((range.start + self.range.start + self.body.start..range.end + self.range.start + self.body.start, text));
+        }
+        if self.formula.block { if let Some(align) = self.alignment { if let Some(edit) = alignment::edit(source, self.range.start, align) {
+            if source.slice(edit.0.clone()).to_string() != edit.1 { edits.push(edit); }
+        } } }
+        edits.sort_by_key(|(range, _)| range.start);
+        edits
     }
     fn caret(&self) -> Option<geometry::Rect> { self.caret_cache }
     fn caret_bounds(&self, view: &SourcePresentation, window: &Window, cx: &App) -> Option<Bounds<Pixels>> {
@@ -185,7 +215,7 @@ impl SourcePresentation {
         self.sync_inline_reveal();
         let session_id = self.formula.as_ref().unwrap().id;
         let blur = cx.on_focus_out(&self.focus.clone(), window, move |view, _, window, cx| {
-            if view.formula.as_ref().is_some_and(|session| session.id == session_id) {
+            if !view.focus.contains_focused(window, cx) && view.formula_tools.menu.is_none() && !view.formula_tools.exporting && view.formula.as_ref().is_some_and(|session| session.id == session_id) {
                 view.finish_formula(true, false, window, cx);
             }
         });
@@ -217,13 +247,11 @@ impl SourcePresentation {
                 && document.source().slice(session.range.clone()).to_string() == session.original
         };
         let mut after = session.range.end;
-        if commit && valid && session.dirty() {
-            let latex = session.latex();
-            let original_body = &session.original[session.body.clone()];
-            let (range, text) = minimal_edit(original_body, &latex);
-            let range = range.start + session.range.start + session.body.start..range.end + session.range.start + session.body.start;
-            after = session.range.end - original_body.len() + latex.len();
-            self.command(Command::BatchReplaceSelected { edits: vec![(range, text)], selection: Selection::caret(if backward { session.range.start } else { after }) }, window, cx);
+        let edits = if commit && valid { session.edits(self.document.read(cx).source()) } else { Vec::new() };
+        if !edits.is_empty() {
+            after = edits.iter().fold(after, |at, (range, text)| at - range.len() + text.len());
+            let before = edits.iter().filter(|(range, _)| range.end <= session.range.start).fold(session.range.start, |at, (range, text)| at - range.len() + text.len());
+            self.command(Command::BatchReplaceSelected { edits, selection: Selection::caret(if backward { before } else { after }) }, window, cx);
         } else if valid {
             self.state.selection = Selection::caret(if backward { session.range.start } else { after });
         }
@@ -274,12 +302,14 @@ impl SourcePresentation {
             Command::CancelComposition => {
                 if self.formula.as_ref().is_some_and(|s| !s.preedit.is_empty()) {
                     self.formula.as_mut().unwrap().preedit.clear(); self.formula_changed(window, cx);
+                } else if self.formula.as_ref().is_some_and(|s| s.command.is_some()) {
+                    self.formula.as_mut().unwrap().command = None; self.formula_changed(window, cx);
                 } else { self.finish_formula(false, false, window, cx); }
                 true
             }
             Command::Backspace | Command::Delete => {
                 let session = self.formula.as_mut().unwrap();
-                if let Some(command) = &mut session.command { if command.pop().is_none() { session.command = None; } }
+                if let Some(command) = &mut session.command { if command.pop().is_none() { session.command = None; } session.completion_ix = 0; }
                 else if !session.delete_selection() {
                     if matches!(command, Command::Delete) {
                         let lo = session.cursor.index;
@@ -294,6 +324,13 @@ impl SourcePresentation {
     pub(super) fn formula_move(&mut self, horizontal: i32, vertical: i32, extend: bool, edge: Option<bool>, window: &mut Window, cx: &mut Context<Self>) -> bool {
         let Some(session) = &mut self.formula else { return false; };
         if !session.preedit.is_empty() { return true; }
+        if vertical != 0 && !extend && edge.is_none() {
+            let count = session.completions().len();
+            if count > 0 {
+                session.completion_ix = if vertical < 0 { (session.completion_ix + count - 1) % count } else { (session.completion_ix + 1) % count };
+                cx.notify(); return true;
+            }
+        }
         self.input_generation = self.input_generation.wrapping_add(1);
         let before = session.cursor.clone();
         if !extend && horizontal != 0 {
@@ -326,6 +363,7 @@ impl SourcePresentation {
         let key = &event.keystroke;
         if self.formula.as_ref().is_some_and(|s| !s.preedit.is_empty()) && key.key != "escape" { return false; }
         let primary = if cfg!(target_os = "macos") { key.modifiers.platform } else { key.modifiers.control };
+        if self.formula_completion_key(event, window, cx) { return true; }
         match key.key.as_str() {
             "home" | "end" if primary => {
                 let session = self.formula.as_mut().unwrap();
@@ -334,13 +372,11 @@ impl SourcePresentation {
                 session.refresh_geometry(false);
                 self.invalidate_formula_blocks(); window.notify_text_selection_changed(&self.focus); cx.notify(); true
             }
+            "f10" if key.modifiers.shift => { self.open_formula_menu(None, window, cx); true }
+            "contextmenu" => { self.open_formula_menu(None, window, cx); true }
             "f6" => { window.focus_next(cx); true }
             "escape" => { self.command(Command::CancelComposition, window, cx); true }
-            "enter" => {
-                if self.formula.as_ref().is_some_and(|s| s.command.is_some()) { self.formula.as_mut().unwrap().commit_command(); self.formula_changed(window, cx); }
-                else { self.finish_formula(true, false, window, cx); }
-                true
-            }
+            "enter" => { self.formula_enter(window, cx); true }
             "tab" => {
                 if self.formula.as_ref().is_some_and(|s| s.command.is_some()) { self.formula.as_mut().unwrap().commit_command(); self.formula_changed(window, cx); }
                 else { self.formula_move(if key.modifiers.shift { -1 } else { 1 }, 0, false, None, window, cx); }
@@ -468,6 +504,27 @@ impl SourcePresentation {
             ] { bar = bar.child(Button::new(id).small().ghost().label(t(key)).on_click(cx.listener(move |_, _, window, cx| window.dispatch_action(action.boxed_clone(), cx)))); }
         }
         if let Some(command) = &session.command { bar = bar.child(format!("\\{command}")); }
+        let matches = session.completions();
+        let selected = session.completion_ix.min(matches.len().saturating_sub(1));
+        for (ix, name) in matches.iter().enumerate().skip(selected.saturating_sub(3)).take(8) {
+            let name = *name;
+            let session_id = session.id;
+            bar = bar.child(Button::new(SharedString::from(format!("formula-complete-{name}"))).small().ghost()
+                .label(format!("\\{name}")).selected(ix == selected)
+                .on_hover(cx.listener(move |view, hovered: &bool, _, cx| {
+                    if *hovered { if let Some(session) = &mut view.formula { if session.id == session_id && session.preedit.is_empty() { session.completion_ix = ix; cx.notify(); } } }
+                }))
+                .on_click(cx.listener(move |view, _, window, cx| {
+                    if let Some(session) = &mut view.formula { if session.id == session_id { session.accept_completion(name); view.formula_changed(window, cx); } }
+                    view.focus.focus(window, cx);
+                }))
+                .on_mouse_down(MouseButton::Left, cx.listener(move |view, _, window, cx| {
+                    if let Some(session) = &mut view.formula { if session.id == session_id { session.accept_completion(name); view.formula_changed(window, cx); } }
+                    view.focus.focus(window, cx); cx.stop_propagation();
+                })));
+        }
+        bar = bar.child(Button::new("formula-context-menu").small().ghost().label(t(L10nKey::EditorFormulaMenu))
+            .on_click(cx.listener(|view, _, window, cx| view.open_formula_menu(None, window, cx))));
         bar = bar.child(div().text_xs().text_color(cx.theme().muted_foreground).child(t(L10nKey::EditorFormulaHelp)));
         if let Some(error) = &session.render_error { bar = bar.child(div().text_xs().text_color(cx.theme().danger).child(format!("{} {error}", t(L10nKey::EditorMarkdownMathError)))); }
         bar.into_any_element()
@@ -542,10 +599,10 @@ impl SourcePresentation {
         let text = std::mem::take(&mut session.preedit); session.insert_text(&text); session.commit_command();
         self.document.update(cx, |document, cx| {
             if document.composition_owner.as_ref().is_some_and(|owner| owner.entity_id() == owner_id) { document.composition_owner = None; }
-            if session.dirty() && document.revision() == session.revision && session.range.end <= document.source().len() && document.source().slice(session.range.clone()).to_string() == session.original {
-                let (range, text) = minimal_edit(&session.original[session.body.clone()], &session.latex());
-                let range = session.range.start + session.body.start + range.start..session.range.start + session.body.start + range.end;
-                let transaction = document.command(&mut self.state, Command::Replace { range, text, kind: EditKind::Command });
+            let valid = document.revision() == session.revision && session.range.end <= document.source().len() && document.source().slice(session.range.clone()).to_string() == session.original;
+            let edits = if valid { session.edits(document.source()) } else { Vec::new() };
+            if !edits.is_empty() {
+                let transaction = document.command(&mut self.state, Command::BatchReplace { edits, kind: EditKind::Command });
                 let selected = requested.map(|selection| transaction.map_selection(selection));
                 cx.emit(DocumentEvent::Edited(transaction)); cx.notify();
                 selected

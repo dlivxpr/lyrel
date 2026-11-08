@@ -98,6 +98,7 @@ pub(crate) struct SourcePresentation {
     math: super::math::State,
     formula: Option<math_edit::Session>,
     formula_render: Option<Task<()>>,
+    formula_tools: math_edit::Tools,
     extra_selections: Vec<Selection>,
     search_matches: std::rc::Rc<Vec<Range<usize>>>,
     spelling: spelling::State,
@@ -272,6 +273,7 @@ impl SourcePresentation {
             math: super::math::State::default(),
             formula: None,
             formula_render: None,
+            formula_tools: math_edit::Tools::default(),
             extra_selections: Vec::new(),
             search_matches: std::rc::Rc::default(),
             spelling: spelling::State::default(),
@@ -1014,7 +1016,7 @@ impl SourcePresentation {
         use super::tables::*;
         use crate::ui::i18n::{L10nKey, t};
         let menu = self.format_menu(menu);
-        let menu = self.spelling_menu(menu);
+        let menu = self.formula_menu(self.spelling_menu(menu));
         if !self.live {
             return menu;
         }
@@ -1918,7 +1920,7 @@ impl SourcePresentation {
         }
     }
     fn enter(&mut self, hard: bool, window: &mut Window, cx: &mut Context<Self>) {
-        if self.formula.is_some() { self.finish_formula(true, false, window, cx); return; }
+        if self.formula.is_some() { self.formula_enter(window, cx); return; }
         if self.code_enter(window, cx) {
             return;
         }
@@ -2841,7 +2843,12 @@ impl Render for SourcePresentation {
                             row.child(div().flex_1().min_w_0().child(rendered))
                                 .into_any_element()
                         } else if self.live && leaf.kind == Kind::Math {
-                            div().flex().justify_center().w_full().py_2().child(rendered).into_any_element()
+                            let align = self.formula_alignment(leaf.range.start, leaf.math_alignment);
+                            div().flex().w_full().py_2()
+                                .when(align == math_edit::alignment::Align::Left, |row| row.justify_start())
+                                .when(align == math_edit::alignment::Align::Center, |row| row.justify_center())
+                                .when(align == math_edit::alignment::Align::Right, |row| row.justify_end())
+                                .child(rendered).into_any_element()
                         } else {
 
                             rendered
@@ -2985,6 +2992,10 @@ impl Render for SourcePresentation {
                     if this.formula_key(event, window, cx) { cx.stop_propagation(); return; }
                     if this.image_key(event, window, cx) { cx.stop_propagation(); return; }
                     let key = &event.keystroke;
+                    if ((key.modifiers.shift && key.key == "f10") || key.key == "contextmenu")
+                        && this.formula_at(this.state.selection.head(), false, cx).or_else(|| this.formula_at(this.state.selection.head(), true, cx)).is_some() {
+                        this.open_formula_menu(None, window, cx); cx.stop_propagation(); return;
+                    }
                     if key.modifiers.shift && key.key == "f10" && !key.modifiers.control && !key.modifiers.alt && !key.modifiers.platform {
                         window.dispatch_action(Box::new(spelling::SpellingSuggestions), cx);
                         cx.stop_propagation();
@@ -3295,7 +3306,7 @@ impl Render for SourcePresentation {
                     );
                 }))
                 .on_action(cx.listener(|this, _: &actions::Escape, window, cx| {
-                    if this.formula.is_some() { this.finish_formula(false, false, window, cx); this.focus.focus(window, cx); return; }
+                    if this.formula.is_some() { this.command(Command::CancelComposition, window, cx); this.focus.focus(window, cx); return; }
                     if this.finish_image_resize(true, window, cx) { return; }
                     if this.cancel_image_insertion(cx) { return; }
                     if this.state.composition.is_some() {
@@ -3319,6 +3330,14 @@ impl Render for SourcePresentation {
                 ))
                 .child(image_status)
                 .child(self.formula_toolbar(cx))
+                .child(self.formula_feedback(cx))
+                .on_action(cx.listener(|this, _: &math_edit::FormulaMenu, window, cx| this.open_formula_menu(None, window, cx)))
+                .on_action(cx.listener(|this, _: &math_edit::CopyFormulaLatex, _, cx| this.copy_formula_latex(cx)))
+                .on_action(cx.listener(|this, _: &math_edit::ExportFormulaPng, window, cx| this.export_formula(true, window, cx)))
+                .on_action(cx.listener(|this, _: &math_edit::ExportFormulaSvg, window, cx| this.export_formula(false, window, cx)))
+                .on_action(cx.listener(|this, _: &math_edit::AlignFormulaLeft, window, cx| this.align_formula(math_edit::alignment::Align::Left, window, cx)))
+                .on_action(cx.listener(|this, _: &math_edit::AlignFormulaCenter, window, cx| this.align_formula(math_edit::alignment::Align::Center, window, cx)))
+                .on_action(cx.listener(|this, _: &math_edit::AlignFormulaRight, window, cx| this.align_formula(math_edit::alignment::Align::Right, window, cx)))
                 .on_action(cx.listener(|this, _: &math_edit::CommitFormula, window, cx| { this.finish_formula(true, false, window, cx); this.focus.focus(window, cx); }))
                 .on_action(cx.listener(|this, _: &math_edit::CancelFormula, window, cx| { this.finish_formula(false, false, window, cx); this.focus.focus(window, cx); }))
                 .on_action(cx.listener(|this, _: &math_edit::EditFormulaSource, window, cx| this.formula_source(window, cx)))
@@ -3377,6 +3396,7 @@ impl Render for SourcePresentation {
                                     |this, event: &MouseDownEvent, window, cx| {
                                         if event.button == MouseButton::Left && this.formula_pointer(event, window, cx) { cx.stop_propagation(); return; }
                                         if event.button == MouseButton::Left && !event.modifiers.shift && this.begin_formula_from_pointer(event.position, window, cx) { cx.stop_propagation(); return; }
+                                        if event.button == MouseButton::Right && this.formula_context_at(event.position, window, cx) { cx.stop_propagation(); return; }
                                         if event.button == MouseButton::Right && this.spelling_at_point(event.position, cx).is_some() {
                                             this.open_spelling(Some(event.position), window, cx);
                                             cx.stop_propagation();
@@ -3406,6 +3426,7 @@ impl Render for SourcePresentation {
                 ));
         let root = self.code_actions(root, cx);
         let root = root.children(self.spelling_overlay(window, cx));
+        let root = root.children(self.formula_overlay(window));
         SourceElement {
             child: root.into_any_element(),
             view: cx.entity(),
