@@ -18,7 +18,7 @@ pub(crate) struct Layout {
     columns: HashMap<usize, Vec<Pixels>>,
     table_ids: HashMap<usize, u64>,
     scrolls: HashMap<u64, ScrollHandle>,
-    style: Option<(SharedString, SharedString, Pixels, bool)>,
+    style: Option<(SharedString, SharedString, Pixels, Pixels, Pixels, bool)>,
     generation: u64,
 }
 struct Measurement {
@@ -54,6 +54,8 @@ impl Layout {
             cx.theme().font_family.clone(),
             cx.theme().mono_font_family.clone(),
             window.rem_size(),
+            cx.theme().font_size,
+            cx.theme().mono_font_size,
             wrap,
         );
         if self.style.as_ref() != Some(&style) {
@@ -316,8 +318,13 @@ fn cell_element(
         .flex_none()
         .when_some(width, |cell, width| cell.w(width))
         .min_w_0()
-        .px_3()
-        .py_2()
+        // Fixed reference tables.rs:1057 and element.rs:3007: 10px cell
+        // inset and 6px vertical padding at 16px body, scaled with the document.
+        .px(rems(10. / 16.))
+        .py(rems(6. / 16.))
+        .font_family(cx.theme().font_family.clone())
+        .text_size(rems(1.))
+        .line_height(relative(1.45))
         .border_r_1()
         .border_color(cx.theme().border)
         .when(cell.row == 0, |cell| cell.font_semibold())

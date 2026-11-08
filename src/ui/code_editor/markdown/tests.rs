@@ -1,6 +1,9 @@
 use super::*;
 use gpui_kit::{EntityInputHandler as _, VisualContext as _, test::TestWindowExt as _};
 
+#[path = "typography_tests.rs"]
+mod typography;
+
 fn start_in_source(
     view: &gpui_kit::Entity<SourcePresentation>,
     cx: &mut gpui_kit::VisualTestContext,
