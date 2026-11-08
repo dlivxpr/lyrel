@@ -145,6 +145,10 @@ Rio `0.5.29` 不再由 `Processor` 暂存同步输出；解析、协议应答和
 
 图片传输在共享核心复用锁图中正式 registry 的 `png 0.18.1` 做逐行内容校验，zlib 继续使用 `miniz_oxide 0.9.1`；二者均为 Rust 实现，不新增平台 PNG／zlib 原生安装步骤。桌面仍使用既有 `image 0.25` 生成渲染像素；按原有 `Cargo.lock` 与 `--locked` 命令安装，不引入 Git/path/patch 第三方来源。
 
+Markdown 公式继续使用正式 `ratex-parser`／`ratex-layout`／`ratex-svg =0.1.15` 生成本机渲染结果；结构编辑仅复用 `ratex-gpui =0.4.1` 的公开 model、cursor、geometry 和 input API，关闭默认 features、启用 `editor`，不使用它的 GPUI view。该包会在锁图保留其正式 `gpui-pre` 传递依赖，不代表应用切换后端；实际控件、输入与绘制仍经 Kit 的 Fast 类型。表格首 strong 字符方向分类复用正式 `unicode-bidi =0.3.18`，不复制 Unicode 数据表。新增依赖不改变 Linux headless crate 的无 GUI 边界。
+
+当前正式 `gpui-base =0.9.0` 尚未提供正文范围的任意 foreground 或 soft-wrap 双 caret affinity；上游分支中的新 API 不等于已发布依赖。文字颜色与跨 soft-wrap 拼写下划线的对应验收项保持开放，不以 Git/path/patch、修改下载源码或替换渲染器绕过发布边界。
+
 桌面用量的浏览器 LocalStorage 读取使用正式 registry 的 `rusty-leveldb 4.0.2` 与 `rusqlite 0.40.2`（`bundled`）。SQLite 随 crate 构建，无需另装系统 SQLite；仍需下述平台 C/C++ 编译工具链。Snappy、文件锁、SHA-256 与内存擦除也使用锁图中的正式依赖，不引入 Git／补丁包或浏览器注入工具。
 
 Windows Chromium Cookie 的 AES-GCM 解密使用正式 registry 的 `aes-gcm =0.11.1`，保留 `zeroize` feature。升级精确版本依赖时，须同步 `Cargo.toml` 与 `Cargo.lock`；仅更新锁文件会被 `--locked` 拒绝。

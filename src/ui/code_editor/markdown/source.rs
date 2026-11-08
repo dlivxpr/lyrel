@@ -24,10 +24,10 @@ mod embeds;
 
 #[path = "assets.rs"]
 mod assets;
-#[path = "image_edit.rs"]
-mod image_edit;
 #[path = "headings.rs"]
 pub(super) mod headings;
+#[path = "image_edit.rs"]
+mod image_edit;
 #[path = "navigation.rs"]
 mod navigation;
 
@@ -37,16 +37,18 @@ mod typography;
 #[path = "composition.rs"]
 mod composition;
 
-#[path = "math_edit.rs"]
-pub(super) mod math_edit;
 #[path = "code.rs"]
 mod code;
 #[path = "formats.rs"]
 pub(super) mod formats;
+#[path = "math_edit.rs"]
+pub(super) mod math_edit;
 #[path = "mermaid_authoring.rs"]
 mod mermaid_authoring;
 #[path = "properties.rs"]
 pub(super) mod properties;
+#[path = "reorder.rs"]
+mod reorder;
 #[path = "spelling.rs"]
 mod spelling;
 #[path = "tools.rs"]
@@ -173,6 +175,7 @@ impl SourcePresentation {
             ) {
                 this.image_snapshot = None;
                 if matches!(event, DocumentEvent::ResourceContextChanged) {
+                    this.cancel_drag();
                     this.schedule_spelling(cx);
                     this.cancel_reorder(cx);
                     this.pointer_link = None;
@@ -196,11 +199,11 @@ impl SourcePresentation {
                 return;
             }
             if let DocumentEvent::Edited(transaction) = event {
+                this.cancel_drag();
                 this.cancel_reorder(cx);
                 this.spelling.invalidate();
                 this.pointer_link = None;
                 this.rebase_formula(transaction, cx);
-                this.assets.rebase(transaction);
                 this.folds.rebase(transaction);
                 this.state.rebase(transaction);
                 if transaction.origin != this.state.id {
@@ -236,7 +239,9 @@ impl SourcePresentation {
                 this.schedule_math(cx);
                 this.schedule_mermaid(cx);
                 this.geometry = None;
-                if this.references.target.is_some() && !this.reference_lease_current(this.references.generation, cx) {
+                if this.references.target.is_some()
+                    && !this.reference_lease_current(this.references.generation, cx)
+                {
                     this.dismiss_references(cx);
                 }
                 cx.notify();
@@ -371,6 +376,7 @@ impl SourcePresentation {
         self.live
     }
     pub(crate) fn toggle_mode(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.cancel_drag();
         self.command(Command::FinishComposition, window, cx);
         self.cancel_reorder(cx);
         self.properties = properties::State::default();
@@ -681,7 +687,12 @@ impl SourcePresentation {
             self.document.read(cx).source(),
             &self.mdx_state,
         );
-        hidden.extend(self.folds.hidden.iter().map(|range| range.start.saturating_sub(1)..range.end));
+        hidden.extend(
+            self.folds
+                .hidden
+                .iter()
+                .map(|range| range.start.saturating_sub(1)..range.end),
+        );
         let marked = self.state.marked_range();
         for leaf in &mut self.projection.leaves {
             if matches!(leaf.kind, Kind::Code(_)) {
@@ -769,7 +780,9 @@ impl SourcePresentation {
     }
     pub(crate) fn select_range(&mut self, range: Range<usize>, cx: &mut Context<Self>) {
         let requested = Selection::new(range.start, range.end);
-        let selected = self.release_formula(cx.entity_id(), Some(requested), cx).unwrap_or(requested);
+        let selected = self
+            .release_formula(cx.entity_id(), Some(requested), cx)
+            .unwrap_or(requested);
         self.dismiss_references(cx);
         self.input_generation = self.input_generation.wrapping_add(1);
         let was_composing = self.is_composing();
@@ -785,10 +798,7 @@ impl SourcePresentation {
         }
         let owner_id = cx.entity_id();
         self.document.update(cx, |document, cx| {
-            document.command(
-                &mut self.state,
-                Command::Select(selected),
-            );
+            document.command(&mut self.state, Command::Select(selected));
             if document
                 .composition_owner
                 .as_ref()
@@ -1075,7 +1085,8 @@ impl SourcePresentation {
                 matches!(leaf.kind, Kind::TableCell(other) if other.table() == cell.table() && other.column() != cell.column())
             })
         });
-        self.table_presentation_menu(menu).separator()
+        self.table_presentation_menu(menu)
+            .separator()
             .menu(t(L10nKey::EditorTableInsert), Box::new(InsertTable))
             .menu_with_disabled(
                 t(L10nKey::EditorTableInsertRowBefore),
@@ -1151,7 +1162,9 @@ impl SourcePresentation {
         cx: &mut Context<Self>,
     ) {
         self.cancel_reorder(cx);
-        if self.formula_command(&command, window, cx) { return; }
+        if self.formula_command(&command, window, cx) {
+            return;
+        }
         let toggle_task = matches!(command, Command::ToggleTask { .. });
         if !toggle_task {
             self.goal_x = None;
@@ -1437,7 +1450,9 @@ impl SourcePresentation {
         cx.notify();
         if changed {
             self.request_references(cx);
-        } else if self.references.target.is_some() && !self.reference_lease_current(self.references.generation, cx) {
+        } else if self.references.target.is_some()
+            && !self.reference_lease_current(self.references.generation, cx)
+        {
             self.dismiss_references(cx);
         }
     }
@@ -1460,7 +1475,11 @@ impl SourcePresentation {
         }
         let presentation = cx.entity().entity_id();
         let revision = self.document.read(cx).revision();
-        let resource_epoch = self.document.read(cx).resources().map(|resources| (resources.host().id(), resources.epoch()));
+        let resource_epoch = self
+            .document
+            .read(cx)
+            .resources()
+            .map(|resources| (resources.host().id(), resources.epoch()));
         self.document.update(cx, |_, cx| {
             cx.emit(DocumentEvent::FollowLink {
                 presentation,
@@ -1547,7 +1566,9 @@ impl SourcePresentation {
         let Some(at) = self.point_offset_for(point, !extend, cx) else {
             return;
         };
-        if !extend && self.begin_formula(at, false, window, cx) { return; }
+        if !extend && self.begin_formula(at, false, window, cx) {
+            return;
+        }
         let anchor = if extend {
             self.state.selection.anchor
         } else {
@@ -1564,10 +1585,14 @@ impl SourcePresentation {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.formula_move(horizontal, vertical, extend, edge, window, cx) { return; }
+        if self.formula_move(horizontal, vertical, extend, edge, window, cx) {
+            return;
+        }
         if !extend && edge.is_none() && horizontal != 0 {
             let at = self.state.selection.head();
-            if self.begin_formula(at, horizontal < 0, window, cx) { return; }
+            if self.begin_formula(at, horizontal < 0, window, cx) {
+                return;
+            }
         }
         let doc = self.document.read(cx);
         let current = doc.boundary(self.state.selection.head, false);
@@ -1601,7 +1626,12 @@ impl SourcePresentation {
             doc.next(current)
         };
         let at = doc.boundary(at, false);
-        if !extend && edge.is_none() && self.begin_formula(at, horizontal < 0 || vertical < 0, window, cx) { return; }
+        if !extend
+            && edge.is_none()
+            && self.begin_formula(at, horizontal < 0 || vertical < 0, window, cx)
+        {
+            return;
+        }
         let anchor = if extend {
             self.state.selection.anchor
         } else {
@@ -1986,7 +2016,10 @@ impl SourcePresentation {
         }
     }
     fn enter(&mut self, hard: bool, window: &mut Window, cx: &mut Context<Self>) {
-        if self.formula.is_some() { self.formula_enter(window, cx); return; }
+        if self.formula.is_some() {
+            self.formula_enter(window, cx);
+            return;
+        }
         if self.code_enter(window, cx) {
             return;
         }
@@ -2050,7 +2083,18 @@ impl SourcePresentation {
         self.command(command, window, cx);
     }
     fn delete_prose(&mut self, backward: bool, window: &mut Window, cx: &mut Context<Self>) {
-        if self.formula.is_some() { self.command(if backward { Command::Backspace } else { Command::Delete }, window, cx); return; }
+        if self.formula.is_some() {
+            self.command(
+                if backward {
+                    Command::Backspace
+                } else {
+                    Command::Delete
+                },
+                window,
+                cx,
+            );
+            return;
+        }
         if self.code_delete(backward, window, cx) {
             return;
         }
@@ -2166,7 +2210,9 @@ impl SourcePresentation {
             return;
         };
         if self.formula.is_some() {
-            if let Some(text) = item.text() { self.formula_paste(&text, window, cx); }
+            if let Some(text) = item.text() {
+                self.formula_paste(&text, window, cx);
+            }
             return;
         }
         if let Some(text) = clipboard::plain_text(&item) {
@@ -2220,7 +2266,9 @@ impl EntityInputHandler for SourcePresentation {
         _: &mut Window,
         cx: &mut Context<Self>,
     ) -> Option<String> {
-        if self.formula.is_some() { return self.formula_native_text(range, adjusted); }
+        if self.formula.is_some() {
+            return self.formula_native_text(range, adjusted);
+        }
         let doc = self.document.read(cx);
         let range = doc.utf16_range(range);
         *adjusted = Some(doc.utf16_offset(range.start)..doc.utf16_offset(range.end));
@@ -2232,7 +2280,9 @@ impl EntityInputHandler for SourcePresentation {
         _: &mut Window,
         cx: &mut Context<Self>,
     ) -> Option<UTF16Selection> {
-        if self.formula.is_some() { return self.formula_native_selection(); }
+        if self.formula.is_some() {
+            return self.formula_native_selection();
+        }
         let doc = self.document.read(cx);
         let selected = self.state.selection;
         let range = selected.range();
@@ -2242,13 +2292,17 @@ impl EntityInputHandler for SourcePresentation {
         })
     }
     fn marked_text_range(&self, _: &mut Window, cx: &mut Context<Self>) -> Option<Range<usize>> {
-        if self.formula.is_some() { return self.formula_native_marked(); }
+        if self.formula.is_some() {
+            return self.formula_native_marked();
+        }
         let doc = self.document.read(cx);
         let range = self.state.marked_range()?;
         Some(doc.utf16_offset(range.start)..doc.utf16_offset(range.end))
     }
     fn unmark_text(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.formula_unmark(window, cx) { return; }
+        if self.formula_unmark(window, cx) {
+            return;
+        }
         self.command(Command::FinishComposition, window, cx);
     }
     fn replace_text_in_range(
@@ -2258,7 +2312,9 @@ impl EntityInputHandler for SourcePresentation {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.formula_commit_text(range.clone(), text, window, cx) { return; }
+        if self.formula_commit_text(range.clone(), text, window, cx) {
+            return;
+        }
         if let Some(range) = range {
             let range = self.document.read(cx).utf16_range(range);
             if self.state.marked_range().as_ref() != Some(&range) {
@@ -2285,7 +2341,9 @@ impl EntityInputHandler for SourcePresentation {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.formula_preedit(range.clone(), text, selected.clone(), window, cx) { return; }
+        if self.formula_preedit(range.clone(), text, selected.clone(), window, cx) {
+            return;
+        }
         let range = range.map(|range| self.document.read(cx).utf16_range(range));
         self.command(
             Command::Compose {
@@ -2304,7 +2362,9 @@ impl EntityInputHandler for SourcePresentation {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Option<Bounds<Pixels>> {
-        if self.formula.is_some() { return self.formula_native_bounds(window, cx); }
+        if self.formula.is_some() {
+            return self.formula_native_bounds(window, cx);
+        }
         if !self.candidate_frame?.is_current(self, window, cx) {
             return None;
         }
@@ -2328,7 +2388,9 @@ impl EntityInputHandler for SourcePresentation {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Option<usize> {
-        if self.formula.is_some() { return self.formula_native_bounds(window, cx).map(|_| 0); }
+        if self.formula.is_some() {
+            return self.formula_native_bounds(window, cx).map(|_| 0);
+        }
         if !self.candidate_frame?.is_current(self, window, cx) {
             return None;
         }
@@ -2344,7 +2406,9 @@ impl EntityInputHandler for SourcePresentation {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.formula_native_select(range.clone(), cx) { return; }
+        if self.formula_native_select(range.clone(), cx) {
+            return;
+        }
         let range = self.document.read(cx).utf16_range(range);
         self.command(
             Command::Select(Selection::new(range.start, range.end)),
@@ -2353,7 +2417,9 @@ impl EntityInputHandler for SourcePresentation {
         );
     }
     fn text_length_utf16(&mut self, _: &mut Window, cx: &mut Context<Self>) -> Option<usize> {
-        if let Some(length) = self.formula_native_length() { return Some(length); }
+        if let Some(length) = self.formula_native_length() {
+            return Some(length);
+        }
         let doc = self.document.read(cx);
         Some(doc.utf16_offset(doc.source().len()))
     }
@@ -2714,7 +2780,11 @@ impl Render for SourcePresentation {
                 let view = cx.entity().downgrade();
                 let row = row.on_children_prepainted(move |bounds, _, cx| {
                     let _ = view.update(cx, |view, cx| {
-                        if view.document.read(cx).revision() != revision || view.projection.revision != revision { return; }
+                        if view.document.read(cx).revision() != revision
+                            || view.projection.revision != revision
+                        {
+                            return;
+                        }
                         for (id, bounds) in ids.iter().zip(bounds) {
                             if let Some(id) = id {
                                 view.table_geometry.insert(*id, bounds);
@@ -2780,10 +2850,15 @@ impl Render for SourcePresentation {
                                     .id(("markdown-table-pan", leaf.id)),
                             ),
                     )
-                    .when(cell.is_header(), |table| table.child(div().w_full().h_2().relative()
-                        .child(gpui_kit::component::scroll::Scrollbar::horizontal(&scroll)
-                            .id(("markdown-table-scrollbar", leaf.id))
-                            .mode(gpui_kit::component::scroll::ScrollbarMode::Always))))
+                    .when(cell.is_header(), |table| {
+                        table.child(
+                            div().w_full().h_2().relative().child(
+                                gpui_kit::component::scroll::Scrollbar::horizontal(&scroll)
+                                    .id(("markdown-table-scrollbar", leaf.id))
+                                    .mode(gpui_kit::component::scroll::ScrollbarMode::Always),
+                            ),
+                        )
+                    })
                     .into_any_element()
             } else {
                 self.blocks[&leaf.id]
@@ -2914,12 +2989,23 @@ impl Render for SourcePresentation {
                             row.child(div().flex_1().min_w_0().child(rendered))
                                 .into_any_element()
                         } else if self.live && leaf.kind == Kind::Math {
-                            let align = self.formula_alignment(leaf.range.start, leaf.math_alignment);
-                            div().flex().w_full().py_2()
-                                .when(align == math_edit::alignment::Align::Left, |row| row.justify_start())
-                                .when(align == math_edit::alignment::Align::Center, |row| row.justify_center())
-                                .when(align == math_edit::alignment::Align::Right, |row| row.justify_end())
-                                .child(rendered).into_any_element()
+                            let align =
+                                self.formula_alignment(leaf.range.start, leaf.math_alignment);
+                            div()
+                                .flex()
+                                .w_full()
+                                .py_2()
+                                .when(align == math_edit::alignment::Align::Left, |row| {
+                                    row.justify_start()
+                                })
+                                .when(align == math_edit::alignment::Align::Center, |row| {
+                                    row.justify_center()
+                                })
+                                .when(align == math_edit::alignment::Align::Right, |row| {
+                                    row.justify_end()
+                                })
+                                .child(rendered)
+                                .into_any_element()
                         } else {
                             rendered
                         }
@@ -3672,7 +3758,11 @@ impl Element for SourceElement {
             view.table_geometry.clear();
         });
         let table_measurement_changed = self.view.update(cx, |view, cx| {
-            if view.document.read(cx).revision() != self.revision || view.projection.revision != self.revision { return false; }
+            if view.document.read(cx).revision() != self.revision
+                || view.projection.revision != self.revision
+            {
+                return false;
+            }
             let width = typography::content_width(
                 view.viewport
                     .bounds
@@ -3917,14 +4007,20 @@ impl Element for SourceElement {
                 });
                 return;
             }
-            if !phase.bubble() || (!view.read(cx).dragging && view.read(cx).pointer_link.is_none() && view.read(cx).reorder.is_none())
+            if !phase.bubble()
+                || (!view.read(cx).dragging
+                    && view.read(cx).pointer_link.is_none()
+                    && view.read(cx).reorder.is_none())
             {
                 return;
             }
             view.update(cx, |view, cx| {
                 if view.reorder.is_some() {
-                    if event.pressed_button == Some(MouseButton::Left) { view.move_reorder(event.position, window, cx); }
-                    else { view.cancel_reorder(cx); }
+                    if event.pressed_button == Some(MouseButton::Left) {
+                        view.move_reorder(event.position, window, cx);
+                    } else {
+                        view.cancel_reorder(cx);
+                    }
                     cx.stop_propagation();
                     return;
                 }

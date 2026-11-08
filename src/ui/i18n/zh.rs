@@ -1612,7 +1612,9 @@ pub fn translate_zh(key: L10nKey) -> Option<&'static str> {
         L10nKey::EditorMarkdownTaskLabel => "切换任务状态：{text}",
         L10nKey::EditorMarkdownFormulaLabel => "公式：{tex}",
         L10nKey::EditorFormulaEditing => "编辑公式",
-        L10nKey::EditorFormulaHelp => "↑↓ 选择建议 · Enter 接受／应用 · Esc 关闭／取消 · Shift+F10 公式菜单",
+        L10nKey::EditorFormulaHelp => {
+            "↑↓ 选择建议 · Enter 接受／应用 · Esc 关闭／取消 · Shift+F10 公式菜单"
+        }
         L10nKey::EditorFormulaCommit => "应用公式",
         L10nKey::EditorFormulaCancel => "取消公式",
         L10nKey::EditorFormulaSource => "编辑公式源码",
@@ -1716,7 +1718,9 @@ pub fn translate_zh(key: L10nKey) -> Option<&'static str> {
         L10nKey::MarkdownBlockCommands => "块…",
         L10nKey::MarkdownMoveContent => "移动内容",
         L10nKey::MarkdownMoveDestination => "将内容插入此处",
-        L10nKey::MarkdownMoveHelp => "移动内容：拖至插入线，或用 ↑/↓ 选择位置、Enter 确认；Esc 取消。",
+        L10nKey::MarkdownMoveHelp => {
+            "移动内容：拖至插入线，或用 ↑/↓ 选择位置、Enter 确认；Esc 取消。"
+        }
         L10nKey::MarkdownBlockParagraph => "正文",
         L10nKey::MarkdownBlockHeading1 => "一级标题",
         L10nKey::MarkdownBlockHeading2 => "二级标题",
