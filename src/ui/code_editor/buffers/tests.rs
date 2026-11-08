@@ -2885,7 +2885,7 @@ fn markdown_local_reference_completion_reports_ambiguity_without_hidden_writes(
             window.try_find("markdown-reference-completions").is_some()
         })
     });
-    context.update(|window, cx| window.press("tab", cx));
+    context.update(|window, cx| window.press("enter", cx));
     view.read_with(&context, |view, cx| {
         assert_eq!(
             view.document().read(cx).encode().unwrap(),
