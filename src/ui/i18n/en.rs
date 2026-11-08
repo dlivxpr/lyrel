@@ -1841,7 +1841,7 @@ pub fn translate_en(key: L10nKey) -> &'static str {
         L10nKey::MarkdownBlockCode => "Code block",
         L10nKey::MarkdownBlockMath => "Math block",
         L10nKey::MarkdownBlockToggleFold => "Toggle block fold (this view)",
-        L10nKey::MarkdownBlockPersistFold => "Save callout fold in source",
+        L10nKey::MarkdownBlockPersistFold => "Toggle callout fold (update source)",
         L10nKey::MarkdownBlockExitQuote => "Exit quote",
         L10nKey::MarkdownBlockSource => "Edit document source",
         L10nKey::MarkdownBlockExpand => "Expand block",

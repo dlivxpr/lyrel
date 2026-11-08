@@ -1691,7 +1691,7 @@ pub fn translate_zh(key: L10nKey) -> Option<&'static str> {
         L10nKey::MarkdownBlockCode => "代码块",
         L10nKey::MarkdownBlockMath => "公式块",
         L10nKey::MarkdownBlockToggleFold => "折叠／展开块（当前视图）",
-        L10nKey::MarkdownBlockPersistFold => "将提示块折叠状态写入源码",
+        L10nKey::MarkdownBlockPersistFold => "折叠／展开提示块（写入源码）",
         L10nKey::MarkdownBlockExitQuote => "退出引用",
         L10nKey::MarkdownBlockSource => "编辑文档源码",
         L10nKey::MarkdownBlockExpand => "展开块",
