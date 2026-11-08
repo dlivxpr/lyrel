@@ -1758,7 +1758,9 @@ pub fn translate_en(key: L10nKey) -> &'static str {
         L10nKey::EditorMarkdownTaskLabel => "Toggle task: {text}",
         L10nKey::EditorMarkdownFormulaLabel => "Formula: {tex}",
         L10nKey::EditorFormulaEditing => "Edit formula",
-        L10nKey::EditorFormulaHelp => "↑↓: suggestions · Enter: accept/apply · Esc: dismiss/cancel · Shift+F10: formula menu",
+        L10nKey::EditorFormulaHelp => {
+            "↑↓: suggestions · Enter: accept/apply · Esc: dismiss/cancel · Shift+F10: formula menu"
+        }
         L10nKey::EditorFormulaCommit => "Apply formula",
         L10nKey::EditorFormulaCancel => "Cancel formula",
         L10nKey::EditorFormulaSource => "Edit formula source",
@@ -1866,7 +1868,9 @@ pub fn translate_en(key: L10nKey) -> &'static str {
         L10nKey::MarkdownBlockCommands => "Block…",
         L10nKey::MarkdownMoveContent => "Move content",
         L10nKey::MarkdownMoveDestination => "Insert moved content here",
-        L10nKey::MarkdownMoveHelp => "Move content: drag to an insertion line, or use ↑/↓ and Enter. Esc cancels.",
+        L10nKey::MarkdownMoveHelp => {
+            "Move content: drag to an insertion line, or use ↑/↓ and Enter. Esc cancels."
+        }
         L10nKey::MarkdownBlockParagraph => "Paragraph",
         L10nKey::MarkdownBlockHeading1 => "Heading 1",
         L10nKey::MarkdownBlockHeading2 => "Heading 2",
@@ -1978,9 +1982,15 @@ pub fn translate_en(key: L10nKey) -> &'static str {
         L10nKey::MarkdownSlashCustomTable => "Insert custom table",
         L10nKey::MarkdownSlashTableInvalid => "Enter positive row and column counts (maximum 100 each).",
         L10nKey::MarkdownReferenceLoading => "Looking up workspace references…",
-        L10nKey::MarkdownReferenceNoMatches => "No matching file or anchor. No file will be created.",
-        L10nKey::MarkdownReferenceUnreadable => "The reference target could not be read. Check the Host connection and permissions.",
-        L10nKey::MarkdownReferenceAmbiguous => "More than one file or anchor matches. Use an explicit path and a unique anchor.",
+        L10nKey::MarkdownReferenceNoMatches => {
+            "No matching file or anchor. No file will be created."
+        }
+        L10nKey::MarkdownReferenceUnreadable => {
+            "The reference target could not be read. Check the Host connection and permissions."
+        }
+        L10nKey::MarkdownReferenceAmbiguous => {
+            "More than one file or anchor matches. Use an explicit path and a unique anchor."
+        }
         L10nKey::MarkdownReferenceMissing => "The reference target does not exist. Edit the source to choose another file.",
         L10nKey::MarkdownEmbedChanged => "The target changed while being read. The fragment will refresh shortly.",
         L10nKey::MarkdownEmbedReadonly => "Readonly fragment",

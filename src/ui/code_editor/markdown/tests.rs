@@ -1,8 +1,13 @@
-use super::*;
+use super::{
+    Command, DocumentEvent, EditKind, LineEnding, MarkdownDocument, PresentationState, Selection,
+    SourcePresentation, TextFormat,
+};
+use crate::ui::editor_text;
 use gpui_kit::{
     EntityInputHandler as _, VisualContext as _,
     test::{TestEventExt as _, TestQueryExt as _, TestWindowExt as _},
 };
+use std::ops::Range;
 
 #[path = "typography_tests.rs"]
 mod typography;
@@ -5002,7 +5007,10 @@ fn native_formula_pointer_inserts_inside_delimiters_and_reopens(cx: &mut gpui_ki
         // Entry is derived: Escape must preserve every original source byte.
         context.update(|window, cx| window.press("escape", cx));
         view.read_with(&context, |view, cx| {
-            assert_eq!(view.document().read(cx).encode().unwrap(), source.as_bytes());
+            assert_eq!(
+                view.document().read(cx).encode().unwrap(),
+                source.as_bytes()
+            );
         });
         context.update(|window, cx| {
             window.pointer_down(point, gpui_kit::MouseButton::Left, cx);
@@ -6429,8 +6437,8 @@ fn mdx_component_rename_is_sparse_atomic_and_restores_selection() {
 fn native_generic_mdx_edits_names_properties_children_and_saves_without_execution(
     cx: &mut gpui_kit::TestAppContext,
 ) {
-    use super::super::test_host::FileHost;
     use crate::ui::app::test_window::harness_with_tabs;
+    use crate::ui::code_editor::test_host::FileHost;
     use gpui_kit::test::{TestInput, TestWindowExt as _};
     use gpui_kit::{ElementInputHandler, Focusable as _};
     let directory = tempfile::tempdir().unwrap();
@@ -7039,8 +7047,8 @@ fn native_mdx_embedded_in_heading_exposes_property_edits_without_replacing_its_s
 fn native_cards_edit_properties_children_follow_host_links_and_save_reopen(
     cx: &mut gpui_kit::TestAppContext,
 ) {
-    use super::super::test_host::FileHost;
     use crate::ui::app::test_window::harness_with_tabs;
+    use crate::ui::code_editor::test_host::FileHost;
     use gpui_kit::{Focusable as _, test::TestWindowExt as _};
     let directory = tempfile::tempdir().unwrap();
     let path = std::path::PathBuf::from("/docs/cards.mdx");
@@ -7687,8 +7695,8 @@ fn wide_single_line_transactions_keep_chunk_crossing_graphemes_atomic() {
 fn native_steps_edit_properties_nested_content_source_history_and_host_reopen(
     cx: &mut gpui_kit::TestAppContext,
 ) {
-    use super::super::test_host::FileHost;
     use crate::ui::app::test_window::harness_with_tabs;
+    use crate::ui::code_editor::test_host::FileHost;
     use gpui_kit::{
         Focusable as _, MouseButton,
         test::{TestEventExt as _, TestQueryExt as _, TestWindowExt as _},
@@ -8019,8 +8027,8 @@ fn native_steps_keyboard_source_activation_finishes_preedit_without_numbering_ed
 }
 
 fn exercise_native_callout_consumer(cx: &mut gpui_kit::TestAppContext, name: &str) {
-    use super::super::test_host::FileHost;
     use crate::ui::app::test_window::harness_with_tabs;
+    use crate::ui::code_editor::test_host::FileHost;
     use gpui_kit::test::{TestInput, TestWindowExt as _};
     use gpui_kit::{ElementInputHandler, Focusable as _};
     let directory = tempfile::tempdir().unwrap();
@@ -8248,8 +8256,8 @@ fn native_callout_warning_edits_source_history_and_host_reopen(cx: &mut gpui_kit
 fn native_accordions_preserve_hidden_children_focus_history_and_host_save(
     cx: &mut gpui_kit::TestAppContext,
 ) {
-    use super::super::test_host::FileHost;
     use crate::ui::app::test_window::harness_with_tabs;
+    use crate::ui::code_editor::test_host::FileHost;
     use gpui_kit::test::{TestEventExt as _, TestInput, TestQueryExt as _, TestWindowExt as _};
     use gpui_kit::{ElementInputHandler, Focusable as _, MouseButton};
     let directory = tempfile::tempdir().unwrap();
@@ -8710,8 +8718,8 @@ fn native_table_inline_disclosures_hide_content_without_losing_source(
 fn native_tabs_switch_preserves_hidden_edits_history_composition_and_host_bytes(
     cx: &mut gpui_kit::TestAppContext,
 ) {
-    use super::super::test_host::FileHost;
     use crate::ui::app::test_window::harness_with_tabs;
+    use crate::ui::code_editor::test_host::FileHost;
     use gpui_kit::{
         ElementInputHandler, Focusable as _,
         test::{TestEventExt as _, TestInput, TestWindowExt as _},
@@ -9998,21 +10006,30 @@ fn native_navigation_pointer_words_lines_and_stationary_offscreen_drag(
         window.pointer_move(outside, Some(MouseButton::Left), cx);
         outside
     });
+    // render_frame only draws. Deliver the platform frame tick as well so
+    // production on_next_frame callbacks run while the pointer stays still.
     for _ in 0..16 {
-        context.update(|window, cx| window.render_frame(cx));
+        context.update(|window, cx| {
+            window.simulate_next_frame(cx);
+            window.render_frame(cx);
+        });
     }
-    let extended = view.read_with(&context, |view, _| {
+    let (extended, offset) = view.read_with(&context, |view, _| {
         assert_eq!(view.selection().anchor, 0);
         assert!(view.scroll_offset().y < gpui_kit::Pixels::ZERO);
         assert!(view.selection().head() > source.find("paragraph 5").unwrap());
-        view.selection().head()
+        (view.selection().head(), view.scroll_offset())
     });
     context.update(|window, cx| window.pointer_up(outside, MouseButton::Left, cx));
     for _ in 0..3 {
-        context.update(|window, cx| window.render_frame(cx));
+        context.update(|window, cx| {
+            window.simulate_next_frame(cx);
+            window.render_frame(cx);
+        });
     }
     view.read_with(&context, |view, cx| {
         assert_eq!(view.selection(), Selection::new(0, extended));
+        assert_eq!(view.scroll_offset(), offset);
         assert_eq!(
             view.document().read(cx).encode().unwrap(),
             source.as_bytes()
@@ -10031,7 +10048,10 @@ fn native_navigation_pointer_words_lines_and_stationary_offscreen_drag(
         above
     });
     for _ in 0..16 {
-        context.update(|window, cx| window.render_frame(cx));
+        context.update(|window, cx| {
+            window.simulate_next_frame(cx);
+            window.render_frame(cx);
+        });
     }
     context.update(|window, cx| window.pointer_up(above, MouseButton::Left, cx));
     view.read_with(&context, |view, cx| {
@@ -10041,6 +10061,37 @@ fn native_navigation_pointer_words_lines_and_stationary_offscreen_drag(
             view.document().read(cx).encode().unwrap(),
             source.as_bytes()
         );
+    });
+    // A canceled offscreen gesture must not resume when focus returns while
+    // the mouse remains held. Exercise the same native pointer/frame route.
+    let (outside, selection, offset) = context.update(|window, cx| {
+        let head = view.read(cx).selection().head();
+        let at = view
+            .read(cx)
+            .range_to_bounds(&(head..head), cx)
+            .unwrap()
+            .center();
+        let outside = gpui_kit::point(
+            at.x,
+            window.find("markdown-source").bounds().bottom() + window.rem_size() * 2.,
+        );
+        window.pointer_down(at, MouseButton::Left, cx);
+        window.pointer_move(outside, Some(MouseButton::Left), cx);
+        window.blur(cx);
+        window.simulate_next_frame(cx);
+        window.render_frame(cx);
+        (outside, view.read(cx).selection(), view.read(cx).scroll_offset())
+    });
+    view.update_in(&mut context, |view, window, cx| {
+        view.focus_handle(cx).focus(window, cx);
+    });
+    context.update(|window, cx| {
+        window.pointer_move(outside, Some(MouseButton::Left), cx);
+        window.simulate_next_frame(cx);
+        window.render_frame(cx);
+        assert_eq!(view.read(cx).selection(), selection);
+        assert_eq!(view.read(cx).scroll_offset(), offset);
+        window.pointer_up(outside, MouseButton::Left, cx);
     });
 }
 

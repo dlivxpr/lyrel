@@ -37,6 +37,8 @@ required-features = ["updater"]
 lyrel-core = { path = "crates/lyrel-core", features = ["gssapi", "remote-install", "github", "terminal-width"] }
 
 gpui-kit = { workspace = true, features = ["tree-sitter-languages"] }
+# Native text + HTML publication; screenshot images remain on the existing Kit path.
+arboard = { version = "=3.6.1", default-features = false }
 
 anyhow.workspace = true
 log.workspace = true
@@ -236,6 +238,7 @@ windows = { version = "0.62.2", features = [
     "Win32_Storage_FileSystem",
     "Win32_System_Com",
     "Win32_System_Com_StructuredStorage",
+    "Win32_System_DataExchange",
     "Win32_System_Variant",
     "Win32_UI_Shell",
     "Win32_UI_Shell_PropertiesSystem",

@@ -943,8 +943,16 @@ impl LyrelApp {
     }
 
     fn editor_resource_epoch(&self, id: BufferId, cx: &gpui_kit::App) -> Option<(HostId, u64)> {
-        self.editor.buffers.get(id)?.input.markdown()?.read(cx).document().read(cx)
-            .resources().map(|resources| (resources.host().id(), resources.epoch()))
+        self.editor
+            .buffers
+            .get(id)?
+            .input
+            .markdown()?
+            .read(cx)
+            .document()
+            .read(cx)
+            .resources()
+            .map(|resources| (resources.host().id(), resources.epoch()))
     }
 
     fn editor_open_target_valid(&self, target: buffers::OpenTarget, cx: &gpui_kit::App) -> bool {
@@ -970,7 +978,10 @@ impl LyrelApp {
                     .is_some_and(|view| {
                         let document = view.read(cx).document().read(cx);
                         document.revision() == revision
-                            && document.resources().map(|resources| (resources.host().id(), resources.epoch())) == target.origin_epoch
+                            && document
+                                .resources()
+                                .map(|resources| (resources.host().id(), resources.epoch()))
+                                == target.origin_epoch
                     })
                     && self
                         .tabs
@@ -1264,8 +1275,28 @@ impl LyrelApp {
                             cx,
                         );
                     }
-                    if let markdown::DocumentEvent::RequestReferences { presentation, generation, revision, resource_epoch, cancelled, query, anchors } = event {
-                        app.editor_query_references(id, presentation.clone(), *generation, *revision, *resource_epoch, cancelled.clone(), query.clone(), *anchors, window, cx);
+                    if let markdown::DocumentEvent::RequestReferences {
+                        presentation,
+                        generation,
+                        revision,
+                        resource_epoch,
+                        cancelled,
+                        query,
+                        anchors,
+                    } = event
+                    {
+                        app.editor_query_references(
+                            id,
+                            presentation.clone(),
+                            *generation,
+                            *revision,
+                            *resource_epoch,
+                            cancelled.clone(),
+                            query.clone(),
+                            *anchors,
+                            window,
+                            cx,
+                        );
                     }
                     if let markdown::DocumentEvent::RequestEmbeds { presentation, generation, revision, resource_epoch } = event {
                         app.editor_refresh_embeds(id, presentation.clone(), *generation, *revision, *resource_epoch, window, cx);
@@ -1309,9 +1340,15 @@ impl LyrelApp {
         match destination {
             Ok(markdown::links::Target::External(url)) => cx.open_url(&url),
             Ok(markdown::links::Target::File(path)) => {
-                let fragment = target.split_once('#').map(|(_, fragment)| fragment).filter(|fragment| !fragment.is_empty()).map(str::to_owned);
+                let fragment = target
+                    .split_once('#')
+                    .map(|(_, fragment)| fragment)
+                    .filter(|fragment| !fragment.is_empty())
+                    .map(str::to_owned);
                 if path.extension().is_none() || fragment.is_some() {
-                    self.editor_resolve_reference_file(id, revision, host, path, fragment, window, cx);
+                    self.editor_resolve_reference_file(
+                        id, revision, host, path, fragment, window, cx,
+                    );
                 } else {
                     self.editor_open_request(host, &path, None, Some((id, revision)), window, cx);
                 }

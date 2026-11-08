@@ -1,8 +1,8 @@
+use super::metadata::{self, Marker, Style};
 use super::{
     super::projection::{Kind, Leaf},
     Cell,
 };
-use super::metadata::{self, Marker, Style};
 use crate::ui::code_editor::markdown::math;
 use gpui_kit::base::{
     StyledExt as _,
@@ -92,11 +92,17 @@ impl Layout {
             for leaf in leaves {
                 if let Kind::TableCell(cell) = leaf.kind
                     && !directions.contains_key(&cell.start)
-                    && let Some(rtl) = leaf.text.chars().find_map(|ch| match unicode_bidi::bidi_class(ch) {
-                        unicode_bidi::BidiClass::R | unicode_bidi::BidiClass::AL => Some(true),
-                        unicode_bidi::BidiClass::L => Some(false),
-                        _ => None,
-                    }) {
+                    && let Some(rtl) =
+                        leaf.text
+                            .chars()
+                            .find_map(|ch| match unicode_bidi::bidi_class(ch) {
+                                unicode_bidi::BidiClass::R | unicode_bidi::BidiClass::AL => {
+                                    Some(true)
+                                }
+                                unicode_bidi::BidiClass::L => Some(false),
+                                _ => None,
+                            })
+                {
                     directions.insert(cell.start, rtl);
                 }
             }
@@ -104,13 +110,19 @@ impl Layout {
             self.directions = directions;
             for leaf in leaves {
                 if let Kind::TableCell(cell) = leaf.kind
-                    && cell.row == 0 && cell.column == 0
-                    && let Some(marker) = metadata::read(source, cell.start) {
+                    && cell.row == 0
+                    && cell.column == 0
+                    && let Some(marker) = metadata::read(source, cell.start)
+                {
                     self.metadata.insert(cell.start, marker);
                 }
             }
             self.revision = Some(revision);
-            if self.resize.as_ref().is_some_and(|resize| resize.revision != revision) {
+            if self
+                .resize
+                .as_ref()
+                .is_some_and(|resize| resize.revision != revision)
+            {
                 self.resize = None;
             }
         }
@@ -128,9 +140,14 @@ impl Layout {
                 wrapped: None,
             });
             if measure && measurement.version != leaf.version {
-                let style = self.metadata.get(&cell.start).map_or(Style::Grid, |marker| marker.style);
+                let style = self
+                    .metadata
+                    .get(&cell.start)
+                    .map_or(Style::Grid, |marker| marker.style);
                 let rtl = self.directions.get(&cell.start).copied().unwrap_or(false);
-                let mut element = cell_element(leaf, None, wrap, style, rtl, marked, math, context, window, cx);
+                let mut element = cell_element(
+                    leaf, None, wrap, style, rtl, marked, math, context, window, cx,
+                );
                 measurement.intrinsic = element
                     .layout_as_root(
                         size(AvailableSpace::MaxContent, AvailableSpace::MinContent),
@@ -157,21 +174,33 @@ impl Layout {
                     *column = window.rem_size() * (explicit.max(24.) / 16.);
                 }
             }
-            if let Some(resize) = self.resize.as_ref().filter(|resize| resize.cell.start == *start) {
+            if let Some(resize) = self
+                .resize
+                .as_ref()
+                .filter(|resize| resize.cell.start == *start)
+            {
                 widths.clone_from(&resize.widths);
             }
-            let scroll = self.scrolls.get_mut(&self.table_ids[start]).expect("prepared table scroll");
+            let scroll = self
+                .scrolls
+                .get_mut(&self.table_ids[start])
+                .expect("prepared table scroll");
             let total = widths.iter().copied().sum::<Pixels>();
             let previous = std::mem::replace(&mut scroll.total, total);
             if self.directions.get(start) == Some(&true) {
                 let previous_max = (previous - self.viewport_width).max(Pixels::ZERO);
                 let maximum = (total - width).max(Pixels::ZERO);
-                let offset = (scroll.handle.offset().x + previous_max - maximum).clamp(-maximum, Pixels::ZERO);
-                if offset != scroll.handle.offset().x { scroll.handle.set_offset(point(offset, Pixels::ZERO)); }
+                let offset = (scroll.handle.offset().x + previous_max - maximum)
+                    .clamp(-maximum, Pixels::ZERO);
+                if offset != scroll.handle.offset().x {
+                    scroll.handle.set_offset(point(offset, Pixels::ZERO));
+                }
             }
         }
         let changed = self.columns != columns || direction_changed;
-        if changed { self.geometry_generation = self.geometry_generation.wrapping_add(1); }
+        if changed {
+            self.geometry_generation = self.geometry_generation.wrapping_add(1);
+        }
         self.columns = columns;
         self.viewport_width = width;
         changed
@@ -185,7 +214,9 @@ impl Layout {
             .fold(Pixels::ZERO, |a, b| a + b);
         let left = if self.directions.get(&cell.start) == Some(&true) {
             widths.iter().copied().sum::<Pixels>() - left - widths[cell.column]
-        } else { left };
+        } else {
+            left
+        };
         (left, left + widths[cell.column])
     }
 
@@ -212,18 +243,32 @@ impl Layout {
     }
 
     pub(crate) fn style(&self, cell: Cell) -> Style {
-        self.metadata.get(&cell.start).map_or(Style::Grid, |marker| marker.style)
+        self.metadata
+            .get(&cell.start)
+            .map_or(Style::Grid, |marker| marker.style)
     }
 
-    pub(crate) fn alignment(&self, cell: Cell) -> markdown::mdast::AlignKind { cell.align }
+    pub(crate) fn alignment(&self, cell: Cell) -> markdown::mdast::AlignKind {
+        cell.align
+    }
 
     pub(crate) fn geometry_state(&self, cell: Cell) -> Option<(u64, Point<Pixels>, u64)> {
         let id = *self.table_ids.get(&cell.start)?;
-        Some((id, self.scrolls.get(&id)?.handle.offset(), self.geometry_generation))
+        Some((
+            id,
+            self.scrolls.get(&id)?.handle.offset(),
+            self.geometry_generation,
+        ))
     }
 
     pub(crate) fn widths(&self, cell: Cell, rem: Pixels) -> Option<Vec<f32>> {
-        Some(self.columns.get(&cell.start)?.iter().map(|width| f32::from(*width / rem) * 16.).collect())
+        Some(
+            self.columns
+                .get(&cell.start)?
+                .iter()
+                .map(|width| f32::from(*width / rem) * 16.)
+                .collect(),
+        )
     }
 
     pub(crate) fn natural_width(&self, leaves: &[Leaf], cell: Cell, rem: Pixels) -> f32 {
@@ -233,18 +278,34 @@ impl Layout {
     }
 
     pub(crate) fn begin_resize(&mut self, cell: Cell, revision: u64, origin: Pixels) -> bool {
-        let Some(widths) = self.columns.get(&cell.start).cloned() else { return false; };
-        let Some(&original) = widths.get(cell.column) else { return false; };
-        self.resize = Some(Resize { cell, revision, origin, original, widths });
+        let Some(widths) = self.columns.get(&cell.start).cloned() else {
+            return false;
+        };
+        let Some(&original) = widths.get(cell.column) else {
+            return false;
+        };
+        self.resize = Some(Resize {
+            cell,
+            revision,
+            origin,
+            original,
+            widths,
+        });
         true
     }
 
-    pub(crate) fn is_resizing(&self) -> bool { self.resize.is_some() }
+    pub(crate) fn is_resizing(&self) -> bool {
+        self.resize.is_some()
+    }
 
     pub(crate) fn resize_to(&mut self, position: Pixels, rem: Pixels) {
         if let Some(resize) = &mut self.resize {
             let delta = position - resize.origin;
-            let delta = if self.directions.get(&resize.cell.start) == Some(&true) { -delta } else { delta };
+            let delta = if self.directions.get(&resize.cell.start) == Some(&true) {
+                -delta
+            } else {
+                delta
+            };
             let width = (resize.original + delta).max(rem * 1.5);
             if resize.widths[resize.cell.column] != width {
                 resize.widths[resize.cell.column] = width;
@@ -255,17 +316,38 @@ impl Layout {
 
     pub(crate) fn finish_resize(&mut self, rem: Pixels) -> Option<(Cell, u64, Vec<f32>)> {
         let resize = self.resize.take()?;
-        if resize.widths[resize.cell.column] == resize.original { return None; }
-        Some((resize.cell, resize.revision, resize.widths.into_iter().map(|width| f32::from(width / rem) * 16.).collect()))
+        if resize.widths[resize.cell.column] == resize.original {
+            return None;
+        }
+        Some((
+            resize.cell,
+            resize.revision,
+            resize
+                .widths
+                .into_iter()
+                .map(|width| f32::from(width / rem) * 16.)
+                .collect(),
+        ))
     }
 
     pub(crate) fn cancel_resize(&mut self) {
-        if self.resize.take().is_some() { self.geometry_generation = self.geometry_generation.wrapping_add(1); }
+        if self.resize.take().is_some() {
+            self.geometry_generation = self.geometry_generation.wrapping_add(1);
+        }
     }
 
-    pub(crate) fn adjusted_widths(&self, leaves: &[Leaf], cell: Cell, rem: Pixels, delta: Option<f32>) -> Option<Vec<f32>> {
+    pub(crate) fn adjusted_widths(
+        &self,
+        leaves: &[Leaf],
+        cell: Cell,
+        rem: Pixels,
+        delta: Option<f32>,
+    ) -> Option<Vec<f32>> {
         let mut widths = self.widths(cell, rem)?;
-        widths[cell.column] = delta.map_or_else(|| self.natural_width(leaves, cell, rem).ceil(), |delta| (widths[cell.column] + delta).max(24.));
+        widths[cell.column] = delta.map_or_else(
+            || self.natural_width(leaves, cell, rem).ceil(),
+            |delta| (widths[cell.column] + delta).max(24.),
+        );
         Some(widths)
     }
 
@@ -291,7 +373,18 @@ impl Layout {
             if measurement.wrapped.is_some_and(|(at, _)| at == width) {
                 continue;
             }
-            let mut element = cell_element(leaf, Some(width), wrap, style, rtl, marked, math, context, window, cx);
+            let mut element = cell_element(
+                leaf,
+                Some(width),
+                wrap,
+                style,
+                rtl,
+                marked,
+                math,
+                context,
+                window,
+                cx,
+            );
             let height = element
                 .layout_as_root(
                     size(AvailableSpace::Definite(width), AvailableSpace::MinContent),
@@ -337,7 +430,11 @@ impl Layout {
         let mut ids = Vec::new();
         let mut blank = Pixels::ZERO;
         for visual_column in 0..widths.len() {
-            let column = if rtl { widths.len() - 1 - visual_column } else { visual_column };
+            let column = if rtl {
+                widths.len() - 1 - visual_column
+            } else {
+                visual_column
+            };
             let width = widths[column];
             let visible = x + width >= viewport_x && x <= viewport_x + viewport_width;
             x += width;
@@ -381,11 +478,27 @@ impl Layout {
                             ))
                             .when(first.is_header(), |cell| {
                                 let id = leaf.id;
-                                cell.child(gpui_kit::base::resizable::resize_handle::<(), super::super::SourcePresentation>(("markdown-table-width", id), Axis::Horizontal)
-                                    .inside(if rtl { gpui_kit::base::resizable::HandleEdge::Leading } else { gpui_kit::base::resizable::HandleEdge::Trailing })
+                                cell.child(
+                                    gpui_kit::base::resize_handle::<
+                                        (),
+                                        super::super::SourcePresentation,
+                                    >(
+                                        ("markdown-table-width", id), Axis::Horizontal
+                                    )
+                                    .inside(if rtl {
+                                        gpui_kit::base::HandleEdge::Leading
+                                    } else {
+                                        gpui_kit::base::HandleEdge::Trailing
+                                    })
                                     .role(Role::Splitter)
                                     .aria_label("Resize table column")
-                                    .on_mouse_down(MouseButton::Left, cx.listener(move |view, event, window, cx| view.start_table_resize(id, event, window, cx))))
+                                    .on_mouse_down(
+                                        MouseButton::Left,
+                                        cx.listener(move |view, event, window, cx| {
+                                            view.start_table_resize(id, event, window, cx)
+                                        }),
+                                    ),
+                                )
                             })
                             .into_any_element()
                     } else {
@@ -408,8 +521,16 @@ impl Layout {
             .w(x)
             .when(rtl, |row| row.ml_auto())
             .min_h(height)
-            .when(style == Style::Grid || (first.row == 0 && matches!(style, Style::Striped | Style::Minimal)), |row| row.border_b_1().border_color(cx.theme().border))
-            .when((first.row == 0 && matches!(style, Style::Grid | Style::Header)) || (style == Style::Striped && first.row > 0 && first.row % 2 == 0), |row| row.bg(cx.theme().muted))
+            .when(
+                style == Style::Grid
+                    || (first.row == 0 && matches!(style, Style::Striped | Style::Minimal)),
+                |row| row.border_b_1().border_color(cx.theme().border),
+            )
+            .when(
+                (first.row == 0 && matches!(style, Style::Grid | Style::Header))
+                    || (style == Style::Striped && first.row > 0 && first.row % 2 == 0),
+                |row| row.bg(cx.theme().muted),
+            )
             .children(children);
         (row, ids)
     }
@@ -467,14 +588,18 @@ fn cell_element(
         .font_family(cx.theme().font_family.clone())
         .text_size(rems(1.))
         .line_height(relative(1.45))
-        .when(style == Style::Grid, |cell| cell.border_r_1().border_color(cx.theme().border))
+        .when(style == Style::Grid, |cell| {
+            cell.border_r_1().border_color(cx.theme().border)
+        })
         .when(cell.row == 0, |cell| cell.font_semibold())
         .when(cell.align == markdown::mdast::AlignKind::Center, |cell| {
             cell.text_center()
         })
-        .when(cell.align == markdown::mdast::AlignKind::Right || (rtl && cell.align == markdown::mdast::AlignKind::None), |cell| {
-            cell.text_right()
-        })
+        .when(
+            cell.align == markdown::mdast::AlignKind::Right
+                || (rtl && cell.align == markdown::mdast::AlignKind::None),
+            |cell| cell.text_right(),
+        )
         // A chosen column width constrains its own cell independently of the
         // source/prose soft-wrap preference; text must not cross other cells.
         .whitespace_normal()

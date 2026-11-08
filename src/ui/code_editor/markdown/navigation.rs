@@ -12,12 +12,14 @@ impl SourcePresentation {
     pub(super) fn selectable_leaf(&self, leaf: &super::super::projection::Leaf, cx: &App) -> bool {
         !self.live
             || (!self.folds.is_hidden(leaf.range.start)
-                && super::super::mdx::view::visible_field(&super::super::mdx::view::FieldContext::new(
-                    &self.projection,
-                    leaf,
-                    self.document.read(cx).source(),
-                    &self.mdx_state,
-                )))
+                && super::super::mdx::view::visible_field(
+                    &super::super::mdx::view::FieldContext::new(
+                        &self.projection,
+                        leaf,
+                        self.document.read(cx).source(),
+                        &self.mdx_state,
+                    ),
+                ))
     }
 
     pub(super) fn logical_line_edge(&self, at: usize, end: bool, cx: &App) -> usize {
@@ -483,6 +485,14 @@ impl SourcePresentation {
         self.schedule_drag_frame(window, cx);
     }
 
+    pub(super) fn cancel_drag(&mut self) {
+        self.dragging = false;
+        self.drag_pointer = None;
+        self.drag_origin = None;
+        // A queued frame still owns drag_frame_pending until it is delivered.
+        // Clearing it here could enqueue a second loop for a new gesture.
+    }
+
     pub(super) fn schedule_drag_frame(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.drag_frame_pending || (!self.dragging && self.reorder.is_none()) {
             return;
@@ -509,6 +519,7 @@ impl SourcePresentation {
             view.update(cx, |view, cx| {
                 view.drag_frame_pending = false;
                 if (!view.dragging && view.reorder.is_none()) || !view.focus.is_focused(window) {
+                    view.cancel_drag();
                     view.cancel_reorder(cx);
                     return;
                 }
@@ -521,8 +532,11 @@ impl SourcePresentation {
                     // This callback alone decides whether another frame is
                     // needed; reaching the scroll limit must stop scheduling.
                     view.drag_frame_pending = true;
-                    if view.reorder.is_some() { view.move_reorder(pointer, window, cx); }
-                    else { view.drag_to(pointer, window, cx); }
+                    if view.reorder.is_some() {
+                        view.move_reorder(pointer, window, cx);
+                    } else {
+                        view.drag_to(pointer, window, cx);
+                    }
                     view.drag_frame_pending = false;
                 }
                 let bounds = view.scroll.bounds();

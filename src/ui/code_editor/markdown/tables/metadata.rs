@@ -99,15 +99,25 @@ pub(crate) fn read(source: &Rope, table_start: usize) -> Option<Marker> {
 }
 
 fn continuation(ch: char) -> char {
-    if ch.is_ascii_whitespace() || ch == '>' { ch } else { ' ' }
+    if ch.is_ascii_whitespace() || ch == '>' {
+        ch
+    } else {
+        ' '
+    }
 }
 
 fn marker_content<'a>(line: &'a str, table_prefix: &str) -> Option<(&'a str, usize)> {
     // A list marker belongs only to its own first block, not to a sibling item.
-    if table_prefix.chars().any(|ch| continuation(ch) != ch) { return None; }
+    if table_prefix.chars().any(|ch| continuation(ch) != ch) {
+        return None;
+    }
     let len = super::super::lists::prefix_len(line);
     let prefix = &line[..len];
-    prefix.chars().map(continuation).eq(table_prefix.chars()).then_some((&line[len..], len))
+    prefix
+        .chars()
+        .map(continuation)
+        .eq(table_prefix.chars())
+        .then_some((&line[len..], len))
 }
 
 pub(in crate::ui::code_editor::markdown) fn marker_range(
@@ -129,7 +139,9 @@ pub(in crate::ui::code_editor::markdown) fn column_edit(
     let value = source.slice(range.clone()).to_string();
     let mut columns: Vec<_> = value.split(',').collect();
     if insert {
-        if column > columns.len() { return None; }
+        if column > columns.len() {
+            return None;
+        }
         let width = *columns.get(column.min(columns.len().checked_sub(1)?))?;
         columns.insert(column.min(columns.len()), width);
     } else if column < columns.len() {
@@ -185,22 +197,44 @@ fn new_marker(
     let start = source.line_start_offset(source.offset_to_point(table_start).row);
     let prefix = source.slice(start..table_start).to_string();
     let continuation: String = prefix.chars().map(continuation).collect();
-    let marker = format!("{prefix}<!-- table:{}{} -->\n", style.name(), widths.map_or(String::new(), |widths| format!(" cols={widths}")));
-    if continuation == prefix { (start..start, marker) }
-    else { (start..table_start, format!("{marker}{continuation}")) }
+    let marker = format!(
+        "{prefix}<!-- table:{}{} -->\n",
+        style.name(),
+        widths.map_or(String::new(), |widths| format!(" cols={widths}"))
+    );
+    if continuation == prefix {
+        (start..start, marker)
+    } else {
+        (start..table_start, format!("{marker}{continuation}"))
+    }
 }
 
 /// Hide only valid comments immediately preceding an actual parsed table.
-pub(in crate::ui::code_editor::markdown) fn hide_markers(source: &str, leaves: &mut Vec<super::Leaf>) {
-    let ranges: Vec<_> = leaves.iter().filter_map(|leaf| {
-        let super::Kind::TableCell(cell) = leaf.kind else { return None; };
-        if cell.row != 0 || cell.column != 0 { return None; }
-        let start = source[..cell.start].rfind('\n').map_or(0, |ix| ix + 1);
-        let prefix = &source[start..cell.start];
-        let previous = start.checked_sub(1)?;
-        let marker_start = source[..previous].rfind('\n').map_or(0, |ix| ix + 1);
-        let (content, prefix_len) = marker_content(&source[marker_start..previous], prefix)?;
-        parse(content, marker_start + prefix_len, start).map(|_| marker_start..start)
-    }).collect();
-    leaves.retain(|leaf| !matches!(leaf.kind, super::Kind::Html) || !ranges.iter().any(|range| range.start <= leaf.range.start && range.end >= leaf.range.end));
+pub(in crate::ui::code_editor::markdown) fn hide_markers(
+    source: &str,
+    leaves: &mut Vec<super::Leaf>,
+) {
+    let ranges: Vec<_> = leaves
+        .iter()
+        .filter_map(|leaf| {
+            let super::Kind::TableCell(cell) = leaf.kind else {
+                return None;
+            };
+            if cell.row != 0 || cell.column != 0 {
+                return None;
+            }
+            let start = source[..cell.start].rfind('\n').map_or(0, |ix| ix + 1);
+            let prefix = &source[start..cell.start];
+            let previous = start.checked_sub(1)?;
+            let marker_start = source[..previous].rfind('\n').map_or(0, |ix| ix + 1);
+            let (content, prefix_len) = marker_content(&source[marker_start..previous], prefix)?;
+            parse(content, marker_start + prefix_len, start).map(|_| marker_start..start)
+        })
+        .collect();
+    leaves.retain(|leaf| {
+        !matches!(leaf.kind, super::Kind::Html)
+            || !ranges
+                .iter()
+                .any(|range| range.start <= leaf.range.start && range.end >= leaf.range.end)
+    });
 }

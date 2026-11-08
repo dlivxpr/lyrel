@@ -79,7 +79,9 @@ impl Index {
         for property in &self.properties {
             if let Some(run) = runs.last_mut().filter(|run| run.end == property.line.start) {
                 run.end = property.line.end;
-            } else { runs.push(property.line.clone()); }
+            } else {
+                runs.push(property.line.clone());
+            }
         }
         runs
     }
