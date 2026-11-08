@@ -58,10 +58,8 @@ fn spelling_segment(
         // resolves a fragment-end index to the next fragment: its next row's
         // leading index is greater than `start`, so it must not be bridged.
         let origin = geometry.position_for_index(0).x;
-        let next_start = geometry.index_for_position(point(
-            origin,
-            b.y + geometry.caret_height() / 2.,
-        ));
+        let next_start =
+            geometry.index_for_position(point(origin, b.y + geometry.caret_height() / 2.));
         if next_start != start {
             return None;
         }
@@ -374,7 +372,9 @@ mod tests {
     use crate::ui::app::test_window::harness_with_tabs;
     use crate::ui::code_editor::markdown::projection::Kind;
     use gpui_kit::test::TestWindowExt as _;
-    use gpui_kit::{Entity, Pixels, TestAppContext, VisualTestContext, point, px, size};
+    use gpui_kit::{
+        Entity, Pixels, TestAppContext, VisualContext as _, VisualTestContext, point, px, size,
+    };
     use unicode_segmentation::UnicodeSegmentation as _;
 
     fn settle_geometry(view: &Entity<SourcePresentation>, context: &mut VisualTestContext) {
@@ -543,8 +543,14 @@ mod tests {
                         covered[slot] = true;
                     }
                 }
-                assert_eq!(covered, [true; 4], "each real layout must exercise soft wrap");
-                assert_eq!(view.document.read(cx).encode().unwrap(), original.as_bytes());
+                assert_eq!(
+                    covered, [true; 4],
+                    "each real layout must exercise soft wrap"
+                );
+                assert_eq!(
+                    view.document.read(cx).encode().unwrap(),
+                    original.as_bytes()
+                );
                 assert_eq!(view.document.read(cx).revision(), revision);
                 heights
             });
@@ -559,7 +565,10 @@ mod tests {
         context.dispatch_action(gpui_kit::component::input::Redo);
         context.run_until_parked();
         view.read_with(&context, |view, cx| {
-            assert_eq!(view.document.read(cx).encode().unwrap(), original.as_bytes());
+            assert_eq!(
+                view.document.read(cx).encode().unwrap(),
+                original.as_bytes()
+            );
             assert_eq!(view.document.read(cx).revision(), revision);
         });
         assert_eq!(std::fs::read(path).unwrap(), original.as_bytes());
@@ -635,8 +644,8 @@ mod tests {
                         );
                         fragmented[slot] = true;
                     } else if a.x != b.x {
-                        let segment = segment
-                            .expect("inline fragment keeps its ordinary spelling segment");
+                        let segment =
+                            segment.expect("inline fragment keeps its ordinary spelling segment");
                         assert_eq!(segment.left(), a.x.min(b.x));
                         assert_eq!(segment.right(), a.x.max(b.x));
                         assert_eq!(segment.top(), a.y);
@@ -653,14 +662,20 @@ mod tests {
                 "image and formula must each exercise a fragment row boundary"
             );
             assert!(local_segments.into_iter().all(|count| count > 0));
-            assert_eq!(view.document.read(cx).encode().unwrap(), original.as_bytes());
+            assert_eq!(
+                view.document.read(cx).encode().unwrap(),
+                original.as_bytes()
+            );
             view.document.read(cx).revision()
         });
         context.dispatch_action(gpui_kit::component::input::Undo);
         context.dispatch_action(gpui_kit::component::input::Redo);
         context.run_until_parked();
         view.read_with(&context, |view, cx| {
-            assert_eq!(view.document.read(cx).encode().unwrap(), original.as_bytes());
+            assert_eq!(
+                view.document.read(cx).encode().unwrap(),
+                original.as_bytes()
+            );
             assert_eq!(view.document.read(cx).revision(), revision);
         });
         assert_eq!(std::fs::read(path).unwrap(), original.as_bytes());
