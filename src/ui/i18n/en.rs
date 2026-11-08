@@ -1932,7 +1932,11 @@ pub fn translate_en(key: L10nKey) -> &'static str {
         }
         L10nKey::MarkdownLinkSaveFirst => "Save the document before opening a relative link",
         L10nKey::MarkdownLinkRemotePath => "A remote destination must use a POSIX path",
-        L10nKey::MarkdownLinkAnchorNotFound => "The heading anchor was not found in this document",
+        L10nKey::MarkdownLinkAnchorNotFound => "The anchor was not found or is not unique in this document",
+        L10nKey::MarkdownReferenceLoading => "Looking up workspace references…",
+        L10nKey::MarkdownReferenceNoMatches => "No matching file or anchor. No file will be created.",
+        L10nKey::MarkdownReferenceUnreadable => "The reference target could not be read. Check the Host connection and permissions.",
+        L10nKey::MarkdownReferenceAmbiguous => "More than one file or anchor matches. Use an explicit path and a unique anchor.",
         L10nKey::EditorWrapOn => "Wrap: on",
         L10nKey::EditorWrapOff => "Wrap: off",
         L10nKey::EditorFileTooLarge => "\"{path}\" is too large for the editor ({size} MB)",

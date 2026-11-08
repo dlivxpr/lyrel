@@ -17,6 +17,8 @@ actions!(markdown_links, [EditLinkDestination, FollowLink]);
 
 #[path = "links/interaction.rs"]
 mod link_interaction;
+#[path = "references.rs"]
+mod references;
 
 #[path = "assets.rs"]
 mod assets;
@@ -113,6 +115,7 @@ pub(crate) struct SourcePresentation {
     reveal_at: Option<usize>,
     selection_notification: bool,
     assets: assets::InsertionState,
+    references: references::State,
     formats: formats::State,
     code: code::State,
     image_resize: Option<image_edit::Resize>,
@@ -158,6 +161,7 @@ impl SourcePresentation {
                 if matches!(event, DocumentEvent::ResourceContextChanged) {
                     this.schedule_spelling(cx);
                     this.pointer_link = None;
+                    this.dismiss_references(cx);
                     let document = this.document.read(cx);
                     if this.projection.grammar != document.grammar() {
                         this.projection.install(Projection::source(
@@ -212,6 +216,9 @@ impl SourcePresentation {
                 this.schedule_math(cx);
                 this.schedule_mermaid(cx);
                 this.geometry = None;
+                if this.references.target.is_some() && !this.reference_lease_current(this.references.generation, cx) {
+                    this.dismiss_references(cx);
+                }
                 cx.notify();
             }
         });
@@ -290,6 +297,7 @@ impl SourcePresentation {
             reveal_at: None,
             selection_notification: false,
             assets: assets::InsertionState::default(),
+            references: references::State::default(),
             code: code::State::default(),
             image_resize: None,
             _observe: observe,
@@ -341,6 +349,7 @@ impl SourcePresentation {
         self.command(Command::FinishComposition, window, cx);
         self.properties = properties::State::default();
         self.live = !self.live;
+        self.dismiss_references(cx);
         self.geometry = None;
         self.rendered_revision = None;
         self.parse_pending = None;
@@ -730,6 +739,7 @@ impl SourcePresentation {
     pub(crate) fn select_range(&mut self, range: Range<usize>, cx: &mut Context<Self>) {
         let requested = Selection::new(range.start, range.end);
         let selected = self.release_formula(cx.entity_id(), Some(requested), cx).unwrap_or(requested);
+        self.dismiss_references(cx);
         self.input_generation = self.input_generation.wrapping_add(1);
         let was_composing = self.is_composing();
         self.extra_selections.clear();
@@ -1389,6 +1399,11 @@ impl SourcePresentation {
             self.reveal_at = None;
         }
         cx.notify();
+        if changed {
+            self.request_references(cx);
+        } else if self.references.target.is_some() && !self.reference_lease_current(self.references.generation, cx) {
+            self.dismiss_references(cx);
+        }
     }
     pub(super) fn follow_link(&mut self, target: String, cx: &mut Context<Self>) {
         if self.projection.revision != self.document.read(cx).revision() {
@@ -1409,10 +1424,12 @@ impl SourcePresentation {
         }
         let presentation = cx.entity().entity_id();
         let revision = self.document.read(cx).revision();
+        let resource_epoch = self.document.read(cx).resources().map(|resources| (resources.host().id(), resources.epoch()));
         self.document.update(cx, |_, cx| {
             cx.emit(DocumentEvent::FollowLink {
                 presentation,
                 revision,
+                resource_epoch,
                 target,
             })
         });
@@ -2978,6 +2995,25 @@ impl Render for SourcePresentation {
                 .min_h_0()
                 .key_context(key_context)
                 .track_focus(&self.focus)
+                .capture_action(cx.listener(|this, _: &actions::MoveUp, window, cx| {
+                    if this.move_reference(false, window, cx) { cx.stop_propagation(); }
+                }))
+                .capture_action(cx.listener(|this, _: &actions::MoveDown, window, cx| {
+                    if this.move_reference(true, window, cx) { cx.stop_propagation(); }
+                }))
+                .capture_action(cx.listener(|this, action: &actions::Enter, window, cx| {
+                    if !action.shift && this.accept_reference(window, cx) { cx.stop_propagation(); }
+                }))
+                .capture_action(cx.listener(|this, _: &actions::IndentInline, window, cx| {
+                    if this.accept_reference(window, cx) { cx.stop_propagation(); }
+                }))
+                .capture_action(cx.listener(|this, _: &actions::Indent, window, cx| {
+                    if this.accept_reference(window, cx) { cx.stop_propagation(); }
+                }))
+                .capture_action(cx.listener(|this, _: &actions::Escape, window, cx| {
+                    if this.dismiss_references(cx) { this.focus.focus(window, cx); cx.stop_propagation(); }
+                }))
+                .on_action(cx.listener(|this, _: &actions::ShowCompletions, _, cx| this.request_references(cx)))
                 .cursor_text()
                 .bg(cx.theme().background)
                 .text_color(cx.theme().foreground)
@@ -3408,6 +3444,7 @@ impl Render for SourcePresentation {
                 .on_action(cx.listener(|this, _: &math_edit::MatrixRemoveRow, window, cx| this.formula_matrix(1, window, cx)))
                 .on_action(cx.listener(|this, _: &math_edit::MatrixAddColumn, window, cx| this.formula_matrix(2, window, cx)))
                 .on_action(cx.listener(|this, _: &math_edit::MatrixRemoveColumn, window, cx| this.formula_matrix(3, window, cx)))
+                .child(self.render_references(window, cx))
                 .child(self.format_toolbar(window, cx))
                 .child(self.image_toolbar(cx))
                 .when(self.live, |root| {
