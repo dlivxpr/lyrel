@@ -26,6 +26,9 @@ mod typography;
 #[path = "composition.rs"]
 mod composition;
 
+#[path = "properties.rs"]
+pub(super) mod properties;
+
 struct CachedBlock {
     version: u64,
     seen: u64,
@@ -84,6 +87,7 @@ pub(crate) struct SourcePresentation {
     assets: assets::InsertionState,
     _observe: Subscription,
     mdx_state: super::mdx::ViewState,
+    properties: properties::State,
 }
 impl SourcePresentation {
     pub(crate) fn new(
@@ -245,6 +249,7 @@ impl SourcePresentation {
             assets: assets::InsertionState::default(),
             _observe: observe,
             mdx_state: super::mdx::ViewState::default(),
+            properties: properties::State::default(),
         };
         view.schedule_parse(cx);
         view
@@ -289,6 +294,7 @@ impl SourcePresentation {
     }
     pub(crate) fn toggle_mode(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.command(Command::FinishComposition, window, cx);
+        self.properties = properties::State::default();
         self.live = !self.live;
         self.geometry = None;
         self.rendered_revision = None;
@@ -2602,6 +2608,7 @@ impl Render for SourcePresentation {
                         } else {
                             rendered
                         };
+                        let rendered = self.render_property_leaf(leaf, rendered, cx);
                         Some(MeasuredBlock {
                             view: cx.entity(),
                             id: leaf.id,
@@ -2847,6 +2854,9 @@ impl Render for SourcePresentation {
                     cx.stop_propagation();
                 }))
                 .on_action(cx.listener(|view, _: &LoadImages, _, cx| view.refresh_images(true, cx)))
+                .on_action(cx.listener(|this, _: &properties::EditDocumentProperties, window, cx| this.open_properties(window, cx)))
+                .on_action(cx.listener(|this, _: &properties::AddDocumentProperty, window, cx| this.add_document_property(false, window, cx)))
+                .on_action(cx.listener(|this, _: &properties::AddDocumentTag, window, cx| this.add_document_property(true, window, cx)))
                 .on_action(cx.listener(|this, _: &EditLinkDestination, window, cx| {
                     this.edit_link_destination(window, cx);
                 }))
@@ -2932,13 +2942,13 @@ impl Render for SourcePresentation {
                     cx.propagate();
                 }))
                 .on_action(cx.listener(|this, _: &actions::Backspace, window, cx| {
-                    this.delete_prose(true, window, cx)
+                    if !this.delete_document_property_boundary(true, window, cx) { this.delete_prose(true, window, cx); }
                 }))
                 .on_action(cx.listener(|this, _: &actions::Delete, window, cx| {
-                    this.delete_prose(false, window, cx)
+                    if !this.delete_document_property_boundary(false, window, cx) { this.delete_prose(false, window, cx); }
                 }))
                 .on_action(cx.listener(|this, action: &actions::Enter, window, cx| {
-                    this.enter(action.shift, window, cx)
+                    if !this.enter_document_property(window, cx) { this.enter(action.shift, window, cx); }
                 }))
                 .on_action(cx.listener(|this, _: &actions::Indent, window, cx| {
                     this.indent_selection(false, window, cx)
@@ -3019,10 +3029,12 @@ impl Render for SourcePresentation {
                     this.move_cursor(1, 0, false, None, window, cx)
                 }))
                 .on_action(cx.listener(|this, _: &actions::MoveUp, window, cx| {
-                    this.move_cursor(0, -1, false, None, window, cx)
+                    this.move_cursor(0, -1, false, None, window, cx);
+                    this.enter_document_property(window, cx);
                 }))
                 .on_action(cx.listener(|this, _: &actions::MoveDown, window, cx| {
-                    this.move_cursor(0, 1, false, None, window, cx)
+                    this.move_cursor(0, 1, false, None, window, cx);
+                    this.enter_document_property(window, cx);
                 }))
                 .on_action(cx.listener(
                     |this, _: &gpui_kit::base::actions::SelectLeft, window, cx| {
@@ -3095,6 +3107,8 @@ impl Render for SourcePresentation {
                 .on_action(cx.listener(|this, _: &actions::Escape, window, cx| {
                     if this.state.composition.is_some() {
                         this.command(Command::CancelComposition, window, cx);
+                    } else if this.escape_document_properties(window, cx) {
+                        // The document inspector returns focus without a source transaction.
                     } else if this.navigate_table(super::tables::Navigation::Exit { backward: false }, window, cx) {
                         // Escape leaves the table without changing its source.
                     } else {
@@ -3106,6 +3120,14 @@ impl Render for SourcePresentation {
                         .flex_shrink_0().aria_label(status.clone()).text_sm().text_color(cx.theme().muted_foreground).child(status)
                 ))
                 .child(image_status)
+                .when(self.live, |root| {
+                    use gpui_kit::component::{Sizable as _, button::{Button, ButtonVariants as _}};
+                    root.child(div().on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                        .child(Button::new("markdown-properties").small().ghost()
+                            .label(t(L10nKey::EditorDocumentProperties))
+                            .on_click(cx.listener(|this, _, window, cx| this.open_properties(window, cx)))))
+                        .when(self.properties.open, |root| root.child(self.render_properties(cx)))
+                })
                 .when(self.live && self.projection.links.at(self.state.selection.head()).is_some(), |root| {
                     use gpui_kit::component::button::{Button, ButtonVariants as _};
                     use gpui_kit::component::Sizable as _;
