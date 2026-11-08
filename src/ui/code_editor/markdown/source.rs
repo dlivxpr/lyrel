@@ -89,7 +89,11 @@ impl SourcePresentation {
             // Platform handlers are weak. A last-owner release must still put
             // retained preedit into the document's existing ordered history.
             if view.state.composition.is_some()
-                && view.document.read(cx).composition_owner.as_ref()
+                && view
+                    .document
+                    .read(cx)
+                    .composition_owner
+                    .as_ref()
                     .is_some_and(|owner| owner.entity_id() == owner_id)
             {
                 view.document.update(cx, |document, cx| {
@@ -244,11 +248,19 @@ impl SourcePresentation {
             document.revision(),
             document.input_generation,
             self.input_generation,
-            document.composition_owner.as_ref().map(WeakEntity::entity_id),
+            document
+                .composition_owner
+                .as_ref()
+                .map(WeakEntity::entity_id),
         )
     }
     fn retire_native_composition(&self, completed: bool, cx: &mut Context<Self>) {
-        crate::ui::ime::retire_markdown_composition(&self.focus, self.input_token(cx), completed, cx);
+        crate::ui::ime::retire_markdown_composition(
+            &self.focus,
+            self.input_token(cx),
+            completed,
+            cx,
+        );
     }
     pub(crate) fn indent(&self) -> crate::ui::editor_text::Indent {
         self.indent
@@ -659,7 +671,11 @@ impl SourcePresentation {
                 &mut self.state,
                 Command::Select(Selection::new(range.start, range.end)),
             );
-            if document.composition_owner.as_ref().is_some_and(|owner| owner.entity_id() == owner_id) {
+            if document
+                .composition_owner
+                .as_ref()
+                .is_some_and(|owner| owner.entity_id() == owner_id)
+            {
                 document.composition_owner = None;
             }
             cx.emit(DocumentEvent::PresentationChanged);
@@ -992,8 +1008,10 @@ impl SourcePresentation {
         self.input_generation = self.input_generation.wrapping_add(1);
         // A late unmark/blur from an idle presentation must not finish a
         // different split's newly acquired composition.
-        if matches!(command, Command::FinishComposition | Command::CancelComposition)
-            && self.state.composition.is_none()
+        if matches!(
+            command,
+            Command::FinishComposition | Command::CancelComposition
+        ) && self.state.composition.is_none()
         {
             if self.focus.is_focused(window) {
                 self.retire_native_composition(false, cx);
@@ -2085,7 +2103,7 @@ impl EntityInputHandler for SourcePresentation {
             && caret.bottom() <= viewport.bottom()
             && caret.left() >= viewport.left()
             && caret.left() <= viewport.right())
-            .then_some(caret)
+        .then_some(caret)
     }
     fn character_index_for_point(
         &mut self,
@@ -2178,7 +2196,9 @@ impl Render for SourcePresentation {
             });
         let context = typography::context(context, self.live, cx);
         let table_width = typography::content_width(
-            self.viewport.bounds.map_or(window.viewport_size().width, |bounds| bounds.size.width),
+            self.viewport
+                .bounds
+                .map_or(window.viewport_size().width, |bounds| bounds.size.width),
             window.rem_size(),
             self.live,
         );
@@ -3199,7 +3219,9 @@ impl Element for SourceElement {
         });
         let table_measurement_changed = self.view.update(cx, |view, cx| {
             let width = typography::content_width(
-                view.viewport.bounds.map_or(window.viewport_size().width, |bounds| bounds.size.width),
+                view.viewport
+                    .bounds
+                    .map_or(window.viewport_size().width, |bounds| bounds.size.width),
                 window.rem_size(),
                 view.live,
             );
@@ -3284,8 +3306,13 @@ impl Element for SourceElement {
                 return;
             }
             let viewport = view.scroll.bounds();
-            let layout = typography::LayoutKey::new(viewport.size.width, view.live, view.wrap, window, cx);
-            let reflow = view.viewport.layout.as_ref().is_some_and(|old| old != &layout);
+            let layout =
+                typography::LayoutKey::new(viewport.size.width, view.live, view.wrap, window, cx);
+            let reflow = view
+                .viewport
+                .layout
+                .as_ref()
+                .is_some_and(|old| old != &layout);
             if reflow {
                 view.viewport.heights.clear();
             }
@@ -3431,11 +3458,7 @@ impl Element for SourceElement {
             };
             (view.focus.clone(), carets)
         };
-        window.handle_input(
-            &focus,
-            composition::Input::new(&self.view, cx),
-            cx,
-        );
+        window.handle_input(&focus, composition::Input::new(&self.view, cx), cx);
         let viewport = self.view.read(cx).scroll.bounds();
         for caret in carets {
             if caret.top() >= viewport.top()

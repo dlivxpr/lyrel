@@ -31,7 +31,10 @@ impl Frame {
     pub(super) fn is_current(self, view: &SourcePresentation, window: &Window, cx: &App) -> bool {
         self == Self::new(view, window, cx)
             && view.projection.revision == self.revision
-            && view.geometry.as_ref().is_some_and(|(revision, _)| *revision == self.revision)
+            && view
+                .geometry
+                .as_ref()
+                .is_some_and(|(revision, _)| *revision == self.revision)
     }
 }
 
@@ -55,7 +58,11 @@ impl Input {
         &mut self,
         window: &mut Window,
         cx: &mut App,
-        callback: impl FnOnce(&mut SourcePresentation, &mut Window, &mut Context<SourcePresentation>) -> R,
+        callback: impl FnOnce(
+            &mut SourcePresentation,
+            &mut Window,
+            &mut Context<SourcePresentation>,
+        ) -> R,
     ) -> Option<R> {
         let view = self.view.upgrade()?;
         let current = view.read(cx);
@@ -77,23 +84,45 @@ impl InputHandler for Input {
         cx: &mut App,
     ) -> Option<String> {
         *adjusted = None;
-        self.with_view(window, cx, |view, window, cx| view.text_for_range(range, adjusted, window, cx)).flatten()
+        self.with_view(window, cx, |view, window, cx| {
+            view.text_for_range(range, adjusted, window, cx)
+        })
+        .flatten()
     }
 
-    fn selected_text_range(&mut self, ignore: bool, window: &mut Window, cx: &mut App) -> Option<UTF16Selection> {
-        self.with_view(window, cx, |view, window, cx| view.selected_text_range(ignore, window, cx)).flatten()
+    fn selected_text_range(
+        &mut self,
+        ignore: bool,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> Option<UTF16Selection> {
+        self.with_view(window, cx, |view, window, cx| {
+            view.selected_text_range(ignore, window, cx)
+        })
+        .flatten()
     }
 
     fn marked_text_range(&mut self, window: &mut Window, cx: &mut App) -> Option<Range<usize>> {
-        self.with_view(window, cx, |view, window, cx| view.marked_text_range(window, cx)).flatten()
+        self.with_view(window, cx, |view, window, cx| {
+            view.marked_text_range(window, cx)
+        })
+        .flatten()
     }
 
     fn unmark_text(&mut self, window: &mut Window, cx: &mut App) {
         let _ = self.with_view(window, cx, |view, window, cx| view.unmark_text(window, cx));
     }
 
-    fn replace_text_in_range(&mut self, range: Option<Range<usize>>, text: &str, window: &mut Window, cx: &mut App) {
-        let _ = self.with_view(window, cx, |view, window, cx| view.replace_text_in_range(range, text, window, cx));
+    fn replace_text_in_range(
+        &mut self,
+        range: Option<Range<usize>>,
+        text: &str,
+        window: &mut Window,
+        cx: &mut App,
+    ) {
+        let _ = self.with_view(window, cx, |view, window, cx| {
+            view.replace_text_in_range(range, text, window, cx)
+        });
     }
 
     fn replace_and_mark_text_in_range(
@@ -104,27 +133,50 @@ impl InputHandler for Input {
         window: &mut Window,
         cx: &mut App,
     ) {
-        let _ = self.with_view(window, cx, |view, window, cx| view.replace_and_mark_text_in_range(range, text, selected, window, cx));
+        let _ = self.with_view(window, cx, |view, window, cx| {
+            view.replace_and_mark_text_in_range(range, text, selected, window, cx)
+        });
     }
 
     fn paste(&mut self, item: ClipboardItem, window: &mut Window, cx: &mut App) {
         let _ = self.with_view(window, cx, |view, window, cx| view.paste(item, window, cx));
     }
 
-    fn bounds_for_range(&mut self, range: Range<usize>, window: &mut Window, cx: &mut App) -> Option<Bounds<Pixels>> {
-        self.with_view(window, cx, |view, window, cx| view.bounds_for_range(range, view.scroll.bounds(), window, cx)).flatten()
+    fn bounds_for_range(
+        &mut self,
+        range: Range<usize>,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> Option<Bounds<Pixels>> {
+        self.with_view(window, cx, |view, window, cx| {
+            view.bounds_for_range(range, view.scroll.bounds(), window, cx)
+        })
+        .flatten()
     }
 
-    fn character_index_for_point(&mut self, point: Point<Pixels>, window: &mut Window, cx: &mut App) -> Option<usize> {
-        self.with_view(window, cx, |view, window, cx| view.character_index_for_point(point, window, cx)).flatten()
+    fn character_index_for_point(
+        &mut self,
+        point: Point<Pixels>,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> Option<usize> {
+        self.with_view(window, cx, |view, window, cx| {
+            view.character_index_for_point(point, window, cx)
+        })
+        .flatten()
     }
 
     fn set_selected_text_range(&mut self, range: Range<usize>, window: &mut Window, cx: &mut App) {
-        let _ = self.with_view(window, cx, |view, window, cx| view.set_selected_text_range(range, window, cx));
+        let _ = self.with_view(window, cx, |view, window, cx| {
+            view.set_selected_text_range(range, window, cx)
+        });
     }
 
     fn text_length_utf16(&mut self, window: &mut Window, cx: &mut App) -> Option<usize> {
-        self.with_view(window, cx, |view, window, cx| view.text_length_utf16(window, cx)).flatten()
+        self.with_view(window, cx, |view, window, cx| {
+            view.text_length_utf16(window, cx)
+        })
+        .flatten()
     }
 
     fn element_bounds(&mut self, window: &mut Window, cx: &mut App) -> Option<Bounds<Pixels>> {
@@ -166,7 +218,8 @@ mod tests {
         let first = loop {
             context.run_until_parked();
             if let Some(view) = app.read_with(&context, |app, _| {
-                app.active_editor_input().and_then(|input| input.markdown().cloned())
+                app.active_editor_input()
+                    .and_then(|input| input.markdown().cloned())
             }) {
                 break view;
             }
@@ -182,25 +235,37 @@ mod tests {
             let mut input = Input::new(&first, cx);
             input.replace_and_mark_text_in_range(None, "你🎉", Some(3..3), window, cx);
             assert_eq!(input.marked_text_range(window, cx), Some(1..4));
-            assert_eq!(input.selected_text_range(false, window, cx).unwrap().range, 4..4);
+            assert_eq!(
+                input.selected_text_range(false, window, cx).unwrap().range,
+                4..4
+            );
             input
         });
         context.update(|window, cx| {
             window.render_frame(cx);
             window.render_frame(cx);
-            assert!(first.read(cx).is_composing(), "registering the same owner again must retain preedit");
+            assert!(
+                first.read(cx).is_composing(),
+                "registering the same owner again must retain preedit"
+            );
         });
         // The production source/live action is a commit boundary, not a new editor.
         context.dispatch_action(crate::core::actions::ToggleDocumentPreview);
         context.update(|window, cx| {
             old.replace_text_in_range(None, "OBSOLETE", window, cx);
-            assert_eq!(first.read(cx).document.read(cx).encode().unwrap(), "A你🎉Z\r\ntail\n".as_bytes());
+            assert_eq!(
+                first.read(cx).document.read(cx).encode().unwrap(),
+                "A你🎉Z\r\ntail\n".as_bytes()
+            );
             assert!(!first.read(cx).is_composing());
         });
         context.dispatch_action(gpui_kit::component::input::Undo);
         context.run_until_parked();
         app.read_with(&context, |app, cx| {
-            assert_eq!(first.read(cx).document.read(cx).encode().unwrap(), original.as_bytes());
+            assert_eq!(
+                first.read(cx).document.read(cx).encode().unwrap(),
+                original.as_bytes()
+            );
             assert!(!app.active_buffer().unwrap().dirty);
         });
         context.dispatch_action(gpui_kit::component::input::Redo);
@@ -220,11 +285,22 @@ mod tests {
         context.run_until_parked();
         context.update(|window, cx| {
             assert!(first.read(cx).focus.is_focused(window));
-            assert_eq!(first.read(cx).document.read(cx).encode().unwrap(), "A你🎉Z\r\ntail\n".as_bytes());
+            assert_eq!(
+                first.read(cx).document.read(cx).encode().unwrap(),
+                "A你🎉Z\r\ntail\n".as_bytes()
+            );
         });
-        app.update_in(&mut context, |app, window, cx| assert!(app.editor_split(window, cx)));
+        app.update_in(&mut context, |app, window, cx| {
+            assert!(app.editor_split(window, cx))
+        });
         context.run_until_parked();
-        let second = app.read_with(&context, |app, _| app.active_editor_input().unwrap().markdown().unwrap().clone());
+        let second = app.read_with(&context, |app, _| {
+            app.active_editor_input()
+                .unwrap()
+                .markdown()
+                .unwrap()
+                .clone()
+        });
         assert_ne!(first.entity_id(), second.entity_id());
         context.update(|window, cx| {
             window.render_frame(cx);
@@ -236,18 +312,26 @@ mod tests {
             input.replace_text_in_range(None, "kept ", window, cx);
             input.replace_and_mark_text_in_range(None, "cancel", Some(6..6), window, cx);
             input.replace_and_mark_text_in_range(None, "", Some(0..0), window, cx);
-            assert_eq!(second.read(cx).document.read(cx).encode().unwrap(), "kept A你🎉Z\r\ntail\n".as_bytes());
+            assert_eq!(
+                second.read(cx).document.read(cx).encode().unwrap(),
+                "kept A你🎉Z\r\ntail\n".as_bytes()
+            );
             // A retained stale native handler cannot undo or commit through a new owner.
             old.unmark_text(window, cx);
             old.replace_text_in_range(Some(0..1), "bad", window, cx);
             assert_eq!(second.read(cx).selection(), Selection::caret(5));
         });
         context.run_until_parked();
-        first.read_with(&context, |view, _| assert_eq!(view.selection(), Selection::caret(13)));
+        first.read_with(&context, |view, _| {
+            assert_eq!(view.selection(), Selection::caret(13))
+        });
         context.dispatch_action(gpui_kit::component::input::Undo);
         context.run_until_parked();
         context.update(|window, cx| {
-            assert_eq!(second.read(cx).document.read(cx).encode().unwrap(), "A你🎉Z\r\ntail\n".as_bytes());
+            assert_eq!(
+                second.read(cx).document.read(cx).encode().unwrap(),
+                "A你🎉Z\r\ntail\n".as_bytes()
+            );
             // Focus transfer commits only the previous Markdown owner, while a
             // subsequent candidate/cancel callback from that handler is obsolete.
             second.update(cx, |view, cx| view.select_range(0..0, cx));
@@ -261,27 +345,37 @@ mod tests {
         context.update(|window, cx| {
             window.render_frame(cx);
             assert!(!second.read(cx).is_composing());
-            assert_eq!(first.read(cx).document.entity_id(), second.read(cx).document.entity_id());
+            assert_eq!(
+                first.read(cx).document.entity_id(),
+                second.read(cx).document.entity_id()
+            );
             assert_eq!(first.read(cx).selection(), Selection::caret(12));
             assert_eq!(second.read(cx).selection(), Selection::caret(4));
             first.update(cx, |view, cx| view.select_range(0..0, cx));
             let mut input = Input::new(&first, cx);
             input.replace_and_mark_text_in_range(None, "close", Some(5..5), window, cx);
         });
-        app.update_in(&mut context, |app, window, cx| app.editor_close_file(0, window, cx));
+        app.update_in(&mut context, |app, window, cx| {
+            app.editor_close_file(0, window, cx)
+        });
         context.run_until_parked();
         app.update_in(&mut context, |app, window, cx| app.focus_editor(window, cx));
         context.dispatch_action(crate::core::actions::EditorSave);
         loop {
             context.run_until_parked();
-            if app.read_with(&context, |app, _| app.active_buffer().is_some_and(|file| !file.dirty && !file.saving)) {
+            if app.read_with(&context, |app, _| {
+                app.active_buffer()
+                    .is_some_and(|file| !file.dirty && !file.saving)
+            }) {
                 break;
             }
             assert!(std::time::Instant::now() < deadline);
             std::thread::sleep(std::time::Duration::from_millis(5));
         }
         let saved = "closehandA你🎉Z\r\ntail\n".as_bytes();
-        first.read_with(&context, |view, cx| assert_eq!(view.document.read(cx).encode().unwrap(), saved));
+        first.read_with(&context, |view, cx| {
+            assert_eq!(view.document.read(cx).encode().unwrap(), saved)
+        });
         assert_eq!(std::fs::read(&path).unwrap(), saved);
         assert_eq!(host.writes.load(std::sync::atomic::Ordering::SeqCst), 1);
         app.update_in(&mut context, |app, window, cx| {
@@ -290,7 +384,11 @@ mod tests {
         });
         loop {
             context.run_until_parked();
-            if app.read_with(&context, |app, cx| app.active_buffer().is_some_and(|file| file.input.read(cx).text().to_string() == "closehandA你🎉Z\ntail\n")) {
+            if app.read_with(&context, |app, cx| {
+                app.active_buffer().is_some_and(|file| {
+                    file.input.read(cx).text().to_string() == "closehandA你🎉Z\ntail\n"
+                })
+            }) {
                 break;
             }
             assert!(std::time::Instant::now() < deadline);
@@ -298,9 +396,32 @@ mod tests {
         }
         context.update(|window, cx| old.replace_text_in_range(None, "replacement", window, cx));
         app.read_with(&context, |app, cx| {
-            assert_eq!(app.active_buffer().unwrap().host.id(), lyrel_core::host::HostId(208));
-            assert_ne!(app.active_editor_input().unwrap().markdown().unwrap().read(cx).document.entity_id(), first.read(cx).document.entity_id());
-            assert_eq!(app.active_editor_input().unwrap().markdown().unwrap().read(cx).document.read(cx).encode().unwrap(), saved);
+            assert_eq!(
+                app.active_buffer().unwrap().host.id(),
+                lyrel_core::host::HostId(208)
+            );
+            assert_ne!(
+                app.active_editor_input()
+                    .unwrap()
+                    .markdown()
+                    .unwrap()
+                    .read(cx)
+                    .document
+                    .entity_id(),
+                first.read(cx).document.entity_id()
+            );
+            assert_eq!(
+                app.active_editor_input()
+                    .unwrap()
+                    .markdown()
+                    .unwrap()
+                    .read(cx)
+                    .document
+                    .read(cx)
+                    .encode()
+                    .unwrap(),
+                saved
+            );
         });
         // Reuse the owning Host's delayed read seam: a reload started before
         // newer committed input/preedit must not land over that input.
@@ -317,7 +438,13 @@ mod tests {
             assert!(std::time::Instant::now() < deadline);
             std::thread::sleep(std::time::Duration::from_millis(5));
         }
-        let replacement = app.read_with(&context, |app, _| app.active_editor_input().unwrap().markdown().unwrap().clone());
+        let replacement = app.read_with(&context, |app, _| {
+            app.active_editor_input()
+                .unwrap()
+                .markdown()
+                .unwrap()
+                .clone()
+        });
         context.update(|window, cx| {
             window.input("fresh ", cx);
             let mut input = Input::new(&replacement, cx);
@@ -334,12 +461,18 @@ mod tests {
             std::thread::sleep(std::time::Duration::from_millis(5));
         }
         replacement.read_with(&context, |view, cx| {
-            assert_eq!(view.document.read(cx).encode().unwrap(), "fresh closehandA你🎉Z\r\ntail\n".as_bytes());
+            assert_eq!(
+                view.document.read(cx).encode().unwrap(),
+                "fresh closehandA你🎉Z\r\ntail\n".as_bytes()
+            );
         });
         context.dispatch_action(gpui_kit::component::input::Undo);
         context.run_until_parked();
         app.read_with(&context, |app, cx| {
-            assert_eq!(replacement.read(cx).document.read(cx).encode().unwrap(), saved);
+            assert_eq!(
+                replacement.read(cx).document.read(cx).encode().unwrap(),
+                saved
+            );
             assert!(!app.active_buffer().unwrap().dirty);
         });
     }
@@ -352,11 +485,16 @@ mod tests {
         let path = directory.path().join("candidate.md");
         std::fs::write(&path, format!("{}\n\ntail", "wrapped words ".repeat(80))).unwrap();
         let (app, mut context, _streams) = harness_with_tabs(cx, 1);
-        app.update_in(&mut context, |app, window, cx| app.open_file_in_editor(&path, window, cx));
+        app.update_in(&mut context, |app, window, cx| {
+            app.open_file_in_editor(&path, window, cx)
+        });
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
         let view = loop {
             context.run_until_parked();
-            if let Some(view) = app.read_with(&context, |app, _| app.active_editor_input().and_then(|input| input.markdown().cloned())) {
+            if let Some(view) = app.read_with(&context, |app, _| {
+                app.active_editor_input()
+                    .and_then(|input| input.markdown().cloned())
+            }) {
                 break view;
             }
             assert!(std::time::Instant::now() < deadline);
@@ -370,10 +508,15 @@ mod tests {
             window.render_frame(cx);
             let mut input = Input::new(&view, cx);
             input.replace_and_mark_text_in_range(None, "你🎉", Some(300..300), window, cx);
-            assert_eq!(input.selected_text_range(false, window, cx).unwrap().range, 143..143);
+            assert_eq!(
+                input.selected_text_range(false, window, cx).unwrap().range,
+                143..143
+            );
         });
         loop {
-            context.executor().advance_clock(std::time::Duration::from_millis(100));
+            context
+                .executor()
+                .advance_clock(std::time::Duration::from_millis(100));
             context.run_until_parked();
             if context.update(|window, cx| {
                 window.render_frame(cx);
@@ -390,7 +533,10 @@ mod tests {
             let mut input = Input::new(&view, cx);
             let caret = view.read(cx).caret_bounds(147, cx).unwrap();
             assert_eq!(input.bounds_for_range(140..143, window, cx), Some(caret));
-            assert_eq!(input.character_index_for_point(caret.center(), window, cx), Some(143));
+            assert_eq!(
+                input.character_index_for_point(caret.center(), window, cx),
+                Some(143)
+            );
             // ScrollHandle can move before the next layout. No old candidate is usable.
             view.read(cx).scroll.set_offset(point(px(0.), px(-20.)));
             assert!(input.bounds_for_range(140..143, window, cx).is_none());
