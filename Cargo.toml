@@ -226,6 +226,7 @@ windows = { version = "0.62.2", features = [
     "Foundation",
     "UI_Notifications",
     "Win32_Foundation",
+    "Win32_Globalization",
     "Win32_Storage_EnhancedStorage",
     # IShellLinkW::GetPath takes a WIN32_FIND_DATAW, so reading an existing
     # shortcut's target back — which is how `aumid` decides whether it has to
@@ -256,7 +257,7 @@ libc = "0.2.191"
 # and it makes the Windows jieba fallback unnecessary here.
 core-foundation = "0.10.1"
 objc2 = "0.6.5"
-objc2-app-kit = { version = "0.3", features = ["NSApplication", "NSResponder", "NSAppearance", "NSGraphics", "NSImage", "NSMenu", "NSMenuItem"] }
+objc2-app-kit = { version = "0.3", features = ["NSApplication", "NSResponder", "NSAppearance", "NSGraphics", "NSImage", "NSMenu", "NSMenuItem", "NSSpellChecker"] }
 # NSData feeds the runtime Dock icon for bare (non-bundled) binaries — see
 # `set_dock_icon_for_bare_binary` in main.rs.
 # NSUserNotification is the click-to-reveal notification path — see
@@ -267,7 +268,7 @@ objc2-app-kit = { version = "0.3", features = ["NSApplication", "NSResponder", "
 # NSMenu/NSMenuItem back the native-menu key-equivalent repair in
 # `ui::theme::fix_native_menu_key_equivalents` (gpui 0.3.9 does not map
 # "enter"/"tab", so the app rewrites those equivalents itself).
-objc2-foundation = { version = "0.3", features = ["NSData", "NSDictionary", "NSString", "NSUserDefaults", "NSUserNotification", "NSLocale", "NSArray"] }
+objc2-foundation = { version = "0.3", features = ["NSData", "NSDictionary", "NSString", "NSUserDefaults", "NSUserNotification", "NSLocale", "NSArray", "NSRange"] }
 # `oneshot::Receiver` appears in the `Platform` trait's prompt/screen-capture
 # signatures, which the full-delegation wrapper in `ui::platform` must name.
 # Already in the tree at 0.3.34 via gpui.

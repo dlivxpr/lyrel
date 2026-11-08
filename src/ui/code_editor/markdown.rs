@@ -22,6 +22,8 @@ mod tables;
 #[cfg(test)]
 pub(super) use source::FollowLink;
 pub(crate) use source::SourcePresentation;
+pub(crate) use source::properties::EditDocumentProperties;
+pub(super) use source::tools::{SearchSurfaceChanged, SearchText};
 pub(crate) use tables::bindings as table_bindings;
 pub(crate) use source::formats::bindings as inline_format_bindings;
 #[cfg(test)]
@@ -469,9 +471,12 @@ impl MarkdownDocument {
             self.history.end_grouping();
         }
         self.typing_end = (kind == EditKind::Typing
-            && change.edits.len() == 1
-            && !edit.inserted.text.contains(['\n', '\r']))
-        .then_some((owner, edit.start + edit.inserted.text.len()));
+            && change.after.range().is_empty()
+            && change
+                .edits
+                .iter()
+                .all(|edit| !edit.inserted.text.contains(['\n', '\r'])))
+        .then_some((owner, change.after.head()));
         self.history.push(change);
         self.history.end_grouping();
     }
@@ -698,7 +703,8 @@ impl MarkdownDocument {
                             == Some('\n'),
                     );
                 let local = self.source_text(start..end);
-                if let Some((range, inserted, caret)) = tables::edit(
+                let header = range.start - start;
+                if let Some((range, mut inserted, caret)) = tables::edit(
                     &local,
                     range.start - start..range.end - start,
                     Selection::new(
@@ -708,10 +714,33 @@ impl MarkdownDocument {
                     operation,
                     self.format.line_ending,
                 ) {
-                    let range = range.start + start..range.end + start;
-                    let caret = caret + start;
-                    let mut removed = local;
-                    removed.text.drain(..range.start - start);
+                    let mut range = range.start + start..range.end + start;
+                    let mut caret = caret + start;
+                    let marker_edit = match operation {
+                        tables::Operation::InsertColumnBefore | tables::Operation::InsertColumnAfter | tables::Operation::DeleteColumn => {
+                            tables::column_at(&local, header, state.selection.head.saturating_sub(start)).and_then(|column| {
+                                let column = column + usize::from(matches!(operation, tables::Operation::InsertColumnAfter));
+                                tables::metadata::column_edit(&self.source, start + header, column, !matches!(operation, tables::Operation::DeleteColumn))
+                            })
+                        }
+                        _ => None,
+                    };
+                    if matches!(operation, tables::Operation::DeleteTable) {
+                        if let Some(marker) = tables::metadata::marker_range(&self.source, start + header) {
+                            range.start = marker.start;
+                            caret = range.start;
+                        }
+                    } else if let Some((marker_range, text)) = marker_edit {
+                        let marker_start = self.source.line_start_offset(self.source.offset_to_point(marker_range.start).row);
+                        let mut prefix = self.source_text(marker_start..range.start);
+                        caret = caret - marker_range.len() + text.len();
+                        prefix.text.replace_range(marker_range.start - marker_start..marker_range.end - marker_start, &text);
+                        prefix.text.push_str(&inserted.text);
+                        prefix.endings.append(&mut inserted.endings);
+                        inserted = prefix;
+                        range.start = marker_start;
+                    }
+                    let removed = self.source_text(range.clone());
                     if removed != inserted {
                         let before = state.selection;
                         self.replace(range.clone(), &inserted);
