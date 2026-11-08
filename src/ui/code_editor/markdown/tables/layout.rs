@@ -18,7 +18,7 @@ pub(crate) struct Layout {
     cells: HashMap<u64, Measurement>,
     columns: HashMap<usize, Vec<Pixels>>,
     table_ids: HashMap<usize, u64>,
-    scrolls: HashMap<u64, ScrollHandle>,
+    scrolls: HashMap<u64, TableScroll>,
     metadata: HashMap<usize, Marker>,
     directions: HashMap<usize, bool>,
     viewport_width: Pixels,
@@ -33,6 +33,12 @@ struct Measurement {
     seen: u64,
     intrinsic: Pixels,
     wrapped: Option<(Pixels, Pixels)>,
+}
+
+#[derive(Default)]
+struct TableScroll {
+    handle: ScrollHandle,
+    total: Pixels,
 }
 
 struct Resize {
@@ -154,13 +160,14 @@ impl Layout {
             if let Some(resize) = self.resize.as_ref().filter(|resize| resize.cell.start == *start) {
                 widths.clone_from(&resize.widths);
             }
+            let scroll = self.scrolls.get_mut(&self.table_ids[start]).expect("prepared table scroll");
+            let total = widths.iter().copied().sum::<Pixels>();
+            let previous = std::mem::replace(&mut scroll.total, total);
             if self.directions.get(start) == Some(&true) {
-                let previous = self.columns.get(start).map_or(Pixels::ZERO, |widths| widths.iter().copied().sum::<Pixels>());
                 let previous_max = (previous - self.viewport_width).max(Pixels::ZERO);
-                let maximum = (widths.iter().copied().sum::<Pixels>() - width).max(Pixels::ZERO);
-                let scroll = &self.scrolls[&self.table_ids[start]];
-                let offset = (scroll.offset().x + previous_max - maximum).clamp(-maximum, Pixels::ZERO);
-                if offset != scroll.offset().x { scroll.set_offset(point(offset, Pixels::ZERO)); }
+                let maximum = (total - width).max(Pixels::ZERO);
+                let offset = (scroll.handle.offset().x + previous_max - maximum).clamp(-maximum, Pixels::ZERO);
+                if offset != scroll.handle.offset().x { scroll.handle.set_offset(point(offset, Pixels::ZERO)); }
             }
         }
         let changed = self.columns != columns || direction_changed;
@@ -187,7 +194,7 @@ impl Layout {
     }
 
     pub fn scroll(&self, cell: Cell) -> &ScrollHandle {
-        &self.scrolls[&self.table_ids[&cell.start]]
+        &self.scrolls[&self.table_ids[&cell.start]].handle
     }
 
     pub fn reveal(&self, cell: Cell, width: Pixels) {
@@ -212,7 +219,7 @@ impl Layout {
 
     pub(crate) fn geometry_state(&self, cell: Cell) -> Option<(u64, Point<Pixels>, u64)> {
         let id = *self.table_ids.get(&cell.start)?;
-        Some((id, self.scrolls.get(&id)?.offset(), self.geometry_generation))
+        Some((id, self.scrolls.get(&id)?.handle.offset(), self.geometry_generation))
     }
 
     pub(crate) fn widths(&self, cell: Cell, rem: Pixels) -> Option<Vec<f32>> {
