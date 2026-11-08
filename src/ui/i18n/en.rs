@@ -1839,6 +1839,7 @@ pub fn translate_en(key: L10nKey) -> &'static str {
         }
         L10nKey::MarkdownLinkSaveFirst => "Save the document before opening a relative link",
         L10nKey::MarkdownLinkRemotePath => "A remote destination must use a POSIX path",
+        L10nKey::MarkdownLinkAnchorNotFound => "The heading anchor was not found in this document",
         L10nKey::EditorWrapOn => "Wrap: on",
         L10nKey::EditorWrapOff => "Wrap: off",
         L10nKey::EditorFileTooLarge => "\"{path}\" is too large for the editor ({size} MB)",
