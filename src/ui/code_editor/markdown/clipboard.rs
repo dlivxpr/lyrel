@@ -22,18 +22,18 @@ fn escaped(text: &str, out: &mut String) {
 }
 
 /// The original line endings belong to the document, not its LF coordinates.
-fn source_fragment(document: &MarkdownDocument, range: Range<usize>) -> String {
-    let source = document.source_text(range);
-    let mut endings = source.endings.into_iter();
-    let mut out = String::with_capacity(source.text.len());
-    for part in source.text.split_inclusive('\n') {
-        if let Some(line) = part.strip_suffix('\n') {
-            out.push_str(line);
-            if endings.next() == Some(crate::ui::editor_text::LineEnding::CrLf) { out.push('\r'); }
-            out.push('\n');
-        } else { out.push_str(part); }
+fn append_source(document: &MarkdownDocument, range: Range<usize>, out: &mut String) {
+    let row = document.source().offset_to_point(range.start).row;
+    let mut endings = document.endings[row..].iter();
+    for chunk in document.source().slice(range).chunks() {
+        for part in chunk.split_inclusive('\n') {
+            if let Some(line) = part.strip_suffix('\n') {
+                out.push_str(line);
+                if endings.next() == Some(&crate::ui::editor_text::LineEnding::CrLf) { out.push('\r'); }
+                out.push('\n');
+            } else { out.push_str(part); }
+        }
     }
-    out
 }
 
 struct Html<'a> {
@@ -120,12 +120,24 @@ impl Html<'_> {
             Node::List(list) => if list.ordered { "ol" } else { "ul" },
             Node::ListItem(_) => "li", Node::Table(_) => "table", Node::TableRow(_) => "tr", Node::TableCell(_) => "td",
             Node::Link(_) | Node::LinkReference(_) => "span", // Never attach an executable/resource URL.
-            Node::Text(_) => { self.text(range, out); return; }
+            Node::Text(text) => {
+                let has_delimiter = self.decorations.iter().any(|d| (d.open.start < range.end && range.start < d.open.end) || (d.close.start < range.end && range.start < d.close.end));
+                if range == owner && !has_delimiter {
+                    let active: Vec<_> = self.decorations.iter().filter(|d| d.open.end <= range.start && range.end <= d.close.start).collect();
+                    for d in &active { out.push_str(&style_tag(d)); }
+                    escaped(&text.value, out);
+                    for _ in active { out.push_str("</span>"); }
+                } else { self.text(range, out); }
+                return;
+            }
             Node::Break(_) => { out.push_str("<br>"); return; }
             Node::ThematicBreak(_) => { out.push_str("<hr>"); return; }
             Node::Definition(_) => return,
             Node::MdxJsxTextElement(_) | Node::MdxJsxFlowElement(_) if formats::wrapper(self.source, node).is_some() => "",
-            Node::Html(_) => { self.text(range, out); return; }
+            Node::Html(_) => {
+                if self.source[owner].trim_start().starts_with("<!--") { return; }
+                self.text(range, out); return;
+            }
             Node::InlineCode(_) | Node::InlineMath(_) => {
                 out.push_str("<code>");
                 // Whole atoms can use their decoded body; partial atoms retain only selected source.
@@ -182,7 +194,7 @@ impl SourcePresentation {
         let doc = self.document.read(cx);
         let mut ranges: Vec<_> = std::iter::once(self.state.selection).chain(self.extra_selections.iter().copied()).map(Selection::range).filter(|range| !range.is_empty()).collect();
         for range in &mut ranges {
-            if !self.live || !doc.source().slice(range.clone()).chars().any(|ch| ch == '\n') { continue; }
+            if !self.live || self.projection.revision != doc.revision() || !doc.source().slice(range.clone()).chars().any(|ch| ch == '\n') { continue; }
             if let Some(leaf) = self.projection.leaf_at(range.start).filter(|leaf| matches!(leaf.kind, super::Kind::List(_) | super::Kind::Quote(_)) && leaf.content_start() == range.start) {
                 range.start = doc.source().line_start_offset(doc.source().offset_to_point(leaf.range.start).row);
             }
@@ -200,7 +212,11 @@ impl SourcePresentation {
         let ranges = self.clipboard_ranges(cx);
         if ranges.is_empty() { return; }
         let doc = self.document.read(cx);
-        let text = ranges.iter().map(|range| source_fragment(doc, range.clone())).collect::<Vec<_>>().join("\n");
+        let mut text = String::new();
+        for (ix, range) in ranges.iter().enumerate() {
+            if ix != 0 { text.push('\n'); }
+            append_source(doc, range.clone(), &mut text);
+        }
         let html = if plain { None } else {
             let source = doc.source().to_string();
             let mut out = String::new();
