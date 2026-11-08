@@ -22,6 +22,7 @@ mod tables;
 #[cfg(test)]
 pub(super) use source::FollowLink;
 pub(crate) use source::SourcePresentation;
+pub(crate) use source::properties::EditDocumentProperties;
 pub(crate) use tables::bindings as table_bindings;
 pub(crate) use source::formats::bindings as inline_format_bindings;
 #[cfg(test)]

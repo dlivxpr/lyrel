@@ -794,6 +794,7 @@ pub(super) struct Projection {
     pub links: super::links::Index,
     pub grammar: super::mdx::Grammar,
     pub mdx: super::mdx::Index,
+    pub properties: super::source::properties::Index,
     pub error: Option<String>,
     live: bool,
     next_id: u64,
@@ -830,6 +831,7 @@ impl Projection {
         let mut leaves = Vec::new();
         let mut links = super::links::Index::default();
         let mut mdx = super::mdx::Index::default();
+        let mut properties = super::source::properties::Index::default();
         let mut error = None;
         if live {
             if super::regions::unfinished_metadata(source, document_start) {
@@ -843,6 +845,7 @@ impl Projection {
                             std::sync::Arc::new(super::images::definitions(&root));
                         links = super::links::Index::from_ast(source, &root);
                         mdx = super::mdx::Index::from_ast(source, &root);
+                        properties = super::source::properties::Index::from_ast(source, &root);
                         Self::project_nodes(
                             source,
                             root.children().map_or(&[], Vec::as_slice),
@@ -901,6 +904,7 @@ impl Projection {
             links,
             grammar,
             mdx,
+            properties,
             error,
             live,
             format_tint: None,
@@ -1659,6 +1663,7 @@ impl Projection {
         // Absolute destinations and definitions must never be rebased against a
         // fragment. The revision-checked background parse restores this index.
         self.links = super::links::Index::default();
+        self.properties = super::source::properties::Index::default();
         self.mdx.rebase(transaction, source);
         // Only affected leaves and their immediate neighbours are reparsed on
         // input. The debounced background parse resolves larger syntax changes.
