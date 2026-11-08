@@ -1,6 +1,9 @@
-use super::*;
+use super::settle_live_geometry;
 use crate::ui::app::test_window::harness_with_tabs;
-use gpui_kit::{px, size};
+use gpui_kit::{
+    VisualContext as _, px, size,
+    test::{TestEventExt as _, TestWindowExt as _},
+};
 
 #[gpui_kit::test]
 fn editable_document_typography_reflows_without_rewriting_source_or_history(
