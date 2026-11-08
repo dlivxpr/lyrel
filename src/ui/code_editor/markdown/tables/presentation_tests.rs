@@ -7,8 +7,8 @@ use gpui_kit::test::{TestEventExt as _, TestQueryExt as _, TestWindowExt as _};
 fn table_presentation_drag_fit_scroll_edit_history_and_host_reopen(cx: &mut gpui_kit::TestAppContext) {
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("presentation.md");
-    let original = "Before  \r\n\r\n<!-- table:striped cols=400.0,420 -->\r\n| A | B |\n| --- | --- |\r\n| one | two |\n\r\nAfter  ";
-    std::fs::write(&path, original).unwrap();
+    let original = format!("Before  \r\n\r\n<!-- table:striped cols=400.0,420 -->\r\n| A | B |\n| --- | --- |\r\n| one | two |\n\r\nAfter  {}", "\n\nBelow".repeat(12));
+    std::fs::write(&path, &original).unwrap();
     let (app, mut context, _streams) = harness_with_tabs(cx, 1);
     app.update_in(&mut context, |app, window, cx| app.open_file_in_editor(&path, window, cx));
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
@@ -63,7 +63,23 @@ fn table_presentation_drag_fit_scroll_edit_history_and_host_reopen(cx: &mut gpui
         assert_eq!(view.document().read(cx).encode().unwrap(), resized.as_bytes());
         assert_eq!(view.range_to_bounds(&(0..0), cx).unwrap().left(), prose.0.left());
         assert!(view.range_to_bounds(&(at..at + 1), cx).unwrap().left() < prose.1.left());
+        assert_eq!(view.scroll_offset().x, px(0.));
     });
+    context.update(|window, cx| {
+        let handle = window.find_all_by_label("Resize table column")[0].bounds().center();
+        window.dispatch_event(gpui_kit::PlatformInput::Scroll(gpui_kit::ScrollEvent {
+            position: handle + point(px(-20.), px(20.)),
+            delta: gpui_kit::ScrollDelta::Pixels(point(px(0.), px(-32.))),
+            ..Default::default()
+        }), cx);
+    });
+    settle_live_geometry(&view, &mut context);
+    view.read_with(&context, |view, cx| {
+        assert!(view.scroll_offset().y < px(0.));
+        assert_eq!(view.document().read(cx).encode().unwrap(), resized.as_bytes());
+    });
+    context.update(|window, cx| window.scroll("markdown-source", gpui_kit::ScrollDelta::Pixels(point(px(0.), px(32.))), cx));
+    settle_live_geometry(&view, &mut context);
     context.update(|window, cx| window.press("secondary-alt-f", cx));
     settle_live_geometry(&view, &mut context);
     let fitted = view.read_with(&context, |view, cx| view.document().read(cx).encode().unwrap());

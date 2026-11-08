@@ -335,6 +335,7 @@ impl Layout {
                                 let id = leaf.id;
                                 cell.child(gpui_kit::base::resizable::resize_handle::<(), super::super::SourcePresentation>(("markdown-table-width", id), Axis::Horizontal)
                                     .inside(gpui_kit::base::resizable::HandleEdge::Trailing)
+                                    .role(Role::Splitter)
                                     .aria_label("Resize table column")
                                     .on_mouse_down(MouseButton::Left, cx.listener(move |view, event, window, cx| view.start_table_resize(id, event, window, cx))))
                             })
