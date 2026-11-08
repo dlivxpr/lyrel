@@ -640,7 +640,10 @@ fn native_link_grapheme_hovers_edits_and_opens(cx: &mut TestAppContext, fragment
             (position, ix)
         } else {
             assert_eq!(next_start, ix);
-            let position = point(origin + reference * 0.75, b.y + geometry.caret_height() / 2.);
+            let position = point(
+                origin + reference * 0.75,
+                b.y + geometry.caret_height() / 2.,
+            );
             assert_eq!(geometry.index_for_position(position), ix + glyph.len());
             (position, ix + glyph.len())
         };
