@@ -1,9 +1,18 @@
 //! Derived readonly fragments. All I/O is through the captured document Host.
-use super::{links, mdx, parser, projection::{Kind, Projection}};
+use super::{
+    links, mdx, parser,
+    projection::{Kind, Projection},
+};
 use crate::ui::{editor_text, host_ops::Host, i18n::L10nKey};
-use gpui_kit::{EntityId, RenderImage};
 use gpui_kit::base::text::editor_host::{BlockNode, CodeBlock, Paragraph};
-use std::{collections::{HashMap, HashSet}, hash::{Hash, Hasher}, ops::Range, path::{Path, PathBuf}, sync::Arc};
+use gpui_kit::{EntityId, RenderImage};
+use std::{
+    collections::{HashMap, HashSet},
+    hash::{Hash, Hasher},
+    ops::Range,
+    path::{Path, PathBuf},
+    sync::Arc,
+};
 
 const MAX_FILES_BYTES: usize = 8 * 1024 * 1024;
 const MAX_ITEMS: usize = 64;
@@ -15,9 +24,17 @@ pub(crate) struct Style {
     identity: EntityId,
 }
 impl Style {
-    pub(crate) fn current(window: &gpui_kit::Window, cx: &gpui_kit::App, identity: EntityId) -> Self {
+    pub(crate) fn current(
+        window: &gpui_kit::Window,
+        cx: &gpui_kit::App,
+        identity: EntityId,
+    ) -> Self {
         use gpui_kit::component::ActiveTheme as _;
-        Self { math: super::math::Style::new(cx.theme().foreground, window.rem_size()), diagrams: super::mermaid::Style::current(cx), identity }
+        Self {
+            math: super::math::Style::new(cx.theme().foreground, window.rem_size()),
+            diagrams: super::mermaid::Style::current(cx),
+            identity,
+        }
     }
 }
 
@@ -27,7 +44,10 @@ pub(crate) struct Request {
 }
 impl Request {
     pub(super) fn new(revision: u64, references: &[links::Link]) -> Self {
-        Self { revision, references: references.to_vec() }
+        Self {
+            revision,
+            references: references.to_vec(),
+        }
     }
 }
 pub(crate) struct Loaded {
@@ -70,7 +90,9 @@ struct Budget {
 }
 fn raster_bytes(image: &RenderImage) -> usize {
     let size = image.size(0);
-    (size.width.0 as usize).saturating_mul(size.height.0 as usize).saturating_mul(4)
+    (size.width.0 as usize)
+        .saturating_mul(size.height.0 as usize)
+        .saturating_mul(4)
 }
 struct Resolver<'a> {
     host: &'a dyn Host,
@@ -84,74 +106,173 @@ struct Resolver<'a> {
     stamp: std::collections::hash_map::DefaultHasher,
 }
 impl Resolver<'_> {
-    fn target(&mut self, owner: &Path, reference: &links::Link, depth: usize) -> Result<Plan, L10nKey> {
-        if depth > 3 || self.remaining == 0 { return Err(L10nKey::MarkdownEmbedLimit); }
+    fn target(
+        &mut self,
+        owner: &Path,
+        reference: &links::Link,
+        depth: usize,
+    ) -> Result<Plan, L10nKey> {
+        if depth > 3 || self.remaining == 0 {
+            return Err(L10nKey::MarkdownEmbedLimit);
+        }
         self.remaining -= 1;
         let path = match links::resolve(owner, self.host, &reference.target)? {
             links::Target::File(path) => path,
             links::Target::Anchor => owner.to_path_buf(),
             links::Target::External(_) => return Err(L10nKey::MarkdownLinkUnsupportedScheme),
         };
-        let path = if self.open.contains_key(&path) { path } else { links::references::file_path(self.host, &path)? };
-        if !super::super::is_markdown_path(&path) { return Err(L10nKey::MarkdownEmbedUnsupported); }
-        let fragment = reference.target.split_once('#').map(|(_, fragment)| fragment.to_owned()).unwrap_or_default();
-        let decoded = percent_encoding::percent_decode_str(&fragment).decode_utf8().map_err(|_| L10nKey::MarkdownLinkInvalidDestination)?.into_owned();
+        let path = if self.open.contains_key(&path) {
+            path
+        } else {
+            links::references::file_path(self.host, &path)?
+        };
+        if !super::super::is_markdown_path(&path) {
+            return Err(L10nKey::MarkdownEmbedUnsupported);
+        }
+        let fragment = reference
+            .target
+            .split_once('#')
+            .map(|(_, fragment)| fragment.to_owned())
+            .unwrap_or_default();
+        let decoded = percent_encoding::percent_decode_str(&fragment)
+            .decode_utf8()
+            .map_err(|_| L10nKey::MarkdownLinkInvalidDestination)?
+            .into_owned();
         let key = (path.clone(), decoded);
-        if self.stack.contains(&key) { return Err(L10nKey::MarkdownEmbedCycle); }
-        if !self.seen.insert(key.clone()) { return Err(L10nKey::MarkdownEmbedDuplicate); }
+        if self.stack.contains(&key) {
+            return Err(L10nKey::MarkdownEmbedCycle);
+        }
+        if !self.seen.insert(key.clone()) {
+            return Err(L10nKey::MarkdownEmbedDuplicate);
+        }
         if !self.files.contains_key(&path) {
-            if self.bytes >= MAX_FILES_BYTES { return Err(L10nKey::MarkdownEmbedLimit); }
-            let source = if let Some(current) = self.open.get(&path) { current.to_string() } else {
-                let before = self.host.stat(&path).map_err(|_| L10nKey::MarkdownReferenceUnreadable)?;
-                let bytes = self.host.read_file(&path, 4 * 1024 * 1024).map_err(|_| L10nKey::MarkdownReferenceUnreadable)?;
-                let after = self.host.stat(&path).map_err(|_| L10nKey::MarkdownReferenceUnreadable)?;
-                if before.mtime != after.mtime || before.len != after.len { return Err(L10nKey::MarkdownEmbedChanged); }
-                editor_text::decode_source(&bytes).map_err(|_| L10nKey::MarkdownReferenceUnreadable)?
-                    .ok_or(L10nKey::MarkdownReferenceUnreadable)?.text
+            if self.bytes >= MAX_FILES_BYTES {
+                return Err(L10nKey::MarkdownEmbedLimit);
+            }
+            let source = if let Some(current) = self.open.get(&path) {
+                current.to_string()
+            } else {
+                let before = self
+                    .host
+                    .stat(&path)
+                    .map_err(|_| L10nKey::MarkdownReferenceUnreadable)?;
+                let bytes = self
+                    .host
+                    .read_file(&path, 4 * 1024 * 1024)
+                    .map_err(|_| L10nKey::MarkdownReferenceUnreadable)?;
+                let after = self
+                    .host
+                    .stat(&path)
+                    .map_err(|_| L10nKey::MarkdownReferenceUnreadable)?;
+                if before.mtime != after.mtime || before.len != after.len {
+                    return Err(L10nKey::MarkdownEmbedChanged);
+                }
+                editor_text::decode_source(&bytes)
+                    .map_err(|_| L10nKey::MarkdownReferenceUnreadable)?
+                    .ok_or(L10nKey::MarkdownReferenceUnreadable)?
+                    .text
             };
             self.bytes = self.bytes.saturating_add(source.len());
-            if self.bytes > MAX_FILES_BYTES { return Err(L10nKey::MarkdownEmbedLimit); }
+            if self.bytes > MAX_FILES_BYTES {
+                return Err(L10nKey::MarkdownEmbedLimit);
+            }
             path.hash(&mut self.stamp);
             source.hash(&mut self.stamp);
-            let indexed = if let Some(cached) = self.cached.and_then(|files| files.get(&path)).filter(|cached| cached.source.as_ref() == source) {
+            let indexed = if let Some(cached) = self
+                .cached
+                .and_then(|files| files.get(&path))
+                .filter(|cached| cached.source.as_ref() == source)
+            {
                 cached.clone()
             } else {
-                let root = parser::parse(&source, mdx::Grammar::for_path(Some(&path)), true).map_err(|_| L10nKey::EditorMdxParseError)?;
+                let root = parser::parse(&source, mdx::Grammar::for_path(Some(&path)), true)
+                    .map_err(|_| L10nKey::EditorMdxParseError)?;
                 let index = links::Index::from_ast(&source, &root);
-                Arc::new(Indexed { source: source.into(), root, index })
+                Arc::new(Indexed {
+                    source: source.into(),
+                    root,
+                    index,
+                })
             };
             self.files.insert(path.clone(), indexed);
         }
         let indexed = &self.files[&path];
-        let range = indexed.index.fragment(&indexed.source, &indexed.root, Some(&fragment))?;
+        let range = indexed
+            .index
+            .fragment(&indexed.source, &indexed.root, Some(&fragment))?;
         let source = indexed.source.clone();
-        let references: Vec<_> = indexed.index.embeds.iter().filter(|reference| range.start <= reference.source.start && reference.source.end <= range.end).take(MAX_ITEMS + 1).cloned().collect();
+        let references: Vec<_> = indexed
+            .index
+            .embeds
+            .iter()
+            .filter(|reference| {
+                range.start <= reference.source.start && reference.source.end <= range.end
+            })
+            .take(MAX_ITEMS + 1)
+            .cloned()
+            .collect();
         self.stack.push(key);
-        let nested = references.into_iter().take(MAX_ITEMS + 1).map(|mut reference| {
-            let result = self.target(&path, &reference, depth + 1);
-            reference.source = reference.source.start - range.start..reference.source.end - range.start;
-            reference.label = reference.label.start - range.start..reference.label.end - range.start;
-            reference.destination = reference.destination.start - range.start..reference.destination.end - range.start;
-            (reference, result)
-        }).collect();
+        let nested = references
+            .into_iter()
+            .take(MAX_ITEMS + 1)
+            .map(|mut reference| {
+                let result = self.target(&path, &reference, depth + 1);
+                reference.source =
+                    reference.source.start - range.start..reference.source.end - range.start;
+                reference.label =
+                    reference.label.start - range.start..reference.label.end - range.start;
+                reference.destination = reference.destination.start - range.start
+                    ..reference.destination.end - range.start;
+                (reference, result)
+            })
+            .collect();
         self.stack.pop();
-        Ok(Plan { source, path, range, nested })
+        Ok(Plan {
+            source,
+            path,
+            range,
+            nested,
+        })
     }
 }
 impl Plan {
-    fn prepare(self, host: &dyn Host, math_style: super::math::Style, diagram_style: &super::mermaid::Style, identity: EntityId, budget: &mut Budget) -> Result<Arc<Fragment>, L10nKey> {
-        let mut projection = Projection::parse(&self.source[self.range], 0, true, mdx::Grammar::for_path(Some(&self.path)));
-        if projection.leaves.len() > budget.leaves { return Err(L10nKey::MarkdownEmbedLimit); }
+    fn prepare(
+        self,
+        host: &dyn Host,
+        math_style: super::math::Style,
+        diagram_style: &super::mermaid::Style,
+        identity: EntityId,
+        budget: &mut Budget,
+    ) -> Result<Arc<Fragment>, L10nKey> {
+        let mut projection = Projection::parse(
+            &self.source[self.range],
+            0,
+            true,
+            mdx::Grammar::for_path(Some(&self.path)),
+        );
+        if projection.leaves.len() > budget.leaves {
+            return Err(L10nKey::MarkdownEmbedLimit);
+        }
         budget.leaves -= projection.leaves.len();
-        for leaf in &mut projection.leaves { leaf.readonly(); }
+        for leaf in &mut projection.leaves {
+            leaf.readonly();
+        }
         let mut math = super::math::State::default();
         for formula in projection.leaves.iter().flat_map(|leaf| leaf.formulas()) {
             let output = budget.formulas.entry(formula.clone()).or_insert_with(|| {
-                if budget.raster_bytes == 0 { return super::math::Output::Failed(crate::ui::i18n::t(L10nKey::MarkdownEmbedLimit).to_owned()); }
+                if budget.raster_bytes == 0 {
+                    return super::math::Output::Failed(
+                        crate::ui::i18n::t(L10nKey::MarkdownEmbedLimit).to_owned(),
+                    );
+                }
                 let output = super::math::render(formula, math_style);
                 if let super::math::Output::Ready { image, .. } = &output {
                     let bytes = raster_bytes(image);
-                    if bytes > budget.raster_bytes { return super::math::Output::Failed(crate::ui::i18n::t(L10nKey::MarkdownEmbedLimit).to_owned()); }
+                    if bytes > budget.raster_bytes {
+                        return super::math::Output::Failed(
+                            crate::ui::i18n::t(L10nKey::MarkdownEmbedLimit).to_owned(),
+                        );
+                    }
                     budget.raster_bytes -= bytes;
                 }
                 output
@@ -160,29 +281,63 @@ impl Plan {
         }
         let mut diagrams = super::mermaid::State::default();
         diagrams.request(&projection, identity, diagram_style.clone());
-        if let Some(job) = diagrams.take_job() { diagrams.complete(job.run_bounded(&mut budget.raster_bytes)); }
+        if let Some(job) = diagrams.take_job() {
+            diagrams.complete(job.run_bounded(&mut budget.raster_bytes));
+        }
         diagrams.install(&projection, identity, diagram_style);
         let mut images = HashMap::new();
         let mut image_errors = Vec::new();
         let mut seen = HashSet::new();
-        for url in projection.leaves.iter().flat_map(|leaf| leaf.image_urls()).filter(|url| seen.insert((*url).to_owned())) {
+        for url in projection
+            .leaves
+            .iter()
+            .flat_map(|leaf| leaf.image_urls())
+            .filter(|url| seen.insert((*url).to_owned()))
+        {
             let result = (|| {
-                let links::Target::File(path) = links::resolve(&self.path, host, url)? else { return Err(L10nKey::MarkdownEmbedExternal); };
-                if let Some(image) = budget.images.get(&path) { return Ok(image.clone()); }
-                if budget.raster_bytes == 0 { return Err(L10nKey::MarkdownEmbedLimit); }
-                let bytes = host.read_file(&path, budget.raster_bytes.min(32 * 1024 * 1024) as u64).map_err(|_| L10nKey::MarkdownReferenceUnreadable)?;
-                let image = super::images::decode(&bytes).map_err(|_| L10nKey::MarkdownReferenceUnreadable)?;
+                let links::Target::File(path) = links::resolve(&self.path, host, url)? else {
+                    return Err(L10nKey::MarkdownEmbedExternal);
+                };
+                if let Some(image) = budget.images.get(&path) {
+                    return Ok(image.clone());
+                }
+                if budget.raster_bytes == 0 {
+                    return Err(L10nKey::MarkdownEmbedLimit);
+                }
+                let bytes = host
+                    .read_file(&path, budget.raster_bytes.min(32 * 1024 * 1024) as u64)
+                    .map_err(|_| L10nKey::MarkdownReferenceUnreadable)?;
+                let image = super::images::decode(&bytes)
+                    .map_err(|_| L10nKey::MarkdownReferenceUnreadable)?;
                 let bytes = raster_bytes(&image);
-                if bytes > budget.raster_bytes { return Err(L10nKey::MarkdownEmbedLimit); }
+                if bytes > budget.raster_bytes {
+                    return Err(L10nKey::MarkdownEmbedLimit);
+                }
                 budget.raster_bytes -= bytes;
                 budget.images.insert(path, image.clone());
                 Ok(image)
             })();
-            match result { Ok(image) => { images.insert(url.to_owned(), image); }, Err(reason) => image_errors.push(reason) }
+            match result {
+                Ok(image) => {
+                    images.insert(url.to_owned(), image);
+                }
+                Err(reason) => image_errors.push(reason),
+            }
         }
-        let dimensions = images.iter().map(|(url, image)| (url.clone(), super::images::State::Ready(image.clone()))).collect();
-        for leaf in &mut projection.leaves { leaf.image_dimensions(&dimensions); }
-        let text = projection.leaves.iter().map(|leaf| leaf.text.as_str()).collect::<Vec<_>>().join("\n").into();
+        let dimensions = images
+            .iter()
+            .map(|(url, image)| (url.clone(), super::images::State::Ready(image.clone())))
+            .collect();
+        for leaf in &mut projection.leaves {
+            leaf.image_dimensions(&dimensions);
+        }
+        let text = projection
+            .leaves
+            .iter()
+            .map(|leaf| leaf.text.as_str())
+            .collect::<Vec<_>>()
+            .join("\n")
+            .into();
         let mut blocks = Vec::with_capacity(projection.leaves.len());
         let mut ix = 0;
         while ix < projection.leaves.len() {
@@ -192,21 +347,31 @@ impl Plan {
                 let mut rows = Vec::new();
                 let mut align = Vec::new();
                 let start = ix;
-                while ix < projection.leaves.len() && matches!(projection.leaves[ix].kind, Kind::TableCell(cell) if cell.table() == first.table()) {
+                while ix < projection.leaves.len()
+                    && matches!(projection.leaves[ix].kind, Kind::TableCell(cell) if cell.table() == first.table())
+                {
                     let mut row = Vec::new();
-                    let Kind::TableCell(row_cell) = projection.leaves[ix].kind else { unreachable!() };
-                    while ix < projection.leaves.len() && matches!(projection.leaves[ix].kind, Kind::TableCell(cell) if cell.same_row(row_cell)) {
+                    let Kind::TableCell(row_cell) = projection.leaves[ix].kind else {
+                        unreachable!()
+                    };
+                    while ix < projection.leaves.len()
+                        && matches!(projection.leaves[ix].kind, Kind::TableCell(cell) if cell.same_row(row_cell))
+                    {
                         let cell_leaf = &projection.leaves[ix];
                         if let Kind::TableCell(cell) = cell_leaf.kind {
-                            if cell.is_header() { align.push(match cell.alignment() {
-                                markdown::mdast::AlignKind::Left => ColumnAlign::Left,
-                                markdown::mdast::AlignKind::Right => ColumnAlign::Right,
-                                markdown::mdast::AlignKind::Center => ColumnAlign::Center,
-                                markdown::mdast::AlignKind::None => ColumnAlign::None,
-                            }); }
+                            if cell.is_header() {
+                                align.push(match cell.alignment() {
+                                    markdown::mdast::AlignKind::Left => ColumnAlign::Left,
+                                    markdown::mdast::AlignKind::Right => ColumnAlign::Right,
+                                    markdown::mdast::AlignKind::Center => ColumnAlign::Center,
+                                    markdown::mdast::AlignKind::None => ColumnAlign::None,
+                                });
+                            }
                         }
                         let mut paragraph = Paragraph::default();
-                        for node in cell_leaf.inline_nodes(None, &math) { paragraph.push(node); }
+                        for node in cell_leaf.inline_nodes(None, &math) {
+                            paragraph.push(node);
+                        }
                         row.push(paragraph);
                         ix += 1;
                     }
@@ -218,54 +383,166 @@ impl Plan {
             }
             let mut paragraph = Paragraph::default(); // Unkeyed: never enter the outer editor geometry collector.
             if let Kind::List(style) = leaf.kind {
-                if let Some(checked) = style.task { paragraph.push(gpui_kit::base::text::editor_host::InlineNode::new(if checked { "☑ " } else { "☐ " })); }
+                if let Some(checked) = style.task {
+                    paragraph.push(gpui_kit::base::text::editor_host::InlineNode::new(
+                        if checked { "☑ " } else { "☐ " },
+                    ));
+                }
             }
-            for node in leaf.inline_nodes(None, &math) { paragraph.push(node); }
+            for node in leaf.inline_nodes(None, &math) {
+                paragraph.push(node);
+            }
             let mut block = match leaf.kind {
-                Kind::Heading(level) => BlockNode::Heading { level, children: paragraph, span: None },
+                Kind::Heading(level) => BlockNode::Heading {
+                    level,
+                    children: paragraph,
+                    span: None,
+                },
                 Kind::Rule => BlockNode::HorizontalRule { span: None },
-                Kind::Code(_) | Kind::Mermaid(_) => BlockNode::CodeBlock(CodeBlock::from_code(leaf.text.clone(), None::<gpui_kit::SharedString>)),
+                Kind::Code(_) | Kind::Mermaid(_) => BlockNode::CodeBlock(CodeBlock::from_code(
+                    leaf.text.clone(),
+                    None::<gpui_kit::SharedString>,
+                )),
                 _ => BlockNode::Paragraph(paragraph),
             };
             if let Kind::List(style) | Kind::Quote(style) = leaf.kind {
                 if style.task.is_none() {
                     if let Some(marker) = style.marker {
-                        block = BlockNode::List { children: vec![BlockNode::ListItem { children: vec![block], spread: false, checked: None, span: None }],
-                            ordered: matches!(marker, super::lists::Marker::Ordered(..)), start: match marker { super::lists::Marker::Ordered(number, _) => Some(number), _ => None }, span: None };
+                        block = BlockNode::List {
+                            children: vec![BlockNode::ListItem {
+                                children: vec![block],
+                                spread: false,
+                                checked: None,
+                                span: None,
+                            }],
+                            ordered: matches!(marker, super::lists::Marker::Ordered(..)),
+                            start: match marker {
+                                super::lists::Marker::Ordered(number, _) => Some(number),
+                                _ => None,
+                            },
+                            span: None,
+                        };
                     }
                 }
-                for _ in 0..style.quotes { block = BlockNode::Blockquote { children: vec![block], span: None }; }
+                for _ in 0..style.quotes {
+                    block = BlockNode::Blockquote {
+                        children: vec![block],
+                        span: None,
+                    };
+                }
             }
             blocks.push(block);
             ix += 1;
         }
-        let nested = self.nested.into_iter().map(|(reference, result)| Entry { reference, result: result.and_then(|plan| plan.prepare(host, math_style, diagram_style, identity, budget)) }).collect();
-        Ok(Arc::new(Fragment { projection, text, blocks, nested, images: Arc::new(images), image_errors, diagrams }))
+        let nested = self
+            .nested
+            .into_iter()
+            .map(|(reference, result)| Entry {
+                reference,
+                result: result.and_then(|plan| {
+                    plan.prepare(host, math_style, diagram_style, identity, budget)
+                }),
+            })
+            .collect();
+        Ok(Arc::new(Fragment {
+            projection,
+            text,
+            blocks,
+            nested,
+            images: Arc::new(images),
+            image_errors,
+            diagrams,
+        }))
     }
 }
 /// Called only on the Host worker. Open buffers are immutable snapshots of the
 /// existing MarkdownDocument authority, not fragment editing buffers.
-pub(crate) fn load(host: &dyn Host, owner: &Path, request: Request, open: &HashMap<PathBuf, super::Rope>, previous: Option<Arc<Loaded>>, style: Style) -> Arc<Loaded> {
-    let Style { math: math_style, diagrams: diagram_style, identity } = style;
-    let mut resolver = Resolver { host, open, files: HashMap::new(), cached: previous.as_ref().map(|previous| &previous.files), stack: Vec::new(), seen: HashSet::new(), remaining: MAX_ITEMS, bytes: 0, stamp: Default::default() };
-    let plans: Vec<_> = request.references.into_iter().take(MAX_ITEMS + 1).map(|reference| {
-        let result = resolver.target(owner, &reference, 1);
-        (reference, result)
-    }).collect();
+pub(crate) fn load(
+    host: &dyn Host,
+    owner: &Path,
+    request: Request,
+    open: &HashMap<PathBuf, super::Rope>,
+    previous: Option<Arc<Loaded>>,
+    style: Style,
+) -> Arc<Loaded> {
+    let Style {
+        math: math_style,
+        diagrams: diagram_style,
+        identity,
+    } = style;
+    let mut resolver = Resolver {
+        host,
+        open,
+        files: HashMap::new(),
+        cached: previous.as_ref().map(|previous| &previous.files),
+        stack: Vec::new(),
+        seen: HashSet::new(),
+        remaining: MAX_ITEMS,
+        bytes: 0,
+        stamp: Default::default(),
+    };
+    let plans: Vec<_> = request
+        .references
+        .into_iter()
+        .take(MAX_ITEMS + 1)
+        .map(|reference| {
+            let result = resolver.target(owner, &reference, 1);
+            (reference, result)
+        })
+        .collect();
     // Error changes participate in cache invalidation, including disappearance,
     // ambiguity and permission recovery with unchanged owner bytes.
     fn hash_results(plans: &[(links::Link, Result<Plan, L10nKey>)], stamp: &mut impl Hasher) {
         for (_, result) in plans {
-            match result { Ok(plan) => { 0u8.hash(stamp); hash_results(&plan.nested, stamp); }, Err(reason) => { format!("{reason:?}").hash(stamp); } }
+            match result {
+                Ok(plan) => {
+                    0u8.hash(stamp);
+                    hash_results(&plan.nested, stamp);
+                }
+                Err(reason) => {
+                    format!("{reason:?}").hash(stamp);
+                }
+            }
         }
     }
     hash_results(&plans, &mut resolver.stamp);
     let stamp = resolver.stamp.finish();
-    if let Some(previous) = previous.as_ref().filter(|previous| previous.revision == request.revision && previous.stamp == stamp
-        && previous.math_style == math_style && previous.diagram_style == diagram_style
-        && previous.files.len() == resolver.files.len()
-        && resolver.files.iter().all(|(path, current)| previous.files.get(path).is_some_and(|old| old.source == current.source))) { return previous.clone(); }
-    let mut budget = Budget { leaves: MAX_LEAVES, raster_bytes: 32 * 1024 * 1024, images: HashMap::new(), formulas: HashMap::new() };
-    let entries = plans.into_iter().map(|(reference, result)| Entry { reference, result: result.and_then(|plan| plan.prepare(host, math_style, &diagram_style, identity, &mut budget)) }).collect();
-    Arc::new(Loaded { entries, stamp, revision: request.revision, math_style, diagram_style, files: resolver.files })
+    if let Some(previous) = previous.as_ref().filter(|previous| {
+        previous.revision == request.revision
+            && previous.stamp == stamp
+            && previous.math_style == math_style
+            && previous.diagram_style == diagram_style
+            && previous.files.len() == resolver.files.len()
+            && resolver.files.iter().all(|(path, current)| {
+                previous
+                    .files
+                    .get(path)
+                    .is_some_and(|old| old.source == current.source)
+            })
+    }) {
+        return previous.clone();
+    }
+    let mut budget = Budget {
+        leaves: MAX_LEAVES,
+        raster_bytes: 32 * 1024 * 1024,
+        images: HashMap::new(),
+        formulas: HashMap::new(),
+    };
+    let entries = plans
+        .into_iter()
+        .map(|(reference, result)| Entry {
+            reference,
+            result: result.and_then(|plan| {
+                plan.prepare(host, math_style, &diagram_style, identity, &mut budget)
+            }),
+        })
+        .collect();
+    Arc::new(Loaded {
+        entries,
+        stamp,
+        revision: request.revision,
+        math_style,
+        diagram_style,
+        files: resolver.files,
+    })
 }

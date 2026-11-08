@@ -198,7 +198,7 @@ GitHub 上的 Markdown 来自陌生人，因此渲染时有两项限制：只加
 
 #### Zorite 体验对齐目标（实施中，未完成验收）
 
-本设计已由负责人确认，正在 integration branch 实施。#206 的连续输入、格式隐藏与单换行源码改动已合入，但核心运行验证尚未执行；下文局部实现与历史验收不代表完整目标已完成。范围与视觉约束见仓库 `docs/design-system.md` 的“分屏与文档栏”。源码与真实软件对照固定为 Zorite `9c09b8cce84e41ca20c403e5b381c448cde468c4`，实施期间不跟随上游滚动扩大目标；正式版 `v0.13.0` 与该提交不是同一基线，不能互相冒充。
+本设计已由负责人确认，正在 integration branch 实施。连续输入与各结构的代码已集中合入；核心自动回归、本机与真实 SSH 冒烟仍在继续，下文历史验收不代表本轮完整目标已完成。范围与视觉约束见仓库 `docs/design-system.md` 的“分屏与文档栏”。源码与真实软件对照固定为 Zorite `9c09b8cce84e41ca20c403e5b381c448cde468c4`，实施期间不跟随上游滚动扩大目标；正式版 `v0.13.0` 与该提交不是同一基线，不能互相冒充。
 
 - **所见即所得编辑**：直接操作排版后的文档内容。粗体、斜体、删除线、行内代码等格式标记在普通输入和选区覆盖时保持隐藏，通过样式、快捷键和格式操作提供反馈；列表、任务、代码围栏及表格分隔符由相应的可视结构承载。精确语法修改通过明确的局部源码入口或完整源码模式完成。此目标替代目前“光标进入便显露格式标记”的交互，不改变源码权威或统一撤销历史。
 - **显式扩展语法**：允许用户主动使用图片尺寸、表格样式、公式对齐、属性面板、下划线及颜色等能力时写入对应的文档表示；此类效果在其他 Markdown 软件中可能不同。扩展只修改该操作必需的内容，须可撤销，不因打开、呈现或普通保存而把原文转换为 Zorite 方言。具体表示仍须与现有 Markdown／MDX 解析规则核对。
@@ -253,6 +253,13 @@ GitHub 上的 Markdown 来自陌生人，因此渲染时有两项限制：只加
 两侧临时 callback→paint 探针仅存在于仓库外，不进入产品。现有 A/A、AB/BA 与改造前大负载原始分布用于后续核心回归比较；不同 fixture、cache、条件不合并，工具调用耗时不算输入到绘制时延。reference 的 Arial／16 px／浅色设置已原生复核，但不证明代码叶字号、逐 glyph fallback、行高与对象布局匹配。回归样本分别为：1200 组混合样本 342,220 字节；1200 节且含 1200 处图片的混合样本 695,006 字节；120 列×160 正文行表格 291,041 字节、19,320 单元格；单大段落／单大代码块 400,034／400,042 字节；多资源 MDX 3,448 字节。不混用历史负载或 Debug 数据。
 
 仓库外证据目录为 `C:/Users/dlivx/AppData/Local/Temp/lyrel-204-CtjYLY/evidence205/`。操作／差异入口为 `offline-native-mapping/closure.json`、`approved-differences.md`；数据与限制入口为 `resume-resource-retained-baseline-summary.json`、`offline-baseline-index/baseline-index-resources-retained01.json`、`fixture-manifest.json`、`measurement-protocol.md`、`final-status.json`；独立输入诊断为 `resume-direct-native-diagnostic03.json`。新增 `core-verification-policy.json` 记录本次验收调整；后继票依据完整功能契约实现，按核心测试要求验证，不据此宣称全量矩阵或性能通过。
+
+##### #204 当前核心证据与明确缺口
+
+本轮隔离 Windows 实窗已在默认即时编辑中追加中文与 emoji，经正常保存、源码／即时编辑切换、关闭和文件树重开，独立核对完整文件恰为原始 353 字节追加指定的 25 字节，BOM 与其余原始字节不变。此证据来自集中集成期间的临时 Debug 二进制，不替代最终合并二进制复验、真实系统 IME、SSH 编辑或性能结论。二进制 SHA-256 与操作证据位于仓库外 `native-core-1794151628130/native-local-core-smoke.json`。
+
+正式 registry 当前的 `gpui-kit`／`gpui-base 0.9.0` 尚无正文任意 range foreground 与 soft-wrap 双 affinity 的公开接口：#209 的任意文字颜色呈现、#225 跨 soft-wrap 续行首 grapheme 的完整拼写波浪线仍未满足。不能以背景着色、重新绘字、私有 renderer 或 Git/path 补丁冒充完成；上游 `main` 上的未发布接口也不等于当前正式依赖已经可用。此缺口保留开放，其余已合入代码须按各自核心工作流实测，不据此宣布完整对齐。
+
 
 #### 使用隔离配置复验
 

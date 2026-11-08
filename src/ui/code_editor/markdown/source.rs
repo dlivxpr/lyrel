@@ -39,6 +39,8 @@ mod typography;
 #[path = "composition.rs"]
 mod composition;
 
+#[path = "clipboard.rs"]
+pub(super) mod clipboard;
 #[path = "code.rs"]
 mod code;
 #[path = "formats.rs"]
@@ -55,10 +57,6 @@ mod reorder;
 mod spelling;
 #[path = "tools.rs"]
 pub(super) mod tools;
-#[path = "reorder.rs"]
-mod reorder;
-#[path = "clipboard.rs"]
-pub(super) mod clipboard;
 
 #[path = "tables/authoring.rs"]
 mod table_authoring;
@@ -667,7 +665,9 @@ impl SourcePresentation {
             && self.projection.revision == self.document.read(cx).revision()
         {
             if let Some(leaf) = self.projection.leaf_at(selection.head) {
-                if leaf.inline_position(selection.head) || self.empty_slash_inline(selection.head, cx) {
+                if leaf.inline_position(selection.head)
+                    || self.empty_slash_inline(selection.head, cx)
+                {
                     return selection;
                 }
                 let mapped = leaf.source_offset(leaf.display_offset(selection.head));
@@ -701,7 +701,12 @@ impl SourcePresentation {
         if self.empty_slash_inline(self.state.selection.head(), cx) {
             insertions.push(self.state.selection.head());
         }
-        hidden.extend(self.folds.hidden.iter().map(|range| range.start.saturating_sub(1)..range.end));
+        hidden.extend(
+            self.folds
+                .hidden
+                .iter()
+                .map(|range| range.start.saturating_sub(1)..range.end),
+        );
         let marked = self.state.marked_range();
         for leaf in &mut self.projection.leaves {
             if matches!(leaf.kind, Kind::Code(_)) {
@@ -1461,7 +1466,9 @@ impl SourcePresentation {
         if changed {
             self.request_references(cx);
             self.request_slash(window, cx);
-        } else if self.references.target.is_some() && !self.reference_lease_current(self.references.generation, cx) {
+        } else if self.references.target.is_some()
+            && !self.reference_lease_current(self.references.generation, cx)
+        {
             self.dismiss_references(cx);
         }
         if !self.slash_current(self.slash.generation, cx) {
@@ -2947,15 +2954,21 @@ impl Render for SourcePresentation {
                                 )
                         },
                     )
-                    .when(self.live && leaf.kind == Kind::Rule && !(leaf.range.contains(&self.state.selection.head()) && self.empty_slash_inline(self.state.selection.head(), cx)), |block| {
-                        block.child(BlockNode::HorizontalRule { span: None }.render_with_id(
-                            ("markdown-rule", leaf.id),
-                            FlowPosition::at(&references, ix, true),
-                            &context,
-                            window,
-                            cx,
-                        ))
-                    })
+                    .when(
+                        self.live
+                            && leaf.kind == Kind::Rule
+                            && !(leaf.range.contains(&self.state.selection.head())
+                                && self.empty_slash_inline(self.state.selection.head(), cx)),
+                        |block| {
+                            block.child(BlockNode::HorizontalRule { span: None }.render_with_id(
+                                ("markdown-rule", leaf.id),
+                                FlowPosition::at(&references, ix, true),
+                                &context,
+                                window,
+                                cx,
+                            ))
+                        },
+                    )
                     .child({
                         let style = match leaf.kind {
                             Kind::List(style) | Kind::Quote(style) if self.live => Some(style),
@@ -3545,7 +3558,6 @@ impl Render for SourcePresentation {
                     div().id("markdown-clipboard-status").test_support().role(Role::Status)
                         .aria_label(status.clone()).text_sm().text_color(cx.theme().muted_foreground).child(status)
                 ))
-                .child(image_status)
                 .child(self.formula_toolbar(cx))
                 .child(self.formula_feedback(cx))
                 .on_action(cx.listener(|this, _: &math_edit::FormulaMenu, window, cx| this.open_formula_menu(None, window, cx)))
@@ -3565,18 +3577,20 @@ impl Render for SourcePresentation {
                 .child(self.render_references(window, cx))
                 .child(self.render_slash(window, cx))
                 .children(self.reorder_status(cx))
-                .child(self.format_toolbar(window, cx))
+                .child(gpui_kit::component::h_flex().w_full().flex_none().flex_wrap().gap_1()
+                    .child(image_status)
+                    .child(self.format_toolbar(window, cx))
+                    .when(self.live, |toolbar| {
+                        use gpui_kit::component::{Sizable as _, button::{Button, ButtonVariants as _}};
+                        toolbar.child(div().on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                            .child(Button::new("markdown-properties").small().ghost()
+                                .label(t(L10nKey::EditorDocumentProperties))
+                                .on_click(cx.listener(|this, _, window, cx| this.open_properties(window, cx)))))
+                            .child(self.block_toolbar(cx))
+                            .child(self.table_insert_button(cx))
+                    }))
                 .child(self.image_toolbar(cx))
-                .when(self.live, |root| {
-                    use gpui_kit::component::{Sizable as _, button::{Button, ButtonVariants as _}};
-                    root.child(div().on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-                        .child(Button::new("markdown-properties").small().ghost()
-                            .label(t(L10nKey::EditorDocumentProperties))
-                            .on_click(cx.listener(|this, _, window, cx| this.open_properties(window, cx)))))
-                        .when(self.properties.open, |root| root.child(self.render_properties(cx)))
-                })
-                .when(self.live, |root| root.child(self.block_toolbar(cx)))
-                .when(self.live, |root| root.child(self.table_insert_button(cx)))
+                .when(self.live && self.properties.open, |root| root.child(self.render_properties(cx)))
                 .when(self.live && self.projection.links.at(self.state.selection.head()).is_some(), |root| {
                     use gpui_kit::component::button::{Button, ButtonVariants as _};
                     use gpui_kit::component::Sizable as _;

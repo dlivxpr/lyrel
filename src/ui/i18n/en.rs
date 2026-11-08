@@ -1835,8 +1835,12 @@ pub fn translate_en(key: L10nKey) -> &'static str {
         L10nKey::MarkdownCodePlain => "Plain text",
         L10nKey::MarkdownCodeCopy => "Copy code",
         L10nKey::MarkdownCopyMarkdownOnly => "Copy as Markdown",
-        L10nKey::MarkdownClipboardPlainFallback => "Markdown copied. Rich clipboard format is unavailable.",
-        L10nKey::MarkdownClipboardRichUnconfirmed => "Markdown copied. Rich formatting depends on system clipboard support and the destination app.",
+        L10nKey::MarkdownClipboardPlainFallback => {
+            "Markdown copied. Rich clipboard format is unavailable."
+        }
+        L10nKey::MarkdownClipboardRichUnconfirmed => {
+            "Markdown copied. Rich formatting depends on system clipboard support and the destination app."
+        }
         L10nKey::MarkdownClipboardFailed => "Couldn’t access the system clipboard. Try again.",
         L10nKey::MarkdownCodeSource => "Edit fence source",
         L10nKey::MarkdownCodeLive => "Return to code",
@@ -1971,7 +1975,9 @@ pub fn translate_en(key: L10nKey) -> &'static str {
         }
         L10nKey::MarkdownLinkSaveFirst => "Save the document before opening a relative link",
         L10nKey::MarkdownLinkRemotePath => "A remote destination must use a POSIX path",
-        L10nKey::MarkdownLinkAnchorNotFound => "The anchor was not found or is not unique in this document",
+        L10nKey::MarkdownLinkAnchorNotFound => {
+            "The anchor was not found or is not unique in this document"
+        }
         L10nKey::MarkdownSlashMarkdown => "Markdown",
         L10nKey::MarkdownSlashDivider => "Divider",
         L10nKey::MarkdownSlashInlineMath => "Inline math",
@@ -1981,11 +1987,15 @@ pub fn translate_en(key: L10nKey) -> &'static str {
         L10nKey::MarkdownSlashDate => "Date",
         L10nKey::MarkdownSlashTime => "Time",
         L10nKey::MarkdownSlashEmpty => "No matching command. Escape keeps your text.",
-        L10nKey::MarkdownSlashTableHelp => "Arrow keys choose a size; Enter inserts. Tab reaches styles and custom dimensions.",
+        L10nKey::MarkdownSlashTableHelp => {
+            "Arrow keys choose a size; Enter inserts. Tab reaches styles and custom dimensions."
+        }
         L10nKey::MarkdownSlashRows => "Rows (including header)",
         L10nKey::MarkdownSlashColumns => "Columns",
         L10nKey::MarkdownSlashCustomTable => "Insert custom table",
-        L10nKey::MarkdownSlashTableInvalid => "Enter positive row and column counts (maximum 100 each).",
+        L10nKey::MarkdownSlashTableInvalid => {
+            "Enter positive row and column counts (maximum 100 each)."
+        }
         L10nKey::MarkdownReferenceLoading => "Looking up workspace references…",
         L10nKey::MarkdownReferenceNoMatches => {
             "No matching file or anchor. No file will be created."

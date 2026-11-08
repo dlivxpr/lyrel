@@ -411,7 +411,10 @@ impl Job {
             if self.control.is_cancelled() {
                 break;
             }
-            if remaining.as_deref().is_some_and(|remaining| *remaining == 0) {
+            if remaining
+                .as_deref()
+                .is_some_and(|remaining| *remaining == 0)
+            {
                 batch.push((id, key, Err(Failure::Limit)));
                 continue;
             }
@@ -461,8 +464,13 @@ impl Job {
                 if width > 4096. || height > 4096. || width.ceil() * height.ceil() > 8_000_000. {
                     return Err(Failure::Limit);
                 }
-                let bytes = (width.ceil() as usize).saturating_mul(height.ceil() as usize).saturating_mul(4);
-                if remaining.as_deref().is_some_and(|remaining| bytes > *remaining) {
+                let bytes = (width.ceil() as usize)
+                    .saturating_mul(height.ceil() as usize)
+                    .saturating_mul(4);
+                if remaining
+                    .as_deref()
+                    .is_some_and(|remaining| bytes > *remaining)
+                {
                     return Err(Failure::Limit);
                 }
                 if self.control.is_cancelled() {
@@ -486,7 +494,11 @@ impl Job {
             }
             if let (Some(remaining), Ok(image)) = (remaining.as_deref_mut(), &result) {
                 let size = image.size(0);
-                *remaining = remaining.saturating_sub((size.width.0 as usize).saturating_mul(size.height.0 as usize).saturating_mul(4));
+                *remaining = remaining.saturating_sub(
+                    (size.width.0 as usize)
+                        .saturating_mul(size.height.0 as usize)
+                        .saturating_mul(4),
+                );
             }
             batch.push((id, key, result));
         }

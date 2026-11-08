@@ -74,8 +74,16 @@ fn property(line: &str, base: usize) -> Option<Property> {
 }
 
 impl Index {
-    pub(super) fn clipboard_rows(&self) -> impl Iterator<Item = (Range<usize>, Range<usize>, Range<usize>)> + '_ {
-        self.properties.iter().map(|property| (property.line.clone(), property.key.clone(), property.value.clone()))
+    pub(super) fn clipboard_rows(
+        &self,
+    ) -> impl Iterator<Item = (Range<usize>, Range<usize>, Range<usize>)> + '_ {
+        self.properties.iter().map(|property| {
+            (
+                property.line.clone(),
+                property.key.clone(),
+                property.value.clone(),
+            )
+        })
     }
     pub(super) fn reorder_ranges(&self) -> Vec<Range<usize>> {
         let mut runs: Vec<Range<usize>> = Vec::new();

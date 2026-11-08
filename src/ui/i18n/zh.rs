@@ -1688,7 +1688,9 @@ pub fn translate_zh(key: L10nKey) -> Option<&'static str> {
         L10nKey::MarkdownCodeCopy => "复制代码",
         L10nKey::MarkdownCopyMarkdownOnly => "复制为 Markdown",
         L10nKey::MarkdownClipboardPlainFallback => "已复制 Markdown；富文本剪贴板格式不可用。",
-        L10nKey::MarkdownClipboardRichUnconfirmed => "已复制 Markdown；富文本格式取决于系统剪贴板支持和目标应用。",
+        L10nKey::MarkdownClipboardRichUnconfirmed => {
+            "已复制 Markdown；富文本格式取决于系统剪贴板支持和目标应用。"
+        }
         L10nKey::MarkdownClipboardFailed => "无法访问系统剪贴板，请重试。",
         L10nKey::MarkdownCodeSource => "编辑围栏源码",
         L10nKey::MarkdownCodeLive => "返回代码",
@@ -1823,7 +1825,9 @@ pub fn translate_zh(key: L10nKey) -> Option<&'static str> {
         L10nKey::MarkdownSlashDate => "日期",
         L10nKey::MarkdownSlashTime => "时间",
         L10nKey::MarkdownSlashEmpty => "没有匹配的命令，按 Esc 保留输入内容。",
-        L10nKey::MarkdownSlashTableHelp => "方向键选择尺寸，Enter 插入；Tab 可访问样式和自定义尺寸。",
+        L10nKey::MarkdownSlashTableHelp => {
+            "方向键选择尺寸，Enter 插入；Tab 可访问样式和自定义尺寸。"
+        }
         L10nKey::MarkdownSlashRows => "行数（含表头）",
         L10nKey::MarkdownSlashColumns => "列数",
         L10nKey::MarkdownSlashCustomTable => "插入自定义表格",

@@ -249,50 +249,132 @@ impl LyrelApp {
         );
     }
     #[allow(clippy::too_many_arguments)]
-    pub(super) fn editor_refresh_embeds(&mut self, id: BufferId, presentation: gpui_kit::WeakEntity<markdown::SourcePresentation>, generation: u64, revision: u64, resource_epoch: Option<(HostId, u64)>, window: &mut Window, cx: &mut Context<Self>) {
+    pub(super) fn editor_refresh_embeds(
+        &mut self,
+        id: BufferId,
+        presentation: gpui_kit::WeakEntity<markdown::SourcePresentation>,
+        generation: u64,
+        revision: u64,
+        resource_epoch: Option<(HostId, u64)>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let discard = |cx: &mut Context<Self>| {
-            if let Some(view) = presentation.upgrade() { view.update(cx, |view, _| view.discard_embed_results(generation)); }
+            if let Some(view) = presentation.upgrade() {
+                view.update(cx, |view, _| view.discard_embed_results(generation));
+            }
         };
-        let Some(file) = self.editor.buffers.get(id) else { discard(cx); return; };
-        if file.untitled.is_some() || self.active_buffer().is_none_or(|active| active.id() != id)
+        let Some(file) = self.editor.buffers.get(id) else {
+            discard(cx);
+            return;
+        };
+        if file.untitled.is_some()
+            || self.active_buffer().is_none_or(|active| active.id() != id)
             || self.editor_resource_epoch(id, cx) != resource_epoch
-            || self.active_editor_input().and_then(|input| input.markdown()).is_none_or(|view| *view != presentation) { discard(cx); return; }
+            || self
+                .active_editor_input()
+                .is_none_or(|input| input.markdown().is_none_or(|view| *view != presentation))
+        {
+            discard(cx);
+            return;
+        }
         let host = file.host.clone();
         let path = file.path.clone();
-        let Some(view) = presentation.upgrade() else { return; };
+        let Some(view) = presentation.upgrade() else {
+            return;
+        };
         let previous = view.read(cx).previous_embeds();
         let request = view.read(cx).embed_request(cx);
-        let style = markdown::embeds::Style::current(window, cx, view.read(cx).document().entity_id());
-        let snapshots: Vec<_> = self.editor.buffers.iter().filter(|file| file.host.id() == host.id())
-            .filter_map(|file| file.input.markdown().map(|view| {
-                let document = view.read(cx).document();
-                let resources = document.read(cx).resources().map(|resources| (resources.host().id(), resources.epoch()));
-                (file.id(), file.path.clone(), document.entity_id(), document.read(cx).revision(), resources, file.input.read(cx).text().clone())
-            })).collect();
-        let open = snapshots.iter().map(|(_, path, _, _, _, source)| (path.clone(), source.clone())).collect();
-        let Some(target) = self.reference_open_target(id, revision, cx) else { discard(cx); return; };
+        let style =
+            markdown::embeds::Style::current(window, cx, view.read(cx).document().entity_id());
+        let snapshots: Vec<_> = self
+            .editor
+            .buffers
+            .iter()
+            .filter(|file| file.host.id() == host.id())
+            .filter_map(|file| {
+                file.input.markdown().map(|view| {
+                    let document = view.read(cx).document();
+                    let resources = document
+                        .read(cx)
+                        .resources()
+                        .map(|resources| (resources.host().id(), resources.epoch()));
+                    (
+                        file.id(),
+                        file.path.clone(),
+                        document.entity_id(),
+                        document.read(cx).revision(),
+                        resources,
+                        file.input.read(cx).text().clone(),
+                    )
+                })
+            })
+            .collect();
+        let open = snapshots
+            .iter()
+            .map(|(_, path, _, _, _, source)| (path.clone(), source.clone()))
+            .collect();
+        let Some(target) = self.reference_open_target(id, revision, cx) else {
+            discard(cx);
+            return;
+        };
         let lease_path = path.clone();
         let lease_host = host.id();
-        HostOps::run_in(host, window, cx,
+        HostOps::run_in(
+            host,
+            window,
+            cx,
             move |host| markdown::embeds::load(host, &path, request, &open, previous, style),
             move |app, loaded, _, cx| {
-                let current: Vec<_> = app.editor.buffers.iter().filter(|file| file.host.id() == lease_host)
-                    .filter_map(|file| file.input.markdown().map(|view| {
-                        let document = view.read(cx).document();
-                        let resources = document.read(cx).resources().map(|resources| (resources.host().id(), resources.epoch()));
-                        (file.id(), file.path.clone(), document.entity_id(), document.read(cx).revision(), resources)
-                    })).collect();
+                let current: Vec<_> = app
+                    .editor
+                    .buffers
+                    .iter()
+                    .filter(|file| file.host.id() == lease_host)
+                    .filter_map(|file| {
+                        file.input.markdown().map(|view| {
+                            let document = view.read(cx).document();
+                            let resources = document
+                                .read(cx)
+                                .resources()
+                                .map(|resources| (resources.host().id(), resources.epoch()));
+                            (
+                                file.id(),
+                                file.path.clone(),
+                                document.entity_id(),
+                                document.read(cx).revision(),
+                                resources,
+                            )
+                        })
+                    })
+                    .collect();
                 if !app.editor_open_target_valid(target, cx)
-                    || app.editor.buffers.get(id).is_none_or(|file| file.path != lease_path || file.host.id() != lease_host)
-                    || app.active_editor_input().and_then(|input| input.markdown()).is_none_or(|view| *view != presentation)
+                    || app
+                        .editor
+                        .buffers
+                        .get(id)
+                        .is_none_or(|file| file.path != lease_path || file.host.id() != lease_host)
+                    || app.active_editor_input().is_none_or(|input| {
+                        input.markdown().is_none_or(|view| *view != presentation)
+                    })
                     || current.len() != snapshots.len()
-                    || current.iter().zip(&snapshots).any(|(now, (id, path, document, revision, epoch, _))| now != &(*id, path.clone(), *document, *revision, *epoch)) {
-                    if let Some(view) = presentation.upgrade() { view.update(cx, |view, _| view.discard_embed_results(generation)); }
+                    || current.iter().zip(&snapshots).any(
+                        |(now, (id, path, document, revision, epoch, _))| {
+                            now != &(*id, path.clone(), *document, *revision, *epoch)
+                        },
+                    )
+                {
+                    if let Some(view) = presentation.upgrade() {
+                        view.update(cx, |view, _| view.discard_embed_results(generation));
+                    }
                     return;
                 }
                 if let Some(view) = presentation.upgrade() {
-                    view.update(cx, |view, cx| view.install_embed_results(generation, loaded, cx));
+                    view.update(cx, |view, cx| {
+                        view.install_embed_results(generation, loaded, cx)
+                    });
                 }
-            });
+            },
+        );
     }
 }

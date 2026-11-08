@@ -79,7 +79,11 @@ impl Index {
                         } else {
                             body + target.len() + 1
                         };
-                        let references = if embed { &mut index.embeds } else { &mut index.links };
+                        let references = if embed {
+                            &mut index.embeds
+                        } else {
+                            &mut index.links
+                        };
                         references.push(Link {
                             source: range.start + start - usize::from(embed)..range.start + cursor,
                             label: range.start + label_start..range.start + end,
@@ -188,16 +192,39 @@ impl Index {
     }
     /// Resolve the same explicit anchor used for navigation. Headings include
     /// their section; a literal id includes its positioned owning block only.
-    pub(super) fn fragment(&self, source: &str, root: &Node, fragment: Option<&str>) -> Result<Range<usize>, L10nKey> {
-        let Some(fragment) = fragment.filter(|value| !value.is_empty()) else { return Ok(0..source.len()); };
-        let decoded = percent_encoding::percent_decode_str(fragment).decode_utf8().map_err(|_| L10nKey::MarkdownLinkInvalidDestination)?;
-        let mut matches = self.headings.iter().filter(|(id, _)| id == decoded.as_ref());
-        let at = matches.next().map(|(_, at)| *at).ok_or(L10nKey::MarkdownLinkAnchorNotFound)?;
-        if matches.next().is_some() { return Err(L10nKey::MarkdownReferenceAmbiguous); }
+    pub(super) fn fragment(
+        &self,
+        source: &str,
+        root: &Node,
+        fragment: Option<&str>,
+    ) -> Result<Range<usize>, L10nKey> {
+        let Some(fragment) = fragment.filter(|value| !value.is_empty()) else {
+            return Ok(0..source.len());
+        };
+        let decoded = percent_encoding::percent_decode_str(fragment)
+            .decode_utf8()
+            .map_err(|_| L10nKey::MarkdownLinkInvalidDestination)?;
+        let mut matches = self
+            .headings
+            .iter()
+            .filter(|(id, _)| id == decoded.as_ref());
+        let at = matches
+            .next()
+            .map(|(_, at)| *at)
+            .ok_or(L10nKey::MarkdownLinkAnchorNotFound)?;
+        if matches.next().is_some() {
+            return Err(L10nKey::MarkdownReferenceAmbiguous);
+        }
         let mut heading = None;
         visit(root, &mut |node| {
             if let Node::Heading(value) = node {
-                if value.position.as_ref().is_some_and(|position| position.start.offset == at) { heading = Some(value.depth); }
+                if value
+                    .position
+                    .as_ref()
+                    .is_some_and(|position| position.start.offset == at)
+                {
+                    heading = Some(value.depth);
+                }
             }
         });
         if let Some(depth) = heading {
@@ -205,13 +232,19 @@ impl Index {
             visit(root, &mut |node| {
                 if let Node::Heading(value) = node {
                     if let Some(position) = &value.position {
-                        if position.start.offset > at && value.depth <= depth { end = end.min(position.start.offset); }
+                        if position.start.offset > at && value.depth <= depth {
+                            end = end.min(position.start.offset);
+                        }
                     }
                 }
             });
             return Ok(at..end);
         }
-        let block = root.children().into_iter().flatten().filter_map(Node::position)
+        let block = root
+            .children()
+            .into_iter()
+            .flatten()
+            .filter_map(Node::position)
             .find(|position| position.start.offset <= at && at < position.end.offset)
             .ok_or(L10nKey::MarkdownLinkAnchorNotFound)?;
         Ok(block.start.offset..block.end.offset)
