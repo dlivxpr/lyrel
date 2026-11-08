@@ -41,6 +41,9 @@ fn content(row: &Row, column: usize, offset: usize) -> usize {
     let ranges = cells(row);
     let range = &ranges[column.min(ranges.len() - 1)];
     let text = &row.text[range.clone()];
+    if text.trim_matches([' ', '\t']).is_empty() {
+        return range.start + range.len() / 2;
+    }
     let start = range.start + text.len() - text.trim_start_matches([' ', '\t']).len();
     let end = range.end - (text.len() - text.trim_end_matches([' ', '\t']).len());
     let mut at = (start + offset).min(end.max(start));
