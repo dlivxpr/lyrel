@@ -182,7 +182,7 @@ fn style_tag(d: &Decoration) -> String {
         Format::Highlight => "background-color:yellow".into(),
         Format::TextColor | Format::HighlightColor => {
             let color = d.color.unwrap_or(0);
-            format!("{}:#{:06x};opacity:{}", if d.format == Format::TextColor { "color" } else { "background-color" }, color >> 8, (color & 255) as f32 / 255.)
+            format!("{}:rgba({},{},{},{})", if d.format == Format::TextColor { "color" } else { "background-color" }, color >> 24, color >> 16 & 255, color >> 8 & 255, (color & 255) as f32 / 255.)
         }
         _ => String::new(),
     };
