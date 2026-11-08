@@ -13,6 +13,7 @@ pub(super) struct Frame {
     window_size: Size<Pixels>,
     rem: Pixels,
     scale: f32,
+    table: Option<(u64, Point<Pixels>, u64)>,
 }
 
 impl Frame {
@@ -25,6 +26,10 @@ impl Frame {
             window_size: window.viewport_size(),
             rem: window.rem_size(),
             scale: window.scale_factor(),
+            table: view.projection.leaf_at(view.state.selection.head()).and_then(|leaf| {
+                let Kind::TableCell(cell) = leaf.kind else { return None; };
+                view.tables.geometry_state(cell)
+            }),
         }
     }
 
@@ -453,6 +458,10 @@ mod tests {
         });
         release.send(()).unwrap();
         loop {
+            // Derived spelling work retains Host context until its virtual timer runs.
+            context
+                .executor()
+                .advance_clock(std::time::Duration::from_millis(10));
             context.run_until_parked();
             if std::sync::Arc::strong_count(&host) <= owners {
                 break;
@@ -500,6 +509,9 @@ mod tests {
             assert!(std::time::Instant::now() < deadline);
             std::thread::sleep(std::time::Duration::from_millis(5));
         };
+        if !app.read_with(&context, |app, _| app.active_buffer().unwrap().wrap) {
+            context.dispatch_action(crate::core::actions::ToggleDocumentWrap);
+        }
         view.update_in(&mut context, |view, window, cx| {
             view.select_range(140..140, cx);
             view.focus.focus(window, cx);

@@ -1,5 +1,8 @@
 //! Native Markdown find UI; the shared document remains the only editable text.
-use super::markdown::{Command, DocumentEvent, EditKind, Selection, SourcePresentation, SearchText, SearchSurfaceChanged};
+use super::markdown::{
+    Command, DocumentEvent, EditKind, SearchSurfaceChanged, SearchText, Selection,
+    SourcePresentation,
+};
 use super::*;
 use gpui_kit::base::input::SearchMatcher;
 use gpui_kit::{App, WeakEntity};
@@ -39,13 +42,24 @@ impl MarkdownSearch {
                 }
             }),
             cx.subscribe_in(&document, window, |this, _, event, window, cx| {
-                if this.open && matches!(event, DocumentEvent::Edited(_) | DocumentEvent::PresentationChanged) {
+                if this.open
+                    && matches!(
+                        event,
+                        DocumentEvent::Edited(_) | DocumentEvent::PresentationChanged
+                    )
+                {
                     this.refresh(false, window, cx);
                 }
             }),
-            cx.subscribe_in(source, window, |this, _, _: &SearchSurfaceChanged, window, cx| {
-                if this.open { this.refresh(false, window, cx); }
-            }),
+            cx.subscribe_in(
+                source,
+                window,
+                |this, _, _: &SearchSurfaceChanged, window, cx| {
+                    if this.open {
+                        this.refresh(false, window, cx);
+                    }
+                },
+            ),
         ];
         Self {
             source: source.downgrade(),
@@ -77,10 +91,14 @@ impl MarkdownSearch {
             let range = view.selection().range();
             if range.start < range.end {
                 let surface = view.search_text(cx);
-                let selected = surface.text.slice(surface.visible_offset(range.start)..surface.visible_offset(range.end)).to_string();
+                let selected = surface
+                    .text
+                    .slice(surface.visible_offset(range.start)..surface.visible_offset(range.end))
+                    .to_string();
                 if !selected.is_empty() {
                     self.query_dirty = true;
-                    self.query.update(cx, |input, cx| input.set_value(selected, window, cx));
+                    self.query
+                        .update(cx, |input, cx| input.set_value(selected, window, cx));
                 }
             }
         }
@@ -108,7 +126,9 @@ impl MarkdownSearch {
             self.matched_query != query || self.matched_case_sensitive != self.case_sensitive;
         let matches_changed = query_changed || self.matched_revision != Some(surface_key);
         if self.matched_revision != Some(surface_key) {
-            if query_changed { self.matcher.query = None; }
+            if query_changed {
+                self.matcher.query = None;
+            }
             self.surface = view.search_text(cx);
             self.matcher.update(&self.surface.text);
             self.matched_revision = Some(surface_key);
@@ -118,10 +138,17 @@ impl MarkdownSearch {
             self.matched_query = query;
             self.matched_case_sensitive = self.case_sensitive;
         }
-        self.matcher.update_cursor_by_offset(self.surface.visible_offset(at));
+        self.matcher
+            .update_cursor_by_offset(self.surface.visible_offset(at));
         if matches_changed {
-            let matches = std::rc::Rc::new(self.matcher.matched_ranges().iter().cloned()
-                .flat_map(|range| self.surface.source_ranges(range)).collect());
+            let matches = std::rc::Rc::new(
+                self.matcher
+                    .matched_ranges()
+                    .iter()
+                    .cloned()
+                    .flat_map(|range| self.surface.source_ranges(range))
+                    .collect(),
+            );
             source.update(cx, |view, cx| view.set_search_matches(matches, cx));
         }
         if select {
@@ -138,7 +165,9 @@ impl MarkdownSearch {
             .cloned();
         if let (Some(source), Some(range)) = (self.source.upgrade(), range) {
             let fragments = self.surface.source_ranges(range);
-            let (Some(first), Some(last)) = (fragments.first(), fragments.last()) else { return; };
+            let (Some(first), Some(last)) = (fragments.first(), fragments.last()) else {
+                return;
+            };
             let range = first.start..last.end;
             source.update(cx, |view, cx| {
                 view.command(
@@ -357,19 +386,36 @@ impl Render for MarkdownSearch {
 }
 
 impl LyrelApp {
-    pub(super) fn editor_markdown_find_step(&mut self, forward: bool, window: &mut Window, cx: &mut Context<Self>) -> bool {
-        if !self.editor_panel_has_focus(window, cx) { return false; }
-        let Some(input) = self.active_editor_input() else { return false; };
-        let Some(source) = input.markdown() else { return false; };
-        let Some(file) = self.active_buffer() else { return false; };
+    pub(crate) fn editor_markdown_find_step(
+        &mut self,
+        forward: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        if !self.editor_panel_has_focus(window, cx) {
+            return false;
+        }
+        let Some(input) = self.active_editor_input() else {
+            return false;
+        };
+        let Some(source) = input.markdown() else {
+            return false;
+        };
+        let Some(file) = self.active_buffer() else {
+            return false;
+        };
         let search = file.presentations.open_search(source, window, cx);
         search.update(cx, |search, cx| {
-            if search.matched_query.is_empty() { search.show(false, window, cx); }
-            else { search.open = true; search.step(forward, window, cx); }
+            if search.matched_query.is_empty() {
+                search.show(false, window, cx);
+            } else {
+                search.open = true;
+                search.step(forward, window, cx);
+            }
         });
         true
     }
-    pub(super) fn editor_markdown_search(
+    pub(crate) fn editor_markdown_search(
         &mut self,
         replace: bool,
         window: &mut Window,
@@ -413,14 +459,23 @@ mod tests {
         let original = "alpha **beta** gamma\n";
         std::fs::write(&path, original).unwrap();
         let (app, mut vcx, _streams) = harness_with_tabs(cx, 1);
-        app.update_in(&mut vcx, |app, window, cx| app.open_file_in_editor(&path, window, cx));
+        app.update_in(&mut vcx, |app, window, cx| {
+            app.open_file_in_editor(&path, window, cx)
+        });
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
         while !app.read_with(&vcx, |app, _| app.active_buffer().is_some()) {
             settle(&mut vcx);
             assert!(std::time::Instant::now() < deadline);
             std::thread::sleep(std::time::Duration::from_millis(5));
         }
-        if !app.read_with(&vcx, |app, cx| app.active_editor_input().unwrap().markdown().unwrap().read(cx).is_live()) {
+        if !app.read_with(&vcx, |app, cx| {
+            app.active_editor_input()
+                .unwrap()
+                .markdown()
+                .unwrap()
+                .read(cx)
+                .is_live()
+        }) {
             vcx.dispatch_action(crate::core::actions::ToggleDocumentPreview);
         }
         settle(&mut vcx);
@@ -439,15 +494,37 @@ mod tests {
             window.click("markdown-replace-one", cx);
         });
         settle(&mut vcx);
-        app.read_with(&vcx, |app, cx| assert_eq!(app.active_buffer().unwrap().input.read(cx).text().to_string(), "new**** gamma\n"));
+        app.read_with(&vcx, |app, cx| {
+            assert_eq!(
+                app.active_buffer()
+                    .unwrap()
+                    .input
+                    .read(cx)
+                    .text()
+                    .to_string(),
+                "new**** gamma\n"
+            )
+        });
         vcx.update(|window, cx| window.press("escape", cx));
         vcx.dispatch_action(gpui_kit::component::input::Undo);
         settle(&mut vcx);
-        app.read_with(&vcx, |app, cx| assert_eq!(app.active_buffer().unwrap().input.read(cx).text().to_string(), original));
+        app.read_with(&vcx, |app, cx| {
+            assert_eq!(
+                app.active_buffer()
+                    .unwrap()
+                    .input
+                    .read(cx)
+                    .text()
+                    .to_string(),
+                original
+            )
+        });
         vcx.dispatch_action(gpui_kit::component::input::Search);
         vcx.update(|window, cx| window.input("**", cx));
         settle(&mut vcx);
-        vcx.update(|window, _| assert_eq!(window.find("markdown-match-count").label(), Some("0/0")));
+        vcx.update(|window, _| {
+            assert_eq!(window.find("markdown-match-count").label(), Some("0/0"))
+        });
     }
 
     #[gpui_kit::test]

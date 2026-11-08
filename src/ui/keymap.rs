@@ -92,6 +92,7 @@ fn fixed_bindings(cx: &App) -> Vec<KeyBinding> {
     }
     bindings.extend(crate::ui::code_editor::markdown::table_bindings(cx));
     bindings.extend(crate::ui::code_editor::markdown::inline_format_bindings(cx));
+    bindings.extend(crate::ui::code_editor::markdown::block_bindings(cx));
     // The switcher's footer tells you Tab is the way across to the tab column
     // once a query is in the box. gpui-component's Root binds `tab` to its
     // focus walker, actions are dispatched before key listeners, and the panel
@@ -1916,9 +1917,19 @@ fn make_binding(action: &str, keystroke: &str, cx: &App) -> Option<KeyBinding> {
         "ScmToggleGraph" => load_binding(keystroke, ScmToggleGraph, None, cx),
         "ToggleDiffViewMode" => load_binding(keystroke, ToggleDiffViewMode, None, cx),
         "FindInTerminal" => load_binding(keystroke, FindInTerminal, action_context(action), cx),
-        "FindNext" => load_binding(keystroke, FindNext, Some("Terminal || Markdown || MarkdownSearch"), cx),
+        "FindNext" => load_binding(
+            keystroke,
+            FindNext,
+            Some("Terminal || Markdown || MarkdownSearch"),
+            cx,
+        ),
         "ToggleComposer" => load_binding(keystroke, ToggleComposer, action_context(action), cx),
-        "FindPrevious" => load_binding(keystroke, FindPrevious, Some("Terminal || Markdown || MarkdownSearch"), cx),
+        "FindPrevious" => load_binding(
+            keystroke,
+            FindPrevious,
+            Some("Terminal || Markdown || MarkdownSearch"),
+            cx,
+        ),
         "ClearScrollback" => load_binding(keystroke, ClearScrollback, action_context(action), cx),
         "InsertNewline" => load_binding(keystroke, InsertNewline, action_context(action), cx),
         "CopyText" => load_binding(keystroke, CopyText, action_context(action), cx),

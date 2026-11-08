@@ -47,7 +47,9 @@ impl InsertionState {
 
 impl SourcePresentation {
     pub(super) fn cancel_image_insertion(&mut self, cx: &mut Context<Self>) -> bool {
-        let Some(pending) = self.assets.pending.take() else { return false; };
+        let Some(pending) = self.assets.pending.take() else {
+            return false;
+        };
         pending.cancelled.set(true);
         cx.notify();
         true
@@ -99,7 +101,12 @@ impl SourcePresentation {
         if resources.path().is_none() {
             return;
         }
-        if self.assets.pending.as_ref().is_some_and(|pending| pending.token != self.input_token(cx)) {
+        if self
+            .assets
+            .pending
+            .as_ref()
+            .is_some_and(|pending| pending.token != self.input_token(cx))
+        {
             self.cancel_image_insertion(cx);
             return;
         }
@@ -142,15 +149,35 @@ impl SourcePresentation {
                 match result {
                     Ok(mut source) => {
                         let document = view.document.read(cx);
-                        let start = document.source().line_start_offset(document.source().offset_to_point(pending.selection.range().start).row);
-                        let prefix = document.source().slice(start..pending.selection.range().start);
-                        let suffix = document.source().slice(pending.selection.range().end..document.source().len());
-                        if prefix.chars().all(char::is_whitespace) && suffix.chars().take_while(|ch| *ch != '\n').all(char::is_whitespace) { source.push('\n'); }
+                        let start = document.source().line_start_offset(
+                            document
+                                .source()
+                                .offset_to_point(pending.selection.range().start)
+                                .row,
+                        );
+                        let prefix = document
+                            .source()
+                            .slice(start..pending.selection.range().start);
+                        let suffix = document
+                            .source()
+                            .slice(pending.selection.range().end..document.source().len());
+                        if prefix.chars().all(char::is_whitespace)
+                            && suffix
+                                .chars()
+                                .take_while(|ch| *ch != '\n')
+                                .all(char::is_whitespace)
+                        {
+                            source.push('\n');
+                        }
                         let caret = pending.selection.range().start + source.len();
-                        view.command(Command::BatchReplaceSelected {
-                            edits: vec![(pending.selection.range(), source)],
-                            selection: Selection::caret(caret),
-                        }, window, cx);
+                        view.command(
+                            Command::BatchReplaceSelected {
+                                edits: vec![(pending.selection.range(), source)],
+                                selection: Selection::caret(caret),
+                            },
+                            window,
+                            cx,
+                        );
                     }
                     Err(error) => {
                         view.assets.error = Some(
@@ -182,7 +209,9 @@ impl SourcePresentation {
     }
 }
 
-pub(super) fn is_image_path(path: &Path) -> bool { image_extension(path).is_some() }
+pub(super) fn is_image_path(path: &Path) -> bool {
+    image_extension(path).is_some()
+}
 
 fn image_extension(path: &Path) -> Option<&'static str> {
     match path.extension()?.to_str()?.to_ascii_lowercase().as_str() {

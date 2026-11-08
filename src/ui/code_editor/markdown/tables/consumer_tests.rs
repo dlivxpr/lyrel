@@ -176,7 +176,10 @@ fn table_reverse_replacement_and_multi_caret_paste_preserve_structure(
     context.dispatch_action(gpui_kit::component::input::Undo);
     context.run_until_parked();
     view.read_with(&context, |view, cx| {
-        assert_eq!(view.document().read(cx).encode().unwrap(), original.as_bytes());
+        assert_eq!(
+            view.document().read(cx).encode().unwrap(),
+            original.as_bytes()
+        );
         assert_eq!(view.selection(), Selection::new(two + 3, one));
     });
     context.dispatch_action(gpui_kit::component::input::Redo);
@@ -240,15 +243,19 @@ fn table_structure_reverse_header_duplicate_and_minimum_save_reopen(
 ) {
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("structure-boundaries.md");
-    let original = "Before  \r\n\n| **Head**  | `x\\|y` |\r\n| :----- | ----: |\n| body | tail |\r\n\nAfter  ";
+    let original =
+        "Before  \r\n\n| **Head**  | `x\\|y` |\r\n| :----- | ----: |\n| body | tail |\r\n\nAfter  ";
     std::fs::write(&path, original).unwrap();
     let (app, mut context, _streams) = harness_with_tabs(cx, 1);
-    app.update_in(&mut context, |app, window, cx| app.open_file_in_editor(&path, window, cx));
+    app.update_in(&mut context, |app, window, cx| {
+        app.open_file_in_editor(&path, window, cx)
+    });
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
     let view = loop {
         context.run_until_parked();
         if let Some(view) = app.read_with(&context, |app, _| {
-            app.active_editor_input().and_then(|input| input.markdown().cloned())
+            app.active_editor_input()
+                .and_then(|input| input.markdown().cloned())
         }) {
             start_in_source(&view, &mut context);
             break view;
@@ -270,7 +277,10 @@ fn table_structure_reverse_header_duplicate_and_minimum_save_reopen(
     context.dispatch_action(crate::ui::code_editor::markdown::tables::DeleteRow);
     context.run_until_parked();
     view.read_with(&context, |view, cx| {
-        assert_eq!(view.document().read(cx).encode().unwrap(), original.as_bytes());
+        assert_eq!(
+            view.document().read(cx).encode().unwrap(),
+            original.as_bytes()
+        );
         assert_eq!(view.selection(), reverse);
     });
     context.dispatch_action(crate::ui::code_editor::markdown::tables::DuplicateRow);
@@ -281,13 +291,19 @@ fn table_structure_reverse_header_duplicate_and_minimum_save_reopen(
     context.run_until_parked();
     let expected = "Before  \r\n\n| **Head**  | `x\\|y` |\r\n| :----- | ----: |\n| **HeXad**  | `x\\|y` |\r\n| body | tail |\r\n\nAfter  ";
     view.read_with(&context, |view, cx| {
-        assert_eq!(view.document().read(cx).encode().unwrap(), expected.as_bytes());
+        assert_eq!(
+            view.document().read(cx).encode().unwrap(),
+            expected.as_bytes()
+        );
     });
     context.dispatch_action(gpui_kit::component::input::Undo);
     context.dispatch_action(gpui_kit::component::input::Undo);
     context.run_until_parked();
     view.read_with(&context, |view, cx| {
-        assert_eq!(view.document().read(cx).encode().unwrap(), original.as_bytes());
+        assert_eq!(
+            view.document().read(cx).encode().unwrap(),
+            original.as_bytes()
+        );
         assert_eq!(view.selection(), reverse);
     });
     context.dispatch_action(crate::core::actions::ToggleDocumentPreview);
@@ -296,7 +312,12 @@ fn table_structure_reverse_header_duplicate_and_minimum_save_reopen(
     context.dispatch_action(crate::core::actions::EditorSave);
     loop {
         context.run_until_parked();
-        if app.read_with(&context, |app, _| app.active_buffer().is_some_and(|file| !file.dirty && !file.saving)) { break; }
+        if app.read_with(&context, |app, _| {
+            app.active_buffer()
+                .is_some_and(|file| !file.dirty && !file.saving)
+        }) {
+            break;
+        }
         assert!(std::time::Instant::now() < deadline);
         std::thread::sleep(std::time::Duration::from_millis(5));
     }
@@ -307,12 +328,22 @@ fn table_structure_reverse_header_duplicate_and_minimum_save_reopen(
     });
     loop {
         context.run_until_parked();
-        if app.read_with(&context, |app, _| app.active_buffer().is_some()) { break; }
+        if app.read_with(&context, |app, _| app.active_buffer().is_some()) {
+            break;
+        }
         assert!(std::time::Instant::now() < deadline);
         std::thread::sleep(std::time::Duration::from_millis(5));
     }
     app.read_with(&context, |app, cx| {
-        let reopened = app.active_editor_input().unwrap().markdown().unwrap().read(cx);
-        assert_eq!(reopened.document().read(cx).encode().unwrap(), expected.as_bytes());
+        let reopened = app
+            .active_editor_input()
+            .unwrap()
+            .markdown()
+            .unwrap()
+            .read(cx);
+        assert_eq!(
+            reopened.document().read(cx).encode().unwrap(),
+            expected.as_bytes()
+        );
     });
 }
