@@ -20,6 +20,8 @@ mod link_interaction;
 
 #[path = "assets.rs"]
 mod assets;
+#[path = "image_edit.rs"]
+mod image_edit;
 #[path = "navigation.rs"]
 mod navigation;
 
@@ -29,6 +31,16 @@ mod typography;
 #[path = "composition.rs"]
 mod composition;
 
+#[path = "formats.rs"]
+pub(super) mod formats;
+#[path = "code.rs"]
+mod code;
+#[path = "properties.rs"]
+pub(super) mod properties;
+#[path = "tools.rs"]
+pub(super) mod tools;
+#[path = "spelling.rs"]
+mod spelling;
 #[path = "mermaid_authoring.rs"]
 mod mermaid_authoring;
 
@@ -84,6 +96,7 @@ pub(crate) struct SourcePresentation {
     math: super::math::State,
     extra_selections: Vec<Selection>,
     search_matches: std::rc::Rc<Vec<Range<usize>>>,
+    spelling: spelling::State,
     image_snapshot: Option<std::sync::Arc<HashMap<String, std::sync::Arc<RenderImage>>>>,
     accessibility_snapshot: Option<(u64, SharedString)>,
     indent: crate::ui::editor_text::Indent,
@@ -92,8 +105,12 @@ pub(crate) struct SourcePresentation {
     reveal_at: Option<usize>,
     selection_notification: bool,
     assets: assets::InsertionState,
+    formats: formats::State,
+    code: code::State,
+    image_resize: Option<image_edit::Resize>,
     _observe: Subscription,
     mdx_state: super::mdx::ViewState,
+    properties: properties::State,
 }
 impl SourcePresentation {
     pub(crate) fn new(
@@ -101,6 +118,7 @@ impl SourcePresentation {
         wrap: bool,
         cx: &mut Context<Self>,
     ) -> Self {
+        code::init(cx);
         let owner_id = cx.entity_id();
         cx.on_release(move |view, cx| {
             // Platform handlers are weak. A last-owner release must still put
@@ -129,6 +147,7 @@ impl SourcePresentation {
             ) {
                 this.image_snapshot = None;
                 if matches!(event, DocumentEvent::ResourceContextChanged) {
+                    this.schedule_spelling(cx);
                     this.pointer_link = None;
                     let document = this.document.read(cx);
                     if this.projection.grammar != document.grammar() {
@@ -148,8 +167,8 @@ impl SourcePresentation {
                 return;
             }
             if let DocumentEvent::Edited(transaction) = event {
+                this.spelling.invalidate();
                 this.pointer_link = None;
-                this.assets.rebase(transaction);
                 this.state.rebase(transaction);
                 if transaction.origin != this.state.id {
                     for selection in &mut this.extra_selections {
@@ -180,6 +199,7 @@ impl SourcePresentation {
                 }
                 this.sync_inline_reveal();
                 this.schedule_parse(cx);
+                this.schedule_spelling(cx);
                 this.schedule_math(cx);
                 this.schedule_mermaid(cx);
                 this.geometry = None;
@@ -217,6 +237,7 @@ impl SourcePresentation {
             document,
             state: PresentationState::default(),
             input_generation: 0,
+            formats: formats::State::default(),
             focus: cx.focus_handle().tab_stop(true),
             scroll: ScrollHandle::new(),
             geometry: None,
@@ -245,6 +266,7 @@ impl SourcePresentation {
             math: super::math::State::default(),
             extra_selections: Vec::new(),
             search_matches: std::rc::Rc::default(),
+            spelling: spelling::State::default(),
             image_snapshot: None,
             accessibility_snapshot: None,
             indent: crate::ui::editor_text::Indent {
@@ -256,8 +278,11 @@ impl SourcePresentation {
             reveal_at: None,
             selection_notification: false,
             assets: assets::InsertionState::default(),
+            code: code::State::default(),
+            image_resize: None,
             _observe: observe,
             mdx_state: super::mdx::ViewState::default(),
+            properties: properties::State::default(),
         };
         view.schedule_parse(cx);
         view
@@ -302,6 +327,7 @@ impl SourcePresentation {
     }
     pub(crate) fn toggle_mode(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.command(Command::FinishComposition, window, cx);
+        self.properties = properties::State::default();
         self.live = !self.live;
         self.geometry = None;
         self.rendered_revision = None;
@@ -317,6 +343,7 @@ impl SourcePresentation {
                 self.document.read(cx).grammar(),
             ));
         }
+        self.tools_changed(cx);
         self.reveal_caret = true;
         self.focus.focus(window, cx);
         window.notify_text_selection_changed(&self.focus);
@@ -384,6 +411,7 @@ impl SourcePresentation {
                         view.refresh_images(false, cx);
                         view.schedule_mermaid(cx);
                         view.schedule_math(cx);
+                        view.tools_changed(cx);
                         cx.notify();
                     }
                     let next = view.parse_pending.is_some();
@@ -413,6 +441,8 @@ impl SourcePresentation {
         urls.dedup();
         self.document
             .update(cx, |document, cx| document.sync_images(urls, consent, cx));
+        let document = self.document.read(cx);
+        for leaf in &mut self.projection.leaves { leaf.image_dimensions(&document.images.states); }
     }
     fn schedule_mermaid(&mut self, cx: &mut Context<Self>) {
         if !self.live || self.projection.revision != self.document.read(cx).revision() {
@@ -601,9 +631,13 @@ impl SourcePresentation {
         );
         let marked = self.state.marked_range();
         for leaf in &mut self.projection.leaves {
+            if matches!(leaf.kind, Kind::Code(_)) {
+                continue; // Code owns its derived fence/container visibility.
+            }
             let visibility_changed = leaf.hide_ranges(&hidden, marked.as_ref());
             let insertions_changed = leaf.set_inline_insertions(&insertions);
             if visibility_changed || insertions_changed {
+                self.spelling.surface_generation = self.spelling.surface_generation.wrapping_add(1);
                 if matches!(leaf.kind, Kind::TableCell(_)) {
                     self.tables.invalidate_cell(leaf.id);
                 }
@@ -624,6 +658,7 @@ impl SourcePresentation {
                 &self.extra_selections,
                 marked.as_ref(),
             ) {
+                self.spelling.surface_generation = self.spelling.surface_generation.wrapping_add(1);
                 if matches!(leaf.kind, Kind::TableCell(_)) {
                     self.tables.invalidate_cell(leaf.id);
                     self.viewport.heights.clear();
@@ -738,6 +773,7 @@ impl SourcePresentation {
         self.viewport.layout = None;
         self.geometry = None;
         self.rendered_revision = None;
+        self.tools_changed(cx);
         cx.notify();
     }
     pub(super) fn toggle_component_source(
@@ -967,6 +1003,8 @@ impl SourcePresentation {
     ) -> gpui_kit::component::menu::PopupMenu {
         use super::tables::*;
         use crate::ui::i18n::{L10nKey, t};
+        let menu = self.format_menu(menu);
+        let menu = self.spelling_menu(menu);
         if !self.live {
             return menu;
         }
@@ -1052,6 +1090,8 @@ impl SourcePresentation {
         if !toggle_task {
             self.state.selection = self.map_live_caret(self.state.selection, cx);
         }
+        self.sync_code(cx);
+        let (command, code_caret) = self.code_input(command, cx);
         let command = if self.live
             && self.extra_selections.is_empty()
             && self.projection.grammar == self.document.read(cx).grammar()
@@ -1110,6 +1150,12 @@ impl SourcePresentation {
                 let (text, _) = cell_input(&range, text, None);
                 Command::Replace { range, text, kind }
             }
+            Command::BatchReplace { edits, kind } => Command::BatchReplace {
+                edits: edits.into_iter().map(|(range, text)| {
+                    let text = cell_input(&range, text, None).0;
+                    (range, text)
+                }).collect(), kind,
+            },
             command => command,
         };
         let command = self.protect_table_replacement(command, cx);
@@ -1263,6 +1309,9 @@ impl SourcePresentation {
             }
             changed
         });
+        if let Some(at) = code_caret {
+            self.state.selection = Selection::caret(at);
+        }
         if let Some(selections) = after_extra {
             self.extra_selections = selections;
         }
@@ -1578,6 +1627,9 @@ impl SourcePresentation {
         true
     }
     fn indent_selection(&mut self, outdent: bool, window: &mut Window, cx: &mut Context<Self>) {
+        if self.code_indent(outdent, window, cx) {
+            return;
+        }
         if self.navigate_table(
             super::tables::Navigation::Cell { backward: outdent },
             window,
@@ -1832,6 +1884,9 @@ impl SourcePresentation {
         }
     }
     fn enter(&mut self, hard: bool, window: &mut Window, cx: &mut Context<Self>) {
+        if self.code_enter(window, cx) {
+            return;
+        }
         if self.live
             && self
                 .projection
@@ -1889,6 +1944,9 @@ impl SourcePresentation {
         self.command(command, window, cx);
     }
     fn delete_prose(&mut self, backward: bool, window: &mut Window, cx: &mut Context<Self>) {
+        if self.code_delete(backward, window, cx) {
+            return;
+        }
         if !self.live
             || !self.state.selection.range().is_empty()
             || !self.extra_selections.is_empty()
@@ -1904,6 +1962,7 @@ impl SourcePresentation {
             );
             return;
         }
+        if self.delete_adjacent_image(backward, window, cx) { return; }
         let at = self.state.selection.head;
         if let Some(range) = self.adjacent_block_atom(at, backward, cx) {
             let command = self.deletion_command(range, cx);
@@ -2024,6 +2083,10 @@ impl SourcePresentation {
         let Some(item) = cx.read_from_clipboard() else {
             return;
         };
+        if let Some(paths) = item.entries().iter().find_map(|entry| match entry { ClipboardEntry::ExternalPaths(paths) => Some(paths), _ => None }) {
+            let inputs: Vec<_> = paths.paths().iter().filter(|path| assets::is_image_path(path)).cloned().map(assets::IncomingImage::File).collect();
+            if !inputs.is_empty() { self.insert_images(inputs, window, cx); return; }
+        }
         if item
             .entries()
             .iter()
@@ -2203,6 +2266,7 @@ impl EntityInputHandler for SourcePresentation {
 }
 impl Render for SourcePresentation {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.projection.format_theme(cx.theme().primary.opacity(0.2));
         let style = super::math::Style::new(cx.theme().foreground, window.rem_size());
         if self.math.style != Some(style) {
             self.math.style = Some(style);
@@ -2217,6 +2281,7 @@ impl Render for SourcePresentation {
         if self.live && self.rendered_revision != Some(self.document.read(cx).revision()) {
             self.sync_mdx_inline_visibility(cx);
         }
+        self.sync_code(cx);
         let view = cx.entity().downgrade();
         let ready = self
             .image_snapshot
@@ -2404,6 +2469,11 @@ impl Render for SourcePresentation {
         {
             self.render_generation += 1;
             for leaf in &self.projection.leaves[visible.clone()] {
+                let language = if self.live && self.blocks.get(&leaf.id).is_none_or(|cached| cached.version != leaf.version) {
+                    self.code_language(leaf, cx)
+                } else {
+                    None
+                };
                 let cached = self.blocks.entry(leaf.id).or_insert_with(|| CachedBlock {
                     version: u64::MAX,
                     seen: 0,
@@ -2412,7 +2482,7 @@ impl Render for SourcePresentation {
                 if cached.version != leaf.version {
                     if self.live && matches!(leaf.kind, Kind::Code(_) | Kind::Mermaid(_)) {
                         cached.node = BlockNode::CodeBlock(
-                            CodeBlock::from_code(leaf.text.clone(), None::<SharedString>)
+                            CodeBlock::from_code(leaf.text.clone(), language)
                                 .with_leaf_key(leaf.id),
                         );
                         cached.version = leaf.version;
@@ -2617,6 +2687,11 @@ impl Render for SourcePresentation {
             } else {
                 rendered.into_any_element()
             };
+            let rendered = if self.live && matches!(leaf.kind, Kind::Code(_)) {
+                self.code_controls(leaf, rendered, cx)
+            } else {
+                rendered
+            };
             let rendered = if self.live && !matches!(leaf.kind, Kind::TableCell(_)) {
                 let field = super::mdx::view::FieldContext::new(
                     &self.projection,
@@ -2628,6 +2703,8 @@ impl Render for SourcePresentation {
             } else {
                 rendered
             };
+            let rendered = if self.live { self.image_surface(leaf, rendered, cx) } else { rendered };
+            let rendered = self.render_property_leaf(leaf, rendered, cx);
             block = block.child(MeasuredBlock {
                 view: cx.entity(),
                 id: leaf.id,
@@ -2711,6 +2788,7 @@ impl Render for SourcePresentation {
                             row.child(div().flex_1().min_w_0().child(rendered))
                                 .into_any_element()
                         } else {
+
                             rendered
                         }
                     })
@@ -2849,7 +2927,13 @@ impl Render for SourcePresentation {
                     }
                 })
                 .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
+                    if this.image_key(event, window, cx) { cx.stop_propagation(); return; }
                     let key = &event.keystroke;
+                    if key.modifiers.shift && key.key == "f10" && !key.modifiers.control && !key.modifiers.alt && !key.modifiers.platform {
+                        window.dispatch_action(Box::new(spelling::SpellingSuggestions), cx);
+                        cx.stop_propagation();
+                        return;
+                    }
                     if this.live && key.modifiers.alt && !key.modifiers.control && !key.modifiers.platform
                         && matches!(key.key.as_str(), "pageup" | "pagedown") {
                         let target = super::mdx::tabs::adjacent(&this.projection.mdx.components, this.document.read(cx).source(), &this.mdx_state, this.state.selection, key.key == "pageup");
@@ -2872,6 +2956,28 @@ impl Render for SourcePresentation {
                     cx.stop_propagation();
                 }))
                 .on_action(cx.listener(|view, _: &LoadImages, _, cx| view.refresh_images(true, cx)))
+                .on_action(cx.listener(|this, _: &formats::Bold, window, cx| this.format_command(formats::Format::Bold, None, window, cx)))
+                .on_action(cx.listener(|this, _: &formats::Italic, window, cx| this.format_command(formats::Format::Italic, None, window, cx)))
+                .on_action(cx.listener(|this, _: &formats::Underline, window, cx| this.format_command(formats::Format::Underline, None, window, cx)))
+                .on_action(cx.listener(|this, _: &formats::Strike, window, cx| this.format_command(formats::Format::Strike, None, window, cx)))
+                .on_action(cx.listener(|this, _: &formats::InlineCode, window, cx| this.format_command(formats::Format::Code, None, window, cx)))
+                .on_action(cx.listener(|this, _: &formats::Highlight, window, cx| this.format_command(formats::Format::Highlight, None, window, cx)))
+                .on_action(cx.listener(|this, _: &formats::ClearHighlightColor, window, cx| this.format_command(formats::Format::HighlightColor, None, window, cx)))
+                .on_action(cx.listener(|this, action: &formats::SetHighlightColor, window, cx| this.format_command(formats::Format::HighlightColor, Some(action.color), window, cx)))
+                .on_action(cx.listener(|this, _: &formats::CustomHighlightColor, window, cx| this.custom_format_color(formats::Format::HighlightColor, window, cx)))
+                .on_action(cx.listener(|this, _: &formats::ApplyCustomColor, window, cx| this.apply_format_color(window, cx)))
+                .on_action(cx.listener(|this, _: &formats::CancelCustomColor, window, cx| { this.cancel_format_color(window, cx); }))
+                .on_action(cx.listener(|view, _: &image_edit::EditImage, window, cx| view.edit_image(window, cx)))
+                .on_action(cx.listener(|view, _: &image_edit::PreviewImage, window, cx| view.preview_image(window, cx)))
+                .on_action(cx.listener(|view, _: &image_edit::DeleteImage, window, cx| view.delete_image(window, cx)))
+                .on_action(cx.listener(|view, _: &image_edit::FitImages, window, cx| view.fit_images(window, cx)))
+                .on_mouse_move(cx.listener(|view, event: &MouseMoveEvent, _, cx| {
+                    if view.move_image_resize(event.position, cx) { cx.stop_propagation(); }
+                }))
+                .on_action(cx.listener(|this, _: &properties::EditDocumentProperties, window, cx| this.open_properties(window, cx)))
+                .on_action(cx.listener(|this, _: &properties::AddDocumentProperty, window, cx| this.add_document_property(false, window, cx)))
+                .on_action(cx.listener(|this, _: &properties::AddDocumentTag, window, cx| this.add_document_property(true, window, cx)))
+                .on_action(cx.listener(|view, _: &spelling::SpellingSuggestions, window, cx| view.open_spelling(None, window, cx)))
                 .on_action(cx.listener(|this, _: &mermaid_authoring::EditDiagramSource, window, cx| {
                     this.edit_mermaid_source(None, window, cx);
                 }))
@@ -2906,6 +3012,7 @@ impl Render for SourcePresentation {
                 .on_mouse_up(
                     MouseButton::Left,
                     cx.listener(|this, event: &MouseUpEvent, window, cx| {
+                        if this.finish_image_resize(false, window, cx) { cx.stop_propagation(); return; }
                         this.dragging = false;
                         this.drag_pointer = None;
                         this.drag_origin = None;
@@ -2917,7 +3024,8 @@ impl Render for SourcePresentation {
                 )
                 .on_mouse_up_out(
                     MouseButton::Left,
-                    cx.listener(|this, _, _, _| {
+                    cx.listener(|this, _, window, cx| {
+                        this.finish_image_resize(false, window, cx);
                         this.dragging = false;
                         this.drag_pointer = None;
                         this.drag_origin = None;
@@ -2966,13 +3074,13 @@ impl Render for SourcePresentation {
                     cx.propagate();
                 }))
                 .on_action(cx.listener(|this, _: &actions::Backspace, window, cx| {
-                    this.delete_prose(true, window, cx)
+                    if !this.delete_document_property_boundary(true, window, cx) { this.delete_prose(true, window, cx); }
                 }))
                 .on_action(cx.listener(|this, _: &actions::Delete, window, cx| {
-                    this.delete_prose(false, window, cx)
+                    if !this.delete_document_property_boundary(false, window, cx) { this.delete_prose(false, window, cx); }
                 }))
                 .on_action(cx.listener(|this, action: &actions::Enter, window, cx| {
-                    this.enter(action.shift, window, cx)
+                    if !this.enter_document_property(window, cx) { this.enter(action.shift, window, cx); }
                 }))
                 .on_action(cx.listener(|this, _: &actions::Indent, window, cx| {
                     this.indent_selection(false, window, cx)
@@ -3053,10 +3161,12 @@ impl Render for SourcePresentation {
                     this.move_cursor(1, 0, false, None, window, cx)
                 }))
                 .on_action(cx.listener(|this, _: &actions::MoveUp, window, cx| {
-                    this.move_cursor(0, -1, false, None, window, cx)
+                    this.move_cursor(0, -1, false, None, window, cx);
+                    this.enter_document_property(window, cx);
                 }))
                 .on_action(cx.listener(|this, _: &actions::MoveDown, window, cx| {
-                    this.move_cursor(0, 1, false, None, window, cx)
+                    this.move_cursor(0, 1, false, None, window, cx);
+                    this.enter_document_property(window, cx);
                 }))
                 .on_action(cx.listener(
                     |this, _: &gpui_kit::base::actions::SelectLeft, window, cx| {
@@ -3127,12 +3237,19 @@ impl Render for SourcePresentation {
                     );
                 }))
                 .on_action(cx.listener(|this, _: &actions::Escape, window, cx| {
+                    if this.finish_image_resize(true, window, cx) { return; }
+                    if this.cancel_image_insertion(cx) { return; }
                     if this.state.composition.is_some() {
                         this.command(Command::CancelComposition, window, cx);
+                    } else if this.cancel_format_color(window, cx) {
+                    } else if this.escape_document_properties(window, cx) {
+                        // The document inspector returns focus without a source transaction.
                     } else if this.leave_mermaid_result(window, cx) {
                         // Escape restores the retained diagram source selection.
                     } else if this.navigate_table(super::tables::Navigation::Exit { backward: false }, window, cx) {
                         // Escape leaves the table without changing its source.
+                    } else if this.exit_code(window, cx) {
+                        // Escape returns from local source, or leaves the code block.
                     } else {
                         cx.propagate();
                     }
@@ -3142,6 +3259,16 @@ impl Render for SourcePresentation {
                         .flex_shrink_0().aria_label(status.clone()).text_sm().text_color(cx.theme().muted_foreground).child(status)
                 ))
                 .child(image_status)
+                .child(self.format_toolbar(window, cx))
+                .child(self.image_toolbar(cx))
+                .when(self.live, |root| {
+                    use gpui_kit::component::{Sizable as _, button::{Button, ButtonVariants as _}};
+                    root.child(div().on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                        .child(Button::new("markdown-properties").small().ghost()
+                            .label(t(L10nKey::EditorDocumentProperties))
+                            .on_click(cx.listener(|this, _, window, cx| this.open_properties(window, cx)))))
+                        .when(self.properties.open, |root| root.child(self.render_properties(cx)))
+                })
                 .when(self.live, |root| root.child(self.table_insert_button(cx)))
                 .when(self.live && self.projection.links.at(self.state.selection.head()).is_some(), |root| {
                     use gpui_kit::component::button::{Button, ButtonVariants as _};
@@ -3181,6 +3308,11 @@ impl Render for SourcePresentation {
                                 .p(rems(typography::inset(self.live)))
                                 .capture_any_mouse_down(cx.listener(
                                     |this, event: &MouseDownEvent, window, cx| {
+                                        if event.button == MouseButton::Right && this.spelling_at_point(event.position, cx).is_some() {
+                                            this.open_spelling(Some(event.position), window, cx);
+                                            cx.stop_propagation();
+                                            return;
+                                        }
                                         if event.button != MouseButton::Left
                                             || !this.geometry.as_ref().is_some_and(|(revision, geometry)| {
                                                 *revision == this.document.read(cx).revision()
@@ -3203,6 +3335,8 @@ impl Render for SourcePresentation {
                         ),
                     &self.scroll,
                 ));
+        let root = self.code_actions(root, cx);
+        let root = root.children(self.spelling_overlay(window, cx));
         SourceElement {
             child: root.into_any_element(),
             view: cx.entity(),
@@ -3548,6 +3682,7 @@ impl Element for SourceElement {
         cx: &mut App,
     ) {
         self.child.paint(window, cx);
+        self.view.read(cx).paint_spelling(window, cx);
         let view = self.view.clone();
         window.on_mouse_event(move |event: &MouseMoveEvent, phase, window, cx| {
             if !phase.bubble() || (!view.read(cx).dragging && view.read(cx).pointer_link.is_none())

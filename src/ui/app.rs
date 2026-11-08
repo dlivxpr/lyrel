@@ -4268,6 +4268,7 @@ impl LyrelApp {
             ShowRightPanel(tab) => self.set_right_panel_tab(tab, cx),
             ResetFontSize => self.reset_font_size(cx),
             FindInTerminal => {
+                if self.editor_markdown_search(false, window, cx) { return; }
                 if let Some(leaf) = self.focused_leaf(window, cx) {
                     leaf.update(cx, |view, cx| view.open_search(window, cx));
                 }
@@ -4278,11 +4279,13 @@ impl LyrelApp {
                 }
             }
             FindNext => {
+                if self.editor_markdown_find_step(true, window, cx) { return; }
                 if let Some(leaf) = self.focused_leaf(window, cx) {
                     leaf.update(cx, |view, cx| view.find_step(true, cx));
                 }
             }
             FindPrevious => {
+                if self.editor_markdown_find_step(false, window, cx) { return; }
                 if let Some(leaf) = self.focused_leaf(window, cx) {
                     leaf.update(cx, |view, cx| view.find_step(false, cx));
                 }
