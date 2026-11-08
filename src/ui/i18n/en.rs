@@ -1974,9 +1974,15 @@ pub fn translate_en(key: L10nKey) -> &'static str {
             "The anchor was not found or is not unique in this document"
         }
         L10nKey::MarkdownReferenceLoading => "Looking up workspace references…",
-        L10nKey::MarkdownReferenceNoMatches => "No matching file or anchor. No file will be created.",
-        L10nKey::MarkdownReferenceUnreadable => "The reference target could not be read. Check the Host connection and permissions.",
-        L10nKey::MarkdownReferenceAmbiguous => "More than one file or anchor matches. Use an explicit path and a unique anchor.",
+        L10nKey::MarkdownReferenceNoMatches => {
+            "No matching file or anchor. No file will be created."
+        }
+        L10nKey::MarkdownReferenceUnreadable => {
+            "The reference target could not be read. Check the Host connection and permissions."
+        }
+        L10nKey::MarkdownReferenceAmbiguous => {
+            "More than one file or anchor matches. Use an explicit path and a unique anchor."
+        }
         L10nKey::MarkdownReferenceMissing => "The reference target does not exist. Edit the source to choose another file.",
         L10nKey::MarkdownEmbedChanged => "The target changed while being read. The fragment will refresh shortly.",
         L10nKey::MarkdownEmbedReadonly => "Readonly fragment",

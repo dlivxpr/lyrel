@@ -96,20 +96,42 @@ impl SourcePresentation {
             .source()
             .line_start_offset(document.source().offset_to_point(end).row);
         let line = document.source().slice(start..end).to_string();
-        let trigger = [("[[", false), ("((", true), ("#", false)].into_iter().filter_map(|(delimiter, anchors)| {
-            let at = line.rfind(delimiter)?;
-            if at > 0 && line.as_bytes()[at - 1] == b'\\' { return None; }
-            if at > 1 && line.as_bytes()[at - 1] == b'!' && line.as_bytes()[at - 2] == b'\\' { return None; }
-            let query = &line[at + delimiter.len()..];
-            if delimiter == "#" {
-                if at > 0 && !line[..at].chars().next_back().is_some_and(char::is_whitespace) { return None; }
-                if query.is_empty() { return None; }
-            }
-            if query.contains(['\n', ']', ')']) || query.starts_with(' ') { return None; }
-            if anchors && query.chars().count() < 2 { return None; }
-            Some((at, delimiter, anchors))
-        }).min_by_key(|(at, _, _)| *at);
-        let Some((at, delimiter, anchors)) = trigger else { return; };
+        let trigger = [("[[", false), ("((", true), ("#", false)]
+            .into_iter()
+            .filter_map(|(delimiter, anchors)| {
+                let at = line.rfind(delimiter)?;
+                if at > 0 && line.as_bytes()[at - 1] == b'\\' {
+                    return None;
+                }
+                if at > 1 && line.as_bytes()[at - 1] == b'!' && line.as_bytes()[at - 2] == b'\\' {
+                    return None;
+                }
+                let query = &line[at + delimiter.len()..];
+                if delimiter == "#" {
+                    if at > 0
+                        && !line[..at]
+                            .chars()
+                            .next_back()
+                            .is_some_and(char::is_whitespace)
+                    {
+                        return None;
+                    }
+                    if query.is_empty() {
+                        return None;
+                    }
+                }
+                if query.contains(['\n', ']', ')']) || query.starts_with(' ') {
+                    return None;
+                }
+                if anchors && query.chars().count() < 2 {
+                    return None;
+                }
+                Some((at, delimiter, anchors))
+            })
+            .min_by_key(|(at, _, _)| *at);
+        let Some((at, delimiter, anchors)) = trigger else {
+            return;
+        };
         let embed = delimiter != "#" && at > 0 && line.as_bytes()[at - 1] == b'!';
         // Positioned code/math/object regions retain their ordinary input behavior.
         if self
@@ -126,9 +148,25 @@ impl SourcePresentation {
         let revision = document.revision();
         let resource_epoch = Some((resources.host().id(), resources.epoch()));
         let cancelled = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
-        let closing = match delimiter { "[[" => "]]", "((" => "))", _ => "" };
-        let suffix = document.source().chars_at(end).zip(closing.chars()).take_while(|(a, b)| a == b).count();
-        self.references.target = Some(Target { range: start + at - usize::from(embed)..end + suffix, embed, cursor: end, revision, resources, cancelled: cancelled.clone() });
+        let closing = match delimiter {
+            "[[" => "]]",
+            "((" => "))",
+            _ => "",
+        };
+        let suffix = document
+            .source()
+            .chars_at(end)
+            .zip(closing.chars())
+            .take_while(|(a, b)| a == b)
+            .count();
+        self.references.target = Some(Target {
+            range: start + at - usize::from(embed)..end + suffix,
+            embed,
+            cursor: end,
+            revision,
+            resources,
+            cancelled: cancelled.clone(),
+        });
         self.references.status = Some(L10nKey::MarkdownReferenceLoading);
         let presentation = cx.weak_entity();
         let generation = self.references.generation;
@@ -237,7 +275,12 @@ impl SourcePresentation {
         } else {
             text.push('[');
             for ch in item.label().chars() {
-                if matches!(ch, '\\' | '[' | ']' | '*' | '_' | '`' | '~' | '<' | '>' | '&' | '|') { text.push('\\'); }
+                if matches!(
+                    ch,
+                    '\\' | '[' | ']' | '*' | '_' | '`' | '~' | '<' | '>' | '&' | '|'
+                ) {
+                    text.push('\\');
+                }
                 text.push(ch);
             }
             text.push_str("](");

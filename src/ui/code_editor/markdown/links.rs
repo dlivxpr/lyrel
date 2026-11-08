@@ -58,9 +58,13 @@ impl Index {
                             break;
                         };
                         cursor = end + closing.len();
-                        if start > 0 && raw.as_bytes()[start - 1] == b'\\' { continue; }
+                        if start > 0 && raw.as_bytes()[start - 1] == b'\\' {
+                            continue;
+                        }
                         let embed = start > 0 && raw.as_bytes()[start - 1] == b'!';
-                        if embed && start > 1 && raw.as_bytes()[start - 2] == b'\\' { continue; }
+                        if embed && start > 1 && raw.as_bytes()[start - 2] == b'\\' {
+                            continue;
+                        }
                         let inside = &raw[body..end];
                         let (target, label) = inside.split_once('|').unwrap_or((inside, inside));
                         if target.is_empty()
@@ -70,7 +74,11 @@ impl Index {
                             continue;
                         }
                         let destination = range.start + body..range.start + body + target.len();
-                        let label_start = if label == inside { body } else { body + target.len() + 1 };
+                        let label_start = if label == inside {
+                            body
+                        } else {
+                            body + target.len() + 1
+                        };
                         let references = if embed { &mut index.embeds } else { &mut index.links };
                         references.push(Link {
                             source: range.start + start - usize::from(embed)..range.start + cursor,

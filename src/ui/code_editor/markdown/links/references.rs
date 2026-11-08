@@ -260,9 +260,16 @@ pub(crate) fn anchor_position(
 
 pub(crate) fn file_path(host: &dyn Host, path: &Path) -> Result<PathBuf, L10nKey> {
     match host.stat(path) {
-        Ok(_) => return host.canonicalize(path).map_err(|_| L10nKey::MarkdownReferenceUnreadable),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound && path.extension().is_none() => {},
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Err(L10nKey::MarkdownReferenceMissing),
+        Ok(_) => {
+            return host
+                .canonicalize(path)
+                .map_err(|_| L10nKey::MarkdownReferenceUnreadable);
+        }
+        Err(error)
+            if error.kind() == std::io::ErrorKind::NotFound && path.extension().is_none() => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return Err(L10nKey::MarkdownReferenceMissing);
+        }
         Err(_) => return Err(L10nKey::MarkdownReferenceUnreadable),
     }
     let mut found = None;
@@ -281,5 +288,6 @@ pub(crate) fn file_path(host: &dyn Host, path: &Path) -> Result<PathBuf, L10nKey
         }
     }
     let path = found.ok_or(L10nKey::MarkdownReferenceMissing)?;
-    host.canonicalize(&path).map_err(|_| L10nKey::MarkdownReferenceUnreadable)
+    host.canonicalize(&path)
+        .map_err(|_| L10nKey::MarkdownReferenceUnreadable)
 }
