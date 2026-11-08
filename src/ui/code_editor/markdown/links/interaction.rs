@@ -27,17 +27,31 @@ impl SourcePresentation {
         if self.projection.revision != self.document.read(cx).revision() {
             return;
         }
-        let Some(range) = self.projection.links.at(self.state.selection.head())
-            .map(|link| link.destination.clone()) else {
+        let Some(range) = self
+            .projection
+            .links
+            .at(self.state.selection.head())
+            .map(|link| link.destination.clone())
+        else {
             return;
         };
-        self.command(Command::Select(Selection::new(range.start, range.end)), window, cx);
+        self.command(
+            Command::Select(Selection::new(range.start, range.end)),
+            window,
+            cx,
+        );
         self.focus.focus(window, cx);
     }
 
-    fn pointer_link_at(&self, position: Point<Pixels>, cx: &App) -> Option<(&super::super::links::Link, usize)> {
-        if !self.live || self.state.composition.is_some()
-            || self.projection.revision != self.document.read(cx).revision() {
+    fn pointer_link_at(
+        &self,
+        position: Point<Pixels>,
+        cx: &App,
+    ) -> Option<(&super::super::links::Link, usize)> {
+        if !self.live
+            || self.state.composition.is_some()
+            || self.projection.revision != self.document.read(cx).revision()
+        {
             return None;
         }
         let at = self.point_offset(position, cx)?;
@@ -47,7 +61,8 @@ impl SourcePresentation {
 
     pub(super) fn begin_pointer_link(&mut self, event: &MouseDownEvent, cx: &App) -> bool {
         self.pointer_link = None;
-        if event.button != MouseButton::Left || event.click_count != 1 || !modifier(event.modifiers) {
+        if event.button != MouseButton::Left || event.click_count != 1 || !modifier(event.modifiers)
+        {
             return false;
         }
         if let Some((link, at)) = self.pointer_link_at(event.position, cx) {
@@ -63,13 +78,22 @@ impl SourcePresentation {
         self.pointer_link.is_some()
     }
 
-    pub(super) fn move_pointer_link(&mut self, event: &MouseMoveEvent, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(gesture) = self.pointer_link.as_ref() else { return };
+    pub(super) fn move_pointer_link(
+        &mut self,
+        event: &MouseMoveEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(gesture) = self.pointer_link.as_ref() else {
+            return;
+        };
         if event.pressed_button != Some(MouseButton::Left) {
             self.pointer_link = None;
             return;
         }
-        if !gesture.moved(event.position, window) { return; }
+        if !gesture.moved(event.position, window) {
+            return;
+        }
         let gesture = self.pointer_link.take().unwrap();
         // A modifier drag is still a text selection, not a delayed navigation.
         // Seed the existing selection engine from the captured source offset;
@@ -80,24 +104,45 @@ impl SourcePresentation {
         self.drag_pointer = Some(event.position);
     }
 
-    pub(super) fn finish_pointer_link(&mut self, position: Point<Pixels>, modifiers: Modifiers, window: &Window, cx: &mut Context<Self>) {
-        let Some(gesture) = self.pointer_link.take() else { return };
+    pub(super) fn finish_pointer_link(
+        &mut self,
+        position: Point<Pixels>,
+        modifiers: Modifiers,
+        window: &Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(gesture) = self.pointer_link.take() else {
+            return;
+        };
         let document = self.document.read(cx);
         let same_owner = match (&gesture.resources, document.resources()) {
             (Some(owner), current) => owner.is_current(current),
             (None, None) => true,
             _ => false,
         };
-        if modifier(modifiers) && !gesture.moved(position, window) && same_owner
+        if modifier(modifiers)
+            && !gesture.moved(position, window)
+            && same_owner
             && document.revision() == gesture.revision
-            && self.pointer_link_at(position, cx).is_some_and(|(link, _)| link.source == gesture.source && link.target == gesture.target) {
+            && self.pointer_link_at(position, cx).is_some_and(|(link, _)| {
+                link.source == gesture.source && link.target == gesture.target
+            })
+        {
             self.follow_link(gesture.target, cx);
         }
     }
 
-    pub(crate) fn link_menu(&self, menu: gpui_kit::component::menu::PopupMenu, cx: &App) -> gpui_kit::component::menu::PopupMenu {
-        if self.projection.revision != self.document.read(cx).revision() { return menu; }
-        let Some(link) = self.projection.links.at(self.state.selection.head()) else { return menu };
+    pub(crate) fn link_menu(
+        &self,
+        menu: gpui_kit::component::menu::PopupMenu,
+        cx: &App,
+    ) -> gpui_kit::component::menu::PopupMenu {
+        if self.projection.revision != self.document.read(cx).revision() {
+            return menu;
+        }
+        let Some(link) = self.projection.links.at(self.state.selection.head()) else {
+            return menu;
+        };
         let label = if !link.source.contains(&link.destination.start) {
             L10nKey::MarkdownEditReferenceDestination
         } else {

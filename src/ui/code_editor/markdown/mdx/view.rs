@@ -272,11 +272,11 @@ fn render_component(
                 cx.stop_propagation();
             }
         }))
-        .on_action(cx.listener(
-            |this, _: &gpui_kit::component::input::Escape, window, cx| {
+        .on_action(
+            cx.listener(|this, _: &gpui_kit::component::input::Escape, window, cx| {
                 return_text_focus(this, window, cx);
-            },
-        ))
+            }),
+        )
         .child(content)
         .into_any_element()
 }

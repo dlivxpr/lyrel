@@ -114,7 +114,11 @@ impl Prefix {
     fn outer_quotes(&self) -> usize {
         self.quotes
             .iter()
-            .take_while(|quote| self.marker.as_ref().is_none_or(|marker| quote.start < marker.start))
+            .take_while(|quote| {
+                self.marker
+                    .as_ref()
+                    .is_none_or(|marker| quote.start < marker.start)
+            })
             .count()
     }
     fn list_indent(&self, text: &str, quotes: usize) -> Range<usize> {
@@ -122,8 +126,16 @@ impl Prefix {
         // Move that indentation, not whitespace inside the quoted text.
         self.quotes
             .get(quotes)
-            .filter(|quote| self.marker.as_ref().is_none_or(|marker| quote.start < marker.start))
-            .and_then(|quote| text[quote.clone()].find('>').map(|at| quote.start..quote.start + at))
+            .filter(|quote| {
+                self.marker
+                    .as_ref()
+                    .is_none_or(|marker| quote.start < marker.start)
+            })
+            .and_then(|quote| {
+                text[quote.clone()]
+                    .find('>')
+                    .map(|at| quote.start..quote.start + at)
+            })
             .unwrap_or_else(|| self.indent.clone())
     }
     fn marker_style(&self, line: &str) -> Option<Marker> {
@@ -274,13 +286,19 @@ pub(super) fn line_break(
 
 fn column(text: &str, end: usize) -> usize {
     text.as_bytes()[..end].iter().fold(0, |column, byte| {
-        if *byte == b'\t' { column + 4 - column % 4 } else { column + 1 }
+        if *byte == b'\t' {
+            column + 4 - column % 4
+        } else {
+            column + 1
+        }
     })
 }
 
 fn outdent_edit(text: &str, indent: Range<usize>, width: usize) -> Option<(Range<usize>, String)> {
     let mut at_column = column(text, indent.start);
-    let target = column(text, indent.end).saturating_sub(width).max(at_column);
+    let target = column(text, indent.end)
+        .saturating_sub(width)
+        .max(at_column);
     for at in indent.clone() {
         let next = if text.as_bytes()[at] == b'\t' {
             at_column + 4 - at_column % 4
@@ -417,7 +435,11 @@ pub(super) fn indent(
             }
             let previous_indent = previous.list_indent(&text, quotes);
             let previous_column = column(&text, previous_indent.end);
-            if let Some(marker) = previous.marker.as_ref().filter(|_| previous.outer_quotes() == quotes) {
+            if let Some(marker) = previous
+                .marker
+                .as_ref()
+                .filter(|_| previous.outer_quotes() == quotes)
+            {
                 if previous_column == first_column {
                     step = column(&text, marker.end) - column(&text, marker.start);
                     parent = true;
@@ -466,7 +488,8 @@ pub(super) fn indent(
             // Compare the actual next container's source column, not just its
             // quote count: an unindented quote after a list is not its child.
             candidate.outer_quotes() >= tail.outer_quotes()
-                && column(&text, candidate.list_indent(&text, tail.outer_quotes()).end) > tail_column
+                && column(&text, candidate.list_indent(&text, tail.outer_quotes()).end)
+                    > tail_column
         } else {
             candidate.quotes.len() > tail.quotes.len()
                 || (candidate.quotes.len() == tail.quotes.len()
@@ -492,7 +515,9 @@ pub(super) fn indent(
             prefix.indent.clone()
         };
         let indentation_column = column(&text, indentation.end);
-        if outdent && first.marker.is_some() && prefix.marker.is_some()
+        if outdent
+            && first.marker.is_some()
+            && prefix.marker.is_some()
             && indentation_column < group_indent
         {
             // A shallower selected item begins a new subtree. A root item is
@@ -509,7 +534,12 @@ pub(super) fn indent(
                 edits.push((start + quote.start..start + quote.end, String::new()));
             }
         } else {
-            let insertion = start + if first.marker.is_some() { indentation.end } else { indentation.start };
+            let insertion = start
+                + if first.marker.is_some() {
+                    indentation.end
+                } else {
+                    indentation.start
+                };
             edits.push((
                 insertion..insertion,
                 if first.marker.is_some() {
@@ -569,7 +599,11 @@ mod tests {
         let mut state = PresentationState::new(Selection::caret(first));
         document.command(
             &mut state,
-            Command::ListIndent { outdent: false, width: 4, at: None },
+            Command::ListIndent {
+                outdent: false,
+                width: 4,
+                at: None,
+            },
         );
         assert_eq!(document.source().to_string(), original);
         assert_eq!(state.selection(), Selection::caret(first));
@@ -579,7 +613,11 @@ mod tests {
         document.command(&mut state, Command::Select(selection));
         document.command(
             &mut state,
-            Command::ListIndent { outdent: false, width: 4, at: None },
+            Command::ListIndent {
+                outdent: false,
+                width: 4,
+                at: None,
+            },
         );
         assert_eq!(
             document.source().to_string(),
@@ -593,7 +631,13 @@ mod tests {
         assert_eq!(document.source().to_string(), original);
         assert_eq!(state.selection(), selection);
         document.command(&mut state, Command::Select(Selection::caret(first + 5)));
-        document.command(&mut state, Command::ListBreak { hard: false, at: None });
+        document.command(
+            &mut state,
+            Command::ListBreak {
+                hard: false,
+                at: None,
+            },
+        );
         assert_eq!(
             document.source().to_string(),
             "- earlier\n\nparagraph\n\n007) first\n008) \n009) target\n     > child\n> unrelated\n\n42. untouched"
@@ -610,7 +654,11 @@ mod tests {
         let mut state = PresentationState::new(Selection::caret(at));
         document.command(
             &mut state,
-            Command::ListIndent { outdent: false, width: 4, at: None },
+            Command::ListIndent {
+                outdent: false,
+                width: 4,
+                at: None,
+            },
         );
         assert_eq!(
             document.source().to_string(),
@@ -618,13 +666,23 @@ mod tests {
         );
         document.command(
             &mut state,
-            Command::ListIndent { outdent: true, width: 4, at: None },
+            Command::ListIndent {
+                outdent: true,
+                width: 4,
+                at: None,
+            },
         );
         assert_eq!(document.source().to_string(), original);
         assert_eq!(state.selection(), Selection::caret(at));
         let mut document = MarkdownDocument::new("-\ttext".into(), TextFormat::default());
         let mut state = PresentationState::new(Selection::caret(6));
-        document.command(&mut state, Command::ListBreak { hard: true, at: None });
+        document.command(
+            &mut state,
+            Command::ListBreak {
+                hard: true,
+                at: None,
+            },
+        );
         assert_eq!(document.source().to_string(), "-\ttext  \n    ");
         document.command(&mut state, Command::Undo);
         assert_eq!(document.source().to_string(), "-\ttext");
@@ -641,7 +699,11 @@ mod tests {
         let mut state = PresentationState::new(selection);
         document.command(
             &mut state,
-            Command::ListIndent { outdent: true, width: 4, at: None },
+            Command::ListIndent {
+                outdent: true,
+                width: 4,
+                at: None,
+            },
         );
         assert_eq!(
             document.source().to_string(),
@@ -661,7 +723,11 @@ mod tests {
         );
         document.command(
             &mut state,
-            Command::ListIndent { outdent: true, width: 4, at: None },
+            Command::ListIndent {
+                outdent: true,
+                width: 4,
+                at: None,
+            },
         );
         assert_eq!(
             document.source().to_string(),

@@ -902,14 +902,22 @@ fn markdown_clean_reload_survives_selection_and_group_handoff_without_overwritin
     wait_until(&mut vcx, |vcx| active_id(&app, vcx).is_some());
     start_active_markdown_in_source(&app, &mut vcx);
     let first = app.read_with(&vcx, |app, _| {
-        app.active_editor_input().unwrap().markdown().unwrap().clone()
+        app.active_editor_input()
+            .unwrap()
+            .markdown()
+            .unwrap()
+            .clone()
     });
     app.update_in(&mut vcx, |app, window, cx| {
         assert!(app.editor_split(window, cx));
     });
     start_active_markdown_in_source(&app, &mut vcx);
     let second = app.read_with(&vcx, |app, _| {
-        app.active_editor_input().unwrap().markdown().unwrap().clone()
+        app.active_editor_input()
+            .unwrap()
+            .markdown()
+            .unwrap()
+            .clone()
     });
 
     // The external-change path uses this same Host-bound reload. Pause its
@@ -933,7 +941,12 @@ fn markdown_clean_reload_survives_selection_and_group_handoff_without_overwritin
     release.send(()).unwrap();
     wait_until(&mut vcx, |vcx| {
         app.read_with(vcx, |app, cx| {
-            app.active_buffer().unwrap().input.read(cx).text().to_string()
+            app.active_buffer()
+                .unwrap()
+                .input
+                .read(cx)
+                .text()
+                .to_string()
                 == "external  \nsecond\nlast"
         })
     });
@@ -942,13 +955,20 @@ fn markdown_clean_reload_survives_selection_and_group_handoff_without_overwritin
             first.read(cx).document().entity_id(),
             second.read(cx).document().entity_id()
         );
-        assert_eq!(first.read(cx).document().read(cx).encode().unwrap(), external);
-        assert_eq!(second.read(cx).document().read(cx).encode().unwrap(), external);
+        assert_eq!(
+            first.read(cx).document().read(cx).encode().unwrap(),
+            external
+        );
+        assert_eq!(
+            second.read(cx).document().read(cx).encode().unwrap(),
+            external
+        );
     });
     vcx.dispatch_action(crate::core::actions::EditorSave);
     wait_until(&mut vcx, |vcx| {
         app.read_with(vcx, |app, _| {
-            app.active_buffer().is_some_and(|file| !file.dirty && !file.saving)
+            app.active_buffer()
+                .is_some_and(|file| !file.dirty && !file.saving)
         })
     });
     assert_eq!(std::fs::read(&path).unwrap(), external);
@@ -2547,7 +2567,9 @@ fn mdx_unicode_reference_with_indented_definition_opens_on_its_document_host(
 }
 
 #[gpui_kit::test]
-fn markdown_link_same_named_hosts_are_isolated_and_failed_targets_keep_edits(cx: &mut TestAppContext) {
+fn markdown_link_same_named_hosts_are_isolated_and_failed_targets_keep_edits(
+    cx: &mut TestAppContext,
+) {
     use gpui_kit::{Focusable as _, test::TestWindowExt as _};
     let first = tempfile::tempdir().unwrap();
     let second = tempfile::tempdir().unwrap();
@@ -2567,16 +2589,25 @@ fn markdown_link_same_named_hosts_are_isolated_and_failed_targets_keep_edits(cx:
     app.update_in(&mut context, |app, window, cx| {
         app.editor_open_on_host(second_host.clone(), Path::new("/start.md"), window, cx)
     });
-    wait_until(&mut context, |cx| active_id(&app, cx).is_some_and(|id| id != first_id));
+    wait_until(&mut context, |cx| {
+        active_id(&app, cx).is_some_and(|id| id != first_id)
+    });
     start_active_markdown_in_source(&app, &mut context);
     let source_id = active_id(&app, &context).unwrap();
     let view = app.read_with(&context, |app, _| {
-        app.active_editor_input().unwrap().markdown().unwrap().clone()
+        app.active_editor_input()
+            .unwrap()
+            .markdown()
+            .unwrap()
+            .clone()
     });
     context.dispatch_action(crate::core::actions::ToggleDocumentPreview);
     let jump = original.replace("\r\n", "\n").find("jump").unwrap();
     wait_until(&mut context, |cx| {
-        cx.update(|window, cx| { window.render_frame(cx); window.render_frame(cx); });
+        cx.update(|window, cx| {
+            window.render_frame(cx);
+            window.render_frame(cx);
+        });
         view.read_with(cx, |view, cx| {
             let label = view.range_to_bounds(&(jump..jump), cx);
             label.is_some() && label == view.range_to_bounds(&(jump - 1..jump - 1), cx)
@@ -2587,14 +2618,19 @@ fn markdown_link_same_named_hosts_are_isolated_and_failed_targets_keep_edits(cx:
         view.focus_handle(cx).focus(window, cx);
     });
     context.dispatch_action(markdown::FollowLink);
-    wait_until(&mut context, |cx| active_id(&app, cx).is_some_and(|id| id != source_id));
+    wait_until(&mut context, |cx| {
+        active_id(&app, cx).is_some_and(|id| id != source_id)
+    });
     app.read_with(&context, |app, cx| {
         let file = app.active_buffer().unwrap();
         assert_ne!(file.id(), first_id);
         assert_eq!(file.host.id(), HostId(742));
         assert_eq!(file.path, Path::new("/next.md"));
         assert_eq!(file.input.read(cx).text().to_string(), "second Host target");
-        assert_eq!(view.read(cx).document().read(cx).encode().unwrap(), original.as_bytes());
+        assert_eq!(
+            view.read(cx).document().read(cx).encode().unwrap(),
+            original.as_bytes()
+        );
     });
     app.update_in(&mut context, |app, window, cx| {
         app.editor_open_on_host(second_host.clone(), Path::new("/start.md"), window, cx)
@@ -2612,7 +2648,8 @@ fn markdown_link_same_named_hosts_are_isolated_and_failed_targets_keep_edits(cx:
         // Wait for the production parser after typing, without bypassing the
         // action route with a direct follow_link invocation.
         wait_until(&mut context, |cx| {
-            cx.executor().advance_clock(std::time::Duration::from_millis(100));
+            cx.executor()
+                .advance_clock(std::time::Duration::from_millis(100));
             cx.update(|window, cx| {
                 window.render_frame(cx);
                 window.render_frame(cx);
@@ -2620,16 +2657,30 @@ fn markdown_link_same_named_hosts_are_isolated_and_failed_targets_keep_edits(cx:
             })
         });
         context.dispatch_action(markdown::FollowLink);
-        wait_until(&mut context, |cx| app.read_with(cx, |app, _| app.editor.buffers.pending.is_empty()));
+        wait_until(&mut context, |cx| {
+            app.read_with(cx, |app, _| app.editor.buffers.pending.is_empty())
+        });
         app.read_with(&context, |app, cx| {
             assert_eq!(app.active_buffer().unwrap().id(), source_id);
             assert!(app.active_buffer().unwrap().dirty);
-            assert_eq!(view.read(cx).document().read(cx).encode().unwrap(), format!("{original}unsaved").as_bytes());
+            assert_eq!(
+                view.read(cx).document().read(cx).encode().unwrap(),
+                format!("{original}unsaved").as_bytes()
+            );
         });
         context.update(|window, cx| assert!(view.read(cx).focus_handle(cx).is_focused(window)));
     }
-    assert_eq!(std::fs::read(second.path().join("start.md")).unwrap(), original.as_bytes());
-    assert_eq!(std::fs::read(first.path().join("next.md")).unwrap(), b"first Host target");
-    assert_eq!(std::fs::read(second.path().join("next.md")).unwrap(), b"second Host target");
+    assert_eq!(
+        std::fs::read(second.path().join("start.md")).unwrap(),
+        original.as_bytes()
+    );
+    assert_eq!(
+        std::fs::read(first.path().join("next.md")).unwrap(),
+        b"first Host target"
+    );
+    assert_eq!(
+        std::fs::read(second.path().join("next.md")).unwrap(),
+        b"second Host target"
+    );
     assert!(!second.path().join("missing.md").exists());
 }
