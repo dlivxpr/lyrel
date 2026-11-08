@@ -7,6 +7,7 @@ use gpui_kit::base::{
 use std::ops::Range;
 use unicode_segmentation::UnicodeSegmentation as _;
 
+mod blocks;
 mod images;
 pub(super) mod links;
 mod lists;
@@ -23,6 +24,7 @@ mod tables;
 pub(super) use source::FollowLink;
 pub(super) use source::SourcePresentation;
 pub(crate) use tables::bindings as table_bindings;
+pub(crate) use source::headings::bindings as block_bindings;
 #[cfg(test)]
 mod tests;
 
