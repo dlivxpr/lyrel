@@ -738,6 +738,51 @@ impl SourcePresentation {
         }
         true
     }
+    // Bound input actions run before `on_key_down`. Keep document-edge actions
+    // inside the structural row instead of committing it as a source selection.
+    pub(super) fn formula_document_edge(
+        &mut self,
+        end: bool,
+        extend: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let Some(session) = &mut self.formula else {
+            return false;
+        };
+        if !session.preedit.is_empty() {
+            return true;
+        }
+        if extend {
+            session.anchor.get_or_insert_with(|| session.cursor.clone());
+        } else {
+            session.anchor = None;
+        }
+        session.cursor = Cursor {
+            path: Vec::new(),
+            index: if end { session.root.atoms.len() } else { 0 },
+        };
+        session.refresh_geometry(false);
+        self.input_generation = self.input_generation.wrapping_add(1);
+        self.invalidate_formula_blocks();
+        window.notify_text_selection_changed(&self.focus);
+        cx.notify();
+        true
+    }
+    pub(super) fn formula_select_all(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let Some(session) = &mut self.formula else {
+            return false;
+        };
+        if !session.preedit.is_empty() {
+            return true;
+        }
+        session.anchor = Some(Cursor::start());
+        self.formula_document_edge(true, true, window, cx)
+    }
     pub(super) fn formula_key(
         &mut self,
         event: &KeyDownEvent,
@@ -760,27 +805,12 @@ impl SourcePresentation {
             return true;
         }
         match key.key.as_str() {
-            "home" | "end" if primary => {
-                let session = self.formula.as_mut().unwrap();
-                if key.modifiers.shift {
-                    session.anchor.get_or_insert_with(|| session.cursor.clone());
-                } else {
-                    session.anchor = None;
-                }
-                session.cursor = Cursor {
-                    path: Vec::new(),
-                    index: if key.key == "end" {
-                        session.root.atoms.len()
-                    } else {
-                        0
-                    },
-                };
-                session.refresh_geometry(false);
-                self.invalidate_formula_blocks();
-                window.notify_text_selection_changed(&self.focus);
-                cx.notify();
-                true
-            }
+            "home" | "end" if primary => self.formula_document_edge(
+                key.key == "end",
+                key.modifiers.shift,
+                window,
+                cx,
+            ),
             "f10" if key.modifiers.shift => {
                 self.open_formula_menu(None, window, cx);
                 true
@@ -817,18 +847,7 @@ impl SourcePresentation {
                 }
                 true
             }
-            "a" if primary => {
-                let session = self.formula.as_mut().unwrap();
-                session.anchor = Some(Cursor::start());
-                session.cursor = Cursor {
-                    path: Vec::new(),
-                    index: session.root.atoms.len(),
-                };
-                session.refresh_geometry(false);
-                self.invalidate_formula_blocks();
-                cx.notify();
-                true
-            }
+            "a" if primary => self.formula_select_all(window, cx),
             "left" if !primary && !key.modifiers.alt => {
                 self.formula_move(-1, 0, key.modifiers.shift, None, window, cx)
             }

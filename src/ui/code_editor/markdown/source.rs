@@ -3437,6 +3437,7 @@ impl Render for SourcePresentation {
                     },
                 ))
                 .on_action(cx.listener(|this, _: &actions::SelectAll, window, cx| {
+                    if this.formula_select_all(window, cx) { return; }
                     let end = this.document.read(cx).source().len();
                     this.command(Command::Select(Selection::new(0, end)), window, cx);
                 }))
@@ -3501,13 +3502,16 @@ impl Render for SourcePresentation {
                     }),
                 )
                 .on_action(cx.listener(|this, _: &actions::MoveToStart, window, cx| {
+                    if this.formula_document_edge(false, false, window, cx) { return; }
                     this.command(Command::Select(Selection::caret(0)), window, cx)
                 }))
                 .on_action(cx.listener(|this, _: &actions::MoveToEnd, window, cx| {
+                    if this.formula_document_edge(true, false, window, cx) { return; }
                     let end = this.document.read(cx).source().len();
                     this.command(Command::Select(Selection::caret(end)), window, cx);
                 }))
                 .on_action(cx.listener(|this, _: &actions::SelectToStart, window, cx| {
+                    if this.formula_document_edge(false, true, window, cx) { return; }
                     this.command(
                         Command::Select(Selection::new(this.state.selection.anchor, 0)),
                         window,
@@ -3515,6 +3519,7 @@ impl Render for SourcePresentation {
                     )
                 }))
                 .on_action(cx.listener(|this, _: &actions::SelectToEnd, window, cx| {
+                    if this.formula_document_edge(true, true, window, cx) { return; }
                     let end = this.document.read(cx).source().len();
                     this.command(
                         Command::Select(Selection::new(this.state.selection.anchor, end)),
