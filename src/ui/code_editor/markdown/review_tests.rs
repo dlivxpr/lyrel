@@ -622,7 +622,10 @@ fn native_link_grapheme_hovers_edits_and_opens(cx: &mut TestAppContext, fragment
                     let position = if fragment_tail {
                         point(a.x + reference * 0.25, a.y + geometry.caret_height() / 2.)
                     } else {
-                        point(origin + reference * 0.75, b.y + geometry.caret_height() / 2.)
+                        point(
+                            origin + reference * 0.75,
+                            b.y + geometry.caret_height() / 2.,
+                        )
                     };
                     (text == glyph
                         && a.y != b.y

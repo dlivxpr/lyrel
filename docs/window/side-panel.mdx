@@ -260,7 +260,11 @@ GitHub 上的 Markdown 来自陌生人，因此渲染时有两项限制：只加
 
 后续无探针 Debug 实窗已通过生产 Copy 检查 Windows 原始 `UnicodeText` 与 `HTML Format`；纯文本与所选源码的原始混合行尾相符，HTML 在新建 Word 文档中实际呈现标题、粗斜体、列表、代码正文、公式及链接文字。另在自有 Notepad 文件中粘贴并保存，完整正文与 Markdown 一致；Notepad 自身统一为 CRLF，不把其保存结果误报为混合行尾逐字节相同。该批证据为仓库外 `native-core-current-17941601/native-clipboard-formats.json`、`native-word-rich-paste.json` 与 `native-notepad-plain-paste.json`，不是最终 Release、系统 IME 或全量对象组合通过。
 
-正式 registry 当前的 `gpui-kit`／`gpui-base 0.9.0` 尚无正文任意 range foreground 与 soft-wrap 双 affinity 的公开接口：#209 的任意文字颜色呈现、#225 跨 soft-wrap 续行首 grapheme 的完整拼写波浪线仍未满足。不能以背景着色、重新绘字、私有 renderer 或 Git/path 补丁冒充完成；上游 `main` 上的未发布接口也不等于当前正式依赖已经可用。此缺口保留开放，其余已合入代码须按各自核心工作流实测，不据此宣布完整对齐。
+正式 registry 当前的 `gpui-kit`／`gpui-base 0.9.0` 尚无正文任意 range foreground 与显式 soft-wrap 双 affinity 的公开接口。#209 的任意文字颜色呈现仍未满足；不能以背景着色、重新绘字、私有 renderer 或 Git/path 补丁冒充完成，上游 `main` 上的未发布接口也不等于当前正式依赖已经可用。
+
+续行首 grapheme 的拼写波浪线不再整体依赖缺失的双 affinity 接口：拼写装饰与链接命中使用当前帧公开 native caret 几何恢复同一视觉行的完整 advance，区分 whole-layout 续行起点与 InlineFlow 前一片段末尾，不连接跨行矩形。无探针 Windows 产品实窗已用同一 628 字节文件观察到正文、列表与引用续行首字的完整波浪线；另以真实链接证明首个软换行字符可延迟显示 owning-Host 标题／首段、点击输入与撤销，以及真实 `Ctrl+Click` 打开目标。后台 modified-click 曾只送达普通选择，改为实际 takeover 后才导航成功，不将该失败计为后台通过。这些局部恢复不等于 SDK 已支持完整双 affinity caret 绘制、RTL 或表格对齐几何。
+
+真实 Windows 系统 IME 核心路径也已单独验证：在隔离的 `ime-native-1667.md` 中只发送物理拼音键 `zhong` 与提交空格，得到“中”，精确保存为原始 10 字节加 3 字节 UTF-8；一次 Undo 恢复原始全文，而不是字面 `zhong`。证据在仓库外 `native-final-1667d23a/native-real-ime-pass.json`，来自中间无探针 Debug 产品，不冒充最终 Release、纯后台输入、全部候选窗布局或 macOS 通过。
 
 当前 RTL 表格核心消费者仍未通过：即使使用平台文字系统，第二列起点按 `Right` 仍停在同一列，不能把列顺序镜像当作完整的双向文字命中／导航能力。正式 `gpui-fast 0.1.13` 的 Windows glyph 回调不使用 DirectWrite 的 bidi 层级或 baseline origin，公开逐字节几何也不表达双 affinity；这条依赖边界仍需解决，不以改掉方向键断言或复制第三方 renderer 取得绿灯。`gpui-kit`／`gpui-base` 最新正式版本仍为 `0.9.0`，不能把未发布的上游接口当作已可用。
 
