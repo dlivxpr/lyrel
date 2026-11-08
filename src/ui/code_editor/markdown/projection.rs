@@ -556,10 +556,106 @@ impl Leaf {
                 },
             )
     }
+    /// Map a visible range with inward affinity at both ends. Insertion
+    /// affinity alone would include the preceding hidden closing delimiter.
+    pub(super) fn visible_range(&self, range: Range<usize>) -> Range<usize> {
+        let mut segments = self.segments.iter().filter(|segment| {
+            segment.display.start < range.end && range.start < segment.display.end
+        });
+        let Some(first) = segments.next() else {
+            let at = self.source_offset(range.start);
+            return at..at;
+        };
+        let last = segments.last().unwrap_or(first);
+        let start = if first.source.len() == first.display.len() {
+            first.source.start + range.start.saturating_sub(first.display.start)
+        } else {
+            first.source.start
+        };
+        let end = if last.source.len() == last.display.len() {
+            last.source.start + range.end.min(last.display.end) - last.display.start
+        } else {
+            last.source.end
+        };
+        start..end
+    }
+
+    /// Remove a paired wrapper only when its content is emptied or one side
+    /// of its syntax is removed. Unselected text is never part of this repair.
+    pub(super) fn deletion_delimiters(&self, range: &Range<usize>) -> Vec<Range<usize>> {
+        let mut removed = Vec::new();
+        for (ix, span) in self.spans.iter().enumerate() {
+            if range.start >= span.source.end || span.source.start >= range.end {
+                continue;
+            }
+            let mut delimiters = self.segments.iter().filter(|segment| segment.delimiter == Some(ix));
+            let Some(opening) = delimiters.next() else { continue };
+            let Some(closing) = delimiters.next_back() else { continue };
+            if span.revealed && !span.always_hidden && [opening, closing].iter().any(|segment| {
+                segment.source.start <= range.start && range.end <= segment.source.end
+            }) {
+                continue; // Explicit destination/source editing remains byte-precise.
+            }
+            let content_start = opening.source.end;
+            let content_end = closing.source.start;
+            let emptied = range.start <= content_start && content_end <= range.end
+                || self.segments.iter().filter(|segment| {
+                    segment.delimiter.is_none()
+                        && content_start <= segment.source.start
+                        && segment.source.end <= content_end
+                        && !segment.display.is_empty()
+                }).all(|segment| range.start <= segment.source.start && segment.source.end <= range.end);
+            let broken = [opening, closing].iter().any(|segment| {
+                range.start < segment.source.end && segment.source.start < range.end
+            });
+            if emptied || broken {
+                removed.extend([opening.source.clone(), closing.source.clone()]);
+            }
+        }
+        removed
+    }
+
+    pub(super) fn block_atom_range(&self) -> Option<Range<usize>> {
+        if self.kind == Kind::Rule {
+            return Some(self.range.clone());
+        }
+        let mut visible = self.segments.iter().filter(|segment| !segment.display.is_empty());
+        let atom = visible.next()?;
+        if atom.verbatim || atom.image.is_none() && atom.math.is_none() {
+            return None;
+        }
+        visible.all(|segment| self.text[segment.display.clone()].trim().is_empty())
+            .then(|| atom.source.clone())
+    }
+
+    pub(super) fn word_atom_target(&self, display: usize, backward: bool) -> Option<usize> {
+        let mut atoms = self.segments.iter().filter(|segment| {
+            !segment.display.is_empty() && !segment.verbatim
+                && (segment.source.len() != segment.display.len() || segment.math.is_some() || segment.image.is_some())
+        });
+        if backward {
+            atoms.rfind(|segment| segment.display.start < display).map(|segment| segment.display.start)
+        } else {
+            atoms.find(|segment| segment.display.end > display).map(|segment| segment.display.end)
+        }
+    }
+
+    pub(super) fn join_start(&self) -> usize {
+        self.segments.iter().find(|segment| {
+            segment.delimiter.is_none_or(|ix| self.spans[ix].source != segment.source)
+        }).map_or(self.insertion, |segment| segment.source.start)
+    }
+
+    pub(super) fn join_end(&self) -> usize {
+        self.segments.last().map_or(self.range.end, |segment| segment.source.end)
+    }
     pub fn content_start(&self) -> usize {
         self.source_offset(0)
     }
     pub fn content_end(&self) -> usize {
+        if self.kind == Kind::Rule {
+            return self.range.end;
+        }
         if self.deferred {
             return self.range.end;
         }
