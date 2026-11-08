@@ -1795,6 +1795,8 @@ pub fn translate_en(key: L10nKey) -> &'static str {
         L10nKey::EditorMarkdownMermaidSource => "Mermaid source",
         L10nKey::EditorMarkdownMermaidLoading => "Rendering diagram…",
         L10nKey::EditorMarkdownMermaidEdit => "Edit diagram source",
+        L10nKey::EditorMarkdownMermaidResult => "Show diagram result",
+        L10nKey::EditorMarkdownMermaidResultLabel => "Diagram result",
         L10nKey::EditorMarkdownMermaidError => {
             "Diagram could not render. Source is retained and editable."
         }

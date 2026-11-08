@@ -1651,6 +1651,8 @@ pub fn translate_zh(key: L10nKey) -> Option<&'static str> {
         L10nKey::EditorMarkdownMermaidSource => "Mermaid 源码",
         L10nKey::EditorMarkdownMermaidLoading => "正在渲染图表…",
         L10nKey::EditorMarkdownMermaidEdit => "编辑图表源码",
+        L10nKey::EditorMarkdownMermaidResult => "查看图表结果",
+        L10nKey::EditorMarkdownMermaidResultLabel => "图表结果",
         L10nKey::EditorMarkdownMermaidError => "图表无法渲染，源码已保留，可继续编辑。",
         L10nKey::EditorMarkdownMermaidEmpty => "未检测到 Mermaid 图表，请在保留的源码中输入图表。",
         L10nKey::EditorMarkdownMermaidExternal => {

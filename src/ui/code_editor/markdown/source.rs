@@ -26,6 +26,9 @@ mod typography;
 #[path = "composition.rs"]
 mod composition;
 
+#[path = "mermaid_authoring.rs"]
+mod mermaid_authoring;
+
 struct CachedBlock {
     version: u64,
     seen: u64,
@@ -70,6 +73,7 @@ pub(crate) struct SourcePresentation {
     parse_pending: Option<(Rope, u64, bool, super::mdx::Grammar)>,
     mermaid: super::mermaid::State,
     mermaid_task: Option<Task<()>>,
+    mermaid_authoring: mermaid_authoring::Authoring,
     _mermaid_theme: Subscription,
     math: super::math::State,
     extra_selections: Vec<Selection>,
@@ -228,6 +232,7 @@ impl SourcePresentation {
             parse_pending: None,
             mermaid: super::mermaid::State::default(),
             mermaid_task: None,
+            mermaid_authoring: mermaid_authoring::Authoring::default(),
             _mermaid_theme: mermaid_theme,
             math: super::math::State::default(),
             extra_selections: Vec::new(),
@@ -294,6 +299,7 @@ impl SourcePresentation {
         self.rendered_revision = None;
         self.parse_pending = None;
         self.mermaid.cancel();
+        self.mermaid_authoring = mermaid_authoring::Authoring::default();
         if self.live {
             self.schedule_parse(cx);
         } else {
@@ -2573,21 +2579,7 @@ impl Render for SourcePresentation {
                             ).into_any_element()
                         };
                         let rendered = if self.live && matches!(leaf.kind, Kind::Mermaid(_)) {
-                            let selection = self.state.selection.range();
-                            let active = selection.start <= leaf.range.end
-                                && selection.end >= leaf.range.start;
-                            let at = leaf.range.start + leaf.text.find('\n').map_or(0, |at| at + 1);
-                            self.mermaid.render(
-                                leaf,
-                                active,
-                                rendered.into_any_element(),
-                                cx.listener(move |this, _, window, cx| {
-                                    cx.stop_propagation();
-                                    this.select_range(at..at, cx);
-                                    this.focus.focus(window, cx);
-                                }),
-                                cx,
-                            )
+                            self.render_mermaid(leaf, rendered.into_any_element(), window, cx)
                         } else {
                             rendered.into_any_element()
                         };
@@ -2839,6 +2831,8 @@ impl Render for SourcePresentation {
                     if event.keystroke.key == "escape" && this.state.composition.is_some() {
                         this.command(Command::CancelComposition, window, cx);
                         cx.stop_propagation();
+                    } else if event.keystroke.key == "escape" && this.leave_mermaid_result(window, cx) {
+                        cx.stop_propagation();
                     }
                 }))
                 .drag_over::<ExternalPaths>(|style, _, _, cx| style.bg(cx.theme().drag_border.opacity(0.12)))
@@ -2847,6 +2841,14 @@ impl Render for SourcePresentation {
                     cx.stop_propagation();
                 }))
                 .on_action(cx.listener(|view, _: &LoadImages, _, cx| view.refresh_images(true, cx)))
+                .on_action(cx.listener(|this, _: &mermaid_authoring::EditDiagramSource, window, cx| {
+                    this.edit_mermaid_source(None, window, cx);
+                }))
+                .on_action(cx.listener(|this, _: &mermaid_authoring::ShowDiagramResult, window, cx| {
+                    if !this.show_mermaid_result(None, window, cx) {
+                        cx.propagate();
+                    }
+                }))
                 .on_action(cx.listener(|this, _: &EditLinkDestination, window, cx| {
                     this.edit_link_destination(window, cx);
                 }))
@@ -3095,6 +3097,8 @@ impl Render for SourcePresentation {
                 .on_action(cx.listener(|this, _: &actions::Escape, window, cx| {
                     if this.state.composition.is_some() {
                         this.command(Command::CancelComposition, window, cx);
+                    } else if this.leave_mermaid_result(window, cx) {
+                        // Escape restores the retained diagram source selection.
                     } else if this.navigate_table(super::tables::Navigation::Exit { backward: false }, window, cx) {
                         // Escape leaves the table without changing its source.
                     } else {
