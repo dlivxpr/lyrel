@@ -21,6 +21,8 @@ mod embeds;
 mod link_interaction;
 #[path = "references.rs"]
 mod references;
+#[path = "slash.rs"]
+mod slash;
 
 #[path = "assets.rs"]
 mod assets;
@@ -128,6 +130,7 @@ pub(crate) struct SourcePresentation {
     assets: assets::InsertionState,
     clipboard_status: Option<SharedString>,
     references: references::State,
+    slash: slash::State,
     embeds: embeds::State,
     formats: formats::State,
     code: code::State,
@@ -144,6 +147,7 @@ impl SourcePresentation {
         wrap: bool,
         cx: &mut Context<Self>,
     ) -> Self {
+        slash::init(cx);
         code::init(cx);
         reorder::init(cx);
         let owner_id = cx.entity_id();
@@ -180,6 +184,7 @@ impl SourcePresentation {
                     this.cancel_reorder(cx);
                     this.pointer_link = None;
                     this.dismiss_references(cx);
+                    this.dismiss_slash(cx);
                     this.reset_embeds();
                     let document = this.document.read(cx);
                     if this.projection.grammar != document.grammar() {
@@ -243,6 +248,9 @@ impl SourcePresentation {
                     && !this.reference_lease_current(this.references.generation, cx)
                 {
                     this.dismiss_references(cx);
+                }
+                if !this.slash_current(this.slash.generation, cx) {
+                    this.dismiss_slash(cx);
                 }
                 cx.notify();
             }
@@ -324,6 +332,7 @@ impl SourcePresentation {
             assets: assets::InsertionState::default(),
             clipboard_status: None,
             references: references::State::default(),
+            slash: slash::State::default(),
             embeds: embeds::State::default(),
             code: code::State::default(),
             image_resize: None,
@@ -382,6 +391,7 @@ impl SourcePresentation {
         self.properties = properties::State::default();
         self.live = !self.live;
         self.dismiss_references(cx);
+        self.dismiss_slash(cx);
         self.reset_embeds();
         self.geometry = None;
         self.rendered_revision = None;
@@ -657,7 +667,7 @@ impl SourcePresentation {
             && self.projection.revision == self.document.read(cx).revision()
         {
             if let Some(leaf) = self.projection.leaf_at(selection.head) {
-                if leaf.inline_position(selection.head) {
+                if leaf.inline_position(selection.head) || self.empty_slash_inline(selection.head, cx) {
                     return selection;
                 }
                 let mapped = leaf.source_offset(leaf.display_offset(selection.head));
@@ -683,17 +693,15 @@ impl SourcePresentation {
         if !self.live {
             return;
         }
-        let (mut hidden, insertions) = super::mdx::view::inline_visibility(
+        let (mut hidden, mut insertions) = super::mdx::view::inline_visibility(
             &self.projection,
             self.document.read(cx).source(),
             &self.mdx_state,
         );
-        hidden.extend(
-            self.folds
-                .hidden
-                .iter()
-                .map(|range| range.start.saturating_sub(1)..range.end),
-        );
+        if self.empty_slash_inline(self.state.selection.head(), cx) {
+            insertions.push(self.state.selection.head());
+        }
+        hidden.extend(self.folds.hidden.iter().map(|range| range.start.saturating_sub(1)..range.end));
         let marked = self.state.marked_range();
         for leaf in &mut self.projection.leaves {
             if matches!(leaf.kind, Kind::Code(_)) {
@@ -785,6 +793,7 @@ impl SourcePresentation {
             .release_formula(cx.entity_id(), Some(requested), cx)
             .unwrap_or(requested);
         self.dismiss_references(cx);
+        self.dismiss_slash(cx);
         self.input_generation = self.input_generation.wrapping_add(1);
         let was_composing = self.is_composing();
         self.extra_selections.clear();
@@ -1451,10 +1460,12 @@ impl SourcePresentation {
         cx.notify();
         if changed {
             self.request_references(cx);
-        } else if self.references.target.is_some()
-            && !self.reference_lease_current(self.references.generation, cx)
-        {
+            self.request_slash(window, cx);
+        } else if self.references.target.is_some() && !self.reference_lease_current(self.references.generation, cx) {
             self.dismiss_references(cx);
+        }
+        if !self.slash_current(self.slash.generation, cx) {
+            self.dismiss_slash(cx);
         }
     }
     pub(super) fn follow_link(&mut self, target: String, cx: &mut Context<Self>) {
@@ -2936,7 +2947,7 @@ impl Render for SourcePresentation {
                                 )
                         },
                     )
-                    .when(self.live && leaf.kind == Kind::Rule, |block| {
+                    .when(self.live && leaf.kind == Kind::Rule && !(leaf.range.contains(&self.state.selection.head()) && self.empty_slash_inline(self.state.selection.head(), cx)), |block| {
                         block.child(BlockNode::HorizontalRule { span: None }.render_with_id(
                             ("markdown-rule", leaf.id),
                             FlowPosition::at(&references, ix, true),
@@ -3095,22 +3106,22 @@ impl Render for SourcePresentation {
                 .key_context(key_context)
                 .track_focus(&self.focus)
                 .capture_action(cx.listener(|this, _: &actions::MoveUp, window, cx| {
-                    if this.move_reference(false, window, cx) { cx.stop_propagation(); }
+                    if this.move_slash(false, window, cx) || this.move_reference(false, window, cx) { cx.stop_propagation(); }
                 }))
                 .capture_action(cx.listener(|this, _: &actions::MoveDown, window, cx| {
-                    if this.move_reference(true, window, cx) { cx.stop_propagation(); }
+                    if this.move_slash(true, window, cx) || this.move_reference(true, window, cx) { cx.stop_propagation(); }
                 }))
                 .capture_action(cx.listener(|this, action: &actions::Enter, window, cx| {
-                    if !action.shift && this.accept_reference(window, cx) { cx.stop_propagation(); }
+                    if !action.shift && (this.accept_slash(window, cx) || this.accept_reference(window, cx)) { cx.stop_propagation(); }
                 }))
-                .capture_action(cx.listener(|this, _: &actions::IndentInline, window, cx| {
-                    if this.accept_reference(window, cx) { cx.stop_propagation(); }
+                .capture_action(cx.listener(|this, _: &actions::MoveLeft, window, cx| {
+                    if this.horizontal_slash(false, window, cx) { cx.stop_propagation(); }
                 }))
-                .capture_action(cx.listener(|this, _: &actions::Indent, window, cx| {
-                    if this.accept_reference(window, cx) { cx.stop_propagation(); }
+                .capture_action(cx.listener(|this, _: &actions::MoveRight, window, cx| {
+                    if this.horizontal_slash(true, window, cx) { cx.stop_propagation(); }
                 }))
                 .capture_action(cx.listener(|this, _: &actions::Escape, window, cx| {
-                    if this.dismiss_references(cx) { this.focus.focus(window, cx); cx.stop_propagation(); }
+                    if this.dismiss_slash(cx) || this.dismiss_references(cx) { this.focus.focus(window, cx); cx.stop_propagation(); }
                 }))
                 .on_action(cx.listener(|this, _: &actions::ShowCompletions, _, cx| this.request_references(cx)))
                 .cursor_text()
@@ -3552,6 +3563,7 @@ impl Render for SourcePresentation {
                 .on_action(cx.listener(|this, _: &math_edit::MatrixAddColumn, window, cx| this.formula_matrix(2, window, cx)))
                 .on_action(cx.listener(|this, _: &math_edit::MatrixRemoveColumn, window, cx| this.formula_matrix(3, window, cx)))
                 .child(self.render_references(window, cx))
+                .child(self.render_slash(window, cx))
                 .children(self.reorder_status(cx))
                 .child(self.format_toolbar(window, cx))
                 .child(self.image_toolbar(cx))
@@ -3919,6 +3931,13 @@ impl Element for SourceElement {
             }
             let previous_caret = view.caret_bounds(view.state.selection.head, cx);
             view.geometry = Some((self.revision, geometry));
+            if view.slash_current(view.slash.generation, cx)
+                && previous_caret != view.caret_bounds(view.state.selection.head(), cx)
+            {
+                // Publish a measured caret anchor, never create/update an
+                // overlay or document transaction during prepaint.
+                cx.notify();
+            }
             view.candidate_frame = Some(composition::Frame::new(view, window, cx));
             view.viewport_height = viewport.size.height;
             view.viewport.bounds = Some(viewport);
