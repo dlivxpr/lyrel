@@ -3033,3 +3033,6 @@ fn markdown_embed_fragment_source_history_and_host_roundtrip(cx: &mut TestAppCon
         nested.as_bytes()
     );
 }
+
+#[path = "../markdown/clipboard_tests.rs"]
+mod clipboard_tests;

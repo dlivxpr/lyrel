@@ -53,6 +53,10 @@ mod reorder;
 mod spelling;
 #[path = "tools.rs"]
 pub(super) mod tools;
+#[path = "reorder.rs"]
+mod reorder;
+#[path = "clipboard.rs"]
+pub(super) mod clipboard;
 
 #[path = "tables/authoring.rs"]
 mod table_authoring;
@@ -122,6 +126,7 @@ pub(crate) struct SourcePresentation {
     reveal_at: Option<usize>,
     selection_notification: bool,
     assets: assets::InsertionState,
+    clipboard_status: Option<SharedString>,
     references: references::State,
     embeds: embeds::State,
     formats: formats::State,
@@ -317,6 +322,7 @@ impl SourcePresentation {
             reveal_at: None,
             selection_notification: false,
             assets: assets::InsertionState::default(),
+            clipboard_status: None,
             references: references::State::default(),
             embeds: embeds::State::default(),
             code: code::State::default(),
@@ -1068,7 +1074,7 @@ impl SourcePresentation {
         use super::tables::*;
         use crate::ui::i18n::{L10nKey, t};
         let menu = self.format_menu(menu);
-        let menu = self.formula_menu(self.spelling_menu(menu));
+        let menu = self.clipboard_menu(self.formula_menu(self.spelling_menu(menu)));
         if !self.live {
             return menu;
         }
@@ -2198,37 +2204,7 @@ impl SourcePresentation {
         }
     }
     fn copy(&mut self, cut: bool, window: &mut Window, cx: &mut Context<Self>) {
-        if self.formula_copy(cut, window, cx) {
-            return;
-        }
-        let mut ranges: Vec<_> = std::iter::once(self.state.selection)
-            .chain(self.extra_selections.iter().copied())
-            .map(Selection::range)
-            .filter(|range| !range.is_empty())
-            .collect();
-        if ranges.is_empty() {
-            return;
-        }
-        ranges.sort_by_key(|range| range.start);
-        let doc = self.document.read(cx);
-        let text = ranges
-            .iter()
-            .map(|range| doc.source().slice(range.clone()).to_string())
-            .collect::<Vec<_>>()
-            .join("\n");
-        let range = self.state.selection.range();
-        cx.write_to_clipboard(ClipboardItem::new_string(text));
-        if cut {
-            self.command(
-                Command::Replace {
-                    range,
-                    text: String::new(),
-                    kind: EditKind::Command,
-                },
-                window,
-                cx,
-            );
-        }
+        self.copy_markdown(cut, false, window, cx);
     }
     fn paste_clipboard(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(item) = cx.read_from_clipboard() else {
@@ -2238,6 +2214,10 @@ impl SourcePresentation {
             if let Some(text) = item.text() {
                 self.formula_paste(&text, window, cx);
             }
+            return;
+        }
+        if let Some(text) = clipboard::plain_text(&item) {
+            self.paste_text(text, window, cx);
             return;
         }
         if let Some(paths) = item.entries().iter().find_map(|entry| match entry {
@@ -2271,24 +2251,6 @@ impl SourcePresentation {
                 .collect();
             self.insert_images(images, window, cx);
             return;
-        }
-        if let Some(text) = item.text() {
-            // New clipboard line breaks follow the current codec's LF insertion
-            // convention; this does not rewrite any existing document region.
-            let text = if text.contains("\r\n") {
-                text.replace("\r\n", "\n")
-            } else {
-                text
-            };
-            self.command(
-                Command::Replace {
-                    range: self.state.selection.range(),
-                    text,
-                    kind: EditKind::Paste,
-                },
-                window,
-                cx,
-            );
         }
     }
 }
@@ -3345,6 +3307,7 @@ impl Render for SourcePresentation {
                 .on_action(
                     cx.listener(|this, _: &actions::Copy, window, cx| this.copy(false, window, cx)),
                 )
+                .on_action(cx.listener(|this, _: &clipboard::CopyMarkdownOnly, window, cx| this.copy_markdown(false, true, window, cx)))
                 .on_action(
                     cx.listener(|this, _: &actions::Cut, window, cx| this.copy(true, window, cx)),
                 )
@@ -3566,6 +3529,10 @@ impl Render for SourcePresentation {
                 .when_some(self.assets.status(), |root, status| root.child(
                     div().id("markdown-image-insertion-status").test_support().role(Role::Status)
                         .flex_shrink_0().aria_label(status.clone()).text_sm().text_color(cx.theme().muted_foreground).child(status)
+                ))
+                .when_some(self.clipboard_status.clone(), |root, status| root.child(
+                    div().id("markdown-clipboard-status").test_support().role(Role::Status)
+                        .aria_label(status.clone()).text_sm().text_color(cx.theme().muted_foreground).child(status)
                 ))
                 .child(image_status)
                 .child(self.formula_toolbar(cx))

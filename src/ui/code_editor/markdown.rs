@@ -24,6 +24,7 @@ mod tables;
 #[cfg(test)]
 pub(super) use source::FollowLink;
 pub(crate) use source::SourcePresentation;
+pub(crate) use source::clipboard::CopyMarkdownOnly;
 pub(crate) use source::formats::bindings as inline_format_bindings;
 pub(crate) use source::headings::bindings as block_bindings;
 pub(crate) use source::properties::EditDocumentProperties;
