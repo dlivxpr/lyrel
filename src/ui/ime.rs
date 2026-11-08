@@ -3,6 +3,8 @@
 
 use std::collections::HashMap;
 
+use crate::ui::code_editor::markdown::SourcePresentation;
+
 use gpui_kit::base::{Root, RootPlugin};
 use gpui_kit::component::input::{EditorState, InputState, TextareaState};
 use gpui_kit::{
@@ -15,10 +17,14 @@ enum CompositionOwner {
     Input(WeakEntity<InputState>),
     Textarea(WeakEntity<TextareaState>),
     Editor(WeakEntity<EditorState>),
+    Markdown(WeakEntity<SourcePresentation>),
 }
 
 #[derive(Default)]
-struct CompositionOwners(HashMap<ElementId, CompositionOwner>);
+struct CompositionOwners {
+    inputs: HashMap<ElementId, CompositionOwner>,
+    markdown_cancellations: HashMap<ElementId, (gpui_kit::EntityId, u64, u64, u64, Option<gpui_kit::EntityId>)>,
+}
 impl Global for CompositionOwners {}
 
 pub(crate) fn install(cx: &mut App) {
@@ -26,9 +32,43 @@ pub(crate) fn install(cx: &mut App) {
     observe_inputs(cx, CompositionOwner::Input);
     observe_inputs(cx, CompositionOwner::Textarea);
     observe_inputs(cx, CompositionOwner::Editor);
+    observe_inputs(cx, CompositionOwner::Markdown);
     Root::register_plugin(cx, |window, cx| CompositionFocus {
-        focus: window.focused(cx),
+        focus: window.is_window_active().then(|| window.focused(cx)).flatten(),
     });
+}
+
+/// Native IME cancellation can synchronously call input handlers. Defer it to
+/// Root's safe handler handoff instead of re-entering a borrowed presentation.
+pub(crate) fn retire_markdown_composition(
+    focus: &FocusHandle,
+    token: (gpui_kit::EntityId, u64, u64, u64, Option<gpui_kit::EntityId>),
+    completed: bool,
+    cx: &mut App,
+) {
+    if cx.has_global::<CompositionOwners>() {
+        let pending = &mut cx.global_mut::<CompositionOwners>().markdown_cancellations;
+        let key = ElementId::from(focus);
+        if completed || pending.contains_key(&key) {
+            // Later non-composing commands can renew this request, but starting
+            // a new composition leaves the old token obsolete instead.
+            pending.insert(key, token);
+        }
+    }
+}
+
+fn take_markdown_cancellation(focus: &FocusHandle, cx: &mut App) -> bool {
+    let key = ElementId::from(focus);
+    let (token, owner) = {
+        let owners = cx.global_mut::<CompositionOwners>();
+        (owners.markdown_cancellations.remove(&key), owners.inputs.get(&key).cloned())
+    };
+    match (token, owner) {
+        (Some(token), Some(CompositionOwner::Markdown(owner))) => owner
+            .upgrade()
+            .is_some_and(|owner| owner.read(cx).input_token(cx) == token),
+        _ => false,
+    }
 }
 
 fn observe_inputs<T: EntityInputHandler + Focusable + 'static>(
@@ -41,11 +81,13 @@ fn observe_inputs<T: EntityInputHandler + Focusable + 'static>(
         let key = ElementId::from(&input.focus_handle(cx));
         let input = cx.entity().downgrade();
         cx.global_mut::<CompositionOwners>()
-            .0
+            .inputs
             .insert(key.clone(), owner(input));
         cx.on_release(move |_, cx| {
             if cx.has_global::<CompositionOwners>() {
-                cx.global_mut::<CompositionOwners>().0.remove(&key);
+                let owners = cx.global_mut::<CompositionOwners>();
+                owners.inputs.remove(&key);
+                owners.markdown_cancellations.remove(&key);
             }
         })
         .detach();
@@ -59,16 +101,22 @@ struct CompositionFocus {
 
 impl RootPlugin for CompositionFocus {
     fn prepare(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let focus = window.focused(cx);
-        if self.focus != focus {
+        let focus = window.is_window_active().then(|| window.focused(cx)).flatten();
+        let mut retire = false;
+        for handle in self.focus.iter().chain(focus.iter()) {
+            retire |= take_markdown_cancellation(handle, cx);
+        }
+        if self.focus != focus || retire {
             // The old platform handler has been taken, but the new one has
             // not been installed. Native cancellation cannot edit the new
             // input, and the retained component still owns its marked text.
             #[cfg(windows)]
             windows::cancel_native_composition(window);
+        }
+        if self.focus != focus {
             let owner = self.focus.as_ref().and_then(|focus| {
                 cx.global::<CompositionOwners>()
-                    .0
+                    .inputs
                     .get(&ElementId::from(focus))
                     .cloned()
             });
@@ -76,6 +124,14 @@ impl RootPlugin for CompositionFocus {
                 Some(CompositionOwner::Input(input)) => discard_composition(input, window, cx),
                 Some(CompositionOwner::Textarea(input)) => discard_composition(input, window, cx),
                 Some(CompositionOwner::Editor(input)) => discard_composition(input, window, cx),
+                Some(CompositionOwner::Markdown(input)) => {
+                    if let Some(input) = input.upgrade() {
+                        // Focus/mode/close handoff keeps visible preedit as one
+                        // meaningful document edit. Only explicit cancel rolls
+                        // back its original source; committed prefixes survive.
+                        input.update(cx, |input, cx| input.unmark_text(window, cx));
+                    }
+                }
                 None => {}
             }
             self.focus = focus;

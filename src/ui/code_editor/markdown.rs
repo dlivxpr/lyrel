@@ -262,6 +262,8 @@ impl SourceText {
 pub(crate) struct MarkdownDocument {
     source: Rope,
     revision: u64,
+    // Includes selection/lease changes that do not advance the source revision.
+    input_generation: u64,
     format: TextFormat,
     endings: Vec<LineEnding>,
     history: UndoHistory<Change>,
@@ -280,6 +282,7 @@ impl MarkdownDocument {
             source: Rope::from(source.text),
             endings: source.endings,
             revision: 0,
+            input_generation: 0,
             format,
             history: UndoHistory::new(),
             typing_end: None,
@@ -630,6 +633,7 @@ impl MarkdownDocument {
         state: &mut PresentationState,
         command: Command,
     ) -> Transaction {
+        self.input_generation = self.input_generation.wrapping_add(1);
         self.apply_command(state, command);
         Transaction {
             revision: self.revision,
@@ -760,10 +764,12 @@ impl MarkdownDocument {
                 }
                 let text = SourceText::from_input(text, self.format.line_ending);
                 self.replace_preedit(state, range.clone(), &text);
-                let selected = selected.unwrap_or_else(|| {
-                    let end = text.text.encode_utf16().count();
-                    end..end
-                });
+                let length16 = text.text.encode_utf16().count();
+                let selected = selected.unwrap_or(length16..length16);
+                // IME selection offsets are relative to preedit, not the rest
+                // of the document. Clamp before addition to avoid stale or
+                // oversized UTF-16 coordinates consuming a committed suffix.
+                let selected = selected.start.min(length16)..selected.end.min(length16);
                 let start16 = self.utf16_offset(range.start);
                 let bytes = self.utf16_range(start16 + selected.start..start16 + selected.end);
                 state.selection = if bytes.is_empty() {
