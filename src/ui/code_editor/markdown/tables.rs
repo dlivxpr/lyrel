@@ -301,6 +301,7 @@ pub(crate) enum Operation {
 }
 
 pub(crate) fn bindings(cx: &gpui_kit::App) -> Vec<gpui_kit::KeyBinding> {
+    use super::source::table_presentation::*;
     let bind = |keys: &str, action: Box<dyn gpui_kit::Action>| {
         let predicate = gpui_kit::KeyBindingContextPredicate::parse("MarkdownTable")
             .expect("static table key context")
@@ -320,5 +321,12 @@ pub(crate) fn bindings(cx: &gpui_kit::App) -> Vec<gpui_kit::KeyBinding> {
         bind("secondary-alt-shift-1", Box::new(AlignLeft)),
         bind("secondary-alt-shift-2", Box::new(AlignCenter)),
         bind("secondary-alt-shift-3", Box::new(AlignRight)),
+        bind("secondary-alt-f", Box::new(FitColumn)),
+        bind("secondary-alt-]", Box::new(WidenColumn)),
+        bind("secondary-alt-[", Box::new(NarrowColumn)),
+        bind("secondary-alt-shift-4", Box::new(StyleGrid)),
+        bind("secondary-alt-shift-5", Box::new(StyleStriped)),
+        bind("secondary-alt-shift-6", Box::new(StyleHeader)),
+        bind("secondary-alt-shift-7", Box::new(StyleMinimal)),
     ]
 }

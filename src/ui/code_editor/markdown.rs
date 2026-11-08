@@ -7,6 +7,7 @@ use gpui_kit::base::{
 use std::ops::Range;
 use unicode_segmentation::UnicodeSegmentation as _;
 
+mod blocks;
 mod images;
 pub(super) mod links;
 mod lists;
@@ -26,6 +27,7 @@ pub(crate) use source::formats::bindings as inline_format_bindings;
 pub(crate) use source::properties::EditDocumentProperties;
 pub(super) use source::tools::{SearchSurfaceChanged, SearchText};
 pub(crate) use tables::bindings as table_bindings;
+pub(crate) use source::headings::bindings as block_bindings;
 #[cfg(test)]
 mod tests;
 
@@ -1028,9 +1030,19 @@ pub(super) enum DocumentEvent {
     },
     ResourceContextChanged,
     ImagesChanged,
+    RequestReferences {
+        presentation: gpui_kit::WeakEntity<SourcePresentation>,
+        generation: u64,
+        revision: u64,
+        resource_epoch: Option<(lyrel_core::host::HostId, u64)>,
+        cancelled: std::sync::Arc<std::sync::atomic::AtomicBool>,
+        query: String,
+        anchors: bool,
+    },
     FollowLink {
         presentation: gpui_kit::EntityId,
         revision: u64,
+        resource_epoch: Option<(lyrel_core::host::HostId, u64)>,
         target: String,
     },
 }
