@@ -43,6 +43,7 @@ pub(super) struct OpenTarget {
     pub(super) group: Option<split::GroupId>,
     pub(super) window_host: HostId,
     pub(super) origin: Option<(BufferId, u64)>,
+    pub(super) origin_epoch: Option<(HostId, u64)>,
 }
 
 pub(super) enum OpenResult {
@@ -420,6 +421,7 @@ impl EditorBuffers {
                     | markdown::DocumentEvent::ResourceContextChanged
                     | markdown::DocumentEvent::ImagesChanged => cx.notify(),
                     markdown::DocumentEvent::FollowLink { .. }
+                    | markdown::DocumentEvent::RequestReferences { .. }
                     | markdown::DocumentEvent::RequestAssetLocation { .. } => {}
                 },
             );

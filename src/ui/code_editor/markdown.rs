@@ -973,9 +973,19 @@ pub(super) enum DocumentEvent {
     },
     ResourceContextChanged,
     ImagesChanged,
+    RequestReferences {
+        presentation: gpui_kit::WeakEntity<SourcePresentation>,
+        generation: u64,
+        revision: u64,
+        resource_epoch: Option<(lyrel_core::host::HostId, u64)>,
+        cancelled: std::sync::Arc<std::sync::atomic::AtomicBool>,
+        query: String,
+        anchors: bool,
+    },
     FollowLink {
         presentation: gpui_kit::EntityId,
         revision: u64,
+        resource_epoch: Option<(lyrel_core::host::HostId, u64)>,
         target: String,
     },
 }

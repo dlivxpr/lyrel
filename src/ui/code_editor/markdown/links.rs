@@ -7,6 +7,8 @@ use std::{
     path::{Path, PathBuf},
 };
 
+pub(crate) mod references;
+
 #[derive(Clone, PartialEq, Eq)]
 pub(super) struct Link {
     pub source: Range<usize>,
@@ -45,6 +47,50 @@ impl Index {
                 return;
             };
             let range = position.start.offset..position.end.offset;
+            if matches!(node, Node::Text(_)) {
+                for (opening, closing) in [("[[", "]]"), ("((", "))")] {
+                    let raw = &source[range.clone()];
+                    let mut cursor = 0;
+                    while let Some(start) = raw[cursor..].find(opening).map(|at| cursor + at) {
+                        let body = start + opening.len();
+                        let Some(end) = raw[body..].find(closing).map(|at| body + at) else { break; };
+                        cursor = end + closing.len();
+                        if start > 0 && matches!(raw.as_bytes()[start - 1], b'\\' | b'!') { continue; }
+                        let inside = &raw[body..end];
+                        let (target, label) = inside.split_once('|').unwrap_or((inside, inside));
+                        if target.is_empty() || target.contains('\n') || (opening == "((" && !target.contains('#')) { continue; }
+                        let destination = range.start + body..range.start + body + target.len();
+                        let label_start = if label == inside { body } else { body + target.len() + 1 };
+                        index.links.push(Link {
+                            source: range.start + start..range.start + cursor,
+                            label: range.start + label_start..range.start + end,
+                            destination,
+                            target: target.to_owned(),
+                        });
+                    }
+                }
+            }
+            let attributes = match node {
+                Node::MdxJsxFlowElement(element) => Some((&element.name, &element.attributes)),
+                Node::MdxJsxTextElement(element) => Some((&element.name, &element.attributes)),
+                _ => None,
+            };
+            if let Some((name, attributes)) = attributes {
+                for attribute in attributes {
+                    if let markdown::mdast::AttributeContent::Property(attribute) = attribute {
+                        if attribute.name == "id" || (name.as_deref() == Some("a") && attribute.name == "name") {
+                            if let Some(markdown::mdast::AttributeValue::Literal(id)) = &attribute.value {
+                                if !id.is_empty() { index.headings.push((id.clone(), range.start)); }
+                            }
+                        }
+                    }
+                }
+            }
+            if let Node::Html(html) = node {
+                for (offset, id) in explicit_ids(&html.value) {
+                    index.headings.push((id, range.start + offset));
+                }
+            }
             if let Node::Heading(_) = node {
                 let slug = slug(&node.to_string());
                 let count = slugs.entry(slug.clone()).or_default();
@@ -91,6 +137,7 @@ impl Index {
                 target,
             });
         });
+        index.headings.dedup();
         index
     }
     pub fn at(&self, at: usize) -> Option<&Link> {
@@ -105,10 +152,9 @@ impl Index {
         let fragment = percent_encoding::percent_decode_str(fragment)
             .decode_utf8()
             .ok()?;
-        self.headings
-            .iter()
-            .find(|(slug, _)| slug == fragment.as_ref())
-            .map(|(_, at)| *at)
+        let mut matches = self.headings.iter().filter(|(slug, _)| slug == fragment.as_ref());
+        let at = matches.next()?.1;
+        matches.next().is_none().then_some(at)
     }
 }
 fn visit(node: &Node, f: &mut impl FnMut(&Node)) {
@@ -131,6 +177,62 @@ fn slug(text: &str) -> String {
         })
         .collect()
 }
+/// Only called on positioned HTML nodes; code fences and code spans are excluded.
+fn explicit_ids(html: &str) -> Vec<(usize, String)> {
+    let mut ids = Vec::new();
+    let bytes = html.as_bytes();
+    let mut cursor = 0;
+    while cursor < bytes.len() {
+        let Some(open) = html[cursor..].find('<').map(|at| cursor + at) else { break; };
+        if html[open..].starts_with("<!--") {
+            cursor = html[open + 4..].find("-->").map_or(bytes.len(), |at| open + 4 + at + 3);
+            continue;
+        }
+        let mut tag_end = open + 1;
+        while tag_end < bytes.len() && bytes[tag_end].is_ascii_alphanumeric() { tag_end += 1; }
+        if tag_end == open + 1 { cursor = open + 1; continue; }
+        let tag = &bytes[open + 1..tag_end];
+        let mut close = tag_end;
+        let mut quote = None;
+        while close < bytes.len() {
+            let byte = bytes[close];
+            if quote == Some(byte) { quote = None; }
+            else if quote.is_none() {
+                if matches!(byte, b'\'' | b'"') { quote = Some(byte); }
+                else if byte == b'>' { break; }
+            }
+            close += 1;
+        }
+        if close == bytes.len() { break; }
+        let mut at = tag_end;
+        while at < close {
+            while at < close && bytes[at].is_ascii_whitespace() { at += 1; }
+            let name_start = at;
+            while at < close && (bytes[at].is_ascii_alphanumeric() || matches!(bytes[at], b'-' | b'_' | b':')) { at += 1; }
+            if name_start == at { at += 1; continue; }
+            let name = &bytes[name_start..at];
+            while at < close && bytes[at].is_ascii_whitespace() { at += 1; }
+            if at == close || bytes[at] != b'=' { continue; }
+            at += 1;
+            while at < close && bytes[at].is_ascii_whitespace() { at += 1; }
+            let quote = bytes.get(at).copied().filter(|byte| matches!(*byte, b'\'' | b'"'));
+            at += usize::from(quote.is_some());
+            let value = at;
+            while at < close && if let Some(quote) = quote { bytes[at] != quote } else { !bytes[at].is_ascii_whitespace() } { at += 1; }
+            if at > value && (name.eq_ignore_ascii_case(b"id") || (tag.eq_ignore_ascii_case(b"a") && name.eq_ignore_ascii_case(b"name"))) {
+                ids.push((open, html[value..at].to_owned()));
+            }
+            at += usize::from(quote.is_some());
+        }
+        cursor = close + 1;
+        if tag.eq_ignore_ascii_case(b"script") || tag.eq_ignore_ascii_case(b"style") {
+            let closing = if tag.eq_ignore_ascii_case(b"script") { "</script" } else { "</style" };
+            cursor = html[cursor..].to_ascii_lowercase().find(closing).map_or(bytes.len(), |at| cursor + at);
+        }
+    }
+    ids
+}
+
 /// Only scans within an AST-identified link/definition, never searches rendered text.
 pub(super) fn label_range(source: &str, node: &Node) -> Option<Range<usize>> {
     let position = node.position()?;

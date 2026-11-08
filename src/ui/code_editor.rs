@@ -36,6 +36,7 @@ mod gutter;
 mod nav;
 pub(crate) mod outline;
 mod problems;
+mod references;
 pub(crate) mod saving;
 mod split;
 mod strip;
@@ -922,6 +923,7 @@ impl LyrelApp {
             group: Some(group),
             window_host: self.spawn_host(cx),
             origin,
+            origin_epoch: origin.and_then(|(id, _)| self.editor_resource_epoch(id, cx)),
         };
         let reused = self.editor.buffers.open(
             host,
@@ -938,6 +940,11 @@ impl LyrelApp {
         if let Some(id) = reused {
             self.editor_show_in_tab(tab, id, true, window, cx);
         }
+    }
+
+    fn editor_resource_epoch(&self, id: BufferId, cx: &gpui_kit::App) -> Option<(HostId, u64)> {
+        self.editor.buffers.get(id)?.input.markdown()?.read(cx).document().read(cx)
+            .resources().map(|resources| (resources.host().id(), resources.epoch()))
     }
 
     fn editor_open_target_valid(&self, target: buffers::OpenTarget, cx: &gpui_kit::App) -> bool {
@@ -960,7 +967,11 @@ impl LyrelApp {
                     .buffers
                     .get(id)
                     .and_then(|file| file.input.markdown())
-                    .is_some_and(|view| view.read(cx).document().read(cx).revision() == revision)
+                    .is_some_and(|view| {
+                        let document = view.read(cx).document().read(cx);
+                        document.revision() == revision
+                            && document.resources().map(|resources| (resources.host().id(), resources.epoch())) == target.origin_epoch
+                    })
                     && self
                         .tabs
                         .iter()
@@ -1239,6 +1250,7 @@ impl LyrelApp {
                     if let markdown::DocumentEvent::FollowLink {
                         presentation,
                         revision,
+                        resource_epoch,
                         target,
                     } = event
                     {
@@ -1246,10 +1258,14 @@ impl LyrelApp {
                             id,
                             *presentation,
                             *revision,
+                            *resource_epoch,
                             target,
                             window,
                             cx,
                         );
+                    }
+                    if let markdown::DocumentEvent::RequestReferences { presentation, generation, revision, resource_epoch, cancelled, query, anchors } = event {
+                        app.editor_query_references(id, presentation.clone(), *generation, *revision, *resource_epoch, cancelled.clone(), query.clone(), *anchors, window, cx);
                     }
                 });
             if let Some(file) = self.editor.buffers.get_mut(id) {
@@ -1258,17 +1274,20 @@ impl LyrelApp {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn editor_follow_markdown_link(
         &mut self,
         id: BufferId,
         presentation: gpui_kit::EntityId,
         revision: u64,
+        resource_epoch: Option<(HostId, u64)>,
         target: &str,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         // Events from closed/replaced presentations cannot redirect a newer tab.
         if self.active_buffer().is_none_or(|file| file.id() != id)
+            || self.editor_resource_epoch(id, cx) != resource_epoch
             || self
                 .active_editor_input()
                 .and_then(|input| input.markdown().cloned())
@@ -1287,7 +1306,12 @@ impl LyrelApp {
         match destination {
             Ok(markdown::links::Target::External(url)) => cx.open_url(&url),
             Ok(markdown::links::Target::File(path)) => {
-                self.editor_open_request(host, &path, None, Some((id, revision)), window, cx)
+                let fragment = target.split_once('#').map(|(_, fragment)| fragment).filter(|fragment| !fragment.is_empty()).map(str::to_owned);
+                if path.extension().is_none() || fragment.is_some() {
+                    self.editor_resolve_reference_file(id, revision, host, path, fragment, window, cx);
+                } else {
+                    self.editor_open_request(host, &path, None, Some((id, revision)), window, cx);
+                }
             }
             Ok(markdown::links::Target::Anchor) => window.notify_app(
                 t_fmt(L10nKey::MarkdownLinkOpenFailed, &[("reason", t(L10nKey::MarkdownLinkAnchorNotFound))]),
@@ -2466,6 +2490,7 @@ impl LyrelApp {
             group: None,
             window_host: self.spawn_host(cx),
             origin: None,
+            origin_epoch: None,
         };
         self.editor.buffers.restore(
             host.clone(),

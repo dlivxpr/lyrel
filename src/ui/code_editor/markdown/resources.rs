@@ -10,6 +10,9 @@ pub(crate) struct ResourceContext {
     epoch: u64,
 }
 impl ResourceContext {
+    pub(crate) fn epoch(&self) -> u64 {
+        self.epoch
+    }
     pub(crate) fn host(&self) -> &SharedHost {
         &self.host
     }

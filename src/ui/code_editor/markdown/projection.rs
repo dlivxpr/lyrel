@@ -463,6 +463,10 @@ impl Leaf {
         });
         self.push_segment(range.clone(), &source[range], Some(ix), None);
     }
+    pub(super) fn accepts_reference(&self, at: usize) -> bool {
+        !matches!(self.kind, Kind::Code(_) | Kind::Mermaid(_) | Kind::Math | Kind::Metadata | Kind::Html | Kind::Mdx(_))
+            && !self.segments.iter().any(|segment| segment.style.code && segment.source.start <= at && at <= segment.source.end)
+    }
     pub(super) fn raw(&mut self, source: &str, range: Range<usize>) {
         self.push(range.clone(), &source[range]);
     }
@@ -1072,8 +1076,23 @@ impl Projection {
                     range.start -= 1;
                 }
                 let raw = &source[range.clone()];
+                let alternatives = if raw.contains("[[") || raw.contains("((") {
+                    super::links::Index::from_ast(source, node).links
+                } else { Vec::new() };
                 let mut at = 0;
                 while at < raw.len() {
+                    if let Some(link) = alternatives.iter().find(|link| link.source.start == range.start + at) {
+                        let ix = leaf.spans.len();
+                        leaf.spans.push(InlineSpan { source: link.source.clone(), revealed: false, always_hidden: false, target: None });
+                        leaf.push_segment(link.source.start..link.label.start, &source[link.source.start..link.label.start], Some(ix), None);
+                        let before = leaf.style;
+                        leaf.style.link = Some(ix);
+                        leaf.raw(source, link.label.clone());
+                        leaf.style = before;
+                        leaf.push_segment(link.label.end..link.source.end, &source[link.label.end..link.source.end], Some(ix), None);
+                        at = link.source.end - range.start;
+                        continue;
+                    }
                     let rest = &raw[at..];
                     let ch = rest.chars().next().unwrap();
                     if ch == '\\' && rest.as_bytes().get(1).is_some_and(u8::is_ascii_punctuation) {
