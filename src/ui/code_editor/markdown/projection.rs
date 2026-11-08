@@ -411,7 +411,7 @@ impl Leaf {
                     node.height = Some(gpui_kit::rems(8.).into());
                     InlineNode::image(node)
                 } else if let Some(formula) = segment.math.as_ref().filter(|_| !segment.verbatim) {
-                    math.inline_node(formula)
+                    math.inline_node(formula, &segment.source)
                 } else {
                     InlineNode::new(self.text[range].to_owned()).marks(run_marks)
                 },
@@ -423,6 +423,13 @@ impl Leaf {
         self.segments
             .iter()
             .filter_map(|segment| segment.math.as_ref())
+    }
+    pub(super) fn formula_at(&self, at: usize, end: bool) -> Option<(Range<usize>, super::math::Formula)> {
+        self.segments.iter().find_map(|segment| {
+            let inside = segment.source.start < at && at < segment.source.end;
+            let boundary = if end { at == segment.source.end } else { at == segment.source.start };
+            (inside || boundary).then(|| segment.math.as_ref().map(|formula| (segment.source.clone(), formula.clone()))).flatten()
+        })
     }
     pub fn atom_source(&self, display: usize) -> Option<usize> {
         self.segments.iter().find_map(|segment| {

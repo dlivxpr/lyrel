@@ -4747,7 +4747,7 @@ fn native_formula_pointer_inserts_inside_delimiters_and_reopens(cx: &mut gpui_ki
         } else {
             normalized.len()
         };
-        let insertion = normalized.find('x').unwrap();
+        let _insertion = normalized.find('x').unwrap();
         let point = view.read_with(&context, |view, cx| {
             let a = view.range_to_bounds(&(start..start), cx).unwrap().center();
             let b = view.range_to_bounds(&(end..end), cx).unwrap().center();
@@ -4758,10 +4758,18 @@ fn native_formula_pointer_inserts_inside_delimiters_and_reopens(cx: &mut gpui_ki
             window.pointer_up(point, gpui_kit::MouseButton::Left, cx);
         });
         context.run_until_parked();
-        view.read_with(&context, |view, _| {
-            assert_eq!(view.selection(), Selection::caret(insertion))
+        // Entry is derived: Escape must preserve every original source byte.
+        context.update(|window, cx| window.press("escape", cx));
+        view.read_with(&context, |view, cx| {
+            assert_eq!(view.document().read(cx).encode().unwrap(), source.as_bytes());
         });
-        context.update(|window, cx| window.input("z+", cx));
+        context.update(|window, cx| {
+            window.pointer_down(point, gpui_kit::MouseButton::Left, cx);
+            window.pointer_up(point, gpui_kit::MouseButton::Left, cx);
+            window.press("home", cx);
+            window.input("z+", cx);
+            window.press("enter", cx);
+        });
         context.run_until_parked();
         let expected = source.replacen('x', "z+x", 1);
         view.read_with(&context, |view, cx| {

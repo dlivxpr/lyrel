@@ -18,6 +18,9 @@ pub(super) struct Formula {
     raw: String,
 }
 impl Formula {
+    pub(super) fn with_tex(&self, tex: String) -> Self {
+        Self { tex, block: self.block, raw: self.raw.clone() }
+    }
     pub(super) fn insertion_offset(&self) -> usize {
         let opening = self.raw.bytes().take_while(|byte| *byte == b'$').count();
         let start = if self.block {
@@ -92,13 +95,14 @@ pub(super) struct State {
     pub outputs: HashMap<Formula, Output>,
     pub task: Option<Task<()>>,
     pub running: bool,
+    pub editor: Option<(std::ops::Range<usize>, super::source::math_edit::Editor)>,
 }
 impl State {
-    pub fn inline_node(&self, formula: &Formula) -> InlineNode {
+    pub fn inline_node(&self, formula: &Formula, range: &std::ops::Range<usize>) -> InlineNode {
         InlineNode::custom(
             MarkdownNode::new(
                 "lyrel-math",
-                (formula.clone(), self.outputs.get(formula).cloned()),
+                (formula.clone(), self.outputs.get(formula).cloned(), self.editor.as_ref().filter(|(active, _)| active == range).map(|(_, view)| view.clone())),
             )
             .text("\u{fffc}")
             .accessibility_label(crate::ui::i18n::t_fmt(
@@ -121,17 +125,20 @@ impl MarkdownPlugin for MathPlugin {
     }
     fn parse(&self, node: &Node, context: &MarkdownParseContext<'_>) -> Option<MarkdownNode> {
         Formula::from_node(node, context.node_source(node)?).map(|formula| {
-            MarkdownNode::new("lyrel-math", (formula, None::<Output>)).text("\u{fffc}")
+            MarkdownNode::new("lyrel-math", (formula, None::<Output>, None::<super::source::math_edit::Editor>)).text("\u{fffc}")
         })
     }
     fn render_inline(
         &self,
         node: &MarkdownNode,
         context: &InlineRenderContext,
-        _: &mut Window,
+        window: &mut Window,
         cx: &mut App,
     ) -> Option<InlineElement> {
-        let (formula, output) = node.data::<(Formula, Option<Output>)>()?;
+        let (formula, output, editor) = node.data::<(Formula, Option<Output>, Option<super::source::math_edit::Editor>)>()?;
+        if let Some(editor) = editor {
+            if let Some(element) = super::source::math_edit::render(editor, context.font_size(), window, cx) { return Some(element); }
+        }
         let element = match output {
             Some(Output::Ready {
                 image,

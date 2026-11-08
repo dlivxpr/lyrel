@@ -26,6 +26,9 @@ mod typography;
 #[path = "composition.rs"]
 mod composition;
 
+#[path = "math_edit.rs"]
+pub(super) mod math_edit;
+
 struct CachedBlock {
     version: u64,
     seen: u64,
@@ -72,6 +75,8 @@ pub(crate) struct SourcePresentation {
     mermaid_task: Option<Task<()>>,
     _mermaid_theme: Subscription,
     math: super::math::State,
+    formula: Option<math_edit::Session>,
+    formula_render: Option<Task<()>>,
     extra_selections: Vec<Selection>,
     search_matches: std::rc::Rc<Vec<Range<usize>>>,
     image_snapshot: Option<std::sync::Arc<HashMap<String, std::sync::Arc<RenderImage>>>>,
@@ -93,6 +98,7 @@ impl SourcePresentation {
     ) -> Self {
         let owner_id = cx.entity_id();
         cx.on_release(move |view, cx| {
+            let _ = view.release_formula(owner_id, None, cx);
             // Platform handlers are weak. A last-owner release must still put
             // retained preedit into the document's existing ordered history.
             if view.state.composition.is_some()
@@ -138,6 +144,7 @@ impl SourcePresentation {
             }
             if let DocumentEvent::Edited(transaction) = event {
                 this.assets.rebase(transaction);
+                this.rebase_formula(transaction, cx);
                 this.state.rebase(transaction);
                 if transaction.origin != this.state.id {
                     for selection in &mut this.extra_selections {
@@ -230,6 +237,8 @@ impl SourcePresentation {
             mermaid_task: None,
             _mermaid_theme: mermaid_theme,
             math: super::math::State::default(),
+            formula: None,
+            formula_render: None,
             extra_selections: Vec::new(),
             search_matches: std::rc::Rc::default(),
             image_snapshot: None,
@@ -664,6 +673,8 @@ impl SourcePresentation {
         cx.notify();
     }
     pub(crate) fn select_range(&mut self, range: Range<usize>, cx: &mut Context<Self>) {
+        let requested = Selection::new(range.start, range.end);
+        let selected = self.release_formula(cx.entity_id(), Some(requested), cx).unwrap_or(requested);
         self.input_generation = self.input_generation.wrapping_add(1);
         let was_composing = self.is_composing();
         self.extra_selections.clear();
@@ -680,7 +691,7 @@ impl SourcePresentation {
         self.document.update(cx, |document, cx| {
             document.command(
                 &mut self.state,
-                Command::Select(Selection::new(range.start, range.end)),
+                Command::Select(selected),
             );
             if document
                 .composition_owner
@@ -888,7 +899,7 @@ impl SourcePresentation {
         self.focus.focus(window, cx);
     }
     pub(crate) fn is_composing(&self) -> bool {
-        self.state.composition.is_some()
+        self.state.composition.is_some() || self.formula_native_marked().is_some()
     }
     pub(crate) fn is_soft_wrap(&self) -> bool {
         self.wrap
@@ -1016,6 +1027,7 @@ impl SourcePresentation {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.formula_command(&command, window, cx) { return; }
         self.goal_x = None;
         self.input_generation = self.input_generation.wrapping_add(1);
         // A late unmark/blur from an idle presentation must not finish a
@@ -1418,6 +1430,7 @@ impl SourcePresentation {
         let Some(at) = self.point_offset_for(point, !extend, cx) else {
             return;
         };
+        if !extend && self.begin_formula(at, false, window, cx) { return; }
         let anchor = if extend {
             self.state.selection.anchor
         } else {
@@ -1434,6 +1447,11 @@ impl SourcePresentation {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.formula_move(horizontal, vertical, extend, edge, window, cx) { return; }
+        if !extend && edge.is_none() && horizontal != 0 {
+            let at = self.state.selection.head();
+            if self.begin_formula(at, horizontal < 0, window, cx) { return; }
+        }
         let doc = self.document.read(cx);
         let current = doc.boundary(self.state.selection.head, false);
         let goal_x = (vertical != 0)
@@ -1460,6 +1478,7 @@ impl SourcePresentation {
             doc.next(current)
         };
         let at = doc.boundary(at, false);
+        if !extend && edge.is_none() && self.begin_formula(at, horizontal < 0 || vertical < 0, window, cx) { return; }
         let anchor = if extend {
             self.state.selection.anchor
         } else {
@@ -1841,6 +1860,7 @@ impl SourcePresentation {
         }
     }
     fn enter(&mut self, hard: bool, window: &mut Window, cx: &mut Context<Self>) {
+        if self.formula.is_some() { self.finish_formula(true, false, window, cx); return; }
         if self.live
             && self
                 .projection
@@ -1902,6 +1922,7 @@ impl SourcePresentation {
         self.command(command, window, cx);
     }
     fn delete_prose(&mut self, backward: bool, window: &mut Window, cx: &mut Context<Self>) {
+        if self.formula.is_some() { self.command(if backward { Command::Backspace } else { Command::Delete }, window, cx); return; }
         if !self.live
             || !self.state.selection.range().is_empty()
             || !self.extra_selections.is_empty()
@@ -2004,6 +2025,7 @@ impl SourcePresentation {
         }
     }
     fn copy(&mut self, cut: bool, window: &mut Window, cx: &mut Context<Self>) {
+        if self.formula_copy(cut, window, cx) { return; }
         let mut ranges: Vec<_> = std::iter::once(self.state.selection)
             .chain(self.extra_selections.iter().copied())
             .map(Selection::range)
@@ -2037,6 +2059,10 @@ impl SourcePresentation {
         let Some(item) = cx.read_from_clipboard() else {
             return;
         };
+        if self.formula.is_some() {
+            if let Some(text) = item.text() { self.formula_paste(&text, window, cx); }
+            return;
+        }
         if item
             .entries()
             .iter()
@@ -2086,6 +2112,7 @@ impl EntityInputHandler for SourcePresentation {
         _: &mut Window,
         cx: &mut Context<Self>,
     ) -> Option<String> {
+        if self.formula.is_some() { return self.formula_native_text(range, adjusted); }
         let doc = self.document.read(cx);
         let range = doc.utf16_range(range);
         *adjusted = Some(doc.utf16_offset(range.start)..doc.utf16_offset(range.end));
@@ -2097,6 +2124,7 @@ impl EntityInputHandler for SourcePresentation {
         _: &mut Window,
         cx: &mut Context<Self>,
     ) -> Option<UTF16Selection> {
+        if self.formula.is_some() { return self.formula_native_selection(); }
         let doc = self.document.read(cx);
         let selected = self.state.selection;
         let range = selected.range();
@@ -2106,11 +2134,13 @@ impl EntityInputHandler for SourcePresentation {
         })
     }
     fn marked_text_range(&self, _: &mut Window, cx: &mut Context<Self>) -> Option<Range<usize>> {
+        if self.formula.is_some() { return self.formula_native_marked(); }
         let doc = self.document.read(cx);
         let range = self.state.marked_range()?;
         Some(doc.utf16_offset(range.start)..doc.utf16_offset(range.end))
     }
     fn unmark_text(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.formula_unmark(window, cx) { return; }
         self.command(Command::FinishComposition, window, cx);
     }
     fn replace_text_in_range(
@@ -2120,6 +2150,7 @@ impl EntityInputHandler for SourcePresentation {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.formula_commit_text(range.clone(), text, window, cx) { return; }
         if let Some(range) = range {
             let range = self.document.read(cx).utf16_range(range);
             if self.state.marked_range().as_ref() != Some(&range) {
@@ -2146,6 +2177,7 @@ impl EntityInputHandler for SourcePresentation {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.formula_preedit(range.clone(), text, selected.clone(), window, cx) { return; }
         let range = range.map(|range| self.document.read(cx).utf16_range(range));
         self.command(
             Command::Compose {
@@ -2164,6 +2196,7 @@ impl EntityInputHandler for SourcePresentation {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Option<Bounds<Pixels>> {
+        if self.formula.is_some() { return self.formula_native_bounds(window, cx); }
         if !self.candidate_frame?.is_current(self, window, cx) {
             return None;
         }
@@ -2187,6 +2220,7 @@ impl EntityInputHandler for SourcePresentation {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Option<usize> {
+        if self.formula.is_some() { return self.formula_native_bounds(window, cx).map(|_| 0); }
         if !self.candidate_frame?.is_current(self, window, cx) {
             return None;
         }
@@ -2202,6 +2236,7 @@ impl EntityInputHandler for SourcePresentation {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.formula_native_select(range.clone(), cx) { return; }
         let range = self.document.read(cx).utf16_range(range);
         self.command(
             Command::Select(Selection::new(range.start, range.end)),
@@ -2210,12 +2245,15 @@ impl EntityInputHandler for SourcePresentation {
         );
     }
     fn text_length_utf16(&mut self, _: &mut Window, cx: &mut Context<Self>) -> Option<usize> {
+        if let Some(length) = self.formula_native_length() { return Some(length); }
         let doc = self.document.read(cx);
         Some(doc.utf16_offset(doc.source().len()))
     }
 }
 impl Render for SourcePresentation {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.schedule_formula_render(window, cx);
+        self.sync_formula_surface(cx);
         let style = super::math::Style::new(cx.theme().foreground, window.rem_size());
         if self.math.style != Some(style) {
             self.math.style = Some(style);
@@ -2686,6 +2724,8 @@ impl Render for SourcePresentation {
                                         }
                                         row.child(div().flex_1().min_w_0().child(rendered))
                                             .into_any_element()
+                                    } else if self.live && leaf.kind == Kind::Math {
+                                        div().flex().justify_center().w_full().py_2().child(rendered).into_any_element()
                                     } else {
                                         rendered
                                     }
@@ -2826,6 +2866,7 @@ impl Render for SourcePresentation {
                     }
                 })
                 .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
+                    if this.formula_key(event, window, cx) { cx.stop_propagation(); return; }
                     let key = &event.keystroke;
                     if this.live && key.modifiers.alt && !key.modifiers.control && !key.modifiers.platform
                         && matches!(key.key.as_str(), "pageup" | "pagedown") {
@@ -3093,6 +3134,7 @@ impl Render for SourcePresentation {
                     );
                 }))
                 .on_action(cx.listener(|this, _: &actions::Escape, window, cx| {
+                    if this.formula.is_some() { this.finish_formula(false, false, window, cx); this.focus.focus(window, cx); return; }
                     if this.state.composition.is_some() {
                         this.command(Command::CancelComposition, window, cx);
                     } else if this.navigate_table(super::tables::Navigation::Exit { backward: false }, window, cx) {
@@ -3106,6 +3148,14 @@ impl Render for SourcePresentation {
                         .flex_shrink_0().aria_label(status.clone()).text_sm().text_color(cx.theme().muted_foreground).child(status)
                 ))
                 .child(image_status)
+                .child(self.formula_toolbar(cx))
+                .on_action(cx.listener(|this, _: &math_edit::CommitFormula, window, cx| { this.finish_formula(true, false, window, cx); this.focus.focus(window, cx); }))
+                .on_action(cx.listener(|this, _: &math_edit::CancelFormula, window, cx| { this.finish_formula(false, false, window, cx); this.focus.focus(window, cx); }))
+                .on_action(cx.listener(|this, _: &math_edit::EditFormulaSource, window, cx| this.formula_source(window, cx)))
+                .on_action(cx.listener(|this, _: &math_edit::MatrixAddRow, window, cx| this.formula_matrix(0, window, cx)))
+                .on_action(cx.listener(|this, _: &math_edit::MatrixRemoveRow, window, cx| this.formula_matrix(1, window, cx)))
+                .on_action(cx.listener(|this, _: &math_edit::MatrixAddColumn, window, cx| this.formula_matrix(2, window, cx)))
+                .on_action(cx.listener(|this, _: &math_edit::MatrixRemoveColumn, window, cx| this.formula_matrix(3, window, cx)))
                 .when(self.live && self.projection.links.at(self.state.selection.head()).is_some(), |root| {
                     use gpui_kit::component::button::{Button, ButtonVariants as _};
                     use gpui_kit::component::Sizable as _;
@@ -3144,6 +3194,8 @@ impl Render for SourcePresentation {
                                 .p(rems(typography::inset(self.live)))
                                 .capture_any_mouse_down(cx.listener(
                                     |this, event: &MouseDownEvent, window, cx| {
+                                        if event.button == MouseButton::Left && this.formula_pointer(event, window, cx) { cx.stop_propagation(); return; }
+                                        if event.button == MouseButton::Left && !event.modifiers.shift && this.begin_formula_from_pointer(event.position, window, cx) { cx.stop_propagation(); return; }
                                         if event.button != MouseButton::Left
                                             || !this.geometry.as_ref().is_some_and(|(revision, geometry)| {
                                                 *revision == this.document.read(cx).revision()
@@ -3532,7 +3584,7 @@ impl Element for SourceElement {
         });
         let (focus, carets) = {
             let view = self.view.read(cx);
-            let carets: Vec<_> = if view.focus.is_focused(window) {
+            let carets: Vec<_> = if view.focus.is_focused(window) && view.formula.is_none() {
                 std::iter::once(view.state.selection)
                     .chain(view.extra_selections.iter().copied())
                     .filter(|selection| selection.range().is_empty())
