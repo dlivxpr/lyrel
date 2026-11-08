@@ -194,10 +194,10 @@ impl InputHandler for Input {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use super::{Input, Selection};
     use crate::ui::app::test_window::harness_with_tabs;
     use gpui_kit::test::TestWindowExt as _;
-    use gpui_kit::{InputHandler as _, VisualContext as _};
+    use gpui_kit::{InputHandler as _, TestAppContext, VisualContext as _, point, px, size};
 
     #[gpui_kit::test]
     fn composition_lease_survives_workbench_handoffs_and_rejects_old_callbacks(
