@@ -121,14 +121,15 @@ impl SourcePresentation {
                 && preview.selection == self.state.selection
                 && preview.focus.contains_focused(window, cx)
         });
-        let active = !collapsed
-            && selection.start <= leaf.range.end
-            && selection.end >= leaf.range.start;
+        let active =
+            !collapsed && selection.start <= leaf.range.end && selection.end >= leaf.range.start;
         let target = (leaf.id, self.projection.revision);
         let controls = div()
             .flex()
             .gap_2()
-            .on_mouse_down(gpui_kit::MouseButton::Left, |_, _, cx| cx.stop_propagation())
+            .on_mouse_down(gpui_kit::MouseButton::Left, |_, _, cx| {
+                cx.stop_propagation()
+            })
             .child(
                 Button::new(("markdown-mermaid-edit", leaf.id))
                     .ghost()
@@ -184,7 +185,8 @@ mod tests {
     ) {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("authoring.md");
-        let original = b"before\r\n\r\n```mermaid\r\nflowchart LR\r\nA[Start] --> B[End]\r\n```\n\nafter";
+        let original =
+            b"before\r\n\r\n```mermaid\r\nflowchart LR\r\nA[Start] --> B[End]\r\n```\n\nafter";
         std::fs::write(&path, original).unwrap();
         let source = String::from_utf8(original.to_vec())
             .unwrap()
@@ -208,9 +210,7 @@ mod tests {
         let fence = source.find("```mermaid").unwrap();
         let image_id = format!("markdown-mermaid-image-{fence}");
         loop {
-            context
-                .executor()
-                .advance_clock(Duration::from_millis(100));
+            context.executor().advance_clock(Duration::from_millis(100));
             context.run_until_parked();
             if context.update(|window, cx| {
                 window.render_frame(cx);

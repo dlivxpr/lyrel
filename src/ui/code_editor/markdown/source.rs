@@ -1304,7 +1304,11 @@ impl SourcePresentation {
             return;
         }
         if let Some(fragment) = target.strip_prefix('#') {
-            if let Some(at) = if fragment.is_empty() { Some(0) } else { self.projection.links.anchor(fragment) } {
+            if let Some(at) = if fragment.is_empty() {
+                Some(0)
+            } else {
+                self.projection.links.anchor(fragment)
+            } {
                 self.select_range(at..at, cx);
                 self.reveal_caret = true;
                 return;
@@ -1425,8 +1429,10 @@ impl SourcePresentation {
                 })
             })
             .flatten();
-        let table_target = (edge.is_some() || vertical != 0 || extend || self.state.selection.range().is_empty())
-            .then(|| self.table_arrow_target(current, horizontal, vertical, edge, cx)).flatten();
+        let table_target =
+            (edge.is_some() || vertical != 0 || extend || self.state.selection.range().is_empty())
+                .then(|| self.table_arrow_target(current, horizontal, vertical, edge, cx))
+                .flatten();
         let at = if let Some(target) = table_target {
             target
         } else if let Some(end) = edge {
@@ -2246,7 +2252,12 @@ impl Render for SourcePresentation {
                     view.dragging = false;
                     if let ClickEvent::Mouse(click) = event {
                         if click.up.button == MouseButton::Left {
-                            view.finish_pointer_link(click.up.position, click.up.modifiers, window, cx);
+                            view.finish_pointer_link(
+                                click.up.position,
+                                click.up.modifiers,
+                                window,
+                                cx,
+                            );
                         }
                     }
                 });
@@ -2468,7 +2479,7 @@ impl Render for SourcePresentation {
             .map(|leaf| &self.blocks[&leaf.id].node)
             .collect();
         let active_table = self.active_table();
-        let block = div()
+        let mut block = div()
             .w_full()
             .when_some(self.projection.error.as_ref(), |block, error| {
                 block.child(
@@ -2481,191 +2492,232 @@ impl Render for SourcePresentation {
                         .child(div().text_xs().child(error.clone())),
                 )
             })
-            .child(div().h(before).flex_none())
-            .children(
-                self.projection.leaves[visible.clone()]
-                    .iter()
-                    .enumerate()
-                    .filter_map(|(ix, leaf)| {
-                        if self.live
-                            && !super::mdx::view::visible_field(
-                                &super::mdx::view::FieldContext::new(
-                                    &self.projection,
-                                    leaf,
-                                    &component_source,
-                                    &self.mdx_state,
-                                ),
-                            )
-                        {
-                            return None;
-                        }
-                        let rendered = if let Kind::TableCell(cell) = leaf.kind {
-                            let global = visible.start + ix;
-                            if global > visible.start
-                                && matches!(self.projection.leaves[global - 1].kind, Kind::TableCell(other) if other.same_row(cell)) {
-                                return None;
-                            }
-                            let end = global + self.projection.leaves[global..].iter().take_while(|leaf| {
+            .child(div().h(before).flex_none());
+        for (ix, leaf) in self.projection.leaves[visible.clone()].iter().enumerate() {
+            if self.live
+                && !super::mdx::view::visible_field(&super::mdx::view::FieldContext::new(
+                    &self.projection,
+                    leaf,
+                    &component_source,
+                    &self.mdx_state,
+                ))
+            {
+                continue;
+            }
+            let rendered = if let Kind::TableCell(cell) = leaf.kind {
+                let global = visible.start + ix;
+                if global > visible.start
+                    && matches!(self.projection.leaves[global - 1].kind, Kind::TableCell(other) if other.same_row(cell))
+                {
+                    continue;
+                }
+                let end = global + self.projection.leaves[global..].iter().take_while(|leaf| {
                                 matches!(leaf.kind, Kind::TableCell(other) if other.same_row(cell))
                             }).count();
-                            let scroll = self.tables.scroll(cell).clone();
-                            let (row, ids) = self.tables.row(&self.projection.leaves[global..end],
-                                -scroll.offset().x, table_width, self.wrap,
-                                self.state.marked_range().as_ref(), &self.math, &context,
-                                &self.projection, &component_source, &self.mdx_state, window, cx);
+                let scroll = self.tables.scroll(cell).clone();
+                let (row, ids) = self.tables.row(
+                    &self.projection.leaves[global..end],
+                    -scroll.offset().x,
+                    table_width,
+                    self.wrap,
+                    self.state.marked_range().as_ref(),
+                    &self.math,
+                    &context,
+                    &self.projection,
+                    &component_source,
+                    &self.mdx_state,
+                    window,
+                    cx,
+                );
+                let view = cx.entity().downgrade();
+                let row = row.on_children_prepainted(move |bounds, _, cx| {
+                    let _ = view.update(cx, |view, _| {
+                        for (id, bounds) in ids.iter().zip(bounds) {
+                            if let Some(id) = id {
+                                view.table_geometry.insert(*id, bounds);
+                            }
+                        }
+                    });
+                });
+                // The header owns the toolbar in document flow, outside the
+                // table's horizontal scroll/mask but inside vertical scrolling.
+                div()
+                    .w_full()
+                    .flex()
+                    .flex_col()
+                    .when(
+                        cell.is_header()
+                            && active_table.is_some_and(|active| active.table() == cell.table()),
+                        |table| {
+                            use gpui_kit::component::{
+                                Sizable as _,
+                                button::{Button, ButtonVariants as _},
+                                menu::DropdownMenu as _,
+                            };
                             let view = cx.entity().downgrade();
-                            let row = row.on_children_prepainted(move |bounds, _, cx| {
-                                let _ = view.update(cx, |view, _| {
-                                    for (id, bounds) in ids.iter().zip(bounds) {
-                                        if let Some(id) = id { view.table_geometry.insert(*id, bounds); }
-                                    }
-                                });
-                            });
-                            // The header owns the toolbar in document flow, outside the
-                            // table's horizontal scroll/mask but inside vertical scrolling.
-                            div().w_full().flex().flex_col()
-                                .when(cell.is_header() && active_table.is_some_and(|active| active.table() == cell.table()), |table| {
-                                    use gpui_kit::component::{Sizable as _, button::{Button, ButtonVariants as _}, menu::DropdownMenu as _};
-                                    let view = cx.entity().downgrade();
-                                    let focus = self.focus.clone();
-                                    table.child(gpui_kit::component::h_flex().flex_none()
-                                        .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-                                        .child(Button::new("markdown-table-commands").small().ghost()
-                                            .label(crate::ui::i18n::t(crate::ui::i18n::L10nKey::EditorTableCommands))
+                            let focus = self.focus.clone();
+                            table.child(
+                                gpui_kit::component::h_flex()
+                                    .flex_none()
+                                    .on_mouse_down(MouseButton::Left, |_, _, cx| {
+                                        cx.stop_propagation()
+                                    })
+                                    .child(
+                                        Button::new("markdown-table-commands")
+                                            .small()
+                                            .ghost()
+                                            .label(crate::ui::i18n::t(
+                                                crate::ui::i18n::L10nKey::EditorTableCommands,
+                                            ))
                                             .dropdown_menu(move |menu, _, cx| {
                                                 let menu = menu.action_context(focus.clone());
                                                 match view.upgrade() {
                                                     Some(view) => view.read(cx).table_menu(menu),
                                                     None => menu,
                                                 }
-                                            })))
-                                })
-                                .child(div().w_full().relative()
-                                    .child(div().id(("markdown-table-row", leaf.id)).w_full()
-                                        .overflow_hidden().track_scroll(&scroll).child(row))
-                                    .child(gpui_kit::base::ScrollableMask::new(Axis::Horizontal, &scroll)
-                                        .id(("markdown-table-pan", leaf.id))))
+                                            }),
+                                    ),
+                            )
+                        },
+                    )
+                    .child(
+                        div()
+                            .w_full()
+                            .relative()
+                            .child(
+                                div()
+                                    .id(("markdown-table-row", leaf.id))
+                                    .w_full()
+                                    .overflow_hidden()
+                                    .track_scroll(&scroll)
+                                    .child(row),
+                            )
+                            .child(
+                                gpui_kit::base::ScrollableMask::new(Axis::Horizontal, &scroll)
+                                    .id(("markdown-table-pan", leaf.id)),
+                            ),
+                    )
+                    .into_any_element()
+            } else {
+                self.blocks[&leaf.id]
+                    .node
+                    .render_with_id(
+                        ("markdown-leaf", leaf.id),
+                        FlowPosition::at(&references, ix, ix + 1 == references.len())
+                            .first(true)
+                            .last(true),
+                        &context,
+                        window,
+                        cx,
+                    )
+                    .into_any_element()
+            };
+            let rendered = if self.live && matches!(leaf.kind, Kind::Mermaid(_)) {
+                self.render_mermaid(leaf, rendered.into_any_element(), window, cx)
+            } else {
+                rendered.into_any_element()
+            };
+            let rendered = if self.live && !matches!(leaf.kind, Kind::TableCell(_)) {
+                let field = super::mdx::view::FieldContext::new(
+                    &self.projection,
+                    leaf,
+                    &component_source,
+                    &self.mdx_state,
+                );
+                super::mdx::view::render_field(&field, rendered, window, cx)
+            } else {
+                rendered
+            };
+            block = block.child(MeasuredBlock {
+                view: cx.entity(),
+                id: leaf.id,
+                version: leaf.version,
+                child: div()
+                    .id(("markdown-block", leaf.id))
+                    .w(table_width)
+                    .when(self.live && matches!(leaf.kind, Kind::List(_)), |block| {
+                        block.pb(rems(typography::LIST_GAP))
+                    })
+                    .when(
+                        self.live
+                            && super::regions::label(leaf.kind).is_some()
+                            && !matches!(leaf.kind, Kind::Mermaid(_))
+                            && !leaf.text.is_empty(),
+                        |block| {
+                            block
+                                .font_family(cx.theme().mono_font_family.clone())
+                                .child(
+                                    div()
+                                        .text_xs()
+                                        .text_color(cx.theme().muted_foreground)
+                                        .child(crate::ui::i18n::t(
+                                            super::regions::label(leaf.kind)
+                                                .expect("source region label"),
+                                        )),
+                                )
+                        },
+                    )
+                    .when(self.live && leaf.kind == Kind::Rule, |block| {
+                        block.child(BlockNode::HorizontalRule { span: None }.render_with_id(
+                            ("markdown-rule", leaf.id),
+                            FlowPosition::at(&references, ix, true),
+                            &context,
+                            window,
+                            cx,
+                        ))
+                    })
+                    .child({
+                        let style = match leaf.kind {
+                            Kind::List(style) | Kind::Quote(style) if self.live => Some(style),
+                            _ => None,
+                        };
+                        if let Some(style) = style {
+                            let mut row = div().flex().items_start().min_w_0().w_full();
+                            let levels = style.depth.saturating_sub(1)
+                                + usize::from(style.depth > 0 && style.marker.is_none());
+                            row = row.pl(rems(levels as f32 * typography::list_level(style)));
+                            if let Some(checked) = style.task {
+                                let at = leaf.range.start;
+                                let revision = self.projection.revision;
+                                row = row.gap_2().child(
+                                    div()
+                                        .on_mouse_down(MouseButton::Left, |_, _, cx| {
+                                            cx.stop_propagation();
+                                        })
+                                        .child(
+                                            gpui_kit::component::checkbox::Checkbox::new((
+                                                "markdown-task",
+                                                leaf.id,
+                                            ))
+                                            .checked(checked)
+                                            .accessibility_label(crate::ui::i18n::t_fmt(
+                                                L10nKey::EditorMarkdownTaskLabel,
+                                                &[("text", &leaf.text)],
+                                            ))
+                                            .on_change(cx.listener(move |this, _, window, cx| {
+                                                if this.document.read(cx).revision() != revision {
+                                                    return;
+                                                }
+                                                this.command(
+                                                    Command::ToggleTask { at },
+                                                    window,
+                                                    cx,
+                                                );
+                                                this.focus.focus(window, cx);
+                                            })),
+                                        ),
+                                );
+                            }
+                            row.child(div().flex_1().min_w_0().child(rendered))
                                 .into_any_element()
                         } else {
-                            self.blocks[&leaf.id].node.render_with_id(
-                                ("markdown-leaf", leaf.id),
-                                FlowPosition::at(&references, ix, ix + 1 == references.len()).first(true).last(true),
-                                &context, window, cx,
-                            ).into_any_element()
-                        };
-                        let rendered = if self.live && matches!(leaf.kind, Kind::Mermaid(_)) {
-                            self.render_mermaid(leaf, rendered.into_any_element(), window, cx)
-                        } else {
-                            rendered.into_any_element()
-                        };
-                        let rendered = if self.live && !matches!(leaf.kind, Kind::TableCell(_)) {
-                            let field = super::mdx::view::FieldContext::new(
-                                &self.projection,
-                                leaf,
-                                &component_source,
-                                &self.mdx_state,
-                            );
-                            super::mdx::view::render_field(&field, rendered, window, cx)
-                        } else {
                             rendered
-                        };
-                        Some(MeasuredBlock {
-                            view: cx.entity(),
-                            id: leaf.id,
-                            version: leaf.version,
-                            child: div()
-                                .id(("markdown-block", leaf.id))
-                                .w(table_width)
-                                .when(self.live && matches!(leaf.kind, Kind::List(_)), |block| {
-                                    block.pb(rems(typography::LIST_GAP))
-                                })
-                                .when(
-                                    self.live
-                                        && super::regions::label(leaf.kind).is_some()
-                                        && !matches!(leaf.kind, Kind::Mermaid(_))
-                                        && !leaf.text.is_empty(),
-                                    |block| {
-                                        block
-                                            .font_family(cx.theme().mono_font_family.clone())
-                                            .child(
-                                                div()
-                                                    .text_xs()
-                                                    .text_color(cx.theme().muted_foreground)
-                                                    .child(crate::ui::i18n::t(
-                                                        super::regions::label(leaf.kind)
-                                                            .expect("source region label"),
-                                                    )),
-                                            )
-                                    },
-                                )
-                                .when(self.live && leaf.kind == Kind::Rule, |block| {
-                                    block.child(
-                                        BlockNode::HorizontalRule { span: None }.render_with_id(
-                                            ("markdown-rule", leaf.id),
-                                            FlowPosition::at(&references, ix, true),
-                                            &context,
-                                            window,
-                                            cx,
-                                        ),
-                                    )
-                                })
-                                .child({
-                                    let style = match leaf.kind {
-                                        Kind::List(style) | Kind::Quote(style) if self.live => {
-                                            Some(style)
-                                        }
-                                        _ => None,
-                                    };
-                                    if let Some(style) = style {
-                                        let mut row = div().flex().items_start().min_w_0().w_full();
-                                        let levels = style.depth.saturating_sub(1)
-                                            + usize::from(
-                                                style.depth > 0 && style.marker.is_none(),
-                                            );
-                                        row = row.pl(rems(levels as f32 * typography::list_level(style)));
-                                        if let Some(checked) = style.task {
-                                            let at = leaf.range.start;
-                                            let revision = self.projection.revision;
-                                            row = row.gap_2().child(
-                                                div().on_mouse_down(MouseButton::Left, |_, _, cx| {
-                                                    cx.stop_propagation();
-                                                }).child(
-                                                gpui_kit::component::checkbox::Checkbox::new((
-                                                    "markdown-task",
-                                                    leaf.id,
-                                                ))
-                                                .checked(checked)
-                                                .accessibility_label(crate::ui::i18n::t_fmt(
-                                                    L10nKey::EditorMarkdownTaskLabel,
-                                                    &[("text", &leaf.text)],
-                                                ))
-                                                .on_change(cx.listener(
-                                                    move |this, _, window, cx| {
-                                                        if this.document.read(cx).revision() != revision {
-                                                            return;
-                                                        }
-                                                        this.command(
-                                                            Command::ToggleTask { at },
-                                                            window,
-                                                            cx,
-                                                        );
-                                                        this.focus.focus(window, cx);
-                                                    },
-                                                )),
-                                                ),
-                                            );
-                                        }
-                                        row.child(div().flex_1().min_w_0().child(rendered))
-                                            .into_any_element()
-                                    } else {
-                                        rendered
-                                    }
-                                })
-                                .into_any_element(),
-                        })
-                    }),
-            )
-            .child(div().h(after).flex_none());
+                        }
+                    })
+                    .into_any_element(),
+            });
+        }
+        let block = block.child(div().h(after).flex_none());
         let image_status = if self.live {
             use crate::ui::i18n::{L10nKey, t};
             use gpui_kit::component::{
@@ -3498,12 +3550,15 @@ impl Element for SourceElement {
         self.child.paint(window, cx);
         let view = self.view.clone();
         window.on_mouse_event(move |event: &MouseMoveEvent, phase, window, cx| {
-            if !phase.bubble() || (!view.read(cx).dragging && view.read(cx).pointer_link.is_none()) {
+            if !phase.bubble() || (!view.read(cx).dragging && view.read(cx).pointer_link.is_none())
+            {
                 return;
             }
             view.update(cx, |view, cx| {
                 view.move_pointer_link(event, window, cx);
-                if !view.dragging { return; }
+                if !view.dragging {
+                    return;
+                }
                 if event.pressed_button == Some(MouseButton::Left) {
                     view.drag_to(event.position, window, cx);
                 } else {
@@ -3539,4 +3594,3 @@ impl Element for SourceElement {
         }
     }
 }
-

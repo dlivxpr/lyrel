@@ -1,9 +1,6 @@
 //! Consumer regression for keyboard return from native MDX controls.
 use crate::ui::app::test_window::harness_with_tabs;
-use gpui_kit::{
-    Focusable as _, VisualContext as _,
-    test::TestWindowExt as _,
-};
+use gpui_kit::{Focusable as _, test::TestWindowExt as _};
 
 #[gpui_kit::test]
 fn mdx_control_escape_returns_to_nested_text_without_changing_source_or_history(
@@ -72,7 +69,10 @@ fn mdx_control_escape_returns_to_nested_text_without_changing_source_or_history(
     });
     let edited = original.replacen("**bold**", "**changed**", 1);
     view.read_with(&context, |view, cx| {
-        assert_eq!(view.document().read(cx).encode().unwrap(), edited.as_bytes());
+        assert_eq!(
+            view.document().read(cx).encode().unwrap(),
+            edited.as_bytes()
+        );
     });
     context.dispatch_action(gpui_kit::component::input::Undo);
     view.read_with(&context, |view, cx| {
