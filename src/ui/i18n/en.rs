@@ -1758,7 +1758,9 @@ pub fn translate_en(key: L10nKey) -> &'static str {
         L10nKey::EditorMarkdownTaskLabel => "Toggle task: {text}",
         L10nKey::EditorMarkdownFormulaLabel => "Formula: {tex}",
         L10nKey::EditorFormulaEditing => "Edit formula",
-        L10nKey::EditorFormulaHelp => "↑↓: suggestions · Enter: accept/apply · Esc: dismiss/cancel · Shift+F10: formula menu",
+        L10nKey::EditorFormulaHelp => {
+            "↑↓: suggestions · Enter: accept/apply · Esc: dismiss/cancel · Shift+F10: formula menu"
+        }
         L10nKey::EditorFormulaCommit => "Apply formula",
         L10nKey::EditorFormulaCancel => "Cancel formula",
         L10nKey::EditorFormulaSource => "Edit formula source",
@@ -1866,7 +1868,9 @@ pub fn translate_en(key: L10nKey) -> &'static str {
         L10nKey::MarkdownBlockCommands => "Block…",
         L10nKey::MarkdownMoveContent => "Move content",
         L10nKey::MarkdownMoveDestination => "Insert moved content here",
-        L10nKey::MarkdownMoveHelp => "Move content: drag to an insertion line, or use ↑/↓ and Enter. Esc cancels.",
+        L10nKey::MarkdownMoveHelp => {
+            "Move content: drag to an insertion line, or use ↑/↓ and Enter. Esc cancels."
+        }
         L10nKey::MarkdownBlockParagraph => "Paragraph",
         L10nKey::MarkdownBlockHeading1 => "Heading 1",
         L10nKey::MarkdownBlockHeading2 => "Heading 2",
@@ -1962,11 +1966,19 @@ pub fn translate_en(key: L10nKey) -> &'static str {
         }
         L10nKey::MarkdownLinkSaveFirst => "Save the document before opening a relative link",
         L10nKey::MarkdownLinkRemotePath => "A remote destination must use a POSIX path",
-        L10nKey::MarkdownLinkAnchorNotFound => "The anchor was not found or is not unique in this document",
+        L10nKey::MarkdownLinkAnchorNotFound => {
+            "The anchor was not found or is not unique in this document"
+        }
         L10nKey::MarkdownReferenceLoading => "Looking up workspace references…",
-        L10nKey::MarkdownReferenceNoMatches => "No matching file or anchor. No file will be created.",
-        L10nKey::MarkdownReferenceUnreadable => "The reference target could not be read. Check the Host connection and permissions.",
-        L10nKey::MarkdownReferenceAmbiguous => "More than one file or anchor matches. Use an explicit path and a unique anchor.",
+        L10nKey::MarkdownReferenceNoMatches => {
+            "No matching file or anchor. No file will be created."
+        }
+        L10nKey::MarkdownReferenceUnreadable => {
+            "The reference target could not be read. Check the Host connection and permissions."
+        }
+        L10nKey::MarkdownReferenceAmbiguous => {
+            "More than one file or anchor matches. Use an explicit path and a unique anchor."
+        }
         L10nKey::EditorWrapOn => "Wrap: on",
         L10nKey::EditorWrapOff => "Wrap: off",
         L10nKey::EditorFileTooLarge => "\"{path}\" is too large for the editor ({size} MB)",

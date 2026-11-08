@@ -568,11 +568,26 @@ impl Leaf {
             .iter()
             .filter_map(|segment| segment.math.as_ref())
     }
-    pub(super) fn formula_at(&self, at: usize, end: bool) -> Option<(Range<usize>, super::math::Formula)> {
+    pub(super) fn formula_at(
+        &self,
+        at: usize,
+        end: bool,
+    ) -> Option<(Range<usize>, super::math::Formula)> {
         self.segments.iter().find_map(|segment| {
             let inside = segment.source.start < at && at < segment.source.end;
-            let boundary = if end { at == segment.source.end } else { at == segment.source.start };
-            (inside || boundary).then(|| segment.math.as_ref().map(|formula| (segment.source.clone(), formula.clone()))).flatten()
+            let boundary = if end {
+                at == segment.source.end
+            } else {
+                at == segment.source.start
+            };
+            (inside || boundary)
+                .then(|| {
+                    segment
+                        .math
+                        .as_ref()
+                        .map(|formula| (segment.source.clone(), formula.clone()))
+                })
+                .flatten()
         })
     }
     pub fn atom_source(&self, display: usize) -> Option<usize> {
@@ -615,8 +630,17 @@ impl Leaf {
         self.push_segment(range.clone(), &source[range], Some(ix), None);
     }
     pub(super) fn accepts_reference(&self, at: usize) -> bool {
-        !matches!(self.kind, Kind::Code(_) | Kind::Mermaid(_) | Kind::Math | Kind::Metadata | Kind::Html | Kind::Mdx(_))
-            && !self.segments.iter().any(|segment| segment.style.code && segment.source.start <= at && at <= segment.source.end)
+        !matches!(
+            self.kind,
+            Kind::Code(_)
+                | Kind::Mermaid(_)
+                | Kind::Math
+                | Kind::Metadata
+                | Kind::Html
+                | Kind::Mdx(_)
+        ) && !self.segments.iter().any(|segment| {
+            segment.style.code && segment.source.start <= at && at <= segment.source.end
+        })
     }
     pub(super) fn raw(&mut self, source: &str, range: Range<usize>) {
         self.push(range.clone(), &source[range]);
@@ -980,7 +1004,9 @@ impl Projection {
         } else {
             Self::source_lines(source, 0, &mut leaves);
         }
-        if live { super::source::math_edit::alignment::hide_markers(source, &mut leaves); }
+        if live {
+            super::source::math_edit::alignment::hide_markers(source, &mut leaves);
+        }
         if leaves.is_empty() {
             leaves.push(Leaf::new(0..0, Kind::Prose));
         }
@@ -1328,18 +1354,38 @@ impl Projection {
                 let raw = &source[range.clone()];
                 let alternatives = if raw.contains("[[") || raw.contains("((") {
                     super::links::Index::from_ast(source, node).links
-                } else { Vec::new() };
+                } else {
+                    Vec::new()
+                };
                 let mut at = 0;
                 while at < raw.len() {
-                    if let Some(link) = alternatives.iter().find(|link| link.source.start == range.start + at) {
+                    if let Some(link) = alternatives
+                        .iter()
+                        .find(|link| link.source.start == range.start + at)
+                    {
                         let ix = leaf.spans.len();
-                        leaf.spans.push(InlineSpan { source: link.source.clone(), revealed: false, always_hidden: false, target: None });
-                        leaf.push_segment(link.source.start..link.label.start, &source[link.source.start..link.label.start], Some(ix), None);
+                        leaf.spans.push(InlineSpan {
+                            source: link.source.clone(),
+                            revealed: false,
+                            always_hidden: false,
+                            target: None,
+                        });
+                        leaf.push_segment(
+                            link.source.start..link.label.start,
+                            &source[link.source.start..link.label.start],
+                            Some(ix),
+                            None,
+                        );
                         let before = leaf.style;
                         leaf.style.link = Some(ix);
                         leaf.raw(source, link.label.clone());
                         leaf.style = before;
-                        leaf.push_segment(link.label.end..link.source.end, &source[link.label.end..link.source.end], Some(ix), None);
+                        leaf.push_segment(
+                            link.label.end..link.source.end,
+                            &source[link.label.end..link.source.end],
+                            Some(ix),
+                            None,
+                        );
                         at = link.source.end - range.start;
                         continue;
                     }

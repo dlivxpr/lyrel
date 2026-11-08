@@ -6,8 +6,8 @@ fn links_selection_gestures_never_navigate_and_plain_click_edits(
 ) {
     use crate::ui::app::test_window::harness_with_tabs;
     use gpui_kit::{
-        Focusable as _, KeyDownEvent, KeyUpEvent, Keystroke, Modifiers, MouseButton, MouseDownEvent,
-        PlatformInput,
+        Focusable as _, KeyDownEvent, KeyUpEvent, Keystroke, Modifiers, MouseButton,
+        MouseDownEvent, PlatformInput,
         test::{TestEventExt as _, TestWindowExt as _},
     };
     let directory = tempfile::tempdir().unwrap();

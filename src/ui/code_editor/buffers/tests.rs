@@ -2699,66 +2699,130 @@ fn markdown_reference_completion_keyboard_history_and_owning_host_anchor(cx: &mu
     });
     wait_until(&mut context, |cx| active_id(&app, cx).is_some());
     let original_id = active_id(&app, &context).unwrap();
-    let view = app.read_with(&context, |app, _| app.active_editor_input().unwrap().markdown().unwrap().clone());
+    let view = app.read_with(&context, |app, _| {
+        app.active_editor_input()
+            .unwrap()
+            .markdown()
+            .unwrap()
+            .clone()
+    });
     view.update_in(&mut context, |view, window, cx| {
         view.select_range(6..6, cx);
         view.focus_handle(cx).focus(window, cx);
     });
     context.update(|window, cx| window.input("[[next#det", cx));
-    wait_until(&mut context, |cx| cx.update(|window, cx| {
-        window.render_frame(cx);
-        window.try_find("markdown-reference-completions").is_some()
-    }));
+    wait_until(&mut context, |cx| {
+        cx.update(|window, cx| {
+            window.render_frame(cx);
+            window.try_find("markdown-reference-completions").is_some()
+        })
+    });
     context.update(|window, cx| {
         window.press("escape", cx);
         assert!(view.read(cx).focus_handle(cx).is_focused(window));
     });
-    view.read_with(&context, |view, cx| assert_eq!(view.document().read(cx).encode().unwrap(), b"Keep\r\n\r\n[[next#det"));
+    view.read_with(&context, |view, cx| {
+        assert_eq!(
+            view.document().read(cx).encode().unwrap(),
+            b"Keep\r\n\r\n[[next#det"
+        )
+    });
     context.dispatch_action(gpui_kit::component::input::ShowCompletions);
-    wait_until(&mut context, |cx| cx.update(|window, cx| {
-        window.render_frame(cx);
-        window.try_find("markdown-reference-completions").is_some()
-    }));
+    wait_until(&mut context, |cx| {
+        cx.update(|window, cx| {
+            window.render_frame(cx);
+            window.try_find("markdown-reference-completions").is_some()
+        })
+    });
     context.update(|window, cx| window.press("down", cx));
     context.update(|window, cx| window.press("enter", cx));
     let inserted = "Keep\r\n\r\n[detail](next.md#detail)";
-    view.read_with(&context, |view, cx| assert_eq!(view.document().read(cx).encode().unwrap(), inserted.as_bytes()));
+    view.read_with(&context, |view, cx| {
+        assert_eq!(
+            view.document().read(cx).encode().unwrap(),
+            inserted.as_bytes()
+        )
+    });
     context.dispatch_action(gpui_kit::component::input::Undo);
-    view.read_with(&context, |view, cx| assert_eq!(view.document().read(cx).encode().unwrap(), b"Keep\r\n\r\n[[next#det"));
+    view.read_with(&context, |view, cx| {
+        assert_eq!(
+            view.document().read(cx).encode().unwrap(),
+            b"Keep\r\n\r\n[[next#det"
+        )
+    });
     context.dispatch_action(gpui_kit::component::input::Redo);
-    view.read_with(&context, |view, cx| assert_eq!(view.document().read(cx).encode().unwrap(), inserted.as_bytes()));
-    app.update_in(&mut context, |app, window, cx| app.editor_save_active(window, cx));
-    wait_until(&mut context, |cx| app.read_with(cx, |app, _| !app.active_buffer().unwrap().dirty));
-    assert_eq!(std::fs::read(directory.path().join("start.md")).unwrap(), inserted.as_bytes());
+    view.read_with(&context, |view, cx| {
+        assert_eq!(
+            view.document().read(cx).encode().unwrap(),
+            inserted.as_bytes()
+        )
+    });
+    app.update_in(&mut context, |app, window, cx| {
+        app.editor_save_active(window, cx)
+    });
+    wait_until(&mut context, |cx| {
+        app.read_with(cx, |app, _| !app.active_buffer().unwrap().dirty)
+    });
+    assert_eq!(
+        std::fs::read(directory.path().join("start.md")).unwrap(),
+        inserted.as_bytes()
+    );
     app.update_in(&mut context, |app, window, cx| {
         app.editor_close_file(0, window, cx);
         app.editor_open_on_host(host.clone(), Path::new("/start.md"), window, cx);
     });
-    wait_until(&mut context, |cx| active_id(&app, cx).is_some_and(|id| id != original_id));
+    wait_until(&mut context, |cx| {
+        active_id(&app, cx).is_some_and(|id| id != original_id)
+    });
     let original_id = active_id(&app, &context).unwrap();
-    let view = app.read_with(&context, |app, _| app.active_editor_input().unwrap().markdown().unwrap().clone());
-    view.read_with(&context, |view, cx| assert_eq!(view.document().read(cx).encode().unwrap(), inserted.as_bytes()));
+    let view = app.read_with(&context, |app, _| {
+        app.active_editor_input()
+            .unwrap()
+            .markdown()
+            .unwrap()
+            .clone()
+    });
+    view.read_with(&context, |view, cx| {
+        assert_eq!(
+            view.document().read(cx).encode().unwrap(),
+            inserted.as_bytes()
+        )
+    });
     view.update_in(&mut context, |view, window, cx| {
         view.select_range(8..8, cx);
         view.focus_handle(cx).focus(window, cx);
     });
     wait_until(&mut context, |cx| {
         cx.executor().advance_clock(Duration::from_millis(100));
-        cx.update(|window, cx| { window.render_frame(cx); window.render_frame(cx); window.try_find("markdown-follow-link").is_some() })
+        cx.update(|window, cx| {
+            window.render_frame(cx);
+            window.render_frame(cx);
+            window.try_find("markdown-follow-link").is_some()
+        })
     });
     context.dispatch_action(markdown::FollowLink);
-    wait_until(&mut context, |cx| active_id(&app, cx).is_some_and(|id| id != original_id));
+    wait_until(&mut context, |cx| {
+        active_id(&app, cx).is_some_and(|id| id != original_id)
+    });
     app.read_with(&context, |app, cx| {
         let file = app.active_buffer().unwrap();
         assert_eq!(file.host.id(), HostId(822));
         assert_eq!(file.path, Path::new("/next.md"));
-        assert_eq!(file.input.markdown().unwrap().read(cx).selection().head(), target.find("<a").unwrap());
+        assert_eq!(
+            file.input.markdown().unwrap().read(cx).selection().head(),
+            target.find("<a").unwrap()
+        );
     });
-    assert_eq!(std::fs::read(directory.path().join("next.md")).unwrap(), target.as_bytes());
+    assert_eq!(
+        std::fs::read(directory.path().join("next.md")).unwrap(),
+        target.as_bytes()
+    );
 }
 
 #[gpui_kit::test]
-fn markdown_local_reference_completion_reports_ambiguity_without_hidden_writes(cx: &mut TestAppContext) {
+fn markdown_local_reference_completion_reports_ambiguity_without_hidden_writes(
+    cx: &mut TestAppContext,
+) {
     use gpui_kit::Focusable as _;
     let directory = canonical_tempdir();
     let path = directory.path().join("start.md");
@@ -2767,26 +2831,47 @@ fn markdown_local_reference_completion_reports_ambiguity_without_hidden_writes(c
     let target = "<a id=\"dup\"></a>\n\n<a id=\"dup\"></a>\n";
     std::fs::write(directory.path().join("next.md"), target).unwrap();
     let (app, mut context, _streams) = harness_with_tabs(cx, 1);
-    app.update_in(&mut context, |app, window, cx| app.open_file_in_editor(&path, window, cx));
+    app.update_in(&mut context, |app, window, cx| {
+        app.open_file_in_editor(&path, window, cx)
+    });
     wait_until(&mut context, |cx| active_id(&app, cx).is_some());
-    let view = app.read_with(&context, |app, _| app.active_editor_input().unwrap().markdown().unwrap().clone());
+    let view = app.read_with(&context, |app, _| {
+        app.active_editor_input()
+            .unwrap()
+            .markdown()
+            .unwrap()
+            .clone()
+    });
     view.update_in(&mut context, |view, window, cx| {
         let end = view.document().read(cx).source().len();
         view.select_range(end..end, cx);
         view.focus_handle(cx).focus(window, cx);
     });
     context.update(|window, cx| window.input("[[next#dup", cx));
-    wait_until(&mut context, |cx| cx.update(|window, cx| {
-        window.render_frame(cx);
-        window.try_find("markdown-reference-status").is_some_and(|status| status.label() == Some(t(L10nKey::MarkdownReferenceAmbiguous)))
-    }));
-    app.read_with(&context, |app, _| assert!(app.active_buffer().unwrap().dirty));
+    wait_until(&mut context, |cx| {
+        cx.update(|window, cx| {
+            window.render_frame(cx);
+            window
+                .try_find("markdown-reference-status")
+                .is_some_and(|status| {
+                    status.label() == Some(t(L10nKey::MarkdownReferenceAmbiguous))
+                })
+        })
+    });
+    app.read_with(&context, |app, _| {
+        assert!(app.active_buffer().unwrap().dirty)
+    });
     context.update(|window, cx| {
         window.press("escape", cx);
         assert!(view.read(cx).focus_handle(cx).is_focused(window));
     });
     context.dispatch_action(gpui_kit::component::input::Undo);
-    view.read_with(&context, |view, cx| assert_eq!(view.document().read(cx).encode().unwrap(), original.as_bytes()));
+    view.read_with(&context, |view, cx| {
+        assert_eq!(
+            view.document().read(cx).encode().unwrap(),
+            original.as_bytes()
+        )
+    });
     context.update(|window, cx| window.input("[[next]]", cx));
     view.update_in(&mut context, |view, window, cx| {
         let caret = view.document().read(cx).source().len() - 2;
@@ -2794,13 +2879,23 @@ fn markdown_local_reference_completion_reports_ambiguity_without_hidden_writes(c
         view.focus_handle(cx).focus(window, cx);
     });
     context.dispatch_action(gpui_kit::component::input::ShowCompletions);
-    wait_until(&mut context, |cx| cx.update(|window, cx| {
-        window.render_frame(cx);
-        window.try_find("markdown-reference-completions").is_some()
-    }));
+    wait_until(&mut context, |cx| {
+        cx.update(|window, cx| {
+            window.render_frame(cx);
+            window.try_find("markdown-reference-completions").is_some()
+        })
+    });
     context.update(|window, cx| window.press("tab", cx));
-    view.read_with(&context, |view, cx| assert_eq!(view.document().read(cx).encode().unwrap(), format!("{original}[next.md](next.md)").as_bytes()));
+    view.read_with(&context, |view, cx| {
+        assert_eq!(
+            view.document().read(cx).encode().unwrap(),
+            format!("{original}[next.md](next.md)").as_bytes()
+        )
+    });
     assert_eq!(std::fs::read(&path).unwrap(), original.as_bytes());
-    assert_eq!(std::fs::read(directory.path().join("next.md")).unwrap(), target.as_bytes());
+    assert_eq!(
+        std::fs::read(directory.path().join("next.md")).unwrap(),
+        target.as_bytes()
+    );
     assert_eq!(std::fs::read_dir(directory.path()).unwrap().count(), 2);
 }

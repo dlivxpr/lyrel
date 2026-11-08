@@ -12,12 +12,14 @@ impl SourcePresentation {
     pub(super) fn selectable_leaf(&self, leaf: &super::super::projection::Leaf, cx: &App) -> bool {
         !self.live
             || (!self.folds.is_hidden(leaf.range.start)
-                && super::super::mdx::view::visible_field(&super::super::mdx::view::FieldContext::new(
-                    &self.projection,
-                    leaf,
-                    self.document.read(cx).source(),
-                    &self.mdx_state,
-                )))
+                && super::super::mdx::view::visible_field(
+                    &super::super::mdx::view::FieldContext::new(
+                        &self.projection,
+                        leaf,
+                        self.document.read(cx).source(),
+                        &self.mdx_state,
+                    ),
+                ))
     }
 
     pub(super) fn logical_line_edge(&self, at: usize, end: bool, cx: &App) -> usize {
@@ -521,8 +523,11 @@ impl SourcePresentation {
                     // This callback alone decides whether another frame is
                     // needed; reaching the scroll limit must stop scheduling.
                     view.drag_frame_pending = true;
-                    if view.reorder.is_some() { view.move_reorder(pointer, window, cx); }
-                    else { view.drag_to(pointer, window, cx); }
+                    if view.reorder.is_some() {
+                        view.move_reorder(pointer, window, cx);
+                    } else {
+                        view.drag_to(pointer, window, cx);
+                    }
                     view.drag_frame_pending = false;
                 }
                 let bounds = view.scroll.bounds();

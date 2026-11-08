@@ -26,10 +26,15 @@ impl Frame {
             window_size: window.viewport_size(),
             rem: window.rem_size(),
             scale: window.scale_factor(),
-            table: view.projection.leaf_at(view.state.selection.head()).and_then(|leaf| {
-                let Kind::TableCell(cell) = leaf.kind else { return None; };
-                view.tables.geometry_state(cell)
-            }),
+            table: view
+                .projection
+                .leaf_at(view.state.selection.head())
+                .and_then(|leaf| {
+                    let Kind::TableCell(cell) = leaf.kind else {
+                        return None;
+                    };
+                    view.tables.geometry_state(cell)
+                }),
         }
     }
 
