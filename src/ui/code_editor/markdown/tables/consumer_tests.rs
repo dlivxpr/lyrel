@@ -233,3 +233,86 @@ fn table_reverse_replacement_and_multi_caret_paste_preserve_structure(
         )
     });
 }
+
+#[gpui_kit::test]
+fn table_structure_reverse_header_duplicate_and_minimum_save_reopen(
+    cx: &mut gpui_kit::TestAppContext,
+) {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("structure-boundaries.md");
+    let original = "Before  \r\n\n| **Head**  | `x\\|y` |\r\n| :----- | ----: |\n| body | tail |\r\n\nAfter  ";
+    std::fs::write(&path, original).unwrap();
+    let (app, mut context, _streams) = harness_with_tabs(cx, 1);
+    app.update_in(&mut context, |app, window, cx| app.open_file_in_editor(&path, window, cx));
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    let view = loop {
+        context.run_until_parked();
+        if let Some(view) = app.read_with(&context, |app, _| {
+            app.active_editor_input().and_then(|input| input.markdown().cloned())
+        }) {
+            start_in_source(&view, &mut context);
+            break view;
+        }
+        assert!(std::time::Instant::now() < deadline);
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    };
+    context.dispatch_action(crate::core::actions::ToggleDocumentPreview);
+    settle_live_geometry(&view, &mut context);
+    let source = original.replace("\r\n", "\n");
+    let head = source.find("Head").unwrap();
+    let end = source.find("x\\|y").unwrap() + 4;
+    let reverse = Selection::new(end, head + 2);
+    view.update_in(&mut context, |view, window, cx| {
+        view.command(Command::Select(reverse), window, cx);
+        view.focus_handle(cx).focus(window, cx);
+    });
+    // Header deletion must not promote a body row or create a history entry.
+    context.dispatch_action(crate::ui::code_editor::markdown::tables::DeleteRow);
+    context.run_until_parked();
+    view.read_with(&context, |view, cx| {
+        assert_eq!(view.document().read(cx).encode().unwrap(), original.as_bytes());
+        assert_eq!(view.selection(), reverse);
+    });
+    context.dispatch_action(crate::ui::code_editor::markdown::tables::DuplicateRow);
+    context.run_until_parked();
+    settle_live_geometry(&view, &mut context);
+    // Continue inside the duplicated formatted cell, not the header or delimiter.
+    context.update(|window, cx| window.input("X", cx));
+    context.run_until_parked();
+    let expected = "Before  \r\n\n| **Head**  | `x\\|y` |\r\n| :----- | ----: |\n| **HeXad**  | `x\\|y` |\r\n| body | tail |\r\n\nAfter  ";
+    view.read_with(&context, |view, cx| {
+        assert_eq!(view.document().read(cx).encode().unwrap(), expected.as_bytes());
+    });
+    context.dispatch_action(gpui_kit::component::input::Undo);
+    context.dispatch_action(gpui_kit::component::input::Undo);
+    context.run_until_parked();
+    view.read_with(&context, |view, cx| {
+        assert_eq!(view.document().read(cx).encode().unwrap(), original.as_bytes());
+        assert_eq!(view.selection(), reverse);
+    });
+    context.dispatch_action(crate::core::actions::ToggleDocumentPreview);
+    context.dispatch_action(gpui_kit::component::input::Redo);
+    context.dispatch_action(gpui_kit::component::input::Redo);
+    context.dispatch_action(crate::core::actions::EditorSave);
+    loop {
+        context.run_until_parked();
+        if app.read_with(&context, |app, _| app.active_buffer().is_some_and(|file| !file.dirty && !file.saving)) { break; }
+        assert!(std::time::Instant::now() < deadline);
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    assert_eq!(std::fs::read(&path).unwrap(), expected.as_bytes());
+    app.update_in(&mut context, |app, window, cx| {
+        app.editor_close_file(0, window, cx);
+        app.open_file_in_editor(&path, window, cx);
+    });
+    loop {
+        context.run_until_parked();
+        if app.read_with(&context, |app, _| app.active_buffer().is_some()) { break; }
+        assert!(std::time::Instant::now() < deadline);
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    app.read_with(&context, |app, cx| {
+        let reopened = app.active_editor_input().unwrap().markdown().unwrap().read(cx);
+        assert_eq!(reopened.document().read(cx).encode().unwrap(), expected.as_bytes());
+    });
+}

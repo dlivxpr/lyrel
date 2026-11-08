@@ -1409,6 +1409,8 @@ l10n_keys! {
     EditorTableInsert,
     EditorTableInsertRowBefore,
     EditorTableInsertRowAfter,
+    EditorTableDuplicateRow,
+    EditorTableDeleteTable,
     EditorTableDeleteRow,
     EditorTableInsertColumnBefore,
     EditorTableInsertColumnAfter,
