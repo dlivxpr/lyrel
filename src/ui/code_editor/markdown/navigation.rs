@@ -483,8 +483,8 @@ impl SourcePresentation {
         self.schedule_drag_frame(window, cx);
     }
 
-    fn schedule_drag_frame(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.drag_frame_pending || !self.dragging {
+    pub(super) fn schedule_drag_frame(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.drag_frame_pending || (!self.dragging && self.reorder.is_none()) {
             return;
         }
         let Some(pointer) = self.drag_pointer else {
@@ -508,7 +508,8 @@ impl SourcePresentation {
             let Some(view) = view.upgrade() else { return };
             view.update(cx, |view, cx| {
                 view.drag_frame_pending = false;
-                if !view.dragging || !view.focus.is_focused(window) {
+                if (!view.dragging && view.reorder.is_none()) || !view.focus.is_focused(window) {
+                    view.cancel_reorder(cx);
                     return;
                 }
                 let Some(pointer) = view.drag_pointer else {
@@ -520,7 +521,8 @@ impl SourcePresentation {
                     // This callback alone decides whether another frame is
                     // needed; reaching the scroll limit must stop scheduling.
                     view.drag_frame_pending = true;
-                    view.drag_to(pointer, window, cx);
+                    if view.reorder.is_some() { view.move_reorder(pointer, window, cx); }
+                    else { view.drag_to(pointer, window, cx); }
                     view.drag_frame_pending = false;
                 }
                 let bounds = view.scroll.bounds();

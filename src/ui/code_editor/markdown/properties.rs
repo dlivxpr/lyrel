@@ -52,6 +52,15 @@ fn property(line: &str, base: usize) -> Option<Property> {
 }
 
 impl Index {
+    pub(super) fn reorder_ranges(&self) -> Vec<Range<usize>> {
+        let mut runs: Vec<Range<usize>> = Vec::new();
+        for property in &self.properties {
+            if let Some(run) = runs.last_mut().filter(|run| run.end == property.line.start) {
+                run.end = property.line.end;
+            } else { runs.push(property.line.clone()); }
+        }
+        runs
+    }
     pub(in super::super) fn from_ast(source: &str, root: &Node) -> Self {
         fn walk(source: &str, node: &Node, index: &mut Index) {
             if matches!(node, Node::Code(_) | Node::InlineCode(_) | Node::Math(_) | Node::InlineMath(_)

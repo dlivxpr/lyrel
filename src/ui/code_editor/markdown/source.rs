@@ -45,6 +45,8 @@ pub(super) mod tools;
 mod spelling;
 #[path = "mermaid_authoring.rs"]
 mod mermaid_authoring;
+#[path = "reorder.rs"]
+mod reorder;
 
 #[path = "tables/authoring.rs"]
 mod table_authoring;
@@ -59,6 +61,7 @@ struct CachedBlock {
 struct Viewport {
     heights: HashMap<u64, (u64, Pixels)>,
     frame: Vec<(u64, u64, Bounds<Pixels>)>,
+    visible: Range<usize>,
     layout: Option<typography::LayoutKey>,
     anchor: Option<(u64, Pixels)>,
     offset: Point<Pixels>,
@@ -110,6 +113,7 @@ pub(crate) struct SourcePresentation {
     formats: formats::State,
     code: code::State,
     image_resize: Option<image_edit::Resize>,
+    reorder: Option<reorder::Gesture>,
     _observe: Subscription,
     mdx_state: super::mdx::ViewState,
     properties: properties::State,
@@ -122,6 +126,7 @@ impl SourcePresentation {
         cx: &mut Context<Self>,
     ) -> Self {
         code::init(cx);
+        reorder::init(cx);
         let owner_id = cx.entity_id();
         cx.on_release(move |view, cx| {
             // Platform handlers are weak. A last-owner release must still put
@@ -151,6 +156,7 @@ impl SourcePresentation {
                 this.image_snapshot = None;
                 if matches!(event, DocumentEvent::ResourceContextChanged) {
                     this.schedule_spelling(cx);
+                    this.cancel_reorder(cx);
                     this.pointer_link = None;
                     let document = this.document.read(cx);
                     if this.projection.grammar != document.grammar() {
@@ -170,6 +176,7 @@ impl SourcePresentation {
                 return;
             }
             if let DocumentEvent::Edited(transaction) = event {
+                this.cancel_reorder(cx);
                 this.spelling.invalidate();
                 this.pointer_link = None;
                 this.assets.rebase(transaction);
@@ -286,6 +293,7 @@ impl SourcePresentation {
             assets: assets::InsertionState::default(),
             code: code::State::default(),
             image_resize: None,
+            reorder: None,
             _observe: observe,
             mdx_state: super::mdx::ViewState::default(),
             properties: properties::State::default(),
@@ -334,6 +342,7 @@ impl SourcePresentation {
     }
     pub(crate) fn toggle_mode(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.command(Command::FinishComposition, window, cx);
+        self.cancel_reorder(cx);
         self.properties = properties::State::default();
         self.live = !self.live;
         self.geometry = None;
@@ -1098,6 +1107,7 @@ impl SourcePresentation {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        self.cancel_reorder(cx);
         let toggle_task = matches!(command, Command::ToggleTask { .. });
         if !toggle_task {
             self.goal_x = None;
@@ -2753,6 +2763,8 @@ impl Render for SourcePresentation {
                 child: div()
                     .id(("markdown-block", leaf.id))
                     .w(table_width)
+                    .relative()
+                    .children(self.reorder_grips(leaf, cx))
                     .children(self.block_disclosure(leaf.range.start, leaf.id, cx))
                     .when(self.live && matches!(leaf.kind, Kind::List(_)), |block| {
                         block.pb(rems(typography::LIST_GAP))
@@ -2896,7 +2908,9 @@ impl Render for SourcePresentation {
         } else {
             div().into_any_element()
         };
-        let key_context = KeyContext::parse(if !self.focus.is_focused(window) {
+        let key_context = KeyContext::parse(if self.reorder.is_some() {
+            "Markdown MarkdownReorder"
+        } else if !self.focus.is_focused(window) {
             "Markdown"
         } else if active_table.is_some() {
             "Input mode=editor Markdown MarkdownTable"
@@ -2909,6 +2923,7 @@ impl Render for SourcePresentation {
                 .id("markdown-source")
                 .test_support()
                 .size_full()
+                .relative()
                 .flex()
                 .flex_col()
                 .min_h_0()
@@ -3054,6 +3069,7 @@ impl Render for SourcePresentation {
                 .on_mouse_up(
                     MouseButton::Left,
                     cx.listener(|this, event: &MouseUpEvent, window, cx| {
+                        if this.finish_reorder(Some(event.position), window, cx) { cx.stop_propagation(); return; }
                         if this.finish_image_resize(false, window, cx) { cx.stop_propagation(); return; }
                         this.dragging = false;
                         this.drag_pointer = None;
@@ -3067,6 +3083,7 @@ impl Render for SourcePresentation {
                 .on_mouse_up_out(
                     MouseButton::Left,
                     cx.listener(|this, _, window, cx| {
+                        if this.cancel_reorder(cx) { cx.stop_propagation(); return; }
                         this.finish_image_resize(false, window, cx);
                         this.dragging = false;
                         this.drag_pointer = None;
@@ -3281,6 +3298,7 @@ impl Render for SourcePresentation {
                     );
                 }))
                 .on_action(cx.listener(|this, _: &actions::Escape, window, cx| {
+                    if this.cancel_reorder(cx) { return; }
                     if this.finish_image_resize(true, window, cx) { return; }
                     if this.cancel_image_insertion(cx) { return; }
                     if this.state.composition.is_some() {
@@ -3303,6 +3321,7 @@ impl Render for SourcePresentation {
                         .flex_shrink_0().aria_label(status.clone()).text_sm().text_color(cx.theme().muted_foreground).child(status)
                 ))
                 .child(image_status)
+                .children(self.reorder_status(cx))
                 .child(self.format_toolbar(window, cx))
                 .child(self.image_toolbar(cx))
                 .when(self.live, |root| {
@@ -3340,6 +3359,7 @@ impl Render for SourcePresentation {
                     div()
                         .id("markdown-source-scroll")
                         .flex_1().min_h_0().w_full()
+                        .relative()
                         .overflow_y_scroll()
                         .overflow_x_scroll()
                         .track_scroll(&self.scroll)
@@ -3377,12 +3397,14 @@ impl Render for SourcePresentation {
                                     },
                                 ))
                                 .child(block),
-                        ),
+                        )
+                        .children(self.reorder_indicator(window, cx)),
                     &self.scroll,
                 ));
         let root = self.code_actions(root, cx);
         let root = root.children(self.spelling_overlay(window, cx));
         let root = self.block_actions(root, cx);
+        let root = self.reorder_actions(root, cx);
         SourceElement {
             child: root.into_any_element(),
             view: cx.entity(),
@@ -3498,6 +3520,7 @@ impl Element for SourceElement {
     ) {
         self.view.update(cx, |view, _| {
             view.viewport.frame.clear();
+            view.viewport.visible = self.visible.clone();
             view.table_geometry.clear();
         });
         let table_measurement_changed = self.view.update(cx, |view, cx| {
@@ -3715,6 +3738,7 @@ impl Element for SourceElement {
                 // resources must not infer caret visibility from stale bounds.
                 view.geometry = None;
             }
+            view.refresh_reorder_geometry(window, cx);
         });
     }
     fn paint(
@@ -3731,11 +3755,17 @@ impl Element for SourceElement {
         self.view.read(cx).paint_spelling(window, cx);
         let view = self.view.clone();
         window.on_mouse_event(move |event: &MouseMoveEvent, phase, window, cx| {
-            if !phase.bubble() || (!view.read(cx).dragging && view.read(cx).pointer_link.is_none())
+            if !phase.bubble() || (!view.read(cx).dragging && view.read(cx).pointer_link.is_none() && view.read(cx).reorder.is_none())
             {
                 return;
             }
             view.update(cx, |view, cx| {
+                if view.reorder.is_some() {
+                    if event.pressed_button == Some(MouseButton::Left) { view.move_reorder(event.position, window, cx); }
+                    else { view.cancel_reorder(cx); }
+                    cx.stop_propagation();
+                    return;
+                }
                 view.move_pointer_link(event, window, cx);
                 if !view.dragging {
                     return;
