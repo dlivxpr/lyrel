@@ -907,6 +907,19 @@ fn code_controls_preserve_fence_info_and_copy_only_body(cx: &mut gpui_kit::TestA
         assert_eq!(view.document().read(cx).encode().unwrap(), original.replacen("rust", "text", 1).as_bytes());
     });
     context.dispatch_action(gpui_kit::component::input::Undo);
+    settle_live_geometry(&view, &mut context);
+    context.update(|window, cx| {
+        window.press("f6", cx);
+        assert_eq!(window.find_by_label("rust").focused(), Some(true));
+        window.press("escape", cx);
+        assert!(view.read(cx).focus_handle(cx).is_focused(window));
+        let source = window.find_all_by_label(crate::ui::i18n::t(crate::ui::i18n::L10nKey::MarkdownCodeSource))[0].bounds().center();
+        window.pointer_down(source, gpui_kit::MouseButton::Left, cx);
+        window.pointer_up(source, gpui_kit::MouseButton::Left, cx);
+        assert!(window.try_find_by_label(crate::ui::i18n::t(crate::ui::i18n::L10nKey::MarkdownCodeLive)).is_some());
+        window.press("escape", cx);
+        assert!(view.read(cx).focus_handle(cx).is_focused(window));
+    });
     context.dispatch_action(crate::core::actions::ToggleDocumentPreview);
     context.dispatch_action(crate::core::actions::ToggleDocumentPreview);
     context.run_until_parked();

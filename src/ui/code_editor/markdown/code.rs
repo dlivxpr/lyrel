@@ -15,13 +15,16 @@ struct CopyBody { id: u64, revision: u64 }
 #[action(namespace = markdown_code, no_json)]
 struct ToggleSource { id: u64, revision: u64 }
 
-gpui_kit::actions!(markdown_code, [FocusControls]);
+gpui_kit::actions!(markdown_code, [FocusControls, ReturnFocus]);
 struct Bindings;
 impl Global for Bindings {}
 pub(super) fn init(cx: &mut App) {
     if !cx.has_global::<Bindings>() {
         cx.set_global(Bindings);
-        cx.bind_keys([KeyBinding::new("f6", FocusControls, Some("Markdown"))]);
+        cx.bind_keys([
+            KeyBinding::new("f6", FocusControls, Some("Markdown")),
+            KeyBinding::new("escape", ReturnFocus, Some("MarkdownCodeControls")),
+        ]);
     }
 }
 
@@ -400,6 +403,8 @@ impl SourcePresentation {
         let selected = if language.is_empty() { "text".to_owned() } else { language };
         div().w_full().min_w_0().flex().flex_col()
             .child(gpui_kit::component::h_flex().gap_1().flex_wrap()
+                .id(("markdown-code-controls", id))
+                .key_context("MarkdownCodeControls")
                 .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                 .child(Button::new(("markdown-code-language", id)).small().ghost()
                     .track_focus(self.code.controls.get(&id).expect("code language focus"))
@@ -433,6 +438,7 @@ impl SourcePresentation {
                     cx.propagate();
                 }
             }))
+            .on_action(cx.listener(|this, _: &ReturnFocus, window, cx| this.focus.focus(window, cx)))
     }
 }
 
