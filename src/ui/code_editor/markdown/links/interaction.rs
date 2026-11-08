@@ -36,12 +36,9 @@ fn link_grapheme_line_box(
     grapheme: &str,
     recover_wrapped_start: bool,
 ) -> Option<Bounds<Pixels>> {
-    if let Some(bounds) = navigation::grapheme_line_box(
-        geometry,
-        start,
-        grapheme,
-        recover_wrapped_start,
-    ) {
+    if let Some(bounds) =
+        navigation::grapheme_line_box(geometry, start, grapheme, recover_wrapped_start)
+    {
         return Some(bounds);
     }
     if grapheme.contains(['\r', '\n']) {
@@ -56,27 +53,22 @@ fn link_grapheme_line_box(
     // grapheme lives on a.y; the caret after it resolves to the next piece.
     // Recover only that piece's advance, never bridge the two visual rows.
     let origin = geometry.position_for_index(0).x;
-    if geometry.index_for_position(point(origin, b.y + geometry.caret_height() / 2.))
-        == start
-    {
+    if geometry.index_for_position(point(origin, b.y + geometry.caret_height() / 2.)) == start {
         return None;
     }
     let mut low = a.x;
     let mut high = geometry.bounds().right().max(low);
     for _ in 0..24 {
         let middle = (low + high) / 2.;
-        if geometry.index_for_position(point(middle, a.y + geometry.caret_height() / 2.))
-            <= start
-        {
+        if geometry.index_for_position(point(middle, a.y + geometry.caret_height() / 2.)) <= start {
             low = middle;
         } else {
             high = middle;
         }
     }
     let width = (high - a.x) * 2.;
-    (width > Pixels::ZERO).then(|| {
-        Bounds::new(point(a.x, a.y), size(width, geometry.caret_height()))
-    })
+    (width > Pixels::ZERO)
+        .then(|| Bounds::new(point(a.x, a.y), size(width, geometry.caret_height())))
 }
 
 impl SourcePresentation {
@@ -174,15 +166,19 @@ impl SourcePresentation {
         cx: &'a App,
     ) -> impl Iterator<Item = Bounds<Pixels>> + 'a {
         use unicode_segmentation::UnicodeSegmentation as _;
-        let geometries = self.geometry.as_ref()
+        let geometries = self
+            .geometry
+            .as_ref()
             .filter(|_| self.geometry_is_current(cx))
             .map(|(_, geometries)| geometries);
         // Leaves are source-ordered. Only the label's leaves participate; a
         // pointer over a short link must not walk the rest of the document.
-        let first = self.projection.leaves.partition_point(|leaf| {
-            leaf.range.end <= link.label.start
-        });
-        let mut segments = self.projection.leaves[first..].iter()
+        let first = self
+            .projection
+            .leaves
+            .partition_point(|leaf| leaf.range.end <= link.label.start);
+        let mut segments = self.projection.leaves[first..]
+            .iter()
             .take_while(move |leaf| leaf.range.start < link.label.end)
             .filter_map(move |leaf| {
                 let geometry = geometries?.get(&leaf.id)?;
@@ -194,7 +190,12 @@ impl SourcePresentation {
                 );
                 Some(leaf.text[start..end].grapheme_indices(true).filter_map(
                     move |(offset, grapheme)| {
-                        link_grapheme_line_box(geometry, start + offset, grapheme, recover_wrapped_start)
+                        link_grapheme_line_box(
+                            geometry,
+                            start + offset,
+                            grapheme,
+                            recover_wrapped_start,
+                        )
                     },
                 ))
             })
@@ -239,7 +240,8 @@ impl SourcePresentation {
         if at < link.label.start || at > link.label.end {
             return None;
         }
-        let region = self.link_label_regions(link, cx)
+        let region = self
+            .link_label_regions(link, cx)
             .find(|bounds| bounds.contains(&position))?;
         Some((link, at, region))
     }
@@ -309,9 +311,11 @@ impl SourcePresentation {
             && !gesture.moved(position, window)
             && same_owner
             && document.revision() == gesture.revision
-            && self.pointer_link_at(position, cx).is_some_and(|(link, _, _)| {
-                link.source == gesture.source && link.target == gesture.target
-            })
+            && self
+                .pointer_link_at(position, cx)
+                .is_some_and(|(link, _, _)| {
+                    link.source == gesture.source && link.target == gesture.target
+                })
         {
             self.follow_link(gesture.target, cx);
         }

@@ -180,19 +180,24 @@ impl SourcePresentation {
     }
     pub(super) fn hover_link(&mut self, event: &MouseMoveEvent, cx: &mut Context<Self>) {
         let (same_link, region, link) = {
-            let hit = event.pressed_button.is_none()
+            let hit = event
+                .pressed_button
+                .is_none()
                 .then(|| self.pointer_link_at(event.position, cx))
                 .flatten();
             let same = self.embeds.hover.as_ref() == hit.as_ref().map(|(link, _, _)| *link);
             let region = hit.as_ref().map(|(_, _, region)| *region);
-            let link = if same { None } else { hit.map(|(link, _, _)| link.clone()) };
+            let link = if same {
+                None
+            } else {
+                hit.map(|(link, _, _)| link.clone())
+            };
             (same, region, link)
         };
         let previous_position = self.embeds.hover_position;
         self.embeds.hover_position = event.position;
         if same_link {
-            if region.is_some_and(|region| !region.contains(&previous_position))
-            {
+            if region.is_some_and(|region| !region.contains(&previous_position)) {
                 cx.notify();
             }
             return;

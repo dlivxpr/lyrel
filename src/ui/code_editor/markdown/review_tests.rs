@@ -536,7 +536,8 @@ fn review_table_formula_session_remeasures_owning_row_before_source_commit(
 fn first_soft_wrapped_link_grapheme_hovers_edits_and_opens(cx: &mut gpui_kit::TestAppContext) {
     use crate::ui::app::test_window::harness_with_tabs;
     use gpui_kit::{
-        Focusable as _, Modifiers, MouseButton, TestAppContext, VisualContext as _, point, px, size,
+        Focusable as _, Modifiers, MouseButton, TestAppContext, VisualContext as _, point, px,
+        size,
         test::{TestEventExt as _, TestWindowExt as _},
     };
     use std::time::{Duration, Instant};
@@ -595,14 +596,18 @@ fn first_soft_wrapped_link_grapheme_hovers_edits_and_opens(cx: &mut gpui_kit::Te
         let link = &view.projection.links.links[0];
         let leaf = view.projection.leaf_at(link.label.start).unwrap();
         let geometry = &view.geometry.as_ref().unwrap().1[&leaf.id];
-        let reference = leaf.text.grapheme_indices(true)
+        let reference = leaf
+            .text
+            .grapheme_indices(true)
             .find_map(|(ix, text)| {
                 let a = geometry.position_for_index(ix);
                 let b = geometry.position_for_index(ix + text.len());
                 (text == "W" && a.y == b.y).then_some(b.x - a.x)
             })
             .unwrap();
-        let (ix, b) = leaf.text.grapheme_indices(true)
+        let (ix, b) = leaf
+            .text
+            .grapheme_indices(true)
             .find_map(|(ix, text)| {
                 let a = geometry.position_for_index(ix);
                 let b = geometry.position_for_index(ix + text.len());
@@ -632,12 +637,14 @@ fn first_soft_wrapped_link_grapheme_hovers_edits_and_opens(cx: &mut gpui_kit::Te
         context.run_until_parked();
         if context.update(|window, cx| {
             window.render_frame(cx);
-            window.try_find("markdown-link-preview").is_some_and(|preview| {
-                preview.visible()
-                    && preview.label().is_some_and(|label| {
-                        label.contains("Target title") && label.contains("First paragraph")
-                    })
-            })
+            window
+                .try_find("markdown-link-preview")
+                .is_some_and(|preview| {
+                    preview.visible()
+                        && preview.label().is_some_and(|label| {
+                            label.contains("Target title") && label.contains("First paragraph")
+                        })
+                })
         }) {
             break;
         }
@@ -657,7 +664,10 @@ fn first_soft_wrapped_link_grapheme_hovers_edits_and_opens(cx: &mut gpui_kit::Te
     view.read_with(&context, |view, cx| {
         let mut edited = original.clone();
         edited.insert(at, 'X');
-        assert_eq!(view.document().read(cx).encode().unwrap(), edited.as_bytes());
+        assert_eq!(
+            view.document().read(cx).encode().unwrap(),
+            edited.as_bytes()
+        );
     });
     context.dispatch_action(gpui_kit::component::input::Undo);
     settle(&view, &mut context);
@@ -665,7 +675,10 @@ fn first_soft_wrapped_link_grapheme_hovers_edits_and_opens(cx: &mut gpui_kit::Te
     context.dispatch_action(crate::core::actions::ToggleDocumentPreview);
     settle(&view, &mut context);
     view.read_with(&context, |view, cx| {
-        assert_eq!(view.document().read(cx).encode().unwrap(), original.as_bytes());
+        assert_eq!(
+            view.document().read(cx).encode().unwrap(),
+            original.as_bytes()
+        );
     });
     let modifiers = if cfg!(target_os = "macos") {
         Modifiers {
@@ -681,7 +694,8 @@ fn first_soft_wrapped_link_grapheme_hovers_edits_and_opens(cx: &mut gpui_kit::Te
     loop {
         context.run_until_parked();
         if app.read_with(&context, |app, _| {
-            app.active_buffer().is_some_and(|buffer| buffer.path == target)
+            app.active_buffer()
+                .is_some_and(|buffer| buffer.path == target)
         }) {
             break;
         }

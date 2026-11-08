@@ -1,6 +1,6 @@
 //! Debounced spelling diagnostics and the standard keyboard-accessible menu.
-use super::*;
 use super::navigation::grapheme_line_box;
+use super::*;
 use gpui_kit::component::menu::{PopupMenu, PopupMenuItem};
 #[path = "spelling_os.rs"]
 mod os;
