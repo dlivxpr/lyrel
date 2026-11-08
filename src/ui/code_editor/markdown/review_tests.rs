@@ -590,66 +590,78 @@ fn native_link_grapheme_hovers_edits_and_opens(cx: &mut TestAppContext, fragment
     }
     // Locate the pointer only through independent native caret geometry, not
     // the link-region helper whose fragment-tail recovery is under test.
-    let (position, at) = view.read_with(&context, |view, cx| {
-        let link = &view.projection.links.links[0];
-        let leaf = view.projection.leaf_at(link.label.start).unwrap();
-        if fragment_tail {
-            assert!(
-                leaf.image_urls().next().is_some(),
-                "link must contain an image atom"
-            );
-        }
-        let geometry = &view.geometry.as_ref().unwrap().1[&leaf.id];
-        let reference = leaf
-            .text
-            .grapheme_indices(true)
-            .find_map(|(ix, text)| {
-                let a = geometry.position_for_index(ix);
-                let b = geometry.position_for_index(ix + text.len());
-                (text == glyph && a.y == b.y && b.x > a.x).then_some(b.x - a.x)
-            })
-            .unwrap();
-        let (ix, a, b) = leaf
-            .text
-            .grapheme_indices(true)
-            .find_map(|(ix, text)| {
-                let a = geometry.position_for_index(ix);
-                let b = geometry.position_for_index(ix + text.len());
-                (text == glyph && a.y != b.y && leaf.atom_source(ix).is_none())
+    let locate = |context: &VisualTestContext| {
+        view.read_with(context, |view, cx| {
+            assert!(view.geometry_is_current(cx));
+            let link = &view.projection.links.links[0];
+            let leaf = view.projection.leaf_at(link.label.start).unwrap();
+            if fragment_tail {
+                assert!(
+                    leaf.image_urls().next().is_some(),
+                    "link must contain an image atom"
+                );
+            }
+            let geometry = &view.geometry.as_ref().unwrap().1[&leaf.id];
+            let reference = leaf
+                .text
+                .grapheme_indices(true)
+                .find_map(|(ix, text)| {
+                    let a = geometry.position_for_index(ix);
+                    let b = geometry.position_for_index(ix + text.len());
+                    (text == glyph && a.y == b.y && b.x > a.x).then_some(b.x - a.x)
+                })
+                .unwrap();
+            let origin = geometry.position_for_index(0).x;
+            let viewport = view.viewport.bounds.unwrap();
+            let (ix, a, b) = leaf
+                .text
+                .grapheme_indices(true)
+                .find_map(|(ix, text)| {
+                    let a = geometry.position_for_index(ix);
+                    let b = geometry.position_for_index(ix + text.len());
+                    let position = if fragment_tail {
+                        point(a.x + reference * 0.25, a.y + geometry.caret_height() / 2.)
+                    } else {
+                        point(origin + reference * 0.75, b.y + geometry.caret_height() / 2.)
+                    };
+                    (text == glyph
+                        && a.y != b.y
+                        && leaf.atom_source(ix).is_none()
+                        && viewport.contains(&position))
                     .then_some((ix, a, b))
-            })
-            .expect("native link must exercise a visible grapheme across a caret row boundary");
-        let origin = geometry.position_for_index(0).x;
-        let next_start =
-            geometry.index_for_position(point(origin, b.y + geometry.caret_height() / 2.));
-        let (position, hit) = if fragment_tail {
-            assert_ne!(
-                next_start, ix,
-                "must be a fragment tail, not a whole-layout wrapped start"
-            );
-            assert!(a.y < b.y);
-            let position = point(a.x + reference * 0.25, a.y + geometry.caret_height() / 2.);
-            // The native hit and its caret both belong to the preceding piece's
-            // final visible glyph. Ordinary same-row glyphs cannot satisfy this.
-            assert_eq!(geometry.index_for_position(position), ix);
-            assert_eq!(geometry.position_for_index(ix).y, a.y);
-            assert_eq!(
-                geometry.index_for_position(point(a.x + reference * 0.75, position.y)),
-                ix + glyph.len()
-            );
-            (position, ix)
-        } else {
-            assert_eq!(next_start, ix);
-            let position = point(
-                origin + reference * 0.75,
-                b.y + geometry.caret_height() / 2.,
-            );
-            assert_eq!(geometry.index_for_position(position), ix + glyph.len());
-            (position, ix + glyph.len())
-        };
-        assert!(view.geometry_is_current(cx));
-        (position, leaf.source_offset(hit))
-    });
+                })
+                .expect("native link must exercise a visible grapheme across a caret row boundary");
+            let next_start =
+                geometry.index_for_position(point(origin, b.y + geometry.caret_height() / 2.));
+            let (position, hit) = if fragment_tail {
+                assert_ne!(
+                    next_start, ix,
+                    "must be a fragment tail, not a whole-layout wrapped start"
+                );
+                assert!(a.y < b.y);
+                let position = point(a.x + reference * 0.25, a.y + geometry.caret_height() / 2.);
+                // The native hit and its caret both belong to the preceding piece's
+                // final visible glyph. Ordinary same-row glyphs cannot satisfy this.
+                assert_eq!(geometry.index_for_position(position), ix);
+                assert_eq!(geometry.position_for_index(ix).y, a.y);
+                assert_eq!(
+                    geometry.index_for_position(point(a.x + reference * 0.75, position.y)),
+                    ix + glyph.len()
+                );
+                (position, ix)
+            } else {
+                assert_eq!(next_start, ix);
+                let position = point(
+                    origin + reference * 0.75,
+                    b.y + geometry.caret_height() / 2.,
+                );
+                assert_eq!(geometry.index_for_position(position), ix + glyph.len());
+                (position, ix + glyph.len())
+            };
+            (position, leaf.source_offset(hit))
+        })
+    };
+    let (position, at) = locate(&context);
     context.update(|window, cx| window.pointer_move(position, None, cx));
     context.update(|window, cx| window.pointer_move(position, None, cx));
     context.run_until_parked();
@@ -711,6 +723,12 @@ fn native_link_grapheme_hovers_edits_and_opens(cx: &mut TestAppContext, fragment
             original.as_bytes()
         );
     });
+    // Editing, mode switches and image settlement can replace the InlineFlow
+    // pieces. Re-find a guarded native boundary in the current painted frame.
+    until(&mut context, |context| {
+        view.read_with(context, |view, cx| view.geometry_is_current(cx))
+    });
+    let (position, _) = locate(&context);
     let modifiers = if cfg!(target_os = "macos") {
         Modifiers {
             platform: true,

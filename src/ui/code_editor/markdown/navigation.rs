@@ -132,6 +132,7 @@ impl SourcePresentation {
                 &leaf.text,
                 geometry,
                 point(caret.x + distance * direction, y),
+                recover_wrapped_start(leaf.kind),
             );
             let position = geometry.position_for_index(ix);
             let dx = (position.x - caret.x) * direction;
@@ -165,8 +166,18 @@ impl SourcePresentation {
         }
         // At a visual edge, ask the same row's endpoints for its source-order
         // direction rather than visiting every glyph to infer RTL/wrap exit.
-        let left = hit_test_grapheme(&leaf.text, geometry, point(bounds.left(), y));
-        let right = hit_test_grapheme(&leaf.text, geometry, point(bounds.right(), y));
+        let left = hit_test_grapheme(
+            &leaf.text,
+            geometry,
+            point(bounds.left(), y),
+            recover_wrapped_start(leaf.kind),
+        );
+        let right = hit_test_grapheme(
+            &leaf.text,
+            geometry,
+            point(bounds.right(), y),
+            recover_wrapped_start(leaf.kind),
+        );
         (left > right).then(|| self.visible_step(at, !backward, cx))
     }
 
@@ -643,7 +654,12 @@ fn subtract(ranges: &mut smallvec::SmallVec<[Range<usize>; 4]>, protected: Range
     }
 }
 
-pub(super) fn hit_test_grapheme(text: &str, geometry: &LeafGeometry, at: Point<Pixels>) -> usize {
+pub(super) fn hit_test_grapheme(
+    text: &str,
+    geometry: &LeafGeometry,
+    at: Point<Pixels>,
+    recover_wrapped_start: bool,
+) -> usize {
     let index = floor_grapheme(text, geometry.index_for_position(at));
     // Whole-leaf hit testing can round past the next glyph at a grapheme edge.
     // Check adjacent carets in the same shaped layout without walking the leaf.
@@ -651,7 +667,25 @@ pub(super) fn hit_test_grapheme(text: &str, geometry: &LeafGeometry, at: Point<P
         .chain(adjacent_grapheme(text, index, true).map(|range| range.start))
         .chain(adjacent_grapheme(text, index, false).map(|range| range.end))
         .map(|index| {
-            let caret = geometry.position_for_index(index);
+            let mut caret = geometry.position_for_index(index);
+            if recover_wrapped_start
+                && (at.y < caret.y || at.y >= caret.y + geometry.line_height())
+                && let Some(range) = adjacent_grapheme(text, index, false)
+                && let Some(bounds) = grapheme_line_box(
+                    geometry,
+                    index,
+                    &text[range.start..range.end],
+                    recover_wrapped_start,
+                )
+                && bounds.top() != caret.y
+                && bounds.contains(&at)
+            {
+                // The shared index has only the previous-row caret in the
+                // public SDK. For this proven whole-layout wrapped start,
+                // compare against the glyph's actual current-row leading edge.
+                // InlineFlow tails and non-allowlisted kinds never enter here.
+                caret = bounds.origin;
+            }
             let dy = if at.y < caret.y {
                 caret.y - at.y
             } else {

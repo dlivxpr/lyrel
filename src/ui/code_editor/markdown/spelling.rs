@@ -471,11 +471,20 @@ mod tests {
                         // segment belongs to this grapheme on the next row.
                         assert_eq!(segment.left(), origin);
                         assert_eq!(segment.top(), b.y);
+                        let leading = point(
+                            segment.left() + segment.size.width * 0.25,
+                            segment.center().y,
+                        );
+                        let raw_leading = geometry.index_for_position(leading);
+                        assert!(leaf.text.is_char_boundary(raw_leading));
+                        assert!(ix <= raw_leading && raw_leading < ix + grapheme.len());
                         assert_eq!(
-                            geometry.index_for_position(point(
-                                segment.left() + segment.size.width * 0.25,
-                                segment.center().y,
-                            )),
+                            super::super::navigation::hit_test_grapheme(
+                                &leaf.text,
+                                geometry,
+                                leading,
+                                super::super::navigation::recover_wrapped_start(leaf.kind),
+                            ),
                             ix
                         );
                         let trailing = geometry.index_for_position(point(
@@ -496,6 +505,7 @@ mod tests {
                                     segment.right() - segment.size.width * 0.25,
                                     segment.center().y,
                                 ),
+                                super::super::navigation::recover_wrapped_start(leaf.kind),
                             ),
                             ix + grapheme.len()
                         );
