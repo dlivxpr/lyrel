@@ -1406,6 +1406,7 @@ l10n_keys! {
     MarkdownCopyMarkdownOnly,
     MarkdownClipboardPlainFallback,
     MarkdownClipboardRichUnconfirmed,
+    MarkdownClipboardFailed,
     MarkdownCodeSource,
     MarkdownCodeLive,
     EditorMarkdownMermaidSource,

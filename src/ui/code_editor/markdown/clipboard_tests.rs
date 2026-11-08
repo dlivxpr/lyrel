@@ -86,7 +86,9 @@ fn clipboard_safe_objects_and_plain_priority_do_not_read_resources(cx: &mut Test
         assert!(html.contains("<strong>x</strong>"));
         assert!(html.contains("&lt;Unknown"));
         assert!(!html.contains("<Unknown"));
-        assert!(!html.contains(" src="));
+        assert!(!html.contains("src=\"https:"));
+        assert!(!html.contains("src=\"file:"));
+        assert!(html.contains("<dl><dt>key</dt><dd>value</dd></dl>"));
         assert!(!html.contains("<script"));
         cx.write_to_clipboard(gpui_kit::ClipboardItem { entries: vec![
             gpui_kit::ClipboardEntry::String(gpui_kit::ClipboardString::new("**literal**".into())),

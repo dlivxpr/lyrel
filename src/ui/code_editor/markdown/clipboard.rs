@@ -36,8 +36,30 @@ fn source_fragment(document: &MarkdownDocument, range: Range<usize>) -> String {
     out
 }
 
-struct Html<'a> { source: &'a str, decorations: Vec<Decoration> }
+struct Html<'a> {
+    source: &'a str,
+    decorations: Vec<Decoration>,
+    definitions: super::super::images::Definitions,
+    images: &'a std::collections::HashMap<String, super::super::images::State>,
+    math: &'a super::super::math::State,
+    properties: super::properties::Index,
+}
 impl Html<'_> {
+    fn image(&self, image: &gpui_kit::RenderImage, label: &str, out: &mut String) -> bool {
+        use base64::Engine as _;
+        use image::ImageEncoder as _;
+        let Some(bytes) = image.as_bytes(0) else { return false; };
+        let size = image.size(0);
+        let mut rgba = bytes.to_vec();
+        for pixel in rgba.chunks_exact_mut(4) { pixel.swap(0, 2); }
+        let mut png = Vec::new();
+        if image::codecs::png::PngEncoder::new(&mut png).write_image(&rgba, size.width.0, size.height.0, image::ExtendedColorType::Rgba8).is_err() { return false; }
+        out.push_str("<img alt=\""); escaped(label, out);
+        out.push_str("\" src=\"data:image/png;base64,");
+        base64::engine::general_purpose::STANDARD.encode_string(png, out);
+        out.push_str("\">");
+        true
+    }
     fn literal(&self, range: Range<usize>, out: &mut String) {
         escaped(&self.source[range], out);
     }
@@ -62,6 +84,35 @@ impl Html<'_> {
         let owner = position.start.offset..position.end.offset;
         let range = owner.start.max(selected.start)..owner.end.min(selected.end);
         if range.is_empty() { return; }
+        if range == owner {
+            if let Some(image) = super::super::images::image(node, &self.definitions) {
+                if let Some(super::super::images::State::Ready(pixels)) = self.images.get(&image.url) {
+                    if self.image(pixels, &image.alt, out) { return; }
+                }
+            }
+            if let Some(formula) = super::super::math::Formula::from_node(node, &self.source[owner.clone()]) {
+                if let Some(super::super::math::Output::Ready { image, .. }) = self.math.outputs.get(&formula) {
+                    if self.image(image, &formula.tex, out) { return; }
+                }
+            }
+        }
+        if matches!(node, Node::Paragraph(_)) {
+            let rows: Vec<_> = self.properties.clipboard_rows().filter(|(line, _, _)| owner.start <= line.start && line.start < owner.end).collect();
+            if !rows.is_empty() && rows[0].0.start == owner.start && rows.last().is_some_and(|(line, _, _)| line.end >= owner.end) {
+                out.push_str("<dl>");
+                for (line, key, value) in rows {
+                    if line.start >= range.end || range.start >= line.end { continue; }
+                    out.push_str("<dt>");
+                    let key = key.start.max(range.start)..key.end.min(range.end);
+                    if key.start < key.end { self.text(key, out); }
+                    out.push_str("</dt><dd>");
+                    let value = value.start.max(range.start)..value.end.min(range.end);
+                    if value.start < value.end { self.text(value, out); }
+                    out.push_str("</dd>");
+                }
+                out.push_str("</dl>"); return;
+            }
+        }
         let tag = match node {
             Node::Root(_) => "", Node::Paragraph(_) => "p", Node::Blockquote(_) => "blockquote",
             Node::Heading(h) => match h.depth { 1 => "h1", 2 => "h2", 3 => "h3", 4 => "h4", 5 => "h5", _ => "h6" },
@@ -155,7 +206,14 @@ impl SourcePresentation {
             let mut out = String::new();
             match parser::parse(&source, doc.grammar(), true) {
                 Ok(root) => {
-                    let renderer = Html { decorations: formats::decorations(&source, &root), source: &source };
+                    let renderer = Html {
+                        decorations: formats::decorations(&source, &root),
+                        definitions: super::super::images::definitions(&root),
+                        images: &doc.images.states,
+                        math: &self.math,
+                        properties: super::properties::Index::from_ast(&source, &root),
+                        source: &source,
+                    };
                     for (ix, range) in ranges.iter().enumerate() {
                         if ix != 0 { out.push_str("<br>"); }
                         renderer.node(&root, range, &mut out);
@@ -165,9 +223,10 @@ impl SourcePresentation {
             }
             Some(out)
         };
-        // GPUI metadata is the deterministic payload boundary, not an HTML OS flavor.
-        let item = html.as_ref().map_or_else(|| ClipboardItem::new_string(text.clone()), |html| ClipboardItem::new_string_with_metadata(text.clone(), html.clone()));
-        cx.write_to_clipboard(item);
+        // GPUI's in-memory test clipboard receives the same production payload;
+        // metadata exposes HTML to consumers without touching the user's OS clipboard.
+        #[cfg(test)]
+        cx.write_to_clipboard(html.as_ref().map_or_else(|| ClipboardItem::new_string(text.clone()), |html| ClipboardItem::new_string_with_metadata(text.clone(), html.clone())));
         self.clipboard_status = None;
         #[cfg(not(test))]
         {
@@ -178,7 +237,12 @@ impl SourcePresentation {
                 let result = arboard::Clipboard::new().and_then(|mut clipboard| clipboard.set_html(html.as_str(), Some(text.as_str())));
                 if let Err(error) = result {
                     log::warn!("Rich Markdown clipboard publication failed: {error}");
-                    cx.write_to_clipboard(ClipboardItem::new_string(text));
+                    if let Err(error) = arboard::Clipboard::new().and_then(|mut clipboard| clipboard.set_text(text.as_str())) {
+                        log::warn!("Plain Markdown clipboard publication failed: {error}");
+                        self.clipboard_status = Some(t(L10nKey::MarkdownClipboardFailed).into());
+                        cx.notify();
+                        return; // Cut must never delete text whose publication failed.
+                    }
                     self.clipboard_status = Some(fallback.into());
                 }
                 #[cfg(target_os = "windows")]
@@ -194,6 +258,12 @@ impl SourcePresentation {
                 if self.clipboard_status.is_none() {
                     self.clipboard_status = Some(t(L10nKey::MarkdownClipboardRichUnconfirmed).into());
                 }
+            }
+            else if let Err(error) = arboard::Clipboard::new().and_then(|mut clipboard| clipboard.set_text(text.as_str())) {
+                log::warn!("Plain Markdown clipboard publication failed: {error}");
+                self.clipboard_status = Some(t(L10nKey::MarkdownClipboardFailed).into());
+                cx.notify();
+                return;
             }
         }
         if cut {

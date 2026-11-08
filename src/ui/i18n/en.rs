@@ -1835,6 +1835,7 @@ pub fn translate_en(key: L10nKey) -> &'static str {
         L10nKey::MarkdownCopyMarkdownOnly => "Copy as Markdown",
         L10nKey::MarkdownClipboardPlainFallback => "Markdown copied. Rich clipboard format is unavailable.",
         L10nKey::MarkdownClipboardRichUnconfirmed => "Markdown copied. Rich formatting depends on system clipboard support and the destination app.",
+        L10nKey::MarkdownClipboardFailed => "Couldn’t access the system clipboard. Try again.",
         L10nKey::MarkdownCodeSource => "Edit fence source",
         L10nKey::MarkdownCodeLive => "Return to code",
         L10nKey::EditorMarkdownMermaidSource => "Mermaid source",

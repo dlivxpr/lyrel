@@ -1687,6 +1687,7 @@ pub fn translate_zh(key: L10nKey) -> Option<&'static str> {
         L10nKey::MarkdownCopyMarkdownOnly => "复制为 Markdown",
         L10nKey::MarkdownClipboardPlainFallback => "已复制 Markdown；富文本剪贴板格式不可用。",
         L10nKey::MarkdownClipboardRichUnconfirmed => "已复制 Markdown；富文本格式取决于系统剪贴板支持和目标应用。",
+        L10nKey::MarkdownClipboardFailed => "无法访问系统剪贴板，请重试。",
         L10nKey::MarkdownCodeSource => "编辑围栏源码",
         L10nKey::MarkdownCodeLive => "返回代码",
         L10nKey::EditorMarkdownMermaidSource => "Mermaid 源码",
