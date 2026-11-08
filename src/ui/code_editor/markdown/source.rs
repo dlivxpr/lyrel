@@ -1087,7 +1087,7 @@ impl SourcePresentation {
     ) -> gpui_kit::component::menu::PopupMenu {
         use super::tables::*;
         use crate::ui::i18n::{L10nKey, t};
-        let menu = self.format_menu(menu);
+        let menu = self.format_menu(menu).scrollable(true);
         let menu = self.clipboard_menu(self.formula_menu(self.spelling_menu(menu)));
         if !self.live {
             return menu;

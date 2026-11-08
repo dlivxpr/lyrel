@@ -92,10 +92,9 @@ fn links_selection_gestures_never_navigate_and_plain_click_edits(
         }
         context.run_until_parked();
         view.read_with(&context, |view, cx| {
-            assert_ne!(
-                view.selection(),
-                Selection::caret(0),
-                "selection gesture navigated"
+            assert!(
+                (label..=label + "target words".len()).contains(&view.selection().head()),
+                "selection gesture left the link label"
             );
             if gesture == 1 {
                 assert_eq!(view.selection().range(), label..label + 6);
@@ -171,7 +170,6 @@ fn links_selection_gestures_never_navigate_and_plain_click_edits(
         window.render_frame(cx);
         assert!(window.try_find("popup-menu").is_none());
         assert!(view.read(cx).focus_handle(cx).is_focused(window));
-        assert_ne!(view.read(cx).selection(), Selection::caret(0));
         assert_eq!(view.read(cx).selection(), Selection::caret(label));
         window.right_click("markdown-source", cx);
     });
@@ -179,6 +177,11 @@ fn links_selection_gestures_never_navigate_and_plain_click_edits(
     context.update(|window, cx| {
         window.render_frame(cx);
         assert_eq!(window.find("popup-menu").focused(), Some(true));
+        window.scroll(
+            "popup-menu",
+            gpui_kit::ScrollDelta::Pixels(gpui_kit::point(gpui_kit::px(0.), gpui_kit::px(-10000.))),
+            cx,
+        );
         let edit = window
             .within("popup-menu")
             .find_by_label(crate::ui::i18n::t(
@@ -186,6 +189,15 @@ fn links_selection_gestures_never_navigate_and_plain_click_edits(
             ))
             .bounds()
             .center();
+        assert!(window.find("popup-menu").bounds().contains(&edit));
+        assert!(
+            edit.y < window.viewport_size().height && edit.x < window.viewport_size().width,
+            "menu {:?}, click {:?}, viewport {:?}",
+            window.find("popup-menu").bounds(),
+            edit,
+            window.viewport_size()
+        );
+        window.pointer_move(edit, None, cx);
         window.pointer_down(edit, MouseButton::Left, cx);
         window.pointer_up(edit, MouseButton::Left, cx);
     });
@@ -221,6 +233,11 @@ fn links_selection_gestures_never_navigate_and_plain_click_edits(
     context.update(|window, cx| {
         window.render_frame(cx);
         assert_eq!(window.find("popup-menu").focused(), Some(true));
+        window.scroll(
+            "popup-menu",
+            gpui_kit::ScrollDelta::Pixels(gpui_kit::point(gpui_kit::px(0.), gpui_kit::px(-10000.))),
+            cx,
+        );
         let menu = window.within("popup-menu");
         let open = menu
             .find_by_label(crate::ui::i18n::t(
@@ -228,12 +245,17 @@ fn links_selection_gestures_never_navigate_and_plain_click_edits(
             ))
             .bounds()
             .center();
+        assert!(window.find("popup-menu").bounds().contains(&open));
+        window.pointer_move(open, None, cx);
         window.pointer_down(open, MouseButton::Left, cx);
         window.pointer_up(open, MouseButton::Left, cx);
     });
     context.run_until_parked();
     view.read_with(&context, |view, cx| {
-        assert_eq!(view.selection(), Selection::caret(0));
+        assert_eq!(
+            view.selection(),
+            Selection::caret(original.find("Heading").unwrap())
+        );
         assert_eq!(
             view.document().read(cx).encode().unwrap(),
             original.as_bytes()

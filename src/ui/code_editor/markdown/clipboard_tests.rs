@@ -1,13 +1,16 @@
 use super::{FileHost, active_id, read_owned, wait_until};
 use crate::ui::app::test_window::harness_with_tabs;
 use crate::ui::code_editor::markdown::CopyMarkdownOnly;
-use gpui_kit::{Focusable as _, TestAppContext};
+use gpui_kit::{Focusable as _, TestAppContext, test::TestWindowExt};
 
 #[gpui_kit::test]
 fn clipboard_mixed_selection_cut_history_paste_and_owned_reopen(cx: &mut TestAppContext) {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("clipboard.md");
-    let original = "Keep\r\n9. **alpha**\r\n42. beta\nuntouched __spelling__\r\n";
+    let original = "Keep\r\n\r\n9. **alpha**\r\n42. beta\nuntouched __spelling__\r\n";
+    let normalized = original.replace("\r\n", "\n");
+    let alpha = normalized.find("alpha").unwrap();
+    let beta = normalized.find("beta").unwrap();
     std::fs::write(&path, original).unwrap();
     let host = FileHost::new(lyrel_core::host::HostId(227));
     let (app, mut context, _streams) = harness_with_tabs(cx, 1);
@@ -22,23 +25,24 @@ fn clipboard_mixed_selection_cut_history_paste_and_owned_reopen(cx: &mut TestApp
             .unwrap()
             .clone()
     });
-    // Opening a buffer installs the source projection first. Wait for the real
-    // Live layout to collapse both the list marker and the bold opener before
-    // asserting selection behavior at that shared visible boundary.
+    // The list marker has its own gutter. Wait for the bold opener to share
+    // its visible insertion point, not for the gutter to overlap the text.
     let settle_live = |context: &mut gpui_kit::VisualTestContext| {
         wait_until(context, |context| {
             context.update(|window, cx| window.render_frame(cx));
             view.read_with(context, |view, cx| {
-                let start = view.range_to_bounds(&(5..5), cx);
-                view.is_live() && start.is_some() && start == view.range_to_bounds(&(10..10), cx)
+                let start = view.range_to_bounds(&(alpha - 2..alpha - 2), cx);
+                view.is_live()
+                    && start.is_some()
+                    && start == view.range_to_bounds(&(alpha..alpha), cx)
             })
         });
     };
     settle_live(&mut context);
     view.update_in(&mut context, |view, window, cx| {
         view.focus_handle(cx).focus(window, cx);
-        view.select_range(12..10, cx); // reverse partial selection inside bold
-        view.add_selection(22..24, cx); // later selection, not the intervening syntax
+        view.select_range(alpha + 2..alpha, cx); // reverse partial selection inside bold
+        view.add_selection(beta..beta + 2, cx); // later selection, not the intervening syntax
     });
     context.dispatch_action(gpui_kit::component::input::Copy);
     context.update(|_, cx| {
@@ -50,7 +54,7 @@ fn clipboard_mixed_selection_cut_history_paste_and_owned_reopen(cx: &mut TestApp
         assert!(!html.contains("Keep"));
     });
     context.dispatch_action(gpui_kit::component::input::Cut);
-    let cut = "Keep\r\n9. **pha**\r\n42. ta\nuntouched __spelling__\r\n";
+    let cut = "Keep\r\n\r\n9. **pha**\r\n42. ta\nuntouched __spelling__\r\n";
     view.read_with(&context, |view, cx| {
         assert_eq!(view.document().read(cx).encode().unwrap(), cut.as_bytes())
     });
@@ -67,9 +71,11 @@ fn clipboard_mixed_selection_cut_history_paste_and_owned_reopen(cx: &mut TestApp
     });
     context.dispatch_action(gpui_kit::component::input::Undo);
     settle_live(&mut context);
-    view.update_in(&mut context, |view, _, cx| view.select_range(10..26, cx));
+    view.update_in(&mut context, |view, _, cx| {
+        view.select_range(alpha..beta + 4, cx)
+    });
     context.dispatch_action(gpui_kit::component::input::Cut);
-    let block_cut = "Keep\r\n\nuntouched __spelling__\r\n";
+    let block_cut = "Keep\r\n\r\n\nuntouched __spelling__\r\n";
     context.update(|_, cx| {
         let item = cx.read_from_clipboard().unwrap();
         assert_eq!(item.text().unwrap(), "9. **alpha**\r\n42. beta");
@@ -100,7 +106,9 @@ fn clipboard_mixed_selection_cut_history_paste_and_owned_reopen(cx: &mut TestApp
     });
     context.dispatch_action(gpui_kit::component::input::Undo);
     settle_live(&mut context);
-    view.update_in(&mut context, |view, _, cx| view.select_range(10..26, cx));
+    view.update_in(&mut context, |view, _, cx| {
+        view.select_range(alpha..beta + 4, cx)
+    });
     context.dispatch_action(CopyMarkdownOnly);
     context.update(|_, cx| {
         let item = cx.read_from_clipboard().unwrap();

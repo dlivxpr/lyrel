@@ -7,6 +7,13 @@ use gpui_kit::{Focusable as _, MouseButton, point, px};
 fn table_presentation_drag_fit_scroll_edit_history_and_host_reopen(
     cx: &mut gpui_kit::TestAppContext,
 ) {
+    // NoopTextSystem lays every glyph left-to-right; RTL caret assertions need native shaping.
+    let mut native_context = gpui_kit::TestAppContext::build_with_text_system(
+        gpui_kit::TestDispatcher::new(0),
+        cx.test_function_name(),
+        gpui_kit::platform::current_platform(true).text_system(),
+    );
+    let cx = &mut native_context;
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("presentation.md");
     let original = format!(
@@ -59,11 +66,19 @@ fn table_presentation_drag_fit_scroll_edit_history_and_host_reopen(
         view.select_range(rtl_second..rtl_second, cx)
     });
     settle_live_geometry(&view, &mut context);
-    context.update(|window, cx| window.press("right", cx));
+    context.update(|window, cx| {
+        assert!(view.read(cx).focus_handle(cx).is_focused(window));
+        window.press("right", cx);
+    });
     context.run_until_parked();
     let first_column = normalized.find("123").unwrap();
     view.read_with(&context, |view, _| {
-        assert!((first_column..=rtl_first + "אב".len()).contains(&view.selection().head()))
+        assert!(
+            (first_column..=rtl_first + "אב".len()).contains(&view.selection().head()),
+            "Right at RTL cell start {rtl_second} must enter {first_column}..={}, got {:?}",
+            rtl_first + "אב".len(),
+            view.selection()
+        )
     });
     context.update(|window, cx| window.press("left", cx));
     context.run_until_parked();

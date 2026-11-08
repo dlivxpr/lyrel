@@ -805,12 +805,9 @@ impl SourcePresentation {
             return true;
         }
         match key.key.as_str() {
-            "home" | "end" if primary => self.formula_document_edge(
-                key.key == "end",
-                key.modifiers.shift,
-                window,
-                cx,
-            ),
+            "home" | "end" if primary => {
+                self.formula_document_edge(key.key == "end", key.modifiers.shift, window, cx)
+            }
             "f10" if key.modifiers.shift => {
                 self.open_formula_menu(None, window, cx);
                 true

@@ -447,6 +447,8 @@ mod tests {
     use gpui_kit::{TestAppContext, VisualTestContext};
 
     fn settle(vcx: &mut VisualTestContext) {
+        vcx.executor()
+            .advance_clock(std::time::Duration::from_millis(100));
         vcx.run_until_parked();
         vcx.update(|window, cx| window.render_frame(cx));
         vcx.run_until_parked();
@@ -480,6 +482,10 @@ mod tests {
         }
         settle(&mut vcx);
         vcx.dispatch_action(gpui_kit::component::input::Replace);
+        settle(&mut vcx);
+        vcx.update(|window, _| {
+            assert_eq!(window.find("markdown-query").focused(), Some(true));
+        });
         vcx.update(|window, cx| window.input("alpha beta", cx));
         settle(&mut vcx);
         while !vcx.update(|window, _| window.find("markdown-match-count").label() == Some("1/1")) {

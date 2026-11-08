@@ -96,11 +96,17 @@ fn formula_structural_fraction_cancel_commit_and_shared_document_undo(cx: &mut T
         // Both selection directions copy the numerator, never TeX command bytes.
         window.press("shift-right", cx);
         window.press("secondary-c", cx);
-        assert_eq!(cx.read_from_clipboard().unwrap().text().as_deref(), Some("a"));
+        assert_eq!(
+            cx.read_from_clipboard().unwrap().text().as_deref(),
+            Some("a")
+        );
         window.press("right", cx);
         window.press("shift-left", cx);
         window.press("secondary-c", cx);
-        assert_eq!(cx.read_from_clipboard().unwrap().text().as_deref(), Some("a"));
+        assert_eq!(
+            cx.read_from_clipboard().unwrap().text().as_deref(),
+            Some("a")
+        );
         window.press("left", cx);
         assert!(window.find("markdown-formula-editor").visible());
         let bounds = window.find("markdown-source").bounds();
@@ -200,7 +206,10 @@ fn formula_structural_fraction_cancel_commit_and_shared_document_undo(cx: &mut T
         std::thread::sleep(std::time::Duration::from_millis(5));
     }
     app.read_with(&context, |app, cx| {
-        assert_eq!(app.active_buffer().unwrap().host.id(), lyrel_core::host::HostId(219));
+        assert_eq!(
+            app.active_buffer().unwrap().host.id(),
+            lyrel_core::host::HostId(219)
+        );
         assert_eq!(
             app.active_editor_input()
                 .unwrap()
