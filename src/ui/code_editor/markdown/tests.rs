@@ -1699,7 +1699,10 @@ fn native_nested_lists_tasks_quotes_share_input_history_and_host_save_reopen(
             view.document().read(cx).source().to_string(),
             "* root\n\n7) [ ] **child**\n+ neighbor\n\n> > *quote*\n"
         );
-        assert_eq!(view.selection(), Selection::new(reverse.anchor - 2, reverse.head - 2));
+        assert_eq!(
+            view.selection(),
+            Selection::new(reverse.anchor - 2, reverse.head - 2)
+        );
     });
     context.dispatch_action(crate::core::actions::ToggleDocumentPreview);
     context.dispatch_action(gpui_kit::component::input::Undo);
@@ -2474,13 +2477,19 @@ fn native_table_at_document_edges_transfers_focus_without_inserting_rows(
     });
     context.run_until_parked();
     view.read_with(&context, |view, cx| {
-        assert_eq!(view.document().read(cx).encode().unwrap(), format!("{original}\n\nBelow").as_bytes());
+        assert_eq!(
+            view.document().read(cx).encode().unwrap(),
+            format!("{original}\n\nBelow").as_bytes()
+        );
     });
     context.dispatch_action(gpui_kit::component::input::Undo);
     context.dispatch_action(gpui_kit::component::input::Undo);
     context.run_until_parked();
     view.read_with(&context, |view, cx| {
-        assert_eq!(view.document().read(cx).encode().unwrap(), original.as_bytes());
+        assert_eq!(
+            view.document().read(cx).encode().unwrap(),
+            original.as_bytes()
+        );
     });
 }
 

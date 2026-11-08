@@ -1290,7 +1290,10 @@ impl LyrelApp {
                 self.editor_open_request(host, &path, None, Some((id, revision)), window, cx)
             }
             Ok(markdown::links::Target::Anchor) => window.notify_app(
-                t_fmt(L10nKey::MarkdownLinkOpenFailed, &[("reason", t(L10nKey::MarkdownLinkAnchorNotFound))]),
+                t_fmt(
+                    L10nKey::MarkdownLinkOpenFailed,
+                    &[("reason", t(L10nKey::MarkdownLinkAnchorNotFound))],
+                ),
                 cx,
             ),
             Err(reason) => window.notify_app(
