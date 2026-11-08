@@ -9,6 +9,9 @@ struct InlineStyle {
     italic: bool,
     strikethrough: bool,
     code: bool,
+    underline: bool,
+    highlight: bool,
+    highlight_color: Option<u32>,
     link: Option<usize>,
 }
 
@@ -66,8 +69,54 @@ pub(super) struct Leaf {
     spans: Vec<InlineSpan>,
     style: InlineStyle,
     pub(super) image_definitions: std::sync::Arc<super::images::Definitions>,
+    highlight_tint: gpui_kit::Hsla,
 }
 impl Leaf {
+    fn decorate_formats(&mut self, decorations: &[&super::source::formats::Decoration]) {
+        use super::source::formats::{Decoration, Format};
+        fn apply(part: &mut Segment, decoration: &Decoration, ix: usize) {
+            if (decoration.open.start <= part.source.start && part.source.end <= decoration.open.end)
+                || (decoration.close.start <= part.source.start && part.source.end <= decoration.close.end) {
+                part.delimiter = Some(ix);
+            } else if decoration.open.end <= part.source.start && part.source.end <= decoration.close.start {
+                match decoration.format {
+                    Format::Underline => part.style.underline = true,
+                    Format::Highlight | Format::HighlightColor => { part.style.highlight = true; part.style.highlight_color = decoration.color; }
+                    _ => {}
+                }
+            }
+        }
+        let mut scratch = Vec::new();
+        for decoration in decorations {
+            // Keep text-color source visible until the native public foreground seam exists.
+            if decoration.format == Format::TextColor { continue; }
+            let ix = self.spans.len();
+            self.spans.push(InlineSpan { source: decoration.open.start..decoration.close.end, revealed: false, always_hidden: true, target: None });
+            scratch.clear();
+            scratch.reserve(self.segments.len() + 4);
+            for mut segment in self.segments.drain(..) {
+                if segment.source.end <= decoration.open.start || decoration.close.end <= segment.source.start { scratch.push(segment); continue; }
+                let mut cuts = smallvec::SmallVec::<[usize; 6]>::new();
+                cuts.extend([segment.source.start, segment.source.end]);
+                if segment.raw.is_none() && segment.source.len() == segment.content.len() {
+                    cuts.extend([decoration.open.start, decoration.open.end, decoration.close.start, decoration.close.end].into_iter()
+                        .filter(|at| segment.source.start < *at && *at < segment.source.end));
+                }
+                cuts.sort_unstable();
+                cuts.dedup();
+                if cuts.len() == 2 { apply(&mut segment, decoration, ix); scratch.push(segment); continue; }
+                for pair in cuts.windows(2) {
+                    let mut part = segment.clone();
+                    part.source = pair[0]..pair[1];
+                    part.content = segment.content.start + pair[0] - segment.source.start..segment.content.start + pair[1] - segment.source.start;
+                    apply(&mut part, decoration, ix);
+                    scratch.push(part);
+                }
+            }
+            std::mem::swap(&mut self.segments, &mut scratch);
+        }
+    }
+
     pub(super) fn new(range: Range<usize>, kind: Kind) -> Self {
         Self {
             id: 0,
@@ -84,6 +133,7 @@ impl Leaf {
             spans: Vec::new(),
             style: InlineStyle::default(),
             image_definitions: Default::default(),
+            highlight_tint: gpui_kit::Hsla::default(),
         }
     }
     pub fn materialize(&mut self, source: &Rope) {
@@ -308,6 +358,8 @@ impl Leaf {
                 italic: style.italic,
                 strikethrough: style.strikethrough,
                 code: style.code,
+                underline: style.underline,
+                highlight: style.highlight.then(|| style.highlight_color.map_or(self.highlight_tint, |color| gpui_kit::rgba(color).into())),
                 link: style
                     .link
                     .map(|ix| gpui_kit::base::text::editor_host::LinkMark {
@@ -722,8 +774,22 @@ pub(super) struct Projection {
     pub error: Option<String>,
     live: bool,
     next_id: u64,
+    format_tint: Option<(u64, gpui_kit::Hsla)>,
 }
 impl Projection {
+    pub(super) fn format_theme(&mut self, tint: gpui_kit::Hsla) {
+        if self.format_tint == Some((self.revision, tint)) { return; }
+        self.format_tint = Some((self.revision, tint));
+        for leaf in &mut self.leaves {
+            if leaf.highlight_tint != tint {
+                leaf.highlight_tint = tint;
+                if leaf.segments.iter().any(|s| s.style.highlight && s.style.highlight_color.is_none()) {
+                    leaf.version = self.next_id;
+                    self.next_id += 1;
+                }
+            }
+        }
+    }
     pub fn source(source: &Rope, revision: u64, grammar: super::mdx::Grammar) -> Self {
         let text = source.to_string();
         Self::parse(&text, revision, false, grammar)
@@ -761,6 +827,18 @@ impl Projection {
                             &image_definitions,
                             &mut leaves,
                         );
+                        let decorations = super::source::formats::decorations(source, &root);
+                        let mut active = Vec::new();
+                        let mut next = 0;
+                        for leaf in &mut leaves {
+                            active.retain(|d: &&super::source::formats::Decoration| d.close.end > leaf.range.start);
+                            while next < decorations.len() && decorations[next].open.start < leaf.range.end {
+                                let decoration = &decorations[next];
+                                if decoration.close.end > leaf.range.start { active.push(decoration); }
+                                next += 1;
+                            }
+                            leaf.decorate_formats(&active);
+                        }
                     }
                     Err(reason) => {
                         error = Some(reason.to_string());
@@ -802,6 +880,7 @@ impl Projection {
             mdx,
             error,
             live,
+            format_tint: None,
         }
     }
     pub(super) fn project_nodes(
@@ -823,6 +902,14 @@ impl Projection {
                 range.start
             };
             Self::gap(source, cursor..start, leaves);
+            if super::source::formats::wrapper(source, node).is_some() {
+                let mut leaf = Leaf::new(range.clone(), Kind::Prose);
+                leaf.image_definitions = images.clone();
+                Self::inline(source, node, &mut leaf);
+                leaves.push(leaf);
+                cursor = range.end;
+                continue;
+            }
             if super::mdx::project(source, node, images, leaves) {
                 cursor = range.end;
                 continue;
@@ -1041,6 +1128,18 @@ impl Projection {
             return;
         };
         let range = position.start.offset..position.end.offset;
+        if let Some(decoration) = super::source::formats::wrapper(source, node) {
+            leaf.push(decoration.open.clone(), &source[decoration.open]);
+            if let Some(children) = node.children() {
+                for child in children {
+                    if matches!(child, Node::Paragraph(_)) {
+                        if let Some(inline) = child.children() { for child in inline { Self::inline(source, child, leaf); } }
+                    } else { Self::inline(source, child, leaf); }
+                }
+            }
+            leaf.push(decoration.close.clone(), &source[decoration.close]);
+            return;
+        }
         if let Some(image) = super::images::image(node, &leaf.image_definitions) {
             leaf.push_normalized(range.clone(), "\u{FFFC}", &source[range]);
             leaf.segments.last_mut().unwrap().image = Some(image);

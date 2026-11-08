@@ -29,6 +29,8 @@ mod typography;
 #[path = "composition.rs"]
 mod composition;
 
+#[path = "formats.rs"]
+pub(super) mod formats;
 #[path = "mermaid_authoring.rs"]
 mod mermaid_authoring;
 
@@ -92,6 +94,7 @@ pub(crate) struct SourcePresentation {
     reveal_at: Option<usize>,
     selection_notification: bool,
     assets: assets::InsertionState,
+    formats: formats::State,
     _observe: Subscription,
     mdx_state: super::mdx::ViewState,
 }
@@ -217,6 +220,7 @@ impl SourcePresentation {
             document,
             state: PresentationState::default(),
             input_generation: 0,
+            formats: formats::State::default(),
             focus: cx.focus_handle().tab_stop(true),
             scroll: ScrollHandle::new(),
             geometry: None,
@@ -967,6 +971,7 @@ impl SourcePresentation {
     ) -> gpui_kit::component::menu::PopupMenu {
         use super::tables::*;
         use crate::ui::i18n::{L10nKey, t};
+        let menu = self.format_menu(menu);
         if !self.live {
             return menu;
         }
@@ -2203,6 +2208,7 @@ impl EntityInputHandler for SourcePresentation {
 }
 impl Render for SourcePresentation {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.projection.format_theme(cx.theme().primary.opacity(0.2));
         let style = super::math::Style::new(cx.theme().foreground, window.rem_size());
         if self.math.style != Some(style) {
             self.math.style = Some(style);
@@ -2872,6 +2878,17 @@ impl Render for SourcePresentation {
                     cx.stop_propagation();
                 }))
                 .on_action(cx.listener(|view, _: &LoadImages, _, cx| view.refresh_images(true, cx)))
+                .on_action(cx.listener(|this, _: &formats::Bold, window, cx| this.format_command(formats::Format::Bold, None, window, cx)))
+                .on_action(cx.listener(|this, _: &formats::Italic, window, cx| this.format_command(formats::Format::Italic, None, window, cx)))
+                .on_action(cx.listener(|this, _: &formats::Underline, window, cx| this.format_command(formats::Format::Underline, None, window, cx)))
+                .on_action(cx.listener(|this, _: &formats::Strike, window, cx| this.format_command(formats::Format::Strike, None, window, cx)))
+                .on_action(cx.listener(|this, _: &formats::InlineCode, window, cx| this.format_command(formats::Format::Code, None, window, cx)))
+                .on_action(cx.listener(|this, _: &formats::Highlight, window, cx| this.format_command(formats::Format::Highlight, None, window, cx)))
+                .on_action(cx.listener(|this, _: &formats::ClearHighlightColor, window, cx| this.format_command(formats::Format::HighlightColor, None, window, cx)))
+                .on_action(cx.listener(|this, action: &formats::SetHighlightColor, window, cx| this.format_command(formats::Format::HighlightColor, Some(action.color), window, cx)))
+                .on_action(cx.listener(|this, _: &formats::CustomHighlightColor, window, cx| this.custom_format_color(formats::Format::HighlightColor, window, cx)))
+                .on_action(cx.listener(|this, _: &formats::ApplyCustomColor, window, cx| this.apply_format_color(window, cx)))
+                .on_action(cx.listener(|this, _: &formats::CancelCustomColor, window, cx| { this.cancel_format_color(window, cx); }))
                 .on_action(cx.listener(|this, _: &mermaid_authoring::EditDiagramSource, window, cx| {
                     this.edit_mermaid_source(None, window, cx);
                 }))
@@ -3129,6 +3146,7 @@ impl Render for SourcePresentation {
                 .on_action(cx.listener(|this, _: &actions::Escape, window, cx| {
                     if this.state.composition.is_some() {
                         this.command(Command::CancelComposition, window, cx);
+                    } else if this.cancel_format_color(window, cx) {
                     } else if this.leave_mermaid_result(window, cx) {
                         // Escape restores the retained diagram source selection.
                     } else if this.navigate_table(super::tables::Navigation::Exit { backward: false }, window, cx) {
@@ -3142,6 +3160,7 @@ impl Render for SourcePresentation {
                         .flex_shrink_0().aria_label(status.clone()).text_sm().text_color(cx.theme().muted_foreground).child(status)
                 ))
                 .child(image_status)
+                .child(self.format_toolbar(window, cx))
                 .when(self.live, |root| root.child(self.table_insert_button(cx)))
                 .when(self.live && self.projection.links.at(self.state.selection.head()).is_some(), |root| {
                     use gpui_kit::component::button::{Button, ButtonVariants as _};
