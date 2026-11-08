@@ -61,6 +61,7 @@ pub(super) struct Leaf {
     pub text: String,
     pub kind: Kind,
     pub deferred: bool,
+    pub(super) math_alignment: super::source::math_edit::alignment::Align,
     segments: Vec<Segment>,
     insertion: usize,
     inline_insertions: smallvec::SmallVec<[usize; 1]>,
@@ -160,6 +161,7 @@ impl Leaf {
             text: String::new(),
             kind,
             deferred: false,
+            math_alignment: Default::default(),
             segments: Vec::new(),
             content: String::new(),
             container: None,
@@ -553,7 +555,7 @@ impl Leaf {
                     ));
                     InlineNode::image(node)
                 } else if let Some(formula) = segment.math.as_ref().filter(|_| !segment.verbatim) {
-                    math.inline_node(formula)
+                    math.inline_node(formula, &segment.source)
                 } else {
                     InlineNode::new(self.text[range].to_owned()).marks(run_marks)
                 },
@@ -565,6 +567,13 @@ impl Leaf {
         self.segments
             .iter()
             .filter_map(|segment| segment.math.as_ref())
+    }
+    pub(super) fn formula_at(&self, at: usize, end: bool) -> Option<(Range<usize>, super::math::Formula)> {
+        self.segments.iter().find_map(|segment| {
+            let inside = segment.source.start < at && at < segment.source.end;
+            let boundary = if end { at == segment.source.end } else { at == segment.source.start };
+            (inside || boundary).then(|| segment.math.as_ref().map(|formula| (segment.source.clone(), formula.clone()))).flatten()
+        })
     }
     pub fn atom_source(&self, display: usize) -> Option<usize> {
         self.segments.iter().find_map(|segment| {
@@ -963,6 +972,7 @@ impl Projection {
         } else {
             Self::source_lines(source, 0, &mut leaves);
         }
+        if live { super::source::math_edit::alignment::hide_markers(source, &mut leaves); }
         if leaves.is_empty() {
             leaves.push(Leaf::new(0..0, Kind::Prose));
         }
