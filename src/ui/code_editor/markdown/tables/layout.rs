@@ -4,6 +4,7 @@ use super::{
     Cell,
 };
 use crate::ui::code_editor::markdown::math;
+use crate::ui::i18n::{L10nKey, t};
 use gpui_kit::base::{
     StyledExt as _,
     text::editor_host::{BlockNode, FlowPosition, Paragraph, RenderContext},
@@ -55,6 +56,10 @@ impl Layout {
 
     pub fn invalidate_cell(&mut self, id: u64) {
         self.cells.remove(&id);
+    }
+
+    pub fn invalidate_metadata(&mut self) {
+        self.revision = None;
     }
 
     // Measurements contain numbers only. In particular, measuring an offscreen
@@ -491,7 +496,7 @@ impl Layout {
                                         gpui_kit::base::HandleEdge::Trailing
                                     })
                                     .role(Role::Splitter)
-                                    .aria_label("Resize table column")
+                                    .aria_label(t(L10nKey::EditorTableResizeColumn))
                                     .on_mouse_down(
                                         MouseButton::Left,
                                         cx.listener(move |view, event, window, cx| {

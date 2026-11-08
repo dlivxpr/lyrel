@@ -192,7 +192,6 @@ pub(in crate::ui::code_editor::markdown) fn edit(
                 copy.text
                     .replace_range(..copy.prefix, &rows[delimiter].text[..prefix]);
                 copy.prefix = prefix;
-                copy.ending = Some(newline);
                 copy
             } else {
                 column = 0;

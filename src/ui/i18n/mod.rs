@@ -1468,6 +1468,7 @@ l10n_keys! {
     EditorTableAlignCenter,
     EditorTableAlignRight,
     EditorTableFitColumn,
+    EditorTableResizeColumn,
     EditorTableWidenColumn,
     EditorTableNarrowColumn,
     EditorTableStyleGrid,
