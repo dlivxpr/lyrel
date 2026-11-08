@@ -533,6 +533,65 @@ fn review_table_formula_session_remeasures_owning_row_before_source_commit(
 }
 
 #[gpui_kit::test]
+fn native_down_visits_each_soft_wrapped_row_without_skipping(cx: &mut TestAppContext) {
+    use unicode_segmentation::UnicodeSegmentation as _;
+
+    let mut native_context = TestAppContext::build_with_text_system(
+        gpui_kit::TestDispatcher::new(0),
+        cx.test_function_name(),
+        gpui_kit::platform::current_platform(true).text_system(),
+    );
+    let cx = &mut native_context;
+    let original = format!("{}\n\nkeep\n", "W ".repeat(140));
+    let (_directory, _path, _app, mut context, _streams, view) = fixture!(cx, &original, true);
+    view.update_in(&mut context, |view, _, cx| view.set_soft_wrap(true, cx));
+    cx.simulate_window_resize(
+        context.window_handle(),
+        gpui_kit::size(gpui_kit::px(1000.), gpui_kit::px(1200.)),
+    );
+    select(&view, &mut context, 0, 0);
+    until(&mut context, |context| {
+        view.read_with(context, |view, cx| view.geometry_is_current(cx))
+    });
+    let rows = view.read_with(&context, |view, _| {
+        let leaf = view.projection.leaf_at(0).unwrap();
+        let geometry = &view.geometry.as_ref().unwrap().1[&leaf.id];
+        // Native single-affinity geometry exposes each continuation row's
+        // leading W only through its trailing caret. These are independent
+        // expected physical rows, not vertical_target's hit-test result.
+        let rows = leaf
+            .text
+            .grapheme_indices(true)
+            .filter_map(|(ix, text)| {
+                let a = geometry.position_for_index(ix);
+                let b = geometry.position_for_index(ix + text.len());
+                (text == "W" && a.y < b.y)
+                    .then_some((leaf.source_offset(ix + text.len()), b.y))
+            })
+            .take(2)
+            .collect::<Vec<_>>();
+        assert_eq!(rows.len(), 2, "fixture must contain two continuation rows");
+        rows
+    });
+    for (expected, top) in rows {
+        context.update(|window, cx| window.press("down", cx));
+        settle(&view, &mut context);
+        view.read_with(&context, |view, cx| {
+            assert_eq!(view.selection(), Selection::caret(expected));
+            assert_eq!(
+                view.range_to_bounds(&(expected..expected), cx).unwrap().top(),
+                top
+            );
+            assert_eq!(view.document().read(cx).revision(), 0);
+            assert_eq!(
+                view.document().read(cx).encode().unwrap(),
+                original.as_bytes()
+            );
+        });
+    }
+}
+
+#[gpui_kit::test]
 fn first_soft_wrapped_link_grapheme_hovers_edits_and_opens(cx: &mut gpui_kit::TestAppContext) {
     native_link_grapheme_hovers_edits_and_opens(cx, false);
 }

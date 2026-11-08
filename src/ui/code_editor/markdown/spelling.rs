@@ -428,7 +428,12 @@ mod tests {
         let revision = view.read_with(&context, |view, cx| view.document.read(cx).revision());
         let mut previous_heights: Option<Vec<Pixels>> = None;
         for rem in [16., 22.] {
-            context.update(|window, _| window.set_rem_size(px(rem)));
+            // Match the production typography setting consumed by the root;
+            // setting Window rem alone is overwritten by the next root render.
+            context.update(|_, cx| {
+                cx.global_mut::<crate::core::config::Config>().ui_font_size = rem;
+                gpui_kit::component::Theme::update(cx, |theme| theme.font_size = px(rem));
+            });
             settle_geometry(&view, &mut context);
             let heights = view.read_with(&context, |view, cx| {
                 assert!(view.geometry_is_current(cx));

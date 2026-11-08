@@ -132,7 +132,8 @@ impl SourcePresentation {
                 &leaf.text,
                 geometry,
                 point(caret.x + distance * direction, y),
-                recover_wrapped_start(leaf.kind),
+                // This scorer also consumes native single-affinity positions.
+                false,
             );
             let position = geometry.position_for_index(ix);
             let dx = (position.x - caret.x) * direction;
@@ -166,18 +167,8 @@ impl SourcePresentation {
         }
         // At a visual edge, ask the same row's endpoints for its source-order
         // direction rather than visiting every glyph to infer RTL/wrap exit.
-        let left = hit_test_grapheme(
-            &leaf.text,
-            geometry,
-            point(bounds.left(), y),
-            recover_wrapped_start(leaf.kind),
-        );
-        let right = hit_test_grapheme(
-            &leaf.text,
-            geometry,
-            point(bounds.right(), y),
-            recover_wrapped_start(leaf.kind),
-        );
+        let left = hit_test_grapheme(&leaf.text, geometry, point(bounds.left(), y), false);
+        let right = hit_test_grapheme(&leaf.text, geometry, point(bounds.right(), y), false);
         (left > right).then(|| self.visible_step(at, !backward, cx))
     }
 

@@ -1737,7 +1737,11 @@ impl SourcePresentation {
                     &mapped.text,
                     leaf,
                     point(goal_x, y),
-                    navigation::recover_wrapped_start(mapped.kind),
+                    // Vertical scoring below uses the SDK's physical caret.
+                    // Its single affinity cannot score a recovered logical
+                    // wrapped start on the continuation row; keep the native
+                    // same-row candidate rather than filtering it out as dy=0.
+                    false,
                 );
                 let position = leaf.position_for_index(display);
                 let dy = if backward {
