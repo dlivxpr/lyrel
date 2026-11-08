@@ -8,8 +8,8 @@ use std::ops::Range;
 use unicode_segmentation::UnicodeSegmentation as _;
 
 mod blocks;
-mod images;
 pub(super) mod embeds;
+mod images;
 pub(super) mod links;
 mod lists;
 mod math;

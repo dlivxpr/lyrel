@@ -2911,62 +2911,125 @@ fn markdown_embed_fragment_source_history_and_host_roundtrip(cx: &mut TestAppCon
     std::fs::write(directory.path().join("nested.md"), nested).unwrap();
     let host = FileHost::mapped(HostId(823), directory.path());
     let (app, mut context, _streams) = harness_with_tabs(cx, 1);
-    app.update_in(&mut context, |app, window, cx| app.editor_open_on_host(host.clone(), Path::new("/start.md"), window, cx));
+    app.update_in(&mut context, |app, window, cx| {
+        app.editor_open_on_host(host.clone(), Path::new("/start.md"), window, cx)
+    });
     wait_until(&mut context, |cx| active_id(&app, cx).is_some());
     let original_id = active_id(&app, &context).unwrap();
-    let view = app.read_with(&context, |app, _| app.active_editor_input().unwrap().markdown().unwrap().clone());
+    let view = app.read_with(&context, |app, _| {
+        app.active_editor_input()
+            .unwrap()
+            .markdown()
+            .unwrap()
+            .clone()
+    });
     view.update_in(&mut context, |view, window, cx| {
         view.select_range(6..6, cx);
         view.focus_handle(cx).focus(window, cx);
     });
     context.update(|window, cx| window.input("![[next#det", cx));
-    wait_until(&mut context, |cx| cx.update(|window, cx| {
-        window.render_frame(cx);
-        window.try_find("markdown-reference-completions").is_some()
-    }));
+    wait_until(&mut context, |cx| {
+        cx.update(|window, cx| {
+            window.render_frame(cx);
+            window.try_find("markdown-reference-completions").is_some()
+        })
+    });
     context.update(|window, cx| window.press("enter", cx));
     let inserted = "Keep\r\n\r\n![[next.md#detail]]";
-    view.read_with(&context, |view, cx| assert_eq!(view.document().read(cx).encode().unwrap(), inserted.as_bytes()));
-    wait_until(&mut context, |cx| cx.update(|window, cx| {
-        window.render_frame(cx);
-        window.try_find("markdown-embed-content-6").is_some()
-            && window.try_find("markdown-embed-cycle-root-6-0-0").is_some()
-    }));
+    view.read_with(&context, |view, cx| {
+        assert_eq!(
+            view.document().read(cx).encode().unwrap(),
+            inserted.as_bytes()
+        )
+    });
+    wait_until(&mut context, |cx| {
+        cx.update(|window, cx| {
+            window.render_frame(cx);
+            window.try_find("markdown-embed-content-6").is_some()
+                && window.try_find("markdown-embed-cycle-root-6-0-0").is_some()
+        })
+    });
     context.update(|window, cx| {
         let content = window.find("markdown-embed-content-6");
         let value = content.value().unwrap();
         assert!(value.contains("Visible fragment"));
         assert!(!value.contains("Hidden"));
         assert!(!value.contains("Excluded"));
-        assert_eq!(window.find("markdown-embed-error-root-6-0-1").label(), Some(t(L10nKey::MarkdownReferenceMissing)));
+        assert_eq!(
+            window.find("markdown-embed-error-root-6-0-1").label(),
+            Some(t(L10nKey::MarkdownReferenceMissing))
+        );
         window.click("markdown-embed-content-6", cx);
         window.press("escape", cx);
         assert!(view.read(cx).focus_handle(cx).is_focused(window));
     });
     context.update(|window, cx| window.click("markdown-embed-source-6", cx));
-    view.read_with(&context, |view, _| assert_eq!(view.selection().range(), 6..25));
+    view.read_with(&context, |view, _| {
+        assert_eq!(view.selection().range(), 6..25)
+    });
     context.update(|window, cx| window.input("![[next.md#detail|Alias]]", cx));
     let edited = "Keep\r\n\r\n![[next.md#detail|Alias]]";
     context.dispatch_action(gpui_kit::component::input::Undo);
-    view.read_with(&context, |view, cx| assert_eq!(view.document().read(cx).encode().unwrap(), inserted.as_bytes()));
+    view.read_with(&context, |view, cx| {
+        assert_eq!(
+            view.document().read(cx).encode().unwrap(),
+            inserted.as_bytes()
+        )
+    });
     context.dispatch_action(gpui_kit::component::input::Redo);
-    view.read_with(&context, |view, cx| assert_eq!(view.document().read(cx).encode().unwrap(), edited.as_bytes()));
+    view.read_with(&context, |view, cx| {
+        assert_eq!(
+            view.document().read(cx).encode().unwrap(),
+            edited.as_bytes()
+        )
+    });
     context.dispatch_action(crate::core::actions::ToggleDocumentPreview);
     view.read_with(&context, |view, cx| {
         assert!(!view.is_live());
-        assert_eq!(view.document().read(cx).encode().unwrap(), edited.as_bytes());
+        assert_eq!(
+            view.document().read(cx).encode().unwrap(),
+            edited.as_bytes()
+        );
     });
     context.dispatch_action(crate::core::actions::ToggleDocumentPreview);
     view.read_with(&context, |view, _| assert!(view.is_live()));
-    app.update_in(&mut context, |app, window, cx| app.editor_save_active(window, cx));
-    wait_until(&mut context, |cx| app.read_with(cx, |app, _| !app.active_buffer().unwrap().dirty));
-    assert_eq!(std::fs::read(directory.path().join("start.md")).unwrap(), edited.as_bytes());
+    app.update_in(&mut context, |app, window, cx| {
+        app.editor_save_active(window, cx)
+    });
+    wait_until(&mut context, |cx| {
+        app.read_with(cx, |app, _| !app.active_buffer().unwrap().dirty)
+    });
+    assert_eq!(
+        std::fs::read(directory.path().join("start.md")).unwrap(),
+        edited.as_bytes()
+    );
     app.update_in(&mut context, |app, window, cx| {
         app.editor_close_file(0, window, cx);
         app.editor_open_on_host(host.clone(), Path::new("/start.md"), window, cx);
     });
-    wait_until(&mut context, |cx| active_id(&app, cx).is_some_and(|id| id != original_id));
-    app.read_with(&context, |app, cx| assert_eq!(app.active_editor_input().unwrap().markdown().unwrap().read(cx).document().read(cx).encode().unwrap(), edited.as_bytes()));
-    assert_eq!(std::fs::read(directory.path().join("next.md")).unwrap(), target.as_bytes());
-    assert_eq!(std::fs::read(directory.path().join("nested.md")).unwrap(), nested.as_bytes());
+    wait_until(&mut context, |cx| {
+        active_id(&app, cx).is_some_and(|id| id != original_id)
+    });
+    app.read_with(&context, |app, cx| {
+        assert_eq!(
+            app.active_editor_input()
+                .unwrap()
+                .markdown()
+                .unwrap()
+                .read(cx)
+                .document()
+                .read(cx)
+                .encode()
+                .unwrap(),
+            edited.as_bytes()
+        )
+    });
+    assert_eq!(
+        std::fs::read(directory.path().join("next.md")).unwrap(),
+        target.as_bytes()
+    );
+    assert_eq!(
+        std::fs::read(directory.path().join("nested.md")).unwrap(),
+        nested.as_bytes()
+    );
 }
