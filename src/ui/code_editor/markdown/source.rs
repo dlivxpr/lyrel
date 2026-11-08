@@ -262,7 +262,7 @@ impl SourcePresentation {
             document
                 .composition_owner
                 .as_ref()
-                .map(WeakEntity::entity_id),
+                .map(|owner| owner.entity_id()),
         )
     }
     fn retire_native_composition(&self, completed: bool, cx: &mut Context<Self>) {
@@ -3521,7 +3521,7 @@ impl Element for SourceElement {
         &mut self,
         _: Option<&GlobalElementId>,
         _: Option<&InspectorElementId>,
-        bounds: Bounds<Pixels>,
+        _: Bounds<Pixels>,
         _: &mut (),
         _: &mut (),
         window: &mut Window,

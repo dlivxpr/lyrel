@@ -9778,7 +9778,7 @@ fn native_navigation_pointer_words_lines_and_stationary_offscreen_drag(
         context.update(|window, cx| window.render_frame(cx));
     }
     let extended = view.read_with(&context, |view, _| {
-        assert_eq!(view.selection().anchor(), 0);
+        assert_eq!(view.selection().anchor, 0);
         assert!(view.scroll_offset().y < gpui_kit::Pixels::ZERO);
         assert!(view.selection().head() > source.find("paragraph 5").unwrap());
         view.selection().head()
@@ -9811,7 +9811,7 @@ fn native_navigation_pointer_words_lines_and_stationary_offscreen_drag(
     }
     context.update(|window, cx| window.pointer_up(above, MouseButton::Left, cx));
     view.read_with(&context, |view, cx| {
-        assert_eq!(view.selection().anchor(), extended);
+        assert_eq!(view.selection().anchor, extended);
         assert!(view.selection().head() < extended);
         assert_eq!(
             view.document().read(cx).encode().unwrap(),
