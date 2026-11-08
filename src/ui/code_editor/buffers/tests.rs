@@ -886,6 +886,76 @@ fn external_writes_scenario(cx: &mut TestAppContext, markdown: bool) {
 }
 
 #[gpui_kit::test]
+fn markdown_clean_reload_survives_selection_and_group_handoff_without_overwriting_disk(
+    cx: &mut TestAppContext,
+) {
+    use gpui_kit::component::input::SelectAll;
+
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("delayed-reload.mdx");
+    std::fs::write(&path, b"alpha\r\nbeta\nlast").unwrap();
+    let host = FileHost::new(HostId(230));
+    let (app, mut vcx, _streams) = harness_with_tabs(cx, 1);
+    app.update_in(&mut vcx, |app, window, cx| {
+        app.editor_open_on_host(host.clone(), &path, window, cx);
+    });
+    wait_until(&mut vcx, |vcx| active_id(&app, vcx).is_some());
+    start_active_markdown_in_source(&app, &mut vcx);
+    let first = app.read_with(&vcx, |app, _| {
+        app.active_editor_input().unwrap().markdown().unwrap().clone()
+    });
+    app.update_in(&mut vcx, |app, window, cx| {
+        assert!(app.editor_split(window, cx));
+    });
+    start_active_markdown_in_source(&app, &mut vcx);
+    let second = app.read_with(&vcx, |app, _| {
+        app.active_editor_input().unwrap().markdown().unwrap().clone()
+    });
+
+    // The external-change path uses this same Host-bound reload. Pause its
+    // read, then change only presentation state, not the document's bytes.
+    let external = b"\xef\xbb\xbfexternal  \r\nsecond\nlast";
+    std::fs::write(&path, external).unwrap();
+    let release = host.pause_next_read();
+    app.update_in(&mut vcx, |app, window, cx| {
+        app.editor_reload_from_disk(app.active_buffer().unwrap().id(), window, cx);
+    });
+    wait_until(&mut vcx, |_| host.entered.load(Ordering::SeqCst));
+    app.update_in(&mut vcx, |app, window, cx| {
+        assert!(app.editor_focus_group(true, window, cx));
+    });
+    vcx.dispatch_action(SelectAll);
+    vcx.run_until_parked();
+    app.read_with(&vcx, |app, cx| {
+        assert!(!app.active_buffer().unwrap().dirty);
+        assert_eq!(first.read(cx).selection().range(), 0..15);
+    });
+    release.send(()).unwrap();
+    wait_until(&mut vcx, |vcx| {
+        app.read_with(vcx, |app, cx| {
+            app.active_buffer().unwrap().input.read(cx).text().to_string()
+                == "external  \nsecond\nlast"
+        })
+    });
+    vcx.update(|_, cx| {
+        assert_eq!(
+            first.read(cx).document().entity_id(),
+            second.read(cx).document().entity_id()
+        );
+        assert_eq!(first.read(cx).document().read(cx).encode().unwrap(), external);
+        assert_eq!(second.read(cx).document().read(cx).encode().unwrap(), external);
+    });
+    vcx.dispatch_action(crate::core::actions::EditorSave);
+    wait_until(&mut vcx, |vcx| {
+        app.read_with(vcx, |app, _| {
+            app.active_buffer().is_some_and(|file| !file.dirty && !file.saving)
+        })
+    });
+    assert_eq!(std::fs::read(&path).unwrap(), external);
+    assert_eq!(host.writes.load(Ordering::SeqCst), 1);
+}
+
+#[gpui_kit::test]
 fn unchanged_text_refresh_preserves_selection_and_saved_undo_history(cx: &mut TestAppContext) {
     use gpui_kit::component::input::{MoveToStart, Redo, Undo};
 
