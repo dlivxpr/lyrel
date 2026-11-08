@@ -29,6 +29,10 @@ mod typography;
 #[path = "composition.rs"]
 mod composition;
 
+#[path = "formats.rs"]
+pub(super) mod formats;
+#[path = "code.rs"]
+mod code;
 #[path = "mermaid_authoring.rs"]
 mod mermaid_authoring;
 
@@ -92,6 +96,8 @@ pub(crate) struct SourcePresentation {
     reveal_at: Option<usize>,
     selection_notification: bool,
     assets: assets::InsertionState,
+    formats: formats::State,
+    code: code::State,
     _observe: Subscription,
     mdx_state: super::mdx::ViewState,
 }
@@ -101,6 +107,7 @@ impl SourcePresentation {
         wrap: bool,
         cx: &mut Context<Self>,
     ) -> Self {
+        code::init(cx);
         let owner_id = cx.entity_id();
         cx.on_release(move |view, cx| {
             // Platform handlers are weak. A last-owner release must still put
@@ -217,6 +224,7 @@ impl SourcePresentation {
             document,
             state: PresentationState::default(),
             input_generation: 0,
+            formats: formats::State::default(),
             focus: cx.focus_handle().tab_stop(true),
             scroll: ScrollHandle::new(),
             geometry: None,
@@ -256,6 +264,7 @@ impl SourcePresentation {
             reveal_at: None,
             selection_notification: false,
             assets: assets::InsertionState::default(),
+            code: code::State::default(),
             _observe: observe,
             mdx_state: super::mdx::ViewState::default(),
         };
@@ -601,6 +610,9 @@ impl SourcePresentation {
         );
         let marked = self.state.marked_range();
         for leaf in &mut self.projection.leaves {
+            if matches!(leaf.kind, Kind::Code(_)) {
+                continue; // Code owns its derived fence/container visibility.
+            }
             let visibility_changed = leaf.hide_ranges(&hidden, marked.as_ref());
             let insertions_changed = leaf.set_inline_insertions(&insertions);
             if visibility_changed || insertions_changed {
@@ -967,6 +979,7 @@ impl SourcePresentation {
     ) -> gpui_kit::component::menu::PopupMenu {
         use super::tables::*;
         use crate::ui::i18n::{L10nKey, t};
+        let menu = self.format_menu(menu);
         if !self.live {
             return menu;
         }
@@ -1052,6 +1065,8 @@ impl SourcePresentation {
         if !toggle_task {
             self.state.selection = self.map_live_caret(self.state.selection, cx);
         }
+        self.sync_code(cx);
+        let (command, code_caret) = self.code_input(command, cx);
         let command = if self.live
             && self.extra_selections.is_empty()
             && self.projection.grammar == self.document.read(cx).grammar()
@@ -1263,6 +1278,9 @@ impl SourcePresentation {
             }
             changed
         });
+        if let Some(at) = code_caret {
+            self.state.selection = Selection::caret(at);
+        }
         if let Some(selections) = after_extra {
             self.extra_selections = selections;
         }
@@ -1578,6 +1596,9 @@ impl SourcePresentation {
         true
     }
     fn indent_selection(&mut self, outdent: bool, window: &mut Window, cx: &mut Context<Self>) {
+        if self.code_indent(outdent, window, cx) {
+            return;
+        }
         if self.navigate_table(
             super::tables::Navigation::Cell { backward: outdent },
             window,
@@ -1832,6 +1853,9 @@ impl SourcePresentation {
         }
     }
     fn enter(&mut self, hard: bool, window: &mut Window, cx: &mut Context<Self>) {
+        if self.code_enter(window, cx) {
+            return;
+        }
         if self.live
             && self
                 .projection
@@ -1889,6 +1913,9 @@ impl SourcePresentation {
         self.command(command, window, cx);
     }
     fn delete_prose(&mut self, backward: bool, window: &mut Window, cx: &mut Context<Self>) {
+        if self.code_delete(backward, window, cx) {
+            return;
+        }
         if !self.live
             || !self.state.selection.range().is_empty()
             || !self.extra_selections.is_empty()
@@ -2203,6 +2230,7 @@ impl EntityInputHandler for SourcePresentation {
 }
 impl Render for SourcePresentation {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.projection.format_theme(cx.theme().primary.opacity(0.2));
         let style = super::math::Style::new(cx.theme().foreground, window.rem_size());
         if self.math.style != Some(style) {
             self.math.style = Some(style);
@@ -2217,6 +2245,7 @@ impl Render for SourcePresentation {
         if self.live && self.rendered_revision != Some(self.document.read(cx).revision()) {
             self.sync_mdx_inline_visibility(cx);
         }
+        self.sync_code(cx);
         let view = cx.entity().downgrade();
         let ready = self
             .image_snapshot
@@ -2404,6 +2433,11 @@ impl Render for SourcePresentation {
         {
             self.render_generation += 1;
             for leaf in &self.projection.leaves[visible.clone()] {
+                let language = if self.live && self.blocks.get(&leaf.id).is_none_or(|cached| cached.version != leaf.version) {
+                    self.code_language(leaf, cx)
+                } else {
+                    None
+                };
                 let cached = self.blocks.entry(leaf.id).or_insert_with(|| CachedBlock {
                     version: u64::MAX,
                     seen: 0,
@@ -2412,7 +2446,7 @@ impl Render for SourcePresentation {
                 if cached.version != leaf.version {
                     if self.live && matches!(leaf.kind, Kind::Code(_) | Kind::Mermaid(_)) {
                         cached.node = BlockNode::CodeBlock(
-                            CodeBlock::from_code(leaf.text.clone(), None::<SharedString>)
+                            CodeBlock::from_code(leaf.text.clone(), language)
                                 .with_leaf_key(leaf.id),
                         );
                         cached.version = leaf.version;
@@ -2617,6 +2651,11 @@ impl Render for SourcePresentation {
             } else {
                 rendered.into_any_element()
             };
+            let rendered = if self.live && matches!(leaf.kind, Kind::Code(_)) {
+                self.code_controls(leaf, rendered, cx)
+            } else {
+                rendered
+            };
             let rendered = if self.live && !matches!(leaf.kind, Kind::TableCell(_)) {
                 let field = super::mdx::view::FieldContext::new(
                     &self.projection,
@@ -2711,6 +2750,7 @@ impl Render for SourcePresentation {
                             row.child(div().flex_1().min_w_0().child(rendered))
                                 .into_any_element()
                         } else {
+
                             rendered
                         }
                     })
@@ -2872,6 +2912,17 @@ impl Render for SourcePresentation {
                     cx.stop_propagation();
                 }))
                 .on_action(cx.listener(|view, _: &LoadImages, _, cx| view.refresh_images(true, cx)))
+                .on_action(cx.listener(|this, _: &formats::Bold, window, cx| this.format_command(formats::Format::Bold, None, window, cx)))
+                .on_action(cx.listener(|this, _: &formats::Italic, window, cx| this.format_command(formats::Format::Italic, None, window, cx)))
+                .on_action(cx.listener(|this, _: &formats::Underline, window, cx| this.format_command(formats::Format::Underline, None, window, cx)))
+                .on_action(cx.listener(|this, _: &formats::Strike, window, cx| this.format_command(formats::Format::Strike, None, window, cx)))
+                .on_action(cx.listener(|this, _: &formats::InlineCode, window, cx| this.format_command(formats::Format::Code, None, window, cx)))
+                .on_action(cx.listener(|this, _: &formats::Highlight, window, cx| this.format_command(formats::Format::Highlight, None, window, cx)))
+                .on_action(cx.listener(|this, _: &formats::ClearHighlightColor, window, cx| this.format_command(formats::Format::HighlightColor, None, window, cx)))
+                .on_action(cx.listener(|this, action: &formats::SetHighlightColor, window, cx| this.format_command(formats::Format::HighlightColor, Some(action.color), window, cx)))
+                .on_action(cx.listener(|this, _: &formats::CustomHighlightColor, window, cx| this.custom_format_color(formats::Format::HighlightColor, window, cx)))
+                .on_action(cx.listener(|this, _: &formats::ApplyCustomColor, window, cx| this.apply_format_color(window, cx)))
+                .on_action(cx.listener(|this, _: &formats::CancelCustomColor, window, cx| { this.cancel_format_color(window, cx); }))
                 .on_action(cx.listener(|this, _: &mermaid_authoring::EditDiagramSource, window, cx| {
                     this.edit_mermaid_source(None, window, cx);
                 }))
@@ -3129,10 +3180,13 @@ impl Render for SourcePresentation {
                 .on_action(cx.listener(|this, _: &actions::Escape, window, cx| {
                     if this.state.composition.is_some() {
                         this.command(Command::CancelComposition, window, cx);
+                    } else if this.cancel_format_color(window, cx) {
                     } else if this.leave_mermaid_result(window, cx) {
                         // Escape restores the retained diagram source selection.
                     } else if this.navigate_table(super::tables::Navigation::Exit { backward: false }, window, cx) {
                         // Escape leaves the table without changing its source.
+                    } else if this.exit_code(window, cx) {
+                        // Escape returns from local source, or leaves the code block.
                     } else {
                         cx.propagate();
                     }
@@ -3142,6 +3196,7 @@ impl Render for SourcePresentation {
                         .flex_shrink_0().aria_label(status.clone()).text_sm().text_color(cx.theme().muted_foreground).child(status)
                 ))
                 .child(image_status)
+                .child(self.format_toolbar(window, cx))
                 .when(self.live, |root| root.child(self.table_insert_button(cx)))
                 .when(self.live && self.projection.links.at(self.state.selection.head()).is_some(), |root| {
                     use gpui_kit::component::button::{Button, ButtonVariants as _};
@@ -3203,6 +3258,7 @@ impl Render for SourcePresentation {
                         ),
                     &self.scroll,
                 ));
+        let root = self.code_actions(root, cx);
         SourceElement {
             child: root.into_any_element(),
             view: cx.entity(),
