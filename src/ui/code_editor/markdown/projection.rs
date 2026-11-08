@@ -466,24 +466,6 @@ impl Leaf {
     pub(super) fn raw(&mut self, source: &str, range: Range<usize>) {
         self.push(range.clone(), &source[range]);
     }
-    pub fn atomic_boundary(&self, at: usize, forward: bool) -> usize {
-        self.segments
-            .iter()
-            .find(|segment| {
-                segment.source.start < at
-                    && at < segment.source.end
-                    && !segment.display.is_empty()
-                    && (segment.source.len() != segment.display.len()
-                        || segment.math.is_some() && !segment.verbatim)
-            })
-            .map_or(at, |segment| {
-                if forward {
-                    segment.source.end
-                } else {
-                    segment.source.start
-                }
-            })
-    }
     pub fn display_offset(&self, source: usize) -> usize {
         if self.deferred {
             return source
