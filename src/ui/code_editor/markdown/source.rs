@@ -18,6 +18,9 @@ actions!(markdown_links, [EditLinkDestination, FollowLink]);
 #[path = "assets.rs"]
 mod assets;
 
+#[path = "typography.rs"]
+mod typography;
+
 struct CachedBlock {
     version: u64,
     seen: u64,
@@ -28,7 +31,7 @@ struct CachedBlock {
 struct Viewport {
     heights: HashMap<u64, (u64, Pixels)>,
     frame: Vec<(u64, u64, Bounds<Pixels>)>,
-    layout: Option<(Pixels, Pixels)>,
+    layout: Option<typography::LayoutKey>,
     anchor: Option<(u64, Pixels)>,
     offset: Point<Pixels>,
     bounds: Option<Bounds<Pixels>>,
@@ -162,6 +165,7 @@ impl SourcePresentation {
             if current != typography {
                 typography = current;
                 this.viewport.layout = None;
+                this.tables.invalidate();
             }
         });
         let mut view = Self {
@@ -2091,11 +2095,12 @@ impl Render for SourcePresentation {
                     }
                 });
             });
-        let table_width = self
-            .viewport
-            .bounds
-            .map_or(window.viewport_size().width, |bounds| bounds.size.width)
-            - window.rem_size() * 1.5;
+        let context = typography::context(context, self.live, cx);
+        let table_width = typography::content_width(
+            self.viewport.bounds.map_or(window.viewport_size().width, |bounds| bounds.size.width),
+            window.rem_size(),
+            self.live,
+        );
         if self.tables.prepare(
             &self.projection.leaves,
             table_width,
@@ -2166,17 +2171,14 @@ impl Render for SourcePresentation {
                 .map_or_else(
                     || {
                         let lines = if leaf.deferred && self.wrap {
-                            let width = self
-                                .viewport
-                                .bounds
-                                .map_or(window.rem_size() * 40., |bounds| bounds.size.width);
+                            let width = table_width;
                             let columns =
                                 (f32::from(width) / f32::from(window.rem_size()) * 1.5).max(1.);
                             (leaf.range.len() as f32 / columns).ceil().max(1.)
                         } else {
                             1.
                         };
-                        window.rem_size() * (lines * 1.5 + 0.5)
+                        typography::estimated_height(leaf.kind, lines, self.live, window.rem_size())
                     },
                     |(_, height)| *height,
                 );
@@ -2430,6 +2432,9 @@ impl Render for SourcePresentation {
                             child: div()
                                 .id(("markdown-block", leaf.id))
                                 .w(table_width)
+                                .when(self.live && matches!(leaf.kind, Kind::List(_)), |block| {
+                                    block.pb(rems(typography::LIST_GAP))
+                                })
                                 .when(
                                     self.live
                                         && super::regions::label(leaf.kind).is_some()
@@ -2473,7 +2478,7 @@ impl Render for SourcePresentation {
                                             + usize::from(
                                                 style.depth > 0 && style.marker.is_none(),
                                             );
-                                        row = row.pl(rems(levels as f32 * 1.5));
+                                        row = row.pl(rems(levels as f32 * typography::list_level(style)));
                                         if let Some(checked) = style.task {
                                             let at = leaf.range.start;
                                             row = row.gap_2().child(
@@ -2592,6 +2597,11 @@ impl Render for SourcePresentation {
                 .cursor_text()
                 .bg(cx.theme().background)
                 .text_color(cx.theme().foreground)
+                .when(self.live, |root| {
+                    root.font_family(cx.theme().font_family.clone())
+                        .text_size(rems(1.))
+                        .line_height(relative(typography::LINE_HEIGHT))
+                })
                 .when(!self.live, |root| {
                     root.font_family(cx.theme().mono_font_family.clone())
                 })
@@ -2955,7 +2965,7 @@ impl Render for SourcePresentation {
                         }))
                         .child(
                             div()
-                                .p_3()
+                                .p(rems(typography::inset(self.live)))
                                 .capture_any_mouse_down(cx.listener(
                                     |this, event: &MouseDownEvent, window, cx| {
                                         if event.button != MouseButton::Left
@@ -3107,11 +3117,11 @@ impl Element for SourceElement {
             view.table_geometry.clear();
         });
         let table_measurement_changed = self.view.update(cx, |view, cx| {
-            let width = view
-                .viewport
-                .bounds
-                .map_or(window.viewport_size().width, |bounds| bounds.size.width)
-                - window.rem_size() * 1.5;
+            let width = typography::content_width(
+                view.viewport.bounds.map_or(window.viewport_size().width, |bounds| bounds.size.width),
+                window.rem_size(),
+                view.live,
+            );
             let marked = view.state.marked_range();
             let columns = view.tables.prepare(
                 &view.projection.leaves,
@@ -3193,8 +3203,8 @@ impl Element for SourceElement {
                 return;
             }
             let viewport = view.scroll.bounds();
-            let layout = (viewport.size.width, window.rem_size());
-            let reflow = view.viewport.layout.is_some_and(|old| old != layout);
+            let layout = typography::LayoutKey::new(viewport.size.width, view.live, view.wrap, window, cx);
+            let reflow = view.viewport.layout.as_ref().is_some_and(|old| old != &layout);
             if reflow {
                 view.viewport.heights.clear();
             }
