@@ -1736,8 +1736,12 @@ pub fn translate_zh(key: L10nKey) -> Option<&'static str> {
         L10nKey::EditorPropertyRemove => "移除",
         L10nKey::EditorPropertySource => "编辑源码",
         L10nKey::EditorPropertyChanged => "文档已更改。请取消并重新打开字段，编辑当前值。",
-        L10nKey::EditorPropertyInvalid => "属性名以英文字母开头，仅含英文字母、数字及 -_.；标签仅含英文字母、数字及 _-/。",
-        L10nKey::EditorPropertyHelp => "属性使用 key:: value；标签仅保存在当前文档。YAML/TOML frontmatter 与 MDX 属性是不同语义，请通过保留的源码编辑。",
+        L10nKey::EditorPropertyInvalid => {
+            "属性名以英文字母开头，仅含英文字母、数字及 -_.；标签仅含英文字母、数字及 _-/。"
+        }
+        L10nKey::EditorPropertyHelp => {
+            "属性使用 key:: value；标签仅保存在当前文档。YAML/TOML frontmatter 与 MDX 属性是不同语义，请通过保留的源码编辑。"
+        }
         L10nKey::MarkdownEditReferenceDestination => "编辑引用定义目标",
         L10nKey::MarkdownFollowLink => "打开链接",
         L10nKey::MarkdownLinkOpenFailed => "无法打开链接：{reason}",

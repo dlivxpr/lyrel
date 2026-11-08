@@ -56,7 +56,9 @@ pub(super) fn width_suffix(source: &str) -> Option<(usize, u32)> {
     let rest = source.strip_prefix("{width=")?;
     let end = rest.find('}')?;
     let number = rest[..end].strip_suffix("px").unwrap_or(&rest[..end]);
-    if number.is_empty() || !number.bytes().all(|byte| byte.is_ascii_digit()) { return None; }
+    if number.is_empty() || !number.bytes().all(|byte| byte.is_ascii_digit()) {
+        return None;
+    }
     let width = number.parse::<u32>().ok().filter(|width| *width > 0)?;
     Some(("{width=".len() + end + 1, width))
 }

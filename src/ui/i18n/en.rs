@@ -1702,8 +1702,12 @@ pub fn translate_en(key: L10nKey) -> &'static str {
         L10nKey::MarkdownImageDelete => "Delete image",
         L10nKey::MarkdownImageResize => "Resize image",
         L10nKey::MarkdownImageApply => "Apply image changes",
-        L10nKey::MarkdownImageInvalid => "Use single-line text and a positive whole-number width, or leave width empty.",
-        L10nKey::MarkdownImageChanged => "The document or editing context changed. Cancel and reopen image editing.",
+        L10nKey::MarkdownImageInvalid => {
+            "Use single-line text and a positive whole-number width, or leave width empty."
+        }
+        L10nKey::MarkdownImageChanged => {
+            "The document or editing context changed. Cancel and reopen image editing."
+        }
         L10nKey::FileTreeContextShowDotfiles => "Show Dotfiles",
         L10nKey::FileDropIntoItself => "A folder cannot be copied into itself.",
         L10nKey::FileDropNotHere => "Not on this machine.",
@@ -1885,9 +1889,15 @@ pub fn translate_en(key: L10nKey) -> &'static str {
         L10nKey::EditorTagAdd => "Add tag…",
         L10nKey::EditorPropertyRemove => "Remove",
         L10nKey::EditorPropertySource => "Edit source",
-        L10nKey::EditorPropertyChanged => "The document changed. Cancel and reopen this field to edit the current value.",
-        L10nKey::EditorPropertyInvalid => "Keys must start with a letter and use letters, digits, -_. Tags use letters, digits, _-/.",
-        L10nKey::EditorPropertyHelp => "Properties use key:: value. Tags stay in this document. YAML/TOML frontmatter and MDX attributes remain separate; edit their retained source.",
+        L10nKey::EditorPropertyChanged => {
+            "The document changed. Cancel and reopen this field to edit the current value."
+        }
+        L10nKey::EditorPropertyInvalid => {
+            "Keys must start with a letter and use letters, digits, -_. Tags use letters, digits, _-/."
+        }
+        L10nKey::EditorPropertyHelp => {
+            "Properties use key:: value. Tags stay in this document. YAML/TOML frontmatter and MDX attributes remain separate; edit their retained source."
+        }
         L10nKey::MarkdownEditReferenceDestination => "Edit reference destination",
         L10nKey::MarkdownFollowLink => "Open link",
         L10nKey::MarkdownLinkOpenFailed => "Couldn’t open link: {reason}",

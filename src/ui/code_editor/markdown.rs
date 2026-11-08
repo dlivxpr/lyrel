@@ -22,10 +22,10 @@ mod tables;
 #[cfg(test)]
 pub(super) use source::FollowLink;
 pub(crate) use source::SourcePresentation;
+pub(crate) use source::formats::bindings as inline_format_bindings;
 pub(crate) use source::properties::EditDocumentProperties;
 pub(super) use source::tools::{SearchSurfaceChanged, SearchText};
 pub(crate) use tables::bindings as table_bindings;
-pub(crate) use source::formats::bindings as inline_format_bindings;
 #[cfg(test)]
 mod tests;
 
@@ -96,6 +96,9 @@ pub(crate) struct Transaction {
     revision: u64,
     origin: u64,
     edits: smallvec::SmallVec<[SourceChange; 1]>,
+    // Shared, read-only source for this revision while edit observers replay it.
+    // Selection-only effects do not retain a snapshot.
+    snapshot: Option<Rope>,
 }
 struct SourceChange {
     range: Range<usize>,
@@ -644,6 +647,7 @@ impl MarkdownDocument {
         Transaction {
             revision: self.revision,
             origin: state.id,
+            snapshot: (!self.pending_changes.is_empty()).then(|| self.source.clone()),
             edits: std::mem::take(&mut self.pending_changes),
         }
     }
@@ -717,24 +721,45 @@ impl MarkdownDocument {
                     let mut range = range.start + start..range.end + start;
                     let mut caret = caret + start;
                     let marker_edit = match operation {
-                        tables::Operation::InsertColumnBefore | tables::Operation::InsertColumnAfter | tables::Operation::DeleteColumn => {
-                            tables::column_at(&local, header, state.selection.head.saturating_sub(start)).and_then(|column| {
-                                let column = column + usize::from(matches!(operation, tables::Operation::InsertColumnAfter));
-                                tables::metadata::column_edit(&self.source, start + header, column, !matches!(operation, tables::Operation::DeleteColumn))
-                            })
-                        }
+                        tables::Operation::InsertColumnBefore
+                        | tables::Operation::InsertColumnAfter
+                        | tables::Operation::DeleteColumn => tables::column_at(
+                            &local,
+                            header,
+                            state.selection.head.saturating_sub(start),
+                        )
+                        .and_then(|column| {
+                            let column = column
+                                + usize::from(matches!(
+                                    operation,
+                                    tables::Operation::InsertColumnAfter
+                                ));
+                            tables::metadata::column_edit(
+                                &self.source,
+                                start + header,
+                                column,
+                                !matches!(operation, tables::Operation::DeleteColumn),
+                            )
+                        }),
                         _ => None,
                     };
                     if matches!(operation, tables::Operation::DeleteTable) {
-                        if let Some(marker) = tables::metadata::marker_range(&self.source, start + header) {
+                        if let Some(marker) =
+                            tables::metadata::marker_range(&self.source, start + header)
+                        {
                             range.start = marker.start;
                             caret = range.start;
                         }
                     } else if let Some((marker_range, text)) = marker_edit {
-                        let marker_start = self.source.line_start_offset(self.source.offset_to_point(marker_range.start).row);
+                        let marker_start = self
+                            .source
+                            .line_start_offset(self.source.offset_to_point(marker_range.start).row);
                         let mut prefix = self.source_text(marker_start..range.start);
                         caret = caret - marker_range.len() + text.len();
-                        prefix.text.replace_range(marker_range.start - marker_start..marker_range.end - marker_start, &text);
+                        prefix.text.replace_range(
+                            marker_range.start - marker_start..marker_range.end - marker_start,
+                            &text,
+                        );
                         prefix.text.push_str(&inserted.text);
                         prefix.endings.append(&mut inserted.endings);
                         inserted = prefix;

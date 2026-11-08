@@ -14,10 +14,21 @@ pub(crate) enum Style {
 }
 impl Style {
     pub(super) fn name(self) -> &'static str {
-        match self { Self::Grid => "grid", Self::Striped => "striped", Self::Header => "header", Self::Minimal => "minimal" }
+        match self {
+            Self::Grid => "grid",
+            Self::Striped => "striped",
+            Self::Header => "header",
+            Self::Minimal => "minimal",
+        }
     }
     fn parse(value: &str) -> Option<Self> {
-        Some(match value { "grid" => Self::Grid, "striped" => Self::Striped, "header" => Self::Header, "minimal" => Self::Minimal, _ => return None })
+        Some(match value {
+            "grid" => Self::Grid,
+            "striped" => Self::Striped,
+            "header" => Self::Header,
+            "minimal" => Self::Minimal,
+            _ => return None,
+        })
     }
 }
 
@@ -45,10 +56,22 @@ fn parse(line: &str, start: usize, end: usize) -> Option<Marker> {
     let mut widths = Vec::new();
     let mut widths_range = None;
     for token in tokens {
-        if widths_range.is_some() { return None; }
+        if widths_range.is_some() {
+            return None;
+        }
         let value = token.strip_prefix("cols=")?;
-        widths = value.split(',').map(str::parse::<f32>).collect::<Result<Vec<_>, _>>().ok()?;
-        if widths.is_empty() || widths.iter().any(|width| !width.is_finite() || *width <= 0.) { return None; }
+        widths = value
+            .split(',')
+            .map(str::parse::<f32>)
+            .collect::<Result<Vec<_>, _>>()
+            .ok()?;
+        if widths.is_empty()
+            || widths
+                .iter()
+                .any(|width| !width.is_finite() || *width <= 0.)
+        {
+            return None;
+        }
         let offset = start + (value.as_ptr() as usize - line.as_ptr() as usize);
         widths_range = Some(offset..offset + value.len());
     }
@@ -75,11 +98,19 @@ pub(crate) fn read(source: &Rope, table_start: usize) -> Option<Marker> {
     Some(marker)
 }
 
-pub(in crate::ui::code_editor::markdown) fn marker_range(source: &Rope, table_start: usize) -> Option<Range<usize>> {
+pub(in crate::ui::code_editor::markdown) fn marker_range(
+    source: &Rope,
+    table_start: usize,
+) -> Option<Range<usize>> {
     read(source, table_start).map(|marker| marker.range)
 }
 
-pub(in crate::ui::code_editor::markdown) fn column_edit(source: &Rope, table_start: usize, column: usize, insert: bool) -> Option<(Range<usize>, String)> {
+pub(in crate::ui::code_editor::markdown) fn column_edit(
+    source: &Rope,
+    table_start: usize,
+    column: usize,
+    insert: bool,
+) -> Option<(Range<usize>, String)> {
     let marker = read(source, table_start)?;
     let range = marker.widths_range?;
     // Preserve the spelling of every surviving column's width.
@@ -90,11 +121,17 @@ pub(in crate::ui::code_editor::markdown) fn column_edit(source: &Rope, table_sta
         columns.insert(column.min(columns.len()), width);
     } else if column < columns.len() {
         columns.remove(column);
-    } else { return None; }
+    } else {
+        return None;
+    }
     Some((range, columns.join(",")))
 }
 
-pub(crate) fn style_edit(source: &Rope, table_start: usize, style: Style) -> (Range<usize>, String) {
+pub(crate) fn style_edit(
+    source: &Rope,
+    table_start: usize,
+    style: Style,
+) -> (Range<usize>, String) {
     if let Some(marker) = read(source, table_start) {
         (marker.style_range, style.name().into())
     } else {
@@ -102,33 +139,74 @@ pub(crate) fn style_edit(source: &Rope, table_start: usize, style: Style) -> (Ra
     }
 }
 
-pub(crate) fn widths_edit(source: &Rope, table_start: usize, widths: &[f32]) -> (Range<usize>, String) {
-    let value = widths.iter().map(|width| format!("{:.0}", width.round().max(24.))).collect::<Vec<_>>().join(",");
+pub(crate) fn widths_edit(
+    source: &Rope,
+    table_start: usize,
+    widths: &[f32],
+) -> (Range<usize>, String) {
+    let value = widths
+        .iter()
+        .map(|width| format!("{:.0}", width.round().max(24.)))
+        .collect::<Vec<_>>()
+        .join(",");
     if let Some(marker) = read(source, table_start) {
-        if let Some(range) = marker.widths_range { (range, value) }
-        else { (marker.attributes_end..marker.attributes_end, format!(" cols={value}")) }
+        if let Some(range) = marker.widths_range {
+            (range, value)
+        } else {
+            (
+                marker.attributes_end..marker.attributes_end,
+                format!(" cols={value}"),
+            )
+        }
     } else {
         new_marker(source, table_start, Style::Grid, Some(value))
     }
 }
 
-fn new_marker(source: &Rope, table_start: usize, style: Style, widths: Option<String>) -> (Range<usize>, String) {
+fn new_marker(
+    source: &Rope,
+    table_start: usize,
+    style: Style,
+    widths: Option<String>,
+) -> (Range<usize>, String) {
     let start = source.line_start_offset(source.offset_to_point(table_start).row);
     let prefix = source.slice(start..table_start).to_string();
-    (start..start, format!("{prefix}<!-- table:{}{} -->\n", style.name(), widths.map_or(String::new(), |widths| format!(" cols={widths}"))))
+    (
+        start..start,
+        format!(
+            "{prefix}<!-- table:{}{} -->\n",
+            style.name(),
+            widths.map_or(String::new(), |widths| format!(" cols={widths}"))
+        ),
+    )
 }
 
 /// Hide only valid comments immediately preceding an actual parsed table.
-pub(in crate::ui::code_editor::markdown) fn hide_markers(source: &str, leaves: &mut Vec<super::Leaf>) {
-    let ranges: Vec<_> = leaves.iter().filter_map(|leaf| {
-        let super::Kind::TableCell(cell) = leaf.kind else { return None; };
-        if cell.row != 0 || cell.column != 0 { return None; }
-        let start = source[..cell.start].rfind('\n').map_or(0, |ix| ix + 1);
-        let prefix = &source[start..cell.start];
-        let previous = start.checked_sub(1)?;
-        let marker_start = source[..previous].rfind('\n').map_or(0, |ix| ix + 1);
-        let content = source[marker_start..previous].strip_prefix(prefix)?;
-        parse(content, marker_start + prefix.len(), start).map(|_| marker_start..start)
-    }).collect();
-    leaves.retain(|leaf| !matches!(leaf.kind, super::Kind::Html) || !ranges.iter().any(|range| range.start <= leaf.range.start && range.end >= leaf.range.end));
+pub(in crate::ui::code_editor::markdown) fn hide_markers(
+    source: &str,
+    leaves: &mut Vec<super::Leaf>,
+) {
+    let ranges: Vec<_> = leaves
+        .iter()
+        .filter_map(|leaf| {
+            let super::Kind::TableCell(cell) = leaf.kind else {
+                return None;
+            };
+            if cell.row != 0 || cell.column != 0 {
+                return None;
+            }
+            let start = source[..cell.start].rfind('\n').map_or(0, |ix| ix + 1);
+            let prefix = &source[start..cell.start];
+            let previous = start.checked_sub(1)?;
+            let marker_start = source[..previous].rfind('\n').map_or(0, |ix| ix + 1);
+            let content = source[marker_start..previous].strip_prefix(prefix)?;
+            parse(content, marker_start + prefix.len(), start).map(|_| marker_start..start)
+        })
+        .collect();
+    leaves.retain(|leaf| {
+        !matches!(leaf.kind, super::Kind::Html)
+            || !ranges
+                .iter()
+                .any(|range| range.start <= leaf.range.start && range.end >= leaf.range.end)
+    });
 }

@@ -1905,10 +1905,12 @@ fn markdown_delayed_image_write_preserves_newer_typing_and_caret(cx: &mut TestAp
     vcx.update(|window, cx| window.input("typed", cx));
     vcx.run_until_parked();
     release.send(()).unwrap();
-    wait_until(&mut vcx, |vcx| vcx.update(|window, cx| {
-        window.render_frame(cx);
-        window.try_find("markdown-image-insertion-status").is_none()
-    }));
+    wait_until(&mut vcx, |vcx| {
+        vcx.update(|window, cx| {
+            window.render_frame(cx);
+            window.try_find("markdown-image-insertion-status").is_none()
+        })
+    });
     app.read_with(&vcx, |app, cx| {
         let input = &app.active_buffer().unwrap().input;
         assert_eq!(input.read(cx).text().to_string(), "typedoriginal");

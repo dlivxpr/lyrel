@@ -31,18 +31,18 @@ mod typography;
 #[path = "composition.rs"]
 mod composition;
 
-#[path = "formats.rs"]
-pub(super) mod formats;
 #[path = "code.rs"]
 mod code;
-#[path = "properties.rs"]
-pub(super) mod properties;
-#[path = "tools.rs"]
-pub(super) mod tools;
-#[path = "spelling.rs"]
-mod spelling;
+#[path = "formats.rs"]
+pub(super) mod formats;
 #[path = "mermaid_authoring.rs"]
 mod mermaid_authoring;
+#[path = "properties.rs"]
+pub(super) mod properties;
+#[path = "spelling.rs"]
+mod spelling;
+#[path = "tools.rs"]
+pub(super) mod tools;
 
 #[path = "tables/authoring.rs"]
 mod table_authoring;
@@ -183,17 +183,16 @@ impl SourcePresentation {
                     );
                 }
                 if this.projection.revision != transaction.revision()
-                    && transaction.revision() == doc.revision()
                     && this
                         .projection
                         .revision
                         .wrapping_add(transaction.edits.len() as u64)
                         == transaction.revision()
+                    && let Some(source) = transaction.snapshot.as_ref()
                 {
-                    this.projection.rebase(doc.source(), transaction, this.live);
+                    this.projection.rebase(source, transaction, this.live);
                     if this.live {
-                        this.projection
-                            .component_sources(doc.source(), &this.mdx_state);
+                        this.projection.component_sources(source, &this.mdx_state);
                     }
                     this.rendered_revision = None;
                 }
@@ -442,7 +441,9 @@ impl SourcePresentation {
         self.document
             .update(cx, |document, cx| document.sync_images(urls, consent, cx));
         let document = self.document.read(cx);
-        for leaf in &mut self.projection.leaves { leaf.image_dimensions(&document.images.states); }
+        for leaf in &mut self.projection.leaves {
+            leaf.image_dimensions(&document.images.states);
+        }
     }
     fn schedule_mermaid(&mut self, cx: &mut Context<Self>) {
         if !self.live || self.projection.revision != self.document.read(cx).revision() {
@@ -1167,10 +1168,14 @@ impl SourcePresentation {
                 Command::Replace { range, text, kind }
             }
             Command::BatchReplace { edits, kind } => Command::BatchReplace {
-                edits: edits.into_iter().map(|(range, text)| {
-                    let text = cell_input(&range, text, None).0;
-                    (range, text)
-                }).collect(), kind,
+                edits: edits
+                    .into_iter()
+                    .map(|(range, text)| {
+                        let text = cell_input(&range, text, None).0;
+                        (range, text)
+                    })
+                    .collect(),
+                kind,
             },
             command => command,
         };
@@ -1978,7 +1983,9 @@ impl SourcePresentation {
             );
             return;
         }
-        if self.delete_adjacent_image(backward, window, cx) { return; }
+        if self.delete_adjacent_image(backward, window, cx) {
+            return;
+        }
         let at = self.state.selection.head;
         if let Some(range) = self.adjacent_block_atom(at, backward, cx) {
             let command = self.deletion_command(range, cx);
@@ -2099,9 +2106,21 @@ impl SourcePresentation {
         let Some(item) = cx.read_from_clipboard() else {
             return;
         };
-        if let Some(paths) = item.entries().iter().find_map(|entry| match entry { ClipboardEntry::ExternalPaths(paths) => Some(paths), _ => None }) {
-            let inputs: Vec<_> = paths.paths().iter().filter(|path| assets::is_image_path(path)).cloned().map(assets::IncomingImage::File).collect();
-            if !inputs.is_empty() { self.insert_images(inputs, window, cx); return; }
+        if let Some(paths) = item.entries().iter().find_map(|entry| match entry {
+            ClipboardEntry::ExternalPaths(paths) => Some(paths),
+            _ => None,
+        }) {
+            let inputs: Vec<_> = paths
+                .paths()
+                .iter()
+                .filter(|path| assets::is_image_path(path))
+                .cloned()
+                .map(assets::IncomingImage::File)
+                .collect();
+            if !inputs.is_empty() {
+                self.insert_images(inputs, window, cx);
+                return;
+            }
         }
         if item
             .entries()
@@ -2282,7 +2301,8 @@ impl EntityInputHandler for SourcePresentation {
 }
 impl Render for SourcePresentation {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        self.projection.format_theme(cx.theme().primary.opacity(0.2));
+        self.projection
+            .format_theme(cx.theme().primary.opacity(0.2));
         let style = super::math::Style::new(cx.theme().foreground, window.rem_size());
         if self.math.style != Some(style) {
             self.math.style = Some(style);
@@ -2485,7 +2505,12 @@ impl Render for SourcePresentation {
         {
             self.render_generation += 1;
             for leaf in &self.projection.leaves[visible.clone()] {
-                let language = if self.live && self.blocks.get(&leaf.id).is_none_or(|cached| cached.version != leaf.version) {
+                let language = if self.live
+                    && self
+                        .blocks
+                        .get(&leaf.id)
+                        .is_none_or(|cached| cached.version != leaf.version)
+                {
                     self.code_language(leaf, cx)
                 } else {
                     None
@@ -2719,7 +2744,11 @@ impl Render for SourcePresentation {
             } else {
                 rendered
             };
-            let rendered = if self.live { self.image_surface(leaf, rendered, cx) } else { rendered };
+            let rendered = if self.live {
+                self.image_surface(leaf, rendered, cx)
+            } else {
+                rendered
+            };
             let rendered = self.render_property_leaf(leaf, rendered, cx);
             block = block.child(MeasuredBlock {
                 view: cx.entity(),
@@ -2804,7 +2833,6 @@ impl Render for SourcePresentation {
                             row.child(div().flex_1().min_w_0().child(rendered))
                                 .into_any_element()
                         } else {
-
                             rendered
                         }
                     })

@@ -300,7 +300,6 @@ pub(crate) enum Operation {
     AlignRight,
 }
 
-
 pub(crate) fn bindings(cx: &gpui_kit::App) -> Vec<gpui_kit::KeyBinding> {
     let bind = |keys: &str, action: Box<dyn gpui_kit::Action>| {
         let predicate = gpui_kit::KeyBindingContextPredicate::parse("MarkdownTable")
