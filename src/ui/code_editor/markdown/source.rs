@@ -24,6 +24,8 @@ mod references;
 mod assets;
 #[path = "image_edit.rs"]
 mod image_edit;
+#[path = "headings.rs"]
+pub(super) mod headings;
 #[path = "navigation.rs"]
 mod navigation;
 
@@ -47,6 +49,8 @@ pub(super) mod properties;
 mod spelling;
 #[path = "tools.rs"]
 pub(super) mod tools;
+#[path = "reorder.rs"]
+mod reorder;
 
 #[path = "tables/authoring.rs"]
 mod table_authoring;
@@ -64,6 +68,7 @@ struct CachedBlock {
 struct Viewport {
     heights: HashMap<u64, (u64, Pixels)>,
     frame: Vec<(u64, u64, Bounds<Pixels>)>,
+    visible: Range<usize>,
     layout: Option<typography::LayoutKey>,
     anchor: Option<(u64, Pixels)>,
     offset: Point<Pixels>,
@@ -119,9 +124,11 @@ pub(crate) struct SourcePresentation {
     formats: formats::State,
     code: code::State,
     image_resize: Option<image_edit::Resize>,
+    reorder: Option<reorder::Gesture>,
     _observe: Subscription,
     mdx_state: super::mdx::ViewState,
     properties: properties::State,
+    folds: headings::State,
 }
 impl SourcePresentation {
     pub(crate) fn new(
@@ -130,6 +137,7 @@ impl SourcePresentation {
         cx: &mut Context<Self>,
     ) -> Self {
         code::init(cx);
+        reorder::init(cx);
         let owner_id = cx.entity_id();
         cx.on_release(move |view, cx| {
             let _ = view.release_formula(owner_id, None, cx);
@@ -160,6 +168,7 @@ impl SourcePresentation {
                 this.image_snapshot = None;
                 if matches!(event, DocumentEvent::ResourceContextChanged) {
                     this.schedule_spelling(cx);
+                    this.cancel_reorder(cx);
                     this.pointer_link = None;
                     this.dismiss_references(cx);
                     let document = this.document.read(cx);
@@ -180,9 +189,12 @@ impl SourcePresentation {
                 return;
             }
             if let DocumentEvent::Edited(transaction) = event {
+                this.cancel_reorder(cx);
                 this.spelling.invalidate();
                 this.pointer_link = None;
                 this.rebase_formula(transaction, cx);
+                this.assets.rebase(transaction);
+                this.folds.rebase(transaction);
                 this.state.rebase(transaction);
                 if transaction.origin != this.state.id {
                     for selection in &mut this.extra_selections {
@@ -210,6 +222,7 @@ impl SourcePresentation {
                     }
                     this.rendered_revision = None;
                 }
+                this.sync_block_folds();
                 this.sync_inline_reveal();
                 this.schedule_parse(cx);
                 this.schedule_spelling(cx);
@@ -300,9 +313,11 @@ impl SourcePresentation {
             references: references::State::default(),
             code: code::State::default(),
             image_resize: None,
+            reorder: None,
             _observe: observe,
             mdx_state: super::mdx::ViewState::default(),
             properties: properties::State::default(),
+            folds: headings::State::default(),
         };
         view.schedule_parse(cx);
         view
@@ -347,6 +362,7 @@ impl SourcePresentation {
     }
     pub(crate) fn toggle_mode(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.command(Command::FinishComposition, window, cx);
+        self.cancel_reorder(cx);
         self.properties = properties::State::default();
         self.live = !self.live;
         self.dismiss_references(cx);
@@ -424,6 +440,7 @@ impl SourcePresentation {
                             );
                         }
                         view.reveal_mdx_selection(cx);
+                        view.sync_block_folds();
                         view.sync_inline_reveal();
                         view.state.selection = view.map_live_caret(view.state.selection, cx);
                         view.selection_notification = true;
@@ -647,11 +664,12 @@ impl SourcePresentation {
         if !self.live {
             return;
         }
-        let (hidden, insertions) = super::mdx::view::inline_visibility(
+        let (mut hidden, insertions) = super::mdx::view::inline_visibility(
             &self.projection,
             self.document.read(cx).source(),
             &self.mdx_state,
         );
+        hidden.extend(self.folds.hidden.iter().map(|range| range.start.saturating_sub(1)..range.end));
         let marked = self.state.marked_range();
         for leaf in &mut self.projection.leaves {
             if matches!(leaf.kind, Kind::Code(_)) {
@@ -674,6 +692,7 @@ impl SourcePresentation {
         }
     }
     fn sync_inline_reveal(&mut self) {
+        self.sync_block_folds();
         let marked = self.state.marked_range();
         for leaf in &mut self.projection.leaves {
             if leaf.contextual_reveal(
@@ -768,6 +787,8 @@ impl SourcePresentation {
             cx.emit(DocumentEvent::PresentationChanged);
         });
         self.reveal_mdx_selection(cx);
+        self.sync_block_folds();
+        self.sync_mdx_inline_visibility(cx);
         self.state.selection = self.map_live_caret(self.state.selection, cx);
         self.sync_inline_reveal();
         self.retire_native_composition(was_composing, cx);
@@ -1117,6 +1138,7 @@ impl SourcePresentation {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        self.cancel_reorder(cx);
         if self.formula_command(&command, window, cx) { return; }
         let toggle_task = matches!(command, Command::ToggleTask { .. });
         if !toggle_task {
@@ -1135,6 +1157,7 @@ impl SourcePresentation {
             }
             return;
         }
+        self.reveal_block_command(&command, cx);
         if !toggle_task {
             self.state.selection = self.map_live_caret(self.state.selection, cx);
         }
@@ -1386,6 +1409,7 @@ impl SourcePresentation {
             self.rendered_revision = None;
         }
         self.reveal_mdx_selection(cx);
+        self.sync_block_folds();
         self.sync_inline_reveal();
         if changed {
             self.geometry = None;
@@ -1966,6 +1990,9 @@ impl SourcePresentation {
         if self.enter_table(window, cx) {
             return;
         }
+        if self.block_enter(hard, window, cx) {
+            return;
+        }
         let mut range = self.state.selection.range();
         let structure = self
             .projection
@@ -2489,6 +2516,10 @@ impl Render for SourcePresentation {
                     end += 1;
                 }
             }
+            if self.live && self.folds.is_hidden(leaf.range.start) {
+                ix = end;
+                continue;
+            }
             if self.live
                 && !super::mdx::view::visible_field(&super::mdx::view::FieldContext::new(
                     &self.projection,
@@ -2672,6 +2703,9 @@ impl Render for SourcePresentation {
             })
             .child(div().h(before).flex_none());
         for (ix, leaf) in self.projection.leaves[visible.clone()].iter().enumerate() {
+            if self.live && self.folds.is_hidden(leaf.range.start) {
+                continue;
+            }
             if self.live
                 && !super::mdx::view::visible_field(&super::mdx::view::FieldContext::new(
                     &self.projection,
@@ -2822,6 +2856,7 @@ impl Render for SourcePresentation {
                 rendered
             };
             let rendered = self.render_property_leaf(leaf, rendered, cx);
+            let rendered = self.decorate_block(leaf.range.start, rendered, cx);
             block = block.child(MeasuredBlock {
                 view: cx.entity(),
                 id: leaf.id,
@@ -2829,6 +2864,9 @@ impl Render for SourcePresentation {
                 child: div()
                     .id(("markdown-block", leaf.id))
                     .w(table_width)
+                    .relative()
+                    .children(self.reorder_grips(leaf, cx))
+                    .children(self.block_disclosure(leaf.range.start, leaf.id, cx))
                     .when(self.live && matches!(leaf.kind, Kind::List(_)), |block| {
                         block.pb(rems(typography::LIST_GAP))
                     })
@@ -2977,7 +3015,9 @@ impl Render for SourcePresentation {
         } else {
             div().into_any_element()
         };
-        let key_context = KeyContext::parse(if !self.focus.is_focused(window) {
+        let key_context = KeyContext::parse(if self.reorder.is_some() {
+            "Markdown MarkdownReorder"
+        } else if !self.focus.is_focused(window) {
             "Markdown"
         } else if active_table.is_some() {
             "Input mode=editor Markdown MarkdownTable"
@@ -2990,6 +3030,7 @@ impl Render for SourcePresentation {
                 .id("markdown-source")
                 .test_support()
                 .size_full()
+                .relative()
                 .flex()
                 .flex_col()
                 .min_h_0()
@@ -3159,6 +3200,7 @@ impl Render for SourcePresentation {
                 .on_mouse_up(
                     MouseButton::Left,
                     cx.listener(|this, event: &MouseUpEvent, window, cx| {
+                        if this.finish_reorder(Some(event.position), window, cx) { cx.stop_propagation(); return; }
                         if this.tables.is_resizing() { this.update_table_resize(event.position, window, cx); }
                         this.finish_table_resize(window, cx);
                         if this.finish_image_resize(false, window, cx) { cx.stop_propagation(); return; }
@@ -3174,6 +3216,7 @@ impl Render for SourcePresentation {
                 .on_mouse_up_out(
                     MouseButton::Left,
                     cx.listener(|this, event: &MouseUpEvent, window, cx| {
+                        if this.cancel_reorder(cx) { cx.stop_propagation(); return; }
                         if this.tables.is_resizing() { this.update_table_resize(event.position, window, cx); }
                         this.finish_table_resize(window, cx);
                         this.finish_image_resize(false, window, cx);
@@ -3406,6 +3449,7 @@ impl Render for SourcePresentation {
                         cx.notify();
                         return;
                     }
+                    if this.cancel_reorder(cx) { return; }
                     if this.finish_image_resize(true, window, cx) { return; }
                     if this.cancel_image_insertion(cx) { return; }
                     if this.state.composition.is_some() {
@@ -3445,6 +3489,7 @@ impl Render for SourcePresentation {
                 .on_action(cx.listener(|this, _: &math_edit::MatrixAddColumn, window, cx| this.formula_matrix(2, window, cx)))
                 .on_action(cx.listener(|this, _: &math_edit::MatrixRemoveColumn, window, cx| this.formula_matrix(3, window, cx)))
                 .child(self.render_references(window, cx))
+                .children(self.reorder_status(cx))
                 .child(self.format_toolbar(window, cx))
                 .child(self.image_toolbar(cx))
                 .when(self.live, |root| {
@@ -3455,6 +3500,7 @@ impl Render for SourcePresentation {
                             .on_click(cx.listener(|this, _, window, cx| this.open_properties(window, cx)))))
                         .when(self.properties.open, |root| root.child(self.render_properties(cx)))
                 })
+                .when(self.live, |root| root.child(self.block_toolbar(cx)))
                 .when(self.live, |root| root.child(self.table_insert_button(cx)))
                 .when(self.live && self.projection.links.at(self.state.selection.head()).is_some(), |root| {
                     use gpui_kit::component::button::{Button, ButtonVariants as _};
@@ -3481,6 +3527,7 @@ impl Render for SourcePresentation {
                     div()
                         .id("markdown-source-scroll")
                         .flex_1().min_h_0().w_full()
+                        .relative()
                         .overflow_y_scroll()
                         .overflow_x_scroll()
                         .track_scroll(&self.scroll)
@@ -3521,12 +3568,15 @@ impl Render for SourcePresentation {
                                     },
                                 ))
                                 .child(block),
-                        ),
+                        )
+                        .children(self.reorder_indicator(window, cx)),
                     &self.scroll,
                 ));
         let root = self.code_actions(root, cx);
         let root = root.children(self.spelling_overlay(window, cx));
         let root = root.children(self.formula_overlay(window));
+        let root = self.block_actions(root, cx);
+        let root = self.reorder_actions(root, cx);
         SourceElement {
             child: root.into_any_element(),
             view: cx.entity(),
@@ -3642,6 +3692,7 @@ impl Element for SourceElement {
     ) {
         self.view.update(cx, |view, _| {
             view.viewport.frame.clear();
+            view.viewport.visible = self.visible.clone();
             view.table_geometry.clear();
         });
         let table_measurement_changed = self.view.update(cx, |view, cx| {
@@ -3863,6 +3914,7 @@ impl Element for SourceElement {
                 // resources must not infer caret visibility from stale bounds.
                 view.geometry = None;
             }
+            view.refresh_reorder_geometry(window, cx);
         });
     }
     fn paint(
@@ -3889,11 +3941,17 @@ impl Element for SourceElement {
                 });
                 return;
             }
-            if !phase.bubble() || (!view.read(cx).dragging && view.read(cx).pointer_link.is_none())
+            if !phase.bubble() || (!view.read(cx).dragging && view.read(cx).pointer_link.is_none() && view.read(cx).reorder.is_none())
             {
                 return;
             }
             view.update(cx, |view, cx| {
+                if view.reorder.is_some() {
+                    if event.pressed_button == Some(MouseButton::Left) { view.move_reorder(event.position, window, cx); }
+                    else { view.cancel_reorder(cx); }
+                    cx.stop_propagation();
+                    return;
+                }
                 view.move_pointer_link(event, window, cx);
                 if !view.dragging {
                     return;
