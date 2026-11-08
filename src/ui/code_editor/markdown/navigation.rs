@@ -1,5 +1,4 @@
 use super::*;
-use unicode_segmentation::UnicodeSegmentation as _;
 
 impl SourcePresentation {
     pub(super) fn geometry_is_current(&self, cx: &App) -> bool {
@@ -274,7 +273,7 @@ impl SourcePresentation {
             }
         }
         ranges.extend(repairs);
-        ranges.retain(|range| !range.is_empty());
+        ranges.retain(|range| range.start < range.end);
         ranges.sort_by_key(|range| range.start);
         let mut merged = smallvec::SmallVec::<[Range<usize>; 4]>::new();
         for range in ranges {
