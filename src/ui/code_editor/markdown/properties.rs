@@ -761,7 +761,11 @@ impl SourcePresentation {
                 .map_selection(self.state.selection)
             };
             self.command(
-                Command::BatchReplaceSelected { edits, selection, kind: EditKind::Command },
+                Command::BatchReplaceSelected {
+                    edits,
+                    selection,
+                    kind: EditKind::Command,
+                },
                 window,
                 cx,
             );

@@ -283,7 +283,9 @@ fn review_formula_cancel_after_plain_input_keeps_original_bytes_and_history(
         assert!(view.read(cx).focus_handle(cx).is_focused(window));
     });
     assert_eq!(bytes(&view, &context), source.as_bytes());
-    app.read_with(&context, |app, _| assert!(!app.active_buffer().unwrap().dirty));
+    app.read_with(&context, |app, _| {
+        assert!(!app.active_buffer().unwrap().dirty)
+    });
     context.dispatch_action(gpui_kit::component::input::Undo);
     assert_eq!(bytes(&view, &context), source.as_bytes());
     context.dispatch_action(gpui_kit::component::input::Redo);

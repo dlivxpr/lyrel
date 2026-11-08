@@ -140,10 +140,11 @@ impl Session {
         self.dirty()
             || !self.preedit.is_empty()
             || self.command.is_some()
-            || self.formula.block && self.alignment.is_some_and(|align| {
-                alignment::edit(source, self.range.start, align)
-                    .is_some_and(|(range, text)| source.slice(range).to_string() != text)
-            })
+            || self.formula.block
+                && self.alignment.is_some_and(|align| {
+                    alignment::edit(source, self.range.start, align)
+                        .is_some_and(|(range, text)| source.slice(range).to_string() != text)
+                })
     }
     fn refresh_geometry(&mut self, changed: bool) {
         if changed {
@@ -329,9 +330,9 @@ impl Session {
 
 impl SourcePresentation {
     pub(super) fn formula_has_pending_input(&self, cx: &App) -> bool {
-        self.formula.as_ref().is_some_and(|session| {
-            session.has_pending_input(self.document.read(cx).source())
-        })
+        self.formula
+            .as_ref()
+            .is_some_and(|session| session.has_pending_input(self.document.read(cx).source()))
     }
     pub(super) fn sync_formula_surface(&mut self, cx: &Context<Self>) {
         self.math.editor = self.formula.as_ref().map(|session| {
@@ -897,7 +898,8 @@ impl SourcePresentation {
         self.input_generation = self.input_generation.wrapping_add(1);
         if self.formula_has_pending_input(cx) {
             self.document.update(cx, |document, _| {
-                document.pending_input_generation = document.pending_input_generation.wrapping_add(1);
+                document.pending_input_generation =
+                    document.pending_input_generation.wrapping_add(1);
             });
         }
         if let Some(session) = &mut self.formula {

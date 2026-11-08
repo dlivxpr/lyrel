@@ -931,7 +931,11 @@ impl MarkdownDocument {
                     Command::ToggleTask { at } => lists::toggle(self, state, at),
                     Command::Replace { range, text, kind } => self.edit(state, range, text, kind),
                     Command::BatchReplace { edits, kind } => self.batch_edit(state, edits, kind),
-                    Command::BatchReplaceSelected { edits, selection, kind } => {
+                    Command::BatchReplaceSelected {
+                        edits,
+                        selection,
+                        kind,
+                    } => {
                         self.batch_edit_selected(state, edits, kind, Some(selection));
                     }
                     Command::ReplaceLines {

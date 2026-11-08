@@ -629,7 +629,11 @@ fn edit(
     if source[body.end..owner.end] != close {
         edits.push((body.end..owner.end, close));
     }
-    (!edits.is_empty()).then_some(Command::BatchReplaceSelected { edits, selection, kind: EditKind::Command })
+    (!edits.is_empty()).then_some(Command::BatchReplaceSelected {
+        edits,
+        selection,
+        kind: EditKind::Command,
+    })
 }
 
 fn coverage(root: &Node, decorations: &[Decoration]) -> Vec<(Format, Range<usize>)> {

@@ -26,12 +26,20 @@ impl SourcePresentation {
         }
         let source = self.document.read(cx).source();
         let mut covered = range.start;
-        for leaf in self.projection.leaves.iter().filter(|leaf| {
-            leaf.range.start < range.end && range.start < leaf.range.end
-        }) {
+        for leaf in self
+            .projection
+            .leaves
+            .iter()
+            .filter(|leaf| leaf.range.start < range.end && range.start < leaf.range.end)
+        {
             if !matches!(leaf.kind, Kind::Prose)
-                || !source.slice(covered..leaf.range.start.max(covered)).chars().all(char::is_whitespace)
-                || !leaf.accepts_pair(&(range.start.max(leaf.range.start)..range.end.min(leaf.range.end)))
+                || !source
+                    .slice(covered..leaf.range.start.max(covered))
+                    .chars()
+                    .all(char::is_whitespace)
+                || !leaf.accepts_pair(
+                    &(range.start.max(leaf.range.start)..range.end.min(leaf.range.end)),
+                )
             {
                 return false;
             }
@@ -130,7 +138,10 @@ impl SourcePresentation {
         } else {
             // Insert at the edges: selected source and each disk line ending stay untouched.
             (
-                vec![(range.start..range.start, ch.to_string()), (range.end..range.end, close.to_string())],
+                vec![
+                    (range.start..range.start, ch.to_string()),
+                    (range.end..range.end, close.to_string()),
+                ],
                 EditKind::Command,
             )
         };

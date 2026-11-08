@@ -971,7 +971,11 @@ fn markdown_pristine_formula_reload_allows_open_and_cursor_moves_during_disk_rea
         });
         wait_until(&mut context, |cx| active_id(&app, cx).is_some());
         let view = app.read_with(&context, |app, _| {
-            app.active_editor_input().unwrap().markdown().unwrap().clone()
+            app.active_editor_input()
+                .unwrap()
+                .markdown()
+                .unwrap()
+                .clone()
         });
         view.update_in(&mut context, |view, window, cx| {
             if !view.is_live() {
@@ -992,7 +996,10 @@ fn markdown_pristine_formula_reload_allows_open_and_cursor_moves_during_disk_rea
         let release = host.pause_next_read();
         app.update_in(&mut context, |app, window, cx| {
             app.editor.buffers.external_change(
-                &path, window, cx, |app| &mut app.editor.buffers,
+                &path,
+                window,
+                cx,
+                |app| &mut app.editor.buffers,
                 crate::ui::code_editor::EditorPanelState::buffer_edited,
             );
         });
@@ -1006,7 +1013,9 @@ fn markdown_pristine_formula_reload_allows_open_and_cursor_moves_during_disk_rea
         });
         release.send(()).unwrap();
         wait_until(&mut context, |context| {
-            view.read_with(context, |view, cx| view.document().read(cx).encode().unwrap() == loaded.as_bytes())
+            view.read_with(context, |view, cx| {
+                view.document().read(cx).encode().unwrap() == loaded.as_bytes()
+            })
         });
         app.read_with(&context, |app, _| {
             let file = app.active_buffer().unwrap();
@@ -1019,7 +1028,10 @@ fn markdown_pristine_formula_reload_allows_open_and_cursor_moves_during_disk_rea
         });
         context.dispatch_action(gpui_kit::component::input::Undo);
         view.read_with(&context, |view, cx| {
-            assert_eq!(view.document().read(cx).encode().unwrap(), loaded.as_bytes());
+            assert_eq!(
+                view.document().read(cx).encode().unwrap(),
+                loaded.as_bytes()
+            );
         });
         assert_eq!(std::fs::read(&path).unwrap(), loaded.as_bytes());
     }
