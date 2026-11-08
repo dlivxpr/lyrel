@@ -26,6 +26,11 @@ mod typography;
 #[path = "composition.rs"]
 mod composition;
 
+#[path = "tools.rs"]
+pub(super) mod tools;
+#[path = "spelling.rs"]
+mod spelling;
+
 struct CachedBlock {
     version: u64,
     seen: u64,
@@ -74,6 +79,7 @@ pub(crate) struct SourcePresentation {
     math: super::math::State,
     extra_selections: Vec<Selection>,
     search_matches: std::rc::Rc<Vec<Range<usize>>>,
+    spelling: spelling::State,
     image_snapshot: Option<std::sync::Arc<HashMap<String, std::sync::Arc<RenderImage>>>>,
     accessibility_snapshot: Option<(u64, SharedString)>,
     indent: crate::ui::editor_text::Indent,
@@ -119,6 +125,7 @@ impl SourcePresentation {
             ) {
                 this.image_snapshot = None;
                 if matches!(event, DocumentEvent::ResourceContextChanged) {
+                    this.schedule_spelling(cx);
                     let document = this.document.read(cx);
                     if this.projection.grammar != document.grammar() {
                         this.projection.install(Projection::source(
@@ -137,6 +144,7 @@ impl SourcePresentation {
                 return;
             }
             if let DocumentEvent::Edited(transaction) = event {
+                this.spelling.invalidate();
                 this.assets.rebase(transaction);
                 this.state.rebase(transaction);
                 if transaction.origin != this.state.id {
@@ -168,6 +176,7 @@ impl SourcePresentation {
                 }
                 this.sync_inline_reveal();
                 this.schedule_parse(cx);
+                this.schedule_spelling(cx);
                 this.schedule_math(cx);
                 this.schedule_mermaid(cx);
                 this.geometry = None;
@@ -232,6 +241,7 @@ impl SourcePresentation {
             math: super::math::State::default(),
             extra_selections: Vec::new(),
             search_matches: std::rc::Rc::default(),
+            spelling: spelling::State::default(),
             image_snapshot: None,
             accessibility_snapshot: None,
             indent: crate::ui::editor_text::Indent {
@@ -303,6 +313,7 @@ impl SourcePresentation {
                 self.document.read(cx).grammar(),
             ));
         }
+        self.tools_changed(cx);
         self.reveal_caret = true;
         self.focus.focus(window, cx);
         window.notify_text_selection_changed(&self.focus);
@@ -370,6 +381,7 @@ impl SourcePresentation {
                         view.refresh_images(false, cx);
                         view.schedule_mermaid(cx);
                         view.schedule_math(cx);
+                        view.tools_changed(cx);
                         cx.notify();
                     }
                     let next = view.parse_pending.is_some();
@@ -589,6 +601,7 @@ impl SourcePresentation {
             let visibility_changed = leaf.hide_ranges(&hidden, marked.as_ref());
             let insertions_changed = leaf.set_inline_insertions(&insertions);
             if visibility_changed || insertions_changed {
+                self.spelling.surface_generation = self.spelling.surface_generation.wrapping_add(1);
                 if matches!(leaf.kind, Kind::TableCell(_)) {
                     self.tables.invalidate_cell(leaf.id);
                 }
@@ -609,6 +622,7 @@ impl SourcePresentation {
                 &self.extra_selections,
                 marked.as_ref(),
             ) {
+                self.spelling.surface_generation = self.spelling.surface_generation.wrapping_add(1);
                 if matches!(leaf.kind, Kind::TableCell(_)) {
                     self.tables.invalidate_cell(leaf.id);
                     self.viewport.heights.clear();
@@ -723,6 +737,7 @@ impl SourcePresentation {
         self.viewport.layout = None;
         self.geometry = None;
         self.rendered_revision = None;
+        self.tools_changed(cx);
         cx.notify();
     }
     pub(super) fn toggle_component_source(
@@ -952,6 +967,7 @@ impl SourcePresentation {
     ) -> gpui_kit::component::menu::PopupMenu {
         use super::tables::*;
         use crate::ui::i18n::{L10nKey, t};
+        let menu = self.spelling_menu(menu);
         if !self.live {
             return menu;
         }
@@ -1093,6 +1109,12 @@ impl SourcePresentation {
                 let (text, _) = cell_input(&range, text, None);
                 Command::Replace { range, text, kind }
             }
+            Command::BatchReplace { edits, kind } => Command::BatchReplace {
+                edits: edits.into_iter().map(|(range, text)| {
+                    let text = cell_input(&range, text, None).0;
+                    (range, text)
+                }).collect(), kind,
+            },
             command => command,
         };
         let marked_before = self.state.marked_range();
@@ -2827,6 +2849,11 @@ impl Render for SourcePresentation {
                 })
                 .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
                     let key = &event.keystroke;
+                    if key.modifiers.shift && key.key == "f10" && !key.modifiers.control && !key.modifiers.alt && !key.modifiers.platform {
+                        window.dispatch_action(Box::new(spelling::SpellingSuggestions), cx);
+                        cx.stop_propagation();
+                        return;
+                    }
                     if this.live && key.modifiers.alt && !key.modifiers.control && !key.modifiers.platform
                         && matches!(key.key.as_str(), "pageup" | "pagedown") {
                         let target = super::mdx::tabs::adjacent(&this.projection.mdx.components, this.document.read(cx).source(), &this.mdx_state, this.state.selection, key.key == "pageup");
@@ -2847,6 +2874,7 @@ impl Render for SourcePresentation {
                     cx.stop_propagation();
                 }))
                 .on_action(cx.listener(|view, _: &LoadImages, _, cx| view.refresh_images(true, cx)))
+                .on_action(cx.listener(|view, _: &spelling::SpellingSuggestions, window, cx| view.open_spelling(None, window, cx)))
                 .on_action(cx.listener(|this, _: &EditLinkDestination, window, cx| {
                     this.edit_link_destination(window, cx);
                 }))
@@ -3144,6 +3172,11 @@ impl Render for SourcePresentation {
                                 .p(rems(typography::inset(self.live)))
                                 .capture_any_mouse_down(cx.listener(
                                     |this, event: &MouseDownEvent, window, cx| {
+                                        if event.button == MouseButton::Right && this.spelling_at_point(event.position, cx).is_some() {
+                                            this.open_spelling(Some(event.position), window, cx);
+                                            cx.stop_propagation();
+                                            return;
+                                        }
                                         if event.button != MouseButton::Left
                                             || !this.geometry.as_ref().is_some_and(|(revision, geometry)| {
                                                 *revision == this.document.read(cx).revision()
@@ -3170,6 +3203,7 @@ impl Render for SourcePresentation {
                         ),
                     &self.scroll,
                 ));
+        let root = root.children(self.spelling_overlay(window, cx));
         SourceElement {
             child: root.into_any_element(),
             view: cx.entity(),
@@ -3515,6 +3549,7 @@ impl Element for SourceElement {
         cx: &mut App,
     ) {
         self.child.paint(window, cx);
+        self.view.read(cx).paint_spelling(window, cx);
         let view = self.view.clone();
         window.on_mouse_event(move |event: &MouseMoveEvent, phase, window, cx| {
             if !phase.bubble() || !view.read(cx).dragging {

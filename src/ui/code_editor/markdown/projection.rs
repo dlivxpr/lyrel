@@ -484,6 +484,10 @@ impl Leaf {
                 }
             })
     }
+    pub(super) fn visible_fragments(&self) -> impl Iterator<Item = (Range<usize>, Range<usize>)> + '_ {
+        self.segments.iter().filter(|segment| !segment.display.is_empty())
+            .map(|segment| (segment.display.clone(), segment.source.clone()))
+    }
     pub fn display_offset(&self, source: usize) -> usize {
         if self.deferred {
             return source

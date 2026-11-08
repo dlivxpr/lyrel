@@ -22,6 +22,7 @@ mod tables;
 #[cfg(test)]
 pub(super) use source::FollowLink;
 pub(super) use source::SourcePresentation;
+pub(super) use source::tools::{SearchSurfaceChanged, SearchText};
 pub(crate) use tables::bindings as table_bindings;
 #[cfg(test)]
 mod tests;
