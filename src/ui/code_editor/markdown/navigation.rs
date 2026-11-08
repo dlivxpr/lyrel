@@ -76,8 +76,11 @@ impl SourcePresentation {
         let distance = (limit - caret.x).abs();
         let tolerance = geometry.caret_height() / 1024.;
         let candidate = |distance| {
-            let ix = geometry.index_for_position(point(caret.x + distance * direction, y));
-            let ix = floor_grapheme(&leaf.text, ix);
+            let ix = hit_test_grapheme(
+                &leaf.text,
+                geometry,
+                point(caret.x + distance * direction, y),
+            );
             let position = geometry.position_for_index(ix);
             let dx = (position.x - caret.x) * direction;
             (ix != display
@@ -110,8 +113,8 @@ impl SourcePresentation {
         }
         // At a visual edge, ask the same row's endpoints for its source-order
         // direction rather than visiting every glyph to infer RTL/wrap exit.
-        let left = geometry.index_for_position(point(bounds.left(), y));
-        let right = geometry.index_for_position(point(bounds.right(), y));
+        let left = hit_test_grapheme(&leaf.text, geometry, point(bounds.left(), y));
+        let right = hit_test_grapheme(&leaf.text, geometry, point(bounds.right(), y));
         (left > right).then(|| self.visible_step(at, !backward, cx))
     }
 
@@ -564,6 +567,26 @@ fn subtract(ranges: &mut smallvec::SmallVec<[Range<usize>; 4]>, protected: Range
             ix += 1;
         }
     }
+}
+
+pub(super) fn hit_test_grapheme(text: &str, geometry: &LeafGeometry, at: Point<Pixels>) -> usize {
+    let index = floor_grapheme(text, geometry.index_for_position(at));
+    // Whole-leaf hit testing can round past the next glyph at a grapheme edge.
+    // Check adjacent carets in the same shaped layout without walking the leaf.
+    std::iter::once(index)
+        .chain(adjacent_grapheme(text, index, true).map(|range| range.start))
+        .chain(adjacent_grapheme(text, index, false).map(|range| range.end))
+        .map(|index| {
+            let caret = geometry.position_for_index(index);
+            let dy = if at.y < caret.y {
+                caret.y - at.y
+            } else {
+                (at.y - caret.y - geometry.line_height()).max(Pixels::ZERO)
+            };
+            (index, (dy, (at.x - caret.x).abs()))
+        })
+        .min_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal))
+        .map_or(index, |(index, _)| index)
 }
 
 fn floor_grapheme(text: &str, at: usize) -> usize {

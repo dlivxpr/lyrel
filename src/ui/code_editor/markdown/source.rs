@@ -1404,7 +1404,9 @@ impl SourcePresentation {
             .flatten()
             .and_then(|atom| mapped.atom_source(atom.start));
         Some(doc.boundary(
-            display.unwrap_or_else(|| mapped.source_offset(leaf.index_for_position(point))),
+            display.unwrap_or_else(|| {
+                mapped.source_offset(navigation::hit_test_grapheme(&mapped.text, leaf, point))
+            }),
             false,
         ))
     }
@@ -1494,7 +1496,7 @@ impl SourcePresentation {
                         .y
                         + leaf.line_height() * 0.25
                 };
-                let display = leaf.index_for_position(point(goal_x, y));
+                let display = navigation::hit_test_grapheme(&mapped.text, leaf, point(goal_x, y));
                 let position = leaf.position_for_index(display);
                 let dy = if backward {
                     caret.y - position.y
