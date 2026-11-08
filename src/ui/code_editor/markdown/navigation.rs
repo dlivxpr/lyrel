@@ -479,6 +479,14 @@ impl SourcePresentation {
         self.schedule_drag_frame(window, cx);
     }
 
+    pub(super) fn cancel_drag(&mut self) {
+        self.dragging = false;
+        self.drag_pointer = None;
+        self.drag_origin = None;
+        // A queued frame still owns drag_frame_pending until it is delivered.
+        // Clearing it here could enqueue a second loop for a new gesture.
+    }
+
     fn schedule_drag_frame(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.drag_frame_pending || !self.dragging {
             return;
@@ -505,6 +513,7 @@ impl SourcePresentation {
             view.update(cx, |view, cx| {
                 view.drag_frame_pending = false;
                 if !view.dragging || !view.focus.is_focused(window) {
+                    view.cancel_drag();
                     return;
                 }
                 let Some(pointer) = view.drag_pointer else {

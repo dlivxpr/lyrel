@@ -147,6 +147,7 @@ impl SourcePresentation {
             ) {
                 this.image_snapshot = None;
                 if matches!(event, DocumentEvent::ResourceContextChanged) {
+                    this.cancel_drag();
                     this.schedule_spelling(cx);
                     this.pointer_link = None;
                     let document = this.document.read(cx);
@@ -167,6 +168,7 @@ impl SourcePresentation {
                 return;
             }
             if let DocumentEvent::Edited(transaction) = event {
+                this.cancel_drag();
                 this.spelling.invalidate();
                 this.pointer_link = None;
                 this.state.rebase(transaction);
@@ -325,6 +327,7 @@ impl SourcePresentation {
         self.live
     }
     pub(crate) fn toggle_mode(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.cancel_drag();
         self.command(Command::FinishComposition, window, cx);
         self.properties = properties::State::default();
         self.live = !self.live;
