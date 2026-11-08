@@ -1016,7 +1016,10 @@ impl SourcePresentation {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.goal_x = None;
+        let toggle_task = matches!(command, Command::ToggleTask { .. });
+        if !toggle_task {
+            self.goal_x = None;
+        }
         self.input_generation = self.input_generation.wrapping_add(1);
         // A late unmark/blur from an idle presentation must not finish a
         // different split's newly acquired composition.
@@ -1030,7 +1033,9 @@ impl SourcePresentation {
             }
             return;
         }
-        self.state.selection = self.map_live_caret(self.state.selection, cx);
+        if !toggle_task {
+            self.state.selection = self.map_live_caret(self.state.selection, cx);
+        }
         let command = if self.live
             && self.extra_selections.is_empty()
             && self.projection.grammar == self.document.read(cx).grammar()
@@ -1275,8 +1280,10 @@ impl SourcePresentation {
         } else {
             window.notify_text_selection_changed(&self.focus);
         }
-        self.reveal_caret = true;
-        self.reveal_at = None;
+        if !toggle_task {
+            self.reveal_caret = true;
+            self.reveal_at = None;
+        }
         cx.notify();
     }
     fn edit_link_destination(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -2658,6 +2665,7 @@ impl Render for SourcePresentation {
                                         row = row.pl(rems(levels as f32 * typography::list_level(style)));
                                         if let Some(checked) = style.task {
                                             let at = leaf.range.start;
+                                            let revision = self.projection.revision;
                                             row = row.gap_2().child(
                                                 div().on_mouse_down(MouseButton::Left, |_, _, cx| {
                                                     cx.stop_propagation();
@@ -2673,6 +2681,9 @@ impl Render for SourcePresentation {
                                                 ))
                                                 .on_change(cx.listener(
                                                     move |this, _, window, cx| {
+                                                        if this.document.read(cx).revision() != revision {
+                                                            return;
+                                                        }
                                                         this.command(
                                                             Command::ToggleTask { at },
                                                             window,
@@ -2923,7 +2934,9 @@ impl Render for SourcePresentation {
                         Kind::List(style) if style.task.is_some() => Some(style.start),
                         _ => None,
                     });
-                    if this.live && !this.is_composing() {
+                    if this.live && !this.is_composing()
+                        && this.projection.revision == this.document.read(cx).revision()
+                    {
                         if let Some(at) = task {
                             this.command(Command::ToggleTask { at }, window, cx);
                             return;

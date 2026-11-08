@@ -1682,6 +1682,31 @@ fn native_nested_lists_tasks_quotes_share_input_history_and_host_save_reopen(
     context.dispatch_action(gpui_kit::component::input::Undo);
     context.dispatch_action(gpui_kit::component::input::Undo);
     context.run_until_parked();
+    // A pointer task toggle must not collapse a reverse text selection. Move
+    // the selected item out and undo through Source before testing its hit target.
+    settle_live_geometry(&view, &mut context);
+    let reverse = Selection::new(at, normalized.find("child").unwrap());
+    view.update_in(&mut context, |view, window, cx| {
+        view.command(Command::Select(reverse), window, cx);
+    });
+    context.update(|window, cx| window.press("shift-tab", cx));
+    context.run_until_parked();
+    view.read_with(&context, |view, cx| {
+        assert_eq!(
+            view.document().read(cx).source().to_string(),
+            "* root\n\n7) [ ] **child**\n+ neighbor\n\n> > *quote*\n"
+        );
+        assert_eq!(view.selection(), Selection::new(reverse.anchor - 2, reverse.head - 2));
+    });
+    context.dispatch_action(crate::core::actions::ToggleDocumentPreview);
+    context.dispatch_action(gpui_kit::component::input::Undo);
+    context.run_until_parked();
+    view.read_with(&context, |view, cx| {
+        assert!(!view.is_live());
+        assert_eq!(view.document().read(cx).source().to_string(), normalized);
+        assert_eq!(view.selection(), reverse);
+    });
+    context.dispatch_action(crate::core::actions::ToggleDocumentPreview);
     let selection = view.read_with(&context, |view, _| view.selection());
     settle_live_geometry(&view, &mut context);
     context.update(|window, cx| {
