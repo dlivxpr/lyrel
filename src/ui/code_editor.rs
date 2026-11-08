@@ -1314,7 +1314,10 @@ impl LyrelApp {
                 }
             }
             Ok(markdown::links::Target::Anchor) => window.notify_app(
-                t_fmt(L10nKey::MarkdownLinkOpenFailed, &[("reason", t(L10nKey::MarkdownLinkAnchorNotFound))]),
+                t_fmt(
+                    L10nKey::MarkdownLinkOpenFailed,
+                    &[("reason", t(L10nKey::MarkdownLinkAnchorNotFound))],
+                ),
                 cx,
             ),
             Err(reason) => window.notify_app(
@@ -2019,10 +2022,16 @@ impl LyrelApp {
             )
             .menu(t(L10nKey::AppMenuSelectAll), Box::new(edit::SelectAll));
         if let Some(markdown) = input.markdown() {
-            let menu = menu.menu(
-                t(L10nKey::EditorGoToLineAction),
-                Box::new(crate::core::actions::EditorGoToLine),
-            );
+            let menu = menu
+                .action_context(markdown.read(cx).focus_handle(cx))
+                .menu(
+                    t(L10nKey::EditorGoToLineAction),
+                    Box::new(crate::core::actions::EditorGoToLine),
+                )
+                .menu(
+                    t(L10nKey::EditorDocumentProperties),
+                    Box::new(markdown::EditDocumentProperties),
+                );
             let menu = markdown.read(cx).table_menu(menu);
             let menu = markdown.read(cx).link_menu(menu, cx);
             return this.editor_file_menu_items(menu, id, app, cx);
