@@ -1,7 +1,7 @@
 use super::settle_live_geometry;
 use crate::ui::app::test_window::harness_with_tabs;
 use gpui_kit::{
-    VisualContext as _, px, size,
+    px, size,
     test::{TestEventExt as _, TestWindowExt as _},
 };
 
