@@ -99,7 +99,8 @@ impl Host for FileHost {
         }
     }
     fn read_dir(&self, p: &Path, root: Option<&Path>) -> io::Result<Vec<Entry>> {
-        self.inner.read_dir(p, root)
+        let root = root.map(|root| self.path(root));
+        self.inner.read_dir(&self.path(p), root.as_deref())
     }
     fn stat(&self, p: &Path) -> io::Result<Meta> {
         self.inner.stat(&self.path(p))

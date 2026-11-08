@@ -61,6 +61,7 @@ pub(super) struct Leaf {
     pub text: String,
     pub kind: Kind,
     pub deferred: bool,
+    pub(super) math_alignment: super::source::math_edit::alignment::Align,
     segments: Vec<Segment>,
     insertion: usize,
     inline_insertions: smallvec::SmallVec<[usize; 1]>,
@@ -160,6 +161,7 @@ impl Leaf {
             text: String::new(),
             kind,
             deferred: false,
+            math_alignment: Default::default(),
             segments: Vec::new(),
             content: String::new(),
             container: None,
@@ -553,7 +555,7 @@ impl Leaf {
                     ));
                     InlineNode::image(node)
                 } else if let Some(formula) = segment.math.as_ref().filter(|_| !segment.verbatim) {
-                    math.inline_node(formula)
+                    math.inline_node(formula, &segment.source)
                 } else {
                     InlineNode::new(self.text[range].to_owned()).marks(run_marks)
                 },
@@ -565,6 +567,13 @@ impl Leaf {
         self.segments
             .iter()
             .filter_map(|segment| segment.math.as_ref())
+    }
+    pub(super) fn formula_at(&self, at: usize, end: bool) -> Option<(Range<usize>, super::math::Formula)> {
+        self.segments.iter().find_map(|segment| {
+            let inside = segment.source.start < at && at < segment.source.end;
+            let boundary = if end { at == segment.source.end } else { at == segment.source.start };
+            (inside || boundary).then(|| segment.math.as_ref().map(|formula| (segment.source.clone(), formula.clone()))).flatten()
+        })
     }
     pub fn atom_source(&self, display: usize) -> Option<usize> {
         self.segments.iter().find_map(|segment| {
@@ -604,6 +613,10 @@ impl Leaf {
             target: None,
         });
         self.push_segment(range.clone(), &source[range], Some(ix), None);
+    }
+    pub(super) fn accepts_reference(&self, at: usize) -> bool {
+        !matches!(self.kind, Kind::Code(_) | Kind::Mermaid(_) | Kind::Math | Kind::Metadata | Kind::Html | Kind::Mdx(_))
+            && !self.segments.iter().any(|segment| segment.style.code && segment.source.start <= at && at <= segment.source.end)
     }
     pub(super) fn raw(&mut self, source: &str, range: Range<usize>) {
         self.push(range.clone(), &source[range]);
@@ -647,6 +660,7 @@ impl Leaf {
         // opening delimiters instead select the first visible content byte.
         if let Some(closing) = self.segments.iter().rev().find(|segment| {
             segment.display.is_empty()
+                && !segment.hidden
                 && segment.display.start == display
                 && segment
                     .delimiter
@@ -870,6 +884,7 @@ pub(super) struct Projection {
     pub grammar: super::mdx::Grammar,
     pub mdx: super::mdx::Index,
     pub properties: super::source::properties::Index,
+    pub(super) block_index: super::blocks::Index,
     pub error: Option<String>,
     live: bool,
     next_id: u64,
@@ -913,6 +928,7 @@ impl Projection {
         let mut links = super::links::Index::default();
         let mut mdx = super::mdx::Index::default();
         let mut properties = super::source::properties::Index::default();
+        let mut block_index = super::blocks::Index::default();
         let mut error = None;
         if live {
             if super::regions::unfinished_metadata(source, document_start) {
@@ -927,6 +943,7 @@ impl Projection {
                         links = super::links::Index::from_ast(source, &root);
                         mdx = super::mdx::Index::from_ast(source, &root);
                         properties = super::source::properties::Index::from_ast(source, &root);
+                        block_index = super::blocks::Index::from_ast(source, &root);
                         Self::project_nodes(
                             source,
                             root.children().map_or(&[], Vec::as_slice),
@@ -934,6 +951,7 @@ impl Projection {
                             &image_definitions,
                             &mut leaves,
                         );
+                        super::tables::metadata::hide_markers(source, &mut leaves);
                         let decorations = super::source::formats::decorations(source, &root);
                         let mut active = Vec::new();
                         let mut next = 0;
@@ -962,6 +980,7 @@ impl Projection {
         } else {
             Self::source_lines(source, 0, &mut leaves);
         }
+        if live { super::source::math_edit::alignment::hide_markers(source, &mut leaves); }
         if leaves.is_empty() {
             leaves.push(Leaf::new(0..0, Kind::Prose));
         }
@@ -992,6 +1011,7 @@ impl Projection {
             grammar,
             mdx,
             properties,
+            block_index,
             error,
             live,
             format_tint: None,
@@ -1306,8 +1326,23 @@ impl Projection {
                     range.start -= 1;
                 }
                 let raw = &source[range.clone()];
+                let alternatives = if raw.contains("[[") || raw.contains("((") {
+                    super::links::Index::from_ast(source, node).links
+                } else { Vec::new() };
                 let mut at = 0;
                 while at < raw.len() {
+                    if let Some(link) = alternatives.iter().find(|link| link.source.start == range.start + at) {
+                        let ix = leaf.spans.len();
+                        leaf.spans.push(InlineSpan { source: link.source.clone(), revealed: false, always_hidden: false, target: None });
+                        leaf.push_segment(link.source.start..link.label.start, &source[link.source.start..link.label.start], Some(ix), None);
+                        let before = leaf.style;
+                        leaf.style.link = Some(ix);
+                        leaf.raw(source, link.label.clone());
+                        leaf.style = before;
+                        leaf.push_segment(link.label.end..link.source.end, &source[link.label.end..link.source.end], Some(ix), None);
+                        at = link.source.end - range.start;
+                        continue;
+                    }
                     let rest = &raw[at..];
                     let ch = rest.chars().next().unwrap();
                     if ch == '\\' && rest.as_bytes().get(1).is_some_and(u8::is_ascii_punctuation) {
@@ -1765,6 +1800,7 @@ impl Projection {
         self.links = super::links::Index::default();
         self.properties = super::source::properties::Index::default();
         self.mdx.rebase(transaction, source);
+        self.block_index.rebase(transaction);
         // Only affected leaves and their immediate neighbours are reparsed on
         // input. The debounced background parse resolves larger syntax changes.
         let mut old = transaction
