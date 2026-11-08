@@ -15,6 +15,9 @@ gpui_kit::actions!(markdown_images, [LoadImages]);
 
 actions!(markdown_links, [EditLinkDestination, FollowLink]);
 
+#[path = "links/interaction.rs"]
+mod link_interaction;
+
 #[path = "assets.rs"]
 mod assets;
 #[path = "navigation.rs"]
@@ -57,7 +60,7 @@ pub(crate) struct SourcePresentation {
     drag_origin: Option<(Selection, usize)>,
     drag_frame_pending: bool,
     goal_x: Option<Pixels>,
-    pointer_link: Option<(u64, String)>,
+    pointer_link: Option<link_interaction::Gesture>,
     reveal_caret: bool,
     wrap: bool,
     live: bool,
@@ -119,6 +122,7 @@ impl SourcePresentation {
             ) {
                 this.image_snapshot = None;
                 if matches!(event, DocumentEvent::ResourceContextChanged) {
+                    this.pointer_link = None;
                     let document = this.document.read(cx);
                     if this.projection.grammar != document.grammar() {
                         this.projection.install(Projection::source(
@@ -137,6 +141,7 @@ impl SourcePresentation {
                 return;
             }
             if let DocumentEvent::Edited(transaction) = event {
+                this.pointer_link = None;
                 this.assets.rebase(transaction);
                 this.state.rebase(transaction);
                 if transaction.origin != this.state.id {
@@ -1279,59 +1284,18 @@ impl SourcePresentation {
         self.reveal_at = None;
         cx.notify();
     }
-    fn edit_link_destination(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.projection.revision != self.document.read(cx).revision() {
-            return;
-        }
-        let Some(range) = self
-            .projection
-            .links
-            .at(self.state.selection.head())
-            .map(|link| link.destination.clone())
-        else {
-            return;
-        };
-        self.command(
-            Command::Select(Selection::new(range.start, range.end)),
-            window,
-            cx,
-        );
-        self.focus.focus(window, cx);
-    }
-    fn pointer_link_target(&self, position: Point<Pixels>, cx: &App) -> Option<&str> {
-        if !self.live || self.projection.revision != self.document.read(cx).revision() {
-            return None;
-        }
-        let at = self.point_offset(position, cx)?;
-        let link = self.projection.links.at(at)?;
-        (link.label.start <= at && at <= link.label.end).then_some(link.target.as_str())
-    }
-    fn finish_pointer_link(
-        &mut self,
-        position: Point<Pixels>,
-        modifiers: Modifiers,
-        cx: &mut Context<Self>,
-    ) {
-        let Some((revision, target)) = self.pointer_link.take() else {
-            return;
-        };
-        if link_modifier(modifiers)
-            && self.document.read(cx).revision() == revision
-            && self.pointer_link_target(position, cx) == Some(target.as_str())
-        {
-            self.follow_link(target, cx);
-        }
-    }
     pub(super) fn follow_link(&mut self, target: String, cx: &mut Context<Self>) {
         if self.projection.revision != self.document.read(cx).revision() {
             return;
         }
         if let Some(fragment) = target.strip_prefix('#') {
-            if let Some(at) = self.projection.links.anchor(fragment) {
+            if let Some(at) = if fragment.is_empty() { Some(0) } else { self.projection.links.anchor(fragment) } {
                 self.select_range(at..at, cx);
                 self.reveal_caret = true;
+                return;
             }
-            return;
+            // Missing anchors use the same localized workbench error path as
+            // missing files, without modifying source or external-image policy.
         }
         let presentation = cx.entity().entity_id();
         let revision = self.document.read(cx).revision();
@@ -2262,12 +2226,12 @@ impl Render for SourcePresentation {
                     |image| ImageSource::Render(image.clone()),
                 )
             })
-            .on_link_click(move |_, event, _, cx| {
+            .on_link_click(move |_, event, window, cx| {
                 let _ = view.update(cx, |view, cx| {
                     view.dragging = false;
                     if let ClickEvent::Mouse(click) = event {
                         if click.up.button == MouseButton::Left {
-                            view.finish_pointer_link(click.up.position, click.up.modifiers, cx);
+                            view.finish_pointer_link(click.up.position, click.up.modifiers, window, cx);
                         }
                     }
                 });
@@ -2852,7 +2816,8 @@ impl Render for SourcePresentation {
                 .on_action(cx.listener(|this, _: &EditLinkDestination, window, cx| {
                     this.edit_link_destination(window, cx);
                 }))
-                .on_action(cx.listener(|this, _: &FollowLink, _, cx| {
+                .on_action(cx.listener(|this, _: &FollowLink, window, cx| {
+                    this.focus.focus(window, cx);
                     if let Some(link) = this.projection.links.at(this.state.selection.head()).cloned() {
                         this.follow_link(link.target, cx);
                     }
@@ -2861,10 +2826,7 @@ impl Render for SourcePresentation {
                     MouseButton::Left,
                     cx.listener(|this, event: &MouseDownEvent, window, cx| {
                         this.focus.focus(window, cx);
-                        this.pointer_link = link_modifier(event.modifiers)
-                            .then(|| this.pointer_link_target(event.position, cx))
-                            .flatten()
-                            .map(|target| (this.projection.revision, target.to_owned()));
+                        this.begin_pointer_link(event, cx);
                         if this.pointer_link.is_some() {
                             this.dragging = false;
                         } else {
@@ -2876,14 +2838,14 @@ impl Render for SourcePresentation {
                 )
                 .on_mouse_up(
                     MouseButton::Left,
-                    cx.listener(|this, event: &MouseUpEvent, _, cx| {
+                    cx.listener(|this, event: &MouseUpEvent, window, cx| {
                         this.dragging = false;
                         this.drag_pointer = None;
                         this.drag_origin = None;
                         // editor_host may consume a rendered link's mouse-up.
                         // Otherwise the editing surface completes the same
                         // captured gesture; neither path navigates twice.
-                        this.finish_pointer_link(event.position, event.modifiers, cx);
+                        this.finish_pointer_link(event.position, event.modifiers, window, cx);
                     }),
                 )
                 .on_mouse_up_out(
@@ -3154,15 +3116,11 @@ impl Render for SourcePresentation {
                                         {
                                             return;
                                         }
-                                        if link_modifier(event.modifiers) {
-                                            this.pointer_link = this.pointer_link_target(event.position, cx)
-                                                .map(|target| (this.projection.revision, target.to_owned()));
-                                            if this.pointer_link.is_some() {
-                                                this.dragging = false;
-                                                return;
-                                            }
-                                        }
                                         this.focus.focus(window, cx);
+                                        if this.begin_pointer_link(event, cx) {
+                                            this.dragging = false;
+                                            return;
+                                        }
                                         this.dragging = true;
                                         this.pointer_down(event, window, cx);
                                         cx.stop_propagation();
@@ -3519,10 +3477,12 @@ impl Element for SourceElement {
         self.child.paint(window, cx);
         let view = self.view.clone();
         window.on_mouse_event(move |event: &MouseMoveEvent, phase, window, cx| {
-            if !phase.bubble() || !view.read(cx).dragging {
+            if !phase.bubble() || (!view.read(cx).dragging && view.read(cx).pointer_link.is_none()) {
                 return;
             }
             view.update(cx, |view, cx| {
+                view.move_pointer_link(event, window, cx);
+                if !view.dragging { return; }
                 if event.pressed_button == Some(MouseButton::Left) {
                     view.drag_to(event.position, window, cx);
                 } else {
@@ -3559,10 +3519,3 @@ impl Element for SourceElement {
     }
 }
 
-fn link_modifier(modifiers: Modifiers) -> bool {
-    if cfg!(target_os = "macos") {
-        modifiers.platform && !modifiers.control && !modifiers.alt && !modifiers.shift
-    } else {
-        modifiers.control && !modifiers.platform && !modifiers.alt && !modifiers.shift
-    }
-}

@@ -97,6 +97,9 @@ impl Index {
         self.links
             .iter()
             .find(|link| link.source.start <= at && at < link.source.end)
+            .or_else(|| self.links.iter().find(|link| {
+                link.destination.start <= at && at <= link.destination.end
+            }))
     }
     pub fn anchor(&self, fragment: &str) -> Option<usize> {
         let fragment = percent_encoding::percent_decode_str(fragment)

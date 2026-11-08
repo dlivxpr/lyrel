@@ -1687,6 +1687,7 @@ pub fn translate_zh(key: L10nKey) -> Option<&'static str> {
         L10nKey::MarkdownLinkUnsupportedScheme => "文档所属 Host 不支持此链接协议",
         L10nKey::MarkdownLinkSaveFirst => "请先保存文档，再打开相对链接",
         L10nKey::MarkdownLinkRemotePath => "远端链接目标必须使用 POSIX 路径",
+        L10nKey::MarkdownLinkAnchorNotFound => "当前文档中不存在此标题锚点",
         L10nKey::EditorWrapOn => "自动换行：开",
         L10nKey::EditorWrapOff => "自动换行：关",
         L10nKey::EditorFileTooLarge => "“{path}”太大，无法在编辑器中打开（{size} MB）",

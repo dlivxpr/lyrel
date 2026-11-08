@@ -1405,6 +1405,7 @@ l10n_keys! {
     MarkdownLinkUnsupportedScheme,
     MarkdownLinkSaveFirst,
     MarkdownLinkRemotePath,
+    MarkdownLinkAnchorNotFound,
     EditorWrapOn,
     EditorWrapOff,
     EditorFileTooLarge,

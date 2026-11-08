@@ -9794,3 +9794,6 @@ fn native_navigation_pointer_words_lines_and_stationary_offscreen_drag(
         );
     });
 }
+
+#[path = "links/consumer_tests.rs"]
+mod link_consumers;
