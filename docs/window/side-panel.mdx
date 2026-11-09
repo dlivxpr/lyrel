@@ -296,6 +296,15 @@ GitHub 上的 Markdown 来自陌生人，因此渲染时有两项限制：只加
 
 后续 `ee6a981f` 已修复上述三项 unit 失败：默认并发 GUI unit 实际为 3109 通过、0 失败、29 ignored，8 项定向消费者和制表符扩容连续五次全部通过；独立真实字体入口仍实际执行 9 项，7 通过、2 个原 RTL 失败。该无探针 Release 的 SHA-256 为 `7e5b93cc2d97003e7439fae2a6b28bfbb6e3d8633d65b15c736400e6b6147725`。本机表格实窗已从文件树打开混合行尾原件，执行 `X|Y` 转义输入、保存、Undo／Redo 后 `Left` 再输入 `Z`，确认内容仍在正文单元格、表头与邻格不变；源码／即时编辑往返后统一 Undo 恢复原始 63 字节，经保存、关闭及文件树重开再次精确核对。证据为仓库外 `evidence205/native-main-validation-1794194611604/results.json` 与 `core-native-ci-frame-fix-ee-table01/native-table-pass.json`，不替代真实 IME、RTL、超长行 paint 或匹配性能验收；本轮自建 GUI／daemon 已按确切身份停止，未操作用户实例。
 
+`ee6a981f` 的 [hosted CI `42556155764`](https://github.com/dlivxpr/lyrel/actions/runs/42556155764) 已结束，macOS 主线程真实字体入口不再因初始化失败而中止：
+
+| 平台 | GUI unit 通过 | 失败 | ignored | 真实字体消费者通过 | 失败 | ignored |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| Windows | 3109 | 0 | 29 | 7 | 2 | 0 |
+| macOS | 3161 | 0 | 27 | 7 | 2 | 0 |
+
+两平台保留的 RTL 表格与波斯文选择原断言均仍失败，未缩减消费者集合或忽略失败；macOS 表格实际到达源码位置 141，Windows 为 139，要求的范围仍是 `122..=132`。相同消费者失败不证明相同后端根因，不能把 Windows 的 DirectWrite 探针归因直接移用于 macOS。终端扩容制表符复制消费者及 updater 在两平台通过，Linux headless、双架构 musl server 和 macOS server job 通过；两项桌面 job 仍因 RTL 失败，不能写成完整 CI 已绿。原生日志与计数保留在仓库外 `evidence205/hosted-ee6a981f-summary.json` 及其指向的两个完整 job 日志；这不替代 macOS 产品实窗验收。
+
 超长行的实际绘字差异仍待正式依赖解决：锁定的 `gpui-fast 0.1.13` 在 `text_system/line.rs` 从原点逐 glyph 累加 X，而 `gpui-base 0.9.0` 的 caret 几何使用原点加 shaped 绝对位置。`[INFERENCE]` 巨大负滚动原点下的浮点累加误差与上述约 546 px 差异相符，但尚未通过替换算法的对照实验确认因果，不能把推断写成已证实修复。正式 `Paragraph` 会合并相邻普通 `InlineNode`，未公开有界 text fragment 控制；custom／image 节点在几何中计为 `U+FFFC`，不能伪造对象拆段或截掉末尾源码来绕过。当前保留完整源码、末端 caret 和原失败，正式依赖、公开几何与原生 paint 一致性仍是完成前提。
 
 
