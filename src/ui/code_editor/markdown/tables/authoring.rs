@@ -223,7 +223,7 @@ impl SourcePresentation {
         vertical: i32,
         edge: Option<bool>,
         cx: &App,
-    ) -> Option<usize> {
+    ) -> Option<SourceCaret> {
         if !self.live || self.projection.revision != self.document.read(cx).revision() {
             return None;
         }
@@ -233,21 +233,27 @@ impl SourcePresentation {
         };
         if let Some(end) = edge {
             return Some(if end {
-                leaf.content_end()
+                SourceCaret::upstream(leaf.content_end())
             } else {
-                leaf.content_start()
+                SourceCaret::new(leaf.content_start())
             });
         }
         if vertical != 0 {
-            return super::super::tables::vertical(&self.projection.leaves, at, vertical < 0);
+            return super::super::tables::vertical(&self.projection.leaves, at, vertical < 0)
+                .map(|byte| {
+                    if self.projection.leaf_at(byte).is_some_and(|target| byte == target.content_end()) {
+                        SourceCaret::upstream(byte)
+                    } else {
+                        SourceCaret::new(byte)
+                    }
+                });
         }
         if horizontal != 0 && (at <= leaf.content_start() || at >= leaf.content_end()) {
             // A logical endpoint can still have another visual caret in a
             // mixed-bidi cell. Keep the shared glyph mapper authoritative.
             if let Some(next) = self.visual_horizontal_target(at, horizontal < 0, cx)
-                && next != at
-                && leaf.content_start() <= next
-                && next <= leaf.content_end()
+                && leaf.content_start() <= next.byte
+                && next.byte <= leaf.content_end()
             {
                 return Some(next);
             }
@@ -257,7 +263,8 @@ impl SourcePresentation {
                 at,
                 super::super::tables::Navigation::Boundary { backward },
             )
-            .flatten();
+            .flatten()
+            .map(|byte| if backward { SourceCaret::upstream(byte) } else { SourceCaret::new(byte) });
         }
         None
     }

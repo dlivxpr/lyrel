@@ -357,7 +357,6 @@ impl SourcePresentation {
             for visible in visible_spelling_text(leaf, geometry, viewport) {
                 let source_start = leaf.source_offset(visible.start);
                 let source_end = leaf.source_offset(visible.end);
-                let recover_wrapped_start = navigation::recover_wrapped_start(leaf.kind);
                 let first = self.spelling.diagnostics.partition_point(|diagnostic| {
                     diagnostic
                         .ranges
@@ -393,7 +392,6 @@ impl SourcePresentation {
                                 geometry,
                                 start + offset,
                                 grapheme,
-                                recover_wrapped_start,
                             ) else {
                                 continue;
                             };
@@ -735,7 +733,7 @@ mod tests {
                         if a.y == b.y {
                             continue;
                         }
-                        let segment = grapheme_line_box(geometry, ix, grapheme, true).expect(
+                        let segment = grapheme_line_box(geometry, ix, grapheme).expect(
                             "a whole paragraph's continuation starts with a spelling segment",
                         );
                         // Independent caret hit tests prove that the emitted
@@ -750,12 +748,11 @@ mod tests {
                         assert!(leaf.text.is_char_boundary(raw_leading));
                         assert!(ix <= raw_leading && raw_leading < ix + grapheme.len());
                         assert_eq!(
-                            super::super::navigation::hit_test_grapheme(
+                            super::super::navigation::hit_test_caret(
                                 &leaf.text,
                                 geometry,
                                 leading,
-                                super::super::navigation::recover_wrapped_start(leaf.kind),
-                            ),
+                            ).index,
                             ix
                         );
                         let trailing = geometry.index_for_position(point(
@@ -769,15 +766,14 @@ mod tests {
                         assert!(leaf.text.is_char_boundary(trailing));
                         assert!(ix < trailing && trailing <= ix + grapheme.len());
                         assert_eq!(
-                            super::super::navigation::hit_test_grapheme(
+                            super::super::navigation::hit_test_caret(
                                 &leaf.text,
                                 geometry,
                                 point(
                                     segment.right() - segment.size.width * 0.25,
                                     segment.center().y,
                                 ),
-                                super::super::navigation::recover_wrapped_start(leaf.kind),
-                            ),
+                            ).index,
                             ix + grapheme.len()
                         );
                         // The same repeated grapheme on the first row is an
@@ -859,7 +855,7 @@ mod tests {
                 };
                 for (ix, grapheme) in leaf.text.grapheme_indices(true) {
                     if grapheme.contains(['\r', '\n']) {
-                        assert!(grapheme_line_box(geometry, ix, grapheme, true).is_none());
+                        assert!(grapheme_line_box(geometry, ix, grapheme).is_none());
                         hard_breaks += 1;
                         continue;
                     }
@@ -873,7 +869,7 @@ mod tests {
                     }
                     let a = geometry.position_for_index(ix);
                     let b = geometry.position_for_index(ix + grapheme.len());
-                    let segment = grapheme_line_box(geometry, ix, grapheme, true);
+                    let segment = grapheme_line_box(geometry, ix, grapheme);
                     if a.y != b.y {
                         assert_ne!(
                             geometry.index_for_position(point(
@@ -883,10 +879,10 @@ mod tests {
                             ix,
                             "fragment-end index must not masquerade as a whole-leaf wrapped start"
                         );
-                        assert!(
-                            segment.is_none(),
-                            "no line from a previous fragment to the next row"
-                        );
+                        let segment = segment.expect("fragment tail retains its own row's spelling segment");
+                        assert_eq!(segment.top(), a.y);
+                        assert_eq!(segment.left(), a.x);
+                        assert!(segment.right() > segment.left());
                         fragmented[slot] = true;
                     } else if a.x != b.x {
                         let segment =
