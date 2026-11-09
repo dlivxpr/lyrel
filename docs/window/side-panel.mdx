@@ -266,7 +266,7 @@ GitHub 上的 Markdown 来自陌生人，因此渲染时有两项限制：只加
 
 真实 Windows 系统 IME 核心路径也已单独验证：在隔离的 `ime-native-1667.md` 中只发送物理拼音键 `zhong` 与提交空格，得到“中”，精确保存为原始 10 字节加 3 字节 UTF-8；一次 Undo 恢复原始全文，而不是字面 `zhong`。证据在仓库外 `native-final-1667d23a/native-real-ime-pass.json`，来自中间无探针 Debug 产品，不冒充最终 Release、纯后台输入、全部候选窗布局或 macOS 通过。
 
-此前 RTL 表格消费者失败不能作为原生 SDK 缺口的证据：旧构造 `current_platform(true)` 在正式 Windows backend 中返回 `NoopTextSystem`，并非 DirectWrite。主线程 runner 已改为 `current_platform(false)`，保留真实字体前提守卫及全部原方向键断言；必须以该前提下的实际结果重新定位导航与几何问题，不能把旧 Noop 结果归因于正式 `gpui-fast 0.1.13`，也不以修改断言或复制第三方 renderer 取得绿灯。
+此前 RTL 表格消费者失败不能作为原生 SDK 缺口的证据：旧构造 `current_platform(true)` 在正式 Windows backend 中返回 `NoopTextSystem`，并非 DirectWrite。纠正为 `current_platform(false)`、保留字体守卫及全部原断言后，`3f9a54ec` 实际执行 9 项：7 项通过，2 项 RTL 仍失败。另一次定向探针确认当前几何未过期，但 `גד` 的源码边界 X 坐标依次为 `1622`、`1630.0547`、`1638.5547`，波斯文首段同样随源码向右增长；按 `Right` 因而停在第二列，段首 `Shift+Left` 则跨回前段。正式 `gpui-fast-windows 0.1.13` 的 `DrawGlyphRun` 忽略 baseline origin，按正 advance 累加 glyph 位置，与该实测一致。这是独立于旧 Noop 结果的新证据；不通过反转按键、修改断言或复制第三方 renderer 绕过，探针不进入产品。
 
 同一无探针 Windows Debug 候选 `776c6e9e` 已完成本机输入、保存、源码／即时编辑往返、关闭及文件树重开。真实 SSH 同步完成精确保存、撤销／重做、关闭重开、图片宽度表单、相对链接、显式锚点及只读片段嵌入；远端原始 394 字节和本机独立副本均已恢复。未提交公式「9」在真实外部文件变化后仍保留，并显示冲突提示。具体范围见仓库外 `native-final-776c6e9e/native-local-core-and-wrap-pass.json`、`native-ssh-core-pass.json` 及其关联记录；不扩张为完整原生矩阵、macOS 或 Release 性能通过。
 
@@ -289,6 +289,8 @@ GitHub 上的 Markdown 来自陌生人，因此渲染时有两项限制：只加
 `59306dcd` 的集中桌面测试实际为 3106 项通过、10 项失败；图片 HTTP 加载的 caret 稳定断言已通过，宽表预编辑已越过原 X 相对坐标失败点，但不能据此宣称完整套件通过。后续修正结构公式 session 与源码显露的归属冲突，将另一项延迟图片消费者迁移到相同可见反馈契约，并保留其新文本、caret 与撤销断言；宽表末尾无填充单元格的粘贴首行继续转义管道，遇换行后退出表格，原样保留后续文本，不再把尾随换行当成单元格内部清理掉。新增完整 400,034 字节、含高图片与公式的单段落消费者覆盖开／关自动换行、实际指针输入、统一撤销及源文件保真；块公式消费者覆盖带前导空白的真实指针入口。这些后续修改尚未运行集中验证，两个 RTL 失败仍保留原断言；当时未识别 Noop 平台前提，不能据此归因 SDK。
 
 继后的 `34dfae81` 集中测试实际为 3112 项通过、5 项失败：完整宽表和延迟图片消费者通过，两个 RTL 断言仍失败；该阶段同样尚未纠正 Noop 平台前提。块公式新增断言须使用源文档统一的 LF／UTF-8 坐标，不把原始 CRLF 文件字节偏移当成 `Selection`；该样本两个 CRLF 导致原文件入口为 44、源文档入口为 42，`insertion_offset()` 已跳过块起始行及两个前导空格。原生公式混合消费者在原始 pointer 结果断言后，以实际 `Escape` 退出未变 session，继续 Live 工作流，不再先切到 Source 却等待 Live 几何；完整混合长段落在图片加载按钮取得焦点后，先把焦点交还当前编辑 presentation，再要求离屏 caret 重入并验证其诊断。新的失败信息保留 wrap、caret、viewport 和可见区间，以上测试阶段修正尚待集中复验，不记为 green。
+
+`3f9a54ec` 的真实 DirectWrite 字形回归已通过所有 7 项软换行、链接及拼写消费者，包括完整 400,034 字节混合长段落、高图片／公式、wrap／nowrap 下的可见 caret、真实生产 pointer/input 路由及统一 Undo。原九项全部实际执行，无 ignored；两个原 RTL 断言仍失败。记录见仓库外 `evidence205/real-font-validation-1794191971997/results.json`；几何探针见 `real-font-validation-1794192279286/native-all.log`。这些是工作台消费者证据，不替代产品实窗、完整套件或性能验收。
 
 
 #### 使用隔离配置复验
