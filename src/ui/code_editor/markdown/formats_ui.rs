@@ -24,7 +24,7 @@ pub(in crate::ui::code_editor::markdown) struct Syntax {
     source: String,
     root: markdown::mdast::Node,
     decorations: Vec<super::Decoration>,
-    delimiters: Vec<std::ops::Range<usize>>,
+    color_runs: Vec<super::ColorRun>,
     coverage: Vec<(Format, std::ops::Range<usize>)>,
 }
 impl Syntax {
@@ -50,8 +50,7 @@ impl Syntax {
         grammar: super::super::super::mdx::Grammar,
         decorations: Vec<super::Decoration>,
     ) -> Self {
-        let mut delimiters = Vec::new();
-        super::markdown_delimiters(&root, &mut delimiters);
+        let color_runs = super::color_runs(source, &root, &(0..source.len()), &decorations);
         let coverage = super::coverage(&root, &decorations);
         Self {
             revision,
@@ -59,7 +58,7 @@ impl Syntax {
             source: source.into(),
             root,
             decorations,
-            delimiters,
+            color_runs,
             coverage,
         }
     }
@@ -119,57 +118,19 @@ const HIGHLIGHT_COLORS: [(L10nKey, u32); 7] = [
 fn text_color_feedback(
     range: std::ops::Range<usize>,
     decorations: &[super::Decoration],
-    delimiters: &[std::ops::Range<usize>],
+    runs: &[super::ColorRun],
 ) -> (u8, Option<u32>) {
-    let mut cuts = vec![range.start, range.end];
-    for decoration in decorations {
-        cuts.extend(
-            [
-                decoration.open.start,
-                decoration.open.end,
-                decoration.close.start,
-                decoration.close.end,
-            ]
-            .into_iter()
-            .filter(|at| range.start < *at && *at < range.end),
-        );
-    }
-    cuts.extend(
-        delimiters
-            .iter()
-            .flat_map(|range| [range.start, range.end])
-            .filter(|at| range.start < *at && *at < range.end),
-    );
-    cuts.sort_unstable();
-    cuts.dedup();
-    let mut first = None;
+    let first = runs.partition_point(|run| run.range.end <= range.start);
+    let mut initial = None;
     let mut any = false;
     let mut mixed = false;
-    for pair in cuts.windows(2) {
-        let part = pair[0]..pair[1];
-        if decorations.iter().any(|d| {
-            d.open.start <= part.start && part.end <= d.open.end
-                || d.close.start <= part.start && part.end <= d.close.end
-        }) || delimiters
-            .iter()
-            .any(|range| range.start <= part.start && part.end <= range.end)
-        {
-            continue;
-        }
-        let color = decorations
-            .iter()
-            .rev()
-            .find(|d| {
-                d.format == Format::TextColor
-                    && d.content().start <= part.start
-                    && part.end <= d.content().end
-            })
-            .and_then(|d| d.color);
+    for run in runs[first..].iter().take_while(|run| run.range.start < range.end) {
+        let color = run.owner.and_then(|ix| decorations[ix].color);
         any |= color.is_some();
-        if let Some(previous) = first {
+        if let Some(previous) = initial {
             mixed |= previous != color;
         } else {
-            first = Some(color);
+            initial = Some(color);
         }
     }
     if !any {
@@ -177,7 +138,7 @@ fn text_color_feedback(
     } else if mixed {
         (1, None)
     } else {
-        (2, first.flatten())
+        (2, initial.flatten())
     }
 }
 
@@ -422,7 +383,7 @@ impl SourcePresentation {
                 })
                 .and_then(|d| d.color);
             let (state, color) =
-                text_color_feedback(range, &syntax.decorations, &syntax.delimiters);
+                text_color_feedback(range, &syntax.decorations, &syntax.color_runs);
             feedback.states[7] = state;
             feedback.text_color = color;
         }

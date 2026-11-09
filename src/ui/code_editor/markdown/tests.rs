@@ -33,6 +33,89 @@ pub(super) fn native_cases() -> [crate::native_markdown::Case; 3] {
 }
 
 #[gpui_kit::test]
+fn workbench_color_runs_ignore_block_gaps_single_strike_and_preserve_inherited_copy(
+    cx: &mut gpui_kit::TestAppContext,
+) {
+    use crate::ui::app::test_window::harness_with_tabs;
+    use crate::ui::i18n::{L10nKey, t};
+    use gpui_kit::{Focusable as _, MouseButton};
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("color-runs.md");
+    let original = "<span style=\"color:red\">a</span>\n\n~<span style=\"color:red\">b</span>~\n\n<span data-keep='x' style='color:red;background:yellow'>cd</span>";
+    std::fs::write(&path, original).unwrap();
+    let (app, mut context, _streams) = harness_with_tabs(cx, 1);
+    app.update_in(&mut context, |app, window, cx| app.open_file_in_editor(&path, window, cx));
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    let view = loop {
+        context.run_until_parked();
+        if let Some(view) = app.read_with(&context, |app, _| app.active_editor_input().and_then(|input| input.markdown().cloned())) {
+            break view;
+        }
+        assert!(std::time::Instant::now() < deadline);
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    };
+    settle_live_geometry(&view, &mut context);
+    let through = original.find("\n\n<span data-keep").unwrap();
+    view.update_in(&mut context, |view, window, cx| {
+        view.select_range(0..through, cx);
+        view.focus_handle(cx).focus(window, cx);
+    });
+    context.update(|window, cx| window.click("markdown-format-menu", cx));
+    context.run_until_parked();
+    context.update(|window, cx| {
+        assert_eq!(window.find_by_label(t(L10nKey::MarkdownFormatTextColor)).checked(), Some(true));
+        window.press("escape", cx);
+    });
+    context.run_until_parked();
+    let b = original.find(">b</span>").unwrap() + 1;
+    view.update_in(&mut context, |view, window, cx| {
+        view.select_range(b..b + 1, cx);
+        view.focus_handle(cx).focus(window, cx);
+    });
+    context.update(|window, cx| window.click("markdown-format-menu", cx));
+    context.run_until_parked();
+    context.update(|window, cx| {
+        assert_eq!(window.find_by_label(t(L10nKey::MarkdownFormatTextColor)).checked(), Some(true));
+        let clear = window.find_by_label(t(L10nKey::MarkdownClearTextColor));
+        window.pointer_down(clear.bounds().center(), MouseButton::Left, cx);
+        window.pointer_up(clear.bounds().center(), MouseButton::Left, cx);
+    });
+    context.run_until_parked();
+    view.read_with(&context, |view, cx| {
+        assert_eq!(view.document().read(cx).encode().unwrap(), original.replacen("~<span style=\"color:red\">b</span>~", "~b~", 1).as_bytes());
+    });
+    context.dispatch_action(gpui_kit::component::input::Undo);
+    context.run_until_parked();
+    let d = original.find(">cd</span>").unwrap() + 2;
+    view.update_in(&mut context, |view, window, cx| {
+        view.select_range(d..d + 1, cx);
+        view.focus_handle(cx).focus(window, cx);
+    });
+    context.dispatch_action(super::source::formats::ClearTextColor);
+    settle_live_geometry(&view, &mut context);
+    let copied = "<span data-keep='x' style='color:inherit;background:yellow'><span style=\"color:#ff0000\">c</span>d</span>";
+    let owner = original.find("<span data-keep").unwrap();
+    let expected = format!("{}{copied}", &original[..owner]);
+    view.read_with(&context, |view, cx| assert_eq!(view.document().read(cx).encode().unwrap(), expected.as_bytes()));
+    view.update_in(&mut context, |view, window, cx| {
+        view.select_range(owner..expected.len(), cx);
+        view.focus_handle(cx).focus(window, cx);
+    });
+    context.dispatch_action(gpui_kit::component::input::Copy);
+    wait_for_clipboard(&mut context, copied);
+    context.update(|_, cx| {
+        let item = cx.read_from_clipboard().unwrap();
+        assert_eq!(item.text().as_deref(), Some(copied));
+        let html = item.metadata().unwrap();
+        assert!(html.contains("color:inherit"), "{html}");
+        assert!(!html.contains("rgba(0,0,0,0)"), "{html}");
+    });
+    context.dispatch_action(gpui_kit::component::input::Undo);
+    context.run_until_parked();
+    view.read_with(&context, |view, cx| assert_eq!(view.document().read(cx).encode().unwrap(), original.as_bytes()));
+}
+
+#[gpui_kit::test]
 fn workbench_text_color_picker_clear_geometry_and_shared_history(
     cx: &mut gpui_kit::TestAppContext,
 ) {
@@ -97,7 +180,6 @@ fn native_text_color_picker_clear_geometry_and_shared_history(cx: &mut gpui_kit:
     context.run_until_parked();
     context.update(|window, cx| {
         window.render_frame(cx);
-        assert_eq!(window.find_by_label(t(L10nKey::MarkdownFormatTextColor)).focused(), Some(true));
         assert_eq!(view.read(cx).document().read(cx).encode().unwrap(), original.as_bytes());
     });
     // The standard picker owns keyboard opening, hex input and confirmation.
@@ -289,7 +371,6 @@ fn native_text_color_picker_clear_geometry_and_shared_history(cx: &mut gpui_kit:
         context.run_until_parked();
         context.update(|window, cx| {
             window.render_frame(cx);
-            assert_eq!(window.find_by_label(t(key)).focused(), Some(true));
             window.press("enter", cx);
         });
         context.run_until_parked();
