@@ -2107,13 +2107,13 @@ impl LyrelApp {
         menu: PopupMenu,
         app: &gpui_kit::WeakEntity<Self>,
         id: BufferId,
-        cx: &gpui_kit::App,
+        cx: &mut gpui_kit::App,
     ) -> PopupMenu {
         use gpui_kit::component::input as edit;
-        let Some(this) = app.upgrade() else {
+        let Some(owner) = app.upgrade() else {
             return menu;
         };
-        let this = this.read(cx);
+        let this = owner.read(cx);
         let Some(f) = this.editor.buffers.get(id) else {
             return menu;
         };
@@ -2160,7 +2160,7 @@ impl LyrelApp {
                 );
             let menu = markdown.update(cx, |markdown, cx| markdown.table_menu(menu, cx));
             let menu = markdown.read(cx).link_menu(menu, cx);
-            return this.editor_file_menu_items(menu, id, app, cx);
+            return owner.read(cx).editor_file_menu_items(menu, id, app, cx);
         }
         let menu = menu
             .separator()
