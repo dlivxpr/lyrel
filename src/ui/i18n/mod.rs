@@ -1496,6 +1496,7 @@ l10n_keys! {
     MarkdownFormatHighlightColor,
     MarkdownFormatMixed,
     MarkdownClearHighlightColor,
+    MarkdownClearTextColor,
     MarkdownApplyColor,
     MarkdownColorYellow,
     MarkdownColorOrange,

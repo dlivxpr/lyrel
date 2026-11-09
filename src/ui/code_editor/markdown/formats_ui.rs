@@ -1,6 +1,7 @@
 use super::{
-    Bold, ClearHighlightColor, CustomHighlightColor, Format, Highlight, InlineCode, Italic,
-    Selection, SourcePresentation, Strike, Underline, decorations, eligible, state, trim,
+    Bold, ClearHighlightColor, ClearTextColor, CustomHighlightColor, CustomTextColor, Format,
+    Highlight, InlineCode, Italic, Selection, SourcePresentation, Strike, Underline, decorations,
+    eligible, state, trim,
 };
 use crate::ui::i18n::{L10nKey, t};
 use gpui_kit::{Action, App, AppContext as _, Context, Window};
@@ -23,6 +24,7 @@ pub(in crate::ui::code_editor::markdown) struct Syntax {
     source: String,
     root: markdown::mdast::Node,
     decorations: Vec<super::Decoration>,
+    delimiters: Vec<std::ops::Range<usize>>,
     coverage: Vec<(Format, std::ops::Range<usize>)>,
 }
 impl Syntax {
@@ -48,6 +50,8 @@ impl Syntax {
         grammar: super::super::super::mdx::Grammar,
         decorations: Vec<super::Decoration>,
     ) -> Self {
+        let mut delimiters = Vec::new();
+        super::markdown_delimiters(&root, &mut delimiters);
         let coverage = super::coverage(&root, &decorations);
         Self {
             revision,
@@ -55,6 +59,7 @@ impl Syntax {
             source: source.into(),
             root,
             decorations,
+            delimiters,
             coverage,
         }
     }
@@ -62,14 +67,14 @@ impl Syntax {
 struct Feedback {
     revision: u64,
     selection: Selection,
-    enabled: [bool; 7],
-    states: [u8; 7],
+    enabled: [bool; 8],
+    states: [u8; 8],
     color: Option<u32>,
+    text_color: Option<u32>,
 }
 struct CustomColor {
     format: Format,
-    selection: Selection,
-    revision: u64,
+    lease: CommandLease,
     picker: gpui_kit::Entity<gpui_kit::component::color_picker::ColorPickerState>,
 }
 #[derive(PartialEq, Eq)]
@@ -91,7 +96,7 @@ pub(in super::super) struct SetHighlightColor {
     pub color: u32,
 }
 
-const FORMATS: [Format; 7] = [
+const FORMATS: [Format; 8] = [
     Format::Bold,
     Format::Italic,
     Format::Underline,
@@ -99,6 +104,7 @@ const FORMATS: [Format; 7] = [
     Format::Code,
     Format::Highlight,
     Format::HighlightColor,
+    Format::TextColor,
 ];
 // Document color data from the pinned reference, not UI theme colors.
 const HIGHLIGHT_COLORS: [(L10nKey, u32); 7] = [
@@ -110,6 +116,50 @@ const HIGHLIGHT_COLORS: [(L10nKey, u32); 7] = [
     (L10nKey::MarkdownColorPink, 0xf48fb180),
     (L10nKey::MarkdownColorGray, 0xbdbdbd80),
 ];
+fn text_color_feedback(
+    range: std::ops::Range<usize>,
+    decorations: &[super::Decoration],
+    delimiters: &[std::ops::Range<usize>],
+) -> (u8, Option<u32>) {
+    let mut cuts = vec![range.start, range.end];
+    for decoration in decorations {
+        cuts.extend([
+            decoration.open.start, decoration.open.end,
+            decoration.close.start, decoration.close.end,
+        ].into_iter().filter(|at| range.start < *at && *at < range.end));
+    }
+    cuts.extend(delimiters.iter().flat_map(|range| [range.start, range.end]).filter(|at| range.start < *at && *at < range.end));
+    cuts.sort_unstable();
+    cuts.dedup();
+    let mut first = None;
+    let mut any = false;
+    let mut mixed = false;
+    for pair in cuts.windows(2) {
+        let part = pair[0]..pair[1];
+        if decorations.iter().any(|d| {
+            d.open.start <= part.start && part.end <= d.open.end
+                || d.close.start <= part.start && part.end <= d.close.end
+        }) || delimiters.iter().any(|range| range.start <= part.start && part.end <= range.end) {
+            continue;
+        }
+        let color = decorations.iter().rev().find(|d| {
+            d.format == Format::TextColor && d.content().start <= part.start && part.end <= d.content().end
+        }).and_then(|d| d.color);
+        any |= color.is_some();
+        if let Some(previous) = first {
+            mixed |= previous != color;
+        } else {
+            first = Some(color);
+        }
+    }
+    if !any {
+        (0, None)
+    } else if mixed {
+        (1, None)
+    } else {
+        (2, first.flatten())
+    }
+}
 
 impl SourcePresentation {
     fn format_command_lease(&self, cx: &App) -> CommandLease {
@@ -297,9 +347,10 @@ impl SourcePresentation {
             self.formats.feedback = Some(Feedback {
                 revision: self.document.read(cx).revision(),
                 selection,
-                enabled: [false; 7],
-                states: [0; 7],
+                enabled: [false; 8],
+                states: [0; 8],
                 color: None,
+                text_color: None,
             });
             return;
         }
@@ -318,9 +369,10 @@ impl SourcePresentation {
         let mut feedback = Feedback {
             revision: syntax.revision,
             selection,
-            enabled: [false; 7],
-            states: [0; 7],
+            enabled: [false; 8],
+            states: [0; 8],
             color: None,
+            text_color: None,
         };
         {
             let root = &syntax.root;
@@ -349,6 +401,9 @@ impl SourcePresentation {
                         && selection.range().end <= d.close.end
                 })
                 .and_then(|d| d.color);
+            let (state, color) = text_color_feedback(range, &syntax.decorations, &syntax.delimiters);
+            feedback.states[7] = state;
+            feedback.text_color = color;
         }
         self.formats.feedback = Some(feedback);
     }
@@ -357,7 +412,7 @@ impl SourcePresentation {
         &self,
         mut menu: gpui_kit::component::menu::PopupMenu,
     ) -> gpui_kit::component::menu::PopupMenu {
-        let actions: [Box<dyn Action>; 7] = [
+        let actions: [Box<dyn Action>; 8] = [
             Box::new(Bold),
             Box::new(Italic),
             Box::new(Underline),
@@ -365,6 +420,7 @@ impl SourcePresentation {
             Box::new(InlineCode),
             Box::new(Highlight),
             Box::new(CustomHighlightColor),
+            Box::new(CustomTextColor),
         ];
         menu = menu.separator().label(t(L10nKey::MarkdownFormatMenu));
         for (ix, (format, action)) in FORMATS.into_iter().zip(actions).enumerate() {
@@ -382,6 +438,13 @@ impl SourcePresentation {
                     .as_ref()
                     .is_none_or(|f| !f.enabled[ix]);
             menu = menu.menu_with_check_and_disabled(label, state == 2, action, disabled);
+            if format == Format::TextColor {
+                menu = menu.menu_with_disabled(
+                    t(L10nKey::MarkdownClearTextColor),
+                    Box::new(ClearTextColor),
+                    disabled || state == 0,
+                );
+            }
         }
         let disabled = self.is_composing()
             || !self.extra_selections.is_empty()
@@ -415,17 +478,26 @@ impl SourcePresentation {
         use gpui_kit::Focusable as _;
         use gpui_kit::component::{ActiveTheme as _, color_picker::ColorPickerState};
         self.refresh_format_feedback(cx);
-        if self.formats.feedback.as_ref().is_none_or(|f| !f.enabled[6]) || self.is_composing() {
+        let ix = match format {
+            Format::TextColor => 7,
+            Format::HighlightColor => 6,
+            _ => return,
+        };
+        if self.formats.feedback.as_ref().is_none_or(|f| !f.enabled[ix]) || self.is_composing() {
             return;
         }
-        let initial = cx.theme().primary.opacity(0.5);
+        let feedback = self.formats.feedback.as_ref().unwrap();
+        let initial = if format == Format::TextColor {
+            feedback.text_color.map_or(cx.theme().foreground, |color| gpui_kit::rgba(color).into())
+        } else {
+            feedback.color.map_or(cx.theme().primary.opacity(0.5), |color| gpui_kit::rgba(color).into())
+        };
         let picker = cx.new(|cx| ColorPickerState::new(window, cx).default_value(initial));
         picker.read(cx).focus_handle(cx).focus(window, cx);
         self.formats.custom = Some(CustomColor {
             format,
             picker,
-            selection: self.state.selection,
-            revision: self.document.read(cx).revision(),
+            lease: self.format_command_lease(cx),
         });
         cx.notify();
     }
@@ -451,9 +523,7 @@ impl SourcePresentation {
         let Some(custom) = self.formats.custom.take() else {
             return;
         };
-        if custom.revision == self.document.read(cx).revision()
-            && custom.selection == self.state.selection
-        {
+        if custom.lease == self.format_command_lease(cx) && !self.is_composing() {
             let color = custom.picker.read(cx).value().map(|color| {
                 let rgba: gpui_kit::Rgba = color.into();
                 ((rgba.r * 255.).round() as u32) << 24

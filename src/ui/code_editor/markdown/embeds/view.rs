@@ -608,6 +608,7 @@ fn render_fragment(
         .zip(&fragment.blocks)
         .enumerate()
     {
+        let context = leaf.foreground_context(&context);
         let rendered = block
             .render_with_id(
                 SharedString::from(format!("{namespace}-{}", leaf.range.start)),

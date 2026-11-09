@@ -1787,6 +1787,7 @@ pub fn translate_zh(key: L10nKey) -> Option<&'static str> {
         L10nKey::MarkdownFormatHighlightColor => "高亮颜色…",
         L10nKey::MarkdownFormatMixed => "{format}（混合）",
         L10nKey::MarkdownClearHighlightColor => "清除高亮颜色",
+        L10nKey::MarkdownClearTextColor => "清除文字颜色",
         L10nKey::MarkdownApplyColor => "应用颜色",
         L10nKey::MarkdownColorYellow => "黄色高亮",
         L10nKey::MarkdownColorOrange => "橙色高亮",
