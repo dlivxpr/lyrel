@@ -907,7 +907,11 @@ fn native_live_break_mapping_resize_and_composition_keep_source_ranges(
             gpui_kit::ScrollDelta::Pixels(gpui_kit::point(px(0.), px(-64.))),
             cx,
         );
-        assert!(presentation.read(cx).scroll_offset().y < px(0.));
+        assert!(
+            presentation.read(cx).scroll_offset().y < px(0.),
+            "{}",
+            presentation.read(cx).scroll_geometry_diagnostic(),
+        );
         let caret = presentation
             .read(cx)
             .range_to_bounds(&(158..158), cx)

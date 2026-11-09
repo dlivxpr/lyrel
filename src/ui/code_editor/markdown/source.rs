@@ -121,6 +121,7 @@ pub(crate) struct SourcePresentation {
     state: PresentationState,
     // Visual wrap sides are local to this selection, source revision and mode.
     caret_selection: Option<(Selection, u64, bool, CaretAffinity, CaretAffinity)>,
+    extra_carets: Vec<(Selection, u64, bool, CaretAffinity)>,
     input_generation: u64,
     focus: FocusHandle,
     scroll: ScrollHandle,
@@ -218,6 +219,7 @@ impl SourcePresentation {
                 this.image_snapshot = None;
                 if matches!(event, DocumentEvent::ResourceContextChanged) {
                     this.caret_selection = None;
+                    this.extra_carets.clear();
                     this.cancel_drag();
                     this.schedule_spelling(cx);
                     this.cancel_reorder(cx);
@@ -245,6 +247,7 @@ impl SourcePresentation {
             }
             if let DocumentEvent::Edited(transaction) = event {
                 this.caret_selection = None;
+                this.extra_carets.clear();
                 this.cancel_drag();
                 this.cancel_reorder(cx);
                 this.spelling.invalidate();
@@ -334,6 +337,7 @@ impl SourcePresentation {
             document,
             state: PresentationState::default(),
             caret_selection: None,
+            extra_carets: Vec::new(),
             input_generation: 0,
             formats: formats::State::default(),
             focus: cx.focus_handle().tab_stop(true),
@@ -456,6 +460,7 @@ impl SourcePresentation {
         self.properties = properties::State::default();
         self.live = !self.live;
         self.caret_selection = None;
+        self.extra_carets.clear();
         self.link_destination = None;
         self.dismiss_references(cx);
         self.dismiss_slash(cx);
@@ -853,6 +858,9 @@ impl SourcePresentation {
         let doc = self.document.read(cx);
         let range = doc.safe_range(range);
         let selection = Selection::new(range.start, range.end);
+        self.extra_carets.retain(|(previous, _, _, _)| {
+            *previous != selection && self.extra_selections.contains(previous)
+        });
         if selection != self.state.selection && !self.extra_selections.contains(&selection) {
             self.extra_selections.push(selection);
         }
@@ -872,6 +880,7 @@ impl SourcePresentation {
     }
     pub(crate) fn select_range(&mut self, range: Range<usize>, cx: &mut Context<Self>) {
         self.caret_selection = None;
+        self.extra_carets.clear();
         let requested = Selection::new(range.start, range.end);
         let selected = self
             .release_formula(cx.entity_id(), Some(requested), cx)
@@ -1117,6 +1126,18 @@ impl SourcePresentation {
     pub(crate) fn scroll_offset(&self) -> Point<Pixels> {
         self.scroll.offset()
     }
+    #[cfg(test)]
+    pub(super) fn scroll_geometry_diagnostic(&self) -> String {
+        format!(
+            "offset {:?}, max_offset {:?}, viewport {:?}, soft_wrap {}, visible {:?}, measured leaves {:?}",
+            self.scroll.offset(),
+            self.scroll.max_offset(),
+            self.scroll.bounds(),
+            self.wrap,
+            self.viewport.visible,
+            self.viewport.frame,
+        )
+    }
     pub(crate) fn set_scroll_offset(&mut self, offset: Point<Pixels>, cx: &mut Context<Self>) {
         self.scroll.set_offset(offset);
         self.viewport.anchor = None;
@@ -1290,6 +1311,7 @@ impl SourcePresentation {
             return;
         }
         self.caret_selection = None;
+        self.extra_carets.clear();
         self.reveal_block_command(&command, cx);
         if !toggle_task {
             self.state.selection = self.map_live_caret(self.state.selection, cx);
@@ -2062,12 +2084,8 @@ impl SourcePresentation {
                 cx,
             );
         } else {
-            let anchor = if extend {
-                self.state.selection.anchor
-            } else {
-                target
-            };
-            self.command(Command::Select(Selection::new(anchor, target)), window, cx);
+            let caret = if backward { SourceCaret::new(target) } else { SourceCaret::upstream(target) };
+            self.select_caret(caret, extend, window, cx);
         }
     }
     fn add_vertical_cursor(&mut self, direction: i32, _: &mut Window, cx: &mut Context<Self>) {
@@ -2078,6 +2096,10 @@ impl SourcePresentation {
             .head;
         if let Some(offset) = self.vertical_target(at, direction as f32, cx) {
             self.add_selection(offset.byte..offset.byte, cx);
+            let selection = Selection::caret(offset.byte);
+            if self.extra_selections.contains(&selection) {
+                self.extra_carets.push((selection, self.document.read(cx).revision(), self.live, offset.affinity));
+            }
         }
     }
     fn visible_step(&self, at: usize, backward: bool, cx: &App) -> usize {
@@ -3671,29 +3693,21 @@ impl Render for SourcePresentation {
                 )
                 .on_action(cx.listener(|this, _: &actions::MoveToStart, window, cx| {
                     if this.formula_document_edge(false, false, window, cx) { return; }
-                    this.command(Command::Select(Selection::caret(0)), window, cx)
+                    this.select_caret(SourceCaret::new(0), false, window, cx)
                 }))
                 .on_action(cx.listener(|this, _: &actions::MoveToEnd, window, cx| {
                     if this.formula_document_edge(true, false, window, cx) { return; }
                     let end = this.document.read(cx).source().len();
-                    this.command(Command::Select(Selection::caret(end)), window, cx);
+                    this.select_caret(SourceCaret::upstream(end), false, window, cx);
                 }))
                 .on_action(cx.listener(|this, _: &actions::SelectToStart, window, cx| {
                     if this.formula_document_edge(false, true, window, cx) { return; }
-                    this.command(
-                        Command::Select(Selection::new(this.state.selection.anchor, 0)),
-                        window,
-                        cx,
-                    )
+                    this.select_caret(SourceCaret::new(0), true, window, cx)
                 }))
                 .on_action(cx.listener(|this, _: &actions::SelectToEnd, window, cx| {
                     if this.formula_document_edge(true, true, window, cx) { return; }
                     let end = this.document.read(cx).source().len();
-                    this.command(
-                        Command::Select(Selection::new(this.state.selection.anchor, end)),
-                        window,
-                        cx,
-                    );
+                    this.select_caret(SourceCaret::upstream(end), true, window, cx);
                 }))
                 .on_action(cx.listener(|this, _: &actions::Escape, window, cx| {
                     if this.formula.is_some() { this.command(Command::CancelComposition, window, cx); this.focus.focus(window, cx); return; }
