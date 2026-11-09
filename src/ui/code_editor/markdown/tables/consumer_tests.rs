@@ -193,6 +193,13 @@ fn table_reverse_replacement_and_multi_caret_paste_preserve_structure(
     });
     // A caret command ends the typing burst, including a sparse replacement.
     context.update(|window, cx| window.press("left", cx));
+    view.read_with(&context, |view, _| {
+        assert_eq!(
+            view.selection(),
+            Selection::caret(one + "X\\|".len()),
+            "left immediately after redo must stay inside the body cell"
+        );
+    });
     context.update(|window, cx| window.input("Z", cx));
     context.run_until_parked();
     view.read_with(&context, |view, cx| {

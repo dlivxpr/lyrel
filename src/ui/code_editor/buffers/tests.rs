@@ -762,18 +762,29 @@ fn markdown_native_handler_converts_utf16_and_composition_undo(cx: &mut TestAppC
             view.replace_and_mark_text_in_range(None, "你好", Some(2..2), window, cx);
             view.replace_text_in_range(None, "你好", window, cx);
         });
-        window.render_frame(cx);
-        view.update(cx, |view, cx| {
-            let start = view
-                .bounds_for_range(0..0, gpui_kit::Bounds::default(), window, cx)
-                .unwrap();
-            let committed = view
-                .bounds_for_range(3..3, gpui_kit::Bounds::default(), window, cx)
-                .unwrap();
-            assert!(committed.left() > start.left());
-            assert_eq!(committed.top(), start.top());
-            assert!(committed.size.height > gpui_kit::px(0.));
-        });
+    });
+    // Source projection and native coordinates are revision-scoped; a commit
+    // may schedule another frame before its bounds can be queried.
+    wait_until(&mut vcx, |vcx| {
+        vcx.update(|window, cx| {
+            window.render_frame(cx);
+            view.update(cx, |view, cx| {
+                let Some(start) = view
+                    .bounds_for_range(0..0, gpui_kit::Bounds::default(), window, cx)
+                else {
+                    return false;
+                };
+                let Some(committed) = view
+                    .bounds_for_range(3..3, gpui_kit::Bounds::default(), window, cx)
+                else {
+                    return false;
+                };
+                assert!(committed.left() > start.left());
+                assert_eq!(committed.top(), start.top());
+                assert!(committed.size.height > gpui_kit::px(0.));
+                true
+            })
+        })
     });
     vcx.dispatch_action(gpui_kit::component::input::Undo);
     vcx.run_until_parked();

@@ -690,6 +690,9 @@ impl SourcePresentation {
                 caret.top() >= viewport.top() && caret.bottom() <= viewport.bottom();
         }
         self.geometry = None;
+        // Resources and contextual source reveal can change dimensions without
+        // changing a leaf's source version, including leaves outside this frame.
+        self.viewport.widths.clear();
     }
     // Display-boundary insertion has right affinity after a hidden opening
     // delimiter and left affinity before a hidden closing delimiter.
@@ -776,6 +779,7 @@ impl SourcePresentation {
                 self.math.editor.as_ref().map(|(range, _)| range),
             ) {
                 self.spelling.surface_generation = self.spelling.surface_generation.wrapping_add(1);
+                self.viewport.widths.remove(&leaf.id);
                 if matches!(leaf.kind, Kind::TableCell(_)) {
                     self.tables.invalidate_cell(leaf.id);
                     self.viewport.heights.clear();
@@ -4141,9 +4145,9 @@ impl Element for SourceElement {
                     }
                 }
             }
-            if extent_changed || view.scroll.offset() != offset {
-                // This frame predates a native-width or scroll correction. Async
-                // resources must not infer caret visibility from stale bounds.
+            if view.scroll.offset() != offset {
+                // Native width hints size the next frame; they do not move the
+                // geometry just collected. Only an actual scroll invalidates it.
                 view.geometry = None;
             }
             view.refresh_reorder_geometry(window, cx);

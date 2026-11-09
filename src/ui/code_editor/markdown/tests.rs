@@ -2798,10 +2798,14 @@ fn native_table_at_document_edges_keeps_focus_without_inserting_rows(
         context.run_until_parked();
         context.update(|window, cx| window.render_frame(cx));
         if view.read_with(&context, |view, cx| {
-            let a = view.range_to_bounds(&(2..2), cx).unwrap();
-            let b = view.range_to_bounds(&(6..6), cx).unwrap();
             let delimiter = original.find("---").unwrap();
-            let hidden = view.range_to_bounds(&(delimiter..delimiter), cx).unwrap();
+            let (Some(a), Some(b), Some(hidden)) = (
+                view.range_to_bounds(&(2..2), cx),
+                view.range_to_bounds(&(6..6), cx),
+                view.range_to_bounds(&(delimiter..delimiter), cx),
+            ) else {
+                return false;
+            };
             a.top() == b.top() && b.left() > a.left() && hidden.top() == a.top()
         }) {
             break;
@@ -7752,6 +7756,90 @@ fn native_long_document_scroll_return_reflow_and_pending_parse_keep_selection_an
             source.as_bytes()
         )
     });
+}
+
+#[gpui_kit::test]
+fn native_nowrap_inline_reveal_drops_offscreen_source_extent(
+    cx: &mut gpui_kit::TestAppContext,
+) {
+    use crate::ui::app::test_window::harness_with_tabs;
+    use gpui_kit::{Focusable as _, ScrollDelta, point, px};
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("inline-extent.md");
+    let source = format!(
+        "![{}](not-loaded.png)\n\n{}Tail",
+        "wide ".repeat(512),
+        "Short paragraph.\n\n".repeat(120),
+    );
+    std::fs::write(&path, &source).unwrap();
+    let (app, mut context, _streams) = harness_with_tabs(cx, 1);
+    app.update_in(&mut context, |app, window, cx| {
+        app.open_file_in_editor(&path, window, cx)
+    });
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    let view = loop {
+        context.run_until_parked();
+        if let Some(view) = app.read_with(&context, |app, _| {
+            app.active_editor_input()
+                .and_then(|input| input.markdown().cloned())
+        }) {
+            break view;
+        }
+        assert!(std::time::Instant::now() < deadline);
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    };
+    let settle_at = |at, context: &mut gpui_kit::VisualTestContext| {
+        loop {
+            context.run_until_parked();
+            if context.update(|window, cx| {
+                window.render_frame(cx);
+                let surface = window.find("markdown-source").bounds();
+                view.read(cx)
+                    .range_to_bounds(&(at..at), cx)
+                    .is_some_and(|caret| {
+                        caret.top() >= surface.top() && caret.bottom() <= surface.bottom()
+                    })
+            }) {
+                break;
+            }
+            assert!(std::time::Instant::now() < deadline);
+            context.executor().advance_clock(std::time::Duration::from_millis(100));
+        }
+    };
+    view.update_in(&mut context, |view, window, cx| {
+        assert!(view.is_live());
+        view.set_soft_wrap(false, cx);
+        // An interior image selection temporarily shows its original syntax.
+        view.select_range(3..3, cx);
+        view.focus_handle(cx).focus(window, cx);
+    });
+    settle_at(3, &mut context);
+    context.update(|window, cx| {
+        window.scroll(
+            "markdown-source",
+            ScrollDelta::Pixels(point(-window.rem_size() * 100., px(0.))),
+            cx,
+        );
+    });
+    assert!(view.read_with(&context, |view, _| view.scroll_offset().x < px(0.)));
+    let tail = source.len() - "Tail".len();
+    view.update_in(&mut context, |view, _, cx| view.select_range(tail..tail, cx));
+    settle_at(tail, &mut context);
+    context.update(|window, cx| {
+        // The image is now virtualized away. Its old source-reveal width must
+        // not keep a phantom horizontal range on these short paragraphs.
+        assert!(view.read(cx).range_to_bounds(&(3..3), cx).is_none());
+        window.scroll(
+            "markdown-source",
+            ScrollDelta::Pixels(point(-window.rem_size() * 100., px(0.))),
+            cx,
+        );
+        assert_eq!(view.read(cx).scroll_offset().x, px(0.));
+        assert_eq!(view.read(cx).document().read(cx).revision(), 0);
+        assert_eq!(view.read(cx).document().read(cx).encode().unwrap(), source.as_bytes());
+        assert_eq!(view.read(cx).selection(), Selection::caret(tail));
+    });
+    assert_eq!(std::fs::read(&path).unwrap(), source.as_bytes());
 }
 
 #[gpui_kit::test]
