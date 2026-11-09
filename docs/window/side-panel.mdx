@@ -349,9 +349,11 @@ GitHub 上的 Markdown 来自陌生人，因此渲染时有两项限制：只加
 
 ##### GPUI Kit 0.9.1 升级复验
 
-正式依赖已升至 Kit／Base／Component `0.9.1`、Fast `0.1.14` 和共享 HTTP transport `0.3.12`；应用仍只经 Kit facade 选择 Fast，没有引入第三方 Git/path/patch。`733e2e95` 已把源码 `SourceCaret` 与 SDK 显示坐标的 `Caret` 分开，affinity 仅由当前 presentation 保存，并按选区、revision 与 source/live 模式校验。原 9 个真实字体 selector 全部保留，新增同 byte 两侧点选、导航、IME 锚点、编辑／Undo、模式与共享呈现失效的消费者。
+正式依赖已升至 Kit／Base／Component `0.9.1`、Fast `0.1.14` 和共享 HTTP transport `0.3.12`；应用仍只经 Kit facade 选择 Fast，没有引入第三方 Git/path/patch。源码 `SourceCaret` 与 SDK 显示坐标的 `Caret` 分开，affinity 仅由当前 presentation 保存，并按选区、revision 与 source/live 模式校验；主光标、额外光标、Shift 扩选与修饰键链接拖选共用该边界，同 byte 换侧也触发原生坐标失效。前景色使用 keyed leaf 的公开 `with_foreground_ranges`；菜单反馈与颜色重分配共用按 revision 缓存的可见 runs 和边界 sweep，不逐 run 扫描全部 decorations。
 
-该候选实际执行 10 项真实字体消费者：8 通过、2 个原 RTL 断言仍失败、0 ignored；新增 soft-wrap 用例也已单独通过。原完整 200,016 字节公共 `ShapedLine::paint` 复现在 Fast `0.1.14` 中仍显示完整行绘字结束与原生几何标记不一致，而同一 shaping 结果的公开 `split_at` 尾片段对齐；未据此修改产品或 SDK。原始日志、截图分别保留在仓库外 `evidence205/sdk091-native-1794219938036/` 和 `evidence205/sdk091-native-paint-result.json`。这证明 affinity 的已测消费者与未解决的 RTL／长行边界，不是无探针产品实窗、完整 GUI unit、文字颜色或性能已通过；前景色接入及最终候选复验仍在进行。
+`f688de71` 实际通过格式检查与消费者构建，并执行全部 12 项真实字体消费者：10 通过、2 个原 RTL 断言仍失败、0 ignored；原 9 个 selector 全部保留，新增 affinity、修饰键拖选和真实 picker 键盘流程均通过。完整 GUI unit 为 3123 通过、2 个新增测试断言失败、29 ignored：两处错误分别假定未知 span 子树全部不解析、要求菜单 label 暴露并不存在的 disabled 属性；`1605cd93` 删除虚构契约、以实际 Clear 点击及完整字节验证替代控件实现细节后，两项消费者定向通过，不冒充另一次完整 unit 绿灯。强调结束边界与空 owner 的新增回归先实际测红，修复后原字节、前景色范围、菜单状态与 Undo 均通过。证据为仓库外 `evidence205/sdk091-consolidated-1794223078587/` 和 `evidence205/sdk091-boundary-{red-1794222844196,green-1794223561901}/`。
+
+完整 200,016 字节公共 `ShapedLine::paint` 原复现在 Fast `0.1.14` 中仍显示完整行绘字结束与原生几何标记不一致，而同一 shaping 结果的公开 `split_at` 尾片段对齐；未据此修改产品或 SDK。原始截图与结果保留在 `evidence205/sdk091-native-paint-result.json`。这不是无探针产品实窗、macOS 或性能已通过；上述两项 RTL 与长行边界继续由 [#235](https://github.com/dlivxpr/lyrel/issues/235) 跟踪，不修改原断言或忽略用例。
 
 
 
