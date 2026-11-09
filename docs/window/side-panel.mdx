@@ -305,7 +305,31 @@ GitHub 上的 Markdown 来自陌生人，因此渲染时有两项限制：只加
 
 两平台保留的 RTL 表格与波斯文选择原断言均仍失败，未缩减消费者集合或忽略失败；macOS 表格实际到达源码位置 141，Windows 为 139，要求的范围仍是 `122..=132`。相同消费者失败不证明相同后端根因，不能把 Windows 的 DirectWrite 探针归因直接移用于 macOS。终端扩容制表符复制消费者及 updater 在两平台通过，Linux headless、双架构 musl server 和 macOS server job 通过；两项桌面 job 仍因 RTL 失败，不能写成完整 CI 已绿。原生日志与计数保留在仓库外 `evidence205/hosted-ee6a981f-summary.json` 及其指向的两个完整 job 日志；这不替代 macOS 产品实窗验收。
 
-超长行的实际绘字差异仍待正式依赖解决：锁定的 `gpui-fast 0.1.13` 在 `text_system/line.rs` 从原点逐 glyph 累加 X，而 `gpui-base 0.9.0` 的 caret 几何使用原点加 shaped 绝对位置。`[INFERENCE]` 巨大负滚动原点下的浮点累加误差与上述约 546 px 差异相符，但尚未通过替换算法的对照实验确认因果，不能把推断写成已证实修复。正式 `Paragraph` 会合并相邻普通 `InlineNode`，未公开有界 text fragment 控制；custom／image 节点在几何中计为 `U+FFFC`，不能伪造对象拆段或截掉末尾源码来绕过。当前保留完整源码、末端 caret 和原失败，正式依赖、公开几何与原生 paint 一致性仍是完成前提。
+超长行的实际绘字差异仍待正式依赖解决：锁定的 `gpui-fast 0.1.13` 在 `text_system/line.rs` 从原点逐 glyph 累加 X，而 `gpui-base 0.9.0` 的 caret 几何使用原点加 shaped 绝对位置。`[INFERENCE]` 巨大负滚动原点下的浮点累加误差与上述约 546 px 差异相符，但尚未通过替换算法的对照实验确认因果，不能把推断写成已证实修复。正式 `Paragraph` 会合并相邻普通 `InlineNode`，未公开有界 text fragment 控制；custom／image 节点在几何中计为 `U+FFFC`，不能伪造对象拆段或截掉末尾源码来绕过。当前保留完整源码、末端 caret 和原失败；正式依赖、公开几何与原生 paint 一致性转由下述 #235 跟踪。
+
+##### 负责人批准的 SDK 延期边界
+
+按[负责人批准的范围调整](https://github.com/dlivxpr/lyrel/issues/204#issuecomment-6733596104)，任意文字前景色、soft-wrap caret affinity、RTL shaping／可视导航／选择／表格边界，以及极长 nowrap 行的 paint／caret／命中一致性，统一转移至独立 [#235](https://github.com/dlivxpr/lyrel/issues/235)。这些项不再阻塞本次 #204／PR #234 的其余交付，但不表示功能已经修复或原断言已经通过。两平台的原 RTL 红灯、原生失败与正式依赖约束全部保留；不忽略用例、不引入未发布补丁，也不由本 PR 自动关闭 #235。
+
+##### `52d5a8f2` Release 核心复验与性能诊断
+
+无探针产品、修正观察边界的改造前基线与候选观察器，均以 `cargo build --release --locked -j2 -p lyrel --bin lyrel-app` 构建成功。产品 SHA-256 为 `894a288c9c130eb38259e2ef0e93522eaa6b7129bade9f64abea35bbe1a2d7fa`；根 Release 可执行文件已恢复为该无探针产品，历史基线未覆盖。
+
+该产品实窗对 487 字节正文、342,220 字节／1,200 组混合文档、400,034 字节单段落、400,042 字节单代码块、291,041 字节／120 列×160 正文行表格、3,448 字节多资源 MDX，以及 695,006 字节／1,200 节资源文档，分别执行实际输入、保存、Undo 和往返滚动；全部文件逐字节恢复。代码正文的插点为源码 UTF-16 偏移 546，已完成投影的宽表插点为 6,626，不以标题输入代替正文／单元格输入。资源文档、代码块与宽表另经关闭及文件树重开核对全文。证据为仓库外 `evidence205/core-native-final52-product01/production-smoke-index.json`；两次过早读取 AX 的初始脚本失败和定向恢复完整保留，不计作产品回归或性能样本。原生键盘工具实际使用自动 takeover，不冒充纯后台输入。
+
+性能观察协议为 `204-core-native-paint-before-observer-v2`：从应用拥有的原生输入 callback 入口到实际子元素、selection／spelling／caret paint 完成后立即取时，排除 OS 排队、IME 候选生成、GPU、合成与扫描。每个负载先执行 10 对 A/A，再执行 10 对交替 AB／BA；每个 run 10 次单字符输入，按同一归档快照及 entity／painted_sequence／paint_us 关联输入 leaf 的同帧几何，所有任务输入均已撤回。下表仅统计 AB／BA，各侧每负载 100 个输入，百分位为 linear-R7，单位 ms：
+
+| 负载 | Release 变体 | 样本数 | p50 | p95 | p99 | 最大值 | ≥50 ms stall |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| 正文 | 改造前基线 | 100 | 4.687 | 6.940 | 7.047 | 7.142 | 0 |
+| 正文 | `52d5a8f2` 候选 | 100 | 4.874 | 7.717 | 7.947 | 8.131 | 0 |
+| 完整 1,200 组文档标题 | 改造前基线 | 100 | 8.376 | 9.972 | 11.409 | 11.562 | 0 |
+| 完整 1,200 组文档标题 | `52d5a8f2` 候选 | 100 | 13.164 | 16.637 | 17.647 | 18.144 | 0 |
+
+两侧默认文字宽度、行高及工具栏占用不同，仍归类为描述性默认排版对照，不是严格 matched、Zorite 不劣性或物理键到屏幕时延通过。长文每对 p50 均更慢，配对差中位数为 4.549 ms，基线 A/A 绝对差的 p95 为 1.378 ms；正在分段诊断稳定额外开销，未放宽阈值或关闭功能。完整长文另各记录 10 次真实 wheel→paint，均无 ≥50 ms stall；单轮滚动不是重复配对通过。资源快照在计时区间之外采集，未观察到编译进程，不将工作集快照当作峰值或内存不回退证明。
+
+构建、原始 run、逐帧几何与资源快照集中在仓库外 `evidence205/core-release-review-1794205311089/`，协议锁为 `core-233-protocol-lock-52d5a8f2.json`。最终两轴复审的非延期问题仍在修复；#233 与 PR #234 此时未完成验收。既有系统 IME、真实 SSH 核心证据仍按原提交和实际范围引用，不把它们改写成本二进制的新验收；macOS 产品实窗仍未验证。
+
 
 
 #### 使用隔离配置复验
