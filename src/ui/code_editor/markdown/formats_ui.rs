@@ -74,7 +74,13 @@ struct CustomColor {
 }
 #[derive(PartialEq, Eq)]
 struct CommandLease {
-    token: (gpui_kit::EntityId, u64, u64, u64, Option<gpui_kit::EntityId>),
+    token: (
+        gpui_kit::EntityId,
+        u64,
+        u64,
+        u64,
+        Option<gpui_kit::EntityId>,
+    ),
     selection: Selection,
     grammar: super::super::super::mdx::Grammar,
     live: bool,
@@ -139,7 +145,9 @@ impl SourcePresentation {
                 self.command(command, window, cx);
                 return;
             }
-            if self.format_syntax(cx).is_some() || self.document.read(cx).source().len() <= 32 * 1024 {
+            if self.format_syntax(cx).is_some()
+                || self.document.read(cx).source().len() <= 32 * 1024
+            {
                 return;
             }
         }
@@ -176,18 +184,29 @@ impl SourcePresentation {
                         view.finish_format_commands();
                         return None;
                     };
-                    Some((view.formats.generation, current.selection,
-                        view.document.read(cx).source().clone(), current.grammar, format, color))
+                    Some((
+                        view.formats.generation,
+                        current.selection,
+                        view.document.read(cx).source().clone(),
+                        current.grammar,
+                        format,
+                        color,
+                    ))
                 });
-                let Ok(Some((generation, selection, source, grammar, format, color))) = request else {
+                let Ok(Some((generation, selection, source, grammar, format, color))) = request
+                else {
                     break;
                 };
-                let command = cx.background_executor().spawn(async move {
-                    let source = source.to_string();
-                    let root = super::super::super::parser::parse(&source, grammar, true).ok()?;
-                    let styles = decorations(&source, &root);
-                    super::edit(&source, &root, selection, format, color, &styles)
-                }).await;
+                let command = cx
+                    .background_executor()
+                    .spawn(async move {
+                        let source = source.to_string();
+                        let root =
+                            super::super::super::parser::parse(&source, grammar, true).ok()?;
+                        let styles = decorations(&source, &root);
+                        super::edit(&source, &root, selection, format, color, &styles)
+                    })
+                    .await;
                 let next = view.update_in(cx, |view, window, cx| {
                     if view.formats.generation != generation {
                         return true;

@@ -855,7 +855,9 @@ fn final_review_format_nested_delimiters_and_underscore_toggle(cx: &mut TestAppC
     select(&view, &mut context, 0, 8);
     context.update(|window, cx| window.press("secondary-i", cx));
     assert_eq!(bytes(&view, &context), b"*bold* and __strong__\n");
-    view.read_with(&context, |view, _| assert_eq!(view.selection().range(), 0..6));
+    view.read_with(&context, |view, _| {
+        assert_eq!(view.selection().range(), 0..6)
+    });
     context.dispatch_action(gpui_kit::component::input::Undo);
     settle(&view, &mut context);
     select(&view, &mut context, 15, 21);
@@ -867,7 +869,14 @@ fn final_review_format_nested_delimiters_and_underscore_toggle(cx: &mut TestAppC
 fn final_review_format_preserves_link_destination_and_reference_label(cx: &mut TestAppContext) {
     let source = "[body](https://example.com) and [other][label]\n\n[label]: https://example.org\n\n<https://auto.example.com> <user@example.com> https://bare.example.net bare@example.net\n";
     let (_dir, _path, _app, mut context, _streams, view) = fixture!(cx, source);
-    for text in ["https://example.com", "label", "https://auto.example.com", "user@example.com", "https://bare.example.net", "bare@example.net"] {
+    for text in [
+        "https://example.com",
+        "label",
+        "https://auto.example.com",
+        "user@example.com",
+        "https://bare.example.net",
+        "bare@example.net",
+    ] {
         let at = source.find(text).unwrap();
         select(&view, &mut context, at, at + text.len());
         context.update(|window, cx| window.press("secondary-b", cx));
@@ -1021,7 +1030,10 @@ fn final_review_table_slash_excludes_block_insertion_and_keeps_inline_commands(
         let entry = window.find("markdown-slash-entry-code");
         let expected = crate::ui::i18n::t_fmt(
             crate::ui::i18n::L10nKey::MarkdownSlashBlockUnavailable,
-            &[("label", crate::ui::i18n::t(crate::ui::i18n::L10nKey::MarkdownBlockCode))],
+            &[(
+                "label",
+                crate::ui::i18n::t(crate::ui::i18n::L10nKey::MarkdownBlockCode),
+            )],
         );
         assert_eq!(entry.label(), Some(expected.as_str()));
         window.press("enter", cx);
@@ -1172,9 +1184,16 @@ fn final_review_large_document_format_commands_preserve_order_and_cancel_externa
         window.press("secondary-i", cx);
     });
     let combined = source.replacen("start bold", "Xstart ***bold***", 1);
-    until(&mut context, |context| bytes(&view, context) == combined.as_bytes());
+    until(&mut context, |context| {
+        bytes(&view, context) == combined.as_bytes()
+    });
     context.dispatch_action(gpui_kit::component::input::Undo);
-    assert_eq!(bytes(&view, &context), source.replacen("start bold", "Xstart **bold**", 1).as_bytes());
+    assert_eq!(
+        bytes(&view, &context),
+        source
+            .replacen("start bold", "Xstart **bold**", 1)
+            .as_bytes()
+    );
     context.dispatch_action(gpui_kit::component::input::Undo);
     assert_eq!(bytes(&view, &context), format!("X{source}").as_bytes());
     context.dispatch_action(gpui_kit::component::input::Undo);
@@ -1192,9 +1211,14 @@ fn final_review_large_document_format_commands_preserve_order_and_cancel_externa
         window.press("secondary-shift-u", cx);
     });
     let external = source.replacen("start bold", "Xstart <u>Y</u>", 1);
-    until(&mut context, |context| bytes(&view, context) == external.as_bytes());
+    until(&mut context, |context| {
+        bytes(&view, context) == external.as_bytes()
+    });
     context.dispatch_action(gpui_kit::component::input::Undo);
-    assert_eq!(bytes(&view, &context), source.replacen("start bold", "Xstart Y", 1).as_bytes());
+    assert_eq!(
+        bytes(&view, &context),
+        source.replacen("start bold", "Xstart Y", 1).as_bytes()
+    );
     context.dispatch_action(gpui_kit::component::input::Undo);
     assert_eq!(bytes(&view, &context), format!("X{source}").as_bytes());
     context.dispatch_action(gpui_kit::component::input::Undo);
