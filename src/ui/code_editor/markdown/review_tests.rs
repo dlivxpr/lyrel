@@ -822,3 +822,32 @@ fn native_link_grapheme_hovers_edits_and_opens(cx: &mut TestAppContext, fragment
     }
     assert_eq!(std::fs::read(&path).unwrap(), original.as_bytes());
 }
+
+#[gpui_kit::test]
+fn final_review_format_nested_delimiters_and_underscore_toggle(cx: &mut TestAppContext) {
+    let source = "**bold** and __strong__\n";
+    let (_dir, _path, _app, mut context, _streams, view) = fixture!(cx, source);
+    select(&view, &mut context, 2, 6);
+    context.update(|window, cx| window.press("secondary-i", cx));
+    assert_eq!(bytes(&view, &context), b"***bold*** and __strong__\n");
+    context.dispatch_action(gpui_kit::component::input::Undo);
+    settle(&view, &mut context);
+    select(&view, &mut context, 15, 21);
+    context.update(|window, cx| window.press("secondary-b", cx));
+    assert_eq!(bytes(&view, &context), b"**bold** and strong\n");
+}
+
+#[gpui_kit::test]
+fn final_review_format_preserves_link_destination_and_reference_label(cx: &mut TestAppContext) {
+    let source = "[body](https://example.com) and [other][label]\n\n[label]: https://example.org\n";
+    let (_dir, _path, _app, mut context, _streams, view) = fixture!(cx, source);
+    for text in ["https://example.com", "label"] {
+        let at = source.find(text).unwrap();
+        select(&view, &mut context, at, at + text.len());
+        context.update(|window, cx| window.press("secondary-b", cx));
+        assert_eq!(bytes(&view, &context), source.as_bytes());
+    }
+    select(&view, &mut context, 1, 5);
+    context.update(|window, cx| window.press("secondary-b", cx));
+    assert_eq!(bytes(&view, &context), b"[**body**](https://example.com) and [other][label]\n\n[label]: https://example.org\n");
+}
