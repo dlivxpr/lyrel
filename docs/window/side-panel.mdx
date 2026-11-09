@@ -292,6 +292,8 @@ GitHub 上的 Markdown 来自陌生人，因此渲染时有两项限制：只加
 
 `3f9a54ec` 的真实 DirectWrite 字形回归已通过所有 7 项软换行、链接及拼写消费者，包括完整 400,034 字节混合长段落、高图片／公式、wrap／nowrap 下的可见 caret、真实生产 pointer/input 路由及统一 Undo。原九项全部实际执行，无 ignored；两个原 RTL 断言仍失败。记录见仓库外 `evidence205/real-font-validation-1794191971997/results.json`；几何探针见 `real-font-validation-1794192279286/native-all.log`。这些是工作台消费者证据，不替代产品实窗、完整套件或性能验收。
 
+`884cdb3a` 集中复验的三项定向消费者与制表符扩容连续五次均通过；默认并发 GUI unit 实际为 3105 通过、3 失败、29 ignored，独立真实字体入口为 7 通过、2 个原 RTL 失败。新增 unit 失败涉及 IME bounds 暂缺、表格边缘几何以及 Redo 后 `Left`／输入错误进入表头，不能据定向通过宣称完整回归已绿。无探针 Release 构建成功，SHA-256 为 `404c66fee1f33deb14307b8212f77c89eaeed2f9366f4d75802fa61139cd947f`；完整 400,059 字节单段落在实际窗口完成尾部输入、精确保存、一次 Undo 及关闭重开，但尾部绘字结束位置与 caret 相差约 546 px，点击可见末尾实际落在源码末尾前 109 个字符。该原生失败保留，不把字节工作流成功当作 caret／命中验收通过。键盘工具实际使用了自动 takeover，不冒充纯后台验证。记录为仓库外 `evidence205/native-main-validation-1794192453898/results.json` 与 `core-native-ci-real-font-884-mixed01/native-results.json`；此轮新增三项 Standards finding 正在统一修复，Spec 轴 0 finding 不代表全规格完成。
+
 
 #### 使用隔离配置复验
 
