@@ -95,9 +95,28 @@ fn native_text_color_picker_clear_geometry_and_shared_history(cx: &mut gpui_kit:
         window.pointer_up(item.bounds().center(), MouseButton::Left, cx);
     });
     context.run_until_parked();
+    context.update(|window, cx| {
+        window.render_frame(cx);
+        assert_eq!(
+            window
+                .find_by_label(t(L10nKey::MarkdownFormatTextColor))
+                .focused(),
+            Some(true)
+        );
+        assert_eq!(
+            view.read(cx).document().read(cx).encode().unwrap(),
+            original.as_bytes()
+        );
+    });
     // The standard picker owns keyboard opening, hex input and confirmation.
     context.update(|window, cx| window.press("enter", cx));
     context.run_until_parked();
+    view.read_with(&context, |view, cx| {
+        assert_eq!(
+            view.document().read(cx).encode().unwrap(),
+            original.as_bytes()
+        );
+    });
     context.update(|window, cx| {
         let input = window
             .find_all_by_role(gpui_kit::Role::TextInput)
@@ -262,6 +281,47 @@ fn native_text_color_picker_clear_geometry_and_shared_history(cx: &mut gpui_kit:
     view.read_with(&context, |view, _| {
         assert_eq!(view.document().entity_id(), identity)
     });
+    // Both menu actions share the same focus handoff; Enter must open the
+    // standard picker rather than replace the retained document selection.
+    for key in [
+        L10nKey::MarkdownFormatTextColor,
+        L10nKey::MarkdownFormatHighlightColor,
+    ] {
+        let source = cleared.trim_start_matches('\u{feff}').replace("\r\n", "\n");
+        let tail = source.find("tail").unwrap();
+        view.update_in(&mut context, |view, window, cx| {
+            view.select_range(tail..tail + 4, cx);
+            view.focus_handle(cx).focus(window, cx);
+        });
+        context.update(|window, cx| window.click("markdown-format-menu", cx));
+        context.run_until_parked();
+        context.update(|window, cx| {
+            let item = window.find_by_label(t(key));
+            window.pointer_down(item.bounds().center(), MouseButton::Left, cx);
+            window.pointer_up(item.bounds().center(), MouseButton::Left, cx);
+        });
+        context.run_until_parked();
+        context.update(|window, cx| {
+            window.render_frame(cx);
+            assert_eq!(window.find_by_label(t(key)).focused(), Some(true));
+            window.press("enter", cx);
+        });
+        context.run_until_parked();
+        view.read_with(&context, |view, cx| {
+            assert_eq!(
+                view.document().read(cx).encode().unwrap(),
+                cleared.as_bytes()
+            );
+            assert_eq!(view.selection().range(), tail..tail + 4);
+        });
+        context.update(|window, cx| window.press("escape", cx));
+        context.run_until_parked();
+        context.update(|window, cx| window.click("markdown-format-cancel-color", cx));
+        context.run_until_parked();
+        context.update(|window, cx| {
+            assert!(view.read(cx).focus_handle(cx).is_focused(window));
+        });
+    }
 }
 
 fn start_in_source(

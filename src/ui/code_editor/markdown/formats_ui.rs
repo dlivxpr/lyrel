@@ -526,11 +526,25 @@ impl SourcePresentation {
                 })
         };
         let picker = cx.new(|cx| ColorPickerState::new(window, cx).default_value(initial));
-        picker.read(cx).focus_handle(cx).focus(window, cx);
+        let picker_id = picker.entity_id();
         self.formats.custom = Some(CustomColor {
             format,
             picker,
             lease: self.format_command_lease(cx),
+        });
+        // PopupMenu dispatches its action before delivering the dismiss event.
+        // Hand focus off after that event, otherwise the closing menu/popover
+        // can restore the document over this newly created picker.
+        cx.defer_in(window, move |view, window, cx| {
+            let Some(custom) = view.formats.custom.as_ref() else {
+                return;
+            };
+            if custom.picker.entity_id() == picker_id
+                && custom.lease == view.format_command_lease(cx)
+                && !view.is_composing()
+            {
+                custom.picker.read(cx).focus_handle(cx).focus(window, cx);
+            }
         });
         cx.notify();
     }

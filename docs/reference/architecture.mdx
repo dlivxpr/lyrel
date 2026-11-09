@@ -21,7 +21,7 @@ workspace 包含四个 crate；桌面 GUI、CLI 和 headless server 复用同一
 
 `src/daemon.rs` 重导出共享 daemon，`src/core/` 在共享核心之上增加 GUI 适配。桌面入口的 `--daemon` 模式在启动 GPUI 前转入共享 daemon，因此后台服务器可以由 `lyrel-app --daemon` 或独立 `lyrel-server --daemon` 承载。
 
-GUI 通过 `gpui-kit =0.9.0` 的官方 `gpui-fast` feature 选择 Fast，应用导入与测试宏仍使用 `gpui_kit` facade。GUI、daemon 图形镜像与 CLI capture 共用 `rio-vt =0.5.29` 的解析器和网格；Rio 的默认 features 关闭，不引入其 PTY、窗口或 GPU 渲染栈。平台 PTY 和终端绘制仍由 lyrel 自己接入。
+GUI 通过 `gpui-kit =0.9.1` 的官方 `gpui-fast` feature 选择 Fast，应用导入与测试宏仍使用 `gpui_kit` facade。GUI、daemon 图形镜像与 CLI capture 共用 `rio-vt =0.5.29` 的解析器和网格；Rio 的默认 features 关闭，不引入其 PTY、窗口或 GPU 渲染栈。平台 PTY 和终端绘制仍由 lyrel 自己接入。
 
 ## 进程与连接拓扑
 
