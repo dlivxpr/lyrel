@@ -97,14 +97,25 @@ fn native_text_color_picker_clear_geometry_and_shared_history(cx: &mut gpui_kit:
     context.run_until_parked();
     context.update(|window, cx| {
         window.render_frame(cx);
-        assert_eq!(window.find_by_label(t(L10nKey::MarkdownFormatTextColor)).focused(), Some(true));
-        assert_eq!(view.read(cx).document().read(cx).encode().unwrap(), original.as_bytes());
+        assert_eq!(
+            window
+                .find_by_label(t(L10nKey::MarkdownFormatTextColor))
+                .focused(),
+            Some(true)
+        );
+        assert_eq!(
+            view.read(cx).document().read(cx).encode().unwrap(),
+            original.as_bytes()
+        );
     });
     // The standard picker owns keyboard opening, hex input and confirmation.
     context.update(|window, cx| window.press("enter", cx));
     context.run_until_parked();
     view.read_with(&context, |view, cx| {
-        assert_eq!(view.document().read(cx).encode().unwrap(), original.as_bytes());
+        assert_eq!(
+            view.document().read(cx).encode().unwrap(),
+            original.as_bytes()
+        );
     });
     context.update(|window, cx| {
         let input = window
@@ -272,7 +283,10 @@ fn native_text_color_picker_clear_geometry_and_shared_history(cx: &mut gpui_kit:
     });
     // Both menu actions share the same focus handoff; Enter must open the
     // standard picker rather than replace the retained document selection.
-    for key in [L10nKey::MarkdownFormatTextColor, L10nKey::MarkdownFormatHighlightColor] {
+    for key in [
+        L10nKey::MarkdownFormatTextColor,
+        L10nKey::MarkdownFormatHighlightColor,
+    ] {
         let source = cleared.trim_start_matches('\u{feff}').replace("\r\n", "\n");
         let tail = source.find("tail").unwrap();
         view.update_in(&mut context, |view, window, cx| {
@@ -294,7 +308,10 @@ fn native_text_color_picker_clear_geometry_and_shared_history(cx: &mut gpui_kit:
         });
         context.run_until_parked();
         view.read_with(&context, |view, cx| {
-            assert_eq!(view.document().read(cx).encode().unwrap(), cleared.as_bytes());
+            assert_eq!(
+                view.document().read(cx).encode().unwrap(),
+                cleared.as_bytes()
+            );
             assert_eq!(view.selection().range(), tail..tail + 4);
         });
         context.update(|window, cx| window.press("escape", cx));
