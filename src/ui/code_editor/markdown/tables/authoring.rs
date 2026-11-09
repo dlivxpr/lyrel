@@ -239,14 +239,19 @@ impl SourcePresentation {
             });
         }
         if vertical != 0 {
-            return super::super::tables::vertical(&self.projection.leaves, at, vertical < 0)
-                .map(|byte| {
-                    if self.projection.leaf_at(byte).is_some_and(|target| byte == target.content_end()) {
+            return super::super::tables::vertical(&self.projection.leaves, at, vertical < 0).map(
+                |byte| {
+                    if self
+                        .projection
+                        .leaf_at(byte)
+                        .is_some_and(|target| byte == target.content_end())
+                    {
                         SourceCaret::upstream(byte)
                     } else {
                         SourceCaret::new(byte)
                     }
-                });
+                },
+            );
         }
         if horizontal != 0 && (at <= leaf.content_start() || at >= leaf.content_end()) {
             // A logical endpoint can still have another visual caret in a
@@ -264,7 +269,13 @@ impl SourcePresentation {
                 super::super::tables::Navigation::Boundary { backward },
             )
             .flatten()
-            .map(|byte| if backward { SourceCaret::upstream(byte) } else { SourceCaret::new(byte) });
+            .map(|byte| {
+                if backward {
+                    SourceCaret::upstream(byte)
+                } else {
+                    SourceCaret::new(byte)
+                }
+            });
         }
         None
     }

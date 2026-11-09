@@ -4,8 +4,8 @@ use crate::ui::i18n::{L10nKey, t};
 use gpui_kit::TestSupportExt as _;
 use gpui_kit::base::StyledExt as _;
 use gpui_kit::base::text::editor_host::{
-    BlockNode, Caret, CaretAffinity, CodeBlock, FlowPosition, LeafGeometry, Paragraph, RenderContext,
-    collect_leaf_geometry,
+    BlockNode, Caret, CaretAffinity, CodeBlock, FlowPosition, LeafGeometry, Paragraph,
+    RenderContext, collect_leaf_geometry,
 };
 use gpui_kit::component::{ActiveTheme as _, input as actions};
 use gpui_kit::prelude::*;
@@ -102,10 +102,16 @@ struct SourceCaret {
 
 impl SourceCaret {
     fn new(byte: usize) -> Self {
-        Self { byte, affinity: CaretAffinity::Downstream }
+        Self {
+            byte,
+            affinity: CaretAffinity::Downstream,
+        }
     }
     fn upstream(byte: usize) -> Self {
-        Self { byte, affinity: CaretAffinity::Upstream }
+        Self {
+            byte,
+            affinity: CaretAffinity::Upstream,
+        }
     }
 }
 
@@ -1617,9 +1623,15 @@ impl SourcePresentation {
         self.caret_bounds(range.end, cx)
     }
     fn point_offset(&self, point: Point<Pixels>, cx: &App) -> Option<usize> {
-        self.point_caret_for(point, false, cx).map(|caret| caret.byte)
+        self.point_caret_for(point, false, cx)
+            .map(|caret| caret.byte)
     }
-    fn point_caret_for(&self, point: Point<Pixels>, activate: bool, cx: &App) -> Option<SourceCaret> {
+    fn point_caret_for(
+        &self,
+        point: Point<Pixels>,
+        activate: bool,
+        cx: &App,
+    ) -> Option<SourceCaret> {
         let (_, geometry) = self.geometry.as_ref()?;
         let doc = self.document.read(cx);
         if !self.geometry_is_current(cx) {
@@ -1663,7 +1675,10 @@ impl SourcePresentation {
             .and_then(|atom| mapped.atom_source(atom.start));
         let caret = navigation::hit_test_caret(&mapped.text, leaf, point);
         Some(SourceCaret {
-            byte: doc.boundary(display.unwrap_or_else(|| mapped.source_offset(caret.index)), false),
+            byte: doc.boundary(
+                display.unwrap_or_else(|| mapped.source_offset(caret.index)),
+                false,
+            ),
             affinity: caret.affinity,
         })
     }
@@ -1718,13 +1733,22 @@ impl SourcePresentation {
             target
         } else if let Some(end) = edge {
             let byte = self.logical_line_edge(current, end, cx);
-            if end { SourceCaret::upstream(byte) } else { SourceCaret::new(byte) }
+            if end {
+                SourceCaret::upstream(byte)
+            } else {
+                SourceCaret::new(byte)
+            }
         } else if vertical != 0 {
             self.vertical_target(current, vertical as f32, cx)
-                .unwrap_or_else(|| SourceCaret::new(self.vertical_fallback(current, vertical < 0, cx)))
+                .unwrap_or_else(|| {
+                    SourceCaret::new(self.vertical_fallback(current, vertical < 0, cx))
+                })
         } else if !extend && !self.state.selection.range().is_empty() {
             let at = self.visual_selection_edge(horizontal < 0, cx);
-            SourceCaret { byte: at, affinity: self.caret_affinity(at, cx) }
+            SourceCaret {
+                byte: at,
+                affinity: self.caret_affinity(at, cx),
+            }
         } else if let Some(target) = self.visual_horizontal_target(current, horizontal < 0, cx) {
             target
         } else if self.live {
@@ -1734,7 +1758,10 @@ impl SourcePresentation {
         } else {
             SourceCaret::new(doc.next(current))
         };
-        let target = SourceCaret { byte: doc.boundary(target.byte, false), ..target };
+        let target = SourceCaret {
+            byte: doc.boundary(target.byte, false),
+            ..target
+        };
         if !extend
             && edge.is_none()
             && self.begin_formula(target.byte, horizontal < 0 || vertical < 0, window, cx)
@@ -1769,8 +1796,12 @@ impl SourcePresentation {
                 let y = if mapped.id == current_id {
                     caret.y + leaf.line_height() * (lines + 0.25)
                 } else {
-                    leaf.position_for_caret(if backward { Caret::upstream(mapped.text.len()) } else { Caret::new(0) }).y
-                        + leaf.line_height() * 0.25
+                    leaf.position_for_caret(if backward {
+                        Caret::upstream(mapped.text.len())
+                    } else {
+                        Caret::new(0)
+                    })
+                    .y + leaf.line_height() * 0.25
                 };
                 let target = navigation::hit_test_caret(&mapped.text, leaf, point(goal_x, y));
                 let position = leaf.position_for_caret(target);
@@ -1781,7 +1812,10 @@ impl SourcePresentation {
                 };
                 (dy > Pixels::ZERO).then(|| {
                     (
-                        SourceCaret { byte: mapped.source_offset(target.index), affinity: target.affinity },
+                        SourceCaret {
+                            byte: mapped.source_offset(target.index),
+                            affinity: target.affinity,
+                        },
                         dy,
                         (position.x - goal_x).abs(),
                     )
@@ -1801,7 +1835,10 @@ impl SourcePresentation {
         }
         let mapped = self.projection.leaf_at(at)?;
         let leaf = geometry.get(&mapped.id)?;
-        let caret = leaf.position_for_caret(Caret { index: mapped.display_offset(at), affinity: self.caret_affinity(at, cx) });
+        let caret = leaf.position_for_caret(Caret {
+            index: mapped.display_offset(at),
+            affinity: self.caret_affinity(at, cx),
+        });
         let x = if end {
             leaf.bounds().right()
         } else {
@@ -1832,7 +1869,8 @@ impl SourcePresentation {
         if let Some(caret) = self.caret_bounds(at, cx) {
             if let Some(target) = self.point_caret_for(
                 point(caret.left(), caret.top() + self.viewport_height * direction),
-                false, cx,
+                false,
+                cx,
             ) {
                 self.select_caret(target, false, window, cx);
             }

@@ -30,7 +30,6 @@ fn modifier(modifiers: Modifiers) -> bool {
     }
 }
 
-
 impl SourcePresentation {
     pub(super) fn link_destination_range(&mut self) -> Option<Range<usize>> {
         let current = self.link_destination.as_ref().is_some_and(|source| {
@@ -146,11 +145,7 @@ impl SourcePresentation {
                 let end = leaf.display_offset(link.label.end.min(leaf.range.end));
                 Some(leaf.text[start..end].grapheme_indices(true).filter_map(
                     move |(offset, grapheme)| {
-                        navigation::grapheme_line_box(
-                            geometry,
-                            start + offset,
-                            grapheme,
-                        )
+                        navigation::grapheme_line_box(geometry, start + offset, grapheme)
                     },
                 ))
             })

@@ -388,11 +388,9 @@ impl SourcePresentation {
                         };
                         let mut path = PathBuilder::stroke(unit);
                         for (offset, grapheme) in text.grapheme_indices(true) {
-                            let Some(segment) = grapheme_line_box(
-                                geometry,
-                                start + offset,
-                                grapheme,
-                            ) else {
+                            let Some(segment) =
+                                grapheme_line_box(geometry, start + offset, grapheme)
+                            else {
                                 continue;
                             };
                             let left = segment.left().max(viewport.left());
@@ -773,7 +771,8 @@ mod tests {
                                     segment.right() - segment.size.width * 0.25,
                                     segment.center().y,
                                 ),
-                            ).index,
+                            )
+                            .index,
                             ix + grapheme.len()
                         );
                         // The same repeated grapheme on the first row is an
@@ -879,7 +878,8 @@ mod tests {
                             ix,
                             "fragment-end index must not masquerade as a whole-leaf wrapped start"
                         );
-                        let segment = segment.expect("fragment tail retains its own row's spelling segment");
+                        let segment =
+                            segment.expect("fragment tail retains its own row's spelling segment");
                         assert_eq!(segment.top(), a.y);
                         assert_eq!(segment.left(), a.x);
                         assert!(segment.right() > segment.left());

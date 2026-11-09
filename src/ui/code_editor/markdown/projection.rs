@@ -464,9 +464,7 @@ impl Leaf {
         if ranges.is_empty() {
             return std::borrow::Cow::Borrowed(context);
         }
-        std::borrow::Cow::Owned(
-            context.clone().with_foreground_ranges(self.id, ranges),
-        )
+        std::borrow::Cow::Owned(context.clone().with_foreground_ranges(self.id, ranges))
     }
     pub fn marks(
         &self,

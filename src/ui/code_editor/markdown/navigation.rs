@@ -12,10 +12,12 @@ pub(super) fn grapheme_line_box(
     }
     let a = geometry.position_for_caret(Caret::new(start));
     let b = geometry.position_for_caret(Caret::upstream(start + grapheme.len()));
-    (a.y == b.y && a.x != b.x).then(|| Bounds::new(
-        point(a.x.min(b.x), a.y),
-        size((b.x - a.x).abs(), geometry.caret_height()),
-    ))
+    (a.y == b.y && a.x != b.x).then(|| {
+        Bounds::new(
+            point(a.x.min(b.x), a.y),
+            size((b.x - a.x).abs(), geometry.caret_height()),
+        )
+    })
 }
 
 impl SourcePresentation {
@@ -26,25 +28,49 @@ impl SourcePresentation {
                     && *revision == self.document.read(cx).revision()
                     && *live == self.live
             })
-            .map_or((CaretAffinity::Downstream, CaretAffinity::Downstream), |(_, _, _, anchor, head)| (anchor, head))
+            .map_or(
+                (CaretAffinity::Downstream, CaretAffinity::Downstream),
+                |(_, _, _, anchor, head)| (anchor, head),
+            )
     }
 
     pub(super) fn caret_affinity(&self, at: usize, cx: &App) -> CaretAffinity {
         let (anchor, head) = self.selection_affinities(cx);
-        if at == self.state.selection.head { head }
-        else if at == self.state.selection.anchor { anchor }
-        else { CaretAffinity::Downstream }
+        if at == self.state.selection.head {
+            head
+        } else if at == self.state.selection.anchor {
+            anchor
+        } else {
+            CaretAffinity::Downstream
+        }
     }
 
-    pub(super) fn select_caret(&mut self, caret: SourceCaret, extend: bool, window: &mut Window, cx: &mut Context<Self>) {
+    pub(super) fn select_caret(
+        &mut self,
+        caret: SourceCaret,
+        extend: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let anchor = if extend {
-            SourceCaret { byte: self.state.selection.anchor, affinity: self.selection_affinities(cx).0 }
-        } else { caret };
+            SourceCaret {
+                byte: self.state.selection.anchor,
+                affinity: self.selection_affinities(cx).0,
+            }
+        } else {
+            caret
+        };
         let selection = Selection::new(anchor.byte, caret.byte);
         self.command(Command::Select(selection), window, cx);
         // Mapping hidden source delimiters may replace the requested selection.
         if self.state.selection == selection {
-            self.caret_selection = Some((selection, self.document.read(cx).revision(), self.live, anchor.affinity, caret.affinity));
+            self.caret_selection = Some((
+                selection,
+                self.document.read(cx).revision(),
+                self.live,
+                anchor.affinity,
+                caret.affinity,
+            ));
         }
     }
 
@@ -111,7 +137,10 @@ impl SourcePresentation {
             return None;
         }
         let display = leaf.display_offset(at);
-        let current = Caret { index: display, affinity: self.caret_affinity(at, cx) };
+        let current = Caret {
+            index: display,
+            affinity: self.caret_affinity(at, cx),
+        };
         let caret = geometry.position_for_caret(current);
         // Probe the current shaped row, then bisect its first caret transition.
         // The number of geometry queries depends on coordinate precision, not
@@ -127,7 +156,11 @@ impl SourcePresentation {
         let distance = (limit - caret.x).abs();
         let tolerance = geometry.caret_height() / 1024.;
         let candidate = |distance| {
-            let target = hit_test_caret(&leaf.text, geometry, point(caret.x + distance * direction, y));
+            let target = hit_test_caret(
+                &leaf.text,
+                geometry,
+                point(caret.x + distance * direction, y),
+            );
             let position = geometry.position_for_caret(target);
             let dx = (position.x - caret.x) * direction;
             (target != current
@@ -156,17 +189,26 @@ impl SourcePresentation {
                     low = middle;
                 }
             }
-            return Some(SourceCaret { byte: leaf.source_offset(ix.index), affinity: ix.affinity });
+            return Some(SourceCaret {
+                byte: leaf.source_offset(ix.index),
+                affinity: ix.affinity,
+            });
         }
         // At a visual edge, ask the same row's endpoints for its source-order
         // direction rather than visiting every glyph to infer RTL/wrap exit.
-        let opposite = Caret { index: display, affinity: match current.affinity {
-            CaretAffinity::Upstream => CaretAffinity::Downstream,
-            CaretAffinity::Downstream => CaretAffinity::Upstream,
-        }};
+        let opposite = Caret {
+            index: display,
+            affinity: match current.affinity {
+                CaretAffinity::Upstream => CaretAffinity::Downstream,
+                CaretAffinity::Downstream => CaretAffinity::Upstream,
+            },
+        };
         let other = geometry.position_for_caret(opposite);
         if (backward && other.y < caret.y) || (!backward && other.y > caret.y) {
-            return Some(SourceCaret { byte: at, affinity: opposite.affinity });
+            return Some(SourceCaret {
+                byte: at,
+                affinity: opposite.affinity,
+            });
         }
         let left = hit_test_caret(&leaf.text, geometry, point(bounds.left(), y));
         let right = hit_test_caret(&leaf.text, geometry, point(bounds.right(), y));
@@ -657,9 +699,19 @@ pub(super) fn hit_test_caret(text: &str, geometry: &LeafGeometry, at: Point<Pixe
         .flat_map(|index| [Caret::new(index), Caret::upstream(index)])
         .map(|caret| {
             let position = geometry.position_for_caret(caret);
-            let dy = if at.y < position.y { position.y - at.y }
-                else { (at.y - position.y - geometry.line_height()).max(Pixels::ZERO) };
-            (caret, (dy, (at.x - position.x).abs(), caret.affinity != hit.affinity))
+            let dy = if at.y < position.y {
+                position.y - at.y
+            } else {
+                (at.y - position.y - geometry.line_height()).max(Pixels::ZERO)
+            };
+            (
+                caret,
+                (
+                    dy,
+                    (at.x - position.x).abs(),
+                    caret.affinity != hit.affinity,
+                ),
+            )
         })
         .min_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal))
         .map_or(hit, |(caret, _)| caret)

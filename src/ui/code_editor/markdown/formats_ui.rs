@@ -123,12 +123,23 @@ fn text_color_feedback(
 ) -> (u8, Option<u32>) {
     let mut cuts = vec![range.start, range.end];
     for decoration in decorations {
-        cuts.extend([
-            decoration.open.start, decoration.open.end,
-            decoration.close.start, decoration.close.end,
-        ].into_iter().filter(|at| range.start < *at && *at < range.end));
+        cuts.extend(
+            [
+                decoration.open.start,
+                decoration.open.end,
+                decoration.close.start,
+                decoration.close.end,
+            ]
+            .into_iter()
+            .filter(|at| range.start < *at && *at < range.end),
+        );
     }
-    cuts.extend(delimiters.iter().flat_map(|range| [range.start, range.end]).filter(|at| range.start < *at && *at < range.end));
+    cuts.extend(
+        delimiters
+            .iter()
+            .flat_map(|range| [range.start, range.end])
+            .filter(|at| range.start < *at && *at < range.end),
+    );
     cuts.sort_unstable();
     cuts.dedup();
     let mut first = None;
@@ -139,12 +150,21 @@ fn text_color_feedback(
         if decorations.iter().any(|d| {
             d.open.start <= part.start && part.end <= d.open.end
                 || d.close.start <= part.start && part.end <= d.close.end
-        }) || delimiters.iter().any(|range| range.start <= part.start && part.end <= range.end) {
+        }) || delimiters
+            .iter()
+            .any(|range| range.start <= part.start && part.end <= range.end)
+        {
             continue;
         }
-        let color = decorations.iter().rev().find(|d| {
-            d.format == Format::TextColor && d.content().start <= part.start && part.end <= d.content().end
-        }).and_then(|d| d.color);
+        let color = decorations
+            .iter()
+            .rev()
+            .find(|d| {
+                d.format == Format::TextColor
+                    && d.content().start <= part.start
+                    && part.end <= d.content().end
+            })
+            .and_then(|d| d.color);
         any |= color.is_some();
         if let Some(previous) = first {
             mixed |= previous != color;
@@ -401,7 +421,8 @@ impl SourcePresentation {
                         && selection.range().end <= d.close.end
                 })
                 .and_then(|d| d.color);
-            let (state, color) = text_color_feedback(range, &syntax.decorations, &syntax.delimiters);
+            let (state, color) =
+                text_color_feedback(range, &syntax.decorations, &syntax.delimiters);
             feedback.states[7] = state;
             feedback.text_color = color;
         }
@@ -483,14 +504,26 @@ impl SourcePresentation {
             Format::HighlightColor => 6,
             _ => return,
         };
-        if self.formats.feedback.as_ref().is_none_or(|f| !f.enabled[ix]) || self.is_composing() {
+        if self
+            .formats
+            .feedback
+            .as_ref()
+            .is_none_or(|f| !f.enabled[ix])
+            || self.is_composing()
+        {
             return;
         }
         let feedback = self.formats.feedback.as_ref().unwrap();
         let initial = if format == Format::TextColor {
-            feedback.text_color.map_or(cx.theme().foreground, |color| gpui_kit::rgba(color).into())
+            feedback
+                .text_color
+                .map_or(cx.theme().foreground, |color| gpui_kit::rgba(color).into())
         } else {
-            feedback.color.map_or(cx.theme().primary.opacity(0.5), |color| gpui_kit::rgba(color).into())
+            feedback
+                .color
+                .map_or(cx.theme().primary.opacity(0.5), |color| {
+                    gpui_kit::rgba(color).into()
+                })
         };
         let picker = cx.new(|cx| ColorPickerState::new(window, cx).default_value(initial));
         picker.read(cx).focus_handle(cx).focus(window, cx);
