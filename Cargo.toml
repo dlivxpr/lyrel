@@ -157,7 +157,7 @@ image = "0.25"
 
 # The published transport shares gpui-pre-http-client types with Fast through Kit.
 # Its library name is `reqwest_client`; it owns its Tokio runtime.
-gpui-pre-reqwest-client = "=0.3.11"
+gpui-pre-reqwest-client = "=0.3.12"
 ureq = { version = "3", default-features = false, features = ["rustls", "win-system-proxy", "socks-proxy"] }
 
 # See `[workspace.dependencies]`: the pin is shared with lyrel-cli, which parses
@@ -312,7 +312,7 @@ version = "0.3.1"
 
 [workspace.dependencies]
 # The public facade selects Fast consistently for component, base, assets and platform.
-gpui-kit = { version = "=0.9.0", features = ["gpui-fast"] }
+gpui-kit = { version = "=0.9.1", features = ["gpui-fast"] }
 
 # 正式 Rio VT parser + grid 同时供 GUI 镜像、CLI capture 和 daemon 图片状态使用。
 # 共享版本保证三个消费者的光标与字符单元语义一致；PTY 仍由 portable-pty 驱动。
