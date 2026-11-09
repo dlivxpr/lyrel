@@ -2944,7 +2944,9 @@ impl Render for SourcePresentation {
                                             .dropdown_menu(move |menu, _, cx| {
                                                 let menu = menu.action_context(focus.clone());
                                                 match view.upgrade() {
-                                                    Some(view) => view.update(cx, |view, cx| view.table_menu(menu, cx)),
+                                                    Some(view) => view.update(cx, |view, cx| {
+                                                        view.table_menu(menu, cx)
+                                                    }),
                                                     None => menu,
                                                 }
                                             }),

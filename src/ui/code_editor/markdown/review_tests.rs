@@ -871,15 +871,22 @@ fn final_review_format_nested_delimiters_and_underscore_toggle(cx: &mut TestAppC
     context.update(|window, cx| window.click("markdown-format-menu", cx));
     context.run_until_parked();
     context.update(|window, cx| {
-        assert_eq!(window.find_by_label(crate::ui::i18n::t(
-            crate::ui::i18n::L10nKey::MarkdownFormatItalic,
-        )).checked(), Some(true));
+        assert_eq!(
+            window
+                .find_by_label(crate::ui::i18n::t(
+                    crate::ui::i18n::L10nKey::MarkdownFormatItalic,
+                ))
+                .checked(),
+            Some(true)
+        );
         window.press("escape", cx);
     });
     context.run_until_parked();
     context.update(|window, cx| window.press("secondary-i", cx));
     assert_eq!(bytes(&view, &context), source.as_bytes());
-    view.read_with(&context, |view, _| assert_eq!(view.selection().range(), 0..8));
+    view.read_with(&context, |view, _| {
+        assert_eq!(view.selection().range(), 0..8)
+    });
     context.dispatch_action(gpui_kit::component::input::Undo);
     assert_eq!(bytes(&view, &context), b"**_bold_** and __strong__\n");
     context.dispatch_action(gpui_kit::component::input::Undo);

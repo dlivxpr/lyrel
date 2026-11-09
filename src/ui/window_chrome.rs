@@ -624,10 +624,13 @@ mod gpui_tests {
         // input() probe remains appropriate for duplicate/hidden-tab negatives.
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
         loop {
-            let remaining = deadline.checked_duration_since(std::time::Instant::now())
+            let remaining = deadline
+                .checked_duration_since(std::time::Instant::now())
                 .expect("the dispatched Input frame did not arrive before its deadline");
             stream.set_read_timeout(Some(remaining)).unwrap();
-            match ClientMsg::read(stream).expect("the dispatched key must reach the pane connection") {
+            match ClientMsg::read(stream)
+                .expect("the dispatched key must reach the pane connection")
+            {
                 ClientMsg::Input(bytes) => return bytes,
                 ClientMsg::Resize(_) => continue,
                 other => panic!("unexpected frame while awaiting dispatched Input: {other:?}"),

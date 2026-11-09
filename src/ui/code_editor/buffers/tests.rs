@@ -3154,12 +3154,20 @@ fn markdown_embed_fragment_source_history_and_host_roundtrip(cx: &mut TestAppCon
     wait_until(&mut context, |cx| {
         cx.update(|window, cx| {
             window.render_frame(cx);
-            content_id = window.find_all_by_label(t(L10nKey::MarkdownEmbedReadonly))
+            content_id = window
+                .find_all_by_label(t(L10nKey::MarkdownEmbedReadonly))
                 .into_iter()
-                .find(|content| content.value().is_some_and(|value| value.contains("Visible fragment")))
+                .find(|content| {
+                    content
+                        .value()
+                        .is_some_and(|value| value.contains("Visible fragment"))
+                })
                 .and_then(|content| content.path().last().cloned());
             content_id.as_ref().is_some_and(|id| {
-                !window.within(id.clone()).find_all_by_label(t(L10nKey::MarkdownEmbedCycle)).is_empty()
+                !window
+                    .within(id.clone())
+                    .find_all_by_label(t(L10nKey::MarkdownEmbedCycle))
+                    .is_empty()
             })
         })
     });
@@ -3171,7 +3179,10 @@ fn markdown_embed_fragment_source_history_and_host_roundtrip(cx: &mut TestAppCon
         assert!(!value.contains("Hidden"));
         assert!(!value.contains("Excluded"));
         assert_eq!(
-            window.within(content_id.clone()).find_by_label(t(L10nKey::MarkdownReferenceMissing)).label(),
+            window
+                .within(content_id.clone())
+                .find_by_label(t(L10nKey::MarkdownReferenceMissing))
+                .label(),
             Some(t(L10nKey::MarkdownReferenceMissing))
         );
         window.click(content_id.clone(), cx);
@@ -3179,8 +3190,12 @@ fn markdown_embed_fragment_source_history_and_host_roundtrip(cx: &mut TestAppCon
         assert!(view.read(cx).focus_handle(cx).is_focused(window));
     });
     context.update(|window, cx| {
-        let source_id = window.find_by_label(t(L10nKey::MarkdownEmbedSource))
-            .path().last().cloned().expect("embed source button identity");
+        let source_id = window
+            .find_by_label(t(L10nKey::MarkdownEmbedSource))
+            .path()
+            .last()
+            .cloned()
+            .expect("embed source button identity");
         window.click(source_id, cx);
     });
     view.read_with(&context, |view, _| {
