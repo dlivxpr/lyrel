@@ -3,10 +3,9 @@ use super::Selection;
 use super::consumer_support::settle_live_geometry;
 #[cfg(feature = "native-markdown-tests")]
 use super::consumer_support::start_in_source;
-use gpui_kit::{
-    VisualContext as _,
-    test::{TestEventExt as _, TestQueryExt as _, TestWindowExt as _},
-};
+#[cfg(feature = "native-markdown-tests")]
+use gpui_kit::VisualContext as _;
+use gpui_kit::test::{TestEventExt as _, TestQueryExt as _, TestWindowExt as _};
 #[cfg(feature = "native-markdown-tests")]
 #[path = "tables/presentation_tests.rs"]
 mod table_presentation;
