@@ -9,17 +9,37 @@ use gpui_kit::{Action, App, AppContext as _, Context, Window};
 pub(in super::super) struct State {
     custom: Option<CustomColor>,
     feedback: Option<Feedback>,
-    syntax: Option<Syntax>,
 }
 // Immutable positioned parse cache, invalidated from the owning document. It
 // cannot accept text input, save, or retain independent undo history.
-struct Syntax {
-    revision: u64,
-    grammar: super::super::super::mdx::Grammar,
-    source: String,
-    root: Option<markdown::mdast::Node>,
-    decorations: Vec<super::Decoration>,
-    coverage: Vec<(Format, std::ops::Range<usize>)>,
+pub(in crate::ui::code_editor::markdown) struct Syntax {
+    pub revision: u64,
+    pub grammar: super::super::super::mdx::Grammar,
+    pub source: String,
+    pub root: markdown::mdast::Node,
+    pub decorations: Vec<super::Decoration>,
+    pub coverage: Vec<(Format, std::ops::Range<usize>)>,
+}
+impl Syntax {
+    pub(in crate::ui::code_editor::markdown) fn new(
+        source: &str,
+        root: markdown::mdast::Node,
+        revision: u64,
+        grammar: super::super::super::mdx::Grammar,
+    ) -> Self {
+        let decorations = decorations(source, &root);
+        Self::from_parts(source, root, revision, grammar, decorations)
+    }
+    pub(in crate::ui::code_editor::markdown) fn from_parts(
+        source: &str,
+        root: markdown::mdast::Node,
+        revision: u64,
+        grammar: super::super::super::mdx::Grammar,
+        decorations: Vec<super::Decoration>,
+    ) -> Self {
+        let coverage = super::coverage(&root, &decorations);
+        Self { revision, grammar, source: source.into(), root, decorations, coverage }
+    }
 }
 struct Feedback {
     revision: u64,
@@ -61,33 +81,11 @@ const HIGHLIGHT_COLORS: [(L10nKey, u32); 7] = [
 ];
 
 impl SourcePresentation {
-    fn refresh_format_syntax(&mut self, cx: &App) {
+    pub(in crate::ui::code_editor::markdown) fn format_syntax(&self, cx: &App) -> Option<&Syntax> {
         let doc = self.document.read(cx);
-        if self
-            .formats
-            .syntax
-            .as_ref()
-            .is_some_and(|s| s.revision == doc.revision() && s.grammar == doc.grammar())
-        {
-            return;
-        }
-        let source = doc.source().to_string();
-        let root = super::super::super::parser::parse(&source, doc.grammar(), true).ok();
-        let decorations = root
-            .as_ref()
-            .map_or_else(Vec::new, |root| decorations(&source, root));
-        let coverage = root
-            .as_ref()
-            .map_or_else(Vec::new, |root| super::coverage(root, &decorations));
-        self.formats.syntax = Some(Syntax {
-            revision: doc.revision(),
-            grammar: doc.grammar(),
-            source,
-            root,
-            decorations,
-            coverage,
-        });
-        self.formats.feedback = None;
+        self.projection.syntax.as_deref().filter(|syntax| {
+            syntax.revision == doc.revision() && syntax.grammar == doc.grammar()
+        })
     }
 
     pub(in super::super) fn plan_format(
@@ -99,11 +97,23 @@ impl SourcePresentation {
         if self.state.selection.range().start == self.state.selection.range().end {
             return None;
         }
-        self.refresh_format_syntax(cx);
-        let syntax = self.formats.syntax.as_ref()?;
+        let bounded;
+        let syntax = if let Some(syntax) = self.format_syntax(cx) {
+            syntax
+        } else {
+            let doc = self.document.read(cx);
+            // Explicit commands may inspect a bounded document; render never parses.
+            if doc.source().len() > 32 * 1024 {
+                return None;
+            }
+            let source = doc.source().to_string();
+            let root = super::super::super::parser::parse(&source, doc.grammar(), true).ok()?;
+            bounded = Syntax::new(&source, root, doc.revision(), doc.grammar());
+            &bounded
+        };
         super::edit(
             &syntax.source,
-            syntax.root.as_ref()?,
+            &syntax.root,
             self.state.selection,
             format,
             color,
@@ -127,12 +137,10 @@ impl SourcePresentation {
             });
             return;
         }
-        self.refresh_format_syntax(cx);
-        let syntax = self
-            .formats
-            .syntax
-            .as_ref()
-            .expect("format analysis installed");
+        let Some(syntax) = self.format_syntax(cx) else {
+            self.formats.feedback = None;
+            return;
+        };
         if self
             .formats
             .feedback
@@ -148,7 +156,8 @@ impl SourcePresentation {
             states: [0; 7],
             color: None,
         };
-        if let Some(root) = &syntax.root {
+        {
+            let root = &syntax.root;
             let range = trim(&syntax.source, selection.range());
             let prose = eligible(&syntax.source, root, &range, Format::Bold);
             feedback.enabled.fill(prose);

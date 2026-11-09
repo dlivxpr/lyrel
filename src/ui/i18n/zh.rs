@@ -1690,6 +1690,9 @@ pub fn translate_zh(key: L10nKey) -> Option<&'static str> {
         L10nKey::MarkdownCodePlain => "纯文本",
         L10nKey::MarkdownCodeCopy => "复制代码",
         L10nKey::MarkdownCopyMarkdownOnly => "复制为 Markdown",
+        L10nKey::MarkdownCopyContents => "复制全文",
+        L10nKey::MarkdownCopyContentsMarkdown => "复制全文为 Markdown",
+        L10nKey::MarkdownSlashBlockUnavailable => "表格单元格内不可用",
         L10nKey::MarkdownClipboardPlainFallback => "已复制 Markdown；富文本剪贴板格式不可用。",
         L10nKey::MarkdownClipboardRichUnconfirmed => {
             "已复制 Markdown；富文本格式取决于系统剪贴板支持和目标应用。"

@@ -64,7 +64,7 @@ mod mermaid_authoring;
 #[path = "properties.rs"]
 pub(super) mod properties;
 #[path = "reorder.rs"]
-mod reorder;
+pub(super) mod reorder;
 #[path = "spelling.rs"]
 mod spelling;
 #[path = "tools.rs"]
@@ -141,6 +141,8 @@ pub(crate) struct SourcePresentation {
     selection_notification: bool,
     assets: assets::InsertionState,
     clipboard_status: Option<SharedString>,
+    clipboard_generation: u64,
+    clipboard_task: Option<Task<()>>,
     references: references::State,
     slash: slash::State,
     embeds: embeds::State,
@@ -221,6 +223,8 @@ impl SourcePresentation {
                 this.cancel_reorder(cx);
                 this.spelling.invalidate();
                 this.pointer_link = None;
+                this.invalidate_link_hover();
+                this.rebase_embed_controls(transaction);
                 Self::rebase_link_destination(
                     &mut this.link_destination,
                     this.state.id,
@@ -350,6 +354,8 @@ impl SourcePresentation {
             selection_notification: false,
             assets: assets::InsertionState::default(),
             clipboard_status: None,
+            clipboard_generation: 0,
+            clipboard_task: None,
             references: references::State::default(),
             slash: slash::State::default(),
             embeds: embeds::State::default(),
@@ -439,6 +445,7 @@ impl SourcePresentation {
                 self.document.read(cx).revision(),
                 self.document.read(cx).grammar(),
             ));
+            self.schedule_parse(cx);
         }
         self.tools_changed(cx);
         self.reveal_caret = true;
@@ -447,9 +454,10 @@ impl SourcePresentation {
         cx.notify();
     }
     fn schedule_parse(&mut self, cx: &mut Context<Self>) {
-        if !self.live
-            && self.projection.revision == self.document.read(cx).revision()
+        if self.projection.revision == self.document.read(cx).revision()
             && self.projection.grammar == self.document.read(cx).grammar()
+            && self.projection.syntax.is_some()
+            && self.parse_pending.is_none()
         {
             return;
         }
@@ -3437,6 +3445,8 @@ impl Render for SourcePresentation {
                     cx.listener(|this, _: &actions::Copy, window, cx| this.copy(false, window, cx)),
                 )
                 .on_action(cx.listener(|this, _: &clipboard::CopyMarkdownOnly, window, cx| this.copy_markdown(false, true, window, cx)))
+                .on_action(cx.listener(|this, _: &clipboard::CopyContents, window, cx| this.copy_contents(false, window, cx)))
+                .on_action(cx.listener(|this, _: &clipboard::CopyContentsMarkdown, window, cx| this.copy_contents(true, window, cx)))
                 .on_action(
                     cx.listener(|this, _: &actions::Cut, window, cx| this.copy(true, window, cx)),
                 )

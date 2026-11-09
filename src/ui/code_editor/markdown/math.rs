@@ -27,24 +27,15 @@ impl Formula {
     }
     pub(super) fn insertion_offset(&self) -> usize {
         let opening = self.raw.bytes().take_while(|byte| *byte == b'$').count();
-        let start = if self.block {
-            self.raw.find('\n').map_or(opening, |at| at + 1)
+        let first_end = self.raw.find('\n').unwrap_or(self.raw.len());
+        let fence_line = self.block && self.raw[opening..first_end].trim().is_empty();
+        let start = if fence_line {
+            (first_end + usize::from(first_end < self.raw.len())).min(self.raw.len())
         } else {
             opening
         };
-        let end = if self.block {
-            self.raw
-                .rsplit_once('\n')
-                .and_then(|(before, last)| {
-                    let closing = last.trim();
-                    (closing.len() >= opening && closing.bytes().all(|byte| byte == b'$'))
-                        .then_some(before.len())
-                })
-                .unwrap_or(self.raw.len())
-                .max(start)
-        } else {
-            self.raw.trim_end_matches('$').len().max(start)
-        };
+        let closing_end = self.raw.trim_end_matches(char::is_whitespace).len();
+        let end = self.raw[..closing_end].trim_end_matches('$').len().max(start);
         let body = &self.raw[start..end];
         start + body.len() - body.trim_start_matches(char::is_whitespace).len()
     }

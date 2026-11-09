@@ -299,12 +299,14 @@ impl SourcePresentation {
         for row in rows {
             let edit_key = row.clone();
             let edit_value = row.clone();
+            let edit_blank = row.clone();
             let context_row = row.clone();
             let view = cx.entity().downgrade();
             let revision = self.projection.revision;
             panel = panel.child(
                 gpui_kit::component::h_flex()
                     .gap_2()
+                    .w_full()
                     .min_w_0()
                     .child(
                         Button::new(("property-inline-key", row.key.start))
@@ -333,6 +335,22 @@ impl SourcePresentation {
                                         window,
                                         cx,
                                     );
+                                    if let Some(draft) = &this.properties.draft {
+                                        draft.value.update(cx, |input, cx| input.focus(window, cx));
+                                    }
+                                }
+                            })),
+                    )
+                    .child(
+                        Button::new(SharedString::from(format!("markdown-property-space-{}", row.key.start)))
+                            .small()
+                            .ghost()
+                            .flex_1()
+                            .label(" ")
+                            .accessibility_label(t(L10nKey::EditorPropertyEdit))
+                            .on_click(cx.listener(move |this, _, window, cx| {
+                                if this.document.read(cx).revision() == revision {
+                                    this.edit_property(Target::Property(edit_blank.clone()), window, cx);
                                     if let Some(draft) = &this.properties.draft {
                                         draft.value.update(cx, |input, cx| input.focus(window, cx));
                                     }

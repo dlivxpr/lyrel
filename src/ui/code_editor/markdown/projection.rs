@@ -985,6 +985,8 @@ pub(super) struct Projection {
     pub mdx: super::mdx::Index,
     pub properties: super::source::properties::Index,
     pub(super) block_index: super::blocks::Index,
+    pub(super) syntax: Option<std::sync::Arc<super::source::formats::Syntax>>,
+    pub(super) reorder_inventory: Option<std::sync::Arc<super::source::reorder::Inventory>>,
     pub error: Option<String>,
     live: bool,
     next_id: u64,
@@ -1012,10 +1014,16 @@ impl Projection {
     }
     pub fn source(source: &Rope, revision: u64, grammar: super::mdx::Grammar) -> Self {
         let text = source.to_string();
-        Self::parse(&text, revision, false, grammar)
+        Self::parse_fragment(&text, revision, false, true, grammar, false)
     }
     pub fn parse(source: &str, revision: u64, live: bool, grammar: super::mdx::Grammar) -> Self {
-        Self::parse_fragment(source, revision, live, true, grammar)
+        let mut projection = Self::parse_fragment(source, revision, live, true, grammar, true);
+        if !live {
+            projection.syntax = super::parser::parse(source, grammar, true).ok().map(|root| {
+                std::sync::Arc::new(super::source::formats::Syntax::new(source, root, revision, grammar))
+            });
+        }
+        projection
     }
     fn parse_fragment(
         source: &str,
@@ -1023,6 +1031,7 @@ impl Projection {
         live: bool,
         document_start: bool,
         grammar: super::mdx::Grammar,
+        retain_syntax: bool,
     ) -> Self {
         let mut leaves = Vec::new();
         let mut links = super::links::Index::default();
@@ -1030,6 +1039,8 @@ impl Projection {
         let mut properties = super::source::properties::Index::default();
         let mut block_index = super::blocks::Index::default();
         let mut error = None;
+        let mut syntax = None;
+        let mut reorder_inventory = None;
         if live {
             if super::regions::unfinished_metadata(source, document_start) {
                 let mut leaf = Leaf::new(0..source.len(), Kind::Metadata);
@@ -1044,6 +1055,11 @@ impl Projection {
                         mdx = super::mdx::Index::from_ast(source, &root);
                         properties = super::source::properties::Index::from_ast(source, &root);
                         block_index = super::blocks::Index::from_ast(source, &root);
+                        if retain_syntax {
+                            reorder_inventory = Some(std::sync::Arc::new(super::source::reorder::Inventory::new(
+                                source, &root, properties.reorder_ranges(),
+                            )));
+                        }
                         Self::project_nodes(
                             source,
                             root.children().map_or(&[], Vec::as_slice),
@@ -1069,6 +1085,11 @@ impl Projection {
                                 next += 1;
                             }
                             leaf.decorate_formats(&active);
+                        }
+                        if retain_syntax {
+                            syntax = Some(std::sync::Arc::new(super::source::formats::Syntax::from_parts(
+                                source, root, revision, grammar, decorations,
+                            )));
                         }
                     }
                     Err(reason) => {
@@ -1114,6 +1135,8 @@ impl Projection {
             mdx,
             properties,
             block_index,
+            syntax,
+            reorder_inventory,
             error,
             live,
             format_tint: None,
@@ -1887,7 +1910,7 @@ impl Projection {
             .unwrap();
         }
         let parsed =
-            Self::parse_fragment(&fragment, transaction.revision(), true, false, self.grammar);
+            Self::parse_fragment(&fragment, transaction.revision(), true, false, self.grammar, false);
         if parsed.error.is_some() {
             return false;
         }
@@ -1952,9 +1975,21 @@ impl Projection {
         if transaction.edits.is_empty() {
             return;
         }
+        self.syntax = None;
+        self.reorder_inventory = None;
         // Absolute destinations and definitions must never be rebased against a
         // fragment. The revision-checked background parse restores this index.
-        self.links = super::links::Index::default();
+        let embeds = self.links.embeds.drain(..).filter_map(|mut reference| {
+            let source = transaction.map_untouched_range(reference.source.clone())?;
+            let delta = source.start as isize - reference.source.start as isize;
+            reference.source = source;
+            reference.label = reference.label.start.checked_add_signed(delta)?
+                ..reference.label.end.checked_add_signed(delta)?;
+            reference.destination = reference.destination.start.checked_add_signed(delta)?
+                ..reference.destination.end.checked_add_signed(delta)?;
+            Some(reference)
+        }).collect();
+        self.links = super::links::Index { embeds, ..Default::default() };
         self.properties = super::source::properties::Index::default();
         self.mdx.rebase(transaction, source);
         self.block_index.rebase(transaction);
@@ -2064,6 +2099,7 @@ impl Projection {
                 local_live,
                 start == 0,
                 self.grammar,
+                false,
             )
             .leaves;
             for leaf in &mut leaves {

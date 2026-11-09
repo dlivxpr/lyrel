@@ -3,7 +3,7 @@ use super::{FollowLink, SourcePresentation};
 use crate::ui::app::test_window::harness_with_tabs;
 use crate::ui::code_editor::markdown::{Selection, projection::Kind};
 use gpui_kit::test::{TestEventExt as _, TestWindowExt as _};
-use gpui_kit::{Entity, Focusable as _, TestAppContext, VisualContext as _, VisualTestContext};
+use gpui_kit::{AppContext as _, Entity, Focusable as _, TestAppContext, VisualContext as _, VisualTestContext};
 use std::time::{Duration, Instant};
 
 pub(super) fn native_cases() -> [crate::native_markdown::Case; 3] {
@@ -71,9 +71,12 @@ macro_rules! fixture {
     ($cx:expr, $source:expr) => {
         fixture!($cx, $source, false)
     };
-    ($cx:expr, $source:expr, $local:expr) => {{
+    ($cx:expr, $source:expr, $local:expr) => {
+        fixture!($cx, $source, $local, "review.md")
+    };
+    ($cx:expr, $source:expr, $local:expr, $name:expr) => {{
         let directory = crate::ui::code_editor::test_host::canonical_tempdir();
-        let path = directory.path().join("review.md");
+        let path = directory.path().join($name);
         std::fs::write(&path, $source).unwrap();
         let (app, mut context, streams) = harness_with_tabs($cx, 1);
         let host = crate::ui::code_editor::test_host::FileHost::new(lyrel_core::host::HostId(2041));
@@ -187,6 +190,11 @@ fn review_table_copy_keeps_metadata_codec_selection_and_history(cx: &mut TestApp
     let at = normalized.find("two").unwrap();
     select(&view, &mut context, at, at);
     context.dispatch_action(crate::ui::code_editor::markdown::tables::CopyTableAsMarkdown);
+    until(&mut context, |context| context.update(|_, cx| {
+        cx.read_from_clipboard().and_then(|item| item.text()).is_some_and(|text| {
+            text.starts_with("<!-- table:striped cols=120,240 -->")
+        })
+    }));
     context.update(|_, cx| {
         assert_eq!(
             cx.read_from_clipboard().unwrap().text().unwrap(),
@@ -425,6 +433,13 @@ fn review_link_hover_shows_host_excerpt_without_editing_source_and_dismisses(
         assert!(window.find("markdown-link-preview").visible());
     });
     assert_eq!(bytes(&view, &context), source.as_bytes());
+    select(&view, &mut context, source.len() - 1, source.len() - 1);
+    context.update(|window, cx| window.input("X", cx));
+    until(&mut context, |context| context.update(|window, _| {
+        window.try_find("markdown-link-preview").is_none()
+    }));
+    context.dispatch_action(gpui_kit::component::input::Undo);
+    settle(&view, &mut context);
     context.update(|window, cx| {
         window.pointer_move(
             gpui_kit::point(gpui_kit::px(1.), gpui_kit::px(1.)),
@@ -850,4 +865,197 @@ fn final_review_format_preserves_link_destination_and_reference_label(cx: &mut T
     select(&view, &mut context, 1, 5);
     context.update(|window, cx| window.press("secondary-b", cx));
     assert_eq!(bytes(&view, &context), b"[**body**](https://example.com) and [other][label]\n\n[label]: https://example.org\n");
+}
+
+#[gpui_kit::test]
+fn final_review_copy_contents_with_empty_selection_and_stale_cut(cx: &mut TestAppContext) {
+    use super::clipboard::{CopyContents, CopyContentsMarkdown};
+    let source = "9. **bold**\r\n\r\n| A | B |\n| --- | --- |\n| x | y |\n";
+    let (_dir, _path, _app, mut context, _streams, view) = fixture!(cx, source);
+    select(&view, &mut context, 0, 0);
+    context.dispatch_action(CopyContents);
+    until(&mut context, |context| context.update(|_, cx| {
+        cx.read_from_clipboard().is_some_and(|item| {
+            item.text().as_deref() == Some(source) && item.metadata().is_some()
+        })
+    }));
+    context.update(|_, cx| {
+        let item = cx.read_from_clipboard().unwrap();
+        let html = item.metadata().unwrap();
+        assert!(html.contains("<strong>bold</strong>"));
+        assert!(html.contains("<table>"));
+        assert_eq!(view.read(cx).selection(), Selection::caret(0));
+    });
+    context.dispatch_action(CopyContentsMarkdown);
+    until(&mut context, |context| context.update(|_, cx| {
+        cx.read_from_clipboard().is_some_and(|item| {
+            item.text().as_deref() == Some(source) && item.metadata().is_none()
+        })
+    }));
+    let bold = source.find("bold").unwrap();
+    select(&view, &mut context, bold, bold + 4);
+    context.update(|window, cx| {
+        cx.write_to_clipboard(gpui_kit::ClipboardItem::new_string("sentinel".into()));
+        window.press("secondary-x", cx);
+        window.input("NEW", cx);
+    });
+    settle(&view, &mut context);
+    assert_eq!(bytes(&view, &context), source.replacen("bold", "NEW", 1).as_bytes());
+    context.update(|_, cx| {
+        assert_eq!(cx.read_from_clipboard().unwrap().text().as_deref(), Some("sentinel"));
+    });
+    context.dispatch_action(gpui_kit::component::input::Undo);
+    assert_eq!(bytes(&view, &context), source.as_bytes());
+}
+
+#[gpui_kit::test]
+fn final_review_nested_fence_source_return_targets_editable_body(cx: &mut TestAppContext) {
+    use crate::ui::i18n::{L10nKey, t};
+    use gpui_kit::test::TestQueryExt as _;
+    let source = "> ```rust\n> body\n> ```\n\nkeep\n";
+    let (_dir, _path, _app, mut context, _streams, view) = fixture!(cx, source);
+    for key in [L10nKey::MarkdownCodeSource, L10nKey::MarkdownCodeLive] {
+        context.update(|window, cx| {
+            let button = window.find_by_label(t(key)).bounds().center();
+            window.pointer_down(button, gpui_kit::MouseButton::Left, cx);
+            window.pointer_up(button, gpui_kit::MouseButton::Left, cx);
+        });
+        context.run_until_parked();
+    }
+    view.read_with(&context, |view, _| assert_eq!(view.selection().head(), source.find("body").unwrap()));
+    context.update(|window, cx| window.input("X", cx));
+    assert_eq!(bytes(&view, &context), b"> ```rust\n> Xbody\n> ```\n\nkeep\n");
+    context.dispatch_action(gpui_kit::component::input::Undo);
+    assert_eq!(bytes(&view, &context), source.as_bytes());
+}
+
+#[gpui_kit::test]
+fn final_review_single_line_mdx_formula_entry_and_top_boundary(cx: &mut TestAppContext) {
+    let source = "$$x$$\n\nkeep\n";
+    let (_dir, _path, _app, mut context, _streams, view) = fixture!(cx, source, false, "formula.mdx");
+    until(&mut context, |context| context.update(|window, _| {
+        window.try_find("markdown-math-ready-x").is_some()
+    }));
+    context.update(|window, cx| window.click("markdown-math-ready-x", cx));
+    until(&mut context, |context| context.update(|window, _| {
+        window.try_find("markdown-formula-editor").is_some()
+    }));
+    context.update(|window, cx| {
+        window.press("home", cx);
+        window.press("up", cx);
+        assert!(window.find("markdown-formula-editor").visible());
+        window.press("left", cx);
+        assert!(window.find("markdown-formula-editor").visible());
+    });
+    context.dispatch_action(super::math_edit::EditFormulaSource);
+    context.run_until_parked();
+    view.read_with(&context, |view, _| {
+        assert!(!view.is_live());
+        assert_eq!(view.selection().head(), 2);
+    });
+    context.update(|window, cx| window.input("Y", cx));
+    assert_eq!(bytes(&view, &context), b"$$Yx$$\n\nkeep\n");
+}
+
+#[gpui_kit::test]
+fn final_review_property_row_whitespace_opens_value_form(cx: &mut TestAppContext) {
+    let source = "key:: value\n\nkeep\n";
+    let (_dir, _path, _app, mut context, _streams, view) = fixture!(cx, source);
+    context.update(|window, cx| window.click("markdown-property-space-0", cx));
+    context.run_until_parked();
+    context.update(|window, cx| {
+        assert!(window.find("markdown-property-value").visible());
+        window.press("secondary-a", cx);
+        window.input("changed", cx);
+        window.click("markdown-property-apply", cx);
+    });
+    context.run_until_parked();
+    assert_eq!(bytes(&view, &context), b"key:: changed\n\nkeep\n");
+    context.dispatch_action(gpui_kit::component::input::Undo);
+    assert_eq!(bytes(&view, &context), source.as_bytes());
+}
+
+#[gpui_kit::test]
+fn final_review_table_slash_excludes_block_insertion_and_keeps_inline_commands(cx: &mut TestAppContext) {
+    let source = "| A | B |\n| --- | --- |\n| value | other |\n";
+    let (_dir, _path, _app, mut context, _streams, view) = fixture!(cx, source);
+    let at = source.find("value").unwrap();
+    select(&view, &mut context, at, at + 5);
+    context.update(|window, cx| window.input("/code", cx));
+    until(&mut context, |context| context.update(|window, _| {
+        window.try_find("markdown-slash-entry-code").is_some()
+    }));
+    context.update(|window, cx| {
+        let entry = window.find("markdown-slash-entry-code");
+        assert!(entry.label().unwrap().contains(crate::ui::i18n::t(
+            crate::ui::i18n::L10nKey::MarkdownSlashBlockUnavailable)));
+        window.press("enter", cx);
+    });
+    assert_eq!(bytes(&view, &context), source.replacen("value", "/code", 1).as_bytes());
+    select(&view, &mut context, at, at + 5);
+    context.update(|window, cx| window.input("/table", cx));
+    until(&mut context, |context| context.update(|window, _| {
+        window.try_find("markdown-slash-entry-table").is_some()
+    }));
+    context.update(|window, cx| window.press("enter", cx));
+    assert_eq!(bytes(&view, &context), source.replacen("value", "/table", 1).as_bytes());
+    select(&view, &mut context, at, at + 6);
+    context.update(|window, cx| window.input("/bold", cx));
+    until(&mut context, |context| context.update(|window, _| {
+        window.try_find("markdown-slash-entry-bold").is_some()
+    }));
+    context.update(|window, cx| window.press("enter", cx));
+    assert_eq!(bytes(&view, &context), source.replacen("value", "****", 1).as_bytes());
+}
+
+#[gpui_kit::test]
+fn final_review_duplicate_embeds_keep_focus_and_scroll_after_shared_prefix_edit(cx: &mut TestAppContext) {
+    let source = "before\n\n![[target.md]]\n\n![[target.md]]\n";
+    let (dir, _path, _app, mut context, _streams, view) = fixture!(cx, source, true);
+    std::fs::write(dir.path().join("target.md"), "a long readonly paragraph\n\n".repeat(80)).unwrap();
+    until(&mut context, |context| context.update(|window, _| {
+        window.try_find("markdown-embed-flow-root-1").is_some()
+            && window.try_find("markdown-embed-flow-root-2").is_some()
+    }));
+    let sibling = context.update(|_, cx| {
+        let document = view.read(cx).document().clone();
+        cx.new(|cx| SourcePresentation::new(document, true, cx))
+    });
+    let relative = context.update(|window, cx| {
+        window.click("markdown-embed-content-1", cx);
+        window.scroll("markdown-embed-content-1", gpui_kit::ScrollDelta::Pixels(
+            gpui_kit::point(gpui_kit::px(0.), gpui_kit::px(-140.))), cx);
+        assert_eq!(window.find("markdown-embed-content-1").focused(), Some(true));
+        let content = window.find("markdown-embed-content-1").bounds();
+        let flow = window.find("markdown-embed-flow-root-1").bounds();
+        assert!(flow.top() < content.top());
+        flow.top() - content.top()
+    });
+    sibling.update_in(&mut context, |sibling, window, cx| {
+        sibling.command(super::Command::Replace {
+            range: 0..0,
+            text: "inserted before both embeds\n\n".into(),
+            kind: super::EditKind::Command,
+        }, window, cx);
+    });
+    settle(&view, &mut context);
+    context.update(|window, _| {
+        assert_eq!(window.find("markdown-embed-content-1").focused(), Some(true));
+        let content = window.find("markdown-embed-content-1").bounds();
+        let flow = window.find("markdown-embed-flow-root-1").bounds();
+        assert_eq!(flow.top() - content.top(), relative);
+        assert!(window.try_find("markdown-embed-content-2").is_some());
+    });
+    assert_eq!(bytes(&view, &context), format!("inserted before both embeds\n\n{source}").as_bytes());
+    sibling.update_in(&mut context, |sibling, window, cx| {
+        sibling.command(super::Command::Undo, window, cx);
+    });
+    settle(&view, &mut context);
+    context.update(|window, _| {
+        assert_eq!(window.find("markdown-embed-content-1").focused(), Some(true));
+        let content = window.find("markdown-embed-content-1").bounds();
+        let flow = window.find("markdown-embed-flow-root-1").bounds();
+        assert_eq!(flow.top() - content.top(), relative);
+    });
+    assert_eq!(bytes(&view, &context), source.as_bytes());
 }

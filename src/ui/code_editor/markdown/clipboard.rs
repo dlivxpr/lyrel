@@ -1,6 +1,6 @@
 //! Source-preserving clipboard payloads. HTML is an inert, allowlisted projection
 //! of positioned syntax, never a browser/MDX renderer or a resource loader.
-use super::super::{Command, EditKind, MarkdownDocument, Selection, parser};
+use super::super::{Command, EditKind, Selection, parser};
 use super::SourcePresentation;
 use super::formats::{self, Decoration, Format};
 use crate::ui::i18n::{L10nKey, t};
@@ -9,7 +9,7 @@ use gpui_kit::{ClipboardEntry, ClipboardItem, Context, Window};
 use markdown::mdast::Node;
 use std::ops::Range;
 
-gpui_kit::actions!(markdown_clipboard, [CopyMarkdownOnly]);
+gpui_kit::actions!(markdown_clipboard, [CopyMarkdownOnly, CopyContents, CopyContentsMarkdown]);
 
 fn escaped(text: &str, out: &mut String) {
     for ch in text.chars() {
@@ -25,10 +25,10 @@ fn escaped(text: &str, out: &mut String) {
 }
 
 /// The original line endings belong to the document, not its LF coordinates.
-fn append_source(document: &MarkdownDocument, range: Range<usize>, out: &mut String) {
-    let row = document.source().offset_to_point(range.start).row;
-    let mut endings = document.endings[row..].iter();
-    for chunk in document.source().slice(range).chunks() {
+fn append_source(source: &super::Rope, endings: &[crate::ui::editor_text::LineEnding], range: Range<usize>, out: &mut String) {
+    let row = source.offset_to_point(range.start).row;
+    let mut endings = endings[row..].iter();
+    for chunk in source.slice(range).chunks() {
         for part in chunk.split_inclusive('\n') {
             if let Some(line) = part.strip_suffix('\n') {
                 out.push_str(line);
@@ -48,7 +48,7 @@ struct Html<'a> {
     decorations: Vec<Decoration>,
     definitions: super::super::images::Definitions,
     images: &'a std::collections::HashMap<String, super::super::images::State>,
-    math: &'a super::super::math::State,
+    math: &'a std::collections::HashMap<super::super::math::Formula, super::super::math::Output>,
     properties: super::properties::Index,
 }
 impl Html<'_> {
@@ -141,7 +141,7 @@ impl Html<'_> {
                 super::super::math::Formula::from_node(node, &self.source[owner.clone()])
             {
                 if let Some(super::super::math::Output::Ready { image, .. }) =
-                    self.math.outputs.get(&formula)
+                    self.math.get(&formula)
                 {
                     if self.image(image, &formula.tex, out) {
                         return;
@@ -391,6 +391,13 @@ impl SourcePresentation {
         }
         merged
     }
+    pub(super) fn copy_contents(&mut self, plain: bool, window: &mut Window, cx: &mut Context<Self>) {
+        if self.is_composing() {
+            self.command(Command::FinishComposition, window, cx);
+        }
+        let end = self.document.read(cx).source().len();
+        self.copy_markdown_ranges(vec![0..end], false, plain, window, cx);
+    }
     pub(super) fn copy_markdown(
         &mut self,
         cut: bool,
@@ -431,44 +438,83 @@ impl SourcePresentation {
             return;
         }
         let doc = self.document.read(cx);
-        let mut text = String::new();
-        for (ix, range) in ranges.iter().enumerate() {
-            if ix != 0 {
-                text.push('\n');
-            }
-            append_source(doc, range.clone(), &mut text);
-        }
-        let html = if plain {
-            None
-        } else {
-            let source = doc.source().to_string();
-            let mut out = String::new();
-            match parser::parse(&source, doc.grammar(), true) {
-                Ok(root) => {
-                    let renderer = Html {
-                        decorations: formats::decorations(&source, &root),
-                        definitions: super::super::images::definitions(&root),
-                        images: &doc.images.states,
-                        math: &self.math,
-                        properties: super::properties::Index::from_ast(&source, &root),
-                        source: &source,
-                    };
-                    for (ix, range) in ranges.iter().enumerate() {
-                        if ix != 0 {
-                            out.push_str("<br>");
+        let source = doc.source().clone();
+        let endings = doc.endings.clone();
+        let grammar = doc.grammar();
+        let resources = doc.resources().cloned();
+        let images = doc.images.states.clone();
+        let math = self.math.outputs.clone();
+        let token = self.input_token(cx);
+        let selection = self.state.selection;
+        let extra = self.extra_selections.clone();
+        self.clipboard_generation = self.clipboard_generation.wrapping_add(1);
+        let generation = self.clipboard_generation;
+        let selected_ranges = ranges.clone();
+        self.clipboard_task = Some(cx.spawn_in(window, async move |view, cx| {
+            let (text, html) = cx.background_executor().spawn(async move {
+                let mut text = String::new();
+                for (ix, range) in selected_ranges.iter().enumerate() {
+                    if ix != 0 { text.push('\n'); }
+                    append_source(&source, &endings, range.clone(), &mut text);
+                }
+                let html = if plain { None } else {
+                    let source = source.to_string();
+                    let mut out = String::new();
+                    match parser::parse(&source, grammar, true) {
+                        Ok(root) => {
+                            let renderer = Html {
+                                decorations: formats::decorations(&source, &root),
+                                definitions: super::super::images::definitions(&root),
+                                images: &images,
+                                math: &math,
+                                properties: super::properties::Index::from_ast(&source, &root),
+                                source: &source,
+                            };
+                            for (ix, range) in selected_ranges.iter().enumerate() {
+                                if ix != 0 { out.push_str("<br>"); }
+                                renderer.node(&root, range, &mut out);
+                            }
                         }
-                        renderer.node(&root, range, &mut out);
+                        Err(_) => {
+                            out.push_str("<pre>");
+                            escaped(&text, &mut out);
+                            out.push_str("</pre>");
+                        }
                     }
+                    Some(out)
+                };
+                (text, html)
+            }).await;
+            let _ = view.update_in(cx, |view, window, cx| {
+                if view.clipboard_generation != generation {
+                    return;
                 }
-                Err(_) => {
-                    out.push_str("<pre>");
-                    escaped(&text, &mut out);
-                    out.push_str("</pre>");
+                let current_resources = view.document.read(cx).resources();
+                let same_resources = resources.as_ref().map_or(current_resources.is_none(), |expected| {
+                    expected.is_current(current_resources)
+                });
+                if view.input_token(cx) != token || view.document.read(cx).grammar() != grammar
+                    || view.state.selection != selection || view.extra_selections != extra
+                    || !same_resources || !view.focus.contains_focused(window, cx)
+                {
+                    view.clipboard_task = None;
+                    return;
                 }
-            }
-            Some(out)
-        };
-        // GPUI's in-memory test clipboard receives the same production payload;
+                view.publish_clipboard(text, html, ranges, cut, window, cx);
+                view.clipboard_task = None;
+            });
+        }));
+    }
+    fn publish_clipboard(
+        &mut self,
+        text: String,
+        html: Option<String>,
+        ranges: Vec<Range<usize>>,
+        cut: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        // Both platform adapters publish the same completed payload.
         // metadata exposes HTML to consumers without touching the user's OS clipboard.
         #[cfg(test)]
         cx.write_to_clipboard(html.as_ref().map_or_else(
@@ -562,6 +608,9 @@ impl SourcePresentation {
             Box::new(CopyMarkdownOnly),
             self.state.selection.range().is_empty() && self.extra_selections.is_empty(),
         )
+        .separator()
+        .menu(t(L10nKey::MarkdownCopyContents), Box::new(CopyContents))
+        .menu(t(L10nKey::MarkdownCopyContentsMarkdown), Box::new(CopyContentsMarkdown))
     }
 }
 

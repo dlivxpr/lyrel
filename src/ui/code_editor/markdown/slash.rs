@@ -53,6 +53,17 @@ struct Entry {
     alias: &'static str,
     operation: Operation,
 }
+impl Entry {
+    fn allowed_in_cell(&self) -> bool {
+        match self.operation {
+            Operation::Insert(text, _) => !text.contains(['\n', '|'])
+                && matches!(self.id, "bold" | "italic" | "strike" | "inline-code"
+                    | "inline-math" | "highlight" | "underline" | "link" | "wiki" | "image"),
+            Operation::Category | Operation::Date | Operation::Time => true,
+            Operation::Table | Operation::Property => false,
+        }
+    }
+}
 fn entries() -> Vec<Entry> {
     use L10nKey::*;
     let mut entries: Vec<_> = [
@@ -220,6 +231,7 @@ struct Choices {
     owner: WeakEntity<SourcePresentation>,
     generation: u64,
     flyout: bool,
+    table: bool,
 }
 impl ListDelegate for Choices {
     type Item = ListItem;
@@ -247,6 +259,12 @@ impl ListDelegate for Choices {
             Operation::Time => format!("{} ({})", t(entry.key), date_time(true)),
             _ => t(entry.key).to_owned(),
         };
+        let disabled = self.table && !entry.allowed_in_cell();
+        let label = if disabled {
+            format!("{label} · {}", t(L10nKey::MarkdownSlashBlockUnavailable))
+        } else {
+            label
+        };
         let hover_owner = self.owner.clone();
         let accept_owner = self.owner.clone();
         let generation = self.generation;
@@ -258,6 +276,7 @@ impl ListDelegate for Choices {
                 entry.id
             )))
             .accessibility_label(label.clone())
+            .disabled(disabled)
             .child(label)
             .on_mouse_enter(move |_, window, cx| {
                 let _ = hover_owner.update(cx, |view, cx| {
@@ -265,6 +284,7 @@ impl ListDelegate for Choices {
                 });
             })
             .on_mouse_down(MouseButton::Left, move |_, window, cx| {
+                if disabled { return; }
                 cx.stop_propagation();
                 let _ = accept_owner.update(cx, |view, cx| {
                     if !view.slash_current(generation, cx) {
@@ -383,6 +403,7 @@ impl SourcePresentation {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Entity<ListState<Choices>> {
+        let table = self.active_table().is_some();
         let owner = cx.weak_entity();
         let generation = self.slash.generation;
         let list = cx.new(|cx| {
@@ -392,6 +413,7 @@ impl SourcePresentation {
                     owner,
                     generation,
                     flyout,
+                    table,
                 },
                 window,
                 cx,
@@ -657,6 +679,9 @@ impl SourcePresentation {
         let Some(entry) = entry else {
             return true;
         };
+        if self.active_table().is_some() && !entry.allowed_in_cell() {
+            return true;
+        }
         match entry.operation {
             Operation::Category => {
                 if self.slash.flyout.is_none() {
@@ -732,21 +757,25 @@ impl SourcePresentation {
             self.begin_formula(selection.head(), false, window, cx);
         }
         if property {
-            // This is the same production inspector as a property click. Parse
-            // the new source first; an old frame must never supply its ranges.
-            let revision = self.document.read(cx).revision();
-            cx.defer_in(window, move |view, window, cx| {
-                if view.document.read(cx).revision() != revision || !view.focus.is_focused(window) {
-                    return;
-                }
-                let source = view.document.read(cx).source().to_string();
-                if let Ok(root) =
-                    super::super::parser::parse(&source, view.document.read(cx).grammar(), true)
-                {
-                    view.projection.properties = properties::Index::from_ast(&source, &root);
-                    view.enter_document_property(window, cx);
-                }
-            });
+            let source = self.document.read(cx).source().clone();
+            let grammar = self.document.read(cx).grammar();
+            let token = self.input_token(cx);
+            cx.spawn_in(window, async move |view, cx| {
+                let index = cx.background_executor().spawn(async move {
+                    let source = source.to_string();
+                    super::super::parser::parse(&source, grammar, true).ok()
+                        .map(|root| properties::Index::from_ast(&source, &root))
+                }).await;
+                let _ = view.update_in(cx, |view, window, cx| {
+                    if view.input_token(cx) == token && view.focus.is_focused(window)
+                        && view.document.read(cx).grammar() == grammar && view.live
+                        && let Some(index) = index
+                    {
+                        view.projection.properties = index;
+                        view.enter_document_property(window, cx);
+                    }
+                });
+            }).detach();
         }
     }
     fn insert_slash_table(&mut self, custom: bool, window: &mut Window, cx: &mut Context<Self>) {

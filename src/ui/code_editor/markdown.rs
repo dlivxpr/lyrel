@@ -114,6 +114,17 @@ struct SourceChange {
     inserted_len: usize,
 }
 impl Transaction {
+    fn map_untouched_range(&self, mut range: Range<usize>) -> Option<Range<usize>> {
+        for edit in &self.edits {
+            if edit.range.end <= range.start {
+                let delta = edit.inserted_len as isize - edit.range.len() as isize;
+                range = range.start.checked_add_signed(delta)?..range.end.checked_add_signed(delta)?;
+            } else if edit.range.start < range.end {
+                return None;
+            }
+        }
+        Some(range)
+    }
     pub(crate) fn revision(&self) -> u64 {
         self.revision
     }

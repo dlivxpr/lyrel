@@ -634,6 +634,9 @@ fn markdown_workbench_shares_native_source_history_and_host_save_across_groups(
     });
     vcx.dispatch_action(gpui_kit::component::input::SelectAll);
     vcx.dispatch_action(gpui_kit::component::input::Copy);
+    wait_until(&mut vcx, |context| context.update(|_, cx| {
+        cx.read_from_clipboard().and_then(|item| item.text()).as_deref() == Some("中🎉alpha\nbeta\n")
+    }));
     vcx.update(|_, cx| {
         assert_eq!(
             cx.read_from_clipboard().and_then(|item| item.text()),
@@ -641,7 +644,9 @@ fn markdown_workbench_shares_native_source_history_and_host_save_across_groups(
         )
     });
     vcx.dispatch_action(gpui_kit::component::input::Cut);
-    vcx.run_until_parked();
+    wait_until(&mut vcx, |context| first.read_with(context, |view, cx| {
+        view.document().read(cx).source().len() == 0
+    }));
     app.read_with(&vcx, |app, cx| {
         assert_eq!(
             app.active_buffer()
@@ -3139,25 +3144,25 @@ fn markdown_embed_fragment_source_history_and_host_roundtrip(cx: &mut TestAppCon
     wait_until(&mut context, |cx| {
         cx.update(|window, cx| {
             window.render_frame(cx);
-            window.try_find("markdown-embed-content-6").is_some()
-                && window.try_find("markdown-embed-cycle-root-6-0-0").is_some()
+            window.try_find("markdown-embed-content-1").is_some()
+                && window.try_find("markdown-embed-cycle-root-1-0-0").is_some()
         })
     });
     context.update(|window, cx| {
-        let content = window.find("markdown-embed-content-6");
+        let content = window.find("markdown-embed-content-1");
         let value = content.value().unwrap();
         assert!(value.contains("Visible fragment"));
         assert!(!value.contains("Hidden"));
         assert!(!value.contains("Excluded"));
         assert_eq!(
-            window.find("markdown-embed-error-root-6-0-1").label(),
+            window.find("markdown-embed-error-root-1-0-1").label(),
             Some(t(L10nKey::MarkdownReferenceMissing))
         );
-        window.click("markdown-embed-content-6", cx);
+        window.click("markdown-embed-content-1", cx);
         window.press("escape", cx);
         assert!(view.read(cx).focus_handle(cx).is_focused(window));
     });
-    context.update(|window, cx| window.click("markdown-embed-source-6", cx));
+    context.update(|window, cx| window.click("markdown-embed-source-1", cx));
     view.read_with(&context, |view, _| {
         assert_eq!(view.selection().range(), 6..25)
     });
