@@ -816,8 +816,7 @@ impl SourcePresentation {
                     .background_executor()
                     .spawn(async move {
                         let source = source.to_string();
-                        let root =
-                            super::super::super::parser::parse(&source, grammar, true).ok()?;
+                        let root = super::super::parser::parse(&source, grammar, true).ok()?;
                         let styles = decorations(&source, &root);
                         edit(&source, &root, selection, format, color, &styles)
                     })

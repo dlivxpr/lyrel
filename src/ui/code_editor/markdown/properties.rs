@@ -85,7 +85,7 @@ impl Index {
             )
         })
     }
-    pub(super) fn reorder_ranges(&self) -> Vec<Range<usize>> {
+    pub(in crate::ui::code_editor::markdown) fn reorder_ranges(&self) -> Vec<Range<usize>> {
         let mut runs: Vec<Range<usize>> = Vec::new();
         for property in &self.properties {
             if let Some(run) = runs.last_mut().filter(|run| run.end == property.line.start) {
