@@ -3348,7 +3348,7 @@ impl Render for SourcePresentation {
                 } else {
                     L10nKey::EditorMarkdownSourceLabel
                 }))
-                .when(window.is_a11y_active() || cfg!(test), |root| {
+                .when(window.is_a11y_active() || cfg!(any(test, feature = "native-markdown-tests")), |root| {
                     let document = self.document.read(cx);
                     let (revision, value) = self.accessibility_snapshot.get_or_insert_with(|| {
                         (document.revision(), document.source().to_string().into())

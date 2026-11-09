@@ -5175,6 +5175,7 @@ pub(crate) mod test_window {
             gpui_kit::component::init(cx);
             cx.set_global(Config::default());
             crate::ui::keymap::init(cx);
+            crate::ui::windows::WindowRegistry::init(cx);
         });
         let window = cx.add_window(|window, cx| {
             let app =
