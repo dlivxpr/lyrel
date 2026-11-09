@@ -2808,6 +2808,7 @@ impl Render for SourcePresentation {
                                             children: vec![node],
                                             spread: false,
                                             checked: None,
+                                            task_marker: None,
                                             span: None,
                                         }],
                                         ordered: matches!(

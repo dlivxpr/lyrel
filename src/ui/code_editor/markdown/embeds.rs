@@ -484,6 +484,7 @@ impl Plan {
                                 children: vec![block],
                                 spread: false,
                                 checked: None,
+                                task_marker: None,
                                 span: None,
                             }],
                             ordered: matches!(marker, super::lists::Marker::Ordered(..)),
