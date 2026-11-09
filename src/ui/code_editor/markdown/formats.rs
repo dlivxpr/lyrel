@@ -218,7 +218,8 @@ fn tag(raw: &str) -> Option<(Format, Option<u32>, &'static str)> {
                             && key.trim().eq_ignore_ascii_case("background-color")
                     {
                         color = css_color(value);
-                        inherits_color = property == "color" && value.trim().eq_ignore_ascii_case("inherit");
+                        inherits_color =
+                            property == "color" && value.trim().eq_ignore_ascii_case("inherit");
                     }
                 }
             }
@@ -683,14 +684,18 @@ fn selection_crosses_blocks(node: &Node, range: &Range<usize>) -> bool {
                 return 0;
             }
         }
-        if matches!(node, Node::Paragraph(_) | Node::Heading(_) | Node::TableCell(_)) {
+        if matches!(
+            node,
+            Node::Paragraph(_) | Node::Heading(_) | Node::TableCell(_)
+        ) {
             return 1;
         }
-        node.children().map_or(0, |children| children.iter().map(|node| count(node, range)).sum())
+        node.children().map_or(0, |children| {
+            children.iter().map(|node| count(node, range)).sum()
+        })
     }
     count(node, range) > 1
 }
-
 
 fn color_crosses_mark(root: &Node, range: &Range<usize>, styles: &[Decoration]) -> bool {
     fn contains_mark(node: &Node, at: usize, outer: usize) -> bool {
@@ -717,7 +722,12 @@ fn color_crosses_mark(root: &Node, range: &Range<usize>, styles: &[Decoration]) 
     [range.start, range.end].into_iter().any(|at| {
         styles
             .iter()
-            .find(|d| d.format == Format::TextColor && d.color.is_some() && d.open.end < at && at < d.close.start)
+            .find(|d| {
+                d.format == Format::TextColor
+                    && d.color.is_some()
+                    && d.open.end < at
+                    && at < d.close.start
+            })
             .is_some_and(|color| {
                 contains_mark(root, at, color.open.start)
                     || styles.iter().any(|d| {
@@ -736,26 +746,55 @@ struct ColorRun {
     owner: Option<usize>,
 }
 
-fn color_runs(source: &str, root: &Node, scope: &Range<usize>, styles: &[Decoration]) -> Vec<ColorRun> {
+fn color_runs(
+    source: &str,
+    root: &Node,
+    scope: &Range<usize>,
+    styles: &[Decoration],
+) -> Vec<ColorRun> {
     fn collect(node: &Node, source: &str, scope: &Range<usize>, runs: &mut Vec<Range<usize>>) {
-        let Some(position) = node.position() else { return; };
+        let Some(position) = node.position() else {
+            return;
+        };
         let span = position.start.offset..position.end.offset;
         if span.end <= scope.start || scope.end <= span.start {
             return;
         }
-        if opaque_jsx(node) || matches!(node, Node::Text(_) | Node::InlineCode(_) | Node::InlineMath(_) | Node::Image(_) | Node::ImageReference(_) | Node::FootnoteReference(_) | Node::Html(_)) {
+        if opaque_jsx(node)
+            || matches!(
+                node,
+                Node::Text(_)
+                    | Node::InlineCode(_)
+                    | Node::InlineMath(_)
+                    | Node::Image(_)
+                    | Node::ImageReference(_)
+                    | Node::FootnoteReference(_)
+                    | Node::Html(_)
+            )
+        {
             let raw = &source[span.clone()];
-            if !matches!(node, Node::Html(_)) || tag(raw).is_none() && !["</u>", "</mark>", "</span>"].iter().any(|close| raw.trim().eq_ignore_ascii_case(close)) {
+            if !matches!(node, Node::Html(_))
+                || tag(raw).is_none()
+                    && !["</u>", "</mark>", "</span>"]
+                        .iter()
+                        .any(|close| raw.trim().eq_ignore_ascii_case(close))
+            {
                 runs.push(span);
             }
             return;
         }
-        let Some(children) = node.children() else { return; };
+        let Some(children) = node.children() else {
+            return;
+        };
         let mut opaque = None;
         for child in children {
-            let Some(position) = child.position() else { continue; };
+            let Some(position) = child.position() else {
+                continue;
+            };
             if matches!(child, Node::Html(_)) {
-                if let Some((name, closing)) = opaque_tag(&source[position.start.offset..position.end.offset]) {
+                if let Some((name, closing)) =
+                    opaque_tag(&source[position.start.offset..position.end.offset])
+                {
                     if let Some((opened, start, depth)) = opaque.as_mut() {
                         if *opened == name {
                             if closing {
@@ -788,9 +827,16 @@ fn color_runs(source: &str, root: &Node, scope: &Range<usize>, styles: &[Decorat
     let mut text = Vec::new();
     collect(root, source, scope, &mut text);
     let mut boundaries = Vec::new();
-    for (ix, style) in styles.iter().enumerate().filter(|(_, d)| d.open.start < scope.end && scope.start < d.close.end) {
+    for (ix, style) in styles
+        .iter()
+        .enumerate()
+        .filter(|(_, d)| d.open.start < scope.end && scope.start < d.close.end)
+    {
         if style.format == Format::TextColor && style.color.is_some() {
-            boundaries.extend([(style.open.end, true, Some(ix)), (style.close.start, false, Some(ix))]);
+            boundaries.extend([
+                (style.open.end, true, Some(ix)),
+                (style.close.start, false, Some(ix)),
+            ]);
         }
         for hidden in [&style.open, &style.close] {
             boundaries.extend([(hidden.start, true, None), (hidden.end, false, None)]);
@@ -805,9 +851,17 @@ fn color_runs(source: &str, root: &Node, scope: &Range<usize>, styles: &[Decorat
         let mut at = run.start.max(scope.start);
         let end = run.end.min(scope.end);
         while at < end {
-            while let Some((_, start, owner)) = boundaries.get(next).copied().filter(|(boundary, _, _)| *boundary <= at) {
+            while let Some((_, start, owner)) = boundaries
+                .get(next)
+                .copied()
+                .filter(|(boundary, _, _)| *boundary <= at)
+            {
                 if let Some(owner) = owner {
-                    if start { active.insert(owner); } else { active.remove(&owner); }
+                    if start {
+                        active.insert(owner);
+                    } else {
+                        active.remove(&owner);
+                    }
                 } else if start {
                     hidden += 1;
                 } else {
@@ -815,13 +869,21 @@ fn color_runs(source: &str, root: &Node, scope: &Range<usize>, styles: &[Decorat
                 }
                 next += 1;
             }
-            let through = boundaries.get(next).map_or(end, |(boundary, _, _)| end.min(*boundary));
+            let through = boundaries
+                .get(next)
+                .map_or(end, |(boundary, _, _)| end.min(*boundary));
             if hidden == 0 && at < through {
                 let owner = active.last().copied();
-                if let Some(previous) = result.last_mut().filter(|previous| previous.range.end == at && previous.owner == owner) {
+                if let Some(previous) = result
+                    .last_mut()
+                    .filter(|previous| previous.range.end == at && previous.owner == owner)
+                {
                     previous.range.end = through;
                 } else {
-                    result.push(ColorRun { range: at..through, owner });
+                    result.push(ColorRun {
+                        range: at..through,
+                        owner,
+                    });
                 }
             }
             at = through;
@@ -839,32 +901,69 @@ fn preserve_crossed_colors(
     retained: &std::collections::HashMap<usize, String>,
     changes: &mut std::collections::BTreeMap<usize, (usize, String)>,
 ) {
-    let scope = styles.iter().filter(|d| {
-        d.format == Format::TextColor && d.color.is_some() && d.open.end < range.end && range.start < d.close.start
-    }).fold(range.clone(), |scope, d| scope.start.min(d.open.start)..scope.end.max(d.close.end));
+    let scope = styles
+        .iter()
+        .filter(|d| {
+            d.format == Format::TextColor
+                && d.color.is_some()
+                && d.open.end < range.end
+                && range.start < d.close.start
+        })
+        .fold(range.clone(), |scope, d| {
+            scope.start.min(d.open.start)..scope.end.max(d.close.end)
+        });
     for run in color_runs(source, root, &scope, styles) {
-        let mut cuts = smallvec::SmallVec::<[usize; 4]>::from_slice(&[run.range.start, run.range.end]);
-        cuts.extend([range.start, range.end].into_iter().filter(|at| run.range.start < *at && *at < run.range.end));
+        let mut cuts =
+            smallvec::SmallVec::<[usize; 4]>::from_slice(&[run.range.start, run.range.end]);
+        cuts.extend(
+            [range.start, range.end]
+                .into_iter()
+                .filter(|at| run.range.start < *at && *at < run.range.end),
+        );
         cuts.sort_unstable();
         for pair in cuts.windows(2) {
             let part = pair[0]..pair[1];
             let selected = part.start < range.end && range.start < part.end;
-            let original = run.owner.map(|ix| &styles[ix]).filter(|style| style.open.end < range.end && range.start < style.close.start);
+            let original = run
+                .owner
+                .map(|ix| &styles[ix])
+                .filter(|style| style.open.end < range.end && range.start < style.close.start);
             let (open, close) = if selected {
-                let Some(open) = selected_open else { continue; };
+                let Some(open) = selected_open else {
+                    continue;
+                };
                 (open, "</span>")
             } else {
-                let Some(style) = original else { continue; };
-                (run.owner.and_then(|ix| retained.get(&ix)).map_or(&source[style.open.clone()], String::as_str), &source[style.close.clone()])
+                let Some(style) = original else {
+                    continue;
+                };
+                (
+                    run.owner
+                        .and_then(|ix| retained.get(&ix))
+                        .map_or(&source[style.open.clone()], String::as_str),
+                    &source[style.close.clone()],
+                )
             };
-            changes.entry(part.start).or_insert_with(|| (part.start, String::new())).1.push_str(open);
-            changes.entry(part.end).or_insert_with(|| (part.end, String::new())).1.push_str(close);
+            changes
+                .entry(part.start)
+                .or_insert_with(|| (part.start, String::new()))
+                .1
+                .push_str(open);
+            changes
+                .entry(part.end)
+                .or_insert_with(|| (part.end, String::new()))
+                .1
+                .push_str(close);
         }
     }
 }
 
 fn color_hex(color: u32) -> String {
-    if color & 255 == 255 { format!("#{:06x}", color >> 8) } else { format!("#{color:08x}") }
+    if color & 255 == 255 {
+        format!("#{:06x}", color >> 8)
+    } else {
+        format!("#{color:08x}")
+    }
 }
 
 // Return original style-value byte ranges and whether this opening has any
@@ -876,8 +975,12 @@ fn color_properties(raw: &str) -> Option<(Vec<Range<usize>>, bool)> {
     let mut properties = Vec::new();
     let mut other = false;
     while !attributes.is_empty() {
-        let end = attributes.find(|c: char| !c.is_ascii_alphanumeric() && !matches!(c, '-' | ':' | '_')).unwrap_or(attributes.len());
-        if end == 0 { return None; }
+        let end = attributes
+            .find(|c: char| !c.is_ascii_alphanumeric() && !matches!(c, '-' | ':' | '_'))
+            .unwrap_or(attributes.len());
+        if end == 0 {
+            return None;
+        }
         let key = &attributes[..end];
         attributes = attributes[end..].trim_start();
         if !attributes.starts_with('=') {
@@ -894,7 +997,9 @@ fn color_properties(raw: &str) -> Option<(Vec<Range<usize>>, bool)> {
             value = &attributes[1..end];
             attributes = attributes[end + 1..].trim_start();
         } else {
-            let end = attributes.find(char::is_whitespace).unwrap_or(attributes.len());
+            let end = attributes
+                .find(char::is_whitespace)
+                .unwrap_or(attributes.len());
             value_start = raw.len() - 1 - attributes.len();
             value = &attributes[..end];
             attributes = attributes[end..].trim_start();
@@ -908,7 +1013,8 @@ fn color_properties(raw: &str) -> Option<(Vec<Range<usize>>, bool)> {
             let text = declaration.strip_suffix(';').unwrap_or(declaration);
             if let Some((key, value)) = text.split_once(':') {
                 if key.trim().eq_ignore_ascii_case("color") {
-                    let at = value_start + offset + key.len() + 1 + value.len() - value.trim_start().len();
+                    let at = value_start + offset + key.len() + 1 + value.len()
+                        - value.trim_start().len();
                     properties.push(at..at + value.trim().len());
                 } else {
                     other |= !text.trim().is_empty();
@@ -934,12 +1040,26 @@ fn color_command(
     let mut edits = Vec::with_capacity(changes.len());
     for (at, (through, text)) in changes {
         let delta = text.len() as isize - (through - at) as isize;
-        if through <= range.start && at < range.start { start += delta; }
-        if at < range.end { end += delta; }
-        if source[at..through] != text { edits.push((at..through, text)); }
+        if through <= range.start && at < range.start {
+            start += delta;
+        }
+        if at < range.end {
+            end += delta;
+        }
+        if source[at..through] != text {
+            edits.push((at..through, text));
+        }
     }
-    let selection = if reversed { Selection::new(end as usize, start as usize) } else { Selection::new(start as usize, end as usize) };
-    (!edits.is_empty()).then_some(Command::BatchReplaceSelected { edits, selection, kind: EditKind::Command })
+    let selection = if reversed {
+        Selection::new(end as usize, start as usize)
+    } else {
+        Selection::new(start as usize, end as usize)
+    };
+    (!edits.is_empty()).then_some(Command::BatchReplaceSelected {
+        edits,
+        selection,
+        kind: EditKind::Command,
+    })
 }
 
 fn text_color_edit(
@@ -955,22 +1075,37 @@ fn text_color_edit(
     let mut changes = std::collections::BTreeMap::<usize, (usize, String)>::new();
     let mut affected = Vec::new();
     for (ix, decoration) in styles.iter().enumerate().filter(|(_, d)| {
-        d.format == Format::TextColor && d.color.is_some() && d.content().start < range.end && range.start < d.content().end
+        d.format == Format::TextColor
+            && d.color.is_some()
+            && d.content().start < range.end
+            && range.start < d.content().end
     }) {
         let (properties, other) = color_properties(&source[decoration.open.clone()])?;
         affected.push((ix, decoration, properties, other));
     }
     if let Some(color) = color {
-        if let Some((_, owner, _, _)) = affected.iter().find(|(_, d, _, _)| d.content() == range || (d.open.start..d.close.end) == range) {
+        if let Some((_, owner, _, _)) = affected
+            .iter()
+            .find(|(_, d, _, _)| d.content() == range || (d.open.start..d.close.end) == range)
+        {
             let hex = color_hex(color);
             for (_, decoration, properties, _) in &affected {
-                if owner.open.start <= decoration.open.start && decoration.close.end <= owner.close.end {
+                if owner.open.start <= decoration.open.start
+                    && decoration.close.end <= owner.close.end
+                {
                     for property in properties {
-                        changes.insert(decoration.open.start + property.start, (decoration.open.start + property.end, hex.clone()));
+                        changes.insert(
+                            decoration.open.start + property.start,
+                            (decoration.open.start + property.end, hex.clone()),
+                        );
                     }
                 }
             }
-            let selected = if range.start == owner.open.start { owner.content() } else { range };
+            let selected = if range.start == owner.open.start {
+                owner.content()
+            } else {
+                range
+            };
             return color_command(source, selected, reversed, 0, changes);
         }
     }
@@ -993,9 +1128,18 @@ fn text_color_edit(
     for (ix, decoration, properties, other) in affected {
         if other {
             for property in properties {
-                changes.insert(decoration.open.start + property.start, (decoration.open.start + property.end, "inherit".into()));
+                changes.insert(
+                    decoration.open.start + property.start,
+                    (decoration.open.start + property.end, "inherit".into()),
+                );
             }
-            retained.insert(ix, format!("<span style=\"color:{}\">", color_hex(decoration.color.unwrap())));
+            retained.insert(
+                ix,
+                format!(
+                    "<span style=\"color:{}\">",
+                    color_hex(decoration.color.unwrap())
+                ),
+            );
             continue;
         }
         let body = decoration.content();
@@ -1697,11 +1841,32 @@ mod tests {
 
     #[test]
     fn text_color_block_mark_and_attribute_boundaries_preserve_semantics_and_undo() {
-        use super::super::super::{Command, MarkdownDocument, PresentationState, Selection, TextFormat, mdx::Grammar, projection::Projection};
+        use super::super::super::{
+            Command, MarkdownDocument, PresentationState, Selection, TextFormat, mdx::Grammar,
+            projection::Projection,
+        };
         for (source, selected, color, expected, text) in [
-            ("a\n\nb", "a\n\nb", Some(0x123456ff), "<span style=\"color:#123456\">a</span>\n\n<span style=\"color:#123456\">b</span>", "ab"),
-            ("*ab*", "*a", Some(0x123456ff), "*<span style=\"color:#123456\">a</span>b*", "ab"),
-            ("<span data-keep='x' style='background:#fff; COLOR : red ;'>ab</span>", "ab", Some(0x123456ff), "<span data-keep='x' style='background:#fff; COLOR : #123456 ;'>ab</span>", "ab"),
+            (
+                "a\n\nb",
+                "a\n\nb",
+                Some(0x123456ff),
+                "<span style=\"color:#123456\">a</span>\n\n<span style=\"color:#123456\">b</span>",
+                "ab",
+            ),
+            (
+                "*ab*",
+                "*a",
+                Some(0x123456ff),
+                "*<span style=\"color:#123456\">a</span>b*",
+                "ab",
+            ),
+            (
+                "<span data-keep='x' style='background:#fff; COLOR : red ;'>ab</span>",
+                "ab",
+                Some(0x123456ff),
+                "<span data-keep='x' style='background:#fff; COLOR : #123456 ;'>ab</span>",
+                "ab",
+            ),
         ] {
             let at = source.find(selected).unwrap();
             let selection = Selection::new(at, at + selected.len());
@@ -1709,16 +1874,42 @@ mod tests {
             let styles = super::decorations(source, &root);
             let mut document = MarkdownDocument::new(source.into(), TextFormat::default());
             let mut state = PresentationState::new(selection);
-            document.command(&mut state, super::edit(source, &root, selection, super::Format::TextColor, color, &styles).unwrap());
+            document.command(
+                &mut state,
+                super::edit(
+                    source,
+                    &root,
+                    selection,
+                    super::Format::TextColor,
+                    color,
+                    &styles,
+                )
+                .unwrap(),
+            );
             assert_eq!(document.encode().unwrap(), expected.as_bytes());
             let projection = Projection::parse(expected, 1, true, Grammar::Markdown);
-            assert_eq!(projection.leaves.iter().map(|leaf| leaf.text.as_str()).collect::<String>(), text);
+            assert_eq!(
+                projection
+                    .leaves
+                    .iter()
+                    .map(|leaf| leaf.text.as_str())
+                    .collect::<String>(),
+                text
+            );
             if source == "*ab*" {
                 let leaf = &projection.leaves[0];
                 assert!(leaf.marks(None).iter().all(|(_, mark)| mark.italic));
-                assert_eq!(leaf.foreground_ranges(), vec![(0..1, gpui_kit::rgba(0x123456ff).into())]);
+                assert_eq!(
+                    leaf.foreground_ranges(),
+                    vec![(0..1, gpui_kit::rgba(0x123456ff).into())]
+                );
             } else {
-                assert!(projection.leaves.iter().all(|leaf| !leaf.foreground_ranges().is_empty()));
+                assert!(
+                    projection
+                        .leaves
+                        .iter()
+                        .all(|leaf| !leaf.foreground_ranges().is_empty())
+                );
             }
             document.command(&mut state, Command::Undo);
             assert_eq!(document.encode().unwrap(), source.as_bytes());
@@ -1727,22 +1918,44 @@ mod tests {
             assert_eq!(document.encode().unwrap(), expected.as_bytes());
         }
         let source = "<span data-keep='x' style='background:#fff; COLOR : red ;'>ab</span>";
-        for (color, selected) in [(None, "b"), (Some(0x123456ff), "<span style=\"color:#123456\">b</span>")] {
+        for (color, selected) in [
+            (None, "b"),
+            (Some(0x123456ff), "<span style=\"color:#123456\">b</span>"),
+        ] {
             let at = source.find(">ab").unwrap() + 2;
             let selection = Selection::new(at, at + 1);
             let root = super::super::super::parser::parse(source, Grammar::Markdown, true).unwrap();
             let styles = super::decorations(source, &root);
             let mut document = MarkdownDocument::new(source.into(), TextFormat::default());
             let mut state = PresentationState::new(selection);
-            document.command(&mut state, super::edit(source, &root, selection, super::Format::TextColor, color, &styles).unwrap());
-            let expected = format!("<span data-keep='x' style='background:#fff; COLOR : inherit ;'><span style=\"color:#ff0000\">a</span>{selected}</span>");
+            document.command(
+                &mut state,
+                super::edit(
+                    source,
+                    &root,
+                    selection,
+                    super::Format::TextColor,
+                    color,
+                    &styles,
+                )
+                .unwrap(),
+            );
+            let expected = format!(
+                "<span data-keep='x' style='background:#fff; COLOR : inherit ;'><span style=\"color:#ff0000\">a</span>{selected}</span>"
+            );
             assert_eq!(document.encode().unwrap(), expected.as_bytes());
             let projection = Projection::parse(&expected, 1, true, Grammar::Markdown);
             assert_eq!(projection.leaves[0].text, "ab");
-            assert_eq!(projection.leaves[0].foreground_ranges(), color.map_or_else(
-                || vec![(0..1, gpui_kit::rgba(0xff0000ff).into())],
-                |color| vec![(0..1, gpui_kit::rgba(0xff0000ff).into()), (1..2, gpui_kit::rgba(color).into())],
-            ));
+            assert_eq!(
+                projection.leaves[0].foreground_ranges(),
+                color.map_or_else(
+                    || vec![(0..1, gpui_kit::rgba(0xff0000ff).into())],
+                    |color| vec![
+                        (0..1, gpui_kit::rgba(0xff0000ff).into()),
+                        (1..2, gpui_kit::rgba(color).into())
+                    ],
+                )
+            );
             document.command(&mut state, Command::Undo);
             assert_eq!(document.encode().unwrap(), source.as_bytes());
             assert_eq!(state.selection(), selection);
@@ -1750,7 +1963,12 @@ mod tests {
         let unknown = "before <span style=\"white-space:pre\">**raw**</span> after";
         let projection = Projection::parse(unknown, 1, true, Grammar::Markdown);
         assert_eq!(projection.leaves[0].text, unknown);
-        assert!(projection.leaves[0].marks(None).iter().all(|(_, mark)| !mark.bold));
+        assert!(
+            projection.leaves[0]
+                .marks(None)
+                .iter()
+                .all(|(_, mark)| !mark.bold)
+        );
     }
 
     #[test]

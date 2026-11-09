@@ -124,7 +124,10 @@ fn text_color_feedback(
     let mut initial = None;
     let mut any = false;
     let mut mixed = false;
-    for run in runs[first..].iter().take_while(|run| run.range.start < range.end) {
+    for run in runs[first..]
+        .iter()
+        .take_while(|run| run.range.start < range.end)
+    {
         let color = run.owner.and_then(|ix| decorations[ix].color);
         any |= color.is_some();
         if let Some(previous) = initial {

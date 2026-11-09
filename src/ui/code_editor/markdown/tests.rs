@@ -44,11 +44,16 @@ fn workbench_color_runs_ignore_block_gaps_single_strike_and_preserve_inherited_c
     let original = "<span style=\"color:red\">a</span>\n\n~<span style=\"color:red\">b</span>~\n\n<span data-keep='x' style='color:red;background:yellow'>cd</span>";
     std::fs::write(&path, original).unwrap();
     let (app, mut context, _streams) = harness_with_tabs(cx, 1);
-    app.update_in(&mut context, |app, window, cx| app.open_file_in_editor(&path, window, cx));
+    app.update_in(&mut context, |app, window, cx| {
+        app.open_file_in_editor(&path, window, cx)
+    });
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
     let view = loop {
         context.run_until_parked();
-        if let Some(view) = app.read_with(&context, |app, _| app.active_editor_input().and_then(|input| input.markdown().cloned())) {
+        if let Some(view) = app.read_with(&context, |app, _| {
+            app.active_editor_input()
+                .and_then(|input| input.markdown().cloned())
+        }) {
             break view;
         }
         assert!(std::time::Instant::now() < deadline);
@@ -63,7 +68,12 @@ fn workbench_color_runs_ignore_block_gaps_single_strike_and_preserve_inherited_c
     context.update(|window, cx| window.click("markdown-format-menu", cx));
     context.run_until_parked();
     context.update(|window, cx| {
-        assert_eq!(window.find_by_label(t(L10nKey::MarkdownFormatTextColor)).checked(), Some(true));
+        assert_eq!(
+            window
+                .find_by_label(t(L10nKey::MarkdownFormatTextColor))
+                .checked(),
+            Some(true)
+        );
         window.press("escape", cx);
     });
     context.run_until_parked();
@@ -75,14 +85,24 @@ fn workbench_color_runs_ignore_block_gaps_single_strike_and_preserve_inherited_c
     context.update(|window, cx| window.click("markdown-format-menu", cx));
     context.run_until_parked();
     context.update(|window, cx| {
-        assert_eq!(window.find_by_label(t(L10nKey::MarkdownFormatTextColor)).checked(), Some(true));
+        assert_eq!(
+            window
+                .find_by_label(t(L10nKey::MarkdownFormatTextColor))
+                .checked(),
+            Some(true)
+        );
         let clear = window.find_by_label(t(L10nKey::MarkdownClearTextColor));
         window.pointer_down(clear.bounds().center(), MouseButton::Left, cx);
         window.pointer_up(clear.bounds().center(), MouseButton::Left, cx);
     });
     context.run_until_parked();
     view.read_with(&context, |view, cx| {
-        assert_eq!(view.document().read(cx).encode().unwrap(), original.replacen("~<span style=\"color:red\">b</span>~", "~b~", 1).as_bytes());
+        assert_eq!(
+            view.document().read(cx).encode().unwrap(),
+            original
+                .replacen("~<span style=\"color:red\">b</span>~", "~b~", 1)
+                .as_bytes()
+        );
     });
     context.dispatch_action(gpui_kit::component::input::Undo);
     context.run_until_parked();
@@ -96,7 +116,12 @@ fn workbench_color_runs_ignore_block_gaps_single_strike_and_preserve_inherited_c
     let copied = "<span data-keep='x' style='color:inherit;background:yellow'><span style=\"color:#ff0000\">c</span>d</span>";
     let owner = original.find("<span data-keep").unwrap();
     let expected = format!("{}{copied}", &original[..owner]);
-    view.read_with(&context, |view, cx| assert_eq!(view.document().read(cx).encode().unwrap(), expected.as_bytes()));
+    view.read_with(&context, |view, cx| {
+        assert_eq!(
+            view.document().read(cx).encode().unwrap(),
+            expected.as_bytes()
+        )
+    });
     view.update_in(&mut context, |view, window, cx| {
         view.select_range(owner..expected.len(), cx);
         view.focus_handle(cx).focus(window, cx);
@@ -112,7 +137,12 @@ fn workbench_color_runs_ignore_block_gaps_single_strike_and_preserve_inherited_c
     });
     context.dispatch_action(gpui_kit::component::input::Undo);
     context.run_until_parked();
-    view.read_with(&context, |view, cx| assert_eq!(view.document().read(cx).encode().unwrap(), original.as_bytes()));
+    view.read_with(&context, |view, cx| {
+        assert_eq!(
+            view.document().read(cx).encode().unwrap(),
+            original.as_bytes()
+        )
+    });
 }
 
 #[gpui_kit::test]

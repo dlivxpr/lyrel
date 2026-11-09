@@ -97,7 +97,9 @@ impl Leaf {
                 && part.source.end <= decoration.close.start
             {
                 match decoration.format {
-                    Format::TextColor if decoration.color.is_some() => part.style.foreground = decoration.color,
+                    Format::TextColor if decoration.color.is_some() => {
+                        part.style.foreground = decoration.color
+                    }
                     Format::Underline => part.style.underline = true,
                     Format::Highlight | Format::HighlightColor => {
                         part.style.highlight = true;
@@ -116,7 +118,8 @@ impl Leaf {
                 always_hidden: true,
                 target: None,
             });
-            self.has_foreground |= decoration.format == Format::TextColor && decoration.color.is_some();
+            self.has_foreground |=
+                decoration.format == Format::TextColor && decoration.color.is_some();
             scratch.clear();
             scratch.reserve(self.segments.len() + 4);
             for mut segment in self.segments.drain(..) {
