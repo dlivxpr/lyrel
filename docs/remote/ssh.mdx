@@ -145,7 +145,7 @@ shell／control 报告的 HOME 与 SFTP `Realpath(".")` 必须同属该隔离目
 ```bash
 cargo test --locked -p lyrel-server --test native_ssh_graphics native_ssh_graphics_ \
   -- --ignored --nocapture --test-threads=1 --skip nested_ssh
-cargo test --locked -p lyrel --bin lyrel-app native_ssh_consumer_ \
+cargo test --locked -p lyrel --lib native_ssh_consumer_ \
   -- --ignored --nocapture --test-threads=1
 ```
 
@@ -194,10 +194,10 @@ cargo test --locked -p lyrel-server --test native_ssh_lifecycle \
 更正服务端 shell 前提后，使用新的自有本机 router daemon 验收；同一 daemon 对相同连接 key 的 shell probe 会缓存，关标签页或切换 profile 开关不代表重新探测。
 
 ```sh
-cargo test --locked -p lyrel --bin lyrel-app native_ssh_connected_shell_seeds_remote_history -- --ignored --test-threads=1 --nocapture
-cargo test --locked -p lyrel --bin lyrel-app native_ssh_workspace_history_uses_remote_home_and_isolates_inner_hop -- --ignored --test-threads=1 --nocapture
-cargo test --locked -p lyrel --bin lyrel-app native_ssh_workspace_reconnect_yields_to_active_client -- --ignored --test-threads=1 --nocapture
-cargo test --locked -p lyrel --bin lyrel-app native_ssh_host_menu_disconnect_preserves_other_window -- --ignored --test-threads=1 --nocapture
+cargo test --locked -p lyrel --lib native_ssh_connected_shell_seeds_remote_history -- --ignored --test-threads=1 --nocapture
+cargo test --locked -p lyrel --lib native_ssh_workspace_history_uses_remote_home_and_isolates_inner_hop -- --ignored --test-threads=1 --nocapture
+cargo test --locked -p lyrel --lib native_ssh_workspace_reconnect_yields_to_active_client -- --ignored --test-threads=1 --nocapture
+cargo test --locked -p lyrel --lib native_ssh_host_menu_disconnect_preserves_other_window -- --ignored --test-threads=1 --nocapture
 ```
 
 所有权用例在真实传输中断后，由另一个真实 control 客户端取得工作区，再让 rooted 工作台执行生产重连，

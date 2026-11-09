@@ -111,6 +111,8 @@ pub(crate) fn main() -> ExitCode {
         return ExitCode::SUCCESS;
     }
 
+    crate::core::config::pin_test_config_dir();
+
     // Keep the native platform alive until all independent test contexts are gone.
     // Only its Send + Sync text system crosses into the deterministic test platform;
     // no native window or AppKit object is constructed on a libtest worker.

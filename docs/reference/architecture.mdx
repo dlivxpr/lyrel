@@ -185,7 +185,7 @@ coding agent 在真实 PTY 中运行自己的原生 TUI。命令识别、状态 
 
 | 修改内容 | 源码入口 |
 | --- | --- |
-| 进程角色与桌面启动 | [`src/main.rs`](https://github.com/dlivxpr/lyrel/blob/main/src/main.rs)、[`lyrel-server` 入口](https://github.com/dlivxpr/lyrel/blob/main/crates/lyrel-server/src/main.rs) |
+| 进程角色与桌面启动 | [`src/lib.rs::run`](https://github.com/dlivxpr/lyrel/blob/main/src/lib.rs)（[`src/main.rs`](https://github.com/dlivxpr/lyrel/blob/main/src/main.rs) 为薄 binary）、[`lyrel-server` 入口](https://github.com/dlivxpr/lyrel/blob/main/crates/lyrel-server/src/main.rs) |
 | 共享领域、事务与数据目录 | [`core/machine/`](https://github.com/dlivxpr/lyrel/tree/main/crates/lyrel-core/src/core/machine)、[`core/session.rs`](https://github.com/dlivxpr/lyrel/blob/main/crates/lyrel-core/src/core/session.rs) |
 | Host 与 control 服务 | [`host/`](https://github.com/dlivxpr/lyrel/tree/main/crates/lyrel-core/src/host)、[`ui/host_ops.rs`](https://github.com/dlivxpr/lyrel/blob/main/src/ui/host_ops.rs) |
 | PTY、pane 与 SSH 路由 | [`daemon/`](https://github.com/dlivxpr/lyrel/tree/main/crates/lyrel-core/src/daemon) |

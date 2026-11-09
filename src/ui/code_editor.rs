@@ -41,7 +41,7 @@ pub(crate) mod saving;
 mod split;
 mod strip;
 use saving::{AfterUnsaved, BarKind, EditorBar, EditorBridge, EditorEvent, SaveWaiter};
-#[cfg(test)]
+#[cfg(any(test, feature = "native-markdown-tests"))]
 mod test_host;
 
 pub(crate) use nav::KEY_CONTEXT as NAV_KEY_CONTEXT;

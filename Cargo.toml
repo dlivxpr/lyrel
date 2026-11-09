@@ -21,8 +21,9 @@ required-features = ["updater"]
 # AppKit initialization must run on the process main thread, not a libtest worker.
 [[test]]
 name = "native_markdown"
-path = "src/main.rs"
+path = "tests/native_markdown.rs"
 harness = false
+required-features = ["native-markdown-tests"]
 
 [target.'cfg(any(target_os = "macos", target_os = "windows"))'.dependencies]
 # The framework-free half of lyrel: wire protocol, session daemon, PTY, the
@@ -296,6 +297,7 @@ workspace = true
 [features]
 default = []
 updater = ["dep:async_zip"]
+native-markdown-tests = ["gpui-kit/test-support"]
 
 # Shared pins keep the GUI and its consumers on one published framework chain.
 [workspace]

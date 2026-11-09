@@ -34,13 +34,19 @@ pub(super) mod headings;
 mod image_edit;
 #[path = "navigation.rs"]
 mod navigation;
+#[cfg(feature = "native-markdown-tests")]
+#[path = "review_native.rs"]
+mod review_native;
+#[cfg(any(test, feature = "native-markdown-tests"))]
+#[path = "review_support.rs"]
+mod review_support;
 #[cfg(test)]
 #[path = "review_tests.rs"]
 mod review_tests;
 
-#[cfg(test)]
+#[cfg(feature = "native-markdown-tests")]
 pub(super) fn native_cases() -> impl Iterator<Item = crate::native_markdown::Case> {
-    review_tests::native_cases()
+    review_native::native_cases()
         .into_iter()
         .chain(spelling::native_cases())
 }

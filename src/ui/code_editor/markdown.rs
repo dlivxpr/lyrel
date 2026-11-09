@@ -33,9 +33,14 @@ pub(crate) use tables::bindings as table_bindings;
 #[cfg(test)]
 mod tests;
 
-#[cfg(test)]
+#[cfg(any(test, feature = "native-markdown-tests"))]
+mod consumer_support;
+#[cfg(any(test, feature = "native-markdown-tests"))]
+mod native_consumers;
+
+#[cfg(feature = "native-markdown-tests")]
 pub(crate) fn native_cases() -> impl Iterator<Item = crate::native_markdown::Case> {
-    source::native_cases().chain(tests::native_cases())
+    source::native_cases().chain(native_consumers::native_cases())
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
