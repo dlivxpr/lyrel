@@ -26,6 +26,7 @@ pub(super) fn native_cases() -> [crate::native_markdown::Case; 3] {
     ]
 }
 
+#[track_caller]
 fn until(context: &mut VisualTestContext, mut ready: impl FnMut(&mut VisualTestContext) -> bool) {
     let deadline = Instant::now() + Duration::from_secs(15);
     loop {
@@ -49,7 +50,7 @@ fn settle(view: &Entity<SourcePresentation>, context: &mut VisualTestContext) {
                     .leaves
                     .iter()
                     .any(|leaf| matches!(leaf.kind, Kind::PendingSource))
-                && view.range_to_bounds(&(0..0), cx).is_some()
+                && view.geometry_is_current(cx)
         })
     });
 }
@@ -1057,7 +1058,12 @@ fn final_review_duplicate_embeds_keep_focus_and_scroll_after_shared_prefix_edit(
     until(&mut context, |context| {
         context.update(|window, _| {
             window.try_find("markdown-embed-flow-root-1").is_some()
-                && window.try_find("markdown-embed-flow-root-2").is_some()
+                && window.try_find("markdown-embed-content-2").is_some()
+                && window.try_find("markdown-embed-error-root-2").is_some_and(|error| {
+                    error.label() == Some(crate::ui::i18n::t(
+                        crate::ui::i18n::L10nKey::MarkdownEmbedDuplicate,
+                    ))
+                })
         })
     });
     let sibling = context.update(|_, cx| {
@@ -1100,7 +1106,11 @@ fn final_review_duplicate_embeds_keep_focus_and_scroll_after_shared_prefix_edit(
         let content = window.find("markdown-embed-content-1").bounds();
         let flow = window.find("markdown-embed-flow-root-1").bounds();
         assert_eq!(flow.top() - content.top(), relative);
-        assert!(window.try_find("markdown-embed-content-2").is_some());
+        assert_eq!(window.find("markdown-embed-content-2").focused(), Some(false));
+        assert_eq!(
+            window.find("markdown-embed-error-root-2").label(),
+            Some(crate::ui::i18n::t(crate::ui::i18n::L10nKey::MarkdownEmbedDuplicate))
+        );
     });
     assert_eq!(
         bytes(&view, &context),
@@ -1118,6 +1128,11 @@ fn final_review_duplicate_embeds_keep_focus_and_scroll_after_shared_prefix_edit(
         let content = window.find("markdown-embed-content-1").bounds();
         let flow = window.find("markdown-embed-flow-root-1").bounds();
         assert_eq!(flow.top() - content.top(), relative);
+        assert_eq!(window.find("markdown-embed-content-2").focused(), Some(false));
+        assert_eq!(
+            window.find("markdown-embed-error-root-2").label(),
+            Some(crate::ui::i18n::t(crate::ui::i18n::L10nKey::MarkdownEmbedDuplicate))
+        );
     });
     assert_eq!(bytes(&view, &context), source.as_bytes());
 }
