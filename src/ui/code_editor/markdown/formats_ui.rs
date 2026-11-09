@@ -243,6 +243,25 @@ impl SourcePresentation {
             .as_deref()
             .filter(|syntax| syntax.revision == doc.revision() && syntax.grammar == doc.grammar())
     }
+    fn prepare_bounded_format_syntax(&mut self, cx: &App) {
+        if self.format_syntax(cx).is_some() {
+            return;
+        }
+        let doc = self.document.read(cx);
+        if doc.source().len() > 32 * 1024 {
+            return;
+        }
+        let source = doc.source().to_string();
+        if let Ok(root) = super::super::super::parser::parse(&source, doc.grammar(), true) {
+            self.projection.syntax = Some(std::sync::Arc::new(Syntax::new(
+                &source, root, doc.revision(), doc.grammar(),
+            )));
+        }
+    }
+    pub(in super::super) fn prepare_format_menu(&mut self, cx: &App) {
+        self.prepare_bounded_format_syntax(cx);
+        self.refresh_format_feedback(cx);
+    }
 
     pub(in super::super) fn plan_format(
         &mut self,
@@ -253,20 +272,8 @@ impl SourcePresentation {
         if self.state.selection.range().start == self.state.selection.range().end {
             return None;
         }
-        let bounded;
-        let syntax = if let Some(syntax) = self.format_syntax(cx) {
-            syntax
-        } else {
-            let doc = self.document.read(cx);
-            // Explicit commands may inspect a bounded document; render never parses.
-            if doc.source().len() > 32 * 1024 {
-                return None;
-            }
-            let source = doc.source().to_string();
-            let root = super::super::super::parser::parse(&source, doc.grammar(), true).ok()?;
-            bounded = Syntax::new(&source, root, doc.revision(), doc.grammar());
-            &bounded
-        };
+        self.prepare_bounded_format_syntax(cx);
+        let syntax = self.format_syntax(cx)?;
         super::edit(
             &syntax.source,
             &syntax.root,
@@ -319,8 +326,15 @@ impl SourcePresentation {
             feedback.enabled.fill(prose);
             feedback.enabled[4] = prose || eligible(&syntax.source, root, &range, Format::Code);
             for (ix, format) in FORMATS.iter().copied().enumerate() {
-                feedback.states[ix] =
-                    state(&syntax.source, selection.range(), format, &syntax.coverage);
+                let value = state(&syntax.source, selection.range(), format, &syntax.coverage);
+                feedback.states[ix] = if value == 1
+                    && matches!(format, Format::Bold | Format::Italic | Format::Strike)
+                    && super::markdown_wrapper(root, &range, format).is_some()
+                {
+                    2
+                } else {
+                    value
+                };
             }
             feedback.color = syntax
                 .decorations
@@ -482,7 +496,10 @@ impl SourcePresentation {
                     .dropdown_menu(move |menu, _, cx| {
                         let menu = menu.action_context(focus.clone());
                         match view.upgrade() {
-                            Some(view) => view.read(cx).format_menu(menu),
+                            Some(view) => view.update(cx, |view, cx| {
+                                view.prepare_format_menu(cx);
+                                view.format_menu(menu)
+                            }),
                             None => menu,
                         }
                     }),

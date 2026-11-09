@@ -7,6 +7,7 @@ use lyrel_core::host::Host as _;
 use std::sync::atomic::Ordering;
 use std::time::{Duration, Instant};
 
+#[track_caller]
 fn wait_until(vcx: &mut VisualTestContext, mut ready: impl FnMut(&mut VisualTestContext) -> bool) {
     let deadline = Instant::now() + Duration::from_secs(10);
     loop {
@@ -3109,6 +3110,7 @@ fn markdown_local_reference_completion_reports_ambiguity_without_hidden_writes(
 #[gpui_kit::test]
 fn markdown_embed_fragment_source_history_and_host_roundtrip(cx: &mut TestAppContext) {
     use gpui_kit::Focusable as _;
+    use gpui_kit::test::TestQueryExt as _;
     let directory = tempfile::tempdir().unwrap();
     std::fs::write(directory.path().join("start.md"), "Keep\r\n\r\n").unwrap();
     let target = "# Intro\n\nHidden\n\n# Detail\n\n**Visible fragment**\n\n![[nested.md]]\n\n# After\n\nExcluded\n";
@@ -3148,28 +3150,39 @@ fn markdown_embed_fragment_source_history_and_host_roundtrip(cx: &mut TestAppCon
             inserted.as_bytes()
         )
     });
+    let mut content_id = None;
     wait_until(&mut context, |cx| {
         cx.update(|window, cx| {
             window.render_frame(cx);
-            window.try_find("markdown-embed-content-1").is_some()
-                && window.try_find("markdown-embed-cycle-root-1-0-0").is_some()
+            content_id = window.find_all_by_label(t(L10nKey::MarkdownEmbedReadonly))
+                .into_iter()
+                .find(|content| content.value().is_some_and(|value| value.contains("Visible fragment")))
+                .and_then(|content| content.path().last().cloned());
+            content_id.as_ref().is_some_and(|id| {
+                !window.within(id.clone()).find_all_by_label(t(L10nKey::MarkdownEmbedCycle)).is_empty()
+            })
         })
     });
+    let content_id = content_id.expect("the loaded embed has a native identity");
     context.update(|window, cx| {
-        let content = window.find("markdown-embed-content-1");
+        let content = window.find(content_id.clone());
         let value = content.value().unwrap();
         assert!(value.contains("Visible fragment"));
         assert!(!value.contains("Hidden"));
         assert!(!value.contains("Excluded"));
         assert_eq!(
-            window.find("markdown-embed-error-root-1-0-1").label(),
+            window.within(content_id.clone()).find_by_label(t(L10nKey::MarkdownReferenceMissing)).label(),
             Some(t(L10nKey::MarkdownReferenceMissing))
         );
-        window.click("markdown-embed-content-1", cx);
+        window.click(content_id.clone(), cx);
         window.press("escape", cx);
         assert!(view.read(cx).focus_handle(cx).is_focused(window));
     });
-    context.update(|window, cx| window.click("markdown-embed-source-1", cx));
+    context.update(|window, cx| {
+        let source_id = window.find_by_label(t(L10nKey::MarkdownEmbedSource))
+            .path().last().cloned().expect("embed source button identity");
+        window.click(source_id, cx);
+    });
     view.read_with(&context, |view, _| {
         assert_eq!(view.selection().range(), 6..25)
     });

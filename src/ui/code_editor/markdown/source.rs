@@ -1132,11 +1132,13 @@ impl SourcePresentation {
     }
 
     pub(crate) fn table_menu(
-        &self,
+        &mut self,
         menu: gpui_kit::component::menu::PopupMenu,
+        cx: &App,
     ) -> gpui_kit::component::menu::PopupMenu {
         use super::tables::*;
         use crate::ui::i18n::{L10nKey, t};
+        self.prepare_format_menu(cx);
         let menu = self.format_menu(menu).scrollable(true);
         let menu = self.clipboard_menu(self.formula_menu(self.spelling_menu(menu)));
         if !self.live {
@@ -2942,7 +2944,7 @@ impl Render for SourcePresentation {
                                             .dropdown_menu(move |menu, _, cx| {
                                                 let menu = menu.action_context(focus.clone());
                                                 match view.upgrade() {
-                                                    Some(view) => view.read(cx).table_menu(menu),
+                                                    Some(view) => view.update(cx, |view, cx| view.table_menu(menu, cx)),
                                                     None => menu,
                                                 }
                                             }),

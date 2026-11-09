@@ -2158,7 +2158,7 @@ impl LyrelApp {
                     t(L10nKey::EditorDocumentProperties),
                     Box::new(markdown::EditDocumentProperties),
                 );
-            let menu = markdown.read(cx).table_menu(menu);
+            let menu = markdown.update(cx, |markdown, cx| markdown.table_menu(menu, cx));
             let menu = markdown.read(cx).link_menu(menu, cx);
             return this.editor_file_menu_items(menu, id, app, cx);
         }

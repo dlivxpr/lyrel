@@ -845,6 +845,7 @@ fn native_link_grapheme_hovers_edits_and_opens(cx: &mut TestAppContext, fragment
 
 #[gpui_kit::test]
 fn final_review_format_nested_delimiters_and_underscore_toggle(cx: &mut TestAppContext) {
+    use gpui_kit::test::TestQueryExt as _;
     let source = "**bold** and __strong__\n";
     let (_dir, _path, _app, mut context, _streams, view) = fixture!(cx, source);
     select(&view, &mut context, 2, 6);
@@ -867,6 +868,15 @@ fn final_review_format_nested_delimiters_and_underscore_toggle(cx: &mut TestAppC
     select(&view, &mut context, 0, 8);
     context.update(|window, cx| window.input("**_bold_**", cx));
     select(&view, &mut context, 0, 10);
+    context.update(|window, cx| window.click("markdown-format-menu", cx));
+    context.run_until_parked();
+    context.update(|window, cx| {
+        assert_eq!(window.find_by_label(crate::ui::i18n::t(
+            crate::ui::i18n::L10nKey::MarkdownFormatItalic,
+        )).checked(), Some(true));
+        window.press("escape", cx);
+    });
+    context.run_until_parked();
     context.update(|window, cx| window.press("secondary-i", cx));
     assert_eq!(bytes(&view, &context), source.as_bytes());
     view.read_with(&context, |view, _| assert_eq!(view.selection().range(), 0..8));
