@@ -682,7 +682,7 @@ impl RemoteTerminal {
     }
 
     /// A test pane backed by a pty of this machine's own.
-    #[cfg(test)]
+    #[cfg(any(test, feature = "native-markdown-tests"))]
     pub(super) fn from_stream(stream: Stream, size: TermSize) -> anyhow::Result<Self> {
         Self::from_stream_with(
             stream,
@@ -692,7 +692,7 @@ impl RemoteTerminal {
         )
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "native-markdown-tests"))]
     pub(super) fn from_stream_with(
         stream: Stream,
         size: TermSize,

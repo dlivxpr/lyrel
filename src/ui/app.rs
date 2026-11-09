@@ -5158,12 +5158,14 @@ mod tests {
 #[path = "app/attention_tests.rs"]
 mod attention_tests;
 
-#[cfg(test)]
+#[cfg(any(test, feature = "native-markdown-tests"))]
 pub(crate) mod test_window {
     use crate::core::config::Config;
     use crate::core::session::Session;
     use crate::ui::app::LyrelApp;
-    use gpui_kit::{AppContext, Entity, Focusable, TestAppContext, VisualTestContext};
+    #[cfg(test)]
+    use gpui_kit::Focusable;
+    use gpui_kit::{AppContext, Entity, TestAppContext, VisualTestContext};
 
     pub(crate) fn harness(cx: &mut TestAppContext) -> (Entity<LyrelApp>, VisualTestContext) {
         crate::core::config::pin_test_config_dir();
@@ -5231,6 +5233,7 @@ pub(crate) mod test_window {
         (app, vcx, streams)
     }
 
+    #[cfg(test)]
     pub(crate) fn harness_with_pane(
         cx: &mut TestAppContext,
     ) -> (
@@ -5260,6 +5263,7 @@ pub(crate) mod test_window {
         (app, vcx, stream)
     }
 
+    #[cfg(test)]
     /// Wait until the window has actually stopped drawing — which is not the
     /// same as having reached the state a test was waiting for.
     ///
