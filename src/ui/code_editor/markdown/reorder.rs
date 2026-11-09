@@ -315,7 +315,7 @@ impl SourcePresentation {
         let Some(syntax) = self.format_syntax(cx) else {
             return;
         };
-        let source = &syntax.source;
+        let source = syntax.source();
         let Some(inventory) = self.projection.reorder_inventory.clone() else {
             return;
         };

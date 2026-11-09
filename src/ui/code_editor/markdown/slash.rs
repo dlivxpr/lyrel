@@ -274,7 +274,7 @@ impl ListDelegate for Choices {
         };
         let disabled = self.table && !entry.allowed_in_cell();
         let label = if disabled {
-            format!("{label} · {}", t(L10nKey::MarkdownSlashBlockUnavailable))
+            crate::ui::i18n::t_fmt(L10nKey::MarkdownSlashBlockUnavailable, &[("label", &label)])
         } else {
             label
         };

@@ -852,6 +852,12 @@ fn final_review_format_nested_delimiters_and_underscore_toggle(cx: &mut TestAppC
     assert_eq!(bytes(&view, &context), b"***bold*** and __strong__\n");
     context.dispatch_action(gpui_kit::component::input::Undo);
     settle(&view, &mut context);
+    select(&view, &mut context, 0, 8);
+    context.update(|window, cx| window.press("secondary-i", cx));
+    assert_eq!(bytes(&view, &context), b"*bold* and __strong__\n");
+    view.read_with(&context, |view, _| assert_eq!(view.selection().range(), 0..6));
+    context.dispatch_action(gpui_kit::component::input::Undo);
+    settle(&view, &mut context);
     select(&view, &mut context, 15, 21);
     context.update(|window, cx| window.press("secondary-b", cx));
     assert_eq!(bytes(&view, &context), b"**bold** and strong\n");
@@ -859,9 +865,9 @@ fn final_review_format_nested_delimiters_and_underscore_toggle(cx: &mut TestAppC
 
 #[gpui_kit::test]
 fn final_review_format_preserves_link_destination_and_reference_label(cx: &mut TestAppContext) {
-    let source = "[body](https://example.com) and [other][label]\n\n[label]: https://example.org\n";
+    let source = "[body](https://example.com) and [other][label]\n\n[label]: https://example.org\n\n<https://auto.example.com> <user@example.com> https://bare.example.net bare@example.net\n";
     let (_dir, _path, _app, mut context, _streams, view) = fixture!(cx, source);
-    for text in ["https://example.com", "label"] {
+    for text in ["https://example.com", "label", "https://auto.example.com", "user@example.com", "https://bare.example.net", "bare@example.net"] {
         let at = source.find(text).unwrap();
         select(&view, &mut context, at, at + text.len());
         context.update(|window, cx| window.press("secondary-b", cx));
@@ -871,7 +877,7 @@ fn final_review_format_preserves_link_destination_and_reference_label(cx: &mut T
     context.update(|window, cx| window.press("secondary-b", cx));
     assert_eq!(
         bytes(&view, &context),
-        b"[**body**](https://example.com) and [other][label]\n\n[label]: https://example.org\n"
+        b"[**body**](https://example.com) and [other][label]\n\n[label]: https://example.org\n\n<https://auto.example.com> <user@example.com> https://bare.example.net bare@example.net\n"
     );
 }
 
@@ -1013,9 +1019,11 @@ fn final_review_table_slash_excludes_block_insertion_and_keeps_inline_commands(
     });
     context.update(|window, cx| {
         let entry = window.find("markdown-slash-entry-code");
-        assert!(entry.label().unwrap().contains(crate::ui::i18n::t(
-            crate::ui::i18n::L10nKey::MarkdownSlashBlockUnavailable
-        )));
+        let expected = crate::ui::i18n::t_fmt(
+            crate::ui::i18n::L10nKey::MarkdownSlashBlockUnavailable,
+            &[("label", crate::ui::i18n::t(crate::ui::i18n::L10nKey::MarkdownBlockCode))],
+        );
+        assert_eq!(entry.label(), Some(expected.as_str()));
         window.press("enter", cx);
     });
     assert_eq!(
@@ -1147,5 +1155,48 @@ fn final_review_duplicate_embeds_keep_focus_and_scroll_after_shared_prefix_edit(
             ))
         );
     });
+    assert_eq!(bytes(&view, &context), source.as_bytes());
+}
+
+#[gpui_kit::test]
+fn final_review_large_document_format_commands_preserve_order_and_cancel_external_edits(
+    cx: &mut TestAppContext,
+) {
+    let source = format!("start bold\n\n{}", "filler words\n\n".repeat(3000));
+    let (_dir, _path, _app, mut context, _streams, view) = fixture!(cx, &source);
+    select(&view, &mut context, 0, 0);
+    context.update(|window, cx| {
+        window.input("X", cx);
+        view.update(cx, |view, cx| view.select_range(7..11, cx));
+        window.press("secondary-b", cx);
+        window.press("secondary-i", cx);
+    });
+    let combined = source.replacen("start bold", "Xstart ***bold***", 1);
+    until(&mut context, |context| bytes(&view, context) == combined.as_bytes());
+    context.dispatch_action(gpui_kit::component::input::Undo);
+    assert_eq!(bytes(&view, &context), source.replacen("start bold", "Xstart **bold**", 1).as_bytes());
+    context.dispatch_action(gpui_kit::component::input::Undo);
+    assert_eq!(bytes(&view, &context), format!("X{source}").as_bytes());
+    context.dispatch_action(gpui_kit::component::input::Undo);
+    assert_eq!(bytes(&view, &context), source.as_bytes());
+    settle(&view, &mut context);
+
+    select(&view, &mut context, 0, 0);
+    context.update(|window, cx| {
+        window.input("X", cx);
+        view.update(cx, |view, cx| view.select_range(7..11, cx));
+        window.press("secondary-b", cx);
+        window.press("secondary-i", cx);
+        window.input("Y", cx);
+        view.update(cx, |view, cx| view.select_range(7..8, cx));
+        window.press("secondary-shift-u", cx);
+    });
+    let external = source.replacen("start bold", "Xstart <u>Y</u>", 1);
+    until(&mut context, |context| bytes(&view, context) == external.as_bytes());
+    context.dispatch_action(gpui_kit::component::input::Undo);
+    assert_eq!(bytes(&view, &context), source.replacen("start bold", "Xstart Y", 1).as_bytes());
+    context.dispatch_action(gpui_kit::component::input::Undo);
+    assert_eq!(bytes(&view, &context), format!("X{source}").as_bytes());
+    context.dispatch_action(gpui_kit::component::input::Undo);
     assert_eq!(bytes(&view, &context), source.as_bytes());
 }

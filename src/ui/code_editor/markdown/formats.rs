@@ -506,6 +506,14 @@ fn eligible(source: &str, root: &Node, range: &Range<usize>, format: Format) -> 
                 )
             });
             let whole = range.start <= p.start.offset && p.end.offset <= range.end;
+            if matches!(node, Node::Link(_))
+                && super::super::links::label_range(source, node).is_none()
+            {
+                let delimited = source[p.start.offset..p.end.offset].starts_with('<');
+                if !whole || (!delimited && range.start == p.start.offset && range.end == p.end.offset) {
+                    return true;
+                }
+            }
             if !whole && body.is_none_or(|body| range.start < body.start || body.end < range.end) {
                 return true;
             }
@@ -624,6 +632,7 @@ fn edit(
     }
     let mut owner = range.clone();
     let mut body = range.clone();
+    let mut converted = false;
     if matches!(
         format,
         Format::TextColor | Format::HighlightColor | Format::Highlight
@@ -696,10 +705,38 @@ fn edit(
             body = inner;
             (String::new(), String::new())
         } else {
-            (open.to_owned(), close.to_owned())
+            let other = match format {
+                Format::Bold => Some(Format::Italic),
+                Format::Italic => Some(Format::Bold),
+                _ => None,
+            };
+            let conversion = other
+                .and_then(|other| markdown_wrapper(root, &body, other))
+                .filter(|(outer, _)| *outer == body);
+            if let Some((outer, inner)) = conversion {
+                // A complete source owner is an explicit conversion. Selecting
+                // only its text instead adds the requested mark without removing
+                // the existing format.
+                owner = outer;
+                body = inner;
+                converted = true;
+                if markdown_wrapper(root, &body, format)
+                    .is_some_and(|(outer, _)| outer == body)
+                {
+                    (String::new(), String::new())
+                } else {
+                    (open.to_owned(), close.to_owned())
+                }
+            } else {
+                (open.to_owned(), close.to_owned())
+            }
         }
     };
-    let selected = owner.start + open.len()..owner.start + open.len() + body.len();
+    let selected = if converted {
+        owner.start..owner.start + open.len() + body.len() + close.len()
+    } else {
+        owner.start + open.len()..owner.start + open.len() + body.len()
+    };
     let selection = if selection.is_reversed() {
         Selection::new(selected.end, selected.start)
     } else {
@@ -798,46 +835,7 @@ impl SourcePresentation {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.is_composing() || !self.extra_selections.is_empty() {
-            return;
-        }
-        if let Some(command) = self.plan_format(format, color, cx) {
-            self.command(command, window, cx);
-        } else if self.format_syntax(cx).is_none()
-            && self.document.read(cx).source().len() > 32 * 1024
-        {
-            let token = self.input_token(cx);
-            let selection = self.state.selection;
-            let source = self.document.read(cx).source().clone();
-            let grammar = self.document.read(cx).grammar();
-            let live = self.live;
-            cx.spawn_in(window, async move |view, cx| {
-                let command = cx
-                    .background_executor()
-                    .spawn(async move {
-                        let source = source.to_string();
-                        let root = super::super::parser::parse(&source, grammar, true).ok()?;
-                        let styles = decorations(&source, &root);
-                        edit(&source, &root, selection, format, color, &styles)
-                    })
-                    .await;
-                let _ = view.update_in(cx, |view, window, cx| {
-                    if view.input_token(cx) == token
-                        && view.state.selection == selection
-                        && view.document.read(cx).grammar() == grammar
-                        && view.live == live
-                        && view.extra_selections.is_empty()
-                        && !view.is_composing()
-                        && view.focus.is_focused(window)
-                        && let Some(command) = command
-                    {
-                        view.command(command, window, cx);
-                    }
-                });
-            })
-            .detach();
-        }
-        self.focus.focus(window, cx);
+        self.dispatch_format_command(format, color, window, cx);
     }
 }
 
@@ -894,13 +892,17 @@ mod tests {
         context.dispatch_action(gpui_kit::component::input::Undo);
         context.dispatch_action(gpui_kit::component::input::Redo);
         context.dispatch_action(Bold);
+        view.read_with(&context, |view, cx| {
+            assert_eq!(view.document().read(cx).encode().unwrap(), original.as_bytes());
+        });
         view.update_in(&mut context, |view, _, cx| view.select_range(2..7, cx));
         context.dispatch_action(Italic);
         view.read_with(&context, |view, cx| {
             assert_eq!(
                 view.document().read(cx).encode().unwrap(),
                 "\u{feff}a *b* c\r\nuntouched __spelling__\n".as_bytes()
-            )
+            );
+            assert_eq!(view.selection().range(), 2..5);
         });
         context.dispatch_action(Underline);
         context.dispatch_action(Highlight);
