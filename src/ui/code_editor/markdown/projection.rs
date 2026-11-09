@@ -1116,15 +1116,16 @@ impl Projection {
                     Node::MdxjsEsm(_) | Node::MdxFlowExpression(_) | Node::MdxTextExpression(_) => {
                         Kind::Mdx(super::mdx::Field::Dynamic)
                     }
+                    // Inline HTML keeps its source, but must not turn adjacent
+                    // Markdown prose into an unformatted source-only region.
+                    Node::Paragraph(_) => Kind::Prose,
                     _ => super::regions::classify(node, &source[range.clone()]),
                 };
                 let mut leaf = Leaf::new(range.clone(), kind);
                 leaf.image_definitions = images.clone();
                 if matches!(kind, Kind::Prose | Kind::Heading(_)) {
                     if let Some(children) = node.children() {
-                        for child in children {
-                            Self::inline(source, child, &mut leaf);
-                        }
+                        Self::inline_children(source, children, &mut leaf);
                     }
                     if leaf.segments.is_empty() {
                         leaf.insertion = range.end;
@@ -1261,9 +1262,7 @@ impl Projection {
                     } else {
                         leaf.prefix(source, start..range.start);
                         if let Some(children) = node.children() {
-                            for child in children {
-                                Self::inline(source, child, &mut leaf);
-                            }
+                            Self::inline_children(source, children, &mut leaf);
                         }
                     }
                     if empty_prefix || leaf.segments.is_empty() {
@@ -1307,6 +1306,43 @@ impl Projection {
             leaves.push(Leaf::new(range.end..range.end, Kind::Prose));
         }
     }
+    fn inline_children(source: &str, children: &[Node], leaf: &mut Leaf) {
+        let mut opaque = None;
+        for child in children {
+            let Some(position) = child.position() else {
+                continue;
+            };
+            let range = position.start.offset..position.end.offset;
+            let tag = matches!(child, Node::Html(_))
+                .then(|| super::source::formats::opaque_tag(&source[range.clone()]))
+                .flatten();
+            if let Some((name, start)) = opaque {
+                if tag == Some((name, true)) {
+                    leaf.raw(source, start..range.end);
+                    opaque = None;
+                }
+                continue;
+            }
+            if let Some((name, false)) = tag {
+                opaque = Some((name, range.start));
+            } else {
+                Self::inline(source, child, leaf);
+            }
+        }
+        if let Some((_, start)) = opaque {
+            // An unfinished opaque element remains literal through the end of
+            // this inline owner; it never swallows a following block.
+            let end = children
+                .iter()
+                .rev()
+                .find_map(Node::position)
+                .unwrap()
+                .end
+                .offset;
+            leaf.raw(source, start..end);
+        }
+    }
+
     pub(super) fn inline(source: &str, node: &Node, leaf: &mut Leaf) {
         let Some(position) = node.position() else {
             return;
@@ -1329,9 +1365,7 @@ impl Projection {
                 for child in children {
                     if matches!(child, Node::Paragraph(_)) {
                         if let Some(inline) = child.children() {
-                            for child in inline {
-                                Self::inline(source, child, leaf);
-                            }
+                            Self::inline_children(source, inline, leaf);
                         }
                     } else {
                         Self::inline(source, child, leaf);
@@ -1492,9 +1526,7 @@ impl Projection {
                     Some(ix),
                     None,
                 );
-                for child in children {
-                    Self::inline(source, child, leaf);
-                }
+                Self::inline_children(source, children, leaf);
                 leaf.push_segment(end..range.end, &source[end..range.end], Some(ix), None);
                 leaf.style = before;
             }
@@ -1574,9 +1606,7 @@ impl Projection {
                 let before = leaf.style;
                 leaf.style.link = Some(ix);
                 if let Some(children) = node.children() {
-                    for child in children {
-                        Self::inline(source, child, leaf);
-                    }
+                    Self::inline_children(source, children, leaf);
                 }
                 leaf.style = before;
                 leaf.push_segment(

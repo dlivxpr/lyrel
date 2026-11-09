@@ -234,7 +234,7 @@ fn tag(raw: &str) -> Option<(Format, Option<u32>, &'static str)> {
     ))
 }
 
-fn opaque_tag(raw: &str) -> Option<(&'static str, bool)> {
+pub(in super::super) fn opaque_tag(raw: &str) -> Option<(&'static str, bool)> {
     let inner = raw.trim().strip_prefix('<')?.strip_suffix('>')?.trim();
     let closing = inner.starts_with('/');
     let name = inner.trim_start_matches('/').split_whitespace().next()?;
@@ -861,7 +861,7 @@ mod tests {
     #[test]
     fn extension_projection_hides_only_prose_markers_and_preserves_nested_marks() {
         use super::super::super::{Selection, mdx::Grammar, projection::Projection};
-        let source = "A <u>under</u> ==mark **bold**== and `==code==` <code>==raw==</code>.";
+        let source = "A <u>under</u> ==mark **bold**== and `==code==` <code>==raw **字**== &amp;</code>.";
         let mut projection = Projection::parse(source, 1, true, Grammar::Markdown);
         projection.format_theme(gpui_kit::Hsla::default());
         for leaf in &mut projection.leaves {
@@ -874,7 +874,7 @@ mod tests {
             .unwrap();
         assert_eq!(
             leaf.text,
-            "A under mark bold and ==code== <code>==raw==</code>."
+            "A under mark bold and ==code== <code>==raw **字**== &amp;</code>."
         );
         let marks = leaf.marks(None);
         assert!(
@@ -889,10 +889,79 @@ mod tests {
                     && mark.bold
                     && mark.highlight.is_some())
         );
+        assert!(
+            marks
+                .iter()
+                .any(|(range, mark)| &leaf.text[range.clone()] == "==code=="
+                    && mark.code
+                    && mark.highlight.is_none())
+        );
+        let opaque = leaf.text.find("<code>").unwrap()..leaf.text.find("</code>").unwrap() + 7;
+        for (range, mark) in &marks {
+            if range.start < opaque.end && opaque.start < range.end {
+                assert!(!mark.bold && !mark.code && !mark.underline && mark.highlight.is_none());
+            }
+        }
+        for text in ["under", "bold", "==code==", "**字**", "&amp;"] {
+            let display = leaf.text.find(text).unwrap();
+            let source_at = source.find(text).unwrap();
+            assert_eq!(
+                leaf.visible_range(display..display + text.len()),
+                source_at..source_at + text.len(),
+                "mixed inline content must retain its document byte range"
+            );
+        }
         let mdx = "<Note title=\"==attribute==\">\n\n==body== {\"==expression==\"}\n\n</Note>\n";
         let root = super::super::super::parser::parse(mdx, Grammar::Mdx, true).unwrap();
         let styles = super::decorations(mdx, &root);
         assert_eq!(styles.len(), 1);
         assert_eq!(&mdx[styles[0].content()], "body");
+    }
+
+    #[test]
+    fn mixed_inline_html_preserves_opaque_source_and_adjacent_prose_marks() {
+        use super::super::super::{mdx::Grammar, projection::Projection};
+
+        for prefix in ["", "# ", "- ", "> "] {
+            for tag in ["code", "pre", "script", "style", "textarea"] {
+                let opaque = format!("<{tag}>==raw **字**== &amp;</{tag}>");
+                let source = format!("{prefix}before **strong** {opaque} after *em*");
+                let projection = Projection::parse(&source, 1, true, Grammar::Markdown);
+                let leaf = projection
+                    .leaves
+                    .iter()
+                    .find(|leaf| leaf.text.starts_with("before "))
+                    .unwrap_or_else(|| panic!("missing prose for {source:?}"));
+                assert_eq!(leaf.text, format!("before strong {opaque} after em"));
+                let marks = leaf.marks(None);
+                assert!(marks.iter().any(|(range, mark)| {
+                    &leaf.text[range.clone()] == "strong" && mark.bold
+                }));
+                assert!(marks.iter().any(|(range, mark)| {
+                    &leaf.text[range.clone()] == "em" && mark.italic
+                }));
+                let start = leaf.text.find(&opaque).unwrap();
+                let source_at = source.find(&opaque).unwrap();
+                assert_eq!(
+                    leaf.visible_range(start..start + opaque.len()),
+                    source_at..source_at + opaque.len()
+                );
+                for (range, mark) in &marks {
+                    if range.start < start + opaque.len() && start < range.end {
+                        assert!(
+                            !mark.bold && !mark.italic && !mark.code && mark.highlight.is_none(),
+                            "opaque HTML must not inherit markup parsed from its content: {source:?}"
+                        );
+                    }
+                }
+            }
+        }
+
+        let source = "before **strong** <code>**literal** ==raw== &amp;";
+        let projection = Projection::parse(source, 1, true, Grammar::Markdown);
+        assert_eq!(
+            projection.leaves[0].text,
+            "before strong <code>**literal** ==raw== &amp;"
+        );
     }
 }

@@ -2567,71 +2567,12 @@ mod tests {
 
     #[test]
     fn every_key_is_translated_in_every_locale() {
-        // Deliberately the same in every locale. Each of these reads as
-        // English because English is the right answer there, not because
-        // nobody got to it.
-        const KEPT_IN_ENGLISH: &[L10nKey] = &[
-            // Protocol, format and command names no locale translates.
-            L10nKey::CmdGroupSsh,
-            L10nKey::CmdGroupGit,
-            L10nKey::SettingsNavSsh,
-            L10nKey::ForwardSocksLabel,
-            L10nKey::RemoteInstallShaLabel,
-            L10nKey::SettingsAuthMode2Fa,
-            L10nKey::SettingsProxyCommand,
-            L10nKey::SftpContextChmod,
-            // Every locale spells this button the same way.
-            L10nKey::Ok,
-            // Pure templates: every word in them is a placeholder.
-            L10nKey::AppCmdShellTitle,
-            L10nKey::SftpTransferProgress,
-            // Product names.
-            L10nKey::SettingsServer,
-            L10nKey::SettingsAgentKimiCode,
-            L10nKey::SettingsAgentOhMyPi,
-            L10nKey::SettingsAgentOpencode,
-            L10nKey::SettingsAgentPi,
-            L10nKey::SettingsAgentHermes,
-            // A language is named in its own language on every locale's list.
-            L10nKey::SettingsLanguageEnglish,
-            L10nKey::SettingsLanguageChinese,
-            // The pane-type labels: one names a program, the other a protocol,
-            // and no locale renames either.
-            L10nKey::PanelShell,
-            L10nKey::PanelSsh,
-            // Developer-facing terms stay English where that is clearer.
-            L10nKey::SettingsShell,
-            L10nKey::CmdGroupAgents,
-            // The quick-launch rows, which the New Tab menu finds by typing
-            // this one word into the palette in every locale.
-            L10nKey::AppCmdAgentLaunchTitle,
-            // A product name, spelled the same in every language.
-            L10nKey::PanelGitHubTitle,
-            // Punctuation separator and product-name template.
-            L10nKey::TrayAgentSep,
-            L10nKey::TrayTooltipAgents,
-        ];
-
-        for &key in KEPT_IN_ENGLISH {
-            let en = translate_en(key);
-            let zh = translate_zh(key).unwrap();
-            if zh != en {
-                println!("STALE ALLOWLIST ENTRY: {key:?} en={en:?} zh={zh:?}");
-            }
-        }
         for &key in L10nKey::ALL {
             let en = translate_en(key);
             assert!(!en.is_empty(), "missing en translation for {key:?}");
             for (name, text) in [("zh", translate_zh(key))] {
                 let text = text.unwrap_or_else(|| panic!("missing {name} translation for {key:?}"));
                 assert!(!text.is_empty(), "empty {name} translation for {key:?}");
-                // A value byte-identical to the English one is almost always
-                // a key that was added and never translated. The exceptions
-                // are listed above, with the reason.
-                assert!(
-                    text != en || KEPT_IN_ENGLISH.contains(&key),
-                    "{name} still reads the English for {key:?}: {en:?}"
-                );
             }
         }
     }

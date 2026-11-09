@@ -1799,8 +1799,9 @@ fn keystroke_is_valid(s: &str) -> bool {
 
 fn action_context(action: &str) -> Option<&'static str> {
     match action {
-        "FindInTerminal" | "FindNext" | "FindPrevious" | "ClearScrollback" | "InsertNewline"
-        | "CopyText" | "PasteText" | "ToggleComposer" => Some("Terminal"),
+        "FindInTerminal" | "ClearScrollback" | "InsertNewline" | "CopyText" | "PasteText"
+        | "ToggleComposer" => Some("Terminal"),
+        "FindNext" | "FindPrevious" => Some("Terminal || Markdown || MarkdownSearch"),
         // `alt_screen` is declared by the pane whenever a full-screen program
         // owns the grid, so this binding is simply absent there and Ctrl+V
         // carries on to the PTY as SYN (#677).
@@ -1923,19 +1924,9 @@ fn make_binding(action: &str, keystroke: &str, cx: &App) -> Option<KeyBinding> {
         "ScmToggleGraph" => load_binding(keystroke, ScmToggleGraph, None, cx),
         "ToggleDiffViewMode" => load_binding(keystroke, ToggleDiffViewMode, None, cx),
         "FindInTerminal" => load_binding(keystroke, FindInTerminal, action_context(action), cx),
-        "FindNext" => load_binding(
-            keystroke,
-            FindNext,
-            Some("Terminal || Markdown || MarkdownSearch"),
-            cx,
-        ),
+        "FindNext" => load_binding(keystroke, FindNext, action_context(action), cx),
         "ToggleComposer" => load_binding(keystroke, ToggleComposer, action_context(action), cx),
-        "FindPrevious" => load_binding(
-            keystroke,
-            FindPrevious,
-            Some("Terminal || Markdown || MarkdownSearch"),
-            cx,
-        ),
+        "FindPrevious" => load_binding(keystroke, FindPrevious, action_context(action), cx),
         "ClearScrollback" => load_binding(keystroke, ClearScrollback, action_context(action), cx),
         "InsertNewline" => load_binding(keystroke, InsertNewline, action_context(action), cx),
         "CopyText" => load_binding(keystroke, CopyText, action_context(action), cx),
@@ -2583,6 +2574,28 @@ mod tests {
                 action_context(action),
                 "{action} is installed in a different context than `action_context` reports"
             );
+        }
+    }
+
+    #[test]
+    fn find_navigation_dispatches_in_terminal_and_markdown_but_not_unrelated_views() {
+        let effective = vec![
+            ("FindNext".to_string(), "f13".to_string()),
+            ("FindPrevious".to_string(), "shift-f13".to_string()),
+        ];
+        for context in ["Terminal", "Markdown", "MarkdownSearch"] {
+            assert_eq!(
+                dispatched(&effective, "f13", context),
+                vec![FindNext::name_for_type()]
+            );
+            assert_eq!(
+                dispatched(&effective, "shift-f13", context),
+                vec![FindPrevious::name_for_type()]
+            );
+        }
+        for context in ["Workspace", "Input"] {
+            assert!(dispatched(&effective, "f13", context).is_empty());
+            assert!(dispatched(&effective, "shift-f13", context).is_empty());
         }
     }
 
