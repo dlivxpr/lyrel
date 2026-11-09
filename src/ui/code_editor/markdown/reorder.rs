@@ -217,6 +217,7 @@ impl SourcePresentation {
         if !self.live
             || self.is_composing()
             || self.projection.revision != self.document.read(cx).revision()
+            || self.projection.reorder_inventory.is_none()
             || matches!(
                 leaf.kind,
                 Kind::PendingSource | Kind::Mdx(_) | Kind::Metadata
