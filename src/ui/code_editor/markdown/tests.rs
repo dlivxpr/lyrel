@@ -234,13 +234,21 @@ fn native_text_color_picker_clear_geometry_and_shared_history(cx: &mut gpui_kit:
                     .is_some_and(|value| value.eq_ignore_ascii_case("#123456"))
             })
             .expect("standard picker hex input");
+        assert!(input.visible(), "hex entry must be a visible standard picker input");
         window.pointer_down(input.bounds().center(), MouseButton::Left, cx);
         window.pointer_up(input.bounds().center(), MouseButton::Left, cx);
         window.press("secondary-a", cx);
         window.input("#7c3aed80", cx);
+        assert_eq!(view.read(cx).document().read(cx).encode().unwrap(), original.as_bytes());
+        assert!(window.find_all_by_role(gpui_kit::Role::TextInput).into_iter().any(|input| {
+            input.visible() && input.value().is_some_and(|value| value.eq_ignore_ascii_case("#7c3aed80"))
+        }), "standard picker accepts the public eight-digit RGBA hex value");
         window.press("enter", cx);
     });
     context.run_until_parked();
+    view.read_with(&context, |view, cx| {
+        assert_eq!(view.document().read(cx).encode().unwrap(), original.as_bytes());
+    });
     context.update(|window, cx| window.click("markdown-format-apply-color", cx));
     context.run_until_parked();
     let recolored = original.replace("#123456", "#7c3aed80");
