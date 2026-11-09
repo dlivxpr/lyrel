@@ -354,6 +354,9 @@ impl SourcePresentation {
                 window,
                 cx,
             );
+        } else {
+            let at = fence.insertion();
+            self.command(Command::Select(Selection::caret(at)), window, cx);
         }
         self.focus.focus(window, cx);
     }

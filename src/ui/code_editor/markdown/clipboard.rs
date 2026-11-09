@@ -392,7 +392,9 @@ impl SourcePresentation {
         merged
     }
     pub(super) fn copy_contents(&mut self, plain: bool, window: &mut Window, cx: &mut Context<Self>) {
-        self.command(Command::FinishComposition, window, cx);
+        if self.is_composing() {
+            self.command(Command::FinishComposition, window, cx);
+        }
         let end = self.document.read(cx).source().len();
         self.copy_markdown_ranges(vec![0..end], false, plain, window, cx);
     }

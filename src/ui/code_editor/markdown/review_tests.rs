@@ -892,14 +892,15 @@ fn final_review_copy_contents_with_empty_selection_and_stale_cut(cx: &mut TestAp
             item.text().as_deref() == Some(source) && item.metadata().is_none()
         })
     }));
-    select(&view, &mut context, 0, 1);
+    let bold = source.find("bold").unwrap();
+    select(&view, &mut context, bold, bold + 4);
     context.update(|window, cx| {
         cx.write_to_clipboard(gpui_kit::ClipboardItem::new_string("sentinel".into()));
         window.press("secondary-x", cx);
         window.input("NEW", cx);
     });
     settle(&view, &mut context);
-    assert_eq!(bytes(&view, &context), source.replacen('9', "NEW", 1).as_bytes());
+    assert_eq!(bytes(&view, &context), source.replacen("bold", "NEW", 1).as_bytes());
     context.update(|_, cx| {
         assert_eq!(cx.read_from_clipboard().unwrap().text().as_deref(), Some("sentinel"));
     });
@@ -992,6 +993,13 @@ fn final_review_table_slash_excludes_block_insertion_and_keeps_inline_commands(c
     });
     assert_eq!(bytes(&view, &context), source.replacen("value", "/code", 1).as_bytes());
     select(&view, &mut context, at, at + 5);
+    context.update(|window, cx| window.input("/table", cx));
+    until(&mut context, |context| context.update(|window, _| {
+        window.try_find("markdown-slash-entry-table").is_some()
+    }));
+    context.update(|window, cx| window.press("enter", cx));
+    assert_eq!(bytes(&view, &context), source.replacen("value", "/table", 1).as_bytes());
+    select(&view, &mut context, at, at + 6);
     context.update(|window, cx| window.input("/bold", cx));
     until(&mut context, |context| context.update(|window, _| {
         window.try_find("markdown-slash-entry-bold").is_some()
