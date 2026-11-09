@@ -661,9 +661,17 @@ fn native_soft_wrap_caret_keeps_clicked_side_across_navigation_and_input(cx: &mu
             geometry.caret_height(),
         )
     });
-    let assert_bounds = |bounds: gpui_kit::Bounds<gpui_kit::Pixels>, expected: gpui_kit::Point<gpui_kit::Pixels>| {
-        assert_eq!(bounds.top(), expected.y, "caret must stay on the independently located visual row");
-        assert!((bounds.left() - expected.x).abs() < px(0.5), "caret must retain the row's expected glyph column");
+    let assert_bounds = |bounds: gpui_kit::Bounds<gpui_kit::Pixels>,
+                         expected: gpui_kit::Point<gpui_kit::Pixels>| {
+        assert_eq!(
+            bounds.top(),
+            expected.y,
+            "caret must stay on the independently located visual row"
+        );
+        assert!(
+            (bounds.left() - expected.x).abs() < px(0.5),
+            "caret must retain the row's expected glyph column"
+        );
     };
     let click = |position: gpui_kit::Point<gpui_kit::Pixels>, context: &mut VisualTestContext| {
         context.update(|window, cx| {
@@ -730,7 +738,8 @@ fn native_soft_wrap_caret_keeps_clicked_side_across_navigation_and_input(cx: &mu
     view.update_in(&mut context, |view, window, cx| {
         let utf16 = view.document().read(cx).utf16_offset(at);
         assert_bounds(
-            view.bounds_for_range(utf16..utf16, view.scroll.bounds(), window, cx).unwrap(),
+            view.bounds_for_range(utf16..utf16, view.scroll.bounds(), window, cx)
+                .unwrap(),
             lower,
         );
     });
@@ -801,11 +810,15 @@ fn native_soft_wrap_caret_keeps_clicked_side_across_navigation_and_input(cx: &mu
     });
     sibling.update_in(&mut context, |sibling, window, cx| {
         let start = original.find("keep").unwrap();
-        sibling.command(super::Command::Replace {
-            range: start..start + 4,
-            text: "keep".into(),
-            kind: super::EditKind::Command,
-        }, window, cx);
+        sibling.command(
+            super::Command::Replace {
+                range: start..start + 4,
+                text: "keep".into(),
+                kind: super::EditKind::Command,
+            },
+            window,
+            cx,
+        );
     });
     settle(&view, &mut context);
     view.read_with(&context, |view, cx| {
@@ -852,20 +865,43 @@ fn native_modified_link_drag_retains_upper_wrap_anchor(cx: &mut TestAppContext) 
         (
             1 + columns * "界".len(),
             point(bounds.left() + advance * columns as f32, bounds.top()),
-            point(bounds.left() + advance * 2., bounds.top() + geometry.line_height()),
+            point(
+                bounds.left() + advance * 2.,
+                bounds.top() + geometry.line_height(),
+            ),
             geometry.caret_height(),
         )
     });
     let modifiers = if cfg!(target_os = "macos") {
-        Modifiers { platform: true, ..Modifiers::none() }
-    } else { Modifiers::control() };
-    context.simulate_mouse_down(point(upper.x - px(1.), upper.y + height / 2.), MouseButton::Left, modifiers);
+        Modifiers {
+            platform: true,
+            ..Modifiers::none()
+        }
+    } else {
+        Modifiers::control()
+    };
+    context.simulate_mouse_down(
+        point(upper.x - px(1.), upper.y + height / 2.),
+        MouseButton::Left,
+        modifiers,
+    );
     context.update(|window, cx| {
-        window.pointer_move(point(target.x, target.y + height / 2.), Some(MouseButton::Left), cx);
+        window.pointer_move(
+            point(target.x, target.y + height / 2.),
+            Some(MouseButton::Left),
+            cx,
+        );
     });
-    context.simulate_mouse_up(point(target.x, target.y + height / 2.), MouseButton::Left, modifiers);
+    context.simulate_mouse_up(
+        point(target.x, target.y + height / 2.),
+        MouseButton::Left,
+        modifiers,
+    );
     settle(&view, &mut context);
-    assert_eq!(view.read_with(&context, |view, _| view.selection()), Selection::new(at, at + 2 * "界".len()));
+    assert_eq!(
+        view.read_with(&context, |view, _| view.selection()),
+        Selection::new(at, at + 2 * "界".len())
+    );
     context.dispatch_action(gpui_kit::component::input::MoveLeft);
     settle(&view, &mut context);
     view.read_with(&context, |view, cx| {
@@ -874,10 +910,12 @@ fn native_modified_link_drag_retains_upper_wrap_anchor(cx: &mut TestAppContext) 
         assert_eq!(caret.top(), upper.y);
         assert!((caret.left() - upper.x).abs() < px(0.5));
     });
-    assert_eq!(app.read_with(&context, |app, _| app.active_buffer().unwrap().path.clone()), path);
+    assert_eq!(
+        app.read_with(&context, |app, _| app.active_buffer().unwrap().path.clone()),
+        path
+    );
     assert_eq!(bytes(&view, &context), source.as_bytes());
 }
-
 
 fn first_soft_wrapped_link_grapheme_hovers_edits_and_opens(cx: &mut gpui_kit::TestAppContext) {
     native_link_grapheme_hovers_edits_and_opens(cx, false);

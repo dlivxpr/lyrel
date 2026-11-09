@@ -41,13 +41,16 @@ impl SourcePresentation {
         } else if at == self.state.selection.anchor {
             anchor
         } else {
-            self.extra_carets.iter().find_map(|(selection, revision, live, affinity)| {
-                (selection.head == at
-                    && *revision == self.document.read(cx).revision()
-                    && *live == self.live
-                    && self.extra_selections.contains(selection))
+            self.extra_carets
+                .iter()
+                .find_map(|(selection, revision, live, affinity)| {
+                    (selection.head == at
+                        && *revision == self.document.read(cx).revision()
+                        && *live == self.live
+                        && self.extra_selections.contains(selection))
                     .then_some(*affinity)
-            }).unwrap_or(CaretAffinity::Downstream)
+                })
+                .unwrap_or(CaretAffinity::Downstream)
         }
     }
 

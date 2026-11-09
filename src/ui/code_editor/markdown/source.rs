@@ -2084,7 +2084,11 @@ impl SourcePresentation {
                 cx,
             );
         } else {
-            let caret = if backward { SourceCaret::new(target) } else { SourceCaret::upstream(target) };
+            let caret = if backward {
+                SourceCaret::new(target)
+            } else {
+                SourceCaret::upstream(target)
+            };
             self.select_caret(caret, extend, window, cx);
         }
     }
@@ -2098,7 +2102,12 @@ impl SourcePresentation {
             self.add_selection(offset.byte..offset.byte, cx);
             let selection = Selection::caret(offset.byte);
             if self.extra_selections.contains(&selection) {
-                self.extra_carets.push((selection, self.document.read(cx).revision(), self.live, offset.affinity));
+                self.extra_carets.push((
+                    selection,
+                    self.document.read(cx).revision(),
+                    self.live,
+                    offset.affinity,
+                ));
             }
         }
     }
