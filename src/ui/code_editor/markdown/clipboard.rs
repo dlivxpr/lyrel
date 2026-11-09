@@ -340,6 +340,7 @@ fn style_tag(d: &Decoration) -> String {
     let css = match d.format {
         Format::Underline => "text-decoration:underline".into(),
         Format::Highlight => "background-color:yellow".into(),
+        Format::TextColor if d.color.is_none() => "color:inherit".into(),
         Format::TextColor | Format::HighlightColor => {
             let color = d.color.unwrap_or(0);
             format!(
