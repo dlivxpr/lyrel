@@ -783,6 +783,9 @@ mod tests {
             std::thread::sleep(std::time::Duration::from_millis(5));
         };
         loop {
+            context
+                .executor()
+                .advance_clock(std::time::Duration::from_millis(100));
             context.run_until_parked();
             if view.read_with(&context, |view, cx| {
                 view.projection.revision == view.document.read(cx).revision()

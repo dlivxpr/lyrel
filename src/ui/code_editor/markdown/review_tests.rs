@@ -54,7 +54,7 @@ macro_rules! fixture {
         fixture!($cx, $source, false)
     };
     ($cx:expr, $source:expr, $local:expr) => {{
-        let directory = tempfile::tempdir().unwrap();
+        let directory = crate::ui::code_editor::test_host::canonical_tempdir();
         let path = directory.path().join("review.md");
         std::fs::write(&path, $source).unwrap();
         let (app, mut context, streams) = harness_with_tabs($cx, 1);

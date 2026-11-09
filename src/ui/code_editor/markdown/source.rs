@@ -3129,6 +3129,8 @@ impl Render for SourcePresentation {
                         .id(SharedString::from(format!("markdown-image:{url}")))
                         .role(Role::Status)
                         .test_support()
+                        .w_full()
+                        .min_w_0()
                         .aria_label(t(key))
                         .text_xs()
                         .truncate()
@@ -3142,6 +3144,8 @@ impl Render for SourcePresentation {
                 .collect::<Vec<_>>();
             div()
                 .v_flex()
+                .w_full()
+                .min_w_0()
                 .flex_none()
                 .when(has_images, |bar| {
                     bar.px_3()
@@ -3654,8 +3658,8 @@ impl Render for SourcePresentation {
                 .child(self.render_references(window, cx))
                 .child(self.render_slash(window, cx))
                 .children(self.reorder_status(cx))
+                .child(image_status)
                 .child(gpui_kit::component::h_flex().w_full().flex_none().flex_wrap().gap_1()
-                    .child(image_status)
                     .child(self.format_toolbar(window, cx))
                     .when(self.live, |toolbar| {
                         use gpui_kit::component::{Sizable as _, button::{Button, ButtonVariants as _}};
@@ -3692,6 +3696,7 @@ impl Render for SourcePresentation {
                     "markdown-source-scrollbar",
                     div()
                         .id("markdown-source-scroll")
+                        .test_support()
                         .flex_1().min_h_0().w_full()
                         .relative()
                         .overflow_y_scroll()
@@ -3985,7 +3990,9 @@ impl Element for SourceElement {
                     if let Some((_, _, row)) =
                         view.viewport.frame.iter().find(|(key, _, _)| *key == id)
                     {
-                        let delta = y - row.top();
+                        // Toolbars can resize during font reflow. Preserve the
+                        // row inside the scroll viewport, not the window origin.
+                        let delta = viewport.top() + y - row.top();
                         // Keep a pending correction, but once it settles anchor
                         // the top visible row instead of an overscan-only row.
                         preserve_anchor = delta.abs() > px(0.5);
@@ -4012,7 +4019,7 @@ impl Element for SourceElement {
                             .iter()
                             .find(|(_, _, row)| row.bottom() > viewport.top())
                     })
-                    .map(|(id, _, row)| (*id, row.top()));
+                    .map(|(id, _, row)| (*id, row.top() - viewport.top()));
             }
             view.viewport.offset = view.scroll.offset();
             if reflow {

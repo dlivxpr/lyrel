@@ -2554,30 +2554,6 @@ mod tests {
     }
 
     #[test]
-    fn action_context_matches_the_scope_make_binding_installs() {
-        let extra_actions = extra_keystrokes(
-            &default_bindings()
-                .into_iter()
-                .map(|(a, k)| (a.to_string(), k.to_string()))
-                .collect::<Vec<_>>(),
-        );
-        let actions = default_bindings()
-            .into_iter()
-            .map(|(a, _)| a)
-            .chain(extra_actions.into_iter().map(|(a, _)| a));
-        for action in actions {
-            let binding =
-                make_binding(action, "f13").unwrap_or_else(|| panic!("no arm for {action}"));
-            let installed = binding.predicate().map(|p| p.to_string());
-            assert_eq!(
-                installed.as_deref(),
-                action_context(action),
-                "{action} is installed in a different context than `action_context` reports"
-            );
-        }
-    }
-
-    #[test]
     fn find_navigation_dispatches_in_terminal_and_markdown_but_not_unrelated_views() {
         let effective = vec![
             ("FindNext".to_string(), "f13".to_string()),

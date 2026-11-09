@@ -861,7 +861,8 @@ mod tests {
     #[test]
     fn extension_projection_hides_only_prose_markers_and_preserves_nested_marks() {
         use super::super::super::{Selection, mdx::Grammar, projection::Projection};
-        let source = "A <u>under</u> ==mark **bold**== and `==code==` <code>==raw **字**== &amp;</code>.";
+        let source =
+            "A <u>under</u> ==mark **bold**== and `==code==` <code>==raw **字**== &amp;</code>.";
         let mut projection = Projection::parse(source, 1, true, Grammar::Markdown);
         projection.format_theme(gpui_kit::Hsla::default());
         for leaf in &mut projection.leaves {
@@ -934,12 +935,16 @@ mod tests {
                     .unwrap_or_else(|| panic!("missing prose for {source:?}"));
                 assert_eq!(leaf.text, format!("before strong {opaque} after em"));
                 let marks = leaf.marks(None);
-                assert!(marks.iter().any(|(range, mark)| {
-                    &leaf.text[range.clone()] == "strong" && mark.bold
-                }));
-                assert!(marks.iter().any(|(range, mark)| {
-                    &leaf.text[range.clone()] == "em" && mark.italic
-                }));
+                assert!(
+                    marks.iter().any(|(range, mark)| {
+                        &leaf.text[range.clone()] == "strong" && mark.bold
+                    })
+                );
+                assert!(
+                    marks
+                        .iter()
+                        .any(|(range, mark)| { &leaf.text[range.clone()] == "em" && mark.italic })
+                );
                 let start = leaf.text.find(&opaque).unwrap();
                 let source_at = source.find(&opaque).unwrap();
                 assert_eq!(

@@ -2254,19 +2254,17 @@ fn markdown_image_completion_never_replaces_text_typed_over_pending_selection(
     let release = host.pause_next_write();
     paste_screenshot(&mut vcx, &png);
     wait_until(&mut vcx, |_| host.entered.load(Ordering::SeqCst));
+    vcx.update(|window, cx| {
+        window.render_frame(cx);
+        assert!(window.find("markdown-image-insertion-status").visible());
+    });
     vcx.update(|window, cx| window.input("new author text", cx));
     vcx.run_until_parked();
     release.send(()).unwrap();
     wait_until(&mut vcx, |vcx| {
         vcx.update(|window, cx| {
             window.render_frame(cx);
-            window
-                .try_find("markdown-image-insertion-status")
-                .is_some_and(|status| {
-                    status
-                        .label()
-                        .is_some_and(|label| label == t(L10nKey::MarkdownImageSelectionChanged))
-                })
+            window.try_find("markdown-image-insertion-status").is_none()
         })
     });
     app.read_with(&vcx, |app, cx| {

@@ -2639,7 +2639,7 @@ fn native_table_cell_escapes_wrapping_unicode_and_preedit_share_the_document_map
     context.dispatch_action(gpui_kit::component::input::Undo);
     settle_live_geometry(&view, &mut context);
     let wrapped = original.find("wrapping").unwrap();
-    let wrapped_end = wrapped + "wrapping words ".len() * 8;
+    let wrapped_end = original.rfind("wrapping words ").unwrap();
     context.update(|window, cx| {
         let first = view
             .read(cx)
@@ -3726,7 +3726,11 @@ fn native_table_toolbar_tracks_its_table_across_selection_scroll_and_zoom(
                     assert!(toolbar.bottom() <= header.top());
                     assert!(header.top() - toolbar.bottom() < window.rem_size());
                     assert!(toolbar.left() >= surface.left());
-                    assert!(toolbar.left() - surface.left() < window.rem_size());
+                    assert_eq!(
+                        toolbar.left(),
+                        heading.left(),
+                        "align with document content"
+                    );
                     assert_eq!(window.find_all("markdown-table-commands").len(), 1);
                     (toolbar, header)
                 });
@@ -3850,11 +3854,20 @@ fn native_table_structure_actions_share_undo_and_save_reopen(cx: &mut gpui_kit::
     context.update(|window, cx| window.click("markdown-table-commands", cx));
     context.run_until_parked();
     context.update(|window, cx| {
-        let item = window.find_by_label(
+        window.scroll(
+            "popup-menu",
+            gpui_kit::ScrollDelta::Pixels(gpui_kit::point(gpui_kit::px(0.), gpui_kit::px(-10000.))),
+            cx,
+        );
+        let item = window.within("popup-menu").find_by_label(
             crate::ui::i18n::t(crate::ui::i18n::L10nKey::EditorTableAlignCenter).as_ref(),
         );
-        window.pointer_down(item.bounds().center(), MouseButton::Left, cx);
-        window.pointer_up(item.bounds().center(), MouseButton::Left, cx);
+        let point = item.bounds().center();
+        assert!(window.find("popup-menu").bounds().contains(&point));
+        assert!(point.y < window.viewport_size().height);
+        window.pointer_move(point, None, cx);
+        window.pointer_down(point, MouseButton::Left, cx);
+        window.pointer_up(point, MouseButton::Left, cx);
     });
     context.run_until_parked();
     let expected = "before  \r\n\n| **A** |  | B |\r\n| --- | :---: | ---: |\n| x\\|y |  | `z` |\r\n|  |  |  |\n\n[ref]: target  ";
@@ -5320,6 +5333,9 @@ fn native_math_renders_glyph_atoms_and_local_source_uses_document_history_and_sa
     settle_live_geometry(&view, &mut context);
     let ready = "markdown-math-ready-x_i^2";
     loop {
+        context
+            .executor()
+            .advance_clock(std::time::Duration::from_millis(100));
         context.run_until_parked();
         context.update(|window, cx| window.render_frame(cx));
         if context.update(|window, _| window.try_find(ready).is_some()) {
@@ -5365,6 +5381,10 @@ fn native_math_renders_glyph_atoms_and_local_source_uses_document_history_and_sa
         window.pointer_up(point, MouseButton::Left, cx);
     });
     context.run_until_parked();
+    context.update(|window, cx| {
+        assert!(window.find("formula-cancel").visible());
+        window.click("formula-source", cx);
+    });
     view.read_with(&context, |view, cx| {
         assert_eq!(view.selection(), Selection::caret(at - 5));
         assert_eq!(
@@ -5372,6 +5392,8 @@ fn native_math_renders_glyph_atoms_and_local_source_uses_document_history_and_sa
             source.as_bytes()
         );
     });
+    context.dispatch_action(crate::core::actions::ToggleDocumentPreview);
+    settle_live_geometry(&view, &mut context);
     // Do not pump the executor between revisions: the first requested glyph
     // batch is still queued when its source is replaced by the second edit.
     for replacement in ["x_i^3", "x_i^4"] {
@@ -5390,6 +5412,9 @@ fn native_math_renders_glyph_atoms_and_local_source_uses_document_history_and_sa
     view.update_in(&mut context, |view, _, cx| view.select_range(0..0, cx));
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
     loop {
+        context
+            .executor()
+            .advance_clock(std::time::Duration::from_millis(100));
         context.run_until_parked();
         context.update(|window, cx| window.render_frame(cx));
         if context.update(|window, _| window.try_find("markdown-math-ready-x_i^4").is_some()) {
@@ -5417,6 +5442,9 @@ fn native_math_renders_glyph_atoms_and_local_source_uses_document_history_and_sa
             source.as_bytes()
         )
     });
+    // The structural formula surface does not expose raw delimiter positions.
+    // Exercise native composition through the explicit source-mode boundary.
+    context.dispatch_action(crate::core::actions::ToggleDocumentPreview);
     view.update_in(&mut context, |view, window, cx| {
         view.select_range(at..at, cx);
         view.focus_handle(cx).focus(window, cx);
@@ -7783,13 +7811,13 @@ fn native_theme_change_preserves_scrolled_reading_anchor_and_offscreen_selection
             context.run_until_parked();
         }
         let (anchor, before) = context.update(|window, cx| {
-            let viewport = window.find("markdown-source").bounds();
+            let viewport = window.find("markdown-source-scroll").bounds();
             source
                 .match_indices("Section-")
                 .find_map(|(at, _)| {
                     let bounds = view.read(cx).range_to_bounds(&(at..at), cx)?;
                     (bounds.top() >= viewport.top() && bounds.bottom() < viewport.bottom())
-                        .then_some((at, bounds.top()))
+                        .then_some((at, bounds.top() - viewport.top()))
                 })
                 .expect("a scrolled section heading is visible")
         });
@@ -7805,11 +7833,14 @@ fn native_theme_change_preserves_scrolled_reading_anchor_and_offscreen_selection
             context.update(|window, cx| window.render_frame(cx));
             context.run_until_parked();
         }
-        view.read_with(&context, |view, cx| {
+        context.update(|window, cx| {
+            let viewport = window.find("markdown-source-scroll").bounds();
+            let view = view.read(cx);
             let after = view
                 .range_to_bounds(&(anchor..anchor), cx)
                 .expect("the same reading anchor remains laid out")
-                .top();
+                .top()
+                - viewport.top();
             assert!(
                 (after - before).abs() <= px(1.),
                 "theme-only change moved the reading anchor: {before:?} -> {after:?}"
@@ -7830,7 +7861,7 @@ fn native_theme_change_preserves_scrolled_reading_anchor_and_offscreen_selection
                 context.run_until_parked();
             }
             context.update(|window, cx| {
-                let viewport = window.find("markdown-source").bounds();
+                let viewport = window.find("markdown-source-scroll").bounds();
                 let view = view.read(cx);
                 let bounds = view
                     .range_to_bounds(&(anchor..anchor), cx)
@@ -7841,7 +7872,7 @@ fn native_theme_change_preserves_scrolled_reading_anchor_and_offscreen_selection
                 );
                 if font_size >= 16. {
                     assert!(
-                        (bounds.top() - before).abs() <= window.rem_size(),
+                        (bounds.top() - viewport.top() - before).abs() <= window.rem_size(),
                         "font {font_size} moved {section} reading anchor: {before:?} -> {bounds:?}"
                     );
                 }
@@ -9673,7 +9704,7 @@ fn native_full_wide_table_reenters_distant_cells_with_wrapped_height_and_undo(
         settle_at(source.find(token).unwrap(), &mut context);
     }
     let start = source.find("Tall-080-119").unwrap();
-    let later = start + "Tall-080-119 ".len() + "wrapped 中文 e\u{301} 🎉 ".len() * 8;
+    let later = source.rfind("wrapped 中文 e\u{301} 🎉 ").unwrap();
     let first = settle_at(start, &mut context);
     let later_bounds = view
         .read_with(&context, |view, cx| {
@@ -10425,7 +10456,7 @@ fn native_slash_inline_continuation_and_focus_stay_with_the_document(
 ) {
     use crate::ui::app::test_window::harness_with_tabs;
     use gpui_kit::{Focusable as _, test::TestWindowExt as _};
-    let directory = tempfile::tempdir().unwrap();
+    let directory = crate::ui::code_editor::test_host::canonical_tempdir();
     let path = directory.path().join("inline-slash.md");
     let other = directory.path().join("other.md");
     std::fs::write(&path, "").unwrap();

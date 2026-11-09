@@ -168,7 +168,15 @@ impl Layout {
             self.scrolls.entry(id).or_default();
             let widths = columns.entry(cell.start).or_default();
             widths.resize(widths.len().max(cell.column + 1), window.rem_size() * 3.);
-            widths[cell.column] = widths[cell.column].max(measurement.intrinsic);
+            // Automatic columns may grow to the viewport, but a long cell must
+            // wrap before its intrinsic width makes that viewport unreachable.
+            // Explicit widths and FitColumn below remain authoritative.
+            let intrinsic = if wrap {
+                measurement.intrinsic.min(width.max(window.rem_size() * 3.))
+            } else {
+                measurement.intrinsic
+            };
+            widths[cell.column] = widths[cell.column].max(intrinsic);
         }
         self.cells.retain(|_, cell| cell.seen == self.generation);
         let live: std::collections::HashSet<_> = self.table_ids.values().copied().collect();
