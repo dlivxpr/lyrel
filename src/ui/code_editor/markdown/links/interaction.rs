@@ -13,7 +13,7 @@ pub(super) struct Gesture {
     source: Range<usize>,
     target: String,
     down: Point<Pixels>,
-    at: usize,
+    at: SourceCaret,
     resources: Option<super::super::resources::ResourceContext>,
 }
 impl Gesture {
@@ -171,7 +171,7 @@ impl SourcePresentation {
         &self,
         position: Point<Pixels>,
         cx: &App,
-    ) -> Option<(&super::super::links::Link, usize, Bounds<Pixels>)> {
+    ) -> Option<(&super::super::links::Link, SourceCaret, Bounds<Pixels>)> {
         if self
             .viewport
             .bounds
@@ -185,9 +185,9 @@ impl SourcePresentation {
         {
             return None;
         }
-        let at = self.point_offset(position, cx)?;
-        let link = self.projection.links.at(at)?;
-        if at < link.label.start || at > link.label.end {
+        let at = self.point_caret_for(position, false, cx)?;
+        let link = self.projection.links.at(at.byte)?;
+        if at.byte < link.label.start || at.byte > link.label.end {
             return None;
         }
         let region = self
@@ -235,7 +235,7 @@ impl SourcePresentation {
         // A modifier drag is still a text selection, not a delayed navigation.
         // Seed the existing selection engine from the captured source offset;
         // revealing link syntax must not shift the start to a different byte.
-        self.command(Command::Select(Selection::caret(gesture.at)), window, cx);
+        self.select_caret(gesture.at, false, window, cx);
         self.dragging = true;
         self.drag_origin = None;
         self.drag_pointer = Some(event.position);

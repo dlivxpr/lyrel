@@ -41,7 +41,13 @@ impl SourcePresentation {
         } else if at == self.state.selection.anchor {
             anchor
         } else {
-            CaretAffinity::Downstream
+            self.extra_carets.iter().find_map(|(selection, revision, live, affinity)| {
+                (selection.head == at
+                    && *revision == self.document.read(cx).revision()
+                    && *live == self.live
+                    && self.extra_selections.contains(selection))
+                    .then_some(*affinity)
+            }).unwrap_or(CaretAffinity::Downstream)
         }
     }
 
@@ -71,6 +77,9 @@ impl SourcePresentation {
                 anchor.affinity,
                 caret.affinity,
             ));
+            // A same-byte wrap-side change is still a new native caret location.
+            // Publish it after the next frame has laid out the retained side.
+            self.selection_notification = true;
         }
     }
 
