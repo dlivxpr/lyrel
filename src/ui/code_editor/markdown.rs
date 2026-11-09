@@ -33,6 +33,11 @@ pub(crate) use tables::bindings as table_bindings;
 #[cfg(test)]
 mod tests;
 
+#[cfg(test)]
+pub(crate) fn native_cases() -> impl Iterator<Item = crate::native_markdown::Case> {
+    source::native_cases().chain(tests::native_cases())
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct Selection {
     anchor: usize,

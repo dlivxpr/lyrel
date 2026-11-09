@@ -38,6 +38,13 @@ mod navigation;
 #[path = "review_tests.rs"]
 mod review_tests;
 
+#[cfg(test)]
+pub(super) fn native_cases() -> impl Iterator<Item = crate::native_markdown::Case> {
+    review_tests::native_cases()
+        .into_iter()
+        .chain(spelling::native_cases())
+}
+
 #[path = "typography.rs"]
 mod typography;
 

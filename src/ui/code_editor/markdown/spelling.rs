@@ -408,6 +408,11 @@ impl SourcePresentation {
 }
 
 #[cfg(test)]
+pub(super) fn native_cases() -> [crate::native_markdown::Case; 4] {
+    tests::native_cases()
+}
+
+#[cfg(test)]
 mod tests {
     use super::{Diagnostic, SourcePresentation, grapheme_line_box};
     use crate::ui::app::test_window::harness_with_tabs;
@@ -417,6 +422,28 @@ mod tests {
         Entity, Pixels, TestAppContext, VisualContext as _, VisualTestContext, point, px, size,
     };
     use unicode_segmentation::UnicodeSegmentation as _;
+
+    pub(super) fn native_cases() -> [crate::native_markdown::Case; 4] {
+        use crate::native_markdown::Case;
+        [
+            Case::new(
+                "ui::code_editor::markdown::source::spelling::tests::spelling_long_code_remains_editable_with_offscreen_diagnostics",
+                spelling_long_code_remains_editable_with_offscreen_diagnostics,
+            ),
+            Case::new(
+                "ui::code_editor::markdown::source::spelling::tests::spelling_full_mixed_paragraph_keeps_visible_text_editable_around_tall_atoms",
+                spelling_full_mixed_paragraph_keeps_visible_text_editable_around_tall_atoms,
+            ),
+            Case::new(
+                "ui::code_editor::markdown::source::spelling::tests::spelling_wrapped_starts_follow_native_prose_heading_list_quote_and_zoom",
+                spelling_wrapped_starts_follow_native_prose_heading_list_quote_and_zoom,
+            ),
+            Case::new(
+                "ui::code_editor::markdown::source::spelling::tests::spelling_native_hard_breaks_and_image_formula_fragments_do_not_bridge_rows",
+                spelling_native_hard_breaks_and_image_formula_fragments_do_not_bridge_rows,
+            ),
+        ]
+    }
 
     fn settle_geometry(view: &Entity<SourcePresentation>, context: &mut VisualTestContext) {
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
@@ -487,18 +514,12 @@ mod tests {
         }};
     }
 
-    #[gpui_kit::test]
     fn spelling_long_code_remains_editable_with_offscreen_diagnostics(cx: &mut TestAppContext) {
         use gpui_kit::test::TestEventExt as _;
-        let mut native_context = TestAppContext::build_with_text_system(
-            gpui_kit::TestDispatcher::new(0),
-            cx.test_function_name(),
-            gpui_kit::platform::current_platform(true).text_system(),
-        );
         let original = format!("# Huge code\n\n```text\n{}\n```\n", "wide ".repeat(80_000));
         let body = original.find("wide").unwrap();
         let (_directory, path, _app, mut context, _streams, view) =
-            spelling_fixture!(&mut native_context, original.as_bytes());
+            spelling_fixture!(cx, original.as_bytes());
         view.update_in(&mut context, |view, _, cx| {
             view.set_soft_wrap(false, cx);
             view.select_range(body..body, cx);
@@ -545,16 +566,10 @@ mod tests {
         assert_eq!(std::fs::read(path).unwrap(), original.as_bytes());
     }
 
-    #[gpui_kit::test]
     fn spelling_full_mixed_paragraph_keeps_visible_text_editable_around_tall_atoms(
         cx: &mut TestAppContext,
     ) {
         use gpui_kit::test::TestEventExt as _;
-        let mut native_context = TestAppContext::build_with_text_system(
-            gpui_kit::TestDispatcher::new(0),
-            cx.test_function_name(),
-            gpui_kit::platform::current_platform(true).text_system(),
-        );
         let original = format!(
             "A {}![tall](tall.png) $\\frac{{a}}{{b}}$ {}",
             "a ".repeat(100_000),
@@ -563,7 +578,7 @@ mod tests {
         assert_eq!(original.len(), 400_034);
         let body = original.find("$ ").unwrap() + 2;
         let (_directory, path, _app, mut context, _streams, view) =
-            spelling_fixture!(&mut native_context, original.as_bytes());
+            spelling_fixture!(cx, original.as_bytes());
         image::RgbaImage::from_pixel(12, 96, image::Rgba([0, 0, 255, 255]))
             .save(path.parent().unwrap().join("tall.png"))
             .unwrap();
@@ -634,18 +649,11 @@ mod tests {
         assert_eq!(std::fs::read(path).unwrap(), original.as_bytes());
     }
 
-    #[gpui_kit::test]
     fn spelling_wrapped_starts_follow_native_prose_heading_list_quote_and_zoom(
         cx: &mut TestAppContext,
     ) {
         // Native font shaping, still in the real workbench's test window; this
         // is not a GPU screenshot or an operating-system window acceptance.
-        let mut native_context = TestAppContext::build_with_text_system(
-            gpui_kit::TestDispatcher::new(0),
-            cx.test_function_name(),
-            gpui_kit::platform::current_platform(true).text_system(),
-        );
-        let cx = &mut native_context;
         let original = format!(
             "\u{feff}{}\r\n\r\n# {}\n\n- {}\r\n\r\n> {}\n\nkeep\r\n",
             "W ".repeat(80),
@@ -791,16 +799,9 @@ mod tests {
         assert_eq!(std::fs::read(path).unwrap(), original.as_bytes());
     }
 
-    #[gpui_kit::test]
     fn spelling_native_hard_breaks_and_image_formula_fragments_do_not_bridge_rows(
         cx: &mut TestAppContext,
     ) {
-        let mut native_context = TestAppContext::build_with_text_system(
-            gpui_kit::TestDispatcher::new(0),
-            cx.test_function_name(),
-            gpui_kit::platform::current_platform(true).text_system(),
-        );
-        let cx = &mut native_context;
         let original = format!(
             "\u{feff}hard first  \r\nhard second\n\n{}![alt](missing.png){}\r\n\r\n{}$x${}\n\nkeep\r\n",
             "image words ".repeat(25),

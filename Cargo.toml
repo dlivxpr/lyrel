@@ -18,6 +18,12 @@ name = "lyrel-updater"
 path = "src/bin/lyrel-updater.rs"
 required-features = ["updater"]
 
+# AppKit initialization must run on the process main thread, not a libtest worker.
+[[test]]
+name = "native_markdown"
+path = "src/main.rs"
+harness = false
+
 [target.'cfg(any(target_os = "macos", target_os = "windows"))'.dependencies]
 # The framework-free half of lyrel: wire protocol, session daemon, PTY, the
 # native SSH engine, and the domain model the headless `lyrel-server` shares with

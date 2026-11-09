@@ -6,6 +6,24 @@ use gpui_kit::test::{TestEventExt as _, TestWindowExt as _};
 use gpui_kit::{Entity, Focusable as _, TestAppContext, VisualContext as _, VisualTestContext};
 use std::time::{Duration, Instant};
 
+pub(super) fn native_cases() -> [crate::native_markdown::Case; 3] {
+    use crate::native_markdown::Case;
+    [
+        Case::new(
+            "ui::code_editor::markdown::source::review_tests::native_down_visits_each_soft_wrapped_row_without_skipping",
+            native_down_visits_each_soft_wrapped_row_without_skipping,
+        ),
+        Case::new(
+            "ui::code_editor::markdown::source::review_tests::first_soft_wrapped_link_grapheme_hovers_edits_and_opens",
+            first_soft_wrapped_link_grapheme_hovers_edits_and_opens,
+        ),
+        Case::new(
+            "ui::code_editor::markdown::source::review_tests::fragment_tail_link_grapheme_hovers_edits_and_opens",
+            fragment_tail_link_grapheme_hovers_edits_and_opens,
+        ),
+    ]
+}
+
 fn until(context: &mut VisualTestContext, mut ready: impl FnMut(&mut VisualTestContext) -> bool) {
     let deadline = Instant::now() + Duration::from_secs(15);
     loop {
@@ -532,16 +550,9 @@ fn review_table_formula_session_remeasures_owning_row_before_source_commit(
     assert_eq!(bytes(&view, &context), source.as_bytes());
 }
 
-#[gpui_kit::test]
 fn native_down_visits_each_soft_wrapped_row_without_skipping(cx: &mut TestAppContext) {
     use unicode_segmentation::UnicodeSegmentation as _;
 
-    let mut native_context = TestAppContext::build_with_text_system(
-        gpui_kit::TestDispatcher::new(0),
-        cx.test_function_name(),
-        gpui_kit::platform::current_platform(true).text_system(),
-    );
-    let cx = &mut native_context;
     let original = format!("{}\n\nkeep\n", "W ".repeat(140));
     let (_directory, _path, _app, mut context, _streams, view) = fixture!(cx, &original, true);
     view.update_in(&mut context, |view, _, cx| view.set_soft_wrap(true, cx));
@@ -592,12 +603,10 @@ fn native_down_visits_each_soft_wrapped_row_without_skipping(cx: &mut TestAppCon
     }
 }
 
-#[gpui_kit::test]
 fn first_soft_wrapped_link_grapheme_hovers_edits_and_opens(cx: &mut gpui_kit::TestAppContext) {
     native_link_grapheme_hovers_edits_and_opens(cx, false);
 }
 
-#[gpui_kit::test]
 fn fragment_tail_link_grapheme_hovers_edits_and_opens(cx: &mut TestAppContext) {
     native_link_grapheme_hovers_edits_and_opens(cx, true);
 }
@@ -612,12 +621,6 @@ fn native_link_grapheme_hovers_edits_and_opens(cx: &mut TestAppContext, fragment
     use std::time::{Duration, Instant};
     use unicode_segmentation::UnicodeSegmentation as _;
 
-    let mut native_context = TestAppContext::build_with_text_system(
-        gpui_kit::TestDispatcher::new(0),
-        cx.test_function_name(),
-        gpui_kit::platform::current_platform(true).text_system(),
-    );
-    let cx = &mut native_context;
     let glyph = if fragment_tail { "界" } else { "W" };
     let original = if fragment_tail {
         // CJK supplies visible, non-whitespace wrap boundaries. The embedded

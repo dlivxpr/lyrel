@@ -3,17 +3,16 @@ use crate::ui::app::test_window::harness_with_tabs;
 use gpui_kit::test::{TestEventExt as _, TestQueryExt as _, TestWindowExt as _};
 use gpui_kit::{Focusable as _, MouseButton, point, px};
 
-#[gpui_kit::test]
+pub(super) fn native_case() -> crate::native_markdown::Case {
+    crate::native_markdown::Case::new(
+        "ui::code_editor::markdown::tests::table_presentation::table_presentation_drag_fit_scroll_edit_history_and_host_reopen",
+        table_presentation_drag_fit_scroll_edit_history_and_host_reopen,
+    )
+}
+
 fn table_presentation_drag_fit_scroll_edit_history_and_host_reopen(
     cx: &mut gpui_kit::TestAppContext,
 ) {
-    // NoopTextSystem lays every glyph left-to-right; RTL caret assertions need native shaping.
-    let mut native_context = gpui_kit::TestAppContext::build_with_text_system(
-        gpui_kit::TestDispatcher::new(0),
-        cx.test_function_name(),
-        gpui_kit::platform::current_platform(true).text_system(),
-    );
-    let cx = &mut native_context;
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("presentation.md");
     let original = format!(

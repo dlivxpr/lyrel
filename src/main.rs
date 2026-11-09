@@ -12,6 +12,15 @@ mod ui;
 #[path = "../tests/support/native_ssh_graphics.rs"]
 pub mod native_ssh_graphics_fixture;
 
+#[cfg(test)]
+#[path = "../tests/support/native_markdown.rs"]
+mod native_markdown;
+
+#[cfg(test)]
+fn main() -> std::process::ExitCode {
+    native_markdown::main()
+}
+
 use crate::core::config::Config;
 use crate::ui::assets::Assets;
 use crate::ui::keymap;
@@ -590,6 +599,7 @@ fn handle_external_opens(urls: Vec<String>, cx: &mut App) {
     }
 }
 
+#[cfg(not(test))]
 fn main() {
     let args: Vec<std::ffi::OsString> = std::env::args_os().skip(1).collect();
     {

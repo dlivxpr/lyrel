@@ -18,6 +18,16 @@ mod table_consumer;
 #[path = "tables/presentation_tests.rs"]
 mod table_presentation;
 
+pub(super) fn native_cases() -> [crate::native_markdown::Case; 2] {
+    [
+        table_presentation::native_case(),
+        crate::native_markdown::Case::new(
+            "ui::code_editor::markdown::tests::native_navigation_home_end_and_words_use_visible_logical_content",
+            native_navigation_home_end_and_words_use_visible_logical_content,
+        ),
+    ]
+}
+
 fn start_in_source(
     view: &gpui_kit::Entity<SourcePresentation>,
     cx: &mut gpui_kit::VisualTestContext,
@@ -10033,7 +10043,6 @@ fn native_navigation_deletes_visible_nested_graphemes_without_orphan_markers(
     }
 }
 
-#[gpui_kit::test]
 fn native_navigation_home_end_and_words_use_visible_logical_content(
     cx: &mut gpui_kit::TestAppContext,
 ) {
