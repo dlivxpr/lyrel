@@ -907,8 +907,16 @@ fn native_modified_link_drag_retains_upper_wrap_anchor(cx: &mut TestAppContext) 
     view.read_with(&context, |view, cx| {
         assert_eq!(view.selection(), Selection::caret(at));
         let caret = view.range_to_bounds(&(at..at), cx).unwrap();
-        assert_eq!(caret.top(), upper.y);
-        assert!((caret.left() - upper.x).abs() < px(0.5));
+        // Entering the link adds its contextual toolbar above the document.
+        // Use the current paragraph box, not the pre-gesture window origin;
+        // Downstream would still be exactly one visual row below this oracle.
+        let leaf = view.projection.leaf_at(1).unwrap();
+        let geometry = &view.geometry.as_ref().unwrap().1[&leaf.id];
+        let row = geometry.bounds();
+        let advance = geometry.position_for_index("界".len()).x - row.left();
+        assert_eq!(caret.top(), row.top());
+        let expected_x = row.left() + advance * ((at - 1) / "界".len()) as f32;
+        assert!((caret.left() - expected_x).abs() < px(0.5));
     });
     assert_eq!(
         app.read_with(&context, |app, _| app.active_buffer().unwrap().path.clone()),

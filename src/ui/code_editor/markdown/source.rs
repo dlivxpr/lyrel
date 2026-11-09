@@ -1126,18 +1126,6 @@ impl SourcePresentation {
     pub(crate) fn scroll_offset(&self) -> Point<Pixels> {
         self.scroll.offset()
     }
-    #[cfg(test)]
-    pub(super) fn scroll_geometry_diagnostic(&self) -> String {
-        format!(
-            "offset {:?}, max_offset {:?}, viewport {:?}, soft_wrap {}, visible {:?}, measured leaves {:?}",
-            self.scroll.offset(),
-            self.scroll.max_offset(),
-            self.scroll.bounds(),
-            self.wrap,
-            self.viewport.visible,
-            self.viewport.frame,
-        )
-    }
     pub(crate) fn set_scroll_offset(&mut self, offset: Point<Pixels>, cx: &mut Context<Self>) {
         self.scroll.set_offset(offset);
         self.viewport.anchor = None;

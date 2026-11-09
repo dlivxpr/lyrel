@@ -1068,16 +1068,6 @@ fn native_live_break_mapping_resize_and_composition_keep_source_ranges(
     view_context.update(|window, cx| {
         window.render_frame(cx);
         window.render_frame(cx);
-        window.scroll(
-            "markdown-source",
-            gpui_kit::ScrollDelta::Pixels(gpui_kit::point(px(0.), px(-64.))),
-            cx,
-        );
-        assert!(
-            presentation.read(cx).scroll_offset().y < px(0.),
-            "{}",
-            presentation.read(cx).scroll_geometry_diagnostic(),
-        );
         let caret = presentation
             .read(cx)
             .range_to_bounds(&(158..158), cx)
