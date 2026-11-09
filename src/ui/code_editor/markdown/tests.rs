@@ -47,24 +47,39 @@ fn wait_for_clipboard(context: &mut gpui_kit::VisualTestContext, expected: &str)
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
     loop {
         context.run_until_parked();
-        if context.update(|_, cx| cx.read_from_clipboard()
-            .and_then(|item| item.text()).as_deref() == Some(expected))
-        {
+        if context.update(|_, cx| {
+            cx.read_from_clipboard()
+                .and_then(|item| item.text())
+                .as_deref()
+                == Some(expected)
+        }) {
             return;
         }
-        assert!(std::time::Instant::now() < deadline, "clipboard did not publish {expected:?}");
+        assert!(
+            std::time::Instant::now() < deadline,
+            "clipboard did not publish {expected:?}"
+        );
         std::thread::sleep(std::time::Duration::from_millis(5));
     }
 }
 
-fn wait_for_source(view: &gpui_kit::Entity<SourcePresentation>, context: &mut gpui_kit::VisualTestContext, expected: &str) {
+fn wait_for_source(
+    view: &gpui_kit::Entity<SourcePresentation>,
+    context: &mut gpui_kit::VisualTestContext,
+    expected: &str,
+) {
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
     loop {
         context.run_until_parked();
-        if view.read_with(context, |view, cx| view.document().read(cx).source().to_string() == expected) {
+        if view.read_with(context, |view, cx| {
+            view.document().read(cx).source().to_string() == expected
+        }) {
             return;
         }
-        assert!(std::time::Instant::now() < deadline, "source did not become {expected:?}");
+        assert!(
+            std::time::Instant::now() < deadline,
+            "source did not become {expected:?}"
+        );
         std::thread::sleep(std::time::Duration::from_millis(5));
     }
 }
@@ -4813,7 +4828,11 @@ fn native_mixed_selection_drag_cut_history_and_mixed_ending_save_reopen(
         });
     }
     context.update(|window, cx| window.press("secondary-x", cx));
-    wait_for_source(&view, &mut context, "# Heading\n\nil  \n\n[picture]: missing.png \"title\"\n");
+    wait_for_source(
+        &view,
+        &mut context,
+        "# Heading\n\nil  \n\n[picture]: missing.png \"title\"\n",
+    );
     view.read_with(&context, |view, cx| {
         assert_eq!(
             view.document().read(cx).source().to_string(),

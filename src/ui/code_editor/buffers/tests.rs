@@ -634,9 +634,14 @@ fn markdown_workbench_shares_native_source_history_and_host_save_across_groups(
     });
     vcx.dispatch_action(gpui_kit::component::input::SelectAll);
     vcx.dispatch_action(gpui_kit::component::input::Copy);
-    wait_until(&mut vcx, |context| context.update(|_, cx| {
-        cx.read_from_clipboard().and_then(|item| item.text()).as_deref() == Some("中🎉alpha\nbeta\n")
-    }));
+    wait_until(&mut vcx, |context| {
+        context.update(|_, cx| {
+            cx.read_from_clipboard()
+                .and_then(|item| item.text())
+                .as_deref()
+                == Some("中🎉alpha\nbeta\n")
+        })
+    });
     vcx.update(|_, cx| {
         assert_eq!(
             cx.read_from_clipboard().and_then(|item| item.text()),
@@ -644,9 +649,11 @@ fn markdown_workbench_shares_native_source_history_and_host_save_across_groups(
         )
     });
     vcx.dispatch_action(gpui_kit::component::input::Cut);
-    wait_until(&mut vcx, |context| first.read_with(context, |view, cx| {
-        view.document().read(cx).source().len() == 0
-    }));
+    wait_until(&mut vcx, |context| {
+        first.read_with(context, |view, cx| {
+            view.document().read(cx).source().len() == 0
+        })
+    });
     app.read_with(&vcx, |app, cx| {
         assert_eq!(
             app.active_buffer()

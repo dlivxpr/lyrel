@@ -1019,9 +1019,13 @@ impl Projection {
     pub fn parse(source: &str, revision: u64, live: bool, grammar: super::mdx::Grammar) -> Self {
         let mut projection = Self::parse_fragment(source, revision, live, true, grammar, true);
         if !live {
-            projection.syntax = super::parser::parse(source, grammar, true).ok().map(|root| {
-                std::sync::Arc::new(super::source::formats::Syntax::new(source, root, revision, grammar))
-            });
+            projection.syntax = super::parser::parse(source, grammar, true)
+                .ok()
+                .map(|root| {
+                    std::sync::Arc::new(super::source::formats::Syntax::new(
+                        source, root, revision, grammar,
+                    ))
+                });
         }
         projection
     }
@@ -1056,9 +1060,12 @@ impl Projection {
                         properties = super::source::properties::Index::from_ast(source, &root);
                         block_index = super::blocks::Index::from_ast(source, &root);
                         if retain_syntax {
-                            reorder_inventory = Some(std::sync::Arc::new(super::source::reorder::Inventory::new(
-                                source, &root, properties.reorder_ranges(),
-                            )));
+                            reorder_inventory =
+                                Some(std::sync::Arc::new(super::source::reorder::Inventory::new(
+                                    source,
+                                    &root,
+                                    properties.reorder_ranges(),
+                                )));
                         }
                         Self::project_nodes(
                             source,
@@ -1087,9 +1094,15 @@ impl Projection {
                             leaf.decorate_formats(&active);
                         }
                         if retain_syntax {
-                            syntax = Some(std::sync::Arc::new(super::source::formats::Syntax::from_parts(
-                                source, root, revision, grammar, decorations,
-                            )));
+                            syntax = Some(std::sync::Arc::new(
+                                super::source::formats::Syntax::from_parts(
+                                    source,
+                                    root,
+                                    revision,
+                                    grammar,
+                                    decorations,
+                                ),
+                            ));
                         }
                     }
                     Err(reason) => {
@@ -1909,8 +1922,14 @@ impl Projection {
             )
             .unwrap();
         }
-        let parsed =
-            Self::parse_fragment(&fragment, transaction.revision(), true, false, self.grammar, false);
+        let parsed = Self::parse_fragment(
+            &fragment,
+            transaction.revision(),
+            true,
+            false,
+            self.grammar,
+            false,
+        );
         if parsed.error.is_some() {
             return false;
         }
@@ -1979,17 +1998,25 @@ impl Projection {
         self.reorder_inventory = None;
         // Absolute destinations and definitions must never be rebased against a
         // fragment. The revision-checked background parse restores this index.
-        let embeds = self.links.embeds.drain(..).filter_map(|mut reference| {
-            let source = transaction.map_untouched_range(reference.source.clone())?;
-            let delta = source.start as isize - reference.source.start as isize;
-            reference.source = source;
-            reference.label = reference.label.start.checked_add_signed(delta)?
-                ..reference.label.end.checked_add_signed(delta)?;
-            reference.destination = reference.destination.start.checked_add_signed(delta)?
-                ..reference.destination.end.checked_add_signed(delta)?;
-            Some(reference)
-        }).collect();
-        self.links = super::links::Index { embeds, ..Default::default() };
+        let embeds = self
+            .links
+            .embeds
+            .drain(..)
+            .filter_map(|mut reference| {
+                let source = transaction.map_untouched_range(reference.source.clone())?;
+                let delta = source.start as isize - reference.source.start as isize;
+                reference.source = source;
+                reference.label = reference.label.start.checked_add_signed(delta)?
+                    ..reference.label.end.checked_add_signed(delta)?;
+                reference.destination = reference.destination.start.checked_add_signed(delta)?
+                    ..reference.destination.end.checked_add_signed(delta)?;
+                Some(reference)
+            })
+            .collect();
+        self.links = super::links::Index {
+            embeds,
+            ..Default::default()
+        };
         self.properties = super::source::properties::Index::default();
         self.mdx.rebase(transaction, source);
         self.block_index.rebase(transaction);

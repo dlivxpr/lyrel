@@ -44,7 +44,11 @@ impl SourcePresentation {
             reference.source = source;
             reference.label = reference.label.start.checked_add_signed(delta).unwrap()
                 ..reference.label.end.checked_add_signed(delta).unwrap();
-            reference.destination = reference.destination.start.checked_add_signed(delta).unwrap()
+            reference.destination = reference
+                .destination
+                .start
+                .checked_add_signed(delta)
+                .unwrap()
                 ..reference.destination.end.checked_add_signed(delta).unwrap();
             true
         });
@@ -156,21 +160,30 @@ impl SourcePresentation {
             return;
         }
         self.embeds.controls.retain(|_, control| {
-            loaded.entries.iter().any(|entry| entry.reference == control.reference)
+            loaded
+                .entries
+                .iter()
+                .any(|entry| entry.reference == control.reference)
         });
         for entry in &loaded.entries {
-            if let Some(control) = self.embeds.controls.values_mut()
+            if let Some(control) = self
+                .embeds
+                .controls
+                .values_mut()
                 .find(|control| control.reference == entry.reference)
             {
                 control.result = entry.result.clone();
             } else {
                 self.embeds.next_id = self.embeds.next_id.wrapping_add(1);
-                self.embeds.controls.insert(self.embeds.next_id, Controls {
-                    reference: entry.reference.clone(),
-                    scroll: ScrollHandle::new(),
-                    focus: cx.focus_handle().tab_stop(true),
-                    result: entry.result.clone(),
-                });
+                self.embeds.controls.insert(
+                    self.embeds.next_id,
+                    Controls {
+                        reference: entry.reference.clone(),
+                        scroll: ScrollHandle::new(),
+                        focus: cx.focus_handle().tab_stop(true),
+                        result: entry.result.clone(),
+                    },
+                );
             }
         }
         let layout_changed =
@@ -249,7 +262,13 @@ impl SourcePresentation {
         if !self.live || self.projection.revision != document.revision() {
             return None;
         }
-        if !self.projection.links.links.iter().any(|current| current == link) {
+        if !self
+            .projection
+            .links
+            .links
+            .iter()
+            .any(|current| current == link)
+        {
             return None;
         }
         let bounds = self
@@ -370,7 +389,11 @@ impl SourcePresentation {
             let range = reference.source.clone();
             let revision = self.projection.revision;
             let resources = self.document.read(cx).resources().cloned();
-            let control = self.embeds.controls.iter().find(|(_, control)| control.reference == *reference);
+            let control = self
+                .embeds
+                .controls
+                .iter()
+                .find(|(_, control)| control.reference == *reference);
             let id = control.map_or_else(
                 || format!("pending-{}", reference.source.start),
                 |(id, _)| id.to_string(),
@@ -571,7 +594,9 @@ fn render_fragment(
     );
     let references: Vec<_> = fragment.blocks.iter().collect();
     let mut body = div()
-        .id(SharedString::from(format!("markdown-embed-flow-{namespace}")))
+        .id(SharedString::from(format!(
+            "markdown-embed-flow-{namespace}"
+        )))
         .test_support()
         .w_full()
         .min_w_0()

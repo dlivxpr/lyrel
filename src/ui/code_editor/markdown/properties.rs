@@ -85,7 +85,7 @@ impl Index {
             )
         })
     }
-    pub(super) fn reorder_ranges(&self) -> Vec<Range<usize>> {
+    pub(in crate::ui::code_editor::markdown) fn reorder_ranges(&self) -> Vec<Range<usize>> {
         let mut runs: Vec<Range<usize>> = Vec::new();
         for property in &self.properties {
             if let Some(run) = runs.last_mut().filter(|run| run.end == property.line.start) {
@@ -342,20 +342,29 @@ impl SourcePresentation {
                             })),
                     )
                     .child(
-                        Button::new(SharedString::from(format!("markdown-property-space-{}", row.key.start)))
-                            .small()
-                            .ghost()
-                            .flex_1()
-                            .label(" ")
-                            .accessibility_label(t(L10nKey::EditorPropertyEdit))
-                            .on_click(cx.listener(move |this, _, window, cx| {
+                        Button::new(SharedString::from(format!(
+                            "markdown-property-space-{}",
+                            row.key.start
+                        )))
+                        .small()
+                        .ghost()
+                        .flex_1()
+                        .label(" ")
+                        .accessibility_label(t(L10nKey::EditorPropertyEdit))
+                        .on_click(cx.listener(
+                            move |this, _, window, cx| {
                                 if this.document.read(cx).revision() == revision {
-                                    this.edit_property(Target::Property(edit_blank.clone()), window, cx);
+                                    this.edit_property(
+                                        Target::Property(edit_blank.clone()),
+                                        window,
+                                        cx,
+                                    );
                                     if let Some(draft) = &this.properties.draft {
                                         draft.value.update(cx, |input, cx| input.focus(window, cx));
                                     }
                                 }
-                            })),
+                            },
+                        )),
                     )
                     .context_menu(move |menu, _, _| {
                         let edit_view = view.clone();

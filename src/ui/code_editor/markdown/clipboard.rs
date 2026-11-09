@@ -9,7 +9,10 @@ use gpui_kit::{ClipboardEntry, ClipboardItem, Context, Window};
 use markdown::mdast::Node;
 use std::ops::Range;
 
-gpui_kit::actions!(markdown_clipboard, [CopyMarkdownOnly, CopyContents, CopyContentsMarkdown]);
+gpui_kit::actions!(
+    markdown_clipboard,
+    [CopyMarkdownOnly, CopyContents, CopyContentsMarkdown]
+);
 
 fn escaped(text: &str, out: &mut String) {
     for ch in text.chars() {
@@ -25,7 +28,12 @@ fn escaped(text: &str, out: &mut String) {
 }
 
 /// The original line endings belong to the document, not its LF coordinates.
-fn append_source(source: &super::Rope, endings: &[crate::ui::editor_text::LineEnding], range: Range<usize>, out: &mut String) {
+fn append_source(
+    source: &super::Rope,
+    endings: &[crate::ui::editor_text::LineEnding],
+    range: Range<usize>,
+    out: &mut String,
+) {
     let row = source.offset_to_point(range.start).row;
     let mut endings = endings[row..].iter();
     for chunk in source.slice(range).chunks() {
@@ -391,7 +399,12 @@ impl SourcePresentation {
         }
         merged
     }
-    pub(super) fn copy_contents(&mut self, plain: bool, window: &mut Window, cx: &mut Context<Self>) {
+    pub(super) fn copy_contents(
+        &mut self,
+        plain: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         if self.is_composing() {
             self.command(Command::FinishComposition, window, cx);
         }
@@ -451,51 +464,65 @@ impl SourcePresentation {
         let generation = self.clipboard_generation;
         let selected_ranges = ranges.clone();
         self.clipboard_task = Some(cx.spawn_in(window, async move |view, cx| {
-            let (text, html) = cx.background_executor().spawn(async move {
-                let mut text = String::new();
-                for (ix, range) in selected_ranges.iter().enumerate() {
-                    if ix != 0 { text.push('\n'); }
-                    append_source(&source, &endings, range.clone(), &mut text);
-                }
-                let html = if plain { None } else {
-                    let source = source.to_string();
-                    let mut out = String::new();
-                    match parser::parse(&source, grammar, true) {
-                        Ok(root) => {
-                            let renderer = Html {
-                                decorations: formats::decorations(&source, &root),
-                                definitions: super::super::images::definitions(&root),
-                                images: &images,
-                                math: &math,
-                                properties: super::properties::Index::from_ast(&source, &root),
-                                source: &source,
-                            };
-                            for (ix, range) in selected_ranges.iter().enumerate() {
-                                if ix != 0 { out.push_str("<br>"); }
-                                renderer.node(&root, range, &mut out);
+            let (text, html) = cx
+                .background_executor()
+                .spawn(async move {
+                    let mut text = String::new();
+                    for (ix, range) in selected_ranges.iter().enumerate() {
+                        if ix != 0 {
+                            text.push('\n');
+                        }
+                        append_source(&source, &endings, range.clone(), &mut text);
+                    }
+                    let html = if plain {
+                        None
+                    } else {
+                        let source = source.to_string();
+                        let mut out = String::new();
+                        match parser::parse(&source, grammar, true) {
+                            Ok(root) => {
+                                let renderer = Html {
+                                    decorations: formats::decorations(&source, &root),
+                                    definitions: super::super::images::definitions(&root),
+                                    images: &images,
+                                    math: &math,
+                                    properties: super::properties::Index::from_ast(&source, &root),
+                                    source: &source,
+                                };
+                                for (ix, range) in selected_ranges.iter().enumerate() {
+                                    if ix != 0 {
+                                        out.push_str("<br>");
+                                    }
+                                    renderer.node(&root, range, &mut out);
+                                }
+                            }
+                            Err(_) => {
+                                out.push_str("<pre>");
+                                escaped(&text, &mut out);
+                                out.push_str("</pre>");
                             }
                         }
-                        Err(_) => {
-                            out.push_str("<pre>");
-                            escaped(&text, &mut out);
-                            out.push_str("</pre>");
-                        }
-                    }
-                    Some(out)
-                };
-                (text, html)
-            }).await;
+                        Some(out)
+                    };
+                    (text, html)
+                })
+                .await;
             let _ = view.update_in(cx, |view, window, cx| {
                 if view.clipboard_generation != generation {
                     return;
                 }
                 let current_resources = view.document.read(cx).resources();
-                let same_resources = resources.as_ref().map_or(current_resources.is_none(), |expected| {
-                    expected.is_current(current_resources)
-                });
-                if view.input_token(cx) != token || view.document.read(cx).grammar() != grammar
-                    || view.state.selection != selection || view.extra_selections != extra
-                    || !same_resources || !view.focus.contains_focused(window, cx)
+                let same_resources = resources
+                    .as_ref()
+                    .map_or(current_resources.is_none(), |expected| {
+                        expected.is_current(current_resources)
+                    });
+                if view.input_token(cx) != token
+                    || view.document.read(cx).grammar() != grammar
+                    || view.state.selection != selection
+                    || view.extra_selections != extra
+                    || !same_resources
+                    || !view.focus.contains_focused(window, cx)
                 {
                     view.clipboard_task = None;
                     return;
@@ -610,7 +637,10 @@ impl SourcePresentation {
         )
         .separator()
         .menu(t(L10nKey::MarkdownCopyContents), Box::new(CopyContents))
-        .menu(t(L10nKey::MarkdownCopyContentsMarkdown), Box::new(CopyContentsMarkdown))
+        .menu(
+            t(L10nKey::MarkdownCopyContentsMarkdown),
+            Box::new(CopyContentsMarkdown),
+        )
     }
 }
 

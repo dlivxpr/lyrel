@@ -38,7 +38,14 @@ impl Syntax {
         decorations: Vec<super::Decoration>,
     ) -> Self {
         let coverage = super::coverage(&root, &decorations);
-        Self { revision, grammar, source: source.into(), root, decorations, coverage }
+        Self {
+            revision,
+            grammar,
+            source: source.into(),
+            root,
+            decorations,
+            coverage,
+        }
     }
 }
 struct Feedback {
@@ -83,9 +90,10 @@ const HIGHLIGHT_COLORS: [(L10nKey, u32); 7] = [
 impl SourcePresentation {
     pub(in crate::ui::code_editor::markdown) fn format_syntax(&self, cx: &App) -> Option<&Syntax> {
         let doc = self.document.read(cx);
-        self.projection.syntax.as_deref().filter(|syntax| {
-            syntax.revision == doc.revision() && syntax.grammar == doc.grammar()
-        })
+        self.projection
+            .syntax
+            .as_deref()
+            .filter(|syntax| syntax.revision == doc.revision() && syntax.grammar == doc.grammar())
     }
 
     pub(in super::super) fn plan_format(

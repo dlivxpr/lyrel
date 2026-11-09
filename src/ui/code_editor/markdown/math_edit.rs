@@ -768,10 +768,13 @@ impl SourcePresentation {
             session.cursor.move_right(&session.root);
         }
         session.refresh_geometry(false);
-        let before_document = (horizontal < 0 || vertical < 0)
-            && session.formula.block && session.range.start == 0;
-        let exit = edge.is_none() && before == session.cursor && !extend
-            && session.cursor.path.is_empty() && !before_document;
+        let before_document =
+            (horizontal < 0 || vertical < 0) && session.formula.block && session.range.start == 0;
+        let exit = edge.is_none()
+            && before == session.cursor
+            && !extend
+            && session.cursor.path.is_empty()
+            && !before_document;
         self.invalidate_formula_blocks();
         if exit {
             // A root boundary leaves the formula, not its source delimiters.

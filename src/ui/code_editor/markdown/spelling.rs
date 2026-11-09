@@ -1036,7 +1036,8 @@ mod tests {
     fn final_review_spelling_menu_survives_own_composition_commit(cx: &mut TestAppContext) {
         use gpui_kit::test::TestInput;
         let original = b"wrog\n";
-        let (_directory, _path, _app, mut context, _streams, view) = spelling_fixture!(cx, original);
+        let (_directory, _path, _app, mut context, _streams, view) =
+            spelling_fixture!(cx, original);
         settle_geometry(&view, &mut context);
         view.update_in(&mut context, |view, window, cx| {
             view.select_range(0..4, cx);
@@ -1044,14 +1045,23 @@ mod tests {
         });
         context.update(|window, cx| {
             let bounds = window.find("markdown-source").bounds();
-            TestInput::new(gpui_kit::ElementInputHandler::new(bounds, view.clone()), window)
-                .compose_text(None, "wrng", Some(4..4), cx);
+            TestInput::new(
+                gpui_kit::ElementInputHandler::new(bounds, view.clone()),
+                window,
+            )
+            .compose_text(None, "wrng", Some(4..4), cx);
         });
         context.run_until_parked();
         settle_geometry(&view, &mut context);
         view.update_in(&mut context, |view, _, cx| {
             view.spelling.invalidate();
-            view.set_spelling_diagnostics(vec![Diagnostic { ranges: vec![0..4], word: "wrng".into() }], cx);
+            view.set_spelling_diagnostics(
+                vec![Diagnostic {
+                    ranges: vec![0..4],
+                    word: "wrng".into(),
+                }],
+                cx,
+            );
         });
         context.dispatch_action(super::SpellingSuggestions);
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
@@ -1076,6 +1086,8 @@ mod tests {
         });
         context.update(|window, cx| assert!(view.read(cx).focus.is_focused(window)));
         context.dispatch_action(gpui_kit::component::input::Undo);
-        view.read_with(&context, |view, cx| assert_eq!(view.document().read(cx).encode().unwrap(), original));
+        view.read_with(&context, |view, cx| {
+            assert_eq!(view.document().read(cx).encode().unwrap(), original)
+        });
     }
 }
