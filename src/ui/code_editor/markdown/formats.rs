@@ -664,7 +664,7 @@ fn selection_crosses_mark(node: &Node, range: &Range<usize>) -> bool {
                 | Node::LinkReference(_)
         ) && (position.start.offset < range.start
             && range.start < position.end.offset
-            && position.end.offset < range.end
+            && position.end.offset <= range.end
             || range.start <= position.start.offset
                 && position.start.offset < range.end
                 && range.end < position.end.offset)
@@ -832,7 +832,10 @@ fn color_runs(
         .enumerate()
         .filter(|(_, d)| d.open.start < scope.end && scope.start < d.close.end)
     {
-        if style.format == Format::TextColor && style.color.is_some() {
+        if style.format == Format::TextColor
+            && style.color.is_some()
+            && style.open.end < style.close.start
+        {
             boundaries.extend([
                 (style.open.end, true, Some(ix)),
                 (style.close.start, false, Some(ix)),
@@ -1861,6 +1864,13 @@ mod tests {
                 "ab",
             ),
             (
+                "*ab*",
+                "b*",
+                Some(0x123456ff),
+                "*a<span style=\"color:#123456\">b</span>*",
+                "ab",
+            ),
+            (
                 "<span data-keep='x' style='background:#fff; COLOR : red ;'>ab</span>",
                 "ab",
                 Some(0x123456ff),
@@ -1901,15 +1911,25 @@ mod tests {
                 assert!(leaf.marks(None).iter().all(|(_, mark)| mark.italic));
                 assert_eq!(
                     leaf.foreground_ranges(),
-                    vec![(0..1, gpui_kit::rgba(0x123456ff).into())]
+                    vec![(
+                        if selected == "*a" { 0..1 } else { 1..2 },
+                        gpui_kit::rgba(0x123456ff).into()
+                    )]
                 );
             } else {
-                assert!(
-                    projection
-                        .leaves
-                        .iter()
-                        .all(|leaf| !leaf.foreground_ranges().is_empty())
-                );
+                for leaf in &projection.leaves {
+                    let expected = if leaf.text.is_empty() {
+                        Vec::new()
+                    } else {
+                        vec![(0..leaf.text.len(), gpui_kit::rgba(0x123456ff).into())]
+                    };
+                    assert_eq!(
+                        leaf.foreground_ranges(),
+                        expected,
+                        "source {source:?}, leaf {:?}",
+                        leaf.text
+                    );
+                }
             }
             document.command(&mut state, Command::Undo);
             assert_eq!(document.encode().unwrap(), source.as_bytes());

@@ -143,6 +143,49 @@ fn workbench_color_runs_ignore_block_gaps_single_strike_and_preserve_inherited_c
             original.as_bytes()
         )
     });
+    // Empty nested owners must not leak their active color into following text.
+    let empty =
+        "seed <span style=\"color:#ff0000\"><span style=\"color:#00ff00\"></span></span>plain";
+    view.update_in(&mut context, |view, window, cx| {
+        view.select_range(0..original.len(), cx);
+        view.focus_handle(cx).focus(window, cx);
+    });
+    context.update(|window, cx| window.input(empty, cx));
+    settle_live_geometry(&view, &mut context);
+    let plain = empty.find("plain").unwrap();
+    view.update_in(&mut context, |view, window, cx| {
+        view.select_range(plain..empty.len(), cx);
+        view.focus_handle(cx).focus(window, cx);
+    });
+    context.update(|window, cx| window.click("markdown-format-menu", cx));
+    context.run_until_parked();
+    context.update(|window, cx| {
+        assert_ne!(
+            window
+                .find_by_label(t(L10nKey::MarkdownFormatTextColor))
+                .checked(),
+            Some(true)
+        );
+        assert_eq!(
+            window
+                .find_by_label(t(L10nKey::MarkdownClearTextColor))
+                .disabled(),
+            Some(true)
+        );
+        window.press("escape", cx);
+    });
+    context.run_until_parked();
+    view.read_with(&context, |view, cx| {
+        assert_eq!(view.document().read(cx).encode().unwrap(), empty.as_bytes());
+    });
+    context.dispatch_action(gpui_kit::component::input::Undo);
+    context.run_until_parked();
+    view.read_with(&context, |view, cx| {
+        assert_eq!(
+            view.document().read(cx).encode().unwrap(),
+            original.as_bytes()
+        );
+    });
 }
 
 #[gpui_kit::test]
