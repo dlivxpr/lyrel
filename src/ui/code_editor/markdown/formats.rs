@@ -470,12 +470,15 @@ fn markdown_wrapper(
         if range.start < p.start.offset || p.end.offset < range.end {
             return None;
         }
-        if range.start == p.start.offset && range.end == p.end.offset
+        if range.start == p.start.offset
+            && range.end == p.end.offset
             && matches!(node, Node::Strong(_) | Node::Emphasis(_) | Node::Delete(_))
         {
             return visible(node);
         }
-        node.children()?.iter().find_map(|child| selected_scope(child, range))
+        node.children()?
+            .iter()
+            .find_map(|child| selected_scope(child, range))
     }
     fn find(
         node: &Node,
@@ -488,7 +491,9 @@ fn markdown_wrapper(
             return None;
         }
         if let Some(found) = node.children().and_then(|children| {
-            children.iter().find_map(|child| find(child, range, scope, format))
+            children
+                .iter()
+                .find_map(|child| find(child, range, scope, format))
         }) {
             return Some(found);
         }
@@ -500,8 +505,10 @@ fn markdown_wrapper(
         let outer = p.start.offset..p.end.offset;
         let body = outer.start + width..outer.end - width;
         let content = visible(node);
-        let selected_nested = range.start <= outer.start && outer.end <= range.end
-            && scope.is_some() && content == *scope;
+        let selected_nested = range.start <= outer.start
+            && outer.end <= range.end
+            && scope.is_some()
+            && content == *scope;
         (*range == outer || *range == body || content.as_ref() == Some(range) || selected_nested)
             .then_some((outer, body))
     }

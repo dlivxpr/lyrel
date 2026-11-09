@@ -254,7 +254,10 @@ impl SourcePresentation {
         let source = doc.source().to_string();
         if let Ok(root) = super::super::super::parser::parse(&source, doc.grammar(), true) {
             self.projection.syntax = Some(std::sync::Arc::new(Syntax::new(
-                &source, root, doc.revision(), doc.grammar(),
+                &source,
+                root,
+                doc.revision(),
+                doc.grammar(),
             )));
         }
     }
