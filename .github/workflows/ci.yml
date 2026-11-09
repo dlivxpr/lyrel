@@ -145,6 +145,12 @@ jobs:
       # to be re-discarded before every commit. The release workflow locks its
       # build too.
 
+      # 单独检查未启用测试支持的生产图；不设置 RUSTFLAGS，保留 Windows +crt-static。
+      - name: Check desktop and headless
+        if: runner.os != 'Linux'
+        timeout-minutes: 30
+        run: cargo check --locked --features updater --target ${{ matrix.target }}
+
       - name: Build desktop and headless
         if: runner.os != 'Linux'
         # Cold-cache builds have been observed at ~10 min; warm ones at ~90s.
@@ -180,20 +186,35 @@ jobs:
             "target/${{ matrix.target }}/debug/lyrel-server.exe" `
             "target/${{ matrix.target }}/debug/lyrel-updater.exe"
 
-      # 测试 feature 会重编译 GPUI 和测试目标，普通 build 不能预热这部分。
-      # main CI 41987369719 在测试步骤内编译耗时 7m21s，挤占了原本用于
-      # 执行的 20 分钟；超时前测试仍持续完成，没有失败断言。
-      # 分离编译与执行；冷缓存测试编译与普通 build 同给 30 分钟，
-      # 实际测试仍保留 20 分钟卡死保护，不跳过用例。
-      - name: Compile desktop and headless tests
+      # 239a1b4c 的 macOS 日志：14:48:12 开始测试编译，14:55:35 编译根包，
+      # 15:07:00 仍输出未使用代码诊断，15:18:25 达到 30 分钟上限；尚未执行测试。
+      # 旧 native target 将 src/main.rs 连同所有 cfg(test) 模块再编译一次。
+      # 普通单元测试现在位于共享 library；本轮不启用 native-markdown-tests，
+      # 由 required-features 排除原生入口，不过滤普通桌面、headless 或 updater 用例。
+      - name: Compile desktop library and headless tests
+        id: desktop_tests_compile
         if: runner.os != 'Linux'
         timeout-minutes: 30
-        run: cargo test --locked --features updater --target ${{ matrix.target }} --no-run
-      - name: Test desktop and headless
+        run: cargo test --locked -p lyrel -p lyrel-core -p lyrel-cli -p lyrel-server --features updater --target ${{ matrix.target }} --no-run
+      - name: Test desktop library and headless
         if: runner.os != 'Linux'
         timeout-minutes: 20
-        # SIGABRT 会丢失 libtest 捕获缓冲；直接保留原始 panic 和回溯。
-        run: cargo test --locked --features updater --target ${{ matrix.target }} -- --nocapture
+        # SIGABRT 会丢失 libtest 捕获缓冲；保留原始 panic，并继续收集其他目标结果。
+        run: cargo test --locked -p lyrel -p lyrel-core -p lyrel-cli -p lyrel-server --features updater --target ${{ matrix.target }} --no-fail-fast -- --nocapture
+
+      # 显式 feature 只给共享 library 增加 14 项原生消费者所需的支持代码，
+      # 不再把完整单元测试套件编入自定义 runner。编译、执行分别计时和报告失败。
+      # 普通测试断言失败后仍执行原生目标，但编译失败或取消时不启动它。
+      - name: Compile native Markdown tests
+        id: native_markdown_compile
+        if: ${{ !cancelled() && runner.os != 'Linux' && steps.desktop_tests_compile.outcome == 'success' }}
+        timeout-minutes: 30
+        run: cargo test --locked -p lyrel --features updater,native-markdown-tests --test native_markdown --target ${{ matrix.target }} --no-run
+      - name: Test native Markdown
+        if: ${{ !cancelled() && runner.os != 'Linux' && steps.native_markdown_compile.outcome == 'success' }}
+        timeout-minutes: 10
+        # harness=false 的进程 main 持有原生字体平台；不使用 libtest worker 或名称筛选。
+        run: cargo test --locked -p lyrel --features updater,native-markdown-tests --test native_markdown --target ${{ matrix.target }} -- --nocapture
 
       - name: Test Linux headless
         if: runner.os == 'Linux'

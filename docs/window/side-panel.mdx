@@ -188,7 +188,7 @@ GitHub 上的 Markdown 来自陌生人，因此渲染时有两项限制：只加
 <a id="markdown-editor-design"></a>
 ### Markdown 即时渲染编辑
 
-`.md`、`.markdown` 和 `.mdx` 默认使用原生即时编辑。普通正文直接输入，相关语法随光标局部显露；状态栏的**源码**／**即时编辑**按钮切换同一文档和历史，不打开只读预览。原有 `ToggleDocumentPreview` Action 标识保留，便于继续使用自定义快捷键；旧的只读 Markdown 预览设置已移除。
+`.md`、`.markdown` 和 `.mdx` 默认使用原生即时编辑。普通正文直接输入，粗体、斜体、删除线、行内代码标记在普通输入与选区覆盖时保持隐藏，结构语法仍可按构造局部访问；状态栏的**源码**／**即时编辑**按钮切换同一文档和历史，不打开只读预览。原有 `ToggleDocumentPreview` Action 标识保留，便于继续使用自定义快捷键；旧的只读 Markdown 预览设置已移除。本轮实现与验收状态见下方记录，不把源码合入当作实机通过。
 
 普通**新建文件**与终端 scrollback 导出继续使用纯文本编辑器。使用命令面板的**新建 Markdown 文档**创建未命名 Markdown；该命令默认没有快捷键，可在设置中绑定。未命名 Markdown 首次保存建议 `.md`，粘贴或拖入图片前先确定保存位置。普通代码的 `EditorState`、保存整理与语言服务不因 Markdown 切换而替换。
 
@@ -196,9 +196,45 @@ GitHub 上的 Markdown 来自陌生人，因此渲染时有两项限制：只加
 
 反向同样适用：已打开的 Markdown 另存为或重命名为其他扩展名后，当前 buffer 继续使用原生文档、编码／逐行行尾表示和撤销历史，外部重载也按当前输入实体解码；释放后重开才按新扩展名选择编辑器。更名不隐式执行全文整理或有损编辑器迁移。
 
-#### Zorite 体验对齐目标（已确认，未实施）
+#### 当前支持范围与文本布局保护
 
-本设计已由负责人确认，本轮仅定稿，不实施编辑器代码。下文现有实现与历史验收不代表新目标已完成。范围与视觉约束见仓库 `docs/design-system.md` 的“分屏与文档栏”。源码与真实软件对照固定为 Zorite `9c09b8cce84e41ca20c403e5b381c448cde468c4`，实施期间不跟随上游滚动扩大目标；正式版 `v0.13.0` 与该提交不是同一基线，不能互相冒充。
+负责人已明确将阿拉伯语、波斯语、希伯来语的完整 RTL 字形、双向混排阅读顺序及其视觉左右语义排除在当前验收目标之外。这是产品范围决定，不表示 SDK 缺陷已修复。对应的 RTL 镜像列顺序、波斯语反向扩选断言已删除；原复合消费者仍执行中文／英文、组合字素、光标选择、表格导航、保存和历史验证，不整项忽略。下文保留的 RTL 原始失败属于历史证据，以本节的当前边界为准。
+
+应用层采用以下保护，仍仅使用正式 Kit `0.9.1`／Fast `0.1.14`，没有依赖补丁或替代 renderer：
+
+- **表格对齐与命中**：居中／右对齐改为定位内容盒，不再用只移动 paint、却不移动 native hit-testing 的 `text_align`。跨单元格仍由同一表格模型导航；表格内按内容调整列宽的快捷键不再被 Markdown 标题折叠截获，表格外保留折叠快捷键。
+- **极长行安全折行**：Markdown 即时编辑和源码模式按实际 native 横向布局宽度判断；超过 `65,536` 逻辑像素的文本块即使关闭自动换行，也仅在展示层折成有界视觉行。普通 nowrap 及其他文本块的横向滚动保留；状态栏仍显示用户的自动换行偏好，而非改写该偏好。阈值不是文件大小或字节截断上限，不插入真实换行、不减少源文档内容。
+- **重排期间的编辑安全**：重排完成前不发布旧命中几何，不绘制不可靠的巨大负原点文字；键盘、焦点和 Undo 路由继续注册。定位到受保护块时清除从其他 nowrap 块带来的横向偏移，避免可见尾字落进窗格边缘的 resize 区域。文档版本或版面变化后重新测量。
+
+本轮实际验证：
+
+| 验证 | 命令或场景 | 结果 |
+| --- | --- | --- |
+| 全部真实字体消费者 | `cargo test --locked --test native_markdown -- --nocapture` | 14 通过、0 失败、0 ignored；新增完整超长单行与对齐单元格点击／扩选／Undo 消费者 |
+| 标题折叠与转换 | `cargo test --locked --bin lyrel-app -- headings::tests::` | 1 通过 |
+| 普通 nowrap 保持 | `cargo test --locked --bin lyrel-app -- native_nowrap_inline_reveal_drops_offscreen_source_extent` | 1 通过 |
+| 完整宽表 | `cargo test --locked --bin lyrel-app -- native_full_wide_table_reenters_distant_cells_with_wrapped_height_and_undo` | 1 通过 |
+| 无探针产品 | `cargo build --locked --bin lyrel-app` | Debug 构建成功 |
+
+隔离 Windows 产品实窗使用原始失败样本的完整 `400,059` 字节副本，关闭自动换行偏好；观察到末尾文字和 caret 相接，直接点击可见末尾后的 `Q` 确实写入源码末尾，保存为 `400,060` 字节，一次 Undo 并保存恢复原始 `400,059` 字节及 SHA-256。另在实际居中／右对齐表格中点击右列的“乙”，Shift 扩选并替换为 `Q`，确认其余单元格和元数据不变，保存及一次 Undo 精确恢复原始 88 字节。
+
+证据位于仓库外 `C:/Users/dlivx/AppData/Local/Temp/lyrel-204-CtjYLY/evidence205/approved-workarounds/`：测试日志、`product-long/result.json`、`product-long/table-result.json` 与截图。产品二进制 SHA-256 为 `e26ae4f5530c024d59521964b12f2b3de4efb66adbed06ad7cf3982d546fcb67`。原生键盘操作由工具自动使用 takeover，不称为纯后台输入；未做本轮 Release 性能、macOS 或完整 workspace 验收。SDK 原始 `ShapedLine::paint` 的任意长 nowrap 缺陷仍未修复，不能用应用安全折行宣称底层已解决；历史失败与 [#235](https://github.com/dlivxpr/lyrel/issues/235) 保留。
+
+#### CI 编译边界与警告清理
+
+`239a1b4c` 的 hosted CI 中，Windows、Linux、两种 musl 和 macOS server 均通过；macOS 桌面失败发生在测试编译的 30 分钟上限，尚未进入用例执行，不是新的断言失败。该轮仍以同一个 `src/main.rs` 同时构建产品和自定义 native runner，后者带入全部普通 `cfg(test)` 模块，产生大量未使用导入与代码警告；日志不能证明全部编译时间都来自警告输出。
+
+后续将生产实现集中到 `src/lib.rs::run`，`src/main.rs` 只保留平台 subsystem 属性和入口调用。普通桌面单元测试使用 `cargo test --locked -p lyrel --lib`；真实字形入口移至 `tests/native_markdown.rs`，使用 `cargo test --locked -p lyrel --features native-markdown-tests --test native_markdown -- --nocapture`，仍在 OS 主线程初始化真实字体平台、运行全部 14 项消费者。该 feature 非默认产品 feature，只开放必要 fixture，不再编译无关单元测试。上表和下文的旧命令保留为历史执行记录，不是当前 library 测试入口。
+
+CI 分别编译、执行普通测试与 native 目标，不延长原有 30 分钟编译上限，不通过名称筛选、ignored、全局 `allow` 或隐藏输出清除警告。Host 检查识别显式测试 feature，同时继续检查其他平台／feature 条件及被生产代码共同引用的文件。当前开发命令与完整 CI 范围见[安装指南](/getting-started/installation#building-from-source)。
+
+切换后的本机 `cargo check --locked` exit `0`、警告 `0`；`cargo fmt --all --check` 通过，Host 边界检查及四项 feature／混合引用回归通过。日志与后续候选的构建、普通测试、真实字体结果分别保存在仓库外 `evidence205/warning-clean-verify-*/`，最终 hosted 状态由 PR #234 记录；旧 macOS 超时不会改记为通过，普通 unit、native 和产品实窗也不互相冒充。
+
+
+
+#### Zorite 体验对齐：核心交付与验收边界
+
+本设计已在 `integration/204-markdown-wysiwyg` 集中实现，按负责人批准的 Windows 核心验证与已记录性能取舍交付；完整原生矩阵、严格匹配性能及 SDK 延期项不冒充通过。下文保留历史检查点，并单列最终正式依赖、无探针产品与量测证据。范围与视觉约束见仓库 `docs/design-system.md` 的“分屏与文档栏”。源码与真实软件对照固定为 Zorite `9c09b8cce84e41ca20c403e5b381c448cde468c4`，未跟随上游滚动扩大目标；正式版 `v0.13.0` 与该提交不是同一基线，不能互相冒充。
 
 - **所见即所得编辑**：直接操作排版后的文档内容。粗体、斜体、删除线、行内代码等格式标记在普通输入和选区覆盖时保持隐藏，通过样式、快捷键和格式操作提供反馈；列表、任务、代码围栏及表格分隔符由相应的可视结构承载。精确语法修改通过明确的局部源码入口或完整源码模式完成。此目标替代目前“光标进入便显露格式标记”的交互，不改变源码权威或统一撤销历史。
 - **显式扩展语法**：允许用户主动使用图片尺寸、表格样式、公式对齐、属性面板、下划线及颜色等能力时写入对应的文档表示；此类效果在其他 Markdown 软件中可能不同。扩展只修改该操作必需的内容，须可撤销，不因打开、呈现或普通保存而把原文转换为 Zorite 方言。具体表示仍须与现有 Markdown／MDX 解析规则核对。
@@ -217,6 +253,8 @@ GitHub 上的 Markdown 来自陌生人，因此渲染时有两项限制：只加
 
 完整编辑体验对齐，不以部分高频操作、功能名称相同或静态排版截图代替。共同支持的场景以固定提交的 Zorite 软件行为为对照；lyrel 特有能力按现有契约验收。以下是验收面，不是任选的阶段性子集：
 
+负责人在实施会话中调整了测试要求：功能范围不变，验收精简为核心工作流；优先现有消费者回归、可复现脚本与后台测试，减少需要审批的前台操作。不再逐条穷举下表全部原生组合，也不以全量原生矩阵阻塞各实现票。以下各项仍是功能契约；报告区分核心实测、保留的历史证据与未验证组合，不把测试精简写成完整原生或跨平台通过。
+
 | 验收面 | 必须实际操作的路径 |
 | --- | --- |
 | 连续编辑 | 中文 IME 预编辑／候选位置／提交／取消，字素及词导航，软换行边界，跨结构选择／删除，Undo／Redo，源码往返 |
@@ -228,9 +266,155 @@ GitHub 上的 Markdown 来自陌生人，因此渲染时有两项限制：只加
 
 性能在同机、同窗口条件、同样本和相同测量边界下使用 Release 对照，记录输入响应与滚动，不能以工具调用耗时冒充输入到绘制时延。共同场景以不劣于 Zorite 为目标；lyrel 既有长文、宽表、多资源负载另与改造前比较，不得出现可复现退化。不得通过减少内容、切换源码、关闭功能或放宽保真取得更快结果；报告保留版本、负载和重复测量证据，不提前编造提升百分比。
 
-本次要求 Windows 完整原生交互及真实 SSH 验收；macOS 保持兼容，未实测部分明确记录。未完成项目仍为未完成，不以编译、单元测试、Unicode 注入或 headless 结果替代真实窗口、系统 IME、保存和重开。历史验收记录不自动满足新目标。
+本轮最终[负责人批准的完成边界](https://github.com/dlivxpr/lyrel/issues/204#issuecomment-6739510183)：接受正式 `0.9.1` 最终候选的代表性核心比较及已记录额外成本，不再将严格排版匹配或穷举原生矩阵作为本次交付闸门；不将数据改称严格性能通过。完整功能范围不因此缩减，未执行的 macOS 组合与 #235 的 RTL／长 nowrap paint 缺口仍明确保留。PR #234 可标为 ready，但不自动合并；工单通过 PR 合并关闭。
 
-本轮查证限于双方源码与现有文档，尚未构建或运行固定版本的 Zorite，也未新增编辑器交互或性能实测。上游依据：[连续文档模型](https://github.com/packetThrower/zorite/blob/9c09b8cce84e41ca20c403e5b381c448cde468c4/src/db.rs#L1-L9)、[格式标记与结构标记显隐](https://github.com/packetThrower/zorite/blob/9c09b8cce84e41ca20c403e5b381c448cde468c4/crates/zorite-editor/src/markdown_syntax.rs#L300-L390)、[回车处理](https://github.com/packetThrower/zorite/blob/9c09b8cce84e41ca20c403e5b381c448cde468c4/crates/zorite-editor/src/lib.rs#L2400-L2510)、[双格式剪贴板](https://github.com/packetThrower/zorite/blob/9c09b8cce84e41ca20c403e5b381c448cde468c4/src/clipboard.rs)、[原位公式编辑](https://github.com/packetThrower/zorite/blob/9c09b8cce84e41ca20c403e5b381c448cde468c4/src/app/math.rs)、[链接点击处理](https://github.com/packetThrower/zorite/blob/9c09b8cce84e41ca20c403e5b381c448cde468c4/crates/zorite-editor/src/lib.rs#L3380-L3475)。显隐以条件表达式为准：`always_hide` 和 `hide_prefix` 优先于选区揭示，不能据上游旧注释声称选中时所有标记都会出现。
+本次重点验证 Windows 本机与真实 SSH 的核心路径；macOS 保持兼容，未实测部分明确记录。脚本／headless 可以证明事务、保存字节和 Host 隔离，但不能冒充真实窗口、系统 IME 或完整原生操作通过。需要实际窗口证明的核心变更合并批次验证，不重复申请逐条前台审批。
+
+规格准备阶段的历史状态：当时查证限于双方源码与现有文档，尚未构建或运行固定版本的 Zorite，也未新增编辑器交互或性能实测；后续已执行证据见下方 #205 对照记录，不以此历史状态描述当前进展。上游依据：[连续文档模型](https://github.com/packetThrower/zorite/blob/9c09b8cce84e41ca20c403e5b381c448cde468c4/src/db.rs#L1-L9)、[格式标记与结构标记显隐](https://github.com/packetThrower/zorite/blob/9c09b8cce84e41ca20c403e5b381c448cde468c4/crates/zorite-editor/src/markdown_syntax.rs#L300-L390)、[回车处理](https://github.com/packetThrower/zorite/blob/9c09b8cce84e41ca20c403e5b381c448cde468c4/crates/zorite-editor/src/lib.rs#L2400-L2510)、[双格式剪贴板](https://github.com/packetThrower/zorite/blob/9c09b8cce84e41ca20c403e5b381c448cde468c4/src/clipboard.rs)、[原位公式编辑](https://github.com/packetThrower/zorite/blob/9c09b8cce84e41ca20c403e5b381c448cde468c4/src/app/math.rs)、[链接点击处理](https://github.com/packetThrower/zorite/blob/9c09b8cce84e41ca20c403e5b381c448cde468c4/crates/zorite-editor/src/lib.rs#L3380-L3475)。显隐以条件表达式为准：`always_hide` 和 `hide_prefix` 优先于选区揭示，不能据上游旧注释声称选中时所有标记都会出现。
+
+##### #205 固定版本对照记录（核心基线就绪，保留未验证范围）
+
+按负责人最新的核心测试要求，固定版本原生运行、完整静态操作清单、差异台账、可复现 fixture 与改造前原始数据已可供后继实现使用，不再以穷举原生矩阵阻塞 #206。静态清单 285 条、冻结原生账本 186 行不是完整原生通过率。现存完整量测族含 680 个 run、6000 个输入及 1400 个滚动样本，另保留 66 个失败族 run；已执行 A/A 校准及交替配对，但严格排版／资源匹配未闭环，不能据此声明性能达标。
+
+2026-11-08 已在 Windows `10.0.26300` 构建并运行精确的 Zorite `9c09b8cce84e41ca20c403e5b381c448cde468c4`，未用正式版 `v0.13.0` 或 moving HEAD 替代。原始源码与锁文件未改；`cargo build --release --locked --bin zorite` 成功。首次构建因 vendored OpenSSL 找不到 `perl` 失败，随后在仓库外配置校验过的 Strawberry Perl portable，仅修改构建进程 PATH，同一命令成功。原始无探针二进制 SHA-256 为 `711637e157cb0a59f766f378ff8b08b8fb6e00021809ac2d6e99df1b7b95d7da`。其数据、`APPDATA`、`LOCALAPPDATA` 均隔离在任务自有目录，没有接管真实笔记或配置。
+
+改造前 lyrel `3d97debb93504441dfc580f9fdb2345d211e1a58` 的 `cargo build --release --locked --bin lyrel-app` 也已成功，原始二进制 SHA-256 为 `20198268490c690b35903147405016807f1edf0ba58ebd9e1f1f930f9fcd1dcc`。隔离原生窗口从文件树打开自有 Markdown，在标题插入一个 `S`，经关闭确认保存并从文件树重开；独立读回的 349 字节文件恰好是 348 字节原件加该一个字符，其他字节不变。此输入不是系统 IME，也不是快捷键验收。
+
+固定 reference 已实际观察普通正文与混合选区隐藏格式标记、空选区／混合选区上下文菜单、混合格式 Bold、Markdown 复制及持久化重开；另观察公式结构编辑入口及 LaTeX／导出／对齐菜单、代码语言菜单与复制、表格菜单／插行／样式／列宽拖拽、图片对象菜单与尺寸拖拽、拼写建议替换、混合方向文字呈现及嵌套标题折叠。上述证据只覆盖各自的鼠标／菜单路径，不代表完整操作 inventory 已经原生验收。
+
+恢复后已取得任务范围的原生控制授权，并实际执行六种格式快捷键的选区／空选区命令、混合与嵌套格式、撤销／重做、列表续行与空项退出、可见字符／grapheme 删除、表格 Tab／Shift+Tab／Enter／方向键、图片及公式边界删除、代码换行缩进、搜索前后匹配、slash 选择／关闭、属性提交及撤销、公式结构补全和 PNG／SVG 导出。原生 Copy 的 `UnicodeText`／`HTML Format` 已独立检查；真实 Word 粘贴显示格式，Notepad 保存字节保留 Markdown。真实 Microsoft Pinyin 候选、提交与取消已在 reference 执行；改造前 lyrel 另完成候选、提交“中”、保存、关闭及文件树重开，完整源码与保存字节一致。记录见 `resume-native-results.json`、`resume-native-clipboard.json` 及 `resume-*.png`，不扩张为尚未执行的完整矩阵通过。
+
+新确认的适配是表内格式标记：该原始 Zorite 二进制在第一正文行 B 单元格直接显示字面 `**bold**`，而同页普通正文隐藏星号；当时鼠标右击的是 A 单元格，B 不是正在编辑的 cell。按本节既有优先级，lyrel 仍须遵守 #204 的格式标记隐藏不变式，不能将这条差异当作 #206／#209／#212／#214 的豁免，或改写为上游已有表内隐藏格式。后续须保留对应源文本、鼠标位置与两种呈现的对照证据。
+
+**历史输入前提与当前证据边界：**恢复后实际执行了真实 `Ctrl`／`Shift` 和系统 IME。媒体组旧失败含 `RefCell already borrowed` 与落点偏移，数据和原文恢复记录完整保留；后续独立直发诊断中 10 个 `X` 均落在预期文首，逐次校验源码并全部撤回，未记录运行时错误。该诊断不证明根因、不替换失败 run，也不计入性能配对。原生剩余组合改为明确列出的未验证范围，不再阻塞核心实现。reference 提交“中”后 Undo 回到字面 `zhong`、slash 插入清空此前历史等上游行为，不能放宽 lyrel 的组合输入与统一历史要求。
+
+两侧临时 callback→paint 探针仅存在于仓库外，不进入产品。现有 A/A、AB/BA 与改造前大负载原始分布用于后续核心回归比较；不同 fixture、cache、条件不合并，工具调用耗时不算输入到绘制时延。reference 的 Arial／16 px／浅色设置已原生复核，但不证明代码叶字号、逐 glyph fallback、行高与对象布局匹配。回归样本分别为：1200 组混合样本 342,220 字节；1200 节且含 1200 处图片的混合样本 695,006 字节；120 列×160 正文行表格 291,041 字节、19,320 单元格；单大段落／单大代码块 400,034／400,042 字节；多资源 MDX 3,448 字节。不混用历史负载或 Debug 数据。
+
+仓库外证据目录为 `C:/Users/dlivx/AppData/Local/Temp/lyrel-204-CtjYLY/evidence205/`。操作／差异入口为 `offline-native-mapping/closure.json`、`approved-differences.md`；数据与限制入口为 `resume-resource-retained-baseline-summary.json`、`offline-baseline-index/baseline-index-resources-retained01.json`、`fixture-manifest.json`、`measurement-protocol.md`、`final-status.json`；独立输入诊断为 `resume-direct-native-diagnostic03.json`。新增 `core-verification-policy.json` 记录本次验收调整；后继票依据完整功能契约实现，按核心测试要求验证，不据此宣称全量矩阵或性能通过。
+
+##### #204 当前核心证据与明确缺口
+
+本轮隔离 Windows 实窗已在默认即时编辑中追加中文与 emoji，经正常保存、源码／即时编辑切换、关闭和文件树重开，独立核对完整文件恰为原始 353 字节追加指定的 25 字节，BOM 与其余原始字节不变。此证据来自集中集成期间的临时 Debug 二进制，不替代最终合并二进制复验、真实系统 IME、SSH 编辑或性能结论。二进制 SHA-256 与操作证据位于仓库外 `native-core-1794151628130/native-local-core-smoke.json`。
+
+后续无探针 Debug 实窗已通过生产 Copy 检查 Windows 原始 `UnicodeText` 与 `HTML Format`；纯文本与所选源码的原始混合行尾相符，HTML 在新建 Word 文档中实际呈现标题、粗斜体、列表、代码正文、公式及链接文字。另在自有 Notepad 文件中粘贴并保存，完整正文与 Markdown 一致；Notepad 自身统一为 CRLF，不把其保存结果误报为混合行尾逐字节相同。该批证据为仓库外 `native-core-current-17941601/native-clipboard-formats.json`、`native-word-rich-paste.json` 与 `native-notepad-plain-paste.json`，不是最终 Release、系统 IME 或全量对象组合通过。
+
+在 `gpui-kit`／`gpui-base 0.9.0` 检查点，正式 registry 尚无正文任意 range foreground 与显式 soft-wrap 双 affinity 的公开接口，#209 的任意文字颜色呈现因此未满足。当时不以背景着色、重新绘字、私有 renderer 或 Git/path 补丁冒充完成。随后正式 [0.9.1](https://github.com/longbridge/gpui-kit/releases/tag/v0.9.1) 已发布对应 API；应用接入和复验结果按新的候选另记，不把旧检查点的缺口继续描述为当前 SDK 未发布，也不据版本号推定全部问题已修复。
+
+续行首 grapheme 的拼写波浪线不再整体依赖缺失的双 affinity 接口：拼写装饰与链接命中使用当前帧公开 native caret 几何恢复同一视觉行的完整 advance，区分 whole-layout 续行起点与 InlineFlow 前一片段末尾，不连接跨行矩形。无探针 Windows 产品实窗已用同一 628 字节文件观察到正文、列表与引用续行首字的完整波浪线；另以真实链接证明首个软换行字符可延迟显示 owning-Host 标题／首段、点击输入与撤销，以及真实 `Ctrl+Click` 打开目标。后台 modified-click 曾只送达普通选择，改为实际 takeover 后才导航成功，不将该失败计为后台通过。这些局部恢复不等于 SDK 已支持完整双 affinity caret 绘制、RTL 或表格对齐几何。
+
+真实 Windows 系统 IME 核心路径也已单独验证：在隔离的 `ime-native-1667.md` 中只发送物理拼音键 `zhong` 与提交空格，得到“中”，精确保存为原始 10 字节加 3 字节 UTF-8；一次 Undo 恢复原始全文，而不是字面 `zhong`。证据在仓库外 `native-final-1667d23a/native-real-ime-pass.json`，来自中间无探针 Debug 产品，不冒充最终 Release、纯后台输入、全部候选窗布局或 macOS 通过。
+
+此前 RTL 表格消费者失败不能作为原生 SDK 缺口的证据：旧构造 `current_platform(true)` 在正式 Windows backend 中返回 `NoopTextSystem`，并非 DirectWrite。纠正为 `current_platform(false)`、保留字体守卫及全部原断言后，`3f9a54ec` 实际执行 9 项：7 项通过，2 项 RTL 仍失败。另一次定向探针确认当前几何未过期，但 `גד` 的源码边界 X 坐标依次为 `1622`、`1630.0547`、`1638.5547`，波斯文首段同样随源码向右增长；按 `Right` 因而停在第二列，段首 `Shift+Left` 则跨回前段。正式 `gpui-fast-windows 0.1.13` 的 `DrawGlyphRun` 忽略 baseline origin，按正 advance 累加 glyph 位置，与该实测一致。这是独立于旧 Noop 结果的新证据；不通过反转按键、修改断言或复制第三方 renderer 绕过，探针不进入产品。
+
+同一无探针 Windows Debug 候选 `776c6e9e` 已完成本机输入、保存、源码／即时编辑往返、关闭及文件树重开。真实 SSH 同步完成精确保存、撤销／重做、关闭重开、图片宽度表单、相对链接、显式锚点及只读片段嵌入；远端原始 394 字节和本机独立副本均已恢复。未提交公式「9」在真实外部文件变化后仍保留，并显示冲突提示。具体范围见仓库外 `native-final-776c6e9e/native-local-core-and-wrap-pass.json`、`native-ssh-core-pass.json` 及其关联记录；不扩张为完整原生矩阵、macOS 或 Release 性能通过。
+
+集中核心回归按 59 个 selector 取最后一次实际结果，58 个通过，RTL 表格消费者仍失败；这是集中运行及 reload 竞态修复后复跑的合并结果，不是一次完整 workspace 绿灯。记录见仓库外 `core-acceptance-summary-3ff12407.json`。
+
+`3ff12407` 的无探针产品、修正观察边界的改造前基线与候选观察器均已完成 Release 构建，历史基线哈希不变。短文四轮及完整 342,220 字节长文的输入／滚动保留原始 callback→paint 和逐帧几何；默认排版的视口、文字宽度与行高不同，数据仅为描述性记录，不满足 #233 的严格匹配门槛。该无探针产品的完整 400,042 字节单代码块另暴露 UI 卡顿，实际符号栈定位到离屏拼写诊断的几何绘制；原始失败保留，不回填为通过。证据入口为仓库外 `evidence205/core-release-review-1794179081764/`、`evidence205/core-native-product-long01/` 与 `evidence205/core-native-code-debug-stall01/`。
+
+离屏拼写几何的定向修复按当前原生 caret 的 y 坐标二分定位可见源码范围，保留视口上下相邻行及完整 grapheme，再使用既有像素裁剪；不按 x 假设 RTL 顺序，不删除诊断或降低代码块上限。相同 400,000 字符代码正文的确定性工作台消费者在未修复时触及固定 30 秒执行上限，修复后在 0.51 秒内完成原生事件点击、输入和统一撤销；拼写四项消费者合计通过，包含续行首字、硬换行、图片／公式片段和键盘建议替换。原始记录见仓库外 `evidence205/code-spelling-red-1794183302237/` 与 `evidence205/code-spelling-green-1794183566243/`。
+
+后续从固定 `a08faed4` 源码构建的无探针 Release 已重放原来卡住的代码正文点击，窗口保持响应且可见拼写波浪线仍绘制。实际插入 `CODE_FIXED`、保存、一次撤销、往返滚动、关闭及文件树重开后，400,042 字节全文精确恢复；没有强制进入源码模式或削减代码内容。二进制 SHA-256 为 `4f4e8e13a7c51dcafcd0b93009cf8578d9a762ee94daeafbf49afbd24a104828`，保留匹配 PDB；原生证据为仓库外 `evidence205/core-native-code-release-a08-after01/native-code-fix-pass.json`。此结果仅证明该负载的卡顿修复，不替代其他完整负载、后续代码的复验或匹配性能门槛。
+
+共享剪贴板的 `base64` 依赖已移入 Windows／macOS 的生产依赖作用域，锁定版本不变。后继 CI run `42540077047` 的 macOS job `128912959712` 已实际通过 `Build desktop and headless` 步骤，修复原生产构建的 `E0432`／`E0433`；该步骤不是 macOS 测试套件或实机验收通过。
+
+两轴复审后的修复继续保留上述失败证据：原生文本在各不跨 atom／样式边界的显示片段内按纵向行及同方向区间定位二维可见诊断，方向区间只在显示文字重建时派生，关闭自动换行的超长代码与含高图片／公式的长段落都不逐个查询全部离屏 grapheme。只查询公开 `LeafGeometry`，不访问其私有 pieces，也不对高 atom 的非单调 y 或下一个片段的末端 caret 二分；保留完整诊断数据和片段边界 grapheme，最终仍用原生行框裁剪。嵌套原始 HTML 的同名标签按外层闭合确定原样范围，内部 Markdown 标记不进入格式投影或格式命令。
+
+图片加载与其他工具栏命令的 pointer-down 不再作为正文选点，避免意外进入图片上下文工具栏并改变光标布局；延迟图片写入期间选区／输入已变化时，保留新文本并显示本地化反馈，不把完成结果静默丢弃。公式指针进入结构编辑后，源文档选区复用 `Formula::insertion_offset()` 的正文入口，跳过 `$`、块公式起始行与前导空白；活动结构 session 明确拥有该 atom，正文源坐标不触发局部源码显露或使原生编辑器消失。消费者直接断言指针结果，不先执行「公式源码」来重置选区。
+
+原生 `bounds_for_range` 尊重调用方请求的 UTF-16 区间起点：查询 marked range 锚定预编辑起点，查询当前选区的空区间锚定实际 caret，不以 `selection.head` 替换所有请求。中文质量保障继续使用现有语言解析／退役语言回退、完整中文目录与复数分支缺失检查；不恢复 `zh == en` 措辞断言或技术借词白名单，也不新增逐 key 镜像目录 getter 的转发测试。本地化用户面另由 `zh-CN` 原生复验观察。上述修改尚待集中自动回归与原生复验；120 列表格原有 candidate 相对坐标断言、图片加载前后 caret 不移动断言及两个 RTL 方向断言保持原值，未据静态修改宣称通过。
+
+`59306dcd` 的集中桌面测试实际为 3106 项通过、10 项失败；图片 HTTP 加载的 caret 稳定断言已通过，宽表预编辑已越过原 X 相对坐标失败点，但不能据此宣称完整套件通过。后续修正结构公式 session 与源码显露的归属冲突，将另一项延迟图片消费者迁移到相同可见反馈契约，并保留其新文本、caret 与撤销断言；宽表末尾无填充单元格的粘贴首行继续转义管道，遇换行后退出表格，原样保留后续文本，不再把尾随换行当成单元格内部清理掉。新增完整 400,034 字节、含高图片与公式的单段落消费者覆盖开／关自动换行、实际指针输入、统一撤销及源文件保真；块公式消费者覆盖带前导空白的真实指针入口。这些后续修改尚未运行集中验证，两个 RTL 失败仍保留原断言；当时未识别 Noop 平台前提，不能据此归因 SDK。
+
+继后的 `34dfae81` 集中测试实际为 3112 项通过、5 项失败：完整宽表和延迟图片消费者通过，两个 RTL 断言仍失败；该阶段同样尚未纠正 Noop 平台前提。块公式新增断言须使用源文档统一的 LF／UTF-8 坐标，不把原始 CRLF 文件字节偏移当成 `Selection`；该样本两个 CRLF 导致原文件入口为 44、源文档入口为 42，`insertion_offset()` 已跳过块起始行及两个前导空格。原生公式混合消费者在原始 pointer 结果断言后，以实际 `Escape` 退出未变 session，继续 Live 工作流，不再先切到 Source 却等待 Live 几何；完整混合长段落在图片加载按钮取得焦点后，先把焦点交还当前编辑 presentation，再要求离屏 caret 重入并验证其诊断。新的失败信息保留 wrap、caret、viewport 和可见区间，以上测试阶段修正尚待集中复验，不记为 green。
+
+`3f9a54ec` 的真实 DirectWrite 字形回归已通过所有 7 项软换行、链接及拼写消费者，包括完整 400,034 字节混合长段落、高图片／公式、wrap／nowrap 下的可见 caret、真实生产 pointer/input 路由及统一 Undo。原九项全部实际执行，无 ignored；两个原 RTL 断言仍失败。记录见仓库外 `evidence205/real-font-validation-1794191971997/results.json`；几何探针见 `real-font-validation-1794192279286/native-all.log`。这些是工作台消费者证据，不替代产品实窗、完整套件或性能验收。
+
+`884cdb3a` 集中复验的三项定向消费者与制表符扩容连续五次均通过；默认并发 GUI unit 实际为 3105 通过、3 失败、29 ignored，独立真实字体入口为 7 通过、2 个原 RTL 失败。新增 unit 失败涉及 IME bounds 暂缺、表格边缘几何以及 Redo 后 `Left`／输入错误进入表头，不能据定向通过宣称完整回归已绿。无探针 Release 构建成功，SHA-256 为 `404c66fee1f33deb14307b8212f77c89eaeed2f9366f4d75802fa61139cd947f`；完整 400,059 字节单段落在实际窗口完成尾部输入、精确保存、一次 Undo 及关闭重开，但尾部绘字结束位置与 caret 相差约 546 px，点击可见末尾实际落在源码末尾前 109 个字符。该原生失败保留，不把字节工作流成功当作 caret／命中验收通过。键盘工具实际使用了自动 takeover，不冒充纯后台验证。记录为仓库外 `evidence205/native-main-validation-1794192453898/results.json` 与 `core-native-ci-real-font-884-mixed01/native-results.json`；此轮新增三项 Standards finding 正在统一修复，Spec 轴 0 finding 不代表全规格完成。
+
+后续 `ee6a981f` 已修复上述三项 unit 失败：默认并发 GUI unit 实际为 3109 通过、0 失败、29 ignored，8 项定向消费者和制表符扩容连续五次全部通过；独立真实字体入口仍实际执行 9 项，7 通过、2 个原 RTL 失败。该无探针 Release 的 SHA-256 为 `7e5b93cc2d97003e7439fae2a6b28bfbb6e3d8633d65b15c736400e6b6147725`。本机表格实窗已从文件树打开混合行尾原件，执行 `X|Y` 转义输入、保存、Undo／Redo 后 `Left` 再输入 `Z`，确认内容仍在正文单元格、表头与邻格不变；源码／即时编辑往返后统一 Undo 恢复原始 63 字节，经保存、关闭及文件树重开再次精确核对。证据为仓库外 `evidence205/native-main-validation-1794194611604/results.json` 与 `core-native-ci-frame-fix-ee-table01/native-table-pass.json`，不替代真实 IME、RTL、超长行 paint 或匹配性能验收；本轮自建 GUI／daemon 已按确切身份停止，未操作用户实例。
+
+`ee6a981f` 的 [hosted CI `42556155764`](https://github.com/dlivxpr/lyrel/actions/runs/42556155764) 已结束，macOS 主线程真实字体入口不再因初始化失败而中止：
+
+| 平台 | GUI unit 通过 | 失败 | ignored | 真实字体消费者通过 | 失败 | ignored |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| Windows | 3109 | 0 | 29 | 7 | 2 | 0 |
+| macOS | 3161 | 0 | 27 | 7 | 2 | 0 |
+
+两平台保留的 RTL 表格与波斯文选择原断言均仍失败，未缩减消费者集合或忽略失败；macOS 表格实际到达源码位置 141，Windows 为 139，要求的范围仍是 `122..=132`。相同消费者失败不证明相同后端根因，不能把 Windows 的 DirectWrite 探针归因直接移用于 macOS。终端扩容制表符复制消费者及 updater 在两平台通过，Linux headless、双架构 musl server 和 macOS server job 通过；两项桌面 job 仍因 RTL 失败，不能写成完整 CI 已绿。原生日志与计数保留在仓库外 `evidence205/hosted-ee6a981f-summary.json` 及其指向的两个完整 job 日志；这不替代 macOS 产品实窗验收。
+
+超长行的实际绘字差异仍待正式依赖解决：锁定的 `gpui-fast 0.1.13` 在 `text_system/line.rs` 从原点逐 glyph 累加 X，而 `gpui-base 0.9.0` 的 caret 几何使用原点加 shaped 绝对位置。`[INFERENCE]` 巨大负滚动原点下的浮点累加误差与上述约 546 px 差异相符，但尚未通过替换算法的对照实验确认因果，不能把推断写成已证实修复。正式 `Paragraph` 会合并相邻普通 `InlineNode`，未公开有界 text fragment 控制；custom／image 节点在几何中计为 `U+FFFC`，不能伪造对象拆段或截掉末尾源码来绕过。当前保留完整源码、末端 caret 和原失败；正式依赖、公开几何与原生 paint 一致性转由下述 #235 跟踪。
+
+##### 负责人批准的 SDK 延期边界
+
+按[负责人批准的范围调整](https://github.com/dlivxpr/lyrel/issues/204#issuecomment-6733596104)，任意文字前景色、soft-wrap caret affinity、RTL shaping／可视导航／选择／表格边界，以及极长 nowrap 行的 paint／caret／命中一致性，原先统一转移至独立 [#235](https://github.com/dlivxpr/lyrel/issues/235)，不以未执行代替通过。`0.9.1` 发布后，负责人要求本轮接入已正式公开的前景色与 affinity 能力；后续实现与实测按新候选记录。未解决的 RTL 和极长行仍保留原失败与延期边界；不忽略用例、不引入未发布补丁，也不由本 PR 自动关闭 #235。
+
+##### `52d5a8f2` Release 核心复验与性能诊断
+
+无探针产品、修正观察边界的改造前基线与候选观察器，均以 `cargo build --release --locked -j2 -p lyrel --bin lyrel-app` 构建成功。产品 SHA-256 为 `894a288c9c130eb38259e2ef0e93522eaa6b7129bade9f64abea35bbe1a2d7fa`；根 Release 可执行文件已恢复为该无探针产品，历史基线未覆盖。
+
+该产品实窗对 487 字节正文、342,220 字节／1,200 组混合文档、400,034 字节单段落、400,042 字节单代码块、291,041 字节／120 列×160 正文行表格、3,448 字节多资源 MDX，以及 695,006 字节／1,200 节资源文档，分别执行实际输入、保存、Undo 和往返滚动；全部文件逐字节恢复。代码正文的插点为源码 UTF-16 偏移 546，已完成投影的宽表插点为 6,626，不以标题输入代替正文／单元格输入。资源文档、代码块与宽表另经关闭及文件树重开核对全文。证据为仓库外 `evidence205/core-native-final52-product01/production-smoke-index.json`；两次过早读取 AX 的初始脚本失败和定向恢复完整保留，不计作产品回归或性能样本。原生键盘工具实际使用自动 takeover，不冒充纯后台输入。
+
+性能观察协议为 `204-core-native-paint-before-observer-v2`：从应用拥有的原生输入 callback 入口到实际子元素、selection／spelling／caret paint 完成后立即取时，排除 OS 排队、IME 候选生成、GPU、合成与扫描。每个负载先执行 10 对 A/A，再执行 10 对交替 AB／BA；每个 run 10 次单字符输入，按同一归档快照及 entity／painted_sequence／paint_us 关联输入 leaf 的同帧几何，所有任务输入均已撤回。下表仅统计 AB／BA，各侧每负载 100 个输入，百分位为 linear-R7，单位 ms：
+
+| 负载 | Release 变体 | 样本数 | p50 | p95 | p99 | 最大值 | ≥50 ms stall |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| 正文 | 改造前基线 | 100 | 4.687 | 6.940 | 7.047 | 7.142 | 0 |
+| 正文 | `52d5a8f2` 候选 | 100 | 4.874 | 7.717 | 7.947 | 8.131 | 0 |
+| 完整 1,200 组文档标题 | 改造前基线 | 100 | 8.376 | 9.972 | 11.409 | 11.562 | 0 |
+| 完整 1,200 组文档标题 | `52d5a8f2` 候选 | 100 | 13.164 | 16.637 | 17.647 | 18.144 | 0 |
+
+两侧默认文字宽度、行高及工具栏占用不同，仍归类为描述性默认排版对照，不是严格 matched、Zorite 不劣性或物理键到屏幕时延通过。长文每对 p50 均更慢，配对差中位数为 4.549 ms，基线 A/A 绝对差的 p95 为 1.378 ms；正在分段诊断稳定额外开销，未放宽阈值或关闭功能。完整长文另各记录 10 次真实 wheel→paint，均无 ≥50 ms stall；单轮滚动不是重复配对通过。资源快照在计时区间之外采集，未观察到编译进程，不将工作集快照当作峰值或内存不回退证明。
+
+构建、原始 run、逐帧几何与资源快照集中在仓库外 `evidence205/core-release-review-1794205311089/`，协议锁为 `core-233-protocol-lock-52d5a8f2.json`。这是 `52d5a8f2` 的历史产品证据，不替代后续修复产物的实窗验收；#233 与 PR #234 仍待收尾。既有系统 IME、真实 SSH 核心证据仍按原提交和实际范围引用，macOS 产品实窗仍未验证。
+
+##### 最终复审修复与消费者回归（`bca6c619`）
+
+行内格式按 AST 的真实分隔符与可见内容处理嵌套、重复切换和完整源码选区转换；已有目标格式优先切换，保留外层其他格式。普通链接正文仍可格式化，destination、reference label，以及 URL／email 自动链接的同源选区受到保护。大文档缺少当前语法缓存时，格式命令由单个后台 worker 按顺序执行；外部编辑、切换呈现、选区或焦点变化使旧上下文失效，不把连续快捷键当作陈旧结果静默丢弃。
+
+格式工具栏 render 只读缓存；显式打开菜单时，至多对 32 KiB 文档准备有界语法并刷新可用状态。普通复制、剪切及整页复制的富文本生成在后台完成，发布前校验文档和输入上下文；剪切仅在成功发布且目标仍有效后删除源码。整页复制入口在空选区也可使用，不要求先手动全选。
+
+嵌入控件沿用稳定文档对象身份，前文在另一呈现中编辑后保留自身焦点与滚动。重复 target 仍遵循原去重提示，不生成第二个可编辑 flow。另修复属性行右侧空白进入字段表单、表格 slash 的不适用块操作、嵌套围栏返回正文的插点、单行 MDX 块公式入口及顶部边界，以及 composition 提交后拼写菜单的生命周期。
+
+下列 Windows 消费者均实际执行；GUI unit 已包含 10 项最终复审用例及颜色转换、嵌入 Host 往返、关闭面板恢复终端输入三个原失败路径，不重复累计：
+
+| 套件 | 通过 | 失败 | ignored |
+| --- | ---: | ---: | ---: |
+| GUI unit | 3119 | 0 | 29 |
+| 真实原生字体消费者 | 7 | 2 | 0 |
+
+两项原生失败仍是 #235 已批准延期的 RTL 表格导航与波斯文可视导航原断言；未忽略或放宽，不声明完整原生套件或 CI 已绿。证据为仓库外 `evidence205/final-review-validation-1794213604432/` 与 `evidence205/final-review-suite-resume-1794214189912/`。前一 runner 中断后的未完成套件未计通过，后一轮仅续跑原二进制的完整 unit／native。Standards 与 Spec 的修复闭合复核均未发现残余问题；这不替代最终无探针产品实窗、性能与 macOS 验收。
+
+##### GPUI Kit 0.9.1 升级复验
+
+正式依赖已升至 Kit／Base／Component `0.9.1`、Fast `0.1.14` 和共享 HTTP transport `0.3.12`；应用仍只经 Kit facade 选择 Fast，没有引入第三方 Git/path/patch。源码 `SourceCaret` 与 SDK 显示坐标的 `Caret` 分开，affinity 仅由当前 presentation 保存，并按选区、revision 与 source/live 模式校验；主光标、额外光标、Shift 扩选与修饰键链接拖选共用该边界，同 byte 换侧也触发原生坐标失效。前景色使用 keyed leaf 的公开 `with_foreground_ranges`；菜单反馈与颜色重分配共用按 revision 缓存的可见 runs 和边界 sweep，不逐 run 扫描全部 decorations。
+
+`f688de71` 实际通过格式检查与消费者构建，并执行全部 12 项真实字体消费者：10 通过、2 个原 RTL 断言仍失败、0 ignored；原 9 个 selector 全部保留，新增 affinity、修饰键拖选和真实 picker 键盘流程均通过。完整 GUI unit 为 3123 通过、2 个新增测试断言失败、29 ignored：两处错误分别假定未知 span 子树全部不解析、要求菜单 label 暴露并不存在的 disabled 属性；`1605cd93` 删除虚构契约、以实际 Clear 点击及完整字节验证替代控件实现细节后，两项消费者定向通过，不冒充另一次完整 unit 绿灯。强调结束边界与空 owner 的新增回归先实际测红，修复后原字节、前景色范围、菜单状态与 Undo 均通过。证据为仓库外 `evidence205/sdk091-consolidated-1794223078587/` 和 `evidence205/sdk091-boundary-{red-1794222844196,green-1794223561901}/`。
+
+完整 200,016 字节公共 `ShapedLine::paint` 原复现在 Fast `0.1.14` 中仍显示完整行绘字结束与原生几何标记不一致，而同一 shaping 结果的公开 `split_at` 尾片段对齐；未据此修改产品或 SDK。原始截图与结果保留在 `evidence205/sdk091-native-paint-result.json`。这不是无探针产品实窗、macOS 或性能已通过；上述两项 RTL 与长行边界继续由 [#235](https://github.com/dlivxpr/lyrel/issues/235) 跟踪，不修改原断言或忽略用例。
+
+##### 最终无探针 Release 与负责人接受的核心比较
+
+`c9f1d949` 无探针 Release 构建成功，产品 SHA-256 为 `69e77f7c15afe413b590308fb317582e63dc9fda2f95c2e8195cd48fc8ddcbb0`。后继 `1605cd93` 只修正上述两个测试 oracle，未改变生产代码。实际 Windows 窗口完成标准 hex 输入、红色 glyph 呈现、清色、统一 Undo 与逐字节保存／恢复；首轮自动化因 AX press 未打开菜单而失败，原记录保留，按实际控件 click 续测后通过，不把失败 run 删除或算成成功。
+
+同一二进制对完整 342,220 字节／1,200 组长文、400,034 字节段落、400,042 字节代码、291,041 字节／120 列×160 正文行表格及 3,448 字节多资源 MDX 执行真实输入、保存、Undo 和原字节恢复。代码另测正文点击；大表格在完整异步投影完成后另测实际单元格；资源窗口实际显示图片、公式与 Mermaid。长文和资源完成可见滚动往返。该批不替代此前按各自提交记录的系统 IME、真实 SSH、关闭重开或 macOS 验收。
+
+隔离观察器与冻结基线共用 `204-core-native-paint-before-observer-v2` 和 geometry schema 2；两侧 observer 正文 SHA-256 均为 `ab3a44f1b62585ab97ee534be288ccc92999695f38cbbbded96cb1a433cc3a34`。去除旧阶段诊断后构建观察器，采样期间没有 Cargo／rustc 构建进程；不把观察器合回产品。两类输入各完成 10 对 A/A 和 10 对交替 AB/BA，共 40 对、80 run、800 个输入样本；每个样本关联同帧输入 leaf 几何并核对精确源码及恢复。以下为 AB 分布，单位 ms，默认布局不匹配，不声明相对 Zorite 达标：
+
+| 负载 | 改造前 p50／p95／p99 | 当前 p50／p95／p99 | 每侧输入样本 | ≥50 ms 输入 |
+| --- | --- | --- | ---: | ---: |
+| 短文 | 4.614／7.008／7.225 | 4.810／7.389／7.785 | 100 | 0 |
+| 1,200 组长文 | 9.342／11.607／12.279 | 13.291／16.822／18.603 | 100 | 0 |
+
+长文配对 p50 增量中位数 **4.220 ms**，超过 A/A 绝对差 p95 **1.470 ms**；负责人已明确接受该额外成本作为本轮核心交付边界，而非将其改写为无回归。完整长文另各采 10 个真实 wheel 事件：改造前／当前 p50 为 128.264／19.138 ms，p95 为 136.052／136.573 ms，≥50 ms 为 8／3；只有一组描述性采样，不声明普遍滚动提速。最初两份 wheel preflight 因未建立截图坐标系而在输入前失败，保留原 run；完成坐标前提后的 preflight 与核心事件均有效。
+
+量测只含应用 native callback 至实际编辑器 paint 结束，不含 OS 排队、IME 候选、GPU、合成或物理显示。两侧字体请求、正文宽度、行高和控件仍有差异；资源快照中 working set 为 224,276,480／257,810,432 字节、private memory 为 237,707,264／254,304,256 字节，不是峰值。最终 Standards／Spec 原 finding 闭合复核均为 0，不把静态复核当作运行证明。
+
+原始 build、80 个配对 run、完整 geometry／资源快照保留在仓库外 `evidence205/sdk091-release-observer-1794224113863/`；产品与实窗证据为 `final-production-release-1794223373851/`、`core-native-sdk091-*/`。严格未匹配、原失败、旧基线和未知项均保留。任务自有 GUI／daemon 已停止，用户实例未被清理；只交付产品源码与正式文档，不提交探针、二进制、本地配置或原始数据。
+
+
+
+
 
 #### 使用隔离配置复验
 
@@ -245,7 +429,9 @@ cargo run --locked -p lyrel --bin lyrel-app -- \
 
 在此入口使用编辑器分组命令打开同一文档的第二份呈现：两边共享源码、revision 和公开 `UndoHistory` 支撑的撤销历史；光标、选择、焦点和滚动分别保留。连续输入按呈现与光标连续性分组；粘贴、删除、组合输入提交各自形成事务，撤销后输入会替换旧的重做分支。关闭其中一份不会丢弃另一份的编辑。
 
-即时编辑把普通段落、ATX／Setext 标题和分隔线投影到公开 `editor_host` 的原生块渲染；正文是一个连续的原生输入表面，不为每个段落创建 `Input`，也不因点击段落而弹出源码框。`Enter` 插入段落分隔，`Shift+Enter` 插入双空格硬换行；既有单换行按软换行流排，双空格或反斜杠换行保持硬换行。段首 `Backspace`／段尾 `Delete` 通过最小源码事务合并相邻正文，拖动或 Shift 选择可以跨相邻段落复制、剪切和删除。转义标点与字符实体显示为对应文字，编辑位置映射回原始源码区间；Unicode 移动和删除仍遵守 grapheme 边界。
+即时编辑把普通段落、ATX／Setext 标题和分隔线投影到公开 `editor_host` 的原生块渲染；正文是一个连续的原生输入表面，不为每个段落创建 `Input`，也不因点击段落而弹出源码框。普通正文 `Enter` 只插入一个源码换行，并在 live 呈现中直接显示下一行；`Shift+Enter` 保留双空格硬换行，结构上下文保留各自规则。既有空行和换行拼写不自动整理；外部 Markdown renderer 可能把普通单换行合并为空格，这是已接受的呈现差异，不为消除差异自动补空行或 hard-break 标记。粗体、斜体、删除线、行内代码标记在普通 caret、选区及 composition 覆盖时保持隐藏；结构语法仍可局部访问，完整源码模式可精确编辑。段首 `Backspace`／段尾 `Delete` 通过最小源码事务合并相邻正文，拖动或 Shift 选择可以跨相邻段落复制、剪切和删除。转义标点与字符实体映射回原始源码区间；Unicode 移动和删除遵守 grapheme 边界。本次核心回归与实际窗口范围见上文，不沿用旧版测试或 Debug 冒烟作为 Release 性能证明。
+
+#229 的排版源码已接入默认编辑路径：文档内边距与字体层级随 rem 缩放，正文行高为 `1.45`，列表按层级留出缩进；代码与表格使用当前主题的语义颜色及相应字体。文档填充现有列的可用宽度，不另造固定宽度的页面 shell。宽度、字体、字号、rem、模式及自动换行改变时重测视口高度和表格；排版不修改文档源码或历史。无探针 Windows Debug 实窗已执行 Light → Dark → Light、UI 字号 16 → 17 → 16，并在重排后真实输入及撤销，源码与历史不变，隔离外观配置恢复原值。证据为仓库外 `native-final-776c6e9e/native-theme-scale-pass.json`；不代表逐 glyph 字体匹配、完整窄宽窗口矩阵或 macOS 视觉验收。
 
 两种模式保留同一文档 identity、源码选择、dirty 和统一撤销历史；呈现模式、选择、焦点与滚动分别保留。所选内容的剪贴板表示始终是原始 Markdown；occurrence 多选按源码顺序以换行连接，输入、粘贴和删除经一次稀疏事务，不导入任意 HTML/CSS。
 
@@ -255,11 +441,11 @@ cargo run --locked -p lyrel --bin lyrel-app -- \
 
 表格操作栏锚定当前表格的左上角，不跟随光标所在行漂移；切换表格、滚动及界面缩放后使用当前帧的表格几何重新定位。操作仍作用于所属表格，不改写无关源码。
 
-正文投影按文档语法使用唯一带源码位置的解析路径：普通 Markdown 使用与 `gpui-base 0.9.0` 相同的正式 `markdown 1.0.0`，MDX 使用正式 `ox_content_parser 3.4.0`，把公开字节区间 AST 转换为现有投影的 `mdast` 数据。同一文档不由两个解析器竞争，也不从渲染字符串反查源码。YAML/TOML 元数据作为原始前缀分区，后续区间回到同一源码坐标，不插入占位或改写解析输入。输入后只更新受影响块及其直接相邻上下文；完整解析在后台合并调度，落地前检查原文档 identity 与 revision。未完成或无效的输入保留在源文档中。稳定的块／leaf identity 复用原生渲染状态；选择、点击、原生输入法候选位置取自每帧重新收集的 `LeafGeometry`，宽度、字体、缩放和滚动改变后不复用旧布局几何。
+正文投影按文档语法使用唯一带源码位置的解析路径：普通 Markdown 使用与 `gpui-base 0.9.1` 相同的正式 `markdown 1.0.0`，MDX 使用正式 `ox_content_parser 3.4.0`，把公开字节区间 AST 转换为现有投影的 `mdast` 数据。同一文档不由两个解析器竞争，也不从渲染字符串反查源码。YAML/TOML 元数据作为原始前缀分区，后续区间回到同一源码坐标，不插入占位或改写解析输入。输入后只更新受影响块及其直接相邻上下文；完整解析在后台合并调度，落地前检查原文档 identity 与 revision。未完成或无效的输入保留在源文档中。稳定的块／leaf identity 复用原生渲染状态；选择、点击、原生输入法候选位置取自每帧重新收集的 `LeafGeometry`，宽度、字体、缩放和滚动改变后不复用旧布局几何。
 
 长文呈现仅构建视口及前后缓冲区的原生块；表格单元格作为同一布局行保留，离屏块使用带 leaf identity／version 的高度提示占位。缺少当前帧几何仅表示未布局，不删除源码、选择或历史。返回离屏位置先按源码定位所属块，再以新帧几何校正光标；宽度、字体与 rem 缩放改变后重测。晚到的图片、公式、图形与解析结果更新布局时，仍在视口中的光标继续保持可见，阅读位置按稳定 leaf 锚定；主动滚动不被旧锚点抵消。
 
-光标重入请求要等到新帧中的光标实际进入滚动区才完成，不能在发出像素位移时就清除。滚动区边界取自 `ScrollHandle::bounds()`，不拿包含工具栏的整个编辑器边界代替；在 prepaint 中校正位移后通知所属 Entity 重新构建虚拟视口，不依赖绘制阶段会被忽略的 `Window::refresh()`。
+光标重入请求要等到新帧中的光标实际进入滚动区才完成，不能在发出像素位移时就清除。滚动区边界取自 `ScrollHandle::bounds()`，不拿包含工具栏的整个编辑器边界代替；在 prepaint 中校正位移后通知所属 Entity 重新构建虚拟视口，不依赖绘制阶段会被忽略的 `Window::refresh()`。宽度提示只影响下一帧时，保留刚收集的当前绘制几何；不能让同一帧的表格方向键因几何被错误清空而跳到其他单元格。实际滚动偏移改变后才丢弃该坐标，局部源码显露与异步公式等非源码版本变化也清除旧宽度提示。几何与源码字节消费者不替代真实 glyph／caret 像素一致性验收。
 
 完整解析采用一个运行中的后台任务及一个可替换的最新请求，避免连续输入排队执行多份全文解析。同步局部语法解析限制为 32 KiB；超大容器的受影响区域暂时显示可编辑源码，随后由匹配 identity／revision 的后台结果恢复排版。过大补丁先保留 Rope 源码区间，只为视口内的有界片段生成显示文字；Unicode 边界通过借用 Rope chunk 的 `GraphemeCursor` 查询，不为单个宽行复制全文。该策略不改变唯一源码及撤销所有权，也不意味着任意大小单个段落、代码块或表格已经完成性能验收。
 
@@ -269,7 +455,9 @@ cargo run --locked -p lyrel --bin lyrel-app -- \
 
 最新 Windows Debug 实窗另从真实 SSH Host 打开 536,161 字节、16,202 行、600 节的混合结构长文：观察到初始源码占位在后台解析完成后恢复标题、引用、任务、表格和图片状态；标题输入「长文实测」，滚动离开首节并返回，经原生保存关闭、文件树重开。远端 536,173 字节结果仅增加该 12 字节前缀，完整 SHA-256 为 `5b1c3e154d746a96ea8ddd69fac5efd7e2982cb618665a6dff807934676de476`，本机原文件不变。机器为 Intel Core Ultra 7 265KF、33,931,841,536 字节物理内存、NVIDIA GeForce RTX 5080（驱动 `32.0.16.2101`，另有 GameViewer Virtual Display Adapter），窗口 1440×900、浅色主题。该结果是具体负载的输入、往返滚动与保存观察，不是 input-to-paint 测量，也不替代超长单块、宽表格及多图形全负载验收。
 
-行内强调、粗体、删除线与行内代码使用同一源码位置投影，支持嵌套样式。光标进入 span 时只显露对应标记，离开后恢复排版；实体、转义和 Unicode 仍映射到原始源码，不通过搜索显示文字猜测偏移。显露状态不创建另一份文档或撤销历史。
+行内强调、粗体、删除线与行内代码使用同一源码位置投影，支持嵌套样式。普通光标、选区与组合输入覆盖均不显露格式标记；局部语法入口与完整源码模式提供精确编辑。实体、转义和 Unicode 仍映射到原始源码，不通过搜索显示文字猜测偏移。显露状态不创建另一份文档或撤销历史。
+
+“格式…”菜单提供“文字颜色…”与“清除文字颜色”，按可见文字显示统一颜色或混合状态。颜色使用标准 picker 的十六进制输入与显式“应用颜色”；提交 picker 的 `Enter` 不插入正文换行。命令按真实文本／原子 run 分配颜色，不把 `<span>` 跨越段落或强调边界。已有 owner 改色只替换原 `color` 值；部分改色或清色保留其余属性、引号和空白，必要时用明确的 `color:inherit` 保留非颜色 wrapper。它不执行任意 CSS，也不把未知、无 `color` 的 HTML span 改成透明 Markdown 容器；复制仍同时提供原始源码和富文本表示。前景色通过公开 render-local ranges 着色，不重新绘字或改写 native 几何。
 
 围栏与缩进代码通过公开 `CodeBlock` 呈现，原始围栏、语言和缩进保留且可直接编辑。代码内部 `Enter` 插入一个源码换行并延续缩进；关闭围栏末尾 `Enter` 进入下一段，空缩进代码行 `Enter` 清除缩进并退出。frontmatter 明确标记为元数据源码；原始 HTML、无效输入及尚未适配结构保持可见、可编辑，不执行 HTML 或承诺还原任意 CSS。
 
@@ -463,9 +651,9 @@ Markdown/MDX 普通保存不执行全文整理；严格解码保留编码、BOM 
 
 #### 原生实现路线与候选依赖
 
-自建源码保真的 Markdown 编辑模块，复用 GPUI Kit 的公开渲染接口，不直接采用会重新序列化文档的富文本模型。当前锁定的 `gpui-kit 0.9.0` 包含 `gpui_kit::base::text::editor_host`；它提供块渲染与文字几何信息，但不提供完整编辑内核。文档身份、源码映射、编辑事务、撤销、选择、焦点、原生输入法接入和无障碍仍由编辑模块负责，见 [GPUI Kit 的 editor host 职责](https://github.com/longbridge/gpui-kit/blob/main/docs/ARCHITECTURE.md)。
+自建源码保真的 Markdown 编辑模块，复用 GPUI Kit 的公开渲染接口，不直接采用会重新序列化文档的富文本模型。当前锁定的 `gpui-kit 0.9.1` 包含 `gpui_kit::base::text::editor_host`；它提供块渲染与文字几何信息，但不提供完整编辑内核。文档身份、源码映射、编辑事务、撤销、选择、焦点、原生输入法接入和无障碍仍由编辑模块负责，见 [GPUI Kit 的 editor host 职责](https://github.com/longbridge/gpui-kit/blob/main/docs/ARCHITECTURE.md)。
 
-`gpui-kit-markdown-editor` 作为交互与架构参考，不直接集成其 `0.1.1` 发布版：该版本固定 `gpui-pre =0.3.9`，而 lyrel 已通过 Kit 选择 `gpui-fast 0.1.13`；它还明确存在首次保存改变列表紧凑度、空段落消失、缺少源码偏移映射，以及 Windows/macOS 原生输入未验证等限制，见 [发布版依赖与限制](https://docs.rs/crate/gpui-kit-markdown-editor/0.1.1)。不以 Git 依赖、第三方源码复制或构建补丁绕过仓库依赖约束。
+`gpui-kit-markdown-editor` 作为交互与架构参考，不直接集成其 `0.1.1` 发布版：该版本固定 `gpui-pre =0.3.9`，而 lyrel 已通过 Kit 选择 `gpui-fast 0.1.14`；它还明确存在首次保存改变列表紧凑度、空段落消失、缺少源码偏移映射，以及 Windows/macOS 原生输入未验证等限制，见 [发布版依赖与限制](https://docs.rs/crate/gpui-kit-markdown-editor/0.1.1)。不以 Git 依赖、第三方源码复制或构建补丁绕过仓库依赖约束。
 
 原生实现使用正式 [RaTeX 0.1.15](https://docs.rs/ratex-svg/0.1.15/ratex_svg/) 的 `parse → layout → glyph SVG` 路径，以及 [Merman 0.9.2](https://docs.rs/crate/merman/0.9.2) 的 `all-diagrams`／`complete-svg` 与完整 `resvg_safe` 管线，不启用 ELK。两者由 resvg 光栅化为原生图像，不依赖 Node.js、Chromium 或项目 JavaScript；MiTeX／Typst 未加入产品依赖。
 

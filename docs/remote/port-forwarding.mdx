@@ -85,13 +85,13 @@ description: "本地、远程和动态转发——可预先配置，也可在会
 桌面消费者回归通过真实 GPUI 工作台执行，常规检查不要求 SSH 端点：
 
 ```sh
-cargo test --locked -p lyrel --bin lyrel-app ui::forwards:: -- --test-threads=1
+cargo test --locked -p lyrel --lib ui::forwards:: -- --test-threads=1
 ```
 
 真实转发用例复用 `tests/support/native_ssh_graphics.rs` 的隔离 SSH fixture；它会在远端启动受跟踪的 Node 回显进程，分别通过 pane 与 workspace 路由验证实际字节、短表单端口冲突、高级表单拒绝与恢复、继续编辑、关闭状态编辑、开关和移除。该用例默认忽略，不代表通过，必须显式运行：
 
 ```sh
-cargo test --locked -p lyrel --bin lyrel-app managed_forward_real_routes_reject_recover_and_continue_editing -- --ignored --test-threads=1 --nocapture
+cargo test --locked -p lyrel --lib managed_forward_real_routes_reject_recover_and_continue_editing -- --ignored --test-threads=1 --nocapture
 ```
 
 前提是同一提交构建的本机 `lyrel-server`，以及明确授权的隔离 Linux SSH 端点。沿用 fixture 的 `LYREL_TEST_SSH_LOCAL_SERVER`、`LYREL_TEST_SSH_HOST`、`LYREL_TEST_SSH_PORT`、`LYREL_TEST_SSH_USER`、`LYREL_TEST_SSH_IDENTITY`、`LYREL_TEST_SSH_KNOWN_HOSTS`、`LYREL_TEST_SSH_REMOTE_HOME` 和 `LYREL_TEST_SSH_NODE`；私钥与固定主机公钥必须属于该 fixture，远端 Node 使用 Linux 绝对路径，不能指向 Windows 的 `node.exe`。所有配置、路由守护进程、远端进程与目录均由 fixture 隔离；不得使用已安装 daemon 或用户工作区作为测试对象。没有这些前提时，真实转发保持未验证；GPUI 测试也不替代 Windows/macOS 原生窗口的焦点、Return/Escape 和错误可见性 smoke。

@@ -580,6 +580,9 @@ pub fn translate_en(key: L10nKey) -> &'static str {
         L10nKey::SearchFind => "Find…",
         L10nKey::EditorSearchReplacement => "Replace…",
         L10nKey::EditorSearchReplaceAll => "Replace All",
+        L10nKey::EditorSpellingSuggestions => "Spelling suggestions…",
+        L10nKey::EditorSpellingChecking => "Checking spelling…",
+        L10nKey::EditorSpellingNoSuggestions => "No spelling suggestions",
         L10nKey::SearchMatchCase => "Match case",
         L10nKey::SearchUseRegex => "Use regular expression",
         L10nKey::NewFolderName => "New folder name",
@@ -1689,6 +1692,22 @@ pub fn translate_en(key: L10nKey) -> &'static str {
         L10nKey::MarkdownImageSelectionChanged => {
             "The image was saved, but the selected text changed. No link was inserted."
         }
+        L10nKey::MarkdownImageEdit => "Edit image…",
+        L10nKey::MarkdownImagePreview => "Preview image…",
+        L10nKey::MarkdownImageCommands => "Image commands",
+        L10nKey::MarkdownImageAlt => "Alternative text",
+        L10nKey::MarkdownImageSource => "Image source",
+        L10nKey::MarkdownImageWidth => "Width (px; empty for default)",
+        L10nKey::MarkdownImageFit => "Fit document images",
+        L10nKey::MarkdownImageDelete => "Delete image",
+        L10nKey::MarkdownImageResize => "Resize image",
+        L10nKey::MarkdownImageApply => "Apply image changes",
+        L10nKey::MarkdownImageInvalid => {
+            "Use single-line text and a positive whole-number width, or leave width empty."
+        }
+        L10nKey::MarkdownImageChanged => {
+            "The document or editing context changed. Cancel and reopen image editing."
+        }
         L10nKey::FileTreeContextShowDotfiles => "Show Dotfiles",
         L10nKey::FileDropIntoItself => "A folder cannot be copied into itself.",
         L10nKey::FileDropNotHere => "Not on this machine.",
@@ -1738,6 +1757,29 @@ pub fn translate_en(key: L10nKey) -> &'static str {
         L10nKey::EditorMarkdownSourceLabel => "Markdown source",
         L10nKey::EditorMarkdownTaskLabel => "Toggle task: {text}",
         L10nKey::EditorMarkdownFormulaLabel => "Formula: {tex}",
+        L10nKey::EditorFormulaEditing => "Edit formula",
+        L10nKey::EditorFormulaHelp => {
+            "↑↓: suggestions · Enter: accept/apply · Esc: dismiss/cancel · Shift+F10: formula menu"
+        }
+        L10nKey::EditorFormulaCommit => "Apply formula",
+        L10nKey::EditorFormulaCancel => "Cancel formula",
+        L10nKey::EditorFormulaSource => "Edit formula source",
+        L10nKey::EditorFormulaAddRow => "Add matrix row",
+        L10nKey::EditorFormulaRemoveRow => "Remove matrix row",
+        L10nKey::EditorFormulaAddColumn => "Add matrix column",
+        L10nKey::EditorFormulaRemoveColumn => "Remove matrix column",
+        L10nKey::EditorFormulaMenu => "Formula commands…",
+        L10nKey::EditorFormulaInsertSymbol => "Insert {symbol}",
+        L10nKey::EditorFormulaSymbols => "Symbols…",
+        L10nKey::EditorTableCopyMarkdown => "Copy table as Markdown",
+        L10nKey::EditorFormulaCopyLatex => "Copy LaTeX",
+        L10nKey::EditorFormulaExportPng => "Export PNG to this computer…",
+        L10nKey::EditorFormulaExportSvg => "Export SVG to this computer…",
+        L10nKey::EditorFormulaAlignLeft => "Align left",
+        L10nKey::EditorFormulaAlignCenter => "Align center",
+        L10nKey::EditorFormulaAlignRight => "Align right",
+        L10nKey::EditorFormulaExporting => "Exporting formula to this computer…",
+        L10nKey::EditorFormulaExportFailed => "Couldn’t export formula.",
         L10nKey::EditorMdxEditName => "Edit component name",
         L10nKey::EditorMdxEditProperty => "Edit property: {name}",
         L10nKey::EditorMdxEditChildren => "Edit component children",
@@ -1792,9 +1834,27 @@ pub fn translate_en(key: L10nKey) -> &'static str {
         L10nKey::EditorMdxTabsEmpty => "No Tab children. Edit children to add a tab.",
         L10nKey::EditorMdxTabsKeyboard => "In content: Alt+Page Up / Page Down switches tabs",
         L10nKey::EditorMarkdownCodeRegion => "Code source",
+        L10nKey::MarkdownCodeLanguage => "Code language…",
+        L10nKey::MarkdownCodePlain => "Plain text",
+        L10nKey::MarkdownCodeCopy => "Copy code",
+        L10nKey::MarkdownCopyMarkdownOnly => "Copy as Markdown",
+        L10nKey::MarkdownCopyContents => "Copy contents",
+        L10nKey::MarkdownCopyContentsMarkdown => "Copy contents as Markdown",
+        L10nKey::MarkdownSlashBlockUnavailable => "{label} · Not available inside a table cell",
+        L10nKey::MarkdownClipboardPlainFallback => {
+            "Markdown copied. Rich clipboard format is unavailable."
+        }
+        L10nKey::MarkdownClipboardRichUnconfirmed => {
+            "Markdown copied. Rich formatting depends on system clipboard support and the destination app."
+        }
+        L10nKey::MarkdownClipboardFailed => "Couldn’t access the system clipboard. Try again.",
+        L10nKey::MarkdownCodeSource => "Edit fence source",
+        L10nKey::MarkdownCodeLive => "Return to code",
         L10nKey::EditorMarkdownMermaidSource => "Mermaid source",
         L10nKey::EditorMarkdownMermaidLoading => "Rendering diagram…",
         L10nKey::EditorMarkdownMermaidEdit => "Edit diagram source",
+        L10nKey::EditorMarkdownMermaidResult => "Show diagram result",
+        L10nKey::EditorMarkdownMermaidResultLabel => "Diagram result",
         L10nKey::EditorMarkdownMermaidError => {
             "Diagram could not render. Source is retained and editable."
         }
@@ -1819,8 +1879,43 @@ pub fn translate_en(key: L10nKey) -> &'static str {
         L10nKey::EditorImageLoaded => "Image loaded",
         L10nKey::EditorImageFailed => "Couldn’t load image",
         L10nKey::EditorTableCommands => "Table…",
+        L10nKey::MarkdownBlockCommands => "Block…",
+        L10nKey::MarkdownMoveContent => "Move content",
+        L10nKey::MarkdownMoveDestination => "Insert moved content here",
+        L10nKey::MarkdownMoveHelp => {
+            "Move content: drag to an insertion line, or use ↑/↓ and Enter. Esc cancels."
+        }
+        L10nKey::MarkdownBlockParagraph => "Paragraph",
+        L10nKey::MarkdownBlockHeading1 => "Heading 1",
+        L10nKey::MarkdownBlockHeading2 => "Heading 2",
+        L10nKey::MarkdownBlockHeading3 => "Heading 3",
+        L10nKey::MarkdownBlockHeading4 => "Heading 4",
+        L10nKey::MarkdownBlockHeading5 => "Heading 5",
+        L10nKey::MarkdownBlockHeading6 => "Heading 6",
+        L10nKey::MarkdownBlockQuote => "Quote",
+        L10nKey::MarkdownBlockNote => "Note callout",
+        L10nKey::MarkdownBlockTip => "Tip callout",
+        L10nKey::MarkdownBlockImportant => "Important callout",
+        L10nKey::MarkdownBlockWarning => "Warning callout",
+        L10nKey::MarkdownBlockCaution => "Caution callout",
+        L10nKey::MarkdownBlockBullet => "Bulleted list",
+        L10nKey::MarkdownBlockNumbered => "Numbered list",
+        L10nKey::MarkdownBlockTask => "Task list",
+        L10nKey::MarkdownBlockCode => "Code block",
+        L10nKey::MarkdownBlockMath => "Math block",
+        L10nKey::MarkdownBlockToggleFold => "Toggle block fold (this view)",
+        L10nKey::MarkdownBlockPersistFold => "Toggle callout fold (update source)",
+        L10nKey::MarkdownBlockExitQuote => "Exit quote",
+        L10nKey::MarkdownBlockSource => "Edit document source",
+        L10nKey::MarkdownBlockExpand => "Expand block",
+        L10nKey::MarkdownBlockCollapse => "Collapse block",
+        L10nKey::MarkdownBlockExpandLabel => "Expand block: {text}",
+        L10nKey::MarkdownBlockCollapseLabel => "Collapse block: {text}",
+        L10nKey::EditorTableInsert => "Insert table",
         L10nKey::EditorTableInsertRowBefore => "Table: Insert row above",
         L10nKey::EditorTableInsertRowAfter => "Table: Insert row below",
+        L10nKey::EditorTableDuplicateRow => "Table: Duplicate row",
+        L10nKey::EditorTableDeleteTable => "Table: Delete table",
         L10nKey::EditorTableDeleteRow => "Table: Delete row",
         L10nKey::EditorTableInsertColumnBefore => "Table: Insert column before",
         L10nKey::EditorTableInsertColumnAfter => "Table: Insert column after",
@@ -1829,7 +1924,55 @@ pub fn translate_en(key: L10nKey) -> &'static str {
         L10nKey::EditorTableAlignLeft => "Table: Align left",
         L10nKey::EditorTableAlignCenter => "Table: Align center",
         L10nKey::EditorTableAlignRight => "Table: Align right",
+        L10nKey::EditorTableFitColumn => "Table: Auto-fit column",
+        L10nKey::EditorTableResizeColumn => "Resize table column",
+        L10nKey::EditorTableWidenColumn => "Table: Widen column",
+        L10nKey::EditorTableNarrowColumn => "Table: Narrow column",
+        L10nKey::EditorTableStyleGrid => "Table style: Grid",
+        L10nKey::EditorTableStyleStriped => "Table style: Striped",
+        L10nKey::EditorTableStyleHeader => "Table style: Header",
+        L10nKey::EditorTableStyleMinimal => "Table style: Minimal",
+        L10nKey::MarkdownFormatMenu => "Format…",
+        L10nKey::MarkdownFormatBold => "Bold",
+        L10nKey::MarkdownFormatItalic => "Italic",
+        L10nKey::MarkdownFormatUnderline => "Underline",
+        L10nKey::MarkdownFormatStrike => "Strikethrough",
+        L10nKey::MarkdownFormatCode => "Inline code",
+        L10nKey::MarkdownFormatHighlight => "Highlight",
+        L10nKey::MarkdownFormatTextColor => "Text color…",
+        L10nKey::MarkdownFormatHighlightColor => "Highlight color…",
+        L10nKey::MarkdownFormatMixed => "{format} (mixed)",
+        L10nKey::MarkdownClearHighlightColor => "Clear highlight color",
+        L10nKey::MarkdownClearTextColor => "Clear text color",
+        L10nKey::MarkdownApplyColor => "Apply color",
+        L10nKey::MarkdownColorYellow => "Yellow highlight",
+        L10nKey::MarkdownColorOrange => "Orange highlight",
+        L10nKey::MarkdownColorGreen => "Green highlight",
+        L10nKey::MarkdownColorBlue => "Blue highlight",
+        L10nKey::MarkdownColorPurple => "Purple highlight",
+        L10nKey::MarkdownColorPink => "Pink highlight",
+        L10nKey::MarkdownColorGray => "Gray highlight",
         L10nKey::MarkdownEditLinkDestination => "Edit link destination",
+        L10nKey::EditorDocumentProperties => "Properties and tags…",
+        L10nKey::EditorDocumentTag => "Tag",
+        L10nKey::EditorPropertyEdit => "Edit property…",
+        L10nKey::EditorPropertyKey => "Property key",
+        L10nKey::EditorPropertyValue => "Value",
+        L10nKey::EditorPropertyApply => "Apply",
+        L10nKey::EditorPropertyCancel => "Cancel",
+        L10nKey::EditorPropertyAdd => "Add property…",
+        L10nKey::EditorTagAdd => "Add tag…",
+        L10nKey::EditorPropertyRemove => "Remove",
+        L10nKey::EditorPropertySource => "Edit source",
+        L10nKey::EditorPropertyChanged => {
+            "The document changed. Cancel and reopen this field to edit the current value."
+        }
+        L10nKey::EditorPropertyInvalid => {
+            "Keys must start with a letter and use letters, digits, -_. Tags use letters, digits, _-/."
+        }
+        L10nKey::EditorPropertyHelp => {
+            "Properties use key:: value. Tags stay in this document. YAML/TOML frontmatter and MDX attributes remain separate; edit their retained source."
+        }
         L10nKey::MarkdownEditReferenceDestination => "Edit reference destination",
         L10nKey::MarkdownFollowLink => "Open link",
         L10nKey::MarkdownLinkOpenFailed => "Couldn’t open link: {reason}",
@@ -1839,6 +1982,57 @@ pub fn translate_en(key: L10nKey) -> &'static str {
         }
         L10nKey::MarkdownLinkSaveFirst => "Save the document before opening a relative link",
         L10nKey::MarkdownLinkRemotePath => "A remote destination must use a POSIX path",
+        L10nKey::MarkdownLinkAnchorNotFound => {
+            "The anchor was not found or is not unique in this document"
+        }
+        L10nKey::MarkdownSlashMarkdown => "Markdown",
+        L10nKey::MarkdownSlashDivider => "Divider",
+        L10nKey::MarkdownSlashInlineMath => "Inline math",
+        L10nKey::MarkdownSlashLink => "Link",
+        L10nKey::MarkdownSlashWiki => "Wiki link",
+        L10nKey::MarkdownSlashImage => "Image",
+        L10nKey::MarkdownSlashDate => "Date",
+        L10nKey::MarkdownSlashTime => "Time",
+        L10nKey::MarkdownSlashEmpty => "No matching command. Escape keeps your text.",
+        L10nKey::MarkdownSlashTableHelp => {
+            "Arrow keys choose a size; Enter inserts. Tab reaches styles and custom dimensions."
+        }
+        L10nKey::MarkdownSlashRows => "Rows (including header)",
+        L10nKey::MarkdownSlashColumns => "Columns",
+        L10nKey::MarkdownSlashCustomTable => "Insert custom table",
+        L10nKey::MarkdownSlashTableInvalid => {
+            "Enter positive row and column counts (maximum 100 each)."
+        }
+        L10nKey::MarkdownReferenceLoading => "Looking up workspace references…",
+        L10nKey::MarkdownReferenceNoMatches => {
+            "No matching file or anchor. No file will be created."
+        }
+        L10nKey::MarkdownReferenceUnreadable => {
+            "The reference target could not be read. Check the Host connection and permissions."
+        }
+        L10nKey::MarkdownReferenceAmbiguous => {
+            "More than one file or anchor matches. Use an explicit path and a unique anchor."
+        }
+        L10nKey::MarkdownReferenceMissing => {
+            "The reference target does not exist. Edit the source to choose another file."
+        }
+        L10nKey::MarkdownEmbedChanged => {
+            "The target changed while being read. The fragment will refresh shortly."
+        }
+        L10nKey::MarkdownEmbedReadonly => "Readonly fragment",
+        L10nKey::MarkdownEmbedSource => "Edit embed source",
+        L10nKey::MarkdownEmbedLoading => "Loading fragment…",
+        L10nKey::MarkdownEmbedCycle => "This embed forms a cycle. Its source remains editable.",
+        L10nKey::MarkdownEmbedDuplicate => "This fragment is already included above.",
+        L10nKey::MarkdownEmbedLimit => {
+            "Embed limit reached (3 levels, 64 references, 8 MiB of source, 4096 blocks or 32 MiB of rasters)."
+        }
+        L10nKey::MarkdownEmbedUnsupported => {
+            "Only workspace Markdown and MDX fragments can be embedded."
+        }
+        L10nKey::MarkdownEmbedExternal => {
+            "External resources are not loaded inside readonly embeds."
+        }
         L10nKey::EditorWrapOn => "Wrap: on",
         L10nKey::EditorWrapOff => "Wrap: off",
         L10nKey::EditorFileTooLarge => "\"{path}\" is too large for the editor ({size} MB)",

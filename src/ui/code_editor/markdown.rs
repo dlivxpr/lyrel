@@ -7,6 +7,8 @@ use gpui_kit::base::{
 use std::ops::Range;
 use unicode_segmentation::UnicodeSegmentation as _;
 
+mod blocks;
+pub(super) mod embeds;
 mod images;
 pub(super) mod links;
 mod lists;
@@ -21,10 +23,25 @@ mod source;
 mod tables;
 #[cfg(test)]
 pub(super) use source::FollowLink;
-pub(super) use source::SourcePresentation;
+pub(crate) use source::SourcePresentation;
+pub(crate) use source::clipboard::CopyMarkdownOnly;
+pub(crate) use source::formats::bindings as inline_format_bindings;
+pub(crate) use source::headings::bindings as block_bindings;
+pub(crate) use source::properties::EditDocumentProperties;
+pub(super) use source::tools::{SearchSurfaceChanged, SearchText};
 pub(crate) use tables::bindings as table_bindings;
 #[cfg(test)]
 mod tests;
+
+#[cfg(any(test, feature = "native-markdown-tests"))]
+mod consumer_support;
+#[cfg(any(test, feature = "native-markdown-tests"))]
+mod native_consumers;
+
+#[cfg(feature = "native-markdown-tests")]
+pub(crate) fn native_cases() -> impl Iterator<Item = crate::native_markdown::Case> {
+    source::native_cases().chain(native_consumers::native_cases())
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct Selection {
@@ -93,12 +110,27 @@ pub(crate) struct Transaction {
     revision: u64,
     origin: u64,
     edits: smallvec::SmallVec<[SourceChange; 1]>,
+    // Shared, read-only source for this revision while edit observers replay it.
+    // Selection-only effects do not retain a snapshot.
+    snapshot: Option<Rope>,
 }
 struct SourceChange {
     range: Range<usize>,
     inserted_len: usize,
 }
 impl Transaction {
+    fn map_untouched_range(&self, mut range: Range<usize>) -> Option<Range<usize>> {
+        for edit in &self.edits {
+            if edit.range.end <= range.start {
+                let delta = edit.inserted_len as isize - edit.range.len() as isize;
+                range =
+                    range.start.checked_add_signed(delta)?..range.end.checked_add_signed(delta)?;
+            } else if edit.range.start < range.end {
+                return None;
+            }
+        }
+        Some(range)
+    }
     pub(crate) fn revision(&self) -> u64 {
         self.revision
     }
@@ -136,6 +168,7 @@ pub(crate) enum Command {
         format: TextFormat,
     },
     Select(Selection),
+    SkipPairedCloser(usize),
     RenameComponent {
         opening: Range<usize>,
         closing: Option<Range<usize>>,
@@ -174,6 +207,7 @@ pub(crate) enum Command {
         kind: EditKind,
     },
     BatchReplaceSelected {
+        kind: EditKind,
         edits: Vec<(Range<usize>, String)>,
         selection: Selection,
     },
@@ -262,6 +296,9 @@ impl SourceText {
 pub(crate) struct MarkdownDocument {
     source: Rope,
     revision: u64,
+    // Includes selection/lease changes that do not advance the source revision.
+    input_generation: u64,
+    pending_input_generation: u64,
     format: TextFormat,
     endings: Vec<LineEnding>,
     history: UndoHistory<Change>,
@@ -280,6 +317,8 @@ impl MarkdownDocument {
             source: Rope::from(source.text),
             endings: source.endings,
             revision: 0,
+            input_generation: 0,
+            pending_input_generation: 0,
             format,
             history: UndoHistory::new(),
             typing_end: None,
@@ -465,9 +504,12 @@ impl MarkdownDocument {
             self.history.end_grouping();
         }
         self.typing_end = (kind == EditKind::Typing
-            && change.edits.len() == 1
-            && !edit.inserted.text.contains(['\n', '\r']))
-        .then_some((owner, edit.start + edit.inserted.text.len()));
+            && change.after.range().is_empty()
+            && change
+                .edits
+                .iter()
+                .all(|edit| !edit.inserted.text.contains(['\n', '\r'])))
+        .then_some((owner, change.after.head()));
         self.history.push(change);
         self.history.end_grouping();
     }
@@ -630,10 +672,12 @@ impl MarkdownDocument {
         state: &mut PresentationState,
         command: Command,
     ) -> Transaction {
+        self.input_generation = self.input_generation.wrapping_add(1);
         self.apply_command(state, command);
         Transaction {
             revision: self.revision,
             origin: state.id,
+            snapshot: (!self.pending_changes.is_empty()).then(|| self.source.clone()),
             edits: std::mem::take(&mut self.pending_changes),
         }
     }
@@ -693,7 +737,8 @@ impl MarkdownDocument {
                             == Some('\n'),
                     );
                 let local = self.source_text(start..end);
-                if let Some((range, inserted, caret)) = tables::edit(
+                let header = range.start - start;
+                if let Some((range, mut inserted, caret)) = tables::edit(
                     &local,
                     range.start - start..range.end - start,
                     Selection::new(
@@ -703,10 +748,54 @@ impl MarkdownDocument {
                     operation,
                     self.format.line_ending,
                 ) {
-                    let range = range.start + start..range.end + start;
-                    let caret = caret + start;
-                    let mut removed = local;
-                    removed.text.drain(..range.start - start);
+                    let mut range = range.start + start..range.end + start;
+                    let mut caret = caret + start;
+                    let marker_edit = match operation {
+                        tables::Operation::InsertColumnBefore
+                        | tables::Operation::InsertColumnAfter
+                        | tables::Operation::DeleteColumn => tables::column_at(
+                            &local,
+                            header,
+                            state.selection.head.saturating_sub(start),
+                        )
+                        .and_then(|column| {
+                            let column = column
+                                + usize::from(matches!(
+                                    operation,
+                                    tables::Operation::InsertColumnAfter
+                                ));
+                            tables::metadata::column_edit(
+                                &self.source,
+                                start + header,
+                                column,
+                                !matches!(operation, tables::Operation::DeleteColumn),
+                            )
+                        }),
+                        _ => None,
+                    };
+                    if matches!(operation, tables::Operation::DeleteTable) {
+                        if let Some(marker) =
+                            tables::metadata::marker_range(&self.source, start + header)
+                        {
+                            range.start = marker.start;
+                            caret = range.start;
+                        }
+                    } else if let Some((marker_range, text)) = marker_edit {
+                        let marker_start = self
+                            .source
+                            .line_start_offset(self.source.offset_to_point(marker_range.start).row);
+                        let mut prefix = self.source_text(marker_start..range.start);
+                        caret = caret - marker_range.len() + text.len();
+                        prefix.text.replace_range(
+                            marker_range.start - marker_start..marker_range.end - marker_start,
+                            &text,
+                        );
+                        prefix.text.push_str(&inserted.text);
+                        prefix.endings.append(&mut inserted.endings);
+                        inserted = prefix;
+                        range.start = marker_start;
+                    }
+                    let removed = self.source_text(range.clone());
                     if removed != inserted {
                         let before = state.selection;
                         self.replace(range.clone(), &inserted);
@@ -760,10 +849,12 @@ impl MarkdownDocument {
                 }
                 let text = SourceText::from_input(text, self.format.line_ending);
                 self.replace_preedit(state, range.clone(), &text);
-                let selected = selected.unwrap_or_else(|| {
-                    let end = text.text.encode_utf16().count();
-                    end..end
-                });
+                let length16 = text.text.encode_utf16().count();
+                let selected = selected.unwrap_or(length16..length16);
+                // IME selection offsets are relative to preedit, not the rest
+                // of the document. Clamp before addition to avoid stale or
+                // oversized UTF-16 coordinates consuming a committed suffix.
+                let selected = selected.start.min(length16)..selected.end.min(length16);
                 let start16 = self.utf16_offset(range.start);
                 let bytes = self.utf16_range(start16 + selected.start..start16 + selected.end);
                 state.selection = if bytes.is_empty() {
@@ -807,6 +898,11 @@ impl MarkdownDocument {
                             self.boundary(selection.head, false),
                         );
                     }
+                    Command::SkipPairedCloser(at) => {
+                        let continued = self.typing_end == Some((state.id, state.selection.head()));
+                        state.selection = Selection::caret(self.boundary(at, true));
+                        self.typing_end = continued.then_some((state.id, state.selection.head()));
+                    }
                     Command::RenameComponent {
                         opening,
                         closing,
@@ -845,7 +941,7 @@ impl MarkdownDocument {
                         self.edit(
                             state,
                             state.selection.range(),
-                            if hard { "  \n" } else { "\n\n" }.into(),
+                            if hard { "  \n" } else { "\n" }.into(),
                             EditKind::Command,
                         );
                     }
@@ -857,8 +953,12 @@ impl MarkdownDocument {
                     Command::ToggleTask { at } => lists::toggle(self, state, at),
                     Command::Replace { range, text, kind } => self.edit(state, range, text, kind),
                     Command::BatchReplace { edits, kind } => self.batch_edit(state, edits, kind),
-                    Command::BatchReplaceSelected { edits, selection } => {
-                        self.batch_edit_selected(state, edits, EditKind::Command, Some(selection));
+                    Command::BatchReplaceSelected {
+                        edits,
+                        selection,
+                        kind,
+                    } => {
+                        self.batch_edit_selected(state, edits, kind, Some(selection));
                     }
                     Command::ReplaceLines {
                         range,
@@ -961,15 +1061,36 @@ impl gpui_kit::EventEmitter<DocumentEvent> for MarkdownDocument {}
 pub(super) enum DocumentEvent {
     Edited(Transaction),
     PresentationChanged,
+    RequestImageEdit {
+        presentation: gpui_kit::WeakEntity<SourcePresentation>,
+        revision: u64,
+        selection: Selection,
+    },
     RequestAssetLocation {
         presentation: gpui_kit::WeakEntity<SourcePresentation>,
         cancelled: std::rc::Rc<std::cell::Cell<bool>>,
     },
     ResourceContextChanged,
     ImagesChanged,
+    RequestEmbeds {
+        presentation: gpui_kit::WeakEntity<SourcePresentation>,
+        generation: u64,
+        revision: u64,
+        resource_epoch: Option<(lyrel_core::host::HostId, u64)>,
+    },
+    RequestReferences {
+        presentation: gpui_kit::WeakEntity<SourcePresentation>,
+        generation: u64,
+        revision: u64,
+        resource_epoch: Option<(lyrel_core::host::HostId, u64)>,
+        cancelled: std::sync::Arc<std::sync::atomic::AtomicBool>,
+        query: String,
+        anchors: bool,
+    },
     FollowLink {
         presentation: gpui_kit::EntityId,
         revision: u64,
+        resource_epoch: Option<(lyrel_core::host::HostId, u64)>,
         target: String,
     },
 }

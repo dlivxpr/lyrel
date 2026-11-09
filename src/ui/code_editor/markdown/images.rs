@@ -7,6 +7,8 @@ pub(super) struct Image {
     pub url: String,
     pub alt: String,
     pub title: Option<String>,
+    pub width: Option<u32>,
+    pub dimensions: Option<(u32, u32)>,
 }
 pub(super) type Definitions = HashMap<String, (String, Option<String>)>;
 pub(super) fn definitions(root: &Node) -> Definitions {
@@ -30,6 +32,8 @@ pub(super) fn image(node: &Node, definitions: &Definitions) -> Option<Image> {
             url: value.url.clone(),
             alt: value.alt.clone(),
             title: value.title.clone(),
+            width: None,
+            dimensions: None,
         }),
         Node::ImageReference(value) => {
             definitions
@@ -38,10 +42,25 @@ pub(super) fn image(node: &Node, definitions: &Definitions) -> Option<Image> {
                     url: url.clone(),
                     alt: value.alt.clone(),
                     title: title.clone(),
+                    width: None,
+                    dimensions: None,
                 })
         }
         _ => None,
     }
+}
+
+// The explicit extension matches the fixed editing reference. Parsing is only
+// called immediately after an AST-confirmed image, never arbitrary source.
+pub(super) fn width_suffix(source: &str) -> Option<(usize, u32)> {
+    let rest = source.strip_prefix("{width=")?;
+    let end = rest.find('}')?;
+    let number = rest[..end].strip_suffix("px").unwrap_or(&rest[..end]);
+    if number.is_empty() || !number.bytes().all(|byte| byte.is_ascii_digit()) {
+        return None;
+    }
+    let width = number.parse::<u32>().ok().filter(|width| *width > 0)?;
+    Some(("{width=".len() + end + 1, width))
 }
 #[derive(Clone)]
 pub(super) enum State {
@@ -60,7 +79,7 @@ const MAX_BYTES: u64 = 32 * 1024 * 1024;
 pub(super) fn external(url: &str) -> bool {
     url::Url::parse(url).is_ok_and(|url| matches!(url.scheme(), "http" | "https"))
 }
-fn decode(bytes: &[u8]) -> anyhow::Result<Arc<RenderImage>> {
+pub(super) fn decode(bytes: &[u8]) -> anyhow::Result<Arc<RenderImage>> {
     static FONTS: std::sync::LazyLock<Arc<resvg::usvg::fontdb::Database>> =
         std::sync::LazyLock::new(|| {
             let mut fonts = resvg::usvg::fontdb::Database::new();

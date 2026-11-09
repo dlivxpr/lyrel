@@ -9,6 +9,10 @@ struct InlineStyle {
     italic: bool,
     strikethrough: bool,
     code: bool,
+    underline: bool,
+    highlight: bool,
+    highlight_color: Option<u32>,
+    foreground: Option<u32>,
     link: Option<usize>,
 }
 
@@ -16,6 +20,7 @@ struct InlineStyle {
 struct InlineSpan {
     source: Range<usize>,
     revealed: bool,
+    always_hidden: bool,
     target: Option<gpui_kit::SharedString>,
 }
 
@@ -55,8 +60,11 @@ pub(super) struct Leaf {
     pub version: u64,
     pub range: Range<usize>,
     pub text: String,
+    pub(super) direction_runs: smallvec::SmallVec<[Range<usize>; 1]>,
+    text_fragments: smallvec::SmallVec<[Range<usize>; 1]>,
     pub kind: Kind,
     pub deferred: bool,
+    pub(super) math_alignment: super::source::math_edit::alignment::Align,
     segments: Vec<Segment>,
     insertion: usize,
     inline_insertions: smallvec::SmallVec<[usize; 1]>,
@@ -65,8 +73,96 @@ pub(super) struct Leaf {
     spans: Vec<InlineSpan>,
     style: InlineStyle,
     pub(super) image_definitions: std::sync::Arc<super::images::Definitions>,
+    highlight_tint: gpui_kit::Hsla,
+    has_foreground: bool,
 }
 impl Leaf {
+    /// Embedded content has no document-navigation or editing affordances.
+    /// Keep labels and formatting, without leaving inert clickable link marks.
+    pub(super) fn readonly(&mut self) {
+        for segment in &mut self.segments {
+            segment.style.link = None;
+        }
+    }
+    fn decorate_formats(&mut self, decorations: &[&super::source::formats::Decoration]) {
+        use super::source::formats::{Decoration, Format};
+        fn apply(part: &mut Segment, decoration: &Decoration, ix: usize) {
+            if (decoration.open.start <= part.source.start
+                && part.source.end <= decoration.open.end)
+                || (decoration.close.start <= part.source.start
+                    && part.source.end <= decoration.close.end)
+            {
+                part.delimiter = Some(ix);
+            } else if decoration.open.end <= part.source.start
+                && part.source.end <= decoration.close.start
+            {
+                match decoration.format {
+                    Format::TextColor if decoration.color.is_some() => {
+                        part.style.foreground = decoration.color
+                    }
+                    Format::Underline => part.style.underline = true,
+                    Format::Highlight | Format::HighlightColor => {
+                        part.style.highlight = true;
+                        part.style.highlight_color = decoration.color;
+                    }
+                    _ => {}
+                }
+            }
+        }
+        let mut scratch = Vec::new();
+        for decoration in decorations {
+            let ix = self.spans.len();
+            self.spans.push(InlineSpan {
+                source: decoration.open.start..decoration.close.end,
+                revealed: false,
+                always_hidden: true,
+                target: None,
+            });
+            self.has_foreground |=
+                decoration.format == Format::TextColor && decoration.color.is_some();
+            scratch.clear();
+            scratch.reserve(self.segments.len() + 4);
+            for mut segment in self.segments.drain(..) {
+                if segment.source.end <= decoration.open.start
+                    || decoration.close.end <= segment.source.start
+                {
+                    scratch.push(segment);
+                    continue;
+                }
+                let mut cuts = smallvec::SmallVec::<[usize; 6]>::new();
+                cuts.extend([segment.source.start, segment.source.end]);
+                if segment.raw.is_none() && segment.source.len() == segment.content.len() {
+                    cuts.extend(
+                        [
+                            decoration.open.start,
+                            decoration.open.end,
+                            decoration.close.start,
+                            decoration.close.end,
+                        ]
+                        .into_iter()
+                        .filter(|at| segment.source.start < *at && *at < segment.source.end),
+                    );
+                }
+                cuts.sort_unstable();
+                cuts.dedup();
+                if cuts.len() == 2 {
+                    apply(&mut segment, decoration, ix);
+                    scratch.push(segment);
+                    continue;
+                }
+                for pair in cuts.windows(2) {
+                    let mut part = segment.clone();
+                    part.source = pair[0]..pair[1];
+                    part.content = segment.content.start + pair[0] - segment.source.start
+                        ..segment.content.start + pair[1] - segment.source.start;
+                    apply(&mut part, decoration, ix);
+                    scratch.push(part);
+                }
+            }
+            std::mem::swap(&mut self.segments, &mut scratch);
+        }
+    }
+
     pub(super) fn new(range: Range<usize>, kind: Kind) -> Self {
         Self {
             id: 0,
@@ -75,14 +171,19 @@ impl Leaf {
             inline_insertions: smallvec::SmallVec::new(),
             range,
             text: String::new(),
+            direction_runs: smallvec::SmallVec::new(),
+            text_fragments: smallvec::SmallVec::new(),
             kind,
             deferred: false,
+            math_alignment: Default::default(),
             segments: Vec::new(),
             content: String::new(),
             container: None,
             spans: Vec::new(),
             style: InlineStyle::default(),
             image_definitions: Default::default(),
+            highlight_tint: gpui_kit::Hsla::default(),
+            has_foreground: false,
         }
     }
     pub fn materialize(&mut self, source: &Rope) {
@@ -145,6 +246,7 @@ impl Leaf {
     }
     fn rebuild(&mut self, marked: Option<&Range<usize>>) {
         self.text.clear();
+        self.text_fragments.clear();
         for segment in &mut self.segments {
             let start = self.text.len();
             if segment.image.is_none() && segment.math.is_none() {
@@ -161,6 +263,45 @@ impl Leaf {
                 });
             }
             segment.display = start..self.text.len();
+            if segment.verbatim || segment.image.is_none() && segment.math.is_none() {
+                let mut at = segment.display.start;
+                for line in self.text[segment.display.clone()].split_inclusive('\n') {
+                    // InlineFlow reports no Text piece for the hard-break
+                    // byte. Do not mistake its fallback caret for a text row.
+                    let end = at + line.trim_end_matches('\n').len();
+                    if at < end {
+                        self.text_fragments.push(at..end);
+                    }
+                    at += line.len();
+                }
+            }
+        }
+        // Build source-order direction runs once per displayed text revision,
+        // not once per diagnostic/frame. Geometry remains entirely native.
+        self.direction_runs.clear();
+        if self.text.is_ascii()
+            || !self.text.chars().any(|ch| {
+                use unicode_bidi::BidiClass::*;
+                matches!(
+                    unicode_bidi::bidi_class(ch),
+                    R | AL | AN | RLE | LRE | RLO | LRO | RLI | LRI | FSI | PDI | PDF
+                )
+            })
+        {
+            self.direction_runs.push(0..self.text.len());
+        } else {
+            let bidi = unicode_bidi::BidiInfo::new(&self.text, None);
+            for paragraph in &bidi.paragraphs {
+                let mut start = paragraph.range.start;
+                for (offset, _) in self.text[paragraph.range.clone()].char_indices().skip(1) {
+                    let at = paragraph.range.start + offset;
+                    if bidi.levels[at] != bidi.levels[start] {
+                        self.direction_runs.push(start..at);
+                        start = at;
+                    }
+                }
+                self.direction_runs.push(start..paragraph.range.end);
+            }
         }
     }
     /// Hide presentation-only source slices while retaining their byte mapping.
@@ -211,35 +352,38 @@ impl Leaf {
         selection: super::Selection,
         extra: &[super::Selection],
         marked: Option<&Range<usize>>,
+        source: Option<&Range<usize>>,
+        formula: Option<&Range<usize>>,
     ) -> bool {
         let mut changed = false;
         for span in &mut self.spans {
-            let revealed = std::iter::once(&selection).chain(extra).any(|selection| {
-                let range = selection.range();
-                if range.is_empty() {
-                    span.source.start < range.start && range.start < span.source.end
-                } else {
-                    range.start < span.source.end && range.end > span.source.start
-                }
-            }) || marked.is_some_and(|range| {
-                range.start <= span.source.end && range.end >= span.source.start
-            });
+            // Only an explicit local-source command authorizes syntax display.
+            // Ordinary selections and composition never expose structure or links.
+            let revealed = !span.always_hidden
+                && source.is_some_and(|range| {
+                    span.source.start <= range.start
+                        && range.end <= span.source.end
+                        && (!range.is_empty()
+                            || (span.source.start < range.start && range.end < span.source.end))
+                });
             changed |= revealed != span.revealed;
             span.revealed = revealed;
         }
         for segment in &mut self.segments {
             if segment.image.is_some() || segment.math.is_some() {
-                let revealed = std::iter::once(&selection).chain(extra).any(|selection| {
-                    let range = selection.range();
-                    // Crossing the whole image selects its original Markdown as
-                    // one atom. Reveal only when an editing endpoint is inside
-                    // its syntax; otherwise reverse Shift navigation must cross
-                    // the same boundary instead of entering the image URL.
-                    segment.source.start < range.start && range.start < segment.source.end
-                        || segment.source.start < range.end && range.end < segment.source.end
-                }) || marked.is_some_and(|range| {
-                    range.start < segment.source.end && range.end > segment.source.start
-                });
+                // A structural session owns the atom even though its source
+                // selection records the insertion point inside the delimiters.
+                // Only leaving that session can restore ordinary source reveal.
+                let revealed = formula != Some(&segment.source)
+                    && (std::iter::once(&selection).chain(extra).any(|selection| {
+                        let range = selection.range();
+                        // Crossing the whole image selects its original Markdown
+                        // as one atom; an interior endpoint enters its syntax.
+                        segment.source.start < range.start && range.start < segment.source.end
+                            || segment.source.start < range.end && range.end < segment.source.end
+                    }) || marked.is_some_and(|range| {
+                        range.start < segment.source.end && range.end > segment.source.start
+                    }));
                 changed |= segment.verbatim != revealed;
                 segment.verbatim = revealed;
             }
@@ -286,6 +430,45 @@ impl Leaf {
                     && at <= segment.source.end
             })
     }
+    /// Display bytes already account for hidden delimiters, decoded entities
+    /// and complete U+FFFC atom placeholders. Derive only for rendered leaves.
+    pub(super) fn foreground_ranges(&self) -> Vec<(Range<usize>, gpui_kit::Hsla)> {
+        let mut ranges: Vec<(Range<usize>, gpui_kit::Hsla)> = Vec::new();
+        if !self.has_foreground {
+            return ranges;
+        }
+        for segment in &self.segments {
+            let Some(color) = segment.style.foreground else {
+                continue;
+            };
+            if segment.display.is_empty() || segment.delimiter.is_some() {
+                continue;
+            }
+            let color = gpui_kit::rgba(color).into();
+            if let Some((range, _)) = ranges.last_mut().filter(|(range, previous)| {
+                range.end == segment.display.start && *previous == color
+            }) {
+                range.end = segment.display.end;
+            } else {
+                ranges.push((segment.display.clone(), color));
+            }
+        }
+        ranges
+    }
+
+    pub(super) fn foreground_context<'a>(
+        &self,
+        context: &'a gpui_kit::base::text::editor_host::RenderContext,
+    ) -> std::borrow::Cow<'a, gpui_kit::base::text::editor_host::RenderContext> {
+        if !self.has_foreground {
+            return std::borrow::Cow::Borrowed(context);
+        }
+        let ranges = self.foreground_ranges();
+        if ranges.is_empty() {
+            return std::borrow::Cow::Borrowed(context);
+        }
+        std::borrow::Cow::Owned(context.clone().with_foreground_ranges(self.id, ranges))
+    }
     pub fn marks(
         &self,
         marked: Option<&Range<usize>>,
@@ -304,6 +487,12 @@ impl Leaf {
                 italic: style.italic,
                 strikethrough: style.strikethrough,
                 code: style.code,
+                underline: style.underline,
+                highlight: style.highlight.then(|| {
+                    style
+                        .highlight_color
+                        .map_or(self.highlight_tint, |color| gpui_kit::rgba(color).into())
+                }),
                 link: style
                     .link
                     .map(|ix| gpui_kit::base::text::editor_host::LinkMark {
@@ -341,6 +530,48 @@ impl Leaf {
         self.segments
             .iter()
             .filter_map(|segment| segment.image.as_ref().map(|image| image.url.as_str()))
+    }
+    pub(super) fn image_objects(
+        &self,
+    ) -> impl Iterator<Item = (Range<usize>, &super::images::Image)> {
+        self.segments.iter().filter_map(|segment| {
+            segment
+                .image
+                .as_ref()
+                .map(|image| (segment.source.clone(), image))
+        })
+    }
+    pub(super) fn resize_image(&mut self, range: &Range<usize>, width: Option<u32>) -> bool {
+        let Some(image) = self
+            .segments
+            .iter_mut()
+            .find(|segment| &segment.source == range)
+            .and_then(|segment| segment.image.as_mut())
+        else {
+            return false;
+        };
+        image.width = width;
+        self.version = self.version.wrapping_add(1);
+        true
+    }
+    pub(super) fn image_dimensions(
+        &mut self,
+        states: &std::collections::HashMap<String, super::images::State>,
+    ) {
+        for segment in &mut self.segments {
+            if let Some(image) = &mut segment.image {
+                if let Some(super::images::State::Ready(ready)) = states.get(&image.url) {
+                    let size = ready.size(0);
+                    let dimensions = u32::try_from(size.width.0)
+                        .ok()
+                        .zip(u32::try_from(size.height.0).ok());
+                    if image.dimensions != dimensions {
+                        image.dimensions = dimensions;
+                        self.version = self.version.wrapping_add(1);
+                    }
+                }
+            }
+        }
     }
     pub fn inline_nodes(
         &self,
@@ -403,11 +634,22 @@ impl Leaf {
                     node.title = image.title.clone().map(Into::into);
                     // Reserve geometry before loading, so completion cannot move the
                     // caret or scroll anchor. Images fit inside this native atom.
-                    node.width = Some(gpui_kit::rems(12.).into());
-                    node.height = Some(gpui_kit::rems(8.).into());
+                    node.width = Some(image.width.map_or_else(
+                        || gpui_kit::rems(12.).into(),
+                        |width| gpui_kit::px(width as f32).into(),
+                    ));
+                    node.height = Some(image.width.map_or_else(
+                        || gpui_kit::rems(8.).into(),
+                        |width| {
+                            let ratio = image
+                                .dimensions
+                                .map_or(2. / 3., |(w, h)| h as f32 / w.max(1) as f32);
+                            gpui_kit::px(width as f32 * ratio).into()
+                        },
+                    ));
                     InlineNode::image(node)
                 } else if let Some(formula) = segment.math.as_ref().filter(|_| !segment.verbatim) {
-                    math.inline_node(formula)
+                    math.inline_node(formula, &segment.source)
                 } else {
                     InlineNode::new(self.text[range].to_owned()).marks(run_marks)
                 },
@@ -419,6 +661,28 @@ impl Leaf {
         self.segments
             .iter()
             .filter_map(|segment| segment.math.as_ref())
+    }
+    pub(super) fn formula_at(
+        &self,
+        at: usize,
+        end: bool,
+    ) -> Option<(Range<usize>, super::math::Formula)> {
+        self.segments.iter().find_map(|segment| {
+            let inside = segment.source.start < at && at < segment.source.end;
+            let boundary = if end {
+                at == segment.source.end
+            } else {
+                at == segment.source.start
+            };
+            (inside || boundary)
+                .then(|| {
+                    segment
+                        .math
+                        .as_ref()
+                        .map(|formula| (segment.source.clone(), formula.clone()))
+                })
+                .flatten()
+        })
     }
     pub fn atom_source(&self, display: usize) -> Option<usize> {
         self.segments.iter().find_map(|segment| {
@@ -454,30 +718,59 @@ impl Leaf {
         self.spans.push(InlineSpan {
             source: range.clone(),
             revealed: false,
+            always_hidden: false,
             target: None,
         });
         self.push_segment(range.clone(), &source[range], Some(ix), None);
     }
+    pub(super) fn accepts_reference(&self, at: usize) -> bool {
+        !matches!(
+            self.kind,
+            Kind::Code(_)
+                | Kind::Mermaid(_)
+                | Kind::Math
+                | Kind::Metadata
+                | Kind::Html
+                | Kind::Mdx(_)
+        ) && !self.segments.iter().any(|segment| {
+            segment.style.code && segment.source.start <= at && at <= segment.source.end
+        })
+    }
+    pub(super) fn accepts_pair(&self, range: &Range<usize>) -> bool {
+        matches!(
+            self.kind,
+            Kind::Prose | Kind::Heading(_) | Kind::List(_) | Kind::Quote(_) | Kind::TableCell(_)
+        ) && self.range.start <= range.start
+            && range.end <= self.range.end
+            && !self.segments.iter().any(|segment| {
+                let touches = if range.is_empty() {
+                    segment.source.start <= range.start && range.start < segment.source.end
+                } else {
+                    segment.source.start < range.end && range.start < segment.source.end
+                };
+                touches
+                    && (segment.style.code
+                        || segment.math.is_some()
+                        || segment.image.is_some()
+                        || segment.delimiter.is_some()
+                        || segment.hidden)
+            })
+    }
     pub(super) fn raw(&mut self, source: &str, range: Range<usize>) {
         self.push(range.clone(), &source[range]);
     }
-    pub fn atomic_boundary(&self, at: usize, forward: bool) -> usize {
+    pub(super) fn visible_fragments(
+        &self,
+    ) -> impl Iterator<Item = (Range<usize>, Range<usize>)> + '_ {
         self.segments
             .iter()
-            .find(|segment| {
-                segment.source.start < at
-                    && at < segment.source.end
-                    && !segment.display.is_empty()
-                    && (segment.source.len() != segment.display.len()
-                        || segment.math.is_some() && !segment.verbatim)
-            })
-            .map_or(at, |segment| {
-                if forward {
-                    segment.source.end
-                } else {
-                    segment.source.start
-                }
-            })
+            .filter(|segment| !segment.display.is_empty())
+            .map(|segment| (segment.display.clone(), segment.source.clone()))
+    }
+    /// Text segments have source-ordered native rows. Keep atom and style
+    /// boundaries separate: InlineFlow baselines can differ on the same row.
+    pub(super) fn spelling_fragments(&self) -> impl Iterator<Item = Range<usize>> + '_ {
+        self.text_fragments.iter().cloned()
     }
     pub fn display_offset(&self, source: usize) -> usize {
         if self.deferred {
@@ -510,6 +803,7 @@ impl Leaf {
         // opening delimiters instead select the first visible content byte.
         if let Some(closing) = self.segments.iter().rev().find(|segment| {
             segment.display.is_empty()
+                && !segment.hidden
                 && segment.display.start == display
                 && segment
                     .delimiter
@@ -551,10 +845,143 @@ impl Leaf {
                 },
             )
     }
+    /// Map a visible range with inward affinity at both ends. Insertion
+    /// affinity alone would include the preceding hidden closing delimiter.
+    pub(super) fn visible_range(&self, range: Range<usize>) -> Range<usize> {
+        let mut segments = self.segments.iter().filter(|segment| {
+            segment.display.start < range.end && range.start < segment.display.end
+        });
+        let Some(first) = segments.next() else {
+            let at = self.source_offset(range.start);
+            return at..at;
+        };
+        let last = segments.last().unwrap_or(first);
+        let start = if first.source.len() == first.display.len() {
+            first.source.start + range.start.saturating_sub(first.display.start)
+        } else {
+            first.source.start
+        };
+        let end = if last.source.len() == last.display.len() {
+            last.source.start + range.end.min(last.display.end) - last.display.start
+        } else {
+            last.source.end
+        };
+        start..end
+    }
+
+    /// Remove a paired wrapper only when its content is emptied or one side
+    /// of its syntax is removed. Unselected text is never part of this repair.
+    pub(super) fn deletion_delimiters(
+        &self,
+        range: &Range<usize>,
+    ) -> smallvec::SmallVec<[Range<usize>; 4]> {
+        let mut removed = smallvec::SmallVec::new();
+        for (ix, span) in self.spans.iter().enumerate() {
+            if range.start >= span.source.end || span.source.start >= range.end {
+                continue;
+            }
+            let mut delimiters = self
+                .segments
+                .iter()
+                .filter(|segment| segment.delimiter == Some(ix));
+            let Some(opening) = delimiters.next() else {
+                continue;
+            };
+            let Some(closing) = delimiters.next_back() else {
+                continue;
+            };
+            if span.revealed
+                && !span.always_hidden
+                && [opening, closing].iter().any(|segment| {
+                    segment.source.start <= range.start && range.end <= segment.source.end
+                })
+            {
+                continue; // Explicit destination/source editing remains byte-precise.
+            }
+            let content_start = opening.source.end;
+            let content_end = closing.source.start;
+            let emptied = range.start <= content_start && content_end <= range.end
+                || self
+                    .segments
+                    .iter()
+                    .filter(|segment| {
+                        segment.delimiter.is_none()
+                            && content_start <= segment.source.start
+                            && segment.source.end <= content_end
+                            && !segment.display.is_empty()
+                    })
+                    .all(|segment| {
+                        range.start <= segment.source.start && segment.source.end <= range.end
+                    });
+            let broken = [opening, closing].iter().any(|segment| {
+                range.start < segment.source.end && segment.source.start < range.end
+            });
+            if emptied || broken {
+                removed.extend([opening.source.clone(), closing.source.clone()]);
+            }
+        }
+        removed
+    }
+
+    pub(super) fn block_atom_range(&self) -> Option<Range<usize>> {
+        if self.kind == Kind::Rule {
+            return Some(self.range.clone());
+        }
+        let mut visible = self
+            .segments
+            .iter()
+            .filter(|segment| !segment.display.is_empty());
+        let atom = visible.next()?;
+        if atom.verbatim || atom.image.is_none() && atom.math.is_none() {
+            return None;
+        }
+        visible
+            .all(|segment| self.text[segment.display.clone()].trim().is_empty())
+            .then(|| atom.source.clone())
+    }
+
+    pub(super) fn word_atom_target(&self, display: usize, backward: bool) -> Option<usize> {
+        let mut atoms = self.segments.iter().filter(|segment| {
+            !segment.display.is_empty()
+                && !segment.verbatim
+                && (segment.source.len() != segment.display.len()
+                    || segment.math.is_some()
+                    || segment.image.is_some())
+        });
+        if backward {
+            atoms
+                .rfind(|segment| segment.display.start < display)
+                .map(|segment| segment.display.start)
+        } else {
+            atoms
+                .find(|segment| segment.display.end > display)
+                .map(|segment| segment.display.end)
+        }
+    }
+
+    pub(super) fn join_start(&self) -> usize {
+        self.segments
+            .iter()
+            .find(|segment| {
+                segment
+                    .delimiter
+                    .is_none_or(|ix| self.spans[ix].source != segment.source)
+            })
+            .map_or(self.insertion, |segment| segment.source.start)
+    }
+
+    pub(super) fn join_end(&self) -> usize {
+        self.segments
+            .last()
+            .map_or(self.range.end, |segment| segment.source.end)
+    }
     pub fn content_start(&self) -> usize {
         self.source_offset(0)
     }
     pub fn content_end(&self) -> usize {
+        if self.kind == Kind::Rule {
+            return self.range.end;
+        }
         if self.deferred {
             return self.range.end;
         }
@@ -599,17 +1026,51 @@ pub(super) struct Projection {
     pub links: super::links::Index,
     pub grammar: super::mdx::Grammar,
     pub mdx: super::mdx::Index,
+    pub properties: super::source::properties::Index,
+    pub(super) block_index: super::blocks::Index,
+    pub(super) syntax: Option<std::sync::Arc<super::source::formats::Syntax>>,
+    pub(super) reorder_inventory: Option<std::sync::Arc<super::source::reorder::Inventory>>,
     pub error: Option<String>,
     live: bool,
     next_id: u64,
+    format_tint: Option<(u64, gpui_kit::Hsla)>,
 }
 impl Projection {
+    pub(super) fn format_theme(&mut self, tint: gpui_kit::Hsla) {
+        if self.format_tint == Some((self.revision, tint)) {
+            return;
+        }
+        self.format_tint = Some((self.revision, tint));
+        for leaf in &mut self.leaves {
+            if leaf.highlight_tint != tint {
+                leaf.highlight_tint = tint;
+                if leaf
+                    .segments
+                    .iter()
+                    .any(|s| s.style.highlight && s.style.highlight_color.is_none())
+                {
+                    leaf.version = self.next_id;
+                    self.next_id += 1;
+                }
+            }
+        }
+    }
     pub fn source(source: &Rope, revision: u64, grammar: super::mdx::Grammar) -> Self {
         let text = source.to_string();
-        Self::parse(&text, revision, false, grammar)
+        Self::parse_fragment(&text, revision, false, true, grammar, false)
     }
     pub fn parse(source: &str, revision: u64, live: bool, grammar: super::mdx::Grammar) -> Self {
-        Self::parse_fragment(source, revision, live, true, grammar)
+        let mut projection = Self::parse_fragment(source, revision, live, true, grammar, true);
+        if !live {
+            projection.syntax = super::parser::parse(source, grammar, true)
+                .ok()
+                .map(|root| {
+                    std::sync::Arc::new(super::source::formats::Syntax::new(
+                        source, root, revision, grammar,
+                    ))
+                });
+        }
+        projection
     }
     fn parse_fragment(
         source: &str,
@@ -617,11 +1078,16 @@ impl Projection {
         live: bool,
         document_start: bool,
         grammar: super::mdx::Grammar,
+        retain_syntax: bool,
     ) -> Self {
         let mut leaves = Vec::new();
         let mut links = super::links::Index::default();
         let mut mdx = super::mdx::Index::default();
+        let mut properties = super::source::properties::Index::default();
+        let mut block_index = super::blocks::Index::default();
         let mut error = None;
+        let mut syntax = None;
+        let mut reorder_inventory = None;
         if live {
             if super::regions::unfinished_metadata(source, document_start) {
                 let mut leaf = Leaf::new(0..source.len(), Kind::Metadata);
@@ -634,6 +1100,16 @@ impl Projection {
                             std::sync::Arc::new(super::images::definitions(&root));
                         links = super::links::Index::from_ast(source, &root);
                         mdx = super::mdx::Index::from_ast(source, &root);
+                        properties = super::source::properties::Index::from_ast(source, &root);
+                        block_index = super::blocks::Index::from_ast(source, &root);
+                        if retain_syntax {
+                            reorder_inventory =
+                                Some(std::sync::Arc::new(super::source::reorder::Inventory::new(
+                                    source,
+                                    &root,
+                                    properties.reorder_ranges(),
+                                )));
+                        }
                         Self::project_nodes(
                             source,
                             root.children().map_or(&[], Vec::as_slice),
@@ -641,6 +1117,36 @@ impl Projection {
                             &image_definitions,
                             &mut leaves,
                         );
+                        super::tables::metadata::hide_markers(source, &mut leaves);
+                        let decorations = super::source::formats::decorations(source, &root);
+                        let mut active = Vec::new();
+                        let mut next = 0;
+                        for leaf in &mut leaves {
+                            active.retain(|d: &&super::source::formats::Decoration| {
+                                d.close.end > leaf.range.start
+                            });
+                            while next < decorations.len()
+                                && decorations[next].open.start < leaf.range.end
+                            {
+                                let decoration = &decorations[next];
+                                if decoration.close.end > leaf.range.start {
+                                    active.push(decoration);
+                                }
+                                next += 1;
+                            }
+                            leaf.decorate_formats(&active);
+                        }
+                        if retain_syntax {
+                            syntax = Some(std::sync::Arc::new(
+                                super::source::formats::Syntax::from_parts(
+                                    source,
+                                    root,
+                                    revision,
+                                    grammar,
+                                    decorations,
+                                ),
+                            ));
+                        }
                     }
                     Err(reason) => {
                         error = Some(reason.to_string());
@@ -650,6 +1156,9 @@ impl Projection {
             }
         } else {
             Self::source_lines(source, 0, &mut leaves);
+        }
+        if live {
+            super::source::math_edit::alignment::hide_markers(source, &mut leaves);
         }
         if leaves.is_empty() {
             leaves.push(Leaf::new(0..0, Kind::Prose));
@@ -680,8 +1189,13 @@ impl Projection {
             links,
             grammar,
             mdx,
+            properties,
+            block_index,
+            syntax,
+            reorder_inventory,
             error,
             live,
+            format_tint: None,
         }
     }
     pub(super) fn project_nodes(
@@ -703,6 +1217,14 @@ impl Projection {
                 range.start
             };
             Self::gap(source, cursor..start, leaves);
+            if super::source::formats::wrapper(source, node).is_some() {
+                let mut leaf = Leaf::new(range.clone(), Kind::Prose);
+                leaf.image_definitions = images.clone();
+                Self::inline(source, node, &mut leaf);
+                leaves.push(leaf);
+                cursor = range.end;
+                continue;
+            }
             if super::mdx::project(source, node, images, leaves) {
                 cursor = range.end;
                 continue;
@@ -725,15 +1247,16 @@ impl Projection {
                     Node::MdxjsEsm(_) | Node::MdxFlowExpression(_) | Node::MdxTextExpression(_) => {
                         Kind::Mdx(super::mdx::Field::Dynamic)
                     }
+                    // Inline HTML keeps its source, but must not turn adjacent
+                    // Markdown prose into an unformatted source-only region.
+                    Node::Paragraph(_) => Kind::Prose,
                     _ => super::regions::classify(node, &source[range.clone()]),
                 };
                 let mut leaf = Leaf::new(range.clone(), kind);
                 leaf.image_definitions = images.clone();
                 if matches!(kind, Kind::Prose | Kind::Heading(_)) {
                     if let Some(children) = node.children() {
-                        for child in children {
-                            Self::inline(source, child, &mut leaf);
-                        }
+                        Self::inline_children(source, children, &mut leaf);
                     }
                     if leaf.segments.is_empty() {
                         leaf.insertion = range.end;
@@ -870,9 +1393,7 @@ impl Projection {
                     } else {
                         leaf.prefix(source, start..range.start);
                         if let Some(children) = node.children() {
-                            for child in children {
-                                Self::inline(source, child, &mut leaf);
-                            }
+                            Self::inline_children(source, children, &mut leaf);
                         }
                     }
                     if empty_prefix || leaf.segments.is_empty() {
@@ -916,12 +1437,85 @@ impl Projection {
             leaves.push(Leaf::new(range.end..range.end, Kind::Prose));
         }
     }
+    fn inline_children(source: &str, children: &[Node], leaf: &mut Leaf) {
+        let mut opaque = None;
+        for child in children {
+            let Some(position) = child.position() else {
+                continue;
+            };
+            let range = position.start.offset..position.end.offset;
+            let tag = matches!(child, Node::Html(_))
+                .then(|| super::source::formats::opaque_tag(&source[range.clone()]))
+                .flatten();
+            if let Some((name, start, depth)) = opaque.as_mut() {
+                if tag == Some((*name, false)) {
+                    *depth += 1;
+                } else if tag == Some((*name, true)) {
+                    *depth -= 1;
+                    if *depth == 0 {
+                        leaf.raw(source, *start..range.end);
+                        opaque = None;
+                    }
+                }
+                continue;
+            }
+            if let Some((name, false)) = tag {
+                opaque = Some((name, range.start, 1usize));
+            } else {
+                Self::inline(source, child, leaf);
+            }
+        }
+        if let Some((_, start, _)) = opaque {
+            // An unfinished opaque element remains literal through the end of
+            // this inline owner; it never swallows a following block.
+            let end = children
+                .iter()
+                .rev()
+                .find_map(Node::position)
+                .unwrap()
+                .end
+                .offset;
+            leaf.raw(source, start..end);
+        }
+    }
+
     pub(super) fn inline(source: &str, node: &Node, leaf: &mut Leaf) {
         let Some(position) = node.position() else {
             return;
         };
-        let range = position.start.offset..position.end.offset;
-        if let Some(image) = super::images::image(node, &leaf.image_definitions) {
+        let mut range = position.start.offset..position.end.offset;
+        if let Some(end) = leaf
+            .segments
+            .last()
+            .filter(|segment| segment.image.is_some())
+            .map(|segment| segment.source.end)
+        {
+            range.start = range.start.max(end);
+            if range.start >= range.end {
+                return;
+            }
+        }
+        if let Some(decoration) = super::source::formats::wrapper(source, node) {
+            leaf.push(decoration.open.clone(), &source[decoration.open]);
+            if let Some(children) = node.children() {
+                for child in children {
+                    if matches!(child, Node::Paragraph(_)) {
+                        if let Some(inline) = child.children() {
+                            Self::inline_children(source, inline, leaf);
+                        }
+                    } else {
+                        Self::inline(source, child, leaf);
+                    }
+                }
+            }
+            leaf.push(decoration.close.clone(), &source[decoration.close]);
+            return;
+        }
+        if let Some(mut image) = super::images::image(node, &leaf.image_definitions) {
+            if let Some((length, width)) = super::images::width_suffix(&source[range.end..]) {
+                range.end += length;
+                image.width = Some(width);
+            }
             leaf.push_normalized(range.clone(), "\u{FFFC}", &source[range]);
             leaf.segments.last_mut().unwrap().image = Some(image);
             return;
@@ -952,8 +1546,43 @@ impl Projection {
                     range.start -= 1;
                 }
                 let raw = &source[range.clone()];
+                let alternatives = if raw.contains("[[") || raw.contains("((") {
+                    super::links::Index::from_ast(source, node).links
+                } else {
+                    Vec::new()
+                };
                 let mut at = 0;
                 while at < raw.len() {
+                    if let Some(link) = alternatives
+                        .iter()
+                        .find(|link| link.source.start == range.start + at)
+                    {
+                        let ix = leaf.spans.len();
+                        leaf.spans.push(InlineSpan {
+                            source: link.source.clone(),
+                            revealed: false,
+                            always_hidden: false,
+                            target: None,
+                        });
+                        leaf.push_segment(
+                            link.source.start..link.label.start,
+                            &source[link.source.start..link.label.start],
+                            Some(ix),
+                            None,
+                        );
+                        let before = leaf.style;
+                        leaf.style.link = Some(ix);
+                        leaf.raw(source, link.label.clone());
+                        leaf.style = before;
+                        leaf.push_segment(
+                            link.label.end..link.source.end,
+                            &source[link.label.end..link.source.end],
+                            Some(ix),
+                            None,
+                        );
+                        at = link.source.end - range.start;
+                        continue;
+                    }
                     let rest = &raw[at..];
                     let ch = rest.chars().next().unwrap();
                     if ch == '\\' && rest.as_bytes().get(1).is_some_and(u8::is_ascii_punctuation) {
@@ -984,13 +1613,11 @@ impl Projection {
                             at += 1;
                         }
                     } else {
-                        leaf.push_normalized(
+                        // Keep source line feedback in the editing presentation.
+                        // External Markdown renderers may flow this soft break;
+                        // the source spelling remains a single untouched LF.
+                        leaf.push(
                             range.start + at..range.start + at + ch.len_utf8(),
-                            if ch == '\n' {
-                                " "
-                            } else {
-                                &rest[..ch.len_utf8()]
-                            },
                             &rest[..ch.len_utf8()],
                         );
                         at += ch.len_utf8();
@@ -1026,6 +1653,7 @@ impl Projection {
                 leaf.spans.push(InlineSpan {
                     source: range.clone(),
                     revealed: false,
+                    always_hidden: true,
                     target: None,
                 });
                 leaf.push_segment(
@@ -1034,9 +1662,7 @@ impl Projection {
                     Some(ix),
                     None,
                 );
-                for child in children {
-                    Self::inline(source, child, leaf);
-                }
+                Self::inline_children(source, children, leaf);
                 leaf.push_segment(end..range.end, &source[end..range.end], Some(ix), None);
                 leaf.style = before;
             }
@@ -1058,6 +1684,7 @@ impl Projection {
                 leaf.spans.push(InlineSpan {
                     source: range.clone(),
                     revealed: false,
+                    always_hidden: true,
                     target: None,
                 });
                 let before = leaf.style;
@@ -1103,6 +1730,7 @@ impl Projection {
                 leaf.spans.push(InlineSpan {
                     source: range.clone(),
                     revealed: false,
+                    always_hidden: false,
                     target: None,
                 });
                 leaf.push_segment(
@@ -1114,9 +1742,7 @@ impl Projection {
                 let before = leaf.style;
                 leaf.style.link = Some(ix);
                 if let Some(children) = node.children() {
-                    for child in children {
-                        Self::inline(source, child, leaf);
-                    }
+                    Self::inline_children(source, children, leaf);
                 }
                 leaf.style = before;
                 leaf.push_segment(
@@ -1339,8 +1965,14 @@ impl Projection {
             )
             .unwrap();
         }
-        let parsed =
-            Self::parse_fragment(&fragment, transaction.revision(), true, false, self.grammar);
+        let parsed = Self::parse_fragment(
+            &fragment,
+            transaction.revision(),
+            true,
+            false,
+            self.grammar,
+            false,
+        );
         if parsed.error.is_some() {
             return false;
         }
@@ -1405,10 +2037,32 @@ impl Projection {
         if transaction.edits.is_empty() {
             return;
         }
+        self.syntax = None;
+        self.reorder_inventory = None;
         // Absolute destinations and definitions must never be rebased against a
         // fragment. The revision-checked background parse restores this index.
-        self.links = super::links::Index::default();
+        let embeds = self
+            .links
+            .embeds
+            .drain(..)
+            .filter_map(|mut reference| {
+                let source = transaction.map_untouched_range(reference.source.clone())?;
+                let delta = source.start as isize - reference.source.start as isize;
+                reference.source = source;
+                reference.label = reference.label.start.checked_add_signed(delta)?
+                    ..reference.label.end.checked_add_signed(delta)?;
+                reference.destination = reference.destination.start.checked_add_signed(delta)?
+                    ..reference.destination.end.checked_add_signed(delta)?;
+                Some(reference)
+            })
+            .collect();
+        self.links = super::links::Index {
+            embeds,
+            ..Default::default()
+        };
+        self.properties = super::source::properties::Index::default();
         self.mdx.rebase(transaction, source);
+        self.block_index.rebase(transaction);
         // Only affected leaves and their immediate neighbours are reparsed on
         // input. The debounced background parse resolves larger syntax changes.
         let mut old = transaction
@@ -1515,6 +2169,7 @@ impl Projection {
                 local_live,
                 start == 0,
                 self.grammar,
+                false,
             )
             .leaves;
             for leaf in &mut leaves {

@@ -23,13 +23,13 @@ lyrel 在 shell 提示符处提供了一个编辑器。无需安装任何东西�
 以下命令供集成后的 Windows／macOS 桌面验证使用；职责迁移时未运行 build、tests、lint、formatter 或原生 smoke，不能将这些场景记为通过：
 
 ```bash
-cargo test --locked -p lyrel --bin lyrel-app terminal::prompt_input::
-cargo test --locked -p lyrel --bin lyrel-app terminal::view::input::consumer_tests::
-cargo test --locked -p lyrel --bin lyrel-app terminal::view::prompt::tests::
-cargo test --locked -p lyrel --bin lyrel-app terminal::view::completion_adapter::
-cargo test --locked -p lyrel --bin lyrel-app terminal::view::history_adapter::
-cargo test --locked -p lyrel --bin lyrel-app terminal::view::prompt_handover_tests::
-cargo test --locked -p lyrel --bin lyrel-app terminal::
+cargo test --locked -p lyrel --lib terminal::prompt_input::
+cargo test --locked -p lyrel --lib terminal::view::input::consumer_tests::
+cargo test --locked -p lyrel --lib terminal::view::prompt::tests::
+cargo test --locked -p lyrel --lib terminal::view::completion_adapter::
+cargo test --locked -p lyrel --lib terminal::view::history_adapter::
+cargo test --locked -p lyrel --lib terminal::view::prompt_handover_tests::
+cargo test --locked -p lyrel --lib terminal::
 ```
 
 原生验收使用 `cargo dev` 的隔离配置，并逐平台记录结果：

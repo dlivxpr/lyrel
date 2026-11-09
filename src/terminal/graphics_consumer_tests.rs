@@ -2557,14 +2557,41 @@ fn synchronized_copy_preserves_tabstop_gaps_custom_clear_reset_and_growth(cx: &m
     let mut failures = Vec::new();
     for (label, setup, text, start, end, expected, grow) in cases {
         let (client, mut sender) = test_stream_pair();
-        let size = TermSize::new(if grow {96} else {80},24);
-        let (view, window) = graphics_build_rooted_consumer_at(cx,178,client,Vec::new(),size,PtySource::Raw);
+        let (view, window) = graphics_build_rooted_consumer_at(cx,178,client,Vec::new(),TermSize::new(80,24),PtySource::Raw);
         if grow {
             DaemonMsg::Size(crate::daemon::protocol::WinSize { cols: 80, rows: 24, cell_w: 10, cell_h: 20 }).encode(&mut sender).unwrap();
         }
         DaemonMsg::Output(setup.as_bytes().to_vec()).encode(&mut sender).unwrap();
         if grow {
+            // Keep both the physical window and Rio at 80 until TBC/HTS has
+            // crossed the production consumer. Starting the window at 96 let
+            // prepaint grow Rio before setup, making the final Size a no-op
+            // after TBC had already cleared the newly allocated default stops.
+            let wait_for_geometry = |cx: &mut TestAppContext, cols, marker: &str| {
+                let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+                loop {
+                    cx.run_until_parked();
+                    window.update(cx, |_,window,cx| { window.refresh(); window.draw(cx).clear(cx); }).unwrap();
+                    if view.read_with(cx, |view, _| {
+                        let term = view.terminal.term.lock();
+                        view.title == marker
+                            && (term.columns(),term.screen_lines()) == (cols,24)
+                            && view.cell_geom.is_some_and(|geom| (geom.cols,geom.rows) == (cols,24))
+                            && view.grid_buf.len() == cols * 24
+                    }) { break; }
+                    assert!(std::time::Instant::now() < deadline,
+                        "tab growth barrier {marker} did not consume and paint {cols} columns");
+                    cx.executor().advance_clock(std::time::Duration::from_millis(5));
+                    std::thread::yield_now();
+                }
+            };
+            DaemonMsg::Output(b"\x1b]2;tab-growth-80\x07".to_vec()).encode(&mut sender).unwrap();
+            wait_for_geometry(cx,80,"tab-growth-80");
+            let target = graphics_window_geometry(window, &view, cx, TermSize::new(96,24)).0;
+            cx.simulate_window_resize(window, target);
             DaemonMsg::Size(crate::daemon::protocol::WinSize { cols: 96, rows: 24, cell_w: 10, cell_h: 20 }).encode(&mut sender).unwrap();
+            DaemonMsg::Output(b"\x1b]2;tab-growth-96\x07".to_vec()).encode(&mut sender).unwrap();
+            wait_for_geometry(cx,96,"tab-growth-96");
         }
         DaemonMsg::Output(text.as_bytes().to_vec()).encode(&mut sender).unwrap();
         graphics_recovery_wait(cx, "tab fixture did not paint", |cx| {

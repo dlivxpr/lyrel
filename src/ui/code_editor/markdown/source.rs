@@ -4,8 +4,8 @@ use crate::ui::i18n::{L10nKey, t};
 use gpui_kit::TestSupportExt as _;
 use gpui_kit::base::StyledExt as _;
 use gpui_kit::base::text::editor_host::{
-    BlockNode, CodeBlock, FlowPosition, LeafGeometry, Paragraph, RenderContext,
-    collect_leaf_geometry,
+    BlockNode, Caret, CaretAffinity, CodeBlock, FlowPosition, LeafGeometry, Paragraph,
+    RenderContext, collect_leaf_geometry,
 };
 use gpui_kit::component::{ActiveTheme as _, input as actions};
 use gpui_kit::prelude::*;
@@ -15,34 +15,137 @@ gpui_kit::actions!(markdown_images, [LoadImages]);
 
 actions!(markdown_links, [EditLinkDestination, FollowLink]);
 
+#[path = "embeds/view.rs"]
+mod embeds;
+#[path = "links/interaction.rs"]
+mod link_interaction;
+#[path = "references.rs"]
+mod references;
+#[path = "slash.rs"]
+mod slash;
+
 #[path = "assets.rs"]
 mod assets;
+#[path = "auto_pair.rs"]
+mod auto_pair;
+#[path = "headings.rs"]
+pub(super) mod headings;
+#[path = "image_edit.rs"]
+mod image_edit;
+#[path = "navigation.rs"]
+mod navigation;
+#[cfg(feature = "native-markdown-tests")]
+#[path = "review_native.rs"]
+mod review_native;
+#[cfg(any(test, feature = "native-markdown-tests"))]
+#[path = "review_support.rs"]
+mod review_support;
+#[cfg(test)]
+#[path = "review_tests.rs"]
+mod review_tests;
+
+#[cfg(feature = "native-markdown-tests")]
+pub(super) fn native_cases() -> impl Iterator<Item = crate::native_markdown::Case> {
+    review_native::native_cases()
+        .into_iter()
+        .chain(spelling::native_cases())
+}
+
+#[path = "typography.rs"]
+mod typography;
+
+#[path = "composition.rs"]
+mod composition;
+
+#[path = "clipboard.rs"]
+pub(super) mod clipboard;
+#[path = "code.rs"]
+mod code;
+#[path = "formats.rs"]
+pub(super) mod formats;
+#[path = "math_edit.rs"]
+pub(super) mod math_edit;
+#[path = "mermaid_authoring.rs"]
+mod mermaid_authoring;
+#[path = "properties.rs"]
+pub(super) mod properties;
+#[path = "reorder.rs"]
+pub(super) mod reorder;
+#[path = "spelling.rs"]
+mod spelling;
+#[path = "tools.rs"]
+pub(super) mod tools;
+
+#[path = "tables/authoring.rs"]
+mod table_authoring;
+
+#[path = "tables/presentation.rs"]
+pub(super) mod table_presentation;
+
+// Bound the paint origin without changing source bytes or the user's wrap preference.
+const MAX_NOWRAP_WIDTH: f32 = 65_536.;
 
 struct CachedBlock {
     version: u64,
     seen: u64,
     node: BlockNode,
+    safety_wrap: bool,
 }
 
 #[derive(Default)]
 struct Viewport {
     heights: HashMap<u64, (u64, Pixels)>,
+    widths: HashMap<u64, (u64, Pixels)>,
     frame: Vec<(u64, u64, Bounds<Pixels>)>,
-    layout: Option<(Pixels, Pixels)>,
+    visible: Range<usize>,
+    layout: Option<typography::LayoutKey>,
     anchor: Option<(u64, Pixels)>,
     offset: Point<Pixels>,
     bounds: Option<Bounds<Pixels>>,
 }
+/// A document UTF-8 byte and local visual side; SDK Caret remains display-only.
+#[derive(Clone, Copy)]
+struct SourceCaret {
+    byte: usize,
+    affinity: CaretAffinity,
+}
+
+impl SourceCaret {
+    fn new(byte: usize) -> Self {
+        Self {
+            byte,
+            affinity: CaretAffinity::Downstream,
+        }
+    }
+    fn upstream(byte: usize) -> Self {
+        Self {
+            byte,
+            affinity: CaretAffinity::Upstream,
+        }
+    }
+}
+
 /// A native editing presentation. It never owns a second text buffer or history.
 pub(crate) struct SourcePresentation {
     document: Entity<MarkdownDocument>,
     state: PresentationState,
+    // Visual wrap sides are local to this selection, source revision and mode.
+    caret_selection: Option<(Selection, u64, bool, CaretAffinity, CaretAffinity)>,
+    extra_carets: Vec<(Selection, u64, bool, CaretAffinity)>,
+    input_generation: u64,
     focus: FocusHandle,
     scroll: ScrollHandle,
     geometry: Option<(u64, HashMap<u64, LeafGeometry>)>,
+    candidate_frame: Option<composition::Frame>,
     table_geometry: HashMap<u64, Bounds<Pixels>>,
     dragging: bool,
-    pointer_link: Option<(u64, String)>,
+    // Pointer and goal-x belong to this presentation, never the document.
+    drag_pointer: Option<Point<Pixels>>,
+    drag_origin: Option<(Selection, usize)>,
+    drag_frame_pending: bool,
+    goal_x: Option<Pixels>,
+    pointer_link: Option<link_interaction::Gesture>,
+    link_destination: Option<link_interaction::Destination>,
     reveal_caret: bool,
     wrap: bool,
     live: bool,
@@ -55,10 +158,15 @@ pub(crate) struct SourcePresentation {
     parse_pending: Option<(Rope, u64, bool, super::mdx::Grammar)>,
     mermaid: super::mermaid::State,
     mermaid_task: Option<Task<()>>,
+    mermaid_authoring: mermaid_authoring::Authoring,
     _mermaid_theme: Subscription,
     math: super::math::State,
+    formula: Option<math_edit::Session>,
+    formula_render: Option<Task<()>>,
+    formula_tools: math_edit::Tools,
     extra_selections: Vec<Selection>,
     search_matches: std::rc::Rc<Vec<Range<usize>>>,
+    spelling: spelling::State,
     image_snapshot: Option<std::sync::Arc<HashMap<String, std::sync::Arc<RenderImage>>>>,
     accessibility_snapshot: Option<(u64, SharedString)>,
     indent: crate::ui::editor_text::Indent,
@@ -67,8 +175,20 @@ pub(crate) struct SourcePresentation {
     reveal_at: Option<usize>,
     selection_notification: bool,
     assets: assets::InsertionState,
+    clipboard_status: Option<SharedString>,
+    clipboard_generation: u64,
+    clipboard_task: Option<Task<()>>,
+    references: references::State,
+    slash: slash::State,
+    embeds: embeds::State,
+    formats: formats::State,
+    code: code::State,
+    image_resize: Option<image_edit::Resize>,
+    reorder: Option<reorder::Gesture>,
     _observe: Subscription,
     mdx_state: super::mdx::ViewState,
+    properties: properties::State,
+    folds: headings::State,
 }
 impl SourcePresentation {
     pub(crate) fn new(
@@ -76,6 +196,31 @@ impl SourcePresentation {
         wrap: bool,
         cx: &mut Context<Self>,
     ) -> Self {
+        slash::init(cx);
+        code::init(cx);
+        reorder::init(cx);
+        let owner_id = cx.entity_id();
+        cx.on_release(move |view, cx| {
+            let _ = view.release_formula(owner_id, None, cx);
+            // Platform handlers are weak. A last-owner release must still put
+            // retained preedit into the document's existing ordered history.
+            if view.state.composition.is_some()
+                && view
+                    .document
+                    .read(cx)
+                    .composition_owner
+                    .as_ref()
+                    .is_some_and(|owner| owner.entity_id() == owner_id)
+            {
+                view.document.update(cx, |document, cx| {
+                    document.command(&mut view.state, Command::FinishComposition);
+                    document.composition_owner = None;
+                    cx.emit(DocumentEvent::PresentationChanged);
+                    cx.notify();
+                });
+            }
+        })
+        .detach();
         let observe = cx.subscribe(&document, |this, _, event: &DocumentEvent, cx| {
             if matches!(
                 event,
@@ -83,6 +228,16 @@ impl SourcePresentation {
             ) {
                 this.image_snapshot = None;
                 if matches!(event, DocumentEvent::ResourceContextChanged) {
+                    this.caret_selection = None;
+                    this.extra_carets.clear();
+                    this.cancel_drag();
+                    this.schedule_spelling(cx);
+                    this.cancel_reorder(cx);
+                    this.pointer_link = None;
+                    this.link_destination = None;
+                    this.dismiss_references(cx);
+                    this.dismiss_slash(cx);
+                    this.reset_embeds();
                     let document = this.document.read(cx);
                     if this.projection.grammar != document.grammar() {
                         this.projection.install(Projection::source(
@@ -101,7 +256,21 @@ impl SourcePresentation {
                 return;
             }
             if let DocumentEvent::Edited(transaction) = event {
-                this.assets.rebase(transaction);
+                this.caret_selection = None;
+                this.extra_carets.clear();
+                this.cancel_drag();
+                this.cancel_reorder(cx);
+                this.spelling.invalidate();
+                this.pointer_link = None;
+                this.invalidate_link_hover();
+                this.rebase_embed_controls(transaction);
+                Self::rebase_link_destination(
+                    &mut this.link_destination,
+                    this.state.id,
+                    transaction,
+                );
+                this.rebase_formula(transaction, cx);
+                this.folds.rebase(transaction);
                 this.state.rebase(transaction);
                 if transaction.origin != this.state.id {
                     for selection in &mut this.extra_selections {
@@ -116,25 +285,34 @@ impl SourcePresentation {
                     );
                 }
                 if this.projection.revision != transaction.revision()
-                    && transaction.revision() == doc.revision()
                     && this
                         .projection
                         .revision
                         .wrapping_add(transaction.edits.len() as u64)
                         == transaction.revision()
+                    && let Some(source) = transaction.snapshot.as_ref()
                 {
-                    this.projection.rebase(doc.source(), transaction, this.live);
+                    this.projection.rebase(source, transaction, this.live);
                     if this.live {
-                        this.projection
-                            .component_sources(doc.source(), &this.mdx_state);
+                        this.projection.component_sources(source, &this.mdx_state);
                     }
                     this.rendered_revision = None;
                 }
+                this.sync_block_folds();
                 this.sync_inline_reveal();
                 this.schedule_parse(cx);
+                this.schedule_spelling(cx);
                 this.schedule_math(cx);
                 this.schedule_mermaid(cx);
                 this.geometry = None;
+                if this.references.target.is_some()
+                    && !this.reference_lease_current(this.references.generation, cx)
+                {
+                    this.dismiss_references(cx);
+                }
+                if !this.slash_current(this.slash.generation, cx) {
+                    this.dismiss_slash(cx);
+                }
                 cx.notify();
             }
         });
@@ -162,17 +340,28 @@ impl SourcePresentation {
             if current != typography {
                 typography = current;
                 this.viewport.layout = None;
+                this.tables.invalidate();
             }
         });
         let mut view = Self {
             document,
             state: PresentationState::default(),
+            caret_selection: None,
+            extra_carets: Vec::new(),
+            input_generation: 0,
+            formats: formats::State::default(),
             focus: cx.focus_handle().tab_stop(true),
             scroll: ScrollHandle::new(),
             geometry: None,
+            candidate_frame: None,
             table_geometry: HashMap::new(),
             dragging: false,
+            drag_pointer: None,
+            drag_origin: None,
+            drag_frame_pending: false,
+            goal_x: None,
             pointer_link: None,
+            link_destination: None,
             reveal_caret: false,
             wrap,
             live: true,
@@ -185,10 +374,15 @@ impl SourcePresentation {
             parse_pending: None,
             mermaid: super::mermaid::State::default(),
             mermaid_task: None,
+            mermaid_authoring: mermaid_authoring::Authoring::default(),
             _mermaid_theme: mermaid_theme,
             math: super::math::State::default(),
+            formula: None,
+            formula_render: None,
+            formula_tools: math_edit::Tools::default(),
             extra_selections: Vec::new(),
             search_matches: std::rc::Rc::default(),
+            spelling: spelling::State::default(),
             image_snapshot: None,
             accessibility_snapshot: None,
             indent: crate::ui::editor_text::Indent {
@@ -200,14 +394,60 @@ impl SourcePresentation {
             reveal_at: None,
             selection_notification: false,
             assets: assets::InsertionState::default(),
+            clipboard_status: None,
+            clipboard_generation: 0,
+            clipboard_task: None,
+            references: references::State::default(),
+            slash: slash::State::default(),
+            embeds: embeds::State::default(),
+            code: code::State::default(),
+            image_resize: None,
+            reorder: None,
             _observe: observe,
             mdx_state: super::mdx::ViewState::default(),
+            properties: properties::State::default(),
+            folds: headings::State::default(),
         };
         view.schedule_parse(cx);
+        view.start_embed_refresh(cx);
         view
     }
     pub(crate) fn document(&self) -> &Entity<MarkdownDocument> {
         &self.document
+    }
+    pub(crate) fn input_token(&self, cx: &App) -> (EntityId, u64, u64, u64, Option<EntityId>) {
+        let document = self.document.read(cx);
+        (
+            self.document.entity_id(),
+            document.revision(),
+            document.input_generation,
+            self.input_generation,
+            document
+                .composition_owner
+                .as_ref()
+                .map(|owner| owner.entity_id()),
+        )
+    }
+    pub(crate) fn reload_input(&self, cx: &App) -> (u64, bool) {
+        let document = self.document.read(cx);
+        let pending = document
+            .composition_owner
+            .as_ref()
+            .and_then(|owner| owner.upgrade())
+            .is_some_and(|owner| {
+                let owner = owner.read(cx);
+                owner.document.entity_id() == self.document.entity_id()
+                    && (owner.formula_has_pending_input(cx) || owner.state.composition.is_some())
+            });
+        (document.pending_input_generation, pending)
+    }
+    fn retire_native_composition(&self, completed: bool, cx: &mut Context<Self>) {
+        crate::ui::ime::retire_markdown_composition(
+            &self.focus,
+            self.input_token(cx),
+            completed,
+            cx,
+        );
     }
     pub(crate) fn indent(&self) -> crate::ui::editor_text::Indent {
         self.indent
@@ -224,11 +464,22 @@ impl SourcePresentation {
         self.live
     }
     pub(crate) fn toggle_mode(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.cancel_drag();
+        self.command(Command::FinishComposition, window, cx);
+        self.cancel_reorder(cx);
+        self.properties = properties::State::default();
         self.live = !self.live;
+        self.caret_selection = None;
+        self.extra_carets.clear();
+        self.link_destination = None;
+        self.dismiss_references(cx);
+        self.dismiss_slash(cx);
+        self.reset_embeds();
         self.geometry = None;
         self.rendered_revision = None;
         self.parse_pending = None;
         self.mermaid.cancel();
+        self.mermaid_authoring = mermaid_authoring::Authoring::default();
         if self.live {
             self.schedule_parse(cx);
         } else {
@@ -237,16 +488,19 @@ impl SourcePresentation {
                 self.document.read(cx).revision(),
                 self.document.read(cx).grammar(),
             ));
+            self.schedule_parse(cx);
         }
+        self.tools_changed(cx);
         self.reveal_caret = true;
         self.focus.focus(window, cx);
         window.notify_text_selection_changed(&self.focus);
         cx.notify();
     }
     fn schedule_parse(&mut self, cx: &mut Context<Self>) {
-        if !self.live
-            && self.projection.revision == self.document.read(cx).revision()
+        if self.projection.revision == self.document.read(cx).revision()
             && self.projection.grammar == self.document.read(cx).grammar()
+            && self.projection.syntax.is_some()
+            && self.parse_pending.is_none()
         {
             return;
         }
@@ -290,6 +544,7 @@ impl SourcePresentation {
                     {
                         view.invalidate_layout(cx);
                         view.projection.install(projection);
+                        view.tables.invalidate_metadata();
                         if live {
                             view.projection.component_sources(
                                 view.document.read(cx).source(),
@@ -297,14 +552,17 @@ impl SourcePresentation {
                             );
                         }
                         view.reveal_mdx_selection(cx);
+                        view.sync_block_folds();
                         view.sync_inline_reveal();
                         view.state.selection = view.map_live_caret(view.state.selection, cx);
                         view.selection_notification = true;
                         view.rendered_revision = None;
                         view.geometry = None;
                         view.refresh_images(false, cx);
+                        view.request_embeds(cx);
                         view.schedule_mermaid(cx);
                         view.schedule_math(cx);
+                        view.tools_changed(cx);
                         cx.notify();
                     }
                     let next = view.parse_pending.is_some();
@@ -334,6 +592,10 @@ impl SourcePresentation {
         urls.dedup();
         self.document
             .update(cx, |document, cx| document.sync_images(urls, consent, cx));
+        let document = self.document.read(cx);
+        for leaf in &mut self.projection.leaves {
+            leaf.image_dimensions(&document.images.states);
+        }
     }
     fn schedule_mermaid(&mut self, cx: &mut Context<Self>) {
         if !self.live || self.projection.revision != self.document.read(cx).revision() {
@@ -479,6 +741,9 @@ impl SourcePresentation {
                 caret.top() >= viewport.top() && caret.bottom() <= viewport.bottom();
         }
         self.geometry = None;
+        // Resources and contextual source reveal can change dimensions without
+        // changing a leaf's source version, including leaves outside this frame.
+        self.viewport.widths.clear();
     }
     // Display-boundary insertion has right affinity after a hidden opening
     // delimiter and left affinity before a hidden closing delimiter.
@@ -489,11 +754,14 @@ impl SourcePresentation {
             && self.projection.revision == self.document.read(cx).revision()
         {
             if let Some(leaf) = self.projection.leaf_at(selection.head) {
-                if leaf.inline_position(selection.head) {
+                if leaf.inline_position(selection.head)
+                    || self.empty_slash_inline(selection.head, cx)
+                {
                     return selection;
                 }
                 let mapped = leaf.source_offset(leaf.display_offset(selection.head));
                 if mapped < selection.head
+                    && !matches!(leaf.kind, Kind::TableCell(_))
                     && self
                         .document
                         .read(cx)
@@ -514,16 +782,29 @@ impl SourcePresentation {
         if !self.live {
             return;
         }
-        let (hidden, insertions) = super::mdx::view::inline_visibility(
+        let (mut hidden, mut insertions) = super::mdx::view::inline_visibility(
             &self.projection,
             self.document.read(cx).source(),
             &self.mdx_state,
         );
+        if self.empty_slash_inline(self.state.selection.head(), cx) {
+            insertions.push(self.state.selection.head());
+        }
+        hidden.extend(
+            self.folds
+                .hidden
+                .iter()
+                .map(|range| range.start.saturating_sub(1)..range.end),
+        );
         let marked = self.state.marked_range();
         for leaf in &mut self.projection.leaves {
+            if matches!(leaf.kind, Kind::Code(_)) {
+                continue; // Code owns its derived fence/container visibility.
+            }
             let visibility_changed = leaf.hide_ranges(&hidden, marked.as_ref());
             let insertions_changed = leaf.set_inline_insertions(&insertions);
             if visibility_changed || insertions_changed {
+                self.spelling.surface_generation = self.spelling.surface_generation.wrapping_add(1);
                 if matches!(leaf.kind, Kind::TableCell(_)) {
                     self.tables.invalidate_cell(leaf.id);
                 }
@@ -537,13 +818,19 @@ impl SourcePresentation {
         }
     }
     fn sync_inline_reveal(&mut self) {
+        self.sync_block_folds();
         let marked = self.state.marked_range();
+        let source = self.link_destination_range();
         for leaf in &mut self.projection.leaves {
             if leaf.contextual_reveal(
                 self.state.selection,
                 &self.extra_selections,
                 marked.as_ref(),
+                source.as_ref(),
+                self.math.editor.as_ref().map(|(range, _)| range),
             ) {
+                self.spelling.surface_generation = self.spelling.surface_generation.wrapping_add(1);
+                self.viewport.widths.remove(&leaf.id);
                 if matches!(leaf.kind, Kind::TableCell(_)) {
                     self.tables.invalidate_cell(leaf.id);
                     self.viewport.heights.clear();
@@ -567,15 +854,23 @@ impl SourcePresentation {
             .as_ref()
             .and_then(WeakEntity::upgrade);
         if let Some(owner) = owner {
-            owner.update(cx, |view, cx| {
-                view.command(Command::FinishComposition, window, cx)
-            });
+            if owner.read(cx).document.entity_id() == document.entity_id() {
+                owner.update(cx, |view, cx| {
+                    view.command(Command::FinishComposition, window, cx)
+                });
+            } else {
+                // Never forward a lease retained by a replaced document.
+                document.update(cx, |document, _| document.composition_owner = None);
+            }
         }
     }
     pub(crate) fn add_selection(&mut self, range: Range<usize>, cx: &mut Context<Self>) {
         let doc = self.document.read(cx);
         let range = doc.safe_range(range);
         let selection = Selection::new(range.start, range.end);
+        self.extra_carets.retain(|(previous, _, _, _)| {
+            *previous != selection && self.extra_selections.contains(previous)
+        });
         if selection != self.state.selection && !self.extra_selections.contains(&selection) {
             self.extra_selections.push(selection);
         }
@@ -594,26 +889,44 @@ impl SourcePresentation {
         cx.notify();
     }
     pub(crate) fn select_range(&mut self, range: Range<usize>, cx: &mut Context<Self>) {
+        self.caret_selection = None;
+        self.extra_carets.clear();
+        let requested = Selection::new(range.start, range.end);
+        let selected = self
+            .release_formula(cx.entity_id(), Some(requested), cx)
+            .unwrap_or(requested);
+        self.dismiss_references(cx);
+        self.dismiss_slash(cx);
+        self.input_generation = self.input_generation.wrapping_add(1);
+        let was_composing = self.is_composing();
         self.extra_selections.clear();
         self.reveal_caret = true;
         self.reveal_at = None;
         self.selection_notification = true;
-        if self.is_composing() {
+        if was_composing {
             for cached in self.blocks.values_mut() {
                 cached.version = u64::MAX;
             }
             self.rendered_revision = None;
         }
+        let owner_id = cx.entity_id();
         self.document.update(cx, |document, cx| {
-            document.command(
-                &mut self.state,
-                Command::Select(Selection::new(range.start, range.end)),
-            );
+            document.command(&mut self.state, Command::Select(selected));
+            if document
+                .composition_owner
+                .as_ref()
+                .is_some_and(|owner| owner.entity_id() == owner_id)
+            {
+                document.composition_owner = None;
+            }
             cx.emit(DocumentEvent::PresentationChanged);
         });
         self.reveal_mdx_selection(cx);
+        self.sync_block_folds();
+        self.sync_mdx_inline_visibility(cx);
         self.state.selection = self.map_live_caret(self.state.selection, cx);
         self.sync_inline_reveal();
+        self.retire_native_composition(was_composing, cx);
         cx.notify();
     }
     pub(crate) fn selection(&self) -> Selection {
@@ -642,6 +955,7 @@ impl SourcePresentation {
         self.viewport.layout = None;
         self.geometry = None;
         self.rendered_revision = None;
+        self.tools_changed(cx);
         cx.notify();
     }
     pub(super) fn toggle_component_source(
@@ -807,7 +1121,7 @@ impl SourcePresentation {
         self.focus.focus(window, cx);
     }
     pub(crate) fn is_composing(&self) -> bool {
-        self.state.composition.is_some()
+        self.state.composition.is_some() || self.formula_native_marked().is_some()
     }
     pub(crate) fn is_soft_wrap(&self) -> bool {
         self.wrap
@@ -866,16 +1180,34 @@ impl SourcePresentation {
     }
 
     pub(crate) fn table_menu(
-        &self,
+        &mut self,
         menu: gpui_kit::component::menu::PopupMenu,
+        cx: &App,
     ) -> gpui_kit::component::menu::PopupMenu {
         use super::tables::*;
         use crate::ui::i18n::{L10nKey, t};
+        self.prepare_format_menu(cx);
+        let menu = self.format_menu(menu).scrollable(true);
+        let menu = self.clipboard_menu(self.formula_menu(self.spelling_menu(menu)));
         if !self.live {
             return menu;
         }
         let disabled = self.active_table().is_none();
-        menu.separator()
+        let alignment = self.active_table().map(|cell| self.tables.alignment(cell));
+        let delete_row_disabled = self.active_table().is_none_or(|cell| cell.is_header());
+        let delete_column_disabled = self.active_table().is_none_or(|cell| {
+            !self.projection.leaves.iter().any(|leaf| {
+                matches!(leaf.kind, Kind::TableCell(other) if other.table() == cell.table() && other.column() != cell.column())
+            })
+        });
+        self.table_presentation_menu(menu)
+            .separator()
+            .menu_with_disabled(
+                t(L10nKey::EditorTableCopyMarkdown),
+                Box::new(CopyTableAsMarkdown),
+                disabled,
+            )
+            .menu(t(L10nKey::EditorTableInsert), Box::new(InsertTable))
             .menu_with_disabled(
                 t(L10nKey::EditorTableInsertRowBefore),
                 Box::new(InsertRowBefore),
@@ -887,9 +1219,14 @@ impl SourcePresentation {
                 disabled,
             )
             .menu_with_disabled(
+                t(L10nKey::EditorTableDuplicateRow),
+                Box::new(DuplicateRow),
+                disabled,
+            )
+            .menu_with_disabled(
                 t(L10nKey::EditorTableDeleteRow),
                 Box::new(DeleteRow),
-                disabled,
+                delete_row_disabled,
             )
             .menu_with_disabled(
                 t(L10nKey::EditorTableInsertColumnBefore),
@@ -904,26 +1241,35 @@ impl SourcePresentation {
             .menu_with_disabled(
                 t(L10nKey::EditorTableDeleteColumn),
                 Box::new(DeleteColumn),
+                delete_column_disabled,
+            )
+            .menu_with_disabled(
+                t(L10nKey::EditorTableDeleteTable),
+                Box::new(DeleteTable),
                 disabled,
             )
             .separator()
-            .menu_with_disabled(
+            .menu_with_check_and_disabled(
                 t(L10nKey::EditorTableAlignDefault),
+                alignment == Some(markdown::mdast::AlignKind::None),
                 Box::new(AlignDefault),
                 disabled,
             )
-            .menu_with_disabled(
+            .menu_with_check_and_disabled(
                 t(L10nKey::EditorTableAlignLeft),
+                alignment == Some(markdown::mdast::AlignKind::Left),
                 Box::new(AlignLeft),
                 disabled,
             )
-            .menu_with_disabled(
+            .menu_with_check_and_disabled(
                 t(L10nKey::EditorTableAlignCenter),
+                alignment == Some(markdown::mdast::AlignKind::Center),
                 Box::new(AlignCenter),
                 disabled,
             )
-            .menu_with_disabled(
+            .menu_with_check_and_disabled(
                 t(L10nKey::EditorTableAlignRight),
+                alignment == Some(markdown::mdast::AlignKind::Right),
                 Box::new(AlignRight),
                 disabled,
             )
@@ -935,7 +1281,42 @@ impl SourcePresentation {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.state.selection = self.map_live_caret(self.state.selection, cx);
+        self.cancel_reorder(cx);
+        if self.formula_command(&command, window, cx) {
+            return;
+        }
+        let toggle_task = matches!(command, Command::ToggleTask { .. });
+        if !toggle_task {
+            self.goal_x = None;
+        }
+        self.input_generation = self.input_generation.wrapping_add(1);
+        if matches!(
+            command,
+            Command::Undo | Command::Redo | Command::Reload { .. }
+        ) {
+            self.link_destination = None;
+        }
+        // A late unmark/blur from an idle presentation must not finish a
+        // different split's newly acquired composition.
+        if matches!(
+            command,
+            Command::FinishComposition | Command::CancelComposition
+        ) && self.state.composition.is_none()
+        {
+            if self.focus.is_focused(window) {
+                self.retire_native_composition(false, cx);
+            }
+            return;
+        }
+        self.caret_selection = None;
+        self.extra_carets.clear();
+        self.reveal_block_command(&command, cx);
+        if !toggle_task {
+            self.state.selection = self.map_live_caret(self.state.selection, cx);
+        }
+        self.sync_code(cx);
+        let command = self.auto_pair(command, cx);
+        let (command, code_caret) = self.code_input(command, cx);
         let command = if self.live
             && self.extra_selections.is_empty()
             && self.projection.grammar == self.document.read(cx).grammar()
@@ -955,12 +1336,8 @@ impl SourcePresentation {
             command => command,
         };
         let cell_input = |range: &Range<usize>, text: String, selected| {
-            if self.live
-                && self.projection.leaf_at(range.start).is_some_and(|leaf| {
-                    matches!(leaf.kind, Kind::TableCell(_)) && range.end <= leaf.range.end
-                })
-            {
-                super::tables::input(self.document.read(cx).source(), range, text, selected)
+            if self.extra_selections.is_empty() {
+                self.table_input(range, text, selected, cx)
             } else {
                 (text, selected)
             }
@@ -998,8 +1375,19 @@ impl SourcePresentation {
                 let (text, _) = cell_input(&range, text, None);
                 Command::Replace { range, text, kind }
             }
+            Command::BatchReplace { edits, kind } => Command::BatchReplace {
+                edits: edits
+                    .into_iter()
+                    .map(|(range, text)| {
+                        let text = cell_input(&range, text, None).0;
+                        (range, text)
+                    })
+                    .collect(),
+                kind,
+            },
             command => command,
         };
+        let command = self.protect_table_replacement(command, cx);
         let marked_before = self.state.marked_range();
         let mut after_extra = None;
         let command = if !self.extra_selections.is_empty() {
@@ -1016,33 +1404,72 @@ impl SourcePresentation {
                 _ => None,
             };
             if let Some((text, kind)) = replacement {
-                let doc = self.document.read(cx);
-                let mut edits: Vec<_> = std::iter::once(self.state.selection)
+                let mut selections: Vec<_> = std::iter::once(self.state.selection)
                     .chain(self.extra_selections.iter().copied())
-                    .map(|selection| {
-                        let mut range = selection.range();
-                        if range.is_empty() {
-                            if matches!(command, Command::Backspace) {
-                                range.start = doc.previous(range.start);
-                            }
-                            if matches!(command, Command::Delete) {
-                                range.end = doc.next(range.end);
-                            }
-                        }
-                        (range, text.clone())
-                    })
                     .collect();
-                edits.sort_by_key(|(range, _)| range.start);
-                let mut delta: isize = 0;
-                let mut resulting = Vec::new();
-                for (range, text) in &edits {
-                    resulting.push(Selection::caret(
-                        (range.start as isize + delta) as usize + text.len(),
-                    ));
-                    delta += text.len() as isize - range.len() as isize;
+                selections.sort_by_key(|selection| selection.range().start);
+                let mut edits = Vec::new();
+                for selection in &selections {
+                    let mut range = selection.range();
+                    if range.is_empty() && matches!(command, Command::Backspace | Command::Delete) {
+                        range = self.visible_delete_range(
+                            range.start,
+                            matches!(command, Command::Backspace),
+                            cx,
+                        );
+                    }
+                    if text.is_empty() {
+                        edits.extend(
+                            self.deletion_ranges(range, cx)
+                                .into_iter()
+                                .map(|range| (range, String::new())),
+                        );
+                    } else {
+                        edits.extend(self.table_replacement(range, text.clone(), cx));
+                    }
                 }
-                after_extra = Some(resulting.into_iter().skip(1).collect());
-                Command::BatchReplace { edits, kind }
+                edits.sort_by_key(|(range, _)| range.start);
+                if text.is_empty() {
+                    let mut merged: Vec<(Range<usize>, String)> = Vec::new();
+                    for (range, text) in edits {
+                        if let Some((last, _)) = merged
+                            .last_mut()
+                            .filter(|(last, _)| range.start <= last.end)
+                        {
+                            last.end = last.end.max(range.end);
+                        } else {
+                            merged.push((range, text));
+                        }
+                    }
+                    edits = merged;
+                }
+                let map = |at: usize| {
+                    let mut delta = 0isize;
+                    for (range, text) in &edits {
+                        if at < range.start {
+                            break;
+                        }
+                        if at <= range.end {
+                            return (range.start as isize + delta) as usize + text.len();
+                        }
+                        delta += text.len() as isize - range.len() as isize;
+                    }
+                    (at as isize + delta) as usize
+                };
+                let mut resulting = selections
+                    .iter()
+                    .map(|selection| Selection::caret(map(selection.range().start)));
+                let primary = resulting.next().unwrap_or(self.state.selection);
+                after_extra = Some(resulting.collect());
+                if text.is_empty() {
+                    Command::BatchReplaceSelected {
+                        kind: EditKind::Command,
+                        edits,
+                        selection: primary,
+                    }
+                } else {
+                    Command::BatchReplace { edits, kind }
+                }
             } else {
                 if matches!(
                     command,
@@ -1051,6 +1478,29 @@ impl SourcePresentation {
                     self.extra_selections.clear();
                 }
                 command
+            }
+        } else {
+            command
+        };
+        let command = if !self.is_composing() && self.extra_selections.is_empty() {
+            match command {
+                Command::Replace { range, text, .. } if text.is_empty() => {
+                    self.deletion_command(range, cx)
+                }
+                Command::Backspace | Command::Delete => {
+                    let selection = self.state.selection.range();
+                    let range = if selection.is_empty() {
+                        self.visible_delete_range(
+                            selection.start,
+                            matches!(command, Command::Backspace),
+                            cx,
+                        )
+                    } else {
+                        selection
+                    };
+                    self.deletion_command(range, cx)
+                }
+                command => command,
             }
         } else {
             command
@@ -1070,6 +1520,7 @@ impl SourcePresentation {
         let changed = self.document.update(cx, |document, cx| {
             let revision = document.revision();
             let transaction = document.command(&mut self.state, command);
+            Self::rebase_link_destination(&mut self.link_destination, self.state.id, &transaction);
             document.composition_owner = self.state.composition.as_ref().map(|_| own_view);
             let changed = document.revision() != revision;
             if changed {
@@ -1089,8 +1540,14 @@ impl SourcePresentation {
             }
             changed
         });
+        if let Some(at) = code_caret {
+            self.state.selection = Selection::caret(at);
+        }
         if let Some(selections) = after_extra {
             self.extra_selections = selections;
+        }
+        if self.state.composition.is_none() && self.focus.is_focused(window) {
+            self.retire_native_composition(marked_before.is_some(), cx);
         }
         if marked_before != self.state.marked_range() {
             let after = self.state.marked_range();
@@ -1108,6 +1565,7 @@ impl SourcePresentation {
             self.rendered_revision = None;
         }
         self.reveal_mdx_selection(cx);
+        self.sync_block_folds();
         self.sync_inline_reveal();
         if changed {
             self.geometry = None;
@@ -1116,51 +1574,21 @@ impl SourcePresentation {
         } else {
             window.notify_text_selection_changed(&self.focus);
         }
-        self.reveal_caret = true;
-        self.reveal_at = None;
+        if !toggle_task {
+            self.reveal_caret = true;
+            self.reveal_at = None;
+        }
         cx.notify();
-    }
-    fn edit_link_destination(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.projection.revision != self.document.read(cx).revision() {
-            return;
-        }
-        let Some(range) = self
-            .projection
-            .links
-            .at(self.state.selection.head())
-            .map(|link| link.destination.clone())
-        else {
-            return;
-        };
-        self.command(
-            Command::Select(Selection::new(range.start, range.end)),
-            window,
-            cx,
-        );
-        self.focus.focus(window, cx);
-    }
-    fn pointer_link_target(&self, position: Point<Pixels>, cx: &App) -> Option<&str> {
-        if !self.live || self.projection.revision != self.document.read(cx).revision() {
-            return None;
-        }
-        let at = self.point_offset(position, cx)?;
-        let link = self.projection.links.at(at)?;
-        (link.label.start <= at && at <= link.label.end).then_some(link.target.as_str())
-    }
-    fn finish_pointer_link(
-        &mut self,
-        position: Point<Pixels>,
-        modifiers: Modifiers,
-        cx: &mut Context<Self>,
-    ) {
-        let Some((revision, target)) = self.pointer_link.take() else {
-            return;
-        };
-        if link_modifier(modifiers)
-            && self.document.read(cx).revision() == revision
-            && self.pointer_link_target(position, cx) == Some(target.as_str())
+        if changed {
+            self.request_references(cx);
+            self.request_slash(window, cx);
+        } else if self.references.target.is_some()
+            && !self.reference_lease_current(self.references.generation, cx)
         {
-            self.follow_link(target, cx);
+            self.dismiss_references(cx);
+        }
+        if !self.slash_current(self.slash.generation, cx) {
+            self.dismiss_slash(cx);
         }
     }
     pub(super) fn follow_link(&mut self, target: String, cx: &mut Context<Self>) {
@@ -1168,31 +1596,46 @@ impl SourcePresentation {
             return;
         }
         if let Some(fragment) = target.strip_prefix('#') {
-            if let Some(at) = self.projection.links.anchor(fragment) {
+            if let Some(at) = if fragment.is_empty() {
+                Some(0)
+            } else {
+                self.projection.links.anchor(fragment)
+            } {
                 self.select_range(at..at, cx);
                 self.reveal_caret = true;
+                return;
             }
-            return;
+            // Missing anchors use the same localized workbench error path as
+            // missing files, without modifying source or external-image policy.
         }
         let presentation = cx.entity().entity_id();
         let revision = self.document.read(cx).revision();
+        let resource_epoch = self
+            .document
+            .read(cx)
+            .resources()
+            .map(|resources| (resources.host().id(), resources.epoch()));
         self.document.update(cx, |_, cx| {
             cx.emit(DocumentEvent::FollowLink {
                 presentation,
                 revision,
+                resource_epoch,
                 target,
             })
         });
     }
     fn caret_bounds(&self, byte: usize, cx: &App) -> Option<Bounds<Pixels>> {
-        let (revision, geometry) = self.geometry.as_ref()?;
-        if *revision != self.document.read(cx).revision() {
+        let (_, geometry) = self.geometry.as_ref()?;
+        if !self.geometry_is_current(cx) {
             return None;
         }
         let mapped = self.projection.leaf_at(byte)?;
         let leaf = geometry.get(&mapped.id)?;
         Some(Bounds::new(
-            leaf.position_for_index(mapped.display_offset(byte)),
+            leaf.position_for_caret(Caret {
+                index: mapped.display_offset(byte),
+                affinity: self.caret_affinity(byte, cx),
+            }),
             size(px(1.), leaf.caret_height()),
         ))
     }
@@ -1200,12 +1643,18 @@ impl SourcePresentation {
         self.caret_bounds(range.end, cx)
     }
     fn point_offset(&self, point: Point<Pixels>, cx: &App) -> Option<usize> {
-        self.point_offset_for(point, false, cx)
+        self.point_caret_for(point, false, cx)
+            .map(|caret| caret.byte)
     }
-    fn point_offset_for(&self, point: Point<Pixels>, activate: bool, cx: &App) -> Option<usize> {
-        let (revision, geometry) = self.geometry.as_ref()?;
+    fn point_caret_for(
+        &self,
+        point: Point<Pixels>,
+        activate: bool,
+        cx: &App,
+    ) -> Option<SourceCaret> {
+        let (_, geometry) = self.geometry.as_ref()?;
         let doc = self.document.read(cx);
-        if *revision != doc.revision() {
+        if !self.geometry_is_current(cx) {
             return None;
         }
         let (id, leaf) = geometry.iter().min_by(|(a_id, a), (b_id, b)| {
@@ -1244,10 +1693,14 @@ impl SourcePresentation {
             .then(|| leaf.atom_at(point))
             .flatten()
             .and_then(|atom| mapped.atom_source(atom.start));
-        Some(doc.boundary(
-            display.unwrap_or_else(|| mapped.source_offset(leaf.index_for_position(point))),
-            false,
-        ))
+        let caret = navigation::hit_test_caret(&mapped.text, leaf, point);
+        Some(SourceCaret {
+            byte: doc.boundary(
+                display.unwrap_or_else(|| mapped.source_offset(caret.index)),
+                false,
+            ),
+            affinity: caret.affinity,
+        })
     }
     fn select_point(
         &mut self,
@@ -1256,15 +1709,13 @@ impl SourcePresentation {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let Some(at) = self.point_offset_for(point, !extend, cx) else {
+        let Some(caret) = self.point_caret_for(point, !extend, cx) else {
             return;
         };
-        let anchor = if extend {
-            self.state.selection.anchor
-        } else {
-            at
-        };
-        self.command(Command::Select(Selection::new(anchor, at)), window, cx);
+        if !extend && self.begin_formula(caret.byte, false, window, cx) {
+            return;
+        }
+        self.select_caret(caret, extend, window, cx);
     }
     fn move_cursor(
         &mut self,
@@ -1275,61 +1726,84 @@ impl SourcePresentation {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.formula_move(horizontal, vertical, extend, edge, window, cx) {
+            return;
+        }
+        if !extend && edge.is_none() && horizontal != 0 {
+            let at = self.state.selection.head();
+            if self.begin_formula(at, horizontal < 0, window, cx) {
+                return;
+            }
+        }
         let doc = self.document.read(cx);
         let current = doc.boundary(self.state.selection.head, false);
-        let at = if let Some(end) = edge {
-            self.visual_line_edge(current, end, cx).unwrap_or_else(|| {
-                let row = doc.source().offset_to_point(current).row;
-                if end {
-                    doc.source().line_end_offset(row)
-                } else {
-                    doc.source().line_start_offset(row)
-                }
+        let goal_x = (vertical != 0)
+            .then(|| {
+                self.goal_x.or_else(|| {
+                    self.caret_bounds(current, cx)
+                        .map(|caret| caret.left() - self.scroll.offset().x)
+                })
             })
+            .flatten();
+        let table_target =
+            (edge.is_some() || vertical != 0 || extend || self.state.selection.range().is_empty())
+                .then(|| self.table_arrow_target(current, horizontal, vertical, edge, cx))
+                .flatten();
+        let target = if let Some(target) = table_target {
+            target
+        } else if let Some(end) = edge {
+            let byte = self.logical_line_edge(current, end, cx);
+            if end {
+                SourceCaret::upstream(byte)
+            } else {
+                SourceCaret::new(byte)
+            }
         } else if vertical != 0 {
             self.vertical_target(current, vertical as f32, cx)
                 .unwrap_or_else(|| {
-                    let point = doc.source().offset_to_point(current);
-                    let last = doc.source().offset_to_point(doc.source().len()).row;
-                    let row = if vertical < 0 {
-                        point.row.saturating_sub(1)
-                    } else {
-                        (point.row + 1).min(last)
-                    };
-                    let start = doc.source().line_start_offset(row);
-                    let end = doc.source().line_end_offset(row);
-                    doc.boundary((start + point.column as usize).min(end), false)
+                    SourceCaret::new(self.vertical_fallback(current, vertical < 0, cx))
                 })
         } else if !extend && !self.state.selection.range().is_empty() {
-            if horizontal < 0 {
-                self.state.selection.range().start
-            } else {
-                self.state.selection.range().end
+            let at = self.visual_selection_edge(horizontal < 0, cx);
+            SourceCaret {
+                byte: at,
+                affinity: self.caret_affinity(at, cx),
             }
+        } else if let Some(target) = self.visual_horizontal_target(current, horizontal < 0, cx) {
+            target
         } else if self.live {
-            self.visible_step(current, horizontal < 0, cx)
+            SourceCaret::new(self.visible_step(current, horizontal < 0, cx))
         } else if horizontal < 0 {
-            doc.previous(current)
+            SourceCaret::new(doc.previous(current))
         } else {
-            doc.next(current)
+            SourceCaret::new(doc.next(current))
         };
-        let at = doc.boundary(at, false);
-        let anchor = if extend {
-            self.state.selection.anchor
-        } else {
-            at
+        let target = SourceCaret {
+            byte: doc.boundary(target.byte, false),
+            ..target
         };
-        self.command(Command::Select(Selection::new(anchor, at)), window, cx);
+        if !extend
+            && edge.is_none()
+            && self.begin_formula(target.byte, horizontal < 0 || vertical < 0, window, cx)
+        {
+            return;
+        }
+        self.select_caret(target, extend, window, cx);
+        self.goal_x = goal_x;
     }
-    fn vertical_target(&self, at: usize, lines: f32, cx: &App) -> Option<usize> {
-        let (revision, geometry) = self.geometry.as_ref()?;
-        if *revision != self.document.read(cx).revision() {
+    fn vertical_target(&self, at: usize, lines: f32, cx: &App) -> Option<SourceCaret> {
+        let (_, geometry) = self.geometry.as_ref()?;
+        if !self.geometry_is_current(cx) {
             return None;
         }
         let mapped = self.projection.leaf_at(at)?;
         let current_id = mapped.id;
         let leaf = geometry.get(&mapped.id)?;
-        let caret = leaf.position_for_index(mapped.display_offset(at));
+        let caret = leaf.position_for_caret(Caret {
+            index: mapped.display_offset(at),
+            affinity: self.caret_affinity(at, cx),
+        });
+        let goal_x = self.goal_x.map_or(caret.x, |x| x + self.scroll.offset().x);
         let backward = lines < 0.;
         // A sample just past a short row can still hit that row when the next
         // block has a margin (or a tall image). Search the current frame's
@@ -1342,12 +1816,15 @@ impl SourcePresentation {
                 let y = if mapped.id == current_id {
                     caret.y + leaf.line_height() * (lines + 0.25)
                 } else {
-                    leaf.position_for_index(if backward { mapped.text.len() } else { 0 })
-                        .y
-                        + leaf.line_height() * 0.25
+                    leaf.position_for_caret(if backward {
+                        Caret::upstream(mapped.text.len())
+                    } else {
+                        Caret::new(0)
+                    })
+                    .y + leaf.line_height() * 0.25
                 };
-                let display = leaf.index_for_position(point(caret.x, y));
-                let position = leaf.position_for_index(display);
+                let target = navigation::hit_test_caret(&mapped.text, leaf, point(goal_x, y));
+                let position = leaf.position_for_caret(target);
                 let dy = if backward {
                     caret.y - position.y
                 } else {
@@ -1355,9 +1832,12 @@ impl SourcePresentation {
                 };
                 (dy > Pixels::ZERO).then(|| {
                     (
-                        mapped.source_offset(display),
+                        SourceCaret {
+                            byte: mapped.source_offset(target.index),
+                            affinity: target.affinity,
+                        },
                         dy,
-                        (position.x - caret.x).abs(),
+                        (position.x - goal_x).abs(),
                     )
                 })
             })
@@ -1369,13 +1849,16 @@ impl SourcePresentation {
             .map(|(at, _, _)| at)
     }
     fn visual_line_edge(&self, at: usize, end: bool, cx: &App) -> Option<usize> {
-        let (revision, geometry) = self.geometry.as_ref()?;
-        if *revision != self.document.read(cx).revision() {
+        let (_, geometry) = self.geometry.as_ref()?;
+        if !self.geometry_is_current(cx) {
             return None;
         }
         let mapped = self.projection.leaf_at(at)?;
         let leaf = geometry.get(&mapped.id)?;
-        let caret = leaf.position_for_index(mapped.display_offset(at));
+        let caret = leaf.position_for_caret(Caret {
+            index: mapped.display_offset(at),
+            affinity: self.caret_affinity(at, cx),
+        });
         let x = if end {
             leaf.bounds().right()
         } else {
@@ -1404,11 +1887,12 @@ impl SourcePresentation {
     fn move_page(&mut self, direction: f32, window: &mut Window, cx: &mut Context<Self>) {
         let at = self.state.selection.head;
         if let Some(caret) = self.caret_bounds(at, cx) {
-            if let Some(target) = self.point_offset(
+            if let Some(target) = self.point_caret_for(
                 point(caret.left(), caret.top() + self.viewport_height * direction),
+                false,
                 cx,
             ) {
-                self.command(Command::Select(Selection::caret(target)), window, cx);
+                self.select_caret(target, false, window, cx);
             }
         }
     }
@@ -1439,6 +1923,9 @@ impl SourcePresentation {
         true
     }
     fn indent_selection(&mut self, outdent: bool, window: &mut Window, cx: &mut Context<Self>) {
+        if self.code_indent(outdent, window, cx) {
+            return;
+        }
         if self.navigate_table(
             super::tables::Navigation::Cell { backward: outdent },
             window,
@@ -1552,6 +2039,7 @@ impl SourcePresentation {
             }
             self.command(
                 Command::BatchReplaceSelected {
+                    kind: EditKind::Command,
                     edits,
                     selection: selections[0],
                 },
@@ -1581,29 +2069,8 @@ impl SourcePresentation {
             );
             return;
         }
-        let doc = self.document.read(cx);
         let at = self.state.selection.head;
-        let row = doc.source().offset_to_point(at).row;
-        let start = doc.source().line_start_offset(row);
-        let end = doc.source().line_end_offset(row);
-        let line = doc.source().slice(start..end).to_string();
-        let target = if backward {
-            line.unicode_word_indices()
-                .rev()
-                .find(|(ix, _)| start + ix < at)
-                .map_or_else(|| doc.previous(start), |(ix, _)| start + ix)
-        } else {
-            line.unicode_word_indices()
-                .find(|(ix, word)| start + ix + word.len() > at)
-                .map_or_else(|| doc.next(end), |(ix, word)| start + ix + word.len())
-        };
-        let target = if self.live && self.projection.revision == doc.revision() {
-            self.projection
-                .leaf_at(target)
-                .map_or(target, |leaf| leaf.atomic_boundary(target, !backward))
-        } else {
-            target
-        };
+        let target = self.visible_word_target(at, backward, cx);
         if delete {
             self.command(
                 Command::Replace {
@@ -1615,12 +2082,12 @@ impl SourcePresentation {
                 cx,
             );
         } else {
-            let anchor = if extend {
-                self.state.selection.anchor
+            let caret = if backward {
+                SourceCaret::new(target)
             } else {
-                target
+                SourceCaret::upstream(target)
             };
-            self.command(Command::Select(Selection::new(anchor, target)), window, cx);
+            self.select_caret(caret, extend, window, cx);
         }
     }
     fn add_vertical_cursor(&mut self, direction: i32, _: &mut Window, cx: &mut Context<Self>) {
@@ -1630,13 +2097,30 @@ impl SourcePresentation {
             .unwrap_or(&self.state.selection)
             .head;
         if let Some(offset) = self.vertical_target(at, direction as f32, cx) {
-            self.add_selection(offset..offset, cx);
+            self.add_selection(offset.byte..offset.byte, cx);
+            let selection = Selection::caret(offset.byte);
+            if self.extra_selections.contains(&selection) {
+                self.extra_carets.push((
+                    selection,
+                    self.document.read(cx).revision(),
+                    self.live,
+                    offset.affinity,
+                ));
+            }
         }
     }
     fn visible_step(&self, at: usize, backward: bool, cx: &App) -> usize {
         let Some(leaf) = self.projection.leaf_at(at) else {
             return at;
         };
+        if leaf.kind == Kind::Rule {
+            if backward && at > leaf.range.start {
+                return leaf.range.start;
+            }
+            if !backward && at < leaf.range.end {
+                return leaf.range.end;
+            }
+        }
         if leaf.deferred {
             let document = self.document.read(cx);
             return if backward {
@@ -1647,13 +2131,8 @@ impl SourcePresentation {
         }
         let display = leaf.display_offset(at);
         if backward {
-            if let Some((ix, _)) = leaf
-                .text
-                .grapheme_indices(true)
-                .rev()
-                .find(|(ix, _)| *ix < display)
-            {
-                return leaf.source_offset(ix);
+            if let Some(range) = navigation::adjacent_grapheme(&leaf.text, display, true) {
+                return leaf.source_offset(range.start);
             }
             self.projection
                 .leaves
@@ -1661,15 +2140,27 @@ impl SourcePresentation {
                 .rev()
                 // Adjacent table cells can share a source-range boundary.
                 .skip_while(|other| other.id != leaf.id)
-                .nth(1)
-                .map_or(leaf.content_start(), |other| other.content_end())
+                .filter(|other| self.selectable_leaf(other, cx))
+                .filter(|other| other.id != leaf.id)
+                .find_map(|other| {
+                    let end = other.content_end();
+                    if end < at {
+                        return Some(end);
+                    }
+                    if end == at {
+                        return other
+                            .text
+                            .grapheme_indices(true)
+                            .next_back()
+                            .map(|(ix, _)| other.source_offset(ix))
+                            .filter(|target| *target < at);
+                    }
+                    None
+                })
+                .unwrap_or(leaf.content_start())
         } else {
-            if let Some((ix, _)) = leaf
-                .text
-                .grapheme_indices(true)
-                .find(|(ix, _)| *ix > display)
-            {
-                return leaf.source_offset(ix);
+            if let Some(range) = navigation::adjacent_grapheme(&leaf.text, display, false) {
+                return leaf.source_offset(range.end);
             }
             if display < leaf.text.len() {
                 return leaf.content_end();
@@ -1678,11 +2169,34 @@ impl SourcePresentation {
                 .leaves
                 .iter()
                 .skip_while(|other| other.id != leaf.id)
-                .nth(1)
-                .map_or(leaf.content_end(), |other| other.content_start())
+                .filter(|other| self.selectable_leaf(other, cx))
+                .filter(|other| other.id != leaf.id)
+                .find_map(|other| {
+                    let start = other.content_start();
+                    if start > at {
+                        return Some(start);
+                    }
+                    if start == at {
+                        return other
+                            .text
+                            .graphemes(true)
+                            .next()
+                            .map(|text| other.source_offset(text.len()))
+                            .filter(|target| *target > at);
+                    }
+                    None
+                })
+                .unwrap_or(leaf.content_end())
         }
     }
     fn enter(&mut self, hard: bool, window: &mut Window, cx: &mut Context<Self>) {
+        if self.formula.is_some() {
+            self.formula_enter(window, cx);
+            return;
+        }
+        if self.code_enter(window, cx) {
+            return;
+        }
         if self.live
             && self
                 .projection
@@ -1692,11 +2206,10 @@ impl SourcePresentation {
             self.command(Command::Insert("\n".into()), window, cx);
             return;
         }
-        if self.navigate_table(
-            super::tables::Navigation::Exit { backward: hard },
-            window,
-            cx,
-        ) {
+        if self.enter_table(window, cx) {
+            return;
+        }
+        if self.block_enter(hard, window, cx) {
             return;
         }
         let mut range = self.state.selection.range();
@@ -1744,6 +2257,28 @@ impl SourcePresentation {
         self.command(command, window, cx);
     }
     fn delete_prose(&mut self, backward: bool, window: &mut Window, cx: &mut Context<Self>) {
+        if self.formula.is_some() {
+            self.command(
+                if backward {
+                    Command::Backspace
+                } else {
+                    Command::Delete
+                },
+                window,
+                cx,
+            );
+            return;
+        }
+        if backward {
+            let paired = self.auto_pair(Command::Backspace, cx);
+            if matches!(paired, Command::BatchReplaceSelected { .. }) {
+                self.command(paired, window, cx);
+                return;
+            }
+        }
+        if self.code_delete(backward, window, cx) {
+            return;
+        }
         if !self.live
             || !self.state.selection.range().is_empty()
             || !self.extra_selections.is_empty()
@@ -1759,7 +2294,15 @@ impl SourcePresentation {
             );
             return;
         }
+        if self.delete_adjacent_image(backward, window, cx) {
+            return;
+        }
         let at = self.state.selection.head;
+        if let Some(range) = self.adjacent_block_atom(at, backward, cx) {
+            let command = self.deletion_command(range, cx);
+            self.command(command, window, cx);
+            return;
+        }
         let Some(leaf) = self.projection.leaf_at(at) else {
             return;
         };
@@ -1804,7 +2347,7 @@ impl SourcePresentation {
                     if super::regions::label(other.kind).is_some() {
                         self.document.read(cx).previous(at)..at
                     } else {
-                        other.content_end()..leaf.content_start()
+                        other.join_end()..leaf.join_start()
                     }
                 })
         } else if !backward && at >= leaf.content_end() {
@@ -1822,12 +2365,11 @@ impl SourcePresentation {
                     if super::regions::label(other.kind).is_some() {
                         at..self.document.read(cx).next(at)
                     } else {
-                        leaf.content_end()..other.content_start()
+                        leaf.join_end()..other.join_start()
                     }
                 })
         } else {
-            let next = self.visible_step(at, backward, cx);
-            Some(next.min(at)..next.max(at))
+            Some(self.visible_delete_range(at, backward, cx))
         };
         if let Some(range) = other.filter(|range| !range.is_empty()) {
             self.command(
@@ -1842,39 +2384,38 @@ impl SourcePresentation {
         }
     }
     fn copy(&mut self, cut: bool, window: &mut Window, cx: &mut Context<Self>) {
-        let mut ranges: Vec<_> = std::iter::once(self.state.selection)
-            .chain(self.extra_selections.iter().copied())
-            .map(Selection::range)
-            .filter(|range| !range.is_empty())
-            .collect();
-        if ranges.is_empty() {
-            return;
-        }
-        ranges.sort_by_key(|range| range.start);
-        let doc = self.document.read(cx);
-        let text = ranges
-            .iter()
-            .map(|range| doc.source().slice(range.clone()).to_string())
-            .collect::<Vec<_>>()
-            .join("\n");
-        let range = self.state.selection.range();
-        cx.write_to_clipboard(ClipboardItem::new_string(text));
-        if cut {
-            self.command(
-                Command::Replace {
-                    range,
-                    text: String::new(),
-                    kind: EditKind::Command,
-                },
-                window,
-                cx,
-            );
-        }
+        self.copy_markdown(cut, false, window, cx);
     }
     fn paste_clipboard(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(item) = cx.read_from_clipboard() else {
             return;
         };
+        if self.formula.is_some() {
+            if let Some(text) = item.text() {
+                self.formula_paste(&text, window, cx);
+            }
+            return;
+        }
+        if let Some(text) = clipboard::plain_text(&item) {
+            self.paste_text(text, window, cx);
+            return;
+        }
+        if let Some(paths) = item.entries().iter().find_map(|entry| match entry {
+            ClipboardEntry::ExternalPaths(paths) => Some(paths),
+            _ => None,
+        }) {
+            let inputs: Vec<_> = paths
+                .paths()
+                .iter()
+                .filter(|path| assets::is_image_path(path))
+                .cloned()
+                .map(assets::IncomingImage::File)
+                .collect();
+            if !inputs.is_empty() {
+                self.insert_images(inputs, window, cx);
+                return;
+            }
+        }
         if item
             .entries()
             .iter()
@@ -1891,24 +2432,6 @@ impl SourcePresentation {
             self.insert_images(images, window, cx);
             return;
         }
-        if let Some(text) = item.text() {
-            // New clipboard line breaks follow the current codec's LF insertion
-            // convention; this does not rewrite any existing document region.
-            let text = if text.contains("\r\n") {
-                text.replace("\r\n", "\n")
-            } else {
-                text
-            };
-            self.command(
-                Command::Replace {
-                    range: self.state.selection.range(),
-                    text,
-                    kind: EditKind::Paste,
-                },
-                window,
-                cx,
-            );
-        }
     }
 }
 impl Focusable for SourcePresentation {
@@ -1924,6 +2447,9 @@ impl EntityInputHandler for SourcePresentation {
         _: &mut Window,
         cx: &mut Context<Self>,
     ) -> Option<String> {
+        if self.formula.is_some() {
+            return self.formula_native_text(range, adjusted);
+        }
         let doc = self.document.read(cx);
         let range = doc.utf16_range(range);
         *adjusted = Some(doc.utf16_offset(range.start)..doc.utf16_offset(range.end));
@@ -1935,6 +2461,9 @@ impl EntityInputHandler for SourcePresentation {
         _: &mut Window,
         cx: &mut Context<Self>,
     ) -> Option<UTF16Selection> {
+        if self.formula.is_some() {
+            return self.formula_native_selection();
+        }
         let doc = self.document.read(cx);
         let selected = self.state.selection;
         let range = selected.range();
@@ -1944,11 +2473,17 @@ impl EntityInputHandler for SourcePresentation {
         })
     }
     fn marked_text_range(&self, _: &mut Window, cx: &mut Context<Self>) -> Option<Range<usize>> {
+        if self.formula.is_some() {
+            return self.formula_native_marked();
+        }
         let doc = self.document.read(cx);
         let range = self.state.marked_range()?;
         Some(doc.utf16_offset(range.start)..doc.utf16_offset(range.end))
     }
     fn unmark_text(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.formula_unmark(window, cx) {
+            return;
+        }
         self.command(Command::FinishComposition, window, cx);
     }
     fn replace_text_in_range(
@@ -1958,6 +2493,9 @@ impl EntityInputHandler for SourcePresentation {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.formula_commit_text(range.clone(), text, window, cx) {
+            return;
+        }
         if let Some(range) = range {
             let range = self.document.read(cx).utf16_range(range);
             if self.state.marked_range().as_ref() != Some(&range) {
@@ -1984,6 +2522,9 @@ impl EntityInputHandler for SourcePresentation {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.formula_preedit(range.clone(), text, selected.clone(), window, cx) {
+            return;
+        }
         let range = range.map(|range| self.document.read(cx).utf16_range(range));
         self.command(
             Command::Compose {
@@ -1999,18 +2540,41 @@ impl EntityInputHandler for SourcePresentation {
         &mut self,
         range: Range<usize>,
         _: Bounds<Pixels>,
-        _: &mut Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Option<Bounds<Pixels>> {
+        if self.formula.is_some() {
+            return self.formula_native_bounds(window, cx);
+        }
+        if !self.candidate_frame?.is_current(self, window, cx) {
+            return None;
+        }
         let range = self.document.read(cx).utf16_range(range);
-        self.caret_bounds(range.start, cx)
+        // The OS supplies the requested UTF-16 range. A marked-range query
+        // anchors its beginning; a caret query supplies the selected endpoint.
+        // Substituting selection.head makes the candidate drift by the entire
+        // preedit width and loses the requested column in wide tables.
+        let at = range.start;
+        let caret = self.caret_bounds(at, cx)?;
+        let viewport = self.scroll.bounds();
+        (caret.top() >= viewport.top()
+            && caret.bottom() <= viewport.bottom()
+            && caret.left() >= viewport.left()
+            && caret.left() <= viewport.right())
+        .then_some(caret)
     }
     fn character_index_for_point(
         &mut self,
         point: Point<Pixels>,
-        _: &mut Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Option<usize> {
+        if self.formula.is_some() {
+            return self.formula_native_bounds(window, cx).map(|_| 0);
+        }
+        if !self.candidate_frame?.is_current(self, window, cx) {
+            return None;
+        }
         Some(
             self.document
                 .read(cx)
@@ -2023,6 +2587,9 @@ impl EntityInputHandler for SourcePresentation {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.formula_native_select(range.clone(), cx) {
+            return;
+        }
         let range = self.document.read(cx).utf16_range(range);
         self.command(
             Command::Select(Selection::new(range.start, range.end)),
@@ -2031,12 +2598,19 @@ impl EntityInputHandler for SourcePresentation {
         );
     }
     fn text_length_utf16(&mut self, _: &mut Window, cx: &mut Context<Self>) -> Option<usize> {
+        if let Some(length) = self.formula_native_length() {
+            return Some(length);
+        }
         let doc = self.document.read(cx);
         Some(doc.utf16_offset(doc.source().len()))
     }
 }
 impl Render for SourcePresentation {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.schedule_formula_render(window, cx);
+        self.sync_formula_surface(cx);
+        self.projection
+            .format_theme(cx.theme().primary.opacity(0.2));
         let style = super::math::Style::new(cx.theme().foreground, window.rem_size());
         if self.math.style != Some(style) {
             self.math.style = Some(style);
@@ -2051,6 +2625,7 @@ impl Render for SourcePresentation {
         if self.live && self.rendered_revision != Some(self.document.read(cx).revision()) {
             self.sync_mdx_inline_visibility(cx);
         }
+        self.sync_code(cx);
         let view = cx.entity().downgrade();
         let ready = self
             .image_snapshot
@@ -2081,23 +2656,34 @@ impl Render for SourcePresentation {
                     |image| ImageSource::Render(image.clone()),
                 )
             })
-            .on_link_click(move |_, event, _, cx| {
+            .on_link_click(move |_, event, window, cx| {
                 let _ = view.update(cx, |view, cx| {
                     view.dragging = false;
                     if let ClickEvent::Mouse(click) = event {
                         if click.up.button == MouseButton::Left {
-                            view.finish_pointer_link(click.up.position, click.up.modifiers, cx);
+                            view.finish_pointer_link(
+                                click.up.position,
+                                click.up.modifiers,
+                                window,
+                                cx,
+                            );
                         }
                     }
                 });
             });
-        let table_width = self
-            .viewport
-            .bounds
-            .map_or(window.viewport_size().width, |bounds| bounds.size.width)
-            - window.rem_size() * 1.5;
+        let context = typography::context(context, self.live, cx);
+        let table_width = typography::content_width(
+            self.viewport
+                .bounds
+                .map_or(window.viewport_size().width, |bounds| bounds.size.width),
+            window.rem_size(),
+            self.live,
+        );
+        let table_source = self.document.read(cx).source().clone();
         if self.tables.prepare(
             &self.projection.leaves,
+            &table_source,
+            self.projection.revision,
             table_width,
             self.wrap,
             false,
@@ -2119,8 +2705,9 @@ impl Render for SourcePresentation {
         }
         if self.viewport.layout.is_none() {
             self.viewport.heights.clear();
+            self.viewport.widths.clear();
         }
-        // Heights are derived, versioned layout hints, never source ownership.
+        // Native dimensions are derived, versioned layout hints, never source ownership.
         // A table row is one variable-height virtual item; columns are culled separately.
         let mut before = Pixels::ZERO;
         let mut through = Pixels::ZERO;
@@ -2137,6 +2724,7 @@ impl Render for SourcePresentation {
             .map(|(id, _)| id);
         let mut anchor_row = None;
         let component_source = self.document.read(cx).source().clone();
+        let mut content_width = table_width;
         while ix < self.projection.leaves.len() {
             let leaf = &self.projection.leaves[ix];
             let mut end = ix + 1;
@@ -2146,6 +2734,10 @@ impl Render for SourcePresentation {
                 {
                     end += 1;
                 }
+            }
+            if self.live && self.folds.is_hidden(leaf.range.start) {
+                ix = end;
+                continue;
             }
             if self.live
                 && !super::mdx::view::visible_field(&super::mdx::view::FieldContext::new(
@@ -2158,6 +2750,22 @@ impl Render for SourcePresentation {
                 ix = end;
                 continue;
             }
+            if !self.wrap
+                && !matches!(leaf.kind, Kind::TableCell(_))
+                && !self
+                    .blocks
+                    .get(&leaf.id)
+                    .is_some_and(|block| block.version == leaf.version && block.safety_wrap)
+            {
+                if let Some((_, width)) = self
+                    .viewport
+                    .widths
+                    .get(&leaf.id)
+                    .filter(|(version, _)| *version == leaf.version)
+                {
+                    content_width = content_width.max(*width);
+                }
+            }
             let height = self
                 .viewport
                 .heights
@@ -2166,17 +2774,14 @@ impl Render for SourcePresentation {
                 .map_or_else(
                     || {
                         let lines = if leaf.deferred && self.wrap {
-                            let width = self
-                                .viewport
-                                .bounds
-                                .map_or(window.rem_size() * 40., |bounds| bounds.size.width);
+                            let width = table_width;
                             let columns =
                                 (f32::from(width) / f32::from(window.rem_size()) * 1.5).max(1.);
                             (leaf.range.len() as f32 / columns).ceil().max(1.)
                         } else {
                             1.
                         };
-                        window.rem_size() * (lines * 1.5 + 0.5)
+                        typography::estimated_height(leaf.kind, lines, self.live, window.rem_size())
                     },
                     |(_, height)| *height,
                 );
@@ -2233,15 +2838,27 @@ impl Render for SourcePresentation {
         {
             self.render_generation += 1;
             for leaf in &self.projection.leaves[visible.clone()] {
+                let language = if self.live
+                    && self
+                        .blocks
+                        .get(&leaf.id)
+                        .is_none_or(|cached| cached.version != leaf.version)
+                {
+                    self.code_language(leaf, cx)
+                } else {
+                    None
+                };
                 let cached = self.blocks.entry(leaf.id).or_insert_with(|| CachedBlock {
                     version: u64::MAX,
                     seen: 0,
                     node: BlockNode::Unknown,
+                    safety_wrap: false,
                 });
                 if cached.version != leaf.version {
+                    cached.safety_wrap = false;
                     if self.live && matches!(leaf.kind, Kind::Code(_) | Kind::Mermaid(_)) {
                         cached.node = BlockNode::CodeBlock(
-                            CodeBlock::from_code(leaf.text.clone(), None::<SharedString>)
+                            CodeBlock::from_code(leaf.text.clone(), language)
                                 .with_leaf_key(leaf.id),
                         );
                         cached.version = leaf.version;
@@ -2270,6 +2887,7 @@ impl Render for SourcePresentation {
                                             children: vec![node],
                                             spread: false,
                                             checked: None,
+                                            task_marker: None,
                                             span: None,
                                         }],
                                         ordered: matches!(
@@ -2308,7 +2926,7 @@ impl Render for SourcePresentation {
             .map(|leaf| &self.blocks[&leaf.id].node)
             .collect();
         let active_table = self.active_table();
-        let block = div()
+        let mut block = div()
             .w_full()
             .when_some(self.projection.error.as_ref(), |block, error| {
                 block.child(
@@ -2321,198 +2939,295 @@ impl Render for SourcePresentation {
                         .child(div().text_xs().child(error.clone())),
                 )
             })
-            .child(div().h(before).flex_none())
-            .children(
-                self.projection.leaves[visible.clone()]
-                    .iter()
-                    .enumerate()
-                    .filter_map(|(ix, leaf)| {
-                        if self.live
-                            && !super::mdx::view::visible_field(
-                                &super::mdx::view::FieldContext::new(
-                                    &self.projection,
-                                    leaf,
-                                    &component_source,
-                                    &self.mdx_state,
-                                ),
-                            )
-                        {
-                            return None;
-                        }
-                        let rendered = if let Kind::TableCell(cell) = leaf.kind {
-                            let global = visible.start + ix;
-                            if global > visible.start
-                                && matches!(self.projection.leaves[global - 1].kind, Kind::TableCell(other) if other.same_row(cell)) {
-                                return None;
-                            }
-                            let end = global + self.projection.leaves[global..].iter().take_while(|leaf| {
+            .child(div().h(before).flex_none());
+        for (ix, leaf) in self.projection.leaves[visible.clone()].iter().enumerate() {
+            if self.live && self.folds.is_hidden(leaf.range.start) {
+                continue;
+            }
+            if self.live
+                && !super::mdx::view::visible_field(&super::mdx::view::FieldContext::new(
+                    &self.projection,
+                    leaf,
+                    &component_source,
+                    &self.mdx_state,
+                ))
+            {
+                continue;
+            }
+            let rendered = if let Kind::TableCell(cell) = leaf.kind {
+                let global = visible.start + ix;
+                if global > visible.start
+                    && matches!(self.projection.leaves[global - 1].kind, Kind::TableCell(other) if other.same_row(cell))
+                {
+                    continue;
+                }
+                let end = global + self.projection.leaves[global..].iter().take_while(|leaf| {
                                 matches!(leaf.kind, Kind::TableCell(other) if other.same_row(cell))
                             }).count();
-                            let scroll = self.tables.scroll(cell).clone();
-                            let (row, ids) = self.tables.row(&self.projection.leaves[global..end],
-                                -scroll.offset().x, table_width, self.wrap,
-                                self.state.marked_range().as_ref(), &self.math, &context,
-                                &self.projection, &component_source, &self.mdx_state, window, cx);
+                let scroll = self.tables.scroll(cell).clone();
+                let (row, ids) = self.tables.row(
+                    &self.projection.leaves[global..end],
+                    -scroll.offset().x,
+                    table_width,
+                    self.wrap,
+                    self.state.marked_range().as_ref(),
+                    &self.math,
+                    &context,
+                    &self.projection,
+                    &component_source,
+                    &self.mdx_state,
+                    window,
+                    cx,
+                );
+                let view = cx.entity().downgrade();
+                let row = row.on_children_prepainted(move |bounds, _, cx| {
+                    let _ = view.update(cx, |view, cx| {
+                        if view.document.read(cx).revision() != revision
+                            || view.projection.revision != revision
+                        {
+                            return;
+                        }
+                        for (id, bounds) in ids.iter().zip(bounds) {
+                            if let Some(id) = id {
+                                view.table_geometry.insert(*id, bounds);
+                            }
+                        }
+                    });
+                });
+                // The header owns the toolbar in document flow, outside the
+                // table's horizontal scroll/mask but inside vertical scrolling.
+                div()
+                    .w_full()
+                    .flex()
+                    .flex_col()
+                    .when(
+                        cell.is_header()
+                            && active_table.is_some_and(|active| active.table() == cell.table()),
+                        |table| {
+                            use gpui_kit::component::{
+                                Sizable as _,
+                                button::{Button, ButtonVariants as _},
+                                menu::DropdownMenu as _,
+                            };
                             let view = cx.entity().downgrade();
-                            let row = row.on_children_prepainted(move |bounds, _, cx| {
-                                let _ = view.update(cx, |view, _| {
-                                    for (id, bounds) in ids.iter().zip(bounds) {
-                                        if let Some(id) = id { view.table_geometry.insert(*id, bounds); }
-                                    }
-                                });
-                            });
-                            // The header owns the toolbar in document flow, outside the
-                            // table's horizontal scroll/mask but inside vertical scrolling.
-                            div().w_full().flex().flex_col()
-                                .when(cell.is_header() && active_table.is_some_and(|active| active.table() == cell.table()), |table| {
-                                    use gpui_kit::component::{Sizable as _, button::{Button, ButtonVariants as _}, menu::DropdownMenu as _};
-                                    let view = cx.entity().downgrade();
-                                    let focus = self.focus.clone();
-                                    table.child(gpui_kit::component::h_flex().flex_none()
-                                        .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-                                        .child(Button::new("markdown-table-commands").small().ghost()
-                                            .label(crate::ui::i18n::t(crate::ui::i18n::L10nKey::EditorTableCommands))
+                            let focus = self.focus.clone();
+                            table.child(
+                                gpui_kit::component::h_flex()
+                                    .flex_none()
+                                    .on_mouse_down(MouseButton::Left, |_, _, cx| {
+                                        cx.stop_propagation()
+                                    })
+                                    .child(
+                                        Button::new("markdown-table-commands")
+                                            .small()
+                                            .ghost()
+                                            .label(crate::ui::i18n::t(
+                                                crate::ui::i18n::L10nKey::EditorTableCommands,
+                                            ))
                                             .dropdown_menu(move |menu, _, cx| {
                                                 let menu = menu.action_context(focus.clone());
                                                 match view.upgrade() {
-                                                    Some(view) => view.read(cx).table_menu(menu),
+                                                    Some(view) => view.update(cx, |view, cx| {
+                                                        view.table_menu(menu, cx)
+                                                    }),
                                                     None => menu,
                                                 }
-                                            })))
+                                            }),
+                                    ),
+                            )
+                        },
+                    )
+                    .child(
+                        div()
+                            .w_full()
+                            .relative()
+                            .child(
+                                div()
+                                    .id(("markdown-table-row", leaf.id))
+                                    .w_full()
+                                    .overflow_hidden()
+                                    .track_scroll(&scroll)
+                                    .child(row),
+                            )
+                            .child(
+                                gpui_kit::base::ScrollableMask::new(Axis::Horizontal, &scroll)
+                                    .id(("markdown-table-pan", leaf.id)),
+                            ),
+                    )
+                    .when(cell.is_header(), |table| {
+                        table.child(
+                            div().w_full().h_2().relative().child(
+                                gpui_kit::component::scroll::Scrollbar::horizontal(&scroll)
+                                    .id(("markdown-table-scrollbar", leaf.id))
+                                    .mode(gpui_kit::component::scroll::ScrollbarMode::Always),
+                            ),
+                        )
+                    })
+                    .into_any_element()
+            } else {
+                let context = leaf.foreground_context(&context);
+                self.blocks[&leaf.id]
+                    .node
+                    .render_with_id(
+                        ("markdown-leaf", leaf.id),
+                        FlowPosition::at(&references, ix, ix + 1 == references.len())
+                            .first(true)
+                            .last(true),
+                        &context,
+                        window,
+                        cx,
+                    )
+                    .into_any_element()
+            };
+            let rendered = if self.live && matches!(leaf.kind, Kind::Mermaid(_)) {
+                self.render_mermaid(leaf, rendered.into_any_element(), window, cx)
+            } else {
+                rendered.into_any_element()
+            };
+            let rendered = if self.live && matches!(leaf.kind, Kind::Code(_)) {
+                self.code_controls(leaf, rendered, cx)
+            } else {
+                rendered
+            };
+            let rendered = if self.live && !matches!(leaf.kind, Kind::TableCell(_)) {
+                let field = super::mdx::view::FieldContext::new(
+                    &self.projection,
+                    leaf,
+                    &component_source,
+                    &self.mdx_state,
+                );
+                super::mdx::view::render_field(&field, rendered, window, cx)
+            } else {
+                rendered
+            };
+            let rendered = if self.live {
+                self.image_surface(leaf, rendered, cx)
+            } else {
+                rendered
+            };
+            let rendered = self.render_property_leaf(leaf, rendered, cx);
+            let rendered = self.render_embeds(leaf, rendered, window, cx);
+            let rendered = self.decorate_block(leaf.range.start, rendered, cx);
+            block = block.child(MeasuredBlock {
+                view: cx.entity(),
+                id: leaf.id,
+                version: leaf.version,
+                child: div()
+                    .id(("markdown-block", leaf.id))
+                    .w(table_width)
+                    .relative()
+                    .when(self.blocks[&leaf.id].safety_wrap, |block| {
+                        block.whitespace_normal()
+                    })
+                    .children(self.reorder_grips(leaf, cx))
+                    .children(self.block_disclosure(leaf.range.start, leaf.id, cx))
+                    .when(self.live && matches!(leaf.kind, Kind::List(_)), |block| {
+                        block.pb(rems(typography::LIST_GAP))
+                    })
+                    .when(
+                        self.live
+                            && super::regions::label(leaf.kind).is_some()
+                            && !matches!(leaf.kind, Kind::Mermaid(_))
+                            && !leaf.text.is_empty(),
+                        |block| {
+                            block
+                                .font_family(cx.theme().mono_font_family.clone())
+                                .child(
+                                    div()
+                                        .text_xs()
+                                        .text_color(cx.theme().muted_foreground)
+                                        .child(crate::ui::i18n::t(
+                                            super::regions::label(leaf.kind)
+                                                .expect("source region label"),
+                                        )),
+                                )
+                        },
+                    )
+                    .when(
+                        self.live
+                            && leaf.kind == Kind::Rule
+                            && !(leaf.range.contains(&self.state.selection.head())
+                                && self.empty_slash_inline(self.state.selection.head(), cx)),
+                        |block| {
+                            block.child(BlockNode::HorizontalRule { span: None }.render_with_id(
+                                ("markdown-rule", leaf.id),
+                                FlowPosition::at(&references, ix, true),
+                                &context,
+                                window,
+                                cx,
+                            ))
+                        },
+                    )
+                    .child({
+                        let style = match leaf.kind {
+                            Kind::List(style) | Kind::Quote(style) if self.live => Some(style),
+                            _ => None,
+                        };
+                        if let Some(style) = style {
+                            let mut row = div().flex().items_start().min_w_0().w_full();
+                            let levels = style.depth.saturating_sub(1)
+                                + usize::from(style.depth > 0 && style.marker.is_none());
+                            row = row.pl(rems(levels as f32 * typography::list_level(style)));
+                            if let Some(checked) = style.task {
+                                let at = leaf.range.start;
+                                let revision = self.projection.revision;
+                                row = row.gap_2().child(
+                                    div()
+                                        .on_mouse_down(MouseButton::Left, |_, _, cx| {
+                                            cx.stop_propagation();
+                                        })
+                                        .child(
+                                            gpui_kit::component::checkbox::Checkbox::new((
+                                                "markdown-task",
+                                                leaf.id,
+                                            ))
+                                            .checked(checked)
+                                            .accessibility_label(crate::ui::i18n::t_fmt(
+                                                L10nKey::EditorMarkdownTaskLabel,
+                                                &[("text", &leaf.text)],
+                                            ))
+                                            .on_change(cx.listener(move |this, _, window, cx| {
+                                                if this.document.read(cx).revision() != revision {
+                                                    return;
+                                                }
+                                                this.command(
+                                                    Command::ToggleTask { at },
+                                                    window,
+                                                    cx,
+                                                );
+                                                this.focus.focus(window, cx);
+                                            })),
+                                        ),
+                                );
+                            }
+                            row.child(div().flex_1().min_w_0().child(rendered))
+                                .into_any_element()
+                        } else if self.live && leaf.kind == Kind::Math {
+                            let align =
+                                self.formula_alignment(leaf.range.start, leaf.math_alignment);
+                            div()
+                                .flex()
+                                .w_full()
+                                .py_2()
+                                .when(align == math_edit::alignment::Align::Left, |row| {
+                                    row.justify_start()
                                 })
-                                .child(div().w_full().relative()
-                                    .child(div().id(("markdown-table-row", leaf.id)).w_full()
-                                        .overflow_hidden().track_scroll(&scroll).child(row))
-                                    .child(gpui_kit::base::ScrollableMask::new(Axis::Horizontal, &scroll)
-                                        .id(("markdown-table-pan", leaf.id))))
+                                .when(align == math_edit::alignment::Align::Center, |row| {
+                                    row.justify_center()
+                                })
+                                .when(align == math_edit::alignment::Align::Right, |row| {
+                                    row.justify_end()
+                                })
+                                .child(rendered)
                                 .into_any_element()
                         } else {
-                            self.blocks[&leaf.id].node.render_with_id(
-                                ("markdown-leaf", leaf.id),
-                                FlowPosition::at(&references, ix, ix + 1 == references.len()).first(true).last(true),
-                                &context, window, cx,
-                            ).into_any_element()
-                        };
-                        let rendered = if self.live && matches!(leaf.kind, Kind::Mermaid(_)) {
-                            let selection = self.state.selection.range();
-                            let active = selection.start <= leaf.range.end
-                                && selection.end >= leaf.range.start;
-                            let at = leaf.range.start + leaf.text.find('\n').map_or(0, |at| at + 1);
-                            self.mermaid.render(
-                                leaf,
-                                active,
-                                rendered.into_any_element(),
-                                cx.listener(move |this, _, window, cx| {
-                                    cx.stop_propagation();
-                                    this.select_range(at..at, cx);
-                                    this.focus.focus(window, cx);
-                                }),
-                                cx,
-                            )
-                        } else {
-                            rendered.into_any_element()
-                        };
-                        let rendered = if self.live && !matches!(leaf.kind, Kind::TableCell(_)) {
-                            let field = super::mdx::view::FieldContext::new(
-                                &self.projection,
-                                leaf,
-                                &component_source,
-                                &self.mdx_state,
-                            );
-                            super::mdx::view::render_field(&field, rendered, window, cx)
-                        } else {
                             rendered
-                        };
-                        Some(MeasuredBlock {
-                            view: cx.entity(),
-                            id: leaf.id,
-                            version: leaf.version,
-                            child: div()
-                                .id(("markdown-block", leaf.id))
-                                .w(table_width)
-                                .when(
-                                    self.live
-                                        && super::regions::label(leaf.kind).is_some()
-                                        && !matches!(leaf.kind, Kind::Mermaid(_))
-                                        && !leaf.text.is_empty(),
-                                    |block| {
-                                        block
-                                            .font_family(cx.theme().mono_font_family.clone())
-                                            .child(
-                                                div()
-                                                    .text_xs()
-                                                    .text_color(cx.theme().muted_foreground)
-                                                    .child(crate::ui::i18n::t(
-                                                        super::regions::label(leaf.kind)
-                                                            .expect("source region label"),
-                                                    )),
-                                            )
-                                    },
-                                )
-                                .when(self.live && leaf.kind == Kind::Rule, |block| {
-                                    block.child(
-                                        BlockNode::HorizontalRule { span: None }.render_with_id(
-                                            ("markdown-rule", leaf.id),
-                                            FlowPosition::at(&references, ix, true),
-                                            &context,
-                                            window,
-                                            cx,
-                                        ),
-                                    )
-                                })
-                                .child({
-                                    let style = match leaf.kind {
-                                        Kind::List(style) | Kind::Quote(style) if self.live => {
-                                            Some(style)
-                                        }
-                                        _ => None,
-                                    };
-                                    if let Some(style) = style {
-                                        let mut row = div().flex().items_start().min_w_0().w_full();
-                                        let levels = style.depth.saturating_sub(1)
-                                            + usize::from(
-                                                style.depth > 0 && style.marker.is_none(),
-                                            );
-                                        row = row.pl(rems(levels as f32 * 1.5));
-                                        if let Some(checked) = style.task {
-                                            let at = leaf.range.start;
-                                            row = row.gap_2().child(
-                                                div().on_mouse_down(MouseButton::Left, |_, _, cx| {
-                                                    cx.stop_propagation();
-                                                }).child(
-                                                gpui_kit::component::checkbox::Checkbox::new((
-                                                    "markdown-task",
-                                                    leaf.id,
-                                                ))
-                                                .checked(checked)
-                                                .accessibility_label(crate::ui::i18n::t_fmt(
-                                                    L10nKey::EditorMarkdownTaskLabel,
-                                                    &[("text", &leaf.text)],
-                                                ))
-                                                .on_change(cx.listener(
-                                                    move |this, _, window, cx| {
-                                                        this.command(
-                                                            Command::ToggleTask { at },
-                                                            window,
-                                                            cx,
-                                                        );
-                                                        this.focus.focus(window, cx);
-                                                    },
-                                                )),
-                                                ),
-                                            );
-                                        }
-                                        row.child(div().flex_1().min_w_0().child(rendered))
-                                            .into_any_element()
-                                    } else {
-                                        rendered
-                                    }
-                                })
-                                .into_any_element(),
-                        })
-                    }),
-            )
-            .child(div().h(after).flex_none());
+                        }
+                    })
+                    .into_any_element(),
+            });
+        }
+        let block = block.child(div().h(after).flex_none());
         let image_status = if self.live {
             use crate::ui::i18n::{L10nKey, t};
             use gpui_kit::component::{
@@ -2538,6 +3253,8 @@ impl Render for SourcePresentation {
                         .id(SharedString::from(format!("markdown-image:{url}")))
                         .role(Role::Status)
                         .test_support()
+                        .w_full()
+                        .min_w_0()
                         .aria_label(t(key))
                         .text_xs()
                         .truncate()
@@ -2551,6 +3268,8 @@ impl Render for SourcePresentation {
                 .collect::<Vec<_>>();
             div()
                 .v_flex()
+                .w_full()
+                .min_w_0()
                 .flex_none()
                 .when(has_images, |bar| {
                     bar.px_3()
@@ -2571,7 +3290,9 @@ impl Render for SourcePresentation {
         } else {
             div().into_any_element()
         };
-        let key_context = KeyContext::parse(if !self.focus.is_focused(window) {
+        let key_context = KeyContext::parse(if self.reorder.is_some() {
+            "Markdown MarkdownReorder"
+        } else if !self.focus.is_focused(window) {
             "Markdown"
         } else if active_table.is_some() {
             "Input mode=editor Markdown MarkdownTable"
@@ -2584,14 +3305,39 @@ impl Render for SourcePresentation {
                 .id("markdown-source")
                 .test_support()
                 .size_full()
+                .relative()
                 .flex()
                 .flex_col()
                 .min_h_0()
                 .key_context(key_context)
                 .track_focus(&self.focus)
+                .capture_action(cx.listener(|this, _: &actions::MoveUp, window, cx| {
+                    if this.move_slash(false, window, cx) || this.move_reference(false, window, cx) { cx.stop_propagation(); }
+                }))
+                .capture_action(cx.listener(|this, _: &actions::MoveDown, window, cx| {
+                    if this.move_slash(true, window, cx) || this.move_reference(true, window, cx) { cx.stop_propagation(); }
+                }))
+                .capture_action(cx.listener(|this, action: &actions::Enter, window, cx| {
+                    if !action.shift && (this.accept_slash(window, cx) || this.accept_reference(window, cx)) { cx.stop_propagation(); }
+                }))
+                .capture_action(cx.listener(|this, _: &actions::MoveLeft, window, cx| {
+                    if this.horizontal_slash(false, window, cx) { cx.stop_propagation(); }
+                }))
+                .capture_action(cx.listener(|this, _: &actions::MoveRight, window, cx| {
+                    if this.horizontal_slash(true, window, cx) { cx.stop_propagation(); }
+                }))
+                .capture_action(cx.listener(|this, _: &actions::Escape, window, cx| {
+                    if this.dismiss_slash(cx) || this.dismiss_references(cx) { this.focus.focus(window, cx); cx.stop_propagation(); }
+                }))
+                .on_action(cx.listener(|this, _: &actions::ShowCompletions, _, cx| this.request_references(cx)))
                 .cursor_text()
                 .bg(cx.theme().background)
                 .text_color(cx.theme().foreground)
+                .when(self.live, |root| {
+                    root.font_family(cx.theme().font_family.clone())
+                        .text_size(rems(1.))
+                        .line_height(relative(typography::LINE_HEIGHT))
+                })
                 .when(!self.live, |root| {
                     root.font_family(cx.theme().mono_font_family.clone())
                 })
@@ -2602,7 +3348,7 @@ impl Render for SourcePresentation {
                 } else {
                     L10nKey::EditorMarkdownSourceLabel
                 }))
-                .when(window.is_a11y_active() || cfg!(test), |root| {
+                .when(window.is_a11y_active() || cfg!(any(test, feature = "native-markdown-tests")), |root| {
                     let document = self.document.read(cx);
                     let (revision, value) = self.accessibility_snapshot.get_or_insert_with(|| {
                         (document.revision(), document.source().to_string().into())
@@ -2639,7 +3385,18 @@ impl Render for SourcePresentation {
                     }
                 })
                 .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
+                    if this.formula_key(event, window, cx) { cx.stop_propagation(); return; }
+                    if this.image_key(event, window, cx) { cx.stop_propagation(); return; }
                     let key = &event.keystroke;
+                    if ((key.modifiers.shift && key.key == "f10") || key.key == "contextmenu")
+                        && this.formula_at(this.state.selection.head(), false, cx).or_else(|| this.formula_at(this.state.selection.head(), true, cx)).is_some() {
+                        this.open_formula_menu(None, window, cx); cx.stop_propagation(); return;
+                    }
+                    if key.modifiers.shift && key.key == "f10" && !key.modifiers.control && !key.modifiers.alt && !key.modifiers.platform {
+                        window.dispatch_action(Box::new(spelling::SpellingSuggestions), cx);
+                        cx.stop_propagation();
+                        return;
+                    }
                     if this.live && key.modifiers.alt && !key.modifiers.control && !key.modifiers.platform
                         && matches!(key.key.as_str(), "pageup" | "pagedown") {
                         let target = super::mdx::tabs::adjacent(&this.projection.mdx.components, this.document.read(cx).source(), &this.mdx_state, this.state.selection, key.key == "pageup");
@@ -2652,6 +3409,8 @@ impl Render for SourcePresentation {
                     if event.keystroke.key == "escape" && this.state.composition.is_some() {
                         this.command(Command::CancelComposition, window, cx);
                         cx.stop_propagation();
+                    } else if event.keystroke.key == "escape" && this.leave_mermaid_result(window, cx) {
+                        cx.stop_propagation();
                     }
                 }))
                 .drag_over::<ExternalPaths>(|style, _, _, cx| style.bg(cx.theme().drag_border.opacity(0.12)))
@@ -2660,10 +3419,47 @@ impl Render for SourcePresentation {
                     cx.stop_propagation();
                 }))
                 .on_action(cx.listener(|view, _: &LoadImages, _, cx| view.refresh_images(true, cx)))
+                .on_action(cx.listener(|this, _: &formats::Bold, window, cx| this.format_command(formats::Format::Bold, None, window, cx)))
+                .on_action(cx.listener(|this, _: &formats::Italic, window, cx| this.format_command(formats::Format::Italic, None, window, cx)))
+                .on_action(cx.listener(|this, _: &formats::Underline, window, cx| this.format_command(formats::Format::Underline, None, window, cx)))
+                .on_action(cx.listener(|this, _: &formats::Strike, window, cx| this.format_command(formats::Format::Strike, None, window, cx)))
+                .on_action(cx.listener(|this, _: &formats::InlineCode, window, cx| this.format_command(formats::Format::Code, None, window, cx)))
+                .on_action(cx.listener(|this, _: &formats::Highlight, window, cx| this.format_command(formats::Format::Highlight, None, window, cx)))
+                .on_action(cx.listener(|this, _: &formats::ClearHighlightColor, window, cx| this.format_command(formats::Format::HighlightColor, None, window, cx)))
+                .on_action(cx.listener(|this, action: &formats::SetHighlightColor, window, cx| this.format_command(formats::Format::HighlightColor, Some(action.color), window, cx)))
+                .on_action(cx.listener(|this, _: &formats::CustomHighlightColor, window, cx| this.custom_format_color(formats::Format::HighlightColor, window, cx)))
+                .on_action(cx.listener(|this, _: &formats::ClearTextColor, window, cx| this.format_command(formats::Format::TextColor, None, window, cx)))
+                .on_action(cx.listener(|this, _: &formats::CustomTextColor, window, cx| this.custom_format_color(formats::Format::TextColor, window, cx)))
+                .on_action(cx.listener(|this, _: &formats::ApplyCustomColor, window, cx| this.apply_format_color(window, cx)))
+                .on_action(cx.listener(|this, _: &formats::CancelCustomColor, window, cx| { this.cancel_format_color(window, cx); }))
+                .on_action(cx.listener(|view, _: &image_edit::EditImage, window, cx| view.edit_image(window, cx)))
+                .on_action(cx.listener(|view, _: &image_edit::PreviewImage, window, cx| view.preview_image(window, cx)))
+                .on_action(cx.listener(|view, _: &image_edit::DeleteImage, window, cx| view.delete_image(window, cx)))
+                .on_action(cx.listener(|view, _: &image_edit::FitImages, window, cx| view.fit_images(window, cx)))
+                .on_mouse_move(cx.listener(|view, event: &MouseMoveEvent, _, cx| {
+                    if view.move_image_resize(event.position, cx) { cx.stop_propagation(); }
+                    else { view.hover_link(event, cx); }
+                }))
+                .on_hover(cx.listener(|view, hovered: &bool, window, cx| {
+                    if !*hovered { view.leave_link_hover(window, cx); }
+                }))
+                .on_action(cx.listener(|this, _: &properties::EditDocumentProperties, window, cx| this.open_properties(window, cx)))
+                .on_action(cx.listener(|this, _: &properties::AddDocumentProperty, window, cx| this.add_document_property(false, window, cx)))
+                .on_action(cx.listener(|this, _: &properties::AddDocumentTag, window, cx| this.add_document_property(true, window, cx)))
+                .on_action(cx.listener(|view, _: &spelling::SpellingSuggestions, window, cx| view.open_spelling(None, window, cx)))
+                .on_action(cx.listener(|this, _: &mermaid_authoring::EditDiagramSource, window, cx| {
+                    this.edit_mermaid_source(None, window, cx);
+                }))
+                .on_action(cx.listener(|this, _: &mermaid_authoring::ShowDiagramResult, window, cx| {
+                    if !this.show_mermaid_result(None, window, cx) {
+                        cx.propagate();
+                    }
+                }))
                 .on_action(cx.listener(|this, _: &EditLinkDestination, window, cx| {
                     this.edit_link_destination(window, cx);
                 }))
-                .on_action(cx.listener(|this, _: &FollowLink, _, cx| {
+                .on_action(cx.listener(|this, _: &FollowLink, window, cx| {
+                    this.focus.focus(window, cx);
                     if let Some(link) = this.projection.links.at(this.state.selection.head()).cloned() {
                         this.follow_link(link.target, cx);
                     }
@@ -2671,44 +3467,58 @@ impl Render for SourcePresentation {
                 .on_mouse_down(
                     MouseButton::Left,
                     cx.listener(|this, event: &MouseDownEvent, window, cx| {
+                        // Command/status surfaces are not document text. Their
+                        // pointer-down must not select the nearest image/leaf
+                        // and grow a contextual toolbar before the click runs.
+                        if !this.scroll.bounds().contains(&event.position) {
+                            return;
+                        }
                         this.focus.focus(window, cx);
-                        this.pointer_link = link_modifier(event.modifiers)
-                            .then(|| this.pointer_link_target(event.position, cx))
-                            .flatten()
-                            .map(|target| (this.projection.revision, target.to_owned()));
+                        this.begin_pointer_link(event, cx);
                         if this.pointer_link.is_some() {
                             this.dragging = false;
                         } else {
                             this.dragging = true;
-                            this.select_point(event.position, event.modifiers.shift, window, cx);
+                            this.pointer_down(event, window, cx);
                         }
                         cx.stop_propagation();
                     }),
                 )
-                .on_mouse_move(cx.listener(|this, event: &MouseMoveEvent, window, cx| {
-                    if this.dragging {
-                        this.select_point(event.position, true, window, cx);
-                    }
-                }))
                 .on_mouse_up(
                     MouseButton::Left,
-                    cx.listener(|this, event: &MouseUpEvent, _, cx| {
+                    cx.listener(|this, event: &MouseUpEvent, window, cx| {
+                        if this.finish_reorder(Some(event.position), window, cx) { cx.stop_propagation(); return; }
+                        if this.tables.is_resizing() { this.update_table_resize(event.position, window, cx); }
+                        this.finish_table_resize(window, cx);
+                        if this.finish_image_resize(false, window, cx) { cx.stop_propagation(); return; }
                         this.dragging = false;
+                        this.drag_pointer = None;
+                        this.drag_origin = None;
                         // editor_host may consume a rendered link's mouse-up.
                         // Otherwise the editing surface completes the same
                         // captured gesture; neither path navigates twice.
-                        this.finish_pointer_link(event.position, event.modifiers, cx);
+                        this.finish_pointer_link(event.position, event.modifiers, window, cx);
                     }),
                 )
                 .on_mouse_up_out(
                     MouseButton::Left,
-                    cx.listener(|this, _, _, _| {
+                    cx.listener(|this, event: &MouseUpEvent, window, cx| {
+                        if this.cancel_reorder(cx) { cx.stop_propagation(); return; }
+                        if this.tables.is_resizing() { this.update_table_resize(event.position, window, cx); }
+                        this.finish_table_resize(window, cx);
+                        this.finish_image_resize(false, window, cx);
                         this.dragging = false;
+                        this.drag_pointer = None;
+                        this.drag_origin = None;
                         this.pointer_link = None;
                     }),
                 )
+                .on_action(cx.listener(|this, _: &super::tables::InsertTable, window, cx| this.insert_table(window, cx)))
+                .on_action(cx.listener(|this, _: &super::tables::CopyTableAsMarkdown, window, cx| this.copy_table_markdown(window, cx)))
                 .on_action(cx.listener(|this, _: &super::tables::InsertRowBefore, window, cx| this.table_command(super::tables::Operation::InsertRowBefore, window, cx)))
                 .on_action(cx.listener(|this, _: &super::tables::InsertRowAfter, window, cx| this.table_command(super::tables::Operation::InsertRowAfter, window, cx)))
+                .on_action(cx.listener(|this, _: &super::tables::DuplicateRow, window, cx| this.table_command(super::tables::Operation::DuplicateRow, window, cx)))
+                .on_action(cx.listener(|this, _: &super::tables::DeleteTable, window, cx| this.table_command(super::tables::Operation::DeleteTable, window, cx)))
                 .on_action(cx.listener(|this, _: &super::tables::DeleteRow, window, cx| this.table_command(super::tables::Operation::DeleteRow, window, cx)))
                 .on_action(cx.listener(|this, _: &super::tables::InsertColumnBefore, window, cx| this.table_command(super::tables::Operation::InsertColumnBefore, window, cx)))
                 .on_action(cx.listener(|this, _: &super::tables::InsertColumnAfter, window, cx| this.table_command(super::tables::Operation::InsertColumnAfter, window, cx)))
@@ -2717,9 +3527,19 @@ impl Render for SourcePresentation {
                 .on_action(cx.listener(|this, _: &super::tables::AlignLeft, window, cx| this.table_command(super::tables::Operation::AlignLeft, window, cx)))
                 .on_action(cx.listener(|this, _: &super::tables::AlignCenter, window, cx| this.table_command(super::tables::Operation::AlignCenter, window, cx)))
                 .on_action(cx.listener(|this, _: &super::tables::AlignRight, window, cx| this.table_command(super::tables::Operation::AlignRight, window, cx)))
+                .on_action(cx.listener(|this, _: &table_presentation::FitColumn, window, cx| this.table_fit(None, window, cx)))
+                .on_action(cx.listener(|this, _: &table_presentation::WidenColumn, window, cx| this.table_fit(Some(16.), window, cx)))
+                .on_action(cx.listener(|this, _: &table_presentation::NarrowColumn, window, cx| this.table_fit(Some(-16.), window, cx)))
+                .on_action(cx.listener(|this, _: &table_presentation::StyleGrid, window, cx| this.table_style(super::tables::metadata::Style::Grid, window, cx)))
+                .on_action(cx.listener(|this, _: &table_presentation::StyleStriped, window, cx| this.table_style(super::tables::metadata::Style::Striped, window, cx)))
+                .on_action(cx.listener(|this, _: &table_presentation::StyleHeader, window, cx| this.table_style(super::tables::metadata::Style::Header, window, cx)))
+                .on_action(cx.listener(|this, _: &table_presentation::StyleMinimal, window, cx| this.table_style(super::tables::metadata::Style::Minimal, window, cx)))
                 .on_action(
                     cx.listener(|this, _: &actions::Copy, window, cx| this.copy(false, window, cx)),
                 )
+                .on_action(cx.listener(|this, _: &clipboard::CopyMarkdownOnly, window, cx| this.copy_markdown(false, true, window, cx)))
+                .on_action(cx.listener(|this, _: &clipboard::CopyContents, window, cx| this.copy_contents(false, window, cx)))
+                .on_action(cx.listener(|this, _: &clipboard::CopyContentsMarkdown, window, cx| this.copy_contents(true, window, cx)))
                 .on_action(
                     cx.listener(|this, _: &actions::Cut, window, cx| this.copy(true, window, cx)),
                 )
@@ -2737,7 +3557,9 @@ impl Render for SourcePresentation {
                         Kind::List(style) if style.task.is_some() => Some(style.start),
                         _ => None,
                     });
-                    if this.live && !this.is_composing() {
+                    if this.live && !this.is_composing()
+                        && this.projection.revision == this.document.read(cx).revision()
+                    {
                         if let Some(at) = task {
                             this.command(Command::ToggleTask { at }, window, cx);
                             return;
@@ -2746,13 +3568,13 @@ impl Render for SourcePresentation {
                     cx.propagate();
                 }))
                 .on_action(cx.listener(|this, _: &actions::Backspace, window, cx| {
-                    this.delete_prose(true, window, cx)
+                    if !this.delete_document_property_boundary(true, window, cx) { this.delete_prose(true, window, cx); }
                 }))
                 .on_action(cx.listener(|this, _: &actions::Delete, window, cx| {
-                    this.delete_prose(false, window, cx)
+                    if !this.delete_document_property_boundary(false, window, cx) { this.delete_prose(false, window, cx); }
                 }))
                 .on_action(cx.listener(|this, action: &actions::Enter, window, cx| {
-                    this.enter(action.shift, window, cx)
+                    if !this.enter_document_property(window, cx) { this.enter(action.shift, window, cx); }
                 }))
                 .on_action(cx.listener(|this, _: &actions::Indent, window, cx| {
                     this.indent_selection(false, window, cx)
@@ -2823,6 +3645,7 @@ impl Render for SourcePresentation {
                     },
                 ))
                 .on_action(cx.listener(|this, _: &actions::SelectAll, window, cx| {
+                    if this.formula_select_all(window, cx) { return; }
                     let end = this.document.read(cx).source().len();
                     this.command(Command::Select(Selection::new(0, end)), window, cx);
                 }))
@@ -2833,10 +3656,12 @@ impl Render for SourcePresentation {
                     this.move_cursor(1, 0, false, None, window, cx)
                 }))
                 .on_action(cx.listener(|this, _: &actions::MoveUp, window, cx| {
-                    this.move_cursor(0, -1, false, None, window, cx)
+                    this.move_cursor(0, -1, false, None, window, cx);
+                    this.enter_document_property(window, cx);
                 }))
                 .on_action(cx.listener(|this, _: &actions::MoveDown, window, cx| {
-                    this.move_cursor(0, 1, false, None, window, cx)
+                    this.move_cursor(0, 1, false, None, window, cx);
+                    this.enter_document_property(window, cx);
                 }))
                 .on_action(cx.listener(
                     |this, _: &gpui_kit::base::actions::SelectLeft, window, cx| {
@@ -2885,32 +3710,49 @@ impl Render for SourcePresentation {
                     }),
                 )
                 .on_action(cx.listener(|this, _: &actions::MoveToStart, window, cx| {
-                    this.command(Command::Select(Selection::caret(0)), window, cx)
+                    if this.formula_document_edge(false, false, window, cx) { return; }
+                    this.select_caret(SourceCaret::new(0), false, window, cx)
                 }))
                 .on_action(cx.listener(|this, _: &actions::MoveToEnd, window, cx| {
+                    if this.formula_document_edge(true, false, window, cx) { return; }
                     let end = this.document.read(cx).source().len();
-                    this.command(Command::Select(Selection::caret(end)), window, cx);
+                    this.select_caret(SourceCaret::upstream(end), false, window, cx);
                 }))
                 .on_action(cx.listener(|this, _: &actions::SelectToStart, window, cx| {
-                    this.command(
-                        Command::Select(Selection::new(this.state.selection.anchor, 0)),
-                        window,
-                        cx,
-                    )
+                    if this.formula_document_edge(false, true, window, cx) { return; }
+                    this.select_caret(SourceCaret::new(0), true, window, cx)
                 }))
                 .on_action(cx.listener(|this, _: &actions::SelectToEnd, window, cx| {
+                    if this.formula_document_edge(true, true, window, cx) { return; }
                     let end = this.document.read(cx).source().len();
-                    this.command(
-                        Command::Select(Selection::new(this.state.selection.anchor, end)),
-                        window,
-                        cx,
-                    );
+                    this.select_caret(SourceCaret::upstream(end), true, window, cx);
                 }))
                 .on_action(cx.listener(|this, _: &actions::Escape, window, cx| {
+                    if this.formula.is_some() { this.command(Command::CancelComposition, window, cx); this.focus.focus(window, cx); return; }
+                    if this.tables.is_resizing() {
+                        this.tables.cancel_resize();
+                        this.geometry = None;
+                        this.viewport.heights.clear();
+                        this.focus.focus(window, cx);
+                        cx.notify();
+                        return;
+                    }
+                    if this.cancel_reorder(cx) { return; }
+                    if this.finish_image_resize(true, window, cx) { return; }
+                    if this.cancel_image_insertion(cx) { return; }
                     if this.state.composition.is_some() {
                         this.command(Command::CancelComposition, window, cx);
+                    } else if this.exit_link_destination(window, cx) {
+                        // Escape closes explicit destination source without editing the document.
+                    } else if this.cancel_format_color(window, cx) {
+                    } else if this.escape_document_properties(window, cx) {
+                        // The document inspector returns focus without a source transaction.
+                    } else if this.leave_mermaid_result(window, cx) {
+                        // Escape restores the retained diagram source selection.
                     } else if this.navigate_table(super::tables::Navigation::Exit { backward: false }, window, cx) {
                         // Escape leaves the table without changing its source.
+                    } else if this.exit_code(window, cx) {
+                        // Escape returns from local source, or leaves the code block.
                     } else {
                         cx.propagate();
                     }
@@ -2919,7 +3761,43 @@ impl Render for SourcePresentation {
                     div().id("markdown-image-insertion-status").test_support().role(Role::Status)
                         .flex_shrink_0().aria_label(status.clone()).text_sm().text_color(cx.theme().muted_foreground).child(status)
                 ))
+                .when_some(self.clipboard_status.clone(), |root, status| root.child(
+                    div().id("markdown-clipboard-status").test_support().role(Role::Status)
+                        .aria_label(status.clone()).text_sm().text_color(cx.theme().muted_foreground).child(status)
+                ))
+                .child(self.formula_toolbar(cx))
+                .child(self.formula_feedback(cx))
+                .on_action(cx.listener(|this, _: &math_edit::FormulaMenu, window, cx| this.open_formula_menu(None, window, cx)))
+                .on_action(cx.listener(|this, _: &math_edit::CopyFormulaLatex, _, cx| this.copy_formula_latex(cx)))
+                .on_action(cx.listener(|this, _: &math_edit::ExportFormulaPng, window, cx| this.export_formula(true, window, cx)))
+                .on_action(cx.listener(|this, _: &math_edit::ExportFormulaSvg, window, cx| this.export_formula(false, window, cx)))
+                .on_action(cx.listener(|this, _: &math_edit::AlignFormulaLeft, window, cx| this.align_formula(math_edit::alignment::Align::Left, window, cx)))
+                .on_action(cx.listener(|this, _: &math_edit::AlignFormulaCenter, window, cx| this.align_formula(math_edit::alignment::Align::Center, window, cx)))
+                .on_action(cx.listener(|this, _: &math_edit::AlignFormulaRight, window, cx| this.align_formula(math_edit::alignment::Align::Right, window, cx)))
+                .on_action(cx.listener(|this, _: &math_edit::CommitFormula, window, cx| { this.finish_formula(true, false, window, cx); this.focus.focus(window, cx); }))
+                .on_action(cx.listener(|this, _: &math_edit::CancelFormula, window, cx| { this.finish_formula(false, false, window, cx); this.focus.focus(window, cx); }))
+                .on_action(cx.listener(|this, _: &math_edit::EditFormulaSource, window, cx| this.formula_source(window, cx)))
+                .on_action(cx.listener(|this, _: &math_edit::MatrixAddRow, window, cx| this.formula_matrix(0, window, cx)))
+                .on_action(cx.listener(|this, _: &math_edit::MatrixRemoveRow, window, cx| this.formula_matrix(1, window, cx)))
+                .on_action(cx.listener(|this, _: &math_edit::MatrixAddColumn, window, cx| this.formula_matrix(2, window, cx)))
+                .on_action(cx.listener(|this, _: &math_edit::MatrixRemoveColumn, window, cx| this.formula_matrix(3, window, cx)))
+                .child(self.render_references(window, cx))
+                .child(self.render_slash(window, cx))
+                .children(self.reorder_status(cx))
                 .child(image_status)
+                .child(gpui_kit::component::h_flex().w_full().flex_none().flex_wrap().gap_1()
+                    .child(self.format_toolbar(window, cx))
+                    .when(self.live, |toolbar| {
+                        use gpui_kit::component::{Sizable as _, button::{Button, ButtonVariants as _}};
+                        toolbar.child(div().on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                            .child(Button::new("markdown-properties").small().ghost()
+                                .label(t(L10nKey::EditorDocumentProperties))
+                                .on_click(cx.listener(|this, _, window, cx| this.open_properties(window, cx)))))
+                            .child(self.block_toolbar(cx))
+                            .child(self.table_insert_button(cx))
+                    }))
+                .child(self.image_toolbar(cx))
+                .when(self.live && self.properties.open, |root| root.child(self.render_properties(cx)))
                 .when(self.live && self.projection.links.at(self.state.selection.head()).is_some(), |root| {
                     use gpui_kit::component::button::{Button, ButtonVariants as _};
                     use gpui_kit::component::Sizable as _;
@@ -2944,7 +3822,9 @@ impl Render for SourcePresentation {
                     "markdown-source-scrollbar",
                     div()
                         .id("markdown-source-scroll")
+                        .test_support()
                         .flex_1().min_h_0().w_full()
+                        .relative()
                         .overflow_y_scroll()
                         .overflow_x_scroll()
                         .track_scroll(&self.scroll)
@@ -2955,9 +3835,24 @@ impl Render for SourcePresentation {
                         }))
                         .child(
                             div()
-                                .p_3()
+                                .p(rems(typography::inset(self.live)))
+                                .when(!self.wrap, |content| {
+                                    // ScrollHandle measures its immediate child, not
+                                    // overflowing glyphs inside fixed-width blocks.
+                                    // Keep block/table viewport widths unchanged and
+                                    // publish native text extents on this scroll child.
+                                    content.min_w(content_width + window.rem_size() * typography::inset(self.live) * 2.)
+                                })
                                 .capture_any_mouse_down(cx.listener(
                                     |this, event: &MouseDownEvent, window, cx| {
+                                        if event.button == MouseButton::Left && this.formula_pointer(event, window, cx) { cx.stop_propagation(); return; }
+                                        if event.button == MouseButton::Left && !event.modifiers.shift && this.begin_formula_from_pointer(event.position, window, cx) { cx.stop_propagation(); return; }
+                                        if event.button == MouseButton::Right && this.formula_context_at(event.position, window, cx) { cx.stop_propagation(); return; }
+                                        if event.button == MouseButton::Right && this.spelling_at_point(event.position, cx).is_some() {
+                                            this.open_spelling(Some(event.position), window, cx);
+                                            cx.stop_propagation();
+                                            return;
+                                        }
                                         if event.button != MouseButton::Left
                                             || !this.geometry.as_ref().is_some_and(|(revision, geometry)| {
                                                 *revision == this.document.read(cx).revision()
@@ -2966,29 +3861,27 @@ impl Render for SourcePresentation {
                                         {
                                             return;
                                         }
-                                        if link_modifier(event.modifiers) {
-                                            this.pointer_link = this.pointer_link_target(event.position, cx)
-                                                .map(|target| (this.projection.revision, target.to_owned()));
-                                            if this.pointer_link.is_some() {
-                                                this.dragging = false;
-                                                return;
-                                            }
-                                        }
                                         this.focus.focus(window, cx);
+                                        if this.begin_pointer_link(event, cx) {
+                                            this.dragging = false;
+                                            return;
+                                        }
                                         this.dragging = true;
-                                        this.select_point(
-                                            event.position,
-                                            event.modifiers.shift,
-                                            window,
-                                            cx,
-                                        );
+                                        this.pointer_down(event, window, cx);
                                         cx.stop_propagation();
                                     },
                                 ))
                                 .child(block),
-                        ),
+                        )
+                        .children(self.reorder_indicator(window, cx)),
                     &self.scroll,
                 ));
+        let root = self.code_actions(root, cx);
+        let root = root.children(self.spelling_overlay(window, cx));
+        let root = root.children(self.formula_overlay(window));
+        let root = root.children(self.link_preview(cx));
+        let root = self.block_actions(root, cx);
+        let root = self.reorder_actions(root, cx);
         SourceElement {
             child: root.into_any_element(),
             view: cx.entity(),
@@ -3077,7 +3970,7 @@ impl IntoElement for SourceElement {
 }
 impl Element for SourceElement {
     type RequestLayoutState = ();
-    type PrepaintState = ();
+    type PrepaintState = bool;
     fn id(&self) -> Option<ElementId> {
         None
     }
@@ -3101,20 +3994,31 @@ impl Element for SourceElement {
         _: &mut (),
         window: &mut Window,
         cx: &mut App,
-    ) {
+    ) -> bool {
         self.view.update(cx, |view, _| {
             view.viewport.frame.clear();
+            view.viewport.visible = self.visible.clone();
             view.table_geometry.clear();
         });
         let table_measurement_changed = self.view.update(cx, |view, cx| {
-            let width = view
-                .viewport
-                .bounds
-                .map_or(window.viewport_size().width, |bounds| bounds.size.width)
-                - window.rem_size() * 1.5;
+            if view.document.read(cx).revision() != self.revision
+                || view.projection.revision != self.revision
+            {
+                return false;
+            }
+            let width = typography::content_width(
+                view.viewport
+                    .bounds
+                    .map_or(window.viewport_size().width, |bounds| bounds.size.width),
+                window.rem_size(),
+                view.live,
+            );
             let marked = view.state.marked_range();
+            let source = view.document.read(cx).source().clone();
             let columns = view.tables.prepare(
                 &view.projection.leaves,
+                &source,
+                view.projection.revision,
                 width,
                 view.wrap,
                 true,
@@ -3184,26 +4088,55 @@ impl Element for SourceElement {
                 view.geometry = None;
                 view.viewport.bounds = Some(view.scroll.bounds());
                 view.viewport_height = view.scroll.bounds().size.height;
-                return;
+                return true;
             }
             if view.document.read(cx).revision() != self.revision
                 || view.projection.revision != self.revision
             {
                 view.geometry = None;
-                return;
+                return true;
             }
             let viewport = view.scroll.bounds();
-            let layout = (viewport.size.width, window.rem_size());
-            let reflow = view.viewport.layout.is_some_and(|old| old != layout);
+            let layout =
+                typography::LayoutKey::new(viewport.size.width, view.live, view.wrap, window, cx);
+            let reflow = view
+                .viewport
+                .layout
+                .as_ref()
+                .is_some_and(|old| old != &layout);
             if reflow {
                 view.viewport.heights.clear();
+                view.viewport.widths.clear();
+                for block in view.blocks.values_mut() {
+                    block.safety_wrap = false;
+                }
             }
             view.viewport.layout = Some(layout);
             let mut measured = false;
+            let mut extent_changed = false;
+            let mut safety_reflow = false;
             for (id, version, bounds) in &view.viewport.frame {
                 let height = bounds.size.height.max(window.rem_size());
                 measured |= view.viewport.heights.insert(*id, (*version, height))
                     != Some((*version, height));
+                if !view.wrap {
+                    if let Some(native) = geometry.get(id) {
+                        let right = native
+                            .bounds()
+                            .right()
+                            .max(native.position_for_index(native.len()).x + px(1.));
+                        let width = (right - bounds.left()).max(bounds.size.width);
+                        extent_changed |= view.viewport.widths.insert(*id, (*version, width))
+                            != Some((*version, width));
+                        if width > px(MAX_NOWRAP_WIDTH)
+                            && let Some(block) = view.blocks.get_mut(id)
+                            && !block.safety_wrap
+                        {
+                            block.safety_wrap = true;
+                            safety_reflow = true;
+                        }
+                    }
+                }
             }
             // Anchor a source leaf, not a document-wide pixel offset. Only
             // compensate layout changes, never an explicit user scroll.
@@ -3214,7 +4147,9 @@ impl Element for SourceElement {
                     if let Some((_, _, row)) =
                         view.viewport.frame.iter().find(|(key, _, _)| *key == id)
                     {
-                        let delta = y - row.top();
+                        // Toolbars can resize during font reflow. Preserve the
+                        // row inside the scroll viewport, not the window origin.
+                        let delta = viewport.top() + y - row.top();
                         // Keep a pending correction, but once it settles anchor
                         // the top visible row instead of an overscan-only row.
                         preserve_anchor = delta.abs() > px(0.5);
@@ -3241,17 +4176,25 @@ impl Element for SourceElement {
                             .iter()
                             .find(|(_, _, row)| row.bottom() > viewport.top())
                     })
-                    .map(|(id, _, row)| (*id, row.top()));
+                    .map(|(id, _, row)| (*id, row.top() - viewport.top()));
             }
             view.viewport.offset = view.scroll.offset();
             if reflow {
                 view.invalidate_layout(cx);
             }
-            if measured || reflow {
+            if measured || reflow || extent_changed {
                 cx.notify();
             }
             let previous_caret = view.caret_bounds(view.state.selection.head, cx);
-            view.geometry = Some((self.revision, geometry));
+            view.geometry = (!safety_reflow).then_some((self.revision, geometry));
+            if view.slash_current(view.slash.generation, cx)
+                && previous_caret != view.caret_bounds(view.state.selection.head(), cx)
+            {
+                // Publish a measured caret anchor, never create/update an
+                // overlay or document transaction during prepaint.
+                cx.notify();
+            }
+            view.candidate_frame = Some(composition::Frame::new(view, window, cx));
             view.viewport_height = viewport.size.height;
             view.viewport.bounds = Some(viewport);
             if view.focus.is_focused(window)
@@ -3265,6 +4208,11 @@ impl Element for SourceElement {
             if view.reveal_caret && view.focus.is_focused(window) {
                 let at = view.reveal_at.unwrap_or(view.state.selection.head);
                 if let Some(caret) = view.caret_bounds(at, cx) {
+                    let safety_wrapped = view.projection.leaf_at(at).is_some_and(|leaf| {
+                        view.blocks
+                            .get(&leaf.id)
+                            .is_some_and(|block| block.safety_wrap)
+                    });
                     let inset = window.rem_size() * 0.75;
                     let delta = if caret.top() < viewport.top() + inset {
                         viewport.top() + inset - caret.top()
@@ -3273,7 +4221,9 @@ impl Element for SourceElement {
                     } else {
                         px(0.)
                     };
-                    let delta_x = if caret.left() < viewport.left() + inset {
+                    let delta_x = if safety_wrapped {
+                        -view.scroll.offset().x
+                    } else if caret.left() < viewport.left() + inset {
                         viewport.left() + inset - caret.left()
                     } else if caret.right() > viewport.right() - inset {
                         viewport.right() - inset - caret.right()
@@ -3284,6 +4234,7 @@ impl Element for SourceElement {
                         && caret.bottom() <= viewport.bottom()
                         && caret.left() >= viewport.left()
                         && caret.right() <= viewport.right()
+                        && (!safety_wrapped || view.scroll.offset().x == Pixels::ZERO)
                     {
                         // Completion is observable only in a frame laid out at
                         // the final offset, not the frame requesting that offset.
@@ -3309,26 +4260,84 @@ impl Element for SourceElement {
                 }
             }
             if view.scroll.offset() != offset {
-                // This frame was measured before the scroll correction. Async
-                // resources must not infer caret visibility from stale bounds.
+                // Native width hints size the next frame; they do not move the
+                // geometry just collected. Only an actual scroll invalidates it.
                 view.geometry = None;
             }
-        });
+            view.refresh_reorder_geometry(window, cx);
+            // Never display or accept pointer input against the provisional
+            // giant-origin layout. The next frame uses bounded visual rows.
+            !safety_reflow
+        })
     }
     fn paint(
         &mut self,
         _: Option<&GlobalElementId>,
         _: Option<&InspectorElementId>,
-        bounds: Bounds<Pixels>,
+        _: Bounds<Pixels>,
         _: &mut (),
-        _: &mut (),
+        ready: &mut bool,
         window: &mut Window,
         cx: &mut App,
     ) {
-        self.child.paint(window, cx);
+        if *ready {
+            self.child.paint(window, cx);
+        } else {
+            // Register focus/actions even while withholding unsafe glyphs.
+            // Otherwise a fast Undo during reflow can lose its dispatch target.
+            window.with_content_mask(
+                Some(ContentMask {
+                    bounds: Bounds::default(),
+                }),
+                |window| self.child.paint(window, cx),
+            );
+        }
+        self.view.read(cx).paint_spelling(window, cx);
+        let view = self.view.clone();
+        window.on_mouse_event(move |event: &MouseMoveEvent, phase, window, cx| {
+            if phase.bubble() && view.read(cx).tables.is_resizing() {
+                view.update(cx, |view, cx| {
+                    if event.pressed_button == Some(MouseButton::Left) {
+                        view.update_table_resize(event.position, window, cx);
+                    } else {
+                        view.finish_table_resize(window, cx);
+                    }
+                });
+                return;
+            }
+            if !phase.bubble()
+                || (!view.read(cx).dragging
+                    && view.read(cx).pointer_link.is_none()
+                    && view.read(cx).reorder.is_none())
+            {
+                return;
+            }
+            view.update(cx, |view, cx| {
+                if view.reorder.is_some() {
+                    if event.pressed_button == Some(MouseButton::Left) {
+                        view.move_reorder(event.position, window, cx);
+                    } else {
+                        view.cancel_reorder(cx);
+                    }
+                    cx.stop_propagation();
+                    return;
+                }
+                view.move_pointer_link(event, window, cx);
+                if !view.dragging {
+                    return;
+                }
+                if event.pressed_button == Some(MouseButton::Left) {
+                    view.drag_to(event.position, window, cx);
+                } else {
+                    view.dragging = false;
+                    view.drag_pointer = None;
+                    view.drag_origin = None;
+                }
+            });
+        });
         let (focus, carets) = {
             let view = self.view.read(cx);
-            let carets: Vec<_> = if view.focus.is_focused(window) {
+            let carets: Vec<_> = if view.focus.is_focused(window) && view.formula.is_none() {
                 std::iter::once(view.state.selection)
                     .chain(view.extra_selections.iter().copied())
                     .filter(|selection| selection.range().is_empty())
@@ -3339,11 +4348,7 @@ impl Element for SourceElement {
             };
             (view.focus.clone(), carets)
         };
-        window.handle_input(
-            &focus,
-            ElementInputHandler::new(bounds, self.view.clone()),
-            cx,
-        );
+        window.handle_input(&focus, composition::Input::new(&self.view, cx), cx);
         let viewport = self.view.read(cx).scroll.bounds();
         for caret in carets {
             if caret.top() >= viewport.top()
@@ -3354,13 +4359,5 @@ impl Element for SourceElement {
                 window.paint_quad(fill(caret, self.caret));
             }
         }
-    }
-}
-
-fn link_modifier(modifiers: Modifiers) -> bool {
-    if cfg!(target_os = "macos") {
-        modifiers.platform && !modifiers.control && !modifiers.alt && !modifiers.shift
-    } else {
-        modifiers.control && !modifiers.platform && !modifiers.alt && !modifiers.shift
     }
 }

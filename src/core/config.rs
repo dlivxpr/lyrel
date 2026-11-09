@@ -53,7 +53,7 @@ fn assert_scratch_config_dir(what: &str) {
     );
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "native-markdown-tests"))]
 pub(crate) fn pin_test_config_dir() {
     let dir = std::env::temp_dir().join(format!("lyrel-covtest-{}", std::process::id()));
     std::fs::create_dir_all(&dir).ok();

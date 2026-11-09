@@ -244,29 +244,52 @@ fn render_component(
     window: &mut Window,
     cx: &mut Context<SourcePresentation>,
 ) -> AnyElement {
-    if context.component().is_some_and(|component| {
-        super::tabs::matches(&context.source().slice(component.name_range()).to_string())
-    }) {
-        return super::tabs::render(context, content, window, cx);
+    let Some(component) = context.component() else {
+        return render_generic(context, content, cx);
+    };
+    let name = context.source().slice(component.name_range()).to_string();
+    let content = if super::tabs::matches(&name) {
+        super::tabs::render(context, content, window, cx)
+    } else if super::cards::matches(&name) {
+        super::cards::render(context, content, window, cx)
+    } else if super::steps::matches(context) {
+        super::steps::render(context, content, window, cx)
+    } else if super::callouts::matches(context) {
+        super::callouts::render(context, content, window, cx)
+    } else if super::accordions::matches(&name) {
+        super::accordions::render(context, content, window, cx)
+    } else {
+        render_generic(context, content, cx)
+    };
+    // A native control is a keyboard stop, not another text-input owner. Keep
+    // Escape local to its MDX surface, including controls embedded in a cell or
+    // heading; do not let the editor's table-exit action move the selection.
+    div()
+        .w_full()
+        .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
+            if event.keystroke.key == "escape" {
+                return_text_focus(this, window, cx);
+                cx.stop_propagation();
+            }
+        }))
+        .on_action(
+            cx.listener(|this, _: &gpui_kit::component::input::Escape, window, cx| {
+                return_text_focus(this, window, cx);
+            }),
+        )
+        .child(content)
+        .into_any_element()
+}
+
+fn return_text_focus(
+    view: &mut SourcePresentation,
+    window: &mut Window,
+    cx: &mut Context<SourcePresentation>,
+) {
+    if view.is_composing() {
+        view.command(Command::CancelComposition, window, cx);
     }
-    if context.component.is_some_and(|component| {
-        super::cards::matches(&context.source.slice(component.name_range()).to_string())
-    }) {
-        return super::cards::render(context, content, window, cx);
-    }
-    if super::steps::matches(context) {
-        return super::steps::render(context, content, window, cx);
-    }
-    if super::callouts::matches(context) {
-        return super::callouts::render(context, content, window, cx);
-    }
-    if let Some(component) = context.component() {
-        let name = context.source().slice(component.name_range()).to_string();
-        if super::accordions::matches(&name) {
-            return super::accordions::render(context, content, window, cx);
-        }
-    }
-    render_generic(context, content, cx)
+    view.focus_handle(cx).focus(window, cx);
 }
 
 pub(in super::super) fn render_generic(
