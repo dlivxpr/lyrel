@@ -863,6 +863,17 @@ fn final_review_format_nested_delimiters_and_underscore_toggle(cx: &mut TestAppC
     select(&view, &mut context, 15, 21);
     context.update(|window, cx| window.press("secondary-b", cx));
     assert_eq!(bytes(&view, &context), b"**bold** and strong\n");
+    context.dispatch_action(gpui_kit::component::input::Undo);
+    select(&view, &mut context, 0, 8);
+    context.update(|window, cx| window.input("**_bold_**", cx));
+    select(&view, &mut context, 0, 10);
+    context.update(|window, cx| window.press("secondary-i", cx));
+    assert_eq!(bytes(&view, &context), source.as_bytes());
+    view.read_with(&context, |view, _| assert_eq!(view.selection().range(), 0..8));
+    context.dispatch_action(gpui_kit::component::input::Undo);
+    assert_eq!(bytes(&view, &context), b"**_bold_** and __strong__\n");
+    context.dispatch_action(gpui_kit::component::input::Undo);
+    assert_eq!(bytes(&view, &context), source.as_bytes());
 }
 
 #[gpui_kit::test]
