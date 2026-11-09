@@ -140,7 +140,10 @@ fn formula_structural_fraction_cancel_commit_and_shared_document_undo(cx: &mut T
             "block formula entry skips the opening line and leading whitespace"
         );
         window.press("escape", cx);
-        assert_eq!(view.read(cx).document().read(cx).encode().unwrap(), source.as_bytes());
+        assert_eq!(
+            view.read(cx).document().read(cx).encode().unwrap(),
+            source.as_bytes()
+        );
     });
     context.update(|window, cx| {
         window.render_frame(cx);
