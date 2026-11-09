@@ -638,12 +638,13 @@ fn native_soft_wrap_caret_keeps_clicked_side_across_navigation_and_input(cx: &mu
     let (at, upper, lower, height) = view.read_with(&context, |view, _| {
         let leaf = view.projection.leaf_at(0).unwrap();
         let geometry = &view.geometry.as_ref().unwrap().1[&leaf.id];
-        leaf.text.char_indices().find_map(|(ix, _)| {
+        leaf.text.char_indices().filter(|(_, ch)| *ch == 'W').find_map(|(ix, _)| {
             let upper = geometry.position_for_caret(Caret::upstream(ix));
             let lower = geometry.position_for_caret(Caret::new(ix));
             (upper.y < lower.y).then_some((leaf.source_offset(ix), upper, lower, geometry.caret_height()))
         }).expect("fixture must expose both visual sides of one soft-wrap byte")
     });
+    assert_eq!(&original[at..at + 1], "W", "expected endpoint is the source glyph at the next visual row start");
     let click = |position: gpui_kit::Point<gpui_kit::Pixels>, context: &mut VisualTestContext| {
         context.update(|window, cx| {
             let position = point(position.x, position.y + height / 2.);

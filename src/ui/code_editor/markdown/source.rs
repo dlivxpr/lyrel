@@ -104,6 +104,9 @@ impl SourceCaret {
     fn new(byte: usize) -> Self {
         Self { byte, affinity: CaretAffinity::Downstream }
     }
+    fn upstream(byte: usize) -> Self {
+        Self { byte, affinity: CaretAffinity::Upstream }
+    }
 }
 
 /// A native editing presentation. It never owns a second text buffer or history.
@@ -1712,9 +1715,10 @@ impl SourcePresentation {
                 .then(|| self.table_arrow_target(current, horizontal, vertical, edge, cx))
                 .flatten();
         let target = if let Some(target) = table_target {
-            SourceCaret::new(target)
+            target
         } else if let Some(end) = edge {
-            SourceCaret::new(self.logical_line_edge(current, end, cx))
+            let byte = self.logical_line_edge(current, end, cx);
+            if end { SourceCaret::upstream(byte) } else { SourceCaret::new(byte) }
         } else if vertical != 0 {
             self.vertical_target(current, vertical as f32, cx)
                 .unwrap_or_else(|| SourceCaret::new(self.vertical_fallback(current, vertical < 0, cx)))
