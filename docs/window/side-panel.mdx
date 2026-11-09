@@ -220,6 +220,17 @@ GitHub 上的 Markdown 来自陌生人，因此渲染时有两项限制：只加
 
 证据位于仓库外 `C:/Users/dlivx/AppData/Local/Temp/lyrel-204-CtjYLY/evidence205/approved-workarounds/`：测试日志、`product-long/result.json`、`product-long/table-result.json` 与截图。产品二进制 SHA-256 为 `e26ae4f5530c024d59521964b12f2b3de4efb66adbed06ad7cf3982d546fcb67`。原生键盘操作由工具自动使用 takeover，不称为纯后台输入；未做本轮 Release 性能、macOS 或完整 workspace 验收。SDK 原始 `ShapedLine::paint` 的任意长 nowrap 缺陷仍未修复，不能用应用安全折行宣称底层已解决；历史失败与 [#235](https://github.com/dlivxpr/lyrel/issues/235) 保留。
 
+#### CI 编译边界与警告清理
+
+`239a1b4c` 的 hosted CI 中，Windows、Linux、两种 musl 和 macOS server 均通过；macOS 桌面失败发生在测试编译的 30 分钟上限，尚未进入用例执行，不是新的断言失败。该轮仍以同一个 `src/main.rs` 同时构建产品和自定义 native runner，后者带入全部普通 `cfg(test)` 模块，产生大量未使用导入与代码警告；日志不能证明全部编译时间都来自警告输出。
+
+后续将生产实现集中到 `src/lib.rs::run`，`src/main.rs` 只保留平台 subsystem 属性和入口调用。普通桌面单元测试使用 `cargo test --locked -p lyrel --lib`；真实字形入口移至 `tests/native_markdown.rs`，使用 `cargo test --locked -p lyrel --features native-markdown-tests --test native_markdown -- --nocapture`，仍在 OS 主线程初始化真实字体平台、运行全部 14 项消费者。该 feature 非默认产品 feature，只开放必要 fixture，不再编译无关单元测试。上表和下文的旧命令保留为历史执行记录，不是当前 library 测试入口。
+
+CI 分别编译、执行普通测试与 native 目标，不延长原有 30 分钟编译上限，不通过名称筛选、ignored、全局 `allow` 或隐藏输出清除警告。Host 检查识别显式测试 feature，同时继续检查其他平台／feature 条件及被生产代码共同引用的文件。当前开发命令与完整 CI 范围见[安装指南](/getting-started/installation#building-from-source)。
+
+切换后的本机 `cargo check --locked` exit `0`、警告 `0`；`cargo fmt --all --check` 通过，Host 边界检查及四项 feature／混合引用回归通过。日志与后续候选的构建、普通测试、真实字体结果分别保存在仓库外 `evidence205/warning-clean-verify-*/`，最终 hosted 状态由 PR #234 记录；旧 macOS 超时不会改记为通过，普通 unit、native 和产品实窗也不互相冒充。
+
+
 
 #### Zorite 体验对齐：核心交付与验收边界
 
