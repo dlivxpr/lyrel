@@ -510,7 +510,9 @@ fn eligible(source: &str, root: &Node, range: &Range<usize>, format: Format) -> 
                 && super::super::links::label_range(source, node).is_none()
             {
                 let delimited = source[p.start.offset..p.end.offset].starts_with('<');
-                if !whole || (!delimited && range.start == p.start.offset && range.end == p.end.offset) {
+                if !whole
+                    || (!delimited && range.start == p.start.offset && range.end == p.end.offset)
+                {
                     return true;
                 }
             }
@@ -720,9 +722,7 @@ fn edit(
                 owner = outer;
                 body = inner;
                 converted = true;
-                if markdown_wrapper(root, &body, format)
-                    .is_some_and(|(outer, _)| outer == body)
-                {
+                if markdown_wrapper(root, &body, format).is_some_and(|(outer, _)| outer == body) {
                     (String::new(), String::new())
                 } else {
                     (open.to_owned(), close.to_owned())
@@ -893,7 +893,10 @@ mod tests {
         context.dispatch_action(gpui_kit::component::input::Redo);
         context.dispatch_action(Bold);
         view.read_with(&context, |view, cx| {
-            assert_eq!(view.document().read(cx).encode().unwrap(), original.as_bytes());
+            assert_eq!(
+                view.document().read(cx).encode().unwrap(),
+                original.as_bytes()
+            );
         });
         view.update_in(&mut context, |view, _, cx| view.select_range(2..7, cx));
         context.dispatch_action(Italic);
