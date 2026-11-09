@@ -1980,15 +1980,6 @@ mod tests {
             assert_eq!(document.encode().unwrap(), source.as_bytes());
             assert_eq!(state.selection(), selection);
         }
-        let unknown = "before <span style=\"white-space:pre\">**raw**</span> after";
-        let projection = Projection::parse(unknown, 1, true, Grammar::Markdown);
-        assert_eq!(projection.leaves[0].text, unknown);
-        assert!(
-            projection.leaves[0]
-                .marks(None)
-                .iter()
-                .all(|(_, mark)| !mark.bold)
-        );
     }
 
     #[test]

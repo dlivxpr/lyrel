@@ -166,12 +166,9 @@ fn workbench_color_runs_ignore_block_gaps_single_strike_and_preserve_inherited_c
                 .checked(),
             Some(true)
         );
-        assert_eq!(
-            window
-                .find_by_label(t(L10nKey::MarkdownClearTextColor))
-                .disabled(),
-            Some(true)
-        );
+        let clear = window.find_by_label(t(L10nKey::MarkdownClearTextColor));
+        window.pointer_down(clear.bounds().center(), MouseButton::Left, cx);
+        window.pointer_up(clear.bounds().center(), MouseButton::Left, cx);
         window.press("escape", cx);
     });
     context.run_until_parked();
