@@ -465,26 +465,47 @@ fn markdown_wrapper(
         let p = node.position()?;
         Some(p.start.offset..p.end.offset)
     }
-    let p = node.position()?;
-    if range.start < p.start.offset || range.end > p.end.offset {
-        return None;
+    fn selected_scope(node: &Node, range: &Range<usize>) -> Option<Range<usize>> {
+        let p = node.position()?;
+        if range.start < p.start.offset || p.end.offset < range.end {
+            return None;
+        }
+        if range.start == p.start.offset && range.end == p.end.offset
+            && matches!(node, Node::Strong(_) | Node::Emphasis(_) | Node::Delete(_))
+        {
+            return visible(node);
+        }
+        node.children()?.iter().find_map(|child| selected_scope(child, range))
     }
-    if let Some(found) = node.children().and_then(|children| {
-        children
-            .iter()
-            .find_map(|child| markdown_wrapper(child, range, format))
-    }) {
-        return Some(found);
+    fn find(
+        node: &Node,
+        range: &Range<usize>,
+        scope: &Option<Range<usize>>,
+        format: Format,
+    ) -> Option<(Range<usize>, Range<usize>)> {
+        let p = node.position()?;
+        if p.start.offset >= range.end || p.end.offset <= range.start {
+            return None;
+        }
+        if let Some(found) = node.children().and_then(|children| {
+            children.iter().find_map(|child| find(child, range, scope, format))
+        }) {
+            return Some(found);
+        }
+        let width = match (node, format) {
+            (Node::Strong(_), Format::Bold) | (Node::Delete(_), Format::Strike) => 2,
+            (Node::Emphasis(_), Format::Italic) => 1,
+            _ => return None,
+        };
+        let outer = p.start.offset..p.end.offset;
+        let body = outer.start + width..outer.end - width;
+        let content = visible(node);
+        let selected_nested = range.start <= outer.start && outer.end <= range.end
+            && scope.is_some() && content == *scope;
+        (*range == outer || *range == body || content.as_ref() == Some(range) || selected_nested)
+            .then_some((outer, body))
     }
-    let width = match (node, format) {
-        (Node::Strong(_), Format::Bold) | (Node::Delete(_), Format::Strike) => 2,
-        (Node::Emphasis(_), Format::Italic) => 1,
-        _ => return None,
-    };
-    let outer = p.start.offset..p.end.offset;
-    let body = outer.start + width..outer.end - width;
-    (*range == outer || *range == body || visible(node).as_ref() == Some(range))
-        .then_some((outer, body))
+    find(node, range, &selected_scope(node, range), format)
 }
 
 fn eligible(source: &str, root: &Node, range: &Range<usize>, format: Format) -> bool {
@@ -722,17 +743,13 @@ fn edit(
                 owner = outer;
                 body = inner;
                 converted = true;
-                if markdown_wrapper(root, &body, format).is_some_and(|(outer, _)| outer == body) {
-                    (String::new(), String::new())
-                } else {
-                    (open.to_owned(), close.to_owned())
-                }
-            } else {
-                (open.to_owned(), close.to_owned())
             }
+            (open.to_owned(), close.to_owned())
         }
     };
-    let selected = if converted {
+    let selected = if range.start <= owner.start && owner.end <= range.end && range != owner {
+        range.start..range.end - owner.len() + open.len() + body.len() + close.len()
+    } else if converted {
         owner.start..owner.start + open.len() + body.len() + close.len()
     } else {
         owner.start + open.len()..owner.start + open.len() + body.len()
