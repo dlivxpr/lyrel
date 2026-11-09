@@ -245,11 +245,10 @@ impl SourcePresentation {
             // A logical endpoint can still have another visual caret in a
             // mixed-bidi cell. Keep the shared glyph mapper authoritative.
             if let Some(next) = self.visual_horizontal_target(at, horizontal < 0, cx)
-                && next != at
-                && leaf.content_start() <= next
-                && next <= leaf.content_end()
+                && leaf.content_start() <= next.byte
+                && next.byte <= leaf.content_end()
             {
-                return Some(next);
+                return (next.byte != at).then_some(next.byte);
             }
             let backward = (horizontal < 0) ^ self.tables.is_rtl(cell);
             return super::super::tables::navigate(

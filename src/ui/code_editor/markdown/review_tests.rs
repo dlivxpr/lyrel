@@ -8,7 +8,7 @@ use gpui_kit::{
 };
 use std::time::{Duration, Instant};
 
-pub(super) fn native_cases() -> [crate::native_markdown::Case; 3] {
+pub(super) fn native_cases() -> [crate::native_markdown::Case; 4] {
     use crate::native_markdown::Case;
     [
         Case::new(
@@ -22,6 +22,10 @@ pub(super) fn native_cases() -> [crate::native_markdown::Case; 3] {
         Case::new(
             "ui::code_editor::markdown::source::review_tests::fragment_tail_link_grapheme_hovers_edits_and_opens",
             fragment_tail_link_grapheme_hovers_edits_and_opens,
+        ),
+        Case::new(
+            "ui::code_editor::markdown::source::review_tests::native_soft_wrap_caret_keeps_clicked_side_across_navigation_and_input",
+            native_soft_wrap_caret_keeps_clicked_side_across_navigation_and_input,
         ),
     ]
 }
@@ -587,16 +591,15 @@ fn native_down_visits_each_soft_wrapped_row_without_skipping(cx: &mut TestAppCon
     let rows = view.read_with(&context, |view, _| {
         let leaf = view.projection.leaf_at(0).unwrap();
         let geometry = &view.geometry.as_ref().unwrap().1[&leaf.id];
-        // Native single-affinity geometry exposes each continuation row's
-        // leading W only through its trailing caret. These are independent
-        // expected physical rows, not vertical_target's hit-test result.
+        // The source W at each independently shaped continuation-row start is
+        // the expected endpoint, not the next glyph's trailing caret.
         let rows = leaf
             .text
             .grapheme_indices(true)
             .filter_map(|(ix, text)| {
-                let a = geometry.position_for_index(ix);
-                let b = geometry.position_for_index(ix + text.len());
-                (text == "W" && a.y < b.y).then_some((leaf.source_offset(ix + text.len()), b.y))
+                let a = geometry.position_for_caret(gpui_kit::base::text::editor_host::Caret::upstream(ix));
+                let b = geometry.position_for_caret(gpui_kit::base::text::editor_host::Caret::new(ix));
+                (text == "W" && a.y < b.y).then_some((leaf.source_offset(ix), b.y))
             })
             .take(2)
             .collect::<Vec<_>>();
@@ -622,6 +625,109 @@ fn native_down_visits_each_soft_wrapped_row_without_skipping(cx: &mut TestAppCon
         });
     }
 }
+fn native_soft_wrap_caret_keeps_clicked_side_across_navigation_and_input(cx: &mut TestAppContext) {
+    use gpui_kit::base::text::editor_host::Caret;
+    use gpui_kit::{EntityInputHandler as _, MouseButton, point, px, size};
+
+    let original = format!("{}\n\nkeep\n", "W ".repeat(140));
+    let (_directory, _path, _app, mut context, _streams, view) = fixture!(cx, &original, true);
+    view.update_in(&mut context, |view, _, cx| view.set_soft_wrap(true, cx));
+    cx.simulate_window_resize(context.window_handle(), size(px(1000.), px(1200.)));
+    select(&view, &mut context, 0, 0);
+    settle(&view, &mut context);
+    let (at, upper, lower, height) = view.read_with(&context, |view, _| {
+        let leaf = view.projection.leaf_at(0).unwrap();
+        let geometry = &view.geometry.as_ref().unwrap().1[&leaf.id];
+        leaf.text.char_indices().find_map(|(ix, _)| {
+            let upper = geometry.position_for_caret(Caret::upstream(ix));
+            let lower = geometry.position_for_caret(Caret::new(ix));
+            (upper.y < lower.y).then_some((leaf.source_offset(ix), upper, lower, geometry.caret_height()))
+        }).expect("fixture must expose both visual sides of one soft-wrap byte")
+    });
+    let click = |position: gpui_kit::Point<gpui_kit::Pixels>, context: &mut VisualTestContext| {
+        context.update(|window, cx| {
+            let position = point(position.x, position.y + height / 2.);
+            window.pointer_down(position, MouseButton::Left, cx);
+            window.pointer_up(position, MouseButton::Left, cx);
+        });
+        settle(&view, context);
+    };
+    let assert_anchor = |expected, context: &mut VisualTestContext| {
+        view.update_in(context, |view, window, cx| {
+            assert_eq!(view.selection(), Selection::caret(at));
+            assert_eq!(view.range_to_bounds(&(at..at), cx).unwrap().origin, expected);
+            let utf16 = view.document().read(cx).utf16_offset(at);
+            let bounds = view.bounds_for_range(utf16..utf16, view.scroll.bounds(), window, cx).unwrap();
+            assert_eq!(bounds.origin, expected, "native candidate must use the clicked visual side");
+            // An OS query for another UTF-16 position must not be replaced by head.
+            let requested = view.bounds_for_range(0..0, view.scroll.bounds(), window, cx).unwrap();
+            assert_eq!(requested.origin, view.range_to_bounds(&(0..0), cx).unwrap().origin);
+            assert_ne!(requested.origin, expected);
+        });
+    };
+    click(upper, &mut context);
+    assert_anchor(upper, &mut context);
+    context.update(|window, cx| window.press("right", cx));
+    settle(&view, &mut context);
+    assert_anchor(lower, &mut context);
+    context.update(|window, cx| window.press("left", cx));
+    settle(&view, &mut context);
+    assert_anchor(upper, &mut context);
+    click(lower, &mut context);
+    assert_anchor(lower, &mut context);
+    context.update(|window, cx| window.press("up", cx));
+    settle(&view, &mut context);
+    assert_eq!(view.read_with(&context, |view, _| view.selection()), Selection::caret(0));
+    context.update(|window, cx| window.press("shift-down", cx));
+    settle(&view, &mut context);
+    assert_eq!(view.read_with(&context, |view, _| view.selection()), Selection::new(0, at));
+    view.update_in(&mut context, |view, window, cx| {
+        let utf16 = view.document().read(cx).utf16_offset(at);
+        assert_eq!(view.bounds_for_range(utf16..utf16, view.scroll.bounds(), window, cx).unwrap().origin, lower);
+    });
+    context.update(|window, cx| window.press("shift-up", cx));
+    settle(&view, &mut context);
+    assert_eq!(view.read_with(&context, |view, _| view.selection()), Selection::caret(0));
+    // A real drag keeps the same source endpoint but changes its painted row.
+    context.update(|window, cx| {
+        window.pointer_down(point(lower.x, lower.y + height / 2.), MouseButton::Left, cx);
+        window.pointer_move(point(upper.x, upper.y + height / 2.), Some(MouseButton::Left), cx);
+        window.pointer_up(point(upper.x, upper.y + height / 2.), MouseButton::Left, cx);
+    });
+    settle(&view, &mut context);
+    assert_anchor(upper, &mut context);
+    context.update(|window, cx| window.input("X", cx));
+    settle(&view, &mut context);
+    let mut edited = original.clone();
+    edited.insert(at, 'X');
+    assert_eq!(bytes(&view, &context), edited.as_bytes());
+    context.dispatch_action(gpui_kit::component::input::Undo);
+    settle(&view, &mut context);
+    assert_eq!(bytes(&view, &context), original.as_bytes());
+    assert_anchor(lower, &mut context);
+    click(upper, &mut context);
+    context.dispatch_action(crate::core::actions::ToggleDocumentPreview);
+    context.dispatch_action(crate::core::actions::ToggleDocumentPreview);
+    settle(&view, &mut context);
+    assert_anchor(lower, &mut context);
+    click(upper, &mut context);
+    let sibling = context.update(|_, cx| {
+        let document = view.read(cx).document().clone();
+        cx.new(|cx| SourcePresentation::new(document, true, cx))
+    });
+    sibling.update_in(&mut context, |sibling, window, cx| {
+        let start = original.find("keep").unwrap();
+        sibling.command(super::Command::Replace {
+            range: start..start + 4,
+            text: "else".into(),
+            kind: super::EditKind::Command,
+        }, window, cx);
+    });
+    settle(&view, &mut context);
+    assert_anchor(lower, &mut context);
+    assert_eq!(bytes(&view, &context), original.replacen("keep", "else", 1).as_bytes());
+}
+
 
 fn first_soft_wrapped_link_grapheme_hovers_edits_and_opens(cx: &mut gpui_kit::TestAppContext) {
     native_link_grapheme_hovers_edits_and_opens(cx, false);

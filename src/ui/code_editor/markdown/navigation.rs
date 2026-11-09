@@ -1,55 +1,53 @@
 use super::*;
 
-/// Only left-aligned paragraph kinds share the origin needed for recovery.
-pub(super) fn recover_wrapped_start(kind: Kind) -> bool {
-    matches!(
-        kind,
-        Kind::Prose | Kind::Heading(_) | Kind::List(_) | Kind::Quote(_)
-    )
-}
-
-/// A grapheme's line box from the same geometry used to paint the text.
-/// Wrapped-start recovery is restricted to the left-aligned paragraph paths;
-/// table alignment and bidi paint origins need a richer upstream geometry API.
+/// Use the two sides of the glyph, not the ambiguous index-only wrap position.
+/// This resolves soft wraps; the SDK's bidi geometry contract is unchanged.
 pub(super) fn grapheme_line_box(
     geometry: &LeafGeometry,
     start: usize,
     grapheme: &str,
-    recover_wrapped_start: bool,
 ) -> Option<Bounds<Pixels>> {
     if grapheme.contains(['\r', '\n']) {
         return None;
     }
-    let a = geometry.position_for_index(start);
-    let b = geometry.position_for_index(start + grapheme.len());
-    let (left, right, top) = if a.y == b.y {
-        (a.x.min(b.x), a.x.max(b.x), a.y)
-    } else {
-        if !recover_wrapped_start {
-            return None;
-        }
-        // Whole TextLayout resolves a shared wrap index to the previous row's
-        // end. Left-aligned rows all start at this actual paragraph origin,
-        // including list indentation and blockquote padding. InlineFlow instead
-        // resolves a fragment-end index to the next fragment: its next row's
-        // leading index is greater than `start`, so it must not be bridged.
-        let origin = geometry.position_for_index(0).x;
-        let next_start =
-            geometry.index_for_position(point(origin, b.y + geometry.caret_height() / 2.));
-        if next_start != start {
-            return None;
-        }
-        (origin, b.x, b.y)
-    };
-    (left < right).then(|| {
-        Bounds::new(
-            point(left, top),
-            size(right - left, geometry.caret_height()),
-        )
-    })
+    let a = geometry.position_for_caret(Caret::new(start));
+    let b = geometry.position_for_caret(Caret::upstream(start + grapheme.len()));
+    (a.y == b.y && a.x != b.x).then(|| Bounds::new(
+        point(a.x.min(b.x), a.y),
+        size((b.x - a.x).abs(), geometry.caret_height()),
+    ))
 }
 
 impl SourcePresentation {
+    fn selection_affinities(&self, cx: &App) -> (CaretAffinity, CaretAffinity) {
+        self.caret_selection
+            .filter(|(selection, revision, live, _, _)| {
+                *selection == self.state.selection
+                    && *revision == self.document.read(cx).revision()
+                    && *live == self.live
+            })
+            .map_or((CaretAffinity::Downstream, CaretAffinity::Downstream), |(_, _, _, anchor, head)| (anchor, head))
+    }
+
+    pub(super) fn caret_affinity(&self, at: usize, cx: &App) -> CaretAffinity {
+        let (anchor, head) = self.selection_affinities(cx);
+        if at == self.state.selection.head { head }
+        else if at == self.state.selection.anchor { anchor }
+        else { CaretAffinity::Downstream }
+    }
+
+    pub(super) fn select_caret(&mut self, caret: SourceCaret, extend: bool, window: &mut Window, cx: &mut Context<Self>) {
+        let anchor = if extend {
+            SourceCaret { byte: self.state.selection.anchor, affinity: self.selection_affinities(cx).0 }
+        } else { caret };
+        let selection = Selection::new(anchor.byte, caret.byte);
+        self.command(Command::Select(selection), window, cx);
+        // Mapping hidden source delimiters may replace the requested selection.
+        if self.state.selection == selection {
+            self.caret_selection = Some((selection, self.document.read(cx).revision(), self.live, anchor.affinity, caret.affinity));
+        }
+    }
+
     pub(super) fn geometry_is_current(&self, cx: &App) -> bool {
         self.geometry.as_ref().is_some_and(|(revision, _)| {
             *revision == self.document.read(cx).revision()
@@ -100,7 +98,7 @@ impl SourcePresentation {
         at: usize,
         backward: bool,
         cx: &App,
-    ) -> Option<usize> {
+    ) -> Option<SourceCaret> {
         if !self.geometry_is_current(cx) {
             return None;
         }
@@ -113,7 +111,8 @@ impl SourcePresentation {
             return None;
         }
         let display = leaf.display_offset(at);
-        let caret = geometry.position_for_index(display);
+        let current = Caret { index: display, affinity: self.caret_affinity(at, cx) };
+        let caret = geometry.position_for_caret(current);
         // Probe the current shaped row, then bisect its first caret transition.
         // The number of geometry queries depends on coordinate precision, not
         // the paragraph's grapheme count; atoms and bidi keep the same mapper.
@@ -128,19 +127,13 @@ impl SourcePresentation {
         let distance = (limit - caret.x).abs();
         let tolerance = geometry.caret_height() / 1024.;
         let candidate = |distance| {
-            let ix = hit_test_grapheme(
-                &leaf.text,
-                geometry,
-                point(caret.x + distance * direction, y),
-                // This scorer also consumes native single-affinity positions.
-                false,
-            );
-            let position = geometry.position_for_index(ix);
+            let target = hit_test_caret(&leaf.text, geometry, point(caret.x + distance * direction, y));
+            let position = geometry.position_for_caret(target);
             let dx = (position.x - caret.x) * direction;
-            (ix != display
+            (target != current
                 && dx > Pixels::ZERO
                 && (position.y - caret.y).abs() < geometry.line_height() * 0.25)
-                .then_some(ix)
+                .then_some(target)
         };
         let mut low = Pixels::ZERO;
         let mut high = (geometry.caret_height() * 0.25).min(distance);
@@ -163,13 +156,21 @@ impl SourcePresentation {
                     low = middle;
                 }
             }
-            return Some(leaf.source_offset(ix));
+            return Some(SourceCaret { byte: leaf.source_offset(ix.index), affinity: ix.affinity });
         }
         // At a visual edge, ask the same row's endpoints for its source-order
         // direction rather than visiting every glyph to infer RTL/wrap exit.
-        let left = hit_test_grapheme(&leaf.text, geometry, point(bounds.left(), y), false);
-        let right = hit_test_grapheme(&leaf.text, geometry, point(bounds.right(), y), false);
-        (left > right).then(|| self.visible_step(at, !backward, cx))
+        let opposite = Caret { index: display, affinity: match current.affinity {
+            CaretAffinity::Upstream => CaretAffinity::Downstream,
+            CaretAffinity::Downstream => CaretAffinity::Upstream,
+        }};
+        let other = geometry.position_for_caret(opposite);
+        if (backward && other.y < caret.y) || (!backward && other.y > caret.y) {
+            return Some(SourceCaret { byte: at, affinity: opposite.affinity });
+        }
+        let left = hit_test_caret(&leaf.text, geometry, point(bounds.left(), y));
+        let right = hit_test_caret(&leaf.text, geometry, point(bounds.right(), y));
+        (left.index > right.index).then(|| SourceCaret::new(self.visible_step(at, !backward, cx)))
     }
 
     pub(super) fn visual_selection_edge(&self, backward: bool, cx: &App) -> usize {
@@ -645,47 +646,23 @@ fn subtract(ranges: &mut smallvec::SmallVec<[Range<usize>; 4]>, protected: Range
     }
 }
 
-pub(super) fn hit_test_grapheme(
-    text: &str,
-    geometry: &LeafGeometry,
-    at: Point<Pixels>,
-    recover_wrapped_start: bool,
-) -> usize {
-    let index = floor_grapheme(text, geometry.index_for_position(at));
-    // Whole-leaf hit testing can round past the next glyph at a grapheme edge.
-    // Check adjacent carets in the same shaped layout without walking the leaf.
+pub(super) fn hit_test_caret(text: &str, geometry: &LeafGeometry, at: Point<Pixels>) -> Caret {
+    let hit = geometry.caret_for_position(at);
+    let index = floor_grapheme(text, hit.index);
+    // Preserve grapheme snapping and nearest-edge behavior using only public
+    // affinity-aware geometry; no reconstruction of SDK wrap or fragment rows.
     std::iter::once(index)
         .chain(adjacent_grapheme(text, index, true).map(|range| range.start))
         .chain(adjacent_grapheme(text, index, false).map(|range| range.end))
-        .map(|index| {
-            let mut caret = geometry.position_for_index(index);
-            if recover_wrapped_start
-                && (at.y < caret.y || at.y >= caret.y + geometry.line_height())
-                && let Some(range) = adjacent_grapheme(text, index, false)
-                && let Some(bounds) = grapheme_line_box(
-                    geometry,
-                    index,
-                    &text[range.start..range.end],
-                    recover_wrapped_start,
-                )
-                && bounds.top() != caret.y
-                && bounds.contains(&at)
-            {
-                // The shared index has only the previous-row caret in the
-                // public SDK. For this proven whole-layout wrapped start,
-                // compare against the glyph's actual current-row leading edge.
-                // InlineFlow tails and non-allowlisted kinds never enter here.
-                caret = bounds.origin;
-            }
-            let dy = if at.y < caret.y {
-                caret.y - at.y
-            } else {
-                (at.y - caret.y - geometry.line_height()).max(Pixels::ZERO)
-            };
-            (index, (dy, (at.x - caret.x).abs()))
+        .flat_map(|index| [Caret::new(index), Caret::upstream(index)])
+        .map(|caret| {
+            let position = geometry.position_for_caret(caret);
+            let dy = if at.y < position.y { position.y - at.y }
+                else { (at.y - position.y - geometry.line_height()).max(Pixels::ZERO) };
+            (caret, (dy, (at.x - position.x).abs(), caret.affinity != hit.affinity))
         })
         .min_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal))
-        .map_or(index, |(index, _)| index)
+        .map_or(hit, |(caret, _)| caret)
 }
 
 fn floor_grapheme(text: &str, at: usize) -> usize {

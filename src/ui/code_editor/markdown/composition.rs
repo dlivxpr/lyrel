@@ -8,6 +8,7 @@ pub(super) type Token = (EntityId, u64, u64, u64, Option<EntityId>);
 pub(super) struct Frame {
     document: EntityId,
     revision: u64,
+    live: bool,
     offset: Point<Pixels>,
     viewport: Bounds<Pixels>,
     window_size: Size<Pixels>,
@@ -21,6 +22,7 @@ impl Frame {
         Self {
             document: view.document.entity_id(),
             revision: view.document.read(cx).revision(),
+            live: view.live,
             offset: view.scroll.offset(),
             viewport: view.scroll.bounds(),
             window_size: window.viewport_size(),

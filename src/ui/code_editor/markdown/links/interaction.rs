@@ -30,46 +30,6 @@ fn modifier(modifiers: Modifiers) -> bool {
     }
 }
 
-fn link_grapheme_line_box(
-    geometry: &LeafGeometry,
-    start: usize,
-    grapheme: &str,
-    recover_wrapped_start: bool,
-) -> Option<Bounds<Pixels>> {
-    if let Some(bounds) =
-        navigation::grapheme_line_box(geometry, start, grapheme, recover_wrapped_start)
-    {
-        return Some(bounds);
-    }
-    if grapheme.contains(['\r', '\n']) {
-        return None;
-    }
-    let a = geometry.position_for_index(start);
-    let b = geometry.position_for_index(start + grapheme.len());
-    if a.y == b.y {
-        return None;
-    }
-    // Unlike a whole-layout wrapped start, an InlineFlow fragment's final
-    // grapheme lives on a.y; the caret after it resolves to the next piece.
-    // Recover only that piece's advance, never bridge the two visual rows.
-    let origin = geometry.position_for_index(0).x;
-    if geometry.index_for_position(point(origin, b.y + geometry.caret_height() / 2.)) == start {
-        return None;
-    }
-    let mut low = a.x;
-    let mut high = geometry.bounds().right().max(low);
-    for _ in 0..24 {
-        let middle = (low + high) / 2.;
-        if geometry.index_for_position(point(middle, a.y + geometry.caret_height() / 2.)) <= start {
-            low = middle;
-        } else {
-            high = middle;
-        }
-    }
-    let width = (high - a.x) * 2.;
-    (width > Pixels::ZERO)
-        .then(|| Bounds::new(point(a.x, a.y), size(width, geometry.caret_height())))
-}
 
 impl SourcePresentation {
     pub(super) fn link_destination_range(&mut self) -> Option<Range<usize>> {
@@ -184,14 +144,12 @@ impl SourcePresentation {
                 let geometry = geometries?.get(&leaf.id)?;
                 let start = leaf.display_offset(link.label.start.max(leaf.range.start));
                 let end = leaf.display_offset(link.label.end.min(leaf.range.end));
-                let recover_wrapped_start = navigation::recover_wrapped_start(leaf.kind);
                 Some(leaf.text[start..end].grapheme_indices(true).filter_map(
                     move |(offset, grapheme)| {
-                        link_grapheme_line_box(
+                        navigation::grapheme_line_box(
                             geometry,
                             start + offset,
                             grapheme,
-                            recover_wrapped_start,
                         )
                     },
                 ))
