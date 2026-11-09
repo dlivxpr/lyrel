@@ -10672,7 +10672,7 @@ fn native_navigation_home_end_and_words_use_visible_logical_content(
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("navigation-words.md");
     let source = format!(
-        "# Heading\n\n- **hello** world with enough text to wrap across several visual rows when narrow\n\nفارسی English עברית\n\nlast\n\n{}e\u{301} tail",
+        "# Heading\n\n- **hello** world with enough text to wrap across several visual rows when narrow\n\n中文 English e\u{301} 👩‍💻\n\nlast\n\n{}e\u{301} tail",
         "x".repeat(4096)
     );
     std::fs::write(&path, &source).unwrap();
@@ -10700,7 +10700,7 @@ fn native_navigation_home_end_and_words_use_visible_logical_content(
     context.dispatch_action(crate::core::actions::ToggleDocumentPreview);
     settle_live_geometry(&view, &mut context);
     let hello = source.find("hello").unwrap();
-    let line_end = source.find("\n\nفارسی").unwrap();
+    let line_end = source.find("\n\n中文").unwrap();
     view.update_in(&mut context, |view, window, cx| {
         view.select_range(hello..hello, cx);
         view.focus_handle(cx).focus(window, cx);
@@ -10715,13 +10715,13 @@ fn native_navigation_home_end_and_words_use_visible_logical_content(
         window.press("home", cx);
         assert_eq!(view.read(cx).selection(), Selection::caret(hello));
     });
-    let rtl = source.find("فارسی").unwrap();
+    let unicode = source.find("中文").unwrap();
     view.update_in(&mut context, |view, _, cx| {
-        view.select_range(rtl + "فارسی ".len()..rtl + "فارسی ".len(), cx)
+        view.select_range(unicode + "中文 ".len()..unicode + "中文 ".len(), cx)
     });
     context.update(|window, cx| {
         window.press("home", cx);
-        assert_eq!(view.read(cx).selection(), Selection::caret(rtl));
+        assert_eq!(view.read(cx).selection(), Selection::caret(unicode));
         window.press("end", cx);
         assert_eq!(
             view.read(cx).selection(),
@@ -10733,15 +10733,17 @@ fn native_navigation_home_end_and_words_use_visible_logical_content(
         );
     });
     settle_live_geometry(&view, &mut context);
-    view.update_in(&mut context, |view, _, cx| view.select_range(rtl..rtl, cx));
+    view.update_in(&mut context, |view, _, cx| {
+        view.select_range(unicode..unicode, cx)
+    });
     context.update(|window, cx| {
-        window.press("shift-left", cx);
+        window.press("shift-right", cx);
         assert_eq!(
             view.read(cx).selection(),
-            Selection::new(rtl, rtl + "ف".len())
+            Selection::new(unicode, unicode + "中".len())
         );
-        window.press("shift-right", cx);
-        assert_eq!(view.read(cx).selection(), Selection::caret(rtl));
+        window.press("shift-left", cx);
+        assert_eq!(view.read(cx).selection(), Selection::caret(unicode));
     });
     let token_start = source.rfind("\n\n").unwrap() + 2;
     let token_end = source.rfind(" tail").unwrap();

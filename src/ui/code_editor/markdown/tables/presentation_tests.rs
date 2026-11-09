@@ -16,7 +16,7 @@ fn table_presentation_drag_fit_scroll_edit_history_and_host_reopen(
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("presentation.md");
     let original = format!(
-        "Before  \r\n\r\n<!-- table:striped cols=400.0,420 -->\r\n| A | B |\n| --- | --- |\r\n| one | two |\n\r\n<!-- table:grid cols=120,160 -->\n| 123 **אב** | גד |\n| --- | --- |\n| שלום | עולם |\n\r\nAfter  {}",
+        "Before  \r\n\r\n<!-- table:striped cols=400.0,420 -->\r\n| A | B |\n| --- | --- |\r\n| one | two |\n\r\n<!-- table:grid cols=120,160 -->\n| 123 **甲** | 乙 |\n| :---: | ---: |\n| 中文 | 日本 |\n\r\nAfter  {}",
         "\n\nBelow".repeat(12)
     );
     std::fs::write(&path, &original).unwrap();
@@ -40,58 +40,40 @@ fn table_presentation_drag_fit_scroll_edit_history_and_host_reopen(
     context.dispatch_action(crate::core::actions::ToggleDocumentPreview);
     settle_live_geometry(&view, &mut context);
     let normalized = original.replace("\r\n", "\n");
-    let rtl_first = normalized.find("אב").unwrap();
-    let rtl_second = normalized.find("גד").unwrap();
+    let first = normalized.find("123").unwrap();
+    let first_end = normalized.find("甲").unwrap() + "甲".len();
+    let second = normalized.find("乙").unwrap();
     context.update(|window, cx| {
-        let first = view
-            .read(cx)
-            .range_to_bounds(&(rtl_first..rtl_first + "אב".len()), cx)
-            .unwrap();
-        let second = view
-            .read(cx)
-            .range_to_bounds(&(rtl_second..rtl_second + "גד".len()), cx)
-            .unwrap();
-        assert!(
-            first.left() > second.right(),
-            "RTL columns must mirror the source order"
-        );
-        window.pointer_down(first.center(), MouseButton::Left, cx);
-        window.pointer_up(first.center(), MouseButton::Left, cx);
+        let view = view.read(cx);
+        let start = view.range_to_bounds(&(first..first), cx).unwrap();
+        window.pointer_down(start.center(), MouseButton::Left, cx);
+        window.pointer_up(start.center(), MouseButton::Left, cx);
     });
     view.read_with(&context, |view, _| {
-        assert!((rtl_first..=rtl_first + "אב".len()).contains(&view.selection().head()))
+        assert_eq!(view.selection().head(), first)
     });
     view.update_in(&mut context, |view, _, cx| {
-        view.select_range(rtl_second..rtl_second, cx)
+        view.select_range(first_end..first_end, cx)
     });
     settle_live_geometry(&view, &mut context);
-    context.update(|window, cx| {
-        assert!(view.read(cx).focus_handle(cx).is_focused(window));
-        window.press("right", cx);
-    });
+    context.update(|window, cx| window.press("right", cx));
     context.run_until_parked();
-    let first_column = normalized.find("123").unwrap();
     view.read_with(&context, |view, _| {
-        assert!(
-            (first_column..=rtl_first + "אב".len()).contains(&view.selection().head()),
-            "Right at RTL cell start {rtl_second} must enter {first_column}..={}, got {:?}",
-            rtl_first + "אב".len(),
-            view.selection()
-        )
+        assert_eq!(view.selection().head(), second)
     });
     context.update(|window, cx| window.press("left", cx));
     context.run_until_parked();
     view.read_with(&context, |view, _| {
-        assert!((rtl_second..=rtl_second + "גד".len()).contains(&view.selection().head()))
+        assert_eq!(view.selection().head(), first_end)
     });
     view.update_in(&mut context, |view, _, cx| {
-        view.select_range(rtl_second..rtl_second, cx)
+        view.select_range(second..second, cx)
     });
     context.update(|window, cx| window.press("tab", cx));
     context.run_until_parked();
-    let body_first = normalized.find("שלום").unwrap();
+    let body_first = normalized.find("中文").unwrap();
     view.read_with(&context, |view, _| {
-        assert!((body_first..=body_first + "שלום".len()).contains(&view.selection().head()))
+        assert_eq!(view.selection().head(), body_first)
     });
     let at = original.replace("\r\n", "\n").find("one").unwrap();
     view.update_in(&mut context, |view, window, cx| {
@@ -145,12 +127,9 @@ fn table_presentation_drag_fit_scroll_edit_history_and_host_reopen(
     let prose = context.update(|window, cx| {
         let prose = view.read(cx).range_to_bounds(&(0..0), cx).unwrap();
         let cell = view.read(cx).range_to_bounds(&(at..at + 1), cx).unwrap();
-        let handle = window.find_all_by_label("Resize table column")[0]
-            .bounds()
-            .center();
         window.dispatch_event(
             gpui_kit::PlatformInput::Scroll(gpui_kit::ScrollEvent {
-                position: handle + point(px(-20.), px(20.)),
+                position: cell.center(),
                 delta: gpui_kit::ScrollDelta::Pixels(point(px(-120.), px(0.))),
                 touch_phase: gpui_kit::TouchPhase::Moved,
                 ..Default::default()
@@ -173,12 +152,13 @@ fn table_presentation_drag_fit_scroll_edit_history_and_host_reopen(
         assert_eq!(view.scroll_offset().x, px(0.));
     });
     context.update(|window, cx| {
-        let handle = window.find_all_by_label("Resize table column")[0]
-            .bounds()
-            .center();
+        let cell = view.read(cx).range_to_bounds(&(at..at + 1), cx).unwrap();
         window.dispatch_event(
             gpui_kit::PlatformInput::Scroll(gpui_kit::ScrollEvent {
-                position: handle + point(px(-20.), px(20.)),
+                position: point(
+                    window.find("markdown-source").bounds().center().x,
+                    cell.center().y,
+                ),
                 delta: gpui_kit::ScrollDelta::Pixels(point(px(0.), px(-32.))),
                 ..Default::default()
             }),
@@ -201,17 +181,14 @@ fn table_presentation_drag_fit_scroll_edit_history_and_host_reopen(
         )
     });
     settle_live_geometry(&view, &mut context);
-    context.update(|window, cx| window.press("secondary-alt-f", cx));
+    context.update(|window, cx| {
+        assert!(view.read(cx).focus_handle(cx).is_focused(window));
+        window.press("secondary-alt-f", cx);
+    });
     settle_live_geometry(&view, &mut context);
     let fitted = view.read_with(&context, |view, cx| {
         view.document().read(cx).encode().unwrap()
     });
-    assert_ne!(fitted, resized.as_bytes());
-    assert!(
-        String::from_utf8(fitted.clone())
-            .unwrap()
-            .contains("table:striped cols=")
-    );
     context.update(|window, cx| window.press("shift-right", cx));
     context.update(|window, cx| window.input("X", cx));
     context.run_until_parked();

@@ -8,7 +8,7 @@ use gpui_kit::{
 };
 use std::time::{Duration, Instant};
 
-pub(super) fn native_cases() -> [crate::native_markdown::Case; 5] {
+pub(super) fn native_cases() -> [crate::native_markdown::Case; 7] {
     use crate::native_markdown::Case;
     [
         Case::new(
@@ -30,6 +30,14 @@ pub(super) fn native_cases() -> [crate::native_markdown::Case; 5] {
         Case::new(
             "ui::code_editor::markdown::source::review_tests::native_modified_link_drag_retains_upper_wrap_anchor",
             native_modified_link_drag_retains_upper_wrap_anchor,
+        ),
+        Case::new(
+            "ui::code_editor::markdown::source::review_tests::native_extreme_nowrap_line_keeps_pointer_selection_and_source_exact",
+            native_extreme_nowrap_line_keeps_pointer_selection_and_source_exact,
+        ),
+        Case::new(
+            "ui::code_editor::markdown::source::review_tests::native_aligned_table_pointer_and_selection_follow_content",
+            native_aligned_table_pointer_and_selection_follow_content,
         ),
     ]
 }
@@ -1553,4 +1561,114 @@ fn final_review_large_document_format_commands_preserve_order_and_cancel_externa
     assert_eq!(bytes(&view, &context), format!("X{source}").as_bytes());
     context.dispatch_action(gpui_kit::component::input::Undo);
     assert_eq!(bytes(&view, &context), source.as_bytes());
+}
+
+fn native_extreme_nowrap_line_keeps_pointer_selection_and_source_exact(cx: &mut TestAppContext) {
+    use gpui_kit::{MouseButton, point, px};
+    let ordinary = "ordinary ".repeat(256);
+    let source = format!("{ordinary}\n\n{} e\u{301} 👩‍💻 END", "w".repeat(200_000));
+    let (_directory, _path, _app, mut context, _streams, view) = fixture!(cx, &source);
+    for live in [true, false] {
+        view.update_in(&mut context, |view, window, cx| {
+            if view.is_live() != live {
+                view.toggle_mode(window, cx);
+            }
+            view.set_soft_wrap(false, cx);
+        });
+        select(&view, &mut context, ordinary.len(), ordinary.len());
+        until(&mut context, |context| {
+            view.read_with(context, |view, cx| {
+                view.geometry_is_current(cx)
+                    && !view.reveal_caret
+                    && view.scroll_offset().x < px(0.)
+            })
+        });
+        let end = source.len();
+        select(&view, &mut context, end, end);
+        until(&mut context, |context| {
+            view.read_with(context, |view, cx| {
+                view.geometry_is_current(cx) && !view.reveal_caret
+            })
+        });
+        let (start, finish) = view.read_with(&context, |view, cx| {
+            assert!(
+                !view.is_soft_wrap(),
+                "safety wrapping must not change the preference"
+            );
+            let start = view.range_to_bounds(&(end - 1..end - 1), cx).unwrap();
+            let finish = view.range_to_bounds(&(end..end), cx).unwrap();
+            let viewport = view.scroll.bounds();
+            assert!(viewport.contains(&start.center()) && viewport.contains(&finish.center()));
+            assert_eq!(start.top(), finish.top());
+            assert!(finish.left() > start.left());
+            (start, finish)
+        });
+        context.update(|window, cx| {
+            let at = point(
+                start.left() + (finish.left() - start.left()) * 0.2,
+                start.center().y,
+            );
+            window.pointer_down(at, MouseButton::Left, cx);
+            window.pointer_up(at, MouseButton::Left, cx);
+            assert_eq!(
+                view.read(cx).selection(),
+                Selection::caret(end - 1),
+                "live={live}, pointer={at:?}, start={start:?}, finish={finish:?}",
+            );
+            window.press("shift-right", cx);
+            assert_eq!(view.read(cx).selection(), Selection::new(end - 1, end));
+            window.input("Q", cx);
+        });
+        let mut edited = source.clone();
+        edited.replace_range(end - 1..end, "Q");
+        assert_eq!(bytes(&view, &context), edited.as_bytes());
+        context.dispatch_action(gpui_kit::component::input::Undo);
+        until(&mut context, |context| {
+            bytes(&view, context) == source.as_bytes()
+        });
+        assert_eq!(bytes(&view, &context), source.as_bytes());
+    }
+}
+
+fn native_aligned_table_pointer_and_selection_follow_content(cx: &mut TestAppContext) {
+    use gpui_kit::{MouseButton, point, px};
+    let source =
+        "<!-- table:grid cols=160,160 -->\n| **甲** | 乙 |\n| :---: | ---: |\n| 中文 | 日本 |";
+    let (_directory, _path, _app, mut context, _streams, view) = fixture!(cx, source);
+    for (text, centered) in [("甲", true), ("乙", false)] {
+        let at = source.find(text).unwrap();
+        let (start, end) = view.read_with(&context, |view, cx| {
+            let start = view.range_to_bounds(&(at..at), cx).unwrap();
+            let end = view.range_to_bounds(&(at..at + text.len()), cx).unwrap();
+            let cell = view.table_geometry[&view.projection.leaf_at(at).unwrap().id];
+            if centered {
+                assert!(((start.left() + end.left()) / 2. - cell.center().x).abs() < px(1.));
+            } else {
+                assert!(start.left() > cell.center().x && end.left() <= cell.right());
+            }
+            (start, end)
+        });
+        context.update(|window, cx| {
+            let position = point(
+                start.left() + (end.left() - start.left()) * 0.2,
+                start.center().y,
+            );
+            window.pointer_down(position, MouseButton::Left, cx);
+            window.pointer_up(position, MouseButton::Left, cx);
+            assert_eq!(view.read(cx).selection(), Selection::caret(at));
+            window.press("shift-right", cx);
+            assert_eq!(
+                view.read(cx).selection(),
+                Selection::new(at, at + text.len())
+            );
+            window.input("Q", cx);
+        });
+        assert_eq!(
+            bytes(&view, &context),
+            source.replacen(text, "Q", 1).as_bytes()
+        );
+        context.dispatch_action(gpui_kit::component::input::Undo);
+        settle(&view, &mut context);
+        assert_eq!(bytes(&view, &context), source.as_bytes());
+    }
 }

@@ -76,10 +76,14 @@ mod table_authoring;
 #[path = "tables/presentation.rs"]
 pub(super) mod table_presentation;
 
+// Bound the paint origin without changing source bytes or the user's wrap preference.
+const MAX_NOWRAP_WIDTH: f32 = 65_536.;
+
 struct CachedBlock {
     version: u64,
     seen: u64,
     node: BlockNode,
+    safety_wrap: bool,
 }
 
 #[derive(Default)]
@@ -2740,7 +2744,13 @@ impl Render for SourcePresentation {
                 ix = end;
                 continue;
             }
-            if !self.wrap && !matches!(leaf.kind, Kind::TableCell(_)) {
+            if !self.wrap
+                && !matches!(leaf.kind, Kind::TableCell(_))
+                && !self
+                    .blocks
+                    .get(&leaf.id)
+                    .is_some_and(|block| block.version == leaf.version && block.safety_wrap)
+            {
                 if let Some((_, width)) = self
                     .viewport
                     .widths
@@ -2836,8 +2846,10 @@ impl Render for SourcePresentation {
                     version: u64::MAX,
                     seen: 0,
                     node: BlockNode::Unknown,
+                    safety_wrap: false,
                 });
                 if cached.version != leaf.version {
+                    cached.safety_wrap = false;
                     if self.live && matches!(leaf.kind, Kind::Code(_) | Kind::Mermaid(_)) {
                         cached.node = BlockNode::CodeBlock(
                             CodeBlock::from_code(leaf.text.clone(), language)
@@ -3098,6 +3110,9 @@ impl Render for SourcePresentation {
                     .id(("markdown-block", leaf.id))
                     .w(table_width)
                     .relative()
+                    .when(self.blocks[&leaf.id].safety_wrap, |block| {
+                        block.whitespace_normal()
+                    })
                     .children(self.reorder_grips(leaf, cx))
                     .children(self.block_disclosure(leaf.range.start, leaf.id, cx))
                     .when(self.live && matches!(leaf.kind, Kind::List(_)), |block| {
@@ -3949,7 +3964,7 @@ impl IntoElement for SourceElement {
 }
 impl Element for SourceElement {
     type RequestLayoutState = ();
-    type PrepaintState = ();
+    type PrepaintState = bool;
     fn id(&self) -> Option<ElementId> {
         None
     }
@@ -3973,7 +3988,7 @@ impl Element for SourceElement {
         _: &mut (),
         window: &mut Window,
         cx: &mut App,
-    ) {
+    ) -> bool {
         self.view.update(cx, |view, _| {
             view.viewport.frame.clear();
             view.viewport.visible = self.visible.clone();
@@ -4067,13 +4082,13 @@ impl Element for SourceElement {
                 view.geometry = None;
                 view.viewport.bounds = Some(view.scroll.bounds());
                 view.viewport_height = view.scroll.bounds().size.height;
-                return;
+                return true;
             }
             if view.document.read(cx).revision() != self.revision
                 || view.projection.revision != self.revision
             {
                 view.geometry = None;
-                return;
+                return true;
             }
             let viewport = view.scroll.bounds();
             let layout =
@@ -4086,10 +4101,14 @@ impl Element for SourceElement {
             if reflow {
                 view.viewport.heights.clear();
                 view.viewport.widths.clear();
+                for block in view.blocks.values_mut() {
+                    block.safety_wrap = false;
+                }
             }
             view.viewport.layout = Some(layout);
             let mut measured = false;
             let mut extent_changed = false;
+            let mut safety_reflow = false;
             for (id, version, bounds) in &view.viewport.frame {
                 let height = bounds.size.height.max(window.rem_size());
                 measured |= view.viewport.heights.insert(*id, (*version, height))
@@ -4103,6 +4122,13 @@ impl Element for SourceElement {
                         let width = (right - bounds.left()).max(bounds.size.width);
                         extent_changed |= view.viewport.widths.insert(*id, (*version, width))
                             != Some((*version, width));
+                        if width > px(MAX_NOWRAP_WIDTH)
+                            && let Some(block) = view.blocks.get_mut(id)
+                            && !block.safety_wrap
+                        {
+                            block.safety_wrap = true;
+                            safety_reflow = true;
+                        }
                     }
                 }
             }
@@ -4154,7 +4180,7 @@ impl Element for SourceElement {
                 cx.notify();
             }
             let previous_caret = view.caret_bounds(view.state.selection.head, cx);
-            view.geometry = Some((self.revision, geometry));
+            view.geometry = (!safety_reflow).then_some((self.revision, geometry));
             if view.slash_current(view.slash.generation, cx)
                 && previous_caret != view.caret_bounds(view.state.selection.head(), cx)
             {
@@ -4176,6 +4202,11 @@ impl Element for SourceElement {
             if view.reveal_caret && view.focus.is_focused(window) {
                 let at = view.reveal_at.unwrap_or(view.state.selection.head);
                 if let Some(caret) = view.caret_bounds(at, cx) {
+                    let safety_wrapped = view.projection.leaf_at(at).is_some_and(|leaf| {
+                        view.blocks
+                            .get(&leaf.id)
+                            .is_some_and(|block| block.safety_wrap)
+                    });
                     let inset = window.rem_size() * 0.75;
                     let delta = if caret.top() < viewport.top() + inset {
                         viewport.top() + inset - caret.top()
@@ -4184,7 +4215,9 @@ impl Element for SourceElement {
                     } else {
                         px(0.)
                     };
-                    let delta_x = if caret.left() < viewport.left() + inset {
+                    let delta_x = if safety_wrapped {
+                        -view.scroll.offset().x
+                    } else if caret.left() < viewport.left() + inset {
                         viewport.left() + inset - caret.left()
                     } else if caret.right() > viewport.right() - inset {
                         viewport.right() - inset - caret.right()
@@ -4195,6 +4228,7 @@ impl Element for SourceElement {
                         && caret.bottom() <= viewport.bottom()
                         && caret.left() >= viewport.left()
                         && caret.right() <= viewport.right()
+                        && (!safety_wrapped || view.scroll.offset().x == Pixels::ZERO)
                     {
                         // Completion is observable only in a frame laid out at
                         // the final offset, not the frame requesting that offset.
@@ -4225,7 +4259,10 @@ impl Element for SourceElement {
                 view.geometry = None;
             }
             view.refresh_reorder_geometry(window, cx);
-        });
+            // Never display or accept pointer input against the provisional
+            // giant-origin layout. The next frame uses bounded visual rows.
+            !safety_reflow
+        })
     }
     fn paint(
         &mut self,
@@ -4233,11 +4270,22 @@ impl Element for SourceElement {
         _: Option<&InspectorElementId>,
         _: Bounds<Pixels>,
         _: &mut (),
-        _: &mut (),
+        ready: &mut bool,
         window: &mut Window,
         cx: &mut App,
     ) {
-        self.child.paint(window, cx);
+        if *ready {
+            self.child.paint(window, cx);
+        } else {
+            // Register focus/actions even while withholding unsafe glyphs.
+            // Otherwise a fast Undo during reflow can lose its dispatch target.
+            window.with_content_mask(
+                Some(ContentMask {
+                    bounds: Bounds::default(),
+                }),
+                |window| self.child.paint(window, cx),
+            );
+        }
         self.view.read(cx).paint_spelling(window, cx);
         let view = self.view.clone();
         window.on_mouse_event(move |event: &MouseMoveEvent, phase, window, cx| {

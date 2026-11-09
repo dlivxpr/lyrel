@@ -627,11 +627,8 @@ mod tests {
                 let visible = super::visible_spelling_text(leaf, geometry, viewport);
                 if !wrap {
                     assert!(
-                        view.scroll.offset().x < gpui_kit::Pixels::ZERO
-                            && view.scroll.max_offset().x > viewport.size.width,
-                        "nowrap native text must publish its real horizontal extent: offset={:?}, maximum={:?}, viewport={viewport:?}",
-                        view.scroll.offset(),
-                        view.scroll.max_offset(),
+                        view.scroll.max_offset().x <= viewport.size.width,
+                        "the complete extreme line must stay in bounded visual rows"
                     );
                 }
                 assert!(

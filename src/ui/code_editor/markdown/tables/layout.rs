@@ -606,13 +606,15 @@ fn cell_element(
             cell.border_r_1().border_color(cx.theme().border)
         })
         .when(cell.row == 0, |cell| cell.font_semibold())
+        // Move the content box so native caret/hit geometry follows alignment.
+        // GPUI text_align moves paint only, leaving those coordinates behind.
         .when(cell.align == markdown::mdast::AlignKind::Center, |cell| {
-            cell.text_center()
+            cell.flex().flex_col().items_center()
         })
         .when(
             cell.align == markdown::mdast::AlignKind::Right
                 || (rtl && cell.align == markdown::mdast::AlignKind::None),
-            |cell| cell.text_right(),
+            |cell| cell.flex().flex_col().items_end(),
         )
         // A chosen column width constrains its own cell independently of the
         // source/prose soft-wrap preference; text must not cross other cells.

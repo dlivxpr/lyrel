@@ -58,7 +58,19 @@ pub(crate) fn bindings(cx: &App) -> Vec<KeyBinding> {
         bind(&format!("{modifier}-6"), Box::new(ToHeading6)),
         bind(&format!("{modifier}-q"), Box::new(ToQuote)),
         bind(&format!("{modifier}-n"), Box::new(ToCallout)),
-        bind(&format!("{modifier}-f"), Box::new(ToggleFold)),
+        KeyBinding::load(
+            &format!("{modifier}-f"),
+            Box::new(ToggleFold),
+            Some(
+                KeyBindingContextPredicate::parse("Markdown && !MarkdownTable")
+                    .expect("static fold context")
+                    .into(),
+            ),
+            false,
+            None,
+            cx,
+        )
+        .expect("static fold shortcut"),
         bind(&format!("{modifier}-shift-f"), Box::new(PersistCalloutFold)),
         bind(&format!("{modifier}-enter"), Box::new(ExitQuote)),
     ]

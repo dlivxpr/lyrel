@@ -196,6 +196,31 @@ GitHub 上的 Markdown 来自陌生人，因此渲染时有两项限制：只加
 
 反向同样适用：已打开的 Markdown 另存为或重命名为其他扩展名后，当前 buffer 继续使用原生文档、编码／逐行行尾表示和撤销历史，外部重载也按当前输入实体解码；释放后重开才按新扩展名选择编辑器。更名不隐式执行全文整理或有损编辑器迁移。
 
+#### 当前支持范围与文本布局保护
+
+负责人已明确将阿拉伯语、波斯语、希伯来语的完整 RTL 字形、双向混排阅读顺序及其视觉左右语义排除在当前验收目标之外。这是产品范围决定，不表示 SDK 缺陷已修复。对应的 RTL 镜像列顺序、波斯语反向扩选断言已删除；原复合消费者仍执行中文／英文、组合字素、光标选择、表格导航、保存和历史验证，不整项忽略。下文保留的 RTL 原始失败属于历史证据，以本节的当前边界为准。
+
+应用层采用以下保护，仍仅使用正式 Kit `0.9.1`／Fast `0.1.14`，没有依赖补丁或替代 renderer：
+
+- **表格对齐与命中**：居中／右对齐改为定位内容盒，不再用只移动 paint、却不移动 native hit-testing 的 `text_align`。跨单元格仍由同一表格模型导航；表格内按内容调整列宽的快捷键不再被 Markdown 标题折叠截获，表格外保留折叠快捷键。
+- **极长行安全折行**：Markdown 即时编辑和源码模式按实际 native 横向布局宽度判断；超过 `65,536` 逻辑像素的文本块即使关闭自动换行，也仅在展示层折成有界视觉行。普通 nowrap 及其他文本块的横向滚动保留；状态栏仍显示用户的自动换行偏好，而非改写该偏好。阈值不是文件大小或字节截断上限，不插入真实换行、不减少源文档内容。
+- **重排期间的编辑安全**：重排完成前不发布旧命中几何，不绘制不可靠的巨大负原点文字；键盘、焦点和 Undo 路由继续注册。定位到受保护块时清除从其他 nowrap 块带来的横向偏移，避免可见尾字落进窗格边缘的 resize 区域。文档版本或版面变化后重新测量。
+
+本轮实际验证：
+
+| 验证 | 命令或场景 | 结果 |
+| --- | --- | --- |
+| 全部真实字体消费者 | `cargo test --locked --test native_markdown -- --nocapture` | 14 通过、0 失败、0 ignored；新增完整超长单行与对齐单元格点击／扩选／Undo 消费者 |
+| 标题折叠与转换 | `cargo test --locked --bin lyrel-app -- headings::tests::` | 1 通过 |
+| 普通 nowrap 保持 | `cargo test --locked --bin lyrel-app -- native_nowrap_inline_reveal_drops_offscreen_source_extent` | 1 通过 |
+| 完整宽表 | `cargo test --locked --bin lyrel-app -- native_full_wide_table_reenters_distant_cells_with_wrapped_height_and_undo` | 1 通过 |
+| 无探针产品 | `cargo build --locked --bin lyrel-app` | Debug 构建成功 |
+
+隔离 Windows 产品实窗使用原始失败样本的完整 `400,059` 字节副本，关闭自动换行偏好；观察到末尾文字和 caret 相接，直接点击可见末尾后的 `Q` 确实写入源码末尾，保存为 `400,060` 字节，一次 Undo 并保存恢复原始 `400,059` 字节及 SHA-256。另在实际居中／右对齐表格中点击右列的“乙”，Shift 扩选并替换为 `Q`，确认其余单元格和元数据不变，保存及一次 Undo 精确恢复原始 88 字节。
+
+证据位于仓库外 `C:/Users/dlivx/AppData/Local/Temp/lyrel-204-CtjYLY/evidence205/approved-workarounds/`：测试日志、`product-long/result.json`、`product-long/table-result.json` 与截图。产品二进制 SHA-256 为 `e26ae4f5530c024d59521964b12f2b3de4efb66adbed06ad7cf3982d546fcb67`。原生键盘操作由工具自动使用 takeover，不称为纯后台输入；未做本轮 Release 性能、macOS 或完整 workspace 验收。SDK 原始 `ShapedLine::paint` 的任意长 nowrap 缺陷仍未修复，不能用应用安全折行宣称底层已解决；历史失败与 [#235](https://github.com/dlivxpr/lyrel/issues/235) 保留。
+
+
 #### Zorite 体验对齐：核心交付与验收边界
 
 本设计已在 `integration/204-markdown-wysiwyg` 集中实现，按负责人批准的 Windows 核心验证与已记录性能取舍交付；完整原生矩阵、严格匹配性能及 SDK 延期项不冒充通过。下文保留历史检查点，并单列最终正式依赖、无探针产品与量测证据。范围与视觉约束见仓库 `docs/design-system.md` 的“分屏与文档栏”。源码与真实软件对照固定为 Zorite `9c09b8cce84e41ca20c403e5b381c448cde468c4`，未跟随上游滚动扩大目标；正式版 `v0.13.0` 与该提交不是同一基线，不能互相冒充。
