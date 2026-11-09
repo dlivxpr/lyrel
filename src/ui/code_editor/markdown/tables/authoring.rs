@@ -96,16 +96,27 @@ impl SourcePresentation {
         selected: Option<Range<usize>>,
         cx: &App,
     ) -> (String, Option<Range<usize>>) {
-        if self.live
-            && self.projection.revision == self.document.read(cx).revision()
-            && self.projection.leaf_at(range.start).is_some_and(|leaf| {
-                matches!(leaf.kind, Kind::TableCell(_)) && range.end <= leaf.range.end
-            })
-        {
-            super::super::tables::input(self.document.read(cx).source(), range, text, selected)
-        } else {
-            (text, selected)
-        }
+        let leaf = (self.live && self.projection.revision == self.document.read(cx).revision())
+            .then(|| self.projection.leaf_at(range.start))
+            .flatten();
+        let Some(leaf) = leaf.filter(|leaf| range.end <= leaf.range.end) else {
+            return (text, selected);
+        };
+        let Kind::TableCell(cell) = leaf.kind else {
+            return (text, selected);
+        };
+        // At the final unpadded cell's source end, a pasted newline leaves the
+        // table. Interior cell input still flattens newlines and escapes pipes.
+        let exit_at_newline = range.is_empty()
+            && range.start == cell.table().end
+            && range.start == leaf.content_end();
+        super::super::tables::input(
+            self.document.read(cx).source(),
+            range,
+            text,
+            selected,
+            exit_at_newline,
+        )
     }
 
     // Replacement across partial cells deletes only editable content, then puts

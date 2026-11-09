@@ -60,6 +60,7 @@ pub(super) struct Leaf {
     pub range: Range<usize>,
     pub text: String,
     pub(super) direction_runs: smallvec::SmallVec<[Range<usize>; 1]>,
+    text_fragments: smallvec::SmallVec<[Range<usize>; 1]>,
     pub kind: Kind,
     pub deferred: bool,
     pub(super) math_alignment: super::source::math_edit::alignment::Align,
@@ -168,6 +169,7 @@ impl Leaf {
             range,
             text: String::new(),
             direction_runs: smallvec::SmallVec::new(),
+            text_fragments: smallvec::SmallVec::new(),
             kind,
             deferred: false,
             math_alignment: Default::default(),
@@ -240,6 +242,7 @@ impl Leaf {
     }
     fn rebuild(&mut self, marked: Option<&Range<usize>>) {
         self.text.clear();
+        self.text_fragments.clear();
         for segment in &mut self.segments {
             let start = self.text.len();
             if segment.image.is_none() && segment.math.is_none() {
@@ -256,6 +259,18 @@ impl Leaf {
                 });
             }
             segment.display = start..self.text.len();
+            if segment.verbatim || segment.image.is_none() && segment.math.is_none() {
+                let mut at = segment.display.start;
+                for line in self.text[segment.display.clone()].split_inclusive('\n') {
+                    // InlineFlow reports no Text piece for the hard-break
+                    // byte. Do not mistake its fallback caret for a text row.
+                    let end = at + line.trim_end_matches('\n').len();
+                    if at < end {
+                        self.text_fragments.push(at..end);
+                    }
+                    at += line.len();
+                }
+            }
         }
         // Build source-order direction runs once per displayed text revision,
         // not once per diagnostic/frame. Geometry remains entirely native.
@@ -334,6 +349,7 @@ impl Leaf {
         extra: &[super::Selection],
         marked: Option<&Range<usize>>,
         source: Option<&Range<usize>>,
+        formula: Option<&Range<usize>>,
     ) -> bool {
         let mut changed = false;
         for span in &mut self.spans {
@@ -351,17 +367,19 @@ impl Leaf {
         }
         for segment in &mut self.segments {
             if segment.image.is_some() || segment.math.is_some() {
-                let revealed = std::iter::once(&selection).chain(extra).any(|selection| {
-                    let range = selection.range();
-                    // Crossing the whole image selects its original Markdown as
-                    // one atom. Reveal only when an editing endpoint is inside
-                    // its syntax; otherwise reverse Shift navigation must cross
-                    // the same boundary instead of entering the image URL.
-                    segment.source.start < range.start && range.start < segment.source.end
-                        || segment.source.start < range.end && range.end < segment.source.end
-                }) || marked.is_some_and(|range| {
-                    range.start < segment.source.end && range.end > segment.source.start
-                });
+                // A structural session owns the atom even though its source
+                // selection records the insertion point inside the delimiters.
+                // Only leaving that session can restore ordinary source reveal.
+                let revealed = formula != Some(&segment.source)
+                    && (std::iter::once(&selection).chain(extra).any(|selection| {
+                        let range = selection.range();
+                        // Crossing the whole image selects its original Markdown
+                        // as one atom; an interior endpoint enters its syntax.
+                        segment.source.start < range.start && range.start < segment.source.end
+                            || segment.source.start < range.end && range.end < segment.source.end
+                    }) || marked.is_some_and(|range| {
+                        range.start < segment.source.end && range.end > segment.source.start
+                    }));
                 changed |= segment.verbatim != revealed;
                 segment.verbatim = revealed;
             }
@@ -705,6 +723,11 @@ impl Leaf {
             .iter()
             .filter(|segment| !segment.display.is_empty())
             .map(|segment| (segment.display.clone(), segment.source.clone()))
+    }
+    /// Text segments have source-ordered native rows. Keep atom and style
+    /// boundaries separate: InlineFlow baselines can differ on the same row.
+    pub(super) fn spelling_fragments(&self) -> impl Iterator<Item = Range<usize>> + '_ {
+        self.text_fragments.iter().cloned()
     }
     pub fn display_offset(&self, source: usize) -> usize {
         if self.deferred {

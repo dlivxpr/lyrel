@@ -46,11 +46,6 @@ fn visible_spelling_text(
     if bounds.bottom() < top || bounds.top() > bottom {
         return smallvec::SmallVec::new();
     }
-    // InlineFlow atom carets sit at the atom's bottom, unlike surrounding
-    // baseline-aligned text. Their y is not source-monotonic: never bisect it.
-    if leaf.image_urls().next().is_some() || leaf.formulas().next().is_some() {
-        return smallvec::smallvec![0..text.len()];
-    }
     let before = |range: Range<usize>, predicate: &dyn Fn(Point<Pixels>) -> bool| {
         let mut low = range.start;
         let mut high = range.end;
@@ -64,39 +59,46 @@ fn visible_spelling_text(
         }
         low
     };
-    let start = before(0..text.len(), &|p| p.y < top);
-    let end = before(start..text.len(), &|p| p.y < bottom);
     let mut visible = smallvec::SmallVec::<[Range<usize>; 1]>::new();
-    let mut row_start = start;
-    while row_start < end {
-        let y = geometry.position_for_index(row_start).y;
-        let row_end = before(row_start..end, &|p| p.y < y + geometry.line_height() / 2.)
-            .max(text.ceil_char_boundary(row_start + 1));
-        for run in &leaf.direction_runs {
-            let a = row_start.max(run.start);
-            let b = row_end.min(run.end);
-            if a >= b {
-                continue;
+    // Only bisect text within its original atom/style boundaries. In
+    // particular, never query fragment.end: that caret belongs to the next
+    // piece, possibly a tall atom with a non-monotonic baseline.
+    for fragment in leaf.spelling_fragments() {
+        let start = before(fragment.clone(), &|p| p.y < top);
+        let end = before(start..fragment.end, &|p| p.y < bottom);
+        let mut row_start = start;
+        while row_start < end {
+            let y = geometry.position_for_index(row_start).y;
+            let row_end = before(row_start..end, &|p| p.y < y + geometry.line_height() / 2.)
+                .max(text.ceil_char_boundary(row_start + 1));
+            for run in &leaf.direction_runs {
+                let a = row_start.max(run.start);
+                let b = row_end.min(run.end);
+                if a >= b {
+                    continue;
+                }
+                let last = text.floor_char_boundary(b - 1);
+                let rtl = geometry.position_for_index(a).x > geometry.position_for_index(last).x;
+                let left = viewport.left() - margin;
+                let right = viewport.right() + margin;
+                let from = before(a..b, &|p| if rtl { p.x > right } else { p.x < left });
+                let through = before(from..b, &|p| if rtl { p.x >= left } else { p.x <= right });
+                // Retain complete boundary graphemes; native line boxes and
+                // pixel clipping still decide which part is actually drawn.
+                let from = navigation::adjacent_grapheme(text, from, true)
+                    .map_or(from, |grapheme| grapheme.start)
+                    .max(fragment.start);
+                let through = navigation::adjacent_grapheme(text, through, false)
+                    .map_or(through, |grapheme| grapheme.end)
+                    .min(fragment.end);
+                if let Some(previous) = visible.last_mut().filter(|range| range.end >= from) {
+                    previous.end = previous.end.max(through);
+                } else {
+                    visible.push(from..through);
+                }
             }
-            let last = text.floor_char_boundary(b - 1);
-            let rtl = geometry.position_for_index(a).x > geometry.position_for_index(last).x;
-            let left = viewport.left() - margin;
-            let right = viewport.right() + margin;
-            let from = before(a..b, &|p| if rtl { p.x > right } else { p.x < left });
-            let through = before(from..b, &|p| if rtl { p.x >= left } else { p.x <= right });
-            // Include boundary graphemes and the shared wrap/run endpoint, then
-            // let exact native line boxes and pixel clipping decide visibility.
-            let from = navigation::adjacent_grapheme(text, from, true)
-                .map_or(from, |grapheme| grapheme.start);
-            let through = navigation::adjacent_grapheme(text, through, false)
-                .map_or(through, |grapheme| grapheme.end);
-            if let Some(previous) = visible.last_mut().filter(|range| range.end >= from) {
-                previous.end = previous.end.max(through);
-            } else {
-                visible.push(from..through);
-            }
+            row_start = row_end;
         }
-        row_start = row_end;
     }
     visible
 }
@@ -540,6 +542,78 @@ mod tests {
                 original.as_bytes()
             );
         });
+        assert_eq!(std::fs::read(path).unwrap(), original.as_bytes());
+    }
+
+    #[gpui_kit::test]
+    fn spelling_full_mixed_paragraph_keeps_visible_text_editable_around_tall_atoms(
+        cx: &mut TestAppContext,
+    ) {
+        use gpui_kit::test::TestEventExt as _;
+        let mut native_context = TestAppContext::build_with_text_system(
+            gpui_kit::TestDispatcher::new(0),
+            cx.test_function_name(),
+            gpui_kit::platform::current_platform(true).text_system(),
+        );
+        let original = format!(
+            "A {}![tall](tall.png) $\\frac{{a}}{{b}}$ {}",
+            "a ".repeat(100_000),
+            "b ".repeat(100_000),
+        );
+        assert_eq!(original.len(), 400_034);
+        let body = original.find("$ ").unwrap() + 2;
+        let (_directory, path, _app, mut context, _streams, view) =
+            spelling_fixture!(&mut native_context, original.as_bytes());
+        image::RgbaImage::from_pixel(12, 96, image::Rgba([0, 0, 255, 255]))
+            .save(path.parent().unwrap().join("tall.png"))
+            .unwrap();
+        settle_geometry(&view, &mut context);
+        context.update(|window, cx| window.click("markdown-load-images", cx));
+        for wrap in [true, false] {
+            view.update_in(&mut context, |view, _, cx| {
+                view.set_soft_wrap(wrap, cx);
+                view.select_range(body..body, cx);
+            });
+            settle_geometry(&view, &mut context);
+            view.update_in(&mut context, |view, _, cx| {
+                view.spelling.invalidate();
+                view.set_spelling_diagnostics(
+                    vec![Diagnostic {
+                        ranges: vec![0..original.len()],
+                        word: "deterministic OS diagnostic".into(),
+                    }],
+                    cx,
+                );
+            });
+            context.update(|window, cx| window.render_frame(cx));
+            let position = view.read_with(&context, |view, cx| {
+                let leaf = view.projection.leaf_at(body).unwrap();
+                let geometry = &view.geometry.as_ref().unwrap().1[&leaf.id];
+                let display = leaf.display_offset(body);
+                assert!(
+                    super::visible_spelling_text(leaf, geometry, view.scroll.bounds())
+                        .iter()
+                        .any(|range| range.contains(&display)),
+                    "native visible text after the high atoms retains its diagnostic"
+                );
+                view.caret_bounds(body, cx).unwrap().center()
+            });
+            context.update(|window, cx| {
+                window.pointer_down(position, gpui_kit::MouseButton::Left, cx);
+                window.pointer_up(position, gpui_kit::MouseButton::Left, cx);
+                window.input("X", cx);
+            });
+            let mut expected = original.clone();
+            expected.insert(body, 'X');
+            view.read_with(&context, |view, cx| {
+                assert_eq!(view.document.read(cx).encode().unwrap(), expected.as_bytes());
+            });
+            context.dispatch_action(gpui_kit::component::input::Undo);
+            settle_geometry(&view, &mut context);
+            view.read_with(&context, |view, cx| {
+                assert_eq!(view.document.read(cx).encode().unwrap(), original.as_bytes());
+            });
+        }
         assert_eq!(std::fs::read(path).unwrap(), original.as_bytes());
     }
 

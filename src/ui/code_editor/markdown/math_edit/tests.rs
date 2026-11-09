@@ -9,7 +9,7 @@ fn formula_structural_fraction_cancel_commit_and_shared_document_undo(cx: &mut T
     use crate::ui::code_editor::test_host::FileHost;
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("structural-formula.md");
-    let source = "前 $\\frac{a}{b}+\\mathrm{keep}$ 后\r\n\r\n$$\nx_i^2\n$$\n";
+    let source = "前 $\\frac{a}{b}+\\mathrm{keep}$ 后\r\n\r\n$$\n  x_i^2\n$$\n";
     std::fs::write(&path, source).unwrap();
     let (app, mut context, _streams) = harness_with_tabs(cx, 1);
     let host = FileHost::new(lyrel_core::host::HostId(219));
@@ -131,6 +131,17 @@ fn formula_structural_fraction_cancel_commit_and_shared_document_undo(cx: &mut T
         )
     });
     context.run_until_parked();
+    context.update(|window, cx| {
+        window.click("markdown-math-ready-  x_i^2", cx);
+        assert!(window.find("markdown-formula-editor").visible());
+        assert_eq!(
+            view.read(cx).selection(),
+            super::Selection::caret(source.find("x_i^2").unwrap()),
+            "block formula entry skips the opening line and leading whitespace"
+        );
+        window.press("escape", cx);
+        assert_eq!(view.read(cx).document().read(cx).encode().unwrap(), source.as_bytes());
+    });
     context.update(|window, cx| {
         window.render_frame(cx);
         window.click(ready, cx);

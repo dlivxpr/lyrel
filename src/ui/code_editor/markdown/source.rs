@@ -765,6 +765,7 @@ impl SourcePresentation {
                 &self.extra_selections,
                 marked.as_ref(),
                 source.as_ref(),
+                self.math.editor.as_ref().map(|(range, _)| range),
             ) {
                 self.spelling.surface_generation = self.spelling.surface_generation.wrapping_add(1);
                 if matches!(leaf.kind, Kind::TableCell(_)) {

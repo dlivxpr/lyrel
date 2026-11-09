@@ -882,7 +882,7 @@ mod tests {
         let mut projection = Projection::parse(source, 1, true, Grammar::Markdown);
         projection.format_theme(gpui_kit::Hsla::default());
         for leaf in &mut projection.leaves {
-            leaf.contextual_reveal(Selection::new(0, source.len()), &[], None, None);
+            leaf.contextual_reveal(Selection::new(0, source.len()), &[], None, None, None);
         }
         let leaf = projection
             .leaves

@@ -2066,7 +2066,18 @@ fn markdown_delayed_image_write_preserves_newer_typing_and_caret(cx: &mut TestAp
     wait_until(&mut vcx, |vcx| {
         vcx.update(|window, cx| {
             window.render_frame(cx);
-            window.try_find("markdown-image-insertion-status").is_none()
+            window
+                .try_find("markdown-image-insertion-status")
+                .is_some_and(|status| {
+                    status.visible()
+                        && status.label()
+                            == Some(
+                                crate::ui::i18n::t(
+                                    crate::ui::i18n::L10nKey::MarkdownImageSelectionChanged,
+                                )
+                                .as_ref(),
+                            )
+                })
         })
     });
     app.read_with(&vcx, |app, cx| {

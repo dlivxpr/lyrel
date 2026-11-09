@@ -460,7 +460,7 @@ impl SourcePresentation {
             + if end {
                 session.body.end
             } else {
-                session.body.start
+                formula.insertion_offset()
             };
         self.formula = Some(session);
         self.formula_tools.palette_open = false;

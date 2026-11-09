@@ -216,6 +216,7 @@ pub(super) fn input(
     range: &Range<usize>,
     text: String,
     selected: Option<Range<usize>>,
+    exit_at_newline: bool,
 ) -> (String, Option<Range<usize>>) {
     if !text.contains(['|', '\n', '\r']) {
         return (text, selected);
@@ -237,7 +238,12 @@ pub(super) fn input(
     let original_selection = selected.clone();
     let mut offset = 0;
     let mut output_offset = 0;
-    let text = text.trim_end_matches(['\r', '\n']);
+    let text = if exit_at_newline {
+        text.as_str()
+    } else {
+        text.trim_end_matches(['\r', '\n'])
+    };
+    let mut after_table = false;
     let mut chars = text.chars().peekable();
     while let Some(ch) = chars.next() {
         // Native selections use UTF-16; preserve their affinity before any
@@ -251,12 +257,19 @@ pub(super) fn input(
             }
         }
         offset += ch.len_utf16();
-        if ch == '\r' && chars.peek() == Some(&'\n') {
+        if !exit_at_newline && ch == '\r' && chars.peek() == Some(&'\n') {
             chars.next();
             offset += 1;
         }
-        let ch = if matches!(ch, '\r' | '\n') { ' ' } else { ch };
-        if ch == '|' && !escaped {
+        if exit_at_newline && matches!(ch, '\r' | '\n') {
+            after_table = true;
+        }
+        let ch = if !after_table && matches!(ch, '\r' | '\n') {
+            ' '
+        } else {
+            ch
+        };
+        if !after_table && ch == '|' && !escaped {
             output.push('\\');
             output_offset += 1;
         }
