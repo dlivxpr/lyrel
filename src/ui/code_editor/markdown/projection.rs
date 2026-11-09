@@ -59,6 +59,7 @@ pub(super) struct Leaf {
     pub version: u64,
     pub range: Range<usize>,
     pub text: String,
+    pub(super) direction_runs: smallvec::SmallVec<[Range<usize>; 1]>,
     pub kind: Kind,
     pub deferred: bool,
     pub(super) math_alignment: super::source::math_edit::alignment::Align,
@@ -166,6 +167,7 @@ impl Leaf {
             inline_insertions: smallvec::SmallVec::new(),
             range,
             text: String::new(),
+            direction_runs: smallvec::SmallVec::new(),
             kind,
             deferred: false,
             math_alignment: Default::default(),
@@ -254,6 +256,33 @@ impl Leaf {
                 });
             }
             segment.display = start..self.text.len();
+        }
+        // Build source-order direction runs once per displayed text revision,
+        // not once per diagnostic/frame. Geometry remains entirely native.
+        self.direction_runs.clear();
+        if self.text.is_ascii()
+            || !self.text.chars().any(|ch| {
+                use unicode_bidi::BidiClass::*;
+                matches!(
+                    unicode_bidi::bidi_class(ch),
+                    R | AL | AN | RLE | LRE | RLO | LRO | RLI | LRI | FSI | PDI | PDF
+                )
+            })
+        {
+            self.direction_runs.push(0..self.text.len());
+        } else {
+            let bidi = unicode_bidi::BidiInfo::new(&self.text, None);
+            for paragraph in &bidi.paragraphs {
+                let mut start = paragraph.range.start;
+                for (offset, _) in self.text[paragraph.range.clone()].char_indices().skip(1) {
+                    let at = paragraph.range.start + offset;
+                    if bidi.levels[at] != bidi.levels[start] {
+                        self.direction_runs.push(start..at);
+                        start = at;
+                    }
+                }
+                self.direction_runs.push(start..paragraph.range.end);
+            }
         }
     }
     /// Hide presentation-only source slices while retaining their byte mapping.
@@ -1316,20 +1345,25 @@ impl Projection {
             let tag = matches!(child, Node::Html(_))
                 .then(|| super::source::formats::opaque_tag(&source[range.clone()]))
                 .flatten();
-            if let Some((name, start)) = opaque {
-                if tag == Some((name, true)) {
-                    leaf.raw(source, start..range.end);
-                    opaque = None;
+            if let Some((name, start, depth)) = opaque.as_mut() {
+                if tag == Some((*name, false)) {
+                    *depth += 1;
+                } else if tag == Some((*name, true)) {
+                    *depth -= 1;
+                    if *depth == 0 {
+                        leaf.raw(source, *start..range.end);
+                        opaque = None;
+                    }
                 }
                 continue;
             }
             if let Some((name, false)) = tag {
-                opaque = Some((name, range.start));
+                opaque = Some((name, range.start, 1usize));
             } else {
                 Self::inline(source, child, leaf);
             }
         }
-        if let Some((_, start)) = opaque {
+        if let Some((_, start, _)) = opaque {
             // An unfinished opaque element remains literal through the end of
             // this inline owner; it never swallows a following block.
             let end = children

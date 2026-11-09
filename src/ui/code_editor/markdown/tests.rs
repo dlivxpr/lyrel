@@ -3420,6 +3420,7 @@ fn opening_native_images_never_contacts_http_until_loading_intent(
     });
     assert_eq!(requests.load(Ordering::SeqCst), 1);
     view.read_with(&context, |view, cx| {
+        assert_eq!(view.selection(), Selection::caret(source.len()));
         assert_eq!(view.document().read(cx).source().to_string(), source);
         assert_eq!(
             view.range_to_bounds(&(source.len()..source.len()), cx)
@@ -5381,9 +5382,8 @@ fn native_math_renders_glyph_atoms_and_local_source_uses_document_history_and_sa
         window.pointer_up(point, MouseButton::Left, cx);
     });
     context.run_until_parked();
-    context.update(|window, cx| {
+    context.update(|window, _| {
         assert!(window.find("formula-cancel").visible());
-        window.click("formula-source", cx);
     });
     view.read_with(&context, |view, cx| {
         assert_eq!(view.selection(), Selection::caret(at - 5));

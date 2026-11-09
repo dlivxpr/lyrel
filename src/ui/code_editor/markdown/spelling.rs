@@ -34,27 +34,29 @@ impl State {
 }
 
 fn visible_spelling_text(
-    text: &str,
+    leaf: &super::super::projection::Leaf,
     geometry: &LeafGeometry,
     viewport: Bounds<Pixels>,
-) -> Range<usize> {
+) -> smallvec::SmallVec<[Range<usize>; 1]> {
+    let text = &leaf.text;
     let margin = geometry.line_height() * 2.;
     let top = viewport.top() - margin;
     let bottom = viewport.bottom() + margin;
     let bounds = geometry.bounds();
-    if bounds.top() >= top && bounds.bottom() <= bottom {
-        return 0..text.len();
+    if bounds.bottom() < top || bounds.top() > bottom {
+        return smallvec::SmallVec::new();
     }
-    // Native carets follow source-ordered visual rows, including RTL within a
-    // row. Bisect by y, not x; wrapped starts and mixed inline pieces retain
-    // two neighboring rows before the existing pixel clipping is applied.
-    // Querying every offscreen diagnostic is quadratic on a long shaped line.
-    let before = |y: Pixels| {
-        let mut low = 0;
-        let mut high = text.len();
+    // InlineFlow atom carets sit at the atom's bottom, unlike surrounding
+    // baseline-aligned text. Their y is not source-monotonic: never bisect it.
+    if leaf.image_urls().next().is_some() || leaf.formulas().next().is_some() {
+        return smallvec::smallvec![0..text.len()];
+    }
+    let before = |range: Range<usize>, predicate: &dyn Fn(Point<Pixels>) -> bool| {
+        let mut low = range.start;
+        let mut high = range.end;
         while low < high {
             let middle = text.floor_char_boundary(low + (high - low) / 2);
-            if geometry.position_for_index(middle).y < y {
+            if predicate(geometry.position_for_index(middle)) {
                 low = text.ceil_char_boundary(middle + 1);
             } else {
                 high = middle;
@@ -62,12 +64,41 @@ fn visible_spelling_text(
         }
         low
     };
-    let start = before(top);
-    let end = before(bottom);
-    let start =
-        navigation::adjacent_grapheme(text, start, true).map_or(start, |grapheme| grapheme.start);
-    let end = navigation::adjacent_grapheme(text, end, false).map_or(end, |grapheme| grapheme.end);
-    start..end
+    let start = before(0..text.len(), &|p| p.y < top);
+    let end = before(start..text.len(), &|p| p.y < bottom);
+    let mut visible = smallvec::SmallVec::<[Range<usize>; 1]>::new();
+    let mut row_start = start;
+    while row_start < end {
+        let y = geometry.position_for_index(row_start).y;
+        let row_end = before(row_start..end, &|p| p.y < y + geometry.line_height() / 2.)
+            .max(text.ceil_char_boundary(row_start + 1));
+        for run in &leaf.direction_runs {
+            let a = row_start.max(run.start);
+            let b = row_end.min(run.end);
+            if a >= b {
+                continue;
+            }
+            let last = text.floor_char_boundary(b - 1);
+            let rtl = geometry.position_for_index(a).x > geometry.position_for_index(last).x;
+            let left = viewport.left() - margin;
+            let right = viewport.right() + margin;
+            let from = before(a..b, &|p| if rtl { p.x > right } else { p.x < left });
+            let through = before(from..b, &|p| if rtl { p.x >= left } else { p.x <= right });
+            // Include boundary graphemes and the shared wrap/run endpoint, then
+            // let exact native line boxes and pixel clipping decide visibility.
+            let from = navigation::adjacent_grapheme(text, from, true)
+                .map_or(from, |grapheme| grapheme.start);
+            let through = navigation::adjacent_grapheme(text, through, false)
+                .map_or(through, |grapheme| grapheme.end);
+            if let Some(previous) = visible.last_mut().filter(|range| range.end >= from) {
+                previous.end = previous.end.max(through);
+            } else {
+                visible.push(from..through);
+            }
+        }
+        row_start = row_end;
+    }
+    visible
 }
 
 impl SourcePresentation {
@@ -303,7 +334,7 @@ impl SourcePresentation {
             let Some(geometry) = geometry.get(&leaf.id) else {
                 continue;
             };
-            let visible = visible_spelling_text(&leaf.text, geometry, viewport);
+            for visible in visible_spelling_text(leaf, geometry, viewport) {
             let source_start = leaf.source_offset(visible.start);
             let source_end = leaf.source_offset(visible.end);
             let recover_wrapped_start = navigation::recover_wrapped_start(leaf.kind);
@@ -365,6 +396,7 @@ impl SourcePresentation {
                         window.paint_path(path, color);
                     }
                 }
+            }
             }
         }
     }
@@ -463,6 +495,7 @@ mod tests {
         let (_directory, path, _app, mut context, _streams, view) =
             spelling_fixture!(&mut native_context, original.as_bytes());
         view.update_in(&mut context, |view, _, cx| {
+            view.set_soft_wrap(false, cx);
             view.select_range(body..body, cx);
         });
         settle_geometry(&view, &mut context);

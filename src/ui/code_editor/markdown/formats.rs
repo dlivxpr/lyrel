@@ -317,11 +317,20 @@ pub(in super::super) fn decorations(source: &str, root: &Node) -> Vec<Decoration
             let raw = &source[range.clone()];
             if matches!(child, Node::Html(_)) {
                 if let Some((name, closing)) = opaque_tag(raw) {
-                    if !closing {
-                        opaque = Some(name);
+                    if let Some((opened, depth)) = opaque.as_mut() {
+                        if *opened == name {
+                            if closing {
+                                *depth -= 1;
+                                if *depth == 0 {
+                                    opaque = None;
+                                }
+                            } else {
+                                *depth += 1;
+                            }
+                        }
+                    } else if !closing {
+                        opaque = Some((name, 1usize));
                         highlight = None;
-                    } else if opaque == Some(name) {
-                        opaque = None;
                     }
                     continue;
                 }
@@ -514,21 +523,28 @@ fn eligible(source: &str, root: &Node, range: &Range<usize>, format: Format) -> 
                         if let Some((name, closing)) =
                             opaque_tag(&source[p.start.offset..p.end.offset])
                         {
-                            if !closing {
-                                opening = Some((name, p.end.offset));
-                            } else if let Some((opened, start)) = opening.take() {
-                                if opened == name
-                                    && start < range.end
-                                    && range.start < p.start.offset
-                                {
-                                    return true;
+                            if let Some((opened, start, depth)) = opening.as_mut() {
+                                if *opened == name {
+                                    if closing {
+                                        *depth -= 1;
+                                        if *depth == 0 {
+                                            if *start < range.end && range.start < p.start.offset {
+                                                return true;
+                                            }
+                                            opening = None;
+                                        }
+                                    } else {
+                                        *depth += 1;
+                                    }
                                 }
+                            } else if !closing {
+                                opening = Some((name, p.end.offset, 1usize));
                             }
                         }
                     }
                 }
             }
-            if opening.is_some_and(|(_, start)| start < range.end) {
+            if opening.is_some_and(|(_, start, _)| start < range.end) {
                 return true;
             }
         }
@@ -925,7 +941,9 @@ mod tests {
 
         for prefix in ["", "# ", "- ", "> "] {
             for tag in ["code", "pre", "script", "style", "textarea"] {
-                let opaque = format!("<{tag}>==raw **字**== &amp;</{tag}>");
+                let opaque = format!(
+                    "<{tag}>outer <{tag}>inner</{tag}> ==raw **字**== &amp;</{tag}>"
+                );
                 let source = format!("{prefix}before **strong** {opaque} after *em*");
                 let projection = Projection::parse(&source, 1, true, Grammar::Markdown);
                 let leaf = projection

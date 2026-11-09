@@ -2453,11 +2453,11 @@ impl EntityInputHandler for SourcePresentation {
             return None;
         }
         let range = self.document.read(cx).utf16_range(range);
-        let at = if self.is_composing() {
-            self.state.selection.head()
-        } else {
-            range.start
-        };
+        // The OS supplies the requested UTF-16 range. A marked-range query
+        // anchors its beginning; a caret query supplies the selected endpoint.
+        // Substituting selection.head makes the candidate drift by the entire
+        // preedit width and loses the requested column in wide tables.
+        let at = range.start;
         let caret = self.caret_bounds(at, cx)?;
         let viewport = self.scroll.bounds();
         (caret.top() >= viewport.top()
@@ -3341,6 +3341,12 @@ impl Render for SourcePresentation {
                 .on_mouse_down(
                     MouseButton::Left,
                     cx.listener(|this, event: &MouseDownEvent, window, cx| {
+                        // Command/status surfaces are not document text. Their
+                        // pointer-down must not select the nearest image/leaf
+                        // and grow a contextual toolbar before the click runs.
+                        if !this.scroll.bounds().contains(&event.position) {
+                            return;
+                        }
                         this.focus.focus(window, cx);
                         this.begin_pointer_link(event, cx);
                         if this.pointer_link.is_some() {

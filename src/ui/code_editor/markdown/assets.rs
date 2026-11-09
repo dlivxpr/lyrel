@@ -139,10 +139,13 @@ impl SourcePresentation {
                 }
                 let pending = view.assets.pending.take().unwrap();
                 if pending.cancelled.get()
-                    || pending.token != view.input_token(cx)
-                    || !view.focus.is_focused(window)
                     || !resources.is_current(view.document.read(cx).resources())
                 {
+                    cx.notify();
+                    return;
+                }
+                if pending.token != view.input_token(cx) || !view.focus.is_focused(window) {
+                    view.assets.error = Some(t(L10nKey::MarkdownImageSelectionChanged).into());
                     cx.notify();
                     return;
                 }

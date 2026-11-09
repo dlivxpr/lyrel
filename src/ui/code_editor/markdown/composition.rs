@@ -548,8 +548,10 @@ mod tests {
         }
         context.update(|window, cx| {
             let mut input = Input::new(&view, cx);
+            let start = view.read(cx).caret_bounds(140, cx).unwrap();
+            assert_eq!(input.bounds_for_range(140..143, window, cx), Some(start));
             let caret = view.read(cx).caret_bounds(147, cx).unwrap();
-            assert_eq!(input.bounds_for_range(140..143, window, cx), Some(caret));
+            assert_eq!(input.bounds_for_range(143..143, window, cx), Some(caret));
             assert_eq!(
                 input.character_index_for_point(caret.center(), window, cx),
                 Some(143)
@@ -571,7 +573,7 @@ mod tests {
                 window.render_frame(cx);
                 window.render_frame(cx);
                 let mut input = Input::new(&view, cx);
-                let candidate = input.bounds_for_range(140..143, window, cx);
+                let candidate = input.bounds_for_range(143..143, window, cx);
                 candidate.is_some() && candidate == view.read(cx).caret_bounds(147, cx)
             }) {
                 break;

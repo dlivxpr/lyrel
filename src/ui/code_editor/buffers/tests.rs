@@ -2264,7 +2264,15 @@ fn markdown_image_completion_never_replaces_text_typed_over_pending_selection(
     wait_until(&mut vcx, |vcx| {
         vcx.update(|window, cx| {
             window.render_frame(cx);
-            window.try_find("markdown-image-insertion-status").is_none()
+            window
+                .try_find("markdown-image-insertion-status")
+                .is_some_and(|status| {
+                    status.visible()
+                        && status.label()
+                            == Some(crate::ui::i18n::t(
+                                crate::ui::i18n::L10nKey::MarkdownImageSelectionChanged,
+                            ).as_ref())
+                })
         })
     });
     app.read_with(&vcx, |app, cx| {
