@@ -134,9 +134,11 @@ fn formula_structural_fraction_cancel_commit_and_shared_document_undo(cx: &mut T
     context.update(|window, cx| {
         window.click("markdown-math-ready-  x_i^2", cx);
         assert!(window.find("markdown-formula-editor").visible());
+        // Selection uses normalized LF/UTF-8 document coordinates. Encoded
+        // file bytes below retain both CRLFs and therefore have other offsets.
         assert_eq!(
             view.read(cx).selection(),
-            super::Selection::caret(source.find("x_i^2").unwrap()),
+            super::Selection::caret(source.replace("\r\n", "\n").find("x_i^2").unwrap()),
             "block formula entry skips the opening line and leading whitespace"
         );
         window.press("escape", cx);

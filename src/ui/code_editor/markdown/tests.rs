@@ -5392,7 +5392,10 @@ fn native_math_renders_glyph_atoms_and_local_source_uses_document_history_and_sa
             source.as_bytes()
         );
     });
-    context.dispatch_action(crate::core::actions::ToggleDocumentPreview);
+    // Pointer selection and untouched bytes were asserted above. Leave the
+    // unchanged structural session before testing subsequent live revisions;
+    // toggling here would enter Source and make a Live-geometry wait impossible.
+    context.update(|window, cx| window.press("escape", cx));
     settle_live_geometry(&view, &mut context);
     // Do not pump the executor between revisions: the first requested glyph
     // batch is still queued when its source is replaced by the second edit.

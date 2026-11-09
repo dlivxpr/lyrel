@@ -570,9 +570,12 @@ mod tests {
         settle_geometry(&view, &mut context);
         context.update(|window, cx| window.click("markdown-load-images", cx));
         for wrap in [true, false] {
-            view.update_in(&mut context, |view, _, cx| {
+            view.update_in(&mut context, |view, window, cx| {
                 view.set_soft_wrap(wrap, cx);
                 view.select_range(body..body, cx);
+                // Loading is a command surface with its own focus. A source
+                // selection is revealed only by its focused presentation.
+                view.focus.focus(window, cx);
             });
             settle_geometry(&view, &mut context);
             view.update_in(&mut context, |view, _, cx| {
@@ -590,13 +593,21 @@ mod tests {
                 let leaf = view.projection.leaf_at(body).unwrap();
                 let geometry = &view.geometry.as_ref().unwrap().1[&leaf.id];
                 let display = leaf.display_offset(body);
+                let caret = view.caret_bounds(body, cx).unwrap();
+                let viewport = view.scroll.bounds();
+                let visible = super::visible_spelling_text(leaf, geometry, viewport);
                 assert!(
-                    super::visible_spelling_text(leaf, geometry, view.scroll.bounds())
-                        .iter()
-                        .any(|range| range.contains(&display)),
-                    "native visible text after the high atoms retains its diagnostic"
+                    caret.top() >= viewport.top()
+                        && caret.bottom() <= viewport.bottom()
+                        && caret.left() >= viewport.left()
+                        && caret.right() <= viewport.right(),
+                    "post-atom caret must actually be visible: wrap={wrap}, caret={caret:?}, viewport={viewport:?}, display={display}, visible={visible:?}"
                 );
-                view.caret_bounds(body, cx).unwrap().center()
+                assert!(
+                    visible.iter().any(|range| range.contains(&display)),
+                    "native visible text after the high atoms retains its diagnostic: wrap={wrap}, caret={caret:?}, viewport={viewport:?}, display={display}, visible={visible:?}"
+                );
+                caret.center()
             });
             context.update(|window, cx| {
                 window.pointer_down(position, gpui_kit::MouseButton::Left, cx);
