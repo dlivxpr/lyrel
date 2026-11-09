@@ -46,13 +46,13 @@ struct Row {
     list: bool,
     blank: bool,
 }
-struct Inventory {
+pub(in crate::ui::code_editor::markdown) struct Inventory {
     rows: Vec<Row>,
     opaque: Vec<Range<usize>>,
     length: usize,
 }
 impl Inventory {
-    fn new(source: &str, root: &Node, properties: Vec<Range<usize>>) -> Self {
+    pub(in crate::ui::code_editor::markdown) fn new(source: &str, root: &Node, properties: Vec<Range<usize>>) -> Self {
         let mut rows = Vec::new();
         let mut start = 0;
         for line in source.split_inclusive('\n') {
@@ -197,7 +197,7 @@ impl Inventory {
 }
 
 pub(super) struct Gesture {
-    inventory: Inventory,
+    inventory: std::sync::Arc<Inventory>,
     source: Range<usize>,
     folds: Vec<Range<usize>>,
     token: (EntityId, u64, u64, u64, Option<EntityId>),
@@ -307,12 +307,13 @@ impl SourcePresentation {
         {
             return;
         }
-        let document = self.document.read(cx);
-        let source = document.source().to_string();
-        let Ok(root) = super::super::parser::parse(&source, document.grammar(), true) else {
+        let Some(syntax) = self.format_syntax(cx) else {
             return;
         };
-        let inventory = Inventory::new(&source, &root, self.projection.properties.reorder_ranges());
+        let source = &syntax.source;
+        let Some(inventory) = self.projection.reorder_inventory.clone() else {
+            return;
+        };
         let Some(mut range) = inventory.scope(at) else {
             return;
         };

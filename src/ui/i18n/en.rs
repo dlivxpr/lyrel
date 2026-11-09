@@ -1838,6 +1838,9 @@ pub fn translate_en(key: L10nKey) -> &'static str {
         L10nKey::MarkdownCodePlain => "Plain text",
         L10nKey::MarkdownCodeCopy => "Copy code",
         L10nKey::MarkdownCopyMarkdownOnly => "Copy as Markdown",
+        L10nKey::MarkdownCopyContents => "Copy contents",
+        L10nKey::MarkdownCopyContentsMarkdown => "Copy contents as Markdown",
+        L10nKey::MarkdownSlashBlockUnavailable => "Not available inside a table cell",
         L10nKey::MarkdownClipboardPlainFallback => {
             "Markdown copied. Rich clipboard format is unavailable."
         }

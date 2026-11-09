@@ -7,6 +7,12 @@ use gpui_kit::component::{
 };
 use std::sync::Arc;
 
+struct Controls {
+    reference: super::super::links::Link,
+    scroll: ScrollHandle,
+    focus: FocusHandle,
+    result: Result<Arc<Fragment>, L10nKey>,
+}
 #[derive(Default)]
 pub(super) struct State {
     generation: u64,
@@ -14,13 +20,35 @@ pub(super) struct State {
     lease: Option<(u64, super::super::resources::ResourceContext)>,
     installed: Option<u64>,
     loaded: Option<Arc<Loaded>>,
-    controls: HashMap<(usize, String), (ScrollHandle, FocusHandle)>,
+    controls: HashMap<u64, Controls>,
+    next_id: u64,
     task: Option<Task<()>>,
     hover: Option<super::super::links::Link>,
     hover_position: Point<Pixels>,
     hover_open: bool,
 }
 impl SourcePresentation {
+    pub(super) fn invalidate_link_hover(&mut self) {
+        self.embeds.hover = None;
+        self.embeds.hover_open = false;
+        self.embeds.generation = self.embeds.generation.wrapping_add(1);
+        self.embeds.pending = false;
+    }
+    pub(super) fn rebase_embed_controls(&mut self, transaction: &Transaction) {
+        self.embeds.controls.retain(|_, control| {
+            let reference = &mut control.reference;
+            let Some(source) = transaction.map_untouched_range(reference.source.clone()) else {
+                return false;
+            };
+            let delta = source.start as isize - reference.source.start as isize;
+            reference.source = source;
+            reference.label = reference.label.start.checked_add_signed(delta).unwrap()
+                ..reference.label.end.checked_add_signed(delta).unwrap();
+            reference.destination = reference.destination.start.checked_add_signed(delta).unwrap()
+                ..reference.destination.end.checked_add_signed(delta).unwrap();
+            true
+        });
+    }
     pub(super) fn start_embed_refresh(&mut self, cx: &mut Context<Self>) {
         self.embeds.task = Some(cx.spawn(async move |view, cx| {
             loop {
@@ -127,17 +155,23 @@ impl SourcePresentation {
         {
             return;
         }
-        let keys: std::collections::HashSet<_> = loaded
-            .entries
-            .iter()
-            .map(|entry| (entry.reference.source.start, entry.reference.target.clone()))
-            .collect();
-        self.embeds.controls.retain(|key, _| keys.contains(key));
-        for key in keys {
-            self.embeds
-                .controls
-                .entry(key)
-                .or_insert_with(|| (ScrollHandle::new(), cx.focus_handle().tab_stop(true)));
+        self.embeds.controls.retain(|_, control| {
+            loaded.entries.iter().any(|entry| entry.reference == control.reference)
+        });
+        for entry in &loaded.entries {
+            if let Some(control) = self.embeds.controls.values_mut()
+                .find(|control| control.reference == entry.reference)
+            {
+                control.result = entry.result.clone();
+            } else {
+                self.embeds.next_id = self.embeds.next_id.wrapping_add(1);
+                self.embeds.controls.insert(self.embeds.next_id, Controls {
+                    reference: entry.reference.clone(),
+                    scroll: ScrollHandle::new(),
+                    focus: cx.focus_handle().tab_stop(true),
+                    result: entry.result.clone(),
+                });
+            }
         }
         let layout_changed =
             self.embeds
@@ -213,6 +247,9 @@ impl SourcePresentation {
         let link = self.embeds.hover.as_ref()?;
         let document = self.document.read(cx);
         if !self.live || self.projection.revision != document.revision() {
+            return None;
+        }
+        if !self.projection.links.links.iter().any(|current| current == link) {
             return None;
         }
         let bounds = self
@@ -333,7 +370,11 @@ impl SourcePresentation {
             let range = reference.source.clone();
             let revision = self.projection.revision;
             let resources = self.document.read(cx).resources().cloned();
-            let id = reference.source.start;
+            let control = self.embeds.controls.iter().find(|(_, control)| control.reference == *reference);
+            let id = control.map_or_else(
+                || format!("pending-{}", reference.source.start),
+                |(id, _)| id.to_string(),
+            );
             let label = self
                 .document
                 .read(cx)
@@ -391,19 +432,12 @@ impl SourcePresentation {
                                 })),
                         ),
                 );
-            let entry = self
-                .embeds
-                .loaded
-                .as_ref()
-                .filter(|_| self.embeds.installed == Some(revision))
-                .and_then(|loaded| {
-                    loaded
-                        .entries
-                        .iter()
-                        .find(|entry| entry.reference == *reference)
-                });
+            let entry = control.map(|(_, control)| Entry {
+                reference: control.reference.clone(),
+                result: control.result.clone(),
+            });
             if let Some(entry) = entry {
-                let content = render_entry(entry, &format!("root-{id}"), window, cx);
+                let content = render_entry(&entry, &format!("root-{id}"), window, cx);
                 let mut body = div()
                     .id(SharedString::from(format!("markdown-embed-content-{id}")))
                     .test_support()
@@ -419,9 +453,9 @@ impl SourcePresentation {
                 if let Ok(fragment) = &entry.result {
                     body = body.aria_value(fragment.text.clone());
                 }
-                if let Some((scroll, focus)) =
-                    self.embeds.controls.get(&(id, reference.target.clone()))
-                {
+                if let Some((_, control)) = control {
+                    let scroll = &control.scroll;
+                    let focus = &control.focus;
                     let pointer_focus = focus.clone();
                     let wheel = scroll.clone();
                     let keyboard = scroll.clone();
@@ -470,7 +504,7 @@ impl SourcePresentation {
                 };
                 embed = embed.child(
                     div()
-                        .id(("markdown-embed-status", id as u64))
+                        .id(SharedString::from(format!("markdown-embed-status-{id}")))
                         .role(Role::Status)
                         .text_sm()
                         .text_color(cx.theme().muted_foreground)
@@ -536,7 +570,12 @@ fn render_fragment(
         cx,
     );
     let references: Vec<_> = fragment.blocks.iter().collect();
-    let mut body = div().w_full().min_w_0().v_flex();
+    let mut body = div()
+        .id(SharedString::from(format!("markdown-embed-flow-{namespace}")))
+        .test_support()
+        .w_full()
+        .min_w_0()
+        .v_flex();
     for (ix, (leaf, block)) in fragment
         .projection
         .leaves

@@ -45,6 +45,9 @@ fn clipboard_mixed_selection_cut_history_paste_and_owned_reopen(cx: &mut TestApp
         view.add_selection(beta..beta + 2, cx); // later selection, not the intervening syntax
     });
     context.dispatch_action(gpui_kit::component::input::Copy);
+    wait_until(&mut context, |context| context.update(|_, cx| {
+        cx.read_from_clipboard().and_then(|item| item.text()).as_deref() == Some("al\nbe")
+    }));
     context.update(|_, cx| {
         let item = cx.read_from_clipboard().unwrap();
         assert_eq!(item.text().unwrap(), "al\nbe");
@@ -55,6 +58,9 @@ fn clipboard_mixed_selection_cut_history_paste_and_owned_reopen(cx: &mut TestApp
     });
     context.dispatch_action(gpui_kit::component::input::Cut);
     let cut = "Keep\r\n\r\n9. **pha**\r\n42. ta\nuntouched __spelling__\r\n";
+    wait_until(&mut context, |context| view.read_with(context, |view, cx| {
+        view.document().read(cx).encode().unwrap() == cut.as_bytes()
+    }));
     view.read_with(&context, |view, cx| {
         assert_eq!(view.document().read(cx).encode().unwrap(), cut.as_bytes())
     });
@@ -76,6 +82,9 @@ fn clipboard_mixed_selection_cut_history_paste_and_owned_reopen(cx: &mut TestApp
     });
     context.dispatch_action(gpui_kit::component::input::Cut);
     let block_cut = "Keep\r\n\r\n\nuntouched __spelling__\r\n";
+    wait_until(&mut context, |context| view.read_with(context, |view, cx| {
+        view.document().read(cx).encode().unwrap() == block_cut.as_bytes()
+    }));
     context.update(|_, cx| {
         let item = cx.read_from_clipboard().unwrap();
         assert_eq!(item.text().unwrap(), "9. **alpha**\r\n42. beta");
@@ -110,6 +119,10 @@ fn clipboard_mixed_selection_cut_history_paste_and_owned_reopen(cx: &mut TestApp
         view.select_range(alpha..beta + 4, cx)
     });
     context.dispatch_action(CopyMarkdownOnly);
+    wait_until(&mut context, |context| context.update(|_, cx| {
+        cx.read_from_clipboard().is_some_and(|item| item.metadata().is_none()
+            && item.text().as_deref() == Some("9. **alpha**\r\n42. beta"))
+    }));
     context.update(|_, cx| {
         let item = cx.read_from_clipboard().unwrap();
         assert_eq!(item.text().unwrap(), "9. **alpha**\r\n42. beta");
@@ -174,6 +187,9 @@ fn clipboard_safe_objects_and_plain_priority_do_not_read_resources(cx: &mut Test
         view.select_range(0..original.len(), cx);
     });
     context.dispatch_action(gpui_kit::component::input::Copy);
+    wait_until(&mut context, |context| context.update(|_, cx| {
+        cx.read_from_clipboard().and_then(|item| item.text()).as_deref() == Some(original)
+    }));
     context.update(|_, cx| {
         let item = cx.read_from_clipboard().unwrap();
         assert_eq!(item.text().unwrap(), original);

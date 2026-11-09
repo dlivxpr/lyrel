@@ -43,6 +43,32 @@ fn start_in_source(
     });
 }
 
+fn wait_for_clipboard(context: &mut gpui_kit::VisualTestContext, expected: &str) {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    loop {
+        context.run_until_parked();
+        if context.update(|_, cx| cx.read_from_clipboard()
+            .and_then(|item| item.text()).as_deref() == Some(expected))
+        {
+            return;
+        }
+        assert!(std::time::Instant::now() < deadline, "clipboard did not publish {expected:?}");
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+}
+
+fn wait_for_source(view: &gpui_kit::Entity<SourcePresentation>, context: &mut gpui_kit::VisualTestContext, expected: &str) {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    loop {
+        context.run_until_parked();
+        if view.read_with(context, |view, cx| view.document().read(cx).source().to_string() == expected) {
+            return;
+        }
+        assert!(std::time::Instant::now() < deadline, "source did not become {expected:?}");
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+}
+
 #[test]
 fn presentations_share_history_and_new_edits_replace_the_redo_branch() {
     let mut document = MarkdownDocument::new("中🎉 e\u{301}\n".into(), TextFormat::default());
@@ -488,6 +514,9 @@ fn native_live_pointer_selection_cuts_raw_source_across_adjacent_prose(
         window.change_modifiers(Modifiers::default(), cx);
         assert_eq!(presentation.read(cx).selection(), Selection::new(11, 25));
         window.press("secondary-x", cx);
+    });
+    wait_for_source(&presentation, &mut view_context, "# Heading\n\nst\n");
+    view_context.update(|_, cx| {
         assert_eq!(
             cx.read_from_clipboard().and_then(|item| item.text()),
             Some("alpha beta\n\nla".into())
@@ -1344,6 +1373,9 @@ fn native_code_regions_keep_line_breaks_fences_and_shared_history(
     });
     context.update(|window, cx| {
         window.press("secondary-x", cx);
+    });
+    wait_for_source(&view, &mut context, "# Heading\n\n");
+    context.update(|_, cx| {
         assert_eq!(
             cx.read_from_clipboard().unwrap().text().as_deref(),
             Some(&source[from..])
@@ -4771,6 +4803,9 @@ fn native_mixed_selection_drag_cut_history_and_mixed_ending_save_reopen(
                 }
             );
             window.press("secondary-c", cx);
+        });
+        wait_for_clipboard(&mut context, copied);
+        context.update(|_, cx| {
             assert_eq!(
                 cx.read_from_clipboard().and_then(|item| item.text()),
                 Some(copied.into())
@@ -4778,7 +4813,7 @@ fn native_mixed_selection_drag_cut_history_and_mixed_ending_save_reopen(
         });
     }
     context.update(|window, cx| window.press("secondary-x", cx));
-    context.run_until_parked();
+    wait_for_source(&view, &mut context, "# Heading\n\nil  \n\n[picture]: missing.png \"title\"\n");
     view.read_with(&context, |view, cx| {
         assert_eq!(
             view.document().read(cx).source().to_string(),
@@ -4806,6 +4841,9 @@ fn native_mixed_selection_drag_cut_history_and_mixed_ending_save_reopen(
     context.dispatch_action(crate::core::actions::ToggleDocumentPreview);
     context.update(|window, cx| {
         window.press("secondary-c", cx);
+    });
+    wait_for_clipboard(&mut context, copied);
+    context.update(|window, cx| {
         assert_eq!(
             cx.read_from_clipboard().and_then(|item| item.text()),
             Some(copied.into())
@@ -4827,6 +4865,9 @@ fn native_mixed_selection_drag_cut_history_and_mixed_ending_save_reopen(
         window.press("shift-right", cx);
         assert_eq!(view.read(cx).selection(), Selection::new(image, image_end));
         window.press("secondary-c", cx);
+    });
+    wait_for_clipboard(&mut context, "![引用][picture]");
+    context.update(|window, cx| {
         assert_eq!(
             cx.read_from_clipboard().and_then(|item| item.text()),
             Some("![引用][picture]".into())
@@ -4849,6 +4890,9 @@ fn native_mixed_selection_drag_cut_history_and_mixed_ending_save_reopen(
             window.press(key, cx);
             assert_eq!(view.read(cx).selection(), Selection::new(from, to));
             window.press("secondary-c", cx);
+        });
+        wait_for_clipboard(&mut context, " | ");
+        context.update(|window, cx| {
             assert_eq!(
                 cx.read_from_clipboard().and_then(|item| item.text()),
                 Some(" | ".into())
@@ -4995,6 +5039,9 @@ fn native_mixed_shift_navigation_crosses_wrapped_rows_tables_and_image_atoms_bot
             }
             assert_eq!(view.read(cx).selection(), Selection::new(from, to));
             window.press("secondary-c", cx);
+        });
+        wait_for_clipboard(&mut context, &source[start..end]);
+        context.update(|_, cx| {
             assert_eq!(
                 cx.read_from_clipboard().and_then(|item| item.text()),
                 Some(source[start..end].into())

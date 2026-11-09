@@ -272,8 +272,6 @@ impl SourcePresentation {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        // Finish only the owning presentation's preedit through the normal command.
-        self.command(Command::FinishComposition, window, cx);
         let ix = point
             .and_then(|point| self.spelling_at_point(point, cx))
             .or_else(|| self.spelling_at_selection());
@@ -287,6 +285,26 @@ impl SourcePresentation {
         let Some(position) = position else {
             return;
         };
+        let composing = self.is_composing();
+        self.command(Command::FinishComposition, window, cx);
+        if composing {
+            let token = self.input_token(cx);
+            cx.defer_in(window, move |view, window, cx| {
+                if view.input_token(cx) == token && view.focus.is_focused(window) {
+                    view.open_spelling_diagnostic(diagnostic, position, window, cx);
+                }
+            });
+        } else {
+            self.open_spelling_diagnostic(diagnostic, position, window, cx);
+        }
+    }
+    fn open_spelling_diagnostic(
+        &mut self,
+        diagnostic: Diagnostic,
+        position: Point<Pixels>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         self.focus.focus(window, cx);
         self.install_spelling_menu(diagnostic.clone(), None, position, window, cx);
         let generation = self.spelling.generation;
@@ -1012,5 +1030,52 @@ mod tests {
                 expected
             )
         });
+    }
+
+    #[gpui_kit::test]
+    fn final_review_spelling_menu_survives_own_composition_commit(cx: &mut TestAppContext) {
+        use gpui_kit::test::TestInput;
+        let original = b"wrog\n";
+        let (_directory, _path, _app, mut context, _streams, view) = spelling_fixture!(cx, original);
+        settle_geometry(&view, &mut context);
+        view.update_in(&mut context, |view, window, cx| {
+            view.select_range(0..4, cx);
+            view.focus.focus(window, cx);
+        });
+        context.update(|window, cx| {
+            let bounds = window.find("markdown-source").bounds();
+            TestInput::new(gpui_kit::ElementInputHandler::new(bounds, view.clone()), window)
+                .compose_text(None, "wrng", Some(4..4), cx);
+        });
+        context.run_until_parked();
+        settle_geometry(&view, &mut context);
+        view.update_in(&mut context, |view, _, cx| {
+            view.spelling.invalidate();
+            view.set_spelling_diagnostics(vec![Diagnostic { ranges: vec![0..4], word: "wrng".into() }], cx);
+        });
+        context.dispatch_action(super::SpellingSuggestions);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        loop {
+            context.run_until_parked();
+            if view.read_with(&context, |view, _| view.spelling.suggestions_task.is_none()) {
+                break;
+            }
+            assert!(std::time::Instant::now() < deadline);
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        context.update(|window, cx| {
+            window.render_frame(cx);
+            assert!(window.find("popup-menu").visible());
+            assert_eq!(window.find("popup-menu").focused(), Some(true));
+            window.press("escape", cx);
+        });
+        context.run_until_parked();
+        view.read_with(&context, |view, cx| {
+            assert!(!view.is_composing());
+            assert_eq!(view.document().read(cx).encode().unwrap(), b"wrng\n");
+        });
+        context.update(|window, cx| assert!(view.read(cx).focus.is_focused(window)));
+        context.dispatch_action(gpui_kit::component::input::Undo);
+        view.read_with(&context, |view, cx| assert_eq!(view.document().read(cx).encode().unwrap(), original));
     }
 }

@@ -55,6 +55,7 @@ struct Fence {
     opening: Range<usize>,
     closing: Option<Range<usize>>,
     body: Range<usize>,
+    insertion: usize,
     hidden: Vec<Range<usize>>,
     prefix: String,
     ending: String,
@@ -117,11 +118,19 @@ impl Fence {
         let body_end = closing
             .as_ref()
             .map_or(start + raw.len(), |range| range.start);
+        let insertion = hidden.iter().fold(start + body_start, |at, hidden| {
+            if hidden.start <= at && at < hidden.end && hidden.end <= body_end {
+                hidden.end
+            } else {
+                at
+            }
+        });
         Some(Self {
             language: start + language_start..start + language_end,
             opening: start..start + first_end,
             closing,
             body: start + body_start..body_end,
+            insertion,
             hidden,
             ending: format!(
                 "{prefix}{}",
@@ -129,6 +138,9 @@ impl Fence {
             ),
             prefix,
         })
+    }
+    fn insertion(&self) -> usize {
+        self.insertion
     }
     fn on_fence(&self, selection: Selection) -> bool {
         let range = selection.range();
@@ -274,10 +286,11 @@ impl SourcePresentation {
                 fence.hidden.as_slice()
             };
             let changed = leaf.hide_ranges(hidden, marked.as_ref());
+            let insertion = fence.insertion();
             let insertion_changed = leaf.set_inline_insertions(if reveal {
                 &[]
             } else {
-                std::slice::from_ref(&fence.body.start)
+                std::slice::from_ref(&insertion)
             });
             if changed || insertion_changed {
                 if let Some(cached) = self.blocks.get_mut(&leaf.id) {
@@ -331,7 +344,7 @@ impl SourcePresentation {
             .slice(fence.language.clone())
             .to_string();
         if old != language {
-            let at = fence.body.start - fence.language.len() + language.len();
+            let at = fence.insertion() - fence.language.len() + language.len();
             self.command(
                 Command::BatchReplaceSelected {
                     kind: EditKind::Command,
@@ -376,7 +389,7 @@ impl SourcePresentation {
         };
         let showing = self.code.source == Some(action.id);
         let at = if showing {
-            fence.body.start
+            fence.insertion()
         } else {
             fence.language.start
         };
@@ -695,7 +708,7 @@ impl SourcePresentation {
                             .end
                             .saturating_sub(usize::from(fence.body.end > fence.body.start))
                     } else {
-                        fence.body.start
+                        fence.insertion()
                     }
                 });
             if let Some(at) = target {
@@ -816,7 +829,7 @@ impl SourcePresentation {
         let Some(fence) = self.code_fence(leaf.id, self.projection.revision, cx) else {
             return false;
         };
-        let at = fence.body.start;
+        let at = fence.insertion();
         let end = leaf.range.end;
         let return_to_body = self.code.source.is_some() || fence.on_fence(self.state.selection);
         let ending = fence

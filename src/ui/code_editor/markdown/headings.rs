@@ -122,13 +122,11 @@ impl State {
 
 impl SourcePresentation {
     fn refresh_block_index(&mut self, cx: &App) {
-        if self.projection.block_index.ready {
+        if !self.live || self.projection.block_index.ready {
             return;
         }
-        let document = self.document.read(cx);
-        let source = document.source().to_string();
-        if let Ok(root) = super::super::parser::parse(&source, document.grammar(), true) {
-            self.projection.block_index = blocks::Index::from_ast(&source, &root);
+        if let Some(syntax) = self.format_syntax(cx) {
+            self.projection.block_index = blocks::Index::from_ast(&syntax.source, &syntax.root);
         }
     }
     pub(super) fn reveal_block_command(&mut self, command: &Command, cx: &App) {
