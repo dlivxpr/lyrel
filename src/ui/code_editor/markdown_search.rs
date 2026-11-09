@@ -1,5 +1,8 @@
 //! Native Markdown find UI; the shared document remains the only editable text.
-use super::markdown::{Command, DocumentEvent, EditKind, Selection, SourcePresentation};
+use super::markdown::{
+    Command, DocumentEvent, EditKind, SearchSurfaceChanged, SearchText, Selection,
+    SourcePresentation,
+};
 use super::*;
 use gpui_kit::base::input::SearchMatcher;
 use gpui_kit::{App, WeakEntity};
@@ -13,7 +16,8 @@ pub(super) struct MarkdownSearch {
     matched_query: SharedString,
     query_dirty: bool,
     matched_case_sensitive: bool,
-    matched_revision: Option<u64>,
+    matched_revision: Option<(u64, u64, bool)>,
+    surface: SearchText,
     case_sensitive: bool,
     replace_mode: bool,
     open: bool,
@@ -38,10 +42,24 @@ impl MarkdownSearch {
                 }
             }),
             cx.subscribe_in(&document, window, |this, _, event, window, cx| {
-                if this.open && matches!(event, DocumentEvent::Edited(_)) {
+                if this.open
+                    && matches!(
+                        event,
+                        DocumentEvent::Edited(_) | DocumentEvent::PresentationChanged
+                    )
+                {
                     this.refresh(false, window, cx);
                 }
             }),
+            cx.subscribe_in(
+                source,
+                window,
+                |this, _, _: &SearchSurfaceChanged, window, cx| {
+                    if this.open {
+                        this.refresh(false, window, cx);
+                    }
+                },
+            ),
         ];
         Self {
             source: source.downgrade(),
@@ -53,6 +71,7 @@ impl MarkdownSearch {
             query_dirty: true,
             matched_case_sensitive: false,
             matched_revision: None,
+            surface: SearchText::default(),
             case_sensitive: false,
             replace_mode: false,
             open: false,
@@ -69,16 +88,18 @@ impl MarkdownSearch {
         self.replace_mode = replace_mode;
         if let Some(source) = self.source.upgrade() {
             let view = source.read(cx);
-            let selected = view
-                .document()
-                .read(cx)
-                .source()
-                .slice(view.selection().range())
-                .to_string();
-            if !selected.is_empty() {
-                self.query_dirty = true;
-                self.query
-                    .update(cx, |input, cx| input.set_value(selected, window, cx));
+            let range = view.selection().range();
+            if range.start < range.end {
+                let surface = view.search_text(cx);
+                let selected = surface
+                    .text
+                    .slice(surface.visible_offset(range.start)..surface.visible_offset(range.end))
+                    .to_string();
+                if !selected.is_empty() {
+                    self.query_dirty = true;
+                    self.query
+                        .update(cx, |input, cx| input.set_value(selected, window, cx));
+                }
             }
         }
         self.query.update(cx, |input, cx| {
@@ -94,7 +115,7 @@ impl MarkdownSearch {
         };
         let view = source.read(cx);
         let at = view.selection().range().start;
-        let document = view.document().read(cx);
+        let surface_key = view.search_surface_key(cx);
         let query = if self.query_dirty {
             self.query_dirty = false;
             self.query.read(cx).value()
@@ -103,24 +124,33 @@ impl MarkdownSearch {
         };
         let query_changed =
             self.matched_query != query || self.matched_case_sensitive != self.case_sensitive;
-        if self.matched_revision != Some(document.revision()) {
-            // SearchMatcher exposes its compiled query publicly. Clear it only
-            // when both inputs changed, so update does not scan the old query.
+        let matches_changed = query_changed || self.matched_revision != Some(surface_key);
+        if self.matched_revision != Some(surface_key) {
             if query_changed {
                 self.matcher.query = None;
             }
-            self.matcher.update(document.source());
-            self.matched_revision = Some(document.revision());
+            self.surface = view.search_text(cx);
+            self.matcher.update(&self.surface.text);
+            self.matched_revision = Some(surface_key);
         }
         if query_changed {
             self.matcher.update_query(&query, !self.case_sensitive);
             self.matched_query = query;
             self.matched_case_sensitive = self.case_sensitive;
         }
-        self.matcher.update_cursor_by_offset(at);
-        source.update(cx, |view, cx| {
-            view.set_search_matches(self.matcher.matched_ranges(), cx)
-        });
+        self.matcher
+            .update_cursor_by_offset(self.surface.visible_offset(at));
+        if matches_changed {
+            let matches = std::rc::Rc::new(
+                self.matcher
+                    .matched_ranges()
+                    .iter()
+                    .cloned()
+                    .flat_map(|range| self.surface.source_ranges(range))
+                    .collect(),
+            );
+            source.update(cx, |view, cx| view.set_search_matches(matches, cx));
+        }
         if select {
             self.select_current(window, cx);
         }
@@ -134,6 +164,11 @@ impl MarkdownSearch {
             .get(self.matcher.current_match_index())
             .cloned();
         if let (Some(source), Some(range)) = (self.source.upgrade(), range) {
+            let fragments = self.surface.source_ranges(range);
+            let (Some(first), Some(last)) = (fragments.first(), fragments.last()) else {
+                return;
+            };
+            let range = first.start..last.end;
             source.update(cx, |view, cx| {
                 view.command(
                     Command::Select(Selection::new(range.start, range.end)),
@@ -163,13 +198,13 @@ impl MarkdownSearch {
             ranges
                 .iter()
                 .cloned()
-                .map(|range| (range, replacement.clone()))
+                .flat_map(|range| self.surface.replacement(range, &replacement))
                 .collect()
         } else {
             ranges
                 .get(self.matcher.current_match_index())
                 .cloned()
-                .map(|range| vec![(range, replacement)])
+                .map(|range| self.surface.replacement(range, &replacement))
                 .unwrap_or_default()
         };
         if let Some(source) = self.source.upgrade() {
@@ -189,6 +224,7 @@ impl MarkdownSearch {
 
     fn close(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.open = false;
+        self.matched_revision = None;
         if let Some(source) = self.source.upgrade() {
             source.update(cx, |view, cx| {
                 view.set_search_matches(std::rc::Rc::default(), cx)
@@ -208,7 +244,7 @@ impl Render for MarkdownSearch {
         }
         v_flex()
             .id("markdown-search")
-            .key_context("SearchPanel")
+            .key_context("SearchPanel MarkdownSearch")
             .track_focus(&self.focus)
             .flex_none()
             .w_full()
@@ -350,7 +386,36 @@ impl Render for MarkdownSearch {
 }
 
 impl LyrelApp {
-    pub(super) fn editor_markdown_search(
+    pub(crate) fn editor_markdown_find_step(
+        &mut self,
+        forward: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        if !self.editor_panel_has_focus(window, cx) {
+            return false;
+        }
+        let Some(input) = self.active_editor_input() else {
+            return false;
+        };
+        let Some(source) = input.markdown() else {
+            return false;
+        };
+        let Some(file) = self.active_buffer() else {
+            return false;
+        };
+        let search = file.presentations.open_search(source, window, cx);
+        search.update(cx, |search, cx| {
+            if search.matched_query.is_empty() {
+                search.show(false, window, cx);
+            } else {
+                search.open = true;
+                search.step(forward, window, cx);
+            }
+        });
+        true
+    }
+    pub(crate) fn editor_markdown_search(
         &mut self,
         replace: bool,
         window: &mut Window,
@@ -382,9 +447,90 @@ mod tests {
     use gpui_kit::{TestAppContext, VisualTestContext};
 
     fn settle(vcx: &mut VisualTestContext) {
+        vcx.executor()
+            .advance_clock(std::time::Duration::from_millis(100));
         vcx.run_until_parked();
         vcx.update(|window, cx| window.render_frame(cx));
         vcx.run_until_parked();
+    }
+
+    #[gpui_kit::test]
+    fn live_search_replaces_across_hidden_markers_without_deleting_syntax(cx: &mut TestAppContext) {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("visible-find.md");
+        let original = "alpha **beta** gamma\n";
+        std::fs::write(&path, original).unwrap();
+        let (app, mut vcx, _streams) = harness_with_tabs(cx, 1);
+        app.update_in(&mut vcx, |app, window, cx| {
+            app.open_file_in_editor(&path, window, cx)
+        });
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while !app.read_with(&vcx, |app, _| app.active_buffer().is_some()) {
+            settle(&mut vcx);
+            assert!(std::time::Instant::now() < deadline);
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        if !app.read_with(&vcx, |app, cx| {
+            app.active_editor_input()
+                .unwrap()
+                .markdown()
+                .unwrap()
+                .read(cx)
+                .is_live()
+        }) {
+            vcx.dispatch_action(crate::core::actions::ToggleDocumentPreview);
+        }
+        settle(&mut vcx);
+        vcx.dispatch_action(gpui_kit::component::input::Replace);
+        settle(&mut vcx);
+        vcx.update(|window, _| {
+            assert_eq!(window.find("markdown-query").focused(), Some(true));
+        });
+        vcx.update(|window, cx| window.input("alpha beta", cx));
+        settle(&mut vcx);
+        while !vcx.update(|window, _| window.find("markdown-match-count").label() == Some("1/1")) {
+            settle(&mut vcx);
+            assert!(std::time::Instant::now() < deadline);
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        vcx.update(|window, cx| {
+            assert_eq!(window.find("markdown-match-count").label(), Some("1/1"));
+            window.click("markdown-replacement", cx);
+            window.input("new", cx);
+            window.click("markdown-replace-one", cx);
+        });
+        settle(&mut vcx);
+        app.read_with(&vcx, |app, cx| {
+            assert_eq!(
+                app.active_buffer()
+                    .unwrap()
+                    .input
+                    .read(cx)
+                    .text()
+                    .to_string(),
+                "new**** gamma\n"
+            )
+        });
+        vcx.update(|window, cx| window.press("escape", cx));
+        vcx.dispatch_action(gpui_kit::component::input::Undo);
+        settle(&mut vcx);
+        app.read_with(&vcx, |app, cx| {
+            assert_eq!(
+                app.active_buffer()
+                    .unwrap()
+                    .input
+                    .read(cx)
+                    .text()
+                    .to_string(),
+                original
+            )
+        });
+        vcx.dispatch_action(gpui_kit::component::input::Search);
+        vcx.update(|window, cx| window.input("**", cx));
+        settle(&mut vcx);
+        vcx.update(|window, _| {
+            assert_eq!(window.find("markdown-match-count").label(), Some("0/0"))
+        });
     }
 
     #[gpui_kit::test]
@@ -423,7 +569,7 @@ mod tests {
         });
         vcx.update(|window, cx| {
             assert_eq!(window.find("markdown-match-count").label(), Some("1/3"));
-            window.press("enter", cx);
+            window.dispatch_action(Box::new(crate::terminal::view::FindNext), cx);
         });
         settle(&mut vcx);
         app.read_with(&vcx, |app, cx| {
@@ -433,7 +579,7 @@ mod tests {
             )
         });
         vcx.update(|window, cx| {
-            window.press("shift-enter", cx);
+            window.dispatch_action(Box::new(crate::terminal::view::FindPrevious), cx);
             window.click("markdown-match-case", cx);
         });
         settle(&mut vcx);

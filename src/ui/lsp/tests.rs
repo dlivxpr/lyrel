@@ -100,7 +100,7 @@ fn a_rename_across_a_file_applies_every_occurrence() {
 /// reaped. clangd, because it ships with Xcode's command line tools and needs
 /// no project to index; the file's type error is what it has to find.
 ///
-/// `cargo test -p lyrel --bin lyrel-app lsp_smoke -- --ignored`
+/// `cargo test -p lyrel --lib lsp_smoke -- --ignored`
 #[test]
 #[ignore = "needs clangd on PATH"]
 fn lsp_smoke_a_real_server_publishes_diagnostics_and_shuts_down() {

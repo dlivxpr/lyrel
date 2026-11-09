@@ -45,14 +45,16 @@ flowchart LR
 | 查看 CLI 用法 | `cargo run --locked -p lyrel-cli -- --help` |
 | 准备官方 ConPTY（Windows 首次构建或 `.conpty/` 失效前运行一次） | `pwsh scripts/prepare-conpty.ps1` |
 | 启动隔离的 headless daemon | `cargo run --locked -p lyrel-server -- --daemon --config-dir .lyrel-dev` |
-| 桌面平台默认成员测试，与 CI 范围一致 | `cargo test --locked` |
+| 桌面平台默认成员测试，不含独立 native 字形消费者 | `cargo test --locked` |
 | 桌面平台根 workspace 全成员测试 | `cargo test --workspace --locked` |
 | 桌面 updater 专项测试（Windows/macOS） | `cargo test --locked --features updater --bin lyrel-updater` |
+| 真实 native Markdown 字形消费者（Windows/macOS） | `cargo test --locked -p lyrel --features native-markdown-tests --test native_markdown` |
+| 桌面 library 单元测试 | `cargo test --locked -p lyrel --lib` |
 | 格式检查／写回 | `cargo fmt --check` / `cargo fmt` |
 | Host 架构边界检查，需 Bash 与 LF 脚本行尾 | `bash .github/scripts/check-host-boundary.sh` |
 | 补充 lint，CI 未运行此项 | `cargo clippy --workspace --all-targets --locked` |
 
-Windows/macOS 的默认 `build`/`test` 覆盖全部四个 workspace 成员。Linux 仅保留 core/server/CLI：使用 `cargo build --locked --workspace --exclude lyrel --all-features` 与 `cargo test --locked --workspace --exclude lyrel --all-features`；根桌面包会明确拒绝 Linux。Linux 完整 features 需 MIT Kerberos 开发依赖及 `LIBGSSAPI_IMPL=mit`，不需要桌面图形库。手机访问不属于产品范围，不预留移动网关或关闭的兼容实现。
+Windows/macOS 的默认 `build`/`test` 覆盖全部四个 workspace 成员；CI 另显式执行 `native-markdown-tests` 真实字形目标，默认测试不包含该目标。Linux 仅保留 core/server/CLI：使用 `cargo build --locked --workspace --exclude lyrel --all-features` 与 `cargo test --locked --workspace --exclude lyrel --all-features`；根桌面包会明确拒绝 Linux。Linux 完整 features 需 MIT Kerberos 开发依赖及 `LIBGSSAPI_IMPL=mit`，不需要桌面图形库。手机访问不属于产品范围，不预留移动网关或关闭的兼容实现。
 
 Windows 下此 Bash 检查需 LF 工作树：CRLF 脚本会报 `$'\r': command not found`／`invalid option name`。`.gitattributes` 已为 `.sh` 固定 LF；先排除行尾问题，不通过扩大 allowlist 掩盖。
 
@@ -79,7 +81,7 @@ Windows 下此 Bash 检查需 LF 工作树：CRLF 脚本会报 `$'\r': command n
 
 ## 重要文件
 
-- `src/main.rs`：GUI／daemon／agent-hook 角色分发、应用启动与全局注册。
+- `src/main.rs`：保留平台 subsystem 属性的薄 binary；`src/lib.rs::run`：GUI／daemon／agent-hook 角色分发、应用启动与全局注册。普通桌面单元测试归 library，不以 `--bin lyrel-app` 的零用例结果代替。
 - `src/ui/app.rs`、`src/terminal/view.rs`：工作台编排与终端主视图；文件很大，按符号或行为定位范围阅读。
 - `crates/lyrel-cli/src/cli.rs`：用户可见命令和参数契约。
 - `crates/lyrel-core/src/core/config.rs`：共享配置、目录解析和进程级覆盖；`src/core/config.rs` 是 GPUI 包装与测试写盘守卫。
@@ -96,7 +98,7 @@ Windows 下此 Bash 检查需 LF 工作树：CRLF 脚本会报 `$'\r': command n
 
 ## 测试与质量保障
 
-- 单元测试多为内联 `#[cfg(test)] mod tests`；GUI 用 `#[gpui_kit::test]`／`TestAppContext`，异步集成测试用 `#[tokio::test]`。CLI E2E 是 `harness = false` 的自定义 runner。
+- 单元测试多为内联 `#[cfg(test)] mod tests`；GUI 用 `#[gpui_kit::test]`／`TestAppContext`，异步集成测试用 `#[tokio::test]`。CLI E2E 与真实 native Markdown 字形目标均为 `harness = false` 的自定义 runner；后者由 `tests/native_markdown.rs` 在 OS 主线程初始化平台，不能移回 libtest worker。`native-markdown-tests` 非默认产品 feature，仅开放消费者所需支持代码。
 - 按改动选择测试，例如 `cargo test --locked -p lyrel-core`、`cargo test --locked -p lyrel-cli --test cli_e2e`；Host 契约复用 `crates/lyrel-core/src/host/conformance.rs` 的本地／stdio 共享套件。
 - 集成测试从 `env!("CARGO_BIN_EXE_lyrel-server")` 等获取真实二进制。沿用 `tempfile::TempDir`、隔离配置／socket、子进程退出清理；GUI 测试写配置前调用 `crate::core::config::pin_test_config_dir()`。
 - Pi 桥契约测试需要当前平台的 Node 22.19+ 位于 `PATH`；Linux 测试不能以 Windows 的 `node.exe` 代替。缺少运行时是验证前提失败，不能跳过用例后宣称完整套件通过。

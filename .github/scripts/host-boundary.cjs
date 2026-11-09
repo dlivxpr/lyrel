@@ -41,14 +41,18 @@ function lex(text) {
     }
     return tokens;
 }
-// Evaluate with test=false and every platform/feature predicate unknown. Only a
-// provably false cfg is test-only; any(test, unix) must remain production.
+// Production disables test and the explicit native-test feature. Other predicates
+// stay unknown: any(test, unix) or an unrelated feature must remain production.
 function testOnlyCfg(attr) {
     if (attr[0] !== 'cfg' || attr[1] !== '(' || attr.at(-1) !== ')') return false;
     let ix = 2;
     function predicate() {
         const name = attr[ix++];
-        if (attr[ix] === '=') { ix += 2; return undefined; }
+        if (attr[ix] === '=') {
+            const value = attr[ix+1];
+            ix += 2;
+            return name === 'feature' && value === '"native-markdown-tests"' ? false : undefined;
+        }
         if (attr[ix] !== '(') return name === 'test' ? false : undefined;
         ix++;
         const args = [];

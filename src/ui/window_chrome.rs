@@ -617,6 +617,26 @@ mod gpui_tests {
             }
         }
     }
+
+    fn dispatched_input(stream: &mut Stream) -> Vec<u8> {
+        // The pane sender is an OS thread, not part of the parked GPUI executor.
+        // A positive assertion waits for its complete protocol frame; the short
+        // input() probe remains appropriate for duplicate/hidden-tab negatives.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        loop {
+            let remaining = deadline
+                .checked_duration_since(std::time::Instant::now())
+                .expect("the dispatched Input frame did not arrive before its deadline");
+            stream.set_read_timeout(Some(remaining)).unwrap();
+            match ClientMsg::read(stream)
+                .expect("the dispatched key must reach the pane connection")
+            {
+                ClientMsg::Input(bytes) => return bytes,
+                ClientMsg::Resize(_) => continue,
+                other => panic!("unexpected frame while awaiting dispatched Input: {other:?}"),
+            }
+        }
+    }
     #[cfg(target_os = "macos")]
     #[gpui_kit::test]
     fn macos_fullscreen_chrome_uses_compact_balanced_edge_insets(cx: &mut TestAppContext) {
@@ -1071,7 +1091,7 @@ mod gpui_tests {
 
             vcx.simulate_keystrokes("x");
             settle(&mut vcx);
-            assert_eq!(input(&mut streams[0]).as_deref(), Some(&b"x"[..]));
+            assert_eq!(dispatched_input(&mut streams[0]).as_slice(), &b"x"[..]);
             assert_eq!(input(&mut streams[0]), None, "one key is delivered once");
             assert_eq!(
                 input(&mut streams[1]),

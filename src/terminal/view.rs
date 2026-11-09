@@ -2732,7 +2732,7 @@ mod tests {
 /// differently — `socketpair` there, a loopback connect here — and every gpui
 /// test in this crate is portable once it goes through this instead of naming
 /// `UnixStream` itself.
-#[cfg(test)]
+#[cfg(any(test, feature = "native-markdown-tests"))]
 pub(crate) fn test_stream_pair() -> (
     crate::daemon::transport::Stream,
     crate::daemon::transport::Stream,
@@ -2751,7 +2751,7 @@ pub(crate) fn test_stream_pair() -> (
     }
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "native-markdown-tests"))]
 pub(crate) fn quiet_test_pane(
     pane_id: u64,
     window: &mut Window,

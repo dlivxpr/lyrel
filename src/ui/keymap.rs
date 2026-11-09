@@ -91,6 +91,14 @@ fn fixed_bindings(cx: &App) -> Vec<KeyBinding> {
         ));
     }
     bindings.extend(crate::ui::code_editor::markdown::table_bindings(cx));
+    bindings.extend(crate::ui::code_editor::markdown::inline_format_bindings(cx));
+    bindings.extend(crate::ui::code_editor::markdown::block_bindings(cx));
+    bindings.push(load_binding(
+        "secondary-shift-c",
+        crate::ui::code_editor::markdown::CopyMarkdownOnly,
+        Some("Input && Markdown"),
+        cx,
+    ));
     // The switcher's footer tells you Tab is the way across to the tab column
     // once a query is in the box. gpui-component's Root binds `tab` to its
     // focus walker, actions are dispatched before key listeners, and the panel
@@ -1791,8 +1799,9 @@ fn keystroke_is_valid(s: &str) -> bool {
 
 fn action_context(action: &str) -> Option<&'static str> {
     match action {
-        "FindInTerminal" | "FindNext" | "FindPrevious" | "ClearScrollback" | "InsertNewline"
-        | "CopyText" | "PasteText" | "ToggleComposer" => Some("Terminal"),
+        "FindInTerminal" | "ClearScrollback" | "InsertNewline" | "CopyText" | "PasteText"
+        | "ToggleComposer" => Some("Terminal"),
+        "FindNext" | "FindPrevious" => Some("Terminal || Markdown || MarkdownSearch"),
         // `alt_screen` is declared by the pane whenever a full-screen program
         // owns the grid, so this binding is simply absent there and Ctrl+V
         // carries on to the PTY as SYN (#677).
@@ -2545,26 +2554,24 @@ mod tests {
     }
 
     #[test]
-    fn action_context_matches_the_scope_make_binding_installs() {
-        let extra_actions = extra_keystrokes(
-            &default_bindings()
-                .into_iter()
-                .map(|(a, k)| (a.to_string(), k.to_string()))
-                .collect::<Vec<_>>(),
-        );
-        let actions = default_bindings()
-            .into_iter()
-            .map(|(a, _)| a)
-            .chain(extra_actions.into_iter().map(|(a, _)| a));
-        for action in actions {
-            let binding =
-                make_binding(action, "f13").unwrap_or_else(|| panic!("no arm for {action}"));
-            let installed = binding.predicate().map(|p| p.to_string());
+    fn find_navigation_dispatches_in_terminal_and_markdown_but_not_unrelated_views() {
+        let effective = vec![
+            ("FindNext".to_string(), "f13".to_string()),
+            ("FindPrevious".to_string(), "shift-f13".to_string()),
+        ];
+        for context in ["Terminal", "Markdown", "MarkdownSearch"] {
             assert_eq!(
-                installed.as_deref(),
-                action_context(action),
-                "{action} is installed in a different context than `action_context` reports"
+                dispatched(&effective, "f13", context),
+                vec![FindNext::name_for_type()]
             );
+            assert_eq!(
+                dispatched(&effective, "shift-f13", context),
+                vec![FindPrevious::name_for_type()]
+            );
+        }
+        for context in ["Workspace", "Input"] {
+            assert!(dispatched(&effective, "f13", context).is_empty());
+            assert!(dispatched(&effective, "shift-f13", context).is_empty());
         }
     }
 

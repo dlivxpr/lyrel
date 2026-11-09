@@ -18,6 +18,13 @@ name = "lyrel-updater"
 path = "src/bin/lyrel-updater.rs"
 required-features = ["updater"]
 
+# AppKit initialization must run on the process main thread, not a libtest worker.
+[[test]]
+name = "native_markdown"
+path = "tests/native_markdown.rs"
+harness = false
+required-features = ["native-markdown-tests"]
+
 [target.'cfg(any(target_os = "macos", target_os = "windows"))'.dependencies]
 # The framework-free half of lyrel: wire protocol, session daemon, PTY, the
 # native SSH engine, and the domain model the headless `lyrel-server` shares with
@@ -37,6 +44,9 @@ required-features = ["updater"]
 lyrel-core = { path = "crates/lyrel-core", features = ["gssapi", "remote-install", "github", "terminal-width"] }
 
 gpui-kit = { workspace = true, features = ["tree-sitter-languages"] }
+# Native text + HTML publication; screenshot images remain on the existing Kit path.
+arboard = { version = "=3.6.1", default-features = false }
+base64 = "0.23.1"
 
 anyhow.workspace = true
 log.workspace = true
@@ -61,6 +71,8 @@ memchr = "2"
 # emoji, and half a flag renders as a bare letter. Already in the tree via
 # gpui, so this pins no new code.
 unicode-segmentation = "1"
+# First-strong direction for native table geometry; already used by GPUI.
+unicode-bidi = "=0.3.18"
 # Markdown AST data stays compatible with gpui-base; MDX uses its own native parser.
 markdown = "=1.0.0"
 ox_content_allocator = "=3.4.0"
@@ -70,6 +82,8 @@ ox_content_parser = "=3.4.0"
 ratex-parser = "=0.1.15"
 ratex-layout = "=0.1.15"
 ratex-svg = { version = "=0.1.15", features = ["embed-fonts"] }
+# Only the GUI-free structural model/cursor/geometry/input API is used.
+ratex-gpui = { version = "=0.4.1", default-features = false, features = ["editor"] }
 # Enable every released diagram family without browser or ELK runtime integration.
 merman = { version = "=0.9.2", default-features = false, features = ["all-diagrams", "complete-svg"] }
 # Scalar widths remain needed by preedit ink detection and copy unwrapping.
@@ -144,7 +158,7 @@ image = "0.25"
 
 # The published transport shares gpui-pre-http-client types with Fast through Kit.
 # Its library name is `reqwest_client`; it owns its Tokio runtime.
-gpui-pre-reqwest-client = "=0.3.11"
+gpui-pre-reqwest-client = "=0.3.12"
 ureq = { version = "3", default-features = false, features = ["rustls", "win-system-proxy", "socks-proxy"] }
 
 # See `[workspace.dependencies]`: the pin is shared with lyrel-cli, which parses
@@ -175,7 +189,6 @@ tray-icon = "0.26.1"
 # this pins no new code.
 [target.'cfg(windows)'.dependencies]
 aes-gcm = { version = "=0.11.1", features = ["zeroize"] }
-base64 = "0.23.1"
 windows-sys = { version = "0.61", features = [
     "Win32_Foundation",
     "Win32_Globalization",
@@ -224,6 +237,7 @@ windows = { version = "0.62.2", features = [
     "Foundation",
     "UI_Notifications",
     "Win32_Foundation",
+    "Win32_Globalization",
     "Win32_Storage_EnhancedStorage",
     # IShellLinkW::GetPath takes a WIN32_FIND_DATAW, so reading an existing
     # shortcut's target back — which is how `aumid` decides whether it has to
@@ -231,6 +245,7 @@ windows = { version = "0.62.2", features = [
     "Win32_Storage_FileSystem",
     "Win32_System_Com",
     "Win32_System_Com_StructuredStorage",
+    "Win32_System_DataExchange",
     "Win32_System_Variant",
     "Win32_UI_Shell",
     "Win32_UI_Shell_PropertiesSystem",
@@ -254,7 +269,7 @@ libc = "0.2.191"
 # and it makes the Windows jieba fallback unnecessary here.
 core-foundation = "0.10.1"
 objc2 = "0.6.5"
-objc2-app-kit = { version = "0.3", features = ["NSApplication", "NSResponder", "NSAppearance", "NSGraphics", "NSImage", "NSMenu", "NSMenuItem"] }
+objc2-app-kit = { version = "0.3", features = ["NSApplication", "NSResponder", "NSAppearance", "NSGraphics", "NSImage", "NSMenu", "NSMenuItem", "NSSpellChecker"] }
 # NSData feeds the runtime Dock icon for bare (non-bundled) binaries — see
 # `set_dock_icon_for_bare_binary` in main.rs.
 # NSUserNotification is the click-to-reveal notification path — see
@@ -265,7 +280,7 @@ objc2-app-kit = { version = "0.3", features = ["NSApplication", "NSResponder", "
 # NSMenu/NSMenuItem back the native-menu key-equivalent repair in
 # `ui::theme::fix_native_menu_key_equivalents` (gpui 0.3.9 does not map
 # "enter"/"tab", so the app rewrites those equivalents itself).
-objc2-foundation = { version = "0.3", features = ["NSData", "NSDictionary", "NSString", "NSUserDefaults", "NSUserNotification", "NSLocale", "NSArray"] }
+objc2-foundation = { version = "0.3", features = ["NSData", "NSDictionary", "NSString", "NSUserDefaults", "NSUserNotification", "NSLocale", "NSArray", "NSRange"] }
 # `oneshot::Receiver` appears in the `Platform` trait's prompt/screen-capture
 # signatures, which the full-delegation wrapper in `ui::platform` must name.
 # Already in the tree at 0.3.34 via gpui.
@@ -274,7 +289,6 @@ futures-channel = "0.3"
 
 # The Kit test-support feature enables its real App/Window test harness.
 [target.'cfg(any(target_os = "macos", target_os = "windows"))'.dev-dependencies]
-base64 = "0.23.1"
 gpui-kit = { workspace = true, features = ["test-support"] }
 
 [lints]
@@ -283,6 +297,7 @@ workspace = true
 [features]
 default = []
 updater = ["dep:async_zip"]
+native-markdown-tests = ["gpui-kit/test-support"]
 
 # Shared pins keep the GUI and its consumers on one published framework chain.
 [workspace]
@@ -299,7 +314,7 @@ version = "0.3.1"
 
 [workspace.dependencies]
 # The public facade selects Fast consistently for component, base, assets and platform.
-gpui-kit = { version = "=0.9.0", features = ["gpui-fast"] }
+gpui-kit = { version = "=0.9.1", features = ["gpui-fast"] }
 
 # 正式 Rio VT parser + grid 同时供 GUI 镜像、CLI capture 和 daemon 图片状态使用。
 # 共享版本保证三个消费者的光标与字符单元语义一致；PTY 仍由 portable-pty 驱动。

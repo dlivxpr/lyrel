@@ -22,17 +22,12 @@ pub(super) struct InsertionState {
 }
 struct PendingInsertion {
     serial: u64,
+    token: (EntityId, u64, u64, u64, Option<EntityId>),
     selection: Selection,
-    replaced: String,
     inputs: Option<Vec<IncomingImage>>,
     cancelled: std::rc::Rc<std::cell::Cell<bool>>,
 }
 impl InsertionState {
-    pub(super) fn rebase(&mut self, transaction: &Transaction) {
-        if let Some(pending) = &mut self.pending {
-            pending.selection = transaction.map_selection(pending.selection);
-        }
-    }
     pub(super) fn status(&self) -> Option<SharedString> {
         self.error.clone().or_else(|| {
             self.pending
@@ -51,6 +46,14 @@ impl InsertionState {
 }
 
 impl SourcePresentation {
+    pub(super) fn cancel_image_insertion(&mut self, cx: &mut Context<Self>) -> bool {
+        let Some(pending) = self.assets.pending.take() else {
+            return false;
+        };
+        pending.cancelled.set(true);
+        cx.notify();
+        true
+    }
     pub(super) fn insert_images(
         &mut self,
         inputs: Vec<IncomingImage>,
@@ -74,13 +77,8 @@ impl SourcePresentation {
         let cancelled = std::rc::Rc::new(std::cell::Cell::new(false));
         self.assets.pending = Some(PendingInsertion {
             serial: self.assets.serial,
+            token: self.input_token(cx),
             selection: self.state.selection,
-            replaced: self
-                .document
-                .read(cx)
-                .source()
-                .slice(self.state.selection.range())
-                .to_string(),
             inputs: Some(inputs),
             cancelled: cancelled.clone(),
         });
@@ -101,6 +99,15 @@ impl SourcePresentation {
             return;
         };
         if resources.path().is_none() {
+            return;
+        }
+        if self
+            .assets
+            .pending
+            .as_ref()
+            .is_some_and(|pending| pending.token != self.input_token(cx))
+        {
+            self.cancel_image_insertion(cx);
             return;
         }
         let Some(pending) = self.assets.pending.as_mut() else {
@@ -132,32 +139,45 @@ impl SourcePresentation {
                 }
                 let pending = view.assets.pending.take().unwrap();
                 if pending.cancelled.get()
-                    || !view.focus.is_focused(window)
                     || !resources.is_current(view.document.read(cx).resources())
                 {
                     cx.notify();
                     return;
                 }
+                if pending.token != view.input_token(cx) || !view.focus.is_focused(window) {
+                    view.assets.error = Some(t(L10nKey::MarkdownImageSelectionChanged).into());
+                    cx.notify();
+                    return;
+                }
                 match result {
-                    Ok(source) => {
-                        if !view
-                            .document
-                            .read(cx)
+                    Ok(mut source) => {
+                        let document = view.document.read(cx);
+                        let start = document.source().line_start_offset(
+                            document
+                                .source()
+                                .offset_to_point(pending.selection.range().start)
+                                .row,
+                        );
+                        let prefix = document
                             .source()
-                            .slice(pending.selection.range())
-                            .chars()
-                            .eq(pending.replaced.chars())
+                            .slice(start..pending.selection.range().start);
+                        let suffix = document
+                            .source()
+                            .slice(pending.selection.range().end..document.source().len());
+                        if prefix.chars().all(char::is_whitespace)
+                            && suffix
+                                .chars()
+                                .take_while(|ch| *ch != '\n')
+                                .all(char::is_whitespace)
                         {
-                            view.assets.error =
-                                Some(t(L10nKey::MarkdownImageSelectionChanged).into());
-                            cx.notify();
-                            return;
+                            source.push('\n');
                         }
+                        let caret = pending.selection.range().start + source.len();
                         view.command(
-                            Command::Replace {
-                                range: pending.selection.range(),
-                                text: source,
-                                kind: EditKind::Paste,
+                            Command::BatchReplaceSelected {
+                                kind: EditKind::Command,
+                                edits: vec![(pending.selection.range(), source)],
+                                selection: Selection::caret(caret),
                             },
                             window,
                             cx,
@@ -191,6 +211,10 @@ impl SourcePresentation {
         self.focus.focus(window, cx);
         self.insert_images(inputs, window, cx);
     }
+}
+
+pub(super) fn is_image_path(path: &Path) -> bool {
+    image_extension(path).is_some()
 }
 
 fn image_extension(path: &Path) -> Option<&'static str> {

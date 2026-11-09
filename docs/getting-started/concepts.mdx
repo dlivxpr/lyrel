@@ -181,7 +181,7 @@ macOS 原生验收延期到 [#166 专门性能后续工单](https://github.com/d
 
 播放时间线只在存活 daemon 中推进。每个连接报告当前 `screen/epoch` 的真实 viewport；direct、relative 和实际 Unicode placeholder 图共同决定任一资源是否仍有可见部分。一个可见消费者足以继续播放；全部隐藏、滚出 viewport、切换到非活动 screen、断开或关闭全部窗口时暂停，保留选帧、剩余间隔和循环进度，不计隐藏墙钟时间。上传、修改间隔、选帧和播放控制在暂停时仍生效。过期 epoch 或已退休连接不能恢复可见性。每次播放切换只传输 `Select` 和固定大小 `Playback` 元数据，不重发帧像素；元数据本身不触发整窗重绘。
 
-中央自动化入口：`cargo test --locked -p lyrel-core controlled_`，以及 `cargo test --locked -p lyrel --bin lyrel-app graphics_consumer_playback_loading_append_two_consumers_pause_and_fresh_restore -- --test-threads=1`。前者私有受控时间覆盖剩余间隔、有限循环、gapless、loading 尾等待、隐藏时追加／显式选帧、失效 viewport 和 reader；后者使用真实 PTY／daemon／production RemoteTerminal／rooted TerminalView，检查解码颜色、共享像素、冲突可见性的两个消费者及 fresh-store/window 恢复。Windows 已实际通过五项受控时间回归和一项双消费者回归。
+中央自动化入口：`cargo test --locked -p lyrel-core controlled_`，以及 `cargo test --locked -p lyrel --lib graphics_consumer_playback_loading_append_two_consumers_pause_and_fresh_restore -- --test-threads=1`。前者私有受控时间覆盖剩余间隔、有限循环、gapless、loading 尾等待、隐藏时追加／显式选帧、失效 viewport 和 reader；后者使用真实 PTY／daemon／production RemoteTerminal／rooted TerminalView，检查解码颜色、共享像素、冲突可见性的两个消费者及 fresh-store/window 恢复。Windows 已实际通过五项受控时间回归和一项双消费者回归。
 
 Windows 原生入口：在本次构建的隔离原生 pane 运行 `node scripts/kitty-playback.mjs`。默认两处红／绿／蓝白边图片以 500 ms 间隔同步；`stop` 停止，`play` 恢复无限循环，`finite` 重置后播放两次并停在尾帧；`loading` 从 root 顺序播放到尾并等待，`append` 追加白帧并解除等待，`gapless` 使绿帧不再自动显示。`1/2/3` 停止并手动选帧。2026-10-31 Windows `10.0.26300`／RTX 5080 Debug 原生窗口已观察两处同步切色、loading 蓝尾等待、append 后白帧、隐藏 tab 后返回及 sender 退出后的 fresh-window 继续播放。发送器 `uploads=4`，同一 daemon PID `22792`、pane `17`／control `16`；fresh 后未重启发送器。剩余间隔与循环进度由上述受控回归验证，静态截图不证明节拍或 60 fps。双 pane 容量、原生高帧率、真实 SSH 与 macOS 仍由后续票验收。
 
@@ -191,7 +191,7 @@ Windows 原生入口：在本次构建的隔离原生 pane 运行 `node scripts/
 
 矩形必须完全位于 root 尺寸内；不存在的帧／底图返回 `ENOENT`，越界和无效 `X` 返回 `EINVAL`，工作空间／保留／消费者配额不足返回 `ENOSPC`，并沿用 `i/I/p` 关联与 quiet 规则。失败不改变已接受像素、帧数、选择或放置。每次成功编辑产生新的不可变像素 key，root 身份和帧编号保持；所有放置和 fresh consumer 使用最新版本，不以同 key 覆盖绕过旧 worker／GPU owner 的退休。daemon 在 pane 锁内只捕获底图 packet 的共享所有权，在锁外按 PTY 顺序解码／合成，再检查代次并原子提交；旧／新内容与 decoder、RGBA、packet 副本的实际共存工作集均先准入，不能为编辑提前返还旧 owner 信用或逐帧淘汰既有序列。
 
-中央自动化入口：`cargo test --locked -p lyrel-core retention_daemon_complete_frames_refusal_quiet_and_replacement_are_atomic -- --test-threads=1`、`cargo test --locked -p lyrel-core prepared_root_edit_cannot_revive_deleted_replaced_or_newer_pixels -- --test-threads=1`、`cargo test --locked -p lyrel --bin lyrel-app graphics_consumer_partial_frames_edit_pixels_and_detached_versions -- --test-threads=1`。用例覆盖真实 raw／PNG／zlib、底图与背景、未修改区域、半透明 blend／overwrite、非破坏性拒绝、所有放置同步与 detached root 编辑后的全新窗口恢复；私有测试仅确定性控制 stale prepare／delete／replacement 边界。
+中央自动化入口：`cargo test --locked -p lyrel-core retention_daemon_complete_frames_refusal_quiet_and_replacement_are_atomic -- --test-threads=1`、`cargo test --locked -p lyrel-core prepared_root_edit_cannot_revive_deleted_replaced_or_newer_pixels -- --test-threads=1`、`cargo test --locked -p lyrel --lib graphics_consumer_partial_frames_edit_pixels_and_detached_versions -- --test-threads=1`。用例覆盖真实 raw／PNG／zlib、底图与背景、未修改区域、半透明 blend／overwrite、非破坏性拒绝、所有放置同步与 detached root 编辑后的全新窗口恢复；私有测试仅确定性控制 stale prepare／delete／replacement 边界。
 
 Windows 原生入口仍为 `node scripts/kitty-frames.mjs`：先输入 `partial`，两处绿色第 2 帧底图中应同时出现白色 L 边和红色半透明矩形，外围绿色／白框不变；再输入 `edit`，第 4 帧右下角应出现透明蓝矩形且其余已合成内容不变；输入 `root-edit`，第 1 帧变成红底上的黄色矩形并保持两处位置。输入 `stats` 记录后 `quit`，确认发送器停止，再关闭自有 GUI 并附着同一活 daemon，不重启发送器，检查最终选择及编辑像素恢复。先 `partial` 再 `edit`，脚本不会假造尚不存在的第 4 帧。播放中的组合变更另用下述 #143 入口验收。
 
@@ -207,7 +207,7 @@ Windows 原生入口仍为 `node scripts/kitty-frames.mjs`：先输入 `partial`
 
 stopped、loading、running 和全隐藏暂停都接受 append／edit／compose／delete。合成或没有显式 `z` 的编辑不重设当前帧剩余间隔；loading 在尾部等待时，仅编辑／合成尾帧不会假造新后继，追加新帧才解除等待。隐藏时仍提交新像素／编号与显式控制，自动推进等到恢复可见性。准备时捕获源／目标 packet 的共享所有权与 root pin，在 pane 锁外预留并解码；提交核对不可变内容和 mutation 代次，防止 delete／renumber／replacement 后的旧准备工作回写。新旧像素、实际 packet 容量和 decoder scratch 均计入相应峰值；packet／snapshot／decoder 持有的旧 owner 在实际释放前仍占其租约，不以删除提前退还在途信用。不新增磁盘缓存、公开测试控制或第二渲染器，pane `17`／control `16` 不变。
 
-中央入口：`cargo test --locked -p lyrel-core controlled_ -- --test-threads=1`、`cargo test --locked -p lyrel-core prepared_compose_rejects_delete_renumber_edit_and_replacement_with_snapshot_owners -- --test-threads=1`、`cargo test --locked -p lyrel-core deletion_of_each_selected_position_keeps_independent_referenced_pixels_and_dense_numbers -- --test-threads=1`、`cargo test --locked -p lyrel-core retention_daemon_complete_frames_refusal_quiet_and_replacement_are_atomic -- --test-threads=1`；桌面使用 `cargo test --locked -p lyrel --bin lyrel-app graphics_consumer_compose_rectangles_delete_frames_and_detached_recovery -- --test-threads=1`、`cargo test --locked -p lyrel --bin lyrel-app graphics_consumer_mutations_running_loading_hidden_and_fresh -- --test-threads=1`，以及 `cargo test --locked -p lyrel --bin lyrel-app promoted_root_and_composed_version_retire_stale_frame_decode_and_snapshot_claims -- --test-threads=1`。真实消费者用例走 PTY → daemon → production RemoteTerminal → rooted TerminalView，检查矩形实际像素／未改区域、半透明、真实 PTY exact errors／quiet、删除与 detached／fresh 恢复；私有测试用于确定性时间与准备／解码／snapshot 竞态。
+中央入口：`cargo test --locked -p lyrel-core controlled_ -- --test-threads=1`、`cargo test --locked -p lyrel-core prepared_compose_rejects_delete_renumber_edit_and_replacement_with_snapshot_owners -- --test-threads=1`、`cargo test --locked -p lyrel-core deletion_of_each_selected_position_keeps_independent_referenced_pixels_and_dense_numbers -- --test-threads=1`、`cargo test --locked -p lyrel-core retention_daemon_complete_frames_refusal_quiet_and_replacement_are_atomic -- --test-threads=1`；桌面使用 `cargo test --locked -p lyrel --lib graphics_consumer_compose_rectangles_delete_frames_and_detached_recovery -- --test-threads=1`、`cargo test --locked -p lyrel --lib graphics_consumer_mutations_running_loading_hidden_and_fresh -- --test-threads=1`，以及 `cargo test --locked -p lyrel --lib promoted_root_and_composed_version_retire_stale_frame_decode_and_snapshot_claims -- --test-threads=1`。真实消费者用例走 PTY → daemon → production RemoteTerminal → rooted TerminalView，检查矩形实际像素／未改区域、半透明、真实 PTY exact errors／quiet、删除与 detached／fresh 恢复；私有测试用于确定性时间与准备／解码／snapshot 竞态。
 
 Windows 自有原生入口：在本次构建的隔离 pane 运行 `node scripts/kitty-frame-mutations.mjs`，初始两处红／绿／蓝白框同步播放，第 4 帧黄色半透明 source 为 gapless。先输入 `compose`，绿色阶段应在 `(24,16)` 出现混合黄色矩形；再输入 `replace`，蓝色阶段相同位置应为半透明黄色，而非不透明混色。两项均不上传新像素，仍在播放。`edit` 在绿帧右下增加半透明品红；`current-delete` 在 running 中选择并删除绿帧，随后蓝帧接续，白框／位置不变。`delete-first`／`delete-last` 可继续删首／尾，剩一帧时 `delete-only` 用大写 `F` 删除资源及全部放置；`reset` 恢复场景。`loading` 到尾等待后 `append` 追加白帧；可切换隐藏 tab 后向同一自有 pane 发送变更，再返回检查两处一致。最后 `stats`、`quit`，确认 `KITTY_MUTATIONS_STOPPED`，销毁旧 GUI 并重新附着同一存活 daemon，不启动发送器，检查最终像素／删除和播放状态。记录上传数以区分无负载 compose／delete 与 edit／append。
 
@@ -274,11 +274,11 @@ parser 的源 `Work` 在准备阶段转交 `PreparedImage`，在等待桌面准�
 node --check scripts/kitty-capacity.mjs
 node --test scripts/kitty-capacity-analysis.test.mjs
 cargo test --locked -p lyrel-core retention_ -- --test-threads=1
-cargo test --locked -p lyrel --bin lyrel-app terminal::images::tests:: -- --test-threads=1
+cargo test --locked -p lyrel --lib terminal::images::tests:: -- --test-threads=1
 cargo test --locked -p lyrel-core `
   core::graphics_state::retention_tests::retention_daemon_two_visible_panes_retain_and_replay_sixty_distinct_1080p_frames `
   -- --ignored --exact --nocapture --test-threads=1
-cargo test --locked -p lyrel --bin lyrel-app `
+cargo test --locked -p lyrel --lib `
   terminal::view::tests::graphics_consumer_fullsize_two_panes_retain_reuse_restore_mutate_and_release `
   -- --ignored --exact --nocapture --test-threads=1
 ```
@@ -528,7 +528,7 @@ node scripts/omp-native-replay.mjs launch --root $fixture --lyrel-app (Resolve-P
 node scripts/omp-native-replay.mjs cleanup --root $fixture --lyrel-cli (Resolve-Path .\target\debug\lyrel.exe).Path
 ```
 
-集中消费者入口为 `cargo test --locked --bin lyrel-app graphics_consumer_released_omp_native_ -- --ignored --nocapture --test-threads=1`，先将 `LYREL_TEST_OMP` 设为正式可执行文件绝对路径；中央先运行 `node --check scripts/omp-native-replay.mjs`。只验证剩余 budget 时使用 `cargo test --locked --bin lyrel-app graphics_consumer_released_omp_native_resume_budget -- --ignored --nocapture --test-threads=1`，无需重复已通过的 pictures／disabled 路径。budget 保留精确八图身份、不同原生 image ID、前四图不可复活、后六图／toolResult／SVG 及滚出返回 placement identity 不变的断言。它复用真实 PTY／独立 daemon → `RemoteTerminal` → rooted `TerminalView`，不替代原生 GPU 像素。`--wait-ready` 只等待自有目录的 `consumer-ready` 文件，由 rooted consumer 挂载后释放；wrapper 不创建 readline／stdin stream，不向 TUI 注入 `LYREL_OMP_START`。原生 omp 独占继承的 ConPTY stdin。
+集中消费者入口为 `cargo test --locked --lib graphics_consumer_released_omp_native_ -- --ignored --nocapture --test-threads=1`，先将 `LYREL_TEST_OMP` 设为正式可执行文件绝对路径；中央先运行 `node --check scripts/omp-native-replay.mjs`。只验证剩余 budget 时使用 `cargo test --locked --lib graphics_consumer_released_omp_native_resume_budget -- --ignored --nocapture --test-threads=1`，无需重复已通过的 pictures／disabled 路径。budget 保留精确八图身份、不同原生 image ID、前四图不可复活、后六图／toolResult／SVG 及滚出返回 placement identity 不变的断言。它复用真实 PTY／独立 daemon → `RemoteTerminal` → rooted `TerminalView`，不替代原生 GPU 像素。`--wait-ready` 只等待自有目录的 `consumer-ready` 文件，由 rooted consumer 挂载后释放；wrapper 不创建 readline／stdin stream，不向 TUI 注入 `LYREL_OMP_START`。原生 omp 独占继承的 ConPTY stdin。
 
 原生 budget 使用新的 `$fixture`，将上方 `prepare` 改为 `node scripts/omp-native-replay.mjs prepare --root $fixture --omp (Get-Command omp).Source --case budget`，然后执行同一 `launch`。不输入 prompt；从尾部向上滚动遍历八图，再返回，确认前四张不复活、后六张 assistant 及 toolResult／SVG 的实际像素与顺序。退出后核验 `version.txt`、公开 cap preflight 为 8 与 `audit.json` 的零推理结果，再关闭和清理这个自有实例。不要把仅查询版本或 rooted paint 当作该原生步骤已经通过。
 
@@ -576,7 +576,7 @@ $env:LYREL_PI_GRAPHICS_CLI = 'C:\path\to\official\pi.exe'
 node --check scripts/pi-image-replay.mjs
 cargo test --locked -p lyrel-core pi_resume_preserves_explicit_image_protocol_without_omp_options
 cargo test --locked -p lyrel-core pi_first_run_waits_for_settlement_and_resolves_only_its_own_dialog
-cargo test --locked --bin lyrel-app graphics_consumer_pi_native_ -- --ignored --nocapture --test-threads=1
+cargo test --locked --lib graphics_consumer_pi_native_ -- --ignored --nocapture --test-threads=1
 ```
 
 最后一条已在 Windows 通过真实 PTY → 新建隔离 daemon → production `RemoteTerminal` → rooted `TerminalView`，比较两张图不同的 BGRA 地标、放置、图片处于对应 `read` 卡片和后续文本之间的几何与真实 production paint claim，覆盖原生历史 top／bottom、`/new` 删除、再次原生启动重放，以及三种显式关闭和设置覆盖环境。GPUI 测试窗口不是最终 GPU 像素证据。
@@ -638,8 +638,8 @@ node scripts/opencode-image-replay.mjs --previews off
 
 ```sh
 cargo test --locked -p lyrel-core opencode_scoped_launch_keeps_preview_policy_and_default_config_untouched -- --test-threads=1
-cargo test --locked -p lyrel --bin lyrel-app graphics_consumer_static_placements_count_coincident_instances_and_replace_by_id -- --nocapture --test-threads=1
-cargo test --locked -p lyrel --bin lyrel-app opencode_replay_consumer_tests:: -- --ignored --nocapture --test-threads=1
+cargo test --locked -p lyrel --lib graphics_consumer_static_placements_count_coincident_instances_and_replace_by_id -- --nocapture --test-threads=1
+cargo test --locked -p lyrel --lib opencode_replay_consumer_tests:: -- --ignored --nocapture --test-threads=1
 ```
 
 consumer 用例复用真实 PTY → 独立真实 daemon → 生产 pane connection／`RemoteTerminal` → rooted `TerminalView`，断言实际解码 BGRA 主色、独立 instance 数量、两卡左右几何、production paint claim、原生分页／滚离返回／tab 卸载重挂载，以及退出后 fresh consumer 不复活被应用删除的图片。额外静态协议用例覆盖同色不同放置、同原点重叠放置、同 `i/p` 替换不增量及精确删除；它验证计数不会被集合或 bbox 合并掩盖，不替代真实 OpenCode 或最终 GPU 像素。失败／超时输出完整 placement key、resource、原生 ID、源裁剪、anchor、paint 矩形、paint claim、图形预算状态和终端文本，供中央定位真实协议路径。

@@ -7,6 +7,7 @@ use lyrel_core::host::Host as _;
 use std::sync::atomic::Ordering;
 use std::time::{Duration, Instant};
 
+#[track_caller]
 fn wait_until(vcx: &mut VisualTestContext, mut ready: impl FnMut(&mut VisualTestContext) -> bool) {
     let deadline = Instant::now() + Duration::from_secs(10);
     loop {
@@ -634,6 +635,14 @@ fn markdown_workbench_shares_native_source_history_and_host_save_across_groups(
     });
     vcx.dispatch_action(gpui_kit::component::input::SelectAll);
     vcx.dispatch_action(gpui_kit::component::input::Copy);
+    wait_until(&mut vcx, |context| {
+        context.update(|_, cx| {
+            cx.read_from_clipboard()
+                .and_then(|item| item.text())
+                .as_deref()
+                == Some("中🎉alpha\nbeta\n")
+        })
+    });
     vcx.update(|_, cx| {
         assert_eq!(
             cx.read_from_clipboard().and_then(|item| item.text()),
@@ -641,7 +650,11 @@ fn markdown_workbench_shares_native_source_history_and_host_save_across_groups(
         )
     });
     vcx.dispatch_action(gpui_kit::component::input::Cut);
-    vcx.run_until_parked();
+    wait_until(&mut vcx, |context| {
+        first.read_with(context, |view, cx| {
+            view.document().read(cx).source().len() == 0
+        })
+    });
     app.read_with(&vcx, |app, cx| {
         assert_eq!(
             app.active_buffer()
@@ -762,18 +775,29 @@ fn markdown_native_handler_converts_utf16_and_composition_undo(cx: &mut TestAppC
             view.replace_and_mark_text_in_range(None, "你好", Some(2..2), window, cx);
             view.replace_text_in_range(None, "你好", window, cx);
         });
-        window.render_frame(cx);
-        view.update(cx, |view, cx| {
-            let start = view
-                .bounds_for_range(0..0, gpui_kit::Bounds::default(), window, cx)
-                .unwrap();
-            let committed = view
-                .bounds_for_range(3..3, gpui_kit::Bounds::default(), window, cx)
-                .unwrap();
-            assert!(committed.left() > start.left());
-            assert_eq!(committed.top(), start.top());
-            assert!(committed.size.height > gpui_kit::px(0.));
-        });
+    });
+    // Source projection and native coordinates are revision-scoped; a commit
+    // may schedule another frame before its bounds can be queried.
+    wait_until(&mut vcx, |vcx| {
+        vcx.update(|window, cx| {
+            window.render_frame(cx);
+            view.update(cx, |view, cx| {
+                let Some(start) =
+                    view.bounds_for_range(0..0, gpui_kit::Bounds::default(), window, cx)
+                else {
+                    return false;
+                };
+                let Some(committed) =
+                    view.bounds_for_range(3..3, gpui_kit::Bounds::default(), window, cx)
+                else {
+                    return false;
+                };
+                assert!(committed.left() > start.left());
+                assert_eq!(committed.top(), start.top());
+                assert!(committed.size.height > gpui_kit::px(0.));
+                true
+            })
+        })
     });
     vcx.dispatch_action(gpui_kit::component::input::Undo);
     vcx.run_until_parked();
@@ -883,6 +907,254 @@ fn external_writes_scenario(cx: &mut TestAppContext, markdown: bool) {
         assert_eq!(file.input.read(cx).text().to_string(), text);
         assert!(app.editor.is_dirty(HostId::LOCAL, &file.path));
     });
+}
+
+#[gpui_kit::test]
+fn markdown_reload_started_before_formula_input_reports_conflict_without_losing_session(
+    cx: &mut TestAppContext,
+) {
+    use gpui_kit::Focusable as _;
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("pending-formula.md");
+    let original = "$x$\n\nkeep\n";
+    std::fs::write(&path, original).unwrap();
+    let host = FileHost::new(HostId(2042));
+    let (app, mut context, _streams) = harness_with_tabs(cx, 1);
+    app.update_in(&mut context, |app, window, cx| {
+        app.editor_open_on_host(host.clone(), &path, window, cx)
+    });
+    wait_until(&mut context, |context| active_id(&app, context).is_some());
+    let view = app.read_with(&context, |app, _| {
+        app.active_editor_input()
+            .unwrap()
+            .markdown()
+            .unwrap()
+            .clone()
+    });
+    view.update_in(&mut context, |view, window, cx| {
+        if !view.is_live() {
+            view.toggle_mode(window, cx);
+        }
+        view.focus_handle(cx).focus(window, cx);
+    });
+    wait_until(&mut context, |context| {
+        context.update(|window, cx| {
+            window.render_frame(cx);
+            window.try_find("markdown-math-ready-x").is_some()
+        })
+    });
+    std::fs::write(&path, format!("{original}external\n")).unwrap();
+    let release = host.pause_next_read();
+    app.update_in(&mut context, |app, window, cx| {
+        app.editor_reload_from_disk(app.active_buffer().unwrap().id(), window, cx)
+    });
+    wait_until(&mut context, |_| host.entered.load(Ordering::SeqCst));
+    context.update(|window, cx| {
+        window.click("markdown-math-ready-x", cx);
+        window.input("9", cx);
+    });
+    release.send(()).unwrap();
+    wait_until(&mut context, |context| {
+        app.read_with(context, |app, _| {
+            app.active_buffer().unwrap().conflict.is_some()
+        })
+    });
+    context.update(|window, cx| {
+        assert!(window.find("markdown-formula-editor").visible());
+        assert_eq!(
+            view.read(cx).document().read(cx).encode().unwrap(),
+            original.as_bytes()
+        );
+        window.press("secondary-a", cx);
+        window.press("secondary-c", cx);
+        assert!(
+            cx.read_from_clipboard()
+                .unwrap()
+                .text()
+                .unwrap()
+                .contains('9')
+        );
+    });
+}
+
+#[gpui_kit::test]
+fn markdown_pristine_formula_reload_allows_open_and_cursor_moves_during_disk_read(
+    cx: &mut TestAppContext,
+) {
+    use gpui_kit::Focusable as _;
+    for opened_before_read in [true, false] {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("pristine-formula.md");
+        let original = "$x$\r\n\r\nkeep\n";
+        let loaded = "$y$\r\n\r\nexternal\n";
+        std::fs::write(&path, original).unwrap();
+        let host = FileHost::new(HostId(2043));
+        let (app, mut context, _streams) = harness_with_tabs(cx, 1);
+        app.update_in(&mut context, |app, window, cx| {
+            app.editor_open_on_host(host.clone(), &path, window, cx)
+        });
+        wait_until(&mut context, |cx| active_id(&app, cx).is_some());
+        let view = app.read_with(&context, |app, _| {
+            app.active_editor_input()
+                .unwrap()
+                .markdown()
+                .unwrap()
+                .clone()
+        });
+        // Register the owning watch after the write: a real notification must
+        // not race the explicitly gated external_change request below.
+        let path = app.read_with(&context, |app, _| app.active_buffer().unwrap().path.clone());
+        view.update_in(&mut context, |view, window, cx| {
+            if !view.is_live() {
+                view.toggle_mode(window, cx);
+            }
+            view.focus_handle(cx).focus(window, cx);
+        });
+        wait_until(&mut context, |context| {
+            context.update(|window, cx| {
+                window.render_frame(cx);
+                window.try_find("markdown-math-ready-x").is_some()
+            })
+        });
+        if opened_before_read {
+            context.update(|window, cx| window.click("markdown-math-ready-x", cx));
+        }
+        let release = host.pause_next_read();
+        std::fs::write(&path, loaded).unwrap();
+        app.update_in(&mut context, |app, window, cx| {
+            app.editor
+                .buffers
+                .rebuild_watch(Some(host.clone()), cx, |app| &mut app.editor.buffers);
+            app.editor.buffers.external_change(
+                &path,
+                window,
+                cx,
+                |app| &mut app.editor.buffers,
+                crate::ui::code_editor::EditorPanelState::buffer_edited,
+            );
+        });
+        wait_until(&mut context, |_| host.entered.load(Ordering::SeqCst));
+        context.update(|window, cx| {
+            if !opened_before_read {
+                window.click("markdown-math-ready-x", cx);
+            }
+            window.press("secondary-a", cx);
+            window.press("left", cx);
+        });
+        release.send(()).unwrap();
+        wait_until(&mut context, |context| {
+            view.read_with(context, |view, cx| {
+                view.document().read(cx).encode().unwrap() == loaded.as_bytes()
+            })
+        });
+        app.read_with(&context, |app, _| {
+            let file = app.active_buffer().unwrap();
+            assert!(file.conflict.is_none());
+            assert!(!file.dirty);
+        });
+        context.update(|window, cx| {
+            window.render_frame(cx);
+            assert!(window.try_find("markdown-formula-editor").is_none());
+        });
+        context.dispatch_action(gpui_kit::component::input::Undo);
+        view.read_with(&context, |view, cx| {
+            assert_eq!(
+                view.document().read(cx).encode().unwrap(),
+                loaded.as_bytes()
+            );
+        });
+        assert_eq!(std::fs::read(&path).unwrap(), loaded.as_bytes());
+    }
+}
+
+#[gpui_kit::test]
+fn markdown_clean_reload_survives_selection_and_group_handoff_without_overwriting_disk(
+    cx: &mut TestAppContext,
+) {
+    use gpui_kit::component::input::SelectAll;
+
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("delayed-reload.mdx");
+    std::fs::write(&path, b"alpha\r\nbeta\nlast").unwrap();
+    let host = FileHost::new(HostId(230));
+    let (app, mut vcx, _streams) = harness_with_tabs(cx, 1);
+    app.update_in(&mut vcx, |app, window, cx| {
+        app.editor_open_on_host(host.clone(), &path, window, cx);
+    });
+    wait_until(&mut vcx, |vcx| active_id(&app, vcx).is_some());
+    start_active_markdown_in_source(&app, &mut vcx);
+    let first = app.read_with(&vcx, |app, _| {
+        app.active_editor_input()
+            .unwrap()
+            .markdown()
+            .unwrap()
+            .clone()
+    });
+    app.update_in(&mut vcx, |app, window, cx| {
+        assert!(app.editor_split(window, cx));
+    });
+    start_active_markdown_in_source(&app, &mut vcx);
+    let second = app.read_with(&vcx, |app, _| {
+        app.active_editor_input()
+            .unwrap()
+            .markdown()
+            .unwrap()
+            .clone()
+    });
+
+    // The external-change path uses this same Host-bound reload. Pause its
+    // read, then change only presentation state, not the document's bytes.
+    let external = b"\xef\xbb\xbfexternal  \r\nsecond\nlast";
+    std::fs::write(&path, external).unwrap();
+    let release = host.pause_next_read();
+    app.update_in(&mut vcx, |app, window, cx| {
+        app.editor_reload_from_disk(app.active_buffer().unwrap().id(), window, cx);
+    });
+    wait_until(&mut vcx, |_| host.entered.load(Ordering::SeqCst));
+    app.update_in(&mut vcx, |app, window, cx| {
+        assert!(app.editor_focus_group(true, window, cx));
+    });
+    vcx.dispatch_action(SelectAll);
+    vcx.run_until_parked();
+    app.read_with(&vcx, |app, cx| {
+        assert!(!app.active_buffer().unwrap().dirty);
+        assert_eq!(first.read(cx).selection().range(), 0..15);
+    });
+    release.send(()).unwrap();
+    wait_until(&mut vcx, |vcx| {
+        app.read_with(vcx, |app, cx| {
+            app.active_buffer()
+                .unwrap()
+                .input
+                .read(cx)
+                .text()
+                .to_string()
+                == "external  \nsecond\nlast"
+        })
+    });
+    vcx.update(|_, cx| {
+        assert_eq!(
+            first.read(cx).document().entity_id(),
+            second.read(cx).document().entity_id()
+        );
+        assert_eq!(
+            first.read(cx).document().read(cx).encode().unwrap(),
+            external
+        );
+        assert_eq!(
+            second.read(cx).document().read(cx).encode().unwrap(),
+            external
+        );
+    });
+    vcx.dispatch_action(crate::core::actions::EditorSave);
+    wait_until(&mut vcx, |vcx| {
+        app.read_with(vcx, |app, _| {
+            app.active_buffer()
+                .is_some_and(|file| !file.dirty && !file.saving)
+        })
+    });
+    assert_eq!(std::fs::read(&path).unwrap(), external);
+    assert_eq!(host.writes.load(Ordering::SeqCst), 1);
 }
 
 #[gpui_kit::test]
@@ -1696,7 +1968,7 @@ fn markdown_untitled_image_cancel_is_unchanged_and_success_waits_for_document_sa
                 .read(cx)
                 .text()
                 .to_string()
-                == "![screenshot](assets/screenshot.png)"
+                == "![screenshot](assets/screenshot.png)\n"
         })
     });
     assert_eq!(std::fs::read(&path).unwrap(), b"");
@@ -1797,7 +2069,7 @@ fn markdown_failed_asset_write_has_no_link_and_late_write_cannot_touch_replaceme
 }
 
 #[gpui_kit::test]
-fn markdown_delayed_image_write_rebases_while_typing_without_losing_text(cx: &mut TestAppContext) {
+fn markdown_delayed_image_write_preserves_newer_typing_and_caret(cx: &mut TestAppContext) {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("typing.md");
     std::fs::write(&path, "original").unwrap();
@@ -1816,15 +2088,26 @@ fn markdown_delayed_image_write_rebases_while_typing_without_losing_text(cx: &mu
     vcx.run_until_parked();
     release.send(()).unwrap();
     wait_until(&mut vcx, |vcx| {
-        app.read_with(vcx, |app, cx| {
-            app.active_buffer()
-                .unwrap()
-                .input
-                .read(cx)
-                .text()
-                .to_string()
-                == "![screenshot](assets/screenshot.png)typedoriginal"
+        vcx.update(|window, cx| {
+            window.render_frame(cx);
+            window
+                .try_find("markdown-image-insertion-status")
+                .is_some_and(|status| {
+                    status.visible()
+                        && status.label()
+                            == Some(
+                                crate::ui::i18n::t(
+                                    crate::ui::i18n::L10nKey::MarkdownImageSelectionChanged,
+                                )
+                                .as_ref(),
+                            )
+                })
         })
+    });
+    app.read_with(&vcx, |app, cx| {
+        let input = &app.active_buffer().unwrap().input;
+        assert_eq!(input.read(cx).text().to_string(), "typedoriginal");
+        assert_eq!(input.markdown().unwrap().read(cx).selection().head(), 5);
     });
     vcx.dispatch_action(gpui_kit::component::input::Undo);
     vcx.run_until_parked();
@@ -1836,7 +2119,7 @@ fn markdown_delayed_image_write_rebases_while_typing_without_losing_text(cx: &mu
                 .read(cx)
                 .text()
                 .to_string(),
-            "typedoriginal"
+            "original"
         )
     });
     assert_eq!(
@@ -1900,7 +2183,7 @@ fn markdown_untitled_host_save_must_finish_before_assets_and_failed_save_never_c
                 .read(cx)
                 .text()
                 .to_string()
-                == "![screenshot](assets/screenshot.png)"
+                == "![screenshot](assets/screenshot.png)\n"
         })
     });
     assert_eq!(
@@ -1977,7 +2260,7 @@ fn markdown_untitled_host_save_must_finish_before_assets_and_failed_save_never_c
                 .read(cx)
                 .text()
                 .to_string()
-                == "![screenshot](assets/screenshot.png)"
+                == "![screenshot](assets/screenshot.png)\n"
         })
     });
     assert_eq!(read_owned(&host, &failed).unwrap(), b"");
@@ -2006,6 +2289,10 @@ fn markdown_image_completion_never_replaces_text_typed_over_pending_selection(
     let release = host.pause_next_write();
     paste_screenshot(&mut vcx, &png);
     wait_until(&mut vcx, |_| host.entered.load(Ordering::SeqCst));
+    vcx.update(|window, cx| {
+        window.render_frame(cx);
+        assert!(window.find("markdown-image-insertion-status").visible());
+    });
     vcx.update(|window, cx| window.input("new author text", cx));
     vcx.run_until_parked();
     release.send(()).unwrap();
@@ -2015,9 +2302,14 @@ fn markdown_image_completion_never_replaces_text_typed_over_pending_selection(
             window
                 .try_find("markdown-image-insertion-status")
                 .is_some_and(|status| {
-                    status
-                        .label()
-                        .is_some_and(|label| label == t(L10nKey::MarkdownImageSelectionChanged))
+                    status.visible()
+                        && status.label()
+                            == Some(
+                                crate::ui::i18n::t(
+                                    crate::ui::i18n::L10nKey::MarkdownImageSelectionChanged,
+                                )
+                                .as_ref(),
+                            )
                 })
         })
     });
@@ -2475,3 +2767,506 @@ fn mdx_unicode_reference_with_indented_definition_opens_on_its_document_host(
         );
     });
 }
+
+#[gpui_kit::test]
+fn markdown_link_same_named_hosts_are_isolated_and_failed_targets_keep_edits(
+    cx: &mut TestAppContext,
+) {
+    use gpui_kit::{Focusable as _, test::TestWindowExt as _};
+    let first = tempfile::tempdir().unwrap();
+    let second = tempfile::tempdir().unwrap();
+    let original = "# Source\r\n\n[jump][Ref] [missing](missing.md) [unreadable](folder)\r\n\r\n[Ref]: <next.md> 'keep'\n";
+    std::fs::write(first.path().join("next.md"), "first Host target").unwrap();
+    std::fs::write(second.path().join("next.md"), "second Host target").unwrap();
+    std::fs::write(second.path().join("start.md"), original).unwrap();
+    std::fs::create_dir(second.path().join("folder")).unwrap();
+    let first_host = FileHost::mapped(HostId(741), first.path());
+    let second_host = FileHost::mapped(HostId(742), second.path());
+    let (app, mut context, _streams) = harness_with_tabs(cx, 1);
+    app.update_in(&mut context, |app, window, cx| {
+        app.editor_open_on_host(first_host.clone(), Path::new("/next.md"), window, cx)
+    });
+    wait_until(&mut context, |cx| active_id(&app, cx).is_some());
+    let first_id = active_id(&app, &context).unwrap();
+    app.update_in(&mut context, |app, window, cx| {
+        app.editor_open_on_host(second_host.clone(), Path::new("/start.md"), window, cx)
+    });
+    wait_until(&mut context, |cx| {
+        active_id(&app, cx).is_some_and(|id| id != first_id)
+    });
+    start_active_markdown_in_source(&app, &mut context);
+    let source_id = active_id(&app, &context).unwrap();
+    let view = app.read_with(&context, |app, _| {
+        app.active_editor_input()
+            .unwrap()
+            .markdown()
+            .unwrap()
+            .clone()
+    });
+    context.dispatch_action(crate::core::actions::ToggleDocumentPreview);
+    let jump = original.replace("\r\n", "\n").find("jump").unwrap();
+    wait_until(&mut context, |cx| {
+        cx.update(|window, cx| {
+            window.render_frame(cx);
+            window.render_frame(cx);
+        });
+        view.read_with(cx, |view, cx| {
+            let label = view.range_to_bounds(&(jump..jump), cx);
+            label.is_some() && label == view.range_to_bounds(&(jump - 1..jump - 1), cx)
+        })
+    });
+    view.update_in(&mut context, |view, window, cx| {
+        view.select_range(jump..jump, cx);
+        view.focus_handle(cx).focus(window, cx);
+    });
+    context.dispatch_action(markdown::FollowLink);
+    wait_until(&mut context, |cx| {
+        active_id(&app, cx).is_some_and(|id| id != source_id)
+    });
+    app.read_with(&context, |app, cx| {
+        let file = app.active_buffer().unwrap();
+        assert_ne!(file.id(), first_id);
+        assert_eq!(file.host.id(), HostId(742));
+        assert_eq!(file.path, Path::new("/next.md"));
+        assert_eq!(file.input.read(cx).text().to_string(), "second Host target");
+        assert_eq!(
+            view.read(cx).document().read(cx).encode().unwrap(),
+            original.as_bytes()
+        );
+    });
+    app.update_in(&mut context, |app, window, cx| {
+        app.editor_open_on_host(second_host.clone(), Path::new("/start.md"), window, cx)
+    });
+    assert_eq!(active_id(&app, &context), Some(source_id));
+    view.update_in(&mut context, |view, window, cx| {
+        let end = view.document().read(cx).source().len();
+        view.select_range(end..end, cx);
+        view.focus_handle(cx).focus(window, cx);
+    });
+    context.update(|window, cx| window.input("unsaved", cx));
+    for label in ["missing", "unreadable"] {
+        let at = original.replace("\r\n", "\n").find(label).unwrap();
+        view.update_in(&mut context, |view, _, cx| view.select_range(at..at, cx));
+        // Wait for the production parser after typing, without bypassing the
+        // action route with a direct follow_link invocation.
+        wait_until(&mut context, |cx| {
+            cx.executor()
+                .advance_clock(std::time::Duration::from_millis(100));
+            cx.update(|window, cx| {
+                window.render_frame(cx);
+                window.render_frame(cx);
+                window.try_find("markdown-follow-link").is_some()
+            })
+        });
+        context.dispatch_action(markdown::FollowLink);
+        wait_until(&mut context, |cx| {
+            app.read_with(cx, |app, _| app.editor.buffers.pending.is_empty())
+        });
+        app.read_with(&context, |app, cx| {
+            assert_eq!(app.active_buffer().unwrap().id(), source_id);
+            assert!(app.active_buffer().unwrap().dirty);
+            assert_eq!(
+                view.read(cx).document().read(cx).encode().unwrap(),
+                format!("{original}unsaved").as_bytes()
+            );
+        });
+        context.update(|window, cx| assert!(view.read(cx).focus_handle(cx).is_focused(window)));
+    }
+    assert_eq!(
+        std::fs::read(second.path().join("start.md")).unwrap(),
+        original.as_bytes()
+    );
+    assert_eq!(
+        std::fs::read(first.path().join("next.md")).unwrap(),
+        b"first Host target"
+    );
+    assert_eq!(
+        std::fs::read(second.path().join("next.md")).unwrap(),
+        b"second Host target"
+    );
+    assert!(!second.path().join("missing.md").exists());
+}
+
+#[gpui_kit::test]
+fn markdown_reference_completion_keyboard_history_and_owning_host_anchor(cx: &mut TestAppContext) {
+    use gpui_kit::Focusable as _;
+    let directory = tempfile::tempdir().unwrap();
+    std::fs::write(directory.path().join("start.md"), "Keep\r\n\r\n").unwrap();
+    let target = "# Det\n\n<a id=\"detail\"></a>\nDetails\n";
+    std::fs::write(directory.path().join("next.md"), target).unwrap();
+    let host = FileHost::mapped(HostId(822), directory.path());
+    let (app, mut context, _streams) = harness_with_tabs(cx, 1);
+    app.update_in(&mut context, |app, window, cx| {
+        app.editor_open_on_host(host.clone(), Path::new("/start.md"), window, cx)
+    });
+    wait_until(&mut context, |cx| active_id(&app, cx).is_some());
+    let original_id = active_id(&app, &context).unwrap();
+    let view = app.read_with(&context, |app, _| {
+        app.active_editor_input()
+            .unwrap()
+            .markdown()
+            .unwrap()
+            .clone()
+    });
+    view.update_in(&mut context, |view, window, cx| {
+        view.select_range(6..6, cx);
+        view.focus_handle(cx).focus(window, cx);
+    });
+    context.update(|window, cx| window.input("[[next#det", cx));
+    wait_until(&mut context, |cx| {
+        cx.update(|window, cx| {
+            window.render_frame(cx);
+            window.try_find("markdown-reference-completions").is_some()
+        })
+    });
+    let partial = view.read_with(&context, |view, cx| {
+        view.document().read(cx).encode().unwrap()
+    });
+    context.update(|window, cx| {
+        window.press("escape", cx);
+        assert!(view.read(cx).focus_handle(cx).is_focused(window));
+    });
+    view.read_with(&context, |view, cx| {
+        assert_eq!(view.document().read(cx).encode().unwrap(), partial)
+    });
+    context.dispatch_action(gpui_kit::component::input::ShowCompletions);
+    wait_until(&mut context, |cx| {
+        cx.update(|window, cx| {
+            window.render_frame(cx);
+            window.try_find("markdown-reference-completions").is_some()
+        })
+    });
+    context.update(|window, cx| window.press("down", cx));
+    context.update(|window, cx| window.press("enter", cx));
+    let inserted = "Keep\r\n\r\n[detail](next.md#detail)";
+    view.read_with(&context, |view, cx| {
+        assert_eq!(
+            view.document().read(cx).encode().unwrap(),
+            inserted.as_bytes()
+        )
+    });
+    context.dispatch_action(gpui_kit::component::input::Undo);
+    view.read_with(&context, |view, cx| {
+        assert_eq!(view.document().read(cx).encode().unwrap(), partial)
+    });
+    context.dispatch_action(gpui_kit::component::input::Undo);
+    view.read_with(&context, |view, cx| {
+        assert_eq!(view.document().read(cx).encode().unwrap(), b"Keep\r\n\r\n");
+    });
+    context.dispatch_action(gpui_kit::component::input::Redo);
+    view.read_with(&context, |view, cx| {
+        assert_eq!(view.document().read(cx).encode().unwrap(), partial);
+    });
+    context.dispatch_action(gpui_kit::component::input::Redo);
+    view.read_with(&context, |view, cx| {
+        assert_eq!(
+            view.document().read(cx).encode().unwrap(),
+            inserted.as_bytes()
+        )
+    });
+    app.update_in(&mut context, |app, window, cx| {
+        app.editor_save_active(window, cx)
+    });
+    wait_until(&mut context, |cx| {
+        app.read_with(cx, |app, _| !app.active_buffer().unwrap().dirty)
+    });
+    assert_eq!(
+        std::fs::read(directory.path().join("start.md")).unwrap(),
+        inserted.as_bytes()
+    );
+    app.update_in(&mut context, |app, window, cx| {
+        app.editor_close_file(0, window, cx);
+        app.editor_open_on_host(host.clone(), Path::new("/start.md"), window, cx);
+    });
+    wait_until(&mut context, |cx| {
+        active_id(&app, cx).is_some_and(|id| id != original_id)
+    });
+    let original_id = active_id(&app, &context).unwrap();
+    let view = app.read_with(&context, |app, _| {
+        app.active_editor_input()
+            .unwrap()
+            .markdown()
+            .unwrap()
+            .clone()
+    });
+    view.read_with(&context, |view, cx| {
+        assert_eq!(
+            view.document().read(cx).encode().unwrap(),
+            inserted.as_bytes()
+        )
+    });
+    view.update_in(&mut context, |view, window, cx| {
+        view.select_range(8..8, cx);
+        view.focus_handle(cx).focus(window, cx);
+    });
+    wait_until(&mut context, |cx| {
+        cx.executor().advance_clock(Duration::from_millis(100));
+        cx.update(|window, cx| {
+            window.render_frame(cx);
+            window.render_frame(cx);
+            window.try_find("markdown-follow-link").is_some()
+        })
+    });
+    context.dispatch_action(markdown::FollowLink);
+    wait_until(&mut context, |cx| {
+        active_id(&app, cx).is_some_and(|id| id != original_id)
+    });
+    app.read_with(&context, |app, cx| {
+        let file = app.active_buffer().unwrap();
+        assert_eq!(file.host.id(), HostId(822));
+        assert_eq!(file.path, Path::new("/next.md"));
+        assert_eq!(
+            file.input.markdown().unwrap().read(cx).selection().head(),
+            target.find("<a").unwrap()
+        );
+    });
+    assert_eq!(
+        std::fs::read(directory.path().join("next.md")).unwrap(),
+        target.as_bytes()
+    );
+}
+
+#[gpui_kit::test]
+fn markdown_local_reference_completion_reports_ambiguity_without_hidden_writes(
+    cx: &mut TestAppContext,
+) {
+    use gpui_kit::Focusable as _;
+    let directory = canonical_tempdir();
+    let path = directory.path().join("start.md");
+    let original = "# Local\r\n\r\n";
+    std::fs::write(&path, original).unwrap();
+    let target = "<a id=\"dup\"></a>\n\n<a id=\"dup\"></a>\n";
+    std::fs::write(directory.path().join("next.md"), target).unwrap();
+    let (app, mut context, _streams) = harness_with_tabs(cx, 1);
+    app.update_in(&mut context, |app, window, cx| {
+        app.open_file_in_editor(&path, window, cx)
+    });
+    wait_until(&mut context, |cx| active_id(&app, cx).is_some());
+    let view = app.read_with(&context, |app, _| {
+        app.active_editor_input()
+            .unwrap()
+            .markdown()
+            .unwrap()
+            .clone()
+    });
+    view.update_in(&mut context, |view, window, cx| {
+        let end = view.document().read(cx).source().len();
+        view.select_range(end..end, cx);
+        view.focus_handle(cx).focus(window, cx);
+    });
+    context.update(|window, cx| window.input("[[next#dup", cx));
+    wait_until(&mut context, |cx| {
+        cx.update(|window, cx| {
+            window.render_frame(cx);
+            window
+                .try_find("markdown-reference-status")
+                .is_some_and(|status| {
+                    status.label() == Some(t(L10nKey::MarkdownReferenceAmbiguous))
+                })
+        })
+    });
+    app.read_with(&context, |app, _| {
+        assert!(app.active_buffer().unwrap().dirty)
+    });
+    context.update(|window, cx| {
+        window.press("escape", cx);
+        assert!(view.read(cx).focus_handle(cx).is_focused(window));
+    });
+    context.dispatch_action(gpui_kit::component::input::Undo);
+    view.read_with(&context, |view, cx| {
+        assert_eq!(
+            view.document().read(cx).encode().unwrap(),
+            original.as_bytes()
+        )
+    });
+    context.update(|window, cx| window.input("[[next]]", cx));
+    view.update_in(&mut context, |view, window, cx| {
+        let caret = view.document().read(cx).source().len() - 2;
+        view.select_range(caret..caret, cx);
+        view.focus_handle(cx).focus(window, cx);
+    });
+    context.dispatch_action(gpui_kit::component::input::ShowCompletions);
+    wait_until(&mut context, |cx| {
+        cx.update(|window, cx| {
+            window.render_frame(cx);
+            window.try_find("markdown-reference-completions").is_some()
+        })
+    });
+    context.update(|window, cx| window.press("enter", cx));
+    view.read_with(&context, |view, cx| {
+        assert_eq!(
+            view.document().read(cx).encode().unwrap(),
+            format!("{original}[next.md](next.md)").as_bytes()
+        )
+    });
+    assert_eq!(std::fs::read(&path).unwrap(), original.as_bytes());
+    assert_eq!(
+        std::fs::read(directory.path().join("next.md")).unwrap(),
+        target.as_bytes()
+    );
+    assert_eq!(std::fs::read_dir(directory.path()).unwrap().count(), 2);
+}
+
+#[gpui_kit::test]
+fn markdown_embed_fragment_source_history_and_host_roundtrip(cx: &mut TestAppContext) {
+    use gpui_kit::Focusable as _;
+    use gpui_kit::test::TestQueryExt as _;
+    let directory = tempfile::tempdir().unwrap();
+    std::fs::write(directory.path().join("start.md"), "Keep\r\n\r\n").unwrap();
+    let target = "# Intro\n\nHidden\n\n# Detail\n\n**Visible fragment**\n\n![[nested.md]]\n\n# After\n\nExcluded\n";
+    let nested = "Nested content\n\n![[next.md#detail]]\n\n![[missing.md]]\n";
+    std::fs::write(directory.path().join("next.md"), target).unwrap();
+    std::fs::write(directory.path().join("nested.md"), nested).unwrap();
+    let host = FileHost::mapped(HostId(823), directory.path());
+    let (app, mut context, _streams) = harness_with_tabs(cx, 1);
+    app.update_in(&mut context, |app, window, cx| {
+        app.editor_open_on_host(host.clone(), Path::new("/start.md"), window, cx)
+    });
+    wait_until(&mut context, |cx| active_id(&app, cx).is_some());
+    let original_id = active_id(&app, &context).unwrap();
+    let view = app.read_with(&context, |app, _| {
+        app.active_editor_input()
+            .unwrap()
+            .markdown()
+            .unwrap()
+            .clone()
+    });
+    view.update_in(&mut context, |view, window, cx| {
+        view.select_range(6..6, cx);
+        view.focus_handle(cx).focus(window, cx);
+    });
+    context.update(|window, cx| window.input("![[next#det", cx));
+    wait_until(&mut context, |cx| {
+        cx.update(|window, cx| {
+            window.render_frame(cx);
+            window.try_find("markdown-reference-completions").is_some()
+        })
+    });
+    context.update(|window, cx| window.press("enter", cx));
+    let inserted = "Keep\r\n\r\n![[next.md#detail]]";
+    view.read_with(&context, |view, cx| {
+        assert_eq!(
+            view.document().read(cx).encode().unwrap(),
+            inserted.as_bytes()
+        )
+    });
+    let mut content_id = None;
+    wait_until(&mut context, |cx| {
+        cx.update(|window, cx| {
+            window.render_frame(cx);
+            content_id = window
+                .find_all_by_label(t(L10nKey::MarkdownEmbedReadonly))
+                .into_iter()
+                .find(|content| {
+                    content
+                        .value()
+                        .is_some_and(|value| value.contains("Visible fragment"))
+                })
+                .and_then(|content| content.path().last().cloned());
+            content_id.as_ref().is_some_and(|id| {
+                !window
+                    .within(id.clone())
+                    .find_all_by_label(t(L10nKey::MarkdownEmbedCycle))
+                    .is_empty()
+            })
+        })
+    });
+    let content_id = content_id.expect("the loaded embed has a native identity");
+    context.update(|window, cx| {
+        let content = window.find(content_id.clone());
+        let value = content.value().unwrap();
+        assert!(value.contains("Visible fragment"));
+        assert!(!value.contains("Hidden"));
+        assert!(!value.contains("Excluded"));
+        assert_eq!(
+            window
+                .within(content_id.clone())
+                .find_by_label(t(L10nKey::MarkdownReferenceMissing))
+                .label(),
+            Some(t(L10nKey::MarkdownReferenceMissing))
+        );
+        window.click(content_id.clone(), cx);
+        window.press("escape", cx);
+        assert!(view.read(cx).focus_handle(cx).is_focused(window));
+    });
+    context.update(|window, cx| {
+        let source_id = window
+            .find_by_label(t(L10nKey::MarkdownEmbedSource))
+            .path()
+            .last()
+            .cloned()
+            .expect("embed source button identity");
+        window.click(source_id, cx);
+    });
+    view.read_with(&context, |view, _| {
+        assert_eq!(view.selection().range(), 6..25)
+    });
+    context.update(|window, cx| window.input("![[next.md#detail|Alias]]", cx));
+    let edited = "Keep\r\n\r\n![[next.md#detail|Alias]]";
+    context.dispatch_action(gpui_kit::component::input::Undo);
+    view.read_with(&context, |view, cx| {
+        assert_eq!(
+            view.document().read(cx).encode().unwrap(),
+            inserted.as_bytes()
+        )
+    });
+    context.dispatch_action(gpui_kit::component::input::Redo);
+    view.read_with(&context, |view, cx| {
+        assert_eq!(
+            view.document().read(cx).encode().unwrap(),
+            edited.as_bytes()
+        )
+    });
+    context.dispatch_action(crate::core::actions::ToggleDocumentPreview);
+    view.read_with(&context, |view, cx| {
+        assert!(!view.is_live());
+        assert_eq!(
+            view.document().read(cx).encode().unwrap(),
+            edited.as_bytes()
+        );
+    });
+    context.dispatch_action(crate::core::actions::ToggleDocumentPreview);
+    view.read_with(&context, |view, _| assert!(view.is_live()));
+    app.update_in(&mut context, |app, window, cx| {
+        app.editor_save_active(window, cx)
+    });
+    wait_until(&mut context, |cx| {
+        app.read_with(cx, |app, _| !app.active_buffer().unwrap().dirty)
+    });
+    assert_eq!(
+        std::fs::read(directory.path().join("start.md")).unwrap(),
+        edited.as_bytes()
+    );
+    app.update_in(&mut context, |app, window, cx| {
+        app.editor_close_file(0, window, cx);
+        app.editor_open_on_host(host.clone(), Path::new("/start.md"), window, cx);
+    });
+    wait_until(&mut context, |cx| {
+        active_id(&app, cx).is_some_and(|id| id != original_id)
+    });
+    app.read_with(&context, |app, cx| {
+        assert_eq!(
+            app.active_editor_input()
+                .unwrap()
+                .markdown()
+                .unwrap()
+                .read(cx)
+                .document()
+                .read(cx)
+                .encode()
+                .unwrap(),
+            edited.as_bytes()
+        )
+    });
+    assert_eq!(
+        std::fs::read(directory.path().join("next.md")).unwrap(),
+        target.as_bytes()
+    );
+    assert_eq!(
+        std::fs::read(directory.path().join("nested.md")).unwrap(),
+        nested.as_bytes()
+    );
+}
+
+#[path = "../markdown/clipboard_tests.rs"]
+mod clipboard_tests;

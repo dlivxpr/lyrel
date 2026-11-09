@@ -129,13 +129,30 @@ lyrel 独立初版为 `0.1.0`；缺少匹配包时不会回退下载上游安装
 
 Windows／macOS 使用 stable Rust 工具链与仓库已有锁文件运行 `cargo build --locked`；应用二进制文件名为 `lyrel-app`，CLI 为 `lyrel`，headless server 为 `lyrel-server`。Linux 使用下列排除根桌面包的命令，直接构建根包会明确拒绝。
 
-GUI 统一通过正式 `gpui-kit =0.9.0` 的官方 `gpui-fast` feature 选择 GPUI Fast，锁文件基线为 `0.1.13` 家族；Kit 同步选择 core、native platform、Base、Component 与 assets 的 Fast 类型。应用导入与测试宏仍经 `gpui_kit`，不直接依赖 engine、不增加 crate alias／patch 或双后端产品开关。GUI HTTP 保持 `gpui-pre-reqwest-client =0.3.11`，与 Fast 共用 `gpui-pre-http-client =0.3.11` 类型身份；保留 `tree-sitter-languages` 和测试专用 `test-support`。当前 Rio 组合为 `=0.5.29`；完整 Kit／Fast／Rio 组合的构建、行为与性能必须重新验证，不能沿用仅 Fast 的检查点结果。[#168](https://github.com/dlivxpr/lyrel/issues/168) 的跨平台验收与 [#167](https://github.com/dlivxpr/lyrel/issues/167) 的真实 Mac 验收分别记录。
+GUI 统一通过正式 `gpui-kit =0.9.1` 的官方 `gpui-fast` feature 选择 GPUI Fast，锁文件基线为 `0.1.14` 家族；Kit 同步选择 core、native platform、Base、Component 与 assets 的 Fast 类型。应用导入与测试宏仍经 `gpui_kit`，不直接依赖 engine、不增加 crate alias／patch 或双后端产品开关。GUI HTTP 使用 `gpui-pre-reqwest-client =0.3.12`，与 Fast 共用 `gpui-pre-http-client =0.3.12` 类型身份；保留 `tree-sitter-languages` 和测试专用 `test-support`。当前 Rio 组合为 `=0.5.29`；完整 Kit／Fast／Rio 组合的构建、行为与性能须按升级后的候选重新验证，不能沿用 `0.9.0` 的检查点结果。本轮 SDK 问题与实测边界由 [#235](https://github.com/dlivxpr/lyrel/issues/235) 记录，真实 Mac 验收仍由 [#167](https://github.com/dlivxpr/lyrel/issues/167) 跟踪。
 
-`Cargo.lock` 会收录可选后端及其他平台的依赖；Kit 的 additive features 也会保留合法的 `gpui-pre` 上游构建链，不能以包名前缀判断当前公开类型。用 `cargo tree --locked -p lyrel --target x86_64-pc-windows-msvc -e features -i gpui-fast@0.1.13` 检查启用层；macOS 对应使用 `--target aarch64-apple-darwin -i gpui-fast-macos@0.1.13`，确认 `font-kit`，并另查 `-i gpui-pre-http-client@0.3.11`。Kit 使用兼容的 `0.1.x` 约束，更新锁文件时须复核 Fast 家族版本，不能意外漂移此基线。
+`Cargo.lock` 会收录可选后端及其他平台的依赖；Kit 的 additive features 也会保留合法的 `gpui-pre` 上游构建链，不能以包名前缀判断当前公开类型。用 `cargo tree --locked -p lyrel --target x86_64-pc-windows-msvc -e features -i gpui-fast@0.1.14` 检查启用层；macOS 对应使用 `--target aarch64-apple-darwin -i gpui-fast-macos@0.1.14`，确认 `font-kit`，并另查 `-i gpui-pre-http-client@0.3.12`。Kit 使用兼容的 `0.1.x` 约束，更新锁文件时须复核 Fast 家族版本，不能意外漂移此基线。
 
 自定义 `RenderOnce` 使用 `#[derive(IntoElement)]` 时，显式从 Kit 根导入 `use gpui_kit::IntoElement`（或使用完整 `#[derive(gpui_kit::IntoElement)]` 路径），不要只从 `prelude::*` 取得同名 derive。Kit 根保留了可解析 facade 路径的官方宏；Fast prelude 的同名宏仍生成 `gpui::` 路径，应用无需为它增加 engine 依赖或 alias。普通 trait／builder 仍可继续使用现有 prelude。
 
 `0.9.0` 将公开主题记录标为 `#[non_exhaustive]`：外部调用从 `Default`／现有构造器创建，再逐字段赋值，不能使用含 `..Default::default()` 的结构体字面量。`Window::text_system()` 现在返回 `&Rc<WindowTextSystem>`，窗口布局缓存不再可共享给并发回调；后台任务继续携带 `Arc<TextSystem>`，在任务内创建布局系统。Merman 的测宽回调要求 `Send + Sync`，因此该任务独有的布局缓存通过互斥访问保留复用，不捕获窗口的 `Rc`。`Animation` 使用 executor 时钟，测试动画推进使用 `advance_clock`，不靠墙钟休眠。保留每窗一个 `Root`、主题字段／tokens 与 Base 同步，以及 macOS 平台完整委派；维护自定义 GPUI 代码时核对[官方 `v0.9.0` 发布与迁移说明](https://github.com/longbridge/gpui-kit/releases/tag/v0.9.0)。本轮原生工作流、HTTP 与性能结果须单独记录；macOS 实机验收由 [#167](https://github.com/dlivxpr/lyrel/issues/167) 跟踪，先前轮次的未执行决定不适用于本次升级。
+
+桌面应用代码由共享 `lyrel` library 提供，`lyrel-app` 只调用公开 `run()`。普通单元测试保留在 library 中，不再随二进制或原生 runner 重复编译。Windows／macOS 的默认 `cargo test --locked --features updater` 仍覆盖桌面 library、core、CLI、server 与 updater，但不启用 `native-markdown-tests`，因此不包含下述真实 native 字形消费者。只运行桌面 library 单元测试时使用 `cargo test --locked -p lyrel --lib`；不能把旧 `--bin lyrel-app` 的零用例结果作为 library 已通过的证据。
+
+真实 native 字形消费者须显式启用 `native-markdown-tests`；该可选 feature 启用 `gpui-kit/test-support`，不是默认产品 feature。`native_markdown` 的独立入口为 `tests/native_markdown.rs`，通过 `required-features` 限定，保留当前全部 **14 项**用例和原 9 个 selector。入口使用 `harness = false`，在进程 `main()` 创建并持有 `current_platform(false)`，再为每个消费者创建独立 `TestAppContext`；共享 library 仅额外编译这些消费者所需的支持代码，不编入其他单元测试套件。正式 Windows backend 的 `headless = true` 明确使用 `NoopTextSystem`，不能把 `current_platform(true)` 当作原生字体构造；window-capable 平台提供 DirectWrite，但测试没有调用平台 `run()` 或创建原生测试窗口。macOS 的 AppKit 初始化不能放在 libtest worker 上，`--test-threads=1` 不等于 OS 主线程。字体前提失败保持 fail-closed，不替换 Noop 或删掉消费者断言；这些字形消费者也不替代 GPU 截图、OS IME 或真实窗口验收。
+
+在满足上述桌面构建前提的终端中，分别编译、执行全部原生用例，再按需列出 selector：
+
+```bash
+cargo test --locked -p lyrel --features native-markdown-tests \
+  --test native_markdown --no-run
+cargo test --locked -p lyrel --features native-markdown-tests \
+  --test native_markdown -- --nocapture
+cargo test --locked -p lyrel --features native-markdown-tests \
+  --test native_markdown -- --list
+```
+
+Windows PowerShell 中将每条命令写成一行，不复制 Bash 的续行符 `\`。运行单例使用 `cargo test --locked -p lyrel --features native-markdown-tests --test native_markdown -- '<完整 selector>' --exact --nocapture`。未知 `--exact` selector 返回非零；普通 substring filter 零匹配按 Cargo 常规语义报告 0 例，不能作为消费者已通过的证据。完整执行须实际报告当前注册的全部用例，并保留原 9 个 selector。需要继续收集其他普通目标结果时，使用 `cargo test --locked --features updater --no-fail-fast`，但仍须独立运行上述原生目标；该 feature 仅隔离测试编译，不改变当前支持范围或软换行、原子对象与长文消费者断言。测试结果仍需按候选提交重新记录。
 
 Fast 的 development profile 为当前启用的 core、platform、macros 和 Windows／macOS／Apple backend 保留优化；运行性能只比较同条件 Release。官方 `GPUI_VIEW_RETENTION=0` 可在启动时关闭 view retention 以定位差异（默认开启），不是产品 backend 回退。正式二进制的 `LYREL_FPS=1` 只记录终端 paint 次数／耗时，不是 retention 命中率、GPU 帧延迟或物理输入延迟。官方 `Window::reset_layout_stats()`／`layout_stats()` 仅在 `test-support` 提供，包含 `views_built`、`views_reused`、`nodes_created`、`nodes_reused`、`style_writes` 及各 phase 时间；需要时在已有 rooted consumer 临时采样，不在生产热路径新增计数器。必须先测量终端 paint 中实体写入的实际失效影响，再决定是否修复；保留单一 frame buffer／metadata owner、已有生命周期与隐藏 pane 通知门控。
 
@@ -144,6 +161,12 @@ GUI、CLI 与 daemon 的图片权威状态统一采用正式 `rio-vt =0.5.29`（
 Rio `0.5.29` 不再由 `Processor` 暂存同步输出；解析、协议应答和输入模式始终实时推进。桌面在实际 snapshot／paint 发布点保留上次完整文字、光标和图片 display list，结束标记或 lyrel 既有 **150 ms** fail-safe 才使新帧可发布；每次开始标记会重新计时。reader 自己推进静默链路的期限，不采用 Rio 默认的 1000 ms，也不新增设置。图形资源仍由 daemon 决定，桌面只保留已计入原预算的呈现 lease；隐藏 pane 不因输出新增重绘。CLI `capture --plain` 独立重建最新收到状态，不等待 GUI committed frame。此语义及新回归不等于候选已经通过构建／原生／性能验收，实际命令、退出码与证据由 #168 的集中检查点记录。
 
 图片传输在共享核心复用锁图中正式 registry 的 `png 0.18.1` 做逐行内容校验，zlib 继续使用 `miniz_oxide 0.9.1`；二者均为 Rust 实现，不新增平台 PNG／zlib 原生安装步骤。桌面仍使用既有 `image 0.25` 生成渲染像素；按原有 `Cargo.lock` 与 `--locked` 命令安装，不引入 Git/path/patch 第三方来源。
+
+Markdown 富文本剪贴板在 Windows／macOS 的生产依赖中共用锁定的正式 `base64 0.23.1`，用于把已加载的本机图像写入 HTML data URL。它不是 Windows 专用或仅测试依赖，不为复制额外加载网络资源，也不增加系统安装步骤。
+
+Markdown 公式继续使用正式 `ratex-parser`／`ratex-layout`／`ratex-svg =0.1.15` 生成本机渲染结果；结构编辑仅复用 `ratex-gpui =0.4.1` 的公开 model、cursor、geometry 和 input API，关闭默认 features、启用 `editor`，不使用它的 GPUI view。该包会在锁图保留其正式 `gpui-pre` 传递依赖，不代表应用切换后端；实际控件、输入与绘制仍经 Kit 的 Fast 类型。表格首 strong 字符方向分类复用正式 `unicode-bidi =0.3.18`，不复制 Unicode 数据表。新增依赖不改变 Linux headless crate 的无 GUI 边界。
+
+正式 `gpui-base =0.9.1` 已发布 `RenderContext::with_foreground_ranges` 和 `Caret`／`CaretAffinity`、`caret_for_position`／`position_for_caret`，分别提供 keyed leaf 的 render-local 前景色与软换行两侧 caret。应用接入和真实消费者验证仍须单独完成；新 API 的发布不代表完整 bidi／RTL 或超长 nowrap 行的 paint／geometry 已修复。相关原始失败和后续结果保留在 [#235](https://github.com/dlivxpr/lyrel/issues/235) 及[Markdown 核心验收记录](/window/side-panel#204-当前核心证据与明确缺口)，不通过 Git/path/patch、修改下载源码或替换渲染器绕过正式发布边界。
 
 桌面用量的浏览器 LocalStorage 读取使用正式 registry 的 `rusty-leveldb 4.0.2` 与 `rusqlite 0.40.2`（`bundled`）。SQLite 随 crate 构建，无需另装系统 SQLite；仍需下述平台 C/C++ 编译工具链。Snappy、文件锁、SHA-256 与内存擦除也使用锁图中的正式依赖，不引入 Git／补丁包或浏览器注入工具。
 
@@ -159,11 +182,11 @@ CPU／RAM 的 refresh 方法仍返回 `()`，没有可传播的刷新错误；�
 [sysinfo 0.40.1 `System`](https://docs.rs/sysinfo/0.40.1/sysinfo/struct.System.html)。
 
 手动执行 `bash .github/scripts/check-host-boundary.sh` 时，需使用 LF 工作树，并让同一 Bash 的 `PATH` 可找到 Node.js 22.19+（与 pi 桥测试运行时一致）。检查器只用 Node.js 标准库解析 Rust 测试模块归属，不运行 Cargo、编译器或原生桌面；WSL 需使用 Linux Node，不能误用 `node.exe`。
-仅由 `#[cfg(test)]` 模块引用的外部 `mod` 与字面量 `include!("...")` 文件一并排除；同一文件只要也被生产代码引用，仍执行 Host 检查。未引用文件与无法确认的条件不因文件名含 `test` 而豁免。
+仅由 `#[cfg(test)]` 或显式测试专用 `native-markdown-tests` feature 引用的外部 `mod` 与字面量 `include!("...")` 文件一并排除；同一文件只要也被生产代码引用，仍执行 Host 检查。其他 feature／平台条件保持保守判断，未引用文件不因文件名含 `test` 而豁免。
 
 <Tabs>
   <Tab title="macOS">
-    GPUI Fast `0.1.13` 需要完整 Xcode 提供 macOS SDK 26+；runner 的 `macos-15` 标签不能证明 SDK 版本。CI 与 Release 桌面构建共用 `.github/scripts/select-macos-sdk.sh`：优先核对显式 `DEVELOPER_DIR`，否则检查当前工具链及 `/Applications/Xcode*.app`，仅选择实际 SDK 版本至少为 26 的工具链。日志输出 Xcode 版本、实际 SDK 版本／路径、clang／metal 路径与 `MACOSX_DEPLOYMENT_TARGET=15.0`；缺少兼容 Xcode／SDK／clang 时直接失败，不下载工具链或修改全局 `xcode-select`。Kit 启用 `runtime_shaders`，因此离线 `metal` 编译器缺失只记录，不作为该配置的构建前提。本地构建前在同一 Bash 中 source 该脚本，或明确提供满足相同要求的 `DEVELOPER_DIR`／`SDKROOT`。根 `build.rs` 的 `lyrel-app` linker 参数与 bundle 的 `LSMinimumSystemVersion` 均为 `15.0`；独立 headless server 不经桌面 SDK 选择脚本、不修改其运行时下限。SDK 日志不是实际 Mac 运行、IME 或签名验收。
+    GPUI Fast `0.1.14` 的 macOS 桌面构建继续要求完整 Xcode 提供 macOS SDK 26+；runner 的 `macos-15` 标签不能证明 SDK 版本。CI 与 Release 桌面构建共用 `.github/scripts/select-macos-sdk.sh`：优先核对显式 `DEVELOPER_DIR`，否则检查当前工具链及 `/Applications/Xcode*.app`，仅选择实际 SDK 版本至少为 26 的工具链。日志输出 Xcode 版本、实际 SDK 版本／路径、clang／metal 路径与 `MACOSX_DEPLOYMENT_TARGET=15.0`；缺少兼容 Xcode／SDK／clang 时直接失败，不下载工具链或修改全局 `xcode-select`。Kit 启用 `runtime_shaders`，因此离线 `metal` 编译器缺失只记录，不作为该配置的构建前提。本地构建前在同一 Bash 中 source 该脚本，或明确提供满足相同要求的 `DEVELOPER_DIR`／`SDKROOT`。根 `build.rs` 的 `lyrel-app` linker 参数与 bundle 的 `LSMinimumSystemVersion` 均为 `15.0`；独立 headless server 不经桌面 SDK 选择脚本、不修改其运行时下限。SDK 日志不是实际 Mac 运行、IME 或签名验收。
 
     工作区及依赖的 Debug／测试默认使用 `opt-level = 1`，减少未优化代码及展开信息的体积；现有渲染／解析热路径依赖继续使用显式级别 `3`。保留 Apple 默认的 compact unwind／DWARF 选择、panic 展开和回溯，不使用禁用 compact unwind 或屏蔽 linker diagnostics 的参数；Release 配置不变。
 
@@ -372,9 +395,13 @@ Node.js 22 显式安装，用于自动化回归、Host 检查和 pi 桥测试；
 
 分类入口为 `.github/scripts/ci-changes.cjs`；新增编译输入时同步检查允许跳过的路径。`LICENSE` 被 server 内嵌，`skills/` 等目录不能按 Markdown 后缀当作纯文档。分类使用 `--no-renames` 保留重命名两端，移出源码目录仍会验证删除的影响。检查名称由原来的 `changes`／`rustfmt`／`host boundary` 收敛为 `preflight`；设置合并门禁时使用新名称及所需平台检查，不引用已移除的名称。
 
-CI 的桌面 build 与 test 统一启用 `--features updater`，同一次默认 workspace 测试覆盖 GUI、core、CLI、server 和 updater；不另起一轮不同 feature 图的 updater 编译。Linux 仍验证完整 headless features，所有平台断言保持不变。
+CI 的桌面生产检查先运行 `cargo check --locked --features updater --target <target>`，再以相同 feature 构建；不覆盖 `RUSTFLAGS`，保留 Windows 的 `+crt-static` 和现有 CRT 断言。普通测试显式选择 `lyrel`、`lyrel-core`、`lyrel-cli`、`lyrel-server` 四个包，启用 `updater`，覆盖共享桌面 library、headless 单元／集成／CLI E2E 与 updater。原生消费者另以 `-p lyrel --features updater,native-markdown-tests --test native_markdown` 编译、执行，不能用未启用 feature 的默认测试代替。Linux 仍使用 `--workspace --exclude lyrel --all-features` 验证完整 headless 范围；独立 server 构建和所有平台断言保持不变。
 
-桌面测试先独立运行同参数的 `cargo test --no-run` 编译全部测试目标，再执行原有完整测试。普通构建和测试编译各保留 30 分钟步骤上限，实际测试执行仍为 20 分钟；job 总上限为 90 分钟，容纳准备、两轮编译及执行。普通 `cargo build` 未启用的 test-support 依赖不消耗测试执行预算。PR #201 的 Windows CI `42081752060` 已完成普通构建与静态 CRT 断言，随后在测试编译阶段触及原有 20 分钟上限，尚未执行测试；因此仅扩大编译预算，不跳过用例，也不延长实际测试的卡死保护。
+普通桌面／headless 测试和原生 Markdown 目标各有独立的 `--no-run` 编译步骤，分别保留 30 分钟上限；实际普通测试执行为 20 分钟，原生执行为 10 分钟。普通测试使用 `--no-fail-fast` 收集各目标结果，其断言失败后仍执行已可编译的原生目标；编译失败或取消不冒充执行成功。生产检查与构建各为 30 分钟，job 总上限仍为 90 分钟，作为全部步骤共享的最终保护，不保证每一步同时耗尽自身上限。各轮使用相同显式 `--target`，编译日志与执行日志分别定位失败，不把测试编译耗时计作消费者运行耗时。
+
+`239a1b4c` 的 macOS 日志中，测试编译于 `14:48:12` 开始，根包于 `14:55:35` 开始编译，未使用代码诊断持续至 `15:07:00`，`15:18:25` 达到 30 分钟上限，尚未进入测试执行。旧入口把 `src/main.rs` 同时作为产品 binary 与原生 test target，并随自定义 runner 编译全部 `cfg(test)` 模块。共享 library 与独立 feature-gated 原生入口移除这个重复编译边界；步骤拆分不延长原有 30 分钟编译上限，也不据日志推断所有耗时均来自警告或断言卡死。新候选仍须取得自己的完整平台结果。
+
+此前编译预算调整的历史证据保持不变：PR #201 的 Windows CI `42081752060` 已完成普通构建与静态 CRT 断言，随后在测试编译阶段触及原有 20 分钟上限，尚未执行测试；因此仅扩大编译预算，不跳过用例，也不延长实际测试的卡死保护。
 
 同一 SHA 的失败恢复只重跑失败 job，保留原有成功结果，不以本地新 HEAD 替换原提交，也不自动循环重试。先预览失败项，再显式执行：
 
