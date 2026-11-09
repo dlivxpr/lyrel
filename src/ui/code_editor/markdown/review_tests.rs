@@ -1019,9 +1019,11 @@ fn final_review_table_slash_excludes_block_insertion_and_keeps_inline_commands(
     });
     context.update(|window, cx| {
         let entry = window.find("markdown-slash-entry-code");
-        assert!(entry.label().unwrap().contains(crate::ui::i18n::t(
-            crate::ui::i18n::L10nKey::MarkdownSlashBlockUnavailable
-        )));
+        let expected = crate::ui::i18n::t_fmt(
+            crate::ui::i18n::L10nKey::MarkdownSlashBlockUnavailable,
+            &[("label", crate::ui::i18n::t(crate::ui::i18n::L10nKey::MarkdownBlockCode))],
+        );
+        assert_eq!(entry.label(), Some(expected.as_str()));
         window.press("enter", cx);
     });
     assert_eq!(

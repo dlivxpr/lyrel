@@ -9,18 +9,29 @@ use gpui_kit::{Action, App, AppContext as _, Context, Window};
 pub(in super::super) struct State {
     custom: Option<CustomColor>,
     feedback: Option<Feedback>,
+    commands: std::collections::VecDeque<(Format, Option<u32>)>,
+    lease: Option<CommandLease>,
+    generation: u64,
+    task: Option<gpui_kit::Task<()>>,
+    blur: Option<gpui_kit::Subscription>,
 }
 // Immutable positioned parse cache, invalidated from the owning document. It
 // cannot accept text input, save, or retain independent undo history.
 pub(in crate::ui::code_editor::markdown) struct Syntax {
-    pub revision: u64,
-    pub grammar: super::super::super::mdx::Grammar,
-    pub source: String,
-    pub root: markdown::mdast::Node,
-    pub decorations: Vec<super::Decoration>,
-    pub coverage: Vec<(Format, std::ops::Range<usize>)>,
+    revision: u64,
+    grammar: super::super::super::mdx::Grammar,
+    source: String,
+    root: markdown::mdast::Node,
+    decorations: Vec<super::Decoration>,
+    coverage: Vec<(Format, std::ops::Range<usize>)>,
 }
 impl Syntax {
+    pub(in crate::ui::code_editor::markdown) fn source(&self) -> &str {
+        &self.source
+    }
+    pub(in crate::ui::code_editor::markdown) fn root(&self) -> &markdown::mdast::Node {
+        &self.root
+    }
     pub(in crate::ui::code_editor::markdown) fn new(
         source: &str,
         root: markdown::mdast::Node,
@@ -61,6 +72,13 @@ struct CustomColor {
     revision: u64,
     picker: gpui_kit::Entity<gpui_kit::component::color_picker::ColorPickerState>,
 }
+#[derive(PartialEq, Eq)]
+struct CommandLease {
+    token: (gpui_kit::EntityId, u64, u64, u64, Option<gpui_kit::EntityId>),
+    selection: Selection,
+    grammar: super::super::super::mdx::Grammar,
+    live: bool,
+}
 #[derive(Clone, Debug, PartialEq, gpui_kit::Action)]
 #[action(namespace = markdown_formats, no_json)]
 pub(in super::super) struct SetHighlightColor {
@@ -88,6 +106,117 @@ const HIGHLIGHT_COLORS: [(L10nKey, u32); 7] = [
 ];
 
 impl SourcePresentation {
+    fn format_command_lease(&self, cx: &App) -> CommandLease {
+        CommandLease {
+            token: self.input_token(cx),
+            selection: self.state.selection,
+            grammar: self.document.read(cx).grammar(),
+            live: self.live,
+        }
+    }
+    fn finish_format_commands(&mut self) {
+        self.formats.commands.clear();
+        self.formats.lease = None;
+        self.formats.task = None;
+        self.formats.blur = None;
+    }
+    pub(super) fn dispatch_format_command(
+        &mut self,
+        format: Format,
+        color: Option<u32>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.is_composing() || !self.extra_selections.is_empty() {
+            return;
+        }
+        self.focus.focus(window, cx);
+        if self.state.selection.range().is_empty() {
+            return;
+        }
+        if self.formats.task.is_none() {
+            if let Some(command) = self.plan_format(format, color, cx) {
+                self.command(command, window, cx);
+                return;
+            }
+            if self.format_syntax(cx).is_some() || self.document.read(cx).source().len() <= 32 * 1024 {
+                return;
+            }
+        }
+        let lease = self.format_command_lease(cx);
+        if self.formats.lease.as_ref() != Some(&lease) {
+            self.formats.commands.clear();
+            self.formats.generation = self.formats.generation.wrapping_add(1);
+            self.formats.lease = Some(lease);
+        }
+        self.formats.commands.push_back((format, color));
+        if self.formats.task.is_some() {
+            return;
+        }
+        // One worker retains command order. Only its own transactions advance
+        // the lease; user edits, another presentation or a focus change cancel it.
+        self.formats.blur = Some(cx.on_blur(&self.focus, window, |view, _, _| {
+            view.formats.commands.clear();
+            view.formats.lease = None;
+            view.formats.generation = view.formats.generation.wrapping_add(1);
+        }));
+        self.formats.task = Some(cx.spawn_in(window, async move |view, cx| {
+            loop {
+                let request = view.update_in(cx, |view, window, cx| {
+                    let current = view.format_command_lease(cx);
+                    if view.formats.lease.as_ref() != Some(&current)
+                        || !view.focus.is_focused(window)
+                        || view.is_composing()
+                        || !view.extra_selections.is_empty()
+                    {
+                        view.finish_format_commands();
+                        return None;
+                    }
+                    let Some((format, color)) = view.formats.commands.pop_front() else {
+                        view.finish_format_commands();
+                        return None;
+                    };
+                    Some((view.formats.generation, current.selection,
+                        view.document.read(cx).source().clone(), current.grammar, format, color))
+                });
+                let Ok(Some((generation, selection, source, grammar, format, color))) = request else {
+                    break;
+                };
+                let command = cx.background_executor().spawn(async move {
+                    let source = source.to_string();
+                    let root = super::super::super::parser::parse(&source, grammar, true).ok()?;
+                    let styles = decorations(&source, &root);
+                    super::edit(&source, &root, selection, format, color, &styles)
+                }).await;
+                let next = view.update_in(cx, |view, window, cx| {
+                    if view.formats.generation != generation {
+                        return true;
+                    }
+                    if view.formats.lease.as_ref() != Some(&view.format_command_lease(cx))
+                        || !view.focus.is_focused(window)
+                        || view.is_composing()
+                        || !view.extra_selections.is_empty()
+                    {
+                        view.finish_format_commands();
+                        return false;
+                    }
+                    if let Some(command) = command {
+                        view.command(command, window, cx);
+                    }
+                    view.formats.lease = Some(view.format_command_lease(cx));
+                    if view.formats.commands.is_empty() {
+                        view.finish_format_commands();
+                        false
+                    } else {
+                        true
+                    }
+                });
+                if !matches!(next, Ok(true)) {
+                    break;
+                }
+            }
+        }));
+    }
     pub(in crate::ui::code_editor::markdown) fn format_syntax(&self, cx: &App) -> Option<&Syntax> {
         let doc = self.document.read(cx);
         self.projection

@@ -126,7 +126,7 @@ impl SourcePresentation {
             return;
         }
         if let Some(syntax) = self.format_syntax(cx) {
-            self.projection.block_index = blocks::Index::from_ast(&syntax.source, &syntax.root);
+            self.projection.block_index = blocks::Index::from_ast(syntax.source(), syntax.root());
         }
     }
     pub(super) fn reveal_block_command(&mut self, command: &Command, cx: &App) {

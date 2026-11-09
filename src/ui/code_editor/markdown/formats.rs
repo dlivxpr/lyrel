@@ -506,6 +506,14 @@ fn eligible(source: &str, root: &Node, range: &Range<usize>, format: Format) -> 
                 )
             });
             let whole = range.start <= p.start.offset && p.end.offset <= range.end;
+            if matches!(node, Node::Link(_))
+                && super::super::links::label_range(source, node).is_none()
+            {
+                let delimited = source[p.start.offset..p.end.offset].starts_with('<');
+                if !whole || (!delimited && range.start == p.start.offset && range.end == p.end.offset) {
+                    return true;
+                }
+            }
             if !whole && body.is_none_or(|body| range.start < body.start || body.end < range.end) {
                 return true;
             }
@@ -827,46 +835,7 @@ impl SourcePresentation {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.is_composing() || !self.extra_selections.is_empty() {
-            return;
-        }
-        if let Some(command) = self.plan_format(format, color, cx) {
-            self.command(command, window, cx);
-        } else if self.format_syntax(cx).is_none()
-            && self.document.read(cx).source().len() > 32 * 1024
-        {
-            let token = self.input_token(cx);
-            let selection = self.state.selection;
-            let source = self.document.read(cx).source().clone();
-            let grammar = self.document.read(cx).grammar();
-            let live = self.live;
-            cx.spawn_in(window, async move |view, cx| {
-                let command = cx
-                    .background_executor()
-                    .spawn(async move {
-                        let source = source.to_string();
-                        let root = super::super::parser::parse(&source, grammar, true).ok()?;
-                        let styles = decorations(&source, &root);
-                        edit(&source, &root, selection, format, color, &styles)
-                    })
-                    .await;
-                let _ = view.update_in(cx, |view, window, cx| {
-                    if view.input_token(cx) == token
-                        && view.state.selection == selection
-                        && view.document.read(cx).grammar() == grammar
-                        && view.live == live
-                        && view.extra_selections.is_empty()
-                        && !view.is_composing()
-                        && view.focus.is_focused(window)
-                        && let Some(command) = command
-                    {
-                        view.command(command, window, cx);
-                    }
-                });
-            })
-            .detach();
-        }
-        self.focus.focus(window, cx);
+        self.dispatch_format_command(format, color, window, cx);
     }
 }
 
