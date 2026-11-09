@@ -572,6 +572,10 @@ impl SourcePresentation {
             .px_3()
             .py_1()
             .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+            // Single-line Input emits PressEnter for the picker and deliberately
+            // bubbles input::Enter. Keep that submission inside the toolbar;
+            // the document's Enter handler must not edit its retained selection.
+            .on_action(|_: &gpui_kit::component::input::Enter, _, cx| cx.stop_propagation())
             .child(
                 Button::new("markdown-format-menu")
                     .small()
