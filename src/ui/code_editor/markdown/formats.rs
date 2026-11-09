@@ -16,6 +16,8 @@ gpui_kit::actions!(
         Highlight,
         ClearHighlightColor,
         CustomHighlightColor,
+        ClearTextColor,
+        CustomTextColor,
         ApplyCustomColor,
         CancelCustomColor
     ]
@@ -648,6 +650,252 @@ fn eligible(source: &str, root: &Node, range: &Range<usize>, format: Format) -> 
     range.start < range.end && !forbidden(source, root, range, format)
 }
 
+fn selection_crosses_mark(node: &Node, range: &Range<usize>) -> bool {
+    let crossing = node.position().is_some_and(|position| {
+        matches!(node, Node::Strong(_) | Node::Emphasis(_) | Node::Delete(_) | Node::Link(_) | Node::LinkReference(_))
+            && (position.start.offset < range.start && range.start < position.end.offset && position.end.offset < range.end
+                || range.start < position.start.offset && position.start.offset < range.end && range.end < position.end.offset)
+    });
+    crossing || node.children().is_some_and(|children| children.iter().any(|node| selection_crosses_mark(node, range)))
+}
+
+fn markdown_delimiters(node: &Node, hidden: &mut Vec<Range<usize>>) {
+    if let Some(position) = node.position() {
+        let width = match node {
+            Node::Strong(_) | Node::Delete(_) => 2,
+            Node::Emphasis(_) => 1,
+            _ => 0,
+        };
+        if width > 0 {
+            hidden.extend([position.start.offset..position.start.offset + width,
+                position.end.offset - width..position.end.offset]);
+        }
+        if matches!(node, Node::Link(_) | Node::LinkReference(_)) {
+            if let Some(children) = node.children() {
+                if let Some((first, last)) = children.first().and_then(|first| first.position()).zip(children.last().and_then(|last| last.position())) {
+                    hidden.extend([position.start.offset..first.start.offset, last.end.offset..position.end.offset]);
+                }
+            }
+        }
+    }
+    if let Some(children) = node.children() {
+        for child in children {
+            markdown_delimiters(child, hidden);
+        }
+    }
+}
+
+fn color_crosses_mark(root: &Node, range: &Range<usize>, styles: &[Decoration]) -> bool {
+    fn contains_mark(node: &Node, at: usize, outer: usize) -> bool {
+        let Some(position) = node.position() else { return false; };
+        if at <= position.start.offset || position.end.offset <= at {
+            return false;
+        }
+        if matches!(node, Node::Strong(_) | Node::Emphasis(_) | Node::Delete(_) | Node::Link(_) | Node::LinkReference(_))
+            && outer < position.start.offset
+        {
+            return true;
+        }
+        node.children().is_some_and(|children| children.iter().any(|node| contains_mark(node, at, outer)))
+    }
+    [range.start, range.end].into_iter().any(|at| {
+        styles.iter().filter(|d| d.format == Format::TextColor && d.open.end < at && at < d.close.start).any(|color| {
+            contains_mark(root, at, color.open.start) || styles.iter().any(|d| {
+                d.format != Format::TextColor && color.open.start < d.open.start
+                    && d.open.end <= at && at <= d.close.start
+            })
+        })
+    })
+}
+
+fn preserve_crossed_colors(
+    source: &str,
+    root: &Node,
+    range: &Range<usize>,
+    styles: &[Decoration],
+    selected_open: Option<&str>,
+    changes: &mut std::collections::BTreeMap<usize, (usize, String)>,
+) {
+    fn collect(node: &Node, source: &str, scope: &Range<usize>, styles: &[Decoration], runs: &mut Vec<Range<usize>>) {
+        let Some(position) = node.position() else { return; };
+        let span = position.start.offset..position.end.offset;
+        if span.end <= scope.start || scope.end <= span.start {
+            return;
+        }
+        if opaque_jsx(node) || matches!(node, Node::Text(_) | Node::InlineCode(_) | Node::InlineMath(_) | Node::Image(_) | Node::ImageReference(_) | Node::FootnoteReference(_) | Node::Html(_)) {
+            if !styles.iter().any(|d| d.open == span || d.close == span) {
+                runs.push(span);
+            }
+            return;
+        }
+        let Some(children) = node.children() else { return; };
+        let mut opaque = None;
+        for child in children {
+            let Some(position) = child.position() else { continue; };
+            if matches!(child, Node::Html(_)) {
+                if let Some((name, closing)) = opaque_tag(&source[position.start.offset..position.end.offset]) {
+                    if let Some((opened, start, depth)) = opaque.as_mut() {
+                        if *opened == name {
+                            if closing {
+                                *depth -= 1;
+                                if *depth == 0 {
+                                    runs.push(*start..position.end.offset);
+                                    opaque = None;
+                                }
+                            } else {
+                                *depth += 1;
+                            }
+                        }
+                    } else if !closing {
+                        opaque = Some((name, position.start.offset, 1usize));
+                    }
+                    continue;
+                }
+            }
+            if opaque.is_none() {
+                collect(child, source, scope, styles, runs);
+            }
+        }
+        if let Some((_, start, _)) = opaque {
+            runs.push(start..span.end);
+        }
+    }
+    // Only color owners crossing this selection are redistributed. Keep each
+    // original opening/closing slice, including unknown attributes, and never
+    // serialize Markdown or touch opaque HTML's internal source.
+    let mut runs = Vec::new();
+    let scope = styles.iter().filter(|d| {
+        d.format == Format::TextColor && d.open.end < range.end && range.start < d.close.start
+    }).fold(range.clone(), |scope, d| scope.start.min(d.open.start)..scope.end.max(d.close.end));
+    collect(root, source, &scope, styles, &mut runs);
+    for run in runs {
+        let mut cuts = vec![run.start, run.end];
+        cuts.extend([range.start, range.end].into_iter().filter(|at| run.start < *at && *at < run.end));
+        for style in styles.iter().filter(|d| d.format == Format::TextColor) {
+            cuts.extend([style.open.end, style.close.start].into_iter().filter(|at| run.start < *at && *at < run.end));
+        }
+        cuts.sort_unstable();
+        cuts.dedup();
+        for pair in cuts.windows(2) {
+            let part = pair[0]..pair[1];
+            if part.start < range.end && range.start < part.end {
+                if let Some(open) = selected_open {
+                    changes.entry(part.start).or_insert_with(|| (part.start, String::new())).1.push_str(open);
+                    changes.entry(part.end).or_insert_with(|| (part.end, String::new())).1.push_str("</span>");
+                }
+                continue;
+            }
+            let Some(style) = styles.iter().rev().find(|d| {
+                d.format == Format::TextColor && d.open.end <= part.start && part.end <= d.close.start
+            }) else { continue; };
+            if style.open.end >= range.end || range.start >= style.close.start {
+                continue;
+            }
+            changes.entry(part.start).or_insert_with(|| (part.start, String::new())).1.push_str(&source[style.open.clone()]);
+            changes.entry(part.end).or_insert_with(|| (part.end, String::new())).1.push_str(&source[style.close.clone()]);
+        }
+    }
+}
+
+fn text_color_edit(
+    source: &str,
+    root: &Node,
+    range: Range<usize>,
+    reversed: bool,
+    color: Option<u32>,
+    styles: &[Decoration],
+) -> Option<Command> {
+    // Split enclosing colors at selection edges. Other formatting and all
+    // unselected source spelling remain owned by the original document.
+    let mut changes = std::collections::BTreeMap::<usize, (usize, String)>::new();
+    let split_selection = selection_crosses_mark(root, &range) || styles.iter().any(|d| {
+        d.format != Format::TextColor && (d.open.start < range.start && range.start < d.close.end && d.close.end < range.end
+            || range.start < d.open.start && d.open.start < range.end && range.end < d.close.end)
+    });
+    let distribute = split_selection || color_crosses_mark(root, &range, styles);
+    let mut prefix = String::new();
+    let mut suffix = String::new();
+    for decoration in styles.iter().filter(|d| {
+        d.format == Format::TextColor
+            && d.content().start < range.end
+            && range.start < d.content().end
+    }) {
+        let body = decoration.content();
+        if distribute {
+            changes.insert(decoration.open.start, (decoration.open.end, String::new()));
+            changes.insert(decoration.close.start, (decoration.close.end, String::new()));
+            continue;
+        }
+        if body.start < range.start {
+            prefix.push_str(&source[decoration.close.clone()]);
+        } else {
+            changes.insert(decoration.open.start, (decoration.open.end, String::new()));
+        }
+        if range.end < body.end {
+            suffix.push_str(&source[decoration.open.clone()]);
+        } else {
+            changes.insert(decoration.close.start, (decoration.close.end, String::new()));
+        }
+    }
+    let (mut open, mut close) = color.map_or_else(
+        || (String::new(), ""),
+        |color| {
+            let hex = if color & 255 == 255 {
+                format!("#{:06x}", color >> 8)
+            } else {
+                format!("#{color:08x}")
+            };
+            (format!("<span style=\"color:{hex}\">"), "</span>")
+        },
+    );
+    if distribute {
+        preserve_crossed_colors(source, root, &range, styles, split_selection.then_some(open.as_str()).filter(|open| !open.is_empty()), &mut changes);
+    }
+    if split_selection {
+        open.clear();
+        close = "";
+    }
+    let leading = prefix.len() + open.len() + changes.get(&range.start).map_or(0, |(_, text)| text.len());
+    prefix.push_str(&open);
+    if !prefix.is_empty() {
+        changes.entry(range.start).or_insert_with(|| (range.start, String::new())).1.push_str(&prefix);
+    }
+    if !close.is_empty() || !suffix.is_empty() {
+        let replacement = &mut changes.entry(range.end).or_insert_with(|| (range.end, String::new())).1;
+        if distribute {
+            replacement.insert_str(0, close);
+        } else {
+            replacement.push_str(close);
+            replacement.push_str(&suffix);
+        }
+    }
+    let mut start = range.start as isize + leading as isize;
+    let mut end = range.end as isize;
+    let mut edits = Vec::with_capacity(changes.len());
+    for (at, (through, text)) in changes {
+        let delta = text.len() as isize - (through - at) as isize;
+        if through <= range.start && at < range.start {
+            start += delta;
+        }
+        if at < range.end {
+            end += delta;
+        }
+        if source[at..through] != text {
+            edits.push((at..through, text));
+        }
+    }
+    let selection = if reversed {
+        Selection::new(end as usize, start as usize)
+    } else {
+        Selection::new(start as usize, end as usize)
+    };
+    (!edits.is_empty()).then_some(Command::BatchReplaceSelected {
+        edits,
+        selection,
+        kind: EditKind::Command,
+    })
+}
+
 fn edit(
     source: &str,
     root: &Node,
@@ -660,23 +908,16 @@ fn edit(
     if !eligible(source, root, &range, format) {
         return None;
     }
+    if format == Format::TextColor {
+        return text_color_edit(source, root, range, selection.is_reversed(), color, styles);
+    }
     let mut owner = range.clone();
     let mut body = range.clone();
     let mut converted = false;
-    if matches!(
-        format,
-        Format::TextColor | Format::HighlightColor | Format::Highlight
-    ) {
-        let want = if format == Format::TextColor {
-            Format::TextColor
-        } else {
-            Format::HighlightColor
-        };
+    if matches!(format, Format::HighlightColor | Format::Highlight) {
         if let Some(d) = styles.iter().find(|d| {
-            (d.format == want
-                || want == Format::HighlightColor
-                    && d.format == Format::Highlight
-                    && source[d.open.clone()].starts_with('<'))
+            (d.format == Format::HighlightColor
+                || d.format == Format::Highlight && source[d.open.clone()].starts_with('<'))
                 && (d.content() == range || d.open.start == range.start && d.close.end == range.end)
         }) {
             owner = d.open.start..d.close.end;
@@ -691,24 +932,17 @@ fn edit(
             }
         }
     }
-    let (open, close) = if matches!(format, Format::TextColor | Format::HighlightColor) {
+    let (open, close) = if format == Format::HighlightColor {
         if let Some(color) = color {
             let hex = if color & 255 == 255 {
                 format!("#{:06x}", color >> 8)
             } else {
                 format!("#{color:08x}")
             };
-            if format == Format::TextColor {
-                (
-                    format!("<span style=\"color:{hex}\">"),
-                    "</span>".to_owned(),
-                )
-            } else {
-                (
-                    format!("<mark style=\"background:{hex}\">"),
-                    "</mark>".to_owned(),
-                )
-            }
+            (
+                format!("<mark style=\"background:{hex}\">"),
+                "</mark>".to_owned(),
+            )
         } else {
             (String::new(), String::new())
         }
@@ -1066,6 +1300,131 @@ mod tests {
         let styles = super::decorations(mdx, &root);
         assert_eq!(styles.len(), 1);
         assert_eq!(&mdx[styles[0].content()], "body");
+
+        let source = "A <span style=\"color:#123456\"><u>中 **bold**</u> <span style=\"color:#abcdef80\">e&#x301;🎉</span></span> tail";
+        let projection = Projection::parse(source, 1, true, Grammar::Markdown);
+        let leaf = &projection.leaves[0];
+        assert_eq!(leaf.text, "A 中 bold e\u{301}🎉 tail");
+        let ranges = leaf.foreground_ranges();
+        assert_eq!(ranges, vec![
+            (2..11, gpui_kit::rgba(0x123456ff).into()),
+            (11..18, gpui_kit::rgba(0xabcdef80).into()),
+        ]);
+        assert!(leaf.marks(None).iter().any(|(range, mark)| {
+            &leaf.text[range.clone()] == "bold" && mark.bold && mark.underline
+        }));
+        let source_projection = Projection::parse(source, 1, false, Grammar::Markdown);
+        assert_eq!(source_projection.leaves[0].text, source);
+        assert!(source_projection.leaves[0].foreground_ranges().is_empty());
+
+        let atom_source = "A <span style=\"color:#123456\">中 $x$ 🎉</span>";
+        let atom_projection = Projection::parse(atom_source, 1, true, Grammar::Markdown);
+        let leaf = &atom_projection.leaves[0];
+        assert_eq!(leaf.text, "A 中 \u{fffc} 🎉");
+        assert_eq!(leaf.foreground_ranges(), vec![(2..14, gpui_kit::rgba(0x123456ff).into())]);
+
+        let mdx = "<Note>\n\nA <span style=\"color:#123456\">中🎉</span>\n\n</Note>";
+        let mut projection = Projection::parse(mdx, 1, true, Grammar::Mdx);
+        let mut state = super::super::super::mdx::ViewState::default();
+        let note = projection.mdx.components.iter().find(|component| &mdx[component.name_range()] == "Note").unwrap();
+        state.source_components.insert(note.id());
+        projection.component_sources(&super::super::super::Rope::from(mdx), &state);
+        assert!(projection.leaves.iter().any(|leaf| leaf.text == mdx));
+        assert!(projection.leaves.iter().all(|leaf| leaf.foreground_ranges().is_empty()));
+    }
+
+    #[test]
+    fn text_color_selection_clear_and_nested_recolor_keep_document_history() {
+        use super::super::super::{Command, MarkdownDocument, PresentationState, Selection, TextFormat, mdx::Grammar, projection::Projection};
+        for grammar in [Grammar::Markdown, Grammar::Mdx] {
+            for (source, selected, color, expected) in [
+                ("A <span style=\"color:red\">left middle right</span> Z", "middle", None,
+                 "A <span style=\"color:red\">left </span>middle<span style=\"color:red\"> right</span> Z"),
+                ("A <span style=\"color:red\">left <span style=\"color:blue\">middle</span> right</span> Z", "middle", None,
+                 "A <span style=\"color:red\">left </span>middle<span style=\"color:red\"> right</span> Z"),
+                ("A <span style=\"color:red\"><u>left <span style=\"color:blue\">middle</span> right</u></span> Z", "<u>left <span style=\"color:blue\">middle</span> right</u>", Some(0x7c3aed80),
+                 "A <span style=\"color:#7c3aed80\"><u>left middle right</u></span> Z"),
+            ] {
+                let root = super::super::super::parser::parse(source, grammar, true).unwrap();
+                let styles = super::decorations(source, &root);
+                let at = source.find(selected).unwrap();
+                let selection = Selection::new(at + selected.len(), at);
+                let command = super::edit(source, &root, selection, super::Format::TextColor, color, &styles).unwrap();
+                let mut document = MarkdownDocument::new(source.into(), TextFormat::default());
+                let mut state = PresentationState::new(selection);
+                document.command(&mut state, command);
+                assert_eq!(document.encode().unwrap(), expected.as_bytes());
+                assert!(state.selection().is_reversed());
+                let projection = Projection::parse(expected, 1, true, grammar);
+                assert_eq!(projection.leaves[0].text, "A left middle right Z");
+                document.command(&mut state, Command::Undo);
+                assert_eq!(document.encode().unwrap(), source.as_bytes());
+                assert_eq!(state.selection(), selection);
+                document.command(&mut state, Command::Redo);
+                assert_eq!(document.encode().unwrap(), expected.as_bytes());
+            }
+        }
+    }
+
+    #[test]
+    fn text_color_partial_nested_marks_keep_unicode_and_original_undo_bytes() {
+        use super::super::super::{Command, MarkdownDocument, PresentationState, Selection, TextFormat, mdx::Grammar, projection::Projection};
+        let source = "A <span style=\"color:red\" data-keep=\"原样\">**left *中🎉 middle* right**</span> Z";
+        for grammar in [Grammar::Markdown, Grammar::Mdx] {
+            for (color, expected) in [
+                (None, "A **<span style=\"color:red\" data-keep=\"原样\">left </span>*中🎉<span style=\"color:red\" data-keep=\"原样\"> middle</span>*<span style=\"color:red\" data-keep=\"原样\"> right</span>** Z"),
+                (Some(0x7c3aed80), "A **<span style=\"color:red\" data-keep=\"原样\">left </span>*<span style=\"color:#7c3aed80\">中🎉</span><span style=\"color:red\" data-keep=\"原样\"> middle</span>*<span style=\"color:red\" data-keep=\"原样\"> right</span>** Z"),
+            ] {
+                let root = super::super::super::parser::parse(source, grammar, true).unwrap();
+                let styles = super::decorations(source, &root);
+                let at = source.find('中').unwrap();
+                let selection = Selection::new(at, at + "中🎉".len());
+                let command = super::edit(source, &root, selection, super::Format::TextColor, color, &styles).unwrap();
+                let mut document = MarkdownDocument::new(source.into(), TextFormat::default());
+                let mut state = PresentationState::new(selection);
+                document.command(&mut state, command);
+                assert_eq!(document.encode().unwrap(), expected.as_bytes());
+                let projection = Projection::parse(expected, 1, true, grammar);
+                let leaf = &projection.leaves[0];
+                assert_eq!(leaf.text, "A left 中🎉 middle right Z");
+                let glyph = leaf.text.find('中').unwrap();
+                assert!(leaf.marks(None).iter().any(|(range, mark)| {
+                    range.start <= glyph && glyph + "中🎉".len() <= range.end && mark.bold && mark.italic
+                }));
+                assert_eq!(leaf.foreground_ranges().iter().find(|(range, _)| {
+                    range.start <= glyph && glyph + "中🎉".len() <= range.end
+                }).map(|(_, color)| *color), color.map(|color| gpui_kit::rgba(color).into()));
+                document.command(&mut state, Command::Undo);
+                assert_eq!(document.encode().unwrap(), source.as_bytes());
+                assert_eq!(state.selection(), selection);
+                document.command(&mut state, Command::Redo);
+                assert_eq!(document.encode().unwrap(), expected.as_bytes());
+            }
+        }
+    }
+
+    #[test]
+    fn text_color_crossing_bold_boundary_keeps_bold_and_plain_text() {
+        use super::super::super::{MarkdownDocument, PresentationState, Selection, TextFormat, mdx::Grammar, projection::Projection};
+        let source = "A **left 中🎉** plain Z";
+        let start = source.find('中').unwrap();
+        let end = source.find(" Z").unwrap();
+        let root = super::super::super::parser::parse(source, Grammar::Markdown, true).unwrap();
+        let styles = super::decorations(source, &root);
+        let selection = Selection::new(start, end);
+        let mut state = PresentationState::new(selection);
+        let mut document = MarkdownDocument::new(source.into(), TextFormat::default());
+        document.command(&mut state, super::edit(source, &root, selection, super::Format::TextColor, Some(0x123456ff), &styles).unwrap());
+        let expected = "A **left <span style=\"color:#123456\">中🎉</span>**<span style=\"color:#123456\"> plain</span> Z";
+        assert_eq!(document.encode().unwrap(), expected.as_bytes());
+        let projection = Projection::parse(expected, 1, true, Grammar::Markdown);
+        let leaf = &projection.leaves[0];
+        assert_eq!(leaf.text, "A left 中🎉 plain Z");
+        let glyph = leaf.text.find('中').unwrap();
+        assert!(leaf.marks(None).iter().any(|(range, mark)| range.contains(&glyph) && mark.bold));
+        let plain = leaf.text.find("plain").unwrap();
+        assert!(leaf.marks(None).iter().any(|(range, mark)| range.contains(&plain) && !mark.bold));
+        assert_eq!(leaf.foreground_ranges(), vec![(glyph..leaf.text.find(" Z").unwrap(), gpui_kit::rgba(0x123456ff).into())]);
     }
 
     #[test]

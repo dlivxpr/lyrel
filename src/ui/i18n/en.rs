@@ -1943,6 +1943,7 @@ pub fn translate_en(key: L10nKey) -> &'static str {
         L10nKey::MarkdownFormatHighlightColor => "Highlight color…",
         L10nKey::MarkdownFormatMixed => "{format} (mixed)",
         L10nKey::MarkdownClearHighlightColor => "Clear highlight color",
+        L10nKey::MarkdownClearTextColor => "Clear text color",
         L10nKey::MarkdownApplyColor => "Apply color",
         L10nKey::MarkdownColorYellow => "Yellow highlight",
         L10nKey::MarkdownColorOrange => "Orange highlight",

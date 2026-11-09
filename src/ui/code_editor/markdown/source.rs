@@ -2990,6 +2990,7 @@ impl Render for SourcePresentation {
                     })
                     .into_any_element()
             } else {
+                let context = leaf.foreground_context(&context);
                 self.blocks[&leaf.id]
                     .node
                     .render_with_id(
@@ -3349,6 +3350,8 @@ impl Render for SourcePresentation {
                 .on_action(cx.listener(|this, _: &formats::ClearHighlightColor, window, cx| this.format_command(formats::Format::HighlightColor, None, window, cx)))
                 .on_action(cx.listener(|this, action: &formats::SetHighlightColor, window, cx| this.format_command(formats::Format::HighlightColor, Some(action.color), window, cx)))
                 .on_action(cx.listener(|this, _: &formats::CustomHighlightColor, window, cx| this.custom_format_color(formats::Format::HighlightColor, window, cx)))
+                .on_action(cx.listener(|this, _: &formats::ClearTextColor, window, cx| this.format_command(formats::Format::TextColor, None, window, cx)))
+                .on_action(cx.listener(|this, _: &formats::CustomTextColor, window, cx| this.custom_format_color(formats::Format::TextColor, window, cx)))
                 .on_action(cx.listener(|this, _: &formats::ApplyCustomColor, window, cx| this.apply_format_color(window, cx)))
                 .on_action(cx.listener(|this, _: &formats::CancelCustomColor, window, cx| { this.cancel_format_color(window, cx); }))
                 .on_action(cx.listener(|view, _: &image_edit::EditImage, window, cx| view.edit_image(window, cx)))

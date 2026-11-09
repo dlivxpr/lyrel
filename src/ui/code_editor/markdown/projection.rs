@@ -12,6 +12,7 @@ struct InlineStyle {
     underline: bool,
     highlight: bool,
     highlight_color: Option<u32>,
+    foreground: Option<u32>,
     link: Option<usize>,
 }
 
@@ -73,6 +74,7 @@ pub(super) struct Leaf {
     style: InlineStyle,
     pub(super) image_definitions: std::sync::Arc<super::images::Definitions>,
     highlight_tint: gpui_kit::Hsla,
+    has_foreground: bool,
 }
 impl Leaf {
     /// Embedded content has no document-navigation or editing affordances.
@@ -95,6 +97,7 @@ impl Leaf {
                 && part.source.end <= decoration.close.start
             {
                 match decoration.format {
+                    Format::TextColor => part.style.foreground = decoration.color,
                     Format::Underline => part.style.underline = true,
                     Format::Highlight | Format::HighlightColor => {
                         part.style.highlight = true;
@@ -106,10 +109,6 @@ impl Leaf {
         }
         let mut scratch = Vec::new();
         for decoration in decorations {
-            // Keep text-color source visible until the native public foreground seam exists.
-            if decoration.format == Format::TextColor {
-                continue;
-            }
             let ix = self.spans.len();
             self.spans.push(InlineSpan {
                 source: decoration.open.start..decoration.close.end,
@@ -117,6 +116,7 @@ impl Leaf {
                 always_hidden: true,
                 target: None,
             });
+            self.has_foreground |= decoration.format == Format::TextColor;
             scratch.clear();
             scratch.reserve(self.segments.len() + 4);
             for mut segment in self.segments.drain(..) {
@@ -180,6 +180,7 @@ impl Leaf {
             style: InlineStyle::default(),
             image_definitions: Default::default(),
             highlight_tint: gpui_kit::Hsla::default(),
+            has_foreground: false,
         }
     }
     pub fn materialize(&mut self, source: &Rope) {
@@ -425,6 +426,47 @@ impl Leaf {
                     && segment.source.start <= at
                     && at <= segment.source.end
             })
+    }
+    /// Display bytes already account for hidden delimiters, decoded entities
+    /// and complete U+FFFC atom placeholders. Derive only for rendered leaves.
+    pub(super) fn foreground_ranges(&self) -> Vec<(Range<usize>, gpui_kit::Hsla)> {
+        let mut ranges: Vec<(Range<usize>, gpui_kit::Hsla)> = Vec::new();
+        if !self.has_foreground {
+            return ranges;
+        }
+        for segment in &self.segments {
+            let Some(color) = segment.style.foreground else {
+                continue;
+            };
+            if segment.display.is_empty() || segment.delimiter.is_some() {
+                continue;
+            }
+            let color = gpui_kit::rgba(color).into();
+            if let Some((range, _)) = ranges.last_mut().filter(|(range, previous)| {
+                range.end == segment.display.start && *previous == color
+            }) {
+                range.end = segment.display.end;
+            } else {
+                ranges.push((segment.display.clone(), color));
+            }
+        }
+        ranges
+    }
+
+    pub(super) fn foreground_context<'a>(
+        &self,
+        context: &'a gpui_kit::base::text::editor_host::RenderContext,
+    ) -> std::borrow::Cow<'a, gpui_kit::base::text::editor_host::RenderContext> {
+        if !self.has_foreground {
+            return std::borrow::Cow::Borrowed(context);
+        }
+        let ranges = self.foreground_ranges();
+        if ranges.is_empty() {
+            return std::borrow::Cow::Borrowed(context);
+        }
+        std::borrow::Cow::Owned(
+            context.clone().with_foreground_ranges(self.id, ranges),
+        )
     }
     pub fn marks(
         &self,

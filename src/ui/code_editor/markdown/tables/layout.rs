@@ -469,6 +469,7 @@ impl Layout {
                         projection, leaf, source, mdx_state,
                     );
                     if super::super::mdx::view::visible_field(&field) {
+                        let context = leaf.foreground_context(context);
                         let content = cell_element(
                             leaf,
                             Some(width),
@@ -477,7 +478,7 @@ impl Layout {
                             rtl,
                             marked,
                             math,
-                            context,
+                            &context,
                             window,
                             cx,
                         );
