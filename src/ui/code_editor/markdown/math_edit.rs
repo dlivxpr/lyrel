@@ -456,7 +456,12 @@ impl SourcePresentation {
         self.input_generation = self.input_generation.wrapping_add(1);
         session.id = self.input_generation;
         session.output = self.math.outputs.get(&formula).cloned();
-        let source_caret = range.start + if end { session.body.end } else { session.body.start };
+        let source_caret = range.start
+            + if end {
+                session.body.end
+            } else {
+                session.body.start
+            };
         self.formula = Some(session);
         self.formula_tools.palette_open = false;
         self.state.selection = Selection::caret(source_caret);

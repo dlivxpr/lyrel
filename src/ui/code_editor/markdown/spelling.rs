@@ -335,68 +335,71 @@ impl SourcePresentation {
                 continue;
             };
             for visible in visible_spelling_text(leaf, geometry, viewport) {
-            let source_start = leaf.source_offset(visible.start);
-            let source_end = leaf.source_offset(visible.end);
-            let recover_wrapped_start = navigation::recover_wrapped_start(leaf.kind);
-            let first = self.spelling.diagnostics.partition_point(|diagnostic| {
-                diagnostic
-                    .ranges
-                    .last()
-                    .is_none_or(|range| range.end <= source_start)
-            });
-            for diagnostic in self.spelling.diagnostics[first..]
-                .iter()
-                .take_while(|diagnostic| {
+                let source_start = leaf.source_offset(visible.start);
+                let source_end = leaf.source_offset(visible.end);
+                let recover_wrapped_start = navigation::recover_wrapped_start(leaf.kind);
+                let first = self.spelling.diagnostics.partition_point(|diagnostic| {
                     diagnostic
                         .ranges
-                        .first()
-                        .is_some_and(|range| range.start < source_end)
-                })
-            {
-                for source in &diagnostic.ranges {
-                    let start = leaf
-                        .display_offset(source.start.max(leaf.range.start))
-                        .max(visible.start);
-                    let end = leaf
-                        .display_offset(source.end.min(leaf.range.end))
-                        .min(visible.end);
-                    if start >= end {
-                        continue;
-                    }
-                    let Some(text) = leaf.text.get(start..end) else {
-                        continue;
-                    };
-                    let mut path = PathBuilder::stroke(unit);
-                    for (offset, grapheme) in text.grapheme_indices(true) {
-                        let Some(segment) = grapheme_line_box(
-                            geometry,
-                            start + offset,
-                            grapheme,
-                            recover_wrapped_start,
-                        ) else {
+                        .last()
+                        .is_none_or(|range| range.end <= source_start)
+                });
+                for diagnostic in
+                    self.spelling.diagnostics[first..]
+                        .iter()
+                        .take_while(|diagnostic| {
+                            diagnostic
+                                .ranges
+                                .first()
+                                .is_some_and(|range| range.start < source_end)
+                        })
+                {
+                    for source in &diagnostic.ranges {
+                        let start = leaf
+                            .display_offset(source.start.max(leaf.range.start))
+                            .max(visible.start);
+                        let end = leaf
+                            .display_offset(source.end.min(leaf.range.end))
+                            .min(visible.end);
+                        if start >= end {
+                            continue;
+                        }
+                        let Some(text) = leaf.text.get(start..end) else {
                             continue;
                         };
-                        let left = segment.left().max(viewport.left());
-                        let right = segment.right().min(viewport.right());
-                        let y = segment.bottom();
-                        if y < viewport.top() || y + unit * 2. > viewport.bottom() || left >= right
-                        {
-                            continue;
+                        let mut path = PathBuilder::stroke(unit);
+                        for (offset, grapheme) in text.grapheme_indices(true) {
+                            let Some(segment) = grapheme_line_box(
+                                geometry,
+                                start + offset,
+                                grapheme,
+                                recover_wrapped_start,
+                            ) else {
+                                continue;
+                            };
+                            let left = segment.left().max(viewport.left());
+                            let right = segment.right().min(viewport.right());
+                            let y = segment.bottom();
+                            if y < viewport.top()
+                                || y + unit * 2. > viewport.bottom()
+                                || left >= right
+                            {
+                                continue;
+                            }
+                            path.move_to(point(left, y));
+                            let mut x = left;
+                            let mut up = true;
+                            while x < right {
+                                x = (x + unit * 2.).min(right);
+                                path.line_to(point(x, y + if up { unit } else { Pixels::ZERO }));
+                                up = !up;
+                            }
                         }
-                        path.move_to(point(left, y));
-                        let mut x = left;
-                        let mut up = true;
-                        while x < right {
-                            x = (x + unit * 2.).min(right);
-                            path.line_to(point(x, y + if up { unit } else { Pixels::ZERO }));
-                            up = !up;
+                        if let Ok(path) = path.build() {
+                            window.paint_path(path, color);
                         }
-                    }
-                    if let Ok(path) = path.build() {
-                        window.paint_path(path, color);
                     }
                 }
-            }
             }
         }
     }

@@ -941,9 +941,8 @@ mod tests {
 
         for prefix in ["", "# ", "- ", "> "] {
             for tag in ["code", "pre", "script", "style", "textarea"] {
-                let opaque = format!(
-                    "<{tag}>outer <{tag}>inner</{tag}> ==raw **字**== &amp;</{tag}>"
-                );
+                let opaque =
+                    format!("<{tag}>outer <{tag}>inner</{tag}> ==raw **字**== &amp;</{tag}>");
                 let source = format!("{prefix}before **strong** {opaque} after *em*");
                 let projection = Projection::parse(&source, 1, true, Grammar::Markdown);
                 let leaf = projection

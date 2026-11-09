@@ -2269,9 +2269,12 @@ fn markdown_image_completion_never_replaces_text_typed_over_pending_selection(
                 .is_some_and(|status| {
                     status.visible()
                         && status.label()
-                            == Some(crate::ui::i18n::t(
-                                crate::ui::i18n::L10nKey::MarkdownImageSelectionChanged,
-                            ).as_ref())
+                            == Some(
+                                crate::ui::i18n::t(
+                                    crate::ui::i18n::L10nKey::MarkdownImageSelectionChanged,
+                                )
+                                .as_ref(),
+                            )
                 })
         })
     });
