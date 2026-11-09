@@ -1106,7 +1106,11 @@ fn final_review_duplicate_embeds_keep_focus_and_scroll_after_shared_prefix_edit(
         let content = window.find("markdown-embed-content-1").bounds();
         let flow = window.find("markdown-embed-flow-root-1").bounds();
         assert_eq!(flow.top() - content.top(), relative);
-        assert!(window.try_find("markdown-embed-content-2").is_some());
+        assert_eq!(window.find("markdown-embed-content-2").focused(), Some(false));
+        assert_eq!(
+            window.find("markdown-embed-error-root-2").label(),
+            Some(crate::ui::i18n::t(crate::ui::i18n::L10nKey::MarkdownEmbedDuplicate))
+        );
     });
     assert_eq!(
         bytes(&view, &context),
@@ -1124,6 +1128,11 @@ fn final_review_duplicate_embeds_keep_focus_and_scroll_after_shared_prefix_edit(
         let content = window.find("markdown-embed-content-1").bounds();
         let flow = window.find("markdown-embed-flow-root-1").bounds();
         assert_eq!(flow.top() - content.top(), relative);
+        assert_eq!(window.find("markdown-embed-content-2").focused(), Some(false));
+        assert_eq!(
+            window.find("markdown-embed-error-root-2").label(),
+            Some(crate::ui::i18n::t(crate::ui::i18n::L10nKey::MarkdownEmbedDuplicate))
+        );
     });
     assert_eq!(bytes(&view, &context), source.as_bytes());
 }
