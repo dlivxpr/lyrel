@@ -17,13 +17,14 @@ impl Case {
     fn execute(&self, text_system: Arc<dyn PlatformTextSystem>) {
         let name = self.name;
         let run = self.run;
+        let text_system = AssertUnwindSafe(move || text_system);
         gpui_kit::run_test_once(
             0,
-            Box::new(AssertUnwindSafe(move |dispatcher: gpui_kit::TestDispatcher| {
+            Box::new(move |dispatcher: gpui_kit::TestDispatcher| {
                 let mut cx = TestAppContext::build_with_text_system(
                     dispatcher.clone(),
                     Some(name),
-                    text_system,
+                    text_system(),
                 );
                 let result = catch_unwind(AssertUnwindSafe(|| run(&mut cx)));
                 cx.run_until_parked();
@@ -37,7 +38,7 @@ impl Case {
                 if let Err(error) = result {
                     resume_unwind(error);
                 }
-            })),
+            }),
         );
     }
 }

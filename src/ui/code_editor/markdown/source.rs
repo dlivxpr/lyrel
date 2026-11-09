@@ -85,6 +85,7 @@ struct CachedBlock {
 #[derive(Default)]
 struct Viewport {
     heights: HashMap<u64, (u64, Pixels)>,
+    widths: HashMap<u64, (u64, Pixels)>,
     frame: Vec<(u64, u64, Bounds<Pixels>)>,
     visible: Range<usize>,
     layout: Option<typography::LayoutKey>,
@@ -2616,8 +2617,9 @@ impl Render for SourcePresentation {
         }
         if self.viewport.layout.is_none() {
             self.viewport.heights.clear();
+            self.viewport.widths.clear();
         }
-        // Heights are derived, versioned layout hints, never source ownership.
+        // Native dimensions are derived, versioned layout hints, never source ownership.
         // A table row is one variable-height virtual item; columns are culled separately.
         let mut before = Pixels::ZERO;
         let mut through = Pixels::ZERO;
@@ -2634,6 +2636,7 @@ impl Render for SourcePresentation {
             .map(|(id, _)| id);
         let mut anchor_row = None;
         let component_source = self.document.read(cx).source().clone();
+        let mut content_width = table_width;
         while ix < self.projection.leaves.len() {
             let leaf = &self.projection.leaves[ix];
             let mut end = ix + 1;
@@ -2658,6 +2661,16 @@ impl Render for SourcePresentation {
             {
                 ix = end;
                 continue;
+            }
+            if !self.wrap && !matches!(leaf.kind, Kind::TableCell(_)) {
+                if let Some((_, width)) = self
+                    .viewport
+                    .widths
+                    .get(&leaf.id)
+                    .filter(|(version, _)| *version == leaf.version)
+                {
+                    content_width = content_width.max(*width);
+                }
             }
             let height = self
                 .viewport
@@ -3724,6 +3737,13 @@ impl Render for SourcePresentation {
                         .child(
                             div()
                                 .p(rems(typography::inset(self.live)))
+                                .when(!self.wrap, |content| {
+                                    // ScrollHandle measures its immediate child, not
+                                    // overflowing glyphs inside fixed-width blocks.
+                                    // Keep block/table viewport widths unchanged and
+                                    // publish native text extents on this scroll child.
+                                    content.min_w(content_width + window.rem_size() * typography::inset(self.live) * 2.)
+                                })
                                 .capture_any_mouse_down(cx.listener(
                                     |this, event: &MouseDownEvent, window, cx| {
                                         if event.button == MouseButton::Left && this.formula_pointer(event, window, cx) { cx.stop_propagation(); return; }
@@ -3987,13 +4007,26 @@ impl Element for SourceElement {
                 .is_some_and(|old| old != &layout);
             if reflow {
                 view.viewport.heights.clear();
+                view.viewport.widths.clear();
             }
             view.viewport.layout = Some(layout);
             let mut measured = false;
+            let mut extent_changed = false;
             for (id, version, bounds) in &view.viewport.frame {
                 let height = bounds.size.height.max(window.rem_size());
                 measured |= view.viewport.heights.insert(*id, (*version, height))
                     != Some((*version, height));
+                if !view.wrap {
+                    if let Some(native) = geometry.get(id) {
+                        let right = native
+                            .bounds()
+                            .right()
+                            .max(native.position_for_index(native.len()).x + px(1.));
+                        let width = (right - bounds.left()).max(bounds.size.width);
+                        extent_changed |= view.viewport.widths.insert(*id, (*version, width))
+                            != Some((*version, width));
+                    }
+                }
             }
             // Anchor a source leaf, not a document-wide pixel offset. Only
             // compensate layout changes, never an explicit user scroll.
@@ -4039,7 +4072,7 @@ impl Element for SourceElement {
             if reflow {
                 view.invalidate_layout(cx);
             }
-            if measured || reflow {
+            if measured || reflow || extent_changed {
                 cx.notify();
             }
             let previous_caret = view.caret_bounds(view.state.selection.head, cx);
@@ -4108,8 +4141,8 @@ impl Element for SourceElement {
                     }
                 }
             }
-            if view.scroll.offset() != offset {
-                // This frame was measured before the scroll correction. Async
+            if extent_changed || view.scroll.offset() != offset {
+                // This frame predates a native-width or scroll correction. Async
                 // resources must not infer caret visibility from stale bounds.
                 view.geometry = None;
             }
