@@ -180,13 +180,19 @@ fn native_text_color_picker_clear_geometry_and_shared_history(cx: &mut gpui_kit:
     context.run_until_parked();
     context.update(|window, cx| {
         window.render_frame(cx);
-        assert_eq!(view.read(cx).document().read(cx).encode().unwrap(), original.as_bytes());
+        assert_eq!(
+            view.read(cx).document().read(cx).encode().unwrap(),
+            original.as_bytes()
+        );
     });
     // The standard picker owns keyboard opening, hex input and confirmation.
     context.update(|window, cx| window.press("enter", cx));
     context.run_until_parked();
     view.read_with(&context, |view, cx| {
-        assert_eq!(view.document().read(cx).encode().unwrap(), original.as_bytes());
+        assert_eq!(
+            view.document().read(cx).encode().unwrap(),
+            original.as_bytes()
+        );
     });
     context.update(|window, cx| {
         let input = window
@@ -354,7 +360,10 @@ fn native_text_color_picker_clear_geometry_and_shared_history(cx: &mut gpui_kit:
     });
     // Both menu actions share the same focus handoff; Enter must open the
     // standard picker rather than replace the retained document selection.
-    for key in [L10nKey::MarkdownFormatTextColor, L10nKey::MarkdownFormatHighlightColor] {
+    for key in [
+        L10nKey::MarkdownFormatTextColor,
+        L10nKey::MarkdownFormatHighlightColor,
+    ] {
         let source = cleared.trim_start_matches('\u{feff}').replace("\r\n", "\n");
         let tail = source.find("tail").unwrap();
         view.update_in(&mut context, |view, window, cx| {
@@ -375,7 +384,10 @@ fn native_text_color_picker_clear_geometry_and_shared_history(cx: &mut gpui_kit:
         });
         context.run_until_parked();
         view.read_with(&context, |view, cx| {
-            assert_eq!(view.document().read(cx).encode().unwrap(), cleared.as_bytes());
+            assert_eq!(
+                view.document().read(cx).encode().unwrap(),
+                cleared.as_bytes()
+            );
             assert_eq!(view.selection().range(), tail..tail + 4);
         });
         context.update(|window, cx| window.press("escape", cx));
@@ -1031,7 +1043,11 @@ fn native_live_break_mapping_resize_and_composition_keep_source_ranges(
             gpui_kit::ScrollDelta::Pixels(gpui_kit::point(px(0.), px(-64.))),
             cx,
         );
-        assert!(presentation.read(cx).scroll_offset().y < px(0.));
+        assert!(
+            presentation.read(cx).scroll_offset().y < px(0.),
+            "{}",
+            presentation.read(cx).scroll_geometry_diagnostic(),
+        );
         let caret = presentation
             .read(cx)
             .range_to_bounds(&(158..158), cx)
