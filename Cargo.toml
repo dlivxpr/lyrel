@@ -39,6 +39,7 @@ lyrel-core = { path = "crates/lyrel-core", features = ["gssapi", "remote-install
 gpui-kit = { workspace = true, features = ["tree-sitter-languages"] }
 # Native text + HTML publication; screenshot images remain on the existing Kit path.
 arboard = { version = "=3.6.1", default-features = false }
+base64 = "0.23.1"
 
 anyhow.workspace = true
 log.workspace = true
@@ -181,7 +182,6 @@ tray-icon = "0.26.1"
 # this pins no new code.
 [target.'cfg(windows)'.dependencies]
 aes-gcm = { version = "=0.11.1", features = ["zeroize"] }
-base64 = "0.23.1"
 windows-sys = { version = "0.61", features = [
     "Win32_Foundation",
     "Win32_Globalization",
@@ -282,7 +282,6 @@ futures-channel = "0.3"
 
 # The Kit test-support feature enables its real App/Window test harness.
 [target.'cfg(any(target_os = "macos", target_os = "windows"))'.dev-dependencies]
-base64 = "0.23.1"
 gpui-kit = { workspace = true, features = ["test-support"] }
 
 [lints]

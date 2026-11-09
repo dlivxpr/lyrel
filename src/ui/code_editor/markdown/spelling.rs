@@ -33,6 +33,43 @@ impl State {
     }
 }
 
+fn visible_spelling_text(
+    text: &str,
+    geometry: &LeafGeometry,
+    viewport: Bounds<Pixels>,
+) -> Range<usize> {
+    let margin = geometry.line_height() * 2.;
+    let top = viewport.top() - margin;
+    let bottom = viewport.bottom() + margin;
+    let bounds = geometry.bounds();
+    if bounds.top() >= top && bounds.bottom() <= bottom {
+        return 0..text.len();
+    }
+    // Native carets follow source-ordered visual rows, including RTL within a
+    // row. Bisect by y, not x; wrapped starts and mixed inline pieces retain
+    // two neighboring rows before the existing pixel clipping is applied.
+    // Querying every offscreen diagnostic is quadratic on a long shaped line.
+    let before = |y: Pixels| {
+        let mut low = 0;
+        let mut high = text.len();
+        while low < high {
+            let middle = text.floor_char_boundary(low + (high - low) / 2);
+            if geometry.position_for_index(middle).y < y {
+                low = text.ceil_char_boundary(middle + 1);
+            } else {
+                high = middle;
+            }
+        }
+        low
+    };
+    let start = before(top);
+    let end = before(bottom);
+    let start =
+        navigation::adjacent_grapheme(text, start, true).map_or(start, |grapheme| grapheme.start);
+    let end = navigation::adjacent_grapheme(text, end, false).map_or(end, |grapheme| grapheme.end);
+    start..end
+}
+
 impl SourcePresentation {
     pub(super) fn schedule_spelling(&mut self, cx: &mut Context<Self>) {
         self.spelling.invalidate();
@@ -253,7 +290,7 @@ impl SourcePresentation {
         })
     }
     pub(super) fn paint_spelling(&self, window: &mut Window, cx: &App) {
-        if !self.geometry_is_current(cx) {
+        if self.spelling.diagnostics.is_empty() || !self.geometry_is_current(cx) {
             return;
         }
         let Some((_, geometry)) = &self.geometry else {
@@ -266,12 +303,15 @@ impl SourcePresentation {
             let Some(geometry) = geometry.get(&leaf.id) else {
                 continue;
             };
+            let visible = visible_spelling_text(&leaf.text, geometry, viewport);
+            let source_start = leaf.source_offset(visible.start);
+            let source_end = leaf.source_offset(visible.end);
             let recover_wrapped_start = navigation::recover_wrapped_start(leaf.kind);
             let first = self.spelling.diagnostics.partition_point(|diagnostic| {
                 diagnostic
                     .ranges
                     .last()
-                    .is_none_or(|range| range.end <= leaf.range.start)
+                    .is_none_or(|range| range.end <= source_start)
             });
             for diagnostic in self.spelling.diagnostics[first..]
                 .iter()
@@ -279,12 +319,19 @@ impl SourcePresentation {
                     diagnostic
                         .ranges
                         .first()
-                        .is_some_and(|range| range.start < leaf.range.end)
+                        .is_some_and(|range| range.start < source_end)
                 })
             {
                 for source in &diagnostic.ranges {
-                    let start = leaf.display_offset(source.start.max(leaf.range.start));
-                    let end = leaf.display_offset(source.end.min(leaf.range.end));
+                    let start = leaf
+                        .display_offset(source.start.max(leaf.range.start))
+                        .max(visible.start);
+                    let end = leaf
+                        .display_offset(source.end.min(leaf.range.end))
+                        .min(visible.end);
+                    if start >= end {
+                        continue;
+                    }
                     let Some(text) = leaf.text.get(start..end) else {
                         continue;
                     };
@@ -401,6 +448,63 @@ mod tests {
             });
             (directory, path, app, context, streams, view)
         }};
+    }
+
+    #[gpui_kit::test]
+    fn spelling_long_code_remains_editable_with_offscreen_diagnostics(cx: &mut TestAppContext) {
+        use gpui_kit::test::TestEventExt as _;
+        let mut native_context = TestAppContext::build_with_text_system(
+            gpui_kit::TestDispatcher::new(0),
+            cx.test_function_name(),
+            gpui_kit::platform::current_platform(true).text_system(),
+        );
+        let original = format!("# Huge code\n\n```text\n{}\n```\n", "wide ".repeat(80_000));
+        let body = original.find("wide").unwrap();
+        let (_directory, path, _app, mut context, _streams, view) =
+            spelling_fixture!(&mut native_context, original.as_bytes());
+        view.update_in(&mut context, |view, _, cx| {
+            view.select_range(body..body, cx);
+        });
+        settle_geometry(&view, &mut context);
+        view.update_in(&mut context, |view, _, cx| {
+            view.spelling.invalidate();
+            view.set_spelling_diagnostics(
+                vec![Diagnostic {
+                    ranges: vec![body..body + 400_000],
+                    word: "deterministic OS diagnostic".into(),
+                }],
+                cx,
+            );
+        });
+        context.update(|window, cx| window.render_frame(cx));
+        let position = view.read_with(&context, |view, _| {
+            let leaf = view.projection.leaf_at(body).unwrap();
+            let geometry = &view.geometry.as_ref().unwrap().1[&leaf.id];
+            geometry.position_for_index(0) + point(px(0.), geometry.caret_height() / 2.)
+        });
+        context.update(|window, cx| {
+            window.pointer_down(position, gpui_kit::MouseButton::Left, cx);
+            window.pointer_up(position, gpui_kit::MouseButton::Left, cx);
+            window.input("X", cx);
+        });
+        settle_geometry(&view, &mut context);
+        let mut expected = original.clone();
+        expected.insert(body, 'X');
+        view.read_with(&context, |view, cx| {
+            assert_eq!(
+                view.document.read(cx).encode().unwrap(),
+                expected.as_bytes()
+            );
+        });
+        context.dispatch_action(gpui_kit::component::input::Undo);
+        settle_geometry(&view, &mut context);
+        view.read_with(&context, |view, cx| {
+            assert_eq!(
+                view.document.read(cx).encode().unwrap(),
+                original.as_bytes()
+            );
+        });
+        assert_eq!(std::fs::read(path).unwrap(), original.as_bytes());
     }
 
     #[gpui_kit::test]
