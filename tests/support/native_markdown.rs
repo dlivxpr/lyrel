@@ -114,7 +114,9 @@ pub(crate) fn main() -> ExitCode {
     // Keep the native platform alive until all independent test contexts are gone.
     // Only its Send + Sync text system crosses into the deterministic test platform;
     // no native window or AppKit object is constructed on a libtest worker.
-    let platform = gpui_kit::platform::current_platform(true);
+    // A permanently headless Windows platform deliberately supplies NoopTextSystem.
+    // The window-capable platform supplies real fonts without opening a test window.
+    let platform = gpui_kit::platform::current_platform(false);
     let text_system = platform.text_system();
     assert!(
         !text_system.all_font_names().is_empty(),
