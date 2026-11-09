@@ -769,13 +769,13 @@ fn markdown_native_handler_converts_utf16_and_composition_undo(cx: &mut TestAppC
         vcx.update(|window, cx| {
             window.render_frame(cx);
             view.update(cx, |view, cx| {
-                let Some(start) = view
-                    .bounds_for_range(0..0, gpui_kit::Bounds::default(), window, cx)
+                let Some(start) =
+                    view.bounds_for_range(0..0, gpui_kit::Bounds::default(), window, cx)
                 else {
                     return false;
                 };
-                let Some(committed) = view
-                    .bounds_for_range(3..3, gpui_kit::Bounds::default(), window, cx)
+                let Some(committed) =
+                    view.bounds_for_range(3..3, gpui_kit::Bounds::default(), window, cx)
                 else {
                     return false;
                 };

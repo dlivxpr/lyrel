@@ -7759,9 +7759,7 @@ fn native_long_document_scroll_return_reflow_and_pending_parse_keep_selection_an
 }
 
 #[gpui_kit::test]
-fn native_nowrap_inline_reveal_drops_offscreen_source_extent(
-    cx: &mut gpui_kit::TestAppContext,
-) {
+fn native_nowrap_inline_reveal_drops_offscreen_source_extent(cx: &mut gpui_kit::TestAppContext) {
     use crate::ui::app::test_window::harness_with_tabs;
     use gpui_kit::{Focusable as _, ScrollDelta, point, px};
     let directory = tempfile::tempdir().unwrap();
@@ -7803,7 +7801,9 @@ fn native_nowrap_inline_reveal_drops_offscreen_source_extent(
                 break;
             }
             assert!(std::time::Instant::now() < deadline);
-            context.executor().advance_clock(std::time::Duration::from_millis(100));
+            context
+                .executor()
+                .advance_clock(std::time::Duration::from_millis(100));
         }
     };
     view.update_in(&mut context, |view, window, cx| {
@@ -7823,7 +7823,9 @@ fn native_nowrap_inline_reveal_drops_offscreen_source_extent(
     });
     assert!(view.read_with(&context, |view, _| view.scroll_offset().x < px(0.)));
     let tail = source.len() - "Tail".len();
-    view.update_in(&mut context, |view, _, cx| view.select_range(tail..tail, cx));
+    view.update_in(&mut context, |view, _, cx| {
+        view.select_range(tail..tail, cx)
+    });
     settle_at(tail, &mut context);
     context.update(|window, cx| {
         // The image is now virtualized away. Its old source-reveal width must
@@ -7836,7 +7838,10 @@ fn native_nowrap_inline_reveal_drops_offscreen_source_extent(
         );
         assert_eq!(view.read(cx).scroll_offset().x, px(0.));
         assert_eq!(view.read(cx).document().read(cx).revision(), 0);
-        assert_eq!(view.read(cx).document().read(cx).encode().unwrap(), source.as_bytes());
+        assert_eq!(
+            view.read(cx).document().read(cx).encode().unwrap(),
+            source.as_bytes()
+        );
         assert_eq!(view.read(cx).selection(), Selection::caret(tail));
     });
     assert_eq!(std::fs::read(&path).unwrap(), source.as_bytes());
