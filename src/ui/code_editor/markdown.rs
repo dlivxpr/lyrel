@@ -118,7 +118,8 @@ impl Transaction {
         for edit in &self.edits {
             if edit.range.end <= range.start {
                 let delta = edit.inserted_len as isize - edit.range.len() as isize;
-                range = range.start.checked_add_signed(delta)?..range.end.checked_add_signed(delta)?;
+                range =
+                    range.start.checked_add_signed(delta)?..range.end.checked_add_signed(delta)?;
             } else if edit.range.start < range.end {
                 return None;
             }

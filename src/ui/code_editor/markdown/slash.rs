@@ -56,9 +56,22 @@ struct Entry {
 impl Entry {
     fn allowed_in_cell(&self) -> bool {
         match self.operation {
-            Operation::Insert(text, _) => !text.contains(['\n', '|'])
-                && matches!(self.id, "bold" | "italic" | "strike" | "inline-code"
-                    | "inline-math" | "highlight" | "underline" | "link" | "wiki" | "image"),
+            Operation::Insert(text, _) => {
+                !text.contains(['\n', '|'])
+                    && matches!(
+                        self.id,
+                        "bold"
+                            | "italic"
+                            | "strike"
+                            | "inline-code"
+                            | "inline-math"
+                            | "highlight"
+                            | "underline"
+                            | "link"
+                            | "wiki"
+                            | "image"
+                    )
+            }
             Operation::Category | Operation::Date | Operation::Time => true,
             Operation::Table | Operation::Property => false,
         }
@@ -284,7 +297,9 @@ impl ListDelegate for Choices {
                 });
             })
             .on_mouse_down(MouseButton::Left, move |_, window, cx| {
-                if disabled { return; }
+                if disabled {
+                    return;
+                }
                 cx.stop_propagation();
                 let _ = accept_owner.update(cx, |view, cx| {
                     if !view.slash_current(generation, cx) {
@@ -761,21 +776,28 @@ impl SourcePresentation {
             let grammar = self.document.read(cx).grammar();
             let token = self.input_token(cx);
             cx.spawn_in(window, async move |view, cx| {
-                let index = cx.background_executor().spawn(async move {
-                    let source = source.to_string();
-                    super::super::parser::parse(&source, grammar, true).ok()
-                        .map(|root| properties::Index::from_ast(&source, &root))
-                }).await;
+                let index = cx
+                    .background_executor()
+                    .spawn(async move {
+                        let source = source.to_string();
+                        super::super::parser::parse(&source, grammar, true)
+                            .ok()
+                            .map(|root| properties::Index::from_ast(&source, &root))
+                    })
+                    .await;
                 let _ = view.update_in(cx, |view, window, cx| {
-                    if view.input_token(cx) == token && view.focus.is_focused(window)
-                        && view.document.read(cx).grammar() == grammar && view.live
+                    if view.input_token(cx) == token
+                        && view.focus.is_focused(window)
+                        && view.document.read(cx).grammar() == grammar
+                        && view.live
                         && let Some(index) = index
                     {
                         view.projection.properties = index;
                         view.enter_document_property(window, cx);
                     }
                 });
-            }).detach();
+            })
+            .detach();
         }
     }
     fn insert_slash_table(&mut self, custom: bool, window: &mut Window, cx: &mut Context<Self>) {

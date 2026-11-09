@@ -35,7 +35,10 @@ impl Formula {
             opening
         };
         let closing_end = self.raw.trim_end_matches(char::is_whitespace).len();
-        let end = self.raw[..closing_end].trim_end_matches('$').len().max(start);
+        let end = self.raw[..closing_end]
+            .trim_end_matches('$')
+            .len()
+            .max(start);
         let body = &self.raw[start..end];
         start + body.len() - body.trim_start_matches(char::is_whitespace).len()
     }

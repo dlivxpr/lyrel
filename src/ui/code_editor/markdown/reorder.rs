@@ -52,7 +52,11 @@ pub(in crate::ui::code_editor::markdown) struct Inventory {
     length: usize,
 }
 impl Inventory {
-    pub(in crate::ui::code_editor::markdown) fn new(source: &str, root: &Node, properties: Vec<Range<usize>>) -> Self {
+    pub(in crate::ui::code_editor::markdown) fn new(
+        source: &str,
+        root: &Node,
+        properties: Vec<Range<usize>>,
+    ) -> Self {
         let mut rows = Vec::new();
         let mut start = 0;
         for line in source.split_inclusive('\n') {

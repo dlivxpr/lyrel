@@ -452,7 +452,11 @@ fn wrapped(
     }
 }
 
-fn markdown_wrapper(node: &Node, range: &Range<usize>, format: Format) -> Option<(Range<usize>, Range<usize>)> {
+fn markdown_wrapper(
+    node: &Node,
+    range: &Range<usize>,
+    format: Format,
+) -> Option<(Range<usize>, Range<usize>)> {
     fn visible(node: &Node) -> Option<Range<usize>> {
         if matches!(node, Node::Strong(_) | Node::Emphasis(_) | Node::Delete(_)) {
             let children = node.children()?;
@@ -465,9 +469,11 @@ fn markdown_wrapper(node: &Node, range: &Range<usize>, format: Format) -> Option
     if range.start < p.start.offset || range.end > p.end.offset {
         return None;
     }
-    if let Some(found) = node.children().and_then(|children| children.iter()
-        .find_map(|child| markdown_wrapper(child, range, format)))
-    {
+    if let Some(found) = node.children().and_then(|children| {
+        children
+            .iter()
+            .find_map(|child| markdown_wrapper(child, range, format))
+    }) {
         return Some(found);
     }
     let width = match (node, format) {
@@ -494,15 +500,20 @@ fn eligible(source: &str, root: &Node, range: &Range<usize>, format: Format) -> 
         }
         if matches!(node, Node::Link(_) | Node::LinkReference(_)) {
             let body = node.children().and_then(|children| {
-                Some(children.first()?.position()?.start.offset
-                    ..children.last()?.position()?.end.offset)
+                Some(
+                    children.first()?.position()?.start.offset
+                        ..children.last()?.position()?.end.offset,
+                )
             });
             let whole = range.start <= p.start.offset && p.end.offset <= range.end;
             if !whole && body.is_none_or(|body| range.start < body.start || body.end < range.end) {
                 return true;
             }
         }
-        if matches!(node, Node::Image(_) | Node::ImageReference(_) | Node::FootnoteReference(_)) {
+        if matches!(
+            node,
+            Node::Image(_) | Node::ImageReference(_) | Node::FootnoteReference(_)
+        ) {
             return true;
         }
         if let Node::InlineCode(_) = node {
@@ -664,10 +675,15 @@ fn edit(
         }
     } else {
         let (open, close) = format.pair();
-        let delimiter = styles.iter().rev().find(|d| {
-            d.format == format
-                && (d.content() == body || d.open.start == body.start && d.close.end == body.end)
-        }).map(|d| (d.open.start..d.close.end, d.content()));
+        let delimiter = styles
+            .iter()
+            .rev()
+            .find(|d| {
+                d.format == format
+                    && (d.content() == body
+                        || d.open.start == body.start && d.close.end == body.end)
+            })
+            .map(|d| (d.open.start..d.close.end, d.content()));
         let delimiter = if matches!(format, Format::Bold | Format::Italic | Format::Strike) {
             markdown_wrapper(root, &body, format)
         } else {
@@ -745,7 +761,8 @@ fn state(
     }
     let (open, close) = format.pair();
     if !matches!(format, Format::Bold | Format::Italic | Format::Strike)
-        && !open.is_empty() && wrapped(source, range.clone(), open, close).is_some()
+        && !open.is_empty()
+        && wrapped(source, range.clone(), open, close).is_some()
     {
         return 2;
     }
@@ -770,8 +787,8 @@ fn state(
 #[path = "formats_ui.rs"]
 mod ui;
 pub(super) use ui::SetHighlightColor;
-pub(in super::super) use ui::Syntax;
 pub(super) use ui::State;
+pub(in super::super) use ui::Syntax;
 
 impl SourcePresentation {
     pub(super) fn format_command(
@@ -786,30 +803,40 @@ impl SourcePresentation {
         }
         if let Some(command) = self.plan_format(format, color, cx) {
             self.command(command, window, cx);
-        }
-        else if self.format_syntax(cx).is_none() && self.document.read(cx).source().len() > 32 * 1024 {
+        } else if self.format_syntax(cx).is_none()
+            && self.document.read(cx).source().len() > 32 * 1024
+        {
             let token = self.input_token(cx);
             let selection = self.state.selection;
             let source = self.document.read(cx).source().clone();
             let grammar = self.document.read(cx).grammar();
             let live = self.live;
             cx.spawn_in(window, async move |view, cx| {
-                let command = cx.background_executor().spawn(async move {
-                    let source = source.to_string();
-                    let root = super::super::super::parser::parse(&source, grammar, true).ok()?;
-                    let styles = decorations(&source, &root);
-                    edit(&source, &root, selection, format, color, &styles)
-                }).await;
+                let command = cx
+                    .background_executor()
+                    .spawn(async move {
+                        let source = source.to_string();
+                        let root =
+                            super::super::super::parser::parse(&source, grammar, true).ok()?;
+                        let styles = decorations(&source, &root);
+                        edit(&source, &root, selection, format, color, &styles)
+                    })
+                    .await;
                 let _ = view.update_in(cx, |view, window, cx| {
-                    if view.input_token(cx) == token && view.state.selection == selection
-                        && view.document.read(cx).grammar() == grammar && view.live == live
-                        && view.extra_selections.is_empty() && !view.is_composing()
-                        && view.focus.is_focused(window) && let Some(command) = command
+                    if view.input_token(cx) == token
+                        && view.state.selection == selection
+                        && view.document.read(cx).grammar() == grammar
+                        && view.live == live
+                        && view.extra_selections.is_empty()
+                        && !view.is_composing()
+                        && view.focus.is_focused(window)
+                        && let Some(command) = command
                     {
                         view.command(command, window, cx);
                     }
                 });
-            }).detach();
+            })
+            .detach();
         }
         self.focus.focus(window, cx);
     }
