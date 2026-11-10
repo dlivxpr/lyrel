@@ -101,7 +101,10 @@ fn graphics_assert_production_paint_at(
     // otherwise a default test window would silently resize the real daemon.
     cx.simulate_window_resize(window, target);
     let previously_painted = view.update(cx, |view, _| {
-        let images = view.grid_snap.as_ref().map(|snap| snap.images.to_vec()).unwrap_or_default();
+        let mut images = view.grid_snap.as_ref().map(|snap| snap.images.to_vec()).unwrap_or_default();
+        // Reset both sides: frozen reading owns old leases, while a newly
+        // decoded live resource may not have entered the previous frame yet.
+        images.extend(graphics_visible_images(view));
         let previous: Vec<_> = images
             .iter()
             .map(|image| (image.painted.clone(), image.painted.load(Ordering::Acquire)))
@@ -138,7 +141,7 @@ fn graphics_assert_production_paint_at(
             }
             // Reading mode intentionally presents a frozen picture, rather
             // than the advancing live image map. Keep that existing contract.
-            if view.selection_scroll.has_presented() {
+            if view.selection_scroll.reading.is_some() {
                 return true;
             }
             if snap.display_offset != term.display_offset() as i32 {
