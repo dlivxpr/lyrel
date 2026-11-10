@@ -556,7 +556,10 @@ pub(super) fn theme_zoom_scroll(cx: &mut TestAppContext) {
     );
     let (prior_size, prior_ui_size) = context.update(|_, cx| {
         use gpui_kit::component::ActiveTheme as _;
-        (cx.theme().font_size, cx.global::<crate::core::config::Config>().ui_font_size)
+        (
+            cx.theme().font_size,
+            cx.global::<crate::core::config::Config>().ui_font_size,
+        )
     });
     let zoom_size = prior_ui_size * 1.25;
     // 与 SettingsWindow::set_ui_font_size 相同：配置负责工作台 rem，Theme 负责 provider。

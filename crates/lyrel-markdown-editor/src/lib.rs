@@ -7164,7 +7164,9 @@ fn line_index_at(line: &WrappedLine, rtl: Option<&RtlRow>, p: Point<Pixels>, lh:
                 let last_row = line.wrap_boundaries().len();
                 if (f32::from(p.y) / f32::from(lh)) as usize == last_row {
                     let start_x = line.wrap_boundaries().last().map_or(px(0.), |boundary| {
-                        layout.runs[boundary.run_ix].glyphs[boundary.glyph_ix].position.x
+                        layout.runs[boundary.run_ix].glyphs[boundary.glyph_ix]
+                            .position
+                            .x
                     });
                     let x = p.x + start_x;
                     if x > last.position.x && x <= (last.position.x + layout.width) / 2. {
