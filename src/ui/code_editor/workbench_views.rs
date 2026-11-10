@@ -285,7 +285,10 @@ pub(crate) fn focused_consumers_and_layout(cx: &mut TestAppContext) {
     app.update_in(&mut cx, |app, window, cx| {
         assert!(app.editor_has_focus(window, cx))
     });
-    cx.update(|window, cx| window.input("new", cx));
+    cx.update(|_, cx| {
+        cx.write_to_clipboard(gpui_kit::ClipboardItem::new_string("new".into()));
+    });
+    cx.dispatch_action(gpui_kit::component::input::Paste);
     settle(&mut cx);
     let selected = second.read_with(&cx, |view, _| view.selected_range());
     for (width, font_size, mode, layout) in [
