@@ -627,6 +627,7 @@ fn markdown_workbench_shares_native_source_history_and_host_save_across_groups(
             .unwrap()
             .clone()
     });
+    vcx.dispatch_action(gpui_kit::component::input::MoveToStart);
     vcx.update(|_, cx| {
         assert_ne!(first.entity_id(), second.entity_id());
         assert_eq!(
