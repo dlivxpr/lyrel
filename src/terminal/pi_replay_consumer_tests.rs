@@ -5,9 +5,17 @@ fn native_graphics_scoped_shell(agent: crate::core::cli_agent::CLIAgent, mut she
     let line = std::iter::once(shell.program.clone()).chain(shell.args.iter().cloned())
         .map(|arg| lyrel_core::core::shell_quote::quote_for_shell(&arg, Some(program)))
         .collect::<Vec<_>>().join(" ");
-    let line = lyrel_core::host::session_operations::agent_compatibility_command(agent, &line);
-    let line = lyrel_core::host::session_operations::scoped_launch_command(
-        &*lyrel_core::host::local::LocalHost::new(), &line, Some(program)).unwrap();
+    let host = lyrel_core::host::local::LocalHost::new();
+    let line = if agent == crate::core::cli_agent::CLIAgent::Hermes {
+        // Hermes' presence-sensitive marker belongs to the production agent
+        // encoder, never a fixture-authored child environment override.
+        lyrel_core::host::session_operations::scoped_agent_launch_command(
+            &*host, agent, &line, Some(program)).unwrap()
+    } else {
+        let line = lyrel_core::host::session_operations::agent_compatibility_command(agent, &line);
+        lyrel_core::host::session_operations::scoped_launch_command(
+            &*host, &line, Some(program)).unwrap()
+    };
     let line = if cfg!(windows) {
         format!("Write-Output ('LYREL_PARENT_BEFORE=' + $env:TERM_PROGRAM); {line}; Write-Output ('LYREL_PARENT_AFTER=' + $env:TERM_PROGRAM)")
     } else {

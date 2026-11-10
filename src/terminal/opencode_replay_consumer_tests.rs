@@ -11,8 +11,8 @@ impl OpenCodeReplay {
         let root = tempfile::TempDir::new().unwrap();
         let output = std::process::Command::new("node")
             .args([SCRIPT, "--prepare"])
-            .args(["--opencode", &std::env::var("LYREL_OPENCODE_GRAPHICS_CLI").unwrap_or_else(|_| "opencode".into())])
             .arg(root.path())
+            .args(["--opencode", &std::env::var("LYREL_OPENCODE_GRAPHICS_CLI").unwrap_or_else(|_| "opencode".into())])
             .args(["--previews", previews])
             .output()
             .expect("Node.js and released OpenCode 2.2.0 must be installed; never skip a missing native prerequisite");
