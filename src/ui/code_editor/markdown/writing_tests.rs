@@ -147,7 +147,11 @@ fn insertion_cancel_restores_trigger_without_stealing_transferred_focus(cx: &mut
     });
     settle(&mut context);
     let second = app.read_with(&context, |app, _| {
-        app.active_editor_input().unwrap().markdown().unwrap().clone()
+        app.active_editor_input()
+            .unwrap()
+            .markdown()
+            .unwrap()
+            .clone()
     });
     context.dispatch_action(lyrel_markdown_editor::InsertWritingBlock);
     settle(&mut context);
@@ -335,10 +339,21 @@ pub(super) fn native_rhythm(cx: &mut TestAppContext) {
 pub(super) fn context_menu_follows_language_in_existing_views(cx: &mut TestAppContext) {
     use crate::core::config::Config;
     let (_directory, _path, app, mut context, first, _streams) = open(cx, "body text\n");
-    app.update_in(&mut context, |app, window, cx| assert!(app.editor_split(window, cx)));
+    app.update_in(&mut context, |app, window, cx| {
+        assert!(app.editor_split(window, cx))
+    });
     settle(&mut context);
-    let second = app.read_with(&context, |app, _| app.active_editor_input().unwrap().markdown().unwrap().clone());
-    for (locale, cut, copy, paste) in [("zh-CN", "剪切", "复制", "粘贴"), ("en", "Cut", "Copy", "Paste")] {
+    let second = app.read_with(&context, |app, _| {
+        app.active_editor_input()
+            .unwrap()
+            .markdown()
+            .unwrap()
+            .clone()
+    });
+    for (locale, cut, copy, paste) in [
+        ("zh-CN", "剪切", "复制", "粘贴"),
+        ("en", "Cut", "Copy", "Paste"),
+    ] {
         context.update(|_, cx| {
             crate::ui::i18n::set_locale(locale);
             let mut config = cx.global::<Config>().clone();
@@ -352,7 +367,9 @@ pub(super) fn context_menu_follows_language_in_existing_views(cx: &mut TestAppCo
                 view.focus_handle(cx).focus(window, cx);
             });
             settle(&mut context);
-            let target = view.read_with(&context, |view, _| view.range_to_bounds(&(1..1)).unwrap().center());
+            let target = view.read_with(&context, |view, _| {
+                view.range_to_bounds(&(1..1)).unwrap().center()
+            });
             context.update(|window, cx| {
                 window.pointer_move(target, None, cx);
                 window.pointer_down(target, gpui_kit::MouseButton::Right, cx);
@@ -370,7 +387,6 @@ pub(super) fn context_menu_follows_language_in_existing_views(cx: &mut TestAppCo
     }
     assert!(!app.read_with(&context, |app, _| app.active_buffer().unwrap().dirty));
 }
-
 
 #[cfg(feature = "native-markdown-tests")]
 pub(super) fn native_cases() -> impl Iterator<Item = crate::native_markdown::Case> {

@@ -5830,8 +5830,9 @@ impl Render for EditorState {
                 let clip_item = |id: &'static str, label: SharedString| {
                     div()
                         .id(id)
-                        .accessibility_label(label.clone())
                         .test_support()
+                        .role(gpui_kit::Role::MenuItem)
+                        .aria_label(label.clone())
                         .flex_shrink_0()
                         .px(px(10.))
                         .py(px(3.))

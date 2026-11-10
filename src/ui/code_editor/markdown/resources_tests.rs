@@ -79,7 +79,10 @@ pub(super) fn owning_host(cx: &mut TestAppContext) {
         second.read_with(cx, |view, _| view.text().contains("assets/image-"))
     });
     let (inserted, src) = second.read_with(&vcx, |view, cx| {
-        (view.text().to_string(), view.document().read(cx).snapshot().image_sources()[0].clone())
+        (
+            view.text().to_string(),
+            view.document().read(cx).snapshot().image_sources()[0].clone(),
+        )
     });
     assert_eq!(std::fs::read(remote.path().join(&src)).unwrap(), png());
     assert!(!local.path().join("assets").exists());
@@ -152,7 +155,13 @@ fn shared_images_follow_latest_document_not_a_stale_presentation(cx: &mut TestAp
     use super::super::test_host::{FileHost, canonical_tempdir};
     let directory = canonical_tempdir();
     std::fs::write(directory.path().join("images.md"), "![old](old.png)\r\n").unwrap();
-    for name in ["old.png", "new.png", "inline.png", "second.png", "other.png"] {
+    for name in [
+        "old.png",
+        "new.png",
+        "inline.png",
+        "second.png",
+        "other.png",
+    ] {
         std::fs::write(directory.path().join(name), png()).unwrap();
     }
     let host = FileHost::mapped(HostId(2382), directory.path());
@@ -160,30 +169,64 @@ fn shared_images_follow_latest_document_not_a_stale_presentation(cx: &mut TestAp
     app.update_in(&mut context, |app, window, cx| {
         app.editor_open_on_host(host, Path::new("/images.md"), window, cx)
     });
-    until(&mut context, |cx| app.read_with(cx, |app, _| app.active_buffer().is_some()));
-    let first = app.read_with(&context, |app, _| app.active_editor_input().unwrap().markdown().unwrap().clone());
-    app.update_in(&mut context, |app, window, cx| assert!(app.editor_split(window, cx)));
+    until(&mut context, |cx| {
+        app.read_with(cx, |app, _| app.active_buffer().is_some())
+    });
+    let first = app.read_with(&context, |app, _| {
+        app.active_editor_input()
+            .unwrap()
+            .markdown()
+            .unwrap()
+            .clone()
+    });
+    app.update_in(&mut context, |app, window, cx| {
+        assert!(app.editor_split(window, cx))
+    });
     settle(&mut context);
-    let second = app.read_with(&context, |app, _| app.active_editor_input().unwrap().markdown().unwrap().clone());
+    let second = app.read_with(&context, |app, _| {
+        app.active_editor_input()
+            .unwrap()
+            .markdown()
+            .unwrap()
+            .clone()
+    });
     for (writer, final_writer, block, inline) in [
         (&first, &second, "new.png", "inline.png"),
         (&second, &first, "second.png", "other.png"),
     ] {
-        let latest = format!("![new]({block})\n\ntext ![inline]({inline}) tail\n\n```md\n![code](missing.png)\n```\n`![code](also-missing.png)`\n");
+        let latest = format!(
+            "![new]({block})\n\ntext ![inline]({inline}) tail\n\n```md\n![code](missing.png)\n```\n`![code](also-missing.png)`\n"
+        );
         // Both notification orders matter: HashMap iteration must never pick
         // the intermediate writer as a new revision's resource authority.
         context.update(|_, cx| {
-            writer.update(cx, |view, cx| view.replace_range(0..view.text().len(), "intermediate\n", cx));
-            final_writer.update(cx, |view, cx| view.replace_range(0.."intermediate\n".len(), &latest, cx));
+            writer.update(cx, |view, cx| {
+                view.replace_range(0..view.text().len(), "intermediate\n", cx)
+            });
+            final_writer.update(cx, |view, cx| {
+                view.replace_range(0.."intermediate\n".len(), &latest, cx)
+            });
         });
         until(&mut context, |cx| {
             app.read_with(cx, |app, cx| {
-                let resources = app.active_buffer().unwrap().markdown_resources.as_ref().unwrap().read(cx);
+                let resources = app
+                    .active_buffer()
+                    .unwrap()
+                    .markdown_resources
+                    .as_ref()
+                    .unwrap()
+                    .read(cx);
                 resources.is_loaded(block) && resources.is_loaded(inline)
             })
         });
         app.read_with(&context, |app, cx| {
-            let resources = app.active_buffer().unwrap().markdown_resources.as_ref().unwrap().read(cx);
+            let resources = app
+                .active_buffer()
+                .unwrap()
+                .markdown_resources
+                .as_ref()
+                .unwrap()
+                .read(cx);
             assert!(!resources.is_loaded("old.png"));
             assert!(!resources.is_loaded("missing.png"));
             assert!(!resources.is_loaded("also-missing.png"));
@@ -207,17 +250,42 @@ pub(super) fn renamed_mdx_links_in_both_views(cx: &mut TestAppContext) {
     app.update_in(&mut context, |app, window, cx| {
         app.editor_open_on_host(host, Path::new("/links.mdx"), window, cx);
     });
-    until(&mut context, |cx| app.read_with(cx, |app, _| app.active_buffer().is_some()));
-    let first = app.read_with(&context, |app, _| app.active_editor_input().unwrap().markdown().unwrap().clone());
-    app.update_in(&mut context, |app, window, cx| assert!(app.editor_split(window, cx)));
+    until(&mut context, |cx| {
+        app.read_with(cx, |app, _| app.active_buffer().is_some())
+    });
+    let first = app.read_with(&context, |app, _| {
+        app.active_editor_input()
+            .unwrap()
+            .markdown()
+            .unwrap()
+            .clone()
+    });
+    app.update_in(&mut context, |app, window, cx| {
+        assert!(app.editor_split(window, cx))
+    });
     settle(&mut context);
-    let second = app.read_with(&context, |app, _| app.active_editor_input().unwrap().markdown().unwrap().clone());
+    let second = app.read_with(&context, |app, _| {
+        app.active_editor_input()
+            .unwrap()
+            .markdown()
+            .unwrap()
+            .clone()
+    });
     for view in [&first, &second] {
         assert!(view.read_with(&context, |view, _| view.is_source_only()));
     }
-    std::fs::rename(directory.path().join("links.mdx"), directory.path().join("links.md")).unwrap();
+    std::fs::rename(
+        directory.path().join("links.mdx"),
+        directory.path().join("links.md"),
+    )
+    .unwrap();
     app.update_in(&mut context, |app, window, cx| {
-        app.editor_path_moved(HostId(2383), Path::new("/links.mdx"), Path::new("/links.md"), cx);
+        app.editor_path_moved(
+            HostId(2383),
+            Path::new("/links.mdx"),
+            Path::new("/links.md"),
+            cx,
+        );
         app.editor_focus_group(true, window, cx);
         app.toggle_document_preview(window, cx);
         app.editor_focus_group(false, window, cx);
@@ -239,15 +307,26 @@ pub(super) fn renamed_mdx_links_in_both_views(cx: &mut TestAppContext) {
         });
         context.update(|window, cx| window.pointer_move(target, None, cx));
         settle(&mut context);
-        context.update(|window, _| assert_eq!(window.find("markdown-link-hover").label(), Some("target.md")));
+        context.update(|window, _| {
+            assert_eq!(
+                window.find("markdown-link-hover").label(),
+                Some("target.md")
+            )
+        });
         context.simulate_click(target, gpui_kit::Modifiers::none());
-        until(&mut context, |cx| app.read_with(cx, |app, _| {
-            app.active_buffer().is_some_and(|file| file.path == Path::new("/target.md") && file.host.id() == HostId(2383))
-        }));
+        until(&mut context, |cx| {
+            app.read_with(cx, |app, _| {
+                app.active_buffer().is_some_and(|file| {
+                    file.path == Path::new("/target.md") && file.host.id() == HostId(2383)
+                })
+            })
+        });
     }
-    assert_eq!(std::fs::read(directory.path().join("links.md")).unwrap(), source.as_bytes());
+    assert_eq!(
+        std::fs::read(directory.path().join("links.md")).unwrap(),
+        source.as_bytes()
+    );
 }
-
 
 #[cfg(feature = "native-markdown-tests")]
 fn wrapped_link(cx: &mut TestAppContext, tail: bool, drag: bool) {
@@ -550,10 +629,15 @@ pub(super) fn image_preview_resize(cx: &mut TestAppContext) {
     });
     vcx.simulate_event(gpui_kit::FileDropEvent::Submit { position });
     until(&mut vcx, |cx| {
-        view.read_with(cx, |view, _| view.image_sources().len() == 2)
+        view.read_with(cx, |view, cx| {
+            view.document().read(cx).snapshot().image_sources().len() == 2
+        })
     });
-    let attachment = view.read_with(&vcx, |view, _| {
-        view.image_sources()
+    let attachment = view.read_with(&vcx, |view, cx| {
+        view.document()
+            .read(cx)
+            .snapshot()
+            .image_sources()
             .into_iter()
             .find(|source| source.starts_with("assets/"))
             .unwrap()
