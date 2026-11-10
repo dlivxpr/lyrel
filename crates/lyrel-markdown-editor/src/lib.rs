@@ -750,6 +750,9 @@ impl Default for Labels {
     }
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum WrapAffinity { Upstream, Downstream }
+
 pub struct EditorState {
     focus_handle: FocusHandle,
     /// Immutable cache of the shared document's current revision, never an authority.
@@ -759,7 +762,11 @@ pub struct EditorState {
     pending_coalesce: bool,
     soft_wrap: bool,
     scroll: ScrollHandle,
-    revealed_caret: Option<(u64, usize)>,
+    revealed_caret: Option<(u64, usize, WrapAffinity)>,
+    /// Only local navigation/editing requests reveal; observing another view never does.
+    reveal_requested: bool,
+    caret_affinity: WrapAffinity,
+    anchor_affinity: WrapAffinity,
     live_style: Option<SyntaxStyle>,
     source_only: bool,
     host_links: bool,
@@ -1096,6 +1103,9 @@ impl EditorState {
             soft_wrap: true,
             scroll: ScrollHandle::new(),
             revealed_caret: None,
+            reveal_requested: false,
+            caret_affinity: WrapAffinity::Downstream,
+            anchor_affinity: WrapAffinity::Downstream,
             live_style: None,
             source_only: false,
             host_links: false,
@@ -1968,7 +1978,7 @@ impl EditorState {
         let (row, col) = self.row_col(offset);
         let lh = self.line_h(row);
         let line = self.wrapped.get(row)?;
-        let p = line_pos(line, self.bidi_map(row), self.display_col(row, col), lh)?;
+        let p = caret_line_pos(line, self.bidi_map(row), self.display_col(row, col), lh, self.affinity_for_offset(offset))?;
         let top = bounds.top() + self.line_tops.get(row).copied().unwrap_or(px(0.)) + p.y;
         let x = bounds.left() + p.x + self.row_origin_x(row);
         Some(Bounds::from_corners(point(x, top), point(x, top + lh)))
@@ -2119,7 +2129,7 @@ impl EditorState {
             self.move_to(off, cx);
             return;
         }
-        let off = self.move_vertical(-1);
+        let (off, affinity) = self.move_vertical(-1);
         if let Some((range, source)) = self.inline_math_span_at(off) {
             cx.emit(EditorEvent::EditMath {
                 range,
@@ -2151,6 +2161,9 @@ impl EditorState {
         }
         // Set the caret directly (not via `move_to`) to keep the goal column.
         self.selected_range = off..off;
+        self.caret_affinity = affinity;
+        self.anchor_affinity = affinity;
+        self.request_caret_reveal();
         self.last_edit = EditKind::Other;
         cx.emit(EditorEvent::SelectionChanged);
         cx.notify();
@@ -2163,7 +2176,7 @@ impl EditorState {
             self.move_to(off, cx);
             return;
         }
-        let off = self.move_vertical(1);
+        let (off, affinity) = self.move_vertical(1);
         if let Some((range, source)) = self.inline_math_span_at(off) {
             cx.emit(EditorEvent::EditMath {
                 range,
@@ -2193,6 +2206,9 @@ impl EditorState {
             return;
         }
         self.selected_range = off..off;
+        self.caret_affinity = affinity;
+        self.anchor_affinity = affinity;
+        self.request_caret_reveal();
         self.last_edit = EditKind::Other;
         cx.emit(EditorEvent::SelectionChanged);
         cx.notify();
@@ -2211,13 +2227,13 @@ impl EditorState {
     }
 
     fn select_up(&mut self, _: &SelectUp, _: &mut Window, cx: &mut Context<Self>) {
-        let off = self.move_vertical(-1);
-        self.select_to(off, cx);
+        let (off, affinity) = self.move_vertical(-1);
+        self.select_to_with_affinity(off, affinity, cx);
     }
 
     fn select_down(&mut self, _: &SelectDown, _: &mut Window, cx: &mut Context<Self>) {
-        let off = self.move_vertical(1);
-        self.select_to(off, cx);
+        let (off, affinity) = self.move_vertical(1);
+        self.select_to_with_affinity(off, affinity, cx);
     }
 
     fn select_all(&mut self, _: &SelectAll, _: &mut Window, cx: &mut Context<Self>) {
@@ -3091,6 +3107,7 @@ impl EditorState {
         self.marked_range = None;
         self.last_edit = EditKind::Other;
         self.last_edit_keystroke = false;
+        self.request_caret_reveal();
         self.invalidate_geometry();
         cx.notify();
     }
@@ -3599,6 +3616,7 @@ impl EditorState {
         let offset = self
             .table_offset_at(event.position, window)
             .unwrap_or_else(|| self.index_for_mouse_position(event.position));
+        let affinity = self.affinity_for_mouse_position(offset, event.position);
         self.menu = None;
         self.table_menu = None;
         self.image_menu = None;
@@ -3662,9 +3680,9 @@ impl EditorState {
                 }
                 self.is_selecting = true;
                 if event.modifiers.shift {
-                    self.select_to(offset, cx);
+                    self.select_to_with_affinity(offset, affinity, cx);
                 } else {
-                    self.move_to(offset, cx);
+                    self.move_to_with_affinity(offset, affinity, cx);
                 }
             }
         }
@@ -3783,7 +3801,8 @@ impl EditorState {
             let offset = self
                 .table_offset_at(event.position, window)
                 .unwrap_or_else(|| self.index_for_mouse_position(event.position));
-            self.select_to(offset, cx);
+            let affinity = self.affinity_for_mouse_position(offset, event.position);
+            self.select_to_with_affinity(offset, affinity, cx);
             return;
         }
         // While the right-click menu is open it owns the pointer — don't let the
@@ -4429,8 +4448,16 @@ impl EditorState {
     // --- Selection helpers ---------------------------------------------------
 
     fn move_to(&mut self, offset: usize, cx: &mut Context<Self>) {
+        self.move_to_with_affinity(offset, WrapAffinity::Downstream, cx);
+    }
+
+    fn move_to_with_affinity(&mut self, offset: usize, affinity: WrapAffinity, cx: &mut Context<Self>) {
+        self.caret_affinity = affinity;
+        self.anchor_affinity = affinity;
+        self.selection_reversed = false;
         self.extra_selections.clear();
         self.selected_range = offset..offset;
+        self.request_caret_reveal();
         // A deliberate caret move ends the current typing/deleting run and the
         // vertical-movement goal column.
         self.last_edit = EditKind::Other;
@@ -4506,6 +4533,12 @@ impl EditorState {
     }
 
     fn select_to(&mut self, offset: usize, cx: &mut Context<Self>) {
+        self.select_to_with_affinity(offset, WrapAffinity::Downstream, cx);
+    }
+
+    fn select_to_with_affinity(&mut self, offset: usize, affinity: WrapAffinity, cx: &mut Context<Self>) {
+        if self.selected_range.is_empty() { self.anchor_affinity = self.caret_affinity; }
+        self.caret_affinity = affinity;
         if self.selection_reversed {
             self.selected_range.start = offset;
         } else {
@@ -4515,6 +4548,7 @@ impl EditorState {
             self.selection_reversed = !self.selection_reversed;
             self.selected_range = self.selected_range.end..self.selected_range.start;
         }
+        self.request_caret_reveal();
         cx.emit(EditorEvent::SelectionChanged);
         cx.notify();
     }
@@ -4576,21 +4610,21 @@ impl EditorState {
     /// Offset one *visual* row up/down from the caret, preserving the goal column
     /// (x) across the run. Falls back to logical-line movement before the first
     /// paint (when no wrapped layout is cached yet).
-    fn move_vertical(&mut self, dir: i32) -> usize {
+    fn move_vertical(&mut self, dir: i32) -> (usize, WrapAffinity) {
         if self.wrapped.is_empty() {
-            return self.vertical_offset(dir);
+            return (self.vertical_offset(dir), WrapAffinity::Downstream);
         }
         let (row, col) = self.row_col(self.cursor_offset());
         let cur_lh = self.line_h(row);
         if cur_lh <= px(0.) {
-            return self.vertical_offset(dir);
+            return (self.vertical_offset(dir), WrapAffinity::Downstream);
         }
         let Some(cur) = self
             .wrapped
             .get(row)
-            .and_then(|l| line_pos(l, self.bidi_map(row), self.display_col(row, col), cur_lh))
+            .and_then(|l| caret_line_pos(l, self.bidi_map(row), self.display_col(row, col), cur_lh, self.caret_affinity))
         else {
-            return self.vertical_offset(dir);
+            return (self.vertical_offset(dir), WrapAffinity::Downstream);
         };
         let global_y = self.line_tops[row] + cur.y;
         // The goal column is the caret's *visual* x, so it carries an RTL row's
@@ -4608,7 +4642,7 @@ impl EditorState {
             global_y - px(1.)
         };
         if target_y < px(0.) {
-            return 0;
+            return (0, WrapAffinity::Downstream);
         }
         let last = self.wrapped.len() - 1;
         let total = self.line_tops[last] + self.line_h(last) * self.row_span(last) as f32;
@@ -4620,11 +4654,7 @@ impl EditorState {
             while r > 0 && self.line_h(r) <= px(0.) {
                 r -= 1;
             }
-            return if r == last {
-                self.content.len()
-            } else {
-                self.line_end(r)
-            };
+            return (if r == last { self.content.len() } else { self.line_end(r) }, WrapAffinity::Upstream);
         }
         let mut trow = last;
         for i in 0..self.wrapped.len() {
@@ -4679,7 +4709,7 @@ impl EditorState {
                         trow = n;
                         break;
                     }
-                    None => return self.cursor_offset(),
+                    None => return (self.cursor_offset(), self.caret_affinity),
                 }
             }
         }
@@ -4693,7 +4723,7 @@ impl EditorState {
             rel,
             self.line_h(trow),
         );
-        self.line_starts()[trow] + self.source_col(trow, col)
+        (self.line_starts()[trow] + self.source_col(trow, col), self.affinity_for_visual_position(trow, col, rel))
     }
 
     /// The end of the next word at/after `offset` (⌥→ on macOS).
@@ -5271,6 +5301,7 @@ impl EntityInputHandler for EditorState {
         let snapshot = document.update(cx, |document, cx| document.compose(range.clone(), new_text, owner, caret, cx));
         self.content = snapshot.text_handle();
         self.content_gen = document.read(cx).revision();
+        self.request_caret_reveal();
         self.invalidate_geometry();
         self.marked_range =
             (!new_text.is_empty()).then(|| range.start..range.start + new_text.len());
@@ -5307,7 +5338,7 @@ impl EntityInputHandler for EditorState {
         let lh = self.line_h(row);
         let line = self.wrapped.get(row)?;
         let map = self.bidi_map(row);
-        let p = line_pos(line, map, self.display_col(row, col), lh)?;
+        let p = caret_line_pos(line, map, self.display_col(row, col), lh, self.affinity_for_offset(range.start))?;
         let top = bounds.top() + self.line_tops.get(row).copied().unwrap_or(px(0.)) + p.y;
         let x = bounds.left() + p.x + self.row_origin_x(row);
         // Span the whole range when it stays on one wrap row (the common IME
@@ -5316,7 +5347,7 @@ impl EntityInputHandler for EditorState {
         // start-anchored bar.
         let (erow, ecol) = self.row_col(range.end);
         let x2 = if erow == row && range.end > range.start {
-            line_pos(line, map, self.display_col(row, ecol), lh)
+            caret_line_pos(line, map, self.display_col(row, ecol), lh, self.affinity_for_offset(range.end))
                 .filter(|e| e.y == p.y)
                 .map(|e| bounds.left() + e.x + self.row_origin_x(row))
                 .unwrap_or(x)
@@ -6729,6 +6760,30 @@ fn line_pos(
             Some(point(x, lh * row))
         }
         None => line.position_for_index(dcol, lh),
+    }
+}
+
+/// Caret endpoints retain the visual side of a shared wrap-boundary byte.
+fn caret_line_pos(line: &WrappedLine, rtl: Option<&RtlRow>, dcol: usize, lh: Pixels, affinity: WrapAffinity) -> Option<Point<Pixels>> {
+    match (rtl, affinity) {
+        (Some(r), WrapAffinity::Upstream) => {
+            let (mut row, mut local) = r.row_of(dcol);
+            if local == 0 && row > 0 { row -= 1; local = r.rows.get(row)?.len; }
+            Some(point(px(r.rows.get(row)?.map.x_for_index(local)) + r.shift_delta(row), lh * row))
+        }
+        (None, WrapAffinity::Downstream) => {
+            if dcol > line.len() { return None; }
+            let mut start = 0;
+            let mut y = px(0.);
+            for boundary in line.wrap_boundaries() {
+                let end = line.unwrapped_layout.runs[boundary.run_ix].glyphs[boundary.glyph_ix].index;
+                if dcol < end { break; }
+                start = end;
+                y += lh;
+            }
+            Some(point(line.unwrapped_layout.x_for_index(dcol) - line.unwrapped_layout.x_for_index(start), y))
+        }
+        _ => line_pos(line, rtl, dcol, lh),
     }
 }
 

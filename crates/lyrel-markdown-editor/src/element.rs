@@ -1227,8 +1227,8 @@ impl Element for EditorElement {
                         continue;
                     }
                     let inset = row_x(row);
-                    let pa = line_pos(line, bidi(row), disp_col(row, a), lh).unwrap_or_default();
-                    let pb = line_pos(line, bidi(row), disp_col(row, b), lh).unwrap_or_default();
+                    let pa = caret_line_pos(line, bidi(row), disp_col(row, a), lh, editor.affinity_for_offset(line_start + a)).unwrap_or_default();
+                    let pb = caret_line_pos(line, bidi(row), disp_col(row, b), lh, editor.affinity_for_offset(line_start + b)).unwrap_or_default();
                     let pa = point(pa.x + inset, pa.y);
                     let pb = point(pb.x + inset, pb.y);
                     if pa.y == pb.y {
@@ -1400,7 +1400,7 @@ impl Element for EditorElement {
             } else {
                 let p = wrapped
                     .get(row)
-                    .and_then(|l| line_pos(l, bidi(row), disp_col(row, col), lh))
+                    .and_then(|l| caret_line_pos(l, bidi(row), disp_col(row, col), lh, editor.caret_affinity))
                     .unwrap_or_default();
                 let inset = row_x(row);
                 // A row can be taller than its text — grown to fit an inline
@@ -2469,12 +2469,11 @@ impl Element for EditorElement {
             editor.line_height = base_lh;
             editor.font_size = font_size;
             editor.paint_font = Some(font.clone());
-            let key = (editor.content_gen, editor.cursor_offset());
-            if !editor.focus_handle.is_focused(window) || editor.revealed_caret == Some(key) {
-                return None;
-            }
-            editor.revealed_caret = Some(key);
+            if !editor.reveal_requested { return None; }
+            let key = (editor.content_gen, editor.cursor_offset(), editor.caret_affinity);
             let caret = editor.range_to_bounds(&(key.1..key.1))?;
+            editor.reveal_requested = false;
+            editor.revealed_caret = Some(key);
             let viewport = editor.scroll.bounds();
             let mut offset = editor.scroll.offset();
             let previous = offset;
@@ -2491,7 +2490,7 @@ impl Element for EditorElement {
             let editor = self.editor.clone();
             window.on_next_frame(move |_, cx| {
                 editor.update(cx, |editor, cx| {
-                    if editor.revealed_caret == Some(key) {
+                    if editor.revealed_caret == Some(key) && !editor.reveal_requested {
                         editor.scroll.set_offset(offset);
                         cx.notify();
                     }

@@ -180,7 +180,7 @@ pub(super) fn extreme_line(cx: &mut TestAppContext) {
                     let editor = view.read(cx);
                     let caret = editor.range_to_bounds(&(at..at));
                     let ready = caret.is_some_and(|caret| caret.top() >= px(0.) && caret.bottom() <= window.viewport_size().height && caret.left() >= px(0.) && caret.right() <= window.viewport_size().width);
-                    (ready, (source_mode, at, caret, editor.scroll_offset(), window.viewport_size()))
+                    (ready, (source_mode, at, caret, editor.scroll_offset(), window.viewport_size(), editor.focus_handle(cx).is_focused(window)))
                 })
             });
             let caret = view.read_with(&context, |view, _| view.range_to_bounds(&(at..at)).unwrap());
@@ -213,10 +213,10 @@ pub(super) fn extreme_line(cx: &mut TestAppContext) {
 
 #[cfg(feature = "native-markdown-tests")]
 pub(super) fn native_navigation(cx: &mut TestAppContext) {
-    use gpui_kit::{MouseButton, point};
+    use gpui_kit::{EntityInputHandler, MouseButton, point};
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("native-navigation.md");
-    let source = format!("{}\n\n中文 English e\u{301} 👩‍💻\n\nlast", "W ".repeat(240));
+    let source = format!("{}\n\n中文 English e\u{301} 👩‍💻\n\nlast\n{}", "W ".repeat(240), "scroll anchor\n".repeat(100));
     std::fs::write(&path, &source).unwrap();
     let (app, mut context, _streams) = harness_with_tabs(cx, 1);
     context.simulate_resize(gpui_kit::size(px(900.), px(1000.)));
@@ -230,19 +230,59 @@ pub(super) fn native_navigation(cx: &mut TestAppContext) {
     view.read_with(&context, |view, _| assert!(view.is_soft_wrap(), "this native navigation scenario explicitly enables wrap"));
     settle(&mut context);
     until(&mut context, |context| view.read_with(context, |view, _| view.range_to_bounds(&(0..0)).is_some()));
-    let (first, wrap_at, row_start) = view.read_with(&context, |view, _| {
+    let (first, wrap_at, previous_end) = view.read_with(&context, |view, _| {
         let first = view.range_to_bounds(&(0..0)).unwrap();
-        let wrap_at = (1..480).find(|at| view.range_to_bounds(&(*at..*at)).is_some_and(|bounds| bounds.top() > first.top())).expect("fixture wraps in native layout");
+        // The ASCII fixture lets us find GPUI's first downstream byte, then
+        // name the shared boundary byte which also ends the previous row.
+        let wrap_at = (1..480).find(|at| view.range_to_bounds(&(*at..*at)).is_some_and(|bounds| bounds.top() > first.top())).expect("fixture wraps in native layout") - 1;
         (first, wrap_at, view.range_to_bounds(&(wrap_at..wrap_at)).unwrap())
     });
+    view.update_in(&mut context, |view, _, cx| view.select_range(wrap_at..wrap_at, cx));
+    settle(&mut context);
+    let row_start = view.read_with(&context, |view, _| view.range_to_bounds(&(wrap_at..wrap_at)).unwrap());
+    assert!(row_start.top() > previous_end.top(), "one source offset must retain both visual sides");
+    view.update_in(&mut context, |view, _, cx| view.select_range(0..0, cx));
+    settle(&mut context);
     let mut previous = first;
     for _ in 0..3 {
         context.update(|window, cx| window.press("down", cx));
         settle(&mut context);
         let next = view.read_with(&context, |view, _| view.range_to_bounds(&(view.cursor()..view.cursor())).unwrap());
-        assert!(next.top() > previous.top(), "Down visits the next visual row");
-        assert!(next.top() - previous.top() < first.size.height * 2., "Down must not skip a visual row");
+        assert!(next.top() > previous.top(), "Down visits the next visual row; previous={previous:?}, next={next:?}");
+        assert!(next.top() - previous.top() < first.size.height * 2., "Down must not skip a visual row; previous={previous:?}, next={next:?}");
         previous = next;
+    }
+    for target in [previous_end.center(), row_start.center()] {
+        context.update(|window, cx| { window.pointer_down(target, MouseButton::Left, cx); window.pointer_up(target, MouseButton::Left, cx); });
+        settle(&mut context);
+        let before = view.read_with(&context, |view, _| {
+            assert_eq!(view.cursor(), wrap_at, "both visual sides resolve to the same source byte");
+            let caret = view.range_to_bounds(&(wrap_at..wrap_at)).unwrap();
+            assert_eq!(caret.top(), if target.y < row_start.top() { previous_end.top() } else { row_start.top() }, "pointer retains its clicked boundary side");
+            caret
+        });
+        let ime = view.update_in(&mut context, |view, window, cx| view.bounds_for_range(wrap_at..wrap_at, gpui_kit::Bounds::new(first.origin, window.viewport_size()), window, cx).unwrap());
+        assert_eq!(ime.top(), before.top(), "IME anchor follows the actual visual caret side");
+        context.update(|window, cx| window.press("down", cx));
+        settle(&mut context);
+        view.read_with(&context, |view, _| assert!(view.range_to_bounds(&(view.cursor()..view.cursor())).unwrap().top() > before.top()));
+        context.update(|window, cx| window.press("up", cx));
+        settle(&mut context);
+        view.read_with(&context, |view, _| { assert_eq!(view.cursor(), wrap_at); assert_eq!(view.range_to_bounds(&(wrap_at..wrap_at)).unwrap().top(), before.top(), "Down/Up returns to the clicked boundary side"); });
+        if before.top() > first.top() {
+            context.update(|window, cx| window.press("up", cx));
+            settle(&mut context);
+            context.update(|window, cx| window.press("down", cx));
+            settle(&mut context);
+            view.read_with(&context, |view, _| { assert_eq!(view.cursor(), wrap_at); assert_eq!(view.range_to_bounds(&(wrap_at..wrap_at)).unwrap().top(), before.top(), "Up/Down returns to the lower boundary side"); });
+        }
+        context.update(|window, cx| window.press("shift-left", cx));
+        settle(&mut context);
+        view.read_with(&context, |view, _| { assert_eq!(view.selected_range(), wrap_at - 1..wrap_at); assert_eq!(view.range_to_bounds(&(wrap_at..wrap_at)).unwrap().top(), before.top(), "selection anchor retains its boundary side"); });
+        context.update(|window, cx| { window.pointer_down(target, MouseButton::Left, cx); window.pointer_up(target, MouseButton::Left, cx); window.input("Q", cx); });
+        context.dispatch_action(gpui_kit::component::input::Undo);
+        settle(&mut context);
+        view.read_with(&context, |view, cx| { assert_eq!(view.document().read(cx).encode().unwrap(), source.as_bytes()); assert_eq!(view.range_to_bounds(&(wrap_at..wrap_at)).unwrap().top(), before.top(), "input/Undo preserves clicked boundary affinity"); });
     }
     view.update_in(&mut context, |view, _, cx| view.select_range(0..0, cx));
     settle(&mut context);
@@ -278,6 +318,37 @@ pub(super) fn native_navigation(cx: &mut TestAppContext) {
     view.update_in(&mut context, |view, _, cx| view.select_range(word..word, cx));
     context.update(|window, cx| window.press(if cfg!(target_os = "macos") { "alt-right" } else { "ctrl-right" }, cx));
     view.read_with(&context, |view, _| assert!(view.cursor() >= word + "English".len()));
+    save(&app, &mut context);
+    assert_eq!(std::fs::read(&path).unwrap(), source.as_bytes());
+    // Host go-to selection must reveal without stealing the other view's focus.
+    app.update_in(&mut context, |app, window, cx| { assert!(app.editor_split(window, cx)); });
+    settle(&mut context);
+    let second = app.read_with(&context, |app, _| app.active_editor_input().unwrap().markdown().unwrap().clone());
+    second.update_in(&mut context, |view, window, cx| {
+        view.select_range(source.len()..source.len(), cx);
+        view.focus_handle(cx).focus(window, cx);
+    });
+    until(&mut context, |context| second.read_with(context, |view, _| view.scroll_offset().y < px(0.)));
+    let other_scroll = second.read_with(&context, |view, _| view.scroll_offset());
+    view.update_in(&mut context, |view, _, cx| view.select_range(source.len()..source.len(), cx));
+    until(&mut context, |context| context.update(|window, cx| {
+        let view = view.read(cx);
+        view.range_to_bounds(&(source.len()..source.len())).is_some_and(|caret| caret.top() >= px(0.) && caret.bottom() <= window.viewport_size().height)
+    }));
+    let first_scroll = view.read_with(&context, |view, _| { assert!(view.scroll_offset().y < px(0.)); view.scroll_offset() });
+    second.read_with(&context, |view, _| assert_eq!(view.scroll_offset(), other_scroll));
+    context.update(|window, cx| assert!(second.read(cx).focus_handle(cx).is_focused(window), "a host selection in another presentation must not take focus"));
+    view.update_in(&mut context, |view, _, cx| view.select_range(0..0, cx));
+    until(&mut context, |context| context.update(|window, cx| {
+        view.read(cx).range_to_bounds(&(0..0)).is_some_and(|caret| caret.top() >= px(0.) && caret.bottom() <= window.viewport_size().height)
+    }));
+    // The user may scroll away from their caret; a foreign edit must not undo it.
+    view.update_in(&mut context, |view, _, cx| view.set_scroll_offset(first_scroll, cx));
+    settle(&mut context);
+    context.update(|window, cx| window.input("X", cx));
+    settle(&mut context);
+    view.read_with(&context, |view, _| { assert_eq!(view.selected_range(), 0..0); assert_eq!(view.scroll_offset(), first_scroll); });
+    context.dispatch_action(gpui_kit::component::input::Undo);
     save(&app, &mut context);
     assert_eq!(std::fs::read(&path).unwrap(), source.as_bytes());
 }

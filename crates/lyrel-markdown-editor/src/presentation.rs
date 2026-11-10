@@ -1,6 +1,31 @@
 use super::*;
 
 impl EditorState {
+    pub(super) fn request_caret_reveal(&mut self) {
+        self.reveal_requested = true;
+        self.revealed_caret = None;
+    }
+    pub(super) fn affinity_for_offset(&self, offset: usize) -> WrapAffinity {
+        if offset == self.cursor_offset() { return self.caret_affinity; }
+        let anchor = if self.selection_reversed { self.selected_range.end } else { self.selected_range.start };
+        if offset == anchor { self.anchor_affinity } else { WrapAffinity::Upstream }
+    }
+    pub(super) fn affinity_for_visual_position(&self, row: usize, column: usize, position: Point<Pixels>) -> WrapAffinity {
+        let Some(line) = self.wrapped.get(row) else { return WrapAffinity::Downstream; };
+        let lh = self.line_h(row);
+        let upstream = caret_line_pos(line, self.bidi_map(row), column, lh, WrapAffinity::Upstream);
+        let downstream = caret_line_pos(line, self.bidi_map(row), column, lh, WrapAffinity::Downstream);
+        match (upstream, downstream) {
+            (Some(up), Some(down)) if down.y > up.y && position.y < down.y => WrapAffinity::Upstream,
+            _ => WrapAffinity::Downstream,
+        }
+    }
+    pub(super) fn affinity_for_mouse_position(&self, offset: usize, position: Point<Pixels>) -> WrapAffinity {
+        let Some(bounds) = self.last_bounds else { return WrapAffinity::Downstream; };
+        let (row, column) = self.row_col(offset);
+        let Some(top) = self.line_tops.get(row) else { return WrapAffinity::Downstream; };
+        self.affinity_for_visual_position(row, self.display_col(row, column), point(position.x - bounds.left() - self.row_origin_x(row), position.y - bounds.top() - *top))
+    }
     pub fn document(&self) -> &Entity<Document> { &self.document }
     pub fn occurrence_range(&self) -> Range<usize> { self.extra_selections.last().unwrap_or(&self.selected_range).clone() }
     pub fn add_selection(&mut self, range: Range<usize>, cx: &mut Context<Self>) {
@@ -82,6 +107,7 @@ impl EditorState {
         self.diagnostics.clear();
         self.content = snapshot.text_handle(); self.content_gen = document.read(cx).revision();
         self.selected_range = after.clone();
+        self.request_caret_reveal();
         self.set_history_selection(before, after, cx);
         self.last_edit = EditKind::Other; self.invalidate_geometry(); cx.notify();
     }
@@ -91,6 +117,7 @@ impl EditorState {
         let snapshot = document.update(cx, |document, cx| document.replace_lines(range, lines, leading, trailing, origin, caret, cx));
         self.diagnostics.clear();
         self.content = snapshot.text_handle(); self.content_gen = document.read(cx).revision();
+        self.request_caret_reveal();
         self.last_edit = EditKind::Other; self.invalidate_geometry(); cx.notify();
     }
     pub fn selected_range(&self) -> Range<usize> { self.selected_range.clone() }
@@ -119,7 +146,11 @@ impl EditorState {
         let end = self.content.floor_char_boundary(range.end.min(self.content.len()));
         self.selected_range = start.min(end)..start.max(end);
         self.selection_reversed = start > end;
+        self.caret_affinity = WrapAffinity::Downstream;
+        self.anchor_affinity = WrapAffinity::Downstream;
         self.last_edit = EditKind::Other;
+        self.goal_x = None;
+        self.request_caret_reveal();
         cx.emit(EditorEvent::SelectionChanged); cx.notify();
     }
     pub fn line_column(&self, at: usize) -> (usize, usize) {
@@ -137,7 +168,7 @@ impl EditorState {
         let bounds = self.last_bounds?;
         let (row, col) = self.row_col(range.start.min(self.content.len()));
         let lh = self.line_h(row);
-        let p = line_pos(self.wrapped.get(row)?, self.bidi_map(row), self.display_col(row, col), lh)?;
+        let p = caret_line_pos(self.wrapped.get(row)?, self.bidi_map(row), self.display_col(row, col), lh, self.affinity_for_offset(range.start))?;
         Some(Bounds::new(point(bounds.left() + p.x + self.row_origin_x(row), bounds.top() + self.line_tops.get(row).copied()? + p.y), size(px(1.), lh)))
     }
     pub fn set_format(&mut self, format: lyrel_text::TextFormat, cx: &mut Context<Self>) {
@@ -189,6 +220,7 @@ impl EditorState {
         };
         if !composing { document.update(cx, |document, _| document.set_history_selection(origin, before_selection, after_caret..after_caret, coalesced)); }
         self.content = snapshot.text_handle(); self.content_gen = document.read(cx).revision();
+        self.request_caret_reveal();
         self.pending_coalesce = false; self.invalidate_geometry();
     }
     pub(super) fn invalidate_geometry(&mut self) {
