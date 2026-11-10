@@ -57,10 +57,11 @@ if (!args.includes('--worker')) {
     if (agent === 'hermes') assert.equal(env.KITTY_WINDOW_ID, 'lyrel', 'Hermes native auto detector requires its scoped marker');
     if (agent === 'kimi' && policy === 'off') env.PI_IMAGE_PROTOCOL = 'none';
     const loader = path.join(source, agent === 'kimi' ? 'node_modules' : 'ui-tui/node_modules', 'tsx/dist/cli.mjs');
-    // Match upstream dev:cli-only: tsx handles TS/decorators, while Kimi's
-    // own ?raw loader handles transitive system.md without copying templates.
-    const compiler = agent === 'kimi' ? ['--tsconfig', path.join(source, 'tsconfig.json'),
-      '--import', pathToFileURL(path.join(source, 'build/register-raw-text-loader.mjs')).href] : [];
+    // Resolve compiler settings from the pinned source, not the isolated cwd.
+    // Hermes' native TSX uses the automatic JSX runtime (no React default import).
+    // Kimi also needs its own ?raw loader for transitive system.md imports.
+    const compiler = ['--tsconfig', path.join(source, agent === 'kimi' ? 'tsconfig.json' : 'ui-tui/tsconfig.json'),
+      ...(agent === 'kimi' ? ['--import', pathToFileURL(path.join(source, 'build/register-raw-text-loader.mjs')).href] : [])];
     const worker = [loader, ...compiler, fileURLToPath(import.meta.url), ...args, '--worker', '--root', root,
       '--python', option('--python', process.env.LYREL_HERMES_GRAPHICS_PYTHON ?? 'python')];
     child = spawn(process.execPath, worker, { cwd: root, env, stdio: 'inherit' });
@@ -132,6 +133,12 @@ if (!args.includes('--worker')) {
     const h = React.createElement;
     // Pinned Ink's public render() is async; rerender belongs to its resolved Instance.
     const ui = await render(h(Text, null, 'NATIVE_STATIC_STARTING'), { exitOnCtrlC: false, patchConsole: false });
+    // Native App.componentDidCatch rejects this public lifecycle promise. Without
+    // observing it, a component error can leave only the last committed frame.
+    let phase = 'startup';
+    void ui.waitUntilExit().catch(error => {
+      process.nextTick(() => { throw new Error(`Hermes native render failed during ${phase}`, { cause: error }); });
+    });
     process.stdin.setRawMode(true); process.stdin.resume();
     function Frame({ phase, index }) {
       const [ready, setReady] = React.useState(false);
@@ -141,8 +148,8 @@ if (!args.includes('--worker')) {
         h(InlineImage, { cols: 64, path: path.join(root, `image-${index}.png`), revision: phase, key: phase }),
         h(Text, null, 'NATIVE_STATIC_AFTER\nLiteral <svg/> ![not image](https://example.invalid/x.png)')));
     }
-    show = (phase, index) => ui.rerender(h(Frame, { phase, index, key: phase }));
-    empty = () => ui.rerender(h(Text, null, 'NATIVE_STATIC_EMPTY'));
+    show = (nextPhase, index) => { phase = nextPhase; ui.rerender(h(Frame, { phase, index, key: phase })); };
+    empty = () => { phase = 'unmount'; ui.rerender(h(Text, null, 'NATIVE_STATIC_EMPTY')); };
     stop = () => { assert(calls >= 3); ui.unmount(); process.stdin.setRawMode(false); };
   }
   try {
