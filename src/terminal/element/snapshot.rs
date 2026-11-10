@@ -307,10 +307,6 @@ impl TerminalElement {
                 let line = Line(row as i32 - display_offset);
                 if let Some(reading) = reading {
                     let source = reading.row(row as i32);
-                    let slices = reading.placeholders(row as i32);
-                    if !slices.is_empty() {
-                        placeholders.push((row as i32, slices.to_vec()));
-                    }
                     for col in 0..cols {
                         let mut rendered = source
                             .and_then(|source| source.get(col))
@@ -366,10 +362,10 @@ impl TerminalElement {
 
             if want_sliver && (display_offset as usize) < term.grid.history_size() {
                 let line = Line(-display_offset - 1);
-                let slices = if let Some(reading) = reading {
-                    reading.placeholders(-1).to_vec()
-                } else {
+                let slices = if reading.is_none() {
                     lyrel_core::core::kitty_graphics::placeholder_row(&term.grid, line)
+                } else {
+                    Vec::new()
                 };
                 if !slices.is_empty() {
                     placeholders.push((-1, slices));
@@ -425,15 +421,17 @@ impl TerminalElement {
                         .unwrap_or_else(|| cursor_style_from_shape(cur.content)),
                 });
             }
-            // Text, cursor, placeholder runs and the daemon-owned placement
-            // display list are acquired at one stream position. The reader
-            // applies graphics under this same terminal guard.
-            let images = self
-                .view
-                .read(cx)
-                .terminal
-                .images()
-                .commit_with_placeholders(&placeholders);
+            // Reading rows and their graphics leases were captured together.
+            // Never resolve a frozen placeholder through the live image map.
+            let images = if let Some(reading) = reading {
+                reading.commit_images(&term)
+            } else {
+                self.view
+                    .read(cx)
+                    .terminal
+                    .images()
+                    .commit_with_placeholders(&placeholders)
+            };
             drop(term);
             let (any_match, any_current) = if reading.is_none() {
                 self.flag_hovered_link(buf, rows, cols, display_offset, cx);

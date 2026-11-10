@@ -222,6 +222,13 @@ Git 的新增/修改标记种子为绿 `#2F8A52` / `#4CC27A`、琥珀 `#B7791F` 
 图片继续由既有 image store 拥有资源。管线保留图片低层、cell 背景与选择／搜索、
 负 z 图片、文字与下划线、非负 z 图片、cursor／IME、bell 的绘制顺序；
 图片的 claim、register、atlas 释放时机及 pane clipping 不移入独立状态所有者。
+阅读历史时，`ReadingView` 将语义单元与同一行的图片切片一起首次捕获；切片借用既有像素、
+资源及 metadata lease，不复制像素，也不在后续绘制时按图片 ID 重新解析实时资源。
+直接放置按行裁切，占位符保留捕获时的 prototype／资源身份；两者均随阅读锚点重投影，
+包括前一行的小数滚动切片。实时擦除、同 ID 重传与删除不改变已捕获行；历史淘汰或
+返回实时视口时释放对应行的 lease，atlas 仍经既有退休路径回收。阅读状态不阻塞 PTY
+解析，也不改变 daemon 的权威资源生命周期。
+
 绘制回归按颜色、snapshot、文字与装饰分组，小型 fixture 位于 `element/test_support.rs`；
 真实终端与 graphics consumer 继续从既有窗口 seam 验证。
 

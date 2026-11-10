@@ -162,12 +162,16 @@ fn reading_scrollbar_uses_the_same_stable_rows_and_paste_releases_them(cx: &mut 
     graphics_send_fixture(&view, cx, 31, b"\x1b[H\x1b[2J\x1b[24;1H\r\nSCROLLBAR-LIVE\r\n");
     graphics_assert_production_paint(window, &view, cx);
     assert_eq!(reading_painted_rows(&view, cx), before);
-    cx.update(|cx| cx.write_to_clipboard(ClipboardItem::new_string("SEND 32 0 1b5b306d 0".into())));
+    let pasted = "SEND 32 0 1b5b306d 0";
+    cx.update(|cx| cx.write_to_clipboard(ClipboardItem::new_string(pasted.into())));
     window.update(cx, |_, window, cx| {
         window.dispatch_action(Box::new(PasteText), cx);
     }).unwrap();
     cx.run_until_parked();
     view.read_with(cx, |view, _| view.terminal.write(b"\n".to_vec()));
+    // The pasted request has its own parser-order reply barrier. Sending the
+    // next request before its DONE marker races that request against the reply.
+    graphics_wait_fixture(&view, cx, 32, pasted.len() + 1);
     graphics_send_fixture(&view, cx, 33, b"\x1b[0m");
     graphics_assert_production_paint(window, &view, cx);
     assert_ne!(reading_painted_rows(&view, cx), before);
@@ -177,6 +181,12 @@ fn reading_scrollbar_uses_the_same_stable_rows_and_paste_releases_them(cx: &mut 
     }).unwrap();
     daemon.panes().kill(pane).unwrap();
     graphics_recovery_destroy(view, window, cx);
+}
+
+// RenderImage stores native BGRA; compare the independent source RGBA identity.
+fn reading_rgba_pixel(image: &crate::terminal::images::RenderPlacement) -> [u8; 4] {
+    let bgra = image.data.as_ref().unwrap().as_bytes(0).unwrap();
+    [bgra[2], bgra[1], bgra[0], bgra[3]]
 }
 
 #[gpui_kit::test]
@@ -189,19 +199,22 @@ fn reading_placeholders_paint_from_captured_rows_after_live_cells_are_erased(cx:
     view.update(cx, |view, cx| { view.smooth_scroll(1., cx); });
     graphics_assert_production_paint(window, &view, cx);
     let before = reading_painted_rows(&view, cx);
-    let (painted, bounds) = view.read_with(cx, |view, _| {
+    let (painted, bounds, frozen) = view.read_with(cx, |view, _| {
         let image = view.grid_snap.as_ref().unwrap().images.iter()
             .find(|image| image.placement.image_id == 8)
             .expect("captured placeholder must enter the production display list");
-        assert_eq!(image.data.as_ref().unwrap().as_bytes(0).unwrap(), &[0, 0, 255, 255]);
+        assert_eq!(reading_rgba_pixel(image), [0, 0, 255, 255]);
         assert!(image.painted.load(Ordering::Acquire));
         let geom = view.cell_geom.unwrap();
         let offset = view.terminal.term.lock().display_offset() as i32;
-        (image.painted.clone(), image.paint_bounds(geom.origin, geom.cell_width, geom.line_height, 0, offset, 1.))
+        (image.painted.clone(), image.paint_bounds(geom.origin, geom.cell_width, geom.line_height, 0, offset, 1.), Arc::downgrade(image.data.as_ref().unwrap()))
     });
     painted.store(false, Ordering::Release);
     let mut advance = b"\x1b[8;1H\x1b[2KERASED\x1b[24;1H".to_vec();
     advance.extend_from_slice(&b"\r\nADVANCED".repeat(12));
+    // Replace the same image ID with red pixels, retiring the old resource.
+    // Frozen rows must retain the original decoded identity and atlas lease.
+    advance.extend_from_slice(b"\x1b_Ga=t,i=8,f=32,s=1,v=1,q=2;/wAA/w==\x1b\\");
     graphics_send_fixture(&view, cx, 42, &advance);
     graphics_assert_production_paint(window, &view, cx);
     assert_eq!(reading_painted_rows(&view, cx), before);
@@ -209,7 +222,8 @@ fn reading_placeholders_paint_from_captured_rows_after_live_cells_are_erased(cx:
         let image = view.grid_snap.as_ref().unwrap().images.iter()
             .find(|image| image.placement.image_id == 8)
             .expect("erasing live cells must not erase captured placeholder runs");
-        assert_eq!(image.data.as_ref().unwrap().as_bytes(0).unwrap(), &[0, 0, 255, 255]);
+        assert_eq!(reading_rgba_pixel(image), [0, 0, 255, 255]);
+        assert!(Arc::ptr_eq(image.data.as_ref().unwrap(), &frozen.upgrade().unwrap()));
         assert!(painted.load(Ordering::Acquire), "a new production frame must paint the captured image");
         let geom = view.cell_geom.unwrap();
         let offset = view.terminal.term.lock().display_offset() as i32;
@@ -243,6 +257,12 @@ fn reading_placeholders_paint_from_captured_rows_after_live_cells_are_erased(cx:
         assert_eq!(image.paint_bounds(geom.origin, geom.cell_width, geom.line_height, 0, offset, 1.), sliver_bounds);
         assert!(painted.load(Ordering::Acquire));
     });
+    view.update(cx, |view, _| view.jump_to_prompt());
+    graphics_assert_production_paint(window, &view, cx);
+    window.update(cx, |_, window, cx| {
+        view.read(cx).terminal.images().release_retired(window, cx);
+    }).unwrap();
+    assert!(frozen.upgrade().is_none(), "returning live must release the retired frozen pixels");
     daemon.panes().kill(pane).unwrap();
     graphics_recovery_destroy(view, window, cx);
 }
