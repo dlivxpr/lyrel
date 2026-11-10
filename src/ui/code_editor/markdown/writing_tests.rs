@@ -284,7 +284,9 @@ pub(super) fn native_rhythm(cx: &mut TestAppContext) {
                 // Keep the structural prefix rendered, as it is during ordinary
                 // body editing; revealing a list/quote marker changes its wrap.
                 let body = at + prefix_len;
-                view.update_in(&mut context, |view, _, cx| view.select_range(body..body, cx));
+                view.update_in(&mut context, |view, _, cx| {
+                    view.select_range(body..body, cx)
+                });
                 settle(&mut context);
                 let (first, next) = view.read_with(&context, |view, _| {
                     let first = view.range_to_bounds(&(at..at)).unwrap();
@@ -313,7 +315,8 @@ pub(super) fn native_rhythm(cx: &mut TestAppContext) {
                         view.read(cx)
                             .range_to_bounds(&(next.0..next.0))
                             .is_some_and(|bounds| {
-                                bounds.top() >= viewport.top() && bounds.bottom() <= viewport.bottom()
+                                bounds.top() >= viewport.top()
+                                    && bounds.bottom() <= viewport.bottom()
                             })
                     })
                 });
