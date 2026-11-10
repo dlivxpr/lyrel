@@ -38,7 +38,7 @@
 | 普通相对/外部链接、hover、caret 附近的源码访问 | 上游行为 + Lyrel Host，#238 | 采用 Zorite 的普通单击打开语义，不保留旧 Ctrl+Click-only。在真实 OpenLink/HoverLink 接线前不启用 `set_host_link_navigation(true)`，不显示无效手形控件。相对路径绑定文档 Host，延迟完成不重定向活动组；失败可见且不丢编辑。 |
 | 图片插入/paste/drop、资源、preview、resize/zoom | 上游保留 + Lyrel Host，#238 | 当前无伪造 bitmap/provider；源码 intact。完成 owning local/SSH Host 读写、唯一资源命名、可见失败、延迟资源隔离、输入/Undo/save/reopen 与 native 预览几何。 |
 | inline/display math 渲染、二维结构编辑 seat/menus/commit/cancel | 指定 MIT 公式 GUI 导入 + Lyrel Host，#241 | #237 不导入公式 GUI。渲染 provider 未配置时允许原文直接编辑，不让 arrow/click 被未接线结构编辑事件吞掉。#241 安装真实 renderer 与结构编辑器，并经同一 Document 修改协议提交。 |
-| Mermaid cache/render/entry/refresh/error/stale-result | Lyrel Host，#242 | 源码可访问；#242 完成真实 native 图、错误/恢复与布局变化，不以 parser 成功或无限 loading 冒充可用。 |
+| Mermaid cache/render/entry/refresh/error/stale-result | Lyrel Host，#242 | `markdown::mermaid_host::install` 在所有 presentation 的共同 configure 入口安装真实 Merman `0.9.2` → `resvg_safe` → Kit `SvgRenderer` provider；caret/selection 进入块即显露原始 fenced source，正常输入与 Undo/Redo 使用同一 Document。loading/失败在块首行显示，正文源码仍可编辑；错误修复触发新 request，不显示假图或无限等待。见下方所有权与消费者边界。 |
 | status/search/outline、tabs/groups、MDX source-only、focus/layout | Lyrel 工作台，#240 | #237 已建立所有权和最小状态/跳转；#240 完成完整导航/search/outline 与多视图布局消费者。MDX 不恢复旧 rich component 系统。 |
 | 编码/BOM、显式换行转换/cleanup、save-as/conflict/failure/close | Lyrel 工作台 + `lyrel-text`，#243 | 混合行尾事务基础属 #237；#243 扩充 supported encodings、失败恢复、真实 local/SSH 和在途第二视图快照。不得再复制 codec 到 GUI crate。 |
 | extreme nowrap 行、完整源文/尾部 caret/input/Undo/save | 上游布局 + Lyrel 安全保护，#237/#244 | 实际 native 宽度超过 65,536 逻辑像素时保留有界视觉折行；不插入源换行、不截断、不更改 wrap 偏好。caret 几何以整数视觉行号乘一次行高，不能逐行累加 `f32` 后再让 native hit-testing 除行高反解。#235 的 not_planned 不是 SDK 修复证据。 |
@@ -60,6 +60,16 @@
 - native 字体目标：`cargo test --locked -p lyrel --features native-markdown-tests --test native_markdown -- --nocapture`。runner 将真实 text system 接入 deterministic test platform，不创建产品 OS 窗口；test settle 须通过 SDK `simulate_next_frame` 执行平台帧回调，pointer move 后再 down/up，不能仅以 `render_frame` 冒充完整输入/帧生命周期。它验证 native 字体几何和生产消费者，不替代实际产品窗口、系统中文 IME 或真实 SSH。
 - Linux：`cargo test --locked --workspace --exclude lyrel --exclude lyrel-markdown-editor --all-features`；`lyrel-text` 可参与，GUI crate 不被选入 headless 范围。
 - Release 输入/导航/scroll/Undo-memory、系统 IME、真实 SSH 与跨平台结果由集成者保存精确 commit、固定 fixtures、执行序列、display 条件、命令、退出码和未验前提。早先实现的历史验收不自动转移到本源码导入。
+
+### #242 Mermaid 原生 Host 与消费者
+
+- `MermaidHost` 属于单个 presentation，由 provider 的实体句柄保活，持有共享 Document 与弱 editor；关闭 presentation 释放订阅和缓存并取消工作。primary/secondary 都经 `markdown::configure` 安装，不借用焦点确定结果目标。
+- renderer 使用正式 registry `merman =0.9.2` 的 `all-diagrams`、`complete-svg`，复用 Lyrel 既有的 native 字体测宽、完整 `SvgPipeline::resvg_safe`、外部资源拒绝和 Usecase CSS 字符引用边界修复，再由 Kit/Fast `SvgRenderer` 光栅化；不导入 GPL Host、不运行 browser/Node/项目脚本。单图最多单边 4096 px、800 万像素；每 presentation 的图像缓存与单批请求均限 64 MiB。限制失败保留源码，简化源码后重新请求。
+- 每个块有独立 owner/request lease，key 捕获 Document entity、创建 revision、精确 source 与实际字体/颜色/字号。`DocumentEvent` 的有序 edits 按各自 snapshot/revision 移动未改块；普通正文编辑不会丢图或重启其在途渲染。整块移除撤销 owner，即使相同文本随后回到同一位置也不是旧 lease。晚到结果必须同时匹配当前文档 revision 的已观察状态、owner、request、source、style；旧请求不能覆盖新版、另一文档或复活删除块。
+- provider 显式返回 `MermaidPresentation::{Loading,Failed,Ready}`；Ready 携带逻辑像素尺寸，不以纹理像素除窗口 DPI 猜测大小。宽度按当前 pane 约束缩小；源文行与布局仍由原 editor 管线统一映射。异步高度变化使用每 view 的原 ScrollHandle，锚定首个可见源行，不以整篇高度差移动另一 view。
+- 新 native registry 为 `mermaid_host::native_edit_refresh_history_save_reopen`、`native_stale_completion`、`native_theme_zoom_scroll_geometry`。分别覆盖真实生产输入、尺寸更新、live/source 同一历史、双 view、invalid-source 恢复和 mapped Host 精确保存重开；真实原生结果在发布前延迟的 stale/source-change/remove/other-document 场景；主题字号、离屏异步尺寸变化、scroll/caret 命中和 Undo/save。延迟 seam 仅在 `native-markdown-tests` 编译，不替换真实渲染结果。
+- 运行入口：`cargo test --locked -p lyrel --features native-markdown-tests --test native_markdown -- mermaid_host`。本票源码交付期间按共同契约不运行 build/test/lint/formatter；上述消费者、固定 Zorite 同文档实窗外观对照、真实 SSH、系统 IME、macOS 与最终产物许可证均由集成验收分别记录，不能从 bitmap 存在或历史 #204 结果推定 parity/通过。
+
 
 ## 最终许可证分发验收（#245）
 

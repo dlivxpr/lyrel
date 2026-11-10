@@ -14,6 +14,7 @@
 - #175／#178：未连接窗口的终端按既有外观提示回答主题查询，无有效提示时沿用浅色默认；附着客户端继续负责自己的查询，重放与显式 handoff 不重复回答历史查询。
 - #175／#179：macOS 新增 Cmd+Shift+W“关闭窗口”快捷键，复用既有未保存文档确认与会话关闭路径；Cmd+W 和 Windows 默认键位不变。
 - #204／#226：Markdown 即时编辑新增边栏拖动重排与键盘落点选择，按原始源码片段移动整块对象、连续引用／提示块和列表项的深层子项；插入线只指示有效目标，Esc、失焦、过期目标与越界释放取消，不写入其他文档。重排复用统一撤销历史与原 Host 保存路径；保留 BOM、既有行尾和对象语法，未终止的末行移到中间时仅补必要分隔换行。本条记录实现范围，原生与集中回归仍待本轮验收。
+- #236／#242：Zorite-derived Markdown 的所有 presentation 接入真正 native Mermaid Host，复用正式 Merman `0.9.2`、安全 SVG 管线与 Kit/Fast renderer；当前 source 编辑、Undo/Redo 与 live/source 共用 Document，提供 loading、可见诊断、错误恢复、主题字号和异步几何/scroll 锚定。派生结果按文档、块 owner、request、revision 与 source/style lease 隔离；移除或修改块不接受旧结果。新增生产工作台 native 消费者及精确 Host 保存重开覆盖；集中检查与固定参考实窗对照由集成验收执行，未在本分票中宣称通过。
 
 ### 修复
 
