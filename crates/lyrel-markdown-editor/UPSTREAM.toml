@@ -1,0 +1,52 @@
+# 此清单记录原始 MIT 源文件；本地修改后的文件不应与这些上游摘要相等。
+repository = "https://github.com/packetThrower/zorite"
+revision = "9f069c73a56b06efc84fb7abb700beb50083c827"
+editor_version = "0.11.3"
+bidi_version = "0.1.1"
+license = "MIT"
+copyright = "Copyright (c) 2026 Will Lehnertz"
+maintainer = "Lyrel"
+syntax_dependency = "zorite-markdown =0.10.1; default-features=false"
+formula_import_owner = "#241"
+
+# 本地适配：GPUI Kit/Fast 类型与命名空间；共享 Document/source/history/revision；
+# 独立 presentation/IME/layout；有序 range-edit 通知；LF 坐标与逐行原始表示；
+# 移除加载时公式规范化；保留超长 nowrap 行有界视觉布局；未配置 Host 控件不伪装可用。
+# prepaint 复用当前行索引；viewport band 变化时按需补帧，避免远跳后的可见正文保持空白。
+# document.rs、presentation.rs 为 Lyrel 原创适配；文件 codec 属于独立 Apache-2.0 lyrel-text。
+# 未导入 Zorite GPL 应用层、notebook 数据库、独立只读 Markdown renderer 或公式 GUI。
+
+[[source]]
+upstream = "crates/zorite-editor/src/lib.rs"
+local = "src/lib.rs"
+sha256 = "d59d0279fe551923aa5b8f34d97089389dd241cd8e9c111a18f905a0b643cd89"
+
+[[source]]
+upstream = "crates/zorite-editor/src/element.rs"
+local = "src/element.rs"
+sha256 = "4ab7ac9f086a72bd402c4ab2c5e920e5257bd4a41937474ee649d697638c0781"
+
+[[source]]
+upstream = "crates/zorite-editor/src/markdown_syntax.rs"
+local = "src/markdown_syntax.rs"
+sha256 = "80321256a7142798837e25d089b31102fd0934d1e93b303e7070881ab52d0379"
+
+[[source]]
+upstream = "crates/zorite-editor/src/tables.rs"
+local = "src/tables.rs"
+sha256 = "c099de534f7ec3bba69b73460368843b279c97e0f6e2ee7ca8f4d54db64c8822"
+
+[[source]]
+upstream = "crates/gpui-bidi/src/lib.rs"
+local = "src/bidi/mod.rs"
+sha256 = "643bfb7b20e21bbc0265d65d949deaba0bbe829cb7333421a4fc282085282ebf"
+
+[[source]]
+upstream = "crates/gpui-bidi/src/paragraph.rs"
+local = "src/bidi/paragraph.rs"
+sha256 = "bae9205267cd389a9d1703c9f1051c4d21009829c090d63822f44b6e3645510d"
+
+[[source]]
+upstream = "crates/gpui-bidi/src/shaped.rs"
+local = "src/bidi/shaped.rs"
+sha256 = "5ec10f93a2724f2f4ddfb9ab15c83379b1540e9ab5897348d6c5ed490665a36e"

@@ -50,6 +50,7 @@ impl Global for BaseBindings {}
 
 pub fn init(cx: &mut App) {
     if cx.try_global::<BaseBindings>().is_none() {
+        lyrel_markdown_editor::bind_keys(cx);
         let base: Vec<KeyBinding> = cx.key_bindings().borrow().bindings().cloned().collect();
         cx.set_global(BaseBindings(base));
     }
@@ -90,15 +91,6 @@ fn fixed_bindings(cx: &App) -> Vec<KeyBinding> {
             cx,
         ));
     }
-    bindings.extend(crate::ui::code_editor::markdown::table_bindings(cx));
-    bindings.extend(crate::ui::code_editor::markdown::inline_format_bindings(cx));
-    bindings.extend(crate::ui::code_editor::markdown::block_bindings(cx));
-    bindings.push(load_binding(
-        "secondary-shift-c",
-        crate::ui::code_editor::markdown::CopyMarkdownOnly,
-        Some("Input && Markdown"),
-        cx,
-    ));
     // The switcher's footer tells you Tab is the way across to the tab column
     // once a query is in the box. gpui-component's Root binds `tab` to its
     // focus walker, actions are dispatched before key listeners, and the panel
@@ -124,7 +116,7 @@ fn fixed_bindings(cx: &App) -> Vec<KeyBinding> {
     {
         use crate::ui::code_editor::commands::{SelectAllOccurrences, SelectNextOccurrence};
         use gpui_kit::base::input::{AddCursorAbove, AddCursorBelow};
-        let input = Some("Input && mode == editor");
+        let input = Some("(Input && mode == editor) || Editor");
         bindings.push(load_binding("secondary-d", SelectNextOccurrence, input, cx));
         bindings.push(load_binding(
             "secondary-shift-l",
@@ -146,7 +138,7 @@ fn fixed_bindings(cx: &App) -> Vec<KeyBinding> {
         bindings.push(load_binding(
             "secondary-k secondary-d",
             crate::ui::code_editor::commands::SkipOccurrence,
-            Some("Input && mode == editor"),
+            Some("(Input && mode == editor) || Editor"),
             cx,
         ));
     }
@@ -180,7 +172,7 @@ fn fixed_bindings(cx: &App) -> Vec<KeyBinding> {
             CopyLineDown, CopyLineUp, DeleteLine, InsertLineAbove, InsertLineBelow, MoveLineDown,
             MoveLineUp, MoveToMatchingBracket, SelectLine, ToggleBlockComment, ToggleLineComment,
         };
-        let editor = Some("Input && mode == editor");
+        let editor = Some("(Input && mode == editor) || Editor");
         bindings.extend([
             load_binding("secondary-/", ToggleLineComment, editor, cx),
             load_binding("alt-shift-a", ToggleBlockComment, editor, cx),

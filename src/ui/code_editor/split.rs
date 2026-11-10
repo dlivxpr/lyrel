@@ -14,8 +14,8 @@
 //! Ordinary code still has one `EditorState`: the focused group draws it and
 //! the other shows the existing click-to-focus placeholder.
 //!
-//! Native Markdown instead retains a `SourcePresentation` for each tab/group
-//! relation. Both sides render together, sharing one `MarkdownDocument` and
+//! Native Markdown retains an independent `lyrel_markdown_editor::EditorState`
+//! for each tab/group relation. Both sides share a single `Document` and
 //! undo history but not caret, selection, focus or scrolling. Neither side
 //! mirrors text into another authoritative editor.
 //!

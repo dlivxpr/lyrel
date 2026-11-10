@@ -1,0 +1,20 @@
+[package]
+name = "lyrel-markdown-editor"
+version.workspace = true
+edition.workspace = true
+license = "MIT"
+publish = false
+description = "Lyrel's independently maintained Zorite-derived native Markdown editor"
+
+[target.'cfg(any(target_os = "macos", target_os = "windows"))'.dependencies]
+gpui-kit.workspace = true
+unicode-segmentation = "1"
+unicode-bidi = { version = "=0.3.18", default-features = false, features = ["hardcoded-data"] }
+zorite-markdown = { version = "=0.10.1", default-features = false }
+lyrel-text = { path = "../lyrel-text" }
+
+[target.'cfg(any(target_os = "macos", target_os = "windows"))'.dev-dependencies]
+gpui-kit = { workspace = true, features = ["test-support"] }
+
+[lints]
+workspace = true

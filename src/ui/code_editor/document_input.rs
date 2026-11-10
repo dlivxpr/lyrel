@@ -1,19 +1,18 @@
-//! Workbench-facing content variant: Markdown never allocates an EditorState.
-use super::markdown::{Command, EditKind, Selection, SourcePresentation};
+//! 工作台编辑 interface：文档文本与 presentation 状态分别读取。
+use super::text::TextSnapshot;
 use super::*;
-use gpui_kit::base::input::Rope;
+use lyrel_markdown_editor::EditorState as MarkdownEditor;
 use std::cell::RefCell;
 
 #[derive(Clone)]
 pub(crate) enum EditorInput {
     Code(Entity<EditorState>),
-    Markdown(Entity<SourcePresentation>),
+    Markdown(Entity<MarkdownEditor>),
 }
-
 #[derive(Clone)]
 pub(crate) enum WeakEditorInput {
     Code(gpui_kit::WeakEntity<EditorState>),
-    Markdown(gpui_kit::WeakEntity<SourcePresentation>),
+    Markdown(gpui_kit::WeakEntity<MarkdownEditor>),
 }
 impl WeakEditorInput {
     pub(crate) fn upgrade(&self) -> Option<EditorInput> {
@@ -23,7 +22,6 @@ impl WeakEditorInput {
         }
     }
 }
-
 impl EditorInput {
     pub(crate) fn downgrade(&self) -> WeakEditorInput {
         match self {
@@ -31,24 +29,16 @@ impl EditorInput {
             Self::Markdown(input) => WeakEditorInput::Markdown(input.downgrade()),
         }
     }
-    pub(crate) fn add_selection(&self, range: std::ops::Range<usize>, cx: &mut gpui_kit::App) {
-        match self {
-            Self::Code(input) => input.update(cx, |state, cx| state.add_selection(range, cx)),
-            Self::Markdown(input) => input.update(cx, |state, cx| state.add_selection(range, cx)),
-        }
-    }
     pub(crate) fn code(&self) -> Option<&Entity<EditorState>> {
-        if let Self::Code(input) = self {
-            Some(input)
-        } else {
-            None
+        match self {
+            Self::Code(input) => Some(input),
+            _ => None,
         }
     }
-    pub(crate) fn markdown(&self) -> Option<&Entity<SourcePresentation>> {
-        if let Self::Markdown(input) = self {
-            Some(input)
-        } else {
-            None
+    pub(crate) fn markdown(&self) -> Option<&Entity<MarkdownEditor>> {
+        match self {
+            Self::Markdown(input) => Some(input),
+            _ => None,
         }
     }
     pub(crate) fn set_soft_wrap(&self, wrap: bool, window: &mut Window, cx: &mut gpui_kit::App) {
@@ -59,33 +49,25 @@ impl EditorInput {
             Self::Markdown(input) => input.update(cx, |state, cx| state.set_soft_wrap(wrap, cx)),
         }
     }
-    pub(crate) fn finish_composition(&self, window: &mut Window, cx: &mut gpui_kit::App) {
-        if let Some(view) = self.markdown() {
-            let document = view.read(cx).document().clone();
-            SourcePresentation::finish_active_composition(&document, window, cx);
+    pub(crate) fn finish_composition(&self, _: &mut Window, cx: &mut gpui_kit::App) {
+        if let Some(input) = self.markdown() {
+            input.update(cx, |state, cx| state.finish_composition(cx));
         }
     }
     pub(crate) fn set_selected_range(&self, range: std::ops::Range<usize>, cx: &mut gpui_kit::App) {
         match self {
             Self::Code(input) => input.update(cx, |state, cx| state.set_selected_range(range, cx)),
-            Self::Markdown(input) => input.update(cx, |state, cx| {
-                state.select_range(range, cx);
-            }),
+            Self::Markdown(input) => input.update(cx, |state, cx| state.select_range(range, cx)),
+        }
+    }
+    pub(crate) fn add_selection(&self, range: std::ops::Range<usize>, cx: &mut gpui_kit::App) {
+        match self {
+            Self::Code(input) => input.update(cx, |state, cx| state.add_selection(range, cx)),
+            Self::Markdown(input) => input.update(cx, |state, cx| state.add_selection(range, cx)),
         }
     }
     pub(crate) fn read<'a>(&'a self, cx: &'a gpui_kit::App) -> InputRead<'a> {
-        match self {
-            Self::Code(input) => InputRead {
-                code: Some(input.read(cx)),
-                source: None,
-                cx,
-            },
-            Self::Markdown(input) => InputRead {
-                code: None,
-                source: Some(input.read(cx)),
-                cx,
-            },
-        }
+        InputRead { input: self, cx }
     }
     pub(crate) fn focus(&self, window: &mut Window, cx: &mut gpui_kit::App) {
         self.read(cx).focus_handle(cx).focus(window, cx);
@@ -100,14 +82,10 @@ impl EditorInput {
             Self::Code(input) => input.update(cx, |state, cx| {
                 state.set_cursor_position(position, window, cx)
             }),
-            Self::Markdown(input) => input.update(cx, |state, cx| {
-                let at = state
-                    .document()
-                    .read(cx)
-                    .source()
-                    .position_to_offset(&position);
-                state.command(Command::Select(Selection::caret(at)), window, cx);
-            }),
+            Self::Markdown(input) => {
+                let at = self.read(cx).text().position_to_offset(&position);
+                input.update(cx, |state, cx| state.select_range(at..at, cx));
+            }
         }
     }
     pub(crate) fn set_scroll_offset(
@@ -132,93 +110,90 @@ impl EditorInput {
         match self {
             Self::Code(input) => {
                 let old = input.read(cx).text();
-                let range16 = old.byte_to_utf16_idx(range.start)..old.byte_to_utf16_idx(range.end);
+                let range = old.byte_to_utf16_idx(range.start)..old.byte_to_utf16_idx(range.end);
                 input.update(cx, |state, cx| {
-                    state.replace_text_in_range(Some(range16), text, window, cx)
+                    state.replace_text_in_range(Some(range), text, window, cx)
                 });
             }
-            Self::Markdown(input) => input.update(cx, |state, cx| {
-                // Explicit workbench/LSP ranges affect only their target, unlike
-                // native typing and clipboard actions with occurrence selections.
-                state.select_range(range.clone(), cx);
-                state.command(
-                    Command::Replace {
-                        range,
-                        text: text.into(),
-                        kind: EditKind::Command,
-                    },
-                    window,
-                    cx,
-                )
-            }),
+            Self::Markdown(input) => {
+                input.update(cx, |state, cx| state.replace_range(range, text, cx))
+            }
         }
     }
     pub(crate) fn set_highlighter(&self, language: &'static str, cx: &mut gpui_kit::App) {
-        // Source Markdown is projected by the feature; only code has a Kit highlighter.
         if let Some(input) = self.code() {
             input.update(cx, |state, cx| state.set_highlighter(language, cx));
         }
     }
 }
 pub(crate) struct InputRead<'a> {
-    code: Option<&'a EditorState>,
-    source: Option<&'a SourcePresentation>,
+    input: &'a EditorInput,
     cx: &'a gpui_kit::App,
 }
 impl InputRead<'_> {
-    pub(crate) fn text(&self) -> &Rope {
-        self.code
-            .map(|s| s.text())
-            .unwrap_or_else(|| self.source.unwrap().document().read(self.cx).source())
+    pub(crate) fn text(&self) -> TextSnapshot {
+        match self.input {
+            EditorInput::Code(input) => TextSnapshot::Code(input.read(self.cx).text().clone()),
+            EditorInput::Markdown(input) => TextSnapshot::Markdown(
+                input
+                    .read(self.cx)
+                    .document()
+                    .read(self.cx)
+                    .snapshot()
+                    .shared_text(),
+            ),
+        }
     }
     pub(crate) fn cursor(&self) -> usize {
-        self.code
-            .map(|s| s.cursor())
-            .unwrap_or_else(|| self.source.unwrap().selection().head())
+        match self.input {
+            EditorInput::Code(input) => input.read(self.cx).cursor(),
+            EditorInput::Markdown(input) => input.read(self.cx).cursor(),
+        }
     }
     pub(crate) fn cursor_position(&self) -> Position {
-        self.text()
-            .offset_to_position(self.cursor().min(self.text().len()))
+        self.text().offset_to_position(self.cursor())
     }
     pub(crate) fn selected_range(&self) -> std::ops::Range<usize> {
-        self.code
-            .map(|s| s.selected_range())
-            .unwrap_or_else(|| self.source.unwrap().selection().range())
+        match self.input {
+            EditorInput::Code(input) => input.read(self.cx).selected_range(),
+            EditorInput::Markdown(input) => input.read(self.cx).selected_range(),
+        }
     }
     pub(crate) fn occurrence_range(&self) -> std::ops::Range<usize> {
-        self.source.map_or_else(
-            || self.selected_range(),
-            SourcePresentation::occurrence_range,
-        )
+        match self.input {
+            EditorInput::Code(_) => self.selected_range(),
+            EditorInput::Markdown(input) => input.read(self.cx).occurrence_range(),
+        }
     }
     pub(crate) fn focus_handle(&self, cx: &gpui_kit::App) -> gpui_kit::FocusHandle {
-        self.code
-            .map(|s| s.focus_handle(cx))
-            .unwrap_or_else(|| self.source.unwrap().focus_handle(cx))
+        match self.input {
+            EditorInput::Code(input) => input.read(self.cx).focus_handle(cx),
+            EditorInput::Markdown(input) => input.read(self.cx).focus_handle(cx),
+        }
     }
     pub(crate) fn scroll_offset(&self) -> gpui_kit::Point<gpui_kit::Pixels> {
-        self.code
-            .map(|s| s.scroll_offset())
-            .unwrap_or_else(|| self.source.unwrap().scroll_offset())
+        match self.input {
+            EditorInput::Code(input) => input.read(self.cx).scroll_offset(),
+            EditorInput::Markdown(input) => input.read(self.cx).scroll_offset(),
+        }
     }
     pub(crate) fn range_to_bounds(
         &self,
         range: &std::ops::Range<usize>,
     ) -> Option<gpui_kit::Bounds<gpui_kit::Pixels>> {
-        self.code
-            .and_then(|s| s.range_to_bounds(range))
-            .or_else(|| self.source.and_then(|s| s.range_to_bounds(range, self.cx)))
+        match self.input {
+            EditorInput::Code(input) => input.read(self.cx).range_to_bounds(range),
+            EditorInput::Markdown(input) => input.read(self.cx).range_to_bounds(range),
+        }
     }
 }
-
-/// Per-presentation storage contains only views, not another document authority.
 #[derive(Default)]
 pub(super) struct MarkdownPresentations(
     RefCell<
         Vec<(
             TabId,
             split::GroupId,
-            Entity<SourcePresentation>,
+            Entity<MarkdownEditor>,
             Option<Entity<super::markdown_search::MarkdownSearch>>,
         )>,
     >,
@@ -226,11 +201,11 @@ pub(super) struct MarkdownPresentations(
 impl MarkdownPresentations {
     pub(super) fn view(
         &self,
-        input: &Entity<SourcePresentation>,
+        input: &Entity<MarkdownEditor>,
         tab: TabId,
         group: split::GroupId,
         cx: &mut gpui_kit::App,
-    ) -> Entity<SourcePresentation> {
+    ) -> Entity<MarkdownEditor> {
         let mut views = self.0.borrow_mut();
         if let Some((_, _, view, _)) = views.iter().find(|(t, g, _, _)| *t == tab && *g == group) {
             return view.clone();
@@ -240,10 +215,18 @@ impl MarkdownPresentations {
         } else {
             let document = input.read(cx).document().clone();
             let wrap = input.read(cx).is_soft_wrap();
-            let indent = input.read(cx).indent();
+            let live = input.read(cx).is_live();
+            let source_only = input.read(cx).is_source_only();
+            let tab_indent = input.read(cx).tab_indent();
             cx.new(|cx| {
-                let mut view = SourcePresentation::new(document, wrap, cx);
-                view.set_indent(indent, cx);
+                let mut view = MarkdownEditor::for_document(document, cx);
+                markdown::configure(&mut view, cx);
+                view.set_tab_indent(tab_indent);
+                view.set_source_only(source_only, cx);
+                if !live {
+                    view.clear_markdown_style(cx);
+                }
+                view.set_soft_wrap(wrap, cx);
                 view
             })
         };
@@ -254,34 +237,34 @@ impl MarkdownPresentations {
         &self,
         tab: TabId,
         group: split::GroupId,
-    ) -> Option<Entity<SourcePresentation>> {
+    ) -> Option<Entity<MarkdownEditor>> {
         self.0
             .borrow()
             .iter()
             .find(|(t, g, _, _)| *t == tab && *g == group)
-            .map(|(_, _, v, _)| v.clone())
+            .map(|(_, _, view, _)| view.clone())
     }
     pub(super) fn search(
         &self,
-        source: &Entity<SourcePresentation>,
+        source: &Entity<MarkdownEditor>,
     ) -> Option<Entity<super::markdown_search::MarkdownSearch>> {
         self.0
             .borrow()
             .iter()
-            .find(|(_, _, view, _)| view.entity_id() == source.entity_id())
+            .find(|(_, _, view, _)| view == source)
             .and_then(|(_, _, _, search)| search.clone())
     }
     pub(super) fn open_search(
         &self,
-        source: &Entity<SourcePresentation>,
+        source: &Entity<MarkdownEditor>,
         window: &mut Window,
         cx: &mut gpui_kit::App,
     ) -> Entity<super::markdown_search::MarkdownSearch> {
         let mut views = self.0.borrow_mut();
         let (_, _, _, search) = views
             .iter_mut()
-            .find(|(_, _, view, _)| view.entity_id() == source.entity_id())
-            .expect("source presentation is registered before receiving commands");
+            .find(|(_, _, view, _)| view == source)
+            .expect("registered presentation");
         search
             .get_or_insert_with(|| {
                 cx.new(|cx| super::markdown_search::MarkdownSearch::new(source, window, cx))
@@ -291,27 +274,20 @@ impl MarkdownPresentations {
     pub(super) fn retain(
         &self,
         mut live: impl FnMut(TabId, split::GroupId) -> bool,
-        window: &mut Window,
+        _: &mut Window,
         cx: &mut gpui_kit::App,
     ) {
         self.0.borrow_mut().retain(|(tab, group, view, _)| {
             let keep = live(*tab, *group);
             if !keep {
-                view.update(cx, |view, cx| {
-                    view.command(Command::FinishComposition, window, cx)
-                });
+                view.update(cx, |view, cx| view.finish_composition(cx));
             }
             keep
         });
     }
-    pub(super) fn set_soft_wrap(&self, wrap: bool, primary: &EditorInput, cx: &mut gpui_kit::App) {
+    pub(super) fn set_soft_wrap(&self, wrap: bool, _: &EditorInput, cx: &mut gpui_kit::App) {
         for (_, _, view, _) in self.0.borrow().iter() {
-            if primary
-                .markdown()
-                .is_none_or(|input| input.entity_id() != view.entity_id())
-            {
-                view.update(cx, |view, cx| view.set_soft_wrap(wrap, cx));
-            }
+            view.update(cx, |view, cx| view.set_soft_wrap(wrap, cx));
         }
     }
 }

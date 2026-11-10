@@ -50,7 +50,7 @@ impl FileHost {
         })
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "native-markdown-tests"))]
     pub(super) fn mapped(id: HostId, root: &Path) -> Arc<Self> {
         let mut host = Self::new(id);
         Arc::get_mut(&mut host).unwrap().root = Some(root.to_path_buf());

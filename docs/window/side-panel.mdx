@@ -130,7 +130,7 @@ GitHub 上的 Markdown 来自陌生人，因此渲染时有两项限制：只加
 <a id="the-editor"></a>
 ## 编辑器
 
-<kbd>⌘ ⇧ E</kbd> 可切换代码面板的显示状态；点击文件选项卡中的文件会在此处打开。普通代码提供语法高亮、行列位置和自动换行；Markdown/MDX 默认使用原生即时编辑，保留完整源码模式。
+<kbd>⌘ ⇧ E</kbd> 切换代码面板；点击文件选项卡打开文档。普通代码提供语法高亮、行列与自动换行；`.md`/`.markdown` 默认进入 Zorite-derived native editor，`.mdx` 是 source-only。
 
 | | |
 |---|---|
@@ -188,7 +188,7 @@ GitHub 上的 Markdown 来自陌生人，因此渲染时有两项限制：只加
 <a id="markdown-editor-design"></a>
 ### Markdown 即时渲染编辑
 
-`.md`、`.markdown` 和 `.mdx` 默认使用原生即时编辑。普通正文直接输入，粗体、斜体、删除线、行内代码标记在普通输入与选区覆盖时保持隐藏，结构语法仍可按构造局部访问；状态栏的**源码**／**即时编辑**按钮切换同一文档和历史，不打开只读预览。原有 `ToggleDocumentPreview` Action 标识保留，便于继续使用自定义快捷键；旧的只读 Markdown 预览设置已移除。本轮实现与验收状态见下方记录，不把源码合入当作实机通过。
+`.md`、`.markdown` 使用独立维护的 Zorite-derived `lyrel-markdown-editor`；`.mdx` 使用 source-only，不恢复旧 rich component/inspector 系统。Markdown 的 live/source 共用 `Document` 原文、逐行表示、revision 与 history，每个 presentation 独立拥有选择、focus、scroll、IME 和几何。`ToggleDocumentPreview` Action 保留；caret-local 标记显露与链接普通单击采用固定上游行为，替代旧“全部标记始终隐藏”及 Ctrl+Click-only 契约。
 
 普通**新建文件**与终端 scrollback 导出继续使用纯文本编辑器。使用命令面板的**新建 Markdown 文档**创建未命名 Markdown；该命令默认没有快捷键，可在设置中绑定。未命名 Markdown 首次保存建议 `.md`，粘贴或拖入图片前先确定保存位置。普通代码的 `EditorState`、保存整理与语言服务不因 Markdown 切换而替换。
 
@@ -196,7 +196,16 @@ GitHub 上的 Markdown 来自陌生人，因此渲染时有两项限制：只加
 
 反向同样适用：已打开的 Markdown 另存为或重命名为其他扩展名后，当前 buffer 继续使用原生文档、编码／逐行行尾表示和撤销历史，外部重载也按当前输入实体解码；释放后重开才按新扩展名选择编辑器。更名不隐式执行全文整理或有损编辑器迁移。
 
-#### 当前支持范围与文本布局保护
+#### #236 当前源码导入契约
+
+参考与来源固定为 Zorite `9f069c73a56b06efc84fb7abb700beb50083c827`，不沿用下方 #204 的旧基线。#237 负责可执行的共享文档/Host 文件生命周期、最小状态与 go-to-line、混合行尾/BOM 保真、desktop/headless wiring 和早期 native/Release 可用性；#238—#244 完成图片/链接、表格/代码、工作台、二维公式、Mermaid、完整格式与视觉体验，#245 才汇总完整默认路径验收。导入 API 或样式不等于这些能力已经接线或验证。
+
+能力责任、planned/delivered 边界、保留的上游行为、排除构造的 source access、原 14 项 native 消费者逐项迁移及许可证分发要求，统一见仓库 `crates/lyrel-markdown-editor/HOST_CAPABILITIES.md`；exact upstream 文件来源与摘要见同目录 `UPSTREAM.toml`。工作台继续拥有 Host/path、save/save-as/conflict/close 和全局状态；GUI-free `lyrel-text` 共享原 Apache-2.0 codec/EditorConfig。未配置的资源/结构编辑 provider 不得伪装成功。
+
+超长 nowrap 行的 source-preserving 有界视觉布局继续保留；full RTL 仍在已批准验收范围之外，但 imported bidi mapping 不删除。下方 #204 的字形、表格、图片、公式、性能与保存证据仅属于原实现，不是本次替换的通过证明；新候选必须记录自己的实际结果。
+
+
+#### 历史 #204 支持范围与文本布局保护
 
 负责人已明确将阿拉伯语、波斯语、希伯来语的完整 RTL 字形、双向混排阅读顺序及其视觉左右语义排除在当前验收目标之外。这是产品范围决定，不表示 SDK 缺陷已修复。对应的 RTL 镜像列顺序、波斯语反向扩选断言已删除；原复合消费者仍执行中文／英文、组合字素、光标选择、表格导航、保存和历史验证，不整项忽略。下文保留的 RTL 原始失败属于历史证据，以本节的当前边界为准。
 
@@ -232,7 +241,7 @@ CI 分别编译、执行普通测试与 native 目标，不延长原有 30 分�
 
 
 
-#### Zorite 体验对齐：核心交付与验收边界
+#### 历史 #204：Zorite 体验对齐与原实现验收边界
 
 本设计已在 `integration/204-markdown-wysiwyg` 集中实现，按负责人批准的 Windows 核心验证与已记录性能取舍交付；完整原生矩阵、严格匹配性能及 SDK 延期项不冒充通过。下文保留历史检查点，并单列最终正式依赖、无探针产品与量测证据。范围与视觉约束见仓库 `docs/design-system.md` 的“分屏与文档栏”。源码与真实软件对照固定为 Zorite `9c09b8cce84e41ca20c403e5b381c448cde468c4`，未跟随上游滚动扩大目标；正式版 `v0.13.0` 与该提交不是同一基线，不能互相冒充。
 

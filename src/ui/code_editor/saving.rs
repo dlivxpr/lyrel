@@ -108,11 +108,6 @@ impl EditorPanelState {
         self.prompt_epoch = self.prompt_epoch.wrapping_add(1);
         self.unsaved_prompt_open = false;
         self.waiters.clear();
-        for file in self.buffers.iter() {
-            if let Some((_, cancelled)) = &file.asset_location {
-                cancelled.set(true);
-            }
-        }
         self.dismiss_bar();
     }
 
@@ -141,7 +136,7 @@ impl EditorPanelState {
         }
         let text = file.input.read(cx).text().to_string();
         if file.input.code().is_some() {
-            if let Some(fixed) = editor_text::apply_save_rules(&text, &file.config) {
+            if let Some(fixed) = lyrel_text::apply_save_rules(&text, &file.config) {
                 let input = file.input.clone();
                 replace_buffer_text(&input, &fixed, window, cx);
             }
@@ -158,7 +153,7 @@ impl EditorPanelState {
         let encoded = if let Some(source) = file.input.markdown() {
             source.read(cx).document().read(cx).encode()
         } else {
-            editor_text::encode(&text, &file.format(cx))
+            lyrel_text::encode(&text, &file.format(cx))
         };
         let bytes = match encoded {
             Ok(bytes) => bytes,
@@ -207,7 +202,6 @@ impl EditorPanelState {
                 }
                 match outcome {
                     SaveOutcome::Saved(mtime) => {
-                        file.asset_save_required = false;
                         file.disk_mtime = mtime;
                         file.saved = written;
                         file.saved_format = format;
@@ -434,14 +428,8 @@ impl EditorPanelState {
             return;
         }
         let file = self.buffers.get_mut(id).unwrap();
-        file.asset_save_required = true;
         file.path = path;
         file.untitled = None;
-        if let Some(view) = file.input.markdown() {
-            view.read(cx).document().clone().update(cx, |document, cx| {
-                document.set_resource_context(file.host.clone(), Some(file.path.clone()), cx);
-            });
-        }
         file.conflict = None;
         let language = file.language();
         file.input.set_highlighter(language, cx);
@@ -723,13 +711,6 @@ impl EditorPanelState {
     }
 
     pub(super) fn saves_failed(&mut self, id: BufferId) {
-        if let Some((_, cancelled)) = self
-            .buffers
-            .get_mut(id)
-            .and_then(|file| file.asset_location.take())
-        {
-            cancelled.set(true);
-        }
         self.waiters.retain(|waiter| !waiter.ids.contains(&id));
     }
 
