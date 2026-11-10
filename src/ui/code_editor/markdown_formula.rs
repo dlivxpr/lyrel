@@ -43,6 +43,7 @@ struct FormulaSession {
     range: Range<usize>,
     original: String,
     body: Range<usize>,
+    body_needs_newline: bool,
     selection: Range<usize>,
     inline: bool,
     align: MathAlign,
@@ -168,19 +169,18 @@ impl FormulaHost {
         }
         if let Some(session) = &self.active {
             let theme = cx.theme();
-            let theme = MathTheme {
-                fg: theme.foreground,
-                muted: theme.muted_foreground,
-                panel: theme.popover,
-                border: theme.border,
-                accent: theme.primary,
-                accent_bg: theme.list_hover,
-            };
+            let mut colors = MathTheme::default();
+            colors.fg = theme.foreground;
+            colors.muted = theme.muted_foreground;
+            colors.panel = theme.popover;
+            colors.border = theme.border;
+            colors.accent = theme.primary;
+            colors.accent_bg = theme.list_hover;
             session.editor.update(cx, |editor, cx| {
                 editor.set_presentation(
                     key.em / if session.inline { 1.5 } else { 1. },
                     key.dpr,
-                    theme,
+                    colors,
                     window,
                     cx,
                 )
@@ -264,12 +264,10 @@ impl FormulaHost {
             return;
         };
         // Capture exact delimiters/whitespace once. Commit replaces the body only, not the fences.
-        let delimiter = if original.starts_with("$$") {
-            "$$"
-        } else {
-            "$"
-        };
-        let Some(inner) = original
+        let delimiter = if inline { "$" } else { "$$" };
+        let trimmed = original.trim();
+        let leading = original.len() - original.trim_start().len();
+        let Some(inner) = trimmed
             .strip_prefix(delimiter)
             .and_then(|s| s.strip_suffix(delimiter))
         else {
@@ -280,12 +278,16 @@ impl FormulaHost {
             report(L10nKey::EditorFormulaChanged, window, cx);
             return;
         }
-        let body = if inner.trim().is_empty() {
-            let at = delimiter.len() + usize::from(inner.starts_with('\n'));
-            at..at
+        let body_start = leading + delimiter.len();
+        let (body, body_needs_newline) = if inner.trim().is_empty() {
+            // An empty fenced body can share its only newline with the opening
+            // fence. Insert after it and keep the closing fence on its own line.
+            let offset = inner.find('\n').map_or(0, |at| at + 1);
+            let at = body_start + offset;
+            (at..at, !inline && inner.contains('\n') && !inner[offset..].contains('\n'))
         } else {
-            let start = delimiter.len() + inner.len() - inner.trim_start().len();
-            start..delimiter.len() + inner.trim_end().len()
+            let start = body_start + inner.len() - inner.trim_start().len();
+            (start..body_start + inner.trim_end().len(), false)
         };
         let row = match lyrel_markdown_editor::math::editor::latex::parse_latex_checked(latex) {
             Ok(row) => row,
@@ -304,16 +306,15 @@ impl FormulaHost {
         };
         let font = f32::from(cx.theme().font_size) * if inline { 1. } else { 1.5 };
         let theme = cx.theme();
-        let theme = MathTheme {
-            fg: theme.foreground,
-            muted: theme.muted_foreground,
-            panel: theme.popover,
-            border: theme.border,
-            accent: theme.primary,
-            accent_bg: theme.list_hover,
-        };
+        let mut colors = MathTheme::default();
+        colors.fg = theme.foreground;
+        colors.muted = theme.muted_foreground;
+        colors.panel = theme.popover;
+        colors.border = theme.border;
+        colors.accent = theme.primary;
+        colors.accent_bg = theme.list_hover;
         self.dismiss(false, window, cx);
-        let editor = cx.new(|cx| MathEditor::from_row(row, font, at_end, align, theme, cx));
+        let editor = cx.new(|cx| MathEditor::from_row(row, font, at_end, align, colors, cx));
         editor.update(cx, |editor, _| {
             editor.set_compact(inline);
             editor.set_action_labels(
@@ -366,6 +367,7 @@ impl FormulaHost {
             range,
             original,
             body,
+            body_needs_newline,
             selection,
             inline,
             align,
@@ -427,12 +429,15 @@ impl FormulaHost {
             report(L10nKey::EditorFormulaRenderFailed, window, cx);
             return false;
         }
-        let latex = editor.to_latex();
+        let mut latex = editor.to_latex();
         if lyrel_markdown_editor::math::editor::latex::parse_latex_checked(&latex).is_err() {
             report(L10nKey::EditorFormulaUnsupported, window, cx);
             return false;
         }
         let changed = editor.is_modified();
+        if changed && session.body_needs_newline {
+            latex.push('\n');
+        }
         let align = editor.align();
         let session = self.active.take().unwrap();
         view.update(cx, |view, cx| {

@@ -126,6 +126,122 @@ fn split_preserves_context_rebases_selection_and_retires_only_old_ime_owner(
 
 #[cfg(test)]
 #[gpui_kit::test]
+fn closing_either_nonowner_preserves_composition_lease_and_history(cx: &mut TestAppContext) {
+    for close_primary in [false, true] {
+        let dir = test_host::canonical_tempdir();
+        let path = dir.path().join("composition-close.md");
+        let original = b"# First\r\nalpha\nbeta\r\n";
+        std::fs::write(&path, original).unwrap();
+        let (app, mut context, _streams) = harness_with_tabs(cx, 1);
+        app.update_in(&mut context, |app, window, cx| {
+            app.open_file_in_editor(&path, window, cx)
+        });
+        until(&mut context, |cx| {
+            app.read_with(cx, |app, _| app.active_buffer().is_some())
+        });
+        let first = view(&app, &context);
+        app.update_in(&mut context, |app, window, cx| {
+            app.toggle_document_preview(window, cx);
+            assert!(app.editor_split(window, cx));
+        });
+        settle(&mut context);
+        let second = view(&app, &context);
+        let (closing, owner) = if close_primary { (&first, &second) } else { (&second, &first) };
+        app.update_in(&mut context, |app, window, cx| {
+            if close_primary {
+                assert!(app.editor_focus_group(true, window, cx));
+            }
+            owner.update(cx, |view, cx| view.select_range(8..8, cx));
+            owner.read(cx).focus_handle(cx).focus(window, cx);
+            owner.update(cx, |view, cx| {
+                view.replace_and_mark_text_in_range(None, "中😀", Some(3..3), window, cx);
+            });
+            // Closing the other strip must preserve this already-focused
+            // input, including the restoration performed by focus_editor.
+            app.editor_close_file(0, window, cx);
+            app.editor_sync(window, cx);
+        });
+        owner.read_with(&context, |view, cx| {
+            assert!(!view.is_live(), "source presentation survives");
+            assert!(view.document().read(cx).has_composition());
+            assert_eq!(view.text(), "# First\n中😀alpha\nbeta\n");
+        });
+        owner.update_in(&mut context, |view, window, cx| {
+            assert_eq!(view.marked_text_range(window, cx), Some(8..11));
+        });
+        closing.update_in(&mut context, |view, window, cx| view.unmark_text(window, cx));
+        owner.update_in(&mut context, |view, window, cx| {
+            view.replace_and_mark_text_in_range(None, "中文😀", Some(4..4), window, cx);
+            view.unmark_text(window, cx);
+        });
+        settle(&mut context);
+        assert!(app.read_with(&context, |app, _| app.active_buffer().unwrap().dirty));
+        context.dispatch_action(gpui_kit::component::input::Undo);
+        settle(&mut context);
+        owner.read_with(&context, |view, cx| {
+            assert_eq!(view.document().read(cx).encode().unwrap(), original);
+        });
+        assert!(!app.read_with(&context, |app, _| app.active_buffer().unwrap().dirty));
+    }
+}
+
+#[cfg(test)]
+#[gpui_kit::test]
+fn representation_conversion_is_separate_from_adjacent_typing_undo(cx: &mut TestAppContext) {
+    let dir = test_host::canonical_tempdir();
+    let path = dir.path().join("format-history.md");
+    std::fs::write(&path, b"body\n").unwrap();
+    let (app, mut context, _streams) = harness_with_tabs(cx, 1);
+    app.update_in(&mut context, |app, window, cx| app.open_file_in_editor(&path, window, cx));
+    until(&mut context, |cx| app.read_with(cx, |app, _| app.active_buffer().is_some()));
+    let editor = view(&app, &context);
+    editor.update_in(&mut context, |view, window, cx| {
+        view.select_range(0..0, cx);
+        view.focus_handle(cx).focus(window, cx);
+    });
+    context.update(|window, cx| window.input("a", cx));
+    app.update_in(&mut context, |app, _, cx| app.toggle_line_ending(cx));
+    context.update(|window, cx| window.input("b", cx));
+    settle(&mut context);
+    for expected in [b"abody\r\n".as_slice(), b"abody\n".as_slice(), b"body\n".as_slice()] {
+        context.dispatch_action(gpui_kit::component::input::Undo);
+        settle(&mut context);
+        editor.read_with(&context, |view, cx| assert_eq!(view.document().read(cx).encode().unwrap(), expected));
+    }
+}
+
+#[cfg(test)]
+#[gpui_kit::test]
+fn noop_trim_preserves_the_previous_edits_undo_selection(cx: &mut TestAppContext) {
+    let dir = test_host::canonical_tempdir();
+    let path = dir.path().join("trim-history.md");
+    std::fs::write(&path, b"first\nsecond\n").unwrap();
+    let (app, mut context, _streams) = harness_with_tabs(cx, 1);
+    app.update_in(&mut context, |app, window, cx| app.open_file_in_editor(&path, window, cx));
+    until(&mut context, |cx| app.read_with(cx, |app, _| app.active_buffer().is_some()));
+    let editor = view(&app, &context);
+    editor.update_in(&mut context, |view, window, cx| {
+        view.select_range(0..5, cx);
+        view.focus_handle(cx).focus(window, cx);
+    });
+    context.update(|window, cx| window.input("typed", cx));
+    editor.update_in(&mut context, |view, _, cx| {
+        let end = view.text().len();
+        view.select_range(end..end, cx);
+    });
+    context.dispatch_action(crate::core::actions::EditorTrimTrailingWhitespace);
+    settle(&mut context);
+    context.dispatch_action(gpui_kit::component::input::Undo);
+    settle(&mut context);
+    editor.read_with(&context, |view, cx| {
+        assert_eq!(view.document().read(cx).encode().unwrap(), b"first\nsecond\n");
+        assert_eq!(view.selected_range(), 0..5);
+    });
+}
+
+
+#[cfg(test)]
+#[gpui_kit::test]
 fn secondary_pending_save_survives_tab_focus_close_and_reopen(cx: &mut TestAppContext) {
     use std::sync::atomic::Ordering;
     let dir = test_host::canonical_tempdir();

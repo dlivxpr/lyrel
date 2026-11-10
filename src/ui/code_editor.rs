@@ -1747,13 +1747,22 @@ impl LyrelApp {
         let Some(id) = self.tab_code().and_then(|c| c.files.get(pos).copied()) else {
             return;
         };
+        let shared = self.buffer_refs(id) > 1;
         if let Some(file) = self.editor.buffers.get(id) {
-            file.input.finish_composition(window, cx);
+            if shared {
+                let tab = self.tabs.active().unwrap().id();
+                let group = self.tab_code().unwrap().focused_group();
+                if let Some(view) = file.presentations.existing(tab, group) {
+                    view.update(cx, |view, cx| view.finish_owned_composition(cx));
+                }
+            } else {
+                file.input.finish_composition(window, cx);
+            }
         }
         let Some(f) = self.editor.buffers.get(id) else {
             return;
         };
-        if !f.dirty || self.buffer_refs(id) > 1 {
+        if !f.dirty || shared {
             self.editor_remove_from_tab(tab_ix, id, cx);
             self.focus_editor(window, cx);
             return;

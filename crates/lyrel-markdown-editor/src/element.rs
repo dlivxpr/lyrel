@@ -338,6 +338,7 @@ impl Element for EditorElement {
         cx: &mut App,
     ) -> PrepaintState {
         let editor = self.editor.read(cx);
+        let starts = editor.line_starts();
         // Reveal-on-caret (markers, raw-on-caret widgets, per-construct reveal)
         // applies only while the editor is focused. An unfocused editor — always
         // shown in WYSIWYG mode but not being edited — renders fully, like a
@@ -629,7 +630,6 @@ impl Element for EditorElement {
             .as_ref()
             .filter(|_| !editor.content.is_empty())
         {
-            let starts = editor.line_starts();
             let chip_fs = px(13.);
             let chip_h = px(20.);
             let shape = |window: &mut Window, text: &SharedString, color: Hsla| {
@@ -730,7 +730,6 @@ impl Element for EditorElement {
         let mut heading_fold_grips = Vec::new();
         let mut heading_row_rects = Vec::new();
         if editor.markdown_style.is_some() && !editor.content.is_empty() {
-            let starts = editor.line_starts();
             for (i, line_shaped) in wrapped.iter().enumerate() {
                 // A fence's `# comment` line isn't a heading; folded rows
                 // (height 0, inside an outer fold) can't anchor a chevron.
@@ -782,7 +781,6 @@ impl Element for EditorElement {
         let mut link_rects: Vec<(Bounds<Pixels>, zorite_markdown::syntax::LinkHit)> = Vec::new();
         let mut inline_image_grips = Vec::new();
         if editor.markdown_style.is_some() && !editor.content.is_empty() {
-            let starts = editor.line_starts();
             for (i, line_shaped) in wrapped.iter().enumerate() {
                 if widgets.get(i).and_then(Option::as_ref).is_some()
                     || backgrounds.get(i).and_then(Option::as_ref).is_some()
@@ -1161,9 +1159,8 @@ impl Element for EditorElement {
         // highlights (which paint the same shapes in other colors).
         let range_quads =
             |s: usize, e: usize, color: Hsla, window: &mut Window| -> Vec<PaintQuad> {
-                let starts = editor.line_starts();
-                let (s_row, _) = editor.row_col(s);
-                let (e_row, _) = editor.row_col(e);
+                let s_row = starts.partition_point(|&start| start <= s).saturating_sub(1);
+                let e_row = starts.partition_point(|&start| start <= e).saturating_sub(1);
                 let right = bounds.size.width;
                 let mut sels = Vec::new();
                 for row in s_row..=e_row {

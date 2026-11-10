@@ -129,6 +129,40 @@ fn zorite_writing_workbench_lists_format_insert_shared_history(cx: &mut TestAppC
     continuous_writing(cx);
 }
 
+#[cfg(test)]
+#[gpui_kit::test]
+fn insertion_cancel_restores_trigger_without_stealing_transferred_focus(cx: &mut TestAppContext) {
+    let (_directory, _path, app, mut context, first, _streams) = open(cx, "body\n");
+    context.dispatch_action(lyrel_markdown_editor::InsertWritingBlock);
+    settle(&mut context);
+    context.update(|window, cx| window.press("escape", cx));
+    settle(&mut context);
+    context.update(|window, cx| {
+        assert!(first.read(cx).focus_handle(cx).is_focused(window));
+        window.input("returned", cx);
+    });
+    assert!(first.read_with(&context, |view, _| view.text().contains("returned")));
+    app.update_in(&mut context, |app, window, cx| {
+        assert!(app.editor_split(window, cx));
+    });
+    settle(&mut context);
+    let second = app.read_with(&context, |app, _| {
+        app.active_editor_input().unwrap().markdown().unwrap().clone()
+    });
+    context.dispatch_action(lyrel_markdown_editor::InsertWritingBlock);
+    settle(&mut context);
+    context.update(|window, cx| {
+        let menu_focus = window.focused(cx).unwrap();
+        first.read(cx).focus_handle(cx).focus(window, cx);
+        menu_focus.dispatch_action(&gpui_kit::base::actions::Cancel, window, cx);
+    });
+    settle(&mut context);
+    context.update(|window, cx| {
+        assert!(first.read(cx).focus_handle(cx).is_focused(window));
+        assert!(!second.read(cx).focus_handle(cx).is_focused(window));
+    });
+}
+
 #[cfg(feature = "native-markdown-tests")]
 pub(super) fn native_colors(cx: &mut TestAppContext) {
     let original = "# Colors\r\n\r\ncolored text\r\n";
@@ -298,10 +332,52 @@ pub(super) fn native_rhythm(cx: &mut TestAppContext) {
 }
 
 #[cfg(feature = "native-markdown-tests")]
+pub(super) fn context_menu_follows_language_in_existing_views(cx: &mut TestAppContext) {
+    use crate::core::config::Config;
+    let (_directory, _path, app, mut context, first, _streams) = open(cx, "body text\n");
+    app.update_in(&mut context, |app, window, cx| assert!(app.editor_split(window, cx)));
+    settle(&mut context);
+    let second = app.read_with(&context, |app, _| app.active_editor_input().unwrap().markdown().unwrap().clone());
+    for (locale, cut, copy, paste) in [("zh-CN", "剪切", "复制", "粘贴"), ("en", "Cut", "Copy", "Paste")] {
+        context.update(|_, cx| {
+            crate::ui::i18n::set_locale(locale);
+            let mut config = cx.global::<Config>().clone();
+            config.gui_language = locale.into();
+            cx.set_global(config);
+        });
+        settle(&mut context);
+        for view in [&first, &second] {
+            view.update_in(&mut context, |view, window, cx| {
+                view.select_range(0..4, cx);
+                view.focus_handle(cx).focus(window, cx);
+            });
+            settle(&mut context);
+            let target = view.read_with(&context, |view, _| view.range_to_bounds(&(1..1)).unwrap().center());
+            context.update(|window, cx| {
+                window.pointer_move(target, None, cx);
+                window.pointer_down(target, gpui_kit::MouseButton::Right, cx);
+                window.pointer_up(target, gpui_kit::MouseButton::Right, cx);
+            });
+            settle(&mut context);
+            context.update(|window, _| {
+                assert_eq!(window.find("menu-cut").label(), Some(cut));
+                assert_eq!(window.find("menu-copy").label(), Some(copy));
+                assert_eq!(window.find("menu-paste").label(), Some(paste));
+            });
+            context.update(|window, cx| window.press("escape", cx));
+            settle(&mut context);
+        }
+    }
+    assert!(!app.read_with(&context, |app, _| app.active_buffer().unwrap().dirty));
+}
+
+
+#[cfg(feature = "native-markdown-tests")]
 pub(super) fn native_cases() -> impl Iterator<Item = crate::native_markdown::Case> {
     [
         crate::native_markdown::Case::new("ui::code_editor::markdown::writing::continuous_writing", continuous_writing),
         crate::native_markdown::Case::new("ui::code_editor::markdown::writing::native_text_color_picker_clear_geometry_and_shared_history", native_colors),
         crate::native_markdown::Case::new("ui::code_editor::markdown::writing::native_wrapped_starts_prose_heading_list_quote_zoom", native_rhythm),
+        crate::native_markdown::Case::new("ui::code_editor::markdown::writing::native_existing_views_bilingual_context_menu", context_menu_follows_language_in_existing_views),
     ].into_iter()
 }

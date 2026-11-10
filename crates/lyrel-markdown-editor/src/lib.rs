@@ -312,9 +312,15 @@ enum EditKind {
 /// span, via the provider set with [`EditorState::on_suggest`] — so detection
 /// can stay cheap and run on every edit.
 #[derive(Clone)]
+#[non_exhaustive]
 pub struct Diagnostic {
     /// Byte range in the document.
     pub range: Range<usize>,
+}
+impl Diagnostic {
+    pub fn new(range: Range<usize>) -> Self {
+        Self { range }
+    }
 }
 
 /// An open right-click suggestions menu for a diagnostic.
@@ -677,6 +683,7 @@ pub fn inline_math_sources(content: &str) -> Vec<SharedString> {
 /// [`EditorState::set_labels`]. The default is English, keeping the crate
 /// usable standalone (and existing tests' expectations intact).
 #[derive(Clone)]
+#[non_exhaustive]
 pub struct Labels {
     /// Text-selection right-click menu.
     pub cut: SharedString,
@@ -5823,6 +5830,8 @@ impl Render for EditorState {
                 let clip_item = |id: &'static str, label: SharedString| {
                     div()
                         .id(id)
+                        .accessibility_label(label.clone())
+                        .test_support()
                         .flex_shrink_0()
                         .px(px(10.))
                         .py(px(3.))

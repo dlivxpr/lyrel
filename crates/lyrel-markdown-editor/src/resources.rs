@@ -4,6 +4,31 @@ pub use zorite_markdown::syntax::LinkHit;
 
 // Insert a local image through the owning workbench Host.
 actions!(lyrel_markdown_resources, [InsertImage]);
+impl SourceSnapshot {
+    /// Image sources in this exact document revision, using the renderer's grammar.
+    /// Fenced and inline code are not resource requests; duplicates share one load.
+    pub fn image_sources(&self) -> Vec<String> {
+        let mut sources = Vec::new();
+        let mut fenced = false;
+        for line in self.text().lines() {
+            let inside_fence = fenced;
+            if line.trim_start().starts_with("```") {
+                fenced = !fenced;
+            }
+            if inside_fence {
+                continue;
+            }
+            for (_, range) in markdown_syntax::inline_image_spans(line) {
+                let source = &line[range];
+                if !sources.iter().any(|existing| existing == source) {
+                    sources.push(source.to_owned());
+                }
+            }
+        }
+        sources
+    }
+}
+
 
 impl EditorState {
     /// A Host bitmap changed without changing source/history/revision.
@@ -11,24 +36,6 @@ impl EditorState {
         self.invalidate_geometry();
         self.shape_caches.line_heights.borrow_mut().clear();
         cx.notify();
-    }
-    /// Image references using the same grammar as the native image renderer.
-    /// Fenced code is not a resource request. Duplicate sources share a load.
-    pub fn image_sources(&self) -> Vec<String> {
-        let scan = self.scan_data();
-        let mut sources = Vec::new();
-        for (row, line) in self.content.lines().enumerate() {
-            if scan.fence_odd.get(row).copied().unwrap_or(false) {
-                continue;
-            }
-            for (_, range) in markdown_syntax::inline_image_spans(line) {
-                let src = &line[range];
-                if !sources.iter().any(|s| s == src) {
-                    sources.push(src.to_owned());
-                }
-            }
-        }
-        sources
     }
 
     /// Current painted bounds of a block image, for Host previews and native hit-testing.
