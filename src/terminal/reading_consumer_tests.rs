@@ -200,7 +200,9 @@ fn reading_placeholders_paint_from_captured_rows_after_live_cells_are_erased(cx:
         (image.painted.clone(), image.paint_bounds(geom.origin, geom.cell_width, geom.line_height, 0, offset, 1.))
     });
     painted.store(false, Ordering::Release);
-    graphics_send_fixture(&view, cx, 42, b"\x1b[8;1H\x1b[2KERASED\x1b[24;1H\r\nADVANCED\r\n");
+    let mut advance = b"\x1b[8;1H\x1b[2KERASED\x1b[24;1H".to_vec();
+    advance.extend_from_slice(&b"\r\nADVANCED".repeat(12));
+    graphics_send_fixture(&view, cx, 42, &advance);
     graphics_assert_production_paint(window, &view, cx);
     assert_eq!(reading_painted_rows(&view, cx), before);
     view.read_with(cx, |view, _| {
@@ -212,6 +214,34 @@ fn reading_placeholders_paint_from_captured_rows_after_live_cells_are_erased(cx:
         let geom = view.cell_geom.unwrap();
         let offset = view.terminal.term.lock().display_offset() as i32;
         assert_eq!(image.paint_bounds(geom.origin, geom.cell_width, geom.line_height, 0, offset, 1.), bounds);
+    });
+    // The captured eighth screen row is now above live history. Move it into
+    // the preceding half-row sliver, whose live cells no longer contain an image.
+    view.update(cx, |view, cx| { view.smooth_scroll(-8.5, cx); });
+    painted.store(false, Ordering::Release);
+    graphics_assert_production_paint(window, &view, cx);
+    let sliver_bounds = view.read_with(cx, |view, _| {
+        let image = view.grid_snap.as_ref().unwrap().images.iter()
+            .find(|image| image.placement.image_id == 8)
+            .expect("captured placeholder must also enter the fractional sliver display list");
+        let geom = view.cell_geom.unwrap();
+        let offset = view.terminal.term.lock().display_offset() as i32;
+        let bounds = image.paint_bounds(geom.origin, geom.cell_width, geom.line_height, 0, offset, 1.);
+        assert_eq!(bounds.0.origin.y, geom.origin.y - geom.line_height);
+        assert!(painted.load(Ordering::Acquire), "the visible half-row must actually paint");
+        bounds
+    });
+    painted.store(false, Ordering::Release);
+    graphics_send_fixture(&view, cx, 43, b"\x1b[H\x1b[2J\x1b[24;1H\r\nNEW-LIVE\r\n");
+    graphics_assert_production_paint(window, &view, cx);
+    view.read_with(cx, |view, _| {
+        let image = view.grid_snap.as_ref().unwrap().images.iter()
+            .find(|image| image.placement.image_id == 8)
+            .expect("live redraw must preserve the frozen placeholder sliver");
+        let geom = view.cell_geom.unwrap();
+        let offset = view.terminal.term.lock().display_offset() as i32;
+        assert_eq!(image.paint_bounds(geom.origin, geom.cell_width, geom.line_height, 0, offset, 1.), sliver_bounds);
+        assert!(painted.load(Ordering::Acquire));
     });
     daemon.panes().kill(pane).unwrap();
     graphics_recovery_destroy(view, window, cx);

@@ -40,7 +40,7 @@ description: "指针、滚轮和 ^G 各有何行为——以及如何分别调�
 
 `reading_consumer_tests.rs` 增加受控真实 PTY → 隔离 daemon → `RemoteTerminal` → 生产 `TerminalView` 的文本回归，以及标准 GPUI Button 的位置、Tab／Enter、点击、双语、窄窗格与界面缩放测试代码。本工单实施阶段按集成约定未执行构建、测试或格式化；集成人应运行以下命令并保留原始结果，不能把已添加测试写成已通过：
 
-集成首轮 `reading_` 记录为 `3 passed / 1 failed`：滚动条在实时边缘冻结的旧历史范围阻止了阅读态建立。修复后增加离开实时画面的断言、历史增长后的滚动条目标回归，以及活动 placeholder cells 被擦除后的生产图片绘制回归；本修复子任务按约定未执行测试、构建或格式化，不能把新增断言计为通过。
+集成首轮 `reading_` 记录为 `3 passed / 1 failed`：滚动条在实时边缘冻结的旧历史范围阻止了阅读态建立。修复后增加离开实时画面的断言、历史增长后的滚动条目标回归，以及活动 placeholder cells 被擦除后完整行与上一行半行切片的生产图片绘制回归；本修复子任务按约定未执行测试、构建或格式化，不能把新增断言计为通过。
 
 ```powershell
 cargo test --locked -p lyrel --lib terminal::view::gpui_tests::reading_ -- --nocapture --test-threads=1
