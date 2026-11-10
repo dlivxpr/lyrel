@@ -286,15 +286,24 @@ pub(crate) fn prepare<H: Host + ?Sized>(
             "session persistence is disabled",
         ));
     }
-    // Resolve an unspecified shell on the executing Host, never on the client.
-    let mut resolved;
-    let request = if request.scope.shell_program.is_none() {
-        resolved = request.clone();
+    // Resolve and apply defaults on the executing Host. Literal selectors and
+    // captured scope stay authoritative; credentials never enter this map.
+    let mut resolved = request.clone();
+    if resolved.scope.shell_program.is_none() {
         resolved.scope.shell_program = Some(default_shell_program(host)?);
-        &resolved
+    }
+    let bound_launch = resolved.scope.opencode.as_ref()
+        .filter(|_| resolved.agent == CLIAgent::OpenCode)
+        .map(|context| context.launch_argv.as_slice())
+        .filter(|argv| !argv.is_empty());
+    if let Some(argv) = bound_launch {
+        scope_environment_prefix(argv, &mut resolved.scope.environment)?;
     } else {
-        request
-    };
+        let prefix = scope_environment_prefix(&resolved.launch_argv, &mut resolved.scope.environment)?;
+        resolved.launch_argv.drain(..prefix);
+    }
+    compatibility_environment(resolved.agent, &mut resolved.scope.environment);
+    let request = &resolved;
     match request.agent {
         CLIAgent::OhMyPi => omp(request),
         CLIAgent::Pi => pi::prepare(host, request),
@@ -307,18 +316,17 @@ pub(crate) fn prepare<H: Host + ?Sized>(
 // One source for replay, Host discovery and the generated Pi/OMP bridges.
 // The macro only concatenates static slices; no runtime registry or allocation.
 macro_rules! scope_environment_keys {
-    (common: [$($common:literal),* $(,)?], pi: [$($pi:literal),* $(,)?], omp: [$($omp:literal),* $(,)?], other: [$($other:literal),* $(,)?]) => {
-        pub(crate) const PI_SCOPE_ENV: &[&str] = &[$($common,)* $($pi,)*];
-        pub(crate) const OMP_SCOPE_ENV: &[&str] = &[$($common,)* $($omp,)*];
-        pub(crate) const SCOPE_ENV: &[&str] = &[$($common,)* $($pi,)* $($omp,)* $($other,)*];
+    (terminal: [$($terminal:literal),* $(,)?], common: [$($common:literal),* $(,)?], pi: [$($pi:literal),* $(,)?], omp: [$($omp:literal),* $(,)?], other: [$($other:literal),* $(,)?]) => {
+        pub(crate) const TERMINAL_SCOPE_ENV: &[&str] = &[$($terminal,)*];
+        pub(crate) const PI_SCOPE_ENV: &[&str] = &[$($common,)* $($terminal,)* $($pi,)*];
+        pub(crate) const OMP_SCOPE_ENV: &[&str] = &[$($common,)* $($terminal,)* $($omp,)*];
+        pub(crate) const SCOPE_ENV: &[&str] = &[$($common,)* $($terminal,)* $($pi,)* $($omp,)* $($other,)*];
     };
 }
 
 scope_environment_keys! {
-    common: [
-        "HOME", "USERPROFILE", "PI_CODING_AGENT_DIR",
-        "TERM_PROGRAM", "TERM_PROGRAM_VERSION", "LC_TERMINAL", "LC_TERMINAL_VERSION",
-    ],
+    terminal: ["TERM_PROGRAM", "TERM_PROGRAM_VERSION", "LC_TERMINAL", "LC_TERMINAL_VERSION", "KITTY_WINDOW_ID"],
+    common: ["HOME", "USERPROFILE", "PI_CODING_AGENT_DIR"],
     pi: ["PI_CODING_AGENT_SESSION_DIR", "PI_IMAGE_PROTOCOL"],
     omp: [
         "OMP_PROFILE", "PI_PROFILE", "PI_CONFIG_DIR", "PI_CONFIG_FILES",
@@ -685,6 +693,20 @@ fn scope_environment_prefix(
     Ok(prefix)
 }
 
+fn compatibility_environment(agent: CLIAgent, environment: &mut BTreeMap<String, String>) {
+    for (key, value) in [
+        ("TERM_PROGRAM", "kitty"),
+        ("TERM_PROGRAM_VERSION", ""),
+        ("LC_TERMINAL", "lyrel"),
+        ("LC_TERMINAL_VERSION", env!("CARGO_PKG_VERSION")),
+    ] {
+        environment.entry(key.into()).or_insert_with(|| value.into());
+    }
+    if agent == CLIAgent::OhMyPi {
+        environment.entry("PI_NO_DECCARA".into()).or_insert_with(|| "1".into());
+    }
+}
+
 /// Add only command-local terminal defaults where the launch UI knows the agent.
 /// Keep the command portable until the target Host chooses its actual shell;
 /// connecting panes retain this same literal prefix rather than losing intent.
@@ -692,11 +714,6 @@ fn scope_environment_prefix(
 /// inherited version regardless; an explicit version and public policies win.
 pub fn agent_compatibility_command(agent: CLIAgent, line: &str) -> String {
     let argv = crate::core::cli_agent::parse_command_argv(line).ok();
-    let explicit_identity = argv.as_ref().is_some_and(|argv| {
-        argv.iter()
-            .take_while(|arg| arg.contains('='))
-            .any(|arg| arg.starts_with("TERM_PROGRAM="))
-    });
     // The literal argv parser accepts PowerShell's leading call operator only
     // before the executable/prefix. It is reintroduced by the target encoder,
     // not buried behind the newly added environment assignments.
@@ -708,20 +725,29 @@ pub fn agent_compatibility_command(agent: CLIAgent, line: &str) -> String {
     } else {
         line
     };
-    let identity = if explicit_identity {
-        ""
-    } else {
-        "TERM_PROGRAM=kitty "
-    };
-    let omp = if agent == CLIAgent::OhMyPi {
-        "PI_NO_DECCARA=1 "
-    } else {
-        ""
-    };
-    format!(
-        "{identity}TERM_PROGRAM_VERSION='' LC_TERMINAL=lyrel LC_TERMINAL_VERSION={} {omp}{line}",
-        env!("CARGO_PKG_VERSION")
-    )
+    let mut command = String::with_capacity(line.len() + 160);
+    for (key, value, enabled) in [
+        ("TERM_PROGRAM", "kitty", true),
+        ("TERM_PROGRAM_VERSION", "''", true),
+        ("LC_TERMINAL", "lyrel", true),
+        ("LC_TERMINAL_VERSION", env!("CARGO_PKG_VERSION"), true),
+        ("PI_NO_DECCARA", "1", agent == CLIAgent::OhMyPi),
+        // Hermes' presence marker is resolved in the target shell, not here:
+        // an inherited explicit value (including empty) must stay authoritative.
+    ] {
+        if !enabled || argv.as_ref().is_some_and(|argv| {
+            argv.iter().take_while(|arg| arg.contains('='))
+                .any(|arg| arg.split_once('=').is_some_and(|(explicit, _)| explicit == key))
+        }) {
+            continue;
+        }
+        command.push_str(key);
+        command.push('=');
+        command.push_str(value);
+        command.push(' ');
+    }
+    command.push_str(line);
+    command
 }
 
 /// Render literal public environment prefixes for the pane's actual shell.
@@ -731,8 +757,12 @@ pub fn scoped_launch_command<H: Host + ?Sized>(
     line: &str,
     shell: Option<&str>,
 ) -> Result<String, SessionOperationError> {
-    let Ok(mut argv) = crate::core::cli_agent::parse_command_argv(line) else {
-        return Ok(line.into());
+    let mut argv = match crate::core::cli_agent::parse_command_argv(line) {
+        Ok(argv) => argv,
+        Err(error) if line.trim_start().split_once('=').is_some_and(|(key, _)| SCOPE_ENV.contains(&key)) => {
+            return Err(failure(SessionErrorKind::Unsupported, format!("agent_launch: {error}")));
+        }
+        Err(_) => return Ok(line.into()),
     };
     if !argv.first().is_some_and(|arg| {
         arg.split_once('=')
@@ -758,11 +788,67 @@ pub fn scoped_launch_command<H: Host + ?Sized>(
     command_line(&argv, &scope)
 }
 
+/// Prepare a known agent without interpreting the contents of its wrapper.
+pub fn scoped_agent_launch_command<H: Host + ?Sized>(
+    host: &H,
+    agent: CLIAgent,
+    line: &str,
+    shell: Option<&str>,
+) -> Result<String, SessionOperationError> {
+    let mut argv = crate::core::cli_agent::parse_command_argv(line)
+        .map_err(|error| failure(SessionErrorKind::Unsupported, format!("agent_launch: {error}")))?;
+    let mut scope = SessionScope {
+        shell_program: Some(match shell {
+            Some(shell) => shell.to_owned(),
+            None => default_shell_program(host)?,
+        }),
+        ..Default::default()
+    };
+    let prefix = scope_environment_prefix(&argv, &mut scope.environment)?;
+    argv.drain(..prefix);
+    if argv.is_empty() {
+        return Err(failure(SessionErrorKind::Command, "launch environment has no executable"));
+    }
+    compatibility_environment(agent, &mut scope.environment);
+    agent_command_line(&argv, &scope, agent)
+}
+
+fn agent_command_line(
+    argv: &[String],
+    scope: &SessionScope,
+    agent: CLIAgent,
+) -> Result<String, SessionOperationError> {
+    encode_command_line(argv, scope, agent == CLIAgent::Hermes && !scope.environment.contains_key("KITTY_WINDOW_ID"))
+}
+
 pub(crate) fn command_line(
     argv: &[String],
     scope: &SessionScope,
 ) -> Result<String, SessionOperationError> {
+    encode_command_line(argv, scope, false)
+}
+
+fn encode_command_line(
+    argv: &[String],
+    scope: &SessionScope,
+    default_kitty_marker: bool,
+) -> Result<String, SessionOperationError> {
     let shell = scope.shell_program.as_deref();
+    if shell.is_some_and(|shell| {
+        shell.rsplit(['/', '\\']).next().unwrap_or(shell).trim_end_matches(".exe").eq_ignore_ascii_case("nu")
+    }) {
+        let quote = crate::daemon::shell_integration::nu_string_literal;
+        let command = format!("^{}", argv.iter().map(|arg| quote(arg)).collect::<Vec<_>>().join(" "));
+        let mut environment = scope.environment.iter()
+            .map(|(key, value)| format!("{key}: {}", quote(value)))
+            .collect::<Vec<_>>().join(", ");
+        if default_kitty_marker {
+            environment.push_str(", KITTY_WINDOW_ID: (if 'KITTY_WINDOW_ID' in $env { $env.KITTY_WINDOW_ID } else { 'lyrel' })");
+        }
+        return Ok(if environment.is_empty() { command } else {
+            format!("with-env {{{environment}}} {{ {command} }}")
+        });
+    }
     let quoting = quoting_for(shell);
     if quoting == Quoting::Cmd
         && argv
@@ -784,26 +870,37 @@ pub(crate) fn command_line(
     if quoting == Quoting::PowerShell {
         command = format!("& {command}");
     }
-    if quoting == Quoting::PowerShell && !scope.environment.is_empty() {
+    if quoting == Quoting::PowerShell && (!scope.environment.is_empty() || default_kitty_marker) {
         let mut save = String::new();
+        let mut apply = String::new();
         let mut restore = String::new();
         for key in scope.environment.keys() {
             save.push_str(&format!(
-                "$__lyrelEnv['{key}']=[Environment]::GetEnvironmentVariable('{key}','Process'); "
+                "$__lyrelEnv['{key}']=[Environment]::GetEnvironmentVariables('Process')['{key}']; "
             ));
             restore.push_str(&format!(
-                "[Environment]::SetEnvironmentVariable('{key}',$__lyrelEnv['{key}'],'Process'); "
+                "__LyrelScopeSet '{key}' $__lyrelEnv['{key}']; "
             ));
         }
         for (key, value) in &scope.environment {
-            save.push_str(&format!(
-                "[Environment]::SetEnvironmentVariable('{key}','{}','Process'); ",
-                value.replace('\'', "''")
-            ));
+            if value.is_empty() {
+                apply.push_str(&format!("__LyrelScopeSet '{key}' ''; "));
+            } else {
+                apply.push_str(&format!(
+                    "[Environment]::SetEnvironmentVariable('{key}','{}','Process'); ",
+                    value.replace('\'', "''")
+                ));
+            }
+        }
+        if default_kitty_marker {
+            save.push_str("$__lyrelEnv['KITTY_WINDOW_ID']=[Environment]::GetEnvironmentVariables('Process')['KITTY_WINDOW_ID']; ");
+            apply.push_str("if (-not [Environment]::GetEnvironmentVariables('Process').Contains('KITTY_WINDOW_ID')) { __LyrelScopeSet 'KITTY_WINDOW_ID' 'lyrel'; } ");
+            restore.push_str("__LyrelScopeSet 'KITTY_WINDOW_ID' $__lyrelEnv['KITTY_WINDOW_ID']; ");
         }
         // Scriptblock-local bookkeeping, with restoration even on launch failure.
+        let setter = include_str!("../daemon/shell_integration/environment.ps1");
         return Ok(format!(
-            "& {{ $__lyrelEnv=@{{}}; {save}try {{ {command} }} finally {{ {restore} }} }}"
+            "& {{ {setter}$__lyrelEnv=@{{}}; {save}try {{ {apply}{command} }} finally {{ {restore} }} }}"
         ));
     }
     for (key, value) in &scope.environment {
@@ -811,6 +908,16 @@ pub(crate) fn command_line(
             Quoting::Cmd => format!("set \"{key}={value}\" && {command}"),
             Quoting::Posix => format!("{key}={} {command}", quote(value)),
             Quoting::PowerShell => unreachable!(),
+        };
+    }
+    if default_kitty_marker {
+        let base = shell.unwrap_or("").rsplit(['/', '\\']).next().unwrap_or("");
+        command = if quoting == Quoting::Cmd {
+            format!("if defined KITTY_WINDOW_ID ({command}) else (set \"KITTY_WINDOW_ID=lyrel\" && {command})")
+        } else if base == "fish" {
+            format!("if set -q KITTY_WINDOW_ID; {command}; else; KITTY_WINDOW_ID=lyrel {command}; end")
+        } else {
+            format!("KITTY_WINDOW_ID=\"${{KITTY_WINDOW_ID-lyrel}}\" {command}")
         };
     }
     if quoting == Quoting::Cmd && !scope.environment.is_empty() {
@@ -1219,6 +1326,98 @@ mod tests {
     }
 
     #[test]
+    fn nushell_scoped_launch_preserves_arguments_and_parent_environment() {
+        let dir = tempfile::tempdir().unwrap();
+        let output = dir.path().join("identity.json");
+        let argv = vec![
+            std::env::current_exe().unwrap().to_string_lossy().into_owned(),
+            "--ignored".into(), "--exact".into(),
+            "host::session_operations::tests::omp_identity_child".into(),
+            "--nocapture".into(),
+        ];
+        let mut scope = SessionScope { shell_program: Some("nu".into()), ..Default::default() };
+        compatibility_environment(CLIAgent::OhMyPi, &mut scope.environment);
+        let child = command_line(&argv, &scope).unwrap();
+        let result = Command::new("nu").args(["--no-config-file", "-c"])
+            .arg(format!("{child}; print $env.TERM_PROGRAM"))
+            .env("LYREL_IDENTITY_OUTPUT", &output).env("TERM_PROGRAM", "original")
+            .output();
+        let result = match result {
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                eprintln!("skipping: Nushell not installed");
+                return;
+            }
+            result => result.unwrap(),
+        };
+        assert!(result.status.success(), "{}", String::from_utf8_lossy(&result.stderr));
+        let actual: serde_json::Value = serde_json::from_slice(&std::fs::read(output).unwrap()).unwrap();
+        assert_eq!(actual["TERM_PROGRAM"], "kitty");
+        assert_eq!(actual["PI_NO_DECCARA"], "1");
+        assert!(String::from_utf8_lossy(&result.stdout).contains("original"));
+    }
+
+    #[test]
+    fn every_known_agent_wrapper_receives_scoped_identity() {
+        let dir = tempfile::tempdir().unwrap();
+        let shell = if cfg!(windows) { "pwsh" } else { "sh" };
+        for agent in CLIAgent::ALL {
+            let output = dir.path().join(format!("{}.json", agent.slug()));
+            // A wrapper need not name its agent: launch intent is explicit.
+            let native = format!(
+                "{} --ignored --exact host::session_operations::tests::omp_identity_child --nocapture",
+                quote_for_shell(&std::env::current_exe().unwrap().to_string_lossy(), Some(shell))
+            );
+            let child = scoped_agent_launch_command(&*LocalHost::new(), agent, &native, Some(shell)).unwrap();
+            let mut command = Command::new(shell);
+            command.args(if cfg!(windows) { vec!["-NoProfile", "-Command"] } else { vec!["-c"] });
+            let status = command.arg(child)
+                .env("LYREL_IDENTITY_OUTPUT", &output)
+                .env("TERM_PROGRAM", "lyrel")
+                .env_remove("PI_NO_DECCARA")
+                .env_remove("KITTY_WINDOW_ID")
+                .status().unwrap();
+            assert!(status.success(), "{} launch failed", agent.slug());
+            let actual: serde_json::Value = serde_json::from_slice(&std::fs::read(output).unwrap()).unwrap();
+            assert_eq!(actual["TERM_PROGRAM"], "kitty");
+            assert_eq!(actual["TERM_PROGRAM_VERSION"], "");
+            assert_eq!(actual["LC_TERMINAL"], "lyrel");
+            assert_eq!(actual["PI_NO_DECCARA"], if agent == CLIAgent::OhMyPi { "1" } else { "" });
+            assert_eq!(actual["KITTY_WINDOW_ID"], if agent == CLIAgent::Hermes { "lyrel" } else { "" });
+        }
+    }
+
+    #[test]
+    fn known_hermes_launch_preserves_inherited_and_command_marker_values() {
+        let dir = tempfile::tempdir().unwrap();
+        let shell = if cfg!(windows) { "pwsh" } else { "sh" };
+        let native = format!(
+            "{} --ignored --exact host::session_operations::tests::omp_identity_child --nocapture",
+            quote_for_shell(&std::env::current_exe().unwrap().to_string_lossy(), Some(shell))
+        );
+        for (index, (inherited, explicit, expected)) in [
+            (None, "", "lyrel"),
+            (Some(""), "", ""),
+            (Some("owned-window"), "", "owned-window"),
+            (Some("owned-window"), "KITTY_WINDOW_ID='' ", ""),
+            (Some("owned-window"), "KITTY_WINDOW_ID=lyrel ", "lyrel"),
+        ].into_iter().enumerate() {
+            let output = dir.path().join(format!("marker-{index}.json"));
+            let line = format!("TERM_PROGRAM='' {explicit}{native}");
+            let child = scoped_agent_launch_command(&*LocalHost::new(), CLIAgent::Hermes, &line, Some(shell)).unwrap();
+            let mut command = Command::new(shell);
+            command.args(if cfg!(windows) { vec!["-NoProfile", "-Command"] } else { vec!["-c"] });
+            command.arg(child).env("LYREL_IDENTITY_OUTPUT", &output).env("TERM_PROGRAM", "lyrel");
+            if let Some(value) = inherited { command.env("KITTY_WINDOW_ID", value); }
+            else { command.env_remove("KITTY_WINDOW_ID"); }
+            let result = command.output().unwrap();
+            assert!(result.status.success(), "{}", String::from_utf8_lossy(&result.stderr));
+            let actual: serde_json::Value = serde_json::from_slice(&std::fs::read(output).unwrap()).unwrap();
+            assert_eq!(actual["TERM_PROGRAM"], "");
+            assert_eq!(actual["KITTY_WINDOW_ID"], expected);
+        }
+    }
+
+    #[test]
     #[ignore = "owned subprocess for scoped terminal identity"]
     fn omp_identity_child() {
         let Some(output) = std::env::var_os("LYREL_IDENTITY_OUTPUT") else {
@@ -1231,7 +1430,9 @@ mod tests {
             "LC_TERMINAL_VERSION",
             "LYREL",
             "PI_NO_DECCARA",
+            "KITTY_WINDOW_ID",
             "PI_FORCE_IMAGE_PROTOCOL",
+            "PI_IMAGE_PROTOCOL",
             "PI_KITTY_PLACEHOLDERS",
             "PI_NO_KITTY_PLACEHOLDERS",
         ]
@@ -1311,6 +1512,41 @@ mod tests {
         let request = operation(dir.path().join("removed"));
         let error = LocalHost::new().session_operation(&request).unwrap_err();
         assert_eq!(error.kind, SessionErrorKind::Directory);
+    }
+
+    #[test]
+    fn prepared_resume_delivers_identity_and_explicit_policy_to_a_native_child() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut request = persisted_pi_operation(dir.path().into());
+        let shell = if cfg!(windows) { "pwsh" } else { "sh" };
+        let wrapper = dir.path().join(if cfg!(windows) { "pi.cmd" } else { "pi" });
+        let executable = std::env::current_exe().unwrap();
+        let body = if cfg!(windows) {
+            format!("@echo off\r\n\"{}\" --ignored --exact host::session_operations::tests::omp_identity_child --nocapture\r\n", executable.display())
+        } else {
+            format!("#!/bin/sh\nexec {} --ignored --exact host::session_operations::tests::omp_identity_child --nocapture\n", quote_for_shell(&executable.to_string_lossy(), Some("sh")))
+        };
+        std::fs::write(&wrapper, body).unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&wrapper, std::fs::Permissions::from_mode(0o700)).unwrap();
+        }
+        request.launch_argv = vec![wrapper.to_string_lossy().into_owned()];
+        request.scope.shell_program = Some(shell.into());
+        request.scope.environment.insert("PI_IMAGE_PROTOCOL".into(), "none".into());
+        let prepared = LocalHost::new().session_operation(&request).unwrap();
+        let output = dir.path().join("resumed.json");
+        let mut child = Command::new(shell);
+        child.args(if cfg!(windows) { vec!["-NoProfile", "-Command"] } else { vec!["-c"] });
+        let status = child.arg(prepared.command.unwrap()).env("LYREL_IDENTITY_OUTPUT", &output)
+            .env("TERM_PROGRAM", "lyrel").status().unwrap();
+        assert!(status.success());
+        let actual: serde_json::Value = serde_json::from_slice(&std::fs::read(output).unwrap()).unwrap();
+        assert_eq!(actual["TERM_PROGRAM"], "kitty");
+        assert_eq!(actual["TERM_PROGRAM_VERSION"], "");
+        assert_eq!(actual["LC_TERMINAL"], "lyrel");
+        assert_eq!(actual["PI_IMAGE_PROTOCOL"], "none");
     }
 
     #[test]
