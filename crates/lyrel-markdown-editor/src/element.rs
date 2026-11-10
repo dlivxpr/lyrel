@@ -1833,7 +1833,7 @@ impl Element for EditorElement {
                     }
                 }
                 // Icon (when the host supplies asset paths), then the bold label.
-                let mut label_x = origin.x + px(QUOTE_INSET);
+                let mut label_x = origin.x + font_size * (QUOTE_INSET / 16.);
                 if let Some(icons) = &prepaint.alert_icons {
                     let sz = font_size;
                     let icon_bounds = Bounds::new(
@@ -1848,7 +1848,7 @@ impl Element for EditorElement {
                         bar,
                         cx,
                     );
-                    label_x += sz + px(6.);
+                    label_x += sz + font_size * (6. / 16.);
                 }
                 let label_font = Font {
                     weight: FontWeight::BOLD,
@@ -3508,15 +3508,15 @@ fn shape_document(
                     // The icon (when the host supplies paths) sits before the
                     // label; both shift the same-line body's inset.
                     let icon_w = if st.alert_icons.is_some() {
-                        base_font_size + px(6.)
+                        base_font_size * (1. + 6. / 16.)
                     } else {
                         px(0.)
                     };
                     // A foldable callout's chevron sits after the label and
                     // pushes any same-line body further right.
-                    let chevron_x = px(QUOTE_INSET) + icon_w + label_w + px(8.);
+                    let chevron_x = base_font_size * (QUOTE_INSET / 16.) + icon_w + label_w + base_font_size * 0.5;
                     let chevron_w = if fold.is_some() {
-                        measure_width(window, "▾", base_font, base_font_size) + px(8.)
+                        measure_width(window, "▾", base_font, base_font_size) + base_font_size * 0.5
                     } else {
                         px(0.)
                     };
@@ -3538,7 +3538,7 @@ fn shape_document(
                         Some((c, _)) => (c, None),
                         None => (st.quote, Some(st.quote)),
                     };
-                    Some((plen, LineMark::Quote { bar, text }))
+                    Some((plen, LineMark::Quote { bar, text, text_inset: base_font_size * (QUOTE_INSET / 16.) }))
                 }
             } else if let Some((plen, indent, checked)) = markdown_syntax::task_prefix(line) {
                 // Reader-style geometry: each nesting level advances by
@@ -3546,9 +3546,9 @@ fn shape_document(
                 let depth = indent as f32 / tab_indent.max(1) as f32;
                 let box_w = base_font_size * CHECKBOX_SCALE;
                 let level =
-                    box_w + px(LIST_TEXT_GAP) + px(LIST_LEVEL_PER_SPACE) * tab_indent as f32;
+                    box_w + base_font_size * (LIST_TEXT_GAP / 16.) + base_font_size * (LIST_LEVEL_PER_SPACE / 16.) * tab_indent as f32;
                 let bullet_x = level * depth;
-                let text_inset = bullet_x + box_w + px(LIST_TEXT_GAP);
+                let text_inset = bullet_x + box_w + base_font_size * (LIST_TEXT_GAP / 16.);
                 Some((
                     plen,
                     LineMark::Check {
@@ -3581,11 +3581,11 @@ fn shape_document(
                 } else {
                     glyph_w
                 };
-                let step = marker_w.max(px(7.))
-                    + px(LIST_TEXT_GAP)
-                    + px(LIST_LEVEL_PER_SPACE) * tab_indent as f32;
+                let step = marker_w.max(base_font_size * (7. / 16.))
+                    + base_font_size * (LIST_TEXT_GAP / 16.)
+                    + base_font_size * (LIST_LEVEL_PER_SPACE / 16.) * tab_indent as f32;
                 let bullet_x = step * depth;
-                let text_inset = bullet_x + glyph_w + px(LIST_TEXT_GAP);
+                let text_inset = bullet_x + glyph_w + base_font_size * (LIST_TEXT_GAP / 16.);
                 Some((
                     plen,
                     LineMark::List {
@@ -4029,7 +4029,7 @@ fn shape_document(
                                 (fs * LINE_HEIGHT_RATIO).max(math_h + px(INLINE_MATH_ROW_PAD));
                             // List items breathe like the reader's (LIST_ROW_GAP).
                             if md.is_some() && markdown_syntax::list_prefix(line).is_some() {
-                                h += px(LIST_ROW_GAP);
+                                h += base_font_size * (LIST_ROW_GAP / 16.);
                             }
                             h
                         }

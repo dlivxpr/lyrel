@@ -303,6 +303,12 @@ fn attachment_completion_rejects_changed_source_and_selection(cx: &mut TestAppCo
         assert!(app.active_buffer().unwrap().input.read(cx).text().to_string().contains("Changed "));
     });
     assert_eq!(std::fs::read(remote.path().join("late.md")).unwrap(), b"# Original\n");
+    let before = app.read_with(&vcx, |app, cx| app.active_buffer().unwrap().input.read(cx).text().to_string());
+    host.fail_next_write();
+    vcx.dispatch_action(gpui_kit::component::input::Paste);
+    until(&mut vcx, |cx| cx.update(|window, _| window.try_find("markdown-resource-notice").is_some_and(|notice| notice.label().is_some_and(|label| label.contains(t(L10nKey::MarkdownImageWriteFailed))))));
+    app.read_with(&vcx, |app, cx| assert_eq!(app.active_buffer().unwrap().input.read(cx).text().to_string(), before));
+    assert_eq!(std::fs::read_dir(remote.path().join("assets")).unwrap().count(), 1, "failed import removes only its reserved attachment, preserving the earlier stale result");
 }
 
 #[cfg(test)]
