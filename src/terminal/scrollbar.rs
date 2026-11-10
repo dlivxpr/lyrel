@@ -249,7 +249,11 @@ mod tests {
         handle.sync(grid(0, 0));
         let hidden = handle.offset();
         handle.sync(grid(124, 0));
-        assert_eq!(handle.offset(), hidden, "output alone must not reveal the bar");
+        assert_eq!(
+            handle.offset(),
+            hidden,
+            "output alone must not reveal the bar"
+        );
 
         handle.set_offset(point(px(0.), px(-1000.)));
         assert_eq!(handle.take_pending(), Some(24));
