@@ -26,9 +26,13 @@ impl Bitmap {
     fn new(image: Arc<RenderImage>, cx: &mut App) -> Self {
         let release = image.clone();
         let lease = cx.new(|cx| {
-            cx.on_release(move |_, cx| cx.drop_image(release, None)).detach();
+            cx.on_release(move |_, cx| cx.drop_image(release, None))
+                .detach();
         });
-        Self { image, _lease: lease }
+        Self {
+            image,
+            _lease: lease,
+        }
     }
 }
 #[derive(Clone)]
@@ -77,7 +81,8 @@ impl ImageHost {
         let document = editor.read(cx).document().clone();
         let subscription =
             cx.subscribe(&document, |this, _, _: &DocumentEvent, cx| this.refresh(cx));
-        cx.on_release(|this, _| this.images.borrow_mut().clear()).detach();
+        cx.on_release(|this, _| this.images.borrow_mut().clear())
+            .detach();
         Self {
             app,
             id,
@@ -105,7 +110,9 @@ impl ImageHost {
             if !this.views.contains_key(&editor.entity_id()) {
                 let images = this.images.clone();
                 editor.update(cx, |editor, _| {
-                    editor.set_block_image_provider(move |src| images.borrow().get(src).map(|bitmap| bitmap.image.clone()));
+                    editor.set_block_image_provider(move |src| {
+                        images.borrow().get(src).map(|bitmap| bitmap.image.clone())
+                    });
                     editor.set_host_link_navigation(!editor.is_source_only());
                 });
                 let subscription = cx.subscribe(editor, |this, source, event: &NativeEvent, cx| {
@@ -264,17 +271,27 @@ impl ImageHost {
                 let _ = view.update(cx, |view, cx| view.refresh_resource_layout(cx));
             }
         }
-        let source_only = path.as_ref().and_then(|path| path.extension()).is_some_and(|extension| extension.eq_ignore_ascii_case("mdx"));
+        let source_only = path
+            .as_ref()
+            .and_then(|path| path.extension())
+            .is_some_and(|extension| extension.eq_ignore_ascii_case("mdx"));
         let sources: HashSet<_> = if source_only {
             HashSet::new()
         } else {
-            self.document.read(cx).snapshot().image_sources().into_iter().collect()
+            self.document
+                .read(cx)
+                .snapshot()
+                .image_sources()
+                .into_iter()
+                .collect()
         };
         let changed = sources != self.sources || changed_identity;
         self.sources = sources;
         self.states
             .retain(|source, _| self.sources.contains(source));
-        self.images.borrow_mut().retain(|source, _| self.sources.contains(source));
+        self.images
+            .borrow_mut()
+            .retain(|source, _| self.sources.contains(source));
         self.allowed.retain(|source| self.sources.contains(source));
         let pending: Vec<_> = self
             .sources
@@ -361,7 +378,9 @@ impl ImageHost {
                                 State::Failed(t(L10nKey::MarkdownImageLimit).into()),
                             );
                         } else {
-                            this.images.borrow_mut().insert(source.clone(), Bitmap::new(image, cx));
+                            this.images
+                                .borrow_mut()
+                                .insert(source.clone(), Bitmap::new(image, cx));
                             this.states.insert(source, State::Ready);
                         }
                     }
@@ -481,7 +500,11 @@ impl ImageHost {
             .identity(cx)
             .and_then(|(host, path)| path.map(|path| (host.id(), path)));
         if current != self.signature
-            || !self.document.read(cx).snapshot().image_sources()
+            || !self
+                .document
+                .read(cx)
+                .snapshot()
+                .image_sources()
                 .iter()
                 .any(|src| src == source)
         {

@@ -284,7 +284,10 @@ impl FormulaHost {
             // fence. Insert after it and keep the closing fence on its own line.
             let offset = inner.find('\n').map_or(0, |at| at + 1);
             let at = body_start + offset;
-            (at..at, !inline && inner.contains('\n') && !inner[offset..].contains('\n'))
+            (
+                at..at,
+                !inline && inner.contains('\n') && !inner[offset..].contains('\n'),
+            )
         } else {
             let start = body_start + inner.len() - inner.trim_start().len();
             (start..body_start + inner.trim_end().len(), false)

@@ -388,7 +388,12 @@ impl EditorState {
     }
     /// Retire this presentation without finalizing another view's IME lease.
     pub fn finish_owned_composition(&mut self, cx: &mut Context<Self>) {
-        if self.document.read(cx).composition_owner().is_some_and(|owner| owner.entity_id() == cx.entity_id()) {
+        if self
+            .document
+            .read(cx)
+            .composition_owner()
+            .is_some_and(|owner| owner.entity_id() == cx.entity_id())
+        {
             self.finish_composition(cx);
         }
     }
