@@ -436,9 +436,14 @@ if [[ $- == *i* ]] && [[ -z "$LYREL_SHELL_INTEGRATION" ]]; then
         __lyrel_debug_action=${__lyrel_debug_action% DEBUG}
         builtin eval "__lyrel_debug_action=$__lyrel_debug_action"
       else
-        __lyrel_debug_action=:
+        # A simple `:` clears $_ before our tail can preserve it. A true
+        # compound conditional leaves the incoming last argument untouched.
+        __lyrel_debug_action='[[ : ]]'
       fi
-      builtin trap "$__lyrel_debug_action"$'\n__lyrel_scope_debug "$?" "$BASH_COMMAND"' DEBUG
+      # Bash restores $? / PIPESTATUS after DEBUG, but not $_. Keep the
+      # original action's last argument as the tail call's final argument;
+      # the function's own commands are overwritten by that call's lastarg.
+      builtin trap "$__lyrel_debug_action"$'\n__lyrel_scope_debug "$?" "$BASH_COMMAND" "$_"' DEBUG
       unset __lyrel_debug_action
     else
       # macOS still ships Bash 3.2, without PS0. Use DEBUG only there, leaving
@@ -450,7 +455,7 @@ if [[ $- == *i* ]] && [[ -z "$LYREL_SHELL_INTEGRATION" ]]; then
         __lyrel_debug_action=${__lyrel_debug_action% DEBUG}
         builtin eval "__lyrel_debug_action=$__lyrel_debug_action"
       else
-        __lyrel_debug_action=:
+        __lyrel_debug_action='[[ : ]]'
       fi
       __lyrel_command_start() {
         if [[ "$2" == 'for __lyrel_prompt_state in prompt'* ]]; then
@@ -476,7 +481,8 @@ if [[ $- == *i* ]] && [[ -z "$LYREL_SHELL_INTEGRATION" ]]; then
       # Run the existing action first, with no command ahead of it to replace
       # $? / PIPESTATUS / $_. Our tail receives and returns its result, so
       # extdebug retains the user's command-skip behavior as well.
-      builtin trap "$__lyrel_debug_action"$'\n__lyrel_command_start "$?" "$BASH_COMMAND"' DEBUG
+      # As on the PS0 path, the tail's final argument preserves native $_.
+      builtin trap "$__lyrel_debug_action"$'\n__lyrel_command_start "$?" "$BASH_COMMAND" "$_"' DEBUG
       unset __lyrel_debug_action
     fi
 
@@ -2574,7 +2580,12 @@ mod tests {
     /// Exercise the installed integration in an actual interactive Bash, not
     /// by invoking its private functions. LYREL_TEST_BASH permits the same
     /// consumer contract to run against an installed Bash 3.2 or 4.4 as well.
-    fn bash_contract_over_pty(array_prompt: bool, keys: &[u8], inputrc: &str) -> Option<String> {
+    fn bash_contract_over_pty(
+        array_prompt: bool,
+        user_debug: bool,
+        keys: &[u8],
+        inputrc: &str,
+    ) -> Option<String> {
         let program = std::env::var("LYREL_TEST_BASH").ok().or_else(|| {
             #[cfg(windows)]
             {
@@ -2611,7 +2622,9 @@ __consumer_prompt() {
   PS1='consumer> '
   return "$ret"
 }
-trap 'builtin printf "\e]777;debug;%s;%s;%s\a" "$?" "${PIPESTATUS[*]}" "$_"' DEBUG
+if [[ "$LYREL_TEST_USER_DEBUG" == 1 ]]; then
+  trap 'builtin printf "\e]777;debug;%s;%s;%s\a" "$?" "${PIPESTATUS[*]}" "$_"' DEBUG
+fi
 PS0='$(builtin printf "\e]777;user-ps0\a")'
 if [[ "$LYREL_TEST_ARRAY_PROMPT" == 1 ]] &&
     (( BASH_VERSINFO[0] > 5 || (BASH_VERSINFO[0] == 5 && BASH_VERSINFO[1] >= 1) )); then
@@ -2636,6 +2649,10 @@ builtin printf '\e]777;version;%s.%s\a' "${BASH_VERSINFO[0]}" "${BASH_VERSINFO[1
                 (
                     "LYREL_TEST_ARRAY_PROMPT".into(),
                     u8::from(array_prompt).to_string(),
+                ),
+                (
+                    "LYREL_TEST_USER_DEBUG".into(),
+                    u8::from(user_debug).to_string(),
                 ),
                 ("LYREL_RM_DIR".into(), bash_path(&cleanup)),
             ]),
@@ -2671,7 +2688,7 @@ builtin printf '\e]777;version;%s.%s\a' "${BASH_VERSINFO[0]}" "${BASH_VERSINFO[1
     fn bash_preserves_native_prompt_and_trap_contracts_over_a_real_pty() {
         let keys = b"\n: LAST_ARGUMENT\nfalse | (exit 7)\nbuiltin printf '\\033]777;state;%s;%s;%s\\a' \"$?\" \"${PIPESTATUS[*]}\" \"$_\"\nprintf '%s\\n' 'multi\nline'\nfalse | true\nfalse\n";
         for array_prompt in [false, true] {
-            let Some(text) = bash_contract_over_pty(array_prompt, keys, "set editing-mode vi\n")
+            let Some(text) = bash_contract_over_pty(array_prompt, true, keys, "set editing-mode vi\n")
             else {
                 return;
             };
@@ -2788,6 +2805,29 @@ builtin printf '\e]777;version;%s.%s\a' "${BASH_VERSINFO[0]}" "${BASH_VERSINFO[1
     }
 
     #[test]
+    fn bash_preserves_prompt_state_without_a_user_debug_trap_over_a_real_pty() {
+        let keys = b": LAST_ARGUMENT\nfalse | (exit 7)\nfalse\n";
+        for array_prompt in [false, true] {
+            let Some(text) = bash_contract_over_pty(array_prompt, false, keys, "") else {
+                return;
+            };
+            let payloads = osc_payloads(&text);
+            assert!(
+                payloads.iter().any(|p| {
+                    p.starts_with("777;prompt;0;")
+                        && p.ends_with(";LAST_ARGUMENT;ignoredups;not-a-command")
+                }),
+                "prompt lost $_ without a user DEBUG trap:\n{text}"
+            );
+            assert!(
+                payloads.iter().any(|p| p.starts_with("777;prompt;7;")),
+                "prompt lost exit status without a user DEBUG trap:\n{text}"
+            );
+            assert!(!payloads.iter().any(|p| p.starts_with("777;debug;")));
+        }
+    }
+
+    #[test]
     fn bash_escapes_and_truncates_submitted_commands_over_a_real_pty() {
         // Use Readline's public macro, retaining ESC/BEL and a multiline command.
         // Git Bash's parser drops literal CR even with `bash -c`; Unix can
@@ -2802,7 +2842,7 @@ builtin printf '\e]777;version;%s.%s\a' "${BASH_VERSINFO[0]}" "${BASH_VERSINFO[1
              \"\\C-x\\C-u\": \"printf '%s' 'percent%\\C-v\\e\\C-v\\C-g{insert_cr}multi\\n{}'\\nfalse\\n\"\n",
             "x".repeat(600)
         );
-        let Some(text) = bash_contract_over_pty(false, b"\x18\x15", &inputrc) else {
+        let Some(text) = bash_contract_over_pty(false, true, b"\x18\x15", &inputrc) else {
             return;
         };
         let payloads = osc_payloads(&text);
