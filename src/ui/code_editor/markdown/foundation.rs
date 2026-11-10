@@ -831,6 +831,75 @@ pub(super) fn native_navigation(cx: &mut TestAppContext) {
     assert_eq!(std::fs::read(&path).unwrap(), source.as_bytes());
 }
 
+#[cfg(feature = "native-markdown-tests")]
+pub(super) fn native_viewport_jump(cx: &mut TestAppContext) {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("viewport-jump.md");
+    let source = format!(
+        "head\nvisible 中文 neighbor\n{}",
+        "scroll anchor\n".repeat(300)
+    );
+    std::fs::write(&path, &source).unwrap();
+    let (app, mut context, _streams) = harness_with_tabs(cx, 1);
+    app.update_in(&mut context, |app, window, cx| {
+        app.open_file_in_editor(&path, window, cx)
+    });
+    until(&mut context, |context| {
+        app.read_with(context, |app, _| app.active_buffer().is_some())
+    });
+    let view = app.read_with(&context, |app, _| {
+        app.active_editor_input()
+            .unwrap()
+            .markdown()
+            .unwrap()
+            .clone()
+    });
+    view.update_in(&mut context, |view, window, cx| {
+        view.set_soft_wrap(true, cx);
+        view.select_range(source.len()..source.len(), cx);
+        view.focus_handle(cx).focus(window, cx);
+    });
+    until(&mut context, |context| {
+        view.read_with(context, |view, _| view.scroll_offset().y < px(0.))
+    });
+    settle(&mut context);
+    view.update_in(&mut context, |view, _, cx| view.select_range(0..0, cx));
+    context.run_until_parked();
+    context.update(|window, cx| window.render_frame(cx));
+    // Deliver only requested frames: forced redraws would mask a viewport stuck on placeholders.
+    for _ in 0..16 {
+        let requested = context.update(|window, cx| window.simulate_next_frame(cx));
+        if requested == 0 {
+            break;
+        }
+        context.run_until_parked();
+        context.update(|window, cx| window.render_frame(cx));
+    }
+    let at = "head\nvisible 中".len();
+    let caret = context.update(|window, cx| {
+        let caret = view
+            .read(cx)
+            .range_to_bounds(&(at..at))
+            .expect("the visible non-caret row must repaint without extra input");
+        assert!(caret.top() >= px(0.) && caret.bottom() <= window.viewport_size().height);
+        caret
+    });
+    context.update(|window, cx| {
+        window.pointer_move(caret.center(), None, cx);
+        window.pointer_down(caret.center(), gpui_kit::MouseButton::Left, cx);
+        window.pointer_up(caret.center(), gpui_kit::MouseButton::Left, cx);
+    });
+    view.read_with(&context, |view, _| assert_eq!(view.cursor(), at));
+    context.update(|window, cx| window.input("界", cx));
+    save(&app, &mut context);
+    let mut expected = source.clone();
+    expected.insert_str(at, "界");
+    assert_eq!(std::fs::read(&path).unwrap(), expected.as_bytes());
+    context.dispatch_action(gpui_kit::component::input::Undo);
+    save(&app, &mut context);
+    assert_eq!(std::fs::read(&path).unwrap(), source.as_bytes());
+}
+
 #[cfg(test)]
 #[gpui_kit::test]
 fn mdx_source_only_survives_mode_action_split_history_save_reopen(cx: &mut TestAppContext) {
@@ -1028,6 +1097,7 @@ pub(super) fn native_cases() -> impl Iterator<Item = crate::native_markdown::Cas
         crate::native_markdown::Case::new("ui::code_editor::markdown::foundation::zorite_foundation_workbench_composition_commit_cancel_undo", composition),
         crate::native_markdown::Case::new("ui::code_editor::markdown::foundation::zorite_foundation_complete_extreme_line_paint_caret_input_save_undo", extreme_line),
         crate::native_markdown::Case::new("ui::code_editor::markdown::foundation::zorite_foundation_native_wrapped_pointer_navigation_unicode_history", native_navigation),
+        crate::native_markdown::Case::new("ui::code_editor::markdown::foundation::zorite_foundation_native_distant_jump_repaints_visible_neighbor_without_input", native_viewport_jump),
         crate::native_markdown::Case::new("ui::code_editor::markdown::source::spelling::tests::spelling_long_code_remains_editable_with_offscreen_diagnostics", native_long_code),
     ].into_iter()
 }

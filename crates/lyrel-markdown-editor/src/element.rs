@@ -454,7 +454,13 @@ impl Element for EditorElement {
             let q = 512.0;
             let lo = (((top - vh) / q).floor() * q).max(0.);
             let hi = ((top + 2. * vh) / q).ceil() * q;
-            editor.shape_band.set(Some((lo, hi)));
+            if editor.shape_band.replace(Some((lo, hi))) != Some((lo, hi)) {
+                // This frame used the previous band; repaint the newly visible rows.
+                let editor = self.editor.clone();
+                window.on_next_frame(move |_, cx| {
+                    editor.update(cx, |_, cx| cx.notify());
+                });
+            }
         }
 
         // Top offset of each logical line (running sum of variable wrap heights),
@@ -668,9 +674,8 @@ impl Element for EditorElement {
                 // the nearest ``` row above (hidden fences collapse to height 0).
                 let Some(fence_row) = (0..=i).rev().find(|&r| {
                     starts.get(r).is_some_and(|&s| {
-                        editor.content[s..editor.line_end(r)]
-                            .trim_start()
-                            .starts_with("```")
+                        let end = starts.get(r + 1).map_or(editor.content.len(), |&s| s - 1);
+                        editor.content[s..end].trim_start().starts_with("```")
                     })
                 }) else {
                     continue;
@@ -729,7 +734,9 @@ impl Element for EditorElement {
                 let (Some(&start), Some(&lh)) = (starts.get(i), line_heights.get(i)) else {
                     continue;
                 };
-                let line = &editor.content[start..editor.line_end(i)];
+                // Reuse this pass's index instead of rescanning the source for every row.
+                let end = starts.get(i + 1).map_or(editor.content.len(), |&s| s - 1);
+                let line = &editor.content[start..end];
                 if markdown_syntax::line_heading_level(line).is_none() || lh == px(0.) {
                     continue;
                 }
@@ -781,7 +788,8 @@ impl Element for EditorElement {
                 let (Some(&start), Some(lh)) = (starts.get(i), line_heights.get(i)) else {
                     continue;
                 };
-                let line = &editor.content[start..editor.line_end(i)];
+                let end = starts.get(i + 1).map_or(editor.content.len(), |&s| s - 1);
+                let line = &editor.content[start..end];
                 let inset = row_x(i);
                 // The reference-count badge over a hidden ` ^id` anchor is
                 // clickable too (skipped on the caret's line, where the raw
@@ -1154,7 +1162,8 @@ impl Element for EditorElement {
                     let top = line_tops[row];
                     let line_start = starts[row];
                     let a = s.max(line_start) - line_start;
-                    let b = e.min(editor.line_end(row)) - line_start;
+                    let line_end = starts.get(row + 1).map_or(editor.content.len(), |&s| s - 1);
+                    let b = e.min(line_end) - line_start;
                     // Table row: highlight between the cell positions of the selection
                     // ends (not raw-source geometry).
                     if let Some(t) = tables.get(row).and_then(Option::as_ref) {

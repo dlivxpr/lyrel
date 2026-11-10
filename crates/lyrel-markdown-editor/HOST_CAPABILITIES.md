@@ -12,6 +12,7 @@
 - `EditorState` 是 presentation：选择、方向、focus、scroll、marked range、layout/geometry cache 都独立。其 `Arc<String>` 是当前不可变 revision 快照，不是第二份可编辑权威。普通编辑不以 `set_text` 或整篇 diff 同步其他视图。
 - caret reveal 由当前 presentation 的显式选择/跳转、键盘移动、本地输入与 Undo/Redo 请求；不依赖当时键盘焦点，不由其他 view/Host 的文档通知自动请求。同一 source wrap-boundary byte 可是上一视觉行末或下一行首；caret 与 selection anchor 的 affinity 只归该 presentation，pointer/Down/Up、selection、popup/IME bounds 共用该状态，普通 link/range 映射不全局改为 downstream。native 门禁须实际验证两侧指针、往返导航、输入/Undo 和非聚焦 go-to 的滚动隔离；源码修复不等于验收通过。
 - 屏外 shaping 可用空占位保留行高，但当前 caret 所在的逻辑行始终保留真实 shaping，即使 presentation 没有焦点；否则非零列的 `range_to_bounds` 为 `None`，go-to 只更新源坐标而不能滚动。此几何需求不改变非聚焦 view 的 caret-local marker 显露规则，亦不强制全篇 shaping。native navigation 覆盖 source 跳转，以及 live 下的非聚焦屏外非空行跳转。
+- prepaint 的全行命中区与选择区域复用当前 pass 已建立的行起点数组，不对每行重新扫描全文。跨可见区跳转后，只有量化 shaping band 变化才经现有 next-frame 通知补绘一次；不能依赖额外 hover、输入或持续重绘来填充新可见正文。native 消费者按实际请求递送后续帧，并核对非 caret 行的真实几何。
 - 工作台的 native Markdown body 在 leading edge 为现有 shell resize hitbox 预留 `RESIZE_HANDLE_WIDTH / 2`；使真实首列 caret 不与 dock 抓手重叠，不移动测试指针、不缩小 resize target，也不把此输入安全间隔称为 #244 的最终参考排版。
 - 所有源文变更和 Undo/Redo 发出 `DocumentEvent`。`edits()` 按实际应用顺序给出每一步 LF/UTF-8 range、removed、inserted；后一条 range 基于前一条已经应用的文本。消费者仅应用更新的 revision。
 - 初始加载/外部重载明确调用 `Document::new` / `reload`；不是普通编辑协议。加载不整理公式、不补换行、不重写未知构造。
@@ -66,17 +67,17 @@
 
 ## 原 14 项 native 消费者迁移清单
 
-以下以 baseline `5a38d0a9242761024335fe06263b040ddb3f5d74` 的真实 registry 为准，名称省略共同 `ui::code_editor::markdown::` 前缀。旧文件依赖已删除的 Rope/SourcePresentation/投影与旧格式菜单；不编译旧内核来让测试继续绿。新基础的三个 case **不等价于原 14 项全通过**。后续票必须在真实 replacement 工作台恢复其仍有效的用户行为与几何边界；仅已明确替代的交互或排除的旧 UI 可以退役。
+以下以 baseline `5a38d0a9242761024335fe06263b040ddb3f5d74` 的真实 registry 为准，名称省略共同 `ui::code_editor::markdown::` 前缀。旧文件依赖已删除的 Rope/SourcePresentation/投影与旧格式菜单；不编译旧内核来让测试继续绿。当前基础六项消费者 **不等价于原 14 项全通过**。后续票必须在真实 replacement 工作台恢复其仍有效的用户行为与几何边界；仅已明确替代的交互或排除的旧 UI 可以退役。
 
 | baseline selector 后缀 | 处理与仍有效的验收边界 | 所属票 |
 | --- | --- | --- |
-| `source::review_tests::native_down_visits_each_soft_wrapped_row_without_skipping` | 迁移：新 native navigation 消费者逐视觉行 Down/Up，不允许跨行跳过。当前基础三 case 不声称覆盖。 | #237 |
+| `source::review_tests::native_down_visits_each_soft_wrapped_row_without_skipping` | 已迁移至 native navigation：逐视觉行 Down/Up 与 wrap-boundary 两侧往返，不允许跨行跳过。 | #237 |
 | `source::review_tests::first_soft_wrapped_link_grapheme_hovers_edits_and_opens` | 保留行为，随新 Host link/hover 接线迁移；首个 wrapped grapheme 的命中/输入/open。 | #238 |
 | `source::review_tests::fragment_tail_link_grapheme_hovers_edits_and_opens` | 保留行为，迁移分片末尾 glyph 的 hit-testing、编辑和打开，不按旧投影内部类型断言。 | #238 |
 | `source::review_tests::native_soft_wrap_caret_keeps_clicked_side_across_navigation_and_input` | 迁移：真实指针点击 wrap 两侧，箭头/输入/Undo 后 caret 不跳至另一侧。 | #237 |
 | `source::review_tests::native_modified_link_drag_retains_upper_wrap_anchor` | 旧 Ctrl+Click-only 激活契约退役；wrapped drag 选择锚点正确性仍保留，按 Zorite 普通单击链接和实际扩选方式验证。 | #238 |
 | `source::review_tests::native_extreme_nowrap_line_keeps_pointer_selection_and_source_exact` | 迁移至 `foundation::zorite_foundation_complete_extreme_line_paint_caret_input_save_undo`；完整 2,523,166 B，不缩水为截断样本；保留指针/选择和原始源码条件。 | #237 |
-| `source::review_tests::native_aligned_table_pointer_and_selection_follow_content` | 表格仍有效：新列宽/居中/右对齐 native glyph 与 selection/hit-test 同位置，Undo 后一致；不是基础三 case 覆盖。 | #239 |
+| `source::review_tests::native_aligned_table_pointer_and_selection_follow_content` | 表格仍有效：新列宽/居中/右对齐 native glyph 与 selection/hit-test 同位置，Undo 后一致；不由基础消费者代替。 | #239 |
 | `tests::table_presentation::table_presentation_drag_fit_scroll_edit_history_and_host_reopen` | 表格完整 drag/fit/scroll/edit/Undo/Host 保存重开迁移到新表格 UI；旧 inspector/menu id 不保留。 | #239 |
 | `tests::native_navigation_home_end_and_words_use_visible_logical_content` | 迁移新 navigation case 的 Home/End/Unicode word/grapheme，删除仅为旧 Rope chunk seam 的实现断言。 | #237 |
 | `tests::native_text_color_picker_clear_geometry_and_shared_history` | 自定义色/取消/clear/geometry/history 仍有效；按 Zorite native menu + Lyrel picker 迁移，不重建旧全行格式工具栏。 | #244 |
@@ -89,7 +90,7 @@
 
 ### #237 当前 replacement 消费者入口
 
-`foundation::zorite_foundation_native_wrapped_pointer_navigation_unicode_history` 恢复基础 native wrapped-row Down、行首指针/input/Undo、source Home/End/Unicode grapheme selection 与 word movement；`foundation::zorite_foundation_complete_extreme_line_paint_caret_input_save_undo` 使用完整 2,523,166 B fixture，分别在 live/source 的首尾执行 native pointer exact-offset、shift selection、输入、保存与 Undo。它们与 shared Host、composition owner close 两个生命周期 case 同处当前 native registry；运行结果仍由实际候选门禁决定，不从注册成功推定通过。
+`foundation::zorite_foundation_native_wrapped_pointer_navigation_unicode_history` 恢复基础 native wrapped-row Down、行首指针/input/Undo、source Home/End/Unicode grapheme selection 与 word movement；`foundation::zorite_foundation_complete_extreme_line_paint_caret_input_save_undo` 使用完整 2,523,166 B fixture，分别在 live/source 的首尾执行 native pointer exact-offset、shift selection、输入、保存与 Undo。它们与 shared Host、composition owner close、完整长代码和 input-free distant-jump 的消费者同处当前六项 native registry。最后一项仅递送产品实际请求的后续帧，验证跳转后非 caret 行的字形几何、指针输入、精确保存与 Undo，不以强制 redraw 掩盖缺帧。
 
 MDX 的 `source_only` 是 presentation 能力，分屏复制该约束；`ToggleDocumentPreview` 无法进入 live，状态栏模式按钮显示源码且禁用。workbench 回归 `mdx_source_only_survives_mode_action_split_history_save_reopen` 验证这一路由与 BOM/混合行尾/未知 JSX/attached-formula 原文、输入/Undo、保存/重开。源文编码策略不会因文档另存为或重命名自动转换。
 
@@ -104,3 +105,11 @@ MDX 的 `source_only` 是 presentation 能力，分屏复制该约束；`ToggleD
 `reload_request` 单独标识最近一次真实读请求；`reload_seq` 继续标识源文适用性。普通编辑不冒充“已启动另一读请求”：晚到的仍属当前Host/path的读会报告 conflict，既不覆盖新preedit，也不在观察到revision变化前静默return。真正的新reload、context失效、路径移动/删除仍使旧request失效。
 
 原 `source::spelling::tests::spelling_long_code_remains_editable_with_offscreen_diagnostics` selector 已迁移到当前native registry的 `foundation::native_long_code`。保留完整 `"wide ".repeat(80_000)` fenced-code fixture与覆盖完整400,000B正文的离屏诊断，通过真实字体/paint/pointer、输入、保存、Undo、精确字节与重开验证；未保留旧projection/spelling内部接口，未缩短fixture。其余provider相关几何边界仍按上方逐项归属完成，新增case不代表这些边界自动通过。
+
+### Windows 基础实窗验收
+
+固定参考为上述 Zorite commit 的原始 Release binary。当前无探针 Lyrel Release 已在隔离配置中完成普通 991 B 和完整长文 722,000 B 的输入、字符/词导航、选择替换、剪切粘贴、live/source、首尾滚动、保存关闭重开，以及各 100 次结构编辑的完整 Undo/Redo；保存结果逐字节核验。系统中文 IME 通过实际候选窗完成 `ni'hao` 提交“你好”、`zhongwen` 取消与 Unicode 选区替换/Undo/Redo，不以文本注入替代。
+
+长文初测发现 prepaint 两段逐行命中区准备耗时约 0.83–0.91 秒/帧；修复为复用现有行索引后，100 次结构输入不再积压。最终相同长文工作负载的进程 CPU 增量为 4.875 秒，private bytes 从 171,372,544 增至 345,698,304；保留全部整串历史，没有截断文本或缩短 Undo/Redo。此完整 Windows 基础工作负载判定可用；内存的线性历史成本已记录，不宣称零拷贝历史或任意大小性能。自动化调用耗时不是 input-to-paint 延迟，进程内存也不是历史独占内存。
+
+真实 loopback SSH Host 的 BOM/混合行尾编辑、保存关闭重开及本地同名诱饵隔离已有独立实窗与精确字节证据；后续改动只涉及 GUI 几何，不将早前 SSH 结果冒充最后 binary 的重跑。macOS 没有本机执行前提，未实测；Windows 与 Linux headless 不代替 macOS 验收。上述基础结论不覆盖后续图片、结构公式、Mermaid、宽表资源整合，也不是 #244/#245 的完整视觉一致或最终接受结论。
