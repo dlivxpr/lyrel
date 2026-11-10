@@ -702,6 +702,8 @@ fn reading_ordered_size(sender: &mut crate::daemon::transport::Stream, cols: u16
 }
 
 fn reading_ordered_screen(sender: &mut crate::daemon::transport::Stream, origin: i64, epoch: u64) {
+    use lyrel_core::core::kitty_graphics::GraphicsUpdate;
+
     send_graphics(sender, GraphicsUpdate::Screen { screen: 0, history_origin: origin, epoch });
 }
 
