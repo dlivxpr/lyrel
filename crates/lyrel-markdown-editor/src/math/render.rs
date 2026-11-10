@@ -20,6 +20,7 @@ use std::sync::Arc;
 pub const PAD: f32 = 8.0;
 
 /// A rasterized formula plus its logical (pre-DPR) size in px.
+#[non_exhaustive]
 pub struct Rendered {
     pub image: Arc<RenderImage>,
     pub width: f32,

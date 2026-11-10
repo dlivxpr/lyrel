@@ -23,7 +23,8 @@ use crate::Diagnostic;
 /// the editor stays theme-agnostic. Install via
 /// [`crate::EditorState::set_markdown_style`]; absent it, the editor renders
 /// plain text (only spell-check underlines).
-#[derive(Clone)]
+#[derive(Clone, Default)]
+#[non_exhaustive]
 pub struct SyntaxStyle {
     /// Dimmed color for the syntax markers themselves (`**`, `*`, `~~`, `[`,
     /// `]`, `[[`, `]]`, `]( … )`).
@@ -1371,7 +1372,8 @@ pub(crate) fn html_block(line: &str) -> bool {
 pub(crate) use zorite_markdown::syntax::{AlertKind, alert_prefix};
 
 /// Per-kind SVG asset paths for the alert title icons.
-#[derive(Clone)]
+#[derive(Clone, Default)]
+#[non_exhaustive]
 pub struct AlertIcons {
     pub note: SharedString,
     pub tip: SharedString,

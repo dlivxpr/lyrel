@@ -16,17 +16,25 @@ formula_import_owner = "#241"
 # prepaint 复用当前行索引；viewport band 变化时按需补帧，避免远跳后的可见正文保持空白。
 # #240：foreign selection rebase 发出可观察事件；已退役 IME lease 拒绝迟到失焦 callback，
 # unmark 仅结束自己的 lease，仍有效的失焦提交不被拒绝。
+# 双轴审查：关闭 presentation 只结束自己的 composition；格式转换是独立 history 屏障，
+# no-op range batch 不覆盖上一事务的 Undo 选区；选择/搜索 quads 共享单帧 starts。
+# Host-facing record 采用 non_exhaustive 与 Default/必要构造器；图片源扫描迁到权威 snapshot。
 # document.rs、presentation.rs 为 Lyrel 原创适配；文件 codec 属于独立 Apache-2.0 lyrel-text。
 # 公式结构源导入 src/math；Lyrel 原创 markdown_formula Host 负责 seat、版本、range commit、菜单与返焦。
 # GUI 仅 GPUI Kit/Fast；GUI-free RaTeX 0.1.15 使用正式 registry，未导入 GPL 应用层或独立 Markdown renderer。
 # 本地公式适配：严格 AST 保真检查、未修改树不序列化、原始定界符/body-only 提交、Escape 取消；
 # EntityInputHandler 预编辑/candidate geometry、Kit Button、本地化命令与原生菜单；NBSP 保持图片/公式 wrap atom。
 # 公式焦点内用专属 SaveFormula action 处理 Cmd/Ctrl+S，避免工作台先保存未提交的正文快照。
+# 公式 caret/selection-only 仅 notify，不同步重栅格化；精确 body offset 支持缩进/空 fence，
+# 空 body 首次写入保留 closing fence 独立行，未修改/取消保持原始字节。
 # #238：Lyrel images/links Host 编排；普通 release 单击与拖选隔离；完整wrapped link hitboxes；
 # 无Host wiki/embed源码保留；资源意图/provider失效接口、revision保护的图片resize。
+# 图片 bitmap 使用 cache/preview 共用的实体释放 lease；Mermaid 在替换、删除、释放时
+# 显式 drop_image，仍活跃 preview 不提前释放 tile；MDX 身份切换同步所有 view 的链接能力。
 # writing.rs 为 Lyrel 原创 Host request seam；紧凑 disclosure 与原生格式控件仍沿用 MIT editor。
 # 内容 inset 在 scroll owner 内，公式/嵌入 overlay 共享 inset 后的坐标根；prose/list/quote spacing 随字体缩放。
 # 自定义颜色原子替换同一源码范围；主题 provider 派生当前 semantic style，不重置模式或 history。
+# 正文 Labels 由 Host 完整双语注入，Config 语言更新同步既有 view；菜单返焦复用 Kit 生命周期。
 # #239：表格插入与样式原子history、cell Unicode/IME几何、列宽metadata随增删迁移；
 # code语言仅替换token并保留fence metadata，高亮provider读取当前App主题。
 # src/code.rs与应用markdown/table_code.rs为Lyrel原创Host适配，不导入GPL picker。
