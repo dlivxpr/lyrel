@@ -9,7 +9,7 @@ lyrel 是面向桌面本地开发与桌面远程开发的 Rust 原生终端工�
 
 ## 可执行程序与共享核心
 
-workspace 包含四个 crate；桌面 GUI、CLI 和 headless server 复用同一个 `lyrel-core`，而不是各自实现会话和协议。
+workspace 包含六个 crate；桌面 GUI、CLI 和 headless server 复用 `lyrel-core`，文本 codec 属于 GUI-free `lyrel-text`，Markdown 编辑实现单独属于 desktop-only `lyrel-markdown-editor`。
 
 | crate／程序 | 职责 | 不负责 |
 | --- | --- | --- |
@@ -17,7 +17,9 @@ workspace 包含四个 crate；桌面 GUI、CLI 和 headless server 复用同一
 | `lyrel-core` | 领域模型、配置与持久化、Host、daemon、PTY、SSH、IPC 和 agent 集成的共享逻辑 | 不依赖 GPUI 或系统钥匙串 |
 | `lyrel-cli`，程序 `lyrel` | 面向人和 agent 的命令、目标解析、输出与退出码 | 不要求 GUI 正在运行 |
 | `lyrel-server` | headless daemon 入口，以及 control／pane 的 stdio 服务和桥接 | 不依赖桌面组件；唯一生产依赖是 `lyrel-core` |
-| 根包内的 `lyrel-updater` | 启用 `updater` feature 后构建的 Windows 独立更新程序 | 不是第五个 crate，也不是会话服务器 |
+| `lyrel-text` | 编码、BOM、逐行行尾与 EditorConfig 策略，供普通文件工作台和 Markdown Document 复用 | 不依赖 GPUI、app 或 Host |
+| `lyrel-markdown-editor` | 固定 MIT Zorite editor/bidi/ratex 源码的独立维护，Document/history 与各 presentation 的 native editing | 不拥有文件 I/O、Host/path、dirty/save/close，不导入 GPL 应用 |
+| 根包内的 `lyrel-updater` | 启用 `updater` feature 后构建的 Windows 独立更新程序 | 不是独立 crate，也不是会话服务器 |
 
 `src/daemon.rs` 重导出共享 daemon，`src/core/` 在共享核心之上增加 GUI 适配。桌面入口的 `--daemon` 模式在启动 GPUI 前转入共享 daemon，因此后台服务器可以由 `lyrel-app --daemon` 或独立 `lyrel-server --daemon` 承载。
 
@@ -74,7 +76,7 @@ CLI 的 `-m` 复用本地 daemon 已连接的机器路由，不自行建立新�
 | 共享机器连接 | `RemoteLinks`、`HostLinks`、`LocalLink` | 进程 Global | 监督机器连接、control link、本地 daemon、重连与 pane relink，各自保留原有职责 |
 | 文件树／SCM | `FileTreeState`／`ScmPanelState` | 每窗口 | 管理各自加载、失效和转换；工作台适配 Host 调度、确认与导航 |
 | 文档面板与缓冲区 | `EditorPanelState`／`EditorBuffers` | 每窗口编辑面板 | 管理文档加载、监视、导航、保存及未保存提示 |
-| Markdown／MDX 原文与撤销 | `MarkdownDocument` | 每文档 | 持有一份 Rope 与 `UndoHistory`；`SourcePresentation` 不持有第二份文本或历史 |
+| Markdown／MDX 原文与撤销 | `lyrel_markdown_editor::Document` | 每文档 | 一份 LF 原文、逐行表示、格式、history 与 revision；每个 `EditorState` presentation 独立持有选择、焦点、滚动、IME 与几何缓存 |
 | 终端客户端与绘制 | `RemoteTerminal`、`PaneConnection`、`TerminalView`、`TerminalElement` | 每客户端 pane | 按连接、流消费、实体适配与逐帧绘制分工，桌面缓存不是会话权威 |
 | 终端交互 | `PromptInput`、`Composer`、`AgentActivity`、搜索与滚动状态 | 每客户端 pane | 各自拥有输入、agent 消息框、活动与交互转换，生命周期任务归 `TerminalLifecycle` |
 | 应用通知历史 | `InboxGlobal` 内的 `Inbox` | 进程共享；每窗一个 `NotificationBell` | 本机有界持久化，与 daemon 和系统通知中心解耦 |
@@ -167,7 +169,11 @@ Unix 的 daemon handoff 是独立的升级路径：通过 exec 继承本地 PTY 
 
 文件缓冲区按 Host 与文档身份加载、监视和保存。编辑器用工作区、`HostId`、目标文档／分组与请求序号核对结果，恢复另有 `context_epoch`；这与文件树按 Host adapter 实例隔离不是同一机制。
 
-Markdown／MDX 保留源文本权威，live 排版与源码视图共享文档和 Undo／Redo。公式与 Mermaid 使用 Rust 原生解析、SVG 和光栅化管线，不依赖浏览器或 Node.js 运行时；显示投影不重新序列化整篇原文，也不另建撤销栈。LSP 的会话与读写线程属于桌面编辑器，不加入远端 headless server 的图形依赖。
+Markdown 只有独立维护的 Zorite-derived `lyrel-markdown-editor` 默认即时编辑路线，GUI 仅经 GPUI Kit/Fast。工作台拥有 Host/path、dirty、save/close 与状态，`lyrel-text` 共享原 Apache-2.0 codec/EditorConfig；editor 不依赖 app/core。live/source 不建立第二份源文或 history，所有 source range edit/Undo/Redo 走同一 `DocumentEvent`。Document 在同一事务中更新 LF 原文与逐行表示，保存捕获源文、格式、表示和原 owning Host/path，不以焦点视图决定异步目标。
+
+每个 presentation 都安装 writing、table/code、owning-Host 图片/链接、结构公式及 Mermaid provider。普通链接采用 release 单击，caret 附近按上游语义显露标记；不保留旧 Ctrl+Click-only、始终隐藏标记或旧 WYSIWYG fallback。MDX 是 source-only，旧 rich component/inspector/workspace embed 已退役；frontmatter 和未知语法保留源码，不执行项目组件。公式与图形在 native Rust 中呈现，不使用浏览器或 Node.js 编辑器。
+
+源码例外只涵盖 pinned Zorite `9f069c73a56b06efc84fb7abb700beb50083c827` 的 MIT editor/bidi/ratex 16 文件；registry `zorite-markdown =0.10.1` 仅提供 GUI-free syntax。`UPSTREAM.toml` 记录原始 Git blob 摘要和本地适配，MIT notices 与字体许可进入根 `LICENSE` 并沿平台打包链分发。保留 imported bidi mapping 与超长 nowrap 行的 source-preserving 有界视觉布局；#235 为 `not_planned`，不是 native long-line 或 full RTL 已修复的证明，完整 RTL 仍在已批准验收范围之外。全部源码接线与验收边界见 `HOST_CAPABILITIES.md`；最终 native/实窗/平台与真实 SSH 结果分别记录。LSP 仍属于桌面，headless 不引入 GUI。
 
 coding agent 在真实 PTY 中运行自己的原生 TUI。命令识别、状态 hooks、会话历史、resume／fork 与启动任务投递是独立能力；hooks／产品 SDK bridge 是状态观测与任务交互通道，不替代 agent 界面。内置产品与能力边界见[agent 概览](/agents/overview)和[会话操作](/agents/sessions)，其中 pi 与 omp 是独立产品，名称识别不构成全部能力已经验收的声明。
 
@@ -193,6 +199,6 @@ coding agent 在真实 PTY 中运行自己的原生 TUI。命令识别、状态 
 | 终端连接、交互与绘制 | [`terminal/`](https://github.com/dlivxpr/lyrel/tree/main/src/terminal) |
 | CLI 命令与依赖替换点 | [`lyrel-cli/src/`](https://github.com/dlivxpr/lyrel/tree/main/crates/lyrel-cli/src)，沿用 `Backend` trait |
 
-桌面只支持 Windows／macOS；Linux 保留 core、server、CLI，不预留手机网关。Windows 使用已核验、配套分发的官方 ConPTY，不回退系统终端宿主。依赖、构建、平台断言和发布职责见[安装指南](/getting-started/installation)，不要从某个平台编译成功推导其他平台行为已通过。
+桌面只支持 Windows／macOS；Linux 保留 core、server、CLI 与 GUI-free `lyrel-text`，显式排除根桌面包及 `lyrel-markdown-editor`，不预留手机网关。Windows 使用已核验、配套分发的官方 ConPTY。依赖与平台选择见[安装指南](/getting-started/installation)，编译成功不推导原生或跨平台行为通过。
 
 验证需匹配被修改的边界：共享行为使用对应 core／server／CLI 用例和真实 daemon／PTY 路径；GUI 行为还需实际窗口观察；Unix、Windows、macOS 与真实 SSH 的证据分别记录。历史工单中的测试计数、二进制身份、失败与未验证项保留在原记录，不作为当前源码已重新验收的声明。

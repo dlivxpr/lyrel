@@ -1,6 +1,5 @@
 use std::ops::Range;
 
-use gpui_kit::component::input::RopeExt as _;
 use gpui_kit::{Context, Div, InteractiveElement as _, Stateful, Window};
 
 use super::super::app::LyrelApp;
@@ -131,6 +130,26 @@ fn whole_lines(text: &str, selection: &Range<usize>) -> Range<usize> {
     start..end
 }
 
+fn trailing_whitespace_edits(text: &str, selected: &Range<usize>) -> Vec<(Range<usize>, String)> {
+    let range = if selected.is_empty() {
+        0..text.len()
+    } else {
+        whole_lines(text, selected)
+    };
+    let mut changes = Vec::new();
+    let mut offset = range.start;
+    for line in text[range].split_inclusive('\n') {
+        let body = line.strip_suffix('\n').unwrap_or(line);
+        let body = body.strip_suffix('\r').unwrap_or(body);
+        let keep = body.trim_end_matches([' ', '\t']).len();
+        if keep < body.len() {
+            changes.push((offset + keep..offset + body.len(), String::new()));
+        }
+        offset += line.len();
+    }
+    changes
+}
+
 fn comment_pair(language: &str) -> (&'static str, &'static str) {
     match language {
         "python" | "bash" | "ruby" | "yaml" | "toml" | "elixir" | "cmake" | "make" | "graphql" => {
@@ -253,23 +272,7 @@ fn plan(
             });
         }
         Command::Trim => {
-            range = if selected.is_empty() {
-                0..text.len()
-            } else {
-                whole_lines(text, &selected)
-            };
-            let mut changes = Vec::new();
-            let mut offset = range.start;
-            for line in text[range].split_inclusive('\n') {
-                let body = line.strip_suffix('\n').unwrap_or(line);
-                let body = body.strip_suffix('\r').unwrap_or(body);
-                let keep = body.trim_end_matches([' ', '\t']).len();
-                if keep < body.len() {
-                    changes.push((offset + keep..offset + body.len(), String::new()));
-                }
-                offset += line.len();
-            }
-            return combine(text, changes, selected);
+            return combine(text, trailing_whitespace_edits(text, &selected), selected);
         }
         Command::Join => {
             let lines = whole_lines(text, &selected);
@@ -789,6 +792,15 @@ impl LyrelApp {
         } else {
             selected
         };
+        if matches!(command, Command::Trim)
+            && let Some(view) = input.markdown()
+        {
+            // Keep each untouched terminator; one encompassing replacement
+            // would turn mixed endings into the document's preferred ending.
+            let edits = trailing_whitespace_edits(&text, &selected);
+            view.update(cx, |view, cx| view.replace_ranges(edits, cx));
+            return true;
+        }
         let Some(edit) = plan(&text, selected.clone(), language, tab_size, command) else {
             return true;
         };
@@ -817,24 +829,21 @@ impl LyrelApp {
                 _ => vec![selected_lines.clone()],
             };
             view.update(cx, |view, cx| {
-                view.command(
-                    super::markdown::Command::ReplaceLines {
-                        range: edit.range,
-                        lines,
-                        leading_newline: matches!(command, Command::CopyDown)
-                            && !text[selected_lines].ends_with('\n'),
-                        trailing_newline: edit.replacement.ends_with('\n'),
-                        selection: super::markdown::Selection::new(
-                            edit.selection.start,
-                            edit.selection.end,
-                        ),
-                    },
-                    window,
+                view.replace_lines(
+                    edit.range,
+                    lines,
+                    matches!(command, Command::CopyDown) && !text[selected_lines].ends_with('\n'),
+                    edit.replacement.ends_with('\n'),
                     cx,
                 )
             });
         } else {
             input.replace(edit.range, &edit.replacement, window, cx);
+        }
+        if let Some(view) = input.markdown() {
+            view.update(cx, |view, cx| {
+                view.set_history_selection(selected, edit.selection.clone(), cx)
+            });
         }
         input.set_selected_range(edit.selection, cx);
         true

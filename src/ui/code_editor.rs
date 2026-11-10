@@ -6,10 +6,12 @@ use std::sync::Arc;
 use gpui_kit::TestSupportExt as _;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::input::{
-    Editor, EditorState, Input, InputEvent, InputState, Position, RopeExt as _, TabSize,
+    Editor, EditorState, Input, InputEvent, InputState, Position, TabSize,
 };
 use gpui_kit::component::menu::{ContextMenuExt as _, PopupMenu, PopupMenuItem};
-use gpui_kit::component::{ActiveTheme as _, Icon, IconName, Sizable as _, h_flex, v_flex};
+use gpui_kit::component::{
+    ActiveTheme as _, Disableable as _, Icon, IconName, Sizable as _, h_flex, v_flex,
+};
 use gpui_kit::prelude::*;
 use gpui_kit::{
     AnyElement, Context, Entity, EntityInputHandler as _, Focusable as _, MouseButton, PromptLevel,
@@ -20,23 +22,24 @@ use lyrel_core::core::machine::TabId;
 use crate::ui::app::LyrelApp;
 use crate::ui::document_column::DocumentChrome;
 use crate::ui::editor_session::{self, TabEditor};
-use crate::ui::editor_text::{self, EditorConfig, Indent, LineEnding, TextFormat};
 use crate::ui::host_ops::{HostId, HostOps, MTime, SharedHost, WatchSub};
 use crate::ui::i18n::{L10nKey, t, t_fmt};
 use crate::ui::window_chrome::{TITLE_BAR_BORDER, TitleStripRow as _};
+use lyrel_text::{self, EditorConfig, Indent, LineEnding, TextFormat};
 
 mod buffers;
 pub(crate) mod commands;
 mod document_input;
 pub(crate) mod markdown;
+mod markdown_formula;
 mod markdown_search;
+mod text;
 use buffers::Loaded;
 use document_input::{EditorInput, MarkdownPresentations};
 mod gutter;
 mod nav;
 pub(crate) mod outline;
 mod problems;
-mod references;
 pub(crate) mod saving;
 mod split;
 mod strip;
@@ -121,6 +124,7 @@ pub(crate) struct OpenFile {
     pub(crate) host: SharedHost,
     pub(crate) input: EditorInput,
     presentations: MarkdownPresentations,
+    markdown_resources: Option<Entity<markdown::images::ImageHost>>,
     pub(crate) dirty: bool,
     saved: Fingerprint,
     /// Ordinary code retains its codec metadata here. Markdown owns it in its document.
@@ -132,22 +136,16 @@ pub(crate) struct OpenFile {
     disk_mtime: Option<MTime>,
     saving: bool,
     save_pending: bool,
+    save_as_pending: Option<PathBuf>,
     reload_seq: u64,
+    reload_request: u64,
     pub(crate) conflict: Option<DiskConflict>,
     pub(crate) wrap: bool,
     /// Git change markers — see `gutter`.
     gutter: gutter::BufferGutter,
     popups: Option<Entity<crate::ui::lsp::popups::EditorPopups>>,
-    _assets_sub: Option<Subscription>,
-    asset_location: Option<(
-        gpui_kit::WeakEntity<markdown::SourcePresentation>,
-        std::rc::Rc<std::cell::Cell<bool>>,
-    )>,
-    /// Save As changing a path does not authorize assets until its write succeeds.
-    asset_save_required: bool,
     _sub: Subscription,
     _observe: Subscription,
-    _links_sub: Option<Subscription>,
 }
 
 impl OpenFile {
@@ -173,8 +171,7 @@ impl OpenFile {
 
     fn set_format(&mut self, format: TextFormat, cx: &mut gpui_kit::App) {
         if let Some(view) = self.input.markdown() {
-            let document = view.read(cx).document().clone();
-            document.update(cx, |document, _| document.set_format(format));
+            view.update(cx, |view, cx| view.set_format(format, cx));
         } else {
             self.format = Some(format);
         }
@@ -522,6 +519,11 @@ fn place_cursor(
     cx: &mut gpui_kit::App,
 ) {
     input.set_cursor_position(position, window, cx);
+    // Native Markdown retains a view-local reveal request until layout paints.
+    // Replaying its selection on later frames would overwrite newer navigation.
+    if input.markdown().is_some() {
+        return;
+    }
     // A target near the top of the file scrolls nowhere and is already done;
     // so is one that has landed. Either way this stops.
     if left <= 1 || input.read(cx).scroll_offset().y != px(0.) {
@@ -699,9 +701,10 @@ fn default_browser_bundle_id() -> Option<String> {
 /// The lines a selection covers, 1-based and inclusive. One that ends at the
 /// very start of a line — a whole-line selection — does not take that line.
 fn selected_lines(
-    text: &gpui_kit::component::input::Rope,
+    text: &(impl Clone + Into<text::TextSnapshot>),
     range: std::ops::Range<usize>,
 ) -> Option<(usize, usize)> {
+    let text = text.clone().into();
     if range.is_empty() {
         return None;
     }
@@ -942,17 +945,9 @@ impl LyrelApp {
         }
     }
 
-    fn editor_resource_epoch(&self, id: BufferId, cx: &gpui_kit::App) -> Option<(HostId, u64)> {
-        self.editor
-            .buffers
-            .get(id)?
-            .input
-            .markdown()?
-            .read(cx)
-            .document()
-            .read(cx)
-            .resources()
-            .map(|resources| (resources.host().id(), resources.epoch()))
+    fn editor_resource_epoch(&self, id: BufferId, _: &gpui_kit::App) -> Option<(HostId, u64)> {
+        let file = self.editor.buffers.get(id)?;
+        Some((file.host.id(), file.reload_seq))
     }
 
     fn editor_open_target_valid(&self, target: buffers::OpenTarget, cx: &gpui_kit::App) -> bool {
@@ -978,10 +973,7 @@ impl LyrelApp {
                     .is_some_and(|view| {
                         let document = view.read(cx).document().read(cx);
                         document.revision() == revision
-                            && document
-                                .resources()
-                                .map(|resources| (resources.host().id(), resources.epoch()))
-                                == target.origin_epoch
+                            && self.editor_resource_epoch(id, cx) == target.origin_epoch
                     })
                     && self
                         .tabs
@@ -1213,243 +1205,11 @@ impl LyrelApp {
             .nav
             .track_buffer(id, input.read(cx).text().clone());
         if let Some(source) = input.markdown() {
-            let document = source.read(cx).document().clone();
-            let subscription =
-                cx.subscribe_in(&document, window, move |app, _, event, window, cx| {
-                    if let markdown::DocumentEvent::RequestAssetLocation {
-                        presentation,
-                        cancelled,
-                    } = event
-                    {
-                        app.editor_split_follow_focus(window, cx);
-                        let current = app
-                            .active_editor_input()
-                            .and_then(|input| input.markdown().cloned());
-                        if app.tab_code().and_then(TabCode::active_id) != Some(id)
-                            || !current.is_some_and(|current| current == *presentation)
-                        {
-                            cancelled.set(true);
-                            return;
-                        }
-                        let Some(file) = app.editor.buffers.get(id) else {
-                            cancelled.set(true);
-                            return;
-                        };
-                        if !file.asset_save_required {
-                            if let Some(source) = presentation.upgrade() {
-                                source.update(cx, |source, cx| {
-                                    source.resume_pending_image(window, cx)
-                                });
-                            }
-                            return;
-                        }
-                        let saving = file.saving;
-                        if !saving {
-                            app.editor_save_as(id, window, cx);
-                        }
-                        if let Some(file) = app.editor.buffers.get_mut(id) {
-                            file.asset_location = Some((presentation.clone(), cancelled.clone()));
-                        }
-                    }
-                });
-            self.editor.buffers.get_mut(id).unwrap()._assets_sub = Some(subscription);
-        }
-        if let Some(presentation) = input.markdown() {
-            let document = presentation.read(cx).document().clone();
-            let subscription =
-                cx.subscribe_in(&document, window, move |app, _, event, window, cx| {
-                    if let markdown::DocumentEvent::FollowLink {
-                        presentation,
-                        revision,
-                        resource_epoch,
-                        target,
-                    } = event
-                    {
-                        app.editor_follow_markdown_link(
-                            id,
-                            *presentation,
-                            *revision,
-                            *resource_epoch,
-                            target,
-                            window,
-                            cx,
-                        );
-                    }
-                    if let markdown::DocumentEvent::RequestReferences {
-                        presentation,
-                        generation,
-                        revision,
-                        resource_epoch,
-                        cancelled,
-                        query,
-                        anchors,
-                    } = event
-                    {
-                        app.editor_query_references(
-                            id,
-                            presentation.clone(),
-                            *generation,
-                            *revision,
-                            *resource_epoch,
-                            cancelled.clone(),
-                            query.clone(),
-                            *anchors,
-                            window,
-                            cx,
-                        );
-                    }
-                    if let markdown::DocumentEvent::RequestEmbeds {
-                        presentation,
-                        generation,
-                        revision,
-                        resource_epoch,
-                    } = event
-                    {
-                        app.editor_refresh_embeds(
-                            id,
-                            presentation.clone(),
-                            *generation,
-                            *revision,
-                            *resource_epoch,
-                            window,
-                            cx,
-                        );
-                    }
-                    if let markdown::DocumentEvent::RequestImageEdit {
-                        presentation,
-                        revision,
-                        selection,
-                    } = event
-                    {
-                        app.editor_edit_markdown_image(
-                            id,
-                            presentation.clone(),
-                            *revision,
-                            *selection,
-                            window,
-                            cx,
-                        );
-                    }
-                });
-            if let Some(file) = self.editor.buffers.get_mut(id) {
-                file._links_sub = Some(subscription);
-            }
-        }
-    }
-
-    fn editor_edit_markdown_image(
-        &mut self,
-        id: BufferId,
-        presentation: gpui_kit::WeakEntity<markdown::SourcePresentation>,
-        revision: u64,
-        selection: markdown::Selection,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        let Some(view) = presentation.upgrade() else {
-            return;
-        };
-        if self.active_buffer().is_none_or(|file| file.id() != id)
-            || self
-                .active_editor_input()
-                .is_none_or(|input| input.markdown().is_none_or(|active| active != &view))
-            || view.read(cx).document().read(cx).revision() != revision
-            || view.read(cx).selection() != selection
-        {
-            return;
-        }
-        let Some(tab) = self.tabs.get(self.tabs.active_index()).map(|tab| tab.id()) else {
-            return;
-        };
-        let Some(group) = self.tab_code().map(|code| code.group) else {
-            return;
-        };
-        let target = buffers::OpenTarget {
-            workspace: self.workspace,
-            tab,
-            group: Some(group),
-            window_host: self.spawn_host(cx),
-            origin: Some((id, revision)),
-            origin_epoch: self.editor_resource_epoch(id, cx),
-        };
-        let owner = cx.weak_entity();
-        let identity = view.entity_id();
-        let current = std::rc::Rc::new(move |cx: &gpui_kit::App| {
-            let Some(owner) = owner.upgrade() else {
-                return false;
-            };
-            let owner = owner.read(cx);
-            owner.editor_open_target_valid(target, cx)
-                && owner
-                    .tabs
-                    .get(owner.tabs.active_index())
-                    .is_some_and(|active| active.id() == tab)
-                && owner.tab_code().is_some_and(|code| code.group == group)
-                && owner.active_editor_input().is_some_and(|input| {
-                    input
-                        .markdown()
-                        .is_some_and(|active| active.entity_id() == identity)
-                })
-        });
-        view.update(cx, |view, cx| view.open_image_editor(current, window, cx));
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    fn editor_follow_markdown_link(
-        &mut self,
-        id: BufferId,
-        presentation: gpui_kit::EntityId,
-        revision: u64,
-        resource_epoch: Option<(HostId, u64)>,
-        target: &str,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        // Events from closed/replaced presentations cannot redirect a newer tab.
-        if self.active_buffer().is_none_or(|file| file.id() != id)
-            || self.editor_resource_epoch(id, cx) != resource_epoch
-            || self
-                .active_editor_input()
-                .and_then(|input| input.markdown().cloned())
-                .is_none_or(|view| {
-                    view.entity_id() != presentation
-                        || view.read(cx).document().read(cx).revision() != revision
-                })
-        {
-            return;
-        }
-        let Some(file) = self.editor.buffers.get(id) else {
-            return;
-        };
-        let host = file.host.clone();
-        let destination = markdown::links::resolve(&file.path, host.as_ref(), target);
-        match destination {
-            Ok(markdown::links::Target::External(url)) => cx.open_url(&url),
-            Ok(markdown::links::Target::File(path)) => {
-                let fragment = target
-                    .split_once('#')
-                    .map(|(_, fragment)| fragment)
-                    .filter(|fragment| !fragment.is_empty())
-                    .map(str::to_owned);
-                if path.extension().is_none() || fragment.is_some() {
-                    self.editor_resolve_reference_file(
-                        id, revision, host, path, fragment, window, cx,
-                    );
-                } else {
-                    self.editor_open_request(host, &path, None, Some((id, revision)), window, cx);
-                }
-            }
-            Ok(markdown::links::Target::Anchor) => window.notify_app(
-                t_fmt(
-                    L10nKey::MarkdownLinkOpenFailed,
-                    &[("reason", t(L10nKey::MarkdownLinkAnchorNotFound))],
-                ),
-                cx,
-            ),
-            Err(reason) => window.notify_app(
-                t_fmt(L10nKey::MarkdownLinkOpenFailed, &[("reason", t(reason))]),
-                cx,
-            ),
+            let app = cx.entity().downgrade();
+            let resources =
+                cx.new(|cx| markdown::images::ImageHost::new(app, id, source, window, cx));
+            markdown::images::ImageHost::attach(&resources, source, cx);
+            self.editor.buffers.get_mut(id).unwrap().markdown_resources = Some(resources);
         }
     }
 
@@ -1507,7 +1267,7 @@ impl LyrelApp {
         };
         self.raise_code_overlay();
         let n = self.editor.buffers.next_untitled();
-        let indent = editor_text::detect_indent("", "text");
+        let indent = lyrel_text::detect_indent("", "text");
         let id = self.editor_new_buffer(
             host,
             PathBuf::new(),
@@ -1537,7 +1297,7 @@ impl LyrelApp {
         };
         let host: SharedHost = lyrel_core::host::local::LocalHost::new();
         let n = self.editor.buffers.next_untitled();
-        let indent = editor_text::detect_indent(&text, "text");
+        let indent = lyrel_text::detect_indent(&text, "text");
         let dirty = !text.is_empty();
         let id = self.editor_new_buffer(
             host,
@@ -1618,8 +1378,8 @@ impl LyrelApp {
                 .expect("active editor tab")
                 .id();
             let group = self.tab_code().expect("active editor group").group;
-            let view = file.presentations.view(input, tab, group, cx);
-            view.read(cx).focus_handle(cx).focus(window, cx);
+            let view = file.presentations.view(input, tab, group, window, cx);
+            EditorInput::Markdown(view).focus(window, cx);
         } else {
             file.input.focus(window, cx);
         }
@@ -1671,7 +1431,7 @@ impl LyrelApp {
 
     /// Switch the active native Markdown presentation between live editing and source.
     /// `ToggleDocumentPreview` remains the action ID for existing custom keybindings.
-    pub(crate) fn toggle_document_preview(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn toggle_document_preview(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
         if !self.code_panel_visible() {
             return;
         }
@@ -1679,7 +1439,7 @@ impl LyrelApp {
             .active_editor_input()
             .and_then(|input| input.markdown().cloned())
         {
-            view.update(cx, |view, cx| view.toggle_mode(window, cx));
+            view.update(cx, |view, cx| view.toggle_mode(cx));
             cx.notify();
         }
     }
@@ -1802,11 +1562,9 @@ impl LyrelApp {
                     cx.propagate();
                     return;
                 }
-                this.editor_dispatch(
-                    &crate::ui::code_editor::commands::TrimTrailingWhitespace,
-                    window,
-                    cx,
-                );
+                // This handler already owns LyrelApp. Redispatching to its own
+                // command listener would try to update the same entity again.
+                this.editor_apply_command(commands::Command::Trim, window, cx);
             }),
         )
         .on_action(cx.listener(|this, _: &EditorJoinLines, window, cx| {
@@ -1854,8 +1612,9 @@ impl LyrelApp {
             || self
                 .active_editor_input()
                 .and_then(|input| {
-                    let source = input.markdown()?;
-                    self.active_buffer()?.presentations.search(source)
+                    input
+                        .markdown()
+                        .and_then(|source| self.active_buffer()?.presentations.search(source))
                 })
                 .is_some_and(|search| search.read(cx).has_focus(window, cx))
     }
@@ -1917,29 +1676,6 @@ impl LyrelApp {
                 self.editor_gutter_refetch(id);
                 if let Some(directory) = directory {
                     self.scm_invalidate_cwd(host, &directory, cx);
-                }
-                if let Some((source, cancelled)) = self
-                    .editor
-                    .buffers
-                    .get_mut(id)
-                    .and_then(|file| file.asset_location.take())
-                {
-                    let current = self
-                        .active_editor_input()
-                        .and_then(|input| input.markdown().cloned());
-                    if self.tab_code().and_then(TabCode::active_id) != Some(id)
-                        || !current.is_some_and(|current| current == source)
-                    {
-                        cancelled.set(true);
-                        return;
-                    }
-                    let Some(source) = source.upgrade() else {
-                        return;
-                    };
-                    source.update(cx, |source, cx| {
-                        source.focus_handle(cx).focus(window, cx);
-                        source.resume_pending_image(window, cx);
-                    });
                 }
             }
             EditorEvent::IdentityChanged => self.editor_rebuild_watcher(cx),
@@ -2011,13 +1747,22 @@ impl LyrelApp {
         let Some(id) = self.tab_code().and_then(|c| c.files.get(pos).copied()) else {
             return;
         };
+        let shared = self.buffer_refs(id) > 1;
         if let Some(file) = self.editor.buffers.get(id) {
-            file.input.finish_composition(window, cx);
+            if shared {
+                let tab = self.tabs.get(tab_ix).unwrap().id();
+                let group = self.tab_code().unwrap().focused_group();
+                if let Some(view) = file.presentations.existing(tab, group) {
+                    view.update(cx, |view, cx| view.finish_owned_composition(cx));
+                }
+            } else {
+                file.input.finish_composition(window, cx);
+            }
         }
         let Some(f) = self.editor.buffers.get(id) else {
             return;
         };
-        if !f.dirty || self.buffer_refs(id) > 1 {
+        if !f.dirty || shared {
             self.editor_remove_from_tab(tab_ix, id, cx);
             self.focus_editor(window, cx);
             return;
@@ -2092,7 +1837,7 @@ impl LyrelApp {
         };
         let input = self.editor_input_for(id).expect("retained document");
         let state = input.read(cx);
-        let suffix = match selected_lines(state.text(), state.selected_range()) {
+        let suffix = match selected_lines(&state.text(), state.selected_range()) {
             Some((a, b)) if a == b => format!("#L{a}"),
             Some((a, b)) => format!("#L{a}-{b}"),
             None => String::new(),
@@ -2153,13 +1898,7 @@ impl LyrelApp {
                 .menu(
                     t(L10nKey::EditorGoToLineAction),
                     Box::new(crate::core::actions::EditorGoToLine),
-                )
-                .menu(
-                    t(L10nKey::EditorDocumentProperties),
-                    Box::new(markdown::EditDocumentProperties),
                 );
-            let menu = markdown.update(cx, |markdown, cx| markdown.table_menu(menu, cx));
-            let menu = markdown.read(cx).link_menu(menu, cx);
             return owner.read(cx).editor_file_menu_items(menu, id, app, cx);
         }
         let menu = menu
@@ -2813,6 +2552,7 @@ impl LyrelApp {
         let body = self.render_editor_body(
             self.tab_code().and_then(TabCode::active_id),
             self.tab_code().map_or(0, TabCode::focused_slot),
+            window,
             cx,
         );
         let conflict_banner = self
@@ -2901,6 +2641,7 @@ impl LyrelApp {
         &self,
         id: Option<BufferId>,
         slot: usize,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
         match id.and_then(|id| self.editor.buffers.get(id)) {
@@ -2918,14 +2659,39 @@ impl LyrelApp {
                 } else {
                     code.split.as_ref().expect("second editor group").id
                 };
-                let view = f.presentations.view(input, tab, group, cx);
-                let app = cx.entity().downgrade();
-                let id = f.id();
+                let view = f.presentations.view(input, tab, group, window, cx);
+                if let Some(resources) = &f.markdown_resources {
+                    markdown::images::ImageHost::attach(resources, &view, cx);
+                }
                 v_flex()
+                    .id(("markdown-presentation", view.entity_id()))
+                    .min_w_0()
                     .size_full()
+                    .font_family(if view.read(cx).is_live() {
+                        SharedString::from("Arial")
+                    } else {
+                        cx.theme().mono_font_family.clone()
+                    })
+                    .text_size(rems(1.))
+                    .text_color(cx.theme().foreground)
+                    .when(!view.read(cx).is_source_only(), |body| {
+                        body.children(
+                            f.markdown_resources
+                                .as_ref()
+                                .map(|resources| markdown::images::controls(resources, &view, cx)),
+                        )
+                    })
+                    .child(markdown::table_code::render_controls(&view))
                     .children(f.presentations.search(&view))
-                    .child(div().flex_1().min_h_0().child(view))
-                    .context_menu(move |menu, _, cx| Self::editor_body_menu(menu, &app, id, cx))
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .min_h_0()
+                            // Native document inset also clears the existing dock resize band.
+                            // Keep it inside the scroll owner rather than adding shell padding.
+                            .child(view),
+                    )
                     .into_any_element()
             }
             Some(f) => {
@@ -3214,9 +2980,11 @@ impl LyrelApp {
             ln_col.into()
         });
         let wrap: Option<bool> = active.map(|f| f.wrap);
-        let native_live = self
-            .active_editor_input()
-            .and_then(|input| input.markdown().map(|view| view.read(cx).is_live()));
+        let native_live = self.active_editor_input().and_then(|input| {
+            input
+                .markdown()
+                .map(|view| (view.read(cx).is_live(), view.read(cx).is_source_only()))
+        });
         let indent: Option<SharedString> = active.map(|f| {
             let key = if f.indent.hard_tabs {
                 L10nKey::EditorIndentTabs
@@ -3258,19 +3026,19 @@ impl LyrelApp {
                         this.focus_editor(window, cx);
                     })),
             )
-            .when_some(native_live, |this, live| {
-                let label = t(if live {
+            .when_some(native_live, |this, (live, source_only)| {
+                let label = t(if live || source_only {
                     L10nKey::EditorMarkdownSource
                 } else {
                     L10nKey::EditorMarkdownLive
                 });
                 this.child(
-                    item("status-md-preview", label.into()).on_click(cx.listener(
-                        |this, _, window, cx| {
+                    item("status-md-preview", label.into())
+                        .disabled(source_only)
+                        .on_click(cx.listener(|this, _, window, cx| {
                             this.toggle_document_preview(window, cx);
                             this.focus_editor(window, cx);
-                        },
-                    )),
+                        })),
                 )
             })
             .when_some(wrap, |this, wrap| {

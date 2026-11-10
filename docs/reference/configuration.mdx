@@ -98,9 +98,9 @@ description: "lyrel 读取的每个配置键、类型及默认值。"
 
 标签导航固定在左侧，窗口六按钮常驻。加载旧配置时精准移除 `tab_bar_position` 和 `auto_hide_titlebar_buttons`，不将整个配置重写为默认值；其他键（含当前版本不识别的键）、主题、字体、opacity、快捷键及工作区文件均保留。侧栏收起状态仍由 `sidebar_collapsed` 控制。
 
-`.md`、`.markdown`、`.mdx` 文件默认使用原生 Markdown 即时编辑；状态栏或 `ToggleDocumentPreview` 可在即时编辑与源码间切换，两种模式共用同一份文档和撤销历史。旧 `editor_markdown_preview` 键已退役，加载时作为未知键忽略，不会触发专门迁移；下次正常保存配置时不再写出。没有替代设置或只读预览偏好。
+`.md`、`.markdown` 默认使用 Zorite-derived native Markdown 编辑器；live/source 共用文档与 history，`ToggleDocumentPreview` 保留。`.mdx` 为 source-only，不恢复旧 rich component 系统。旧 `editor_markdown_preview` 键仍按未知键忽略；没有替代设置、只读预览偏好或双编辑器切换开关。当前源码导入与各 Host 能力的交付/验收状态见[编辑器说明](/window/side-panel#markdown-editor-design)。
 
-“新建 Markdown 文档”（`EditorNewMarkdownFile`）显式创建未命名 Markdown 文档，另存为建议使用 `.md`。普通新建文本（包括编辑器中的 `Ctrl+N`）与终端回滚内容导出仍使用普通文本编辑器，不会静默变为 Markdown。外部 HTTP(S) 图片初始不请求，须在当前文档选择“加载外部图片”；详见[隐私与权限](/reference/privacy#what-leaves-your-machine)。
+“新建 Markdown 文档”（`EditorNewMarkdownFile`）从开始创建 native 文档，首次另存为建议 `.md`。普通文本新建与终端 scrollback 导出不自动转换。图片插入／截图粘贴／拖入需先保存文档，由所属Host写入唯一命名的同级assets；HTTP(S)图片在资源行主动加载前不请求，加载由本机client发出且不跟随重定向。没有自动联网配置或旧provider回退。新接线的实际native／local／SSH结果按当前候选分别记录，不沿用旧实现证据。
 
 <a id="terminal"></a>
 ## 终端

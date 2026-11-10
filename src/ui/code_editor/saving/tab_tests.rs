@@ -33,7 +33,7 @@ fn failed_save_does_not_close_the_tab_on_a_later_manual_save(cx: &mut TestAppCon
     let recovered = dir.path().join("recovered-tab.txt");
     std::fs::create_dir(&occupied).unwrap();
     let (app, mut vcx, _streams) = harness_with_tabs(cx, 2);
-    new_edited_file(&app, &mut vcx);
+    let id = new_edited_file(&app, &mut vcx);
     let original = app.read_with(&vcx, |app, _| app.tabs[0].id());
     app.update_in(&mut vcx, |app, window, cx| app.close_tab(0, window, cx));
     settle(&mut vcx);
@@ -43,9 +43,18 @@ fn failed_save_does_not_close_the_tab_on_a_later_manual_save(cx: &mut TestAppCon
     wait_until(&mut vcx, |vcx| {
         app.read_with(vcx, |app, _| {
             app.active_buffer()
-                .is_some_and(|file| file.path == occupied && !file.saving)
+                .is_some_and(|file| file.untitled.is_some() && !file.saving)
+                && app.editor.waiters.is_empty()
         })
     });
+    app.read_with(&vcx, |app, cx| {
+        let file = app.active_buffer().unwrap();
+        assert_eq!(file.id(), id);
+        assert!(file.path.as_os_str().is_empty());
+        assert!(file.dirty);
+        assert_eq!(file.input.read(cx).text().to_string(), "original edits");
+    });
+    assert!(occupied.is_dir());
     assert_eq!(app.read_with(&vcx, |app, _| app.tabs.len()), 2);
     vcx.dispatch_action(EditorSaveAs);
     settle(&mut vcx);
@@ -59,6 +68,10 @@ fn failed_save_does_not_close_the_tab_on_a_later_manual_save(cx: &mut TestAppCon
     app.read_with(&vcx, |app, _| {
         assert_eq!(app.tabs.len(), 2);
         assert_eq!(app.tabs[0].id(), original);
+        let file = app.active_buffer().unwrap();
+        assert_eq!(file.id(), id);
+        assert_eq!(file.path, recovered);
+        assert!(file.untitled.is_none());
     });
     assert_eq!(
         std::fs::read_to_string(recovered).unwrap(),
