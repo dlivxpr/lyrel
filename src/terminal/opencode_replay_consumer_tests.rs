@@ -96,7 +96,7 @@ fn native_pictures(view: &TerminalView, scale: f32) -> Vec<NativePicture> {
         Some(NativePicture {
             color,
             bgra_sha256: { use sha2::Digest; sha2::Sha256::digest(bytes).into() },
-            dimensions: { let size = image.data.as_ref()?.size(0); (size.width.0, size.height.0) },
+            dimensions: { let size = image.data.as_ref()?.size(0); (size.width.0 as u32, size.height.0 as u32) },
             placement: image.placement,
             bounds: [bounds.origin.x.as_f32() / cell_width.as_f32(), bounds.origin.y.as_f32() / line_height.as_f32(),
                 (bounds.origin.x + bounds.size.width).as_f32() / cell_width.as_f32(),
