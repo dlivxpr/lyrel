@@ -24,6 +24,7 @@
 
 ### 修复
 
+- #252：真实字形／主题／光标消费者从零光栅边界的 `NoopTextSystem` 迁入 `native_terminal` 目标，复用已有 OS 主线程、真实字体 runner 与同一 PTY／daemon 支持；复制、宽字／组合字符、链接、Tab stops、冻结文字及非空 glyph／动态颜色断言全部保留。Windows raw PTY 的长链接夹具先显式开启 DECAWM，并独立核对全部三行后再冻结、滚动与验证 hover／完整目标，不改生产阅读／绘制逻辑或 #249 matrix。未运行构建、测试、lint、格式化；native-font consumer 不替代 #255 实窗／系统 IME 验收。
 - #252：生产绘制消费者改从 GPUI 已完成帧的 `terminal-surface` 几何观察固定 pane 边界，不再读取私有 `GridSnapshot::scroll_shift`；保留分数滚动上一行图片的可见薄片与全部真实 paint 断言，不修改字段可见性或生产行为。本修复未运行构建、测试、lint 或格式化，待集成验收。
 - #250：修复 Windows PowerShell 5.1 在 hook 之后执行 `Env:` 显式空赋值、再次删除空值的问题：仅对已识别 agent 命令的七个 scope 字段，在旧 Windows PowerShell／pwsh 中用系统 setter 执行空字面量赋值；保持原始历史／OSC、显式 `TERM_PROGRAM`、opt-outs 和提示符恢复。真实 PTY 用例新增显式空／unset 恢复断言，并用生产 scope encoder 配合 `Start-Job`／`Wait-Job` 覆盖 PS5.1，保留 pwsh 7 末尾 `&` 背景启动及恢复断言；旧 `AmpersandNotAllowed` 不算有效启动。本次未执行测试、构建、lint 或格式化，PS5.1／pwsh 7 均待集成验收。
 - #250：Bash 提交命令的 history 前缀正则改为局部变量中的 ERE，并在 `=~` 右侧使用未加引号的变量展开，避免 Bash 3.2 在启动阶段把内联正则中的括号误解析为 shell 语法。正则、完整多行命令重建、转义／截断、用户 history／hooks 及命令级 agent scope 均不变，不增加 `eval` 或命令执行；保留全部既有断言。本修复子任务未执行构建、测试、lint 或格式化，Bash 3.2／4.4／5.1／5.2 行为需由集成验收核验。

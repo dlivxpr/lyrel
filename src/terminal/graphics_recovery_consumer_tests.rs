@@ -2,38 +2,6 @@
 // decoder output and TerminalElement paint/geometry. The headless GPUI window
 // does not certify final GPU pixels or replace the native reopen acceptance.
 
-fn graphics_consumer_progress(cx: &mut TestAppContext) {
-    cx.update(|cx| cx.refresh_windows());
-    cx.executor()
-        .advance_clock(std::time::Duration::from_millis(5));
-    cx.run_until_parked();
-    std::thread::sleep(std::time::Duration::from_millis(5));
-}
-
-fn graphics_recovery_wait(
-    cx: &mut TestAppContext,
-    reason: &str,
-    ready: impl FnMut(&mut TestAppContext) -> bool,
-) {
-    graphics_recovery_wait_with(cx, std::time::Duration::from_secs(30), ready, |_| reason.to_owned());
-}
-
-/// Native agent startup and full-size replay need longer deadlines and live
-/// diagnostics, but must pump the same production consumer lifecycle.
-#[track_caller]
-fn graphics_recovery_wait_with(
-    cx: &mut TestAppContext,
-    timeout: std::time::Duration,
-    mut ready: impl FnMut(&mut TestAppContext) -> bool,
-    mut diagnostics: impl FnMut(&mut TestAppContext) -> String,
-) {
-    let deadline = std::time::Instant::now() + timeout;
-    while !ready(cx) {
-        assert!(std::time::Instant::now() < deadline, "{}", diagnostics(cx));
-        graphics_consumer_progress(cx);
-    }
-}
-
 fn graphics_recovery_fresh(
     daemon: &GraphicsDaemonProcess,
     pane: u64,

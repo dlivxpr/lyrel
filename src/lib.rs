@@ -14,7 +14,22 @@ mod native_markdown;
 /// 在进程主线程上运行真实字体 Markdown consumer。
 #[cfg(feature = "native-markdown-tests")]
 pub fn run_native_markdown_tests() -> std::process::ExitCode {
-    native_markdown::main()
+    native_markdown::main(
+        ui::code_editor::markdown::native_cases().collect(),
+        "native_markdown",
+    )
+}
+
+/// Run the native-font terminal consumer on the process main thread.
+#[cfg(feature = "native-markdown-tests")]
+pub fn run_native_terminal_tests() -> std::process::ExitCode {
+    if let Some(result) = terminal::view::native_terminal_tests::run_fixture() {
+        return result;
+    }
+    native_markdown::main(
+        terminal::view::native_terminal_tests::native_cases().collect(),
+        "native_terminal",
+    )
 }
 
 use crate::core::config::Config;
