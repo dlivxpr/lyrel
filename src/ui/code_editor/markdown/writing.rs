@@ -9,13 +9,14 @@ use gpui_kit::component::{input::Input, v_flex};
 
 struct ColorDraft {
     picker: Entity<ColorPickerState>,
+    title: SharedString,
     _observe: Subscription,
 }
 impl Render for ColorDraft {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         v_flex()
             .gap_3()
-            .child(ColorSelect::new(&self.picker))
+            .child(ColorSelect::new(&self.picker).accessibility_label(self.title.clone()))
             .when(!self.picker.read(cx).is_open(), |view| view.child(
                 div().debug_selector(|| "writing-color-hex".into())
                     .child(Input::new(self.picker.read(cx).hex_input())),
@@ -142,6 +143,7 @@ fn open_color(editor: &Entity<EditorState>, request: WritingRequest, window: &mu
     picker.update(cx, |picker, cx| picker.sync_pending_value(window, cx));
     let draft = cx.new(|cx| ColorDraft {
         picker: picker.clone(),
+        title: title.into(),
         _observe: cx.observe(&picker, |_, _, cx| cx.notify()),
     });
     let target = editor.downgrade();
