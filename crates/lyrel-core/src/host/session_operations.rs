@@ -292,14 +292,18 @@ pub(crate) fn prepare<H: Host + ?Sized>(
     if resolved.scope.shell_program.is_none() {
         resolved.scope.shell_program = Some(default_shell_program(host)?);
     }
-    let bound_launch = resolved.scope.opencode.as_ref()
+    let bound_launch = resolved
+        .scope
+        .opencode
+        .as_ref()
         .filter(|_| resolved.agent == CLIAgent::OpenCode)
         .map(|context| context.launch_argv.as_slice())
         .filter(|argv| !argv.is_empty());
     if let Some(argv) = bound_launch {
         scope_environment_prefix(argv, &mut resolved.scope.environment)?;
     } else {
-        let prefix = scope_environment_prefix(&resolved.launch_argv, &mut resolved.scope.environment)?;
+        let prefix =
+            scope_environment_prefix(&resolved.launch_argv, &mut resolved.scope.environment)?;
         resolved.launch_argv.drain(..prefix);
     }
     compatibility_environment(resolved.agent, &mut resolved.scope.environment);
@@ -700,10 +704,14 @@ fn compatibility_environment(agent: CLIAgent, environment: &mut BTreeMap<String,
         ("LC_TERMINAL", "lyrel"),
         ("LC_TERMINAL_VERSION", env!("CARGO_PKG_VERSION")),
     ] {
-        environment.entry(key.into()).or_insert_with(|| value.into());
+        environment
+            .entry(key.into())
+            .or_insert_with(|| value.into());
     }
     if agent == CLIAgent::OhMyPi {
-        environment.entry("PI_NO_DECCARA".into()).or_insert_with(|| "1".into());
+        environment
+            .entry("PI_NO_DECCARA".into())
+            .or_insert_with(|| "1".into());
     }
 }
 
@@ -733,10 +741,14 @@ pub fn agent_compatibility_command(agent: CLIAgent, line: &str) -> String {
         // Hermes' presence marker is resolved in the target shell, not here:
         // an inherited explicit value (including empty) must stay authoritative.
     ] {
-        if !enabled || argv.as_ref().is_some_and(|argv| {
-            argv.iter().take_while(|arg| arg.contains('='))
-                .any(|arg| arg.split_once('=').is_some_and(|(explicit, _)| explicit == key))
-        }) {
+        if !enabled
+            || argv.as_ref().is_some_and(|argv| {
+                argv.iter().take_while(|arg| arg.contains('=')).any(|arg| {
+                    arg.split_once('=')
+                        .is_some_and(|(explicit, _)| explicit == key)
+                })
+            })
+        {
             continue;
         }
         command.push_str(key);
@@ -757,8 +769,16 @@ pub fn scoped_launch_command<H: Host + ?Sized>(
 ) -> Result<String, SessionOperationError> {
     let mut argv = match crate::core::cli_agent::parse_command_argv(line) {
         Ok(argv) => argv,
-        Err(error) if line.trim_start().split_once('=').is_some_and(|(key, _)| SCOPE_ENV.contains(&key)) => {
-            return Err(failure(SessionErrorKind::Unsupported, format!("agent_launch: {error}")));
+        Err(error)
+            if line
+                .trim_start()
+                .split_once('=')
+                .is_some_and(|(key, _)| SCOPE_ENV.contains(&key)) =>
+        {
+            return Err(failure(
+                SessionErrorKind::Unsupported,
+                format!("agent_launch: {error}"),
+            ));
         }
         Err(_) => return Ok(line.into()),
     };
@@ -793,8 +813,12 @@ pub fn scoped_agent_launch_command<H: Host + ?Sized>(
     line: &str,
     shell: Option<&str>,
 ) -> Result<String, SessionOperationError> {
-    let mut argv = crate::core::cli_agent::parse_command_argv(line)
-        .map_err(|error| failure(SessionErrorKind::Unsupported, format!("agent_launch: {error}")))?;
+    let mut argv = crate::core::cli_agent::parse_command_argv(line).map_err(|error| {
+        failure(
+            SessionErrorKind::Unsupported,
+            format!("agent_launch: {error}"),
+        )
+    })?;
     let mut scope = SessionScope {
         shell_program: Some(match shell {
             Some(shell) => shell.to_owned(),
@@ -805,7 +829,10 @@ pub fn scoped_agent_launch_command<H: Host + ?Sized>(
     let prefix = scope_environment_prefix(&argv, &mut scope.environment)?;
     argv.drain(..prefix);
     if argv.is_empty() {
-        return Err(failure(SessionErrorKind::Command, "launch environment has no executable"));
+        return Err(failure(
+            SessionErrorKind::Command,
+            "launch environment has no executable",
+        ));
     }
     compatibility_environment(agent, &mut scope.environment);
     agent_command_line(&argv, &scope, agent)
@@ -816,7 +843,11 @@ fn agent_command_line(
     scope: &SessionScope,
     agent: CLIAgent,
 ) -> Result<String, SessionOperationError> {
-    encode_command_line(argv, scope, agent == CLIAgent::Hermes && !scope.environment.contains_key("KITTY_WINDOW_ID"))
+    encode_command_line(
+        argv,
+        scope,
+        agent == CLIAgent::Hermes && !scope.environment.contains_key("KITTY_WINDOW_ID"),
+    )
 }
 
 pub(crate) fn command_line(
@@ -833,17 +864,33 @@ fn encode_command_line(
 ) -> Result<String, SessionOperationError> {
     let shell = scope.shell_program.as_deref();
     if shell.is_some_and(|shell| {
-        shell.rsplit(['/', '\\']).next().unwrap_or(shell).trim_end_matches(".exe").eq_ignore_ascii_case("nu")
+        shell
+            .rsplit(['/', '\\'])
+            .next()
+            .unwrap_or(shell)
+            .trim_end_matches(".exe")
+            .eq_ignore_ascii_case("nu")
     }) {
         let quote = crate::daemon::shell_integration::nu_string_literal;
-        let command = format!("^{}", argv.iter().map(|arg| quote(arg)).collect::<Vec<_>>().join(" "));
-        let mut environment = scope.environment.iter()
+        let command = format!(
+            "^{}",
+            argv.iter()
+                .map(|arg| quote(arg))
+                .collect::<Vec<_>>()
+                .join(" ")
+        );
+        let mut environment = scope
+            .environment
+            .iter()
             .map(|(key, value)| format!("{key}: {}", quote(value)))
-            .collect::<Vec<_>>().join(", ");
+            .collect::<Vec<_>>()
+            .join(", ");
         if default_kitty_marker {
             environment.push_str(", KITTY_WINDOW_ID: (if 'KITTY_WINDOW_ID' in $env { $env.KITTY_WINDOW_ID } else { 'lyrel' })");
         }
-        return Ok(if environment.is_empty() { command } else {
+        return Ok(if environment.is_empty() {
+            command
+        } else {
             format!("with-env {{{environment}}} {{ {command} }}")
         });
     }
@@ -876,9 +923,7 @@ fn encode_command_line(
             save.push_str(&format!(
                 "$__lyrelEnv['{key}']=[Environment]::GetEnvironmentVariables('Process')['{key}']; "
             ));
-            restore.push_str(&format!(
-                "__LyrelScopeSet '{key}' $__lyrelEnv['{key}']; "
-            ));
+            restore.push_str(&format!("__LyrelScopeSet '{key}' $__lyrelEnv['{key}']; "));
         }
         for (key, value) in &scope.environment {
             if value.is_empty() {
@@ -911,9 +956,13 @@ fn encode_command_line(
     if default_kitty_marker {
         let base = shell.unwrap_or("").rsplit(['/', '\\']).next().unwrap_or("");
         command = if quoting == Quoting::Cmd {
-            format!("if defined KITTY_WINDOW_ID ({command}) else (set \"KITTY_WINDOW_ID=lyrel\" && {command})")
+            format!(
+                "if defined KITTY_WINDOW_ID ({command}) else (set \"KITTY_WINDOW_ID=lyrel\" && {command})"
+            )
         } else if base == "fish" {
-            format!("if set -q KITTY_WINDOW_ID; {command}; else; KITTY_WINDOW_ID=lyrel {command}; end")
+            format!(
+                "if set -q KITTY_WINDOW_ID; {command}; else; KITTY_WINDOW_ID=lyrel {command}; end"
+            )
         } else {
             format!("KITTY_WINDOW_ID=\"${{KITTY_WINDOW_ID-lyrel}}\" {command}")
         };
@@ -1335,17 +1384,26 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let output = dir.path().join("identity.json");
         let argv = vec![
-            std::env::current_exe().unwrap().to_string_lossy().into_owned(),
-            "--ignored".into(), "--exact".into(),
+            std::env::current_exe()
+                .unwrap()
+                .to_string_lossy()
+                .into_owned(),
+            "--ignored".into(),
+            "--exact".into(),
             "host::session_operations::tests::omp_identity_child".into(),
             "--nocapture".into(),
         ];
-        let mut scope = SessionScope { shell_program: Some("nu".into()), ..Default::default() };
+        let mut scope = SessionScope {
+            shell_program: Some("nu".into()),
+            ..Default::default()
+        };
         compatibility_environment(CLIAgent::OhMyPi, &mut scope.environment);
         let child = command_line(&argv, &scope).unwrap();
-        let result = Command::new("nu").args(["--no-config-file", "-c"])
+        let result = Command::new("nu")
+            .args(["--no-config-file", "-c"])
             .arg(format!("{child}; print $env.TERM_PROGRAM"))
-            .env("LYREL_IDENTITY_OUTPUT", &output).env("TERM_PROGRAM", "original")
+            .env("LYREL_IDENTITY_OUTPUT", &output)
+            .env("TERM_PROGRAM", "original")
             .output();
         let result = match result {
             Err(error) if error.kind() == io::ErrorKind::NotFound => {
@@ -1354,8 +1412,13 @@ mod tests {
             }
             result => result.unwrap(),
         };
-        assert!(result.status.success(), "{}", String::from_utf8_lossy(&result.stderr));
-        let actual: serde_json::Value = serde_json::from_slice(&std::fs::read(output).unwrap()).unwrap();
+        assert!(
+            result.status.success(),
+            "{}",
+            String::from_utf8_lossy(&result.stderr)
+        );
+        let actual: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(output).unwrap()).unwrap();
         assert_eq!(actual["TERM_PROGRAM"], "kitty");
         assert_eq!(actual["PI_NO_DECCARA"], "1");
         assert!(String::from_utf8_lossy(&result.stdout).contains("original"));
@@ -1370,24 +1433,46 @@ mod tests {
             // A wrapper need not name its agent: launch intent is explicit.
             let native = format!(
                 "{} --ignored --exact host::session_operations::tests::omp_identity_child --nocapture",
-                quote_for_shell(&std::env::current_exe().unwrap().to_string_lossy(), Some(shell))
+                quote_for_shell(
+                    &std::env::current_exe().unwrap().to_string_lossy(),
+                    Some(shell)
+                )
             );
-            let child = scoped_agent_launch_command(&*LocalHost::new(), agent, &native, Some(shell)).unwrap();
+            let child =
+                scoped_agent_launch_command(&*LocalHost::new(), agent, &native, Some(shell))
+                    .unwrap();
             let mut command = Command::new(shell);
-            command.args(if cfg!(windows) { vec!["-NoProfile", "-Command"] } else { vec!["-c"] });
-            let status = command.arg(child)
+            command.args(if cfg!(windows) {
+                vec!["-NoProfile", "-Command"]
+            } else {
+                vec!["-c"]
+            });
+            let status = command
+                .arg(child)
                 .env("LYREL_IDENTITY_OUTPUT", &output)
                 .env("TERM_PROGRAM", "lyrel")
                 .env_remove("PI_NO_DECCARA")
                 .env_remove("KITTY_WINDOW_ID")
-                .status().unwrap();
+                .status()
+                .unwrap();
             assert!(status.success(), "{} launch failed", agent.slug());
-            let actual: serde_json::Value = serde_json::from_slice(&std::fs::read(output).unwrap()).unwrap();
+            let actual: serde_json::Value =
+                serde_json::from_slice(&std::fs::read(output).unwrap()).unwrap();
             assert_eq!(actual["TERM_PROGRAM"], "kitty");
             assert_eq!(actual["TERM_PROGRAM_VERSION"], "");
             assert_eq!(actual["LC_TERMINAL"], "lyrel");
-            assert_eq!(actual["PI_NO_DECCARA"], if agent == CLIAgent::OhMyPi { "1" } else { "" });
-            assert_eq!(actual["KITTY_WINDOW_ID"], if agent == CLIAgent::Hermes { "lyrel" } else { "" });
+            assert_eq!(
+                actual["PI_NO_DECCARA"],
+                if agent == CLIAgent::OhMyPi { "1" } else { "" }
+            );
+            assert_eq!(
+                actual["KITTY_WINDOW_ID"],
+                if agent == CLIAgent::Hermes {
+                    "lyrel"
+                } else {
+                    ""
+                }
+            );
         }
     }
 
@@ -1397,7 +1482,10 @@ mod tests {
         let shell = if cfg!(windows) { "pwsh" } else { "sh" };
         let native = format!(
             "{} --ignored --exact host::session_operations::tests::omp_identity_child --nocapture",
-            quote_for_shell(&std::env::current_exe().unwrap().to_string_lossy(), Some(shell))
+            quote_for_shell(
+                &std::env::current_exe().unwrap().to_string_lossy(),
+                Some(shell)
+            )
         );
         for (index, (inherited, explicit, expected)) in [
             (None, "", "lyrel"),
@@ -1405,18 +1493,42 @@ mod tests {
             (Some("owned-window"), "", "owned-window"),
             (Some("owned-window"), "KITTY_WINDOW_ID='' ", ""),
             (Some("owned-window"), "KITTY_WINDOW_ID=lyrel ", "lyrel"),
-        ].into_iter().enumerate() {
+        ]
+        .into_iter()
+        .enumerate()
+        {
             let output = dir.path().join(format!("marker-{index}.json"));
             let line = format!("TERM_PROGRAM='' {explicit}{native}");
-            let child = scoped_agent_launch_command(&*LocalHost::new(), CLIAgent::Hermes, &line, Some(shell)).unwrap();
+            let child = scoped_agent_launch_command(
+                &*LocalHost::new(),
+                CLIAgent::Hermes,
+                &line,
+                Some(shell),
+            )
+            .unwrap();
             let mut command = Command::new(shell);
-            command.args(if cfg!(windows) { vec!["-NoProfile", "-Command"] } else { vec!["-c"] });
-            command.arg(child).env("LYREL_IDENTITY_OUTPUT", &output).env("TERM_PROGRAM", "lyrel");
-            if let Some(value) = inherited { command.env("KITTY_WINDOW_ID", value); }
-            else { command.env_remove("KITTY_WINDOW_ID"); }
+            command.args(if cfg!(windows) {
+                vec!["-NoProfile", "-Command"]
+            } else {
+                vec!["-c"]
+            });
+            command
+                .arg(child)
+                .env("LYREL_IDENTITY_OUTPUT", &output)
+                .env("TERM_PROGRAM", "lyrel");
+            if let Some(value) = inherited {
+                command.env("KITTY_WINDOW_ID", value);
+            } else {
+                command.env_remove("KITTY_WINDOW_ID");
+            }
             let result = command.output().unwrap();
-            assert!(result.status.success(), "{}", String::from_utf8_lossy(&result.stderr));
-            let actual: serde_json::Value = serde_json::from_slice(&std::fs::read(output).unwrap()).unwrap();
+            assert!(
+                result.status.success(),
+                "{}",
+                String::from_utf8_lossy(&result.stderr)
+            );
+            let actual: serde_json::Value =
+                serde_json::from_slice(&std::fs::read(output).unwrap()).unwrap();
             assert_eq!(actual["TERM_PROGRAM"], "");
             assert_eq!(actual["KITTY_WINDOW_ID"], expected);
         }
@@ -1527,9 +1639,15 @@ mod tests {
         let wrapper = dir.path().join(if cfg!(windows) { "pi.cmd" } else { "pi" });
         let executable = std::env::current_exe().unwrap();
         let body = if cfg!(windows) {
-            format!("@echo off\r\n\"{}\" --ignored --exact host::session_operations::tests::omp_identity_child --nocapture\r\n", executable.display())
+            format!(
+                "@echo off\r\n\"{}\" --ignored --exact host::session_operations::tests::omp_identity_child --nocapture\r\n",
+                executable.display()
+            )
         } else {
-            format!("#!/bin/sh\nexec {} --ignored --exact host::session_operations::tests::omp_identity_child --nocapture\n", quote_for_shell(&executable.to_string_lossy(), Some("sh")))
+            format!(
+                "#!/bin/sh\nexec {} --ignored --exact host::session_operations::tests::omp_identity_child --nocapture\n",
+                quote_for_shell(&executable.to_string_lossy(), Some("sh"))
+            )
         };
         std::fs::write(&wrapper, body).unwrap();
         #[cfg(unix)]
@@ -1539,15 +1657,27 @@ mod tests {
         }
         request.launch_argv = vec![wrapper.to_string_lossy().into_owned()];
         request.scope.shell_program = Some(shell.into());
-        request.scope.environment.insert("PI_IMAGE_PROTOCOL".into(), "none".into());
+        request
+            .scope
+            .environment
+            .insert("PI_IMAGE_PROTOCOL".into(), "none".into());
         let prepared = LocalHost::new().session_operation(&request).unwrap();
         let output = dir.path().join("resumed.json");
         let mut child = Command::new(shell);
-        child.args(if cfg!(windows) { vec!["-NoProfile", "-Command"] } else { vec!["-c"] });
-        let status = child.arg(prepared.command.unwrap()).env("LYREL_IDENTITY_OUTPUT", &output)
-            .env("TERM_PROGRAM", "lyrel").status().unwrap();
+        child.args(if cfg!(windows) {
+            vec!["-NoProfile", "-Command"]
+        } else {
+            vec!["-c"]
+        });
+        let status = child
+            .arg(prepared.command.unwrap())
+            .env("LYREL_IDENTITY_OUTPUT", &output)
+            .env("TERM_PROGRAM", "lyrel")
+            .status()
+            .unwrap();
         assert!(status.success());
-        let actual: serde_json::Value = serde_json::from_slice(&std::fs::read(output).unwrap()).unwrap();
+        let actual: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(output).unwrap()).unwrap();
         assert_eq!(actual["TERM_PROGRAM"], "kitty");
         assert_eq!(actual["TERM_PROGRAM_VERSION"], "");
         assert_eq!(actual["LC_TERMINAL"], "lyrel");

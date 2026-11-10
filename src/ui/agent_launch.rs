@@ -141,10 +141,15 @@ pub(crate) fn run_when_ready(slot: &PaneSlot, command: String, cx: &mut App) {
     let aliases = crate::core::config::detection_aliases(&cfg.agent_commands, &cfg.agent_launch);
     // Only the executable or an explicit mapping selects an agent. Do not
     // search interpreter arguments or inspect arbitrary wrapper contents.
-    let agent = crate::core::cli_agent::parse_command_argv(&command).ok().and_then(|argv| {
-        argv.iter().find(|arg| !arg.contains('='))
-            .and_then(|program| CLIAgent::detect_from_argv_with(std::slice::from_ref(program), &aliases))
-    });
+    let agent = crate::core::cli_agent::parse_command_argv(&command)
+        .ok()
+        .and_then(|argv| {
+            argv.iter()
+                .find(|arg| !arg.contains('='))
+                .and_then(|program| {
+                    CLIAgent::detect_from_argv_with(std::slice::from_ref(program), &aliases)
+                })
+        });
     run_known_agent_when_ready(slot, command, agent, cx);
 }
 
@@ -232,7 +237,9 @@ pub(crate) fn run_known_agent_when_ready(
             .detach();
         }
         PaneSlot::Connecting(pending) => {
-            pending.update(cx, |pending, _| pending.run_known_agent_when_ready(command, agent));
+            pending.update(cx, |pending, _| {
+                pending.run_known_agent_when_ready(command, agent)
+            });
         }
     }
 }

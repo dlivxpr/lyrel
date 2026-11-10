@@ -166,12 +166,15 @@ fn build_hook_payload(agent: &str, event: &str, stdin_json: &str) -> serde_json:
     // terminal fields in an existing scope, never synthesize/replace storage
     // scope on a status-only event or copy inline config/credentials.
     if matches!(agent, "omp" | "pi" | "kimi" | "opencode" | "hermes")
-        && let Some(environment) = body.get_mut("session_scope")
+        && let Some(environment) = body
+            .get_mut("session_scope")
             .and_then(|scope| scope.get_mut("environment"))
             .and_then(serde_json::Value::as_object_mut)
     {
         for key in crate::host::session_operations::TERMINAL_SCOPE_ENV {
-            if !environment.contains_key(*key) && let Ok(value) = std::env::var(key) {
+            if !environment.contains_key(*key)
+                && let Ok(value) = std::env::var(key)
+            {
                 environment.insert((*key).into(), value.into());
             }
         }
@@ -1489,7 +1492,12 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let output = dir.path().join("scope.json");
         let status = std::process::Command::new(std::env::current_exe().unwrap())
-            .args(["--ignored", "--exact", "core::agent_hooks::tests::terminal_scope_hook_child", "--nocapture"])
+            .args([
+                "--ignored",
+                "--exact",
+                "core::agent_hooks::tests::terminal_scope_hook_child",
+                "--nocapture",
+            ])
             .env("LYREL_TEST_HOOK_SCOPE_OUTPUT", &output)
             .env("TERM_PROGRAM", "explicit-terminal")
             .env("TERM_PROGRAM_VERSION", "")
@@ -1497,7 +1505,8 @@ mod tests {
             .env("KITTY_WINDOW_ID", "")
             .env("OPENAI_API_KEY", "must-not-leak")
             .env("OPENCODE_CLI_CONFIG_CONTENT", "private-inline-config")
-            .status().unwrap();
+            .status()
+            .unwrap();
         assert!(status.success());
         let body = std::fs::read_to_string(output).unwrap();
         let event = crate::core::cli_agent::parse_agent_event_body(body.as_bytes()).unwrap();
@@ -1513,9 +1522,14 @@ mod tests {
     #[test]
     #[ignore = "native child for hook process environment reporting"]
     fn terminal_scope_hook_child() {
-        let Some(output) = std::env::var_os("LYREL_TEST_HOOK_SCOPE_OUTPUT") else { return; };
-        let body = build_hook_body("hermes", "session-start",
-            r#"{"session_id":"owned-session","session_scope":{"environment":{"HERMES_HOME":"/owned-home"}}}"#);
+        let Some(output) = std::env::var_os("LYREL_TEST_HOOK_SCOPE_OUTPUT") else {
+            return;
+        };
+        let body = build_hook_body(
+            "hermes",
+            "session-start",
+            r#"{"session_id":"owned-session","session_scope":{"environment":{"HERMES_HOME":"/owned-home"}}}"#,
+        );
         std::fs::write(output, body).unwrap();
     }
 

@@ -303,10 +303,19 @@ fn a_late_spawn_keeps_the_open_searchs_focus(cx: &mut TestAppContext) {
 #[test]
 #[ignore = "native child for the pending launch environment contract"]
 fn pending_scope_child() {
-    let Some(path) = std::env::var_os("LYREL_PENDING_SCOPE_OUTPUT") else { return; };
+    let Some(path) = std::env::var_os("LYREL_PENDING_SCOPE_OUTPUT") else {
+        return;
+    };
     let environment: std::collections::BTreeMap<_, _> = [
-        "TERM_PROGRAM", "TERM_PROGRAM_VERSION", "LC_TERMINAL", "KITTY_WINDOW_ID", "PI_IMAGE_PROTOCOL",
-    ].into_iter().map(|key| (key, std::env::var(key).ok())).collect();
+        "TERM_PROGRAM",
+        "TERM_PROGRAM_VERSION",
+        "LC_TERMINAL",
+        "KITTY_WINDOW_ID",
+        "PI_IMAGE_PROTOCOL",
+    ]
+    .into_iter()
+    .map(|key| (key, std::env::var(key).ok()))
+    .collect();
     std::fs::write(path, serde_json::to_vec(&environment).unwrap()).unwrap();
 }
 
@@ -323,7 +332,11 @@ fn a_connecting_known_launch_keeps_opaque_wrapper_intent(cx: &mut TestAppContext
 fn connecting_agent_environment(cx: &mut TestAppContext, mapped: bool) {
     use crate::core::shell_quote::quote_for_shell;
     let dir = tempfile::tempdir().unwrap();
-    let wrapper = dir.path().join(if cfg!(windows) { "mapped-hermes.exe" } else { "mapped-hermes" });
+    let wrapper = dir.path().join(if cfg!(windows) {
+        "mapped-hermes.exe"
+    } else {
+        "mapped-hermes"
+    });
     std::fs::hard_link(std::env::current_exe().unwrap(), &wrapper).unwrap();
     let shell = if cfg!(windows) { "pwsh" } else { "/bin/sh" };
     let command = format!(
@@ -334,10 +347,13 @@ fn connecting_agent_environment(cx: &mut TestAppContext, mapped: bool) {
     let (waiting, parts, mut daemon) = app.update_in(&mut vcx, |app, window, cx| {
         let cfg = cx.global_mut::<crate::core::config::Config>();
         cfg.shell = Some(crate::daemon::protocol::ShellSpec {
-            program: shell.into(), args: Vec::new(), args_are_lyrel_defaults: false,
+            program: shell.into(),
+            args: Vec::new(),
+            args_are_lyrel_defaults: false,
         });
         if mapped {
-            cfg.agent_commands.insert("mapped-hermes".into(), "hermes".into());
+            cfg.agent_commands
+                .insert("mapped-hermes".into(), "hermes".into());
         }
         let waiting = pending(app, window, cx);
         let slot = PaneSlot::Connecting(waiting.clone());
@@ -345,36 +361,68 @@ fn connecting_agent_environment(cx: &mut TestAppContext, mapped: bool) {
             crate::ui::agent_launch::run_when_ready(&slot, command, cx);
         } else {
             crate::ui::agent_launch::run_known_agent_when_ready(
-                &slot, command, Some(crate::core::cli_agent::CLIAgent::Hermes), cx,
+                &slot,
+                command,
+                Some(crate::core::cli_agent::CLIAgent::Hermes),
+                cx,
             );
         }
-        let (parts, daemon) = crate::terminal::view::quiet_test_shell_parts(97, Some(app.workspace));
+        let (parts, daemon) =
+            crate::terminal::view::quiet_test_shell_parts(97, Some(app.workspace));
         (waiting, parts, daemon)
     });
     deliver(&waiting, Ok(parts), &mut vcx);
-    daemon.set_read_timeout(Some(std::time::Duration::from_millis(20))).unwrap();
+    daemon
+        .set_read_timeout(Some(std::time::Duration::from_millis(20)))
+        .unwrap();
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(8);
     let line = loop {
-        vcx.executor().advance_clock(std::time::Duration::from_millis(50));
+        vcx.executor()
+            .advance_clock(std::time::Duration::from_millis(50));
         vcx.run_until_parked();
-        if let Ok(crate::daemon::protocol::ClientMsg::Input(bytes)) = crate::daemon::protocol::ClientMsg::read(&mut daemon) {
-            break String::from_utf8(bytes).unwrap().trim_end_matches('\r').to_owned();
+        if let Ok(crate::daemon::protocol::ClientMsg::Input(bytes)) =
+            crate::daemon::protocol::ClientMsg::read(&mut daemon)
+        {
+            break String::from_utf8(bytes)
+                .unwrap()
+                .trim_end_matches('\r')
+                .to_owned();
         }
-        assert!(std::time::Instant::now() < deadline, "pending command never reached its landed pane");
+        assert!(
+            std::time::Instant::now() < deadline,
+            "pending command never reached its landed pane"
+        );
         std::thread::sleep(std::time::Duration::from_millis(5));
     };
     let output = dir.path().join("environment.json");
     let mut process = std::process::Command::new(shell);
-    process.args(if cfg!(windows) { vec!["-NoProfile", "-Command"] } else { vec!["-c"] });
-    process.env("LYREL_PENDING_SCOPE_OUTPUT", &output).env("TERM_PROGRAM", "lyrel");
-    if mapped { process.env_remove("KITTY_WINDOW_ID"); }
-    else { process.env("KITTY_WINDOW_ID", "owned-window"); }
+    process.args(if cfg!(windows) {
+        vec!["-NoProfile", "-Command"]
+    } else {
+        vec!["-c"]
+    });
+    process
+        .env("LYREL_PENDING_SCOPE_OUTPUT", &output)
+        .env("TERM_PROGRAM", "lyrel");
+    if mapped {
+        process.env_remove("KITTY_WINDOW_ID");
+    } else {
+        process.env("KITTY_WINDOW_ID", "owned-window");
+    }
     let result = process.arg(line).output().unwrap();
-    assert!(result.status.success(), "{}", String::from_utf8_lossy(&result.stderr));
-    let actual: serde_json::Value = serde_json::from_slice(&std::fs::read(output).unwrap()).unwrap();
+    assert!(
+        result.status.success(),
+        "{}",
+        String::from_utf8_lossy(&result.stderr)
+    );
+    let actual: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(output).unwrap()).unwrap();
     assert_eq!(actual["TERM_PROGRAM"], "kitty");
     assert_eq!(actual["TERM_PROGRAM_VERSION"], "");
     assert_eq!(actual["LC_TERMINAL"], "lyrel");
-    assert_eq!(actual["KITTY_WINDOW_ID"], if mapped { "lyrel" } else { "owned-window" });
+    assert_eq!(
+        actual["KITTY_WINDOW_ID"],
+        if mapped { "lyrel" } else { "owned-window" }
+    );
     assert_eq!(actual["PI_IMAGE_PROTOCOL"], "none");
 }

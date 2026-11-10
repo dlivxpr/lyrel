@@ -1,12 +1,17 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
-const ZSH_INTEGRATION: &str = concat!(r#"
+const ZSH_INTEGRATION: &str = concat!(
+    r#"
 # --- lyrel shell integration (zsh) ---
 if [[ -o interactive ]] && [[ -z "$LYREL_SHELL_INTEGRATION" ]]; then
   export LYREL_SHELL_INTEGRATION=1
-  __lyrel_scope_version='"#, env!("CARGO_PKG_VERSION"), r#"'
-"#, include_str!("shell_integration/agent_scope.sh"), r#"
+  __lyrel_scope_version='"#,
+    env!("CARGO_PKG_VERSION"),
+    r#"'
+"#,
+    include_str!("shell_integration/agent_scope.sh"),
+    r#"
 
   # Per-pane history, when the app asked for it. This runs after the user's
   # .zshrc, which is the only reason it can work at all: $HISTFILE is theirs to
@@ -154,9 +159,11 @@ if [[ -o interactive ]] && [[ -z "$LYREL_SHELL_INTEGRATION" ]]; then
   add-zsh-hook precmd __lyrel_restore_zdotdir
 fi
 # --- end lyrel shell integration ---
-"#);
+"#
+);
 
-const FISH_INTEGRATION: &str = concat!(r#"
+const FISH_INTEGRATION: &str = concat!(
+    r#"
 # --- lyrel shell integration (fish) ---
 # Guard on *emptiness* (`test -z`), not definedness (`set -q`): `setup()` resets the
 # sentinel to an empty-but-exported "" at each spawn boundary, and fish reports an
@@ -165,8 +172,12 @@ const FISH_INTEGRATION: &str = concat!(r#"
 # it installs once for a fresh top-level shell while an inherited `1` still blocks it.
 if status is-interactive; and test -z "$LYREL_SHELL_INTEGRATION"
   set -gx LYREL_SHELL_INTEGRATION 1
-  set -g __lyrel_scope_version '"#, env!("CARGO_PKG_VERSION"), r#"'
-"#, include_str!("shell_integration/agent_scope.fish"), r#"
+  set -g __lyrel_scope_version '"#,
+    env!("CARGO_PKG_VERSION"),
+    r#"'
+"#,
+    include_str!("shell_integration/agent_scope.fish"),
+    r#"
 
   function __lyrel_osc
     printf '\e]%s\a' $argv[1]
@@ -226,14 +237,20 @@ if status is-interactive; and test -z "$LYREL_SHELL_INTEGRATION"
   end
 end
 # --- end lyrel shell integration ---
-"#);
+"#
+);
 
-const BASH_INTEGRATION: &str = concat!(r#"
+const BASH_INTEGRATION: &str = concat!(
+    r#"
 # --- lyrel shell integration (bash) ---
 if [[ $- == *i* ]] && [[ -z "$LYREL_SHELL_INTEGRATION" ]]; then
   export LYREL_SHELL_INTEGRATION=1
-  __lyrel_scope_version='"#, env!("CARGO_PKG_VERSION"), r#"'
-"#, include_str!("shell_integration/agent_scope.sh"), r#"
+  __lyrel_scope_version='"#,
+    env!("CARGO_PKG_VERSION"),
+    r#"'
+"#,
+    include_str!("shell_integration/agent_scope.sh"),
+    r#"
 
   # Per-pane history — see the zsh block for why this can only be done here,
   # after the user's rc has decided where their history lives. bash loads the
@@ -486,14 +503,21 @@ if [[ $- == *i* ]] && [[ -z "$LYREL_SHELL_INTEGRATION" ]]; then
   fi
 fi
 # --- end lyrel shell integration ---
-"#);
+"#
+);
 
-const POWERSHELL_INTEGRATION: &str = concat!(r#"
+const POWERSHELL_INTEGRATION: &str = concat!(
+    r#"
 # --- lyrel shell integration (PowerShell) ---
 if (-not $env:LYREL_SHELL_INTEGRATION) {
   $env:LYREL_SHELL_INTEGRATION = '1'
-  $global:__LyrelScopeVersion='"#, env!("CARGO_PKG_VERSION"), r#"'
-"#, include_str!("shell_integration/environment.ps1"), include_str!("shell_integration/agent_scope.ps1"), r#"
+  $global:__LyrelScopeVersion='"#,
+    env!("CARGO_PKG_VERSION"),
+    r#"'
+"#,
+    include_str!("shell_integration/environment.ps1"),
+    include_str!("shell_integration/agent_scope.ps1"),
+    r#"
 
   $global:__LyrelEsc = [char]0x1b
   $global:__LyrelBel = [char]0x07
@@ -605,9 +629,11 @@ if (-not $env:LYREL_SHELL_INTEGRATION) {
   }
 }
 # --- end lyrel shell integration ---
-"#);
+"#
+);
 
-const NUSHELL_INTEGRATION: &str = concat!(r#"
+const NUSHELL_INTEGRATION: &str = concat!(
+    r#"
 # --- lyrel shell integration (nushell) ---
 # Guard on emptiness (`== ""`), not mere definedness, exactly like the other
 # shells: setup() resets the sentinel to an empty-but-exported value at each
@@ -682,7 +708,9 @@ if (($env.LYREL_SHELL_INTEGRATION? | default "") == "") {
   }
 }
 # --- end lyrel shell integration ---
-"#, include_str!("shell_integration/agent_scope.nu"));
+"#,
+    include_str!("shell_integration/agent_scope.nu")
+);
 
 fn zsh_redirectors() -> [(&'static str, String); 4] {
     let redirect = |name: &str, tail: &str| {
@@ -2426,10 +2454,18 @@ mod tests {
             let prompt_tail = text.rfind("133;A\u{7}").map(|at| &text[at..]).unwrap_or("");
             let input_ready = !unix_powershell || prompt_tail.contains("\u{1b}[?1h");
             let prompt_count = text.matches("133;A\u{7}").count();
-            let interrupt_ready = steps.get(typed).is_some_and(|keys| keys.starts_with(b"\x03"))
-                && text.get(last_input_end..).is_some_and(|text| text.contains("LYREL_INTERRUPT_READY"));
-            if typed < steps.len() && input_ready && (interrupt_ready ||
-                (prompt_count > last_prompt && (prompt_tail.contains("133;B") || !bash_prompt))) {
+            let interrupt_ready = steps
+                .get(typed)
+                .is_some_and(|keys| keys.starts_with(b"\x03"))
+                && text
+                    .get(last_input_end..)
+                    .is_some_and(|text| text.contains("LYREL_INTERRUPT_READY"));
+            if typed < steps.len()
+                && input_ready
+                && (interrupt_ready
+                    || (prompt_count > last_prompt
+                        && (prompt_tail.contains("133;B") || !bash_prompt)))
+            {
                 writer.write_all(steps[typed]).expect("write");
                 writer.flush().expect("flush");
                 typed += 1;
@@ -2441,7 +2477,11 @@ mod tests {
             // emit an unpaired D while drawing its first prompt, and breaking on
             // that would sample the transcript before the prompt cycle under test
             // has run at all.
-            if typed == steps.len() && prompt_count > last_prompt && text.contains(FAILED_COMMAND_MARK) && seen_fail.is_none() {
+            if typed == steps.len()
+                && prompt_count > last_prompt
+                && text.contains(FAILED_COMMAND_MARK)
+                && seen_fail.is_none()
+            {
                 seen_fail = Some(std::time::Instant::now());
             }
             // The D mark and the rest of the same prompt cycle (the cwd report,
