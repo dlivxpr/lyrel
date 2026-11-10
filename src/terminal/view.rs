@@ -3090,6 +3090,7 @@ mod gpui_tests {
     include!("graphics_playback_consumer_tests.rs");
     include!("graphics_capacity_consumer_tests.rs");
     include!("pi_replay_consumer_tests.rs");
+    include!("native_static_consumer_tests.rs");
     include!("graphics_relative_consumer_tests.rs");
     include!("native_ssh_consumer_tests.rs");
     include!("lifecycle_consumer_tests.rs");
