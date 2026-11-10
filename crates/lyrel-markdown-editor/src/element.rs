@@ -176,6 +176,7 @@ impl Element for EditorElement {
                 let scan = editor.scan_data();
                 let shaped = shape_document(
                     window,
+                    cx,
                     &editor.content,
                     &text_style.font(),
                     text_style.color,
@@ -411,6 +412,7 @@ impl Element for EditorElement {
         } else {
             shape_document(
                 window,
+                cx,
                 &editor.content,
                 &font,
                 text_color,
@@ -2856,6 +2858,7 @@ fn shape_inline_images(
 #[allow(clippy::too_many_arguments)]
 fn shape_document(
     window: &mut Window,
+    cx: &App,
     content: &str,
     base_font: &Font,
     base_color: Hsla,
@@ -3146,7 +3149,7 @@ fn shape_document(
                         i += 1;
                         continue;
                     };
-                    let lang = lang.trim();
+                    let lang = lang.split_whitespace().next().unwrap_or("");
                     let mut j = i + 1;
                     while j < lines.len() && !lines[j].trim_start().starts_with("```") {
                         j += 1;
@@ -3154,7 +3157,7 @@ fn shape_document(
                     // Mermaid blocks render as diagrams, not code.
                     if !lang.is_empty() && lang != "mermaid" && j > i + 1 {
                         let block = lines[i + 1..j].join("\n");
-                        let ranges = hl(lang, &block);
+                        let ranges = hl(lang, &block, cx);
                         let mut start = 0;
                         for (k, l) in lines[i + 1..j].iter().enumerate() {
                             let end = start + l.len();

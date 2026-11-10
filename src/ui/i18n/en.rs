@@ -1912,6 +1912,7 @@ pub fn translate_en(key: L10nKey) -> &'static str {
         L10nKey::MarkdownBlockExpandLabel => "Expand block: {text}",
         L10nKey::MarkdownBlockCollapseLabel => "Collapse block: {text}",
         L10nKey::EditorTableInsert => "Insert table",
+        L10nKey::EditorTableChanged => "The document changed. Close and reopen table insertion.",
         L10nKey::EditorTableInsertRowBefore => "Table: Insert row above",
         L10nKey::EditorTableInsertRowAfter => "Table: Insert row below",
         L10nKey::EditorTableDuplicateRow => "Table: Duplicate row",

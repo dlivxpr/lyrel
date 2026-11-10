@@ -32,8 +32,8 @@
 | 最小真实行列、go-to-line | Lyrel 工作台，#237 | 状态来自当前 presentation 的共享源文；Unicode 跳转、选择与变更后的行列一致，不为查询复制全文。Markdown 跳转只设置一次选择，由其 view-local reveal request 等待布局；不复用普通 Code InputState 的跨帧光标重放，避免覆盖用户后续选择或分屏后的独立状态。 |
 | 本文宽度、字体层级、段距、padding、theme、zoom、disclosure 占地 | 上游排版 + Lyrel shell，#244 | 样式接入在 #237；最终对照固定参考的 ordinary 文档，在窄/宽实窗连续书写、导航和滚动。#237 不将未对照的样式配置称为视觉一致。 |
 | 快捷键、caret-local 标记显露、选择、列表/任务/标题/callout | 上游保留，#244 | `bind_keys` 使用当前 Kit 类型；基础输入由 #237 验证。完整格式/折叠/转换/连续编辑与 Zorite 对照归 #244。旧“光标处仍隐藏全部标记”约束已被替代。 |
-| 插入/slash menu、construct picker、table insertion | Lyrel Host + 上游命令，#239/#244 | #239 完成真实 table picker 与结构编辑；#244 完成通用插入/slash 和文档上下文。不能把源文插入 API 当成已提供 picker。 |
-| 表格行列、对齐、样式、导航、resize、code fence 语言/复制/高亮 | 上游保留 + Lyrel Host，#239 | native hit-testing、跨单元格输入/Undo、完整宽表；安装真实 code highlighter，验证 code language/copy 控件。 |
+| 插入/slash menu、construct picker、table insertion | Lyrel Host + 上游命令，#239/#244 | #239 的 `markdown::table_code` 为每个真实 presentation 提供 8×8 键盘/指针尺寸选择、自定义 1—100 行列与四种样式；尺寸、样式、源文与 history 同次提交。取消不写源文，revision 变化拒绝过期提交；`open_table_picker` 是 #244 通用插入/slash 的同一入口，不复制 GPL picker。 |
+| 表格行列、对齐、样式、导航、resize、code fence 语言/复制/高亮 | 上游保留 + Lyrel Host，#239 | primary/secondary 均配置 Kit registry/tree-sitter highlighter，按当前主题缓存 token 样式；原生 grid 的 in-cell pointer/Unicode、Tab/箭头/Enter、边框 drag/双击 fit 保留，另有 Kit 键盘菜单提供行列增删/对齐/四种样式/fit/宽窄调整。code 语言只修改语言 token，保留 fence metadata；复制正文与 delimiter 访问使用同一 editor。工作台/native 消费者已接入，集中 checks 和实窗对照尚未运行，不声明通过。 |
 | 文字/高亮预设颜色与自定义颜色 | 上游保留 + Lyrel Host，#244 | 预设源文操作已导入；自定义 picker 待接线。仅在真实 Host 订阅 `PickColor` 后启用 `set_host_custom_colors(true)`；取消、提交和 Undo 均验证。 |
 | 普通相对/外部链接、hover、caret 附近的源码访问 | 上游行为 + Lyrel Host，#238 | 采用 Zorite 的普通单击打开语义，不保留旧 Ctrl+Click-only。在真实 OpenLink/HoverLink 接线前不启用 `set_host_link_navigation(true)`，不显示无效手形控件。相对路径绑定文档 Host，延迟完成不重定向活动组；失败可见且不丢编辑。 |
 | 图片插入/paste/drop、资源、preview、resize/zoom | 上游保留 + Lyrel Host，#238 | 当前无伪造 bitmap/provider；源码 intact。完成 owning local/SSH Host 读写、唯一资源命名、可见失败、延迟资源隔离、输入/Undo/save/reopen 与 native 预览几何。 |
@@ -88,8 +88,8 @@
 | `source::review_tests::native_soft_wrap_caret_keeps_clicked_side_across_navigation_and_input` | 迁移：真实指针点击 wrap 两侧，箭头/输入/Undo 后 caret 不跳至另一侧。 | #237 |
 | `source::review_tests::native_modified_link_drag_retains_upper_wrap_anchor` | 旧 Ctrl+Click-only 激活契约退役；wrapped drag 选择锚点正确性仍保留，按 Zorite 普通单击链接和实际扩选方式验证。 | #238 |
 | `source::review_tests::native_extreme_nowrap_line_keeps_pointer_selection_and_source_exact` | 迁移至 `foundation::zorite_foundation_complete_extreme_line_paint_caret_input_save_undo`；完整 2,523,166 B，不缩水为截断样本；保留指针/选择和原始源码条件。 | #237 |
-| `source::review_tests::native_aligned_table_pointer_and_selection_follow_content` | 表格仍有效：新列宽/居中/右对齐 native glyph 与 selection/hit-test 同位置，Undo 后一致；不由基础消费者代替。 | #239 |
-| `tests::table_presentation::table_presentation_drag_fit_scroll_edit_history_and_host_reopen` | 表格完整 drag/fit/scroll/edit/Undo/Host 保存重开迁移到新表格 UI；旧 inspector/menu id 不保留。 | #239 |
+| `source::review_tests::native_aligned_table_pointer_and_selection_follow_content` | 迁移至 `table_code_tests::aligned_geometry`：真实 cell glyph 命中、wrapped Unicode、grapheme 选择/复制、边框 drag、fit 与精确 Undo；保留原 selector。源码已接线，native 结果待集中检查。 | #239 |
+| `tests::table_presentation::table_presentation_drag_fit_scroll_edit_history_and_host_reopen` | 迁移至 `table_code_tests::wide_table`：完整 88,987 B、48 列/64 正文行 fixture 的 live grid、指针编辑/Undo、独立横向滚动、窄宽 resize、保存重开；drag/fit 另由同组 aligned 消费者完成。旧 inspector/menu id 退役，保留原 selector。 | #239 |
 | `tests::native_navigation_home_end_and_words_use_visible_logical_content` | 迁移新 navigation case 的 Home/End/Unicode word/grapheme，删除仅为旧 Rope chunk seam 的实现断言。 | #237 |
 | `tests::native_text_color_picker_clear_geometry_and_shared_history` | 自定义色/取消/clear/geometry/history 仍有效；按 Zorite native menu + Lyrel picker 迁移，不重建旧全行格式工具栏。 | #244 |
 | `source::spelling::tests::spelling_long_code_remains_editable_with_offscreen_diagnostics` | 保留超长 code 与离屏 diagnostics 的 caret/input/Undo 安全；旧 spelling UI id 不保留，新 pipeline 的 diagnostics 渲染另验。 | #237/#239/#244 |
@@ -133,3 +133,8 @@ native registry 增加 `workbench_views::shared_context_and_ime_handoff` 与 `wo
 长文初测发现 prepaint 两段逐行命中区准备耗时约 0.83–0.91 秒/帧；修复为复用现有行索引后，100 次结构输入不再积压。最终相同长文工作负载的进程 CPU 增量为 4.875 秒，private bytes 从 171,372,544 增至 345,698,304；保留全部整串历史，没有截断文本或缩短 Undo/Redo。此完整 Windows 基础工作负载判定可用；内存的线性历史成本已记录，不宣称零拷贝历史或任意大小性能。自动化调用耗时不是 input-to-paint 延迟，进程内存也不是历史独占内存。
 
 真实 loopback SSH Host 的 BOM/混合行尾编辑、保存关闭重开及本地同名诱饵隔离已有独立实窗与精确字节证据；后续改动只涉及 GUI 几何，不将早前 SSH 结果冒充最后 binary 的重跑。macOS 没有本机执行前提，未实测；Windows 与 Linux headless 不代替 macOS 验收。上述基础结论不覆盖后续图片、结构公式、Mermaid、宽表资源整合，也不是 #244/#245 的完整视觉一致或最终接受结论。
+
+### #239 表格与代码原生验收路径
+
+`markdown::table_code_tests::workflow` 通过生产 owning Host 打开 BOM/混合行尾文档，实际操作 table commands、code language/copy、键盘尺寸选择与自定义 picker，跨结构替换/Undo，以及两个 presentation 的共享 history/保存关闭重开。native registry 额外保留上述两项原表格 selector；完整 wide-table 在测试中生成，不依赖仓库外的临时目录、不截断正文、不切 source 掩盖布局。窄验证入口为 `cargo test --locked -p lyrel --lib table_code_workbench_controls_history_host_reopen` 与 `cargo test --locked -p lyrel --features native-markdown-tests --test native_markdown -- table`。源码提交未运行 build/test/lint/formatter；实际 Windows 产品窗口、固定 Zorite 表格/code 对照、系统 IME、真实 SSH 与 macOS 证据仍由集成者逐项记录，基础历史证据不自动转移。
+

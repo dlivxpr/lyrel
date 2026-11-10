@@ -33,11 +33,13 @@
 #![cfg(any(target_os = "macos", target_os = "windows"))]
 
 pub mod bidi;
+mod code;
 mod document;
 mod presentation;
 pub use document::{Document, DocumentEvent, SourceEdit, SourceSnapshot};
 
 use gpui_kit::AppContext as _;
+use gpui_kit::TestSupportExt as _;
 use std::ops::Range;
 use std::sync::Arc;
 
@@ -488,6 +490,8 @@ pub enum EditorEvent {
     /// The caret / selection moved without a text change — so a host can update a
     /// caret-anchored affordance (e.g. the table-alignment toolbar).
     SelectionChanged,
+    /// The host opens its native table insertion picker without changing source.
+    InsertTable,
     /// The caret entered a `$$…$$` math block (by click, or by arrowing into it): its byte
     /// `range` in the document (covering both fences) and the LaTeX `source` between them, so
     /// the host can open a structural editor and replace the block's text on commit. `at_end`
@@ -595,7 +599,7 @@ type BlockMathFn = Box<dyn Fn(&str) -> Option<(Arc<RenderImage>, f32, f32)>>;
 /// block). Host-supplied (e.g. a tree-sitter highlighter) so the crate stays
 /// engine-free; absent it, code renders in `SyntaxStyle::code`. Set via
 /// [`EditorState::set_code_highlighter`].
-type CodeHighlightFn = Box<dyn Fn(&str, &str) -> Vec<(Range<usize>, HighlightStyle)>>;
+type CodeHighlightFn = Box<dyn Fn(&str, &str, &App) -> Vec<(Range<usize>, HighlightStyle)>>;
 
 /// Host auto-replace hook, consulted when a word-boundary character (space,
 /// punctuation, Enter) completes a word: receives the just-finished line's
@@ -1444,7 +1448,7 @@ impl EditorState {
     /// Set the fenced-code syntax highlighter (see [`CodeHighlightFn`]).
     pub fn set_code_highlighter(
         &mut self,
-        f: impl Fn(&str, &str) -> Vec<(Range<usize>, HighlightStyle)> + 'static,
+        f: impl Fn(&str, &str, &App) -> Vec<(Range<usize>, HighlightStyle)> + 'static,
     ) {
         self.code_highlight = Some(Box::new(f));
     }
@@ -2466,7 +2470,7 @@ impl EditorState {
         // Enter instead moves to the cell directly below (next row, same column,
         // spreadsheet-style); from the last row it exits onto a fresh line below
         // the table.
-        if self.caret_in_table() {
+        if self.selected_range.is_empty() && self.caret_in_table() {
             if let Some(off) = self.table_move_vertical(1)
                 && self
                     .table_rows
@@ -4961,7 +4965,8 @@ impl EditorState {
         let &start = starts.get(fence_row)?;
         let fence_line = &self.content[start..self.line_end(fence_row)];
         let trimmed = fence_line.trim_start();
-        let lang = trimmed.strip_prefix("```")?.trim().to_string();
+        let info = trimmed.trim_start_matches('`');
+        let lang = info.split_whitespace().next().unwrap_or("").to_string();
         let body_start = (self.line_end(fence_row) + 1).min(self.content.len());
         let mut body_end = self.content.len();
         for (row, &row_start) in starts.iter().enumerate().skip(fence_row + 1) {
@@ -5000,17 +5005,28 @@ impl EditorState {
         let end = self.line_end(fence_row);
         let line = &self.content[start..end];
         let trimmed = line.trim_start();
-        if !trimmed.starts_with("```") {
+        if !trimmed.starts_with("```") || lang.contains(char::is_whitespace) {
             return;
         }
-        let indent = &line[..line.len() - trimmed.len()];
-        let new_line = format!("{indent}```{}", if lang == "text" { "" } else { lang });
-        self.replace_range(start..end, &new_line, cx);
-        // replace_range parks the caret at the fence line's end, which reveals
-        // the raw ``` marker (reveal-on-caret). Step onto the body's first
-        // line instead so the fence stays hidden.
-        let caret = (start + new_line.len() + 1).min(self.content.len());
-        self.selected_range = caret..caret;
+        let fence_end = start + line.len() - trimmed.len()
+            + trimmed.bytes().take_while(|&byte| byte == b'`').count();
+        let info = &self.content[fence_end..end];
+        let leading = info.len() - info.trim_start().len();
+        let token_start = fence_end + leading;
+        let token_end = token_start + info.trim_start().split_whitespace().next().unwrap_or("").len();
+        let language = if lang == "text" && token_end == end { "" } else { lang };
+        if &self.content[token_start..token_end] == language {
+            return;
+        }
+        let before = self.selected_range.clone();
+        let delta = language.len() as isize - (token_end - token_start) as isize;
+        self.replace_range(token_start..token_end, language, cx);
+        // Keep source access in this editor, but seat routine language changes
+        // in the body so selecting a language does not reveal the delimiter.
+        let caret = (end as isize + delta + 1).max(0) as usize;
+        let caret = caret.min(self.content.len());
+        self.select_range(caret..caret, cx);
+        self.set_history_selection(before, caret..caret, cx);
         cx.emit(EditorEvent::Changed);
     }
 
@@ -5419,10 +5435,13 @@ impl EntityInputHandler for EditorState {
         &mut self,
         range_utf16: Range<usize>,
         bounds: Bounds<Pixels>,
-        _: &mut Window,
+        window: &mut Window,
         _: &mut Context<Self>,
     ) -> Option<Bounds<Pixels>> {
         let range = self.range_from_utf16(&range_utf16);
+        if self.table_rows.get(self.row_col(range.start).0).and_then(Option::as_ref).is_some_and(|table| !table.is_separator) {
+            return self.source_bounds(&range, window);
+        }
         let (row, col) = self.row_col(range.start);
         let lh = self.line_h(row);
         let line = self.wrapped.get(row)?;
@@ -5464,10 +5483,11 @@ impl EntityInputHandler for EditorState {
     fn character_index_for_point(
         &mut self,
         point: Point<Pixels>,
-        _: &mut Window,
+        window: &mut Window,
         _: &mut Context<Self>,
     ) -> Option<usize> {
-        Some(self.offset_to_utf16(self.index_for_mouse_position(point)))
+        let offset = self.table_offset_at(point, window).unwrap_or_else(|| self.index_for_mouse_position(point));
+        Some(self.offset_to_utf16(offset))
     }
 }
 
@@ -5484,6 +5504,7 @@ impl Render for EditorState {
         div()
             .relative()
             .id("markdown-document-scroll")
+            .test_support()
             .overflow_scroll()
             .track_scroll(&self.scroll)
             .size_full()

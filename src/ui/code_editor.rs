@@ -2655,6 +2655,7 @@ impl LyrelApp {
                     })
                     .text_size(rems(1.))
                     .text_color(cx.theme().foreground)
+                    .child(markdown::table_code::render_controls(&view))
                     .children(f.presentations.search(&view))
                     .child(
                         div()
