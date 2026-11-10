@@ -1,5 +1,13 @@
 use super::*;
 
+mod fidelity;
+#[cfg(any(test, feature = "native-markdown-tests"))]
+mod fidelity_tests;
+#[cfg(feature = "native-markdown-tests")]
+pub(super) fn native_cases() -> impl Iterator<Item = crate::native_markdown::Case> {
+    fidelity_tests::native_cases()
+}
+
 /// A captured workbench intent. The editor never resolves it from current focus.
 #[derive(Clone, Debug)]
 pub(crate) enum AfterUnsaved {
@@ -75,10 +83,18 @@ struct SaveIdentity {
     path: PathBuf,
     untitled: Option<u32>,
     epoch: u64,
+    document: gpui_kit::EntityId,
+}
+
+fn document_identity(file: &OpenFile, cx: &gpui_kit::App) -> gpui_kit::EntityId {
+    match &file.input {
+        EditorInput::Code(input) => input.entity_id(),
+        EditorInput::Markdown(view) => view.read(cx).document().entity_id(),
+    }
 }
 
 impl EditorPanelState {
-    fn save_identity(&self, id: BufferId) -> Option<SaveIdentity> {
+    fn save_identity(&self, id: BufferId, cx: &gpui_kit::App) -> Option<SaveIdentity> {
         let file = self.buffers.get(id)?;
         Some(SaveIdentity {
             id,
@@ -86,10 +102,11 @@ impl EditorPanelState {
             path: file.path.clone(),
             untitled: file.untitled,
             epoch: self.prompt_epoch,
+            document: document_identity(file, cx),
         })
     }
 
-    fn accepts_prompt(&mut self, identity: &SaveIdentity) -> bool {
+    fn accepts_prompt(&mut self, identity: &SaveIdentity, cx: &gpui_kit::App) -> bool {
         if self.prompt_epoch != identity.epoch {
             return false;
         }
@@ -97,6 +114,7 @@ impl EditorPanelState {
             file.host.id() == identity.host
                 && file.path == identity.path
                 && file.untitled == identity.untitled
+                && document_identity(file, cx) == identity.document
         });
         if !valid {
             self.saves_failed(identity.id);
@@ -120,60 +138,63 @@ impl EditorPanelState {
         cx: &mut Context<E>,
         bridge: EditorBridge<E>,
     ) {
+        self.save_at(id, force, None, root, window, cx, bridge);
+    }
+
+    fn save_at<E: 'static>(
+        &mut self,
+        id: BufferId,
+        force: bool,
+        save_as: Option<PathBuf>,
+        root: &Path,
+        window: &mut Window,
+        cx: &mut Context<E>,
+        bridge: EditorBridge<E>,
+    ) {
         if let Some(file) = self.buffers.get(id) {
             file.input.finish_composition(window, cx);
         }
         let Some(file) = self.buffers.get_mut(id) else {
             return;
         };
-        if file.untitled.is_some() {
+        if file.saving {
+            if let Some(target) = save_as {
+                file.save_as_pending = Some(target);
+            } else {
+                file.save_pending = true;
+            }
+            return;
+        }
+        if file.untitled.is_some() && save_as.is_none() {
             self.save_as(id, root, window, cx, bridge);
             return;
         }
-        if file.saving {
-            file.save_pending = true;
-            return;
-        }
-        let text = file.input.read(cx).text().to_string();
+        // Markdown hard breaks and unknown syntax are source: ordinary saves do
+        // not apply code cleanup. Explicit workbench cleanup remains undoable.
         if file.input.code().is_some() {
+            let text = file.input.read(cx).text().to_string();
             if let Some(fixed) = lyrel_text::apply_save_rules(&text, &file.config) {
                 let input = file.input.clone();
                 replace_buffer_text(&input, &fixed, window, cx);
             }
         }
-        let Some(file) = self.buffers.get_mut(id) else {
-            return;
-        };
-        let text = file.input.read(cx).text().to_string();
-        let text = if file.input.code().is_some() && text.contains("\r\n") {
-            text.replace("\r\n", "\n")
-        } else {
-            text
-        };
-        let encoded = if let Some(source) = file.input.markdown() {
-            source.read(cx).document().read(cx).encode()
-        } else {
-            lyrel_text::encode(&text, &file.format(cx))
-        };
-        let bytes = match encoded {
-            Ok(bytes) => bytes,
+        let captured = match fidelity::SaveContent::capture(self.buffers.get(id).unwrap(), cx) {
+            Ok(captured) => captured,
             Err(error) => {
-                self.offer_utf8(id, error.unmappable, window, cx, bridge);
+                self.offer_utf8(id, error.unmappable, save_as, window, cx, bridge);
                 return;
             }
         };
-        let identity = self.save_identity(id).unwrap();
+        let identity = self.save_identity(id, cx).unwrap();
         let file = self.buffers.get_mut(id).unwrap();
         file.saving = true;
-        let expect = match (force, file.conflict) {
-            (true, _) | (_, Some(DiskConflict::Deleted)) => None,
+        let expect = match (save_as.is_some(), force, file.conflict) {
+            (true, _, _) | (_, true, _) | (_, _, Some(DiskConflict::Deleted)) => None,
             _ => Some(file.disk_mtime),
         };
-        let written = Fingerprint::of_str(&text);
-        let format = file.format(cx);
-        let representation = file.representation_fingerprint(cx);
+        let fidelity::SaveContent { bytes, written, format, representation, revision } = captured;
         let host = file.host.clone();
-        let target = file.path.clone();
+        let target = save_as.clone().unwrap_or_else(|| file.path.clone());
         let directory = target.parent().map(Path::to_path_buf);
         HostOps::run_in(
             host,
@@ -187,27 +208,55 @@ impl EditorPanelState {
                 };
                 file.saving = false;
                 let pending = std::mem::take(&mut file.save_pending);
+                let next_target = file.save_as_pending.take();
                 // A rename or another Save As can change a buffer's identity
                 // while I/O is in flight. Its old write cannot clean the new file.
                 if file.host.id() != identity.host
                     || file.path != identity.path
                     || file.untitled != identity.untitled
+                    || document_identity(file, cx) != identity.document
                 {
                     editor.saves_failed(id);
-                    if pending {
-                        editor.save(id, false, Path::new(""), window, cx, bridge);
-                    }
+                    // A request queued against the old identity must not be
+                    // silently redirected to the renamed/replaced document.
                     cx.notify();
                     return;
                 }
                 match outcome {
                     SaveOutcome::Saved(mtime) => {
+                        if let Some(target) = save_as.as_ref() {
+                            // Adopt the target only after a successful write. A
+                            // cancelled/failed Save As keeps the original identity.
+                            if editor.buffers.at(identity.host, target).is_some_and(|other| other != id) {
+                                editor.saves_failed(id);
+                                cx.notify();
+                                return;
+                            }
+                            let file = editor.buffers.get_mut(id).unwrap();
+                            file.path = target.clone();
+                            file.untitled = None;
+                            file.reload_seq = file.reload_seq.wrapping_add(1);
+                            file.reload_request = file.reload_request.wrapping_add(1);
+                            file.input.set_highlighter(file.language(), cx);
+                            let source_only = file.path.extension().is_some_and(|extension| extension.eq_ignore_ascii_case("mdx"));
+                            file.presentations.set_source_only(source_only, &file.input, cx);
+                        }
+                        let file = editor.buffers.get_mut(id).unwrap();
                         file.disk_mtime = mtime;
                         file.saved = written;
                         file.saved_format = format;
                         file.saved_representation = representation;
                         file.conflict = None;
                         editor.buffers.note_edit(id, cx);
+                        if editor.buffers.get(id).is_some_and(|file| {
+                            file.dirty || revision.is_some_and(|saved_revision| {
+                                file.input.markdown().is_some_and(|view| view.read(cx).document().read(cx).revision() != saved_revision)
+                            })
+                        }) {
+                            // New edits/representation changes retire this close.
+                            // A later save is not consent to close that newer work.
+                            editor.saves_failed(id);
+                        }
                         (bridge.event)(
                             view,
                             EditorEvent::Saved {
@@ -218,8 +267,13 @@ impl EditorPanelState {
                             window,
                             cx,
                         );
+                        if save_as.is_some() {
+                            (bridge.event)(view, EditorEvent::IdentityChanged, window, cx);
+                        }
                         let editor = (bridge.access)(view);
-                        if pending {
+                        if let Some(target) = next_target {
+                            editor.save_to(id, target, window, cx, bridge);
+                        } else if pending {
                             editor.save(id, false, Path::new(""), window, cx, bridge);
                         } else {
                             let ready = editor.take_saved_intents();
@@ -252,7 +306,7 @@ impl EditorPanelState {
         cx: &mut Context<E>,
         bridge: EditorBridge<E>,
     ) {
-        let Some(identity) = self.save_identity(id) else {
+        let Some(identity) = self.save_identity(id, cx) else {
             return;
         };
         let name = self.buffers.get(id).unwrap().label();
@@ -267,7 +321,7 @@ impl EditorPanelState {
             let choice = answer.await;
             let _ = view.update_in(cx, |view, window, cx| {
                 let editor = (bridge.access)(view);
-                if !editor.accepts_prompt(&identity) {
+                if !editor.accepts_prompt(&identity, cx) {
                     return;
                 }
                 if matches!(choice, Ok(0)) {
@@ -284,11 +338,12 @@ impl EditorPanelState {
         &mut self,
         id: BufferId,
         unmappable: char,
+        target: Option<PathBuf>,
         window: &mut Window,
         cx: &mut Context<E>,
         bridge: EditorBridge<E>,
     ) {
-        let Some(identity) = self.save_identity(id) else {
+        let Some(identity) = self.save_identity(id, cx) else {
             return;
         };
         let file = self.buffers.get(id).unwrap();
@@ -312,7 +367,7 @@ impl EditorPanelState {
             let choice = answer.await;
             let _ = view.update_in(cx, |view, window, cx| {
                 let editor = (bridge.access)(view);
-                if !editor.accepts_prompt(&identity) {
+                if !editor.accepts_prompt(&identity, cx) {
                     return;
                 }
                 if matches!(choice, Ok(0)) {
@@ -324,7 +379,7 @@ impl EditorPanelState {
                         },
                         cx,
                     );
-                    editor.save(id, false, Path::new(""), window, cx, bridge);
+                    editor.save_at(id, false, target, Path::new(""), window, cx, bridge);
                 } else {
                     (bridge.event)(view, EditorEvent::Focus, window, cx);
                 }
@@ -341,7 +396,7 @@ impl EditorPanelState {
         cx: &mut Context<E>,
         bridge: EditorBridge<E>,
     ) {
-        let Some(identity) = self.save_identity(id) else {
+        let Some(identity) = self.save_identity(id, cx) else {
             return;
         };
         let file = self.buffers.get(id).unwrap();
@@ -386,12 +441,11 @@ impl EditorPanelState {
             let result = answer.await;
             let _ = view.update_in(cx, |view, window, cx| {
                 let editor = (bridge.access)(view);
-                if !editor.accepts_prompt(&identity) {
+                if !editor.accepts_prompt(&identity, cx) {
                     return;
                 }
                 if let Ok(Ok(Some(path))) = result {
                     editor.save_to(id, path, window, cx, bridge);
-                    (bridge.event)(view, EditorEvent::IdentityChanged, window, cx);
                 } else {
                     editor.saves_failed(id);
                     (bridge.event)(view, EditorEvent::Focus, window, cx);
@@ -427,13 +481,7 @@ impl EditorPanelState {
             );
             return;
         }
-        let file = self.buffers.get_mut(id).unwrap();
-        file.path = path;
-        file.untitled = None;
-        file.conflict = None;
-        let language = file.language();
-        file.input.set_highlighter(language, cx);
-        self.save(id, true, Path::new(""), window, cx, bridge);
+        self.save_at(id, true, Some(path), Path::new(""), window, cx, bridge);
     }
 
     pub(super) fn open_bar<E: 'static>(
@@ -447,7 +495,7 @@ impl EditorPanelState {
         let id = match kind {
             BarKind::GoToLine { id } | BarKind::SaveAs { id } | BarKind::Rename { id, .. } => id,
         };
-        let Some(identity) = self.save_identity(id) else {
+        let Some(identity) = self.save_identity(id, cx) else {
             return;
         };
         self.dismiss_bar();
@@ -529,7 +577,7 @@ impl EditorPanelState {
     ) -> Option<EditorEvent> {
         let bar = self.bar.as_ref()?;
         let identity = bar.identity.clone();
-        if !self.accepts_prompt(&identity) {
+        if !self.accepts_prompt(&identity, cx) {
             self.dismiss_bar();
             return Some(EditorEvent::Focus);
         }
@@ -565,12 +613,11 @@ impl EditorPanelState {
                     move |host| host.exists(&check),
                     move |view, exists, window, cx| {
                         let editor = (bridge.access)(view);
-                        if !editor.accepts_prompt(&identity) {
+                        if !editor.accepts_prompt(&identity, cx) {
                             return;
                         }
                         if !exists {
                             editor.save_to(id, path, window, cx, bridge);
-                            (bridge.event)(view, EditorEvent::IdentityChanged, window, cx);
                             return;
                         }
                         let answer = window.prompt(
@@ -590,12 +637,11 @@ impl EditorPanelState {
                             let choice = answer.await;
                             let _ = view.update_in(cx, |view, window, cx| {
                                 let editor = (bridge.access)(view);
-                                if !editor.accepts_prompt(&identity) {
+                                if !editor.accepts_prompt(&identity, cx) {
                                     return;
                                 }
                                 if matches!(choice, Ok(0)) {
                                     editor.save_to(id, path, window, cx, bridge);
-                                    (bridge.event)(view, EditorEvent::IdentityChanged, window, cx);
                                 } else {
                                     editor.saves_failed(id);
                                     (bridge.event)(view, EditorEvent::Focus, window, cx);
@@ -628,6 +674,7 @@ impl EditorPanelState {
         }
         self.unsaved_prompt_open = true;
         let epoch = self.prompt_epoch;
+        let identities: Vec<_> = ids.iter().filter_map(|id| self.save_identity(*id, cx)).collect();
         let names: Vec<_> = ids
             .iter()
             .filter_map(|id| self.buffers.get(*id).map(OpenFile::label))
@@ -667,8 +714,8 @@ impl EditorPanelState {
                     return;
                 }
                 editor.unsaved_prompt_open = false;
-                // A missing buffer is not evidence that the captured save succeeded.
-                if ids.iter().any(|id| editor.buffers.get(*id).is_none()) {
+                // A missing/replaced/renamed target is not consent to save or discard.
+                if identities.len() != ids.len() || identities.iter().any(|identity| !editor.accepts_prompt(identity, cx)) {
                     return;
                 }
                 match choice {
@@ -776,7 +823,11 @@ fn write_checked(
         match host.stat(target) {
             Ok(meta) if meta.mtime != expected => return SaveOutcome::Conflict(meta.mtime),
             Ok(_) => {}
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                if expected.is_some() {
+                    return SaveOutcome::Conflict(None);
+                }
+            }
             Err(error) => return SaveOutcome::Failed(error),
         }
     }

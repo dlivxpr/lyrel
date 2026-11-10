@@ -60,7 +60,7 @@ fn native_untitled_save_as_suggests_markdown_and_keeps_its_document(cx: &mut Tes
         assert_eq!(file.language(), "markdown");
         let view = file.input.markdown().unwrap().read(cx);
         assert_eq!(view.document().entity_id(), document);
-        assert!(view.is_live());
+        assert!(!view.is_live(), "Save As MDX keeps history but enforces source-only presentation");
         assert!(!file.dirty);
     });
     assert_eq!(std::fs::read(&target).unwrap(), b"# Author text\n");
