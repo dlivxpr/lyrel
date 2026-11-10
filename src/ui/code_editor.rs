@@ -9,10 +9,10 @@ use gpui_kit::component::input::{
     Editor, EditorState, Input, InputEvent, InputState, Position, TabSize,
 };
 use gpui_kit::component::menu::{ContextMenuExt as _, PopupMenu, PopupMenuItem};
-use gpui_kit::component::{ActiveTheme as _, Icon, IconName, Sizable as _, h_flex, v_flex};
+use gpui_kit::component::{ActiveTheme as _, Disableable as _, Icon, IconName, Sizable as _, h_flex, v_flex};
 use gpui_kit::prelude::*;
 use gpui_kit::{
-    AnyElement, Context, Disableable as _, Entity, EntityInputHandler as _, Focusable as _, MouseButton, PromptLevel,
+    AnyElement, Context, Entity, EntityInputHandler as _, Focusable as _, MouseButton, PromptLevel,
     SharedString, Subscription, Window, div, px, rems,
 };
 use lyrel_core::core::machine::TabId;
