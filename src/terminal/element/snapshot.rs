@@ -270,10 +270,16 @@ impl TerminalElement {
             buf.resize_with(rows * cols, RenderCell::default);
             display_offset = term.display_offset() as i32;
             history_size = term.grid.history_size();
-            selection_is_lines = term
-                .selection
-                .as_ref()
-                .is_some_and(|selection| selection.ty == rio_vt::selection::SelectionType::Lines);
+            selection_is_lines = if self.view.read(cx).selection_scroll.reading.is_some() {
+                self.view
+                    .read(cx)
+                    .selection_scroll
+                    .reading_selection_is_lines()
+            } else {
+                term.selection.as_ref().is_some_and(|selection| {
+                    selection.ty == rio_vt::selection::SelectionType::Lines
+                })
+            };
             let selection = term
                 .selection
                 .as_ref()
@@ -314,7 +320,9 @@ impl TerminalElement {
                                 render_reading_cell(cell, &palette, colors, &mut reading_style)
                             })
                             .unwrap_or_default();
-                        rendered.tab_stop = presentation.is_tab_stop(col);
+                        rendered.tab_stop = source
+                            .and_then(|source| source.get(col))
+                            .is_some_and(|cell| cell.tab_stop);
                         buf[row * cols + col] = if dim < 1. {
                             dim_cell(rendered, dim, under)
                         } else {
@@ -385,7 +393,14 @@ impl TerminalElement {
                         let position = Pos::new(line, Column(col));
                         painter.snapshot(position, term.grid[position])
                     };
-                    rc.tab_stop = presentation.is_tab_stop(col);
+                    rc.tab_stop = if let Some(reading) = reading {
+                        reading
+                            .row(-1)
+                            .and_then(|source| source.get(col))
+                            .is_some_and(|cell| cell.tab_stop)
+                    } else {
+                        presentation.is_tab_stop(col)
+                    };
                     if dim < 1. {
                         rc = dim_cell(rc, dim, under);
                     }
@@ -428,13 +443,25 @@ impl TerminalElement {
                     .images()
                     .commit_with_placeholders(&placeholders)
             };
+            if reading.is_some() {
+                any_selected = self
+                    .view
+                    .read(cx)
+                    .selection_scroll
+                    .apply_reading_selection(buf, cols);
+                if let Some(sliver) = sliver.as_mut() {
+                    any_selected |= self
+                        .view
+                        .read(cx)
+                        .selection_scroll
+                        .apply_reading_sliver_selection(sliver, cols);
+                }
+            }
+            let live_origin = crate::terminal::reading::live_start(&term);
             drop(term);
-            let (any_match, any_current) = if reading.is_none() {
-                self.flag_hovered_link(buf, rows, cols, display_offset, cx);
-                self.flag_search_matches(buf, rows, cols, display_offset, cx)
-            } else {
-                (false, false)
-            };
+            self.flag_hovered_link(buf, rows, cols, display_offset, cx);
+            let (any_match, any_current) =
+                self.flag_search_matches(buf, rows, cols, display_offset, live_origin, cx);
             return Ok(GridSnapshot {
                 cursor,
                 sliver,
@@ -459,6 +486,11 @@ impl TerminalElement {
         display_offset: i32,
         cx: &App,
     ) {
+        let display_offset = if self.view.read(cx).selection_scroll.reading.is_some() {
+            0
+        } else {
+            display_offset
+        };
         let Some(link) = self.view.read(cx).links.hovered() else {
             return;
         };
@@ -483,11 +515,23 @@ impl TerminalElement {
         rows: usize,
         cols: usize,
         display_offset: i32,
+        live_origin: i64,
         cx: &App,
     ) -> (bool, bool) {
         let Some(search) = self.view.read(cx).search.as_ref() else {
             return (false, false);
         };
+        let reading = self
+            .view
+            .read(cx)
+            .selection_scroll
+            .reading
+            .as_ref()
+            .map(|reading| reading.content_identity());
+        if !search.presentation_matches(reading) {
+            return (false, false);
+        }
+        let display_offset = display_offset - (live_origin - search.origin()) as i32;
         let (mut any_hit, mut any_current) = (false, false);
         let first = search
             .matches

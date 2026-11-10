@@ -101,7 +101,7 @@ fn graphics_assert_production_paint_at(
     // otherwise a default test window would silently resize the real daemon.
     cx.simulate_window_resize(window, target);
     let previously_painted = view.update(cx, |view, _| {
-        let images = graphics_visible_images(view);
+        let images = view.grid_snap.as_ref().map(|snap| snap.images.to_vec()).unwrap_or_default();
         let previous: Vec<_> = images
             .iter()
             .map(|image| (image.painted.clone(), image.painted.load(Ordering::Acquire)))
@@ -125,11 +125,12 @@ fn graphics_assert_production_paint_at(
         let geom = view.cell_geom.expect("rooted production TerminalElement must paint a fresh frame");
         assert_eq!((geom.cols, geom.rows), (cols, rows));
         let viewport = Bounds::new(geom.origin, gpui_kit::size(geom.cell_width * cols as f32, geom.line_height * rows as f32));
-        let term = view.terminal.term.lock();
-        let offset = term.display_offset() as i32;
-        drop(term);
-        let images = graphics_visible_images(view);
-        for image in &images {
+        // Inspect the picture actually consumed by production paint, not a
+        // fresh projection of live placements under frozen reading/held text.
+        let snap = view.grid_snap.as_ref().expect("committed production frame");
+        let offset = snap.display_offset;
+        let images = &snap.images;
+        for image in images.iter() {
             let expected = images.iter().filter(|other| std::sync::Arc::ptr_eq(&image.painted, &other.painted)).any(|other| {
                 let (crop, _) = other.paint_bounds(geom.origin, geom.cell_width, geom.line_height, 0, offset, scale);
                 let visible = crop.intersect(&viewport);
