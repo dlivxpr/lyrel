@@ -262,15 +262,20 @@ impl TerminalView {
                 break;
             }
         }
-        let bottom = Pos::new(Line(term.screen_lines() as i32 - 1 - term.display_offset() as i32), term.grid.last_column());
+        let bottom = Pos::new(
+            Line(term.screen_lines() as i32 - 1 - term.display_offset() as i32),
+            term.grid.last_column(),
+        );
         drop(term);
         if let Some(reading) = self.selection_scroll.reading.as_ref() {
             // Rio remains the search authority for unretained history. Its
             // matches cannot annotate rows whose semantic source is frozen.
-            matches.retain(|m| !reading.intersects_rows(
-                history as i64 + i64::from(m.start().row.0),
-                history as i64 + i64::from(m.end().row.0),
-            ));
+            matches.retain(|m| {
+                !reading.intersects_rows(
+                    history as i64 + i64::from(m.start().row.0),
+                    history as i64 + i64::from(m.end().row.0),
+                )
+            });
             if let Ok(regex) = regex::RegexBuilder::new(&pattern)
                 .case_insensitive(!self.search_case_sensitive)
                 .build()
@@ -279,11 +284,19 @@ impl TerminalView {
                 let mut points = Vec::new();
                 let mut previous = None;
                 let mut wrapped = false;
-                let flush = |text: &mut String, points: &mut Vec<(usize, Pos)>, matches: &mut Vec<Match>| {
+                let flush = |text: &mut String,
+                             points: &mut Vec<(usize, Pos)>,
+                             matches: &mut Vec<Match>| {
                     for found in regex.find_iter(text).filter(|found| !found.is_empty()) {
-                        if matches.len() >= MAX_MATCHES { break; }
-                        let start = points.partition_point(|(byte, _)| *byte <= found.start()).saturating_sub(1);
-                        let end = points.partition_point(|(byte, _)| *byte < found.end()).saturating_sub(1);
+                        if matches.len() >= MAX_MATCHES {
+                            break;
+                        }
+                        let start = points
+                            .partition_point(|(byte, _)| *byte <= found.start())
+                            .saturating_sub(1);
+                        let end = points
+                            .partition_point(|(byte, _)| *byte < found.end())
+                            .saturating_sub(1);
                         matches.push(points[start].1..=points[end].1);
                     }
                     text.clear();
@@ -294,10 +307,20 @@ impl TerminalView {
                         flush(&mut text, &mut points, &mut matches);
                     }
                     for (col, cell) in cells.iter().enumerate() {
-                        if matches!(cell.wide, rio_vt::crosswords::square::Wide::Spacer | rio_vt::crosswords::square::Wide::LeadingSpacer) { continue; }
+                        if matches!(
+                            cell.wide,
+                            rio_vt::crosswords::square::Wide::Spacer
+                                | rio_vt::crosswords::square::Wide::LeadingSpacer
+                        ) {
+                            continue;
+                        }
                         let point = Pos::new(Line((row - history as i64) as i32), Column(col));
                         points.push((text.len(), point));
-                        text.push(if matches!(cell.c, '\0' | '\u{10eeee}') { ' ' } else { cell.c });
+                        text.push(if matches!(cell.c, '\0' | '\u{10eeee}') {
+                            ' '
+                        } else {
+                            cell.c
+                        });
                         if cell.c != '\u{10eeee}' {
                             for &mark in cell.marks.as_deref().unwrap_or_default() {
                                 points.push((text.len(), point));
@@ -309,7 +332,14 @@ impl TerminalView {
                     wrapped = cells.last().is_some_and(|cell| cell.wrapped);
                 }
                 flush(&mut text, &mut points, &mut matches);
-                matches.sort_unstable_by_key(|m| (m.start().row.0, m.start().col.0, m.end().row.0, m.end().col.0));
+                matches.sort_unstable_by_key(|m| {
+                    (
+                        m.start().row.0,
+                        m.start().col.0,
+                        m.end().row.0,
+                        m.end().col.0,
+                    )
+                });
                 matches.truncate(MAX_MATCHES);
             }
         }
@@ -477,7 +507,11 @@ impl TerminalView {
             s.matches = scan.matches;
             s.current_index = current_index;
             s.scanned_history = scan.history;
-            s.scanned_reading = self.selection_scroll.reading.as_ref().map(|reading| reading.content_identity());
+            s.scanned_reading = self
+                .selection_scroll
+                .reading
+                .as_ref()
+                .map(|reading| reading.content_identity());
             s.scanned_query = Some(query);
         }
         self.search_regex_error = scan.regex_error;
@@ -512,7 +546,11 @@ impl TerminalView {
             s.matches = scan.matches;
             s.current_index = current_index;
             s.scanned_history = scan.history;
-            s.scanned_reading = self.selection_scroll.reading.as_ref().map(|reading| reading.content_identity());
+            s.scanned_reading = self
+                .selection_scroll
+                .reading
+                .as_ref()
+                .map(|reading| reading.content_identity());
             s.scanned_query = Some(query);
         }
         self.search_regex_error = scan.regex_error;
@@ -566,9 +604,14 @@ impl TerminalView {
     /// Scrollbar and search navigation share the reading owner. Refresh only
     /// when its semantic row set changes; viewport movement reuses anchors.
     pub(super) fn sync_search_presentation(&mut self, cx: &mut Context<Self>) {
-        let key = self.selection_scroll.reading.as_ref().map(|reading| reading.content_identity());
+        let key = self
+            .selection_scroll
+            .reading
+            .as_ref()
+            .map(|reading| reading.content_identity());
         if self.search.as_ref().is_some_and(|search| {
-            search.scanned_reading != key || search.scanned_query.as_deref() != Some(search.input.read(cx).value().as_ref())
+            search.scanned_reading != key
+                || search.scanned_query.as_deref() != Some(search.input.read(cx).value().as_ref())
         }) {
             self.refresh_matches_after_output(cx);
         }

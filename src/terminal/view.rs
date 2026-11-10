@@ -1371,8 +1371,15 @@ impl TerminalView {
     }
 
     pub fn select_all(&mut self, cx: &mut Context<Self>) {
-        let term = self.selection_scroll.reading.is_none().then(|| self.terminal.term.lock());
-        if self.selection_scroll.reading.is_some() || term.as_ref().is_some_and(|term| term.synchronized_output()) || self.grid_snap.as_ref().is_some_and(|snap| snap.held) {
+        let term = self
+            .selection_scroll
+            .reading
+            .is_none()
+            .then(|| self.terminal.term.lock());
+        if self.selection_scroll.reading.is_some()
+            || term.as_ref().is_some_and(|term| term.synchronized_output())
+            || self.grid_snap.as_ref().is_some_and(|snap| snap.held)
+        {
             drop(term);
             let selected = self
                 .selection_scroll
@@ -1755,8 +1762,15 @@ impl TerminalView {
         shift: bool,
         cx: &mut Context<Self>,
     ) {
-        let term = self.selection_scroll.reading.is_none().then(|| self.terminal.term.lock());
-        if self.selection_scroll.reading.is_some() || term.as_ref().is_some_and(|term| term.synchronized_output()) || self.grid_snap.as_ref().is_some_and(|snap| snap.held) {
+        let term = self
+            .selection_scroll
+            .reading
+            .is_none()
+            .then(|| self.terminal.term.lock());
+        if self.selection_scroll.reading.is_some()
+            || term.as_ref().is_some_and(|term| term.synchronized_output())
+            || self.grid_snap.as_ref().is_some_and(|snap| snap.held)
+        {
             drop(term);
             if let Some(geom) = self.cell_geom {
                 let selected = self.selection_scroll.start_presented(
@@ -1799,7 +1813,9 @@ impl TerminalView {
         }
         if !self.selection_scroll.has_presented() {
             let mut term = self.terminal.term.lock();
-            if (self.selection_scroll.reading.is_some() || term.synchronized_output() || self.grid_snap.as_ref().is_some_and(|snap| snap.held))
+            if (self.selection_scroll.reading.is_some()
+                || term.synchronized_output()
+                || self.grid_snap.as_ref().is_some_and(|snap| snap.held))
                 && let Some(geom) = self.cell_geom
             {
                 self.selection_scroll.adopt_presented(
@@ -1995,9 +2011,16 @@ impl TerminalView {
             self.selection_scroll
                 .scroll_to(&mut term, target, &self.terminal);
         }
-        self.selection_scroll.sync_reading(&mut term, &self.terminal);
-        let reading_identity = self.selection_scroll.reading.as_ref().map(|reading| reading.identity());
-        if self.frame.reading_identity != reading_identity || (reading_identity.is_none() && self.frame.display_offset != term.display_offset()) {
+        self.selection_scroll
+            .sync_reading(&mut term, &self.terminal);
+        let reading_identity = self
+            .selection_scroll
+            .reading
+            .as_ref()
+            .map(|reading| reading.identity());
+        if self.frame.reading_identity != reading_identity
+            || (reading_identity.is_none() && self.frame.display_offset != term.display_offset())
+        {
             self.links.invalidate_geometry();
         }
         let cursor = term.cursor().pos;
@@ -2007,7 +2030,8 @@ impl TerminalView {
             mouse_mode: term.mode().intersects(Mode::MOUSE_MODE),
             reading_identity,
             has_selection: self.selection_scroll.has_presented() || term.selection.is_some(),
-            cursor: (self.selection_scroll.reading.is_none() && row >= 0).then_some((row as usize, cursor.col.0)),
+            cursor: (self.selection_scroll.reading.is_none() && row >= 0)
+                .then_some((row as usize, cursor.col.0)),
             rows: term.screen_lines(),
             cols: term.columns(),
             display_offset: term.grid.display_offset(),
@@ -5227,11 +5251,8 @@ mod gpui_tests {
         });
         print(cx, &view, filler(160));
         view.update(cx, |view, _| {
-            view.selection_scroll.scroll_to(
-                &mut view.terminal.term.lock(),
-                1,
-                &view.terminal,
-            );
+            view.selection_scroll
+                .scroll_to(&mut view.terminal.term.lock(), 1, &view.terminal);
         });
         vcx.update(|window, cx| {
             window.refresh();

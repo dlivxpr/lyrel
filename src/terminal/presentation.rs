@@ -120,17 +120,45 @@ impl<'a> PresentedGrid<'a> {
         match self.cells {
             PresentedCells::Rendered(cells) => {
                 if let Some(cell) = cells.get(ix) {
-                    return PresentedCell { c: cell.c, marks: cell.marks.as_deref(), hyperlink: cell.hyperlink.as_ref(), wide: cell.wide, spacer: cell.spacer, wrapped: cell.wrapped };
+                    return PresentedCell {
+                        c: cell.c,
+                        marks: cell.marks.as_deref(),
+                        hyperlink: cell.hyperlink.as_ref(),
+                        wide: cell.wide,
+                        spacer: cell.spacer,
+                        wrapped: cell.wrapped,
+                    };
                 }
             }
             PresentedCells::Reading(reading, first, _) => {
-                if let Some(cell) = reading.absolute_row(first + (ix / self.cols) as i64).and_then(|row| row.get(ix % self.cols)) {
+                if let Some(cell) = reading
+                    .absolute_row(first + (ix / self.cols) as i64)
+                    .and_then(|row| row.get(ix % self.cols))
+                {
                     let placeholder = cell.c == '\u{10eeee}';
-                    return PresentedCell { c: if placeholder { ' ' } else { cell.c }, marks: if placeholder { None } else { cell.marks.as_deref() }, hyperlink: cell.hyperlink.as_ref(), wide: cell.wide, spacer: matches!(cell.wide, Wide::Spacer | Wide::LeadingSpacer), wrapped: cell.wrapped };
+                    return PresentedCell {
+                        c: if placeholder { ' ' } else { cell.c },
+                        marks: if placeholder {
+                            None
+                        } else {
+                            cell.marks.as_deref()
+                        },
+                        hyperlink: cell.hyperlink.as_ref(),
+                        wide: cell.wide,
+                        spacer: matches!(cell.wide, Wide::Spacer | Wide::LeadingSpacer),
+                        wrapped: cell.wrapped,
+                    };
                 }
             }
         }
-        PresentedCell { c: '\0', marks: None, hyperlink: None, wide: Wide::Narrow, spacer: false, wrapped: false }
+        PresentedCell {
+            c: '\0',
+            marks: None,
+            hyperlink: None,
+            wide: Wide::Narrow,
+            spacer: false,
+            wrapped: false,
+        }
     }
 
     fn rows(&self) -> usize {
@@ -180,7 +208,8 @@ impl<'a> PresentedGrid<'a> {
         if self.len() == 0 {
             return 0;
         }
-        let ix = (row + self.viewport_row).min(self.rows() - 1) * self.cols + col.min(self.cols - 1);
+        let ix =
+            (row + self.viewport_row).min(self.rows() - 1) * self.cols + col.min(self.cols - 1);
         // A leading spacer still belongs to this physical row. Simple
         // selection must preserve that row's break before the wide glyph.
         if self.cell(ix).wide == Wide::LeadingSpacer {
@@ -274,7 +303,9 @@ impl<'a> PresentedGrid<'a> {
         let ix = self.lead(row * self.cols + col);
         let uri = self.cell(ix).hyperlink?.uri();
         let same = |at: usize| {
-            self.cell(self.lead(at)).hyperlink.is_some_and(|link| link.uri() == uri)
+            self.cell(self.lead(at))
+                .hyperlink
+                .is_some_and(|link| link.uri() == uri)
         };
         let mut start = ix;
         while start > 0
@@ -365,20 +396,28 @@ impl<'a> PresentedGrid<'a> {
     }
 
     pub(super) fn selected_text(&self, lines: bool) -> Option<String> {
-        let PresentedCells::Rendered(cells) = self.cells else { return None; };
+        let PresentedCells::Rendered(cells) = self.cells else {
+            return None;
+        };
         let start = cells.iter().position(|cell| cell.selected)?;
         let end = cells.iter().rposition(|cell| cell.selected)?;
-        Some(copy_rows((start / self.cols..=end / self.cols).map(|row| {
-            let from = start.max(row * self.cols);
-            let to = (end + 1).min((row + 1) * self.cols);
-            (self.wraps(row), cells[from..to].iter().map(|cell| CopyCell {
-                c: cell.c,
-                marks: cell.marks.as_deref(),
-                spacer: cell.spacer,
-                selected: cell.selected,
-                tab_stop: cell.tab_stop,
-            }))
-        }), lines))
+        Some(copy_rows(
+            (start / self.cols..=end / self.cols).map(|row| {
+                let from = start.max(row * self.cols);
+                let to = (end + 1).min((row + 1) * self.cols);
+                (
+                    self.wraps(row),
+                    cells[from..to].iter().map(|cell| CopyCell {
+                        c: cell.c,
+                        marks: cell.marks.as_deref(),
+                        spacer: cell.spacer,
+                        selected: cell.selected,
+                        tab_stop: cell.tab_stop,
+                    }),
+                )
+            }),
+            lines,
+        ))
     }
 }
 
@@ -404,9 +443,13 @@ where
         let mut row_has_content = false;
         let mut tab_suffix = false;
         for cell in cells {
-            if cell.spacer || !cell.selected { continue; }
+            if cell.spacer || !cell.selected {
+                continue;
+            }
             // A Tab encodes only the run up to the captured next stop.
-            if tab_suffix && cell.c == '\0' && !cell.tab_stop { continue; }
+            if tab_suffix && cell.c == '\0' && !cell.tab_stop {
+                continue;
+            }
             tab_suffix = cell.c == '\t';
             if matches!(cell.c, ' ' | '\0') && cell.marks.is_none_or(|marks| marks.is_empty()) {
                 pending_spaces += 1;
@@ -418,13 +461,21 @@ where
             text.extend(std::iter::repeat_n(' ', pending_spaces));
             pending_spaces = 0;
             text.push(if cell.c == '\0' { ' ' } else { cell.c });
-            if let Some(marks) = cell.marks { text.extend(marks.iter()); }
+            if let Some(marks) = cell.marks {
+                text.extend(marks.iter());
+            }
             row_has_content = true;
         }
-        if !row_has_content || !wraps { pending_breaks += 1; }
-        if !wraps { pending_spaces = 0; }
+        if !row_has_content || !wraps {
+            pending_breaks += 1;
+        }
+        if !wraps {
+            pending_spaces = 0;
+        }
     }
-    if lines { text.push('\n'); }
+    if lines {
+        text.push('\n');
+    }
     text
 }
 
@@ -455,7 +506,6 @@ impl PresentedSelection {
     pub(super) fn range(&self) -> Range<usize> {
         self.anchor.start.min(self.target.start)..self.anchor.end.max(self.target.end)
     }
-
 
     pub(super) fn apply_from(&self, cells: &mut [RenderCell], start: usize) -> bool {
         let range = self.range();

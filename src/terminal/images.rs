@@ -1122,17 +1122,36 @@ impl ImageStore {
         Self::collect_placements(&inner, rows, true, Some(local_origin), |row, image| {
             captured.entry(row).or_default().push(image);
         });
-        captured.into_iter().map(|(row, mut images)| {
-            images.sort_unstable_by_key(|image| (image.placement.z, image.placement.image_id, image.placement.key));
-            (row, CommittedImages::new(images))
-        }).collect()
+        captured
+            .into_iter()
+            .map(|(row, mut images)| {
+                images.sort_unstable_by_key(|image| {
+                    (
+                        image.placement.z,
+                        image.placement.image_id,
+                        image.placement.key,
+                    )
+                });
+                (row, CommittedImages::new(images))
+            })
+            .collect()
     }
 
-    fn snapshot_placements(&self, rows: &[(i32, Vec<PlaceholderSlice>)], committed: bool) -> Vec<RenderPlacement> {
+    fn snapshot_placements(
+        &self,
+        rows: &[(i32, Vec<PlaceholderSlice>)],
+        committed: bool,
+    ) -> Vec<RenderPlacement> {
         let inner = self.0.state.lock().unwrap();
         let mut images = Vec::new();
         Self::collect_placements(&inner, rows, committed, None, |_, image| images.push(image));
-        images.sort_unstable_by_key(|image| (image.placement.z, image.placement.image_id, image.placement.key));
+        images.sort_unstable_by_key(|image| {
+            (
+                image.placement.z,
+                image.placement.image_id,
+                image.placement.key,
+            )
+        });
         images
     }
 
@@ -1143,7 +1162,9 @@ impl ImageStore {
         reading_origin: Option<i64>,
         mut emit: impl FnMut(i32, RenderPlacement),
     ) {
-        if committed && !inner.viewport_known { return; }
+        if committed && !inner.viewport_known {
+            return;
+        }
         let render = |anchored: &AnchoredPlacement, placeholder| {
             let root = inner.resources.get(&anchored.placement.resource)?;
             let selection = root.selection(anchored.placement.resource);
@@ -1195,12 +1216,20 @@ impl ImageStore {
                 let last = start + i64::from(anchored.placement.clip_bottom);
                 let from = rows.partition_point(|(line, _)| i64::from(*line) < first);
                 let to = rows.partition_point(|(line, _)| i64::from(*line) < last);
-                if from == to { continue; }
-                let Some(mut image) = render(anchored, None) else { continue; };
+                if from == to {
+                    continue;
+                }
+                let Some(mut image) = render(anchored, None) else {
+                    continue;
+                };
                 image.history_origin = origin;
                 let mut image = Some(image);
                 for (ix, (line, _)) in rows[from..to].iter().enumerate() {
-                    let mut slice = if ix + 1 == to - from { image.take().unwrap() } else { image.as_ref().unwrap().clone() };
+                    let mut slice = if ix + 1 == to - from {
+                        image.take().unwrap()
+                    } else {
+                        image.as_ref().unwrap().clone()
+                    };
                     let row = (i64::from(*line) - start) as u32;
                     slice.placement.clip_top = row;
                     slice.placement.clip_bottom = row + 1;
@@ -1225,7 +1254,10 @@ impl ImageStore {
                 let mut slice = slice.clone();
                 slice.run.width = slice.run.width.min(prototype.span_cols - slice.run.col);
                 let viewport_row = if reading_origin.is_some() { 0 } else { *row };
-                if let Some(image) = render(&inner.placements[&prototype.key], Some((viewport_row, slice))) {
+                if let Some(image) = render(
+                    &inner.placements[&prototype.key],
+                    Some((viewport_row, slice)),
+                ) {
                     emit(*row, image);
                 }
             }
