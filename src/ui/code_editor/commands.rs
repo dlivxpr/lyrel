@@ -828,7 +828,9 @@ impl LyrelApp {
             input.replace(edit.range, &edit.replacement, window, cx);
         }
         if let Some(view) = input.markdown() {
-            view.update(cx, |view, cx| view.set_history_selection(selected, edit.selection.clone(), cx));
+            view.update(cx, |view, cx| {
+                view.set_history_selection(selected, edit.selection.clone(), cx)
+            });
         }
         input.set_selected_range(edit.selection, cx);
         true

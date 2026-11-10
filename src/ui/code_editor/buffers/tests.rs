@@ -182,7 +182,10 @@ fn production_markdown_opens_live_without_changing_code_or_plain_untitled(cx: &m
         app.read_with(&vcx, |app, cx| {
             let file = app.active_buffer().unwrap();
             assert_eq!(file.language(), "markdown");
-            assert_eq!(file.input.markdown().unwrap().read(cx).is_live(), !extension.eq_ignore_ascii_case("mdx"));
+            assert_eq!(
+                file.input.markdown().unwrap().read(cx).is_live(),
+                !extension.eq_ignore_ascii_case("mdx")
+            );
             assert_eq!(
                 file.input.read(cx).text().to_string(),
                 "# Heading\n\nbody\n"
@@ -924,7 +927,13 @@ fn markdown_reload_started_before_composition_reports_conflict_without_losing_in
         app.editor_open_on_host(host.clone(), &path, window, cx)
     });
     wait_until(&mut context, |context| active_id(&app, context).is_some());
-    let view = app.read_with(&context, |app, _| app.active_editor_input().unwrap().markdown().unwrap().clone());
+    let view = app.read_with(&context, |app, _| {
+        app.active_editor_input()
+            .unwrap()
+            .markdown()
+            .unwrap()
+            .clone()
+    });
     view.update_in(&mut context, |view, window, cx| {
         view.select_range(0..0, cx);
         view.focus_handle(cx).focus(window, cx);
@@ -939,14 +948,28 @@ fn markdown_reload_started_before_composition_reports_conflict_without_losing_in
         view.replace_and_mark_text_in_range(None, "ni", Some(2..2), window, cx);
     });
     release.send(()).unwrap();
-    wait_until(&mut context, |context| app.read_with(context, |app, _| app.active_buffer().unwrap().conflict.is_some()));
+    wait_until(&mut context, |context| {
+        app.read_with(context, |app, _| {
+            app.active_buffer().unwrap().conflict.is_some()
+        })
+    });
     view.read_with(&context, |view, cx| {
         assert!(view.document().read(cx).has_composition());
-        assert_eq!(view.document().read(cx).encode().unwrap(), b"nialpha\r\nkeep\n");
+        assert_eq!(
+            view.document().read(cx).encode().unwrap(),
+            b"nialpha\r\nkeep\n"
+        );
     });
-    view.update_in(&mut context, |view, window, cx| view.replace_text_in_range(None, "你", window, cx));
+    view.update_in(&mut context, |view, window, cx| {
+        view.replace_text_in_range(None, "你", window, cx)
+    });
     context.dispatch_action(gpui_kit::component::input::Undo);
-    view.read_with(&context, |view, cx| assert_eq!(view.document().read(cx).encode().unwrap(), original.as_bytes()));
+    view.read_with(&context, |view, cx| {
+        assert_eq!(
+            view.document().read(cx).encode().unwrap(),
+            original.as_bytes()
+        )
+    });
 }
 
 #[gpui_kit::test]
@@ -961,15 +984,33 @@ fn markdown_pristine_reload_allows_cursor_and_mode_changes_during_disk_read(
     std::fs::write(&path, original).unwrap();
     let host = FileHost::new(HostId(2043));
     let (app, mut context, _streams) = harness_with_tabs(cx, 1);
-    app.update_in(&mut context, |app, window, cx| app.editor_open_on_host(host.clone(), &path, window, cx));
+    app.update_in(&mut context, |app, window, cx| {
+        app.editor_open_on_host(host.clone(), &path, window, cx)
+    });
     wait_until(&mut context, |context| active_id(&app, context).is_some());
-    let view = app.read_with(&context, |app, _| app.active_editor_input().unwrap().markdown().unwrap().clone());
-    view.update_in(&mut context, |view, window, cx| view.focus_handle(cx).focus(window, cx));
+    let view = app.read_with(&context, |app, _| {
+        app.active_editor_input()
+            .unwrap()
+            .markdown()
+            .unwrap()
+            .clone()
+    });
+    view.update_in(&mut context, |view, window, cx| {
+        view.focus_handle(cx).focus(window, cx)
+    });
     let release = host.pause_next_read();
     std::fs::write(&path, loaded).unwrap();
     app.update_in(&mut context, |app, window, cx| {
-        app.editor.buffers.rebuild_watch(Some(host.clone()), cx, |app| &mut app.editor.buffers);
-        app.editor.buffers.external_change(&path, window, cx, |app| &mut app.editor.buffers, crate::ui::code_editor::EditorPanelState::buffer_edited);
+        app.editor
+            .buffers
+            .rebuild_watch(Some(host.clone()), cx, |app| &mut app.editor.buffers);
+        app.editor.buffers.external_change(
+            &path,
+            window,
+            cx,
+            |app| &mut app.editor.buffers,
+            crate::ui::code_editor::EditorPanelState::buffer_edited,
+        );
     });
     wait_until(&mut context, |_| host.entered.load(Ordering::SeqCst));
     view.update_in(&mut context, |view, _window, cx| {
@@ -977,14 +1018,23 @@ fn markdown_pristine_reload_allows_cursor_and_mode_changes_during_disk_read(
         view.toggle_mode(cx);
     });
     release.send(()).unwrap();
-    wait_until(&mut context, |context| view.read_with(context, |view, cx| view.document().read(cx).encode().unwrap() == loaded.as_bytes()));
+    wait_until(&mut context, |context| {
+        view.read_with(context, |view, cx| {
+            view.document().read(cx).encode().unwrap() == loaded.as_bytes()
+        })
+    });
     app.read_with(&context, |app, _| {
         let file = app.active_buffer().unwrap();
         assert!(file.conflict.is_none());
         assert!(!file.dirty);
     });
     context.dispatch_action(gpui_kit::component::input::Undo);
-    view.read_with(&context, |view, cx| assert_eq!(view.document().read(cx).encode().unwrap(), loaded.as_bytes()));
+    view.read_with(&context, |view, cx| {
+        assert_eq!(
+            view.document().read(cx).encode().unwrap(),
+            loaded.as_bytes()
+        )
+    });
     assert_eq!(std::fs::read(&path).unwrap(), loaded.as_bytes());
 }
 

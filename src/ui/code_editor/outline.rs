@@ -13,8 +13,8 @@ use std::collections::HashMap;
 use std::ops::Range;
 use std::sync::{Arc, LazyLock, Mutex};
 
-use gpui_kit::component::Rope;
 use super::text::TextSnapshot;
+use gpui_kit::component::Rope;
 use gpui_kit::component::highlighter::LanguageRegistry;
 use gpui_kit::component::input::Position;
 use tree_sitter::{self, Query, QueryCursor, StreamingIterator as _};
@@ -389,7 +389,11 @@ fn text_of(text: &TextSnapshot, range: Range<usize>) -> String {
 }
 
 /// The outline of `text`, as parsed into `tree`.
-pub(crate) fn outline_from_tree(language: &str, tree: &tree_sitter::Tree, text: &TextSnapshot) -> Outline {
+pub(crate) fn outline_from_tree(
+    language: &str,
+    tree: &tree_sitter::Tree,
+    text: &TextSnapshot,
+) -> Outline {
     let Some(query) = query_for(language) else {
         return Outline::default();
     };
@@ -538,11 +542,7 @@ impl OutlineParser {
             if start != self.source.len() || start != text.len() {
                 let max_suffix = self.source.len().min(text.len()) - start;
                 let mut suffix = 0;
-                for (a, b) in self
-                    .source
-                    .reverse_chars()
-                    .zip(text.reverse_chars())
-                {
+                for (a, b) in self.source.reverse_chars().zip(text.reverse_chars()) {
                     if a != b || suffix + a.len_utf8() > max_suffix {
                         break;
                     }

@@ -40,7 +40,6 @@ pub(crate) fn install(cx: &mut App) {
     });
 }
 
-
 fn observe_inputs<T: EntityInputHandler + Focusable + 'static>(
     cx: &mut App,
     owner: fn(WeakEntity<T>) -> CompositionOwner,

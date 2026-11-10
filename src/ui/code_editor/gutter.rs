@@ -29,9 +29,9 @@ use gpui_kit::{
 
 use super::{BufferId, TabCode};
 use crate::ui::app::LyrelApp;
-use lyrel_text::TextFormat;
 use crate::ui::host_ops::HostOps;
 use crate::ui::i18n::{L10nKey, t, t_fmt};
+use lyrel_text::TextFormat;
 
 /// How long typing has to pause before the buffer is diffed again.
 const DIFF_DEBOUNCE: Duration = Duration::from_millis(150);

@@ -1227,8 +1227,22 @@ impl Element for EditorElement {
                         continue;
                     }
                     let inset = row_x(row);
-                    let pa = caret_line_pos(line, bidi(row), disp_col(row, a), lh, editor.affinity_for_offset(line_start + a)).unwrap_or_default();
-                    let pb = caret_line_pos(line, bidi(row), disp_col(row, b), lh, editor.affinity_for_offset(line_start + b)).unwrap_or_default();
+                    let pa = caret_line_pos(
+                        line,
+                        bidi(row),
+                        disp_col(row, a),
+                        lh,
+                        editor.affinity_for_offset(line_start + a),
+                    )
+                    .unwrap_or_default();
+                    let pb = caret_line_pos(
+                        line,
+                        bidi(row),
+                        disp_col(row, b),
+                        lh,
+                        editor.affinity_for_offset(line_start + b),
+                    )
+                    .unwrap_or_default();
                     let pa = point(pa.x + inset, pa.y);
                     let pb = point(pb.x + inset, pb.y);
                     if pa.y == pb.y {
@@ -1400,7 +1414,9 @@ impl Element for EditorElement {
             } else {
                 let p = wrapped
                     .get(row)
-                    .and_then(|l| caret_line_pos(l, bidi(row), disp_col(row, col), lh, editor.caret_affinity))
+                    .and_then(|l| {
+                        caret_line_pos(l, bidi(row), disp_col(row, col), lh, editor.caret_affinity)
+                    })
                     .unwrap_or_default();
                 let inset = row_x(row);
                 // A row can be taller than its text — grown to fit an inline
@@ -1449,11 +1465,21 @@ impl Element for EditorElement {
                 if let Some(line) = wrapped.get(row) {
                     let lh = line_heights.get(row).copied().unwrap_or(base_lh);
                     if let Some(p) = line_pos(line, bidi(row), disp_col(row, col), lh) {
-                        selections.push(fill(Bounds::new(to_screen(line_tops[row], point(p.x + row_x(row), p.y)), size(px(CARET_WIDTH), lh)), text_color));
+                        selections.push(fill(
+                            Bounds::new(
+                                to_screen(line_tops[row], point(p.x + row_x(row), p.y)),
+                                size(px(CARET_WIDTH), lh),
+                            ),
+                            text_color,
+                        ));
                     }
                 }
             } else {
-                let mut color = editor.markdown_style.as_ref().map_or(text_color, |style| style.link); color.a = 0.25;
+                let mut color = editor
+                    .markdown_style
+                    .as_ref()
+                    .map_or(text_color, |style| style.link);
+                color.a = 0.25;
                 selections.extend(range_quads(selection.start, selection.end, color, window));
             }
         }
@@ -2095,7 +2121,14 @@ impl Element for EditorElement {
                         window,
                         cx,
                     );
-                    let _ = line.paint(text_origin, *lh, gpui_kit::TextAlign::Left, None, window, cx);
+                    let _ = line.paint(
+                        text_origin,
+                        *lh,
+                        gpui_kit::TextAlign::Left,
+                        None,
+                        window,
+                        cx,
+                    );
                 }
                 // Inline `$…$` formulas: paint each typeset raster over its spacer, centered on
                 // the text row. Record each formula's window bounds for click-to-edit; the one
@@ -2469,8 +2502,14 @@ impl Element for EditorElement {
             editor.line_height = base_lh;
             editor.font_size = font_size;
             editor.paint_font = Some(font.clone());
-            if !editor.reveal_requested { return None; }
-            let key = (editor.content_gen, editor.cursor_offset(), editor.caret_affinity);
+            if !editor.reveal_requested {
+                return None;
+            }
+            let key = (
+                editor.content_gen,
+                editor.cursor_offset(),
+                editor.caret_affinity,
+            );
             let caret = editor.range_to_bounds(&(key.1..key.1))?;
             editor.reveal_requested = false;
             editor.revealed_caret = Some(key);
@@ -2478,10 +2517,16 @@ impl Element for EditorElement {
             let mut offset = editor.scroll.offset();
             let previous = offset;
             let margin = px(4.);
-            if caret.top() < viewport.top() + margin { offset.y += viewport.top() + margin - caret.top(); }
-            else if caret.bottom() > viewport.bottom() - margin { offset.y -= caret.bottom() - viewport.bottom() + margin; }
-            if caret.left() < viewport.left() + margin { offset.x += viewport.left() + margin - caret.left(); }
-            else if caret.right() > viewport.right() - margin { offset.x -= caret.right() - viewport.right() + margin; }
+            if caret.top() < viewport.top() + margin {
+                offset.y += viewport.top() + margin - caret.top();
+            } else if caret.bottom() > viewport.bottom() - margin {
+                offset.y -= caret.bottom() - viewport.bottom() + margin;
+            }
+            if caret.left() < viewport.left() + margin {
+                offset.x += viewport.left() + margin - caret.left();
+            } else if caret.right() > viewport.right() - margin {
+                offset.x -= caret.right() - viewport.right() + margin;
+            }
             offset.x = offset.x.min(px(0.));
             offset.y = offset.y.min(px(0.));
             (offset != previous).then_some((key, offset))
@@ -2922,30 +2967,31 @@ fn shape_document(
     // math block, the panel paints on the region's first line and the rest of
     // its lines collapse; the caret entering the region is filtered out here so
     // the raw source shows for editing.
-    let props: Vec<(Range<usize>, PropPanel)> = match md.filter(|style| style.property_icon.is_some()) {
-        Some(st) => scan
-            .props
-            .iter()
-            .filter(|r| caret_row.is_none_or(|cr| !r.contains(&cr)) && !sel_hits(r))
-            .cloned()
-            .map(|r| {
-                let panel = build_prop_panel(
-                    &lines,
-                    &r,
-                    window,
-                    base_font,
-                    base_font_size,
-                    st.marker,
-                    base_color,
-                    st.tag,
-                    st.link,
-                    st.property_icon.as_ref(),
-                );
-                (r, panel)
-            })
-            .collect(),
-        None => Vec::new(),
-    };
+    let props: Vec<(Range<usize>, PropPanel)> =
+        match md.filter(|style| style.property_icon.is_some()) {
+            Some(st) => scan
+                .props
+                .iter()
+                .filter(|r| caret_row.is_none_or(|cr| !r.contains(&cr)) && !sel_hits(r))
+                .cloned()
+                .map(|r| {
+                    let panel = build_prop_panel(
+                        &lines,
+                        &r,
+                        window,
+                        base_font,
+                        base_font_size,
+                        st.marker,
+                        base_color,
+                        st.tag,
+                        st.link,
+                        st.property_icon.as_ref(),
+                    );
+                    (r, panel)
+                })
+                .collect(),
+            None => Vec::new(),
+        };
     // Folded callouts (`> [!NOTE]-`): each region's BODY lines collapse (the
     // marker line stays, painting the label + chevron) unless the caret is
     // inside the region — reveal-on-caret, so arrowing in unfolds for editing.

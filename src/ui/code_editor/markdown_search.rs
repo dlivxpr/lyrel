@@ -1,8 +1,8 @@
 //! Native Markdown find UI; the shared document remains the only editable text.
-use lyrel_markdown_editor::{DocumentEvent, EditorState as MarkdownEditor};
 use super::*;
 use gpui_kit::base::input::SearchMatcher;
 use gpui_kit::{App, WeakEntity};
+use lyrel_markdown_editor::{DocumentEvent, EditorState as MarkdownEditor};
 
 pub(super) struct MarkdownSearch {
     source: WeakEntity<MarkdownEditor>,
@@ -38,9 +38,15 @@ impl MarkdownSearch {
                     this.refresh(true, window, cx);
                 }
             }),
-            cx.subscribe_in(&document, window, |this, _, _: &DocumentEvent, window, cx| {
-                if this.open { this.refresh(false, window, cx); }
-            }),
+            cx.subscribe_in(
+                &document,
+                window,
+                |this, _, _: &DocumentEvent, window, cx| {
+                    if this.open {
+                        this.refresh(false, window, cx);
+                    }
+                },
+            ),
         ];
         Self {
             source: source.downgrade(),
@@ -166,9 +172,7 @@ impl MarkdownSearch {
                 .unwrap_or_default()
         };
         if let Some(source) = self.source.upgrade() {
-            source.update(cx, |view, cx| {
-                view.replace_ranges(edits, cx)
-            });
+            source.update(cx, |view, cx| view.replace_ranges(edits, cx));
         }
         self.refresh(true, window, cx);
     }

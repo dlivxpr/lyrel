@@ -9,7 +9,9 @@ use gpui_kit::component::input::{
     Editor, EditorState, Input, InputEvent, InputState, Position, TabSize,
 };
 use gpui_kit::component::menu::{ContextMenuExt as _, PopupMenu, PopupMenuItem};
-use gpui_kit::component::{ActiveTheme as _, Disableable as _, Icon, IconName, Sizable as _, h_flex, v_flex};
+use gpui_kit::component::{
+    ActiveTheme as _, Disableable as _, Icon, IconName, Sizable as _, h_flex, v_flex,
+};
 use gpui_kit::prelude::*;
 use gpui_kit::{
     AnyElement, Context, Entity, EntityInputHandler as _, Focusable as _, MouseButton, PromptLevel,
@@ -20,17 +22,17 @@ use lyrel_core::core::machine::TabId;
 use crate::ui::app::LyrelApp;
 use crate::ui::document_column::DocumentChrome;
 use crate::ui::editor_session::{self, TabEditor};
-use lyrel_text::{self, EditorConfig, Indent, LineEnding, TextFormat};
 use crate::ui::host_ops::{HostId, HostOps, MTime, SharedHost, WatchSub};
 use crate::ui::i18n::{L10nKey, t, t_fmt};
 use crate::ui::window_chrome::{TITLE_BAR_BORDER, TitleStripRow as _};
+use lyrel_text::{self, EditorConfig, Indent, LineEnding, TextFormat};
 
 mod buffers;
 pub(crate) mod commands;
 mod document_input;
-mod text;
 pub(crate) mod markdown;
 mod markdown_search;
+mod text;
 use buffers::Loaded;
 use document_input::{EditorInput, MarkdownPresentations};
 mod gutter;
@@ -1196,8 +1198,6 @@ impl LyrelApp {
             .track_buffer(id, input.read(cx).text().clone());
     }
 
-
-
     /// Re-derives whether a buffer differs from what is on disk, after an
     /// edit of any kind — typing, undo, a reload, a save rule.
     fn editor_note_edit(&mut self, id: BufferId, cx: &mut Context<Self>) {
@@ -1596,7 +1596,14 @@ impl LyrelApp {
         self.editor_has_focus(window, cx)
             || (self.code_panel_visible() && self.editor.empty_focus.is_focused(window))
             || self.editor.bar_has_focus(window, cx)
-            || self.active_editor_input().and_then(|input| input.markdown().and_then(|source| self.active_buffer()?.presentations.search(source))).is_some_and(|search| search.read(cx).has_focus(window, cx))
+            || self
+                .active_editor_input()
+                .and_then(|input| {
+                    input
+                        .markdown()
+                        .and_then(|source| self.active_buffer()?.presentations.search(source))
+                })
+                .is_some_and(|search| search.read(cx).has_focus(window, cx))
     }
 
     pub(crate) fn editor_save_active(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -1866,7 +1873,10 @@ impl LyrelApp {
         if let Some(markdown) = input.markdown() {
             let menu = menu
                 .action_context(markdown.read(cx).focus_handle(cx))
-                .menu(t(L10nKey::EditorGoToLineAction), Box::new(crate::core::actions::EditorGoToLine));
+                .menu(
+                    t(L10nKey::EditorGoToLineAction),
+                    Box::new(crate::core::actions::EditorGoToLine),
+                );
             return owner.read(cx).editor_file_menu_items(menu, id, app, cx);
         }
         let menu = menu
@@ -2628,7 +2638,11 @@ impl LyrelApp {
                 let view = f.presentations.view(input, tab, group, cx);
                 v_flex()
                     .size_full()
-                    .font_family(if view.read(cx).is_live() { SharedString::from("Arial") } else { cx.theme().mono_font_family.clone() })
+                    .font_family(if view.read(cx).is_live() {
+                        SharedString::from("Arial")
+                    } else {
+                        cx.theme().mono_font_family.clone()
+                    })
                     .text_size(rems(1.))
                     .text_color(cx.theme().foreground)
                     .children(f.presentations.search(&view))
@@ -2929,9 +2943,11 @@ impl LyrelApp {
             ln_col.into()
         });
         let wrap: Option<bool> = active.map(|f| f.wrap);
-        let native_live = self
-            .active_editor_input()
-            .and_then(|input| input.markdown().map(|view| (view.read(cx).is_live(), view.read(cx).is_source_only())));
+        let native_live = self.active_editor_input().and_then(|input| {
+            input
+                .markdown()
+                .map(|view| (view.read(cx).is_live(), view.read(cx).is_source_only()))
+        });
         let indent: Option<SharedString> = active.map(|f| {
             let key = if f.indent.hard_tabs {
                 L10nKey::EditorIndentTabs
@@ -2980,12 +2996,12 @@ impl LyrelApp {
                     L10nKey::EditorMarkdownLive
                 });
                 this.child(
-                    item("status-md-preview", label.into()).disabled(source_only).on_click(cx.listener(
-                        |this, _, window, cx| {
+                    item("status-md-preview", label.into())
+                        .disabled(source_only)
+                        .on_click(cx.listener(|this, _, window, cx| {
                             this.toggle_document_preview(window, cx);
                             this.focus_editor(window, cx);
-                        },
-                    )),
+                        })),
                 )
             })
             .when_some(wrap, |this, wrap| {

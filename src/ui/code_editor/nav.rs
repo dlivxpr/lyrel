@@ -104,7 +104,10 @@ fn matching_chunk_bytes<'a>(
 impl NavEdit {
     /// Edits use the old snapshot's coordinates, last first, so shifting a
     /// location through them never changes the coordinates of an earlier edit.
-    fn between(old: &(impl Clone + Into<super::text::TextSnapshot>), new: &(impl Clone + Into<super::text::TextSnapshot>)) -> SmallVec<[Self; 1]> {
+    fn between(
+        old: &(impl Clone + Into<super::text::TextSnapshot>),
+        new: &(impl Clone + Into<super::text::TextSnapshot>),
+    ) -> SmallVec<[Self; 1]> {
         let old = old.clone().into();
         let new = new.clone().into();
         let shared = old.len().min(new.len());
@@ -1191,8 +1194,8 @@ pub(crate) fn symbol_rows(outline: &Outline) -> Vec<(usize, Item)> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use super::super::text::TextSnapshot;
+    use super::*;
 
     fn at(path: &str, line: u32) -> NavLocation {
         NavLocation {
@@ -1366,7 +1369,10 @@ mod tests {
             ("Ā\ntarget\n", "Ă\ninserted\ntarget\n", 1, 2),
             ("X\n\u{80}\ntarget\n", "X\nnew\nÀ\ntarget\n", 2, 3),
         ] {
-            let edits = NavEdit::between(&TextSnapshot::Markdown(Arc::new(old.into())), &TextSnapshot::Markdown(Arc::new(new.into())));
+            let edits = NavEdit::between(
+                &TextSnapshot::Markdown(Arc::new(old.into())),
+                &TextSnapshot::Markdown(Arc::new(new.into())),
+            );
             let mut history = NavHistory::default();
             history.push(at("a.rs", line));
             history.shift(&at("a.rs", 0), &edits);
@@ -1389,7 +1395,11 @@ mod tests {
         after.insert(after.len(), "tail\n");
         let mut tail_only = before.clone();
         tail_only.insert(tail_only.len(), "tail\n");
-        let (before, after, tail_only) = (TextSnapshot::Code(before), TextSnapshot::Code(after), TextSnapshot::Code(tail_only));
+        let (before, after, tail_only) = (
+            TextSnapshot::Code(before),
+            TextSnapshot::Code(after),
+            TextSnapshot::Code(tail_only),
+        );
         for (old, new, from, expected) in [
             (&before, &prefix_only, 700, 701),
             (&prefix_only, &before, 701, 700),
@@ -1572,8 +1582,8 @@ pub(super) mod gpui_tests {
     use super::super::BufferKind;
     use super::*;
     use crate::ui::app::test_window::harness_with_tabs;
-    use lyrel_text::{EditorConfig, TextFormat};
     use gpui_kit::{Entity, TestAppContext, VisualTestContext};
+    use lyrel_text::{EditorConfig, TextFormat};
 
     /// `alpha` on line 0, `beta` on 30, `gamma` on 50.
     pub(crate) fn source() -> String {

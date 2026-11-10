@@ -32,14 +32,14 @@
 
 #![cfg(any(target_os = "macos", target_os = "windows"))]
 
+pub mod bidi;
 mod document;
 mod presentation;
-pub mod bidi;
 pub use document::{Document, DocumentEvent, SourceEdit, SourceSnapshot};
 
+use gpui_kit::AppContext as _;
 use std::ops::Range;
 use std::sync::Arc;
-use gpui_kit::AppContext as _;
 
 use gpui_kit::{
     App, AvailableSpace, BorderStyle, Bounds, ClipboardItem, Context, Corners, CursorStyle, Edges,
@@ -205,7 +205,6 @@ pub const HIGHLIGHT_COLORS: [u32; 7] = [
     0xffd54f80, 0xffab4080, 0xa5d6a780, 0x90caf980, 0xce93d880, 0xf48fb180, 0xbdbdbd80,
 ];
 
-
 /// Line height as a multiple of the font size. Derived from the editor's own
 /// font (not the ambient `window.line_height()`, which tracks the host's UI text
 /// style and would leave the caret/rows mismatched against differently-sized
@@ -277,7 +276,6 @@ struct ImageResize {
     start_x: Pixels,
     width: f32,
 }
-
 
 /// The last edit's kind, for coalescing a run of edits into one undo step.
 /// `Insert(end)` is a single-grapheme insert whose caret ends at `end`.
@@ -362,7 +360,6 @@ impl TurnKind {
         }
     }
 }
-
 
 /// If `offset` sits on a collapsed marker line (a table style marker or a
 /// math align marker), the offset of the nearest line that reveals nothing
@@ -751,7 +748,10 @@ impl Default for Labels {
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
-enum WrapAffinity { Upstream, Downstream }
+enum WrapAffinity {
+    Upstream,
+    Downstream,
+}
 
 pub struct EditorState {
     focus_handle: FocusHandle,
@@ -1078,22 +1078,29 @@ impl EditorState {
     pub fn for_document(document: Entity<Document>, cx: &mut Context<Self>) -> Self {
         let content = document.read(cx).snapshot().text_handle();
         let revision = document.read(cx).revision();
-        let document_subscription = cx.subscribe(&document, |this, _, event: &DocumentEvent, cx| {
-            if event.revision() <= this.content_gen { return; }
-            if event.origin() != Some(cx.entity_id()) {
-                this.diagnostics.clear();
-                for edit in event.edits() {
-                    for selection in &mut this.extra_selections { *selection = edit.map_offset(selection.start)..edit.map_offset(selection.end); }
-                    this.selected_range = edit.map_offset(this.selected_range.start)..edit.map_offset(this.selected_range.end);
+        let document_subscription =
+            cx.subscribe(&document, |this, _, event: &DocumentEvent, cx| {
+                if event.revision() <= this.content_gen {
+                    return;
                 }
-                this.marked_range = None;
-                this.last_edit = EditKind::Other;
-            }
-            this.content = event.snapshot().text_handle();
-            this.content_gen = event.revision();
-            this.invalidate_geometry();
-            cx.notify();
-        });
+                if event.origin() != Some(cx.entity_id()) {
+                    this.diagnostics.clear();
+                    for edit in event.edits() {
+                        for selection in &mut this.extra_selections {
+                            *selection =
+                                edit.map_offset(selection.start)..edit.map_offset(selection.end);
+                        }
+                        this.selected_range = edit.map_offset(this.selected_range.start)
+                            ..edit.map_offset(this.selected_range.end);
+                    }
+                    this.marked_range = None;
+                    this.last_edit = EditKind::Other;
+                }
+                this.content = event.snapshot().text_handle();
+                this.content_gen = event.revision();
+                this.invalidate_geometry();
+                cx.notify();
+            });
         Self {
             focus_handle: cx.focus_handle(),
             content,
@@ -1978,7 +1985,13 @@ impl EditorState {
         let (row, col) = self.row_col(offset);
         let lh = self.line_h(row);
         let line = self.wrapped.get(row)?;
-        let p = caret_line_pos(line, self.bidi_map(row), self.display_col(row, col), lh, self.affinity_for_offset(offset))?;
+        let p = caret_line_pos(
+            line,
+            self.bidi_map(row),
+            self.display_col(row, col),
+            lh,
+            self.affinity_for_offset(offset),
+        )?;
         let top = bounds.top() + self.line_tops.get(row).copied().unwrap_or(px(0.)) + p.y;
         let x = bounds.left() + p.x + self.row_origin_x(row);
         Some(Bounds::from_corners(point(x, top), point(x, top + lh)))
@@ -2628,7 +2641,13 @@ impl EditorState {
 
     /// The edit every wrap/unwrap ends in: replace `range` with `new`, select
     /// `new_sel`, keep undo and diagnostics in step. Callers emit `Changed`.
-    fn splice(&mut self, range: Range<usize>, new: String, new_sel: Range<usize>, cx: &mut Context<Self>) {
+    fn splice(
+        &mut self,
+        range: Range<usize>,
+        new: String,
+        new_sel: Range<usize>,
+        cx: &mut Context<Self>,
+    ) {
         self.record_edit(&range, &new);
         self.replace_source(range.clone(), &new, cx);
         self.selected_range = new_sel;
@@ -2818,7 +2837,7 @@ impl EditorState {
                     }),
                 ),
         )
-        .children(custom_colors.then(||
+        .children(custom_colors.then(|| {
             cell((tag, 201))
                 .text_size(px(12.))
                 .child("\u{2026}")
@@ -2833,7 +2852,7 @@ impl EditorState {
                         });
                     }),
                 )
-        ))
+        }))
     }
 
     fn bold(&mut self, _: &Bold, _: &mut Window, cx: &mut Context<Self>) {
@@ -2868,7 +2887,9 @@ impl EditorState {
             }
             return;
         }
-        if self.indent_selected_lines(false, cx) { return; }
+        if self.indent_selected_lines(false, cx) {
+            return;
+        }
         let cursor = self.cursor_offset();
         let line_start = self.content[..cursor].rfind('\n').map_or(0, |i| i + 1);
         let line_end = self.content[line_start..]
@@ -2917,7 +2938,9 @@ impl EditorState {
             }
             return;
         }
-        if self.indent_selected_lines(true, cx) { return; }
+        if self.indent_selected_lines(true, cx) {
+            return;
+        }
         let cursor = self.cursor_offset();
         let line_start = self.content[..cursor].rfind('\n').map_or(0, |i| i + 1);
         let line = &self.content[line_start..];
@@ -3083,7 +3106,9 @@ impl EditorState {
         self.finish_composition(cx);
         let document = self.document.clone();
         let origin = cx.entity_id();
-        if let Some((snapshot, caret)) = document.update(cx, |document, cx| document.undo(origin, cx)) {
+        if let Some((snapshot, caret)) =
+            document.update(cx, |document, cx| document.undo(origin, cx))
+        {
             self.restore_snapshot(snapshot, caret, cx);
         }
     }
@@ -3092,17 +3117,25 @@ impl EditorState {
         self.finish_composition(cx);
         let document = self.document.clone();
         let origin = cx.entity_id();
-        if let Some((snapshot, caret)) = document.update(cx, |document, cx| document.redo(origin, cx)) {
+        if let Some((snapshot, caret)) =
+            document.update(cx, |document, cx| document.redo(origin, cx))
+        {
             self.restore_snapshot(snapshot, caret, cx);
         }
     }
 
-    fn restore_snapshot(&mut self, snapshot: Arc<SourceSnapshot>, selection: Range<usize>, cx: &mut Context<Self>) {
+    fn restore_snapshot(
+        &mut self,
+        snapshot: Arc<SourceSnapshot>,
+        selection: Range<usize>,
+        cx: &mut Context<Self>,
+    ) {
         self.content = snapshot.text_handle();
         self.content_gen = self.document.read(cx).revision();
         self.diagnostics.clear();
         self.extra_selections.clear();
-        self.selected_range = selection.start.min(self.content.len())..selection.end.min(self.content.len());
+        self.selected_range =
+            selection.start.min(self.content.len())..selection.end.min(self.content.len());
         self.selection_reversed = false;
         self.marked_range = None;
         self.last_edit = EditKind::Other;
@@ -3129,7 +3162,9 @@ impl EditorState {
         };
         let coalesce = match (self.last_edit, kind) {
             (EditKind::Insert(end), EditKind::Insert(_)) => end == range.start,
-            (EditKind::Insert(end), EditKind::Other) if new_text == "\n" && range.is_empty() => end == range.start,
+            (EditKind::Insert(end), EditKind::Other) if new_text == "\n" && range.is_empty() => {
+                end == range.start
+            }
             (EditKind::Delete, EditKind::Delete) => true,
             _ => false,
         };
@@ -3485,7 +3520,8 @@ impl EditorState {
         if event.click_count == 1
             && !event.modifiers.shift
             && !event.modifiers.control
-            && self.markdown_style.is_some() && self.host_links
+            && self.markdown_style.is_some()
+            && self.host_links
         {
             let offset = self.index_for_mouse_position(event.position);
             let (row, _) = self.row_col(offset);
@@ -3727,12 +3763,16 @@ impl EditorState {
     ) {
         // Link under the pointer → `HoverLink` on change (a host shows a preview
         // card there). Painted boxes from the last frame, like the hand cursor.
-        let over_link = self.host_links.then(|| self
-            .link_rects
-            .iter()
-            .chain(self.prop_pill_rects.iter())
-            .find(|(b, _)| b.contains(&event.position))
-            .map(|(b, hit)| (hit.clone(), *b))).flatten();
+        let over_link = self
+            .host_links
+            .then(|| {
+                self.link_rects
+                    .iter()
+                    .chain(self.prop_pill_rects.iter())
+                    .find(|(b, _)| b.contains(&event.position))
+                    .map(|(b, hit)| (hit.clone(), *b))
+            })
+            .flatten();
         if over_link != self.hovered_link {
             self.hovered_link = over_link.clone();
             cx.emit(EditorEvent::HoverLink(over_link));
@@ -4069,7 +4109,11 @@ impl EditorState {
 
     /// Close the suggestions menu (Escape, or a click elsewhere).
     fn dismiss(&mut self, _: &Dismiss, _: &mut Window, cx: &mut Context<Self>) {
-        if !self.extra_selections.is_empty() { self.extra_selections.clear(); cx.notify(); return; }
+        if !self.extra_selections.is_empty() {
+            self.extra_selections.clear();
+            cx.notify();
+            return;
+        }
         if self.menu.take().is_some()
             || self.table_menu.take().is_some()
             || self.image_menu.take().is_some()
@@ -4079,7 +4123,6 @@ impl EditorState {
             cx.notify();
         }
     }
-
 
     /// Replace `range` with a chosen suggestion and close the menu.
     fn apply_suggestion(
@@ -4451,7 +4494,12 @@ impl EditorState {
         self.move_to_with_affinity(offset, WrapAffinity::Downstream, cx);
     }
 
-    fn move_to_with_affinity(&mut self, offset: usize, affinity: WrapAffinity, cx: &mut Context<Self>) {
+    fn move_to_with_affinity(
+        &mut self,
+        offset: usize,
+        affinity: WrapAffinity,
+        cx: &mut Context<Self>,
+    ) {
         self.caret_affinity = affinity;
         self.anchor_affinity = affinity;
         self.selection_reversed = false;
@@ -4536,8 +4584,15 @@ impl EditorState {
         self.select_to_with_affinity(offset, WrapAffinity::Downstream, cx);
     }
 
-    fn select_to_with_affinity(&mut self, offset: usize, affinity: WrapAffinity, cx: &mut Context<Self>) {
-        if self.selected_range.is_empty() { self.anchor_affinity = self.caret_affinity; }
+    fn select_to_with_affinity(
+        &mut self,
+        offset: usize,
+        affinity: WrapAffinity,
+        cx: &mut Context<Self>,
+    ) {
+        if self.selected_range.is_empty() {
+            self.anchor_affinity = self.caret_affinity;
+        }
         self.caret_affinity = affinity;
         if self.selection_reversed {
             self.selected_range.start = offset;
@@ -4619,11 +4674,15 @@ impl EditorState {
         if cur_lh <= px(0.) {
             return (self.vertical_offset(dir), WrapAffinity::Downstream);
         }
-        let Some(cur) = self
-            .wrapped
-            .get(row)
-            .and_then(|l| caret_line_pos(l, self.bidi_map(row), self.display_col(row, col), cur_lh, self.caret_affinity))
-        else {
+        let Some(cur) = self.wrapped.get(row).and_then(|l| {
+            caret_line_pos(
+                l,
+                self.bidi_map(row),
+                self.display_col(row, col),
+                cur_lh,
+                self.caret_affinity,
+            )
+        }) else {
             return (self.vertical_offset(dir), WrapAffinity::Downstream);
         };
         let global_y = self.line_tops[row] + cur.y;
@@ -4654,7 +4713,14 @@ impl EditorState {
             while r > 0 && self.line_h(r) <= px(0.) {
                 r -= 1;
             }
-            return (if r == last { self.content.len() } else { self.line_end(r) }, WrapAffinity::Upstream);
+            return (
+                if r == last {
+                    self.content.len()
+                } else {
+                    self.line_end(r)
+                },
+                WrapAffinity::Upstream,
+            );
         }
         let mut trow = last;
         for i in 0..self.wrapped.len() {
@@ -4723,7 +4789,10 @@ impl EditorState {
             rel,
             self.line_h(trow),
         );
-        (self.line_starts()[trow] + self.source_col(trow, col), self.affinity_for_visual_position(trow, col, rel))
+        (
+            self.line_starts()[trow] + self.source_col(trow, col),
+            self.affinity_for_visual_position(trow, col, rel),
+        )
     }
 
     /// The end of the next word at/after `offset` (⌥→ on macOS).
@@ -5251,7 +5320,8 @@ impl EntityInputHandler for EditorState {
         _: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if range_utf16.is_none() && self.marked_range.is_none() && !self.extra_selections.is_empty() {
+        if range_utf16.is_none() && self.marked_range.is_none() && !self.extra_selections.is_empty()
+        {
             self.replace_occurrences(new_text, cx);
             return;
         }
@@ -5298,7 +5368,9 @@ impl EntityInputHandler for EditorState {
         let document = self.document.clone();
         let owner = cx.weak_entity();
         let caret = self.cursor_offset();
-        let snapshot = document.update(cx, |document, cx| document.compose(range.clone(), new_text, owner, caret, cx));
+        let snapshot = document.update(cx, |document, cx| {
+            document.compose(range.clone(), new_text, owner, caret, cx)
+        });
         self.content = snapshot.text_handle();
         self.content_gen = document.read(cx).revision();
         self.request_caret_reveal();
@@ -5338,7 +5410,13 @@ impl EntityInputHandler for EditorState {
         let lh = self.line_h(row);
         let line = self.wrapped.get(row)?;
         let map = self.bidi_map(row);
-        let p = caret_line_pos(line, map, self.display_col(row, col), lh, self.affinity_for_offset(range.start))?;
+        let p = caret_line_pos(
+            line,
+            map,
+            self.display_col(row, col),
+            lh,
+            self.affinity_for_offset(range.start),
+        )?;
         let top = bounds.top() + self.line_tops.get(row).copied().unwrap_or(px(0.)) + p.y;
         let x = bounds.left() + p.x + self.row_origin_x(row);
         // Span the whole range when it stays on one wrap row (the common IME
@@ -5347,10 +5425,16 @@ impl EntityInputHandler for EditorState {
         // start-anchored bar.
         let (erow, ecol) = self.row_col(range.end);
         let x2 = if erow == row && range.end > range.start {
-            caret_line_pos(line, map, self.display_col(row, ecol), lh, self.affinity_for_offset(range.end))
-                .filter(|e| e.y == p.y)
-                .map(|e| bounds.left() + e.x + self.row_origin_x(row))
-                .unwrap_or(x)
+            caret_line_pos(
+                line,
+                map,
+                self.display_col(row, ecol),
+                lh,
+                self.affinity_for_offset(range.end),
+            )
+            .filter(|e| e.y == p.y)
+            .map(|e| bounds.left() + e.x + self.row_origin_x(row))
+            .unwrap_or(x)
         } else {
             x
         };
@@ -5399,15 +5483,51 @@ impl Render for EditorState {
             )
             .track_focus(&self.focus_handle)
             .cursor(CursorStyle::IBeam)
-            .on_action(cx.listener(|this, _: &gpui_kit::component::input::Undo, window, cx| this.undo(&Undo, window, cx)))
-            .on_action(cx.listener(|this, _: &gpui_kit::component::input::Redo, window, cx| this.redo(&Redo, window, cx)))
-            .on_action(cx.listener(|this, _: &gpui_kit::component::input::Copy, window, cx| this.copy(&Copy, window, cx)))
-            .on_action(cx.listener(|this, _: &gpui_kit::component::input::Cut, window, cx| this.cut(&Cut, window, cx)))
-            .on_action(cx.listener(|this, _: &gpui_kit::component::input::Paste, window, cx| this.paste(&Paste, window, cx)))
-            .on_action(cx.listener(|this, _: &gpui_kit::component::input::SelectAll, window, cx| this.select_all(&SelectAll, window, cx)))
-            .on_action(cx.listener(|this, _: &gpui_kit::component::input::MoveToStart, window, cx| this.doc_start(&DocStart, window, cx)))
-            .on_action(cx.listener(|this, _: &gpui_kit::component::input::Backspace, window, cx| this.backspace(&Backspace, window, cx)))
-            .on_action(cx.listener(|this, _: &gpui_kit::component::input::Delete, window, cx| this.delete(&Delete, window, cx)))
+            .on_action(
+                cx.listener(|this, _: &gpui_kit::component::input::Undo, window, cx| {
+                    this.undo(&Undo, window, cx)
+                }),
+            )
+            .on_action(
+                cx.listener(|this, _: &gpui_kit::component::input::Redo, window, cx| {
+                    this.redo(&Redo, window, cx)
+                }),
+            )
+            .on_action(
+                cx.listener(|this, _: &gpui_kit::component::input::Copy, window, cx| {
+                    this.copy(&Copy, window, cx)
+                }),
+            )
+            .on_action(
+                cx.listener(|this, _: &gpui_kit::component::input::Cut, window, cx| {
+                    this.cut(&Cut, window, cx)
+                }),
+            )
+            .on_action(
+                cx.listener(|this, _: &gpui_kit::component::input::Paste, window, cx| {
+                    this.paste(&Paste, window, cx)
+                }),
+            )
+            .on_action(cx.listener(
+                |this, _: &gpui_kit::component::input::SelectAll, window, cx| {
+                    this.select_all(&SelectAll, window, cx)
+                },
+            ))
+            .on_action(cx.listener(
+                |this, _: &gpui_kit::component::input::MoveToStart, window, cx| {
+                    this.doc_start(&DocStart, window, cx)
+                },
+            ))
+            .on_action(cx.listener(
+                |this, _: &gpui_kit::component::input::Backspace, window, cx| {
+                    this.backspace(&Backspace, window, cx)
+                },
+            ))
+            .on_action(
+                cx.listener(|this, _: &gpui_kit::component::input::Delete, window, cx| {
+                    this.delete(&Delete, window, cx)
+                }),
+            )
             .on_action(cx.listener(Self::backspace))
             .on_action(cx.listener(Self::delete))
             .on_action(cx.listener(Self::left))
@@ -5811,53 +5931,56 @@ impl Render for EditorState {
                 // so it renders above the page chrome and captures the wheel — else a
                 // scroll over the popup scrolls the page behind it.
                 gpui_kit::deferred(
-                    gpui_kit::anchored().position(anchor).snap_to_window().child(
-                        div().relative().children(turn_flyout).child(
-                            div()
-                                .relative()
-                                .occlude()
-                                .min_w(px(150.))
-                                // Override the editor's I-beam — the menu is a normal
-                                // pointer surface (children inherit this hitbox's cursor).
-                                .cursor(CursorStyle::Arrow)
-                                .bg(menu_bg)
-                                .border_1()
-                                .border_color(menu_border)
-                                .rounded(px(6.))
-                                .shadow_md()
-                                // Clip rows + thumb to the rounded box.
-                                .overflow_hidden()
-                                .text_color(menu_fg)
-                                .text_size(px(13.))
-                                // A click anywhere outside the menu dismisses it.
-                                .on_mouse_down_out(cx.listener(
-                                    |editor, _: &MouseDownEvent, _, cx| {
-                                        editor.menu = None;
-                                        cx.notify();
-                                    },
-                                ))
-                                .children(format_bar)
-                                .children(color_rows)
-                                .children(has_sel.then(|| div().h(px(1.)).bg(menu_border)))
-                                .children((count > 0).then(|| {
-                                    // The scroll viewport: shows ~6 rows, the rest scroll.
-                                    div()
-                                        .id("suggestion-menu")
-                                        .max_h(px(MAX_H))
-                                        .overflow_y_scroll()
-                                        .track_scroll(&scroll)
-                                        .flex()
-                                        .flex_col()
-                                        .py(px(PAD))
-                                        .children(rows)
-                                }))
-                                .children((count > 0).then(|| div().h(px(1.)).bg(menu_border)))
-                                .child(clipboard)
-                                .child(div().h(px(1.)).bg(menu_border))
-                                .child(div().flex().flex_col().py(px(4.)).child(turn_row))
-                                .children(thumb),
+                    gpui_kit::anchored()
+                        .position(anchor)
+                        .snap_to_window()
+                        .child(
+                            div().relative().children(turn_flyout).child(
+                                div()
+                                    .relative()
+                                    .occlude()
+                                    .min_w(px(150.))
+                                    // Override the editor's I-beam — the menu is a normal
+                                    // pointer surface (children inherit this hitbox's cursor).
+                                    .cursor(CursorStyle::Arrow)
+                                    .bg(menu_bg)
+                                    .border_1()
+                                    .border_color(menu_border)
+                                    .rounded(px(6.))
+                                    .shadow_md()
+                                    // Clip rows + thumb to the rounded box.
+                                    .overflow_hidden()
+                                    .text_color(menu_fg)
+                                    .text_size(px(13.))
+                                    // A click anywhere outside the menu dismisses it.
+                                    .on_mouse_down_out(cx.listener(
+                                        |editor, _: &MouseDownEvent, _, cx| {
+                                            editor.menu = None;
+                                            cx.notify();
+                                        },
+                                    ))
+                                    .children(format_bar)
+                                    .children(color_rows)
+                                    .children(has_sel.then(|| div().h(px(1.)).bg(menu_border)))
+                                    .children((count > 0).then(|| {
+                                        // The scroll viewport: shows ~6 rows, the rest scroll.
+                                        div()
+                                            .id("suggestion-menu")
+                                            .max_h(px(MAX_H))
+                                            .overflow_y_scroll()
+                                            .track_scroll(&scroll)
+                                            .flex()
+                                            .flex_col()
+                                            .py(px(PAD))
+                                            .children(rows)
+                                    }))
+                                    .children((count > 0).then(|| div().h(px(1.)).bg(menu_border)))
+                                    .child(clipboard)
+                                    .child(div().h(px(1.)).bg(menu_border))
+                                    .child(div().flex().flex_col().py(px(4.)).child(turn_row))
+                                    .children(thumb),
+                            ),
                         ),
-                    ),
                 )
             }))
             // The table right-click menu (Word-style row/column editing), anchored
@@ -6089,41 +6212,46 @@ impl Render for EditorState {
                         .bg(thumb_c)
                 });
                 gpui_kit::deferred(
-                    gpui_kit::anchored().position(anchor).snap_to_window().child(
-                        div()
-                            .relative()
-                            .occlude()
-                            .min_w(px(190.))
-                            .cursor(CursorStyle::Arrow)
-                            .bg(menu_bg)
-                            .border_1()
-                            .border_color(menu_border)
-                            .rounded(px(6.))
-                            .shadow_md()
-                            .overflow_hidden()
-                            .text_color(menu_fg)
-                            .text_size(px(13.))
-                            .on_mouse_down_out(cx.listener(|editor, _: &MouseDownEvent, _, cx| {
-                                editor.table_menu = None;
-                                cx.notify();
-                            }))
-                            .child(
-                                // Inner scroll viewport: caps the height + scrolls the
-                                // overflow (max_h on a separate flex-col div, like the
-                                // suggestion menu — combining it with the styled box
-                                // above doesn't cap).
-                                div()
-                                    .id("table-menu")
-                                    .max_h(px(MAX_H))
-                                    .overflow_y_scroll()
-                                    .track_scroll(&self.table_menu_scroll)
-                                    .flex()
-                                    .flex_col()
-                                    .py(px(PAD))
-                                    .children(rows),
-                            )
-                            .children(thumb),
-                    ),
+                    gpui_kit::anchored()
+                        .position(anchor)
+                        .snap_to_window()
+                        .child(
+                            div()
+                                .relative()
+                                .occlude()
+                                .min_w(px(190.))
+                                .cursor(CursorStyle::Arrow)
+                                .bg(menu_bg)
+                                .border_1()
+                                .border_color(menu_border)
+                                .rounded(px(6.))
+                                .shadow_md()
+                                .overflow_hidden()
+                                .text_color(menu_fg)
+                                .text_size(px(13.))
+                                .on_mouse_down_out(cx.listener(
+                                    |editor, _: &MouseDownEvent, _, cx| {
+                                        editor.table_menu = None;
+                                        cx.notify();
+                                    },
+                                ))
+                                .child(
+                                    // Inner scroll viewport: caps the height + scrolls the
+                                    // overflow (max_h on a separate flex-col div, like the
+                                    // suggestion menu — combining it with the styled box
+                                    // above doesn't cap).
+                                    div()
+                                        .id("table-menu")
+                                        .max_h(px(MAX_H))
+                                        .overflow_y_scroll()
+                                        .track_scroll(&self.table_menu_scroll)
+                                        .flex()
+                                        .flex_col()
+                                        .py(px(PAD))
+                                        .children(rows),
+                                )
+                                .children(thumb),
+                        ),
                 )
             }))
             // The image right-click menu: Word-style object actions on an inline
@@ -6143,57 +6271,67 @@ impl Render for EditorState {
                         .child(label)
                 };
                 gpui_kit::deferred(
-                    gpui_kit::anchored().position(anchor).snap_to_window().child(
-                        div()
-                            .occlude()
-                            .min_w(px(160.))
-                            .cursor(CursorStyle::Arrow)
-                            .bg(menu_bg)
-                            .border_1()
-                            .border_color(menu_border)
-                            .rounded(px(6.))
-                            .shadow_md()
-                            .overflow_hidden()
-                            .text_color(menu_fg)
-                            .text_size(px(13.))
-                            .py(px(4.))
-                            .on_mouse_down_out(cx.listener(|editor, _: &MouseDownEvent, _, cx| {
-                                editor.prop_menu = None;
-                                cx.notify();
-                            }))
-                            .child(
-                                item("prop-menu-edit", self.labels.edit_properties.clone())
-                                    .on_mouse_down(
-                                        MouseButton::Left,
-                                        cx.listener(move |editor, _: &MouseDownEvent, _, cx| {
-                                            cx.stop_propagation();
-                                            editor.prop_menu = None;
-                                            if let Some((range, source)) =
-                                                editor.property_block_at(row)
-                                            {
-                                                let block_row = row - editor.row_col(range.start).0;
-                                                cx.emit(EditorEvent::EditProperties {
-                                                    range,
-                                                    source,
-                                                    at_end: false,
-                                                    row: Some(block_row),
-                                                });
-                                            }
-                                        }),
-                                    ),
-                            )
-                            .child(
-                                item("prop-menu-delete", self.labels.delete_property.clone())
-                                    .on_mouse_down(
-                                        MouseButton::Left,
-                                        cx.listener(move |editor, _: &MouseDownEvent, _, cx| {
-                                            cx.stop_propagation();
-                                            editor.prop_menu = None;
-                                            editor.delete_property_row(row, cx);
-                                        }),
-                                    ),
-                            ),
-                    ),
+                    gpui_kit::anchored()
+                        .position(anchor)
+                        .snap_to_window()
+                        .child(
+                            div()
+                                .occlude()
+                                .min_w(px(160.))
+                                .cursor(CursorStyle::Arrow)
+                                .bg(menu_bg)
+                                .border_1()
+                                .border_color(menu_border)
+                                .rounded(px(6.))
+                                .shadow_md()
+                                .overflow_hidden()
+                                .text_color(menu_fg)
+                                .text_size(px(13.))
+                                .py(px(4.))
+                                .on_mouse_down_out(cx.listener(
+                                    |editor, _: &MouseDownEvent, _, cx| {
+                                        editor.prop_menu = None;
+                                        cx.notify();
+                                    },
+                                ))
+                                .child(
+                                    item("prop-menu-edit", self.labels.edit_properties.clone())
+                                        .on_mouse_down(
+                                            MouseButton::Left,
+                                            cx.listener(
+                                                move |editor, _: &MouseDownEvent, _, cx| {
+                                                    cx.stop_propagation();
+                                                    editor.prop_menu = None;
+                                                    if let Some((range, source)) =
+                                                        editor.property_block_at(row)
+                                                    {
+                                                        let block_row =
+                                                            row - editor.row_col(range.start).0;
+                                                        cx.emit(EditorEvent::EditProperties {
+                                                            range,
+                                                            source,
+                                                            at_end: false,
+                                                            row: Some(block_row),
+                                                        });
+                                                    }
+                                                },
+                                            ),
+                                        ),
+                                )
+                                .child(
+                                    item("prop-menu-delete", self.labels.delete_property.clone())
+                                        .on_mouse_down(
+                                            MouseButton::Left,
+                                            cx.listener(
+                                                move |editor, _: &MouseDownEvent, _, cx| {
+                                                    cx.stop_propagation();
+                                                    editor.prop_menu = None;
+                                                    editor.delete_property_row(row, cx);
+                                                },
+                                            ),
+                                        ),
+                                ),
+                        ),
                 )
             }))
             .children(self.image_menu.map(|(line, anchor)| {
@@ -6203,41 +6341,48 @@ impl Render for EditorState {
                 let menu_fg = st.map_or(rgb(0xe6e6e6).into(), |s| s.popover_fg);
                 let hover = st.map_or(rgba(0x2f6fd628).into(), |s| s.popover_hover);
                 gpui_kit::deferred(
-                    gpui_kit::anchored().position(anchor).snap_to_window().child(
-                        div()
-                            .occlude()
-                            .min_w(px(140.))
-                            .cursor(CursorStyle::Arrow)
-                            .bg(menu_bg)
-                            .border_1()
-                            .border_color(menu_border)
-                            .rounded(px(6.))
-                            .shadow_md()
-                            .overflow_hidden()
-                            .text_color(menu_fg)
-                            .text_size(px(13.))
-                            .py(px(4.))
-                            .on_mouse_down_out(cx.listener(|editor, _: &MouseDownEvent, _, cx| {
-                                editor.image_menu = None;
-                                cx.notify();
-                            }))
-                            .child(
-                                div()
-                                    .id("image-menu-delete")
-                                    .px(px(10.))
-                                    .py(px(3.))
-                                    .hover(move |s| s.bg(hover))
-                                    .child(self.labels.delete_image.clone())
-                                    .on_mouse_down(
-                                        MouseButton::Left,
-                                        cx.listener(move |editor, _: &MouseDownEvent, _, cx| {
-                                            cx.stop_propagation();
-                                            editor.image_menu = None;
-                                            editor.delete_image_row(line, cx);
-                                        }),
-                                    ),
-                            ),
-                    ),
+                    gpui_kit::anchored()
+                        .position(anchor)
+                        .snap_to_window()
+                        .child(
+                            div()
+                                .occlude()
+                                .min_w(px(140.))
+                                .cursor(CursorStyle::Arrow)
+                                .bg(menu_bg)
+                                .border_1()
+                                .border_color(menu_border)
+                                .rounded(px(6.))
+                                .shadow_md()
+                                .overflow_hidden()
+                                .text_color(menu_fg)
+                                .text_size(px(13.))
+                                .py(px(4.))
+                                .on_mouse_down_out(cx.listener(
+                                    |editor, _: &MouseDownEvent, _, cx| {
+                                        editor.image_menu = None;
+                                        cx.notify();
+                                    },
+                                ))
+                                .child(
+                                    div()
+                                        .id("image-menu-delete")
+                                        .px(px(10.))
+                                        .py(px(3.))
+                                        .hover(move |s| s.bg(hover))
+                                        .child(self.labels.delete_image.clone())
+                                        .on_mouse_down(
+                                            MouseButton::Left,
+                                            cx.listener(
+                                                move |editor, _: &MouseDownEvent, _, cx| {
+                                                    cx.stop_propagation();
+                                                    editor.image_menu = None;
+                                                    editor.delete_image_row(line, cx);
+                                                },
+                                            ),
+                                        ),
+                                ),
+                        ),
                 )
             }))
             .children(self.code_lang_menu.map(|(row, anchor)| {
@@ -6273,40 +6418,46 @@ impl Render for EditorState {
                         .bg(thumb_c)
                 });
                 gpui_kit::deferred(
-                    gpui_kit::anchored().position(anchor).snap_to_window().child(
-                        div()
-                            .relative()
-                            .occlude()
-                            .min_w(px(140.))
-                            .cursor(CursorStyle::Arrow)
-                            .bg(menu_bg)
-                            .border_1()
-                            .border_color(menu_border)
-                            .rounded(px(6.))
-                            .shadow_md()
-                            .overflow_hidden()
-                            .text_color(menu_fg)
-                            .text_size(px(13.))
-                            .py(px(PAD))
-                            .on_mouse_down_out(cx.listener(|editor, _: &MouseDownEvent, _, cx| {
-                                editor.code_lang_menu = None;
-                                cx.notify();
-                            }))
-                            .child(
-                                div()
-                                    .id("code-lang-list")
-                                    .max_h(px(MAX_H - 2.0 * PAD))
-                                    .overflow_y_scroll()
-                                    .track_scroll(&self.code_lang_scroll)
-                                    .children(langs.into_iter().enumerate().map(|(i, lang)| {
-                                        let is_current = *lang == current
-                                            || (current.is_empty() && *lang == *"text");
-                                        let label: SharedString = if is_current {
-                                            format!("{lang} ✓").into()
-                                        } else {
-                                            lang.clone()
-                                        };
-                                        div()
+                    gpui_kit::anchored()
+                        .position(anchor)
+                        .snap_to_window()
+                        .child(
+                            div()
+                                .relative()
+                                .occlude()
+                                .min_w(px(140.))
+                                .cursor(CursorStyle::Arrow)
+                                .bg(menu_bg)
+                                .border_1()
+                                .border_color(menu_border)
+                                .rounded(px(6.))
+                                .shadow_md()
+                                .overflow_hidden()
+                                .text_color(menu_fg)
+                                .text_size(px(13.))
+                                .py(px(PAD))
+                                .on_mouse_down_out(cx.listener(
+                                    |editor, _: &MouseDownEvent, _, cx| {
+                                        editor.code_lang_menu = None;
+                                        cx.notify();
+                                    },
+                                ))
+                                .child(
+                                    div()
+                                        .id("code-lang-list")
+                                        .max_h(px(MAX_H - 2.0 * PAD))
+                                        .overflow_y_scroll()
+                                        .track_scroll(&self.code_lang_scroll)
+                                        .children(langs.into_iter().enumerate().map(
+                                            |(i, lang)| {
+                                                let is_current = *lang == current
+                                                    || (current.is_empty() && *lang == *"text");
+                                                let label: SharedString = if is_current {
+                                                    format!("{lang} ✓").into()
+                                                } else {
+                                                    lang.clone()
+                                                };
+                                                div()
                                             .id(("code-lang-row", i))
                                             .flex_shrink_0()
                                             .h(px(ROW_H))
@@ -6325,10 +6476,11 @@ impl Render for EditorState {
                                                 ),
                                             )
                                             .into_any_element()
-                                    })),
-                            )
-                            .children(thumb),
-                    ),
+                                            },
+                                        )),
+                                )
+                                .children(thumb),
+                        ),
                 )
             }))
     }
@@ -6373,8 +6525,14 @@ fn shape_runs(
     // Fast's enormous nowrap paint origin is unsafe. Keep every byte, but bound
     // visual lines using native shaping, never source newlines or byte truncation.
     if !soft_wrap {
-        if let Ok(lines) = window.text_system().shape_text(text.clone(), font_size, runs, None, None) {
-            if lines.iter().all(|line| line.width() <= px(65_536.)) { return lines.into_vec(); }
+        if let Ok(lines) =
+            window
+                .text_system()
+                .shape_text(text.clone(), font_size, runs, None, None)
+        {
+            if lines.iter().all(|line| line.width() <= px(65_536.)) {
+                return lines.into_vec();
+            }
         }
     }
     window
@@ -6764,25 +6922,45 @@ fn line_pos(
 }
 
 /// Caret endpoints retain the visual side of a shared wrap-boundary byte.
-fn caret_line_pos(line: &WrappedLine, rtl: Option<&RtlRow>, dcol: usize, lh: Pixels, affinity: WrapAffinity) -> Option<Point<Pixels>> {
+fn caret_line_pos(
+    line: &WrappedLine,
+    rtl: Option<&RtlRow>,
+    dcol: usize,
+    lh: Pixels,
+    affinity: WrapAffinity,
+) -> Option<Point<Pixels>> {
     match (rtl, affinity) {
         (Some(r), WrapAffinity::Upstream) => {
             let (mut row, mut local) = r.row_of(dcol);
-            if local == 0 && row > 0 { row -= 1; local = r.rows.get(row)?.len; }
-            Some(point(px(r.rows.get(row)?.map.x_for_index(local)) + r.shift_delta(row), lh * row))
+            if local == 0 && row > 0 {
+                row -= 1;
+                local = r.rows.get(row)?.len;
+            }
+            Some(point(
+                px(r.rows.get(row)?.map.x_for_index(local)) + r.shift_delta(row),
+                lh * row,
+            ))
         }
         (None, WrapAffinity::Downstream) => {
-            if dcol > line.len() { return None; }
+            if dcol > line.len() {
+                return None;
+            }
             let mut start = 0;
             // Match native hit-testing: accumulating f32 heights drifts on extreme lines.
             let mut row = 0usize;
             for boundary in line.wrap_boundaries() {
-                let end = line.unwrapped_layout.runs[boundary.run_ix].glyphs[boundary.glyph_ix].index;
-                if dcol < end { break; }
+                let end =
+                    line.unwrapped_layout.runs[boundary.run_ix].glyphs[boundary.glyph_ix].index;
+                if dcol < end {
+                    break;
+                }
                 start = end;
                 row += 1;
             }
-            Some(point(line.unwrapped_layout.x_for_index(dcol) - line.unwrapped_layout.x_for_index(start), lh * row))
+            Some(point(
+                line.unwrapped_layout.x_for_index(dcol) - line.unwrapped_layout.x_for_index(start),
+                lh * row,
+            ))
         }
         _ => line_pos(line, rtl, dcol, lh),
     }
@@ -7225,7 +7403,10 @@ mod tests {
                 e.set_text(plain, cx);
                 e.selected_range = plain.find("yellow").unwrap()..plain.find(',').unwrap();
                 e.color_selection(super::ColorKind::Text, Some(0x30a46cff), cx);
-                assert_eq!(e.content.as_str(), "a ==<span style=\"color:#30a46c\">yellow mark</span>==, b");
+                assert_eq!(
+                    e.content.as_str(),
+                    "a ==<span style=\"color:#30a46c\">yellow mark</span>==, b"
+                );
                 // And a selection starting on the hidden opening tag.
                 e.set_text(&text, cx);
                 e.selected_range = text.find("<mark").unwrap()..text.find("</mark>").unwrap();

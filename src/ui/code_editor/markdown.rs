@@ -1,6 +1,6 @@
 //! Zorite-derived editor 的工作台样式与原生消费者入口。文件生命周期保留在 buffers/saving。
-use gpui_kit::component::ActiveTheme as _;
 use gpui_kit::Context;
+use gpui_kit::component::ActiveTheme as _;
 use lyrel_markdown_editor::{EditorState, SyntaxStyle};
 
 pub(super) fn configure(editor: &mut EditorState, cx: &mut Context<EditorState>) {
@@ -29,7 +29,10 @@ pub(super) fn configure(editor: &mut EditorState, cx: &mut Context<EditorState>)
         popover_hover: theme.list_hover,
         popover_divider: theme.border,
         popover_danger: theme.danger,
-        mono: gpui_kit::Font { family: theme.mono_font_family.clone(), ..Default::default() },
+        mono: gpui_kit::Font {
+            family: theme.mono_font_family.clone(),
+            ..Default::default()
+        },
         property_icon: None,
     };
     editor.set_live_style(style.clone(), cx);
