@@ -239,7 +239,20 @@ pub(super) fn native_rhythm(cx: &mut TestAppContext) {
             for needle in ["# Heading", "\nordinary", "\n- ordinary", "\n> ordinary"] {
                 let at = source.find(needle).unwrap() + usize::from(needle.starts_with('\n'));
                 view.update_in(&mut context, |view, _, cx| view.select_range(at..at, cx));
-                settle(&mut context);
+                // Selection requests a reveal on the following platform frame;
+                // layout can already describe this block while it is offscreen.
+                // Wait for that production reveal before dispatching a pointer.
+                until(&mut context, |context| {
+                    context.update(|window, cx| {
+                        let viewport = window.find("markdown-document-scroll").bounds();
+                        view.read(cx)
+                            .range_to_bounds(&(at..at))
+                            .is_some_and(|bounds| {
+                                bounds.top() >= viewport.top()
+                                    && bounds.bottom() + bounds.size.height <= viewport.bottom()
+                            })
+                    })
+                });
                 let (first, next) = view.read_with(&context, |view, _| {
                     let first = view.range_to_bounds(&(at..at)).unwrap();
                     let next = (at + 1
@@ -261,9 +274,9 @@ pub(super) fn native_rhythm(cx: &mut TestAppContext) {
                 });
                 settle(&mut context);
                 let before = view.read_with(&context, |view, _| view.cursor());
-                assert!(
-                    before >= next.0.saturating_sub(1) && before <= next.0 + 1,
-                    "native wrap hit: font={font_size}, width={width}, block={needle:?}, first={first:?}, next={next:?}, target={target:?}, cursor={before}"
+                assert_eq!(
+                    before, next.0,
+                    "native wrap hit: font={font_size}, width={width}, block={needle:?}, first={first:?}, next={next:?}, target={target:?}"
                 );
                 context.update(|window, cx| window.input("X", cx));
                 context.dispatch_action(gpui_kit::component::input::Undo);
