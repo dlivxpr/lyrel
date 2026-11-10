@@ -96,6 +96,7 @@ fn graphics_assert_production_paint_at(
     size: TermSize,
 ) {
     use std::sync::atomic::Ordering;
+    use gpui_kit::test::TestWindowExt as _;
     let (target, cols, rows, scale) = graphics_window_geometry(window, view, cx, size);
     // Preserve the requested grid through the actual prepaint sizing callback;
     // otherwise a default test window would silently resize the real daemon.
