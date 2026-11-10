@@ -220,25 +220,29 @@ impl Relocation {
         let history = term.grid.history_size() as i64;
         // Retained-history geometry predicts where this fraction of history
         // moved. No absolute old row survives a reflow as an identity.
-        let estimate = if self.history == 0 {
-            live - (self.oldest + self.history as i64 - self.top)
-        } else {
-            oldest + (self.top - self.oldest) * history / self.history as i64
-        }
-        .clamp(oldest, live);
+        let estimate_row = |top: i64| {
+            if self.history == 0 {
+                live - (self.oldest + self.history as i64 - top)
+            } else {
+                oldest + (top - self.oldest) * history / self.history as i64
+            }
+            .clamp(oldest, live)
+        };
+        let estimate = estimate_row(self.top);
+        let hard_estimate = estimate_row(self.top - self.row_offset);
         let geometry = (history - self.history as i64).abs()
             + (self.cols as i64 - term.columns() as i64).abs()
             + self.rows.max(term.screen_lines()) as i64
             + (self.offset / term.columns().max(1)) as i64;
         let window = (geometry * 2 + 64).clamp(64, SEARCH_ROWS);
         let end = live + term.screen_lines() as i64;
-        let center = estimate - self.row_offset * self.cols as i64 / term.columns().max(1) as i64;
+        let center = hard_estimate;
         let first = (center - window / 2)
             .max(oldest)
             .min((end - window).max(oldest));
         let limit = (first + window).min(end);
         let source = Rows { term, frozen: None };
-        let mut nearest: Option<i64> = None;
+        let mut nearest: Option<(i64, i64)> = None;
         for row in first..limit {
             if row > oldest && source.wrapped(row - 1) {
                 continue;
@@ -263,11 +267,14 @@ impl Relocation {
             if source.blank_context(row, last, oldest, end) != self.blanks {
                 continue;
             }
-            if nearest.is_none_or(|previous| (top - estimate).abs() < (previous - estimate).abs()) {
-                nearest = Some(top);
+            if nearest.is_none_or(|(_, previous)| {
+                (row - hard_estimate).abs() < (previous - hard_estimate).abs()
+            }) {
+                nearest = Some((top, row));
             }
         }
         nearest
+            .map(|(top, _)| top)
             .unwrap_or(estimate)
             .saturating_add(self.scroll)
             .clamp(oldest, live)
