@@ -259,6 +259,13 @@ fn second_view_in_flight(cx: &mut TestAppContext) {
         assert!(app.tabs.iter().any(|candidate| candidate.id() == tab));
     });
     app.update_in(&mut vcx, |app, window, cx| app.activate(0, window, cx));
+    assert_eq!(view(&app, &vcx), second);
+    // Selecting a workbench tab focuses its file tree. Return to the captured
+    // presentation before issuing the later manual save from the editor.
+    second.update_in(&mut vcx, |view, window, cx| {
+        view.focus_handle(cx).focus(window, cx)
+    });
+    settle(&mut vcx);
     save(&app, &mut vcx);
     assert_eq!(
         std::fs::read(&stored).unwrap(),
@@ -363,7 +370,17 @@ fn first_save_failure_history(cx: &mut TestAppContext) {
     vcx.dispatch_action(gpui_kit::component::input::Undo);
     settle(&mut vcx);
     save(&app, &mut vcx);
+    // Ordinary input types one run on each side of Enter; Enter joins the
+    // preceding run, not the following one. Saving must preserve both steps.
+    assert_eq!(std::fs::read(&stored).unwrap(), b"attached$$x$$literal\n");
+    vcx.dispatch_action(gpui_kit::component::input::Undo);
+    settle(&mut vcx);
+    save(&app, &mut vcx);
     assert_eq!(std::fs::read(&stored).unwrap(), b"");
+    vcx.dispatch_action(gpui_kit::component::input::Redo);
+    settle(&mut vcx);
+    save(&app, &mut vcx);
+    assert_eq!(std::fs::read(&stored).unwrap(), b"attached$$x$$literal\n");
     vcx.dispatch_action(gpui_kit::component::input::Redo);
     settle(&mut vcx);
     save(&app, &mut vcx);
@@ -371,6 +388,12 @@ fn first_save_failure_history(cx: &mut TestAppContext) {
         std::fs::read(&stored).unwrap(),
         b"attached$$x$$literal\n<Unknown />"
     );
+    app.read_with(&vcx, |app, cx| {
+        let file = app.active_buffer().unwrap();
+        assert_eq!(file.id(), id);
+        assert_eq!(file.path, path);
+        assert_eq!(presentation.read(cx).document().entity_id(), document);
+    });
 }
 
 fn encoding_cancel_recover(cx: &mut TestAppContext) {
