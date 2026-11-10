@@ -59,26 +59,86 @@ impl ParsePresentation {
     }
 }
 
+#[derive(Clone, Copy)]
+enum PresentedCells<'a> {
+    Rendered(&'a [RenderCell]),
+    Reading(&'a super::reading::ReadingView, i64, i64),
+}
+
 pub(super) struct PresentedGrid<'a> {
-    cells: &'a [RenderCell],
+    cells: PresentedCells<'a>,
     cols: usize,
     offset: i32,
+    viewport_row: usize,
+}
+
+struct PresentedCell<'a> {
+    c: char,
+    marks: Option<&'a [char]>,
+    hyperlink: Option<&'a rio_vt::crosswords::square::Hyperlink>,
+    wide: Wide,
+    spacer: bool,
+    wrapped: bool,
 }
 
 impl<'a> PresentedGrid<'a> {
     pub(super) fn new(cells: &'a [RenderCell], cols: usize, offset: i32) -> Self {
         Self {
-            cells,
+            cells: PresentedCells::Rendered(cells),
             cols: cols.max(1),
             offset,
+            viewport_row: 0,
         }
     }
 
+    pub(super) fn reading(reading: &'a super::reading::ReadingView) -> Self {
+        let (first, last) = reading.bounds();
+        let viewport_row = (reading.top() - first) as usize;
+        Self {
+            cells: PresentedCells::Reading(reading, first, last),
+            cols: reading.columns(),
+            offset: viewport_row as i32,
+            viewport_row,
+        }
+    }
+
+    pub(super) fn absolute_origin(&self) -> usize {
+        match self.cells {
+            PresentedCells::Rendered(_) => 0,
+            PresentedCells::Reading(_, first, _) => first as usize * self.cols,
+        }
+    }
+
+    fn len(&self) -> usize {
+        match self.cells {
+            PresentedCells::Rendered(cells) => cells.len(),
+            PresentedCells::Reading(_, first, last) => (last - first + 1) as usize * self.cols,
+        }
+    }
+
+    fn cell(&self, ix: usize) -> PresentedCell<'a> {
+        match self.cells {
+            PresentedCells::Rendered(cells) => {
+                if let Some(cell) = cells.get(ix) {
+                    return PresentedCell { c: cell.c, marks: cell.marks.as_deref(), hyperlink: cell.hyperlink.as_ref(), wide: cell.wide, spacer: cell.spacer, wrapped: cell.wrapped };
+                }
+            }
+            PresentedCells::Reading(reading, first, _) => {
+                if let Some(cell) = reading.absolute_row(first + (ix / self.cols) as i64).and_then(|row| row.get(ix % self.cols)) {
+                    let placeholder = cell.c == '\u{10eeee}';
+                    return PresentedCell { c: if placeholder { ' ' } else { cell.c }, marks: if placeholder { None } else { cell.marks.as_deref() }, hyperlink: cell.hyperlink.as_ref(), wide: cell.wide, spacer: matches!(cell.wide, Wide::Spacer | Wide::LeadingSpacer), wrapped: cell.wrapped };
+                }
+            }
+        }
+        PresentedCell { c: '\0', marks: None, hyperlink: None, wide: Wide::Narrow, spacer: false, wrapped: false }
+    }
+
     fn rows(&self) -> usize {
-        self.cells.len() / self.cols
+        self.len() / self.cols
     }
 
     pub(super) fn link_line(&self, col: usize, row: usize) -> Option<super::link::GridLink> {
+        let row = row + self.viewport_row;
         if let Some((uri, runs)) = self.hyperlink(col, row) {
             return Some(super::link::GridLink::Hyperlink(uri, runs));
         }
@@ -90,11 +150,7 @@ impl<'a> PresentedGrid<'a> {
         let mut runs: Vec<(Pos, Pos)> = Vec::new();
         for &point in points {
             let ix = self.index(point);
-            let end = if self
-                .cells
-                .get(ix)
-                .is_some_and(|cell| cell.wide == Wide::Wide)
-            {
+            let end = if self.cell(ix).wide == Wide::Wide {
                 Pos::new(point.row, Column((point.col.0 + 1).min(self.cols - 1)))
             } else {
                 point
@@ -112,28 +168,28 @@ impl<'a> PresentedGrid<'a> {
     }
 
     fn lead(&self, ix: usize) -> usize {
-        let ix = ix.min(self.cells.len().saturating_sub(1));
-        match self.cells.get(ix).map(|cell| cell.wide) {
-            Some(Wide::Spacer) => ix.saturating_sub(1),
-            Some(Wide::LeadingSpacer) => (ix + 1).min(self.cells.len().saturating_sub(1)),
+        let ix = ix.min(self.len().saturating_sub(1));
+        match self.cell(ix).wide {
+            Wide::Spacer => ix.saturating_sub(1),
+            Wide::LeadingSpacer => (ix + 1).min(self.len().saturating_sub(1)),
             _ => ix,
         }
     }
 
     pub(super) fn boundary(&self, col: usize, row: usize, left: bool) -> usize {
-        if self.cells.is_empty() {
+        if self.len() == 0 {
             return 0;
         }
-        let ix = row.min(self.rows() - 1) * self.cols + col.min(self.cols - 1);
+        let ix = (row + self.viewport_row).min(self.rows() - 1) * self.cols + col.min(self.cols - 1);
         // A leading spacer still belongs to this physical row. Simple
         // selection must preserve that row's break before the wide glyph.
-        if self.cells[ix].wide == Wide::LeadingSpacer {
+        if self.cell(ix).wide == Wide::LeadingSpacer {
             return ix + usize::from(!left);
         }
         let ix = self.lead(ix);
         ix + if left {
             0
-        } else if self.cells[ix].wide == Wide::Wide {
+        } else if self.cell(ix).wide == Wide::Wide {
             2
         } else {
             1
@@ -141,9 +197,7 @@ impl<'a> PresentedGrid<'a> {
     }
 
     fn wraps(&self, row: usize) -> bool {
-        self.cells
-            .get((row + 1) * self.cols - 1)
-            .is_some_and(|cell| cell.wrapped)
+        self.cell((row + 1) * self.cols - 1).wrapped
     }
 
     fn point(&self, ix: usize) -> Pos {
@@ -158,9 +212,8 @@ impl<'a> PresentedGrid<'a> {
     }
 
     pub(super) fn is_blank(&self, col: usize, row: usize) -> bool {
-        self.cells
-            .get(row * self.cols + col)
-            .is_none_or(|cell| !cell.spacer && cell.c.is_whitespace())
+        let cell = self.cell((row + self.viewport_row) * self.cols + col);
+        !cell.spacer && (cell.c == '\0' || cell.c.is_whitespace())
     }
 
     /// A logical line and its character-to-cell mapping, allocated only for a
@@ -179,9 +232,9 @@ impl<'a> PresentedGrid<'a> {
             self.wraps(row)
                 || (hard
                     && row + 1 < self.rows()
-                    && super::search::is_url_char(self.cells[(row + 1) * self.cols - 1].c)
-                    && super::search::is_url_char(self.cells[(row + 1) * self.cols].c)
-                    && self.cells[(row + 1) * self.cols].c != '@')
+                    && super::search::is_url_char(self.cell((row + 1) * self.cols - 1).c)
+                    && super::search::is_url_char(self.cell((row + 1) * self.cols).c)
+                    && self.cell((row + 1) * self.cols).c != '@')
         };
         let mut first = row;
         while first > 0 && row - first < 32 && joins(first - 1) {
@@ -195,7 +248,7 @@ impl<'a> PresentedGrid<'a> {
         let mut points = Vec::new();
         let mut clicked = None;
         for ix in first * self.cols..(last + 1) * self.cols {
-            let cell = &self.cells[ix];
+            let cell = self.cell(ix);
             if cell.spacer {
                 continue;
             }
@@ -219,12 +272,9 @@ impl<'a> PresentedGrid<'a> {
             return None;
         }
         let ix = self.lead(row * self.cols + col);
-        let uri = self.cells[ix].hyperlink.as_ref()?.uri();
+        let uri = self.cell(ix).hyperlink?.uri();
         let same = |at: usize| {
-            self.cells[self.lead(at)]
-                .hyperlink
-                .as_ref()
-                .is_some_and(|link| link.uri() == uri)
+            self.cell(self.lead(at)).hyperlink.is_some_and(|link| link.uri() == uri)
         };
         let mut start = ix;
         while start > 0
@@ -234,7 +284,7 @@ impl<'a> PresentedGrid<'a> {
             start -= 1;
         }
         let mut end = ix;
-        while end + 1 < self.cells.len()
+        while end + 1 < self.len()
             && ((end + 1) % self.cols != 0 || self.wraps(end / self.cols))
             && same(end + 1)
         {
@@ -253,6 +303,7 @@ impl<'a> PresentedGrid<'a> {
         clicks: usize,
         cfg: &crate::core::config::Config,
     ) -> Range<usize> {
+        let row = row + self.viewport_row;
         if row >= self.rows() || col >= self.cols {
             return 0..0;
         }
@@ -306,7 +357,7 @@ impl<'a> PresentedGrid<'a> {
         let end = self.index(points[end]);
         self.index(points[start])
             ..end
-                + if self.cells[end].wide == Wide::Wide {
+                + if self.cell(end).wide == Wide::Wide {
                     2
                 } else {
                     1
@@ -314,57 +365,67 @@ impl<'a> PresentedGrid<'a> {
     }
 
     pub(super) fn selected_text(&self, lines: bool) -> Option<String> {
-        let start = self.cells.iter().position(|cell| cell.selected)?;
-        let end = self.cells.iter().rposition(|cell| cell.selected)?;
-        let mut text = String::new();
-        let mut pending_spaces = 0;
-        let mut pending_breaks = 0;
-        for row in start / self.cols..=end / self.cols {
+        let PresentedCells::Rendered(cells) = self.cells else { return None; };
+        let start = cells.iter().position(|cell| cell.selected)?;
+        let end = cells.iter().rposition(|cell| cell.selected)?;
+        Some(copy_rows((start / self.cols..=end / self.cols).map(|row| {
             let from = start.max(row * self.cols);
             let to = (end + 1).min((row + 1) * self.cols);
-            let mut row_has_content = false;
-            let mut tab_suffix = false;
-            for cell in &self.cells[from..to] {
-                if cell.spacer || !cell.selected {
-                    continue;
-                }
-                // A Tab encodes only the run up to the next committed stop.
-                // NUL cells at/after that stop are real gaps and stay spaces.
-                if tab_suffix && cell.c == '\0' && !cell.tab_stop {
-                    continue;
-                }
-                tab_suffix = cell.c == '\t';
-                if matches!(cell.c, ' ' | '\0')
-                    && cell.marks.as_deref().is_none_or(|marks| marks.is_empty())
-                {
-                    pending_spaces += 1;
-                    continue;
-                }
-                // Only later content commits blanks. This keeps embedded
-                // blank rows and wrap gaps, but drops trailing empty rows.
-                text.extend(std::iter::repeat_n('\n', pending_breaks));
-                pending_breaks = 0;
-                text.extend(std::iter::repeat_n(' ', pending_spaces));
-                pending_spaces = 0;
-                text.push(if cell.c == '\0' { ' ' } else { cell.c });
-                if let Some(marks) = &cell.marks {
-                    text.extend(marks.iter());
-                }
-                row_has_content = true;
-            }
-            let wraps = self.wraps(row);
-            if !row_has_content || !wraps {
-                pending_breaks += 1;
-            }
-            if !wraps {
-                pending_spaces = 0;
-            }
-        }
-        if lines {
-            text.push('\n');
-        }
-        Some(text)
+            (self.wraps(row), cells[from..to].iter().map(|cell| CopyCell {
+                c: cell.c,
+                marks: cell.marks.as_deref(),
+                spacer: cell.spacer,
+                selected: cell.selected,
+                tab_stop: cell.tab_stop,
+            }))
+        }), lines))
     }
+}
+
+/// Borrow only copy semantics. Frozen rows never allocate a second styled
+/// RenderCell buffer (or clone marks) just to serialize a large selection.
+pub(super) struct CopyCell<'a> {
+    pub(super) c: char,
+    pub(super) marks: Option<&'a [char]>,
+    pub(super) spacer: bool,
+    pub(super) selected: bool,
+    pub(super) tab_stop: bool,
+}
+
+pub(super) fn copy_rows<'a, Rows, Cells>(rows: Rows, lines: bool) -> String
+where
+    Rows: IntoIterator<Item = (bool, Cells)>,
+    Cells: IntoIterator<Item = CopyCell<'a>>,
+{
+    let mut text = String::new();
+    let mut pending_spaces = 0;
+    let mut pending_breaks = 0;
+    for (wraps, cells) in rows {
+        let mut row_has_content = false;
+        let mut tab_suffix = false;
+        for cell in cells {
+            if cell.spacer || !cell.selected { continue; }
+            // A Tab encodes only the run up to the captured next stop.
+            if tab_suffix && cell.c == '\0' && !cell.tab_stop { continue; }
+            tab_suffix = cell.c == '\t';
+            if matches!(cell.c, ' ' | '\0') && cell.marks.is_none_or(|marks| marks.is_empty()) {
+                pending_spaces += 1;
+                continue;
+            }
+            // Commit interior blanks only when later selected text exists.
+            text.extend(std::iter::repeat_n('\n', pending_breaks));
+            pending_breaks = 0;
+            text.extend(std::iter::repeat_n(' ', pending_spaces));
+            pending_spaces = 0;
+            text.push(if cell.c == '\0' { ' ' } else { cell.c });
+            if let Some(marks) = cell.marks { text.extend(marks.iter()); }
+            row_has_content = true;
+        }
+        if !row_has_content || !wraps { pending_breaks += 1; }
+        if !wraps { pending_spaces = 0; }
+    }
+    if lines { text.push('\n'); }
+    text
 }
 
 #[derive(Default)]
@@ -391,11 +452,18 @@ impl PresentedSelection {
         self.clicks
     }
 
-    pub(super) fn apply(&self, cells: &mut [RenderCell]) -> bool {
-        let range = self.anchor.start.min(self.target.start)..self.anchor.end.max(self.target.end);
+    pub(super) fn range(&self) -> Range<usize> {
+        self.anchor.start.min(self.target.start)..self.anchor.end.max(self.target.end)
+    }
+
+
+    pub(super) fn apply_from(&self, cells: &mut [RenderCell], start: usize) -> bool {
+        let range = self.range();
+        let mut selected = false;
         for (ix, cell) in cells.iter_mut().enumerate() {
-            cell.selected = range.contains(&ix);
+            cell.selected = range.contains(&(start + ix));
+            selected |= cell.selected;
         }
-        !range.is_empty()
+        selected
     }
 }

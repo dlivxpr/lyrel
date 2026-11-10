@@ -420,11 +420,11 @@ impl TerminalView {
                 .grid_snap
                 .as_ref()
                 .map_or(0, |snap| snap.display_offset);
-            let grid = crate::terminal::presentation::PresentedGrid::new(
-                &self.grid_buf,
-                geom.cols,
-                offset,
-            );
+            let grid = if let Some(reading) = self.selection_scroll.reading.as_ref() {
+                crate::terminal::presentation::PresentedGrid::reading(reading)
+            } else {
+                crate::terminal::presentation::PresentedGrid::new(&self.grid_buf, geom.cols, offset)
+            };
             self.links.resolve_line(
                 grid.link_line(col, row),
                 include_files,

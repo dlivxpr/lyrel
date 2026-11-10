@@ -402,7 +402,8 @@ fn configured_word_selection_autoscroll_extends_by_whole_words(cx: &mut TestAppC
             view.select_autoscroll(1., 6, true, cx);
             let term = view.terminal.term.lock();
             assert!(term.grid.display_offset() > 0);
-            let selected = term.selection_to_string().expect("word drag selection");
+            drop(term);
+            let selected = view.selection_text().expect("displayed word drag selection");
             assert!(selected.starts_with("foo.bar.baz"), "{selected:?}");
             assert!(selected.ends_with("zero.foo"), "{selected:?}");
         })

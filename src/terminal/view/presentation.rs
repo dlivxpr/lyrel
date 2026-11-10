@@ -13,6 +13,7 @@ impl Render for TerminalView {
         if !self.sync_frame_facts() {
             self.retry_grid_when_available(cx);
         }
+        self.sync_search_presentation(cx);
         self.sync_composer(window, cx);
         if !self.sync_prompt_input() {
             self.retry_grid_when_available(cx);
