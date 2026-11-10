@@ -191,6 +191,7 @@ fn reading_rgba_pixel(image: &crate::terminal::images::RenderPlacement) -> [u8; 
 
 #[gpui_kit::test]
 fn reading_placeholders_paint_from_captured_rows_after_live_cells_are_erased(cx: &mut TestAppContext) {
+    use std::sync::Arc;
     use std::sync::atomic::Ordering;
     let (daemon, pane, view, window) = graphics_layout_harness(cx);
     graphics_send_fixture(&view, cx, 40, &b"PLACEHOLDER\r\n".repeat(72));
