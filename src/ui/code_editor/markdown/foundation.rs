@@ -3,6 +3,8 @@ use super::super::*;
 use crate::ui::app::test_window::harness_with_tabs;
 use gpui_kit::{TestAppContext, VisualTestContext};
 use gpui_kit::test::TestWindowExt as _;
+#[cfg(feature = "native-markdown-tests")]
+use gpui_kit::test::TestEventExt as _;
 use std::time::{Duration, Instant};
 
 fn settle(context: &mut VisualTestContext) {
