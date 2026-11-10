@@ -67,6 +67,7 @@ fn enter(
 
 pub(super) fn formula_commit_cancel_history_host_save(cx: &mut TestAppContext) {
     use super::super::test_host::{FileHost, canonical_tempdir};
+    use lyrel_markdown_editor::math::editor::view::ConfirmFormula;
     let remote = canonical_tempdir();
     let local = canonical_tempdir();
     let original =
@@ -156,16 +157,32 @@ pub(super) fn formula_commit_cancel_history_host_save(cx: &mut TestAppContext) {
     // A changed sibling revision expires the old seat; it may never commit to a shifted range.
     enter(&second, display, &mut context);
     context.update(|window, cx| window.input("q", cx));
+    second.read_with(&context, |view, cx| {
+        assert_eq!(
+            view.document().read(cx).encode().unwrap(),
+            expected,
+            "the second presentation keeps its structural draft out of the document"
+        );
+    });
     first.update_in(&mut context, |view, _, cx| {
         view.replace_ranges(vec![(0..0, "prefix ".into())], cx)
     });
+    // 模拟原生菜单的迟到确认；兄弟 revision 已改变，旧草稿不能覆盖移动后的 range。
+    context.dispatch_action(ConfirmFormula);
     settle(&mut context);
-    second.read_with(&context, |view, _| assert!(!view.text().contains('q')));
+    // 原文的 \\sqrt 本来含 q；必须比较精确字节，不能按整篇是否含 q 判断草稿泄漏。
+    let prefixed = [&expected[..3], b"prefix ", &expected[3..]].concat();
+    second.read_with(&context, |view, cx| {
+        assert_eq!(view.document().read(cx).encode().unwrap(), prefixed)
+    });
     first.update_in(&mut context, |view, window, cx| {
         view.focus_handle(cx).focus(window, cx)
     });
     context.dispatch_action(gpui_kit::component::input::Undo);
     settle(&mut context);
+    second.read_with(&context, |view, cx| {
+        assert_eq!(view.document().read(cx).encode().unwrap(), expected)
+    });
     // Ordinary display edit preserves the mixed fence line endings, not just surrounding prose.
     enter(&second, display, &mut context);
     context.update(|window, cx| {
