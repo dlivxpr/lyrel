@@ -318,13 +318,13 @@ impl EditorBuffers {
         );
     }
 
-    fn place_cursor(
+    fn place_cursor<E: 'static>(
         &mut self,
         id: BufferId,
         cursor: Option<Position>,
         target: OpenTarget,
         window: &mut Window,
-        cx: &mut gpui_kit::App,
+        cx: &mut Context<E>,
     ) {
         let Some(position) = cursor else { return };
         let Some(file) = self.get_mut(id) else { return };

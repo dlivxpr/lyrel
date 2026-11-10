@@ -254,7 +254,7 @@ fn open_color(
                             .label(t(L10nKey::MarkdownApplyColor))
                             .on_click(|_, window, cx| {
                                 window.dispatch_action(
-                                    Box::new(gpui_kit::component::actions::Confirm {
+                                    Box::new(gpui_kit::component::dialog::Confirm {
                                         secondary: false,
                                     }),
                                     cx,

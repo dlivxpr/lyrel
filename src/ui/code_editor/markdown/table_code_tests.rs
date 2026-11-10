@@ -22,7 +22,7 @@ fn select(view: &Entity<MarkdownEditor>, at: usize, context: &mut VisualTestCont
     });
     settle(context);
 }
-fn click_menu(context: &mut VisualTestContext, trigger: &str, label: L10nKey) {
+fn click_menu(context: &mut VisualTestContext, trigger: &'static str, label: L10nKey) {
     context.update(|window, cx| window.click(trigger, cx));
     settle(context);
     context.update(|window, cx| {
@@ -128,7 +128,12 @@ pub(super) fn workflow(cx: &mut TestAppContext) {
         view.select_range(start..end, cx);
         view.focus_handle(cx).focus(window, cx);
     });
-    context.update(|window, cx| window.input("replacement\n\n", cx));
+    context.update(|_, cx| {
+        cx.write_to_clipboard(gpui_kit::ClipboardItem::new_string(
+            "replacement\n\n".into(),
+        ));
+    });
+    context.dispatch_action(gpui_kit::component::input::Paste);
     settle(&mut context);
     assert!(first.read_with(&context, |view, _| {
         view.text().ends_with("after$$x$$literal  ")

@@ -239,16 +239,27 @@ pub(crate) fn focused_consumers_and_layout(cx: &mut TestAppContext) {
         );
     });
     cx.update(|window, _| assert_eq!(window.find("status-cursor").label(), Some("Ln 3, Col 4")));
+    first.update_in(&mut cx, |view, _, cx| view.select_range(0..0, cx));
     app.update_in(&mut cx, |app, window, cx| {
-        let id = app.active_buffer().unwrap().id();
-        let outline = app.editor_outline(id, true, cx).unwrap();
-        assert!(outline.symbols.iter().any(|symbol| symbol.name == "Target"));
-        app.editor_go_to_symbol(window, cx);
-        app.editor_symbol_preview(3, 2, cx);
-        app.close_search(window, cx);
+        app.editor_go_to_symbol(window, cx)
     });
     settle(&mut cx);
-    first.read_with(&cx, |view, _| assert_eq!(view.selected_range(), 17..17));
+    cx.update(|window, cx| {
+        window.input("Target", cx);
+        window.press("enter", cx);
+    });
+    settle(&mut cx);
+    app.read_with(&cx, |app, cx| {
+        assert_eq!(
+            app.active_editor_input()
+                .unwrap()
+                .read(cx)
+                .cursor_position()
+                .line,
+            2
+        );
+    });
+    let first_after_outline = first.read_with(&cx, |view, _| view.selected_range());
     // Open search for the other presentation of this file, without rendering first.
     app.update_in(&mut cx, |app, window, cx| {
         app.editor_focus_group(false, window, cx);
@@ -266,13 +277,18 @@ pub(crate) fn focused_consumers_and_layout(cx: &mut TestAppContext) {
     cx.update(|window, cx| window.input("beta", cx));
     settle(&mut cx);
     second.read_with(&cx, |view, _| assert_eq!(view.selected_range(), 24..28));
-    first.read_with(&cx, |view, _| assert_eq!(view.selected_range(), 17..17));
+    first.read_with(&cx, |view, _| {
+        assert_eq!(view.selected_range(), first_after_outline)
+    });
     cx.update(|window, cx| window.press("escape", cx));
     settle(&mut cx);
     app.update_in(&mut cx, |app, window, cx| {
         assert!(app.editor_has_focus(window, cx))
     });
-    cx.update(|window, cx| window.input("new", cx));
+    cx.update(|_, cx| {
+        cx.write_to_clipboard(gpui_kit::ClipboardItem::new_string("new".into()));
+    });
+    cx.dispatch_action(gpui_kit::component::input::Paste);
     settle(&mut cx);
     let selected = second.read_with(&cx, |view, _| view.selected_range());
     for (width, font_size, mode, layout) in [

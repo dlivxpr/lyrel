@@ -169,10 +169,10 @@ impl Host for FileHost {
         self.inner.create_dir(&self.path(p), recursive)
     }
     fn rename(&self, from: &Path, to: &Path) -> io::Result<()> {
-        self.inner.rename(from, to)
+        self.inner.rename(&self.path(from), &self.path(to))
     }
     fn remove(&self, p: &Path, recursive: bool) -> io::Result<()> {
-        self.inner.remove(p, recursive)
+        self.inner.remove(&self.path(p), recursive)
     }
     fn repo_root(&self, p: &Path) -> io::Result<Option<PathBuf>> {
         self.inner.repo_root(p)

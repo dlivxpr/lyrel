@@ -116,7 +116,8 @@ impl TableCodeControls {
                 if matches!(event, lyrel_markdown_editor::EditorEvent::InsertTable) {
                     this.open = true;
                     this.picker.update(cx, |picker, cx| picker.reset(cx));
-                    this.picker.read(cx).focus.focus(window, cx);
+                    let focus = this.picker.read(cx).focus.clone();
+                    focus.focus(window, cx);
                     cx.notify();
                 }
             }),
