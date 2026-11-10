@@ -28,6 +28,8 @@ description: "lyrel 向 shell 中注入了什么，以及它带来的功能。"
 
 Bash 4.4 及以上仍通过公开的 `PS0` 报告命令开始，保留用户 `PS0`；命令环境在父 shell 的链式 `DEBUG` action 中应用，不能在 `PS0` 的 command substitution 中修改父进程。Bash 3.2 使用同一环境生命周期和既有 `DEBUG` 兼容路径。用户 `DEBUG` action 仍先执行，保留其状态／跳过语义；若已安装 bash-preexec，则只接入其公开函数数组，不安装或下载它。`PROMPT_COMMAND` 的 scalar／array、历史设置、命令状态与提示符标记继续沿用原契约。
 
+链式 `DEBUG` 尾调用将用户 action 执行后的 `$_` 保留为最后一个参数：Bash 会恢复 trap 前的 `$?`（4.4+ 还恢复 `PIPESTATUS`），但不会替集成恢复 `$_`。因此在 `: LAST_ARGUMENT` → 提示符边界的 `for` → 用户 prompt hook 序列中，内部 `BASH_COMMAND` 不会覆盖用户最后一个参数。没有用户 trap 时使用不改写 `$_` 的 compound conditional，而不是会清空它的裸 `:`；Bash 3.2 和 PS0 路径使用相同规则。Bash 3.2 原生 `DEBUG` 对 `PIPESTATUS` 的限制保持既有兼容边界，不伪造 pipeline 状态。
+
 ## 智能体的命令作用域环境
 
 集成的 zsh、Bash、fish、PowerShell 识别直接输入的 `omp`、`kimi`、`pi`、`opencode`、`opencode2`、`hermes`，包括字面量参数、前置环境赋值和带引号的绝对路径。只对该次启动设置 `TERM_PROGRAM=kitty`、清空 `TERM_PROGRAM_VERSION`，并用 `LC_TERMINAL=lyrel`、`LC_TERMINAL_VERSION=$LYREL` 保留真实来源；远端未提供 `LYREL` 时使用构建该引导脚本的 lyrel 版本，不改 `TERM`。omp 另加 `PI_NO_DECCARA=1`。Hermes 0.23.1 的公开检测器不读取 `TERM_PROGRAM`，因此只给 Hermes 默认 `KITTY_WINDOW_ID=lyrel`，不覆盖显式 marker（包括空串），也不强制 `image.render`。
@@ -84,6 +86,8 @@ cargo test --locked -p lyrel --lib ui::pending_pane::creation::consumer_tests::a
 ```
 
 同时运行既有 `bash_preserves_native_prompt_and_trap_contracts_over_a_real_pty`、`bash_escapes_and_truncates_submitted_commands_over_a_real_pty`、`bootstrap_scripts_parse_under_their_real_shells` 和各平台 prompt-cycle contracts。新增 pending consumer 旨在检查延迟投递到目标 pane 后的命令能在真实目标 shell 执行，不代表已取得原生窗口／GPU／真实 agent 图像或 SSH 的通过证据。
+
+`bash_preserves_prompt_state_without_a_user_debug_trap_over_a_real_pty` 补充无用户 `DEBUG` action 的 scalar／array prompt 回归覆盖。此次修复未执行测试、构建、lint 或格式化；已有 Linux Bash 5.2.21 的 `prompt lost $_` 失败记录仅作为修复前证据，不代表修复后通过。
 
 
 <a id="what-it-reports"></a>
