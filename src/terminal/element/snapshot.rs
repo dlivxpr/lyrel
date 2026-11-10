@@ -371,13 +371,8 @@ impl TerminalElement {
                     placeholders.push((-1, slices));
                 }
                 let mut row_buf = vec![RenderCell::default(); cols];
-                for (col, (slot, &cell)) in row_buf
-                    .iter_mut()
-                    .zip(term.grid[line][..].iter())
-                    .take(rendered_cols)
-                    .enumerate()
-                {
-                    let position = Pos::new(line, Column(col));
+                // Frozen cells cannot depend on the live row's shape or lifetime.
+                for (col, slot) in row_buf.iter_mut().take(rendered_cols).enumerate() {
                     let mut rc = if let Some(reading) = reading {
                         reading
                             .row(-1)
@@ -387,7 +382,8 @@ impl TerminalElement {
                             })
                             .unwrap_or_default()
                     } else {
-                        painter.snapshot(position, cell)
+                        let position = Pos::new(line, Column(col));
+                        painter.snapshot(position, term.grid[position])
                     };
                     rc.tab_stop = presentation.is_tab_stop(col);
                     if dim < 1. {

@@ -23,6 +23,7 @@
 
 ### 修复
 
+- #251：冻结 placeholder 消费者区分单元格行原点与方图 aspect-fit 后的居中像素 crop，按独立方图几何同时约束完整行与分数滚动上一行，保留蓝色资源身份、live 擦除／替换后的捕获图片及真实绘制断言，不修改生产图片布局。阅读态的上一行单元格不再遍历实时栅格；构建、测试与格式化由集成验收执行，本修复子任务未运行。
 - #248：普通 shell 的 scoped-launch 前置身份标记改从 daemon 的只读 `Observe` 回放中独立检查，并核验前后标记顺序；终端 `scrollback_text()` 是可被原生 TUI 清屏／覆盖的 VT 呈现，不是追加式 PTY transcript。保留退出后生产视图中的父 shell 身份检查、显式策略优先级及全部 streaming 栅格／放置断言，不修改实际输出或生产阅读实现。本修复子任务未执行构建、测试或格式化。
 - #248：确定性 omp token-stage 消费者仅在自有 streaming overlay 关闭额外的 `display.smoothStreaming` 文字揭示动画，并用正式 config CLI 核验。避免单个 SSE delta 被再次拆成根标签已完整、首个图元尚未完整的合法透明 SVG 后，误当作红底修订；真实 SSE、SVG 修补／节流、两个非空完整中间栅格、精确最终像素与顺序／无旧放置断言保持不变。未在修复子任务运行验证，不宣称默认 smooth reveal 子前缀验收通过。
 - #251：终端阅读态在原生 `Div` 上注册子元素 prepaint 监听后再附加 identity／测试观察包装，修复 `Observed<E>` 不提供 `on_children_prepainted` 的编译错误；保留原有子元素边界测量、遮挡高度更新与返回实时输出按钮布局。编译与行为回归由集成验收执行。

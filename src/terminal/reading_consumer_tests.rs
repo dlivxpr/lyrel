@@ -193,6 +193,18 @@ fn reading_rgba_pixel(image: &crate::terminal::images::RenderPlacement) -> [u8; 
 fn reading_placeholders_paint_from_captured_rows_after_live_cells_are_erased(cx: &mut TestAppContext) {
     use std::sync::Arc;
     use std::sync::atomic::Ordering;
+    // A 1x1 source aspect-fits, centered, inside this two-column, one-row
+    // placeholder. Its pixel crop need not start at the cell's top edge.
+    let square_bounds = |geom: crate::terminal::element::CellGeom, row: f32| {
+        let side = (geom.cell_width * 2.).min(geom.line_height);
+        Bounds::new(
+            point(
+                geom.origin.x + geom.cell_width * 4. + (geom.cell_width * 2. - side) / 2.,
+                geom.origin.y + geom.line_height * row + (geom.line_height - side) / 2.,
+            ),
+            gpui_kit::size(side, side),
+        )
+    };
     let (daemon, pane, view, window) = graphics_layout_harness(cx);
     graphics_send_fixture(&view, cx, 40, &b"PLACEHOLDER\r\n".repeat(72));
     graphics_send_fixture(&view, cx, 41, "\x1b[8;5H\x1b_Ga=T,i=8,p=2,U=1,c=2,r=1,f=32,s=1,v=1,q=2;AAD//w==\x1b\\\x1b[38;5;8;58;5;2m\u{10eeee}\u{305}\u{305}\u{10eeee}\x1b[0m".as_bytes());
@@ -208,7 +220,10 @@ fn reading_placeholders_paint_from_captured_rows_after_live_cells_are_erased(cx:
         assert!(image.painted.load(Ordering::Acquire));
         let geom = view.cell_geom.unwrap();
         let offset = view.terminal.term.lock().display_offset() as i32;
-        (image.painted.clone(), image.paint_bounds(geom.origin, geom.cell_width, geom.line_height, 0, offset, 1.), Arc::downgrade(image.data.as_ref().unwrap()))
+        let bounds = image.paint_bounds(geom.origin, geom.cell_width, geom.line_height, 0, offset, 1.);
+        let expected = square_bounds(geom, 8.);
+        assert_eq!(bounds, (expected, expected), "full row uses the centered image crop, not the cell box");
+        (image.painted.clone(), bounds, Arc::downgrade(image.data.as_ref().unwrap()))
     });
     painted.store(false, Ordering::Release);
     let mut advance = b"\x1b[8;1H\x1b[2KERASED\x1b[24;1H".to_vec();
@@ -239,10 +254,13 @@ fn reading_placeholders_paint_from_captured_rows_after_live_cells_are_erased(cx:
         let image = view.grid_snap.as_ref().unwrap().images.iter()
             .find(|image| image.placement.image_id == 8)
             .expect("captured placeholder must also enter the fractional sliver display list");
+        assert_eq!(reading_rgba_pixel(image), [0, 0, 255, 255]);
+        assert!(Arc::ptr_eq(image.data.as_ref().unwrap(), &frozen.upgrade().unwrap()));
         let geom = view.cell_geom.unwrap();
         let offset = view.terminal.term.lock().display_offset() as i32;
         let bounds = image.paint_bounds(geom.origin, geom.cell_width, geom.line_height, 0, offset, 1.);
-        assert_eq!(bounds.0.origin.y, geom.origin.y - geom.line_height);
+        let expected = square_bounds(geom, -1.);
+        assert_eq!(bounds, (expected, expected), "sliver keeps the same centered crop at viewport row -1");
         assert!(painted.load(Ordering::Acquire), "the visible half-row must actually paint");
         bounds
     });
@@ -253,6 +271,8 @@ fn reading_placeholders_paint_from_captured_rows_after_live_cells_are_erased(cx:
         let image = view.grid_snap.as_ref().unwrap().images.iter()
             .find(|image| image.placement.image_id == 8)
             .expect("live redraw must preserve the frozen placeholder sliver");
+        assert_eq!(reading_rgba_pixel(image), [0, 0, 255, 255]);
+        assert!(Arc::ptr_eq(image.data.as_ref().unwrap(), &frozen.upgrade().unwrap()));
         let geom = view.cell_geom.unwrap();
         let offset = view.terminal.term.lock().display_offset() as i32;
         assert_eq!(image.paint_bounds(geom.origin, geom.cell_width, geom.line_height, 0, offset, 1.), sliver_bounds);
