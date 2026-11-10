@@ -494,15 +494,15 @@ direct／virtual 父子图随 `move` 同步移动，`erase` 使 virtual child �
 
 2026-10-31 读取上游最新正式 release 为 [v18.14.1](https://github.com/can1357/oh-my-pi/releases/tag/v18.14.1)。最终 integration 使用本机正式 `omp/18.14.1` 执行 pictures、budget、disabled／protocol-off 的真实 PTY／rooted consumer，三项均通过；三次退出审计均为 `requests=[]`、消息 `5→5`、`modelUsage=0`、`zeroInference=true`。Windows 原生三图与完整 budget 像素证据来自下文记录的正式 `omp/18.14.0`，不将该原生结果外推到 18.14.1。
 
-在 lyrel 设置的 `agent_launch.omp` 使用字面量前缀，例如：
+omp 快速启动自动提供进程级 Kitty 兼容身份，不再要求先强制图片协议。需要明确选择协议时，仍可在 `agent_launch.omp` 使用字面量前缀，例如：
 
 ```text
 PI_FORCE_IMAGE_PROTOCOL=kitty PI_KITTY_PLACEHOLDERS=1 omp
 ```
 
-启动与恢复沿用现有 agent launch／Host session operation，不伪造 `TERM_PROGRAM`，不注入全局配置。已知公开前缀会按实际 shell 编码；未显式指定 shell 时，从目标 Host 的 `ShellInventory` 默认项解析，不用 Windows 桌面身份猜测远端 POSIX shell。PowerShell 的进程环境在 native 子进程退出后恢复，cmd 使用独立子 shell，POSIX 使用命令前缀。过去 Windows 快捷启动直接键入 `KEY=value omp`，以及恢复后变量留在 shell 的缺陷由同一入口修复。启动拒绝通过持久错误通知说明原因，并提示修改 `agent_launch` 或在新窗格手动启动；此审查修复不扩大已有原生验收声明。
+快速启动只在 omp 命令作用域设置 `TERM_PROGRAM=kitty`，清空 Kitty 版本，以 `LC_TERMINAL=lyrel`、真实版本的 `LC_TERMINAL_VERSION` 和既有 `LYREL` 保留宿主身份，同时设置 `PI_NO_DECCARA=1`。普通 shell 继续如实报告 lyrel；显式命令级 `TERM_PROGRAM` 绕过 Kitty 身份／版本默认值。公开前缀沿用 agent launch／Host session operation 的目标 shell 编码；PowerShell 在子进程退出后恢复环境，cmd 使用独立子 shell，POSIX 使用命令前缀。连接中的快捷启动保留同一前缀。此切片不代表恢复／分叉、Nushell 或所有手动 shell 入口的覆盖已通过；全路径覆盖由 #250 负责。启动拒绝仍通过持久错误通知说明原因，不注入全局配置或替换原生 TUI。
 
-lyrel 不为未配置的 omp 强制添加图片选项，也不追加 `terminal.showImages: true` overlay。公开 `PI_FORCE_IMAGE_PROTOCOL=none/off`、`PI_KITTY_PLACEHOLDERS=0`、`PI_NO_KITTY_PLACEHOLDERS=1` 和上游 `terminal.showImages: false` 保持有效。显式选择启用模式是操作者的决定；公开环境选项和关闭项会作为非敏感启动上下文保留。`PI_NO_KITTY_PLACEHOLDERS=1` 优先于 placeholder opt-in。不要使用不存在的 `--image-protocol`，也不要使用已移除的 `PI_KITTY_IMAGE_TRANSMISSION`。
+兼容身份不强制图片协议，也不追加 `terminal.showImages: true` overlay。公开 `PI_FORCE_IMAGE_PROTOCOL=none/off`、`PI_KITTY_PLACEHOLDERS=0`、`PI_NO_KITTY_PLACEHOLDERS=1` 和上游 `terminal.showImages: false` 保持有效。公开环境选项和关闭项作为非敏感启动上下文保留；权限名单只新增所需的终端身份／版本和 `PI_NO_DECCARA`，不扩大凭据或任意环境读取。`PI_NO_KITTY_PLACEHOLDERS=1` 优先于 placeholder opt-in，它关闭 Unicode placeholder，并非关闭原生 direct 图片。不要使用不存在的 `--image-protocol` 或已移除的 `PI_KITTY_IMAGE_TRANSMISSION`。
 
 v18.14.1 的原生 renderer 可从保存会话重建 assistant 图片、toolResult 图片及 `tui.renderSvg` 启用时 fenced SVG 的栅格图；PNG 直接显示，其他支持格式经上游转换。普通 SVG 字符串／链接／路径仍不由 lyrel 解释。上游默认 `tui.maxInlineImages=8`，每个 screen／alternate surface 独立计数；`0` 是上游取消该 cap，不代表 lyrel 无预算。默认宽限 100 列，高限 20 行并受 viewport 约束。超额旧图由上游 demotion 和 `d=I` 删除，lyrel 不偷偷恢复这些像素；后续原生 replay 合法重传另当别论。omp 使用原生 terminal scrollback，不套用 OpenCode 的分页／remount 假设；resize 的默认 `rebuild` 可重新发图。
 
@@ -539,6 +539,30 @@ node scripts/omp-native-replay.mjs cleanup --root $fixture --lyrel-cli (Resolve-
 无需升级全局安装即可另行验收 `18.14.1`：从[官方 release](https://github.com/can1357/oh-my-pi/releases/tag/v18.14.1) 下载 `omp-windows-x64.exe` 到新的临时目录，用 `Get-FileHash -Algorithm SHA256` 核对本次 GitHub asset digest `5b72f0e46e9cd441793d399d36f319a656f2e3c9a3f1997342e46fa885614913`，再把 `LYREL_TEST_OMP`／`prepare --omp` 指向该绝对路径。下载地址为 `https://github.com/can1357/oh-my-pi/releases/download/v18.14.1/omp-windows-x64.exe`；先运行该文件的 `--version` 并记录，不修改 PATH、全局配置或现有 omp。18.14.1 并非本修复的已证明前提，不能把本次 18.14.0 结果外推到它。
 
 历史上 `omp/18.12.6` 曾在 Windows 隔离原生窗口验证 placeholder assistant SVG 和 toolResult PNG、无新 prompt；direct 重放当时观察到重叠。该记录仅属于旧版本，不替代以上新版验收。
+
+<a id="omp-loopback-streaming"></a>
+##### omp 18.18.6：确定性 loopback token streaming（#248）
+
+`graphics_consumer_released_omp_loopback_streamed_svg` 使用现有隔离 replay 夹具的独立 `streaming` 场景，版本精确限定正式 `18.18.6`，不升级全局安装。它通过生产启动编码给真实 PTY 中的 omp 设置兼容身份，不强制 `PI_FORCE_IMAGE_PROTOCOL` 或 placeholder 开关；在原生 `/debug` → **View: terminal state** 中核对 `kitty`、`Kitty graphics`、`DECCARA: no` 和实际 cell 几何，并验证命令前后 shell 仍为 lyrel。
+
+公开 `models.yml` 的 `auth: none`／`openai-completions` provider 只指向 `127.0.0.1`，仅接受一次指定模型／prompt 的 POST。`scripts/omp-loopback-stream.mjs` 发送预定 SSE token，不编码 PNG、不发送 Kitty、不解析 PTY。一个未闭合的 SVG 先显示红底，再增加右侧绿色；最后闭合围栏，底半部变蓝。每段都等待生产消费者确认后才推进，避免机器快慢吞掉中间修订。两段故意截断的 XML 期间继续检查完整旧像素。逐像素比较全部 BGRA（包括整 cell 的透明 padding）、原生 image ID、完整 crop 覆盖、`z=0` paint claim、周边文字行序及最终整个保留网格无旧放置；不把 Base64、非空输出或进程启动当作图片证据。
+
+与静态场景的 `zeroInference=true` 不同，streaming 退出审计必须为一次完成的 loopback 请求、恰好新增 user／assistant 两条消息、`loopbackStreaming=true`、`zeroInference=false`。日志仅记录 method／URL／loopback peer／模型和匹配布尔值，不保存请求正文、凭据或私人历史。原有 pictures／budget／disabled 场景仍要求零请求和消息不变；另增加 placeholder-off 的真实 direct-placement 重放入口。
+
+在 Windows/macOS 仓库根设置 `LYREL_TEST_OMP` 为正式 `18.18.6` 的绝对路径后，中央串行执行以下命令（本次实现阶段均未运行）：
+
+```text
+node --check scripts/omp-native-replay.mjs
+node --check scripts/omp-loopback-stream.mjs
+cargo test --locked -p lyrel-core host::session_operations::tests::quick_omp_identity_is_scoped_and_explicit_policies_win -- --exact --nocapture --test-threads=1
+cargo test --locked -p lyrel --lib terminal::view::gpui_tests::graphics_consumer_released_omp_loopback_streamed_svg -- --ignored --exact --nocapture --test-threads=1
+cargo test --locked -p lyrel --lib terminal::view::gpui_tests::graphics_consumer_released_omp_native_ -- --ignored --nocapture --test-threads=1
+```
+
+源码中的测试断言不是执行结果。production paint claim 也不是 GPU 最终像素；原生窗口图文对齐、交互以及真实 SSH／远端组合须单独验收。旧版本静态重放的历史通过记录不能计作新身份或 live streaming 通过。
+
+上游接口依据：[正式版本 provider 格式](https://github.com/can1357/oh-my-pi/blob/v18.18.6/docs/models.md)、[原生终端诊断](https://github.com/can1357/oh-my-pi/blob/v18.18.6/packages/tui/src/apps/debug/terminal-info.ts)、[SvgFigure 完整修订替换](https://github.com/can1357/oh-my-pi/blob/v18.18.6/packages/tui/src/chat/svg-figure.ts) 和[原生 SVG 栅格尺寸／透明 padding](https://github.com/can1357/oh-my-pi/blob/v18.18.6/crates/pi-natives/src/svg.rs)。
+
 
 <a id="pi-native-image-replay"></a>
 #### 正式 pi 接入：公开进程设置与独立重放夹具（#149）
@@ -738,7 +762,7 @@ Windows → Linux 原生图片与无重传恢复已补充实测，见远程文�
 - 图片属于窗格会话，不属于某个窗口。在历史保留范围和资源预算内，切换工作区、关闭后重开 GUI，以及重新连接同一存活 daemon 后，图片应恢复，无需应用重新发送。
 - 图片不新增磁盘持久化；daemon 结束后不保证历史图片恢复。智能体重新启动后主动重绘，是新的图片输出，不是 lyrel 恢复了旧图片。
 - 以 [Kitty graphics](https://sw.kovidgoyal.net/kitty/graphics-protocol/) 为支持协议，覆盖传输与独立放置、重复放置、裁剪、删除、Unicode 占位符，以及已有的传输并显示路径；SIXEL 与 iTerm2 inline images 不列为本次支持协议。
-- lyrel 如实报告已实现的能力。尚未识别 lyrel 的应用可通过自身公开选项选择图片协议；接入文档应注明已验证的应用版本与启动方式，不通过伪造 `TERM_PROGRAM` 取得支持，不承诺所有第三方应用自动识别。
+- lyrel 如实报告已实现的能力。普通 shell 不冒充其他终端；明确的 agent 启动作用域可以提供 Kitty 兼容身份，同时保留真实 lyrel 标记、清空 Kitty 版本并尊重公开关闭选项。尚未覆盖的入口仍可使用应用自身公开协议设置；文档应注明已验证的版本与启动方式，不承诺所有第三方应用自动识别。
 - 单图、每窗格及整体图片资源均须有界，预算不能只按压缩文件大小或图片张数计算。优先回收最旧的非可见历史图片，保留文字；可见图片已占满预算时拒绝新图，不无限增长或阻塞 Shell。被回收图片不再属于可恢复内容。
 - 因预算回收历史图片后，只在仍保留的原显示区域绘制“图片已淘汰”提示，不改写终端文本、插入新行、写入 PTY 或弹出通知。应用主动删除、清屏或显示位置离开历史保留范围时不显示此提示；尚未成功接收的新图没有显示位置时，按协议应答规则报告失败。
 - 正式兼容范围为 Windows/macOS 桌面的本地窗格，以及经 lyrel 原生 SSH 远程工作区连接 Linux daemon 的图片路径。tmux/screen 的中转配置与版本组合不列入本次兼容承诺。

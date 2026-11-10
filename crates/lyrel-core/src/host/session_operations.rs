@@ -315,12 +315,15 @@ macro_rules! scope_environment_keys {
 }
 
 scope_environment_keys! {
-    common: ["HOME", "USERPROFILE", "PI_CODING_AGENT_DIR"],
+    common: [
+        "HOME", "USERPROFILE", "PI_CODING_AGENT_DIR",
+        "TERM_PROGRAM", "TERM_PROGRAM_VERSION", "LC_TERMINAL", "LC_TERMINAL_VERSION",
+    ],
     pi: ["PI_CODING_AGENT_SESSION_DIR", "PI_IMAGE_PROTOCOL"],
     omp: [
         "OMP_PROFILE", "PI_PROFILE", "PI_CONFIG_DIR", "PI_CONFIG_FILES",
         "XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_STATE_HOME", "XDG_CACHE_HOME",
-        "PI_FORCE_IMAGE_PROTOCOL", "PI_KITTY_PLACEHOLDERS", "PI_NO_KITTY_PLACEHOLDERS",
+        "PI_FORCE_IMAGE_PROTOCOL", "PI_KITTY_PLACEHOLDERS", "PI_NO_KITTY_PLACEHOLDERS", "PI_NO_DECCARA",
     ],
     other: ["KIMI_CODE_HOME", "OPENCODE_DB", "HERMES_HOME", "HERMES_RUNTIME_DIR"]
 }
@@ -680,6 +683,45 @@ fn scope_environment_prefix(
         }
     }
     Ok(prefix)
+}
+
+/// Add only command-local terminal defaults where the launch UI knows the agent.
+/// Keep the command portable until the target Host chooses its actual shell;
+/// connecting panes retain this same literal prefix rather than losing intent.
+/// Explicit terminal identity bypasses Kitty identity/version defaults. Other
+/// public policy assignments stay in the original command and win over defaults.
+pub fn agent_compatibility_command(agent: CLIAgent, line: &str) -> String {
+    let argv = crate::core::cli_agent::parse_command_argv(line).ok();
+    let explicit_identity = argv.as_ref().is_some_and(|argv| {
+        argv.iter()
+            .take_while(|arg| arg.contains('='))
+            .any(|arg| arg.starts_with("TERM_PROGRAM="))
+    });
+    // The literal argv parser accepts PowerShell's leading call operator only
+    // before the executable/prefix. It is reintroduced by the target encoder,
+    // not buried behind the newly added environment assignments.
+    let line = if argv.is_some() {
+        line.trim_start()
+            .strip_prefix('&')
+            .map(str::trim_start)
+            .unwrap_or(line)
+    } else {
+        line
+    };
+    let identity = if explicit_identity {
+        ""
+    } else {
+        "TERM_PROGRAM=kitty TERM_PROGRAM_VERSION='' "
+    };
+    let omp = if agent == CLIAgent::OhMyPi {
+        "PI_NO_DECCARA=1 "
+    } else {
+        ""
+    };
+    format!(
+        "{identity}LC_TERMINAL=lyrel LC_TERMINAL_VERSION={} {omp}{line}",
+        env!("CARGO_PKG_VERSION")
+    )
 }
 
 /// Render literal public environment prefixes for the pane's actual shell.
@@ -1103,6 +1145,104 @@ mod tests {
             ),
         )
         .unwrap();
+    }
+
+    #[test]
+    fn quick_omp_identity_is_scoped_and_explicit_policies_win() {
+        let dir = tempfile::tempdir().unwrap();
+        let output = dir.path().join("identity.json");
+        let shell = if cfg!(windows) { "pwsh" } else { "sh" };
+        let executable = std::env::current_exe().unwrap();
+        let native = [
+            executable.to_string_lossy().into_owned(),
+            "--ignored".into(),
+            "--exact".into(),
+            "host::session_operations::tests::omp_identity_child".into(),
+            "--nocapture".into(),
+        ]
+        .iter()
+        .map(|arg| quote_for_shell(arg, Some(shell)))
+        .collect::<Vec<_>>()
+        .join(" ");
+        for (explicit, call) in [
+            ("", ""),
+            ("TERM_PROGRAM=wezterm TERM_PROGRAM_VERSION=custom ", ""),
+            ("", "& "),
+        ] {
+            if output.exists() {
+                std::fs::remove_file(&output).unwrap();
+            }
+            let line = agent_compatibility_command(
+                CLIAgent::OhMyPi,
+                &format!("{call}{explicit}PI_FORCE_IMAGE_PROTOCOL=off PI_KITTY_PLACEHOLDERS=0 PI_NO_KITTY_PLACEHOLDERS=1 {native}"),
+            );
+            let child = scoped_launch_command(&*LocalHost::new(), &line, Some(shell)).unwrap();
+            let parent = if cfg!(windows) {
+                "[IO.File]::WriteAllText($env:LYREL_IDENTITY_PARENT, $env:TERM_PROGRAM + ',' + $env:TERM_PROGRAM_VERSION)"
+            } else {
+                "printf '%s,%s' \"$TERM_PROGRAM\" \"$TERM_PROGRAM_VERSION\" > \"$LYREL_IDENTITY_PARENT\""
+            };
+            let mut command = Command::new(shell);
+            if cfg!(windows) {
+                command.args(["-NoProfile", "-Command"]);
+            } else {
+                command.arg("-c");
+            }
+            let status = command
+                .arg(format!("{child}; {parent}"))
+                .env("LYREL_IDENTITY_OUTPUT", &output)
+                .env("LYREL_IDENTITY_PARENT", dir.path().join("parent.txt"))
+                .env("TERM_PROGRAM", "lyrel")
+                .env("TERM_PROGRAM_VERSION", "parent-version")
+                .env("LYREL", env!("CARGO_PKG_VERSION"))
+                .status()
+                .unwrap();
+            assert!(status.success());
+            let actual: serde_json::Value =
+                serde_json::from_slice(&std::fs::read(&output).unwrap()).unwrap();
+            assert_eq!(
+                actual["TERM_PROGRAM"],
+                if explicit.is_empty() { "kitty" } else { "wezterm" }
+            );
+            assert_eq!(
+                actual["TERM_PROGRAM_VERSION"],
+                if explicit.is_empty() { "" } else { "custom" }
+            );
+            assert_eq!(actual["LC_TERMINAL"], "lyrel");
+            assert_eq!(actual["LC_TERMINAL_VERSION"], env!("CARGO_PKG_VERSION"));
+            assert_eq!(actual["LYREL"], env!("CARGO_PKG_VERSION"));
+            assert_eq!(actual["PI_NO_DECCARA"], "1");
+            assert_eq!(actual["PI_FORCE_IMAGE_PROTOCOL"], "off");
+            assert_eq!(actual["PI_KITTY_PLACEHOLDERS"], "0");
+            assert_eq!(actual["PI_NO_KITTY_PLACEHOLDERS"], "1");
+            assert_eq!(
+                std::fs::read_to_string(dir.path().join("parent.txt")).unwrap(),
+                "lyrel,parent-version"
+            );
+        }
+    }
+
+    #[test]
+    #[ignore = "owned subprocess for scoped terminal identity"]
+    fn omp_identity_child() {
+        let Some(output) = std::env::var_os("LYREL_IDENTITY_OUTPUT") else {
+            return;
+        };
+        let actual: BTreeMap<_, _> = [
+            "TERM_PROGRAM",
+            "TERM_PROGRAM_VERSION",
+            "LC_TERMINAL",
+            "LC_TERMINAL_VERSION",
+            "LYREL",
+            "PI_NO_DECCARA",
+            "PI_FORCE_IMAGE_PROTOCOL",
+            "PI_KITTY_PLACEHOLDERS",
+            "PI_NO_KITTY_PLACEHOLDERS",
+        ]
+        .into_iter()
+        .map(|key| (key, std::env::var(key).unwrap_or_default()))
+        .collect();
+        std::fs::write(output, serde_json::to_vec(&actual).unwrap()).unwrap();
     }
 
     fn operation(cwd: PathBuf) -> SessionOperation {
