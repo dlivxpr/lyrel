@@ -222,7 +222,10 @@ fn wrapped_link(cx: &mut TestAppContext, tail: bool, drag: bool) {
     settle(&mut vcx);
     vcx.update(|window, _| {
         assert_eq!(
-            window.find("markdown-link-hover").label(),
+            window
+                .try_find("markdown-link-hover")
+                .unwrap_or_else(|| panic!("native link hover: tail={tail}, drag={drag}, wrap={wrap}, at={at}, target={target:?}"))
+                .label(),
             Some("linked.md")
         );
     });

@@ -1491,15 +1491,18 @@ fn cell_offset_for_point(
         let map = crate::bidi::shaped::map_of_wrapped(&wl, content.len());
         return map.index_for_x(f32::from(target.x));
     }
-    match wl.closest_index_for_position(
-        point(
-            target.x,
-            target.y.max(px(0.)).min(wl.size(line_h).height - px(1.)),
+    cell_grapheme_boundary(
+        content,
+        line_index_at(
+            &wl,
+            None,
+            point(
+                target.x,
+                target.y.max(px(0.)).min(wl.size(line_h).height - px(1.)),
+            ),
+            line_h,
         ),
-        line_h,
-    ) {
-        Ok(i) | Err(i) => cell_grapheme_boundary(content, i),
-    }
+    )
 }
 
 /// Paint a table row as a grid (W4c): a top border (+ bottom on the last row),

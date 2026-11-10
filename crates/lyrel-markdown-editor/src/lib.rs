@@ -7144,9 +7144,28 @@ fn line_index_at(line: &WrappedLine, rtl: Option<&RtlRow>, p: Point<Pixels>, lh:
             };
             rr.start + rr.map.index_for_x(f32::from(x))
         }
-        _ => match line.closest_index_for_position(p, lh) {
-            Ok(i) | Err(i) => i,
-        },
+        _ => {
+            // Native closest-index lookup has no synthetic endpoint after the
+            // final glyph: any x past its start returns the whole line's len.
+            // Include that endpoint so the glyph's leading half still names
+            // its own caret (not the byte after a final emoji/grapheme).
+            let layout = &line.unwrapped_layout;
+            if let Some(last) = layout.runs.iter().rev().find_map(|run| run.glyphs.last()) {
+                let last_row = line.wrap_boundaries().len();
+                if (f32::from(p.y) / f32::from(lh)) as usize == last_row {
+                    let start_x = line.wrap_boundaries().last().map_or(px(0.), |boundary| {
+                        layout.runs[boundary.run_ix].glyphs[boundary.glyph_ix].position.x
+                    });
+                    let x = p.x + start_x;
+                    if x > last.position.x && x < (last.position.x + layout.width) / 2. {
+                        return last.index;
+                    }
+                }
+            }
+            match line.closest_index_for_position(p, lh) {
+                Ok(i) | Err(i) => i,
+            }
+        }
     }
 }
 

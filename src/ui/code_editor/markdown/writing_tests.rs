@@ -261,7 +261,10 @@ pub(super) fn native_rhythm(cx: &mut TestAppContext) {
                 });
                 settle(&mut context);
                 let before = view.read_with(&context, |view, _| view.cursor());
-                assert!(before >= next.0.saturating_sub(1) && before <= next.0 + 1);
+                assert!(
+                    before >= next.0.saturating_sub(1) && before <= next.0 + 1,
+                    "native wrap hit: font={font_size}, width={width}, block={needle:?}, first={first:?}, next={next:?}, target={target:?}, cursor={before}"
+                );
                 context.update(|window, cx| window.input("X", cx));
                 context.dispatch_action(gpui_kit::component::input::Undo);
                 settle(&mut context);
