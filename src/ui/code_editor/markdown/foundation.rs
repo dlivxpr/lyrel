@@ -1060,12 +1060,16 @@ pub(super) fn native_long_code(cx: &mut TestAppContext) {
     save(&app, &mut context);
     assert_eq!(std::fs::read(&path).unwrap(), original.as_bytes());
     let tail = body + 400_000 - "wide ".len();
-    view.update_in(&mut context, |view, _, cx| view.select_range(tail..tail, cx));
+    view.update_in(&mut context, |view, _, cx| {
+        view.select_range(tail..tail, cx)
+    });
     until(&mut context, |context| {
         context.update(|window, cx| {
-            view.read(cx).range_to_bounds(&(tail..tail)).is_some_and(|caret| {
-                caret.top() >= px(0.) && caret.bottom() <= window.viewport_size().height
-            })
+            view.read(cx)
+                .range_to_bounds(&(tail..tail))
+                .is_some_and(|caret| {
+                    caret.top() >= px(0.) && caret.bottom() <= window.viewport_size().height
+                })
         })
     });
     let target = view.read_with(&context, |view, _| {
@@ -1076,8 +1080,11 @@ pub(super) fn native_long_code(cx: &mut TestAppContext) {
         window.pointer_down(target, gpui_kit::MouseButton::Left, cx);
         window.pointer_up(target, gpui_kit::MouseButton::Left, cx);
     });
-    assert_eq!(view.read_with(&context, |view, _| view.cursor()), tail,
-        "the complete long code remains pointer-editable at its diagnostic tail");
+    assert_eq!(
+        view.read_with(&context, |view, _| view.cursor()),
+        tail,
+        "the complete long code remains pointer-editable at its diagnostic tail"
+    );
     context.update(|window, cx| window.input("Z", cx));
     settle(&mut context);
     let mut expected = original.clone();

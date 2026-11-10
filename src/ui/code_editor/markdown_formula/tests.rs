@@ -415,8 +415,14 @@ pub(super) fn native_hard_break_formula_fragments(cx: &mut TestAppContext) {
         let formula = view.formula_bounds(&(formula_start..formula_end)).unwrap();
         let next = original.find("next").unwrap();
         let caret = view.range_to_bounds(&(next..next)).unwrap();
-        assert!(formula.size.height > px(20.), "use the real FormulaProvider raster");
-        assert!(caret.top() >= formula.bottom(), "a hard break cannot bridge a tall image/formula row");
+        assert!(
+            formula.size.height > px(20.),
+            "use the real FormulaProvider raster"
+        );
+        assert!(
+            caret.top() >= formula.bottom(),
+            "a hard break cannot bridge a tall image/formula row"
+        );
     });
     for at in [
         original.find("next").unwrap(),
@@ -435,7 +441,8 @@ pub(super) fn native_hard_break_formula_fragments(cx: &mut TestAppContext) {
         until(&mut context, |context| {
             view.read_with(context, |view, _| {
                 view.range_to_bounds(&(at..at)).is_some()
-                    && view.formula_bounds(&(start..end))
+                    && view
+                        .formula_bounds(&(start..end))
                         .is_some_and(|bounds| bounds.size.height > px(20.))
             })
         });
