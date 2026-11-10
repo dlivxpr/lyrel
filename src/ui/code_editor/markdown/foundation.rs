@@ -9,7 +9,8 @@ use std::time::{Duration, Instant};
 
 fn settle(context: &mut VisualTestContext) {
     context.run_until_parked();
-    context.update(|window, cx| window.render_frame(cx));
+    // Test windows have no platform frame loop; run the SDK's actual frame callbacks.
+    context.update(|window, cx| { window.simulate_next_frame(cx); window.render_frame(cx); });
     context.run_until_parked();
 }
 #[track_caller]
@@ -185,6 +186,7 @@ pub(super) fn extreme_line(cx: &mut TestAppContext) {
             });
             let caret = view.read_with(&context, |view, _| view.range_to_bounds(&(at..at)).unwrap());
             context.update(|window, cx| {
+                window.pointer_move(caret.center(), None, cx);
                 window.pointer_down(caret.center(), gpui_kit::MouseButton::Left, cx);
                 window.pointer_up(caret.center(), gpui_kit::MouseButton::Left, cx);
             });
@@ -253,7 +255,7 @@ pub(super) fn native_navigation(cx: &mut TestAppContext) {
         previous = next;
     }
     for target in [previous_end.center(), row_start.center()] {
-        context.update(|window, cx| { window.pointer_down(target, MouseButton::Left, cx); window.pointer_up(target, MouseButton::Left, cx); });
+        context.update(|window, cx| { window.pointer_move(target, None, cx); assert_eq!(window.mouse_position(), target, "SDK click uses the moved pointer position"); window.pointer_down(target, MouseButton::Left, cx); window.pointer_up(target, MouseButton::Left, cx); });
         settle(&mut context);
         let before = view.read_with(&context, |view, _| {
             assert_eq!(view.cursor(), wrap_at, "both visual sides resolve to the same source byte");
@@ -279,7 +281,7 @@ pub(super) fn native_navigation(cx: &mut TestAppContext) {
         context.update(|window, cx| window.press("shift-left", cx));
         settle(&mut context);
         view.read_with(&context, |view, _| { assert_eq!(view.selected_range(), wrap_at - 1..wrap_at); assert_eq!(view.range_to_bounds(&(wrap_at..wrap_at)).unwrap().top(), before.top(), "selection anchor retains its boundary side"); });
-        context.update(|window, cx| { window.pointer_down(target, MouseButton::Left, cx); window.pointer_up(target, MouseButton::Left, cx); window.input("Q", cx); });
+        context.update(|window, cx| { window.pointer_move(target, None, cx); window.pointer_down(target, MouseButton::Left, cx); window.pointer_up(target, MouseButton::Left, cx); window.input("Q", cx); });
         context.dispatch_action(gpui_kit::component::input::Undo);
         settle(&mut context);
         view.read_with(&context, |view, cx| { assert_eq!(view.document().read(cx).encode().unwrap(), source.as_bytes()); assert_eq!(view.range_to_bounds(&(wrap_at..wrap_at)).unwrap().top(), before.top(), "input/Undo preserves clicked boundary affinity"); });
@@ -287,7 +289,7 @@ pub(super) fn native_navigation(cx: &mut TestAppContext) {
     view.update_in(&mut context, |view, _, cx| view.select_range(0..0, cx));
     settle(&mut context);
     let target = point(row_start.left() + px(1.), row_start.center().y);
-    context.update(|window, cx| { window.pointer_down(target, MouseButton::Left, cx); window.pointer_up(target, MouseButton::Left, cx); });
+    context.update(|window, cx| { window.pointer_move(target, None, cx); window.pointer_down(target, MouseButton::Left, cx); window.pointer_up(target, MouseButton::Left, cx); });
     settle(&mut context);
     let clicked = view.read_with(&context, |view, _| view.cursor());
     assert!(clicked >= wrap_at && clicked <= wrap_at + 2);
@@ -406,6 +408,7 @@ pub(super) fn native_long_code(cx: &mut TestAppContext) {
     }));
     let position = view.read_with(&context, |view, _| view.range_to_bounds(&(body..body)).unwrap().center());
     context.update(|window, cx| {
+        window.pointer_move(position, None, cx);
         window.pointer_down(position, gpui_kit::MouseButton::Left, cx);
         window.pointer_up(position, gpui_kit::MouseButton::Left, cx);
     });

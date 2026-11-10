@@ -2469,21 +2469,12 @@ impl Element for EditorElement {
             editor.line_height = base_lh;
             editor.font_size = font_size;
             editor.paint_font = Some(font.clone());
-            if editor.content.len() > 2_000_000 && editor.cursor_offset() > 2_000_000 {
-                static OBSERVATIONS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
-                if OBSERVATIONS.fetch_add(1, std::sync::atomic::Ordering::Relaxed) < 12 {
-                    eprintln!("[DEBUG-236-REVEAL] paint state: pending={}, key={:?}, viewport={:?}, offset={:?}, max={:?}, editor={editor:p}", editor.reveal_requested, editor.revealed_caret, editor.scroll.bounds(), editor.scroll.offset(), editor.scroll.max_offset());
-                }
-            }
             if !editor.reveal_requested { return None; }
             let key = (editor.content_gen, editor.cursor_offset(), editor.caret_affinity);
             let caret = editor.range_to_bounds(&(key.1..key.1))?;
             editor.reveal_requested = false;
             editor.revealed_caret = Some(key);
             let viewport = editor.scroll.bounds();
-            if editor.content.len() > 2_000_000 {
-                eprintln!("[DEBUG-236-REVEAL] consume: key={key:?}, caret={caret:?}, bounds={bounds:?}, viewport={viewport:?}, offset={:?}, max={:?}", editor.scroll.offset(), editor.scroll.max_offset());
-            }
             let mut offset = editor.scroll.offset();
             let previous = offset;
             let margin = px(4.);
@@ -2497,15 +2488,10 @@ impl Element for EditorElement {
         });
         if let Some((key, offset)) = reveal {
             let editor = self.editor.clone();
-            if editor.read(cx).content.len() > 2_000_000 { eprintln!("[DEBUG-236-REVEAL] register: key={key:?}, target={offset:?}"); }
             window.on_next_frame(move |_, cx| {
                 editor.update(cx, |editor, cx| {
-                    if editor.content.len() > 2_000_000 {
-                        eprintln!("[DEBUG-236-REVEAL] execute: requested={key:?}, current={:?}, pending={}, target={offset:?}, viewport={:?}, old={:?}, max={:?}, editor={editor:p}", editor.revealed_caret, editor.reveal_requested, editor.scroll.bounds(), editor.scroll.offset(), editor.scroll.max_offset());
-                    }
                     if editor.revealed_caret == Some(key) && !editor.reveal_requested {
                         editor.scroll.set_offset(offset);
-                        if editor.content.len() > 2_000_000 { eprintln!("[DEBUG-236-REVEAL] applied: {:?}", editor.scroll.offset()); }
                         cx.notify();
                     }
                 });
