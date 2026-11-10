@@ -4,6 +4,91 @@
 use super::*;
 
 impl EditorState {
+    /// Insert a table at the current selection. Counts include the header and
+    /// are bounded to the insertion picker's supported 1..=100 dimensions.
+    /// Neighboring bytes are never reformatted; the insertion is one undo step.
+    pub fn insert_table(&mut self, rows: usize, columns: usize, cx: &mut Context<Self>) {
+        self.insert_table_with_style(rows, columns, None, cx);
+    }
+
+    /// Insert dimensions and presentation together as one history transaction.
+    pub fn insert_table_with_style(&mut self, rows: usize, columns: usize, style: Option<&str>, cx: &mut Context<Self>) {
+        if !(1..=100).contains(&rows) || !(1..=100).contains(&columns) {
+            return;
+        }
+        self.finish_composition(cx);
+        let before = self.selected_range.clone();
+        let mut text = String::new();
+        let prefix = &self.content[..before.start];
+        if !prefix.is_empty() && !prefix.ends_with("\n\n") {
+            text.push_str(if prefix.ends_with('\n') { "\n" } else { "\n\n" });
+        }
+        if let Some(style) = style.and_then(zorite_markdown::syntax::TableStyle::from_name)
+            && let Some(marker) = zorite_markdown::syntax::table_marker_text(style, None)
+        {
+            text.push_str(&marker);
+            text.push('\n');
+        }
+        let first_cell = before.start + text.len() + 2;
+        let empty_row = format!("|{}\n", "  |".repeat(columns));
+        text.push_str(&empty_row);
+        text.push('|');
+        for _ in 0..columns {
+            text.push_str(" --- |");
+        }
+        text.push('\n');
+        for _ in 1..rows {
+            text.push_str(&empty_row);
+        }
+        if !self.content[before.end..].starts_with('\n') {
+            text.push('\n');
+        }
+        self.replace_range(before.clone(), &text, cx);
+        self.select_range(first_cell..first_cell, cx);
+        self.set_history_selection(before, first_cell..first_cell, cx);
+        cx.emit(EditorEvent::Changed);
+    }
+
+    /// Whether table commands apply at this presentation's current caret.
+    pub fn has_caret_table(&self) -> bool {
+        self.caret_table_block().is_some()
+    }
+
+    /// Fit the current column to its native shaped content, preserving style.
+    pub fn fit_caret_table_column(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some((_, cell, _)) = self.caret_table_cell_pos() else { return; };
+        let Some(region) = self.caret_table_region() else { return; };
+        self.autofit_table_col(region.lines.start, cell, window, cx);
+    }
+
+    /// Keyboard-accessible counterpart of dragging a column border. Widths use
+    /// the same measured pixels and marker transaction as the native drag.
+    pub fn resize_caret_table_column(&mut self, delta: f32, cx: &mut Context<Self>) {
+        let Some((_, col, _)) = self.caret_table_cell_pos() else { return; };
+        let Some(region) = self.caret_table_region() else { return; };
+        let Some(width) = self.table_rows.get(region.lines.start)
+            .and_then(Option::as_ref).and_then(|row| row.col_widths.get(col)).copied()
+        else { return; };
+        self.commit_table_col_widths(TableColResize {
+            header_row: region.lines.start, col, start_x: px(0.),
+            orig: f32::from(width), width: (f32::from(width) + delta).max(24.),
+        }, cx);
+    }
+
+    /// Native source geometry for a table-cell position. Host anchors and IME
+    /// must use the same shaped cell, padding and alignment as paint/hit-test.
+    pub fn source_bounds(&self, range: &Range<usize>, window: &mut Window) -> Option<Bounds<Pixels>> {
+        let (row, col) = self.row_col(range.start.min(self.content.len()));
+        let Some(table) = self.table_rows.get(row).and_then(Option::as_ref).filter(|table| !table.is_separator) else {
+            return self.range_to_bounds(range);
+        };
+        let bounds = self.last_bounds?;
+        let font = self.paint_font.clone().unwrap_or_else(|| window.text_style().font());
+        let (x, y, _, _) = table_caret_pos(table, col, self.table_left(table, row, &bounds), &font, self.font_size, window)?;
+        let height = self.font_size * LINE_HEIGHT_RATIO;
+        Some(Bounds::new(point(x, bounds.top() + self.line_tops[row] + px(6.) + y), size(px(1.), height)))
+    }
+
     /// The table-affordance region the pointer is in — `(table index, 0 = in the
     /// hover zone / 1 = on the below "+" strip / 2 = on the right "+" strip)`, or
     /// `None` off every table. Drives `on_mouse_move`'s repaint-on-change.
@@ -307,7 +392,9 @@ impl EditorState {
                 Some(Some(nt)) if !nt.is_separator && !nt.cell_ranges.is_empty() => {
                     let tc = cell.min(nt.cell_ranges.len() - 1);
                     let cr = &nt.cell_ranges[tc];
-                    return Some(starts[ru] + cr.start + intra.min(cr.end - cr.start));
+                    let target = starts[ru] + cr.start + intra.min(cr.end - cr.start);
+                    let start = starts[ru] + cr.start;
+                    return Some(start + cell_grapheme_boundary(&self.content[start..starts[ru] + cr.end], target - start));
                 }
                 Some(Some(_)) => r += dir as isize, // separator — skip past it
                 // A non-table row next to the table: exit onto it at the same byte
@@ -888,7 +975,12 @@ impl EditorState {
         let close = (r.end..bytes.len())
             .find(|&i| bytes[i] == b'|')
             .unwrap_or(bytes.len());
-        row_start + (r.start + in_cell).min(close.saturating_sub(1))
+        let target = (r.start + in_cell).min(close.saturating_sub(1));
+        if target < r.start {
+            row_start + line.floor_char_boundary(target)
+        } else {
+            row_start + r.start + cell_grapheme_boundary(&line[r.start..r.end], target - r.start)
+        }
     }
 
     /// Insert an empty column left/right of the caret's column (a cell added to
@@ -955,15 +1047,34 @@ impl EditorState {
             new_rows.push(format!("| {} |", cells.join(" | ")));
         }
         let starts = self.line_starts();
-        let block_start = starts[header];
+        let region = self.caret_table_region().expect("the current table was resolved above");
+        let block_start = starts[region.marker_line.unwrap_or(header)];
         let block_end = self.line_end(end - 1);
-        let new_block = new_rows.join("\n");
+        let mut new_block = new_rows.join("\n");
+        if let Some(marker_row) = region.marker_line {
+            let marker = if let Some(mut widths) = region.col_widths_attr {
+                match edit {
+                    ColEdit::Insert(at) => widths.insert(at.min(widths.len()), 48.),
+                    ColEdit::Delete(at) if at < widths.len() => { widths.remove(at); },
+                    ColEdit::Delete(_) => {},
+                }
+                zorite_markdown::syntax::table_marker_text(region.style, Some(&widths)).unwrap_or_default()
+            } else {
+                self.content[starts[marker_row]..self.line_end(marker_row)].to_string()
+            };
+            new_block = format!("{marker}\n{new_block}");
+        }
         let range = block_start..block_end;
         self.record_edit(&range, &new_block);
         self.replace_source(range.clone(), &new_block, cx);
         self.remap_diagnostics(&range, new_block.len());
         true
     }
+}
+
+fn cell_grapheme_boundary(content: &str, offset: usize) -> usize {
+    content.grapheme_indices(true).map(|(at, _)| at).chain(std::iter::once(content.len()))
+        .take_while(|&at| at <= offset).last().unwrap_or(0)
 }
 
 /// Content-fit column widths for a table region (W4c): each column sized to its
@@ -1323,7 +1434,7 @@ fn cell_offset_for_point(
         ),
         line_h,
     ) {
-        Ok(i) | Err(i) => i,
+        Ok(i) | Err(i) => cell_grapheme_boundary(content, i),
     }
 }
 

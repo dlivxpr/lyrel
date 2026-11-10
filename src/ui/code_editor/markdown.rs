@@ -2,6 +2,7 @@
 use gpui_kit::Context;
 use gpui_kit::component::ActiveTheme as _;
 use lyrel_markdown_editor::{EditorState, SyntaxStyle};
+pub(crate) mod table_code;
 
 pub(super) fn configure(editor: &mut EditorState, cx: &mut Context<EditorState>) {
     let theme = cx.theme();
@@ -37,11 +38,14 @@ pub(super) fn configure(editor: &mut EditorState, cx: &mut Context<EditorState>)
     };
     editor.set_live_style(style.clone(), cx);
     editor.set_markdown_style(style, cx);
+    table_code::configure(editor, cx);
 }
 
 #[cfg(any(test, feature = "native-markdown-tests"))]
 mod foundation;
+#[cfg(any(test, feature = "native-markdown-tests"))]
+mod table_code_tests;
 #[cfg(feature = "native-markdown-tests")]
 pub(crate) fn native_cases() -> impl Iterator<Item = crate::native_markdown::Case> {
-    foundation::native_cases()
+    foundation::native_cases().chain(table_code_tests::native_cases())
 }
