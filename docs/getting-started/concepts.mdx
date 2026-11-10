@@ -547,6 +547,8 @@ node scripts/omp-native-replay.mjs cleanup --root $fixture --lyrel-cli (Resolve-
 
 公开 `models.yml` 的 `auth: none`／`openai-completions` provider 只指向 `127.0.0.1`，仅接受一次指定模型／prompt 的 POST。`scripts/omp-loopback-stream.mjs` 发送预定 SSE token，不编码 PNG、不发送 Kitty、不解析 PTY。一个未闭合的 SVG 先显示红底，再增加右侧绿色；最后闭合围栏，底半部变蓝。每段都等待生产消费者确认后才推进，避免机器快慢吞掉中间修订。两段故意截断的 XML 期间继续检查完整旧像素。逐像素比较全部 BGRA（包括整 cell 的透明 padding）、原生 image ID、完整 crop 覆盖、`z=0` paint claim、周边文字行序及最终整个保留网格无旧放置；不把 Base64、非空输出或进程启动当作图片证据。
 
+此场景只在自有 overlay 设置 `display.smoothStreaming=false`，并通过正式 `omp config get display.smoothStreaming --json` 核对生效。默认 smooth reveal 会把一个完整 SSE delta 再切为逐 grapheme 前缀；在根 `<svg ...>` 已完整、首个 `<rect .../>` 尚未完整时，`closePartialSvg` 合法生成空画布，原消费者会把这张完整透明 PNG 误判成红底修订。关闭的是额外的文字揭示动画，不是 provider token streaming、SVG 的流式修补／节流或 native raster 替换；两个非空完整中间修订与精确最终图仍须分别通过原有全部像素／顺序／旧放置断言。该夹具不据此覆盖默认 smooth reveal 的任意子前缀。
+
 与静态场景的 `zeroInference=true` 不同，streaming 退出审计必须为一次完成的 loopback 请求、恰好新增 user／assistant 两条消息、`loopbackStreaming=true`、`zeroInference=false`。日志仅记录 method／URL／loopback peer／模型和匹配布尔值，不保存请求正文、凭据或私人历史。原有 pictures／budget 场景保持独立重放，全部静态场景仍要求零请求和消息不变；disabled／protocol-off 以及新增的 placeholder-off direct-placement 消费者在 Kitty 兼容身份下检查关闭项仍优先，并核对真实子进程环境。它们不是 live streaming 证据。
 
 在 Windows/macOS 仓库根设置 `LYREL_TEST_OMP` 为正式 `18.18.6` 的绝对路径后，中央串行执行以下命令（本次实现阶段均未运行）：
@@ -561,7 +563,7 @@ cargo test --locked -p lyrel --lib terminal::view::gpui_tests::graphics_consumer
 
 源码中的测试断言不是执行结果。production paint claim 也不是 GPU 最终像素；原生窗口图文对齐、交互以及真实 SSH／远端组合须单独验收。旧版本静态重放的历史通过记录不能计作新身份或 live streaming 通过。
 
-上游接口依据：[正式版本 provider 格式](https://github.com/can1357/oh-my-pi/blob/v18.18.6/docs/models.md)、[原生终端诊断](https://github.com/can1357/oh-my-pi/blob/v18.18.6/packages/tui/src/apps/debug/terminal-info.ts)、[SvgFigure 完整修订替换](https://github.com/can1357/oh-my-pi/blob/v18.18.6/packages/tui/src/chat/svg-figure.ts) 和[原生 SVG 栅格尺寸／透明 padding](https://github.com/can1357/oh-my-pi/blob/v18.18.6/crates/pi-natives/src/svg.rs)。
+上游接口依据：[正式版本 provider 格式](https://github.com/can1357/oh-my-pi/blob/v18.18.6/docs/models.md)、[原生终端诊断](https://github.com/can1357/oh-my-pi/blob/v18.18.6/packages/tui/src/apps/debug/terminal-info.ts)、[smooth reveal 设置](https://github.com/can1357/oh-my-pi/blob/v18.18.6/packages/coding-agent/src/modes/settings.ts)、[逐 grapheme 揭示与关闭后仍保留 transient 更新](https://github.com/can1357/oh-my-pi/blob/v18.18.6/packages/coding-agent/src/modes/controllers/streaming-reveal.ts)、[部分 SVG 修补](https://github.com/can1357/oh-my-pi/blob/v18.18.6/packages/tui/src/chat/svg-source.ts)、[SvgFigure 完整修订替换](https://github.com/can1357/oh-my-pi/blob/v18.18.6/packages/tui/src/chat/svg-figure.ts) 和[原生 SVG 栅格尺寸／透明 padding](https://github.com/can1357/oh-my-pi/blob/v18.18.6/crates/pi-natives/src/svg.rs)。
 
 
 <a id="pi-native-image-replay"></a>
