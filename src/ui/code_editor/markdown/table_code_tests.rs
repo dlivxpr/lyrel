@@ -22,7 +22,7 @@ fn select(view: &Entity<MarkdownEditor>, at: usize, context: &mut VisualTestCont
     });
     settle(context);
 }
-fn click_menu(context: &mut VisualTestContext, trigger: &str, label: L10nKey) {
+fn click_menu(context: &mut VisualTestContext, trigger: &'static str, label: L10nKey) {
     context.update(|window, cx| window.click(trigger, cx));
     settle(context);
     context.update(|window, cx| {

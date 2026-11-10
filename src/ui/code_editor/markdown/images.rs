@@ -743,6 +743,7 @@ pub(crate) fn controls(
     if host.importing {
         surface = surface.child(
             div()
+                .id("markdown-image-writing")
                 .test_support()
                 .role(gpui_kit::Role::Status)
                 .aria_label(t(L10nKey::MarkdownImageWriting))
