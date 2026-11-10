@@ -694,6 +694,7 @@ impl TerminalView {
                 foreground: |view, window, cx| view.poll_foreground(window, cx),
                 detach: |view| {
                     view.grid_snap = None;
+                    view.selection_scroll.clear_scrollback();
                     view.terminal.detach_link();
                 },
             },
@@ -977,6 +978,7 @@ impl TerminalView {
         self.grid_snap = None;
         self.grid_buf.clear();
         self.selection_scroll.clear_presented();
+        self.selection_scroll.clear_scrollback();
         self.relink_abandoned = false;
         self.relink_inflight = false;
         self.title = self.default_title.clone();
@@ -1595,7 +1597,7 @@ impl TerminalView {
     /// Clear presentation without discarding retained history or restarting
     /// the process. Only a live pane receives Ctrl+L through its own transport.
     pub fn clear_screen(&mut self, cx: &mut Context<Self>) {
-        self.selection_scroll.cancel_animation();
+        self.jump_to_prompt();
         if self.terminal.clear_presentation(false) {
             self.terminal.write(vec![0x0c_u8]);
         }
@@ -1603,7 +1605,7 @@ impl TerminalView {
     }
 
     pub fn clear_scrollback(&mut self, cx: &mut Context<Self>) {
-        self.selection_scroll.clear_scrollback();
+        self.jump_to_prompt();
         if self.terminal.clear_presentation(true) {
             self.terminal.write(vec![0x0c_u8]);
         }
@@ -2021,6 +2023,8 @@ impl TerminalView {
             return false;
         };
         if term.synchronized_output() {
+            self.selection_scroll
+                .invalidate_reading(&mut term, &self.terminal);
             // Render facts belong to the same committed picture as the cells.
             // Keyboard/mouse protocol routing still consults the live terminal.
             return true;
@@ -3167,6 +3171,7 @@ mod gpui_tests {
     include!("native_ssh_consumer_tests.rs");
     include!("lifecycle_consumer_tests.rs");
     include!("reading_consumer_tests.rs");
+    include!("reading_lifecycle_consumer_tests.rs");
 
     #[gpui_kit::test]
     fn graphics_consumer_streamed_png_and_compression_render_after_rejected_transfer(

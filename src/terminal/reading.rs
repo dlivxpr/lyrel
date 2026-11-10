@@ -43,6 +43,9 @@ struct ReadingNeeds {
 
 pub(super) struct ReadingView {
     identity: u64,
+    generation: u64,
+    last_live_start: i64,
+    last_oldest: i64,
     top: i64,
     captured_live_start: i64,
     cols: usize,
@@ -68,6 +71,9 @@ impl ReadingView {
         static NEXT_ID: AtomicU64 = AtomicU64::new(1);
         let mut reading = Self {
             identity: NEXT_ID.fetch_add(1, Ordering::Relaxed),
+            generation: presentation.reading_generation,
+            last_live_start: live,
+            last_oldest: term.grid.lines_evicted() as i64,
             top: live - term.display_offset() as i64,
             captured_live_start: live,
             cols: term.columns(),
@@ -276,6 +282,19 @@ impl ReadingView {
         CommittedImages::new(images)
     }
 
+    pub(super) fn belongs_to(&self, generation: u64) -> bool {
+        self.generation == generation
+    }
+
+    /// Hidden panes keep bounded semantic text, but surrender every derived
+    /// pixel lease. Existing rows are first-write-wins, so showing the pane or
+    /// resizing later cannot reacquire a released resource under the same row.
+    pub(super) fn release_images(&mut self) {
+        for row in self.rows.values_mut() {
+            row.images = CommittedImages::default();
+        }
+    }
+
     pub(super) fn distance<T: EventListener>(&self, term: &Crosswords<T>) -> usize {
         (live_start(term) - self.top).max(0) as usize
     }
@@ -288,11 +307,17 @@ impl ReadingView {
             pending.sync_offset(term);
             return true;
         }
-        if live < self.captured_live_start {
+        let oldest = term.grid.lines_evicted() as i64;
+        if term.columns() == self.cols && term.screen_lines() == self.captured_rows
+            && (live < self.last_live_start || oldest < self.last_oldest)
+        {
             return false;
         }
+        self.last_live_start = live;
+        self.last_oldest = oldest;
         self.top = self.top.clamp(term.grid.lines_evicted() as i64, live);
-        let oldest = term.grid.lines_evicted() as i64;
+        // Eviction is not a new generation: retain surviving content, but
+        // permanently discard rows and leases before the new oldest row.
         while self
             .rows
             .first_key_value()
