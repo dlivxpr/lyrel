@@ -1,6 +1,6 @@
 //! Formula workflow owned by Lyrel, not by the upstream GPL application.
 use crate::ui::{
-    host_ops::HostOps,
+    host_ops::{Host as _, HostOps},
     i18n::{L10nKey, t},
 };
 use gpui_kit::component::{ActiveTheme as _, native_menu::NativeMenu};
@@ -584,9 +584,9 @@ fn export(action: ExportFormula, cx: &mut App) {
                     } else {
                         render::render_latex_to_png(&action.latex, 32., 2.)
                     };
-                    std::fs::write(
-                        path,
-                        bytes.ok_or_else(|| std::io::Error::other("formula render failed"))?,
+                    lyrel_core::host::local::LocalHost::new().write_file(
+                        &path,
+                        &bytes.ok_or_else(|| std::io::Error::other("formula render failed"))?,
                     )
                 })
                 .await
