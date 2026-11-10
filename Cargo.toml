@@ -25,6 +25,12 @@ path = "tests/native_markdown.rs"
 harness = false
 required-features = ["native-markdown-tests"]
 
+[[test]]
+name = "native_terminal"
+path = "tests/native_terminal.rs"
+harness = false
+required-features = ["native-markdown-tests"]
+
 [target.'cfg(any(target_os = "macos", target_os = "windows"))'.dependencies]
 # The framework-free half of lyrel: wire protocol, session daemon, PTY, the
 # native SSH engine, and the domain model the headless `lyrel-server` shares with

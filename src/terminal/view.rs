@@ -2921,6 +2921,10 @@ pub(crate) fn quiet_test_ssh_pane_with(
 #[path = "agent_activity_tests.rs"]
 mod agent_activity_tests;
 
+#[cfg(feature = "native-markdown-tests")]
+#[path = "native_terminal_tests.rs"]
+pub(crate) mod native_terminal_tests;
+
 #[cfg(test)]
 mod gpui_tests {
     use super::test_support::*;
