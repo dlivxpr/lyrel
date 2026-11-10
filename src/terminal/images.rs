@@ -1099,36 +1099,71 @@ impl ImageStore {
         &self,
         rows: &[(i32, Vec<PlaceholderSlice>)],
     ) -> Vec<RenderPlacement> {
-        self.snapshot_placements(rows, false, None)
+        self.snapshot_placements(rows, false)
     }
 
     pub(super) fn commit_with_placeholders(
         &self,
         rows: &[(i32, Vec<PlaceholderSlice>)],
     ) -> CommittedImages {
-        CommittedImages::new(self.snapshot_placements(rows, true, None))
+        CommittedImages::new(self.snapshot_placements(rows, true))
     }
 
-    /// Each frozen text row owns exactly its image slices and existing leases.
-    /// Direct placements are clipped to that row, so lazy capture and history
-    /// eviction cannot retain or paint a slice belonging to a different row.
-    pub(super) fn commit_reading_row(
+    /// Capture sorted requested rows in one store transaction. Iterate direct
+    /// placements once, and resolve only intersections; never pin a whole-store
+    /// snapshot while a large selection walks its semantic rows.
+    pub(super) fn commit_reading_rows(
         &self,
-        line: i32,
-        slices: &[PlaceholderSlice],
-    ) -> CommittedImages {
-        CommittedImages::new(self.snapshot_placements(&[(0, slices.to_vec())], true, Some(line)))
+        local_origin: i64,
+        rows: &[(i32, Vec<PlaceholderSlice>)],
+    ) -> BTreeMap<i32, CommittedImages> {
+        let inner = self.0.state.lock().unwrap();
+        let mut captured: BTreeMap<i32, Vec<RenderPlacement>> = BTreeMap::new();
+        Self::collect_placements(&inner, rows, true, Some(local_origin), |row, image| {
+            captured.entry(row).or_default().push(image);
+        });
+        captured
+            .into_iter()
+            .map(|(row, mut images)| {
+                images.sort_unstable_by_key(|image| {
+                    (
+                        image.placement.z,
+                        image.placement.image_id,
+                        image.placement.key,
+                    )
+                });
+                (row, CommittedImages::new(images))
+            })
+            .collect()
     }
 
     fn snapshot_placements(
         &self,
         rows: &[(i32, Vec<PlaceholderSlice>)],
         committed: bool,
-        reading_line: Option<i32>,
     ) -> Vec<RenderPlacement> {
         let inner = self.0.state.lock().unwrap();
+        let mut images = Vec::new();
+        Self::collect_placements(&inner, rows, committed, None, |_, image| images.push(image));
+        images.sort_unstable_by_key(|image| {
+            (
+                image.placement.z,
+                image.placement.image_id,
+                image.placement.key,
+            )
+        });
+        images
+    }
+
+    fn collect_placements(
+        inner: &StoreInner,
+        rows: &[(i32, Vec<PlaceholderSlice>)],
+        committed: bool,
+        reading_origin: Option<i64>,
+        mut emit: impl FnMut(i32, RenderPlacement),
+    ) {
         if committed && !inner.viewport_known {
-            return Vec::new();
+            return;
         }
         let render = |anchored: &AnchoredPlacement, placeholder| {
             let root = inner.resources.get(&anchored.placement.resource)?;
@@ -1169,29 +1204,41 @@ impl ImageStore {
                 _metadata: (resource.metadata.clone(), anchored.metadata.clone()),
             })
         };
-        let mut images: Vec<_> = inner
-            .placements
-            .values()
-            .filter(|anchored| {
-                anchored.placement.screen == inner.screen
-                    && !anchored.placement.virtual_placement
-                    && !anchored.placement.unresolved
-            })
-            .filter_map(|anchored| {
-                let mut image = render(anchored, None)?;
-                if let Some(line) = reading_line {
-                    let start = inner.history_origin + i64::from(line) - image.anchor_row;
-                    let top = i64::from(image.placement.clip_top).max(start);
-                    let bottom = i64::from(image.placement.clip_bottom).min(start + 1);
-                    if top >= bottom {
-                        return None;
-                    }
-                    image.placement.clip_top = top as u32;
-                    image.placement.clip_bottom = bottom as u32;
+        for anchored in inner.placements.values().filter(|anchored| {
+            anchored.placement.screen == inner.screen
+                && !anchored.placement.virtual_placement
+                && !anchored.placement.unresolved
+        }) {
+            if let Some(local_origin) = reading_origin {
+                let origin = inner.history_origin + local_origin - inner.local_origin;
+                let start = anchored.placement.anchor_row - origin;
+                let first = start + i64::from(anchored.placement.clip_top);
+                let last = start + i64::from(anchored.placement.clip_bottom);
+                let from = rows.partition_point(|(line, _)| i64::from(*line) < first);
+                let to = rows.partition_point(|(line, _)| i64::from(*line) < last);
+                if from == to {
+                    continue;
                 }
-                Some(image)
-            })
-            .collect();
+                let Some(mut image) = render(anchored, None) else {
+                    continue;
+                };
+                image.history_origin = origin;
+                let mut image = Some(image);
+                for (ix, (line, _)) in rows[from..to].iter().enumerate() {
+                    let mut slice = if ix + 1 == to - from {
+                        image.take().unwrap()
+                    } else {
+                        image.as_ref().unwrap().clone()
+                    };
+                    let row = (i64::from(*line) - start) as u32;
+                    slice.placement.clip_top = row;
+                    slice.placement.clip_bottom = row + 1;
+                    emit(*line, slice);
+                }
+            } else if let Some(image) = render(anchored, None) {
+                emit(0, image);
+            }
+        }
         for (row, slices) in rows {
             for slice in slices {
                 let Some(prototype) = placeholder_prototype(
@@ -1206,20 +1253,15 @@ impl ImageStore {
                 }
                 let mut slice = slice.clone();
                 slice.run.width = slice.run.width.min(prototype.span_cols - slice.run.col);
-                if let Some(image) = render(&inner.placements[&prototype.key], Some((*row, slice)))
-                {
-                    images.push(image);
+                let viewport_row = if reading_origin.is_some() { 0 } else { *row };
+                if let Some(image) = render(
+                    &inner.placements[&prototype.key],
+                    Some((viewport_row, slice)),
+                ) {
+                    emit(*row, image);
                 }
             }
         }
-        images.sort_unstable_by_key(|image| {
-            (
-                image.placement.z,
-                image.placement.image_id,
-                image.placement.key,
-            )
-        });
-        images
     }
 
     #[cfg(test)]

@@ -225,9 +225,19 @@ Git 的新增/修改标记种子为绿 `#2F8A52` / `#4CC27A`、琥珀 `#B7791F` 
 阅读历史时，`ReadingView` 将语义单元与同一行的图片切片一起首次捕获；切片借用既有像素、
 资源及 metadata lease，不复制像素，也不在后续绘制时按图片 ID 重新解析实时资源。
 直接放置按行裁切，占位符保留捕获时的 prototype／资源身份；两者均随阅读锚点重投影，
-包括前一行的小数滚动切片。实时擦除、同 ID 重传与删除不改变已捕获行；历史淘汰或
-返回实时视口时释放对应行的 lease，atlas 仍经既有退休路径回收。阅读状态不阻塞 PTY
-解析，也不改变 daemon 的权威资源生命周期。
+包括前一行的小数滚动切片，并使用与 viewport 上报一致的 daemon／GUI origin 转换。
+实时擦除、同 ID 重传与删除不改变已捕获行；最初活动屏幕之外仅保留当前视口／sliver、
+链接所需的有界换行上下文及选择跨越的必要行。滚出且不再需要的历史行立即退役，
+历史淘汰或返回实时输出释放
+对应 lease，atlas 仍经既有退休路径回收，不恢复 stale identity，也不阻塞 PTY 解析。
+选择的绝对行区间与绘制、跨视口复制共用语义行，Tab stops 随行捕获；复制只借用字符
+与 marks，不临时复制一份 styled cells。链接的语义适配器可访问已保留的视口外前缀，
+几何 identity 不随 Rio 的后台 offset 补偿失效；搜索用冻结语义行覆盖 live matches，
+按绝对 origin（含已淘汰历史）投影，源身份不匹配时不画标注。视口移动复用绝对匹配，
+只在查询／语义集合变化时重扫，冻结行的正则处理不持实时 grid guard。主题重新解析，
+阅读不显示 live caret／IME。新增行的图片 lease 在一个 store transaction 中批量裁切，
+直接 placements 只遍历一次，不逐行重复扫描整个 store。
+这些长期阅读状态与 synchronized frame 的 acquisition／committed lease 生命周期分离。
 
 绘制回归按颜色、snapshot、文字与装饰分组，小型 fixture 位于 `element/test_support.rs`；
 真实终端与 graphics consumer 继续从既有窗口 seam 验证。
