@@ -33,4 +33,5 @@ if Path(image).name == "image-1.png":
 from tui_gateway import server
 response = server.handle_request(request)
 assert response is not None and "error" not in response, response
-print(json.dumps(response))
+# Importing server redirects sys.stdout to stderr; only its transport owns RPC stdout.
+assert server.write_json(response), "Native gateway failed to write its image.render response"
