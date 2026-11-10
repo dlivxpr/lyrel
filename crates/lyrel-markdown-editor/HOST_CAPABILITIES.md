@@ -11,6 +11,7 @@
 - `lyrel_markdown_editor::Document` 独占文档身份、LF/UTF-8 原文、逐行原始行尾、格式策略、history 与单调 revision。
 - `EditorState` 是 presentation：选择、方向、focus、scroll、marked range、layout/geometry cache 都独立。其 `Arc<String>` 是当前不可变 revision 快照，不是第二份可编辑权威。普通编辑不以 `set_text` 或整篇 diff 同步其他视图。
 - caret reveal 由当前 presentation 的显式选择/跳转、键盘移动、本地输入与 Undo/Redo 请求；不依赖当时键盘焦点，不由其他 view/Host 的文档通知自动请求。同一 source wrap-boundary byte 可是上一视觉行末或下一行首；caret 与 selection anchor 的 affinity 只归该 presentation，pointer/Down/Up、selection、popup/IME bounds 共用该状态，普通 link/range 映射不全局改为 downstream。native 门禁须实际验证两侧指针、往返导航、输入/Undo 和非聚焦 go-to 的滚动隔离；源码修复不等于验收通过。
+- 屏外 shaping 可用空占位保留行高，但当前 caret 所在的逻辑行始终保留真实 shaping，即使 presentation 没有焦点；否则非零列的 `range_to_bounds` 为 `None`，go-to 只更新源坐标而不能滚动。此几何需求不改变非聚焦 view 的 caret-local marker 显露规则，亦不强制全篇 shaping。native navigation 覆盖 source 跳转，以及 live 下的非聚焦屏外非空行跳转。
 - 工作台的 native Markdown body 在 leading edge 为现有 shell resize hitbox 预留 `RESIZE_HANDLE_WIDTH / 2`；使真实首列 caret 不与 dock 抓手重叠，不移动测试指针、不缩小 resize target，也不把此输入安全间隔称为 #244 的最终参考排版。
 - 所有源文变更和 Undo/Redo 发出 `DocumentEvent`。`edits()` 按实际应用顺序给出每一步 LF/UTF-8 range、removed、inserted；后一条 range 基于前一条已经应用的文本。消费者仅应用更新的 revision。
 - 初始加载/外部重载明确调用 `Document::new` / `reload`；不是普通编辑协议。加载不整理公式、不补换行、不重写未知构造。

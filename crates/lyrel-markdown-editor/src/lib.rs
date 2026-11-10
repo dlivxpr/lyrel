@@ -7272,6 +7272,7 @@ pub(crate) struct ScanData {
 struct ShapeMemo {
     wrap_width: Option<Pixels>,
     caret_row: Option<usize>,
+    geometry_row: usize,
     selection: (usize, usize),
     font_size: Pixels,
     shaped: ShapedDoc,

@@ -759,6 +759,29 @@ pub(super) fn native_navigation(cx: &mut TestAppContext) {
         second.read_with(context, |view, _| view.scroll_offset().y < px(0.))
     });
     let other_scroll = second.read_with(&context, |view, _| view.scroll_offset());
+    view.update_in(&mut context, |view, _, cx| view.toggle_mode(cx));
+    settle(&mut context);
+    view.read_with(&context, |view, _| assert!(view.is_live()));
+    let tail = source.len() - 1;
+    view.update_in(&mut context, |view, _, cx| {
+        view.select_range(tail..tail, cx)
+    });
+    until_state(
+        &mut context,
+        "unfocused offscreen nonempty line is revealed",
+        |context| {
+            context.update(|window, cx| {
+                let view = view.read(cx);
+                let caret = view.range_to_bounds(&(tail..tail));
+                (
+                    caret.is_some_and(|caret| {
+                        caret.top() >= px(0.) && caret.bottom() <= window.viewport_size().height
+                    }),
+                    (caret, view.scroll_offset()),
+                )
+            })
+        },
+    );
     view.update_in(&mut context, |view, _, cx| {
         view.select_range(source.len()..source.len(), cx)
     });

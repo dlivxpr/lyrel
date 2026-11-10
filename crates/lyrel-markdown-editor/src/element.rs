@@ -165,7 +165,8 @@ impl Element for EditorElement {
                 // Sum of per-line (variable) heights × each line's wrap rows.
                 // Reveal-on-caret applies only while focused (matches prepaint).
                 let focused = editor.focus_handle.is_focused(window);
-                let caret_row = focused.then(|| editor.row_col(editor.cursor_offset()).0);
+                let geometry_row = editor.row_col(editor.cursor_offset()).0;
+                let caret_row = focused.then_some(geometry_row);
                 let selection = if focused {
                     (editor.selected_range.start, editor.selected_range.end)
                 } else {
@@ -184,6 +185,7 @@ impl Element for EditorElement {
                     wrap_width,
                     editor.soft_wrap,
                     caret_row,
+                    geometry_row,
                     editor.block_image.as_ref(),
                     editor.block_chip.as_ref(),
                     editor.embed_view.as_ref(),
@@ -305,6 +307,7 @@ impl Element for EditorElement {
                 *editor.shape_memo.borrow_mut() = Some(ShapeMemo {
                     wrap_width,
                     caret_row,
+                    geometry_row,
                     selection,
                     font_size,
                     shaped,
@@ -347,7 +350,8 @@ impl Element for EditorElement {
 
         // Placeholder (uniform) when empty; else shape per line so headings get
         // their own taller rows (W2) and image lines render inline (W4).
-        let caret_row = focused.then(|| editor.row_col(editor.cursor_offset()).0);
+        let geometry_row = editor.row_col(editor.cursor_offset()).0;
+        let caret_row = focused.then_some(geometry_row);
         let selection = if focused {
             (editor.selected_range.start, editor.selected_range.end)
         } else {
@@ -359,6 +363,7 @@ impl Element for EditorElement {
         let memo = editor.shape_memo.borrow_mut().take().filter(|m| {
             m.wrap_width == wrap_width
                 && m.caret_row == caret_row
+                && m.geometry_row == geometry_row
                 && m.selection == selection
                 && m.font_size == font_size
         });
@@ -411,6 +416,7 @@ impl Element for EditorElement {
                 wrap_width,
                 editor.soft_wrap,
                 caret_row,
+                geometry_row,
                 editor.block_image.as_ref(),
                 editor.block_chip.as_ref(),
                 editor.embed_view.as_ref(),
@@ -2838,6 +2844,8 @@ fn shape_document(
     wrap_width: Option<Pixels>,
     soft_wrap: bool,
     caret_row: Option<usize>,
+    // The caret needs precise geometry even while unfocused or outside the shaping band.
+    geometry_row: usize,
     block_image: Option<&BlockImageFn>,
     block_chip: Option<&BlockChipFn>,
     embed_view: Option<&EmbedViewFn>,
@@ -3767,7 +3775,8 @@ fn shape_document(
                 Some(m) => wrap_width.map(|w| (w - m.inset()).max(px(0.))),
                 None => wrap_width,
             };
-            let skip_key = (!line.contains('$')
+            let skip_key = (idx != geometry_row
+                && !line.contains('$')
                 && !line.contains("![")
                 && !collapse_fence
                 && !collapse_marker)
