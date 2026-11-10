@@ -137,6 +137,10 @@ impl GraphicsDaemonProcess {
     }
 
     fn spawn(&self) -> u64 {
+        self.spawn_with_cwd(None)
+    }
+
+    fn spawn_with_cwd(&self, cwd: Option<std::path::PathBuf>) -> u64 {
         use crate::daemon::protocol::{ShellSpec, WinSize};
         let shell = ShellSpec {
             program: std::env::current_exe().unwrap().to_str().unwrap().into(),
@@ -156,7 +160,7 @@ impl GraphicsDaemonProcess {
         let mut session = self
             .panes()
             .spawn(
-                None,
+                cwd,
                 WinSize {
                     cols: 80,
                     rows: 24,
