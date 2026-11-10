@@ -346,10 +346,9 @@ fn connecting_agent_environment(cx: &mut TestAppContext, mapped: bool) {
     let (app, mut vcx, _original_stream) = test_window::harness_with_pane(cx);
     let (waiting, parts, mut daemon) = app.update_in(&mut vcx, |app, window, cx| {
         let cfg = cx.global_mut::<crate::core::config::Config>();
-        cfg.shell = Some(crate::daemon::protocol::ShellSpec {
+        cfg.shell = Some(crate::core::config::ShellConfig {
             program: shell.into(),
             args: Vec::new(),
-            args_are_lyrel_defaults: false,
         });
         if mapped {
             cfg.agent_commands
