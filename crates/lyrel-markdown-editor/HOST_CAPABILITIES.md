@@ -2,7 +2,7 @@
 
 ## 当前交付边界
 
-本清单描述 #236 集成源码的生产入口与验收合同，不是验收通过声明。`.md`/`.markdown` 只有 Zorite-derived 默认即时编辑路线，`.mdx` 为 source-only；没有旧 WYSIWYG fallback、双编辑器设置或兼容旧投影的测试内核。#237—#244 的共享文档、写作、资源与文件生命周期均已接入；#245 的最终构建、完整 native runner、系统 IME、真实 SSH、同条件 Release 对照与产品接受仍须分别记录，不从源码交付推定通过。
+本清单描述 #236 集成源码的生产入口与验收合同。`.md`/`.markdown` 只有 Zorite-derived 默认即时编辑路线，`.mdx` 为 source-only；没有旧 WYSIWYG fallback、双编辑器设置或兼容旧投影的测试内核。#237—#244 的共享文档、写作、资源与文件生命周期均已接入；下文分票交接中的“尚待执行”描述当时的源码交付边界，不覆盖后续集成者的实际结果。最终无探针 Windows 产品、完整 native、真实 SSH／系统 IME、平台／分发与负责人接受边界统一记录在 `docs/window/side-panel.mdx` 的“#236 最终集成验收与负责人接受边界”；未验证组合仍不计通过。
 
 源码基准固定为 [Zorite `9f069c73a56b06efc84fb7abb700beb50083c827`](https://github.com/packetThrower/zorite/tree/9f069c73a56b06efc84fb7abb700beb50083c827)。原始 16 文件摘要、版本和适配范围见 `UPSTREAM.toml`；摘要对应 pinned Git blob，不是本地适配文件的摘要。MIT 原文见 `licenses/` 与分发根 `LICENSE`。导入限于 editor/bidi/ratex-gpui，不包含 GPL 应用编排；`zorite-markdown =0.10.1` 仍是关闭默认 view feature 的 registry 语法依赖。GPUI 只经 `gpui-kit` 的 Fast 类型，不建立第二个 GUI runtime。
 

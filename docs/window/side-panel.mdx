@@ -254,6 +254,26 @@ primary/secondary 各自拥有 seat/focus/candidate/layout，只共享 Document�
 
 这部分是生产源码与消费者的交付契约，不是新功能已通过实窗或真实SSH的声明。完整native runner、本地／真实SSH附件保存与独立远端读回、同名本地诱饵、预览／resize／主题缩放仍须由集成候选记录实际命令、结果与平台；历史#204记录不转移。
 
+#### #236 最终集成验收与负责人接受边界
+
+无探针 Windows Release 产品固定为 `fcdc7c8a02d69b482eb9417844250550d6d9eff9`，`lyrel-app.exe` 的 SHA-256 为 `7682b82bfa2425cbb98956fd1d4c9d9d9cba59863d876355b1ba5e4354322629`。以下为新实现的证据，不继承 #204 或 #237 的历史通过结论。
+
+| 验收面 | 实际结果与限制 |
+| --- | --- |
+| 完整产品负载 | 普通文档 `1,092 B`、长文 `722,100 B`、48 列／64 正文行宽表 `88,987 B`、原始资源文档 `3,768 B` 均执行真实输入、保存及完整 100 项 Undo／Redo／Undo，独立文件读回确认原文全部恢复；未截断、缩短历史、关闭资源或强制源码模式。 |
+| 宽表指针 | 在独立横向滚动区域到达末列，点击 `R0 C47` 与 `R63 C47` 的可见字形、输入并保存；只有对应单元格增加目标字符，一次 Undo 精确恢复。 |
+| 本地资源 | 原始资源文档保留全部图片与公式，实际打开图片预览、缩放、关闭并滚至完整文档末尾；资源负载的 100 项历史和精确保存仍有效。 |
+| 真实 SSH | 隔离 `127.0.0.1:22360` 的 owning Host 完成 `95 B` UTF-8 BOM／混合行尾文档的编辑、保存、关闭和文件树重开，完整原件已恢复。图片预览／缩放、拖动宽度后保存与一次 Undo、普通单击同 Host 相对链接、公式正文提交和 Mermaid 节点修改均有独立 SSH 字节读回。 |
+| 系统中文 IME | 最终产品的真实 SSH 文档以物理键 `ni'hao` 调出系统候选，提交“你好”并精确保存；一次 Undo 恢复完整原文。物理键 `zhongwen` 预编辑取消不改源文。Windows `type` 文本注入不计入此项，前台控制已释放。 |
+| Windows 自动回归 | `cargo test --locked --workspace --all-features -j1` 成功，包含 desktop library `2906 passed / 29 ignored` 和全部 `35` 项 OS 主线程真实字体消费者，native 无 ignored／filter；独立 editor crate、codec、CLI、core 和 updater 同在 workspace 选择中。ignored 不计为实际运行。 |
+| Linux headless | 排除 `lyrel` 与 `lyrel-markdown-editor` 的完整 features build/test 和 x86_64 musl 静态断言通过。Docker 不可用，实际回退 WSL，使用 Linux Node `22.22.1`，未以 Windows Node 或跳过 Pi 桥用例代替。 |
+| 固定参考与平台 | 固定 Zorite Release 的同源文档、折叠、任务、公式、宽表及主题／字号／窄窗有实际操作记录；参考自身的 IME／完整历史异常保留，不复制到 Lyrel。首次 hosted CI 的 Windows、Linux 与两平台构建／打包通过，macOS native 为 `34 passed / 1 failed`，原因是颜色消费者误用 `Ctrl+A`；修正为 `secondary-a` 后单独复验，不放宽颜色或历史断言。 |
+| 许可证分发 | 本地实际 Windows ZIP 与 Inno 输入 payload 的完整 `LICENSE.txt` 均等于根 `LICENSE`；ZIP 和 setup 已生成但未安装、签名或发布。hosted macOS app／ZIP／DMG 打包通过不等于 macOS 产品实窗或系统 IME 通过。 |
+
+长文 100 次结构编辑期间，整应用 private bytes 从 `183.6 MiB` 增至 `306.6 MiB`；保留上游整串历史，数据不是历史独占内存或峰值。固定参考同阶段约 `178.2 → 258.3 MiB`，但其输入落地与历史不完整、布局不同，不能据此宣称严格回归比例、input-to-paint 或 Zorite 不劣性。负责人已明确接受当前完整负载的核心可用性、历史内存成本和这些测量限制；不要求用截断或关闭功能降低数字。
+
+仓库外证据入口为 `C:/Users/dlivx/AppData/Local/Temp/lyrel-236/` 下的 `final-product-workloads.json`、`final-product-ssh-and-ime.json`、`final-owner-acceptance.json`、`final-paired-fixture-identities.json`、`final-reference-surface-236.json`、`integrated-windows-workspace.log`、`integrated-linux-tests.log` 和 `package-final-fcdc7c8a/package-evidence.json`。首次完整 hosted run 为 [42827800654](https://github.com/dlivxpr/lyrel/actions/runs/42827800654)，颜色快捷键修正及最终文档提交后的状态由 [PR #246 的 checks](https://github.com/dlivxpr/lyrel/pull/246/checks) 按精确 commit 记录。实际工具失败、初次断言失败和不匹配参考均保留，不回填为成功；macOS 产品实窗、系统 IME、实际安装和完整跨平台交互组合仍未验证。本轮只交付集成分支与可审查 PR，不自动合并或发布。
+
 
 
 #### 历史 #204 支持范围与文本布局保护
