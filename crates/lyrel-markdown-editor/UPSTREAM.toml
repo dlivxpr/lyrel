@@ -13,6 +13,8 @@ formula_import_owner = "#241"
 # 独立 presentation/IME/layout；有序 range-edit 通知；LF 坐标与逐行原始表示；
 # 移除加载时公式规范化；保留超长 nowrap 行有界视觉布局；未配置 Host 控件不伪装可用。
 # prepaint 复用当前行索引；viewport band 变化时按需补帧，避免远跳后的可见正文保持空白。
+# #240：foreign selection rebase 发出可观察事件；已退役 IME lease 拒绝迟到失焦 callback，
+# unmark 仅结束自己的 lease，仍有效的失焦提交不被拒绝。
 # document.rs、presentation.rs 为 Lyrel 原创适配；文件 codec 属于独立 Apache-2.0 lyrel-text。
 # #239：表格插入与样式原子history、cell Unicode/IME几何、列宽metadata随增删迁移；
 # code语言仅替换token并保留fence metadata，高亮provider读取当前App主题。

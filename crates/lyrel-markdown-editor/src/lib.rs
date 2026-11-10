@@ -782,6 +782,8 @@ pub struct EditorState {
     selection_reversed: bool,
     /// IME composition range, if any.
     marked_range: Option<Range<usize>>,
+    /// A finished lease cannot accept delayed native callbacks after focus handoff.
+    retired_composition: bool,
     /// Host-supplied clipboard writer for Copy/Cut (e.g. adding an HTML
     /// flavor beside the plain text). `None` = gpui's plain-string copy.
     clipboard_writer: Option<ClipboardWriter>,
@@ -1088,6 +1090,7 @@ impl EditorState {
                     return;
                 }
                 if event.origin() != Some(cx.entity_id()) {
+                    let selection = this.selected_range.clone();
                     this.diagnostics.clear();
                     for edit in event.edits() {
                         for selection in &mut this.extra_selections {
@@ -1097,8 +1100,12 @@ impl EditorState {
                         this.selected_range = edit.map_offset(this.selected_range.start)
                             ..edit.map_offset(this.selected_range.end);
                     }
+                    this.retired_composition |= this.marked_range.is_some();
                     this.marked_range = None;
                     this.last_edit = EditKind::Other;
+                    if this.selected_range != selection {
+                        cx.emit(EditorEvent::SelectionChanged);
+                    }
                 }
                 this.content = event.snapshot().text_handle();
                 this.content_gen = event.revision();
@@ -1126,6 +1133,7 @@ impl EditorState {
             extra_selections: Vec::new(),
             selection_reversed: false,
             marked_range: None,
+            retired_composition: false,
             clipboard_writer: None,
             search: None,
             wrapped: Vec::new(),
@@ -5326,16 +5334,25 @@ impl EntityInputHandler for EditorState {
     }
 
     fn unmark_text(&mut self, _: &mut Window, cx: &mut Context<Self>) {
-        self.finish_composition(cx);
+        if self.document.read(cx).composition_owner()
+            .is_some_and(|owner| owner.entity_id() == cx.entity_id())
+        {
+            self.finish_composition(cx);
+        }
     }
 
     fn replace_text_in_range(
         &mut self,
         range_utf16: Option<Range<usize>>,
         new_text: &str,
-        _: &mut Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.retired_composition && !self.focus_handle.is_focused(window) {
+            return;
+        }
+        self.retired_composition = false;
+        let completing_composition = self.marked_range.is_some();
         if range_utf16.is_none() && self.marked_range.is_none() && !self.extra_selections.is_empty()
         {
             self.replace_occurrences(new_text, cx);
@@ -5352,6 +5369,7 @@ impl EntityInputHandler for EditorState {
             (range.start < range.end).then(|| self.content[range.clone()].to_string());
         self.record_edit(&range, new_text);
         self.replace_source(range.clone(), new_text, cx);
+        self.retired_composition = completing_composition;
         let caret = range.start + new_text.len() - new_text.matches("\r\n").count();
         self.selected_range = caret..caret;
         self.selection_reversed = false;
@@ -5372,9 +5390,13 @@ impl EntityInputHandler for EditorState {
         range_utf16: Option<Range<usize>>,
         new_text: &str,
         new_selected_range_utf16: Option<Range<usize>>,
-        _: &mut Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.retired_composition && !self.focus_handle.is_focused(window) {
+            return;
+        }
+        self.retired_composition = false;
         let range = range_utf16
             .as_ref()
             .map(|r| self.range_from_utf16(r))

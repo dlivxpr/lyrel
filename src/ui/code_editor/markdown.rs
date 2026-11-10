@@ -47,5 +47,14 @@ mod foundation;
 mod table_code_tests;
 #[cfg(feature = "native-markdown-tests")]
 pub(crate) fn native_cases() -> impl Iterator<Item = crate::native_markdown::Case> {
-    foundation::native_cases().chain(table_code_tests::native_cases())
+    foundation::native_cases().chain(table_code_tests::native_cases()).chain([
+        crate::native_markdown::Case::new(
+            "ui::code_editor::workbench_views::shared_context_and_ime_handoff",
+            super::document_input::workbench_views::shared_context_and_ime_handoff,
+        ),
+        crate::native_markdown::Case::new(
+            "ui::code_editor::workbench_views::focused_consumers_and_layout",
+            super::document_input::workbench_views::focused_consumers_and_layout,
+        ),
+    ])
 }
