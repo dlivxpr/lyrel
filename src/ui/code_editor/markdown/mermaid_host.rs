@@ -390,14 +390,14 @@ impl MermaidHost {
             });
             return;
         }
-        let (revision, source) = event.map_or_else(
-            || (document.revision(), document.source()),
-            |event| (event.revision(), event.snapshot().text()),
+        let (revision, snapshot) = event.map_or_else(
+            || (document.revision(), document.snapshot()),
+            |event| (event.revision(), event.snapshot().clone()),
         );
         let jobs = self.store.borrow_mut().sync(
             self.document.entity_id(),
             revision,
-            source,
+            snapshot.text(),
             event,
             Style::current(cx),
             cx,

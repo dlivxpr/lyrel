@@ -1750,7 +1750,7 @@ impl LyrelApp {
         let shared = self.buffer_refs(id) > 1;
         if let Some(file) = self.editor.buffers.get(id) {
             if shared {
-                let tab = self.tabs.active().unwrap().id();
+                let tab = self.tabs.get(tab_ix).unwrap().id();
                 let group = self.tab_code().unwrap().focused_group();
                 if let Some(view) = file.presentations.existing(tab, group) {
                     view.update(cx, |view, cx| view.finish_owned_composition(cx));
