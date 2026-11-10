@@ -114,7 +114,7 @@ impl OmpReplayFixture {
             )
         });
         let mut result = format!("owned_root={} {terminal}", self.root.path().display());
-        for name in ["fixture.json", "stages.jsonl", "version.json", "identity.json", "config-path.json", "config-terminal.showImages.json", "config-tui.renderSvg.json", "config-tui.maxInlineImages.json", "models.json", "running.json", "requests.json", "audit.json"] {
+        for name in ["fixture.json", "stages.jsonl", "version.json", "identity.json", "config-path.json", "config-terminal.showImages.json", "config-tui.renderSvg.json", "config-tui.maxInlineImages.json", "config-display.smoothStreaming.json", "models.json", "running.json", "requests.json", "audit.json"] {
             if let Ok(text) = std::fs::read_to_string(self.root.path().join("owned").join(name)) {
                 result.push_str(&format!("\n{name}: {text}"));
             }
