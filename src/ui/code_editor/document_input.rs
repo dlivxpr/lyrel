@@ -70,6 +70,7 @@ impl EditorInput {
         InputRead { input: self, cx }
     }
     pub(crate) fn focus(&self, window: &mut Window, cx: &mut gpui_kit::App) {
+        self.finish_composition(window, cx);
         self.read(cx).focus_handle(cx).focus(window, cx);
     }
     pub(crate) fn set_cursor_position(
@@ -195,19 +196,21 @@ pub(super) struct MarkdownPresentations(
             split::GroupId,
             Entity<MarkdownEditor>,
             Option<Entity<super::markdown_search::MarkdownSearch>>,
+            Subscription,
         )>,
     >,
 );
 impl MarkdownPresentations {
-    pub(super) fn view(
+    pub(super) fn view<E: 'static>(
         &self,
         input: &Entity<MarkdownEditor>,
         tab: TabId,
         group: split::GroupId,
-        cx: &mut gpui_kit::App,
+        window: &mut Window,
+        cx: &mut Context<E>,
     ) -> Entity<MarkdownEditor> {
         let mut views = self.0.borrow_mut();
-        if let Some((_, _, view, _)) = views.iter().find(|(t, g, _, _)| *t == tab && *g == group) {
+        if let Some((_, _, view, _, _)) = views.iter().find(|(t, g, _, _, _)| *t == tab && *g == group) {
             return view.clone();
         }
         let view = if views.is_empty() {
@@ -218,7 +221,9 @@ impl MarkdownPresentations {
             let live = input.read(cx).is_live();
             let source_only = input.read(cx).is_source_only();
             let tab_indent = input.read(cx).tab_indent();
-            cx.new(|cx| {
+            let selection = input.read(cx).selected_range();
+            let scroll = input.read(cx).scroll_offset();
+            let view = cx.new(|cx| {
                 let mut view = MarkdownEditor::for_document(document, cx);
                 markdown::configure(&mut view, cx);
                 view.set_tab_indent(tab_indent);
@@ -227,10 +232,15 @@ impl MarkdownPresentations {
                     view.clear_markdown_style(cx);
                 }
                 view.set_soft_wrap(wrap, cx);
+                view.select_range(selection, cx);
+                view.set_scroll_offset(scroll, cx);
                 view
-            })
+            });
+            super::markdown_formula::install(&view, window, cx);
+            view
         };
-        views.push((tab, group, view.clone(), None));
+        let observe = cx.observe(&view, |_, _, cx| cx.notify());
+        views.push((tab, group, view.clone(), None, observe));
         view
     }
     pub(super) fn existing(
@@ -241,8 +251,8 @@ impl MarkdownPresentations {
         self.0
             .borrow()
             .iter()
-            .find(|(t, g, _, _)| *t == tab && *g == group)
-            .map(|(_, _, view, _)| view.clone())
+            .find(|(t, g, _, _, _)| *t == tab && *g == group)
+            .map(|(_, _, view, _, _)| view.clone())
     }
     pub(super) fn search(
         &self,
@@ -251,8 +261,8 @@ impl MarkdownPresentations {
         self.0
             .borrow()
             .iter()
-            .find(|(_, _, view, _)| view == source)
-            .and_then(|(_, _, _, search)| search.clone())
+            .find(|(_, _, view, _, _)| view == source)
+            .and_then(|(_, _, _, search, _)| search.clone())
     }
     pub(super) fn open_search(
         &self,
@@ -261,9 +271,9 @@ impl MarkdownPresentations {
         cx: &mut gpui_kit::App,
     ) -> Entity<super::markdown_search::MarkdownSearch> {
         let mut views = self.0.borrow_mut();
-        let (_, _, _, search) = views
+        let (_, _, _, search, _) = views
             .iter_mut()
-            .find(|(_, _, view, _)| view == source)
+            .find(|(_, _, view, _, _)| view == source)
             .expect("registered presentation");
         search
             .get_or_insert_with(|| {
@@ -277,7 +287,7 @@ impl MarkdownPresentations {
         _: &mut Window,
         cx: &mut gpui_kit::App,
     ) {
-        self.0.borrow_mut().retain(|(tab, group, view, _)| {
+        self.0.borrow_mut().retain(|(tab, group, view, _, _)| {
             let keep = live(*tab, *group);
             if !keep {
                 view.update(cx, |view, cx| view.finish_composition(cx));
@@ -285,9 +295,29 @@ impl MarkdownPresentations {
             keep
         });
     }
+    /// File identity changes update capability without replacing source or history.
+    pub(super) fn set_source_only(
+        &self,
+        source_only: bool,
+        input: &EditorInput,
+        cx: &mut gpui_kit::App,
+    ) {
+        if let Some(primary) = input.markdown() {
+            primary.update(cx, |view, cx| view.set_source_only(source_only, cx));
+            for (_, _, view, _, _) in self.0.borrow().iter() {
+                if view != primary {
+                    view.update(cx, |view, cx| view.set_source_only(source_only, cx));
+                }
+            }
+        }
+    }
     pub(super) fn set_soft_wrap(&self, wrap: bool, _: &EditorInput, cx: &mut gpui_kit::App) {
-        for (_, _, view, _) in self.0.borrow().iter() {
+        for (_, _, view, _, _) in self.0.borrow().iter() {
             view.update(cx, |view, cx| view.set_soft_wrap(wrap, cx));
         }
     }
 }
+
+#[cfg(any(test, feature = "native-markdown-tests"))]
+#[path = "workbench_views.rs"]
+pub(super) mod workbench_views;

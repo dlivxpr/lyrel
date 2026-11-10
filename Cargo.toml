@@ -159,6 +159,8 @@ notify = "8"
 # Rasterize tray and document SVGs; file-editor resource policy supplies safe resolvers.
 # Kit's own published SVG versions remain unpatched.
 resvg = { version = "0.49.0", default-features = false, features = ["text", "system-fonts", "raster-images", "svgz"] }
+# Native Mermaid families and safe SVG output; no browser, Node.js or ELK runtime.
+merman = { version = "=0.9.2", default-features = false, features = ["all-diagrams", "complete-svg"] }
 
 # Native tray on Windows and macOS.
 tray-icon = "0.26.1"

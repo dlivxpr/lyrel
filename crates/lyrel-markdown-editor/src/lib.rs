@@ -34,11 +34,15 @@
 
 pub mod bidi;
 pub mod math;
+mod code;
 mod document;
 mod presentation;
 pub use document::{Document, DocumentEvent, SourceEdit, SourceSnapshot};
+mod writing;
+pub use writing::{WritingIntent, WritingRequest};
 
 use gpui_kit::AppContext as _;
+use gpui_kit::TestSupportExt as _;
 use std::ops::Range;
 use std::sync::Arc;
 
@@ -111,6 +115,10 @@ actions!(
         Highlight,
         Code,
         Dismiss,
+        InsertWritingBlock,
+        TextColorPicker,
+        HighlightColorPicker,
+        ToggleHeadingDisclosure,
     ]
 );
 
@@ -179,6 +187,14 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new("ctrl-u", Underline, ctx),
         KeyBinding::new("cmd-shift-h", Highlight, ctx),
         KeyBinding::new("ctrl-shift-h", Highlight, ctx),
+        KeyBinding::new("ctrl-/", InsertWritingBlock, ctx),
+        KeyBinding::new("cmd-/", InsertWritingBlock, ctx),
+        KeyBinding::new("ctrl-alt-c", TextColorPicker, ctx),
+        KeyBinding::new("cmd-alt-c", TextColorPicker, ctx),
+        KeyBinding::new("ctrl-alt-h", HighlightColorPicker, ctx),
+        KeyBinding::new("cmd-alt-h", HighlightColorPicker, ctx),
+        KeyBinding::new("ctrl-alt-f", ToggleHeadingDisclosure, ctx),
+        KeyBinding::new("cmd-alt-f", ToggleHeadingDisclosure, ctx),
         KeyBinding::new("escape", Dismiss, ctx),
     ]);
 }
@@ -489,6 +505,8 @@ pub enum EditorEvent {
     /// The caret / selection moved without a text change — so a host can update a
     /// caret-anchored affordance (e.g. the table-alignment toolbar).
     SelectionChanged,
+    /// The host opens its native table insertion picker without changing source.
+    InsertTable,
     /// The caret entered a `$$…$$` math block (by click, or by arrowing into it): its byte
     /// `range` in the document (covering both fences) and the LaTeX `source` between them, so
     /// the host can open a structural editor and replace the block's text on commit. `at_end`
@@ -578,11 +596,9 @@ pub type ClipboardWriter = std::rc::Rc<dyn Fn(&str, &mut App)>;
 /// embed chip.
 type EmbedViewFn = Box<dyn Fn(&str) -> Option<(gpui_kit::AnyView, Pixels)>>;
 
-/// Resolves a ` ```mermaid ` block's source to a rendered diagram bitmap plus its
-/// **logical** (display) px size — supplied by the host for the same reason as
-/// [`BlockMathFn`]. Set via [`EditorState::set_block_mermaid_provider`]; the host
-/// renders + caches off-thread (see [`mermaid_sources`] to pre-render).
-type BlockMermaidFn = Box<dyn Fn(&str) -> Option<(Arc<RenderImage>, f32, f32)>>;
+/// Host-owned native Mermaid result, keyed by the opening source row and exact source.
+/// Pending and failed results remain visible and source-editable.
+type BlockMermaidFn = Box<dyn Fn(usize, &str) -> MermaidPresentation>;
 
 /// Resolves a `$$…$$` math block's LaTeX to a typeset bitmap plus its **logical**
 /// (display) px size, so the editor can render the block as the equation (caret
@@ -598,7 +614,7 @@ type BlockMathFn = Box<dyn Fn(&str) -> Option<(Arc<RenderImage>, f32, f32)>>;
 /// block). Host-supplied (e.g. a tree-sitter highlighter) so the crate stays
 /// engine-free; absent it, code renders in `SyntaxStyle::code`. Set via
 /// [`EditorState::set_code_highlighter`].
-type CodeHighlightFn = Box<dyn Fn(&str, &str) -> Vec<(Range<usize>, HighlightStyle)>>;
+type CodeHighlightFn = Box<dyn Fn(&str, &str, &App) -> Vec<(Range<usize>, HighlightStyle)>>;
 
 /// Host auto-replace hook, consulted when a word-boundary character (space,
 /// punctuation, Enter) completes a word: receives the just-finished line's
@@ -610,14 +626,8 @@ type CodeHighlightFn = Box<dyn Fn(&str, &str) -> Vec<(Range<usize>, HighlightSty
 /// [`EditorState::set_auto_replace`].
 type AutoReplaceFn = Box<dyn Fn(&str) -> Option<(Range<usize>, String)>>;
 
-/// The diagram sources of every ` ```mermaid ` block in `content`, so a host can
-/// pre-render them (the editor's mermaid provider then finds the ready bitmap).
-pub fn mermaid_sources(content: &str) -> Vec<SharedString> {
-    markdown_syntax::mermaid_blocks(content)
-        .into_iter()
-        .map(|(_, source)| source.into())
-        .collect()
-}
+mod mermaid;
+pub use mermaid::{MermaidBlock, MermaidPresentation, mermaid_blocks};
 
 /// The LaTeX sources of every `$$…$$` math block in `content`, so a host can
 /// pre-render them (the editor's math provider then finds the ready bitmap).
@@ -772,6 +782,10 @@ pub struct EditorState {
     source_only: bool,
     host_links: bool,
     host_custom_colors: bool,
+    writing_provider: Option<writing::WritingProvider>,
+    writing_overlay: Option<gpui_kit::AnyView>,
+    presentation_style_provider: Option<writing::PresentationStyleProvider>,
+    document_inset: (f32, f32),
     placeholder: SharedString,
     /// Selection as a byte range; the caret is one end (see [`Self::cursor_offset`]).
     extra_selections: Vec<Range<usize>>,
@@ -779,6 +793,8 @@ pub struct EditorState {
     selection_reversed: bool,
     /// IME composition range, if any.
     marked_range: Option<Range<usize>>,
+    /// A finished lease cannot accept delayed native callbacks after focus handoff.
+    retired_composition: bool,
     /// Host-supplied clipboard writer for Copy/Cut (e.g. adding an HTML
     /// flavor beside the plain text). `None` = gpui's plain-string copy.
     clipboard_writer: Option<ClipboardWriter>,
@@ -1079,12 +1095,15 @@ impl EditorState {
     pub fn for_document(document: Entity<Document>, cx: &mut Context<Self>) -> Self {
         let content = document.read(cx).snapshot().text_handle();
         let revision = document.read(cx).revision();
+        let scroll = ScrollHandle::new();
+        let anchored_scroll = scroll.clone();
         let document_subscription =
             cx.subscribe(&document, |this, _, event: &DocumentEvent, cx| {
                 if event.revision() <= this.content_gen {
                     return;
                 }
                 if event.origin() != Some(cx.entity_id()) {
+                    let selection = this.selected_range.clone();
                     this.diagnostics.clear();
                     for edit in event.edits() {
                         for selection in &mut this.extra_selections {
@@ -1094,8 +1113,12 @@ impl EditorState {
                         this.selected_range = edit.map_offset(this.selected_range.start)
                             ..edit.map_offset(this.selected_range.end);
                     }
+                    this.retired_composition |= this.marked_range.is_some();
                     this.marked_range = None;
                     this.last_edit = EditKind::Other;
+                    if this.selected_range != selection {
+                        cx.emit(EditorEvent::SelectionChanged);
+                    }
                 }
                 this.content = event.snapshot().text_handle();
                 this.content_gen = event.revision();
@@ -1109,7 +1132,7 @@ impl EditorState {
             _document_subscription: document_subscription,
             pending_coalesce: false,
             soft_wrap: true,
-            scroll: ScrollHandle::new(),
+            scroll,
             revealed_caret: None,
             reveal_requested: false,
             caret_affinity: WrapAffinity::Downstream,
@@ -1118,11 +1141,16 @@ impl EditorState {
             source_only: false,
             host_links: false,
             host_custom_colors: false,
+            writing_provider: None,
+            writing_overlay: None,
+            presentation_style_provider: None,
+            document_inset: (0., 0.),
             placeholder: SharedString::default(),
             selected_range: 0..0,
             extra_selections: Vec::new(),
             selection_reversed: false,
             marked_range: None,
+            retired_composition: false,
             clipboard_writer: None,
             search: None,
             wrapped: Vec::new(),
@@ -1184,7 +1212,11 @@ impl EditorState {
             table_resize_hover: None,
             shape_memo: std::cell::RefCell::new(None),
             scan_cache: std::cell::RefCell::new(None),
-            scroll_compensator: None,
+            scroll_compensator: Some(std::rc::Rc::new(move |delta, _, _| {
+                let mut offset = anchored_scroll.offset();
+                offset.y -= delta;
+                anchored_scroll.set_offset(offset);
+            })),
             last_paint_gen: 0,
             shape_caches: ShapeCaches::default(),
             shape_band: std::cell::Cell::new(None),
@@ -1376,15 +1408,12 @@ impl EditorState {
         self.embed_view = Some(Box::new(provider));
     }
 
-    /// Install the provider that resolves a ` ```mermaid ` block's source to a
-    /// rendered diagram: the bitmap plus its logical (display) px size — see
-    /// [`BlockMathFn`] for why the host supplies the size. With it, such a block
-    /// renders as the diagram when the caret is elsewhere; with the caret inside
-    /// (or while it renders) it shows the raw fenced source. Pre-render with
-    /// [`mermaid_sources`].
+    /// Install the Host's native diagram/cache lookup. The opening row disambiguates
+    /// identical sources in different blocks. Source entry uses this presentation's
+    /// normal caret, selection and shared Document history.
     pub fn set_block_mermaid_provider(
         &mut self,
-        provider: impl Fn(&str) -> Option<(Arc<RenderImage>, f32, f32)> + 'static,
+        provider: impl Fn(usize, &str) -> MermaidPresentation + 'static,
     ) {
         self.block_mermaid = Some(Box::new(provider));
     }
@@ -1442,7 +1471,7 @@ impl EditorState {
     /// Set the fenced-code syntax highlighter (see [`CodeHighlightFn`]).
     pub fn set_code_highlighter(
         &mut self,
-        f: impl Fn(&str, &str) -> Vec<(Range<usize>, HighlightStyle)> + 'static,
+        f: impl Fn(&str, &str, &App) -> Vec<(Range<usize>, HighlightStyle)> + 'static,
     ) {
         self.code_highlight = Some(Box::new(f));
     }
@@ -2477,7 +2506,7 @@ impl EditorState {
         // Enter instead moves to the cell directly below (next row, same column,
         // spreadsheet-style); from the last row it exits onto a fresh line below
         // the table.
-        if self.caret_in_table() {
+        if self.selected_range.is_empty() && self.caret_in_table() {
             if let Some(off) = self.table_move_vertical(1)
                 && self
                     .table_rows
@@ -2549,6 +2578,16 @@ impl EditorState {
                         self.replace_text_in_range(None, "", window, cx);
                     }
                     Some(text) => self.replace_text_in_range(None, &text, window, cx),
+                }
+                return;
+            }
+            if let Some(prefix) = markdown_syntax::blockquote_prefix(line) {
+                if line[prefix..].trim().is_empty() {
+                    self.selected_range = line_start..line_start + prefix;
+                    self.replace_text_in_range(None, "", window, cx);
+                } else {
+                    let continuation = format!("\n{}", &line[..prefix]);
+                    self.replace_text_in_range(None, &continuation, window, cx);
                 }
                 return;
             }
@@ -2728,31 +2767,7 @@ impl EditorState {
     /// already on it (and, for a highlight, a plain `==…==`); `None` removes
     /// that color. No-op on an empty selection.
     pub fn color_selection(&mut self, kind: ColorKind, rgba: Option<u32>, cx: &mut Context<Self>) {
-        self.trim_dangling_tags();
-        if self.selected_range.is_empty() {
-            return;
-        }
-        let stripped = self.strip_color(kind, cx);
-        if kind == ColorKind::Highlight && self.wrapped_by("==", "==") {
-            self.toggle_wrap_pair("==", "==", cx);
-        }
-        match rgba {
-            Some(c) => {
-                let hex = zorite_markdown::syntax::hex_color(c);
-                let (open, close) = match kind {
-                    ColorKind::Text => (format!("<span style=\"color:{hex}\">"), "</span>"),
-                    ColorKind::Highlight => {
-                        (format!("<mark style=\"background:{hex}\">"), "</mark>")
-                    }
-                };
-                self.toggle_wrap_pair(&open, close, cx);
-            }
-            None if stripped => {
-                cx.emit(EditorEvent::Changed);
-                cx.notify();
-            }
-            None => {}
-        }
+        self.set_selection_color(kind, rgba, cx);
     }
 
     /// ⌘⇧H: toggle the plain `==…==` highlight on the selection. A colored
@@ -2857,13 +2872,19 @@ impl EditorState {
                 .child("\u{2026}")
                 .on_mouse_down(
                     MouseButton::Left,
-                    cx.listener(move |editor, _: &MouseDownEvent, _, cx| {
+                    cx.listener(move |editor, _: &MouseDownEvent, window, cx| {
                         cx.stop_propagation();
                         let position = editor.menu.take().map(|m| m.anchor).unwrap_or_default();
                         cx.emit(EditorEvent::PickColor {
                             highlight: kind == ColorKind::Highlight,
                             position,
                         });
+                        editor.request_writing(
+                            if kind == ColorKind::Highlight { WritingIntent::HighlightColor } else { WritingIntent::TextColor },
+                            editor.selected_range.clone(),
+                            window,
+                            cx,
+                        );
                     }),
                 )
         }))
@@ -3428,24 +3449,7 @@ impl EditorState {
         // A press on a heading's fold chevron toggles its section collapsed —
         // view-local state, not an edit (markdown has no heading-fold syntax).
         if let Some(row) = self.heading_fold_at(event.position) {
-            let start = self.line_starts()[row];
-            let end = self.line_end(row);
-            let key = self.content[start..end].trim().to_string();
-            if !self.folded_headings.remove(&key) {
-                // Folding with the caret inside the section would no-op
-                // (reveal-on-caret keeps it open) — seat the caret at the
-                // heading's end first.
-                let single = std::collections::HashSet::from([key.clone()]);
-                let crow = self.row_col(self.cursor_offset()).0;
-                if markdown_syntax::heading_fold_regions(&self.content, &single)
-                    .iter()
-                    .any(|r| crow > r.start && crow < r.end)
-                {
-                    self.move_to(end, cx);
-                }
-                self.folded_headings.insert(key);
-            }
-            cx.notify();
+            self.toggle_heading_row(row, cx);
             return;
         }
         // Left-click a file chip (e.g. a PDF embed) opens it rather than editing —
@@ -4973,7 +4977,8 @@ impl EditorState {
         let &start = starts.get(fence_row)?;
         let fence_line = &self.content[start..self.line_end(fence_row)];
         let trimmed = fence_line.trim_start();
-        let lang = trimmed.strip_prefix("```")?.trim().to_string();
+        let info = trimmed.trim_start_matches('`');
+        let lang = info.split_whitespace().next().unwrap_or("").to_string();
         let body_start = (self.line_end(fence_row) + 1).min(self.content.len());
         let mut body_end = self.content.len();
         for (row, &row_start) in starts.iter().enumerate().skip(fence_row + 1) {
@@ -5012,17 +5017,28 @@ impl EditorState {
         let end = self.line_end(fence_row);
         let line = &self.content[start..end];
         let trimmed = line.trim_start();
-        if !trimmed.starts_with("```") {
+        if !trimmed.starts_with("```") || lang.contains(char::is_whitespace) {
             return;
         }
-        let indent = &line[..line.len() - trimmed.len()];
-        let new_line = format!("{indent}```{}", if lang == "text" { "" } else { lang });
-        self.replace_range(start..end, &new_line, cx);
-        // replace_range parks the caret at the fence line's end, which reveals
-        // the raw ``` marker (reveal-on-caret). Step onto the body's first
-        // line instead so the fence stays hidden.
-        let caret = (start + new_line.len() + 1).min(self.content.len());
-        self.selected_range = caret..caret;
+        let fence_end = start + line.len() - trimmed.len()
+            + trimmed.bytes().take_while(|&byte| byte == b'`').count();
+        let info = &self.content[fence_end..end];
+        let leading = info.len() - info.trim_start().len();
+        let token_start = fence_end + leading;
+        let token_end = token_start + info.trim_start().split_whitespace().next().unwrap_or("").len();
+        let language = if lang == "text" && token_end == end { "" } else { lang };
+        if &self.content[token_start..token_end] == language {
+            return;
+        }
+        let before = self.selected_range.clone();
+        let delta = language.len() as isize - (token_end - token_start) as isize;
+        self.replace_range(token_start..token_end, language, cx);
+        // Keep source access in this editor, but seat routine language changes
+        // in the body so selecting a language does not reveal the delimiter.
+        let caret = (end as isize + delta + 1).max(0) as usize;
+        let caret = caret.min(self.content.len());
+        self.select_range(caret..caret, cx);
+        self.set_history_selection(before, caret..caret, cx);
         cx.emit(EditorEvent::Changed);
     }
 
@@ -5325,16 +5341,25 @@ impl EntityInputHandler for EditorState {
     }
 
     fn unmark_text(&mut self, _: &mut Window, cx: &mut Context<Self>) {
-        self.finish_composition(cx);
+        if self.document.read(cx).composition_owner()
+            .is_some_and(|owner| owner.entity_id() == cx.entity_id())
+        {
+            self.finish_composition(cx);
+        }
     }
 
     fn replace_text_in_range(
         &mut self,
         range_utf16: Option<Range<usize>>,
         new_text: &str,
-        _: &mut Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.retired_composition && !self.focus_handle.is_focused(window) {
+            return;
+        }
+        self.retired_composition = false;
+        let completing_composition = self.marked_range.is_some();
         if range_utf16.is_none() && self.marked_range.is_none() && !self.extra_selections.is_empty()
         {
             self.replace_occurrences(new_text, cx);
@@ -5351,6 +5376,7 @@ impl EntityInputHandler for EditorState {
             (range.start < range.end).then(|| self.content[range.clone()].to_string());
         self.record_edit(&range, new_text);
         self.replace_source(range.clone(), new_text, cx);
+        self.retired_composition = completing_composition;
         let caret = range.start + new_text.len() - new_text.matches("\r\n").count();
         self.selected_range = caret..caret;
         self.selection_reversed = false;
@@ -5364,6 +5390,15 @@ impl EntityInputHandler for EditorState {
         }
         cx.emit(EditorEvent::Changed);
         cx.notify();
+        if new_text == "/" && range.is_empty() && self.markdown_style.is_some() {
+            let start = self.content[..range.start].rfind('\n').map_or(0, |at| at + 1);
+            let row = self.row_col(range.start).0;
+            if self.content[start..range.start].trim().is_empty()
+                && !self.scan_data().fence_odd.get(row).copied().unwrap_or(false)
+            {
+                self.request_writing(WritingIntent::Insert, range.start..range.start + 1, window, cx);
+            }
+        }
     }
 
     fn replace_and_mark_text_in_range(
@@ -5371,9 +5406,13 @@ impl EntityInputHandler for EditorState {
         range_utf16: Option<Range<usize>>,
         new_text: &str,
         new_selected_range_utf16: Option<Range<usize>>,
-        _: &mut Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.retired_composition && !self.focus_handle.is_focused(window) {
+            return;
+        }
+        self.retired_composition = false;
         let range = range_utf16
             .as_ref()
             .map(|r| self.range_from_utf16(r))
@@ -5417,10 +5456,13 @@ impl EntityInputHandler for EditorState {
         &mut self,
         range_utf16: Range<usize>,
         bounds: Bounds<Pixels>,
-        _: &mut Window,
+        window: &mut Window,
         _: &mut Context<Self>,
     ) -> Option<Bounds<Pixels>> {
         let range = self.range_from_utf16(&range_utf16);
+        if self.table_rows.get(self.row_col(range.start).0).and_then(Option::as_ref).is_some_and(|table| !table.is_separator) {
+            return self.source_bounds(&range, window);
+        }
         let (row, col) = self.row_col(range.start);
         let lh = self.line_h(row);
         let line = self.wrapped.get(row)?;
@@ -5462,10 +5504,11 @@ impl EntityInputHandler for EditorState {
     fn character_index_for_point(
         &mut self,
         point: Point<Pixels>,
-        _: &mut Window,
+        window: &mut Window,
         _: &mut Context<Self>,
     ) -> Option<usize> {
-        Some(self.offset_to_utf16(self.index_for_mouse_position(point)))
+        let offset = self.table_offset_at(point, window).unwrap_or_else(|| self.index_for_mouse_position(point));
+        Some(self.offset_to_utf16(offset))
     }
 }
 
@@ -5479,9 +5522,17 @@ impl EventEmitter<EditorEvent> for EditorState {}
 
 impl Render for EditorState {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        if let Some(provider) = &self.presentation_style_provider {
+            let style = provider(cx);
+            self.live_style = Some(style.clone());
+            if self.markdown_style.is_some() {
+                self.markdown_style = Some(style);
+            }
+        }
         div()
             .relative()
             .id("markdown-document-scroll")
+            .test_support()
             .overflow_scroll()
             .track_scroll(&self.scroll)
             .size_full()
@@ -5584,18 +5635,34 @@ impl Render for EditorState {
             .on_action(cx.listener(Self::undo))
             .on_action(cx.listener(Self::redo))
             .on_action(cx.listener(Self::dismiss))
+            .on_action(cx.listener(Self::insert_writing_block))
+            .on_action(cx.listener(Self::text_color_picker))
+            .on_action(cx.listener(Self::highlight_color_picker))
+            .on_action(cx.listener(Self::toggle_heading_disclosure))
             .on_mouse_down(MouseButton::Left, cx.listener(Self::on_mouse_down))
             .on_mouse_down(MouseButton::Right, cx.listener(Self::on_right_mouse_down))
             .on_mouse_up(MouseButton::Left, cx.listener(Self::on_mouse_up))
             .on_mouse_up_out(MouseButton::Left, cx.listener(Self::on_mouse_up))
             .on_mouse_move(cx.listener(Self::on_mouse_move))
             .on_scroll(cx.listener(Self::on_scroll_wheel))
-            .child(EditorElement {
-                editor: cx.entity(),
-            })
-            .children(self.embed_overlays(window))
-            .children(self.editing_block_overlay())
-            .children(self.editing_inline_overlay())
+            .child(
+                div()
+                    .w_full()
+                    .min_w_0()
+                    .px(gpui_kit::rems(self.document_inset.0))
+                    .py(gpui_kit::rems(self.document_inset.1))
+                    .child(
+                        div()
+                            .relative()
+                            .w_full()
+                            .min_w_0()
+                            .child(EditorElement { editor: cx.entity() })
+                            .children(self.embed_overlays(window))
+                            .children(self.editing_block_overlay())
+                            .children(self.editing_inline_overlay()),
+                    ),
+            )
+            .children(self.writing_overlay.clone())
             // Right-click suggestions menu, absolutely positioned over the
             // editor (anchored at the click). `Option`'s `IntoIterator` renders
             // zero or one popup; clicking a row replaces the misspelled span.
@@ -6599,6 +6666,11 @@ struct InlineMath {
 #[derive(Clone)]
 enum Block {
     Image(BlockImg),
+    MermaidStatus {
+        text: std::rc::Rc<Vec<WrappedLine>>,
+        line_height: Pixels,
+        height: Pixels,
+    },
     Chip {
         src: SharedString,
         label: SharedString,
@@ -6658,6 +6730,7 @@ impl Block {
     fn height(&self) -> Pixels {
         match self {
             Block::Image(i) => i.height,
+            Block::MermaidStatus { height, .. } => *height,
             Block::Chip { height, .. } => *height,
             Block::Properties(p) => p.height,
         }
@@ -6743,7 +6816,7 @@ enum LineMark {
     /// Blockquote: a left border (`bar`); the `>` markers are hidden. `text`
     /// colors the body — `Some` = muted quote tone, `None` = the editor's
     /// normal text color (alert bodies).
-    Quote { bar: Hsla, text: Option<Hsla> },
+    Quote { bar: Hsla, text: Option<Hsla>, text_inset: Pixels },
     /// A GitHub alert's marker line (`> [!NOTE]` …): the marker is hidden and
     /// a bold `label` paints in the alert color; any same-line body insets to
     /// `text_inset` (QUOTE_INSET + the label's measured width + a gap) — the
@@ -6793,7 +6866,7 @@ impl LineMark {
     /// Horizontal inset (px) applied to the body text + caret for this mark.
     fn inset(self) -> Pixels {
         match self {
-            LineMark::Quote { .. } => px(QUOTE_INSET),
+            LineMark::Quote { text_inset, .. } => text_inset,
             LineMark::Alert { text_inset, .. } => text_inset,
             LineMark::List { text_inset, .. } | LineMark::Check { text_inset, .. } => text_inset,
             LineMark::Rule(_) => px(0.),

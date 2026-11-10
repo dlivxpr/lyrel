@@ -276,7 +276,7 @@ CI run `42111994380` 的 Windows／macOS production 与测试构建通过，但�
 
 `lyrel-markdown-editor` 为 desktop-only workspace crate，通过 Kit/Fast 提供新 native document surface；`lyrel-text` 是可独立在 Linux 测试的 GUI-free codec。`lyrel-core`、server、CLI 不依赖 GUI。导入来源、MIT copyright 与本地修改保持可追溯；最终 #245 必须核验它们随二进制资产实际分发。
 
-公式渲染和结构编辑由 #241、Mermaid 由 #242 完成真实 Rust native Host 接线，不引入 Node.js/Chromium 编辑器。依赖清单随各票实际使用的正式 renderer 更新，不保留旧实现的依赖冒充新 provider。RaTeX 的 MIT 与所用字体的 SIL OFL 版权分开处理，历史 notices 不代表新实现已经接线或验收。
+Mermaid 的 #242 Host 已接入正式 `merman =0.9.2`（`default-features=false`，`all-diagrams`、`complete-svg`），使用完整 `resvg_safe` 与 Kit/Fast `SvgRenderer` 和 native 字体测宽，不引入 Node.js/Chromium/ELK runtime。它从共享 Document 派生每块缓存，提供 loading/诊断、源码编辑恢复和 owner/request/revision 隔离；主题字号与 pane 宽度参与实际图形几何。公式渲染和结构编辑仍由 #241 负责。RaTeX 的 MIT 与所用字体的 SIL OFL 版权分开处理；根 `LICENSE` 保留既有 Merman 及其启用渲染组件的 notices，最终打包仍由 #245 核验。源码接线不表示 native/实窗/平台验收已通过，边界见 `HOST_CAPABILITIES.md`。
 
 `.mdx` 使用 source-only，不再引入旧 Ox Content rich component/inspector 投影。frontmatter、未知构造、原始空白和逐行行尾保持完整。`.md`/`.markdown` 的即时编辑和 source 模式共用 Document/history，模式切换不整理原文。当前配置与实际证据边界见[编辑器说明](/window/side-panel#markdown-editor-design)。
 
