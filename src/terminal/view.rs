@@ -1526,8 +1526,11 @@ impl TerminalView {
                 self.terminal.write(out);
             }
             WheelRoute::Scrollback => {
-                self.selection_scroll
-                    .scroll_lines(&mut self.terminal.term.lock(), lines, self.terminal.images());
+                self.selection_scroll.scroll_lines(
+                    &mut self.terminal.term.lock(),
+                    lines,
+                    &self.terminal.images(),
+                );
                 self.terminal.viewport_reporter().report();
                 cx.notify();
             }
@@ -1855,7 +1858,7 @@ impl TerminalView {
             epoch,
             || self.terminal.term.lock(),
             &cx.global::<Config>().word_separators,
-            self.terminal.images(),
+            &self.terminal.images(),
         );
         let Some(moved) = moved else {
             return false;
@@ -1934,9 +1937,9 @@ impl TerminalView {
     /// Apply a direct viewport movement and report only an actual visual change.
     fn smooth_scroll(&mut self, delta: f32, cx: &mut Context<Self>) -> bool {
         let mut term = self.terminal.term.lock();
-        let moved =
-            self.selection_scroll
-                .smooth_scroll(&mut term, delta, self.terminal.images());
+        let moved = self
+            .selection_scroll
+            .smooth_scroll(&mut term, delta, &self.terminal.images());
         drop(term);
         self.terminal.viewport_reporter().report();
         if moved {
@@ -1949,7 +1952,7 @@ impl TerminalView {
         let frame = self.selection_scroll.animation_frame(
             epoch,
             || self.terminal.term.lock(),
-            self.terminal.images(),
+            &self.terminal.images(),
         );
         let Some((moved, running)) = frame else {
             return false;
@@ -1978,7 +1981,7 @@ impl TerminalView {
         }
         if let Some(target) = self.scroll_handle.take_pending() {
             self.selection_scroll
-                .scroll_to(&mut term, target, self.terminal.images());
+                .scroll_to(&mut term, target, &self.terminal.images());
         }
         self.selection_scroll.sync_reading(&mut term);
         let cursor = term.cursor().pos;
@@ -5207,8 +5210,11 @@ mod gpui_tests {
         });
         print(cx, &view, filler(160));
         view.update(cx, |view, _| {
-            view.selection_scroll
-                .scroll_to(&mut view.terminal.term.lock(), 1, view.terminal.images());
+            view.selection_scroll.scroll_to(
+                &mut view.terminal.term.lock(),
+                1,
+                &view.terminal.images(),
+            );
         });
         vcx.update(|window, cx| {
             window.refresh();

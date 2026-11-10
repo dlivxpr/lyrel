@@ -438,7 +438,12 @@ impl SelectionScroll {
         Some((moved, moved && !last))
     }
 
-    pub(super) fn smooth_scroll(&mut self, term: &mut Grid, delta: f32, images: &ImageStore) -> bool {
+    pub(super) fn smooth_scroll(
+        &mut self,
+        term: &mut Grid,
+        delta: f32,
+        images: &ImageStore,
+    ) -> bool {
         if term.synchronized_output() {
             return false;
         }
