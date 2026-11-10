@@ -475,7 +475,11 @@ if [[ $- == *i* ]] && [[ -z "$LYREL_SHELL_INTEGRATION" ]]; then
         local REPLY
         __lyrel_submitted_command "$2"
         __lyrel_preexec "$REPLY" markers-only
-        if [[ -o history && ( "$REPLY" == "$2" || "$REPLY" == "$2 &" ) ]]; then
+        # Bash 3.2 temporarily disables history while running DEBUG, so
+        # `-o history` is false even for a freshly recorded submission.
+        # SHELLOPTS retains the configured option, including history-off.
+        # Keep the complete-line match: never scope a pipeline/compound member.
+        if [[ ":$SHELLOPTS:" == *:history:* && ( "$REPLY" == "$2" || "$REPLY" == "$2 &" ) ]]; then
           __lyrel_scope_apply "$REPLY"
         fi
         return "$1"
