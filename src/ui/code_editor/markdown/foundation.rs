@@ -258,7 +258,7 @@ pub(super) fn native_navigation(cx: &mut TestAppContext) {
         let before = view.read_with(&context, |view, _| {
             assert_eq!(view.cursor(), wrap_at, "both visual sides resolve to the same source byte");
             let caret = view.range_to_bounds(&(wrap_at..wrap_at)).unwrap();
-            assert_eq!(caret.top(), if target.y < row_start.top() { previous_end.top() } else { row_start.top() }, "pointer retains its clicked boundary side");
+            assert_eq!(caret.top(), if target.y < row_start.top() { previous_end.top() } else { row_start.top() }, "pointer retains its clicked boundary side; target={target:?}, first={first:?}, upper={previous_end:?}, lower={row_start:?}, caret={caret:?}, scroll={:?}", view.scroll_offset());
             caret
         });
         let ime = view.update_in(&mut context, |view, window, cx| view.bounds_for_range(wrap_at..wrap_at, gpui_kit::Bounds::new(first.origin, window.viewport_size()), window, cx).unwrap());

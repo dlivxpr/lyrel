@@ -4,6 +4,9 @@ impl EditorState {
     pub(super) fn request_caret_reveal(&mut self) {
         self.reveal_requested = true;
         self.revealed_caret = None;
+        if self.content.len() > 2_000_000 {
+            eprintln!("[DEBUG-236-REVEAL] request: revision={}, at={}, affinity={:?}, bounds={:?}, viewport={:?}, offset={:?}, max={:?}, editor={self:p}", self.content_gen, self.cursor_offset(), self.caret_affinity, self.last_bounds, self.scroll.bounds(), self.scroll.offset(), self.scroll.max_offset());
+        }
     }
     pub(super) fn affinity_for_offset(&self, offset: usize) -> WrapAffinity {
         if offset == self.cursor_offset() { return self.caret_affinity; }
@@ -24,7 +27,14 @@ impl EditorState {
         let Some(bounds) = self.last_bounds else { return WrapAffinity::Downstream; };
         let (row, column) = self.row_col(offset);
         let Some(top) = self.line_tops.get(row) else { return WrapAffinity::Downstream; };
-        self.affinity_for_visual_position(row, self.display_col(row, column), point(position.x - bounds.left() - self.row_origin_x(row), position.y - bounds.top() - *top))
+        let relative = point(position.x - bounds.left() - self.row_origin_x(row), position.y - bounds.top() - *top);
+        let affinity = self.affinity_for_visual_position(row, self.display_col(row, column), relative);
+        if self.content.starts_with("W W W ") {
+            let line = &self.wrapped[row];
+            let display = self.display_col(row, column);
+            eprintln!("[DEBUG-236-POINTER] hit: offset={offset}, position={position:?}, bounds={bounds:?}, top={top:?}, relative={relative:?}, up={:?}, down={:?}, affinity={affinity:?}, scroll={:?}", caret_line_pos(line, self.bidi_map(row), display, self.line_h(row), WrapAffinity::Upstream), caret_line_pos(line, self.bidi_map(row), display, self.line_h(row), WrapAffinity::Downstream), self.scroll.offset());
+        }
+        affinity
     }
     pub fn document(&self) -> &Entity<Document> { &self.document }
     pub fn occurrence_range(&self) -> Range<usize> { self.extra_selections.last().unwrap_or(&self.selected_range).clone() }

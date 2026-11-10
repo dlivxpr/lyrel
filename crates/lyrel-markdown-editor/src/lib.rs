@@ -750,7 +750,7 @@ impl Default for Labels {
     }
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum WrapAffinity { Upstream, Downstream }
 
 pub struct EditorState {
@@ -3686,6 +3686,7 @@ impl EditorState {
                 }
             }
         }
+        if self.content.starts_with("W W W ") { eprintln!("[DEBUG-236-POINTER] down end: offset={}, affinity={:?}, bounds={:?}, scroll={:?}", self.cursor_offset(), self.caret_affinity, self.last_bounds, self.scroll.offset()); }
     }
 
     fn on_mouse_up(&mut self, _: &MouseUpEvent, _: &mut Window, cx: &mut Context<Self>) {
@@ -3717,6 +3718,7 @@ impl EditorState {
             return;
         }
         self.is_selecting = false;
+        if self.content.starts_with("W W W ") { eprintln!("[DEBUG-236-POINTER] up end: offset={}, affinity={:?}, bounds={:?}, scroll={:?}", self.cursor_offset(), self.caret_affinity, self.last_bounds, self.scroll.offset()); }
     }
 
     fn on_mouse_move(
