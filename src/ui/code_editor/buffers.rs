@@ -329,7 +329,7 @@ impl EditorBuffers {
         let Some(position) = cursor else { return };
         let Some(file) = self.get_mut(id) else { return };
         let input = if let (Some(source), Some(group)) = (file.input.markdown(), target.group) {
-            EditorInput::Markdown(file.presentations.view(source, target.tab, group, cx))
+            EditorInput::Markdown(file.presentations.view(source, target.tab, group, window, cx))
         } else {
             file.input.clone()
         };

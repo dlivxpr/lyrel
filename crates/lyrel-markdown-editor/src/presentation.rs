@@ -409,6 +409,7 @@ impl EditorState {
                 document.finish_composition(origin, false, caret, cx)
             })
             .text_handle();
+        self.retired_composition |= self.marked_range.is_some();
         self.marked_range = None;
         self.last_edit = EditKind::Other;
     }
