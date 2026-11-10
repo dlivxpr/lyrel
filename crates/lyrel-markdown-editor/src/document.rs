@@ -259,7 +259,9 @@ impl Document {
             let after_caret = edit.range.start + edit.inserted.len();
             if coalesce
                 && self.undo.last().is_some_and(|entry| {
-                    entry.origin == origin && Arc::ptr_eq(&entry.after, &before)
+                    !entry.edits.is_empty()
+                        && entry.origin == origin
+                        && Arc::ptr_eq(&entry.after, &before)
                 })
             {
                 let entry = self.undo.last_mut().unwrap();

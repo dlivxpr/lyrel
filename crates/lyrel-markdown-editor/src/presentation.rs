@@ -233,6 +233,7 @@ impl EditorState {
         let document = self.document.clone();
         let origin = cx.entity_id();
         let caret = self.cursor_offset();
+        let revision = document.read(cx).revision();
         let snapshot = document.update(cx, |document, cx| {
             document.replace_ranges(replacements, origin, caret, cx)
         });
@@ -241,7 +242,9 @@ impl EditorState {
         self.content_gen = document.read(cx).revision();
         self.selected_range = after.clone();
         self.request_caret_reveal();
-        self.set_history_selection(before, after, cx);
+        if document.read(cx).revision() != revision {
+            self.set_history_selection(before, after, cx);
+        }
         self.last_edit = EditKind::Other;
         self.invalidate_geometry();
         cx.notify();
@@ -383,6 +386,13 @@ impl EditorState {
             document.set_format(format, origin, caret, cx)
         });
     }
+    /// Retire this presentation without finalizing another view's IME lease.
+    pub fn finish_owned_composition(&mut self, cx: &mut Context<Self>) {
+        if self.document.read(cx).composition_owner().is_some_and(|owner| owner.entity_id() == cx.entity_id()) {
+            self.finish_composition(cx);
+        }
+    }
+
     pub fn finish_composition(&mut self, cx: &mut Context<Self>) {
         let document = self.document.clone();
         let owner = document.read(cx).composition_owner();

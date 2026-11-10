@@ -244,6 +244,60 @@ pub(super) fn unsupported_and_unchanged_are_lossless(cx: &mut TestAppContext) {
     assert_eq!(std::fs::read(path).unwrap(), original.as_bytes());
 }
 
+#[cfg(test)]
+#[gpui_kit::test]
+fn formula_empty_and_indented_fences_preserve_bytes_through_commit_cancel_and_undo(cx: &mut TestAppContext) {
+    use lyrel_markdown_editor::math::editor::view::ConfirmFormula;
+    for (original, expected) in [
+        ("before\r\n$$\n$$\r\nafter", "before\r\n$$\nz\r\n$$\r\nafter"),
+        ("before\r\n  $$  \n 1 \r\n  $$  \r\nafter", "before\r\n  $$  \n z 1 \r\n  $$  \r\nafter"),
+        ("before\r\n  $$1$$  \r\nafter", "before\r\n  $$z 1$$  \r\nafter"),
+    ] {
+        let directory = super::super::test_host::canonical_tempdir();
+        let path = directory.path().join("fences.md");
+        std::fs::write(&path, original).unwrap();
+        let (app, mut context, _streams) = harness_with_tabs(cx, 1);
+        app.update_in(&mut context, |app, window, cx| app.open_file_in_editor(&path, window, cx));
+        until(&mut context, |cx| app.read_with(cx, |app, _| app.active_buffer().is_some()));
+        let view = active(&app, &context);
+        let at = view.read_with(&context, |view, _| view.text().find("$$").unwrap());
+        for cancel in [false, true] {
+            view.update_in(&mut context, |view, window, cx| {
+                view.select_range(at..at, cx);
+                view.focus_handle(cx).focus(window, cx);
+                view.edit_math_at_caret(cx);
+            });
+            settle(&mut context);
+            if cancel {
+                context.update(|window, cx| {
+                    window.input("z", cx);
+                    window.press("escape", cx);
+                });
+            } else {
+                context.dispatch_action(ConfirmFormula);
+            }
+            settle(&mut context);
+            view.read_with(&context, |view, cx| assert_eq!(view.document().read(cx).encode().unwrap(), original.as_bytes()));
+        }
+        view.update_in(&mut context, |view, window, cx| {
+            view.select_range(at..at, cx);
+            view.focus_handle(cx).focus(window, cx);
+            view.edit_math_at_caret(cx);
+        });
+        settle(&mut context);
+        context.update(|window, cx| window.input("z", cx));
+        context.dispatch_action(ConfirmFormula);
+        settle(&mut context);
+        view.read_with(&context, |view, cx| assert_eq!(view.document().read(cx).encode().unwrap(), expected.as_bytes()));
+        save(&app, &mut context);
+        assert_eq!(std::fs::read(&path).unwrap(), expected.as_bytes());
+        context.dispatch_action(gpui_kit::component::input::Undo);
+        settle(&mut context);
+        view.read_with(&context, |view, cx| assert_eq!(view.document().read(cx).encode().unwrap(), original.as_bytes()));
+    }
+}
+
+
 #[cfg(feature = "native-markdown-tests")]
 pub(super) fn native_full_mixed_tall_formula_pointer_fragments(cx: &mut TestAppContext) {
     use super::super::test_host::canonical_tempdir;

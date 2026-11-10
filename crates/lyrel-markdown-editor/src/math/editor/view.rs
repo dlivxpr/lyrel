@@ -41,6 +41,7 @@ const DROP_MAX_H: f32 = 240.0;
 /// the formula glyphs, so the editor matches the surrounding app. Filled by the host from its
 /// palette; `Default` is a light scheme for the standalone example.
 #[derive(Clone, Copy, PartialEq)]
+#[non_exhaustive]
 pub struct MathTheme {
     /// Formula glyphs + primary text (button labels).
     pub fg: Hsla,
@@ -381,8 +382,8 @@ impl MathEditor {
         cx.notify();
     }
 
-    /// Finish a possibly-mutating action: if it changed the model, record `before` for undo
-    /// (clearing the redo branch), then re-rasterize. Caret-only moves don't record a step.
+    /// Finish a possibly-mutating action: record and rasterize changed models;
+    /// caret/selection-only moves retain the raster and only notify.
     fn commit_edit(&mut self, before: (Row, Cursor), window: &mut Window, cx: &mut Context<Self>) {
         if self.root != before.0 {
             self.undo_stack.push(before);
@@ -390,8 +391,10 @@ impl MathEditor {
             if self.undo_stack.len() > UNDO_CAP {
                 self.undo_stack.remove(0);
             }
+            self.rerender(window, cx);
+        } else {
+            cx.notify();
         }
-        self.rerender(window, cx);
     }
 
     /// Restore the previous snapshot (pushing the current one onto the redo branch). `false`
