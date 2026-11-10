@@ -134,6 +134,7 @@ pub(crate) struct OpenFile {
     disk_mtime: Option<MTime>,
     saving: bool,
     save_pending: bool,
+    save_as_pending: Option<PathBuf>,
     reload_seq: u64,
     reload_request: u64,
     pub(crate) conflict: Option<DiskConflict>,

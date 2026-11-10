@@ -40,7 +40,7 @@
 | inline/display math 渲染、二维结构编辑 seat/menus/commit/cancel | 指定 MIT 公式 GUI 导入 + Lyrel Host，#241 | #237 不导入公式 GUI。渲染 provider 未配置时允许原文直接编辑，不让 arrow/click 被未接线结构编辑事件吞掉。#241 安装真实 renderer 与结构编辑器，并经同一 Document 修改协议提交。 |
 | Mermaid cache/render/entry/refresh/error/stale-result | Lyrel Host，#242 | `markdown::mermaid_host::install` 在所有 presentation 的共同 configure 入口安装真实 Merman `0.9.2` → `resvg_safe` → Kit `SvgRenderer` provider；caret/selection 进入块即显露原始 fenced source，正常输入与 Undo/Redo 使用同一 Document。loading/失败在块首行显示，正文源码仍可编辑；错误修复触发新 request，不显示假图或无限等待。见下方所有权与消费者边界。 |
 | status/search/outline、tabs/groups、MDX source-only、focus/layout | Lyrel 工作台，#240 | `MarkdownPresentations` 按稳定 TabId/GroupId 保留 view/search/observer；新 split 从实际来源 view 继承模式、选区与滚动。每个 view 的通知刷新工作台状态；输入及搜索焦点参与命令捕获阶段的组定位。MDX 路径身份变化只改变 source-only 能力，不替换文档/history。生产与 native 消费者入口见下方；实际原生窗口验收仍由集成者执行。 |
-| 编码/BOM、显式换行转换/cleanup、save-as/conflict/failure/close | Lyrel 工作台 + `lyrel-text`，#243 | 混合行尾事务基础属 #237；#243 扩充 supported encodings、失败恢复、真实 local/SSH 和在途第二视图快照。不得再复制 codec 到 GUI crate。 |
+| 编码/BOM、显式换行转换/cleanup、save-as/conflict/failure/close | Lyrel 工作台 + `lyrel-text`，#243 | `saving::fidelity::SaveContent` 从同一 Document snapshot 捕获源文/表示/格式/字节；成功才采用另存为目标；新编辑退休旧close。消费者覆盖 UTF-8 BOM、UTF-16LE/BE、GB18030、Windows-1252、显式转换/稀疏cleanup与Undo、失败/冲突/取消/扩展名、第二呈现在途快照。沿用全部原保存消费者；真实local/SSH与native结果由集成者另记，不以mapped Host或历史结果冒充。 |
 | extreme nowrap 行、完整源文/尾部 caret/input/Undo/save | 上游布局 + Lyrel 安全保护，#237/#244 | 实际 native 宽度超过 65,536 逻辑像素时保留有界视觉折行；不插入源换行、不截断、不更改 wrap 偏好。caret 几何以整数视觉行号乘一次行高，不能逐行累加 `f32` 后再让 native hit-testing 除行高反解。#235 的 not_planned 不是 SDK 修复证据。 |
 | imported bidi 映射 | 上游保留，#237/#244 | 保留 `bidi/` 与 source/display/native position mapping。完整 RTL 仍在已批准验收范围之外，不能由普通 Unicode 成功推导 RTL parity。 |
 
@@ -60,6 +60,7 @@
 - native 字体目标：`cargo test --locked -p lyrel --features native-markdown-tests --test native_markdown -- --nocapture`。runner 将真实 text system 接入 deterministic test platform，不创建产品 OS 窗口；test settle 须通过 SDK `simulate_next_frame` 执行平台帧回调，pointer move 后再 down/up，不能仅以 `render_frame` 冒充完整输入/帧生命周期。它验证 native 字体几何和生产消费者，不替代实际产品窗口、系统中文 IME 或真实 SSH。
 - Linux：`cargo test --locked --workspace --exclude lyrel --exclude lyrel-markdown-editor --all-features`；`lyrel-text` 可参与，GUI crate 不被选入 headless 范围。
 - Release 输入/导航/scroll/Undo-memory、系统 IME、真实 SSH 与跨平台结果由集成者保存精确 commit、固定 fixtures、执行序列、display 条件、命令、退出码和未验前提。早先实现的历史验收不自动转移到本源码导入。
+- 文件保真专项：`cargo test --locked -p lyrel --lib ui::code_editor::saving`；native selector `saving::fidelity` 包括编码往返、显式策略、第二视图在途快照、首次保存失败、编码取消/转换和目标冲突/重命名。Markdown普通保存不执行EditorConfig代码清理；显式去尾空白只删对应字节，Undo恢复原表示。另存为写入失败不改变原path/untitled，转换到MDX仅改变各view源码策略，不重建Document。
 
 ### #242 Mermaid 原生 Host 与消费者
 
