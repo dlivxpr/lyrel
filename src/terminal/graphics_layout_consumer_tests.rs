@@ -171,10 +171,15 @@ fn graphics_assert_production_paint_at(
     view.read_with(cx, |view, _| {
         let geom = view.cell_geom.expect("rooted production TerminalElement must paint a fresh frame");
         assert_eq!((geom.cols, geom.rows), (cols, rows));
-        let viewport = Bounds::new(geom.origin, gpui_kit::size(geom.cell_width * cols as f32, geom.line_height * rows as f32));
         // Inspect the picture actually consumed by production paint, not a
         // fresh projection of live placements under frozen reading/held text.
         let snap = view.grid_snap.as_ref().expect("committed production frame");
+        // Cell row zero moves during fractional scrolling; the pane mask does
+        // not. The preceding row's image can therefore occupy its top sliver.
+        let viewport = Bounds::new(
+            point(geom.origin.x, geom.origin.y - geom.line_height * snap.scroll_shift),
+            gpui_kit::size(geom.cell_width * cols as f32, geom.line_height * rows as f32),
+        );
         let offset = snap.display_offset;
         let images = &snap.images;
         for image in images.iter() {
