@@ -13,7 +13,7 @@
 - caret reveal 由当前 presentation 的显式选择/跳转、键盘移动、本地输入与 Undo/Redo 请求；不依赖当时键盘焦点，不由其他 view/Host 的文档通知自动请求。同一 source wrap-boundary byte 可是上一视觉行末或下一行首；caret 与 selection anchor 的 affinity 只归该 presentation，pointer/Down/Up、selection、popup/IME bounds 共用该状态，普通 link/range 映射不全局改为 downstream。native 门禁须实际验证两侧指针、往返导航、输入/Undo 和非聚焦 go-to 的滚动隔离；源码修复不等于验收通过。
 - 屏外 shaping 可用空占位保留行高，但当前 caret 所在的逻辑行始终保留真实 shaping，即使 presentation 没有焦点；否则非零列的 `range_to_bounds` 为 `None`，go-to 只更新源坐标而不能滚动。此几何需求不改变非聚焦 view 的 caret-local marker 显露规则，亦不强制全篇 shaping。native navigation 覆盖 source 跳转，以及 live 下的非聚焦屏外非空行跳转。
 - prepaint 的全行命中区与选择区域复用当前 pass 已建立的行起点数组，不对每行重新扫描全文。跨可见区跳转后，只有量化 shaping band 变化才经现有 next-frame 通知补绘一次；不能依赖额外 hover、输入或持续重绘来填充新可见正文。native 消费者按实际请求递送后续帧，并核对非 caret 行的真实几何。
-- 工作台的 native Markdown body 在 leading edge 为现有 shell resize hitbox 预留 `RESIZE_HANDLE_WIDTH / 2`；使真实首列 caret 不与 dock 抓手重叠，不移动测试指针、不缩小 resize target，也不把此输入安全间隔称为 #244 的最终参考排版。
+- #244 的 native Markdown inner inset 同时将真实首列 caret 留在现有 shell resize hitbox 之外；不再叠加 #237 的外层 `RESIZE_HANDLE_WIDTH / 2` padding。resize target 尺寸不变，不移动测试指针；留白属于 scroll owner 内的文档排版，不把 scrollbar 拉离 pane 边缘。实际宽窄窗口及缩放后的参考体验仍须原生对照。
 - 所有源文变更和 Undo/Redo 发出 `DocumentEvent`。`edits()` 按实际应用顺序给出每一步 LF/UTF-8 range、removed、inserted；后一条 range 基于前一条已经应用的文本。消费者仅应用更新的 revision。
 - 初始加载/外部重载明确调用 `Document::new` / `reload`；不是普通编辑协议。加载不整理公式、不补换行、不重写未知构造。
 - splice 在同一操作中修改原文与对应行尾；未涉及的行尾保留。新增 LF 使用当前文档的首选行尾；显式 CRLF 输入保留 CRLF。删除换行同时删除它的表示；拆行新增表示；重排整行携带原行尾。Undo/Redo 原子恢复文本和表示。
@@ -30,11 +30,11 @@
 | 共享源文、revision、history、独立 view 与 composition | Lyrel 适配，#237 | 两个真实工作台 presentation 编辑/Undo/Redo；独立选择、scroll、几何；切换/关闭 composition owner 后继续输入、保存。 |
 | open/edit/live-source/dirty/save/close/reopen | Lyrel Host，#237 | BOM + 混合 CRLF/LF 文件 untouched save；第二视图输入、生产 host range action、Undo/Redo、保存/重开；同名 mapped Host 文件不被修改。 |
 | 最小真实行列、go-to-line | Lyrel 工作台，#237 | 状态来自当前 presentation 的共享源文；Unicode 跳转、选择与变更后的行列一致，不为查询复制全文。Markdown 跳转只设置一次选择，由其 view-local reveal request 等待布局；不复用普通 Code InputState 的跨帧光标重放，避免覆盖用户后续选择或分屏后的独立状态。 |
-| 本文宽度、字体层级、段距、padding、theme、zoom、disclosure 占地 | 上游排版 + Lyrel shell，#244 | 样式接入在 #237；最终对照固定参考的 ordinary 文档，在窄/宽实窗连续书写、导航和滚动。#237 不将未对照的样式配置称为视觉一致。 |
-| 快捷键、caret-local 标记显露、选择、列表/任务/标题/callout | 上游保留，#244 | `bind_keys` 使用当前 Kit 类型；基础输入由 #237 验证。完整格式/折叠/转换/连续编辑与 Zorite 对照归 #244。旧“光标处仍隐藏全部标记”约束已被替代。 |
-| 插入/slash menu、construct picker、table insertion | Lyrel Host + 上游命令，#239/#244 | #239 完成真实 table picker 与结构编辑；#244 完成通用插入/slash 和文档上下文。不能把源文插入 API 当成已提供 picker。 |
+| 本文宽度、字体层级、段距、padding、theme、zoom、disclosure 占地 | 上游排版 + Lyrel shell，#244 | `markdown::configure` 明确使用 fluid width、1.75 rem 左右 inset、1 rem 上下 inset；Arial 1 rem 正文、1.45 行高及上游 H1/H2/H3 1.8/1.5/1.3 层级。列表间距/缩进、引用 inset、callout 图标与标签间距随正文缩放。主题 provider 每次呈现读取 semantic roles，不重置模式/选择/history；scrollbar 仍贴 pane。heading 只绘 hover/折叠态小 chevron，不增加行。代码已接入，固定参考实窗复测仍待集成者执行。 |
+| 快捷键、caret-local 标记显露、选择、列表/任务/标题/callout | 上游保留 + Lyrel 写作适配，#244 | 复用原生格式/列表/任务/转换和 caret-local reveal；引用/callout Enter 延续 `>`，空引用 Enter 退出。`Ctrl/Cmd+Alt+F` 切换当前/祖先 heading 的 view-local fold，不 dirty；callout `+/-` 与任务勾选仍修改同一可撤销源码。所有输入仍经 foundation 的 affinity/composition 协议；原生消费者与实窗结果不由源码交付推定通过。 |
+| 插入/slash menu、construct picker、table insertion | Lyrel Host + 上游命令，#239/#244 | 行首 `/` 或 `Ctrl/Cmd+/` 打开 Kit `PopupMenu`，方向键/Enter 选择、Escape 保留原文并返焦。支持正文、H1–H6、列表/任务、引用、五种 callout、代码/公式、分隔线、链接与行内公式。菜单捕获 view、revision、range，插入不清空 history；#239 的 table picker 与 #238 的 owning-Host 插图由各自实际入口接入。 |
 | 表格行列、对齐、样式、导航、resize、code fence 语言/复制/高亮 | 上游保留 + Lyrel Host，#239 | native hit-testing、跨单元格输入/Undo、完整宽表；安装真实 code highlighter，验证 code language/copy 控件。 |
-| 文字/高亮预设颜色与自定义颜色 | 上游保留 + Lyrel Host，#244 | 预设源文操作已导入；自定义 picker 待接线。仅在真实 Host 订阅 `PickColor` 后启用 `set_host_custom_colors(true)`；取消、提交和 Undo 均验证。 |
+| 文字/高亮预设颜色与自定义颜色 | 上游保留 + Lyrel Host，#244 | `WritingProvider` 安装真实 Kit `ColorSelect`、HSLA/hex picker 与显式应用/取消/清除草稿，才启用 custom swatch；`PickColor` 事件仍可观察。`Ctrl/Cmd+Alt+C` / `Ctrl/Cmd+Alt+H` 直接打开文字/高亮 picker。草稿不修改源码，提交核对捕获的 view/revision/range；改色和清色各是同一 shared history 的一个原子步骤。native consumer 覆盖取消/hex 提交/clear/几何与双视图 Undo，执行结果待集成者记录。 |
 | 普通相对/外部链接、hover、caret 附近的源码访问 | 上游行为 + Lyrel Host，#238 | 采用 Zorite 的普通单击打开语义，不保留旧 Ctrl+Click-only。在真实 OpenLink/HoverLink 接线前不启用 `set_host_link_navigation(true)`，不显示无效手形控件。相对路径绑定文档 Host，延迟完成不重定向活动组；失败可见且不丢编辑。 |
 | 图片插入/paste/drop、资源、preview、resize/zoom | 上游保留 + Lyrel Host，#238 | 当前无伪造 bitmap/provider；源码 intact。完成 owning local/SSH Host 读写、唯一资源命名、可见失败、延迟资源隔离、输入/Undo/save/reopen 与 native 预览几何。 |
 | inline/display math 渲染、二维结构编辑 seat/menus/commit/cancel | 指定 MIT 公式 GUI 导入 + Lyrel Host，#241 | #237 不导入公式 GUI。渲染 provider 未配置时允许原文直接编辑，不让 arrow/click 被未接线结构编辑事件吞掉。#241 安装真实 renderer 与结构编辑器，并经同一 Document 修改协议提交。 |
@@ -49,7 +49,7 @@
 | 构造 | 行为与负责人 |
 | --- | --- |
 | notebook/database、页面管理、知识库搜索、backlinks、wiki 页面、block-reference 浏览 | 不导入 GPL app 或建立 notebook。`[[...]]`、`![[...]]`、`#^...` 及相关 source 均原样保留；#238 区分普通文档链接和这些排除构造，不留下无目标导航。 |
-| 上游 property/wiki 渲染表面 | 不等于旧 Lyrel inspector 的迁移要求。property provider 未安装时原文直接显示/编辑；`SyntaxStyle::property_icon` 为 `None` 时不把 property 源文折成不可编辑面板。#244 对照与确认这些排除表面。 |
+| 上游 property/wiki 渲染表面 | 不迁移 notebook property inspector。`property_icon` 保持 `None`，不注册 property editor/provider 或 slash property 命令，`key:: value` 原文直接显示和编辑；wiki/embed 不建立假导航。frontmatter 与未知构造保留源码访问。它们不是旧 Lyrel inspectors 的替代实现。 |
 | 旧 Lyrel MDX rich components、visual inspectors、自定义 workspace references/embeds、额外 visual extensions | 旧实现与专属消费者随 cutover 删除，不能以 test-only adapter 继续保留。MDX 使用 source-only；frontmatter 和未知语法始终 intact/source-accessible。负责人 #240/#244，最终文档 #245。 |
 
 ## 测试与证据入口
@@ -60,6 +60,12 @@
 - native 字体目标：`cargo test --locked -p lyrel --features native-markdown-tests --test native_markdown -- --nocapture`。runner 将真实 text system 接入 deterministic test platform，不创建产品 OS 窗口；test settle 须通过 SDK `simulate_next_frame` 执行平台帧回调，pointer move 后再 down/up，不能仅以 `render_frame` 冒充完整输入/帧生命周期。它验证 native 字体几何和生产消费者，不替代实际产品窗口、系统中文 IME 或真实 SSH。
 - Linux：`cargo test --locked --workspace --exclude lyrel --exclude lyrel-markdown-editor --all-features`；`lyrel-text` 可参与，GUI crate 不被选入 headless 范围。
 - Release 输入/导航/scroll/Undo-memory、系统 IME、真实 SSH 与跨平台结果由集成者保存精确 commit、固定 fixtures、执行序列、display 条件、命令、退出码和未验前提。早先实现的历史验收不自动转移到本源码导入。
+
+### #244 写作与视觉验收入口
+
+`writing_tests::continuous_writing` 经生产 workbench 覆盖列表续行/缩进/退出、格式、引用延续/退出、第二 presentation 插入及 shared history。native registry 新增 `writing::native_text_color_picker_clear_geometry_and_shared_history` 与 `writing::native_wrapped_starts_prose_heading_list_quote_zoom`，不删除完整 extreme-line 与 affinity 门禁。源码交付期间按并行合同未运行 build/test/formatter 或操作窗口。
+
+早期实窗由集成者实际观察：foundation `fc3b5de8` 与固定参考在 1195×801、Light、同一 1092 B 源文下比较，候选正文只距 shell 约 5 px，参考约 28 px；候选 callout 缺少 info 图标，wrap/节奏亦不同。这是明确未通过的排版基线，不是 #244 的通过证据。本票以源内 inset、真实图标、原生写作 Host 修正这些路径；提交后的 Light/Dark、docked/full、zoom、系统 IME 和连续书写仍须用同源文在实际窗口复测，不以 native-font test 或静态截图代替。
 
 ## 最终许可证分发验收（#245）
 

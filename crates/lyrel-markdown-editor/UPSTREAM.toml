@@ -14,6 +14,9 @@ formula_import_owner = "#241"
 # 移除加载时公式规范化；保留超长 nowrap 行有界视觉布局；未配置 Host 控件不伪装可用。
 # prepaint 复用当前行索引；viewport band 变化时按需补帧，避免远跳后的可见正文保持空白。
 # document.rs、presentation.rs 为 Lyrel 原创适配；文件 codec 属于独立 Apache-2.0 lyrel-text。
+# writing.rs 为 Lyrel 原创 Host request seam；紧凑 disclosure 与原生格式控件仍沿用 MIT editor。
+# 内容 inset 在 scroll owner 内，公式/嵌入 overlay 共享 inset 后的坐标根；prose/list/quote spacing 随字体缩放。
+# 自定义颜色原子替换同一源码范围；主题 provider 派生当前 semantic style，不重置模式或 history。
 # 未导入 Zorite GPL 应用层、notebook 数据库、独立只读 Markdown renderer 或公式 GUI。
 
 [[source]]
