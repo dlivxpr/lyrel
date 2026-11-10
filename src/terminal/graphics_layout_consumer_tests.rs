@@ -168,16 +168,19 @@ fn graphics_assert_production_paint_at(
             view.terminal.images().recovery_diagnostics(),
         )),
     );
-    view.read_with(cx, |view, _| {
+    window.update(cx, |_, window, cx| {
+        let surface = window.find("terminal-surface").bounds();
+        let view = view.read(cx);
         let geom = view.cell_geom.expect("rooted production TerminalElement must paint a fresh frame");
         assert_eq!((geom.cols, geom.rows), (cols, rows));
         // Inspect the picture actually consumed by production paint, not a
         // fresh projection of live placements under frozen reading/held text.
         let snap = view.grid_snap.as_ref().expect("committed production frame");
-        // Cell row zero moves during fractional scrolling; the pane mask does
-        // not. The preceding row's image can therefore occupy its top sliver.
+        // Observe the stationary pane in GPUI's completed frame, independently
+        // of the shifted cell-row origin or the snapshot's private scroll state.
+        // The preceding row's image can therefore occupy its top sliver.
         let viewport = Bounds::new(
-            point(geom.origin.x, geom.origin.y - geom.line_height * snap.scroll_shift),
+            surface.origin + point(px(GRID_PAD_X), px(GRID_PAD_Y)),
             gpui_kit::size(geom.cell_width * cols as f32, geom.line_height * rows as f32),
         );
         let offset = snap.display_offset;
@@ -190,7 +193,7 @@ fn graphics_assert_production_paint_at(
             });
             assert_eq!(image.painted.load(Ordering::Acquire), expected, "fresh production paint claim must match the current visible resource geometry; not GPU pixels");
         }
-    });
+    }).unwrap();
     // The flag also tracks atlas ownership. An offscreen texture painted in a
     // previous frame must still be retired when a later user action removes it.
     for (painted, previous) in previously_painted {
