@@ -1562,11 +1562,9 @@ impl LyrelApp {
                     cx.propagate();
                     return;
                 }
-                this.editor_dispatch(
-                    &crate::ui::code_editor::commands::TrimTrailingWhitespace,
-                    window,
-                    cx,
-                );
+                // This handler already owns LyrelApp. Redispatching to its own
+                // command listener would try to update the same entity again.
+                this.editor_apply_command(commands::Command::Trim, window, cx);
             }),
         )
         .on_action(cx.listener(|this, _: &EditorJoinLines, window, cx| {
