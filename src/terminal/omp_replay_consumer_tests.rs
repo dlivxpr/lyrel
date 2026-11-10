@@ -150,6 +150,24 @@ impl OmpReplayFixture {
         std::fs::write(self.root.path().join("owned/consumer-ready"), b"rooted production consumer mounted\n").unwrap();
     }
 
+    fn wait_replay(&self, view: &Entity<TerminalView>, cx: &mut TestAppContext) {
+        // Do not scroll into stable reading while omp is still constructing
+        // its saved transcript. The tail is emitted by the real native TUI;
+        // decode/identity/placement and fresh paint checks still follow it.
+        graphics_recovery_wait_with(
+            cx,
+            std::time::Duration::from_secs(90),
+            |cx| {
+                self.assert_running(view, cx, "saved transcript tail");
+                view.read_with(cx, |view, _| {
+                    view.scrollback_text().contains("LYREL_REPLAY_END")
+                        && !view.terminal.term.lock().synchronized_output()
+                })
+            },
+            |cx| format!("omp transcript timed out: {}", self.diagnostics(view, cx)),
+        );
+    }
+
     fn finish(&self, view: &Entity<TerminalView>, cx: &mut TestAppContext) {
         if self.streaming {
             // The public JSONL must contain the completed turn before /exit;
@@ -324,6 +342,7 @@ fn omp_replay_assert_resume(cx: &mut TestAppContext, cases: &[&str]) {
             graphics_build_rooted_consumer(cx, pane, daemon.stream(pane), Vec::new());
         graphics_assert_production_paint(window, &view, cx);
         fixture.start(&view, cx);
+        fixture.wait_replay(&view, cx);
         let expected = if case == "budget" { 8 } else { 3 };
         let mut found = std::collections::BTreeMap::new();
         graphics_recovery_wait_with(
@@ -434,16 +453,7 @@ fn graphics_consumer_released_omp_native_disabled_policy(cx: &mut TestAppContext
             graphics_build_rooted_consumer(cx, pane, daemon.stream(pane), Vec::new());
         graphics_assert_production_paint(window, &view, cx);
         fixture.start(&view, cx);
-        graphics_recovery_wait_with(
-            cx,
-            std::time::Duration::from_secs(90),
-            |cx| {
-                if view.read_with(cx, |view, _| view.scrollback_text().contains("LYREL_REPLAY_END")) { return true; }
-                fixture.assert_running(&view, cx, &format!("{case} saved transcript tail"));
-                false
-            },
-            |cx| format!("omp {case} transcript timed out: {}", fixture.diagnostics(&view, cx)),
-        );
+        fixture.wait_replay(&view, cx);
         assert!(
             omp_replay_scan(&view, window, cx).is_empty(),
             "explicit disabled is authoritative"
