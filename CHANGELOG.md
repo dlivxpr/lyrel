@@ -9,6 +9,7 @@
 
 ### 新增
 
+- #250：为 zsh、Bash、fish、PowerShell 的直接 agent 启动增加命令级 Kitty 环境与下一提示符恢复，本地 Nushell 使用轻量 wrappers；快捷启动、明确映射、待连接窗格、恢复／分叉保留 agent 意图和公开终端 scope，Hermes 专属 marker 尊重显式空值。保留协议禁用和用户 hooks，不引入 PATH shim；补充真实 shell／原生子进程／pending consumers 与无集成时的显式回退。实施阶段未运行构建、格式化、测试、原生窗口或远端验收。
 - #249：新增不强制图片协议的 pi 1.4.0 scoped-discovery 消费者，保留显式关闭／设置优先级和零新消息重放；OpenCode 2.2.0 预览 on／off／inline false 检查完整 global／inline 配置不变。补充 pinned Kimi 用户粘贴缩略图和 Hermes 0.23.1 `image.render`／`InlineImage` 原生组件到真实 PTY／生产终端的消费者，比较完整图片、放置、卸载／重挂载与替换；不增加 renderer、不改用户配置。同步各 agent 能力矩阵与 OpenCode opt-in 文档；本分票未执行构建、测试、原生窗口或远端验收。
 - #236／#245：Markdown 完成唯一默认 Zorite-derived 源码路线的切换，移除旧 Markdown/MDX-rich 投影与专属实现契约；caret-local 标记显露、普通单击链接、MDX source-only 和 shared Document/history 成为当前产品规则。primary/secondary 安装同一组真实 Host providers，rename/save-as 只更新身份与源码策略，不丢弃历史。正式文档、原 14 项 native 消费者逐项迁移及 pinned MIT 来源/字体通知统一收敛；Windows ZIP/Inno 与 macOS app/ZIP 增加完整根 LICENSE 字节守卫。完整宽表的远端末行、真实图片/公式联合 hard-break 与长代码诊断尾部消费者补齐；源码和测试交付不是最终 native、实窗、SSH、平台、包或用户接受通过。
 
@@ -24,6 +25,7 @@
 ### 修复
 
 - #252：稳定阅读的选择／复制、链接、搜索和光标／IME 使用同一语义行；跨视口选择以绝对行保持身份，捕获 Tab stops，主题变化重新解析 ANSI 样式。直接 Kitty 切片与 placeholders 保留资源版本、crop、z 及文本对齐，修正 replay origin 转换；历史缓存仅保留阅读／选择需要的行，不累积全部访问历史。新增真实 PTY／daemon／生产 paint 和 GPUI 交互消费者，修正绘制观察为 committed images；未执行构建、测试、lint、格式化或实窗验收，#255 继续记录本地／SSH、原生像素与系统 IME 证据。
+- #250：PowerShell 手动启动识别器先解开环境赋值右侧的 `CommandExpressionAst`，再安全读取字面量，修复真实 pwsh 中带前置环境赋值的 agent 命令未收到 `TERM_PROGRAM=kitty`；仍拒绝赋值重定向、管道、复合命令和解释器调用，保留显式空值、scope 编码启动、用户提示符及下一提示符恢复。既有真实 PTY 消费者已覆盖失败路径，未降低断言；本修复子任务未运行构建、格式化或测试。
 - #251：冻结 placeholder 消费者区分单元格行原点与方图 aspect-fit 后的居中像素 crop，按独立方图几何同时约束完整行与分数滚动上一行，保留蓝色资源身份、live 擦除／替换后的捕获图片及真实绘制断言，不修改生产图片布局。阅读态的上一行单元格不再遍历实时栅格；构建、测试与格式化由集成验收执行，本修复子任务未运行。
 - #248：普通 shell 的 scoped-launch 前置身份标记改从 daemon 的只读 `Observe` 回放中独立检查，并核验前后标记顺序；终端 `scrollback_text()` 是可被原生 TUI 清屏／覆盖的 VT 呈现，不是追加式 PTY transcript。保留退出后生产视图中的父 shell 身份检查、显式策略优先级及全部 streaming 栅格／放置断言，不修改实际输出或生产阅读实现。本修复子任务未执行构建、测试或格式化。
 - #248：确定性 omp token-stage 消费者仅在自有 streaming overlay 关闭额外的 `display.smoothStreaming` 文字揭示动画，并用正式 config CLI 核验。避免单个 SSE delta 被再次拆成根标签已完整、首个图元尚未完整的合法透明 SVG 后，误当作红底修订；真实 SSE、SVG 修补／节流、两个非空完整中间栅格、精确最终像素与顺序／无旧放置断言保持不变。未在修复子任务运行验证，不宣称默认 smooth reveal 子前缀验收通过。

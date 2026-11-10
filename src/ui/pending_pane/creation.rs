@@ -52,7 +52,7 @@ impl EventEmitter<SpawnFinished> for PendingPane {}
 
 pub(crate) enum PendingLaunch {
     None,
-    Command(String),
+    Command(String, Option<crate::core::cli_agent::CLIAgent>),
     Resume {
         agent: Option<crate::core::cli_agent::CLIAgent>,
         session: Option<String>,
@@ -346,7 +346,7 @@ impl PendingPane {
         let launch = if restored {
             PendingLaunch::None
         } else if let Some(command) = self.spawn.run_on_land.clone() {
-            PendingLaunch::Command(command)
+            PendingLaunch::Command(command, self.launch_agent)
         } else {
             PendingLaunch::Resume {
                 agent: self.spawn.agent,

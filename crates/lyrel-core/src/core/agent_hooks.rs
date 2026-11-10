@@ -161,6 +161,24 @@ fn build_hook_payload(agent: &str, event: &str, stdin_json: &str) -> serde_json:
             body["session_scope"] = value;
         }
     }
+    // The hook process inherits the native agent's actual terminal scope.
+    // Some upstream observers report storage only. Fill only missing public
+    // terminal fields in an existing scope, never synthesize/replace storage
+    // scope on a status-only event or copy inline config/credentials.
+    if matches!(agent, "omp" | "pi" | "kimi" | "opencode" | "hermes")
+        && let Some(environment) = body
+            .get_mut("session_scope")
+            .and_then(|scope| scope.get_mut("environment"))
+            .and_then(serde_json::Value::as_object_mut)
+    {
+        for key in crate::host::session_operations::TERMINAL_SCOPE_ENV {
+            if !environment.contains_key(*key)
+                && let Ok(value) = std::env::var(key)
+            {
+                environment.insert((*key).into(), value.into());
+            }
+        }
+    }
     if agent == "opencode"
         && let Some(presence) = payload.get("opencode_presence")
     {
@@ -1467,6 +1485,52 @@ mod tests {
             state.readout.result, None,
             "a denied tool is not a terminal failed turn"
         );
+    }
+
+    #[test]
+    fn hook_process_preserves_terminal_scope_without_inline_config_or_credentials() {
+        let dir = tempfile::tempdir().unwrap();
+        let output = dir.path().join("scope.json");
+        let status = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--ignored",
+                "--exact",
+                "core::agent_hooks::tests::terminal_scope_hook_child",
+                "--nocapture",
+            ])
+            .env("LYREL_TEST_HOOK_SCOPE_OUTPUT", &output)
+            .env("TERM_PROGRAM", "explicit-terminal")
+            .env("TERM_PROGRAM_VERSION", "")
+            .env("LC_TERMINAL", "lyrel")
+            .env("KITTY_WINDOW_ID", "")
+            .env("OPENAI_API_KEY", "must-not-leak")
+            .env("OPENCODE_CLI_CONFIG_CONTENT", "private-inline-config")
+            .status()
+            .unwrap();
+        assert!(status.success());
+        let body = std::fs::read_to_string(output).unwrap();
+        let event = crate::core::cli_agent::parse_agent_event_body(body.as_bytes()).unwrap();
+        let scope = event.readout.session_scope.unwrap();
+        assert_eq!(scope.environment["TERM_PROGRAM"], "explicit-terminal");
+        assert_eq!(scope.environment["TERM_PROGRAM_VERSION"], "");
+        assert_eq!(scope.environment["KITTY_WINDOW_ID"], "");
+        assert_eq!(scope.environment["HERMES_HOME"], "/owned-home");
+        assert!(!body.contains("must-not-leak"));
+        assert!(!body.contains("private-inline-config"));
+    }
+
+    #[test]
+    #[ignore = "native child for hook process environment reporting"]
+    fn terminal_scope_hook_child() {
+        let Some(output) = std::env::var_os("LYREL_TEST_HOOK_SCOPE_OUTPUT") else {
+            return;
+        };
+        let body = build_hook_body(
+            "hermes",
+            "session-start",
+            r#"{"session_id":"owned-session","session_scope":{"environment":{"HERMES_HOME":"/owned-home"}}}"#,
+        );
+        std::fs::write(output, body).unwrap();
     }
 
     #[test]

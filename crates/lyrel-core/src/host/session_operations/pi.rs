@@ -1,12 +1,6 @@
 use super::*;
 
-const ENV: &[&str] = &[
-    "HOME",
-    "USERPROFILE",
-    "PI_CODING_AGENT_DIR",
-    "PI_CODING_AGENT_SESSION_DIR",
-    "PI_IMAGE_PROTOCOL",
-];
+const ENV: &[&str] = PI_SCOPE_ENV;
 
 pub(super) fn prepare<H: Host + ?Sized>(
     host: &H,
