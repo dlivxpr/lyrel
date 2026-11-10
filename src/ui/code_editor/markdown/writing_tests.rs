@@ -131,7 +131,6 @@ fn zorite_writing_workbench_lists_format_insert_shared_history(cx: &mut TestAppC
 
 #[cfg(feature = "native-markdown-tests")]
 pub(super) fn native_colors(cx: &mut TestAppContext) {
-    use gpui_kit::test::TestEventExt as _;
     let original = "# Colors\r\n\r\ncolored text\r\n";
     let (_directory, path, app, mut context, first, _streams) = open(cx, original);
     app.update_in(&mut context, |app, window, cx| {

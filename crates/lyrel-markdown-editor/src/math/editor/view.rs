@@ -24,6 +24,7 @@ actions!(
     lyrel_formula,
     [
         ConfirmFormula,
+        SaveFormula,
         CancelFormula,
         AlignFormulaLeft,
         AlignFormulaCenter,
@@ -1243,6 +1244,7 @@ impl Render for MathEditor {
             .on_action(
                 cx.listener(|_, _: &ConfirmFormula, _, cx| cx.emit(MathNav::Exit { after: true })),
             )
+            .on_action(cx.listener(|_, _: &SaveFormula, _, cx| cx.emit(MathNav::Save)))
             .on_action(cx.listener(|_, _: &CancelFormula, _, cx| cx.emit(MathNav::Cancel)))
             .on_action(
                 cx.listener(|this, _: &AlignFormulaLeft, _, cx| {

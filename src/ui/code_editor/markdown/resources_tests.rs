@@ -721,13 +721,21 @@ pub(super) fn complete_resources(cx: &mut TestAppContext) {
         "complete fixed resource fixture, never truncated"
     );
     assert_eq!(
-        format!("{:x}", Sha256::digest(source.as_bytes())),
-        "977a50984bddf608afb8965ab49d13fda9be788482d7c2eef9f8e09d957cb061"
+        Sha256::digest(source.as_bytes()).as_slice(),
+        &[
+            0x97, 0x7a, 0x50, 0x98, 0x4b, 0xdd, 0xf6, 0x08, 0xaf, 0xb8, 0x96, 0x5a, 0xb4, 0x9d,
+            0x13, 0xfd, 0xa9, 0xbe, 0x78, 0x84, 0x82, 0xd7, 0xc2, 0xee, 0xf9, 0xf8, 0xe0, 0x9d,
+            0x95, 0x7c, 0xb0, 0x61,
+        ]
     );
     let svg = b"<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"160\" height=\"96\" viewBox=\"0 0 160 96\"><rect x=\"12\" y=\"12\" width=\"136\" height=\"72\" rx=\"8\" fill=\"#4477aa\"/><text x=\"80\" y=\"56\" text-anchor=\"middle\" fill=\"white\" font-size=\"18\">image</text></svg>\n";
     assert_eq!(
-        format!("{:x}", Sha256::digest(svg)),
-        "f79f0bb6e6c0d68d04df5e4ecaaa70e70c6b965da95ca03b1d5ff755d1a942aa"
+        Sha256::digest(svg).as_slice(),
+        &[
+            0xf7, 0x9f, 0x0b, 0xb6, 0xe6, 0xc0, 0xd6, 0x8d, 0x04, 0xdf, 0x5e, 0x4e, 0xca, 0xaa,
+            0x70, 0xe7, 0x0c, 0x6b, 0x96, 0x5d, 0xa9, 0x5c, 0xa0, 0x3b, 0x1d, 0x5f, 0xf7, 0x55,
+            0xd1, 0xa9, 0x42, 0xaa,
+        ]
     );
     std::fs::write(directory.path().join("resources.md"), &source).unwrap();
     std::fs::write(directory.path().join("sample.svg"), svg).unwrap();

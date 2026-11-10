@@ -2,8 +2,6 @@
 use super::*;
 use crate::ui::app::test_window::harness_with_tabs;
 use crate::ui::code_editor::test_host::{FileHost, canonical_tempdir};
-#[cfg(feature = "native-markdown-tests")]
-use gpui_kit::test::TestEventExt as _;
 use gpui_kit::test::TestWindowExt as _;
 use gpui_kit::{TestAppContext, VisualTestContext};
 use std::sync::atomic::Ordering;

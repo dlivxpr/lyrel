@@ -198,6 +198,16 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new("ctrl-alt-f", ToggleHeadingDisclosure, ctx),
         KeyBinding::new("cmd-alt-f", ToggleHeadingDisclosure, ctx),
         KeyBinding::new("escape", Dismiss, ctx),
+        KeyBinding::new(
+            "cmd-s",
+            math::editor::view::SaveFormula,
+            Some("LyrelFormula"),
+        ),
+        KeyBinding::new(
+            "ctrl-s",
+            math::editor::view::SaveFormula,
+            Some("LyrelFormula"),
+        ),
     ]);
 }
 
