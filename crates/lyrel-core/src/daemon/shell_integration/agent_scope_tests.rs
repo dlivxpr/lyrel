@@ -275,6 +275,52 @@ fn structured_scope_shell_contract(program: &str, nushell: bool) {
             let actual: serde_json::Value = serde_json::from_slice(&std::fs::read(home.path().join(format!("{label}.json"))).unwrap()).unwrap();
             assert_eq!(actual["TERM_PROGRAM"], "lyrel", "{program}/{label}: {text}");
         }
+
+        // Inherit empty values from the native launcher, including on Windows
+        // PowerShell versions whose own env assignments delete empty strings.
+        let fields = [
+            ("TERM_PROGRAM", "original-terminal"),
+            ("TERM_PROGRAM_VERSION", "original-version"),
+            ("LC_TERMINAL", "original-locale"),
+            ("LC_TERMINAL_VERSION", "original-locale-version"),
+            ("PI_NO_DECCARA", "0"),
+            ("KITTY_WINDOW_ID", "owned-marker"),
+            ("OPENCODE_CLI_CONFIG_CONTENT", "{\"session\":{\"image_preview\":false}}"),
+        ];
+        for (key, _) in fields { injection.env.insert(key.into(), String::new()); }
+        let mut lines = Vec::new();
+        for state in ["empty", "unset", "nonempty"] {
+            if state == "unset" {
+                lines.push(format!("Remove-Item {} -ErrorAction Ignore\r", fields.iter().map(|(key, _)| format!("Env:{key}")).collect::<Vec<_>>().join(",")));
+            } else if state == "nonempty" {
+                lines.push(format!("{}\r", fields.iter().map(|(key, value)| format!("$env:{key}='{}'", value.replace('\'', "''"))).collect::<Vec<_>>().join("; ")));
+            }
+            lines.push(call(&format!("roundtrip-{state}-before"), "ordinary"));
+            for agent in ["omp", "hermes"] {
+                lines.push(call(&format!("roundtrip-{state}-{agent}"), agent));
+                lines.push(call(&format!("roundtrip-{state}-after-{agent}"), "ordinary"));
+            }
+        }
+        lines.push("Write-Error fixture\r".into());
+        let steps: Vec<_> = lines.iter().map(|line| line.as_bytes()).collect();
+        let text = prompt_steps_over_pty(program, &injection, &steps, Some(home.path()));
+        for state in ["empty", "unset", "nonempty"] {
+            for suffix in ["before", "after-omp", "after-hermes"] {
+                let label = format!("roundtrip-{state}-{suffix}");
+                let actual: serde_json::Value = serde_json::from_slice(&std::fs::read(home.path().join(format!("{label}.json"))).unwrap_or_else(|error| panic!("{label}: {error}\n{text}"))).unwrap();
+                for (key, value) in fields {
+                    let expected = match state {
+                        "empty" => serde_json::json!(""),
+                        "unset" => serde_json::Value::Null,
+                        _ => serde_json::json!(value),
+                    };
+                    assert_eq!(actual[key], expected, "{program}/{label}/{key}: {text}");
+                }
+                for (key, value) in [("PI_IMAGE_PROTOCOL", "none"), ("PI_FORCE_IMAGE_PROTOCOL", "off"), ("PI_KITTY_PLACEHOLDERS", "0"), ("PI_NO_KITTY_PLACEHOLDERS", "1")] {
+                    assert_eq!(actual[key], value, "{program}/{label}/{key}: {text}");
+                }
+            }
+        }
     }
     if let Some(dir) = injection.dir { std::fs::remove_dir_all(dir).unwrap(); }
 }

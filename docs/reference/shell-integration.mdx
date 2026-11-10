@@ -32,7 +32,7 @@ Bash 4.4 及以上仍通过公开的 `PS0` 报告命令开始，保留用户 `PS
 
 集成的 zsh、Bash、fish、PowerShell 识别直接输入的 `omp`、`kimi`、`pi`、`opencode`、`opencode2`、`hermes`，包括字面量参数、前置环境赋值和带引号的绝对路径。只对该次启动设置 `TERM_PROGRAM=kitty`、清空 `TERM_PROGRAM_VERSION`，并用 `LC_TERMINAL=lyrel`、`LC_TERMINAL_VERSION=$LYREL` 保留真实来源；远端未提供 `LYREL` 时使用构建该引导脚本的 lyrel 版本，不改 `TERM`。omp 另加 `PI_NO_DECCARA=1`。Hermes 0.23.1 的公开检测器不读取 `TERM_PROGRAM`，因此只给 Hermes 默认 `KITTY_WINDOW_ID=lyrel`，不覆盖显式 marker（包括空串），也不强制 `image.render`。
 
-下一提示符恢复之前的已设置／未设置／空值以及 export 属性；成功、失败、Ctrl+C 和后台启动使用相同生命周期。PowerShell 的字面量 `$env:KEY='value'; omp ...` 属于该 shell 的前置赋值形式，七个终端／inline-config 字段在提示符前恢复；不会重写提交文本。旧 Windows PowerShell 对空环境值使用系统 setter，受限语言模式不能使用该 setter 时会明确失败，不声称已保留空值。
+下一提示符恢复之前的已设置／未设置／空值以及 export 属性；成功、失败、Ctrl+C 和后台启动使用相同生命周期。PowerShell 的字面量 `$env:KEY='value'; omp ...` 属于该 shell 的前置赋值形式，七个终端／inline-config 字段在提示符前恢复；不会重写提交文本。未设置的字段通过 `Env:` provider 删除，避免 PowerShell 7.5+ 将传给 .NET setter 的 `$null` 转成空字符串；显式空值与非空值分别原样恢复。旧 Windows PowerShell 对空环境值使用系统 setter，受限语言模式不能使用该 setter 时会明确失败，不声称已保留空值。
 
 显式命令级 `TERM_PROGRAM`／版本优先。`PI_IMAGE_PROTOCOL`、`PI_FORCE_IMAGE_PROTOCOL`、placeholder-off、agent 自身 graphics／inline-images 设置均不被开启或改写。`OPENCODE_CLI_CONFIG_CONTENT` 不生成、不合并、不进入持久化 scope；既有 inline 配置原样保留。
 
