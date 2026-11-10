@@ -1137,6 +1137,11 @@ impl ImageStore {
             .collect()
     }
 
+    /// Whether an ordered daemon Screen has established graphics geometry.
+    pub(super) fn layout_known(&self) -> bool {
+        self.0.state.lock().unwrap().viewport_known
+    }
+
     fn snapshot_placements(
         &self,
         rows: &[(i32, Vec<PlaceholderSlice>)],

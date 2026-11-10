@@ -11,6 +11,8 @@ use super::element::RenderCell;
 /// tab map. Rio exposes tab mutations through Handler, but no tab-map reader.
 pub(super) struct ParsePresentation {
     pub(super) cursor: Option<Pos>,
+    pub(super) resize_revision: u64,
+    pub(super) resize_images_revision: u64,
     tab_stops: Vec<bool>,
 }
 
@@ -18,6 +20,8 @@ impl ParsePresentation {
     pub(super) fn new(cols: usize) -> Self {
         let mut facts = Self {
             cursor: None,
+            resize_revision: 0,
+            resize_images_revision: 0,
             tab_stops: Vec::new(),
         };
         facts.resize(cols);
@@ -25,6 +29,7 @@ impl ParsePresentation {
     }
 
     pub(super) fn resize(&mut self, cols: usize) {
+        self.resize_revision = self.resize_revision.wrapping_add(1);
         let previous = self.tab_stops.len();
         self.tab_stops.resize(cols, false);
         for col in previous..cols {
