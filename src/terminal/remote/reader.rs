@@ -468,13 +468,7 @@ impl FrameReader {
                         flush_batch!();
                         cursor_scan.reset();
                         parked_cursor.reset();
-                        {
-                            let _term = term.lock();
-                            if quit.load(Ordering::SeqCst) {
-                                return;
-                            }
-                            proxy.parse_state.presentation.lock().unwrap().invalidate_reading();
-                        }
+                        proxy.parse_state.presentation.lock().unwrap().cursor = None;
                         proxy.parse_state.replaying.store(true, Ordering::Relaxed);
                         // The replay carries the command marks too, so
                         // a pane reattached after `nvim` exited in it
@@ -511,6 +505,9 @@ impl FrameReader {
                             // Replay establishes a baseline, never a surviving
                             // presentation hold from a historical stream.
                             term.end_sync_update();
+                            // Fence every capture made before or during replay,
+                            // under the same guard as its completed baseline.
+                            proxy.parse_state.presentation.lock().unwrap().invalidate_reading();
                         }
                         mode_tok.feed(&bytes, |payload| {
                             if let Some(mode) = payload.strip_prefix(b"133;V;") {
