@@ -1006,9 +1006,7 @@ pub(super) fn native_long_code(cx: &mut TestAppContext) {
         view.select_range(body..body, cx);
         view.focus_handle(cx).focus(window, cx);
         view.set_diagnostics(
-            vec![lyrel_markdown_editor::Diagnostic {
-                range: body..body + 400_000,
-            }],
+            vec![lyrel_markdown_editor::Diagnostic::new(body..body + 400_000)],
             cx,
         );
     });

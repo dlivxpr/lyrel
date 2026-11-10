@@ -17,9 +17,12 @@
 - 所有源文变更和 Undo/Redo 发出 `DocumentEvent`。`edits()` 按实际应用顺序给出每一步 LF/UTF-8 range、removed、inserted；后一条 range 基于前一条已经应用的文本。消费者仅应用更新的 revision。
 - 初始加载/外部重载明确调用 `Document::new` / `reload`；不是普通编辑协议。加载不整理公式、不补换行、不重写未知构造。
 - splice 在同一操作中修改原文与对应行尾；未涉及的行尾保留。新增 LF 使用当前文档的首选行尾；显式 CRLF 输入保留 CRLF。删除换行同时删除它的表示；拆行新增表示；重排整行携带原行尾。Undo/Redo 原子恢复文本和表示。
-- preedit 是 Document 持有的单一 composition lease，view 只持有本地 marked range；切换输入所有者先结束原 lease。正常关闭会提交 preedit；若所有者已销毁，后续 claim 将其原子提交为可撤销 history 并发布通知，不将过期 lease 留给后续 edit。
+- preedit 是 Document 持有的单一 composition lease，view 只持有本地 marked range；切换输入所有者先结束原 lease。关闭 presentation 仅提交它自己持有的 preedit，不结束另一个存活 view 的 lease；保存等文档级显式 finalize 仍处理当前 owner。若所有者已销毁，后续 claim 将其原子提交为可撤销 history 并发布通知，不将过期 lease 留给后续 edit。
 - 工作台保留 `BufferId`、Host/path identity、dirty、save/save-as/conflict/close、tabs/groups、导航与状态栏。`lyrel-text` 是两个真实消费者共用的 GUI-free Apache-2.0 codec/EditorConfig 策略；editor 不依赖 app 或 `lyrel-core`。I/O 通过工作台捕获的 owning Host 在 worker 执行。
 - 保存捕获共享文档原文、表示、格式以及 Host/path；晚到完成不能将较新的编辑标为 clean，也不能改变另一个 group 的 close intent。
+- 显式格式转换是独立 history 事务，紧随的 typing 不并入转换；没有真实修改的 range batch（包括 no-op Trim）不改变前一事务的 Undo 选区。正文菜单的完整 `Labels` 由应用双语注入，语言切换同步既有 view，不依赖重新打开。
+- 图片源从权威 `SourceSnapshot` 按与 renderer 相同的语法扫描，不从任意 view 的延迟缓存推断新 revision。cache 与 preview 共用实体释放 lease，最后一个消费者释放时才 `drop_image`；Mermaid 替换、移除与 host 释放显式回收 atlas tile，异步旧 lease 不发布。
+- MDX 改回 Markdown 时，既有 presentation 同步链接导航/hover 能力；source-only 仍不导航。插入菜单取消返焦及已转移焦点保护由锁定 Kit `PopupMenu` 的 `action_context`/dismiss 生命周期提供，不重复实现。
 
 ## 能力、负责人和可观察验收
 
@@ -82,6 +85,9 @@
 ### #241 公式验收路径
 
 `markdown_formula::install` 安装 primary 与 secondary 的 provider、版本隔离、结构 seat 和原生菜单。显示渲染和临时树不修改 Document；未修改提交直接返焦，不重新序列化原式。正文提交只替换去除外围空白后的 body range，原 fences、邻文及逐行行尾不回写。对齐标记是同一 batch 的另一条必要 edit。结构 entry 通过 AST 保真比较拒绝字体、颜色、间距、不可表示环境或无效解析，不把 best-effort wrapper 丢弃带入生产；显示 renderer 仍保留其支持的原语法和显式颜色。
+
+缩进的 display fence、closing 尾空格与单行 display 外围空白均按精确 body offset 保留；空 `$$\n$$` 首次结构提交补齐 body 行，不将 closing fence 拼到公式尾。caret/selection-only 移动仅刷新视图，模型变化才同步栅格化；主题/字号/DPR 变化仍更新显示。相关新增消费者由集成者集中执行，不从源码交付推定通过。
+
 
 临时树内部的 Undo/Redo 仅管理未提交草稿；提交本身只占普通 Document history 的一项。原生文本输入经 `EntityInputHandler`，预编辑不进入文档；候选 bounds 与 pointer 共用实际 formula image/caret 几何。主题、zoom、DPR 与 revision 标识异步 bitmap，晚到结果不覆盖新请求；关闭 presentation 回收 host/seat/图像。NBSP spacer 防止公式/图片在 soft-wrap 中跨错行，不插入任何源码字符。
 

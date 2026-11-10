@@ -293,7 +293,7 @@ impl MarkdownPresentations {
         self.0.borrow_mut().retain(|(tab, group, view, _, _)| {
             let keep = live(*tab, *group);
             if !keep {
-                view.update(cx, |view, cx| view.finish_composition(cx));
+                view.update(cx, |view, cx| view.finish_owned_composition(cx));
             }
             keep
         });
@@ -306,10 +306,16 @@ impl MarkdownPresentations {
         cx: &mut gpui_kit::App,
     ) {
         if let Some(primary) = input.markdown() {
-            primary.update(cx, |view, cx| view.set_source_only(source_only, cx));
+            primary.update(cx, |view, cx| {
+                view.set_source_only(source_only, cx);
+                view.set_host_link_navigation(!source_only);
+            });
             for (_, _, view, _, _) in self.0.borrow().iter() {
                 if view != primary {
-                    view.update(cx, |view, cx| view.set_source_only(source_only, cx));
+                    view.update(cx, |view, cx| {
+                        view.set_source_only(source_only, cx);
+                        view.set_host_link_navigation(!source_only);
+                    });
                 }
             }
         }

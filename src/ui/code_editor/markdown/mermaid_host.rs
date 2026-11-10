@@ -170,6 +170,13 @@ struct Entry {
     state: MermaidPresentation,
     control: OperationControl,
 }
+impl Entry {
+    fn release_image(&self, cx: &mut App) {
+        if let MermaidPresentation::Ready(image, ..) = &self.state {
+            cx.drop_image(image.clone(), None);
+        }
+    }
+}
 struct Job {
     key: Key,
     control: OperationControl,
@@ -205,6 +212,7 @@ impl Store {
         source: &str,
         event: Option<&DocumentEvent>,
         style: Style,
+        cx: &mut App,
     ) -> Vec<Job> {
         // Ordered LF/UTF-8 edits move an unchanged owner, including insertion
         // exactly before its opening fence. Removing the whole owner revokes it
@@ -218,6 +226,7 @@ impl Store {
                         && !removed.is_empty()
                     {
                         entry.control.cancel();
+                        entry.release_image(cx);
                         return false;
                     }
                     if removed.end <= entry.range.start {
@@ -250,6 +259,7 @@ impl Store {
                     continue;
                 }
                 entry.control.cancel();
+                entry.release_image(cx);
                 self.next_request += 1;
                 entry.key.request = self.next_request;
                 entry.key.revision = revision;
@@ -294,11 +304,12 @@ impl Store {
         }
         for entry in previous {
             entry.control.cancel();
+            entry.release_image(cx);
         }
         self.revision = revision;
         jobs
     }
-    fn complete(&mut self, key: &Key, result: Result<Rendered, Failure>) -> bool {
+    fn complete(&mut self, key: &Key, result: Result<Rendered, Failure>, cx: &mut App) -> bool {
         let resident: usize = self
             .entries
             .iter()
@@ -314,6 +325,7 @@ impl Store {
         else {
             return false;
         };
+        entry.release_image(cx);
         entry.state = match result {
             Ok(rendered)
                 if image_bytes(&rendered.image).saturating_add(resident) <= CACHE_BYTES =>
@@ -347,6 +359,13 @@ impl MermaidHost {
         });
         let theme_watch =
             cx.observe_global::<gpui_kit::component::Theme>(|this, cx| this.refresh(None, cx));
+        cx.on_release(|this, cx| {
+            for entry in &this.store.borrow().entries {
+                entry.control.cancel();
+                entry.release_image(cx);
+            }
+        })
+        .detach();
         let mut host = Self {
             document,
             editor,
@@ -381,6 +400,7 @@ impl MermaidHost {
             source,
             event,
             Style::current(cx),
+            cx,
         );
         if jobs.is_empty() {
             return;
@@ -432,7 +452,7 @@ impl MermaidHost {
         let mut changed = false;
         for (key, result) in results {
             if key.document == self.document.entity_id() && key.style == style {
-                changed |= self.store.borrow_mut().complete(&key, result);
+                changed |= self.store.borrow_mut().complete(&key, result, cx);
             }
         }
         if changed {
