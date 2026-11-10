@@ -30,6 +30,66 @@ fn until(context: &mut VisualTestContext, mut ready: impl FnMut(&mut VisualTestC
         std::thread::sleep(Duration::from_millis(5));
     }
 }
+pub(super) fn capture_svg(key: &super::Key, svg: &str) {
+    use std::io::Write as _;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let Some(directory) = std::env::var_os("LYREL_MERMAID_PROBE_DIR") else {
+        return;
+    };
+    let directory = Path::new(&directory);
+    assert!(directory.is_absolute() && directory.is_dir());
+    static NEXT: AtomicUsize = AtomicUsize::new(0);
+    let stem = format!(
+        "{:04}-revision-{}-font-{}",
+        NEXT.fetch_add(1, Ordering::Relaxed),
+        key.revision,
+        key.style.size,
+    );
+    let mut fonts = resvg::usvg::fontdb::Database::new();
+    fonts.load_system_fonts();
+    let options = resvg::usvg::Options {
+        fontdb: std::sync::Arc::new(fonts),
+        ..Default::default()
+    };
+    let tree = resvg::usvg::Tree::from_data(svg.as_bytes(), &options).unwrap();
+    let mut texts = Vec::new();
+    fn collect(group: &resvg::usvg::Group, texts: &mut Vec<serde_json::Value>) {
+        for node in group.children() {
+            match node {
+                resvg::usvg::Node::Group(group) => collect(group, texts),
+                resvg::usvg::Node::Text(text) => texts.push(serde_json::json!({
+                    "text": text.chunks().iter().map(|chunk| chunk.text()).collect::<String>(),
+                    "bounds": format!("{:?}", text.abs_bounding_box()),
+                    "glyph_bounds": format!("{:?}", text.flattened().abs_bounding_box()),
+                })),
+                _ => {}
+            }
+        }
+    }
+    collect(tree.root(), &mut texts);
+    let metadata = serde_json::json!({
+        "source": key.source,
+        "family": key.style.family.as_ref(),
+        "font_size": key.style.size,
+        "revision": key.revision,
+        "svg_size": format!("{:?}", tree.size()),
+        "content_bounds": format!("{:?}", tree.root().abs_stroke_bounding_box()),
+        "texts": texts,
+    });
+    for (extension, bytes) in [
+        ("svg", svg.as_bytes().to_vec()),
+        ("json", serde_json::to_vec_pretty(&metadata).unwrap()),
+    ] {
+        let path = directory.join(format!("{stem}.{extension}"));
+        std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(path)
+            .unwrap()
+            .write_all(&bytes)
+            .unwrap();
+    }
+}
 fn diagnose(
     phase: &str,
     view: &Entity<lyrel_markdown_editor::EditorState>,
@@ -83,6 +143,33 @@ fn ready(
             _ => unreachable!(),
         }
     })
+}
+fn image(
+    view: &Entity<lyrel_markdown_editor::EditorState>,
+    context: &VisualTestContext,
+) -> std::sync::Arc<gpui_kit::RenderImage> {
+    view.read_with(context, |view, _| {
+        match view.mermaid_presentation(2).unwrap() {
+            MermaidPresentation::Ready(image, ..) => image,
+            _ => panic!("expected the current native Mermaid image"),
+        }
+    })
+}
+fn ready_after(
+    view: &Entity<lyrel_markdown_editor::EditorState>,
+    previous: &std::sync::Arc<gpui_kit::RenderImage>,
+    context: &mut VisualTestContext,
+) -> (f32, f32) {
+    until(context, |context| {
+        view.read_with(context, |view, _| {
+            matches!(
+                view.mermaid_presentation(2),
+                Some(MermaidPresentation::Ready(image, ..))
+                    if !std::sync::Arc::ptr_eq(&image, previous)
+            )
+        })
+    });
+    ready(view, context)
 }
 fn save(app: &Entity<LyrelApp>, context: &mut VisualTestContext) {
     context.dispatch_action(crate::core::actions::EditorSave);
@@ -153,6 +240,7 @@ pub(super) fn lifecycle(cx: &mut TestAppContext) {
             .clone()
     });
     ready(&view, &mut context);
+    let previous_image = image(&view, &context);
     // The production go-to command enters the source of the rendered block.
     context.dispatch_action(crate::core::actions::EditorGoToLine);
     context.update(|window, cx| {
@@ -165,13 +253,20 @@ pub(super) fn lifecycle(cx: &mut TestAppContext) {
         view.select_range(at..at + 4, cx);
         view.focus_handle(cx).focus(window, cx);
     });
-    context.update(|window, cx| window.input("A considerably wider destination", cx));
+    context.update(|_, cx| {
+        cx.write_to_clipboard(gpui_kit::ClipboardItem::new_string(
+            "A considerably wider destination".into(),
+        ));
+    });
+    context.dispatch_action(gpui_kit::component::input::Paste);
     settle(&mut context);
     view.update_in(&mut context, |view, _, cx| view.select_range(0..0, cx));
-    let changed = ready(&view, &mut context);
+    let changed = ready_after(&view, &previous_image, &mut context);
     diagnose("lifecycle edited ready", &view, &mut context);
+    // Merman 的真实默认值将普通节点的标签宽度同时下限/换行约束在 120px；
+    // 原生字体会把完整长标签折成多行，增高而不是突破最小节点宽度。
     assert!(
-        changed.0 > before.0,
+        changed.0 >= before.0 && changed.1 > before.1,
         "native labels must change the actual diagram geometry: before={before:?}, changed={changed:?}, source={}",
         view.read_with(&context, |view, _| view.text().to_owned())
     );
@@ -197,7 +292,13 @@ pub(super) fn lifecycle(cx: &mut TestAppContext) {
         view.select_range(at..at + "flowchart TD".len(), cx);
         view.focus_handle(cx).focus(window, cx);
     });
-    context.update(|window, cx| window.input("not-a-mermaid-family", cx));
+    context.update(|_, cx| {
+        cx.write_to_clipboard(gpui_kit::ClipboardItem::new_string(
+            "not-a-mermaid-family".into(),
+        ));
+    });
+    context.dispatch_action(gpui_kit::component::input::Paste);
+    settle(&mut context);
     view.update_in(&mut context, |view, _, cx| view.select_range(0..0, cx));
     until(&mut context, |context| {
         view.read_with(context, |view, _| {
@@ -443,6 +544,7 @@ pub(super) fn theme_zoom_scroll(cx: &mut TestAppContext) {
     diagnose("geometry tail revealed", &view, &mut context);
     delayed.release(&mut context);
     let initial = ready(&view, &mut context);
+    let initial_image = image(&view, &context);
     settle(&mut context);
     diagnose("geometry released ready", &view, &mut context);
     let after = view.read_with(&context, |view, _| {
@@ -452,26 +554,25 @@ pub(super) fn theme_zoom_scroll(cx: &mut TestAppContext) {
         (before.top() - after.top()).abs() <= px(2.),
         "late diagram sizing must anchor the visible document row"
     );
-    let prior_size = context.update(|_, cx| {
+    let (prior_size, prior_ui_size) = context.update(|_, cx| {
         use gpui_kit::component::ActiveTheme as _;
-        cx.theme().font_size
+        (cx.theme().font_size, cx.global::<crate::core::config::Config>().ui_font_size)
     });
-    context.update(|_, cx| {
-        gpui_kit::component::Theme::update(cx, |theme| theme.font_size = prior_size * 1.25)
+    let zoom_size = prior_ui_size * 1.25;
+    // 与 SettingsWindow::set_ui_font_size 相同：配置负责工作台 rem，Theme 负责 provider。
+    app.update_in(&mut context, |_, _, cx| {
+        cx.global_mut::<crate::core::config::Config>().ui_font_size = zoom_size;
+        gpui_kit::component::Theme::update(cx, |theme| theme.font_size = px(zoom_size));
+        cx.notify();
     });
     diagnose("geometry waiting for zoom ready", &view, &mut context);
-    let mut observed_image = None;
-    until(&mut context, |context| {
-        let presentation = view.read_with(context, |view, _| view.mermaid_presentation(2));
-        if let Some(MermaidPresentation::Ready(image, ..)) = &presentation {
-            let image = std::sync::Arc::as_ptr(image) as usize;
-            if observed_image != Some(image) {
-                observed_image = Some(image);
-                diagnose("geometry observed zoom image", &view, context);
-            }
-        }
-        matches!(presentation, Some(MermaidPresentation::Ready(_, width, _)) if width > initial.0)
-    });
+    let zoomed = ready_after(&view, &initial_image, &mut context);
+    diagnose("geometry zoom ready", &view, &mut context);
+    assert!(
+        zoomed.0 >= initial.0 && zoomed.1 > initial.1,
+        "zoom must enlarge actual native diagram geometry: initial={initial:?}, zoomed={zoomed:?}"
+    );
+    context.update(|window, _| assert_eq!(window.rem_size(), px(zoom_size)));
     view.read_with(&context, |view, cx| {
         assert_eq!(
             view.document().read(cx).encode().unwrap(),
@@ -493,7 +594,9 @@ pub(super) fn theme_zoom_scroll(cx: &mut TestAppContext) {
     context.dispatch_action(gpui_kit::component::input::Undo);
     save(&app, &mut context);
     assert_eq!(std::fs::read(&path).unwrap(), original.as_bytes());
-    context.update(|_, cx| {
-        gpui_kit::component::Theme::update(cx, |theme| theme.font_size = prior_size)
+    app.update_in(&mut context, |_, _, cx| {
+        cx.global_mut::<crate::core::config::Config>().ui_font_size = prior_ui_size;
+        gpui_kit::component::Theme::update(cx, |theme| theme.font_size = prior_size);
+        cx.notify();
     });
 }
