@@ -70,8 +70,11 @@ impl EditorInput {
         InputRead { input: self, cx }
     }
     pub(crate) fn focus(&self, window: &mut Window, cx: &mut gpui_kit::App) {
-        self.finish_composition(window, cx);
-        self.read(cx).focus_handle(cx).focus(window, cx);
+        let focus = self.read(cx).focus_handle(cx);
+        if !focus.contains_focused(window, cx) {
+            self.finish_composition(window, cx);
+            focus.focus(window, cx);
+        }
     }
     pub(crate) fn set_cursor_position(
         &self,

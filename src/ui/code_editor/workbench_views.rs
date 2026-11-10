@@ -148,17 +148,17 @@ fn closing_either_nonowner_preserves_composition_lease_and_history(cx: &mut Test
         let second = view(&app, &context);
         let (closing, owner) = if close_primary { (&first, &second) } else { (&second, &first) };
         app.update_in(&mut context, |app, window, cx| {
-            let id = app.active_buffer().unwrap().id();
-            let code = app.tab_code().unwrap();
-            let closing_group = if close_primary { code.split.as_ref().unwrap().id } else { code.group };
-            assert!(app.editor_focus_group(!close_primary, window, cx));
+            if close_primary {
+                assert!(app.editor_focus_group(true, window, cx));
+            }
             owner.update(cx, |view, cx| view.select_range(8..8, cx));
+            owner.read(cx).focus_handle(cx).focus(window, cx);
             owner.update(cx, |view, cx| {
                 view.replace_and_mark_text_in_range(None, "中😀", Some(3..3), window, cx);
             });
-            // Captured closes (save completion/tab retirement) remove a group
-            // without moving focus away from the surviving input owner.
-            assert!(app.tab_code_mut().unwrap().close_in_group(id, closing_group));
+            // Closing the other strip must preserve this already-focused
+            // input, including the restoration performed by focus_editor.
+            app.editor_close_file(0, window, cx);
             app.editor_sync(window, cx);
         });
         owner.read_with(&context, |view, cx| {

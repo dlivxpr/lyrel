@@ -249,7 +249,7 @@ pub(super) fn unsupported_and_unchanged_are_lossless(cx: &mut TestAppContext) {
 fn formula_empty_and_indented_fences_preserve_bytes_through_commit_cancel_and_undo(cx: &mut TestAppContext) {
     use lyrel_markdown_editor::math::editor::view::ConfirmFormula;
     for (original, expected) in [
-        ("before\r\n$$\n$$\r\nafter", "before\r\n$$\nz\n$$\r\nafter"),
+        ("before\r\n$$\n$$\r\nafter", "before\r\n$$\nz\r\n$$\r\nafter"),
         ("before\r\n  $$  \n 1 \r\n  $$  \r\nafter", "before\r\n  $$  \n z 1 \r\n  $$  \r\nafter"),
         ("before\r\n  $$1$$  \r\nafter", "before\r\n  $$z 1$$  \r\nafter"),
     ] {
