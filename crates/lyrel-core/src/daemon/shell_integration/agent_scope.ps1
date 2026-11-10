@@ -24,7 +24,11 @@
           $assignment.Left -isnot [System.Management.Automation.Language.VariableExpressionAst] -or
           $assignment.Left.VariablePath.UserPath -notmatch '^env:([A-Za-z_][A-Za-z_0-9]*)$') { return }
       $key = $Matches[1]
-      try { $null = $assignment.Right.SafeGetValue() } catch { return }
+      # AssignmentStatementAst wraps a literal RHS in CommandExpressionAst;
+      # SafeGetValue rejects that statement wrapper, not its literal expression.
+      $value = $assignment.Right
+      if ($value -isnot [System.Management.Automation.Language.CommandExpressionAst] -or $value.Redirections.Count) { return }
+      try { $null = $value.Expression.SafeGetValue() } catch { return }
       $explicit[$key] = $true
     }
     $pipeline = $statements[-1]

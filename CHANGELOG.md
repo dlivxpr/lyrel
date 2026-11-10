@@ -24,6 +24,7 @@
 
 ### 修复
 
+- #250：PowerShell 手动启动识别器先解开环境赋值右侧的 `CommandExpressionAst`，再安全读取字面量，修复真实 pwsh 中带前置环境赋值的 agent 命令未收到 `TERM_PROGRAM=kitty`；仍拒绝赋值重定向、管道、复合命令和解释器调用，保留显式空值、scope 编码启动、用户提示符及下一提示符恢复。既有真实 PTY 消费者已覆盖失败路径，未降低断言；本修复子任务未运行构建、格式化或测试。
 - #251：冻结 placeholder 消费者区分单元格行原点与方图 aspect-fit 后的居中像素 crop，按独立方图几何同时约束完整行与分数滚动上一行，保留蓝色资源身份、live 擦除／替换后的捕获图片及真实绘制断言，不修改生产图片布局。阅读态的上一行单元格不再遍历实时栅格；构建、测试与格式化由集成验收执行，本修复子任务未运行。
 - #248：普通 shell 的 scoped-launch 前置身份标记改从 daemon 的只读 `Observe` 回放中独立检查，并核验前后标记顺序；终端 `scrollback_text()` 是可被原生 TUI 清屏／覆盖的 VT 呈现，不是追加式 PTY transcript。保留退出后生产视图中的父 shell 身份检查、显式策略优先级及全部 streaming 栅格／放置断言，不修改实际输出或生产阅读实现。本修复子任务未执行构建、测试或格式化。
 - #248：确定性 omp token-stage 消费者仅在自有 streaming overlay 关闭额外的 `display.smoothStreaming` 文字揭示动画，并用正式 config CLI 核验。避免单个 SSE delta 被再次拆成根标签已完整、首个图元尚未完整的合法透明 SVG 后，误当作红底修订；真实 SSE、SVG 修补／节流、两个非空完整中间栅格、精确最终像素与顺序／无旧放置断言保持不变。未在修复子任务运行验证，不宣称默认 smooth reveal 子前缀验收通过。
