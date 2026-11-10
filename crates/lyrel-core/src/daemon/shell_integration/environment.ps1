@@ -1,5 +1,5 @@
-# Windows PowerShell / older .NET delete empty values through Environment.Set.
-# The native setter preserves an empty value as distinct from an absent key.
+# Before PowerShell 7.5, Windows Env: and the .NET setter delete empty values.
+# Use the native setter for empty scope values/restoration, but Env: for unset.
 function global:__LyrelScopeSet([string]$Key, $Value) {
   # PowerShell 7.5+ coerces $null to an empty string for the .NET setter.
   # Delete through Env: instead, without conflating absence with an empty value.

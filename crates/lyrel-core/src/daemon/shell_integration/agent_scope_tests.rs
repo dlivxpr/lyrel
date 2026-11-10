@@ -164,13 +164,22 @@ fn fish_manual_agent_scope_and_restoration_over_a_real_pty() {
 }
 
 fn structured_scope_shell_contract(program: &str, nushell: bool) {
-    match std::process::Command::new(program).arg("--version").output() {
+    let available = if nushell {
+        std::process::Command::new(program).arg("--version").output()
+    } else {
+        std::process::Command::new(program).args(["-NoProfile", "-NonInteractive", "-Command", "$PSVersionTable.PSVersion.Major"]).output()
+    };
+    let version = match available {
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
             eprintln!("skipping: {program} not installed");
             return;
         }
-        result => { result.unwrap(); }
-    }
+        result => result.unwrap(),
+    };
+    let powershell_major = if nushell { 0 } else {
+        assert!(version.status.success(), "{program}: {}", String::from_utf8_lossy(&version.stderr));
+        String::from_utf8_lossy(&version.stdout).trim().parse::<u32>().unwrap()
+    };
     let home = tempfile::tempdir().unwrap();
     let bin = home.path().join("bin with space");
     std::fs::create_dir(&bin).unwrap();
@@ -216,9 +225,17 @@ fn structured_scope_shell_contract(program: &str, nushell: bool) {
     lines.push(if nushell {
         format!("with-env {{TERM_PROGRAM: '', LYREL_CAPTURE_LABEL: 'empty-identity'}} {{ omp {observer} }}\r")
     } else { format!("$env:TERM_PROGRAM=''; $env:LYREL_CAPTURE_LABEL='empty-identity'; omp {observer}\r") });
+    lines.push(call("after-empty-identity", "ordinary"));
     lines.push(if nushell {
         format!("with-env {{KITTY_WINDOW_ID: '', LYREL_CAPTURE_LABEL: 'empty-marker'}} {{ hermes {observer} }}\r")
     } else { format!("$env:KITTY_WINDOW_ID=''; $env:LYREL_CAPTURE_LABEL='empty-marker'; hermes {observer}\r") });
+    lines.push(call("after-empty-marker", "ordinary"));
+    if !nushell {
+        lines.push(format!("$env:TERM_PROGRAM_VERSION=''; $env:LC_TERMINAL=''; $env:LC_TERMINAL_VERSION=''; $env:PI_NO_DECCARA=''; $env:OPENCODE_CLI_CONFIG_CONTENT=''; $env:LYREL_CAPTURE_LABEL='explicit-empty-fields'; omp {observer}\r"));
+        lines.push(call("after-explicit-empty-fields", "ordinary"));
+        lines.push(format!("$env:TERM_PROGRAM=$null; $env:KITTY_WINDOW_ID=$null; $env:LYREL_CAPTURE_LABEL='explicit-unset'; hermes {observer}\r"));
+        lines.push(call("after-explicit-unset", "ordinary"));
+    }
     lines.push(call("failure", "omp"));
     lines.push(call("after-failure", "ordinary"));
     lines.push(call("interrupt", "omp"));
@@ -229,9 +246,24 @@ fn structured_scope_shell_contract(program: &str, nushell: bool) {
         lines.push(call("absolute", &format!("& '{}'", native.to_string_lossy().replace('\'', "''"))));
         lines.push(format!("$env:LYREL_CAPTURE_LABEL='pipeline'; omp {observer} | Out-Null\r"));
         lines.push(format!("$env:LYREL_CAPTURE_LABEL='compound'; omp {observer}; $null=0\r"));
-        lines.push(format!("$env:LYREL_CAPTURE_LABEL='background'; omp {observer} &\r"));
-        lines.push("Get-Job | Wait-Job | Remove-Job\r".into());
-        lines.push(call("after-background", "ordinary"));
+        // PS5.1 cannot parse the trailing background operator. Exercise its
+        // public job mechanism with the same production explicit-scope encoder.
+        let background = crate::host::session_operations::scoped_agent_launch_command(
+            &*crate::host::local::LocalHost::new(),
+            crate::core::cli_agent::CLIAgent::OhMyPi,
+            &format!("omp {observer}"),
+            Some(program),
+        ).unwrap();
+        let script = home.path().join("background.ps1");
+        std::fs::write(&script, format!("$env:LYREL_CAPTURE_LABEL='background-job'\n{background}\n$env:LYREL_CAPTURE_LABEL='after-job-scope'\nordinary {observer}\n")).unwrap();
+        lines.push(format!("Start-Job -ScriptBlock {{ & '{}' }}\r", script.to_string_lossy().replace('\'', "''")));
+        lines.push("Get-Job | Wait-Job | Receive-Job; Get-Job | Remove-Job\r".into());
+        lines.push(call("after-background-job", "ordinary"));
+        if powershell_major >= 6 {
+            lines.push(format!("$env:LYREL_CAPTURE_LABEL='background'; omp {observer} &\r"));
+            lines.push("Get-Job | Wait-Job | Receive-Job; Get-Job | Remove-Job\r".into());
+            lines.push(call("after-background", "ordinary"));
+        }
     }
     lines.push(if nushell { "1 / 0\r".into() } else { "Write-Error fixture\r".into() });
     let steps: Vec<_> = lines.iter().map(|line| line.as_bytes()).collect();
@@ -269,9 +301,41 @@ fn structured_scope_shell_contract(program: &str, nushell: bool) {
     for (label, key) in [("empty-identity", "TERM_PROGRAM"), ("empty-marker", "KITTY_WINDOW_ID")] {
         let actual: serde_json::Value = serde_json::from_slice(&std::fs::read(home.path().join(format!("{label}.json"))).unwrap()).unwrap();
         assert_eq!(actual[key], "", "{program}/{label}: {text}");
+        let restored: serde_json::Value = serde_json::from_slice(&std::fs::read(home.path().join(format!("after-{label}.json"))).unwrap()).unwrap();
+        assert_eq!(restored[key], if key == "TERM_PROGRAM" { serde_json::json!("lyrel") } else { serde_json::Value::Null }, "{program}/after-{label}: {text}");
     }
     if !nushell {
-        for label in ["pipeline", "compound", "after-background"] {
+        let read = |label: &str| -> serde_json::Value {
+            serde_json::from_slice(&std::fs::read(home.path().join(format!("{label}.json"))).unwrap_or_else(|error| panic!("{label}: {error}\n{text}"))).unwrap()
+        };
+        let empty = read("explicit-empty-fields");
+        for key in ["TERM_PROGRAM_VERSION", "LC_TERMINAL", "LC_TERMINAL_VERSION", "PI_NO_DECCARA", "OPENCODE_CLI_CONFIG_CONTENT"] {
+            assert_eq!(empty[key], "", "{program}/explicit-empty-fields/{key}: {text}");
+        }
+        let restored = read("after-explicit-empty-fields");
+        assert_eq!(restored["TERM_PROGRAM_VERSION"], "original-version");
+        assert_eq!(restored["LC_TERMINAL"], "");
+        assert_eq!(restored["LC_TERMINAL_VERSION"], serde_json::Value::Null);
+        assert_eq!(restored["PI_NO_DECCARA"], serde_json::Value::Null);
+        assert_eq!(restored["OPENCODE_CLI_CONFIG_CONTENT"], "{\"session\":{\"image_preview\":false}}");
+        let unset = read("explicit-unset");
+        for key in ["TERM_PROGRAM", "KITTY_WINDOW_ID"] {
+            assert_eq!(unset[key], serde_json::Value::Null, "{program}/explicit-unset/{key}: {text}");
+        }
+        let background = read("background-job");
+        assert_eq!(background["TERM_PROGRAM"], "kitty", "{program}/background-job: {text}");
+        assert_eq!(background["TERM_PROGRAM_VERSION"], "");
+        assert_eq!(background["PI_NO_DECCARA"], "1");
+        for key in ["PI_IMAGE_PROTOCOL", "PI_FORCE_IMAGE_PROTOCOL", "PI_KITTY_PLACEHOLDERS", "PI_NO_KITTY_PLACEHOLDERS", "OPENCODE_CLI_CONFIG_CONTENT"] {
+            assert_eq!(background[key], read("after-job-scope")[key], "{program}/background-job/{key}: {text}");
+        }
+        if powershell_major >= 6 {
+            let background = read("background");
+            assert_eq!(background["TERM_PROGRAM"], "kitty", "{program}/background: {text}");
+            assert_eq!(background["TERM_PROGRAM_VERSION"], "");
+            assert_eq!(read("after-background")["TERM_PROGRAM"], "lyrel");
+        }
+        for label in ["pipeline", "compound", "after-job-scope", "after-background-job", "after-explicit-unset"] {
             let actual: serde_json::Value = serde_json::from_slice(&std::fs::read(home.path().join(format!("{label}.json"))).unwrap()).unwrap();
             assert_eq!(actual["TERM_PROGRAM"], "lyrel", "{program}/{label}: {text}");
         }

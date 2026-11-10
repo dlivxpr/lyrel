@@ -613,9 +613,10 @@ if (-not $env:LYREL_SHELL_INTEGRATION) {
     $global:__LyrelOrigReadLine = $function:global:PSConsoleHostReadLine
     function global:PSConsoleHostReadLine {
       $line = & $global:__LyrelOrigReadLine
+      $executionLine = $line
       if (-not [string]::IsNullOrWhiteSpace($line)) {
         $global:__LyrelCmdActive = $true
-        __LyrelScopeApply $line
+        __LyrelScopeApply $line ([ref]$executionLine)
         # Carry the submitted line on the C mark (lyrel extension): the daemon
         # detects coding agents from it on Windows, where ConPTY exposes no
         # foreground process group to read an argv from. Truncated (detection
@@ -636,7 +637,7 @@ if (-not $env:LYREL_SHELL_INTEGRATION) {
           Write-Host -NoNewline "$($global:__LyrelEsc)]133;C;;aid=lyrel$($global:__LyrelBel)"
         }
       }
-      $line
+      $executionLine
     }
   }
 }

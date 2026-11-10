@@ -7,7 +7,7 @@
       $global:__LyrelScopeSaved = $null
     }
   }
-  function global:__LyrelScopeApply([string]$Line) {
+  function global:__LyrelScopeApply([string]$Line, [ref]$ExecutionLine) {
     if ($null -ne $global:__LyrelScopeSaved) { return }
     $tokens = $null; $errors = $null
     $ast = [System.Management.Automation.Language.Parser]::ParseInput($Line, [ref]$tokens, [ref]$errors)
@@ -15,6 +15,9 @@
     $statements = @($ast.EndBlock.Statements)
     if (-not $statements.Count) { return }
     $explicit = @{}
+    $scopeKeys = @('TERM_PROGRAM','TERM_PROGRAM_VERSION','LC_TERMINAL','LC_TERMINAL_VERSION','PI_NO_DECCARA','KITTY_WINDOW_ID','OPENCODE_CLI_CONFIG_CONTENT')
+    $legacyWindows = $env:OS -eq 'Windows_NT' -and $PSVersionTable.PSVersion -lt [version]'7.5'
+    $emptyAssignments = @()
     # PowerShell's native leading env assignments are separate statements.
     # Only literal env assignments followed by exactly one command qualify.
     for ($i = 0; $i -lt $statements.Count - 1; $i++) {
@@ -28,7 +31,10 @@
       # SafeGetValue rejects that statement wrapper, not its literal expression.
       $value = $assignment.Right
       if ($value -isnot [System.Management.Automation.Language.CommandExpressionAst] -or $value.Redirections.Count) { return }
-      try { $null = $value.Expression.SafeGetValue() } catch { return }
+      try { $literal = $value.Expression.SafeGetValue() } catch { return }
+      if ($legacyWindows -and $scopeKeys -contains $key -and $literal -is [string] -and $literal -eq '') {
+        $emptyAssignments += @{ Key=$key; Extent=$assignment.Extent }
+      }
       $explicit[$key] = $true
     }
     $pipeline = $statements[-1]
@@ -51,10 +57,21 @@
     $environment = [Environment]::GetEnvironmentVariables('Process')
     if ($agent -eq 'hermes' -and -not $environment.Contains('KITTY_WINDOW_ID')) { $defaults.KITTY_WINDOW_ID = 'lyrel' }
     $global:__LyrelScopeSaved = @{}
-    foreach ($key in @('TERM_PROGRAM','TERM_PROGRAM_VERSION','LC_TERMINAL','LC_TERMINAL_VERSION','PI_NO_DECCARA','KITTY_WINDOW_ID','OPENCODE_CLI_CONFIG_CONTENT')) {
+    foreach ($key in $scopeKeys) {
       $global:__LyrelScopeSaved[$key] = $environment[$key]
     }
     foreach ($key in $defaults.Keys) {
       if (-not $explicit.ContainsKey($key)) { __LyrelScopeSet $key $defaults[$key] }
+    }
+    # Env: assignments run after this hook; before 7.5 they delete an empty
+    # value even if the native setter already installed it. Rewrite only the
+    # validated scope-field assignment, not the history/OSC command or argv.
+    # Reverse offsets keep every remaining AST extent valid. Other commands
+    # and variables retain their shell-native assignment semantics.
+    for ($i = $emptyAssignments.Count - 1; $i -ge 0; $i--) {
+      $assignment = $emptyAssignments[$i]
+      $extent = $assignment.Extent
+      $replacement = "__LyrelScopeSet '$($assignment.Key)' ''"
+      $ExecutionLine.Value = $ExecutionLine.Value.Remove($extent.StartOffset, $extent.EndOffset - $extent.StartOffset).Insert($extent.StartOffset, $replacement)
     }
   }

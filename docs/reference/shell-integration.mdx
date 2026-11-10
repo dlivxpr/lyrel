@@ -34,11 +34,13 @@ Bash 4.4 及以上仍通过公开的 `PS0` 报告命令开始，保留用户 `PS
 
 集成的 zsh、Bash、fish、PowerShell 识别直接输入的 `omp`、`kimi`、`pi`、`opencode`、`opencode2`、`hermes`，包括字面量参数、前置环境赋值和带引号的绝对路径。只对该次启动设置 `TERM_PROGRAM=kitty`、清空 `TERM_PROGRAM_VERSION`，并用 `LC_TERMINAL=lyrel`、`LC_TERMINAL_VERSION=$LYREL` 保留真实来源；远端未提供 `LYREL` 时使用构建该引导脚本的 lyrel 版本，不改 `TERM`。omp 另加 `PI_NO_DECCARA=1`。Hermes 0.23.1 的公开检测器不读取 `TERM_PROGRAM`，因此只给 Hermes 默认 `KITTY_WINDOW_ID=lyrel`，不覆盖显式 marker（包括空串），也不强制 `image.render`。
 
-下一提示符恢复之前的已设置／未设置／空值以及 export 属性；成功、失败、Ctrl+C 和后台启动使用相同生命周期。PowerShell 的字面量 `$env:KEY='value'; omp ...` 属于该 shell 的前置赋值形式，七个终端／inline-config 字段在提示符前恢复；不会重写提交文本。未设置的字段通过 `Env:` provider 删除，避免 PowerShell 7.5+ 将传给 .NET setter 的 `$null` 转成空字符串；显式空值与非空值分别原样恢复。旧 Windows PowerShell 对空环境值使用系统 setter，受限语言模式不能使用该 setter 时会明确失败，不声称已保留空值。
+下一提示符恢复之前的已设置／未设置／空值以及 export 属性；成功、失败、Ctrl+C 和受支持的后台启动使用相同生命周期。PowerShell 的字面量 `$env:KEY='value'; omp ...` 属于该 shell 的前置赋值形式，七个终端／inline-config 字段在提示符前恢复。Windows PowerShell 5.1 和 Windows 上的 pwsh 7.5 之前版本会把 `Env:` 空赋值及 .NET setter 的空值当作删除；只有已识别的直接 agent 启动中、这七个字段的显式空字面量赋值才在实际执行文本中改用系统 setter，保留赋值顺序、显式身份优先级、原始历史／OSC 文本和 argv。pwsh 7.5+ 保留原生空赋值。未设置的字段始终通过 `Env:` provider 删除，避免 PowerShell 7.5+ 将传给 .NET setter 的 `$null` 转成空字符串；显式空值与非空值分别原样恢复。其他命令、字段及复杂表达式不改写；受限语言模式不能使用系统 setter 时会明确失败，不声称已保留空值。
 
 显式命令级 `TERM_PROGRAM`／版本优先。`PI_IMAGE_PROTOCOL`、`PI_FORCE_IMAGE_PROTOCOL`、placeholder-off、agent 自身 graphics／inline-images 设置均不被开启或改写。`OPENCODE_CLI_CONFIG_CONTENT` 不生成、不合并、不进入持久化 scope；既有 inline 配置原样保留。
 
 识别器不把 pipeline、compound command、substitution 或任意 interpreter 当作简单启动。Bash 只有完整提交的历史文本与当前 simple command 对应时才介入；关闭历史或被 `HISTIGNORE`／`ignorespace` 隐藏的输入保守回退，不修改历史配置。使用下方显式作用域语法处理这些形式。
+
+PowerShell 5.1 不支持末尾 `&` 后台运算符；应使用 `Start-Job`／`Wait-Job`，并在 job 内显式提供目标 agent 的命令作用域（任意 scriptblock 不会被自动识别为直接启动）。真实 PTY 消费者通过生产 launch encoder 生成 job 内的局部环境，并检查 job 内恢复及父提示符不泄漏；pwsh 7 另外保留直接 `omp ... &` 的自动 scope 与下一提示符恢复检查。旧日志中的 `AmpersandNotAllowed` 是解析失败，不是有效后台启动证据。
 
 本地 Nushell 不从没有命令文本的 `pre_execution` 猜测启动，而为六个正式名称定义小型 `def --wrapped`，用 `with-env` 调用相同名称的外部程序。参数保持为列表，`^` 保留外部 executable/PATH resolution；没有 PATH shim 或替代 binary。绝对路径、`^omp`、用户自己的同名命令／alias 或复杂 wrapper 应使用显式 `with-env`；不声称远端 Nushell 自动集成。
 
@@ -68,7 +70,7 @@ with-env {TERM_PROGRAM: kitty, TERM_PROGRAM_VERSION: '', LC_TERMINAL: lyrel, LC_
 
 ### 验证与证据边界
 
-以下新增 consumer 命令在本分票实施中**未执行**；测试退出为零仍须检查 `skipping:`，不能将缺 shell 记为通过。POSIX 用例只在 Unix 编译，需真实 Bash／zsh／fish 与 PTY；Bash 需分别用 `LYREL_TEST_BASH` 指向 3.2、4.4+、5.1+。结构化 shell 用例需要 `pwsh`／`nu`，可用 `LYREL_TEST_PWSH`／`LYREL_TEST_NU` 指定 executable；Windows 还需仓库受校验 ConPTY。PowerShell 5.1 不支持 `&` background 运算符，需单独记录该平台边界。远端 bootstrap 还需隔离 SSH 主机和原有 pin／Host 前提，以下本机 PTY 不代替远端验收。
+以下新增 consumer 命令在本分票实施中**未执行**；测试退出为零仍须检查 `skipping:`，不能将缺 shell 记为通过。POSIX 用例只在 Unix 编译，需真实 Bash／zsh／fish 与 PTY；Bash 需分别用 `LYREL_TEST_BASH` 指向 3.2、4.4+、5.1+。结构化 shell 用例需要 `pwsh`／`nu`，可用 `LYREL_TEST_PWSH`／`LYREL_TEST_NU` 指定 executable；Windows 还需仓库受校验 ConPTY。PowerShell 用例必须分别指定 Windows PowerShell 5.1 的 `powershell.exe` 和已安装的 `pwsh` 7 运行；两者都覆盖公开 jobs，pwsh 7 额外覆盖后台运算符。当前 PS5.1 空赋值和后台解析错误的修复尚未复跑，不沿用修复前 pwsh 7 通过记录作为本提交证据。远端 bootstrap 还需隔离 SSH 主机和原有 pin／Host 前提，以下本机 PTY 不代替远端验收。
 
 ```text
 cargo test --locked -p lyrel-core daemon::shell_integration::tests::bash_manual_agent_scope_and_restoration_over_a_real_pty -- --exact --nocapture --test-threads=1
