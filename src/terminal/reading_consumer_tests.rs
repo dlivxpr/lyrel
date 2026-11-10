@@ -359,10 +359,19 @@ fn reading_placeholders_paint_from_captured_rows_after_live_cells_are_erased(cx:
 
 #[gpui_kit::test]
 fn reading_copy_links_theme_and_ime_use_the_painted_semantic_rows(cx: &mut TestAppContext) {
-    let (daemon, pane, view, window) = graphics_layout_harness(cx);
+    crate::core::config::pin_test_config_dir();
+    cx.executor().allow_parking();
+    let daemon = GraphicsDaemonProcess::start();
     std::fs::write(daemon.dir.path().join("frozen.txt"), b"owned old file").unwrap();
     std::fs::write(daemon.dir.path().join("new.txt"), b"owned replacement file").unwrap();
-    view.update(cx, |view, _| view.set_git_status_cwd_for_test(Some(daemon.dir.path().to_path_buf())));
+    // The sender really runs here: an injected git-status cwd would be
+    // replaced by the next production foreground-process poll.
+    let pane = daemon.spawn_with_cwd(Some(daemon.dir.path().to_path_buf()));
+    cx.update(|cx| {
+        gpui_kit::component::init(cx);
+        cx.set_global(Config::default());
+    });
+    let (view, window) = graphics_rooted_consumer(cx, pane, daemon.stream(pane));
     graphics_send_fixture(&view, cx, 60, &b"HISTORY\r\n".repeat(72));
     graphics_send_fixture(&view, cx, 61, "\x1b[5;1H\x1b[2Kfrozen 宽e\u{301}\x1b[6;1H\x1b[2K\x1b]8;;https://old.example/\x1b\\old-link\x1b]8;;\x1b\\\x1b[7;1H\x1b[2K\x1b[3gA\x1b[5G\x1bHB\r\x1b[2C\tC\x1b[9;1H\x1b[2K\x1b[31mansi\x1b[0m\x1b[12;1H\x1b[2Kfrozen.txt:9:2".as_bytes());
     view.update(cx, |view, cx| { view.smooth_scroll(1., cx); });
@@ -400,7 +409,9 @@ fn reading_copy_links_theme_and_ime_use_the_painted_semantic_rows(cx: &mut TestA
             seen.borrow_mut().push((event.path.clone(), event.line, event.column));
         }).detach();
     });
+    assert_eq!(reading_painted_rows(&view, cx)[12], "frozen.txt:9:2");
     window.update(cx, |_, window, cx| {
+        assert_eq!(view.read(cx).effective_host_cwd().as_deref(), Some(daemon.dir.path()));
         view.update(cx, |view, cx| assert!(view.open_link_at(2, 12, window, cx)));
     }).unwrap();
     cx.run_until_parked();
@@ -524,7 +535,9 @@ fn reading_mixed_images_keep_identity_crop_z_and_release_unneeded_history(cx: &m
         Arc::downgrade(image.data.as_ref().unwrap())
     }).collect());
     let text = reading_painted_rows(&view, cx);
-    graphics_send_fixture(&view, cx, 83, b"\x1b_Ga=d,d=A\x1b\\\x1b[8;1H\x1b[2KREPLACED\x1b[11;1H\x1b[2KERASED\x1b[24;1H\r\nADVANCE\r\n\x1b[4;9H\x1b_Ga=T,i=7,p=2,c=2,r=1,C=1,z=9,f=32,s=1,v=1,q=2;/wAA/w==\x1b\\");
+    // Delete the actual owners, including the offscreen historical image and
+    // virtual prototype. d=A only removes visible non-virtual placements.
+    graphics_send_fixture(&view, cx, 83, b"\x1b_Ga=d,d=I,i=9\x1b\\\x1b_Ga=d,d=I,i=7\x1b\\\x1b_Ga=d,d=I,i=8\x1b\\\x1b[8;1H\x1b[2KREPLACED\x1b[11;1H\x1b[2KERASED\x1b[24;1H\r\nADVANCE\r\n\x1b[4;9H\x1b_Ga=T,i=7,p=2,c=2,r=1,C=1,z=9,f=32,s=1,v=1,q=2;/wAA/w==\x1b\\");
     graphics_layout_wait_image(&view, cx, 7);
     graphics_assert_production_paint(window, &view, cx);
     assert_eq!(reading_painted_rows(&view, cx), text);
@@ -591,29 +604,60 @@ fn reading_retained_allocations_follow_needed_rows_not_visited_history(cx: &mut 
 
 #[gpui_kit::test]
 fn reading_and_synchronized_output_keep_separate_presentation_lifetimes(cx: &mut TestAppContext) {
-    let (daemon, pane, view, window) = graphics_layout_harness(cx);
-    graphics_send_fixture(&view, cx, 110, &b"READING-BASE\r\n".repeat(72));
-    view.update(cx, |view, cx| { view.smooth_scroll(1., cx); });
-    graphics_assert_production_paint(window, &view, cx);
-    let frozen = reading_painted_rows(&view, cx);
-    graphics_send_fixture(&view, cx, 111, b"\x1b[?2026h\x1b[8;1H\x1b[2KHIDDEN-SYNC-CONTENT");
-    view.read_with(cx, |view, _| {
-        let mut term = view.terminal.term.lock();
-        assert!(term.synchronized_output(), "fixture must observe the in-progress atomic hold");
-        term.sync_update_started = Some(rio_vt::time::Instant::now() + std::time::Duration::from_secs(5));
+    crate::core::config::pin_test_config_dir();
+    cx.executor().allow_parking();
+    cx.update(|cx| {
+        gpui_kit::component::init(cx);
+        cx.set_global(Config::default());
+    });
+    // Observe the daemon/RemoteTerminal seam directly: a real PTY round-trip
+    // barrier can outlast the 150 ms fail-safe (and ConPTY may emit ESU).
+    // The other reading cases retain the full real-PTY path.
+    let (client, mut sender) = test_stream_pair();
+    let (view, window) = graphics_build_rooted_consumer_at(
+        cx, 252, client, Vec::new(), TermSize::new(80, 24), PtySource::Raw,
+    );
+    DaemonMsg::Output(b"READING-BASE\r\n".repeat(72)).encode(&mut sender).unwrap();
+    graphics_recovery_wait(cx, "reading baseline was not parsed", |cx| {
+        view.read_with(cx, |view, _| view.scrollback_text().contains("READING-BASE"))
     });
     view.update(cx, |view, cx| { view.smooth_scroll(1., cx); });
     graphics_assert_production_paint(window, &view, cx);
+    let frozen = reading_painted_rows(&view, cx);
+    DaemonMsg::Output(b"\x1b[?2026h\x1b[8;1H\x1b[2KHIDDEN-SYNC-CONTENT".to_vec())
+        .encode(&mut sender).unwrap();
+    // Flush this Output before waiting, then observe its parsed cells without
+    // advancing GPUI/PTY timers past the production atomic deadline.
+    DaemonMsg::Cwd(std::env::temp_dir()).encode(&mut sender).unwrap();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    loop {
+        if view.read_with(cx, |view, _| {
+            let mut term = view.terminal.term.lock();
+            if term.grid[Line(7)][Column(0)].c() != 'H' { return false; }
+            assert!(term.synchronized_output(), "fixture must observe the in-progress atomic hold");
+            // This case tests lifetime separation; the quiet-stream tests
+            // independently exercise the unmodified 150 ms timeout.
+            term.sync_update_started = Some(rio_vt::time::Instant::now() + std::time::Duration::from_secs(30));
+            true
+        }) { break; }
+        assert!(std::time::Instant::now() < deadline, "hidden output was not parsed");
+        std::thread::yield_now();
+    }
+    view.update(cx, |_, cx| cx.notify());
+    graphics_assert_production_paint(window, &view, cx);
     assert_eq!(reading_painted_rows(&view, cx), frozen);
     assert!(view.read_with(cx, |view, _| view.grid_snap.as_ref().unwrap().held));
-    graphics_send_fixture(&view, cx, 112, b"\x1b[?2026l");
+    DaemonMsg::Output(b"\x1b[?2026l".to_vec()).encode(&mut sender).unwrap();
+    DaemonMsg::Cwd(std::env::temp_dir()).encode(&mut sender).unwrap();
+    graphics_recovery_wait(cx, "ESU did not release the atomic hold", |cx| {
+        view.read_with(cx, |view, _| !view.terminal.term.lock().synchronized_output())
+    });
     graphics_assert_production_paint(window, &view, cx);
     assert_eq!(reading_painted_rows(&view, cx), frozen, "ESU releases atomic acquisition, not the reading session");
     assert!(!view.read_with(cx, |view, _| view.grid_snap.as_ref().unwrap().held));
     view.update(cx, |view, _| view.jump_to_prompt());
     graphics_assert_production_paint(window, &view, cx);
     assert!(reading_painted_rows(&view, cx).iter().any(|row| row.contains("HIDDEN-SYNC-CONTENT")));
-    daemon.panes().kill(pane).unwrap();
     graphics_recovery_destroy(view, window, cx);
 }
 
@@ -642,12 +686,16 @@ fn reading_wrapped_link_uses_retained_prefix_and_hover_survives_live_output(cx: 
     let (daemon, pane, view, window) = graphics_layout_harness(cx);
     graphics_send_fixture(&view, cx, 130, &b"HISTORY\r\n".repeat(72));
     let url = format!("https://old.example/{}", "a".repeat(150));
-    graphics_send_fixture(&view, cx, 131, format!("\x1b[2;1H{url}").as_bytes());
+    // The sender's completion barrier writes its marker on screen row two.
+    // Keep the wrapped prefix below that row rather than overwriting https://.
+    graphics_send_fixture(&view, cx, 131, format!("\x1b[3;1H{url}").as_bytes());
     view.update(cx, |view, cx| { view.smooth_scroll(1., cx); });
     graphics_assert_production_paint(window, &view, cx);
+    assert_eq!(reading_painted_rows(&view, cx)[3], &url[..80]);
     graphics_send_fixture(&view, cx, 132, &b"\x1b[24;1H\r\nADVANCE".repeat(20));
-    view.update(cx, |view, cx| { view.smooth_scroll(-4., cx); });
+    view.update(cx, |view, cx| { view.smooth_scroll(-5., cx); });
     graphics_assert_production_paint(window, &view, cx);
+    assert_eq!(reading_painted_rows(&view, cx)[0], "a".repeat(10), "the viewport starts on the frozen continuation, with its prefix retained offscreen");
     view.update(cx, |view, cx| assert!(view.hover_link_at(1, 0, true, cx)));
     graphics_send_fixture(&view, cx, 133, b"\x1b[24;1H\r\nMORE-OUTPUT");
     graphics_assert_production_paint(window, &view, cx);
