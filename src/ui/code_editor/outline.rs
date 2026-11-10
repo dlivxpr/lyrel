@@ -14,8 +14,9 @@ use std::ops::Range;
 use std::sync::{Arc, LazyLock, Mutex};
 
 use gpui_kit::component::Rope;
+use super::text::TextSnapshot;
 use gpui_kit::component::highlighter::LanguageRegistry;
-use gpui_kit::component::input::{Position, RopeExt as _};
+use gpui_kit::component::input::Position;
 use tree_sitter::{self, Query, QueryCursor, StreamingIterator as _};
 
 /// What a symbol is — the shapes the picker and the breadcrumbs tell apart.
@@ -381,14 +382,14 @@ fn collapse(text: &str) -> String {
     out
 }
 
-fn text_of(text: &Rope, range: Range<usize>) -> String {
+fn text_of(text: &TextSnapshot, range: Range<usize>) -> String {
     let end = range.end.min(text.len());
     let start = range.start.min(end);
     text.slice(start..end).to_string()
 }
 
 /// The outline of `text`, as parsed into `tree`.
-pub(crate) fn outline_from_tree(language: &str, tree: &tree_sitter::Tree, text: &Rope) -> Outline {
+pub(crate) fn outline_from_tree(language: &str, tree: &tree_sitter::Tree, text: &TextSnapshot) -> Outline {
     let Some(query) = query_for(language) else {
         return Outline::default();
     };
@@ -509,7 +510,7 @@ pub(super) struct OutlineParser {
     language: &'static str,
     parser: tree_sitter::Parser,
     tree: Option<tree_sitter::Tree>,
-    source: Rope,
+    source: TextSnapshot,
 }
 
 impl OutlineParser {
@@ -521,11 +522,11 @@ impl OutlineParser {
             language,
             parser,
             tree: None,
-            source: Rope::new(),
+            source: TextSnapshot::default(),
         })
     }
 
-    pub(super) fn parse(&mut self, text: &Rope) -> Outline {
+    pub(super) fn parse(&mut self, text: &TextSnapshot) -> Outline {
         if let Some(tree) = &mut self.tree {
             let start = self
                 .source
@@ -539,16 +540,15 @@ impl OutlineParser {
                 let mut suffix = 0;
                 for (a, b) in self
                     .source
-                    .chars_at(self.source.len())
-                    .reversed()
-                    .zip(text.chars_at(text.len()).reversed())
+                    .reverse_chars()
+                    .zip(text.reverse_chars())
                 {
                     if a != b || suffix + a.len_utf8() > max_suffix {
                         break;
                     }
                     suffix += a.len_utf8();
                 }
-                let point = |rope: &Rope, offset| {
+                let point = |rope: &TextSnapshot, offset| {
                     let p = rope.offset_to_point(offset);
                     tree_sitter::Point::new(p.row, p.column)
                 };
@@ -564,11 +564,8 @@ impl OutlineParser {
         }
         self.tree = self.parser.parse_with_options(
             &mut |offset, _| {
-                let (mut chunks, chunk_start) = text.chunks_at(offset);
-                chunks
-                    .next()
-                    .map(|chunk| &chunk.as_bytes()[offset - chunk_start..])
-                    .unwrap_or_default()
+                let (chunk, chunk_start) = text.chunk_at(offset);
+                &chunk.as_bytes()[offset - chunk_start..]
             },
             self.tree.as_ref(),
             None,
@@ -586,7 +583,7 @@ impl OutlineParser {
 #[cfg_attr(not(test), allow(dead_code))]
 pub(crate) fn outline_of_text(language: &'static str, text: &Rope) -> Outline {
     OutlineParser::new(language)
-        .map(|mut parser| parser.parse(text))
+        .map(|mut parser| parser.parse(&text.clone().into()))
         .unwrap_or_default()
 }
 

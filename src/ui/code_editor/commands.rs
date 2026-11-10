@@ -1,6 +1,5 @@
 use std::ops::Range;
 
-use gpui_kit::component::input::RopeExt as _;
 use gpui_kit::{Context, Div, InteractiveElement as _, Stateful, Window};
 
 use super::super::app::LyrelApp;
@@ -817,19 +816,11 @@ impl LyrelApp {
                 _ => vec![selected_lines.clone()],
             };
             view.update(cx, |view, cx| {
-                view.command(
-                    super::markdown::Command::ReplaceLines {
-                        range: edit.range,
-                        lines,
-                        leading_newline: matches!(command, Command::CopyDown)
-                            && !text[selected_lines].ends_with('\n'),
-                        trailing_newline: edit.replacement.ends_with('\n'),
-                        selection: super::markdown::Selection::new(
-                            edit.selection.start,
-                            edit.selection.end,
-                        ),
-                    },
-                    window,
+                view.replace_lines(
+                    edit.range,
+                    lines,
+                    matches!(command, Command::CopyDown) && !text[selected_lines].ends_with('\n'),
+                    edit.replacement.ends_with('\n'),
                     cx,
                 )
             });

@@ -349,7 +349,7 @@ impl EditorBuffers {
         let language = language_for_path(&loaded.path);
         let indent = loaded
             .config
-            .indent(editor_text::detect_indent(&loaded.text, language));
+            .indent(lyrel_text::detect_indent(&loaded.text, language));
         (
             self.create(
                 host,
@@ -401,34 +401,21 @@ impl EditorBuffers {
         };
         let id = BufferId::new();
         let (input, popups, sub, observe) = if native_markdown {
-            let document = cx.new(|_| markdown::MarkdownDocument::new(text, format));
-            document.update(cx, |document, cx| {
-                document.set_resource_context(
-                    host.clone(),
-                    untitled.is_none().then(|| path.clone()),
-                    cx,
-                );
+            let document = cx.new(|_| lyrel_markdown_editor::Document::new(text, format));
+            let sub = cx.subscribe_in(&document, window, move |view, _, _: &lyrel_markdown_editor::DocumentEvent, _, cx| {
+                access(view).note_edit(id, cx);
+                edited(view, id, cx);
             });
-            let sub = cx.subscribe_in(
-                &document,
-                window,
-                move |view, _, event: &markdown::DocumentEvent, _, cx| match event {
-                    markdown::DocumentEvent::Edited(_) => {
-                        access(view).note_edit(id, cx);
-                        edited(view, id, cx);
-                    }
-                    markdown::DocumentEvent::PresentationChanged
-                    | markdown::DocumentEvent::ResourceContextChanged
-                    | markdown::DocumentEvent::ImagesChanged => cx.notify(),
-                    markdown::DocumentEvent::FollowLink { .. }
-                    | markdown::DocumentEvent::RequestReferences { .. }
-                    | markdown::DocumentEvent::RequestEmbeds { .. }
-                    | markdown::DocumentEvent::RequestAssetLocation { .. }
-                    | markdown::DocumentEvent::RequestImageEdit { .. } => {}
-                },
-            );
-            let presentation = cx.new(|cx| markdown::SourcePresentation::new(document, wrap, cx));
-            presentation.update(cx, |view, cx| view.set_indent(indent, cx));
+            let presentation = cx.new(|cx| {
+                let mut view = lyrel_markdown_editor::EditorState::for_document(document, cx);
+                markdown::configure(&mut view, cx);
+                view.set_soft_wrap(wrap, cx);
+                view.set_tab_indent(indent.size as usize);
+                if path.extension().is_some_and(|extension| extension.eq_ignore_ascii_case("mdx")) {
+                    view.set_source_only(true, cx);
+                }
+                view
+            });
             let observe = cx.observe(&presentation, |_, _, cx| cx.notify());
             (EditorInput::Markdown(presentation), None, sub, observe)
         } else {
@@ -484,12 +471,8 @@ impl EditorBuffers {
             wrap,
             gutter: gutter::BufferGutter::default(),
             popups,
-            _assets_sub: None,
-            asset_location: None,
-            asset_save_required: untitled.is_some(),
             _sub: sub,
             _observe: observe,
-            _links_sub: None,
         });
         id
     }
@@ -668,7 +651,7 @@ impl EditorBuffers {
         let pending = file
             .input
             .markdown()
-            .is_some_and(|view| view.read(cx).reload_input(cx).1);
+            .is_some_and(|view| view.read(cx).document().read(cx).has_composition());
         match classify_external_change(
             file.saving,
             file.dirty || pending,
@@ -708,14 +691,8 @@ impl EditorBuffers {
         let host = file.host.clone();
         let host_id = host.id();
         let markdown = file.input.markdown().is_some();
-        let input_lease = file
-            .input
-            .markdown()
-            .map(|view| view.read(cx).input_token(cx));
-        let pending_lease = file
-            .input
-            .markdown()
-            .map(|view| view.read(cx).reload_input(cx));
+        let input_lease = file.input.markdown().map(|view| view.read(cx).document().read(cx).revision());
+        let pending_lease = file.input.markdown().map(|view| view.read(cx).document().read(cx).has_composition());
         file.reload_seq = file.reload_seq.wrapping_add(1);
         let seq = file.reload_seq;
         HostOps::run_in(
@@ -725,9 +702,9 @@ impl EditorBuffers {
             move |h| {
                 let bytes = h.read_file(&target, MAX_FILE_BYTES)?;
                 let decoded = if markdown {
-                    editor_text::decode_source(&bytes)?
+                    lyrel_text::decode_source(&bytes)?
                 } else {
-                    editor_text::decode(&bytes)
+                    lyrel_text::decode(&bytes)
                 }
                 .ok_or_else(|| {
                     std::io::Error::new(std::io::ErrorKind::InvalidData, "no longer text")
@@ -736,7 +713,7 @@ impl EditorBuffers {
                 Ok((decoded, mtime))
             },
             move |view,
-                  result: std::io::Result<(editor_text::Decoded, Option<MTime>)>,
+                  result: std::io::Result<(lyrel_text::Decoded, Option<MTime>)>,
                   window,
                   cx| {
                 let Some(file) = access(view).get_mut(id) else {
@@ -747,8 +724,7 @@ impl EditorBuffers {
                 }
                 if input_lease.is_some_and(|lease| {
                     file.input.markdown().is_none_or(|view| {
-                        let current = view.read(cx).input_token(cx);
-                        current.0 != lease.0 || current.1 != lease.1
+                        view.read(cx).document().read(cx).revision() != lease
                     })
                 }) {
                     // Reload owns document bytes, not native input coordinates.
@@ -771,13 +747,7 @@ impl EditorBuffers {
                         return;
                     }
                 };
-                if pending_lease.is_some_and(|lease| {
-                    lease.1
-                        || file.input.markdown().is_none_or(|view| {
-                            let current = view.read(cx).reload_input(cx);
-                            current.1 || current.0 != lease.0
-                        })
-                }) {
+                if pending_lease.is_some_and(|pending| pending || file.input.markdown().is_none_or(|view| view.read(cx).document().read(cx).has_composition())) {
                     file.conflict = Some(DiskConflict::Changed(mtime));
                     cx.notify();
                     return;
@@ -787,16 +757,8 @@ impl EditorBuffers {
                 file.saved_format = decoded.format;
                 let input = file.input.clone();
                 if let Some(source) = input.markdown() {
-                    source.update(cx, |source, cx| {
-                        source.command(
-                            markdown::Command::Reload {
-                                text: decoded.text,
-                                format: decoded.format,
-                            },
-                            window,
-                            cx,
-                        )
-                    });
+                    let document = source.read(cx).document().clone();
+                    document.update(cx, |document, cx| document.reload(decoded.text, decoded.format, cx));
                 } else {
                     file.set_format(decoded.format, cx);
                     replace_buffer_text(&input, &decoded.text, window, cx);
@@ -831,11 +793,6 @@ impl EditorBuffers {
             } else {
                 to.join(rest)
             };
-            if let Some(view) = file.input.markdown() {
-                view.read(cx).document().clone().update(cx, |document, cx| {
-                    document.set_resource_context(file.host.clone(), Some(file.path.clone()), cx);
-                });
-            }
             file.reload_seq = file.reload_seq.wrapping_add(1);
             file.input
                 .set_highlighter(language_for_path(&file.path), cx);
@@ -912,11 +869,11 @@ fn load_file(
     })
 }
 
-fn decode_file(path: &Path, bytes: &[u8]) -> std::io::Result<Option<editor_text::Decoded>> {
+fn decode_file(path: &Path, bytes: &[u8]) -> std::io::Result<Option<lyrel_text::Decoded>> {
     if is_markdown_path(path) {
-        editor_text::decode_source(bytes)
+        lyrel_text::decode_source(bytes)
     } else {
-        Ok(editor_text::decode(bytes))
+        Ok(lyrel_text::decode(bytes))
     }
 }
 
@@ -925,18 +882,18 @@ fn decode_file(path: &Path, bytes: &[u8]) -> std::io::Result<Option<editor_text:
 fn read_editorconfig(h: &dyn lyrel_core::host::Host, path: &Path) -> EditorConfig {
     let mut configs = Vec::new();
     for dir in path.ancestors().skip(1).take(EDITORCONFIG_DEPTH) {
-        let file = h.join(dir, editor_text::EDITORCONFIG);
+        let file = h.join(dir, lyrel_text::EDITORCONFIG);
         let Ok(bytes) = h.read_file(&file, 64 * 1024) else {
             continue;
         };
         let contents = String::from_utf8_lossy(&bytes).into_owned();
-        let root = editor_text::is_root(&contents);
+        let root = lyrel_text::is_root(&contents);
         configs.push((dir.to_path_buf(), contents));
         if root {
             break;
         }
     }
-    editor_text::editorconfig_for(path, &configs)
+    lyrel_text::editorconfig_for(path, &configs)
 }
 /// What a watcher saw at a path: the file's modification time, or that it
 /// is not there any more.

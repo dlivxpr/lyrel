@@ -10,7 +10,6 @@ pub mod diff_overlay;
 pub mod diff_rows;
 pub mod document_column;
 pub mod editor_session;
-pub mod editor_text;
 pub mod file_copy;
 pub mod file_tree;
 pub mod forwards;
