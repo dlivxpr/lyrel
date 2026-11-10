@@ -118,9 +118,53 @@ fn graphics_assert_production_paint_at(
             window.refresh();
         })
         .unwrap();
-    cx.executor()
-        .advance_clock(std::time::Duration::from_millis(400));
-    cx.run_until_parked();
+    // Decoded resources are live parser state, not a committed presentation.
+    // In particular, OpenCode can expose all six resources inside BSU before
+    // ESU (or an ordered resize) permits TerminalElement to replace its frame.
+    // Pump the real reader/decoder/window lifecycle instead of advancing only
+    // GPUI's virtual clock and comparing the new resources to a held picture.
+    graphics_recovery_wait_with(
+        cx,
+        std::time::Duration::from_secs(30),
+        |cx| view.read_with(cx, |view, _| {
+            let Some(geom) = view.cell_geom else { return false; };
+            let Some(snap) = view.grid_snap.as_ref() else { return false; };
+            if (geom.cols, geom.rows) != (cols, rows) || snap.held {
+                return false;
+            }
+            let term = view.terminal.term.lock();
+            if term.synchronized_output() {
+                return false;
+            }
+            // Reading mode intentionally presents a frozen picture, rather
+            // than the advancing live image map. Keep that existing contract.
+            if view.selection_scroll.has_presented() {
+                return true;
+            }
+            if snap.display_offset != term.display_offset() as i32 {
+                return false;
+            }
+            drop(term);
+            let images = graphics_visible_images(view);
+            images.len() == snap.images.len() && images.iter().zip(snap.images.iter()).all(|(live, presented)| {
+                live.placement == presented.placement
+                    && std::sync::Arc::ptr_eq(&live.painted, &presented.painted)
+                    && match (&live.data, &presented.data) {
+                        (Some(live), Some(presented)) => std::sync::Arc::ptr_eq(live, presented),
+                        (None, None) => true,
+                        _ => false,
+                    }
+                    && live.paint_bounds(geom.origin, geom.cell_width, geom.line_height, 0, snap.display_offset, scale)
+                        == presented.paint_bounds(geom.origin, geom.cell_width, geom.line_height, 0, snap.display_offset, scale)
+            })
+        }),
+        |cx| view.read_with(cx, |view, _| format!(
+            "production presentation did not commit current {cols}x{rows} resources; held={:?}; synchronized={}; graphics={}",
+            view.grid_snap.as_ref().map(|snap| snap.held),
+            view.terminal.term.lock().synchronized_output(),
+            view.terminal.images().recovery_diagnostics(),
+        )),
+    );
     view.read_with(cx, |view, _| {
         let geom = view.cell_geom.expect("rooted production TerminalElement must paint a fresh frame");
         assert_eq!((geom.cols, geom.rows), (cols, rows));
