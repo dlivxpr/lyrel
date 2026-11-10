@@ -14,6 +14,7 @@ fn settle(context: &mut VisualTestContext) {
     });
     context.run_until_parked();
 }
+#[track_caller]
 fn until(context: &mut VisualTestContext, mut ready: impl FnMut(&mut VisualTestContext) -> bool) {
     let deadline = Instant::now() + Duration::from_secs(30);
     loop {
@@ -28,6 +29,41 @@ fn until(context: &mut VisualTestContext, mut ready: impl FnMut(&mut VisualTestC
         context.executor().advance_clock(Duration::from_millis(50));
         std::thread::sleep(Duration::from_millis(5));
     }
+}
+fn diagnose(
+    phase: &str,
+    view: &Entity<lyrel_markdown_editor::EditorState>,
+    context: &mut VisualTestContext,
+) {
+    context.update(|window, cx| {
+        let style = super::Style::current(cx);
+        let view = view.read(cx);
+        let presentation = match view.mermaid_presentation(2) {
+            Some(MermaidPresentation::Ready(image, width, height)) => format!(
+                "Ready image={:?} ptr={:p} bitmap={:?} logical=({width}, {height})",
+                image.id,
+                std::sync::Arc::as_ptr(&image),
+                image.size(0),
+            ),
+            Some(MermaidPresentation::Loading(message)) => format!("Loading {message}"),
+            Some(MermaidPresentation::Failed(message)) => format!("Failed {message}"),
+            None => "None".into(),
+        };
+        let tail = view
+            .text()
+            .find("TAIL")
+            .and_then(|tail| view.range_to_bounds(&(tail..tail)));
+        eprintln!(
+            "[native-mermaid-probe] phase={phase} revision={} family={:?} font_size={} rem={:?} dpr={} viewport={:?} tail={tail:?} presentation={presentation} source={:?}",
+            view.document().read(cx).revision(),
+            style.family,
+            style.size,
+            window.rem_size(),
+            window.scale_factor(),
+            window.viewport_size(),
+            view.text(),
+        );
+    });
 }
 fn ready(
     view: &Entity<lyrel_markdown_editor::EditorState>,
@@ -81,6 +117,7 @@ pub(super) fn lifecycle(cx: &mut TestAppContext) {
             .clone()
     });
     let before = ready(&first, &mut context);
+    diagnose("lifecycle initial ready", &first, &mut context);
     let original_image = first.read_with(&context, |view, _| {
         match view.mermaid_presentation(2).unwrap() {
             MermaidPresentation::Ready(image, ..) => image,
@@ -132,9 +169,11 @@ pub(super) fn lifecycle(cx: &mut TestAppContext) {
     settle(&mut context);
     view.update_in(&mut context, |view, _, cx| view.select_range(0..0, cx));
     let changed = ready(&view, &mut context);
+    diagnose("lifecycle edited ready", &view, &mut context);
     assert!(
         changed.0 > before.0,
-        "native labels must change the actual diagram geometry"
+        "native labels must change the actual diagram geometry: before={before:?}, changed={changed:?}, source={}",
+        view.read_with(&context, |view, _| view.text().to_owned())
     );
     ready(&first, &mut context);
     first.read_with(&context, |first, cx| {
@@ -382,11 +421,13 @@ pub(super) fn theme_zoom_scroll(cx: &mut TestAppContext) {
             .clone()
     });
     delayed.wait(&mut context);
+    diagnose("geometry native result held", &view, &mut context);
     let tail = original.find("TAIL").unwrap();
     view.update_in(&mut context, |view, window, cx| {
         view.select_range(tail..tail, cx);
         view.focus_handle(cx).focus(window, cx);
     });
+    diagnose("geometry waiting for tail reveal", &view, &mut context);
     until(&mut context, |context| {
         context.update(|window, cx| {
             view.read(cx)
@@ -399,9 +440,11 @@ pub(super) fn theme_zoom_scroll(cx: &mut TestAppContext) {
     let before = view.read_with(&context, |view, _| {
         view.range_to_bounds(&(tail..tail)).unwrap()
     });
+    diagnose("geometry tail revealed", &view, &mut context);
     delayed.release(&mut context);
     let initial = ready(&view, &mut context);
     settle(&mut context);
+    diagnose("geometry released ready", &view, &mut context);
     let after = view.read_with(&context, |view, _| {
         view.range_to_bounds(&(tail..tail)).unwrap()
     });
@@ -416,8 +459,18 @@ pub(super) fn theme_zoom_scroll(cx: &mut TestAppContext) {
     context.update(|_, cx| {
         gpui_kit::component::Theme::update(cx, |theme| theme.font_size = prior_size * 1.25)
     });
+    diagnose("geometry waiting for zoom ready", &view, &mut context);
+    let mut observed_image = None;
     until(&mut context, |context| {
-        view.read_with(context, |view, _| matches!(view.mermaid_presentation(2), Some(MermaidPresentation::Ready(_, width, _)) if width > initial.0))
+        let presentation = view.read_with(context, |view, _| view.mermaid_presentation(2));
+        if let Some(MermaidPresentation::Ready(image, ..)) = &presentation {
+            let image = std::sync::Arc::as_ptr(image) as usize;
+            if observed_image != Some(image) {
+                observed_image = Some(image);
+                diagnose("geometry observed zoom image", &view, context);
+            }
+        }
+        matches!(presentation, Some(MermaidPresentation::Ready(_, width, _)) if width > initial.0)
     });
     view.read_with(&context, |view, cx| {
         assert_eq!(
