@@ -2,8 +2,9 @@
 use gpui_kit::{App, Context};
 use gpui_kit::component::ActiveTheme as _;
 use lyrel_markdown_editor::{AlertIcons, EditorState, SyntaxStyle};
-
 mod writing;
+mod mermaid_host;
+pub(crate) mod table_code;
 
 pub(super) fn configure(editor: &mut EditorState, cx: &mut Context<EditorState>) {
     // Reference document: 16px body, 1.45 line-height, H1/H2/H3 1.8/1.5/1.3.
@@ -14,6 +15,8 @@ pub(super) fn configure(editor: &mut EditorState, cx: &mut Context<EditorState>)
     editor.set_live_style(style.clone(), cx);
     editor.set_markdown_style(style, cx);
     writing::configure(editor, cx);
+    mermaid_host::install(editor, cx);
+    table_code::configure(editor, cx);
 }
 
 fn syntax_style(cx: &App) -> SyntaxStyle {
@@ -60,7 +63,18 @@ fn syntax_style(cx: &App) -> SyntaxStyle {
 mod foundation;
 #[cfg(any(test, feature = "native-markdown-tests"))]
 mod writing_tests;
+#[cfg(any(test, feature = "native-markdown-tests"))]
+mod table_code_tests;
 #[cfg(feature = "native-markdown-tests")]
 pub(crate) fn native_cases() -> impl Iterator<Item = crate::native_markdown::Case> {
-    foundation::native_cases().chain(writing_tests::native_cases())
+    foundation::native_cases().chain(writing_tests::native_cases()).chain(table_code_tests::native_cases()).chain([
+        crate::native_markdown::Case::new(
+            "ui::code_editor::workbench_views::shared_context_and_ime_handoff",
+            super::document_input::workbench_views::shared_context_and_ime_handoff,
+        ),
+        crate::native_markdown::Case::new(
+            "ui::code_editor::workbench_views::focused_consumers_and_layout",
+            super::document_input::workbench_views::focused_consumers_and_layout,
+        ),
+    ]).chain(mermaid_host::native_cases()).chain(super::saving::native_cases())
 }

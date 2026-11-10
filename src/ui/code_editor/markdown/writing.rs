@@ -73,7 +73,25 @@ impl WritingPopup {
                     });
                 }));
             }
-            menu
+            let table_editor = editor.downgrade();
+            let table_request = request.clone();
+            menu = menu.item(PopupMenuItem::new(t(L10nKey::EditorTableInsert)).on_click(move |_, window, cx| {
+                let Some(editor) = table_editor.upgrade() else { return; };
+                if editor.read(cx).document().read(cx).revision() != table_request.revision() { return; }
+                editor.update(cx, |editor, cx| editor.select_range(table_request.range(), cx));
+                super::table_code::open_table_picker(&editor, window, cx);
+            }));
+            let image_editor = editor.downgrade();
+            let image_request = request.clone();
+            menu.item(PopupMenuItem::new(t(L10nKey::MarkdownSlashImage)).on_click(move |_, window, cx| {
+                let Some(editor) = image_editor.upgrade() else { return; };
+                if editor.read(cx).document().read(cx).revision() != image_request.revision() { return; }
+                editor.update(cx, |editor, cx| {
+                    editor.select_range(image_request.range(), cx);
+                    editor.focus_handle(cx).focus(window, cx);
+                });
+                window.dispatch_action(Box::new(lyrel_markdown_editor::InsertImage), cx);
+            }))
         });
         let owner = editor.downgrade();
         let dismiss = cx.subscribe(&menu, move |_, _, _: &DismissEvent, cx| {

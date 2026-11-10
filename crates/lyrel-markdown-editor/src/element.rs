@@ -176,6 +176,7 @@ impl Element for EditorElement {
                 let scan = editor.scan_data();
                 let shaped = shape_document(
                     window,
+                    cx,
                     &editor.content,
                     &text_style.font(),
                     text_style.color,
@@ -262,14 +263,19 @@ impl Element for EditorElement {
                     && !editor.line_tops.is_empty()
                     && wrap_width.is_some_and(|w| (w - last.size.width).abs() < px(1.))
                 {
-                    let delta = total - last.size.height;
+                    let n = new_tops.len().min(editor.line_tops.len());
+                    let viewport_top = editor.scroll.bounds().top();
+                    let anchor = editor.line_tops.iter().position(|top| last.origin.y + *top >= viewport_top).unwrap_or(n);
+                    // Changes below the visible row cannot cancel or amplify
+                    // an independent asynchronous height change above it.
+                    let delta = new_tops.get(anchor).zip(editor.line_tops.get(anchor))
+                        .map_or(total - last.size.height, |(new, old)| *new - *old);
                     // Layout rounds the painted bounds to device pixels, so
                     // `last` can differ from `total` by just under one device
                     // px with nothing changed (seen: 0.9998 at 1x). Compensating
                     // that noise on every re-render crept the feed (#122);
                     // 1.5 device px leaves margin over it.
                     if delta.abs() >= px(1.5 / sf) {
-                        let n = new_tops.len().min(editor.line_tops.len());
                         let j = (0..n)
                             .find(|&k| (new_tops[k] - editor.line_tops[k]).abs() > px(0.5))
                             .unwrap_or(n);
@@ -295,9 +301,8 @@ impl Element for EditorElement {
                                 line_txt
                             );
                         }
-                        let changed_y =
-                            editor.line_tops.get(j).copied().unwrap_or(last.size.height);
-                        if last.origin.y + changed_y < px(0.) && !editor.compensated.get() {
+                        let changed_y = editor.line_tops.get(j).copied().unwrap_or(last.size.height);
+                        if last.origin.y + changed_y < viewport_top && !editor.compensated.get() {
                             editor.compensated.set(true);
                             compensate = Some((f.clone(), delta));
                         }
@@ -407,6 +412,7 @@ impl Element for EditorElement {
         } else {
             shape_document(
                 window,
+                cx,
                 &editor.content,
                 &font,
                 text_color,
@@ -2084,6 +2090,14 @@ impl Element for EditorElement {
                 {
                     window.set_cursor_style(CursorStyle::PointingHand, hb);
                 }
+            } else if let Some(Block::MermaidStatus { text, line_height, .. }) =
+                prepaint.widgets.get(i).and_then(Option::as_ref)
+            {
+                let mut y = origin.y;
+                for line in text.iter() {
+                    let _ = line.paint(point(origin.x, y), *line_height, gpui_kit::TextAlign::Left, None, window, cx);
+                    y += *line_height * (line.wrap_boundaries().len() + 1) as f32;
+                }
             } else if let Some(Block::Properties(p)) =
                 prepaint.widgets.get(i).and_then(Option::as_ref)
             {
@@ -2844,6 +2858,7 @@ fn shape_inline_images(
 #[allow(clippy::too_many_arguments)]
 fn shape_document(
     window: &mut Window,
+    cx: &App,
     content: &str,
     base_font: &Font,
     base_color: Hsla,
@@ -2911,39 +2926,38 @@ fn shape_document(
             .as_ref()
             .is_some_and(|s| s.start < r.end && r.start < s.end)
     };
-    // ```mermaid blocks ready to render as a diagram: the caret is outside the
-    // block and the host has a rendered bitmap. The diagram paints on the block's
-    // first line; the rest collapse. Caret inside / still rendering → raw code.
-    let mermaid: Vec<(Range<usize>, BlockImg)> = match block_mermaid.filter(|_| md.is_some()) {
-        Some(f) => scan
-            .mermaid
-            .iter()
-            .filter(|(range, _)| {
-                caret_row.is_none_or(|cr| !range.contains(&cr)) && !sel_hits(range)
-            })
-            .cloned()
-            .filter_map(|(range, source)| {
-                // Sized by the provider's logical dimensions, like math below —
-                // never texture pixels ÷ window scale factor.
-                let (img, lw, lh) = f(&source)?;
-                if lw <= 0. || lh <= 0. {
-                    return None;
-                }
-                let w = lw.min(wrap_width.map_or(lw, f32::from)).max(1.);
-                Some((
-                    range,
-                    BlockImg {
+    // The Host owns the result state. Only a ready, inactive block collapses
+    // to its diagram; loading/errors occupy the opening marker row while the
+    // actual source remains editable underneath. Entering/selecting the marker
+    // reveals its exact original spelling as well.
+    let mermaid: Vec<(Range<usize>, Block)> = match block_mermaid.filter(|_| md.is_some()) {
+        Some(f) => scan.mermaid.iter().filter_map(|(range, source)| {
+            let presentation = f(range.start, source);
+            let failed = matches!(&presentation, MermaidPresentation::Failed(_));
+            match presentation {
+                MermaidPresentation::Ready(img, lw, lh)
+                    if caret_row.is_none_or(|cr| !range.contains(&cr)) && !sel_hits(range)
+                        && lw.is_finite() && lh.is_finite() && lw > 0. && lh > 0. => {
+                    let w = lw.min(wrap_width.map_or(lw, f32::from)).max(1.);
+                    Some((range.clone(), Block::Image(BlockImg {
                         img,
                         width: px(w),
                         height: px(w * lh / lw),
-                        // No grip: there's no `{width=N}` to persist on a fence
-                        // line (the old grip silently no-oped on release).
                         resizable: false,
                         align: MathAlign::Left,
-                    },
-                ))
-            })
-            .collect(),
+                    })))
+                }
+                MermaidPresentation::Loading(message) | MermaidPresentation::Failed(message)
+                    if caret_row != Some(range.start) && !sel_hits(range) => {
+                    let color = md.map_or(base_color, |style| if failed { style.alert_caution } else { style.marker });
+                    let text = shape_all(window, &message, base_font_size, base_font.clone(), color, wrap_width);
+                    let line_height = base_font_size * LINE_HEIGHT_RATIO;
+                    let rows: usize = text.iter().map(|line| line.wrap_boundaries().len() + 1).sum();
+                    Some((range.clone(), Block::MermaidStatus { text: std::rc::Rc::new(text), line_height, height: line_height * rows.max(1) as f32 }))
+                }
+                _ => None,
+            }
+        }).collect(),
         None => Vec::new(),
     };
     // $$…$$ math blocks ready to render: caret outside + a typeset bitmap ready. Like
@@ -3135,7 +3149,7 @@ fn shape_document(
                         i += 1;
                         continue;
                     };
-                    let lang = lang.trim();
+                    let lang = lang.split_whitespace().next().unwrap_or("");
                     let mut j = i + 1;
                     while j < lines.len() && !lines[j].trim_start().starts_with("```") {
                         j += 1;
@@ -3143,7 +3157,7 @@ fn shape_document(
                     // Mermaid blocks render as diagrams, not code.
                     if !lang.is_empty() && lang != "mermaid" && j > i + 1 {
                         let block = lines[i + 1..j].join("\n");
-                        let ranges = hl(lang, &block);
+                        let ranges = hl(lang, &block, cx);
                         let mut start = 0;
                         for (k, l) in lines[i + 1..j].iter().enumerate() {
                             let end = start + l.len();
@@ -3188,19 +3202,21 @@ fn shape_document(
         // A ready mermaid block renders as its diagram (on the first line) with the
         // rest of the block collapsed — bypassing the normal per-line handling. Its
         // ``` fences still toggle `in_fence` so later code blocks track correctly.
-        if let Some((range, bi)) = mermaid.iter().find(|(r, _)| r.contains(&idx)) {
-            if line.trim_start().starts_with("```") {
-                in_fence = !in_fence;
+        if let Some((range, widget)) = mermaid.iter().find(|(r, _)| r.contains(&idx)) {
+            if matches!(widget, Block::Image(_)) || idx == range.start {
+                if line.trim_start().starts_with("```") {
+                    in_fence = !in_fence;
+                }
+                let (h, widget) = if idx == range.start {
+                    (widget.height(), Some(widget.clone()))
+                } else {
+                    (px(0.), None)
+                };
+                out.push_placeholder(window, base_font_size, wrap_width, h, widget, None, 1);
+                line_start = line_end + 1;
+                alert_run = None;
+                continue;
             }
-            let (h, widget) = if idx == range.start {
-                (bi.height, Some(Block::Image(bi.clone())))
-            } else {
-                (px(0.), None)
-            };
-            out.push_placeholder(window, base_font_size, wrap_width, h, widget, None, 1);
-            line_start = line_end + 1;
-            alert_run = None;
-            continue;
         }
 
         // An in-line-edited $$ block reserves a fixed gap; the host paints the live editor
