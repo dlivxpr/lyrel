@@ -9,7 +9,7 @@ use rio_vt::crosswords::square::{CellFlags, Hyperlink, Wide};
 use rio_vt::crosswords::style::Style;
 use rio_vt::event::EventListener;
 
-use lyrel_core::core::kitty_graphics::PlaceholderSlice;
+use super::images::{CommittedImages, ImageStore};
 
 /// Decoded values, never Square side-table IDs or theme-resolved colours.
 #[derive(Clone)]
@@ -24,7 +24,8 @@ pub(super) struct ReadingCell {
 
 struct ReadingRow {
     cells: Vec<ReadingCell>,
-    placeholders: Vec<PlaceholderSlice>,
+    images: CommittedImages,
+    captured_live_start: i64,
 }
 
 pub(super) struct ReadingView {
@@ -39,7 +40,7 @@ pub(super) fn live_start<T: EventListener>(term: &Crosswords<T>) -> i64 {
 }
 
 impl ReadingView {
-    pub(super) fn capture<T: EventListener>(term: &Crosswords<T>) -> Self {
+    pub(super) fn capture<T: EventListener>(term: &Crosswords<T>, images: &ImageStore) -> Self {
         let live = live_start(term);
         let mut reading = Self {
             top: live - term.display_offset() as i64,
@@ -50,13 +51,13 @@ impl ReadingView {
         // Even a one-row scroll exposes mutable active-screen rows. Capture
         // the entire active screen once, not only the currently visible part.
         for row in live..live + term.screen_lines() as i64 {
-            reading.retain_row(term, row);
+            reading.retain_row(term, images, row);
         }
-        reading.retain_visible(term);
+        reading.retain_visible(term, images);
         reading
     }
 
-    fn retain_row<T: EventListener>(&mut self, term: &Crosswords<T>, row: i64) {
+    fn retain_row<T: EventListener>(&mut self, term: &Crosswords<T>, images: &ImageStore, row: i64) {
         self.rows.entry(row).or_insert_with(|| {
             let line = Line((row - live_start(term)) as i32);
             let cells = term.grid[line][..]
@@ -78,19 +79,23 @@ impl ReadingView {
                     }
                 })
                 .collect();
+            let placeholders =
+                lyrel_core::core::kitty_graphics::placeholder_row(&term.grid, line);
+            let images = images.commit_reading_row(line.0, &placeholders);
             ReadingRow {
                 cells,
-                placeholders: lyrel_core::core::kitty_graphics::placeholder_row(&term.grid, line),
+                images,
+                captured_live_start: live_start(term),
             }
         });
     }
 
-    fn retain_visible<T: EventListener>(&mut self, term: &Crosswords<T>) {
+    fn retain_visible<T: EventListener>(&mut self, term: &Crosswords<T>, images: &ImageStore) {
         let oldest = term.grid.lines_evicted() as i64;
         let end = live_start(term) + term.screen_lines() as i64;
         // Include the preceding fractional-scroll sliver in the same source.
         for row in (self.top - 1).max(oldest)..(self.top + term.screen_lines() as i64).min(end) {
-            self.retain_row(term, row);
+            self.retain_row(term, images, row);
         }
     }
 
@@ -100,10 +105,19 @@ impl ReadingView {
             .map(|row| row.cells.as_slice())
     }
 
-    pub(super) fn placeholders(&self, viewport_row: i32) -> &[PlaceholderSlice] {
-        self.rows
-            .get(&(self.top + viewport_row as i64))
-            .map_or(&[], |row| row.placeholders.as_slice())
+    pub(super) fn commit_images<T: EventListener>(&self, term: &Crosswords<T>) -> CommittedImages {
+        let mut images = Vec::new();
+        for (row, retained) in self.rows.range(self.top - 1..self.top + term.screen_lines() as i64) {
+            retained.images.append_reading(
+                &mut images,
+                (row - self.top) as i32,
+                live_start(term) - retained.captured_live_start,
+            );
+        }
+        images.sort_unstable_by_key(|image| {
+            (image.placement.z, image.placement.image_id, image.placement.key)
+        });
+        CommittedImages::new(images)
     }
 
     pub(super) fn distance<T: EventListener>(&self, term: &Crosswords<T>) -> usize {
@@ -134,9 +148,9 @@ impl ReadingView {
         true
     }
 
-    pub(super) fn moved<T: EventListener>(&mut self, term: &Crosswords<T>) {
+    pub(super) fn moved<T: EventListener>(&mut self, term: &Crosswords<T>, images: &ImageStore) {
         self.top = live_start(term) - term.display_offset() as i64;
-        self.retain_visible(term);
+        self.retain_visible(term, images);
     }
 
     pub(super) fn columns(&self) -> usize {
