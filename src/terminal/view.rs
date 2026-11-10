@@ -1526,8 +1526,11 @@ impl TerminalView {
                 self.terminal.write(out);
             }
             WheelRoute::Scrollback => {
-                self.selection_scroll
-                    .scroll_lines(&mut self.terminal.term.lock(), lines, &self.terminal.images());
+                self.selection_scroll.scroll_lines(
+                    &mut self.terminal.term.lock(),
+                    lines,
+                    &self.terminal.images(),
+                );
                 self.terminal.viewport_reporter().report();
                 cx.notify();
             }
@@ -1934,9 +1937,9 @@ impl TerminalView {
     /// Apply a direct viewport movement and report only an actual visual change.
     fn smooth_scroll(&mut self, delta: f32, cx: &mut Context<Self>) -> bool {
         let mut term = self.terminal.term.lock();
-        let moved =
-            self.selection_scroll
-                .smooth_scroll(&mut term, delta, &self.terminal.images());
+        let moved = self
+            .selection_scroll
+            .smooth_scroll(&mut term, delta, &self.terminal.images());
         drop(term);
         self.terminal.viewport_reporter().report();
         if moved {
@@ -5207,8 +5210,11 @@ mod gpui_tests {
         });
         print(cx, &view, filler(160));
         view.update(cx, |view, _| {
-            view.selection_scroll
-                .scroll_to(&mut view.terminal.term.lock(), 1, &view.terminal.images());
+            view.selection_scroll.scroll_to(
+                &mut view.terminal.term.lock(),
+                1,
+                &view.terminal.images(),
+            );
         });
         vcx.update(|window, cx| {
             window.refresh();

@@ -57,7 +57,12 @@ impl ReadingView {
         reading
     }
 
-    fn retain_row<T: EventListener>(&mut self, term: &Crosswords<T>, images: &ImageStore, row: i64) {
+    fn retain_row<T: EventListener>(
+        &mut self,
+        term: &Crosswords<T>,
+        images: &ImageStore,
+        row: i64,
+    ) {
         self.rows.entry(row).or_insert_with(|| {
             let line = Line((row - live_start(term)) as i32);
             let cells = term.grid[line][..]
@@ -79,8 +84,7 @@ impl ReadingView {
                     }
                 })
                 .collect();
-            let placeholders =
-                lyrel_core::core::kitty_graphics::placeholder_row(&term.grid, line);
+            let placeholders = lyrel_core::core::kitty_graphics::placeholder_row(&term.grid, line);
             let images = images.commit_reading_row(line.0, &placeholders);
             ReadingRow {
                 cells,
@@ -107,7 +111,10 @@ impl ReadingView {
 
     pub(super) fn commit_images<T: EventListener>(&self, term: &Crosswords<T>) -> CommittedImages {
         let mut images = Vec::new();
-        for (row, retained) in self.rows.range(self.top - 1..self.top + term.screen_lines() as i64) {
+        for (row, retained) in self
+            .rows
+            .range(self.top - 1..self.top + term.screen_lines() as i64)
+        {
             retained.images.append_reading(
                 &mut images,
                 (row - self.top) as i32,
@@ -115,7 +122,11 @@ impl ReadingView {
             );
         }
         images.sort_unstable_by_key(|image| {
-            (image.placement.z, image.placement.image_id, image.placement.key)
+            (
+                image.placement.z,
+                image.placement.image_id,
+                image.placement.key,
+            )
         });
         CommittedImages::new(images)
     }
