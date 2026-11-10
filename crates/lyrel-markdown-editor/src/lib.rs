@@ -577,11 +577,9 @@ pub type ClipboardWriter = std::rc::Rc<dyn Fn(&str, &mut App)>;
 /// embed chip.
 type EmbedViewFn = Box<dyn Fn(&str) -> Option<(gpui_kit::AnyView, Pixels)>>;
 
-/// Resolves a ` ```mermaid ` block's source to a rendered diagram bitmap plus its
-/// **logical** (display) px size — supplied by the host for the same reason as
-/// [`BlockMathFn`]. Set via [`EditorState::set_block_mermaid_provider`]; the host
-/// renders + caches off-thread (see [`mermaid_sources`] to pre-render).
-type BlockMermaidFn = Box<dyn Fn(&str) -> Option<(Arc<RenderImage>, f32, f32)>>;
+/// Host-owned native Mermaid result, keyed by the opening source row and exact source.
+/// Pending and failed results remain visible and source-editable.
+type BlockMermaidFn = Box<dyn Fn(usize, &str) -> MermaidPresentation>;
 
 /// Resolves a `$$…$$` math block's LaTeX to a typeset bitmap plus its **logical**
 /// (display) px size, so the editor can render the block as the equation (caret
@@ -609,14 +607,8 @@ type CodeHighlightFn = Box<dyn Fn(&str, &str) -> Vec<(Range<usize>, HighlightSty
 /// [`EditorState::set_auto_replace`].
 type AutoReplaceFn = Box<dyn Fn(&str) -> Option<(Range<usize>, String)>>;
 
-/// The diagram sources of every ` ```mermaid ` block in `content`, so a host can
-/// pre-render them (the editor's mermaid provider then finds the ready bitmap).
-pub fn mermaid_sources(content: &str) -> Vec<SharedString> {
-    markdown_syntax::mermaid_blocks(content)
-        .into_iter()
-        .map(|(_, source)| source.into())
-        .collect()
-}
+mod mermaid;
+pub use mermaid::{MermaidBlock, MermaidPresentation, mermaid_blocks};
 
 /// The LaTeX sources of every `$$…$$` math block in `content`, so a host can
 /// pre-render them (the editor's math provider then finds the ready bitmap).
@@ -1080,6 +1072,8 @@ impl EditorState {
     pub fn for_document(document: Entity<Document>, cx: &mut Context<Self>) -> Self {
         let content = document.read(cx).snapshot().text_handle();
         let revision = document.read(cx).revision();
+        let scroll = ScrollHandle::new();
+        let anchored_scroll = scroll.clone();
         let document_subscription =
             cx.subscribe(&document, |this, _, event: &DocumentEvent, cx| {
                 if event.revision() <= this.content_gen {
@@ -1115,7 +1109,7 @@ impl EditorState {
             _document_subscription: document_subscription,
             pending_coalesce: false,
             soft_wrap: true,
-            scroll: ScrollHandle::new(),
+            scroll,
             revealed_caret: None,
             reveal_requested: false,
             caret_affinity: WrapAffinity::Downstream,
@@ -1191,7 +1185,11 @@ impl EditorState {
             table_resize_hover: None,
             shape_memo: std::cell::RefCell::new(None),
             scan_cache: std::cell::RefCell::new(None),
-            scroll_compensator: None,
+            scroll_compensator: Some(std::rc::Rc::new(move |delta, _, _| {
+                let mut offset = anchored_scroll.offset();
+                offset.y -= delta;
+                anchored_scroll.set_offset(offset);
+            })),
             last_paint_gen: 0,
             shape_caches: ShapeCaches::default(),
             shape_band: std::cell::Cell::new(None),
@@ -1383,15 +1381,12 @@ impl EditorState {
         self.embed_view = Some(Box::new(provider));
     }
 
-    /// Install the provider that resolves a ` ```mermaid ` block's source to a
-    /// rendered diagram: the bitmap plus its logical (display) px size — see
-    /// [`BlockMathFn`] for why the host supplies the size. With it, such a block
-    /// renders as the diagram when the caret is elsewhere; with the caret inside
-    /// (or while it renders) it shows the raw fenced source. Pre-render with
-    /// [`mermaid_sources`].
+    /// Install the Host's native diagram/cache lookup. The opening row disambiguates
+    /// identical sources in different blocks. Source entry uses this presentation's
+    /// normal caret, selection and shared Document history.
     pub fn set_block_mermaid_provider(
         &mut self,
-        provider: impl Fn(&str) -> Option<(Arc<RenderImage>, f32, f32)> + 'static,
+        provider: impl Fn(usize, &str) -> MermaidPresentation + 'static,
     ) {
         self.block_mermaid = Some(Box::new(provider));
     }
@@ -6606,6 +6601,11 @@ struct InlineMath {
 #[derive(Clone)]
 enum Block {
     Image(BlockImg),
+    MermaidStatus {
+        text: std::rc::Rc<Vec<WrappedLine>>,
+        line_height: Pixels,
+        height: Pixels,
+    },
     Chip {
         src: SharedString,
         label: SharedString,
@@ -6665,6 +6665,7 @@ impl Block {
     fn height(&self) -> Pixels {
         match self {
             Block::Image(i) => i.height,
+            Block::MermaidStatus { height, .. } => *height,
             Block::Chip { height, .. } => *height,
             Block::Properties(p) => p.height,
         }
