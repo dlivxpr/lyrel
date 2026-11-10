@@ -274,9 +274,17 @@ pub(super) fn native_rhythm(cx: &mut TestAppContext) {
         context.update(|_, cx| Theme::update(cx, |theme| theme.font_size = px(font_size)));
         for width in [1100., 850.] {
             context.simulate_resize(gpui_kit::size(px(width), px(900.)));
-            for needle in ["# Heading", "\nordinary", "\n- ordinary", "\n> ordinary"] {
+            for (needle, prefix_len) in [
+                ("# Heading", 2),
+                ("\nordinary", 0),
+                ("\n- ordinary", 2),
+                ("\n> ordinary", 2),
+            ] {
                 let at = source.find(needle).unwrap() + usize::from(needle.starts_with('\n'));
-                view.update_in(&mut context, |view, _, cx| view.select_range(at..at, cx));
+                // Keep the structural prefix rendered, as it is during ordinary
+                // body editing; revealing a list/quote marker changes its wrap.
+                let body = at + prefix_len;
+                view.update_in(&mut context, |view, _, cx| view.select_range(body..body, cx));
                 settle(&mut context);
                 let (first, next) = view.read_with(&context, |view, _| {
                     let first = view.range_to_bounds(&(at..at)).unwrap();
@@ -291,7 +299,30 @@ pub(super) fn native_rhythm(cx: &mut TestAppContext) {
                     (first, next)
                 });
                 assert!(next.1.top() > first.top());
-                let target = next.1.center();
+                // Layout can already describe an offscreen row. Reveal the
+                // target through the presentation's normal selection request
+                // and deliver its scheduled platform frame before clicking.
+                // Park one byte later so an ignored pointer cannot pass the
+                // exact caret assertion, without revealing selection markers.
+                view.update_in(&mut context, |view, _, cx| {
+                    view.select_range(next.0 + 1..next.0 + 1, cx)
+                });
+                until(&mut context, |context| {
+                    context.update(|window, cx| {
+                        let viewport = window.find("markdown-document-scroll").bounds();
+                        view.read(cx)
+                            .range_to_bounds(&(next.0..next.0))
+                            .is_some_and(|bounds| {
+                                bounds.top() >= viewport.top() && bounds.bottom() <= viewport.bottom()
+                            })
+                    })
+                });
+                let target = view.read_with(&context, |view, _| {
+                    let first = view.range_to_bounds(&(at..at)).unwrap();
+                    let next = view.range_to_bounds(&(next.0..next.0)).unwrap();
+                    assert!(next.top() > first.top(), "target stays on a wrapped row");
+                    next.center()
+                });
                 context.update(|window, cx| {
                     window.pointer_move(target, None, cx);
                     window.pointer_down(target, gpui_kit::MouseButton::Left, cx);
@@ -299,11 +330,17 @@ pub(super) fn native_rhythm(cx: &mut TestAppContext) {
                 });
                 settle(&mut context);
                 let before = view.read_with(&context, |view, _| view.cursor());
-                assert!(
-                    before >= next.0.saturating_sub(1) && before <= next.0 + 1,
-                    "native wrap hit: font={font_size}, width={width}, block={needle:?}, first={first:?}, next={next:?}, target={target:?}, cursor={before}"
+                assert_eq!(
+                    before, next.0,
+                    "native wrap hit: font={font_size}, width={width}, block={needle:?}, first={first:?}, next={next:?}, target={target:?}"
                 );
+                view.read_with(&context, |view, _| {
+                    assert_eq!(view.selected_range(), next.0..next.0);
+                });
                 context.update(|window, cx| window.input("X", cx));
+                let mut expected = source.clone();
+                expected.insert_str(next.0, "X");
+                view.read_with(&context, |view, _| assert_eq!(view.text(), expected));
                 context.dispatch_action(gpui_kit::component::input::Undo);
                 settle(&mut context);
                 view.read_with(&context, |view, _| assert_eq!(view.text(), source));
