@@ -1,333 +1,954 @@
-use gpui_kit::RenderImage;
-use markdown::mdast::Node;
-use std::{collections::HashMap, sync::Arc};
+//! 图片 I/O、权限和异步生命周期只归工作台；editor 仅消费 bitmap 和发出意图。
+use super::super::*;
+use super::links::{self, Target};
+use gpui_kit::component::{WindowExt as _, button::Button};
+use gpui_kit::{AnyWindowHandle, App, ClipboardEntry, EntityId, RenderImage, WeakEntity};
+use lyrel_core::host::Host;
+use lyrel_markdown_editor::{
+    Document, DocumentEvent, EditorEvent as NativeEvent, EditorState as MarkdownEditor,
+};
+use std::{cell::RefCell, io, rc::Rc, time::Duration};
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(super) struct Image {
-    pub url: String,
-    pub alt: String,
-    pub title: Option<String>,
-    pub width: Option<u32>,
-    pub dimensions: Option<(u32, u32)>,
-}
-pub(super) type Definitions = HashMap<String, (String, Option<String>)>;
-pub(super) fn definitions(root: &Node) -> Definitions {
-    let mut values = HashMap::new();
-    fn walk(node: &Node, values: &mut Definitions) {
-        if let Node::Definition(value) = node {
-            values
-                .entry(value.identifier.to_uppercase())
-                .or_insert_with(|| (value.url.clone(), value.title.clone()));
-        }
-        for child in node.children().into_iter().flatten() {
-            walk(child, values);
-        }
-    }
-    walk(root, &mut values);
-    values
-}
-pub(super) fn image(node: &Node, definitions: &Definitions) -> Option<Image> {
-    match node {
-        Node::Image(value) => Some(Image {
-            url: value.url.clone(),
-            alt: value.alt.clone(),
-            title: value.title.clone(),
-            width: None,
-            dimensions: None,
-        }),
-        Node::ImageReference(value) => {
-            definitions
-                .get(&value.identifier.to_uppercase())
-                .map(|(url, title)| Image {
-                    url: url.clone(),
-                    alt: value.alt.clone(),
-                    title: title.clone(),
-                    width: None,
-                    dimensions: None,
-                })
-        }
-        _ => None,
-    }
-}
+const MAX_BYTES: u64 = 32 * 1024 * 1024;
+const MAX_PIXELS: u64 = 16 * 1024 * 1024;
+const CACHE_BYTES: u64 = 256 * 1024 * 1024;
 
-// The explicit extension matches the fixed editing reference. Parsing is only
-// called immediately after an AST-confirmed image, never arbitrary source.
-pub(super) fn width_suffix(source: &str) -> Option<(usize, u32)> {
-    let rest = source.strip_prefix("{width=")?;
-    let end = rest.find('}')?;
-    let number = rest[..end].strip_suffix("px").unwrap_or(&rest[..end]);
-    if number.is_empty() || !number.bytes().all(|byte| byte.is_ascii_digit()) {
-        return None;
+type Signature = (HostId, PathBuf);
+type Images = Rc<RefCell<HashMap<String, Bitmap>>>;
+
+/// Cache and preview share this lease, so eviction cannot retire a live preview's tile.
+#[derive(Clone)]
+struct Bitmap {
+    image: Arc<RenderImage>,
+    _lease: Entity<()>,
+}
+impl Bitmap {
+    fn new(image: Arc<RenderImage>, cx: &mut App) -> Self {
+        let release = image.clone();
+        let lease = cx.new(|cx| {
+            cx.on_release(move |_, cx| cx.drop_image(release, None))
+                .detach();
+        });
+        Self {
+            image,
+            _lease: lease,
+        }
     }
-    let width = number.parse::<u32>().ok().filter(|width| *width > 0)?;
-    Some(("{width=".len() + end + 1, width))
 }
 #[derive(Clone)]
-pub(super) enum State {
-    Unloaded,
-    Loading(u64),
-    Ready(Arc<RenderImage>),
+enum State {
+    Loading,
+    Blocked,
+    Ready,
     Failed(String),
 }
-#[derive(Default)]
-pub(super) struct Images {
-    pub states: HashMap<String, State>,
-    tasks: HashMap<String, gpui_kit::Task<()>>,
-    generation: u64,
-}
-const MAX_BYTES: u64 = 32 * 1024 * 1024;
-pub(super) fn external(url: &str) -> bool {
-    url::Url::parse(url).is_ok_and(|url| matches!(url.scheme(), "http" | "https"))
-}
-pub(super) fn decode(bytes: &[u8]) -> anyhow::Result<Arc<RenderImage>> {
-    static FONTS: std::sync::LazyLock<Arc<resvg::usvg::fontdb::Database>> =
-        std::sync::LazyLock::new(|| {
-            let mut fonts = resvg::usvg::fontdb::Database::new();
-            fonts.load_system_fonts();
-            Arc::new(fonts)
-        });
-    decode_with_fonts(bytes, &FONTS)
+#[derive(Clone)]
+struct Capture {
+    host: SharedHost,
+    path: PathBuf,
+    revision: u64,
+    selection: std::ops::Range<usize>,
 }
 
-fn decode_with_fonts(
-    bytes: &[u8],
-    fonts: &std::sync::LazyLock<Arc<resvg::usvg::fontdb::Database>>,
-) -> anyhow::Result<Arc<RenderImage>> {
-    // Decode off the UI thread; the image hook returns already prepared pixels.
-    let pixels = match image::load_from_memory(bytes) {
-        Ok(image) => image.into_rgba8(),
-        Err(raster_error) => {
-            use resvg::{tiny_skia, usvg};
-            let denied = Arc::new(std::sync::atomic::AtomicBool::new(false));
-            let rejected = denied.clone();
-            let select_font = usvg::FontResolver::default_font_selector();
-            let options = usvg::Options {
-                // A text-free SVG must not wait for the machine-wide font scan
-                // before it can reject an external image reference. usvg invokes
-                // this resolver only when it actually needs to lay out text.
-                font_resolver: usvg::FontResolver {
-                    select_font: Box::new(move |font, database| {
-                        if database.is_empty() {
-                            *database = Arc::clone(fonts);
-                        }
-                        select_font(font, database)
-                    }),
-                    ..Default::default()
-                },
-                image_href_resolver: usvg::ImageHrefResolver {
-                    resolve_data: usvg::ImageHrefResolver::default_data_resolver(),
-                    resolve_string: Box::new(move |_, _| {
-                        rejected.store(true, std::sync::atomic::Ordering::Relaxed);
-                        None
-                    }),
-                },
-                ..Default::default()
-            };
-            let tree = usvg::Tree::from_data(bytes, &options)
-                .map_err(|_| anyhow::anyhow!("{raster_error}"))?;
-            anyhow::ensure!(
-                !denied.load(std::sync::atomic::Ordering::Relaxed),
-                "SVG references external resources; those resources were not loaded"
-            );
-            let size = tree.size();
-            let scale = (2048. / size.width().max(size.height())).min(1.);
-            let width = (size.width() * scale).ceil().max(1.) as u32;
-            let height = (size.height() * scale).ceil().max(1.) as u32;
-            let mut pixmap = tiny_skia::Pixmap::new(width, height)
-                .ok_or_else(|| anyhow::anyhow!("image allocation failed"))?;
-            resvg::render(
-                &tree,
-                tiny_skia::Transform::from_scale(scale, scale),
-                &mut pixmap.as_mut(),
-            );
-            let mut bytes = pixmap.take();
-            for pixel in bytes.chunks_exact_mut(4) {
-                let alpha = pixel[3] as u32;
-                if alpha != 0 {
-                    for channel in &mut pixel[..3] {
-                        *channel = ((*channel as u32 * 255) / alpha).min(255) as u8;
+pub(crate) struct ImageHost {
+    app: WeakEntity<LyrelApp>,
+    id: BufferId,
+    window: AnyWindowHandle,
+    document: Entity<Document>,
+    signature: Option<Signature>,
+    generation: u64,
+    sources: HashSet<String>,
+    scanned_revision: Option<u64>,
+    images: Images,
+    states: HashMap<String, State>,
+    allowed: HashSet<String>,
+    views: HashMap<EntityId, (WeakEntity<MarkdownEditor>, Subscription)>,
+    hover: Option<(EntityId, SharedString, gpui_kit::Bounds<gpui_kit::Pixels>)>,
+    notice: Option<SharedString>,
+    refresh_scheduled: bool,
+    importing: bool,
+    _document: Subscription,
+}
+
+impl ImageHost {
+    pub(crate) fn new(
+        app: WeakEntity<LyrelApp>,
+        id: BufferId,
+        editor: &Entity<MarkdownEditor>,
+        window: &Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        let document = editor.read(cx).document().clone();
+        let subscription =
+            cx.subscribe(&document, |this, _, _: &DocumentEvent, cx| this.refresh(cx));
+        cx.on_release(|this, _| this.images.borrow_mut().clear())
+            .detach();
+        Self {
+            app,
+            id,
+            window: window.window_handle(),
+            document,
+            signature: None,
+            generation: 0,
+            sources: HashSet::new(),
+            scanned_revision: None,
+            images: Rc::new(RefCell::new(HashMap::new())),
+            states: HashMap::new(),
+            allowed: HashSet::new(),
+            views: HashMap::new(),
+            hover: None,
+            refresh_scheduled: false,
+            importing: false,
+            notice: None,
+            _document: subscription,
+        }
+    }
+
+    /// Every presentation installs its own event subscription and shares only Host bitmap data.
+    pub(crate) fn attach(owner: &Entity<Self>, editor: &Entity<MarkdownEditor>, cx: &mut App) {
+        owner.update(cx, |this, cx| {
+            if !this.views.contains_key(&editor.entity_id()) {
+                let images = this.images.clone();
+                editor.update(cx, |editor, _| {
+                    editor.set_block_image_provider(move |src| {
+                        images.borrow().get(src).map(|bitmap| bitmap.image.clone())
+                    });
+                    editor.set_host_link_navigation(!editor.is_source_only());
+                });
+                let subscription = cx.subscribe(editor, |this, source, event: &NativeEvent, cx| {
+                    this.event(source, event, cx)
+                });
+                this.views
+                    .insert(editor.entity_id(), (editor.downgrade(), subscription));
+            }
+            // Render may observe a save-as/rename without a source edit. Queue a bounded,
+            // idempotent identity refresh, outside the borrowed workbench render/update.
+            if !this.refresh_scheduled {
+                this.refresh_scheduled = true;
+                cx.spawn(async move |this, cx| {
+                    let _ = this.update(cx, |this, cx| {
+                        this.refresh_scheduled = false;
+                        this.refresh(cx);
+                    });
+                })
+                .detach();
+            }
+        });
+    }
+
+    fn identity(&self, cx: &App) -> Option<(SharedHost, Option<PathBuf>)> {
+        let app = self.app.upgrade()?;
+        let file = app.read(cx).editor.buffers.get(self.id)?;
+        let source = file.input.markdown()?;
+        if source.read(cx).document() != &self.document {
+            return None;
+        }
+        Some((
+            file.host.clone(),
+            file.untitled.is_none().then(|| file.path.clone()),
+        ))
+    }
+    fn capture(&self, editor: &Entity<MarkdownEditor>, cx: &App) -> Option<Capture> {
+        let (host, path) = self.identity(cx)?;
+        Some(Capture {
+            host,
+            path: path?,
+            revision: self.document.read(cx).revision(),
+            selection: editor.read(cx).selected_range(),
+        })
+    }
+    fn current(&self, capture: &Capture, cx: &App) -> bool {
+        self.identity(cx).is_some_and(|(host, path)| {
+            host.id() == capture.host.id() && path.as_ref() == Some(&capture.path)
+        }) && self.document.read(cx).revision() == capture.revision
+    }
+    fn notify(&self, cx: &mut Context<Self>) {
+        for (editor, _) in self.views.values() {
+            let _ = editor.update(cx, |_, cx| cx.notify());
+        }
+        let _ = self.app.update(cx, |_, cx| cx.notify());
+        cx.notify();
+    }
+    fn message(&mut self, message: impl Into<SharedString>, cx: &mut Context<Self>) {
+        let message = message.into();
+        self.notice = Some(message.clone());
+        let _ = self.window.update(cx, |_, window, cx| {
+            window.notify_app(message.to_string(), cx)
+        });
+        self.notify(cx);
+    }
+    fn event(
+        &mut self,
+        editor: Entity<MarkdownEditor>,
+        event: &NativeEvent,
+        cx: &mut Context<Self>,
+    ) {
+        match event {
+            NativeEvent::OpenLink(target) => {
+                let app = self.app.clone();
+                let id = self.id;
+                let _ = self.window.update(cx, |_, window, cx| {
+                    let _ = app.update(cx, |app, cx| {
+                        links::follow(app, id, &editor, target, window, cx)
+                    });
+                });
+            }
+            NativeEvent::HoverLink(target) => {
+                let next = target.as_ref().and_then(|(hit, bounds)| match hit {
+                    lyrel_markdown_editor::LinkHit::Url(url) => {
+                        Some((editor.entity_id(), url.clone().into(), *bounds))
                     }
+                    _ => None,
+                });
+                if next.is_some()
+                    || self
+                        .hover
+                        .as_ref()
+                        .is_some_and(|(view, _, _)| *view == editor.entity_id())
+                {
+                    self.hover = next;
+                    self.notify(cx);
                 }
             }
-            image::RgbaImage::from_raw(width, height, bytes).unwrap()
-        }
-    };
-    let mut pixels = pixels;
-    for pixel in pixels.pixels_mut() {
-        pixel.0.swap(0, 2);
-    }
-    Ok(Arc::new(RenderImage::new(smallvec::smallvec![
-        image::Frame::new(pixels)
-    ])))
-}
-impl super::MarkdownDocument {
-    pub(super) fn sync_images(
-        &mut self,
-        urls: Vec<String>,
-        consent: bool,
-        cx: &mut gpui_kit::Context<Self>,
-    ) {
-        let previous_len = self.images.states.len();
-        self.images.states.retain(|url, _| urls.contains(url));
-        self.images.tasks.retain(|url, _| urls.contains(url));
-        let mut changed = self.images.states.len() != previous_len;
-        let Some(resources) = self.resources().cloned() else {
-            if changed {
-                cx.emit(super::DocumentEvent::ImagesChanged);
+            NativeEvent::SelectionChanged => {
+                if self.hover.take().is_some() {
+                    self.notify(cx);
+                }
             }
+            NativeEvent::PreviewImage(source) => self.preview(&editor, source, cx),
+            NativeEvent::PasteAttachments(item) => {
+                let Some(capture) = self.capture(&editor, cx) else {
+                    self.message(t(L10nKey::MarkdownImageChooseLocation), cx);
+                    return;
+                };
+                if let Some(image) = item.entries().iter().find_map(|entry| match entry {
+                    ClipboardEntry::Image(image) => Some(image),
+                    _ => None,
+                }) {
+                    self.import(editor, capture, Import::Bytes(image.bytes.clone()), cx);
+                } else {
+                    let paths: Vec<_> = item
+                        .entries()
+                        .iter()
+                        .filter_map(|entry| match entry {
+                            ClipboardEntry::ExternalPaths(paths) => Some(paths.paths()),
+                            _ => None,
+                        })
+                        .flatten()
+                        .cloned()
+                        .collect();
+                    self.import(editor, capture, Import::Paths(paths), cx);
+                }
+            }
+            NativeEvent::InsertImages(paths) => self.insert(&editor, paths.clone(), cx),
+            _ => {}
+        }
+    }
+
+    fn refresh(&mut self, cx: &mut Context<Self>) {
+        self.views.retain(|_, (view, _)| view.upgrade().is_some());
+        let Some((host, path)) = self.identity(cx) else {
             return;
         };
-        let revision = self.revision();
-        for url in urls {
-            let state = self.images.states.entry(url.clone()).or_insert_with(|| {
-                changed = true;
-                State::Unloaded
-            });
-            if matches!(state, State::Ready(_) | State::Loading(_)) || (external(&url) && !consent)
-            {
-                continue;
+        let signature = path.as_ref().map(|path| (host.id(), path.clone()));
+        let changed_identity = signature != self.signature;
+        let revision = self.document.read(cx).revision();
+        if !changed_identity
+            && self.scanned_revision == Some(revision)
+            && self.sources.len() == self.states.len()
+        {
+            return;
+        }
+        self.scanned_revision = Some(revision);
+        self.hover = None;
+        if changed_identity {
+            self.signature = signature;
+            self.generation = self.generation.wrapping_add(1);
+            self.images.borrow_mut().clear();
+            self.states.clear();
+            self.allowed.clear();
+            for (view, _) in self.views.values() {
+                let _ = view.update(cx, |view, cx| view.refresh_resource_layout(cx));
             }
-            if matches!(state, State::Failed(_)) && !consent {
-                continue;
-            }
-            self.images.generation = self.images.generation.wrapping_add(1);
-            let generation = self.images.generation;
-            *state = State::Loading(generation);
-            changed = true;
-            let resources = resources.clone();
-            let client = cx.http_client();
-            let task_url = url.clone();
-            let task = cx.spawn(async move |document, cx| {
-                let load_url = url.clone();
-                let owner = resources.clone();
-                let result = if external(&url) {
-                    use smol::io::AsyncReadExt as _;
-                    async {
-                        use gpui_kit::http_client::{AsyncBody, HttpRequestExt as _, RedirectPolicy};
-                        let request = gpui_kit::http_client::Request::get(url.as_str())
-                            .follow_redirects(RedirectPolicy::FollowAll).body(AsyncBody::default())?;
-                        let mut response = client.send(request).await?;
-                        anyhow::ensure!(response.status().is_success(), "HTTP {}", response.status());
-                        let mut bytes = Vec::new();
-                        response.body_mut().take(MAX_BYTES + 1).read_to_end(&mut bytes).await?;
-                        anyhow::ensure!(bytes.len() as u64 <= MAX_BYTES, "image exceeds 32 MiB");
-                        cx.background_executor().spawn(async move { decode(&bytes) }).await
-                    }.await
-                } else {
-                    crate::ui::host_ops::off_thread(move || {
-                        let file_url = url::Url::parse(&load_url).ok().filter(|url| url.scheme() == "file");
-                        anyhow::ensure!(file_url.as_ref().is_none_or(|url| url.host_str().is_none_or(|host| host == "localhost")), "file URI names a different host");
-                        let decoded = percent_encoding::percent_decode_str(file_url.as_ref().map_or(load_url.as_str(), |url| url.path())).decode_utf8()?;
-                        let value = if owner.host().separator() == '\\' && file_url.is_some() { decoded.strip_prefix('/').unwrap_or(&decoded) } else { &decoded };
-                        let host = owner.host();
-                        let path = std::path::Path::new(value);
-                        let path = if host.is_absolute(path) { path.to_path_buf() } else {
-                            anyhow::ensure!(!value.contains("://") && !value.starts_with("//") && !value.contains(':'), "unsupported image scheme");
-                            let document = owner.path().ok_or_else(|| anyhow::anyhow!("save the document before loading relative images"))?;
-                            let name = document.to_string_lossy();
-                            let parent = name.rsplit_once(host.separator()).map_or("", |(parent, _)| parent);
-                            host.join(std::path::Path::new(parent), value)
-                        };
-                        decode(&host.read_file(&path, MAX_BYTES)?)
-                    }).await.unwrap_or_else(|| Err(anyhow::anyhow!("image Host operation stopped")))
-                };
-                let _ = document.update(cx, |document, cx| {
-                    if !matches!(document.images.states.get(&url), Some(State::Loading(id)) if *id == generation) { return; }
-                    if !resources.is_current(document.resources()) || document.revision() != revision {
-                        if resources.is_current(document.resources()) {
-                            document.images.states.remove(&url);
-                            cx.emit(super::DocumentEvent::ImagesChanged);
-                        }
-                        return;
-                    }
-                    document.images.states.insert(url, match result {
-                        Ok(image) => State::Ready(image),
-                        Err(error) => State::Failed(error.to_string()),
-                    });
-                    cx.emit(super::DocumentEvent::ImagesChanged);
-                    cx.notify();
-                });
-            });
-            self.images.tasks.insert(task_url, task);
+        }
+        let source_only = path
+            .as_ref()
+            .and_then(|path| path.extension())
+            .is_some_and(|extension| extension.eq_ignore_ascii_case("mdx"));
+        let sources: HashSet<_> = if source_only {
+            HashSet::new()
+        } else {
+            self.document
+                .read(cx)
+                .snapshot()
+                .image_sources()
+                .into_iter()
+                .collect()
+        };
+        let changed = sources != self.sources || changed_identity;
+        self.sources = sources;
+        self.states
+            .retain(|source, _| self.sources.contains(source));
+        self.images
+            .borrow_mut()
+            .retain(|source, _| self.sources.contains(source));
+        self.allowed.retain(|source| self.sources.contains(source));
+        let pending: Vec<_> = self
+            .sources
+            .iter()
+            .filter(|source| !self.states.contains_key(*source))
+            .cloned()
+            .collect();
+        for source in pending {
+            self.load(host.clone(), path.as_deref(), source, cx);
         }
         if changed {
-            cx.emit(super::DocumentEvent::ImagesChanged);
+            self.notify(cx);
         }
+    }
+    fn load(
+        &mut self,
+        host: SharedHost,
+        document: Option<&Path>,
+        source: String,
+        cx: &mut Context<Self>,
+    ) {
+        let target = match links::resolve(&*host, document, destination(&source)) {
+            Ok(Target::External(url)) if matches!(url.scheme(), "http" | "https") => {
+                if !self.allowed.contains(&source) {
+                    self.states.insert(source, State::Blocked);
+                    return;
+                }
+                Resource::External(url)
+            }
+            Ok(Target::File(path, _)) => Resource::File(path),
+            Ok(_) => {
+                self.states.insert(
+                    source,
+                    State::Failed(t(L10nKey::MarkdownLinkUnsupportedScheme).into()),
+                );
+                return;
+            }
+            Err(reason) => {
+                self.states.insert(source, State::Failed(t(reason).into()));
+                return;
+            }
+        };
+        let proxy = cx
+            .global::<crate::core::config::Config>()
+            .http_proxy
+            .clone();
+        let generation = self.generation;
+        let signature = self.signature.clone();
+        self.states.insert(source.clone(), State::Loading);
+        HostOps::run(
+            host,
+            cx,
+            move |h| -> io::Result<Arc<RenderImage>> {
+                let bytes = match target {
+                    Resource::File(path) => h.read_file(&path, MAX_BYTES)?,
+                    Resource::External(url) => fetch(&url, proxy.as_deref())?,
+                };
+                decode(&bytes).map(|(rgba, _)| render(rgba))
+            },
+            move |this, result, cx| {
+                let current = this.identity(cx).and_then(|(h, p)| p.map(|p| (h.id(), p)));
+                if this.generation != generation
+                    || this.signature != signature
+                    || current != signature
+                    || !this.sources.contains(&source)
+                {
+                    return;
+                }
+                match result {
+                    Ok(image) => {
+                        let used: u64 = this
+                            .images
+                            .borrow()
+                            .values()
+                            .map(|image| {
+                                let size = image.image.size(0);
+                                size.width.0 as u64 * size.height.0 as u64 * 4
+                            })
+                            .sum();
+                        let size = image.size(0);
+                        if used + size.width.0 as u64 * size.height.0 as u64 * 4 > CACHE_BYTES {
+                            this.states.insert(
+                                source,
+                                State::Failed(t(L10nKey::MarkdownImageLimit).into()),
+                            );
+                        } else {
+                            this.images
+                                .borrow_mut()
+                                .insert(source.clone(), Bitmap::new(image, cx));
+                            this.states.insert(source, State::Ready);
+                        }
+                    }
+                    Err(error) => {
+                        this.states.insert(source, State::Failed(error.to_string()));
+                    }
+                }
+                for (view, _) in this.views.values() {
+                    let _ = view.update(cx, |view, cx| view.refresh_resource_layout(cx));
+                }
+                this.notify(cx);
+            },
+        );
+    }
+
+    fn insert(
+        &mut self,
+        editor: &Entity<MarkdownEditor>,
+        paths: Vec<PathBuf>,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(capture) = self.capture(editor, cx) else {
+            self.message(t(L10nKey::MarkdownImageChooseLocation), cx);
+            return;
+        };
+        if !paths.is_empty() {
+            self.import(editor.clone(), capture, Import::Paths(paths), cx);
+            return;
+        }
+        let picker = cx.prompt_for_paths(gpui_kit::PathPromptOptions {
+            files: true,
+            directories: false,
+            multiple: true,
+            prompt: Some(t(L10nKey::MarkdownInsertImage).into()),
+        });
+        let editor = editor.downgrade();
+        cx.spawn(async move |this, cx| match picker.await {
+            Ok(Ok(Some(paths))) => {
+                let _ = this.update(cx, |this, cx| {
+                    if let Some(editor) = editor.upgrade() {
+                        this.import(editor, capture, Import::Paths(paths), cx);
+                    }
+                });
+            }
+            Ok(Err(error)) => {
+                let _ = this.update(cx, |this, cx| this.message(error.to_string(), cx));
+            }
+            _ => {}
+        })
+        .detach();
+    }
+
+    fn import(
+        &mut self,
+        editor: Entity<MarkdownEditor>,
+        capture: Capture,
+        input: Import,
+        cx: &mut Context<Self>,
+    ) {
+        self.notice = None;
+        if self.importing {
+            self.message(t(L10nKey::MarkdownImageWriting), cx);
+            return;
+        }
+        if !self.current(&capture, cx) || editor.read(cx).selected_range() != capture.selection {
+            self.message(t(L10nKey::MarkdownImageChanged), cx);
+            return;
+        }
+        self.importing = true;
+        self.notify(cx);
+        let path = capture.path.clone();
+        let request = capture.clone();
+        let editor = editor.downgrade();
+        HostOps::run(
+            capture.host.clone(),
+            cx,
+            move |h| store(h, &path, input),
+            move |this, result, cx| {
+                this.importing = false;
+                match result {
+                    Ok(sources) => {
+                        let Some(editor) = editor.upgrade() else {
+                            return;
+                        };
+                        if !this.current(&request, cx)
+                            || editor.read(cx).selected_range() != request.selection
+                        {
+                            this.message(t(L10nKey::MarkdownImageSelectionChanged), cx);
+                        } else {
+                            let mut text = String::new();
+                            let view = editor.read(cx);
+                            if request.selection.start > 0
+                                && !view.text()[..request.selection.start].ends_with('\n')
+                            {
+                                text.push('\n');
+                            }
+                            for source in sources {
+                                text.push_str(&format!("![]({source})\n"));
+                            }
+                            editor.update(cx, |view, cx| {
+                                view.replace_range(request.selection, &text, cx);
+                            });
+                        }
+                    }
+                    Err(error) => this.message(
+                        format!("{}: {error}", t(L10nKey::MarkdownImageWriteFailed)),
+                        cx,
+                    ),
+                }
+                this.notify(cx);
+            },
+        );
+    }
+
+    fn preview(&mut self, editor: &Entity<MarkdownEditor>, source: &str, cx: &mut Context<Self>) {
+        let current = self
+            .identity(cx)
+            .and_then(|(host, path)| path.map(|path| (host.id(), path)));
+        if current != self.signature
+            || !self
+                .document
+                .read(cx)
+                .snapshot()
+                .image_sources()
+                .iter()
+                .any(|src| src == source)
+        {
+            self.message(t(L10nKey::MarkdownImageChanged), cx);
+            return;
+        }
+        let image = self.images.borrow().get(source).cloned();
+        let Some(image) = image else {
+            self.message(t(L10nKey::EditorImageFailed), cx);
+            return;
+        };
+        let focus = editor.read(cx).focus_handle(cx);
+        let preview = cx.new(|_| ImagePreview {
+            image,
+            zoom: 1.,
+            scroll: gpui_kit::ScrollHandle::new(),
+        });
+        let title = source.to_owned();
+        let _ = self.window.update(cx, |_, window, cx| {
+            window.open_dialog(cx, move |dialog, window, _| {
+                dialog
+                    .title(title.clone())
+                    .w(window.rem_size() * 50.)
+                    .child(preview.clone())
+                    .on_close({
+                        let focus = focus.clone();
+                        move |_, window, cx| focus.focus(window, cx)
+                    })
+            });
+        });
+    }
+
+    #[cfg(any(test, feature = "native-markdown-tests"))]
+    pub(in crate::ui::code_editor) fn is_loaded(&self, source: &str) -> bool {
+        matches!(self.states.get(source), Some(State::Ready))
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
+enum Resource {
+    File(PathBuf),
+    External(url::Url),
+}
 
-    #[test]
-    fn text_free_svg_completes_without_initializing_system_fonts() {
-        // A controlled cold font loader makes the unwanted dependency fail
-        // immediately rather than relying on a machine's font-scan duration.
-        let fonts: std::sync::LazyLock<Arc<resvg::usvg::fontdb::Database>> =
-            std::sync::LazyLock::new(|| panic!("text-free SVG must not scan system fonts"));
-        let image = br##"<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16"><rect width="16" height="16" fill="#f00"/></svg>"##;
-        assert!(decode_with_fonts(image, &fonts).is_ok());
-        let external = br#"<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16"><image href="http://127.0.0.1/private.png" width="16" height="16"/></svg>"#;
-        let error = decode_with_fonts(external, &fonts)
-            .err()
-            .expect("external SVG image must be rejected");
-        assert_eq!(
-            error.to_string(),
-            "SVG references external resources; those resources were not loaded"
-        );
+fn destination(source: &str) -> &str {
+    let source = source.trim();
+    if let Some(angle) = source.strip_prefix('<')
+        && let Some(end) = angle.find('>')
+    {
+        return &angle[..end];
     }
-
-    #[test]
-    #[should_panic(expected = "SVG text requires fonts")]
-    fn svg_text_still_initializes_the_font_database() {
-        let fonts: std::sync::LazyLock<Arc<resvg::usvg::fontdb::Database>> =
-            std::sync::LazyLock::new(|| panic!("SVG text requires fonts"));
-        let image = br#"<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16"><text x="0" y="12">text</text></svg>"#;
-        let _ = decode_with_fonts(image, &fonts);
+    for marker in [" \"", " '"] {
+        if let Some((path, title)) = source.split_once(marker)
+            && title.ends_with(&marker[1..])
+        {
+            return path;
+        }
     }
+    source
+}
+enum Import {
+    Bytes(Vec<u8>),
+    Paths(Vec<PathBuf>),
+}
 
-    #[test]
-    fn svg_text_matches_default_font_selection_and_unicode_fallback() {
-        use resvg::{tiny_skia, usvg};
-
-        let fonts: std::sync::LazyLock<Arc<usvg::fontdb::Database>> =
-            std::sync::LazyLock::new(|| {
-                let mut fonts = usvg::fontdb::Database::new();
-                fonts.load_system_fonts();
-                Arc::new(fonts)
-            });
-        let nested = r#"<svg xmlns="http://www.w3.org/2000/svg" width="100" height="40"><text x="0" y="24" font-size="20">中λЖé</text></svg>"#;
-        let nested =
-            percent_encoding::utf8_percent_encode(nested, percent_encoding::NON_ALPHANUMERIC);
-        let source = format!(
-            r#"<svg xmlns="http://www.w3.org/2000/svg" width="400" height="80"><rect width="400" height="80" fill="white"/><text x="4" y="26" font-family="missing-lyrel-font, serif" font-size="20">ASCII λЖé 中</text><text x="4" y="60" font-family="monospace" font-size="20">fallback Ω العربية</text><image x="280" y="0" width="100" height="40" href="data:image/svg+xml,{nested}"/></svg>"#
-        );
-        let actual = decode_with_fonts(source.as_bytes(), &fonts).unwrap();
-
-        // The former eager fontdb + official default resolver is an independent
-        // rendering reference, including font selection inside a nested SVG.
-        let options = usvg::Options {
-            fontdb: Arc::clone(&fonts),
-            ..Default::default()
+fn invalid(message: impl Into<String>) -> io::Error {
+    io::Error::new(io::ErrorKind::InvalidData, message.into())
+}
+fn decode(bytes: &[u8]) -> io::Result<(image::RgbaImage, &'static str)> {
+    if bytes.len() as u64 > MAX_BYTES {
+        return Err(invalid(t(L10nKey::MarkdownImageLimit)));
+    }
+    if let Ok(format) = image::guess_format(bytes) {
+        let mut reader = image::ImageReader::with_format(std::io::Cursor::new(bytes), format);
+        let mut limits = image::Limits::default();
+        limits.max_image_width = Some(8192);
+        limits.max_image_height = Some(8192);
+        limits.max_alloc = Some(MAX_PIXELS * 8);
+        reader.limits(limits);
+        let rgba = reader
+            .decode()
+            .map_err(|error| invalid(error.to_string()))?
+            .into_rgba8();
+        if rgba.width() as u64 * rgba.height() as u64 > MAX_PIXELS {
+            return Err(invalid(t(L10nKey::MarkdownImageLimit)));
+        }
+        let extension = match format {
+            image::ImageFormat::Png => "png",
+            image::ImageFormat::Jpeg => "jpg",
+            image::ImageFormat::Gif => "gif",
+            image::ImageFormat::WebP => "webp",
+            image::ImageFormat::Bmp => "bmp",
+            image::ImageFormat::Tiff => "tiff",
+            image::ImageFormat::Ico => "ico",
+            _ => return Err(invalid(t(L10nKey::MarkdownImageUnsupported))),
         };
-        let tree = usvg::Tree::from_data(source.as_bytes(), &options).unwrap();
-        let mut expected = tiny_skia::Pixmap::new(400, 80).unwrap();
-        resvg::render(
-            &tree,
-            tiny_skia::Transform::identity(),
-            &mut expected.as_mut(),
+        return Ok((rgba, extension));
+    }
+    // usvg has no JavaScript runtime. Disable *both* resource resolvers: its default
+    // string resolver reads local files, including for an SVG read on a remote Host.
+    let blocked = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let strings = blocked.clone();
+    let data = blocked.clone();
+    static FONTS: std::sync::LazyLock<Arc<resvg::usvg::fontdb::Database>> =
+        std::sync::LazyLock::new(|| {
+            let mut database = resvg::usvg::fontdb::Database::new();
+            database.load_system_fonts();
+            Arc::new(database)
+        });
+    let fontdb = FONTS.clone();
+    let options = resvg::usvg::Options {
+        image_href_resolver: resvg::usvg::ImageHrefResolver {
+            resolve_string: Box::new(move |_, _| {
+                strings.store(true, std::sync::atomic::Ordering::Relaxed);
+                None
+            }),
+            resolve_data: Box::new(move |_, _, _| {
+                data.store(true, std::sync::atomic::Ordering::Relaxed);
+                None
+            }),
+        },
+        fontdb,
+        ..Default::default()
+    };
+    let tree = resvg::usvg::Tree::from_data(bytes, &options)
+        .map_err(|error| invalid(error.to_string()))?;
+    if blocked.load(std::sync::atomic::Ordering::Relaxed) {
+        return Err(invalid(t(L10nKey::MarkdownImageExternalReference)));
+    }
+    let size = tree.size().to_int_size();
+    if size.width() > 8192
+        || size.height() > 8192
+        || size.width() as u64 * size.height() as u64 > MAX_PIXELS
+    {
+        return Err(invalid(t(L10nKey::MarkdownImageLimit)));
+    }
+    let mut pixmap = resvg::tiny_skia::Pixmap::new(size.width(), size.height())
+        .ok_or_else(|| invalid(t(L10nKey::MarkdownImageLimit)))?;
+    resvg::render(
+        &tree,
+        resvg::tiny_skia::Transform::identity(),
+        &mut pixmap.as_mut(),
+    );
+    let mut rgba = pixmap.take();
+    // tiny-skia stores premultiplied RGBA; GPUI consumes straight BGRA.
+    for pixel in rgba.chunks_exact_mut(4) {
+        if pixel[3] > 0 {
+            for channel in 0..3 {
+                pixel[channel] = ((pixel[channel] as u32 * 255 + pixel[3] as u32 / 2)
+                    / pixel[3] as u32)
+                    .min(255) as u8;
+            }
+        }
+    }
+    Ok((
+        image::RgbaImage::from_raw(size.width(), size.height(), rgba)
+            .ok_or_else(|| invalid(t(L10nKey::MarkdownImageUnsupported)))?,
+        "svg",
+    ))
+}
+fn render(mut rgba: image::RgbaImage) -> Arc<RenderImage> {
+    for pixel in rgba.pixels_mut() {
+        pixel.0.swap(0, 2);
+    }
+    Arc::new(RenderImage::new(smallvec::SmallVec::from_elem(
+        image::Frame::new(rgba),
+        1,
+    )))
+}
+
+fn fetch(url: &url::Url, proxy: Option<&str>) -> io::Result<Vec<u8>> {
+    let mut builder = ureq::Agent::config_builder()
+        .timeout_global(Some(Duration::from_secs(30)))
+        .timeout_connect(Some(Duration::from_secs(10)))
+        .max_redirects(0)
+        .http_status_as_error(false);
+    if let Some(proxy) = lyrel_core::daemon::install::proxy::resolve(url.as_str(), proxy) {
+        builder = builder.proxy(Some(proxy));
+    }
+    let agent: ureq::Agent = builder.build().into();
+    let mut response = agent
+        .get(url.as_str())
+        .call()
+        .map_err(|error| io::Error::other(error.to_string()))?;
+    if !(200..300).contains(&response.status().as_u16()) {
+        return Err(io::Error::other(format!(
+            "HTTP {} — {}",
+            response.status(),
+            t(L10nKey::MarkdownImageRedirectBlocked)
+        )));
+    }
+    response
+        .body_mut()
+        .with_config()
+        .limit(MAX_BYTES)
+        .read_to_vec()
+        .map_err(|error| io::Error::other(error.to_string()))
+}
+
+fn store(host: &dyn Host, document: &Path, input: Import) -> io::Result<Vec<String>> {
+    // Input OS picker/drop paths are explicitly local; destination paths are *only*
+    // interpreted by the captured owning Host. Never reverse these two roles.
+    let inputs = match input {
+        Import::Bytes(bytes) => vec![bytes],
+        Import::Paths(paths) => {
+            let local = lyrel_core::host::local::LocalHost::new();
+            paths
+                .into_iter()
+                .map(|path| local.read_file(&path, MAX_BYTES))
+                .collect::<io::Result<Vec<_>>>()?
+        }
+    };
+    let prepared = inputs
+        .into_iter()
+        .map(|bytes| {
+            let (_, extension) = decode(&bytes)?;
+            Ok((bytes, extension))
+        })
+        .collect::<io::Result<Vec<_>>>()?;
+    if prepared.is_empty() {
+        return Err(invalid(t(L10nKey::MarkdownImageUnsupported)));
+    }
+    let parent = links::parent(host, document)?;
+    let dir = host.join(&parent, "assets");
+    host.create_dir(&dir, true)?;
+    // An existing assets symlink cannot send attachments outside the document directory.
+    let actual_parent = host.canonicalize(&parent)?;
+    let actual_dir = host.canonicalize(&dir)?;
+    if links::parent(host, &actual_dir)? != actual_parent {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            t(L10nKey::MarkdownImageUnsafeDirectory),
+        ));
+    }
+    let mut created = Vec::new();
+    let result = (|| {
+        for (bytes, extension) in prepared {
+            let name = format!("image-{}.{}", uuid::Uuid::new_v4(), extension);
+            let path = host.join(&dir, &name);
+            host.create_file_new(&path)?;
+            created.push(path.clone());
+            host.write_file(&path, &bytes)?;
+        }
+        Ok(created
+            .iter()
+            .map(|path| format!("assets/{}", path.file_name().unwrap().to_string_lossy()))
+            .collect())
+    })();
+    if result.is_err() {
+        for path in created {
+            let _ = host.remove(&path, false);
+        }
+    }
+    result
+}
+
+pub(crate) fn controls(
+    owner: &Entity<ImageHost>,
+    editor: &Entity<MarkdownEditor>,
+    cx: &App,
+) -> AnyElement {
+    let host = owner.read(cx);
+    let mut surface = v_flex()
+        .id(("markdown-resource-status", editor.entity_id()))
+        .gap_1()
+        .min_w_0()
+        .max_h(rems(8.))
+        .overflow_y_scroll();
+    if host.importing {
+        surface = surface.child(
+            div()
+                .id("markdown-image-writing")
+                .test_support()
+                .role(gpui_kit::Role::Status)
+                .aria_label(t(L10nKey::MarkdownImageWriting))
+                .text_sm()
+                .text_color(cx.theme().muted_foreground)
+                .child(t(L10nKey::MarkdownImageWriting)),
         );
-        let expected: Vec<u8> = expected
-            .data()
-            .chunks_exact(4)
-            .flat_map(|pixel| [pixel[2], pixel[1], pixel[0], pixel[3]])
-            .collect();
-        assert!(
-            expected
-                .chunks_exact(4)
-                .any(|pixel| pixel != [255, 255, 255, 255])
+    }
+    surface = surface.children(host.notice.clone().map(|notice| {
+        div()
+            .id("markdown-resource-notice")
+            .test_support()
+            .role(gpui_kit::Role::Status)
+            .aria_label(notice.clone())
+            .text_sm()
+            .text_color(cx.theme().muted_foreground)
+            .child(notice)
+    }));
+    let mut rows: Vec<_> = host
+        .states
+        .iter()
+        .filter(|(_, state)| !matches!(state, State::Ready))
+        .collect();
+    rows.sort_by_key(|(source, _)| *source);
+    for (source, state) in rows {
+        let message = match state {
+            State::Loading => t(L10nKey::EditorImageLoading).to_owned(),
+            State::Blocked => t(L10nKey::MarkdownImageNetworkPolicy).to_owned(),
+            State::Failed(reason) => format!("{}: {reason}", t(L10nKey::EditorImageFailed)),
+            State::Ready => unreachable!(),
+        };
+        let retry = owner.downgrade();
+        let target = source.clone();
+        surface = surface.child(
+            gpui_kit::component::h_flex()
+                .gap_2()
+                .min_w_0()
+                .child(
+                    div()
+                        .id(SharedString::from(format!("image-status-{source}")))
+                        .test_support()
+                        .role(gpui_kit::Role::Status)
+                        .aria_label(format!("{source} — {message}"))
+                        .flex_1()
+                        .min_w_0()
+                        .text_sm()
+                        .text_color(cx.theme().muted_foreground)
+                        .child(format!("{source} — {message}")),
+                )
+                .when(!matches!(state, State::Loading), |row| {
+                    row.child(
+                        Button::new(SharedString::from(format!("image-retry-{source}")))
+                            .ghost()
+                            .small()
+                            .label(t(L10nKey::EditorLoadImages))
+                            .on_click(move |_, _, cx| {
+                                let _ = retry.update(cx, |host, cx| {
+                                    host.allowed.insert(target.clone());
+                                    host.states.remove(&target);
+                                    host.refresh(cx);
+                                    host.notify(cx);
+                                });
+                            }),
+                    )
+                }),
         );
-        assert_eq!(actual.as_bytes(0).unwrap(), expected);
+    }
+    div()
+        .relative()
+        .min_w_0()
+        .child(surface)
+        .children(
+            host.hover
+                .as_ref()
+                .filter(|(view, _, _)| *view == editor.entity_id())
+                .map(|(_, target, bounds)| {
+                    div().absolute().child(
+                        gpui_kit::deferred(
+                            gpui_kit::anchored()
+                                .position(gpui_kit::point(bounds.left(), bounds.bottom()))
+                                .snap_to_window_with_margin(cx.theme().font_size * 0.5)
+                                .child(
+                                    div()
+                                        .id("markdown-link-hover")
+                                        .test_support()
+                                        .role(gpui_kit::Role::Status)
+                                        .aria_label(target.clone())
+                                        .p_1()
+                                        .rounded(cx.theme().radius)
+                                        .bg(cx.theme().popover)
+                                        .text_sm()
+                                        .text_color(cx.theme().popover_foreground)
+                                        .child(target.clone()),
+                                ),
+                        )
+                        .with_priority(1),
+                    )
+                }),
+        )
+        .into_any_element()
+}
+
+struct ImagePreview {
+    image: Bitmap,
+    zoom: f32,
+    scroll: gpui_kit::ScrollHandle,
+}
+impl gpui_kit::Render for ImagePreview {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let size = self.image.image.size(0);
+        let max_w = (window.viewport_size().width - window.rem_size() * 6.).max(window.rem_size());
+        let max_h =
+            (window.viewport_size().height - window.rem_size() * 14.).max(window.rem_size() * 4.);
+        let fit = (f32::from(max_w) / size.width.0 as f32)
+            .min(f32::from(max_h) / size.height.0 as f32)
+            .min(1.);
+        let scale = fit * self.zoom;
+        v_flex()
+            .gap_2()
+            .child(
+                gpui_kit::component::h_flex()
+                    .gap_2()
+                    .child(
+                        Button::new("image-zoom-out")
+                            .ghost()
+                            .small()
+                            .label("−")
+                            .accessibility_label("Zoom image out")
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.zoom = (this.zoom / 1.25).max(0.1);
+                                cx.notify();
+                            })),
+                    )
+                    .child(
+                        Button::new("image-zoom-fit")
+                            .ghost()
+                            .small()
+                            .label(t(L10nKey::MarkdownImageFit))
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.zoom = 1.;
+                                this.scroll.set_offset(gpui_kit::point(px(0.), px(0.)));
+                                cx.notify();
+                            })),
+                    )
+                    .child(
+                        Button::new("image-zoom-in")
+                            .ghost()
+                            .small()
+                            .label("+")
+                            .accessibility_label("Zoom image in")
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.zoom = (this.zoom * 1.25).min(16.);
+                                cx.notify();
+                            })),
+                    )
+                    .child(format!("{:.0}%", scale * 100.)),
+            )
+            .child(
+                div()
+                    .id("markdown-image-preview")
+                    .h(max_h)
+                    .max_w(max_w)
+                    .overflow_scroll()
+                    .track_scroll(&self.scroll)
+                    .child(
+                        div()
+                            .id("markdown-image-preview-content")
+                            .test_support()
+                            .w(px(size.width.0 as f32 * scale))
+                            .h(px(size.height.0 as f32 * scale))
+                            .flex_none()
+                            .child(gpui_kit::img(self.image.image.clone()).size_full()),
+                    ),
+            )
     }
 }

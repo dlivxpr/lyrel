@@ -160,7 +160,7 @@ jobs:
       - name: Build Linux headless
         if: runner.os == 'Linux'
         timeout-minutes: 30
-        run: cargo build --locked --workspace --exclude lyrel --all-features --target ${{ matrix.target }}
+        run: cargo build --locked --workspace --exclude lyrel --exclude lyrel-markdown-editor --all-features --target ${{ matrix.target }}
 
       # A binary that imports VCRUNTIME140.dll cannot start on a Windows
       # machine that has never installed the Visual C++ Redistributable — the
@@ -195,15 +195,15 @@ jobs:
         id: desktop_tests_compile
         if: runner.os != 'Linux'
         timeout-minutes: 30
-        run: cargo test --locked -p lyrel -p lyrel-core -p lyrel-cli -p lyrel-server --features updater --target ${{ matrix.target }} --no-run
+        run: cargo test --locked -p lyrel -p lyrel-markdown-editor -p lyrel-text -p lyrel-core -p lyrel-cli -p lyrel-server --features updater --target ${{ matrix.target }} --no-run
       - name: Test desktop library and headless
         if: runner.os != 'Linux'
         timeout-minutes: 20
         # SIGABRT 会丢失 libtest 捕获缓冲；保留原始 panic，并继续收集其他目标结果。
-        run: cargo test --locked -p lyrel -p lyrel-core -p lyrel-cli -p lyrel-server --features updater --target ${{ matrix.target }} --no-fail-fast -- --nocapture
+        run: cargo test --locked -p lyrel -p lyrel-markdown-editor -p lyrel-text -p lyrel-core -p lyrel-cli -p lyrel-server --features updater --target ${{ matrix.target }} --no-fail-fast -- --nocapture
 
-      # 显式 feature 只给共享 library 增加 14 项原生消费者所需的支持代码，
-      # 不再把完整单元测试套件编入自定义 runner。编译、执行分别计时和报告失败。
+      # 显式 feature 只编译当前注册的 replacement native 消费者支持代码。
+      # baseline 消费者迁移边界见 editor HOST_CAPABILITIES；编译与执行独立计时。
       # 普通测试断言失败后仍执行原生目标，但编译失败或取消时不启动它。
       - name: Compile native Markdown tests
         id: native_markdown_compile
@@ -219,7 +219,7 @@ jobs:
       - name: Test Linux headless
         if: runner.os == 'Linux'
         timeout-minutes: 20
-        run: cargo test --locked --workspace --exclude lyrel --all-features --target ${{ matrix.target }}
+        run: cargo test --locked --workspace --exclude lyrel --exclude lyrel-markdown-editor --all-features --target ${{ matrix.target }}
 
       # There is deliberately no post-mortem step here, and that is worth
       # recording, because an earlier version of this file had one: on failure it

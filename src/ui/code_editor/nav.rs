@@ -18,7 +18,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use gpui_kit::component::input::{Position, Rope, RopeExt as _};
+use gpui_kit::component::input::Position;
 use gpui_kit::component::{ActiveTheme as _, Icon, IconName, h_flex};
 use gpui_kit::prelude::*;
 use gpui_kit::{AnyElement, App, Context, Window, div, px};
@@ -104,7 +104,12 @@ fn matching_chunk_bytes<'a>(
 impl NavEdit {
     /// Edits use the old snapshot's coordinates, last first, so shifting a
     /// location through them never changes the coordinates of an earlier edit.
-    fn between(old: &Rope, new: &Rope) -> SmallVec<[Self; 1]> {
+    fn between(
+        old: &(impl Clone + Into<super::text::TextSnapshot>),
+        new: &(impl Clone + Into<super::text::TextSnapshot>),
+    ) -> SmallVec<[Self; 1]> {
+        let old = old.clone().into();
+        let new = new.clone().into();
         let shared = old.len().min(new.len());
         let start = old.floor_char_boundary(matching_chunk_bytes(
             old.chunks(),
@@ -116,8 +121,8 @@ impl NavEdit {
             return SmallVec::new();
         }
         let suffix = matching_chunk_bytes(
-            old.chunks_at(old.len()).0.reversed(),
-            new.chunks_at(new.len()).0.reversed(),
+            old.reverse_chunks(),
+            new.reverse_chunks(),
             shared - start,
             true,
         );
@@ -407,7 +412,7 @@ impl TabNav {
 struct OutlineCache {
     language: &'static str,
     parser: Option<outline::OutlineParser>,
-    text: Option<gpui_kit::component::Rope>,
+    text: Option<super::text::TextSnapshot>,
     outline: Arc<Outline>,
     at: Instant,
     task: Option<gpui_kit::Task<()>>,
@@ -433,7 +438,7 @@ pub(crate) struct EditorNav {
     preview: Option<SymbolPreview>,
     refresh_scheduled: bool,
     /// Persistent rope snapshots share unchanged text; no whole-buffer copy on typing.
-    text_seen: HashMap<BufferId, Rope>,
+    text_seen: HashMap<BufferId, super::text::TextSnapshot>,
     /// A key that pages or pastes was just pressed in the editor: the caret
     /// move it makes is not a jump.
     quiet_move: bool,
@@ -467,7 +472,7 @@ impl EditorNav {
         }
     }
 
-    pub(super) fn track_buffer(&mut self, id: BufferId, text: Rope) {
+    pub(super) fn track_buffer(&mut self, id: BufferId, text: super::text::TextSnapshot) {
         self.text_seen.insert(id, text);
     }
 
@@ -702,7 +707,7 @@ impl LyrelApp {
                 let (parser, text, outline) = background.await;
                 let _ = app.update(cx, |app, cx| {
                     let current = app.editor.buffers.get(id).is_some_and(|file| {
-                        file.language() == language && file.input.read(cx).text() == &text
+                        file.language() == language && file.input.read(cx).text() == text
                     });
                     let Some(cache) = app
                         .editor
@@ -1189,6 +1194,7 @@ pub(crate) fn symbol_rows(outline: &Outline) -> Vec<(usize, Item)> {
 
 #[cfg(test)]
 mod tests {
+    use super::super::text::TextSnapshot;
     use super::*;
 
     fn at(path: &str, line: u32) -> NavLocation {
@@ -1363,7 +1369,10 @@ mod tests {
             ("Ā\ntarget\n", "Ă\ninserted\ntarget\n", 1, 2),
             ("X\n\u{80}\ntarget\n", "X\nnew\nÀ\ntarget\n", 2, 3),
         ] {
-            let edits = NavEdit::between(&Rope::from(old), &Rope::from(new));
+            let edits = NavEdit::between(
+                &TextSnapshot::Markdown(Arc::new(old.into())),
+                &TextSnapshot::Markdown(Arc::new(new.into())),
+            );
             let mut history = NavHistory::default();
             history.push(at("a.rs", line));
             history.shift(&at("a.rs", 0), &edits);
@@ -1379,13 +1388,18 @@ mod tests {
         let source = (0..1500)
             .map(|line| format!("{line}: 一α😀\n"))
             .collect::<String>();
-        let before = Rope::from(source.as_str());
+        let before = gpui_kit::component::input::Rope::from(source.as_str());
         let mut after = before.clone();
         after.insert(0, "prefix\n");
-        let prefix_only = after.clone();
+        let prefix_only = TextSnapshot::Code(after.clone());
         after.insert(after.len(), "tail\n");
         let mut tail_only = before.clone();
         tail_only.insert(tail_only.len(), "tail\n");
+        let (before, after, tail_only) = (
+            TextSnapshot::Code(before),
+            TextSnapshot::Code(after),
+            TextSnapshot::Code(tail_only),
+        );
         for (old, new, from, expected) in [
             (&before, &prefix_only, 700, 701),
             (&prefix_only, &before, 701, 700),
@@ -1418,8 +1432,8 @@ mod tests {
             "use std::fmt;\n{}",
             before.replace("// 第100行🙂", "// 第100行🙂\n// 补全")
         );
-        let before = Rope::from(before.as_str());
-        let after = Rope::from(after.as_str());
+        let before = TextSnapshot::Markdown(Arc::new(before));
+        let after = TextSnapshot::Markdown(Arc::new(after));
         let mut history = NavHistory::default();
         history.push(at("a.rs", 50));
         history.push(at("other.rs", 0));
@@ -1468,8 +1482,8 @@ mod tests {
                     }
                 })
                 .collect::<String>();
-        let before = Rope::from(before.as_str());
-        let after = Rope::from(after.as_str());
+        let before = TextSnapshot::Markdown(Arc::new(before));
+        let after = TextSnapshot::Markdown(Arc::new(after));
         let mut history = NavHistory::default();
         history.push(at("a.rs", 800));
         history.shift(&at("a.rs", 0), &NavEdit::between(&before, &after));
@@ -1568,8 +1582,8 @@ pub(super) mod gpui_tests {
     use super::super::BufferKind;
     use super::*;
     use crate::ui::app::test_window::harness_with_tabs;
-    use crate::ui::editor_text::{EditorConfig, TextFormat};
     use gpui_kit::{Entity, TestAppContext, VisualTestContext};
+    use lyrel_text::{EditorConfig, TextFormat};
 
     /// `alpha` on line 0, `beta` on 30, `gamma` on 50.
     pub(crate) fn source() -> String {
@@ -1594,7 +1608,7 @@ pub(super) mod gpui_tests {
         app.update_in(vcx, |app, window, cx| {
             let host = app.active_host(cx).expect("a host");
             let tab = app.nav_tab().expect("a tab");
-            let indent = crate::ui::editor_text::detect_indent("", "rust");
+            let indent = lyrel_text::detect_indent("", "rust");
             let id = app.editor_new_buffer(
                 host,
                 path,
@@ -1748,7 +1762,7 @@ pub(super) mod gpui_tests {
             source.into(),
             TextFormat::default(),
             EditorConfig::default(),
-            crate::ui::editor_text::detect_indent(source, "markdown"),
+            lyrel_text::detect_indent(source, "markdown"),
             None,
             window,
             cx,
@@ -1759,7 +1773,6 @@ pub(super) mod gpui_tests {
 
     #[gpui_kit::test]
     fn fresh_markdown_symbols_win_over_a_queued_breadcrumb_snapshot(cx: &mut TestAppContext) {
-        use super::super::markdown::{Command, EditKind};
         let (app, mut vcx, _streams) = harness_with_tabs(cx, 1);
         let original = "# Old\nbody\n\n# OldTarget\nbody\n";
         let current = "# Current\nbody\n\n\n\n# NewTarget\nbody\n";
@@ -1769,15 +1782,7 @@ pub(super) mod gpui_tests {
             app.render_editor_breadcrumbs_for(id, 0, true, window, cx);
             let input = app.active_editor_input().unwrap();
             input.markdown().unwrap().update(cx, |view, cx| {
-                view.command(
-                    Command::Replace {
-                        range: 0..original.len(),
-                        text: current.into(),
-                        kind: EditKind::Command,
-                    },
-                    window,
-                    cx,
-                );
+                view.replace_range(0..original.len(), current, cx);
             });
             input.set_cursor_position(Position::new(1, 2), window, cx);
             app.editor_go_to_symbol(window, cx);

@@ -59,6 +59,9 @@ if [[ "$PACKAGE_UPDATE_ZIP" != "0" ]]; then
 fi
 cp assets/lyrel.icns "$APP/Contents/Resources/lyrel.icns"
 cp LICENSE "$APP/Contents/Resources/LICENSE.txt"
+# Preserve the whole notice (including imported MIT code and font licenses),
+# not just a source-tree license or an empty file with the expected name.
+cmp LICENSE "$APP/Contents/Resources/LICENSE.txt"
 # Completion signatures are loaded at runtime (not embedded), resolved relative
 # to the executable as ../Resources/completions — see terminal::signature.
 mkdir -p "$APP/Contents/Resources/completions"
@@ -377,6 +380,7 @@ ZIP=""
 if [[ "$PACKAGE_UPDATE_ZIP" != "0" ]]; then
     ZIP="$DIST/lyrel-${VERSION}-macos-${ARCH}.zip"
     ditto -c -k --keepParent "$APP" "$ZIP"
+    unzip -p "$ZIP" "$APP_NAME.app/Contents/Resources/LICENSE.txt" | cmp - LICENSE
 fi
 
 # Package the (now stapled) bundle as a drag-to-Applications DMG.

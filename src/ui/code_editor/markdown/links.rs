@@ -1,544 +1,296 @@
-//! Link syntax and destinations are derived from the document's positioned AST.
-use crate::ui::host_ops::Host;
-use crate::ui::i18n::L10nKey;
-use markdown::mdast::Node;
-use std::{
-    ops::Range,
-    path::{Path, PathBuf},
-};
+//! Lyrel-owned ordinary file/URL navigation. Notebook/wiki constructs stay source-only.
+use super::super::*;
+use lyrel_core::host::Host;
+use lyrel_markdown_editor::EditorState as MarkdownEditor;
+use std::io;
 
-pub(crate) mod references;
+pub(super) enum Target {
+    External(url::Url),
+    File(PathBuf, Option<String>),
+    Anchor(String),
+}
 
-#[derive(Clone, PartialEq, Eq)]
-pub(super) struct Link {
-    pub source: Range<usize>,
-    pub label: Range<usize>,
-    pub destination: Range<usize>,
-    pub target: String,
-}
-#[derive(Default)]
-pub(super) struct Index {
-    pub links: Vec<Link>,
-    pub embeds: Vec<Link>,
-    pub headings: Vec<(String, usize)>,
-}
-impl Index {
-    pub fn from_ast(source: &str, root: &Node) -> Self {
-        let mut definitions = std::collections::HashMap::new();
-        visit(root, &mut |node| {
-            if let Node::Definition(definition) = node {
-                if let Some(position) = &definition.position {
-                    let range = position.start.offset..position.end.offset;
-                    if let Some(label) = label_range(source, node) {
-                        if let Some(destination) =
-                            destination_range(source, label.end + 2, range.end)
-                        {
-                            definitions
-                                .entry(definition.identifier.clone())
-                                .or_insert_with(|| (definition.url.clone(), destination));
-                        }
-                    }
-                }
-            }
-        });
-        let mut index = Self::default();
-        let mut slugs = std::collections::HashMap::<String, usize>::new();
-        visit(root, &mut |node| {
-            let Some(position) = node.position() else {
-                return;
-            };
-            let range = position.start.offset..position.end.offset;
-            if matches!(node, Node::Text(_)) {
-                for (opening, closing) in [("[[", "]]"), ("((", "))")] {
-                    let raw = &source[range.clone()];
-                    let mut cursor = 0;
-                    while let Some(start) = raw[cursor..].find(opening).map(|at| cursor + at) {
-                        let body = start + opening.len();
-                        let Some(end) = raw[body..].find(closing).map(|at| body + at) else {
-                            break;
-                        };
-                        cursor = end + closing.len();
-                        if start > 0 && raw.as_bytes()[start - 1] == b'\\' {
-                            continue;
-                        }
-                        let embed = start > 0 && raw.as_bytes()[start - 1] == b'!';
-                        if embed && start > 1 && raw.as_bytes()[start - 2] == b'\\' {
-                            continue;
-                        }
-                        let inside = &raw[body..end];
-                        let (target, label) = inside.split_once('|').unwrap_or((inside, inside));
-                        if target.is_empty()
-                            || target.contains('\n')
-                            || (opening == "((" && !target.contains('#'))
-                        {
-                            continue;
-                        }
-                        let destination = range.start + body..range.start + body + target.len();
-                        let label_start = if label == inside {
-                            body
-                        } else {
-                            body + target.len() + 1
-                        };
-                        let references = if embed {
-                            &mut index.embeds
-                        } else {
-                            &mut index.links
-                        };
-                        references.push(Link {
-                            source: range.start + start - usize::from(embed)..range.start + cursor,
-                            label: range.start + label_start..range.start + end,
-                            destination,
-                            target: target.to_owned(),
-                        });
-                    }
-                }
-            }
-            let attributes = match node {
-                Node::MdxJsxFlowElement(element) => Some((&element.name, &element.attributes)),
-                Node::MdxJsxTextElement(element) => Some((&element.name, &element.attributes)),
-                _ => None,
-            };
-            if let Some((name, attributes)) = attributes {
-                for attribute in attributes {
-                    if let markdown::mdast::AttributeContent::Property(attribute) = attribute {
-                        if attribute.name == "id"
-                            || (name.as_deref() == Some("a") && attribute.name == "name")
-                        {
-                            if let Some(markdown::mdast::AttributeValue::Literal(id)) =
-                                &attribute.value
-                            {
-                                if !id.is_empty() {
-                                    index.headings.push((id.clone(), range.start));
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-            if let Node::Html(html) = node {
-                for (offset, id) in explicit_ids(&html.value) {
-                    index.headings.push((id, range.start + offset));
-                }
-            }
-            if let Node::Heading(_) = node {
-                let slug = slug(&node.to_string());
-                let count = slugs.entry(slug.clone()).or_default();
-                let unique = if *count == 0 {
-                    slug
-                } else {
-                    format!("{slug}-{count}")
-                };
-                *count += 1;
-                index.headings.push((unique, range.start));
-            }
-            let (label, target, destination) = match node {
-                Node::Link(link) => {
-                    let raw = &source[range.clone()];
-                    if raw.starts_with('<') {
-                        let inner = range.start + 1..range.end - 1;
-                        (inner.clone(), link.url.clone(), inner)
-                    } else if let Some(label) = label_range(source, node) {
-                        let Some(destination) = destination_range(source, label.end + 2, range.end)
-                        else {
-                            return;
-                        };
-                        (label, link.url.clone(), destination)
-                    } else {
-                        // GFM literal autolinks have no delimiters to reveal.
-                        (range.clone(), link.url.clone(), range.clone())
-                    }
-                }
-                Node::LinkReference(reference) => {
-                    let Some((target, destination)) = definitions.get(&reference.identifier) else {
-                        return;
-                    };
-                    let Some(label) = label_range(source, node) else {
-                        return;
-                    };
-                    (label, target.clone(), destination.clone())
-                }
-                _ => return,
-            };
-            index.links.push(Link {
-                source: range,
-                label,
-                destination,
-                target,
-            });
-        });
-        index.headings.dedup();
-        index
-    }
-    pub fn at(&self, at: usize) -> Option<&Link> {
-        self.links
-            .iter()
-            .find(|link| link.source.start <= at && at < link.source.end)
-            .or_else(|| {
-                self.links
-                    .iter()
-                    .find(|link| link.destination.start <= at && at <= link.destination.end)
-            })
-    }
-    pub fn anchor(&self, fragment: &str) -> Option<usize> {
-        let fragment = percent_encoding::percent_decode_str(fragment)
-            .decode_utf8()
-            .ok()?;
-        let mut matches = self
-            .headings
-            .iter()
-            .filter(|(slug, _)| slug == fragment.as_ref());
-        let at = matches.next()?.1;
-        matches.next().is_none().then_some(at)
-    }
-    /// Resolve the same explicit anchor used for navigation. Headings include
-    /// their section; a literal id includes its positioned owning block only.
-    pub(super) fn fragment(
-        &self,
-        source: &str,
-        root: &Node,
-        fragment: Option<&str>,
-    ) -> Result<Range<usize>, L10nKey> {
-        let Some(fragment) = fragment.filter(|value| !value.is_empty()) else {
-            return Ok(0..source.len());
-        };
-        let decoded = percent_encoding::percent_decode_str(fragment)
-            .decode_utf8()
-            .map_err(|_| L10nKey::MarkdownLinkInvalidDestination)?;
-        let mut matches = self
-            .headings
-            .iter()
-            .filter(|(id, _)| id == decoded.as_ref());
-        let at = matches
-            .next()
-            .map(|(_, at)| *at)
-            .ok_or(L10nKey::MarkdownLinkAnchorNotFound)?;
-        if matches.next().is_some() {
-            return Err(L10nKey::MarkdownReferenceAmbiguous);
-        }
-        let mut heading = None;
-        visit(root, &mut |node| {
-            if let Node::Heading(value) = node {
-                if value
-                    .position
-                    .as_ref()
-                    .is_some_and(|position| position.start.offset == at)
-                {
-                    heading = Some(value.depth);
-                }
-            }
-        });
-        if let Some(depth) = heading {
-            let mut end = source.len();
-            visit(root, &mut |node| {
-                if let Node::Heading(value) = node {
-                    if let Some(position) = &value.position {
-                        if position.start.offset > at && value.depth <= depth {
-                            end = end.min(position.start.offset);
-                        }
-                    }
-                }
-            });
-            return Ok(at..end);
-        }
-        let block = root
-            .children()
-            .into_iter()
-            .flatten()
-            .filter_map(Node::position)
-            .find(|position| position.start.offset <= at && at < position.end.offset)
-            .ok_or(L10nKey::MarkdownLinkAnchorNotFound)?;
-        Ok(block.start.offset..block.end.offset)
-    }
-}
-fn visit(node: &Node, f: &mut impl FnMut(&Node)) {
-    f(node);
-    for child in node.children().into_iter().flatten() {
-        visit(child, f);
-    }
-}
-fn slug(text: &str) -> String {
-    text.chars()
-        .flat_map(char::to_lowercase)
-        .filter_map(|ch| {
-            if ch.is_whitespace() {
-                Some('-')
-            } else if ch.is_alphanumeric() || ch == '-' || ch == '_' {
-                Some(ch)
-            } else {
-                None
-            }
+pub(super) fn parent(host: &dyn Host, path: &Path) -> io::Result<PathBuf> {
+    if host.separator() == '/' {
+        let path = path.to_str().ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::InvalidInput,
+                t(L10nKey::MarkdownLinkInvalidDestination),
+            )
+        })?;
+        let (parent, _) = path.rsplit_once('/').ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::InvalidInput,
+                t(L10nKey::MarkdownLinkSaveFirst),
+            )
+        })?;
+        Ok(PathBuf::from(if parent.is_empty() { "/" } else { parent }))
+    } else {
+        path.parent().map(Path::to_path_buf).ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::InvalidInput,
+                t(L10nKey::MarkdownLinkSaveFirst),
+            )
         })
-        .collect()
-}
-/// Only called on positioned HTML nodes; code fences and code spans are excluded.
-fn explicit_ids(html: &str) -> Vec<(usize, String)> {
-    let mut ids = Vec::new();
-    let bytes = html.as_bytes();
-    let mut cursor = 0;
-    while cursor < bytes.len() {
-        let Some(open) = html[cursor..].find('<').map(|at| cursor + at) else {
-            break;
-        };
-        if html[open..].starts_with("<!--") {
-            cursor = html[open + 4..]
-                .find("-->")
-                .map_or(bytes.len(), |at| open + 4 + at + 3);
-            continue;
-        }
-        let mut tag_end = open + 1;
-        while tag_end < bytes.len() && bytes[tag_end].is_ascii_alphanumeric() {
-            tag_end += 1;
-        }
-        if tag_end == open + 1 {
-            cursor = open + 1;
-            continue;
-        }
-        let tag = &bytes[open + 1..tag_end];
-        let mut close = tag_end;
-        let mut quote = None;
-        while close < bytes.len() {
-            let byte = bytes[close];
-            if quote == Some(byte) {
-                quote = None;
-            } else if quote.is_none() {
-                if matches!(byte, b'\'' | b'"') {
-                    quote = Some(byte);
-                } else if byte == b'>' {
-                    break;
-                }
-            }
-            close += 1;
-        }
-        if close == bytes.len() {
-            break;
-        }
-        let mut at = tag_end;
-        while at < close {
-            while at < close && bytes[at].is_ascii_whitespace() {
-                at += 1;
-            }
-            let name_start = at;
-            while at < close
-                && (bytes[at].is_ascii_alphanumeric() || matches!(bytes[at], b'-' | b'_' | b':'))
-            {
-                at += 1;
-            }
-            if name_start == at {
-                at += 1;
-                continue;
-            }
-            let name = &bytes[name_start..at];
-            while at < close && bytes[at].is_ascii_whitespace() {
-                at += 1;
-            }
-            if at == close || bytes[at] != b'=' {
-                continue;
-            }
-            at += 1;
-            while at < close && bytes[at].is_ascii_whitespace() {
-                at += 1;
-            }
-            let quote = bytes
-                .get(at)
-                .copied()
-                .filter(|byte| matches!(*byte, b'\'' | b'"'));
-            at += usize::from(quote.is_some());
-            let value = at;
-            while at < close
-                && if let Some(quote) = quote {
-                    bytes[at] != quote
-                } else {
-                    !bytes[at].is_ascii_whitespace()
-                }
-            {
-                at += 1;
-            }
-            if at > value
-                && (name.eq_ignore_ascii_case(b"id")
-                    || (tag.eq_ignore_ascii_case(b"a") && name.eq_ignore_ascii_case(b"name")))
-            {
-                ids.push((open, html[value..at].to_owned()));
-            }
-            at += usize::from(quote.is_some());
-        }
-        cursor = close + 1;
-        if tag.eq_ignore_ascii_case(b"script") || tag.eq_ignore_ascii_case(b"style") {
-            let closing = if tag.eq_ignore_ascii_case(b"script") {
-                "</script"
-            } else {
-                "</style"
-            };
-            cursor = html[cursor..]
-                .to_ascii_lowercase()
-                .find(closing)
-                .map_or(bytes.len(), |at| cursor + at);
-        }
     }
-    ids
 }
 
-/// Only scans within an AST-identified link/definition, never searches rendered text.
-pub(super) fn label_range(source: &str, node: &Node) -> Option<Range<usize>> {
-    let position = node.position()?;
-    let mut range = position.start.offset..position.end.offset;
-    // Definition positions include their permitted leading indentation in
-    // both grammars; inspect only that AST-owned region, not rendered labels.
-    if matches!(node, Node::Definition(_)) {
-        range.start += source[range.clone()]
-            .bytes()
-            .take_while(|byte| matches!(byte, b' ' | b'\t'))
-            .count();
+pub(super) fn resolve(
+    host: &dyn Host,
+    document: Option<&Path>,
+    raw: &str,
+) -> Result<Target, L10nKey> {
+    let raw = raw.trim();
+    if raw.is_empty() || raw.chars().any(char::is_control) {
+        return Err(L10nKey::MarkdownLinkInvalidDestination);
     }
-    if source.as_bytes().get(range.start) != Some(&b'[') {
-        return None;
+    if let Some(anchor) = raw.strip_prefix('#') {
+        return Ok(Target::Anchor(decode(anchor)?));
     }
-    // Positioned children already account for nested brackets, code spans,
-    // escaped punctuation and empty labels. The following byte closes the label.
-    if let Some(end) = node
-        .children()
-        .and_then(|children| children.last())
-        .and_then(Node::position)
-        .map(|position| position.end.offset)
-    {
-        if source.as_bytes().get(end) == Some(&b']') {
-            return Some(range.start + 1..end);
+    // A drive-letter path is not a URL scheme on a Windows owning Host.
+    let windows_path = host.separator() == '\\' && host.is_absolute(Path::new(raw));
+    if !windows_path && let Ok(url) = url::Url::parse(raw) {
+        match url.scheme() {
+            "http" | "https"
+                if url.host_str().is_some()
+                    && url.username().is_empty()
+                    && url.password().is_none() =>
+            {
+                return Ok(Target::External(url));
+            }
+            "mailto" => return Ok(Target::External(url)),
+            "file"
+                if host.id().is_local()
+                    && url.host_str().is_none_or(|host| host == "localhost") =>
+            {
+                let path = url
+                    .to_file_path()
+                    .map_err(|_| L10nKey::MarkdownLinkInvalidDestination)?;
+                return Ok(Target::File(path, url.fragment().map(decode).transpose()?));
+            }
+            _ => return Err(L10nKey::MarkdownLinkUnsupportedScheme),
         }
     }
-    let mut escaped = false;
-    for (ix, byte) in source.as_bytes()[range.clone()].iter().enumerate().skip(1) {
-        if escaped {
-            escaped = false;
+    if raw.starts_with("//") || raw.starts_with("\\\\") {
+        return Err(L10nKey::MarkdownLinkUnsupportedScheme);
+    }
+    let (path, anchor) = raw
+        .split_once('#')
+        .map_or((raw, None), |(path, fragment)| (path, Some(fragment)));
+    let path = decode(path)?;
+    if host.separator() == '/' && (path.contains('\\') || path.contains(':')) {
+        return Err(L10nKey::MarkdownLinkRemotePath);
+    }
+    let path = if host.is_absolute(Path::new(&path)) {
+        PathBuf::from(path)
+    } else {
+        let document = document.ok_or(L10nKey::MarkdownLinkSaveFirst)?;
+        let dir = parent(host, document).map_err(|_| L10nKey::MarkdownLinkInvalidDestination)?;
+        host.join(&dir, &path)
+    };
+    Ok(Target::File(path, anchor.map(decode).transpose()?))
+}
+fn decode(value: &str) -> Result<String, L10nKey> {
+    let value = percent_encoding::percent_decode_str(value)
+        .decode_utf8()
+        .map_err(|_| L10nKey::MarkdownLinkInvalidDestination)?
+        .into_owned();
+    if value.chars().any(char::is_control) {
+        return Err(L10nKey::MarkdownLinkInvalidDestination);
+    }
+    Ok(value)
+}
+
+fn anchor_position(source: &str, anchor: &str) -> Option<Position> {
+    let mut seen: HashMap<String, usize> = HashMap::new();
+    let mut fence: Option<(char, usize)> = None;
+    for (row, line) in source.lines().enumerate() {
+        let trimmed = line.trim_start();
+        let first = trimmed.chars().next();
+        if matches!(first, Some('`' | '~')) {
+            let ch = first.unwrap();
+            let count = trimmed.chars().take_while(|c| *c == ch).count();
+            if count >= 3 {
+                match fence {
+                    None => fence = Some((ch, count)),
+                    Some((c, n)) if ch == c && count >= n => fence = None,
+                    _ => {}
+                }
+                continue;
+            }
+        }
+        if fence.is_some() {
             continue;
         }
-        if *byte == b'\\' {
-            escaped = true;
+        let level = trimmed.chars().take_while(|c| *c == '#').count();
+        if !(1..=6).contains(&level) || !trimmed[level..].starts_with(char::is_whitespace) {
             continue;
         }
-        if *byte == b']' {
-            return Some(range.start + 1..range.start + ix);
+        let title = trimmed[level..].trim().trim_end_matches('#').trim_end();
+        let slug: String = title
+            .chars()
+            .flat_map(char::to_lowercase)
+            .filter_map(|ch| {
+                if ch.is_whitespace() {
+                    Some('-')
+                } else if ch.is_alphanumeric() || ch == '-' || ch == '_' {
+                    Some(ch)
+                } else {
+                    None
+                }
+            })
+            .collect();
+        let count = seen.entry(slug.clone()).or_default();
+        let unique = if *count == 0 {
+            slug
+        } else {
+            format!("{slug}-{count}")
+        };
+        *count += 1;
+        if unique == anchor {
+            return Some(Position::new(row as u32, 0));
         }
     }
     None
 }
-fn destination_range(source: &str, mut start: usize, end: usize) -> Option<Range<usize>> {
-    let bytes = source.as_bytes();
-    while start < end && bytes[start].is_ascii_whitespace() {
-        start += 1;
-    }
-    if start >= end {
-        return None;
-    }
-    if bytes[start] == b'<' {
-        let mut at = start + 1;
-        while at < end {
-            if bytes[at] == b'\\' {
-                at += 2;
-                continue;
-            }
-            if bytes[at] == b'>' {
-                return Some(start + 1..at);
-            }
-            at += 1;
+
+pub(super) fn follow(
+    app: &mut LyrelApp,
+    id: BufferId,
+    source: &Entity<MarkdownEditor>,
+    raw: &str,
+    window: &mut Window,
+    cx: &mut Context<LyrelApp>,
+) {
+    let Some(file) = app.editor.buffers.get(id) else {
+        return;
+    };
+    let host = file.host.clone();
+    let path = file.untitled.is_none().then(|| file.path.clone());
+    let revision = source.read(cx).document().read(cx).revision();
+    let target = match resolve(&*host, path.as_deref(), raw) {
+        Ok(target) => target,
+        Err(reason) => {
+            window.notify_app(
+                t_fmt(L10nKey::MarkdownLinkOpenFailed, &[("reason", t(reason))]),
+                cx,
+            );
+            return;
         }
-        return None;
-    }
-    let mut depth = 0usize;
-    let mut at = start;
-    while at < end {
-        match bytes[at] {
-            b'\\' => {
-                at = (at + 2).min(end);
-                continue;
-            }
-            b'(' => depth += 1,
-            b')' if depth == 0 => break,
-            b')' => depth -= 1,
-            byte if byte.is_ascii_whitespace() && depth == 0 => break,
-            _ => {}
+    };
+    let (path, anchor) = match target {
+        Target::External(url) => {
+            cx.open_url(url.as_str());
+            return;
         }
-        at += 1;
+        Target::Anchor(anchor) => {
+            let position = anchor_position(source.read(cx).text(), &anchor);
+            if let Some(position) = position {
+                let offset = source
+                    .read(cx)
+                    .offset_for_line_column(position.line as usize, position.character as usize);
+                source.update(cx, |view, cx| view.select_range(offset..offset, cx));
+            } else {
+                window.notify_app(t(L10nKey::MarkdownLinkAnchorNotFound), cx);
+            }
+            return;
+        }
+        Target::File(path, anchor) => (path, anchor),
+    };
+    let Some((tab, group)) = app.tabs.iter().find_map(|tab| {
+        let code = tab.code.as_ref()?;
+        std::iter::once(code.group)
+            .chain(code.split.as_ref().map(|other| other.id))
+            .find_map(|group| {
+                file.presentations
+                    .existing(tab.id(), group)
+                    .filter(|view| view == source)
+                    .map(|_| (tab.id(), group))
+            })
+    }) else {
+        return;
+    };
+    let target = buffers::OpenTarget {
+        workspace: app.workspace,
+        tab,
+        group: Some(group),
+        window_host: app.spawn_host(cx),
+        origin: Some((id, revision)),
+        origin_epoch: app.editor_resource_epoch(id, cx),
+    };
+    if let Some(anchor) = anchor {
+        let requested = path.clone();
+        let destination_host = host.clone();
+        // Decode on the same owning Host, never by opening a local lookalike.
+        HostOps::run_in(
+            host,
+            window,
+            cx,
+            move |h| -> io::Result<Position> {
+                let bytes = h.read_file(&requested, 4 * 1024 * 1024)?;
+                let source = lyrel_text::decode_source(&bytes)?.ok_or_else(|| {
+                    io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        t(L10nKey::MarkdownLinkInvalidDestination),
+                    )
+                })?;
+                anchor_position(&source.text, &anchor).ok_or_else(|| {
+                    io::Error::new(
+                        io::ErrorKind::NotFound,
+                        t(L10nKey::MarkdownLinkAnchorNotFound),
+                    )
+                })
+            },
+            move |app, result, window, cx| {
+                if !app.editor_open_target_valid(target, cx) {
+                    return;
+                }
+                match result {
+                    Ok(cursor) => open(
+                        app,
+                        destination_host,
+                        &path,
+                        Some(cursor),
+                        target,
+                        window,
+                        cx,
+                    ),
+                    Err(error) => {
+                        HostOps::notify_err(window, cx, t(L10nKey::MarkdownFollowLink), &error)
+                    }
+                }
+            },
+        );
+    } else {
+        open(app, host, &path, None, target, window, cx);
     }
-    Some(start..at)
 }
 
-pub(crate) enum Target {
-    External(String),
-    File(PathBuf),
-    Anchor,
-}
-/// Resolve against the owning Host, without filesystem access on the UI thread.
-pub(crate) fn resolve(owner: &Path, host: &dyn Host, target: &str) -> Result<Target, L10nKey> {
-    let local = host.id().is_local();
-    if target.starts_with('#') {
-        return Ok(Target::Anchor);
+fn open(
+    app: &mut LyrelApp,
+    host: SharedHost,
+    path: &Path,
+    cursor: Option<Position>,
+    target: buffers::OpenTarget,
+    window: &mut Window,
+    cx: &mut Context<LyrelApp>,
+) {
+    if !app.editor_open_target_valid(target, cx) {
+        return;
     }
-    if let Ok(url) = url::Url::parse(target) {
-        return match url.scheme() {
-            "http" | "https" | "mailto" => Ok(Target::External(url.into())),
-            "file" if local => url
-                .to_file_path()
-                .map(Target::File)
-                .map_err(|_| L10nKey::MarkdownLinkInvalidDestination),
-            _ => Err(L10nKey::MarkdownLinkUnsupportedScheme),
-        };
+    let reused = app.editor.buffers.open(
+        host,
+        path,
+        cursor,
+        target,
+        window,
+        cx,
+        |app| &mut app.editor.buffers,
+        EditorPanelState::buffer_edited,
+        LyrelApp::editor_open_target_valid,
+        LyrelApp::editor_opened,
+    );
+    if let Some(id) = reused {
+        app.editor_show_open_target(target, id, true, window, cx);
     }
-    if target.starts_with("//") {
-        return Err(L10nKey::MarkdownLinkUnsupportedScheme);
-    }
-    let path = target.split(['#', '?']).next().unwrap_or("");
-    if path.is_empty() {
-        return Ok(Target::File(owner.to_path_buf()));
-    }
-    let decoded = percent_encoding::percent_decode_str(path)
-        .decode_utf8()
-        .map_err(|_| L10nKey::MarkdownLinkInvalidDestination)?;
-    if decoded.contains('\0') {
-        return Err(L10nKey::MarkdownLinkInvalidDestination);
-    }
-    if local {
-        let path = Path::new(decoded.as_ref());
-        let path = if host.is_absolute(path) {
-            path.to_path_buf()
-        } else {
-            owner
-                .parent()
-                .ok_or(L10nKey::MarkdownLinkSaveFirst)?
-                .join(path)
-        };
-        let mut normalized = PathBuf::new();
-        for component in path.components() {
-            if component == std::path::Component::ParentDir {
-                normalized.pop();
-            } else if component != std::path::Component::CurDir {
-                normalized.push(component);
-            }
-        }
-        return Ok(Target::File(normalized));
-    }
-    // SSH paths always use POSIX semantics, including on a Windows client.
-    if decoded.contains('\\') || decoded.as_bytes().get(1) == Some(&b':') {
-        return Err(L10nKey::MarkdownLinkRemotePath);
-    }
-    let owner = owner
-        .to_str()
-        .ok_or(L10nKey::MarkdownLinkInvalidDestination)?;
-    let joined = if decoded.starts_with('/') {
-        decoded.into_owned()
-    } else {
-        let (parent, _) = owner
-            .rsplit_once('/')
-            .ok_or(L10nKey::MarkdownLinkSaveFirst)?;
-        format!("{parent}/{decoded}")
-    };
-    let mut parts = Vec::new();
-    for part in joined.split('/') {
-        match part {
-            "" | "." => {}
-            ".." => {
-                parts.pop();
-            }
-            part => parts.push(part),
-        }
-    }
-    Ok(Target::File(PathBuf::from(format!("/{}", parts.join("/")))))
 }

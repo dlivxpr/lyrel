@@ -140,11 +140,11 @@ Git 的新增/修改标记种子为绿 `#2F8A52` / `#4CC27A`、琥珀 `#B7791F` 
   文件名保留正文字号与未保存标记，关闭为 26px / 6px 圆角图标块，下接 divider 细线。文档不另设底栏：真实行列、问题、自动换行、
   Markdown 即时编辑 / 源码、缩进、编码、换行符和语言统一放入窗口全局状态栏；操作使用紧凑 ghost Button，行列使用等宽数字。
   最小支持窗口内，diff 标题与改动摘要在既有文本区域收缩并省略，保留 Split／Unified、Dock／Fill 和关闭控件的命中范围；不能以文字的固有宽度把这些既有操作挤到窗口外。裁切不改写标题、摘要或 patch 数据。
-  `.md`、`.markdown`、`.mdx` 默认进入原生即时编辑，源码切换不创建第二份文档或撤销历史；不保留旧只读预览设置。“新建 Markdown 文档”是独立、无默认快捷键的命令，不替换普通文本新建或终端回滚内容导出。
-  Markdown 即时编辑的体验改进以 [Zorite](https://github.com/packetThrower/zorite) 的完整所见即所得编辑体验为对齐目标，不能以只改善部分高频操作替代完整目标。范围限于 lyrel 的文档编辑区域，不因此引入日记库、知识库管理、白板或 PDF 工作流。
-  对齐包括文档内部的正文宽度、字体层级、行距、段间距、列表缩进、表格与代码块外观及编辑控件；窗口、终端、文件树、全局状态栏、主题颜色与缩放继续遵循 lyrel 的设计系统。
-  体验改进不得隐性规范化未编辑源码；保留同一文档与统一撤销历史、本地／远端 Host 保存语义，以及现有 MDX、公式、Mermaid、frontmatter 和图片能力，不因上游缺少对应能力而移除或降级。可以调整内部实现，但不能通过改写文件或减少既有能力换取表面顺滑。
-  此轮保留完整编辑功能目标，按负责人要求聚焦 Windows 核心工作流验证，优先脚本和后台测试，减少前台审批；macOS 保持兼容，未实测部分明确记录，不声称完整原生或跨平台体验通过。核心交付、实际证据、已接受性能成本，以及负责人最新确定的文本排版支持边界和应用层保护，统一见 `docs/window/side-panel.mdx`。
+  `.md`、`.markdown` 默认进入 Zorite-derived 原生即时编辑，live/source 共用一份文档与撤销历史；`.mdx` 使用 source-only，不保留旧 rich component 系统。“新建 Markdown 文档”仍为独立命令，不替换普通文本新建或终端回滚导出。
+  #236 以 Zorite `9f069c73a56b06efc84fb7abb700beb50083c827` 的实际 MIT editor/bidi/ratex 源码为唯一默认实现，替代旧 #204 的独立模仿方案；caret-local 标记显露和普通单击链接采用上游语义，不继续强制隐藏光标附近所有标记或 Ctrl+Click-only。
+  文档内部宽度、字体层级、行距、段距、列表、表格、代码块与 contextual controls 按参考实现；窗口、终端、文件树、全局状态栏、主题与缩放仍遵循 Lyrel shell。不得为普通内容引入旧式整行展开控件。
+  未编辑源文、逐行行尾、BOM/encoding、未知语法与 attached-formula spelling 均须保持；文档权威/history/revision 与各 presentation 的选择/focus/scroll/IME/layout 分离。图片、表格/代码、二维公式、Mermaid、插入及颜色 picker 在 primary/secondary 的生产路线均已接入，旧 Lyrel inspectors/workspace embeds 与 rich MDX 已退役；不显示排除构造的 inert 控件或恢复旧 fallback。
+  最终同源参考实窗必须验证 Light/Dark、docked/full、narrow/zoom、连续输入与紧凑 disclosure，源码接线和 native-font 消费者不代替产品体验。保留 extreme nowrap 有界视觉折行与 bidi 映射，不插入源换行或减少内容；#235 已按 `not_planned` 关闭，完整 RTL 仍排除在批准验收范围外，不宣称 SDK 修复。能力归属与原14项消费者迁移见 `crates/lyrel-markdown-editor/HOST_CAPABILITIES.md`；#237 基础及 `docs/window/side-panel.mdx` 中 #204 的历史证据不转移为 #245 最终候选通过证明。
 - **SFTP 浏览器**：行与本地文件树一致（26px、圆角 6、16px 图标辅助色、文件名侧栏标题色、大小等宽数字）；
   编辑框为无边框淡底井（圆角 7）；传输进度为正文色细条压在淡底轨道上，失败才转红。
 - **面板里的主按钮**（SFTP 确认、添加转发、SSH 断线条的重连）：反色中性，同对话框主按钮。

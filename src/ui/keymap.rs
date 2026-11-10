@@ -50,6 +50,7 @@ impl Global for BaseBindings {}
 
 pub fn init(cx: &mut App) {
     if cx.try_global::<BaseBindings>().is_none() {
+        lyrel_markdown_editor::bind_keys(cx);
         let base: Vec<KeyBinding> = cx.key_bindings().borrow().bindings().cloned().collect();
         cx.set_global(BaseBindings(base));
     }
@@ -90,15 +91,6 @@ fn fixed_bindings(cx: &App) -> Vec<KeyBinding> {
             cx,
         ));
     }
-    bindings.extend(crate::ui::code_editor::markdown::table_bindings(cx));
-    bindings.extend(crate::ui::code_editor::markdown::inline_format_bindings(cx));
-    bindings.extend(crate::ui::code_editor::markdown::block_bindings(cx));
-    bindings.push(load_binding(
-        "secondary-shift-c",
-        crate::ui::code_editor::markdown::CopyMarkdownOnly,
-        Some("Input && Markdown"),
-        cx,
-    ));
     // The switcher's footer tells you Tab is the way across to the tab column
     // once a query is in the box. gpui-component's Root binds `tab` to its
     // focus walker, actions are dispatched before key listeners, and the panel
@@ -124,7 +116,7 @@ fn fixed_bindings(cx: &App) -> Vec<KeyBinding> {
     {
         use crate::ui::code_editor::commands::{SelectAllOccurrences, SelectNextOccurrence};
         use gpui_kit::base::input::{AddCursorAbove, AddCursorBelow};
-        let input = Some("Input && mode == editor");
+        let input = Some("(Input && mode == editor) || Editor");
         bindings.push(load_binding("secondary-d", SelectNextOccurrence, input, cx));
         bindings.push(load_binding(
             "secondary-shift-l",
@@ -146,7 +138,7 @@ fn fixed_bindings(cx: &App) -> Vec<KeyBinding> {
         bindings.push(load_binding(
             "secondary-k secondary-d",
             crate::ui::code_editor::commands::SkipOccurrence,
-            Some("Input && mode == editor"),
+            Some("(Input && mode == editor) || Editor"),
             cx,
         ));
     }
@@ -180,7 +172,7 @@ fn fixed_bindings(cx: &App) -> Vec<KeyBinding> {
             CopyLineDown, CopyLineUp, DeleteLine, InsertLineAbove, InsertLineBelow, MoveLineDown,
             MoveLineUp, MoveToMatchingBracket, SelectLine, ToggleBlockComment, ToggleLineComment,
         };
-        let editor = Some("Input && mode == editor");
+        let editor = Some("(Input && mode == editor) || Editor");
         bindings.extend([
             load_binding("secondary-/", ToggleLineComment, editor, cx),
             load_binding("alt-shift-a", ToggleBlockComment, editor, cx),
@@ -325,10 +317,23 @@ fn push_binding(bindings: &mut Vec<KeyBinding>, action: &str, key: &str, cx: &Ap
         return false;
     };
     bindings.push(binding);
-    if let Some(folded) = folded_spec(key)
-        && let Some(alias) = make_binding(action, &folded, cx)
+    let folded = folded_spec(key);
+    if let Some(folded) = folded.as_deref()
+        && let Some(alias) = make_binding(action, folded, cx)
     {
         bindings.push(alias);
+    }
+    if action == "EditorSave" {
+        // The workbench table ranks after library defaults. Keep its configured chord,
+        // but commit the focused structural draft before saving the shared document.
+        for key in std::iter::once(key).chain(folded.as_deref()) {
+            bindings.push(load_binding(
+                key,
+                lyrel_markdown_editor::math::editor::view::SaveFormula,
+                Some("LyrelFormula"),
+                cx,
+            ));
+        }
     }
     true
 }
@@ -3333,36 +3338,36 @@ mod gpui_tests {
     }
 
     #[gpui_kit::test]
-    fn a_rebuild_keeps_the_bindings_lyrel_did_not_install(cx: &mut TestAppContext) {
+    fn rebuild_preserves_backspace_precedence_in_input_and_markdown(cx: &mut TestAppContext) {
+        use gpui_kit::Action as _;
         cx.update(|cx| {
-            // gpui-component binds the whole `Input` editing table — backspace
-            // among it — from its own `init`, which runs once, before ours. A
-            // rebuild replaces the map, so it has to carry them; without this
-            // the first rebind left every text field in the app unable to
-            // delete a character (#548).
             gpui_kit::component::init(cx);
             cx.set_global(Config::default());
-
-            let backspace = |cx: &App| {
+            let resolved = |cx: &App, context: &str| {
                 let typed = [Keystroke::parse_with_os("backspace", native_os()).unwrap()];
+                let context = [gpui_kit::KeyContext::parse(context).unwrap()];
                 cx.key_bindings()
                     .borrow()
-                    .all_bindings_for_input(&typed)
-                    .iter()
-                    .map(|b| b.action().name().to_string())
-                    .collect::<Vec<_>>()
+                    .bindings_for_input(&typed, &context)
+                    .0
+                    .first()
+                    .map(|binding| binding.action().name())
             };
 
-            let inherited = backspace(cx);
-            assert!(
-                !inherited.is_empty(),
-                "gpui-component binds backspace before lyrel touches the keymap"
-            );
-
             init(cx);
-            assert_eq!(backspace(cx), inherited, "init must not drop them");
-            rebind(cx);
-            assert_eq!(backspace(cx), inherited, "nor may a rebind");
+            for _ in 0..3 {
+                assert_eq!(
+                    resolved(cx, "Input"),
+                    Some(gpui_kit::component::input::Backspace::name_for_type()),
+                    "ordinary text fields keep their editing action"
+                );
+                assert_eq!(
+                    resolved(cx, "Editor"),
+                    Some(lyrel_markdown_editor::Backspace::name_for_type()),
+                    "Markdown receives its own editing action"
+                );
+                rebind(cx);
+            }
         });
     }
 

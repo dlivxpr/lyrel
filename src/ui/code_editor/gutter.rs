@@ -29,9 +29,9 @@ use gpui_kit::{
 
 use super::{BufferId, TabCode};
 use crate::ui::app::LyrelApp;
-use crate::ui::editor_text::TextFormat;
 use crate::ui::host_ops::HostOps;
 use crate::ui::i18n::{L10nKey, t, t_fmt};
+use lyrel_text::TextFormat;
 
 /// How long typing has to pause before the buffer is diffed again.
 const DIFF_DEBOUNCE: Duration = Duration::from_millis(150);
@@ -1205,7 +1205,7 @@ mod tests {
 
     #[test]
     fn the_base_is_decoded_the_way_the_buffer_was() {
-        use crate::ui::editor_text::{LineEnding, TextFormat};
+        use lyrel_text::{LineEnding, TextFormat};
 
         let crlf = TextFormat {
             line_ending: LineEnding::CrLf,

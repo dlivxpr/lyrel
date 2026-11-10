@@ -52,9 +52,6 @@ src/ui/settings/theme_edit.rs|std::fs::create_dir_all
 # local config dir, like the themes above — not a file in any workspace.
 src/ui/editor_session.rs|std::fs::read
 
-# 公式导出只写 OS SaveDialog 明确选择的本机目标，不消费文档 Host 路径。
-src/ui/code_editor/markdown/math_edit/context.rs|std::fs::OpenOptions::new()
-
 # 通知收件箱仅使用本机 config_dir_path()/notifications.json；来源中的
 # Host/workspace/pane 仅为导航元数据，绝不作为文件系统路径。
 src/ui/notification_history.rs|std::fs::read

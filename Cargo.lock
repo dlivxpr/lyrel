@@ -332,23 +332,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c3d036a3c4ab069c7b410a2ce876bd74808d2d0888a82667669f8e783a898bf1"
 
 [[package]]
-name = "arboard"
-version = "3.6.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0348a1c054491f4bfe6ab86a7b6ab1e44e45d899005de92f58b3df180b36ddaf"
-dependencies = [
- "clipboard-win",
- "log",
- "objc2 0.6.5",
- "objc2-app-kit 0.3.2",
- "objc2-foundation 0.3.2",
- "parking_lot 0.12.5",
- "percent-encoding",
- "windows-sys 0.59.0",
- "x11rb",
-]
-
-[[package]]
 name = "arc-swap"
 version = "1.9.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1202,15 +1185,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "37b2a672a2cb129a2e41c10b1224bb368f9f37a2b16b612598138befd7b37eb5"
 
 [[package]]
-name = "castaway"
-version = "0.2.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "dec551ab6e7578819132c713a93c022a05d60159dc86e7a7050223577484c55a"
-dependencies = [
- "rustversion",
-]
-
-[[package]]
 name = "cbc"
 version = "0.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1434,15 +1408,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c8d4a3bb8b1e0c1050499d1815f5ab16d04f0959b233085fb31653fbfc9d98f9"
 
 [[package]]
-name = "clipboard-win"
-version = "5.4.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "052af7878466feccda12ba7a6a67d019d712f296809559b47c12c8cc196d3a9a"
-dependencies = [
- "error-code",
-]
-
-[[package]]
 name = "cmake"
 version = "0.1.58"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1518,19 +1483,6 @@ checksum = "ba5a308b75df32fe02788e748662718f03fde005016435c444eea572398219fd"
 dependencies = [
  "bytes",
  "memchr",
-]
-
-[[package]]
-name = "compact_str"
-version = "0.10.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "79fcda08c33bb58b97008b2cdada6622500e949e060f5913361763121abd2416"
-dependencies = [
- "castaway",
- "cfg-if",
- "itoa",
- "static_assertions",
- "zmij",
 ]
 
 [[package]]
@@ -2568,12 +2520,6 @@ dependencies = [
  "cc",
  "libc",
 ]
-
-[[package]]
-name = "error-code"
-version = "3.4.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0b5343afd4a8365a643ac588dab4cf234a190c7f6c88c9f6dd6ffe00837661b7"
 
 [[package]]
 name = "etagere"
@@ -6075,7 +6021,6 @@ version = "0.3.1"
 dependencies = [
  "aes-gcm",
  "anyhow",
- "arboard",
  "async_zip",
  "base64 0.23.1",
  "chrono",
@@ -6083,7 +6028,6 @@ dependencies = [
  "encoding_rs",
  "fs2",
  "futures-channel",
- "globset",
  "gpui-kit",
  "gpui-pre-reqwest-client",
  "image",
@@ -6093,7 +6037,8 @@ dependencies = [
  "log",
  "lsp-types",
  "lyrel-core",
- "markdown",
+ "lyrel-markdown-editor",
+ "lyrel-text",
  "memchr",
  "merman",
  "notify",
@@ -6101,16 +6046,9 @@ dependencies = [
  "objc2 0.6.5",
  "objc2-app-kit 0.3.2",
  "objc2-foundation 0.3.2",
- "ox_content_allocator",
- "ox_content_ast",
- "ox_content_parser",
  "parking_lot 0.13.0",
  "percent-encoding",
  "plist",
- "ratex-gpui",
- "ratex-layout",
- "ratex-parser",
- "ratex-svg",
  "raw-window-handle",
  "regex",
  "resvg 0.49.0",
@@ -6130,7 +6068,6 @@ dependencies = [
  "tempfile",
  "tray-icon",
  "tree-sitter",
- "unicode-bidi",
  "unicode-segmentation",
  "ureq",
  "url",
@@ -6208,6 +6145,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "lyrel-markdown-editor"
+version = "0.3.1"
+dependencies = [
+ "gpui-kit",
+ "image",
+ "lyrel-text",
+ "ratex-layout",
+ "ratex-parser",
+ "ratex-render",
+ "ratex-svg",
+ "ratex-types",
+ "serde_json",
+ "unicode-bidi",
+ "unicode-segmentation",
+ "zorite-markdown",
+]
+
+[[package]]
 name = "lyrel-server"
 version = "0.3.1"
 dependencies = [
@@ -6217,6 +6172,14 @@ dependencies = [
  "serde_json",
  "tempfile",
  "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "lyrel-text"
+version = "0.3.1"
+dependencies = [
+ "encoding_rs",
+ "globset",
 ]
 
 [[package]]
@@ -7391,39 +7354,6 @@ name = "owo-colors"
 version = "4.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "13c45bb4a6ae1280ec0803b1ef9d3455eb50f01efbbe1447ab020f1d54fba9d8"
-
-[[package]]
-name = "ox_content_allocator"
-version = "3.4.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bc0446527206fef683cc28d84b141af9a5284478a0ede781b50d72673debe60c"
-dependencies = [
- "bumpalo",
-]
-
-[[package]]
-name = "ox_content_ast"
-version = "3.4.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5c7246a253325be8ed5b9804425acd8da944711fd2491833cef964dce5f00f65"
-dependencies = [
- "ox_content_allocator",
-]
-
-[[package]]
-name = "ox_content_parser"
-version = "3.4.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e4fc91e19e7528ab84ef180cf6b8de0b884d295c62e29f71d3ac4c73e145fc7e"
-dependencies = [
- "compact_str",
- "memchr",
- "ox_content_allocator",
- "ox_content_ast",
- "rustc-hash 2.1.3",
- "smallvec",
- "thiserror 2.0.21",
-]
 
 [[package]]
 name = "p256"
@@ -8672,20 +8602,6 @@ dependencies = [
  "ratex-katex-fonts",
  "ratex-types",
  "ratex-unicode-font",
-]
-
-[[package]]
-name = "ratex-gpui"
-version = "0.4.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d6c77adea70179bc9f7619dba84302f4da3870b142cf435d9c2c67f077c18757"
-dependencies = [
- "gpui-pre",
- "image",
- "ratex-layout",
- "ratex-parser",
- "ratex-render",
- "ratex-svg",
 ]
 
 [[package]]
@@ -13589,6 +13505,12 @@ name = "zmij"
 version = "1.0.23"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "29666d0abbfad1e3dc4dcf6144730dd3a3ab225bbbdac83319345b1b44ccfc1b"
+
+[[package]]
+name = "zorite-markdown"
+version = "0.10.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "59383128cff3700ff49464f1974e3c6969b5d5efe4cc2ee37bb41dcdb5feac44"
 
 [[package]]
 name = "zstd"

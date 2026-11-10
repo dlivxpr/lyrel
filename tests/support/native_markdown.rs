@@ -95,19 +95,15 @@ pub(crate) fn main() -> ExitCode {
                 })
         })
         .collect();
+    if selected.is_empty() {
+        eprintln!("native_markdown: no consumers match the requested filters {filters:?}");
+        return ExitCode::from(2);
+    }
     if list {
         for case in &selected {
             println!("{}: test", case.name);
         }
         println!("\n{} tests, 0 benchmarks", selected.len());
-        return ExitCode::SUCCESS;
-    }
-    if selected.is_empty() {
-        println!("running 0 tests");
-        println!(
-            "\ntest result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; {} filtered out",
-            cases.len(),
-        );
         return ExitCode::SUCCESS;
     }
 
