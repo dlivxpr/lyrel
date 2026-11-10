@@ -1647,8 +1647,8 @@ impl LyrelApp {
         self.replace_pane_slot(pending.entity_id(), slot.clone(), cx);
         match launch {
             PendingLaunch::None => {}
-            PendingLaunch::Command(command) => {
-                crate::ui::agent_launch::run_when_ready(&slot, command, cx)
+            PendingLaunch::Command(command, agent) => {
+                crate::ui::agent_launch::run_known_agent_when_ready(&slot, command, agent, cx)
             }
             PendingLaunch::Resume {
                 agent,

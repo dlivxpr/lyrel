@@ -18,7 +18,7 @@ description: "lyrel 向 shell 中注入了什么，以及它带来的功能。"
 | **PowerShell** | 使用经过编码的初始化命令，包装现有的 `prompt` 函数和 PSReadLine 的行读取器。 |
 | **nushell** | 使用 `--config` 包装配置，其中的 `config.nu` 先加载你的配置，再添加 lyrel 的钩子。仅适用于本地窗格。 |
 | **WSL** *（Windows）* | 使用相同的脚本引导初始化发行版的 shell。 |
-| **远程窗格** | 通过 SSH 连接引导初始化上述三种 POSIX shell。可针对每个配置文件，在**设置 → SSH →** 某个配置文件 **→ 高级 → 会话 → Shell 集成**中切换。 |
+| **远程窗格** | 通过 SSH 引导初始化 zsh、Bash、fish 或已探测的 PowerShell；没有远端 Nushell 引导。可在**设置 → SSH →** 某个配置文件 **→ 高级 → 会话 → Shell 集成**中切换。 |
 
 集成启用后会设置 `LYREL_SHELL_INTEGRATION`，防止 shell 嵌套时重复注入。它不会将集成带入嵌套的 shell——[你自行启动的 shell](#shells-you-start-yourself) 不会获得集成。
 
@@ -26,7 +26,65 @@ description: "lyrel 向 shell 中注入了什么，以及它带来的功能。"
   如果启动 shell 时使用了*你自己*填写的参数——`shell.args` 或 `custom_shells` 条目中的参数——lyrel 不会干预，因为注入会与你选择的标志冲突。lyrel 自身检测提供的参数（Git Bash 的 `-i -l`、WSL 条目的 `--distribution`）不在此列，因此这些条目仍会启用集成。
 </Note>
 
-Bash 4.4 及以上通过公开的 `PS0` 报告命令开始，保留你已有的 `PS0`、提示符钩子和 `DEBUG` trap；Bash 3.2 使用自有 `DEBUG` 兼容路径。lyrel 不再内嵌或下载 `bash-preexec`。如果你已自行加载它，lyrel 只接入其公开的函数数组。命令结束、目录和编辑模式报告不变。
+Bash 4.4 及以上仍通过公开的 `PS0` 报告命令开始，保留用户 `PS0`；命令环境在父 shell 的链式 `DEBUG` action 中应用，不能在 `PS0` 的 command substitution 中修改父进程。Bash 3.2 使用同一环境生命周期和既有 `DEBUG` 兼容路径。用户 `DEBUG` action 仍先执行，保留其状态／跳过语义；若已安装 bash-preexec，则只接入其公开函数数组，不安装或下载它。`PROMPT_COMMAND` 的 scalar／array、历史设置、命令状态与提示符标记继续沿用原契约。
+
+## 智能体的命令作用域环境
+
+集成的 zsh、Bash、fish、PowerShell 识别直接输入的 `omp`、`kimi`、`pi`、`opencode`、`opencode2`、`hermes`，包括字面量参数、前置环境赋值和带引号的绝对路径。只对该次启动设置 `TERM_PROGRAM=kitty`、清空 `TERM_PROGRAM_VERSION`，并用 `LC_TERMINAL=lyrel`、`LC_TERMINAL_VERSION=$LYREL` 保留真实来源；远端未提供 `LYREL` 时使用构建该引导脚本的 lyrel 版本，不改 `TERM`。omp 另加 `PI_NO_DECCARA=1`。Hermes 0.23.1 的公开检测器不读取 `TERM_PROGRAM`，因此只给 Hermes 默认 `KITTY_WINDOW_ID=lyrel`，不覆盖显式 marker（包括空串），也不强制 `image.render`。
+
+下一提示符恢复之前的已设置／未设置／空值以及 export 属性；成功、失败、Ctrl+C 和后台启动使用相同生命周期。PowerShell 的字面量 `$env:KEY='value'; omp ...` 属于该 shell 的前置赋值形式，七个终端／inline-config 字段在提示符前恢复；不会重写提交文本。旧 Windows PowerShell 对空环境值使用系统 setter，受限语言模式不能使用该 setter 时会明确失败，不声称已保留空值。
+
+显式命令级 `TERM_PROGRAM`／版本优先。`PI_IMAGE_PROTOCOL`、`PI_FORCE_IMAGE_PROTOCOL`、placeholder-off、agent 自身 graphics／inline-images 设置均不被开启或改写。`OPENCODE_CLI_CONFIG_CONTENT` 不生成、不合并、不进入持久化 scope；既有 inline 配置原样保留。
+
+识别器不把 pipeline、compound command、substitution 或任意 interpreter 当作简单启动。Bash 只有完整提交的历史文本与当前 simple command 对应时才介入；关闭历史或被 `HISTIGNORE`／`ignorespace` 隐藏的输入保守回退，不修改历史配置。使用下方显式作用域语法处理这些形式。
+
+本地 Nushell 不从没有命令文本的 `pre_execution` 猜测启动，而为六个正式名称定义小型 `def --wrapped`，用 `with-env` 调用相同名称的外部程序。参数保持为列表，`^` 保留外部 executable/PATH resolution；没有 PATH shim 或替代 binary。绝对路径、`^omp`、用户自己的同名命令／alias 或复杂 wrapper 应使用显式 `with-env`；不声称远端 Nushell 自动集成。
+
+快捷启动、`agent_launch`、明确 `agent_commands` 映射、恢复／分叉与待连接窗格都通过已知 agent 的 launch preparation 带入相同 defaults，保留所选 Host／shell 和显式非敏感 selector。待连接窗格单独保留 agent 意图；Hermes 的缺省 marker 在目标 shell 执行时才补入，因此已有的非空／空 marker 都不被客户端覆盖。不解析 wrapper 脚本内容，也不扩大凭据 scope。自定义启动命令应为字面量 executable 与 argv（wrapper 可以是任意用户脚本）；需要 shell expression 的启动会显示不支持的原因，而不是猜测重放语义。
+
+### 没有自动集成时的显式回退
+
+嵌套 shell、不支持的 shell、关闭集成、使用自定义 shell args、手动 wrapper 或保守拒绝的命令形式不会自动变成 Kitty。只给目标 agent 一个局部环境，例如：
+
+```bash
+TERM_PROGRAM=kitty TERM_PROGRAM_VERSION='' LC_TERMINAL=lyrel LC_TERMINAL_VERSION="$LYREL" PI_NO_DECCARA=1 omp
+```
+
+PowerShell 可在新的子 shell 中设置环境，父提示符不受影响（使用实际安装的 `pwsh` 或 `powershell`，不要把 POSIX prefix 直接粘贴到 PowerShell）：
+
+```powershell
+pwsh -NoProfile -Command '$env:TERM_PROGRAM="kitty"; $env:TERM_PROGRAM_VERSION=$null; $env:LC_TERMINAL="lyrel"; $env:LC_TERMINAL_VERSION=$env:LYREL; $env:PI_NO_DECCARA="1"; & omp'
+```
+
+Nushell 使用原生作用域，不使用 `KEY=value`：
+
+```nu
+with-env {TERM_PROGRAM: kitty, TERM_PROGRAM_VERSION: '', LC_TERMINAL: lyrel, LC_TERMINAL_VERSION: $env.LYREL, PI_NO_DECCARA: '1'} { ^omp }
+```
+
+其他 agent 去掉 omp 专属 `PI_NO_DECCARA`；Hermes 可在该命令环境中加入 `KITTY_WINDOW_ID=lyrel`。保留自己的协议禁用参数；不要为兼容而设置全局 `TERM_PROGRAM=kitty`、更改 `TERM` 或添加 PATH shim。
+
+### 验证与证据边界
+
+以下新增 consumer 命令在本分票实施中**未执行**；测试退出为零仍须检查 `skipping:`，不能将缺 shell 记为通过。POSIX 用例只在 Unix 编译，需真实 Bash／zsh／fish 与 PTY；Bash 需分别用 `LYREL_TEST_BASH` 指向 3.2、4.4+、5.1+。结构化 shell 用例需要 `pwsh`／`nu`，可用 `LYREL_TEST_PWSH`／`LYREL_TEST_NU` 指定 executable；Windows 还需仓库受校验 ConPTY。PowerShell 5.1 不支持 `&` background 运算符，需单独记录该平台边界。远端 bootstrap 还需隔离 SSH 主机和原有 pin／Host 前提，以下本机 PTY 不代替远端验收。
+
+```text
+cargo test --locked -p lyrel-core daemon::shell_integration::tests::bash_manual_agent_scope_and_restoration_over_a_real_pty -- --exact --nocapture --test-threads=1
+cargo test --locked -p lyrel-core daemon::shell_integration::tests::zsh_manual_agent_scope_and_restoration_over_a_real_pty -- --exact --nocapture --test-threads=1
+cargo test --locked -p lyrel-core daemon::shell_integration::tests::fish_manual_agent_scope_and_restoration_over_a_real_pty -- --exact --nocapture --test-threads=1
+cargo test --locked -p lyrel-core daemon::shell_integration::tests::powershell_manual_agent_scope_and_restoration_over_a_real_pty -- --exact --nocapture --test-threads=1
+cargo test --locked -p lyrel-core daemon::shell_integration::tests::nushell_manual_agent_wrappers_and_restoration_over_a_real_pty -- --exact --nocapture --test-threads=1
+cargo test --locked -p lyrel-core host::session_operations::tests::every_known_agent_wrapper_receives_scoped_identity -- --exact --nocapture --test-threads=1
+cargo test --locked -p lyrel-core host::session_operations::tests::nushell_scoped_launch_preserves_arguments_and_parent_environment -- --exact --nocapture --test-threads=1
+cargo test --locked -p lyrel-core host::session_operations::tests::known_hermes_launch_preserves_inherited_and_command_marker_values -- --exact --nocapture --test-threads=1
+cargo test --locked -p lyrel-core host::session_operations::tests::prepared_resume_delivers_identity_and_explicit_policy_to_a_native_child -- --exact --nocapture --test-threads=1
+cargo test --locked -p lyrel-core core::agent_hooks::tests::hook_process_preserves_terminal_scope_without_inline_config_or_credentials -- --exact --nocapture --test-threads=1
+cargo test --locked -p lyrel --lib ui::pending_pane::creation::consumer_tests::a_connecting_mapped_launch_keeps_its_agent_environment -- --exact --nocapture --test-threads=1
+cargo test --locked -p lyrel --lib ui::pending_pane::creation::consumer_tests::a_connecting_known_launch_keeps_opaque_wrapper_intent -- --exact --nocapture --test-threads=1
+```
+
+同时运行既有 `bash_preserves_native_prompt_and_trap_contracts_over_a_real_pty`、`bash_escapes_and_truncates_submitted_commands_over_a_real_pty`、`bootstrap_scripts_parse_under_their_real_shells` 和各平台 prompt-cycle contracts。新增 pending consumer 旨在检查延迟投递到目标 pane 后的命令能在真实目标 shell 执行，不代表已取得原生窗口／GPU／真实 agent 图像或 SSH 的通过证据。
+
 
 <a id="what-it-reports"></a>
 ## 它会报告什么

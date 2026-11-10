@@ -144,7 +144,7 @@ pub(super) fn prepare(
 ) -> Result<PreparedSession, SessionOperationError> {
     let (launch, gateway, scope) = context(request)?;
     // Validate shell representation before any irreversible creation.
-    command_line(&launch, &scope)?;
+    agent_command_line(&launch, &scope, CLIAgent::Hermes)?;
     let (method, params) = match request.kind {
         SessionOperationKind::Fork => (
             "session.branch_stored",
@@ -188,7 +188,7 @@ pub(super) fn prepare(
         "--in".into(),
         request.cwd.to_string_lossy().into_owned(),
     ]);
-    let command = command_line(&open, &scope);
+    let command = agent_command_line(&open, &scope, CLIAgent::Hermes);
     let prepared = PreparedSession {
         host_id: request.expected_host,
         agent: CLIAgent::Hermes,
@@ -230,16 +230,16 @@ fn context(
     if scope
         .environment
         .keys()
-        .any(|key| !HOME_ENV.contains(&key.as_str()))
+        .any(|key| !HOME_ENV.contains(&key.as_str()) && !TERMINAL_SCOPE_ENV.contains(&key.as_str()))
     {
         return Err(failure(
             SessionErrorKind::Unsupported,
-            "Hermes accepts only home/runtime scope environment selectors",
+            "Hermes accepts only home/runtime and public terminal environment selectors",
         ));
     }
     let mut argv = request.launch_argv.as_slice();
     while let Some((key, value)) = argv.first().and_then(|arg| arg.split_once('=')) {
-        if !HOME_ENV.contains(&key) {
+        if !HOME_ENV.contains(&key) && !TERMINAL_SCOPE_ENV.contains(&key) {
             return Err(failure(
                 SessionErrorKind::Unsupported,
                 "unsupported Hermes launch environment selector",
