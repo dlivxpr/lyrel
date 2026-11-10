@@ -479,7 +479,26 @@ pub(super) fn theme_zoom_scroll(cx: &mut TestAppContext) {
             original.as_bytes()
         )
     });
-    // Hit-testing/input at the retained visible caret still targets the same source.
+    // 真实界面字号会重排整篇正文；通过生产导航重新显露同一源行，
+    // 再验证新几何的指针命中，不能向测试窗口外的坐标注入假交互。
+    let tail_line = original[..tail].bytes().filter(|&byte| byte == b'\n').count() + 1;
+    context.dispatch_action(crate::core::actions::EditorGoToLine);
+    context.update(|window, cx| {
+        window.input(&format!("{tail_line}:1"), cx);
+        window.press("enter", cx);
+    });
+    until(&mut context, |context| {
+        context.update(|window, cx| {
+            view.read(cx)
+                .range_to_bounds(&(tail..tail))
+                .is_some_and(|caret| {
+                    caret.left() >= px(0.)
+                        && caret.right() <= window.viewport_size().width
+                        && caret.top() >= px(0.)
+                        && caret.bottom() <= window.viewport_size().height
+                })
+        })
+    });
     let position = view.read_with(&context, |view, _| {
         view.range_to_bounds(&(tail..tail)).unwrap().center()
     });
