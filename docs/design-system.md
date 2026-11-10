@@ -141,10 +141,10 @@ Git 的新增/修改标记种子为绿 `#2F8A52` / `#4CC27A`、琥珀 `#B7791F` 
   Markdown 即时编辑 / 源码、缩进、编码、换行符和语言统一放入窗口全局状态栏；操作使用紧凑 ghost Button，行列使用等宽数字。
   最小支持窗口内，diff 标题与改动摘要在既有文本区域收缩并省略，保留 Split／Unified、Dock／Fill 和关闭控件的命中范围；不能以文字的固有宽度把这些既有操作挤到窗口外。裁切不改写标题、摘要或 patch 数据。
   `.md`、`.markdown` 默认进入 Zorite-derived 原生即时编辑，live/source 共用一份文档与撤销历史；`.mdx` 使用 source-only，不保留旧 rich component 系统。“新建 Markdown 文档”仍为独立命令，不替换普通文本新建或终端回滚导出。
-  #236 以 Zorite `9f069c73a56b06efc84fb7abb700beb50083c827` 的实际 MIT editor/bidi 源码为实现基础，替代旧 #204 的独立模仿方案；caret-local 标记显露和普通单击链接采用上游语义，不继续强制隐藏光标附近所有标记或 Ctrl+Click-only。
+  #236 以 Zorite `9f069c73a56b06efc84fb7abb700beb50083c827` 的实际 MIT editor/bidi/ratex 源码为唯一默认实现，替代旧 #204 的独立模仿方案；caret-local 标记显露和普通单击链接采用上游语义，不继续强制隐藏光标附近所有标记或 Ctrl+Click-only。
   文档内部宽度、字体层级、行距、段距、列表、表格、代码块与 contextual controls 按参考实现；窗口、终端、文件树、全局状态栏、主题与缩放仍遵循 Lyrel shell。不得为普通内容引入旧式整行展开控件。
-  未编辑源文、逐行行尾、BOM/encoding、未知语法与 attached-formula spelling 均须保持；文档权威/history/revision 与各 presentation 的选择/focus/scroll/IME/layout 分离。图片、表格/代码、二维公式、Mermaid 等必需能力分别由 #238—#244 完成，不能将待接线能力误写成已交付或排除；旧 Lyrel inspectors/workspace embeds 与 rich MDX 明确退役。
-  #237 的基础行为、native/IME/SSH/Release 可用性和平台检查单独记录，#245 负责最终集成验收。能力归属与可观察条件见 `crates/lyrel-markdown-editor/HOST_CAPABILITIES.md`；`docs/window/side-panel.mdx` 中 #204 的历史证据不转移为新实现的通过证明。
+  未编辑源文、逐行行尾、BOM/encoding、未知语法与 attached-formula spelling 均须保持；文档权威/history/revision 与各 presentation 的选择/focus/scroll/IME/layout 分离。图片、表格/代码、二维公式、Mermaid、插入及颜色 picker 在 primary/secondary 的生产路线均已接入，旧 Lyrel inspectors/workspace embeds 与 rich MDX 已退役；不显示排除构造的 inert 控件或恢复旧 fallback。
+  最终同源参考实窗必须验证 Light/Dark、docked/full、narrow/zoom、连续输入与紧凑 disclosure，源码接线和 native-font 消费者不代替产品体验。保留 extreme nowrap 有界视觉折行与 bidi 映射，不插入源换行或减少内容；#235 已按 `not_planned` 关闭，完整 RTL 仍排除在批准验收范围外，不宣称 SDK 修复。能力归属与原14项消费者迁移见 `crates/lyrel-markdown-editor/HOST_CAPABILITIES.md`；#237 基础及 `docs/window/side-panel.mdx` 中 #204 的历史证据不转移为 #245 最终候选通过证明。
 - **SFTP 浏览器**：行与本地文件树一致（26px、圆角 6、16px 图标辅助色、文件名侧栏标题色、大小等宽数字）；
   编辑框为无边框淡底井（圆角 7）；传输进度为正文色细条压在淡底轨道上，失败才转红。
 - **面板里的主按钮**（SFTP 确认、添加转发、SSH 断线条的重连）：反色中性，同对话框主按钮。

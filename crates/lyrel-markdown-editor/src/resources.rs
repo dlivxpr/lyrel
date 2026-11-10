@@ -2,7 +2,7 @@
 use super::*;
 pub use zorite_markdown::syntax::LinkHit;
 
-/// Insert a local image through the owning workbench Host.
+// Insert a local image through the owning workbench Host.
 actions!(lyrel_markdown_resources, [InsertImage]);
 
 impl EditorState {

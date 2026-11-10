@@ -1237,7 +1237,7 @@ fn find_underscore_close(b: &[u8], from: usize, end: usize, double: bool) -> Opt
 // Linkables (wiki/tag/url/bare-url) are shared with the reader
 // (`zorite_markdown::syntax`) — one grammar for clicks, hover cursors, and
 // styling in every renderer.
-pub(crate) use zorite_markdown::syntax::{LinkHit, link_at, links};
+pub(crate) use zorite_markdown::syntax::{LinkHit, links};
 
 /// ATX heading depth (1–6) if `line` is a heading: 1–6 leading `#` followed by
 /// a space or end-of-line. `None` otherwise.
@@ -2781,29 +2781,6 @@ mod tests {
         assert_eq!(image_row("1. ![a](b.png)"), Some(("b.png", None, 3)));
         assert_eq!(image_row("![a](b.png)"), Some(("b.png", None, 0)));
         assert_eq!(image_row("- text ![a](b.png)"), None);
-    }
-
-    #[test]
-    fn link_at_hits_every_linkable_construct() {
-        use LinkHit::*;
-        let line = "see [[Ops Net|the net]] and #scada plus [docs](https://x.io/d) `#not` [[]]";
-        // Anywhere on the wiki link (brackets included) → its target, not the alias.
-        assert_eq!(link_at(line, 4), Some(Page("Ops Net".into())));
-        assert_eq!(link_at(line, 15), Some(Page("Ops Net".into())));
-        // The tag, including its `#`.
-        assert_eq!(link_at(line, 28), Some(Page("scada".into())));
-        assert_eq!(link_at(line, 33), Some(Page("scada".into())));
-        // The inline link: label, brackets, or url all navigate.
-        assert_eq!(link_at(line, 41), Some(Url("https://x.io/d".into())));
-        assert_eq!(link_at(line, 55), Some(Url("https://x.io/d".into())));
-        // Plain text, a tag inside code, and an empty wiki link are not links.
-        assert_eq!(link_at(line, 0), None);
-        assert_eq!(link_at(line, 66), None); // inside `#not`
-        assert_eq!(link_at(line, 72), None); // [[]]
-        // An image is a widget, not a link — even on its url.
-        assert_eq!(link_at("![alt](images/a.png)", 10), None);
-        // A footnote ref is styled like a link but isn't one.
-        assert_eq!(link_at("x [^1] y", 3), None);
     }
 
     #[test]

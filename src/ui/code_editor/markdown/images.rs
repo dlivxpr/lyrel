@@ -1,10 +1,7 @@
 //! 图片 I/O、权限和异步生命周期只归工作台；editor 仅消费 bitmap 和发出意图。
 use super::super::*;
 use super::links::{self, Target};
-use gpui_kit::component::{
-    ActiveTheme as _, Sizable as _, WindowExt as _,
-    button::{Button, ButtonVariants as _},
-};
+use gpui_kit::component::{WindowExt as _, button::Button};
 use gpui_kit::{AnyWindowHandle, App, ClipboardEntry, EntityId, RenderImage, WeakEntity};
 use lyrel_core::host::Host;
 use lyrel_markdown_editor::{
@@ -506,7 +503,7 @@ impl ImageHost {
     }
 
     #[cfg(any(test, feature = "native-markdown-tests"))]
-    pub(super) fn is_loaded(&self, source: &str) -> bool {
+    pub(in crate::ui::code_editor) fn is_loaded(&self, source: &str) -> bool {
         matches!(self.states.get(source), Some(State::Ready))
     }
 }

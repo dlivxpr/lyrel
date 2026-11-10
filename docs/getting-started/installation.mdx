@@ -127,7 +127,7 @@ lyrel 独立初版为 `0.1.0`；缺少匹配包时不会回退下载上游安装
 <a id="building-from-source"></a>
 ## 从源码构建
 
-Windows／macOS 使用 stable Rust 工具链与仓库已有锁文件运行 `cargo build --locked`；应用二进制文件名为 `lyrel-app`，CLI 为 `lyrel`，headless server 为 `lyrel-server`。Linux 使用下列排除根桌面包的命令，直接构建根包会明确拒绝。
+Windows／macOS 使用 stable Rust 工具链与仓库已有锁文件运行 `cargo build --locked`；应用二进制文件名为 `lyrel-app`，CLI 为 `lyrel`，headless server 为 `lyrel-server`。Linux 使用下列同时排除根桌面包与 `lyrel-markdown-editor` 的命令；GUI-free `lyrel-text` 仍参与 headless 检查，直接构建桌面包会明确拒绝。
 
 GUI 统一通过正式 `gpui-kit =0.9.1` 的官方 `gpui-fast` feature 选择 GPUI Fast，锁文件基线为 `0.1.14` 家族；Kit 同步选择 core、native platform、Base、Component 与 assets 的 Fast 类型。应用导入与测试宏仍经 `gpui_kit`，不直接依赖 engine、不增加 crate alias／patch 或双后端产品开关。GUI HTTP 使用 `gpui-pre-reqwest-client =0.3.12`，与 Fast 共用 `gpui-pre-http-client =0.3.12` 类型身份；保留 `tree-sitter-languages` 和测试专用 `test-support`。当前 Rio 组合为 `=0.5.29`；完整 Kit／Fast／Rio 组合的构建、行为与性能须按升级后的候选重新验证，不能沿用 `0.9.0` 的检查点结果。本轮 SDK 问题与实测边界由 [#235](https://github.com/dlivxpr/lyrel/issues/235) 记录，真实 Mac 验收仍由 [#167](https://github.com/dlivxpr/lyrel/issues/167) 跟踪。
 
@@ -137,9 +137,9 @@ GUI 统一通过正式 `gpui-kit =0.9.1` 的官方 `gpui-fast` feature 选择 GP
 
 `0.9.0` 将公开主题记录标为 `#[non_exhaustive]`：外部调用从 `Default`／现有构造器创建，再逐字段赋值，不能使用含 `..Default::default()` 的结构体字面量。`Window::text_system()` 现在返回 `&Rc<WindowTextSystem>`，窗口布局缓存不再可共享给并发回调；后台任务继续携带 `Arc<TextSystem>`，在任务内创建布局系统。Merman 的测宽回调要求 `Send + Sync`，因此该任务独有的布局缓存通过互斥访问保留复用，不捕获窗口的 `Rc`。`Animation` 使用 executor 时钟，测试动画推进使用 `advance_clock`，不靠墙钟休眠。保留每窗一个 `Root`、主题字段／tokens 与 Base 同步，以及 macOS 平台完整委派；维护自定义 GPUI 代码时核对[官方 `v0.9.0` 发布与迁移说明](https://github.com/longbridge/gpui-kit/releases/tag/v0.9.0)。本轮原生工作流、HTTP 与性能结果须单独记录；macOS 实机验收由 [#167](https://github.com/dlivxpr/lyrel/issues/167) 跟踪，先前轮次的未执行决定不适用于本次升级。
 
-桌面应用代码由共享 `lyrel` library 提供，`lyrel-app` 只调用 `run()`。Windows／macOS 默认 `cargo test --locked --features updater` 覆盖桌面 library、`lyrel-markdown-editor`、GUI-free `lyrel-text`、core、CLI、server 与 updater，但不启用非默认 `native-markdown-tests`。只检查工作台 library 使用 `cargo test --locked -p lyrel --lib`，editor 行为使用 `cargo test --locked -p lyrel-markdown-editor --test foundation`；旧二进制零用例结果不是行为证据。
+桌面应用代码由共享 `lyrel` library 提供，`lyrel-app` 只调用 `run()`。Windows／macOS 默认 `cargo test --locked --features updater` 覆盖桌面 library、`lyrel-markdown-editor`、GUI-free `lyrel-text`、core、CLI、server 与 updater，但不启用非默认 `native-markdown-tests`。只检查工作台 library 使用 `cargo test --locked -p lyrel --lib`；editor 全部 unit/结构公式/foundation 行为使用 `cargo test --locked -p lyrel-markdown-editor`，不能只跑 `--test foundation` 冒充整个 crate。旧二进制零用例结果不是行为证据。
 
-真实 native 字形消费者显式启用 `native-markdown-tests` / `gpui-kit/test-support`，入口 `tests/native_markdown.rs` 为 `harness = false`，在 OS 主线程创建并持有 `current_platform(false)`。每个消费者使用独立 `TestAppContext` 和真实工作台 lifecycle。当前 case 以 `--list` 为准；原 14 项的迁移/退役/后续所属票须在 capability inventory 可审查，不能将更少用例视为自动等价。Windows `current_platform(true)` 为 Noop 字体，不替代 DirectWrite；macOS AppKit 也不能在 libtest worker 初始化。字体前提保持 fail-closed；这些消费者不替代 GPU 实窗、系统 IME 或真实 SSH。
+真实 native 字形消费者显式启用 `native-markdown-tests` / `gpui-kit/test-support`，入口 `tests/native_markdown.rs` 为 `harness = false`，在 OS 主线程创建并持有 `current_platform(false)`。每个消费者使用独立 `TestAppContext` 和真实工作台 lifecycle。当前完整 case 以无筛选 `--list` 为准；原 14 项的逐项迁移与明确退役交互见 `HOST_CAPABILITIES.md`，不能按数量推定覆盖等价。Windows `current_platform(true)` 为 Noop 字体，不替代 DirectWrite；macOS AppKit 也不能在 libtest worker 初始化。字体前提保持 fail-closed；这些消费者不替代 GPU 实窗、系统 IME 或真实 SSH。
 
 在满足上述桌面构建前提的终端中，分别编译、执行全部原生用例，再按需列出 selector：
 
@@ -152,21 +152,21 @@ cargo test --locked -p lyrel --features native-markdown-tests \
   --test native_markdown -- --list
 ```
 
-Windows PowerShell 每条命令写成一行，不复制 Bash 的续行符。单例使用 `cargo test --locked -p lyrel --features native-markdown-tests --test native_markdown -- '<完整 selector>' --exact --nocapture`；未知 exact selector 必须非零，普通筛选零匹配不是通过。完整执行记录全部当前注册 case，并分别说明旧消费者的迁移边界。普通测试 `--no-fail-fast` 仍不能代替独立 native 目标；候选提交的结果重新记录。
+Windows PowerShell 每条命令写成一行，不复制 Bash 的续行符。单例使用 `cargo test --locked -p lyrel --features native-markdown-tests --test native_markdown -- '<完整 selector>' --exact --nocapture`；未知 exact selector 及零匹配 substring filter 均返回 exit `2`，不是通过。筛选只供定位，不代替完整无 filter 的执行。完整记录全部当前注册 case，并分别说明旧消费者的迁移边界。普通测试 `--no-fail-fast` 仍不能代替独立 native 目标；候选提交的结果重新记录。
 
 Fast 的 development profile 为当前启用的 core、platform、macros 和 Windows／macOS／Apple backend 保留优化；运行性能只比较同条件 Release。官方 `GPUI_VIEW_RETENTION=0` 可在启动时关闭 view retention 以定位差异（默认开启），不是产品 backend 回退。正式二进制的 `LYREL_FPS=1` 只记录终端 paint 次数／耗时，不是 retention 命中率、GPU 帧延迟或物理输入延迟。官方 `Window::reset_layout_stats()`／`layout_stats()` 仅在 `test-support` 提供，包含 `views_built`、`views_reused`、`nodes_created`、`nodes_reused`、`style_writes` 及各 phase 时间；需要时在已有 rooted consumer 临时采样，不在生产热路径新增计数器。必须先测量终端 paint 中实体写入的实际失效影响，再决定是否修复；保留单一 frame buffer／metadata owner、已有生命周期与隐藏 pane 通知门控。
 
 GUI、CLI 与 daemon 的图片权威状态统一采用正式 `rio-vt =0.5.29`（`default-features = false`），`rio-graphics` 与 `rio-unicode` 同时精确固定为 `=0.5.29`，传递测宽依赖为同版 `rio-grapheme-width`。保留 lyrel 自有 daemon、PTY 和渲染，不引入 Rio 的 PTY event loop、窗口或 GPU 后端，不复制宽度表或 VT parser。`lyrel-core` 的 `terminal-width` feature 只控制输入栏／CLI 的测宽 API，不决定 daemon 是否链接 VT 网格。第三方 Rust 依赖来自正式 registry，使用锁定归档及标准 Cargo 缓存，不修改下载源码或配置 source replacement。用 `cargo tree --locked --workspace --target all -e features -i rio-vt@0.5.29 -i rio-graphics@0.5.29 -i rio-unicode@0.5.29 -i rio-grapheme-width@0.5.29` 核对共同类型身份和 feature 边界。
 
-#236 批准唯一受限源码导入例外：`lyrel-markdown-editor` 独立维护固定 Zorite `9f069c73a56b06efc84fb7abb700beb50083c827` 的 MIT editor/bidi 源码，公式 GUI 导入由 #241 完成；不复制 GPL 应用编排，不修改 Cargo 下载缓存或引入第二个 GUI engine。`zorite-markdown =0.10.1` 为关闭默认 view feature 的正式语法依赖。来源与原始 SHA-256 见 crate 的 `UPSTREAM.toml`；许可证见 `licenses/` 与根 `LICENSE`，Host 能力/所属票/验收见 `HOST_CAPABILITIES.md`。
+#236 的唯一受限源码导入例外已经接入：`lyrel-markdown-editor` 独立维护固定 Zorite `9f069c73a56b06efc84fb7abb700beb50083c827` 的 MIT `zorite-editor 0.11.3`、`gpui-bidi 0.1.1`、`ratex-gpui 0.4.1` 共 16 个源文件；不复制 GPL 应用编排，不修改 Cargo 下载缓存或引入第二个 GUI engine。`zorite-markdown =0.10.1` 为关闭默认 view feature 的正式语法依赖。原始 Git blob 的 SHA-256、来源与本地适配见 crate 的 `UPSTREAM.toml`；完整 MIT 与独立字体 notices 见 `licenses/` 与根 `LICENSE`，Host 能力和最终验收边界见 `HOST_CAPABILITIES.md`。
 
 Rio `0.5.29` 不再由 `Processor` 暂存同步输出；解析、协议应答和输入模式始终实时推进。桌面在实际 snapshot／paint 发布点保留上次完整文字、光标和图片 display list，结束标记或 lyrel 既有 **150 ms** fail-safe 才使新帧可发布；每次开始标记会重新计时。reader 自己推进静默链路的期限，不采用 Rio 默认的 1000 ms，也不新增设置。图形资源仍由 daemon 决定，桌面只保留已计入原预算的呈现 lease；隐藏 pane 不因输出新增重绘。CLI `capture --plain` 独立重建最新收到状态，不等待 GUI committed frame。此语义及新回归不等于候选已经通过构建／原生／性能验收，实际命令、退出码与证据由 #168 的集中检查点记录。
 
 图片传输在共享核心复用锁图中正式 registry 的 `png 0.18.1` 做逐行内容校验，zlib 继续使用 `miniz_oxide 0.9.1`；二者均为 Rust 实现，不新增平台 PNG／zlib 原生安装步骤。桌面仍使用既有 `image 0.25` 生成渲染像素；按原有 `Cargo.lock` 与 `--locked` 命令安装，不引入 Git/path/patch 第三方来源。
 
-Markdown 图片、预览及资源的完整 Host 接线归 #238，不能从已导入图像节点推定图片 paste/drop 或 HTML clipboard 已通过。工作台现有 `base64` 仍用于浏览器凭据和终端相关消费者，不将它误写成新编辑器 rich clipboard 已交付证明。
+Markdown 的生产 primary/secondary 均接入 owning-Host 图片、预览、插图/paste/drop 与普通单击链接；联网图片必须逐资源主动加载。图片输入由 worker 读取，保存到文档所属 Host，不把远端路径当成本机路径。`base64` 的既有浏览器凭据/终端用途不构成新 editor rich clipboard 的验收证明。
 
-#237 不导入公式 GUI；#241 将适配指定 MIT `ratex-gpui` 的二维编辑器到相同 Kit/Fast 类型，并安装真实 native rendering/seat/commit/cancel provider。#242 完成 Mermaid。未配置 provider 的构造保留原文编辑，不显示假可用控件。`unicode-bidi =0.3.18` 与导入的 bidi 映射留在 editor；不据此声明 full RTL 通过。GUI-free `lyrel-text` 保留原 Apache-2.0 编码/BOM/EditorConfig 策略，供工作台与 editor 直接复用。
+结构公式使用指定 MIT `ratex-gpui` 的二维模型与正式 GUI-free RaTeX `0.1.15` renderer，真实 native seat/commit/cancel provider 已安装；Mermaid 使用下方的正式 Merman 管线，不引入项目 JavaScript。未知语法和排除的 notebook 构造保持源码访问，不显示假可用控件。`unicode-bidi =0.3.18` 与 imported bidi 映射保留；#235 已按 `not_planned` 关闭，不代表原生长行或 full RTL 已修复。保留超过 65,536 逻辑像素的 source-preserving 有界视觉折行，完整 RTL 仍在批准验收范围外。GUI-free `lyrel-text` 继续为工作台与 editor 复用 Apache-2.0 编码/BOM/逐行表示/EditorConfig 策略。
 
 正式 `gpui-base =0.9.1` 已发布 `RenderContext::with_foreground_ranges` 和 `Caret`／`CaretAffinity`、`caret_for_position`／`position_for_caret`，分别提供 keyed leaf 的 render-local 前景色与软换行两侧 caret。应用接入和真实消费者验证仍须单独完成；新 API 的发布不代表完整 bidi／RTL 或超长 nowrap 行的 paint／geometry 已修复。相关原始失败和后续结果保留在 [#235](https://github.com/dlivxpr/lyrel/issues/235) 及[Markdown 核心验收记录](/window/side-panel#204-当前核心证据与明确缺口)，不通过 Git/path/patch、修改下载源码或替换渲染器绕过正式发布边界。
 
@@ -274,9 +274,11 @@ CI run `42111994380` 的 Windows／macOS production 与测试构建通过，但�
 
 ### 原生 Markdown 编辑器的依赖边界
 
-`lyrel-markdown-editor` 为 desktop-only workspace crate，通过 Kit/Fast 提供新 native document surface；`lyrel-text` 是可独立在 Linux 测试的 GUI-free codec。`lyrel-core`、server、CLI 不依赖 GUI。导入来源、MIT copyright 与本地修改保持可追溯；最终 #245 必须核验它们随二进制资产实际分发。
+`lyrel-markdown-editor` 为 desktop-only workspace crate，通过 Kit/Fast 提供唯一默认 native document surface；`lyrel-text` 是可独立在 Linux 测试的 GUI-free codec。`lyrel-core`、server、CLI 不依赖 GUI。CI 的 desktop package list 显式包含新 editor crate，Linux 的 workspace 命令显式排除两个 GUI 包；不能以 core/server/CLI 原来无 GUI 依赖推定 workspace 选择正确。
 
-Mermaid 的 #242 Host 已接入正式 `merman =0.9.2`（`default-features=false`，`all-diagrams`、`complete-svg`），使用完整 `resvg_safe` 与 Kit/Fast `SvgRenderer` 和 native 字体测宽，不引入 Node.js/Chromium/ELK runtime。它从共享 Document 派生每块缓存，提供 loading/诊断、源码编辑恢复和 owner/request/revision 隔离；主题字号与 pane 宽度参与实际图形几何。公式渲染和结构编辑仍由 #241 负责。RaTeX 的 MIT 与所用字体的 SIL OFL 版权分开处理；根 `LICENSE` 保留既有 Merman 及其启用渲染组件的 notices，最终打包仍由 #245 核验。源码接线不表示 native/实窗/平台验收已通过，边界见 `HOST_CAPABILITIES.md`。
+Mermaid Host 使用正式 `merman =0.9.2`（`default-features=false`，`all-diagrams`、`complete-svg`）、完整 `resvg_safe`、Kit/Fast `SvgRenderer` 和 native 字体测宽，不引入 Node.js/Chromium/ELK runtime。它从共享 Document 派生每块缓存，显示 loading/诊断、源码编辑恢复和 owner/request/revision 隔离；主题字号与 pane 宽度参与实际图形几何。结构公式同样使用 native provider，RaTeX MIT 与字体 SIL OFL 版权分开保留。
+
+根 `LICENSE` 沿 release desktop-inputs tar 传给平台 bundler：Windows ZIP/Inno 为 `LICENSE.txt`，macOS app/ZIP/DMG 为 `Contents/Resources/LICENSE.txt`。Windows verifier 比较实际解包及 Inno stage 的完整 SHA-256；macOS bundler 比较 app 与实际 ZIP 的完整字节，现有根 allowlist 无需扩大。最终产物仍需实际打包核验，源码链和 guard 不计为 Windows/macOS 产物通过；原生、实窗、系统 IME、真实 SSH 和跨平台证据各自记录，见 `HOST_CAPABILITIES.md`。
 
 `.mdx` 使用 source-only，不再引入旧 Ox Content rich component/inspector 投影。frontmatter、未知构造、原始空白和逐行行尾保持完整。`.md`/`.markdown` 的即时编辑和 source 模式共用 Document/history，模式切换不整理原文。当前配置与实际证据边界见[编辑器说明](/window/side-panel#markdown-editor-design)。
 

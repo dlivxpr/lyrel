@@ -9,7 +9,7 @@ lyrel 是面向桌面本地开发与桌面远程开发的 Rust 原生终端工�
 
 ## 可执行程序与共享核心
 
-workspace 包含四个 crate；桌面 GUI、CLI 和 headless server 复用同一个 `lyrel-core`，而不是各自实现会话和协议。
+workspace 包含六个 crate；桌面 GUI、CLI 和 headless server 复用 `lyrel-core`，文本 codec 属于 GUI-free `lyrel-text`，Markdown 编辑实现单独属于 desktop-only `lyrel-markdown-editor`。
 
 | crate／程序 | 职责 | 不负责 |
 | --- | --- | --- |
@@ -17,7 +17,9 @@ workspace 包含四个 crate；桌面 GUI、CLI 和 headless server 复用同一
 | `lyrel-core` | 领域模型、配置与持久化、Host、daemon、PTY、SSH、IPC 和 agent 集成的共享逻辑 | 不依赖 GPUI 或系统钥匙串 |
 | `lyrel-cli`，程序 `lyrel` | 面向人和 agent 的命令、目标解析、输出与退出码 | 不要求 GUI 正在运行 |
 | `lyrel-server` | headless daemon 入口，以及 control／pane 的 stdio 服务和桥接 | 不依赖桌面组件；唯一生产依赖是 `lyrel-core` |
-| 根包内的 `lyrel-updater` | 启用 `updater` feature 后构建的 Windows 独立更新程序 | 不是第五个 crate，也不是会话服务器 |
+| `lyrel-text` | 编码、BOM、逐行行尾与 EditorConfig 策略，供普通文件工作台和 Markdown Document 复用 | 不依赖 GPUI、app 或 Host |
+| `lyrel-markdown-editor` | 固定 MIT Zorite editor/bidi/ratex 源码的独立维护，Document/history 与各 presentation 的 native editing | 不拥有文件 I/O、Host/path、dirty/save/close，不导入 GPL 应用 |
+| 根包内的 `lyrel-updater` | 启用 `updater` feature 后构建的 Windows 独立更新程序 | 不是独立 crate，也不是会话服务器 |
 
 `src/daemon.rs` 重导出共享 daemon，`src/core/` 在共享核心之上增加 GUI 适配。桌面入口的 `--daemon` 模式在启动 GPUI 前转入共享 daemon，因此后台服务器可以由 `lyrel-app --daemon` 或独立 `lyrel-server --daemon` 承载。
 
@@ -167,7 +169,11 @@ Unix 的 daemon handoff 是独立的升级路径：通过 exec 继承本地 PTY 
 
 文件缓冲区按 Host 与文档身份加载、监视和保存。编辑器用工作区、`HostId`、目标文档／分组与请求序号核对结果，恢复另有 `context_epoch`；这与文件树按 Host adapter 实例隔离不是同一机制。
 
-Markdown 使用独立维护的 Zorite-derived `lyrel-markdown-editor`，仅经 GPUI Kit/Fast。工作台拥有 Host/path、dirty、save/close 与状态，`lyrel-text` 共享原 Apache-2.0 codec/EditorConfig；editor 不依赖 app/core。live/source 不建立第二份源文或 history，所有 source range edit/Undo/Redo 走同一 `DocumentEvent`。MDX 是 source-only；旧 rich component/inspector/workspace embed 不迁移。公式与 Mermaid 的完整 native Host 接线分别属于 #241/#242，最终验收属于 #245；不使用浏览器或 Node.js 编辑器。LSP 保留桌面职责，headless 不引入 GUI。
+Markdown 只有独立维护的 Zorite-derived `lyrel-markdown-editor` 默认即时编辑路线，GUI 仅经 GPUI Kit/Fast。工作台拥有 Host/path、dirty、save/close 与状态，`lyrel-text` 共享原 Apache-2.0 codec/EditorConfig；editor 不依赖 app/core。live/source 不建立第二份源文或 history，所有 source range edit/Undo/Redo 走同一 `DocumentEvent`。Document 在同一事务中更新 LF 原文与逐行表示，保存捕获源文、格式、表示和原 owning Host/path，不以焦点视图决定异步目标。
+
+每个 presentation 都安装 writing、table/code、owning-Host 图片/链接、结构公式及 Mermaid provider。普通链接采用 release 单击，caret 附近按上游语义显露标记；不保留旧 Ctrl+Click-only、始终隐藏标记或旧 WYSIWYG fallback。MDX 是 source-only，旧 rich component/inspector/workspace embed 已退役；frontmatter 和未知语法保留源码，不执行项目组件。公式与图形在 native Rust 中呈现，不使用浏览器或 Node.js 编辑器。
+
+源码例外只涵盖 pinned Zorite `9f069c73a56b06efc84fb7abb700beb50083c827` 的 MIT editor/bidi/ratex 16 文件；registry `zorite-markdown =0.10.1` 仅提供 GUI-free syntax。`UPSTREAM.toml` 记录原始 Git blob 摘要和本地适配，MIT notices 与字体许可进入根 `LICENSE` 并沿平台打包链分发。保留 imported bidi mapping 与超长 nowrap 行的 source-preserving 有界视觉布局；#235 为 `not_planned`，不是 native long-line 或 full RTL 已修复的证明，完整 RTL 仍在已批准验收范围之外。全部源码接线与验收边界见 `HOST_CAPABILITIES.md`；最终 native/实窗/平台与真实 SSH 结果分别记录。LSP 仍属于桌面，headless 不引入 GUI。
 
 coding agent 在真实 PTY 中运行自己的原生 TUI。命令识别、状态 hooks、会话历史、resume／fork 与启动任务投递是独立能力；hooks／产品 SDK bridge 是状态观测与任务交互通道，不替代 agent 界面。内置产品与能力边界见[agent 概览](/agents/overview)和[会话操作](/agents/sessions)，其中 pi 与 omp 是独立产品，名称识别不构成全部能力已经验收的声明。
 

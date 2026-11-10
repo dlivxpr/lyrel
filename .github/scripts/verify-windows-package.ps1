@@ -43,6 +43,20 @@ $Stage = "dist/$Name"
 $failures = New-Object System.Collections.Generic.List[string]
 function Fail([string]$message) { $failures.Add($message) }
 
+# Compare the actual extracted/staged notice, not merely its filename. The root
+# notice includes the pinned MIT editor/bidi/ratex import and font licenses.
+$ExpectedLicenseHash = (Get-FileHash -LiteralPath 'LICENSE' -Algorithm SHA256).Hash
+function Assert-LicensePayload([string]$directory, [string]$label) {
+    $notice = Join-Path $directory 'LICENSE.txt'
+    if (-not (Test-Path -LiteralPath $notice -PathType Leaf)) {
+        Fail "$label is missing the complete root LICENSE: $notice"
+        return
+    }
+    if ((Get-FileHash -LiteralPath $notice -Algorithm SHA256).Hash -ne $ExpectedLicenseHash) {
+        Fail "$label LICENSE.txt differs from the complete root LICENSE"
+    }
+}
+
 function Get-ProductVersion([string]$path) {
     # The same string the updater reads back with VerQueryValueW
     # (\StringFileInfo\<lang><cp>\ProductVersion).
@@ -236,6 +250,7 @@ if (-not (Test-Path -LiteralPath $Zip)) {
             Assert-BinaryArchitecture (Join-Path $unzipped $binary) "the portable $binary"
         }
         Assert-ConptyPair $unzipped 'the portable archive'
+        Assert-LicensePayload $unzipped 'the portable archive'
         Assert-NoVcRuntime $unzipped 'the portable archive'
     } finally {
         Remove-Item -Recurse -Force $unzipped -ErrorAction SilentlyContinue
@@ -280,6 +295,7 @@ if (-not (Test-Path -LiteralPath $Stage -PathType Container)) {
         Assert-BinaryArchitecture (Join-Path $Stage $binary) "the installed $binary"
     }
     Assert-ConptyPair $Stage 'the Inno payload'
+    Assert-LicensePayload $Stage 'the Inno payload'
     Assert-NoVcRuntime $Stage 'the Inno payload'
 }
 
@@ -303,4 +319,4 @@ if ($failures.Count -gt 0) {
     throw "the Windows release package failed validation ($($failures.Count) problem(s))"
 }
 
-Write-Output "Windows package verified: payload layout, markers, architectures, product metadata and versions match $Version ($Arch)"
+Write-Output "Windows package verified: payload layout, complete license bytes, markers, architectures, product metadata and versions match $Version ($Arch)"

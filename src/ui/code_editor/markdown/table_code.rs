@@ -7,9 +7,7 @@ use gpui_kit::component::{
     menu::DropdownMenu as _,
     popover::Popover,
 };
-use gpui_kit::{
-    App, AppContext as _, FocusHandle, HighlightStyle, IntoElement, Render, RenderOnce, WeakEntity,
-};
+use gpui_kit::{App, FocusHandle, HighlightStyle, IntoElement, Render, RenderOnce, WeakEntity};
 use lyrel_markdown_editor::{CellAlign, EditorState as MarkdownEditor};
 use std::{cell::RefCell, ops::Range};
 

@@ -29,6 +29,8 @@ formula_import_owner = "#241"
 # #239：表格插入与样式原子history、cell Unicode/IME几何、列宽metadata随增删迁移；
 # code语言仅替换token并保留fence metadata，高亮provider读取当前App主题。
 # src/code.rs与应用markdown/table_code.rs为Lyrel原创Host适配，不导入GPL picker。
+# #245：移除已被共享写作路径替代的未用 wrapped_by helper、未消费的 link_at 重导出
+# 及仅复述外部 parser/notebook-link API 的旧测试；实际链接交互由工作台/native 消费者覆盖。
 # 未导入 Zorite GPL 应用层、notebook 数据库或独立只读 Markdown renderer。
 
 [[source]]
