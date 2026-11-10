@@ -256,7 +256,7 @@ primary/secondary 各自拥有 seat/focus/candidate/layout，只共享 Document�
 
 #### #236 最终集成验收与负责人接受边界
 
-无探针 Windows Release 产品固定为 `fcdc7c8a02d69b482eb9417844250550d6d9eff9`，`lyrel-app.exe` 的 SHA-256 为 `7682b82bfa2425cbb98956fd1d4c9d9d9cba59863d876355b1ba5e4354322629`。以下为新实现的证据，不继承 #204 或 #237 的历史通过结论。
+完整工作负载的无探针 Windows Release 检查点为 `fcdc7c8a02d69b482eb9417844250550d6d9eff9`，`lyrel-app.exe` 的 SHA-256 为 `7682b82bfa2425cbb98956fd1d4c9d9d9cba59863d876355b1ba5e4354322629`。后续折叠资源修复与最终 CI 使用各自精确 commit，不把早前二进制的结果回填为后继复跑。以下为新实现的证据，不继承 #204 或 #237 的历史通过结论。
 
 | 验收面 | 实际结果与限制 |
 | --- | --- |
@@ -272,7 +272,7 @@ primary/secondary 各自拥有 seat/focus/candidate/layout，只共享 Document�
 
 长文 100 次结构编辑期间，整应用 private bytes 从 `183.6 MiB` 增至 `306.6 MiB`；保留上游整串历史，数据不是历史独占内存或峰值。固定参考同阶段约 `178.2 → 258.3 MiB`，但其输入落地与历史不完整、布局不同，不能据此宣称严格回归比例、input-to-paint 或 Zorite 不劣性。负责人已明确接受当前完整负载的核心可用性、历史内存成本和这些测量限制；不要求用截断或关闭功能降低数字。
 
-仓库外证据入口为 `C:/Users/dlivx/AppData/Local/Temp/lyrel-236/` 下的 `final-product-workloads.json`、`final-product-ssh-and-ime.json`、`final-owner-acceptance.json`、`final-paired-fixture-identities.json`、`final-reference-surface-236.json`、`integrated-windows-workspace.log`、`integrated-linux-tests.log` 和 `package-final-fcdc7c8a/package-evidence.json`。首次完整 hosted run 为 [42827800654](https://github.com/dlivxpr/lyrel/actions/runs/42827800654)，颜色快捷键修正及最终文档提交后的状态由 [PR #246 的 checks](https://github.com/dlivxpr/lyrel/pull/246/checks) 按精确 commit 记录。实际工具失败、初次断言失败和不匹配参考均保留，不回填为成功；macOS 产品实窗、系统 IME、实际安装和完整跨平台交互组合仍未验证。本轮只交付集成分支与可审查 PR，不自动合并或发布。
+仓库外证据入口为 `C:/Users/dlivx/AppData/Local/Temp/lyrel-236/` 下的 `final-product-workloads.json`、`final-product-ssh-and-ime.json`、`final-owner-acceptance.json`、`final-paired-fixture-identities.json`、`final-reference-surface-236.json`、`integrated-windows-workspace.log`、`integrated-linux-tests.log` 和 `package-final-fcdc7c8a/package-evidence.json`。首次完整 hosted run 为 [42827800654](https://github.com/dlivxpr/lyrel/actions/runs/42827800654)，颜色快捷键和折叠资源修正后的状态由 [PR #246 的 checks](https://github.com/dlivxpr/lyrel/pull/246/checks) 按精确 commit 记录。实际工具失败、初次断言失败和不匹配参考均保留，不回填为成功。负责人后续明确以 macOS CI 通过作为本轮门槛，不再要求额外实机验收，并授权全部工作与 CI 完成后直接合并至 `main`、清理本会话中间分支／worktree 和关闭相关工单；这不把未执行的 macOS 产品实窗、系统 IME、实际安装或完整跨平台组合改记为已测试，也不授权发布。
 
 
 

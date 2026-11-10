@@ -90,7 +90,7 @@ pub(super) fn lifecycle(cx: &mut TestAppContext) {
     use super::super::super::test_host::{FileHost, canonical_tempdir};
     let remote = canonical_tempdir();
     let path = remote.path().join("diagram.md");
-    let original = "\u{feff}# Diagram\r\n\n```mermaid\r\nflowchart TD\nA[Start] --> B[Done]\r\n```\n\nKEEP  \r\n";
+    let original = "\u{feff}# Diagram\r\n\n```mermaid\r\nflowchart TD\nA[Start] --> B[Done]\r\n```\n\n# Next\nKEEP  \r\n";
     std::fs::write(&path, original.as_bytes()).unwrap();
     let host = FileHost::mapped(HostId(242), remote.path());
     let (app, mut context, _streams) = harness_with_tabs(cx, 1);
@@ -236,6 +236,38 @@ pub(super) fn lifecycle(cx: &mut TestAppContext) {
             view.document().read(cx).encode().unwrap(),
             expected.as_bytes()
         )
+    });
+    reopened.update_in(&mut context, |view, window, cx| {
+        view.select_range(0..0, cx);
+        view.focus_handle(cx).focus(window, cx);
+    });
+    settle(&mut context);
+    let next = reopened.read_with(&context, |view, _| view.text().find("# Next").unwrap());
+    let expanded = reopened.read_with(&context, |view, _| {
+        view.range_to_bounds(&(next..next)).unwrap()
+    });
+    context.dispatch_action(lyrel_markdown_editor::ToggleHeadingDisclosure);
+    settle(&mut context);
+    reopened.read_with(&context, |view, cx| {
+        let heading = view.range_to_bounds(&(0..0)).unwrap();
+        let following = view.range_to_bounds(&(next..next)).unwrap();
+        assert!(
+            following.top() <= heading.bottom() + px(2.),
+            "folded heading must hide its loaded diagram: heading={heading:?}, next={following:?}"
+        );
+        assert_eq!(
+            view.document().read(cx).encode().unwrap(),
+            expected.as_bytes()
+        );
+    });
+    app.read_with(&context, |app, _| {
+        assert!(!app.active_buffer().unwrap().dirty)
+    });
+    context.dispatch_action(lyrel_markdown_editor::ToggleHeadingDisclosure);
+    settle(&mut context);
+    reopened.read_with(&context, |view, _| {
+        let following = view.range_to_bounds(&(next..next)).unwrap();
+        assert!((following.top() - expanded.top()).abs() <= px(1.));
     });
 }
 

@@ -3257,6 +3257,21 @@ fn shape_document(
             y_acc += tp + bp + out.heights[idx - 1] * out.wrap_rows[idx - 1] as f32;
         }
 
+        // Folded section visibility takes precedence over resource widgets.
+        // Keep fence tracking intact for source rows omitted from the layout.
+        if alert_folds
+            .iter()
+            .any(|r| r.contains(&idx) && idx != r.start)
+        {
+            if line.trim_start().starts_with("```") {
+                in_fence = !in_fence;
+            }
+            out.push_placeholder(window, base_font_size, wrap_width, px(0.), None, None, 1);
+            line_start = line_end + 1;
+            alert_run = None;
+            continue;
+        }
+
         // A ready mermaid block renders as its diagram (on the first line) with the
         // rest of the block collapsed — bypassing the normal per-line handling. Its
         // ``` fences still toggle `in_fence` so later code blocks track correctly.
@@ -3313,18 +3328,6 @@ fn shape_document(
             && let Some(h) = embed_view.and_then(|f| f(inner).map(|(_, h)| h))
         {
             out.push_placeholder(window, base_font_size, wrap_width, h, None, None, 1);
-            line_start = line_end + 1;
-            continue;
-        }
-
-        // A folded callout's body lines collapse (height 0); its marker line
-        // falls through to normal handling, painting the label + chevron. The
-        // caret entering the region reveals it (filtered above).
-        if alert_folds
-            .iter()
-            .any(|r| r.contains(&idx) && idx != r.start)
-        {
-            out.push_placeholder(window, base_font_size, wrap_width, px(0.), None, None, 1);
             line_start = line_end + 1;
             continue;
         }
