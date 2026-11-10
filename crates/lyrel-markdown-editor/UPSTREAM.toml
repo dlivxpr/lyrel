@@ -3,6 +3,7 @@ repository = "https://github.com/packetThrower/zorite"
 revision = "9f069c73a56b06efc84fb7abb700beb50083c827"
 editor_version = "0.11.3"
 bidi_version = "0.1.1"
+formula_version = "0.4.1"
 license = "MIT"
 copyright = "Copyright (c) 2026 Will Lehnertz"
 maintainer = "Lyrel"
@@ -14,7 +15,10 @@ formula_import_owner = "#241"
 # 移除加载时公式规范化；保留超长 nowrap 行有界视觉布局；未配置 Host 控件不伪装可用。
 # prepaint 复用当前行索引；viewport band 变化时按需补帧，避免远跳后的可见正文保持空白。
 # document.rs、presentation.rs 为 Lyrel 原创适配；文件 codec 属于独立 Apache-2.0 lyrel-text。
-# 未导入 Zorite GPL 应用层、notebook 数据库、独立只读 Markdown renderer 或公式 GUI。
+# 公式结构源导入 src/math；Lyrel 原创 markdown_formula Host 负责 seat、版本、range commit、菜单与返焦。
+# GUI 仅 GPUI Kit/Fast；GUI-free RaTeX 0.1.15 使用正式 registry，未导入 GPL 应用层或独立 Markdown renderer。
+# 本地公式适配：严格 AST 保真检查、未修改树不序列化、原始定界符/body-only 提交、Escape 取消；
+# EntityInputHandler 预编辑/candidate geometry、Kit Button、本地化命令与原生菜单；NBSP 保持图片/公式 wrap atom。
 
 [[source]]
 upstream = "crates/zorite-editor/src/lib.rs"
@@ -50,3 +54,48 @@ sha256 = "bae9205267cd389a9d1703c9f1051c4d21009829c090d63822f44b6e3645510d"
 upstream = "crates/gpui-bidi/src/shaped.rs"
 local = "src/bidi/shaped.rs"
 sha256 = "5ec10f93a2724f2f4ddfb9ab15c83379b1540e9ab5897348d6c5ed490665a36e"
+
+[[source]]
+upstream = "crates/ratex-gpui/src/lib.rs"
+local = "src/math/mod.rs"
+sha256 = "f23adc020f99edd6b2066412f56b793f70560bdcb20f99a5e7e734a149dada3f"
+
+[[source]]
+upstream = "crates/ratex-gpui/src/render.rs"
+local = "src/math/render.rs"
+sha256 = "d73990f22fadd411a6c88b883390b516857a6a496666dab5329e9014a040d563"
+
+[[source]]
+upstream = "crates/ratex-gpui/src/editor/mod.rs"
+local = "src/math/editor/mod.rs"
+sha256 = "b840d917c828c6ec0ed6dd20ebd51b912c73adc26b6fff678fed8e4d9843da6e"
+
+[[source]]
+upstream = "crates/ratex-gpui/src/editor/model.rs"
+local = "src/math/editor/model.rs"
+sha256 = "1f479f2e2ff281009821357d5f752ecf349d2e4fd9c2734c45ac36e17579e2c8"
+
+[[source]]
+upstream = "crates/ratex-gpui/src/editor/latex.rs"
+local = "src/math/editor/latex.rs"
+sha256 = "c9ae8c3d0839b8ce5072927b03dd7adf960d59d71cbbfeaff5e388d19452a2cc"
+
+[[source]]
+upstream = "crates/ratex-gpui/src/editor/cursor.rs"
+local = "src/math/editor/cursor.rs"
+sha256 = "da87ca14c2a9b2b52015dad8b63936bcfc81b76c6af62a6c84ee8b61e04dc4f0"
+
+[[source]]
+upstream = "crates/ratex-gpui/src/editor/geometry.rs"
+local = "src/math/editor/geometry.rs"
+sha256 = "153d156d25cd16c8a72d82cddd23c2b4ead4002fcaa88fdfac7bfdcc107a3268"
+
+[[source]]
+upstream = "crates/ratex-gpui/src/editor/input.rs"
+local = "src/math/editor/input.rs"
+sha256 = "5f2c02406662cf175e84e1ba2cdd652ebd8c557e256af91c4a01ed15657abe70"
+
+[[source]]
+upstream = "crates/ratex-gpui/src/editor/view.rs"
+local = "src/math/editor/view.rs"
+sha256 = "9750bbe8006219b932a59c4815dfd42a3e9071dd05a9afb499b9e7c393069f1f"

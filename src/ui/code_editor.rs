@@ -32,6 +32,7 @@ pub(crate) mod commands;
 mod document_input;
 pub(crate) mod markdown;
 mod markdown_search;
+mod markdown_formula;
 mod text;
 use buffers::Loaded;
 use document_input::{EditorInput, MarkdownPresentations};

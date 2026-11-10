@@ -2695,7 +2695,7 @@ fn shape_inline_math(
     if spans.is_empty() || em <= 0. {
         return (disp, runs, map, Vec::new());
     }
-    let space_w = f32::from(measure_width(window, " ", base_font, fs)).max(1.);
+    let space_w = f32::from(measure_width(window, "\u{a0}", base_font, fs)).max(1.);
     let scale = f32::from(fs) / em;
     let mut formulas: Vec<(Range<usize>, usize)> = Vec::new();
     let mut imgs: Vec<(Arc<RenderImage>, Pixels, Pixels, SharedString)> = Vec::new();
@@ -2776,7 +2776,7 @@ fn shape_inline_images(
     if spans.is_empty() {
         return (disp, runs, map, Vec::new());
     }
-    let space_w = f32::from(measure_width(window, " ", base_font, fs)).max(1.);
+    let space_w = f32::from(measure_width(window, "\u{a0}", base_font, fs)).max(1.);
     let mut places: Vec<(Range<usize>, usize)> = Vec::new();
     let mut imgs: Vec<(Arc<RenderImage>, Pixels, Pixels)> = Vec::new();
     for (full, src) in spans {

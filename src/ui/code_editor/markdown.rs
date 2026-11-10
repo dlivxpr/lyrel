@@ -43,5 +43,5 @@ pub(super) fn configure(editor: &mut EditorState, cx: &mut Context<EditorState>)
 mod foundation;
 #[cfg(feature = "native-markdown-tests")]
 pub(crate) fn native_cases() -> impl Iterator<Item = crate::native_markdown::Case> {
-    foundation::native_cases()
+    foundation::native_cases().chain(super::markdown_formula::native_cases())
 }
