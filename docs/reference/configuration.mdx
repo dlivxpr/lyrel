@@ -100,7 +100,7 @@ description: "lyrel 读取的每个配置键、类型及默认值。"
 
 `.md`、`.markdown` 默认使用 Zorite-derived native Markdown 编辑器；live/source 共用文档与 history，`ToggleDocumentPreview` 保留。`.mdx` 为 source-only，不恢复旧 rich component 系统。旧 `editor_markdown_preview` 键仍按未知键忽略；没有替代设置、只读预览偏好或双编辑器切换开关。当前源码导入与各 Host 能力的交付/验收状态见[编辑器说明](/window/side-panel#markdown-editor-design)。
 
-“新建 Markdown 文档”（`EditorNewMarkdownFile`）从开始创建 native 文档，首次另存为建议 `.md`。普通文本新建与终端 scrollback 导出不自动转换。新实现的图片资源与外部 HTTP(S) 策略由 #238 通过实际 Host 接线完成；不将旧实现的图片加载记录作为新 provider 已交付的证据。
+“新建 Markdown 文档”（`EditorNewMarkdownFile`）从开始创建 native 文档，首次另存为建议 `.md`。普通文本新建与终端 scrollback 导出不自动转换。图片插入／截图粘贴／拖入需先保存文档，由所属Host写入唯一命名的同级assets；HTTP(S)图片在资源行主动加载前不请求，加载由本机client发出且不跟随重定向。没有自动联网配置或旧provider回退。新接线的实际native／local／SSH结果按当前候选分别记录，不沿用旧实现证据。
 
 <a id="terminal"></a>
 ## 终端

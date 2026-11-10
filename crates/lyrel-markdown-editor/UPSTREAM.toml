@@ -21,6 +21,8 @@ formula_import_owner = "#241"
 # GUI 仅 GPUI Kit/Fast；GUI-free RaTeX 0.1.15 使用正式 registry，未导入 GPL 应用层或独立 Markdown renderer。
 # 本地公式适配：严格 AST 保真检查、未修改树不序列化、原始定界符/body-only 提交、Escape 取消；
 # EntityInputHandler 预编辑/candidate geometry、Kit Button、本地化命令与原生菜单；NBSP 保持图片/公式 wrap atom。
+# #238：Lyrel images/links Host 编排；普通 release 单击与拖选隔离；完整wrapped link hitboxes；
+# 无Host wiki/embed源码保留；资源意图/provider失效接口、revision保护的图片resize。
 # writing.rs 为 Lyrel 原创 Host request seam；紧凑 disclosure 与原生格式控件仍沿用 MIT editor。
 # 内容 inset 在 scroll owner 内，公式/嵌入 overlay 共享 inset 后的坐标根；prose/list/quote spacing 随字体缩放。
 # 自定义颜色原子替换同一源码范围；主题 provider 派生当前 semantic style，不重置模式或 history。

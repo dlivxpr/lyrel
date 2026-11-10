@@ -228,6 +228,18 @@ primary/secondary 各自拥有 seat/focus/candidate/layout，只共享 Document�
 
 生产消费者位于 `src/ui/code_editor/markdown_formula/tests.rs`，原生入口包括完整 `400034 B` mixed-tall fixture、hard-break/fragment、双视图、提交/取消、普通历史及 mapped Host 保存重开。源码交付不表示新 renderer、系统 IME、固定 Zorite 实窗对照或 macOS 已通过；这些由本轮集中验收另行记录。
 
+#### 图片与普通链接（#238）
+
+文档插入命令的图片项（`/image`，`InsertImage` Action）打开本机文件面板；不为普通正文增加常驻的整行图片工具栏。系统剪贴板中的截图／图片文件和拖入的本机图片使用同一导入路径。输入在 worker 读取，资源由文档所属本地或 SSH Host 写入同级 `assets/image-<UUID>.<extension>`，使用 create-new 防止覆盖已有附件。未命名文档显示“插入图片前，请先选择文档保存位置”，不猜目录、不写入当前终端的机器。导入期间改变正文或原选区，完成后不在新位置插入链接，并显示说明；保存的资源保留在原 Host，Undo 不删除资源，以便 Redo 恢复。hover目标以不影响正文布局的浮层显示。
+
+图片在文档内显示，单击打开原生预览；预览提供放大、缩小、适配与双向滚动，`Esc` 关闭并恢复原编辑器焦点。图片右下角可拖动调整宽度，松开只提交该图片的 `{width=N}`；这是同一文档的一次可撤销修改。拖动期间其他呈现改变文档 revision 时不提交过期的图片行。live/source、普通保存和关闭重开继续使用同一原文／表示／history。
+
+文件图片只通过 owning Host 读取；找不到、无权限、格式或资源超限会显示具体失败与重试，原 Markdown 不改写。HTTP(S) 图片默认不发请求；资源行展示目标与策略，主动加载后才由本机 client 请求该 URL，遵循 `http_proxy`，不跟随重定向。SVG 使用 native Rust rasterizer，拒绝所有嵌套文件／网络／data 图片引用；不执行 JavaScript。每次输入最多32 MiB，单图最多1600万像素，文档bitmap缓存最多256 MiB。
+
+普通相对链接按文档所属 Host 和目录解析；普通单击在松开时打开，拖选、Shift扩选和双击不触发导航。悬停显示实际目标，所有 wrapped 片段均有对应命中区。修改链接文字可从旁边用方向键进入，或使用 Control点击后编辑。外部只允许 HTTP(S) 与 mailto；SSH 文档不会将 file URL、Windows／UNC路径交给本机。`[[wiki]]`、`![[embed]]`、tag和block-reference不建立笔记本、页面或知识库，保持源码可访问，不暴露无目标导航。
+
+这部分是生产源码与消费者的交付契约，不是新功能已通过实窗或真实SSH的声明。完整native runner、本地／真实SSH附件保存与独立远端读回、同名本地诱饵、预览／resize／主题缩放仍须由集成候选记录实际命令、结果与平台；历史#204记录不转移。
+
 
 
 #### 历史 #204 支持范围与文本布局保护

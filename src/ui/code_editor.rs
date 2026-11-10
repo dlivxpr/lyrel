@@ -124,6 +124,7 @@ pub(crate) struct OpenFile {
     pub(crate) host: SharedHost,
     pub(crate) input: EditorInput,
     presentations: MarkdownPresentations,
+    markdown_resources: Option<Entity<markdown::images::ImageHost>>,
     pub(crate) dirty: bool,
     saved: Fingerprint,
     /// Ordinary code retains its codec metadata here. Markdown owns it in its document.
@@ -1203,6 +1204,12 @@ impl LyrelApp {
         self.editor
             .nav
             .track_buffer(id, input.read(cx).text().clone());
+        if let Some(source) = input.markdown() {
+            let app = cx.entity().downgrade();
+            let resources = cx.new(|cx| markdown::images::ImageHost::new(app, id, source, window, cx));
+            markdown::images::ImageHost::attach(&resources, source, cx);
+            self.editor.buffers.get_mut(id).unwrap().markdown_resources = Some(resources);
+        }
     }
 
     /// Re-derives whether a buffer differs from what is on disk, after an
@@ -2645,6 +2652,9 @@ impl LyrelApp {
                     code.split.as_ref().expect("second editor group").id
                 };
                 let view = f.presentations.view(input, tab, group, window, cx);
+                if let Some(resources) = &f.markdown_resources {
+                    markdown::images::ImageHost::attach(resources, &view, cx);
+                }
                 v_flex()
                     .id(("markdown-presentation", view.entity_id()))
                     .min_w_0()
@@ -2656,6 +2666,9 @@ impl LyrelApp {
                     })
                     .text_size(rems(1.))
                     .text_color(cx.theme().foreground)
+                    .when(!view.read(cx).is_source_only(), |body| {
+                        body.children(f.markdown_resources.as_ref().map(|resources| markdown::images::controls(resources, &view, cx)))
+                    })
                     .child(markdown::table_code::render_controls(&view))
                     .children(f.presentations.search(&view))
                     .child(

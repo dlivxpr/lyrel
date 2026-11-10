@@ -44,7 +44,7 @@ Apple 没有为此定义用途说明字符串键。访问 `~/Library/Mail`、
 | **更新检查** | 启动时及之后每六小时分页请求本项目 GitHub releases API。默认会后台下载匹配的新 stable 包及校验和，安装仍需明确同意。`check_for_updates: false` 关闭自动检查，`auto_download_updates: false` 关闭后台下载。缺少安装包时不会回退到上游下载。 |
 | **远程服务器安装** | 为你连接的计算机下载 `lyrel-server` 二进制文件；对于 WSL，则复制安装包中已自带的文件。缺少安装包时不会回退到上游下载。 |
 | **GitHub 标签页** | 仅在你使用时：向 `api.github.com` 请求当前聚焦窗格所在仓库的议题、拉取请求、评论和已更改文件。即使仓库位于远程工作区，请求也会从本机发出；当你通过 `gh` 登录时，请求会携带 GitHub CLI 的令牌。 |
-| **原生 Markdown 编辑器** | #237 的新 editor 基础不安装网络图片 provider，不因打开/聚焦/切换模式而请求外部图片。#238 完成资源 Host 接线时须保持显式外部加载策略，相对文件与截图/拖放写入始终绑定文档所属 Host，不转成本机同名路径。当前状态见[编辑器说明](/window/side-panel#markdown-editor-design)。 |
+| **原生 Markdown 编辑器** | 不因打开、聚焦或切换模式而请求外部 HTTP(S) 图片。资源行注明目标；主动加载后才从本机 client 请求该 URL，遵循 `http_proxy`，拒绝重定向。相对文件读取及截图／拖放附件写入始终绑定文档所属 Host，不回退本机同名路径。当前交付与验收边界见[编辑器说明](/window/side-panel#markdown-editor-design)。 |
 | **其他一切** | 不发送任何数据。没有遥测、没有分析，也无需账户。 |
 
 以上所有操作均遵循 `http_proxy` 设置。[更新 →](/reference/updates#proxies)
@@ -55,7 +55,7 @@ GitHub 标签页本身不存储任何凭据。每次连接时，它都会从 `GH
 
 仓库重命名或转移后，GitHub API 的同域重定向会保留授权；重定向到其他域名或从 HTTPS 降级到 HTTP 时，不会转发令牌。
 
-新 native editor 的资源接线属于 #238：本地/SSH 文档的文件策略与 GitHub 标签页独立，不能套用 GitHub 托管图片的自动加载规则。外部 HTTP(S) 请求必须由明确操作授权，注明本机 client 来源及重定向；状态/失败可见，SVG 内部文件/网络引用不得随顶层授权递归加载。这些是接线约束，不表示 #237 已提供资源 UI。
+native editor 的文件图片策略与 GitHub 标签页独立，不套用 GitHub 托管图片自动加载规则。HTTP(S)授权按当前文档中实际显示的资源URL记录；删除资源、文档换路径或关闭后失效。SVG 顶层授权不授予嵌套文件、网络或data图片读取权限；资源解析器明确拒绝它们，失败可见。安全URL导航只允许HTTP(S)/mailto；SSH文件不交给本机默认应用。源码与自动化消费者不替代当前候选的真实网络／SSH／原生验收。
 
 #241/#242 完成公式与 Mermaid 的 native Rust rendering/结构编辑 Host 接线，不引入 Node.js/Chromium 或项目 JavaScript；渲染不得自动获取文件/网络资源。MDX 项目组件、动态表达式、函数及 import/export 保留源码，不作为 React 执行。`.md`/`.markdown` 使用新 live/source 同文档，`.mdx` 为 source-only；完整离线/安全/跨平台结果按候选分别验证，历史实现的通过记录不转移到本次替换。
 
