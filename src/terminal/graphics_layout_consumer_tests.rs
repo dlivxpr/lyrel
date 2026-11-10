@@ -57,14 +57,18 @@ fn graphics_assert_production_paint_at(
     cx: &mut TestAppContext,
     size: TermSize,
 ) {
-    use std::sync::atomic::Ordering;
     use gpui_kit::test::TestWindowExt as _;
+    use std::sync::atomic::Ordering;
     let (target, cols, rows, scale) = graphics_window_geometry(window, view, cx, size);
     // Preserve the requested grid through the actual prepaint sizing callback;
     // otherwise a default test window would silently resize the real daemon.
     cx.simulate_window_resize(window, target);
     let previously_painted = view.update(cx, |view, _| {
-        let mut images = view.grid_snap.as_ref().map(|snap| snap.images.to_vec()).unwrap_or_default();
+        let mut images = view
+            .grid_snap
+            .as_ref()
+            .map(|snap| snap.images.to_vec())
+            .unwrap_or_default();
         // Reset both sides: frozen reading owns old leases, while a newly
         // decoded live resource may not have entered the previous frame yet.
         images.extend(graphics_visible_images(view));
@@ -75,7 +79,6 @@ fn graphics_assert_production_paint_at(
         for image in images {
             image.painted.store(false, Ordering::Release);
         }
-        view.cell_geom = None;
         previous
     });
     window
@@ -92,44 +95,75 @@ fn graphics_assert_production_paint_at(
     graphics_recovery_wait_with(
         cx,
         std::time::Duration::from_secs(30),
-        |cx| view.read_with(cx, |view, _| {
-            let Some(geom) = view.cell_geom else { return false; };
-            let Some(snap) = view.grid_snap.as_ref() else { return false; };
-            if (geom.cols, geom.rows) != (cols, rows) {
-                return false;
-            }
-            // Reading mode intentionally presents a frozen picture, rather
-            // than the advancing live image map. Keep that existing contract.
-            if view.selection_scroll.reading.is_some() {
-                return true;
-            }
-            let term = view.terminal.term.lock();
-            if snap.held || term.synchronized_output() {
-                return false;
-            }
-            if snap.display_offset != term.display_offset() as i32 {
-                return false;
-            }
-            drop(term);
-            let images = graphics_visible_images(view);
-            images.len() == snap.images.len() && images.iter().zip(snap.images.iter()).all(|(live, presented)| {
-                live.placement == presented.placement
-                    && std::sync::Arc::ptr_eq(&live.painted, &presented.painted)
-                    && match (&live.data, &presented.data) {
-                        (Some(live), Some(presented)) => std::sync::Arc::ptr_eq(live, presented),
-                        (None, None) => true,
-                        _ => false,
-                    }
-                    && live.paint_bounds(geom.origin, geom.cell_width, geom.line_height, 0, snap.display_offset, scale)
-                        == presented.paint_bounds(geom.origin, geom.cell_width, geom.line_height, 0, snap.display_offset, scale)
+        |cx| {
+            window
+                .update(cx, |_, window, cx| window.render_frame(cx))
+                .unwrap();
+            view.read_with(cx, |view, _| {
+                let Some(geom) = view.cell_geom else {
+                    return false;
+                };
+                let Some(snap) = view.grid_snap.as_ref() else {
+                    return false;
+                };
+                if (geom.cols, geom.rows) != (cols, rows) {
+                    return false;
+                }
+                // Reading mode intentionally presents a frozen picture, rather
+                // than the advancing live image map. An ordered resize must first
+                // publish its relocated cells and graphics leases atomically.
+                if let Some(reading) = view.selection_scroll.reading.as_ref() {
+                    return !reading.relocating();
+                }
+                let term = view.terminal.term.lock();
+                if snap.held || term.synchronized_output() {
+                    return false;
+                }
+                if snap.display_offset != term.display_offset() as i32 {
+                    return false;
+                }
+                drop(term);
+                let images = graphics_visible_images(view);
+                images.len() == snap.images.len()
+                    && images
+                        .iter()
+                        .zip(snap.images.iter())
+                        .all(|(live, presented)| {
+                            live.placement == presented.placement
+                                && std::sync::Arc::ptr_eq(&live.painted, &presented.painted)
+                                && match (&live.data, &presented.data) {
+                                    (Some(live), Some(presented)) => {
+                                        std::sync::Arc::ptr_eq(live, presented)
+                                    }
+                                    (None, None) => true,
+                                    _ => false,
+                                }
+                                && live.paint_bounds(
+                                    geom.origin,
+                                    geom.cell_width,
+                                    geom.line_height,
+                                    0,
+                                    snap.display_offset,
+                                    scale,
+                                ) == presented.paint_bounds(
+                                    geom.origin,
+                                    geom.cell_width,
+                                    geom.line_height,
+                                    0,
+                                    snap.display_offset,
+                                    scale,
+                                )
+                        })
             })
-        }),
-        |cx| view.read_with(cx, |view, _| format!(
+        },
+        |cx| {
+            view.read_with(cx, |view, _| format!(
             "production presentation did not commit current {cols}x{rows} resources; held={:?}; synchronized={}; graphics={}",
             view.grid_snap.as_ref().map(|snap| snap.held),
             view.terminal.term.lock().synchronized_output(),
             view.terminal.images().recovery_diagnostics(),
-        )),
+        ))
+        },
     );
     window.update(cx, |_, window, cx| {
         let surface = window.find("terminal-surface").bounds();
