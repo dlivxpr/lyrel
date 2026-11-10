@@ -5632,11 +5632,15 @@ impl Render for EditorState {
             .on_scroll(cx.listener(Self::on_scroll_wheel))
             .child(
                 div()
+                    .w_full()
+                    .min_w_0()
                     .px(gpui_kit::rems(self.document_inset.0))
                     .py(gpui_kit::rems(self.document_inset.1))
                     .child(
                         div()
                             .relative()
+                            .w_full()
+                            .min_w_0()
                             .child(EditorElement { editor: cx.entity() })
                             .children(self.embed_overlays(window))
                             .children(self.editing_block_overlay())
