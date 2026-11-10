@@ -109,10 +109,24 @@ pub(super) fn lifecycle(cx: &mut TestAppContext) {
         )
     });
     first.update_in(&mut context, |view, _, cx| view.select_range(0..0, cx));
+    first.read_with(&context, |view, _| {
+        assert_eq!(
+            view.selected_range(),
+            0..0,
+            "explicit selection replaces the prior go-to target"
+        );
+    });
     app.update_in(&mut context, |app, window, cx| {
         assert!(app.editor_split(window, cx));
     });
     settle(&mut context);
+    first.read_with(&context, |view, _| {
+        assert_eq!(
+            view.selected_range(),
+            0..0,
+            "split frame callbacks must preserve the first view's newer selection"
+        );
+    });
     let second = app.read_with(&context, |app, _| {
         app.active_editor_input()
             .unwrap()
@@ -126,6 +140,13 @@ pub(super) fn lifecycle(cx: &mut TestAppContext) {
         view.focus_handle(cx).focus(window, cx);
     });
     settle(&mut context);
+    first.read_with(&context, |view, _| {
+        assert_eq!(
+            view.selected_range(),
+            0..0,
+            "focusing the second view must not restore the first view's old go-to target"
+        );
+    });
     context.update(|window, cx| window.input("中🎉", cx));
     settle(&mut context);
     app.read_with(&context, |app, cx| {

@@ -516,6 +516,11 @@ fn place_cursor(
     cx: &mut gpui_kit::App,
 ) {
     input.set_cursor_position(position, window, cx);
+    // Native Markdown retains a view-local reveal request until layout paints.
+    // Replaying its selection on later frames would overwrite newer navigation.
+    if input.markdown().is_some() {
+        return;
+    }
     // A target near the top of the file scrolls nowhere and is already done;
     // so is one that has landed. Either way this stops.
     if left <= 1 || input.read(cx).scroll_offset().y != px(0.) {

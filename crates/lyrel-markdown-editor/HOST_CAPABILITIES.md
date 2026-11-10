@@ -27,7 +27,7 @@
 | --- | --- | --- |
 | 共享源文、revision、history、独立 view 与 composition | Lyrel 适配，#237 | 两个真实工作台 presentation 编辑/Undo/Redo；独立选择、scroll、几何；切换/关闭 composition owner 后继续输入、保存。 |
 | open/edit/live-source/dirty/save/close/reopen | Lyrel Host，#237 | BOM + 混合 CRLF/LF 文件 untouched save；第二视图输入、生产 host range action、Undo/Redo、保存/重开；同名 mapped Host 文件不被修改。 |
-| 最小真实行列、go-to-line | Lyrel 工作台，#237 | 状态来自当前 presentation 的共享源文；Unicode 跳转、选择与变更后的行列一致，不为查询复制全文。 |
+| 最小真实行列、go-to-line | Lyrel 工作台，#237 | 状态来自当前 presentation 的共享源文；Unicode 跳转、选择与变更后的行列一致，不为查询复制全文。Markdown 跳转只设置一次选择，由其 view-local reveal request 等待布局；不复用普通 Code InputState 的跨帧光标重放，避免覆盖用户后续选择或分屏后的独立状态。 |
 | 本文宽度、字体层级、段距、padding、theme、zoom、disclosure 占地 | 上游排版 + Lyrel shell，#244 | 样式接入在 #237；最终对照固定参考的 ordinary 文档，在窄/宽实窗连续书写、导航和滚动。#237 不将未对照的样式配置称为视觉一致。 |
 | 快捷键、caret-local 标记显露、选择、列表/任务/标题/callout | 上游保留，#244 | `bind_keys` 使用当前 Kit 类型；基础输入由 #237 验证。完整格式/折叠/转换/连续编辑与 Zorite 对照归 #244。旧“光标处仍隐藏全部标记”约束已被替代。 |
 | 插入/slash menu、construct picker、table insertion | Lyrel Host + 上游命令，#239/#244 | #239 完成真实 table picker 与结构编辑；#244 完成通用插入/slash 和文档上下文。不能把源文插入 API 当成已提供 picker。 |
