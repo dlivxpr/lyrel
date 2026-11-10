@@ -35,8 +35,8 @@
 | 插入/slash menu、construct picker、table insertion | Lyrel Host + 上游命令，#239/#244 | #239 完成真实 table picker 与结构编辑；#244 完成通用插入/slash 和文档上下文。不能把源文插入 API 当成已提供 picker。 |
 | 表格行列、对齐、样式、导航、resize、code fence 语言/复制/高亮 | 上游保留 + Lyrel Host，#239 | native hit-testing、跨单元格输入/Undo、完整宽表；安装真实 code highlighter，验证 code language/copy 控件。 |
 | 文字/高亮预设颜色与自定义颜色 | 上游保留 + Lyrel Host，#244 | 预设源文操作已导入；自定义 picker 待接线。仅在真实 Host 订阅 `PickColor` 后启用 `set_host_custom_colors(true)`；取消、提交和 Undo 均验证。 |
-| 普通相对/外部链接、hover、caret 附近的源码访问 | 上游行为 + Lyrel Host，#238 | 采用 Zorite 的普通单击打开语义，不保留旧 Ctrl+Click-only。在真实 OpenLink/HoverLink 接线前不启用 `set_host_link_navigation(true)`，不显示无效手形控件。相对路径绑定文档 Host，延迟完成不重定向活动组；失败可见且不丢编辑。 |
-| 图片插入/paste/drop、资源、preview、resize/zoom | 上游保留 + Lyrel Host，#238 | 当前无伪造 bitmap/provider；源码 intact。完成 owning local/SSH Host 读写、唯一资源命名、可见失败、延迟资源隔离、输入/Undo/save/reopen 与 native 预览几何。 |
+| 普通相对/外部链接、hover、caret 附近的源码访问 | 上游行为 + Lyrel Host，#238 | `markdown::links` 通过当前文档 Host/path 解析普通链接；`ImageHost::attach` 在每个 presentation 订阅 OpenLink/HoverLink 后启用导航。普通单击在 release 激活；拖动取消待激活目标，Shift/Control 保留选择/编辑。wrapped 起止使用各自 affinity，并覆盖所有中间视觉行；hover 显示实际目标。异步目标捕获 tab/group、BufferId、revision 和 owning epoch，失败可见。外部仅允许 HTTP(S)/mailto；SSH 不接受 file URL、Windows/UNC 路径。源码内 wiki/tag/block-reference 不安装导航或 hover。源码和消费者已接线；native、实窗与真实 SSH 结果由集成者记录，不由本表推定通过。 |
+| 图片插入/paste/drop、资源、preview、resize/zoom | 上游保留 + Lyrel Host，#238 | `markdown::images::ImageHost` 持有 owning Host bitmap cache、明确 loading/blocked/error、每 view 事件订阅与路径 generation。本机文件面板/OS drop/截图经 worker 读取输入，唯一 UUID 名称与 create-new 写入 owning Host 的同级 assets；未保存文件显示 needs-save，不创建目录。插入/resize 走同一 Document history；Undo 保留资源供 Redo，晚到 source/selection 不符不插入。单击真实 block/inline 图片打开 native preview，提供键盘可达 zoom/fit 与滚动，角部 drag 只改 width 属性且 revision 变化取消提交。HTTP(S) 默认不请求，逐资源主动加载由本机 client 发出，遵循 proxy，拒绝重定向和 SVG 的所有嵌套资源。输入上限32 MiB、单图1600万像素、文档bitmap256 MiB；失败保留源码与重试。 |
 | inline/display math 渲染、二维结构编辑 seat/menus/commit/cancel | 指定 MIT 公式 GUI 导入 + Lyrel Host，#241 | #237 不导入公式 GUI。渲染 provider 未配置时允许原文直接编辑，不让 arrow/click 被未接线结构编辑事件吞掉。#241 安装真实 renderer 与结构编辑器，并经同一 Document 修改协议提交。 |
 | Mermaid cache/render/entry/refresh/error/stale-result | Lyrel Host，#242 | 源码可访问；#242 完成真实 native 图、错误/恢复与布局变化，不以 parser 成功或无限 loading 冒充可用。 |
 | status/search/outline、tabs/groups、MDX source-only、focus/layout | Lyrel 工作台，#240 | #237 已建立所有权和最小状态/跳转；#240 完成完整导航/search/outline 与多视图布局消费者。MDX 不恢复旧 rich component 系统。 |
@@ -58,6 +58,7 @@
 - GUI-free codec：`cargo test --locked -p lyrel-text`。
 - 工作台：`cargo test --locked -p lyrel --lib`；`src/ui/code_editor/markdown/foundation.rs` 经生产 lifecycle 运行 shared Host 与 composition 场景，不依赖旧 Markdown 内核。
 - native 字体目标：`cargo test --locked -p lyrel --features native-markdown-tests --test native_markdown -- --nocapture`。runner 将真实 text system 接入 deterministic test platform，不创建产品 OS 窗口；test settle 须通过 SDK `simulate_next_frame` 执行平台帧回调，pointer move 后再 down/up，不能仅以 `render_frame` 冒充完整输入/帧生命周期。它验证 native 字体几何和生产消费者，不替代实际产品窗口、系统中文 IME 或真实 SSH。
+- #238 工作台窄入口：`cargo test --locked -p lyrel --lib ui::code_editor::markdown::resources_tests`；native registry 包含完整 owning-Host paste/history/save-reopen、三项 wrapped link 消费者与 native preview/zoom/resize。`#241` 的完整400034 B mixed-tall 及 hard-break formula 消费者同时使用真实 ImageHost，不能以无bitmap源文测试代替。所有新命令在分票阶段按约定未执行，Windows 实窗、真实 local/SSH、macOS 与最终checks由集成者验收。
 - Linux：`cargo test --locked --workspace --exclude lyrel --exclude lyrel-markdown-editor --all-features`；`lyrel-text` 可参与，GUI crate 不被选入 headless 范围。
 - Release 输入/导航/scroll/Undo-memory、系统 IME、真实 SSH 与跨平台结果由集成者保存精确 commit、固定 fixtures、执行序列、display 条件、命令、退出码和未验前提。早先实现的历史验收不自动转移到本源码导入。
 
@@ -72,10 +73,10 @@
 | baseline selector 后缀 | 处理与仍有效的验收边界 | 所属票 |
 | --- | --- | --- |
 | `source::review_tests::native_down_visits_each_soft_wrapped_row_without_skipping` | 已迁移至 native navigation：逐视觉行 Down/Up 与 wrap-boundary 两侧往返，不允许跨行跳过。 | #237 |
-| `source::review_tests::first_soft_wrapped_link_grapheme_hovers_edits_and_opens` | 保留行为，随新 Host link/hover 接线迁移；首个 wrapped grapheme 的命中/输入/open。 | #238 |
-| `source::review_tests::fragment_tail_link_grapheme_hovers_edits_and_opens` | 保留行为，迁移分片末尾 glyph 的 hit-testing、编辑和打开，不按旧投影内部类型断言。 | #238 |
+| `source::review_tests::first_soft_wrapped_link_grapheme_hovers_edits_and_opens` | 已迁移源码到 `resources::first_soft_wrapped_link_grapheme_hovers_edits_and_opens`：首个 downstream glyph 的 hover、真实修改/Undo、普通单击与 owning Host 打开。待最终 native 执行，不宣称通过。 | #238 |
+| `source::review_tests::fragment_tail_link_grapheme_hovers_edits_and_opens` | 已迁移源码到 `resources::fragment_tail_link_grapheme_hovers_edits_and_opens`：分片末尾字形 hover、修改/Undo 和打开；不按旧 projection 内部类型断言。待最终 native 执行。 | #238 |
 | `source::review_tests::native_soft_wrap_caret_keeps_clicked_side_across_navigation_and_input` | 迁移：真实指针点击 wrap 两侧，箭头/输入/Undo 后 caret 不跳至另一侧。 | #237 |
-| `source::review_tests::native_modified_link_drag_retains_upper_wrap_anchor` | 旧 Ctrl+Click-only 激活契约退役；wrapped drag 选择锚点正确性仍保留，按 Zorite 普通单击链接和实际扩选方式验证。 | #238 |
+| `source::review_tests::native_modified_link_drag_retains_upper_wrap_anchor` | 旧 Ctrl+Click-only 激活契约退役；`resources::native_wrapped_link_drag_retains_upper_wrap_anchor` 恢复普通 link drag 的源锚点、选择替换/Undo 与不导航边界，单击激活另验。待最终 native 执行。 | #238 |
 | `source::review_tests::native_extreme_nowrap_line_keeps_pointer_selection_and_source_exact` | 迁移至 `foundation::zorite_foundation_complete_extreme_line_paint_caret_input_save_undo`；完整 2,523,166 B，不缩水为截断样本；保留指针/选择和原始源码条件。 | #237 |
 | `source::review_tests::native_aligned_table_pointer_and_selection_follow_content` | 表格仍有效：新列宽/居中/右对齐 native glyph 与 selection/hit-test 同位置，Undo 后一致；不由基础消费者代替。 | #239 |
 | `tests::table_presentation::table_presentation_drag_fit_scroll_edit_history_and_host_reopen` | 表格完整 drag/fit/scroll/edit/Undo/Host 保存重开迁移到新表格 UI；旧 inspector/menu id 不保留。 | #239 |

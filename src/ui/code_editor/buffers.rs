@@ -465,6 +465,7 @@ impl EditorBuffers {
             host,
             input,
             presentations: MarkdownPresentations::default(),
+            markdown_resources: None,
             dirty: false,
             saved,
             format: (!native_markdown).then_some(format),

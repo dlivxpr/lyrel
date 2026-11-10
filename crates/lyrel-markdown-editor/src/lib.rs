@@ -35,6 +35,8 @@
 pub mod bidi;
 mod document;
 mod presentation;
+mod resources;
+pub use resources::{InsertImage, LinkHit};
 pub use document::{Document, DocumentEvent, SourceEdit, SourceSnapshot};
 
 use gpui_kit::AppContext as _;
@@ -275,6 +277,7 @@ struct ImageResize {
     start_width: f32,
     start_x: Pixels,
     width: f32,
+    revision: u64,
 }
 
 /// The last edit's kind, for coalescing a run of edits into one undo step.
@@ -524,6 +527,10 @@ pub enum EditorEvent {
     /// An inline `![](src)` image was left-clicked — the host opens a full-size
     /// preview. The text is untouched.
     PreviewImage(SharedString),
+    /// The workbench imports clipboard attachments on the owning Host.
+    PasteAttachments(gpui_kit::ClipboardItem),
+    /// Empty paths requests the native image picker; drop paths are local OS paths.
+    InsertImages(Vec<std::path::PathBuf>),
     /// The selection menu's "custom color…" (`…`) swatch was clicked, on the
     /// highlight row (`highlight`) or the text-color row; `position` is the
     /// menu's window-space top-left, to anchor a picker at. The host shows its
@@ -770,6 +777,7 @@ pub struct EditorState {
     live_style: Option<SyntaxStyle>,
     source_only: bool,
     host_links: bool,
+    pending_link: Option<(SharedString, Point<Pixels>, u64)>,
     host_custom_colors: bool,
     placeholder: SharedString,
     /// Selection as a byte range; the caret is one end (see [`Self::cursor_offset`]).
@@ -1116,6 +1124,7 @@ impl EditorState {
             live_style: None,
             source_only: false,
             host_links: false,
+            pending_link: None,
             host_custom_colors: false,
             placeholder: SharedString::default(),
             selected_range: 0..0,
@@ -2969,6 +2978,13 @@ impl EditorState {
 
     fn paste(&mut self, _: &Paste, window: &mut Window, cx: &mut Context<Self>) {
         let item = cx.read_from_clipboard();
+        if let Some(item) = item.as_ref()
+            && item.entries().iter().any(|entry| matches!(entry,
+                gpui_kit::ClipboardEntry::Image(_) | gpui_kit::ClipboardEntry::ExternalPaths(_)))
+        {
+            cx.emit(EditorEvent::PasteAttachments(item.clone()));
+            return;
+        }
         // A copied FILE also carries its path as text; inserting that string
         // is never what a paste meant. Treat file and image clipboards as
         // not-ours: fall through so a host binding on the same keys
@@ -3345,6 +3361,7 @@ impl EditorState {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        self.pending_link = None;
         // A press on an image's corner grip starts a resize drag — this takes
         // precedence over placing the caret on the image row (which the press
         // would otherwise do). The image keeps its bounds; the drag previews a new
@@ -3355,6 +3372,7 @@ impl EditorState {
                 start_width: width,
                 start_x: event.position.x,
                 width,
+                revision: self.document.read(cx).revision(),
             });
             self.is_selecting = false;
             self.menu = None;
@@ -3506,7 +3524,7 @@ impl EditorState {
         // Left-click an inline image opens a full-size preview (host-shown).
         if !event.modifiers.shift
             && !event.modifiers.control
-            && let Some(src) = self.inline_image_at(event.position)
+            && let Some(src) = self.image_source_at(event.position)
         {
             cx.emit(EditorEvent::PreviewImage(src));
             return;
@@ -3523,41 +3541,10 @@ impl EditorState {
             && self.markdown_style.is_some()
             && self.host_links
         {
-            let offset = self.index_for_mouse_position(event.position);
-            let (row, _) = self.row_col(offset);
-            let start = self.line_starts()[row];
-            let line = &self.content[start..self.line_end(row)];
-            match markdown_syntax::link_at(line, offset - start) {
-                Some(markdown_syntax::LinkHit::Page(title)) => {
-                    cx.emit(EditorEvent::OpenWikiLink(title.into()));
-                    return;
-                }
-                Some(markdown_syntax::LinkHit::BlockRef(id)) => {
-                    cx.emit(EditorEvent::OpenWikiLink(format!("#^{id}").into()));
-                    return;
-                }
-                Some(markdown_syntax::LinkHit::Url(url)) => {
-                    cx.emit(EditorEvent::OpenLink(url.into()));
-                    return;
-                }
-                None => {}
-            }
-            // The reference-count badge painted over a hidden ` ^id` anchor:
-            // a click on its (replaced) range lists the referencers. Only when
-            // the anchor is hidden — with the caret on the line the raw text
-            // is revealed for editing and clicks place the caret as usual.
-            if self.row_col(self.selected_range.start).0 != row
-                && let Some((at, id)) = zorite_markdown::syntax::block_id(line)
-                && offset - start >= at
-                && self
-                    .markdown_style
-                    .as_ref()
-                    .and_then(|st| st.block_ref_count.as_ref().map(|f| f(id)))
-                    .unwrap_or(0)
-                    > 0
+            if let Some((_, markdown_syntax::LinkHit::Url(url))) = self.link_rects.iter()
+                .find(|(bounds, _)| bounds.contains(&event.position))
             {
-                cx.emit(EditorEvent::OpenWikiLink(format!("refs:^{id}").into()));
-                return;
+                self.pending_link = Some((url.clone().into(), event.position, self.document.read(cx).revision()));
             }
         }
         // A press on a table's hover "+" strip adds a row (below) or column (right).
@@ -3724,7 +3711,14 @@ impl EditorState {
         }
     }
 
-    fn on_mouse_up(&mut self, _: &MouseUpEvent, _: &mut Window, cx: &mut Context<Self>) {
+    fn on_mouse_up(&mut self, event: &MouseUpEvent, _: &mut Window, cx: &mut Context<Self>) {
+        if let Some((url, origin, revision)) = self.pending_link.take()
+            && (event.position.x - origin.x).abs() < px(4.)
+            && (event.position.y - origin.y).abs() < px(4.)
+            && revision == self.document.read(cx).revision()
+        {
+            cx.emit(EditorEvent::OpenLink(url));
+        }
         // End a gutter block drag: splice the block at the drop boundary.
         if let Some((bs, be, t)) = self.line_drag.take() {
             self.apply_line_drag(bs, be, t, cx);
@@ -3761,6 +3755,11 @@ impl EditorState {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.pending_link.as_ref().is_some_and(|(_, origin, _)|
+            (event.position.x - origin.x).abs() >= px(4.) || (event.position.y - origin.y).abs() >= px(4.))
+        {
+            self.pending_link = None;
+        }
         // Link under the pointer → `HoverLink` on change (a host shows a preview
         // card there). Painted boxes from the last frame, like the hand cursor.
         let over_link = self
@@ -3908,6 +3907,7 @@ impl EditorState {
     /// isn't an image any more (it shaped to an image last paint, but guard
     /// anyway), or if the width didn't actually change.
     fn commit_image_resize(&mut self, resize: ImageResize, cx: &mut Context<Self>) {
+        if resize.revision != self.document.read(cx).revision() { return; }
         let starts = self.line_starts();
         let Some(&start) = starts.get(resize.line) else {
             return;
@@ -5483,6 +5483,16 @@ impl Render for EditorState {
             )
             .track_focus(&self.focus_handle)
             .cursor(CursorStyle::IBeam)
+            .on_action(cx.listener(|_, _: &InsertImage, _, cx| cx.emit(EditorEvent::InsertImages(Vec::new()))))
+            .on_drop(cx.listener(|this, paths: &gpui_kit::ExternalPaths, window, cx| {
+                cx.stop_propagation();
+                let position = window.mouse_position();
+                let offset = this.index_for_mouse_position(position);
+                let affinity = this.affinity_for_mouse_position(offset, position);
+                this.move_to_with_affinity(offset, affinity, cx);
+                this.focus(window, cx);
+                cx.emit(EditorEvent::InsertImages(paths.paths().to_vec()));
+            }))
             .on_action(
                 cx.listener(|this, _: &gpui_kit::component::input::Undo, window, cx| {
                     this.undo(&Undo, window, cx)

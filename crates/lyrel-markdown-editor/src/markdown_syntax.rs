@@ -1853,7 +1853,15 @@ pub(crate) fn inline_image_spans(line: &str) -> Vec<(Range<usize>, Range<usize>)
     let mut out = Vec::new();
     let mut i = 0;
     while i + 1 < b.len() {
-        if b[i] == b'!'
+        if b[i] == b'`' {
+            let ticks = b[i..].iter().take_while(|&&ch| ch == b'`').count();
+            let marker = &line[i..i + ticks];
+            if let Some(end) = line[i + ticks..].find(marker) {
+                i += ticks + end + ticks;
+                continue;
+            }
+        }
+        if b[i] == b'!' && !is_backslash_escaped(b, i)
             && b[i + 1] == b'['
             && let Some(rb) = line[i + 2..].find(']')
             && line[i + 2 + rb + 1..].starts_with('(')

@@ -1687,6 +1687,13 @@ pub fn translate_en(key: L10nKey) -> &'static str {
         L10nKey::FileTreeContextCopyPath => "Copy Path",
         L10nKey::FileTreeContextHideDotfiles => "Hide Dotfiles",
         L10nKey::MarkdownImageChooseLocation => "Choose a save location before inserting the image",
+        L10nKey::MarkdownInsertImage => "Insert image…",
+        L10nKey::MarkdownImageLimit => "The image exceeds the 32 MiB input, 16 megapixel or 256 MiB document image limit",
+        L10nKey::MarkdownImageUnsupported => "Use a PNG, JPEG, GIF, WebP, BMP, TIFF, ICO or self-contained SVG image",
+        L10nKey::MarkdownImageExternalReference => "The SVG references another resource. Use a self-contained SVG.",
+        L10nKey::MarkdownImageRedirectBlocked => "Image redirects are blocked. Use the final image URL.",
+        L10nKey::MarkdownImageUnsafeDirectory => "The assets directory points outside the document directory",
+        L10nKey::MarkdownImageNetworkPolicy => "Not requested. Load explicitly from the local client; redirects and nested SVG resources are blocked.",
         L10nKey::MarkdownImageWriting => "Writing image to document assets…",
         L10nKey::MarkdownImageWriteFailed => "Could not write image to document assets",
         L10nKey::MarkdownImageSelectionChanged => {

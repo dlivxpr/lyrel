@@ -770,9 +770,8 @@ impl Element for EditorElement {
         // `[text](url)`), so hovering shows a hand like the reading view.
         // Geometry from this frame's shaping: source range → display cols (the
         // row's offset map) → kerned x via position_for_index. A link that
-        // crosses a wrap boundary gets a box per end (the rare middle rows of
-        // a 3+-row link are skipped). Widget/code/table rows carry no inline
-        // links (images and chips have their own machinery).
+        // crosses a wrap boundary gets a box on every visual row.
+        // Widgets/code/table rows have their own image and chip machinery.
         let mut link_grips = Vec::new();
         let mut link_rects: Vec<(Bounds<Pixels>, zorite_markdown::syntax::LinkHit)> = Vec::new();
         let mut inline_image_grips = Vec::new();
@@ -807,6 +806,7 @@ impl Element for EditorElement {
                 // `None` = the badge (clickable, but not a link to preview).
                 for (range, hit) in markdown_syntax::links(line)
                     .into_iter()
+                    .filter(|(_, hit)| matches!(hit, markdown_syntax::LinkHit::Url(_)))
                     .map(|(r, h)| (r, Some(h)))
                     .chain(badge.map(|r| (r, None)))
                 {
@@ -814,8 +814,8 @@ impl Element for EditorElement {
                     let d1 = display_col_in(map, range.start);
                     let d2 = display_col_in(map, range.end);
                     let (Some(p1), Some(p2)) = (
-                        line_pos(line_shaped, bidi(i), d1, *lh),
-                        line_pos(line_shaped, bidi(i), d2, *lh),
+                        caret_line_pos(line_shaped, bidi(i), d1, *lh, WrapAffinity::Downstream),
+                        caret_line_pos(line_shaped, bidi(i), d2, *lh, WrapAffinity::Upstream),
                     ) else {
                         continue;
                     };
@@ -844,6 +844,13 @@ impl Element for EditorElement {
                         let tail = Bounds::new(point(origin.x, origin.y + p2.y), size(p2.x, *lh));
                         link_grips.push(window.insert_hitbox(head, HitboxBehavior::Normal));
                         link_grips.push(window.insert_hitbox(tail, HitboxBehavior::Normal));
+                        let first_row = (f32::from(p1.y) / f32::from(*lh)).round() as usize;
+                        let last_row = (f32::from(p2.y) / f32::from(*lh)).round() as usize;
+                        for row in first_row + 1..last_row {
+                            let middle = Bounds::new(point(origin.x, origin.y + *lh * row), size(line_shaped.width(), *lh));
+                            link_grips.push(window.insert_hitbox(middle, HitboxBehavior::Normal));
+                            if let Some(h) = hit_target(&hit_ref) { link_rects.push((middle, h)); }
+                        }
                         if let Some(h) = hit_target(&hit_ref) {
                             link_rects.push((head, h.clone()));
                             link_rects.push((tail, h));
@@ -3353,25 +3360,7 @@ fn shape_document(
             }
             _ => px(0.),
         };
-        let widget: Option<Block> = if let Some(st) = md.filter(|_| !is_code)
-            && let Some(inner) = zorite_markdown::syntax::embed_line(line)
-        {
-            // A standalone `![[target]]` transclusion renders as a clickable
-            // chip (`⧉ Note → anchor`) that opens/jumps to the source — the
-            // reading view renders the full embedded content; nesting live
-            // views inside the editor isn't feasible. Raw on caret, like a
-            // file chip.
-            let (target, _) = zorite_markdown::syntax::wiki_target_display(inner);
-            (Some(idx) != caret_row).then(|| Block::Chip {
-                src: target.to_string().into(),
-                label: embed_chip_label(inner).into(),
-                link: st.link,
-                bg: st.code_bg,
-                border: st.marker,
-                height: fs * LINE_HEIGHT_RATIO + px(CHIP_PAD * 2.),
-                wiki: true,
-            })
-        } else if let Some(st) = md
+        let widget: Option<Block> = if let Some(st) = md
             && let Some((src, w_attr, _)) = img_row
         {
             if let Some(label) = block_chip.and_then(|f| f(src)) {
@@ -4427,24 +4416,6 @@ fn paint_prop_panel(
     }
 }
 
-/// The label of an `![[target]]` embed chip: an alias verbatim, else the
-/// anchor-link display (`Note → id` / `Note → Heading`), else the page name —
-/// each behind a transclusion glyph.
-fn embed_chip_label(inner: &str) -> String {
-    let (target, display) = zorite_markdown::syntax::wiki_target_display(inner);
-    if display != target {
-        return format!("⧉ {display}");
-    }
-    let (page, block) = zorite_markdown::syntax::split_block_anchor(target);
-    if let Some(id) = block {
-        return format!("⧉ {page} → {id}");
-    }
-    let (page, heading) = zorite_markdown::syntax::split_heading_anchor(target);
-    match heading {
-        Some(h) => format!("⧉ {page} → {}", h.trim()),
-        None => format!("⧉ {page}"),
-    }
-}
 
 /// Paint a file chip — a rounded, bordered button with a flat document icon +
 /// `label` — filling the row (sized in `shape_document` to include vertical
