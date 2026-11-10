@@ -1,6 +1,6 @@
 //! Formula workflow owned by Lyrel, not by the upstream GPL application.
 use crate::ui::{
-    host_ops::{Host as _, HostOps},
+    host_ops::HostOps,
     i18n::{L10nKey, t},
 };
 use gpui_kit::component::{ActiveTheme as _, native_menu::NativeMenu};

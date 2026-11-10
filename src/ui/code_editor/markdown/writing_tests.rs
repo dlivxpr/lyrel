@@ -196,7 +196,7 @@ pub(super) fn native_colors(cx: &mut TestAppContext) {
         assert!(field.left() >= px(0.) && field.right() <= px(1100.));
         context.simulate_click(field.center(), gpui_kit::Modifiers::none());
         context.update(|window, cx| {
-            window.press("ctrl-a", cx);
+            window.press("secondary-a", cx);
             window.input("#12345678", cx);
         });
         settle(&mut context);

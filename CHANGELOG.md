@@ -46,6 +46,7 @@
 ### 验证边界
 
 - #236 最终候选需重新执行完整 editor crate、桌面 library、无筛选 OS 主线程 native-font、Windows local/真实 SSH、Linux headless 与支持的 macOS 检查，并以固定 Zorite 同源完整 fixtures 做 Release 产品窗口对照；未运行及实际失败保持未验收。#237 基础可用性与 #204 历史结果不自动转移；保留 source-preserving native long-line 保护与 bidi 映射，#235 的 `not_planned` 不代表 SDK 修复，完整 RTL 仍在批准范围外。
+- #236 macOS 首轮 CI 的颜色选择器消费者为 `34 passed / 1 failed`：测试误用 Windows `Ctrl+A`，未替换十六进制输入。改用既有跨平台 `secondary-a`，保留精确颜色、取消、清除、双视图历史与保存断言；不修改产品快捷键或放宽预期。后续结果见 Markdown 编辑器的最终集成验收记录。
 - #175 固定审查 tty7 的 34 个提交，终点为 `8ad8841e4835e4e6c4e6f4d5a0a16541eaa9107f`，采用当前 lyrel 架构的局部语义移植；不恢复 gateway、Linux 桌面、旧 alacritty 引擎、已撤销的 New Tab 拆分或 README 宣传改动，不采用 CI `-D warnings` 与 query-table 重构。
 - #175 验收夹具：CLI E2E 忽略既有 `--nocapture` 输出选项但保留用例筛选，避免桌面 CI 零用例退出被误计为通过；Windows DA1 消费者在应用查询前完成真实 ConPTY 启动协商，恢复两种 DA1 的应用实收断言；SCM 消费者在最终绘制后等待当前 refresh epoch 的完成状态，不再将前一帧 loaded 跨异步阶段复用。保留业务断言与原期限，不修改生产回复或第三方代码。
 - #175 图形额度消费者在跨 daemon 施压前实际绘制已滚动的旧窗口，并在准入等待期间执行真实帧，而非仅排队 refresh；不把 PTY viewport 屏障当作显示 lease 已退休的证明，保留生产 `1s` 准入边界、单次 SEND_OK、真实像素／历史／关闭释放断言与原测试期限。
