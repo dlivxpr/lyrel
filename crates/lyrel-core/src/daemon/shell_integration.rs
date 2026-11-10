@@ -2688,7 +2688,8 @@ builtin printf '\e]777;version;%s.%s\a' "${BASH_VERSINFO[0]}" "${BASH_VERSINFO[1
     fn bash_preserves_native_prompt_and_trap_contracts_over_a_real_pty() {
         let keys = b"\n: LAST_ARGUMENT\nfalse | (exit 7)\nbuiltin printf '\\033]777;state;%s;%s;%s\\a' \"$?\" \"${PIPESTATUS[*]}\" \"$_\"\nprintf '%s\\n' 'multi\nline'\nfalse | true\nfalse\n";
         for array_prompt in [false, true] {
-            let Some(text) = bash_contract_over_pty(array_prompt, true, keys, "set editing-mode vi\n")
+            let Some(text) =
+                bash_contract_over_pty(array_prompt, true, keys, "set editing-mode vi\n")
             else {
                 return;
             };
