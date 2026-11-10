@@ -507,7 +507,7 @@ fn the_scrollbar_moves_the_viewport_and_follows_it_back(cx: &mut TestAppContext)
             // Drag the thumb a third of the way up its track. The bar only
             // records the row; the pane applies it on its next render.
             view.selection_scroll
-                .smooth_scroll(&mut view.terminal.term.lock(), 0.5, &view.terminal.images());
+                .smooth_scroll(&mut view.terminal.term.lock(), 0.5, &view.terminal);
             view.scroll_handle
                 .set_offset(point(px(0.), px(-(history as f32) * row / 3.)));
             assert_eq!(
