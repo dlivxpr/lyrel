@@ -481,7 +481,11 @@ pub(super) fn theme_zoom_scroll(cx: &mut TestAppContext) {
     });
     // 真实界面字号会重排整篇正文；通过生产导航重新显露同一源行，
     // 再验证新几何的指针命中，不能向测试窗口外的坐标注入假交互。
-    let tail_line = original[..tail].bytes().filter(|&byte| byte == b'\n').count() + 1;
+    let tail_line = original[..tail]
+        .bytes()
+        .filter(|&byte| byte == b'\n')
+        .count()
+        + 1;
     context.dispatch_action(crate::core::actions::EditorGoToLine);
     context.update(|window, cx| {
         window.input(&format!("{tail_line}:1"), cx);
