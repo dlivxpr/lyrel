@@ -27,7 +27,25 @@ description: "指针、滚轮和 ^G 各有何行为——以及如何分别调�
 
 按钮使用标准 `Button` 的语义主题、键盘焦点和缩放尺寸；它不增加终端行数，底部位置避开已测量的 composer、补全及反向搜索浮层。窄窗格中标签可以省略，完整文案保留在辅助功能名称与 tooltip 中。
 
-文字、直接 Kitty placements 和 Unicode placeholders 共用 #251 的 `ReadingView`。#252 将选择／复制、链接、搜索与光标／IME 接到同一语义来源：后台原地重画或替换同一图片 ID 不改变当前阅读内容；主题变化重新解析 ANSI 样式，不丢弃文字。阅读态不显示实时终端 caret，也不给旧文字配置实时 IME 坐标；输入回到实时输出后恢复。resize 逻辑行重定位由 #253 接入，独立于下述 #254 生命周期世代；新增消费者代码不表示 #255 原生桌面验收已经通过。
+文字、直接 Kitty placements 和 Unicode placeholders 共用 `ReadingView`。选择／复制、链接、搜索与光标／IME 读取同一语义来源：后台原地重画或替换同一图片 ID 不改变当前阅读内容；主题变化重新解析 ANSI 样式，不丢弃文字。阅读态不显示实时终端 caret，也不给旧文字配置实时 IME 坐标；输入回到实时输出后恢复。resize relocation 与下述清屏／reset／重连／隐藏窗格生命周期的失效世代独立；实现与消费者断言不代表 #255 原生桌面验收已经通过。
+
+### 调整窗格尺寸时的阅读位置
+
+改变列数或行数前，阅读所有者记录顶部所属硬逻辑行的前 256 个 Unicode 字符、顶部行在其中的字符偏移、相邻空行上下文，以及原行列与历史范围。字符和组合 marks 从实际语义单元取得，宽字符占位格不重复计数，不把 UTF-8 字节或列数当作字符偏移。
+
+请求尺寸不等于已经应用尺寸。等待有序 `Size` 时，旧宽度文字与图片仍按原行列一起绘制，新边界只裁切旧画面；等面积 resize 也不重新解释旧 cells。已有图片布局的连接还等待同一次 `Size` 之后的有序 graphics `Screen`，避免新文字混用上一尺寸的直接放置锚点。此路径复用现有 GUI mirror、metadata mutex、Wakeup 与图片 lease，不增加 IPC、daemon 行获取或第二个解析器。
+
+新几何就绪后，按保留历史的几何变化估计位置，在动态周边窗口内检查最多 1024 个候选行，选择距估计最近的精确硬行身份，再将字符偏移投影到新 wrapping。空行上下文用于区分重复空行；没有精确身份时使用限制在当前最老历史行与实时边缘之间的估计，不无条件回到实时输出。等待期间的用户滚动累计到最终位置；连续窄宽请求只发布最新目标几何。新文字、直接放置和由新语义行解析的 placeholders 一起重新捕获，旧图片 lease 通过原退休机制释放。
+
+`reading_resize_` 消费者断言观察生产绘制输入中的逻辑文字和图片 bounds／资源像素，覆盖反复窄宽、Unicode／marks、相同 256 字符前缀的最近候选、空行上下文、淘汰后的估计与最老边界、等面积旧画面、等待中的滚动、请求取代和没有后续 PTY 输出的提交。真实 PTY／daemon 场景与人为分开 `Size`／`Screen` 的有序 pane stream 场景在代码中分开标记；后者仍使用真实 `RemoteTerminal` 和 rooted `TerminalView`，不是原生窗口或 SSH 证明。本实施子任务按约定未运行以下检查，须由集成人执行并记录实际结果：
+
+```powershell
+cargo test --locked -p lyrel --lib terminal::view::gpui_tests::reading_resize_ -- --nocapture --test-threads=1
+cargo test --locked -p lyrel --lib terminal::view::gpui_tests::a_column_resize_rescans_the_open_searchs_highlights -- --exact --nocapture --test-threads=1
+cargo test --locked -p lyrel --lib terminal::view::gpui_tests::graphics_consumer_remote_raw_size_keeps_standard_pty_history_growth -- --exact --nocapture --test-threads=1
+```
+
+完整 `reading_`／同步呈现回归与 build、lint、格式检查命令见下文。#255 仍须分别在桌面本地开发和真实 SSH 远端 workspace 的普通生产窗口，记录持续输出与静默 resize 的实际文字／图片对齐、反复窄宽、滚动、DPI／字体、输入法与 shell integration；本票没有提供这些运行通过证据。
 
 
 ### 实现职责

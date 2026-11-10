@@ -265,6 +265,16 @@ impl TerminalElement {
             if has_previous && (term.screen_lines(), term.columns()) != (rows, cols) {
                 return Err(SnapshotUnavailable::AwaitingSize);
             }
+            if self
+                .view
+                .read(cx)
+                .selection_scroll
+                .reading
+                .as_ref()
+                .is_some_and(|reading| reading.relocating() || reading.columns() != cols)
+            {
+                return Err(SnapshotUnavailable::AwaitingSize);
+            }
             // After the lock, not before: an early return must leave the
             // previous frame's cells intact for the caller to paint again.
             buf.resize_with(rows * cols, RenderCell::default);

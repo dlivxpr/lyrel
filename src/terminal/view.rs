@@ -803,6 +803,10 @@ impl TerminalView {
         let cols_changed = cols != self.terminal.size().cols;
         if (cols, rows) != (self.terminal.size().cols, self.terminal.size().rows) {
             self.links.invalidate_geometry();
+            if let Some(reading) = self.selection_scroll.reading.as_mut() {
+                let term = self.terminal.term.lock();
+                reading.prepare_resize(&term, &self.terminal, cols, rows);
+            }
         }
         self.cell_width = cell_width;
         self.line_height = line_height;
@@ -825,6 +829,20 @@ impl TerminalView {
             (line_height.as_f32() * scale).round().max(1.) as u16,
         ) {
             self.retry_grid_when_available(cx);
+        }
+        if self
+            .selection_scroll
+            .reading
+            .as_ref()
+            .is_some_and(|reading| reading.relocating())
+        {
+            let grid = self.terminal.term.clone();
+            if let Some(mut term) = grid.try_lock() {
+                self.selection_scroll
+                    .sync_reading(&mut term, &self.terminal);
+            } else {
+                self.retry_grid_when_available(cx);
+            }
         }
         if cols_changed && self.search.is_some() {
             self.refresh_matches_after_output(cx);

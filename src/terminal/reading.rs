@@ -12,6 +12,8 @@ use rio_vt::event::EventListener;
 
 use super::images::{CommittedImages, ImageStore};
 
+mod relocation;
+
 /// Decoded values, never Square side-table IDs or theme-resolved colours.
 #[derive(Clone)]
 pub(super) struct ReadingCell {
@@ -52,6 +54,7 @@ pub(super) struct ReadingView {
     needs: Option<ReadingNeeds>,
     visible: std::ops::Range<i64>,
     revision: u64,
+    relocation: Option<relocation::Relocation>,
 }
 
 pub(super) fn live_start<T: EventListener>(term: &Crosswords<T>) -> i64 {
@@ -80,6 +83,7 @@ impl ReadingView {
             visible: live - term.display_offset() as i64
                 ..live - term.display_offset() as i64 + term.screen_lines() as i64,
             revision: 0,
+            relocation: None,
         };
         // Even a one-row scroll exposes mutable active-screen rows. Capture
         // the entire active screen once, not only the currently visible part.
@@ -91,6 +95,63 @@ impl ReadingView {
         );
         reading.retain_visible(term, images, presentation);
         reading
+    }
+
+    pub(super) fn prepare_resize<T: EventListener>(
+        &mut self,
+        term: &Crosswords<T>,
+        terminal: &super::remote::RemoteTerminal,
+        cols: usize,
+        rows: usize,
+    ) {
+        let revision = terminal.presentation_facts().resize_revision;
+        let images_known = terminal.images().layout_known();
+        if let Some(pending) = self.relocation.as_mut() {
+            pending.retarget((cols, rows), revision, images_known);
+        } else {
+            self.relocation = Some(relocation::Relocation::capture(
+                self,
+                term,
+                (cols, rows),
+                revision,
+                images_known,
+            ));
+        }
+    }
+
+    pub(super) fn relocating(&self) -> bool {
+        self.relocation.is_some()
+    }
+
+    pub(super) fn relocation_scroll<T: EventListener>(&mut self, term: &Crosswords<T>) -> bool {
+        if let Some(pending) = self.relocation.as_mut() {
+            pending.did_scroll(term);
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Publish new-width semantics and row leases together, only after the VT
+    /// Size and the daemon's ordered graphics Screen have both arrived.
+    pub(super) fn finish_resize<T: EventListener>(
+        &mut self,
+        term: &mut Crosswords<T>,
+        terminal: &super::remote::RemoteTerminal,
+    ) -> bool {
+        let Some(pending) = self.relocation.as_ref() else {
+            return false;
+        };
+        let facts = terminal.presentation_facts();
+        if !pending.ready(term, facts.resize_revision, facts.resize_images_revision) {
+            return false;
+        }
+        drop(facts);
+        let top = pending.locate(term);
+        let delta = (live_start(term) - top) as i32 - term.display_offset() as i32;
+        term.scroll_display(Scroll::Delta(delta));
+        *self = Self::capture(term, &terminal.images(), &terminal.presentation_facts());
+        true
     }
 
     fn retain_rows<T: EventListener>(
@@ -242,6 +303,10 @@ impl ReadingView {
     /// History is read lazily, first-write-wins, and cannot outlive retention.
     pub(super) fn reconcile<T: EventListener>(&mut self, term: &mut Crosswords<T>) -> bool {
         let live = live_start(term);
+        if let Some(pending) = self.relocation.as_mut() {
+            pending.sync_offset(term);
+            return true;
+        }
         let oldest = term.grid.lines_evicted() as i64;
         if term.columns() == self.cols && term.screen_lines() == self.captured_rows
             && (live < self.last_live_start || oldest < self.last_oldest)
@@ -275,6 +340,9 @@ impl ReadingView {
         terminal: &super::remote::RemoteTerminal,
         selected: Option<std::ops::Range<usize>>,
     ) {
+        if self.relocation.is_some() {
+            return;
+        }
         let needs = ReadingNeeds {
             top: live_start(term) - term.display_offset() as i64,
             oldest: term.grid.lines_evicted() as i64,
