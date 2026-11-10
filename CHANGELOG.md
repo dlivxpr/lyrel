@@ -24,6 +24,8 @@
 
 ### 修复
 
+- #250：Bash 提交命令的 history 前缀正则改为局部变量中的 ERE，并在 `=~` 右侧使用未加引号的变量展开，避免 Bash 3.2 在启动阶段把内联正则中的括号误解析为 shell 语法。正则、完整多行命令重建、转义／截断、用户 history／hooks 及命令级 agent scope 均不变，不增加 `eval` 或命令执行；保留全部既有断言。本修复子任务未执行构建、测试、lint 或格式化，Bash 3.2／4.4／5.1／5.2 行为需由集成验收核验。
+
 - #249：修复 OpenCode preparation 参数顺序；Kimi worker 显式选择 pinned source 根 `tsconfig.json` 以保留参数 decorators；Hermes 原生夹具改走生产 agent scope encoder 获取 presence-sensitive marker，不手动注入子进程环境。保留完整像素、placement、关闭策略、配置／源码完整性及零推理断言；此轮未执行构建、测试、lint 或格式化，不宣称原失败已运行通过。
 - #250：PowerShell 手动启动识别器先解开环境赋值右侧的 `CommandExpressionAst`，再安全读取字面量，修复真实 pwsh 中带前置环境赋值的 agent 命令未收到 `TERM_PROGRAM=kitty`；仍拒绝赋值重定向、管道、复合命令和解释器调用，保留显式空值、scope 编码启动、用户提示符及下一提示符恢复。既有真实 PTY 消费者已覆盖失败路径，未降低断言；本修复子任务未运行构建、格式化或测试。
 - #251：冻结 placeholder 消费者区分单元格行原点与方图 aspect-fit 后的居中像素 crop，按独立方图几何同时约束完整行与分数滚动上一行，保留蓝色资源身份、live 擦除／替换后的捕获图片及真实绘制断言，不修改生产图片布局。阅读态的上一行单元格不再遍历实时栅格；构建、测试与格式化由集成验收执行，本修复子任务未运行。
