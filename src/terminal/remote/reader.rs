@@ -580,7 +580,8 @@ impl FrameReader {
                                         + term.grid.history_size() as i64,
                                 );
                                 let mut facts = proxy.parse_state.presentation.lock().unwrap();
-                                layout_completed = facts.resize_images_revision != facts.resize_revision;
+                                layout_completed =
+                                    facts.resize_images_revision != facts.resize_revision;
                                 facts.resize_images_revision = facts.resize_revision;
                             }
                             drop(term);

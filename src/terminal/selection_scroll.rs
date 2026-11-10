@@ -59,7 +59,10 @@ pub(super) enum WheelMotion {
 
 impl SelectionScroll {
     pub(super) fn sync_reading(&mut self, term: &mut Grid, terminal: &RemoteTerminal) {
-        let relocated = self.reading.as_mut().is_some_and(|reading| reading.finish_resize(term, terminal));
+        let relocated = self
+            .reading
+            .as_mut()
+            .is_some_and(|reading| reading.finish_resize(term, terminal));
         if relocated {
             self.clear_presented();
         }
@@ -68,8 +71,12 @@ impl SelectionScroll {
                 .reading
                 .as_mut()
                 .is_some_and(|reading| !reading.reconcile(term))
-            || (term.display_offset() == 0 && self.fraction == 0.
-                && !self.reading.as_ref().is_some_and(|reading| reading.relocating()))
+            || (term.display_offset() == 0
+                && self.fraction == 0.
+                && !self
+                    .reading
+                    .as_ref()
+                    .is_some_and(|reading| reading.relocating()))
         {
             if self.reading.take().is_some() {
                 self.clear_presented();
@@ -88,7 +95,11 @@ impl SelectionScroll {
         if term.synchronized_output() {
             return;
         }
-        if self.reading.as_mut().is_some_and(|reading| reading.relocation_scroll(term)) {
+        if self
+            .reading
+            .as_mut()
+            .is_some_and(|reading| reading.relocation_scroll(term))
+        {
             return;
         }
         if term.display_offset() == 0 && self.fraction == 0. {

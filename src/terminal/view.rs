@@ -829,10 +829,16 @@ impl TerminalView {
         ) {
             self.retry_grid_when_available(cx);
         }
-        if self.selection_scroll.reading.as_ref().is_some_and(|reading| reading.relocating()) {
+        if self
+            .selection_scroll
+            .reading
+            .as_ref()
+            .is_some_and(|reading| reading.relocating())
+        {
             let grid = self.terminal.term.clone();
             if let Some(mut term) = grid.try_lock() {
-                self.selection_scroll.sync_reading(&mut term, &self.terminal);
+                self.selection_scroll
+                    .sync_reading(&mut term, &self.terminal);
             } else {
                 self.retry_grid_when_available(cx);
             }

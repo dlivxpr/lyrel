@@ -36,11 +36,16 @@ struct Rows<'a, T: EventListener> {
 
 impl<T: EventListener> Rows<'_, T> {
     fn wrapped(&self, row: i64) -> bool {
-        self.frozen.and_then(|reading| reading.absolute_row(row)).map_or_else(
-            || self.term.grid[Line((row - live_start(self.term)) as i32)][Column(self.term.columns() - 1)]
-                .contains_cell_flag(CellFlags::WRAPLINE),
-            |cells| cells.last().is_some_and(|cell| cell.wrapped),
-        )
+        self.frozen
+            .and_then(|reading| reading.absolute_row(row))
+            .map_or_else(
+                || {
+                    self.term.grid[Line((row - live_start(self.term)) as i32)]
+                        [Column(self.term.columns() - 1)]
+                    .contains_cell_flag(CellFlags::WRAPLINE)
+                },
+                |cells| cells.last().is_some_and(|cell| cell.wrapped),
+            )
     }
 
     /// Count Unicode characters, including attached marks, once per base cell.
@@ -57,11 +62,15 @@ impl<T: EventListener> Rows<'_, T> {
                     (cell.c == '\0' || cell.c == ' ') && cell.marks.is_none()
                 } else {
                     let cell = &self.term.grid[line][Column(end - 1)];
-                    (cell.c() == '\0' || cell.c() == ' ') && cell.extras_id_checked()
-                        .and_then(|id| self.term.grid.extras_table.get(id))
-                        .is_none_or(|extra| extra.zerowidth.is_empty())
+                    (cell.c() == '\0' || cell.c() == ' ')
+                        && cell
+                            .extras_id_checked()
+                            .and_then(|id| self.term.grid.extras_table.get(id))
+                            .is_none_or(|extra| extra.zerowidth.is_empty())
                 };
-                if !blank { break; }
+                if !blank {
+                    break;
+                }
                 end -= 1;
             }
         }
@@ -72,15 +81,20 @@ impl<T: EventListener> Rows<'_, T> {
                 (cell.c, cell.wide, cell.marks.as_deref().unwrap_or(&[]))
             } else {
                 let cell = &self.term.grid[line][Column(col)];
-                let marks = cell.extras_id_checked()
+                let marks = cell
+                    .extras_id_checked()
                     .and_then(|id| self.term.grid.extras_table.get(id))
                     .map_or(&[][..], |extra| extra.zerowidth.as_slice());
                 (cell.c(), cell.wide(), marks)
             };
-            if matches!(wide, Wide::Spacer | Wide::LeadingSpacer) { continue; }
+            if matches!(wide, Wide::Spacer | Wide::LeadingSpacer) {
+                continue;
+            }
             for c in std::iter::once(if c == '\0' { ' ' } else { c }).chain(marks.iter().copied()) {
                 count += 1;
-                if !visit(c) { return count; }
+                if !visit(c) {
+                    return count;
+                }
             }
         }
         count
@@ -93,7 +107,9 @@ impl<T: EventListener> Rows<'_, T> {
                 prefix.push(c);
                 prefix.len() < PREFIX_CHARS
             });
-            if prefix.len() == PREFIX_CHARS || !self.wrapped(row) { break; }
+            if prefix.len() == PREFIX_CHARS || !self.wrapped(row) {
+                break;
+            }
         }
         prefix
     }
@@ -107,15 +123,24 @@ impl<T: EventListener> Rows<'_, T> {
                 count += 1;
                 matched && count < PREFIX_CHARS
             });
-            if !matched || count == PREFIX_CHARS || !self.wrapped(row) { break; }
+            if !matched || count == PREFIX_CHARS || !self.wrapped(row) {
+                break;
+            }
         }
         matched && count == prefix.len()
     }
 
     fn blank_context(&self, first: i64, last: i64, oldest: i64, end: i64) -> (usize, usize) {
         let blank = |row| !self.wrapped(row) && self.characters(row, |_| false) == 0;
-        let before = (oldest..first).rev().take(32).take_while(|&row| blank(row)).count();
-        let after = (last + 1..end).take(32).take_while(|&row| blank(row)).count();
+        let before = (oldest..first)
+            .rev()
+            .take(32)
+            .take_while(|&row| blank(row))
+            .count();
+        let after = (last + 1..end)
+            .take(32)
+            .take_while(|&row| blank(row))
+            .count();
         (before, after)
     }
 }
@@ -128,14 +153,23 @@ impl Relocation {
         resize_revision: u64,
         images_known: bool,
     ) -> Self {
-        let source = Rows { term, frozen: Some(reading) };
+        let source = Rows {
+            term,
+            frozen: Some(reading),
+        };
         let oldest = term.grid.lines_evicted() as i64;
         let end = live_start(term) + term.screen_lines() as i64;
         let mut first = reading.top;
-        while first > oldest && source.wrapped(first - 1) { first -= 1; }
+        while first > oldest && source.wrapped(first - 1) {
+            first -= 1;
+        }
         let mut last = reading.top;
-        while last + 1 < end && source.wrapped(last) { last += 1; }
-        let offset = (first..reading.top).map(|row| source.characters(row, |_| true)).sum();
+        while last + 1 < end && source.wrapped(last) {
+            last += 1;
+        }
+        let offset = (first..reading.top)
+            .map(|row| source.characters(row, |_| true))
+            .sum();
         Self {
             prefix: source.prefix(first, end),
             offset,
@@ -160,7 +194,12 @@ impl Relocation {
         self.images_known |= images_known;
     }
 
-    pub(super) fn ready<T: EventListener>(&self, term: &Crosswords<T>, revision: u64, images_revision: u64) -> bool {
+    pub(super) fn ready<T: EventListener>(
+        &self,
+        term: &Crosswords<T>,
+        revision: u64,
+        images_revision: u64,
+    ) -> bool {
         (term.columns(), term.screen_lines()) == self.target
             && revision != self.resize_revision
             && (!self.images_known || images_revision == revision)
@@ -185,7 +224,8 @@ impl Relocation {
             live - (self.oldest + self.history as i64 - self.top)
         } else {
             oldest + (self.top - self.oldest) * history / self.history as i64
-        }.clamp(oldest, live);
+        }
+        .clamp(oldest, live);
         let geometry = (history - self.history as i64).abs()
             + (self.cols as i64 - term.columns() as i64).abs()
             + self.rows.max(term.screen_lines()) as i64
@@ -193,13 +233,19 @@ impl Relocation {
         let window = (geometry * 2 + 64).clamp(64, SEARCH_ROWS);
         let end = live + term.screen_lines() as i64;
         let center = estimate - self.row_offset * self.cols as i64 / term.columns().max(1) as i64;
-        let first = (center - window / 2).max(oldest).min((end - window).max(oldest));
+        let first = (center - window / 2)
+            .max(oldest)
+            .min((end - window).max(oldest));
         let limit = (first + window).min(end);
         let source = Rows { term, frozen: None };
         let mut nearest: Option<i64> = None;
         for row in first..limit {
-            if row > oldest && source.wrapped(row - 1) { continue; }
-            if !source.matches_prefix(row, end, &self.prefix) { continue; }
+            if row > oldest && source.wrapped(row - 1) {
+                continue;
+            }
+            if !source.matches_prefix(row, end, &self.prefix) {
+                continue;
+            }
             let mut last = row;
             let mut remaining = self.offset;
             let mut top = row;
@@ -209,14 +255,21 @@ impl Relocation {
                     remaining -= count;
                     top = last + 1;
                 }
-                if !source.wrapped(last) || last + 1 == end { break; }
+                if !source.wrapped(last) || last + 1 == end {
+                    break;
+                }
                 last += 1;
             }
-            if source.blank_context(row, last, oldest, end) != self.blanks { continue; }
+            if source.blank_context(row, last, oldest, end) != self.blanks {
+                continue;
+            }
             if nearest.is_none_or(|previous| (top - estimate).abs() < (previous - estimate).abs()) {
                 nearest = Some(top);
             }
         }
-        nearest.unwrap_or(estimate).saturating_add(self.scroll).clamp(oldest, live)
+        nearest
+            .unwrap_or(estimate)
+            .saturating_add(self.scroll)
+            .clamp(oldest, live)
     }
 }

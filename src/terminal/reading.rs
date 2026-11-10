@@ -104,7 +104,11 @@ impl ReadingView {
             pending.retarget((cols, rows), revision, images_known);
         } else {
             self.relocation = Some(relocation::Relocation::capture(
-                self, term, (cols, rows), revision, images_known,
+                self,
+                term,
+                (cols, rows),
+                revision,
+                images_known,
             ));
         }
     }
@@ -129,7 +133,9 @@ impl ReadingView {
         term: &mut Crosswords<T>,
         terminal: &super::remote::RemoteTerminal,
     ) -> bool {
-        let Some(pending) = self.relocation.as_ref() else { return false; };
+        let Some(pending) = self.relocation.as_ref() else {
+            return false;
+        };
         let facts = terminal.presentation_facts();
         if !pending.ready(term, facts.resize_revision, facts.resize_images_revision) {
             return false;
