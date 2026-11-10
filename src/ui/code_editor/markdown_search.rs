@@ -91,7 +91,6 @@ impl MarkdownSearch {
             return;
         };
         let view = source.read(cx);
-        let at = view.selected_range().start;
         let surface_key = view.document().read(cx).revision();
         let query = if self.query_dirty {
             self.query_dirty = false;
@@ -115,7 +114,7 @@ impl MarkdownSearch {
             self.matched_query = query;
             self.matched_case_sensitive = self.case_sensitive;
         }
-        self.matcher.update_cursor_by_offset(at);
+        self.matcher.update_cursor_by_offset(view.cursor());
         if matches_changed {
             let ranges = self.matcher.matched_ranges().to_vec();
             let active = (!ranges.is_empty()).then_some(self.matcher.current_match_index());

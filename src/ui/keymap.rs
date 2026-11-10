@@ -116,7 +116,7 @@ fn fixed_bindings(cx: &App) -> Vec<KeyBinding> {
     {
         use crate::ui::code_editor::commands::{SelectAllOccurrences, SelectNextOccurrence};
         use gpui_kit::base::input::{AddCursorAbove, AddCursorBelow};
-        let input = Some("Input && mode == editor");
+        let input = Some("(Input && mode == editor) || Editor");
         bindings.push(load_binding("secondary-d", SelectNextOccurrence, input, cx));
         bindings.push(load_binding(
             "secondary-shift-l",
@@ -138,7 +138,7 @@ fn fixed_bindings(cx: &App) -> Vec<KeyBinding> {
         bindings.push(load_binding(
             "secondary-k secondary-d",
             crate::ui::code_editor::commands::SkipOccurrence,
-            Some("Input && mode == editor"),
+            Some("(Input && mode == editor) || Editor"),
             cx,
         ));
     }
@@ -172,7 +172,7 @@ fn fixed_bindings(cx: &App) -> Vec<KeyBinding> {
             CopyLineDown, CopyLineUp, DeleteLine, InsertLineAbove, InsertLineBelow, MoveLineDown,
             MoveLineUp, MoveToMatchingBracket, SelectLine, ToggleBlockComment, ToggleLineComment,
         };
-        let editor = Some("Input && mode == editor");
+        let editor = Some("(Input && mode == editor) || Editor");
         bindings.extend([
             load_binding("secondary-/", ToggleLineComment, editor, cx),
             load_binding("alt-shift-a", ToggleBlockComment, editor, cx),

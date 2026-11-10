@@ -182,7 +182,7 @@ fn production_markdown_opens_live_without_changing_code_or_plain_untitled(cx: &m
         app.read_with(&vcx, |app, cx| {
             let file = app.active_buffer().unwrap();
             assert_eq!(file.language(), "markdown");
-            assert!(file.input.markdown().unwrap().read(cx).is_live());
+            assert_eq!(file.input.markdown().unwrap().read(cx).is_live(), !extension.eq_ignore_ascii_case("mdx"));
             assert_eq!(
                 file.input.read(cx).text().to_string(),
                 "# Heading\n\nbody\n"

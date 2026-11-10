@@ -89,3 +89,9 @@
 `foundation::zorite_foundation_native_wrapped_pointer_navigation_unicode_history` 恢复基础 native wrapped-row Down、行首指针/input/Undo、source Home/End/Unicode grapheme selection 与 word movement；`foundation::zorite_foundation_complete_extreme_line_paint_caret_input_save_undo` 使用完整 2,523,166 B fixture，分别在 live/source 的首尾执行 native pointer exact-offset、shift selection、输入、保存与 Undo。它们与 shared Host、composition owner close 两个生命周期 case 同处当前 native registry；运行结果仍由实际候选门禁决定，不从注册成功推定通过。
 
 MDX 的 `source_only` 是 presentation 能力，分屏复制该约束；`ToggleDocumentPreview` 无法进入 live，状态栏模式按钮显示源码且禁用。workbench 回归 `mdx_source_only_survives_mode_action_split_history_save_reopen` 验证这一路由与 BOM/混合行尾/未知 JSX/attached-formula 原文、输入/Undo、保存/重开。源文编码策略不会因文档另存为或重命名自动转换。
+
+### 基础消费者回归约束
+
+工作台快捷键明确匹配 native `Editor` context，不借用 `Input` context 让普通输入框截获 native 按键。对外 Kit Backspace/Delete 与 editor 自身按键调用同一修改路径。分屏复制文档缩进宽度；多行缩进是保留选区的有序 batch，不替换被选正文。Host 命令的 before/after selection 纳入相同 history，Undo 恢复原选区；行重排保留原行尾且在移动无终止换行的片段时补齐操作必需的连接换行。
+
+重复 occurrence 选择是 view-local 状态，工作台 Next/All 经真实 native selection、quads/carets 与原子 batch 输入执行；不是仅供测试的 Code-only no-op。晚到 reload 若遇到 source revision 或 composition 变化，保留编辑并显示 conflict，而非静默覆盖或仅丢弃结果。以上修复仍须通过对应消费者与 native 门禁，不由本说明推定通过。

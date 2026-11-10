@@ -2,24 +2,87 @@ use super::*;
 
 impl EditorState {
     pub fn document(&self) -> &Entity<Document> { &self.document }
+    pub fn occurrence_range(&self) -> Range<usize> { self.extra_selections.last().unwrap_or(&self.selected_range).clone() }
+    pub fn add_selection(&mut self, range: Range<usize>, cx: &mut Context<Self>) {
+        self.finish_composition(cx);
+        let range = self.content.floor_char_boundary(range.start.min(self.content.len()))..self.content.floor_char_boundary(range.end.min(self.content.len()));
+        if range != self.selected_range && !self.extra_selections.contains(&range) { self.extra_selections.push(range); }
+        self.last_edit = EditKind::Other; cx.notify();
+    }
+    pub(super) fn replace_occurrences(&mut self, text: &str, cx: &mut Context<Self>) {
+        let primary = self.selected_range.clone();
+        let mut selections = self.extra_selections.clone(); selections.push(primary.clone());
+        selections.sort_by_key(|range| range.start);
+        selections.dedup();
+        let mut ranges: Vec<Range<usize>> = Vec::with_capacity(selections.len());
+        for range in selections {
+            if let Some(previous) = ranges.last_mut().filter(|previous| range.start < previous.end) {
+                previous.end = previous.end.max(range.end);
+            } else { ranges.push(range); }
+        }
+        let selections = ranges;
+        let mut shift: isize = 0;
+        let len = text.len() - text.matches("\r\n").count();
+        let mut after_primary = 0..0; let mut after_extra = Vec::with_capacity(self.extra_selections.len());
+        for range in &selections {
+            let at = range.start.checked_add_signed(shift).expect("ordered occurrence offset") + len;
+            if range.start <= primary.start && primary.end <= range.end { after_primary = at..at; } else { after_extra.push(at..at); }
+            shift += len as isize - range.len() as isize;
+        }
+        self.replace_ranges(selections.into_iter().map(|range| (range, text.to_owned())).collect(), cx);
+        self.selected_range = after_primary.clone(); self.extra_selections = after_extra;
+        self.set_history_selection(primary, after_primary, cx);
+        self.last_edit = EditKind::Other; cx.emit(EditorEvent::Changed); cx.notify();
+    }
     /// Enable only after the host subscribes to OpenLink and HoverLink.
     pub fn set_host_link_navigation(&mut self, enabled: bool) { self.host_links = enabled; }
     /// Enable only after a real custom-color picker is installed by the host.
     pub fn set_host_custom_colors(&mut self, enabled: bool) { self.host_custom_colors = enabled; }
     pub fn is_source_only(&self) -> bool { self.source_only }
+    pub fn tab_indent(&self) -> usize { self.tab_indent }
     pub fn set_source_only(&mut self, source_only: bool, cx: &mut Context<Self>) {
         self.finish_composition(cx);
         self.source_only = source_only;
         if source_only { self.markdown_style = None; }
         self.invalidate_geometry(); cx.notify();
     }
+    pub fn set_history_selection(&mut self, before: Range<usize>, after: Range<usize>, cx: &mut Context<Self>) {
+        let origin = cx.entity_id();
+        self.document.update(cx, |document, _| document.set_history_selection(origin, before, after, false));
+    }
+    pub(super) fn indent_selected_lines(&mut self, outdent: bool, cx: &mut Context<Self>) -> bool {
+        if self.selected_range.is_empty() || !self.content[self.selected_range.clone()].contains('\n') { return false; }
+        let start = self.content[..self.selected_range.start].rfind('\n').map_or(0, |at| at + 1);
+        let mut at = start;
+        let mut replacements = Vec::new();
+        for line in self.content[start..].split_inclusive('\n') {
+            if at >= self.selected_range.end { break; }
+            if outdent {
+                let count = if line.starts_with('\t') { 1 } else { line.bytes().take(self.tab_indent).take_while(|byte| *byte == b' ').count() };
+                if count > 0 { replacements.push((at..at + count, String::new())); }
+            } else { replacements.push((at..at, " ".repeat(self.tab_indent))); }
+            at += line.len();
+        }
+        self.replace_ranges(replacements, cx);
+        true
+    }
     pub fn replace_ranges(&mut self, replacements: Vec<(Range<usize>, String)>, cx: &mut Context<Self>) {
         self.finish_composition(cx);
+        let before = self.selected_range.clone();
+        let mut after = before.clone();
+        let mut ordered: Vec<_> = replacements.iter().collect();
+        ordered.sort_by_key(|(range, _)| std::cmp::Reverse(range.start));
+        for (range, text) in ordered {
+            let len = text.len() - text.matches("\r\n").count();
+            let map = |at: usize| if at < range.start { at } else if at >= range.end { at - range.len() + len } else { range.start + len };
+            after = map(after.start)..map(after.end);
+        }
         let document = self.document.clone(); let origin = cx.entity_id(); let caret = self.cursor_offset();
         let snapshot = document.update(cx, |document, cx| document.replace_ranges(replacements, origin, caret, cx));
         self.diagnostics.clear();
         self.content = snapshot.text_handle(); self.content_gen = document.read(cx).revision();
-        self.selected_range = caret.min(self.content.len())..caret.min(self.content.len());
+        self.selected_range = after.clone();
+        self.set_history_selection(before, after, cx);
         self.last_edit = EditKind::Other; self.invalidate_geometry(); cx.notify();
     }
     pub fn replace_lines(&mut self, range: Range<usize>, lines: Vec<Range<usize>>, leading: bool, trailing: bool, cx: &mut Context<Self>) {
@@ -51,6 +114,7 @@ impl EditorState {
     }
     pub fn select_range(&mut self, range: Range<usize>, cx: &mut Context<Self>) {
         self.finish_composition(cx);
+        self.extra_selections.clear();
         let start = self.content.floor_char_boundary(range.start.min(self.content.len()));
         let end = self.content.floor_char_boundary(range.end.min(self.content.len()));
         self.selected_range = start.min(end)..start.max(end);
@@ -109,6 +173,10 @@ impl EditorState {
         self.claim_composition(cx);
         let document = self.document.clone();
         let origin = cx.entity_id(); let caret = self.cursor_offset();
+        let before_selection = self.selected_range.clone();
+        let after_caret = range.start + text.len() - text.matches("\r\n").count();
+        let coalesced = self.pending_coalesce;
+        let composing = self.marked_range.is_some() && document.read(cx).has_composition();
         let snapshot = if self.marked_range.is_some() && document.read(cx).has_composition() {
             let owner = cx.weak_entity();
             document.update(cx, |document, cx| {
@@ -119,6 +187,7 @@ impl EditorState {
             let coalesce = self.pending_coalesce;
             document.update(cx, |document, cx| document.replace(range, text, origin, caret, coalesce, cx))
         };
+        if !composing { document.update(cx, |document, _| document.set_history_selection(origin, before_selection, after_caret..after_caret, coalesced)); }
         self.content = snapshot.text_handle(); self.content_gen = document.read(cx).revision();
         self.pending_coalesce = false; self.invalidate_geometry();
     }

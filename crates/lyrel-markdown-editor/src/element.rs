@@ -1351,7 +1351,7 @@ impl Element for EditorElement {
             })
             .unwrap_or_default();
 
-        let (cursor, selections) = if editor.content.is_empty() {
+        let (cursor, mut selections) = if editor.content.is_empty() {
             let c = fill(
                 Bounds::new(
                     point(bounds.left(), bounds.top()),
@@ -1443,6 +1443,20 @@ impl Element for EditorElement {
                 ),
             )
         };
+        for selection in &editor.extra_selections {
+            if selection.is_empty() {
+                let (row, col) = editor.row_col(selection.start);
+                if let Some(line) = wrapped.get(row) {
+                    let lh = line_heights.get(row).copied().unwrap_or(base_lh);
+                    if let Some(p) = line_pos(line, bidi(row), disp_col(row, col), lh) {
+                        selections.push(fill(Bounds::new(to_screen(line_tops[row], point(p.x + row_x(row), p.y)), size(px(CARET_WIDTH), lh)), text_color));
+                    }
+                }
+            } else {
+                let mut color = editor.markdown_style.as_ref().map_or(text_color, |style| style.link); color.a = 0.25;
+                selections.extend(range_quads(selection.start, selection.end, color, window));
+            }
+        }
 
         PrepaintState {
             wrapped,

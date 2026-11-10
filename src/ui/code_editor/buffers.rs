@@ -722,17 +722,6 @@ impl EditorBuffers {
                 if file.reload_seq != seq || !file.is_at(host_id, &expected) {
                     return;
                 }
-                if input_lease.is_some_and(|lease| {
-                    file.input.markdown().is_none_or(|view| {
-                        view.read(cx).document().read(cx).revision() != lease
-                    })
-                }) {
-                    // Reload owns document bytes, not native input coordinates.
-                    // Selection, scrolling and idle focus handoffs may retire an
-                    // input lease without making a clean disk read obsolete.
-                    // Pending formula/IME input is checked separately below.
-                    return;
-                }
                 let (decoded, mtime) = match result {
                     Ok(loaded) => loaded,
                     Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
@@ -747,6 +736,11 @@ impl EditorBuffers {
                         return;
                     }
                 };
+                if input_lease.is_some_and(|lease| file.input.markdown().is_none_or(|view| view.read(cx).document().read(cx).revision() != lease)) {
+                    file.conflict = Some(DiskConflict::Changed(mtime));
+                    cx.notify();
+                    return;
+                }
                 if pending_lease.is_some_and(|pending| pending || file.input.markdown().is_none_or(|view| view.read(cx).document().read(cx).has_composition())) {
                     file.conflict = Some(DiskConflict::Changed(mtime));
                     cx.notify();

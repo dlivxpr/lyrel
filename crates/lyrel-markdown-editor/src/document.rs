@@ -74,6 +74,7 @@ struct HistoryEntry {
     after: Arc<SourceSnapshot>,
     before_caret: usize,
     after_caret: usize,
+    selection: Option<(Range<usize>, Range<usize>)>,
     edits: Vec<SourceEdit>,
     origin: EntityId,
 }
@@ -124,7 +125,7 @@ impl Document {
         if after.format.line_ending != format.line_ending { after.endings = Arc::new(vec![format.line_ending; after.endings.len()]); }
         after.format = format;
         self.current = Arc::new(after);
-        self.undo.push(HistoryEntry { before, after: self.current.clone(), before_caret: caret, after_caret: caret, edits: Vec::new(), origin });
+        self.undo.push(HistoryEntry { before, after: self.current.clone(), before_caret: caret, after_caret: caret, selection: None, edits: Vec::new(), origin });
         self.redo.clear();
         self.publish(Some(origin), Vec::new(), cx);
     }
@@ -146,7 +147,7 @@ impl Document {
                 let entry = self.undo.last_mut().unwrap();
                 entry.after = self.current.clone(); entry.after_caret = after_caret; entry.edits.push(edit.clone());
             } else {
-                self.undo.push(HistoryEntry { before, after: self.current.clone(), before_caret, after_caret, edits: vec![edit.clone()], origin });
+                self.undo.push(HistoryEntry { before, after: self.current.clone(), before_caret, after_caret, selection: None, edits: vec![edit.clone()], origin });
             }
             self.redo.clear();
             self.publish(Some(origin), vec![edit], cx);
@@ -165,26 +166,26 @@ impl Document {
         let edits: Vec<_> = replacements.into_iter().filter_map(|(range, text)| self.splice(range, &text)).collect();
         if !edits.is_empty() {
             let after_caret = edits.iter().fold(caret, |at, edit| edit.map_offset(at));
-            self.undo.push(HistoryEntry { before, after: self.current.clone(), before_caret: caret, after_caret, edits: edits.clone(), origin });
+            self.undo.push(HistoryEntry { before, after: self.current.clone(), before_caret: caret, after_caret, selection: None, edits: edits.clone(), origin });
             self.redo.clear();
             self.publish(Some(origin), edits, cx);
         }
         self.current.clone()
     }
-    pub(crate) fn undo(&mut self, origin: EntityId, cx: &mut Context<Self>) -> Option<(Arc<SourceSnapshot>, usize)> {
+    pub(crate) fn undo(&mut self, origin: EntityId, cx: &mut Context<Self>) -> Option<(Arc<SourceSnapshot>, Range<usize>)> {
         let entry = self.undo.pop()?;
         let edits = entry.edits.iter().rev().map(SourceEdit::inverse).collect();
         self.current = entry.before.clone();
-        let caret = entry.before_caret;
+        let caret = entry.selection.as_ref().map_or(entry.before_caret..entry.before_caret, |(before, _)| before.clone());
         self.redo.push(entry);
         self.publish(Some(origin), edits, cx);
         Some((self.current.clone(), caret))
     }
-    pub(crate) fn redo(&mut self, origin: EntityId, cx: &mut Context<Self>) -> Option<(Arc<SourceSnapshot>, usize)> {
+    pub(crate) fn redo(&mut self, origin: EntityId, cx: &mut Context<Self>) -> Option<(Arc<SourceSnapshot>, Range<usize>)> {
         let entry = self.redo.pop()?;
         let edits = entry.edits.clone();
         self.current = entry.after.clone();
-        let caret = entry.after_caret;
+        let caret = entry.selection.as_ref().map_or(entry.after_caret..entry.after_caret, |(_, after)| after.clone());
         self.undo.push(entry);
         self.publish(Some(origin), edits, cx);
         Some((self.current.clone(), caret))
@@ -213,7 +214,7 @@ impl Document {
             let edits = composition.edits.iter().rev().map(SourceEdit::inverse).collect();
             self.publish(Some(origin), edits, cx);
         } else if !composition.edits.is_empty() {
-            self.undo.push(HistoryEntry { before: composition.before, after: self.current.clone(), before_caret: composition.before_caret, after_caret: caret, edits: composition.edits, origin });
+            self.undo.push(HistoryEntry { before: composition.before, after: self.current.clone(), before_caret: composition.before_caret, after_caret: caret, selection: None, edits: composition.edits, origin });
             self.redo.clear();
         }
         self.current.clone()
@@ -222,21 +223,29 @@ impl Document {
         assert!(self.composition.is_none());
         let mut inserted = String::new(); let mut endings = Vec::new();
         if leading { inserted.push('\n'); endings.push(self.current.format.line_ending); }
-        for line in lines {
+        let line_count = lines.len();
+        for (index, line) in lines.into_iter().enumerate() {
             let row = self.source()[..line.start].bytes().filter(|&byte| byte == b'\n').count();
             let text = &self.source()[line];
             let count = text.bytes().filter(|&byte| byte == b'\n').count();
             inserted.push_str(text); endings.extend_from_slice(&self.current.endings[row..row + count]);
+            if index + 1 < line_count && !inserted.ends_with('\n') { inserted.push('\n'); endings.push(self.current.format.line_ending); }
         }
         if trailing && !inserted.ends_with('\n') { inserted.push('\n'); endings.push(self.current.format.line_ending); }
         if !trailing && inserted.ends_with('\n') { inserted.pop(); endings.pop(); }
         let before = self.current.clone();
         if let Some(edit) = self.splice_exact(range, inserted, endings) {
             let after_caret = edit.map_offset(caret);
-            self.undo.push(HistoryEntry { before, after: self.current.clone(), before_caret: caret, after_caret, edits: vec![edit.clone()], origin });
+            self.undo.push(HistoryEntry { before, after: self.current.clone(), before_caret: caret, after_caret, selection: None, edits: vec![edit.clone()], origin });
             self.redo.clear(); self.publish(Some(origin), vec![edit], cx);
         }
         self.current.clone()
+    }
+    pub(crate) fn set_history_selection(&mut self, origin: EntityId, before: Range<usize>, after: Range<usize>, coalesced: bool) {
+        if let Some(entry) = self.undo.last_mut().filter(|entry| entry.origin == origin && Arc::ptr_eq(&entry.after, &self.current)) {
+            let before = if coalesced { entry.selection.as_ref().map_or(entry.before_caret..entry.before_caret, |(before, _)| before.clone()) } else { before };
+            entry.selection = Some((before, after));
+        }
     }
     fn splice(&mut self, range: Range<usize>, text: &str) -> Option<SourceEdit> {
         let (inserted, endings) = normalize_input(text, self.current.format.line_ending);

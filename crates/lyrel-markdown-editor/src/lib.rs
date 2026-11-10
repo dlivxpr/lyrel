@@ -766,6 +766,7 @@ pub struct EditorState {
     host_custom_colors: bool,
     placeholder: SharedString,
     /// Selection as a byte range; the caret is one end (see [`Self::cursor_offset`]).
+    extra_selections: Vec<Range<usize>>,
     selected_range: Range<usize>,
     selection_reversed: bool,
     /// IME composition range, if any.
@@ -1075,6 +1076,7 @@ impl EditorState {
             if event.origin() != Some(cx.entity_id()) {
                 this.diagnostics.clear();
                 for edit in event.edits() {
+                    for selection in &mut this.extra_selections { *selection = edit.map_offset(selection.start)..edit.map_offset(selection.end); }
                     this.selected_range = edit.map_offset(this.selected_range.start)..edit.map_offset(this.selected_range.end);
                 }
                 this.marked_range = None;
@@ -1100,6 +1102,7 @@ impl EditorState {
             host_custom_colors: false,
             placeholder: SharedString::default(),
             selected_range: 0..0,
+            extra_selections: Vec::new(),
             selection_reversed: false,
             marked_range: None,
             clipboard_writer: None,
@@ -1244,6 +1247,7 @@ impl EditorState {
 
     /// Replace the whole document; resets the caret to the start.
     pub fn set_text(&mut self, text: impl Into<String>, cx: &mut Context<Self>) {
+        self.extra_selections.clear();
         let document = self.document.clone();
         let format = document.read(cx).format();
         document.update(cx, |document, cx| document.reload(text.into(), format, cx));
@@ -2848,6 +2852,7 @@ impl EditorState {
             }
             return;
         }
+        if self.indent_selected_lines(false, cx) { return; }
         let cursor = self.cursor_offset();
         let line_start = self.content[..cursor].rfind('\n').map_or(0, |i| i + 1);
         let line_end = self.content[line_start..]
@@ -2896,6 +2901,7 @@ impl EditorState {
             }
             return;
         }
+        if self.indent_selected_lines(true, cx) { return; }
         let cursor = self.cursor_offset();
         let line_start = self.content[..cursor].rfind('\n').map_or(0, |i| i + 1);
         let line = &self.content[line_start..];
@@ -3075,12 +3081,12 @@ impl EditorState {
         }
     }
 
-    fn restore_snapshot(&mut self, snapshot: Arc<SourceSnapshot>, caret: usize, cx: &mut Context<Self>) {
+    fn restore_snapshot(&mut self, snapshot: Arc<SourceSnapshot>, selection: Range<usize>, cx: &mut Context<Self>) {
         self.content = snapshot.text_handle();
         self.content_gen = self.document.read(cx).revision();
         self.diagnostics.clear();
-        let caret = caret.min(self.content.len());
-        self.selected_range = caret..caret;
+        self.extra_selections.clear();
+        self.selected_range = selection.start.min(self.content.len())..selection.end.min(self.content.len());
         self.selection_reversed = false;
         self.marked_range = None;
         self.last_edit = EditKind::Other;
@@ -3106,6 +3112,7 @@ impl EditorState {
         };
         let coalesce = match (self.last_edit, kind) {
             (EditKind::Insert(end), EditKind::Insert(_)) => end == range.start,
+            (EditKind::Insert(end), EditKind::Other) if new_text == "\n" && range.is_empty() => end == range.start,
             (EditKind::Delete, EditKind::Delete) => true,
             _ => false,
         };
@@ -4043,6 +4050,7 @@ impl EditorState {
 
     /// Close the suggestions menu (Escape, or a click elsewhere).
     fn dismiss(&mut self, _: &Dismiss, _: &mut Window, cx: &mut Context<Self>) {
+        if !self.extra_selections.is_empty() { self.extra_selections.clear(); cx.notify(); return; }
         if self.menu.take().is_some()
             || self.table_menu.take().is_some()
             || self.image_menu.take().is_some()
@@ -4421,6 +4429,7 @@ impl EditorState {
     // --- Selection helpers ---------------------------------------------------
 
     fn move_to(&mut self, offset: usize, cx: &mut Context<Self>) {
+        self.extra_selections.clear();
         self.selected_range = offset..offset;
         // A deliberate caret move ends the current typing/deleting run and the
         // vertical-movement goal column.
@@ -5212,6 +5221,10 @@ impl EntityInputHandler for EditorState {
         _: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if range_utf16.is_none() && self.marked_range.is_none() && !self.extra_selections.is_empty() {
+            self.replace_occurrences(new_text, cx);
+            return;
+        }
         let range = range_utf16
             .as_ref()
             .map(|r| self.range_from_utf16(r))
@@ -5362,6 +5375,8 @@ impl Render for EditorState {
             .on_action(cx.listener(|this, _: &gpui_kit::component::input::Paste, window, cx| this.paste(&Paste, window, cx)))
             .on_action(cx.listener(|this, _: &gpui_kit::component::input::SelectAll, window, cx| this.select_all(&SelectAll, window, cx)))
             .on_action(cx.listener(|this, _: &gpui_kit::component::input::MoveToStart, window, cx| this.doc_start(&DocStart, window, cx)))
+            .on_action(cx.listener(|this, _: &gpui_kit::component::input::Backspace, window, cx| this.backspace(&Backspace, window, cx)))
+            .on_action(cx.listener(|this, _: &gpui_kit::component::input::Delete, window, cx| this.delete(&Delete, window, cx)))
             .on_action(cx.listener(Self::backspace))
             .on_action(cx.listener(Self::delete))
             .on_action(cx.listener(Self::left))
