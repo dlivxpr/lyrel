@@ -146,7 +146,11 @@ fn closing_either_nonowner_preserves_composition_lease_and_history(cx: &mut Test
         });
         settle(&mut context);
         let second = view(&app, &context);
-        let (closing, owner) = if close_primary { (&first, &second) } else { (&second, &first) };
+        let (closing, owner) = if close_primary {
+            (&first, &second)
+        } else {
+            (&second, &first)
+        };
         app.update_in(&mut context, |app, window, cx| {
             if close_primary {
                 assert!(app.editor_focus_group(true, window, cx));
@@ -169,7 +173,9 @@ fn closing_either_nonowner_preserves_composition_lease_and_history(cx: &mut Test
         owner.update_in(&mut context, |view, window, cx| {
             assert_eq!(view.marked_text_range(window, cx), Some(8..11));
         });
-        closing.update_in(&mut context, |view, window, cx| view.unmark_text(window, cx));
+        closing.update_in(&mut context, |view, window, cx| {
+            view.unmark_text(window, cx)
+        });
         owner.update_in(&mut context, |view, window, cx| {
             view.replace_and_mark_text_in_range(None, "中文😀", Some(4..4), window, cx);
             view.unmark_text(window, cx);
@@ -192,8 +198,12 @@ fn representation_conversion_is_separate_from_adjacent_typing_undo(cx: &mut Test
     let path = dir.path().join("format-history.md");
     std::fs::write(&path, b"body\n").unwrap();
     let (app, mut context, _streams) = harness_with_tabs(cx, 1);
-    app.update_in(&mut context, |app, window, cx| app.open_file_in_editor(&path, window, cx));
-    until(&mut context, |cx| app.read_with(cx, |app, _| app.active_buffer().is_some()));
+    app.update_in(&mut context, |app, window, cx| {
+        app.open_file_in_editor(&path, window, cx)
+    });
+    until(&mut context, |cx| {
+        app.read_with(cx, |app, _| app.active_buffer().is_some())
+    });
     let editor = view(&app, &context);
     editor.update_in(&mut context, |view, window, cx| {
         view.select_range(0..0, cx);
@@ -203,10 +213,16 @@ fn representation_conversion_is_separate_from_adjacent_typing_undo(cx: &mut Test
     app.update_in(&mut context, |app, _, cx| app.toggle_line_ending(cx));
     context.update(|window, cx| window.input("b", cx));
     settle(&mut context);
-    for expected in [b"abody\r\n".as_slice(), b"abody\n".as_slice(), b"body\n".as_slice()] {
+    for expected in [
+        b"abody\r\n".as_slice(),
+        b"abody\n".as_slice(),
+        b"body\n".as_slice(),
+    ] {
         context.dispatch_action(gpui_kit::component::input::Undo);
         settle(&mut context);
-        editor.read_with(&context, |view, cx| assert_eq!(view.document().read(cx).encode().unwrap(), expected));
+        editor.read_with(&context, |view, cx| {
+            assert_eq!(view.document().read(cx).encode().unwrap(), expected)
+        });
     }
 }
 
@@ -217,8 +233,12 @@ fn noop_trim_preserves_the_previous_edits_undo_selection(cx: &mut TestAppContext
     let path = dir.path().join("trim-history.md");
     std::fs::write(&path, b"first\nsecond\n").unwrap();
     let (app, mut context, _streams) = harness_with_tabs(cx, 1);
-    app.update_in(&mut context, |app, window, cx| app.open_file_in_editor(&path, window, cx));
-    until(&mut context, |cx| app.read_with(cx, |app, _| app.active_buffer().is_some()));
+    app.update_in(&mut context, |app, window, cx| {
+        app.open_file_in_editor(&path, window, cx)
+    });
+    until(&mut context, |cx| {
+        app.read_with(cx, |app, _| app.active_buffer().is_some())
+    });
     let editor = view(&app, &context);
     editor.update_in(&mut context, |view, window, cx| {
         view.select_range(0..5, cx);
@@ -234,11 +254,13 @@ fn noop_trim_preserves_the_previous_edits_undo_selection(cx: &mut TestAppContext
     context.dispatch_action(gpui_kit::component::input::Undo);
     settle(&mut context);
     editor.read_with(&context, |view, cx| {
-        assert_eq!(view.document().read(cx).encode().unwrap(), b"first\nsecond\n");
+        assert_eq!(
+            view.document().read(cx).encode().unwrap(),
+            b"first\nsecond\n"
+        );
         assert_eq!(view.selected_range(), 0..5);
     });
 }
-
 
 #[cfg(test)]
 #[gpui_kit::test]

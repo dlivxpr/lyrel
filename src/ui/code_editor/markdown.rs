@@ -1,8 +1,8 @@
 //! Zorite-derived editor 的工作台样式与原生消费者入口。文件生命周期保留在 buffers/saving。
+use crate::ui::i18n::{L10nKey, t};
 use gpui_kit::component::ActiveTheme as _;
 use gpui_kit::{App, Context};
 use lyrel_markdown_editor::{AlertIcons, EditorState, Labels, SyntaxStyle};
-use crate::ui::i18n::{L10nKey, t};
 pub(super) mod images;
 mod links;
 mod mermaid_host;
@@ -105,7 +105,6 @@ fn labels() -> Labels {
     labels.delete_image = t(L10nKey::MarkdownDeleteImage).into();
     labels
 }
-
 
 #[cfg(any(test, feature = "native-markdown-tests"))]
 mod foundation;

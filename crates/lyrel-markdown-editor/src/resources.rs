@@ -29,7 +29,6 @@ impl SourceSnapshot {
     }
 }
 
-
 impl EditorState {
     /// A Host bitmap changed without changing source/history/revision.
     pub fn refresh_resource_layout(&mut self, cx: &mut Context<Self>) {

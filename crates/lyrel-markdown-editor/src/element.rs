@@ -1159,8 +1159,12 @@ impl Element for EditorElement {
         // highlights (which paint the same shapes in other colors).
         let range_quads =
             |s: usize, e: usize, color: Hsla, window: &mut Window| -> Vec<PaintQuad> {
-                let s_row = starts.partition_point(|&start| start <= s).saturating_sub(1);
-                let e_row = starts.partition_point(|&start| start <= e).saturating_sub(1);
+                let s_row = starts
+                    .partition_point(|&start| start <= s)
+                    .saturating_sub(1);
+                let e_row = starts
+                    .partition_point(|&start| start <= e)
+                    .saturating_sub(1);
                 let right = bounds.size.width;
                 let mut sels = Vec::new();
                 for row in s_row..=e_row {
