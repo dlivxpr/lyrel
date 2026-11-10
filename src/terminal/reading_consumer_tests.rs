@@ -9,6 +9,75 @@ fn reading_painted_rows(view: &Entity<TerminalView>, cx: &mut TestAppContext) ->
     })
 }
 
+// Read the renderer's supported scene output, never RenderCell style flags.
+fn reading_painted_glyph_colors(
+    window: gpui_kit::AnyWindowHandle,
+    view: &Entity<TerminalView>,
+    row: usize,
+    col: usize,
+    cx: &mut TestAppContext,
+) -> Vec<gpui_kit::Hsla> {
+    window.update(cx, |_, window, cx| {
+        let geom = view.read(cx).cell_geom.expect("production frame");
+        let cell = Bounds::new(
+            point(geom.origin.x + geom.cell_width * col as f32,
+                geom.origin.y + geom.line_height * row as f32),
+            gpui_kit::size(geom.cell_width, geom.line_height),
+        ).map(|pixel| gpui_kit::ScaledPixels(pixel.as_f32() * window.scale_factor()));
+        let scene = window.painted_scene();
+        scene.monochrome_sprites.iter().map(|sprite| (sprite.bounds, sprite.color))
+            .chain(scene.subpixel_sprites.iter().map(|sprite| (sprite.bounds, sprite.color)))
+            .filter_map(|(bounds, color)| {
+                let visible = bounds.intersect(&cell);
+                (visible.size.width.0 > 0. && visible.size.height.0 > 0.).then_some(color)
+            })
+            .collect()
+    }).unwrap()
+}
+
+// These fixtures have no application-painted cell backgrounds. Full-cell
+// fills therefore observe the search decorations emitted by TerminalElement.
+fn reading_painted_search_runs(
+    window: gpui_kit::AnyWindowHandle,
+    view: &Entity<TerminalView>,
+    cx: &mut TestAppContext,
+) -> Vec<(String, gpui_kit::Hsla)> {
+    window.update(cx, |_, window, cx| {
+        let view = view.read(cx);
+        let geom = view.cell_geom.expect("production frame");
+        let scale = window.scale_factor();
+        let mut runs = Vec::new();
+        for quad in window.painted_quads() {
+            let Some(color) = quad.background.as_solid() else { continue };
+            let bounds = quad.bounds.map(|pixel| px(pixel.0 / scale));
+            let row = ((bounds.origin.y - geom.origin.y) / geom.line_height).round();
+            let col = ((bounds.origin.x - geom.origin.x) / geom.cell_width).round();
+            let len = (bounds.size.width / geom.cell_width).round();
+            if row < 0. || row >= geom.rows as f32 || col < 0. || len < 1.
+                || col + len > geom.cols as f32 {
+                continue;
+            }
+            let (row, col, len) = (row as usize, col as usize, len as usize);
+            let expected = Bounds::new(
+                point(geom.origin.x + geom.cell_width * col as f32,
+                    geom.origin.y + geom.line_height * row as f32),
+                gpui_kit::size(geom.cell_width * len as f32, geom.line_height),
+            );
+            if (bounds.origin.x - expected.origin.x).abs() > px(0.1)
+                || (bounds.origin.y - expected.origin.y).abs() > px(0.1)
+                || (bounds.size.width - expected.size.width).abs() > px(0.1)
+                || (bounds.size.height - expected.size.height).abs() > px(0.1) {
+                continue;
+            }
+            let text = view.grid_buf[row * geom.cols + col..row * geom.cols + col + len]
+                .iter().map(|cell| cell.c).collect();
+            runs.push((row, col, text, color));
+        }
+        runs.sort_by_key(|(row, col, _, _)| (*row, *col));
+        runs.into_iter().map(|(_, _, text, color)| (text, color)).collect()
+    }).unwrap()
+}
+
 #[gpui_kit::test]
 fn reading_one_row_stays_fixed_while_real_pty_rewrites_and_appends(cx: &mut TestAppContext) {
     let (daemon, pane, view, window) = graphics_layout_harness(cx);
@@ -323,10 +392,21 @@ fn reading_copy_links_theme_and_ime_use_the_painted_semantic_rows(cx: &mut TestA
         view.update(cx, |view, cx| assert!(view.open_link_at(2, 6, window, cx)));
     }).unwrap();
     assert_eq!(cx.opened_url().as_deref(), Some("https://old.example/"));
-    view.update(cx, |view, cx| {
-        assert!(matches!(view.resolve_link_at(2, 12, true, false, cx), crate::terminal::link::LinkAt::Found(crate::terminal::search::LinkTarget::File { path, line: Some(9), column: Some(2), .. }, _) if path == daemon.dir.path().join("frozen.txt")));
+    let opened = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+    let seen = opened.clone();
+    view.update(cx, |_, cx| {
+        let entity = cx.entity();
+        cx.subscribe(&entity, move |_, _, event: &OpenFileRequested, _| {
+            seen.borrow_mut().push((event.path.clone(), event.line, event.column));
+        }).detach();
     });
-    let foreground = view.read_with(cx, |view, _| view.grid_buf[5 * view.cell_geom.unwrap().cols].fg);
+    window.update(cx, |_, window, cx| {
+        view.update(cx, |view, cx| assert!(view.open_link_at(2, 12, window, cx)));
+    }).unwrap();
+    cx.run_until_parked();
+    assert_eq!(&*opened.borrow(), &[(daemon.dir.path().join("frozen.txt"), Some(9), Some(2))]);
+    let foreground = reading_painted_glyph_colors(window, &view, 5, 0, cx);
+    assert!(!foreground.is_empty(), "the retained text must actually paint glyphs");
     cx.update(|cx| gpui_kit::component::Theme::update(cx, |theme| theme.foreground = gpui_kit::white()));
     cx.update(|cx| {
         let mut ansi16: [rio_vt::config::colors::ColorRgb; 16] = view.read(cx).terminal.palette[..16].try_into().unwrap();
@@ -335,11 +415,16 @@ fn reading_copy_links_theme_and_ime_use_the_painted_semantic_rows(cx: &mut TestA
     });
     graphics_assert_production_paint(window, &view, cx);
     assert_eq!(reading_painted_rows(&view, cx), before);
-    view.read_with(cx, |view, _| {
-        assert_ne!(view.grid_buf[5 * view.cell_geom.unwrap().cols].fg, foreground, "semantic default foreground re-resolves against the changed theme");
-        assert!(view.grid_snap.as_ref().unwrap().cursor.is_none());
-        assert_eq!(crate::terminal::palette::hsla_to_rgb(view.grid_buf[9 * view.cell_geom.unwrap().cols].fg), rio_vt::config::colors::ColorRgb { r: 0, g: 255, b: 0 });
-    });
+    let changed_foreground = reading_painted_glyph_colors(window, &view, 5, 0, cx);
+    assert!(!changed_foreground.is_empty());
+    assert_ne!(changed_foreground, foreground, "retained glyph ink follows the changed theme");
+    assert!(changed_foreground.iter().all(|color| *color == gpui_kit::white()));
+    assert!(view.read_with(cx, |view, _| view.grid_snap.as_ref().unwrap().painted_cursor().is_none()));
+    let ansi_ink = reading_painted_glyph_colors(window, &view, 9, 0, cx);
+    assert!(!ansi_ink.is_empty());
+    assert!(ansi_ink.iter().all(|color| crate::terminal::palette::hsla_to_rgb(*color)
+        == rio_vt::config::colors::ColorRgb { r: 0, g: 255, b: 0 }),
+        "retained ANSI glyph ink follows the active palette");
     view.update(cx, |view, cx| {
         view.on_select_start(0, 7, true, 1, false, cx);
         view.on_select_update(4, 7, false, cx);
@@ -375,19 +460,24 @@ fn reading_search_changes_query_without_annotating_live_replacements(cx: &mut Te
         graphics_assert_production_paint(window, &view, cx);
         view.read_with(cx, |view, _| {
             assert_eq!(view.search.as_ref().unwrap().matches.len(), expected, "query {query} describes semantic reading rows, not replacements");
-            let highlighted: String = view.grid_buf.iter().filter(|cell| cell.match_hit || cell.match_current).map(|cell| cell.c).collect();
-            assert_eq!(highlighted, query.repeat(expected), "production decorations name the displayed characters");
         });
+        let painted = reading_painted_search_runs(window, &view, cx);
+        assert_eq!(painted.iter().map(|(text, _)| text.as_str()).collect::<String>(), query.repeat(expected),
+            "production search fills cover the displayed characters");
         if expected > 1 {
+            assert_ne!(painted[0].1, painted[1].1, "the current result paints a distinct wash");
             view.update(cx, |view, cx| view.step_match(rio_vt::crosswords::pos::Direction::Right, cx));
             graphics_assert_production_paint(window, &view, cx);
             assert_eq!(view.read_with(cx, |view, _| view.search.as_ref().unwrap().current_index), Some(0));
+            let stepped = reading_painted_search_runs(window, &view, cx);
+            assert_eq!(stepped.iter().map(|(text, _)| text.as_str()).collect::<String>(), "old-needleold-needle");
+            assert_eq!(stepped.iter().map(|(_, color)| *color).collect::<Vec<_>>(),
+                vec![painted[1].1, painted[0].1], "next result moves the current wash between retained rows");
             graphics_send_fixture(&view, cx, 73, &b"\x1b[24;1H\r\nSATURATED-LIVE".repeat(8));
             graphics_assert_production_paint(window, &view, cx);
-            view.read_with(cx, |view, _| {
-                let highlighted: String = view.grid_buf.iter().filter(|cell| cell.match_hit || cell.match_current).map(|cell| cell.c).collect();
-                assert_eq!(highlighted, "old-needleold-needle", "eviction count participates in frozen match coordinates");
-            });
+            let saturated = reading_painted_search_runs(window, &view, cx);
+            assert_eq!(saturated.iter().map(|(text, _)| text.as_str()).collect::<String>(),
+                "old-needleold-needle", "eviction cannot move search fills off the retained characters");
         }
     }
     view.update(cx, |view, _| view.jump_to_prompt());
@@ -582,11 +672,30 @@ fn reading_fractional_sliver_keeps_selection_geometry_and_copy(cx: &mut TestAppC
         view.on_select_update(14, 5, false, cx);
         view.on_select_end(cx);
     });
+    graphics_assert_production_paint(window, &view, cx);
+    let selection_fill = window.update(cx, |_, window, cx| {
+        let geom = view.read(cx).cell_geom.expect("production frame");
+        let expected = Bounds::new(
+            point(geom.origin.x, geom.origin.y + geom.line_height * 5.),
+            gpui_kit::size(geom.cell_width * 15., geom.line_height),
+        ).map(|pixel| gpui_kit::ScaledPixels(pixel.as_f32() * window.scale_factor()));
+        window.painted_quads().iter().find(|quad| quad.bounds == expected)
+            .expect("the selected retained row must paint before scrolling").background.clone()
+    }).unwrap();
     graphics_send_fixture(&view, cx, 142, &b"\x1b[24;1H\r\nADVANCE".repeat(20));
     view.update(cx, |view, cx| { view.smooth_scroll(-5.5, cx); });
     graphics_assert_production_paint(window, &view, cx);
-    let selected = view.read_with(cx, |view, _| view.grid_snap.as_ref().unwrap().sliver.as_ref().unwrap().iter().filter(|cell| cell.selected).map(|cell| cell.c).collect::<String>());
-    assert_eq!(selected.trim_end(), "selected-sliver", "painted fractional row uses the same absolute selected range");
+    window.update(cx, |_, window, cx| {
+        let geom = view.read(cx).cell_geom.expect("production frame");
+        let scale = window.scale_factor();
+        let expected = Bounds::new(
+            point(geom.origin.x, geom.origin.y - geom.line_height),
+            gpui_kit::size(geom.cell_width * 15., geom.line_height),
+        ).map(|pixel| gpui_kit::ScaledPixels(pixel.as_f32() * scale));
+        assert!(window.painted_quads().iter().any(|quad|
+            quad.bounds == expected && quad.background == selection_fill),
+            "the selected fractional row must paint its full retained text range above row zero");
+    }).unwrap();
     view.update(cx, |view, cx| view.copy_selection(cx));
     assert_eq!(cx.update(|cx| cx.read_from_clipboard().and_then(|item| item.text())).as_deref(), Some("selected-sliver"));
     daemon.panes().kill(pane).unwrap();
