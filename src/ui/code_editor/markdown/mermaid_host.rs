@@ -555,6 +555,8 @@ fn render_native(
     let RenderOutput::Svg(Some(output)) = output else {
         return Err(Failure::Empty);
     };
+    #[cfg(feature = "native-markdown-tests")]
+    native_tests::capture_svg(key, output.svg());
     let dimensions =
         resvg::usvg::Tree::from_data(output.svg().as_bytes(), &resvg::usvg::Options::default())
             .map_err(|error| Failure::Diagnostic(error.to_string()))?
