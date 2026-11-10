@@ -638,3 +638,248 @@ fn reading_fractional_sliver_keeps_selection_geometry_and_copy(cx: &mut TestAppC
     daemon.panes().kill(pane).unwrap();
     graphics_recovery_destroy(view, window, cx);
 }
+
+#[gpui_kit::test]
+fn reading_resize_repeated_narrow_wide_keeps_the_logical_character_offset(cx: &mut TestAppContext) {
+    let (daemon, pane, view, window) = graphics_layout_harness(cx);
+    let mut scene = b"\x1b[?7h\x1b[2J\x1b[H".to_vec();
+    for row in 0..20 { scene.extend_from_slice(format!("BEFORE-{row:03}\r\n").as_bytes()); }
+    let response = format!("{}位置e\u{301}{}", "A".repeat(160), "界e\u{301}".repeat(200));
+    scene.extend_from_slice(response.as_bytes());
+    scene.extend_from_slice(b"\r\n");
+    for row in 0..100 { scene.extend_from_slice(format!("AFTER-{row:03}\r\n").as_bytes()); }
+    graphics_send_fixture(&view, cx, 120, &scene);
+    view.update(cx, |view, cx| {
+        let history = view.terminal.term.lock().grid.history_size();
+        view.smooth_scroll((history - 22) as f32, cx);
+    });
+    graphics_assert_production_paint(window, &view, cx);
+    assert!(reading_painted_rows(&view, cx)[0].starts_with("位置e\u{301}"));
+    // No PTY output follows any resize. Ordered Size/graphics alone must
+    // publish the relocated frame, including marks and wide-cell mapping.
+    for cols in [40, 160, 80, 40, 80] {
+        graphics_assert_production_paint_at(window, &view, cx, TermSize::new(cols, 24));
+        assert!(reading_painted_rows(&view, cx)[0].starts_with("位置e\u{301}"),
+            "{cols} columns must retain character 160 of the same hard line");
+    }
+    daemon.panes().kill(pane).unwrap();
+    graphics_recovery_destroy(view, window, cx);
+}
+
+// Controlled ordered pane stream, real RemoteTerminal and rooted production
+// paint. Unlike the tests above this seam is not a real PTY/daemon scene: it
+// deliberately separates Size from its graphics completion to expose races.
+fn reading_ordered_resize_harness(cx: &mut TestAppContext) -> (Entity<TerminalView>, gpui_kit::AnyWindowHandle, crate::daemon::transport::Stream) {
+    crate::core::config::pin_test_config_dir();
+    cx.executor().allow_parking();
+    cx.update(|cx| {
+        gpui_kit::component::init(cx);
+        cx.set_global(Config::default());
+    });
+    let (client, _initial_sender) = test_stream_pair();
+    let (view, window) = graphics_build_rooted_consumer_at(cx, 253, client, Vec::new(), TermSize::new(80, 24), PtySource::Raw);
+    let (client, sender) = test_stream_pair();
+    view.update(cx, |view, cx| {
+        view.adopt_relink(client, Vec::new(), &crate::terminal::PaneRoute::Remote {
+            header: Box::new(crate::daemon::router::RouteHeader::wsl("reading-resize-fixture")),
+            resize_echo: true,
+        }, TermSize::new(80, 24), 10, 20, cx).unwrap();
+    });
+    (view, window, sender)
+}
+
+fn reading_request_window_size(window: gpui_kit::AnyWindowHandle, view: &Entity<TerminalView>, cx: &mut TestAppContext, size: TermSize) {
+    let target = graphics_window_geometry(window, view, cx, size).0;
+    cx.simulate_window_resize(window, target);
+    window.update(cx, |_, window, cx| {
+        window.refresh();
+        window.draw(cx).clear(cx);
+    }).unwrap();
+}
+
+fn reading_ordered_size(sender: &mut crate::daemon::transport::Stream, cols: u16, rows: u16) {
+    DaemonMsg::Size(crate::daemon::protocol::WinSize { cols, rows, cell_w: 10, cell_h: 20 }).encode(sender).unwrap();
+}
+
+fn reading_ordered_screen(sender: &mut crate::daemon::transport::Stream, origin: i64, epoch: u64) {
+    send_graphics(sender, GraphicsUpdate::Screen { screen: 0, history_origin: origin, epoch });
+}
+
+#[gpui_kit::test]
+fn reading_resize_orders_old_width_scroll_and_latest_geometry_without_more_output(cx: &mut TestAppContext) {
+    let (view, window, mut sender) = reading_ordered_resize_harness(cx);
+    let mut scene = b"\x1b[?7h\x1b[2J\x1b[H".to_vec();
+    for row in 0..120 { scene.extend_from_slice(format!("LINE-{row:03}\r\n").as_bytes()); }
+    DaemonMsg::Output(scene).encode(&mut sender).unwrap();
+    reading_ordered_screen(&mut sender, 97, 0);
+    graphics_recovery_wait(cx, "ordered reading baseline did not paint", |cx| {
+        view.read_with(cx, |view, _| view.grid_snap.is_some() && sync_presented_row(view, 0).starts_with("LINE-097"))
+    });
+    view.update(cx, |view, cx| { view.smooth_scroll(47., cx); });
+    graphics_assert_production_paint(window, &view, cx);
+    let before = reading_painted_rows(&view, cx);
+    assert_eq!(before[0], "LINE-050");
+    // Equal-area dimensions must not reinterpret the old 80-column picture.
+    reading_request_window_size(window, &view, cx, TermSize::new(96, 20));
+    assert_eq!(reading_painted_rows(&view, cx), before);
+    view.update(cx, |view, cx| { view.smooth_scroll(3., cx); });
+    // Supersede before the first echo. Neither that Size nor its Screen can
+    // publish an intermediate-width frame over the latest requested intent.
+    reading_request_window_size(window, &view, cx, TermSize::new(40, 24));
+    reading_ordered_size(&mut sender, 96, 20);
+    reading_ordered_screen(&mut sender, 101, 1);
+    reading_ordered_size(&mut sender, 40, 24);
+    graphics_recovery_wait(cx, "latest Size did not reach the mirror", |cx| {
+        view.read_with(cx, |view, _| view.terminal.term.lock().columns() == 40)
+    });
+    window.update(cx, |_, window, cx| { window.refresh(); window.draw(cx).clear(cx); }).unwrap();
+    assert_eq!(reading_painted_rows(&view, cx), before, "Size alone cannot pair new text with old graphics geometry");
+    reading_ordered_screen(&mut sender, 97, 2);
+    graphics_assert_production_paint_at(window, &view, cx, TermSize::new(40, 24));
+    assert_eq!(reading_painted_rows(&view, cx)[0], "LINE-047", "three rows of user travel survive both pending resizes");
+    graphics_recovery_destroy(view, window, cx);
+}
+
+#[gpui_kit::test]
+fn reading_resize_relocates_direct_and_placeholder_images_with_their_text(cx: &mut TestAppContext) {
+    use std::sync::atomic::Ordering;
+    let (daemon, pane, view, window) = graphics_layout_harness(cx);
+    let mut scene = b"\x1b[?7h\x1b[2J\x1b[H".to_vec();
+    for row in 0..20 { scene.extend_from_slice(format!("BEFORE-{row:03}\r\n").as_bytes()); }
+    scene.extend_from_slice("A".repeat(640).as_bytes());
+    scene.extend_from_slice(b"\r\nDIRECT-MARK\r\x1b[6G\x1b_Ga=T,i=71,p=1,c=2,r=1,C=1,f=32,s=1,v=1,q=2;AAD//w==\x1b\\\r\nPLACE-MARK  \x1b_Ga=T,i=72,p=2,U=1,c=2,r=1,f=32,s=1,v=1,q=2;AP8A/w==\x1b\\");
+    scene.extend_from_slice("\x1b[38;5;72;58;5;2m\u{10eeee}\u{305}\u{305}\u{10eeee}\x1b[0m\r\n".as_bytes());
+    graphics_send_fixture(&view, cx, 121, &scene);
+    graphics_layout_wait_image(&view, cx, 71);
+    graphics_layout_wait_image(&view, cx, 72);
+    let mut tail = Vec::new();
+    for row in 0..100 { tail.extend_from_slice(format!("AFTER-{row:03}\r\n").as_bytes()); }
+    graphics_send_fixture(&view, cx, 124, &tail);
+    view.update(cx, |view, cx| {
+        let history = view.terminal.term.lock().grid.history_size();
+        view.smooth_scroll((history - 27) as f32, cx);
+    });
+    for cols in [80, 40, 160, 80, 40] {
+        graphics_assert_production_paint_at(window, &view, cx, TermSize::new(cols, 24));
+        let rows = reading_painted_rows(&view, cx);
+        let direct_row = rows.iter().position(|row| row.starts_with("DIRECT-MARK")).expect("direct text is visible");
+        let placeholder_row = rows.iter().position(|row| row.starts_with("PLACE-MARK")).expect("placeholder text is visible");
+        view.read_with(cx, |view, _| {
+            let geom = view.cell_geom.unwrap();
+            let snap = view.grid_snap.as_ref().unwrap();
+            let direct = snap.images.iter().find(|image| image.placement.image_id == 71).expect("direct placement is painted");
+            let placeholder = snap.images.iter().find(|image| image.placement.image_id == 72).expect("placeholder is painted");
+            assert!(direct.painted.load(Ordering::Acquire));
+            assert!(placeholder.painted.load(Ordering::Acquire));
+            assert_eq!(reading_rgba_pixel(direct), [0, 0, 255, 255]);
+            assert_eq!(reading_rgba_pixel(placeholder), [0, 255, 0, 255]);
+            let (direct_crop, _) = direct.paint_bounds(geom.origin, geom.cell_width, geom.line_height, 0, snap.display_offset, 1.);
+            assert_eq!(direct_crop.origin, geom.origin + point(geom.cell_width * 5., geom.line_height * direct_row as f32));
+            let side = (geom.cell_width * 2.).min(geom.line_height);
+            let (placeholder_crop, _) = placeholder.paint_bounds(geom.origin, geom.cell_width, geom.line_height, 0, snap.display_offset, 1.);
+            assert_eq!(placeholder_crop, Bounds::new(
+                geom.origin + point(geom.cell_width * 12. + (geom.cell_width * 2. - side) / 2., geom.line_height * placeholder_row as f32 + (geom.line_height - side) / 2.),
+                gpui_kit::size(side, side),
+            ), "{cols} columns: both image kinds remain on their own displayed text rows");
+        });
+    }
+    daemon.panes().kill(pane).unwrap();
+    graphics_recovery_destroy(view, window, cx);
+}
+
+#[gpui_kit::test]
+fn reading_resize_chooses_the_nearest_repeated_256_character_prefix(cx: &mut TestAppContext) {
+    let (daemon, pane, view, window) = graphics_layout_harness(cx);
+    let mut scene = b"\x1b[?7h\x1b[2J\x1b[H".to_vec();
+    for row in 0..20 { scene.extend_from_slice(format!("BEFORE-{row:03}\r\n").as_bytes()); }
+    let mut middle = String::new();
+    for label in ["FIRST", "MIDDLE", "LAST"] {
+        let response = format!("{}{}{}", "D".repeat(320), label, "X".repeat(80 - label.len()));
+        if label == "MIDDLE" { middle = response.chars().skip(160).collect(); }
+        scene.extend_from_slice(response.as_bytes());
+        scene.extend_from_slice(b"\r\n");
+    }
+    for row in 0..100 { scene.extend_from_slice(format!("AFTER-{row:03}\r\n").as_bytes()); }
+    graphics_send_fixture(&view, cx, 122, &scene);
+    view.update(cx, |view, cx| {
+        let history = view.terminal.term.lock().grid.history_size();
+        view.smooth_scroll((history - 27) as f32, cx);
+    });
+    for cols in [80, 40, 80] {
+        graphics_assert_production_paint_at(window, &view, cx, TermSize::new(cols, 24));
+        let tail = view.read_with(cx, |view, _| {
+            let geom = view.cell_geom.unwrap();
+            let mut text = String::new();
+            for row in 0..geom.rows {
+                let wrapped = view.grid_buf[(row + 1) * geom.cols - 1].wrapped;
+                let displayed = sync_presented_row(view, row);
+                text.push_str(if wrapped { &displayed } else { displayed.trim_end() });
+                if !wrapped { break; }
+            }
+            text
+        });
+        assert_eq!(tail, middle, "{cols} columns must choose the nearby middle hard line, not the first prefix match");
+    }
+    daemon.panes().kill(pane).unwrap();
+    graphics_recovery_destroy(view, window, cx);
+}
+
+#[gpui_kit::test]
+fn reading_resize_preserves_a_blank_rows_context_between_reflowed_lines(cx: &mut TestAppContext) {
+    let (daemon, pane, view, window) = graphics_layout_harness(cx);
+    let mut scene = b"\x1b[?7h\x1b[2J\x1b[H".to_vec();
+    for row in 0..20 {
+        scene.extend_from_slice(format!("BEFORE-{row:03}{}\r\n", "B".repeat(150)).as_bytes());
+    }
+    // Each preceding logical line is exactly 160 cells. The second blank of
+    // the three-row run is old row 41, independent of the emulator algorithm.
+    scene.extend_from_slice(b"\r\n\r\n\r\nBLANK-CONTEXT-TARGET\r\n\r\nOTHER-GAP\r\n");
+    for row in 0..100 { scene.extend_from_slice(format!("AFTER-{row:03}\r\n").as_bytes()); }
+    graphics_send_fixture(&view, cx, 123, &scene);
+    view.update(cx, |view, cx| {
+        let history = view.terminal.term.lock().grid.history_size();
+        view.smooth_scroll((history - 41) as f32, cx);
+    });
+    for cols in [80, 40, 160, 80] {
+        graphics_assert_production_paint_at(window, &view, cx, TermSize::new(cols, 24));
+        let rows = reading_painted_rows(&view, cx);
+        assert_eq!(&rows[..3], &["", "", "BLANK-CONTEXT-TARGET"], "{cols} columns preserve the blank within its run, not another empty row");
+    }
+    daemon.panes().kill(pane).unwrap();
+    graphics_recovery_destroy(view, window, cx);
+}
+
+#[gpui_kit::test]
+fn reading_resize_missing_evicted_anchor_uses_a_retained_geometry_estimate(cx: &mut TestAppContext) {
+    let (view, window, mut sender) = reading_ordered_resize_harness(cx);
+    let mut scene = b"\x1b[?7h\x1b[2J\x1b[H".to_vec();
+    for row in 0..120 { scene.extend_from_slice(format!("LINE-{row:03}\r\n").as_bytes()); }
+    DaemonMsg::Output(scene).encode(&mut sender).unwrap();
+    reading_ordered_screen(&mut sender, 97, 0);
+    graphics_recovery_wait(cx, "fallback baseline did not paint", |cx| {
+        view.read_with(cx, |view, _| view.grid_snap.is_some() && sync_presented_row(view, 0).starts_with("LINE-097"))
+    });
+    view.update(cx, |view, cx| { view.smooth_scroll(47., cx); });
+    graphics_assert_production_paint(window, &view, cx);
+    assert_eq!(reading_painted_rows(&view, cx)[0], "LINE-050");
+    reading_request_window_size(window, &view, cx, TermSize::new(40, 24));
+    view.update(cx, |view, cx| {
+        let mut config = cx.global::<Config>().clone();
+        config.scrollback_limit = 16;
+        view.terminal.apply_user_config(&config);
+    });
+    reading_ordered_size(&mut sender, 40, 24);
+    reading_ordered_screen(&mut sender, 97, 1);
+    graphics_assert_production_paint_at(window, &view, cx, TermSize::new(40, 24));
+    // The original LINE-050 is gone. Retained history is LINE-081..096;
+    // its midpoint estimate is LINE-089, not the old absolute row or live 097.
+    assert_eq!(reading_painted_rows(&view, cx)[0], "LINE-089");
+    view.update(cx, |view, cx| { view.smooth_scroll(10_000., cx); });
+    reading_request_window_size(window, &view, cx, TermSize::new(80, 24));
+    // Complete the new echo after the request made by prepaint above.
+    reading_ordered_size(&mut sender, 80, 24);
+    reading_ordered_screen(&mut sender, 97, 2);
+    graphics_assert_production_paint_at(window, &view, cx, TermSize::new(80, 24));
+    assert_eq!(reading_painted_rows(&view, cx)[0], "LINE-081", "oldest clamp never resurrects the expired anchor");
+    graphics_recovery_destroy(view, window, cx);
+}

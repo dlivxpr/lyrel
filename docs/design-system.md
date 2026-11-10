@@ -196,6 +196,11 @@ Git 的新增/修改标记种子为绿 `#2F8A52` / `#4CC27A`、琥珀 `#B7791F` 
   已持有的同步帧在有序 `Size` 到达前只受新边界裁切，不等待实时 grid；ESU 或期限先结束 hold
   也不代表 resize 已生效。锁内 VT 行列尚未匹配时独立等待 `Size` 的既有 Wakeup，不启动竞争重试。
   relink 后没有 previous snapshot 的首个 hold 按新 surface 分配空帧，不恢复上一连接残留的几何。
+  阅读 resize 另由 `ReadingView` 保存硬逻辑行前 256 字符、字符偏移、空行上下文与旧历史几何；
+  动态搜索最多 1024 个候选行，选最近精确身份，失败时 clamp 几何估计，并合并 pending 用户滚动。
+  `ParsePresentation` 的 resize revision 不属于 destructive reading generation；有图片基线时，
+  同一 VT guard 下的有序 graphics `Screen` 记录其对应 Size revision，只有二者一致才原子捕获新文字／图片。
+  pending 重用旧行列的完整 committed picture，新的 resize 请求只取代目标几何，不发布晚到的中间尺寸。
 - `TerminalView` 持有的 `FrameFacts` 统一提供绘制模式、选择、光标及 prompt／菜单几何；首帧先取得有效事实，
   后续在同一 guard 内应用 scrollbar 的待处理位置并采样。稳态 render／paint 不为这些投影等待 PTY reader。
   facts、composer、输入维护、同尺寸 resize 核验或实际 grid 构建因锁忙而跳过时，共用每 pane 唯一的后台等待任务；

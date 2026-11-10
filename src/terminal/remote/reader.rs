@@ -573,14 +573,18 @@ impl FrameReader {
                                 return;
                             }
                             let changed = image_decoder.apply(update);
+                            let mut layout_completed = false;
                             if screen {
                                 image_decoder.sync_local_origin(
                                     term.grid.lines_evicted() as i64
                                         + term.grid.history_size() as i64,
                                 );
+                                let mut facts = proxy.parse_state.presentation.lock().unwrap();
+                                layout_completed = facts.resize_images_revision != facts.resize_revision;
+                                facts.resize_images_revision = facts.resize_revision;
                             }
                             drop(term);
-                            if changed {
+                            if changed || layout_completed {
                                 proxy.send(PaneEvent::Wakeup);
                             }
                             if screen {
