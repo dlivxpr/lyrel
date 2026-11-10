@@ -244,7 +244,7 @@ fn noop_trim_preserves_the_previous_edits_undo_selection(cx: &mut TestAppContext
         view.select_range(0..5, cx);
         view.focus_handle(cx).focus(window, cx);
     });
-    context.update(|window, cx| window.input("typed", cx));
+    context.update(|window, cx| window.input("X", cx));
     editor.update_in(&mut context, |view, _, cx| {
         let end = view.text().len();
         view.select_range(end..end, cx);
