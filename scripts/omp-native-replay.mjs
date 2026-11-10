@@ -97,7 +97,12 @@ if (action === 'prepare') {
   }
   writeFileSync(session, entries.map(value => JSON.stringify(value)).join('\n') + '\n');
   const overlay = join(root, 'overlay.json');
-  json(overlay, {terminal:{showImages:scenario !== 'disabled'},tui:{renderSvg:true,maxInlineImages:8,resizeScrollback:'rebuild'},startup:{quiet:true,setupWizard:false},recap:{enabled:false},compaction:{enabled:false},retry:{modelFallback:false}});
+  // Smooth reveal slices even one SSE delta into grapheme prefixes. A complete
+  // <svg> root before its first complete <rect> is a valid transparent raster;
+  // it is not the red revision acknowledged by our token-stage pixel oracle.
+  // Disable only that cosmetic reveal in this owned streaming overlay. Native
+  // SSE updates remain transient, with SvgFigure's repair/throttle/replacement.
+  json(overlay, {terminal:{showImages:scenario !== 'disabled'},tui:{renderSvg:true,maxInlineImages:8,resizeScrollback:'rebuild'},...(scenario === 'streaming' ? {display:{smoothStreaming:false}} : {}),startup:{quiet:true,setupWizard:false},recap:{enabled:false},compaction:{enabled:false},retry:{modelFallback:false}});
   const environment = {
     HOME:join(root,'home'),USERPROFILE:join(root,'home'),APPDATA:join(root,'config'),LOCALAPPDATA:join(root,'data'),
     XDG_CONFIG_HOME:join(root,'config'),XDG_DATA_HOME:join(root,'data'),XDG_STATE_HOME:join(root,'state'),XDG_CACHE_HOME:join(root,'cache'),
@@ -159,6 +164,9 @@ if (action === 'prepare') {
     return result.stdout.trim();
   };
   const version = inspect('version',['--version']);
+  // Released binaries print `omp/<version>`; keep the raw identity in evidence
+  // while pinning the complete release number, not an arbitrary substring.
+  const releasedVersion = /^(?:omp\/)?(\d+\.\d+\.\d+)$/.exec(version)?.[1];
   writeFileSync(join(root,'version.txt'),version + '\n');
   const identity = Object.fromEntries(['TERM_PROGRAM','TERM_PROGRAM_VERSION','LC_TERMINAL','LC_TERMINAL_VERSION','LYREL','PI_NO_DECCARA'].map(key => [key, environment[key] ?? null]));
   // Older PowerShell/.NET clears a process variable by removing it. Both
@@ -166,7 +174,7 @@ if (action === 'prepare') {
   identity.TERM_PROGRAM_VERSION ??= '';
   json(join(root,'identity.json'), identity);
   if (manifest.scenario === 'streaming') {
-    if (version !== '18.18.6') throw new Error(`Streaming fixture requires released omp 18.18.6, got ${version}`);
+    if (releasedVersion !== '18.18.6') throw new Error(`Streaming fixture requires released omp 18.18.6, got ${version}`);
     if (identity.TERM_PROGRAM !== 'kitty' || identity.TERM_PROGRAM_VERSION !== '' || identity.LC_TERMINAL !== 'lyrel' || identity.LC_TERMINAL_VERSION !== identity.LYREL || identity.PI_NO_DECCARA !== '1') throw new Error(`Invalid command-scoped identity: ${JSON.stringify(identity)}`);
   }
   const configPath = inspect('config-path',['config','path']);
@@ -175,6 +183,10 @@ if (action === 'prepare') {
   for (const [key,expected] of [['terminal.showImages',manifest.scenario !== 'disabled'],['tui.renderSvg',true],['tui.maxInlineImages',8]]) {
     const {value:actual} = JSON.parse(inspect(`config-${key}`,['config','get',key,'--json'],{PI_CONFIG_FILES:manifest.overlay}));
     if (actual !== expected) throw new Error(`Public setting ${key}: expected ${expected}, got ${JSON.stringify(actual)}`);
+  }
+  if (manifest.scenario === 'streaming') {
+    const {value} = JSON.parse(inspect('config-display.smoothStreaming',['config','get','display.smoothStreaming','--json'],{PI_CONFIG_FILES:manifest.overlay}));
+    if (value !== false) throw new Error(`Token-stage streaming requires display.smoothStreaming=false, got ${JSON.stringify(value)}`);
   }
   const requests = [];
   const server = createServer((request,response) => {

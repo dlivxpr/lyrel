@@ -1,3 +1,23 @@
+// Exercise the same production command encoder as launch/resume; no fixture
+// writes terminal identity or forces the agent's image policy itself.
+fn native_graphics_scoped_shell(agent: crate::core::cli_agent::CLIAgent, mut shell: crate::daemon::protocol::ShellSpec) -> crate::daemon::protocol::ShellSpec {
+    let program = if cfg!(windows) { "pwsh" } else { "sh" };
+    let line = std::iter::once(shell.program.clone()).chain(shell.args.iter().cloned())
+        .map(|arg| lyrel_core::core::shell_quote::quote_for_shell(&arg, Some(program)))
+        .collect::<Vec<_>>().join(" ");
+    let line = lyrel_core::host::session_operations::agent_compatibility_command(agent, &line);
+    let line = lyrel_core::host::session_operations::scoped_launch_command(
+        &*lyrel_core::host::local::LocalHost::new(), &line, Some(program)).unwrap();
+    let line = if cfg!(windows) {
+        format!("Write-Output ('LYREL_PARENT_BEFORE=' + $env:TERM_PROGRAM); {line}; Write-Output ('LYREL_PARENT_AFTER=' + $env:TERM_PROGRAM)")
+    } else {
+        format!("printf 'LYREL_PARENT_BEFORE=%s\\n' \"$TERM_PROGRAM\"; {line}; printf 'LYREL_PARENT_AFTER=%s\\n' \"$TERM_PROGRAM\"")
+    };
+    shell.program = program.into();
+    shell.args = if cfg!(windows) { vec!["-NoProfile".into(), "-Command".into(), line] } else { vec!["-c".into(), line] };
+    shell
+}
+
 // Released Pi public-entry coverage, not a replacement conversation renderer.
 // The fixture authors only synthetic saved JSONL; Pi emits every Kitty command.
 struct PiReplayPane {
@@ -19,6 +39,8 @@ impl PiReplayPane {
                 cli,
                 "--policy".into(),
                 policy.into(),
+                "--launch".into(),
+                if policy == "enabled" { "legacy".into() } else { "scoped".into() },
                 "--pictures".into(),
                 "2".into(),
                 "--rounds".into(),
@@ -27,6 +49,9 @@ impl PiReplayPane {
                 daemon.dir.path().to_string_lossy().into_owned(),
             ],
             args_are_lyrel_defaults: false,
+        };
+        let shell = if policy == "enabled" { shell } else {
+            native_graphics_scoped_shell(crate::core::cli_agent::CLIAgent::Pi, shell)
         };
         let session = daemon
             .panes()
@@ -93,7 +118,7 @@ fn pi_replay_pixels(
     expected: [[u8; 4]; 5],
 ) -> Option<crate::terminal::images::RenderPlacement> {
     graphics_visible_images(view).into_iter().find(|image| {
-        if image.evicted || image.placement.virtual_placement {
+        if image.evicted {
             return false;
         }
         let Some(data) = &image.data else {
@@ -105,11 +130,13 @@ fn pi_replay_pixels(
         if bytes.len() != 48 * 24 * 4 {
             return false;
         }
-        // Independently specified BGRA landmarks: four quadrants and white center.
-        [(2, 2), (45, 2), (2, 21), (45, 21), (23, 11)]
-            .into_iter()
-            .zip(expected)
-            .all(|((x, y), pixel)| bytes[(y * 48 + x) * 4..(y * 48 + x + 1) * 4] == pixel)
+        // Compare the complete raster, not just dominant color or landmarks.
+        bytes.chunks_exact(4).enumerate().all(|(index, pixel)| {
+            let (x, y) = (index % 48, index / 48);
+            let quadrant = if (22..26).contains(&x) && (10..14).contains(&y) { 4 }
+                else if y < 12 { usize::from(x >= 24) } else { 2 + usize::from(x >= 24) };
+            pixel == expected[quadrant]
+        })
     })
 }
 
@@ -220,6 +247,37 @@ fn graphics_consumer_pi_native_saved_tool_images_remount_delete_and_resume(
             });
         }
     }
+}
+
+#[gpui_kit::test]
+#[ignore = "released Pi 1.4.0 + Node; production scoped discovery without a forced image protocol"]
+fn graphics_consumer_pi_native_scoped_discovery_replays_without_forcing_protocol(cx: &mut TestAppContext) {
+    crate::core::config::pin_test_config_dir();
+    cx.executor().allow_parking();
+    cx.update(|cx| {
+        gpui_kit::component::init(cx);
+        cx.set_global(Config::default());
+    });
+    let fixture = PiReplayPane::start("scoped", 1);
+    let (view, window) = fixture.mount(cx);
+    pi_replay_wait(&view, cx, "scoped automatic Kitty discovery", |view| {
+        pi_replay_pixels(view, PI_REPLAY_LAST).is_some()
+    });
+    graphics_assert_production_paint(window, &view, cx);
+    view.read_with(cx, |view, _| {
+        pi_replay_assert_card_geometry(view, PI_REPLAY_LAST, 1);
+        let image = pi_replay_pixels(view, PI_REPLAY_LAST).unwrap();
+        assert!(image.painted.load(std::sync::atomic::Ordering::Acquire));
+        assert_eq!(graphics_visible_images(view).len(), 1);
+    });
+    view.read_with(cx, |view, _| view.terminal.write(vec![4]));
+    pi_replay_wait(&view, cx, "scoped replay audit and parent restoration", |view| {
+        let text = view.scrollback_text();
+        text.contains("PI_REPLAY_FIXTURE_DONE") && text.contains("LYREL_PARENT_AFTER=lyrel")
+            && text.contains("PI_REPLAY_ROUND_1_NO_NEW_MESSAGES")
+    });
+    assert!(view.read_with(cx, |view, _| graphics_visible_images(view).is_empty()));
+    graphics_recovery_destroy(view, window, cx);
 }
 
 #[gpui_kit::test]

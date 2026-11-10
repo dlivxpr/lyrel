@@ -547,6 +547,8 @@ node scripts/omp-native-replay.mjs cleanup --root $fixture --lyrel-cli (Resolve-
 
 公开 `models.yml` 的 `auth: none`／`openai-completions` provider 只指向 `127.0.0.1`，仅接受一次指定模型／prompt 的 POST。`scripts/omp-loopback-stream.mjs` 发送预定 SSE token，不编码 PNG、不发送 Kitty、不解析 PTY。一个未闭合的 SVG 先显示红底，再增加右侧绿色；最后闭合围栏，底半部变蓝。每段都等待生产消费者确认后才推进，避免机器快慢吞掉中间修订。两段故意截断的 XML 期间继续检查完整旧像素。逐像素比较全部 BGRA（包括整 cell 的透明 padding）、原生 image ID、完整 crop 覆盖、`z=0` paint claim、周边文字行序及最终整个保留网格无旧放置；不把 Base64、非空输出或进程启动当作图片证据。
 
+此场景只在自有 overlay 设置 `display.smoothStreaming=false`，并通过正式 `omp config get display.smoothStreaming --json` 核对生效。默认 smooth reveal 会把一个完整 SSE delta 再切为逐 grapheme 前缀；在根 `<svg ...>` 已完整、首个 `<rect .../>` 尚未完整时，`closePartialSvg` 合法生成空画布，原消费者会把这张完整透明 PNG 误判成红底修订。关闭的是额外的文字揭示动画，不是 provider token streaming、SVG 的流式修补／节流或 native raster 替换；两个非空完整中间修订与精确最终图仍须分别通过原有全部像素／顺序／旧放置断言。该夹具不据此覆盖默认 smooth reveal 的任意子前缀。
+
 与静态场景的 `zeroInference=true` 不同，streaming 退出审计必须为一次完成的 loopback 请求、恰好新增 user／assistant 两条消息、`loopbackStreaming=true`、`zeroInference=false`。日志仅记录 method／URL／loopback peer／模型和匹配布尔值，不保存请求正文、凭据或私人历史。原有 pictures／budget 场景保持独立重放，全部静态场景仍要求零请求和消息不变；disabled／protocol-off 以及新增的 placeholder-off direct-placement 消费者在 Kitty 兼容身份下检查关闭项仍优先，并核对真实子进程环境。它们不是 live streaming 证据。
 
 在 Windows/macOS 仓库根设置 `LYREL_TEST_OMP` 为正式 `18.18.6` 的绝对路径后，中央串行执行以下命令（本次实现阶段均未运行）：
@@ -561,7 +563,7 @@ cargo test --locked -p lyrel --lib terminal::view::gpui_tests::graphics_consumer
 
 源码中的测试断言不是执行结果。production paint claim 也不是 GPU 最终像素；原生窗口图文对齐、交互以及真实 SSH／远端组合须单独验收。旧版本静态重放的历史通过记录不能计作新身份或 live streaming 通过。
 
-上游接口依据：[正式版本 provider 格式](https://github.com/can1357/oh-my-pi/blob/v18.18.6/docs/models.md)、[原生终端诊断](https://github.com/can1357/oh-my-pi/blob/v18.18.6/packages/tui/src/apps/debug/terminal-info.ts)、[SvgFigure 完整修订替换](https://github.com/can1357/oh-my-pi/blob/v18.18.6/packages/tui/src/chat/svg-figure.ts) 和[原生 SVG 栅格尺寸／透明 padding](https://github.com/can1357/oh-my-pi/blob/v18.18.6/crates/pi-natives/src/svg.rs)。
+上游接口依据：[正式版本 provider 格式](https://github.com/can1357/oh-my-pi/blob/v18.18.6/docs/models.md)、[原生终端诊断](https://github.com/can1357/oh-my-pi/blob/v18.18.6/packages/tui/src/apps/debug/terminal-info.ts)、[smooth reveal 设置](https://github.com/can1357/oh-my-pi/blob/v18.18.6/packages/coding-agent/src/modes/settings.ts)、[逐 grapheme 揭示与关闭后仍保留 transient 更新](https://github.com/can1357/oh-my-pi/blob/v18.18.6/packages/coding-agent/src/modes/controllers/streaming-reveal.ts)、[部分 SVG 修补](https://github.com/can1357/oh-my-pi/blob/v18.18.6/packages/tui/src/chat/svg-source.ts)、[SvgFigure 完整修订替换](https://github.com/can1357/oh-my-pi/blob/v18.18.6/packages/tui/src/chat/svg-figure.ts) 和[原生 SVG 栅格尺寸／透明 padding](https://github.com/can1357/oh-my-pi/blob/v18.18.6/crates/pi-natives/src/svg.rs)。
 
 
 <a id="pi-native-image-replay"></a>
@@ -569,7 +571,7 @@ cargo test --locked -p lyrel --lib terminal::view::gpui_tests::graphics_consumer
 
 这里的 **pi** 是 [earendil-works/pi](https://github.com/earendil-works/pi)，npm 包为 `@earendil-works/pi-coding-agent`，不是 omp。2026-10-31 重新查询 [GitHub 最新正式发行](https://github.com/earendil-works/pi/releases/tag/v1.4.0)、npm `version` 和本机 `pi --version`，三者均为 `1.4.0`。版本核实、两项真实 PTY／生产消费者通过结果，以及 Windows 原生二十图与关闭策略通过记录分别列在下文，不互相替代。
 
-使用 lyrel 既有 `agent_launch` 的 literal 环境前缀，只为该次启动选择协议，不修改 `TERM_PROGRAM=lyrel`，也不修改 pi 全局配置：
+已知 agent 的启动使用命令作用域 Kitty 兼容身份以供 pi 自动发现，不需要强制图片协议；普通 shell 的真实身份保持 lyrel。以下保留显式选择协议的可选配置，不是开启图片的必要条件，也不修改 pi 全局配置：
 
 ```json
 {
@@ -579,7 +581,7 @@ cargo test --locked -p lyrel --lib terminal::view::gpui_tests::graphics_consumer
 }
 ```
 
-有意关闭时可改为 `PI_IMAGE_PROTOCOL=none pi`。图片选择值随 Pi 原生 hook 的公开会话 scope 绑定、持久化及恢复；已绑定 scope 优先于启动默认值，启动显式赋值优先于 Host 环境。未配置时不替用户强制打开；不把 omp 的 `PI_FORCE_IMAGE_PROTOCOL`、`PI_KITTY_PLACEHOLDERS` 或 YAML overlay 当成 pi 接口。恢复指定文件使用 pi 的 `--session <path>`，不是 omp 的 `--resume <path>`；pi 的 `--resume` 打开选择器。
+有意关闭时可改为 `PI_IMAGE_PROTOCOL=none pi`。图片选择值随 Pi 原生 hook 的公开会话 scope 绑定、持久化及恢复；已绑定 scope 优先于启动默认值，启动显式赋值优先于 Host 环境。不把 omp 的 `PI_FORCE_IMAGE_PROTOCOL`、`PI_KITTY_PLACEHOLDERS` 或 YAML overlay 当成 pi 接口。兼容身份只启用原生自动发现，不能覆盖 `terminal.images=false`／`terminal.showImages=false`；完整手动／恢复／分叉入口由 #250 接线并单独验收。恢复指定文件使用 pi 的 `--session <path>`，不是 omp 的 `--resume <path>`；pi 的 `--resume` 打开选择器。
 
 上游 [terminal-setup.md](https://github.com/earendil-works/pi/blob/v1.4.0/packages/coding-agent/docs/terminal-setup.md) 和 [settings.md](https://github.com/earendil-works/pi/blob/v1.4.0/packages/coding-agent/docs/settings.md) 规定：
 
@@ -626,6 +628,24 @@ node C:\path\to\lyrel\scripts\pi-image-replay.mjs --pi C:\path\to\official\pi.ex
 
 OpenCode 的 [公开 CLI 设置](https://opencode.ai/v2/docs/cli/config) 是 `session.image_preview`，与仅影响输入框的 `prompt.image_preview` 不同。默认不开启历史预览；CLI 从 `$XDG_CONFIG_HOME/opencode/cli.json`（未设置时为 `~/.config/opencode/cli.json`）读取，不读取项目局部 CLI 配置。`OPENCODE_CLI_CONFIG_CONTENT` 按对象深合并覆盖该文件，数组和标量替换，且变量存在期间保持权威；因此不得注入 `true` 覆盖用户明确的 `false`。
 
+<a id="opencode-preview-opt-in"></a>
+##### 用户如何启用历史图片预览
+
+在**目标 Host** 的已有全局 CLI 配置 `$XDG_CONFIG_HOME/opencode/cli.json`（未设置时为 `~/.config/opencode/cli.json`）中，保留其他字段，将以下字段合并进现有 `session` 对象；不要用整个示例覆盖已有文件：
+
+```json
+{
+  "session": {
+    "image_preview": true
+  }
+}
+```
+
+如果你已有 `OPENCODE_CLI_CONFIG_CONTENT`，同样在你管理的 JSON 对象中保留其他键并合并 `session.image_preview: true`。该变量的深合并结果优先于文件：已有 `{"session":{"image_preview":false}}` 会继续关闭预览，即使文件为 `true`；需要保持关闭时无需删除变量。不要创建第二个 JSON 对象拼接字符串，也不要为了图片丢弃现有 inline 配置。lyrel 不自动编辑／合并该文件，不生成开启预览的 overlay，也不把 inline 配置纳入通用环境持久化。
+
+`prompt.image_preview` 只影响输入框，不能开启历史卡片。启用后也只有原生支持的附件和 eligible data-URI tool images 会显示；第四张仍是 `+N more`，普通 URL、路径、Markdown 或 SVG 正文不会被 lyrel 补画。下面的隔离夹具中的 on／off 是夹具自己管理的用户策略，不是 lyrel 自动替用户开启。
+
+
 lyrel 不强制打开该选项，也不增加 agent 专属图片渲染器。既有 `agent_launch` 可选择独立 CLI 配置目录；获准安装 OpenCode 集成时，同样使用该启动作用域的 `XDG_CONFIG_HOME` 和 Host，而不是误写默认目录。配置目录必须是目标 Host 上的绝对路径。示例中的目录应由你准备，只有明确需要图片时才在其中写入 `{"session":{"image_preview":true}}`：
 
 ```json
@@ -636,7 +656,7 @@ lyrel 不强制打开该选项，也不增加 agent 专属图片渲染器。既�
 }
 ```
 
-命令前的环境赋值沿用 lyrel 的启动设施；手动 PowerShell 启动时，应在仅拥有的子进程环境设置对应变量，不把 POSIX 赋值语法直接粘贴到 PowerShell。`--standalone` 选择私有 OpenCode server，不接管用户既有 service。`TERM_PROGRAM` 继续是 `lyrel`，不伪造 Kitty、WezTerm 等身份。仅需原生图片时不要求安装 lyrel 状态插件。
+命令前的环境赋值沿用 lyrel 的启动设施；手动 PowerShell 启动时，应使用该 shell 的命令作用域编码，不把 POSIX 赋值语法直接粘贴到 PowerShell。`--standalone` 选择私有 OpenCode server，不接管用户既有 service。普通 shell 继续是 `TERM_PROGRAM=lyrel`，已知 agent 的命令作用域提供 Kitty 兼容身份；不修改 `TERM` 或用户预览策略。仅需原生图片时不要求安装 lyrel 状态插件。
 
 该发布标签的 [SessionImages / UserMessage / ToolImages](https://github.com/anomalyco/opencode/blob/v2.2.0/packages/tui/src/routes/session/index.tsx) 已重新核对：用户附件从保存的 `image/*` 字节构造 data URI；tool-result 只选择 `type=file`、`mime=image/*` 且 `uri` 以 `data:image/` 开头的项，实际能否解码仍由原生图片节点决定。每个图片组／卡片最多内联前三张，其余显示 `+N more`；卡片高度按终端高度的四分之一限制在 4–8 行，使用 `fit=cover`。不能把第四张、URL、普通路径、Markdown 或 SVG 文本强行补成终端图片。打开默认只挂载约 40 个加权 transcript 行，较旧内容按约 60 行回填并经原生 API 分页；这些是本标签的实现值，升级需重新检查。
 
@@ -669,6 +689,40 @@ cargo test --locked -p lyrel --lib opencode_replay_consumer_tests:: -- --ignored
 consumer 用例复用真实 PTY → 独立真实 daemon → 生产 pane connection／`RemoteTerminal` → rooted `TerminalView`，断言实际解码 BGRA 主色、独立 instance 数量、两卡左右几何、production paint claim、原生分页／滚离返回／tab 卸载重挂载，以及退出后 fresh consumer 不复活被应用删除的图片。额外静态协议用例覆盖同色不同放置、同原点重叠放置、同 `i/p` 替换不增量及精确删除；它验证计数不会被集合或 bbox 合并掩盖，不替代真实 OpenCode 或最终 GPU 像素。失败／超时输出完整 placement key、resource、原生 ID、源裁剪、anchor、paint 矩形、paint claim、图形预算状态和终端文本，供中央定位真实协议路径。
 
 **本票证据边界：**2026-10-31，正式 OpenCode `2.2.0` 已通过两项真实 PTY／隔离 daemon／production rooted consumer 验收，精确比较独立 placement、源像素、卡片边界、历史分页、滚离返回、tab 卸载重挂载和退出后不复活；静态逐实例协议回归另行通过。原 enabled 重叠失败由统一 synchronized-update 流顺序修复（`6f20137`），不是放宽几何断言。Windows `10.0.26300`／RTX 5080／Debug／100% 缩放的自有原生窗口（2552×1384）实际显示首尾两卡各三张图片、对应色块／黑边／序号条及 `+1 more`，滚离后无残影、返回后恢复；`F6` 关闭后无图，`F7` 重开后六图正确重传。另以 `session.image_preview=false` 验证首尾分页均只有文本／附件标签。两轮退出均输出 `OPENCODE_REPLAY_VERIFIED: unchanged public export, zero model usage`，没有新 prompt 或私人历史。MacBook Air M5 与真实 SSH 的三 agent 组合仍待集成验收；原生应用重传不替代 living-daemon 无重传恢复证明。
+
+
+<a id="native-static-matrix"></a>
+#### #249：scoped static 图片矩阵与未运行入口
+
+本轮新增／增强的消费者**尚未运行**；上文 2026-10-31 的通过记录只属于旧提交、各自版本与原策略，不能移作新 scoped discovery、Kimi 或 Hermes 的通过结果。
+
+- **pi 1.4.0**：保留原 `enabled` 强制协议重放；新增 `scoped` 场景不设置 `PI_IMAGE_PROTOCOL`，从生产 scope 获取 Kitty，逐像素比较完整 48×24 BGRA、卡片与后续文本的夹持几何、paint claim 和退出后父 shell 恢复。显式 env-none、settings-none、display-none、settings-kitty 在兼容身份下继续检查原生优先级；静态保存消息／usage 审计不变。没有 pi SVG 断言。
+- **OpenCode 2.2.0**：仍通过原生公开 import／export、分页、tab 卸载／重挂载；增加完整栅格 SHA-256／边框／序号身份，保留精确六 placement、16×8 槽、间距、裁剪与无重叠。on、global false、global true + inline false 三场景分别由自有配置选择；完整 `cli.json` 字节、inline 字符串、保存消息及零 usage 均须不变。`LYREL_OPENCODE_GRAPHICS_CLI` 可指定已安装正式程序的绝对路径。
+- **Kimi**：`LYREL_KIMI_GRAPHICS_SOURCE` 指向独立源码 checkout `e2770e37bd198e5208be0e0b60b48c77789cf94b`（该提交的 `apps/kimi-code/package.json` 实为 **2.5.1**，不把研究中 bundle 2.5.2 或本机 2.2.0 当成同一证据）。夹具经原生 `ImageAttachmentStore.addImage` → `UserMessageComponent` → `ImageThumbnail` → `TuiAltScreen`；仅用户粘贴附件缩略图，检查自动发现／原生协议 off、卸载／重挂载和不同图片替换。不新建 assistant／toolResult／SVG renderer，不声称保存会话重建粘贴附件。
+- **Hermes 0.23.1**：`LYREL_HERMES_GRAPHICS_SOURCE` 指向正式 tag 的独立 checkout `3b421578588243f920886e6fe79a6faa87ea026e`。通过原生 `GatewayProvider`／`InlineImage` 和真实 `server.handle_request(image.render)`，采用自有 `display.inline_images: auto`／`off`；不强制设为 kitty。原生 `tool_image_path` 检查 `vision_analyze`、`image_generate` 与 `screenshot_path`，拒绝失败、无白名单路径、URL 与 SVG；第二张图片通过 eligible tool gate。`KITTY_WINDOW_ID=lyrel` 只作为 Hermes 命令 scope 的非敏感检测 marker，显式值优先；其 detector 不识别单独的 `TERM_PROGRAM=kitty`。不修改 `TERM`，off 仍先于检测。旧 0.22.2 pet 路径不代表本能力。
+
+Kimi／Hermes 的 `scripts/native-static-images.mjs` 只导入 pinned 上游原生组件，不复制 renderer 或 Kitty encoder；`scripts/hermes-native-image-rpc.py` 仅桥接真实 `image.render` dispatcher。所有图像都在自有临时目录合成，子进程环境 allowlist 不继承凭据／用户扩展／私有历史。检查 source HEAD 与 tracked 内容未修改，失败立即停止，不安装或升级全局 agent。原生组件渲染与 production paint 不是完整 CLI、OS 剪贴板 paste、原生窗口最终像素或真实远端验收；这些由 #255 分开执行。
+
+源码依据：[Kimi UserMessageComponent](https://github.com/MoonshotAI/kimi-code/blob/e2770e37bd198e5208be0e0b60b48c77789cf94b/apps/kimi-code/src/tui/components/messages/user-message.ts)、[ImageThumbnail](https://github.com/MoonshotAI/kimi-code/blob/e2770e37bd198e5208be0e0b60b48c77789cf94b/apps/kimi-code/src/tui/components/media/image-thumbnail.ts)、[Hermes 0.23.1 原生 mode／tool gate](https://github.com/NousResearch/hermes-agent/blob/3b421578588243f920886e6fe79a6faa87ea026e/agent/terminal_image.py)、[真实 image.render handler](https://github.com/NousResearch/hermes-agent/blob/3b421578588243f920886e6fe79a6faa87ea026e/tui_gateway/methods_images.py)、[InlineImage](https://github.com/NousResearch/hermes-agent/blob/3b421578588243f920886e6fe79a6faa87ea026e/ui-tui/src/components/inlineImage.tsx) 与 [TUI detector](https://github.com/NousResearch/hermes-agent/blob/3b421578588243f920886e6fe79a6faa87ea026e/ui-tui/src/lib/terminalGraphics.ts)。
+
+**中央串行验证前提**：Windows/macOS 桌面构建依赖齐全（Windows 先准备 pinned ConPTY）；当前平台 Node 22.19+、`pwsh`（Windows）或 `sh`；正式 pi 1.4.0 与 OpenCode 2.2.0。Kimi pinned checkout 按其锁文件在独立目录准备 workspace dependencies 与 `tsx`；Hermes pinned checkout 按其锁文件准备 native `@hermes/ink`、React、`tsx`，Python 环境包含其 gateway 依赖与 Pillow。设置 `LYREL_HERMES_GRAPHICS_PYTHON` 为该隔离解释器绝对路径（默认 `python`）。不向本机已有安装或用户配置写入；准备依赖属于外部前提，不在本票执行。缺少程序／source／依赖必须作为前提失败记录，不能跳过后算通过。
+
+在仓库根设置上述环境变量和 `LYREL_PI_GRAPHICS_CLI` 后，中央执行以下精确入口；本分票未执行 build／lint／tests／formatter：
+
+```text
+node --check scripts/pi-image-replay.mjs
+node --check scripts/opencode-image-replay.mjs
+node --check scripts/native-static-images.mjs
+python -c "import ast,pathlib; ast.parse(pathlib.Path('scripts/hermes-native-image-rpc.py').read_text(encoding='utf-8'))"
+cargo test --locked -p lyrel --lib terminal::view::gpui_tests::graphics_consumer_pi_native_scoped_discovery_replays_without_forcing_protocol -- --ignored --exact --nocapture --test-threads=1
+cargo test --locked -p lyrel --lib terminal::view::gpui_tests::graphics_consumer_pi_native_saved_tool_images_remount_delete_and_resume -- --ignored --exact --nocapture --test-threads=1
+cargo test --locked -p lyrel --lib terminal::view::gpui_tests::graphics_consumer_pi_native_explicit_image_policies_take_precedence -- --ignored --exact --nocapture --test-threads=1
+cargo test --locked -p lyrel --lib terminal::view::gpui_tests::opencode_replay_consumer_tests:: -- --ignored --nocapture --test-threads=1
+cargo test --locked -p lyrel --lib terminal::view::gpui_tests::graphics_consumer_kimi_native_pasted_thumbnail_only -- --ignored --exact --nocapture --test-threads=1
+cargo test --locked -p lyrel --lib terminal::view::gpui_tests::graphics_consumer_hermes_native_attachment_and_eligible_tool_images -- --ignored --exact --nocapture --test-threads=1
+```
+
+新 Kimi／Hermes 用例在每个 phase 检查完整 BGRA、独立资源身份、真实 paint 几何与上下文、卸载后无可见 placement、重挂载和替换后没有旧图，最后检查自有配置及图像源未改、父 shell 恢复。测试代码的断言不是运行通过；同样不替代 #250 所有快捷／手动／恢复／分叉或 #255 实窗／SSH 组合。
 
 #### 集成验收与仍未完成的运行门槛（#151）
 

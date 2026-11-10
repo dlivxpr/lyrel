@@ -1273,7 +1273,12 @@ mod tests {
         .join(" ");
         for (explicit, call, expected_terminal, expected_version) in [
             ("", "", "kitty", ""),
-            ("TERM_PROGRAM=wezterm TERM_PROGRAM_VERSION=custom ", "", "wezterm", "custom"),
+            (
+                "TERM_PROGRAM=wezterm TERM_PROGRAM_VERSION=custom ",
+                "",
+                "wezterm",
+                "custom",
+            ),
             ("TERM_PROGRAM=kitty ", "", "kitty", ""),
             ("TERM_PROGRAM=wezterm ", "", "wezterm", ""),
             ("", "& ", "kitty", ""),
@@ -1283,7 +1288,9 @@ mod tests {
             }
             let line = agent_compatibility_command(
                 CLIAgent::OhMyPi,
-                &format!("{call}{explicit}PI_FORCE_IMAGE_PROTOCOL=off PI_KITTY_PLACEHOLDERS=0 PI_NO_KITTY_PLACEHOLDERS=1 {native}"),
+                &format!(
+                    "{call}{explicit}PI_FORCE_IMAGE_PROTOCOL=off PI_KITTY_PLACEHOLDERS=0 PI_NO_KITTY_PLACEHOLDERS=1 {native}"
+                ),
             );
             let child = scoped_launch_command(&*LocalHost::new(), &line, Some(shell)).unwrap();
             let parent = if cfg!(windows) {

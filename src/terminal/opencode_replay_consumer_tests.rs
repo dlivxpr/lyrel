@@ -11,6 +11,7 @@ impl OpenCodeReplay {
         let root = tempfile::TempDir::new().unwrap();
         let output = std::process::Command::new("node")
             .args([SCRIPT, "--prepare"])
+            .args(["--opencode", &std::env::var("LYREL_OPENCODE_GRAPHICS_CLI").unwrap_or_else(|_| "opencode".into())])
             .arg(root.path())
             .args(["--previews", previews])
             .output()
@@ -29,11 +30,12 @@ impl OpenCodeReplay {
         let session = daemon.panes().spawn(
             None,
             WinSize { cols: 120, rows: 60, cell_w: 10, cell_h: 20 },
-            Some(ShellSpec {
+            Some(native_graphics_scoped_shell(crate::core::cli_agent::CLIAgent::OpenCode, ShellSpec {
                 program: "node".into(),
-                args: vec![SCRIPT.into(), "--resume".into(), self.root.path().to_string_lossy().into_owned()],
+                args: vec![SCRIPT.into(), "--resume".into(), self.root.path().to_string_lossy().into_owned(),
+                    "--opencode".into(), std::env::var("LYREL_OPENCODE_GRAPHICS_CLI").unwrap_or_else(|_| "opencode".into())],
                 args_are_lyrel_defaults: false,
-            }),
+            })),
             None,
             None,
         ).unwrap();
@@ -69,6 +71,8 @@ fn native_wait(
 #[derive(Debug)]
 struct NativePicture {
     color: [u8; 4],
+    bgra_sha256: [u8; 32],
+    dimensions: (u32, u32),
     placement: lyrel_core::core::kitty_graphics::Placement,
     // Cell coordinates, normalized from the production paint rectangle.
     bounds: [f32; 4],
@@ -91,6 +95,8 @@ fn native_pictures(view: &TerminalView, scale: f32) -> Vec<NativePicture> {
         let color = counts.into_iter().max_by_key(|(_, count)| *count)?.0;
         Some(NativePicture {
             color,
+            bgra_sha256: { use sha2::Digest; sha2::Sha256::digest(bytes).into() },
+            dimensions: { let size = image.data.as_ref()?.size(0); (size.width.0 as u32, size.height.0 as u32) },
             placement: image.placement,
             bounds: [bounds.origin.x.as_f32() / cell_width.as_f32(), bounds.origin.y.as_f32() / line_height.as_f32(),
                 (bounds.origin.x + bounds.size.width).as_f32() / cell_width.as_f32(),
@@ -131,9 +137,22 @@ fn native_assert_cards(view: &Entity<TerminalView>, window: gpui_kit::AnyWindowH
         eprintln!("OpenCode native card diagnostics: {diagnostics}");
         assert_eq!(pictures.len(), 6, "exactly six visible instances, not six distinct colors; {diagnostics}");
         let mut cards = Vec::new();
-        for color in palette {
+        for (index, color) in palette.into_iter().enumerate() {
             let instances: Vec<_> = pictures.iter().copied().filter(|picture| picture.color == color).collect();
             assert_eq!(instances.len(), 1, "each inline picture has one actual placement instance, including coincident duplicates; color={color:?}; {diagnostics}");
+            let picture = instances[0];
+            assert_eq!(picture.dimensions, (96, 48), "complete source raster, before native cover crop; {diagnostics}");
+            // Independent documented fixture legend: black 2px border and
+            // 1/2/3 white ordinal bars over the published BGRA field.
+            let mut expected = Vec::with_capacity(96 * 48 * 4);
+            for y in 0..48 { for x in 0..96 {
+                let border = x < 2 || y < 2 || x >= 94 || y >= 46;
+                let bar = (18..30).contains(&y) && x >= 12 && x < 12 + (index % 3 + 1) * 10 && x % 10 < 6;
+                expected.extend_from_slice(if border { &[0, 0, 0, 255] } else if bar { &[255, 255, 255, 255] } else { &color });
+            }}
+            use sha2::Digest;
+            let expected: [u8; 32] = sha2::Sha256::digest(&expected).into();
+            assert_eq!(picture.bgra_sha256, expected, "complete black border/white ordinal/source color identity; {diagnostics}");
             cards.push(instances[0]);
         }
         // Independent v2.2.0 SessionImages contract: height=clamp(rows/4,4,8),
@@ -280,25 +299,27 @@ fn opencode_native_saved_images_paginate_remount_delete_without_inference(cx: &m
 fn opencode_native_disabled_previews_remain_text(cx: &mut TestAppContext) {
     crate::core::config::pin_test_config_dir();
     cx.executor().allow_parking();
-    let fixture = OpenCodeReplay::prepare("off");
-    let daemon = GraphicsDaemonProcess::start();
-    let pane = fixture.spawn(&daemon);
-    cx.update(|cx| { gpui_kit::component::init(cx); cx.set_global(Config::default()); });
-    let size = crate::daemon::protocol::WinSize { cols: 120, rows: 60, cell_w: 10, cell_h: 20 };
-    let (view, window) = graphics_build_rooted_consumer_at(cx, pane,
-        daemon.stream_with_capacity_at(pane, 64 << 20, 128 << 20, size), Vec::new(), TermSize::new(120, 60),
-        if cfg!(windows) { PtySource::LocalConpty } else { PtySource::Raw });
-    native_wait(&view, cx, "disabled tail transcript mounted", |view| view.scrollback_text().contains("TAIL_TOOL"));
-    graphics_assert_production_paint_at(window, &view, cx, TermSize::new(120, 60));
-    assert!(view.read_with(cx, |view, _| graphics_visible_images(view).is_empty()));
-    view.read_with(cx, |view, _| view.terminal.write(b"\x07".to_vec()));
-    native_wait(&view, cx, "disabled old transcript paginated", |view| view.scrollback_text().contains("OLD_USER"));
-    graphics_assert_production_paint_at(window, &view, cx, TermSize::new(120, 60));
-    assert!(view.read_with(cx, |view, _| graphics_visible_images(view).is_empty()));
-    view.read_with(cx, |view, _| view.terminal.write(vec![3]));
-    native_wait(&view, cx, "disabled replay exports unchanged zero-usage transcript", |view| {
-        view.terminal.child_exited() && view.scrollback_text().contains("OPENCODE_REPLAY_VERIFIED")
-    });
-    daemon.panes().kill(pane).unwrap();
-    graphics_recovery_destroy(view, window, cx);
+    for policy in ["off", "inline-off"] {
+        let fixture = OpenCodeReplay::prepare(policy);
+        let daemon = GraphicsDaemonProcess::start();
+        let pane = fixture.spawn(&daemon);
+        cx.update(|cx| { gpui_kit::component::init(cx); cx.set_global(Config::default()); });
+        let size = crate::daemon::protocol::WinSize { cols: 120, rows: 60, cell_w: 10, cell_h: 20 };
+        let (view, window) = graphics_build_rooted_consumer_at(cx, pane,
+            daemon.stream_with_capacity_at(pane, 64 << 20, 128 << 20, size), Vec::new(), TermSize::new(120, 60),
+            if cfg!(windows) { PtySource::LocalConpty } else { PtySource::Raw });
+        native_wait(&view, cx, "disabled tail transcript mounted", |view| view.scrollback_text().contains("TAIL_TOOL"));
+        graphics_assert_production_paint_at(window, &view, cx, TermSize::new(120, 60));
+        assert!(view.read_with(cx, |view, _| graphics_visible_images(view).is_empty()));
+        view.read_with(cx, |view, _| view.terminal.write(b"\x07".to_vec()));
+        native_wait(&view, cx, "disabled old transcript paginated", |view| view.scrollback_text().contains("OLD_USER"));
+        graphics_assert_production_paint_at(window, &view, cx, TermSize::new(120, 60));
+        assert!(view.read_with(cx, |view, _| graphics_visible_images(view).is_empty()));
+        view.read_with(cx, |view, _| view.terminal.write(vec![3]));
+        native_wait(&view, cx, "disabled replay exports unchanged zero-usage transcript", |view| {
+            view.terminal.child_exited() && view.scrollback_text().contains("OPENCODE_REPLAY_VERIFIED")
+        });
+        daemon.panes().kill(pane).unwrap();
+        graphics_recovery_destroy(view, window, cx);
+    }
 }

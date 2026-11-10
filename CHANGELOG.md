@@ -9,6 +9,7 @@
 
 ### 新增
 
+- #249：新增不强制图片协议的 pi 1.4.0 scoped-discovery 消费者，保留显式关闭／设置优先级和零新消息重放；OpenCode 2.2.0 预览 on／off／inline false 检查完整 global／inline 配置不变。补充 pinned Kimi 用户粘贴缩略图和 Hermes 0.23.1 `image.render`／`InlineImage` 原生组件到真实 PTY／生产终端的消费者，比较完整图片、放置、卸载／重挂载与替换；不增加 renderer、不改用户配置。同步各 agent 能力矩阵与 OpenCode opt-in 文档；本分票未执行构建、测试、原生窗口或远端验收。
 - #236／#245：Markdown 完成唯一默认 Zorite-derived 源码路线的切换，移除旧 Markdown/MDX-rich 投影与专属实现契约；caret-local 标记显露、普通单击链接、MDX source-only 和 shared Document/history 成为当前产品规则。primary/secondary 安装同一组真实 Host providers，rename/save-as 只更新身份与源码策略，不丢弃历史。正式文档、原 14 项 native 消费者逐项迁移及 pinned MIT 来源/字体通知统一收敛；Windows ZIP/Inno 与 macOS app/ZIP 增加完整根 LICENSE 字节守卫。完整宽表的远端末行、真实图片/公式联合 hard-break 与长代码诊断尾部消费者补齐；源码和测试交付不是最终 native、实窗、SSH、平台、包或用户接受通过。
 
 - #236／#239：为 Zorite-derived Markdown 的每个 presentation 接入原生表格尺寸/样式选择、可键盘操作的行列/对齐/resize/fit 命令与 Kit 语法高亮/语言/复制控件。表格和代码均修改同一共享文档/history；代码语言修改保留 fence metadata，表格 Unicode 命中与 IME 使用绘制一致的 cell 几何。补充完整宽表与 owning Host 保存重开消费者；集中回归和实际参考窗口对照尚待执行，不以源码接线声明验收通过。
@@ -22,7 +23,9 @@
 
 ### 修复
 
+- #248：确定性 omp token-stage 消费者仅在自有 streaming overlay 关闭额外的 `display.smoothStreaming` 文字揭示动画，并用正式 config CLI 核验。避免单个 SSE delta 被再次拆成根标签已完整、首个图元尚未完整的合法透明 SVG 后，误当作红底修订；真实 SSE、SVG 修补／节流、两个非空完整中间栅格、精确最终像素与顺序／无旧放置断言保持不变。未在修复子任务运行验证，不宣称默认 smooth reveal 子前缀验收通过。
 - #251：终端阅读态在原生 `Div` 上注册子元素 prepaint 监听后再附加 identity／测试观察包装，修复 `Observed<E>` 不提供 `on_children_prepainted` 的编译错误；保留原有子元素边界测量、遮挡高度更新与返回实时输出按钮布局。编译与行为回归由集成验收执行。
+- #251：滚动条把实时边缘的显隐几何与当前历史范围分开保存，避免首次拖动被过期历史容量裁剪而未建立冻结阅读态；保留后台输出不唤醒滚动条及粘贴回到实时输出的行为。阅读行同时保留共享 Kitty 解码器的语义 placeholder runs，完整行与分数滚动的上一行图片切片均来自冻结行，修复既有 omp 消费者在阅读时图片未进入生产绘制列表的问题；新增消费者回归未在修复子任务中执行。
 - #236／#243：保存从同一共享文档快照捕获源文、编码/BOM、逐行表示与字节，并绑定原Document／Host／path。另存为写入成功后才采用目标，失败保留原身份和历史；在途新编辑使旧关闭意图退役，后续保存不重启旧关闭。显式去尾空白改为稀疏事务，保留混合行尾并可撤销；扩展名改为MDX时只改变各呈现策略，不替换文档。新增编码往返、失败恢复、第二呈现快照与native消费者，实际local／SSH及平台验证由集成者分别记录。
 - #236：修复公开 `EditorTrimTrailingWhitespace` action 同步重入 `LyrelApp` 导致的崩溃；直接调用已有编辑命令，保留共享文档的稀疏修改与 Undo。
 - #236／#241：结构公式焦点内的 Cmd/Ctrl+S 先确认有效草稿，再保存共享文档，避免工作台快捷键抢先保存旧正文。
