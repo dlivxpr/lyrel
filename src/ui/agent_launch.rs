@@ -247,6 +247,11 @@ impl LyrelApp {
         cx: &mut Context<Self>,
     ) {
         let command = agent.launch_command(&cx.global::<Config>().agent_launch);
+        let command = if agent == CLIAgent::OhMyPi {
+            lyrel_core::host::session_operations::agent_compatibility_command(agent, &command)
+        } else {
+            command
+        };
         let slot = match at {
             SpawnWhere::NewTab => {
                 let cwd = self.tabs.get(self.tabs.active_index()).and_then(|t| {
