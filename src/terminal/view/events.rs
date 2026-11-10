@@ -20,12 +20,14 @@ impl TerminalView {
                     && let Some(mut term) = self.terminal.term.try_lock()
                 {
                     if term.synchronized_output() {
-                        self.selection_scroll.invalidate_reading(&mut term, &self.terminal);
+                        self.selection_scroll
+                            .invalidate_reading(&mut term, &self.terminal);
                     } else {
                         // Hidden output still parses and reconciles identity /
                         // eviction, but never asks an unrelated surface to paint.
                         self.selection_scroll.clear_presented();
-                        self.selection_scroll.sync_reading(&mut term, &self.terminal);
+                        self.selection_scroll
+                            .sync_reading(&mut term, &self.terminal);
                         self.grid_snap = None;
                         self.grid_buf.clear();
                         if let Some(reading) = self.selection_scroll.reading.as_mut() {

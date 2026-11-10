@@ -89,7 +89,10 @@ impl SelectionScroll {
             self.jump_to_prompt(term);
         } else if term.display_offset() == 0
             && self.fraction == 0.
-            && !self.reading.as_ref().is_some_and(|reading| reading.relocating())
+            && !self
+                .reading
+                .as_ref()
+                .is_some_and(|reading| reading.relocating())
             && self.reading.take().is_some()
         {
             self.clear_presented();

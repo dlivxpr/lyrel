@@ -308,7 +308,8 @@ impl ReadingView {
             return true;
         }
         let oldest = term.grid.lines_evicted() as i64;
-        if term.columns() == self.cols && term.screen_lines() == self.captured_rows
+        if term.columns() == self.cols
+            && term.screen_lines() == self.captured_rows
             && (live < self.last_live_start || oldest < self.last_oldest)
         {
             return false;

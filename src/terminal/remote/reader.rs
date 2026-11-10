@@ -507,7 +507,12 @@ impl FrameReader {
                             term.end_sync_update();
                             // Fence every capture made before or during replay,
                             // under the same guard as its completed baseline.
-                            proxy.parse_state.presentation.lock().unwrap().invalidate_reading();
+                            proxy
+                                .parse_state
+                                .presentation
+                                .lock()
+                                .unwrap()
+                                .invalidate_reading();
                         }
                         mode_tok.feed(&bytes, |payload| {
                             if let Some(mode) = payload.strip_prefix(b"133;V;") {
