@@ -11,13 +11,25 @@ use crate::math::editor::geometry;
 use crate::math::editor::input;
 use crate::math::editor::model::Row;
 use crate::math::render::{self, PAD, Rendered};
+use gpui_kit::component::{
+    Sizable as _,
+    button::{Button, ButtonVariants as _},
+};
 use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::*;
-use gpui_kit::component::{button::{Button, ButtonVariants as _}, Sizable as _};
 #[path = "text_input.rs"]
 mod text_input;
 
-actions!(lyrel_formula, [ConfirmFormula, CancelFormula, AlignFormulaLeft, AlignFormulaCenter, AlignFormulaRight]);
+actions!(
+    lyrel_formula,
+    [
+        ConfirmFormula,
+        CancelFormula,
+        AlignFormulaLeft,
+        AlignFormulaCenter,
+        AlignFormulaRight
+    ]
+);
 
 /// Autocomplete dropdown geometry (px): row height + the scrollable height cap. Shared by
 /// the dropdown render and `scroll_match_into_view` so the thumb + scroll-into-view agree.
@@ -211,14 +223,7 @@ impl MathEditor {
         theme: MathTheme,
         cx: &mut Context<Self>,
     ) -> Self {
-        let mut this = Self::with_root(
-            root,
-            font_size,
-            true,
-            align,
-            theme,
-            cx,
-        );
+        let mut this = Self::with_root(root, font_size, true, align, theme, cx);
         if !at_end {
             this.cursor = Cursor::start();
         }
@@ -282,15 +287,23 @@ impl MathEditor {
             compact: false,
             commit_label: "Apply formula".into(),
             cancel_label: "Cancel formula".into(),
-            matrix_labels: ["Add row".into(), "Remove row".into(), "Add column".into(), "Remove column".into()],
+            matrix_labels: [
+                "Add row".into(),
+                "Remove row".into(),
+                "Add column".into(),
+                "Remove column".into(),
+            ],
             undo_stack: Vec::new(),
             redo_stack: Vec::new(),
             img_bounds: Rc::new(Cell::new(None)),
         };
         this.rendered = render::render_row(&this.root, this.font_size, this.dpr, this.theme.fg);
         cx.on_release(|this, cx| {
-            if let Some(image) = this.rendered.take() { cx.drop_image(image.image, None); }
-        }).detach();
+            if let Some(image) = this.rendered.take() {
+                cx.drop_image(image.image, None);
+            }
+        })
+        .detach();
         this
     }
 
@@ -300,30 +313,54 @@ impl MathEditor {
     }
 
     /// True only if the temporary structural tree differs from its entry snapshot.
-    pub fn is_modified(&self) -> bool { self.root != self.initial_root }
+    pub fn is_modified(&self) -> bool {
+        self.root != self.initial_root
+    }
 
     /// Resolved raster geometry, shared by host seating and pointer/IME geometry.
     pub fn logical_size(&self) -> (f32, f32) {
-        self.rendered.as_ref().map_or((self.font_size, self.font_size), |r| (r.width, r.height))
+        self.rendered
+            .as_ref()
+            .map_or((self.font_size, self.font_size), |r| (r.width, r.height))
     }
 
-    pub fn is_rendered(&self) -> bool { self.rendered.is_some() }
+    pub fn is_rendered(&self) -> bool {
+        self.rendered.is_some()
+    }
 
-    pub fn has_pending_input(&self) -> bool { self.pending.is_some() || self.composition.is_some() }
+    pub fn has_pending_input(&self) -> bool {
+        self.pending.is_some() || self.composition.is_some()
+    }
 
     /// Inline spans have intrinsic dimensions; display seats fill their document row.
-    pub fn set_compact(&mut self, compact: bool) { self.compact = compact; }
+    pub fn set_compact(&mut self, compact: bool) {
+        self.compact = compact;
+    }
 
     /// Host-owned localized commands; the structural crate does not depend on app i18n.
-    pub fn set_action_labels(&mut self, commit: SharedString, cancel: SharedString, matrix: [SharedString; 4]) {
+    pub fn set_action_labels(
+        &mut self,
+        commit: SharedString,
+        cancel: SharedString,
+        matrix: [SharedString; 4],
+    ) {
         self.commit_label = commit;
         self.cancel_label = cancel;
         self.matrix_labels = matrix;
     }
 
     /// Keep the hosted geometry and raster on the host's current zoom, DPR and semantic theme.
-    pub fn set_presentation(&mut self, font_size: f32, dpr: f32, theme: MathTheme, window: &mut Window, cx: &mut Context<Self>) {
-        if self.font_size == font_size && self.dpr == dpr && self.theme == theme { return; }
+    pub fn set_presentation(
+        &mut self,
+        font_size: f32,
+        dpr: f32,
+        theme: MathTheme,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.font_size == font_size && self.dpr == dpr && self.theme == theme {
+            return;
+        }
         self.font_size = font_size;
         self.dpr = dpr;
         self.theme = theme;
@@ -334,7 +371,9 @@ impl MathEditor {
     fn rerender(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let old = self.rendered.take();
         self.rendered = render::render_row(&self.root, self.font_size, self.dpr, self.theme.fg);
-        if self.rendered.is_none() { cx.emit(MathNav::RenderFailed); }
+        if self.rendered.is_none() {
+            cx.emit(MathNav::RenderFailed);
+        }
         if let Some(old) = old {
             cx.drop_image(old.image, Some(window));
         }
@@ -388,16 +427,26 @@ impl MathEditor {
     fn on_key(&mut self, ev: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
         let ks = &ev.keystroke;
         if ks.key == "f10" && ks.modifiers.shift {
-            cx.emit(MathNav::ContextMenu { position: self.img_bounds.get().map_or(Point::default(), |b| b.bottom_left()) });
+            cx.emit(MathNav::ContextMenu {
+                position: self
+                    .img_bounds
+                    .get()
+                    .map_or(Point::default(), |b| b.bottom_left()),
+            });
             cx.stop_propagation();
             return;
         }
-        if self.composition.is_some() && (ks.modifiers.platform || ks.modifiers.control) && ks.key == "s" {
+        if self.composition.is_some()
+            && (ks.modifiers.platform || ks.modifiers.control)
+            && ks.key == "s"
+        {
             cx.emit(MathNav::Save);
             cx.stop_propagation();
             return;
         }
-        if self.composition.is_some() { return; }
+        if self.composition.is_some() {
+            return;
+        }
         if ks.modifiers.platform || ks.modifiers.control {
             if ks.key == "s" && !ks.modifiers.alt && !ks.modifiers.shift {
                 cx.emit(MathNav::Save);
@@ -441,7 +490,9 @@ impl MathEditor {
             return;
         }
         // Printable input, including IME commits and paste, arrives through EntityInputHandler.
-        if ks.key_char.is_some() && !matches!(ks.key.as_str(), "enter" | "tab" | "space" | "backspace") {
+        if ks.key_char.is_some()
+            && !matches!(ks.key.as_str(), "enter" | "tab" | "space" | "backspace")
+        {
             return;
         }
         cx.stop_propagation();
@@ -628,14 +679,20 @@ impl MathEditor {
     }
 
     fn chrome_scale(&self) -> f32 {
-        if self.inline { self.font_size / if self.compact { 16. } else { 24. } } else { 1. }
+        if self.inline {
+            self.font_size / if self.compact { 16. } else { 24. }
+        } else {
+            1.
+        }
     }
 
     /// Resolve the highlighted command; an unknown command remains visibly pending.
     fn commit_pending(&mut self) {
         let name = self.pending.as_deref().unwrap_or_default();
         let matches = input::command_matches(name);
-        let Some(&chosen) = matches.get(self.selected).or_else(|| matches.first()) else { return; };
+        let Some(&chosen) = matches.get(self.selected).or_else(|| matches.first()) else {
+            return;
+        };
         let sel = self.selection_range();
         self.pending = None;
         self.anchor = None;
@@ -736,7 +793,8 @@ impl MathEditor {
             let win_h = f32::from(window.viewport_size().height);
             let formula_top = f32::from(b.top());
             let panel_height = (PALETTE_H + 40.) * self.chrome_scale();
-            if formula_top + below + panel_height > win_h && formula_top - panel_height - 4.0 >= 0.0 {
+            if formula_top + below + panel_height > win_h && formula_top - panel_height - 4.0 >= 0.0
+            {
                 return -(panel_height + 4.0);
             }
         }
@@ -758,7 +816,9 @@ impl MathEditor {
             return PAD + m.x as f32 * self.font_size + self.toolbar_off.0;
         }
         match self.align {
-            MathAlign::Right => self.rendered.as_ref().map_or(0.0, |r| r.width) - PALETTE_W * self.chrome_scale(),
+            MathAlign::Right => {
+                self.rendered.as_ref().map_or(0.0, |r| r.width) - PALETTE_W * self.chrome_scale()
+            }
             _ => 0.0,
         }
     }
@@ -814,7 +874,10 @@ impl MathEditor {
             .p_2()
             .children(input::PALETTE.iter().map(|(label, cmd)| {
                 let cmd = *cmd;
-                Button::new(cmd).label(*label).small().outline()
+                Button::new(cmd)
+                    .label(*label)
+                    .small()
+                    .outline()
                     .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| {
                         // With a selection active, the fraction / root buttons WRAP it (it
                         // becomes the numerator / radicand); other buttons just insert.
@@ -852,11 +915,27 @@ impl MathEditor {
             .occlude()
             .child(handle)
             .child(buttons)
-            .child(div().flex().gap_1().p_2()
-                .child(Button::new("formula-apply").label(self.commit_label.clone()).small()
-                    .on_click(cx.listener(|_, _, _, cx| cx.emit(MathNav::Exit { after: true }))))
-                .child(Button::new("formula-cancel").label(self.cancel_label.clone()).small().ghost()
-                    .on_click(cx.listener(|_, _, _, cx| cx.emit(MathNav::Cancel)))))
+            .child(
+                div()
+                    .flex()
+                    .gap_1()
+                    .p_2()
+                    .child(
+                        Button::new("formula-apply")
+                            .label(self.commit_label.clone())
+                            .small()
+                            .on_click(
+                                cx.listener(|_, _, _, cx| cx.emit(MathNav::Exit { after: true })),
+                            ),
+                    )
+                    .child(
+                        Button::new("formula-cancel")
+                            .label(self.cancel_label.clone())
+                            .small()
+                            .ghost()
+                            .on_click(cx.listener(|_, _, _, cx| cx.emit(MathNav::Cancel))),
+                    ),
+            )
     }
 
     /// A small contextual toolbar — shown only when the caret is in a matrix — docked just
@@ -897,7 +976,10 @@ impl MathEditor {
             .child("⠿");
 
         let btn = |id: &'static str, label: SharedString, op: fn(&mut Cursor, &mut Row)| {
-            Button::new(id).label(label).small().outline()
+            Button::new(id)
+                .label(label)
+                .small()
+                .outline()
                 .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| {
                     let before = (this.root.clone(), this.cursor.clone());
                     op(&mut this.cursor, &mut this.root);
@@ -920,10 +1002,26 @@ impl MathEditor {
                 // Occlude — same overflow as the palette: it floats below the matrix.
                 .occlude()
                 .child(grip)
-                .child(btn("formula-add-row", self.matrix_labels[0].clone(), Cursor::matrix_add_row))
-                .child(btn("formula-remove-row", self.matrix_labels[1].clone(), Cursor::matrix_remove_row))
-                .child(btn("formula-add-column", self.matrix_labels[2].clone(), Cursor::matrix_add_col))
-                .child(btn("formula-remove-column", self.matrix_labels[3].clone(), Cursor::matrix_remove_col)),
+                .child(btn(
+                    "formula-add-row",
+                    self.matrix_labels[0].clone(),
+                    Cursor::matrix_add_row,
+                ))
+                .child(btn(
+                    "formula-remove-row",
+                    self.matrix_labels[1].clone(),
+                    Cursor::matrix_remove_row,
+                ))
+                .child(btn(
+                    "formula-add-column",
+                    self.matrix_labels[2].clone(),
+                    Cursor::matrix_add_col,
+                ))
+                .child(btn(
+                    "formula-remove-column",
+                    self.matrix_labels[3].clone(),
+                    Cursor::matrix_remove_col,
+                )),
         )
     }
 }
@@ -1003,8 +1101,14 @@ impl Render for MathEditor {
         });
         let composition = self.composition.as_ref().map(|text| {
             let (x, y, _) = self.caret_px().unwrap_or((PAD, PAD, self.font_size));
-            div().absolute().left(px(x)).top(px(y)).text_size(px(self.font_size))
-                .bg(theme.panel).text_color(theme.fg).child(text.clone())
+            div()
+                .absolute()
+                .left(px(x))
+                .top(px(y))
+                .text_size(px(self.font_size))
+                .bg(theme.panel)
+                .text_color(theme.fg)
+                .child(text.clone())
         });
         let dropdown = self.pending.as_ref().and_then(|p| {
             let matches = input::command_matches(p);
@@ -1117,7 +1221,9 @@ impl Render for MathEditor {
             {
                 let focus = self.focus.clone();
                 let view = cx.entity();
-                move |bounds, _, window, cx| window.handle_input(&focus, ElementInputHandler::new(bounds, view), cx)
+                move |bounds, _, window, cx| {
+                    window.handle_input(&focus, ElementInputHandler::new(bounds, view), cx)
+                }
             },
         )
         .absolute()
@@ -1134,14 +1240,24 @@ impl Render for MathEditor {
         div()
             .track_focus(&self.focus)
             .key_context("LyrelFormula")
-            .on_action(cx.listener(|_, _: &ConfirmFormula, _, cx| cx.emit(MathNav::Exit { after: true })))
+            .on_action(
+                cx.listener(|_, _: &ConfirmFormula, _, cx| cx.emit(MathNav::Exit { after: true })),
+            )
             .on_action(cx.listener(|_, _: &CancelFormula, _, cx| cx.emit(MathNav::Cancel)))
-            .on_action(cx.listener(|this, _: &AlignFormulaLeft, _, cx| this.set_align(MathAlign::Left, cx)))
-            .on_action(cx.listener(|this, _: &AlignFormulaCenter, _, cx| this.set_align(MathAlign::Center, cx)))
-            .on_action(cx.listener(|this, _: &AlignFormulaRight, _, cx| this.set_align(MathAlign::Right, cx)))
+            .on_action(
+                cx.listener(|this, _: &AlignFormulaLeft, _, cx| {
+                    this.set_align(MathAlign::Left, cx)
+                }),
+            )
+            .on_action(cx.listener(|this, _: &AlignFormulaCenter, _, cx| {
+                this.set_align(MathAlign::Center, cx)
+            }))
+            .on_action(cx.listener(|this, _: &AlignFormulaRight, _, cx| {
+                this.set_align(MathAlign::Right, cx)
+            }))
             .on_key_down(cx.listener(Self::on_key))
-            .on_drag_move(
-                cx.listener(|this, e: &gpui_kit::DragMoveEvent<GripDrag>, _window, cx| {
+            .on_drag_move(cx.listener(
+                |this, e: &gpui_kit::DragMoveEvent<GripDrag>, _window, cx| {
                     let (mx, my) = (f32::from(e.event.position.x), f32::from(e.event.position.y));
                     if let Some((gx, gy)) = this.palette_drag {
                         if this.inline {
@@ -1175,10 +1291,10 @@ impl Render for MathEditor {
                             cx.notify();
                         }
                     }
-                }),
-            )
-            .on_drag_move(
-                cx.listener(|this, e: &gpui_kit::DragMoveEvent<SelectDrag>, _window, cx| {
+                },
+            ))
+            .on_drag_move(cx.listener(
+                |this, e: &gpui_kit::DragMoveEvent<SelectDrag>, _window, cx| {
                     let Some(from) = this.select_drag.clone() else {
                         return;
                     };
@@ -1189,7 +1305,8 @@ impl Render for MathEditor {
                     // Selection is single-row: both ends climb to their deepest COMMON
                     // row, taking each structure crossed in whole (a press inside one
                     // accent's base dragged into another's must not bail).
-                    let (path, lo, hi) = crate::math::editor::cursor::common_row_selection(&from, &to);
+                    let (path, lo, hi) =
+                        crate::math::editor::cursor::common_row_selection(&from, &to);
                     if lo == hi {
                         this.anchor = None;
                         this.cursor = Cursor { path, index: lo };
@@ -1214,8 +1331,8 @@ impl Render for MathEditor {
                         };
                     }
                     cx.notify();
-                }),
-            )
+                },
+            ))
             .on_mouse_up(
                 MouseButton::Left,
                 cx.listener(|this, _: &MouseUpEvent, _window, cx| {

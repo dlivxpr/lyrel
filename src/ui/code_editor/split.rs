@@ -309,7 +309,11 @@ impl LyrelApp {
             self.tabs.get(self.tabs.active_index()),
             self.tab_code(),
         ) {
-            self.editor.buffers.get(id).expect("split buffer").presentations
+            self.editor
+                .buffers
+                .get(id)
+                .expect("split buffer")
+                .presentations
                 .view(origin, tab.id(), code.group, window, cx);
         }
         self.editor.dismiss_bar();
@@ -365,7 +369,9 @@ impl LyrelApp {
                     .existing(tab, other_group)
                     .is_some_and(|view| {
                         view.read(cx).focus_handle(cx).contains_focused(window, cx)
-                            || file.presentations.search(&view)
+                            || file
+                                .presentations
+                                .search(&view)
                                 .is_some_and(|search| search.read(cx).has_focus(window, cx))
                     })
             } else if code.active_id() != Some(other) {

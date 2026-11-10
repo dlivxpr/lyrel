@@ -12,7 +12,13 @@ impl EditorState {
     }
 
     /// Insert dimensions and presentation together as one history transaction.
-    pub fn insert_table_with_style(&mut self, rows: usize, columns: usize, style: Option<&str>, cx: &mut Context<Self>) {
+    pub fn insert_table_with_style(
+        &mut self,
+        rows: usize,
+        columns: usize,
+        style: Option<&str>,
+        cx: &mut Context<Self>,
+    ) {
         if !(1..=100).contains(&rows) || !(1..=100).contains(&columns) {
             return;
         }
@@ -56,37 +62,79 @@ impl EditorState {
 
     /// Fit the current column to its native shaped content, preserving style.
     pub fn fit_caret_table_column(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some((_, cell, _)) = self.caret_table_cell_pos() else { return; };
-        let Some(region) = self.caret_table_region() else { return; };
+        let Some((_, cell, _)) = self.caret_table_cell_pos() else {
+            return;
+        };
+        let Some(region) = self.caret_table_region() else {
+            return;
+        };
         self.autofit_table_col(region.lines.start, cell, window, cx);
     }
 
     /// Keyboard-accessible counterpart of dragging a column border. Widths use
     /// the same measured pixels and marker transaction as the native drag.
     pub fn resize_caret_table_column(&mut self, delta: f32, cx: &mut Context<Self>) {
-        let Some((_, col, _)) = self.caret_table_cell_pos() else { return; };
-        let Some(region) = self.caret_table_region() else { return; };
-        let Some(width) = self.table_rows.get(region.lines.start)
-            .and_then(Option::as_ref).and_then(|row| row.col_widths.get(col)).copied()
-        else { return; };
-        self.commit_table_col_widths(TableColResize {
-            header_row: region.lines.start, col, start_x: px(0.),
-            orig: f32::from(width), width: (f32::from(width) + delta).max(24.),
-        }, cx);
+        let Some((_, col, _)) = self.caret_table_cell_pos() else {
+            return;
+        };
+        let Some(region) = self.caret_table_region() else {
+            return;
+        };
+        let Some(width) = self
+            .table_rows
+            .get(region.lines.start)
+            .and_then(Option::as_ref)
+            .and_then(|row| row.col_widths.get(col))
+            .copied()
+        else {
+            return;
+        };
+        self.commit_table_col_widths(
+            TableColResize {
+                header_row: region.lines.start,
+                col,
+                start_x: px(0.),
+                orig: f32::from(width),
+                width: (f32::from(width) + delta).max(24.),
+            },
+            cx,
+        );
     }
 
     /// Native source geometry for a table-cell position. Host anchors and IME
     /// must use the same shaped cell, padding and alignment as paint/hit-test.
-    pub fn source_bounds(&self, range: &Range<usize>, window: &mut Window) -> Option<Bounds<Pixels>> {
+    pub fn source_bounds(
+        &self,
+        range: &Range<usize>,
+        window: &mut Window,
+    ) -> Option<Bounds<Pixels>> {
         let (row, col) = self.row_col(range.start.min(self.content.len()));
-        let Some(table) = self.table_rows.get(row).and_then(Option::as_ref).filter(|table| !table.is_separator) else {
+        let Some(table) = self
+            .table_rows
+            .get(row)
+            .and_then(Option::as_ref)
+            .filter(|table| !table.is_separator)
+        else {
             return self.range_to_bounds(range);
         };
         let bounds = self.last_bounds?;
-        let font = self.paint_font.clone().unwrap_or_else(|| window.text_style().font());
-        let (x, y, _, _) = table_caret_pos(table, col, self.table_left(table, row, &bounds), &font, self.font_size, window)?;
+        let font = self
+            .paint_font
+            .clone()
+            .unwrap_or_else(|| window.text_style().font());
+        let (x, y, _, _) = table_caret_pos(
+            table,
+            col,
+            self.table_left(table, row, &bounds),
+            &font,
+            self.font_size,
+            window,
+        )?;
         let height = self.font_size * LINE_HEIGHT_RATIO;
-        Some(Bounds::new(point(x, bounds.top() + self.line_tops[row] + px(6.) + y), size(px(1.), height)))
+        Some(Bounds::new(
+            point(x, bounds.top() + self.line_tops[row] + px(6.) + y),
+            size(px(1.), height),
+        ))
     }
 
     /// The table-affordance region the pointer is in — `(table index, 0 = in the
@@ -394,7 +442,13 @@ impl EditorState {
                     let cr = &nt.cell_ranges[tc];
                     let target = starts[ru] + cr.start + intra.min(cr.end - cr.start);
                     let start = starts[ru] + cr.start;
-                    return Some(start + cell_grapheme_boundary(&self.content[start..starts[ru] + cr.end], target - start));
+                    return Some(
+                        start
+                            + cell_grapheme_boundary(
+                                &self.content[start..starts[ru] + cr.end],
+                                target - start,
+                            ),
+                    );
                 }
                 Some(Some(_)) => r += dir as isize, // separator — skip past it
                 // A non-table row next to the table: exit onto it at the same byte
@@ -1047,7 +1101,9 @@ impl EditorState {
             new_rows.push(format!("| {} |", cells.join(" | ")));
         }
         let starts = self.line_starts();
-        let region = self.caret_table_region().expect("the current table was resolved above");
+        let region = self
+            .caret_table_region()
+            .expect("the current table was resolved above");
         let block_start = starts[region.marker_line.unwrap_or(header)];
         let block_end = self.line_end(end - 1);
         let mut new_block = new_rows.join("\n");
@@ -1055,10 +1111,13 @@ impl EditorState {
             let marker = if let Some(mut widths) = region.col_widths_attr {
                 match edit {
                     ColEdit::Insert(at) => widths.insert(at.min(widths.len()), 48.),
-                    ColEdit::Delete(at) if at < widths.len() => { widths.remove(at); },
-                    ColEdit::Delete(_) => {},
+                    ColEdit::Delete(at) if at < widths.len() => {
+                        widths.remove(at);
+                    }
+                    ColEdit::Delete(_) => {}
                 }
-                zorite_markdown::syntax::table_marker_text(region.style, Some(&widths)).unwrap_or_default()
+                zorite_markdown::syntax::table_marker_text(region.style, Some(&widths))
+                    .unwrap_or_default()
             } else {
                 self.content[starts[marker_row]..self.line_end(marker_row)].to_string()
             };
@@ -1073,8 +1132,13 @@ impl EditorState {
 }
 
 fn cell_grapheme_boundary(content: &str, offset: usize) -> usize {
-    content.grapheme_indices(true).map(|(at, _)| at).chain(std::iter::once(content.len()))
-        .take_while(|&at| at <= offset).last().unwrap_or(0)
+    content
+        .grapheme_indices(true)
+        .map(|(at, _)| at)
+        .chain(std::iter::once(content.len()))
+        .take_while(|&at| at <= offset)
+        .last()
+        .unwrap_or(0)
 }
 
 /// Content-fit column widths for a table region (W4c): each column sized to its

@@ -31,8 +31,8 @@ mod buffers;
 pub(crate) mod commands;
 mod document_input;
 pub(crate) mod markdown;
-mod markdown_search;
 mod markdown_formula;
+mod markdown_search;
 mod text;
 use buffers::Loaded;
 use document_input::{EditorInput, MarkdownPresentations};
@@ -1206,7 +1206,8 @@ impl LyrelApp {
             .track_buffer(id, input.read(cx).text().clone());
         if let Some(source) = input.markdown() {
             let app = cx.entity().downgrade();
-            let resources = cx.new(|cx| markdown::images::ImageHost::new(app, id, source, window, cx));
+            let resources =
+                cx.new(|cx| markdown::images::ImageHost::new(app, id, source, window, cx));
             markdown::images::ImageHost::attach(&resources, source, cx);
             self.editor.buffers.get_mut(id).unwrap().markdown_resources = Some(resources);
         }
@@ -2667,7 +2668,11 @@ impl LyrelApp {
                     .text_size(rems(1.))
                     .text_color(cx.theme().foreground)
                     .when(!view.read(cx).is_source_only(), |body| {
-                        body.children(f.markdown_resources.as_ref().map(|resources| markdown::images::controls(resources, &view, cx)))
+                        body.children(
+                            f.markdown_resources
+                                .as_ref()
+                                .map(|resources| markdown::images::controls(resources, &view, cx)),
+                        )
                     })
                     .child(markdown::table_code::render_controls(&view))
                     .children(f.presentations.search(&view))

@@ -1688,12 +1688,24 @@ pub fn translate_en(key: L10nKey) -> &'static str {
         L10nKey::FileTreeContextHideDotfiles => "Hide Dotfiles",
         L10nKey::MarkdownImageChooseLocation => "Choose a save location before inserting the image",
         L10nKey::MarkdownInsertImage => "Insert image…",
-        L10nKey::MarkdownImageLimit => "The image exceeds the 32 MiB input, 16 megapixel or 256 MiB document image limit",
-        L10nKey::MarkdownImageUnsupported => "Use a PNG, JPEG, GIF, WebP, BMP, TIFF, ICO or self-contained SVG image",
-        L10nKey::MarkdownImageExternalReference => "The SVG references another resource. Use a self-contained SVG.",
-        L10nKey::MarkdownImageRedirectBlocked => "Image redirects are blocked. Use the final image URL.",
-        L10nKey::MarkdownImageUnsafeDirectory => "The assets directory points outside the document directory",
-        L10nKey::MarkdownImageNetworkPolicy => "Not requested. Load explicitly from the local client; redirects and nested SVG resources are blocked.",
+        L10nKey::MarkdownImageLimit => {
+            "The image exceeds the 32 MiB input, 16 megapixel or 256 MiB document image limit"
+        }
+        L10nKey::MarkdownImageUnsupported => {
+            "Use a PNG, JPEG, GIF, WebP, BMP, TIFF, ICO or self-contained SVG image"
+        }
+        L10nKey::MarkdownImageExternalReference => {
+            "The SVG references another resource. Use a self-contained SVG."
+        }
+        L10nKey::MarkdownImageRedirectBlocked => {
+            "Image redirects are blocked. Use the final image URL."
+        }
+        L10nKey::MarkdownImageUnsafeDirectory => {
+            "The assets directory points outside the document directory"
+        }
+        L10nKey::MarkdownImageNetworkPolicy => {
+            "Not requested. Load explicitly from the local client; redirects and nested SVG resources are blocked."
+        }
         L10nKey::MarkdownImageWriting => "Writing image to document assets…",
         L10nKey::MarkdownImageWriteFailed => "Could not write image to document assets",
         L10nKey::MarkdownImageSelectionChanged => {
@@ -1782,9 +1794,15 @@ pub fn translate_en(key: L10nKey) -> &'static str {
         L10nKey::EditorFormulaCopyLatex => "Copy LaTeX",
         L10nKey::EditorFormulaExportPng => "Export PNG to this computer…",
         L10nKey::EditorFormulaExportSvg => "Export SVG to this computer…",
-        L10nKey::EditorFormulaUnsupported => "This formula contains syntax the structural editor cannot preserve. Edit it in source mode.",
-        L10nKey::EditorFormulaChanged => "The document or formula selection changed. Reopen formula editing; the expired edit was not applied.",
-        L10nKey::EditorFormulaRenderFailed => "The formula could not be rendered or has unfinished input. Its source was preserved.",
+        L10nKey::EditorFormulaUnsupported => {
+            "This formula contains syntax the structural editor cannot preserve. Edit it in source mode."
+        }
+        L10nKey::EditorFormulaChanged => {
+            "The document or formula selection changed. Reopen formula editing; the expired edit was not applied."
+        }
+        L10nKey::EditorFormulaRenderFailed => {
+            "The formula could not be rendered or has unfinished input. Its source was preserved."
+        }
         L10nKey::EditorFormulaAlignLeft => "Align left",
         L10nKey::EditorFormulaAlignCenter => "Align center",
         L10nKey::EditorFormulaAlignRight => "Align right",

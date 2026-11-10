@@ -3325,36 +3325,36 @@ mod gpui_tests {
     }
 
     #[gpui_kit::test]
-    fn a_rebuild_keeps_the_bindings_lyrel_did_not_install(cx: &mut TestAppContext) {
+    fn rebuild_preserves_backspace_precedence_in_input_and_markdown(cx: &mut TestAppContext) {
+        use gpui_kit::Action as _;
         cx.update(|cx| {
-            // gpui-component binds the whole `Input` editing table — backspace
-            // among it — from its own `init`, which runs once, before ours. A
-            // rebuild replaces the map, so it has to carry them; without this
-            // the first rebind left every text field in the app unable to
-            // delete a character (#548).
             gpui_kit::component::init(cx);
             cx.set_global(Config::default());
-
-            let backspace = |cx: &App| {
+            let resolved = |cx: &App, context: &str| {
                 let typed = [Keystroke::parse_with_os("backspace", native_os()).unwrap()];
+                let context = [gpui_kit::KeyContext::parse(context).unwrap()];
                 cx.key_bindings()
                     .borrow()
-                    .all_bindings_for_input(&typed)
-                    .iter()
-                    .map(|b| b.action().name().to_string())
-                    .collect::<Vec<_>>()
+                    .bindings_for_input(&typed, &context)
+                    .0
+                    .first()
+                    .map(|binding| binding.action().name())
             };
 
-            let inherited = backspace(cx);
-            assert!(
-                !inherited.is_empty(),
-                "gpui-component binds backspace before lyrel touches the keymap"
-            );
-
             init(cx);
-            assert_eq!(backspace(cx), inherited, "init must not drop them");
-            rebind(cx);
-            assert_eq!(backspace(cx), inherited, "nor may a rebind");
+            for _ in 0..3 {
+                assert_eq!(
+                    resolved(cx, "Input"),
+                    Some(gpui_kit::component::input::Backspace::name_for_type()),
+                    "ordinary text fields keep their editing action"
+                );
+                assert_eq!(
+                    resolved(cx, "Editor"),
+                    Some(lyrel_markdown_editor::Backspace::name_for_type()),
+                    "Markdown receives its own editing action"
+                );
+                rebind(cx);
+            }
         });
     }
 

@@ -9,7 +9,9 @@ impl EditorState {
         for (line, text) in self.content.split('\n').enumerate().take(row + 1) {
             if text.trim_start().starts_with("```") {
                 if let Some(start) = opening.take() {
-                    if line == row { return Some(start); }
+                    if line == row {
+                        return Some(start);
+                    }
                 } else {
                     opening = Some(line);
                 }
@@ -20,7 +22,8 @@ impl EditorState {
 
     /// Language token only; additional fence metadata remains untouched.
     pub fn caret_code_language(&self) -> Option<String> {
-        self.code_block_at(self.caret_code_fence()?).map(|(language, _)| language)
+        self.code_block_at(self.caret_code_fence()?)
+            .map(|(language, _)| language)
     }
 
     /// Change only the current block's language token as one undoable source edit.
@@ -32,7 +35,10 @@ impl EditorState {
 
     /// Copy the current code body without exposing a second editable document.
     pub fn copy_caret_code(&mut self, cx: &mut Context<Self>) {
-        if let Some((_, body)) = self.caret_code_fence().and_then(|row| self.code_block_at(row)) {
+        if let Some((_, body)) = self
+            .caret_code_fence()
+            .and_then(|row| self.code_block_at(row))
+        {
             self.write_clipboard(self.content[body].to_string(), cx);
         }
     }

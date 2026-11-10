@@ -56,7 +56,10 @@ pub fn render_latex(latex: &str, font_size: f32, dpr: f32, color: Hsla) -> Optio
 fn rasterize(latex: &str, font_size: f32, dpr: f32, rgb: [u8; 3]) -> Option<(Vec<u8>, u32, u32)> {
     let nodes = parse(latex).ok()?;
     let [r, g, b] = rgb;
-    let options = LayoutOptions { color: Color::rgb(r as f32 / 255., g as f32 / 255., b as f32 / 255.), ..Default::default() };
+    let options = LayoutOptions {
+        color: Color::rgb(r as f32 / 255., g as f32 / 255., b as f32 / 255.),
+        ..Default::default()
+    };
     let lbox = layout(&nodes, &options);
     let dl = to_display_list(&lbox);
     let opts = RenderOptions {
@@ -143,7 +146,8 @@ mod tests {
     #[test]
     fn render_latex_renders_raw_latex() {
         // The display path: a $$…$$ block's raw LaTeX, no edit model in the loop.
-        let r = render_latex(r"\frac{1}{2} + \sqrt{x}", 18.0, 2.0, gpui_kit::black()).expect("renders");
+        let r =
+            render_latex(r"\frac{1}{2} + \sqrt{x}", 18.0, 2.0, gpui_kit::black()).expect("renders");
         assert!(
             r.width > 0.0 && r.height > 0.0,
             "non-empty: {}x{}",
@@ -174,7 +178,17 @@ mod tests {
     #[test]
     fn transparent_raster_preserves_explicit_red_in_a_themed_formula() {
         let (bytes, _, _) = rasterize(r"\color{red}{x}", 40., 1., [0, 0, 255]).unwrap();
-        assert!(bytes.as_chunks::<4>().0.iter().any(|p| p[3] == 0), "padding remains transparent");
-        assert!(bytes.as_chunks::<4>().0.iter().any(|p| p[2] > 200 && p[0] < 40 && p[1] < 40 && p[3] > 200), "explicit red is not recolored or erased");
+        assert!(
+            bytes.as_chunks::<4>().0.iter().any(|p| p[3] == 0),
+            "padding remains transparent"
+        );
+        assert!(
+            bytes
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .any(|p| p[2] > 200 && p[0] < 40 && p[1] < 40 && p[3] > 200),
+            "explicit red is not recolored or erased"
+        );
     }
 }

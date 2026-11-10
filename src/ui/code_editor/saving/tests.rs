@@ -117,7 +117,8 @@ fn failed_save_before_close_keeps_edits_and_cannot_resume_on_a_later_save(cx: &m
     wait_until(&mut vcx, |vcx| {
         app.read_with(vcx, |app, _| {
             app.active_buffer()
-                .is_some_and(|file| file.untitled.is_some() && !file.saving) && app.editor.waiters.is_empty()
+                .is_some_and(|file| file.untitled.is_some() && !file.saving)
+                && app.editor.waiters.is_empty()
         })
     });
     app.read_with(&vcx, |app, cx| {
@@ -374,7 +375,10 @@ fn markdown_save_as_cancel_and_failed_unsaved_close_keep_edits_through_recovery(
     vcx.simulate_prompt_answer(t(L10nKey::Save));
     wait_until(&mut vcx, |vcx| {
         host.entered.load(std::sync::atomic::Ordering::SeqCst)
-            && app.read_with(vcx, |app, _| app.active_buffer().is_some_and(|file| !file.saving) && app.editor.waiters.is_empty())
+            && app.read_with(vcx, |app, _| {
+                app.active_buffer().is_some_and(|file| !file.saving)
+                    && app.editor.waiters.is_empty()
+            })
     });
     vcx.dispatch_action(EditorSaveAs);
     settle(&mut vcx);

@@ -16,20 +16,39 @@ fn parse_latex(latex: &str) -> Row {
 
 /// Parse only syntax the structural model can preserve. A rejected formula stays source-editable.
 pub fn parse_latex_checked(latex: &str) -> Result<Row, String> {
-    if latex.trim().is_empty() { return Ok(Row::new()); }
+    if latex.trim().is_empty() {
+        return Ok(Row::new());
+    }
     let nodes = parse(latex).map_err(|error| format!("{error:?}"))?;
     fn supported(node: &ParseNode, matrix_cell: bool) -> bool {
         match node {
-            ParseNode::MathOrd { .. } | ParseNode::TextOrd { .. }
-            | ParseNode::Atom { .. } | ParseNode::OpToken { .. } => true,
-            ParseNode::Op { body, .. } => body.as_ref().is_none_or(|body| body.iter().all(|n| supported(n, false))),
-            ParseNode::OrdGroup { body, .. } | ParseNode::LeftRight { body, .. } => body.iter().all(|n| supported(n, false)),
-            ParseNode::SupSub { base, sup, sub, .. } => [base, sup, sub].into_iter().all(|n| n.as_deref().is_none_or(|n| supported(n, false))),
-            ParseNode::GenFrac { numer, denom, has_bar_line, .. } => *has_bar_line && supported(numer, false) && supported(denom, false),
-            ParseNode::Sqrt { body, index, .. } => supported(body, false) && index.as_deref().is_none_or(|n| supported(n, false)),
+            ParseNode::MathOrd { .. }
+            | ParseNode::TextOrd { .. }
+            | ParseNode::Atom { .. }
+            | ParseNode::OpToken { .. } => true,
+            ParseNode::Op { body, .. } => body
+                .as_ref()
+                .is_none_or(|body| body.iter().all(|n| supported(n, false))),
+            ParseNode::OrdGroup { body, .. } | ParseNode::LeftRight { body, .. } => {
+                body.iter().all(|n| supported(n, false))
+            }
+            ParseNode::SupSub { base, sup, sub, .. } => [base, sup, sub]
+                .into_iter()
+                .all(|n| n.as_deref().is_none_or(|n| supported(n, false))),
+            ParseNode::GenFrac {
+                numer,
+                denom,
+                has_bar_line,
+                ..
+            } => *has_bar_line && supported(numer, false) && supported(denom, false),
+            ParseNode::Sqrt { body, index, .. } => {
+                supported(body, false) && index.as_deref().is_none_or(|n| supported(n, false))
+            }
             ParseNode::Accent { base, .. } => supported(base, false),
             ParseNode::Array { body, .. } => body.iter().flatten().all(|n| supported(n, true)),
-            ParseNode::Styling { body, .. } if matrix_cell => body.iter().all(|n| supported(n, false)),
+            ParseNode::Styling { body, .. } if matrix_cell => {
+                body.iter().all(|n| supported(n, false))
+            }
             _ => false,
         }
     }
@@ -42,13 +61,22 @@ pub fn parse_latex_checked(latex: &str) -> Result<Row, String> {
         match &mut value {
             serde_json::Value::Object(object) => {
                 object.remove("loc");
-                for child in object.values_mut() { *child = semantic(child.take()); }
+                for child in object.values_mut() {
+                    *child = semantic(child.take());
+                }
                 // Bracing a single node changes token locations, not its meaning.
                 if object.get("type").and_then(|kind| kind.as_str()) == Some("ordgroup")
                     && let Some(body) = object.get_mut("body").and_then(|body| body.as_array_mut())
-                    && body.len() == 1 { return body.remove(0); }
+                    && body.len() == 1
+                {
+                    return body.remove(0);
+                }
             }
-            serde_json::Value::Array(array) => for child in array { *child = semantic(child.take()); },
+            serde_json::Value::Array(array) => {
+                for child in array {
+                    *child = semantic(child.take());
+                }
+            }
             _ => {}
         }
         value
@@ -310,7 +338,12 @@ mod tests {
 
     #[test]
     fn checked_entry_preserves_nested_supported_structures() {
-        for latex in [r"\frac{1}{2}", r"\sqrt[3]{\frac{x}{y}}", r"\left(\frac{a}{\sqrt{b}}\right)", r"x_i^{2}"] {
+        for latex in [
+            r"\frac{1}{2}",
+            r"\sqrt[3]{\frac{x}{y}}",
+            r"\left(\frac{a}{\sqrt{b}}\right)",
+            r"x_i^{2}",
+        ] {
             let row = parse_latex_checked(latex).unwrap_or_else(|error| panic!("{latex}: {error}"));
             assert!(!row.is_empty());
         }
@@ -318,8 +351,19 @@ mod tests {
 
     #[test]
     fn checked_entry_refuses_wrappers_spacing_and_unrepresentable_environments() {
-        for latex in [r"\color{red}{x}", r"\mathbf{x}", r"x\kern{1em}y", r"\phantom{x}", r"\binom{x}{y}", r"\begin{bmatrix}a&b\end{bmatrix}", r"\frac{"] {
-            assert!(parse_latex_checked(latex).is_err(), "must not silently discard syntax: {latex}");
+        for latex in [
+            r"\color{red}{x}",
+            r"\mathbf{x}",
+            r"x\kern{1em}y",
+            r"\phantom{x}",
+            r"\binom{x}{y}",
+            r"\begin{bmatrix}a&b\end{bmatrix}",
+            r"\frac{",
+        ] {
+            assert!(
+                parse_latex_checked(latex).is_err(),
+                "must not silently discard syntax: {latex}"
+            );
         }
     }
 }

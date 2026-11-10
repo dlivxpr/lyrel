@@ -977,7 +977,7 @@ fn markdown_pristine_reload_allows_cursor_and_mode_changes_during_disk_read(
     cx: &mut TestAppContext,
 ) {
     use gpui_kit::Focusable as _;
-    let directory = tempfile::tempdir().unwrap();
+    let directory = canonical_tempdir();
     let path = directory.path().join("pristine-reload.md");
     let original = "alpha\r\n\r\nkeep\n";
     let loaded = "external\r\n\r\nupdated\n";

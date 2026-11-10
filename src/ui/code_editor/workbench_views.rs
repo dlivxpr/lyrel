@@ -17,7 +17,10 @@ fn settle(cx: &mut VisualTestContext) {
 fn until(cx: &mut VisualTestContext, mut ready: impl FnMut(&mut VisualTestContext) -> bool) {
     let deadline = Instant::now() + Duration::from_secs(15);
     while !ready(cx) {
-        assert!(Instant::now() < deadline, "workbench view transition did not settle");
+        assert!(
+            Instant::now() < deadline,
+            "workbench view transition did not settle"
+        );
         settle(cx);
         cx.executor().advance_clock(Duration::from_millis(50));
         std::thread::sleep(Duration::from_millis(5));
@@ -25,7 +28,13 @@ fn until(cx: &mut VisualTestContext, mut ready: impl FnMut(&mut VisualTestContex
     settle(cx);
 }
 fn view(app: &Entity<LyrelApp>, cx: &VisualTestContext) -> Entity<MarkdownEditor> {
-    app.read_with(cx, |app, _| app.active_editor_input().unwrap().markdown().unwrap().clone())
+    app.read_with(cx, |app, _| {
+        app.active_editor_input()
+            .unwrap()
+            .markdown()
+            .unwrap()
+            .clone()
+    })
 }
 
 pub(crate) fn shared_context_and_ime_handoff(cx: &mut TestAppContext) {
@@ -33,8 +42,12 @@ pub(crate) fn shared_context_and_ime_handoff(cx: &mut TestAppContext) {
     let path = dir.path().join("views.md");
     std::fs::write(&path, b"# First\r\nalpha\nbeta\r\n").unwrap();
     let (app, mut cx, _streams) = harness_with_tabs(cx, 1);
-    app.update_in(&mut cx, |app, window, cx| app.open_file_in_editor(&path, window, cx));
-    until(&mut cx, |cx| app.read_with(cx, |app, _| app.active_buffer().is_some()));
+    app.update_in(&mut cx, |app, window, cx| {
+        app.open_file_in_editor(&path, window, cx)
+    });
+    until(&mut cx, |cx| {
+        app.read_with(cx, |app, _| app.active_buffer().is_some())
+    });
     let first = view(&app, &cx);
     app.update_in(&mut cx, |app, window, cx| {
         app.toggle_document_preview(window, cx);
@@ -46,8 +59,15 @@ pub(crate) fn shared_context_and_ime_handoff(cx: &mut TestAppContext) {
     assert_ne!(first.entity_id(), second.entity_id());
     second.read_with(&cx, |second, cx| {
         assert_eq!(second.document(), first.read(cx).document());
-        assert!(!second.is_live(), "split inherits the originating source presentation");
-        assert_eq!(second.selected_range(), 14..18, "split starts at the originating context");
+        assert!(
+            !second.is_live(),
+            "split inherits the originating source presentation"
+        );
+        assert_eq!(
+            second.selected_range(),
+            14..18,
+            "split starts at the originating context"
+        );
     });
     second.update_in(&mut cx, |view, window, cx| {
         view.select_range(8..8, cx);
@@ -55,7 +75,9 @@ pub(crate) fn shared_context_and_ime_handoff(cx: &mut TestAppContext) {
     });
     settle(&mut cx);
     first.read_with(&cx, |view, _| assert_eq!(view.selected_range(), 17..21));
-    app.update_in(&mut cx, |app, window, cx| assert!(app.editor_focus_group(true, window, cx)));
+    app.update_in(&mut cx, |app, window, cx| {
+        assert!(app.editor_focus_group(true, window, cx))
+    });
     first.update_in(&mut cx, |view, window, cx| {
         view.select_range(0..0, cx);
         view.replace_and_mark_text_in_range(None, "新", Some(1..1), window, cx);
@@ -67,26 +89,38 @@ pub(crate) fn shared_context_and_ime_handoff(cx: &mut TestAppContext) {
         view.replace_text_in_range(None, "STALE COMMIT", window, cx);
     });
     first.read_with(&cx, |view, cx| {
-        assert!(view.document().read(cx).has_composition(), "stale unmark cannot finish the new lease");
+        assert!(
+            view.document().read(cx).has_composition(),
+            "stale unmark cannot finish the new lease"
+        );
         assert_eq!(view.text(), "新# First\n中alpha\nbeta\n");
     });
     first.update_in(&mut cx, |view, window, cx| view.unmark_text(window, cx));
     cx.dispatch_action(gpui_kit::component::input::Undo);
     settle(&mut cx);
-    first.read_with(&cx, |view, _| assert_eq!(view.text(), "# First\n中alpha\nbeta\n"));
-    app.update_in(&mut cx, |app, window, cx| app.editor_close_file(0, window, cx));
+    first.read_with(&cx, |view, _| {
+        assert_eq!(view.text(), "# First\n中alpha\nbeta\n")
+    });
+    app.update_in(&mut cx, |app, window, cx| {
+        app.editor_close_file(0, window, cx)
+    });
     settle(&mut cx);
     assert_eq!(view(&app, &cx), second);
     cx.dispatch_action(gpui_kit::component::input::Undo);
     settle(&mut cx);
     second.read_with(&cx, |view, cx| {
-        assert_eq!(view.document().read(cx).encode().unwrap(), b"# First\r\nalpha\nbeta\r\n");
+        assert_eq!(
+            view.document().read(cx).encode().unwrap(),
+            b"# First\r\nalpha\nbeta\r\n"
+        );
     });
 }
 
 #[cfg(test)]
 #[gpui_kit::test]
-fn split_preserves_context_rebases_selection_and_retires_only_old_ime_owner(cx: &mut TestAppContext) {
+fn split_preserves_context_rebases_selection_and_retires_only_old_ime_owner(
+    cx: &mut TestAppContext,
+) {
     shared_context_and_ime_handoff(cx);
 }
 
@@ -101,9 +135,15 @@ fn secondary_pending_save_survives_tab_focus_close_and_reopen(cx: &mut TestAppCo
     std::fs::write(&other, b"fn untouched() {}\n").unwrap();
     let host = test_host::FileHost::new(HostId(240));
     let (app, mut cx, _streams) = harness_with_tabs(cx, 2);
-    app.update_in(&mut cx, |app, window, cx| app.editor_open_on_host(host.clone(), &path, window, cx));
-    until(&mut cx, |cx| app.read_with(cx, |app, _| app.active_buffer().is_some()));
-    app.update_in(&mut cx, |app, window, cx| assert!(app.editor_split(window, cx)));
+    app.update_in(&mut cx, |app, window, cx| {
+        app.editor_open_on_host(host.clone(), &path, window, cx)
+    });
+    until(&mut cx, |cx| {
+        app.read_with(cx, |app, _| app.active_buffer().is_some())
+    });
+    app.update_in(&mut cx, |app, window, cx| {
+        assert!(app.editor_split(window, cx))
+    });
     let second = view(&app, &cx);
     second.update_in(&mut cx, |view, _, cx| view.select_range(0..0, cx));
     cx.update(|window, cx| window.input("注", cx));
@@ -115,11 +155,19 @@ fn secondary_pending_save_survives_tab_focus_close_and_reopen(cx: &mut TestAppCo
         app.tabs.select(1);
         app.editor_open_on_host(host.clone(), &other, window, cx);
     });
-    until(&mut cx, |cx| app.read_with(cx, |app, _| app.active_buffer().is_some_and(|f| f.path == other)));
+    until(&mut cx, |cx| {
+        app.read_with(cx, |app, _| {
+            app.active_buffer().is_some_and(|f| f.path == other)
+        })
+    });
     release.send(()).unwrap();
-    until(&mut cx, |cx| app.read_with(cx, |app, _| app.editor.buffers.iter().all(|f| !f.saving)));
+    until(&mut cx, |cx| {
+        app.read_with(cx, |app, _| app.editor.buffers.iter().all(|f| !f.saving))
+    });
     assert_eq!(std::fs::read(&other).unwrap(), b"fn untouched() {}\n");
-    let expected = "注---\r\ntitle: intact\n---\r\n<Unknown />\n".as_bytes().to_vec();
+    let expected = "注---\r\ntitle: intact\n---\r\n<Unknown />\n"
+        .as_bytes()
+        .to_vec();
     assert_eq!(std::fs::read(&path).unwrap(), expected);
     app.update_in(&mut cx, |app, window, cx| {
         app.tabs.select(0);
@@ -128,8 +176,12 @@ fn secondary_pending_save_survives_tab_focus_close_and_reopen(cx: &mut TestAppCo
         app.editor_close_file(0, window, cx);
         app.editor_open_on_host(host.clone(), &path, window, cx);
     });
-    until(&mut cx, |cx| app.read_with(cx, |app, _| app.active_buffer().is_some()));
-    view(&app, &cx).read_with(&cx, |view, cx| assert_eq!(view.document().read(cx).encode().unwrap(), expected));
+    until(&mut cx, |cx| {
+        app.read_with(cx, |app, _| app.active_buffer().is_some())
+    });
+    view(&app, &cx).read_with(&cx, |view, cx| {
+        assert_eq!(view.document().read(cx).encode().unwrap(), expected)
+    });
 }
 
 pub(crate) fn focused_consumers_and_layout(cx: &mut TestAppContext) {
@@ -143,23 +195,48 @@ pub(crate) fn focused_consumers_and_layout(cx: &mut TestAppContext) {
     let (app, mut cx, _streams) = harness_with_tabs(cx, 1);
     crate::ui::i18n::set_locale("en");
     cx.simulate_resize(gpui_kit::size(px(1600.), px(900.)));
-    app.update_in(&mut cx, |app, window, cx| app.open_file_in_editor(&path, window, cx));
-    until(&mut cx, |cx| app.read_with(cx, |app, _| app.active_buffer().is_some()));
+    app.update_in(&mut cx, |app, window, cx| {
+        app.open_file_in_editor(&path, window, cx)
+    });
+    until(&mut cx, |cx| {
+        app.read_with(cx, |app, _| app.active_buffer().is_some())
+    });
     let first = view(&app, &cx);
-    app.update_in(&mut cx, |app, window, cx| assert!(app.editor_split(window, cx)));
+    app.update_in(&mut cx, |app, window, cx| {
+        assert!(app.editor_split(window, cx))
+    });
     let second = view(&app, &cx);
-    app.update_in(&mut cx, |app, window, cx| app.open_file_in_editor(&other, window, cx));
-    until(&mut cx, |cx| app.read_with(cx, |app, _| app.active_buffer().is_some_and(|f| f.path == other)));
+    app.update_in(&mut cx, |app, window, cx| {
+        app.open_file_in_editor(&other, window, cx)
+    });
+    until(&mut cx, |cx| {
+        app.read_with(cx, |app, _| {
+            app.active_buffer().is_some_and(|f| f.path == other)
+        })
+    });
     // A menu command dispatched before a draw must follow actual input focus.
     cx.update(|window, cx| {
         first.read(cx).focus_handle(cx).focus(window, cx);
-        window.focused(cx).unwrap().dispatch_action(&crate::core::actions::EditorGoToLine, window, cx);
+        window.focused(cx).unwrap().dispatch_action(
+            &crate::core::actions::EditorGoToLine,
+            window,
+            cx,
+        );
     });
-    cx.update(|window, cx| { window.input("3:4", cx); window.press("enter", cx); });
+    cx.update(|window, cx| {
+        window.input("3:4", cx);
+        window.press("enter", cx);
+    });
     settle(&mut cx);
     app.read_with(&cx, |app, cx| {
         assert_eq!(app.active_buffer().unwrap().path, path);
-        assert_eq!(app.active_editor_input().unwrap().read(cx).cursor_position(), Position::new(2, 3));
+        assert_eq!(
+            app.active_editor_input()
+                .unwrap()
+                .read(cx)
+                .cursor_position(),
+            Position::new(2, 3)
+        );
     });
     cx.update(|window, _| assert_eq!(window.find("status-cursor").label(), Some("Ln 3, Col 4")));
     app.update_in(&mut cx, |app, window, cx| {
@@ -175,9 +252,13 @@ pub(crate) fn focused_consumers_and_layout(cx: &mut TestAppContext) {
     // Open search for the other presentation of this file, without rendering first.
     app.update_in(&mut cx, |app, window, cx| {
         app.editor_focus_group(false, window, cx);
-        let pos = app.tab_code().unwrap().files.iter().position(|id| {
-            app.editor.buffers.get(*id).unwrap().path == path
-        }).unwrap();
+        let pos = app
+            .tab_code()
+            .unwrap()
+            .files
+            .iter()
+            .position(|id| app.editor.buffers.get(*id).unwrap().path == path)
+            .unwrap();
         app.editor_activate(pos, window, cx);
     });
     second.update_in(&mut cx, |view, _, cx| view.select_range(0..0, cx));
@@ -188,7 +269,9 @@ pub(crate) fn focused_consumers_and_layout(cx: &mut TestAppContext) {
     first.read_with(&cx, |view, _| assert_eq!(view.selected_range(), 17..17));
     cx.update(|window, cx| window.press("escape", cx));
     settle(&mut cx);
-    app.update_in(&mut cx, |app, window, cx| assert!(app.editor_has_focus(window, cx)));
+    app.update_in(&mut cx, |app, window, cx| {
+        assert!(app.editor_has_focus(window, cx))
+    });
     cx.update(|window, cx| window.input("new", cx));
     settle(&mut cx);
     let selected = second.read_with(&cx, |view, _| view.selected_range());
@@ -209,8 +292,19 @@ pub(crate) fn focused_consumers_and_layout(cx: &mut TestAppContext) {
         second.read_with(&cx, |view, _| assert_eq!(view.selected_range(), selected));
         app.update_in(&mut cx, |app, window, cx| {
             assert!(app.editor_has_focus(window, cx));
-            assert_eq!(app.active_buffer().unwrap().input.read(cx).text().to_string(), "# First\nalpha\n## Target\nnew\n");
-            let caret = second.read(cx).caret_screen_bounds().expect("displayed caret geometry");
+            assert_eq!(
+                app.active_buffer()
+                    .unwrap()
+                    .input
+                    .read(cx)
+                    .text()
+                    .to_string(),
+                "# First\nalpha\n## Target\nnew\n"
+            );
+            let caret = second
+                .read(cx)
+                .caret_screen_bounds()
+                .expect("displayed caret geometry");
             assert!(caret.left() >= px(0.) && caret.right() <= window.viewport_size().width);
             assert!(caret.top() >= px(0.) && caret.bottom() <= window.viewport_size().height);
         });
@@ -218,7 +312,9 @@ pub(crate) fn focused_consumers_and_layout(cx: &mut TestAppContext) {
     }
     cx.dispatch_action(gpui_kit::component::input::Undo);
     settle(&mut cx);
-    second.read_with(&cx, |view, _| assert_eq!(view.text(), "# First\nalpha\n## Target\nbeta\n"));
+    second.read_with(&cx, |view, _| {
+        assert_eq!(view.text(), "# First\nalpha\n## Target\nbeta\n")
+    });
 }
 
 #[cfg(test)]
@@ -236,16 +332,24 @@ fn active_markdown_rename_to_mdx_retains_each_view_and_history(cx: &mut TestAppC
     std::fs::write(&path, b"---\r\ntitle: untouched\n---\r\n<Component />").unwrap();
     let host = test_host::FileHost::new(HostId(2401));
     let (app, mut cx, _streams) = harness_with_tabs(cx, 1);
-    app.update_in(&mut cx, |app, window, cx| app.editor_open_on_host(host.clone(), &path, window, cx));
-    until(&mut cx, |cx| app.read_with(cx, |app, _| app.active_buffer().is_some()));
+    app.update_in(&mut cx, |app, window, cx| {
+        app.editor_open_on_host(host.clone(), &path, window, cx)
+    });
+    until(&mut cx, |cx| {
+        app.read_with(cx, |app, _| app.active_buffer().is_some())
+    });
     let first = view(&app, &cx);
-    app.update_in(&mut cx, |app, window, cx| assert!(app.editor_split(window, cx)));
+    app.update_in(&mut cx, |app, window, cx| {
+        assert!(app.editor_split(window, cx))
+    });
     let second = view(&app, &cx);
     second.update_in(&mut cx, |view, _, cx| view.select_range(0..0, cx));
     cx.update(|window, cx| window.input("注", cx));
     settle(&mut cx);
     std::fs::rename(&path, &renamed).unwrap();
-    app.update_in(&mut cx, |app, _, cx| app.editor_path_moved(HostId(2401), &path, &renamed, cx));
+    app.update_in(&mut cx, |app, _, cx| {
+        app.editor_path_moved(HostId(2401), &path, &renamed, cx)
+    });
     settle(&mut cx);
     for view in [&first, &second] {
         view.read_with(&cx, |view, cx| {
@@ -260,9 +364,14 @@ fn active_markdown_rename_to_mdx_retains_each_view_and_history(cx: &mut TestAppC
     settle(&mut cx);
     second.read_with(&cx, |view, cx| {
         assert!(!view.is_live());
-        assert_eq!(view.document().read(cx).encode().unwrap(), b"---\r\ntitle: untouched\n---\r\n<Component />");
+        assert_eq!(
+            view.document().read(cx).encode().unwrap(),
+            b"---\r\ntitle: untouched\n---\r\n<Component />"
+        );
     });
-    app.read_with(&cx, |app, _| assert_eq!(app.active_buffer().unwrap().path, renamed));
+    app.read_with(&cx, |app, _| {
+        assert_eq!(app.active_buffer().unwrap().path, renamed)
+    });
 }
 
 #[cfg(test)]
@@ -273,14 +382,20 @@ fn shared_tabs_accept_owned_blur_commit_and_keep_remaining_history(cx: &mut Test
     std::fs::write(&path, b"alpha\r\nbeta\n").unwrap();
     let host = test_host::FileHost::new(HostId(2402));
     let (app, mut cx, _streams) = harness_with_tabs(cx, 2);
-    app.update_in(&mut cx, |app, window, cx| app.editor_open_on_host(host.clone(), &path, window, cx));
-    until(&mut cx, |cx| app.read_with(cx, |app, _| app.active_buffer().is_some()));
+    app.update_in(&mut cx, |app, window, cx| {
+        app.editor_open_on_host(host.clone(), &path, window, cx)
+    });
+    until(&mut cx, |cx| {
+        app.read_with(cx, |app, _| app.active_buffer().is_some())
+    });
     let first = view(&app, &cx);
     app.update_in(&mut cx, |app, window, cx| {
         app.tabs.select(1);
         app.editor_open_on_host(host.clone(), &path, window, cx);
     });
-    until(&mut cx, |cx| app.read_with(cx, |app, _| app.active_buffer().is_some()));
+    until(&mut cx, |cx| {
+        app.read_with(cx, |app, _| app.active_buffer().is_some())
+    });
     let second = view(&app, &cx);
     assert_ne!(first, second);
     app.update_in(&mut cx, |app, window, cx| {
@@ -296,7 +411,9 @@ fn shared_tabs_accept_owned_blur_commit_and_keep_remaining_history(cx: &mut Test
         let terminal = app.tabs[0].pane.first_leaf().unwrap().focus_handle(cx);
         terminal.focus(window, cx);
     });
-    first.update_in(&mut cx, |view, window, cx| view.replace_text_in_range(None, "你", window, cx));
+    first.update_in(&mut cx, |view, window, cx| {
+        view.replace_text_in_range(None, "你", window, cx)
+    });
     settle(&mut cx);
     first.read_with(&cx, |view, cx| {
         assert_eq!(view.text(), "你alpha\nbeta\n");
@@ -312,5 +429,10 @@ fn shared_tabs_accept_owned_blur_commit_and_keep_remaining_history(cx: &mut Test
     settle(&mut cx);
     cx.dispatch_action(gpui_kit::component::input::Undo);
     settle(&mut cx);
-    first.read_with(&cx, |view, cx| assert_eq!(view.document().read(cx).encode().unwrap(), b"alpha\r\nbeta\n"));
+    first.read_with(&cx, |view, cx| {
+        assert_eq!(
+            view.document().read(cx).encode().unwrap(),
+            b"alpha\r\nbeta\n"
+        )
+    });
 }

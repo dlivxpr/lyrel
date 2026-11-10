@@ -192,7 +192,13 @@ impl EditorPanelState {
             (true, _, _) | (_, true, _) | (_, _, Some(DiskConflict::Deleted)) => None,
             _ => Some(file.disk_mtime),
         };
-        let fidelity::SaveContent { bytes, written, format, representation, revision } = captured;
+        let fidelity::SaveContent {
+            bytes,
+            written,
+            format,
+            representation,
+            revision,
+        } = captured;
         let host = file.host.clone();
         let target = save_as.clone().unwrap_or_else(|| file.path.clone());
         let directory = target.parent().map(Path::to_path_buf);
@@ -227,7 +233,11 @@ impl EditorPanelState {
                         if let Some(target) = save_as.as_ref() {
                             // Adopt the target only after a successful write. A
                             // cancelled/failed Save As keeps the original identity.
-                            if editor.buffers.at(identity.host, target).is_some_and(|other| other != id) {
+                            if editor
+                                .buffers
+                                .at(identity.host, target)
+                                .is_some_and(|other| other != id)
+                            {
                                 editor.saves_failed(id);
                                 cx.notify();
                                 return;
@@ -238,8 +248,12 @@ impl EditorPanelState {
                             file.reload_seq = file.reload_seq.wrapping_add(1);
                             file.reload_request = file.reload_request.wrapping_add(1);
                             file.input.set_highlighter(file.language(), cx);
-                            let source_only = file.path.extension().is_some_and(|extension| extension.eq_ignore_ascii_case("mdx"));
-                            file.presentations.set_source_only(source_only, &file.input, cx);
+                            let source_only = file
+                                .path
+                                .extension()
+                                .is_some_and(|extension| extension.eq_ignore_ascii_case("mdx"));
+                            file.presentations
+                                .set_source_only(source_only, &file.input, cx);
                         }
                         let file = editor.buffers.get_mut(id).unwrap();
                         file.disk_mtime = mtime;
@@ -249,9 +263,13 @@ impl EditorPanelState {
                         file.conflict = None;
                         editor.buffers.note_edit(id, cx);
                         if editor.buffers.get(id).is_some_and(|file| {
-                            file.dirty || revision.is_some_and(|saved_revision| {
-                                file.input.markdown().is_some_and(|view| view.read(cx).document().read(cx).revision() != saved_revision)
-                            })
+                            file.dirty
+                                || revision.is_some_and(|saved_revision| {
+                                    file.input.markdown().is_some_and(|view| {
+                                        view.read(cx).document().read(cx).revision()
+                                            != saved_revision
+                                    })
+                                })
                         }) {
                             // New edits/representation changes retire this close.
                             // A later save is not consent to close that newer work.
@@ -674,7 +692,10 @@ impl EditorPanelState {
         }
         self.unsaved_prompt_open = true;
         let epoch = self.prompt_epoch;
-        let identities: Vec<_> = ids.iter().filter_map(|id| self.save_identity(*id, cx)).collect();
+        let identities: Vec<_> = ids
+            .iter()
+            .filter_map(|id| self.save_identity(*id, cx))
+            .collect();
         let names: Vec<_> = ids
             .iter()
             .filter_map(|id| self.buffers.get(*id).map(OpenFile::label))
@@ -715,7 +736,11 @@ impl EditorPanelState {
                 }
                 editor.unsaved_prompt_open = false;
                 // A missing/replaced/renamed target is not consent to save or discard.
-                if identities.len() != ids.len() || identities.iter().any(|identity| !editor.accepts_prompt(identity, cx)) {
+                if identities.len() != ids.len()
+                    || identities
+                        .iter()
+                        .any(|identity| !editor.accepts_prompt(identity, cx))
+                {
                     return;
                 }
                 match choice {

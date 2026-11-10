@@ -131,7 +131,11 @@ fn whole_lines(text: &str, selection: &Range<usize>) -> Range<usize> {
 }
 
 fn trailing_whitespace_edits(text: &str, selected: &Range<usize>) -> Vec<(Range<usize>, String)> {
-    let range = if selected.is_empty() { 0..text.len() } else { whole_lines(text, selected) };
+    let range = if selected.is_empty() {
+        0..text.len()
+    } else {
+        whole_lines(text, selected)
+    };
     let mut changes = Vec::new();
     let mut offset = range.start;
     for line in text[range].split_inclusive('\n') {
@@ -788,7 +792,9 @@ impl LyrelApp {
         } else {
             selected
         };
-        if matches!(command, Command::Trim) && let Some(view) = input.markdown() {
+        if matches!(command, Command::Trim)
+            && let Some(view) = input.markdown()
+        {
             // Keep each untouched terminator; one encompassing replacement
             // would turn mixed endings into the document's preferred ending.
             let edits = trailing_whitespace_edits(&text, &selected);

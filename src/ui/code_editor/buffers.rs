@@ -329,7 +329,10 @@ impl EditorBuffers {
         let Some(position) = cursor else { return };
         let Some(file) = self.get_mut(id) else { return };
         let input = if let (Some(source), Some(group)) = (file.input.markdown(), target.group) {
-            EditorInput::Markdown(file.presentations.view(source, target.tab, group, window, cx))
+            EditorInput::Markdown(
+                file.presentations
+                    .view(source, target.tab, group, window, cx),
+            )
         } else {
             file.input.clone()
         };
@@ -826,8 +829,12 @@ impl EditorBuffers {
             file.reload_request = file.reload_request.wrapping_add(1);
             file.input
                 .set_highlighter(language_for_path(&file.path), cx);
-            let source_only = file.path.extension().is_some_and(|extension| extension.eq_ignore_ascii_case("mdx"));
-            file.presentations.set_source_only(source_only, &file.input, cx);
+            let source_only = file
+                .path
+                .extension()
+                .is_some_and(|extension| extension.eq_ignore_ascii_case("mdx"));
+            file.presentations
+                .set_source_only(source_only, &file.input, cx);
             moved = true;
         }
         moved

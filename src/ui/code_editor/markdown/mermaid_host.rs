@@ -2,11 +2,27 @@
 use crate::ui::i18n::{L10nKey, t};
 use gpui_kit::component::ActiveTheme as _;
 use gpui_kit::*;
-use lyrel_markdown_editor::{Document, DocumentEvent, EditorState, MermaidPresentation, mermaid_blocks};
+use lyrel_markdown_editor::{
+    Document, DocumentEvent, EditorState, MermaidPresentation, mermaid_blocks,
+};
 use merman::resources::{InputResourcePolicy, ResourceProfile};
-use merman::svg::{DeterministicTextMeasurer, MeasurementProfileId, SvgPipeline, SvgPostprocessContext, SvgPostprocessor, TextMeasurementPolicy, TextMeasurementProfile, TextMeasurementProfileIdentity};
-use merman::{Engine, MermaidConfig, OperationControl, ParseOptions, RenderOutput, RenderTarget, Renderer, SvgEnvironment, SvgRequest};
-use std::{borrow::Cow, cell::RefCell, ops::Range, rc::Rc, sync::{Arc, LazyLock}, time::Duration};
+use merman::svg::{
+    DeterministicTextMeasurer, MeasurementProfileId, SvgPipeline, SvgPostprocessContext,
+    SvgPostprocessor, TextMeasurementPolicy, TextMeasurementProfile,
+    TextMeasurementProfileIdentity,
+};
+use merman::{
+    Engine, MermaidConfig, OperationControl, ParseOptions, RenderOutput, RenderTarget, Renderer,
+    SvgEnvironment, SvgRequest,
+};
+use std::{
+    borrow::Cow,
+    cell::RefCell,
+    ops::Range,
+    rc::Rc,
+    sync::{Arc, LazyLock},
+    time::Duration,
+};
 
 const CACHE_BYTES: usize = 64 * 1024 * 1024;
 
@@ -167,16 +183,29 @@ struct Store {
 }
 impl Drop for Store {
     fn drop(&mut self) {
-        for entry in &self.entries { entry.control.cancel(); }
+        for entry in &self.entries {
+            entry.control.cancel();
+        }
     }
 }
 impl Store {
     fn presentation(&self, row: usize, source: &str) -> MermaidPresentation {
-        self.entries.iter().find(|entry| entry.row == row && entry.key.source == source)
+        self.entries
+            .iter()
+            .find(|entry| entry.row == row && entry.key.source == source)
             .map(|entry| entry.state.clone())
-            .unwrap_or_else(|| MermaidPresentation::Loading(t(L10nKey::EditorMarkdownMermaidLoading).into()))
+            .unwrap_or_else(|| {
+                MermaidPresentation::Loading(t(L10nKey::EditorMarkdownMermaidLoading).into())
+            })
     }
-    fn sync(&mut self, document: EntityId, revision: u64, source: &str, event: Option<&DocumentEvent>, style: Style) -> Vec<Job> {
+    fn sync(
+        &mut self,
+        document: EntityId,
+        revision: u64,
+        source: &str,
+        event: Option<&DocumentEvent>,
+        style: Style,
+    ) -> Vec<Job> {
         // Ordered LF/UTF-8 edits move an unchanged owner, including insertion
         // exactly before its opening fence. Removing the whole owner revokes it
         // even if an identical block is inserted at that offset afterwards.
@@ -184,13 +213,17 @@ impl Store {
             for edit in event.edits() {
                 let removed = edit.range();
                 self.entries.retain_mut(|entry| {
-                    if removed.start <= entry.range.start && removed.end >= entry.range.end && !removed.is_empty() {
+                    if removed.start <= entry.range.start
+                        && removed.end >= entry.range.end
+                        && !removed.is_empty()
+                    {
                         entry.control.cancel();
                         return false;
                     }
                     if removed.end <= entry.range.start {
                         let delta = edit.inserted().len() as isize - removed.len() as isize;
-                        entry.range = entry.range.start.saturating_add_signed(delta)..entry.range.end.saturating_add_signed(delta);
+                        entry.range = entry.range.start.saturating_add_signed(delta)
+                            ..entry.range.end.saturating_add_signed(delta);
                     } else if removed.start < entry.range.end {
                         entry.range.end = edit.map_offset(entry.range.end);
                     }
@@ -202,10 +235,15 @@ impl Store {
         let mut jobs = Vec::new();
         for block in mermaid_blocks(source) {
             let range = block.range();
-            let existing = previous.iter().position(|entry| entry.range.start == range.start);
+            let existing = previous
+                .iter()
+                .position(|entry| entry.range.start == range.start);
             let old = existing.map(|ix| previous.swap_remove(ix));
             if let Some(mut entry) = old {
-                if entry.key.document == document && entry.key.source == block.source() && entry.key.style == style {
+                if entry.key.document == document
+                    && entry.key.source == block.source()
+                    && entry.key.style == style
+                {
                     entry.range = range;
                     entry.row = block.rows().start;
                     self.entries.push(entry);
@@ -220,31 +258,71 @@ impl Store {
                 entry.range = range;
                 entry.row = block.rows().start;
                 entry.control = OperationControl::new();
-                entry.state = MermaidPresentation::Loading(t(L10nKey::EditorMarkdownMermaidLoading).into());
-                jobs.push(Job { key: entry.key.clone(), control: entry.control.clone() });
+                entry.state =
+                    MermaidPresentation::Loading(t(L10nKey::EditorMarkdownMermaidLoading).into());
+                jobs.push(Job {
+                    key: entry.key.clone(),
+                    control: entry.control.clone(),
+                });
                 self.entries.push(entry);
             } else {
                 self.next_owner += 1;
                 self.next_request += 1;
-                let key = Key { document, owner: self.next_owner, request: self.next_request, revision, source: block.source().to_owned(), style: style.clone() };
+                let key = Key {
+                    document,
+                    owner: self.next_owner,
+                    request: self.next_request,
+                    revision,
+                    source: block.source().to_owned(),
+                    style: style.clone(),
+                };
                 let control = OperationControl::new();
-                jobs.push(Job { key: key.clone(), control: control.clone() });
-                self.entries.push(Entry { key, range, row: block.rows().start, state: MermaidPresentation::Loading(t(L10nKey::EditorMarkdownMermaidLoading).into()), control });
+                jobs.push(Job {
+                    key: key.clone(),
+                    control: control.clone(),
+                });
+                self.entries.push(Entry {
+                    key,
+                    range,
+                    row: block.rows().start,
+                    state: MermaidPresentation::Loading(
+                        t(L10nKey::EditorMarkdownMermaidLoading).into(),
+                    ),
+                    control,
+                });
             }
         }
-        for entry in previous { entry.control.cancel(); }
+        for entry in previous {
+            entry.control.cancel();
+        }
         self.revision = revision;
         jobs
     }
     fn complete(&mut self, key: &Key, result: Result<Rendered, Failure>) -> bool {
-        let resident: usize = self.entries.iter().filter_map(|entry| match &entry.state {
-            MermaidPresentation::Ready(image, ..) => Some(image_bytes(image)),
-            _ => None,
-        }).sum();
-        let Some(entry) = self.entries.iter_mut().find(|entry| entry.key == *key && !entry.control.is_cancelled()) else { return false; };
+        let resident: usize = self
+            .entries
+            .iter()
+            .filter_map(|entry| match &entry.state {
+                MermaidPresentation::Ready(image, ..) => Some(image_bytes(image)),
+                _ => None,
+            })
+            .sum();
+        let Some(entry) = self
+            .entries
+            .iter_mut()
+            .find(|entry| entry.key == *key && !entry.control.is_cancelled())
+        else {
+            return false;
+        };
         entry.state = match result {
-            Ok(rendered) if image_bytes(&rendered.image).saturating_add(resident) <= CACHE_BYTES => MermaidPresentation::Ready(rendered.image, rendered.width, rendered.height),
-            Ok(_) => MermaidPresentation::Failed(t(L10nKey::EditorMarkdownMermaidRasterLimit).into()),
+            Ok(rendered)
+                if image_bytes(&rendered.image).saturating_add(resident) <= CACHE_BYTES =>
+            {
+                MermaidPresentation::Ready(rendered.image, rendered.width, rendered.height)
+            }
+            Ok(_) => {
+                MermaidPresentation::Failed(t(L10nKey::EditorMarkdownMermaidRasterLimit).into())
+            }
             Err(error) => MermaidPresentation::Failed(error.message()),
         };
         true
@@ -258,50 +336,98 @@ struct MermaidHost {
     _subscriptions: Vec<Subscription>,
 }
 impl MermaidHost {
-    fn new(document: Entity<Document>, editor: WeakEntity<EditorState>, store: Rc<RefCell<Store>>, cx: &mut Context<Self>) -> Self {
-        let document_watch = cx.subscribe(&document, |this, _, event: &DocumentEvent, cx| this.refresh(Some(event), cx));
-        let theme_watch = cx.observe_global::<gpui_kit::component::Theme>(|this, cx| this.refresh(None, cx));
-        let mut host = Self { document, editor, store, _subscriptions: vec![document_watch, theme_watch] };
+    fn new(
+        document: Entity<Document>,
+        editor: WeakEntity<EditorState>,
+        store: Rc<RefCell<Store>>,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        let document_watch = cx.subscribe(&document, |this, _, event: &DocumentEvent, cx| {
+            this.refresh(Some(event), cx)
+        });
+        let theme_watch =
+            cx.observe_global::<gpui_kit::component::Theme>(|this, cx| this.refresh(None, cx));
+        let mut host = Self {
+            document,
+            editor,
+            store,
+            _subscriptions: vec![document_watch, theme_watch],
+        };
         host.refresh(None, cx);
         host
     }
     fn refresh(&mut self, event: Option<&DocumentEvent>, cx: &mut Context<Self>) {
         let document = self.document.read(cx);
-        if event.is_some_and(|event| event.revision() <= self.store.borrow().revision) { return; }
-        if event.is_none() && !self.store.borrow().entries.is_empty() && self.store.borrow().revision != document.revision() {
+        if event.is_some_and(|event| event.revision() <= self.store.borrow().revision) {
+            return;
+        }
+        if event.is_none()
+            && !self.store.borrow().entries.is_empty()
+            && self.store.borrow().revision != document.revision()
+        {
             let host = cx.weak_entity();
-            cx.defer(move |cx| { let _ = host.update(cx, |this, cx| this.refresh(None, cx)); });
+            cx.defer(move |cx| {
+                let _ = host.update(cx, |this, cx| this.refresh(None, cx));
+            });
             return;
         }
         let (revision, source) = event.map_or_else(
             || (document.revision(), document.source()),
             |event| (event.revision(), event.snapshot().text()),
         );
-        let jobs = self.store.borrow_mut().sync(self.document.entity_id(), revision, source, event, Style::current(cx));
-        if jobs.is_empty() { return; }
+        let jobs = self.store.borrow_mut().sync(
+            self.document.entity_id(),
+            revision,
+            source,
+            event,
+            Style::current(cx),
+        );
+        if jobs.is_empty() {
+            return;
+        }
         let editor = self.editor.clone();
-        cx.defer(move |cx| { let _ = editor.update(cx, |_, cx| cx.notify()); });
+        cx.defer(move |cx| {
+            let _ = editor.update(cx, |_, cx| cx.notify());
+        });
         // Actual rendering is never executed in a GPUI render callback or on
         // the UI thread, including the deterministic native consumer platform.
         let failures: Vec<_> = jobs.iter().map(|job| job.key.clone()).collect();
         cx.spawn(async move |this, cx| {
-            let results = crate::ui::host_ops::off_thread(move || run_jobs(jobs)).await
-                .unwrap_or_else(|| failures.into_iter().map(|key| (key, Err(Failure::Diagnostic("Native rendering worker stopped".into())))).collect());
+            let results = crate::ui::host_ops::off_thread(move || run_jobs(jobs))
+                .await
+                .unwrap_or_else(|| {
+                    failures
+                        .into_iter()
+                        .map(|key| {
+                            (
+                                key,
+                                Err(Failure::Diagnostic(
+                                    "Native rendering worker stopped".into(),
+                                )),
+                            )
+                        })
+                        .collect()
+                });
             let _ = this.update(cx, |this, cx| {
                 if this.store.borrow().revision != this.document.read(cx).revision() {
                     // Document notifications queued before this completion own
                     // rebasing. Re-enter after they have applied, never publish
                     // against an unobserved revision.
                     let host = cx.weak_entity();
-                    cx.defer(move |cx| { let _ = host.update(cx, |this, cx| this.complete(results, cx)); });
+                    cx.defer(move |cx| {
+                        let _ = host.update(cx, |this, cx| this.complete(results, cx));
+                    });
                 } else {
                     this.complete(results, cx);
                 }
             });
-        }).detach();
+        })
+        .detach();
     }
     fn complete(&mut self, results: Vec<(Key, Result<Rendered, Failure>)>, cx: &mut Context<Self>) {
-        if self.store.borrow().revision != self.document.read(cx).revision() { return; }
+        if self.store.borrow().revision != self.document.read(cx).revision() {
+            return;
+        }
         let style = Style::current(cx);
         let mut changed = false;
         for (key, result) in results {
@@ -343,55 +469,107 @@ impl Failure {
             Self::Empty => t(L10nKey::EditorMarkdownMermaidEmpty).into(),
             Self::External => t(L10nKey::EditorMarkdownMermaidExternal).into(),
             Self::Limit => t(L10nKey::EditorMarkdownMermaidRasterLimit).into(),
-            Self::Diagnostic(message) => format!("{} {}", t(L10nKey::EditorMarkdownMermaidError), message).into(),
+            Self::Diagnostic(message) => {
+                format!("{} {}", t(L10nKey::EditorMarkdownMermaidError), message).into()
+            }
         }
     }
 }
 fn image_bytes(image: &RenderImage) -> usize {
     let size = image.size(0);
-    (size.width.0 as usize).saturating_mul(size.height.0 as usize).saturating_mul(4)
+    (size.width.0 as usize)
+        .saturating_mul(size.height.0 as usize)
+        .saturating_mul(4)
 }
 fn run_jobs(jobs: Vec<Job>) -> Vec<(Key, Result<Rendered, Failure>)> {
     let rasterizer = SvgRenderer::new(Arc::new(gpui_kit::assets::Assets));
     let mut remaining = CACHE_BYTES;
-    jobs.into_iter().filter_map(|job| {
-        if job.control.is_cancelled() { return None; }
-        let result = render_native(&job.key, &job.control, &rasterizer, remaining);
-        if let Ok(rendered) = &result { remaining = remaining.saturating_sub(image_bytes(&rendered.image)); }
-        #[cfg(feature = "native-markdown-tests")]
-        native_tests::hold_completion(&job.key);
-        Some((job.key, result))
-    }).collect()
+    jobs.into_iter()
+        .filter_map(|job| {
+            if job.control.is_cancelled() {
+                return None;
+            }
+            let result = render_native(&job.key, &job.control, &rasterizer, remaining);
+            if let Ok(rendered) = &result {
+                remaining = remaining.saturating_sub(image_bytes(&rendered.image));
+            }
+            #[cfg(feature = "native-markdown-tests")]
+            native_tests::hold_completion(&job.key);
+            Some((job.key, result))
+        })
+        .collect()
 }
-fn render_native(key: &Key, control: &OperationControl, rasterizer: &SvgRenderer, remaining: usize) -> Result<Rendered, Failure> {
+fn render_native(
+    key: &Key,
+    control: &OperationControl,
+    rasterizer: &SvgRenderer,
+    remaining: usize,
+) -> Result<Rendered, Failure> {
     let renderer = Renderer::new()
         .with_engine(key.style.engine())
         .with_parse_options(ParseOptions::strict())
-        .with_resource_policy(InputResourcePolicy::for_profile(ResourceProfile::Interactive));
+        .with_resource_policy(InputResourcePolicy::for_profile(
+            ResourceProfile::Interactive,
+        ));
     let request = SvgRequest {
-        environment: SvgEnvironment::deterministic().with_text_measurement_policy(key.style.measurement()),
+        environment: SvgEnvironment::deterministic()
+            .with_text_measurement_policy(key.style.measurement()),
         pipeline: Some(SvgPipeline::resvg_safe().with_postprocessor(NativeSvgAdmission)),
         ..Default::default()
     };
-    let semantic = renderer.prepare_semantic(&key.source, control.child().with_deadline(Duration::from_secs(5)))
-        .map_err(render_failure)?.ok_or(Failure::Empty)?;
+    let semantic = renderer
+        .prepare_semantic(
+            &key.source,
+            control.child().with_deadline(Duration::from_secs(5)),
+        )
+        .map_err(render_failure)?
+        .ok_or(Failure::Empty)?;
     if semantic.diagram_type() == "error" {
-        return Err(Failure::Diagnostic("Merman error diagram is diagnostic output, not a rendered diagram family.".into()));
+        return Err(Failure::Diagnostic(
+            "Merman error diagram is diagnostic output, not a rendered diagram family.".into(),
+        ));
     }
-    let output = semantic.render(RenderTarget::Svg(request)).map_err(render_failure)?;
-    let RenderOutput::Svg(Some(output)) = output else { return Err(Failure::Empty); };
-    let dimensions = resvg::usvg::Tree::from_data(output.svg().as_bytes(), &resvg::usvg::Options::default())
-        .map_err(|error| Failure::Diagnostic(error.to_string()))?.size();
+    let output = semantic
+        .render(RenderTarget::Svg(request))
+        .map_err(render_failure)?;
+    let RenderOutput::Svg(Some(output)) = output else {
+        return Err(Failure::Empty);
+    };
+    let dimensions =
+        resvg::usvg::Tree::from_data(output.svg().as_bytes(), &resvg::usvg::Options::default())
+            .map_err(|error| Failure::Diagnostic(error.to_string()))?
+            .size();
     let (width, height) = (dimensions.width(), dimensions.height());
-    let bytes = (width.ceil() as usize).saturating_mul(height.ceil() as usize).saturating_mul(4);
-    if width > 4096. || height > 4096. || width.ceil() * height.ceil() > 8_000_000. || bytes > remaining {
+    let bytes = (width.ceil() as usize)
+        .saturating_mul(height.ceil() as usize)
+        .saturating_mul(4);
+    if width > 4096.
+        || height > 4096.
+        || width.ceil() * height.ceil() > 8_000_000.
+        || bytes > remaining
+    {
         return Err(Failure::Limit);
     }
-    if control.is_cancelled() { return Err(Failure::Diagnostic("cancelled".into())); }
-    let parsed = rasterizer.parse_svg(output.svg().as_bytes()).map_err(|error| Failure::Diagnostic(error.to_string()))?;
-    let image = rasterizer.render_parsed(&parsed, SvgSize::ExactSize(size(DevicePixels(width.ceil() as i32), DevicePixels(height.ceil() as i32))))
+    if control.is_cancelled() {
+        return Err(Failure::Diagnostic("cancelled".into()));
+    }
+    let parsed = rasterizer
+        .parse_svg(output.svg().as_bytes())
         .map_err(|error| Failure::Diagnostic(error.to_string()))?;
-    Ok(Rendered { image, width, height })
+    let image = rasterizer
+        .render_parsed(
+            &parsed,
+            SvgSize::ExactSize(size(
+                DevicePixels(width.ceil() as i32),
+                DevicePixels(height.ceil() as i32),
+            )),
+        )
+        .map_err(|error| Failure::Diagnostic(error.to_string()))?;
+    Ok(Rendered {
+        image,
+        width,
+        height,
+    })
 }
 
 fn render_failure(error: merman::RenderError) -> Failure {
@@ -505,8 +683,18 @@ mod native_tests;
 #[cfg(feature = "native-markdown-tests")]
 pub(super) fn native_cases() -> impl Iterator<Item = crate::native_markdown::Case> {
     [
-        crate::native_markdown::Case::new("ui::code_editor::markdown::mermaid_host::native_edit_refresh_history_save_reopen", native_tests::lifecycle),
-        crate::native_markdown::Case::new("ui::code_editor::markdown::mermaid_host::native_stale_completion", native_tests::stale_completion),
-        crate::native_markdown::Case::new("ui::code_editor::markdown::mermaid_host::native_theme_zoom_scroll_geometry", native_tests::theme_zoom_scroll),
-    ].into_iter()
+        crate::native_markdown::Case::new(
+            "ui::code_editor::markdown::mermaid_host::native_edit_refresh_history_save_reopen",
+            native_tests::lifecycle,
+        ),
+        crate::native_markdown::Case::new(
+            "ui::code_editor::markdown::mermaid_host::native_stale_completion",
+            native_tests::stale_completion,
+        ),
+        crate::native_markdown::Case::new(
+            "ui::code_editor::markdown::mermaid_host::native_theme_zoom_scroll_geometry",
+            native_tests::theme_zoom_scroll,
+        ),
+    ]
+    .into_iter()
 }

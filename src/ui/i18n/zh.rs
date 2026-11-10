@@ -1554,11 +1554,15 @@ pub fn translate_zh(key: L10nKey) -> Option<&'static str> {
         L10nKey::MarkdownImageChooseLocation => "插入图片前，请先选择文档保存位置",
         L10nKey::MarkdownInsertImage => "插入图片…",
         L10nKey::MarkdownImageLimit => "图片超过 32 MiB 输入、1600 万像素或文档 256 MiB 图片上限",
-        L10nKey::MarkdownImageUnsupported => "请使用 PNG、JPEG、GIF、WebP、BMP、TIFF、ICO 或自包含 SVG 图片",
+        L10nKey::MarkdownImageUnsupported => {
+            "请使用 PNG、JPEG、GIF、WebP、BMP、TIFF、ICO 或自包含 SVG 图片"
+        }
         L10nKey::MarkdownImageExternalReference => "SVG 引用了其他资源，请使用自包含 SVG。",
         L10nKey::MarkdownImageRedirectBlocked => "已阻止图片重定向，请使用最终图片 URL。",
         L10nKey::MarkdownImageUnsafeDirectory => "assets 目录指向文档目录之外",
-        L10nKey::MarkdownImageNetworkPolicy => "尚未请求。主动加载后由本机 client 获取；禁止重定向与 SVG 嵌套资源。",
+        L10nKey::MarkdownImageNetworkPolicy => {
+            "尚未请求。主动加载后由本机 client 获取；禁止重定向与 SVG 嵌套资源。"
+        }
         L10nKey::MarkdownImageWriting => "正在写入文档图片资源…",
         L10nKey::MarkdownImageWriteFailed => "无法写入文档图片资源",
         L10nKey::MarkdownImageSelectionChanged => "图片已保存，但选中文字已改变，因此未插入链接。",
@@ -1641,8 +1645,12 @@ pub fn translate_zh(key: L10nKey) -> Option<&'static str> {
         L10nKey::EditorFormulaAlignRight => "右对齐",
         L10nKey::EditorFormulaExporting => "正在导出公式到本机…",
         L10nKey::EditorFormulaExportFailed => "无法导出公式。",
-        L10nKey::EditorFormulaUnsupported => "此公式包含结构编辑器无法保留的语法，请在源码模式编辑。",
-        L10nKey::EditorFormulaChanged => "文档或公式选区已改变，过期的编辑未应用。请重新打开公式编辑。",
+        L10nKey::EditorFormulaUnsupported => {
+            "此公式包含结构编辑器无法保留的语法，请在源码模式编辑。"
+        }
+        L10nKey::EditorFormulaChanged => {
+            "文档或公式选区已改变，过期的编辑未应用。请重新打开公式编辑。"
+        }
         L10nKey::EditorFormulaRenderFailed => "公式无法渲染，或仍有未完成的输入。原文已保留。",
         L10nKey::EditorMdxEditName => "编辑组件名称",
         L10nKey::EditorMdxEditProperty => "编辑属性：{name}",

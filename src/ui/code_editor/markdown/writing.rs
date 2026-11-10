@@ -1,11 +1,17 @@
 //! 写作 Host：仅管理 transient 菜单/颜色草稿，提交仍走同一 Document。
-use gpui_kit::*;
-use gpui_kit::prelude::FluentBuilder as _;
-use gpui_kit::TestSupportExt as _;
-use gpui_kit::component::{ActiveTheme as _, WindowExt as _, button::{Button, ButtonVariants as _}, color_picker::{ColorPickerState, ColorSelect}, dialog::{DialogClose, DialogFooter}, menu::{PopupMenu, PopupMenuItem}};
-use lyrel_markdown_editor::{ColorKind, EditorState, WritingIntent, WritingRequest};
 use crate::ui::i18n::{L10nKey, t};
+use gpui_kit::TestSupportExt as _;
+use gpui_kit::component::{
+    ActiveTheme as _, WindowExt as _,
+    button::{Button, ButtonVariants as _},
+    color_picker::{ColorPickerState, ColorSelect},
+    dialog::{DialogClose, DialogFooter},
+    menu::{PopupMenu, PopupMenuItem},
+};
 use gpui_kit::component::{input::Input, v_flex};
+use gpui_kit::prelude::FluentBuilder as _;
+use gpui_kit::*;
+use lyrel_markdown_editor::{ColorKind, EditorState, WritingIntent, WritingRequest};
 
 struct ColorDraft {
     picker: Entity<ColorPickerState>,
@@ -17,10 +23,13 @@ impl Render for ColorDraft {
         v_flex()
             .gap_3()
             .child(ColorSelect::new(&self.picker).accessibility_label(self.title.clone()))
-            .when(!self.picker.read(cx).is_open(), |view| view.child(
-                div().debug_selector(|| "writing-color-hex".into())
-                    .child(Input::new(self.picker.read(cx).hex_input())),
-            ))
+            .when(!self.picker.read(cx).is_open(), |view| {
+                view.child(
+                    div()
+                        .debug_selector(|| "writing-color-hex".into())
+                        .child(Input::new(self.picker.read(cx).hex_input())),
+                )
+            })
     }
 }
 
@@ -28,9 +37,14 @@ pub(super) fn configure(editor: &mut EditorState, cx: &mut Context<EditorState>)
     let owner = cx.weak_entity();
     editor.set_writing_provider(move |request, window, cx| {
         let owner = owner.upgrade()?;
-        if owner.read(cx).document().read(cx).revision() != request.revision() { return None; }
+        if owner.read(cx).document().read(cx).revision() != request.revision() {
+            return None;
+        }
         match request.intent() {
-            WritingIntent::Insert => Some(cx.new(|cx| WritingPopup::new(&owner, request, window, cx)).into()),
+            WritingIntent::Insert => Some(
+                cx.new(|cx| WritingPopup::new(&owner, request, window, cx))
+                    .into(),
+            ),
             WritingIntent::TextColor | WritingIntent::HighlightColor => {
                 open_color(&owner, request, window, cx);
                 None
@@ -45,7 +59,12 @@ struct WritingPopup {
     _dismiss: Subscription,
 }
 impl WritingPopup {
-    fn new(editor: &Entity<EditorState>, request: WritingRequest, window: &mut Window, cx: &mut Context<Self>) -> Self {
+    fn new(
+        editor: &Entity<EditorState>,
+        request: WritingRequest,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
         let focus = editor.read(cx).focus_handle(cx);
         let menu = PopupMenu::build(window, cx, |mut menu, _, _| {
             menu = menu.action_context(focus).scrollable(true);
@@ -54,12 +73,19 @@ impl WritingPopup {
                 let request = request.clone();
                 menu = menu.item(PopupMenuItem::new(t(label)).on_click(move |_, window, cx| {
                     let _ = editor.update(cx, |editor, cx| {
-                        if editor.document().read(cx).revision() != request.revision() { return; }
+                        if editor.document().read(cx).revision() != request.revision() {
+                            return;
+                        }
                         let range = request.range();
                         let before = editor.selected_range();
-                        let leading = range.start > 0 && !editor.text()[..range.start].ends_with('\n');
-                        let trailing = range.end < editor.text().len() && !editor.text()[range.end..].starts_with('\n');
-                        let inline = matches!(label, L10nKey::MarkdownSlashLink | L10nKey::MarkdownSlashInlineMath);
+                        let leading =
+                            range.start > 0 && !editor.text()[..range.start].ends_with('\n');
+                        let trailing = range.end < editor.text().len()
+                            && !editor.text()[range.end..].starts_with('\n');
+                        let inline = matches!(
+                            label,
+                            L10nKey::MarkdownSlashLink | L10nKey::MarkdownSlashInlineMath
+                        );
                         let prefix = if leading && !inline { "\n" } else { "" };
                         let suffix = if trailing && !inline { "\n" } else { "" };
                         let inserted = format!("{prefix}{snippet}{suffix}");
@@ -76,36 +102,62 @@ impl WritingPopup {
             }
             let table_editor = editor.downgrade();
             let table_request = request.clone();
-            menu = menu.item(PopupMenuItem::new(t(L10nKey::EditorTableInsert)).on_click(move |_, window, cx| {
-                let Some(editor) = table_editor.upgrade() else { return; };
-                if editor.read(cx).document().read(cx).revision() != table_request.revision() { return; }
-                editor.update(cx, |editor, cx| editor.select_range(table_request.range(), cx));
-                super::table_code::open_table_picker(&editor, window, cx);
-            }));
+            menu = menu.item(PopupMenuItem::new(t(L10nKey::EditorTableInsert)).on_click(
+                move |_, window, cx| {
+                    let Some(editor) = table_editor.upgrade() else {
+                        return;
+                    };
+                    if editor.read(cx).document().read(cx).revision() != table_request.revision() {
+                        return;
+                    }
+                    editor.update(cx, |editor, cx| {
+                        editor.select_range(table_request.range(), cx)
+                    });
+                    super::table_code::open_table_picker(&editor, window, cx);
+                },
+            ));
             let image_editor = editor.downgrade();
             let image_request = request.clone();
-            menu.item(PopupMenuItem::new(t(L10nKey::MarkdownSlashImage)).on_click(move |_, window, cx| {
-                let Some(editor) = image_editor.upgrade() else { return; };
-                if editor.read(cx).document().read(cx).revision() != image_request.revision() { return; }
-                editor.update(cx, |editor, cx| {
-                    editor.select_range(image_request.range(), cx);
-                    editor.focus_handle(cx).focus(window, cx);
-                });
-                window.dispatch_action(Box::new(lyrel_markdown_editor::InsertImage), cx);
-            }))
+            menu.item(PopupMenuItem::new(t(L10nKey::MarkdownSlashImage)).on_click(
+                move |_, window, cx| {
+                    let Some(editor) = image_editor.upgrade() else {
+                        return;
+                    };
+                    if editor.read(cx).document().read(cx).revision() != image_request.revision() {
+                        return;
+                    }
+                    editor.update(cx, |editor, cx| {
+                        editor.select_range(image_request.range(), cx);
+                        editor.focus_handle(cx).focus(window, cx);
+                    });
+                    window.dispatch_action(Box::new(lyrel_markdown_editor::InsertImage), cx);
+                },
+            ))
         });
         let owner = editor.downgrade();
         let dismiss = cx.subscribe(&menu, move |_, _, _: &DismissEvent, cx| {
             let owner = owner.clone();
-            cx.defer(move |cx| { let _ = owner.update(cx, |view, cx| view.clear_writing_overlay(cx)); });
+            cx.defer(move |cx| {
+                let _ = owner.update(cx, |view, cx| view.clear_writing_overlay(cx));
+            });
         });
         menu.read(cx).focus_handle(cx).focus(window, cx);
-        Self { menu, position: request.position(), _dismiss: dismiss }
+        Self {
+            menu,
+            position: request.position(),
+            _dismiss: dismiss,
+        }
     }
 }
 impl Render for WritingPopup {
     fn render(&mut self, window: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
-        deferred(anchored().position(self.position).snap_to_window_with_margin(window.rem_size() * 0.5).child(self.menu.clone())).with_priority(2)
+        deferred(
+            anchored()
+                .position(self.position)
+                .snap_to_window_with_margin(window.rem_size() * 0.5)
+                .child(self.menu.clone()),
+        )
+        .with_priority(2)
     }
 }
 
@@ -133,12 +185,34 @@ const INSERTIONS: &[(L10nKey, &str, usize)] = &[
     (L10nKey::MarkdownSlashInlineMath, "$$", 1),
 ];
 
-fn open_color(editor: &Entity<EditorState>, request: WritingRequest, window: &mut Window, cx: &mut App) {
+fn open_color(
+    editor: &Entity<EditorState>,
+    request: WritingRequest,
+    window: &mut Window,
+    cx: &mut App,
+) {
     let highlight = request.intent() == WritingIntent::HighlightColor;
-    let kind = if highlight { ColorKind::Highlight } else { ColorKind::Text };
-    let title = t(if highlight { L10nKey::MarkdownFormatHighlightColor } else { L10nKey::MarkdownFormatTextColor });
-    let initial = editor.read(cx).selection_color(kind).map(|color| Hsla::from(rgba(color)))
-        .unwrap_or_else(|| if highlight { cx.theme().warning.opacity(0.5) } else { cx.theme().foreground });
+    let kind = if highlight {
+        ColorKind::Highlight
+    } else {
+        ColorKind::Text
+    };
+    let title = t(if highlight {
+        L10nKey::MarkdownFormatHighlightColor
+    } else {
+        L10nKey::MarkdownFormatTextColor
+    });
+    let initial = editor
+        .read(cx)
+        .selection_color(kind)
+        .map(|color| Hsla::from(rgba(color)))
+        .unwrap_or_else(|| {
+            if highlight {
+                cx.theme().warning.opacity(0.5)
+            } else {
+                cx.theme().foreground
+            }
+        });
     let picker = cx.new(|cx| ColorPickerState::new(window, cx).default_value(initial));
     picker.update(cx, |picker, cx| picker.sync_pending_value(window, cx));
     let draft = cx.new(|cx| ColorDraft {
@@ -157,25 +231,55 @@ fn open_color(editor: &Entity<EditorState>, request: WritingRequest, window: &mu
         dialog
             .title(title)
             .child(draft.clone())
-            .footer(DialogFooter::new()
-                .child(Button::new("writing-color-clear").debug_selector(|| "writing-color-clear".into()).ghost().label(t(if highlight { L10nKey::MarkdownClearHighlightColor } else { L10nKey::MarkdownClearTextColor })).on_click(move |_, window, cx| {
-                    clear_picker.update(cx, |picker, cx| picker.clear_value(window, cx));
-                }))
-                .child(DialogClose::new().trigger(|button| button.label(t(L10nKey::Cancel))))
-                .child(Button::new("writing-color-apply").debug_selector(|| "writing-color-apply".into()).primary().label(t(L10nKey::MarkdownApplyColor)).on_click(|_, window, cx| {
-                    window.dispatch_action(Box::new(gpui_kit::component::actions::Confirm { secondary: false }), cx);
-                })))
+            .footer(
+                DialogFooter::new()
+                    .child(
+                        Button::new("writing-color-clear")
+                            .debug_selector(|| "writing-color-clear".into())
+                            .ghost()
+                            .label(t(if highlight {
+                                L10nKey::MarkdownClearHighlightColor
+                            } else {
+                                L10nKey::MarkdownClearTextColor
+                            }))
+                            .on_click(move |_, window, cx| {
+                                clear_picker
+                                    .update(cx, |picker, cx| picker.clear_value(window, cx));
+                            }),
+                    )
+                    .child(DialogClose::new().trigger(|button| button.label(t(L10nKey::Cancel))))
+                    .child(
+                        Button::new("writing-color-apply")
+                            .debug_selector(|| "writing-color-apply".into())
+                            .primary()
+                            .label(t(L10nKey::MarkdownApplyColor))
+                            .on_click(|_, window, cx| {
+                                window.dispatch_action(
+                                    Box::new(gpui_kit::component::actions::Confirm {
+                                        secondary: false,
+                                    }),
+                                    cx,
+                                );
+                            }),
+                    ),
+            )
             .on_ok(move |_, window, cx| {
                 let input = commit_picker.read(cx).hex_input().clone();
                 let hex = input.read(cx).value();
                 let color = if hex.is_empty() && commit_picker.read(cx).value().is_none() {
                     None
                 } else {
-                    let Some(color) = commit_picker.update(cx, |picker, cx| picker.commit_hex(hex.as_str(), window, cx)) else { return false; };
+                    let Some(color) = commit_picker
+                        .update(cx, |picker, cx| picker.commit_hex(hex.as_str(), window, cx))
+                    else {
+                        return false;
+                    };
                     Some(pack_rgba(color))
                 };
                 let _ = target.update(cx, |editor, cx| {
-                    if editor.document().read(cx).revision() != request.revision() { return; }
+                    if editor.document().read(cx).revision() != request.revision() {
+                        return;
+                    }
                     editor.select_range(request.range(), cx);
                     editor.color_selection(kind, color, cx);
                     editor.focus_handle(cx).focus(window, cx);

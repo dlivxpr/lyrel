@@ -210,7 +210,10 @@ impl MarkdownPresentations {
         cx: &mut Context<E>,
     ) -> Entity<MarkdownEditor> {
         let mut views = self.0.borrow_mut();
-        if let Some((_, _, view, _, _)) = views.iter().find(|(t, g, _, _, _)| *t == tab && *g == group) {
+        if let Some((_, _, view, _, _)) = views
+            .iter()
+            .find(|(t, g, _, _, _)| *t == tab && *g == group)
+        {
             return view.clone();
         }
         let view = if views.is_empty() {

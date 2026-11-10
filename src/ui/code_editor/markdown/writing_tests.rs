@@ -2,27 +2,50 @@
 use super::super::*;
 use super::foundation::{save, settle, until};
 use crate::ui::app::test_window::harness_with_tabs;
-use gpui_kit::test::TestWindowExt as _;
 #[cfg(feature = "native-markdown-tests")]
 use gpui_kit::test::TestEventExt as _;
+use gpui_kit::test::TestWindowExt as _;
 use gpui_kit::{TestAppContext, VisualTestContext};
 
-fn open(cx: &mut TestAppContext, source: &str) -> (tempfile::TempDir, PathBuf, Entity<LyrelApp>, VisualTestContext, Entity<lyrel_markdown_editor::EditorState>, Vec<crate::daemon::transport::Stream>) {
+fn open(
+    cx: &mut TestAppContext,
+    source: &str,
+) -> (
+    tempfile::TempDir,
+    PathBuf,
+    Entity<LyrelApp>,
+    VisualTestContext,
+    Entity<lyrel_markdown_editor::EditorState>,
+    Vec<crate::daemon::transport::Stream>,
+) {
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("writing.md");
     std::fs::write(&path, source).unwrap();
     let (app, mut context, streams) = harness_with_tabs(cx, 1);
     context.simulate_resize(gpui_kit::size(px(1100.), px(800.)));
-    app.update_in(&mut context, |app, window, cx| app.open_file_in_editor(&path, window, cx));
-    until(&mut context, |context| app.read_with(context, |app, _| app.active_buffer().is_some()));
-    let view = app.read_with(&context, |app, _| app.active_editor_input().unwrap().markdown().unwrap().clone());
-    view.update_in(&mut context, |view, window, cx| view.focus_handle(cx).focus(window, cx));
+    app.update_in(&mut context, |app, window, cx| {
+        app.open_file_in_editor(&path, window, cx)
+    });
+    until(&mut context, |context| {
+        app.read_with(context, |app, _| app.active_buffer().is_some())
+    });
+    let view = app.read_with(&context, |app, _| {
+        app.active_editor_input()
+            .unwrap()
+            .markdown()
+            .unwrap()
+            .clone()
+    });
+    view.update_in(&mut context, |view, window, cx| {
+        view.focus_handle(cx).focus(window, cx)
+    });
     settle(&mut context);
     (directory, path, app, context, view, streams)
 }
 
 pub(super) fn continuous_writing(cx: &mut TestAppContext) {
-    let original = "# Heading\r\n\r\n- first\r\n\r\n> [!NOTE]+ Note\r\n> body\r\n\r\nkey:: intact\r\n";
+    let original =
+        "# Heading\r\n\r\n- first\r\n\r\n> [!NOTE]+ Note\r\n> body\r\n\r\nkey:: intact\r\n";
     let (_directory, path, app, mut context, view, _streams) = open(cx, original);
     view.update_in(&mut context, |view, _, cx| {
         let at = view.text().find("first").unwrap();
@@ -46,15 +69,35 @@ pub(super) fn continuous_writing(cx: &mut TestAppContext) {
         let at = view.text().find("> body").unwrap() + "> body".len();
         view.select_range(at..at, cx);
     });
-    context.update(|window, cx| { window.press("enter", cx); window.input("continued", cx); window.press("enter", cx); window.press("enter", cx); });
+    context.update(|window, cx| {
+        window.press("enter", cx);
+        window.input("continued", cx);
+        window.press("enter", cx);
+        window.press("enter", cx);
+    });
     settle(&mut context);
-    assert!(view.read_with(&context, |view, _| view.text().contains("> body\n> continued\n\n")));
+    assert!(view.read_with(&context, |view, _| {
+        view.text().contains("> body\n> continued\n\n")
+    }));
     save(&app, &mut context);
-    assert!(std::fs::read(&path).unwrap().windows(12).any(|s| s == b"key:: intact"));
+    assert!(
+        std::fs::read(&path)
+            .unwrap()
+            .windows(12)
+            .any(|s| s == b"key:: intact")
+    );
     // A second presentation has the same writing host and shared source/history.
-    app.update_in(&mut context, |app, window, cx| assert!(app.editor_split(window, cx)));
+    app.update_in(&mut context, |app, window, cx| {
+        assert!(app.editor_split(window, cx))
+    });
     settle(&mut context);
-    let second = app.read_with(&context, |app, _| app.active_editor_input().unwrap().markdown().unwrap().clone());
+    let second = app.read_with(&context, |app, _| {
+        app.active_editor_input()
+            .unwrap()
+            .markdown()
+            .unwrap()
+            .clone()
+    });
     second.update_in(&mut context, |view, window, cx| {
         view.select_range(view.text().len()..view.text().len(), cx);
         view.focus_handle(cx).focus(window, cx);
@@ -62,11 +105,17 @@ pub(super) fn continuous_writing(cx: &mut TestAppContext) {
     context.dispatch_action(lyrel_markdown_editor::InsertWritingBlock);
     settle(&mut context);
     // Standard menu keyboard path: first entry is a paragraph, second is H1.
-    context.update(|window, cx| { window.press("down", cx); window.press("down", cx); window.press("enter", cx); });
+    context.update(|window, cx| {
+        window.press("down", cx);
+        window.press("down", cx);
+        window.press("enter", cx);
+    });
     settle(&mut context);
     context.update(|window, cx| window.input("Shared heading", cx));
     settle(&mut context);
-    view.read_with(&context, |view, cx| assert_eq!(view.text(), second.read(cx).text()));
+    view.read_with(&context, |view, cx| {
+        assert_eq!(view.text(), second.read(cx).text())
+    });
     assert!(view.read_with(&context, |view, _| view.text().contains("# Shared heading")));
     context.dispatch_action(gpui_kit::component::input::Undo);
     context.dispatch_action(gpui_kit::component::input::Undo);
@@ -85,9 +134,17 @@ pub(super) fn native_colors(cx: &mut TestAppContext) {
     use gpui_kit::test::TestEventExt as _;
     let original = "# Colors\r\n\r\ncolored text\r\n";
     let (_directory, path, app, mut context, first, _streams) = open(cx, original);
-    app.update_in(&mut context, |app, window, cx| assert!(app.editor_split(window, cx)));
+    app.update_in(&mut context, |app, window, cx| {
+        assert!(app.editor_split(window, cx))
+    });
     settle(&mut context);
-    let second = app.read_with(&context, |app, _| app.active_editor_input().unwrap().markdown().unwrap().clone());
+    let second = app.read_with(&context, |app, _| {
+        app.active_editor_input()
+            .unwrap()
+            .markdown()
+            .unwrap()
+            .clone()
+    });
     second.update_in(&mut context, |view, window, cx| {
         let at = view.text().find("colored").unwrap();
         view.select_range(at..at + 7, cx);
@@ -96,12 +153,23 @@ pub(super) fn native_colors(cx: &mut TestAppContext) {
     for cancel in [true, false] {
         context.dispatch_action(lyrel_markdown_editor::TextColorPicker);
         settle(&mut context);
-        let field = context.debug_bounds("writing-color-hex").expect("real custom color hex input");
+        let field = context
+            .debug_bounds("writing-color-hex")
+            .expect("real custom color hex input");
         assert!(field.left() >= px(0.) && field.right() <= px(1100.));
         context.simulate_click(field.center(), gpui_kit::Modifiers::none());
-        context.update(|window, cx| { window.press("ctrl-a", cx); window.input("#12345678", cx); });
+        context.update(|window, cx| {
+            window.press("ctrl-a", cx);
+            window.input("#12345678", cx);
+        });
         settle(&mut context);
-        first.read_with(&context, |view, cx| assert_eq!(view.document().read(cx).encode().unwrap(), original.as_bytes(), "picker draft must not mutate shared source"));
+        first.read_with(&context, |view, cx| {
+            assert_eq!(
+                view.document().read(cx).encode().unwrap(),
+                original.as_bytes(),
+                "picker draft must not mutate shared source"
+            )
+        });
         if cancel {
             context.update(|window, cx| window.press("escape", cx));
             settle(&mut context);
@@ -114,7 +182,10 @@ pub(super) fn native_colors(cx: &mut TestAppContext) {
     }
     let expected = "# Colors\r\n\r\n<span style=\"color:#12345678\">colored</span> text\r\n";
     first.read_with(&context, |view, cx| {
-        assert_eq!(view.document().read(cx).encode().unwrap(), expected.as_bytes());
+        assert_eq!(
+            view.document().read(cx).encode().unwrap(),
+            expected.as_bytes()
+        );
         assert_eq!(view.text(), second.read(cx).text());
     });
     save(&app, &mut context);
@@ -127,13 +198,28 @@ pub(super) fn native_colors(cx: &mut TestAppContext) {
     let apply = context.debug_bounds("writing-color-apply").unwrap();
     context.simulate_click(apply.center(), gpui_kit::Modifiers::none());
     settle(&mut context);
-    first.read_with(&context, |view, cx| assert_eq!(view.document().read(cx).encode().unwrap(), original.as_bytes()));
+    first.read_with(&context, |view, cx| {
+        assert_eq!(
+            view.document().read(cx).encode().unwrap(),
+            original.as_bytes()
+        )
+    });
     context.dispatch_action(gpui_kit::component::input::Undo);
     settle(&mut context);
-    first.read_with(&context, |view, cx| assert_eq!(view.document().read(cx).encode().unwrap(), expected.as_bytes()));
+    first.read_with(&context, |view, cx| {
+        assert_eq!(
+            view.document().read(cx).encode().unwrap(),
+            expected.as_bytes()
+        )
+    });
     context.dispatch_action(gpui_kit::component::input::Undo);
     settle(&mut context);
-    first.read_with(&context, |view, cx| assert_eq!(view.document().read(cx).encode().unwrap(), original.as_bytes()));
+    first.read_with(&context, |view, cx| {
+        assert_eq!(
+            view.document().read(cx).encode().unwrap(),
+            original.as_bytes()
+        )
+    });
     save(&app, &mut context);
     assert_eq!(std::fs::read(&path).unwrap(), original.as_bytes());
 }
@@ -157,14 +243,23 @@ pub(super) fn native_rhythm(cx: &mut TestAppContext) {
                 settle(&mut context);
                 let (first, next) = view.read_with(&context, |view, _| {
                     let first = view.range_to_bounds(&(at..at)).unwrap();
-                    let next = (at + 1..source[at..].find('\n').map_or(source.len(), |end| at + end))
-                        .find_map(|offset| view.range_to_bounds(&(offset..offset)).filter(|bounds| bounds.top() > first.top()).map(|bounds| (offset, bounds)))
+                    let next = (at + 1
+                        ..source[at..].find('\n').map_or(source.len(), |end| at + end))
+                        .find_map(|offset| {
+                            view.range_to_bounds(&(offset..offset))
+                                .filter(|bounds| bounds.top() > first.top())
+                                .map(|bounds| (offset, bounds))
+                        })
                         .expect("complete block wraps in the native presentation");
                     (first, next)
                 });
                 assert!(next.1.top() > first.top());
                 let target = next.1.center();
-                context.update(|window, cx| { window.pointer_move(target, None, cx); window.pointer_down(target, gpui_kit::MouseButton::Left, cx); window.pointer_up(target, gpui_kit::MouseButton::Left, cx); });
+                context.update(|window, cx| {
+                    window.pointer_move(target, None, cx);
+                    window.pointer_down(target, gpui_kit::MouseButton::Left, cx);
+                    window.pointer_up(target, gpui_kit::MouseButton::Left, cx);
+                });
                 settle(&mut context);
                 let before = view.read_with(&context, |view, _| view.cursor());
                 assert!(before >= next.0.saturating_sub(1) && before <= next.0 + 1);

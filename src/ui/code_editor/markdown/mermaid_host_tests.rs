@@ -18,26 +18,44 @@ fn until(context: &mut VisualTestContext, mut ready: impl FnMut(&mut VisualTestC
     let deadline = Instant::now() + Duration::from_secs(30);
     loop {
         settle(context);
-        if ready(context) { return; }
-        assert!(Instant::now() < deadline, "Mermaid workbench did not settle");
+        if ready(context) {
+            return;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "Mermaid workbench did not settle"
+        );
         context.executor().advance_clock(Duration::from_millis(50));
         std::thread::sleep(Duration::from_millis(5));
     }
 }
-fn ready(view: &Entity<lyrel_markdown_editor::EditorState>, context: &mut VisualTestContext) -> (f32, f32) {
-    until(context, |context| view.read_with(context, |view, _| {
-        matches!(view.mermaid_presentation(2), Some(MermaidPresentation::Ready(..)))
-    }));
-    view.read_with(context, |view, _| match view.mermaid_presentation(2).unwrap() {
-        MermaidPresentation::Ready(_, width, height) => (width, height),
-        _ => unreachable!(),
+fn ready(
+    view: &Entity<lyrel_markdown_editor::EditorState>,
+    context: &mut VisualTestContext,
+) -> (f32, f32) {
+    until(context, |context| {
+        view.read_with(context, |view, _| {
+            matches!(
+                view.mermaid_presentation(2),
+                Some(MermaidPresentation::Ready(..))
+            )
+        })
+    });
+    view.read_with(context, |view, _| {
+        match view.mermaid_presentation(2).unwrap() {
+            MermaidPresentation::Ready(_, width, height) => (width, height),
+            _ => unreachable!(),
+        }
     })
 }
 fn save(app: &Entity<LyrelApp>, context: &mut VisualTestContext) {
     context.dispatch_action(crate::core::actions::EditorSave);
-    until(context, |context| app.read_with(context, |app, _| {
-        app.active_buffer().is_some_and(|file| !file.dirty && !file.saving)
-    }));
+    until(context, |context| {
+        app.read_with(context, |app, _| {
+            app.active_buffer()
+                .is_some_and(|file| !file.dirty && !file.saving)
+        })
+    });
 }
 
 pub(super) fn lifecycle(cx: &mut TestAppContext) {
@@ -49,13 +67,25 @@ pub(super) fn lifecycle(cx: &mut TestAppContext) {
     let host = FileHost::mapped(HostId(242), remote.path());
     let (app, mut context, _streams) = harness_with_tabs(cx, 1);
     context.simulate_resize(gpui_kit::size(px(1600.), px(1000.)));
-    app.update_in(&mut context, |app, window, cx| app.editor_open_on_host(host.clone(), Path::new("/diagram.md"), window, cx));
-    until(&mut context, |context| app.read_with(context, |app, _| app.active_buffer().is_some()));
-    let first = app.read_with(&context, |app, _| app.active_editor_input().unwrap().markdown().unwrap().clone());
+    app.update_in(&mut context, |app, window, cx| {
+        app.editor_open_on_host(host.clone(), Path::new("/diagram.md"), window, cx)
+    });
+    until(&mut context, |context| {
+        app.read_with(context, |app, _| app.active_buffer().is_some())
+    });
+    let first = app.read_with(&context, |app, _| {
+        app.active_editor_input()
+            .unwrap()
+            .markdown()
+            .unwrap()
+            .clone()
+    });
     let before = ready(&first, &mut context);
-    let original_image = first.read_with(&context, |view, _| match view.mermaid_presentation(2).unwrap() {
-        MermaidPresentation::Ready(image, ..) => image,
-        _ => unreachable!(),
+    let original_image = first.read_with(&context, |view, _| {
+        match view.mermaid_presentation(2).unwrap() {
+            MermaidPresentation::Ready(image, ..) => image,
+            _ => unreachable!(),
+        }
     });
     first.update_in(&mut context, |view, window, cx| {
         view.select_range(0..0, cx);
@@ -63,19 +93,35 @@ pub(super) fn lifecycle(cx: &mut TestAppContext) {
     });
     context.update(|window, cx| window.input("X", cx));
     settle(&mut context);
-    first.read_with(&context, |view, _| match view.mermaid_presentation(2).unwrap() {
-        MermaidPresentation::Ready(image, ..) => assert!(std::sync::Arc::ptr_eq(&image, &original_image), "ordinary prose edit must retain native cache"),
-        _ => panic!("unchanged diagram must not re-enter loading"),
+    first.read_with(&context, |view, _| {
+        match view.mermaid_presentation(2).unwrap() {
+            MermaidPresentation::Ready(image, ..) => assert!(
+                std::sync::Arc::ptr_eq(&image, &original_image),
+                "ordinary prose edit must retain native cache"
+            ),
+            _ => panic!("unchanged diagram must not re-enter loading"),
+        }
     });
     context.dispatch_action(gpui_kit::component::input::Undo);
     settle(&mut context);
-    app.update_in(&mut context, |app, window, cx| { assert!(app.editor_split(window, cx)); });
+    app.update_in(&mut context, |app, window, cx| {
+        assert!(app.editor_split(window, cx));
+    });
     settle(&mut context);
-    let view = app.read_with(&context, |app, _| app.active_editor_input().unwrap().markdown().unwrap().clone());
+    let view = app.read_with(&context, |app, _| {
+        app.active_editor_input()
+            .unwrap()
+            .markdown()
+            .unwrap()
+            .clone()
+    });
     ready(&view, &mut context);
     // The production go-to command enters the source of the rendered block.
     context.dispatch_action(crate::core::actions::EditorGoToLine);
-    context.update(|window, cx| { window.input("5:22", cx); window.press("enter", cx); });
+    context.update(|window, cx| {
+        window.input("5:22", cx);
+        window.press("enter", cx);
+    });
     settle(&mut context);
     view.update_in(&mut context, |view, window, cx| {
         let at = view.text().find("Done").unwrap();
@@ -86,9 +132,14 @@ pub(super) fn lifecycle(cx: &mut TestAppContext) {
     settle(&mut context);
     view.update_in(&mut context, |view, _, cx| view.select_range(0..0, cx));
     let changed = ready(&view, &mut context);
-    assert!(changed.0 > before.0, "native labels must change the actual diagram geometry");
+    assert!(
+        changed.0 > before.0,
+        "native labels must change the actual diagram geometry"
+    );
     ready(&first, &mut context);
-    first.read_with(&context, |first, cx| assert_eq!(first.text(), view.read(cx).text()));
+    first.read_with(&context, |first, cx| {
+        assert_eq!(first.text(), view.read(cx).text())
+    });
     context.dispatch_action(crate::core::actions::ToggleDocumentPreview);
     context.dispatch_action(gpui_kit::component::input::Undo);
     view.update_in(&mut context, |view, _, cx| view.select_range(0..0, cx));
@@ -109,7 +160,14 @@ pub(super) fn lifecycle(cx: &mut TestAppContext) {
     });
     context.update(|window, cx| window.input("not-a-mermaid-family", cx));
     view.update_in(&mut context, |view, _, cx| view.select_range(0..0, cx));
-    until(&mut context, |context| view.read_with(context, |view, _| matches!(view.mermaid_presentation(2), Some(MermaidPresentation::Failed(_)))));
+    until(&mut context, |context| {
+        view.read_with(context, |view, _| {
+            matches!(
+                view.mermaid_presentation(2),
+                Some(MermaidPresentation::Failed(_))
+            )
+        })
+    });
     context.dispatch_action(gpui_kit::component::input::Undo);
     view.update_in(&mut context, |view, _, cx| view.select_range(0..0, cx));
     assert_eq!(ready(&view, &mut context), changed);
@@ -119,10 +177,23 @@ pub(super) fn lifecycle(cx: &mut TestAppContext) {
         app.editor_close_file(0, window, cx);
         app.editor_open_on_host(host.clone(), Path::new("/diagram.md"), window, cx);
     });
-    until(&mut context, |context| app.read_with(context, |app, _| app.active_buffer().is_some()));
-    let reopened = app.read_with(&context, |app, _| app.active_editor_input().unwrap().markdown().unwrap().clone());
+    until(&mut context, |context| {
+        app.read_with(context, |app, _| app.active_buffer().is_some())
+    });
+    let reopened = app.read_with(&context, |app, _| {
+        app.active_editor_input()
+            .unwrap()
+            .markdown()
+            .unwrap()
+            .clone()
+    });
     assert_eq!(ready(&reopened, &mut context), changed);
-    reopened.read_with(&context, |view, cx| assert_eq!(view.document().read(cx).encode().unwrap(), expected.as_bytes()));
+    reopened.read_with(&context, |view, cx| {
+        assert_eq!(
+            view.document().read(cx).encode().unwrap(),
+            expected.as_bytes()
+        )
+    });
 }
 
 struct CompletionGate {
@@ -144,8 +215,17 @@ impl Delayed {
         let (returned_tx, returned) = smol::channel::bounded(1);
         let mut gate = COMPLETION_GATE.lock().unwrap();
         assert!(gate.is_none());
-        *gate = Some(CompletionGate { source: source.into(), arrived: arrived_tx, release: release_rx, returned: returned_tx });
-        Self { arrived, release, returned }
+        *gate = Some(CompletionGate {
+            source: source.into(),
+            arrived: arrived_tx,
+            release: release_rx,
+            returned: returned_tx,
+        });
+        Self {
+            arrived,
+            release,
+            returned,
+        }
     }
     fn wait(&self, context: &mut VisualTestContext) {
         until(context, |_| self.arrived.try_recv().is_ok());
@@ -166,7 +246,14 @@ impl Drop for Delayed {
 pub(super) fn hold_completion(key: &super::Key) {
     let gate = {
         let mut gate = COMPLETION_GATE.lock().unwrap();
-        if gate.as_ref().is_some_and(|gate| key.source.contains(&gate.source)) { gate.take() } else { None }
+        if gate
+            .as_ref()
+            .is_some_and(|gate| key.source.contains(&gate.source))
+        {
+            gate.take()
+        } else {
+            None
+        }
     };
     if let Some(gate) = gate {
         let _ = gate.arrived.send_blocking(());
@@ -185,11 +272,26 @@ pub(super) fn stale_completion(cx: &mut TestAppContext) {
     std::fs::write(&other, "# Other\nDO NOT CHANGE\n").unwrap();
     let delayed = Delayed::new("HELD-OLD");
     let (app, mut context, _streams) = harness_with_tabs(cx, 1);
-    app.update_in(&mut context, |app, window, cx| app.open_file_in_editor(&path, window, cx));
-    until(&mut context, |context| app.read_with(context, |app, _| app.active_buffer().is_some()));
-    let view = app.read_with(&context, |app, _| app.active_editor_input().unwrap().markdown().unwrap().clone());
+    app.update_in(&mut context, |app, window, cx| {
+        app.open_file_in_editor(&path, window, cx)
+    });
+    until(&mut context, |context| {
+        app.read_with(context, |app, _| app.active_buffer().is_some())
+    });
+    let view = app.read_with(&context, |app, _| {
+        app.active_editor_input()
+            .unwrap()
+            .markdown()
+            .unwrap()
+            .clone()
+    });
     delayed.wait(&mut context);
-    view.read_with(&context, |view, _| assert!(matches!(view.mermaid_presentation(2), Some(MermaidPresentation::Loading(_)))));
+    view.read_with(&context, |view, _| {
+        assert!(matches!(
+            view.mermaid_presentation(2),
+            Some(MermaidPresentation::Loading(_))
+        ))
+    });
     view.update_in(&mut context, |view, window, cx| {
         let at = view.text().find("HELD-OLD").unwrap();
         view.select_range(at..at + 8, cx);
@@ -199,7 +301,11 @@ pub(super) fn stale_completion(cx: &mut TestAppContext) {
     view.update_in(&mut context, |view, _, cx| view.select_range(0..0, cx));
     let current = ready(&view, &mut context);
     delayed.release(&mut context);
-    assert_eq!(ready(&view, &mut context), current, "late old native result cannot replace the current diagram");
+    assert_eq!(
+        ready(&view, &mut context),
+        current,
+        "late old native result cannot replace the current diagram"
+    );
     let expected = original.replace("HELD-OLD", "NEW CURRENT MUCH WIDER NODE");
     view.read_with(&context, |view, _| assert_eq!(view.text(), expected));
     drop(delayed);
@@ -221,14 +327,32 @@ pub(super) fn stale_completion(cx: &mut TestAppContext) {
     settle(&mut context);
     save(&app, &mut context);
     let retained = view.read_with(&context, |view, _| view.text().to_owned());
-    app.update_in(&mut context, |app, window, cx| app.open_file_in_editor(&other, window, cx));
-    until(&mut context, |context| app.read_with(context, |app, _| app.active_buffer().is_some_and(|file| file.path == other)));
+    app.update_in(&mut context, |app, window, cx| {
+        app.open_file_in_editor(&other, window, cx)
+    });
+    until(&mut context, |context| {
+        app.read_with(context, |app, _| {
+            app.active_buffer().is_some_and(|file| file.path == other)
+        })
+    });
     removed.release(&mut context);
     view.read_with(&context, |view, _| {
         assert_eq!(view.text(), retained);
-        assert!(view.mermaid_presentation(2).is_none(), "removed owner cannot be resurrected");
+        assert!(
+            view.mermaid_presentation(2).is_none(),
+            "removed owner cannot be resurrected"
+        );
     });
-    app.read_with(&context, |app, cx| assert_eq!(app.active_editor_input().unwrap().read(cx).text().to_string(), "# Other\nDO NOT CHANGE\n"));
+    app.read_with(&context, |app, cx| {
+        assert_eq!(
+            app.active_editor_input()
+                .unwrap()
+                .read(cx)
+                .text()
+                .to_string(),
+            "# Other\nDO NOT CHANGE\n"
+        )
+    });
     assert_eq!(std::fs::read(&path).unwrap(), retained.as_bytes());
 }
 
@@ -236,36 +360,75 @@ pub(super) fn theme_zoom_scroll(cx: &mut TestAppContext) {
     use super::super::super::test_host::canonical_tempdir;
     let root = canonical_tempdir();
     let path = root.path().join("geometry.md");
-    let original = format!("# Diagram\n\n```mermaid\nflowchart TD\nA[GEOMETRY-HELD] --> B[Done]\n```\n\n{}TAIL\n", "paragraph remains source\n".repeat(180));
+    let original = format!(
+        "# Diagram\n\n```mermaid\nflowchart TD\nA[GEOMETRY-HELD] --> B[Done]\n```\n\n{}TAIL\n",
+        "paragraph remains source\n".repeat(180)
+    );
     std::fs::write(&path, &original).unwrap();
     let delayed = Delayed::new("GEOMETRY-HELD");
     let (app, mut context, _streams) = harness_with_tabs(cx, 1);
     context.simulate_resize(gpui_kit::size(px(1200.), px(800.)));
-    app.update_in(&mut context, |app, window, cx| app.open_file_in_editor(&path, window, cx));
-    until(&mut context, |context| app.read_with(context, |app, _| app.active_buffer().is_some()));
-    let view = app.read_with(&context, |app, _| app.active_editor_input().unwrap().markdown().unwrap().clone());
+    app.update_in(&mut context, |app, window, cx| {
+        app.open_file_in_editor(&path, window, cx)
+    });
+    until(&mut context, |context| {
+        app.read_with(context, |app, _| app.active_buffer().is_some())
+    });
+    let view = app.read_with(&context, |app, _| {
+        app.active_editor_input()
+            .unwrap()
+            .markdown()
+            .unwrap()
+            .clone()
+    });
     delayed.wait(&mut context);
     let tail = original.find("TAIL").unwrap();
     view.update_in(&mut context, |view, window, cx| {
         view.select_range(tail..tail, cx);
         view.focus_handle(cx).focus(window, cx);
     });
-    until(&mut context, |context| context.update(|window, cx| view.read(cx).range_to_bounds(&(tail..tail)).is_some_and(|caret| caret.top() >= px(0.) && caret.bottom() <= window.viewport_size().height)));
-    let before = view.read_with(&context, |view, _| view.range_to_bounds(&(tail..tail)).unwrap());
+    until(&mut context, |context| {
+        context.update(|window, cx| {
+            view.read(cx)
+                .range_to_bounds(&(tail..tail))
+                .is_some_and(|caret| {
+                    caret.top() >= px(0.) && caret.bottom() <= window.viewport_size().height
+                })
+        })
+    });
+    let before = view.read_with(&context, |view, _| {
+        view.range_to_bounds(&(tail..tail)).unwrap()
+    });
     delayed.release(&mut context);
     let initial = ready(&view, &mut context);
     settle(&mut context);
-    let after = view.read_with(&context, |view, _| view.range_to_bounds(&(tail..tail)).unwrap());
-    assert!((before.top() - after.top()).abs() <= px(2.), "late diagram sizing must anchor the visible document row");
+    let after = view.read_with(&context, |view, _| {
+        view.range_to_bounds(&(tail..tail)).unwrap()
+    });
+    assert!(
+        (before.top() - after.top()).abs() <= px(2.),
+        "late diagram sizing must anchor the visible document row"
+    );
     let prior_size = context.update(|_, cx| {
         use gpui_kit::component::ActiveTheme as _;
         cx.theme().font_size
     });
-    context.update(|_, cx| gpui_kit::component::Theme::update(cx, |theme| theme.font_size = prior_size * 1.25));
-    until(&mut context, |context| view.read_with(context, |view, _| matches!(view.mermaid_presentation(2), Some(MermaidPresentation::Ready(_, width, _)) if width > initial.0)));
-    view.read_with(&context, |view, cx| assert_eq!(view.document().read(cx).encode().unwrap(), original.as_bytes()));
+    context.update(|_, cx| {
+        gpui_kit::component::Theme::update(cx, |theme| theme.font_size = prior_size * 1.25)
+    });
+    until(&mut context, |context| {
+        view.read_with(context, |view, _| matches!(view.mermaid_presentation(2), Some(MermaidPresentation::Ready(_, width, _)) if width > initial.0))
+    });
+    view.read_with(&context, |view, cx| {
+        assert_eq!(
+            view.document().read(cx).encode().unwrap(),
+            original.as_bytes()
+        )
+    });
     // Hit-testing/input at the retained visible caret still targets the same source.
-    let position = view.read_with(&context, |view, _| view.range_to_bounds(&(tail..tail)).unwrap().center());
+    let position = view.read_with(&context, |view, _| {
+        view.range_to_bounds(&(tail..tail)).unwrap().center()
+    });
     context.update(|window, cx| {
         window.pointer_move(position, None, cx);
         window.pointer_down(position, gpui_kit::MouseButton::Left, cx);
@@ -277,5 +440,7 @@ pub(super) fn theme_zoom_scroll(cx: &mut TestAppContext) {
     context.dispatch_action(gpui_kit::component::input::Undo);
     save(&app, &mut context);
     assert_eq!(std::fs::read(&path).unwrap(), original.as_bytes());
-    context.update(|_, cx| gpui_kit::component::Theme::update(cx, |theme| theme.font_size = prior_size));
+    context.update(|_, cx| {
+        gpui_kit::component::Theme::update(cx, |theme| theme.font_size = prior_size)
+    });
 }

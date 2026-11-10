@@ -33,13 +33,13 @@
 #![cfg(any(target_os = "macos", target_os = "windows"))]
 
 pub mod bidi;
-pub mod math;
 mod code;
 mod document;
+pub mod math;
 mod presentation;
 mod resources;
-pub use resources::{InsertImage, LinkHit};
 pub use document::{Document, DocumentEvent, SourceEdit, SourceSnapshot};
+pub use resources::{InsertImage, LinkHit};
 mod writing;
 pub use writing::{WritingIntent, WritingRequest};
 
@@ -1604,8 +1604,13 @@ impl EditorState {
 
     /// The last painted native formula bounds. Geometry belongs to this presentation only.
     pub fn formula_bounds(&self, range: &Range<usize>) -> Option<Bounds<Pixels>> {
-        if self.last_bounds.is_none() || self.last_paint_gen != self.content_gen { return None; }
-        self.inline_math_rects.iter().find(|(source, latex, _)| source == range && !latex.is_empty()).map(|(_, _, bounds)| *bounds)
+        if self.last_bounds.is_none() || self.last_paint_gen != self.content_gen {
+            return None;
+        }
+        self.inline_math_rects
+            .iter()
+            .find(|(source, latex, _)| source == range && !latex.is_empty())
+            .map(|(_, _, bounds)| *bounds)
     }
 
     /// Re-measure this presentation after an asynchronous formula bitmap or theme update.
@@ -2889,7 +2894,11 @@ impl EditorState {
                             position,
                         });
                         editor.request_writing(
-                            if kind == ColorKind::Highlight { WritingIntent::HighlightColor } else { WritingIntent::TextColor },
+                            if kind == ColorKind::Highlight {
+                                WritingIntent::HighlightColor
+                            } else {
+                                WritingIntent::TextColor
+                            },
                             editor.selected_range.clone(),
                             window,
                             cx,
@@ -3014,8 +3023,12 @@ impl EditorState {
     fn paste(&mut self, _: &Paste, window: &mut Window, cx: &mut Context<Self>) {
         let item = cx.read_from_clipboard();
         if let Some(item) = item.as_ref()
-            && item.entries().iter().any(|entry| matches!(entry,
-                gpui_kit::ClipboardEntry::Image(_) | gpui_kit::ClipboardEntry::ExternalPaths(_)))
+            && item.entries().iter().any(|entry| {
+                matches!(
+                    entry,
+                    gpui_kit::ClipboardEntry::Image(_) | gpui_kit::ClipboardEntry::ExternalPaths(_)
+                )
+            })
         {
             cx.emit(EditorEvent::PasteAttachments(item.clone()));
             return;
@@ -3540,9 +3553,11 @@ impl EditorState {
             }
         }
         // Left-click an inline image opens a full-size preview (host-shown).
-        if event.click_count == 1 && !event.modifiers.shift
+        if event.click_count == 1
+            && !event.modifiers.shift
             && !event.modifiers.control
-            && !event.modifiers.alt && !event.modifiers.platform
+            && !event.modifiers.alt
+            && !event.modifiers.platform
             && let Some(src) = self.image_source_at(event.position)
         {
             cx.emit(EditorEvent::PreviewImage(src));
@@ -3557,14 +3572,21 @@ impl EditorState {
         if event.click_count == 1
             && !event.modifiers.shift
             && !event.modifiers.control
-            && !event.modifiers.alt && !event.modifiers.platform
+            && !event.modifiers.alt
+            && !event.modifiers.platform
             && self.markdown_style.is_some()
             && self.host_links
         {
-            if let Some((_, markdown_syntax::LinkHit::Url(url))) = self.link_rects.iter()
+            if let Some((_, markdown_syntax::LinkHit::Url(url))) = self
+                .link_rects
+                .iter()
                 .find(|(bounds, _)| bounds.contains(&event.position))
             {
-                self.pending_link = Some((url.clone().into(), event.position, self.document.read(cx).revision()));
+                self.pending_link = Some((
+                    url.clone().into(),
+                    event.position,
+                    self.document.read(cx).revision(),
+                ));
             }
         }
         // A press on a table's hover "+" strip adds a row (below) or column (right).
@@ -3737,8 +3759,10 @@ impl EditorState {
             && (event.position.y - origin.y).abs() < px(4.)
             && revision == self.document.read(cx).revision()
             && self.selected_range.is_empty()
-            && !event.modifiers.shift && !event.modifiers.control
-            && !event.modifiers.alt && !event.modifiers.platform
+            && !event.modifiers.shift
+            && !event.modifiers.control
+            && !event.modifiers.alt
+            && !event.modifiers.platform
         {
             cx.emit(EditorEvent::OpenLink(url));
         }
@@ -3778,9 +3802,10 @@ impl EditorState {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.pending_link.as_ref().is_some_and(|(_, origin, _)|
-            (event.position.x - origin.x).abs() >= px(4.) || (event.position.y - origin.y).abs() >= px(4.))
-        {
+        if self.pending_link.as_ref().is_some_and(|(_, origin, _)| {
+            (event.position.x - origin.x).abs() >= px(4.)
+                || (event.position.y - origin.y).abs() >= px(4.)
+        }) {
             self.pending_link = None;
         }
         // Link under the pointer → `HoverLink` on change (a host shows a preview
@@ -3930,7 +3955,9 @@ impl EditorState {
     /// isn't an image any more (it shaped to an image last paint, but guard
     /// anyway), or if the width didn't actually change.
     fn commit_image_resize(&mut self, resize: ImageResize, cx: &mut Context<Self>) {
-        if resize.revision != self.document.read(cx).revision() { return; }
+        if resize.revision != self.document.read(cx).revision() {
+            return;
+        }
         let starts = self.line_starts();
         let Some(&start) = starts.get(resize.line) else {
             return;
@@ -4925,7 +4952,9 @@ impl EditorState {
     /// The inline `$…$` formula under `position` (its absolute byte range + inner LaTeX), from
     /// the last paint's window-space `inline_math_rects` — so a click opens its editor.
     fn inline_math_at(&self, position: Point<Pixels>) -> Option<(Range<usize>, SharedString)> {
-        if self.last_bounds.is_none() || self.last_paint_gen != self.content_gen { return None; }
+        if self.last_bounds.is_none() || self.last_paint_gen != self.content_gen {
+            return None;
+        }
         self.inline_math_rects
             .iter()
             // Empty latex marks an inline IMAGE sharing this machinery — not a
@@ -5030,8 +5059,18 @@ impl EditorState {
         let info = &self.content[fence_end..end];
         let leading = info.len() - info.trim_start().len();
         let token_start = fence_end + leading;
-        let token_end = token_start + info.trim_start().split_whitespace().next().unwrap_or("").len();
-        let language = if lang == "text" && token_end == end { "" } else { lang };
+        let token_end = token_start
+            + info
+                .trim_start()
+                .split_whitespace()
+                .next()
+                .unwrap_or("")
+                .len();
+        let language = if lang == "text" && token_end == end {
+            ""
+        } else {
+            lang
+        };
         if &self.content[token_start..token_end] == language {
             return;
         }
@@ -5346,7 +5385,10 @@ impl EntityInputHandler for EditorState {
     }
 
     fn unmark_text(&mut self, _: &mut Window, cx: &mut Context<Self>) {
-        if self.document.read(cx).composition_owner()
+        if self
+            .document
+            .read(cx)
+            .composition_owner()
             .is_some_and(|owner| owner.entity_id() == cx.entity_id())
         {
             self.finish_composition(cx);
@@ -5396,12 +5438,24 @@ impl EntityInputHandler for EditorState {
         cx.emit(EditorEvent::Changed);
         cx.notify();
         if new_text == "/" && range.is_empty() && self.markdown_style.is_some() {
-            let start = self.content[..range.start].rfind('\n').map_or(0, |at| at + 1);
+            let start = self.content[..range.start]
+                .rfind('\n')
+                .map_or(0, |at| at + 1);
             let row = self.row_col(range.start).0;
             if self.content[start..range.start].trim().is_empty()
-                && !self.scan_data().fence_odd.get(row).copied().unwrap_or(false)
+                && !self
+                    .scan_data()
+                    .fence_odd
+                    .get(row)
+                    .copied()
+                    .unwrap_or(false)
             {
-                self.request_writing(WritingIntent::Insert, range.start..range.start + 1, window, cx);
+                self.request_writing(
+                    WritingIntent::Insert,
+                    range.start..range.start + 1,
+                    window,
+                    cx,
+                );
             }
         }
     }
@@ -5465,7 +5519,12 @@ impl EntityInputHandler for EditorState {
         _: &mut Context<Self>,
     ) -> Option<Bounds<Pixels>> {
         let range = self.range_from_utf16(&range_utf16);
-        if self.table_rows.get(self.row_col(range.start).0).and_then(Option::as_ref).is_some_and(|table| !table.is_separator) {
+        if self
+            .table_rows
+            .get(self.row_col(range.start).0)
+            .and_then(Option::as_ref)
+            .is_some_and(|table| !table.is_separator)
+        {
             return self.source_bounds(&range, window);
         }
         let (row, col) = self.row_col(range.start);
@@ -5512,7 +5571,9 @@ impl EntityInputHandler for EditorState {
         window: &mut Window,
         _: &mut Context<Self>,
     ) -> Option<usize> {
-        let offset = self.table_offset_at(point, window).unwrap_or_else(|| self.index_for_mouse_position(point));
+        let offset = self
+            .table_offset_at(point, window)
+            .unwrap_or_else(|| self.index_for_mouse_position(point));
         Some(self.offset_to_utf16(offset))
     }
 }
@@ -5554,16 +5615,20 @@ impl Render for EditorState {
             )
             .track_focus(&self.focus_handle)
             .cursor(CursorStyle::IBeam)
-            .on_action(cx.listener(|_, _: &InsertImage, _, cx| cx.emit(EditorEvent::InsertImages(Vec::new()))))
-            .on_drop(cx.listener(|this, paths: &gpui_kit::ExternalPaths, window, cx| {
-                cx.stop_propagation();
-                let position = window.mouse_position();
-                let offset = this.index_for_mouse_position(position);
-                let affinity = this.affinity_for_mouse_position(offset, position);
-                this.move_to_with_affinity(offset, affinity, cx);
-                this.focus(window, cx);
-                cx.emit(EditorEvent::InsertImages(paths.paths().to_vec()));
+            .on_action(cx.listener(|_, _: &InsertImage, _, cx| {
+                cx.emit(EditorEvent::InsertImages(Vec::new()))
             }))
+            .on_drop(
+                cx.listener(|this, paths: &gpui_kit::ExternalPaths, window, cx| {
+                    cx.stop_propagation();
+                    let position = window.mouse_position();
+                    let offset = this.index_for_mouse_position(position);
+                    let affinity = this.affinity_for_mouse_position(offset, position);
+                    this.move_to_with_affinity(offset, affinity, cx);
+                    this.focus(window, cx);
+                    cx.emit(EditorEvent::InsertImages(paths.paths().to_vec()));
+                }),
+            )
             .on_action(
                 cx.listener(|this, _: &gpui_kit::component::input::Undo, window, cx| {
                     this.undo(&Undo, window, cx)
@@ -5671,7 +5736,9 @@ impl Render for EditorState {
                             .relative()
                             .w_full()
                             .min_w_0()
-                            .child(EditorElement { editor: cx.entity() })
+                            .child(EditorElement {
+                                editor: cx.entity(),
+                            })
                             .children(self.embed_overlays(window))
                             .children(self.editing_block_overlay())
                             .children(self.editing_inline_overlay()),
@@ -6831,7 +6898,11 @@ enum LineMark {
     /// Blockquote: a left border (`bar`); the `>` markers are hidden. `text`
     /// colors the body — `Some` = muted quote tone, `None` = the editor's
     /// normal text color (alert bodies).
-    Quote { bar: Hsla, text: Option<Hsla>, text_inset: Pixels },
+    Quote {
+        bar: Hsla,
+        text: Option<Hsla>,
+        text_inset: Pixels,
+    },
     /// A GitHub alert's marker line (`> [!NOTE]` …): the marker is hidden and
     /// a bold `label` paints in the alert color; any same-line body insets to
     /// `text_inset` (QUOTE_INSET + the label's measured width + a gap) — the

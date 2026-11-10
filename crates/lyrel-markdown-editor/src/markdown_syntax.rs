@@ -1861,7 +1861,8 @@ pub(crate) fn inline_image_spans(line: &str) -> Vec<(Range<usize>, Range<usize>)
                 continue;
             }
         }
-        if b[i] == b'!' && !is_backslash_escaped(b, i)
+        if b[i] == b'!'
+            && !is_backslash_escaped(b, i)
             && b[i + 1] == b'['
             && let Some(rb) = line[i + 2..].find(']')
             && line[i + 2 + rb + 1..].starts_with('(')

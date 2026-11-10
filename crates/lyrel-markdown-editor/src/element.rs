@@ -853,9 +853,14 @@ impl Element for EditorElement {
                         let first_row = (f32::from(p1.y) / f32::from(*lh)).round() as usize;
                         let last_row = (f32::from(p2.y) / f32::from(*lh)).round() as usize;
                         for row in first_row + 1..last_row {
-                            let middle = Bounds::new(point(origin.x, origin.y + *lh * row), size(line_shaped.width(), *lh));
+                            let middle = Bounds::new(
+                                point(origin.x, origin.y + *lh * row),
+                                size(line_shaped.width(), *lh),
+                            );
                             link_grips.push(window.insert_hitbox(middle, HitboxBehavior::Normal));
-                            if let Some(h) = hit_target(&hit_ref) { link_rects.push((middle, h)); }
+                            if let Some(h) = hit_target(&hit_ref) {
+                                link_rects.push((middle, h));
+                            }
                         }
                         if let Some(h) = hit_target(&hit_ref) {
                             link_rects.push((head, h.clone()));
@@ -2097,12 +2102,20 @@ impl Element for EditorElement {
                 {
                     window.set_cursor_style(CursorStyle::PointingHand, hb);
                 }
-            } else if let Some(Block::MermaidStatus { text, line_height, .. }) =
-                prepaint.widgets.get(i).and_then(Option::as_ref)
+            } else if let Some(Block::MermaidStatus {
+                text, line_height, ..
+            }) = prepaint.widgets.get(i).and_then(Option::as_ref)
             {
                 let mut y = origin.y;
                 for line in text.iter() {
-                    let _ = line.paint(point(origin.x, y), *line_height, gpui_kit::TextAlign::Left, None, window, cx);
+                    let _ = line.paint(
+                        point(origin.x, y),
+                        *line_height,
+                        gpui_kit::TextAlign::Left,
+                        None,
+                        window,
+                        cx,
+                    );
                     y += *line_height * (line.wrap_boundaries().len() + 1) as f32;
                 }
             } else if let Some(Block::Properties(p)) =
@@ -2938,33 +2951,70 @@ fn shape_document(
     // actual source remains editable underneath. Entering/selecting the marker
     // reveals its exact original spelling as well.
     let mermaid: Vec<(Range<usize>, Block)> = match block_mermaid.filter(|_| md.is_some()) {
-        Some(f) => scan.mermaid.iter().filter_map(|(range, source)| {
-            let presentation = f(range.start, source);
-            let failed = matches!(&presentation, MermaidPresentation::Failed(_));
-            match presentation {
-                MermaidPresentation::Ready(img, lw, lh)
-                    if caret_row.is_none_or(|cr| !range.contains(&cr)) && !sel_hits(range)
-                        && lw.is_finite() && lh.is_finite() && lw > 0. && lh > 0. => {
-                    let w = lw.min(wrap_width.map_or(lw, f32::from)).max(1.);
-                    Some((range.clone(), Block::Image(BlockImg {
-                        img,
-                        width: px(w),
-                        height: px(w * lh / lw),
-                        resizable: false,
-                        align: MathAlign::Left,
-                    })))
+        Some(f) => scan
+            .mermaid
+            .iter()
+            .filter_map(|(range, source)| {
+                let presentation = f(range.start, source);
+                let failed = matches!(&presentation, MermaidPresentation::Failed(_));
+                match presentation {
+                    MermaidPresentation::Ready(img, lw, lh)
+                        if caret_row.is_none_or(|cr| !range.contains(&cr))
+                            && !sel_hits(range)
+                            && lw.is_finite()
+                            && lh.is_finite()
+                            && lw > 0.
+                            && lh > 0. =>
+                    {
+                        let w = lw.min(wrap_width.map_or(lw, f32::from)).max(1.);
+                        Some((
+                            range.clone(),
+                            Block::Image(BlockImg {
+                                img,
+                                width: px(w),
+                                height: px(w * lh / lw),
+                                resizable: false,
+                                align: MathAlign::Left,
+                            }),
+                        ))
+                    }
+                    MermaidPresentation::Loading(message)
+                    | MermaidPresentation::Failed(message)
+                        if caret_row != Some(range.start) && !sel_hits(range) =>
+                    {
+                        let color = md.map_or(base_color, |style| {
+                            if failed {
+                                style.alert_caution
+                            } else {
+                                style.marker
+                            }
+                        });
+                        let text = shape_all(
+                            window,
+                            &message,
+                            base_font_size,
+                            base_font.clone(),
+                            color,
+                            wrap_width,
+                        );
+                        let line_height = base_font_size * LINE_HEIGHT_RATIO;
+                        let rows: usize = text
+                            .iter()
+                            .map(|line| line.wrap_boundaries().len() + 1)
+                            .sum();
+                        Some((
+                            range.clone(),
+                            Block::MermaidStatus {
+                                text: std::rc::Rc::new(text),
+                                line_height,
+                                height: line_height * rows.max(1) as f32,
+                            },
+                        ))
+                    }
+                    _ => None,
                 }
-                MermaidPresentation::Loading(message) | MermaidPresentation::Failed(message)
-                    if caret_row != Some(range.start) && !sel_hits(range) => {
-                    let color = md.map_or(base_color, |style| if failed { style.alert_caution } else { style.marker });
-                    let text = shape_all(window, &message, base_font_size, base_font.clone(), color, wrap_width);
-                    let line_height = base_font_size * LINE_HEIGHT_RATIO;
-                    let rows: usize = text.iter().map(|line| line.wrap_boundaries().len() + 1).sum();
-                    Some((range.clone(), Block::MermaidStatus { text: std::rc::Rc::new(text), line_height, height: line_height * rows.max(1) as f32 }))
-                }
-                _ => None,
-            }
-        }).collect(),
+            })
+            .collect(),
         None => Vec::new(),
     };
     // $$…$$ math blocks ready to render: caret outside + a typeset bitmap ready. Like
@@ -3514,7 +3564,10 @@ fn shape_document(
                     };
                     // A foldable callout's chevron sits after the label and
                     // pushes any same-line body further right.
-                    let chevron_x = base_font_size * (QUOTE_INSET / 16.) + icon_w + label_w + base_font_size * 0.5;
+                    let chevron_x = base_font_size * (QUOTE_INSET / 16.)
+                        + icon_w
+                        + label_w
+                        + base_font_size * 0.5;
                     let chevron_w = if fold.is_some() {
                         measure_width(window, "▾", base_font, base_font_size) + base_font_size * 0.5
                     } else {
@@ -3538,15 +3591,23 @@ fn shape_document(
                         Some((c, _)) => (c, None),
                         None => (st.quote, Some(st.quote)),
                     };
-                    Some((plen, LineMark::Quote { bar, text, text_inset: base_font_size * (QUOTE_INSET / 16.) }))
+                    Some((
+                        plen,
+                        LineMark::Quote {
+                            bar,
+                            text,
+                            text_inset: base_font_size * (QUOTE_INSET / 16.),
+                        },
+                    ))
                 }
             } else if let Some((plen, indent, checked)) = markdown_syntax::task_prefix(line) {
                 // Reader-style geometry: each nesting level advances by
                 // marker + gap + (spaces × 4.5), not the raw spaces' width.
                 let depth = indent as f32 / tab_indent.max(1) as f32;
                 let box_w = base_font_size * CHECKBOX_SCALE;
-                let level =
-                    box_w + base_font_size * (LIST_TEXT_GAP / 16.) + base_font_size * (LIST_LEVEL_PER_SPACE / 16.) * tab_indent as f32;
+                let level = box_w
+                    + base_font_size * (LIST_TEXT_GAP / 16.)
+                    + base_font_size * (LIST_LEVEL_PER_SPACE / 16.) * tab_indent as f32;
                 let bullet_x = level * depth;
                 let text_inset = bullet_x + box_w + base_font_size * (LIST_TEXT_GAP / 16.);
                 Some((
@@ -4431,7 +4492,6 @@ fn paint_prop_panel(
         }
     }
 }
-
 
 /// Paint a file chip — a rounded, bordered button with a flat document icon +
 /// `label` — filling the row (sized in `shape_document` to include vertical

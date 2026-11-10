@@ -9,7 +9,10 @@ pub(super) struct SaveContent {
     pub(super) revision: Option<u64>,
 }
 impl SaveContent {
-    pub(super) fn capture(file: &OpenFile, cx: &gpui_kit::App) -> Result<Self, lyrel_text::EncodeError> {
+    pub(super) fn capture(
+        file: &OpenFile,
+        cx: &gpui_kit::App,
+    ) -> Result<Self, lyrel_text::EncodeError> {
         if let Some(view) = file.input.markdown() {
             // Source, every terminator, encoding and BOM come from this same snapshot;
             // never read a presentation's possibly stale cached text to acknowledge a save.
@@ -25,7 +28,11 @@ impl SaveContent {
         } else {
             let input = file.input.read(cx);
             let text = input.text().to_string();
-            let text = if text.contains("\r\n") { text.replace("\r\n", "\n") } else { text };
+            let text = if text.contains("\r\n") {
+                text.replace("\r\n", "\n")
+            } else {
+                text
+            };
             let format = file.format(cx);
             Ok(Self {
                 bytes: lyrel_text::encode(&text, &format)?,

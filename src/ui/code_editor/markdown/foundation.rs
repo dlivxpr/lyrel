@@ -17,7 +17,10 @@ pub(super) fn settle(context: &mut VisualTestContext) {
     context.run_until_parked();
 }
 #[track_caller]
-pub(super) fn until(context: &mut VisualTestContext, mut ready: impl FnMut(&mut VisualTestContext) -> bool) {
+pub(super) fn until(
+    context: &mut VisualTestContext,
+    mut ready: impl FnMut(&mut VisualTestContext) -> bool,
+) {
     until_state(context, "foundation workflow", |context| {
         (ready(context), ())
     });
