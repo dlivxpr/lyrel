@@ -130,7 +130,8 @@ if (!args.includes('--worker')) {
       return response.result;
     } };
     const h = React.createElement;
-    const ui = render(h(Text, null, 'NATIVE_STATIC_STARTING'), { exitOnCtrlC: false, patchConsole: false });
+    // Pinned Ink's public render() is async; rerender belongs to its resolved Instance.
+    const ui = await render(h(Text, null, 'NATIVE_STATIC_STARTING'), { exitOnCtrlC: false, patchConsole: false });
     process.stdin.setRawMode(true); process.stdin.resume();
     function Frame({ phase, index }) {
       const [ready, setReady] = React.useState(false);
