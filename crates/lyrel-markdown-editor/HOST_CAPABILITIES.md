@@ -39,7 +39,7 @@
 | 图片插入/paste/drop、资源、preview、resize/zoom | 上游保留 + Lyrel Host，#238 | 当前无伪造 bitmap/provider；源码 intact。完成 owning local/SSH Host 读写、唯一资源命名、可见失败、延迟资源隔离、输入/Undo/save/reopen 与 native 预览几何。 |
 | inline/display math 渲染、二维结构编辑 seat/menus/commit/cancel | 指定 MIT 公式 GUI 导入 + Lyrel Host，#241 | #237 不导入公式 GUI。渲染 provider 未配置时允许原文直接编辑，不让 arrow/click 被未接线结构编辑事件吞掉。#241 安装真实 renderer 与结构编辑器，并经同一 Document 修改协议提交。 |
 | Mermaid cache/render/entry/refresh/error/stale-result | Lyrel Host，#242 | 源码可访问；#242 完成真实 native 图、错误/恢复与布局变化，不以 parser 成功或无限 loading 冒充可用。 |
-| status/search/outline、tabs/groups、MDX source-only、focus/layout | Lyrel 工作台，#240 | #237 已建立所有权和最小状态/跳转；#240 完成完整导航/search/outline 与多视图布局消费者。MDX 不恢复旧 rich component 系统。 |
+| status/search/outline、tabs/groups、MDX source-only、focus/layout | Lyrel 工作台，#240 | `MarkdownPresentations` 按稳定 TabId/GroupId 保留 view/search/observer；新 split 从实际来源 view 继承模式、选区与滚动。每个 view 的通知刷新工作台状态；输入及搜索焦点参与命令捕获阶段的组定位。MDX 路径身份变化只改变 source-only 能力，不替换文档/history。生产与 native 消费者入口见下方；实际原生窗口验收仍由集成者执行。 |
 | 编码/BOM、显式换行转换/cleanup、save-as/conflict/failure/close | Lyrel 工作台 + `lyrel-text`，#243 | 混合行尾事务基础属 #237；#243 扩充 supported encodings、失败恢复、真实 local/SSH 和在途第二视图快照。不得再复制 codec 到 GUI crate。 |
 | extreme nowrap 行、完整源文/尾部 caret/input/Undo/save | 上游布局 + Lyrel 安全保护，#237/#244 | 实际 native 宽度超过 65,536 逻辑像素时保留有界视觉折行；不插入源换行、不截断、不更改 wrap 偏好。caret 几何以整数视觉行号乘一次行高，不能逐行累加 `f32` 后再让 native hit-testing 除行高反解。#235 的 not_planned 不是 SDK 修复证据。 |
 | imported bidi 映射 | 上游保留，#237/#244 | 保留 `bidi/` 与 source/display/native position mapping。完整 RTL 仍在已批准验收范围之外，不能由普通 Unicode 成功推导 RTL parity。 |
@@ -99,6 +99,15 @@ MDX 的 `source_only` 是 presentation 能力，分屏复制该约束；`ToggleD
 工作台快捷键明确匹配 native `Editor` context，不借用 `Input` context 让普通输入框截获 native 按键。对外 Kit Backspace/Delete 与 editor 自身按键调用同一修改路径。分屏复制文档缩进宽度；多行缩进是保留选区的有序 batch，不替换被选正文。Host 命令的 before/after selection 纳入相同 history，Undo 恢复原选区；行重排保留原行尾且在移动无终止换行的片段时补齐操作必需的连接换行。
 
 重复 occurrence 选择是 view-local 状态，工作台 Next/All 经真实 native selection、quads/carets 与原子 batch 输入执行；不是仅供测试的 Code-only no-op。晚到 reload 若遇到 source revision 或 composition 变化，保留编辑并显示 conflict，而非静默覆盖或仅丢弃结果。以上修复仍须通过对应消费者与 native 门禁，不由本说明推定通过。
+
+### #240 多视图工作台消费者
+
+`src/ui/code_editor/workbench_views.rs` 经生产 open/split/focus/actions/search/outline/save/close/reopen 路径覆盖来源 presentation 上下文、跨 view selection rebase、IME owner handoff、迟到 preedit/commit/unmark 隔离、关闭一组后的共享 Undo，以及第二 view 保存期间切换标签页后的精确字节。MDX 重命名覆盖每个 view 的 source-only 与原历史；普通 code 不因扩展名变化隐式转换编辑器。
+
+native registry 增加 `workbench_views::shared_context_and_ime_handoff` 与 `workbench_views::focused_consumers_and_layout`。后者覆盖实际 focus 后无中间 draw 的菜单跳转、状态行列、outline、搜索后焦点返回，以及 light/dark、界面 zoom、Dock/Fill、窄窗口回退与放宽。原 `document_column::gpui_tests::docked_editor_content_fills_its_column_across_scales_and_resize`、`close_gpui_tests` 与 root status/chrome 消费者仍保留原有效合同，不以新测试替代。
+
+仅明确已退役且失焦的 IME lease 拒绝迟到 callback；仍拥有 composition 的合法失焦提交保持可用。`unmark_text` 只结束自己拥有的 lease，不能提交另一个 view 的新 preedit。以上消费者尚需集成者统一执行，字体 runner 不替代真实系统 IME、实窗 geometry 或 macOS 验收。
+
 
 ### Reload 与 native 长代码基础门禁
 
