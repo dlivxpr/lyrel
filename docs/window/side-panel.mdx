@@ -220,6 +220,15 @@ Markdown 的每个标签页／编辑组各自保留光标、选择、滚动、�
 
 超长 nowrap 行的 source-preserving 有界视觉布局继续保留；full RTL 仍在已批准验收范围之外，但 imported bidi mapping 不删除。下方 #204 的字形、表格、图片、公式、性能与保存证据仅属于原实现，不是本次替换的通过证明；新候选必须记录自己的实际结果。
 
+#### #241 结构公式接线与验收入口
+
+公式显示使用正式 GUI-free RaTeX `0.1.15`，结构编辑来自上述固定 MIT `ratex-gpui 0.4.1`，GUI 只使用 Kit/Fast。点击公式或从正文按方向键进入，在原位置操作分式、根式、定界符和嵌套 slot；输入 `\command` 后用方向键和 Enter/Tab 接受候选。Enter 应用，Escape 先关闭候选/选区、再取消整个临时编辑；应用或取消返回原文档上下文。右键及 Shift+F10 提供复制 LaTeX、导出到本机、块公式对齐、应用和取消。
+
+primary/secondary 各自拥有 seat/focus/candidate/layout，只共享 Document。未修改提交、取消和普通呈现不序列化原文；显式提交只替换公式正文，对齐另以同一 batch 修改必要标记。普通 Undo/Redo、source/live 和所属 Host 保存使用原历史与文件生命周期。文档 revision、原 range/选区或模式失效时拒绝过期编辑；结构模型无法保留的字体、颜色、间距或其他语法显示原因，原文仍可在源码模式编辑，不以 best-effort 丢弃 wrapper。
+
+生产消费者位于 `src/ui/code_editor/markdown_formula/tests.rs`，原生入口包括完整 `400034 B` mixed-tall fixture、hard-break/fragment、双视图、提交/取消、普通历史及 mapped Host 保存重开。源码交付不表示新 renderer、系统 IME、固定 Zorite 实窗对照或 macOS 已通过；这些由本轮集中验收另行记录。
+
+
 
 #### 历史 #204 支持范围与文本布局保护
 

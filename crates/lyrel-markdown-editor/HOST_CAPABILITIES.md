@@ -4,7 +4,7 @@
 
 本清单是 #236 的实现契约，不是验收通过声明。#237 提供可执行的文件生命周期与共享文档基础；其行为测试、原生字体、系统 IME、真实 SSH、Release 可用性与平台结果必须分别记录。后续能力按下表完成；依赖 #237 的票不得以独立文本控件演示替代真实工作台。最终完整功能与默认路由验收属于 #245。
 
-源码基准固定为 [Zorite `9f069c73a56b06efc84fb7abb700beb50083c827`](https://github.com/packetThrower/zorite/tree/9f069c73a56b06efc84fb7abb700beb50083c827)。原始文件摘要、版本和适配范围见 `UPSTREAM.toml`；MIT 原文见 `licenses/`。导入限于 editor/bidi，不包含 GPL 应用编排。公式 GUI 导入由 #241 完成。GPUI 只经 `gpui-kit` 的 Fast 类型，不建立第二个 GUI runtime。
+源码基准固定为 [Zorite `9f069c73a56b06efc84fb7abb700beb50083c827`](https://github.com/packetThrower/zorite/tree/9f069c73a56b06efc84fb7abb700beb50083c827)。原始文件摘要、版本和适配范围见 `UPSTREAM.toml`；MIT 原文见 `licenses/`。导入限于 editor/bidi 与 #241 的 ratex-gpui，不包含 GPL 应用编排。GPUI 只经 `gpui-kit` 的 Fast 类型，不建立第二个 GUI runtime。
 
 ## 所有权与修改协议
 
@@ -37,7 +37,7 @@
 | 文字/高亮预设颜色与自定义颜色 | 上游保留 + Lyrel Host，#244 | `WritingProvider` 安装真实 Kit `ColorSelect`、HSLA/hex picker 与显式应用/取消/清除草稿，才启用 custom swatch；`PickColor` 事件仍可观察。`Ctrl/Cmd+Alt+C` / `Ctrl/Cmd+Alt+H` 直接打开文字/高亮 picker。草稿不修改源码，提交核对捕获的 view/revision/range；改色和清色各是同一 shared history 的一个原子步骤。native consumer 覆盖取消/hex 提交/clear/几何与双视图 Undo，执行结果待集成者记录。 |
 | 普通相对/外部链接、hover、caret 附近的源码访问 | 上游行为 + Lyrel Host，#238 | 采用 Zorite 的普通单击打开语义，不保留旧 Ctrl+Click-only。在真实 OpenLink/HoverLink 接线前不启用 `set_host_link_navigation(true)`，不显示无效手形控件。相对路径绑定文档 Host，延迟完成不重定向活动组；失败可见且不丢编辑。 |
 | 图片插入/paste/drop、资源、preview、resize/zoom | 上游保留 + Lyrel Host，#238 | 当前无伪造 bitmap/provider；源码 intact。完成 owning local/SSH Host 读写、唯一资源命名、可见失败、延迟资源隔离、输入/Undo/save/reopen 与 native 预览几何。 |
-| inline/display math 渲染、二维结构编辑 seat/menus/commit/cancel | 指定 MIT 公式 GUI 导入 + Lyrel Host，#241 | #237 不导入公式 GUI。渲染 provider 未配置时允许原文直接编辑，不让 arrow/click 被未接线结构编辑事件吞掉。#241 安装真实 renderer 与结构编辑器，并经同一 Document 修改协议提交。 |
+| inline/display math 渲染、二维结构编辑 seat/menus/commit/cancel | 指定 MIT `ratex-gpui 0.4.1` + Lyrel `markdown_formula` Host，#241 | `src/math` 保留 9 个 pinned source 摘要；renderer 为 registry RaTeX 0.1.15。每 presentation 独立异步 bitmap/seat，版本、document identity、原选区与原 range 校验后通过 `replace_ranges` 提交 body/对齐 batch。Enter/箭头退出应用、Escape 取消、Ctrl/Cmd+S 先提交再走原 Host 保存；Kit palette、native copy/export/块对齐菜单和焦点返回已接线。原生与参考实窗对照尚待集中执行。 |
 | Mermaid cache/render/entry/refresh/error/stale-result | Lyrel Host，#242 | `markdown::mermaid_host::install` 在所有 presentation 的共同 configure 入口安装真实 Merman `0.9.2` → `resvg_safe` → Kit `SvgRenderer` provider；caret/selection 进入块即显露原始 fenced source，正常输入与 Undo/Redo 使用同一 Document。loading/失败在块首行显示，正文源码仍可编辑；错误修复触发新 request，不显示假图或无限等待。见下方所有权与消费者边界。 |
 | status/search/outline、tabs/groups、MDX source-only、focus/layout | Lyrel 工作台，#240 | `MarkdownPresentations` 按稳定 TabId/GroupId 保留 view/search/observer；新 split 从实际来源 view 继承模式、选区与滚动。每个 view 的通知刷新工作台状态；输入及搜索焦点参与命令捕获阶段的组定位。MDX 路径身份变化只改变 source-only 能力，不替换文档/history。生产与 native 消费者入口见下方；实际原生窗口验收仍由集成者执行。 |
 | 编码/BOM、显式换行转换/cleanup、save-as/conflict/failure/close | Lyrel 工作台 + `lyrel-text`，#243 | `saving::fidelity::SaveContent` 从同一 Document snapshot 捕获源文/表示/格式/字节；成功才采用另存为目标；新编辑退休旧close。消费者覆盖 UTF-8 BOM、UTF-16LE/BE、GB18030、Windows-1252、显式转换/稀疏cleanup与Undo、失败/冲突/取消/扩展名、第二呈现在途快照。沿用全部原保存消费者；真实local/SSH与native结果由集成者另记，不以mapped Host或历史结果冒充。 |
@@ -77,6 +77,18 @@
 `writing_tests::continuous_writing` 经生产 workbench 覆盖列表续行/缩进/退出、格式、引用延续/退出、第二 presentation 插入及 shared history。native registry 新增 `writing::native_text_color_picker_clear_geometry_and_shared_history` 与 `writing::native_wrapped_starts_prose_heading_list_quote_zoom`，不删除完整 extreme-line 与 affinity 门禁。源码交付期间按并行合同未运行 build/test/formatter 或操作窗口。
 
 早期实窗由集成者实际观察：foundation `fc3b5de8` 与固定参考在 1195×801、Light、同一 1092 B 源文下比较，候选正文只距 shell 约 5 px，参考约 28 px；候选 callout 缺少 info 图标，wrap/节奏亦不同。这是明确未通过的排版基线，不是 #244 的通过证据。本票以源内 inset、真实图标、原生写作 Host 修正这些路径；提交后的 Light/Dark、docked/full、zoom、系统 IME 和连续书写仍须用同源文在实际窗口复测，不以 native-font test 或静态截图代替。
+
+### #241 公式验收路径
+
+`markdown_formula::install` 安装 primary 与 secondary 的 provider、版本隔离、结构 seat 和原生菜单。显示渲染和临时树不修改 Document；未修改提交直接返焦，不重新序列化原式。正文提交只替换去除外围空白后的 body range，原 fences、邻文及逐行行尾不回写。对齐标记是同一 batch 的另一条必要 edit。结构 entry 通过 AST 保真比较拒绝字体、颜色、间距、不可表示环境或无效解析，不把 best-effort wrapper 丢弃带入生产；显示 renderer 仍保留其支持的原语法和显式颜色。
+
+临时树内部的 Undo/Redo 仅管理未提交草稿；提交本身只占普通 Document history 的一项。原生文本输入经 `EntityInputHandler`，预编辑不进入文档；候选 bounds 与 pointer 共用实际 formula image/caret 几何。主题、zoom、DPR 与 revision 标识异步 bitmap，晚到结果不覆盖新请求；关闭 presentation 回收 host/seat/图像。NBSP spacer 防止公式/图片在 soft-wrap 中跨错行，不插入任何源码字符。
+
+- 窄工作台入口：`cargo test --locked -p lyrel --lib formula_workbench`。
+- 结构/renderer 回归：`cargo test --locked -p lyrel-markdown-editor math::`。
+- native：`cargo test --locked -p lyrel --features native-markdown-tests --test native_markdown -- markdown_formula --nocapture`；四项 selector 包含 commit/cancel/history/Host save/reopen、unsupported/unchanged exact source、完整 400034 B mixed-tall fixture 的 wrap/nowrap 与 pointer/input/Undo/save，以及 hard-break/fragment 邻文安全。
+- 同 fixture 对照固定 Zorite 实窗：点击 inline/display、分式 numerator/denominator、根式/定界符嵌套、补全/菜单、Escape/未修改提交、系统 IME candidate/focusReturn；逐字节比较保存，另做本地/SSH 和浅深主题/缩放。未运行不计通过，native 字体 runner 不能替代实窗或系统 IME。
+
 
 ## 最终许可证分发验收（#245）
 

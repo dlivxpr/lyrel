@@ -6149,7 +6149,14 @@ name = "lyrel-markdown-editor"
 version = "0.3.1"
 dependencies = [
  "gpui-kit",
+ "image",
  "lyrel-text",
+ "ratex-layout",
+ "ratex-parser",
+ "ratex-render",
+ "ratex-svg",
+ "ratex-types",
+ "serde_json",
  "unicode-bidi",
  "unicode-segmentation",
  "zorite-markdown",
@@ -7760,6 +7767,19 @@ dependencies = [
 
 [[package]]
 name = "phf_macros"
+version = "0.11.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f84ac04429c13a7ff43785d75ad27569f2951ce0ffd30a3321230db2fc727216"
+dependencies = [
+ "phf_generator 0.11.3",
+ "phf_shared 0.11.3",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
+]
+
+[[package]]
+name = "phf_macros"
 version = "0.13.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "812f032b54b1e759ccd5f8b6677695d5268c588701effba24601f6932f8269ef"
@@ -8645,6 +8665,26 @@ dependencies = [
  "serde_json",
  "thiserror 1.0.69",
  "unicode-normalization",
+]
+
+[[package]]
+name = "ratex-render"
+version = "0.1.15"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0f59ee48cdb162672b3fc628263057c3fac4e3abf860c594f4a5db503c010611"
+dependencies = [
+ "ab_glyph",
+ "png 0.17.16",
+ "ratex-font",
+ "ratex-font-loader",
+ "ratex-katex-fonts",
+ "ratex-layout",
+ "ratex-parser",
+ "ratex-types",
+ "ratex-unicode-font",
+ "serde_json",
+ "tiny-skia 0.11.4",
+ "ttf-parser",
 ]
 
 [[package]]

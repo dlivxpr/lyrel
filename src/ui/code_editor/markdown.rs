@@ -76,5 +76,5 @@ pub(crate) fn native_cases() -> impl Iterator<Item = crate::native_markdown::Cas
             "ui::code_editor::workbench_views::focused_consumers_and_layout",
             super::document_input::workbench_views::focused_consumers_and_layout,
         ),
-    ]).chain(mermaid_host::native_cases()).chain(super::saving::native_cases())
+    ]).chain(mermaid_host::native_cases()).chain(super::saving::native_cases()).chain(super::markdown_formula::native_cases())
 }

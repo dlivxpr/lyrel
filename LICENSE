@@ -13002,13 +13002,17 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 
-Zorite-derived Markdown editor and bidi source import
-====================================================
+Zorite-derived Markdown editor, bidi and structural math source import
+====================================================================
 
-适用组件：lyrel-markdown-editor 中的 zorite-editor 0.11.3 与 gpui-bidi 0.1.1 派生源码。
+适用组件：lyrel-markdown-editor 中的 zorite-editor 0.11.3、gpui-bidi 0.1.1 与 ratex-gpui 0.4.1 派生源码。
 来源：https://github.com/packetThrower/zorite @ 9f069c73a56b06efc84fb7abb700beb50083c827
 原始文件摘要和本地适配记录：crates/lyrel-markdown-editor/UPSTREAM.toml。
 此例外不改变 Lyrel 原有 Apache-2.0 代码及 lyrel-text codec 的许可。
+ratex-gpui 的 MIT 原文另保存在 crates/lyrel-markdown-editor/licenses/ratex-gpui-MIT.txt。
+实际 renderer 使用正式 registry RaTeX 0.1.15（font/font-loader/katex-fonts/layout/lexer/parser/render/svg/types/unicode-font）；
+其 MIT 条款及 erweixin 版权、KaTeX 字体版权/保留名称与完整 OFL-1.1 已收录于本文件 T140/T141 附录。
+crate 的 licenses/ratex-katex-OFL.txt 与 ratex-katex-NOTICE.txt 同时保留发布包字体通知；字体并非 MIT 代码。
 
 MIT License
 

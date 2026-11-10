@@ -425,6 +425,7 @@ impl EditorBuffers {
                 }
                 view
             });
+            super::markdown_formula::install(&presentation, window, cx);
             let observe = cx.observe(&presentation, |_, _, cx| cx.notify());
             (EditorInput::Markdown(presentation), None, sub, observe)
         } else {

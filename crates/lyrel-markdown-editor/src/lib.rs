@@ -33,6 +33,7 @@
 #![cfg(any(target_os = "macos", target_os = "windows"))]
 
 pub mod bidi;
+pub mod math;
 mod code;
 mod document;
 mod presentation;
@@ -1590,6 +1591,19 @@ impl EditorState {
         let range = self.editing_inline.take().map(|e| e.range);
         cx.notify();
         range
+    }
+
+    /// The last painted native formula bounds. Geometry belongs to this presentation only.
+    pub fn formula_bounds(&self, range: &Range<usize>) -> Option<Bounds<Pixels>> {
+        if self.last_bounds.is_none() || self.last_paint_gen != self.content_gen { return None; }
+        self.inline_math_rects.iter().find(|(source, latex, _)| source == range && !latex.is_empty()).map(|(_, _, bounds)| *bounds)
+    }
+
+    /// Re-measure this presentation after an asynchronous formula bitmap or theme update.
+    pub fn refresh_formula_layout(&mut self, cx: &mut Context<Self>) {
+        *self.shape_memo.borrow_mut() = None;
+        self.shape_caches.line_heights.borrow_mut().clear();
+        cx.notify();
     }
 
     /// Whether `range` still bounds an inline `$…$` span (a `$` at each end, content between, no
@@ -4906,6 +4920,7 @@ impl EditorState {
     /// The inline `$…$` formula under `position` (its absolute byte range + inner LaTeX), from
     /// the last paint's window-space `inline_math_rects` — so a click opens its editor.
     fn inline_math_at(&self, position: Point<Pixels>) -> Option<(Range<usize>, SharedString)> {
+        if self.last_bounds.is_none() || self.last_paint_gen != self.content_gen { return None; }
         self.inline_math_rects
             .iter()
             // Empty latex marks an inline IMAGE sharing this machinery — not a

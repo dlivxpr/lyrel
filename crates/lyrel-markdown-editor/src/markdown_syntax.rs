@@ -2023,19 +2023,21 @@ pub(crate) fn splice_inline_math(
         nd.push_str(&display[cursor..d0]);
         nm.extend_from_slice(&map[cursor..d0]);
         nr.extend(clip_runs(runs, cursor, d0));
-        // The spacer, mapped back to the span start.
+        // A raster is one native line-break atom. ASCII spaces allowed a fraction/image
+        // to straddle two wrap rows while paint still drew one full rectangle.
         places.push(InlineMathPlace {
             display_off: nd.len(),
-            len: *n,
+            len: *n * '\u{a0}'.len_utf8(),
             source: src.clone(),
         });
         let src_at = map.get(d0).copied().unwrap_or(src.start);
         for _ in 0..*n {
-            nd.push(' ');
+            nd.push('\u{a0}');
         }
-        nm.extend(std::iter::repeat_n(src_at, *n));
+        let bytes = *n * '\u{a0}'.len_utf8();
+        nm.extend(std::iter::repeat_n(src_at, bytes));
         nr.push(TextRun {
-            len: *n,
+            len: bytes,
             ..gap.clone()
         });
         cursor = d1;
@@ -2538,16 +2540,16 @@ mod tests {
         let map: Vec<usize> = (0..=display.len()).collect();
         let (nd, nr, nm, places) =
             splice_inline_math(display, &[run(display.len())], &map, &[(2..5, 3)], &run(0));
-        assert_eq!(nd, "a     b"); // "a " + 3 spaces + " b" = a + 5 spaces + b
+        assert_eq!(nd, "a \u{a0}\u{a0}\u{a0} b"); // one unbreakable raster seat
         assert_eq!(
             places,
             vec![InlineMathPlace {
                 display_off: 2,
-                len: 3,
+                len: 6,
                 source: 2..5
             }]
         );
-        assert_eq!(nm, vec![0, 1, 2, 2, 2, 5, 6, 7]); // spacer bytes map to the span start (2)
+        assert_eq!(nm, vec![0, 1, 2, 2, 2, 2, 2, 2, 5, 6, 7]);
         assert_eq!(nm.len(), nd.len() + 1);
         assert_eq!(runs_len(&nr), nd.len()); // runs still tile the display
     }
@@ -2564,18 +2566,18 @@ mod tests {
             &[(0..3, 2), (8..11, 4)],
             &run(0),
         );
-        assert_eq!(nd, "   and     "); // 2 spaces + " and " + 4 spaces
+        assert_eq!(nd, "\u{a0}\u{a0} and \u{a0}\u{a0}\u{a0}\u{a0}");
         assert_eq!(
             places,
             vec![
                 InlineMathPlace {
                     display_off: 0,
-                    len: 2,
+                    len: 4,
                     source: 0..3
                 },
                 InlineMathPlace {
-                    display_off: 7,
-                    len: 4,
+                    display_off: 9,
+                    len: 8,
                     source: 8..11
                 },
             ]
