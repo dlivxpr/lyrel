@@ -3,6 +3,8 @@
 
 use super::*;
 use gpui_kit::component::menu::ContextMenuExt;
+use gpui_kit::component::button::{Button, ButtonRounded, ButtonVariants as _};
+use gpui_kit::component::Sizable as _;
 
 use gpui_kit::TestSupportExt as _;
 use gpui_kit::component::ActiveTheme as _;
@@ -40,7 +42,49 @@ impl Render for TerminalView {
         };
         let integration_notice = self.render_integration_notice(cx);
         let remote_completion_notice = self.render_remote_completion_notice(cx);
+        // Measure actual bottom overlays instead of guessing composer/menu heights.
+        let first_bottom = 2 + usize::from(composer_docked.is_some()) + usize::from(search_bar.is_some());
+        let completion_ix = first_bottom + usize::from(input_bar.is_some());
+        let reverse_ix = completion_ix + usize::from(completion_menu.is_some());
+        let composer_ix = reverse_ix + usize::from(reverse_search_menu.is_some())
+            + usize::from(integration_notice.is_some()) + usize::from(remote_completion_notice.is_some());
+        let obstructions = [
+            input_bar.is_some().then_some(first_bottom),
+            completion_menu.is_some().then_some(completion_ix),
+            reverse_search_menu.is_some().then_some(reverse_ix),
+            composer_over.is_some().then_some(composer_ix),
+        ];
+        let reading_obstruction = self.reading_obstruction.clone();
+        let reading = self.selection_scroll.reading.is_some();
 
+        let return_live = self.selection_scroll.reading.as_ref().map(|_| {
+            let rows = self.frame.display_offset + usize::from(self.selection_scroll.fraction() > 0.);
+            let label = t_fmt(L10nKey::TerminalReturnLive, &[("rows", &rows.to_string())]);
+            div()
+                .absolute()
+                .left_0()
+                .right_0()
+                .bottom(self.grid_slack.max(self.reading_obstruction.get()))
+                .pb_2()
+                .px_2()
+                .flex()
+                .justify_center()
+                .child(Button::new("terminal-return-live")
+                    .label(label.clone())
+                    .tooltip(label)
+                    .max_w_full()
+                    .min_w_0()
+                    .occlude()
+                    .secondary()
+                    .small()
+                    .rounded(ButtonRounded::Large)
+                    .track_focus(&self.reading_focus)
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        this.jump_to_prompt();
+                        window.focus(&this.focus_handle, cx);
+                        cx.notify();
+                    })))
+        });
         let has_selection = self.any_selection();
         let menu_view = cx.entity();
 
@@ -56,6 +100,15 @@ impl Render for TerminalView {
             .key_context(self.key_context(cx))
             .size_full()
             .relative()
+            .when(reading, |surface| surface.on_children_prepainted(move |bounds, window, _| {
+                let Some(grid) = bounds.first() else { return; };
+                let occupied = obstructions.iter().flatten().filter_map(|ix| bounds.get(*ix))
+                    .map(|bounds| (grid.bottom() - bounds.top()).clamp(px(0.), grid.size.height))
+                    .max().unwrap_or(px(0.));
+                if reading_obstruction.replace(occupied) != occupied {
+                    window.refresh();
+                }
+            }))
             // A column so the composer docks under the grid and takes its rows
             // from it: the grid's laid-out height is what sizes the pty.
             .flex()
@@ -162,13 +215,21 @@ impl Render for TerminalView {
             .on_action(cx.listener(|this, _: &RunReverseSearchSelection, _w, cx| {
                 this.run_reverse_search_selection(cx);
             }))
-            .on_action(cx.listener(|this, _: &SendTab, _w, cx| {
-                this.tab_pressed(true, cx);
+            .on_action(cx.listener(|this, _: &SendTab, window, cx| {
+                if this.selection_scroll.reading.is_some() && this.focus_handle.is_focused(window) {
+                    window.focus(&this.reading_focus, cx);
+                } else if this.reading_focus.is_focused(window) {
+                    window.focus(&this.focus_handle, cx);
+                } else { this.tab_pressed(true, cx); }
             }))
-            .on_action(cx.listener(|this, _: &SendBackTab, _w, cx| {
-                this.tab_pressed(false, cx);
+            .on_action(cx.listener(|this, _: &SendBackTab, window, cx| {
+                if this.reading_focus.is_focused(window) {
+                    window.focus(&this.focus_handle, cx);
+                } else { this.tab_pressed(false, cx); }
             }))
-            .child(TerminalElement::new(entity))
+            .child(div().relative().flex().flex_col().flex_1().min_h_0().w_full()
+                .child(TerminalElement::new(entity))
+                .children(return_live))
             .children(composer_docked)
             .child(self.render_scrollbar())
             .children(search_bar)

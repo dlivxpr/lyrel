@@ -19,11 +19,35 @@ description: "指针、滚轮和 ^G 各有何行为——以及如何分别调�
 
 触控板在手势开始时锁定“滚动还是缩放”，该决定持续到惯性尾段结束；中途按下或松开修饰键不会把同一次手势改成另一种操作。新手势会重新判断。滚轮则逐格判断修饰键；一次滚轮缩放只改变一级字号，触控板缩放会累计移动量后按整级改变。
 
+### 稳定阅读与回到实时输出
+
+离开实时输出后，窗格以绝对行身份保留阅读位置。首次滚动捕获一屏活动文字的语义内容；读取到的历史行按首次取得的内容保留，因此后台程序使用光标定位、擦除或重画活动屏幕时，不会改写当前阅读的文字。程序、PTY、daemon 和桌面终端镜像仍继续推进，并未暂停输出。
+
+文字区域底部居中的按钮显示 `↓ N 行 · 回到实时输出`（英文界面为 `↓ N lines · Return to live`）。数字表示距实时边缘的行数，不是未读消息数；不足一行的滚动向上取整。后台产生更多历史行时，距离随之增长。点击按钮，或在阅读时按 Tab 聚焦按钮后按 Enter，会通过原有回到提示符路径返回实时输出，并把焦点交回终端；Enter 不发送给子进程。直接输入或粘贴也保留原有返回实时输出的行为。滚回实时边缘会释放阅读内容，下次离开时重新捕获当前文字。
+
+按钮使用标准 `Button` 的语义主题、键盘焦点和缩放尺寸；它不增加终端行数，底部位置避开已测量的 composer、补全及反向搜索浮层。窄窗格中标签可以省略，完整文案保留在辅助功能名称与 tooltip 中。
+
+这里的文字实现属于 #251。图片及选择／复制／链接／搜索的同源交互由 #252 接入；resize 逻辑行重定位由 #253 接入；清屏／reset／重连世代及隐藏窗格生命周期由 #254 完成。不要把基础文字阅读消费者当作这些后续行为或 #255 原生桌面验收的通过证据。
+
+
 ### 实现职责
 
-`src/terminal/selection_scroll.rs` 的 `SelectionScroll` 统一持有选择拖拽、越界自动滚动、平滑动画、手势锁定，以及彼此独立的滚动／缩放余量。它直接借用现有 live grid，不复制网格，也不创建额外 entity 或锁。`TerminalView` 只适配 GPUI 事件、原有帧回调／定时器、viewport 上报和字号 action；滚动条仍经原有 handle 提交目标行。输入回到提示符时使用同一所有者取消动画并清除行内余量。绘制读取该所有者的行内偏移，鼠标及 IME 继续使用 `TerminalElement` 最近一帧的逻辑像素 cell geometry；display scale 只用于向子进程报告设备像素，不改变鼠标坐标语义。
+`src/terminal/selection_scroll.rs` 的 `SelectionScroll` 统一持有选择拖拽、越界自动滚动、平滑动画、手势锁定，以及彼此独立的滚动／缩放余量。它借用现有 live grid，由私有 `reading.rs` 保存绝对 top row、一屏解码后的活动 cells 以及首次读取的必要历史行，不克隆整个 grid，也不创建额外 entity、锁或 daemon 行获取协议。样式保存 ANSI 值、字符、marks、hyperlink 和宽字符／换行语义，不保存可回收的 side-table ID 或主题解析色；每帧沿用同一颜色解析逻辑。`TerminalView` 适配 GPUI 事件、原有帧回调／定时器、viewport 上报和字号 action；滚动条仍经原有 handle 提交目标行。回到提示符时使用同一所有者释放阅读内容、取消动画并清除行内余量。同步输出 hold 与长期阅读是独立机制：未提交的同步帧不会被捕获为阅读内容。绘制及命中仍使用 `TerminalElement` 最近一帧的逻辑像素 cell geometry；display scale 只用于向子进程报告设备像素。
 
 消费者回归集中在 `selection_scroll_consumer_tests.rs`，规则回归在 `selection_scroll_tests.rs`。原生验收仍需在 live terminal 上执行拖选／越界滚动、输出期间反向扩选、滚轮／触控板惯性尾段修饰键切换、拖动滚动条，以及窗口 resize 和界面／显示缩放；自动断言不能替代这些平台交互记录。
+
+`reading_consumer_tests.rs` 增加受控真实 PTY → 隔离 daemon → `RemoteTerminal` → 生产 `TerminalView` 的文本回归，以及标准 GPUI Button 的位置、Tab／Enter、点击、双语、窄窗格与界面缩放测试代码。本工单实施阶段按集成约定未执行构建、测试或格式化；集成人应运行以下命令并保留原始结果，不能把已添加测试写成已通过：
+
+```powershell
+cargo test --locked -p lyrel --lib terminal::view::gpui_tests::reading_ -- --nocapture --test-threads=1
+cargo test --locked -p lyrel --lib terminal::view::gpui_tests::selection_scroll_consumer_tests:: -- --nocapture --test-threads=1
+cargo test --locked -p lyrel --lib terminal::view::gpui_tests::synchronized_ -- --nocapture --test-threads=1
+cargo test --locked -p lyrel --lib ui::i18n::tests::every_key_is_translated_in_every_locale -- --exact --nocapture --test-threads=1
+cargo fmt --check
+```
+
+上述 GPUI 测试观察生产绘制输入、控件布局和测试平台输入事件，不是原生 GPU 像素、系统 IME、触控板惯性或真实 SSH 验收。#255 仍须分别记录桌面本地开发与桌面远程开发的实窗结果。
+
 
 ### 同步输出的呈现边界
 

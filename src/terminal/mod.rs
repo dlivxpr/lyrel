@@ -32,6 +32,7 @@ mod presentation;
 mod prompt_input;
 pub(crate) mod prompt_reflow;
 pub(crate) mod remote;
+mod reading;
 mod reverse_search;
 pub(crate) mod scrollbar;
 pub mod search;

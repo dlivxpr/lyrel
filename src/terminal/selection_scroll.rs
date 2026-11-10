@@ -12,12 +12,11 @@ use crate::core::config::{Config, MouseZoomModifier};
 
 type Grid = Crosswords<EventProxy>;
 
-/// Selection and viewport interaction over the live grid. The view retains its
-/// GPUI identity and performs reporting, notification, timers and action dispatch.
-/// No grid is copied. Scheduled ticks request the existing guard lazily, after
-/// their epoch checks, so retired callbacks never acquire the terminal lock.
+/// Selection and viewport interaction. Reading owns decoded semantic rows,
+/// while scheduled ticks still request the existing live guard lazily.
 #[derive(Default)]
 pub(super) struct SelectionScroll {
+    pub(super) reading: Option<super::reading::ReadingView>,
     selecting: bool,
     word: Option<GridWordSelection>,
     drag: Option<DragScroll>,
@@ -57,6 +56,25 @@ pub(super) enum WheelMotion {
 }
 
 impl SelectionScroll {
+    pub(super) fn sync_reading(&mut self, term: &mut Grid) {
+        if term.mode().contains(rio_vt::crosswords::Mode::ALT_SCREEN)
+            || self.reading.as_mut().is_some_and(|reading| !reading.reconcile(term))
+            || (term.display_offset() == 0 && self.fraction == 0.)
+        {
+            self.reading = None;
+        }
+    }
+
+    fn did_scroll(&mut self, term: &Grid) {
+        if term.display_offset() == 0 && self.fraction == 0. {
+            self.reading = None;
+        } else if let Some(reading) = &mut self.reading {
+            reading.moved(term);
+        } else if !term.mode().contains(rio_vt::crosswords::Mode::ALT_SCREEN) {
+            self.reading = Some(super::reading::ReadingView::capture(term));
+        }
+    }
+
     pub(super) fn has_presented(&self) -> bool {
         self.presented.is_some()
     }
@@ -295,8 +313,11 @@ impl SelectionScroll {
         let drag = self.drag?;
         self.cancel_animation();
         let mut term = grid();
+        if term.synchronized_output() { return Some(false); }
+        self.sync_reading(&mut term);
         let before = term.grid.display_offset();
         term.scroll_display(Scroll::Delta(drag_scroll_step(drag.overshoot)));
+        self.did_scroll(&term);
         let offset = term.grid.display_offset();
         let row = if drag.overshoot > 0. {
             0
@@ -410,6 +431,8 @@ impl SelectionScroll {
     }
 
     pub(super) fn smooth_scroll(&mut self, term: &mut Grid, delta: f32) -> bool {
+        if term.synchronized_output() { return false; }
+        self.sync_reading(term);
         let (jump, fraction) = smooth_scroll_step(
             term.grid.display_offset(),
             self.fraction,
@@ -421,16 +444,21 @@ impl SelectionScroll {
         }
         let moved = jump != 0 || fraction != self.fraction;
         self.fraction = fraction;
+        self.did_scroll(term);
         moved
     }
 
     pub(super) fn scroll_lines(&mut self, term: &mut Grid, lines: i32) {
+        if term.synchronized_output() { return; }
+        self.sync_reading(term);
         self.fraction = 0.;
         term.scroll_display(Scroll::Delta(lines));
+        self.did_scroll(term);
     }
 
     pub(super) fn jump_to_prompt(&mut self, term: &mut Grid) {
         self.cancel_animation();
+        self.reading = None;
         term.selection = None;
         term.scroll_display(Scroll::Bottom);
         self.fraction = 0.;
@@ -438,15 +466,19 @@ impl SelectionScroll {
 
     pub(super) fn scroll_to(&mut self, term: &mut Grid, target: usize) {
         self.cancel_animation();
+        if term.synchronized_output() { return; }
+        self.sync_reading(term);
         let delta = target as i32 - term.grid.display_offset() as i32;
         if delta != 0 {
             term.scroll_display(Scroll::Delta(delta));
         }
+        self.did_scroll(term);
         self.fraction = 0.;
     }
 
     pub(super) fn clear_scrollback(&mut self) {
         self.cancel_animation();
+        self.reading = None;
         self.fraction = 0.;
     }
 
