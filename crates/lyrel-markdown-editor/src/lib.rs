@@ -7166,7 +7166,7 @@ fn line_index_at(line: &WrappedLine, rtl: Option<&RtlRow>, p: Point<Pixels>, lh:
                         layout.runs[boundary.run_ix].glyphs[boundary.glyph_ix].position.x
                     });
                     let x = p.x + start_x;
-                    if x > last.position.x && x < (last.position.x + layout.width) / 2. {
+                    if x > last.position.x && x <= (last.position.x + layout.width) / 2. {
                         return last.index;
                     }
                 }

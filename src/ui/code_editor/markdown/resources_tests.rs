@@ -300,9 +300,20 @@ fn wrapped_link(cx: &mut TestAppContext, tail: bool, drag: bool) {
             })
             .unwrap()
     });
-    // A fragment's tail glyph and the first downstream glyph exercise opposite
-    // affinity sides; neither may borrow the adjacent visual row's hitbox.
-    let at = if tail { wrap - 2 } else { wrap - 1 };
+    // Non-caret range geometry uses upstream affinity, so `wrap - 1`
+    // is the shared boundary. The preceding byte can be the trailing
+    // word-wrap space rather than a visible glyph; target the last painted
+    // label character on the upper row, not the clipped inter-word gap.
+    let at = if tail {
+        source[label_start..wrap - 1]
+            .char_indices()
+            .rev()
+            .find(|(_, ch)| !ch.is_whitespace())
+            .map(|(at, _)| label_start + at)
+            .expect("the upper fragment has visible label text")
+    } else {
+        wrap - 1
+    };
     let target = view.read_with(&vcx, |view, _| {
         let bounds = view
             .range_to_bounds(&(if tail { at..at } else { wrap..wrap }))
@@ -321,7 +332,13 @@ fn wrapped_link(cx: &mut TestAppContext, tail: bool, drag: bool) {
             bounds.center().y,
         )
     });
-    vcx.update(|window, cx| window.pointer_move(target, None, cx));
+    vcx.update(|window, cx| {
+        assert!(
+            window.find("markdown-document-scroll").bounds().contains(&target),
+            "native link target is inside its visible editor: tail={tail}, at={at}, target={target:?}"
+        );
+        window.pointer_move(target, None, cx);
+    });
     settle(&mut vcx);
     vcx.update(|window, _| {
         assert_eq!(
@@ -345,10 +362,13 @@ fn wrapped_link(cx: &mut TestAppContext, tail: bool, drag: bool) {
             window.pointer_down(target, MouseButton::Left, cx);
             window.pointer_up(target, MouseButton::Left, cx);
             window.change_modifiers(gpui_kit::Modifiers::none(), cx);
+            assert_eq!(view.read(cx).cursor(), at, "modified native glyph hit");
             window.input("Q", cx);
         });
         settle(&mut vcx);
-        view.read_with(&vcx, |view, _| assert!(view.text().contains('Q')));
+        let mut expected = source.clone();
+        expected.insert_str(at, "Q");
+        view.read_with(&vcx, |view, _| assert_eq!(view.text(), expected));
         vcx.dispatch_action(gpui_kit::component::input::Undo);
         settle(&mut vcx);
         view.update_in(&mut vcx, |view, _, cx| view.select_range(0..0, cx));
@@ -374,7 +394,7 @@ fn wrapped_link(cx: &mut TestAppContext, tail: bool, drag: bool) {
         settle(&mut vcx);
         view.read_with(&vcx, |view, _| {
             assert_eq!(view.selected_range().start, anchor);
-            assert!(view.selected_range().end > anchor);
+            assert_eq!(view.selected_range().end, at + 30);
         });
         app.read_with(&vcx, |app, _| {
             assert_eq!(app.active_buffer().unwrap().path, Path::new("/links.md"))
