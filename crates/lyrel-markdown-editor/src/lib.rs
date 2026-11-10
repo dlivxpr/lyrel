@@ -6774,14 +6774,15 @@ fn caret_line_pos(line: &WrappedLine, rtl: Option<&RtlRow>, dcol: usize, lh: Pix
         (None, WrapAffinity::Downstream) => {
             if dcol > line.len() { return None; }
             let mut start = 0;
-            let mut y = px(0.);
+            // Match native hit-testing: accumulating f32 heights drifts on extreme lines.
+            let mut row = 0usize;
             for boundary in line.wrap_boundaries() {
                 let end = line.unwrapped_layout.runs[boundary.run_ix].glyphs[boundary.glyph_ix].index;
                 if dcol < end { break; }
                 start = end;
-                y += lh;
+                row += 1;
             }
-            Some(point(line.unwrapped_layout.x_for_index(dcol) - line.unwrapped_layout.x_for_index(start), y))
+            Some(point(line.unwrapped_layout.x_for_index(dcol) - line.unwrapped_layout.x_for_index(start), lh * row))
         }
         _ => line_pos(line, rtl, dcol, lh),
     }

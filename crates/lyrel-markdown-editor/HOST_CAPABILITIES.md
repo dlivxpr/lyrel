@@ -39,7 +39,7 @@
 | Mermaid cache/render/entry/refresh/error/stale-result | Lyrel Host，#242 | 源码可访问；#242 完成真实 native 图、错误/恢复与布局变化，不以 parser 成功或无限 loading 冒充可用。 |
 | status/search/outline、tabs/groups、MDX source-only、focus/layout | Lyrel 工作台，#240 | #237 已建立所有权和最小状态/跳转；#240 完成完整导航/search/outline 与多视图布局消费者。MDX 不恢复旧 rich component 系统。 |
 | 编码/BOM、显式换行转换/cleanup、save-as/conflict/failure/close | Lyrel 工作台 + `lyrel-text`，#243 | 混合行尾事务基础属 #237；#243 扩充 supported encodings、失败恢复、真实 local/SSH 和在途第二视图快照。不得再复制 codec 到 GUI crate。 |
-| extreme nowrap 行、完整源文/尾部 caret/input/Undo/save | 上游布局 + Lyrel 安全保护，#237/#244 | 实际 native 宽度超过 65,536 逻辑像素时保留有界视觉折行；不插入源换行、不截断、不更改 wrap 偏好。#235 的 not_planned 不是 SDK 修复证据。 |
+| extreme nowrap 行、完整源文/尾部 caret/input/Undo/save | 上游布局 + Lyrel 安全保护，#237/#244 | 实际 native 宽度超过 65,536 逻辑像素时保留有界视觉折行；不插入源换行、不截断、不更改 wrap 偏好。caret 几何以整数视觉行号乘一次行高，不能逐行累加 `f32` 后再让 native hit-testing 除行高反解。#235 的 not_planned 不是 SDK 修复证据。 |
 | imported bidi 映射 | 上游保留，#237/#244 | 保留 `bidi/` 与 source/display/native position mapping。完整 RTL 仍在已批准验收范围之外，不能由普通 Unicode 成功推导 RTL parity。 |
 
 ## 明确排除但保留源码
