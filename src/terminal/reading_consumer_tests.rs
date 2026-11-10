@@ -287,3 +287,308 @@ fn reading_placeholders_paint_from_captured_rows_after_live_cells_are_erased(cx:
     daemon.panes().kill(pane).unwrap();
     graphics_recovery_destroy(view, window, cx);
 }
+
+#[gpui_kit::test]
+fn reading_copy_links_theme_and_ime_use_the_painted_semantic_rows(cx: &mut TestAppContext) {
+    let (daemon, pane, view, window) = graphics_layout_harness(cx);
+    std::fs::write(daemon.dir.path().join("frozen.txt"), b"owned old file").unwrap();
+    std::fs::write(daemon.dir.path().join("new.txt"), b"owned replacement file").unwrap();
+    view.update(cx, |view, _| view.set_git_status_cwd_for_test(Some(daemon.dir.path().to_path_buf())));
+    graphics_send_fixture(&view, cx, 60, &b"HISTORY\r\n".repeat(72));
+    graphics_send_fixture(&view, cx, 61, "\x1b[5;1H\x1b[2Kfrozen 宽e\u{301}\x1b[6;1H\x1b[2K\x1b]8;;https://old.example/\x1b\\old-link\x1b]8;;\x1b\\\x1b[7;1H\x1b[2K\x1b[3gA\x1b[5G\x1bHB\r\x1b[2C\tC\x1b[9;1H\x1b[2K\x1b[31mansi\x1b[0m\x1b[12;1H\x1b[2Kfrozen.txt:9:2".as_bytes());
+    view.update(cx, |view, cx| { view.smooth_scroll(1., cx); });
+    graphics_assert_production_paint(window, &view, cx);
+    let before = reading_painted_rows(&view, cx);
+    graphics_send_fixture(&view, cx, 62, b"\x1b[5;1H\x1b[2Klive-replacement\x1b[6;1H\x1b[2K\x1b]8;;https://new.example/\x1b\\new-link\x1b]8;;\x1b\\\x1b[12;1H\x1b[2Knew.txt:3:4\x1b[3g\x1b[24;1H\r\nADVANCE\r\n");
+    graphics_assert_production_paint(window, &view, cx);
+    let geom = view.read_with(cx, |view, _| view.cell_geom.unwrap());
+    let start = point(geom.origin.x + geom.cell_width * 0.1, geom.origin.y + geom.line_height * 5.5);
+    let end = point(geom.origin.x + geom.cell_width * 9.9, start.y);
+    mouse_reporting_button(cx, window, start, true, Modifiers::default());
+    mouse_reporting_move(cx, window, end, Some(MouseButton::Left), Modifiers::default());
+    mouse_reporting_button(cx, window, end, false, Modifiers::default());
+    window.update(cx, |_, window, cx| window.dispatch_action(Box::new(CopyText), cx)).unwrap();
+    assert_eq!(cx.update(|cx| cx.read_from_clipboard().and_then(|item| item.text())).as_deref(), Some("frozen 宽e\u{301}"));
+    graphics_assert_production_paint(window, &view, cx);
+    assert_eq!(view.read_with(cx, |view, _| view.selection_text()).as_deref(), Some("frozen 宽e\u{301}"), "a production redraw must not discard reading selection");
+    window.update(cx, |_, window, cx| {
+        view.update(cx, |view, cx| {
+            view.open_search(window, cx);
+            assert_eq!(view.search.as_ref().unwrap().input.read(cx).value(), "frozen 宽e\u{301}");
+            assert_eq!(view.selection_text().as_deref(), Some("frozen 宽e\u{301}"));
+            view.close_search(window, cx);
+        });
+    }).unwrap();
+    window.update(cx, |_, window, cx| {
+        view.update(cx, |view, cx| assert!(view.open_link_at(2, 6, window, cx)));
+    }).unwrap();
+    assert_eq!(cx.opened_url().as_deref(), Some("https://old.example/"));
+    view.update(cx, |view, cx| {
+        assert!(matches!(view.resolve_link_at(2, 12, true, false, cx), crate::terminal::link::LinkAt::Found(crate::terminal::search::LinkTarget::File { path, line: Some(9), column: Some(2), .. }, _) if path == daemon.dir.path().join("frozen.txt")));
+    });
+    let foreground = view.read_with(cx, |view, _| view.grid_buf[5 * view.cell_geom.unwrap().cols].fg);
+    cx.update(|cx| gpui_kit::component::Theme::update(cx, |theme| theme.foreground = gpui_kit::white()));
+    cx.update(|cx| {
+        let mut ansi16: [rio_vt::config::colors::ColorRgb; 16] = view.read(cx).terminal.palette[..16].try_into().unwrap();
+        ansi16[1] = rio_vt::config::colors::ColorRgb { r: 0, g: 255, b: 0 };
+        cx.set_global(crate::terminal::palette::ActivePalette { ansi16, sel_bg: rio_vt::config::colors::ColorRgb { r: 0, g: 0, b: 0 } });
+    });
+    graphics_assert_production_paint(window, &view, cx);
+    assert_eq!(reading_painted_rows(&view, cx), before);
+    view.read_with(cx, |view, _| {
+        assert_ne!(view.grid_buf[5 * view.cell_geom.unwrap().cols].fg, foreground, "semantic default foreground re-resolves against the changed theme");
+        assert!(view.grid_snap.as_ref().unwrap().cursor.is_none());
+        assert_eq!(crate::terminal::palette::hsla_to_rgb(view.grid_buf[9 * view.cell_geom.unwrap().cols].fg), rio_vt::config::colors::ColorRgb { r: 0, g: 255, b: 0 });
+    });
+    view.update(cx, |view, cx| {
+        view.on_select_start(0, 7, true, 1, false, cx);
+        view.on_select_update(4, 7, false, cx);
+        view.copy_selection(cx);
+    });
+    assert_eq!(cx.update(|cx| cx.read_from_clipboard().and_then(|item| item.text())).as_deref(), Some("A \tC"), "copy uses captured custom stops after live TBC");
+    daemon.panes().kill(pane).unwrap();
+    graphics_recovery_destroy(view, window, cx);
+}
+
+#[gpui_kit::test]
+fn reading_search_changes_query_without_annotating_live_replacements(cx: &mut TestAppContext) {
+    let (daemon, pane, view, window) = graphics_layout_harness(cx);
+    view.update(cx, |view, cx| {
+        let mut config = cx.global::<Config>().clone();
+        config.scrollback_limit = 64;
+        view.terminal.apply_user_config(&config);
+    });
+    graphics_send_fixture(&view, cx, 70, &b"HISTORY\r\n".repeat(200));
+    graphics_send_fixture(&view, cx, 71, b"\x1b[8;1H\x1b[2Kold-needle old-other\x1b[10;1H\x1b[2Kold-needle");
+    view.update(cx, |view, cx| { view.smooth_scroll(1., cx); });
+    graphics_assert_production_paint(window, &view, cx);
+    graphics_send_fixture(&view, cx, 72, b"\x1b[8;1H\x1b[2Knew-needle\x1b[10;1H\x1b[2Knew-needle\x1b[24;1H\r\nADVANCE\r\n");
+    for (query, expected) in [("old-needle", 2), ("new-needle", 0), ("old-other", 1)] {
+        window.update(cx, |_, window, cx| {
+            view.update(cx, |view, cx| {
+                view.open_search(window, cx);
+                let input = view.search.as_ref().unwrap().input.clone();
+                input.update(cx, |input, cx| input.set_value(query, window, cx));
+                view.recompute_matches(cx);
+            });
+        }).unwrap();
+        graphics_assert_production_paint(window, &view, cx);
+        view.read_with(cx, |view, _| {
+            assert_eq!(view.search.as_ref().unwrap().matches.len(), expected, "query {query} describes semantic reading rows, not replacements");
+            let highlighted: String = view.grid_buf.iter().filter(|cell| cell.match_hit || cell.match_current).map(|cell| cell.c).collect();
+            assert_eq!(highlighted, query.repeat(expected), "production decorations name the displayed characters");
+        });
+        if expected > 1 {
+            view.update(cx, |view, cx| view.step_match(rio_vt::crosswords::pos::Direction::Right, cx));
+            graphics_assert_production_paint(window, &view, cx);
+            assert_eq!(view.read_with(cx, |view, _| view.search.as_ref().unwrap().current_index), Some(0));
+            graphics_send_fixture(&view, cx, 73, &b"\x1b[24;1H\r\nSATURATED-LIVE".repeat(8));
+            graphics_assert_production_paint(window, &view, cx);
+            view.read_with(cx, |view, _| {
+                let highlighted: String = view.grid_buf.iter().filter(|cell| cell.match_hit || cell.match_current).map(|cell| cell.c).collect();
+                assert_eq!(highlighted, "old-needleold-needle", "eviction count participates in frozen match coordinates");
+            });
+        }
+    }
+    view.update(cx, |view, _| view.jump_to_prompt());
+    window.update(cx, |_, window, cx| view.update(cx, |view, cx| view.close_search(window, cx))).unwrap();
+    graphics_assert_production_paint(window, &view, cx);
+    daemon.panes().kill(pane).unwrap();
+    graphics_recovery_destroy(view, window, cx);
+}
+
+#[gpui_kit::test]
+fn reading_mixed_images_keep_identity_crop_z_and_release_unneeded_history(cx: &mut TestAppContext) {
+    use std::sync::Arc;
+    use std::sync::atomic::Ordering;
+    let (daemon, pane, view, window) = graphics_layout_harness(cx);
+    graphics_send_fixture(&view, cx, 80, b"\x1b[2;3H\x1b_Ga=T,i=9,p=1,c=2,r=1,C=1,f=32,s=1,v=1,q=2;AP8A/w==\x1b\\");
+    graphics_layout_wait_image(&view, cx, 9);
+    let history = view.read_with(cx, |view, _| {
+        Arc::downgrade(view.terminal.images().snapshot().iter().find(|image| image.placement.image_id == 9).unwrap().data.as_ref().unwrap())
+    });
+    graphics_send_fixture(&view, cx, 81, &b"HISTORY\r\n".repeat(96));
+    graphics_send_fixture(&view, cx, 82, "\x1b[8;5Hdirect\x1b[8;5H\x1b_Ga=T,i=7,p=2,c=3,r=2,C=1,z=-3,f=32,s=2,v=1,x=1,y=0,w=1,h=1,q=2;AAD//wAA//8=\x1b\\\x1b[11;5H\x1b_Ga=T,i=8,p=3,U=1,c=2,r=1,z=4,f=32,s=1,v=1,q=2;AAD//w==\x1b\\\x1b[38;5;8;58;5;3m\u{10eeee}\u{305}\u{305}\u{10eeee}\x1b[0m".as_bytes());
+    graphics_layout_wait_image(&view, cx, 7);
+    graphics_layout_wait_image(&view, cx, 8);
+    view.update(cx, |view, cx| { view.smooth_scroll(1., cx); });
+    graphics_assert_production_paint(window, &view, cx);
+    let geometry = |view: &TerminalView| {
+        let geom = view.cell_geom.unwrap();
+        let snap = view.grid_snap.as_ref().unwrap();
+        snap.images.iter().map(|image| {
+            assert!(image.painted.load(Ordering::Acquire), "production paint must consume every visible slice");
+            (image.placement.image_id, image.placement.resource, image.placement.key, image.placement.z,
+                image.placement.x, image.placement.y, image.placement.w, image.placement.h,
+                image.placement.clip_top, image.placement.clip_bottom,
+                image.paint_bounds(geom.origin, geom.cell_width, geom.line_height, 0, snap.display_offset, 1.))
+        }).collect::<Vec<_>>()
+    };
+    let before = view.read_with(cx, |view, _| geometry(view));
+    assert_eq!(before.iter().map(|image| image.0).collect::<Vec<_>>(), vec![7, 7, 8]);
+    assert_eq!(before[0].3, -3);
+    assert_eq!((before[0].4, before[0].5, before[0].6, before[0].7), (1, 0, 1, 1));
+    assert_eq!(before[2].3, 4);
+    let frozen: Vec<_> = view.read_with(cx, |view, _| view.grid_snap.as_ref().unwrap().images.iter().map(|image| {
+        assert_eq!(reading_rgba_pixel(image), [0, 0, 255, 255]);
+        Arc::downgrade(image.data.as_ref().unwrap())
+    }).collect());
+    let text = reading_painted_rows(&view, cx);
+    graphics_send_fixture(&view, cx, 83, b"\x1b_Ga=d,d=A\x1b\\\x1b[8;1H\x1b[2KREPLACED\x1b[11;1H\x1b[2KERASED\x1b[24;1H\r\nADVANCE\r\n\x1b[4;9H\x1b_Ga=T,i=7,p=2,c=2,r=1,C=1,z=9,f=32,s=1,v=1,q=2;/wAA/w==\x1b\\");
+    graphics_layout_wait_image(&view, cx, 7);
+    graphics_assert_production_paint(window, &view, cx);
+    assert_eq!(reading_painted_rows(&view, cx), text);
+    assert_eq!(view.read_with(cx, |view, _| geometry(view)), before);
+    window.update(cx, |_, window, cx| view.read(cx).terminal.images().release_retired(window, cx)).unwrap();
+    assert!(history.upgrade().is_none(), "reading cannot pin unrelated historical placements");
+    assert!(frozen.iter().all(|image| image.upgrade().is_some()));
+    view.update(cx, |view, _| view.jump_to_prompt());
+    graphics_assert_production_paint(window, &view, cx);
+    view.read_with(cx, |view, _| {
+        let images = &view.grid_snap.as_ref().unwrap().images;
+        assert_eq!(images.len(), 1);
+        assert_eq!(images[0].placement.z, 9);
+        assert_eq!(reading_rgba_pixel(&images[0]), [255, 0, 0, 255]);
+    });
+    window.update(cx, |_, window, cx| view.read(cx).terminal.images().release_retired(window, cx)).unwrap();
+    assert!(frozen.iter().all(|image| image.upgrade().is_none()), "return live retires every frozen resource version");
+    daemon.panes().kill(pane).unwrap();
+    graphics_recovery_destroy(view, window, cx);
+}
+
+#[gpui_kit::test]
+fn reading_selection_keeps_absolute_rows_across_viewport_scroll(cx: &mut TestAppContext) {
+    let (daemon, pane, view, window) = graphics_layout_harness(cx);
+    let mut scene = b"\x1b[2J\x1b[H".to_vec();
+    for row in 0..72 { scene.extend_from_slice(format!("READ-{row:03}\r\n").as_bytes()); }
+    graphics_send_fixture(&view, cx, 90, &scene);
+    view.update(cx, |view, cx| { view.smooth_scroll(1., cx); });
+    graphics_assert_production_paint(window, &view, cx);
+    view.update(cx, |view, cx| {
+        view.on_select_start(7, 0, false, 1, false, cx);
+        view.smooth_scroll(24., cx);
+    });
+    graphics_assert_production_paint(window, &view, cx);
+    view.update(cx, |view, cx| view.on_select_update(0, 0, true, cx));
+    graphics_assert_production_paint(window, &view, cx);
+    view.update(cx, |view, cx| view.copy_selection(cx));
+    let expected = (24..=48).map(|row| format!("READ-{row:03}")).collect::<Vec<_>>().join("\n");
+    assert_eq!(cx.update(|cx| cx.read_from_clipboard().and_then(|item| item.text())), Some(expected));
+    graphics_send_fixture(&view, cx, 91, b"\x1b[H\x1b[2KREPLACED\x1b[24;1H\r\nADVANCE\r\n");
+    graphics_assert_production_paint(window, &view, cx);
+    assert!(view.read_with(cx, |view, _| view.grid_buf.iter().any(|cell| cell.selected)), "selection survives unrelated output paint");
+    daemon.panes().kill(pane).unwrap();
+    graphics_recovery_destroy(view, window, cx);
+}
+
+#[gpui_kit::test]
+fn reading_retained_allocations_follow_needed_rows_not_visited_history(cx: &mut TestAppContext) {
+    let (daemon, pane, view, window) = graphics_layout_harness(cx);
+    graphics_send_fixture(&view, cx, 100, &b"BOUNDED-HISTORY\r\n".repeat(600));
+    for _ in 0..20 {
+        view.update(cx, |view, cx| { view.smooth_scroll(24., cx); });
+        graphics_assert_production_paint(window, &view, cx);
+        let observation = view.read_with(cx, |view, _| presentation_allocation_observation(view));
+        assert!(observation["reading"]["rows"].as_u64().unwrap() <= 49, "one mutable screen plus viewport/sliver: {observation}");
+        assert!(observation["reading"]["cells"].as_u64().unwrap() <= 49 * 80, "visiting history cannot accumulate semantic rows: {observation}");
+    }
+    view.update(cx, |view, _| view.jump_to_prompt());
+    graphics_assert_production_paint(window, &view, cx);
+    assert!(view.read_with(cx, |view, _| presentation_allocation_observation(view))["reading"].is_null());
+    daemon.panes().kill(pane).unwrap();
+    graphics_recovery_destroy(view, window, cx);
+}
+
+#[gpui_kit::test]
+fn reading_and_synchronized_output_keep_separate_presentation_lifetimes(cx: &mut TestAppContext) {
+    let (daemon, pane, view, window) = graphics_layout_harness(cx);
+    graphics_send_fixture(&view, cx, 110, &b"READING-BASE\r\n".repeat(72));
+    view.update(cx, |view, cx| { view.smooth_scroll(1., cx); });
+    graphics_assert_production_paint(window, &view, cx);
+    let frozen = reading_painted_rows(&view, cx);
+    graphics_send_fixture(&view, cx, 111, b"\x1b[?2026h\x1b[8;1H\x1b[2KHIDDEN-SYNC-CONTENT");
+    view.read_with(cx, |view, _| {
+        let mut term = view.terminal.term.lock();
+        assert!(term.synchronized_output(), "fixture must observe the in-progress atomic hold");
+        term.sync_update_started = Some(rio_vt::time::Instant::now() + std::time::Duration::from_secs(5));
+    });
+    view.update(cx, |view, cx| { view.smooth_scroll(1., cx); });
+    graphics_assert_production_paint(window, &view, cx);
+    assert_eq!(reading_painted_rows(&view, cx), frozen);
+    assert!(view.read_with(cx, |view, _| view.grid_snap.as_ref().unwrap().held));
+    graphics_send_fixture(&view, cx, 112, b"\x1b[?2026l");
+    graphics_assert_production_paint(window, &view, cx);
+    assert_eq!(reading_painted_rows(&view, cx), frozen, "ESU releases atomic acquisition, not the reading session");
+    assert!(!view.read_with(cx, |view, _| view.grid_snap.as_ref().unwrap().held));
+    view.update(cx, |view, _| view.jump_to_prompt());
+    graphics_assert_production_paint(window, &view, cx);
+    assert!(reading_painted_rows(&view, cx).iter().any(|row| row.contains("HIDDEN-SYNC-CONTENT")));
+    daemon.panes().kill(pane).unwrap();
+    graphics_recovery_destroy(view, window, cx);
+}
+
+#[gpui_kit::test]
+fn reading_adopts_a_live_drag_before_autoscrolling_into_frozen_rows(cx: &mut TestAppContext) {
+    let (daemon, pane, view, window) = graphics_layout_harness(cx);
+    let mut scene = b"\x1b[2J\x1b[H".to_vec();
+    for row in 0..72 { scene.extend_from_slice(format!("READ-{row:03}\r\n").as_bytes()); }
+    graphics_send_fixture(&view, cx, 120, &scene);
+    graphics_assert_production_paint(window, &view, cx);
+    view.update(cx, |view, cx| {
+        view.on_select_start(7, 0, false, 1, false, cx);
+        view.select_autoscroll(1., 0, true, cx);
+        view.on_select_end(cx);
+    });
+    graphics_assert_production_paint(window, &view, cx);
+    view.update(cx, |view, cx| view.copy_selection(cx));
+    assert_eq!(cx.update(|cx| cx.read_from_clipboard().and_then(|item| item.text())).as_deref(), Some("READ-048\nREAD-049"));
+    assert!(view.read_with(cx, |view, _| view.grid_snap.as_ref().unwrap().any_selected));
+    daemon.panes().kill(pane).unwrap();
+    graphics_recovery_destroy(view, window, cx);
+}
+
+#[gpui_kit::test]
+fn reading_wrapped_link_uses_retained_prefix_and_hover_survives_live_output(cx: &mut TestAppContext) {
+    let (daemon, pane, view, window) = graphics_layout_harness(cx);
+    graphics_send_fixture(&view, cx, 130, &b"HISTORY\r\n".repeat(72));
+    let url = format!("https://old.example/{}", "a".repeat(150));
+    graphics_send_fixture(&view, cx, 131, format!("\x1b[2;1H{url}").as_bytes());
+    view.update(cx, |view, cx| { view.smooth_scroll(1., cx); });
+    graphics_assert_production_paint(window, &view, cx);
+    graphics_send_fixture(&view, cx, 132, &b"\x1b[24;1H\r\nADVANCE".repeat(20));
+    view.update(cx, |view, cx| { view.smooth_scroll(-4., cx); });
+    graphics_assert_production_paint(window, &view, cx);
+    view.update(cx, |view, cx| assert!(view.hover_link_at(1, 0, true, cx)));
+    graphics_send_fixture(&view, cx, 133, b"\x1b[24;1H\r\nMORE-OUTPUT");
+    graphics_assert_production_paint(window, &view, cx);
+    assert!(view.read_with(cx, |view, _| view.links.hovered().is_some()), "compensating Rio offset cannot cancel a frozen hover or its pending Host probes");
+    window.update(cx, |_, window, cx| {
+        view.update(cx, |view, cx| assert!(view.open_link_at(1, 0, window, cx)));
+    }).unwrap();
+    assert_eq!(cx.opened_url().as_deref(), Some(url.as_str()), "a viewport-edge continuation keeps its offscreen frozen prefix");
+    daemon.panes().kill(pane).unwrap();
+    graphics_recovery_destroy(view, window, cx);
+}
+
+#[gpui_kit::test]
+fn reading_fractional_sliver_keeps_selection_geometry_and_copy(cx: &mut TestAppContext) {
+    let (daemon, pane, view, window) = graphics_layout_harness(cx);
+    graphics_send_fixture(&view, cx, 140, &b"HISTORY\r\n".repeat(72));
+    graphics_send_fixture(&view, cx, 141, b"\x1b[5;1H\x1b[2Kselected-sliver");
+    view.update(cx, |view, cx| { view.smooth_scroll(1., cx); });
+    graphics_assert_production_paint(window, &view, cx);
+    view.update(cx, |view, cx| {
+        view.on_select_start(0, 5, true, 1, false, cx);
+        view.on_select_update(14, 5, false, cx);
+        view.on_select_end(cx);
+    });
+    graphics_send_fixture(&view, cx, 142, &b"\x1b[24;1H\r\nADVANCE".repeat(20));
+    view.update(cx, |view, cx| { view.smooth_scroll(-5.5, cx); });
+    graphics_assert_production_paint(window, &view, cx);
+    let selected = view.read_with(cx, |view, _| view.grid_snap.as_ref().unwrap().sliver.as_ref().unwrap().iter().filter(|cell| cell.selected).map(|cell| cell.c).collect::<String>());
+    assert_eq!(selected.trim_end(), "selected-sliver", "painted fractional row uses the same absolute selected range");
+    view.update(cx, |view, cx| view.copy_selection(cx));
+    assert_eq!(cx.update(|cx| cx.read_from_clipboard().and_then(|item| item.text())).as_deref(), Some("selected-sliver"));
+    daemon.panes().kill(pane).unwrap();
+    graphics_recovery_destroy(view, window, cx);
+}

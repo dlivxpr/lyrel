@@ -27,18 +27,18 @@ description: "指针、滚轮和 ^G 各有何行为——以及如何分别调�
 
 按钮使用标准 `Button` 的语义主题、键盘焦点和缩放尺寸；它不增加终端行数，底部位置避开已测量的 composer、补全及反向搜索浮层。窄窗格中标签可以省略，完整文案保留在辅助功能名称与 tooltip 中。
 
-这里的文字实现属于 #251。图片及选择／复制／链接／搜索的同源交互由 #252 接入；resize 逻辑行重定位由 #253 接入；清屏／reset／重连世代及隐藏窗格生命周期由 #254 完成。不要把基础文字阅读消费者当作这些后续行为或 #255 原生桌面验收的通过证据。
+文字、直接 Kitty placements 和 Unicode placeholders 共用 #251 的 `ReadingView`。#252 将选择／复制、链接、搜索与光标／IME 接到同一语义来源：后台原地重画或替换同一图片 ID 不改变当前阅读内容；主题变化重新解析 ANSI 样式，不丢弃文字。阅读态不显示实时终端 caret，也不给旧文字配置实时 IME 坐标；输入回到实时输出后恢复。resize 逻辑行重定位由 #253 接入；清屏／reset／重连世代及隐藏窗格生命周期由 #254 完成，不能把本票的消费者代码视为这些后续行为或 #255 原生桌面验收已通过。
 
 
 ### 实现职责
 
 `src/terminal/selection_scroll.rs` 的 `SelectionScroll` 统一持有选择拖拽、越界自动滚动、平滑动画、手势锁定，以及彼此独立的滚动／缩放余量。它借用现有 live grid，由私有 `reading.rs` 保存绝对 top row、一屏解码后的活动 cells 以及首次读取的必要历史行，不克隆整个 grid，也不创建额外 entity、锁或 daemon 行获取协议。样式保存 ANSI 值、字符、marks、hyperlink 和宽字符／换行语义，不保存可回收的 side-table ID 或主题解析色；每帧沿用同一颜色解析逻辑。`TerminalView` 适配 GPUI 事件、原有帧回调／定时器、viewport 上报和字号 action；滚动条仍经原有 handle 提交目标行。回到提示符时使用同一所有者释放阅读内容、取消动画并清除行内余量。同步输出 hold 与长期阅读是独立机制：未提交的同步帧不会被捕获为阅读内容。绘制及命中仍使用 `TerminalElement` 最近一帧的逻辑像素 cell geometry；display scale 只用于向子进程报告设备像素。
 
-滚动条在实时边缘仅冻结供显隐判断的呈现几何，仍记录最新历史范围；拖动目标不能使用旧的或空的历史容量来裁剪。目标经同一 `SelectionScroll` 路径进入阅读并捕获行，粘贴仍通过原有路径释放阅读态。每个保留行还保存共享 Kitty 解码器取得的 placeholder runs；完整行及分数滚动的上一行图片切片都与冻结文字使用同一行来源，不从后台已改写的 live cells 重新推导。这项接线修复不替代 #252 的完整图片 lease 与同源交互验收。
+滚动条在实时边缘仅冻结供显隐判断的呈现几何，仍记录最新历史范围；目标经同一 `SelectionScroll` 路径进入阅读。每个保留行保存共享 Kitty 解码器取得的直接放置裁切和 placeholder runs，两者均沿绝对行锚点重投影，包括分数滚动的上一行。只保留最初的活动屏幕、当前视口／上一行切片、有界的换行链接上下文，以及选区跨越的必要行；已访问但不再需要的历史行及图片 lease 会释放，历史淘汰不会被缓存恢复。新增行批量捕获图片切片，不逐行扫描整个 store；图片沿用现有资源、预算和 GPU 退休路径，不钉住整个 store，也不从后台新版本解析冻结 placeholder。回到实时输出后才显示最新资源，下次阅读重新捕获。
 
 消费者回归集中在 `selection_scroll_consumer_tests.rs`，规则回归在 `selection_scroll_tests.rs`。原生验收仍需在 live terminal 上执行拖选／越界滚动、输出期间反向扩选、滚轮／触控板惯性尾段修饰键切换、拖动滚动条，以及窗口 resize 和界面／显示缩放；自动断言不能替代这些平台交互记录。
 
-`reading_consumer_tests.rs` 增加受控真实 PTY → 隔离 daemon → `RemoteTerminal` → 生产 `TerminalView` 的文本回归，以及标准 GPUI Button 的位置、Tab／Enter、点击、双语、窄窗格与界面缩放测试代码。本工单实施阶段按集成约定未执行构建、测试或格式化；集成人应运行以下命令并保留原始结果，不能把已添加测试写成已通过：
+`reading_consumer_tests.rs` 使用受控真实 PTY → 隔离 daemon → `RemoteTerminal` → 生产 `TerminalView`，新增混合直接放置／placeholder 的资源身份、像素、crop、z、文本对齐与退休断言，GPUI 指针拖选／复制 Action／链接激活、跨视口复制、搜索 query／next、主题与无实时 caret、保留行分配上界，以及 synchronized hold 独立生命周期回归。图片绘制辅助观察已改读实际 committed display list，不再用新 live placements 代表冻结画面。本票按集成约定未执行构建、测试、lint 或格式化；集成人应运行以下命令并保留原始结果，不能把已添加断言写成已通过：
 
 集成首轮 `reading_` 记录为 `3 passed / 1 failed`：滚动条在实时边缘冻结的旧历史范围阻止了阅读态建立。修复后增加离开实时画面的断言、历史增长后的滚动条目标回归，以及活动 placeholder cells 被擦除后完整行与上一行半行切片的生产图片绘制回归；本修复子任务按约定未执行测试、构建或格式化，不能把新增断言计为通过。
 
@@ -46,11 +46,14 @@ description: "指针、滚轮和 ^G 各有何行为——以及如何分别调�
 cargo test --locked -p lyrel --lib terminal::view::gpui_tests::reading_ -- --nocapture --test-threads=1
 cargo test --locked -p lyrel --lib terminal::view::gpui_tests::selection_scroll_consumer_tests:: -- --nocapture --test-threads=1
 cargo test --locked -p lyrel --lib terminal::view::gpui_tests::synchronized_ -- --nocapture --test-threads=1
+cargo test --locked -p lyrel --lib terminal::view::links::consumer_tests:: -- --nocapture --test-threads=1
 cargo test --locked -p lyrel --lib ui::i18n::tests::every_key_is_translated_in_every_locale -- --exact --nocapture --test-threads=1
+cargo build --locked -p lyrel
+cargo clippy --locked -p lyrel --lib --tests
 cargo fmt --check
 ```
 
-上述 GPUI 测试观察生产绘制输入、控件布局和测试平台输入事件，不是原生 GPU 像素、系统 IME、触控板惯性或真实 SSH 验收。#255 仍须分别记录桌面本地开发与桌面远程开发的实窗结果。
+上述 GPUI 测试观察生产绘制输入、真实子进程输出、控件布局和测试平台输入事件，不是原生 GPU 像素、系统 IME、触控板惯性或真实 SSH 验收。#255 仍须分别在桌面本地开发与桌面远程开发的普通生产窗口，记录混合图片对齐、实际剪贴板／URL／文件链接、搜索、Light／Dark／自定义主题、真实中文 IME 及返回实时输出；同时记录 OS／DPI、字体、候选提交／二进制与 SSH／shell integration 前提，不用注入 Unicode 代替系统输入法。
 
 
 ### 同步输出的呈现边界

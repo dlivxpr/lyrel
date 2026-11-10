@@ -188,6 +188,7 @@ struct FrameFacts {
     alt_screen: bool,
     mouse_mode: bool,
     has_selection: bool,
+    reading_identity: Option<(u64, i64, usize, i64, i64)>,
     cursor: Option<(usize, usize)>,
     rows: usize,
     cols: usize,
@@ -1173,11 +1174,17 @@ impl TerminalView {
     }
 
     fn holds_presented_grid(&self) -> bool {
+        if self.selection_scroll.reading.is_some() {
+            return true;
+        }
         self.terminal.term.lock().synchronized_output()
             || self.grid_snap.as_ref().is_some_and(|snap| snap.held)
     }
 
     fn presented_grid(&self) -> Option<super::presentation::PresentedGrid<'_>> {
+        if let Some(reading) = self.selection_scroll.reading.as_ref() {
+            return Some(super::presentation::PresentedGrid::reading(reading));
+        }
         let geom = self.cell_geom?;
         let offset = self
             .grid_snap
@@ -1191,6 +1198,9 @@ impl TerminalView {
     }
 
     fn visible_selection_text(&self) -> Option<String> {
+        if self.selection_scroll.reading.is_some() {
+            return self.selection_scroll.reading_selection_text();
+        }
         let term = self.terminal.term.lock();
         if term.synchronized_output()
             || self.grid_snap.as_ref().is_some_and(|snap| snap.held)
@@ -1361,8 +1371,8 @@ impl TerminalView {
     }
 
     pub fn select_all(&mut self, cx: &mut Context<Self>) {
-        let mut term = self.terminal.term.lock();
-        if term.synchronized_output() || self.grid_snap.as_ref().is_some_and(|snap| snap.held) {
+        let term = self.selection_scroll.reading.is_none().then(|| self.terminal.term.lock());
+        if self.selection_scroll.reading.is_some() || term.as_ref().is_some_and(|term| term.synchronized_output()) || self.grid_snap.as_ref().is_some_and(|snap| snap.held) {
             drop(term);
             let selected = self
                 .selection_scroll
@@ -1374,6 +1384,7 @@ impl TerminalView {
             cx.notify();
             return;
         }
+        let mut term = term.unwrap();
         self.selection_scroll.select_all(&mut term);
         drop(term);
         cx.notify();
@@ -1529,7 +1540,7 @@ impl TerminalView {
                 self.selection_scroll.scroll_lines(
                     &mut self.terminal.term.lock(),
                     lines,
-                    &self.terminal.images(),
+                    &self.terminal,
                 );
                 self.terminal.viewport_reporter().report();
                 cx.notify();
@@ -1744,8 +1755,8 @@ impl TerminalView {
         shift: bool,
         cx: &mut Context<Self>,
     ) {
-        let mut term = self.terminal.term.lock();
-        if term.synchronized_output() || self.grid_snap.as_ref().is_some_and(|snap| snap.held) {
+        let term = self.selection_scroll.reading.is_none().then(|| self.terminal.term.lock());
+        if self.selection_scroll.reading.is_some() || term.as_ref().is_some_and(|term| term.synchronized_output()) || self.grid_snap.as_ref().is_some_and(|snap| snap.held) {
             drop(term);
             if let Some(geom) = self.cell_geom {
                 let selected = self.selection_scroll.start_presented(
@@ -1768,6 +1779,7 @@ impl TerminalView {
             }
             return;
         }
+        let mut term = term.unwrap();
         self.selection_scroll.start(
             &mut term,
             col,
@@ -1787,7 +1799,7 @@ impl TerminalView {
         }
         if !self.selection_scroll.has_presented() {
             let mut term = self.terminal.term.lock();
-            if (term.synchronized_output() || self.grid_snap.as_ref().is_some_and(|snap| snap.held))
+            if (self.selection_scroll.reading.is_some() || term.synchronized_output() || self.grid_snap.as_ref().is_some_and(|snap| snap.held))
                 && let Some(geom) = self.cell_geom
             {
                 self.selection_scroll.adopt_presented(
@@ -1830,7 +1842,7 @@ impl TerminalView {
         left: bool,
         cx: &mut Context<Self>,
     ) {
-        if self.selection_scroll.has_presented() {
+        if self.selection_scroll.has_presented() && self.selection_scroll.reading.is_none() {
             return;
         }
         let Some(epoch) = self.selection_scroll.autoscroll(overshoot, col, left) else {
@@ -1857,8 +1869,8 @@ impl TerminalView {
         let moved = self.selection_scroll.drag_tick(
             epoch,
             || self.terminal.term.lock(),
-            &cx.global::<Config>().word_separators,
-            &self.terminal.images(),
+            cx.global::<Config>(),
+            &self.terminal,
         );
         let Some(moved) = moved else {
             return false;
@@ -1939,7 +1951,7 @@ impl TerminalView {
         let mut term = self.terminal.term.lock();
         let moved = self
             .selection_scroll
-            .smooth_scroll(&mut term, delta, &self.terminal.images());
+            .smooth_scroll(&mut term, delta, &self.terminal);
         drop(term);
         self.terminal.viewport_reporter().report();
         if moved {
@@ -1952,7 +1964,7 @@ impl TerminalView {
         let frame = self.selection_scroll.animation_frame(
             epoch,
             || self.terminal.term.lock(),
-            &self.terminal.images(),
+            &self.terminal,
         );
         let Some((moved, running)) = frame else {
             return false;
@@ -1981,16 +1993,21 @@ impl TerminalView {
         }
         if let Some(target) = self.scroll_handle.take_pending() {
             self.selection_scroll
-                .scroll_to(&mut term, target, &self.terminal.images());
+                .scroll_to(&mut term, target, &self.terminal);
         }
-        self.selection_scroll.sync_reading(&mut term);
+        self.selection_scroll.sync_reading(&mut term, &self.terminal);
+        let reading_identity = self.selection_scroll.reading.as_ref().map(|reading| reading.identity());
+        if self.frame.reading_identity != reading_identity || (reading_identity.is_none() && self.frame.display_offset != term.display_offset()) {
+            self.links.invalidate_geometry();
+        }
         let cursor = term.cursor().pos;
         let row = cursor.row.0 + term.display_offset() as i32;
         self.frame = FrameFacts {
             alt_screen: term.mode().contains(Mode::ALT_SCREEN),
             mouse_mode: term.mode().intersects(Mode::MOUSE_MODE),
-            has_selection: term.selection.is_some(),
-            cursor: (row >= 0).then_some((row as usize, cursor.col.0)),
+            reading_identity,
+            has_selection: self.selection_scroll.has_presented() || term.selection.is_some(),
+            cursor: (self.selection_scroll.reading.is_none() && row >= 0).then_some((row as usize, cursor.col.0)),
             rows: term.screen_lines(),
             cols: term.columns(),
             display_offset: term.grid.display_offset(),
@@ -5213,7 +5230,7 @@ mod gpui_tests {
             view.selection_scroll.scroll_to(
                 &mut view.terminal.term.lock(),
                 1,
-                &view.terminal.images(),
+                &view.terminal,
             );
         });
         vcx.update(|window, cx| {
