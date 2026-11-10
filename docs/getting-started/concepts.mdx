@@ -500,7 +500,7 @@ omp 快速启动自动提供进程级 Kitty 兼容身份，不再要求先强制
 PI_FORCE_IMAGE_PROTOCOL=kitty PI_KITTY_PLACEHOLDERS=1 omp
 ```
 
-快速启动只在 omp 命令作用域设置 `TERM_PROGRAM=kitty`，清空 Kitty 版本，以 `LC_TERMINAL=lyrel`、真实版本的 `LC_TERMINAL_VERSION` 和既有 `LYREL` 保留宿主身份，同时设置 `PI_NO_DECCARA=1`。普通 shell 继续如实报告 lyrel；显式命令级 `TERM_PROGRAM` 绕过 Kitty 身份／版本默认值。公开前缀沿用 agent launch／Host session operation 的目标 shell 编码；PowerShell 在子进程退出后恢复环境，cmd 使用独立子 shell，POSIX 使用命令前缀。连接中的快捷启动保留同一前缀。此切片不代表恢复／分叉、Nushell 或所有手动 shell 入口的覆盖已通过；全路径覆盖由 #250 负责。启动拒绝仍通过持久错误通知说明原因，不注入全局配置或替换原生 TUI。
+快速启动只在 omp 命令作用域设置 `TERM_PROGRAM=kitty`，清空 Kitty 版本，以 `LC_TERMINAL=lyrel`、真实版本的 `LC_TERMINAL_VERSION` 和既有 `LYREL` 保留宿主身份，同时设置 `PI_NO_DECCARA=1`。普通 shell 继续如实报告 lyrel；显式命令级 `TERM_PROGRAM` 绕过 Kitty 身份默认值，版本仍默认清空，防止 `TERM_PROGRAM=kitty omp` 误继承 lyrel 版本；命令中同时显式指定的 `TERM_PROGRAM_VERSION` 保持优先。公开前缀沿用 agent launch／Host session operation 的目标 shell 编码；PowerShell 在子进程退出后恢复环境，cmd 使用独立子 shell，POSIX 使用命令前缀。连接中的快捷启动保留同一前缀。此切片不代表恢复／分叉、Nushell 或所有手动 shell 入口的覆盖已通过；全路径覆盖由 #250 负责。启动拒绝仍通过持久错误通知说明原因，不注入全局配置或替换原生 TUI。
 
 兼容身份不强制图片协议，也不追加 `terminal.showImages: true` overlay。公开 `PI_FORCE_IMAGE_PROTOCOL=none/off`、`PI_KITTY_PLACEHOLDERS=0`、`PI_NO_KITTY_PLACEHOLDERS=1` 和上游 `terminal.showImages: false` 保持有效。公开环境选项和关闭项作为非敏感启动上下文保留；权限名单只新增所需的终端身份／版本和 `PI_NO_DECCARA`，不扩大凭据或任意环境读取。`PI_NO_KITTY_PLACEHOLDERS=1` 优先于 placeholder opt-in，它关闭 Unicode placeholder，并非关闭原生 direct 图片。不要使用不存在的 `--image-protocol` 或已移除的 `PI_KITTY_IMAGE_TRANSMISSION`。
 
@@ -547,7 +547,7 @@ node scripts/omp-native-replay.mjs cleanup --root $fixture --lyrel-cli (Resolve-
 
 公开 `models.yml` 的 `auth: none`／`openai-completions` provider 只指向 `127.0.0.1`，仅接受一次指定模型／prompt 的 POST。`scripts/omp-loopback-stream.mjs` 发送预定 SSE token，不编码 PNG、不发送 Kitty、不解析 PTY。一个未闭合的 SVG 先显示红底，再增加右侧绿色；最后闭合围栏，底半部变蓝。每段都等待生产消费者确认后才推进，避免机器快慢吞掉中间修订。两段故意截断的 XML 期间继续检查完整旧像素。逐像素比较全部 BGRA（包括整 cell 的透明 padding）、原生 image ID、完整 crop 覆盖、`z=0` paint claim、周边文字行序及最终整个保留网格无旧放置；不把 Base64、非空输出或进程启动当作图片证据。
 
-与静态场景的 `zeroInference=true` 不同，streaming 退出审计必须为一次完成的 loopback 请求、恰好新增 user／assistant 两条消息、`loopbackStreaming=true`、`zeroInference=false`。日志仅记录 method／URL／loopback peer／模型和匹配布尔值，不保存请求正文、凭据或私人历史。原有 pictures／budget／disabled 场景仍要求零请求和消息不变；另增加 placeholder-off 的真实 direct-placement 重放入口。
+与静态场景的 `zeroInference=true` 不同，streaming 退出审计必须为一次完成的 loopback 请求、恰好新增 user／assistant 两条消息、`loopbackStreaming=true`、`zeroInference=false`。日志仅记录 method／URL／loopback peer／模型和匹配布尔值，不保存请求正文、凭据或私人历史。原有 pictures／budget 场景保持独立重放，全部静态场景仍要求零请求和消息不变；disabled／protocol-off 以及新增的 placeholder-off direct-placement 消费者在 Kitty 兼容身份下检查关闭项仍优先，并核对真实子进程环境。它们不是 live streaming 证据。
 
 在 Windows/macOS 仓库根设置 `LYREL_TEST_OMP` 为正式 `18.18.6` 的绝对路径后，中央串行执行以下命令（本次实现阶段均未运行）：
 

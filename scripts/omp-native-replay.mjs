@@ -160,13 +160,13 @@ if (action === 'prepare') {
   };
   const version = inspect('version',['--version']);
   writeFileSync(join(root,'version.txt'),version + '\n');
+  const identity = Object.fromEntries(['TERM_PROGRAM','TERM_PROGRAM_VERSION','LC_TERMINAL','LC_TERMINAL_VERSION','LYREL','PI_NO_DECCARA'].map(key => [key, environment[key] ?? null]));
+  // Older PowerShell/.NET clears a process variable by removing it. Both
+  // absent and empty mean no Kitty version; never inherit lyrel's version.
+  identity.TERM_PROGRAM_VERSION ??= '';
+  json(join(root,'identity.json'), identity);
   if (manifest.scenario === 'streaming') {
     if (version !== '18.18.6') throw new Error(`Streaming fixture requires released omp 18.18.6, got ${version}`);
-    const identity = Object.fromEntries(['TERM_PROGRAM','TERM_PROGRAM_VERSION','LC_TERMINAL','LC_TERMINAL_VERSION','LYREL','PI_NO_DECCARA'].map(key => [key, environment[key] ?? null]));
-    // Older PowerShell/.NET clears a process variable by removing it. Both
-    // absent and empty mean no Kitty version; never inherit lyrel's version.
-    identity.TERM_PROGRAM_VERSION ??= '';
-    json(join(root,'identity.json'), identity);
     if (identity.TERM_PROGRAM !== 'kitty' || identity.TERM_PROGRAM_VERSION !== '' || identity.LC_TERMINAL !== 'lyrel' || identity.LC_TERMINAL_VERSION !== identity.LYREL || identity.PI_NO_DECCARA !== '1') throw new Error(`Invalid command-scoped identity: ${JSON.stringify(identity)}`);
   }
   const configPath = inspect('config-path',['config','path']);

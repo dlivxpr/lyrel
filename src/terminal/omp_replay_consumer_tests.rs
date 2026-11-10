@@ -2,6 +2,7 @@
 struct OmpReplayFixture {
     root: tempfile::TempDir,
     streaming: bool,
+    scoped: bool,
 }
 
 impl OmpReplayFixture {
@@ -25,6 +26,7 @@ impl OmpReplayFixture {
         Self {
             root,
             streaming: case == "streaming",
+            scoped: matches!(case, "streaming" | "disabled" | "protocol-off" | "placeholder-off"),
         }
     }
 
@@ -44,7 +46,7 @@ impl OmpReplayFixture {
             ],
             args_are_lyrel_defaults: false,
         };
-        if self.streaming {
+        if self.scoped {
             let program = if cfg!(windows) { "pwsh" } else { "sh" };
             let line = std::iter::once(shell.program.clone())
                 .chain(shell.args.iter().cloned())
@@ -197,6 +199,16 @@ impl OmpReplayFixture {
             assert!(view.read_with(cx, |view, _| view.scrollback_text().contains("LYREL_PARENT_BEFORE=lyrel")));
         } else {
             assert_eq!(audit["zeroInference"], true, "{audit}");
+        }
+        if self.scoped {
+            let identity: serde_json::Value = serde_json::from_slice(
+                &std::fs::read(self.root.path().join("owned/identity.json")).unwrap(),
+            ).unwrap();
+            assert_eq!(identity["TERM_PROGRAM"], "kitty", "opt-outs must win even when native auto-detection recognizes Kitty");
+            assert_eq!(identity["TERM_PROGRAM_VERSION"], "");
+            assert_eq!(identity["PI_NO_DECCARA"], "1");
+            assert_eq!(identity["LC_TERMINAL"], "lyrel");
+            assert_eq!(identity["LC_TERMINAL_VERSION"], identity["LYREL"]);
         }
         assert_eq!(audit["exitCode"], 0, "{audit}");
         eprintln!("released omp replay evidence: {audit}");

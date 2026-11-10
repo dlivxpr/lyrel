@@ -688,8 +688,8 @@ fn scope_environment_prefix(
 /// Add only command-local terminal defaults where the launch UI knows the agent.
 /// Keep the command portable until the target Host chooses its actual shell;
 /// connecting panes retain this same literal prefix rather than losing intent.
-/// Explicit terminal identity bypasses Kitty identity/version defaults. Other
-/// public policy assignments stay in the original command and win over defaults.
+/// Explicit terminal identity bypasses the Kitty identity default. Clear an
+/// inherited version regardless; an explicit version and public policies win.
 pub fn agent_compatibility_command(agent: CLIAgent, line: &str) -> String {
     let argv = crate::core::cli_agent::parse_command_argv(line).ok();
     let explicit_identity = argv.as_ref().is_some_and(|argv| {
@@ -711,7 +711,7 @@ pub fn agent_compatibility_command(agent: CLIAgent, line: &str) -> String {
     let identity = if explicit_identity {
         ""
     } else {
-        "TERM_PROGRAM=kitty TERM_PROGRAM_VERSION='' "
+        "TERM_PROGRAM=kitty "
     };
     let omp = if agent == CLIAgent::OhMyPi {
         "PI_NO_DECCARA=1 "
@@ -719,7 +719,7 @@ pub fn agent_compatibility_command(agent: CLIAgent, line: &str) -> String {
         ""
     };
     format!(
-        "{identity}LC_TERMINAL=lyrel LC_TERMINAL_VERSION={} {omp}{line}",
+        "{identity}TERM_PROGRAM_VERSION='' LC_TERMINAL=lyrel LC_TERMINAL_VERSION={} {omp}{line}",
         env!("CARGO_PKG_VERSION")
     )
 }
@@ -1164,10 +1164,12 @@ mod tests {
         .map(|arg| quote_for_shell(arg, Some(shell)))
         .collect::<Vec<_>>()
         .join(" ");
-        for (explicit, call) in [
-            ("", ""),
-            ("TERM_PROGRAM=wezterm TERM_PROGRAM_VERSION=custom ", ""),
-            ("", "& "),
+        for (explicit, call, expected_terminal, expected_version) in [
+            ("", "", "kitty", ""),
+            ("TERM_PROGRAM=wezterm TERM_PROGRAM_VERSION=custom ", "", "wezterm", "custom"),
+            ("TERM_PROGRAM=kitty ", "", "kitty", ""),
+            ("TERM_PROGRAM=wezterm ", "", "wezterm", ""),
+            ("", "& ", "kitty", ""),
         ] {
             if output.exists() {
                 std::fs::remove_file(&output).unwrap();
@@ -1200,14 +1202,8 @@ mod tests {
             assert!(status.success());
             let actual: serde_json::Value =
                 serde_json::from_slice(&std::fs::read(&output).unwrap()).unwrap();
-            assert_eq!(
-                actual["TERM_PROGRAM"],
-                if explicit.is_empty() { "kitty" } else { "wezterm" }
-            );
-            assert_eq!(
-                actual["TERM_PROGRAM_VERSION"],
-                if explicit.is_empty() { "" } else { "custom" }
-            );
+            assert_eq!(actual["TERM_PROGRAM"], expected_terminal);
+            assert_eq!(actual["TERM_PROGRAM_VERSION"], expected_version);
             assert_eq!(actual["LC_TERMINAL"], "lyrel");
             assert_eq!(actual["LC_TERMINAL_VERSION"], env!("CARGO_PKG_VERSION"));
             assert_eq!(actual["LYREL"], env!("CARGO_PKG_VERSION"));
