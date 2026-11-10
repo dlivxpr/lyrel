@@ -302,10 +302,10 @@ pub(super) fn native_rhythm(cx: &mut TestAppContext) {
                 // Layout can already describe an offscreen row. Reveal the
                 // target through the presentation's normal selection request
                 // and deliver its scheduled platform frame before clicking.
-                // A nonempty selection makes an ignored pointer observable:
-                // the real click must collapse it to the exact target byte.
+                // Park one byte later so an ignored pointer cannot pass the
+                // exact caret assertion, without revealing selection markers.
                 view.update_in(&mut context, |view, _, cx| {
-                    view.select_range(next.0..next.0 + 1, cx)
+                    view.select_range(next.0 + 1..next.0 + 1, cx)
                 });
                 until(&mut context, |context| {
                     context.update(|window, cx| {
