@@ -135,6 +135,7 @@ pub(crate) struct OpenFile {
     disk_mtime: Option<MTime>,
     saving: bool,
     save_pending: bool,
+    save_as_pending: Option<PathBuf>,
     reload_seq: u64,
     reload_request: u64,
     pub(crate) conflict: Option<DiskConflict>,
@@ -1375,8 +1376,8 @@ impl LyrelApp {
                 .expect("active editor tab")
                 .id();
             let group = self.tab_code().expect("active editor group").group;
-            let view = file.presentations.view(input, tab, group, cx);
-            view.read(cx).focus_handle(cx).focus(window, cx);
+            let view = file.presentations.view(input, tab, group, window, cx);
+            EditorInput::Markdown(view).focus(window, cx);
         } else {
             file.input.focus(window, cx);
         }
@@ -2542,6 +2543,7 @@ impl LyrelApp {
         let body = self.render_editor_body(
             self.tab_code().and_then(TabCode::active_id),
             self.tab_code().map_or(0, TabCode::focused_slot),
+            window,
             cx,
         );
         let conflict_banner = self
@@ -2630,6 +2632,7 @@ impl LyrelApp {
         &self,
         id: Option<BufferId>,
         slot: usize,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
         match id.and_then(|id| self.editor.buffers.get(id)) {
@@ -2647,11 +2650,13 @@ impl LyrelApp {
                 } else {
                     code.split.as_ref().expect("second editor group").id
                 };
-                let view = f.presentations.view(input, tab, group, cx);
+                let view = f.presentations.view(input, tab, group, window, cx);
                 if let Some(resources) = &f.markdown_resources {
                     markdown::images::ImageHost::attach(resources, &view, cx);
                 }
                 v_flex()
+                    .id(("markdown-presentation", view.entity_id()))
+                    .min_w_0()
                     .size_full()
                     .font_family(if view.read(cx).is_live() {
                         SharedString::from("Arial")
@@ -2663,10 +2668,12 @@ impl LyrelApp {
                     .when(!view.read(cx).is_source_only(), |body| {
                         body.children(f.markdown_resources.as_ref().map(|resources| markdown::images::controls(resources, &view, cx)))
                     })
+                    .child(markdown::table_code::render_controls(&view))
                     .children(f.presentations.search(&view))
                     .child(
                         div()
                             .flex_1()
+                            .min_w_0()
                             .min_h_0()
                             // The dock's centered resize hitbox covers half its width inward.
                             // Keep the first native caret outside that capture band.

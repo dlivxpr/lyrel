@@ -185,6 +185,7 @@ pub(super) fn wrapped_link_drag(cx: &mut TestAppContext) { wrapped_link(cx, true
 pub(super) fn image_preview_resize(cx: &mut TestAppContext) {
     use gpui_kit::test::TestEventExt as _;
     use gpui_kit::{MouseButton, point};
+    use gpui_kit::component::ActiveTheme as _;
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("preview.md");
     let source = "# Image\r\n\r\n![tall](tall.png){width=120}\r\n\r\nuntouched$$x$$spelling\n";
@@ -196,6 +197,16 @@ pub(super) fn image_preview_resize(cx: &mut TestAppContext) {
     until(&mut vcx, |cx| app.read_with(cx, |app, _| app.active_buffer().is_some()));
     let view = app.read_with(&vcx, |app, _| app.active_editor_input().unwrap().markdown().unwrap().clone());
     until(&mut vcx, |cx| view.read_with(cx, |view, _| view.image_bounds("tall.png").is_some()));
+    let base_font = vcx.update(|_, cx| cx.theme().font_size);
+    for font_size in [base_font * 1.25, base_font] {
+        vcx.update(|_, cx| gpui_kit::component::Theme::update(cx, |theme| theme.font_size = font_size));
+        settle(&mut vcx);
+        view.read_with(&vcx, |view, cx| {
+            let bounds = view.image_bounds("tall.png").expect("bitmap stays live after application zoom");
+            assert!((f32::from(bounds.size.height) / f32::from(bounds.size.width) - 2.).abs() < 0.01);
+            assert_eq!(view.document().read(cx).encode().unwrap(), source.as_bytes());
+        });
+    }
     let image = view.read_with(&vcx, |view, _| view.image_bounds("tall.png").unwrap());
     vcx.update(|window, cx| {
         window.pointer_move(image.center(), None, cx);

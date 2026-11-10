@@ -36,7 +36,7 @@ pub(crate) struct ImageHost {
     states: HashMap<String, State>,
     allowed: HashSet<String>,
     views: HashMap<EntityId, (WeakEntity<MarkdownEditor>, Subscription)>,
-    hover: Option<SharedString>,
+    hover: Option<(EntityId, SharedString, gpui_kit::Bounds<gpui_kit::Pixels>)>,
     notice: Option<SharedString>,
     refresh_scheduled: bool,
     importing: bool,
@@ -114,8 +114,16 @@ impl ImageHost {
                 });
             }
             NativeEvent::HoverLink(target) => {
-                self.hover = target.as_ref().and_then(|(hit, _)| match hit { lyrel_markdown_editor::LinkHit::Url(url) => Some(url.clone().into()), _ => None });
-                self.notify(cx);
+                let next = target.as_ref().and_then(|(hit, bounds)| match hit {
+                    lyrel_markdown_editor::LinkHit::Url(url) => Some((editor.entity_id(), url.clone().into(), *bounds)), _ => None,
+                });
+                if next.is_some() || self.hover.as_ref().is_some_and(|(view, _, _)| *view == editor.entity_id()) {
+                    self.hover = next;
+                    self.notify(cx);
+                }
+            }
+            NativeEvent::SelectionChanged => {
+                if self.hover.take().is_some() { self.notify(cx); }
             }
             NativeEvent::PreviewImage(source) => self.preview(&editor, source, cx),
             NativeEvent::PasteAttachments(item) => {
@@ -140,6 +148,7 @@ impl ImageHost {
         let revision = self.document.read(cx).revision();
         if !changed_identity && self.scanned_revision == Some(revision) && self.sources.len() == self.states.len() { return; }
         self.scanned_revision = Some(revision);
+        self.hover = None;
         if changed_identity {
             self.signature = signature;
             self.generation = self.generation.wrapping_add(1);
@@ -253,7 +262,12 @@ impl ImageHost {
     }
 
     fn preview(&mut self, editor: &Entity<MarkdownEditor>, source: &str, cx: &mut Context<Self>) {
-        let Some(image) = self.images.borrow().get(source).cloned() else {
+        let current = self.identity(cx).and_then(|(host, path)| path.map(|path| (host.id(), path)));
+        if current != self.signature || !editor.read(cx).image_sources().iter().any(|src| src == source) {
+            self.message(t(L10nKey::MarkdownImageChanged), cx); return;
+        }
+        let image = self.images.borrow().get(source).cloned();
+        let Some(image) = image else {
             self.message(t(L10nKey::EditorImageFailed), cx); return;
         };
         let focus = editor.read(cx).focus_handle(cx);
@@ -349,6 +363,7 @@ fn store(host: &dyn Host, document: &Path, input: Import) -> io::Result<Vec<Stri
         }
     };
     let prepared = inputs.into_iter().map(|bytes| { let (_, extension) = decode(&bytes)?; Ok((bytes, extension)) }).collect::<io::Result<Vec<_>>>()?;
+    if prepared.is_empty() { return Err(invalid(t(L10nKey::MarkdownImageUnsupported))); }
     let parent = links::parent(host, document)?;
     let dir = host.join(&parent, "assets");
     host.create_dir(&dir, true)?;
@@ -373,14 +388,10 @@ fn store(host: &dyn Host, document: &Path, input: Import) -> io::Result<Vec<Stri
 
 pub(crate) fn controls(owner: &Entity<ImageHost>, editor: &Entity<MarkdownEditor>, cx: &App) -> AnyElement {
     let host = owner.read(cx);
-    let source = editor.downgrade();
-    let insert = owner.downgrade();
-    let mut surface = v_flex().id(("markdown-resource-status", editor.entity_id())).gap_1().min_w_0().max_h(rems(8.)).overflow_y_scroll().child(
-        gpui_kit::component::h_flex().gap_2().child(Button::new(("markdown-insert-image", editor.entity_id())).ghost().small()
-            .label(t(if host.importing { L10nKey::MarkdownImageWriting } else { L10nKey::MarkdownInsertImage })).on_click(move |_, _, cx| {
-                if let Some(editor) = source.upgrade() { let _ = insert.update(cx, |host, cx| host.insert(&editor, Vec::new(), cx)); }
-            })).children(host.hover.clone().map(|target| div().id("markdown-link-hover").test_support().role(gpui_kit::Role::Status).aria_label(target.clone()).text_sm().text_color(cx.theme().muted_foreground).child(target)))
-    );
+    let mut surface = v_flex().id(("markdown-resource-status", editor.entity_id())).gap_1().min_w_0().max_h(rems(8.)).overflow_y_scroll();
+    if host.importing {
+        surface = surface.child(div().test_support().role(gpui_kit::Role::Status).aria_label(t(L10nKey::MarkdownImageWriting)).text_sm().text_color(cx.theme().muted_foreground).child(t(L10nKey::MarkdownImageWriting)));
+    }
     surface = surface.children(host.notice.clone().map(|notice| div().id("markdown-resource-notice").test_support().role(gpui_kit::Role::Status).aria_label(notice.clone()).text_sm().text_color(cx.theme().muted_foreground).child(notice)));
     let mut rows: Vec<_> = host.states.iter().filter(|(_, state)| !matches!(state, State::Ready)).collect();
     rows.sort_by_key(|(source, _)| *source);
@@ -393,7 +404,15 @@ pub(crate) fn controls(owner: &Entity<ImageHost>, editor: &Entity<MarkdownEditor
                 let _ = retry.update(cx, |host, cx| { host.allowed.insert(target.clone()); host.states.remove(&target); host.refresh(cx); host.notify(cx); });
             })));
     }
-    surface.into_any_element()
+    div().relative().min_w_0().child(surface).children(host.hover.as_ref()
+        .filter(|(view, _, _)| *view == editor.entity_id())
+        .map(|(_, target, bounds)| div().absolute().child(gpui_kit::deferred(
+            gpui_kit::anchored().position(gpui_kit::point(bounds.left(), bounds.bottom()))
+                .snap_to_window_with_margin(cx.theme().font_size * 0.5)
+                .child(div().id("markdown-link-hover").test_support().role(gpui_kit::Role::Status)
+                    .aria_label(target.clone()).p_1().rounded(cx.theme().radius).bg(cx.theme().popover)
+                    .text_sm().text_color(cx.theme().popover_foreground).child(target.clone()))
+        ).with_priority(1)))).into_any_element()
 }
 
 struct ImagePreview { image: Arc<RenderImage>, zoom: f32, scroll: gpui_kit::ScrollHandle }

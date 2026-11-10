@@ -117,13 +117,14 @@ fn failed_save_before_close_keeps_edits_and_cannot_resume_on_a_later_save(cx: &m
     wait_until(&mut vcx, |vcx| {
         app.read_with(vcx, |app, _| {
             app.active_buffer()
-                .is_some_and(|file| file.path == occupied && !file.saving)
+                .is_some_and(|file| file.untitled.is_some() && !file.saving) && app.editor.waiters.is_empty()
         })
     });
     app.read_with(&vcx, |app, cx| {
         let file = app.active_buffer().unwrap();
         assert_eq!(file.id(), id);
         assert!(file.dirty);
+        assert!(file.path.as_os_str().is_empty());
         assert_eq!(file.input.read(cx).text().to_string(), "original edits");
     });
     vcx.dispatch_action(EditorSaveAs);
@@ -328,9 +329,10 @@ fn markdown_save_as_cancel_and_failed_unsaved_close_keep_edits_through_recovery(
     let recovered = dir.path().join("recovered.md");
     std::fs::write(&path, "original").unwrap();
     std::fs::create_dir(&occupied).unwrap();
+    let host = crate::ui::code_editor::test_host::FileHost::new(HostId::LOCAL);
     let (app, mut vcx, _streams) = harness_with_tabs(cx, 1);
     app.update_in(&mut vcx, |app, window, cx| {
-        app.open_file_in_editor(&path, window, cx)
+        app.editor_open_on_host(host.clone(), &path, window, cx)
     });
     wait_until(&mut vcx, |vcx| {
         app.read_with(vcx, |app, _| app.active_buffer().is_some())
@@ -360,14 +362,19 @@ fn markdown_save_as_cancel_and_failed_unsaved_close_keep_edits_through_recovery(
     wait_until(&mut vcx, |vcx| {
         app.read_with(vcx, |app, _| {
             app.active_buffer()
-                .is_some_and(|file| file.path == occupied && !file.saving)
+                .is_some_and(|file| file.path == path && !file.saving)
         })
     });
+    // Save As failure no longer moves the path onto the failing directory.
+    // Preserve the original failed-close contract by failing the owning Host's
+    // next write, then recover via a separate successful Save As.
+    host.fail_next_write();
     vcx.dispatch_action(CloseActiveTab);
     settle(&mut vcx);
     vcx.simulate_prompt_answer(t(L10nKey::Save));
     wait_until(&mut vcx, |vcx| {
-        app.read_with(vcx, |app, _| !app.active_buffer().unwrap().saving)
+        host.entered.load(std::sync::atomic::Ordering::SeqCst)
+            && app.read_with(vcx, |app, _| app.active_buffer().is_some_and(|file| !file.saving) && app.editor.waiters.is_empty())
     });
     vcx.dispatch_action(EditorSaveAs);
     settle(&mut vcx);

@@ -7,7 +7,7 @@ use gpui_kit::test::TestWindowExt as _;
 use gpui_kit::{TestAppContext, VisualTestContext};
 use std::time::{Duration, Instant};
 
-fn settle(context: &mut VisualTestContext) {
+pub(super) fn settle(context: &mut VisualTestContext) {
     context.run_until_parked();
     // Test windows have no platform frame loop; run the SDK's actual frame callbacks.
     context.update(|window, cx| {
@@ -17,7 +17,7 @@ fn settle(context: &mut VisualTestContext) {
     context.run_until_parked();
 }
 #[track_caller]
-fn until(context: &mut VisualTestContext, mut ready: impl FnMut(&mut VisualTestContext) -> bool) {
+pub(super) fn until(context: &mut VisualTestContext, mut ready: impl FnMut(&mut VisualTestContext) -> bool) {
     until_state(context, "foundation workflow", |context| {
         (ready(context), ())
     });
@@ -43,7 +43,7 @@ fn until_state<T: std::fmt::Debug>(
         std::thread::sleep(Duration::from_millis(5));
     }
 }
-fn save(app: &Entity<LyrelApp>, context: &mut VisualTestContext) {
+pub(super) fn save(app: &Entity<LyrelApp>, context: &mut VisualTestContext) {
     context.dispatch_action(crate::core::actions::EditorSave);
     until_state(context, "owning document save", |context| {
         app.read_with(context, |app, _| {

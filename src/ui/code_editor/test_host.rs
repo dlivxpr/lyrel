@@ -62,7 +62,7 @@ impl FileHost {
             |root| root.join(path.to_string_lossy().trim_start_matches('/')),
         )
     }
-    #[cfg(test)]
+    #[cfg(any(test, feature = "native-markdown-tests"))]
     pub(super) fn fail_next_write(&self) {
         self.fail_write.store(true, Ordering::SeqCst);
     }
@@ -75,7 +75,7 @@ impl FileHost {
         tx
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "native-markdown-tests"))]
     pub(super) fn pause_next_write(&self) -> mpsc::Sender<()> {
         let (tx, rx) = mpsc::channel();
         self.entered.store(false, Ordering::SeqCst);
@@ -147,6 +147,7 @@ impl Host for FileHost {
     }
     fn write_file(&self, p: &Path, bytes: &[u8]) -> io::Result<Meta> {
         if self.fail_write.swap(false, Ordering::SeqCst) {
+            self.entered.store(true, Ordering::SeqCst);
             return Err(io::Error::new(
                 io::ErrorKind::PermissionDenied,
                 "injected Host write failure",

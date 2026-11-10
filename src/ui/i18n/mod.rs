@@ -1472,6 +1472,7 @@ l10n_keys! {
     MarkdownBlockExpandLabel,
     MarkdownBlockCollapseLabel,
     EditorTableInsert,
+    EditorTableChanged,
     EditorTableInsertRowBefore,
     EditorTableInsertRowAfter,
     EditorTableDuplicateRow,

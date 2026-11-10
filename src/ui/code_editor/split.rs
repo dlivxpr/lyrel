@@ -296,6 +296,7 @@ impl LyrelApp {
     /// right, which takes the focus. Already split, it opens in the other
     /// group instead. `false` with no file to split.
     pub(crate) fn editor_split(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
+        let origin = self.active_editor_input();
         let Some(code) = self.tab_code_mut() else {
             return false;
         };
@@ -303,6 +304,14 @@ impl LyrelApp {
             return false;
         };
         code.split_with(id);
+        if let (Some(origin), Some(tab), Some(code)) = (
+            origin.as_ref().and_then(|input| input.markdown()),
+            self.tabs.get(self.tabs.active_index()),
+            self.tab_code(),
+        ) {
+            self.editor.buffers.get(id).expect("split buffer").presentations
+                .view(origin, tab.id(), code.group, window, cx);
+        }
         self.editor.dismiss_bar();
         self.focus_editor(window, cx);
         cx.notify();
@@ -354,7 +363,11 @@ impl LyrelApp {
             if file.input.markdown().is_some() {
                 file.presentations
                     .existing(tab, other_group)
-                    .is_some_and(|view| view.read(cx).focus_handle(cx).contains_focused(window, cx))
+                    .is_some_and(|view| {
+                        view.read(cx).focus_handle(cx).contains_focused(window, cx)
+                            || file.presentations.search(&view)
+                                .is_some_and(|search| search.read(cx).has_focus(window, cx))
+                    })
             } else if code.active_id() != Some(other) {
                 file.input
                     .read(cx)
@@ -418,6 +431,11 @@ impl LyrelApp {
             EditorPeekChange,
             ToggleDocumentPreview,
             ToggleDocumentWrap,
+            crate::terminal::view::FindInTerminal,
+            crate::terminal::view::FindNext,
+            crate::terminal::view::FindPrevious,
+            gpui_kit::component::input::Search,
+            gpui_kit::component::input::Replace,
         )
     }
 
@@ -461,7 +479,7 @@ impl LyrelApp {
             }
             Some(id) => (
                 self.render_editor_breadcrumbs_for(id, other_slot, false, window, cx),
-                self.render_editor_body(Some(id), other_slot, cx),
+                self.render_editor_body(Some(id), other_slot, window, cx),
             ),
             None => (None, self.render_editor_empty(cx).into_any_element()),
         };
@@ -490,6 +508,7 @@ impl LyrelApp {
             false => (unfocused, focused),
         };
         h_flex()
+            .items_stretch()
             .flex_1()
             .min_h_0()
             .size_full()

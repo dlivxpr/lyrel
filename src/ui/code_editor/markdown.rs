@@ -6,6 +6,8 @@ pub(super) mod images;
 mod links;
 #[cfg(any(test, feature = "native-markdown-tests"))]
 mod resources_tests;
+mod mermaid_host;
+pub(crate) mod table_code;
 
 pub(super) fn configure(editor: &mut EditorState, cx: &mut Context<EditorState>) {
     let theme = cx.theme();
@@ -41,11 +43,24 @@ pub(super) fn configure(editor: &mut EditorState, cx: &mut Context<EditorState>)
     };
     editor.set_live_style(style.clone(), cx);
     editor.set_markdown_style(style, cx);
+    mermaid_host::install(editor, cx);
+    table_code::configure(editor, cx);
 }
 
 #[cfg(any(test, feature = "native-markdown-tests"))]
 mod foundation;
+#[cfg(any(test, feature = "native-markdown-tests"))]
+mod table_code_tests;
 #[cfg(feature = "native-markdown-tests")]
 pub(crate) fn native_cases() -> impl Iterator<Item = crate::native_markdown::Case> {
-    foundation::native_cases().chain(resources_tests::native_cases())
+    foundation::native_cases().chain(resources_tests::native_cases()).chain(table_code_tests::native_cases()).chain([
+        crate::native_markdown::Case::new(
+            "ui::code_editor::workbench_views::shared_context_and_ime_handoff",
+            super::document_input::workbench_views::shared_context_and_ime_handoff,
+        ),
+        crate::native_markdown::Case::new(
+            "ui::code_editor::workbench_views::focused_consumers_and_layout",
+            super::document_input::workbench_views::focused_consumers_and_layout,
+        ),
+    ]).chain(mermaid_host::native_cases())
 }

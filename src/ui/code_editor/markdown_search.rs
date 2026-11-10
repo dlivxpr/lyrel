@@ -139,6 +139,9 @@ impl MarkdownSearch {
             .get(self.matcher.current_match_index())
             .cloned();
         if let (Some(source), Some(range)) = (self.source.upgrade(), range) {
+            let ranges = self.matcher.matched_ranges().to_vec();
+            let active = Some(self.matcher.current_match_index());
+            source.update(cx, |view, cx| view.set_search(ranges, active, cx));
             source.update(cx, |view, cx| view.select_range(range, cx));
         }
     }
