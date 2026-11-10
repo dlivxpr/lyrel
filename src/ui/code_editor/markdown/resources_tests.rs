@@ -366,13 +366,17 @@ fn wrapped_link(cx: &mut TestAppContext, tail: bool, drag: bool) {
     });
     settle(&mut vcx);
     let label_start = source.find('[').unwrap() + 1;
+    // The label can begin exactly at a wrap boundary. Its empty-range
+    // upstream caret then sits on the prefix-only row, which has no link
+    // glyph to hover. Use a caret inside the first label word to identify
+    // the first row that actually paints this link.
     let first_y = view.read_with(&vcx, |view, _| {
-        view.range_to_bounds(&(label_start..label_start))
+        view.range_to_bounds(&(label_start + 1..label_start + 1))
             .unwrap()
             .top()
     });
     let wrap = view.read_with(&vcx, |view, _| {
-        (label_start + 1..label_start + label.len())
+        (label_start + 2..label_start + label.len())
             .find(|at| {
                 view.range_to_bounds(&(*at..*at))
                     .is_some_and(|bounds| bounds.top() > first_y)
