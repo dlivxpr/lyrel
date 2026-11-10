@@ -57,8 +57,10 @@ if (!args.includes('--worker')) {
     if (agent === 'hermes') assert.equal(env.KITTY_WINDOW_ID, 'lyrel', 'Hermes native auto detector requires its scoped marker');
     if (agent === 'kimi' && policy === 'off') env.PI_IMAGE_PROTOCOL = 'none';
     const loader = path.join(source, agent === 'kimi' ? 'node_modules' : 'ui-tui/node_modules', 'tsx/dist/cli.mjs');
-    // The owned temporary cwd must not hide Kimi's pinned decorator settings.
-    const compiler = agent === 'kimi' ? ['--tsconfig', path.join(source, 'tsconfig.json')] : [];
+    // Match upstream dev:cli-only: tsx handles TS/decorators, while Kimi's
+    // own ?raw loader handles transitive system.md without copying templates.
+    const compiler = agent === 'kimi' ? ['--tsconfig', path.join(source, 'tsconfig.json'),
+      '--import', pathToFileURL(path.join(source, 'build/register-raw-text-loader.mjs')).href] : [];
     const worker = [loader, ...compiler, fileURLToPath(import.meta.url), ...args, '--worker', '--root', root,
       '--python', option('--python', process.env.LYREL_HERMES_GRAPHICS_PYTHON ?? 'python')];
     child = spawn(process.execPath, worker, { cwd: root, env, stdio: 'inherit' });
@@ -106,7 +108,9 @@ if (!args.includes('--worker')) {
   } else {
     const req = createRequire(path.join(source, 'ui-tui/package.json'));
     const React = req('react');
-    const { Box, Text, render } = req('@hermes/ink');
+    // Enter native Ink through ESM, so its import-only dependencies (including
+    // ansi-tokenize) use their supported exports on both Node 22.19 and 26.
+    const { Box, Text, render } = await import(pathToFileURL(req.resolve('@hermes/ink')).href);
     const { InlineImage } = await imported('ui-tui/src/components/inlineImage.tsx');
     const { GatewayProvider } = await imported('ui-tui/src/app/gatewayContext.tsx');
     const { detectTerminalGraphics } = await imported('ui-tui/src/lib/terminalGraphics.ts');
