@@ -12,19 +12,28 @@ fn settle(context: &mut VisualTestContext) {
     context.update(|window, cx| window.render_frame(cx));
     context.run_until_parked();
 }
+#[track_caller]
 fn until(context: &mut VisualTestContext, mut ready: impl FnMut(&mut VisualTestContext) -> bool) {
+    until_state(context, "foundation workflow", |context| (ready(context), ()));
+}
+#[track_caller]
+fn until_state<T: std::fmt::Debug>(context: &mut VisualTestContext, phase: &str, mut observe: impl FnMut(&mut VisualTestContext) -> (bool, T)) {
     let deadline = Instant::now() + Duration::from_secs(15);
     loop {
         settle(context);
-        if ready(context) { return; }
-        assert!(Instant::now() < deadline, "foundation workbench transition did not settle");
+        let (ready, state) = observe(context);
+        if ready { return; }
+        assert!(Instant::now() < deadline, "{phase} did not settle; last state: {state:?}");
         context.executor().advance_clock(Duration::from_millis(50));
         std::thread::sleep(Duration::from_millis(5));
     }
 }
 fn save(app: &Entity<LyrelApp>, context: &mut VisualTestContext) {
     context.dispatch_action(crate::core::actions::EditorSave);
-    until(context, |context| app.read_with(context, |app, _| app.active_buffer().is_some_and(|file| !file.dirty && !file.saving)));
+    until_state(context, "owning document save", |context| app.read_with(context, |app, _| {
+        let state = app.active_buffer().map(|file| (file.id(), file.dirty, file.saving, file.conflict));
+        (state.as_ref().is_some_and(|(_, dirty, saving, _)| !dirty && !saving), state)
+    }));
 }
 
 pub(super) fn lifecycle(cx: &mut TestAppContext) {
@@ -166,10 +175,12 @@ pub(super) fn extreme_line(cx: &mut TestAppContext) {
         if source_mode { context.dispatch_action(crate::core::actions::ToggleDocumentPreview); }
         for at in [0, original.len()] {
             view.update_in(&mut context, |view, _, cx| view.select_range(at..at, cx));
-            until(&mut context, |context| {
+            until_state(&mut context, "complete extreme-line caret reveal", |context| {
                 context.update(|window, cx| {
-                    let Some(caret) = view.read(cx).range_to_bounds(&(at..at)) else { return false; };
-                    caret.top() >= px(0.) && caret.bottom() <= window.viewport_size().height && caret.left() >= px(0.) && caret.right() <= window.viewport_size().width
+                    let editor = view.read(cx);
+                    let caret = editor.range_to_bounds(&(at..at));
+                    let ready = caret.is_some_and(|caret| caret.top() >= px(0.) && caret.bottom() <= window.viewport_size().height && caret.left() >= px(0.) && caret.right() <= window.viewport_size().width);
+                    (ready, (source_mode, at, caret, editor.scroll_offset(), window.viewport_size()))
                 })
             });
             let caret = view.read_with(&context, |view, _| view.range_to_bounds(&(at..at)).unwrap());
@@ -213,6 +224,10 @@ pub(super) fn native_navigation(cx: &mut TestAppContext) {
     until(&mut context, |context| app.read_with(context, |app, _| app.active_buffer().is_some()));
     let view = app.read_with(&context, |app, _| app.active_editor_input().unwrap().markdown().unwrap().clone());
     view.update_in(&mut context, |view, window, cx| { view.select_range(0..0, cx); view.focus_handle(cx).focus(window, cx); });
+    if !view.read_with(&context, |view, _| view.is_soft_wrap()) {
+        context.dispatch_action(crate::core::actions::ToggleDocumentWrap);
+    }
+    view.read_with(&context, |view, _| assert!(view.is_soft_wrap(), "this native navigation scenario explicitly enables wrap"));
     settle(&mut context);
     until(&mut context, |context| view.read_with(context, |view, _| view.range_to_bounds(&(0..0)).is_some()));
     let (first, wrap_at, row_start) = view.read_with(&context, |view, _| {
