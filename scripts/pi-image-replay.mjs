@@ -71,8 +71,11 @@ try {
     quietStartup: true, theme: "dark", enableInstallTelemetry: false, enableAnalytics: false,
     cacheWarming: "off", compaction: { enabled: false },
     terminal: {
-      images: policy === "settings-none" ? false : policy === "settings-kitty" ? "kitty" : "auto",
-      showImages: policy !== "display-none", imageWidthCells: 12,
+      ...(policy === "scoped" ? {} : {
+        images: policy === "settings-none" ? false : policy === "settings-kitty" ? "kitty" : "auto",
+        showImages: policy !== "display-none",
+      }),
+      imageWidthCells: 12,
     },
     fullscreenExitOutput: "resume-hint",
   };
