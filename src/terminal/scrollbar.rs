@@ -44,11 +44,17 @@ impl GridScroll {
     }
 }
 
+#[derive(Clone, Copy, Default)]
+struct ScrollState {
+    reported: GridScroll,
+    current: GridScroll,
+}
+
 /// The pane's end of the scrollbar: a snapshot of the grid the bar reads, and a
 /// row the bar asks for.
 #[derive(Clone, Default)]
 pub(crate) struct TerminalScrollHandle {
-    grid: Rc<Cell<GridScroll>>,
+    grid: Rc<Cell<ScrollState>>,
     viewport: Rc<Cell<Bounds<Pixels>>>,
     /// The `display_offset` the bar wants and the pane has not applied yet.
     pending: Rc<Cell<Option<usize>>>,
@@ -61,24 +67,22 @@ impl TerminalScrollHandle {
 
     /// Report where the grid stands now.
     ///
-    /// Scrollback piling up at the live edge is deliberately *not* reported:
-    /// the bar shows itself whenever the offset it reads has changed since the
-    /// last frame, so a pane printing a build log — its viewport pinned to the
-    /// bottom, its history growing under it — would hold the thumb on screen
-    /// for as long as the output ran. Freezing that one case keeps the bar to
-    /// what it is for: saying where you are once you have gone looking. Every
-    /// other change is taken as it comes, including the history *shrinking*,
-    /// which is a cleared scrollback and not growth at all.
+    /// Scrollback growth at the live edge must not reveal the bar, so only its
+    /// reported geometry is held. Input always uses the current grid: freezing
+    /// it too would clamp a first scrollbar request against old or empty history
+    /// and prevent the viewport from entering stable reading at all.
     pub(crate) fn sync(&self, live: GridScroll) {
-        let snap = self.grid.get();
+        let state = self.grid.get();
+        let snap = state.reported;
         let pinned_growth = live.display_offset == 0
             && snap.display_offset == 0
             && live.history >= snap.history
             && live.screen_lines == snap.screen_lines
             && live.line_height == snap.line_height;
-        if !pinned_growth {
-            self.grid.set(live);
-        }
+        self.grid.set(ScrollState {
+            reported: if pinned_growth { snap } else { live },
+            current: live,
+        });
     }
 
     /// The row the bar was dragged to, if it was dragged since the last render.
@@ -88,7 +92,7 @@ impl TerminalScrollHandle {
 
     #[cfg(test)]
     fn snapshot(&self) -> GridScroll {
-        self.grid.get()
+        self.grid.get().reported
     }
 }
 
@@ -98,14 +102,14 @@ impl ScrollbarHandle for TerminalScrollHandle {
     }
 
     fn offset(&self) -> Point<Pixels> {
-        let grid = self.grid.get();
+        let grid = self.grid.get().reported;
         // Scroll offsets run negative as the content moves up past the top of
         // the viewport, which is what the rows above it have done.
         point(px(0.), px(-(grid.above() as f32) * grid.line_height()))
     }
 
     fn set_offset(&self, offset: Point<Pixels>) {
-        let grid = self.grid.get();
+        let grid = self.grid.get().current;
         let above = (-offset.y.as_f32() / grid.line_height())
             .round()
             .clamp(0., grid.history as f32) as usize;
@@ -117,15 +121,19 @@ impl ScrollbarHandle for TerminalScrollHandle {
         // confirm: the bar reads the offset back on the very next mouse move to
         // decide where the thumb sits, and a snapshot still showing the old row
         // would drag it back under the cursor.
-        self.grid.set(GridScroll {
+        let grid = GridScroll {
             display_offset: target,
             ..grid
+        };
+        self.grid.set(ScrollState {
+            reported: grid,
+            current: grid,
         });
         self.pending.set(Some(target));
     }
 
     fn content_size(&self) -> Size<Pixels> {
-        let grid = self.grid.get();
+        let grid = self.grid.get().reported;
         // Width is never read for a vertical-only bar, and the pane has no
         // horizontal scroll to describe.
         size(
@@ -233,6 +241,20 @@ mod tests {
             "a streaming pane would otherwise hold the thumb on screen the whole time"
         );
         assert_eq!(handle.snapshot().history, 100);
+    }
+
+    #[test]
+    fn growth_hidden_from_the_bar_still_updates_the_rows_a_drag_can_reach() {
+        let handle = TerminalScrollHandle::default();
+        handle.sync(grid(0, 0));
+        let hidden = handle.offset();
+        handle.sync(grid(124, 0));
+        assert_eq!(handle.offset(), hidden, "output alone must not reveal the bar");
+
+        handle.set_offset(point(px(0.), px(-1000.)));
+        assert_eq!(handle.take_pending(), Some(24));
+        assert_eq!(handle.offset().y, px(-1000.));
+        assert_eq!(handle.content_size().height, px(1480.));
     }
 
     #[test]

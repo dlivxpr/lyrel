@@ -9,6 +9,8 @@ use rio_vt::crosswords::square::{CellFlags, Hyperlink, Wide};
 use rio_vt::crosswords::style::Style;
 use rio_vt::event::EventListener;
 
+use lyrel_core::core::kitty_graphics::PlaceholderSlice;
+
 /// Decoded values, never Square side-table IDs or theme-resolved colours.
 #[derive(Clone)]
 pub(super) struct ReadingCell {
@@ -20,11 +22,16 @@ pub(super) struct ReadingCell {
     pub(super) wrapped: bool,
 }
 
+struct ReadingRow {
+    cells: Vec<ReadingCell>,
+    placeholders: Vec<PlaceholderSlice>,
+}
+
 pub(super) struct ReadingView {
     top: i64,
     captured_live_start: i64,
     cols: usize,
-    rows: BTreeMap<i64, Vec<ReadingCell>>,
+    rows: BTreeMap<i64, ReadingRow>,
 }
 
 pub(super) fn live_start<T: EventListener>(term: &Crosswords<T>) -> i64 {
@@ -52,7 +59,7 @@ impl ReadingView {
     fn retain_row<T: EventListener>(&mut self, term: &Crosswords<T>, row: i64) {
         self.rows.entry(row).or_insert_with(|| {
             let line = Line((row - live_start(term)) as i32);
-            term.grid[line][..]
+            let cells = term.grid[line][..]
                 .iter()
                 .map(|cell| {
                     let extras = cell
@@ -70,7 +77,11 @@ impl ReadingView {
                         wrapped: cell.contains_cell_flag(CellFlags::WRAPLINE),
                     }
                 })
-                .collect()
+                .collect();
+            ReadingRow {
+                cells,
+                placeholders: lyrel_core::core::kitty_graphics::placeholder_row(&term.grid, line),
+            }
         });
     }
 
@@ -86,7 +97,13 @@ impl ReadingView {
     pub(super) fn row(&self, viewport_row: i32) -> Option<&[ReadingCell]> {
         self.rows
             .get(&(self.top + viewport_row as i64))
-            .map(Vec::as_slice)
+            .map(|row| row.cells.as_slice())
+    }
+
+    pub(super) fn placeholders(&self, viewport_row: i32) -> &[PlaceholderSlice] {
+        self.rows
+            .get(&(self.top + viewport_row as i64))
+            .map_or(&[], |row| row.placeholders.as_slice())
     }
 
     pub(super) fn distance<T: EventListener>(&self, term: &Crosswords<T>) -> usize {

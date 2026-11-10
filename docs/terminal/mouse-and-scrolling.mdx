@@ -34,9 +34,13 @@ description: "指针、滚轮和 ^G 各有何行为——以及如何分别调�
 
 `src/terminal/selection_scroll.rs` 的 `SelectionScroll` 统一持有选择拖拽、越界自动滚动、平滑动画、手势锁定，以及彼此独立的滚动／缩放余量。它借用现有 live grid，由私有 `reading.rs` 保存绝对 top row、一屏解码后的活动 cells 以及首次读取的必要历史行，不克隆整个 grid，也不创建额外 entity、锁或 daemon 行获取协议。样式保存 ANSI 值、字符、marks、hyperlink 和宽字符／换行语义，不保存可回收的 side-table ID 或主题解析色；每帧沿用同一颜色解析逻辑。`TerminalView` 适配 GPUI 事件、原有帧回调／定时器、viewport 上报和字号 action；滚动条仍经原有 handle 提交目标行。回到提示符时使用同一所有者释放阅读内容、取消动画并清除行内余量。同步输出 hold 与长期阅读是独立机制：未提交的同步帧不会被捕获为阅读内容。绘制及命中仍使用 `TerminalElement` 最近一帧的逻辑像素 cell geometry；display scale 只用于向子进程报告设备像素。
 
+滚动条在实时边缘仅冻结供显隐判断的呈现几何，仍记录最新历史范围；拖动目标不能使用旧的或空的历史容量来裁剪。目标经同一 `SelectionScroll` 路径进入阅读并捕获行，粘贴仍通过原有路径释放阅读态。每个保留行还保存共享 Kitty 解码器取得的 placeholder runs；完整行及分数滚动的上一行图片切片都与冻结文字使用同一行来源，不从后台已改写的 live cells 重新推导。这项接线修复不替代 #252 的完整图片 lease 与同源交互验收。
+
 消费者回归集中在 `selection_scroll_consumer_tests.rs`，规则回归在 `selection_scroll_tests.rs`。原生验收仍需在 live terminal 上执行拖选／越界滚动、输出期间反向扩选、滚轮／触控板惯性尾段修饰键切换、拖动滚动条，以及窗口 resize 和界面／显示缩放；自动断言不能替代这些平台交互记录。
 
 `reading_consumer_tests.rs` 增加受控真实 PTY → 隔离 daemon → `RemoteTerminal` → 生产 `TerminalView` 的文本回归，以及标准 GPUI Button 的位置、Tab／Enter、点击、双语、窄窗格与界面缩放测试代码。本工单实施阶段按集成约定未执行构建、测试或格式化；集成人应运行以下命令并保留原始结果，不能把已添加测试写成已通过：
+
+集成首轮 `reading_` 记录为 `3 passed / 1 failed`：滚动条在实时边缘冻结的旧历史范围阻止了阅读态建立。修复后增加离开实时画面的断言、历史增长后的滚动条目标回归，以及活动 placeholder cells 被擦除后的生产图片绘制回归；本修复子任务按约定未执行测试、构建或格式化，不能把新增断言计为通过。
 
 ```powershell
 cargo test --locked -p lyrel --lib terminal::view::gpui_tests::reading_ -- --nocapture --test-threads=1
