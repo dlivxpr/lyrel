@@ -81,6 +81,10 @@ lyrel 会将这些参数写入 `agent_launch`，但会去掉用于恢复会话�
 
 快捷启动和恢复会使用目标 Host 的实际 shell；未显式指定 shell 时，从该 Host 的 `ShellInventory` 默认项解析，不按桌面操作系统猜测远端 shell。命令被拒绝时，界面保留错误通知并说明恢复方式：修改 `agent_launch`，或在新窗格手动启动；不会只记录日志后留下无说明的空 shell。公开图片策略仍只影响对应子进程，恢复时保留显式关闭项。
 
+omp 的快速启动（包括 `agent_launch.omp` 的字面量包装命令和连接中的窗格）现在只给该次命令提供 Kitty 兼容身份：`TERM_PROGRAM=kitty`，清空 `TERM_PROGRAM_VERSION`，以 `LC_TERMINAL=lyrel`、`LC_TERMINAL_VERSION` 和既有 `LYREL` 保留真实身份／版本，并设置 `PI_NO_DECCARA=1` 禁用尚不支持的矩形 SGR。普通 shell 仍为 `TERM_PROGRAM=lyrel`；命令结束后不留下 Kitty 身份。显式命令级 `TERM_PROGRAM` 优先，不强制设置图片协议或改写 omp 的图片显示偏好。恢复／分叉和手动 shell 拦截的全路径覆盖另由 #250 完成，不把本次快速启动改动外推为已验收。
+
+新增的正式 `omp/18.18.6` loopback SSE 消费者与既有静态保存会话重放分开：它经公开 provider 接口逐段发送一个 SVG 围栏，在生产 `RemoteTerminal`／`TerminalView` 中断言两种完整中间栅格及最终像素、裁剪、图层、图文顺序和旧放置消失。测试代码及命令见[终端图片兼容说明](/getting-started/concepts#omp-loopback-streaming)；本次实现阶段未运行该消费者，不代表原生窗口或真实远端已经通过。
+
 在远程工作区中，lyrel 无法读取远程计算机的 `PATH`，因此只会提供它已在该远程计算机上见过运行的智能体：
 手动启动一次，智能体就会加入列表。本地 `agent_launch` 中指定的包装脚本，只有在远程
 `config.json` 中也配置了该名称，才能在远程被识别。

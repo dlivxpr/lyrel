@@ -5,6 +5,7 @@ import { mkdirSync, readFileSync, writeFileSync, appendFileSync, existsSync, rmS
 import { join, resolve } from 'node:path';
 import { spawn, spawnSync } from 'node:child_process';
 import { encodePng } from './graphics-fixture-utils.mjs';
+import { streamSvg } from './omp-loopback-stream.mjs';
 import { fileURLToPath } from 'node:url';
 import { isatty } from 'node:tty';
 
@@ -57,7 +58,7 @@ if (action === 'prepare') {
   const omp = resolve(option('--omp', 'omp.exe'));
   const scenario = option('--case', 'pictures');
   const mode = option('--mode', 'placeholders');
-  if (!['pictures','budget','disabled','protocol-off','placeholder-off'].includes(scenario)) throw new Error('Unknown --case');
+  if (!['pictures','budget','disabled','protocol-off','placeholder-off','streaming'].includes(scenario)) throw new Error('Unknown --case');
   if (!['placeholders','direct'].includes(mode)) throw new Error('Unknown --mode');
   mkdirSync(root); // Exclusive: never overwrite somebody else's data.
   const canonical = realpathSync(root);
@@ -73,6 +74,9 @@ if (action === 'prepare') {
   const assistant = (content, stopReason = 'stop') => ({role:'assistant',api:'openai-completions',provider:'lyrel-fixture',model:'never-infer',content,usage,stopReason,timestamp:now});
   append({role:'user',content:[{type:'text',text:'Synthetic saved input; do not submit a new prompt.'}],timestamp:now});
   const identities = [];
+  if (scenario === 'streaming') {
+    append(assistant([{type:'text',text:'LYREL_STREAM_READY'}]));
+  } else {
   const count = scenario === 'budget' ? 10 : 1;
   // Released 18.14.0/18.14.1 keys assistant images by content slot (`native:${i}`),
   // not by message. Ten separate slot-1 messages alias one transmit-once image.
@@ -90,6 +94,7 @@ if (action === 'prepare') {
   append(assistant([{type:'toolCall',id:'lyrel-picture-read',name:'read',arguments:{path:'synthetic-picture.png'}}], 'toolUse'));
   append({role:'toolResult',toolCallId:'lyrel-picture-read',toolName:'read',content:[{type:'text',text:'LYREL_TOOL_RESULT'},{type:'image',mimeType:'image/png',data:toolImage.bytes.toString('base64')}],isError:false,timestamp:now});
   append(assistant([{type:'text',text:'LYREL_RASTERIZED_FIGURE\n```svg\n<svg xmlns="http://www.w3.org/2000/svg" width="240" height="80" viewBox="0 0 240 80"><rect width="240" height="80" fill="#123456"/><path d="M20 65 L120 10 L220 65 Z" fill="#ff8000"/></svg>\n```\nLYREL_REPLAY_END'}]));
+  }
   writeFileSync(session, entries.map(value => JSON.stringify(value)).join('\n') + '\n');
   const overlay = join(root, 'overlay.json');
   json(overlay, {terminal:{showImages:scenario !== 'disabled'},tui:{renderSvg:true,maxInlineImages:8,resizeScrollback:'rebuild'},startup:{quiet:true,setupWizard:false},recap:{enabled:false},compaction:{enabled:false},retry:{modelFallback:false}});
@@ -100,6 +105,11 @@ if (action === 'prepare') {
     PI_FORCE_IMAGE_PROTOCOL:scenario === 'protocol-off' ? 'off' : 'kitty',PI_KITTY_PLACEHOLDERS:mode === 'direct' ? '0' : '1',PI_NO_TITLE:'1',
   };
   if (scenario === 'placeholder-off') environment.PI_NO_KITTY_PLACEHOLDERS = '1';
+  if (scenario === 'streaming') {
+    // Automatic capability discovery, NOT a forced protocol/placeholder test.
+    delete environment.PI_FORCE_IMAGE_PROTOCOL;
+    delete environment.PI_KITTY_PLACEHOLDERS;
+  }
   const bridgeRunner = option('--bridge-runner');
   let bridge;
   if (bridgeRunner) {
@@ -113,6 +123,7 @@ if (action === 'prepare') {
     figure:{backgroundRgb:[18,52,86],triangleRgb:[255,128,0]},upstreamReviewed:'18.14.1',latestReleaseObserved:'2026-10-31',
     argv:['--config',overlay,'--model','lyrel-fixture/never-infer','--no-extensions','--no-skills','--no-rules','--no-context-files','--no-lsp','--no-tools','--resume',session]};
   if (bridge) manifest.argv.push('--extension', bridge);
+  if (scenario === 'streaming') manifest.argv[manifest.argv.indexOf('--model') + 1] = 'lyrel-fixture/stream-svg';
   json(manifestPath, manifest);
   json(join(root,'lyrel','config.json'), {shell:{program:process.execPath,args:[fileURLToPath(import.meta.url),'run','--root',canonical]},restore_windows:false});
   console.log(JSON.stringify(manifest));
@@ -134,7 +145,7 @@ if (action === 'prepare') {
   }
   // Deliberately allow-list OS/terminal plumbing; no provider keys, proxy, profile,
   // extensions, private stores, dotenv overlays or credential-command variables.
-  const allowed = ['PATH','PATHEXT','SystemRoot','SYSTEMROOT','WINDIR','COMSPEC','TERM','TERM_PROGRAM','TERM_PROGRAM_VERSION','COLORTERM','LYREL','LYREL_PANE','LYREL_CONFIG_DIR','LYREL_AGENT_HOOK_EXE','ConEmuANSI','WT_SESSION'];
+  const allowed = ['PATH','PATHEXT','SystemRoot','SYSTEMROOT','WINDIR','COMSPEC','TERM','TERM_PROGRAM','TERM_PROGRAM_VERSION','LC_TERMINAL','LC_TERMINAL_VERSION','PI_NO_DECCARA','COLORTERM','LYREL','LYREL_PANE','LYREL_CONFIG_DIR','LYREL_AGENT_HOOK_EXE','ConEmuANSI','WT_SESSION'];
   const environment = {};
   for (const [key,value] of Object.entries(process.env)) if (allowed.some(name => name.toLowerCase() === key.toLowerCase())) environment[key] = value;
   Object.assign(environment, manifest.environment);
@@ -149,6 +160,15 @@ if (action === 'prepare') {
   };
   const version = inspect('version',['--version']);
   writeFileSync(join(root,'version.txt'),version + '\n');
+  const identity = Object.fromEntries(['TERM_PROGRAM','TERM_PROGRAM_VERSION','LC_TERMINAL','LC_TERMINAL_VERSION','LYREL','PI_NO_DECCARA'].map(key => [key, environment[key] ?? null]));
+  // Older PowerShell/.NET clears a process variable by removing it. Both
+  // absent and empty mean no Kitty version; never inherit lyrel's version.
+  identity.TERM_PROGRAM_VERSION ??= '';
+  json(join(root,'identity.json'), identity);
+  if (manifest.scenario === 'streaming') {
+    if (version !== '18.18.6') throw new Error(`Streaming fixture requires released omp 18.18.6, got ${version}`);
+    if (identity.TERM_PROGRAM !== 'kitty' || identity.TERM_PROGRAM_VERSION !== '' || identity.LC_TERMINAL !== 'lyrel' || identity.LC_TERMINAL_VERSION !== identity.LYREL || identity.PI_NO_DECCARA !== '1') throw new Error(`Invalid command-scoped identity: ${JSON.stringify(identity)}`);
+  }
   const configPath = inspect('config-path',['config','path']);
   const expectedConfig = join(root,'agent');
   if (resolve(configPath).toLowerCase() !== resolve(expectedConfig).toLowerCase()) throw new Error(`Public config path ${configPath} is not owned ${expectedConfig}`);
@@ -158,15 +178,24 @@ if (action === 'prepare') {
   }
   const requests = [];
   const server = createServer((request,response) => {
+    if (manifest.scenario === 'streaming') {
+      void streamSvg(request,response,{root,stage,requests}).catch(error => {
+        stage('failed',{during:'loopback-stream',error:error.stack ?? String(error)});
+        if (!response.headersSent) response.writeHead(500);
+        response.end();
+      });
+      return;
+    }
     requests.push({method:request.method,url:request.url});
     json(join(root,'requests.json'),requests);
     stage('inference-forbidden',{method:request.method,url:request.url});
     response.writeHead(503); response.end('LYREL fixture forbids inference');
   });
   await new Promise(resolve => server.listen(0,'127.0.0.1',resolve));
-  json(join(root,'agent','models.yml'), {providers:{'lyrel-fixture':{baseUrl:`http://127.0.0.1:${server.address().port}/v1`,api:'openai-completions',auth:'none',models:[{id:'never-infer',name:'Never infer (fixture)',reasoning:false,input:['text','image'],cost:{input:0,output:0,cacheRead:0,cacheWrite:0},contextWindow:128000,maxTokens:1024}]}}});
+  const model = manifest.scenario === 'streaming' ? 'stream-svg' : 'never-infer';
+  json(join(root,'agent','models.yml'), {providers:{'lyrel-fixture':{baseUrl:`http://127.0.0.1:${server.address().port}/v1`,api:'openai-completions',auth:'none',models:[{id:model,name:'Owned loopback fixture',reasoning:false,input:['text','image'],cost:{input:0,output:0,cacheRead:0,cacheWrite:0},contextWindow:128000,maxTokens:1024}]}}});
   const listing = JSON.parse(inspect('models',['models','lyrel-fixture','--json','--no-extensions','--config',manifest.overlay]));
-  if (listing.models?.length !== 1 || listing.models[0].selector !== 'lyrel-fixture/never-infer') throw new Error(`Owned public provider was not selectable: ${JSON.stringify(listing)}`);
+  if (listing.models?.length !== 1 || listing.models[0].selector !== `lyrel-fixture/${model}`) throw new Error(`Owned public provider was not selectable: ${JSON.stringify(listing)}`);
   stage('native-launch',{version,argv:manifest.argv,modelsPath:join(root,'agent','models.yml'),baseUrl:`http://127.0.0.1:${server.address().port}/v1`,stdinTTY:isatty(0),stdoutTTY:isatty(1)});
   const child = spawn(manifest.omp, manifest.argv, {env:environment,cwd:join(root,'workspace'),stdio:'inherit'});
   json(join(root,'running.json'), {pid:process.pid,childPid:child.pid});
@@ -183,14 +212,20 @@ if (action === 'prepare') {
     const records = readFileSync(manifest.session,'utf8').trim().split('\n').map(line => JSON.parse(line));
     const messages = records.filter(record => record.type === 'message').length;
     const modelUsage = records.filter(record => record.type === 'model_usage').length;
-    const audit = {version,requests,messages,initialMessages:manifest.initialMessages,modelUsage,exitCode:code,
+    const audit = {version,scenario:manifest.scenario,requests,messages,initialMessages:manifest.initialMessages,modelUsage,exitCode:code,
       zeroInference:requests.length === 0 && messages === manifest.initialMessages && modelUsage === 0};
+    if (manifest.scenario === 'streaming') {
+      const generated = records.filter(record => record.type === 'message').slice(manifest.initialMessages);
+      const assistant = generated.find(record => record.message.role === 'assistant')?.message;
+      audit.loopbackStreaming = requests.length === 1 && requests[0].completed === true && messages === manifest.initialMessages + 2
+        && assistant?.stopReason === 'stop' && assistant?.content?.some(part => part.type === 'text' && part.text.includes('LYREL_STREAM_AFTER'));
+    }
     json(join(root,'audit.json'),audit);
     stage('audited',audit);
-    if (!audit.zeroInference || code !== 0) process.exitCode = 1;
+    if (!(manifest.scenario === 'streaming' ? audit.loopbackStreaming : audit.zeroInference) || code !== 0) process.exitCode = 1;
     console.error(`\nLYREL_OMP_REPLAY_AUDIT ${JSON.stringify(audit)}`);
   } finally {
-    stop(); server.close(); rmSync(join(root,'running.json'),{force:true});
+    stop(); server.closeAllConnections(); server.close(); rmSync(join(root,'running.json'),{force:true});
     process.removeListener('SIGINT',stop); process.removeListener('SIGTERM',stop); process.removeListener('exit',stop);
   }
 } else if (action === 'launch') {
@@ -228,4 +263,4 @@ if (action === 'prepare') {
   const stopped = spawnSync(resolve(cli), ['server','stop'], {env:environment,encoding:'utf8',timeout:30000});
   if (stopped.status !== 0) throw new Error(`Owned daemon shutdown failed: ${stopped.stderr || stopped.error}`);
   rmSync(root,{recursive:true});
-} else throw new Error('Usage: node scripts/omp-native-replay.mjs prepare|run|launch|cleanup --root <directory> [--omp <absolute executable>] [--bridge-runner <absolute hook executable>] [--lyrel-app <absolute executable>] [--lyrel-cli <absolute executable>] [--case pictures|budget|disabled|protocol-off|placeholder-off] [--mode placeholders|direct]');
+} else throw new Error('Usage: node scripts/omp-native-replay.mjs prepare|run|launch|cleanup --root <directory> [--omp <absolute executable>] [--bridge-runner <absolute hook executable>] [--lyrel-app <absolute executable>] [--lyrel-cli <absolute executable>] [--case pictures|budget|disabled|protocol-off|placeholder-off|streaming] [--mode placeholders|direct]');
