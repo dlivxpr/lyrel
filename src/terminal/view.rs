@@ -213,6 +213,8 @@ pub struct TerminalView {
     remote_clipboard_write_in_flight: Option<u64>,
     remote_clipboard_write_generation: u64,
     pub focus_handle: FocusHandle,
+    reading_focus: FocusHandle,
+    reading_obstruction: std::rc::Rc<std::cell::Cell<Pixels>>,
     pub(super) lifecycle: super::lifecycle::TerminalLifecycle,
     pub font: Font,
     pub font_bold: Option<Font>,
@@ -712,6 +714,8 @@ impl TerminalView {
             remote_clipboard_write_in_flight: None,
             remote_clipboard_write_generation: 0,
             focus_handle,
+            reading_focus: cx.focus_handle().tab_stop(true),
+            reading_obstruction: std::rc::Rc::new(std::cell::Cell::new(px(0.))),
             lifecycle,
             font,
             font_bold,
@@ -1970,6 +1974,7 @@ impl TerminalView {
         if let Some(target) = self.scroll_handle.take_pending() {
             self.selection_scroll.scroll_to(&mut term, target);
         }
+        self.selection_scroll.sync_reading(&mut term);
         let cursor = term.cursor().pos;
         let row = cursor.row.0 + term.display_offset() as i32;
         self.frame = FrameFacts {
@@ -3088,6 +3093,7 @@ mod gpui_tests {
     include!("graphics_relative_consumer_tests.rs");
     include!("native_ssh_consumer_tests.rs");
     include!("lifecycle_consumer_tests.rs");
+    include!("reading_consumer_tests.rs");
 
     #[gpui_kit::test]
     fn graphics_consumer_streamed_png_and_compression_render_after_rejected_transfer(

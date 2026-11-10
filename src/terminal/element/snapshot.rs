@@ -73,48 +73,7 @@ impl<'a, T: rio_vt::event::EventListener> CellPainter<'a, T> {
             rendered.clone()
         } else {
             let style = term.grid.style_of(&cell);
-            let palette = self.palette;
-            let colors = self.colors;
-            let flags = style.flags;
-            let (mut foreground, _) = resolve(style.fg, palette, colors.fg_rgb, colors.bg_rgb);
-            let (background, background_default) =
-                resolve(style.bg, palette, colors.fg_rgb, colors.bg_rgb);
-            let (foreground, background, draw_bg) = if flags.contains(StyleFlags::INVERSE) {
-                (background, foreground, true)
-            } else {
-                if flags.contains(StyleFlags::HIDDEN) {
-                    foreground = background;
-                }
-                (foreground, background, !background_default)
-            };
-            let mut rendered = RenderCell {
-                fg: to_hsla(foreground),
-                bg: to_hsla(background),
-                draw_bg,
-                bold: flags.contains(StyleFlags::BOLD),
-                italic: flags.contains(StyleFlags::ITALIC),
-                strikeout: flags.contains(StyleFlags::STRIKEOUT),
-                underline: if flags.contains(StyleFlags::DOUBLE_UNDERLINE) {
-                    UnderlineKind::Double
-                } else if flags.contains(StyleFlags::UNDERCURL) {
-                    UnderlineKind::Curly
-                } else if flags.contains(StyleFlags::DOTTED_UNDERLINE) {
-                    UnderlineKind::Dotted
-                } else if flags.contains(StyleFlags::DASHED_UNDERLINE) {
-                    UnderlineKind::Dashed
-                } else if flags.contains(StyleFlags::UNDERLINE) {
-                    UnderlineKind::Single
-                } else {
-                    UnderlineKind::None
-                },
-                underline_color: style
-                    .underline_color
-                    .map(|color| to_hsla(resolve(color, palette, colors.fg_rgb, colors.bg_rgb).0)),
-                ..RenderCell::default()
-            };
-            if flags.contains(StyleFlags::DIM) {
-                rendered.fg = dim_fg(rendered.fg, background, colors.legible_dim);
-            }
+            let rendered = render_style(style, self.palette, self.colors);
             self.style = style_id.map(|id| (id, rendered.clone()));
             rendered
         };
@@ -147,6 +106,76 @@ impl<'a, T: rio_vt::event::EventListener> CellPainter<'a, T> {
         );
         rendered
     }
+}
+
+fn render_style(
+    style: rio_vt::crosswords::style::Style,
+    palette: &[ColorRgb; 256],
+    colors: &PaintColors,
+) -> RenderCell {
+    let flags = style.flags;
+    let (mut foreground, _) = resolve(style.fg, palette, colors.fg_rgb, colors.bg_rgb);
+    let (background, background_default) = resolve(style.bg, palette, colors.fg_rgb, colors.bg_rgb);
+    let (foreground, background, draw_bg) = if flags.contains(StyleFlags::INVERSE) {
+        (background, foreground, true)
+    } else {
+        if flags.contains(StyleFlags::HIDDEN) { foreground = background; }
+        (foreground, background, !background_default)
+    };
+    let mut rendered = RenderCell {
+        fg: to_hsla(foreground),
+        bg: to_hsla(background),
+        draw_bg,
+        bold: flags.contains(StyleFlags::BOLD),
+        italic: flags.contains(StyleFlags::ITALIC),
+        strikeout: flags.contains(StyleFlags::STRIKEOUT),
+        underline: if flags.contains(StyleFlags::DOUBLE_UNDERLINE) { UnderlineKind::Double }
+            else if flags.contains(StyleFlags::UNDERCURL) { UnderlineKind::Curly }
+            else if flags.contains(StyleFlags::DOTTED_UNDERLINE) { UnderlineKind::Dotted }
+            else if flags.contains(StyleFlags::DASHED_UNDERLINE) { UnderlineKind::Dashed }
+            else if flags.contains(StyleFlags::UNDERLINE) { UnderlineKind::Single }
+            else { UnderlineKind::None },
+        underline_color: style.underline_color.map(|color| to_hsla(resolve(color, palette, colors.fg_rgb, colors.bg_rgb).0)),
+        ..RenderCell::default()
+    };
+    if flags.contains(StyleFlags::DIM) {
+        rendered.fg = dim_fg(rendered.fg, background, colors.legible_dim);
+    }
+    rendered
+}
+
+fn render_reading_cell(
+    cell: &crate::terminal::reading::ReadingCell,
+    palette: &[ColorRgb; 256],
+    colors: &PaintColors,
+    cached: &mut Option<(rio_vt::crosswords::style::Style, RenderCell)>,
+) -> RenderCell {
+    let spacer = matches!(cell.wide, Wide::Spacer | Wide::LeadingSpacer);
+    let mut rendered = if spacer {
+        RenderCell::default()
+    } else if let Some((style, rendered)) = cached.as_ref()
+        && *style == cell.style
+    {
+        rendered.clone()
+    } else {
+        let rendered = render_style(cell.style, palette, colors);
+        *cached = Some((cell.style, rendered.clone()));
+        rendered
+    };
+    rendered.c = cell.c;
+    rendered.marks = cell.marks.clone();
+    rendered.hyperlink = cell.hyperlink.clone();
+    rendered.wide = cell.wide;
+    rendered.spacer = spacer;
+    rendered.wrapped = cell.wrapped;
+    if rendered.c == '\u{10eeee}' {
+        rendered.c = ' ';
+        rendered.marks = None;
+        rendered.underline = UnderlineKind::None;
+        rendered.strikeout = false;
+    }
+    osc8_underline::mark(&mut rendered, cell.hyperlink.is_some());
+    rendered
 }
 
 impl TerminalElement {
@@ -258,10 +287,24 @@ impl TerminalElement {
             let mut inverse_runs: Vec<(usize, usize)> = Vec::new();
             let mut painter = CellPainter::new(&term, &palette, colors, selection.as_ref());
 
+            let reading = self.view.read(cx).selection_scroll.reading.as_ref();
+            let mut reading_style = None;
             let rendered_rows = rows.min(term.screen_lines());
-            let rendered_cols = cols.min(term.columns());
+            let rendered_cols = cols.min(reading.map_or(term.columns(), |reading| reading.columns()));
             for row in 0..rendered_rows {
                 let line = Line(row as i32 - display_offset);
+                if let Some(reading) = reading {
+                    let source = reading.row(row as i32);
+                    for col in 0..cols {
+                        let mut rendered = source
+                            .and_then(|source| source.get(col))
+                            .map(|cell| render_reading_cell(cell, &palette, colors, &mut reading_style))
+                            .unwrap_or_default();
+                        rendered.tab_stop = presentation.is_tab_stop(col);
+                        buf[row * cols + col] = if dim < 1. { dim_cell(rendered, dim, under) } else { rendered };
+                    }
+                    continue;
+                }
                 let source = &term.grid[line][..];
                 let slices = lyrel_core::core::kitty_graphics::placeholder_row(&term.grid, line);
                 if !slices.is_empty() {
@@ -313,7 +356,10 @@ impl TerminalElement {
                     .enumerate()
                 {
                     let position = Pos::new(line, Column(col));
-                    let mut rc = painter.snapshot(position, cell);
+                    let mut rc = if let Some(reading) = reading {
+                        reading.row(-1).and_then(|source| source.get(col))
+                            .map(|cell| render_reading_cell(cell, &palette, colors, &mut reading_style)).unwrap_or_default()
+                    } else { painter.snapshot(position, cell) };
                     rc.tab_stop = presentation.is_tab_stop(col);
                     if dim < 1. {
                         rc = dim_cell(rc, dim, under);
@@ -327,7 +373,7 @@ impl TerminalElement {
 
             let row = cursor_row;
             let col = cur.pos.col.0;
-            if row >= 0 && (row as usize) < rows && col < cols {
+            if reading.is_none() && row >= 0 && (row as usize) < rows && col < cols {
                 // Snap the IME anchor to the fake caret when there is
                 // exactly one caret-sized inverse run on the row.
                 let ime_col = match inverse_runs.as_slice() {
@@ -356,9 +402,10 @@ impl TerminalElement {
                 .images()
                 .commit_with_placeholders(&placeholders);
             drop(term);
-            let (any_match, any_current) =
-                self.flag_search_matches(buf, rows, cols, display_offset, cx);
-            self.flag_hovered_link(buf, rows, cols, display_offset, cx);
+            let (any_match, any_current) = if reading.is_none() {
+                self.flag_hovered_link(buf, rows, cols, display_offset, cx);
+                self.flag_search_matches(buf, rows, cols, display_offset, cx)
+            } else { (false, false) };
             return Ok(GridSnapshot {
                 cursor,
                 sliver,
