@@ -132,17 +132,17 @@ fn graphics_assert_production_paint_at(
         |cx| view.read_with(cx, |view, _| {
             let Some(geom) = view.cell_geom else { return false; };
             let Some(snap) = view.grid_snap.as_ref() else { return false; };
-            if (geom.cols, geom.rows) != (cols, rows) || snap.held {
-                return false;
-            }
-            let term = view.terminal.term.lock();
-            if term.synchronized_output() {
+            if (geom.cols, geom.rows) != (cols, rows) {
                 return false;
             }
             // Reading mode intentionally presents a frozen picture, rather
             // than the advancing live image map. Keep that existing contract.
             if view.selection_scroll.reading.is_some() {
                 return true;
+            }
+            let term = view.terminal.term.lock();
+            if snap.held || term.synchronized_output() {
+                return false;
             }
             if snap.display_offset != term.display_offset() as i32 {
                 return false;
