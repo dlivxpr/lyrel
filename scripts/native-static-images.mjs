@@ -57,7 +57,9 @@ if (!args.includes('--worker')) {
     if (agent === 'hermes') assert.equal(env.KITTY_WINDOW_ID, 'lyrel', 'Hermes native auto detector requires its scoped marker');
     if (agent === 'kimi' && policy === 'off') env.PI_IMAGE_PROTOCOL = 'none';
     const loader = path.join(source, agent === 'kimi' ? 'node_modules' : 'ui-tui/node_modules', 'tsx/dist/cli.mjs');
-    const worker = [loader, fileURLToPath(import.meta.url), ...args, '--worker', '--root', root,
+    // The owned temporary cwd must not hide Kimi's pinned decorator settings.
+    const compiler = agent === 'kimi' ? ['--tsconfig', path.join(source, 'tsconfig.json')] : [];
+    const worker = [loader, ...compiler, fileURLToPath(import.meta.url), ...args, '--worker', '--root', root,
       '--python', option('--python', process.env.LYREL_HERMES_GRAPHICS_PYTHON ?? 'python')];
     child = spawn(process.execPath, worker, { cwd: root, env, stdio: 'inherit' });
     const timer = setTimeout(() => child.kill(), 180_000);
