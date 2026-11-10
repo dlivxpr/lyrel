@@ -168,7 +168,12 @@ impl OmpReplayFixture {
         );
     }
 
-    fn finish(&self, view: &Entity<TerminalView>, cx: &mut TestAppContext) {
+    fn finish(
+        &self,
+        daemon: &GraphicsDaemonProcess,
+        view: &Entity<TerminalView>,
+        cx: &mut TestAppContext,
+    ) {
         if self.streaming {
             // The public JSONL must contain the completed turn before /exit;
             // receiving the SSE terminator alone is not agent completion.
@@ -214,7 +219,55 @@ impl OmpReplayFixture {
                 |cx| view.read_with(cx, |view, _| view.scrollback_text().contains("LYREL_PARENT_AFTER=lyrel")),
                 |cx| self.diagnostics(view, cx),
             );
-            assert!(view.read_with(cx, |view, _| view.scrollback_text().contains("LYREL_PARENT_BEFORE=lyrel")));
+            // The native TUI may clear/rewrite the live VT grid. Inspect the
+            // daemon's retained PTY transcript independently of that mutable
+            // presentation; Observe neither takes control nor resizes the pane.
+            let pane = view.read_with(cx, |view, _| view.pane_id);
+            let mut observer = daemon
+                .panes()
+                .observe(
+                    pane,
+                    crate::daemon::protocol::WinSize {
+                        cols: 100,
+                        rows: 48,
+                        cell_w: 10,
+                        cell_h: 20,
+                    },
+                )
+                .unwrap();
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+            let mut transcript = Vec::new();
+            let after = b"LYREL_PARENT_AFTER=lyrel";
+            while !transcript.windows(after.len()).any(|bytes| bytes == after) {
+                let remaining = deadline
+                    .checked_duration_since(std::time::Instant::now())
+                    .filter(|wait| !wait.is_zero())
+                    .expect("parent identity transcript replay timed out");
+                observer.set_recv_timeout(Some(remaining)).unwrap();
+                match observer.recv().unwrap() {
+                    DaemonMsg::Snapshot(bytes) | DaemonMsg::Output(bytes) => {
+                        assert!(
+                            transcript.len() + bytes.len() <= 8 << 20,
+                            "parent identity transcript exceeds retained replay budget"
+                        );
+                        transcript.extend(bytes);
+                    }
+                    DaemonMsg::Error(error) => panic!("parent identity observer failed: {error}"),
+                    DaemonMsg::Exited { code } => {
+                        panic!("parent shell exited before identity transcript barrier: {code:?}")
+                    }
+                    _ => {}
+                }
+            }
+            observer.detach().unwrap();
+            let transcript = String::from_utf8_lossy(&transcript);
+            let before = transcript.find("LYREL_PARENT_BEFORE=lyrel").unwrap_or_else(|| {
+                panic!("ordinary-shell identity missing before scoped launch; retained PTY transcript={transcript:?}")
+            });
+            assert!(
+                before < transcript.find("LYREL_PARENT_AFTER=lyrel").unwrap(),
+                "parent identity markers must bracket the scoped launch: {transcript:?}"
+            );
         } else {
             assert_eq!(audit["zeroInference"], true, "{audit}");
         }
@@ -419,7 +472,7 @@ fn omp_replay_assert_resume(cx: &mut TestAppContext, cases: &[&str]) {
                 "scroll-out/back must preserve deletion and exact placement identity"
             );
         }
-        fixture.finish(&view, cx);
+        fixture.finish(&daemon, &view, cx);
         graphics_recovery_destroy(view, window, cx);
     }
 }
@@ -458,7 +511,7 @@ fn graphics_consumer_released_omp_native_disabled_policy(cx: &mut TestAppContext
             omp_replay_scan(&view, window, cx).is_empty(),
             "explicit disabled is authoritative"
         );
-        fixture.finish(&view, cx);
+        fixture.finish(&daemon, &view, cx);
         graphics_recovery_destroy(view, window, cx);
     }
 }
@@ -590,7 +643,7 @@ fn graphics_consumer_released_omp_loopback_streamed_svg(cx: &mut TestAppContext)
             assert!(live.iter().all(|placement| placement.placement.image_id == image.image_id), "no superseded placements may survive: {:?}", live.iter().map(|image| &image.placement).collect::<Vec<_>>());
         });
     }
-    fixture.finish(&view, cx);
+    fixture.finish(&daemon, &view, cx);
     graphics_recovery_destroy(view, window, cx);
 }
 
