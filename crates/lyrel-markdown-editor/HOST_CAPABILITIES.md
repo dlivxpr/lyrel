@@ -95,3 +95,9 @@ MDX 的 `source_only` 是 presentation 能力，分屏复制该约束；`ToggleD
 工作台快捷键明确匹配 native `Editor` context，不借用 `Input` context 让普通输入框截获 native 按键。对外 Kit Backspace/Delete 与 editor 自身按键调用同一修改路径。分屏复制文档缩进宽度；多行缩进是保留选区的有序 batch，不替换被选正文。Host 命令的 before/after selection 纳入相同 history，Undo 恢复原选区；行重排保留原行尾且在移动无终止换行的片段时补齐操作必需的连接换行。
 
 重复 occurrence 选择是 view-local 状态，工作台 Next/All 经真实 native selection、quads/carets 与原子 batch 输入执行；不是仅供测试的 Code-only no-op。晚到 reload 若遇到 source revision 或 composition 变化，保留编辑并显示 conflict，而非静默覆盖或仅丢弃结果。以上修复仍须通过对应消费者与 native 门禁，不由本说明推定通过。
+
+### Reload 与 native 长代码基础门禁
+
+`reload_request` 单独标识最近一次真实读请求；`reload_seq` 继续标识源文适用性。普通编辑不冒充“已启动另一读请求”：晚到的仍属当前Host/path的读会报告 conflict，既不覆盖新preedit，也不在观察到revision变化前静默return。真正的新reload、context失效、路径移动/删除仍使旧request失效。
+
+原 `source::spelling::tests::spelling_long_code_remains_editable_with_offscreen_diagnostics` selector 已迁移到当前native registry的 `foundation::native_long_code`。保留完整 `"wide ".repeat(80_000)` fenced-code fixture与覆盖完整400,000B正文的离屏诊断，通过真实字体/paint/pointer、输入、保存、Undo、精确字节与重开验证；未保留旧projection/spelling内部接口，未缩短fixture。其余provider相关几何边界仍按上方逐项归属完成，新增case不代表这些边界自动通过。

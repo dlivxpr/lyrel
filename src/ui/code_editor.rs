@@ -133,6 +133,7 @@ pub(crate) struct OpenFile {
     saving: bool,
     save_pending: bool,
     reload_seq: u64,
+    reload_request: u64,
     pub(crate) conflict: Option<DiskConflict>,
     pub(crate) wrap: bool,
     /// Git change markers — see `gutter`.

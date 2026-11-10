@@ -295,6 +295,53 @@ fn mdx_source_only_survives_mode_action_split_history_save_reopen(cx: &mut TestA
     app.read_with(&context, |app, cx| { let view = app.active_editor_input().unwrap().markdown().unwrap().read(cx); assert!(view.is_source_only()); assert!(!view.is_live()); assert_eq!(view.document().read(cx).encode().unwrap(), source); });
 }
 
+#[cfg(feature = "native-markdown-tests")]
+pub(super) fn native_long_code(cx: &mut TestAppContext) {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("native-long-code.md");
+    let original = format!("# Huge code\n\n```text\n{}\n```\n", "wide ".repeat(80_000));
+    let body = original.find("wide").unwrap();
+    std::fs::write(&path, &original).unwrap();
+    let (app, mut context, _streams) = harness_with_tabs(cx, 1);
+    context.simulate_resize(gpui_kit::size(px(1600.), px(1000.)));
+    app.update_in(&mut context, |app, window, cx| app.open_file_in_editor(&path, window, cx));
+    until(&mut context, |context| app.read_with(context, |app, _| app.active_buffer().is_some()));
+    let view = app.read_with(&context, |app, _| app.active_editor_input().unwrap().markdown().unwrap().clone());
+    view.update_in(&mut context, |view, window, cx| {
+        view.set_soft_wrap(false, cx);
+        view.select_range(body..body, cx);
+        view.focus_handle(cx).focus(window, cx);
+        view.set_diagnostics(vec![lyrel_markdown_editor::Diagnostic { range: body..body + 400_000 }], cx);
+    });
+    until(&mut context, |context| context.update(|window, cx| {
+        view.read(cx).range_to_bounds(&(body..body)).is_some_and(|caret| caret.top() >= px(0.) && caret.bottom() <= window.viewport_size().height)
+    }));
+    let position = view.read_with(&context, |view, _| view.range_to_bounds(&(body..body)).unwrap().center());
+    context.update(|window, cx| {
+        window.pointer_down(position, gpui_kit::MouseButton::Left, cx);
+        window.pointer_up(position, gpui_kit::MouseButton::Left, cx);
+    });
+    view.read_with(&context, |view, cx| {
+        assert_eq!(view.cursor(), body);
+        assert!(!view.is_soft_wrap());
+        assert_eq!(view.document().read(cx).encode().unwrap(), original.as_bytes());
+    });
+    context.update(|window, cx| window.input("X", cx));
+    settle(&mut context);
+    let mut expected = original.clone(); expected.insert(body, 'X');
+    view.read_with(&context, |view, cx| assert_eq!(view.document().read(cx).encode().unwrap(), expected.as_bytes()));
+    save(&app, &mut context);
+    assert_eq!(std::fs::read(&path).unwrap(), expected.as_bytes());
+    context.dispatch_action(gpui_kit::component::input::Undo);
+    settle(&mut context);
+    view.read_with(&context, |view, cx| assert_eq!(view.document().read(cx).encode().unwrap(), original.as_bytes()));
+    save(&app, &mut context);
+    assert_eq!(std::fs::read(&path).unwrap(), original.as_bytes());
+    app.update_in(&mut context, |app, window, cx| { app.editor_close_file(0, window, cx); app.open_file_in_editor(&path, window, cx); });
+    until(&mut context, |context| app.read_with(context, |app, _| app.active_buffer().is_some()));
+    app.read_with(&context, |app, cx| assert_eq!(app.active_buffer().unwrap().input.markdown().unwrap().read(cx).document().read(cx).encode().unwrap(), original.as_bytes()));
+}
+
 #[cfg(test)]
 #[gpui_kit::test]
 fn zorite_foundation_workbench_shared_host_edit_save_reopen(cx: &mut TestAppContext) { lifecycle(cx); }
@@ -308,5 +355,6 @@ pub(super) fn native_cases() -> impl Iterator<Item = crate::native_markdown::Cas
         crate::native_markdown::Case::new("ui::code_editor::markdown::foundation::zorite_foundation_workbench_composition_commit_cancel_undo", composition),
         crate::native_markdown::Case::new("ui::code_editor::markdown::foundation::zorite_foundation_complete_extreme_line_paint_caret_input_save_undo", extreme_line),
         crate::native_markdown::Case::new("ui::code_editor::markdown::foundation::zorite_foundation_native_wrapped_pointer_navigation_unicode_history", native_navigation),
+        crate::native_markdown::Case::new("ui::code_editor::markdown::source::spelling::tests::spelling_long_code_remains_editable_with_offscreen_diagnostics", native_long_code),
     ].into_iter()
 }

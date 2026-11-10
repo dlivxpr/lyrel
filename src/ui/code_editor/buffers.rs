@@ -135,6 +135,7 @@ impl EditorBuffers {
         self.watch_refresh = true;
         for file in &mut self.files {
             file.reload_seq = file.reload_seq.wrapping_add(1);
+            file.reload_request = file.reload_request.wrapping_add(1);
         }
     }
 
@@ -187,7 +188,8 @@ impl EditorBuffers {
 
     pub(super) fn note_edit(&mut self, id: BufferId, cx: &gpui_kit::App) {
         let Some(file) = self.get_mut(id) else { return };
-        // Every edit also retires reads/stat results prepared for older text.
+        // Edits retire source applicability, not the read request's identity:
+        // a completed owning read must still surface a conflict without overwriting input.
         file.reload_seq = file.reload_seq.wrapping_add(1);
         let input = file.input.read(cx);
         let text = input.text();
@@ -467,6 +469,7 @@ impl EditorBuffers {
             saving: false,
             save_pending: false,
             reload_seq: 0,
+            reload_request: 0,
             conflict: None,
             wrap,
             gutter: gutter::BufferGutter::default(),
@@ -694,7 +697,9 @@ impl EditorBuffers {
         let input_lease = file.input.markdown().map(|view| view.read(cx).document().read(cx).revision());
         let pending_lease = file.input.markdown().map(|view| view.read(cx).document().read(cx).has_composition());
         file.reload_seq = file.reload_seq.wrapping_add(1);
-        let seq = file.reload_seq;
+        let edit_seq = file.reload_seq;
+        file.reload_request = file.reload_request.wrapping_add(1);
+        let seq = file.reload_request;
         HostOps::run_in(
             host,
             window,
@@ -719,7 +724,7 @@ impl EditorBuffers {
                 let Some(file) = access(view).get_mut(id) else {
                     return;
                 };
-                if file.reload_seq != seq || !file.is_at(host_id, &expected) {
+                if file.reload_request != seq || !file.is_at(host_id, &expected) {
                     return;
                 }
                 let (decoded, mtime) = match result {
@@ -736,7 +741,7 @@ impl EditorBuffers {
                         return;
                     }
                 };
-                if input_lease.is_some_and(|lease| file.input.markdown().is_none_or(|view| view.read(cx).document().read(cx).revision() != lease)) {
+                if file.reload_seq != edit_seq || input_lease.is_some_and(|lease| file.input.markdown().is_none_or(|view| view.read(cx).document().read(cx).revision() != lease)) {
                     file.conflict = Some(DiskConflict::Changed(mtime));
                     cx.notify();
                     return;
@@ -788,6 +793,7 @@ impl EditorBuffers {
                 to.join(rest)
             };
             file.reload_seq = file.reload_seq.wrapping_add(1);
+            file.reload_request = file.reload_request.wrapping_add(1);
             file.input
                 .set_highlighter(language_for_path(&file.path), cx);
             moved = true;
@@ -801,6 +807,7 @@ impl EditorBuffers {
                 file.conflict = Some(DiskConflict::Deleted);
                 file.disk_mtime = None;
                 file.reload_seq = file.reload_seq.wrapping_add(1);
+                file.reload_request = file.reload_request.wrapping_add(1);
             }
         }
     }
