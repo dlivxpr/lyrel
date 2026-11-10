@@ -24,14 +24,14 @@ const binary = option('--opencode') ?? 'opencode';
 const allowed = new Set(['--prepare', '--resume', '--previews', '--opencode']);
 for (let i = 0; i < args.length; i += 2) assert(allowed.has(args[i]), `Unknown option: ${args[i]}`);
 assert(!(prepareRoot && resumeRoot), '--prepare and --resume are mutually exclusive');
-assert(resumeRoot || previews === 'on' || previews === 'off', 'Explicitly select --previews on or --previews off; no user policy is overwritten');
+assert(resumeRoot || ['on', 'off', 'inline-off'].includes(previews), 'Explicitly select --previews on|off|inline-off; no user policy is overwritten');
 assert(!resumeRoot || previews === undefined, '--resume uses the saved fixture display policy');
 
 function environment(root) {
   // Whitelist runtime/terminal facts, never copy credentials, provider config,
   // private histories, global plugins, service URLs or inherited CLI overlays.
   const keep = ['PATH', 'Path', 'SystemRoot', 'SYSTEMROOT', 'WINDIR', 'COMSPEC', 'PATHEXT',
-    'LANG', 'LC_ALL', 'TERM', 'TERM_PROGRAM', 'TERM_PROGRAM_VERSION', 'COLORTERM',
+    'LANG', 'LC_ALL', 'TERM', 'TERM_PROGRAM', 'TERM_PROGRAM_VERSION', 'LC_TERMINAL', 'LC_TERMINAL_VERSION', 'COLORTERM',
     'LYREL', 'LYREL_PANE', 'LYREL_CONFIG_DIR', 'LYREL_DATA_DIR', 'LYREL_CONTROL_SOCK'];
   const env = Object.fromEntries(keep.filter((key) => process.env[key] !== undefined).map((key) => [key, process.env[key]]));
   Object.assign(env, {
@@ -41,6 +41,8 @@ function environment(root) {
     XDG_STATE_HOME: path.join(root, 'state'), XDG_CACHE_HOME: path.join(root, 'cache'),
     XDG_RUNTIME_DIR: path.join(root, 'runtime'), TMP: path.join(root, 'tmp'), TEMP: path.join(root, 'tmp'), TMPDIR: path.join(root, 'tmp'),
   });
+  const overlay = path.join(root, 'inline-policy.json');
+  if (existsSync(overlay)) env.OPENCODE_CLI_CONFIG_CONTENT = readFileSync(overlay, 'utf8');
   return env;
 }
 
@@ -121,9 +123,9 @@ function verify(root, manifest) {
   assert.deepEqual(after.messages, manifest.savedMessages, 'Replay changed saved messages (prompt, inference, or source mutation)');
   assert.equal(after.info.cost, 0, 'Replay incurred model cost');
   assert.deepEqual(after.info.tokens, { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } }, 'Replay consumed model tokens');
-  const cli = JSON.parse(readFileSync(path.join(root, 'config', 'opencode', 'cli.json'), 'utf8'));
-  assert.equal(cli.session.image_preview, manifest.previews, 'Native replay changed the explicit display policy');
-  console.log('OPENCODE_REPLAY_VERIFIED: unchanged public export, zero model usage');
+  assert.equal(readFileSync(path.join(root, 'config', 'opencode', 'cli.json'), 'utf8'), manifest.globalConfig, 'Global CLI config must remain byte-identical, including unrelated settings');
+  assert.equal(environment(root).OPENCODE_CLI_CONFIG_CONTENT, manifest.inlineConfig, 'Existing inline deep-merge policy remains authoritative and unchanged');
+  console.log('OPENCODE_REPLAY_VERIFIED: unchanged public export, global/inline config bytes, zero model usage');
 }
 function prepare(root) {
   mkdirSync(root, { recursive: true });
@@ -134,9 +136,12 @@ function prepare(root) {
   assert.match(version, /^opencode v2\.2\.0$/, `Expected released OpenCode ${VERSION}; inspected fixtures must be revalidated for other versions`);
   const cli = { $schema: 'https://opencode.ai/v2/cli.json', highlights: false, animations: false,
     attention: { sound: false, notifications: false }, prompt: { editor: false, image_preview: false },
-    tabs: { mode: 'on' }, session: { image_preview: previews === 'on', grouping: 'none', sidebar: 'hide', verbosity: 'high' },
+    tabs: { mode: 'on' }, session: { image_preview: previews !== 'off', grouping: 'none', sidebar: 'hide', verbosity: 'high' },
     keybinds: { 'session.tab.close': 'f6', 'session.tab.reopen': 'f7' } };
-  writeFileSync(path.join(root, 'config', 'opencode', 'cli.json'), JSON.stringify(cli, null, 2));
+  const globalConfig = JSON.stringify(cli, null, 2) + '\n';
+  const inlineConfig = JSON.stringify({ session: { ...(previews === 'inline-off' ? { image_preview: false } : {}), sidebar: 'hide' }, attention: { notifications: false } });
+  writeFileSync(path.join(root, 'config', 'opencode', 'cli.json'), globalConfig);
+  writeFileSync(path.join(root, 'inline-policy.json'), inlineConfig);
   const source = transcript(path.join(root, 'work'));
   const file = path.join(root, 'saved-session.json');
   writeFileSync(file, JSON.stringify(source));
@@ -144,7 +149,7 @@ function prepare(root) {
   const saved = exported(root, source.info.id);
   assert.deepEqual(saved.messages, source.messages, 'Public import did not preserve the synthetic saved image conversation');
   const manifest = { owner: 'lyrel-opencode-native-replay', version: VERSION, session: source.info.id,
-    previews: previews === 'on', messageCount: saved.messages.length, savedMessages: saved.messages };
+    previews: previews === 'on', globalConfig, inlineConfig, messageCount: saved.messages.length, savedMessages: saved.messages };
   writeFileSync(path.join(root, 'manifest.json'), JSON.stringify(manifest));
   return { root, manifest };
 }
@@ -154,7 +159,13 @@ function resume(root) {
   assert.equal(manifest.owner, 'lyrel-opencode-native-replay', 'Not an owned synthetic fixture');
   assert.equal(manifest.version, VERSION);
   assert.match(run(root, ['--version']).trim(), /^opencode v2\.2\.0$/);
-  // No --prompt, run, SDK prompt API, source patch, protocol injection or TERM spoof.
+  // No --prompt, run, SDK prompt API, source patch or protocol injection.
+  // The production launch scope, not this driver, supplies compatibility.
+  if (process.env.LC_TERMINAL === 'lyrel') {
+    assert.equal(process.env.TERM_PROGRAM, 'kitty');
+    assert.equal(process.env.TERM_PROGRAM_VERSION, '');
+    assert(process.env.LC_TERMINAL_VERSION && process.env.LYREL);
+  }
   run(root, ['--standalone', '-s', manifest.session], true);
   verify(root, manifest);
 }

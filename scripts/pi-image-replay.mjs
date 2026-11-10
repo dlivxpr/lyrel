@@ -16,10 +16,12 @@ const suppliedCli = option("--pi", process.env.LYREL_PI_GRAPHICS_CLI);
 if (!suppliedCli) throw new Error("Provide --pi <official pi executable or npm dist/cli.js>; no global install is performed");
 const cli = resolve(suppliedCli);
 const policy = option("--policy", "enabled");
+const launch = option("--launch", policy === "scoped" ? "scoped" : "legacy");
+if (!["legacy", "scoped"].includes(launch)) throw new Error("Invalid --launch");
 const pictures = Number(option("--pictures", "20"));
 const rounds = Number(option("--rounds", "1"));
 if (!process.stdin.isTTY || !process.stdout.isTTY) throw new Error("Run in an owned real lyrel PTY, not redirected stdio");
-if (!["enabled", "env-none", "settings-none", "display-none", "settings-kitty"].includes(policy)) throw new Error("Invalid --policy");
+if (!["enabled", "scoped", "env-none", "settings-none", "display-none", "settings-kitty"].includes(policy)) throw new Error("Invalid --policy");
 if (!Number.isInteger(pictures) || pictures < 2 || pictures > 24 || ![1, 2].includes(rounds)) throw new Error("Use --pictures 2..24 and --rounds 1|2");
 const nodeEntry = /\.[cm]?js$/i.test(cli);
 const executable = nodeEntry ? process.execPath : cli;
@@ -69,8 +71,11 @@ try {
     quietStartup: true, theme: "dark", enableInstallTelemetry: false, enableAnalytics: false,
     cacheWarming: "off", compaction: { enabled: false },
     terminal: {
-      images: policy === "settings-none" ? false : policy === "settings-kitty" ? "kitty" : "auto",
-      showImages: policy !== "display-none", imageWidthCells: 12,
+      ...(policy === "scoped" ? {} : {
+        images: policy === "settings-none" ? false : policy === "settings-kitty" ? "kitty" : "auto",
+        showImages: policy !== "display-none",
+      }),
+      imageWidthCells: 12,
     },
     fullscreenExitOutput: "resume-hint",
   };
@@ -101,17 +106,24 @@ try {
   // Preserve only OS startup/terminal facts. Never forward credentials, extensions,
   // private config directories, NODE_OPTIONS, proxies, or shell startup files.
   const env = {};
-  const keep = new Set(["path", "pathext", "systemroot", "windir", "comspec", "temp", "tmp", "term", "colorterm", "term_program", "term_program_version", "lang", "lc_all", "lc_ctype"]);
+  const keep = new Set(["path", "pathext", "systemroot", "windir", "comspec", "temp", "tmp", "term", "colorterm", "term_program", "term_program_version", "lc_terminal", "lc_terminal_version", "lyrel", "lang", "lc_all", "lc_ctype"]);
   for (const [key, value] of Object.entries(process.env)) if (keep.has(key.toLowerCase())) env[key] = value;
   Object.assign(env, {
     HOME: join(root, "home"), USERPROFILE: join(root, "home"),
     APPDATA: join(root, "config"), LOCALAPPDATA: join(root, "data"),
     XDG_CONFIG_HOME: join(root, "config"), XDG_CACHE_HOME: join(root, "cache"), XDG_DATA_HOME: join(root, "data"), XDG_STATE_HOME: join(root, "state"),
     PI_CODING_AGENT_DIR: agent, PI_CODING_AGENT_SESSION_DIR: sessions,
-    PI_IMAGE_PROTOCOL: policy === "env-none" || policy === "settings-kitty" ? "none" : "kitty", PI_OFFLINE: "1",
+    PI_OFFLINE: "1",
   });
-  if (env.TERM_PROGRAM !== "lyrel") throw new Error("Fixture requires truthful TERM_PROGRAM=lyrel from an isolated lyrel pane");
-  console.log(`PI_REPLAY_FIXTURE ${JSON.stringify({ package: pkg.name, version: pkg.version, policy, rounds, identities })}`);
+  if (launch === "legacy") env.PI_IMAGE_PROTOCOL = "kitty";
+  if (policy === "env-none" || policy === "settings-kitty") env.PI_IMAGE_PROTOCOL = "none";
+  if (launch === "legacy") {
+    if (env.TERM_PROGRAM !== "lyrel") throw new Error("Legacy fixture requires truthful lyrel pane identity");
+  } else {
+    if (env.TERM_PROGRAM !== "kitty" || env.TERM_PROGRAM_VERSION !== "" || env.LC_TERMINAL !== "lyrel" || !env.LC_TERMINAL_VERSION || !env.LYREL) throw new Error("Scoped fixture requires production Kitty compatibility with truthful lyrel markers");
+    if (policy === "scoped" && "PI_IMAGE_PROTOCOL" in env) throw new Error("Automatic discovery must not force a protocol");
+  }
+  console.log(`PI_REPLAY_FIXTURE ${JSON.stringify({ package: pkg.name, version: pkg.version, policy, rounds, identities, terminal: { program: env.TERM_PROGRAM, version: env.TERM_PROGRAM_VERSION, host: env.LC_TERMINAL, protocol: env.PI_IMAGE_PROTOCOL ?? "unset" } })}`);
   for (let round = 1; round <= rounds; round++) {
     if (timedOut) throw new Error("Owned Pi replay exceeded 180 seconds");
     child = spawn(executable, [...prefix, "--offline", "--no-extensions", "--no-mcp", "--no-skills", "--no-prompt-templates", "--no-context-files", "--no-approve", "--tui-mode", "fullscreen", "--session", file, "--session-dir", sessions], { cwd, env, stdio: "inherit" });
