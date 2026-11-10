@@ -89,6 +89,15 @@ impl Render for TerminalView {
         let menu_view = cx.entity();
 
         div()
+            .when(reading, |surface| surface.on_children_prepainted(move |bounds, window, _| {
+                let Some(grid) = bounds.first() else { return; };
+                let occupied = obstructions.iter().flatten().filter_map(|ix| bounds.get(*ix))
+                    .map(|bounds| (grid.bottom() - bounds.top()).clamp(px(0.), grid.size.height))
+                    .max().unwrap_or(px(0.));
+                if reading_obstruction.replace(occupied) != occupied {
+                    window.refresh();
+                }
+            }))
             .id("terminal-surface")
             .test_support()
             // The surface, not the grid inside it, is what carries the role:
@@ -100,15 +109,6 @@ impl Render for TerminalView {
             .key_context(self.key_context(cx))
             .size_full()
             .relative()
-            .when(reading, |surface| surface.on_children_prepainted(move |bounds, window, _| {
-                let Some(grid) = bounds.first() else { return; };
-                let occupied = obstructions.iter().flatten().filter_map(|ix| bounds.get(*ix))
-                    .map(|bounds| (grid.bottom() - bounds.top()).clamp(px(0.), grid.size.height))
-                    .max().unwrap_or(px(0.));
-                if reading_obstruction.replace(occupied) != occupied {
-                    window.refresh();
-                }
-            }))
             // A column so the composer docks under the grid and takes its rows
             // from it: the grid's laid-out height is what sizes the pty.
             .flex()
