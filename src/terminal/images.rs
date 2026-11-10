@@ -56,6 +56,32 @@ impl std::ops::Deref for CommittedImages {
     }
 }
 
+impl CommittedImages {
+    pub(super) fn new(images: Vec<RenderPlacement>) -> Self {
+        for image in &images {
+            if let Some(residency) = &image._residency {
+                residency.presented.fetch_add(1, Ordering::Relaxed);
+            }
+        }
+        Self(images)
+    }
+
+    pub(super) fn append_reading(
+        &self,
+        images: &mut Vec<RenderPlacement>,
+        row: i32,
+        history_delta: i64,
+    ) {
+        images.extend(self.0.iter().cloned().map(|mut image| {
+            if let Some((viewport_row, _)) = &mut image.placeholder {
+                *viewport_row = row;
+            }
+            image.history_origin += history_delta;
+            image
+        }));
+    }
+}
+
 impl Drop for CommittedImages {
     fn drop(&mut self) {
         for image in &self.0 {
@@ -1073,26 +1099,32 @@ impl ImageStore {
         &self,
         rows: &[(i32, Vec<PlaceholderSlice>)],
     ) -> Vec<RenderPlacement> {
-        self.snapshot_placements(rows, false)
+        self.snapshot_placements(rows, false, None)
     }
 
     pub(super) fn commit_with_placeholders(
         &self,
         rows: &[(i32, Vec<PlaceholderSlice>)],
     ) -> CommittedImages {
-        let images = self.snapshot_placements(rows, true);
-        for image in &images {
-            if let Some(residency) = &image._residency {
-                residency.presented.fetch_add(1, Ordering::Relaxed);
-            }
-        }
-        CommittedImages(images)
+        CommittedImages::new(self.snapshot_placements(rows, true, None))
+    }
+
+    /// Each frozen text row owns exactly its image slices and existing leases.
+    /// Direct placements are clipped to that row, so lazy capture and history
+    /// eviction cannot retain or paint a slice belonging to a different row.
+    pub(super) fn commit_reading_row(
+        &self,
+        line: i32,
+        slices: &[PlaceholderSlice],
+    ) -> CommittedImages {
+        CommittedImages::new(self.snapshot_placements(&[(0, slices.to_vec())], true, Some(line)))
     }
 
     fn snapshot_placements(
         &self,
         rows: &[(i32, Vec<PlaceholderSlice>)],
         committed: bool,
+        reading_line: Option<i32>,
     ) -> Vec<RenderPlacement> {
         let inner = self.0.state.lock().unwrap();
         if committed && !inner.viewport_known {
@@ -1145,7 +1177,20 @@ impl ImageStore {
                     && !anchored.placement.virtual_placement
                     && !anchored.placement.unresolved
             })
-            .filter_map(|anchored| render(anchored, None))
+            .filter_map(|anchored| {
+                let mut image = render(anchored, None)?;
+                if let Some(line) = reading_line {
+                    let start = inner.history_origin + i64::from(line) - image.anchor_row;
+                    let top = i64::from(image.placement.clip_top).max(start);
+                    let bottom = i64::from(image.placement.clip_bottom).min(start + 1);
+                    if top >= bottom {
+                        return None;
+                    }
+                    image.placement.clip_top = top as u32;
+                    image.placement.clip_bottom = bottom as u32;
+                }
+                Some(image)
+            })
             .collect();
         for (row, slices) in rows {
             for slice in slices {

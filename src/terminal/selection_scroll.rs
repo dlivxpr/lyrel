@@ -6,6 +6,7 @@ use rio_vt::crosswords::grid::{Dimensions, Scroll};
 use rio_vt::crosswords::pos::{Column, Line, Pos, Side};
 use rio_vt::selection::{Selection, SelectionType};
 
+use super::images::ImageStore;
 use super::remote::EventProxy;
 use super::smart_select::GridWordSelection;
 use crate::core::config::{Config, MouseZoomModifier};
@@ -68,13 +69,13 @@ impl SelectionScroll {
         }
     }
 
-    fn did_scroll(&mut self, term: &Grid) {
+    fn did_scroll(&mut self, term: &Grid, images: &ImageStore) {
         if term.display_offset() == 0 && self.fraction == 0. {
             self.reading = None;
         } else if let Some(reading) = &mut self.reading {
-            reading.moved(term);
+            reading.moved(term, images);
         } else if !term.mode().contains(rio_vt::crosswords::Mode::ALT_SCREEN) {
-            self.reading = Some(super::reading::ReadingView::capture(term));
+            self.reading = Some(super::reading::ReadingView::capture(term, images));
         }
     }
 
@@ -306,6 +307,7 @@ impl SelectionScroll {
         epoch: u64,
         grid: impl FnOnce() -> G,
         separators: &str,
+        images: &ImageStore,
     ) -> Option<bool> {
         if epoch != self.drag_epoch {
             return None;
@@ -322,7 +324,7 @@ impl SelectionScroll {
         self.sync_reading(&mut term);
         let before = term.grid.display_offset();
         term.scroll_display(Scroll::Delta(drag_scroll_step(drag.overshoot)));
-        self.did_scroll(&term);
+        self.did_scroll(&term, images);
         let offset = term.grid.display_offset();
         let row = if drag.overshoot > 0. {
             0
@@ -415,6 +417,7 @@ impl SelectionScroll {
         &mut self,
         epoch: u64,
         grid: impl FnOnce() -> G,
+        images: &ImageStore,
     ) -> Option<(bool, bool)> {
         if epoch != self.animation_epoch {
             return None;
@@ -428,14 +431,14 @@ impl SelectionScroll {
         if last {
             self.animation = None;
         }
-        let moved = self.smooth_scroll(&mut grid(), step);
+        let moved = self.smooth_scroll(&mut grid(), step, images);
         if !moved {
             self.cancel_animation();
         }
         Some((moved, moved && !last))
     }
 
-    pub(super) fn smooth_scroll(&mut self, term: &mut Grid, delta: f32) -> bool {
+    pub(super) fn smooth_scroll(&mut self, term: &mut Grid, delta: f32, images: &ImageStore) -> bool {
         if term.synchronized_output() {
             return false;
         }
@@ -451,18 +454,18 @@ impl SelectionScroll {
         }
         let moved = jump != 0 || fraction != self.fraction;
         self.fraction = fraction;
-        self.did_scroll(term);
+        self.did_scroll(term, images);
         moved
     }
 
-    pub(super) fn scroll_lines(&mut self, term: &mut Grid, lines: i32) {
+    pub(super) fn scroll_lines(&mut self, term: &mut Grid, lines: i32, images: &ImageStore) {
         if term.synchronized_output() {
             return;
         }
         self.sync_reading(term);
         self.fraction = 0.;
         term.scroll_display(Scroll::Delta(lines));
-        self.did_scroll(term);
+        self.did_scroll(term, images);
     }
 
     pub(super) fn jump_to_prompt(&mut self, term: &mut Grid) {
@@ -473,7 +476,7 @@ impl SelectionScroll {
         self.fraction = 0.;
     }
 
-    pub(super) fn scroll_to(&mut self, term: &mut Grid, target: usize) {
+    pub(super) fn scroll_to(&mut self, term: &mut Grid, target: usize, images: &ImageStore) {
         self.cancel_animation();
         if term.synchronized_output() {
             return;
@@ -483,8 +486,8 @@ impl SelectionScroll {
         if delta != 0 {
             term.scroll_display(Scroll::Delta(delta));
         }
-        self.did_scroll(term);
         self.fraction = 0.;
+        self.did_scroll(term, images);
     }
 
     pub(super) fn clear_scrollback(&mut self) {

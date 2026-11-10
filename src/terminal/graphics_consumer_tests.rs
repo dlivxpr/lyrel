@@ -284,6 +284,15 @@ fn graphics_send_fixture_with_replies(
     );
     let input_bytes = request.len();
     view.read_with(cx, |view, _| view.terminal.write(request.into_bytes()));
+    graphics_wait_fixture(view, cx, serial, input_bytes);
+}
+
+fn graphics_wait_fixture(
+    view: &Entity<TerminalView>,
+    cx: &mut TestAppContext,
+    serial: usize,
+    input_bytes: usize,
+) {
     let marker = format!("KITTY_DONE_{serial};");
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
     loop {
