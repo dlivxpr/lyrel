@@ -385,11 +385,13 @@ if [[ $- == *i* ]] && [[ -z "$LYREL_SHELL_INTEGRATION" ]]; then
     preexec_functions+=(__lyrel_preexec)
   else
     __lyrel_submitted_command() {
-      local entry
+      local entry history_pattern='^[[:space:]]*[0-9]+[[:space:]*][[:space:]](.*)$'
       entry=$(HISTTIMEFORMAT= builtin history 1)
       # `history` prefixes only its first line with an event number. Remove
       # that prefix without an external parser, retaining embedded newlines.
-      if [[ "$entry" =~ ^[[:space:]]*[0-9]+[[:space:]*][[:space:]](.*)$ ]]; then
+      # Bash 3.2 cannot parse this ERE inline. Expand it unquoted so the
+      # regex engine still interprets its bracket expressions and capture.
+      if [[ "$entry" =~ $history_pattern ]]; then
         REPLY=${BASH_REMATCH[1]}
       else
         REPLY=$1
