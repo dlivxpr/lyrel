@@ -307,6 +307,10 @@ impl TerminalElement {
                 let line = Line(row as i32 - display_offset);
                 if let Some(reading) = reading {
                     let source = reading.row(row as i32);
+                    let slices = reading.placeholders(row as i32);
+                    if !slices.is_empty() {
+                        placeholders.push((row as i32, slices.to_vec()));
+                    }
                     for col in 0..cols {
                         let mut rendered = source
                             .and_then(|source| source.get(col))
@@ -362,7 +366,11 @@ impl TerminalElement {
 
             if want_sliver && (display_offset as usize) < term.grid.history_size() {
                 let line = Line(-display_offset - 1);
-                let slices = lyrel_core::core::kitty_graphics::placeholder_row(&term.grid, line);
+                let slices = if let Some(reading) = reading {
+                    reading.placeholders(-1).to_vec()
+                } else {
+                    lyrel_core::core::kitty_graphics::placeholder_row(&term.grid, line)
+                };
                 if !slices.is_empty() {
                     placeholders.push((-1, slices));
                 }
