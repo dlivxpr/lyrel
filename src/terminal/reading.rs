@@ -52,18 +52,25 @@ impl ReadingView {
     fn retain_row<T: EventListener>(&mut self, term: &Crosswords<T>, row: i64) {
         self.rows.entry(row).or_insert_with(|| {
             let line = Line((row - live_start(term)) as i32);
-            term.grid[line][..].iter().map(|cell| {
-                let extras = cell.extras_id_checked().and_then(|id| term.grid.extras_table.get(id));
-                ReadingCell {
-                    c: cell.c(),
-                    style: term.grid.style_of(cell),
-                    marks: extras.map(|extra| extra.zerowidth.as_slice())
-                        .filter(|marks| !marks.is_empty()).map(Box::from),
-                    hyperlink: extras.and_then(|extra| extra.hyperlink.clone()),
-                    wide: cell.wide(),
-                    wrapped: cell.contains_cell_flag(CellFlags::WRAPLINE),
-                }
-            }).collect()
+            term.grid[line][..]
+                .iter()
+                .map(|cell| {
+                    let extras = cell
+                        .extras_id_checked()
+                        .and_then(|id| term.grid.extras_table.get(id));
+                    ReadingCell {
+                        c: cell.c(),
+                        style: term.grid.style_of(cell),
+                        marks: extras
+                            .map(|extra| extra.zerowidth.as_slice())
+                            .filter(|marks| !marks.is_empty())
+                            .map(Box::from),
+                        hyperlink: extras.and_then(|extra| extra.hyperlink.clone()),
+                        wide: cell.wide(),
+                        wrapped: cell.contains_cell_flag(CellFlags::WRAPLINE),
+                    }
+                })
+                .collect()
         });
     }
 
@@ -77,7 +84,9 @@ impl ReadingView {
     }
 
     pub(super) fn row(&self, viewport_row: i32) -> Option<&[ReadingCell]> {
-        self.rows.get(&(self.top + viewport_row as i64)).map(Vec::as_slice)
+        self.rows
+            .get(&(self.top + viewport_row as i64))
+            .map(Vec::as_slice)
     }
 
     pub(super) fn distance<T: EventListener>(&self, term: &Crosswords<T>) -> usize {
@@ -88,10 +97,16 @@ impl ReadingView {
     /// History is read lazily, first-write-wins, and cannot outlive retention.
     pub(super) fn reconcile<T: EventListener>(&mut self, term: &mut Crosswords<T>) -> bool {
         let live = live_start(term);
-        if live < self.captured_live_start { return false; }
+        if live < self.captured_live_start {
+            return false;
+        }
         self.top = self.top.clamp(term.grid.lines_evicted() as i64, live);
         let oldest = term.grid.lines_evicted() as i64;
-        while self.rows.first_key_value().is_some_and(|(row, _)| *row < oldest) {
+        while self
+            .rows
+            .first_key_value()
+            .is_some_and(|(row, _)| *row < oldest)
+        {
             self.rows.pop_first();
         }
         let distance = self.distance(term);
@@ -107,5 +122,7 @@ impl ReadingView {
         self.retain_visible(term);
     }
 
-    pub(super) fn columns(&self) -> usize { self.cols }
+    pub(super) fn columns(&self) -> usize {
+        self.cols
+    }
 }

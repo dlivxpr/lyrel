@@ -58,7 +58,10 @@ pub(super) enum WheelMotion {
 impl SelectionScroll {
     pub(super) fn sync_reading(&mut self, term: &mut Grid) {
         if term.mode().contains(rio_vt::crosswords::Mode::ALT_SCREEN)
-            || self.reading.as_mut().is_some_and(|reading| !reading.reconcile(term))
+            || self
+                .reading
+                .as_mut()
+                .is_some_and(|reading| !reading.reconcile(term))
             || (term.display_offset() == 0 && self.fraction == 0.)
         {
             self.reading = None;
@@ -313,7 +316,9 @@ impl SelectionScroll {
         let drag = self.drag?;
         self.cancel_animation();
         let mut term = grid();
-        if term.synchronized_output() { return Some(false); }
+        if term.synchronized_output() {
+            return Some(false);
+        }
         self.sync_reading(&mut term);
         let before = term.grid.display_offset();
         term.scroll_display(Scroll::Delta(drag_scroll_step(drag.overshoot)));
@@ -431,7 +436,9 @@ impl SelectionScroll {
     }
 
     pub(super) fn smooth_scroll(&mut self, term: &mut Grid, delta: f32) -> bool {
-        if term.synchronized_output() { return false; }
+        if term.synchronized_output() {
+            return false;
+        }
         self.sync_reading(term);
         let (jump, fraction) = smooth_scroll_step(
             term.grid.display_offset(),
@@ -449,7 +456,9 @@ impl SelectionScroll {
     }
 
     pub(super) fn scroll_lines(&mut self, term: &mut Grid, lines: i32) {
-        if term.synchronized_output() { return; }
+        if term.synchronized_output() {
+            return;
+        }
         self.sync_reading(term);
         self.fraction = 0.;
         term.scroll_display(Scroll::Delta(lines));
@@ -466,7 +475,9 @@ impl SelectionScroll {
 
     pub(super) fn scroll_to(&mut self, term: &mut Grid, target: usize) {
         self.cancel_animation();
-        if term.synchronized_output() { return; }
+        if term.synchronized_output() {
+            return;
+        }
         self.sync_reading(term);
         let delta = target as i32 - term.grid.display_offset() as i32;
         if delta != 0 {

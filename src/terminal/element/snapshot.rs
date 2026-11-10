@@ -119,7 +119,9 @@ fn render_style(
     let (foreground, background, draw_bg) = if flags.contains(StyleFlags::INVERSE) {
         (background, foreground, true)
     } else {
-        if flags.contains(StyleFlags::HIDDEN) { foreground = background; }
+        if flags.contains(StyleFlags::HIDDEN) {
+            foreground = background;
+        }
         (foreground, background, !background_default)
     };
     let mut rendered = RenderCell {
@@ -129,13 +131,22 @@ fn render_style(
         bold: flags.contains(StyleFlags::BOLD),
         italic: flags.contains(StyleFlags::ITALIC),
         strikeout: flags.contains(StyleFlags::STRIKEOUT),
-        underline: if flags.contains(StyleFlags::DOUBLE_UNDERLINE) { UnderlineKind::Double }
-            else if flags.contains(StyleFlags::UNDERCURL) { UnderlineKind::Curly }
-            else if flags.contains(StyleFlags::DOTTED_UNDERLINE) { UnderlineKind::Dotted }
-            else if flags.contains(StyleFlags::DASHED_UNDERLINE) { UnderlineKind::Dashed }
-            else if flags.contains(StyleFlags::UNDERLINE) { UnderlineKind::Single }
-            else { UnderlineKind::None },
-        underline_color: style.underline_color.map(|color| to_hsla(resolve(color, palette, colors.fg_rgb, colors.bg_rgb).0)),
+        underline: if flags.contains(StyleFlags::DOUBLE_UNDERLINE) {
+            UnderlineKind::Double
+        } else if flags.contains(StyleFlags::UNDERCURL) {
+            UnderlineKind::Curly
+        } else if flags.contains(StyleFlags::DOTTED_UNDERLINE) {
+            UnderlineKind::Dotted
+        } else if flags.contains(StyleFlags::DASHED_UNDERLINE) {
+            UnderlineKind::Dashed
+        } else if flags.contains(StyleFlags::UNDERLINE) {
+            UnderlineKind::Single
+        } else {
+            UnderlineKind::None
+        },
+        underline_color: style
+            .underline_color
+            .map(|color| to_hsla(resolve(color, palette, colors.fg_rgb, colors.bg_rgb).0)),
         ..RenderCell::default()
     };
     if flags.contains(StyleFlags::DIM) {
@@ -290,7 +301,8 @@ impl TerminalElement {
             let reading = self.view.read(cx).selection_scroll.reading.as_ref();
             let mut reading_style = None;
             let rendered_rows = rows.min(term.screen_lines());
-            let rendered_cols = cols.min(reading.map_or(term.columns(), |reading| reading.columns()));
+            let rendered_cols =
+                cols.min(reading.map_or(term.columns(), |reading| reading.columns()));
             for row in 0..rendered_rows {
                 let line = Line(row as i32 - display_offset);
                 if let Some(reading) = reading {
@@ -298,10 +310,16 @@ impl TerminalElement {
                     for col in 0..cols {
                         let mut rendered = source
                             .and_then(|source| source.get(col))
-                            .map(|cell| render_reading_cell(cell, &palette, colors, &mut reading_style))
+                            .map(|cell| {
+                                render_reading_cell(cell, &palette, colors, &mut reading_style)
+                            })
                             .unwrap_or_default();
                         rendered.tab_stop = presentation.is_tab_stop(col);
-                        buf[row * cols + col] = if dim < 1. { dim_cell(rendered, dim, under) } else { rendered };
+                        buf[row * cols + col] = if dim < 1. {
+                            dim_cell(rendered, dim, under)
+                        } else {
+                            rendered
+                        };
                     }
                     continue;
                 }
@@ -357,9 +375,16 @@ impl TerminalElement {
                 {
                     let position = Pos::new(line, Column(col));
                     let mut rc = if let Some(reading) = reading {
-                        reading.row(-1).and_then(|source| source.get(col))
-                            .map(|cell| render_reading_cell(cell, &palette, colors, &mut reading_style)).unwrap_or_default()
-                    } else { painter.snapshot(position, cell) };
+                        reading
+                            .row(-1)
+                            .and_then(|source| source.get(col))
+                            .map(|cell| {
+                                render_reading_cell(cell, &palette, colors, &mut reading_style)
+                            })
+                            .unwrap_or_default()
+                    } else {
+                        painter.snapshot(position, cell)
+                    };
                     rc.tab_stop = presentation.is_tab_stop(col);
                     if dim < 1. {
                         rc = dim_cell(rc, dim, under);
@@ -405,7 +430,9 @@ impl TerminalElement {
             let (any_match, any_current) = if reading.is_none() {
                 self.flag_hovered_link(buf, rows, cols, display_offset, cx);
                 self.flag_search_matches(buf, rows, cols, display_offset, cx)
-            } else { (false, false) };
+            } else {
+                (false, false)
+            };
             return Ok(GridSnapshot {
                 cursor,
                 sliver,
