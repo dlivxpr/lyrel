@@ -1,6 +1,5 @@
 //! 写作 Host：仅管理 transient 菜单/颜色草稿，提交仍走同一 Document。
 use crate::ui::i18n::{L10nKey, t};
-use gpui_kit::TestSupportExt as _;
 use gpui_kit::component::{
     ActiveTheme as _, WindowExt as _,
     button::{Button, ButtonVariants as _},

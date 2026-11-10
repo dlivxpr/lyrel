@@ -9,12 +9,13 @@
 
 ### 新增
 
+- #236／#245：Markdown 完成唯一默认 Zorite-derived 源码路线的切换，移除旧 Markdown/MDX-rich 投影与专属实现契约；caret-local 标记显露、普通单击链接、MDX source-only 和 shared Document/history 成为当前产品规则。primary/secondary 安装同一组真实 Host providers，rename/save-as 只更新身份与源码策略，不丢弃历史。正式文档、原 14 项 native 消费者逐项迁移及 pinned MIT 来源/字体通知统一收敛；Windows ZIP/Inno 与 macOS app/ZIP 增加完整根 LICENSE 字节守卫。完整宽表的远端末行、真实图片/公式联合 hard-break 与长代码诊断尾部消费者补齐；源码和测试交付不是最终 native、实窗、SSH、平台、包或用户接受通过。
+
 - #236／#239：为 Zorite-derived Markdown 的每个 presentation 接入原生表格尺寸/样式选择、可键盘操作的行列/对齐/resize/fit 命令与 Kit 语法高亮/语言/复制控件。表格和代码均修改同一共享文档/history；代码语言修改保留 fence metadata，表格 Unicode 命中与 IME 使用绘制一致的 cell 几何。补充完整宽表与 owning Host 保存重开消费者；集中回归和实际参考窗口对照尚待执行，不以源码接线声明验收通过。
 - #175／#176：新增智能体关注导航，优先定位等待最久的窗格，再浏览未读完成回合，支持跨标签页／窗口、随处搜索与自定义快捷键（Windows Ctrl+Shift+U／macOS Cmd+Shift+U）。daemon 记录连续状态时长，重复同状态 hook 不重置计时；托盘、工作区切换器与 CLI 使用同一语义，`lyrel agents` 新增 FOR 列，旧 daemon 的未知时长显示 `-`。
 - #175／#177：GitHub 面板将同一仓库的堆叠拉取请求分组并绘制连接线，刷新和重排后按条目身份保持键盘选择；不将无关 fork 或身份不明的分支合并，保留既有链接。
 - #175／#178：未连接窗口的终端按既有外观提示回答主题查询，无有效提示时沿用浅色默认；附着客户端继续负责自己的查询，重放与显式 handoff 不重复回答历史查询。
 - #175／#179：macOS 新增 Cmd+Shift+W“关闭窗口”快捷键，复用既有未保存文档确认与会话关闭路径；Cmd+W 和 Windows 默认键位不变。
-- #204／#226：Markdown 即时编辑新增边栏拖动重排与键盘落点选择，按原始源码片段移动整块对象、连续引用／提示块和列表项的深层子项；插入线只指示有效目标，Esc、失焦、过期目标与越界释放取消，不写入其他文档。重排复用统一撤销历史与原 Host 保存路径；保留 BOM、既有行尾和对象语法，未终止的末行移到中间时仅补必要分隔换行。本条记录实现范围，原生与集中回归仍待本轮验收。
 - #236／#241：导入固定 MIT `ratex-gpui 0.4.1` 结构公式内核并适配 Kit/Fast；原生行内/块级渲染、二维分式/根式/定界符、补全、上下文菜单与原位提交/取消接入共享 Document。提交只修改公式正文及显式对齐标记，取消与未修改提交保留原始定界符、混合行尾和 attached spelling；过期 seat/render 与有损结构解析拒绝应用并显示原因。新增生产工作台与完整 400034 B 高原子/fragment 原生消费者；构建、运行和固定参考实窗比较由集成验收执行，未宣称通过。
 - #236／#244：为 Zorite-derived 原生 Markdown 配置随缩放变化的正文留白、列表／引用节奏与提示块图标，主题切换不重置模式和历史；保留紧凑标题／提示块 disclosure。新增行首 slash／键盘插入菜单与真实颜色草稿、取消、应用和清除入口，引用续行／退出、格式和双视图修改均使用同一文档历史。代码交付不代表原生同源文对照、完整长行／affinity 或系统 IME 已复验。
 - #236／#242：Zorite-derived Markdown 的所有 presentation 接入真正 native Mermaid Host，复用正式 Merman `0.9.2`、安全 SVG 管线与 Kit/Fast renderer；当前 source 编辑、Undo/Redo 与 live/source 共用 Document，提供 loading、可见诊断、错误恢复、主题字号和异步几何/scroll 锚定。派生结果按文档、块 owner、request、revision 与 source/style lease 隔离；移除或修改块不接受旧结果。新增生产工作台 native 消费者及精确 Host 保存重开覆盖；集中检查与固定参考实窗对照由集成验收执行，未在本分票中宣称通过。
@@ -22,9 +23,7 @@
 ### 修复
 
 - #236／#243：保存从同一共享文档快照捕获源文、编码/BOM、逐行表示与字节，并绑定原Document／Host／path。另存为写入成功后才采用目标，失败保留原身份和历史；在途新编辑使旧关闭意图退役，后续保存不重启旧关闭。显式去尾空白改为稀疏事务，保留混合行尾并可撤销；扩展名改为MDX时只改变各呈现策略，不替换文档。新增编码往返、失败恢复、第二呈现快照与native消费者，实际local／SSH及平台验证由集成者分别记录。
-- #204：将 9 项 Markdown 真实字形消费者迁至默认覆盖的 `native_markdown` 测试入口，在真实进程主线程初始化正式平台，为每例保留独立测试 context，避免 macOS 的 AppKit worker-thread 初始化错误。平台使用 `current_platform(false)` 并保留真实字体守卫，纠正 Windows 的 headless 构造实际返回 Noop 而非 DirectWrite 的错误前提；旧 Noop 失败不再作为原生 RTL 的 SDK 缺口证据。保留原 selector、全部 RTL／软换行／原子对象／长文断言，逻辑导航用例改用真实字体；未知精确 selector 失败，普通过滤零匹配明确报告，不把入口修复当作跨平台消费者已通过。
-- #204：不折行正文将公开 native 文字／原子对象几何测得的完整横向范围发布给既有 `ScrollHandle`，聚焦的源码选择按原契约滚动到可见位置。下一帧宽度提示更新保留刚采集的当前几何，避免 Redo 后立即按方向键因缺几何错误跨表格单元格；实际滚动改变后才丢弃该坐标。宽度缓存随叶版本、版式、局部源码显露及异步对象尺寸变化失效，避免离屏叶保留虚假横向范围。保留块布局宽度和表格独立横向滚动；400034 字节混合长文消费者继续要求 wrap／nowrap 下高原子对象后的 caret 真正在 viewport 内，并检查非零真实横向滚动范围。正式 SDK 的真实绘字／caret 差异仍单独保留失败，不以几何断言通过宣称产品像素或性能已通过。
-- #204／#208：编辑事件携带对应 revision 的共享只读 Rope 快照，分屏按事务顺序同步投影；修复快速 Undo／Redo 和组合输入交接后，旧叶文本被新 marked range 切到 UTF-8 字符内部而崩溃的问题。快照不复制全文，也不持有独立编辑历史；保留原始 BOM、逐行行尾和所属 Host 保存路径。
+- #204 的旧投影、Rope 同步与专属工具栏已由 #236 默认实现替代；旧版本的输入、几何与真实字体结果仍是历史记录，不作为本次导入的通过证明。完整 Unicode/软换行/原子对象/长行/表格/保存/history 合同迁到新工作台消费者，明确退役的 rich-MDX 与 notebook 交互不以兼容内核保留。
 - #203：适配正式 `sysinfo =0.40.1` 的可失败构造与主机名 API，保留不支持平台和底层错误，不返回伪造 CPU／RAM 样本。维持仅 `system` feature、原有有效值检查、每秒共享快照与空闲基线重置；refresh API 仍返回 `()`，不宣称能够检测依赖内部未公开的刷新失败。
 - #175／#180：macOS 反向搜索中的 Cmd+Enter 只执行当前选中的历史命令，不再触发窗口全屏；空匹配不运行草稿，其他上下文与非 macOS 默认绑定保持不变。
 - #175／#181：Windows 便携更新在解析 ZIP 目录前限制实际条目数与 ZIP64 资源字段，并限制单条目压缩／展开大小；保留最多 4096 项与累计 1 GiB 上限，以及 checksum、EOF CRC、路径和重复项检查，异常包在停止 daemon 或移动原安装前拒绝。
@@ -43,7 +42,7 @@
 
 ### 验证边界
 
-- #204 当前核心批次已通过组合输入交接、旧 native handler 拒绝、迟到 reload 隔离，以及混合行尾保存重开回归；自动消费者不等同于真实 OS IME 或原生窗口验收。拖选越界滚动与链接菜单焦点回归仍失败，未计通过；后续票的源码交付同样不表示完成验收。
+- #236 最终候选需重新执行完整 editor crate、桌面 library、无筛选 OS 主线程 native-font、Windows local/真实 SSH、Linux headless 与支持的 macOS 检查，并以固定 Zorite 同源完整 fixtures 做 Release 产品窗口对照；未运行及实际失败保持未验收。#237 基础可用性与 #204 历史结果不自动转移；保留 source-preserving native long-line 保护与 bidi 映射，#235 的 `not_planned` 不代表 SDK 修复，完整 RTL 仍在批准范围外。
 - #175 固定审查 tty7 的 34 个提交，终点为 `8ad8841e4835e4e6c4e6f4d5a0a16541eaa9107f`，采用当前 lyrel 架构的局部语义移植；不恢复 gateway、Linux 桌面、旧 alacritty 引擎、已撤销的 New Tab 拆分或 README 宣传改动，不采用 CI `-D warnings` 与 query-table 重构。
 - #175 验收夹具：CLI E2E 忽略既有 `--nocapture` 输出选项但保留用例筛选，避免桌面 CI 零用例退出被误计为通过；Windows DA1 消费者在应用查询前完成真实 ConPTY 启动协商，恢复两种 DA1 的应用实收断言；SCM 消费者在最终绘制后等待当前 refresh epoch 的完成状态，不再将前一帧 loaded 跨异步阶段复用。保留业务断言与原期限，不修改生产回复或第三方代码。
 - #175 图形额度消费者在跨 daemon 施压前实际绘制已滚动的旧窗口，并在准入等待期间执行真实帧，而非仅排队 refresh；不把 PTY viewport 屏障当作显示 lease 已退休的证明，保留生产 `1s` 准入边界、单次 SEND_OK、真实像素／历史／关闭释放断言与原测试期限。

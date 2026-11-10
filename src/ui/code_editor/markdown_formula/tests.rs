@@ -252,10 +252,31 @@ pub(super) fn native_full_mixed_tall_formula_pointer_fragments(cx: &mut TestAppC
         app.read_with(context, |app, _| app.active_buffer().is_some())
     });
     let view = active(&app, &context);
+    until(&mut context, |context| {
+        app.read_with(context, |app, cx| {
+            app.active_buffer()
+                .unwrap()
+                .markdown_resources
+                .as_ref()
+                .unwrap()
+                .read(cx)
+                .is_loaded("tall.png")
+        })
+    });
     let formula = original.find("$\\frac").unwrap();
     let formula_range = formula..formula + "$\\frac{a}{b}$".len();
     for wrap in [true, false] {
         view.update_in(&mut context, |view, _, cx| view.set_soft_wrap(wrap, cx));
+        view.update_in(&mut context, |view, window, cx| {
+            view.select_range(formula_range.end + 1..formula_range.end + 1, cx);
+            view.focus_handle(cx).focus(window, cx);
+        });
+        until(&mut context, |context| {
+            view.read_with(context, |view, _| {
+                view.formula_bounds(&formula_range)
+                    .is_some_and(|bounds| bounds.size.height > px(20.))
+            })
+        });
         for at in [
             0,
             original.find("![tall]").unwrap() - 2,
@@ -334,10 +355,13 @@ pub(super) fn native_hard_break_formula_fragments(cx: &mut TestAppContext) {
     let dir = canonical_tempdir();
     let path = dir.path().join("hard-break-formula.md");
     let original = format!(
-        "before $\\frac{{1}}{{\\sqrt{{x}}}}$  \nnext {}$\\left(\\frac{{a}}{{b}}\\right)$ tail\n",
+        "before ![tall](tall.png) $\\frac{{1}}{{\\sqrt{{x}}}}$  \nnext {}![tall](tall.png) $\\left(\\frac{{a}}{{b}}\\right)$ tail\n",
         "fragment ".repeat(20_000)
     );
     std::fs::write(&path, &original).unwrap();
+    image::RgbaImage::from_pixel(12, 96, image::Rgba([80, 100, 180, 255]))
+        .save(dir.path().join("tall.png"))
+        .unwrap();
     let (app, mut context, _) = harness_with_tabs(cx, 1);
     context.simulate_resize(size(px(1400.), px(900.)));
     app.update_in(&mut context, |app, window, cx| {
@@ -347,16 +371,56 @@ pub(super) fn native_hard_break_formula_fragments(cx: &mut TestAppContext) {
         app.read_with(context, |app, _| app.active_buffer().is_some())
     });
     let view = active(&app, &context);
+    until(&mut context, |context| {
+        app.read_with(context, |app, cx| {
+            app.active_buffer()
+                .unwrap()
+                .markdown_resources
+                .as_ref()
+                .unwrap()
+                .read(cx)
+                .is_loaded("tall.png")
+        })
+    });
+    let formula_start = original.find('$').unwrap();
+    let formula_end = original[formula_start + 1..].find('$').unwrap() + formula_start + 2;
+    view.update_in(&mut context, |view, window, cx| {
+        let next = original.find("next").unwrap();
+        view.select_range(next..next, cx);
+        view.focus_handle(cx).focus(window, cx);
+    });
+    until(&mut context, |context| {
+        view.read_with(context, |view, _| {
+            view.formula_bounds(&(formula_start..formula_end)).is_some()
+        })
+    });
+    view.read_with(&context, |view, _| {
+        let formula = view.formula_bounds(&(formula_start..formula_end)).unwrap();
+        let next = original.find("next").unwrap();
+        let caret = view.range_to_bounds(&(next..next)).unwrap();
+        assert!(formula.size.height > px(20.), "use the real FormulaProvider raster");
+        assert!(caret.top() >= formula.bottom(), "a hard break cannot bridge a tall image/formula row");
+    });
     for at in [
         original.find("next").unwrap(),
         original.rfind("tail").unwrap(),
     ] {
+        let end = if at == original.find("next").unwrap() {
+            formula_end
+        } else {
+            original.rfind('$').unwrap() + 1
+        };
+        let start = original[..end - 1].rfind('$').unwrap();
         view.update_in(&mut context, |view, window, cx| {
             view.select_range(at..at, cx);
             view.focus_handle(cx).focus(window, cx);
         });
         until(&mut context, |context| {
-            view.read_with(context, |view, _| view.range_to_bounds(&(at..at)).is_some())
+            view.read_with(context, |view, _| {
+                view.range_to_bounds(&(at..at)).is_some()
+                    && view.formula_bounds(&(start..end))
+                        .is_some_and(|bounds| bounds.size.height > px(20.))
+            })
         });
         let target = view.read_with(&context, |view, _| {
             view.range_to_bounds(&(at..at)).unwrap().center()

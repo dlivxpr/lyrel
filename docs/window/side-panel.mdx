@@ -200,11 +200,13 @@ Markdown 的每个标签页／编辑组各自保留光标、选择、滚动、�
 
 反向同样适用：已打开的 Markdown 另存为或重命名为其他扩展名后，当前 buffer 继续使用原生文档、编码／逐行行尾表示和撤销历史，外部重载也按当前输入实体解码；释放后重开才按新扩展名选择编辑器。更名不隐式执行全文整理或有损编辑器迁移。
 
-#### #236 当前源码导入契约
+#### 当前源码、文档与 Host 边界
 
-参考与来源固定为 Zorite `9f069c73a56b06efc84fb7abb700beb50083c827`，不沿用下方 #204 的旧基线。#237 负责可执行的共享文档/Host 文件生命周期、最小状态与 go-to-line、混合行尾/BOM 保真、desktop/headless wiring 和早期 native/Release 可用性；#238—#244 完成图片/链接、表格/代码、工作台、二维公式、Mermaid、完整格式与视觉体验，#245 才汇总完整默认路径验收。导入 API 或样式不等于这些能力已经接线或验证。
+参考与 MIT 来源固定为 Zorite `9f069c73a56b06efc84fb7abb700beb50083c827`，不沿用下方 #204 的旧基线。独立 `lyrel-markdown-editor` 已接入共享 Document、所有 presentation 的写作/图片/链接/表格/code/二维公式/Mermaid provider 与原工作台文件生命周期；没有旧 WYSIWYG fallback 或产品双编辑器开关。独立导入限于 MIT editor/bidi/ratex 16 文件，`zorite-markdown =0.10.1` 仍为关闭默认 view feature 的正式语法依赖，不复制 GPL 应用、笔记数据库或只读 renderer。
 
-能力责任、planned/delivered 边界、保留的上游行为、排除构造的 source access、原 14 项 native 消费者逐项迁移及许可证分发要求，统一见仓库 `crates/lyrel-markdown-editor/HOST_CAPABILITIES.md`；exact upstream 文件来源与摘要见同目录 `UPSTREAM.toml`。工作台继续拥有 Host/path、save/save-as/conflict/close 和全局状态；GUI-free `lyrel-text` 共享原 Apache-2.0 codec/EditorConfig。未配置的资源/结构编辑 provider 不得伪装成功。
+工作台继续拥有 Host/path、dirty、save/save-as/conflict/close、tabs/groups 与全局状态；GUI-free `lyrel-text` 复用 Apache-2.0 codec/EditorConfig。Document 在同一事务内更新 LF 原文与逐行原始表示，Undo/Redo 同时恢复两者。保存捕获原 Document、Host/path、源文、编码/BOM 和逐行表示；完成不能把新编辑标为 clean，焦点变化不能重定向保存或关闭。
+
+能力责任、生产接线、排除构造的源码访问、原14项 native 消费者逐项迁移及最终证据入口见 `crates/lyrel-markdown-editor/HOST_CAPABILITIES.md`。`UPSTREAM.toml` 记录 pinned Git blob 摘要与本地适配；MIT 与字体 notices 保存在 crate 的 `licenses/` 及随平台包分发的根 `LICENSE`。代码与测试交付不是 #245 最终 native、实窗、SSH、平台、产物许可证或用户接受通过。
 
 #### 在原生 Markdown 中连续书写
 
@@ -216,11 +218,23 @@ Markdown 的每个标签页／编辑组各自保留光标、选择、滚动、�
 - 标题的悬停箭头只占一个紧凑 glyph，不增加独立行。`Ctrl+Alt+F`（macOS 为 `Cmd+Alt+F`）切换当前或最近上级标题的呈现折叠，不写入文件；提示块的 `+/-` 折叠和任务勾选则是可撤销的源码修改。
 - 选中文字后按 `Ctrl+Alt+C/H`（macOS 为 `Cmd+Alt+C/H`），或点击右键颜色行的自定义入口，打开文字／高亮颜色选择器。颜色草稿支持调色板、HSLA 和十六进制输入；**应用颜色**才修改源码，**取消**不修改，**清除文字颜色**／**清除高亮颜色**先清除草稿，再由应用提交。双视图共用同一撤销历史。
 
-属性行 `key:: value`、frontmatter 和未知语法保持原样可编辑，不显示没有实际消费者的属性 inspector。这里描述代码接入范围；同源文的 Light/Dark、docked/full、zoom、连续输入和实际展开控件体验仍以 #244 的原生复测为准，不沿用下方旧实现的验收结果。
+属性行 `key:: value`、frontmatter 和未知语法保持原样可编辑，不显示无实际消费者的属性 inspector。Light/Dark、docked/full、narrow/zoom、连续输入与紧凑展开控件必须在最终同源参考实窗中复测；native-font runner 和静态截图不代替产品体验。
 
-超长 nowrap 行的 source-preserving 有界视觉布局继续保留；full RTL 仍在已批准验收范围之外，但 imported bidi mapping 不删除。下方 #204 的字形、表格、图片、公式、性能与保存证据仅属于原实现，不是本次替换的通过证明；新候选必须记录自己的实际结果。
+超长 nowrap 行继续采用 source-preserving 有界视觉布局，不改写自动换行偏好、不插入源码换行或截断内容；imported bidi mapping 保留。完整 RTL 仍在已批准验收范围之外，#235 已按 `not_planned` 关闭，不表示 SDK 已修复。下方 #204 的字形、表格、图片、公式、性能与保存证据仅属于原实现；#237 的基础结果也不自动转移为最终候选通过。
 
-#### #241 结构公式接线与验收入口
+#### 表格与代码
+
+通过插入/slash 菜单的表格项打开原生尺寸选择器：使用 8×8 网格或自定义 1—100 行列，选择四种样式后提交。取消不修改文档，表格插入与对应样式属于同一步可撤销修改。光标位于表格时，表格命令提供增删行列、对齐、样式、适应内容与列宽调整；原生边框可拖动或双击 fit。Tab、方向键和 Enter 使用真实 cell 选择与原文位置，宽表在文档内独立横向滚动，不强制切换源码。
+
+代码块使用 Kit registry/tree-sitter 高亮，当前块的语言菜单只修改 fence 的语言 token，保留其他 metadata。复制按钮复制代码正文；需要编辑定界符时进入 caret-local 源码或完整 source 模式。表格、代码、source/live 和双视图共用 Document/history 与 owning Host 保存。完整 48 列/64 正文行宽表及完整长代码诊断消费者均保留，最终 pointer/scroll/input/Undo/save 与固定参考实窗结果分别记录。
+
+#### Mermaid 图形
+
+Mermaid fenced block 使用正式 Merman `0.9.2`、安全 SVG 管线和 Kit/Fast native renderer，不运行浏览器、Node.js 或项目脚本。光标或选区进入块时显露原始 source；正常输入、Undo/Redo 与 source/live 使用同一历史。块首显示 loading 或明确失败，修改错误源码会重新请求，不显示假图或无限等待。
+
+渲染结果按文档、块 owner、request、revision、精确 source 和主题/字号隔离；删除后复现的同文块也不能接受已退休的结果。图像随 pane 宽度约束，异步尺寸变化保持该 presentation 的可见源行滚动锚点，不移动另一 view。单边上限 4096 px、单图 800 万像素、每 presentation 的缓存与单批请求各 64 MiB；超限保留可编辑源码。实际外观、主题缩放、编辑恢复与 local/真实 SSH 保存仍须用最终候选记录，不从 bitmap 存在推定通过。
+
+#### 结构公式
 
 公式显示使用正式 GUI-free RaTeX `0.1.15`，结构编辑来自上述固定 MIT `ratex-gpui 0.4.1`，GUI 只使用 Kit/Fast。点击公式或从正文按方向键进入，在原位置操作分式、根式、定界符和嵌套 slot；输入 `\command` 后用方向键和 Enter/Tab 接受候选。Enter 应用，Escape 先关闭候选/选区、再取消整个临时编辑；应用或取消返回原文档上下文。右键及 Shift+F10 提供复制 LaTeX、导出到本机、块公式对齐、应用和取消。
 
@@ -228,7 +242,7 @@ primary/secondary 各自拥有 seat/focus/candidate/layout，只共享 Document�
 
 生产消费者位于 `src/ui/code_editor/markdown_formula/tests.rs`，原生入口包括完整 `400034 B` mixed-tall fixture、hard-break/fragment、双视图、提交/取消、普通历史及 mapped Host 保存重开。源码交付不表示新 renderer、系统 IME、固定 Zorite 实窗对照或 macOS 已通过；这些由本轮集中验收另行记录。
 
-#### 图片与普通链接（#238）
+#### 图片与普通链接
 
 文档插入命令的图片项（`/image`，`InsertImage` Action）打开本机文件面板；不为普通正文增加常驻的整行图片工具栏。系统剪贴板中的截图／图片文件和拖入的本机图片使用同一导入路径。输入在 worker 读取，资源由文档所属本地或 SSH Host 写入同级 `assets/image-<UUID>.<extension>`，使用 create-new 防止覆盖已有附件。未命名文档显示“插入图片前，请先选择文档保存位置”，不猜目录、不写入当前终端的机器。导入期间改变正文或原选区，完成后不在新位置插入链接，并显示说明；保存的资源保留在原 Host，Undo 不删除资源，以便 Redo 恢复。hover目标以不影响正文布局的浮层显示。
 
@@ -280,43 +294,10 @@ CI 分别编译、执行普通测试与 native 目标，不延长原有 30 分�
 
 #### 历史 #204：Zorite 体验对齐与原实现验收边界
 
-本设计已在 `integration/204-markdown-wysiwyg` 集中实现，按负责人批准的 Windows 核心验证与已记录性能取舍交付；完整原生矩阵、严格匹配性能及 SDK 延期项不冒充通过。下文保留历史检查点，并单列最终正式依赖、无探针产品与量测证据。范围与视觉约束见仓库 `docs/design-system.md` 的“分屏与文档栏”。源码与真实软件对照固定为 Zorite `9c09b8cce84e41ca20c403e5b381c448cde468c4`，未跟随上游滚动扩大目标；正式版 `v0.13.0` 与该提交不是同一基线，不能互相冒充。
+旧 #204 的实现已由 #236 的 Zorite-derived 默认路线替代。下列实测只属于历史候选，保留其精确版本、测量与未验证范围，不作为当前实现要求。旧“标记始终隐藏”、Ctrl+Click-only、保留 rich MDX、工作区引用/嵌入、property inspector 与旧 Rope/投影架构均不再是产品合同；当前行为以本页前面的默认路由、原文保真和 Host 规则为准。
 
-- **所见即所得编辑**：直接操作排版后的文档内容。粗体、斜体、删除线、行内代码等格式标记在普通输入和选区覆盖时保持隐藏，通过样式、快捷键和格式操作提供反馈；列表、任务、代码围栏及表格分隔符由相应的可视结构承载。精确语法修改通过明确的局部源码入口或完整源码模式完成。此目标替代目前“光标进入便显露格式标记”的交互，不改变源码权威或统一撤销历史。
-- **显式扩展语法**：允许用户主动使用图片尺寸、表格样式、公式对齐、属性面板、下划线及颜色等能力时写入对应的文档表示；此类效果在其他 Markdown 软件中可能不同。扩展只修改该操作必需的内容，须可撤销，不因打开、呈现或普通保存而把原文转换为 Zorite 方言。具体表示仍须与现有 Markdown／MDX 解析规则核对。
-- **双格式复制**：复制同时提供原始 Markdown／MDX 纯文本和富文本 HTML；纯文本目标仍收到原文，支持富文本的目标可使用排版表示。粘贴默认优先 Markdown／纯文本，截图沿用现有图片插入；不自动导入任意 HTML／CSS，也不以生成 HTML 为由请求外链资源或执行脚本。
-- **正文换行**：普通正文的 `Enter` 对齐 Zorite，插入一个源码换行；连续空行继续表达段落分隔。live 呈现保留逐行编辑反馈，不改写既有换行。接受其他 Markdown 渲染器可能把单换行作为软换行合并；列表、任务、表格和代码等结构保留各自的上下文操作，不统一套用正文规则。
-- **工作区文档引用**：页面／块引用和片段嵌入适配到当前文档所属 Host／工作区的 Markdown 文件及显式锚点，提供对应的补全、跳转和嵌入。标签与属性可在文档内呈现和编辑；不引入笔记数据库、知识图谱或反链管理页面，不在用户没有明确执行创建／修改操作时创建文件或改写其他文件。
-- **链接激活**：明确不照搬 Zorite 的单击跳转。在所见即所得模式中单击用于编辑，Windows `Ctrl+Click` 打开目标；同时保留明确的打开／编辑入口。扩选、拖选和双击选词不跳转；远端相对链接按文档所属 Host 解析，不改变外链图片的显式加载策略。
+#204 当时使用 Zorite `9c09b8cce84e41ca20c403e5b381c448cde468c4` 作为参考，与本次 pinned `9f069c73a56b06efc84fb7abb700beb50083c827` 不同。负责人当时接受的代表性核心比较与已记录性能取舍不转移至 #236；最终验收需重新使用本次固定参考和完整同源 fixtures，不截断内容、不缩短 history、不强制源码或关闭 feature 掩盖退化。
 
-##### 实施方向
-
-保留 lyrel 的文档、源码事务、统一历史、保存与 Host 边界，按行为借鉴或移植 Zorite 的输入、命中、显隐、结构操作及编辑控件；必要时替换现有显示投影。不整套接入其 SQLite 页面模型、全文快照撤销或独立只读渲染器；沿用项目的原生 GPUI Kit 与正式依赖约束。
-
-实施顺序为固定版本实机对照、输入／选区／IME／撤销内核、全部编辑交互、工作台集成、完整验收。这只是依赖顺序，不是缩小交付范围；完成局部阶段不能声称整体目标已达成。发现与本节约束相冲突的新上游行为时，列明差异并确认取舍，不静默删减或改变目标。
-
-##### 完成门槛
-
-完整编辑体验对齐，不以部分高频操作、功能名称相同或静态排版截图代替。共同支持的场景以固定提交的 Zorite 软件行为为对照；lyrel 特有能力按现有契约验收。以下是验收面，不是任选的阶段性子集：
-
-负责人在实施会话中调整了测试要求：功能范围不变，验收精简为核心工作流；优先现有消费者回归、可复现脚本与后台测试，减少需要审批的前台操作。不再逐条穷举下表全部原生组合，也不以全量原生矩阵阻塞各实现票。以下各项仍是功能契约；报告区分核心实测、保留的历史证据与未验证组合，不把测试精简写成完整原生或跨平台通过。
-
-| 验收面 | 必须实际操作的路径 |
-| --- | --- |
-| 连续编辑 | 中文 IME 预编辑／候选位置／提交／取消，字素及词导航，软换行边界，跨结构选择／删除，Undo／Redo，源码往返 |
-| 格式与结构 | 格式菜单及快捷键，标题，列表／任务，引用／callout，折叠，拖拽重排，斜杠菜单及补全 |
-| 表格与代码 | 插入，增删行列，方向键／Tab／Enter，列宽／自动适应／样式，代码语言选择、高亮和复制 |
-| 图片、公式与图形 | 图片插入／预览／缩放，公式原位结构编辑／补全／对齐，Mermaid 编辑及渲染更新 |
-| 文档互操作 | 双格式复制，属性编辑，工作区文件／锚点引用和片段嵌入，保存关闭重开，现有 MDX 能力不退化 |
-| 工作台约束 | Windows 本机与真实 SSH，外部修改冲突，多视图，未编辑源码及编码／BOM／逐行换行保真，明暗主题与缩放 |
-
-性能在同机、同窗口条件、同样本和相同测量边界下使用 Release 对照，记录输入响应与滚动，不能以工具调用耗时冒充输入到绘制时延。共同场景以不劣于 Zorite 为目标；lyrel 既有长文、宽表、多资源负载另与改造前比较，不得出现可复现退化。不得通过减少内容、切换源码、关闭功能或放宽保真取得更快结果；报告保留版本、负载和重复测量证据，不提前编造提升百分比。
-
-本轮最终[负责人批准的完成边界](https://github.com/dlivxpr/lyrel/issues/204#issuecomment-6739510183)：接受正式 `0.9.1` 最终候选的代表性核心比较及已记录额外成本，不再将严格排版匹配或穷举原生矩阵作为本次交付闸门；不将数据改称严格性能通过。完整功能范围不因此缩减，未执行的 macOS 组合与 #235 的 RTL／长 nowrap paint 缺口仍明确保留。PR #234 可标为 ready，但不自动合并；工单通过 PR 合并关闭。
-
-本次重点验证 Windows 本机与真实 SSH 的核心路径；macOS 保持兼容，未实测部分明确记录。脚本／headless 可以证明事务、保存字节和 Host 隔离，但不能冒充真实窗口、系统 IME 或完整原生操作通过。需要实际窗口证明的核心变更合并批次验证，不重复申请逐条前台审批。
-
-规格准备阶段的历史状态：当时查证限于双方源码与现有文档，尚未构建或运行固定版本的 Zorite，也未新增编辑器交互或性能实测；后续已执行证据见下方 #205 对照记录，不以此历史状态描述当前进展。上游依据：[连续文档模型](https://github.com/packetThrower/zorite/blob/9c09b8cce84e41ca20c403e5b381c448cde468c4/src/db.rs#L1-L9)、[格式标记与结构标记显隐](https://github.com/packetThrower/zorite/blob/9c09b8cce84e41ca20c403e5b381c448cde468c4/crates/zorite-editor/src/markdown_syntax.rs#L300-L390)、[回车处理](https://github.com/packetThrower/zorite/blob/9c09b8cce84e41ca20c403e5b381c448cde468c4/crates/zorite-editor/src/lib.rs#L2400-L2510)、[双格式剪贴板](https://github.com/packetThrower/zorite/blob/9c09b8cce84e41ca20c403e5b381c448cde468c4/src/clipboard.rs)、[原位公式编辑](https://github.com/packetThrower/zorite/blob/9c09b8cce84e41ca20c403e5b381c448cde468c4/src/app/math.rs)、[链接点击处理](https://github.com/packetThrower/zorite/blob/9c09b8cce84e41ca20c403e5b381c448cde468c4/crates/zorite-editor/src/lib.rs#L3380-L3475)。显隐以条件表达式为准：`always_hide` 和 `hide_prefix` 优先于选区揭示，不能据上游旧注释声称选中时所有标记都会出现。
 
 ##### #205 固定版本对照记录（核心基线就绪，保留未验证范围）
 

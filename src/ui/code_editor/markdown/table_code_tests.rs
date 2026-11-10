@@ -371,6 +371,10 @@ pub(super) fn wide_table(cx: &mut TestAppContext) {
     context.dispatch_action(gpui_kit::component::input::Undo);
     settle(&mut context);
     assert_eq!(bytes(&view, &context), original.as_bytes());
+    let page_offset = view.read_with(&context, |view, _| view.scroll_offset());
+    let first_x = context.update(|window, cx| {
+        view.read(cx).source_bounds(&(first..first), window).unwrap().left()
+    });
     // A horizontal wheel belongs to the wide native grid, never to a source-mode escape.
     context.update(|window, cx| {
         window.scroll(
@@ -380,6 +384,56 @@ pub(super) fn wide_table(cx: &mut TestAppContext) {
         );
     });
     settle(&mut context);
+    context.update(|window, cx| {
+        assert!(view.read(cx).source_bounds(&(first..first), window).unwrap().left() < first_x);
+    });
+    assert_eq!(view.read_with(&context, |view, _| view.scroll_offset()), page_offset,
+        "horizontal wheel scrolls the table, not the containing document");
+    // Reach the actual far edge through the same wheel handler, then edit both
+    // the first and last body rows while retaining every cell in the document.
+    context.update(|window, cx| {
+        window.scroll(
+            "markdown-document-scroll",
+            gpui_kit::ScrollDelta::Pixels(gpui_kit::point(px(-100_000.), px(0.))),
+            cx,
+        );
+    });
+    settle(&mut context);
+    for width in [1200., 1800.] {
+        context.simulate_resize(gpui_kit::size(px(width), px(900.)));
+        for token in ["R0 C47", "R63 C47"] {
+            let at = original.find(token).unwrap();
+            select(&view, at, &mut context);
+            until(&mut context, |context| {
+                context.update(|window, cx| {
+                    view.read(cx).source_bounds(&(at..at), window).is_some_and(|bounds| {
+                        bounds.left() > px(0.) && bounds.right() < window.viewport_size().width
+                            && bounds.top() > px(0.) && bounds.bottom() < window.viewport_size().height
+                    })
+                })
+            });
+            let target = context.update(|window, cx| {
+                view.read(cx).source_bounds(&(at..at), window).unwrap().center()
+            });
+            context.update(|window, cx| {
+                window.pointer_move(target, None, cx);
+                window.pointer_down(target, MouseButton::Left, cx);
+                window.pointer_up(target, MouseButton::Left, cx);
+            });
+            assert_eq!(view.read_with(&context, |view, _| view.cursor()), at,
+                "the visible far-edge cell maps to its exact source at {token}");
+            context.update(|window, cx| window.input("界", cx));
+            settle(&mut context);
+            let mut expected = original.clone();
+            expected.insert_str(at, "界");
+            assert_eq!(bytes(&view, &context), expected.as_bytes());
+            save(&app, &mut context);
+            assert_eq!(std::fs::read(&path).unwrap(), expected.as_bytes());
+            context.dispatch_action(gpui_kit::component::input::Undo);
+            settle(&mut context);
+            assert_eq!(bytes(&view, &context), original.as_bytes());
+        }
+    }
     assert!(view.read_with(&context, |view, _| view.is_live()));
     assert_eq!(bytes(&view, &context), original.as_bytes());
     context.simulate_resize(gpui_kit::size(px(1800.), px(1000.)));

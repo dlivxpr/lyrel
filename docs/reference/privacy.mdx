@@ -57,7 +57,7 @@ GitHub 标签页本身不存储任何凭据。每次连接时，它都会从 `GH
 
 native editor 的文件图片策略与 GitHub 标签页独立，不套用 GitHub 托管图片自动加载规则。HTTP(S)授权按当前文档中实际显示的资源URL记录；删除资源、文档换路径或关闭后失效。SVG 顶层授权不授予嵌套文件、网络或data图片读取权限；资源解析器明确拒绝它们，失败可见。安全URL导航只允许HTTP(S)/mailto；SSH文件不交给本机默认应用。源码与自动化消费者不替代当前候选的真实网络／SSH／原生验收。
 
-#241/#242 完成公式与 Mermaid 的 native Rust rendering/结构编辑 Host 接线，不引入 Node.js/Chromium 或项目 JavaScript；渲染不得自动获取文件/网络资源。MDX 项目组件、动态表达式、函数及 import/export 保留源码，不作为 React 执行。`.md`/`.markdown` 使用新 live/source 同文档，`.mdx` 为 source-only；完整离线/安全/跨平台结果按候选分别验证，历史实现的通过记录不转移到本次替换。
+公式与 Mermaid 使用 native Rust rendering/结构编辑 Host，不引入 Node.js/Chromium 或项目 JavaScript；渲染不自动获取文件/网络资源。MDX 项目组件、动态表达式、函数及 import/export 保留源码，不作为 React 执行。`.md`/`.markdown` 使用唯一的 Zorite-derived live/source 同文档路线，`.mdx` 为 source-only；完整离线/安全/跨平台结果按候选分别验证，历史实现的通过记录不转移到本次替换。
 
 <a id="what-is-stored-and-where"></a>
 ## 存储哪些内容，以及存储在哪里

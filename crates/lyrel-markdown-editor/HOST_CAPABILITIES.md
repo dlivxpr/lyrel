@@ -2,9 +2,9 @@
 
 ## 当前交付边界
 
-本清单是 #236 的实现契约，不是验收通过声明。#237 提供可执行的文件生命周期与共享文档基础；其行为测试、原生字体、系统 IME、真实 SSH、Release 可用性与平台结果必须分别记录。后续能力按下表完成；依赖 #237 的票不得以独立文本控件演示替代真实工作台。最终完整功能与默认路由验收属于 #245。
+本清单描述 #236 集成源码的生产入口与验收合同，不是验收通过声明。`.md`/`.markdown` 只有 Zorite-derived 默认即时编辑路线，`.mdx` 为 source-only；没有旧 WYSIWYG fallback、双编辑器设置或兼容旧投影的测试内核。#237—#244 的共享文档、写作、资源与文件生命周期均已接入；#245 的最终构建、完整 native runner、系统 IME、真实 SSH、同条件 Release 对照与产品接受仍须分别记录，不从源码交付推定通过。
 
-源码基准固定为 [Zorite `9f069c73a56b06efc84fb7abb700beb50083c827`](https://github.com/packetThrower/zorite/tree/9f069c73a56b06efc84fb7abb700beb50083c827)。原始文件摘要、版本和适配范围见 `UPSTREAM.toml`；MIT 原文见 `licenses/`。导入限于 editor/bidi 与 #241 的 ratex-gpui，不包含 GPL 应用编排。GPUI 只经 `gpui-kit` 的 Fast 类型，不建立第二个 GUI runtime。
+源码基准固定为 [Zorite `9f069c73a56b06efc84fb7abb700beb50083c827`](https://github.com/packetThrower/zorite/tree/9f069c73a56b06efc84fb7abb700beb50083c827)。原始 16 文件摘要、版本和适配范围见 `UPSTREAM.toml`；摘要对应 pinned Git blob，不是本地适配文件的摘要。MIT 原文见 `licenses/` 与分发根 `LICENSE`。导入限于 editor/bidi/ratex-gpui，不包含 GPL 应用编排；`zorite-markdown =0.10.1` 仍是关闭默认 view feature 的 registry 语法依赖。GPUI 只经 `gpui-kit` 的 Fast 类型，不建立第二个 GUI runtime。
 
 ## 所有权与修改协议
 
@@ -23,7 +23,7 @@
 
 ## 能力、负责人和可观察验收
 
-“上游保留”表示行为实现已导入；不是声称 Host 已配置或原生结果已通过。“待接线”能力保持源码可访问，不暴露假成功的 provider 或无响应按钮。
+表中列出当前生产接线、负责票与必须保留的可观察行为。“上游保留”不是原生通过声明；明确排除的 notebook/legacy-rich 构造只保留安全源码访问，不安装假 provider 或无响应控件。最终实际失败与未运行项必须原样记录，不能将它们改写为能力不在范围。
 
 | 表面 | 分类与所属票 | 当前边界与完成条件 |
 | --- | --- | --- |
@@ -50,11 +50,11 @@
 | --- | --- |
 | notebook/database、页面管理、知识库搜索、backlinks、wiki 页面、block-reference 浏览 | 不导入 GPL app 或建立 notebook。`[[...]]`、`![[...]]`、`#^...` 及相关 source 均原样保留；#238 区分普通文档链接和这些排除构造，不留下无目标导航。 |
 | 上游 property/wiki 渲染表面 | 不迁移 notebook property inspector。`property_icon` 保持 `None`，不注册 property editor/provider 或 slash property 命令，`key:: value` 原文直接显示和编辑；wiki/embed 不建立假导航。frontmatter 与未知构造保留源码访问。它们不是旧 Lyrel inspectors 的替代实现。 |
-| 旧 Lyrel MDX rich components、visual inspectors、自定义 workspace references/embeds、额外 visual extensions | 旧实现与专属消费者随 cutover 删除，不能以 test-only adapter 继续保留。MDX 使用 source-only；frontmatter 和未知语法始终 intact/source-accessible。负责人 #240/#244，最终文档 #245。 |
+| 旧 Lyrel MDX rich components、visual inspectors、自定义 workspace references/embeds、额外 visual extensions | 旧实现与专属消费者已退出默认路线，不保留 test-only adapter。MDX 使用 source-only；frontmatter 和未知语法保持原文与源码访问。#240/#244 完成路由和写作边界，#245 收敛正式合同。 |
 
 ## 测试与证据入口
 
-- editor 回归：`cargo test --locked -p lyrel-markdown-editor --test foundation`。
+- editor 全部回归：`cargo test --locked -p lyrel-markdown-editor`，包含 upstream-derived unit、结构公式和 `--test foundation`；只跑 foundation 不代表整个 crate。
 - GUI-free codec：`cargo test --locked -p lyrel-text`。
 - 工作台：`cargo test --locked -p lyrel --lib`；`src/ui/code_editor/markdown/foundation.rs` 经生产 lifecycle 运行 shared Host 与 composition 场景，不依赖旧 Markdown 内核。
 - native 字体目标：`cargo test --locked -p lyrel --features native-markdown-tests --test native_markdown -- --nocapture`。runner 将真实 text system 接入 deterministic test platform，不创建产品 OS 窗口；test settle 须通过 SDK `simulate_next_frame` 执行平台帧回调，pointer move 后再 down/up，不能仅以 `render_frame` 冒充完整输入/帧生命周期。它验证 native 字体几何和生产消费者，不替代实际产品窗口、系统中文 IME 或真实 SSH。
@@ -93,11 +93,11 @@
 
 ## 最终许可证分发验收（#245）
 
-#237 的 editor/bidi MIT 原文同时保存在 crate 的 `licenses/` 与现有打包入口携带的根 `LICENSE`；源码目录不等于实际产物验收。#245 须对 Windows ZIP/安装包、macOS app/archive 和 release artifacts 核验 editor/bidi 与 #241 新增 ratex 的实际许可证内容。检查入口包括 `.github/scripts/bundle-windows.ps1`、`bundle-macos.sh`、`verify-windows-package.ps1` 的根 allowlist，以及 `.github/workflows/release-build.yml` 的 artifact 白名单；不能只增加源树许可证而漏发二进制归属。
+三个 MIT 导入的原文保存在 crate 的 `licenses/`，根 `LICENSE` 同时包含 editor/bidi/ratex 归属、完整 MIT 条款及独立的 RaTeX/KaTeX 字体通知。实际传递链为：`.github/workflows/release-build.yml` 将同 SHA 的根 `LICENSE` 放入两平台 desktop-inputs tar；Windows `bundle-windows.ps1` 复制为 stage/ZIP 的 `LICENSE.txt`，`windows-installer.iss` 同时以它作为许可页和 `{app}` 文件；macOS `bundle-macos.sh` 复制为 `.app/Contents/Resources/LICENSE.txt`，该 app 再进入 ZIP 与 DMG。现有 updater managed-root 与 `verify-windows-package.ps1` 根 allowlist 已接受 `LICENSE.txt`，无需增加另一套发行目录。Windows verifier 比较实际 ZIP 解包和 Inno stage 的完整 SHA-256；macOS bundler 比较 app 和实际 ZIP 中的完整字节。源码传递链与 guard 不等于实际产物验收：最终 Windows ZIP/Inno、macOS app/archive、release artifacts 必须各自保留命令、候选 SHA、产物与结果，无 macOS 运行前提时仍为未验收。
 
 ## 原 14 项 native 消费者迁移清单
 
-以下以 baseline `5a38d0a9242761024335fe06263b040ddb3f5d74` 的真实 registry 为准，名称省略共同 `ui::code_editor::markdown::` 前缀。旧文件依赖已删除的 Rope/SourcePresentation/投影与旧格式菜单；不编译旧内核来让测试继续绿。当前基础六项消费者 **不等价于原 14 项全通过**。后续票必须在真实 replacement 工作台恢复其仍有效的用户行为与几何边界；仅已明确替代的交互或排除的旧 UI 可以退役。
+以下以 baseline `5a38d0a9242761024335fe06263b040ddb3f5d74` 的真实 registry 为准，名称省略共同 `ui::code_editor::markdown::` 前缀。旧文件依赖的 Rope/SourcePresentation/投影与旧格式菜单已退役；不编译旧内核来保留实现断言。下表逐项对应当前 replacement 工作台消费者；一个消费者可承接多个边界，新增 case 数量不能证明覆盖等价。只有明确替代的交互或排除的旧 UI 退役，其他用户行为与几何边界仍须执行最终 native 验收。
 
 | baseline selector 后缀 | 处理与仍有效的验收边界 | 所属票 |
 | --- | --- | --- |
@@ -108,15 +108,15 @@
 | `source::review_tests::native_modified_link_drag_retains_upper_wrap_anchor` | 旧 Ctrl+Click-only 激活契约退役；`resources::native_wrapped_link_drag_retains_upper_wrap_anchor` 恢复普通 link drag 的源锚点、选择替换/Undo 与不导航边界，单击激活另验。待最终 native 执行。 | #238 |
 | `source::review_tests::native_extreme_nowrap_line_keeps_pointer_selection_and_source_exact` | 迁移至 `foundation::zorite_foundation_complete_extreme_line_paint_caret_input_save_undo`；完整 2,523,166 B，不缩水为截断样本；保留指针/选择和原始源码条件。 | #237 |
 | `source::review_tests::native_aligned_table_pointer_and_selection_follow_content` | 迁移至 `table_code_tests::aligned_geometry`：真实 cell glyph 命中、wrapped Unicode、grapheme 选择/复制、边框 drag、fit 与精确 Undo；保留原 selector。源码已接线，native 结果待集中检查。 | #239 |
-| `tests::table_presentation::table_presentation_drag_fit_scroll_edit_history_and_host_reopen` | 迁移至 `table_code_tests::wide_table`：完整 88,987 B、48 列/64 正文行 fixture 的 live grid、指针编辑/Undo、独立横向滚动、窄宽 resize、保存重开；drag/fit 另由同组 aligned 消费者完成。旧 inspector/menu id 退役，保留原 selector。 | #239 |
+| `tests::table_presentation::table_presentation_drag_fit_scroll_edit_history_and_host_reopen` | 迁移至 `table_code_tests::wide_table`：完整 88,987 B、48 列/64 正文行 fixture；通过真实 wheel 到第 47 列，断言 table 几何移动而 document scroll 不动；在窄/宽 pane 的 R0 C47、R63 C47 点击、输入、精确保存及 Undo，最后关闭重开。drag/fit 由同组 aligned 消费者完成。旧 inspector/menu id 退役，保留原 selector；最终运行未由源码交付推定通过。 | #239/#245 |
 | `tests::native_navigation_home_end_and_words_use_visible_logical_content` | 迁移新 navigation case 的 Home/End/Unicode word/grapheme，删除仅为旧 Rope chunk seam 的实现断言。 | #237 |
 | `tests::native_text_color_picker_clear_geometry_and_shared_history` | 自定义色/取消/clear/geometry/history 仍有效；按 Zorite native menu + Lyrel picker 迁移，不重建旧全行格式工具栏。 | #244 |
-| `source::spelling::tests::spelling_long_code_remains_editable_with_offscreen_diagnostics` | 保留超长 code 与离屏 diagnostics 的 caret/input/Undo 安全；旧 spelling UI id 不保留，新 pipeline 的 diagnostics 渲染另验。 | #237/#239/#244 |
-| `source::spelling::tests::spelling_full_mixed_paragraph_keeps_visible_text_editable_around_tall_atoms` | #238 已接真实ImageHost bitmap与inline image machinery；完整400034 B mixed-tall fixture的图片/公式联合几何消费者由#241的 `markdown_formula::native_full_mixed_tall_formula_pointer_fragments` 迁移并在集成后运行。不能以源码字符串或#238普通preview case代替完整fixture。 | #238/#241 |
+| `source::spelling::tests::spelling_long_code_remains_editable_with_offscreen_diagnostics` | 原 selector 在 `foundation::native_long_code` 中执行完整 400,000 B code body 和覆盖全部正文的 diagnostics；真实首/尾 paint、pointer exact-offset、输入、保存、Undo 与重开。旧 spelling UI id 不保留，不缩减离屏诊断范围。 | #237/#239/#244/#245 |
+| `source::spelling::tests::spelling_full_mixed_paragraph_keeps_visible_text_editable_around_tall_atoms` | `markdown_formula::native_full_mixed_tall_formula_pointer_fragments` 保留完整 400,034 B fixture；等待生产 ImageHost 的真实 bitmap，使用真实 FormulaProvider 高公式几何，分别在 wrap/nowrap 执行图片/公式邻文及远端尾部 pointer/input/Undo/save，取消结构草稿不改变源码。最终执行仍未验收。 | #238/#241/#245 |
 | `source::spelling::tests::spelling_wrapped_starts_follow_native_prose_heading_list_quote_and_zoom` | 保留 prose/heading/list/quote/zoom 后视觉行首与命中一致；按新排版层级迁移。 | #244 |
-| `source::spelling::tests::spelling_native_hard_breaks_and_image_formula_fragments_do_not_bridge_rows` | #238 提供真实图片provider与完成后的native layout失效；共用inline atom不可跨行与hard-break消费者由#241的 `markdown_formula::native_hard_break_formula_fragments` 迁移，集成后联合验证。该边界不能以单独资源加载成功宣称通过。 | #238/#241 |
+| `source::spelling::tests::spelling_native_hard_breaks_and_image_formula_fragments_do_not_bridge_rows` | `markdown_formula::native_hard_break_formula_fragments` 保留完整长 fragment，硬换行两侧都有图片/公式；等待真实 ImageHost bitmap 与 FormulaProvider raster，断言下一行 caret 不跨越前一行 tall atom，实际 pointer/input/Undo/save 核对邻文安全。不能以单资源加载或无 bitmap 文本替代；最终执行仍未验收。 | #238/#241/#245 |
 
-这不是允许后续丢弃仍有效边界的豁免。#237 自有基础几何/导航迁移通过后才可宣称其 foundation gate 完成；依赖 provider 的行由对应票接线与验收，#245 汇总全部未决行并禁止以 case 数量替代实际覆盖。
+表中没有以 source spelling、默认值或 mock echo 替代用户行为。`markdown::native_cases()` 完整聚合 foundation、resources、writing、table/code、workbench views、Mermaid、saving fidelity 与公式消费者；无 filter 的 native 命令执行全部 registry。substring filter 与 `--exact` 仅供定位，零匹配返回 exit 2，不能输出假成功；OS 主线程和真实字体守卫保留。原文档栏、状态/chrome、普通 code、save/conflict/close 消费者仍属原 library 目标，不因 native registry 迁移删除。
 
 ### #237 当前 replacement 消费者入口
 
@@ -143,11 +143,11 @@ native registry 增加 `workbench_views::shared_context_and_ime_handoff` 与 `wo
 
 `reload_request` 单独标识最近一次真实读请求；`reload_seq` 继续标识源文适用性。普通编辑不冒充“已启动另一读请求”：晚到的仍属当前Host/path的读会报告 conflict，既不覆盖新preedit，也不在观察到revision变化前静默return。真正的新reload、context失效、路径移动/删除仍使旧request失效。
 
-原 `source::spelling::tests::spelling_long_code_remains_editable_with_offscreen_diagnostics` selector 已迁移到当前native registry的 `foundation::native_long_code`。保留完整 `"wide ".repeat(80_000)` fenced-code fixture与覆盖完整400,000B正文的离屏诊断，通过真实字体/paint/pointer、输入、保存、Undo、精确字节与重开验证；未保留旧projection/spelling内部接口，未缩短fixture。其余provider相关几何边界仍按上方逐项归属完成，新增case不代表这些边界自动通过。
+原 `source::spelling::tests::spelling_long_code_remains_editable_with_offscreen_diagnostics` selector 在当前 native registry 中执行 `foundation::native_long_code`。完整 `"wide ".repeat(80_000)` fenced-code fixture与覆盖全部 400,000 B 正文的离屏诊断均保留；首部及末端通过真实字体/paint/pointer、输入、保存、Undo、精确字节与重开验证。未保留旧 projection/spelling 内部接口，未缩短 fixture；这些断言的最终结果必须以集中 runner 为准。
 
-### Windows 基础实窗验收
+### #237 Windows 基础实窗历史证据
 
-固定参考为上述 Zorite commit 的原始 Release binary。当前无探针 Lyrel Release 已在隔离配置中完成普通 991 B 和完整长文 722,000 B 的输入、字符/词导航、选择替换、剪切粘贴、live/source、首尾滚动、保存关闭重开，以及各 100 次结构编辑的完整 Undo/Redo；保存结果逐字节核验。系统中文 IME 通过实际候选窗完成 `ni'hao` 提交“你好”、`zhongwen` 取消与 Unicode 选区替换/Undo/Redo，不以文本注入替代。
+固定参考为上述 Zorite commit 的原始 Release binary。#237 基础检查点的无探针 Lyrel Release 曾在隔离配置中完成普通 991 B 和完整长文 722,000 B 的输入、字符/词导航、选择替换、剪切粘贴、live/source、首尾滚动、保存关闭重开，以及各 100 次结构编辑的完整 Undo/Redo；保存结果逐字节核验。系统中文 IME 通过实际候选窗完成 `ni'hao` 提交“你好”、`zhongwen` 取消与 Unicode 选区替换/Undo/Redo，不以文本注入替代。它不是最终 #245 binary 的重跑或接受证据。
 
 长文初测发现 prepaint 两段逐行命中区准备耗时约 0.83–0.91 秒/帧；修复为复用现有行索引后，100 次结构输入不再积压。最终相同长文工作负载的进程 CPU 增量为 4.875 秒，private bytes 从 171,372,544 增至 345,698,304；保留全部整串历史，没有截断文本或缩短 Undo/Redo。此完整 Windows 基础工作负载判定可用；内存的线性历史成本已记录，不宣称零拷贝历史或任意大小性能。自动化调用耗时不是 input-to-paint 延迟，进程内存也不是历史独占内存。
 
@@ -156,4 +156,13 @@ native registry 增加 `workbench_views::shared_context_and_ime_handoff` 与 `wo
 ### #239 表格与代码原生验收路径
 
 `markdown::table_code_tests::workflow` 通过生产 owning Host 打开 BOM/混合行尾文档，实际操作 table commands、code language/copy、键盘尺寸选择与自定义 picker，跨结构替换/Undo，以及两个 presentation 的共享 history/保存关闭重开。native registry 额外保留上述两项原表格 selector；完整 wide-table 在测试中生成，不依赖仓库外的临时目录、不截断正文、不切 source 掩盖布局。窄验证入口为 `cargo test --locked -p lyrel --lib table_code_workbench_controls_history_host_reopen` 与 `cargo test --locked -p lyrel --features native-markdown-tests --test native_markdown -- table`。源码提交未运行 build/test/lint/formatter；实际 Windows 产品窗口、固定 Zorite 表格/code 对照、系统 IME、真实 SSH 与 macOS 证据仍由集成者逐项记录，基础历史证据不自动转移。
+
+## 默认路由与 provider 聚合入口
+
+- `src/ui/code_editor/buffers.rs::create` 按扩展名创建唯一 native Document，`EditorNewMarkdownFile` 从未命名阶段就选择该路线；普通新建/scrollback 保留 code 路线，不做破坏性类型转换。
+- `markdown::configure` 为 primary/secondary 安装语义样式、writing、Mermaid 和 table/code；`markdown_formula::install` 在两种创建入口安装独立 seat；`editor_buffer_created` 建立 owning-Host ImageHost，`render_editor_body` 为每个 presentation 附着真实图片/链接订阅。
+- `MarkdownPresentations::set_source_only` 同时更新 primary 与所有已创建 view。rename/save-as 成功后只更新身份和能力，不重建 Document/history；已有 code buffer 另存为 Markdown 也保留自己的历史，释放后重开才按新扩展名路由。
+- 首次保存与 MDX：`saving::host_tests::native_untitled_save_as_suggests_markdown_and_keeps_its_document`、`foundation::mdx_source_only_survives_mode_action_split_history_save_reopen`、`workbench_views::active_markdown_rename_to_mdx_retains_each_view_and_history` 及 `saving::fidelity_tests::markdown_save_as_target_conflict_and_extension_rename_keep_document_history`。这些仍通过生产工作台 seam 验证，不检查源码拼写。
+
+最终接受还必须使用固定参考的同源普通/长文/宽表/原始完整资源文档，完成连续输入与系统中文 IME、选择导航、fold/格式/列表、表格/code、图片/link、二维公式、Mermaid、source/live、Undo/Redo、local/真实 SSH 保存重开，并比较 light/dark、zoom、docked/full 与 native long-line。保留完整 fixtures 与全部历史；未运行、前提失败、实际回归及尚未接受的测量取舍都不能改为通过。
 

@@ -2,7 +2,7 @@
 use super::*;
 use crate::ui::app::test_window::harness_with_tabs;
 use gpui_kit::test::TestWindowExt as _;
-use gpui_kit::{EntityInputHandler as _, TestAppContext, VisualTestContext};
+use gpui_kit::{TestAppContext, VisualTestContext};
 use lyrel_markdown_editor::EditorState as MarkdownEditor;
 use std::time::{Duration, Instant};
 

@@ -2723,16 +2723,6 @@ impl EditorState {
         self.remap_diagnostics(&range, new.len());
     }
 
-    /// Is the selection wrapped by `open`…`close` — the markers just inside or
-    /// just outside it (the two shapes [`Self::toggle_wrap_pair`] unwraps)?
-    fn wrapped_by(&self, open: &str, close: &str) -> bool {
-        let sel = &self.selected_range;
-        let text = &self.content[sel.clone()];
-        (text.len() >= open.len() + close.len() && text.starts_with(open) && text.ends_with(close))
-            || (self.content[..sel.start].ends_with(open)
-                && self.content[sel.end..].starts_with(close))
-    }
-
     /// Strip a `kind`-colored tag wrapping the selection (just inside or just
     /// outside it), whatever its color. `true` when one was removed; the
     /// caller emits `Changed`.
@@ -3509,7 +3499,7 @@ impl EditorState {
         }
         // Left-click a property-panel pill opens its target — the pill is painted
         // over a collapsed source line, so hit-test the painted bounds directly
-        // (not the raw text like `link_at` below).
+        // rather than hit-testing the hidden source line.
         if event.click_count == 1
             && !event.modifiers.shift
             && !event.modifiers.control

@@ -1772,10 +1772,6 @@ pub fn translate_en(key: L10nKey) -> &'static str {
         L10nKey::StatusRemoteHost => "Remote host {id}",
         L10nKey::EditorMarkdownLive => "Live editing",
         L10nKey::EditorMarkdownSource => "Source",
-        L10nKey::EditorMarkdownLiveLabel => "Markdown live editor",
-        L10nKey::EditorMarkdownSourceLabel => "Markdown source",
-        L10nKey::EditorMarkdownTaskLabel => "Toggle task: {text}",
-        L10nKey::EditorMarkdownFormulaLabel => "Formula: {tex}",
         L10nKey::EditorFormulaEditing => "Edit formula",
         L10nKey::EditorFormulaHelp => {
             "↑↓: suggestions · Enter: accept/apply · Esc: dismiss/cancel · Shift+F10: formula menu"
@@ -1808,76 +1804,10 @@ pub fn translate_en(key: L10nKey) -> &'static str {
         L10nKey::EditorFormulaAlignRight => "Align right",
         L10nKey::EditorFormulaExporting => "Exporting formula to this computer…",
         L10nKey::EditorFormulaExportFailed => "Couldn’t export formula.",
-        L10nKey::EditorMdxEditName => "Edit component name",
-        L10nKey::EditorMdxEditProperty => "Edit property: {name}",
-        L10nKey::EditorMdxEditChildren => "Edit component children",
-        L10nKey::EditorCardEditName => "Edit card component name",
-        L10nKey::EditorCardFollowLabel => "Open card destination: {target}",
-        L10nKey::EditorCardAddProperty => "Add card property: {name}",
-        L10nKey::EditorCardEditProperty => "Edit card property: {name}",
-        L10nKey::EditorCardEditGroupLabel => "Edit card group children",
-        L10nKey::EditorAccordionCollapse => "Collapse accordion: {title}",
-        L10nKey::EditorAccordionExpand => "Expand accordion: {title}",
-        L10nKey::EditorMarkdownSourceRegion => {
-            "Source · structure not yet adapted for live editing"
-        }
-        L10nKey::EditorMdxGeneric => "Generic JSX structure · not runtime output",
-        L10nKey::EditorMdxName => "Component name",
-        L10nKey::EditorMdxProperty => "Property",
-        L10nKey::EditorMdxDynamic => "Dynamic source · never executed",
-        L10nKey::EditorMdxChildren => "Children · continuous Markdown",
-        L10nKey::EditorMdxClosing => "End component",
-        L10nKey::EditorMdxParseError => "Invalid MDX · edit the retained source to recover",
-        L10nKey::EditorCard => "Card",
-        L10nKey::EditorCardGroup => "Card group",
-        L10nKey::EditorCardGroupOrder => "Cards remain in document reading order",
-        L10nKey::EditorCardTitle => "Edit title",
-        L10nKey::EditorCardDestination => "Edit destination",
-        L10nKey::EditorCardIcon => "Edit icon",
-        L10nKey::EditorCardDescription => "Edit description",
-        L10nKey::EditorCardColumns => "Edit columns",
-        L10nKey::EditorCardFollow => "Open destination",
-        L10nKey::EditorCardEditContent => "Edit card content",
-        L10nKey::EditorCardEditGroup => "Edit cards",
-        L10nKey::EditorMdxStepsNumber => "Step {number}",
-        L10nKey::EditorMdxStepsSequence => "Procedure · {count} steps",
-        L10nKey::EditorMdxStepsSequenceSingular => "Procedure · {count} step",
-        L10nKey::EditorMdxStepsEditTitle => "Edit step title",
-        L10nKey::EditorMdxStepsEditSource => "Edit step source",
-        L10nKey::EditorMdxStepsEditContainerSource => "Edit procedure source",
-        L10nKey::EditorMdxStepsEndStep => "End step",
-        L10nKey::EditorMdxStepsEndSequence => "End procedure",
-        L10nKey::EditorCalloutNote => "Note",
-        L10nKey::EditorCalloutTip => "Tip",
-        L10nKey::EditorCalloutInfo => "Information",
-        L10nKey::EditorCalloutWarning => "Warning",
-        L10nKey::EditorCalloutEditSource => "Edit callout source",
-        L10nKey::EditorCalloutReturnContent => "Return to callout content",
-        L10nKey::EditorMdxAccordionsGroup => "Accordion group",
-        L10nKey::EditorMdxAccordionsSection => "Accordion",
-        L10nKey::EditorMdxAccordionsExpand => "Expand accordion",
-        L10nKey::EditorMdxAccordionsCollapse => "Collapse accordion",
-        L10nKey::EditorMdxTabsGroup => "Tabs",
-        L10nKey::EditorMdxTabsUntitled => "Untitled tab",
-        L10nKey::EditorMdxTabsEmpty => "No Tab children. Edit children to add a tab.",
-        L10nKey::EditorMdxTabsKeyboard => "In content: Alt+Page Up / Page Down switches tabs",
-        L10nKey::EditorMarkdownCodeRegion => "Code source",
         L10nKey::MarkdownCodeLanguage => "Code language…",
         L10nKey::MarkdownCodePlain => "Plain text",
         L10nKey::MarkdownCodeCopy => "Copy code",
-        L10nKey::MarkdownCopyMarkdownOnly => "Copy as Markdown",
-        L10nKey::MarkdownCopyContents => "Copy contents",
-        L10nKey::MarkdownCopyContentsMarkdown => "Copy contents as Markdown",
-        L10nKey::MarkdownSlashBlockUnavailable => "{label} · Not available inside a table cell",
-        L10nKey::MarkdownClipboardPlainFallback => {
-            "Markdown copied. Rich clipboard format is unavailable."
-        }
-        L10nKey::MarkdownClipboardRichUnconfirmed => {
-            "Markdown copied. Rich formatting depends on system clipboard support and the destination app."
-        }
-        L10nKey::MarkdownClipboardFailed => "Couldn’t access the system clipboard. Try again.",
         L10nKey::MarkdownCodeSource => "Edit fence source",
-        L10nKey::MarkdownCodeLive => "Return to code",
         L10nKey::EditorMarkdownMermaidSource => "Mermaid source",
         L10nKey::EditorMarkdownMermaidLoading => "Rendering diagram…",
         L10nKey::EditorMarkdownMermaidEdit => "Edit diagram source",
@@ -1895,24 +1825,12 @@ pub fn translate_en(key: L10nKey) -> &'static str {
         L10nKey::EditorMarkdownMermaidRasterLimit => {
             "Diagram exceeds the native image limit (4096 pixels per side or 8 million pixels). Simplify or split the diagram."
         }
-        L10nKey::EditorMarkdownMetadataRegion => "Metadata source",
-        L10nKey::EditorMarkdownHtmlRegion => "HTML source · not executed or rendered as HTML/CSS",
-        L10nKey::EditorMarkdownMathLoading => "Rendering formula",
-        L10nKey::EditorMarkdownMathError => {
-            "Couldn’t render formula. Click to edit its source. Reason:"
-        }
         L10nKey::EditorLoadImages => "Load document images",
         L10nKey::EditorImageUnloaded => "Image not loaded",
         L10nKey::EditorImageLoading => "Loading image",
         L10nKey::EditorImageLoaded => "Image loaded",
         L10nKey::EditorImageFailed => "Couldn’t load image",
         L10nKey::EditorTableCommands => "Table…",
-        L10nKey::MarkdownBlockCommands => "Block…",
-        L10nKey::MarkdownMoveContent => "Move content",
-        L10nKey::MarkdownMoveDestination => "Insert moved content here",
-        L10nKey::MarkdownMoveHelp => {
-            "Move content: drag to an insertion line, or use ↑/↓ and Enter. Esc cancels."
-        }
         L10nKey::MarkdownBlockParagraph => "Paragraph",
         L10nKey::MarkdownBlockHeading1 => "Heading 1",
         L10nKey::MarkdownBlockHeading2 => "Heading 2",
@@ -1931,14 +1849,6 @@ pub fn translate_en(key: L10nKey) -> &'static str {
         L10nKey::MarkdownBlockTask => "Task list",
         L10nKey::MarkdownBlockCode => "Code block",
         L10nKey::MarkdownBlockMath => "Math block",
-        L10nKey::MarkdownBlockToggleFold => "Toggle block fold (this view)",
-        L10nKey::MarkdownBlockPersistFold => "Toggle callout fold (update source)",
-        L10nKey::MarkdownBlockExitQuote => "Exit quote",
-        L10nKey::MarkdownBlockSource => "Edit document source",
-        L10nKey::MarkdownBlockExpand => "Expand block",
-        L10nKey::MarkdownBlockCollapse => "Collapse block",
-        L10nKey::MarkdownBlockExpandLabel => "Expand block: {text}",
-        L10nKey::MarkdownBlockCollapseLabel => "Collapse block: {text}",
         L10nKey::EditorTableInsert => "Insert table",
         L10nKey::EditorTableChanged => "The document changed. Close and reopen table insertion.",
         L10nKey::EditorTableInsertRowBefore => "Table: Insert row above",
@@ -1961,48 +1871,11 @@ pub fn translate_en(key: L10nKey) -> &'static str {
         L10nKey::EditorTableStyleStriped => "Table style: Striped",
         L10nKey::EditorTableStyleHeader => "Table style: Header",
         L10nKey::EditorTableStyleMinimal => "Table style: Minimal",
-        L10nKey::MarkdownFormatMenu => "Format…",
-        L10nKey::MarkdownFormatBold => "Bold",
-        L10nKey::MarkdownFormatItalic => "Italic",
-        L10nKey::MarkdownFormatUnderline => "Underline",
-        L10nKey::MarkdownFormatStrike => "Strikethrough",
-        L10nKey::MarkdownFormatCode => "Inline code",
-        L10nKey::MarkdownFormatHighlight => "Highlight",
         L10nKey::MarkdownFormatTextColor => "Text color…",
         L10nKey::MarkdownFormatHighlightColor => "Highlight color…",
-        L10nKey::MarkdownFormatMixed => "{format} (mixed)",
         L10nKey::MarkdownClearHighlightColor => "Clear highlight color",
         L10nKey::MarkdownClearTextColor => "Clear text color",
         L10nKey::MarkdownApplyColor => "Apply color",
-        L10nKey::MarkdownColorYellow => "Yellow highlight",
-        L10nKey::MarkdownColorOrange => "Orange highlight",
-        L10nKey::MarkdownColorGreen => "Green highlight",
-        L10nKey::MarkdownColorBlue => "Blue highlight",
-        L10nKey::MarkdownColorPurple => "Purple highlight",
-        L10nKey::MarkdownColorPink => "Pink highlight",
-        L10nKey::MarkdownColorGray => "Gray highlight",
-        L10nKey::MarkdownEditLinkDestination => "Edit link destination",
-        L10nKey::EditorDocumentProperties => "Properties and tags…",
-        L10nKey::EditorDocumentTag => "Tag",
-        L10nKey::EditorPropertyEdit => "Edit property…",
-        L10nKey::EditorPropertyKey => "Property key",
-        L10nKey::EditorPropertyValue => "Value",
-        L10nKey::EditorPropertyApply => "Apply",
-        L10nKey::EditorPropertyCancel => "Cancel",
-        L10nKey::EditorPropertyAdd => "Add property…",
-        L10nKey::EditorTagAdd => "Add tag…",
-        L10nKey::EditorPropertyRemove => "Remove",
-        L10nKey::EditorPropertySource => "Edit source",
-        L10nKey::EditorPropertyChanged => {
-            "The document changed. Cancel and reopen this field to edit the current value."
-        }
-        L10nKey::EditorPropertyInvalid => {
-            "Keys must start with a letter and use letters, digits, -_. Tags use letters, digits, _-/."
-        }
-        L10nKey::EditorPropertyHelp => {
-            "Properties use key:: value. Tags stay in this document. YAML/TOML frontmatter and MDX attributes remain separate; edit their retained source."
-        }
-        L10nKey::MarkdownEditReferenceDestination => "Edit reference destination",
         L10nKey::MarkdownFollowLink => "Open link",
         L10nKey::MarkdownLinkOpenFailed => "Couldn’t open link: {reason}",
         L10nKey::MarkdownLinkInvalidDestination => "The destination is not a valid path or URL",
@@ -2018,7 +1891,6 @@ pub fn translate_en(key: L10nKey) -> &'static str {
         L10nKey::MarkdownSlashDivider => "Divider",
         L10nKey::MarkdownSlashInlineMath => "Inline math",
         L10nKey::MarkdownSlashLink => "Link",
-        L10nKey::MarkdownSlashWiki => "Wiki link",
         L10nKey::MarkdownSlashImage => "Image",
         L10nKey::MarkdownSlashDate => "Date",
         L10nKey::MarkdownSlashTime => "Time",
@@ -2031,36 +1903,6 @@ pub fn translate_en(key: L10nKey) -> &'static str {
         L10nKey::MarkdownSlashCustomTable => "Insert custom table",
         L10nKey::MarkdownSlashTableInvalid => {
             "Enter positive row and column counts (maximum 100 each)."
-        }
-        L10nKey::MarkdownReferenceLoading => "Looking up workspace references…",
-        L10nKey::MarkdownReferenceNoMatches => {
-            "No matching file or anchor. No file will be created."
-        }
-        L10nKey::MarkdownReferenceUnreadable => {
-            "The reference target could not be read. Check the Host connection and permissions."
-        }
-        L10nKey::MarkdownReferenceAmbiguous => {
-            "More than one file or anchor matches. Use an explicit path and a unique anchor."
-        }
-        L10nKey::MarkdownReferenceMissing => {
-            "The reference target does not exist. Edit the source to choose another file."
-        }
-        L10nKey::MarkdownEmbedChanged => {
-            "The target changed while being read. The fragment will refresh shortly."
-        }
-        L10nKey::MarkdownEmbedReadonly => "Readonly fragment",
-        L10nKey::MarkdownEmbedSource => "Edit embed source",
-        L10nKey::MarkdownEmbedLoading => "Loading fragment…",
-        L10nKey::MarkdownEmbedCycle => "This embed forms a cycle. Its source remains editable.",
-        L10nKey::MarkdownEmbedDuplicate => "This fragment is already included above.",
-        L10nKey::MarkdownEmbedLimit => {
-            "Embed limit reached (3 levels, 64 references, 8 MiB of source, 4096 blocks or 32 MiB of rasters)."
-        }
-        L10nKey::MarkdownEmbedUnsupported => {
-            "Only workspace Markdown and MDX fragments can be embedded."
-        }
-        L10nKey::MarkdownEmbedExternal => {
-            "External resources are not loaded inside readonly embeds."
         }
         L10nKey::EditorWrapOn => "Wrap: on",
         L10nKey::EditorWrapOff => "Wrap: off",

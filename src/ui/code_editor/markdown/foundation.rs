@@ -1059,6 +1059,35 @@ pub(super) fn native_long_code(cx: &mut TestAppContext) {
     });
     save(&app, &mut context);
     assert_eq!(std::fs::read(&path).unwrap(), original.as_bytes());
+    let tail = body + 400_000 - "wide ".len();
+    view.update_in(&mut context, |view, _, cx| view.select_range(tail..tail, cx));
+    until(&mut context, |context| {
+        context.update(|window, cx| {
+            view.read(cx).range_to_bounds(&(tail..tail)).is_some_and(|caret| {
+                caret.top() >= px(0.) && caret.bottom() <= window.viewport_size().height
+            })
+        })
+    });
+    let target = view.read_with(&context, |view, _| {
+        view.range_to_bounds(&(tail..tail)).unwrap().center()
+    });
+    context.update(|window, cx| {
+        window.pointer_move(target, None, cx);
+        window.pointer_down(target, gpui_kit::MouseButton::Left, cx);
+        window.pointer_up(target, gpui_kit::MouseButton::Left, cx);
+    });
+    assert_eq!(view.read_with(&context, |view, _| view.cursor()), tail,
+        "the complete long code remains pointer-editable at its diagnostic tail");
+    context.update(|window, cx| window.input("Z", cx));
+    settle(&mut context);
+    let mut expected = original.clone();
+    expected.insert(tail, 'Z');
+    save(&app, &mut context);
+    assert_eq!(std::fs::read(&path).unwrap(), expected.as_bytes());
+    context.dispatch_action(gpui_kit::component::input::Undo);
+    settle(&mut context);
+    save(&app, &mut context);
+    assert_eq!(std::fs::read(&path).unwrap(), original.as_bytes());
     app.update_in(&mut context, |app, window, cx| {
         app.editor_close_file(0, window, cx);
         app.open_file_in_editor(&path, window, cx);
