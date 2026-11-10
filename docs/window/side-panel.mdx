@@ -206,6 +206,18 @@ Markdown 的每个标签页／编辑组各自保留光标、选择、滚动、�
 
 能力责任、planned/delivered 边界、保留的上游行为、排除构造的 source access、原 14 项 native 消费者逐项迁移及许可证分发要求，统一见仓库 `crates/lyrel-markdown-editor/HOST_CAPABILITIES.md`；exact upstream 文件来源与摘要见同目录 `UPSTREAM.toml`。工作台继续拥有 Host/path、save/save-as/conflict/close 和全局状态；GUI-free `lyrel-text` 共享原 Apache-2.0 codec/EditorConfig。未配置的资源/结构编辑 provider 不得伪装成功。
 
+#### 在原生 Markdown 中连续书写
+
+正文使用 Arial、`1 rem` 字号和 `1.45` 行高；左右留白为 `1.75 rem`，文档使用现有 pane 的可用宽度，不再增加页面面板或整行展开按钮。标题沿用固定参考的字体层级，引用、列表和提示块随界面缩放；主题只改变语义颜色，不改写源码或重置选择、模式与撤销历史。
+
+- 在行首输入 `/`，或按 `Ctrl+/`（macOS 为 `Cmd+/`），打开插入菜单。用方向键和 `Enter` 选择正文、标题、列表、任务、引用、提示块、代码、公式、分隔线或链接；`Esc` 取消并保留原文。
+- 使用 `Ctrl+B/I/U/E`、`Ctrl+Shift+X/H` 切换粗体、斜体、下划线、行内代码、删除线和高亮；macOS 使用对应 `Cmd` 快捷键。选区右键菜单复用原生格式与块转换。
+- 列表和任务中按 `Enter` 延续下一项，空项再按 `Enter` 退出；`Tab`／`Shift+Tab` 调整缩进。引用和提示块正文延续 `>`，空引用行按 `Enter` 退出。
+- 标题的悬停箭头只占一个紧凑 glyph，不增加独立行。`Ctrl+Alt+F`（macOS 为 `Cmd+Alt+F`）切换当前或最近上级标题的呈现折叠，不写入文件；提示块的 `+/-` 折叠和任务勾选则是可撤销的源码修改。
+- 选中文字后按 `Ctrl+Alt+C/H`（macOS 为 `Cmd+Alt+C/H`），或点击右键颜色行的自定义入口，打开文字／高亮颜色选择器。颜色草稿支持调色板、HSLA 和十六进制输入；**应用颜色**才修改源码，**取消**不修改，**清除文字颜色**／**清除高亮颜色**先清除草稿，再由应用提交。双视图共用同一撤销历史。
+
+属性行 `key:: value`、frontmatter 和未知语法保持原样可编辑，不显示没有实际消费者的属性 inspector。这里描述代码接入范围；同源文的 Light/Dark、docked/full、zoom、连续输入和实际展开控件体验仍以 #244 的原生复测为准，不沿用下方旧实现的验收结果。
+
 超长 nowrap 行的 source-preserving 有界视觉布局继续保留；full RTL 仍在已批准验收范围之外，但 imported bidi mapping 不删除。下方 #204 的字形、表格、图片、公式、性能与保存证据仅属于原实现，不是本次替换的通过证明；新候选必须记录自己的实际结果。
 
 

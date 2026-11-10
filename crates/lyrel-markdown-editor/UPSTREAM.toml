@@ -16,6 +16,9 @@ formula_import_owner = "#241"
 # #240：foreign selection rebase 发出可观察事件；已退役 IME lease 拒绝迟到失焦 callback，
 # unmark 仅结束自己的 lease，仍有效的失焦提交不被拒绝。
 # document.rs、presentation.rs 为 Lyrel 原创适配；文件 codec 属于独立 Apache-2.0 lyrel-text。
+# writing.rs 为 Lyrel 原创 Host request seam；紧凑 disclosure 与原生格式控件仍沿用 MIT editor。
+# 内容 inset 在 scroll owner 内，公式/嵌入 overlay 共享 inset 后的坐标根；prose/list/quote spacing 随字体缩放。
+# 自定义颜色原子替换同一源码范围；主题 provider 派生当前 semantic style，不重置模式或 history。
 # #239：表格插入与样式原子history、cell Unicode/IME几何、列宽metadata随增删迁移；
 # code语言仅替换token并保留fence metadata，高亮provider读取当前App主题。
 # src/code.rs与应用markdown/table_code.rs为Lyrel原创Host适配，不导入GPL picker。

@@ -2662,9 +2662,8 @@ impl LyrelApp {
                             .flex_1()
                             .min_w_0()
                             .min_h_0()
-                            // The dock's centered resize hitbox covers half its width inward.
-                            // Keep the first native caret outside that capture band.
-                            .pl(px(crate::ui::right_panel::RESIZE_HANDLE_WIDTH / 2.))
+                            // Native document inset also clears the existing dock resize band.
+                            // Keep it inside the scroll owner rather than adding shell padding.
                             .child(view),
                     )
                     .into_any_element()

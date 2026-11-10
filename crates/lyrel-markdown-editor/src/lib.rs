@@ -37,6 +37,8 @@ mod code;
 mod document;
 mod presentation;
 pub use document::{Document, DocumentEvent, SourceEdit, SourceSnapshot};
+mod writing;
+pub use writing::{WritingIntent, WritingRequest};
 
 use gpui_kit::AppContext as _;
 use gpui_kit::TestSupportExt as _;
@@ -112,6 +114,10 @@ actions!(
         Highlight,
         Code,
         Dismiss,
+        InsertWritingBlock,
+        TextColorPicker,
+        HighlightColorPicker,
+        ToggleHeadingDisclosure,
     ]
 );
 
@@ -180,6 +186,14 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new("ctrl-u", Underline, ctx),
         KeyBinding::new("cmd-shift-h", Highlight, ctx),
         KeyBinding::new("ctrl-shift-h", Highlight, ctx),
+        KeyBinding::new("ctrl-/", InsertWritingBlock, ctx),
+        KeyBinding::new("cmd-/", InsertWritingBlock, ctx),
+        KeyBinding::new("ctrl-alt-c", TextColorPicker, ctx),
+        KeyBinding::new("cmd-alt-c", TextColorPicker, ctx),
+        KeyBinding::new("ctrl-alt-h", HighlightColorPicker, ctx),
+        KeyBinding::new("cmd-alt-h", HighlightColorPicker, ctx),
+        KeyBinding::new("ctrl-alt-f", ToggleHeadingDisclosure, ctx),
+        KeyBinding::new("cmd-alt-f", ToggleHeadingDisclosure, ctx),
         KeyBinding::new("escape", Dismiss, ctx),
     ]);
 }
@@ -767,6 +781,10 @@ pub struct EditorState {
     source_only: bool,
     host_links: bool,
     host_custom_colors: bool,
+    writing_provider: Option<writing::WritingProvider>,
+    writing_overlay: Option<gpui_kit::AnyView>,
+    presentation_style_provider: Option<writing::PresentationStyleProvider>,
+    document_inset: (f32, f32),
     placeholder: SharedString,
     /// Selection as a byte range; the caret is one end (see [`Self::cursor_offset`]).
     extra_selections: Vec<Range<usize>>,
@@ -1122,6 +1140,10 @@ impl EditorState {
             source_only: false,
             host_links: false,
             host_custom_colors: false,
+            writing_provider: None,
+            writing_overlay: None,
+            presentation_style_provider: None,
+            document_inset: (0., 0.),
             placeholder: SharedString::default(),
             selected_range: 0..0,
             extra_selections: Vec::new(),
@@ -2545,6 +2567,16 @@ impl EditorState {
                 }
                 return;
             }
+            if let Some(prefix) = markdown_syntax::blockquote_prefix(line) {
+                if line[prefix..].trim().is_empty() {
+                    self.selected_range = line_start..line_start + prefix;
+                    self.replace_text_in_range(None, "", window, cx);
+                } else {
+                    let continuation = format!("\n{}", &line[..prefix]);
+                    self.replace_text_in_range(None, &continuation, window, cx);
+                }
+                return;
+            }
         }
         self.replace_text_in_range(None, "\n", window, cx);
     }
@@ -2721,31 +2753,7 @@ impl EditorState {
     /// already on it (and, for a highlight, a plain `==…==`); `None` removes
     /// that color. No-op on an empty selection.
     pub fn color_selection(&mut self, kind: ColorKind, rgba: Option<u32>, cx: &mut Context<Self>) {
-        self.trim_dangling_tags();
-        if self.selected_range.is_empty() {
-            return;
-        }
-        let stripped = self.strip_color(kind, cx);
-        if kind == ColorKind::Highlight && self.wrapped_by("==", "==") {
-            self.toggle_wrap_pair("==", "==", cx);
-        }
-        match rgba {
-            Some(c) => {
-                let hex = zorite_markdown::syntax::hex_color(c);
-                let (open, close) = match kind {
-                    ColorKind::Text => (format!("<span style=\"color:{hex}\">"), "</span>"),
-                    ColorKind::Highlight => {
-                        (format!("<mark style=\"background:{hex}\">"), "</mark>")
-                    }
-                };
-                self.toggle_wrap_pair(&open, close, cx);
-            }
-            None if stripped => {
-                cx.emit(EditorEvent::Changed);
-                cx.notify();
-            }
-            None => {}
-        }
+        self.set_selection_color(kind, rgba, cx);
     }
 
     /// ⌘⇧H: toggle the plain `==…==` highlight on the selection. A colored
@@ -2850,13 +2858,19 @@ impl EditorState {
                 .child("\u{2026}")
                 .on_mouse_down(
                     MouseButton::Left,
-                    cx.listener(move |editor, _: &MouseDownEvent, _, cx| {
+                    cx.listener(move |editor, _: &MouseDownEvent, window, cx| {
                         cx.stop_propagation();
                         let position = editor.menu.take().map(|m| m.anchor).unwrap_or_default();
                         cx.emit(EditorEvent::PickColor {
                             highlight: kind == ColorKind::Highlight,
                             position,
                         });
+                        editor.request_writing(
+                            if kind == ColorKind::Highlight { WritingIntent::HighlightColor } else { WritingIntent::TextColor },
+                            editor.selected_range.clone(),
+                            window,
+                            cx,
+                        );
                     }),
                 )
         }))
@@ -3421,24 +3435,7 @@ impl EditorState {
         // A press on a heading's fold chevron toggles its section collapsed —
         // view-local state, not an edit (markdown has no heading-fold syntax).
         if let Some(row) = self.heading_fold_at(event.position) {
-            let start = self.line_starts()[row];
-            let end = self.line_end(row);
-            let key = self.content[start..end].trim().to_string();
-            if !self.folded_headings.remove(&key) {
-                // Folding with the caret inside the section would no-op
-                // (reveal-on-caret keeps it open) — seat the caret at the
-                // heading's end first.
-                let single = std::collections::HashSet::from([key.clone()]);
-                let crow = self.row_col(self.cursor_offset()).0;
-                if markdown_syntax::heading_fold_regions(&self.content, &single)
-                    .iter()
-                    .any(|r| crow > r.start && crow < r.end)
-                {
-                    self.move_to(end, cx);
-                }
-                self.folded_headings.insert(key);
-            }
-            cx.notify();
+            self.toggle_heading_row(row, cx);
             return;
         }
         // Left-click a file chip (e.g. a PDF embed) opens it rather than editing —
@@ -5378,6 +5375,15 @@ impl EntityInputHandler for EditorState {
         }
         cx.emit(EditorEvent::Changed);
         cx.notify();
+        if new_text == "/" && range.is_empty() && self.markdown_style.is_some() {
+            let start = self.content[..range.start].rfind('\n').map_or(0, |at| at + 1);
+            let row = self.row_col(range.start).0;
+            if self.content[start..range.start].trim().is_empty()
+                && !self.scan_data().fence_odd.get(row).copied().unwrap_or(false)
+            {
+                self.request_writing(WritingIntent::Insert, range.start..range.start + 1, window, cx);
+            }
+        }
     }
 
     fn replace_and_mark_text_in_range(
@@ -5501,6 +5507,13 @@ impl EventEmitter<EditorEvent> for EditorState {}
 
 impl Render for EditorState {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        if let Some(provider) = &self.presentation_style_provider {
+            let style = provider(cx);
+            self.live_style = Some(style.clone());
+            if self.markdown_style.is_some() {
+                self.markdown_style = Some(style);
+            }
+        }
         div()
             .relative()
             .id("markdown-document-scroll")
@@ -5607,18 +5620,34 @@ impl Render for EditorState {
             .on_action(cx.listener(Self::undo))
             .on_action(cx.listener(Self::redo))
             .on_action(cx.listener(Self::dismiss))
+            .on_action(cx.listener(Self::insert_writing_block))
+            .on_action(cx.listener(Self::text_color_picker))
+            .on_action(cx.listener(Self::highlight_color_picker))
+            .on_action(cx.listener(Self::toggle_heading_disclosure))
             .on_mouse_down(MouseButton::Left, cx.listener(Self::on_mouse_down))
             .on_mouse_down(MouseButton::Right, cx.listener(Self::on_right_mouse_down))
             .on_mouse_up(MouseButton::Left, cx.listener(Self::on_mouse_up))
             .on_mouse_up_out(MouseButton::Left, cx.listener(Self::on_mouse_up))
             .on_mouse_move(cx.listener(Self::on_mouse_move))
             .on_scroll(cx.listener(Self::on_scroll_wheel))
-            .child(EditorElement {
-                editor: cx.entity(),
-            })
-            .children(self.embed_overlays(window))
-            .children(self.editing_block_overlay())
-            .children(self.editing_inline_overlay())
+            .child(
+                div()
+                    .w_full()
+                    .min_w_0()
+                    .px(gpui_kit::rems(self.document_inset.0))
+                    .py(gpui_kit::rems(self.document_inset.1))
+                    .child(
+                        div()
+                            .relative()
+                            .w_full()
+                            .min_w_0()
+                            .child(EditorElement { editor: cx.entity() })
+                            .children(self.embed_overlays(window))
+                            .children(self.editing_block_overlay())
+                            .children(self.editing_inline_overlay()),
+                    ),
+            )
+            .children(self.writing_overlay.clone())
             // Right-click suggestions menu, absolutely positioned over the
             // editor (anchored at the click). `Option`'s `IntoIterator` renders
             // zero or one popup; clicking a row replaces the misspelled span.
@@ -6772,7 +6801,7 @@ enum LineMark {
     /// Blockquote: a left border (`bar`); the `>` markers are hidden. `text`
     /// colors the body — `Some` = muted quote tone, `None` = the editor's
     /// normal text color (alert bodies).
-    Quote { bar: Hsla, text: Option<Hsla> },
+    Quote { bar: Hsla, text: Option<Hsla>, text_inset: Pixels },
     /// A GitHub alert's marker line (`> [!NOTE]` …): the marker is hidden and
     /// a bold `label` paints in the alert color; any same-line body insets to
     /// `text_inset` (QUOTE_INSET + the label's measured width + a gap) — the
@@ -6822,7 +6851,7 @@ impl LineMark {
     /// Horizontal inset (px) applied to the body text + caret for this mark.
     fn inset(self) -> Pixels {
         match self {
-            LineMark::Quote { .. } => px(QUOTE_INSET),
+            LineMark::Quote { text_inset, .. } => text_inset,
             LineMark::Alert { text_inset, .. } => text_inset,
             LineMark::List { text_inset, .. } | LineMark::Check { text_inset, .. } => text_inset,
             LineMark::Rule(_) => px(0.),
