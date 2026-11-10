@@ -11,6 +11,7 @@ use super::element::RenderCell;
 /// tab map. Rio exposes tab mutations through Handler, but no tab-map reader.
 pub(super) struct ParsePresentation {
     pub(super) cursor: Option<Pos>,
+    pub(super) reading_generation: u64,
     tab_stops: Vec<bool>,
 }
 
@@ -18,10 +19,18 @@ impl ParsePresentation {
     pub(super) fn new(cols: usize) -> Self {
         let mut facts = Self {
             cursor: None,
+            reading_generation: 0,
             tab_stops: Vec::new(),
         };
         facts.resize(cols);
         facts
+    }
+
+    /// Destructive VT transitions are recorded while parsing, including an
+    /// alternate-screen round trip entirely inside one output batch.
+    pub(super) fn invalidate_reading(&mut self) {
+        self.reading_generation = self.reading_generation.wrapping_add(1);
+        self.cursor = None;
     }
 
     pub(super) fn resize(&mut self, cols: usize) {

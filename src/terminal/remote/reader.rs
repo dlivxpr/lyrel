@@ -468,7 +468,13 @@ impl FrameReader {
                         flush_batch!();
                         cursor_scan.reset();
                         parked_cursor.reset();
-                        proxy.parse_state.presentation.lock().unwrap().cursor = None;
+                        {
+                            let _term = term.lock();
+                            if quit.load(Ordering::SeqCst) {
+                                return;
+                            }
+                            proxy.parse_state.presentation.lock().unwrap().invalidate_reading();
+                        }
                         proxy.parse_state.replaying.store(true, Ordering::Relaxed);
                         // The replay carries the command marks too, so
                         // a pane reattached after `nvim` exited in it

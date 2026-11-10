@@ -58,17 +58,33 @@ pub(super) enum WheelMotion {
 }
 
 impl SelectionScroll {
+    /// Lifecycle transitions outrank resize relocation and atomic holds. The
+    /// generation comes from the same VT guard, not a final-mode observation.
+    pub(super) fn invalidate_reading(&mut self, term: &mut Grid, terminal: &RemoteTerminal) {
+        let invalid = self.reading.as_ref().is_some_and(|reading| {
+            term.mode().contains(rio_vt::crosswords::Mode::ALT_SCREEN)
+                || !reading.belongs_to(terminal.presentation_facts().reading_generation)
+        });
+        if invalid {
+            self.clear_presented();
+            self.jump_to_prompt(term);
+        }
+    }
+
     pub(super) fn sync_reading(&mut self, term: &mut Grid, terminal: &RemoteTerminal) {
-        if term.mode().contains(rio_vt::crosswords::Mode::ALT_SCREEN)
-            || self
-                .reading
-                .as_mut()
-                .is_some_and(|reading| !reading.reconcile(term))
-            || (term.display_offset() == 0 && self.fraction == 0.)
+        self.invalidate_reading(term, terminal);
+        if self
+            .reading
+            .as_mut()
+            .is_some_and(|reading| !reading.reconcile(term))
         {
-            if self.reading.take().is_some() {
-                self.clear_presented();
-            }
+            self.clear_presented();
+            self.jump_to_prompt(term);
+        } else if term.display_offset() == 0
+            && self.fraction == 0.
+            && self.reading.take().is_some()
+        {
+            self.clear_presented();
         }
         if let Some(reading) = self.reading.as_mut() {
             reading.maintain(
@@ -655,6 +671,7 @@ impl SelectionScroll {
 
     pub(super) fn clear_scrollback(&mut self) {
         self.cancel_animation();
+        self.clear_presented();
         self.reading = None;
         self.live_anchor = None;
         self.fraction = 0.;

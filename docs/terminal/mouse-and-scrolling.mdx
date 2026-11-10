@@ -27,7 +27,7 @@ description: "指针、滚轮和 ^G 各有何行为——以及如何分别调�
 
 按钮使用标准 `Button` 的语义主题、键盘焦点和缩放尺寸；它不增加终端行数，底部位置避开已测量的 composer、补全及反向搜索浮层。窄窗格中标签可以省略，完整文案保留在辅助功能名称与 tooltip 中。
 
-文字、直接 Kitty placements 和 Unicode placeholders 共用 #251 的 `ReadingView`。#252 将选择／复制、链接、搜索与光标／IME 接到同一语义来源：后台原地重画或替换同一图片 ID 不改变当前阅读内容；主题变化重新解析 ANSI 样式，不丢弃文字。阅读态不显示实时终端 caret，也不给旧文字配置实时 IME 坐标；输入回到实时输出后恢复。resize 逻辑行重定位由 #253 接入；清屏／reset／重连世代及隐藏窗格生命周期由 #254 完成，不能把本票的消费者代码视为这些后续行为或 #255 原生桌面验收已通过。
+文字、直接 Kitty placements 和 Unicode placeholders 共用 #251 的 `ReadingView`。#252 将选择／复制、链接、搜索与光标／IME 接到同一语义来源：后台原地重画或替换同一图片 ID 不改变当前阅读内容；主题变化重新解析 ANSI 样式，不丢弃文字。阅读态不显示实时终端 caret，也不给旧文字配置实时 IME 坐标；输入回到实时输出后恢复。resize 逻辑行重定位由 #253 接入，独立于下述 #254 生命周期世代；新增消费者代码不表示 #255 原生桌面验收已经通过。
 
 
 ### 实现职责
@@ -54,6 +54,31 @@ cargo fmt --check
 ```
 
 上述 GPUI 测试观察生产绘制输入、真实子进程输出、控件布局和测试平台输入事件，不是原生 GPU 像素、系统 IME、触控板惯性或真实 SSH 验收。#255 仍须分别在桌面本地开发与桌面远程开发的普通生产窗口，记录混合图片对齐、实际剪贴板／URL／文件链接、搜索、Light／Dark／自定义主题、真实中文 IME 及返回实时输出；同时记录 OS／DPI、字体、候选提交／二进制与 SSH／shell integration 前提，不用注入 Unicode 代替系统输入法。
+
+### 阅读生命周期、应用滚轮与隐藏窗格
+
+`CSI 3J` 清除历史、`RIS` reset、replay／重连建立不连续基线，以及进入备用屏幕，都会在现有 parse metadata 中标记阅读世代失效。即使清除前后的 `lines_evicted + history_size` 完全相同，或同一批输出内进入又离开备用屏幕，下一次呈现也会释放旧阅读文字、选区与图片 lease 并回到实时输出。用户主动清屏／清回滚同样使用统一的回到实时输出入口。普通历史容量淘汰不是 reset：绝对 top row 限制到仍保留的最老行，已淘汰的文字和图片切片永久移除，不把缓存配给新行身份。
+
+滚轮路由始终读取实时终端模式，不读冻结画面的旧模式。应用启用 mouse reporting 时优先发送 `64/65` 滚轮报告；备用屏幕启用 `ALTERNATE_SCROLL` 时发送当前 cursor mode 对应的上下箭头。按住 Shift 覆盖这些应用路由，保留本地回滚逃生通道；它不会把普通屏幕的阅读缓存混入应用自己的备用屏幕 transcript。
+
+隐藏窗格继续解析文字、推进 shell／agent facts 和解码图片，但普通输出不请求整窗重绘。可取得 VT guard 且没有 synchronized hold 时，隐藏 Wakeup 同步世代／历史淘汰，清除派生 display list 与选区，并释放阅读行的图片 lease；有界语义文字仍保留。再次显示时不会从新 live 图片重建已释放行的旧图片，回到实时输出后才显示当前有效图片。关闭窗口也释放阅读所有权，不等待仍被其他对象持有的 `TerminalView` 最后 Drop。资源仍遵循 daemon 权威、原有缓存预算及 GPU 退休顺序；普通图片替换可由当前有效阅读 lease 保留旧版本，但已清除／淘汰的行或已释放的 lease 不可复活。resize relocation 不使用 destructive generation，同步输出 hold 也不充当长期阅读生命周期。
+
+`reading_lifecycle_consumer_tests.rs` 新增六项受控生产消费者：origin-sum 不变的 `3J`／`RIS`／同批备用屏往返，Snapshot／relink 基线，超过 10,000 行的容量压力与过期图片后 resize／同 image ID 新版本，隐藏输出无 window notification、应用实际收到的滚轮／箭头与 Shift 本地逃生，以及窗口关闭前后的资源归还。断言观察完整生产呈现文字、实际图片 paint claims／像素身份、独立 live 文本、PTY stdin 字节与现有分配诊断，不检查私有 pending 字段。按本任务要求，以下检查均未运行，交由集成人执行并保存 exit code／原始日志：
+
+```powershell
+cargo test --locked -p lyrel --lib terminal::view::gpui_tests::reading_lifecycle_ -- --nocapture --test-threads=1
+cargo test --locked -p lyrel --lib terminal::view::gpui_tests::reading_ -- --nocapture --test-threads=1
+cargo test --locked -p lyrel --lib terminal::view::gpui_tests::mouse_reporting_only_the_pressed_pane_owns_real_pty_reports -- --exact --nocapture --test-threads=1
+cargo test --locked -p lyrel --lib terminal::view::gpui_tests::graphics_consumer_hidden_ -- --nocapture --test-threads=1
+cargo test --locked -p lyrel --lib terminal::view::gpui_tests::graphics_consumer_real_daemon_history_expiration_clips_before_resize -- --exact --nocapture --test-threads=1
+cargo test --locked -p lyrel --lib terminal::view::gpui_tests::synchronized_ -- --nocapture --test-threads=1
+cargo build --locked -p lyrel
+cargo clippy --locked -p lyrel --lib --tests
+cargo fmt --check
+```
+
+这些新增断言尚无运行结果，不构成性能或原生像素结论。#255 仍须分别在桌面本地开发与真实 SSH 桌面远程开发的普通生产窗口验证 clear／reset／alternate screen／隐藏恢复、滚轮／触控板、资源回收与 resize；需要同提交二进制、固定 SSH host key 的专用远端账号／隔离 HOME、受支持 shell integration 和原生窗口／中文 IME 前提。socket replay、loopback、生产 paint claim 和远端 transport 成功均不能互相替代，更不能替代真实 GPU、OS 焦点、DPI、剪贴板或输入法验收。
+
 
 
 ### 同步输出的呈现边界
