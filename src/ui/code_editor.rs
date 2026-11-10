@@ -2632,7 +2632,15 @@ impl LyrelApp {
                     .text_size(rems(1.))
                     .text_color(cx.theme().foreground)
                     .children(f.presentations.search(&view))
-                    .child(div().flex_1().min_h_0().child(view))
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_h_0()
+                            // The dock's centered resize hitbox covers half its width inward.
+                            // Keep the first native caret outside that capture band.
+                            .pl(px(crate::ui::right_panel::RESIZE_HANDLE_WIDTH / 2.))
+                            .child(view),
+                    )
                     .into_any_element()
             }
             Some(f) => {
