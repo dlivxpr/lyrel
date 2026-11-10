@@ -317,10 +317,23 @@ fn push_binding(bindings: &mut Vec<KeyBinding>, action: &str, key: &str, cx: &Ap
         return false;
     };
     bindings.push(binding);
-    if let Some(folded) = folded_spec(key)
-        && let Some(alias) = make_binding(action, &folded, cx)
+    let folded = folded_spec(key);
+    if let Some(folded) = folded.as_deref()
+        && let Some(alias) = make_binding(action, folded, cx)
     {
         bindings.push(alias);
+    }
+    if action == "EditorSave" {
+        // The workbench table ranks after library defaults. Keep its configured chord,
+        // but commit the focused structural draft before saving the shared document.
+        for key in std::iter::once(key).chain(folded.as_deref()) {
+            bindings.push(load_binding(
+                key,
+                lyrel_markdown_editor::math::editor::view::SaveFormula,
+                Some("LyrelFormula"),
+                cx,
+            ));
+        }
     }
     true
 }
