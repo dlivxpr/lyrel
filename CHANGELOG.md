@@ -25,6 +25,7 @@
 ### 修复
 
 - #250：Bash 提交命令的 history 前缀正则改为局部变量中的 ERE，并在 `=~` 右侧使用未加引号的变量展开，避免 Bash 3.2 在启动阶段把内联正则中的括号误解析为 shell 语法。正则、完整多行命令重建、转义／截断、用户 history／hooks 及命令级 agent scope 均不变，不增加 `eval` 或命令执行；保留全部既有断言。本修复子任务未执行构建、测试、lint 或格式化，Bash 3.2／4.4／5.1／5.2 行为需由集成验收核验。
+- #250：修复 Bash 3.2 的直接 agent 命令未收到 Kitty scope：`DEBUG` 临时关闭 history，导致 `[[ -o history ]]` 拒绝已记录的完整命令。仅旧版 `DEBUG` 路径改从 `SHELLOPTS` 读取配置状态，仍要求完整 history 与命令一致；保留 history 关闭、管道／复合命令／解释器排除、显式身份／协议禁用、用户 traps 与 `$_`，不改 Bash 4.4+ 路径。原始运行时诊断已捕获相同的命令文本及被临时关闭的 history；修复后构建、测试、lint、格式化与版本矩阵均未执行。
 
 - #252：稳定阅读的选择／复制、链接、搜索和光标／IME 使用同一语义行；跨视口选择以绝对行保持身份，捕获 Tab stops，主题变化重新解析 ANSI 样式。直接 Kitty 切片与 placeholders 保留资源版本、crop、z 及文本对齐，修正 replay origin 转换；历史缓存仅保留阅读／选择需要的行，不累积全部访问历史。新增真实 PTY／daemon／生产 paint 和 GPUI 交互消费者，修正绘制观察为 committed images；未执行构建、测试、lint、格式化或实窗验收，#255 继续记录本地／SSH、原生像素与系统 IME 证据。
 - #249：修复 OpenCode preparation 参数顺序；Kimi worker 显式选择 pinned source 根 `tsconfig.json` 以保留参数 decorators；Hermes 原生夹具改走生产 agent scope encoder 获取 presence-sensitive marker，不手动注入子进程环境。保留完整像素、placement、关闭策略、配置／源码完整性及零推理断言；此轮未执行构建、测试、lint 或格式化，不宣称原失败已运行通过。
