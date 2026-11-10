@@ -707,11 +707,9 @@ fn compatibility_environment(agent: CLIAgent, environment: &mut BTreeMap<String,
     }
 }
 
-/// Add only command-local terminal defaults where the launch UI knows the agent.
-/// Keep the command portable until the target Host chooses its actual shell;
-/// connecting panes retain this same literal prefix rather than losing intent.
-/// Explicit terminal identity bypasses the Kitty identity default. Clear an
-/// inherited version regardless; an explicit version and public policies win.
+/// Build portable terminal-identity prefixes for consumers that encode later.
+/// Presence-sensitive Hermes defaults require `scoped_agent_launch_command`
+/// on the target shell. Explicit terminal fields and public policies win.
 pub fn agent_compatibility_command(agent: CLIAgent, line: &str) -> String {
     let argv = crate::core::cli_agent::parse_command_argv(line).ok();
     // The literal argv parser accepts PowerShell's leading call operator only

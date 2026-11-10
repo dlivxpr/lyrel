@@ -9,6 +9,7 @@
 
 ### 新增
 
+- #250：为 zsh、Bash、fish、PowerShell 的直接 agent 启动增加命令级 Kitty 环境与下一提示符恢复，本地 Nushell 使用轻量 wrappers；快捷启动、明确映射、待连接窗格、恢复／分叉保留 agent 意图和公开终端 scope，Hermes 专属 marker 尊重显式空值。保留协议禁用和用户 hooks，不引入 PATH shim；补充真实 shell／原生子进程／pending consumers 与无集成时的显式回退。实施阶段未运行构建、格式化、测试、原生窗口或远端验收。
 - #249：新增不强制图片协议的 pi 1.4.0 scoped-discovery 消费者，保留显式关闭／设置优先级和零新消息重放；OpenCode 2.2.0 预览 on／off／inline false 检查完整 global／inline 配置不变。补充 pinned Kimi 用户粘贴缩略图和 Hermes 0.23.1 `image.render`／`InlineImage` 原生组件到真实 PTY／生产终端的消费者，比较完整图片、放置、卸载／重挂载与替换；不增加 renderer、不改用户配置。同步各 agent 能力矩阵与 OpenCode opt-in 文档；本分票未执行构建、测试、原生窗口或远端验收。
 - #236／#245：Markdown 完成唯一默认 Zorite-derived 源码路线的切换，移除旧 Markdown/MDX-rich 投影与专属实现契约；caret-local 标记显露、普通单击链接、MDX source-only 和 shared Document/history 成为当前产品规则。primary/secondary 安装同一组真实 Host providers，rename/save-as 只更新身份与源码策略，不丢弃历史。正式文档、原 14 项 native 消费者逐项迁移及 pinned MIT 来源/字体通知统一收敛；Windows ZIP/Inno 与 macOS app/ZIP 增加完整根 LICENSE 字节守卫。完整宽表的远端末行、真实图片/公式联合 hard-break 与长代码诊断尾部消费者补齐；源码和测试交付不是最终 native、实窗、SSH、平台、包或用户接受通过。
 
