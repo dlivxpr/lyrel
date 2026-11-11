@@ -14,6 +14,25 @@ function pngChunk(type, data) {
   return Buffer.concat([length, name, data, checksum]);
 }
 
+// One synthetic raster for every native picture fixture: four quadrants plus a
+// white centre cross. `index` selects the revision. Returns the zero-filter
+// RGBA scanlines `encodePng` consumes and the raw RGBA identity.
+export function fixturePicture(index) {
+  const width = 48, height = 24;
+  const rgba = Buffer.alloc(width * height * 4);
+  const scan = Buffer.alloc(height * (width * 4 + 1));
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      const color = x >= 22 && x < 26 && y >= 10 && y < 14 ? [255, 255, 255]
+        : y < 12 ? x < 24 ? [255, 0, index * 11] : [0, 255, index * 7]
+        : x < 24 ? [index * 5, 0, 255] : [255, 255, 0];
+      rgba.set([...color, 255], (y * width + x) * 4);
+    }
+    rgba.copy(scan, y * (width * 4 + 1) + 1, y * width * 4, (y + 1) * width * 4);
+  }
+  return { width, height, scan, rgba };
+}
+
 // Callers retain their own picture identities and zero-filter RGBA scanlines.
 export function encodePng(width, height, scanlines) {
   const header = Buffer.alloc(13);

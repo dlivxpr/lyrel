@@ -6,7 +6,9 @@ def __lyrel_agent_environment [agent: string] {
     {TERM_PROGRAM: 'kitty', TERM_PROGRAM_VERSION: '', LC_TERMINAL: 'lyrel', LC_TERMINAL_VERSION: ($env.LYREL? | default '')}
   } else { {} }
   let identity = if $agent == 'omp' {
-    $identity | insert PI_NO_DECCARA ($env.PI_NO_DECCARA? | default '1')
+    # Same default as the POSIX/PowerShell/fish hooks: an inherited value is
+    # not an explicit command-line opt-out, so omp still opts out of DECCARA.
+    $identity | insert PI_NO_DECCARA '1'
   } else { $identity }
   if $agent == 'hermes' and not ('KITTY_WINDOW_ID' in $env) {
     $identity | insert KITTY_WINDOW_ID 'lyrel'

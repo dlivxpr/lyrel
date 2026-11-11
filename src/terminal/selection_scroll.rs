@@ -4,6 +4,7 @@ use gpui_kit::{Modifiers, OperatingSystem, ScrollDelta, ScrollEvent, TouchPhase}
 use rio_vt::crosswords::Crosswords;
 use rio_vt::crosswords::grid::{Dimensions, Scroll};
 use rio_vt::crosswords::pos::{Column, Line, Pos, Side};
+use rio_vt::event::EventListener;
 use rio_vt::selection::{Selection, SelectionType};
 
 use super::remote::EventProxy;
@@ -33,6 +34,16 @@ pub(super) struct SelectionScroll {
     presented: Option<super::presentation::PresentedSelection>,
     gesture: Option<(usize, usize, bool, usize)>,
     live_anchor: Option<std::ops::Range<usize>>,
+    /// The latest ordered resize request, kept even while no reading exists so
+    /// a reading entered before the `Size` can still relocate.
+    pending_resize: Option<PendingResize>,
+}
+
+#[derive(Clone, Copy)]
+struct PendingResize {
+    target: (usize, usize),
+    revision: u64,
+    images_known: bool,
 }
 
 #[derive(Clone, Copy)]
@@ -71,6 +82,33 @@ impl SelectionScroll {
         }
     }
 
+    /// Record the ordered resize request even when no reading exists yet. A
+    /// reading entered before the `Size` picks this up at capture time.
+    pub(super) fn prepare_resize<T: EventListener>(
+        &mut self,
+        term: &Crosswords<T>,
+        terminal: &RemoteTerminal,
+        cols: usize,
+        rows: usize,
+    ) {
+        let revision = terminal.presentation_facts().resize_revision;
+        let images_known = terminal.images().layout_known();
+        if let Some(pending) = self.pending_resize.as_mut() {
+            pending.target = (cols, rows);
+            pending.revision = revision;
+            pending.images_known |= images_known;
+        } else {
+            self.pending_resize = Some(PendingResize {
+                target: (cols, rows),
+                revision,
+                images_known,
+            });
+        }
+        if let Some(reading) = self.reading.as_mut() {
+            reading.prepare_resize_at(term, terminal, (cols, rows), revision, images_known);
+        }
+    }
+
     pub(super) fn sync_reading(&mut self, term: &mut Grid, terminal: &RemoteTerminal) {
         self.invalidate_reading(term, terminal);
         let relocated = self
@@ -78,6 +116,7 @@ impl SelectionScroll {
             .as_mut()
             .is_some_and(|reading| reading.finish_resize(term, terminal));
         if relocated {
+            self.pending_resize = None;
             self.clear_presented();
         }
         if self
@@ -115,6 +154,15 @@ impl SelectionScroll {
             .as_mut()
             .is_some_and(|reading| reading.relocation_scroll(term))
         {
+            // The user scrolled back to live while the ordered resize was
+            // still pending. That is a return to live, not a reading with a
+            // zero-row pill; the relocation has nothing left to restore.
+            if term.display_offset() == 0 && self.fraction == 0. {
+                self.reading = None;
+                self.pending_resize = None;
+                self.clear_presented();
+                self.live_anchor = None;
+            }
             return;
         }
         if term.display_offset() == 0 && self.fraction == 0. {
@@ -133,6 +181,17 @@ impl SelectionScroll {
                 &terminal.images(),
                 &terminal.presentation_facts(),
             ));
+            if let Some(pending) = self.pending_resize.take()
+                && let Some(reading) = self.reading.as_mut()
+            {
+                reading.prepare_resize_at(
+                    term,
+                    terminal,
+                    pending.target,
+                    pending.revision,
+                    pending.images_known,
+                );
+            }
             self.adopt_live_selection(term);
         }
     }

@@ -803,10 +803,9 @@ impl TerminalView {
         let cols_changed = cols != self.terminal.size().cols;
         if (cols, rows) != (self.terminal.size().cols, self.terminal.size().rows) {
             self.links.invalidate_geometry();
-            if let Some(reading) = self.selection_scroll.reading.as_mut() {
-                let term = self.terminal.term.lock();
-                reading.prepare_resize(&term, &self.terminal, cols, rows);
-            }
+            let term = self.terminal.term.lock();
+            self.selection_scroll
+                .prepare_resize(&term, &self.terminal, cols, rows);
         }
         self.cell_width = cell_width;
         self.line_height = line_height;
@@ -3174,6 +3173,7 @@ mod gpui_tests {
     include!("graphics_recovery_consumer_tests.rs");
     include!("graphics_playback_consumer_tests.rs");
     include!("graphics_capacity_consumer_tests.rs");
+    include!("native_picture_support.rs");
     include!("pi_replay_consumer_tests.rs");
     include!("native_static_consumer_tests.rs");
     include!("graphics_relative_consumer_tests.rs");
@@ -5078,6 +5078,33 @@ mod gpui_tests {
                 "the debounce has to settle, not rescan forever"
             );
         });
+    }
+
+    /// A frozen reading is the search's semantic source. Output that leaves
+    /// its rows unchanged must not schedule a rescan; only a query or
+    /// semantic-set change may.
+    #[gpui_kit::test]
+    fn output_under_a_reading_search_does_not_rescan_unchanged_rows(cx: &mut TestAppContext) {
+        let (window, view, _daemon) = rooted_harness(cx);
+        print(cx, &view, filler(80));
+        view.update(cx, |view, cx| view.smooth_scroll(10., cx));
+        window
+            .update(cx, |_, window, cx| {
+                view.update(cx, |v, cx| {
+                    v.open_search(window, cx);
+                    let input = v.search.as_ref().unwrap().input.clone();
+                    input.update(cx, |s, cx| s.set_value("filler", window, cx));
+                    v.recompute_matches(cx);
+                    assert!(v.selection_scroll.reading.is_some());
+                    assert!(!v.search.as_ref().unwrap().matches.is_empty());
+                });
+            })
+            .unwrap();
+        print(cx, &view, vec!["filler new".to_string()]);
+        assert!(
+            !view.read_with(cx, |v, _| v.search_scan_armed),
+            "unchanged frozen rows must not schedule a search rescan"
+        );
     }
 
     /// Print lines into the grid and post the wakeup the reader thread would

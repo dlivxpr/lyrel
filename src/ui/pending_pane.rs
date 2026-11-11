@@ -52,6 +52,8 @@ pub struct PendingPane {
     attach_only: bool,
     attach_spec: Option<Box<crate::daemon::protocol::NativeSshSpec>>,
     launch_agent: Option<crate::core::cli_agent::CLIAgent>,
+    /// `run_on_land` is already scoped by the session operation; type it as-is.
+    prepared_launch: bool,
 }
 
 /// How many times a pane standing in for one that may still be running asks
@@ -146,6 +148,7 @@ impl PendingPane {
             attach_only: false,
             attach_spec: None,
             launch_agent: None,
+            prepared_launch: false,
         }
     }
 
@@ -215,6 +218,13 @@ impl PendingPane {
     ) {
         self.spawn.run_on_land = Some(command);
         self.launch_agent = agent;
+        self.prepared_launch = false;
+    }
+
+    pub(crate) fn run_prepared_when_ready(&mut self, command: String) {
+        self.spawn.run_on_land = Some(command);
+        self.launch_agent = None;
+        self.prepared_launch = true;
     }
     pub(crate) fn resume_agent(
         &mut self,

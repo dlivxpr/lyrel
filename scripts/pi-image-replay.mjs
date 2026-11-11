@@ -3,7 +3,7 @@ import { createHash } from "node:crypto";
 import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
-import { encodePng } from './graphics-fixture-utils.mjs';
+import { encodePng, fixturePicture } from './graphics-fixture-utils.mjs';
 
 // Only fixture data is authored/read here. The released native CLI owns replay and
 // all terminal output; no imports from Pi internals and no escape-sequence proxy.
@@ -37,19 +37,7 @@ if (version.error || version.status !== 0 || version.stdout.trim() !== "1.4.0") 
 const pkg = { name: "@earendil-works/pi-coding-agent", version: version.stdout.trim() };
 
 function picture(index) {
-  const width = 48, height = 24;
-  const rgba = Buffer.alloc(width * height * 4);
-  const scan = Buffer.alloc(height * (width * 4 + 1));
-  for (let y = 0; y < height; y++) {
-    for (let x = 0; x < width; x++) {
-      const color = x >= 22 && x < 26 && y >= 10 && y < 14 ? [255, 255, 255]
-        : y < 12 ? x < 24 ? [255, 0, index * 11] : [0, 255, index * 7]
-        : x < 24 ? [index * 5, 0, 255] : [255, 255, 0];
-      const offset = (y * width + x) * 4;
-      rgba.set([...color, 255], offset);
-    }
-    rgba.copy(scan, y * (width * 4 + 1) + 1, y * width * 4, (y + 1) * width * 4);
-  }
+  const { width, height, scan, rgba } = fixturePicture(index);
   const png = encodePng(width, height, scan);
   return { data: png.toString("base64"), rgbaSha256: createHash("sha256").update(rgba).digest("hex") };
 }

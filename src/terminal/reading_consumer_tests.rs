@@ -1510,3 +1510,160 @@ fn reading_resize_missing_evicted_anchor_uses_a_retained_geometry_estimate(
     );
     graphics_recovery_destroy(view, window, cx);
 }
+
+/// A reading entered after the resize request but before the ordered `Size`
+/// still has to relocate. The request is not tied to a `ReadingView` that
+/// happened to exist when the window moved.
+#[gpui_kit::test]
+fn reading_entered_after_a_resize_request_relocates_when_ordered_size_arrives(
+    cx: &mut TestAppContext,
+) {
+    let (view, window, mut sender) = reading_ordered_resize_harness(cx);
+    let mut scene = b"\x1b[?7h\x1b[2J\x1b[H".to_vec();
+    for row in 0..120 {
+        scene.extend_from_slice(format!("LINE-{row:03}\r\n").as_bytes());
+    }
+    scene.extend_from_slice(b"LONGSTART");
+    scene.extend_from_slice("A".repeat(81).as_bytes());
+    scene.extend_from_slice(b"MARKER");
+    scene.extend_from_slice("B".repeat(68).as_bytes());
+    scene.extend_from_slice(b"\r\n");
+    for row in 0..40 {
+        scene.extend_from_slice(format!("TAIL-{row:03}\r\n").as_bytes());
+    }
+    DaemonMsg::Output(scene).encode(&mut sender).unwrap();
+    reading_ordered_screen(&mut sender, 97, 0);
+    graphics_recovery_wait(cx, "ordered baseline did not paint", |cx| {
+        view.read_with(cx, |view, _| view.grid_snap.is_some())
+    });
+    // No reading exists yet, so the request has to be remembered by the
+    // viewport owner rather than by a `ReadingView`.
+    reading_request_window_size(window, &view, cx, TermSize::new(40, 24));
+    reading_scroll_to_live_row(&view, cx, "LONGSTART", 0);
+    assert!(
+        view.read_with(cx, |view, _| view.selection_scroll.reading.is_some()),
+        "the fixture entered reading before the ordered Size"
+    );
+    reading_ordered_size(&mut sender, 40, 24);
+    reading_ordered_screen(&mut sender, 97, 1);
+    graphics_assert_production_paint_at(window, &view, cx, TermSize::new(40, 24));
+    let rows = reading_painted_rows(&view, cx);
+    assert_eq!(rows[0][..9], *"LONGSTART");
+    assert!(
+        !rows[1].contains("MARKER"),
+        "40 columns wrap before the marker; an old 80-column frame would still show it on row 1: {rows:?}"
+    );
+    assert!(
+        rows[2].contains("MARKER"),
+        "the relocated hard line keeps the marker on its new wrapped row: {rows:?}"
+    );
+    graphics_recovery_destroy(view, window, cx);
+}
+
+/// HTS/TBC only change the tab map. They must not advance the resize
+/// generation that pairs an ordered graphics `Screen` with its `Size`; doing
+/// so makes `images_revision == revision` unsatisfiable and blocks relocation.
+#[gpui_kit::test]
+fn tab_map_changes_do_not_block_a_pending_reading_relocation(cx: &mut TestAppContext) {
+    let (view, window, mut sender) = reading_ordered_resize_harness(cx);
+    let mut scene = b"\x1b[?7h\x1b[2J\x1b[H".to_vec();
+    for row in 0..120 {
+        scene.extend_from_slice(format!("LINE-{row:03}\r\n").as_bytes());
+    }
+    scene.extend_from_slice(b"LONGSTART");
+    scene.extend_from_slice("A".repeat(81).as_bytes());
+    scene.extend_from_slice(b"MARKER");
+    scene.extend_from_slice("B".repeat(68).as_bytes());
+    scene.extend_from_slice(b"\r\n");
+    for row in 0..40 {
+        scene.extend_from_slice(format!("TAIL-{row:03}\r\n").as_bytes());
+    }
+    DaemonMsg::Output(scene).encode(&mut sender).unwrap();
+    reading_ordered_screen(&mut sender, 97, 0);
+    graphics_recovery_wait(cx, "ordered baseline did not paint", |cx| {
+        view.read_with(cx, |view, _| view.grid_snap.is_some())
+    });
+    reading_scroll_to_live_row(&view, cx, "LONGSTART", 0);
+    reading_request_window_size(window, &view, cx, TermSize::new(40, 24));
+    reading_ordered_size(&mut sender, 40, 24);
+    reading_ordered_screen(&mut sender, 97, 1);
+    // A tab-map mutation after the ordered Screen is unrelated to the resize.
+    DaemonMsg::Output(b"\x1b[5G\x1bH".to_vec())
+        .encode(&mut sender)
+        .unwrap();
+    graphics_recovery_wait(cx, "HTS did not reach the tab map", |cx| {
+        view.read_with(cx, |view, _| {
+            view.terminal.presentation_facts().is_tab_stop(4)
+        })
+    });
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+    while view.read_with(cx, |view, _| {
+        view.selection_scroll
+            .reading
+            .as_ref()
+            .is_some_and(|reading| reading.relocating())
+    }) {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "a tab-map change advanced the resize generation and blocked relocation"
+        );
+        graphics_consumer_progress(cx);
+    }
+    graphics_assert_production_paint_at(window, &view, cx, TermSize::new(40, 24));
+    let rows = reading_painted_rows(&view, cx);
+    assert!(!rows[1].contains("MARKER"), "{rows:?}");
+    assert!(rows[2].contains("MARKER"), "{rows:?}");
+    graphics_recovery_destroy(view, window, cx);
+}
+
+/// Scrolling back to live while a relocation is pending is a return to live,
+/// not a reading state with a zero-row pill.
+#[gpui_kit::test]
+fn returning_to_live_during_relocation_drops_the_reading_and_pill(cx: &mut TestAppContext) {
+    use gpui_kit::test::TestWindowExt as _;
+    let (view, window, mut sender) = reading_ordered_resize_harness(cx);
+    let mut scene = b"\x1b[?7h\x1b[2J\x1b[H".to_vec();
+    for row in 0..120 {
+        scene.extend_from_slice(format!("LINE-{row:03}\r\n").as_bytes());
+    }
+    DaemonMsg::Output(scene).encode(&mut sender).unwrap();
+    reading_ordered_screen(&mut sender, 97, 0);
+    graphics_recovery_wait(cx, "ordered baseline did not paint", |cx| {
+        view.read_with(cx, |view, _| view.grid_snap.is_some())
+    });
+    view.update(cx, |view, cx| {
+        view.smooth_scroll(47., cx);
+    });
+    graphics_assert_production_paint(window, &view, cx);
+    reading_request_window_size(window, &view, cx, TermSize::new(40, 24));
+    assert!(
+        view.read_with(cx, |view, _| {
+            view.selection_scroll
+                .reading
+                .as_ref()
+                .is_some_and(|reading| reading.relocating())
+        }),
+        "the resize request left a pending relocation"
+    );
+    view.update(cx, |view, cx| {
+        view.smooth_scroll(-10_000., cx);
+    });
+    assert!(
+        view.read_with(cx, |view, _| view.selection_scroll.reading.is_none()),
+        "returning to live abandons the pending reading"
+    );
+    window
+        .update(cx, |_, window, cx| {
+            window.render_frame(cx);
+            assert!(
+                window.try_find("terminal-return-live").is_none(),
+                "a live pane has no return-to-live pill, even with a zero-row count"
+            );
+        })
+        .unwrap();
+    // Complete the ordered resize so no pending relocation leaks out.
+    reading_ordered_size(&mut sender, 40, 24);
+    reading_ordered_screen(&mut sender, 97, 1);
+    graphics_assert_production_paint_at(window, &view, cx, TermSize::new(40, 24));
+    graphics_recovery_destroy(view, window, cx);
+}

@@ -17,6 +17,16 @@ use lyrel_core::core::kitty_graphics::{
     GraphicsUpdate, Image, PlaceholderSlice, Placement, WireFormat, placeholder_prototype,
 };
 
+/// Paint order shared by live and retained pictures: z, then stable image
+/// identity, then placement key.
+pub(super) fn placement_order(image: &RenderPlacement) -> (i32, u32, u64) {
+    (
+        image.placement.z,
+        image.placement.image_id,
+        image.placement.key,
+    )
+}
+
 #[derive(Clone)]
 pub struct RenderPlacement {
     pub data: Option<Arc<RenderImage>>,
@@ -602,7 +612,7 @@ impl ImageStore {
         Self::default()
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "native-markdown-tests"))]
     pub(super) fn release_probe(&self) -> impl Fn() -> bool + use<> {
         let store = Arc::downgrade(&self.0);
         move || store.upgrade().is_none()
@@ -624,7 +634,7 @@ impl ImageStore {
         })
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "native-markdown-tests"))]
     pub(super) fn recovery_diagnostics(&self) -> String {
         let inner = self.0.state.lock().unwrap();
         let resources: Vec<_> = inner
@@ -1087,12 +1097,12 @@ impl ImageStore {
             .min_by_key(|(_, received, unreferenced)| (!*unreferenced, *received))
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "native-markdown-tests"))]
     pub fn snapshot(&self) -> Vec<RenderPlacement> {
         self.snapshot_with_placeholders(&[])
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "native-markdown-tests"))]
     /// Runs are derived from the same locked grid snapshot as terminal text.
     /// A prototype itself never appears in the display list.
     pub fn snapshot_with_placeholders(
@@ -1125,13 +1135,7 @@ impl ImageStore {
         captured
             .into_iter()
             .map(|(row, mut images)| {
-                images.sort_unstable_by_key(|image| {
-                    (
-                        image.placement.z,
-                        image.placement.image_id,
-                        image.placement.key,
-                    )
-                });
+                images.sort_unstable_by_key(placement_order);
                 (row, CommittedImages::new(images))
             })
             .collect()
@@ -1150,13 +1154,7 @@ impl ImageStore {
         let inner = self.0.state.lock().unwrap();
         let mut images = Vec::new();
         Self::collect_placements(&inner, rows, committed, None, |_, image| images.push(image));
-        images.sort_unstable_by_key(|image| {
-            (
-                image.placement.z,
-                image.placement.image_id,
-                image.placement.key,
-            )
-        });
+        images.sort_unstable_by_key(placement_order);
         images
     }
 

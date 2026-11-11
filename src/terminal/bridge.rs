@@ -273,7 +273,7 @@ impl<T: EventListener> Handler for ParseBridge<'_, T> {
         self.inner.set_horizontal_tabstop();
         if let Some(presentation) = self.presentation {
             let mut facts = presentation.lock().unwrap();
-            facts.resize(self.inner.columns());
+            facts.ensure_tab_stops(self.inner.columns());
             facts.set_tab_stop(self.inner.grid.cursor.pos.col.0);
         }
     }
@@ -337,7 +337,7 @@ impl<T: EventListener> Handler for ParseBridge<'_, T> {
     fn clear_tabs(&mut self, mode: TabulationClearMode) {
         if let Some(presentation) = self.presentation {
             let mut facts = presentation.lock().unwrap();
-            facts.resize(self.inner.columns());
+            facts.ensure_tab_stops(self.inner.columns());
             match &mode {
                 TabulationClearMode::Current => {
                     facts.clear_tab_stop(self.inner.grid.cursor.pos.col.0)

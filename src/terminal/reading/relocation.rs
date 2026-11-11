@@ -1,7 +1,7 @@
 //! Hard-line relocation over the existing GUI mirror, never a row-fetch protocol.
 use rio_vt::crosswords::Crosswords;
 use rio_vt::crosswords::grid::Dimensions;
-use rio_vt::crosswords::pos::{Column, Line};
+use rio_vt::crosswords::pos::Column;
 use rio_vt::crosswords::square::{CellFlags, Wide};
 use rio_vt::event::EventListener;
 
@@ -40,7 +40,7 @@ impl<T: EventListener> Rows<'_, T> {
             .and_then(|reading| reading.absolute_row(row))
             .map_or_else(
                 || {
-                    self.term.grid[Line((row - live_start(self.term)) as i32)]
+                    self.term.grid[super::grid_line(live_start(self.term), row)]
                         [Column(self.term.columns() - 1)]
                     .contains_cell_flag(CellFlags::WRAPLINE)
                 },
@@ -52,7 +52,7 @@ impl<T: EventListener> Rows<'_, T> {
     /// Wide/leading spacers have no character; final-row padding is not text.
     fn characters(&self, row: i64, mut visit: impl FnMut(char) -> bool) -> usize {
         let frozen = self.frozen.and_then(|reading| reading.absolute_row(row));
-        let line = Line((row - live_start(self.term)) as i32);
+        let line = super::grid_line(live_start(self.term), row);
         let width = frozen.map_or(self.term.columns(), |cells| cells.len());
         let mut end = width;
         if !self.wrapped(row) {

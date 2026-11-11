@@ -7,14 +7,17 @@ struct NativeStaticFixture {
 
 impl NativeStaticFixture {
     fn start(agent: crate::core::cli_agent::CLIAgent, policy: &str) -> Self {
-        let name = agent.slug();
-        let key = if name == "kimi" { "LYREL_KIMI_GRAPHICS_SOURCE" } else { "LYREL_HERMES_GRAPHICS_SOURCE" };
+        let key = match agent {
+            crate::core::cli_agent::CLIAgent::Kimi => "LYREL_KIMI_GRAPHICS_SOURCE",
+            crate::core::cli_agent::CLIAgent::Hermes => "LYREL_HERMES_GRAPHICS_SOURCE",
+            other => panic!("unsupported native static agent: {}", other.slug()),
+        };
         let source = std::env::var(key).unwrap_or_else(|_| panic!("set {key} to an isolated pinned upstream source checkout with native dependencies"));
         let daemon = GraphicsDaemonProcess::start();
         let shell = native_graphics_scoped_shell(agent, crate::daemon::protocol::ShellSpec {
             program: "node".into(),
             args: vec![concat!(env!("CARGO_MANIFEST_DIR"), "/scripts/native-static-images.mjs").into(),
-                "--agent".into(), name.into(), "--source".into(), source,
+                "--agent".into(), agent.slug().into(), "--source".into(), source,
                 "--policy".into(), policy.into(), "--temp-parent".into(), daemon.dir.path().to_string_lossy().into_owned()],
             args_are_lyrel_defaults: false,
         });
@@ -38,10 +41,10 @@ fn native_static_exercise(cx: &mut TestAppContext, agent: crate::core::cli_agent
     for policy in ["auto", "off"] {
         let fixture = NativeStaticFixture::start(agent, policy);
         let (view, window) = graphics_build_rooted_consumer(cx, fixture.pane, fixture.daemon.stream(fixture.pane), Vec::new());
-        for (phase, pixels) in [("ATTACHMENT", PI_REPLAY_FIRST), ("REMOUNT", PI_REPLAY_FIRST), ("REPLACEMENT", PI_REPLAY_LAST)] {
-            pi_replay_wait(&view, cx, phase, |view| {
+        for (phase, pixels) in [("ATTACHMENT", NATIVE_PICTURE_FIRST), ("REMOUNT", NATIVE_PICTURE_FIRST), ("REPLACEMENT", NATIVE_PICTURE_LAST)] {
+            native_picture_wait(&view, cx, phase, |view| {
                 view.scrollback_text().contains(&format!("NATIVE_STATIC_{phase}"))
-                    && (policy == "off" || pi_replay_pixels(view, pixels).is_some())
+                    && (policy == "off" || native_picture_pixels(view, pixels).is_some())
             });
             graphics_assert_production_paint(window, &view, cx);
             view.read_with(cx, |view, _| {
@@ -49,7 +52,7 @@ fn native_static_exercise(cx: &mut TestAppContext, agent: crate::core::cli_agent
                 if policy == "off" { assert!(images.is_empty(), "explicit native off must remain authoritative"); }
                 else {
                     assert!(!images.is_empty());
-                    let image = pi_replay_pixels(view, pixels).unwrap();
+                    let image = native_picture_pixels(view, pixels).unwrap();
                     assert!(images.iter().all(|slice| slice.placement.image_id == image.placement.image_id),
                         "only the native thumbnail or eligible local image; no SVG/URL rendering or stale replacement");
                     assert!(image.painted.load(std::sync::atomic::Ordering::Acquire));
@@ -86,13 +89,13 @@ fn native_static_exercise(cx: &mut TestAppContext, agent: crate::core::cli_agent
                 }
             });
             view.read_with(cx, |view, _| view.terminal.write(b"n".to_vec()));
-            pi_replay_wait(&view, cx, "native unmount clears visible placements", |view| {
+            native_picture_wait(&view, cx, "native unmount clears visible placements", |view| {
                 view.scrollback_text().contains("NATIVE_STATIC_EMPTY") && graphics_visible_images(view).is_empty()
             });
             graphics_assert_production_paint(window, &view, cx);
             view.read_with(cx, |view, _| view.terminal.write(b"n".to_vec()));
         }
-        pi_replay_wait(&view, cx, "native component exit audit and shell restoration", |view| {
+        native_picture_wait(&view, cx, "native component exit audit and shell restoration", |view| {
             let text = view.scrollback_text();
             text.contains("NATIVE_STATIC_AUDITED") && text.contains("LYREL_PARENT_AFTER=lyrel")
         });
