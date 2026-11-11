@@ -137,20 +137,70 @@ const PROMPT_POLL: std::time::Duration = std::time::Duration::from_millis(50);
 /// first prompt instead — up to [`PROMPT_WAIT`], for a shell with no
 /// integration to say when that is.
 pub(crate) fn run_when_ready(slot: &PaneSlot, command: String, cx: &mut App) {
+    let cfg = cx.global::<Config>();
+    let aliases = crate::core::config::detection_aliases(&cfg.agent_commands, &cfg.agent_launch);
+    // Only the executable or an explicit mapping selects an agent. Do not
+    // search interpreter arguments or inspect arbitrary wrapper contents.
+    let agent = crate::core::cli_agent::parse_command_argv(&command)
+        .ok()
+        .and_then(|argv| {
+            argv.iter()
+                .find(|arg| !arg.contains('='))
+                .and_then(|program| {
+                    CLIAgent::detect_from_argv_with(std::slice::from_ref(program), &aliases)
+                })
+        });
+    run_known_agent_when_ready(slot, command, agent, cx);
+}
+
+/// Type an already-scoped command — a prepared resume/fork line — into the
+/// shell. The session operation encoded it for this shell and its environment;
+/// running the launch encoder again would reject the Hermes presence marker
+/// (`${KITTY_WINDOW_ID-lyrel}`), which is a shell expansion rather than a
+/// literal argv token.
+pub(crate) fn run_prepared_when_ready(slot: &PaneSlot, command: String, cx: &mut App) {
     match slot {
         PaneSlot::Ready(view) => {
             let view = view.downgrade();
             cx.spawn(async move |cx| {
-                let deadline = std::time::Instant::now() + PROMPT_WAIT;
-                loop {
-                    let ready = view
-                        .read_with(cx, |view, _| view.terminal.at_prompt())
-                        .unwrap_or(true);
-                    if ready || std::time::Instant::now() >= deadline {
-                        break;
-                    }
-                    cx.background_executor().timer(PROMPT_POLL).await;
-                }
+                wait_for_prompt(&view, cx).await;
+                let _ = view.update_in(cx, |view, _window, _cx| view.run_command_line(&command));
+            })
+            .detach();
+        }
+        PaneSlot::Connecting(pending) => {
+            pending.update(cx, |pending, _| pending.run_prepared_when_ready(command))
+        }
+    }
+}
+
+async fn wait_for_prompt(
+    view: &gpui_kit::WeakEntity<crate::terminal::view::TerminalView>,
+    cx: &mut gpui_kit::AsyncApp,
+) {
+    let deadline = std::time::Instant::now() + PROMPT_WAIT;
+    loop {
+        let ready = view
+            .read_with(cx, |view, _| view.terminal.at_prompt())
+            .unwrap_or(true);
+        if ready || std::time::Instant::now() >= deadline {
+            break;
+        }
+        cx.background_executor().timer(PROMPT_POLL).await;
+    }
+}
+
+pub(crate) fn run_known_agent_when_ready(
+    slot: &PaneSlot,
+    command: String,
+    agent: Option<CLIAgent>,
+    cx: &mut App,
+) {
+    match slot {
+        PaneSlot::Ready(view) => {
+            let view = view.downgrade();
+            cx.spawn(async move |cx| {
+                wait_for_prompt(&view, cx).await;
                 let Ok((host, shell)) = view.read_with(cx, |view, cx| {
                     let shell = view.shell_spec().map(|spec| spec.program).or_else(|| {
                         // Only local panes inherit the desktop's shell setting.
@@ -185,11 +235,14 @@ pub(crate) fn run_when_ready(slot: &PaneSlot, command: String, cx: &mut App) {
                         window,
                         cx,
                         move |host| {
-                            lyrel_core::host::session_operations::scoped_launch_command(
-                                host,
-                                &command,
-                                shell.as_deref(),
-                            )
+                            match agent {
+                                Some(agent) => lyrel_core::host::session_operations::scoped_agent_launch_command(
+                                    host, agent, &command, shell.as_deref(),
+                                ),
+                                None => lyrel_core::host::session_operations::scoped_launch_command(
+                                    host, &command, shell.as_deref(),
+                                ),
+                            }
                             .map_err(|error| error.to_string())
                         },
                         |view, result, window, cx| match result {
@@ -212,7 +265,9 @@ pub(crate) fn run_when_ready(slot: &PaneSlot, command: String, cx: &mut App) {
             .detach();
         }
         PaneSlot::Connecting(pending) => {
-            pending.update(cx, |pending, _| pending.run_when_ready(command));
+            pending.update(cx, |pending, _| {
+                pending.run_known_agent_when_ready(command, agent)
+            });
         }
     }
 }
@@ -267,7 +322,7 @@ impl LyrelApp {
             log::warn!("no pane opened for {}; not launching it", agent.slug());
             return;
         };
-        run_when_ready(&slot, command, cx);
+        run_known_agent_when_ready(&slot, command, Some(agent), cx);
         // Recency only: the run is counted when the pane reports the agent
         // actually running, so a launch and its detection are one use, not two.
         self.update_config(cx, |cfg| {
@@ -412,7 +467,7 @@ impl LyrelApp {
                 );
             });
         }
-        run_when_ready(&slot, command, cx);
+        run_prepared_when_ready(&slot, command, cx);
     }
 
     pub(crate) fn notify_session_operation_error(

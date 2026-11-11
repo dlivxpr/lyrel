@@ -43,16 +43,16 @@ impl Case {
     }
 }
 
-fn usage() {
+fn usage(suite: &str) {
     println!(
-        "native_markdown [FILTER ...] [--exact] [--list] [--nocapture] [--test-threads=1]\n\
-         Runs real native-font Markdown consumers on the process main thread.\n\
+        "{suite} [FILTER ...] [--exact] [--list] [--nocapture] [--test-threads=1]\n\
+         Runs real native-font consumers on the process main thread.\n\
          FILTER matches the original unit-test selector (substring, or full name with --exact).\n\
          Unknown exact selectors and unsupported options fail with exit code 2."
     );
 }
 
-pub(crate) fn main() -> ExitCode {
+pub(crate) fn main(cases: Vec<Case>, suite: &str) -> ExitCode {
     let mut filters = Vec::new();
     let mut exact = false;
     let mut list = false;
@@ -62,22 +62,21 @@ pub(crate) fn main() -> ExitCode {
             "--exact" => exact = true,
             "--nocapture" | "--test-threads=1" => {}
             "--help" | "-h" => {
-                usage();
+                usage(suite);
                 return ExitCode::SUCCESS;
             }
             _ if argument.starts_with('-') => {
-                eprintln!("native_markdown: unsupported option {argument}");
-                usage();
+                eprintln!("{suite}: unsupported option {argument}");
+                usage(suite);
                 return ExitCode::from(2);
             }
             _ => filters.push(argument),
         }
     }
-    let cases: Vec<_> = crate::ui::code_editor::markdown::native_cases().collect();
     if exact {
         for filter in &filters {
             if !cases.iter().any(|case| case.name == filter) {
-                eprintln!("native_markdown: unknown exact test selector {filter:?}");
+                eprintln!("{suite}: unknown exact test selector {filter:?}");
                 return ExitCode::from(2);
             }
         }
@@ -96,7 +95,7 @@ pub(crate) fn main() -> ExitCode {
         })
         .collect();
     if selected.is_empty() {
-        eprintln!("native_markdown: no consumers match the requested filters {filters:?}");
+        eprintln!("{suite}: no consumers match the requested filters {filters:?}");
         return ExitCode::from(2);
     }
     if list {
@@ -118,7 +117,7 @@ pub(crate) fn main() -> ExitCode {
     let text_system = platform.text_system();
     assert!(
         !text_system.all_font_names().is_empty(),
-        "native_markdown requires real platform fonts, not NoopTextSystem"
+        "{suite} requires real platform fonts, not NoopTextSystem"
     );
     println!("running {} tests", selected.len());
     let mut failures = Vec::new();

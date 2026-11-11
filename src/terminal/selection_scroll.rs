@@ -4,20 +4,21 @@ use gpui_kit::{Modifiers, OperatingSystem, ScrollDelta, ScrollEvent, TouchPhase}
 use rio_vt::crosswords::Crosswords;
 use rio_vt::crosswords::grid::{Dimensions, Scroll};
 use rio_vt::crosswords::pos::{Column, Line, Pos, Side};
+use rio_vt::event::EventListener;
 use rio_vt::selection::{Selection, SelectionType};
 
 use super::remote::EventProxy;
+use super::remote::RemoteTerminal;
 use super::smart_select::GridWordSelection;
 use crate::core::config::{Config, MouseZoomModifier};
 
 type Grid = Crosswords<EventProxy>;
 
-/// Selection and viewport interaction over the live grid. The view retains its
-/// GPUI identity and performs reporting, notification, timers and action dispatch.
-/// No grid is copied. Scheduled ticks request the existing guard lazily, after
-/// their epoch checks, so retired callbacks never acquire the terminal lock.
+/// Selection and viewport interaction. Reading owns decoded semantic rows,
+/// while scheduled ticks still request the existing live guard lazily.
 #[derive(Default)]
 pub(super) struct SelectionScroll {
+    pub(super) reading: Option<super::reading::ReadingView>,
     selecting: bool,
     word: Option<GridWordSelection>,
     drag: Option<DragScroll>,
@@ -32,6 +33,17 @@ pub(super) struct SelectionScroll {
     fraction: f32,
     presented: Option<super::presentation::PresentedSelection>,
     gesture: Option<(usize, usize, bool, usize)>,
+    live_anchor: Option<std::ops::Range<usize>>,
+    /// The latest ordered resize request, kept even while no reading exists so
+    /// a reading entered before the `Size` can still relocate.
+    pending_resize: Option<PendingResize>,
+}
+
+#[derive(Clone, Copy)]
+struct PendingResize {
+    target: (usize, usize),
+    revision: u64,
+    images_known: bool,
 }
 
 #[derive(Clone, Copy)]
@@ -57,12 +69,215 @@ pub(super) enum WheelMotion {
 }
 
 impl SelectionScroll {
+    /// Lifecycle transitions outrank resize relocation and atomic holds. The
+    /// generation comes from the same VT guard, not a final-mode observation.
+    pub(super) fn invalidate_reading(&mut self, term: &mut Grid, terminal: &RemoteTerminal) {
+        let invalid = self.reading.as_ref().is_some_and(|reading| {
+            term.mode().contains(rio_vt::crosswords::Mode::ALT_SCREEN)
+                || !reading.belongs_to(terminal.presentation_facts().reading_generation)
+        });
+        if invalid {
+            self.clear_presented();
+            self.jump_to_prompt(term);
+        }
+    }
+
+    /// Record the ordered resize request even when no reading exists yet. A
+    /// reading entered before the `Size` picks this up at capture time.
+    pub(super) fn prepare_resize<T: EventListener>(
+        &mut self,
+        term: &Crosswords<T>,
+        terminal: &RemoteTerminal,
+        cols: usize,
+        rows: usize,
+    ) {
+        let revision = terminal.presentation_facts().resize_revision;
+        let images_known = terminal.images().layout_known();
+        if let Some(pending) = self.pending_resize.as_mut() {
+            pending.target = (cols, rows);
+            pending.revision = revision;
+            pending.images_known |= images_known;
+        } else {
+            self.pending_resize = Some(PendingResize {
+                target: (cols, rows),
+                revision,
+                images_known,
+            });
+        }
+        if let Some(reading) = self.reading.as_mut() {
+            reading.prepare_resize_at(term, terminal, (cols, rows), revision, images_known);
+        }
+    }
+
+    pub(super) fn sync_reading(&mut self, term: &mut Grid, terminal: &RemoteTerminal) {
+        self.invalidate_reading(term, terminal);
+        let relocated = self
+            .reading
+            .as_mut()
+            .is_some_and(|reading| reading.finish_resize(term, terminal));
+        if relocated {
+            self.pending_resize = None;
+            self.clear_presented();
+        }
+        if self
+            .reading
+            .as_mut()
+            .is_some_and(|reading| !reading.reconcile(term))
+        {
+            self.clear_presented();
+            self.jump_to_prompt(term);
+        } else if term.display_offset() == 0
+            && self.fraction == 0.
+            && !self
+                .reading
+                .as_ref()
+                .is_some_and(|reading| reading.relocating())
+            && self.reading.take().is_some()
+        {
+            self.clear_presented();
+        }
+        if let Some(reading) = self.reading.as_mut() {
+            reading.maintain(
+                term,
+                terminal,
+                self.presented.as_ref().map(|selection| selection.range()),
+            );
+        }
+    }
+
+    pub(super) fn did_scroll(&mut self, term: &Grid, terminal: &RemoteTerminal) {
+        if term.synchronized_output() {
+            return;
+        }
+        if self
+            .reading
+            .as_mut()
+            .is_some_and(|reading| reading.relocation_scroll(term))
+        {
+            // The user scrolled back to live while the ordered resize was
+            // still pending. That is a return to live, not a reading with a
+            // zero-row pill; the relocation has nothing left to restore.
+            if term.display_offset() == 0 && self.fraction == 0. {
+                self.reading = None;
+                self.pending_resize = None;
+                self.clear_presented();
+                self.live_anchor = None;
+            }
+            return;
+        }
+        if term.display_offset() == 0 && self.fraction == 0. {
+            if self.reading.take().is_some() {
+                self.clear_presented();
+            }
+        } else if let Some(reading) = &mut self.reading {
+            reading.maintain(
+                term,
+                terminal,
+                self.presented.as_ref().map(|selection| selection.range()),
+            );
+        } else if !term.mode().contains(rio_vt::crosswords::Mode::ALT_SCREEN) {
+            self.reading = Some(super::reading::ReadingView::capture(
+                term,
+                &terminal.images(),
+                &terminal.presentation_facts(),
+            ));
+            if let Some(pending) = self.pending_resize.take()
+                && let Some(reading) = self.reading.as_mut()
+            {
+                reading.prepare_resize_at(
+                    term,
+                    terminal,
+                    pending.target,
+                    pending.revision,
+                    pending.images_known,
+                );
+            }
+            self.adopt_live_selection(term);
+        }
+    }
+
+    fn absolute_selection(term: &Grid) -> Option<std::ops::Range<usize>> {
+        let range = term.selection.as_ref()?.to_range(term)?;
+        let origin = super::reading::live_start(term);
+        Some(
+            (origin + i64::from(range.start.row.0)) as usize * term.columns() + range.start.col.0
+                ..(origin + i64::from(range.end.row.0)) as usize * term.columns()
+                    + range.end.col.0
+                    + 1,
+        )
+    }
+
+    fn adopt_live_selection(&mut self, term: &Grid) {
+        let current = Self::absolute_selection(term);
+        let anchor = if self.selecting {
+            self.live_anchor.clone().or_else(|| current.clone())
+        } else {
+            current.clone()
+        };
+        if let Some(anchor) = anchor {
+            let clicks = self.gesture.map_or(1, |gesture| gesture.3);
+            let mut selection =
+                super::presentation::PresentedSelection::new(anchor.clone(), clicks);
+            if let Some(current) = current {
+                let at = if current.start < anchor.start {
+                    current.start
+                } else {
+                    current.end
+                };
+                selection.update(at..at);
+            }
+            self.presented = Some(selection);
+        }
+    }
+
+    fn selection_origin(&self, cols: usize) -> usize {
+        self.reading
+            .as_ref()
+            .map_or(0, |reading| reading.top().max(0) as usize * cols)
+    }
+
+    pub(super) fn apply_reading_selection(
+        &self,
+        cells: &mut [super::element::RenderCell],
+        cols: usize,
+    ) -> bool {
+        self.presented
+            .as_ref()
+            .is_some_and(|selection| selection.apply_from(cells, self.selection_origin(cols)))
+    }
+
+    pub(super) fn apply_reading_sliver_selection(
+        &self,
+        cells: &mut [super::element::RenderCell],
+        cols: usize,
+    ) -> bool {
+        let origin = self.reading.as_ref().map_or(0, |reading| {
+            reading.top().saturating_sub(1).max(0) as usize * cols
+        });
+        self.presented
+            .as_ref()
+            .is_some_and(|selection| selection.apply_from(cells, origin))
+    }
+
+    pub(super) fn reading_selection_text(&self) -> Option<String> {
+        self.reading
+            .as_ref()?
+            .selected_text(self.presented.as_ref()?)
+    }
+
+    pub(super) fn reading_selection_is_lines(&self) -> bool {
+        self.presented
+            .as_ref()
+            .is_some_and(|selection| selection.clicks() >= 3)
+    }
+
     pub(super) fn has_presented(&self) -> bool {
         self.presented.is_some()
     }
 
     pub(super) fn clear_presented(&mut self) {
         if self.presented.take().is_some() {
+            self.live_anchor = None;
             self.selecting = false;
             self.drag = None;
         }
@@ -90,7 +305,11 @@ impl SelectionScroll {
                 at..at
             }
         };
-        self.presented = Some(super::presentation::PresentedSelection::new(range, clicks));
+        let origin = self.selection_origin(cols);
+        self.presented = Some(super::presentation::PresentedSelection::new(
+            range.start + origin..range.end + origin,
+            clicks,
+        ));
     }
 
     pub(super) fn start_presented(
@@ -105,13 +324,19 @@ impl SelectionScroll {
         cfg: &Config,
     ) -> bool {
         use super::presentation::{PresentedGrid, PresentedSelection};
-        let grid = PresentedGrid::new(cells, cols, 0);
+        let grid = if let Some(reading) = self.reading.as_ref() {
+            PresentedGrid::reading(reading)
+        } else {
+            PresentedGrid::new(cells, cols, 0)
+        };
         let target = if clicks > 1 {
             grid.click_range(col, row, clicks, cfg)
         } else {
             let at = grid.boundary(col, row, left);
             at..at
         };
+        let origin = grid.absolute_origin();
+        let target = target.start + origin..target.end + origin;
         if shift {
             self.adopt_presented(cells, cols, cfg);
         }
@@ -128,7 +353,7 @@ impl SelectionScroll {
         self.word = None;
         self.drag = None;
         self.cancel_animation();
-        self.presented.as_ref().unwrap().apply(cells)
+        self.apply_reading_selection(cells, cols)
     }
 
     pub(super) fn update_presented(
@@ -140,26 +365,35 @@ impl SelectionScroll {
         left: bool,
         cfg: &Config,
     ) -> bool {
+        let origin = self.selection_origin(cols);
         let Some(selection) = self.presented.as_mut() else {
             return false;
         };
-        let grid = super::presentation::PresentedGrid::new(cells, cols, 0);
+        let grid = if let Some(reading) = self.reading.as_ref() {
+            super::presentation::PresentedGrid::reading(reading)
+        } else {
+            super::presentation::PresentedGrid::new(cells, cols, 0)
+        };
+        let target_origin = grid.absolute_origin();
         let target = if selection.clicks() > 1 {
             grid.click_range(col, row, selection.clicks(), cfg)
         } else {
             let at = grid.boundary(col, row, left);
             at..at
         };
-        selection.update(target);
-        selection.apply(cells)
+        selection.update(target.start + target_origin..target.end + target_origin);
+        selection.apply_from(cells, origin)
     }
 
     pub(super) fn select_all_presented(
         &mut self,
         cells: &mut [super::element::RenderCell],
     ) -> bool {
-        let selection = super::presentation::PresentedSelection::new(0..cells.len(), 1);
-        let selected = selection.apply(cells);
+        let cols = self.reading.as_ref().map_or(1, |reading| reading.columns());
+        let origin = self.selection_origin(cols);
+        let selection =
+            super::presentation::PresentedSelection::new(origin..origin + cells.len(), 1);
+        let selected = selection.apply_from(cells, origin);
         self.presented = Some(selection);
         selected
     }
@@ -192,7 +426,8 @@ impl SelectionScroll {
             Column(col),
         );
         let side = if left { Side::Left } else { Side::Right };
-        if shift && clicks == 1 && term.selection.is_some() {
+        let extend_existing = shift && clicks == 1 && term.selection.is_some();
+        if extend_existing {
             self.extend(term, point, side, &cfg.word_separators);
         } else {
             self.word = None;
@@ -211,6 +446,29 @@ impl SelectionScroll {
                 };
                 term.selection = Some(Selection::new(ty, point, side));
             }
+        }
+        if !(extend_existing && self.live_anchor.is_some()) {
+            let absolute_row = (super::reading::live_start(term) + i64::from(point.row.0)) as usize;
+            let wide = term.grid[point].wide();
+            let col = if wide == rio_vt::crosswords::square::Wide::Spacer {
+                col.saturating_sub(1)
+            } else {
+                col
+            };
+            let at = absolute_row * term.columns()
+                + col
+                + if left {
+                    0
+                } else if matches!(
+                    wide,
+                    rio_vt::crosswords::square::Wide::Wide
+                        | rio_vt::crosswords::square::Wide::Spacer
+                ) {
+                    2
+                } else {
+                    1
+                };
+            self.live_anchor = Some(Self::absolute_selection(term).unwrap_or(at..at));
         }
         self.selecting = true;
     }
@@ -284,7 +542,8 @@ impl SelectionScroll {
         &mut self,
         epoch: u64,
         grid: impl FnOnce() -> G,
-        separators: &str,
+        cfg: &Config,
+        terminal: &RemoteTerminal,
     ) -> Option<bool> {
         if epoch != self.drag_epoch {
             return None;
@@ -295,16 +554,35 @@ impl SelectionScroll {
         let drag = self.drag?;
         self.cancel_animation();
         let mut term = grid();
+        if term.synchronized_output() {
+            return Some(false);
+        }
+        self.sync_reading(&mut term, terminal);
         let before = term.grid.display_offset();
         term.scroll_display(Scroll::Delta(drag_scroll_step(drag.overshoot)));
+        self.did_scroll(&term, terminal);
         let offset = term.grid.display_offset();
         let row = if drag.overshoot > 0. {
             0
         } else {
             term.screen_lines().saturating_sub(1)
         };
-        let point = Pos::new(Line(row as i32 - offset as i32), Column(drag.col));
-        self.extend(&mut term, point, drag.side, separators);
+        if let Some(selection) = self.presented.as_mut() {
+            if let Some(reading) = self.reading.as_ref() {
+                let grid = super::presentation::PresentedGrid::reading(reading);
+                let origin = grid.absolute_origin();
+                let target = if selection.clicks() > 1 {
+                    grid.click_range(drag.col, row, selection.clicks(), cfg)
+                } else {
+                    let at = grid.boundary(drag.col, row, drag.side == Side::Left);
+                    at..at
+                };
+                selection.update(target.start + origin..target.end + origin);
+            }
+        } else {
+            let point = Pos::new(Line(row as i32 - offset as i32), Column(drag.col));
+            self.extend(&mut term, point, drag.side, &cfg.word_separators);
+        }
         if offset != before {
             self.fraction = 0.;
         }
@@ -389,6 +667,7 @@ impl SelectionScroll {
         &mut self,
         epoch: u64,
         grid: impl FnOnce() -> G,
+        terminal: &RemoteTerminal,
     ) -> Option<(bool, bool)> {
         if epoch != self.animation_epoch {
             return None;
@@ -402,14 +681,23 @@ impl SelectionScroll {
         if last {
             self.animation = None;
         }
-        let moved = self.smooth_scroll(&mut grid(), step);
+        let moved = self.smooth_scroll(&mut grid(), step, terminal);
         if !moved {
             self.cancel_animation();
         }
         Some((moved, moved && !last))
     }
 
-    pub(super) fn smooth_scroll(&mut self, term: &mut Grid, delta: f32) -> bool {
+    pub(super) fn smooth_scroll(
+        &mut self,
+        term: &mut Grid,
+        delta: f32,
+        terminal: &RemoteTerminal,
+    ) -> bool {
+        if term.synchronized_output() {
+            return false;
+        }
+        self.sync_reading(term, terminal);
         let (jump, fraction) = smooth_scroll_step(
             term.grid.display_offset(),
             self.fraction,
@@ -421,32 +709,48 @@ impl SelectionScroll {
         }
         let moved = jump != 0 || fraction != self.fraction;
         self.fraction = fraction;
+        self.did_scroll(term, terminal);
         moved
     }
 
-    pub(super) fn scroll_lines(&mut self, term: &mut Grid, lines: i32) {
+    pub(super) fn scroll_lines(&mut self, term: &mut Grid, lines: i32, terminal: &RemoteTerminal) {
+        if term.synchronized_output() {
+            return;
+        }
+        self.sync_reading(term, terminal);
         self.fraction = 0.;
         term.scroll_display(Scroll::Delta(lines));
+        self.did_scroll(term, terminal);
     }
 
     pub(super) fn jump_to_prompt(&mut self, term: &mut Grid) {
         self.cancel_animation();
+        self.reading = None;
+        self.live_anchor = None;
         term.selection = None;
         term.scroll_display(Scroll::Bottom);
         self.fraction = 0.;
     }
 
-    pub(super) fn scroll_to(&mut self, term: &mut Grid, target: usize) {
+    pub(super) fn scroll_to(&mut self, term: &mut Grid, target: usize, terminal: &RemoteTerminal) {
         self.cancel_animation();
+        if term.synchronized_output() {
+            return;
+        }
+        self.sync_reading(term, terminal);
         let delta = target as i32 - term.grid.display_offset() as i32;
         if delta != 0 {
             term.scroll_display(Scroll::Delta(delta));
         }
         self.fraction = 0.;
+        self.did_scroll(term, terminal);
     }
 
     pub(super) fn clear_scrollback(&mut self) {
         self.cancel_animation();
+        self.clear_presented();
+        self.reading = None;
+        self.live_anchor = None;
         self.fraction = 0.;
     }
 

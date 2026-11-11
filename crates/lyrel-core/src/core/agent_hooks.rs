@@ -161,6 +161,24 @@ fn build_hook_payload(agent: &str, event: &str, stdin_json: &str) -> serde_json:
             body["session_scope"] = value;
         }
     }
+    // The hook process inherits the native agent's actual terminal scope.
+    // Some upstream observers report storage only. Fill only missing public
+    // terminal fields in an existing scope, never synthesize/replace storage
+    // scope on a status-only event or copy inline config/credentials.
+    if matches!(agent, "omp" | "pi" | "kimi" | "opencode" | "hermes")
+        && let Some(environment) = body
+            .get_mut("session_scope")
+            .and_then(|scope| scope.get_mut("environment"))
+            .and_then(serde_json::Value::as_object_mut)
+    {
+        for key in crate::host::session_operations::TERMINAL_SCOPE_ENV {
+            if !environment.contains_key(*key)
+                && let Ok(value) = std::env::var(key)
+            {
+                environment.insert((*key).into(), value.into());
+            }
+        }
+    }
     if agent == "opencode"
         && let Some(presence) = payload.get("opencode_presence")
     {
@@ -1340,36 +1358,34 @@ mod tests {
     fn generated_bridges_share_public_scope_keys_without_cross_agent_policies() {
         let host = crate::host::local::LocalHost::new();
         let target = HookTarget::local_for_exe(&*host, std::env::current_exe().unwrap()).unwrap();
-        for (agent, expected) in [
-            (
-                HookAgent::Pi,
-                vec![
-                    "HOME",
-                    "USERPROFILE",
-                    "PI_CODING_AGENT_DIR",
-                    "PI_CODING_AGENT_SESSION_DIR",
-                    "PI_IMAGE_PROTOCOL",
-                ],
-            ),
-            (
-                HookAgent::OhMyPi,
-                vec![
-                    "HOME",
-                    "USERPROFILE",
-                    "OMP_PROFILE",
-                    "PI_PROFILE",
-                    "PI_CONFIG_DIR",
-                    "PI_CODING_AGENT_DIR",
-                    "PI_CONFIG_FILES",
-                    "XDG_CONFIG_HOME",
-                    "XDG_DATA_HOME",
-                    "XDG_STATE_HOME",
-                    "XDG_CACHE_HOME",
-                    "PI_FORCE_IMAGE_PROTOCOL",
-                    "PI_KITTY_PLACEHOLDERS",
-                    "PI_NO_KITTY_PLACEHOLDERS",
-                ],
-            ),
+        // Public scope shared by both bridges: home/storage plus the terminal
+        // identity that the #248 command-scoped launch captures and restores.
+        const COMMON: &[&str] = &["HOME", "USERPROFILE", "PI_CODING_AGENT_DIR"];
+        const TERMINAL: &[&str] = &[
+            "TERM_PROGRAM",
+            "TERM_PROGRAM_VERSION",
+            "LC_TERMINAL",
+            "LC_TERMINAL_VERSION",
+            "KITTY_WINDOW_ID",
+        ];
+        const PI_PRIVATE: &[&str] = &["PI_CODING_AGENT_SESSION_DIR", "PI_IMAGE_PROTOCOL"];
+        const OMP_PRIVATE: &[&str] = &[
+            "OMP_PROFILE",
+            "PI_PROFILE",
+            "PI_CONFIG_DIR",
+            "PI_CONFIG_FILES",
+            "XDG_CONFIG_HOME",
+            "XDG_DATA_HOME",
+            "XDG_STATE_HOME",
+            "XDG_CACHE_HOME",
+            "PI_FORCE_IMAGE_PROTOCOL",
+            "PI_KITTY_PLACEHOLDERS",
+            "PI_NO_KITTY_PLACEHOLDERS",
+            "PI_NO_DECCARA",
+        ];
+        for (agent, private, other_private) in [
+            (HookAgent::Pi, PI_PRIVATE, OMP_PRIVATE),
+            (HookAgent::OhMyPi, OMP_PRIVATE, PI_PRIVATE),
         ] {
             let source = owned_file_content(&target, agent).unwrap();
             let declaration = source
@@ -1378,10 +1394,22 @@ mod tests {
                 .unwrap();
             let mut actual: Vec<String> =
                 serde_json::from_str(declaration.trim_end_matches(';')).unwrap();
-            let mut expected = expected;
+            let mut expected: Vec<String> = COMMON
+                .iter()
+                .chain(TERMINAL)
+                .chain(private)
+                .map(|key| (*key).to_string())
+                .collect();
             actual.sort();
             expected.sort();
             assert_eq!(actual, expected, "{} bridge scope contract", agent.slug());
+            assert!(
+                actual
+                    .iter()
+                    .all(|key| !other_private.contains(&key.as_str())),
+                "{} bridge must not capture the other agent's private scope policy",
+                agent.slug()
+            );
             assert!(
                 actual
                     .iter()
@@ -1467,6 +1495,52 @@ mod tests {
             state.readout.result, None,
             "a denied tool is not a terminal failed turn"
         );
+    }
+
+    #[test]
+    fn hook_process_preserves_terminal_scope_without_inline_config_or_credentials() {
+        let dir = tempfile::tempdir().unwrap();
+        let output = dir.path().join("scope.json");
+        let status = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--ignored",
+                "--exact",
+                "core::agent_hooks::tests::terminal_scope_hook_child",
+                "--nocapture",
+            ])
+            .env("LYREL_TEST_HOOK_SCOPE_OUTPUT", &output)
+            .env("TERM_PROGRAM", "explicit-terminal")
+            .env("TERM_PROGRAM_VERSION", "")
+            .env("LC_TERMINAL", "lyrel")
+            .env("KITTY_WINDOW_ID", "")
+            .env("OPENAI_API_KEY", "must-not-leak")
+            .env("OPENCODE_CLI_CONFIG_CONTENT", "private-inline-config")
+            .status()
+            .unwrap();
+        assert!(status.success());
+        let body = std::fs::read_to_string(output).unwrap();
+        let event = crate::core::cli_agent::parse_agent_event_body(body.as_bytes()).unwrap();
+        let scope = event.readout.session_scope.unwrap();
+        assert_eq!(scope.environment["TERM_PROGRAM"], "explicit-terminal");
+        assert_eq!(scope.environment["TERM_PROGRAM_VERSION"], "");
+        assert_eq!(scope.environment["KITTY_WINDOW_ID"], "");
+        assert_eq!(scope.environment["HERMES_HOME"], "/owned-home");
+        assert!(!body.contains("must-not-leak"));
+        assert!(!body.contains("private-inline-config"));
+    }
+
+    #[test]
+    #[ignore = "native child for hook process environment reporting"]
+    fn terminal_scope_hook_child() {
+        let Some(output) = std::env::var_os("LYREL_TEST_HOOK_SCOPE_OUTPUT") else {
+            return;
+        };
+        let body = build_hook_body(
+            "hermes",
+            "session-start",
+            r#"{"session_id":"owned-session","session_scope":{"environment":{"HERMES_HOME":"/owned-home"}}}"#,
+        );
+        std::fs::write(output, body).unwrap();
     }
 
     #[test]

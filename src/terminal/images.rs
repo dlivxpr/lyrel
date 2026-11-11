@@ -17,6 +17,16 @@ use lyrel_core::core::kitty_graphics::{
     GraphicsUpdate, Image, PlaceholderSlice, Placement, WireFormat, placeholder_prototype,
 };
 
+/// Paint order shared by live and retained pictures: z, then stable image
+/// identity, then placement key.
+pub(super) fn placement_order(image: &RenderPlacement) -> (i32, u32, u64) {
+    (
+        image.placement.z,
+        image.placement.image_id,
+        image.placement.key,
+    )
+}
+
 #[derive(Clone)]
 pub struct RenderPlacement {
     pub data: Option<Arc<RenderImage>>,
@@ -53,6 +63,32 @@ impl std::ops::Deref for CommittedImages {
     type Target = [RenderPlacement];
     fn deref(&self) -> &Self::Target {
         &self.0
+    }
+}
+
+impl CommittedImages {
+    pub(super) fn new(images: Vec<RenderPlacement>) -> Self {
+        for image in &images {
+            if let Some(residency) = &image._residency {
+                residency.presented.fetch_add(1, Ordering::Relaxed);
+            }
+        }
+        Self(images)
+    }
+
+    pub(super) fn append_reading(
+        &self,
+        images: &mut Vec<RenderPlacement>,
+        row: i32,
+        history_delta: i64,
+    ) {
+        images.extend(self.0.iter().cloned().map(|mut image| {
+            if let Some((viewport_row, _)) = &mut image.placeholder {
+                *viewport_row = row;
+            }
+            image.history_origin += history_delta;
+            image
+        }));
     }
 }
 
@@ -549,10 +585,16 @@ impl Default for SharedStore {
 pub struct ImageStore(Arc<SharedStore>);
 
 fn retire(resource: Resource, retired: &mut Vec<Arc<Residency>>) {
-    if let Some(decoded) = resource.decoded
-        && resource.painted.load(Ordering::Acquire)
-    {
-        retired.push(decoded.residency);
+    if let Some(decoded) = resource.decoded {
+        if resource.painted.load(Ordering::Acquire) {
+            retired.push(decoded.residency);
+        } else {
+            // No atlas tile was ever allocated for these pixels. A committed
+            // frame may still borrow the decoded CPU pixels, but the GPU page
+            // lease must not stay charged to the desktop until that frame is
+            // replaced: a detached pane may never paint or drop it.
+            decoded.residency.gpu.lock().unwrap().take();
+        }
     }
 }
 
@@ -576,7 +618,7 @@ impl ImageStore {
         Self::default()
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "native-markdown-tests"))]
     pub(super) fn release_probe(&self) -> impl Fn() -> bool + use<> {
         let store = Arc::downgrade(&self.0);
         move || store.upgrade().is_none()
@@ -598,7 +640,7 @@ impl ImageStore {
         })
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "native-markdown-tests"))]
     pub(super) fn recovery_diagnostics(&self) -> String {
         let inner = self.0.state.lock().unwrap();
         let resources: Vec<_> = inner
@@ -1061,12 +1103,12 @@ impl ImageStore {
             .min_by_key(|(_, received, unreferenced)| (!*unreferenced, *received))
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "native-markdown-tests"))]
     pub fn snapshot(&self) -> Vec<RenderPlacement> {
         self.snapshot_with_placeholders(&[])
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "native-markdown-tests"))]
     /// Runs are derived from the same locked grid snapshot as terminal text.
     /// A prototype itself never appears in the display list.
     pub fn snapshot_with_placeholders(
@@ -1080,13 +1122,34 @@ impl ImageStore {
         &self,
         rows: &[(i32, Vec<PlaceholderSlice>)],
     ) -> CommittedImages {
-        let images = self.snapshot_placements(rows, true);
-        for image in &images {
-            if let Some(residency) = &image._residency {
-                residency.presented.fetch_add(1, Ordering::Relaxed);
-            }
-        }
-        CommittedImages(images)
+        CommittedImages::new(self.snapshot_placements(rows, true))
+    }
+
+    /// Capture sorted requested rows in one store transaction. Iterate direct
+    /// placements once, and resolve only intersections; never pin a whole-store
+    /// snapshot while a large selection walks its semantic rows.
+    pub(super) fn commit_reading_rows(
+        &self,
+        local_origin: i64,
+        rows: &[(i32, Vec<PlaceholderSlice>)],
+    ) -> BTreeMap<i32, CommittedImages> {
+        let inner = self.0.state.lock().unwrap();
+        let mut captured: BTreeMap<i32, Vec<RenderPlacement>> = BTreeMap::new();
+        Self::collect_placements(&inner, rows, true, Some(local_origin), |row, image| {
+            captured.entry(row).or_default().push(image);
+        });
+        captured
+            .into_iter()
+            .map(|(row, mut images)| {
+                images.sort_unstable_by_key(placement_order);
+                (row, CommittedImages::new(images))
+            })
+            .collect()
+    }
+
+    /// Whether an ordered daemon Screen has established graphics geometry.
+    pub(super) fn layout_known(&self) -> bool {
+        self.0.state.lock().unwrap().viewport_known
     }
 
     fn snapshot_placements(
@@ -1095,8 +1158,21 @@ impl ImageStore {
         committed: bool,
     ) -> Vec<RenderPlacement> {
         let inner = self.0.state.lock().unwrap();
+        let mut images = Vec::new();
+        Self::collect_placements(&inner, rows, committed, None, |_, image| images.push(image));
+        images.sort_unstable_by_key(placement_order);
+        images
+    }
+
+    fn collect_placements(
+        inner: &StoreInner,
+        rows: &[(i32, Vec<PlaceholderSlice>)],
+        committed: bool,
+        reading_origin: Option<i64>,
+        mut emit: impl FnMut(i32, RenderPlacement),
+    ) {
         if committed && !inner.viewport_known {
-            return Vec::new();
+            return;
         }
         let render = |anchored: &AnchoredPlacement, placeholder| {
             let root = inner.resources.get(&anchored.placement.resource)?;
@@ -1137,16 +1213,41 @@ impl ImageStore {
                 _metadata: (resource.metadata.clone(), anchored.metadata.clone()),
             })
         };
-        let mut images: Vec<_> = inner
-            .placements
-            .values()
-            .filter(|anchored| {
-                anchored.placement.screen == inner.screen
-                    && !anchored.placement.virtual_placement
-                    && !anchored.placement.unresolved
-            })
-            .filter_map(|anchored| render(anchored, None))
-            .collect();
+        for anchored in inner.placements.values().filter(|anchored| {
+            anchored.placement.screen == inner.screen
+                && !anchored.placement.virtual_placement
+                && !anchored.placement.unresolved
+        }) {
+            if let Some(local_origin) = reading_origin {
+                let origin = inner.history_origin + local_origin - inner.local_origin;
+                let start = anchored.placement.anchor_row - origin;
+                let first = start + i64::from(anchored.placement.clip_top);
+                let last = start + i64::from(anchored.placement.clip_bottom);
+                let from = rows.partition_point(|(line, _)| i64::from(*line) < first);
+                let to = rows.partition_point(|(line, _)| i64::from(*line) < last);
+                if from == to {
+                    continue;
+                }
+                let Some(mut image) = render(anchored, None) else {
+                    continue;
+                };
+                image.history_origin = origin;
+                let mut image = Some(image);
+                for (ix, (line, _)) in rows[from..to].iter().enumerate() {
+                    let mut slice = if ix + 1 == to - from {
+                        image.take().unwrap()
+                    } else {
+                        image.as_ref().unwrap().clone()
+                    };
+                    let row = (i64::from(*line) - start) as u32;
+                    slice.placement.clip_top = row;
+                    slice.placement.clip_bottom = row + 1;
+                    emit(*line, slice);
+                }
+            } else if let Some(image) = render(anchored, None) {
+                emit(0, image);
+            }
+        }
         for (row, slices) in rows {
             for slice in slices {
                 let Some(prototype) = placeholder_prototype(
@@ -1161,20 +1262,15 @@ impl ImageStore {
                 }
                 let mut slice = slice.clone();
                 slice.run.width = slice.run.width.min(prototype.span_cols - slice.run.col);
-                if let Some(image) = render(&inner.placements[&prototype.key], Some((*row, slice)))
-                {
-                    images.push(image);
+                let viewport_row = if reading_origin.is_some() { 0 } else { *row };
+                if let Some(image) = render(
+                    &inner.placements[&prototype.key],
+                    Some((viewport_row, slice)),
+                ) {
+                    emit(*row, image);
                 }
             }
         }
-        images.sort_unstable_by_key(|image| {
-            (
-                image.placement.z,
-                image.placement.image_id,
-                image.placement.key,
-            )
-        });
-        images
     }
 
     #[cfg(test)]
@@ -1565,10 +1661,17 @@ impl ImageStore {
                 };
                 inner.next_revision = inner.next_revision.wrapping_add(1);
                 let revision = inner.next_revision;
-                let resource = Resource {
+                let painted = inner.resources.get(&key).map(|old| old.painted.clone());
+                let mut resource = Resource {
                     evicted: true,
                     ..Resource::new(width, height, revision, metadata)
                 };
+                // The evicted shell still represents the same image identity.
+                // Keep its last paint claim so a later frame can tell that the
+                // texture was on screen before it was retired.
+                if let Some(painted) = painted {
+                    resource.painted = painted;
+                }
                 if let Some(old) = inner.resources.insert(key, resource) {
                     retire(old, &mut inner.retired);
                 }

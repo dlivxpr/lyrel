@@ -505,6 +505,14 @@ impl FrameReader {
                             // Replay establishes a baseline, never a surviving
                             // presentation hold from a historical stream.
                             term.end_sync_update();
+                            // Fence every capture made before or during replay,
+                            // under the same guard as its completed baseline.
+                            proxy
+                                .parse_state
+                                .presentation
+                                .lock()
+                                .unwrap()
+                                .invalidate_reading();
                         }
                         mode_tok.feed(&bytes, |payload| {
                             if let Some(mode) = payload.strip_prefix(b"133;V;") {
@@ -573,14 +581,19 @@ impl FrameReader {
                                 return;
                             }
                             let changed = image_decoder.apply(update);
+                            let mut layout_completed = false;
                             if screen {
                                 image_decoder.sync_local_origin(
                                     term.grid.lines_evicted() as i64
                                         + term.grid.history_size() as i64,
                                 );
+                                let mut facts = proxy.parse_state.presentation.lock().unwrap();
+                                layout_completed =
+                                    facts.resize_images_revision != facts.resize_revision;
+                                facts.resize_images_revision = facts.resize_revision;
                             }
                             drop(term);
-                            if changed {
+                            if changed || layout_completed {
                                 proxy.send(PaneEvent::Wakeup);
                             }
                             if screen {

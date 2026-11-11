@@ -299,3 +299,251 @@ fn a_late_spawn_keeps_the_open_searchs_focus(cx: &mut TestAppContext) {
         assert!(landed.focus_handle.contains_focused(window, cx));
     });
 }
+
+#[test]
+#[ignore = "native child for the pending launch environment contract"]
+fn pending_scope_child() {
+    let Some(path) = std::env::var_os("LYREL_PENDING_SCOPE_OUTPUT") else {
+        return;
+    };
+    let environment: std::collections::BTreeMap<_, _> = [
+        "TERM_PROGRAM",
+        "TERM_PROGRAM_VERSION",
+        "LC_TERMINAL",
+        "KITTY_WINDOW_ID",
+        "PI_IMAGE_PROTOCOL",
+    ]
+    .into_iter()
+    .map(|key| (key, std::env::var(key).ok()))
+    .collect();
+    std::fs::write(path, serde_json::to_vec(&environment).unwrap()).unwrap();
+}
+
+#[gpui_kit::test]
+fn a_connecting_mapped_launch_keeps_its_agent_environment(cx: &mut TestAppContext) {
+    connecting_agent_environment(cx, true);
+}
+
+#[gpui_kit::test]
+fn a_connecting_known_launch_keeps_opaque_wrapper_intent(cx: &mut TestAppContext) {
+    connecting_agent_environment(cx, false);
+}
+
+fn connecting_agent_environment(cx: &mut TestAppContext, mapped: bool) {
+    use crate::core::shell_quote::quote_for_shell;
+    let dir = tempfile::tempdir().unwrap();
+    let wrapper = dir.path().join(if cfg!(windows) {
+        "mapped-hermes.exe"
+    } else {
+        "mapped-hermes"
+    });
+    std::fs::copy(std::env::current_exe().unwrap(), &wrapper).unwrap();
+    let shell = if cfg!(windows) { "pwsh" } else { "/bin/sh" };
+    let command = format!(
+        "PI_IMAGE_PROTOCOL=none {} --ignored --exact ui::pending_pane::creation::consumer_tests::pending_scope_child --nocapture",
+        quote_for_shell(&wrapper.to_string_lossy(), Some(shell))
+    );
+    let (app, mut vcx, _original_stream) = test_window::harness_with_pane(cx);
+    let (waiting, parts, mut daemon) = app.update_in(&mut vcx, |app, window, cx| {
+        let cfg = cx.global_mut::<crate::core::config::Config>();
+        cfg.shell = Some(crate::core::config::ShellConfig {
+            program: shell.into(),
+            args: Vec::new(),
+        });
+        if mapped {
+            cfg.agent_commands
+                .insert("mapped-hermes".into(), "hermes".into());
+        }
+        let waiting = pending(app, window, cx);
+        let slot = PaneSlot::Connecting(waiting.clone());
+        if mapped {
+            crate::ui::agent_launch::run_when_ready(&slot, command, cx);
+        } else {
+            crate::ui::agent_launch::run_known_agent_when_ready(
+                &slot,
+                command,
+                Some(crate::core::cli_agent::CLIAgent::Hermes),
+                cx,
+            );
+        }
+        let (parts, daemon) =
+            crate::terminal::view::quiet_test_shell_parts(97, Some(app.workspace));
+        (waiting, parts, daemon)
+    });
+    deliver(&waiting, Ok(parts), &mut vcx);
+    daemon
+        .set_read_timeout(Some(std::time::Duration::from_millis(20)))
+        .unwrap();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(8);
+    let line = loop {
+        vcx.executor()
+            .advance_clock(std::time::Duration::from_millis(50));
+        vcx.run_until_parked();
+        if let Ok(crate::daemon::protocol::ClientMsg::Input(bytes)) =
+            crate::daemon::protocol::ClientMsg::read(&mut daemon)
+        {
+            break String::from_utf8(bytes)
+                .unwrap()
+                .trim_end_matches('\r')
+                .to_owned();
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "pending command never reached its landed pane"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    };
+    let output = dir.path().join("environment.json");
+    let mut process = std::process::Command::new(shell);
+    process.args(if cfg!(windows) {
+        vec!["-NoProfile", "-Command"]
+    } else {
+        vec!["-c"]
+    });
+    process
+        .env("LYREL_PENDING_SCOPE_OUTPUT", &output)
+        .env("TERM_PROGRAM", "lyrel");
+    if mapped {
+        process.env_remove("KITTY_WINDOW_ID");
+    } else {
+        process.env("KITTY_WINDOW_ID", "owned-window");
+    }
+    let result = process.arg(line).output().unwrap();
+    assert!(
+        result.status.success(),
+        "{}",
+        String::from_utf8_lossy(&result.stderr)
+    );
+    let actual: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(output).unwrap()).unwrap();
+    assert_eq!(actual["TERM_PROGRAM"], "kitty");
+    assert_eq!(actual["TERM_PROGRAM_VERSION"], "");
+    assert_eq!(actual["LC_TERMINAL"], "lyrel");
+    assert_eq!(
+        actual["KITTY_WINDOW_ID"],
+        if mapped { "lyrel" } else { "owned-window" }
+    );
+    assert_eq!(actual["PI_IMAGE_PROTOCOL"], "none");
+}
+
+/// A resume/fork command is already fully scoped by the session operation.
+/// Typing it must not run the launch encoder a second time: the Hermes
+/// presence marker is a shell expansion, and the literal argv parser rejects
+/// `$` on purpose. The regression is the public pane seam: the exact prepared
+/// line reaches the shell and the child observes the marker semantics.
+#[gpui_kit::test]
+fn a_prepared_hermes_command_is_typed_verbatim_and_keeps_its_marker(cx: &mut TestAppContext) {
+    use crate::core::shell_quote::quote_for_shell;
+    let dir = tempfile::tempdir().unwrap();
+    // The defect is POSIX-specific: only there does the prepared marker use
+    // `${KITTY_WINDOW_ID-lyrel}`. Prefer an available POSIX shell on Windows
+    // too, and fall back to pwsh only when none is installed.
+    let shell = if cfg!(windows) {
+        let posix = std::process::Command::new("sh")
+            .args(["-c", "true"])
+            .status()
+            .is_ok_and(|status| status.success());
+        if posix { "sh" } else { "pwsh" }
+    } else {
+        "/bin/sh"
+    };
+    let posix = shell == "sh" || shell == "/bin/sh";
+    let wrapper = dir.path().join(if cfg!(windows) {
+        "hermes.exe"
+    } else {
+        "hermes"
+    });
+    std::fs::copy(std::env::current_exe().unwrap(), &wrapper).unwrap();
+    let native = format!(
+        "{} --ignored --exact ui::pending_pane::creation::consumer_tests::pending_scope_child --nocapture",
+        quote_for_shell(&wrapper.to_string_lossy(), Some(shell))
+    );
+    let command = lyrel_core::host::session_operations::scoped_agent_launch_command(
+        &*lyrel_core::host::local::LocalHost::new(),
+        crate::core::cli_agent::CLIAgent::Hermes,
+        &native,
+        Some(shell),
+    )
+    .unwrap();
+    assert!(
+        command.contains("KITTY_WINDOW_ID"),
+        "the prepared command carries the presence-sensitive marker: {command}"
+    );
+
+    let (app, mut vcx, _original_stream) = test_window::harness_with_pane(cx);
+    let (waiting, parts, mut daemon) = app.update_in(&mut vcx, |app, window, cx| {
+        let cfg = cx.global_mut::<crate::core::config::Config>();
+        cfg.shell = Some(crate::core::config::ShellConfig {
+            program: shell.into(),
+            args: Vec::new(),
+        });
+        let waiting = pending(app, window, cx);
+        let slot = PaneSlot::Connecting(waiting.clone());
+        crate::ui::agent_launch::run_prepared_when_ready(&slot, command.clone(), cx);
+        let (parts, daemon) =
+            crate::terminal::view::quiet_test_shell_parts(97, Some(app.workspace));
+        (waiting, parts, daemon)
+    });
+    deliver(&waiting, Ok(parts), &mut vcx);
+    daemon
+        .set_read_timeout(Some(std::time::Duration::from_millis(20)))
+        .unwrap();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(8);
+    let line = loop {
+        vcx.executor()
+            .advance_clock(std::time::Duration::from_millis(50));
+        vcx.run_until_parked();
+        if let Ok(crate::daemon::protocol::ClientMsg::Input(bytes)) =
+            crate::daemon::protocol::ClientMsg::read(&mut daemon)
+        {
+            break String::from_utf8(bytes)
+                .unwrap()
+                .trim_end_matches('\r')
+                .to_owned();
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the prepared command never reached its landed pane"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    };
+    let normalize = |text: &str| text.replace("\r\n", "\n").replace('\r', "\n");
+    assert_eq!(
+        normalize(&line),
+        normalize(&command),
+        "a prepared command is already scoped and must be typed verbatim"
+    );
+
+    for (inherited, expected) in [(None, "lyrel"), (Some("owned-window"), "owned-window")] {
+        let output = dir.path().join(format!("marker-{expected}.json"));
+        let mut process = std::process::Command::new(shell);
+        process.args(if posix {
+            vec!["-c"]
+        } else {
+            vec!["-NoProfile", "-Command"]
+        });
+        process
+            .env("LYREL_PENDING_SCOPE_OUTPUT", &output)
+            .env("TERM_PROGRAM", "lyrel");
+        if let Some(value) = inherited {
+            process.env("KITTY_WINDOW_ID", value);
+        } else {
+            process.env_remove("KITTY_WINDOW_ID");
+        }
+        let result = process.arg(&line).output().unwrap();
+        assert!(
+            result.status.success(),
+            "{}",
+            String::from_utf8_lossy(&result.stderr)
+        );
+        let actual: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(output).unwrap()).unwrap();
+        assert_eq!(actual["TERM_PROGRAM"], "kitty");
+        assert_eq!(actual["TERM_PROGRAM_VERSION"], "");
+        assert_eq!(actual["LC_TERMINAL"], "lyrel");
+        assert_eq!(
+            actual["KITTY_WINDOW_ID"], expected,
+            "the marker defaults only when the target shell has no value"
+        );
+    }
+}

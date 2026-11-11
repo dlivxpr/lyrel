@@ -73,19 +73,29 @@ pub struct SearchState {
     pub input: Entity<InputState>,
     pub matches: Vec<Match>,
     pub current_index: Option<usize>,
-    /// Scrollback depth the `matches` lines are counted against. Match points
-    /// are grid-relative, so this is what turns one back into the absolute row
-    /// it named — see [`TerminalView::refresh_matches_after_output`]. It is the
-    /// depth at the last scan until output scrolls the grid, which moves the
-    /// lines and this together (see
-    /// [`TerminalView::rebase_matches_after_scroll`]) so the anchors hold.
-    scanned_history: usize,
+    /// Absolute live start at the scan, including evicted history. Saturated
+    /// scrollback must rebase matches just like a growing history does.
+    scanned_origin: usize,
+    scanned_reading: Option<(u64, u64)>,
+    /// The bar was opened while the user was reading. A live search that
+    /// happens to scroll to a history match stays live and must keep
+    /// rescanning under output.
+    opened_in_reading: bool,
+    scanned_query: Option<String>,
     _subs: Vec<Subscription>,
 }
 
 impl SearchState {
     pub fn current(&self) -> Option<&Match> {
         self.current_index.and_then(|i| self.matches.get(i))
+    }
+
+    pub(super) fn presentation_matches(&self, reading: Option<(u64, u64)>) -> bool {
+        self.scanned_reading == reading
+    }
+
+    pub(super) fn origin(&self) -> i64 {
+        self.scanned_origin as i64
     }
 }
 
@@ -94,7 +104,8 @@ impl SearchState {
 struct Scan {
     matches: Vec<Match>,
     regex_error: bool,
-    history: usize,
+    origin: usize,
+    bottom: Pos,
 }
 
 impl Scan {
@@ -102,17 +113,18 @@ impl Scan {
         Self {
             matches: Vec::new(),
             regex_error,
-            history: 0,
+            origin: 0,
+            bottom: Pos::new(Line(0), Column(0)),
         }
     }
 }
 
-/// A match point's row counted from the top of scrollback, which survives the
-/// grid scrolling under it — the same anchor a command mark or a placed image
-/// uses, with the same caveat once the scrollback is full and the discard count
-/// stops being observable.
-fn anchor_row(history: usize, point: &Pos) -> i64 {
-    history as i64 + point.row.0 as i64
+/// A match point's absolute GUI-mirror row survives the live grid scrolling
+/// under it — the same anchor a command mark or a placed image
+/// uses. The live origin includes evicted history, so saturated scrollback
+/// keeps the same absolute identity until the row is actually discarded.
+fn anchor_row(origin: usize, point: &Pos) -> i64 {
+    origin as i64 + point.row.0 as i64
 }
 
 impl TerminalView {
@@ -125,9 +137,11 @@ impl TerminalView {
         // longer names anything; here the query IS the selection, so it is
         // put back after the scan (#584).
         let mut seeded_selection = None;
+        let mut seeded_presented = false;
         if fresh {
             let seed = self.selected_search_seed();
             if seed.is_some() {
+                seeded_presented = self.selection_scroll.has_presented();
                 seeded_selection = self.terminal.term.lock().selection.clone();
             }
             let seed = seed.unwrap_or_else(|| self.search_last_query.clone());
@@ -141,7 +155,10 @@ impl TerminalView {
                 input,
                 matches: Vec::new(),
                 current_index: None,
-                scanned_history: 0,
+                scanned_origin: 0,
+                scanned_reading: None,
+                opened_in_reading: self.selection_scroll.reading.is_some(),
+                scanned_query: None,
                 _subs: subs,
             });
         }
@@ -153,7 +170,7 @@ impl TerminalView {
             crate::ui::prefill::select_all_when_drawn(&input, window, cx);
         }
         if fresh {
-            self.recompute_matches(cx);
+            self.recompute_matches_inner(seeded_presented, cx);
             if let Some(selection) = seeded_selection {
                 self.terminal.term.lock().selection = Some(selection);
             }
@@ -220,18 +237,18 @@ impl TerminalView {
     /// scrolling the grid makes every one of them name a different line —
     /// which is what [`TerminalView::rebase_matches_after_scroll`] undoes
     /// between scans. Nothing here caches, and both callers re-read the grid.
-    fn scan_matches(&self, query: &str) -> Scan {
+    fn scan_matches(&self, query: &str) -> Option<Scan> {
         let mut matches: Vec<Match> = Vec::new();
         if query.is_empty() {
-            return Scan::empty(false);
+            return Some(Scan::empty(false));
         }
         let pattern = self.effective_search_pattern(query);
         let Ok(mut regex) = RegexSearch::new(&pattern) else {
-            return Scan::empty(true);
+            return Some(Scan::empty(true));
         };
-        let term = self.terminal.term.lock();
+        let term = self.terminal.term.try_lock()?;
         let grid = &term.grid;
-        let history = grid.history_size();
+        let live_origin = super::reading::live_start(&term) as usize;
         let mut origin = Pos::new(grid.topmost_line(), Column(0));
 
         while matches.len() < MAX_MATCHES {
@@ -250,26 +267,104 @@ impl TerminalView {
                 break;
             }
         }
-        Scan {
+        let bottom = Pos::new(
+            Line(term.screen_lines() as i32 - 1 - term.display_offset() as i32),
+            term.grid.last_column(),
+        );
+        drop(term);
+        if let Some(reading) = self.selection_scroll.reading.as_ref() {
+            // Rio remains the search authority for unretained history. Its
+            // matches cannot annotate rows whose semantic source is frozen.
+            matches.retain(|m| {
+                !reading.intersects_rows(
+                    live_origin as i64 + i64::from(m.start().row.0),
+                    live_origin as i64 + i64::from(m.end().row.0),
+                )
+            });
+            if let Ok(regex) = regex::RegexBuilder::new(&pattern)
+                .case_insensitive(!self.search_case_sensitive)
+                .build()
+            {
+                let mut text = String::new();
+                let mut points = Vec::new();
+                let mut previous = None;
+                let mut wrapped = false;
+                let flush = |text: &mut String,
+                             points: &mut Vec<(usize, Pos)>,
+                             matches: &mut Vec<Match>| {
+                    for found in regex.find_iter(text).filter(|found| !found.is_empty()) {
+                        if matches.len() >= MAX_MATCHES {
+                            break;
+                        }
+                        let start = points
+                            .partition_point(|(byte, _)| *byte <= found.start())
+                            .saturating_sub(1);
+                        let end = points
+                            .partition_point(|(byte, _)| *byte < found.end())
+                            .saturating_sub(1);
+                        matches.push(points[start].1..=points[end].1);
+                    }
+                    text.clear();
+                    points.clear();
+                };
+                for (row, cells) in reading.rows() {
+                    if previous.is_some_and(|previous| row != previous + 1 || !wrapped) {
+                        flush(&mut text, &mut points, &mut matches);
+                    }
+                    for (col, cell) in cells.iter().enumerate() {
+                        if matches!(
+                            cell.wide,
+                            rio_vt::crosswords::square::Wide::Spacer
+                                | rio_vt::crosswords::square::Wide::LeadingSpacer
+                        ) {
+                            continue;
+                        }
+                        let point = Pos::new(
+                            super::reading::grid_line(live_origin as i64, row),
+                            Column(col),
+                        );
+                        points.push((text.len(), point));
+                        text.push(if matches!(cell.c, '\0' | '\u{10eeee}') {
+                            ' '
+                        } else {
+                            cell.c
+                        });
+                        if cell.c != '\u{10eeee}' {
+                            for &mark in cell.marks.as_deref().unwrap_or_default() {
+                                points.push((text.len(), point));
+                                text.push(mark);
+                            }
+                        }
+                    }
+                    previous = Some(row);
+                    wrapped = cells.last().is_some_and(|cell| cell.wrapped);
+                }
+                flush(&mut text, &mut points, &mut matches);
+                matches.sort_unstable_by_key(|m| {
+                    (
+                        m.start().row.0,
+                        m.start().col.0,
+                        m.end().row.0,
+                        m.end().col.0,
+                    )
+                });
+                matches.truncate(MAX_MATCHES);
+            }
+        }
+        Some(Scan {
             matches,
             regex_error: false,
-            history,
-        }
+            origin: live_origin,
+            bottom,
+        })
     }
 
     /// The match a fresh query starts on: the last one at or above the bottom
     /// of what is on screen, so Enter walks forward from where the eye is.
-    fn match_nearest_the_viewport(&self, matches: &[Match]) -> Option<usize> {
+    fn match_nearest_the_viewport(&self, matches: &[Match], bottom: Pos) -> Option<usize> {
         if matches.is_empty() {
             return None;
         }
-        let term = self.terminal.term.lock();
-        let grid = &term.grid;
-        let display_offset = grid.display_offset() as i32;
-        let bottom = Pos::new(
-            Line(grid.screen_lines() as i32 - 1 - display_offset),
-            grid.last_column(),
-        );
         Some(
             matches
                 .iter()
@@ -297,6 +392,22 @@ impl TerminalView {
             return;
         }
         self.rebase_matches_after_scroll(cx);
+        // A frozen reading is the search's semantic source. Output cannot
+        // change its rows, so only a query or semantic-set change may rescan;
+        // `sync_search_presentation` notices those on the next frame.
+        if self
+            .selection_scroll
+            .reading
+            .as_ref()
+            .is_some_and(|reading| {
+                self.search.as_ref().is_some_and(|search| {
+                    search.opened_in_reading
+                        && search.scanned_reading == Some(reading.content_identity())
+                })
+            })
+        {
+            return;
+        }
         self.search_scan_epoch = self.search_scan_epoch.wrapping_add(1);
         if self.search_scan_armed {
             return;
@@ -343,11 +454,14 @@ impl TerminalView {
     /// *shrank* — a cleared scrollback, a swap to the alt screen — moved every
     /// anchor by an amount this cannot see, so that case rescans instead.
     fn rebase_matches_after_scroll(&mut self, cx: &mut Context<Self>) {
-        let history = self.terminal.term.lock().grid.history_size();
+        let term = self.terminal.term.lock();
+        let live_origin = super::reading::live_start(&term) as usize;
+        let topmost = term.grid.topmost_line().0;
+        drop(term);
         let Some(s) = self.search.as_mut() else {
             return;
         };
-        let drift = history as i64 - s.scanned_history as i64;
+        let drift = live_origin as i64 - s.scanned_origin as i64;
         if drift == 0 {
             return;
         }
@@ -357,7 +471,6 @@ impl TerminalView {
         }
 
         let drift = drift as i32;
-        let topmost = -(history as i32);
         let moved = |p: &Pos| Pos::new(Line(p.row.0 - drift), p.col);
         // The matches are in grid order, so the ones that fell off the top are
         // a prefix — and a match whose start survived kept its end too.
@@ -370,7 +483,7 @@ impl TerminalView {
             *m = start..=end;
         }
         s.current_index = s.current_index.and_then(|i| i.checked_sub(gone));
-        s.scanned_history = history;
+        s.scanned_origin = live_origin;
     }
 
     /// Re-run the query against the grid as it now stands, keeping the count
@@ -388,7 +501,13 @@ impl TerminalView {
         else {
             return;
         };
-        let scan = self.scan_matches(&query);
+        let Some(scan) = self.scan_matches(&query) else {
+            if let Some(search) = self.search.as_mut() {
+                search.scanned_query = None;
+            }
+            self.retry_grid_when_available(cx);
+            return;
+        };
         // Stay on the match the user stepped to if it survived. Compare where
         // it was by absolute row, not by line: a line is only meaningful with
         // the scrollback depth it was counted against, and matching on the raw
@@ -398,26 +517,36 @@ impl TerminalView {
         let previous = self
             .search
             .as_ref()
-            .and_then(|s| Some((*s.current()?.start(), s.scanned_history)))
-            .map(|(p, history)| (anchor_row(history, &p), p.col));
+            .and_then(|s| Some((*s.current()?.start(), s.scanned_origin)))
+            .map(|(p, origin)| (anchor_row(origin, &p), p.col));
         let current_index = previous
             .and_then(|(row, column)| {
                 scan.matches.iter().position(|m| {
-                    anchor_row(scan.history, m.start()) == row && m.start().col == column
+                    anchor_row(scan.origin, m.start()) == row && m.start().col == column
                 })
             })
-            .or_else(|| self.match_nearest_the_viewport(&scan.matches));
+            .or_else(|| self.match_nearest_the_viewport(&scan.matches, scan.bottom));
 
         if let Some(s) = self.search.as_mut() {
             s.matches = scan.matches;
             s.current_index = current_index;
-            s.scanned_history = scan.history;
+            s.scanned_origin = scan.origin;
+            s.scanned_reading = self
+                .selection_scroll
+                .reading
+                .as_ref()
+                .map(|reading| reading.content_identity());
+            s.scanned_query = Some(query);
         }
         self.search_regex_error = scan.regex_error;
         cx.notify();
     }
 
     pub(super) fn recompute_matches(&mut self, cx: &mut Context<Self>) {
+        self.recompute_matches_inner(false, cx);
+    }
+
+    fn recompute_matches_inner(&mut self, preserve_presented: bool, cx: &mut Context<Self>) {
         let Some(query) = self
             .search
             .as_ref()
@@ -426,13 +555,27 @@ impl TerminalView {
             return;
         };
 
-        let scan = self.scan_matches(&query);
-        let current_index = self.match_nearest_the_viewport(&scan.matches);
+        let Some(scan) = self.scan_matches(&query) else {
+            if let Some(search) = self.search.as_mut() {
+                search.scanned_query = None;
+                search.matches.clear();
+                search.current_index = None;
+            }
+            self.retry_grid_when_available(cx);
+            return;
+        };
+        let current_index = self.match_nearest_the_viewport(&scan.matches, scan.bottom);
 
         if let Some(s) = self.search.as_mut() {
             s.matches = scan.matches;
             s.current_index = current_index;
-            s.scanned_history = scan.history;
+            s.scanned_origin = scan.origin;
+            s.scanned_reading = self
+                .selection_scroll
+                .reading
+                .as_ref()
+                .map(|reading| reading.content_identity());
+            s.scanned_query = Some(query);
         }
         self.search_regex_error = scan.regex_error;
 
@@ -440,8 +583,14 @@ impl TerminalView {
         let hidden = self.rows_behind_the_search_bar();
         let mut term = self.terminal.term.lock();
         term.selection = None;
-        if let Some(m) = current {
-            scroll_match_into_view(&mut term, &m, hidden);
+        if !preserve_presented {
+            self.selection_scroll.clear_presented();
+        }
+        if !term.synchronized_output() {
+            if let Some(m) = current {
+                scroll_match_into_view(&mut term, &m, hidden);
+            }
+            self.selection_scroll.did_scroll(&term, &self.terminal);
         }
         drop(term);
         self.terminal.viewport_reporter().report();
@@ -466,9 +615,30 @@ impl TerminalView {
             s.matches[next].clone()
         };
         let hidden = self.rows_behind_the_search_bar();
-        scroll_match_into_view(&mut self.terminal.term.lock(), &current, hidden);
+        let mut term = self.terminal.term.lock();
+        if !term.synchronized_output() {
+            scroll_match_into_view(&mut term, &current, hidden);
+            self.selection_scroll.did_scroll(&term, &self.terminal);
+        }
+        drop(term);
         self.terminal.viewport_reporter().report();
         cx.notify();
+    }
+
+    /// Scrollbar and search navigation share the reading owner. Refresh only
+    /// when its semantic row set changes; viewport movement reuses anchors.
+    pub(super) fn sync_search_presentation(&mut self, cx: &mut Context<Self>) {
+        let key = self
+            .selection_scroll
+            .reading
+            .as_ref()
+            .map(|reading| reading.content_identity());
+        if self.search.as_ref().is_some_and(|search| {
+            search.scanned_reading != key
+                || search.scanned_query.as_deref() != Some(search.input.read(cx).value().as_ref())
+        }) {
+            self.refresh_matches_after_output(cx);
+        }
     }
 
     fn rows_behind_the_search_bar(&self) -> i32 {
@@ -1776,6 +1946,12 @@ fn truncate_at_unbalanced_close(token: &mut String) {
             _ => {}
         }
     }
+}
+
+/// Whether a hard line break between two cells continues one URL. Reading and
+/// pointer hit-testing must agree on the same join rule.
+pub(super) fn continues_url(last: char, next: char) -> bool {
+    is_url_char(last) && is_url_char(next) && next != '@'
 }
 
 pub(super) fn is_url_char(c: char) -> bool {

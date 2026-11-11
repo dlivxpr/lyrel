@@ -2,38 +2,6 @@
 // decoder output and TerminalElement paint/geometry. The headless GPUI window
 // does not certify final GPU pixels or replace the native reopen acceptance.
 
-fn graphics_consumer_progress(cx: &mut TestAppContext) {
-    cx.update(|cx| cx.refresh_windows());
-    cx.executor()
-        .advance_clock(std::time::Duration::from_millis(5));
-    cx.run_until_parked();
-    std::thread::sleep(std::time::Duration::from_millis(5));
-}
-
-fn graphics_recovery_wait(
-    cx: &mut TestAppContext,
-    reason: &str,
-    ready: impl FnMut(&mut TestAppContext) -> bool,
-) {
-    graphics_recovery_wait_with(cx, std::time::Duration::from_secs(30), ready, |_| reason.to_owned());
-}
-
-/// Native agent startup and full-size replay need longer deadlines and live
-/// diagnostics, but must pump the same production consumer lifecycle.
-#[track_caller]
-fn graphics_recovery_wait_with(
-    cx: &mut TestAppContext,
-    timeout: std::time::Duration,
-    mut ready: impl FnMut(&mut TestAppContext) -> bool,
-    mut diagnostics: impl FnMut(&mut TestAppContext) -> String,
-) {
-    let deadline = std::time::Instant::now() + timeout;
-    while !ready(cx) {
-        assert!(std::time::Instant::now() < deadline, "{}", diagnostics(cx));
-        graphics_consumer_progress(cx);
-    }
-}
-
 fn graphics_recovery_fresh(
     daemon: &GraphicsDaemonProcess,
     pane: u64,
@@ -76,62 +44,6 @@ fn graphics_recovery_fresh_at(
     (view, window)
 }
 
-fn graphics_recovery_destroy(
-    view: Entity<TerminalView>,
-    window: gpui_kit::AnyWindowHandle,
-    cx: &mut TestAppContext,
-) {
-    let entity_id = view.entity_id();
-    let weak_view = view.downgrade();
-    let (store_released, pixels) = view.read_with(cx, |view, _| {
-        let store = view.terminal.images();
-        let pixels: Vec<_> = store
-            .snapshot()
-            .iter()
-            .filter_map(|image| image.data.as_ref().map(std::sync::Arc::downgrade))
-            .collect();
-        (store.release_probe(), pixels)
-    });
-    // The headless platform keeps its active TestWindow (and that window's
-    // production IME handler, which owns a strong TerminalView) independently
-    // of App's window map. Simulate the native blur before removing the window
-    // so the test platform cannot keep the closed consumer alive forever.
-    gpui_kit::VisualTestContext::from_window(window, cx).deactivate_window();
-    window
-        .update(cx, |_, window, _| window.remove_window())
-        .unwrap();
-    drop(view);
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
-    loop {
-        // Dropping the final Entity handle queues its value for release. The
-        // normal App::update turn flushes that queue and invokes on_release;
-        // running the test dispatcher alone does not drop the entity value.
-        cx.update(|_| {});
-        let view_alive = weak_view.upgrade().is_some();
-        let store_alive = !store_released();
-        let textures_alive = pixels
-            .iter()
-            .filter(|pixel| pixel.upgrade().is_some())
-            .count();
-        if !view_alive && !store_alive && textures_alive == 0 {
-            break;
-        }
-        assert!(
-            std::time::Instant::now() < deadline,
-            "old consumer did not actually die: view_alive={view_alive}, store_alive={store_alive}, textures_alive={textures_alive}"
-        );
-        cx.executor()
-            .advance_clock(std::time::Duration::from_millis(5));
-        cx.run_until_parked();
-        std::thread::sleep(std::time::Duration::from_millis(5));
-    }
-    cx.update(|cx| {
-        assert_eq!(
-            crate::terminal::lifecycle::displayed_for_test(cx, entity_id),
-            None
-        );
-    });
-}
 
 #[track_caller]
 fn graphics_recovery_stats(

@@ -49,12 +49,13 @@ flowchart LR
 | 桌面平台根 workspace 全成员测试 | `cargo test --workspace --locked` |
 | 桌面 updater 专项测试（Windows/macOS） | `cargo test --locked --features updater --bin lyrel-updater` |
 | 真实 native Markdown 字形消费者（Windows/macOS） | `cargo test --locked -p lyrel --features native-markdown-tests --test native_markdown` |
+| 真实 native 终端字形消费者（Windows/macOS） | `cargo test --locked -p lyrel --features native-markdown-tests --test native_terminal` |
 | 桌面 library 单元测试 | `cargo test --locked -p lyrel --lib` |
 | 格式检查／写回 | `cargo fmt --check` / `cargo fmt` |
 | Host 架构边界检查，需 Bash 与 LF 脚本行尾 | `bash .github/scripts/check-host-boundary.sh` |
 | 补充 lint，CI 未运行此项 | `cargo clippy --workspace --all-targets --locked` |
 
-Windows/macOS 默认 `build`/`test` 覆盖桌面、`lyrel-markdown-editor`、GUI-free `lyrel-text` 与 core/server/CLI；CI 另执行非默认 `native-markdown-tests` 真实字形目标。Linux 使用 `cargo build --locked --workspace --exclude lyrel --exclude lyrel-markdown-editor --all-features` 与对应 `cargo test`；`lyrel-text` 可参与 headless 检查，GUI 依赖不得进入 core/server/CLI。Linux 完整 features 需 MIT Kerberos 开发依赖及 `LIBGSSAPI_IMPL=mit`。不引入手机网关。
+Windows/macOS 默认 `build`/`test` 覆盖桌面、`lyrel-markdown-editor`、GUI-free `lyrel-text` 与 core/server/CLI；CI 另执行非默认 `native-markdown-tests` 下的 `native_markdown` 与 `native_terminal` 两个真实字形目标。Linux 使用 `cargo build --locked --workspace --exclude lyrel --exclude lyrel-markdown-editor --all-features` 与对应 `cargo test`；`lyrel-text` 可参与 headless 检查，GUI 依赖不得进入 core/server/CLI。Linux 完整 features 需 MIT Kerberos 开发依赖及 `LIBGSSAPI_IMPL=mit`。不引入手机网关。
 
 Windows 下此 Bash 检查需 LF 工作树：CRLF 脚本会报 `$'\r': command not found`／`invalid option name`。`.gitattributes` 已为 `.sh` 固定 LF；先排除行尾问题，不通过扩大 allowlist 掩盖。
 
@@ -94,7 +95,7 @@ Windows 下此 Bash 检查需 LF 工作树：CRLF 脚本会报 `$'\r': command n
 - Rust edition 2024，CI 使用 stable；仓库未固定具体 toolchain/MSRV。使用 Cargo 与现有 lockfile，不把本机 Rust 版本写成项目要求。
 - 第三方 Rust 依赖默认只用正式 registry，不引入 Git、自定义第三方 path 或 `[patch]`，也不修改下载源码。唯一已批准的源码导入例外为 #236 指定 Zorite editor/bidi 与 #241 的 ratex GUI，独立维护于 `lyrel-markdown-editor`，保留 pinned 来源、MIT notices 与本地修改记录；不是 GPL app 导入许可。编辑此模块先读 `crates/lyrel-markdown-editor/HOST_CAPABILITIES.md`。GUI 仍只经 `gpui-kit` 的官方 Fast 类型；`lyrel-text` 是原 Apache-2.0 codec 的共享 GUI-free 所有者，不是 editor 到 app/core 的反向依赖。
 - Git CLI 仍用于产品的 Git 工作流，不再是 Cargo Git 依赖的拉取前提。Windows MSVC 已设 `+crt-static`，不要用 `RUSTFLAGS` 意外覆盖；ConPTY 先运行 `pwsh scripts/prepare-conpty.ps1`，共享核心的构建脚本只消费准备结果。Linux headless 的 GSSAPI 依赖与 `LIBGSSAPI_IMPL=mit` 见 `.github/workflows/ci.yml`；Windows/macOS 连接 Linux 的 SSH/SFTP、Host/PTY 与 WSL 接线不可因桌面退役删除。
-- 默认配置目录为 Unix 的 `~/.config/lyrel`、Windows 的 `%APPDATA%\lyrel`；覆盖顺序为 `--config-dir`、`LYREL_CONFIG_DIR`、便携模式、默认目录。调试与测试使用隔离目录，避免影响已安装实例。产品注入的 `TERM_PROGRAM` 值为 `lyrel`；标准环境变量键保持原样。
+- 默认配置目录为 Unix 的 `~/.config/lyrel`、Windows 的 `%APPDATA%\lyrel`；覆盖顺序为 `--config-dir`、`LYREL_CONFIG_DIR`、便携模式、默认目录。调试与测试使用隔离目录，避免影响已安装实例。产品级注入的 `TERM_PROGRAM` 值为 `lyrel`；标准环境变量键保持原样。已批准的 #248 例外只作用于已知 coding agent 的命令作用域启动：该命令内临时使用 `TERM_PROGRAM=kitty` 等兼容身份，显式值优先，命令结束恢复 pane 基线；不改变产品级身份或普通 shell。
 
 ## 测试与质量保障
 

@@ -913,7 +913,12 @@ impl RemoteTerminal {
         let history_origin = term.grid.lines_evicted() as i64 + term.grid.history_size() as i64;
         self.images
             .clear_presentation(history, rows, history_origin);
-        self.proxy.parse_state.presentation.lock().unwrap().cursor = None;
+        self.proxy
+            .parse_state
+            .presentation
+            .lock()
+            .unwrap()
+            .invalidate_reading();
         false
     }
 

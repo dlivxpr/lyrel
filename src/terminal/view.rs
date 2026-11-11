@@ -188,6 +188,7 @@ struct FrameFacts {
     alt_screen: bool,
     mouse_mode: bool,
     has_selection: bool,
+    reading_identity: Option<(u64, i64, usize, i64, i64)>,
     cursor: Option<(usize, usize)>,
     rows: usize,
     cols: usize,
@@ -213,6 +214,8 @@ pub struct TerminalView {
     remote_clipboard_write_in_flight: Option<u64>,
     remote_clipboard_write_generation: u64,
     pub focus_handle: FocusHandle,
+    reading_focus: FocusHandle,
+    reading_obstruction: std::rc::Rc<std::cell::Cell<Pixels>>,
     pub(super) lifecycle: super::lifecycle::TerminalLifecycle,
     pub font: Font,
     pub font_bold: Option<Font>,
@@ -691,6 +694,7 @@ impl TerminalView {
                 foreground: |view, window, cx| view.poll_foreground(window, cx),
                 detach: |view| {
                     view.grid_snap = None;
+                    view.selection_scroll.clear_scrollback();
                     view.terminal.detach_link();
                 },
             },
@@ -712,6 +716,8 @@ impl TerminalView {
             remote_clipboard_write_in_flight: None,
             remote_clipboard_write_generation: 0,
             focus_handle,
+            reading_focus: cx.focus_handle().tab_stop(true),
+            reading_obstruction: std::rc::Rc::new(std::cell::Cell::new(px(0.))),
             lifecycle,
             font,
             font_bold,
@@ -797,6 +803,9 @@ impl TerminalView {
         let cols_changed = cols != self.terminal.size().cols;
         if (cols, rows) != (self.terminal.size().cols, self.terminal.size().rows) {
             self.links.invalidate_geometry();
+            let term = self.terminal.term.lock();
+            self.selection_scroll
+                .prepare_resize(&term, &self.terminal, cols, rows);
         }
         self.cell_width = cell_width;
         self.line_height = line_height;
@@ -819,6 +828,20 @@ impl TerminalView {
             (line_height.as_f32() * scale).round().max(1.) as u16,
         ) {
             self.retry_grid_when_available(cx);
+        }
+        if self
+            .selection_scroll
+            .reading
+            .as_ref()
+            .is_some_and(|reading| reading.relocating())
+        {
+            let grid = self.terminal.term.clone();
+            if let Some(mut term) = grid.try_lock() {
+                self.selection_scroll
+                    .sync_reading(&mut term, &self.terminal);
+            } else {
+                self.retry_grid_when_available(cx);
+            }
         }
         if cols_changed && self.search.is_some() {
             self.refresh_matches_after_output(cx);
@@ -954,6 +977,7 @@ impl TerminalView {
         self.grid_snap = None;
         self.grid_buf.clear();
         self.selection_scroll.clear_presented();
+        self.selection_scroll.clear_scrollback();
         self.relink_abandoned = false;
         self.relink_inflight = false;
         self.title = self.default_title.clone();
@@ -1169,11 +1193,17 @@ impl TerminalView {
     }
 
     fn holds_presented_grid(&self) -> bool {
+        if self.selection_scroll.reading.is_some() {
+            return true;
+        }
         self.terminal.term.lock().synchronized_output()
             || self.grid_snap.as_ref().is_some_and(|snap| snap.held)
     }
 
     fn presented_grid(&self) -> Option<super::presentation::PresentedGrid<'_>> {
+        if let Some(reading) = self.selection_scroll.reading.as_ref() {
+            return Some(super::presentation::PresentedGrid::reading(reading));
+        }
         let geom = self.cell_geom?;
         let offset = self
             .grid_snap
@@ -1187,6 +1217,9 @@ impl TerminalView {
     }
 
     fn visible_selection_text(&self) -> Option<String> {
+        if self.selection_scroll.reading.is_some() {
+            return self.selection_scroll.reading_selection_text();
+        }
         let term = self.terminal.term.lock();
         if term.synchronized_output()
             || self.grid_snap.as_ref().is_some_and(|snap| snap.held)
@@ -1224,7 +1257,16 @@ impl TerminalView {
     }
 
     pub fn run_command_line(&self, cmd: &str) {
-        self.terminal.write(format!("{cmd}\r").into_bytes());
+        let bracketed = self
+            .terminal
+            .term
+            .lock()
+            .mode()
+            .contains(Mode::BRACKETED_PASTE);
+        self.terminal
+            .write(super::prompt_input::bytes::submit_bytes(
+                cmd, bracketed, false,
+            ));
     }
 
     pub fn shell_spec(&self) -> Option<ShellSpec> {
@@ -1357,8 +1399,15 @@ impl TerminalView {
     }
 
     pub fn select_all(&mut self, cx: &mut Context<Self>) {
-        let mut term = self.terminal.term.lock();
-        if term.synchronized_output() || self.grid_snap.as_ref().is_some_and(|snap| snap.held) {
+        let term = self
+            .selection_scroll
+            .reading
+            .is_none()
+            .then(|| self.terminal.term.lock());
+        if self.selection_scroll.reading.is_some()
+            || term.as_ref().is_some_and(|term| term.synchronized_output())
+            || self.grid_snap.as_ref().is_some_and(|snap| snap.held)
+        {
             drop(term);
             let selected = self
                 .selection_scroll
@@ -1370,6 +1419,7 @@ impl TerminalView {
             cx.notify();
             return;
         }
+        let mut term = term.unwrap();
         self.selection_scroll.select_all(&mut term);
         drop(term);
         cx.notify();
@@ -1522,8 +1572,11 @@ impl TerminalView {
                 self.terminal.write(out);
             }
             WheelRoute::Scrollback => {
-                self.selection_scroll
-                    .scroll_lines(&mut self.terminal.term.lock(), lines);
+                self.selection_scroll.scroll_lines(
+                    &mut self.terminal.term.lock(),
+                    lines,
+                    &self.terminal,
+                );
                 self.terminal.viewport_reporter().report();
                 cx.notify();
             }
@@ -1552,7 +1605,7 @@ impl TerminalView {
     /// Clear presentation without discarding retained history or restarting
     /// the process. Only a live pane receives Ctrl+L through its own transport.
     pub fn clear_screen(&mut self, cx: &mut Context<Self>) {
-        self.selection_scroll.cancel_animation();
+        self.jump_to_prompt();
         if self.terminal.clear_presentation(false) {
             self.terminal.write(vec![0x0c_u8]);
         }
@@ -1560,7 +1613,7 @@ impl TerminalView {
     }
 
     pub fn clear_scrollback(&mut self, cx: &mut Context<Self>) {
-        self.selection_scroll.clear_scrollback();
+        self.jump_to_prompt();
         if self.terminal.clear_presentation(true) {
             self.terminal.write(vec![0x0c_u8]);
         }
@@ -1737,8 +1790,15 @@ impl TerminalView {
         shift: bool,
         cx: &mut Context<Self>,
     ) {
-        let mut term = self.terminal.term.lock();
-        if term.synchronized_output() || self.grid_snap.as_ref().is_some_and(|snap| snap.held) {
+        let term = self
+            .selection_scroll
+            .reading
+            .is_none()
+            .then(|| self.terminal.term.lock());
+        if self.selection_scroll.reading.is_some()
+            || term.as_ref().is_some_and(|term| term.synchronized_output())
+            || self.grid_snap.as_ref().is_some_and(|snap| snap.held)
+        {
             drop(term);
             if let Some(geom) = self.cell_geom {
                 let selected = self.selection_scroll.start_presented(
@@ -1761,6 +1821,7 @@ impl TerminalView {
             }
             return;
         }
+        let mut term = term.unwrap();
         self.selection_scroll.start(
             &mut term,
             col,
@@ -1780,7 +1841,9 @@ impl TerminalView {
         }
         if !self.selection_scroll.has_presented() {
             let mut term = self.terminal.term.lock();
-            if (term.synchronized_output() || self.grid_snap.as_ref().is_some_and(|snap| snap.held))
+            if (self.selection_scroll.reading.is_some()
+                || term.synchronized_output()
+                || self.grid_snap.as_ref().is_some_and(|snap| snap.held))
                 && let Some(geom) = self.cell_geom
             {
                 self.selection_scroll.adopt_presented(
@@ -1823,7 +1886,7 @@ impl TerminalView {
         left: bool,
         cx: &mut Context<Self>,
     ) {
-        if self.selection_scroll.has_presented() {
+        if self.selection_scroll.has_presented() && self.selection_scroll.reading.is_none() {
             return;
         }
         let Some(epoch) = self.selection_scroll.autoscroll(overshoot, col, left) else {
@@ -1850,7 +1913,8 @@ impl TerminalView {
         let moved = self.selection_scroll.drag_tick(
             epoch,
             || self.terminal.term.lock(),
-            &cx.global::<Config>().word_separators,
+            cx.global::<Config>(),
+            &self.terminal,
         );
         let Some(moved) = moved else {
             return false;
@@ -1929,7 +1993,9 @@ impl TerminalView {
     /// Apply a direct viewport movement and report only an actual visual change.
     fn smooth_scroll(&mut self, delta: f32, cx: &mut Context<Self>) -> bool {
         let mut term = self.terminal.term.lock();
-        let moved = self.selection_scroll.smooth_scroll(&mut term, delta);
+        let moved = self
+            .selection_scroll
+            .smooth_scroll(&mut term, delta, &self.terminal);
         drop(term);
         self.terminal.viewport_reporter().report();
         if moved {
@@ -1939,9 +2005,11 @@ impl TerminalView {
     }
 
     fn scroll_anim_frame(&mut self, epoch: u64, cx: &mut Context<Self>) -> bool {
-        let frame = self
-            .selection_scroll
-            .animation_frame(epoch, || self.terminal.term.lock());
+        let frame = self.selection_scroll.animation_frame(
+            epoch,
+            || self.terminal.term.lock(),
+            &self.terminal,
+        );
         let Some((moved, running)) = frame else {
             return false;
         };
@@ -1963,20 +2031,37 @@ impl TerminalView {
             return false;
         };
         if term.synchronized_output() {
+            self.selection_scroll
+                .invalidate_reading(&mut term, &self.terminal);
             // Render facts belong to the same committed picture as the cells.
             // Keyboard/mouse protocol routing still consults the live terminal.
             return true;
         }
         if let Some(target) = self.scroll_handle.take_pending() {
-            self.selection_scroll.scroll_to(&mut term, target);
+            self.selection_scroll
+                .scroll_to(&mut term, target, &self.terminal);
+        }
+        self.selection_scroll
+            .sync_reading(&mut term, &self.terminal);
+        let reading_identity = self
+            .selection_scroll
+            .reading
+            .as_ref()
+            .map(|reading| reading.identity());
+        if self.frame.reading_identity != reading_identity
+            || (reading_identity.is_none() && self.frame.display_offset != term.display_offset())
+        {
+            self.links.invalidate_geometry();
         }
         let cursor = term.cursor().pos;
         let row = cursor.row.0 + term.display_offset() as i32;
         self.frame = FrameFacts {
             alt_screen: term.mode().contains(Mode::ALT_SCREEN),
             mouse_mode: term.mode().intersects(Mode::MOUSE_MODE),
-            has_selection: term.selection.is_some(),
-            cursor: (row >= 0).then_some((row as usize, cursor.col.0)),
+            reading_identity,
+            has_selection: self.selection_scroll.has_presented() || term.selection.is_some(),
+            cursor: (self.selection_scroll.reading.is_none() && row >= 0)
+                .then_some((row as usize, cursor.col.0)),
             rows: term.screen_lines(),
             cols: term.columns(),
             display_offset: term.grid.display_offset(),
@@ -2866,6 +2951,10 @@ pub(crate) fn quiet_test_ssh_pane_with(
 #[path = "agent_activity_tests.rs"]
 mod agent_activity_tests;
 
+#[cfg(feature = "native-markdown-tests")]
+#[path = "native_terminal_tests.rs"]
+pub(crate) mod native_terminal_tests;
+
 #[cfg(test)]
 mod gpui_tests {
     use super::test_support::*;
@@ -3084,10 +3173,14 @@ mod gpui_tests {
     include!("graphics_recovery_consumer_tests.rs");
     include!("graphics_playback_consumer_tests.rs");
     include!("graphics_capacity_consumer_tests.rs");
+    include!("native_picture_support.rs");
     include!("pi_replay_consumer_tests.rs");
+    include!("native_static_consumer_tests.rs");
     include!("graphics_relative_consumer_tests.rs");
     include!("native_ssh_consumer_tests.rs");
     include!("lifecycle_consumer_tests.rs");
+    include!("reading_consumer_tests.rs");
+    include!("reading_lifecycle_consumer_tests.rs");
 
     #[gpui_kit::test]
     fn graphics_consumer_streamed_png_and_compression_render_after_rejected_transfer(
@@ -3816,7 +3909,8 @@ mod gpui_tests {
         for _ in 0..200 {
             if window
                 .update(cx, |view, _, _| {
-                    view.terminal.term.lock().selection.is_none()
+                    let term = view.terminal.term.lock();
+                    term.selection.is_none() && term.grid.history_size() == 0
                 })
                 .unwrap()
             {
@@ -4540,6 +4634,47 @@ mod gpui_tests {
             .unwrap();
     }
 
+    #[gpui_kit::test]
+    fn run_command_line_submits_multiline_scoped_launch_as_one_bracketed_paste(
+        cx: &mut TestAppContext,
+    ) {
+        let (_window, view, mut daemon) = rooted_harness(cx);
+        DaemonMsg::Output(b"\x1b[?2004h".to_vec())
+            .encode(&mut daemon)
+            .unwrap();
+        for _ in 0..200 {
+            let bracketed = cx.update(|cx| {
+                view.read(cx)
+                    .terminal
+                    .term
+                    .lock()
+                    .mode()
+                    .contains(Mode::BRACKETED_PASTE)
+            });
+            if bracketed {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        assert!(cx.update(|cx| {
+            view.read(cx)
+                .terminal
+                .term
+                .lock()
+                .mode()
+                .contains(Mode::BRACKETED_PASTE)
+        }));
+
+        cx.update(|cx| {
+            view.read(cx)
+                .run_command_line("& {\n    Write-Output 'scoped-launch-ok'\n}")
+        });
+        assert_eq!(
+            next_input(&mut daemon),
+            b"\x1b[200~& {\n    Write-Output 'scoped-launch-ok'\n}\x1b[201~\r"
+        );
+    }
+
     /// The composer end to end on a live pane: laid over the agent's input
     /// once the input is on screen, a message leaves as one paste and then its
     /// own Enter, the box steps aside — keyboard and all — while the agent
@@ -4946,6 +5081,33 @@ mod gpui_tests {
         });
     }
 
+    /// A frozen reading is the search's semantic source. Output that leaves
+    /// its rows unchanged must not schedule a rescan; only a query or
+    /// semantic-set change may.
+    #[gpui_kit::test]
+    fn output_under_a_reading_search_does_not_rescan_unchanged_rows(cx: &mut TestAppContext) {
+        let (window, view, _daemon) = rooted_harness(cx);
+        print(cx, &view, filler(80));
+        view.update(cx, |view, cx| view.smooth_scroll(10., cx));
+        window
+            .update(cx, |_, window, cx| {
+                view.update(cx, |v, cx| {
+                    v.open_search(window, cx);
+                    let input = v.search.as_ref().unwrap().input.clone();
+                    input.update(cx, |s, cx| s.set_value("filler", window, cx));
+                    v.recompute_matches(cx);
+                    assert!(v.selection_scroll.reading.is_some());
+                    assert!(!v.search.as_ref().unwrap().matches.is_empty());
+                });
+            })
+            .unwrap();
+        print(cx, &view, vec!["filler new".to_string()]);
+        assert!(
+            !view.read_with(cx, |v, _| v.search_scan_armed),
+            "unchanged frozen rows must not schedule a search rescan"
+        );
+    }
+
     /// Print lines into the grid and post the wakeup the reader thread would
     /// have posted behind them.
     ///
@@ -5195,7 +5357,7 @@ mod gpui_tests {
         print(cx, &view, filler(160));
         view.update(cx, |view, _| {
             view.selection_scroll
-                .scroll_to(&mut view.terminal.term.lock(), 1);
+                .scroll_to(&mut view.terminal.term.lock(), 1, &view.terminal);
         });
         vcx.update(|window, cx| {
             window.refresh();

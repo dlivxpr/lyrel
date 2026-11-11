@@ -21,6 +21,26 @@ impl TerminalView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        // A child Button owns its keyboard activation. Never encode its Enter
+        // as PTY input while the event bubbles through the terminal surface.
+        if self.reading_focus.is_focused(window) {
+            if ev.keystroke.key == "escape" || ev.keystroke.key == "tab" {
+                window.focus(&self.focus_handle, cx);
+                cx.stop_propagation();
+            }
+            return;
+        }
+        if self.selection_scroll.reading.is_some()
+            && self.focus_handle.is_focused(window)
+            && ev.keystroke.key == "tab"
+            && !ev.keystroke.modifiers.control
+            && !ev.keystroke.modifiers.platform
+            && !ev.keystroke.modifiers.alt
+        {
+            window.focus(&self.reading_focus, cx);
+            cx.stop_propagation();
+            return;
+        }
         let link_dropped_on_a_remote_pane =
             self.workspace().is_some() && !self.terminal.child_exited();
         if self.terminal.exited && !link_dropped_on_a_remote_pane {
