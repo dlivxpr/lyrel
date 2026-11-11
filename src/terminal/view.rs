@@ -3909,7 +3909,8 @@ mod gpui_tests {
         for _ in 0..200 {
             if window
                 .update(cx, |view, _, _| {
-                    view.terminal.term.lock().selection.is_none()
+                    let term = view.terminal.term.lock();
+                    term.selection.is_none() && term.grid.history_size() == 0
                 })
                 .unwrap()
             {

@@ -1358,36 +1358,34 @@ mod tests {
     fn generated_bridges_share_public_scope_keys_without_cross_agent_policies() {
         let host = crate::host::local::LocalHost::new();
         let target = HookTarget::local_for_exe(&*host, std::env::current_exe().unwrap()).unwrap();
-        for (agent, expected) in [
-            (
-                HookAgent::Pi,
-                vec![
-                    "HOME",
-                    "USERPROFILE",
-                    "PI_CODING_AGENT_DIR",
-                    "PI_CODING_AGENT_SESSION_DIR",
-                    "PI_IMAGE_PROTOCOL",
-                ],
-            ),
-            (
-                HookAgent::OhMyPi,
-                vec![
-                    "HOME",
-                    "USERPROFILE",
-                    "OMP_PROFILE",
-                    "PI_PROFILE",
-                    "PI_CONFIG_DIR",
-                    "PI_CODING_AGENT_DIR",
-                    "PI_CONFIG_FILES",
-                    "XDG_CONFIG_HOME",
-                    "XDG_DATA_HOME",
-                    "XDG_STATE_HOME",
-                    "XDG_CACHE_HOME",
-                    "PI_FORCE_IMAGE_PROTOCOL",
-                    "PI_KITTY_PLACEHOLDERS",
-                    "PI_NO_KITTY_PLACEHOLDERS",
-                ],
-            ),
+        // Public scope shared by both bridges: home/storage plus the terminal
+        // identity that the #248 command-scoped launch captures and restores.
+        const COMMON: &[&str] = &["HOME", "USERPROFILE", "PI_CODING_AGENT_DIR"];
+        const TERMINAL: &[&str] = &[
+            "TERM_PROGRAM",
+            "TERM_PROGRAM_VERSION",
+            "LC_TERMINAL",
+            "LC_TERMINAL_VERSION",
+            "KITTY_WINDOW_ID",
+        ];
+        const PI_PRIVATE: &[&str] = &["PI_CODING_AGENT_SESSION_DIR", "PI_IMAGE_PROTOCOL"];
+        const OMP_PRIVATE: &[&str] = &[
+            "OMP_PROFILE",
+            "PI_PROFILE",
+            "PI_CONFIG_DIR",
+            "PI_CONFIG_FILES",
+            "XDG_CONFIG_HOME",
+            "XDG_DATA_HOME",
+            "XDG_STATE_HOME",
+            "XDG_CACHE_HOME",
+            "PI_FORCE_IMAGE_PROTOCOL",
+            "PI_KITTY_PLACEHOLDERS",
+            "PI_NO_KITTY_PLACEHOLDERS",
+            "PI_NO_DECCARA",
+        ];
+        for (agent, private, other_private) in [
+            (HookAgent::Pi, PI_PRIVATE, OMP_PRIVATE),
+            (HookAgent::OhMyPi, OMP_PRIVATE, PI_PRIVATE),
         ] {
             let source = owned_file_content(&target, agent).unwrap();
             let declaration = source
@@ -1396,10 +1394,22 @@ mod tests {
                 .unwrap();
             let mut actual: Vec<String> =
                 serde_json::from_str(declaration.trim_end_matches(';')).unwrap();
-            let mut expected = expected;
+            let mut expected: Vec<String> = COMMON
+                .iter()
+                .chain(TERMINAL)
+                .chain(private)
+                .map(|key| (*key).to_string())
+                .collect();
             actual.sort();
             expected.sort();
             assert_eq!(actual, expected, "{} bridge scope contract", agent.slug());
+            assert!(
+                actual
+                    .iter()
+                    .all(|key| !other_private.contains(&key.as_str())),
+                "{} bridge must not capture the other agent's private scope policy",
+                agent.slug()
+            );
             assert!(
                 actual
                     .iter()

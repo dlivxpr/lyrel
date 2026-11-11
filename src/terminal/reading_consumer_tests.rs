@@ -1534,7 +1534,7 @@ fn reading_entered_after_a_resize_request_relocates_when_ordered_size_arrives(
     DaemonMsg::Output(scene).encode(&mut sender).unwrap();
     reading_ordered_screen(&mut sender, 97, 0);
     graphics_recovery_wait(cx, "ordered baseline did not paint", |cx| {
-        view.read_with(cx, |view, _| view.grid_snap.is_some())
+        view.read_with(cx, |view, _| view.scrollback_text().contains("LONGSTART"))
     });
     // No reading exists yet, so the request has to be remembered by the
     // viewport owner rather than by a `ReadingView`.
@@ -1581,7 +1581,7 @@ fn tab_map_changes_do_not_block_a_pending_reading_relocation(cx: &mut TestAppCon
     DaemonMsg::Output(scene).encode(&mut sender).unwrap();
     reading_ordered_screen(&mut sender, 97, 0);
     graphics_recovery_wait(cx, "ordered baseline did not paint", |cx| {
-        view.read_with(cx, |view, _| view.grid_snap.is_some())
+        view.read_with(cx, |view, _| view.scrollback_text().contains("LONGSTART"))
     });
     reading_scroll_to_live_row(&view, cx, "LONGSTART", 0);
     reading_request_window_size(window, &view, cx, TermSize::new(40, 24));
@@ -1629,7 +1629,7 @@ fn returning_to_live_during_relocation_drops_the_reading_and_pill(cx: &mut TestA
     DaemonMsg::Output(scene).encode(&mut sender).unwrap();
     reading_ordered_screen(&mut sender, 97, 0);
     graphics_recovery_wait(cx, "ordered baseline did not paint", |cx| {
-        view.read_with(cx, |view, _| view.grid_snap.is_some())
+        view.read_with(cx, |view, _| view.scrollback_text().contains("LINE-119"))
     });
     view.update(cx, |view, cx| {
         view.smooth_scroll(47., cx);

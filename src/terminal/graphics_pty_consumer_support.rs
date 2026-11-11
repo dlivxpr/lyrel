@@ -486,6 +486,11 @@ fn graphics_assert_production_paint_at(
             .map(|image| (image.painted.clone(), image.painted.load(Ordering::Acquire)))
             .collect();
         for image in images {
+            // An evicted placement cannot be painted again; keep its last
+            // claim instead of clearing a flag no later frame can restore.
+            if image.evicted {
+                continue;
+            }
             image.painted.store(false, Ordering::Release);
         }
         previous
@@ -592,6 +597,11 @@ fn graphics_assert_production_paint_at(
         let offset = snap.display_offset;
         let images = &snap.images;
         for image in images.iter() {
+            // An evicted placement is historical: it cannot be painted in
+            // this frame, and its last claim is intentionally preserved.
+            if image.evicted {
+                continue;
+            }
             let expected = images.iter().filter(|other| std::sync::Arc::ptr_eq(&image.painted, &other.painted)).any(|other| {
                 let (crop, _) = other.paint_bounds(geom.origin, geom.cell_width, geom.line_height, 0, offset, scale);
                 let visible = crop.intersect(&viewport);
