@@ -585,10 +585,16 @@ impl Default for SharedStore {
 pub struct ImageStore(Arc<SharedStore>);
 
 fn retire(resource: Resource, retired: &mut Vec<Arc<Residency>>) {
-    if let Some(decoded) = resource.decoded
-        && resource.painted.load(Ordering::Acquire)
-    {
-        retired.push(decoded.residency);
+    if let Some(decoded) = resource.decoded {
+        if resource.painted.load(Ordering::Acquire) {
+            retired.push(decoded.residency);
+        } else {
+            // No atlas tile was ever allocated for these pixels. A committed
+            // frame may still borrow the decoded CPU pixels, but the GPU page
+            // lease must not stay charged to the desktop until that frame is
+            // replaced: a detached pane may never paint or drop it.
+            decoded.residency.gpu.lock().unwrap().take();
+        }
     }
 }
 
