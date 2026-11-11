@@ -5,7 +5,7 @@
 
 格式参考 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)，版本遵循 [Semantic Versioning](https://semver.org/spec/v2.0.0.html)。
 
-## [Unreleased]
+## [0.3.2] - 2026-11-11
 
 ### 新增
 
@@ -21,6 +21,8 @@
 - #236／#241：导入固定 MIT `ratex-gpui 0.4.1` 结构公式内核并适配 Kit/Fast；原生行内/块级渲染、二维分式/根式/定界符、补全、上下文菜单与原位提交/取消接入共享 Document。提交只修改公式正文及显式对齐标记，取消与未修改提交保留原始定界符、混合行尾和 attached spelling；过期 seat/render 与有损结构解析拒绝应用并显示原因。新增生产工作台与完整 400034 B 高原子/fragment 原生消费者；构建、运行和固定参考实窗比较由集成验收执行，未宣称通过。
 - #236／#244：为 Zorite-derived 原生 Markdown 配置随缩放变化的正文留白、列表／引用节奏与提示块图标，主题切换不重置模式和历史；保留紧凑标题／提示块 disclosure。新增行首 slash／键盘插入菜单与真实颜色草稿、取消、应用和清除入口，引用续行／退出、格式和双视图修改均使用同一文档历史。代码交付不代表原生同源文对照、完整长行／affinity 或系统 IME 已复验。
 - #236／#242：Zorite-derived Markdown 的所有 presentation 接入真正 native Mermaid Host，复用正式 Merman `0.9.2`、安全 SVG 管线与 Kit/Fast renderer；当前 source 编辑、Undo/Redo 与 live/source 共用 Document，提供 loading、可见诊断、错误恢复、主题字号和异步几何/scroll 锚定。派生结果按文档、块 owner、request、revision 与 source/style lease 隔离；移除或修改块不接受旧结果。新增生产工作台 native 消费者及精确 Host 保存重开覆盖；集中检查与固定参考实窗对照由集成验收执行，未在本分票中宣称通过。
+- #247／#251：终端新增稳定阅读态：离开实时输出后以绝对行身份保留一屏语义文字，按首次读取内容冻结，后台输出、光标定位、擦除与重画不改写当前阅读；底部提供 `↓ N 行 · 回到实时输出` 按钮，支持点击、Tab／Enter、直接输入或粘贴返回。文字、直接 Kitty placements 与 Unicode placeholders 共用 `ReadingView`，选择／复制、链接、搜索、光标／IME 读取同一语义来源；resize reflow 保持逻辑阅读位置，清屏／reset／重连／隐藏窗格按独立失效世代释放阅读行与图片 lease。新增真实 PTY／daemon／生产绘制与 GPUI 交互消费者；#255 已在隔离 Windows 生产窗口和 headless consumer 矩阵运行，macOS／Linux 原生窗口与真实远端 SSH 仍未验收。
+- #248：为快捷启动的 omp 增加命令级 Kitty 图形兼容 scope 与 streaming SVG 原生证据；显式终端身份优先，不继承宿主版本，不修改用户全局 agent 配置或普通 shell 身份。保留协议禁用、显式关闭与零新消息重放；父 shell 身份改从 daemon 只读 `Observe` 回放独立核验，不把可被 TUI 覆盖的 VT 呈现当作追加式 PTY transcript。
 
 ### 修复
 
@@ -45,7 +47,6 @@
 - #236 双轴审查：图片/图表显式回收 GPU atlas，图片预览与 cache 共用释放 lease；资源扫描使用权威 Document snapshot。关闭非 composition owner 的视图不再终结存活输入的 IME；格式转换与后续 typing 分离为 Undo 事务，no-op Trim 不覆盖先前选区。正文菜单完整双语并随语言切换更新，MDX 改回 Markdown 恢复既有双视图链接能力；公式保留缩进/空 fence 边界，纯 caret/selection 移动不重新栅格化，选区绘制复用单帧行索引。新增真实工作台/native 消费者，实际验证由集成者集中记录。
 - #236 最终实窗发现并修复折叠标题内的块公式／Mermaid 残留：折叠行的可见性先于资源 widget 布局，同时维护隐藏 fence 的状态。既有真实字体工作台消费者新增加载图形后折叠／展开的相邻标题几何、原文和 clean 状态验证，不缩减图形或改为源码绕过。
 - #204 的旧投影、Rope 同步与专属工具栏已由 #236 默认实现替代；旧版本的输入、几何与真实字体结果仍是历史记录，不作为本次导入的通过证明。完整 Unicode/软换行/原子对象/长行/表格/保存/history 合同迁到新工作台消费者，明确退役的 rich-MDX 与 notebook 交互不以兼容内核保留。
-- #203：适配正式 `sysinfo =0.40.1` 的可失败构造与主机名 API，保留不支持平台和底层错误，不返回伪造 CPU／RAM 样本。维持仅 `system` feature、原有有效值检查、每秒共享快照与空闲基线重置；refresh API 仍返回 `()`，不宣称能够检测依赖内部未公开的刷新失败。
 - #175／#180：macOS 反向搜索中的 Cmd+Enter 只执行当前选中的历史命令，不再触发窗口全屏；空匹配不运行草稿，其他上下文与非 macOS 默认绑定保持不变。
 - #175／#181：Windows 便携更新在解析 ZIP 目录前限制实际条目数与 ZIP64 资源字段，并限制单条目压缩／展开大小；保留最多 4096 项与累计 1 GiB 上限，以及 checksum、EOF CRC、路径和重复项检查，异常包在停止 daemon 或移动原安装前拒绝。
 - #175／#182：修复 fish 登录 shell 下远端 server 安装与重启的 POSIX 脚本和嵌套路径引用，保留 shell 拒绝启动的实际状态及诊断，避免将 stdio／pane bridge 当作 daemon 停止。
@@ -60,8 +61,21 @@
 - #175／#193：GitHub 同域安全 API 重定向保留认证，支持仓库重命名或转移；跨域及 HTTPS 降级仍不转发令牌。
 - #175／#198：终端 `path:start-end` 引用按窗格 Host 与工作目录解析，并在内置编辑器定位到范围第一行。
 - #175 最终审查：空关注队列的信息提示进入应用通知历史，可回看完整内容并复制；终端分别保留左／中／右按钮已报告按下的所有权，不因另一个按钮松开而丢失配对报告；无 `/proc` 的远端 daemon 探测和停止接受任意位置的独立 `--daemon` 参数，继续排除 bridge 及参数／路径中的同名片段。
+- #253：终端 resize／reflow 时按逻辑行身份重定位阅读位置：反复窄宽、Unicode／marks、相同 256 字符前缀的最近候选、空行上下文、淘汰后的估计与最老边界、等面积旧画面、等待中的滚动、请求取代及没有后续 PTY 输出的提交均保持当前阅读；不改变 live 输出、选择语义或历史淘汰。新增 `reading_resize_` 生产消费者，覆盖真实 PTY／daemon 与人为分开 `Size`／`Screen` 的有序 pane stream；后者仍使用真实 `RemoteTerminal` 和 rooted `TerminalView`，不是原生窗口或 SSH 证明。
+- #254：阅读态生命周期失效与路由加固：`3J`／`RIS`／同批备用屏往返、Snapshot／relink、超过 10,000 行容量压力、过期图片后 resize／同 image ID 新版本、隐藏窗格输出与窗口关闭均按独立世代释放阅读行与图片 lease；滚轮路由始终读取实时终端模式，Shift 保留本地回滚逃生。新增六项受控生产消费者；#255 已运行，macOS／Linux 原生窗口未验收。
+- #247 最终回归：多行命令启动作为一次 paste 提交；修复 full-suite 搜索、淘汰图片与 scrollback 回归；退休图形资源时释放未绘制的 GPU page lease；Pi／OMP bridge scope 契约固定到共享终端身份，不继承宿主版本。
+
+### 依赖升级
+
+- GPUI Kit 升级到 `0.9.1`，继续通过官方 `gpui-fast` feature 使用 Fast 后端；同步 `gpui-pre-reqwest-client =0.3.12`，适配原生 foreground ranges、软换行 caret affinity、颜色选择器焦点与 Markdown 消费者 API。新增 `lyrel-markdown-editor`（Zorite-derived GPUI Fast Markdown 编辑器）与 GUI-free `lyrel-text` 共享 codec 两个 workspace 成员；Windows／macOS 默认成员包含 editor，Linux headless 排除桌面包。
+- #202：`resvg` 从 `0.48.1` 升级到 `0.49.0`，保留 `text`、`system-fonts`、`raster-images`、`svgz` 与关闭默认 features 的配置；同步锁定传递依赖。
+- #203：适配正式 `sysinfo =0.40.1` 的可失败构造与主机名 API，保留不支持平台和底层错误，不返回伪造 CPU／RAM 样本。维持仅 `system` feature、原有有效值检查、每秒共享快照与空闲基线重置；refresh API 仍返回 `()`，不宣称能够检测依赖内部未公开的刷新失败。
+- #201：`cargo-minor-patch` 组升级 8 项传递依赖，保留既有锁定与平台特性。
 
 ### 验证边界
+
+- #255：在隔离 Windows 生产窗口与 native SSH → 容器 sshd → Linux `lyrel-server` 远程窗口完成桌面端到端验收，覆盖持续输出、静默 resize、反复窄宽、滚动、主题、pill、选择、搜索与全屏 reflow；macOS／Linux 桌面原生窗口、真实中文 IME、触控板惯性与远端带宽／帧率仍未验收。
+- #247 原生图形矩阵：omp、pi、OpenCode、Kimi Code 与 Hermes 的图片消费者在真实 PTY／生产终端运行，保留完整像素、placement、卸载／重挂载与关闭策略断言；不替代 macOS／Linux 实窗与系统 IME 验收。
 
 - #236 最终无探针 Windows Release 已完成普通／完整长文／48 列宽表／完整资源文档的输入、精确保存及 100 项 Undo／Redo；最终真实 SSH 验证 BOM／混合行尾保存重开、图片／链接／公式／Mermaid，以及物理键系统中文 IME 的提交／取消与单步 Undo。Windows 全 features workspace 含 35 项无筛选真实字体消费者通过；Linux headless 与两平台 hosted 构建／打包结果另记。负责人明确接受长文完整历史的整应用 private bytes `183.6 → 306.6 MiB` 成本，不宣称严格延迟不劣性；原失败、macOS 实窗／系统 IME 与实际安装未验边界见 `docs/window/side-panel.mdx`。
 - #236 macOS 首轮 CI 的颜色选择器消费者为 `34 passed / 1 failed`：测试误用 Windows `Ctrl+A`，未替换十六进制输入。改用既有跨平台 `secondary-a`，保留精确颜色、取消、清除、双视图历史与保存断言；不修改产品快捷键或放宽预期。后续结果见 Markdown 编辑器的最终集成验收记录。
