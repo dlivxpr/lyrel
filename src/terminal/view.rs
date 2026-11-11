@@ -1258,7 +1258,16 @@ impl TerminalView {
     }
 
     pub fn run_command_line(&self, cmd: &str) {
-        self.terminal.write(format!("{cmd}\r").into_bytes());
+        let bracketed = self
+            .terminal
+            .term
+            .lock()
+            .mode()
+            .contains(Mode::BRACKETED_PASTE);
+        self.terminal
+            .write(super::prompt_input::bytes::submit_bytes(
+                cmd, bracketed, false,
+            ));
     }
 
     pub fn shell_spec(&self) -> Option<ShellSpec> {
@@ -4622,6 +4631,47 @@ mod gpui_tests {
                 });
             })
             .unwrap();
+    }
+
+    #[gpui_kit::test]
+    fn run_command_line_submits_multiline_scoped_launch_as_one_bracketed_paste(
+        cx: &mut TestAppContext,
+    ) {
+        let (_window, view, mut daemon) = rooted_harness(cx);
+        DaemonMsg::Output(b"\x1b[?2004h".to_vec())
+            .encode(&mut daemon)
+            .unwrap();
+        for _ in 0..200 {
+            let bracketed = cx.update(|cx| {
+                view.read(cx)
+                    .terminal
+                    .term
+                    .lock()
+                    .mode()
+                    .contains(Mode::BRACKETED_PASTE)
+            });
+            if bracketed {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        assert!(cx.update(|cx| {
+            view.read(cx)
+                .terminal
+                .term
+                .lock()
+                .mode()
+                .contains(Mode::BRACKETED_PASTE)
+        }));
+
+        cx.update(|cx| {
+            view.read(cx)
+                .run_command_line("& {\n    Write-Output 'scoped-launch-ok'\n}")
+        });
+        assert_eq!(
+            next_input(&mut daemon),
+            b"\x1b[200~& {\n    Write-Output 'scoped-launch-ok'\n}\x1b[201~\r"
+        );
     }
 
     /// The composer end to end on a live pane: laid over the agent's input
