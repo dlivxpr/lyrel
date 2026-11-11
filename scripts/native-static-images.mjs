@@ -9,7 +9,7 @@ import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { encodePng } from './graphics-fixture-utils.mjs';
+import { encodePng, fixturePicture } from './graphics-fixture-utils.mjs';
 
 const args = process.argv.slice(2);
 const option = (name, fallback) => { const i = args.indexOf(name); return i < 0 ? fallback : args[i + 1]; };
@@ -23,14 +23,8 @@ assert.equal(execFileSync('git', ['-C', source, 'rev-parse', 'HEAD'], { encoding
 execFileSync('git', ['-C', source, 'diff', '--exit-code', 'HEAD', '--', '.'], { stdio: 'pipe' });
 
 function picture(index) {
-  const scan = Buffer.alloc(24 * (48 * 4 + 1));
-  for (let y = 0; y < 24; y++) for (let x = 0; x < 48; x++) {
-    const rgb = x >= 22 && x < 26 && y >= 10 && y < 14 ? [255, 255, 255]
-      : y < 12 ? x < 24 ? [255, 0, index * 11] : [0, 255, index * 7]
-      : x < 24 ? [index * 5, 0, 255] : [255, 255, 0];
-    scan.set([...rgb, 255], y * (48 * 4 + 1) + 1 + x * 4);
-  }
-  return encodePng(48, 24, scan);
+  const { width, height, scan } = fixturePicture(index);
+  return encodePng(width, height, scan);
 }
 
 if (!args.includes('--worker')) {

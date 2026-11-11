@@ -498,7 +498,7 @@ fn read_path_from_shell(shell: &str, args: &[&str]) -> Option<String> {
 #[cfg(unix)]
 fn enrich_path_from_login_shell() {
     let shell = crate::core::shells::login_shell();
-    let fish = std::path::Path::new(&shell).file_name() == Some("fish".as_ref());
+    let fish = crate::core::shell_quote::shell_base_name(&shell).eq_ignore_ascii_case("fish");
     let cmd = if fish {
         format!("printf '{PATH_MARKER}%s{PATH_MARKER}' (string join ':' $PATH)")
     } else {

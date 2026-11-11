@@ -697,13 +697,17 @@ fn scope_environment_prefix(
     Ok(prefix)
 }
 
+/// One command-scoped identity policy for the encoded prefix and the prepared
+/// environment. Explicit command-line assignments still win at both seams.
+const AGENT_COMPATIBILITY_DEFAULTS: &[(&str, &str)] = &[
+    ("TERM_PROGRAM", "kitty"),
+    ("TERM_PROGRAM_VERSION", ""),
+    ("LC_TERMINAL", "lyrel"),
+    ("LC_TERMINAL_VERSION", env!("CARGO_PKG_VERSION")),
+];
+
 fn compatibility_environment(agent: CLIAgent, environment: &mut BTreeMap<String, String>) {
-    for (key, value) in [
-        ("TERM_PROGRAM", "kitty"),
-        ("TERM_PROGRAM_VERSION", ""),
-        ("LC_TERMINAL", "lyrel"),
-        ("LC_TERMINAL_VERSION", env!("CARGO_PKG_VERSION")),
-    ] {
+    for &(key, value) in AGENT_COMPATIBILITY_DEFAULTS {
         environment
             .entry(key.into())
             .or_insert_with(|| value.into());
@@ -731,31 +735,31 @@ pub fn agent_compatibility_command(agent: CLIAgent, line: &str) -> String {
     } else {
         line
     };
-    let mut command = String::with_capacity(line.len() + 160);
-    for (key, value, enabled) in [
-        ("TERM_PROGRAM", "kitty", true),
-        ("TERM_PROGRAM_VERSION", "''", true),
-        ("LC_TERMINAL", "lyrel", true),
-        ("LC_TERMINAL_VERSION", env!("CARGO_PKG_VERSION"), true),
-        ("PI_NO_DECCARA", "1", agent == CLIAgent::OhMyPi),
-        // Hermes' presence marker is resolved in the target shell, not here:
-        // an inherited explicit value (including empty) must stay authoritative.
-    ] {
-        if !enabled
-            || argv.as_ref().is_some_and(|argv| {
-                argv.iter().take_while(|arg| arg.contains('=')).any(|arg| {
-                    arg.split_once('=')
-                        .is_some_and(|(explicit, _)| explicit == key)
-                })
+    let explicit = |key: &str| {
+        argv.as_ref().is_some_and(|argv| {
+            argv.iter().take_while(|arg| arg.contains('=')).any(|arg| {
+                arg.split_once('=')
+                    .is_some_and(|(explicit, _)| explicit == key)
             })
-        {
+        })
+    };
+    let mut command = String::with_capacity(line.len() + 160);
+    for &(key, value) in AGENT_COMPATIBILITY_DEFAULTS {
+        if explicit(key) {
             continue;
         }
         command.push_str(key);
         command.push('=');
-        command.push_str(value);
+        // The portable prefix has no target shell yet; an empty value is
+        // written as the POSIX/PowerShell literal `''` and re-quoted later.
+        command.push_str(if value.is_empty() { "''" } else { value });
         command.push(' ');
     }
+    if agent == CLIAgent::OhMyPi && !explicit("PI_NO_DECCARA") {
+        command.push_str("PI_NO_DECCARA=1 ");
+    }
+    // Hermes' presence marker is resolved in the target shell, not here:
+    // an inherited explicit value (including empty) must stay authoritative.
     command.push_str(line);
     command
 }
@@ -864,12 +868,7 @@ fn encode_command_line(
 ) -> Result<String, SessionOperationError> {
     let shell = scope.shell_program.as_deref();
     if shell.is_some_and(|shell| {
-        shell
-            .rsplit(['/', '\\'])
-            .next()
-            .unwrap_or(shell)
-            .trim_end_matches(".exe")
-            .eq_ignore_ascii_case("nu")
+        crate::core::shell_quote::shell_base_name(shell).eq_ignore_ascii_case("nu")
     }) {
         let quote = crate::daemon::shell_integration::nu_string_literal;
         let command = format!(
@@ -954,7 +953,9 @@ fn encode_command_line(
         };
     }
     if default_kitty_marker {
-        let base = shell.unwrap_or("").rsplit(['/', '\\']).next().unwrap_or("");
+        let base = shell
+            .map(crate::core::shell_quote::shell_base_name)
+            .unwrap_or("");
         command = if quoting == Quoting::Cmd {
             format!(
                 "if defined KITTY_WINDOW_ID ({command}) else (set \"KITTY_WINDOW_ID=lyrel\" && {command})"

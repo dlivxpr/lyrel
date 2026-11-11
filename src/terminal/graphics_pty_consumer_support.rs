@@ -432,3 +432,237 @@ fn reading_painted_rows(view: &Entity<TerminalView>, cx: &mut TestAppContext) ->
             .collect()
     })
 }
+
+fn graphics_visible_images(view: &TerminalView) -> Vec<crate::terminal::images::RenderPlacement> {
+    use lyrel_core::core::kitty_graphics::placeholder_row;
+    let term = view.terminal.term.lock();
+    let offset = term.display_offset() as i32;
+    let rows: Vec<_> = (0..term.screen_lines())
+        .filter_map(|row| {
+            let slices = placeholder_row(
+                &term.grid,
+                rio_vt::crosswords::pos::Line(row as i32 - offset),
+            );
+            (!slices.is_empty()).then_some((row as i32, slices))
+        })
+        .collect();
+    view.terminal.images().snapshot_with_placeholders(&rows)
+}
+fn graphics_assert_production_paint(
+    window: gpui_kit::AnyWindowHandle,
+    view: &Entity<TerminalView>,
+    cx: &mut TestAppContext,
+) {
+    let size = view.read_with(cx, |view, _| {
+        let term = view.terminal.term.lock();
+        TermSize::new(term.columns(), term.screen_lines())
+    });
+    graphics_assert_production_paint_at(window, view, cx, size);
+}
+
+fn graphics_assert_production_paint_at(
+    window: gpui_kit::AnyWindowHandle,
+    view: &Entity<TerminalView>,
+    cx: &mut TestAppContext,
+    size: TermSize,
+) {
+    use gpui_kit::test::TestWindowExt as _;
+    use std::sync::atomic::Ordering;
+    let (target, cols, rows, scale) = graphics_window_geometry(window, view, cx, size);
+    // Preserve the requested grid through the actual prepaint sizing callback;
+    // otherwise a default test window would silently resize the real daemon.
+    cx.simulate_window_resize(window, target);
+    let previously_painted = view.update(cx, |view, _| {
+        let mut images = view
+            .grid_snap
+            .as_ref()
+            .map(|snap| snap.images.to_vec())
+            .unwrap_or_default();
+        // Reset both sides: frozen reading owns old leases, while a newly
+        // decoded live resource may not have entered the previous frame yet.
+        images.extend(graphics_visible_images(view));
+        let previous: Vec<_> = images
+            .iter()
+            .map(|image| (image.painted.clone(), image.painted.load(Ordering::Acquire)))
+            .collect();
+        for image in images {
+            image.painted.store(false, Ordering::Release);
+        }
+        previous
+    });
+    window
+        .update(cx, |_, window, _| {
+            window.activate_window();
+            window.refresh();
+        })
+        .unwrap();
+    // Decoded resources are live parser state, not a committed presentation.
+    // In particular, OpenCode can expose all six resources inside BSU before
+    // ESU (or an ordered resize) permits TerminalElement to replace its frame.
+    // Pump the real reader/decoder/window lifecycle instead of advancing only
+    // GPUI's virtual clock and comparing the new resources to a held picture.
+    graphics_recovery_wait_with(
+        cx,
+        std::time::Duration::from_secs(30),
+        |cx| {
+            window
+                .update(cx, |_, window, cx| window.render_frame(cx))
+                .unwrap();
+            view.read_with(cx, |view, _| {
+                let Some(geom) = view.cell_geom else {
+                    return false;
+                };
+                let Some(snap) = view.grid_snap.as_ref() else {
+                    return false;
+                };
+                if (geom.cols, geom.rows) != (cols, rows) {
+                    return false;
+                }
+                // Reading mode intentionally presents a frozen picture, rather
+                // than the advancing live image map. An ordered resize must first
+                // publish its relocated cells and graphics leases atomically.
+                if let Some(reading) = view.selection_scroll.reading.as_ref() {
+                    return !reading.relocating();
+                }
+                let term = view.terminal.term.lock();
+                if snap.held || term.synchronized_output() {
+                    return false;
+                }
+                if snap.display_offset != term.display_offset() as i32 {
+                    return false;
+                }
+                drop(term);
+                let images = graphics_visible_images(view);
+                images.len() == snap.images.len()
+                    && images
+                        .iter()
+                        .zip(snap.images.iter())
+                        .all(|(live, presented)| {
+                            live.placement == presented.placement
+                                && std::sync::Arc::ptr_eq(&live.painted, &presented.painted)
+                                && match (&live.data, &presented.data) {
+                                    (Some(live), Some(presented)) => {
+                                        std::sync::Arc::ptr_eq(live, presented)
+                                    }
+                                    (None, None) => true,
+                                    _ => false,
+                                }
+                                && live.paint_bounds(
+                                    geom.origin,
+                                    geom.cell_width,
+                                    geom.line_height,
+                                    0,
+                                    snap.display_offset,
+                                    scale,
+                                ) == presented.paint_bounds(
+                                    geom.origin,
+                                    geom.cell_width,
+                                    geom.line_height,
+                                    0,
+                                    snap.display_offset,
+                                    scale,
+                                )
+                        })
+            })
+        },
+        |cx| {
+            view.read_with(cx, |view, _| format!(
+            "production presentation did not commit current {cols}x{rows} resources; held={:?}; synchronized={}; graphics={}",
+            view.grid_snap.as_ref().map(|snap| snap.held),
+            view.terminal.term.lock().synchronized_output(),
+            view.terminal.images().recovery_diagnostics(),
+        ))
+        },
+    );
+    window.update(cx, |_, window, cx| {
+        let surface = window.find("terminal-surface").bounds();
+        let view = view.read(cx);
+        let geom = view.cell_geom.expect("rooted production TerminalElement must paint a fresh frame");
+        assert_eq!((geom.cols, geom.rows), (cols, rows));
+        // Inspect the picture actually consumed by production paint, not a
+        // fresh projection of live placements under frozen reading/held text.
+        let snap = view.grid_snap.as_ref().expect("committed production frame");
+        // Observe the stationary pane in GPUI's completed frame, independently
+        // of the shifted cell-row origin or the snapshot's private scroll state.
+        // The preceding row's image can therefore occupy its top sliver.
+        let viewport = Bounds::new(
+            surface.origin + point(px(GRID_PAD_X), px(GRID_PAD_Y)),
+            gpui_kit::size(geom.cell_width * cols as f32, geom.line_height * rows as f32),
+        );
+        let offset = snap.display_offset;
+        let images = &snap.images;
+        for image in images.iter() {
+            let expected = images.iter().filter(|other| std::sync::Arc::ptr_eq(&image.painted, &other.painted)).any(|other| {
+                let (crop, _) = other.paint_bounds(geom.origin, geom.cell_width, geom.line_height, 0, offset, scale);
+                let visible = crop.intersect(&viewport);
+                visible.size.width > px(0.) && visible.size.height > px(0.)
+            });
+            assert_eq!(image.painted.load(Ordering::Acquire), expected, "fresh production paint claim must match the current visible resource geometry; not GPU pixels");
+        }
+    }).unwrap();
+    // The flag also tracks atlas ownership. An offscreen texture painted in a
+    // previous frame must still be retired when a later user action removes it.
+    for (painted, previous) in previously_painted {
+        if previous {
+            painted.store(true, Ordering::Release);
+        }
+    }
+}
+fn graphics_recovery_destroy(
+    view: Entity<TerminalView>,
+    window: gpui_kit::AnyWindowHandle,
+    cx: &mut TestAppContext,
+) {
+    #[cfg(test)]
+    let entity_id = view.entity_id();
+    let weak_view = view.downgrade();
+    let (store_released, pixels) = view.read_with(cx, |view, _| {
+        let store = view.terminal.images();
+        let pixels: Vec<_> = store
+            .snapshot()
+            .iter()
+            .filter_map(|image| image.data.as_ref().map(std::sync::Arc::downgrade))
+            .collect();
+        (store.release_probe(), pixels)
+    });
+    // The headless platform keeps its active TestWindow (and that window's
+    // production IME handler, which owns a strong TerminalView) independently
+    // of App's window map. Simulate the native blur before removing the window
+    // so the test platform cannot keep the closed consumer alive forever.
+    gpui_kit::VisualTestContext::from_window(window, cx).deactivate_window();
+    window
+        .update(cx, |_, window, _| window.remove_window())
+        .unwrap();
+    drop(view);
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    loop {
+        // Dropping the final Entity handle queues its value for release. The
+        // normal App::update turn flushes that queue and invokes on_release;
+        // running the test dispatcher alone does not drop the entity value.
+        cx.update(|_| {});
+        let view_alive = weak_view.upgrade().is_some();
+        let store_alive = !store_released();
+        let textures_alive = pixels
+            .iter()
+            .filter(|pixel| pixel.upgrade().is_some())
+            .count();
+        if !view_alive && !store_alive && textures_alive == 0 {
+            break;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "old consumer did not actually die: view_alive={view_alive}, store_alive={store_alive}, textures_alive={textures_alive}"
+        );
+        cx.executor()
+            .advance_clock(std::time::Duration::from_millis(5));
+        cx.run_until_parked();
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    #[cfg(test)]
+    cx.update(|cx| {
+        assert_eq!(
+            crate::terminal::lifecycle::displayed_for_test(cx, entity_id),
+            None
+        );
+    });
+}

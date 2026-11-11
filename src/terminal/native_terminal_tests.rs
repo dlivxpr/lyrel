@@ -39,58 +39,6 @@ pub(crate) fn run_fixture() -> Option<std::process::ExitCode> {
     None
 }
 
-fn graphics_assert_production_paint(
-    window: gpui_kit::AnyWindowHandle,
-    view: &Entity<TerminalView>,
-    cx: &mut TestAppContext,
-) {
-    graphics_assert_production_paint_at(window, view, cx, TermSize::new(80, 24));
-}
-
-fn graphics_assert_production_paint_at(
-    window: gpui_kit::AnyWindowHandle,
-    view: &Entity<TerminalView>,
-    cx: &mut TestAppContext,
-    size: TermSize,
-) {
-    let (target, cols, rows, _) = graphics_window_geometry(window, view, cx, size);
-    cx.simulate_window_resize(window, target);
-    window
-        .update(cx, |_, window, cx| {
-            window.activate_window();
-            window.simulate_next_frame(cx);
-            window.render_frame(cx);
-            let geom = view
-                .read(cx)
-                .cell_geom
-                .expect("rooted production TerminalElement must paint");
-            assert_eq!((geom.cols, geom.rows), (cols, rows));
-        })
-        .unwrap();
-}
-
-fn graphics_recovery_destroy(
-    view: Entity<TerminalView>,
-    window: gpui_kit::AnyWindowHandle,
-    cx: &mut TestAppContext,
-) {
-    let weak = view.downgrade();
-    gpui_kit::VisualTestContext::from_window(window, cx).deactivate_window();
-    window
-        .update(cx, |_, window, _| window.remove_window())
-        .unwrap();
-    drop(view);
-    graphics_recovery_wait(
-        cx,
-        "native consumer must release its production view",
-        |cx| {
-            cx.update(|_| {});
-            weak.upgrade().is_none()
-        },
-    );
-}
-
-// Read the renderer's supported scene output, never RenderCell style flags.
 fn reading_painted_glyph_colors(
     window: gpui_kit::AnyWindowHandle,
     view: &Entity<TerminalView>,

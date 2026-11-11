@@ -61,6 +61,12 @@ pub(super) fn live_start<T: EventListener>(term: &Crosswords<T>) -> i64 {
     term.grid.lines_evicted() as i64 + term.grid.history_size() as i64
 }
 
+/// Project an absolute GUI-mirror row onto the live grid's local line. One
+/// spelling for retained capture, relocation and search anchors.
+pub(super) fn grid_line(origin: i64, row: i64) -> Line {
+    Line((row - origin) as i32)
+}
+
 impl ReadingView {
     pub(super) fn capture<T: EventListener>(
         term: &Crosswords<T>,
@@ -97,22 +103,31 @@ impl ReadingView {
         reading
     }
 
-    pub(super) fn prepare_resize<T: EventListener>(
+    /// Attach a resize request recorded before this reading existed. A request
+    /// whose ordered `Size` already landed needs no relocation: the capture is
+    /// already at the final geometry.
+    pub(super) fn prepare_resize_at<T: EventListener>(
         &mut self,
         term: &Crosswords<T>,
         terminal: &super::remote::RemoteTerminal,
-        cols: usize,
-        rows: usize,
+        target: (usize, usize),
+        revision: u64,
+        images_known: bool,
     ) {
-        let revision = terminal.presentation_facts().resize_revision;
-        let images_known = terminal.images().layout_known();
+        let facts = terminal.presentation_facts();
+        let applied =
+            (term.columns(), term.screen_lines()) == target && facts.resize_revision != revision;
+        drop(facts);
+        if applied {
+            return;
+        }
         if let Some(pending) = self.relocation.as_mut() {
-            pending.retarget((cols, rows), revision, images_known);
+            pending.retarget(target, revision, images_known);
         } else {
             self.relocation = Some(relocation::Relocation::capture(
                 self,
                 term,
-                (cols, rows),
+                target,
                 revision,
                 images_known,
             ));
@@ -167,7 +182,7 @@ impl ReadingView {
             let std::collections::btree_map::Entry::Vacant(entry) = self.rows.entry(row) else {
                 continue;
             };
-            let line = Line((row - origin) as i32);
+            let line = grid_line(origin, row);
             let cells = term.grid[line][..]
                 .iter()
                 .enumerate()
@@ -222,7 +237,7 @@ impl ReadingView {
         let joins = |row: i64| {
             let frozen = self.absolute_row(row);
             let following = self.absolute_row(row + 1);
-            let line = Line((row - live_start(term)) as i32);
+            let line = grid_line(live_start(term), row);
             let wrapped = frozen.and_then(|row| row.last()).map_or_else(
                 || {
                     term.grid[line][Column(term.columns() - 1)]
@@ -237,10 +252,7 @@ impl ReadingView {
             let next = following
                 .and_then(|row| row.first())
                 .map_or_else(|| term.grid[Line(line.0 + 1)][Column(0)].c(), |cell| cell.c);
-            wrapped
-                || (super::search::is_url_char(last)
-                    && super::search::is_url_char(next)
-                    && next != '@')
+            wrapped || super::search::continues_url(last, next)
         };
         let mut first = (self.top - 1).max(oldest);
         let mut last = (self.top + term.screen_lines() as i64).min(end);
@@ -272,13 +284,7 @@ impl ReadingView {
                 live_start(term) - retained.captured_live_start,
             );
         }
-        images.sort_unstable_by_key(|image| {
-            (
-                image.placement.z,
-                image.placement.image_id,
-                image.placement.key,
-            )
-        });
+        images.sort_unstable_by_key(super::images::placement_order);
         CommittedImages::new(images)
     }
 

@@ -75,7 +75,7 @@ pub struct SearchState {
     pub current_index: Option<usize>,
     /// Absolute live start at the scan, including evicted history. Saturated
     /// scrollback must rebase matches just like a growing history does.
-    scanned_history: usize,
+    scanned_origin: usize,
     scanned_reading: Option<(u64, u64)>,
     scanned_query: Option<String>,
     _subs: Vec<Subscription>,
@@ -91,7 +91,7 @@ impl SearchState {
     }
 
     pub(super) fn origin(&self) -> i64 {
-        self.scanned_history as i64
+        self.scanned_origin as i64
     }
 }
 
@@ -100,7 +100,7 @@ impl SearchState {
 struct Scan {
     matches: Vec<Match>,
     regex_error: bool,
-    history: usize,
+    origin: usize,
     bottom: Pos,
 }
 
@@ -109,7 +109,7 @@ impl Scan {
         Self {
             matches: Vec::new(),
             regex_error,
-            history: 0,
+            origin: 0,
             bottom: Pos::new(Line(0), Column(0)),
         }
     }
@@ -151,7 +151,7 @@ impl TerminalView {
                 input,
                 matches: Vec::new(),
                 current_index: None,
-                scanned_history: 0,
+                scanned_origin: 0,
                 scanned_reading: None,
                 scanned_query: None,
                 _subs: subs,
@@ -243,7 +243,7 @@ impl TerminalView {
         };
         let term = self.terminal.term.try_lock()?;
         let grid = &term.grid;
-        let history = super::reading::live_start(&term) as usize;
+        let live_origin = super::reading::live_start(&term) as usize;
         let mut origin = Pos::new(grid.topmost_line(), Column(0));
 
         while matches.len() < MAX_MATCHES {
@@ -272,8 +272,8 @@ impl TerminalView {
             // matches cannot annotate rows whose semantic source is frozen.
             matches.retain(|m| {
                 !reading.intersects_rows(
-                    history as i64 + i64::from(m.start().row.0),
-                    history as i64 + i64::from(m.end().row.0),
+                    live_origin as i64 + i64::from(m.start().row.0),
+                    live_origin as i64 + i64::from(m.end().row.0),
                 )
             });
             if let Ok(regex) = regex::RegexBuilder::new(&pattern)
@@ -314,7 +314,10 @@ impl TerminalView {
                         ) {
                             continue;
                         }
-                        let point = Pos::new(Line((row - history as i64) as i32), Column(col));
+                        let point = Pos::new(
+                            super::reading::grid_line(live_origin as i64, row),
+                            Column(col),
+                        );
                         points.push((text.len(), point));
                         text.push(if matches!(cell.c, '\0' | '\u{10eeee}') {
                             ' '
@@ -346,7 +349,7 @@ impl TerminalView {
         Some(Scan {
             matches,
             regex_error: false,
-            history,
+            origin: live_origin,
             bottom,
         })
     }
@@ -384,6 +387,21 @@ impl TerminalView {
             return;
         }
         self.rebase_matches_after_scroll(cx);
+        // A frozen reading is the search's semantic source. Output cannot
+        // change its rows, so only a query or semantic-set change may rescan;
+        // `sync_search_presentation` notices those on the next frame.
+        if self
+            .selection_scroll
+            .reading
+            .as_ref()
+            .is_some_and(|reading| {
+                self.search.as_ref().is_some_and(|search| {
+                    search.scanned_reading == Some(reading.content_identity())
+                })
+            })
+        {
+            return;
+        }
         self.search_scan_epoch = self.search_scan_epoch.wrapping_add(1);
         if self.search_scan_armed {
             return;
@@ -431,13 +449,13 @@ impl TerminalView {
     /// anchor by an amount this cannot see, so that case rescans instead.
     fn rebase_matches_after_scroll(&mut self, cx: &mut Context<Self>) {
         let term = self.terminal.term.lock();
-        let history = super::reading::live_start(&term) as usize;
+        let live_origin = super::reading::live_start(&term) as usize;
         let topmost = term.grid.topmost_line().0;
         drop(term);
         let Some(s) = self.search.as_mut() else {
             return;
         };
-        let drift = history as i64 - s.scanned_history as i64;
+        let drift = live_origin as i64 - s.scanned_origin as i64;
         if drift == 0 {
             return;
         }
@@ -459,7 +477,7 @@ impl TerminalView {
             *m = start..=end;
         }
         s.current_index = s.current_index.and_then(|i| i.checked_sub(gone));
-        s.scanned_history = history;
+        s.scanned_origin = live_origin;
     }
 
     /// Re-run the query against the grid as it now stands, keeping the count
@@ -493,12 +511,12 @@ impl TerminalView {
         let previous = self
             .search
             .as_ref()
-            .and_then(|s| Some((*s.current()?.start(), s.scanned_history)))
-            .map(|(p, history)| (anchor_row(history, &p), p.col));
+            .and_then(|s| Some((*s.current()?.start(), s.scanned_origin)))
+            .map(|(p, origin)| (anchor_row(origin, &p), p.col));
         let current_index = previous
             .and_then(|(row, column)| {
                 scan.matches.iter().position(|m| {
-                    anchor_row(scan.history, m.start()) == row && m.start().col == column
+                    anchor_row(scan.origin, m.start()) == row && m.start().col == column
                 })
             })
             .or_else(|| self.match_nearest_the_viewport(&scan.matches, scan.bottom));
@@ -506,7 +524,7 @@ impl TerminalView {
         if let Some(s) = self.search.as_mut() {
             s.matches = scan.matches;
             s.current_index = current_index;
-            s.scanned_history = scan.history;
+            s.scanned_origin = scan.origin;
             s.scanned_reading = self
                 .selection_scroll
                 .reading
@@ -545,7 +563,7 @@ impl TerminalView {
         if let Some(s) = self.search.as_mut() {
             s.matches = scan.matches;
             s.current_index = current_index;
-            s.scanned_history = scan.history;
+            s.scanned_origin = scan.origin;
             s.scanned_reading = self
                 .selection_scroll
                 .reading
@@ -1922,6 +1940,12 @@ fn truncate_at_unbalanced_close(token: &mut String) {
             _ => {}
         }
     }
+}
+
+/// Whether a hard line break between two cells continues one URL. Reading and
+/// pointer hit-testing must agree on the same join rule.
+pub(super) fn continues_url(last: char, next: char) -> bool {
+    is_url_char(last) && is_url_char(next) && next != '@'
 }
 
 pub(super) fn is_url_char(c: char) -> bool {

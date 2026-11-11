@@ -37,18 +37,6 @@ include!("keyboard_boundary_consumer_tests.rs");
 
 include!("graphics_pty_consumer_support.rs");
 
-fn graphics_visible_images(view: &TerminalView) -> Vec<crate::terminal::images::RenderPlacement> {
-    use lyrel_core::core::kitty_graphics::placeholder_row;
-    let term = view.terminal.term.lock();
-    let offset = term.display_offset() as i32;
-    let rows: Vec<_> = (0..term.screen_lines())
-        .filter_map(|row| {
-            let slices = placeholder_row(&term.grid, Line(row as i32 - offset));
-            (!slices.is_empty()).then_some((row as i32, slices))
-        })
-        .collect();
-    view.terminal.images().snapshot_with_placeholders(&rows)
-}
 
 #[gpui_kit::test]
 fn graphics_consumer_synchronized_output_keeps_stream_ordered_image_anchors(

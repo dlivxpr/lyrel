@@ -153,6 +153,43 @@ pub(crate) fn run_when_ready(slot: &PaneSlot, command: String, cx: &mut App) {
     run_known_agent_when_ready(slot, command, agent, cx);
 }
 
+/// Type an already-scoped command — a prepared resume/fork line — into the
+/// shell. The session operation encoded it for this shell and its environment;
+/// running the launch encoder again would reject the Hermes presence marker
+/// (`${KITTY_WINDOW_ID-lyrel}`), which is a shell expansion rather than a
+/// literal argv token.
+pub(crate) fn run_prepared_when_ready(slot: &PaneSlot, command: String, cx: &mut App) {
+    match slot {
+        PaneSlot::Ready(view) => {
+            let view = view.downgrade();
+            cx.spawn(async move |cx| {
+                wait_for_prompt(&view, cx).await;
+                let _ = view.update_in(cx, |view, _window, _cx| view.run_command_line(&command));
+            })
+            .detach();
+        }
+        PaneSlot::Connecting(pending) => {
+            pending.update(cx, |pending, _| pending.run_prepared_when_ready(command))
+        }
+    }
+}
+
+async fn wait_for_prompt(
+    view: &gpui_kit::WeakEntity<crate::terminal::view::TerminalView>,
+    cx: &mut gpui_kit::AsyncApp,
+) {
+    let deadline = std::time::Instant::now() + PROMPT_WAIT;
+    loop {
+        let ready = view
+            .read_with(cx, |view, _| view.terminal.at_prompt())
+            .unwrap_or(true);
+        if ready || std::time::Instant::now() >= deadline {
+            break;
+        }
+        cx.background_executor().timer(PROMPT_POLL).await;
+    }
+}
+
 pub(crate) fn run_known_agent_when_ready(
     slot: &PaneSlot,
     command: String,
@@ -163,16 +200,7 @@ pub(crate) fn run_known_agent_when_ready(
         PaneSlot::Ready(view) => {
             let view = view.downgrade();
             cx.spawn(async move |cx| {
-                let deadline = std::time::Instant::now() + PROMPT_WAIT;
-                loop {
-                    let ready = view
-                        .read_with(cx, |view, _| view.terminal.at_prompt())
-                        .unwrap_or(true);
-                    if ready || std::time::Instant::now() >= deadline {
-                        break;
-                    }
-                    cx.background_executor().timer(PROMPT_POLL).await;
-                }
+                wait_for_prompt(&view, cx).await;
                 let Ok((host, shell)) = view.read_with(cx, |view, cx| {
                     let shell = view.shell_spec().map(|spec| spec.program).or_else(|| {
                         // Only local panes inherit the desktop's shell setting.
@@ -439,7 +467,7 @@ impl LyrelApp {
                 );
             });
         }
-        run_when_ready(&slot, command, cx);
+        run_prepared_when_ready(&slot, command, cx);
     }
 
     pub(crate) fn notify_session_operation_error(

@@ -398,3 +398,25 @@ fn powershell_manual_agent_scope_and_restoration_over_a_real_pty() {
 fn nushell_manual_agent_wrappers_and_restoration_over_a_real_pty() {
     structured_scope_shell_contract(&std::env::var("LYREL_TEST_NU").unwrap_or_else(|_| "nu".into()), true);
 }
+
+/// The four shell hooks cannot share Rust constants at runtime, so pin their
+/// agent list to the production one and keep Nu's omp default identical to the
+/// other three hooks (an inherited value is not an explicit opt-out).
+#[test]
+fn every_shell_scope_script_covers_the_production_agent_programs() {
+    let programs: Vec<_> = crate::core::cli_agent::CLIAgent::scope_programs().collect();
+    for (name, script) in [
+        ("sh", include_str!("agent_scope.sh")),
+        ("fish", include_str!("agent_scope.fish")),
+        ("ps1", include_str!("agent_scope.ps1")),
+        ("nu", include_str!("agent_scope.nu")),
+    ] {
+        for program in &programs {
+            assert!(script.contains(program), "{name} is missing {program}");
+        }
+    }
+    assert!(
+        include_str!("agent_scope.nu").contains("insert PI_NO_DECCARA '1'"),
+        "Nu must default PI_NO_DECCARA to 1 for omp like the other hooks"
+    );
+}

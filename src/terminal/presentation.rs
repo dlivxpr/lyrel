@@ -39,7 +39,18 @@ impl ParsePresentation {
 
     pub(super) fn resize(&mut self, cols: usize) {
         self.resize_revision = self.resize_revision.wrapping_add(1);
+        self.ensure_tab_stops(cols);
+    }
+
+    /// Keep the tab map the same width as the grid without claiming a resize.
+    /// HTS/TBC and RIS only change tab stops; the ordered graphics `Screen`
+    /// pairs with [`Self::resize_revision`], so a tab mutation must not
+    /// advance it.
+    pub(super) fn ensure_tab_stops(&mut self, cols: usize) {
         let previous = self.tab_stops.len();
+        if previous == cols {
+            return;
+        }
         self.tab_stops.resize(cols, false);
         for col in previous..cols {
             self.tab_stops[col] = col.is_multiple_of(8);
@@ -47,7 +58,7 @@ impl ParsePresentation {
     }
 
     pub(super) fn reset_tabs(&mut self, cols: usize) {
-        self.resize(cols);
+        self.ensure_tab_stops(cols);
         for (col, stop) in self.tab_stops.iter_mut().enumerate() {
             *stop = col.is_multiple_of(8);
         }
@@ -275,9 +286,10 @@ impl<'a> PresentedGrid<'a> {
             self.wraps(row)
                 || (hard
                     && row + 1 < self.rows()
-                    && super::search::is_url_char(self.cell((row + 1) * self.cols - 1).c)
-                    && super::search::is_url_char(self.cell((row + 1) * self.cols).c)
-                    && self.cell((row + 1) * self.cols).c != '@')
+                    && super::search::continues_url(
+                        self.cell((row + 1) * self.cols - 1).c,
+                        self.cell((row + 1) * self.cols).c,
+                    ))
         };
         let mut first = row;
         while first > 0 && row - first < 32 && joins(first - 1) {
