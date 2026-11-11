@@ -77,6 +77,10 @@ pub struct SearchState {
     /// scrollback must rebase matches just like a growing history does.
     scanned_origin: usize,
     scanned_reading: Option<(u64, u64)>,
+    /// The bar was opened while the user was reading. A live search that
+    /// happens to scroll to a history match stays live and must keep
+    /// rescanning under output.
+    opened_in_reading: bool,
     scanned_query: Option<String>,
     _subs: Vec<Subscription>,
 }
@@ -153,6 +157,7 @@ impl TerminalView {
                 current_index: None,
                 scanned_origin: 0,
                 scanned_reading: None,
+                opened_in_reading: self.selection_scroll.reading.is_some(),
                 scanned_query: None,
                 _subs: subs,
             });
@@ -396,7 +401,8 @@ impl TerminalView {
             .as_ref()
             .is_some_and(|reading| {
                 self.search.as_ref().is_some_and(|search| {
-                    search.scanned_reading == Some(reading.content_identity())
+                    search.opened_in_reading
+                        && search.scanned_reading == Some(reading.content_identity())
                 })
             })
         {

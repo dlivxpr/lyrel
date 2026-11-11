@@ -1655,10 +1655,17 @@ impl ImageStore {
                 };
                 inner.next_revision = inner.next_revision.wrapping_add(1);
                 let revision = inner.next_revision;
-                let resource = Resource {
+                let painted = inner.resources.get(&key).map(|old| old.painted.clone());
+                let mut resource = Resource {
                     evicted: true,
                     ..Resource::new(width, height, revision, metadata)
                 };
+                // The evicted shell still represents the same image identity.
+                // Keep its last paint claim so a later frame can tell that the
+                // texture was on screen before it was retired.
+                if let Some(painted) = painted {
+                    resource.painted = painted;
+                }
                 if let Some(old) = inner.resources.insert(key, resource) {
                     retire(old, &mut inner.retired);
                 }
