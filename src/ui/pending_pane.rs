@@ -51,6 +51,9 @@ pub struct PendingPane {
     auto_retries: u32,
     attach_only: bool,
     attach_spec: Option<Box<crate::daemon::protocol::NativeSshSpec>>,
+    launch_agent: Option<crate::core::cli_agent::CLIAgent>,
+    /// `run_on_land` is already scoped by the session operation; type it as-is.
+    prepared_launch: bool,
 }
 
 /// How many times a pane standing in for one that may still be running asks
@@ -144,6 +147,8 @@ impl PendingPane {
             auto_retries: 0,
             attach_only: false,
             attach_spec: None,
+            launch_agent: None,
+            prepared_launch: false,
         }
     }
 
@@ -206,8 +211,20 @@ impl PendingPane {
     pub(crate) fn workspace(&self) -> Option<&PaneWorkspace> {
         self.spawn.workspace.as_ref()
     }
-    pub(crate) fn run_when_ready(&mut self, command: String) {
+    pub(crate) fn run_known_agent_when_ready(
+        &mut self,
+        command: String,
+        agent: Option<crate::core::cli_agent::CLIAgent>,
+    ) {
         self.spawn.run_on_land = Some(command);
+        self.launch_agent = agent;
+        self.prepared_launch = false;
+    }
+
+    pub(crate) fn run_prepared_when_ready(&mut self, command: String) {
+        self.spawn.run_on_land = Some(command);
+        self.launch_agent = None;
+        self.prepared_launch = true;
     }
     pub(crate) fn resume_agent(
         &mut self,

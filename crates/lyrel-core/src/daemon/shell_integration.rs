@@ -1,10 +1,17 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
-const ZSH_INTEGRATION: &str = r#"
+const ZSH_INTEGRATION: &str = concat!(
+    r#"
 # --- lyrel shell integration (zsh) ---
 if [[ -o interactive ]] && [[ -z "$LYREL_SHELL_INTEGRATION" ]]; then
   export LYREL_SHELL_INTEGRATION=1
+  __lyrel_scope_version='"#,
+    env!("CARGO_PKG_VERSION"),
+    r#"'
+"#,
+    include_str!("shell_integration/agent_scope.sh"),
+    r#"
 
   # Per-pane history, when the app asked for it. This runs after the user's
   # .zshrc, which is the only reason it can work at all: $HISTFILE is theirs to
@@ -72,10 +79,12 @@ if [[ -o interactive ]] && [[ -z "$LYREL_SHELL_INTEGRATION" ]]; then
   # ms — D must not wait for it.
   __lyrel_precmd_d() {
     local ret=$?
+    __lyrel_scope_restore
     if [[ -n "$__lyrel_cmd_active" ]]; then
       __lyrel_osc "133;D;$ret;aid=lyrel"
       unset __lyrel_cmd_active
     fi
+    return $ret
   }
 
   # The rest of the prompt bookkeeping runs right before the prompt is drawn,
@@ -103,6 +112,7 @@ if [[ -o interactive ]] && [[ -z "$LYREL_SHELL_INTEGRATION" ]]; then
   # where ConPTY has no process table to poll (see core::cli_agent).
   __lyrel_preexec() {
     __lyrel_cmd_active=1
+    __lyrel_scope_apply "$1"
     local cmd=$1
     cmd=${cmd[1,512]}
     cmd=${cmd//\%/%25}
@@ -113,14 +123,26 @@ if [[ -o interactive ]] && [[ -z "$LYREL_SHELL_INTEGRATION" ]]; then
     __lyrel_osc "133;C;$cmd;aid=lyrel"
   }
 
+  # A classic precmd runs before precmd_functions. Restore before that user's
+  # hook too, retaining its incoming status and original implementation.
+  if (( ${+functions[precmd]} )); then
+    functions[__lyrel_user_precmd]=$functions[precmd]
+    __lyrel_return_status() { return "$1"; }
+    precmd() {
+      local ret=$?
+      __lyrel_scope_restore
+      __lyrel_return_status "$ret"
+      __lyrel_user_precmd "$@"
+    }
+  fi
+
   autoload -Uz add-zsh-hook
   add-zsh-hook precmd __lyrel_precmd
   add-zsh-hook preexec __lyrel_preexec
   # add-zsh-hook can only append, and the user's hooks are all registered by now
   # (their .zshrc ran before this file) — prepend the D emitter by hand so it's
-  # the first thing to run when a command exits. Users who define a classic
-  # `precmd()` function still get ahead of us (zsh calls it before the array);
-  # that's out of reach without wrapping their function.
+  # the first thing to run when a command exits. The classic function above
+  # restores scope before invoking the user's prompt; D still runs here.
   precmd_functions=(__lyrel_precmd_d $precmd_functions)
 
   # Startup kept ZDOTDIR aimed at our throwaway redirector dir so zsh read every
@@ -137,9 +159,11 @@ if [[ -o interactive ]] && [[ -z "$LYREL_SHELL_INTEGRATION" ]]; then
   add-zsh-hook precmd __lyrel_restore_zdotdir
 fi
 # --- end lyrel shell integration ---
-"#;
+"#
+);
 
-const FISH_INTEGRATION: &str = r#"
+const FISH_INTEGRATION: &str = concat!(
+    r#"
 # --- lyrel shell integration (fish) ---
 # Guard on *emptiness* (`test -z`), not definedness (`set -q`): `setup()` resets the
 # sentinel to an empty-but-exported "" at each spawn boundary, and fish reports an
@@ -148,6 +172,12 @@ const FISH_INTEGRATION: &str = r#"
 # it installs once for a fresh top-level shell while an inherited `1` still blocks it.
 if status is-interactive; and test -z "$LYREL_SHELL_INTEGRATION"
   set -gx LYREL_SHELL_INTEGRATION 1
+  set -g __lyrel_scope_version '"#,
+    env!("CARGO_PKG_VERSION"),
+    r#"'
+"#,
+    include_str!("shell_integration/agent_scope.fish"),
+    r#"
 
   function __lyrel_osc
     printf '\e]%s\a' $argv[1]
@@ -176,8 +206,13 @@ if status is-interactive; and test -z "$LYREL_SHELL_INTEGRATION"
   # newline. `%` must be escaped first (the other escapes introduce `%`).
   function __lyrel_preexec --on-event fish_preexec
     set -g __lyrel_cmd_active 1
+    __lyrel_scope_apply "$argv[1]"
     set -l cmd (string sub -l 512 -- $argv[1] | string replace -a '%' '%25' | string replace -a \e '%1B' | string replace -a \a '%07' | string replace -a \r '%0D' | string join '%0A')
     __lyrel_osc "133;C;$cmd;aid=lyrel"
+  end
+
+  function __lyrel_scope_postexec --on-event fish_postexec
+    __lyrel_scope_restore
   end
 
   # Runs on the fish_prompt *event*, which fires before fish calls the
@@ -185,6 +220,7 @@ if status is-interactive; and test -z "$LYREL_SHELL_INTEGRATION"
   # (prompt start) belongs.
   function __lyrel_precmd --on-event fish_prompt
     set -l ret $status
+    __lyrel_scope_restore
     if set -q __lyrel_cmd_active
       __lyrel_osc "133;D;$ret;aid=lyrel"
       set -e __lyrel_cmd_active
@@ -201,12 +237,20 @@ if status is-interactive; and test -z "$LYREL_SHELL_INTEGRATION"
   end
 end
 # --- end lyrel shell integration ---
-"#;
+"#
+);
 
-const BASH_INTEGRATION: &str = r#"
+const BASH_INTEGRATION: &str = concat!(
+    r#"
 # --- lyrel shell integration (bash) ---
 if [[ $- == *i* ]] && [[ -z "$LYREL_SHELL_INTEGRATION" ]]; then
   export LYREL_SHELL_INTEGRATION=1
+  __lyrel_scope_version='"#,
+    env!("CARGO_PKG_VERSION"),
+    r#"'
+"#,
+    include_str!("shell_integration/agent_scope.sh"),
+    r#"
 
   # Per-pane history — see the zsh block for why this can only be done here,
   # after the user's rc has decided where their history lives. bash loads the
@@ -290,6 +334,7 @@ if [[ $- == *i* ]] && [[ -z "$LYREL_SHELL_INTEGRATION" ]]; then
   # before slow prompt frameworks start running.
   __lyrel_precmd_d() {
     local ret=${1:-$?}
+    __lyrel_scope_restore
     if [[ -n "${__lyrel_cmd_active+x}" ]]; then
       __lyrel_osc "133;D;$ret;aid=lyrel"
     fi
@@ -321,6 +366,7 @@ if [[ $- == *i* ]] && [[ -z "$LYREL_SHELL_INTEGRATION" ]]; then
   # as the zsh path — the Windows agent-detection input (git-bash).
   __lyrel_preexec() {
     __lyrel_cmd_active=1
+    [[ "${2-}" == markers-only ]] || __lyrel_scope_apply "$1"
     local cmd=${1:0:512}
     cmd=${cmd//\%/%25}
     cmd=${cmd//$'\e'/%1B}
@@ -339,11 +385,13 @@ if [[ $- == *i* ]] && [[ -z "$LYREL_SHELL_INTEGRATION" ]]; then
     preexec_functions+=(__lyrel_preexec)
   else
     __lyrel_submitted_command() {
-      local entry
+      local entry history_pattern='^[[:space:]]*[0-9]+[[:space:]*][[:space:]](.*)$'
       entry=$(HISTTIMEFORMAT= builtin history 1)
       # `history` prefixes only its first line with an event number. Remove
       # that prefix without an external parser, retaining embedded newlines.
-      if [[ "$entry" =~ ^[[:space:]]*[0-9]+[[:space:]*][[:space:]](.*)$ ]]; then
+      # Bash 3.2 cannot parse this ERE inline. Expand it unquoted so the
+      # regex engine still interprets its bracket expressions and capture.
+      if [[ "$entry" =~ $history_pattern ]]; then
         REPLY=${BASH_REMATCH[1]}
       else
         REPLY=$1
@@ -354,13 +402,51 @@ if [[ $- == *i* ]] && [[ -z "$LYREL_SHELL_INTEGRATION" ]]; then
       __lyrel_command_start() {
         local REPLY
         __lyrel_submitted_command "$BASH_COMMAND"
-        __lyrel_preexec "$REPLY"
+        __lyrel_preexec "$REPLY" markers-only
       }
       # PS0 is Bash's public once-per-submitted-command event (4.4+). The
       # empty assignment is expanded in the parent shell; only the emission
       # runs in a command substitution. Preserve the user's PS0 verbatim.
       # https://www.gnu.org/software/bash/manual/html_node/Bash-Variables.html
       PS0='${__lyrel_cmd_active=}$(__lyrel_command_start)'"${PS0-}"
+      # PS0's command substitution cannot export into its parent. A chained
+      # DEBUG action only applies/restores scope; PS0 still owns C and user PS0.
+      __lyrel_scope_debug() {
+        if [[ "$2" == 'for __lyrel_prompt_state in prompt'* ]]; then
+          __lyrel_scope_restore
+          __lyrel_prompt_state=prompt
+          return "$1"
+        fi
+        local frame REPLY
+        for frame in "${FUNCNAME[@]:1}"; do
+          [[ "$frame" == __lyrel_* ]] && return "$1"
+        done
+        [[ "${__lyrel_prompt_state:-}" == ready ]] || return "$1"
+        [[ -z "${COMP_LINE:-}" && -z "${READLINE_LINE+x}" ]] || return "$1"
+        __lyrel_prompt_state=command
+        __lyrel_submitted_command "$2"
+        # Refuse stale history entries (HISTIGNORE/ignorespace/history off).
+        # The complete submitted command, not a pipeline member, must match.
+        if [[ -o history && ( "$REPLY" == "$2" || "$REPLY" == "$2 &" ) ]]; then
+          __lyrel_scope_apply "$REPLY"
+        fi
+        return "$1"
+      }
+      __lyrel_debug_action=$(builtin trap -p DEBUG)
+      if [[ -n "$__lyrel_debug_action" ]]; then
+        __lyrel_debug_action=${__lyrel_debug_action#trap -- }
+        __lyrel_debug_action=${__lyrel_debug_action% DEBUG}
+        builtin eval "__lyrel_debug_action=$__lyrel_debug_action"
+      else
+        # A simple `:` clears $_ before our tail can preserve it. A true
+        # compound conditional leaves the incoming last argument untouched.
+        __lyrel_debug_action='[[ : ]]'
+      fi
+      # Bash restores $? / PIPESTATUS after DEBUG, but not $_. Keep the
+      # original action's last argument as the tail call's final argument;
+      # the function's own commands are overwritten by that call's lastarg.
+      builtin trap "$__lyrel_debug_action"$'\n__lyrel_scope_debug "$?" "$BASH_COMMAND" "$_"' DEBUG
+      unset __lyrel_debug_action
     else
       # macOS still ships Bash 3.2, without PS0. Use DEBUG only there, leaving
       # history options and functrace/extdebug untouched. The original action
@@ -371,10 +457,11 @@ if [[ $- == *i* ]] && [[ -z "$LYREL_SHELL_INTEGRATION" ]]; then
         __lyrel_debug_action=${__lyrel_debug_action% DEBUG}
         builtin eval "__lyrel_debug_action=$__lyrel_debug_action"
       else
-        __lyrel_debug_action=:
+        __lyrel_debug_action='[[ : ]]'
       fi
       __lyrel_command_start() {
         if [[ "$2" == 'for __lyrel_prompt_state in prompt'* ]]; then
+          __lyrel_scope_restore
           __lyrel_prompt_state=prompt
           return "$1"
         fi
@@ -387,13 +474,21 @@ if [[ $- == *i* ]] && [[ -z "$LYREL_SHELL_INTEGRATION" ]]; then
         __lyrel_prompt_state=command
         local REPLY
         __lyrel_submitted_command "$2"
-        __lyrel_preexec "$REPLY"
+        __lyrel_preexec "$REPLY" markers-only
+        # Bash 3.2 temporarily disables history while running DEBUG, so
+        # `-o history` is false even for a freshly recorded submission.
+        # SHELLOPTS retains the configured option, including history-off.
+        # Keep the complete-line match: never scope a pipeline/compound member.
+        if [[ ":$SHELLOPTS:" == *:history:* && ( "$REPLY" == "$2" || "$REPLY" == "$2 &" ) ]]; then
+          __lyrel_scope_apply "$REPLY"
+        fi
         return "$1"
       }
       # Run the existing action first, with no command ahead of it to replace
       # $? / PIPESTATUS / $_. Our tail receives and returns its result, so
       # extdebug retains the user's command-skip behavior as well.
-      builtin trap "$__lyrel_debug_action"$'\n__lyrel_command_start "$?" "$BASH_COMMAND"' DEBUG
+      # As on the PS0 path, the tail's final argument preserves native $_.
+      builtin trap "$__lyrel_debug_action"$'\n__lyrel_command_start "$?" "$BASH_COMMAND" "$_"' DEBUG
       unset __lyrel_debug_action
     fi
 
@@ -420,12 +515,21 @@ if [[ $- == *i* ]] && [[ -z "$LYREL_SHELL_INTEGRATION" ]]; then
   fi
 fi
 # --- end lyrel shell integration ---
-"#;
+"#
+);
 
-const POWERSHELL_INTEGRATION: &str = r#"
+const POWERSHELL_INTEGRATION: &str = concat!(
+    r#"
 # --- lyrel shell integration (PowerShell) ---
 if (-not $env:LYREL_SHELL_INTEGRATION) {
   $env:LYREL_SHELL_INTEGRATION = '1'
+  $global:__LyrelScopeVersion='"#,
+    env!("CARGO_PKG_VERSION"),
+    r#"'
+"#,
+    include_str!("shell_integration/environment.ps1"),
+    include_str!("shell_integration/agent_scope.ps1"),
+    r#"
 
   $global:__LyrelEsc = [char]0x1b
   $global:__LyrelBel = [char]0x07
@@ -449,6 +553,7 @@ if (-not $env:LYREL_SHELL_INTEGRATION) {
     # $? first: an assignment sets $? to true, so read it before anything else.
     $ok = $?
     $lastExit = $LASTEXITCODE
+    __LyrelScopeRestore
 
     if ($global:__LyrelCmdActive) {
       $global:__LyrelCmdActive = $false
@@ -508,8 +613,10 @@ if (-not $env:LYREL_SHELL_INTEGRATION) {
     $global:__LyrelOrigReadLine = $function:global:PSConsoleHostReadLine
     function global:PSConsoleHostReadLine {
       $line = & $global:__LyrelOrigReadLine
+      $executionLine = $line
       if (-not [string]::IsNullOrWhiteSpace($line)) {
         $global:__LyrelCmdActive = $true
+        __LyrelScopeApply $line ([ref]$executionLine)
         # Carry the submitted line on the C mark (lyrel extension): the daemon
         # detects coding agents from it on Windows, where ConPTY exposes no
         # foreground process group to read an argv from. Truncated (detection
@@ -530,18 +637,21 @@ if (-not $env:LYREL_SHELL_INTEGRATION) {
           Write-Host -NoNewline "$($global:__LyrelEsc)]133;C;;aid=lyrel$($global:__LyrelBel)"
         }
       }
-      $line
+      $executionLine
     }
   }
 }
 # --- end lyrel shell integration ---
-"#;
+"#
+);
 
-const NUSHELL_INTEGRATION: &str = r#"
+const NUSHELL_INTEGRATION: &str = concat!(
+    r#"
 # --- lyrel shell integration (nushell) ---
 # Guard on emptiness (`== ""`), not mere definedness, exactly like the other
 # shells: setup() resets the sentinel to an empty-but-exported value at each
 # spawn boundary, and a nested `nu` inherits the set `1` without re-installing.
+__LYREL_SOURCE_USER_CONFIG__
 if (($env.LYREL_SHELL_INTEGRATION? | default "") == "") {
   $env.LYREL_SHELL_INTEGRATION = "1"
 
@@ -552,7 +662,7 @@ if (($env.LYREL_SHELL_INTEGRATION? | default "") == "") {
   # line when there is no config.nu. The order is load-bearing: a config.nu
   # conventionally ends with a wholesale `$env.config = {...}` that would
   # clobber every hook added below, so the hooks must come after it.
-  __LYREL_SOURCE_USER_CONFIG__
+  # User config was sourced at top level so its definitions remain available.
 
   # Hooks live in `$env.config.hooks` as lists. Ensure the skeleton exists
   # before appending to it — a minimal config, or none at all, leaves it
@@ -611,7 +721,9 @@ if (($env.LYREL_SHELL_INTEGRATION? | default "") == "") {
   }
 }
 # --- end lyrel shell integration ---
-"#;
+"#,
+    include_str!("shell_integration/agent_scope.nu")
+);
 
 fn zsh_redirectors() -> [(&'static str, String); 4] {
     let redirect = |name: &str, tail: &str| {
@@ -897,7 +1009,7 @@ fn platform_config_dir() -> Option<PathBuf> {
 /// A Nushell string literal for `path`. Single quotes are fully literal in
 /// Nushell, so they are the default; a path that contains an apostrophe (legal
 /// on Windows) falls back to double quotes with backslash escaping.
-fn nu_string_literal(path: &str) -> String {
+pub(crate) fn nu_string_literal(path: &str) -> String {
     if !path.contains('\'') {
         return format!("'{path}'");
     }
@@ -2258,6 +2370,15 @@ mod tests {
         keys: &[u8],
         cwd: Option<&Path>,
     ) -> String {
+        prompt_steps_over_pty(program, injection, &[keys], cwd)
+    }
+
+    fn prompt_steps_over_pty(
+        program: &str,
+        injection: &Injection,
+        steps: &[&[u8]],
+        cwd: Option<&Path>,
+    ) -> String {
         use portable_pty::{CommandBuilder, PtySize, native_pty_system};
         use std::io::{Read, Write};
 
@@ -2301,7 +2422,9 @@ mod tests {
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
         let mut out = Vec::new();
         let mut answered = 0usize;
-        let mut typed = false;
+        let mut typed = 0usize;
+        let mut last_prompt = 0usize;
+        let mut last_input_end = 0usize;
         let mut seen_fail = None;
         while std::time::Instant::now() < deadline {
             match rx.recv_timeout(std::time::Duration::from_millis(200)) {
@@ -2341,21 +2464,37 @@ mod tests {
             // Unix PowerShell draws the prompt before PSReadLine's console
             // input initialization has finished. Its application-cursor-mode
             // sequence follows that initialization; do not race keys against it.
-            let input_ready = !unix_powershell || text.contains("\u{1b}[?1h");
-            if !typed
+            let prompt_tail = text.rfind("133;A\u{7}").map(|at| &text[at..]).unwrap_or("");
+            let input_ready = !unix_powershell || prompt_tail.contains("\u{1b}[?1h");
+            let prompt_count = text.matches("133;A\u{7}").count();
+            let interrupt_ready = steps
+                .get(typed)
+                .is_some_and(|keys| keys.starts_with(b"\x03"))
+                && text
+                    .get(last_input_end..)
+                    .is_some_and(|text| text.contains("LYREL_INTERRUPT_READY"));
+            if typed < steps.len()
                 && input_ready
-                && (text.contains("133;B") || (!bash_prompt && text.contains("133;A")))
+                && (interrupt_ready
+                    || (prompt_count > last_prompt
+                        && (prompt_tail.contains("133;B") || !bash_prompt)))
             {
-                writer.write_all(keys).expect("write");
+                writer.write_all(steps[typed]).expect("write");
                 writer.flush().expect("flush");
-                typed = true;
+                typed += 1;
+                last_prompt = prompt_count;
+                last_input_end = text.len();
             }
 
             // Stop only once the typed command's own D report lands. A shell can
             // emit an unpaired D while drawing its first prompt, and breaking on
             // that would sample the transcript before the prompt cycle under test
             // has run at all.
-            if typed && text.contains(FAILED_COMMAND_MARK) && seen_fail.is_none() {
+            if typed == steps.len()
+                && prompt_count > last_prompt
+                && text.contains(FAILED_COMMAND_MARK)
+                && seen_fail.is_none()
+            {
                 seen_fail = Some(std::time::Instant::now());
             }
             // The D mark and the rest of the same prompt cycle (the cwd report,
@@ -2390,7 +2529,7 @@ mod tests {
             assert!(status.success(), "Bash did not exit cleanly: {status}");
         }
         assert!(
-            typed,
+            typed == steps.len(),
             "no prompt-start mark ever arrived, so nothing was typed; got:\n{}",
             String::from_utf8_lossy(&out)
         );
@@ -2448,7 +2587,12 @@ mod tests {
     /// Exercise the installed integration in an actual interactive Bash, not
     /// by invoking its private functions. LYREL_TEST_BASH permits the same
     /// consumer contract to run against an installed Bash 3.2 or 4.4 as well.
-    fn bash_contract_over_pty(array_prompt: bool, keys: &[u8], inputrc: &str) -> Option<String> {
+    fn bash_contract_over_pty(
+        array_prompt: bool,
+        user_debug: bool,
+        keys: &[u8],
+        inputrc: &str,
+    ) -> Option<String> {
         let program = std::env::var("LYREL_TEST_BASH").ok().or_else(|| {
             #[cfg(windows)]
             {
@@ -2485,7 +2629,9 @@ __consumer_prompt() {
   PS1='consumer> '
   return "$ret"
 }
-trap 'builtin printf "\e]777;debug;%s;%s;%s\a" "$?" "${PIPESTATUS[*]}" "$_"' DEBUG
+if [[ "$LYREL_TEST_USER_DEBUG" == 1 ]]; then
+  trap 'builtin printf "\e]777;debug;%s;%s;%s\a" "$?" "${PIPESTATUS[*]}" "$_"' DEBUG
+fi
 PS0='$(builtin printf "\e]777;user-ps0\a")'
 if [[ "$LYREL_TEST_ARRAY_PROMPT" == 1 ]] &&
     (( BASH_VERSINFO[0] > 5 || (BASH_VERSINFO[0] == 5 && BASH_VERSINFO[1] >= 1) )); then
@@ -2510,6 +2656,10 @@ builtin printf '\e]777;version;%s.%s\a' "${BASH_VERSINFO[0]}" "${BASH_VERSINFO[1
                 (
                     "LYREL_TEST_ARRAY_PROMPT".into(),
                     u8::from(array_prompt).to_string(),
+                ),
+                (
+                    "LYREL_TEST_USER_DEBUG".into(),
+                    u8::from(user_debug).to_string(),
                 ),
                 ("LYREL_RM_DIR".into(), bash_path(&cleanup)),
             ]),
@@ -2545,7 +2695,8 @@ builtin printf '\e]777;version;%s.%s\a' "${BASH_VERSINFO[0]}" "${BASH_VERSINFO[1
     fn bash_preserves_native_prompt_and_trap_contracts_over_a_real_pty() {
         let keys = b"\n: LAST_ARGUMENT\nfalse | (exit 7)\nbuiltin printf '\\033]777;state;%s;%s;%s\\a' \"$?\" \"${PIPESTATUS[*]}\" \"$_\"\nprintf '%s\\n' 'multi\nline'\nfalse | true\nfalse\n";
         for array_prompt in [false, true] {
-            let Some(text) = bash_contract_over_pty(array_prompt, keys, "set editing-mode vi\n")
+            let Some(text) =
+                bash_contract_over_pty(array_prompt, true, keys, "set editing-mode vi\n")
             else {
                 return;
             };
@@ -2662,6 +2813,29 @@ builtin printf '\e]777;version;%s.%s\a' "${BASH_VERSINFO[0]}" "${BASH_VERSINFO[1
     }
 
     #[test]
+    fn bash_preserves_prompt_state_without_a_user_debug_trap_over_a_real_pty() {
+        let keys = b": LAST_ARGUMENT\nfalse | (exit 7)\nfalse\n";
+        for array_prompt in [false, true] {
+            let Some(text) = bash_contract_over_pty(array_prompt, false, keys, "") else {
+                return;
+            };
+            let payloads = osc_payloads(&text);
+            assert!(
+                payloads.iter().any(|p| {
+                    p.starts_with("777;prompt;0;")
+                        && p.ends_with(";LAST_ARGUMENT;ignoredups;not-a-command")
+                }),
+                "prompt lost $_ without a user DEBUG trap:\n{text}"
+            );
+            assert!(
+                payloads.iter().any(|p| p.starts_with("777;prompt;7;")),
+                "prompt lost exit status without a user DEBUG trap:\n{text}"
+            );
+            assert!(!payloads.iter().any(|p| p.starts_with("777;debug;")));
+        }
+    }
+
+    #[test]
     fn bash_escapes_and_truncates_submitted_commands_over_a_real_pty() {
         // Use Readline's public macro, retaining ESC/BEL and a multiline command.
         // Git Bash's parser drops literal CR even with `bash -c`; Unix can
@@ -2676,7 +2850,7 @@ builtin printf '\e]777;version;%s.%s\a' "${BASH_VERSINFO[0]}" "${BASH_VERSINFO[1
              \"\\C-x\\C-u\": \"printf '%s' 'percent%\\C-v\\e\\C-v\\C-g{insert_cr}multi\\n{}'\\nfalse\\n\"\n",
             "x".repeat(600)
         );
-        let Some(text) = bash_contract_over_pty(false, b"\x18\x15", &inputrc) else {
+        let Some(text) = bash_contract_over_pty(false, true, b"\x18\x15", &inputrc) else {
             return;
         };
         let payloads = osc_payloads(&text);
@@ -3917,4 +4091,5 @@ builtin printf '\e]777;version;%s.%s\a' "${BASH_VERSINFO[0]}" "${BASH_VERSINFO[1
             "`cd` must move the pane's reported cwd; got:\n{text}"
         );
     }
+    include!("shell_integration/agent_scope_tests.rs");
 }

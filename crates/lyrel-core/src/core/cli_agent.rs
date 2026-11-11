@@ -84,7 +84,15 @@ impl CLIAgent {
         CLIAgent::Hermes,
     ];
 
-    fn aliases(self) -> &'static [&'static str] {
+    /// Executable names that receive the command-scoped compatibility
+    /// identity. `opencode2` is the second official OpenCode entry point.
+    pub fn scope_programs() -> impl Iterator<Item = &'static str> {
+        CLIAgent::ALL
+            .into_iter()
+            .flat_map(|agent| agent.aliases().iter().copied())
+    }
+
+    pub(crate) fn aliases(self) -> &'static [&'static str] {
         match self {
             CLIAgent::OhMyPi => &["omp"],
             // Only the current official Kimi Code product contract is supported;

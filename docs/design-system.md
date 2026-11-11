@@ -196,6 +196,11 @@ Git 的新增/修改标记种子为绿 `#2F8A52` / `#4CC27A`、琥珀 `#B7791F` 
   已持有的同步帧在有序 `Size` 到达前只受新边界裁切，不等待实时 grid；ESU 或期限先结束 hold
   也不代表 resize 已生效。锁内 VT 行列尚未匹配时独立等待 `Size` 的既有 Wakeup，不启动竞争重试。
   relink 后没有 previous snapshot 的首个 hold 按新 surface 分配空帧，不恢复上一连接残留的几何。
+  阅读 resize 另由 `ReadingView` 保存硬逻辑行前 256 字符、字符偏移、空行上下文与旧历史几何；
+  动态搜索最多 1024 个候选行，选最近精确身份，失败时 clamp 几何估计，并合并 pending 用户滚动。
+  `ParsePresentation` 的 resize revision 不属于 destructive reading generation；有图片基线时，
+  同一 VT guard 下的有序 graphics `Screen` 记录其对应 Size revision，只有二者一致才原子捕获新文字／图片。
+  pending 重用旧行列的完整 committed picture，新的 resize 请求只取代目标几何，不发布晚到的中间尺寸。
 - `TerminalView` 持有的 `FrameFacts` 统一提供绘制模式、选择、光标及 prompt／菜单几何；首帧先取得有效事实，
   后续在同一 guard 内应用 scrollbar 的待处理位置并采样。稳态 render／paint 不为这些投影等待 PTY reader。
   facts、composer、输入维护、同尺寸 resize 核验或实际 grid 构建因锁忙而跳过时，共用每 pane 唯一的后台等待任务；
@@ -222,6 +227,23 @@ Git 的新增/修改标记种子为绿 `#2F8A52` / `#4CC27A`、琥珀 `#B7791F` 
 图片继续由既有 image store 拥有资源。管线保留图片低层、cell 背景与选择／搜索、
 负 z 图片、文字与下划线、非负 z 图片、cursor／IME、bell 的绘制顺序；
 图片的 claim、register、atlas 释放时机及 pane clipping 不移入独立状态所有者。
+阅读历史时，`ReadingView` 将语义单元与同一行的图片切片一起首次捕获；切片借用既有像素、
+资源及 metadata lease，不复制像素，也不在后续绘制时按图片 ID 重新解析实时资源。
+直接放置按行裁切，占位符保留捕获时的 prototype／资源身份；两者均随阅读锚点重投影，
+包括前一行的小数滚动切片，并使用与 viewport 上报一致的 daemon／GUI origin 转换。
+实时擦除、同 ID 重传与删除不改变已捕获行；最初活动屏幕之外仅保留当前视口／sliver、
+链接所需的有界换行上下文及选择跨越的必要行。滚出且不再需要的历史行立即退役，
+历史淘汰或返回实时输出释放
+对应 lease，atlas 仍经既有退休路径回收，不恢复 stale identity，也不阻塞 PTY 解析。
+选择的绝对行区间与绘制、跨视口复制共用语义行，Tab stops 随行捕获；复制只借用字符
+与 marks，不临时复制一份 styled cells。链接的语义适配器可访问已保留的视口外前缀，
+几何 identity 不随 Rio 的后台 offset 补偿失效；搜索用冻结语义行覆盖 live matches，
+按绝对 origin（含已淘汰历史）投影，源身份不匹配时不画标注。视口移动复用绝对匹配，
+只在查询／语义集合变化时重扫，冻结行的正则处理不持实时 grid guard。主题重新解析，
+阅读不显示 live caret／IME。新增行的图片 lease 在一个 store transaction 中批量裁切，
+直接 placements 只遍历一次，不逐行重复扫描整个 store。
+这些长期阅读状态与 synchronized frame 的 acquisition／committed lease 生命周期分离。
+
 绘制回归按颜色、snapshot、文字与装饰分组，小型 fixture 位于 `element/test_support.rs`；
 真实终端与 graphics consumer 继续从既有窗口 seam 验证。
 

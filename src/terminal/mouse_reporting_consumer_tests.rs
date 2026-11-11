@@ -37,6 +37,21 @@ fn mouse_reporting_fixture_recorder() {
                 output.write_all(b"\x1b[?1002h\x1b[?1006h").unwrap();
                 output.flush().unwrap();
             }
+            7 => {
+                for row in 0..72 {
+                    write!(output, "WHEEL-{row:03}\r\n").unwrap();
+                }
+                output.write_all(b"\x1b[8;1HMOUSE-HISTORY-READY").unwrap();
+                output.flush().unwrap();
+            }
+            8 => {
+                output.write_all(b"\x1b[?1002l\x1b[?1006l\x1b[?1049h\x1b[?1007h\x1b[?1h\x1b[HALT-WHEEL-READY").unwrap();
+                output.flush().unwrap();
+            }
+            9 => {
+                output.write_all(b"\x1b[?1049l\x1b[?1l\x1b[8;1HNORMAL-WHEEL-READY").unwrap();
+                output.flush().unwrap();
+            }
             byte => report.push(byte),
         }
     }

@@ -19,11 +19,85 @@ description: "指针、滚轮和 ^G 各有何行为——以及如何分别调�
 
 触控板在手势开始时锁定“滚动还是缩放”，该决定持续到惯性尾段结束；中途按下或松开修饰键不会把同一次手势改成另一种操作。新手势会重新判断。滚轮则逐格判断修饰键；一次滚轮缩放只改变一级字号，触控板缩放会累计移动量后按整级改变。
 
+### 稳定阅读与回到实时输出
+
+离开实时输出后，窗格以绝对行身份保留阅读位置。首次滚动捕获一屏活动文字的语义内容；读取到的历史行按首次取得的内容保留，因此后台程序使用光标定位、擦除或重画活动屏幕时，不会改写当前阅读的文字。程序、PTY、daemon 和桌面终端镜像仍继续推进，并未暂停输出。
+
+文字区域底部居中的按钮显示 `↓ N 行 · 回到实时输出`（英文界面为 `↓ N lines · Return to live`）。数字表示距实时边缘的行数，不是未读消息数；不足一行的滚动向上取整。后台产生更多历史行时，距离随之增长。点击按钮，或在阅读时按 Tab 聚焦按钮后按 Enter，会通过原有回到提示符路径返回实时输出，并把焦点交回终端；Enter 不发送给子进程。直接输入或粘贴也保留原有返回实时输出的行为。滚回实时边缘会释放阅读内容，下次离开时重新捕获当前文字。
+
+按钮使用标准 `Button` 的语义主题、键盘焦点和缩放尺寸；它不增加终端行数，底部位置避开已测量的 composer、补全及反向搜索浮层。窄窗格中标签可以省略，完整文案保留在辅助功能名称与 tooltip 中。
+
+文字、直接 Kitty placements 和 Unicode placeholders 共用 `ReadingView`。选择／复制、链接、搜索与光标／IME 读取同一语义来源：后台原地重画或替换同一图片 ID 不改变当前阅读内容；主题变化重新解析 ANSI 样式，不丢弃文字。阅读态不显示实时终端 caret，也不给旧文字配置实时 IME 坐标；输入回到实时输出后恢复。resize relocation 与下述清屏／reset／重连／隐藏窗格生命周期的失效世代独立；#255 已在隔离 Windows 生产窗口和 headless consumer 矩阵运行这些路径，但 macOS／Linux 原生窗口与真实远端 SSH 仍未验收。
+
+### 调整窗格尺寸时的阅读位置
+
+改变列数或行数前，阅读所有者记录顶部所属硬逻辑行的前 256 个 Unicode 字符、顶部行在其中的字符偏移、相邻空行上下文，以及原行列与历史范围。字符和组合 marks 从实际语义单元取得，宽字符占位格不重复计数，不把 UTF-8 字节或列数当作字符偏移。
+
+请求尺寸不等于已经应用尺寸。等待有序 `Size` 时，旧宽度文字与图片仍按原行列一起绘制，新边界只裁切旧画面；等面积 resize 也不重新解释旧 cells。已有图片布局的连接还等待同一次 `Size` 之后的有序 graphics `Screen`，避免新文字混用上一尺寸的直接放置锚点。此路径复用现有 GUI mirror、metadata mutex、Wakeup 与图片 lease，不增加 IPC、daemon 行获取或第二个解析器。
+
+新几何就绪后，按保留历史的几何变化估计位置，在动态周边窗口内检查最多 1024 个候选行，选择距估计最近的精确硬行身份，再将字符偏移投影到新 wrapping。空行上下文用于区分重复空行；没有精确身份时使用限制在当前最老历史行与实时边缘之间的估计，不无条件回到实时输出。等待期间的用户滚动累计到最终位置；连续窄宽请求只发布最新目标几何。新文字、直接放置和由新语义行解析的 placeholders 一起重新捕获，旧图片 lease 通过原退休机制释放。
+
+`reading_resize_` 消费者断言观察生产绘制输入中的逻辑文字和图片 bounds／资源像素，覆盖反复窄宽、Unicode／marks、相同 256 字符前缀的最近候选、空行上下文、淘汰后的估计与最老边界、等面积旧画面、等待中的滚动、请求取代和没有后续 PTY 输出的提交。真实 PTY／daemon 场景与人为分开 `Size`／`Screen` 的有序 pane stream 场景在代码中分开标记；后者仍使用真实 `RemoteTerminal` 和 rooted `TerminalView`，不是原生窗口或 SSH 证明。以下检查已在 #255 headless consumer 矩阵运行（`verify-255/logs/`；#13 `reading-consumers` 25 passed、#19 `resize-search-rescan` 1 passed、#20 `remote-raw-size` 1 passed）：
+
+```powershell
+cargo test --locked -p lyrel --lib terminal::view::gpui_tests::reading_resize_ -- --nocapture --test-threads=1
+cargo test --locked -p lyrel --lib terminal::view::gpui_tests::a_column_resize_rescans_the_open_searchs_highlights -- --exact --nocapture --test-threads=1
+cargo test --locked -p lyrel --lib terminal::view::gpui_tests::graphics_consumer_remote_raw_size_keeps_standard_pty_history_growth -- --exact --nocapture --test-threads=1
+```
+
+完整 `reading_`／同步呈现回归与 build、lint、格式检查命令见下文。#255 已在 Windows 隔离本地窗口记录持续输出、静默 resize、反复窄宽、滚动与主题（L12–L17），并在 native SSH → 容器 sshd → Linux `lyrel-server` 的远程窗口记录阅读、pill、选择、搜索、主题与全屏 reflow（R2–R9）；macOS／Linux 桌面原生窗口、真实中文 IME、触控板惯性与远端带宽／帧率仍未验收。
+
+
 ### 实现职责
 
-`src/terminal/selection_scroll.rs` 的 `SelectionScroll` 统一持有选择拖拽、越界自动滚动、平滑动画、手势锁定，以及彼此独立的滚动／缩放余量。它直接借用现有 live grid，不复制网格，也不创建额外 entity 或锁。`TerminalView` 只适配 GPUI 事件、原有帧回调／定时器、viewport 上报和字号 action；滚动条仍经原有 handle 提交目标行。输入回到提示符时使用同一所有者取消动画并清除行内余量。绘制读取该所有者的行内偏移，鼠标及 IME 继续使用 `TerminalElement` 最近一帧的逻辑像素 cell geometry；display scale 只用于向子进程报告设备像素，不改变鼠标坐标语义。
+`src/terminal/selection_scroll.rs` 的 `SelectionScroll` 统一持有选择拖拽、越界自动滚动、平滑动画、手势锁定，以及彼此独立的滚动／缩放余量。它借用现有 live grid，由私有 `reading.rs` 保存绝对 top row、一屏解码后的活动 cells 以及首次读取的必要历史行，不克隆整个 grid，也不创建额外 entity、锁或 daemon 行获取协议。样式保存 ANSI 值、字符、marks、hyperlink 和宽字符／换行语义，不保存可回收的 side-table ID 或主题解析色；每帧沿用同一颜色解析逻辑。`TerminalView` 适配 GPUI 事件、原有帧回调／定时器、viewport 上报和字号 action；滚动条仍经原有 handle 提交目标行。回到提示符时使用同一所有者释放阅读内容、取消动画并清除行内余量。同步输出 hold 与长期阅读是独立机制：未提交的同步帧不会被捕获为阅读内容。绘制及命中仍使用 `TerminalElement` 最近一帧的逻辑像素 cell geometry；display scale 只用于向子进程报告设备像素。
+
+滚动条在实时边缘仅冻结供显隐判断的呈现几何，仍记录最新历史范围；目标经同一 `SelectionScroll` 路径进入阅读。每个保留行保存共享 Kitty 解码器取得的直接放置裁切和 placeholder runs，两者均沿绝对行锚点重投影，包括分数滚动的上一行。只保留最初的活动屏幕、当前视口／上一行切片、有界的换行链接上下文，以及选区跨越的必要行；已访问但不再需要的历史行及图片 lease 会释放，历史淘汰不会被缓存恢复。新增行批量捕获图片切片，不逐行扫描整个 store；图片沿用现有资源、预算和 GPU 退休路径，不钉住整个 store，也不从后台新版本解析冻结 placeholder。回到实时输出后才显示最新资源，下次阅读重新捕获。
 
 消费者回归集中在 `selection_scroll_consumer_tests.rs`，规则回归在 `selection_scroll_tests.rs`。原生验收仍需在 live terminal 上执行拖选／越界滚动、输出期间反向扩选、滚轮／触控板惯性尾段修饰键切换、拖动滚动条，以及窗口 resize 和界面／显示缩放；自动断言不能替代这些平台交互记录。
+
+`reading_consumer_tests.rs` 使用受控真实 PTY → 隔离 daemon → `RemoteTerminal` → 生产 `TerminalView`，新增混合直接放置／placeholder 的资源身份、像素、crop、z、文本对齐与退休断言，GPUI 指针拖选／复制 Action／链接激活、跨视口复制、搜索 query／next、主题与无实时 caret、保留行分配上界，以及 synchronized hold 独立生命周期回归。图片绘制辅助观察已改读实际 committed display list，不再用新 live placements 代表冻结画面。以下命令已在 #255 运行并保留原始结果（`verify-255/logs/reading-consumers.log` 等）；Windows 结果不外推为 macOS／Linux：
+
+集成首轮 `reading_` 记录为 `3 passed / 1 failed`：滚动条在实时边缘冻结的旧历史范围阻止了阅读态建立。修复后增加离开实时画面的断言、历史增长后的滚动条目标回归，以及活动 placeholder cells 被擦除后完整行与上一行半行切片的生产图片绘制回归；这些断言已在 #255 headless consumer 矩阵运行（#13 `reading-consumers` 25 passed、#16 `synchronized-invariants` 7 passed）。
+
+```powershell
+cargo test --locked -p lyrel --lib terminal::view::gpui_tests::reading_ -- --nocapture --test-threads=1
+cargo test --locked -p lyrel --lib terminal::view::gpui_tests::selection_scroll_consumer_tests:: -- --nocapture --test-threads=1
+cargo test --locked -p lyrel --lib terminal::view::gpui_tests::synchronized_ -- --nocapture --test-threads=1
+cargo test --locked -p lyrel --lib terminal::view::links::consumer_tests:: -- --nocapture --test-threads=1
+cargo test --locked -p lyrel --lib ui::i18n::tests::every_key_is_translated_in_every_locale -- --exact --nocapture --test-threads=1
+cargo build --locked -p lyrel
+cargo clippy --locked -p lyrel --lib --tests
+cargo fmt --check
+```
+
+上述 GPUI 测试观察生产绘制输入、真实子进程输出、控件布局和测试平台输入事件，不是原生 GPU 像素、系统 IME、触控板惯性或真实 SSH 验收。#255 已在 Windows 隔离本地窗口和 native SSH 远程窗口记录混合图片对齐、实际剪贴板／URL／文件链接、搜索、Light／Dark 主题及返回实时输出（L12–L18、R2–R10）；真实中文 IME、macOS／Linux 桌面窗口、触控板惯性与远端带宽／帧率仍未验收，注入 Unicode 不代替系统输入法。
+
+### 阅读生命周期、应用滚轮与隐藏窗格
+
+`CSI 3J` 清除历史、`RIS` reset、replay／重连建立不连续基线，以及进入备用屏幕，都会在现有 parse metadata 中标记阅读世代失效。即使清除前后的 `lines_evicted + history_size` 完全相同，或同一批输出内进入又离开备用屏幕，下一次呈现也会释放旧阅读文字、选区与图片 lease 并回到实时输出。用户主动清屏／清回滚同样使用统一的回到实时输出入口。普通历史容量淘汰不是 reset：绝对 top row 限制到仍保留的最老行，已淘汰的文字和图片切片永久移除，不把缓存配给新行身份。
+
+滚轮路由始终读取实时终端模式，不读冻结画面的旧模式。应用启用 mouse reporting 时优先发送 `64/65` 滚轮报告；备用屏幕启用 `ALTERNATE_SCROLL` 时发送当前 cursor mode 对应的上下箭头。按住 Shift 覆盖这些应用路由，保留本地回滚逃生通道；它不会把普通屏幕的阅读缓存混入应用自己的备用屏幕 transcript。
+
+隐藏窗格继续解析文字、推进 shell／agent facts 和解码图片，但普通输出不请求整窗重绘。可取得 VT guard 且没有 synchronized hold 时，隐藏 Wakeup 同步世代／历史淘汰，清除派生 display list 与选区，并释放阅读行的图片 lease；有界语义文字仍保留。再次显示时不会从新 live 图片重建已释放行的旧图片，回到实时输出后才显示当前有效图片。关闭窗口也释放阅读所有权，不等待仍被其他对象持有的 `TerminalView` 最后 Drop。资源仍遵循 daemon 权威、原有缓存预算及 GPU 退休顺序；普通图片替换可由当前有效阅读 lease 保留旧版本，但已清除／淘汰的行或已释放的 lease 不可复活。resize relocation 不使用 destructive generation，同步输出 hold 也不充当长期阅读生命周期。
+
+`reading_lifecycle_consumer_tests.rs` 新增六项受控生产消费者：origin-sum 不变的 `3J`／`RIS`／同批备用屏往返，Snapshot／relink 基线，超过 10,000 行的容量压力与过期图片后 resize／同 image ID 新版本，隐藏输出无 window notification、应用实际收到的滚轮／箭头与 Shift 本地逃生，以及窗口关闭前后的资源归还。断言观察完整生产呈现文字、实际图片 paint claims／像素身份、独立 live 文本、PTY stdin 字节与现有分配诊断，不检查私有 pending 字段。以下检查已在 #255 运行并保存 exit code／原始日志（#14 `reading-lifecycle` 6 passed、#18 `hidden-panes` 3 passed、#21 `mouse-reporting-pty` 1 passed）：
+
+```powershell
+cargo test --locked -p lyrel --lib terminal::view::gpui_tests::reading_lifecycle_ -- --nocapture --test-threads=1
+cargo test --locked -p lyrel --lib terminal::view::gpui_tests::reading_ -- --nocapture --test-threads=1
+cargo test --locked -p lyrel --lib terminal::view::gpui_tests::mouse_reporting_only_the_pressed_pane_owns_real_pty_reports -- --exact --nocapture --test-threads=1
+cargo test --locked -p lyrel --lib terminal::view::gpui_tests::graphics_consumer_hidden_ -- --nocapture --test-threads=1
+cargo test --locked -p lyrel --lib terminal::view::gpui_tests::graphics_consumer_real_daemon_history_expiration_clips_before_resize -- --exact --nocapture --test-threads=1
+cargo test --locked -p lyrel --lib terminal::view::gpui_tests::synchronized_ -- --nocapture --test-threads=1
+cargo build --locked -p lyrel
+cargo clippy --locked -p lyrel --lib --tests
+cargo fmt --check
+```
+
+这些断言已在 #255 运行，但不构成性能或原生像素结论。#255 已在 Windows 隔离本地窗口和 native SSH 远程窗口验证 clear／reset／alternate screen／隐藏恢复、滚轮、资源回收与 resize 的部分路径；macOS／Linux 桌面窗口、真实触控板惯性、中文 IME 与远端带宽／帧率仍未验收。socket replay、loopback、生产 paint claim 和远端 transport 成功均不能互相替代，更不能替代真实 GPU、OS 焦点、DPI、剪贴板或输入法验收。
+
+
 
 ### 同步输出的呈现边界
 

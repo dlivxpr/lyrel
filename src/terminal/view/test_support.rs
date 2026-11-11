@@ -266,3 +266,11 @@ pub(super) fn bind_to_a_disconnected_remote_workspace(
     }));
     id
 }
+
+/// Allocation evidence at the same consumer boundary as image-cache usage.
+pub(super) fn presentation_allocation_observation(view: &TerminalView) -> serde_json::Value {
+    serde_json::json!({
+        "images": view.terminal.images().allocation_observation(),
+        "reading": view.selection_scroll.reading.as_ref().map(|reading| reading.allocation_observation()),
+    })
+}

@@ -542,8 +542,11 @@ impl Element for TerminalElement {
         ) || (built.is_err() && previous.as_ref().is_some_and(|snap| snap.held));
         let mut snap = match built {
             Ok(snap) => {
-                self.view
-                    .update(cx, |view, _| view.selection_scroll.clear_presented());
+                self.view.update(cx, |view, _| {
+                    if view.selection_scroll.reading.is_none() {
+                        view.selection_scroll.clear_presented();
+                    }
+                });
                 snap
             }
             Err(unavailable) => {

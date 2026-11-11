@@ -14,7 +14,22 @@ mod native_markdown;
 /// 在进程主线程上运行真实字体 Markdown consumer。
 #[cfg(feature = "native-markdown-tests")]
 pub fn run_native_markdown_tests() -> std::process::ExitCode {
-    native_markdown::main()
+    native_markdown::main(
+        ui::code_editor::markdown::native_cases().collect(),
+        "native_markdown",
+    )
+}
+
+/// Run the native-font terminal consumer on the process main thread.
+#[cfg(feature = "native-markdown-tests")]
+pub fn run_native_terminal_tests() -> std::process::ExitCode {
+    if let Some(result) = terminal::view::native_terminal_tests::run_fixture() {
+        return result;
+    }
+    native_markdown::main(
+        terminal::view::native_terminal_tests::native_cases().collect(),
+        "native_terminal",
+    )
 }
 
 use crate::core::config::Config;
@@ -483,7 +498,7 @@ fn read_path_from_shell(shell: &str, args: &[&str]) -> Option<String> {
 #[cfg(unix)]
 fn enrich_path_from_login_shell() {
     let shell = crate::core::shells::login_shell();
-    let fish = std::path::Path::new(&shell).file_name() == Some("fish".as_ref());
+    let fish = crate::core::shell_quote::shell_base_name(&shell).eq_ignore_ascii_case("fish");
     let cmd = if fish {
         format!("printf '{PATH_MARKER}%s{PATH_MARKER}' (string join ':' $PATH)")
     } else {

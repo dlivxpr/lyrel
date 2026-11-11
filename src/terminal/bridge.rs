@@ -127,6 +127,9 @@ impl<'a, T: EventListener> ParseBridge<'a, T> {
         if was_alt == is_alt {
             return;
         }
+        if is_alt && let Some(presentation) = self.presentation {
+            presentation.lock().unwrap().invalidate_reading();
+        }
         if mode.raw() == 1049 {
             self.keyboard.swap();
             self.sync_keyboard();
@@ -270,7 +273,7 @@ impl<T: EventListener> Handler for ParseBridge<'_, T> {
         self.inner.set_horizontal_tabstop();
         if let Some(presentation) = self.presentation {
             let mut facts = presentation.lock().unwrap();
-            facts.resize(self.inner.columns());
+            facts.ensure_tab_stops(self.inner.columns());
             facts.set_tab_stop(self.inner.grid.cursor.pos.col.0);
         }
     }
@@ -320,7 +323,11 @@ impl<T: EventListener> Handler for ParseBridge<'_, T> {
     }
 
     fn clear_screen(&mut self, mode: ClearMode) {
+        let clears_history = matches!(mode, ClearMode::Saved);
         self.inner.clear_screen(mode);
+        if clears_history && let Some(presentation) = self.presentation {
+            presentation.lock().unwrap().invalidate_reading();
+        }
     }
 
     fn set_tabs(&mut self, interval: u16) {
@@ -330,7 +337,7 @@ impl<T: EventListener> Handler for ParseBridge<'_, T> {
     fn clear_tabs(&mut self, mode: TabulationClearMode) {
         if let Some(presentation) = self.presentation {
             let mut facts = presentation.lock().unwrap();
-            facts.resize(self.inner.columns());
+            facts.ensure_tab_stops(self.inner.columns());
             match &mode {
                 TabulationClearMode::Current => {
                     facts.clear_tab_stop(self.inner.grid.cursor.pos.col.0)
@@ -345,10 +352,9 @@ impl<T: EventListener> Handler for ParseBridge<'_, T> {
         *self.keyboard = KeyboardStacks::default();
         self.inner.reset_state();
         if let Some(presentation) = self.presentation {
-            presentation
-                .lock()
-                .unwrap()
-                .reset_tabs(self.inner.columns());
+            let mut facts = presentation.lock().unwrap();
+            facts.invalidate_reading();
+            facts.reset_tabs(self.inner.columns());
         }
         if let Some(limit) = self.history_limit {
             self.inner.grid.update_history(limit);

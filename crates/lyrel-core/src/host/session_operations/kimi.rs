@@ -10,11 +10,11 @@ pub(super) fn prepare<H: Host + ?Sized>(
     if scope
         .environment
         .keys()
-        .any(|key| !ENV.contains(&key.as_str()))
+        .any(|key| !ENV.contains(&key.as_str()) && !TERMINAL_SCOPE_ENV.contains(&key.as_str()))
     {
         return Err(failure(
             SessionErrorKind::Unsupported,
-            "Kimi scope accepts only HOME, USERPROFILE and KIMI_CODE_HOME",
+            "Kimi scope accepts only home/storage and public terminal environment selectors",
         ));
     }
     if scope.session_dir.is_some() {
@@ -25,7 +25,7 @@ pub(super) fn prepare<H: Host + ?Sized>(
     }
     let mut argv = request.launch_argv.clone();
     while let Some((key, value)) = argv.first().and_then(|arg| arg.split_once('=')) {
-        if !ENV.contains(&key) {
+        if !ENV.contains(&key) && !TERMINAL_SCOPE_ENV.contains(&key) {
             return Err(failure(
                 SessionErrorKind::Unsupported,
                 "unsupported Kimi environment assignment",

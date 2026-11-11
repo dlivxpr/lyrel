@@ -229,6 +229,7 @@ fn table_code_workbench_controls_history_host_reopen(cx: &mut TestAppContext) {
     workflow(cx);
 }
 
+#[cfg(feature = "native-markdown-tests")]
 pub(super) fn aligned_geometry(cx: &mut TestAppContext) {
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("aligned.md");
@@ -323,6 +324,7 @@ pub(super) fn aligned_geometry(cx: &mut TestAppContext) {
     assert_eq!(std::fs::read(&path).unwrap(), original.as_bytes());
 }
 
+#[cfg(feature = "native-markdown-tests")]
 pub(super) fn wide_table(cx: &mut TestAppContext) {
     // The complete fixed 48-column, 64-body-row fixture; no truncated viewport sample.
     let mut original = String::from("# Complete wide table\n\n|");

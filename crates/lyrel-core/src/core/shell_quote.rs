@@ -45,7 +45,8 @@ pub enum Quoting {
 }
 
 /// The shell binary's name, without a directory and without a `.exe` suffix.
-fn base_name(program: &str) -> &str {
+/// One spelling for every caller that has to recognize a shell by program.
+pub fn shell_base_name(program: &str) -> &str {
     let base = program.rsplit(['\\', '/']).next().unwrap_or(program);
     let cut = base.len().saturating_sub(4);
     match base.get(cut..) {
@@ -62,7 +63,7 @@ fn base_name(program: &str) -> &str {
 /// A local Windows pane defaults to PowerShell; other local platforms use POSIX.
 /// (WSL panes get their paths rewritten to `/mnt/...` before they reach here.)
 pub fn quoting_for(shell_program: Option<&str>) -> Quoting {
-    let Some(base) = shell_program.map(base_name) else {
+    let Some(base) = shell_program.map(shell_base_name) else {
         return if cfg!(windows) {
             Quoting::PowerShell
         } else {
@@ -92,7 +93,7 @@ pub fn runs_or_list(shell_program: &str) -> bool {
         "sh", "bash", "zsh", "dash", "ash", "ksh", "mksh", "oksh", "yash", "fish", "pwsh", "cmd",
         "csh", "tcsh", "xonsh",
     ];
-    let base = base_name(shell_program);
+    let base = shell_base_name(shell_program);
     OR_LIST.iter().any(|s| base.eq_ignore_ascii_case(s))
 }
 

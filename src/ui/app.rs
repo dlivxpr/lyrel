@@ -1647,8 +1647,11 @@ impl LyrelApp {
         self.replace_pane_slot(pending.entity_id(), slot.clone(), cx);
         match launch {
             PendingLaunch::None => {}
-            PendingLaunch::Command(command) => {
-                crate::ui::agent_launch::run_when_ready(&slot, command, cx)
+            PendingLaunch::Command(command, agent) => {
+                crate::ui::agent_launch::run_known_agent_when_ready(&slot, command, agent, cx)
+            }
+            PendingLaunch::Prepared(command) => {
+                crate::ui::agent_launch::run_prepared_when_ready(&slot, command, cx)
             }
             PendingLaunch::Resume {
                 agent,
@@ -3786,7 +3789,7 @@ impl LyrelApp {
                 );
             });
         }
-        crate::ui::agent_launch::run_when_ready(&new, command, cx);
+        crate::ui::agent_launch::run_prepared_when_ready(&new, command, cx);
 
         match placement {
             ForkPlacement::NewTab => {

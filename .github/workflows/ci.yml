@@ -216,6 +216,18 @@ jobs:
         # harness=false 的进程 main 持有原生字体平台；不使用 libtest worker 或名称筛选。
         run: cargo test --locked -p lyrel --features updater,native-markdown-tests --test native_markdown --target ${{ matrix.target }} -- --nocapture
 
+      # 与 native Markdown 相同：harness=false 的进程 main 持有原生字体平台。
+      # 复用已编译的 feature 库，但仍单独编译和执行，避免一个目标失败吞掉另一个。
+      - name: Compile native terminal tests
+        id: native_terminal_compile
+        if: ${{ !cancelled() && runner.os != 'Linux' && steps.native_markdown_compile.outcome == 'success' }}
+        timeout-minutes: 30
+        run: cargo test --locked -p lyrel --features updater,native-markdown-tests --test native_terminal --target ${{ matrix.target }} --no-run
+      - name: Test native terminal
+        if: ${{ !cancelled() && runner.os != 'Linux' && steps.native_terminal_compile.outcome == 'success' }}
+        timeout-minutes: 10
+        run: cargo test --locked -p lyrel --features updater,native-markdown-tests --test native_terminal --target ${{ matrix.target }} -- --nocapture
+
       - name: Test Linux headless
         if: runner.os == 'Linux'
         timeout-minutes: 20

@@ -9,6 +9,8 @@
 
 ### 新增
 
+- #250：为 zsh、Bash、fish、PowerShell 的直接 agent 启动增加命令级 Kitty 环境与下一提示符恢复，本地 Nushell 使用轻量 wrappers；快捷启动、明确映射、待连接窗格、恢复／分叉保留 agent 意图和公开终端 scope，Hermes 专属 marker 尊重显式空值。保留协议禁用和用户 hooks，不引入 PATH shim；补充真实 shell／原生子进程／pending consumers 与无集成时的显式回退。实施阶段未运行构建、格式化、测试、原生窗口或远端验收。
+- #249：新增不强制图片协议的 pi 1.4.0 scoped-discovery 消费者，保留显式关闭／设置优先级和零新消息重放；OpenCode 2.2.0 预览 on／off／inline false 检查完整 global／inline 配置不变。补充 pinned Kimi 用户粘贴缩略图和 Hermes 0.23.1 `image.render`／`InlineImage` 原生组件到真实 PTY／生产终端的消费者，比较完整图片、放置、卸载／重挂载与替换；不增加 renderer、不改用户配置。同步各 agent 能力矩阵与 OpenCode opt-in 文档；本分票未执行构建、测试、原生窗口或远端验收。
 - #236／#245：Markdown 完成唯一默认 Zorite-derived 源码路线的切换，移除旧 Markdown/MDX-rich 投影与专属实现契约；caret-local 标记显露、普通单击链接、MDX source-only 和 shared Document/history 成为当前产品规则。primary/secondary 安装同一组真实 Host providers，rename/save-as 只更新身份与源码策略，不丢弃历史。正式文档、原 14 项 native 消费者逐项迁移及 pinned MIT 来源/字体通知统一收敛；Windows ZIP/Inno 与 macOS app/ZIP 增加完整根 LICENSE 字节守卫。完整宽表的远端末行、真实图片/公式联合 hard-break 与长代码诊断尾部消费者补齐；源码和测试交付不是最终 native、实窗、SSH、平台、包或用户接受通过。
 
 - #236／#239：为 Zorite-derived Markdown 的每个 presentation 接入原生表格尺寸/样式选择、可键盘操作的行列/对齐/resize/fit 命令与 Kit 语法高亮/语言/复制控件。表格和代码均修改同一共享文档/history；代码语言修改保留 fence metadata，表格 Unicode 命中与 IME 使用绘制一致的 cell 几何。补充完整宽表与 owning Host 保存重开消费者；集中回归和实际参考窗口对照尚待执行，不以源码接线声明验收通过。
@@ -22,6 +24,21 @@
 
 ### 修复
 
+- #252：真实字形／主题／光标消费者从零光栅边界的 `NoopTextSystem` 迁入 `native_terminal` 目标，复用已有 OS 主线程、真实字体 runner 与同一 PTY／daemon 支持；复制、宽字／组合字符、链接、Tab stops、冻结文字及非空 glyph／动态颜色断言全部保留。Windows raw PTY 的长链接夹具先显式开启 DECAWM，并独立核对全部三行后再冻结、滚动与验证 hover／完整目标，不改生产阅读／绘制逻辑或 #249 matrix。未运行构建、测试、lint、格式化；native-font consumer 不替代 #255 实窗／系统 IME 验收。
+- #252：生产绘制消费者改从 GPUI 已完成帧的 `terminal-surface` 几何观察固定 pane 边界，不再读取私有 `GridSnapshot::scroll_shift`；保留分数滚动上一行图片的可见薄片与全部真实 paint 断言，不修改字段可见性或生产行为。本修复未运行构建、测试、lint 或格式化，待集成验收。
+- #250：修复 Windows PowerShell 5.1 在 hook 之后执行 `Env:` 显式空赋值、再次删除空值的问题：仅对已识别 agent 命令的七个 scope 字段，在旧 Windows PowerShell／pwsh 中用系统 setter 执行空字面量赋值；保持原始历史／OSC、显式 `TERM_PROGRAM`、opt-outs 和提示符恢复。真实 PTY 用例新增显式空／unset 恢复断言，并用生产 scope encoder 配合 `Start-Job`／`Wait-Job` 覆盖 PS5.1，保留 pwsh 7 末尾 `&` 背景启动及恢复断言；旧 `AmpersandNotAllowed` 不算有效启动。本次未执行测试、构建、lint 或格式化，PS5.1／pwsh 7 均待集成验收。
+- #250：Bash 提交命令的 history 前缀正则改为局部变量中的 ERE，并在 `=~` 右侧使用未加引号的变量展开，避免 Bash 3.2 在启动阶段把内联正则中的括号误解析为 shell 语法。正则、完整多行命令重建、转义／截断、用户 history／hooks 及命令级 agent scope 均不变，不增加 `eval` 或命令执行；保留全部既有断言。本修复子任务未执行构建、测试、lint 或格式化，Bash 3.2／4.4／5.1／5.2 行为需由集成验收核验。
+- #250：修复 Bash 3.2 的直接 agent 命令未收到 Kitty scope：`DEBUG` 临时关闭 history，导致 `[[ -o history ]]` 拒绝已记录的完整命令。仅旧版 `DEBUG` 路径改从 `SHELLOPTS` 读取配置状态，仍要求完整 history 与命令一致；保留 history 关闭、管道／复合命令／解释器排除、显式身份／协议禁用、用户 traps 与 `$_`，不改 Bash 4.4+ 路径。原始运行时诊断已捕获相同的命令文本及被临时关闭的 history；修复后构建、测试、lint、格式化与版本矩阵均未执行。
+
+- #252：修正五项阅读消费者的前置条件与几何观察：文件链接使用真实子进程 cwd，长链接避开 PTY 完成标记行，历史／虚拟图片按 ID 显式删除，分数滚动绘制断言使用固定 pane mask；原子输出生命周期在 daemon／RemoteTerminal 公开边界观察 BSU、隐藏解析与 ESU，避免完整 PTY 往返跨过 fail-safe。保留冻结语义、目标／hover、资源释放和真实 paint 断言，不改生产阅读或图片行为；本修复子任务未运行构建、测试、lint 或格式化。
+- #252：稳定阅读的选择／复制、链接、搜索和光标／IME 使用同一语义行；跨视口选择以绝对行保持身份，捕获 Tab stops，主题变化重新解析 ANSI 样式。直接 Kitty 切片与 placeholders 保留资源版本、crop、z 及文本对齐，修正 replay origin 转换；历史缓存仅保留阅读／选择需要的行，不累积全部访问历史。新增真实 PTY／daemon／生产 paint 和 GPUI 交互消费者，修正绘制观察为 committed images；未执行构建、测试、lint、格式化或实窗验收，#255 继续记录本地／SSH、原生像素与系统 IME 证据。
+- #249：修复 OpenCode preparation 参数顺序；Kimi worker 显式选择 pinned source 根 `tsconfig.json` 以保留参数 decorators；Hermes 原生夹具改走生产 agent scope encoder 获取 presence-sensitive marker，不手动注入子进程环境。保留完整像素、placement、关闭策略、配置／源码完整性及零推理断言；此轮未执行构建、测试、lint 或格式化，不宣称原失败已运行通过。
+- #250：PowerShell 手动启动识别器先解开环境赋值右侧的 `CommandExpressionAst`，再安全读取字面量，修复真实 pwsh 中带前置环境赋值的 agent 命令未收到 `TERM_PROGRAM=kitty`；仍拒绝赋值重定向、管道、复合命令和解释器调用，保留显式空值、scope 编码启动、用户提示符及下一提示符恢复。既有真实 PTY 消费者已覆盖失败路径，未降低断言；本修复子任务未运行构建、格式化或测试。
+- #251：冻结 placeholder 消费者区分单元格行原点与方图 aspect-fit 后的居中像素 crop，按独立方图几何同时约束完整行与分数滚动上一行，保留蓝色资源身份、live 擦除／替换后的捕获图片及真实绘制断言，不修改生产图片布局。阅读态的上一行单元格不再遍历实时栅格；构建、测试与格式化由集成验收执行，本修复子任务未运行。
+- #248：普通 shell 的 scoped-launch 前置身份标记改从 daemon 的只读 `Observe` 回放中独立检查，并核验前后标记顺序；终端 `scrollback_text()` 是可被原生 TUI 清屏／覆盖的 VT 呈现，不是追加式 PTY transcript。保留退出后生产视图中的父 shell 身份检查、显式策略优先级及全部 streaming 栅格／放置断言，不修改实际输出或生产阅读实现。本修复子任务未执行构建、测试或格式化。
+- #248：确定性 omp token-stage 消费者仅在自有 streaming overlay 关闭额外的 `display.smoothStreaming` 文字揭示动画，并用正式 config CLI 核验。避免单个 SSE delta 被再次拆成根标签已完整、首个图元尚未完整的合法透明 SVG 后，误当作红底修订；真实 SSE、SVG 修补／节流、两个非空完整中间栅格、精确最终像素与顺序／无旧放置断言保持不变。未在修复子任务运行验证，不宣称默认 smooth reveal 子前缀验收通过。
+- #251：终端阅读态在原生 `Div` 上注册子元素 prepaint 监听后再附加 identity／测试观察包装，修复 `Observed<E>` 不提供 `on_children_prepainted` 的编译错误；保留原有子元素边界测量、遮挡高度更新与返回实时输出按钮布局。编译与行为回归由集成验收执行。
+- #251：滚动条把实时边缘的显隐几何与当前历史范围分开保存，避免首次拖动被过期历史容量裁剪而未建立冻结阅读态；保留后台输出不唤醒滚动条及粘贴回到实时输出的行为。阅读行同时保留共享 Kitty 解码器的语义 placeholder runs，完整行与分数滚动的上一行图片切片均来自冻结行，修复既有 omp 消费者在阅读时图片未进入生产绘制列表的问题；新增消费者回归未在修复子任务中执行。
 - #236／#243：保存从同一共享文档快照捕获源文、编码/BOM、逐行表示与字节，并绑定原Document／Host／path。另存为写入成功后才采用目标，失败保留原身份和历史；在途新编辑使旧关闭意图退役，后续保存不重启旧关闭。显式去尾空白改为稀疏事务，保留混合行尾并可撤销；扩展名改为MDX时只改变各呈现策略，不替换文档。新增编码往返、失败恢复、第二呈现快照与native消费者，实际local／SSH及平台验证由集成者分别记录。
 - #236：修复公开 `EditorTrimTrailingWhitespace` action 同步重入 `LyrelApp` 导致的崩溃；直接调用已有编辑命令，保留共享文档的稀疏修改与 Undo。
 - #236／#241：结构公式焦点内的 Cmd/Ctrl+S 先确认有效草稿，再保存共享文档，避免工作台快捷键抢先保存旧正文。

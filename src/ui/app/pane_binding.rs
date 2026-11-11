@@ -49,7 +49,7 @@ impl LyrelApp {
                             .any(|leaf| leaf.entity_id() == terminal.entity_id())
                     });
                     if still_present && let Some(command) = prepared.command {
-                        crate::ui::agent_launch::run_when_ready(
+                        crate::ui::agent_launch::run_prepared_when_ready(
                             &PaneSlot::Ready(terminal),
                             command,
                             cx,
