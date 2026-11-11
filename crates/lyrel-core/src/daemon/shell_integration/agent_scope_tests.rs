@@ -185,7 +185,7 @@ fn structured_scope_shell_contract(program: &str, nushell: bool) {
     std::fs::create_dir(&bin).unwrap();
     for name in ["omp", "kimi", "pi", "opencode", "opencode2", "hermes", "ordinary"] {
         let name = if cfg!(windows) { format!("{name}.exe") } else { name.into() };
-        std::fs::hard_link(std::env::current_exe().unwrap(), bin.join(name)).unwrap();
+        std::fs::copy(std::env::current_exe().unwrap(), bin.join(name)).unwrap();
     }
     let mut injection = if nushell { setup_nushell_with(None).unwrap() } else {
         let mut injection = setup_powershell().unwrap();

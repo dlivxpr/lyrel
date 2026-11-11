@@ -337,7 +337,7 @@ fn connecting_agent_environment(cx: &mut TestAppContext, mapped: bool) {
     } else {
         "mapped-hermes"
     });
-    std::fs::hard_link(std::env::current_exe().unwrap(), &wrapper).unwrap();
+    std::fs::copy(std::env::current_exe().unwrap(), &wrapper).unwrap();
     let shell = if cfg!(windows) { "pwsh" } else { "/bin/sh" };
     let command = format!(
         "PI_IMAGE_PROTOCOL=none {} --ignored --exact ui::pending_pane::creation::consumer_tests::pending_scope_child --nocapture",
@@ -453,7 +453,7 @@ fn a_prepared_hermes_command_is_typed_verbatim_and_keeps_its_marker(cx: &mut Tes
     } else {
         "hermes"
     });
-    std::fs::hard_link(std::env::current_exe().unwrap(), &wrapper).unwrap();
+    std::fs::copy(std::env::current_exe().unwrap(), &wrapper).unwrap();
     let native = format!(
         "{} --ignored --exact ui::pending_pane::creation::consumer_tests::pending_scope_child --nocapture",
         quote_for_shell(&wrapper.to_string_lossy(), Some(shell))
