@@ -18,6 +18,11 @@ impl SourceSnapshot {
             if inside_fence {
                 continue;
             }
+            if let Some((source, ..)) = markdown_syntax::image_row(line)
+                && !sources.iter().any(|existing| existing == source)
+            {
+                sources.push(source.to_owned());
+            }
             for (_, range) in markdown_syntax::inline_image_spans(line) {
                 let source = &line[range];
                 if !sources.iter().any(|existing| existing == source) {
@@ -56,5 +61,28 @@ impl EditorState {
             let (src, ..) = markdown_syntax::image_row(&self.content[start..self.line_end(row)])?;
             Some(src.to_owned().into())
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn html_img_src_participates_in_image_resources() {
+        let document = Document::new(
+            concat!(
+                "<div align=\"center\">\n",
+                "<img src=\"assets/app-icon.svg\" alt=\"lyrel\" width=\"88\" />\n",
+                "![badge](https://img.shields.io/badge/test)\n",
+                "```text\n<img src=\"not-a-resource.png\">\n```\n"
+            )
+            .into(),
+            lyrel_text::TextFormat::default(),
+        );
+        assert_eq!(
+            document.snapshot().image_sources(),
+            ["assets/app-icon.svg", "https://img.shields.io/badge/test"]
+        );
     }
 }

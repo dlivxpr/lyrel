@@ -337,6 +337,9 @@ impl PendingPane {
             }
             view
         });
+        if let Some(title) = self.spawn.agent_title.as_deref() {
+            view.update(cx, |view, cx| view.seed_session_title(title, cx));
+        }
         // Terminal construction focuses its new handle. Only the pending slot
         // that already held focus may hand it over to this terminal.
         if !focused {

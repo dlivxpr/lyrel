@@ -49,6 +49,10 @@ impl LyrelApp {
                             .any(|leaf| leaf.entity_id() == terminal.entity_id())
                     });
                     if still_present && let Some(command) = prepared.command {
+                        if let Some(title) = prepared.title.as_deref() {
+                            terminal
+                                .update(cx, |terminal, cx| terminal.seed_session_title(title, cx));
+                        }
                         crate::ui::agent_launch::run_prepared_when_ready(
                             &PaneSlot::Ready(terminal),
                             command,

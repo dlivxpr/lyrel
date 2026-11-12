@@ -8,7 +8,7 @@ use gpui_kit::component::{
     popover::Popover,
 };
 use gpui_kit::{App, FocusHandle, HighlightStyle, IntoElement, Render, RenderOnce, WeakEntity};
-use lyrel_markdown_editor::{CellAlign, EditorState as MarkdownEditor};
+use lyrel_markdown_editor::EditorState as MarkdownEditor;
 use std::{cell::RefCell, ops::Range};
 
 pub(super) fn configure(editor: &mut MarkdownEditor, _: &mut Context<MarkdownEditor>) {
@@ -116,8 +116,13 @@ impl TableCodeControls {
                 if matches!(event, lyrel_markdown_editor::EditorEvent::InsertTable) {
                     this.open = true;
                     this.picker.update(cx, |picker, cx| picker.reset(cx));
-                    let focus = this.picker.read(cx).focus.clone();
+                    let picker = this.picker.clone();
+                    let focus = picker.read(cx).focus.clone();
                     focus.focus(window, cx);
+                    window.on_next_frame(move |window, cx| {
+                        let focus = picker.read(cx).focus.clone();
+                        focus.focus(window, cx);
+                    });
                     cx.notify();
                 }
             }),
@@ -155,98 +160,36 @@ impl Render for TableCodeControls {
         if editor.read(cx).is_source_only() {
             return h_flex();
         }
-        let table = editor.read(cx).has_caret_table();
         let code = editor.read(cx).caret_code_language();
-        let menu_editor = editor.clone();
         let code_editor = editor.clone();
         let copy_editor = editor.clone();
+        let menu_editor = editor.clone();
         h_flex()
             .flex_none()
             .justify_end()
             .gap_1()
             .px_2()
-            .child(
-                Popover::new("markdown-table-insertion-picker")
-                    .open(self.open)
-                    .track_focus(&self.picker.read(cx).focus)
-                    .on_open_change(cx.listener(|this, open, window, cx| {
-                        this.open = *open;
-                        if *open {
-                            this.picker.update(cx, |picker, cx| {
-                                picker.reset(cx);
-                                picker.focus.focus(window, cx);
-                            });
-                        }
-                        cx.notify();
-                    }))
-                    .trigger(
-                        Button::new("markdown-table-insert")
-                            .ghost()
-                            .xsmall()
-                            .label(t(L10nKey::EditorTableInsert)),
-                    )
-                    .child(self.picker.clone()),
-            )
-            .when(table, |row| {
+            .when(self.open, |row| {
                 row.child(
-                    Button::new("markdown-table-commands")
-                        .ghost()
-                        .xsmall()
-                        .label(t(L10nKey::EditorTableCommands))
-                        .dropdown_menu(move |mut menu, _, cx| {
-                            menu = menu.action_context(menu_editor.read(cx).focus_handle(cx));
-                            for (label, command) in [
-                                (L10nKey::EditorTableInsertRowBefore, 0),
-                                (L10nKey::EditorTableInsertRowAfter, 1),
-                                (L10nKey::EditorTableDuplicateRow, 2),
-                                (L10nKey::EditorTableInsertColumnBefore, 3),
-                                (L10nKey::EditorTableInsertColumnAfter, 4),
-                                (L10nKey::EditorTableAlignLeft, 5),
-                                (L10nKey::EditorTableAlignCenter, 6),
-                                (L10nKey::EditorTableAlignRight, 7),
-                                (L10nKey::EditorTableFitColumn, 8),
-                                (L10nKey::EditorTableWidenColumn, 9),
-                                (L10nKey::EditorTableNarrowColumn, 10),
-                                (L10nKey::EditorTableStyleGrid, 11),
-                                (L10nKey::EditorTableStyleStriped, 12),
-                                (L10nKey::EditorTableStyleHeader, 13),
-                                (L10nKey::EditorTableStyleMinimal, 14),
-                                (L10nKey::EditorTableCopyMarkdown, 15),
-                                (L10nKey::EditorTableDeleteRow, 16),
-                                (L10nKey::EditorTableDeleteColumn, 17),
-                                (L10nKey::EditorTableDeleteTable, 18),
-                            ] {
-                                if [3, 5, 8, 11, 15, 16].contains(&command) {
-                                    menu = menu.separator();
-                                }
-                                menu = menu.item(command_item(
-                                    &menu_editor,
-                                    label,
-                                    move |editor, window, cx| match command {
-                                        0 => editor.insert_table_row(false, cx),
-                                        1 => editor.insert_table_row(true, cx),
-                                        2 => editor.duplicate_table_row(cx),
-                                        3 => editor.insert_table_column(false, cx),
-                                        4 => editor.insert_table_column(true, cx),
-                                        5 => editor.set_caret_table_align(CellAlign::Left, cx),
-                                        6 => editor.set_caret_table_align(CellAlign::Center, cx),
-                                        7 => editor.set_caret_table_align(CellAlign::Right, cx),
-                                        8 => editor.fit_caret_table_column(window, cx),
-                                        9 => editor.resize_caret_table_column(16., cx),
-                                        10 => editor.resize_caret_table_column(-16., cx),
-                                        11 => editor.set_table_style(None, cx),
-                                        12 => editor.set_table_style(Some("striped"), cx),
-                                        13 => editor.set_table_style(Some("header"), cx),
-                                        14 => editor.set_table_style(Some("minimal"), cx),
-                                        15 => editor.copy_table(cx),
-                                        16 => editor.delete_table_row(cx),
-                                        17 => editor.delete_table_column(cx),
-                                        _ => editor.delete_table(cx),
-                                    },
-                                ));
+                    Popover::new("markdown-table-insertion-picker")
+                        .open(self.open)
+                        .track_focus(&self.picker.read(cx).focus)
+                        .on_open_change(cx.listener(move |this, open, window, cx| {
+                            this.open = *open;
+                            if *open {
+                                this.picker.update(cx, |picker, cx| {
+                                    picker.reset(cx);
+                                    picker.focus.focus(window, cx);
+                                });
+                            } else {
+                                menu_editor.read(cx).focus_handle(cx).focus(window, cx);
                             }
-                            menu
-                        }),
+                            cx.notify();
+                        }))
+                        // Command-only picker: a zero-size selectable anchor preserves
+                        // Popover positioning/focus without another visible toolbar button.
+                        .trigger(Button::new("markdown-table-picker-anchor").size_0())
+                        .child(self.picker.clone()),
                 )
             })
             .when_some(code, |row, language| {

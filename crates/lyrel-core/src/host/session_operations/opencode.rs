@@ -832,6 +832,11 @@ pub(super) fn prepare(
         source_id: request.source_id.clone(),
         target_id: Some(target),
         session_file: None,
+        title: source["title"]
+            .as_str()
+            .map(str::trim)
+            .filter(|title| !title.is_empty())
+            .map(str::to_owned),
         cwd: request.cwd.clone(),
         scope,
         launch_argv: launch,

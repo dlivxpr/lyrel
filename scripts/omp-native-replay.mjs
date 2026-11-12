@@ -52,7 +52,12 @@ function png(rgb) {
   const bytes = encodePng(width, height, scan);
   return { bytes, bgraHash: createHash('sha256').update(bgra).digest('hex') };
 }
-const palette = [[255,0,0],[0,255,0],[0,0,255],[255,255,0],[255,0,255],[0,255,255],[192,96,0],[96,0,192],[0,128,96],[128,128,128]];
+const palette = [
+  [255,0,0],[0,255,0],[0,0,255],[255,255,0],[255,0,255],[0,255,255],
+  [192,96,0],[96,0,192],[0,128,96],[128,128,128],[224,32,96],[32,160,224],
+  [160,224,32],[224,160,32],[96,32,160],[32,96,160],[160,96,32],[32,224,160],
+  [224,32,160],[96,160,32],[160,32,96],[32,96,32],
+];
 const usage = { input:0, output:0, cacheRead:0, cacheWrite:0, totalTokens:0, cost:{input:0,output:0,cacheRead:0,cacheWrite:0,total:0} };
 if (action === 'prepare') {
   const omp = resolve(option('--omp', 'omp.exe'));
@@ -77,11 +82,11 @@ if (action === 'prepare') {
   if (scenario === 'streaming') {
     append(assistant([{type:'text',text:'LYREL_STREAM_READY'}]));
   } else {
-  const count = scenario === 'budget' ? 10 : 1;
-  // Released 18.14.0/18.14.1 keys assistant images by content slot (`native:${i}`),
-  // not by message. Ten separate slot-1 messages alias one transmit-once image.
-  // Put all ten assistant pictures in one native message to exercise 12 distinct
-  // images against the real eight-image budget, without patching the renderer.
+  const count = scenario === 'budget' ? 22 : 1;
+  // Released omp keys assistant images by content slot (`native:${i}`), not by
+  // message. Keep all pictures in one message so 22 assistant slots plus the
+  // tool result and SVG figure exercise the real 20-image cap without patching
+  // the renderer.
   const assistantContent = [];
   for (let index = 0; index < count; index++) {
     const image = png(palette[index]);
@@ -102,7 +107,7 @@ if (action === 'prepare') {
   // it is not the red revision acknowledged by our token-stage pixel oracle.
   // Disable only that cosmetic reveal in this owned streaming overlay. Native
   // SSE updates remain transient, with SvgFigure's repair/throttle/replacement.
-  json(overlay, {terminal:{showImages:scenario !== 'disabled'},tui:{renderSvg:true,maxInlineImages:8,resizeScrollback:'rebuild'},...(scenario === 'streaming' ? {display:{smoothStreaming:false}} : {}),startup:{quiet:true,setupWizard:false},recap:{enabled:false},compaction:{enabled:false},retry:{modelFallback:false}});
+  json(overlay, {terminal:{showImages:scenario !== 'disabled'},tui:{renderSvg:true,maxInlineImages:20,resizeScrollback:'rebuild'},...(scenario === 'streaming' ? {display:{smoothStreaming:false}} : {}),startup:{quiet:true,setupWizard:false},recap:{enabled:false},compaction:{enabled:false},retry:{modelFallback:false}});
   const environment = {
     HOME:join(root,'home'),USERPROFILE:join(root,'home'),APPDATA:join(root,'config'),LOCALAPPDATA:join(root,'data'),
     XDG_CONFIG_HOME:join(root,'config'),XDG_DATA_HOME:join(root,'data'),XDG_STATE_HOME:join(root,'state'),XDG_CACHE_HOME:join(root,'cache'),
@@ -180,7 +185,7 @@ if (action === 'prepare') {
   const configPath = inspect('config-path',['config','path']);
   const expectedConfig = join(root,'agent');
   if (resolve(configPath).toLowerCase() !== resolve(expectedConfig).toLowerCase()) throw new Error(`Public config path ${configPath} is not owned ${expectedConfig}`);
-  for (const [key,expected] of [['terminal.showImages',manifest.scenario !== 'disabled'],['tui.renderSvg',true],['tui.maxInlineImages',8]]) {
+  for (const [key,expected] of [['terminal.showImages',manifest.scenario !== 'disabled'],['tui.renderSvg',true],['tui.maxInlineImages',20]]) {
     const {value:actual} = JSON.parse(inspect(`config-${key}`,['config','get',key,'--json'],{PI_CONFIG_FILES:manifest.overlay}));
     if (actual !== expected) throw new Error(`Public setting ${key}: expected ${expected}, got ${JSON.stringify(actual)}`);
   }

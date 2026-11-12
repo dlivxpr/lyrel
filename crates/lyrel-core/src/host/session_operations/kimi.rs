@@ -202,6 +202,7 @@ pub(super) fn prepare<H: Host + ?Sized>(
                 source_id: request.source_id.clone(),
                 target_id: Some(id.clone()),
                 session_file: None,
+                title: None,
                 cwd: request.cwd.clone(),
                 scope: scope.clone(),
                 launch_argv: launch.clone(),
@@ -227,6 +228,7 @@ pub(super) fn prepare<H: Host + ?Sized>(
     } else {
         (source_file, request.source_id.clone(), false)
     };
+    let title = crate::core::agent_history::session_title(CLIAgent::Kimi, &file);
     scope.session_file = Some(file.clone());
     let mut open = launch.clone();
     open.extend(["--session".into(), id.clone()]);
@@ -237,6 +239,7 @@ pub(super) fn prepare<H: Host + ?Sized>(
         source_id: request.source_id.clone(),
         target_id: Some(id),
         session_file: Some(file),
+        title,
         cwd: request.cwd.clone(),
         scope,
         launch_argv: launch,

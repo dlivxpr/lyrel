@@ -169,6 +169,20 @@ pub fn same_title_ignoring_status_mark(a: &str, b: &str) -> bool {
     strip_status_mark(a.trim()) == strip_status_mark(b.trim())
 }
 
+pub fn is_shell_program_title(title: &str) -> bool {
+    let title = title.trim().trim_matches('"');
+    let lower = title.to_ascii_lowercase();
+    if !title.contains(['/', '\\']) && !lower.ends_with(".exe") {
+        return false;
+    }
+    let name = lower.rsplit(['/', '\\']).next().unwrap_or(&lower);
+    let name = name.strip_suffix(".exe").unwrap_or(name);
+    matches!(
+        name,
+        "cmd" | "powershell" | "pwsh" | "sh" | "bash" | "zsh" | "fish" | "nu" | "wsl"
+    )
+}
+
 impl TabView {
     pub fn label(&self) -> TabLabel<'_> {
         if let Some(name) = self
@@ -178,6 +192,14 @@ impl TabView {
             .filter(|n| !n.is_empty())
         {
             return TabLabel::Named(name);
+        }
+        if let Some(agent) = self.agent
+            && self
+                .osc_title
+                .as_deref()
+                .is_some_and(is_shell_program_title)
+        {
+            return TabLabel::Agent(agent);
         }
         if let Some(title) = self
             .osc_title
@@ -387,6 +409,17 @@ mod tests {
             ..view()
         };
         assert_eq!(plain.label(), TabLabel::Cwd("/work"));
+    }
+
+    #[test]
+    fn a_stale_shell_program_title_does_not_hide_the_agent() {
+        let shell = TabView {
+            osc_title: Some(r"C:\Windows\System32\cmd.exe".into()),
+            title: "cmd.exe".into(),
+            agent: Some(CLIAgent::OhMyPi),
+            ..view()
+        };
+        assert_eq!(shell.label(), TabLabel::Agent(CLIAgent::OhMyPi));
     }
 
     #[test]

@@ -195,6 +195,7 @@ pub(super) fn prepare(
         source_id: request.source_id.clone(),
         target_id: Some(target.into()),
         session_file: None,
+        title: None,
         cwd: request.cwd.clone(),
         scope,
         launch_argv: launch,

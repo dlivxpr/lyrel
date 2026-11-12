@@ -862,6 +862,22 @@ impl TerminalView {
         stated_title(&self.title)
     }
 
+    /// Seed a title recovered from native history while the pane still shows
+    /// its placeholder or a stale shell executable title. A real native title
+    /// that arrived during preparation is never overwritten by this fallback.
+    pub(crate) fn seed_session_title(&mut self, title: &str, cx: &mut Context<Self>) {
+        let title = title.trim();
+        if title.is_empty()
+            || (self.stated_title().is_some()
+                && !lyrel_core::core::tab_view::is_shell_program_title(&self.title))
+        {
+            return;
+        }
+        self.pending_title = None;
+        self.title = title.to_owned();
+        cx.notify();
+    }
+
     /// Sets how opaque the pane wants this terminal painted; the pane leaf
     /// calls this every frame while rendering, and the terminal element
     /// blends its colours toward the window background during paint (see

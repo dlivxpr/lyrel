@@ -26,7 +26,10 @@ impl OmpReplayFixture {
         Self {
             root,
             streaming: case == "streaming",
-            scoped: matches!(case, "streaming" | "disabled" | "protocol-off" | "placeholder-off"),
+            scoped: matches!(
+                case,
+                "streaming" | "disabled" | "protocol-off" | "placeholder-off"
+            ),
         }
     }
 
@@ -64,9 +67,13 @@ impl OmpReplayFixture {
             )
             .unwrap();
             let line = if cfg!(windows) {
-                format!("Write-Output ('LYREL_PARENT_BEFORE=' + $env:TERM_PROGRAM); {scoped}; Write-Output ('LYREL_PARENT_AFTER=' + $env:TERM_PROGRAM)")
+                format!(
+                    "Write-Output ('LYREL_PARENT_BEFORE=' + $env:TERM_PROGRAM); {scoped}; Write-Output ('LYREL_PARENT_AFTER=' + $env:TERM_PROGRAM)"
+                )
             } else {
-                format!("printf 'LYREL_PARENT_BEFORE=%s\\n' \"$TERM_PROGRAM\"; {scoped}; printf 'LYREL_PARENT_AFTER=%s\\n' \"$TERM_PROGRAM\"")
+                format!(
+                    "printf 'LYREL_PARENT_BEFORE=%s\\n' \"$TERM_PROGRAM\"; {scoped}; printf 'LYREL_PARENT_AFTER=%s\\n' \"$TERM_PROGRAM\""
+                )
             };
             shell.program = program.into();
             shell.args = if cfg!(windows) {
@@ -101,6 +108,12 @@ impl OmpReplayFixture {
         value["stage"].as_str().map(str::to_owned)
     }
 
+    fn identities(&self) -> Vec<serde_json::Value> {
+        let bytes = std::fs::read(self.root.path().join("owned/fixture.json")).unwrap();
+        let value: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        value["identities"].as_array().unwrap().clone()
+    }
+
     fn diagnostics(&self, view: &Entity<TerminalView>, cx: &mut TestAppContext) -> String {
         let terminal = view.update(cx, |view, _| {
             view.terminal.poll_exited();
@@ -114,7 +127,21 @@ impl OmpReplayFixture {
             )
         });
         let mut result = format!("owned_root={} {terminal}", self.root.path().display());
-        for name in ["fixture.json", "stages.jsonl", "version.json", "identity.json", "config-path.json", "config-terminal.showImages.json", "config-tui.renderSvg.json", "config-tui.maxInlineImages.json", "config-display.smoothStreaming.json", "models.json", "running.json", "requests.json", "audit.json"] {
+        for name in [
+            "fixture.json",
+            "stages.jsonl",
+            "version.json",
+            "identity.json",
+            "config-path.json",
+            "config-terminal.showImages.json",
+            "config-tui.renderSvg.json",
+            "config-tui.maxInlineImages.json",
+            "config-display.smoothStreaming.json",
+            "models.json",
+            "running.json",
+            "requests.json",
+            "audit.json",
+        ] {
             if let Ok(text) = std::fs::read_to_string(self.root.path().join("owned").join(name)) {
                 result.push_str(&format!("\n{name}: {text}"));
             }
@@ -127,7 +154,10 @@ impl OmpReplayFixture {
         let failed = self.stage().as_deref() == Some("failed");
         let exited = view.read_with(cx, |view, _| view.terminal.child_exited());
         if failed || exited {
-            panic!("omp public-entry phase {phase} failed: {}", self.diagnostics(view, cx));
+            panic!(
+                "omp public-entry phase {phase} failed: {}",
+                self.diagnostics(view, cx)
+            );
         }
     }
 
@@ -136,18 +166,33 @@ impl OmpReplayFixture {
             cx,
             std::time::Duration::from_secs(30),
             |cx| {
-                if self.stage().as_deref() == Some("waiting-consumer") { return true; }
+                if self.stage().as_deref() == Some("waiting-consumer") {
+                    return true;
+                }
                 self.assert_running(view, cx, "fixture readiness before native launch");
                 false
             },
-            |cx| format!("omp fixture readiness timed out: {}", self.diagnostics(view, cx)),
+            |cx| {
+                format!(
+                    "omp fixture readiness timed out: {}",
+                    self.diagnostics(view, cx)
+                )
+            },
         );
         // Readiness is not a prompt and must never share omp's ConPTY stdin.
         let active: serde_json::Value = serde_json::from_slice(
-            &std::fs::read(self.root.path().join("owned/running.json")).unwrap()
-        ).unwrap();
-        assert!(active["childPid"].is_null(), "native child started before rooted readiness: {active}");
-        std::fs::write(self.root.path().join("owned/consumer-ready"), b"rooted production consumer mounted\n").unwrap();
+            &std::fs::read(self.root.path().join("owned/running.json")).unwrap(),
+        )
+        .unwrap();
+        assert!(
+            active["childPid"].is_null(),
+            "native child started before rooted readiness: {active}"
+        );
+        std::fs::write(
+            self.root.path().join("owned/consumer-ready"),
+            b"rooted production consumer mounted\n",
+        )
+        .unwrap();
     }
 
     fn wait_replay(&self, view: &Entity<TerminalView>, cx: &mut TestAppContext) {
@@ -184,13 +229,17 @@ impl OmpReplayFixture {
                     self.assert_running(view, cx, "native streaming completion");
                     std::fs::read_to_string(self.root.path().join("owned/workspace/pictures.jsonl"))
                         .ok()
-                        .is_some_and(|text| text.lines().any(|line| {
-                            serde_json::from_str::<serde_json::Value>(line).is_ok_and(|record| {
-                                record["type"] == "message"
-                                    && record["message"]["model"] == "stream-svg"
-                                    && record["message"]["stopReason"] == "stop"
+                        .is_some_and(|text| {
+                            text.lines().any(|line| {
+                                serde_json::from_str::<serde_json::Value>(line).is_ok_and(
+                                    |record| {
+                                        record["type"] == "message"
+                                            && record["message"]["model"] == "stream-svg"
+                                            && record["message"]["stopReason"] == "stop"
+                                    },
+                                )
                             })
-                        }))
+                        })
                 },
                 |cx| self.diagnostics(view, cx),
             );
@@ -202,21 +251,36 @@ impl OmpReplayFixture {
             std::time::Duration::from_secs(30),
             |cx| {
                 if self.stage().as_deref() == Some("failed") {
-                    panic!("omp public-entry phase native exit/audit failed: {}", self.diagnostics(view, cx));
+                    panic!(
+                        "omp public-entry phase native exit/audit failed: {}",
+                        self.diagnostics(view, cx)
+                    );
                 }
                 audit.exists()
             },
-            |cx| format!("omp native exit/audit timed out: {}", self.diagnostics(view, cx)),
+            |cx| {
+                format!(
+                    "omp native exit/audit timed out: {}",
+                    self.diagnostics(view, cx)
+                )
+            },
         );
         let audit: serde_json::Value =
             serde_json::from_slice(&std::fs::read(audit).unwrap()).unwrap();
         if self.streaming {
             assert_eq!(audit["loopbackStreaming"], true, "{audit}");
-            assert_eq!(audit["zeroInference"], false, "streaming is NOT static replay: {audit}");
+            assert_eq!(
+                audit["zeroInference"], false,
+                "streaming is NOT static replay: {audit}"
+            );
             graphics_recovery_wait_with(
                 cx,
                 std::time::Duration::from_secs(10),
-                |cx| view.read_with(cx, |view, _| view.scrollback_text().contains("LYREL_PARENT_AFTER=lyrel")),
+                |cx| {
+                    view.read_with(cx, |view, _| {
+                        view.scrollback_text().contains("LYREL_PARENT_AFTER=lyrel")
+                    })
+                },
                 |cx| self.diagnostics(view, cx),
             );
             // The native TUI may clear/rewrite the live VT grid. Inspect the
@@ -274,8 +338,12 @@ impl OmpReplayFixture {
         if self.scoped {
             let identity: serde_json::Value = serde_json::from_slice(
                 &std::fs::read(self.root.path().join("owned/identity.json")).unwrap(),
-            ).unwrap();
-            assert_eq!(identity["TERM_PROGRAM"], "kitty", "opt-outs must win even when native auto-detection recognizes Kitty");
+            )
+            .unwrap();
+            assert_eq!(
+                identity["TERM_PROGRAM"], "kitty",
+                "opt-outs must win even when native auto-detection recognizes Kitty"
+            );
             assert_eq!(identity["TERM_PROGRAM_VERSION"], "");
             assert_eq!(identity["PI_NO_DECCARA"], "1");
             assert_eq!(identity["LC_TERMINAL"], "lyrel");
@@ -396,18 +464,25 @@ fn omp_replay_assert_resume(cx: &mut TestAppContext, cases: &[&str]) {
         graphics_assert_production_paint(window, &view, cx);
         fixture.start(&view, cx);
         fixture.wait_replay(&view, cx);
-        let expected = if case == "budget" { 8 } else { 3 };
+        let expected = if case == "budget" { 20 } else { 3 };
         let mut found = std::collections::BTreeMap::new();
         graphics_recovery_wait_with(
             cx,
             std::time::Duration::from_secs(90),
             |cx| {
                 found = omp_replay_scan(&view, window, cx);
-                if found.len() == expected && found.contains_key(b"rasterized-svg".as_slice()) { return true; }
+                if found.len() == expected && found.contains_key(b"rasterized-svg".as_slice()) {
+                    return true;
+                }
                 fixture.assert_running(&view, cx, &format!("{case} decoded identities: {found:?}"));
                 false
             },
-            |cx| format!("omp {case} identities timed out: {}", fixture.diagnostics(&view, cx)),
+            |cx| {
+                format!(
+                    "omp {case} identities timed out: {}",
+                    fixture.diagnostics(&view, cx)
+                )
+            },
         );
         assert_eq!(
             found
@@ -434,36 +509,51 @@ fn omp_replay_assert_resume(cx: &mut TestAppContext, cases: &[&str]) {
             );
             if case == "placeholder-off" {
                 view.read_with(cx, |view, _| {
-                    let direct: std::collections::BTreeSet<_> = view.terminal.images().snapshot()
-                        .iter().map(|image| image.placement.image_id).collect();
-                    let expected: std::collections::BTreeSet<_> = found.values().map(|image| image.image_id).collect();
-                    assert_eq!(direct, expected, "placeholder opt-out uses native direct placements for all three rasters");
-                    assert!(!view.scrollback_text().contains('\u{10eeee}'), "no native Unicode placeholder cells when explicitly disabled");
+                    let direct: std::collections::BTreeSet<_> = view
+                        .terminal
+                        .images()
+                        .snapshot()
+                        .iter()
+                        .map(|image| image.placement.image_id)
+                        .collect();
+                    let expected: std::collections::BTreeSet<_> =
+                        found.values().map(|image| image.image_id).collect();
+                    assert_eq!(
+                        direct, expected,
+                        "placeholder opt-out uses native direct placements for all three rasters"
+                    );
+                    assert!(
+                        !view.scrollback_text().contains('\u{10eeee}'),
+                        "no native Unicode placeholder cells when explicitly disabled"
+                    );
                 });
             }
         } else {
-            for color in [
-                [0, 0, 255, 255],
-                [0, 255, 0, 255],
-                [255, 0, 0, 255],
-                [0, 255, 255, 255],
-            ] {
+            let key = |identity: &serde_json::Value| {
+                let rgb = identity["rgb"].as_array().unwrap();
+                vec![
+                    rgb[2].as_u64().unwrap() as u8,
+                    rgb[1].as_u64().unwrap() as u8,
+                    rgb[0].as_u64().unwrap() as u8,
+                    255,
+                ]
+            };
+            let identities = fixture.identities();
+            assert_eq!(
+                identities.len(),
+                23,
+                "22 assistant + one tool result; SVG is scanned separately"
+            );
+            for identity in identities.iter().take(4) {
                 assert!(
-                    !found.contains_key(color.as_slice()),
+                    !found.contains_key(key(identity).as_slice()),
                     "upstream d=I demotion must not revive old image"
                 );
             }
-            for color in [
-                [255, 0, 255, 255],
-                [255, 255, 0, 255],
-                [0, 96, 192, 255],
-                [192, 0, 96, 255],
-                [96, 128, 0, 255],
-                [128, 128, 128, 255],
-            ] {
+            for identity in identities.iter().skip(4) {
                 assert!(
-                    found.contains_key(color.as_slice()),
-                    "wrong recent native image identity: {found:?}"
+                    found.contains_key(key(identity).as_slice()),
+                    "wrong retained native image identity: {identity}"
                 );
             }
             assert_eq!(
@@ -548,26 +638,51 @@ fn graphics_consumer_released_omp_loopback_streamed_svg(cx: &mut TestAppContext)
                 fixture.assert_running(&view, cx, needle);
                 view.read_with(cx, |view, _| view.scrollback_text().contains(needle))
             },
-            |cx| format!("missing native text {needle}: {}", fixture.diagnostics(&view, cx)),
+            |cx| {
+                format!(
+                    "missing native text {needle}: {}",
+                    fixture.diagnostics(&view, cx)
+                )
+            },
         );
     };
     wait_text(cx, "LYREL_STREAM_READY");
     view.read_with(cx, |view, _| view.terminal.write(b"/debug\r".to_vec()));
     wait_text(cx, "Debug Tools");
     // The pinned public /debug menu's eighth entry is View: terminal state.
-    view.read_with(cx, |view, _| view.terminal.write(b"\x1b[B\x1b[B\x1b[B\x1b[B\x1b[B\x1b[B\x1b[B\r".to_vec()));
+    view.read_with(cx, |view, _| {
+        view.terminal
+            .write(b"\x1b[B\x1b[B\x1b[B\x1b[B\x1b[B\x1b[B\x1b[B\r".to_vec())
+    });
     wait_text(cx, "rectangular-SGR background fills");
     let text = view.read_with(cx, |view, _| view.scrollback_text());
-    assert!(text.lines().any(|line| line.contains("Detected:") && line.contains("kitty")), "{text}");
-    assert!(text.lines().any(|line| line.contains("Graphics:") && line.contains("Kitty graphics")), "{text}");
-    assert!(text.lines().any(|line| line.contains("DECCARA:") && line.contains("no (rectangular")), "{text}");
+    assert!(
+        text.lines()
+            .any(|line| line.contains("Detected:") && line.contains("kitty")),
+        "{text}"
+    );
+    assert!(
+        text.lines()
+            .any(|line| line.contains("Graphics:") && line.contains("Kitty graphics")),
+        "{text}"
+    );
+    assert!(
+        text.lines()
+            .any(|line| line.contains("DECCARA:") && line.contains("no (rectangular")),
+        "{text}"
+    );
     eprintln!("released omp native terminal diagnostics (production text):\n{text}");
-    let cell = text.lines().find_map(|line| {
-        let (_, suffix) = line.split_once("cells · cell ")?;
-        let (width, height) = suffix.trim().strip_suffix("px")?.split_once('x')?;
-        Some((width.parse::<u32>().ok()?, height.parse::<u32>().ok()?))
-    }).expect("released omp's visible native cell geometry");
-    view.read_with(cx, |view, _| view.terminal.write(b"LYREL_LOOPBACK_PROMPT\r".to_vec()));
+    let cell = text
+        .lines()
+        .find_map(|line| {
+            let (_, suffix) = line.split_once("cells · cell ")?;
+            let (width, height) = suffix.trim().strip_suffix("px")?.split_once('x')?;
+            Some((width.parse::<u32>().ok()?, height.parse::<u32>().ok()?))
+        })
+        .expect("released omp's visible native cell geometry");
+    view.read_with(cx, |view, _| {
+        view.terminal.write(b"LYREL_LOOPBACK_PROMPT\r".to_vec())
+    });
     let mut revisions = Vec::new();
     for revision in 1..=3 {
         let mut observed = None;
@@ -579,19 +694,40 @@ fn graphics_consumer_released_omp_loopback_streamed_svg(cx: &mut TestAppContext)
                 graphics_assert_production_paint_at(window, &view, cx, TermSize::new(100, 48));
                 observed = view.read_with(cx, |view, _| {
                     if revision > 1 {
-                        assert!(!graphics_visible_images(view).is_empty(), "never blank an established streaming figure between complete revisions");
+                        assert!(
+                            !graphics_visible_images(view).is_empty(),
+                            "never blank an established streaming figure between complete revisions"
+                        );
                     }
                     omp_stream_raster(view, cell, revision)
                 });
                 observed.is_some()
             },
-            |cx| format!("missing complete streamed revision {revision}: {}", fixture.diagnostics(&view, cx)),
+            |cx| {
+                format!(
+                    "missing complete streamed revision {revision}: {}",
+                    fixture.diagnostics(&view, cx)
+                )
+            },
         );
         let identity = observed.unwrap();
-        eprintln!("released omp streaming production evidence: revision={revision} cell={cell:?} identity={identity:?}; complete exact BGRA, whole-texture crop, z=0, painted; not GPU pixels");
-        assert!(revisions.iter().all(|old: &OmpReplayPictureIdentity| old.image_id != identity.image_id));
+        eprintln!(
+            "released omp streaming production evidence: revision={revision} cell={cell:?} identity={identity:?}; complete exact BGRA, whole-texture crop, z=0, painted; not GPU pixels"
+        );
+        assert!(
+            revisions
+                .iter()
+                .all(|old: &OmpReplayPictureIdentity| old.image_id != identity.image_id)
+        );
         revisions.push(identity);
-        std::fs::write(fixture.root.path().join(format!("owned/observed-{revision}")), b"complete production paint\n").unwrap();
+        std::fs::write(
+            fixture
+                .root
+                .path()
+                .join(format!("owned/observed-{revision}")),
+            b"complete production paint\n",
+        )
+        .unwrap();
         if revision < 3 {
             graphics_recovery_wait_with(
                 cx,
@@ -606,7 +742,14 @@ fn graphics_consumer_released_omp_loopback_streamed_svg(cx: &mut TestAppContext)
                     assert!(omp_stream_raster(view, cell, revision).is_some(), "incomplete XML keeps complete prior pixels, even if omp re-rasterizes the repaired source");
                 });
             }
-            std::fs::write(fixture.root.path().join(format!("owned/partial-observed-{revision}")), b"previous raster retained\n").unwrap();
+            std::fs::write(
+                fixture
+                    .root
+                    .path()
+                    .join(format!("owned/partial-observed-{revision}")),
+                b"previous raster retained\n",
+            )
+            .unwrap();
         }
     }
     wait_text(cx, "LYREL_STREAM_AFTER");
@@ -623,24 +766,40 @@ fn graphics_consumer_released_omp_loopback_streamed_svg(cx: &mut TestAppContext)
             let term = view.terminal.term.lock();
             let origin = term.grid.lines_evicted() as i64 + term.grid.history_size() as i64;
             let row_of = |needle: &str| {
-                (-(term.grid.history_size() as i32)..term.screen_lines() as i32).find_map(|row| {
-                    let text: String = term.grid[Line(row)][..].iter().map(|cell| cell.c()).collect();
-                    text.contains(needle).then_some(origin + i64::from(row))
-                }).unwrap_or_else(|| panic!("missing surrounding native text {needle}"))
+                (-(term.grid.history_size() as i32)..term.screen_lines() as i32)
+                    .find_map(|row| {
+                        let text: String = term.grid[Line(row)][..]
+                            .iter()
+                            .map(|cell| cell.c())
+                            .collect();
+                        text.contains(needle).then_some(origin + i64::from(row))
+                    })
+                    .unwrap_or_else(|| panic!("missing surrounding native text {needle}"))
             };
             let image = revisions.last().unwrap();
             assert!(row_of("LYREL_STREAM_BEFORE") < image.anchor_row);
             assert!(image.anchor_row + 2 <= row_of("LYREL_STREAM_AFTER"));
             let rows: Vec<_> = (-(term.grid.history_size() as i32)..term.screen_lines() as i32)
                 .filter_map(|row| {
-                    let slices = lyrel_core::core::kitty_graphics::placeholder_row(&term.grid, Line(row));
+                    let slices =
+                        lyrel_core::core::kitty_graphics::placeholder_row(&term.grid, Line(row));
                     (!slices.is_empty()).then_some((row, slices))
                 })
                 .collect();
             drop(term);
             let live = view.terminal.images().snapshot_with_placeholders(&rows);
-            assert!(!live.is_empty(), "final figure remains in production presentation");
-            assert!(live.iter().all(|placement| placement.placement.image_id == image.image_id), "no superseded placements may survive: {:?}", live.iter().map(|image| &image.placement).collect::<Vec<_>>());
+            assert!(
+                !live.is_empty(),
+                "final figure remains in production presentation"
+            );
+            assert!(
+                live.iter()
+                    .all(|placement| placement.placement.image_id == image.image_id),
+                "no superseded placements may survive: {:?}",
+                live.iter()
+                    .map(|image| &image.placement)
+                    .collect::<Vec<_>>()
+            );
         });
     }
     fixture.finish(&daemon, &view, cx);
@@ -672,8 +831,14 @@ fn omp_stream_raster(
             return None;
         }
         let bytes = image.data.as_ref()?.as_bytes(0)?;
-        assert_eq!(bytes.len(), (width * height * 4) as usize, "never expose partial PNG pixels");
-        let actual_revision = if bytes[((height / 2 * width) * 4) as usize..][..4] == [255, 0, 0, 255] {
+        assert_eq!(
+            bytes.len(),
+            (width * height * 4) as usize,
+            "never expose partial PNG pixels"
+        );
+        let actual_revision = if bytes[((height / 2 * width) * 4) as usize..][..4]
+            == [255, 0, 0, 255]
+        {
             3
         } else if bytes[((width.min(drawing_width) / 2) * 4) as usize..][..4] == [0, 255, 0, 255] {
             2
@@ -691,20 +856,49 @@ fn omp_stream_raster(
                 } else {
                     [0, 0, 255, 255]
                 };
-                assert_eq!(bytes[((y * width + x) * 4) as usize..][..4], expected, "complete raster {actual_revision}, pixel ({x},{y})");
+                assert_eq!(
+                    bytes[((y * width + x) * 4) as usize..][..4],
+                    expected,
+                    "complete raster {actual_revision}, pixel ({x},{y})"
+                );
             }
         }
         if actual_revision != revision {
             return None;
         }
         assert_eq!(image.placement.z, 0, "native above-text Kitty layer");
-        assert_eq!((image.placement.x, image.placement.y, image.placement.w, image.placement.h), (0, 0, width, height));
-        assert!(image.painted.load(std::sync::atomic::Ordering::Acquire), "actual production paint claim, not GPU pixels");
-        let (crop, full) = image.paint_bounds(geom.origin, geom.cell_width, geom.line_height, 0, offset, 1.);
+        assert_eq!(
+            (
+                image.placement.x,
+                image.placement.y,
+                image.placement.w,
+                image.placement.h
+            ),
+            (0, 0, width, height)
+        );
+        assert!(
+            image.painted.load(std::sync::atomic::Ordering::Acquire),
+            "actual production paint claim, not GPU pixels"
+        );
+        let (crop, full) = image.paint_bounds(
+            geom.origin,
+            geom.cell_width,
+            geom.line_height,
+            0,
+            offset,
+            1.,
+        );
         assert!(crop.size.width > px(0.) && crop.size.height > px(0.));
-        assert_eq!(crop.intersect(&full), crop, "native placeholder crop stays within its complete texture");
+        assert_eq!(
+            crop.intersect(&full),
+            crop,
+            "native placeholder crop stays within its complete texture"
+        );
         if let Some(previous) = texture {
-            assert_eq!(previous, full, "all native placeholder slices align to one texture");
+            assert_eq!(
+                previous, full,
+                "all native placeholder slices align to one texture"
+            );
         }
         texture = Some(full);
         area += crop.size.width.as_f32() * crop.size.height.as_f32();
@@ -716,6 +910,9 @@ fn omp_stream_raster(
         identity = Some(current);
     }
     let full = texture?;
-    assert!((area - full.size.width.as_f32() * full.size.height.as_f32()).abs() < 0.1, "the native slices cover the complete uncropped figure exactly once");
+    assert!(
+        (area - full.size.width.as_f32() * full.size.height.as_f32()).abs() < 0.1,
+        "the native slices cover the complete uncropped figure exactly once"
+    );
     identity
 }

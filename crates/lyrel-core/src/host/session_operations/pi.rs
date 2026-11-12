@@ -183,6 +183,7 @@ pub(super) fn prepare<H: Host + ?Sized>(
             &request.source_id,
         )?,
     };
+    let title = crate::core::agent_history::session_title(CLIAgent::Pi, &source);
     let source_id = header(&source)?;
     if source_id != request.source_id {
         return Err(failure(
@@ -233,6 +234,7 @@ pub(super) fn prepare<H: Host + ?Sized>(
         source_id: request.source_id.clone(),
         target_id: Some(target),
         session_file: Some(file),
+        title,
         cwd: request.cwd.clone(),
         scope,
         launch_argv: launch,
@@ -423,6 +425,7 @@ fn native_fork(
                     source_id: request.source_id.clone(),
                     target_id: Some(id.clone()),
                     session_file: None,
+                    title: None,
                     cwd: request.cwd.clone(),
                     scope: target_scope,
                     launch_argv: launch.to_vec(),

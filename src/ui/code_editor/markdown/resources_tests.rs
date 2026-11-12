@@ -813,7 +813,7 @@ fn attachment_completion_rejects_changed_source_and_selection(cx: &mut TestAppCo
 
 #[cfg(test)]
 #[gpui_kit::test]
-fn resource_errors_svg_isolation_and_explicit_network_no_redirect(cx: &mut TestAppContext) {
+fn resource_errors_svg_isolation_and_automatic_network_no_redirect(cx: &mut TestAppContext) {
     use std::io::{Read as _, Write as _};
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
@@ -872,18 +872,12 @@ fn resource_errors_svg_isolation_and_explicit_network_no_redirect(cx: &mut TestA
                 })
         })
     });
-    assert_eq!(
-        seen.load(Ordering::SeqCst),
-        0,
-        "opening never authorizes an HTTP request"
-    );
-    vcx.update(|window, cx| {
+    vcx.update(|window, _| {
         assert!(
             window
                 .try_find(SharedString::from("image-status-code.png"))
                 .is_none()
         );
-        window.click(SharedString::from(format!("image-retry-{url}")), cx);
     });
     until(&mut vcx, |cx| {
         cx.update(|window, _| {
@@ -896,7 +890,7 @@ fn resource_errors_svg_isolation_and_explicit_network_no_redirect(cx: &mut TestA
     assert_eq!(
         seen.load(Ordering::SeqCst),
         1,
-        "only the explicit resource URL is requested"
+        "opening requests only the document's actual network image, without a separate click"
     );
     app.read_with(&vcx, |app, cx| {
         assert_eq!(

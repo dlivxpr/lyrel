@@ -416,11 +416,97 @@ pub(super) fn context_menu_follows_language_in_existing_views(cx: &mut TestAppCo
 }
 
 #[cfg(feature = "native-markdown-tests")]
+pub(super) fn native_wrapped_code_background(cx: &mut TestAppContext) {
+    let long = "wrapped code words ".repeat(120);
+    let source = format!("```rust\nlet value = \"{long}\";\nlet after = true;\n```\n");
+    let (_directory, _path, _app, mut context, view, _streams) = open(cx, &source);
+    if !view.read_with(&context, |view, _| view.is_soft_wrap()) {
+        context.dispatch_action(crate::core::actions::ToggleDocumentWrap);
+    }
+    view.update_in(&mut context, |view, _, cx| {
+        view.select_range(source.len()..source.len(), cx)
+    });
+    settle(&mut context);
+    let start = source.find("let value").unwrap();
+    let end = source.find("\";\nlet after").unwrap();
+    let (first, last) = view.read_with(&context, |view, _| {
+        (
+            view.range_to_bounds(&(start..start)).unwrap(),
+            view.range_to_bounds(&(end..end)).unwrap(),
+        )
+    });
+    assert!(last.top() > first.top(), "the long code source line wraps");
+    context.update(|window, cx| {
+        use gpui_kit::component::ActiveTheme as _;
+        let code_bg = cx.theme().muted;
+        let scale = window.scale_factor();
+        let covered = window.painted_quads().iter().any(|quad| {
+            if quad.background.as_solid() != Some(code_bg) {
+                return false;
+            }
+            let bounds = quad.bounds.map(|pixel| px(pixel.0 / scale));
+            bounds.contains(&first.center()) && bounds.contains(&last.center())
+        });
+        assert!(
+            covered,
+            "one code-background quad must cover every visual row of the wrapped source line"
+        );
+    });
+}
+
+#[cfg(feature = "native-markdown-tests")]
+pub(super) fn native_scrollbar_drag(cx: &mut TestAppContext) {
+    let source = format!("# Scroll\n\n{}", "document row\n".repeat(400));
+    let (_directory, _path, _app, mut context, view, _streams) = open(cx, &source);
+    let viewport = view.read_with(&context, |view, _| view.scroll_viewport());
+    assert!(
+        viewport.size.height > px(0.) && viewport.size.height < px(2000.),
+        "real Markdown viewport height: {viewport:?}"
+    );
+    let content = view.read_with(&context, |view, _| {
+        let scroll = view.scroll_handle();
+        scroll.max_offset().y + scroll.bounds().size.height
+    });
+    assert!(
+        content > viewport.size.height,
+        "scroll content must exceed viewport: content={content:?}, viewport={viewport:?}"
+    );
+    let (from, before) = context.update(|window, cx| {
+        let id = SharedString::from(format!(
+            "markdown-document-scrollbar-{}",
+            view.entity_id().as_u64()
+        ));
+        let bounds = window.find(id).bounds();
+        (
+            gpui_kit::point(bounds.right() - px(12.), bounds.top() + px(80.)),
+            view.read(cx).scroll_offset(),
+        )
+    });
+    let to = from + gpui_kit::point(px(0.), px(160.));
+    context.update(|window, cx| window.pointer_move(from, None, cx));
+    settle(&mut context);
+    context.update(|window, cx| window.pointer_down(from, gpui_kit::MouseButton::Left, cx));
+    settle(&mut context);
+    context.update(|window, cx| {
+        window.pointer_move(to, Some(gpui_kit::MouseButton::Left), cx);
+        window.pointer_up(to, gpui_kit::MouseButton::Left, cx);
+    });
+    settle(&mut context);
+    assert_ne!(
+        view.read_with(&context, |view, _| view.scroll_offset()),
+        before,
+        "dragging the document scrollbar changes the presentation scroll position"
+    );
+}
+
+#[cfg(feature = "native-markdown-tests")]
 pub(super) fn native_cases() -> impl Iterator<Item = crate::native_markdown::Case> {
     [
         crate::native_markdown::Case::new("ui::code_editor::markdown::writing::continuous_writing", continuous_writing),
         crate::native_markdown::Case::new("ui::code_editor::markdown::writing::native_text_color_picker_clear_geometry_and_shared_history", native_colors),
         crate::native_markdown::Case::new("ui::code_editor::markdown::writing::native_wrapped_starts_prose_heading_list_quote_zoom", native_rhythm),
+        crate::native_markdown::Case::new("ui::code_editor::markdown::writing::native_wrapped_code_background", native_wrapped_code_background),
+        crate::native_markdown::Case::new("ui::code_editor::markdown::writing::native_scrollbar_drag", native_scrollbar_drag),
         crate::native_markdown::Case::new("ui::code_editor::markdown::writing::native_existing_views_bilingual_context_menu", context_menu_follows_language_in_existing_views),
     ].into_iter()
 }

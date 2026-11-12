@@ -3787,6 +3787,7 @@ impl LyrelApp {
                     Some(prepared.scope.clone()),
                     prepared.created,
                 );
+                pending.set_agent_title(prepared.title.clone());
             });
         }
         crate::ui::agent_launch::run_prepared_when_ready(&new, command, cx);

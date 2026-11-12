@@ -23,6 +23,8 @@ pub struct PendingSpawn {
     pub agent_session_id: Option<String>,
     pub agent_launch_argv: Option<Vec<String>>,
     pub agent_session_scope: Option<lyrel_core::host::session_operations::SessionScope>,
+    /// A native-history title waiting for the restored pane to land.
+    pub agent_title: Option<String>,
     /// A command line to type into the shell once the pane exists, for a pane
     /// opened to run something (a quick-launched agent). Typed only into this
     /// pane, and only when it is a fresh shell rather than a restored one.
@@ -95,6 +97,7 @@ impl PendingPane {
                 agent_session_id: None,
                 agent_launch_argv: None,
                 agent_session_scope: None,
+                agent_title: None,
                 run_on_land: None,
             },
             cx,
@@ -125,6 +128,7 @@ impl PendingPane {
                 agent_session_id: None,
                 agent_launch_argv: None,
                 agent_session_scope: None,
+                agent_title: None,
                 run_on_land: None,
             },
             cx,
@@ -241,6 +245,10 @@ impl PendingPane {
             .as_ref()
             .map(lyrel_core::host::session_operations::durable_scope);
         self.created_session = created && self.spawn.agent_session_id.is_some();
+    }
+
+    pub(crate) fn set_agent_title(&mut self, title: Option<String>) {
+        self.spawn.agent_title = title.filter(|title| !title.trim().is_empty());
     }
 
     pub(crate) fn session(&self) -> crate::core::session::SessionPane {

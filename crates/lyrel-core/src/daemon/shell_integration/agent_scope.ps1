@@ -1,4 +1,4 @@
-  # The full submitted AST, never the truncated OSC payload, selects a scope.
+  # Use the full AST; truncated OSC text cannot select a scope.
   function global:__LyrelScopeRestore {
     if ($null -ne $global:__LyrelScopeSaved) {
       foreach ($key in $global:__LyrelScopeSaved.Keys) {
@@ -15,11 +15,10 @@
     $statements = @($ast.EndBlock.Statements)
     if (-not $statements.Count) { return }
     $explicit = @{}
-    $scopeKeys = @('TERM_PROGRAM','TERM_PROGRAM_VERSION','LC_TERMINAL','LC_TERMINAL_VERSION','PI_NO_DECCARA','KITTY_WINDOW_ID','OPENCODE_CLI_CONFIG_CONTENT')
+    $scopeKeys = @('TERM_PROGRAM','TERM_PROGRAM_VERSION','LC_TERMINAL','LC_TERMINAL_VERSION','PI_NO_DECCARA','KITTY_WINDOW_ID','PI_CONFIG_FILES','OPENCODE_CLI_CONFIG_CONTENT')
     $legacyWindows = $env:OS -eq 'Windows_NT' -and $PSVersionTable.PSVersion -lt [version]'7.5'
     $emptyAssignments = @()
-    # PowerShell's native leading env assignments are separate statements.
-    # Only literal env assignments followed by exactly one command qualify.
+    # Only literal env assignments followed by one native command qualify.
     for ($i = 0; $i -lt $statements.Count - 1; $i++) {
       $assignment = $statements[$i]
       if ($assignment -isnot [System.Management.Automation.Language.AssignmentStatementAst] -or
@@ -27,8 +26,7 @@
           $assignment.Left -isnot [System.Management.Automation.Language.VariableExpressionAst] -or
           $assignment.Left.VariablePath.UserPath -notmatch '^env:([A-Za-z_][A-Za-z_0-9]*)$') { return }
       $key = $Matches[1]
-      # AssignmentStatementAst wraps a literal RHS in CommandExpressionAst;
-      # SafeGetValue rejects that statement wrapper, not its literal expression.
+      # Read the literal RHS, not its statement wrapper.
       $value = $assignment.Right
       if ($value -isnot [System.Management.Automation.Language.CommandExpressionAst] -or $value.Redirections.Count) { return }
       try { $literal = $value.Expression.SafeGetValue() } catch { return }
@@ -55,6 +53,7 @@
     $defaults = @{ TERM_PROGRAM='kitty'; TERM_PROGRAM_VERSION=''; LC_TERMINAL='lyrel'; LC_TERMINAL_VERSION=$version }
     if ($agent -eq 'omp') { $defaults.PI_NO_DECCARA = '1' }
     $environment = [Environment]::GetEnvironmentVariables('Process')
+    if ($agent -eq 'omp' -and $env:LYREL_OMP_IMAGE_CONFIG) { $defaults.PI_CONFIG_FILES = (@($environment['PI_CONFIG_FILES'],$env:LYREL_OMP_IMAGE_CONFIG) -ne '') -join ';' }
     if ($agent -eq 'hermes' -and -not $environment.Contains('KITTY_WINDOW_ID')) { $defaults.KITTY_WINDOW_ID = 'lyrel' }
     $global:__LyrelScopeSaved = @{}
     foreach ($key in $scopeKeys) {

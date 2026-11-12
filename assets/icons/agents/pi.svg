@@ -1,11 +1,7 @@
-<!-- Pi's own brand mark, from https://pi.dev/logo-auto.svg.
-     Normalized to lyrel's 24x24 icon format; geometry unchanged. The published
-     file is an 800x800 box carrying a `prefers-color-scheme` <style> block that
-     swaps black for white — no other mark in this set ships theme-conditional
-     CSS, and the avatars are tinted by the app regardless, so the class and
-     media query are dropped for the flat sentinel fill the rest of the set
-     uses. The mark lands on an exact 4x4 grid of 6-unit cells at this size. -->
-<svg width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-<path fill-rule="evenodd" clip-rule="evenodd" d="M0 0H18V12H12V18H6V24H0V0ZM6 6V12H12V6H6Z" fill="#FF0000"/>
-<path d="M18 12H24V24H18V12Z" fill="#FF0000"/>
+<!-- Pi brand mark, from https://pi.dev/logo-auto.svg (MIT).
+     Preserved official geometry and colors for native image rendering. -->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 800" width="800" height="800">
+  <path fill="#F09082" d="M165.29 165.29H517.36V400H400V282.65H165.29Z"/>
+  <path fill="#4D9ABF" d="M165.29 282.65H282.65V400H400V517.36H282.65V634.72H165.29Z"/>
+  <path fill="#F1BE58" d="M517.36 400H634.72V634.72H517.36Z"/>
 </svg>

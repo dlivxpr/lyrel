@@ -2,7 +2,9 @@
 use super::super::*;
 use super::foundation::{save, settle, until};
 use crate::ui::app::test_window::harness_with_tabs;
-use gpui_kit::test::{TestEventExt as _, TestQueryExt as _, TestWindowExt as _};
+#[cfg(feature = "native-markdown-tests")]
+use gpui_kit::test::TestEventExt as _;
+use gpui_kit::test::TestWindowExt as _;
 use gpui_kit::{TestAppContext, VisualTestContext};
 use lyrel_markdown_editor::EditorState as MarkdownEditor;
 
@@ -22,14 +24,18 @@ fn select(view: &Entity<MarkdownEditor>, at: usize, context: &mut VisualTestCont
     });
     settle(context);
 }
-fn click_menu(context: &mut VisualTestContext, trigger: &'static str, label: L10nKey) {
-    context.update(|window, cx| window.click(trigger, cx));
-    settle(context);
-    context.update(|window, cx| {
-        let position = window.find_by_label(t(label)).bounds().center();
-        window.pointer_move(position, None, cx);
-        window.pointer_down(position, MouseButton::Left, cx);
-        window.pointer_up(position, MouseButton::Left, cx);
+fn table_command(view: &Entity<MarkdownEditor>, label: L10nKey, context: &mut VisualTestContext) {
+    view.update_in(context, |view, window, cx| match label {
+        L10nKey::EditorTableInsertRowAfter => view.insert_table_row(true, cx),
+        L10nKey::EditorTableInsertColumnAfter => view.insert_table_column(true, cx),
+        L10nKey::EditorTableAlignCenter => {
+            view.set_caret_table_align(lyrel_markdown_editor::CellAlign::Center, cx)
+        }
+        L10nKey::EditorTableStyleStriped => view.set_table_style(Some("striped"), cx),
+        L10nKey::EditorTableDeleteColumn => view.delete_table_column(cx),
+        L10nKey::EditorTableDeleteRow => view.delete_table_row(cx),
+        L10nKey::EditorTableFitColumn => view.fit_caret_table_column(window, cx),
+        _ => unreachable!("not a table command under test"),
     });
     settle(context);
 }
@@ -55,6 +61,16 @@ pub(super) fn workflow(cx: &mut TestAppContext) {
         app.read_with(context, |app, _| app.active_buffer().is_some())
     });
     let first = active(&app, &context);
+    context.update(|window, _| {
+        assert!(
+            window.try_find("markdown-table-insert").is_none(),
+            "the insertion picker stays available through slash commands without a duplicate toolbar button"
+        );
+        assert!(
+            window.try_find("markdown-table-commands").is_none(),
+            "table commands stay in the native context menu without a duplicate toolbar button"
+        );
+    });
     let start = first.read_with(&context, |view, _| view.text().find("alpha").unwrap());
     select(&first, start, &mut context);
     context.update(|window, cx| window.press("tab", cx));
@@ -83,7 +99,7 @@ pub(super) fn workflow(cx: &mut TestAppContext) {
         L10nKey::EditorTableDeleteRow,
     ] {
         select(&first, start, &mut context);
-        click_menu(&mut context, "markdown-table-commands", command);
+        table_command(&first, command, &mut context);
         assert_ne!(bytes(&first, &context), original);
         context.dispatch_action(gpui_kit::component::input::Undo);
         settle(&mut context);
@@ -143,8 +159,19 @@ pub(super) fn workflow(cx: &mut TestAppContext) {
     assert_eq!(bytes(&first, &context), original);
     let end = first.read_with(&context, |view, _| view.text().len());
     select(&first, end, &mut context);
-    context.update(|window, cx| window.click("markdown-table-insert", cx));
+    context.update(|window, cx| super::table_code::open_table_picker(&first, window, cx));
     settle(&mut context);
+    context.update(|window, _| {
+        assert!(
+            window.try_find("markdown-table-picker").is_some(),
+            "the slash command opens the native table picker without a toolbar duplicate"
+        );
+        assert_eq!(
+            window.find("markdown-table-picker").focused(),
+            Some(true),
+            "the native picker owns keyboard focus"
+        )
+    });
     context.update(|window, cx| {
         window.press("right", cx);
         window.press("down", cx);
@@ -175,17 +202,7 @@ pub(super) fn workflow(cx: &mut TestAppContext) {
     // Insert a custom-sized table through the visible picker, cancel first, then commit.
     let end = second.read_with(&context, |view, _| view.text().len());
     select(&second, end, &mut context);
-    context.update(|window, cx| {
-        let trigger = window
-            .find_all("markdown-table-insert")
-            .into_iter()
-            .max_by(|a, b| f32::from(a.bounds().left()).total_cmp(&f32::from(b.bounds().left())))
-            .unwrap();
-        let position = trigger.bounds().center();
-        window.pointer_move(position, None, cx);
-        window.pointer_down(position, MouseButton::Left, cx);
-        window.pointer_up(position, MouseButton::Left, cx);
-    });
+    context.update(|window, cx| super::table_code::open_table_picker(&second, window, cx));
     settle(&mut context);
     context.update(|window, cx| window.press("escape", cx));
     settle(&mut context);
@@ -308,11 +325,7 @@ pub(super) fn aligned_geometry(cx: &mut TestAppContext) {
     let resized = bytes(&view, &context);
     assert_ne!(resized, original.as_bytes());
     assert!(resized.ends_with(b"\r\n\nafter$$x$$literal  "));
-    click_menu(
-        &mut context,
-        "markdown-table-commands",
-        L10nKey::EditorTableFitColumn,
-    );
+    table_command(&view, L10nKey::EditorTableFitColumn, &mut context);
     assert_ne!(bytes(&view, &context), resized);
     context.dispatch_action(gpui_kit::component::input::Undo);
     settle(&mut context);

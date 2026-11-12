@@ -1716,7 +1716,12 @@ impl Element for EditorElement {
                     bottom_right: if cb.bottom { r } else { z },
                 };
                 let box_origin = point(origin.x, origin.y - top_pad);
-                let box_size = size(cb.width, *lh + top_pad + bot_pad);
+                // A soft-wrapped source row owns every one of its visual rows;
+                // painting only the first leaves the continuation outside the card.
+                let box_size = size(
+                    cb.width,
+                    *lh * prepaint.wrap_rows[i] as f32 + top_pad + bot_pad,
+                );
                 window.paint_quad(
                     fill(Bounds::new(box_origin, box_size), cb.color).corner_radii(corners),
                 );
@@ -2591,6 +2596,33 @@ impl Element for EditorElement {
                     }
                 });
             });
+        }
+
+        let editor = self.editor.read(cx);
+        let viewport = editor.scroll_viewport;
+        let viewport_h = f32::from(viewport.size.height);
+        let content_h = f32::from(editor.scroll.max_offset().y + viewport.size.height);
+        if viewport.size.width > px(0.) && content_h > viewport_h {
+            let track_w = px(4.);
+            let track_right = viewport.right() - px(8.);
+            let track = Bounds::new(
+                point(track_right - track_w, viewport.top()),
+                size(track_w, viewport.size.height),
+            );
+            window.paint_quad(fill(track, text_color.opacity(0.08)));
+            let thumb_h = (viewport_h * viewport_h / content_h).max(24.);
+            let max_offset = content_h - viewport_h;
+            let scrolled = (-f32::from(editor.scroll.offset().y)).clamp(0., max_offset);
+            let thumb = Bounds::new(
+                point(
+                    track_right - track_w,
+                    viewport.top() + px(scrolled / max_offset * (viewport_h - thumb_h)),
+                ),
+                size(track_w, px(thumb_h)),
+            );
+            window.paint_quad(
+                fill(thumb, text_color.opacity(0.35)).corner_radii(Corners::all(px(2.))),
+            );
         }
     }
 }
@@ -3483,12 +3515,62 @@ fn shape_document(
             .filter(|&ri| !is_code && caret_row != Some(regions[ri].lines.start + 1))
             .map(|ri| {
                 let r = &regions[ri];
+                let cell_ranges = markdown_syntax::table_cell_ranges(line);
+                let source_cells = markdown_syntax::table_cells(line);
+                let cell_presentations: Vec<_> = source_cells
+                    .iter()
+                    .enumerate()
+                    .map(|(cell, source)| {
+                        let range = &cell_ranges[cell];
+                        let caret = (caret_row == Some(idx)
+                            && selection.0 == selection.1
+                            && selection.0 >= line_start + range.start
+                            && selection.0 <= line_start + range.end)
+                            .then(|| selection.0 - line_start - range.start);
+                        let selected = selection.0 != selection.1
+                            && selection.0 <= line_start + range.end
+                            && selection.1 >= line_start + range.start;
+                        let font = if idx == r.lines.start {
+                            Font {
+                                weight: FontWeight::BOLD,
+                                ..base_font.clone()
+                            }
+                        } else {
+                            base_font.clone()
+                        };
+                        let (display, runs, map) = markdown_syntax::hidden_runs(
+                            source,
+                            &font,
+                            base_color,
+                            &[],
+                            caret,
+                            0,
+                            0,
+                            selected,
+                            md.expect("table regions require Markdown styling"),
+                        );
+                        (
+                            SharedString::from(display),
+                            std::rc::Rc::new(runs),
+                            std::rc::Rc::new(map),
+                        )
+                    })
+                    .collect();
                 TableRow {
-                    cells: markdown_syntax::table_cells(line)
-                        .into_iter()
-                        .map(|c| SharedString::from(c.to_string()))
+                    cells: cell_presentations
+                        .iter()
+                        .map(|(display, _, _)| display.clone())
                         .collect(),
-                    cell_ranges: markdown_syntax::table_cell_ranges(line),
+                    source_cells: source_cells.into_iter().map(SharedString::from).collect(),
+                    cell_runs: cell_presentations
+                        .iter()
+                        .map(|(_, runs, _)| runs.clone())
+                        .collect(),
+                    cell_maps: cell_presentations
+                        .iter()
+                        .map(|(_, _, map)| map.clone())
+                        .collect(),
+                    cell_ranges,
                     aligns: r.aligns.clone(),
                     col_widths: region_cols[ri].clone(),
                     is_header: idx == r.lines.start,
@@ -4066,6 +4148,7 @@ fn shape_document(
                                 let r = table_row_wrap_rows(
                                     window,
                                     &t.cells,
+                                    &t.cell_runs,
                                     &t.col_widths,
                                     t.is_header,
                                     base_font,

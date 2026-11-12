@@ -65,9 +65,12 @@ __lyrel_scope_apply() {
   __lyrel_scope_recognize "$1" || return 0
   local key value present saved declaration quoted
   __lyrel_scope_undo=
-  for key in TERM_PROGRAM TERM_PROGRAM_VERSION LC_TERMINAL LC_TERMINAL_VERSION PI_NO_DECCARA KITTY_WINDOW_ID; do
+  for key in TERM_PROGRAM TERM_PROGRAM_VERSION LC_TERMINAL LC_TERMINAL_VERSION PI_NO_DECCARA KITTY_WINDOW_ID PI_CONFIG_FILES; do
     [[ "$__lyrel_scope_explicit" != *" $key "* ]] || continue
     case "$key" in
+      PI_CONFIG_FILES)
+        [[ "$__lyrel_scope_agent" == omp && -n "${LYREL_OMP_IMAGE_CONFIG-}" ]] || continue
+        value=${PI_CONFIG_FILES:+$PI_CONFIG_FILES:}$LYREL_OMP_IMAGE_CONFIG ;;
       PI_NO_DECCARA) [[ "$__lyrel_scope_agent" == omp ]] || continue; value=1 ;;
       KITTY_WINDOW_ID)
         [[ "$__lyrel_scope_agent" == hermes ]] || continue

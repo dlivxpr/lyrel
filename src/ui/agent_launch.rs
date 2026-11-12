@@ -454,18 +454,26 @@ impl LyrelApp {
             );
             return;
         };
-        if let PaneSlot::Connecting(pending) = &slot {
-            // The failed connection card retries this exact prepared identity,
-            // not the source fork operation.
-            pending.update(cx, |pending, _| {
-                pending.resume_agent(
-                    Some(prepared.agent),
-                    prepared.target_id.clone(),
-                    Some(prepared.launch_argv.clone()),
-                    Some(prepared.scope.clone()),
-                    false,
-                );
-            });
+        match &slot {
+            PaneSlot::Connecting(pending) => {
+                // The failed connection card retries this exact prepared identity,
+                // not the source fork operation.
+                pending.update(cx, |pending, _| {
+                    pending.resume_agent(
+                        Some(prepared.agent),
+                        prepared.target_id.clone(),
+                        Some(prepared.launch_argv.clone()),
+                        Some(prepared.scope.clone()),
+                        false,
+                    );
+                    pending.set_agent_title(prepared.title.clone());
+                });
+            }
+            PaneSlot::Ready(view) => {
+                if let Some(title) = prepared.title.as_deref() {
+                    view.update(cx, |view, cx| view.seed_session_title(title, cx));
+                }
+            }
         }
         run_prepared_when_ready(&slot, command, cx);
     }

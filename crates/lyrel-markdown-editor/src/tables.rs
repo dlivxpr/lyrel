@@ -379,9 +379,13 @@ impl EditorState {
         let cell = cell.min(t.cells.len().saturating_sub(1));
         let cx = col_offset(&t.col_widths, t.cells.len(), cell, t.rtl);
         let content = t.cells.get(cell)?;
+        let source = t.source_cells.get(cell)?;
+        let runs = t.cell_runs.get(cell).map(|runs| runs.as_slice());
         let cw = cell_span_width(&t.col_widths, t.cells.len(), cell);
         let cf = cell_font(&font, t.is_header);
-        let full_w = measure_width(window, content, &cf, font_size);
+        let full_w = shape_cell(window, content, &cf, font_size, None, Hsla::default(), runs)
+            .map(|line| line.width())
+            .unwrap_or(px(0.));
         let avail = (cw - pad * 2.).max(px(8.));
         // Alignment shifts only unwrapped content (a wrapped cell fills its width).
         let align_off = if full_w > avail {
@@ -403,8 +407,14 @@ impl EditorState {
             (rel.x - cx - pad - align_off).max(px(0.)),
             rel.y - self.line_tops[row] - pad_y,
         );
-        let in_cell = cell_offset_for_point(content, target, avail, &cf, font_size, window);
-        Some(self.line_starts()[row] + t.cell_ranges.get(cell)?.start + in_cell)
+        let display_offset =
+            cell_offset_for_point(content, target, avail, &cf, font_size, runs, window);
+        let source_offset = t
+            .cell_maps
+            .get(cell)
+            .and_then(|map| map.get(display_offset).copied())
+            .unwrap_or(source.len());
+        Some(self.line_starts()[row] + t.cell_ranges.get(cell)?.start + source_offset)
     }
 
     /// Whether the caret is currently inside an editable table cell (not the
@@ -1252,6 +1262,7 @@ fn shape_cell(
     font_size: Pixels,
     wrap: Option<Pixels>,
     color: Hsla,
+    styled_runs: Option<&[TextRun]>,
 ) -> Option<WrappedLine> {
     let run = TextRun {
         len: content.len(),
@@ -1261,10 +1272,10 @@ fn shape_cell(
         underline: None,
         strikethrough: None,
     };
-    let runs: &[TextRun] = if content.is_empty() {
-        &[]
-    } else {
-        std::slice::from_ref(&run)
+    let runs: &[TextRun] = match styled_runs {
+        Some(runs) => runs,
+        None if content.is_empty() => &[],
+        None => std::slice::from_ref(&run),
     };
     window
         .text_system()
@@ -1371,6 +1382,7 @@ pub(crate) fn cell_span_width(col_widths: &[Pixels], cells_len: usize, c: usize)
 pub(crate) fn table_row_wrap_rows(
     window: &mut Window,
     cells: &[SharedString],
+    cell_runs: &[std::rc::Rc<Vec<TextRun>>],
     col_widths: &[Pixels],
     is_header: bool,
     font: &Font,
@@ -1388,7 +1400,15 @@ pub(crate) fn table_row_wrap_rows(
             continue;
         }
         let avail = (cw - pad * 2.).max(px(8.));
-        if let Some(wl) = shape_cell(window, cell, &cf, font_size, Some(avail), Hsla::default()) {
+        if let Some(wl) = shape_cell(
+            window,
+            cell,
+            &cf,
+            font_size,
+            Some(avail),
+            Hsla::default(),
+            cell_runs.get(c).map(|runs| runs.as_slice()),
+        ) {
             rows = rows.max(wl.wrap_boundaries().len() + 1);
         }
     }
@@ -1422,7 +1442,10 @@ pub(crate) fn table_caret_pos(
     let cell = table_cell_at(t, col);
     let range = t.cell_ranges.get(cell)?;
     let content = t.cells.get(cell)?;
-    let in_cell = col.saturating_sub(range.start).min(content.len());
+    let source_offset = col
+        .saturating_sub(range.start)
+        .min(t.source_cells[cell].len());
+    let in_cell = crate::display_col_in(t.cell_maps.get(cell), source_offset);
     let cell_x = left + col_offset(&t.col_widths, t.cell_ranges.len(), cell, t.rtl);
     let cw = cell_span_width(&t.col_widths, t.cell_ranges.len(), cell);
     // The header is bold, so shape with the bold font or the caret lands left of
@@ -1438,6 +1461,7 @@ pub(crate) fn table_caret_pos(
         font_size,
         Some(avail),
         Hsla::default(),
+        t.cell_runs.get(cell).map(|runs| runs.as_slice()),
     )?;
     let mut pos = wl.position_for_index(in_cell, line_h).unwrap_or_default();
     let wrapped = !wl.wrap_boundaries().is_empty();
@@ -1473,6 +1497,7 @@ fn cell_offset_for_point(
     wrap: Pixels,
     font: &Font,
     font_size: Pixels,
+    styled_runs: Option<&[TextRun]>,
     window: &mut Window,
 ) -> usize {
     let line_h = font_size * LINE_HEIGHT_RATIO;
@@ -1483,6 +1508,7 @@ fn cell_offset_for_point(
         font_size,
         Some(wrap),
         Hsla::default(),
+        styled_runs,
     ) else {
         return 0;
     };
@@ -1580,9 +1606,15 @@ pub(crate) fn paint_table_row(
             // row's last cell spans the remaining columns.
             let cw = cell_span_width(&t.col_widths, t.cells.len(), c);
             let avail = (cw - pad * 2.).max(px(8.));
-            if let Some(shaped) =
-                shape_cell(window, cell, &cell_font, font_size, Some(avail), color)
-            {
+            if let Some(shaped) = shape_cell(
+                window,
+                cell,
+                &cell_font,
+                font_size,
+                Some(avail),
+                color,
+                t.cell_runs.get(c).map(|runs| runs.as_slice()),
+            ) {
                 let align = match t.aligns.get(c) {
                     Some(markdown_syntax::Align::Center) => gpui_kit::TextAlign::Center,
                     Some(markdown_syntax::Align::Right) => gpui_kit::TextAlign::Right,

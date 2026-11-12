@@ -95,6 +95,7 @@ fn agent_icon(path: &str) -> Option<&'static [u8]> {
         "icons/agents/pi.svg" => include_bytes!("../../assets/icons/agents/pi.svg"),
         "icons/agents/omp.svg" => include_bytes!("../../assets/icons/agents/omp.svg"),
         "icons/agents/kimi.svg" => include_bytes!("../../assets/icons/agents/kimi.svg"),
+        "icons/agents/hermes.png" => include_bytes!("../../assets/icons/agents/hermes.png"),
         // The GitHub tab's state glyphs: one shape per state, not one colour.
         "icons/github/issue-open.svg" => include_bytes!("../../assets/icons/github/issue-open.svg"),
         "icons/github/issue-closed.svg" => {
