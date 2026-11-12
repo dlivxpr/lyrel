@@ -379,6 +379,7 @@ fn sidecar_closed_native_leaf_keeps_a_connecting_remote_view(cx: &mut TestAppCon
                     agent_session_id: None,
                     agent_launch_argv: None,
                     agent_session_scope: None,
+                    agent_title: None,
                     run_on_land: None,
                     owner: None,
                     font_size: app.font_size,

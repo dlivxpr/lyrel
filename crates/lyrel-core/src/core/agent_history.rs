@@ -502,6 +502,25 @@ fn read(file: &Found) -> Option<PastSession> {
     }
 }
 
+/// Read the title of one exact native session file, without relying on the
+/// bounded recent-history list. The session operation runs on its owning Host.
+pub(crate) fn session_title(agent: CLIAgent, path: &Path) -> Option<String> {
+    let metadata = std::fs::metadata(path).ok()?;
+    let updated = metadata.modified().unwrap_or(UNIX_EPOCH);
+    match agent {
+        CLIAgent::Pi | CLIAgent::OhMyPi => {
+            let (head, tail) = ends(path, metadata.len()).ok()?;
+            parse_pi(agent, &head, &tail, unix(updated)).map(|session| session.title)
+        }
+        CLIAgent::Kimi => {
+            let text = std::fs::read_to_string(path).ok()?;
+            let dir = path.parent()?.file_name()?.to_str()?;
+            parse_kimi(dir, &text, unix(updated)).map(|session| session.title)
+        }
+        _ => None,
+    }
+}
+
 fn found(agent: CLIAgent, path: PathBuf, meta: &std::fs::Metadata) -> Found {
     Found {
         agent,

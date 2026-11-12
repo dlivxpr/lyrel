@@ -816,6 +816,7 @@ mod gpui_tests {
                     agent_session_id: None,
                     agent_launch_argv: None,
                     agent_session_scope: None,
+                    agent_title: None,
                     run_on_land: None,
                     owner: None,
                     font_size: 14.0,

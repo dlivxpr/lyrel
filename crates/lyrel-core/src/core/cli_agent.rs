@@ -240,10 +240,6 @@ impl CLIAgent {
         }
     }
 
-    pub fn icon_rgb(self) -> u32 {
-        0xFFFFFF
-    }
-
     pub fn icon_path(self) -> &'static str {
         match self {
             CLIAgent::OpenCode => "icons/agents/opencode.svg",
@@ -253,7 +249,7 @@ impl CLIAgent {
 
             CLIAgent::Kimi => "icons/agents/kimi.svg",
 
-            CLIAgent::Hermes => "icons/bot.svg",
+            CLIAgent::Hermes => "icons/agents/hermes.png",
         }
     }
 
@@ -1491,15 +1487,9 @@ mod tests {
     }
 
     #[test]
-    fn only_the_unbranded_agents_use_the_fallback_glyph() {
-        assert_eq!(CLIAgent::Hermes.icon_path(), "icons/bot.svg");
-        for agent in [
-            CLIAgent::OhMyPi,
-            CLIAgent::Kimi,
-            CLIAgent::Pi,
-            CLIAgent::OpenCode,
-        ] {
-            assert_ne!(agent.icon_path(), "icons/bot.svg");
+    fn every_supported_agent_has_a_branded_icon() {
+        for agent in CLIAgent::ALL {
+            assert_ne!(agent.icon_path(), "icons/bot.svg", "{agent:?}");
         }
     }
 

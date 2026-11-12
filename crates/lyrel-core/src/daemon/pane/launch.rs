@@ -1,6 +1,6 @@
 //! 负责 shell 选择、集成注入与平台启动环境，向 pane 交付可直接启动的配置。
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use portable_pty::CommandBuilder;
 
@@ -407,6 +407,30 @@ fn config_dir_env() -> Option<String> {
     crate::core::config::config_dir_path().map(|p| p.display().to_string())
 }
 
+const OMP_IMAGE_OVERLAY_ENV: &str = "LYREL_OMP_IMAGE_CONFIG";
+const OMP_IMAGE_OVERLAY: &str = "# Managed by lyrel; loaded only for command-scoped omp launches.\ntui:\n  maxInlineImages: 20\n";
+
+fn ensure_omp_image_overlay_at(dir: &Path) -> std::io::Result<PathBuf> {
+    let path = dir.join("omp-inline-images.yml");
+    if std::fs::read(&path).is_ok_and(|bytes| bytes == OMP_IMAGE_OVERLAY.as_bytes()) {
+        return Ok(path);
+    }
+    std::fs::create_dir_all(dir)?;
+    std::fs::write(&path, OMP_IMAGE_OVERLAY)?;
+    Ok(path)
+}
+
+fn ensure_omp_image_overlay() -> Option<PathBuf> {
+    let dir = crate::core::config::config_dir_path()?;
+    match ensure_omp_image_overlay_at(&dir) {
+        Ok(path) => Some(path),
+        Err(error) => {
+            log::warn!("could not prepare omp inline-image overlay: {error}");
+            None
+        }
+    }
+}
+
 /// The shell the pane is running, not the one the passwd entry names.
 ///
 /// Everything that spawns "the user's shell" — tmux's `default-shell`, `sudo
@@ -637,6 +661,9 @@ fn apply_common_command_setup(
         } else {
             cmd.env(k, v);
         }
+    }
+    if let Some(overlay) = ensure_omp_image_overlay() {
+        cmd.env(OMP_IMAGE_OVERLAY_ENV, overlay);
     }
 
     #[cfg(target_os = "macos")]
@@ -954,6 +981,21 @@ mod tests {
 
         assert!(cmd.is_default_prog());
         assert!(!default_shell_name(&cmd).is_empty());
+    }
+
+    #[test]
+    fn omp_image_overlay_is_managed_in_the_serving_config_dir() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = ensure_omp_image_overlay_at(dir.path()).unwrap();
+        assert_eq!(path, dir.path().join("omp-inline-images.yml"));
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), OMP_IMAGE_OVERLAY);
+        std::fs::write(&path, "stale").unwrap();
+        ensure_omp_image_overlay_at(dir.path()).unwrap();
+        assert!(
+            std::fs::read_to_string(path)
+                .unwrap()
+                .contains("maxInlineImages: 20")
+        );
     }
 
     #[test]

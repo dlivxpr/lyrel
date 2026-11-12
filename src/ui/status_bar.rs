@@ -269,7 +269,8 @@ impl LyrelApp {
                 )
             })
             .when(
-                document_context == Some(crate::ui::tab::OverlayTop::Code),
+                document_context == Some(crate::ui::tab::OverlayTop::Code)
+                    && !self.markdown_document_active(),
                 |bar| bar.child(self.render_document_status(cx)),
             )
             .child(
@@ -483,5 +484,39 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[gpui_kit::test]
+    fn markdown_status_belongs_to_the_document_panel(cx: &mut TestAppContext) {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("status.md");
+        std::fs::write(&path, "# Status\n").unwrap();
+        let (app, mut vcx, _stream) = crate::ui::app::test_window::harness_with_tabs(cx, 1);
+        app.update_in(&mut vcx, |app, window, cx| {
+            app.open_file_in_editor(&path, window, cx)
+        });
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
+        while app.read_with(&vcx, |app, _| !app.markdown_document_active()) {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "Markdown fixture loads"
+            );
+            settle(&mut vcx);
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        settle(&mut vcx);
+        vcx.update(|window, _| {
+            let document = window.find("document-status").bounds();
+            let local = window.find("markdown-status-bar").bounds();
+            let global = window.find("workbench-status").bounds();
+            assert!(
+                local.contains(&document.center()),
+                "Markdown status must be inside its editor panel: document={document:?}, local={local:?}"
+            );
+            assert!(
+                document.bottom() <= global.top(),
+                "Markdown status sits above, not inside, the global status bar"
+            );
+        });
     }
 }

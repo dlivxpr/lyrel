@@ -26,6 +26,8 @@
 
 ### 修复
 
+- 修复非最大化窗口中 Markdown 铺满／停靠切换和终端指针命中；移除重复表格工具，保持自动换行代码块背景连续，渲染表格单元格中的行内语法，并为文档提供可拖动滚动条。Markdown 状态栏回到编辑器底部；原生 HTML 与图片直接呈现，智能体侧栏改用高清品牌资源。空会话不再被陈旧 shell 可执行路径覆盖智能体名称，恢复会话会读取原生历史标题；omp 通过命令级只读配置叠加将内联图片上限从 8 调整为 20，不改写用户全局配置。
+
 - #252：真实字形／主题／光标消费者从零光栅边界的 `NoopTextSystem` 迁入 `native_terminal` 目标，复用已有 OS 主线程、真实字体 runner 与同一 PTY／daemon 支持；复制、宽字／组合字符、链接、Tab stops、冻结文字及非空 glyph／动态颜色断言全部保留。Windows raw PTY 的长链接夹具先显式开启 DECAWM，并独立核对全部三行后再冻结、滚动与验证 hover／完整目标，不改生产阅读／绘制逻辑或 #249 matrix。未运行构建、测试、lint、格式化；native-font consumer 不替代 #255 实窗／系统 IME 验收。
 - #252：生产绘制消费者改从 GPUI 已完成帧的 `terminal-surface` 几何观察固定 pane 边界，不再读取私有 `GridSnapshot::scroll_shift`；保留分数滚动上一行图片的可见薄片与全部真实 paint 断言，不修改字段可见性或生产行为。本修复未运行构建、测试、lint 或格式化，待集成验收。
 - #250：修复 Windows PowerShell 5.1 在 hook 之后执行 `Env:` 显式空赋值、再次删除空值的问题：仅对已识别 agent 命令的七个 scope 字段，在旧 Windows PowerShell／pwsh 中用系统 setter 执行空字面量赋值；保持原始历史／OSC、显式 `TERM_PROGRAM`、opt-outs 和提示符恢复。真实 PTY 用例新增显式空／unset 恢复断言，并用生产 scope encoder 配合 `Start-Job`／`Wait-Job` 覆盖 PS5.1，保留 pwsh 7 末尾 `&` 背景启动及恢复断言；旧 `AmpersandNotAllowed` 不算有效启动。本次未执行测试、构建、lint 或格式化，PS5.1／pwsh 7 均待集成验收。

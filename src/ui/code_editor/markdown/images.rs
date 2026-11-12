@@ -38,7 +38,6 @@ impl Bitmap {
 #[derive(Clone)]
 enum State {
     Loading,
-    Blocked,
     Ready,
     Failed(String),
 }
@@ -61,7 +60,6 @@ pub(crate) struct ImageHost {
     scanned_revision: Option<u64>,
     images: Images,
     states: HashMap<String, State>,
-    allowed: HashSet<String>,
     views: HashMap<EntityId, (WeakEntity<MarkdownEditor>, Subscription)>,
     hover: Option<(EntityId, SharedString, gpui_kit::Bounds<gpui_kit::Pixels>)>,
     notice: Option<SharedString>,
@@ -94,7 +92,6 @@ impl ImageHost {
             scanned_revision: None,
             images: Rc::new(RefCell::new(HashMap::new())),
             states: HashMap::new(),
-            allowed: HashSet::new(),
             views: HashMap::new(),
             hover: None,
             refresh_scheduled: false,
@@ -266,7 +263,6 @@ impl ImageHost {
             self.generation = self.generation.wrapping_add(1);
             self.images.borrow_mut().clear();
             self.states.clear();
-            self.allowed.clear();
             for (view, _) in self.views.values() {
                 let _ = view.update(cx, |view, cx| view.refresh_resource_layout(cx));
             }
@@ -292,7 +288,6 @@ impl ImageHost {
         self.images
             .borrow_mut()
             .retain(|source, _| self.sources.contains(source));
-        self.allowed.retain(|source| self.sources.contains(source));
         let pending: Vec<_> = self
             .sources
             .iter()
@@ -315,10 +310,6 @@ impl ImageHost {
     ) {
         let target = match links::resolve(&*host, document, destination(&source)) {
             Ok(Target::External(url)) if matches!(url.scheme(), "http" | "https") => {
-                if !self.allowed.contains(&source) {
-                    self.states.insert(source, State::Blocked);
-                    return;
-                }
                 Resource::External(url)
             }
             Ok(Target::File(path, _)) => Resource::File(path),
@@ -803,7 +794,6 @@ pub(crate) fn controls(
     for (source, state) in rows {
         let message = match state {
             State::Loading => t(L10nKey::EditorImageLoading).to_owned(),
-            State::Blocked => t(L10nKey::MarkdownImageNetworkPolicy).to_owned(),
             State::Failed(reason) => format!("{}: {reason}", t(L10nKey::EditorImageFailed)),
             State::Ready => unreachable!(),
         };
@@ -833,7 +823,6 @@ pub(crate) fn controls(
                             .label(t(L10nKey::EditorLoadImages))
                             .on_click(move |_, _, cx| {
                                 let _ = retry.update(cx, |host, cx| {
-                                    host.allowed.insert(target.clone());
                                     host.states.remove(&target);
                                     host.refresh(cx);
                                     host.notify(cx);

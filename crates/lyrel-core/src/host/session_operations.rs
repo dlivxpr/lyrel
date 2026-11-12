@@ -84,6 +84,10 @@ pub struct PreparedSession {
     /// This is not a fabricated identity and is not a completed fork.
     pub target_id: Option<String>,
     pub session_file: Option<PathBuf>,
+    /// A title already present in the native record; a later native OSC title
+    /// remains authoritative after the restored TUI starts.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
     pub cwd: PathBuf,
     pub scope: SessionScope,
     pub launch_argv: Vec<String>,
@@ -561,6 +565,7 @@ fn omp(request: &SessionOperation) -> Result<PreparedSession, SessionOperationEr
             )
         })?
     };
+    let title = crate::core::agent_history::session_title(request.agent, &source_file);
     let source_id = omp_identity(&source_file)?;
     if source_id != request.source_id {
         return Err(failure(
@@ -622,6 +627,7 @@ fn omp(request: &SessionOperation) -> Result<PreparedSession, SessionOperationEr
         source_id: request.source_id.clone(),
         target_id: Some(target_id),
         session_file: Some(session_file),
+        title,
         cwd: request.cwd.clone(),
         scope,
         launch_argv: launch,
@@ -716,6 +722,49 @@ fn compatibility_environment(agent: CLIAgent, environment: &mut BTreeMap<String,
         environment
             .entry("PI_NO_DECCARA".into())
             .or_insert_with(|| "1".into());
+    }
+}
+
+fn append_omp_image_overlay(
+    environment: &mut BTreeMap<String, String>,
+    host_environment: &BTreeMap<String, String>,
+    separator: char,
+) {
+    let Some(overlay) = host_environment
+        .get("LYREL_OMP_IMAGE_CONFIG")
+        .filter(|path| !path.is_empty())
+    else {
+        return;
+    };
+    let mut files = environment
+        .get("PI_CONFIG_FILES")
+        .cloned()
+        .or_else(|| host_environment.get("PI_CONFIG_FILES").cloned())
+        .unwrap_or_default();
+    if files.split(separator).any(|path| path == overlay) {
+        return;
+    }
+    if !files.is_empty() {
+        files.push(separator);
+    }
+    files.push_str(overlay);
+    environment.insert("PI_CONFIG_FILES".into(), files);
+}
+
+fn apply_omp_image_overlay<H: Host + ?Sized>(
+    host: &H,
+    agent: CLIAgent,
+    environment: &mut BTreeMap<String, String>,
+) {
+    if agent != CLIAgent::OhMyPi {
+        return;
+    }
+    if let Ok(host_environment) = host.agent_environment() {
+        append_omp_image_overlay(
+            environment,
+            &host_environment,
+            if host.separator() == '\\' { ';' } else { ':' },
+        );
     }
 }
 
@@ -838,7 +887,11 @@ pub fn scoped_agent_launch_command<H: Host + ?Sized>(
             "launch environment has no executable",
         ));
     }
+    let explicit_overlays = scope.environment.contains_key("PI_CONFIG_FILES");
     compatibility_environment(agent, &mut scope.environment);
+    if !explicit_overlays {
+        apply_omp_image_overlay(host, agent, &mut scope.environment);
+    }
     agent_command_line(&argv, &scope, agent)
 }
 
@@ -1303,6 +1356,22 @@ mod tests {
     }
 
     #[test]
+    fn omp_image_overlay_preserves_existing_files_and_is_not_duplicated() {
+        let host = BTreeMap::from([
+            ("PI_CONFIG_FILES".into(), "C:\\existing.yml".into()),
+            ("LYREL_OMP_IMAGE_CONFIG".into(), "C:\\owned\\omp.yml".into()),
+        ]);
+        let mut environment = BTreeMap::new();
+        append_omp_image_overlay(&mut environment, &host, ';');
+        assert_eq!(
+            environment["PI_CONFIG_FILES"],
+            "C:\\existing.yml;C:\\owned\\omp.yml"
+        );
+        append_omp_image_overlay(&mut environment, &host, ';');
+        assert_eq!(environment["PI_CONFIG_FILES"].matches("omp.yml").count(), 1);
+    }
+
+    #[test]
     fn quick_omp_identity_is_scoped_and_explicit_policies_win() {
         let dir = tempfile::tempdir().unwrap();
         let output = dir.path().join("identity.json");
@@ -1577,7 +1646,7 @@ mod tests {
         let file = cwd.join("source.jsonl");
         std::fs::write(
             &file,
-            "{\"type\":\"session\",\"version\":3,\"id\":\"session-original\"}\n",
+            "{\"type\":\"session\",\"version\":3,\"id\":\"session-original\",\"title\":\"Original native title\"}\n",
         )
         .unwrap();
         request.scope.session_file = Some(file);
@@ -1769,6 +1838,7 @@ mod tests {
         let source = request.scope.session_file.as_ref().unwrap();
         let before = std::fs::read(source).unwrap();
         let resumed = LocalHost::new().session_operation(&request).unwrap();
+        assert_eq!(resumed.title.as_deref(), Some("Original native title"));
         assert_eq!(resumed.target_id.as_deref(), Some("session-original"));
         assert_eq!(resumed.session_file.as_ref(), Some(source));
         assert!(!resumed.created);

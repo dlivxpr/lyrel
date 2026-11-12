@@ -26,6 +26,7 @@ const AGENT_DISCOVERY_ENV: &[&str] = &[
     "CLAUDE_CONFIG_DIR",
     "PROGRAMDATA",
     "LYREL_HOST_OS",
+    "LYREL_OMP_IMAGE_CONFIG",
 ];
 
 pub(crate) fn is_agent_environment_key(key: &str) -> bool {

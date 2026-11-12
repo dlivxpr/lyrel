@@ -10,6 +10,12 @@ def __lyrel_agent_environment [agent: string] {
     # not an explicit command-line opt-out, so omp still opts out of DECCARA.
     $identity | insert PI_NO_DECCARA '1'
   } else { $identity }
+  let identity = if $agent == 'omp' and ('LYREL_OMP_IMAGE_CONFIG' in $env) and ($env.LYREL_OMP_IMAGE_CONFIG | is-not-empty) {
+    let separator = if $nu.os-info.name == 'windows' { ';' } else { ':' }
+    let existing = ($env.PI_CONFIG_FILES? | default '')
+    let overlays = if ($existing | is-empty) { $env.LYREL_OMP_IMAGE_CONFIG } else { $existing + $separator + $env.LYREL_OMP_IMAGE_CONFIG }
+    $identity | insert PI_CONFIG_FILES $overlays
+  } else { $identity }
   if $agent == 'hermes' and not ('KITTY_WINDOW_ID' in $env) {
     $identity | insert KITTY_WINDOW_ID 'lyrel'
   } else { $identity }

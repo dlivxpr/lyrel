@@ -23,7 +23,16 @@ pub(crate) fn with_vertical_scrollbar<H: ScrollbarHandle + Clone>(
 /// the border is already the edge. A scroll area that *is* the window has no
 /// such edge, and a bar that runs to the last pixel lands on the rounded
 /// corner and reads as if it had been clipped.
-pub(crate) fn with_inset_vertical_scrollbar<H: ScrollbarHandle + Clone>(
+pub fn with_inset_vertical_scrollbar<H: ScrollbarHandle + Clone>(
+    id: impl Into<ElementId>,
+    scroll_area: impl IntoElement,
+    handle: &H,
+    inset_y: Pixels,
+) -> AnyElement {
+    with_inset_vertical_scrollbar_mode(id, scroll_area, handle, inset_y)
+}
+
+fn with_inset_vertical_scrollbar_mode<H: ScrollbarHandle + Clone>(
     id: impl Into<ElementId>,
     scroll_area: impl IntoElement,
     handle: &H,
@@ -47,10 +56,8 @@ pub(crate) fn with_inset_vertical_scrollbar<H: ScrollbarHandle + Clone>(
                 .left_0()
                 .right_0()
                 .bottom(inset_y)
-                // No `scrollbar_show` override: it falls back to
-                // `cx.theme().scrollbar_show`, which `apply_theme` pins to
-                // `Scrolling` for every list in the app. Overriding it here
-                // would be one list disagreeing with the rest.
+                // Ordinary lists inherit the theme; a document can explicitly
+                // keep its navigation scrollbar visible while at rest.
                 .child(Scrollbar::vertical(handle).id(id)),
         )
         .into_any_element()

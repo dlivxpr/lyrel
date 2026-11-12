@@ -142,6 +142,7 @@ fn a_connecting_pane_saves_the_agent_it_is_rebuilding(cx: &mut gpui_kit::TestApp
                     agent_session_id: Some("sid-abc".to_string()),
                     agent_launch_argv: Some(vec!["omp".to_string()]),
                     agent_session_scope: None,
+                    agent_title: None,
                     run_on_land: None,
                     owner: None,
                     font_size: 14.0,

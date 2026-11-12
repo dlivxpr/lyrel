@@ -47,10 +47,18 @@
     end
     test -n "$agent"; or return
     set -g __lyrel_scope_keys
-    for key in TERM_PROGRAM TERM_PROGRAM_VERSION LC_TERMINAL LC_TERMINAL_VERSION PI_NO_DECCARA KITTY_WINDOW_ID
+    for key in TERM_PROGRAM TERM_PROGRAM_VERSION LC_TERMINAL LC_TERMINAL_VERSION PI_NO_DECCARA KITTY_WINDOW_ID PI_CONFIG_FILES
       contains -- $key $explicit; and continue
       set -l value
       switch $key
+        case PI_CONFIG_FILES
+          test "$agent" = omp; or continue
+          set -q LYREL_OMP_IMAGE_CONFIG; and test -n "$LYREL_OMP_IMAGE_CONFIG"; or continue
+          if set -q PI_CONFIG_FILES; and test -n "$PI_CONFIG_FILES"
+            set value "$PI_CONFIG_FILES:$LYREL_OMP_IMAGE_CONFIG"
+          else
+            set value "$LYREL_OMP_IMAGE_CONFIG"
+          end
         case TERM_PROGRAM
           set value kitty
         case TERM_PROGRAM_VERSION

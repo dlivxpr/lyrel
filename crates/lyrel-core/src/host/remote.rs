@@ -2155,6 +2155,7 @@ mod tests {
                     source_id: request.source_id.clone(),
                     target_id: Some("real-created-target".into()),
                     session_file: Some(PathBuf::from("/remote/store/real-created-target.jsonl")),
+                    title: None,
                     cwd: request.cwd.clone(),
                     scope: request.scope.clone(),
                     launch_argv: request.launch_argv.clone(),

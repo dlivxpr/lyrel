@@ -4095,12 +4095,6 @@ mod tests {
         );
 
         view.osc_title = None;
-        assert_eq!(
-            tab_view_label(&view, 0, None),
-            "Oh My Pi",
-            "an agent names a tab that has told us nothing else"
-        );
-
         view.agent = None;
         assert_eq!(
             tab_view_label(&view, 0, None),

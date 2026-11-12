@@ -193,7 +193,7 @@ pub(crate) fn label_of(
         // full where the one beside it says "…/dir" would be the same
         // disagreement in a new place.
         TabLabel::Osc(title) => shortened(title),
-        TabLabel::Agent(agent) => agent.display_name().to_string(),
+        TabLabel::Agent(agent) => agent.slug().to_string(),
         TabLabel::Cwd(cwd) => shortened(cwd),
         TabLabel::Process(title) => title.to_string(),
         TabLabel::Unknown => unnamed(),
@@ -1536,7 +1536,7 @@ impl LyrelApp {
             TabLabel::Osc(title) | TabLabel::Cwd(title) => {
                 abbreviate_home(strip_host_prefix(title.trim()), home.as_deref()).into_owned()
             }
-            TabLabel::Agent(agent) => agent.display_name().to_string(),
+            TabLabel::Agent(agent) => agent.slug().to_string(),
             TabLabel::Named(name) => name.to_string(),
             TabLabel::Process(title) => title.to_string(),
             TabLabel::Unknown => String::new(),
@@ -2067,14 +2067,9 @@ fn avatar_disc(
                         d.border_1().border_color(cx.theme().border)
                     })
                     .child(
-                        gpui_kit::svg()
-                            .path(agent.icon_path())
-                            .size(px(size * 0.54))
-                            // SVG assets render as a single-colour mask, so
-                            // the mark's colour comes from the agent rather
-                            // than from the file. The tray icon reads the
-                            // same answer.
-                            .text_color(gpui_kit::rgb(agent.icon_rgb())),
+                        gpui_kit::img(agent.icon_path())
+                            .size(px(size * 0.72))
+                            .object_fit(gpui_kit::ObjectFit::Contain),
                     ),
             )
             .when_some(dot, |b, dot| b.child(dot))
@@ -2846,6 +2841,17 @@ mod tests {
     /// them (#580).
     fn home() -> &'static Path {
         Path::new("/Users/x")
+    }
+
+    #[test]
+    fn an_untitled_agent_uses_its_command_name_not_the_stale_shell_path() {
+        let mut tab = strip_tab();
+        tab.agent = Some(crate::core::cli_agent::CLIAgent::OhMyPi);
+        tab.osc_title = Some(r"C:\Windows\System32\cmd.exe".into());
+        assert_eq!(label_of(&tab, 0, Some(home())), "omp");
+
+        tab.osc_title = Some("Actual session title".into());
+        assert_eq!(label_of(&tab, 0, Some(home())), "Actual session title");
     }
 
     #[test]

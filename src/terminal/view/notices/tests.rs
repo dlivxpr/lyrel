@@ -133,6 +133,23 @@ fn title_events_drive_the_tab_title(cx: &mut TestAppContext) {
         .unwrap();
 }
 
+#[gpui_kit::test]
+fn native_history_title_seeds_only_the_placeholder_or_stale_shell_title(cx: &mut TestAppContext) {
+    let (window, _daemon) = harness(cx);
+    window
+        .update(cx, |view, _, cx| {
+            view.seed_session_title("Recovered session", cx);
+            assert_eq!(view.title, "Recovered session");
+            view.title = r"C:\Windows\System32\cmd.exe".into();
+            view.seed_session_title("Named session", cx);
+            assert_eq!(view.title, "Named session");
+            view.title = "Latest native title".into();
+            view.seed_session_title("Stale history title", cx);
+            assert_eq!(view.title, "Latest native title");
+        })
+        .unwrap();
+}
+
 /// The flash this wait exists to stop: a prompt framework names the command
 /// it is about to run and puts the directory back at the next prompt, and
 /// for anything that finishes in a blink both edges arrive within a few

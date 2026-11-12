@@ -1045,10 +1045,10 @@ fn scan_inline(
         // bare unhidden `!`.
         if c == b'['
             && !is_backslash_escaped(b, i)
-            && let Some(rb) = find1(b, i + 1, end, b']')
+            && let Some(rb) = find_balanced(b, i, end, b'[', b']')
             && rb + 1 < end
             && b[rb + 1] == b'('
-            && let Some(rp) = find1(b, rb + 2, end, b')')
+            && let Some(rp) = find_balanced(b, rb + 1, end, b'(', b')')
         {
             let marker_start = if i > start && b[i - 1] == b'!' {
                 i - 1
@@ -1073,7 +1073,7 @@ fn scan_inline(
         // (Inline `[text](url)` is handled just above; this is the `][` form.)
         if c == b'['
             && !is_backslash_escaped(b, i)
-            && let Some(rb) = find1(b, i + 1, end, b']')
+            && let Some(rb) = find_balanced(b, i, end, b'[', b']')
             && rb + 1 < end
             && b[rb + 1] == b'['
             && let Some(rb2) = find1(b, rb + 2, end, b']')
@@ -1128,8 +1128,73 @@ fn scan_inline(
             i = close + close_len;
             continue;
         }
-        // Any other HTML tag is literal text — its attributes hold no links
-        // (a CSS `#hex` isn't a `#tag`; matches the `links()` hit-tests).
+        // Safe presentational HTML uses the same source→display map as Markdown
+        // markers. Formatting containers nest through the ordinary scanner.
+        if c == b'<'
+            && let Some(gt) = zorite_markdown::syntax::html_tag_end(&text[..end], i)
+            && let Some((closing, name)) = safe_html_tag(&text[i..gt])
+        {
+            if name.eq_ignore_ascii_case("br") {
+                out.push(Span {
+                    range: i..gt,
+                    style: Style {
+                        hide: true,
+                        replace: Some(" ".into()),
+                        ..Default::default()
+                    },
+                });
+                i = gt;
+                continue;
+            }
+            let format = if matches_ignore_ascii_case(name, &["b", "strong"]) {
+                Some(Style {
+                    bold: true,
+                    ..Default::default()
+                })
+            } else if matches_ignore_ascii_case(name, &["em", "i"]) {
+                Some(Style {
+                    italic: true,
+                    ..Default::default()
+                })
+            } else if matches_ignore_ascii_case(name, &["del", "s"]) {
+                Some(Style {
+                    strike: true,
+                    ..Default::default()
+                })
+            } else if name.eq_ignore_ascii_case("a") {
+                Some(Style {
+                    color: Some(st.link),
+                    ..Default::default()
+                })
+            } else {
+                None
+            };
+            if !closing {
+                let close = format!("</{name}>");
+                if let Some(relative) = text[gt..end].find(&close) {
+                    let body = gt;
+                    let close_at = body + relative;
+                    marker(out, i..gt, st.marker);
+                    scan_styled_body(
+                        text,
+                        body,
+                        close_at,
+                        st,
+                        out,
+                        format.unwrap_or_default().over(base),
+                        depth,
+                        next_id,
+                    );
+                    marker(out, close_at..close_at + close.len(), st.marker);
+                    i = close_at + close.len();
+                    continue;
+                }
+            }
+            marker(out, i..gt, st.marker);
+            i = gt;
+            continue;
+        }
+        // Unknown HTML stays literal; its attributes never become tags or links.
         if let Some(gt) = zorite_markdown::syntax::html_tag_end(&text[..end], i) {
             i = gt;
             continue;
@@ -1182,6 +1247,26 @@ fn scan_inline(
 
 fn push(out: &mut Vec<Span>, range: Range<usize>, style: Style) {
     out.push(Span { range, style });
+}
+
+/// Matching closing byte for a construct whose body may contain nested pairs.
+/// Escaped brackets/parens remain literal and do not affect nesting.
+fn find_balanced(b: &[u8], from: usize, end: usize, open: u8, close: u8) -> Option<usize> {
+    let mut depth = 0usize;
+    for i in from..end {
+        if is_backslash_escaped(b, i) {
+            continue;
+        }
+        if b[i] == open {
+            depth += 1;
+        } else if b[i] == close {
+            depth = depth.checked_sub(1)?;
+            if depth == 0 {
+                return Some(i);
+            }
+        }
+    }
+    None
 }
 
 /// First index of byte `c` in `b[from..end]`.
@@ -1617,12 +1702,117 @@ pub(crate) fn toggle_task_checkbox(line: &str) -> Option<String> {
     Some(out)
 }
 
-/// If `line` is a standalone image — `![alt](src)`, optionally followed by a
-/// `{width=N}` / `{width=Npx}` attribute, with only whitespace around it —
-/// return `(src, explicit_width)`. The editor renders such a line as the image
-/// (W4) when the caret is elsewhere; a line with any other trailing text stays
-/// plain source.
+fn matches_ignore_ascii_case(name: &str, candidates: &[&str]) -> bool {
+    candidates
+        .iter()
+        .any(|candidate| name.eq_ignore_ascii_case(candidate))
+}
+
+/// A small, native HTML subset: presentational containers and inline formatting.
+/// Unknown tags remain literal source; no script/style/network subresource is run.
+fn safe_html_tag(tag: &str) -> Option<(bool, &str)> {
+    let inner = tag.strip_prefix('<')?.strip_suffix('>')?;
+    let (closing, inner) = inner
+        .strip_prefix('/')
+        .map_or((false, inner), |inner| (true, inner));
+    let name = inner
+        .split(|c: char| c.is_ascii_whitespace() || c == '/' || c == '>')
+        .next()?;
+    const SAFE: &[&str] = &[
+        "a", "b", "br", "center", "del", "div", "em", "i", "p", "s", "small", "span", "strong",
+        "sub", "sup", "u",
+    ];
+    SAFE.iter()
+        .any(|candidate| name.eq_ignore_ascii_case(candidate))
+        .then_some((closing, name))
+}
+
+fn html_attribute<'a>(attributes: &'a str, name: &str) -> Option<&'a str> {
+    let bytes = attributes.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        while bytes
+            .get(i)
+            .is_some_and(|byte| byte.is_ascii_whitespace() || *byte == b'/')
+        {
+            i += 1;
+        }
+        let start = i;
+        while bytes
+            .get(i)
+            .is_some_and(|byte| byte.is_ascii_alphanumeric() || matches!(*byte, b'-' | b'_' | b':'))
+        {
+            i += 1;
+        }
+        if start == i {
+            i += 1;
+            continue;
+        }
+        let key = &attributes[start..i];
+        while bytes.get(i).is_some_and(|byte| byte.is_ascii_whitespace()) {
+            i += 1;
+        }
+        if bytes.get(i) != Some(&b'=') {
+            continue;
+        }
+        i += 1;
+        while bytes.get(i).is_some_and(|byte| byte.is_ascii_whitespace()) {
+            i += 1;
+        }
+        let quote = *bytes.get(i)?;
+        if !matches!(quote, b'"' | b'\'') {
+            continue;
+        }
+        i += 1;
+        let start = i;
+        while bytes.get(i).is_some_and(|byte| *byte != quote) {
+            i += 1;
+        }
+        if i == bytes.len() {
+            return None;
+        }
+        if key.eq_ignore_ascii_case(name) {
+            return Some(&attributes[start..i]);
+        }
+        i += 1;
+    }
+    None
+}
+
+fn standalone_html_image(line: &str) -> Option<(&str, Option<f32>)> {
+    let line = line.trim();
+    let end = zorite_markdown::syntax::html_tag_end(line, 0)?;
+    let name = line[1..end]
+        .split(|c: char| c.is_ascii_whitespace() || matches!(c, '/' | '>'))
+        .next()?;
+    if end != line.len() || !name.eq_ignore_ascii_case("img") {
+        return None;
+    }
+    let attributes = line[1 + name.len()..end]
+        .trim_end_matches(['>', '/'])
+        .trim();
+    let src = html_attribute(attributes, "src").filter(|src| !src.is_empty())?;
+    let width = html_attribute(attributes, "width")
+        .and_then(|value| {
+            value
+                .trim()
+                .strip_suffix("px")
+                .unwrap_or(value)
+                .parse()
+                .ok()
+        })
+        .filter(|width: &f32| width.is_finite() && *width > 0.);
+    Some((src, width))
+}
+
+/// If `line` is a standalone image — `![alt](src)` or a native `<img src="…">`,
+/// optionally followed by a `{width=N}` / `{width=Npx}` attribute in Markdown —
+/// return `(src, explicit_width)`. The editor renders it through the same Host
+/// image pipeline when the caret is elsewhere.
 pub(crate) fn image_line(line: &str) -> Option<(&str, Option<f32>)> {
+    if let Some(image) = standalone_html_image(line) {
+        return Some(image);
+    }
     let rest = line.trim().strip_prefix("![")?;
     let close_alt = rest.find("](")?;
     let after_alt = &rest[close_alt + 2..];
@@ -2239,14 +2429,19 @@ fn is_backslash_escaped(b: &[u8], i: usize) -> bool {
 /// rendered cell and hit-test a click back to a source offset. An empty cell is a
 /// zero-width range at its content position.
 pub(crate) fn table_cell_ranges(line: &str) -> Vec<Range<usize>> {
-    let (Some(first), Some(last)) = (line.find('|'), line.rfind('|')) else {
-        return Vec::new();
-    };
-    if last <= first {
-        return Vec::new();
+    // Match table_cells exactly: outer whitespace and at most one bounding pipe
+    // at either edge are presentation syntax, not an extra empty cell. Keep the
+    // original byte base so every returned range still addresses `line`.
+    let base = line.len() - line.trim_start().len();
+    let mut base = base;
+    let mut inner = line.trim();
+    if let Some(rest) = inner.strip_prefix('|') {
+        inner = rest;
+        base += 1;
     }
-    let base = first + 1; // start of the inter-pipe region in `line`
-    let inner = &line[base..last];
+    if let Some(rest) = inner.strip_suffix('|') {
+        inner = rest;
+    }
     let mut out = Vec::new();
     let mut seg = 0; // offset of the current cell within `inner`
     for piece in split_unescaped_pipes(inner) {
@@ -2448,7 +2643,9 @@ mod tests {
     fn css_hex_in_an_html_tag_is_not_a_tag() {
         // Unclosed (so not styled) — the `#e03e3e` still isn't a `#tag`.
         let text = r#"<span style="color: #e03e3e">red #real"#;
-        let st = test_style();
+        let mut st = test_style();
+        // Distinguish an actual #tag from the now-hidden HTML marker range.
+        st.tag = hsla(0.6, 1., 0.5, 1.);
         let mut out = Vec::new();
         scan_line(text, 0, text.len(), &st, &mut out);
         let tags: Vec<_> = out
@@ -2711,6 +2908,14 @@ mod tests {
         assert_eq!(ranges.len(), 2);
         assert_eq!(&line[ranges[0].clone()], r"left \| right");
         assert_eq!(&line[ranges[1].clone()], "ok");
+        for line in ["| a | b |", "a | b |", "| a | b", "  a | b  "] {
+            let cells = table_cells(line);
+            let ranges = table_cell_ranges(line);
+            assert_eq!(ranges.len(), cells.len(), "{line:?}");
+            for (range, cell) in ranges.into_iter().zip(cells) {
+                assert_eq!(&line[range], cell, "{line:?}");
+            }
+        }
     }
 
     #[test]
@@ -2783,6 +2988,39 @@ mod tests {
         assert_eq!(image_row("1. ![a](b.png)"), Some(("b.png", None, 3)));
         assert_eq!(image_row("![a](b.png)"), Some(("b.png", None, 0)));
         assert_eq!(image_row("- text ![a](b.png)"), None);
+    }
+
+    #[test]
+    fn standalone_html_img_uses_the_block_image_pipeline() {
+        assert_eq!(
+            image_line(r#"<img src="assets/app-icon.svg" alt="lyrel" width="88" height="88" />"#),
+            Some(("assets/app-icon.svg", Some(88.)))
+        );
+        assert_eq!(
+            image_line(r#"<img src='https://img.shields.io/badge/test' />"#),
+            Some(("https://img.shields.io/badge/test", None))
+        );
+        assert_eq!(image_line("<img src=\"\">"), None);
+        assert_eq!(image_line("text <img src=\"inline.png\">"), None);
+    }
+
+    #[test]
+    fn safe_inline_html_tags_render_their_content() {
+        let font = gpui_kit::font("Helvetica");
+        let color = hsla(0., 0., 0., 1.);
+        let style = test_style();
+        let (display, ..) = hidden_runs(
+            r#"<sub>纯 Rust · <a href="https://example.com">example</a></sub><u>under</u>"#,
+            &font,
+            color,
+            &[],
+            None,
+            0,
+            0,
+            false,
+            &style,
+        );
+        assert_eq!(display, "纯 Rust · exampleunder");
     }
 
     #[test]
@@ -2885,6 +3123,25 @@ mod tests {
         let (disp, _, map) = hidden_runs("plain text", &font, c, &[], None, 0, 0, false, &st);
         assert_eq!(disp, "plain text");
         assert_eq!(map, (0..=10).collect::<Vec<_>>());
+    }
+
+    #[test]
+    fn linked_image_does_not_leave_the_outer_link_target_visible() {
+        let font = gpui_kit::font("Helvetica");
+        let color = hsla(0., 0., 0., 1.);
+        let st = test_style();
+        let (display, ..) = hidden_runs(
+            "[![alt](badge.png)](https://example.com)",
+            &font,
+            color,
+            &[],
+            None,
+            0,
+            0,
+            false,
+            &st,
+        );
+        assert_eq!(display, "![alt](badge.png)");
     }
 
     #[test]

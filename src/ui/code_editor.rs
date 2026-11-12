@@ -740,6 +740,11 @@ impl LyrelApp {
         self.editor.buffers.get(self.tab_code()?.active_id()?)
     }
 
+    pub(crate) fn markdown_document_active(&self) -> bool {
+        self.active_buffer()
+            .is_some_and(|file| file.input.markdown().is_some())
+    }
+
     fn active_editor_input(&self) -> Option<EditorInput> {
         self.editor_input_for(self.tab_code()?.active_id()?)
     }
@@ -2562,6 +2567,20 @@ impl LyrelApp {
         let bar = self.render_editor_bar(cx);
 
         let header = self.render_editor_header(chrome, window, cx);
+        let markdown_status = self.markdown_document_active().then(|| {
+            h_flex()
+                .id("markdown-status-bar")
+                .test_support()
+                .flex_none()
+                .w_full()
+                .h(rems(1.625))
+                .px_1()
+                .border_t_1()
+                .border_color(cx.theme().border)
+                .text_xs()
+                .text_color(cx.theme().muted_foreground)
+                .child(self.render_document_status(cx))
+        });
         let editor_col = v_flex()
             .flex_1()
             .min_w_0()
@@ -2570,7 +2589,8 @@ impl LyrelApp {
             .when_some(conflict_banner, |this, b| this.child(b))
             .children(bar)
             .child(self.render_editor_groups(breadcrumbs, body, window, cx))
-            .children(self.render_editor_problems(window, cx));
+            .children(self.render_editor_problems(window, cx))
+            .when_some(markdown_status, |column, status| column.child(status));
 
         // The panel's own paint is the same either way; only the box is not.
         // Filling the workspace means stopping the window's translucency and
@@ -2660,6 +2680,10 @@ impl LyrelApp {
                     code.split.as_ref().expect("second editor group").id
                 };
                 let view = f.presentations.view(input, tab, group, window, cx);
+                let scrollbar_id = SharedString::from(format!(
+                    "markdown-document-scrollbar-{}",
+                    view.entity_id().as_u64()
+                ));
                 if let Some(resources) = &f.markdown_resources {
                     markdown::images::ImageHost::attach(resources, &view, cx);
                 }
@@ -2685,12 +2709,25 @@ impl LyrelApp {
                     .children(f.presentations.search(&view))
                     .child(
                         div()
+                            .on_children_prepainted({
+                                let view = view.clone();
+                                move |bounds, _, cx| {
+                                    if let Some(bounds) = bounds.first() {
+                                        view.update(cx, |view, _| {
+                                            view.set_scroll_viewport(*bounds)
+                                        });
+                                    }
+                                }
+                            })
+                            .id(scrollbar_id)
+                            .test_support()
+                            .relative()
                             .flex_1()
                             .min_w_0()
                             .min_h_0()
                             // Native document inset also clears the existing dock resize band.
                             // Keep it inside the scroll owner rather than adding shell padding.
-                            .child(view),
+                            .child(v_flex().size_full().min_h_0().child(view)),
                     )
                     .into_any_element()
             }

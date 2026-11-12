@@ -787,6 +787,10 @@ pub struct EditorState {
     pending_coalesce: bool,
     soft_wrap: bool,
     scroll: ScrollHandle,
+    /// Real viewport bounds published by the host; the editor's scroll handle
+    /// spans content height, so a scrollbar cannot infer the visible extent.
+    scroll_viewport: Bounds<Pixels>,
+    scrollbar_dragging: bool,
     revealed_caret: Option<(u64, usize, WrapAffinity)>,
     /// Only local navigation/editing requests reveal; observing another view never does.
     reveal_requested: bool,
@@ -1148,6 +1152,8 @@ impl EditorState {
             pending_coalesce: false,
             soft_wrap: true,
             scroll,
+            scroll_viewport: Bounds::default(),
+            scrollbar_dragging: false,
             revealed_caret: None,
             reveal_requested: false,
             caret_affinity: WrapAffinity::Downstream,
@@ -1852,6 +1858,35 @@ impl EditorState {
             offset -= 1;
         }
         self.move_to(offset, cx);
+    }
+
+    /// The presentation-owned vertical scroll handle, shared with the host's
+    /// scrollbar without introducing a second scrolling authority.
+    pub fn scroll_handle(&self) -> ScrollHandle {
+        self.scroll.clone()
+    }
+
+    /// Publish the real viewport bounds from the host's layout. The scroll
+    /// handle's own bounds describe content height, not the visible extent.
+    pub fn set_scroll_viewport(&mut self, bounds: Bounds<Pixels>) {
+        self.scroll_viewport = bounds;
+    }
+
+    pub fn scroll_viewport(&self) -> Bounds<Pixels> {
+        self.scroll_viewport
+    }
+
+    fn scrollbar_offset_at(&self, y: Pixels) -> Option<Point<Pixels>> {
+        let viewport = self.scroll_viewport;
+        if viewport.size.height <= px(0.) {
+            return None;
+        }
+        let max_offset = self.scroll.max_offset().y;
+        if max_offset <= px(0.) {
+            return None;
+        }
+        let ratio = ((y - viewport.top()) / viewport.size.height).clamp(0., 1.);
+        Some(point(px(0.), -max_offset * ratio))
     }
 
     /// Per logical line, from the last paint: its top offset within the
@@ -3406,6 +3441,19 @@ impl EditorState {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if event.position.x >= self.scroll_viewport.right() - px(20.)
+            && event.position.x <= self.scroll_viewport.right() - px(8.)
+            && event.position.y >= self.scroll_viewport.top()
+            && event.position.y <= self.scroll_viewport.bottom()
+            && let Some(offset) = self.scrollbar_offset_at(event.position.y)
+        {
+            self.scrollbar_dragging = true;
+            self.scroll.set_offset(offset);
+            self.focus(window, cx);
+            cx.stop_propagation();
+            cx.notify();
+            return;
+        }
         self.pending_link = None;
         // A press on an image's corner grip starts a resize drag — this takes
         // precedence over placing the caret on the image row (which the press
@@ -3751,6 +3799,11 @@ impl EditorState {
     }
 
     fn on_mouse_up(&mut self, event: &MouseUpEvent, _: &mut Window, cx: &mut Context<Self>) {
+        if self.scrollbar_dragging {
+            self.scrollbar_dragging = false;
+            cx.notify();
+            return;
+        }
         if let Some((url, origin, revision)) = self.pending_link.take()
             && (event.position.x - origin.x).abs() < px(4.)
             && (event.position.y - origin.y).abs() < px(4.)
@@ -3799,6 +3852,16 @@ impl EditorState {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.scrollbar_dragging {
+            if event.dragging()
+                && let Some(offset) = self.scrollbar_offset_at(event.position.y)
+            {
+                self.scroll.set_offset(offset);
+                cx.stop_propagation();
+                cx.notify();
+            }
+            return;
+        }
         if self.pending_link.as_ref().is_some_and(|(_, origin, _)| {
             (event.position.x - origin.x).abs() >= px(4.)
                 || (event.position.y - origin.y).abs() >= px(4.)
@@ -6863,7 +6926,12 @@ struct CodeBg {
 /// the table — the caret's table shows source instead ("raw on caret").
 #[derive(Clone)]
 struct TableRow {
+    /// Rendered cell text, with Markdown markers projected out.
     cells: Vec<SharedString>,
+    source_cells: Vec<SharedString>,
+    cell_runs: Vec<std::rc::Rc<Vec<TextRun>>>,
+    /// Per-cell display byte → source-byte map, including the end sentinel.
+    cell_maps: Vec<std::rc::Rc<Vec<usize>>>,
     /// Byte range of each cell's trimmed content within its source line — for
     /// placing the caret inside a cell + hit-testing a click back to a source
     /// offset (in-cell editing).
@@ -7057,7 +7125,7 @@ fn set_image_width(line: &str, width: u32) -> String {
 /// as full source). The prepaint cursor/selection pass this frame's fresh map
 /// (the committed `EditorState::offset_maps` lags a frame); event handlers go
 /// through [`EditorState::display_col`], which uses the committed map.
-fn display_col_in(map: Option<&std::rc::Rc<Vec<usize>>>, source_col: usize) -> usize {
+pub(crate) fn display_col_in(map: Option<&std::rc::Rc<Vec<usize>>>, source_col: usize) -> usize {
     match map {
         // The first display byte whose source ≥ `source_col` (a leftmost lower-bound). Unlike
         // `binary_search`, this is deterministic when several display bytes share one source
@@ -7506,6 +7574,7 @@ mod tests {
         DeleteWordLeft, DeleteWordRight, DocEnd, DocStart, EditorState, SelectDocStart, SelectHome,
         utf16_to_byte,
     };
+    use gpui_kit::test::TestWindowExt as _;
     use gpui_kit::{AppContext as _, EntityInputHandler as _};
 
     #[test]
@@ -7922,5 +7991,34 @@ mod tests {
             let (l, r) = table_visible_band(px(O), px(W), rtl);
             assert_eq!(r - l, px(W - g));
         }
+    }
+
+    #[gpui_kit::test]
+    fn table_cells_render_inline_markdown_markers(cx: &mut gpui_kit::TestAppContext) {
+        let editor = cx.update(|cx| {
+            cx.open_window(Default::default(), |window, cx| {
+                cx.new(|cx| {
+                    EditorState::new(window, cx).with_text(
+                        "| Link | Emphasis | Code |\n| --- | --- | --- |\n| [Guide](https://example.com) | **bold** | `cargo test` |",
+                        cx,
+                    )
+                })
+            })
+            .unwrap()
+        });
+        let window = editor
+            .update(cx, |editor, window, cx| {
+                editor.set_markdown_style(super::SyntaxStyle::default(), cx);
+                window.window_handle()
+            })
+            .unwrap();
+        cx.update_window(window.into(), |_, window, cx| window.render_frame(cx))
+            .unwrap();
+        cx.update(|cx| {
+            let editor = editor.read(cx).unwrap();
+            let row = editor.table_rows[2].as_ref().unwrap();
+            let rendered: Vec<_> = row.cells.iter().map(|cell| cell.as_str()).collect();
+            assert_eq!(rendered, ["Guide", "bold", "cargo test"]);
+        });
     }
 }

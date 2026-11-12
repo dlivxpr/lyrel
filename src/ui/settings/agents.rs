@@ -455,10 +455,9 @@ impl SettingsWindow {
                             .items_center()
                             .justify_center()
                             .child(
-                                gpui_kit::svg()
-                                    .path(mark.icon_path())
-                                    .size(px(11.))
-                                    .text_color(rgb(mark.icon_rgb())),
+                                gpui_kit::img(mark.icon_path())
+                                    .size(px(14.))
+                                    .object_fit(gpui_kit::ObjectFit::Contain),
                             ),
                     )
                     .child(
