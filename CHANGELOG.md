@@ -5,6 +5,12 @@
 
 格式参考 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)，版本遵循 [Semantic Versioning](https://semver.org/spec/v2.0.0.html)。
 
+## [0.3.4] - 2026-11-13
+
+### 修复
+
+- 修复智能体输出时上滚再下滑出现已消失输入栏的阅读态残影；Markdown 所见即所得编辑器支持 Ctrl/Cmd+F 查找与替换，宽表按页面宽度折行且不再溢出，Markdown 与代码编辑器提供常显水平滚动条；代码编辑器状态栏移入文档面板底部、与全局状态栏并存；原生 SSH 窗格通过远端进程表显示当前 shell 进程树；应用 Toast 与连接提示统一到右下角、全局状态栏上方。
+
 ## [0.3.3] - 2026-11-12
 
 ### 修复
