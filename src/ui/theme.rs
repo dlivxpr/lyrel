@@ -1003,6 +1003,12 @@ pub(crate) fn apply_theme(mut window: Option<&mut Window>, cx: &mut App) {
 
     let t = Theme::global_mut(cx);
     t.font_size = ui_font_size;
+    // Toasts belong above the global status bar, in the bottom-right corner.
+    // The margin follows the bar's `1.625rem` height at the same UI scale plus
+    // the standard 8px gap, so zooming the interface keeps them clear of it.
+    t.notification.placement = gpui_kit::Anchor::BottomRight;
+    t.notification.margins.bottom = ui_font_size * 1.625 + px(8.);
+    t.notification.margins.right = px(8.);
     // Assigned in both directions, never only when set: this is the one place
     // that decides the chrome's face, so it has to say "back to stock" as
     // plainly as it says "use Inter".
@@ -1864,6 +1870,26 @@ mod tests {
             supported_backdrops_for(17_762),
             &[WindowBackdrop::Auto, WindowBackdrop::Off]
         );
+    }
+
+    #[gpui_kit::test]
+    fn toasts_anchor_bottom_right_above_the_status_bar(cx: &mut TestAppContext) {
+        let (_app, mut vcx, _streams) = crate::ui::app::test_window::harness_with_tabs(cx, 1);
+        vcx.update(|window, cx| {
+            cx.global_mut::<Config>().ui_font_size = 24.;
+            apply_theme(Some(window), cx);
+            let theme = Theme::global(cx);
+            assert_eq!(
+                theme.notification.placement,
+                gpui_kit::Anchor::BottomRight,
+                "toasts must stack in the bottom-right corner"
+            );
+            assert_eq!(
+                theme.notification.margins.bottom,
+                px(24. * 1.625 + 8.),
+                "toast stack must clear the 1.625rem status bar and its 8px gap"
+            );
+        });
     }
 }
 

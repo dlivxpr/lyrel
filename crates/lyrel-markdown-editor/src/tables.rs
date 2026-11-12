@@ -950,6 +950,7 @@ impl EditorState {
             self.font_size,
             Hsla::default(),
             None,
+            None,
         );
         let Some(&w) = natural.get(col) else {
             return;
@@ -1152,8 +1153,9 @@ fn cell_grapheme_boundary(content: &str, offset: usize) -> usize {
 }
 
 /// Content-fit column widths for a table region (W4c): each column sized to its
-/// widest cell (header measured bold) + padding, with a minimum. A table wider
-/// than the viewport is NOT scaled down — it scrolls horizontally in place.
+/// widest cell (header measured bold) + padding, with a minimum. When the note
+/// column has a definite `avail` width, a table wider than the page is shrunk
+/// to fit (widest columns first) and its cells wrap instead of overflowing.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn table_column_widths(
     lines: &[&str],
@@ -1163,6 +1165,7 @@ pub(crate) fn table_column_widths(
     font_size: Pixels,
     color: Hsla,
     col_resize: Option<TableColResize>,
+    avail: Option<Pixels>,
 ) -> Vec<Pixels> {
     // Reader parity: a row with MORE cells than the header widens the grid —
     // extra columns render (the short rows' last cells span the remainder)
@@ -1231,10 +1234,52 @@ pub(crate) fn table_column_widths(
     {
         widths[r.col] = px(r.width.max(24.));
     }
-    // No scale-to-fit: a table wider than the viewport keeps its natural
-    // columns and scrolls horizontally in place (Cditor-style) — see
-    // `EditorState::table_scroll_x`.
+    // A wide table wraps within the page rather than extending past it. The
+    // note column reserves TABLE_GUTTER for the row handles, so that is the
+    // budget the grid may occupy.
+    if let Some(avail) = avail {
+        let budget = (avail - px(TABLE_GUTTER)).max(px(TABLE_MIN_COL));
+        fit_table_widths(&mut widths, budget);
+    }
     widths
+}
+
+/// The narrowest a column may be squeezed to by page fitting. Cells still wrap
+/// below this, but a column narrower than one glyph would be unusable.
+const TABLE_MIN_COL: f32 = 48.;
+
+/// Shrink `widths` until their sum fits `budget` by scaling every column
+/// proportionally, then returning any floor-induced surplus from the widest
+/// columns. Narrow columns therefore keep their minimum readable width.
+pub(crate) fn fit_table_widths(widths: &mut [Pixels], budget: Pixels) {
+    if widths.is_empty() {
+        return;
+    }
+    let total: Pixels = widths.iter().copied().sum();
+    if total <= budget {
+        return;
+    }
+    let floor = (budget / widths.len() as f32).min(px(TABLE_MIN_COL));
+    let scale = f32::from(budget) / f32::from(total);
+    for w in widths.iter_mut() {
+        let scaled: f32 = f32::from(*w) * scale;
+        *w = px(scaled.max(f32::from(floor)));
+    }
+    let mut sum: Pixels = widths.iter().copied().sum();
+    while sum > budget {
+        let Some(widest) = widths
+            .iter()
+            .enumerate()
+            .filter(|(_, w)| **w > floor)
+            .max_by(|(_, a), (_, b)| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal))
+            .map(|(i, _)| i)
+        else {
+            break;
+        };
+        let cut = (widths[widest] - floor).min(sum - budget);
+        widths[widest] -= cut;
+        sum -= cut;
+    }
 }
 
 /// Horizontal inset (px) of a table cell's text from its column's left edge.
@@ -1753,4 +1798,38 @@ pub(crate) struct TableAffordance {
     pub(crate) row: usize,
     pub(crate) col: usize,
     pub(crate) accent: Hsla,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn fitting_shrinks_wide_columns_but_keeps_narrow_ones_readable() {
+        let mut widths = vec![px(500.), px(120.), px(80.)];
+        fit_table_widths(&mut widths, px(400.));
+        let total: Pixels = widths.iter().copied().sum();
+        assert!(total <= px(400.), "table must fit the page: {widths:?}");
+        assert!(widths[1] >= px(48.) && widths[2] >= px(48.));
+        assert!(widths[0] > widths[1], "the widest column absorbs the fit");
+    }
+
+    #[test]
+    fn a_table_that_already_fits_is_untouched() {
+        let mut widths = vec![px(100.), px(80.)];
+        fit_table_widths(&mut widths, px(400.));
+        assert_eq!(widths, vec![px(100.), px(80.)]);
+    }
+
+    #[test]
+    fn a_cramped_page_gives_every_column_an_even_share() {
+        let mut widths = vec![px(300.), px(300.), px(300.)];
+        fit_table_widths(&mut widths, px(60.));
+        let total: Pixels = widths.iter().copied().sum();
+        assert!(
+            total <= px(60.),
+            "even a narrow page is respected: {widths:?}"
+        );
+        assert!(widths.iter().all(|w| *w >= px(20.)));
+    }
 }

@@ -59,6 +59,31 @@ pub(super) struct PtyParts {
 struct NativeSshBackend {
     handle: Arc<crate::daemon::ssh::SshSessionHandle>,
     connection: crate::daemon::ssh::SharedConnection,
+    /// The last remote answer and when it was taken. The panel polls faster
+    /// than a PowerShell start-up finishes, so a poll inside the window reuses
+    /// the table instead of opening another command channel.
+    procs: Mutex<
+        Option<(
+            std::time::Instant,
+            Option<crate::daemon::protocol::PaneProcs>,
+        )>,
+    >,
+}
+
+impl NativeSshBackend {
+    fn procs(&self, shell: Option<&str>) -> crate::daemon::protocol::PaneProcs {
+        const TTL: Duration = Duration::from_secs(3);
+        let now = std::time::Instant::now();
+        if let Some((taken, answer)) = self.procs.lock().unwrap().as_ref()
+            && now.duration_since(*taken) < TTL
+        {
+            return answer.clone().unwrap_or_default();
+        }
+        let conn = self.connection.lock().unwrap().upgrade();
+        let answer = conn.and_then(|conn| crate::daemon::ssh::procs::snapshot(&conn, shell));
+        *self.procs.lock().unwrap() = Some((now, answer.clone()));
+        answer.unwrap_or_default()
+    }
 }
 
 pub(super) fn join_bounded(handle: JoinHandle<()>, timeout: Duration) -> bool {
@@ -176,6 +201,7 @@ impl PaneBackend {
         Self(Transport::NativeSsh(NativeSshBackend {
             handle,
             connection,
+            procs: Mutex::new(None),
         }))
     }
 
@@ -234,14 +260,17 @@ impl PaneBackend {
             .and_then(|pty| foreground_remote_context(&pty.master))
     }
 
-    pub(super) fn procs(&self) -> crate::daemon::protocol::PaneProcs {
-        self.pty()
-            .and_then(|pty| {
-                pty.shell_pid.map(|pid| {
-                    crate::daemon::procinfo::snapshot(pid, pty_foreground_pgid(&pty.master))
-                })
-            })
-            .unwrap_or_default()
+    pub(super) fn procs(&self, shell: Option<&str>) -> crate::daemon::protocol::PaneProcs {
+        if let Some(pty) = self.pty() {
+            return pty
+                .shell_pid
+                .map(|pid| crate::daemon::procinfo::snapshot(pid, pty_foreground_pgid(&pty.master)))
+                .unwrap_or_default();
+        }
+        match &self.0 {
+            Transport::NativeSsh(backend) => backend.procs(shell),
+            Transport::Pty(_) => Default::default(),
+        }
     }
 
     pub(super) fn reader_probes(

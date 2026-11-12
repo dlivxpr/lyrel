@@ -52,20 +52,21 @@ const PILL_H: f32 = 32.;
 /// The severity dot, the rail's status-dot size.
 const DOT: f32 = 6.;
 
-/// Anchors whatever notices are up as one bottom-centred column, so two of
-/// them stack rather than collide. `None` when there is nothing to show, which
-/// is what lets the caller keep using `when_some`.
+/// Anchors whatever notices are up as one bottom-right column, above the
+/// global status bar, so two of them stack rather than collide. `None` when
+/// there is nothing to show, which is what lets the caller keep using
+/// `when_some`.
 pub(crate) fn anchor(items: Vec<AnyElement>) -> Option<AnyElement> {
     if items.is_empty() {
         return None;
     }
     Some(
         div()
+            .id("notice-anchor")
             .absolute()
-            .left_0()
-            .right_0()
+            .right_4()
             .bottom_4()
-            .child(v_flex().w_full().items_center().gap_2().children(items))
+            .child(v_flex().items_end().gap_2().children(items))
             .into_any_element(),
     )
 }

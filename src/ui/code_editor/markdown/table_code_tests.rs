@@ -391,46 +391,20 @@ pub(super) fn wide_table(cx: &mut TestAppContext) {
     context.dispatch_action(gpui_kit::component::input::Undo);
     settle(&mut context);
     assert_eq!(bytes(&view, &context), original.as_bytes());
-    let page_offset = view.read_with(&context, |view, _| view.scroll_offset());
-    let first_x = context.update(|window, cx| {
-        view.read(cx)
-            .source_bounds(&(first..first), window)
-            .unwrap()
-            .left()
-    });
-    // A horizontal wheel belongs to the wide native grid, never to a source-mode escape.
+    // The 48-column grid is fitted to the page and wraps its cells; the far
+    // column is already inside the document width instead of living off the
+    // right edge behind a table-local horizontal scroll.
+    let far = original.find("R0 C47").unwrap();
     context.update(|window, cx| {
-        window.scroll(
-            "markdown-document-scroll",
-            gpui_kit::ScrollDelta::Pixels(gpui_kit::point(px(-800.), px(0.))),
-            cx,
-        );
-    });
-    settle(&mut context);
-    context.update(|window, cx| {
+        let far = view
+            .read(cx)
+            .source_bounds(&(far..far), window)
+            .expect("the far column is laid out");
         assert!(
-            view.read(cx)
-                .source_bounds(&(first..first), window)
-                .unwrap()
-                .left()
-                < first_x
+            far.left() >= px(0.) && far.right() <= window.viewport_size().width,
+            "a fitted table must not extend past the page: {far:?}"
         );
     });
-    assert_eq!(
-        view.read_with(&context, |view, _| view.scroll_offset()),
-        page_offset,
-        "horizontal wheel scrolls the table, not the containing document"
-    );
-    // Reach the actual far edge through the same wheel handler, then edit both
-    // the first and last body rows while retaining every cell in the document.
-    context.update(|window, cx| {
-        window.scroll(
-            "markdown-document-scroll",
-            gpui_kit::ScrollDelta::Pixels(gpui_kit::point(px(-100_000.), px(0.))),
-            cx,
-        );
-    });
-    settle(&mut context);
     for width in [1200., 1800.] {
         context.simulate_resize(gpui_kit::size(px(width), px(900.)));
         for token in ["R0 C47", "R63 C47"] {

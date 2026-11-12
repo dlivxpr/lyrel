@@ -79,6 +79,11 @@ impl PaneFacts {
     pub(super) fn remote(&self) -> Option<&RemoteContext> {
         self.remote.as_ref()
     }
+    /// The login shell named by the far prompt integration, if it has spoken.
+    /// Used to pick the right remote process probe without guessing twice.
+    pub(super) fn shell_program(&self) -> Option<&str> {
+        self.shell_spec.as_ref().map(|shell| shell.program.as_str())
+    }
     pub(super) fn locality(&self) -> (bool, bool) {
         (
             self.remote

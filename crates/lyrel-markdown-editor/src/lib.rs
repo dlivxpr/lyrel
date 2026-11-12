@@ -45,6 +45,7 @@ pub use writing::{WritingIntent, WritingRequest};
 
 use gpui_kit::AppContext as _;
 use gpui_kit::TestSupportExt as _;
+use gpui_kit::component::scroll::{Scrollbar, ScrollbarMode};
 use std::ops::Range;
 use std::sync::Arc;
 
@@ -198,6 +199,13 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new("ctrl-alt-f", ToggleHeadingDisclosure, ctx),
         KeyBinding::new("cmd-alt-f", ToggleHeadingDisclosure, ctx),
         KeyBinding::new("escape", Dismiss, ctx),
+        // Base binds find/replace under the `Input` context, but the WYSIWYG
+        // presentation owns `Editor`. Bind the host's same actions here so
+        // Ctrl/Cmd+F opens the find bar instead of doing nothing.
+        KeyBinding::new("cmd-f", gpui_kit::component::input::Search, ctx),
+        KeyBinding::new("ctrl-f", gpui_kit::component::input::Search, ctx),
+        KeyBinding::new("cmd-shift-f", gpui_kit::component::input::Replace, ctx),
+        KeyBinding::new("ctrl-h", gpui_kit::component::input::Replace, ctx),
     ]);
 }
 
@@ -786,6 +794,11 @@ pub struct EditorState {
     _document_subscription: gpui_kit::Subscription,
     pending_coalesce: bool,
     soft_wrap: bool,
+    /// Widest laid-out line from the last layout pass, excluding document
+    /// padding. With soft wrap off this is the horizontal scroll extent; the
+    /// renderer gives the scroll content this minimum width so unwrapped lines
+    /// can be read by scrolling instead of being clipped.
+    natural_width: std::cell::Cell<Pixels>,
     scroll: ScrollHandle,
     /// Real viewport bounds published by the host; the editor's scroll handle
     /// spans content height, so a scrollbar cannot infer the visible extent.
@@ -1013,10 +1026,11 @@ pub struct EditorState {
     /// The row whose gutter grip the pointer hovers (mirrors prepaint's
     /// computation) — tracked so hover changes repaint the grip.
     grip_hover_row: Option<usize>,
-    /// Horizontal scroll of each wide table, keyed by its header row — wide
-    /// tables keep natural column widths and scroll in place. Keys drift on
-    /// edits above a table; entries are clamped at use, so a stale one is a
-    /// harmless partial offset. (ponytail: no eviction, the map stays tiny)
+    /// Horizontal scroll of each table, keyed by its header row. Columns are
+    /// fitted to the note width and wrap, so this is the fallback for a page
+    /// too narrow for every column's floor. Keys drift on edits above a table;
+    /// entries are clamped at use, so a stale one is a harmless partial
+    /// offset. (ponytail: no eviction, the map stays tiny)
     table_scroll_x: std::collections::HashMap<usize, f32>,
     /// Last-paint wide-table scroll thumbs (padded grab rects), so the thumb
     /// is mouse-draggable, not just an indicator.
@@ -1151,6 +1165,7 @@ impl EditorState {
             _document_subscription: document_subscription,
             pending_coalesce: false,
             soft_wrap: true,
+            natural_width: std::cell::Cell::new(px(0.)),
             scroll,
             scroll_viewport: Bounds::default(),
             scrollbar_dragging: false,
@@ -1868,8 +1883,14 @@ impl EditorState {
 
     /// Publish the real viewport bounds from the host's layout. The scroll
     /// handle's own bounds describe content height, not the visible extent.
-    pub fn set_scroll_viewport(&mut self, bounds: Bounds<Pixels>) {
+    pub fn set_scroll_viewport(&mut self, bounds: Bounds<Pixels>, cx: &mut Context<Self>) {
+        let resized = (self.scroll_viewport.size.width - bounds.size.width).abs() > px(0.5);
         self.scroll_viewport = bounds;
+        if resized {
+            // Tables fit the visible page, not the horizontally scrolled
+            // content width; a real resize may cross a fit boundary.
+            cx.notify();
+        }
     }
 
     pub fn scroll_viewport(&self) -> Bounds<Pixels> {
@@ -5655,7 +5676,7 @@ impl Render for EditorState {
                 self.markdown_style = Some(style);
             }
         }
-        div()
+        let scroll = div()
             .relative()
             .id("markdown-document-scroll")
             .test_support()
@@ -5785,10 +5806,18 @@ impl Render for EditorState {
             .on_mouse_up_out(MouseButton::Left, cx.listener(Self::on_mouse_up))
             .on_mouse_move(cx.listener(Self::on_mouse_move))
             .on_scroll(cx.listener(Self::on_scroll_wheel))
-            .child(
-                div()
-                    .w_full()
-                    .min_w_0()
+            .child({
+                let content = div().w_full().min_w_0();
+                // With soft wrap off, unwrapped lines become the scroll
+                // content's minimum width instead of being clipped.
+                let content = if !self.soft_wrap && self.natural_width.get() > px(0.) {
+                    content.min_w(
+                        self.natural_width.get() + window.rem_size() * (self.document_inset.0 * 2.),
+                    )
+                } else {
+                    content
+                };
+                content
                     .px(gpui_kit::rems(self.document_inset.0))
                     .py(gpui_kit::rems(self.document_inset.1))
                     .child(
@@ -5802,8 +5831,8 @@ impl Render for EditorState {
                             .children(self.embed_overlays(window))
                             .children(self.editing_block_overlay())
                             .children(self.editing_inline_overlay()),
-                    ),
-            )
+                    )
+            })
             .children(self.writing_overlay.clone())
             // Right-click suggestions menu, absolutely positioned over the
             // editor (anchored at the click). `Option`'s `IntoIterator` renders
@@ -6709,7 +6738,17 @@ impl Render for EditorState {
                                 .children(thumb),
                         ),
                 )
-            }))
+            }));
+        // Wide tables, code and unbroken lines can exceed the note width; the
+        // bar is the only pointer affordance for that axis and stays visible so
+        // the overflow is discoverable without touching the wheel.
+        div().relative().size_full().child(scroll).child(
+            div().absolute().inset_0().child(
+                Scrollbar::horizontal(&self.scroll)
+                    .id("markdown-horizontal-scrollbar")
+                    .mode(ScrollbarMode::Always),
+            ),
+        )
     }
 }
 

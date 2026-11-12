@@ -433,7 +433,7 @@ impl EditorBuffers {
             (EditorInput::Markdown(presentation), None, sub, observe)
         } else {
             let input = cx.new(|cx| {
-                EditorState::new(window, cx)
+                let mut state = EditorState::new(window, cx)
                     .language(language)
                     .tab_size(tab_size(indent))
                     .line_number(true)
@@ -442,7 +442,16 @@ impl EditorBuffers {
                     .folding(true)
                     .soft_wrap(wrap)
                     .context_menu(false)
-                    .default_value(text)
+                    .default_value(text);
+                // Base's default bar only appears while scrolling. A document
+                // keeps its bars visible so a horizontally overflowing line —
+                // and the vertical position — stay discoverable at rest.
+                state.set_scrollbar_renderer(Some(std::rc::Rc::new(|context, _window, _cx| {
+                    gpui_kit::component::scroll::Scrollbar::new(&context)
+                        .mode(gpui_kit::component::scroll::ScrollbarMode::Always)
+                        .into_any_element()
+                })));
+                state
             });
             let popups = cx.new(|cx| crate::ui::lsp::popups::EditorPopups::new(&input, window, cx));
             let sub = cx.subscribe_in(&input, window, move |view, _, ev, _, cx| {
