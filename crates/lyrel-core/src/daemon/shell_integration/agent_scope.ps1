@@ -53,7 +53,7 @@
     $defaults = @{ TERM_PROGRAM='kitty'; TERM_PROGRAM_VERSION=''; LC_TERMINAL='lyrel'; LC_TERMINAL_VERSION=$version }
     if ($agent -eq 'omp') { $defaults.PI_NO_DECCARA = '1' }
     $environment = [Environment]::GetEnvironmentVariables('Process')
-    if ($agent -eq 'omp' -and $env:LYREL_OMP_IMAGE_CONFIG) { $defaults.PI_CONFIG_FILES = (@($environment['PI_CONFIG_FILES'],$env:LYREL_OMP_IMAGE_CONFIG) -ne '') -join ';' }
+    if ($agent -eq 'omp' -and $env:LYREL_OMP_IMAGE_CONFIG) { $defaults.PI_CONFIG_FILES = (@($environment['PI_CONFIG_FILES'],$env:LYREL_OMP_IMAGE_CONFIG) -ne '') -join [IO.Path]::PathSeparator }
     if ($agent -eq 'hermes' -and -not $environment.Contains('KITTY_WINDOW_ID')) { $defaults.KITTY_WINDOW_ID = 'lyrel' }
     $global:__LyrelScopeSaved = @{}
     foreach ($key in $scopeKeys) {
