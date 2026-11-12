@@ -171,8 +171,13 @@ fn newest_five_hundred_survive_overflow_clear_then_append_and_restart(cx: &mut T
     let (_, mut window) = harness(cx);
     let dir = isolated(&mut window);
     window.update(|window, cx| {
+        // This test exercises history, not toast placement; keep fixture
+        // toasts away from the bottom-right notification trigger.
         for n in 1..=500 {
-            window.notify_app(format!("event {n}"), cx);
+            window.notify_app(
+                Notification::info(format!("event {n}")).placement(gpui_kit::Anchor::TopLeft),
+                cx,
+            );
         }
     });
     settle(&mut window);
@@ -180,7 +185,12 @@ fn newest_five_hundred_survive_overflow_clear_then_append_and_restart(cx: &mut T
     assert_eq!(retained.len(), 500);
     assert_eq!(retained.first().unwrap(), "event 1");
     assert_eq!(retained.last().unwrap(), "event 500");
-    window.update(|window, cx| window.notify_app("event 501", cx));
+    window.update(|window, cx| {
+        window.notify_app(
+            Notification::info("event 501").placement(gpui_kit::Anchor::TopLeft),
+            cx,
+        )
+    });
     settle(&mut window);
     let retained = messages(&window);
     assert_eq!(retained.len(), 500);

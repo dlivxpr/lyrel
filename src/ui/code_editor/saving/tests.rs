@@ -267,8 +267,10 @@ fn global_status_navigates_and_saves_the_displayed_document(cx: &mut TestAppCont
         settle(&mut vcx);
         vcx.update(|window, cx| {
             let cursor = window.find("status-cursor").bounds();
+            let local = window.find("code-status-bar").bounds();
             let global = window.find("workbench-status").bounds();
-            assert!(cursor.top() >= global.top() && cursor.bottom() <= global.bottom());
+            assert!(local.contains(&cursor.center()));
+            assert!(local.bottom() <= global.top());
             assert_eq!(window.find_all("status-cursor").len(), 1);
             window.click("status-wrap", cx);
         });
