@@ -3638,7 +3638,13 @@ mod close_gpui_tests {
             window.focus(&handle, cx);
         });
         settle(&mut vcx);
-        vcx.update(|window, _| assert!(window.try_find("status-cursor").is_none()));
+        vcx.update(|window, _| {
+            let local = window.find("code-status-bar");
+            let global = window.find("workbench-status");
+            let cursor = window.find("status-cursor");
+            assert!(local.bounds().contains(&cursor.bounds().center()));
+            assert!(!global.bounds().contains(&cursor.bounds().center()));
+        });
         app.update_in(&mut vcx, |app, window, cx| app.focus_editor(window, cx));
         settle(&mut vcx);
         vcx.update(|window, cx| {

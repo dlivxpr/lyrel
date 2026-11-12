@@ -162,6 +162,11 @@ impl Notification {
         self.toast = self.toast.autohide(value);
         self
     }
+    #[cfg(test)]
+    pub(crate) fn placement(mut self, anchor: gpui_kit::Anchor) -> Self {
+        self.toast = self.toast.placement(anchor);
+        self
+    }
     pub(crate) fn on_click(
         mut self,
         callback: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,

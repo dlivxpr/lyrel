@@ -3860,7 +3860,12 @@ impl EditorState {
         // End a column-border drag by persisting every column's width into the
         // table marker's `cols=` list (one undo step, emits Changed).
         if let Some(resize) = self.table_col_resize.take() {
-            self.commit_table_col_widths(resize, cx);
+            // A press on a narrow border band that never moved is a click,
+            // not a resize. Persisting every fitted width here would write a
+            // table marker the user never asked for.
+            if (resize.width - resize.orig).abs() > 0.5 {
+                self.commit_table_col_widths(resize, cx);
+            }
             cx.notify();
             return;
         }
