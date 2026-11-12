@@ -614,4 +614,65 @@ mod tests {
             assert!(!app.active_buffer().unwrap().dirty);
         });
     }
+
+    #[gpui_kit::test]
+    fn ctrl_f_opens_the_find_bar_in_a_live_markdown_document(cx: &mut TestAppContext) {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("keys.md");
+        std::fs::write(&path, "alpha beta\n").unwrap();
+        let (app, mut vcx, _streams) = harness_with_tabs(cx, 1);
+        app.update_in(&mut vcx, |app, window, cx| {
+            app.open_file_in_editor(&path, window, cx)
+        });
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while !app.read_with(&vcx, |app, _| app.active_buffer().is_some()) {
+            settle(&mut vcx);
+            assert!(std::time::Instant::now() < deadline);
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        app.update_in(&mut vcx, |app, window, cx| {
+            let input = app.active_editor_input().expect("markdown presentation");
+            input.focus(window, cx);
+        });
+        settle(&mut vcx);
+        vcx.simulate_keystrokes("secondary-f");
+        settle(&mut vcx);
+        vcx.update(|window, _| {
+            assert_eq!(
+                window.find("markdown-query").focused(),
+                Some(true),
+                "Ctrl/Cmd+F must open the Markdown find bar, not do nothing"
+            );
+        });
+    }
+
+    #[gpui_kit::test]
+    fn unwrapped_long_lines_gain_a_horizontal_scroll_extent(cx: &mut TestAppContext) {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("long.md");
+        let long = format!("start {} end\n", "wide ".repeat(600));
+        std::fs::write(&path, &long).unwrap();
+        let (app, mut vcx, _streams) = harness_with_tabs(cx, 1);
+        vcx.simulate_resize(gpui_kit::size(px(900.), px(700.)));
+        app.update_in(&mut vcx, |app, window, cx| {
+            app.open_file_in_editor(&path, window, cx)
+        });
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        loop {
+            settle(&mut vcx);
+            let ready = app.read_with(&vcx, |app, cx| {
+                app.active_editor_input()
+                    .and_then(|input| input.markdown().cloned())
+                    .is_some_and(|view| view.read(cx).scroll_handle().max_offset().x > px(0.))
+            });
+            if ready {
+                break;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "nowrap Markdown must expose a horizontal scroll extent"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+    }
 }

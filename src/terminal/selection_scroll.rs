@@ -109,6 +109,14 @@ impl SelectionScroll {
         }
     }
 
+    /// Search and selection ranges were computed against the current reading
+    /// snapshot; pin it for as long as they are live.
+    pub(super) fn set_reading_pinned(&mut self, pinned: bool) {
+        if let Some(reading) = self.reading.as_mut() {
+            reading.set_pinned(pinned);
+        }
+    }
+
     pub(super) fn sync_reading(&mut self, term: &mut Grid, terminal: &RemoteTerminal) {
         self.invalidate_reading(term, terminal);
         let relocated = self
@@ -273,6 +281,15 @@ impl SelectionScroll {
 
     pub(super) fn has_presented(&self) -> bool {
         self.presented.is_some()
+    }
+
+    /// A click leaves a collapsed presentation behind to anchor the next
+    /// drag. It must not freeze the reading rows: only a real range has
+    /// offsets that settling output could invalidate.
+    pub(super) fn has_selection(&self) -> bool {
+        self.presented
+            .as_ref()
+            .is_some_and(|selection| !selection.range().is_empty())
     }
 
     pub(super) fn clear_presented(&mut self) {

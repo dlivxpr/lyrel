@@ -268,11 +268,8 @@ impl LyrelApp {
                         }),
                 )
             })
-            .when(
-                document_context == Some(crate::ui::tab::OverlayTop::Code)
-                    && !self.markdown_document_active(),
-                |bar| bar.child(self.render_document_status(cx)),
-            )
+            // Document state lives in the editor panel's own bottom bar now;
+            // the global bar only carries window context.
             .child(
                 h_flex()
                     .flex_none()
@@ -447,10 +444,19 @@ mod tests {
                     let content = window.find("workbench-content").bounds();
                     assert_global_controls_in_bounds(window);
                     if filled && width == 720. {
+                        let local = window.find("code-status-bar").bounds();
                         let document = window.find("document-status").bounds();
-                        let clock = window.find("status-clock").bounds();
-                        assert!(document.right() <= clock.left());
-                        let eol_before = window.find("status-eol").bounds();
+                        assert!(
+                            local.contains(&document.center()),
+                            "document status must sit inside the editor's local bar"
+                        );
+                        assert!(
+                            local.bottom() <= status.top(),
+                            "the local bar must sit above the global status bar"
+                        );
+                        assert!(document.right() <= local.right());
+                        // At the largest UI scale the local bar's items
+                        // overflow; scroll its own strip to reach the tail.
                         window.scroll(
                             "document-status",
                             gpui_kit::ScrollDelta::Pixels(gpui_kit::point(px(-4000.), px(0.))),
@@ -458,11 +464,7 @@ mod tests {
                         );
                         let eol = window.find("status-eol");
                         assert!(eol.visible());
-                        assert!(eol.bounds().right() <= document.right());
-                        assert!(
-                            eol.bounds().left() < eol_before.left(),
-                            "only document status must scroll, not global controls"
-                        );
+                        assert!(eol.bounds().right() <= local.right());
                         assert_global_controls_in_bounds(window);
                         let label = eol.label().unwrap().to_owned();
                         window.click("status-eol", cx);

@@ -125,6 +125,7 @@ impl Element for EditorElement {
         // Height depends on the resolved width (soft-wrap), so measure it: shape
         // the content at the available width and count wrapped rows.
         let editor = self.editor.clone();
+        let layout_entity = editor.clone();
         // Capture the ambient text style NOW, while the host wrapper's style is
         // on the window's style stack (gpui's Text element does the same). The
         // measure closure runs later, in the layout pass, where the stack is
@@ -184,6 +185,7 @@ impl Element for EditorElement {
                     &editor.diagnostics,
                     editor.markdown_style.as_ref(),
                     wrap_width,
+                    table_page_width(editor, window),
                     editor.soft_wrap,
                     caret_row,
                     geometry_row,
@@ -211,6 +213,41 @@ impl Element for EditorElement {
                     editor.shape_band.get().map(|(a, b)| (px(a), px(b))),
                     &editor.folded_headings,
                 );
+                // Without soft wrap the widest shaped line is the document's
+                // horizontal extent. Tables contribute their fitted grid, not
+                // their (unwrapped) source row, or every table would widen the
+                // page. Publish the value so render can give the scroll content
+                // that minimum width; the next frame picks it up.
+                if !editor.soft_wrap {
+                    let natural = shaped
+                        .wrapped
+                        .iter()
+                        .enumerate()
+                        .map(|(i, line)| {
+                            match shaped.tables.get(i).and_then(Option::as_ref) {
+                                Some(t) if !t.is_separator && !t.col_widths.is_empty() => t
+                                    .col_widths
+                                    .iter()
+                                    .copied()
+                                    .sum::<Pixels>()
+                                    + px(TABLE_GUTTER),
+                                Some(_) => px(0.),
+                                None => line.width(),
+                            }
+                        })
+                        .fold(px(0.), Pixels::max);
+                    if (editor.natural_width.replace(natural) - natural).abs() > px(0.5) {
+                        let editor = layout_entity.clone();
+                        window.on_next_frame(move |_, cx| {
+                            editor.update(cx, |_, cx| cx.notify());
+                        });
+                    }
+                } else if editor.natural_width.replace(px(0.)) != px(0.) {
+                    let editor = layout_entity.clone();
+                    window.on_next_frame(move |_, cx| {
+                        editor.update(cx, |_, cx| cx.notify());
+                    });
+                }
                 // Mirror prepaint's `line_tops` walk exactly (same `line_pads`),
                 // or the element lays out shorter than it paints.
                 let (heights, backgrounds, tables, rows) = (
@@ -421,6 +458,7 @@ impl Element for EditorElement {
                 &editor.diagnostics,
                 editor.markdown_style.as_ref(),
                 wrap_width,
+                table_page_width(editor, window),
                 editor.soft_wrap,
                 caret_row,
                 geometry_row,
@@ -2909,6 +2947,12 @@ fn shape_inline_images(
 /// line (incl. empty), so the counts match the logical lines and blank rows
 /// stay positionable.
 #[allow(clippy::too_many_arguments)]
+fn table_page_width(editor: &EditorState, window: &Window) -> Option<Pixels> {
+    let viewport = editor.scroll_viewport.size.width;
+    (viewport > px(0.))
+        .then(|| (viewport - window.rem_size() * (editor.document_inset.0 * 2.)).max(px(1.)))
+}
+
 fn shape_document(
     window: &mut Window,
     cx: &App,
@@ -2919,6 +2963,9 @@ fn shape_document(
     diagnostics: &[Diagnostic],
     md: Option<&SyntaxStyle>,
     wrap_width: Option<Pixels>,
+    // The visible page width inside the horizontal scroll owner. Tables fit
+    // this even when unwrapped lines make the scroll content wider.
+    page_width: Option<Pixels>,
     soft_wrap: bool,
     caret_row: Option<usize>,
     // The caret needs precise geometry even while unfocused or outside the shaping band.
@@ -3185,6 +3232,10 @@ fn shape_document(
                 r.col.hash(&mut h);
                 r.width.to_bits().hash(&mut h);
             }
+            // Table columns are fitted to the note width, so a resize that
+            // crosses a fit boundary must rebuild them.
+            wrap_width.map(|w| f32::from(w).to_bits()).hash(&mut h);
+            page_width.map(|w| f32::from(w).to_bits()).hash(&mut h);
             h.finish()
         };
         let hit = caches
@@ -3208,6 +3259,7 @@ fn shape_document(
                                 base_font_size,
                                 base_color,
                                 col_resize,
+                                page_width.or(wrap_width),
                             )
                         })
                         .collect(),

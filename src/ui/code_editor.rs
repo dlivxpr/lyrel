@@ -2567,9 +2567,17 @@ impl LyrelApp {
         let bar = self.render_editor_bar(cx);
 
         let header = self.render_editor_header(chrome, window, cx);
-        let markdown_status = self.markdown_document_active().then(|| {
+        // Every open document owns a status line at the bottom of its panel;
+        // the window's global bar stays below it. Markdown used to be the only
+        // editor with one, which left code files reading their cursor state
+        // from the far-away global bar.
+        let document_status = self.active_buffer().is_some().then(|| {
             h_flex()
-                .id("markdown-status-bar")
+                .id(if self.markdown_document_active() {
+                    "markdown-status-bar"
+                } else {
+                    "code-status-bar"
+                })
                 .test_support()
                 .flex_none()
                 .w_full()
@@ -2590,7 +2598,7 @@ impl LyrelApp {
             .children(bar)
             .child(self.render_editor_groups(breadcrumbs, body, window, cx))
             .children(self.render_editor_problems(window, cx))
-            .when_some(markdown_status, |column, status| column.child(status));
+            .when_some(document_status, |column, status| column.child(status));
 
         // The panel's own paint is the same either way; only the box is not.
         // Filling the workspace means stopping the window's translucency and
@@ -2713,8 +2721,8 @@ impl LyrelApp {
                                 let view = view.clone();
                                 move |bounds, _, cx| {
                                     if let Some(bounds) = bounds.first() {
-                                        view.update(cx, |view, _| {
-                                            view.set_scroll_viewport(*bounds)
+                                        view.update(cx, |view, cx| {
+                                            view.set_scroll_viewport(*bounds, cx)
                                         });
                                     }
                                 }

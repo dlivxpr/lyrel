@@ -13,6 +13,17 @@ fn copy_on_select_copies_the_buffer_the_gesture_touched() {
 }
 
 #[test]
+fn a_collapsed_click_does_not_pin_reading_rows() {
+    let mut scroll = SelectionScroll::default();
+    scroll.presented = Some(super::super::presentation::PresentedSelection::new(5..5, 1));
+    assert!(!scroll.has_selection());
+    assert!(scroll.has_presented());
+
+    scroll.presented = Some(super::super::presentation::PresentedSelection::new(5..6, 1));
+    assert!(scroll.has_selection());
+}
+
+#[test]
 fn smooth_scroll_step_accumulates_and_clamps() {
     assert_eq!(smooth_scroll_step(0, 0.0, 0.4, 100), (0, 0.4));
     let (jump, frac) = smooth_scroll_step(0, 0.4, 0.8, 100);

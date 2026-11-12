@@ -865,9 +865,10 @@ impl LyrelApp {
                     .map(|p| p.name.trim_start_matches('-').to_string())
                     .filter(|name| !name.is_empty());
                 let shell = if view.ssh_spec().is_some() {
-                    // Native SSH does not report the remote login shell. The
+                    // Native SSH does not report the remote login shell, but
+                    // the root of the remote process tree is that shell. The
                     // local default (e.g. PowerShell) is not a remote fact.
-                    EMPTY.to_string()
+                    root.unwrap_or_else(|| EMPTY.to_string())
                 } else {
                     match view.shell_spec().map(|s| s.program.clone()) {
                         Some(program) => crate::core::shells::default_shell_name(Some(&program)),
@@ -1217,7 +1218,9 @@ impl LyrelApp {
 
     fn procs_section(&self, pane_id: Option<u64>, cx: &mut Context<Self>) -> Option<AnyElement> {
         let procs = &self.procs(pane_id)?.procs;
-        if procs.len() < 2 {
+        // A remote login can have nothing but the shell itself; that row is
+        // exactly the process the user came here to see.
+        if procs.is_empty() {
             return None;
         }
         let mono = cx.theme().mono_font_family.clone();

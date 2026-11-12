@@ -2057,6 +2057,10 @@ impl TerminalView {
             self.selection_scroll
                 .scroll_to(&mut term, target, &self.terminal);
         }
+        let pinned = self.search.is_some()
+            || self.selection_scroll.has_selection()
+            || self.selection_scroll.is_selecting();
+        self.selection_scroll.set_reading_pinned(pinned);
         self.selection_scroll
             .sync_reading(&mut term, &self.terminal);
         let reading_identity = self

@@ -122,11 +122,20 @@ fn reading_one_row_stays_fixed_while_real_pty_rewrites_and_appends(cx: &mut Test
         b"\x1b[2;1H\x1b[2KREWRITTEN\x1b[24;1H\r\nADVANCED\r\n",
     );
     graphics_assert_production_paint(window, &view, cx);
+    let settled = reading_painted_rows(&view, cx);
+    assert_eq!(settled.len(), before.len());
     assert_eq!(
-        reading_painted_rows(&view, cx),
-        before,
-        "all displayed rows, including the captured active screen, stay immutable"
+        settled[2], "REWRITTEN",
+        "the row that settled into history shows its final frame"
     );
+    for (row, (now, then)) in settled.iter().zip(&before).enumerate() {
+        if row != 2 {
+            assert_eq!(
+                now, then,
+                "history rows outside the settled frame stay immutable"
+            );
+        }
+    }
     assert!(
         view.read_with(cx, |view, _| view.scrollback_text().contains("REWRITTEN")),
         "authoritative reader keeps parsing"

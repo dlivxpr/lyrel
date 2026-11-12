@@ -1137,7 +1137,13 @@ impl DaemonPane {
     }
 
     pub fn procs(&self) -> crate::daemon::protocol::PaneProcs {
-        let mut out = self.backend.procs();
+        // Read the far shell before the probe and release the lock: a remote
+        // `ps`/PowerShell round trip must not hold up output parsing.
+        let shell = {
+            let st = self.state.lock().unwrap();
+            st.facts.shell_program().map(str::to_owned)
+        };
+        let mut out = self.backend.procs(shell.as_deref());
         out.context = Some(self.context());
         out
     }

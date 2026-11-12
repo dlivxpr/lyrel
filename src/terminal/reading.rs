@@ -30,6 +30,11 @@ struct ReadingRow {
     cells: Vec<ReadingCell>,
     images: CommittedImages,
     captured_live_start: i64,
+    /// Captured while the row was still part of the mutable active screen.
+    /// Such a snapshot can be overwritten by the program before the row
+    /// scrolls into history (a TUI redrawing its input bar), so it is re-read
+    /// once the row settles into immutable history.
+    provisional: bool,
 }
 
 #[derive(PartialEq, Eq)]
@@ -55,6 +60,9 @@ pub(super) struct ReadingView {
     visible: std::ops::Range<i64>,
     revision: u64,
     relocation: Option<relocation::Relocation>,
+    /// Search and selection read a stable snapshot: their byte/absolute-row
+    /// ranges must keep matching the captured cells while they are open.
+    pinned: bool,
 }
 
 pub(super) fn live_start<T: EventListener>(term: &Crosswords<T>) -> i64 {
@@ -65,6 +73,36 @@ pub(super) fn live_start<T: EventListener>(term: &Crosswords<T>) -> i64 {
 /// spelling for retained capture, relocation and search anchors.
 pub(super) fn grid_line(origin: i64, row: i64) -> Line {
     Line((row - origin) as i32)
+}
+
+/// Decode one grid line into the values the renderer needs. Shared by first
+/// capture and the settled-row refresh so both read a line the same way.
+fn read_cells<T: EventListener>(
+    term: &Crosswords<T>,
+    presentation: &super::presentation::ParsePresentation,
+    line: Line,
+) -> Vec<ReadingCell> {
+    term.grid[line][..]
+        .iter()
+        .enumerate()
+        .map(|(col, cell)| {
+            let extras = cell
+                .extras_id_checked()
+                .and_then(|id| term.grid.extras_table.get(id));
+            ReadingCell {
+                c: cell.c(),
+                style: term.grid.style_of(cell),
+                marks: extras
+                    .map(|extra| extra.zerowidth.as_slice())
+                    .filter(|marks| !marks.is_empty())
+                    .map(Box::from),
+                hyperlink: extras.and_then(|extra| extra.hyperlink.clone()),
+                wide: cell.wide(),
+                wrapped: cell.contains_cell_flag(CellFlags::WRAPLINE),
+                tab_stop: presentation.is_tab_stop(col),
+            }
+        })
+        .collect()
 }
 
 impl ReadingView {
@@ -90,6 +128,7 @@ impl ReadingView {
                 ..live - term.display_offset() as i64 + term.screen_lines() as i64,
             revision: 0,
             relocation: None,
+            pinned: false,
         };
         // Even a one-row scroll exposes mutable active-screen rows. Capture
         // the entire active screen once, not only the currently visible part.
@@ -183,27 +222,7 @@ impl ReadingView {
                 continue;
             };
             let line = grid_line(origin, row);
-            let cells = term.grid[line][..]
-                .iter()
-                .enumerate()
-                .map(|(col, cell)| {
-                    let extras = cell
-                        .extras_id_checked()
-                        .and_then(|id| term.grid.extras_table.get(id));
-                    ReadingCell {
-                        c: cell.c(),
-                        style: term.grid.style_of(cell),
-                        marks: extras
-                            .map(|extra| extra.zerowidth.as_slice())
-                            .filter(|marks| !marks.is_empty())
-                            .map(Box::from),
-                        hyperlink: extras.and_then(|extra| extra.hyperlink.clone()),
-                        wide: cell.wide(),
-                        wrapped: cell.contains_cell_flag(CellFlags::WRAPLINE),
-                        tab_stop: presentation.is_tab_stop(col),
-                    }
-                })
-                .collect();
+            let cells = read_cells(term, presentation, line);
             captured.push((
                 line.0,
                 lyrel_core::core::kitty_graphics::placeholder_row(&term.grid, line),
@@ -212,6 +231,7 @@ impl ReadingView {
                 cells,
                 images: CommittedImages::default(),
                 captured_live_start: origin,
+                provisional: row >= origin,
             });
         }
         if captured.is_empty() {
@@ -350,6 +370,12 @@ impl ReadingView {
         if self.relocation.is_some() {
             return;
         }
+        let presentation = terminal.presentation_facts();
+        // A row captured from the active screen was only a temporary frame of
+        // whatever the program was drawing. Once output pushes it into
+        // history, the grid holds its final content — read that instead of
+        // painting the stale frame (an agent TUI's old input bar, typically).
+        self.refresh_settled(term, &presentation);
         let needs = ReadingNeeds {
             top: live_start(term) - term.display_offset() as i64,
             oldest: term.grid.lines_evicted() as i64,
@@ -362,7 +388,6 @@ impl ReadingView {
         }
         self.top = needs.top;
         let images = terminal.images();
-        let presentation = terminal.presentation_facts();
         self.retain_visible(term, &images, &presentation);
         if let Some(range) = needs.selected.as_ref().filter(|range| !range.is_empty()) {
             let first = ((range.start / self.cols) as i64).max(needs.oldest);
@@ -389,6 +414,42 @@ impl ReadingView {
         }
         self.prune(needs.selected.clone());
         self.needs = Some(needs);
+    }
+
+    /// Re-read retained rows that were captured from the active screen and
+    /// have since scrolled into history. The grid line is immutable from then
+    /// on, so this is the last time its content can differ from the snapshot.
+    fn refresh_settled<T: EventListener>(
+        &mut self,
+        term: &Crosswords<T>,
+        presentation: &super::presentation::ParsePresentation,
+    ) {
+        if self.pinned {
+            return;
+        }
+        let live = live_start(term);
+        let mut changed = false;
+        for (&row, retained) in self.rows.iter_mut() {
+            if !retained.provisional || row >= live {
+                continue;
+            }
+            // A row that carried an image keeps the captured placeholder
+            // identity its lease was taken for; its text stays frozen with it.
+            if !retained.images.is_empty() {
+                retained.provisional = false;
+                continue;
+            }
+            retained.cells = read_cells(term, presentation, grid_line(live, row));
+            retained.provisional = false;
+            changed = true;
+        }
+        if changed {
+            self.revision = self.revision.wrapping_add(1);
+        }
+    }
+
+    pub(super) fn set_pinned(&mut self, pinned: bool) {
+        self.pinned = pinned;
     }
 
     pub(super) fn columns(&self) -> usize {
@@ -506,5 +567,53 @@ impl ReadingView {
             }),
             selection.clicks() >= 3,
         ))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rio_vt::performer::handler::Processor;
+
+    fn text(row: &[ReadingCell]) -> String {
+        row.iter()
+            .map(|cell| cell.c)
+            .collect::<String>()
+            .trim_end()
+            .to_string()
+    }
+
+    #[test]
+    fn a_row_captured_from_the_active_screen_is_reread_once_it_settles() {
+        let size = crate::terminal::size::TermSize::new(20, 4);
+        let mut term = crate::terminal::remote::test_term(size);
+        let mut parser = Processor::default();
+        parser.advance(&mut term, b"row0\r\nrow1\r\nrow2\r\n");
+        // An agent TUI's input bar on the mutable last screen row.
+        parser.advance(&mut term, b"\x1b[4;1H\x1b[2KBAR-INPUT");
+
+        let images = ImageStore::new();
+        let presentation = super::super::presentation::ParsePresentation::new(20);
+        let mut reading = ReadingView::capture(&term, &images, &presentation);
+        assert!(
+            reading
+                .rows()
+                .any(|(_, row)| text(row).contains("BAR-INPUT")),
+            "the capture includes the active screen"
+        );
+
+        // The TUI clears the bar, then output pushes that row into history.
+        parser.advance(&mut term, b"\x1b[4;1H\x1b[2K");
+        for _ in 0..4 {
+            parser.advance(&mut term, b"\r\n");
+        }
+        reading.refresh_settled(&term, &presentation);
+        assert!(
+            !reading
+                .rows()
+                .any(|(_, row)| text(row).contains("BAR-INPUT")),
+            "a row that settled into history must show its final content, not the \
+             mutable frame captured while it was still active"
+        );
     }
 }
