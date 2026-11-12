@@ -529,10 +529,11 @@ jobs:
         shell: pwsh
         run: '& ./.github/scripts/assert-no-vcruntime.ps1 "target/${{ matrix.target }}/release/lyrel-server.exe"'
 
-      # Zip the server with the ConPTY set build.rs staged beside it. The
-      # trio is re-hashed against the pinned manifest here so a staging
-      # mistake fails the release instead of shipping an uninstallable asset
-      # — the installer unpacks exactly this flat layout
+      # Zip the server with the pinned ConPTY set beside it. The build script
+      # stages the same trio; copy it from the prepared tree as well so a
+      # reused target directory whose build-script fingerprint is fresh cannot
+      # silently drop these side files. The hash check below is the trust
+      # boundary — the installer unpacks exactly this flat layout
       # (`daemon::install::package`).
       - name: Stage the asset
         working-directory: lyrel
@@ -542,6 +543,10 @@ jobs:
           $Release = "target/${{ matrix.target }}/release"
           $ConptyArch = @{ 'x86_64-pc-windows-msvc' = 'x64' }['${{ matrix.target }}']
           if (-not $ConptyArch) { throw "no prepared ConPTY for ${{ matrix.target }}" }
+          $Source = ".conpty/$ConptyArch"
+          Copy-Item "$Source/conpty.dll" "$Release/conpty.dll" -Force
+          Copy-Item "$Source/OpenConsole.exe" "$Release/OpenConsole.exe" -Force
+          Copy-Item '.conpty/LICENSE-ConPTY.txt' "$Release/LICENSE-ConPTY.txt" -Force
           $Manifest = Get-Content -LiteralPath 'assets/windows/conpty/manifest.json' -Raw | ConvertFrom-Json
           foreach ($File in 'conpty.dll', 'OpenConsole.exe') {
             $Path = "$Release/$File"
