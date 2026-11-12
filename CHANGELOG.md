@@ -5,6 +5,14 @@
 
 格式参考 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)，版本遵循 [Semantic Versioning](https://semver.org/spec/v2.0.0.html)。
 
+## [0.3.3] - 2026-11-12
+
+### 修复
+
+- 修复非最大化窗口的 Markdown 铺满／停靠切换与终端指针命中；移除重复表格工具，保持自动换行代码块背景连续，渲染表格单元格中的行内语法，并为文档提供可拖动滚动条。Markdown 状态栏回到编辑器底部；原生 HTML 与图片直接呈现，智能体侧栏改用高清品牌资源。空会话不再被陈旧 shell 可执行路径覆盖智能体名称，恢复会话会读取原生历史标题；omp 通过命令级只读配置叠加将内联图片上限从 8 调整为 20，不改写用户全局配置。
+- 修复 PowerShell 在 Unix 上使用 Windows `;` 拼接 `PI_CONFIG_FILES`，改用 `[IO.Path]::PathSeparator`；Windows PowerShell 5.1、pwsh 7 与 Unix 主机共用同一脚本。
+- 稳定 macOS 跨 daemon 图形预算消费者的视口上报时序，避免历史图片在新 offer 到达前仍被旧视口保护而触发预算拒绝。
+
 ## [0.3.2] - 2026-11-11
 
 ### 新增
