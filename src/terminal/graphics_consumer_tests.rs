@@ -642,6 +642,15 @@ fn graphics_consumer_cross_daemon_aggregate_rejects_without_losing_pixels_then_r
                     .0
                     .update(cx, |_, window, cx| window.render_frame(cx))
                     .unwrap();
+                // The scroll report may have been deferred behind the reader's
+                // grid guard. Publish it explicitly and let the bounded worker
+                // and the history daemon consume it before the new offer.
+                terminals[0].1.read_with(cx, |view, _| {
+                    view.terminal.viewport_reporter().report();
+                });
+                for _ in 0..20 {
+                    graphics_consumer_progress(cx);
+                }
                 let request = format!(
                     "SEND_OK 5 1 {} 0\n",
                     graphics_pty_fixture::hex(
