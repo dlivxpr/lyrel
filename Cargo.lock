@@ -6017,7 +6017,7 @@ dependencies = [
 
 [[package]]
 name = "lyrel"
-version = "0.3.2"
+version = "0.3.3"
 dependencies = [
  "aes-gcm",
  "anyhow",
@@ -6081,7 +6081,7 @@ dependencies = [
 
 [[package]]
 name = "lyrel-cli"
-version = "0.3.2"
+version = "0.3.3"
 dependencies = [
  "anyhow",
  "clap",
@@ -6095,7 +6095,7 @@ dependencies = [
 
 [[package]]
 name = "lyrel-core"
-version = "0.3.2"
+version = "0.3.3"
 dependencies = [
  "anyhow",
  "async_zip",
@@ -6146,7 +6146,7 @@ dependencies = [
 
 [[package]]
 name = "lyrel-markdown-editor"
-version = "0.3.2"
+version = "0.3.3"
 dependencies = [
  "gpui-kit",
  "image",
@@ -6164,7 +6164,7 @@ dependencies = [
 
 [[package]]
 name = "lyrel-server"
-version = "0.3.2"
+version = "0.3.3"
 dependencies = [
  "libc",
  "lyrel-core",
@@ -6176,7 +6176,7 @@ dependencies = [
 
 [[package]]
 name = "lyrel-text"
-version = "0.3.2"
+version = "0.3.3"
 dependencies = [
  "encoding_rs",
  "globset",
