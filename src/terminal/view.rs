@@ -3346,6 +3346,7 @@ mod gpui_tests {
     include!("graphics_resize_consumer_tests.rs");
     include!("graphics_layout_consumer_tests.rs");
     include!("graphics_recovery_consumer_tests.rs");
+    include!("graphics_sixel_consumer_tests.rs");
     include!("graphics_playback_consumer_tests.rs");
     include!("graphics_capacity_consumer_tests.rs");
     include!("native_picture_support.rs");

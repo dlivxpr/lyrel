@@ -1370,8 +1370,12 @@ fn record_output(st: &mut PaneState, bytes: &[u8]) {
     st.modes.feed(bytes);
 }
 
-/// The primary device attributes a client's emulator answers with.
-const DA1_REPLY: &[u8] = b"\x1b[?6c";
+/// The primary device attributes a client's emulator answers with. Attribute 4
+/// is Sixel: this pane's build admits static inline Sixel into the bounded
+/// graphics authority, and the attached client answers the same bytes only when
+/// its pane connection actually negotiated the `static-sixel` feature. A routed
+/// remote endpoint that lacks the feature answers without it from its own build.
+const DA1_REPLY: &[u8] = b"\x1b[?4;6c";
 
 /// A pane with no client attached has nobody to answer its queries, and a
 /// replay drops replies, so one asked then is never answered. Programs that

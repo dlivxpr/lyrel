@@ -440,11 +440,23 @@ node scripts/kitty-capacity-analysis.mjs `
 
 默认在当前光标位置锚定，纵向占用 `ceil(height / cell_height)` 行；光标停在图片最后一行的起始列，而不是套用 Kitty 的“图片右侧”规则。图片超出滚动区域底部时推进文字及图片历史；`DECSDM`（`?80h`）改为屏幕左上角、不滚动且不移动光标，`?8452h` 则令默认滚动模式的光标停在图片右侧。主／备屏切换、ED2、reset、历史过期及保留阅读共用现有生命周期；拒收不产生 placement、不移动光标、不替换其他资源。Sixel 无成功／失败应答，后续文字仍按原顺序继续。
 
-实际生产者回归使用 Ubuntu 官方 `libsixel-bin 1.10.5` 的 `img2sixel -w 40 -h 40 -p 4 -d none colors.ppm` 输出，核验真实 PTY → daemon → ordered consumer 的 RGBA、锚点和后续文字光标。源码接线及 headless consumer 不等于 Windows 原生像素、真实 SSH 或 macOS 已验收；原生与平台组合由 #258 的候选记录分别确认。完整 Sixel 恢复／安全／发现能力属于 #275，本切片不扩大自动发现或宣称完整兼容。
+实际生产者回归使用 Ubuntu 官方 `libsixel-bin 1.10.5` 的 `img2sixel -w 40 -h 40 -p 4 -d none colors.ppm` 输出，核验真实 PTY → daemon → ordered consumer 的 RGBA、锚点和后续文字光标。源码接线及 headless consumer 不等于 Windows 原生像素、真实 SSH 或 macOS 已验收；原生与平台组合由 #258 的候选记录分别确认。完整 Sixel 恢复／安全／发现能力由下方 #275 小节补齐；本切片不扩大自动发现或宣称完整兼容。
 
 2026-11-13 的 Windows 独立 target 检查点为源码 `4d788ed5`，已合入父集成 `d7ab88d0`：Sixel 核心／真实 PTY 7 项、既有 Kitty 15 项、XTGETTCAP 共存 4 项、未结束同步输出 1 项、生产 `ParseBridge`／rooted `TerminalView` 消费者 2 项均通过，合计 29 项，无 ignored、无零匹配。生产消费者实际检查量化图的 BGRA、最终文字行、文字之下的图片图层、主备屏往返、冻结阅读期间继续输出 Kitty 和最终清除；有效 RED 曾分别命中未接入像素、超长头透传、图片图层不符和镜像启动未准入 decoder，再以同一生产路径获得 GREEN。此为本票窄验证，不是完整 workspace／产品 GUI binary 构建；Windows 原生窗口像素、WSL headless、真实 SSH 与 macOS 未在该分票检查点验收。
 
 Windows 的隔离候选 pane 可执行 `pwsh -NoProfile -File scripts/sixel-static.ps1 -Scene Baseline -KeepVisible`，实际经 WSL 调用上述已准备的官方 `img2sixel`，输出 240×160 像素图片及 `AFTER_SIXEL_274`。`-Scene Scroll`／`Display`／`Clear`／`Refusal` 分别提供底部滚动、DECSDM、清除和超限拒收场景；只在自有候选 pane 运行，不连接或清理用户窗口。截取原生画面时同时记录 cell 尺寸、图片边界与后续文字，不以脚本退出或收到资源 packet 代替像素通过。
+
+#### 静态 Sixel 兼容与恢复（#275）
+
+静态 Sixel 在 #274 的 daemon authority 之上补齐发现、恢复与拒绝语义，不新增第二套 decoder、VT parser 或图像权威。daemon 仍是唯一解码与准入者；桌面镜像不解码像素，也不重复回答图形查询。
+
+发现面按实际 endpoint 协商：pane 协议新增可忽略的 `static-sixel` feature。附着客户端回答 DA1 时，只有在本次 pane 连接实际协商到该 feature 才附加属性 `4`（`CSI ? 4 ; 6 c`），否则维持 `CSI ? 6 c`；旧 daemon 或未更新的远端 server 不会继承本机 GUI 的能力声明。daemon 自己在 detached 状态回答同一条构建内的 DA1。`XTSMGRAPHICS`（`CSI ? Pi ; Pa ; Pv S`）由持有像素几何与准入上限的 daemon 在附着与脱离两种状态回答，镜像保持沉默：颜色寄存器 `Pi=1` 的当前／最大值回答已发布 parser 的 `1024`；`Pi=2 Pa=1` 回答当前文本区域的设备像素（按每边 4,096 上限截断）；`Pa=2`／`Pa=3` 与 `Pa=4` 以状态 `3` 拒绝——准入同时受单图 32 MiB RGBA 面积预算约束，矩形“最大值”会虚假承诺；`Pi=3`（ReGIS）与未知 item 分别以状态 `1` 拒绝。`XTGETTCAP` 白名单不变（`Co`／`colors`／`RGB`）；`sixel` 不是 terminfo 能力名，其负答不代表图像不支持，Sixel 由 DA1 与 XTSMGRAPHICS 发现。`scripts/terminal-capabilities.mjs` 同时校验这两条新契约，`.lua` 场景注明公开 `vim.tty.query` 只覆盖 XTGETTCAP。缺少 `static-sixel` 的后端（旧 daemon 或未更新远端 server）既不被广告也不被本地替代：客户端不解码、不保留、不以仅环内像素伪装成功；应用若仍发送 Sixel，旧后端不会把它接入图形权威，因此不会出现“无恢复保证却显示为已接受”的路径。更新该后端是显式的用户操作，不自动重启 daemon 或终止 pane。
+
+尺寸与像素语义沿用已发布 parser：`"Pan;Pad;Ph;Pv` 的 `Ph`／`Pv` 是准入的自然像素范围（未绘制区域保持背景寄存器），`Pan`／`Pad` 被忽略、始终使用方形像素；每边 4,096 像素、单图 32 MiB RGBA、整条编码 8 MiB，另计工作池。光标按 DEC VT330/VT340 手册第 14 章处理：scrolling 模式退出 Sixel 时文字光标取最终 sixel 光标位置并向下取整到文字行，因此尾部 graphic newline 即使没有像素也占一个 sixel 行，而最后一个不足一行的 band 会回到其起始文字行；`DECSDM`（`?80h`）不移动光标，`?8452h` 只把列移到图片右缘，不影响行。实现由准入扫描返回最终 band 顶部（`band_top / cell_height`），不以解码像素 bbox 反推。光标、滚动区域、主／备屏、`ED2`、reset 与保留阅读沿用 #274 的既有生命周期。
+
+恢复不依赖文字回放环：Sixel DCS 在进入 ring 之前就被提取，像素只存在于 daemon 资源权威中。发送方停止后，即使普通输出淘汰了整段 8 MiB replay（但仍在 daemon 保留的 10,000 行文字内），全新 consumer 挂回同一存活 pane 仍从有序 Graphics 帧恢复已接受像素与 placement，不需要生产者重发；被淘汰文字对应的旧 placement 不会复活成可见图片。发送方计数器（字节、上传、放置）在恢复前后保持一致，作为“未重传”的外部证据。拒收（超限 raster、非法颜色分量、被 CAN 取消的截断体）不产生 placement、不移动光标、不替换已接受资源，后续文字按原顺序继续；很小的真实 decoded 预算会拒绝准入且不留下绘制像素。窗口 resize 后图片继续与实际文字行共享几何。
+
+原生 Windows、WSL headless 与真实 SSH 的组合验收由 #258 候选记录分别确认；headless 生产消费者断言不等于原生像素、GPU 或 macOS 验收。
 
 #### 当前实现：终端布局与屏幕生命周期（#42）
 

@@ -1,6 +1,9 @@
 // 在隔离候选 pane 中执行：node scripts/terminal-capabilities.mjs
 // 跨 detach/reconnect 场景：node scripts/terminal-capabilities.mjs --reconnect
 // 不读取或修改 lyrel 配置；只通过当前真实终端的输入/输出进行协议查询。
+// XTGETTCAP 只回答 Co/colors/RGB；静态 Sixel 的发现走 DA1 属性 4 与
+// XTSMGRAPHICS，两者都由实际连接的 endpoint 能力决定。`sixel` 作为
+// XTGETTCAP 名称仍是负答，因为它不是 terminfo 能力名，而不是因为图像不支持。
 import assert from 'node:assert/strict';
 
 if (!process.stdin.isTTY || !process.stdout.isTTY) {
@@ -24,28 +27,34 @@ const onData = (bytes) => {
   }
   if (pending) {
     pending.bytes += text;
-    if (pending.bytes.includes(barrier)) {
+    const end = pending.finish(pending.bytes);
+    if (end !== null) {
       const probe = pending;
       pending = undefined;
       clearTimeout(probe.timer);
-      const at = probe.bytes.indexOf(barrier);
-      stray += probe.bytes.slice(at + barrier.length);
-      probe.resolve(probe.bytes.slice(0, at));
+      stray += probe.bytes.slice(end);
+      probe.resolve(probe.bytes.slice(0, end));
     }
   } else {
     stray += text;
   }
 };
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
-async function probe(label, bytes, expected, fragment = false) {
-  assert.equal(stray, '', `非查询时收到额外输入：${JSON.stringify(stray)}`);
-  const result = new Promise((resolve, reject) => {
+function pendingProbe(label, finish) {
+  return new Promise((resolve, reject) => {
     const timer = setTimeout(() => {
       const received = pending?.bytes;
       pending = undefined;
       reject(new Error(`${label} 超时，实际输入 ${JSON.stringify(received)}`));
     }, 10000);
-    pending = { bytes: '', resolve, reject, timer };
+    pending = { bytes: '', resolve, reject, timer, finish };
+  });
+}
+async function probe(label, bytes, expected, fragment = false) {
+  assert.equal(stray, '', `非查询时收到额外输入：${JSON.stringify(stray)}`);
+  const result = pendingProbe(label, (bytes) => {
+    const at = bytes.indexOf(barrier);
+    return at < 0 ? null : at;
   });
   if (fragment) {
     for (const byte of bytes) {
@@ -58,6 +67,33 @@ async function probe(label, bytes, expected, fragment = false) {
   process.stdout.write(barrierQuery);
   assert.equal(await result, expected, label);
   process.stdout.write(`\r\nPASS ${label}\r\n`);
+}
+// A probe whose owner answers without a Kitty barrier: DA1 and XTSMGRAPHICS are
+// plain CSI queries, so completion is the expected bytes themselves. Anything
+// extra stays in `stray` and fails the next probe, which catches duplicate or
+// replayed answers.
+async function probeAnswer(label, bytes, expected) {
+  assert.equal(stray, '', `非查询时收到额外输入：${JSON.stringify(stray)}`);
+  const result = pendingProbe(label, (bytes) =>
+    bytes === expected ? bytes.length : null,
+  );
+  process.stdout.write(bytes);
+  assert.equal(await result, expected, label);
+  process.stdout.write(`\r\nPASS ${label}\r\n`);
+}
+// Same ownership as `probeAnswer`, for answers whose value is the live pane
+// geometry rather than a constant: complete on the first full match, and
+// report the observed bytes so the scene records the actual size.
+async function probePattern(label, bytes, pattern) {
+  assert.equal(stray, '', `非查询时收到额外输入：${JSON.stringify(stray)}`);
+  const result = pendingProbe(label, (bytes) =>
+    pattern.test(bytes) ? bytes.length : null,
+  );
+  process.stdout.write(bytes);
+  const observed = await result;
+  assert.match(observed, pattern, label);
+  process.stdout.write(`\r\nPASS ${label} ${JSON.stringify(observed)}\r\n`);
+  return observed;
 }
 const wasRaw = process.stdin.isRaw;
 process.stdin.setRawMode(true);
@@ -82,7 +118,21 @@ try {
   await probe('no historical/duplicate replies', request(['RGB']), positive('RGB', '8/8/8'));
   await probe('oversized request followed by ordinary text', `${esc}P+q${'436f;'.repeat(2000)}${st}after oversized request\r\n`, '');
   await probe('legal query after oversize', request(['Co']), positive('Co', '256'));
-  process.stdout.write('\r\nXTGETTCAP scene passed; 此脚本不是 Neovim/notcurses 消费者证据。\r\n');
+  // Sixel 没有 terminfo 能力名，因此 XTGETTCAP 对 `sixel` 的负答保持真实；
+  // 静态 Sixel 的发现路径是 DA1 属性 4 与 XTSMGRAPHICS。两项都由实际
+  // endpoint 回答：DA1 由附着客户端按协商能力回答，XTSMGRAPHICS 由持有
+  // 像素几何与准入上限的 daemon 回答。
+  await probeAnswer('DA1 advertises the static Sixel attribute', `${esc}[c`, `${esc}[?4;6c`);
+  await probeAnswer('XTSMGRAPHICS color registers', `${esc}[?1;1;0S`, `${esc}[?1;0;1024S`);
+  // 具体像素值取决于本 pane 的实际单元尺寸与行列数。
+  await probePattern(
+    'XTSMGRAPHICS current geometry',
+    `${esc}[?2;1;0S`,
+    /^\x1b\[\?2;0;\d{1,4};\d{1,4}S$/,
+  );
+  await probeAnswer('XTSMGRAPHICS denies ReGIS', `${esc}[?3;1;0S`, `${esc}[?3;1S`);
+  await probeAnswer('XTSMGRAPHICS denies a rectangular maximum', `${esc}[?2;4S`, `${esc}[?2;3S`);
+  process.stdout.write('\r\nXTGETTCAP/Sixel discovery scene passed; 此脚本不是 Neovim/notcurses 消费者证据。\r\n');
 } finally {
   if (pending) clearTimeout(pending.timer);
   process.stdin.off('data', onData);

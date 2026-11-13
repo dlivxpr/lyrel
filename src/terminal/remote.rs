@@ -649,6 +649,8 @@ impl RemoteTerminal {
         self.adopt_relink_with_version(stream, buffered, route, size, cell_w, cell_h, None)
     }
 
+    /// A relink negotiated again, so the pane keeps the endpoint's current
+    /// version and capability answer instead of the one it spawned against.
     pub fn adopt_relink_with_version(
         &mut self,
         stream: Stream,
@@ -660,6 +662,12 @@ impl RemoteTerminal {
         version: Option<DaemonVersion>,
     ) -> anyhow::Result<()> {
         self.pane_version = version;
+        self.proxy.parse_state.presentation.lock().unwrap().endpoint_sixel = self
+            .pane_version
+            .as_ref()
+            .is_some_and(|version| {
+                version.has_feature(crate::daemon::protocol::FEATURE_STATIC_SIXEL)
+            });
         let signals = self.reader_signals(false);
         self.connection.adopt_relink(
             stream,
@@ -746,6 +754,29 @@ impl RemoteTerminal {
         )
     }
 
+    /// A test pane over an already negotiated connection. `version` is the
+    /// answer that connection actually received; the production handshake
+    /// passes it so DA1 describes the real endpoint, and `None` models an
+    /// endpoint that never negotiated static Sixel.
+    #[cfg(any(test, feature = "native-markdown-tests"))]
+    pub(super) fn from_stream_with_endpoint(
+        stream: Stream,
+        size: TermSize,
+        buffered: Vec<u8>,
+        pty: PtySource,
+        endpoint: Option<DaemonVersion>,
+    ) -> anyhow::Result<Self> {
+        Self::from_stream_parts(
+            stream,
+            size,
+            buffered,
+            pty,
+            false,
+            crate::terminal::images::ImageStore::new(),
+            endpoint,
+        )
+    }
+
     /// `awaiting_replay` says this link is an attach rather than a spawn, and
     /// so that the frames at the head of its stream describe a pane that was
     /// already running — see [`AgentSlot`]. It has to be decided here rather
@@ -763,12 +794,16 @@ impl RemoteTerminal {
     ) -> anyhow::Result<Self> {
         let user_config = crate::core::config::Config::load();
         let (tx, rx) = smol::channel::unbounded();
+        let mut presentation = super::presentation::ParsePresentation::new(size.cols);
+        presentation.endpoint_sixel = version.as_ref().is_some_and(|version| {
+            version.has_feature(crate::daemon::protocol::FEATURE_STATIC_SIXEL)
+        });
         let proxy = EventProxy {
             tx,
             parse_state: Arc::new(ParseState {
                 replaying: AtomicBool::new(false),
                 history_limit: AtomicUsize::new(user_config.scrollback_limit),
-                presentation: Mutex::new(super::presentation::ParsePresentation::new(size.cols)),
+                presentation: Mutex::new(presentation),
             }),
         };
 

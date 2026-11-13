@@ -460,6 +460,8 @@ pub(crate) struct PreparedImage {
     metadata: Option<retention::MetadataTicket>,
     placement: Option<(u64, retention::MetadataTicket)>,
     frame: Option<FramePreparation>,
+    /// The final sixel cursor position, which is not the decoded pixel extent.
+    sixel_cursor: Option<super::sixel_graphics::Cursor>,
     _work: retention::Work,
 }
 impl PreparedImage {
@@ -751,6 +753,7 @@ impl GraphicsState {
                 &control,
                 &mut effects,
                 Some((placement.key, placement.metadata)),
+                None,
             );
         } else {
             Self::reply(&mut effects, &control, control.id, "ENOENT:Image not found");
@@ -931,8 +934,11 @@ impl GraphicsState {
         frame: Option<FramePreparation>,
         mut work: retention::Work,
     ) -> Result<PreparedImage, &'static str> {
+        let mut sixel_cursor = None;
         if control.sixel {
-            image = super::sixel_graphics::decode(image, &mut work)?;
+            let (decoded, cursor) = super::sixel_graphics::decode(image, &mut work)?;
+            image = decoded;
+            sixel_cursor = Some(cursor);
         }
         let mut decoded_bytes = if control.action == Action::Compose {
             0
@@ -972,6 +978,7 @@ impl GraphicsState {
             metadata: None,
             placement: None,
             frame,
+            sixel_cursor,
             _work: work,
         })
     }
@@ -1439,6 +1446,7 @@ impl GraphicsState {
                     placement: placement_lease,
                     _work: _validation,
                     frame,
+                    sixel_cursor,
                 } = prepared;
                 if control.action == Action::Query {
                     Self::reply(&mut effects, &control, control.id, "OK");
@@ -1515,7 +1523,7 @@ impl GraphicsState {
                 );
                 effects.push(GraphicsEffect::Frame(packet));
                 if control.action == Action::TransmitAndDisplay {
-                    self.place(key, &control, &mut effects, placement_lease);
+                    self.place(key, &control, &mut effects, placement_lease, sixel_cursor);
                 } else {
                     Self::reply(&mut effects, &control, id, "OK");
                 }
@@ -1530,7 +1538,7 @@ impl GraphicsState {
                         .packet
                         .is_some()
                 }) {
-                    self.place(key, &control, &mut effects, None);
+                    self.place(key, &control, &mut effects, None, None);
                 } else {
                     Self::reply(&mut effects, &control, control.id, "ENOENT:Image not found");
                 }
@@ -1814,6 +1822,7 @@ impl GraphicsState {
         control: &Control,
         effects: &mut Vec<GraphicsEffect>,
         reserved_metadata: Option<(u64, retention::MetadataTicket)>,
+        sixel_cursor: Option<super::sixel_graphics::Cursor>,
     ) {
         let resource = &self.resources[&resource_key];
         let parent = match self.relative_parent(control, None) {
@@ -1918,7 +1927,13 @@ impl GraphicsState {
             // retains the start column unless mode 8452 requests the right edge.
             let start_row = self.term.grid.cursor.pos.row.0;
             let start_col = self.term.grid.cursor.pos.col.0;
-            let down = span_rows.saturating_sub(1) as i32;
+            // The DEC text cursor is the final sixel cursor position rounded
+            // down to a text cell. That is not the decoded pixel extent: a
+            // graphic newline takes a sixel line even with no pixels on it, and
+            // a partial last band rounds back into the row it started in.
+            let down = sixel_cursor.map_or(span_rows.saturating_sub(1), |cursor| {
+                cursor.band_top / u32::from(self.size.cell_h.max(1))
+            }) as i32;
             let scrolls = if self.region.contains(&start_row) {
                 (start_row + down - (self.region.end - 1)).max(0)
             } else {

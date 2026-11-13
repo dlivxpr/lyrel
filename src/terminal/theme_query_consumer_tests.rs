@@ -98,7 +98,7 @@ fn theme_queries_cross_real_daemon_gui_replay_without_duplicates(cx: &mut TestAp
     // that platform's DA1 receipt from a renderer or writer-only assertion.
     if cfg!(unix) {
         send(10, b"\x1b[c", 1);
-        theme_wait_result(&mut observer, cx, 10, b"\x1b[?6c");
+        theme_wait_result(&mut observer, cx, 10, b"\x1b[?4;6c");
     }
     send(3, b"\x1b[?99", usize::MAX);
     graphics_recovery_wait(cx, "attached partial query flushed", |_| {
@@ -122,7 +122,7 @@ fn theme_queries_cross_real_daemon_gui_replay_without_duplicates(cx: &mut TestAp
     theme_wait_result(&mut observer, cx, 8, b"\x1b[?997;1n");
     if cfg!(unix) {
         send(9, b"\x1b[c", 1);
-        theme_wait_result(&mut observer, cx, 9, b"\x1b[?6c");
+        theme_wait_result(&mut observer, cx, 9, b"\x1b[?4;6c");
     }
     observer.detach().unwrap();
     daemon.panes().kill(pane).unwrap();

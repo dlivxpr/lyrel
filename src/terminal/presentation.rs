@@ -19,6 +19,11 @@ pub(super) struct ParsePresentation {
     /// paint-seam facts the frame already reads. `None` is "no application
     /// owns the pointer": the terminal's own policy applies.
     pub(super) pointer: Option<gpui_kit::CursorStyle>,
+    /// Whether this pane's negotiated endpoint admits static Sixel. DA1 is
+    /// answered by the attached client, so it must describe the endpoint that
+    /// actually decodes and retains the image — never this build's own
+    /// capability when a routed remote server does not have it.
+    pub(super) endpoint_sixel: bool,
     tab_stops: Vec<bool>,
 }
 
@@ -31,6 +36,7 @@ impl ParsePresentation {
             resize_revision: 0,
             resize_images_revision: 0,
             pointer: None,
+            endpoint_sixel: false,
             tab_stops: Vec::new(),
         };
         facts.resize(cols);

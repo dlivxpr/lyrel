@@ -2,6 +2,7 @@
 //! grid. Handler callbacks attach graphics lifetime to the same text mutations.
 
 use super::*;
+use super::super::sixel_graphics::SIDE;
 use rio_unicode::UnicodeWidthChar as _;
 use rio_vt::ansi::mode::{Mode, NamedPrivateMode, PrivateMode};
 use rio_vt::ansi::{ClearMode, LineClearMode, TabulationClearMode};
@@ -739,6 +740,51 @@ impl Handler for GraphicsState {
             self.replies
                 .push(format!("\x1b[4;{height};{width}t").into_bytes());
         }
+    }
+    /// XTSMGRAPHICS (`CSI ? Pi ; Pa ; Pv S`) belongs to the pane that owns the
+    /// pixel geometry and the image admission bounds: one owner whether a
+    /// client is attached or not, local or routed. The desktop mirror never
+    /// replies, so a replayed or duplicated query cannot produce a second
+    /// answer, and an older endpoint that lacks this handler stays silent
+    /// rather than inheriting the local GUI's claim.
+    fn graphics_attribute(&mut self, pi: u16, pa: u16) {
+        use rio_vt::ansi::sixel::MAX_COLOR_REGISTERS;
+        // Items (Pi): 1 color registers, 2 Sixel geometry, 3 ReGIS.
+        // Actions (Pa): 1 read current, 2 reset, 3 set, 4 read maximum.
+        let mut values = [0u32; 2];
+        let (status, count) = match (pi, pa) {
+            // The released Sixel parser's palette bound is the real one.
+            (1, 1 | 4) => {
+                values[0] = MAX_COLOR_REGISTERS as u32;
+                (0, 1)
+            }
+            (1, 2 | 3) => (3, 0),
+            (1, _) => (2, 0),
+            // One rectangular maximum would over-promise: admission also bounds
+            // a single image's decoded RGBA area, so only the current text area
+            // is truthful. Refuse `Pa=4` instead of guessing a rectangle.
+            (2, 1) => {
+                let width = u32::from(self.size.cols) * u32::from(self.size.cell_w);
+                let height = u32::from(self.size.rows) * u32::from(self.size.cell_h);
+                if width == 0 || height == 0 {
+                    (3, 0)
+                } else {
+                    values = [width.min(SIDE as u32), height.min(SIDE as u32)];
+                    (0, 2)
+                }
+            }
+            (2, 2 | 3 | 4) => (3, 0),
+            (2, _) => (2, 0),
+            // ReGIS is unknown and every other item is an error in Pi.
+            _ => (1, 0),
+        };
+        let mut reply = format!("\x1b[?{pi};{status}").into_bytes();
+        for value in &values[..count] {
+            reply.push(b';');
+            reply.extend_from_slice(value.to_string().as_bytes());
+        }
+        reply.push(b'S');
+        self.replies.push(reply);
     }
     fn cells_size_pixels(&mut self) {
         let (w, h) = (self.size.cell_w, self.size.cell_h);

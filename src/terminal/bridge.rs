@@ -9,20 +9,20 @@
 //! What is intercepted, and why:
 //!
 //! - `identify_terminal`: Rio's own DA1 answer advertises sixel and OSC 52
-//!   (`CSI ? 62;4;6;22;52 c`). This terminal's answer stays `CSI ? 6 c`, the
-//!   same bytes the daemon writes for a detached pane
-//!   (`lyrel_core::daemon::pane::DA1_REPLY`) and the previous emulator sent:
-//!   graphics protocols are owned out-of-band by the daemon's sniffer, and
-//!   the query's waiter (Claude Code's theme probe ends its batch on DA1)
-//!   must not read capabilities nothing here renders. DA2 keeps the exact
-//!   bytes the pane has always answered rather than Rio's version number.
+//!   (`CSI ? 62;4;6;22;52 c`). This terminal answers `CSI ? 6 c`, plus attribute
+//!   4 only when this pane's connection negotiated the endpoint's static Sixel
+//!   admission. The same bytes reach a detached pane from the daemon
+//!   (`lyrel_core::daemon::pane::DA1_REPLY`), and a routed remote endpoint that
+//!   lacks the feature answers without it. DA2 keeps the exact bytes the pane
+//!   has always answered rather than Rio's version number.
 //! - `report_version` (XTVERSION): previously met with silence, and a pane
 //!   does not start answering Rio's version because the parser changed.
 //! - `cells_size_pixels` / `text_area_size_pixels`: geometry is answered once
 //!   by the daemon using the controller's device-pixel resize metrics, including
 //!   when no GUI is attached. A local mirror must not send a second reply.
-//! - `graphics_attribute`: the reply would describe sixel geometry this
-//!   terminal does not render; previously silence.
+//! - `graphics_attribute`: XTSMGRAPHICS is answered once by the daemon, which
+//!   owns the pane's pixel geometry and image admission bounds; a mirror reply
+//!   would duplicate or over-promise it.
 //! - `xtgettcap_response`: bounded live requests are extracted and answered
 //!   once by the daemon before publication. This mirror never replies, including
 //!   when replaying snapshots created by an older endpoint.
@@ -225,7 +225,15 @@ impl<T: EventListener> Handler for ParseBridge<'_, T> {
 
     fn identify_terminal(&mut self, intermediate: Option<char>) {
         match intermediate {
-            None => self.reply("\x1b[?6c"),
+            None => {
+                // The endpoint that decodes and retains the image decides the
+                // answer: a routed remote server that never negotiated static
+                // Sixel must not inherit this build's claim.
+                let sixel = self
+                    .presentation
+                    .is_some_and(|facts| facts.lock().unwrap().endpoint_sixel);
+                self.reply(if sixel { "\x1b[?4;6c" } else { "\x1b[?6c" })
+            }
             Some('>') => self.reply(DA2_REPLY),
             other => self.inner.identify_terminal(other),
         }
@@ -502,7 +510,9 @@ impl<T: EventListener> Handler for ParseBridge<'_, T> {
         self.inner.text_area_size_chars();
     }
 
-    /// Sixel admission and geometry belong to the daemon, not this mirror.
+    /// XTSMGRAPHICS is answered once by the daemon, which owns the pane's
+    /// pixel geometry and image admission bounds; this mirror never replies,
+    /// attached or detached, so a replayed query cannot claim geometry.
     fn graphics_attribute(&mut self, _: u16, _: u16) {}
 
     fn insert_graphic(
@@ -705,6 +715,45 @@ mod tests {
     fn device_attributes_keep_the_panes_fingerprint() {
         assert_eq!(replies(b"\x1b[c"), ["\x1b[?6c"]);
         assert_eq!(replies(b"\x1b[>c"), [DA2_REPLY]);
+    }
+
+    /// The attached client answers DA1 for the endpoint that decodes and
+    /// retains the image: an older daemon or a routed remote server that never
+    /// negotiated static Sixel must not inherit this build's attribute 4.
+    #[test]
+    fn da1_sixel_attribute_follows_the_negotiated_endpoint() {
+        let facts = std::sync::Mutex::new(super::super::presentation::ParsePresentation::new(80));
+        let captured = Replies::default();
+        let mut term = Crosswords::new(
+            TermSize::new(80, 24),
+            CursorShape::Block,
+            captured.clone(),
+            WindowId::from(0),
+            0,
+            10_000,
+        );
+        let mut keyboard = KeyboardStacks::default();
+        {
+            let mut bridge = ParseBridge::new(&mut term, captured.clone(), &mut keyboard, None)
+                .with_presentation(Some(&facts));
+            Processor::default().advance(&mut bridge, b"\x1b[c");
+        }
+        assert_eq!(
+            std::mem::take(&mut *captured.0.lock()),
+            ["\x1b[?6c"],
+            "an endpoint without the feature is advertised without Sixel"
+        );
+        facts.lock().unwrap().endpoint_sixel = true;
+        {
+            let mut bridge = ParseBridge::new(&mut term, captured.clone(), &mut keyboard, None)
+                .with_presentation(Some(&facts));
+            Processor::default().advance(&mut bridge, b"\x1b[c");
+        }
+        assert_eq!(
+            std::mem::take(&mut *captured.0.lock()),
+            ["\x1b[?4;6c"],
+            "a negotiated endpoint admits static Sixel"
+        );
     }
 
     /// Capability queries this product never answered stay silent: the

@@ -1,7 +1,7 @@
 # Run only inside an owned candidate lyrel pane. Uses the prepared, official
 # libsixel 1.10.5 producer without changing the tools or user configuration.
 param(
-    [ValidateSet('Baseline', 'Scroll', 'Display', 'Clear', 'Refusal')]
+    [ValidateSet('Baseline', 'Scroll', 'Display', 'Clear', 'Refusal', 'Recovery', 'Discovery')]
     [string]$Scene = 'Baseline',
     [switch]$KeepVisible
 )
@@ -12,7 +12,34 @@ function Write-Vt([string]$text) {
     $out.Write($bytes, 0, $bytes.Length)
     $out.Flush()
 }
+function Invoke-SixelProducer([string[]]$ExtraArgs) {
+    # The producer is a real external process: it exits before the scene does,
+    # so a later window reopen proves restoration without rerunning it.
+    $start = [Diagnostics.ProcessStartInfo]::new('wsl.exe')
+    $producer = 'LD_LIBRARY_PATH=/home/dlivxpr/lyrel258-sixel-tools/root/usr/lib/x86_64-linux-gnu ' +
+        '/home/dlivxpr/lyrel258-sixel-tools/root/usr/bin/img2sixel ' +
+        ($ExtraArgs -join ' ')
+    foreach ($arg in @('-d', 'Ubuntu-26.04', '--', 'bash', '-c', $producer)) {
+        $start.ArgumentList.Add($arg)
+    }
+    $start.UseShellExecute = $false
+    $start.RedirectStandardOutput = $true
+    $process = [Diagnostics.Process]::Start($start)
+    $process.StandardOutput.BaseStream.CopyTo($out)
+    $out.Flush()
+    $process.WaitForExit()
+    if ($process.ExitCode -ne 0) { throw "img2sixel exited $($process.ExitCode)" }
+    $process.Dispose()
+}
 $esc = [char]27
+if ($Scene -eq 'Discovery') {
+    # The Node scene owns the DA1/XTSMGRAPHICS probes; this script only provides
+    # the real pane. It is not a producer and proves no pixels.
+    Write-Vt "${esc}[2J${esc}[HSIXEL_275_DISCOVERY`r`n"
+    node scripts/terminal-capabilities.mjs
+    Write-Vt "`r`nSIXEL_275_DISCOVERY_DONE`r`n"
+    return
+}
 Write-Vt "${esc}[2J${esc}[H${esc}[?80l${esc}[?8452lSIXEL_274_$Scene`r`n"
 Write-Vt "Official img2sixel 1.10.5: static image then AFTER_SIXEL_274`r`n"
 switch ($Scene) {
@@ -25,21 +52,26 @@ if ($Scene -eq 'Refusal') {
     # remain at row 6, column 5, and existing images must not be replaced.
     Write-Vt "${esc}Pq`"1;1;65535;65535#0;2;100;0;0~${esc}\AFTER_SIXEL_274_REFUSED"
 } else {
-    $start = [Diagnostics.ProcessStartInfo]::new('wsl.exe')
-    foreach ($arg in @('-d', 'Ubuntu-26.04', '--', 'bash', '-c',
-        'LD_LIBRARY_PATH=/home/dlivxpr/lyrel258-sixel-tools/root/usr/lib/x86_64-linux-gnu /home/dlivxpr/lyrel258-sixel-tools/root/usr/bin/img2sixel -w 240 -h 160 -p 4 -d none /home/dlivxpr/lyrel258-sixel-tools/colors.ppm')) {
-        $start.ArgumentList.Add($arg)
-    }
-    $start.UseShellExecute = $false
-    $start.RedirectStandardOutput = $true
-    $process = [Diagnostics.Process]::Start($start)
-    $process.StandardOutput.BaseStream.CopyTo($out)
-    $out.Flush()
-    $process.WaitForExit()
-    if ($process.ExitCode -ne 0) { throw "img2sixel exited $($process.ExitCode)" }
-    $process.Dispose()
+    Invoke-SixelProducer @('-w', '240', '-h', '160', '-p', '4', '-d', 'none',
+        '/home/dlivxpr/lyrel258-sixel-tools/colors.ppm')
     Write-Vt 'AFTER_SIXEL_274'
     if ($Scene -eq 'Clear') { Write-Vt "${esc}[2J${esc}[HCLEARED_SIXEL_274" }
+}
+if ($Scene -eq 'Recovery') {
+    # The producer above has already exited. Trim more than the production 8 MiB
+    # replay ring with ordinary text, then let the operator close and reopen the
+    # window: the accepted image must come back from daemon authority, and this
+    # live marker must be the only new output.
+    Write-Vt "`r`nSIXEL_275_RECOVERY_TRIMMING`r`n"
+    $line = 'R' * 1016 + "`r`n"
+    # 520 * 16 * 1018 bytes ≈ 8.5 MiB: more than the production 8 MiB ring and
+    # fewer than the daemon's 10,000 retained text rows.
+    for ($batch = 0; $batch -lt 520; $batch++) {
+        Write-Vt ($line * 16)
+    }
+    Write-Vt "SIXEL_275_RECOVERY_READY close and reopen this window, then press Enter here`r`n"
+    [void](Read-Host 'Close/reopen the window, verify the image and AFTER_SIXEL_274, then press Enter')
+    Write-Vt "SIXEL_275_RECOVERY_DONE`r`n"
 }
 if ($KeepVisible) { [void](Read-Host 'Capture the owned candidate pane; press Enter to finish') }
 Write-Vt "${esc}[?80l${esc}[?8452l`r`nSIXEL_274_SCENE_DONE`r`n"

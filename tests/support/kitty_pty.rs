@@ -185,8 +185,11 @@ pub fn pty_sender() {
         }
         for _ in 0..replies {
             let mut reply = Vec::new();
+            // ST terminates Kitty replies; a `t`- or `c`-final CSI terminates
+            // the geometry and DA1 answers this fixture also captures.
             while !(reply.ends_with(b"\x1b\\")
-                || (reply.starts_with(b"\x1b[") && reply.ends_with(b"t")))
+                || (reply.starts_with(b"\x1b[")
+                    && matches!(reply.last(), Some(b't' | b'c'))))
             {
                 let mut byte = [0];
                 input.read_exact(&mut byte).unwrap();

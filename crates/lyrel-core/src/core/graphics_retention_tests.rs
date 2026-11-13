@@ -378,6 +378,27 @@ fn sixel_real_pty_producer_delivers_pixels_and_ordered_following_text() {
 }
 
 #[test]
+fn sixel_discovery_reports_the_endpoint_graphics_attributes() {
+    let daemon = Daemon::with_limits(0, true);
+    let mut consumer = daemon.spawn();
+    // XTSMGRAPHICS is a live query, not an image: the daemon owns the answer in
+    // both attached and detached states because it alone holds the pane's pixel
+    // geometry and admission bounds. The desktop mirror never replies. A `CSI
+    // 14t` at the end terminates the fixture's byte-level reply capture after
+    // every attribute answer, so the exact bytes and their order are observed.
+    let replies = consumer.exchange(
+        b"\x1b[?1;1;0S\x1b[?1;4S\x1b[?2;1;0S\x1b[?2;4S\x1b[?2;3;4;4S\x1b[?2;2S\x1b[?2;9S\x1b[?3;1;0S\x1b[?9;1S\x1b[14t",
+        1,
+    );
+    assert_eq!(
+        replies,
+        [b"\x1b[?1;0;1024S\x1b[?1;0;1024S\x1b[?2;0;800;480S\x1b[?2;3S\x1b[?2;3S\x1b[?2;3S\x1b[?2;2S\x1b[?3;1S\x1b[?9;1S\x1b[4;480;800t".to_vec()],
+        "color registers, current Sixel geometry, unsupported set/reset, a refused rectangular maximum, ReGIS and unknown items all answer truthfully in request order"
+    );
+    consumer.exit();
+}
+
+#[test]
 fn unfinished_synchronized_output_keeps_daemon_queries_and_image_anchors_live() {
     let daemon = Daemon::start();
     let mut consumer = daemon.spawn();
