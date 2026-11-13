@@ -516,8 +516,7 @@ fn the_aggregate_decoded_budget_refuses_without_touching_prior_registrations() {
     );
     // The remainder fits a smaller outline exactly: budget accounting is by
     // decoded points, not by entry count.
-    let leftover =
-        AGGREGATE_DECODED_BUDGET - entries * glyf_decode::MAX_DECODED_POINTS * 12;
+    let leftover = AGGREGATE_DECODED_BUDGET - entries * glyf_decode::MAX_DECODED_POINTS * 12;
     let fits = leftover / 12;
     accepted(session.handle(
         &register_body(0x100000 + entries as u32, &dense_points(fits), Some(0)),
@@ -699,11 +698,7 @@ fn clear_and_ris_release_the_aggregate_budget() {
         reply.unwrap(),
         b"\x1b_25a1;c;cp=100000;status=0\x1b\\".to_vec()
     );
-    accepted(session.handle(
-        &register_body(0x10fffd, &fat, Some(0)),
-        false,
-        false,
-    ));
+    accepted(session.handle(&register_body(0x10fffd, &fat, Some(0)), false, false));
     refused_reason(
         session.handle(&register_body(0x10fffc, &fat, Some(1)), false, false),
         "outline_too_large",
@@ -715,19 +710,11 @@ fn clear_and_ris_release_the_aggregate_budget() {
     assert_eq!(reply.unwrap(), b"\x1b_25a1;c;status=0\x1b\\".to_vec());
     assert_eq!(session.len(), 0);
     for offset in 0..entries as u32 {
-        accepted(session.handle(
-            &register_body(0xE000 + offset, &fat, Some(0)),
-            false,
-            false,
-        ));
+        accepted(session.handle(&register_body(0xE000 + offset, &fat, Some(0)), false, false));
     }
     session.clear_all();
     assert_eq!(session.len(), 0);
-    accepted(session.handle(
-        &register_body(0x10fffb, &fat, Some(0)),
-        false,
-        false,
-    ));
+    accepted(session.handle(&register_body(0x10fffb, &fat, Some(0)), false, false));
 }
 
 // ---- GlyphFrame projection ---------------------------------------------------
@@ -804,8 +791,7 @@ fn a_frame_projection_restores_fifo_age_and_generation() {
         false,
     ));
     let frame = session.frame();
-    let decoded =
-        GlyphFrame::decode(&frame.encode()).expect("a produced frame is well-formed");
+    let decoded = GlyphFrame::decode(&frame.encode()).expect("a produced frame is well-formed");
     let mut restored =
         GlyphSession::from_frame(decoded).expect("the authority's own snapshot must re-admit");
     assert_eq!(restored.frame().generation(), frame.generation());
@@ -881,8 +867,7 @@ fn a_frame_decoder_refuses_out_of_domain_input() {
     assert!(GlyphFrame::decode(&frame_raw(1, GLOSSARY_CAPACITY as u32 + 1, &[])).is_none());
     // A declared entry count the bytes do not actually carry.
     assert!(
-        GlyphFrame::decode(&frame_raw(1, 2, &frame_entry_default(0xE000, &square(100))))
-            .is_none()
+        GlyphFrame::decode(&frame_raw(1, 2, &frame_entry_default(0xE000, &square(100)))).is_none()
     );
     // A non-PUA codepoint, then a duplicated one.
     assert!(GlyphFrame::decode(&ok(&frame_entry_default(0x41, &square(100)))).is_none());

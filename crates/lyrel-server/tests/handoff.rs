@@ -159,8 +159,7 @@ fn glyph_outline(width: i16, height: i16) -> Vec<u8> {
 }
 
 fn base64(bytes: &[u8]) -> String {
-    const DIGITS: &[u8; 64] =
-        b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    const DIGITS: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
     let mut encoded = String::new();
     for chunk in bytes.chunks(3) {
         let bits = (u32::from(chunk[0]) << 16)
@@ -185,13 +184,7 @@ fn base64(bytes: &[u8]) -> String {
 /// One complete `r` request — `ESC _ 25a1 ; r ; … ESC \` — as a producer
 /// would emit it. `layout` is the §8.5 sizing tail when the registration
 /// declares one; absent keys take the protocol's defaults.
-fn glyph_registration(
-    cp: u32,
-    glyf: &[u8],
-    width: u8,
-    layout: Option<&str>,
-    reply: u8,
-) -> Vec<u8> {
+fn glyph_registration(cp: u32, glyf: &[u8], width: u8, layout: Option<&str>, reply: u8) -> Vec<u8> {
     let layout = layout.map_or_else(String::new, |params| format!(";{params}"));
     format!(
         "\x1b_25a1;r;cp={cp:x};fmt=glyf;upm=1000;width={width};reply={reply}{layout};{}\x1b\\",
@@ -581,8 +574,7 @@ fn a_handoff_keeps_the_pane_glyph_glossary() {
         match session.recv().expect("the adopted pane answers") {
             DaemonMsg::Output(bytes) | DaemonMsg::Snapshot(bytes) => replayed.extend(bytes),
             DaemonMsg::GlyphState(frame) => {
-                glyph_frames
-                    .push(GlyphFrame::decode(&frame).expect("decodable glossary snapshot"));
+                glyph_frames.push(GlyphFrame::decode(&frame).expect("decodable glossary snapshot"));
             }
             DaemonMsg::Exited { code } => panic!("pane exited after handoff: {code:?}"),
             _ => {}

@@ -768,8 +768,7 @@ fn glyph_outline(width: i16, height: i16) -> Vec<u8> {
 
 #[cfg(unix)]
 fn base64(bytes: &[u8]) -> String {
-    const DIGITS: &[u8; 64] =
-        b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    const DIGITS: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
     let mut encoded = String::new();
     for chunk in bytes.chunks(3) {
         let bits = (u32::from(chunk[0]) << 16)
