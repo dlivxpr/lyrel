@@ -161,7 +161,7 @@ impl GlyphFrame {
             }
             let upm = u16::from_le_bytes(frame_bytes(raw, &mut at, 2)?.try_into().ok()?);
             let width = frame_bytes(raw, &mut at, 1)?[0];
-            if !matches!(width, 1 | 2) {
+            if upm == 0 || !matches!(width, 1 | 2) {
                 return None;
             }
             let flags = frame_bytes(raw, &mut at, 1)?[0];
@@ -189,6 +189,9 @@ impl GlyphFrame {
             } else {
                 None
             };
+            if aw == Some(0) || lh == Some(0) {
+                return None;
+            }
             let ymin = if flags & 4 != 0 {
                 Some(i16::from_le_bytes(
                     frame_bytes(raw, &mut at, 2)?.try_into().ok()?,
