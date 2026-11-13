@@ -158,10 +158,8 @@ fn sixel_discovery_reports_the_negotiated_endpoint_and_never_a_mirror_guess(
         std::str::from_utf8(fields[0]).unwrap(),
         std::str::from_utf8(fields[1]).unwrap(),
     );
-    let mut expected = format!(
-        "\x1b[?1;0;1024S\x1b[?2;0;{width};{height}S\x1b[?2;3S\x1b[?3;1S"
-    )
-    .into_bytes();
+    let mut expected =
+        format!("\x1b[?1;0;1024S\x1b[?2;0;{width};{height}S\x1b[?2;3S\x1b[?3;1S").into_bytes();
     expected.extend_from_slice(text_area);
     assert_eq!(
         replies, expected,
@@ -184,9 +182,7 @@ fn sixel_discovery_reports_the_negotiated_endpoint_and_never_a_mirror_guess(
 }
 
 #[gpui_kit::test]
-fn sixel_fresh_consumer_restores_the_accepted_image_after_the_ring_trims(
-    cx: &mut TestAppContext,
-) {
+fn sixel_fresh_consumer_restores_the_accepted_image_after_the_ring_trims(cx: &mut TestAppContext) {
     crate::core::config::pin_test_config_dir();
     cx.executor().allow_parking();
     cx.update(|cx| {
@@ -248,7 +244,8 @@ fn sixel_fresh_consumer_restores_the_accepted_image_after_the_ring_trims(
         "the real sender must have written more than the production ring: {stopped}"
     );
     assert!(
-        !prior.read_with(cx, |view, _| sixel_screen_text(view).contains("EARLY_SIXEL")),
+        !prior.read_with(cx, |view, _| sixel_screen_text(view)
+            .contains("EARLY_SIXEL")),
         "the ring trimmed the early text row"
     );
     graphics_recovery_destroy(prior, prior_window, cx);
@@ -271,9 +268,18 @@ fn sixel_fresh_consumer_restores_the_accepted_image_after_the_ring_trims(
         .unwrap();
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
     let mut raw = Vec::new();
+    let mut ring_bytes = 0;
+    let mut ring_geometry_seen = false;
     loop {
         match replay.recv() {
-            Ok(DaemonMsg::Snapshot(bytes) | DaemonMsg::Output(bytes)) => raw.extend(bytes),
+            Ok(DaemonMsg::Size(_)) => ring_geometry_seen = true,
+            Ok(DaemonMsg::Snapshot(bytes)) => {
+                if ring_geometry_seen {
+                    ring_bytes += bytes.len();
+                }
+                raw.extend(bytes);
+            }
+            Ok(DaemonMsg::Output(bytes)) => raw.extend(bytes),
             Ok(_) => {}
             Err(error)
                 if matches!(
@@ -291,17 +297,15 @@ fn sixel_fresh_consumer_restores_the_accepted_image_after_the_ring_trims(
         );
     }
     replay.detach().unwrap();
-    // The production ring holds at most `RING_CAP` (8 MiB): the replay can
-    // never exceed it, and `ReplayRing::evict` additionally drops to the next
-    // escape-sequence boundary, which inside this producer's uniform `\x1b[0m`
-    // filler can only cost a few bytes. "More than the ring ever was" is what
-    // the sender `bytes=` counter above proves; here a tail just short of the
-    // cap is the real, saturated ring — not a synthetic snapshot.
+    // Replay sends the evicted terminal modes before the ring's first Size,
+    // then Size/Snapshot pairs for the actual bounded ring. Count only those
+    // snapshots: a legitimate mode prelude (or later live Output) is not ring
+    // storage. Boundary trimming inside the uniform SGR filler costs at most
+    // a few bytes; the sender counter above independently proves saturation.
     let ring = 8 * 1024 * 1024;
     assert!(
-        raw.len() <= ring && raw.len() >= ring - 8,
-        "the replay is the real bounded ring tail: {} bytes",
-        raw.len()
+        ring_bytes <= ring && ring_bytes >= ring - 8,
+        "the replay contains the real bounded ring tail: {ring_bytes} bytes"
     );
     assert!(
         !raw.windows(3).any(|part| part == b"\x1bPq"),
