@@ -3,10 +3,10 @@
 
 use gpui_kit::component::ActiveTheme as _;
 use gpui_kit::{
-    App, Bounds, ContentMask, Corners, CursorStyle, Element, ElementId, GlobalElementId, Hitbox,
-    HitboxBehavior, HitboxId, Hsla, IntoElement, LayoutId, MouseButton, MouseDownEvent,
-    MouseMoveEvent, MouseUpEvent, Pixels, Point, Rgba, SharedString, StrikethroughStyle, Style,
-    TextAlign, TextRun, Window, fill, point, px, relative, size,
+    App, Bounds, ContentMask, Corners, Element, ElementId, GlobalElementId, Hitbox, HitboxBehavior,
+    HitboxId, Hsla, IntoElement, LayoutId, MouseButton, MouseDownEvent, MouseMoveEvent,
+    MouseUpEvent, Pixels, Point, Rgba, SharedString, StrikethroughStyle, Style, TextAlign, TextRun,
+    Window, fill, point, px, relative, size,
 };
 use rio_vt::config::colors::ColorRgb;
 
@@ -816,10 +816,8 @@ impl Element for TerminalElement {
         self.register_mouse_handlers(geom, bounds, prepaint.hitbox.id, window);
 
         let view = self.view.read(cx);
-        if view.links.hovered().is_some_and(|link| link.is_armed()) {
-            window.set_cursor_style(CursorStyle::PointingHand, &prepaint.hitbox);
-        } else if !view.frame_mouse_mode() {
-            window.set_cursor_style(CursorStyle::IBeam, &prepaint.hitbox);
+        if let Some(style) = view.content_cursor() {
+            window.set_cursor_style(style, &prepaint.hitbox);
         }
 
         if let Some(start) = fps_start {

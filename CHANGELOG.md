@@ -11,6 +11,10 @@
 
 - #259：`rio-vt`／`rio-graphics`／`rio-unicode` 原子升级到正式 registry 的精确 `=0.5.30`，同步锁定传递 `rio-grapheme-width 0.5.30`；适配 `glyph_register` 新增的 §8.5 `GlyphLayout` 参数，注册解析默认沿用协议默认布局，本票不启用 Glyph Protocol 能力。保留关闭 VT 默认 features、原 PTY／daemon 和无 GPUI 的共享核心；完整构建、回归、原生与远端验收结果按候选实际执行记录，未执行项不记为通过。
 
+### 新增
+
+- #262：终端内容区支持 OSC 22 基本指针 set/reset（含空名称释放），按实际 GPUI／平台形状映射并安全回退；保留工作台菜单／分屏拖动、本地文字选择和链接操作优先级，命令结束、提示符、reset、断连与链接退休清理旧覆盖。不增加指针堆栈／查询或终端身份伪装；新增真实 PTY／daemon／生产交互消费者、确定性 reader 边界回归和可复现原生场景。测试平台的绘制策略与操作断言不替代原生指针、macOS 或真实 SSH 验收。
+
 ### 修复
 
 - #260：终端 `OSC 4/10/11/12` 查询与生产绘制统一使用当前主题的有效 ANSI、默认前景／背景和光标颜色，保留固定扩展色位、亮色可读性、同步输出提交与历史重放副作用抑制；不启用程序驱动动态改色。Windows 独立 target 的真实 PTY → daemon → 生产终端颜色消费者完成有效 RED／GREEN，既有查询重放消费者与四项调色板边界测试通过，均无忽略项；新增 `scripts/terminal-color-query-scene.mjs` 对照入口。原生像素、WSL／真实 SSH 与 macOS 未在本票分支验收，不以返回值或 headless 绘制断言替代。

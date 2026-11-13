@@ -824,6 +824,15 @@ impl RemoteTerminal {
 
     pub fn detach_link(&mut self) {
         self.connection.detach(&self.images);
+        // Retirement fences future parser writes. Wait out the current grid
+        // slice before releasing its claim so that slice cannot restore it.
+        let pointer_released = {
+            let _grid = self.term.lock();
+            self.presentation_facts().set_pointer(None)
+        };
+        if pointer_released {
+            self.proxy.send(PaneEvent::Wakeup);
+        }
         self.poll_exited();
     }
 

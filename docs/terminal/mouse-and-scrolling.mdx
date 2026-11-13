@@ -133,6 +133,19 @@ cargo fmt --check
 
 `src/terminal/mouse_reporting_consumer_tests.rs` 通过生产 `Root`／`TerminalElement` 的鼠标事件路由、隔离 daemon 和真实 PTY 子进程读取应用收到的字节，检查跨窗格所有权、修饰键变化、丢失松开以及正常点击／滚轮。它不替代 Windows／macOS 原生窗口的拖动和跨窗口松开验收。
 
+### 应用请求的指针形状（OSC 22）
+
+终端程序可发送 `OSC 22 ; name ST`（或以 BEL 结束）设置当前窗格内容区的指针形状，例如 `pointer`、`text`、`ew-resize`、`ns-resize` 与四个角的 resize。`default` 明确请求系统箭头；`OSC 22 ; ST` 的空名称释放应用覆盖，恢复终端自身策略。分片请求沿有序输出解析，空重置与同批次后续设置保持先后顺序。不识别的名称及格式错误的请求忽略，不修改已有覆盖；合法但平台缺少对应形状的请求使用安全的原生箭头回退。Windows 的 `grab`／`grabbing` 使用与工作台拖动柄相同的手形替代；`help`／`wait`／`progress` 等没有 GPUI 对应形状的名称回退箭头。
+
+工作台菜单和分屏拖动命中区优先于终端内容。内容区内正在进行的本地文字选择、按住链接修饰键的链接操作优先于应用请求；其后才使用应用形状，最后使用普通终端策略（可选择文本的 I-beam，或应用鼠标模式下的系统默认）。覆盖不影响编辑器、侧边栏、标题栏或其他窗格，也不会改变点击／拖动实际投递到哪里。空重置、`RIS`、shell 的命令完成／返回提示符、断连和链接退休会释放旧覆盖；重连后只由新链接的有序重放重新建立应用状态。
+
+此能力仅包括基本 set/reset，不实现 Kitty 的指针堆栈或查询扩展，也不为触发客户端检测而修改 `TERM`／`TERM_PROGRAM`。已有后端版本和 pane 协议协商仍按实际 endpoint 执行；OSC 22 随原有 PTY 字节传输，不新增控制消息，不自动重启 daemon 或已有会话。经过 tmux／screen 或远端路由时，中间层是否转发 OSC 22 必须单独核实，不能从本地 GUI 推断。
+
+客户端仍可能不发送请求：本轮核对的 [Codex `link_pointer.rs`](https://github.com/openai/codex/blob/main/codex-rs/tui/src/tui/link_pointer.rs) 仅在检测结果为 Kitty／Ghostty 且未检测到 multiplexer 时启用指针请求，Kitty 清理发送空名称、其他受支持终端清理发送 `text`。因此 lyrel 支持解析不代表普通 `TERM_PROGRAM=lyrel` 的 Codex 会自动启用该行为；这里不扩展既有命令级兼容身份，也不宣称 tmux／screen 透明转发或真实 Codex 客户端已验收。原生场景直接发送请求，不能替代该客户端的检测证明。
+
+`src/terminal/pointer_consumer_tests.rs` 使用真实 PTY → 隔离 daemon → 有序 pane stream → 生产 `TerminalView`／`TerminalElement`，覆盖 set/reset、平台回退、命令清理，以及真实鼠标事件触发的选择复制和链接打开；`remote/reader/pointer_tests.rs` 补充分片、重放和断连边界。GPUI 测试平台没有原生 cursor reader，因此这些断言观察生产绘制策略与实际操作结果，不冒充操作系统指针像素证据。可在候选隔离窗口的 pane 内运行 `node tests/support/pointer_scene.mjs`，移动／拖动检查应用形状，按 `m` 关闭应用鼠标报告后检查本地选择、菜单及链接优先级，按 `0`／`f`／`r`／`d` 检查重置，再按 `q` 返回 shell。场景打印实际 `TERM`、`TERM_PROGRAM`、`TMUX` 与 `STY`；原生 Windows、macOS 和真实 SSH 的结果必须分别记录，未执行项不作为通过。
+
+
 ### 链接的实现职责
 
 `src/terminal/link.rs` 的 `LinkInteraction` 是链接状态的唯一所有者，持有悬停范围、修饰键状态、Host／目录上下文、探测缓存、请求 epoch 和右键按下时捕获的目标。`src/terminal/view/links.rs` 是私有 GPUI adapter：将 hover、probe、菜单和 activation 接到同一所有者，为它提供 pane 的 Host／cwd 与配置，并执行通知、剪贴板、URL 打开或 `OpenFileRequested` 导航事件。根视图继续保留终端 attachment、焦点身份和跨能力生命周期，不向链接能力暴露整个可变视图，也不新增 entity 或锁。

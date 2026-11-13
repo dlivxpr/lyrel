@@ -152,6 +152,11 @@ ureq = { version = "3", default-features = false, features = ["rustls", "win-sys
 rio-vt.workspace = true
 rio-graphics.workspace = true
 
+# Named only to implement `Handler::set_mouse_cursor_icon`, whose parameter
+# type rio-vt does not re-export; already in the tree transitively, so this
+# pins no new code. The shape mapping itself is `terminal::pointer`.
+cursor-icon = "=1.2.0"
+
 # Desktop notification fallback on Windows. On macOS only its
 # `set_application` is used — never `show`; see
 # `terminal::remote::macos_notify` for why.
