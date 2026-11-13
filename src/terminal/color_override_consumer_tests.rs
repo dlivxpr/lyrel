@@ -50,6 +50,40 @@ fn color_override(
     colors
 }
 
+fn color_painted_blank_background(
+    window: gpui_kit::AnyWindowHandle,
+    view: &Entity<TerminalView>,
+    cx: &mut TestAppContext,
+) -> Option<(u8, u8, u8)> {
+    window
+        .update(cx, |_, window, cx| {
+            let geom = view.read(cx).cell_geom.expect("production frame");
+            let sample = point(
+                geom.origin.x + geom.cell_width * (geom.cols as f32 - 0.5),
+                geom.origin.y + geom.line_height * (geom.rows as f32 - 0.5),
+            );
+            let scale = window.scale_factor();
+            window
+                .painted_quads()
+                .iter()
+                .filter_map(|quad| {
+                    let bounds = quad.bounds.map(|pixel| px(pixel.0 / scale));
+                    (bounds.origin.x <= sample.x
+                        && sample.x < bounds.origin.x + bounds.size.width
+                        && bounds.origin.y <= sample.y
+                        && sample.y < bounds.origin.y + bounds.size.height)
+                        .then(|| quad.background.as_solid())
+                        .flatten()
+                })
+                .last()
+                .map(|color| {
+                    let color = crate::terminal::palette::hsla_to_rgb(color);
+                    (color.r, color.g, color.b)
+                })
+        })
+        .unwrap()
+}
+
 #[gpui_kit::test]
 fn color_overrides_change_production_paint_and_queries(cx: &mut TestAppContext) {
     use gpui_kit::test::TestWindowExt as _;
@@ -110,8 +144,7 @@ fn color_overrides_change_production_paint_and_queries(cx: &mut TestAppContext) 
                 .lock()
                 .unwrap_or_else(|poison| poison.into_inner());
             colors.get(1) == Some([0x11, 0x22, 0x33])
-                && colors.get(lyrel_core::core::pane_colors::DEFAULT_FG)
-                    == Some([0x0a, 0x0b, 0x0c])
+                && colors.get(lyrel_core::core::pane_colors::DEFAULT_FG) == Some([0x0a, 0x0b, 0x0c])
         })
     });
 
@@ -159,6 +192,11 @@ fn color_overrides_change_production_paint_and_queries(cx: &mut TestAppContext) 
             (0x10, 0x11, 0x12)
         );
     });
+    assert_eq!(
+        color_painted_blank_background(window, &view, cx),
+        Some((0x10, 0x11, 0x12)),
+        "OSC 11 must paint the blank terminal surface, not only change query replies and cell metadata"
+    );
 
     // A theme switch updates only the slots the pane did not override.
     cx.update(|cx| {
@@ -258,14 +296,15 @@ fn color_overrides_change_production_paint_and_queries(cx: &mut TestAppContext) 
 
     // Held frame: a set and its query inside BSU answer correctly but do not
     // publish the unfinished frame; ending the hold paints it whole.
+    let held_background = color_painted_blank_background(window, &view, cx);
     theme_fixture_send(
         &daemon,
         pane,
         8,
-        b"\x1b[?2026h\x1b[13;1Hheld\x1b]4;1;?\x07",
+        b"\x1b[?2026h\x1b[13;1Hheld\x1b]11;#202122\x07\x1b]11;?\x07",
         1,
     );
-    theme_wait_result(&mut observer, cx, 8, b"\x1b]4;1;rgb:ffff/5555/5555\x07");
+    theme_wait_result(&mut observer, cx, 8, b"\x1b]11;rgb:2020/2121/2222\x07");
     window
         .update(cx, |_, window, cx| {
             window.refresh();
@@ -278,12 +317,23 @@ fn color_overrides_change_production_paint_and_queries(cx: &mut TestAppContext) 
             "a colour reply must not publish an unfinished synchronized frame"
         );
     });
+    assert_eq!(
+        color_painted_blank_background(window, &view, cx),
+        held_background,
+        "a live OSC 11 reply must not recolor the committed surface inside an unfinished frame"
+    );
     theme_fixture_send(&daemon, pane, 9, b"\x1b[?2026l", 0);
     theme_wait_result(&mut observer, cx, 9, b"");
     graphics_assert_production_paint(window, &view, cx);
     assert!(
-        view.read_with(cx, |view, _| sync_presented_row(view, 12).starts_with("held")),
+        view.read_with(cx, |view, _| sync_presented_row(view, 12)
+            .starts_with("held")),
         "the finished frame paints whole"
+    );
+    assert_eq!(
+        color_painted_blank_background(window, &view, cx),
+        Some((0x20, 0x21, 0x22)),
+        "the completed frame paints its accepted background together with its text"
     );
 
     graphics_recovery_destroy(view, window, cx);

@@ -475,6 +475,10 @@ impl TerminalElement {
                 self.flag_search_matches(buf, rows, cols, display_offset, live_origin, cx);
             return Ok(GridSnapshot {
                 cursor,
+                background_override: colors
+                    .overrides
+                    .get(lyrel_core::core::pane_colors::DEFAULT_BG)
+                    .map(|_| colors.default_bg),
                 sliver,
                 any_selected,
                 selection_is_lines,

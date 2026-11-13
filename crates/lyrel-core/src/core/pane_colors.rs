@@ -343,14 +343,16 @@ mod tests {
                 .any(|op| matches!(op, ColorOp::Reset { index } if *index < INDEXED_SLOTS as u16)),
             "a wholesale clear must not be spelled as 256 resets"
         );
+        let frame = ColorFrame::decode(&ColorFrame::delta(ops).encode())
+            .expect("the indexed reset has a valid wire representation");
+        let mut restored = after;
+        frame.apply(&mut restored);
         assert_eq!(
-            ops.last(),
-            Some(&ColorOp::Set {
-                index: DEFAULT_BG,
-                rgb: rgb(3, 3, 3)
-            }),
-            "the named defaults are not part of OSC 104"
+            restored.get(DEFAULT_BG),
+            Some(rgb(3, 3, 3)),
+            "OSC 104 must preserve the receiver's unchanged named defaults"
         );
+        assert_eq!(restored, cleared);
     }
 
     #[test]

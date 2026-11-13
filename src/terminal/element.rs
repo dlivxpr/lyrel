@@ -210,6 +210,9 @@ pub(super) enum SnapshotUnavailable {
 #[derive(Default)]
 pub(super) struct GridSnapshot {
     cursor: Option<GridCursor>,
+    // None preserves the window material; an OSC 11 override belongs to the
+    // committed picture, so synchronized/contended repaints cannot leak it.
+    background_override: Option<Hsla>,
     sliver: Option<Vec<RenderCell>>,
     pub(super) any_selected: bool,
     pub(super) selection_is_lines: bool,
@@ -726,6 +729,9 @@ impl Element for TerminalElement {
         });
 
         window.with_content_mask(Some(ContentMask { bounds }), |window| {
+            if let Some(background) = snap.background_override {
+                window.paint_quad(fill(bounds, background));
+            }
             paint_images(window, cx, i64::from(i32::MIN)..below_background);
             paint_backgrounds(window, &geom, &buf);
             if snap.any_selected {
