@@ -28,6 +28,7 @@ pub mod palette;
 pub(crate) mod pane_liveness;
 pub(crate) mod parked_cursor;
 mod paste;
+mod pointer;
 mod presentation;
 mod prompt_input;
 pub(crate) mod prompt_reflow;

@@ -15,6 +15,10 @@ pub(super) struct ParsePresentation {
     pub(super) keyboard_generation: u64,
     pub(super) resize_revision: u64,
     pub(super) resize_images_revision: u64,
+    /// This pane's application-claimed pointer shape (OSC 22), kept at the
+    /// paint-seam facts the frame already reads. `None` is "no application
+    /// owns the pointer": the terminal's own policy applies.
+    pub(super) pointer: Option<gpui_kit::CursorStyle>,
     tab_stops: Vec<bool>,
 }
 
@@ -26,10 +30,20 @@ impl ParsePresentation {
             keyboard_generation: 0,
             resize_revision: 0,
             resize_images_revision: 0,
+            pointer: None,
             tab_stops: Vec::new(),
         };
         facts.resize(cols);
         facts
+    }
+
+    /// Records this pane's application pointer claim (OSC 22). Returns
+    /// whether the visible claim changed — a same-shape or already-released
+    /// release owes no repaint.
+    pub(super) fn set_pointer(&mut self, pointer: Option<gpui_kit::CursorStyle>) -> bool {
+        let changed = self.pointer != pointer;
+        self.pointer = pointer;
+        changed
     }
 
     /// Destructive VT transitions are recorded while parsing, including an

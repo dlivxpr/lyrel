@@ -11,10 +11,15 @@
 
 - #259：`rio-vt`／`rio-graphics`／`rio-unicode` 原子升级到正式 registry 的精确 `=0.5.30`，同步锁定传递 `rio-grapheme-width 0.5.30`；适配 `glyph_register` 新增的 §8.5 `GlyphLayout` 参数，注册解析默认沿用协议默认布局，本票不启用 Glyph Protocol 能力。保留关闭 VT 默认 features、原 PTY／daemon 和无 GPUI 的共享核心；完整构建、回归、原生与远端验收结果按候选实际执行记录，未执行项不记为通过。
 
+### 新增
+
+- #262：终端内容区支持 OSC 22 基本指针 set/reset（含空名称释放），按实际 GPUI／平台形状映射并安全回退；保留工作台菜单／分屏拖动、本地文字选择和链接操作优先级，命令结束、提示符、reset、断连与链接退休清理旧覆盖。不增加指针堆栈／查询或终端身份伪装；新增真实 PTY／daemon／生产交互消费者、确定性 reader 边界回归和可复现原生场景。测试平台的绘制策略与操作断言不替代原生指针、macOS 或真实 SSH 验收。
+
 ### 修复
 
 - #264：将 Kitty 事件类型协商接入真实 GPUI press／repeat／release 路由，CSI-u、方向键和功能键使用真实 held／keyup 信息；只为实际写入 PTY 的按下配对释放，并在焦点、窗口失活、切屏、模式／命令边界、退出和重连时退役旧配对。有效模式栈、查询与 replay 统一过滤框架缺失的 alternate-key 位，保留 legacy 输入及 ConPTY 已合成的 Enter／Ctrl+J 事件对；IME 预编辑不取得配对，支持关联文本的纯文本提交使用 key code `0`。补充生产输入、真实 PTY／daemon 和精确字节消费者；Windows 实窗、系统中文 IME、真实 SSH 与 macOS 原生验收分别记录，不能由 headless 事件测试代替。
 
+- #260：终端 `OSC 4/10/11/12` 查询与生产绘制统一使用当前主题的有效 ANSI、默认前景／背景和光标颜色，保留固定扩展色位、亮色可读性、同步输出提交与历史重放副作用抑制；不启用程序驱动动态改色。Windows 独立 target 的真实 PTY → daemon → 生产终端颜色消费者完成有效 RED／GREEN，既有查询重放消费者与四项调色板边界测试通过，均无忽略项；新增 `scripts/terminal-color-query-scene.mjs` 对照入口。原生像素、WSL／真实 SSH 与 macOS 未在本票分支验收，不以返回值或 headless 绘制断言替代。
 - 修复 Markdown 图片后台加载错误的本地化：worker 保留错误类别，回到 UI 线程后才翻译，避免中文界面混入英文 SVG／容量／重定向提示；资源消费者显式覆盖中文界面，保留外部引用拒绝和禁止重定向断言。
 - 修复智能体输出时上滚再下滑出现已消失输入栏的阅读态残影；Markdown 所见即所得编辑器支持 Ctrl/Cmd+F 查找与替换，宽表按页面宽度折行且不再溢出，Markdown 与代码编辑器提供常显水平滚动条；代码编辑器状态栏移入文档面板底部、与全局状态栏并存；原生 SSH 窗格通过远端进程表显示当前 shell 进程树；应用 Toast 与连接提示统一到右下角、全局状态栏上方。
 
