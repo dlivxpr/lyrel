@@ -58,16 +58,23 @@ fn command(outcome: GlyphOutcome) -> (bool, Option<Vec<u8>>) {
     match outcome {
         GlyphOutcome::Pass { forward, reply } => (forward, reply),
         GlyphOutcome::Ignore => (false, None),
-        GlyphOutcome::Query { .. } => panic!("expected a register/clear outcome"),
+        GlyphOutcome::Query { .. } | GlyphOutcome::Support => {
+            panic!("expected a register/clear outcome")
+        }
     }
 }
 
 #[test]
-fn support_stays_silent_and_is_not_forwarded() {
+fn support_defers_to_the_controllers_render_opt_in() {
     let mut session = GlyphSession::new();
-    let (pass, reply) = command(session.handle(b"25a1;s", false, false));
-    assert!(!pass);
-    assert!(reply.is_none(), "this slice does not advertise fmt=glyf");
+    // `s` reaches the reader as a dedicated outcome: the session cannot name
+    // `fmt=glyf` alone, and the daemon answers only when the current
+    // controller opted in to the complete monochrome contract. Neither a
+    // forwarded body nor a self-authored reply leaves the session.
+    assert!(matches!(
+        session.handle(b"25a1;s", false, false),
+        GlyphOutcome::Support
+    ));
 }
 
 #[test]

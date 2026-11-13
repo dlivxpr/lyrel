@@ -184,6 +184,9 @@ pub(super) struct Subscriptions {
     subscriber_colors: bool,
     /// The controller negotiated the retained glyph projection.
     subscriber_glyphs: bool,
+    /// The controller asserted it renders the complete monochrome contract;
+    /// the only credential that lets the pane answer `s` with `fmt=glyf`.
+    subscriber_glyph_render: bool,
     observers: Vec<Observer>,
     observer_seq: u64,
     allow_remote_clipboard_write: bool,
@@ -211,6 +214,7 @@ impl Subscriptions {
             subscriber_epoch: 0,
             subscriber_colors: false,
             subscriber_glyphs: false,
+            subscriber_glyph_render: false,
             observers: Vec::new(),
             observer_seq: 0,
             allow_remote_clipboard_write: allow_clipboard,
@@ -276,6 +280,15 @@ impl Subscriptions {
     /// receive `GlyphQuery` either, because its decoder has no arm for it.
     pub(super) fn controller_accepts_glyph_state(&self) -> bool {
         self.subscriber.is_some() && self.subscriber_glyphs
+    }
+
+    /// The `s` reply names real capability, not protocol literacy: the
+    /// current controller has to both decode the projection and declare the
+    /// complete monochrome render contract. An older client that subscribed
+    /// to state alone — or no controller at all — leaves `s` silent rather
+    /// than seeing `fmt=glyf` advertised for pixels nothing paints.
+    pub(super) fn controller_renders_glyphs(&self) -> bool {
+        self.subscriber.is_some() && self.subscriber_glyphs && self.subscriber_glyph_render
     }
 
     // Ownership checks intentionally retain the existing epoch-only semantics.
@@ -375,6 +388,7 @@ impl Subscriptions {
         self.subscriber = None;
         self.subscriber_colors = false;
         self.subscriber_glyphs = false;
+        self.subscriber_glyph_render = false;
         self.subscriber_epoch += 1;
         self.observers.clear();
     }
@@ -471,6 +485,7 @@ impl Subscriptions {
         foreground: bool,
         pane_colors: bool,
         glyph_state: bool,
+        glyph_render: bool,
     ) -> u64 {
         let subscriber = subscriber.into();
         self.subscriber_epoch += 1;
@@ -478,6 +493,7 @@ impl Subscriptions {
             self.clipboard_write_from_spec.unwrap_or(allow_clipboard);
         self.subscriber_colors = pane_colors;
         self.subscriber_glyphs = glyph_state;
+        self.subscriber_glyph_render = glyph_render;
         gate.reset();
         let epoch = self.subscriber_epoch;
         let (queued, complete) = replay_state(
@@ -495,6 +511,7 @@ impl Subscriptions {
             self.subscriber = None;
             self.subscriber_colors = false;
             self.subscriber_glyphs = false;
+            self.subscriber_glyph_render = false;
             self.subscriber_epoch += 1;
         }
         self.prune_viewports(graphics);
@@ -545,6 +562,7 @@ impl Subscriptions {
         foreground: bool,
         pane_colors: bool,
         glyph_state: bool,
+        glyph_render: bool,
     ) -> Result<Option<u64>, String> {
         self.publish_evictions(graphics, gate);
         if !admission.activate(&self.admission, graphics)? {
@@ -559,6 +577,7 @@ impl Subscriptions {
             foreground,
             pane_colors,
             glyph_state,
+            glyph_render,
         );
         if self.controller_epoch() != Some(epoch) {
             return Err("Graphics replay failed".into());
@@ -609,6 +628,7 @@ impl Subscriptions {
             self.subscriber = None;
             self.subscriber_colors = false;
             self.subscriber_glyphs = false;
+            self.subscriber_glyph_render = false;
             self.prune_viewports(graphics);
             self.allow_remote_clipboard_write = self.clipboard_write_from_spec.unwrap_or(false);
             gate.reset();

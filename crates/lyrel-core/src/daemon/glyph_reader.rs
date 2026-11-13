@@ -40,6 +40,23 @@ pub(super) fn consume(
             }
         }
         GlyphOutcome::Query { cp, glossary } => request_query(state, cp, glossary),
+        GlyphOutcome::Support => {
+            // The `s` probe advertises only what the current controller can
+            // actually paint. The daemon is the single reply writer, and the
+            // answer names `fmt=glyf` — never a colour format — only when the
+            // controller opted in to the complete monochrome contract. A
+            // state-only or detached controller keeps the probe silent, which
+            // is the protocol's truthful "unsupported" before the producer's
+            // DA1 sentinel, not a fabricated yes.
+            if state
+                .lock()
+                .unwrap()
+                .subscriptions
+                .controller_renders_glyphs()
+            {
+                write_graphics_reply(writer, b"\x1b_25a1;s;fmt=glyf\x1b\\");
+            }
+        }
     }
 }
 
@@ -89,6 +106,28 @@ mod tests {
             false,
             false,
             false,
+            // Glyph state — the controller may receive `GlyphQuery` frames —
+            // and no render opt-in. Query tests bind the state credential
+            // only; support probes attach through `pane_with_renderer`.
+            true,
+            false,
+        );
+        (Arc::new(Mutex::new(pane)), rx)
+    }
+
+    /// A controller that opted in to both the state credential and the
+    /// complete monochrome render contract — the `s` probe's reply gate.
+    fn pane_with_renderer() -> (Arc<Mutex<PaneState>>, mpsc::Receiver<DaemonMsg>) {
+        let mut pane = test_support::test_state(true);
+        let (tx, rx) = mpsc::channel();
+        attach_subscriber_with_features(
+            &mut pane,
+            tx,
+            &OutputGate::new(),
+            false,
+            false,
+            false,
+            true,
             true,
         );
         (Arc::new(Mutex::new(pane)), rx)
@@ -170,6 +209,37 @@ mod tests {
         );
         assert_eq!(state.lock().unwrap().glyph_queries.len(), 1);
     }
+
+    #[test]
+    fn a_support_probe_answers_only_for_a_rendering_controller() {
+        // The render opt-in answers `fmt=glyf`; the daemon writes it to the
+        // PTY input side so the producer reads it in stream order.
+        let (state, _rx) = pane_with_renderer();
+        let gate = OutputGate::new();
+        let (writer, bytes) = test_support::capture_writer();
+        consume(&state, &gate, &writer, b"25a1;s", false, false);
+        assert_eq!(
+            bytes.lock().unwrap().as_slice(),
+            b"\x1b_25a1;s;fmt=glyf\x1b\\",
+            "a rendering controller earns the truthful glyf reply"
+        );
+    }
+
+    #[test]
+    fn a_state_only_controller_keeps_the_support_probe_silent() {
+        // A controller that subscribes to glyph state but never opted in to
+        // rendering is exactly the pre-v1.12 peer: it understands `GlyphQuery`
+        // and `GlyphState` frames yet cannot paint registered outlines, so
+        // the daemon must not advertise `fmt=glyf` to it.
+        let (state, _rx) = pane_with_controller();
+        let gate = OutputGate::new();
+        let (writer, bytes) = test_support::capture_writer();
+        consume(&state, &gate, &writer, b"25a1;s", false, false);
+        assert!(
+            bytes.lock().unwrap().is_empty(),
+            "a state-only controller keeps the support reply silent"
+        );
+    }
 }
 
 #[cfg(test)]
@@ -190,6 +260,7 @@ mod pipeline_tests {
             false,
             false,
             true,
+            false,
         );
         let state = Arc::new(Mutex::new(pane));
         let gate = OutputGate::new();

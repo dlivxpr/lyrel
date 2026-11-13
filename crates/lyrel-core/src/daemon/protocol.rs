@@ -195,6 +195,17 @@ pub const FEATURE_GLYPH_REGISTRY: &str = "glyph-registry";
 /// both messages are additive and gated on this feature.
 pub const FEATURE_GLYPH_STATE: &str = "glyph-state";
 
+/// The daemon can answer the Glyph Protocol `s` probe with `fmt=glyf`, but
+/// only for a pane whose current controller opted in with
+/// `ClientMsg::SubscribeGlyphRender`: the renderer has to keep the whole
+/// monochrome v1.12 contract the advertisement promises, so a client that
+/// merely decodes the projection — or a build that predates it — must never
+/// be described as supported. A client that does not see this feature leaves
+/// the opt-in unsent, and an `s` probe on such a pane stays silent, which is
+/// the truthful "unsupported" answer. The pane protocol version is unchanged:
+/// the message is additive and gated on this feature.
+pub const FEATURE_GLYPH_SUPPORT: &str = "glyph-support";
+
 /// The daemon keeps an authoritative, bounded pane-local colour override layer
 /// and projects it to a consumer that opts in with
 /// `ClientMsg::SubscribePaneColors`. Without this feature a client leaves the
@@ -226,6 +237,7 @@ impl DaemonVersion {
             FEATURE_AGENT_STATE_AGE.to_string(),
             FEATURE_GLYPH_REGISTRY.to_string(),
             FEATURE_GLYPH_STATE.to_string(),
+            FEATURE_GLYPH_SUPPORT.to_string(),
             FEATURE_PANE_COLORS.to_string(),
             FEATURE_XTGETTCAP_OWNER.to_string(),
             FEATURE_STATIC_SIXEL.to_string(),
@@ -249,8 +261,21 @@ impl DaemonVersion {
 /// Negotiate on a fresh pane stream, after any routing prefix and before opening
 /// a session. The caller supplies its read deadline. Diagnostic Version probes
 /// remain separate; an older server can answer this probe and be refused before
-/// it is sent a Spawn/Attach request.
+/// it is sent a Spawn/Attach request. Non-rendering streams (CLI, observer,
+/// diagnostics) use this; they never claim they can paint `fmt=glyf`.
 pub fn negotiate_pane<S: Read + Write>(stream: &mut S) -> io::Result<DaemonVersion> {
+    negotiate_pane_rendering(stream, false)
+}
+
+/// Negotiate as a controller that renders the complete monochrome v1.12
+/// contract. Only a rendering GUI consumer calls this variant with
+/// `renders_glyphs`; a CLI or observational stream keeps `negotiate_pane` and
+/// never claims it can paint `fmt=glyf`, so the daemon never advertises `s`
+/// support it cannot honour.
+pub fn negotiate_pane_rendering<S: Read + Write>(
+    stream: &mut S,
+    renders_glyphs: bool,
+) -> io::Result<DaemonVersion> {
     ClientMsg::Negotiate {
         protocol: PROTOCOL_VERSION,
     }
@@ -277,6 +302,15 @@ pub fn negotiate_pane<S: Read + Write>(stream: &mut S) -> io::Result<DaemonVersi
             // could never send this message or receive the frame kind.
             if version.has_feature(FEATURE_GLYPH_STATE) {
                 ClientMsg::SubscribeGlyphState.encode(stream)?;
+                stream.flush()?;
+            }
+            // A rendering controller additionally asserts the complete
+            // monochrome-render contract so the pane may answer `s` with
+            // `fmt=glyf`. `renders_glyphs` is a caller credential, not a
+            // default: `negotiate_pane` leaves it false, and a daemon that
+            // never advertises the feature is never sent this message.
+            if renders_glyphs && version.has_feature(FEATURE_GLYPH_SUPPORT) {
+                ClientMsg::SubscribeGlyphRender.encode(stream)?;
                 stream.flush()?;
             }
             // Every session consumer, including CLI and routed clients, starts
@@ -1102,6 +1136,16 @@ pub enum ClientMsg {
     /// before Spawn/Attach/Observe. A peer that never sends this keeps its old
     /// stream: it is not sent a kind its decoder cannot read.
     SubscribeGlyphState,
+    /// Assert that this client is a rendering controller for the complete
+    /// monochrome v1.12 contract: it decodes the retained projection (which
+    /// still requires `SubscribeGlyphState`), applies the accepted `r`/`c`
+    /// bodies the daemon re-emits, and answers `q` from its real font stack.
+    /// Sent only after the peer advertised `FEATURE_GLYPH_SUPPORT`, before
+    /// Spawn/Attach/Observe. It binds at attach: an observer or a later
+    /// replacement controller that never sent it does not turn the pane's `s`
+    /// answer on. A peer that never sends this keeps its old stream and never
+    /// sees `fmt=glyf` advertised for the pane it controls.
+    SubscribeGlyphRender,
     /// Finite authority-side allowance, with optional per-resource grants from
     /// a rendering consumer's shared source and decoded-memory budgets.
     GraphicsCapacity {
@@ -1388,6 +1432,9 @@ mod kind {
     /// Daemon -> opted-in consumer: a bounded full glossary snapshot after the
     /// replayed text. Never sent to a peer that did not opt in.
     pub const GLYPH_STATE: u8 = 73;
+    /// Client -> daemon: the controller's full monochrome-render opt-in; the
+    /// only credential that lets the pane answer `s` with `fmt=glyf`.
+    pub const SUBSCRIBE_GLYPH_RENDER: u8 = 74;
     pub const DETACH: u8 = 5;
     pub const KILL: u8 = 6;
     pub const LIST: u8 = 7;
@@ -1609,6 +1656,7 @@ impl ClientMsg {
             ClientMsg::Negotiate { protocol } => write_frame(w, kind::VERSION, &to_json(protocol)?),
             ClientMsg::SubscribePaneColors => write_frame(w, kind::SUBSCRIBE_PANE_COLORS, &[]),
             ClientMsg::SubscribeGlyphState => write_frame(w, kind::SUBSCRIBE_GLYPH_STATE, &[]),
+            ClientMsg::SubscribeGlyphRender => write_frame(w, kind::SUBSCRIBE_GLYPH_RENDER, &[]),
             ClientMsg::Spawn {
                 cwd,
                 size,
@@ -1767,6 +1815,7 @@ impl ClientMsg {
             },
             kind::SUBSCRIBE_PANE_COLORS => ClientMsg::SubscribePaneColors,
             kind::SUBSCRIBE_GLYPH_STATE => ClientMsg::SubscribeGlyphState,
+            kind::SUBSCRIBE_GLYPH_RENDER => ClientMsg::SubscribeGlyphRender,
             kind::SPAWN => {
                 let (cwd, size) = from_json(&payload)?;
                 ClientMsg::Spawn {

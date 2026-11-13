@@ -13,9 +13,13 @@
 //! stripped. `q` is answered by the daemon from the controller's actual font
 //! coverage plus the registry bit captured at the request's stream position.
 //!
-//! This is the first monochrome slice: `s` stays silent until the follow-on
-//! layout, restoration, retained-frame and full-client gates pass, so the
-//! support-negotiation path never claims more than this build renders.
+//! Accepted `r`/`c` bodies are re-emitted into the ordered output stream so a
+//! rendering consumer derives its picture from the daemon's decision, not from
+//! its own parse of the producer's bytes. Rejected or malformed bodies are
+//! stripped. `q` is answered by the daemon from the controller's actual font
+//! coverage plus the registry bit captured at the request's stream position,
+//! and `s` reaches the reader as a dedicated outcome because the answer has to
+//! name only what the current controller actually renders.
 
 use std::collections::{HashSet, VecDeque};
 
@@ -63,6 +67,10 @@ pub(crate) enum GlyphOutcome {
     /// coverage and writes the single reply itself. `glossary` is the registry
     /// bit at the request's stream position.
     Query { cp: u32, glossary: bool },
+    /// The `s` probe: the reader checks the current controller's monochrome
+    /// render opt-in before answering `fmt=glyf`; without that opt-in the
+    /// probe stays silent, which is the protocol's honest "unsupported".
+    Support,
 }
 
 /// One accepted registration as the ring-independent projection carries it.
@@ -371,9 +379,10 @@ impl GlyphSession {
         }
         match glyph_protocol::parse(body) {
             Ok(GlyphCommand::Support) => {
-                // This slice does not advertise `fmt=glyf`: the follow-on
-                // layout/restoration/retained/full-client gates are not met.
-                GlyphOutcome::Ignore
+                // The session cannot decide this alone: the reply may only
+                // name `fmt=glyf` when the current controller opted in to
+                // rendering the complete monochrome contract.
+                GlyphOutcome::Support
             }
             Ok(GlyphCommand::Query { cp }) => GlyphOutcome::Query {
                 cp,

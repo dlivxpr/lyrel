@@ -853,6 +853,7 @@ fn handle_conn(stream: Stream, registry: Arc<Registry>) -> anyhow::Result<()> {
     let mut graphics_capacity = None;
     let mut pane_colors = false;
     let mut glyph_state = false;
+    let mut glyph_render = false;
     loop {
         match first {
             ClientMsg::GraphicsCapacity {
@@ -886,6 +887,17 @@ fn handle_conn(stream: Stream, registry: Arc<Registry>) -> anyhow::Result<()> {
                     return Ok(());
                 }
                 glyph_state = true;
+                first = ClientMsg::read(&mut read_stream)?;
+            }
+            ClientMsg::SubscribeGlyphRender => {
+                if !negotiated {
+                    DaemonMsg::Error(
+                        "pane protocol handshake required before glyph render opt-in".into(),
+                    )
+                    .encode(&mut &write_stream)?;
+                    return Ok(());
+                }
+                glyph_render = true;
                 first = ClientMsg::read(&mut read_stream)?;
             }
             other => {
@@ -1001,6 +1013,7 @@ fn handle_conn(stream: Stream, registry: Arc<Registry>) -> anyhow::Result<()> {
                 graphics_offers.then_some(_graphics_lease.endpoint()),
                 pane_colors,
                 glyph_state,
+                glyph_render,
             )
         }
 
@@ -1057,6 +1070,7 @@ fn handle_conn(stream: Stream, registry: Arc<Registry>) -> anyhow::Result<()> {
                 graphics_offers.then_some(_graphics_lease.endpoint()),
                 pane_colors,
                 glyph_state,
+                glyph_render,
             )
         }
 
@@ -1084,6 +1098,7 @@ fn handle_conn(stream: Stream, registry: Arc<Registry>) -> anyhow::Result<()> {
                     graphics_offers.then_some(_graphics_lease.endpoint()),
                     pane_colors,
                     glyph_state,
+                    glyph_render,
                 )
             }
             None => {
@@ -1433,6 +1448,7 @@ fn publish_spawn_with_glyphs(
     graphics_endpoint: Option<u64>,
     pane_colors: bool,
     glyph_state: bool,
+    glyph_render: bool,
 ) -> anyhow::Result<()> {
     let id = pane.id;
     let mut claim = UnclaimedSpawn {
@@ -1460,6 +1476,7 @@ fn publish_spawn_with_glyphs(
             Some(claim),
             pane_colors,
             glyph_state,
+            glyph_render,
         );
     }
     // Attach the subscriber before publishing. If a short-lived child already
@@ -1472,6 +1489,7 @@ fn publish_spawn_with_glyphs(
         allow_remote_clipboard_write,
         pane_colors,
         glyph_state,
+        glyph_render,
     );
     if pane.alive() {
         registry.insert(pane.clone());
@@ -1506,6 +1524,7 @@ fn publish_spawn(
         graphics_endpoint,
         pane_colors,
         false,
+        false,
     )
 }
 
@@ -1519,6 +1538,7 @@ fn stream_pane_with_attach(
     graphics_endpoint: Option<u64>,
     pane_colors: bool,
     glyph_state: bool,
+    glyph_render: bool,
 ) -> anyhow::Result<()> {
     if let Some(endpoint) = graphics_endpoint {
         return graphics_session::run(
@@ -1533,6 +1553,7 @@ fn stream_pane_with_attach(
             None,
             pane_colors,
             glyph_state,
+            glyph_render,
         );
     }
     let (tx, rx) = mpsc::channel::<DaemonMsg>();
@@ -1541,6 +1562,7 @@ fn stream_pane_with_attach(
         allow_remote_clipboard_write,
         pane_colors,
         glyph_state,
+        glyph_render,
     );
     run_stream(pane, id, epoch, rx, read_stream, write_stream, registry)
 }
@@ -1555,6 +1577,7 @@ fn stream_pane(
     graphics_endpoint: Option<u64>,
     pane_colors: bool,
     glyph_state: bool,
+    glyph_render: bool,
 ) -> anyhow::Result<()> {
     if let Some(endpoint) = graphics_endpoint {
         return graphics_session::run(
@@ -1569,6 +1592,7 @@ fn stream_pane(
             None,
             pane_colors,
             glyph_state,
+            glyph_render,
         );
     }
     let (tx, rx) = mpsc::channel::<DaemonMsg>();
@@ -1577,6 +1601,7 @@ fn stream_pane(
         allow_remote_clipboard_write,
         pane_colors,
         glyph_state,
+        glyph_render,
     );
     run_stream(pane, id, epoch, rx, read_stream, write_stream, registry)
 }
@@ -1638,6 +1663,9 @@ fn stream_observer(
             None,
             pane_colors,
             glyph_state,
+            // A read-only observer never becomes the controller that answers
+            // `s`; it keeps no render credential at all.
+            false,
         );
     }
     read_stream.set_read_timeout(Some(INPUT_RETIRE_WAIT))?;

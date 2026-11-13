@@ -523,6 +523,7 @@ impl DaemonPane {
             admission,
             pane_colors,
             false,
+            false,
         )
     }
 
@@ -533,6 +534,7 @@ impl DaemonPane {
         admission: GraphicsReplayAdmission,
         pane_colors: bool,
         glyph_state: bool,
+        glyph_render: bool,
     ) -> Result<Option<u64>, String> {
         let foreground = self.backend.foreground_command_running();
         let mut state = self.state.lock().unwrap();
@@ -550,6 +552,7 @@ impl DaemonPane {
             foreground,
             pane_colors,
             glyph_state,
+            glyph_render,
         )
     }
 
@@ -1150,6 +1153,7 @@ impl DaemonPane {
             allow_remote_clipboard_write,
             pane_colors,
             false,
+            false,
         )
     }
 
@@ -1159,6 +1163,7 @@ impl DaemonPane {
         allow_remote_clipboard_write: bool,
         pane_colors: bool,
         glyph_state: bool,
+        glyph_render: bool,
     ) -> u64 {
         // Asked before the state lock, not under it: the probe takes the pty
         // master's lock, and every other caller that holds both takes them in
@@ -1173,6 +1178,7 @@ impl DaemonPane {
             foreground_command,
             pane_colors,
             glyph_state,
+            glyph_render,
         );
         st.glyph_queries.clear();
         let nudge = redraw_nudge(
@@ -1738,6 +1744,7 @@ fn attach_subscriber_with_permissions(
         foreground_command,
         pane_colors,
         false,
+        false,
     )
 }
 
@@ -1749,6 +1756,7 @@ fn attach_subscriber_with_features(
     foreground_command: bool,
     pane_colors: bool,
     glyph_state: bool,
+    glyph_render: bool,
 ) -> u64 {
     let (subscriptions, graphics, replay) = st.subscription_parts();
     subscriptions.attach(
@@ -1760,6 +1768,7 @@ fn attach_subscriber_with_features(
         foreground_command,
         pane_colors,
         glyph_state,
+        glyph_render,
     )
 }
 

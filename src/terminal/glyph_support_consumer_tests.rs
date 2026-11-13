@@ -28,6 +28,7 @@ fn glyph_support_stream(daemon: &GraphicsDaemonProcess, pane: u64, glyph_render:
         .set_read_timeout(Some(std::time::Duration::from_secs(30)))
         .unwrap();
     let version = crate::daemon::protocol::negotiate_pane(&mut stream).unwrap();
+    eprintln!("[glyph-support-diag] negotiated features={:?}", version.features);
     if glyph_render && version.has_feature(GLYPH_SUPPORT_FEATURE) {
         // Raw frame: the kind is part of the same additive pane protocol, and
         // an endpoint without the feature never sees it.
@@ -54,6 +55,91 @@ fn glyph_support_stream(daemon: &GraphicsDaemonProcess, pane: u64, glyph_render:
     .encode(&mut stream)
     .unwrap();
     stream
+}
+
+/// Daemon-layer isolation: a controller attached with both glyph opt-ins must
+/// see the frontend-bound `GlyphQuery` frame when the producer writes `q`,
+/// and its `GlyphQueryResult` must come back through the PTY as the single
+/// composed reply. The `s` probe on the same pane must emit the `fmt=glyf`
+/// advertisement. This pins the server collect → credential → dispatch →
+/// reply chain without the production consumer's own answer plumbing.
+#[test]
+fn glyph_support_probe_reaches_the_opted_in_controller() {
+    use crate::daemon::protocol::DaemonMsg;
+
+    let daemon = GraphicsDaemonProcess::start();
+    let pane = daemon.spawn();
+    let mut stream = glyph_support_stream(&daemon, pane, true);
+    stream
+        .set_read_timeout(Some(std::time::Duration::from_secs(10)))
+        .unwrap();
+    let replies = tempfile::TempDir::new().unwrap();
+
+    // `q` is frontend-bound: dispatch arrives on this controller stream, and
+    // the fixture captures the reply the daemon writes for our answer.
+    let q_path = replies.path().join("q");
+    let request = format!(
+        "SEND_ANY 1 1 {} 0 {}\n",
+        graphics_pty_fixture::hex(b"\x1b_25a1;q;cp=100000\x1b\\"),
+        graphics_pty_fixture::hex(q_path.to_string_lossy().as_bytes())
+    );
+    daemon.panes().send_input(pane, request.as_bytes()).unwrap();
+
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    let (token, cp) = loop {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the daemon never framed the query to its opted-in controller"
+        );
+        match DaemonMsg::read(&mut stream) {
+            Ok(DaemonMsg::GlyphQuery { token, cp }) => break (token, cp),
+            Ok(_) => continue,
+            Err(error) => panic!("controller stream failed: {error}"),
+        }
+    };
+    assert_eq!(cp, 0x100000);
+    ClientMsg::GlyphQueryResult {
+        token,
+        cp,
+        system: false,
+    }
+    .encode(&mut stream)
+    .unwrap();
+
+    // `s` binds at attach; its reply is daemon-written and needs no
+    // controller, so it lands on the same capture path a real client reads.
+    let s_path = replies.path().join("s");
+    let request = format!(
+        "SEND_ANY 2 1 {} 0 {}\n",
+        graphics_pty_fixture::hex(b"\x1b_25a1;s\x1b\\"),
+        graphics_pty_fixture::hex(s_path.to_string_lossy().as_bytes())
+    );
+    daemon.panes().send_input(pane, request.as_bytes()).unwrap();
+
+    let wait_reply = |path: &std::path::Path| -> Vec<u8> {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        loop {
+            if let Ok(text) = std::fs::read_to_string(path) {
+                return graphics_pty_fixture::unhex(text.trim());
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "the pane never wrote a reply for {}",
+                path.display()
+            );
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+    };
+    assert_eq!(
+        wait_reply(&q_path),
+        b"\x1b_25a1;q;cp=100000;status=\x1b\\".to_vec(),
+        "the daemon must write the single composed `q` reply to the PTY"
+    );
+    assert_eq!(
+        wait_reply(&s_path),
+        b"\x1b_25a1;s;fmt=glyf\x1b\\".to_vec(),
+        "an opted-in controller must earn the `fmt=glyf` advertisement"
+    );
 }
 
 /// `glyph_send` for a request that yields more than one reply: the fixture
@@ -101,32 +187,13 @@ fn glyph_consumer_support_and_query_replies_precede_the_da1_sentinel(cx: &mut Te
     let (view, _window) =
         graphics_rooted_consumer(cx, pane, glyph_support_stream(&daemon, pane, true));
     let replies = tempfile::TempDir::new().unwrap();
-
-    // The pinned client writes `s` and `ESC [ c` together and accepts the
-    // protocol only when the format list beats the DA1 back.
+    // First prove the controller is bound: the `q` round trip requires the
+    // pane's current subscriber, so a `q`+DA1 pair that both answer shows the
+    // subscriber/glyph-state credentials took effect before the `s` probe.
     let parts = glyph_send_parts(
         &view,
         cx,
         1,
-        &replies.path().join("s_da1"),
-        b"\x1b_25a1;s\x1b\\\x1b[c",
-        2,
-    );
-    assert_eq!(
-        parts,
-        [
-            b"\x1b_25a1;s;fmt=glyf\x1b\\".to_vec(),
-            b"\x1b[?4;6c".to_vec()
-        ],
-        "the support reply must list only glyf and precede DA1"
-    );
-
-    // The confirmation `q` travels the controller's real font answer plus the
-    // daemon's registry bit — still ordered ahead of the same sentinel.
-    let parts = glyph_send_parts(
-        &view,
-        cx,
-        2,
         &replies.path().join("q_da1"),
         &[glyph_query(GLYPH_CP), b"\x1b[c".to_vec()].concat(),
         2,
@@ -145,6 +212,25 @@ fn glyph_consumer_support_and_query_replies_precede_the_da1_sentinel(cx: &mut Te
         parts[1],
         b"\x1b[?4;6c".to_vec(),
         "DA1 follows the query reply"
+    );
+
+    // The pinned client writes `s` and `ESC [ c` together and accepts the
+    // protocol only when the format list beats the DA1 back.
+    let parts = glyph_send_parts(
+        &view,
+        cx,
+        2,
+        &replies.path().join("s_da1"),
+        b"\x1b_25a1;s\x1b\\\x1b[c",
+        2,
+    );
+    assert_eq!(
+        parts,
+        [
+            b"\x1b_25a1;s;fmt=glyf\x1b\\".to_vec(),
+            b"\x1b[?4;6c".to_vec()
+        ],
+        "the support reply must list only glyf and precede DA1"
     );
 
     // Register the client's confirmation codepoint the way the pinned client

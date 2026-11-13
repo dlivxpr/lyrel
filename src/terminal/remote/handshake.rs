@@ -230,7 +230,9 @@ impl PaneHandshake {
         wait: std::time::Duration,
     ) -> anyhow::Result<DaemonVersion> {
         let _ = stream.set_read_timeout(Some(wait));
-        let result = crate::daemon::protocol::negotiate_pane(stream);
+        // This handshake produces a rendering GUI consumer: it asserts the
+        // complete monochrome contract so the pane may answer `s` truthfully.
+        let result = crate::daemon::protocol::negotiate_pane_rendering(stream, true);
         let _ = stream.set_read_timeout(None);
         Ok(result?)
     }

@@ -55,6 +55,7 @@ pub(super) fn run(
     mut claim: Option<UnclaimedSpawn>,
     pane_colors: bool,
     glyph_state: bool,
+    glyph_render: bool,
 ) -> anyhow::Result<()> {
     read_stream.set_read_timeout(Some(INPUT_RETIRE_WAIT))?;
     let broker = pane.graphics_admission_broker();
@@ -143,6 +144,7 @@ pub(super) fn run(
                         admission,
                         pane_colors,
                         glyph_state,
+                        glyph_render,
                     )?
                     .map(Attached::Controller)
                 }
