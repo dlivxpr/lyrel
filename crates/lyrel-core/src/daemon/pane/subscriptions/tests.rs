@@ -246,7 +246,7 @@ fn observers_are_told_the_pane_modes_as_well() {
     record_output(&mut st, &vec![b'.'; RING_CAP]);
 
     let (tx, rx) = mpsc::channel();
-    observe_subscriber(&mut st, tx, Arc::new(OutputGate::new()), false);
+    observe_subscriber(&mut st, tx, Arc::new(OutputGate::new()), false, false);
     assert!(matches!(rx.try_recv(), Ok(DaemonMsg::Snapshot(b)) if b == b"\x1b[?1049h"));
 }
 
@@ -276,7 +276,7 @@ fn observe_replays_state_without_displacing_the_controller() {
     drain(&controller_rx);
 
     let (observer_tx, observer_rx) = mpsc::channel();
-    let id = observe_subscriber(&mut st, observer_tx, Arc::new(OutputGate::new()), false);
+    let id = observe_subscriber(&mut st, observer_tx, Arc::new(OutputGate::new()), false, false);
     assert_eq!(
         st.subscriptions.subscriber_epoch, epoch,
         "observing must not bump the controller epoch"

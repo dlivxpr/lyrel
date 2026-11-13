@@ -64,17 +64,32 @@ impl TerminalView {
                 }
             }
             PaneEvent::ColorRequest(idx, fmt) => {
-                use crate::terminal::palette::{ActivePalette, hsla_to_rgb, query_color};
+                use crate::terminal::palette::{
+                    ActivePalette, effective, hsla_to_rgb, query_color,
+                };
+                let overrides = *self
+                    .terminal
+                    .color_overrides
+                    .lock()
+                    .unwrap_or_else(|poison| poison.into_inner());
+                let table = effective(
+                    &self.terminal.palette,
+                    cx.try_global::<ActivePalette>(),
+                    &overrides,
+                );
                 let theme = cx.theme();
                 let rgb = query_color(
                     idx,
-                    &self.terminal.palette,
-                    cx.try_global::<ActivePalette>(),
+                    &table,
+                    &overrides,
                     hsla_to_rgb(theme.foreground),
                     hsla_to_rgb(theme.background),
                     hsla_to_rgb(theme.caret),
                 );
                 self.terminal.write(fmt(rgb).into_bytes());
+            }
+            PaneEvent::ColorChanged => {
+                self.report_color_scheme_if_changed(cx);
             }
             PaneEvent::Bell => match cx.global::<Config>().bell {
                 BellMode::None => {}

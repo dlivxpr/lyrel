@@ -236,9 +236,32 @@ impl PaintColors {
         theme: &gpui_kit::component::Theme,
         cx: &gpui_kit::App,
     ) -> Self {
-        let default_fg = theme.foreground;
-        let default_bg = theme.background;
-        let caret = theme.caret;
+        Self::resolve_with(
+            theme,
+            lyrel_core::core::pane_colors::PaneColors::default(),
+            cx,
+        )
+    }
+
+    pub(in crate::terminal) fn resolve_with(
+        theme: &gpui_kit::component::Theme,
+        overrides: lyrel_core::core::pane_colors::PaneColors,
+        cx: &gpui_kit::App,
+    ) -> Self {
+        use lyrel_core::core::pane_colors::{CURSOR, DEFAULT_BG, DEFAULT_FG};
+        let rgb = crate::terminal::palette::rgb_color;
+        let (default_fg, fg_rgb) = match overrides.get(DEFAULT_FG) {
+            Some(overridden) => (to_hsla(rgb(overridden)), rgb(overridden)),
+            None => (theme.foreground, crate::terminal::palette::hsla_to_rgb(theme.foreground)),
+        };
+        let (default_bg, bg_rgb) = match overrides.get(DEFAULT_BG) {
+            Some(overridden) => (to_hsla(rgb(overridden)), rgb(overridden)),
+            None => (theme.background, crate::terminal::palette::hsla_to_rgb(theme.background)),
+        };
+        let caret = match overrides.get(CURSOR) {
+            Some(overridden) => to_hsla(rgb(overridden)),
+            None => theme.caret,
+        };
         let selection_bg = {
             let mut c = default_fg;
             c.a = 0.24;
@@ -250,8 +273,6 @@ impl PaintColors {
         // theme — on a white one the matches were all but invisible. How far
         // the wash may travel is the theme's to say (`match_wash_targets`),
         // since the glyph on top of it pays for every step.
-        let fg_rgb = crate::terminal::palette::hsla_to_rgb(default_fg);
-        let bg_rgb = crate::terminal::palette::hsla_to_rgb(default_bg);
         let bg_packed = pack_rgb(bg_rgb);
         let tint = match_tint(cx);
         let (hit_target, current_target) =
@@ -273,6 +294,7 @@ impl PaintColors {
             current_match_bg,
             fg_rgb,
             bg_rgb,
+            overrides,
             legible_dim: cx
                 .try_global::<Config>()
                 .is_none_or(|c| c.theme_legible_palette),
@@ -298,6 +320,7 @@ impl PaintColors {
             current_match_bg: blend_toward(self.current_match_bg, dim, under),
             fg_rgb: self.fg_rgb,
             bg_rgb: self.bg_rgb,
+            overrides: self.overrides,
             legible_dim: self.legible_dim,
         }
     }

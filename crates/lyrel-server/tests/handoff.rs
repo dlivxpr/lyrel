@@ -279,3 +279,67 @@ fn a_handoff_to_something_that_will_not_exec_leaves_the_daemon_serving() {
 
     session.kill().expect("kill the pane");
 }
+
+#[test]
+fn a_handoff_keeps_the_pane_colour_overrides() {
+    use lyrel_core::core::pane_colors::{ColorFrame, PaneColors};
+
+    let daemon = Daemon::start();
+    let panes = daemon.panes();
+    let mut session = panes
+        .spawn(None, size(), Some(interactive_shell()), None, None)
+        .expect("spawn an interactive pane");
+    let pane_id = session.pane_id();
+    session
+        .set_recv_timeout(Some(STREAM_WITHIN))
+        .expect("bound the stream reads");
+    session
+        .input(b"printf '\\033]4;1;#112233\\007\\033]11;#101112\\007'; echo lyrel_colors_set\r")
+        .expect("the shell takes input");
+    collect_until(&mut session, b"lyrel_colors_set");
+    drop(session);
+
+    panes
+        .hand_off(&Daemon::binary())
+        .expect("the daemon hands over");
+    daemon.await_ready();
+
+    let mut session = panes
+        .attach(pane_id, size())
+        .expect("the pane is still there under the same id");
+    session
+        .set_recv_timeout(Some(STREAM_WITHIN))
+        .expect("bound the stream reads");
+
+    let mut colors = None;
+    let mut saw_ring = false;
+    let deadline = Instant::now() + STREAM_WITHIN;
+    while colors.is_none() || !saw_ring {
+        assert!(
+            Instant::now() < deadline,
+            "the handoff replay never delivered the colour projection"
+        );
+        match session.recv().expect("the adopted pane answers") {
+            DaemonMsg::Colors(frame) => {
+                let frame = ColorFrame::decode(&frame).expect("decodable colour snapshot");
+                assert!(frame.is_snapshot(), "an attach carries a full snapshot");
+                let mut state = PaneColors::default();
+                frame.apply(&mut state);
+                colors = Some(state);
+            }
+            DaemonMsg::Snapshot(bytes) | DaemonMsg::Output(bytes) => {
+                saw_ring |= windows_contain(&bytes, b"lyrel_colors_set");
+            }
+            DaemonMsg::Exited { code } => panic!("pane exited after handoff: {code:?}"),
+            _ => {}
+        }
+    }
+    let colors = colors.expect("colour snapshot");
+    assert_eq!(colors.get(1), Some([0x11, 0x22, 0x33]));
+    assert_eq!(
+        colors.get(lyrel_core::core::pane_colors::DEFAULT_BG),
+        Some([0x10, 0x11, 0x12]),
+        "the same live shell keeps its decoded overrides across the exec"
+    );
+    session.kill().expect("kill the pane");
+}

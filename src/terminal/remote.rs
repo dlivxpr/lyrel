@@ -20,10 +20,10 @@ use crate::core::cli_agent::{AgentSessionState, AgentStatus, CLIAgent};
 use crate::core::config::CursorStyle as ConfigCursorStyle;
 use crate::core::osc::{Note, NoteBudget};
 use crate::daemon::protocol::{
-    AuthPromptKind, AuthResponse, ClientMsg, DaemonMsg, LoopbackForward, LoopbackForwardRequest,
-    ManagedForward, NativeSshSpec, PaneProcs, RemoteContext, RestoreFrom, SftpEntry,
-    SftpJobProgress, SftpOp, SftpOpResult, SftpTransferSpec, ShellSpec, SshForwardRule, SshPhase,
-    WinSize, WorkspaceOp, WorkspaceRequest,
+    AuthPromptKind, AuthResponse, ClientMsg, DaemonMsg, DaemonVersion, LoopbackForward,
+    LoopbackForwardRequest, ManagedForward, NativeSshSpec, PaneProcs, RemoteContext, RestoreFrom,
+    SftpEntry, SftpJobProgress, SftpOp, SftpOpResult, SftpTransferSpec, ShellSpec, SshForwardRule,
+    SshPhase, WinSize, WorkspaceOp, WorkspaceRequest,
 };
 use crate::daemon::transport::Stream;
 
@@ -75,6 +75,9 @@ pub enum PaneEvent {
         usize,
         Arc<dyn Fn(ColorRgb) -> String + Sync + Send + 'static>,
     ),
+    /// The pane's effective colour layer changed; the view re-evaluates the
+    /// dark/light report it owes a program that enabled DEC mode 2031.
+    ColorChanged,
     /// Terminal bell ring.
     Bell,
     /// Request to write the text area size, formatter attached.
@@ -92,6 +95,7 @@ impl std::fmt::Debug for PaneEvent {
             PaneEvent::ClipboardStore(ty, text) => write!(f, "ClipboardStore({ty:?}, {text})"),
             PaneEvent::ClipboardLoad(ty, _) => write!(f, "ClipboardLoad({ty:?})"),
             PaneEvent::ColorRequest(index, _) => write!(f, "ColorRequest({index})"),
+            PaneEvent::ColorChanged => write!(f, "ColorChanged"),
             PaneEvent::Bell => write!(f, "Bell"),
             PaneEvent::TextAreaSizeRequest(_) => write!(f, "TextAreaSizeRequest"),
         }
@@ -262,6 +266,9 @@ struct ReaderSignals {
     local_conpty: Arc<AtomicBool>,
     /// Whether the program in the pane switched on DEC mode 2031.
     color_scheme_updates: Arc<AtomicBool>,
+    /// The pane's effective colour layer: live output is folded in at its
+    /// exact stream position, and daemon projections converge it after replay.
+    colors: Arc<Mutex<lyrel_core::core::pane_colors::PaneColors>>,
 }
 
 /// What kind of pty is at the far end of a pane's link, which is what decides
@@ -537,6 +544,13 @@ pub struct RemoteTerminal {
     pub term: Arc<FairMutex<Crosswords<EventProxy>>>,
     pub events: smol::channel::Receiver<PaneEvent>,
     pub palette: [ColorRgb; 256],
+    /// Program-selected pane colours, updated in stream order by live parsing
+    /// and by the daemon's authoritative projections. Fixed-size and bounded.
+    pub color_overrides: Arc<Mutex<lyrel_core::core::pane_colors::PaneColors>>,
+    /// The backend this link actually negotiated with, when the handshake
+    /// recorded it. Kept so a routed pane reports the remote's guarantees, not
+    /// this build's.
+    pane_version: Option<DaemonVersion>,
     pub exited: bool,
     /// This link reattached to a pane that was already running rather than
     /// spawning a fresh one, so whatever it reports first — an agent in the
@@ -627,6 +641,20 @@ impl RemoteTerminal {
         cell_w: u16,
         cell_h: u16,
     ) -> anyhow::Result<()> {
+        self.adopt_relink_with_version(stream, buffered, route, size, cell_w, cell_h, None)
+    }
+
+    pub fn adopt_relink_with_version(
+        &mut self,
+        stream: Stream,
+        buffered: Vec<u8>,
+        route: &PaneRoute,
+        size: TermSize,
+        cell_w: u16,
+        cell_h: u16,
+        version: Option<DaemonVersion>,
+    ) -> anyhow::Result<()> {
+        self.pane_version = version;
         let signals = self.reader_signals(false);
         self.connection.adopt_relink(
             stream,
@@ -663,6 +691,7 @@ impl RemoteTerminal {
             clipboard_write_busy: self.clipboard_write_busy.clone(),
             local_conpty: self.local_conpty.clone(),
             color_scheme_updates: self.color_scheme_updates.clone(),
+            colors: self.color_overrides.clone(),
         }
     }
 
@@ -678,6 +707,7 @@ impl RemoteTerminal {
             PtySource::for_route(&PaneRoute::Local),
             true,
             crate::terminal::images::ImageStore::new(),
+            None,
         )
     }
 
@@ -706,6 +736,7 @@ impl RemoteTerminal {
             pty,
             false,
             crate::terminal::images::ImageStore::new(),
+            None,
         )
     }
 
@@ -722,6 +753,7 @@ impl RemoteTerminal {
         pty: PtySource,
         awaiting_replay: bool,
         images: crate::terminal::images::ImageStore,
+        version: Option<DaemonVersion>,
     ) -> anyhow::Result<Self> {
         let user_config = crate::core::config::Config::load();
         let (tx, rx) = smol::channel::unbounded();
@@ -756,6 +788,8 @@ impl RemoteTerminal {
 
         let local_conpty = Arc::new(AtomicBool::new(pty == PtySource::LocalConpty));
         let color_scheme_updates = Arc::new(AtomicBool::new(false));
+        let color_overrides =
+            Arc::new(Mutex::new(lyrel_core::core::pane_colors::PaneColors::default()));
         let connection = PaneConnection::start(
             stream,
             buffered,
@@ -782,6 +816,7 @@ impl RemoteTerminal {
                 clipboard_write_busy: clipboard_write_busy.clone(),
                 local_conpty: local_conpty.clone(),
                 color_scheme_updates: color_scheme_updates.clone(),
+                colors: color_overrides.clone(),
             },
         )?;
 
@@ -789,6 +824,8 @@ impl RemoteTerminal {
             term,
             events: rx,
             palette: super::palette::build(),
+            color_overrides,
+            pane_version: version,
             exited: false,
             reattached: awaiting_replay,
             cwd,
@@ -956,6 +993,13 @@ impl RemoteTerminal {
     /// See the field: an attach to a running pane, not a fresh spawn.
     pub fn reattached(&self) -> bool {
         self.reattached
+    }
+
+    /// The backend this pane's stream actually negotiated with. `None` only
+    /// for in-process test streams that never performed the handshake.
+    #[allow(dead_code)]
+    pub fn pane_version(&self) -> Option<&DaemonVersion> {
+        self.pane_version.as_ref()
     }
 
     pub fn at_prompt(&self) -> bool {

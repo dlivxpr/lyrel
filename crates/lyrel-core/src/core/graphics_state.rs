@@ -323,6 +323,7 @@ use rio_vt::event::{VoidListener, WindowId};
 use rio_vt::performer::handler::Processor;
 
 use super::kitty_graphics::{Action, Control, MAX_IMAGE_BYTES, response};
+use super::pane_colors::{ColorFrame, PaneColors};
 use super::terminal_resize::ResizeMode;
 use crate::daemon::protocol::WinSize;
 
@@ -517,6 +518,12 @@ pub struct GraphicsState {
     resize_mode: ResizeMode,
     term: Crosswords<VoidListener>,
     processor: Processor,
+    /// Program-selected colours, the authoritative override layer for this
+    /// pane session. `published_colors` is what the current controller (and
+    /// observers) last received, so a new consumer can be sent one bounded
+    /// snapshot and live changes are deltas against that.
+    colors: PaneColors,
+    published_colors: PaneColors,
     screen: u64,
     region: std::ops::Range<i32>,
     dirty: BTreeSet<u64>,
@@ -562,6 +569,8 @@ impl GraphicsState {
                 10_000,
             ),
             processor: Processor::default(),
+            colors: PaneColors::default(),
+            published_colors: PaneColors::default(),
             screen: 0,
             region: 0..i32::from(size.rows.max(1)),
             dirty: BTreeSet::new(),
@@ -1297,6 +1306,43 @@ impl GraphicsState {
             .checked_add(1)
             .expect("graphics identity exhausted");
         self.next_key
+    }
+
+    /// The pane's authoritative override layer. The theme owns every slot this
+    /// does not name; nothing here is a captured theme snapshot.
+    pub fn colors(&self) -> &PaneColors {
+        &self.colors
+    }
+
+    /// Restore an override layer carried across a live daemon handoff. Also
+    /// seeds the inner parser's colour table so both sides of this adapter
+    /// describe the same state.
+    pub fn restore_colors(&mut self, colors: PaneColors) {
+        for (index, rgb) in colors.iter_set() {
+            rio_vt::performer::handler::Handler::set_color(
+                self,
+                usize::from(index),
+                rio_vt::config::colors::ColorRgb {
+                    r: rgb[0],
+                    g: rgb[1],
+                    b: rgb[2],
+                },
+            );
+        }
+        self.colors = colors;
+        self.published_colors = colors;
+    }
+
+    /// The changes since the last consumer was told, or `None` when nothing
+    /// moved. Taking the delta advances the published baseline even when no
+    /// subscriber is attached: the next attach gets a full snapshot.
+    pub fn take_color_delta(&mut self) -> Option<ColorFrame> {
+        let ops = self.published_colors.diff(&self.colors);
+        if ops.is_empty() {
+            return None;
+        }
+        self.published_colors = self.colors;
+        Some(ColorFrame::delta(ops))
     }
 
     fn lookup(&self, control: &Control) -> Option<u64> {

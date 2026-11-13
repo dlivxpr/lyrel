@@ -97,6 +97,10 @@ struct PaneRecord {
     agent_session: Option<crate::core::cli_agent::AgentSessionState>,
     #[serde(default)]
     head_modes: Option<Vec<u8>>,
+    /// Program-selected colours, sparse and decoded. Absent in blobs written
+    /// by builds that predate the field; never written to disk.
+    #[serde(default)]
+    colors: Option<Vec<(u16, [u8; 3])>>,
     /// Length of this pane's ring in the data section, which follows the
     /// manifest in pane order.
     ring_len: u32,
@@ -246,6 +250,7 @@ fn stage(panes: &[Carried], next_pane_id: u64) -> std::io::Result<std::fs::File>
             agent_argv: pane.agent_argv.clone(),
             agent_session: pane.agent_session.clone(),
             head_modes: pane.head_modes.clone(),
+            colors: pane.colors.clone(),
             ring_len: encoded.len() as u32,
         });
         data.extend_from_slice(&encoded);
@@ -381,6 +386,7 @@ pub fn adopt(fd: RawFd) -> Option<Adopted> {
             agent_argv: record.agent.and(record.agent_argv),
             agent_session: record.agent.and(record.agent_session),
             head_modes: record.head_modes,
+            colors: record.colors,
         });
     }
 
@@ -426,6 +432,7 @@ mod tests {
             agent_argv: None,
             agent_session: None,
             head_modes: None,
+            colors: None,
         }
     }
 

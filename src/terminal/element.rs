@@ -127,6 +127,10 @@ pub(super) struct PaintColors {
     current_match_bg: Hsla,
     fg_rgb: ColorRgb,
     bg_rgb: ColorRgb,
+    /// Program-selected pane colours, folded into the indexed table and the
+    /// named defaults for this frame. `None` in this layer means the live
+    /// theme; a reset is therefore a new frame, not a stored snapshot.
+    pub(super) overrides: lyrel_core::core::pane_colors::PaneColors,
     /// Whether faint text on a light cell is held at the text floor (see
     /// `dim_fg`). Mirrors `theme_legible_palette`.
     legible_dim: bool,
@@ -482,7 +486,14 @@ impl Element for TerminalElement {
             cols: prepaint.cols,
             rows: prepaint.rows,
         };
-        let colors = PaintColors::resolve(cx.theme(), cx);
+        let overrides = *self
+            .view
+            .read(cx)
+            .terminal
+            .color_overrides
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
+        let colors = PaintColors::resolve_with(cx.theme(), overrides, cx);
 
         let font_size = self.view.read(cx).font_size;
         let base_font = self.view.read(cx).font.clone();

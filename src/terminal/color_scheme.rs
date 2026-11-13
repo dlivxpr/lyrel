@@ -41,18 +41,45 @@ fn background(cx: &App) -> ColorRgb {
     super::palette::hsla_to_rgb(cx.theme().background)
 }
 
-/// Push a report to the pane each time the theme's background changes while
+/// The background a program would see now: an explicit pane override, else the
+/// live theme. Mode 2031's dark/light report follows this, not the workbench
+/// theme in isolation.
+pub(super) fn effective_background(
+    cx: &App,
+    overrides: &lyrel_core::core::pane_colors::PaneColors,
+) -> ColorRgb {
+    overrides
+        .get(lyrel_core::core::pane_colors::DEFAULT_BG)
+        .map(super::palette::rgb_color)
+        .unwrap_or_else(|| background(cx))
+}
+
+/// Push a report to the pane each time its effective background changes while
 /// its program has 2031 on. Every path to a new theme (a preset pick, a
-/// follow-system flip, a config reload) ends in the `Theme` global.
+/// follow-system flip, a config reload) ends in the `Theme` global; a colour
+/// override or reset calls [`TerminalView::report_color_scheme_if_changed`]
+/// directly.
 pub(super) fn watch(cx: &mut Context<TerminalView>) {
-    let mut last = background(cx);
-    cx.observe_global::<gpui_kit::component::Theme>(move |view, cx| {
-        let now = background(cx);
-        if std::mem::replace(&mut last, now) != now && view.terminal.color_scheme_updates() {
-            view.terminal.write(report(now).into_bytes());
-        }
+    cx.observe_global::<gpui_kit::component::Theme>(|view, cx| {
+        view.report_color_scheme_if_changed(cx);
     })
     .detach();
+}
+
+impl TerminalView {
+    pub(super) fn report_color_scheme_if_changed(&mut self, cx: &mut Context<Self>) {
+        let overrides = *self
+            .terminal
+            .color_overrides
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
+        let now = effective_background(cx, &overrides);
+        if std::mem::replace(&mut self.color_scheme_bg, now) != now
+            && self.terminal.color_scheme_updates()
+        {
+            self.terminal.write(report(now).into_bytes());
+        }
+    }
 }
 
 #[cfg(test)]

@@ -77,31 +77,75 @@ pub fn build() -> [ColorRgb; 256] {
 /// theme-application time. Painting, prompt backdrops and query replies must
 /// share this one view — a query answered from the bare base would report
 /// colours the cells never wear once a preset owns the first sixteen slots.
-pub fn effective(base: &[ColorRgb; 256], active: Option<&ActivePalette>) -> [ColorRgb; 256] {
+pub fn effective(
+    base: &[ColorRgb; 256],
+    active: Option<&ActivePalette>,
+    overrides: &lyrel_core::core::pane_colors::PaneColors,
+) -> [ColorRgb; 256] {
     let mut table = *base;
     if let Some(active) = active {
         table[..16].copy_from_slice(&active.ansi16);
     }
+    for (index, rgb) in overrides.iter_set() {
+        if let Some(slot) = table.get_mut(usize::from(index)) {
+            *slot = rgb_color(rgb);
+        }
+    }
     table
 }
 
-/// Resolve the same indexed/default/cursor colours as the painter without
-/// copying the entire effective table for a single query. Theme ANSI slots
-/// include the legibility adjustment; all other indexed entries stay fixed.
+pub fn rgb_color(rgb: [u8; 3]) -> ColorRgb {
+    ColorRgb {
+        r: rgb[0],
+        g: rgb[1],
+        b: rgb[2],
+    }
+}
+
+/// The effective named defaults: an explicit pane override, otherwise the
+/// live theme's value. A reset therefore reveals the current theme rather
+/// than any colour captured when the override was set.
+pub fn defaults(
+    overrides: &lyrel_core::core::pane_colors::PaneColors,
+    default_fg: ColorRgb,
+    default_bg: ColorRgb,
+    caret: ColorRgb,
+) -> (ColorRgb, ColorRgb, ColorRgb) {
+    use lyrel_core::core::pane_colors::{CURSOR, DEFAULT_BG, DEFAULT_FG};
+    (
+        overrides.get(DEFAULT_FG).map(rgb_color).unwrap_or(default_fg),
+        overrides.get(DEFAULT_BG).map(rgb_color).unwrap_or(default_bg),
+        overrides.get(CURSOR).map(rgb_color).unwrap_or(caret),
+    )
+}
+
+/// Resolve the same indexed/default/cursor colours as the painter. `table` is
+/// already the effective table (`effective`), so every indexed slot has the
+/// theme and the pane overrides folded in; the named defaults fall back to the
+/// live theme.
 pub fn query_color(
     index: usize,
     table: &[ColorRgb; 256],
-    active: Option<&ActivePalette>,
+    overrides: &lyrel_core::core::pane_colors::PaneColors,
     default_fg: ColorRgb,
     default_bg: ColorRgb,
     caret: ColorRgb,
 ) -> ColorRgb {
-    match (index, active) {
-        (i, Some(active)) if i < 16 => active.ansi16[i],
-        (i, _) if i < 256 => table[i],
-        (256, _) => default_fg,
-        (257, _) => default_bg,
-        (258, _) => caret,
+    use lyrel_core::core::pane_colors::{CURSOR, DEFAULT_BG, DEFAULT_FG};
+    match index {
+        i if i < 256 => table[i],
+        i if i == DEFAULT_FG as usize => overrides
+            .get(DEFAULT_FG)
+            .map(rgb_color)
+            .unwrap_or(default_fg),
+        i if i == DEFAULT_BG as usize => overrides
+            .get(DEFAULT_BG)
+            .map(rgb_color)
+            .unwrap_or(default_bg),
+        i if i == CURSOR as usize => overrides
+            .get(CURSOR)
+            .map(rgb_color)
+            .unwrap_or(caret),
         _ => default_fg,
     }
 }
@@ -136,6 +180,7 @@ mod tests {
 
     #[test]
     fn effective_overlays_only_the_sixteen_theme_slots() {
+        use lyrel_core::core::pane_colors::PaneColors;
         let base = build();
         let mut ansi16 = [ColorRgb { r: 0, g: 0, b: 0 }; 16];
         ansi16[1] = ColorRgb { r: 1, g: 2, b: 3 };
@@ -144,10 +189,10 @@ mod tests {
             sel_bg: ColorRgb { r: 0, g: 0, b: 0 },
         };
 
-        let none = effective(&base, None);
+        let none = effective(&base, None, &PaneColors::default());
         assert_eq!(none, base, "no theme overlay keeps the base table");
 
-        let overlaid = effective(&base, Some(&active));
+        let overlaid = effective(&base, Some(&active), &PaneColors::default());
         assert_eq!(overlaid[1], ansi16[1]);
         for i in [0usize, 2, 8, 15] {
             assert_eq!(overlaid[i], ansi16[i]);
@@ -157,8 +202,46 @@ mod tests {
     }
 
     #[test]
+    fn pane_overrides_win_over_the_theme_and_only_where_set() {
+        use lyrel_core::core::pane_colors::{DEFAULT_BG, DEFAULT_FG, PaneColors};
+        let base = build();
+        let mut ansi16 = [ColorRgb { r: 0, g: 0, b: 0 }; 16];
+        ansi16[1] = ColorRgb { r: 1, g: 2, b: 3 };
+        let active = ActivePalette {
+            ansi16,
+            sel_bg: ColorRgb { r: 0, g: 0, b: 0 },
+        };
+        let mut overrides = PaneColors::default();
+        overrides.set(1, [9, 8, 7]);
+        overrides.set(DEFAULT_BG, [6, 5, 4]);
+
+        let table = effective(&base, Some(&active), &overrides);
+        assert_eq!((table[1].r, table[1].g, table[1].b), (9, 8, 7));
+        assert_eq!(table[2], ansi16[2], "unset slots keep the theme");
+        assert_eq!(table[200], base[200]);
+
+        let fg = ColorRgb { r: 10, g: 11, b: 12 };
+        let bg = ColorRgb { r: 20, g: 21, b: 22 };
+        let caret = ColorRgb { r: 30, g: 31, b: 32 };
+        assert_eq!(query_color(1, &table, &overrides, fg, bg, caret).r, 9);
+        assert_eq!(query_color(2, &table, &overrides, fg, bg, caret), ansi16[2]);
+        assert_eq!(query_color(256, &table, &overrides, fg, bg, caret), fg);
+        assert_eq!(
+            query_color(257, &table, &overrides, fg, bg, caret).g,
+            5,
+            "a default-background reset target is the current theme only when unset"
+        );
+        assert_eq!(query_color(258, &table, &overrides, fg, bg, caret), caret);
+        let (fg, bg, caret) = defaults(&overrides, fg, bg, caret);
+        assert_eq!((fg.r, bg.g, caret.b), (10, 5, 32));
+        assert_eq!(overrides.get(DEFAULT_FG), None);
+    }
+
+    #[test]
     fn query_color_mirrors_the_painter_named_and_fallback_rules() {
+        use lyrel_core::core::pane_colors::PaneColors;
         let table = build();
+        let overrides = PaneColors::default();
         let fg = ColorRgb {
             r: 10,
             g: 11,
@@ -175,12 +258,15 @@ mod tests {
             b: 32,
         };
 
-        assert_eq!(query_color(200, &table, None, fg, bg, caret), table[200]);
-        assert_eq!(query_color(256, &table, None, fg, bg, caret), fg);
-        assert_eq!(query_color(257, &table, None, fg, bg, caret), bg);
-        assert_eq!(query_color(258, &table, None, fg, bg, caret), caret);
         assert_eq!(
-            query_color(259, &table, None, fg, bg, caret),
+            query_color(200, &table, &overrides, fg, bg, caret),
+            table[200]
+        );
+        assert_eq!(query_color(256, &table, &overrides, fg, bg, caret), fg);
+        assert_eq!(query_color(257, &table, &overrides, fg, bg, caret), bg);
+        assert_eq!(query_color(258, &table, &overrides, fg, bg, caret), caret);
+        assert_eq!(
+            query_color(259, &table, &overrides, fg, bg, caret),
             fg,
             "past the named slots the painter resolves the default foreground"
         );
