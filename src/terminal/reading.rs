@@ -1,6 +1,7 @@
 //! Stable semantic rows and row-scoped image leases, separate from atomic holds.
 //! Absolute rows belong to the GUI mirror; the daemon remains authoritative.
 use std::collections::BTreeMap;
+use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use rio_vt::crosswords::Crosswords;
@@ -24,6 +25,10 @@ pub(super) struct ReadingCell {
     pub(super) wide: Wide,
     pub(super) wrapped: bool,
     pub(super) tab_stop: bool,
+    /// The registration this row displayed when it was read. The retained row
+    /// keeps this version until it normally retires, independent of later
+    /// replacement or clear in the live registry.
+    pub(super) glyph: Option<Arc<super::glyph::GlyphView>>,
 }
 
 struct ReadingRow {
@@ -63,6 +68,10 @@ pub(super) struct ReadingView {
     /// Search and selection read a stable snapshot: their byte/absolute-row
     /// ranges must keep matching the captured cells while they are open.
     pinned: bool,
+    /// The pane definitions new rows resolve against. Existing rows keep the
+    /// `Arc` identity they already captured; this store is only consulted when
+    /// a row is read.
+    glyphs: Arc<super::glyph::GlyphStore>,
 }
 
 pub(super) fn live_start<T: EventListener>(term: &Crosswords<T>) -> i64 {
@@ -81,6 +90,7 @@ fn read_cells<T: EventListener>(
     term: &Crosswords<T>,
     presentation: &super::presentation::ParsePresentation,
     line: Line,
+    glyphs: Option<&super::glyph::GlyphStore>,
 ) -> Vec<ReadingCell> {
     term.grid[line][..]
         .iter()
@@ -89,17 +99,23 @@ fn read_cells<T: EventListener>(
             let extras = cell
                 .extras_id_checked()
                 .and_then(|id| term.grid.extras_table.get(id));
+            let c = cell.c();
+            let wide = cell.wide();
+            let spacer = matches!(wide, Wide::Spacer | Wide::LeadingSpacer);
             ReadingCell {
-                c: cell.c(),
+                c,
                 style: term.grid.style_of(cell),
                 marks: extras
                     .map(|extra| extra.zerowidth.as_slice())
                     .filter(|marks| !marks.is_empty())
                     .map(Box::from),
                 hyperlink: extras.and_then(|extra| extra.hyperlink.clone()),
-                wide: cell.wide(),
+                wide,
                 wrapped: cell.contains_cell_flag(CellFlags::WRAPLINE),
                 tab_stop: presentation.is_tab_stop(col),
+                glyph: glyphs
+                    .filter(|_| !spacer && c != '\u{10eeee}')
+                    .and_then(|glyphs| glyphs.get(c as u32)),
             }
         })
         .collect()
@@ -110,6 +126,7 @@ impl ReadingView {
         term: &Crosswords<T>,
         images: &ImageStore,
         presentation: &super::presentation::ParsePresentation,
+        glyphs: Arc<super::glyph::GlyphStore>,
     ) -> Self {
         let live = live_start(term);
         static NEXT_ID: AtomicU64 = AtomicU64::new(1);
@@ -129,6 +146,7 @@ impl ReadingView {
             revision: 0,
             relocation: None,
             pinned: false,
+            glyphs,
         };
         // Even a one-row scroll exposes mutable active-screen rows. Capture
         // the entire active screen once, not only the currently visible part.
@@ -204,7 +222,12 @@ impl ReadingView {
         let top = pending.locate(term);
         let delta = (live_start(term) - top) as i32 - term.display_offset() as i32;
         term.scroll_display(Scroll::Delta(delta));
-        *self = Self::capture(term, &terminal.images(), &terminal.presentation_facts());
+        *self = Self::capture(
+            term,
+            &terminal.images(),
+            &terminal.presentation_facts(),
+            terminal.glyphs(),
+        );
         true
     }
 
@@ -216,13 +239,15 @@ impl ReadingView {
         requested: std::ops::Range<i64>,
     ) {
         let origin = live_start(term);
+        let store = Arc::clone(&self.glyphs);
+        let glyphs = (!store.is_empty()).then_some(&*store);
         let mut captured = Vec::new();
         for row in requested {
             let std::collections::btree_map::Entry::Vacant(entry) = self.rows.entry(row) else {
                 continue;
             };
             let line = grid_line(origin, row);
-            let cells = read_cells(term, presentation, line);
+            let cells = read_cells(term, presentation, line, glyphs);
             captured.push((
                 line.0,
                 lyrel_core::core::kitty_graphics::placeholder_row(&term.grid, line),
@@ -427,6 +452,8 @@ impl ReadingView {
         if self.pinned {
             return;
         }
+        let store = Arc::clone(&self.glyphs);
+        let glyphs = (!store.is_empty()).then_some(&*store);
         let live = live_start(term);
         let mut changed = false;
         for (&row, retained) in self.rows.iter_mut() {
@@ -439,7 +466,7 @@ impl ReadingView {
                 retained.provisional = false;
                 continue;
             }
-            retained.cells = read_cells(term, presentation, grid_line(live, row));
+            retained.cells = read_cells(term, presentation, grid_line(live, row), glyphs);
             retained.provisional = false;
             changed = true;
         }
@@ -594,7 +621,12 @@ mod tests {
 
         let images = ImageStore::new();
         let presentation = super::super::presentation::ParsePresentation::new(20);
-        let mut reading = ReadingView::capture(&term, &images, &presentation);
+        let mut reading = ReadingView::capture(
+            &term,
+            &images,
+            &presentation,
+            Arc::new(crate::terminal::glyph::GlyphStore::new()),
+        );
         assert!(
             reading
                 .rows()
@@ -615,5 +647,62 @@ mod tests {
             "a row that settled into history must show its final content, not the \
              mutable frame captured while it was still active"
         );
+    }
+
+    fn glyph_outline(side: i16) -> rio_graphics::glyph::glyf_decode::Outline {
+        rio_graphics::glyph::glyf_decode::Outline {
+            contours: Vec::new(),
+            x_min: 0,
+            y_min: 0,
+            x_max: side,
+            y_max: side,
+        }
+    }
+
+    fn captured_definition(
+        reading: &ReadingView,
+        cp: char,
+    ) -> Arc<crate::terminal::glyph::GlyphView> {
+        reading
+            .rows()
+            .flat_map(|(_, row)| row.iter())
+            .find(|cell| cell.c == cp)
+            .and_then(|cell| cell.glyph.clone())
+            .expect("the reading row captured its registration")
+    }
+
+    #[test]
+    fn glyph_reading_row_keeps_the_registration_it_captured() {
+        use rio_graphics::glyph_layout::GlyphLayout;
+        let cp = 0x100000u32;
+        let ch = char::from_u32(cp).unwrap();
+        let size = crate::terminal::size::TermSize::new(20, 4);
+        let mut term = crate::terminal::remote::test_term(size);
+        Processor::default().advance(&mut term, ch.to_string().as_bytes());
+        let images = ImageStore::new();
+        let presentation = super::super::presentation::ParsePresentation::new(20);
+        let store = Arc::new(crate::terminal::glyph::GlyphStore::new());
+        store.apply(cp, glyph_outline(10), 1000, 1, GlyphLayout::default());
+
+        let reading = ReadingView::capture(&term, &images, &presentation, Arc::clone(&store));
+        let captured = captured_definition(&reading, ch);
+        let revision = captured.revision;
+        assert_eq!(captured.outline.x_max, 10);
+
+        store.apply(cp, glyph_outline(20), 1000, 1, GlyphLayout::default());
+        let retained = captured_definition(&reading, ch);
+        assert_eq!(
+            retained.revision, revision,
+            "a replacement does not rewrite the retained row"
+        );
+        assert_eq!(retained.outline.x_max, 10);
+
+        let fresh = ReadingView::capture(&term, &images, &presentation, Arc::clone(&store));
+        let live = captured_definition(&fresh, ch);
+        assert_ne!(
+            live.revision, revision,
+            "a new capture resolves the replacement"
+        );
+        assert_eq!(live.outline.x_max, 20);
     }
 }

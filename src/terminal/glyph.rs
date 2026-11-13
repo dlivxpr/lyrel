@@ -128,6 +128,12 @@ impl GlyphStore {
             .map(|entry| entry.glyph.clone())
     }
 
+    /// Whether any pane-local definition is live. A presentation snapshot uses
+    /// this once so panes without glyphs pay no per-cell lookup.
+    pub(crate) fn is_empty(&self) -> bool {
+        self.inner.read().by_cp.is_empty()
+    }
+
     #[cfg(test)]
     pub(crate) fn contains(&self, cp: u32) -> bool {
         self.inner.read().by_cp.contains_key(&cp)
@@ -352,5 +358,56 @@ mod tests {
         assert_eq!(store.len(), CAPACITY);
         assert!(!store.contains(0x100000), "oldest registration was evicted");
         assert!(store.contains(0x10fffd));
+    }
+
+    #[test]
+    fn glyph_captured_definition_outlives_replacement_and_clear_until_its_owner_drops() {
+        let store = GlyphStore::new();
+        let cp = 0x100000;
+        store.apply(cp, outline(0, 0, 10, 10), 1000, 1, GlyphLayout::default());
+        let captured = store.get(cp).unwrap();
+        let weak = Arc::downgrade(&captured);
+
+        store.apply(cp, outline(0, 0, 20, 20), 1000, 1, GlyphLayout::default());
+        assert_eq!(
+            captured.outline.x_max, 10,
+            "a captured definition is never rewritten in place"
+        );
+        assert!(
+            weak.upgrade().is_some(),
+            "replacing the live entry cannot release a captured version"
+        );
+
+        store.clear(Some(cp));
+        assert!(store.get(cp).is_none(), "the live registration is gone");
+        assert!(
+            weak.upgrade().is_some(),
+            "clearing the live entry cannot release a captured version"
+        );
+
+        drop(captured);
+        assert!(
+            weak.upgrade().is_none(),
+            "the last captured owner retires the definition"
+        );
+    }
+
+    #[test]
+    fn glyph_superseded_definition_is_not_revived_by_a_later_read() {
+        let store = GlyphStore::new();
+        let cp = 0x100000;
+        store.apply(cp, outline(0, 0, 10, 10), 1000, 1, GlyphLayout::default());
+        let captured = store.get(cp).unwrap();
+        store.apply(cp, outline(0, 0, 20, 20), 1000, 1, GlyphLayout::default());
+        let live = store.get(cp).unwrap();
+        assert_ne!(
+            captured.revision, live.revision,
+            "a later read must resolve the superseding definition"
+        );
+        assert_eq!(live.outline.x_max, 20);
+        assert_eq!(
+            captured.outline.x_max, 10,
+            "the stale owner keeps only its own captured version"
+        );
     }
 }

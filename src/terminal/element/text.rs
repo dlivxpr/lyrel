@@ -439,7 +439,6 @@ pub(super) fn paint_glyphs(
     base_font: &Font,
     bold_font: Option<&Font>,
     italic_font: Option<&Font>,
-    glyphs: &crate::terminal::glyph::GlyphStore,
 ) {
     let faces = [
         build_font(base_font, false, false),
@@ -494,12 +493,14 @@ pub(super) fn paint_glyphs(
                         size(geom.cell_width, geom.line_height),
                     );
                     let style = GlyphStyle::of(cell);
-                    // A daemon-accepted registration shadows ordinary font
-                    // rendering for its codepoint. The cell keeps the raw
-                    // codepoint for selection/copy/search and its logical
+                    // The registration this cell's snapshot captured shadows
+                    // ordinary font rendering for its codepoint. Painting never
+                    // consults the live registry, so a held frame or a reading
+                    // row keeps the version it displayed. The cell keeps the
+                    // raw codepoint for selection/copy/search and its logical
                     // width; only the pixels change.
-                    if let Some(glyph) = glyphs.get(cell.c as u32) {
-                        crate::terminal::glyph::paint(window, cell_bounds, &glyph, style.fg);
+                    if let Some(glyph) = &cell.glyph {
+                        crate::terminal::glyph::paint(window, cell_bounds, glyph, style.fg);
                         match native_cell_residue(&style) {
                             None => continue,
                             Some(c) => (col, 1, char_string(c), None, false),

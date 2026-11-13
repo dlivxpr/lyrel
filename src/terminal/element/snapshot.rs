@@ -27,6 +27,11 @@ pub(super) struct CellPainter<'a, T: rio_vt::event::EventListener> {
     palette: &'a [ColorRgb; 256],
     colors: &'a PaintColors,
     selection: Option<&'a SelectionRange>,
+    /// Set for a live snapshot: each cell captures the definition it displays,
+    /// so a later held frame never resolves the live registry again. `None`
+    /// (a pane without glyphs, or a test of style resolution alone) captures
+    /// nothing and pays no per-cell lookup.
+    glyphs: Option<&'a crate::terminal::glyph::GlyphStore>,
     style: Option<(rio_vt::crosswords::style::StyleId, RenderCell)>,
 }
 
@@ -42,8 +47,14 @@ impl<'a, T: rio_vt::event::EventListener> CellPainter<'a, T> {
             palette,
             colors,
             selection,
+            glyphs: None,
             style: None,
         }
+    }
+
+    pub(super) fn with_glyphs(mut self, glyphs: &'a crate::terminal::glyph::GlyphStore) -> Self {
+        self.glyphs = Some(glyphs);
+        self
     }
 
     #[cfg(test)]
@@ -104,6 +115,13 @@ impl<'a, T: rio_vt::event::EventListener> CellPainter<'a, T> {
             &mut rendered,
             extras.is_some_and(|extra| extra.hyperlink.is_some()),
         );
+        // Resolve the registration once, while the snapshot owns the grid, so
+        // the store cannot change underneath this cell. A Kitty placeholder
+        // stays terminal data, never a registry glyph.
+        rendered.glyph = self
+            .glyphs
+            .filter(|_| cell.c() != '\u{10eeee}')
+            .and_then(|glyphs| glyphs.get(rendered.c as u32));
         rendered
     }
 }
@@ -179,9 +197,13 @@ fn render_reading_cell(
     rendered.wide = cell.wide;
     rendered.spacer = spacer;
     rendered.wrapped = cell.wrapped;
+    // The row captured this definition when it was read. Painting uses it even
+    // if the live registry has since replaced or cleared the codepoint.
+    rendered.glyph = if spacer { None } else { cell.glyph.clone() };
     if rendered.c == '\u{10eeee}' {
         rendered.c = ' ';
         rendered.marks = None;
+        rendered.glyph = None;
         rendered.underline = UnderlineKind::None;
         rendered.strikeout = false;
     }
@@ -313,7 +335,14 @@ impl TerminalElement {
             // run on the cursor's row is that fake caret; collect runs so
             // the IME anchor can snap to it.
             let mut inverse_runs: Vec<(usize, usize)> = Vec::new();
+            // Resolve the pane's live definitions once per snapshot; a pane
+            // without glyphs skips every per-cell lookup.
+            let glyph_store = self.view.read(cx).terminal.glyphs();
+            let active_glyphs = (!glyph_store.is_empty()).then_some(&*glyph_store);
             let mut painter = CellPainter::new(&term, &palette, colors, selection.as_ref());
+            if let Some(glyphs) = active_glyphs {
+                painter = painter.with_glyphs(glyphs);
+            }
 
             let reading = self.view.read(cx).selection_scroll.reading.as_ref();
             let mut reading_style = None;
@@ -1009,5 +1038,173 @@ mod tests {
             );
             assert!(frame.cursor.is_some());
         });
+    }
+
+    fn glyph_test_outline(side: i16) -> rio_graphics::glyph::glyf_decode::Outline {
+        rio_graphics::glyph::glyf_decode::Outline {
+            contours: Vec::new(),
+            x_min: 0,
+            y_min: 0,
+            x_max: side,
+            y_max: side,
+        }
+    }
+
+    #[test]
+    fn glyph_captured_cell_keeps_its_definition_after_a_replacement() {
+        use rio_graphics::glyph_layout::GlyphLayout;
+        let cp = 0x100000u32;
+        let ch = char::from_u32(cp).unwrap();
+        let store = crate::terminal::glyph::GlyphStore::new();
+        store.apply(cp, glyph_test_outline(10), 1000, 1, GlyphLayout::default());
+        let term = painted_term(&ch.to_string());
+        let colors = test_colors();
+        let palette = [ColorRgb { r: 0, g: 0, b: 0 }; 256];
+        let point = Pos::new(Line(0), Column(0));
+
+        let mut painter = CellPainter::new(&term, &palette, &colors, None).with_glyphs(&store);
+        let captured = painter.at(point);
+        let revision = captured
+            .glyph
+            .as_ref()
+            .expect("the cell captured its registration")
+            .revision;
+        assert_eq!(captured.glyph.as_ref().unwrap().outline.x_max, 10);
+
+        store.apply(cp, glyph_test_outline(20), 1000, 1, GlyphLayout::default());
+        assert_eq!(
+            captured.glyph.as_ref().unwrap().revision,
+            revision,
+            "a replacement does not rewrite the captured cell"
+        );
+        assert_eq!(
+            captured.glyph.as_ref().unwrap().outline.x_max,
+            10,
+            "the captured outline is the version the cell displayed"
+        );
+
+        let mut fresh = CellPainter::new(&term, &palette, &colors, None).with_glyphs(&store);
+        let next = fresh.at(point);
+        assert_ne!(
+            next.glyph.as_ref().unwrap().revision,
+            revision,
+            "a new snapshot resolves the replacement"
+        );
+        assert_eq!(next.glyph.as_ref().unwrap().outline.x_max, 20);
+    }
+
+    #[gpui_kit::test]
+    fn glyph_contended_snapshot_never_rewrites_the_captured_picture(cx: &mut TestAppContext) {
+        use rio_graphics::glyph_layout::GlyphLayout;
+        let cp = 0x100000u32;
+        let ch = char::from_u32(cp).unwrap();
+        let (app, mut vcx, _stream) = crate::ui::app::test_window::harness_with_pane(cx);
+        let view = app.update_in(&mut vcx, |app, _, _| match &app.tabs[0].pane.leaves()[0] {
+            crate::ui::pane::PaneSlot::Ready(view) => view.clone(),
+            _ => panic!("the fixture must have a terminal"),
+        });
+        let terminal = cx.update(|cx| view.read(cx).terminal.term.clone());
+        let (rows, cols) = {
+            let mut term = terminal.lock();
+            rio_vt::performer::handler::Processor::default()
+                .advance(&mut *term, format!("\x1b[H{ch}").as_bytes());
+            (term.screen_lines(), term.columns())
+        };
+        cx.update(|cx| {
+            view.read(cx).terminal.glyphs().apply(
+                cp,
+                glyph_test_outline(10),
+                1000,
+                1,
+                GlyphLayout::default(),
+            );
+        });
+        let element = TerminalElement::new(view.clone());
+        let colors = cx.update(|cx| PaintColors::resolve(cx.theme(), cx));
+        let mut buf = Vec::new();
+        cx.update(|cx| {
+            assert!(
+                element
+                    .build_grid(
+                        &colors,
+                        &mut buf,
+                        rows,
+                        cols,
+                        false,
+                        cx,
+                        1.,
+                        Rgba::default(),
+                        true,
+                        false,
+                    )
+                    .is_ok()
+            );
+        });
+        let captured = buf[0]
+            .glyph
+            .as_ref()
+            .expect("the snapshot captured its registration")
+            .revision;
+        assert_eq!(buf[0].glyph.as_ref().unwrap().outline.x_max, 10);
+
+        cx.update(|cx| {
+            view.read(cx).terminal.glyphs().apply(
+                cp,
+                glyph_test_outline(20),
+                1000,
+                1,
+                GlyphLayout::default(),
+            );
+        });
+        let guard = terminal.lock();
+        cx.update(|cx| {
+            assert!(matches!(
+                element.build_grid(
+                    &colors,
+                    &mut buf,
+                    rows,
+                    cols,
+                    false,
+                    cx,
+                    1.,
+                    Rgba::default(),
+                    false,
+                    true,
+                ),
+                Err(SnapshotUnavailable::Contended)
+            ));
+        });
+        drop(guard);
+        assert_eq!(
+            buf[0].glyph.as_ref().unwrap().revision,
+            captured,
+            "a contended snapshot leaves the retained picture untouched"
+        );
+        assert_eq!(buf[0].glyph.as_ref().unwrap().outline.x_max, 10);
+
+        cx.update(|cx| {
+            assert!(
+                element
+                    .build_grid(
+                        &colors,
+                        &mut buf,
+                        rows,
+                        cols,
+                        false,
+                        cx,
+                        1.,
+                        Rgba::default(),
+                        true,
+                        true,
+                    )
+                    .is_ok()
+            );
+        });
+        assert_ne!(
+            buf[0].glyph.as_ref().unwrap().revision,
+            captured,
+            "the next successful snapshot adopts the replacement"
+        );
+        assert_eq!(buf[0].glyph.as_ref().unwrap().outline.x_max, 20);
     }
 }

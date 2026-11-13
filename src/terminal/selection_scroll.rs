@@ -188,6 +188,7 @@ impl SelectionScroll {
                 term,
                 &terminal.images(),
                 &terminal.presentation_facts(),
+                terminal.glyphs(),
             ));
             if let Some(pending) = self.pending_resize.take()
                 && let Some(reading) = self.reading.as_mut()
