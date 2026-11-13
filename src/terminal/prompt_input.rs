@@ -71,7 +71,11 @@ impl PromptInput {
             &term.mode(),
             terminal.is_local_conpty(),
         );
-        let generation = terminal.presentation_facts().keyboard_generation;
+        let generation = if flags.reports_events() {
+            terminal.presentation_facts().keyboard_generation
+        } else {
+            0
+        };
         if self.keyboard_context != Some((flags, generation)) {
             self.pressed_keys.clear();
             self.keyboard_context = Some((flags, generation));
@@ -80,6 +84,9 @@ impl PromptInput {
     }
 
     pub(super) fn release_key(&mut self, ks: &gpui_kit::Keystroke, terminal: &RemoteTerminal) {
+        if self.pressed_keys.is_empty() {
+            return;
+        }
         let flags = self.key_context(terminal);
         let Some(index) = self
             .pressed_keys
