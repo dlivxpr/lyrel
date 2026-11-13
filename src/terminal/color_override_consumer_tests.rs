@@ -292,7 +292,6 @@ fn color_overrides_change_production_paint_and_queries(cx: &mut TestAppContext) 
 }
 
 #[gpui_kit::test]
-#[ignore = "8 MiB ConPTY flood exceeds the 180 s harness budget on this Windows host; run on WSL/CI"]
 fn color_state_outlives_the_replay_ring_for_a_fresh_consumer(cx: &mut TestAppContext) {
     crate::core::config::pin_test_config_dir();
     cx.executor().allow_parking();
@@ -335,46 +334,24 @@ fn color_state_outlives_the_replay_ring_for_a_fresh_consumer(cx: &mut TestAppCon
     theme_wait_result(&mut observer, cx, 1, b"");
     observer.detach().unwrap();
 
-    // Force the original set bytes out of the real 8 MiB replay ring.
-    let mut monitor = daemon.panes().observe(pane, size).unwrap();
-    monitor
-        .set_recv_timeout(Some(std::time::Duration::from_secs(180)))
-        .unwrap();
-    let monitor_thread = std::thread::spawn(move || {
-        let mut bytes_seen = 0usize;
-        loop {
-            match monitor.recv().unwrap() {
-                DaemonMsg::Snapshot(bytes) | DaemonMsg::Output(bytes) => {
-                    bytes_seen += bytes.len();
-                    if bytes
-                        .windows(b"RING_COLOR_DONE".len())
-                        .any(|w| w == b"RING_COLOR_DONE")
-                    {
-                        break;
-                    }
-                }
-                DaemonMsg::Error(error) => panic!("ring monitor failed: {error}"),
-                DaemonMsg::Exited { code } => panic!("ring sender exited: {code:?}"),
-                _ => {}
-            }
-        }
-        let _ = monitor.detach();
-        bytes_seen
-    });
+    // Force the original set bytes out of the real 8 MiB replay ring without
+    // an observer during the flood: the fixture writes a completion file only
+    // after its whole PTY write returned, so the test attaches the fresh
+    // consumer after the sender is actually done. A monitor attached during a
+    // 10 MiB ConPTY burst can itself become the backpressure that keeps the
+    // fixture's barrier from completing, which is what the old harness timed
+    // out on.
     let mut row = vec![b'x'; 1000];
     row.extend_from_slice(b"\r\nCOLOR_ROW_00000\r\n");
     let line = format!(
-        "2 0 {} 10500{}",
+        "2 {} {} 10500{}",
+        usize::MAX,
         graphics_pty_fixture::hex(&row),
         if cfg!(windows) { "\r" } else { "\n" }
     );
     daemon.panes().send_input(pane, line.as_bytes()).unwrap();
-    theme_fixture_send(&daemon, pane, 999, b"RING_COLOR_DONE", 0);
-    let pty_bytes = monitor_thread.join().unwrap();
-    assert!(
-        pty_bytes > 8 * 1024 * 1024,
-        "actual daemon Snapshot/Output bytes must exceed the ring cap: {pty_bytes}"
-    );
+    let sent = daemon.dir.path().join("theme-fragment-2");
+    graphics_recovery_wait(cx, "ring flood written", |_| sent.exists());
 
     // The replay no longer carries the original OSC, but the decoded layer is
     // still there; a fresh production consumer needs no resend.
