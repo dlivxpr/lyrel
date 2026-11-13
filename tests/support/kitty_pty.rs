@@ -195,6 +195,9 @@ pub fn pty_sender() {
                 input.read_exact(&mut byte).unwrap();
                 reply.push(byte[0]);
             }
+            if operation == "SEND_ANY" {
+                eprintln!("[DEBUG-glyph270] serial={serial} reply={}", hex(&reply));
+            }
             if operation == "SEND_OK" {
                 assert!(
                     reply.ends_with(b";OK\x1b\\"),

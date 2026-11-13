@@ -42,7 +42,10 @@ impl TerminalView {
             PaneEvent::ProgressChanged => cx.emit(ProgressChanged),
             PaneEvent::Title(title) => self.set_title_when_settled(title, cx),
             PaneEvent::ResetTitle => self.set_title_when_settled(self.default_title.clone(), cx),
-            PaneEvent::PtyWrite(text) => self.terminal.write(text.into_bytes()),
+            PaneEvent::PtyWrite(text) => {
+                eprintln!("[DEBUG-glyph270] frontend PtyWrite={text:?}");
+                self.terminal.write(text.into_bytes());
+            }
             PaneEvent::Exit => {
                 self.input.forget_keys();
                 self.terminal.exited = true;
@@ -122,6 +125,9 @@ impl TerminalView {
                 // glossary bit it captured when the query was read.
                 let system =
                     crate::terminal::glyph::font_covers(cx, &self.font, self.font_size, cp);
+                eprintln!(
+                    "[DEBUG-glyph270] frontend GlyphQuery token={token} cp={cp:x} system={system}"
+                );
                 self.terminal.answer_glyph_query(token, cp, system);
             }
             PaneEvent::GlyphUnsupported => cx.emit(GlyphUnsupported),
