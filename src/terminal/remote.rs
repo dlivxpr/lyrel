@@ -1791,7 +1791,8 @@ mod tests {
             std::thread::sleep(std::time::Duration::from_millis(5));
         }
 
-        assert_eq!(reply.as_deref(), Some("\x1b[?7u"));
+        // Alternate-key bit 4 is unavailable without native physical-key data.
+        assert_eq!(reply.as_deref(), Some("\x1b[?3u"));
         assert!(
             term.term
                 .lock()
