@@ -536,14 +536,18 @@ fn an_unknown_meta_chord_goes_to_the_shell_with_the_line(cx: &mut TestAppContext
     window
         .update(cx, |view, _, cx| {
             view.input.editor_mut().set("echo hi");
-            view.handle_editor_key(&gpui_kit::Keystroke {
-                modifiers: gpui_kit::Modifiers {
-                    alt: true,
-                    ..Default::default()
+            view.handle_editor_key(
+                &gpui_kit::Keystroke {
+                    modifiers: gpui_kit::Modifiers {
+                        alt: true,
+                        ..Default::default()
+                    },
+                    key: "u".to_string(),
+                    key_char: None,
                 },
-                key: "u".to_string(),
-                key_char: None,
-            }, false, cx);
+                false,
+                cx,
+            );
             assert_eq!(view.input.editor().text(), "");
         })
         .unwrap();
@@ -575,15 +579,19 @@ fn a_shifted_meta_chord_hands_off_the_shifted_character(cx: &mut TestAppContext)
     window
         .update(cx, |view, _, cx| {
             view.input.editor_mut().set("echo hi");
-            view.handle_editor_key(&gpui_kit::Keystroke {
-                modifiers: gpui_kit::Modifiers {
-                    alt: true,
-                    shift: true,
-                    ..Default::default()
+            view.handle_editor_key(
+                &gpui_kit::Keystroke {
+                    modifiers: gpui_kit::Modifiers {
+                        alt: true,
+                        shift: true,
+                        ..Default::default()
+                    },
+                    key: "u".to_string(),
+                    key_char: None,
                 },
-                key: "u".to_string(),
-                key_char: None,
-            }, false, cx);
+                false,
+                cx,
+            );
             assert_eq!(view.input.editor().text(), "");
         })
         .unwrap();
@@ -615,6 +623,8 @@ fn negotiated_event_types_reach_the_production_input_route(cx: &mut TestAppConte
         .encode(&mut daemon)
         .unwrap();
     for _ in 0..200 {
+        cx.executor()
+            .advance_clock(std::time::Duration::from_millis(5));
         cx.run_until_parked();
         if window
             .update(cx, |view, _, _| view.title == "EVENT_TYPES_READY")
@@ -671,6 +681,8 @@ fn keyboard_output_ready(
         .encode(daemon)
         .unwrap();
     for _ in 0..200 {
+        cx.executor()
+            .advance_clock(std::time::Duration::from_millis(5));
         cx.run_until_parked();
         if window.update(cx, |view, _, _| view.title == title).unwrap() {
             return;

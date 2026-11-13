@@ -141,6 +141,8 @@ fn negotiated_keyboard_composition_commits_text_without_key_releases(cx: &mut Te
         .unwrap();
     let mut ready = false;
     for _ in 0..200 {
+        cx.executor()
+            .advance_clock(std::time::Duration::from_millis(5));
         cx.run_until_parked();
         ready = view.read_with(cx, |view, _| view.title == "IME_EVENTS_READY");
         if ready {
