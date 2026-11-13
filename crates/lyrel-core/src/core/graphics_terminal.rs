@@ -1,8 +1,8 @@
 //! The daemon's terminal-layout adapter. Rio remains the only VT parser and
 //! grid. Handler callbacks attach graphics lifetime to the same text mutations.
 
-use super::*;
 use super::super::sixel_graphics::SIDE;
+use super::*;
 use rio_unicode::UnicodeWidthChar as _;
 use rio_vt::ansi::mode::{Mode, NamedPrivateMode, PrivateMode};
 use rio_vt::ansi::{ClearMode, LineClearMode, TabulationClearMode};

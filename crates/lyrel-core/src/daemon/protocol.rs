@@ -186,6 +186,15 @@ pub const FEATURE_UPDATE_SERVER: &str = "update-server";
 /// bytes; a client that does sees only daemon-accepted bodies.
 pub const FEATURE_GLYPH_REGISTRY: &str = "glyph-registry";
 
+/// The daemon retains the accepted glyph glossary outside the text replay ring
+/// and projects it after the ring to a consumer that opts in with
+/// `ClientMsg::SubscribeGlyphState`. A client that does not see this feature
+/// leaves the opt-in unsent; a controller that never opted in is not sent a
+/// frontend-bound `GlyphQuery` either, because a peer that predates the
+/// projection cannot decode the kind. The pane protocol version is unchanged:
+/// both messages are additive and gated on this feature.
+pub const FEATURE_GLYPH_STATE: &str = "glyph-state";
+
 /// The daemon keeps an authoritative, bounded pane-local colour override layer
 /// and projects it to a consumer that opts in with
 /// `ClientMsg::SubscribePaneColors`. Without this feature a client leaves the
@@ -216,6 +225,7 @@ impl DaemonVersion {
             FEATURE_AGENT_REQUESTS.to_string(),
             FEATURE_AGENT_STATE_AGE.to_string(),
             FEATURE_GLYPH_REGISTRY.to_string(),
+            FEATURE_GLYPH_STATE.to_string(),
             FEATURE_PANE_COLORS.to_string(),
             FEATURE_XTGETTCAP_OWNER.to_string(),
             FEATURE_STATIC_SIXEL.to_string(),
@@ -260,6 +270,13 @@ pub fn negotiate_pane<S: Read + Write>(stream: &mut S) -> io::Result<DaemonVersi
             // never sends it a frame kind it cannot decode.
             if version.has_feature(FEATURE_PANE_COLORS) {
                 ClientMsg::SubscribePaneColors.encode(stream)?;
+                stream.flush()?;
+            }
+            // Same rule for the retained glossary: only a daemon that owns the
+            // projection is told this client can decode it, and an old client
+            // could never send this message or receive the frame kind.
+            if version.has_feature(FEATURE_GLYPH_STATE) {
+                ClientMsg::SubscribeGlyphState.encode(stream)?;
                 stream.flush()?;
             }
             // Every session consumer, including CLI and routed clients, starts
@@ -1080,6 +1097,11 @@ pub enum ClientMsg {
     /// Opt in to authoritative pane colour frames. Sent only after the peer's
     /// version advertised `FEATURE_PANE_COLORS`, before Spawn/Attach/Observe.
     SubscribePaneColors,
+    /// Opt in to the retained glyph glossary projection and to frontend-bound
+    /// `q` requests. Sent only after the peer advertised `FEATURE_GLYPH_STATE`,
+    /// before Spawn/Attach/Observe. A peer that never sends this keeps its old
+    /// stream: it is not sent a kind its decoder cannot read.
+    SubscribeGlyphState,
     /// Finite authority-side allowance, with optional per-resource grants from
     /// a rendering consumer's shared source and decoded-memory budgets.
     GraphicsCapacity {
@@ -1298,6 +1320,11 @@ pub enum DaemonMsg {
         token: u64,
         cp: u32,
     },
+    /// A full authoritative glossary snapshot (`GlyphFrame` encoding), sent
+    /// after the replayed text to a consumer that opted in with
+    /// [`ClientMsg::SubscribeGlyphState`]. The generation distinguishes stale
+    /// snapshots; the daemon is the only owner of the registry.
+    GlyphState(Vec<u8>),
     Progress(Option<PaneProgress>),
     Cwd(PathBuf),
     Prompt {
@@ -1352,8 +1379,15 @@ mod kind {
     pub const GRAPHICS_PRESSURE_RESULT: u8 = 70;
     /// Client -> daemon: the controller's font-coverage answer for one query.
     pub const GLYPH_QUERY_RESULT: u8 = 71;
+    /// Client -> daemon: opt in to the retained glossary projection. The kind
+    /// spaces are direction-scoped, so 72 is reserved for this client message
+    /// and for the daemon's `GlyphQuery` above.
+    pub const SUBSCRIBE_GLYPH_STATE: u8 = 72;
     /// Daemon -> controller: a frontend-bound `q` awaiting that answer.
     pub const GLYPH_QUERY: u8 = 72;
+    /// Daemon -> opted-in consumer: a bounded full glossary snapshot after the
+    /// replayed text. Never sent to a peer that did not opt in.
+    pub const GLYPH_STATE: u8 = 73;
     pub const DETACH: u8 = 5;
     pub const KILL: u8 = 6;
     pub const LIST: u8 = 7;
@@ -1574,6 +1608,7 @@ impl ClientMsg {
         match self {
             ClientMsg::Negotiate { protocol } => write_frame(w, kind::VERSION, &to_json(protocol)?),
             ClientMsg::SubscribePaneColors => write_frame(w, kind::SUBSCRIBE_PANE_COLORS, &[]),
+            ClientMsg::SubscribeGlyphState => write_frame(w, kind::SUBSCRIBE_GLYPH_STATE, &[]),
             ClientMsg::Spawn {
                 cwd,
                 size,
@@ -1731,6 +1766,7 @@ impl ClientMsg {
                 protocol: from_json(&payload)?,
             },
             kind::SUBSCRIBE_PANE_COLORS => ClientMsg::SubscribePaneColors,
+            kind::SUBSCRIBE_GLYPH_STATE => ClientMsg::SubscribeGlyphState,
             kind::SPAWN => {
                 let (cwd, size) = from_json(&payload)?;
                 ClientMsg::Spawn {
@@ -1944,6 +1980,7 @@ impl DaemonMsg {
             DaemonMsg::GlyphQuery { token, cp } => {
                 write_frame(w, kind::GLYPH_QUERY, &to_json(&(token, cp))?)
             }
+            DaemonMsg::GlyphState(frame) => write_frame(w, kind::GLYPH_STATE, frame),
             DaemonMsg::Progress(state) => write_frame(w, kind::PROGRESS, &to_json(state)?),
             DaemonMsg::Cwd(path) => write_frame(w, kind::CWD, &to_json(path)?),
             DaemonMsg::Prompt {
@@ -2025,6 +2062,7 @@ impl DaemonMsg {
                 let (token, cp) = from_json(&payload)?;
                 DaemonMsg::GlyphQuery { token, cp }
             }
+            kind::GLYPH_STATE => DaemonMsg::GlyphState(payload),
             kind::PROGRESS => DaemonMsg::Progress(from_json(&payload)?),
             kind::CWD => DaemonMsg::Cwd(from_json(&payload)?),
             kind::PROMPT => {
