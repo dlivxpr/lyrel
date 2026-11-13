@@ -579,7 +579,11 @@ fn a_bounded_restart_preserves_the_live_replay_suffix_and_geometry() {
 
 impl Instance {
     /// Like `spawn_restoring_segments`, but keeps the colour projection the
-    /// restarted daemon sends for the replacement pane.
+    /// restarted daemon sends for the replacement pane. Unix only: the OSC
+    /// producer that justifies the replayed `#112233` needs `printf`;
+    /// `cmd.exe` has no way to emit those bytes, and ConPTY's forwarding of
+    /// literal OSC input is unverified, so no portable shell producer exists.
+    #[cfg(unix)]
     fn spawn_restoring_with_colors(
         &self,
         dead: u64,
@@ -713,6 +717,9 @@ impl Instance {
     }
 }
 
+// The producer is `printf`, so this runs only where `interactive_shell` is
+// `/bin/sh`; `cmd.exe` cannot emit the OSC bytes at all.
+#[cfg(unix)]
 #[test]
 fn a_replacement_shell_does_not_reactivate_old_temporary_colours() {
     let instance = Instance::new();
@@ -725,13 +732,25 @@ fn a_replacement_shell_does_not_reactivate_old_temporary_colours() {
         .set_recv_timeout(Some(STREAM_WITHIN))
         .expect("bound the stream reads");
     let dead = session.pane_id();
+    // One printf writes both OSC commands and the completion marker, so the
+    // marker can only appear after the colour bytes reached the ring. The
+    // marker text is split in the command itself, which keeps the pty's input
+    // echo from finishing the wait early — the previous form raced the
+    // shutdown snapshot against printf's output.
     session
-        .input(b"printf '\\033]4;1;#112233\\007\\033]11;#101112\\007'; echo lyrel_colour_restore\r")
+        .input(b"printf '\\033]4;1;#112233\\007\\033]11;#101112\\007lyrel_%s\\n' colour_restore\r")
         .expect("the shell takes input");
     collect_until(&mut session, b"lyrel_colour_restore");
     session.detach().expect("detach");
     instance.stop(running);
 
+    let stored = instance
+        .snapshot_of(dead)
+        .expect("the shutdown wrote the pane's screen");
+    assert!(
+        windows_contain(&stored, b"\x1b]4;1;#112233"),
+        "the persisted snapshot does not carry the historical colour bytes"
+    );
     let _restarted = instance.start();
     let (_new_pane, replayed, colors) = instance.spawn_restoring_with_colors(dead);
     let text: Vec<u8> = replayed

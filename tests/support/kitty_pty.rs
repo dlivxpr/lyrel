@@ -1,3 +1,4 @@
+use std::collections::VecDeque;
 use std::io::{Read, Write};
 
 pub fn hex(bytes: &[u8]) -> String {
@@ -90,6 +91,87 @@ impl OutputStats {
     }
 }
 
+/// A whole request line the fixture writes to this pane:
+/// `OP serial replies payload-hex [fragment] [gate-hex]`. Replies begin with
+/// ESC, so anything else terminated by a newline can only be a request. The
+/// grammar check stays strict: an unexpected byte stream still reaches the
+/// reply/barrier comparisons unmodified and fails there.
+fn spliceable_request(line: &[u8]) -> bool {
+    if line.is_empty() || line.iter().any(|b| !(0x20..=0x7e).contains(b)) {
+        return false;
+    }
+    let mut fields = line.split(|b| *b == b' ');
+    let Some(op) = fields.next() else {
+        return false;
+    };
+    if op.is_empty() || !op.iter().all(|b| b.is_ascii_uppercase() || *b == b'_') {
+        return false;
+    }
+    let Some(serial) = fields.next() else {
+        return false;
+    };
+    let Some(replies) = fields.next() else {
+        return false;
+    };
+    let Some(payload) = fields.next() else {
+        return false;
+    };
+    !serial.is_empty()
+        && serial.iter().all(|b| b.is_ascii_digit())
+        && !replies.is_empty()
+        && replies.iter().all(|b| b.is_ascii_digit())
+        && !payload.is_empty()
+        && payload.iter().all(|b| b.is_ascii_hexdigit())
+        && fields.all(|field| !field.is_empty() && field.iter().all(|b| b.is_ascii_hexdigit()))
+}
+
+/// The next input byte: spliced requests first, then the stream. `None` on a
+/// clean EOF, matching the command-line reader's exit condition.
+fn next_byte(input: &mut impl Read, pending: &mut VecDeque<u8>) -> std::io::Result<Option<u8>> {
+    if let Some(byte) = pending.pop_front() {
+        return Ok(Some(byte));
+    }
+    let mut byte = [0];
+    match input.read(&mut byte)? {
+        0 => Ok(None),
+        _ => Ok(Some(byte[0])),
+    }
+}
+
+/// Read bytes until `done`, moving complete request lines that the test's
+/// next write spliced into this stream position over to `pending`. Commands
+/// and the daemon's answers share the one pty input: a producer written
+/// without waiting for `KITTY_DONE` (the production `commit_text` path does
+/// not) is already queued when a late answer arrives. The comparison callers
+/// make on `buffer` stays exact — the spliced line is replayed as the next
+/// request, not skipped.
+fn read_until(
+    input: &mut impl Read,
+    pending: &mut VecDeque<u8>,
+    buffer: &mut Vec<u8>,
+    done: impl Fn(&[u8]) -> bool,
+) -> std::io::Result<()> {
+    while !done(&buffer[..]) {
+        let byte = match next_byte(input, pending)? {
+            Some(byte) => byte,
+            None => panic!("pty input ended inside a reply read"),
+        };
+        buffer.push(byte);
+        if byte != b'\n' {
+            continue;
+        }
+        let end = buffer.len();
+        let start = buffer[..end - 1]
+            .iter()
+            .rposition(|b| *b == b'\n')
+            .map_or(0, |at| at + 1);
+        if spliceable_request(&buffer[start..end - 1]) {
+            pending.extend(buffer.splice(start..end, []));
+        }
+    }
+    Ok(())
+}
+
 // This is a real PTY child, not a daemon seam. Running the current test
 // binary avoids an external Python/Node/shell dependency on every platform.
 // Each request has a stream barrier; replies are read from the actual PTY
@@ -102,19 +184,21 @@ pub fn pty_sender() {
     let mut input = std::io::stdin().lock();
     let mut output = std::io::stdout().lock();
     let mut stats = OutputStats::default();
+    // Request lines the test wrote while this loop was still reading a
+    // reply or barrier for the previous serial; they run next, in order.
+    let mut pending = VecDeque::new();
     output.write_all(b"\r\nKITTY_READY\r\n").unwrap();
     output.flush().unwrap();
     loop {
         let mut line = Vec::new();
         loop {
-            let mut byte = [0];
-            if input.read(&mut byte).unwrap() == 0 {
+            let Some(byte) = next_byte(&mut input, &mut pending).unwrap() else {
                 return;
-            }
-            if byte[0] == b'\n' {
+            };
+            if byte == b'\n' {
                 break;
             }
-            line.push(byte[0]);
+            line.push(byte);
         }
         let line = String::from_utf8(line).unwrap();
         let mut fields = line.split_whitespace();
@@ -188,13 +272,11 @@ pub fn pty_sender() {
             let mut reply = Vec::new();
             // ST terminates Kitty replies; a `t`- or `c`-final CSI terminates
             // the geometry and DA1 answers this fixture also captures.
-            while !(reply.ends_with(b"\x1b\\")
-                || (reply.starts_with(b"\x1b[") && matches!(reply.last(), Some(b't' | b'c'))))
-            {
-                let mut byte = [0];
-                input.read_exact(&mut byte).unwrap();
-                reply.push(byte[0]);
-            }
+            read_until(&mut input, &mut pending, &mut reply, |reply| {
+                reply.ends_with(b"\x1b\\")
+                    || (reply.starts_with(b"\x1b[") && matches!(reply.last(), Some(b't' | b'c')))
+            })
+            .unwrap();
             if operation == "SEND_OK" {
                 assert!(
                     reply.ends_with(b";OK\x1b\\"),
@@ -232,11 +314,10 @@ pub fn pty_sender() {
             .unwrap();
         output.flush().unwrap();
         let mut barrier = Vec::new();
-        while !barrier.ends_with(b"\x1b\\") {
-            let mut byte = [0];
-            input.read_exact(&mut byte).unwrap();
-            barrier.push(byte[0]);
-        }
+        read_until(&mut input, &mut pending, &mut barrier, |barrier| {
+            barrier.ends_with(b"\x1b\\")
+        })
+        .unwrap();
         assert_eq!(
             barrier,
             b"\x1b_Gi=4294967294;ENOTSUPPORTED:Unsupported operation\x1b\\"
