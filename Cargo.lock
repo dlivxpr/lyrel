@@ -6178,6 +6178,7 @@ version = "0.3.4"
 dependencies = [
  "libc",
  "lyrel-core",
+ "png 0.18.1",
  "serde",
  "serde_json",
  "tempfile",

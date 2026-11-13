@@ -155,7 +155,24 @@ impl State {
             .selected
             .get(&p.resource)
             .map_or(p.resource, |&(frame, _)| frame);
-        self.resources[&frame].to_rgba8().unwrap()
+        let image = &self.resources[&frame];
+        if image.format == lyrel_core::core::kitty_graphics::WireFormat::Png {
+            // The authority intentionally retains PNG bytes. Decode this
+            // known RGBA8 producer fixture at the receiving consumer, not by
+            // changing the production wire contract to raw pixels.
+            let mut reader = png::Decoder::new(std::io::Cursor::new(&image.data))
+                .read_info()
+                .expect("accepted PNG header");
+            let mut pixels = vec![0; reader.output_buffer_size().expect("bounded PNG output")];
+            let info = reader.next_frame(&mut pixels).expect("accepted PNG pixels");
+            assert_eq!((info.width, info.height), (image.width, image.height));
+            assert_eq!(info.color_type, png::ColorType::Rgba);
+            assert_eq!(info.bit_depth, png::BitDepth::Eight);
+            pixels.truncate(info.buffer_size());
+            pixels
+        } else {
+            image.to_rgba8().expect("accepted raw image pixels")
+        }
     }
 }
 
