@@ -2509,10 +2509,14 @@ fn iterm2_shares_the_metadata_budget_and_session_reset_retires_identities() {
         "the freed budget admits the iTerm2 image"
     );
     assert_eq!(accepted[0].z, -1);
-    // A full reset retires this session's identities: the stale pending work
-    // cannot revive the resource, and a new one is accepted under a fresh
-    // generation as ordinary session state.
+    // Reset must publish retirement of accepted identities before a new
+    // admission uses fresh resource and placement keys.
     a.idle(b"\x1bc");
+    assert!(a.updates.iter().any(|update| matches!(
+        update,
+        GraphicsUpdate::Remove { placements, resources }
+            if placements.contains(&accepted[0].key) && resources.contains(&accepted[0].resource)
+    )), "RIS retires the accepted iTerm2 resource and placement");
     a.idle(&refused);
     let reset_accepted = a
         .updates
@@ -2523,6 +2527,10 @@ fn iterm2_shares_the_metadata_budget_and_session_reset_retires_identities() {
         })
         .collect::<Vec<_>>();
     assert_eq!(reset_accepted.len(), 1);
+    assert_ne!(
+        reset_accepted[0], accepted[0].resource,
+        "reset cannot reuse the retired resource identity"
+    );
     let reset_placements: Vec<_> = a
         .updates
         .iter()
@@ -2532,6 +2540,10 @@ fn iterm2_shares_the_metadata_budget_and_session_reset_retires_identities() {
         })
         .collect();
     assert_eq!(reset_placements.len(), 1);
+    assert_ne!(
+        reset_placements[0], accepted[0].key,
+        "reset cannot reuse the retired placement identity"
+    );
     a.exit();
     daemon.panes().kill(a.session.pane_id()).unwrap();
 }

@@ -905,11 +905,7 @@ fn iterm2_fragmented_cancelled_truncated_and_oversized_inputs_are_nondestructive
 fn iterm2_resize_keeps_the_image_on_its_text_row(cx: &mut TestAppContext) {
     crate::core::config::pin_test_config_dir();
     cx.executor().allow_parking();
-    let daemon = GraphicsDaemonProcess::start_with(|command, _| {
-        command
-            .env("LYREL_ITERM277_DIAG", "1")
-            .stderr(std::process::Stdio::inherit());
-    });
+    let daemon = GraphicsDaemonProcess::start();
     let pane = daemon.spawn();
     let stream = daemon.stream(pane);
     let mut controller = stream.try_clone().unwrap();
@@ -918,57 +914,11 @@ fn iterm2_resize_keeps_the_image_on_its_text_row(cx: &mut TestAppContext) {
         gpui_kit::component::init(cx);
         cx.set_global(Config::default());
     });
-    let mut diagnostic_observer = daemon
-        .panes()
-        .observe(
-            pane,
-            crate::daemon::protocol::WinSize {
-                cols: 80,
-                rows: 24,
-                cell_w: 10,
-                cell_h: 20,
-            },
-        )
-        .unwrap();
-    diagnostic_observer
-        .set_recv_timeout(Some(std::time::Duration::from_millis(1)))
-        .unwrap();
     let (view, window) = graphics_rooted_consumer(cx, pane, stream);
     let mut bytes = b"\x1b[2J\x1b[H\x1b[6;1HRESIZE_ITERM2\r\n".to_vec();
     bytes.extend_from_slice(&iterm2_file("width=4;height=2", &iterm2_fixture_png()));
     bytes.extend_from_slice(b"\x1b[20;1HBELOW_ITERM2");
-    // [DEBUG-iterm277] Observe the actual daemon boundary without changing
-    // the producer bytes or the fixture's completion condition.
-    let request = format!("SEND 730 0 {} 0\n", graphics_pty_fixture::hex(&bytes));
-    view.read_with(cx, |view, _| view.terminal.write(request.into_bytes()));
-    let diagnostic_deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
-    loop {
-        if view.read_with(cx, |view, _| {
-            view.title == "KITTY_DONE_730;" && view.scrollback_text().contains("KITTY_DONE_730;")
-        }) {
-            break;
-        }
-        match diagnostic_observer.recv() {
-            Ok(message) => {
-                let text = format!("{message:?}");
-                eprintln!("[DEBUG-iterm277] {}", &text[..text.len().min(1536)]);
-            }
-            Err(error)
-                if matches!(
-                    error.kind(),
-                    std::io::ErrorKind::TimedOut | std::io::ErrorKind::WouldBlock
-                ) => {}
-            Err(error) => panic!("[DEBUG-iterm277] observer failed: {error}"),
-        }
-        assert!(
-            std::time::Instant::now() < diagnostic_deadline,
-            "[DEBUG-iterm277] resize setup did not complete: {} graphics={}",
-            view.read_with(cx, |view, _| view.scrollback_text()),
-            view.read_with(cx, |view, _| view.terminal.images().recovery_diagnostics())
-        );
-        graphics_consumer_progress(cx);
-    }
-    diagnostic_observer.detach().unwrap();
+    graphics_send_fixture(&view, cx, 730, &bytes);
     graphics_recovery_wait(cx, "resize setup decoded", |cx| {
         view.read_with(cx, |view, _| {
             graphics_visible_images(view)

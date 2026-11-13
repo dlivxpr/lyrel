@@ -53,16 +53,6 @@ pub(super) fn extract<'a>(
     discovery: &mut crate::core::xtgettcap::Sniffer,
 ) -> Extracted<'a> {
     graphics.begin_read();
-    if std::env::var_os("LYREL_ITERM277_DIAG").is_some()
-        && (raw.windows(5).any(|bytes| bytes == b"1337;") || raw.contains(&0x07))
-    {
-        eprintln!(
-            "[DEBUG-iterm277] raw bytes={} prefix={:?} tail={:?}",
-            raw.len(),
-            &raw[..raw.len().min(128)],
-            &raw[raw.len().saturating_sub(96)..]
-        );
-    }
     use crate::core::xtgettcap::{Segment as DiscoverySegment, Sniffed as DiscoverySniffed};
     match discovery.sniff(raw) {
         DiscoverySniffed::Plain(bytes) => {
@@ -247,10 +237,6 @@ fn command(
     gate: &OutputGate,
     writer: &Arc<Mutex<Box<dyn Write + Send>>>,
 ) -> Vec<u8> {
-    let diagnose = control.iterm2 && std::env::var_os("LYREL_ITERM277_DIAG").is_some();
-    if diagnose {
-        eprintln!("[DEBUG-iterm277] command-enter");
-    }
     if !control.invalid && !control.unsupported && control.action == Action::Display {
         return display(state, control, gate, writer);
     }
@@ -314,9 +300,6 @@ fn command(
             frame,
         )
     };
-    if diagnose {
-        eprintln!("[DEBUG-iterm277] prepare key={key} generation={generation}");
-    }
     let prepared = match source_work {
         Some(work) => GraphicsState::prepare_image_budgeted(image, key, &control, frame, work),
         // a=c has no incoming source; its retained packet clones keep their
@@ -330,9 +313,6 @@ fn command(
             return Vec::new();
         }
     };
-    if diagnose {
-        eprintln!("[DEBUG-iterm277] prepared");
-    }
     let preflight = {
         let mut state = state.lock().unwrap();
         match &mut state.graphics {
@@ -345,9 +325,6 @@ fn command(
     if let Err(status) = preflight {
         reply(writer, &control, status);
         return Vec::new();
-    }
-    if diagnose {
-        eprintln!("[DEBUG-iterm277] metadata-preflight-complete");
     }
     if resource {
         let Some(grant) = broker.request_after_release(
@@ -386,9 +363,6 @@ fn command(
             return Vec::new();
         };
         admissions.push(grant);
-        if diagnose {
-            eprintln!("[DEBUG-iterm277] resource-granted");
-        }
         if let Some(placement_key) = image.placement_key() {
             let Some(grant) = broker.request_after_release(
                 None,
@@ -417,9 +391,6 @@ fn command(
             admissions.push(grant);
         }
     }
-    if diagnose {
-        eprintln!("[DEBUG-iterm277] all-grants-complete");
-    }
     let expected_generation = Some(generation);
     let prepared = image;
     let mut state = state.lock().unwrap();
@@ -447,14 +418,7 @@ fn command(
             grant.commit();
         }
     }
-    if diagnose {
-        eprintln!("[DEBUG-iterm277] publishing");
-    }
-    let output = publish_command(&mut state, effects, gate, writer);
-    if diagnose {
-        eprintln!("[DEBUG-iterm277] published output={}", output.len());
-    }
-    output
+    publish_command(&mut state, effects, gate, writer)
 }
 
 fn display(
