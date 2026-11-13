@@ -66,7 +66,11 @@ fn glyph_support_probe_reaches_the_opted_in_controller() {
         graphics_pty_fixture::hex(b"\x1b_25a1;q;cp=100000\x1b\\"),
         graphics_pty_fixture::hex(q_path.to_string_lossy().as_bytes())
     );
-    daemon.panes().send_input(pane, request.as_bytes()).unwrap();
+    // The controller must be attached before its frontend-bound query runs;
+    // input on a separate connection can overtake Attach on a busy host.
+    ClientMsg::Input(request.into_bytes())
+        .encode(&mut stream)
+        .unwrap();
 
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
     let (token, cp) = loop {
@@ -118,7 +122,9 @@ fn glyph_support_probe_reaches_the_opted_in_controller() {
         graphics_pty_fixture::hex(b"\x1b_25a1;s\x1b\\"),
         graphics_pty_fixture::hex(s_path.to_string_lossy().as_bytes())
     );
-    daemon.panes().send_input(pane, request.as_bytes()).unwrap();
+    ClientMsg::Input(request.into_bytes())
+        .encode(&mut stream)
+        .unwrap();
     assert_eq!(
         wait_reply(&s_path),
         b"\x1b_25a1;s;fmt=glyf\x1b\\".to_vec(),

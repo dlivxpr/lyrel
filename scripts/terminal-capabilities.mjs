@@ -54,7 +54,7 @@ async function probe(label, bytes, expected, fragment = false) {
   assert.equal(stray, '', `非查询时收到额外输入：${JSON.stringify(stray)}`);
   const result = pendingProbe(label, (bytes) => {
     const at = bytes.indexOf(barrier);
-    return at < 0 ? null : at;
+    return at < 0 ? null : at + barrier.length;
   });
   if (fragment) {
     for (const byte of bytes) {
@@ -65,7 +65,7 @@ async function probe(label, bytes, expected, fragment = false) {
     process.stdout.write(bytes);
   }
   process.stdout.write(barrierQuery);
-  assert.equal(await result, expected, label);
+  assert.equal(await result, expected + barrier, label);
   process.stdout.write(`\r\nPASS ${label}\r\n`);
 }
 // A probe whose owner answers without a Kitty barrier: DA1 and XTSMGRAPHICS are
