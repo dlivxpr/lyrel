@@ -468,6 +468,16 @@ Windows 的隔离候选 pane 可执行 `pwsh -NoProfile -File scripts/sixel-stat
 
 原生产物记录：官方 `https://iterm2.com/utilities/imgcat` 脚本 SHA-256 `56f39f8c730eb7a64fed2bdb9e2c0bd2448f72e822caf5b4b17c68a76da52af8`；确定性 48×24 PNG fixture SHA-256 `3d6a133dd26429d40b4acb1c72784afa65642a16e6b38c91a6e20320465f041e`；实际命令 `bash imgcat-official.sh -l -W 4 -H 2 iterm2-fixture.png` 输出 330 bytes（含 uutils `base64` 的 76 列换行、绝对路径 `name=`、BEL 与尾随换行），SHA-256 `9e2726a99780ae04e9732b41d9d5e533857c0bcae7cd8aafe02fda4c7537366b`。生产 seam 回归使用该真实字节经真实 PTY → daemon → ordered consumer → rooted `TerminalView`，验证 4×1 placement、40×20 设备像素、BGRA 首像素、光标与 `AFTER_IT_276` 文字；边界用例覆盖尺寸模式、拒收、同步帧、主备屏与清除。headless 消费者断言不等于 Windows 原生像素、WSL headless、真实 SSH 或 macOS 验收；这些平台结果与最终候选记录分别确认。
 
+#### iTerm2 恢复、边界与发现（#277）
+
+静态 iTerm2 图片复用 Kitty／Sixel 的 pane／daemon 资源、placement、元数据预算与退役机制，不另建图片存储。新增后台生产消费者回归已覆盖第二段真实官方 `imgcat -l -n -W 40px -H 20px` 输出（336 bytes，SHA-256 `dc577e1046824a01f6222a29f8a3567b8ff0a199d292b8b27535175a66613ae9`）的长输出后 fresh consumer 恢复，以及滚动区域、`doNotMoveCursor=1`、fragment=7 分片、CAN／ESC 中断和超维／超头部输入的非破坏性拒收。该 GUI 恢复场景保留原 sender 并比较发送计数，不能冒称已验证原进程退出。
+
+同一次 PTY read 中，已完成的 `File=` 图片即使后面紧接 Kitty APC、另一条 File 或拒收控制串，编码／解码 source 的工作额度仍保留到各图片按流序移交，清理当前控制串不提前释放前一幅图片。base64 在原编码 buffer 内去除头部和空白，补齐 padding 后计算长度，并在新解码分配前取得工作池额度；畸形 padding 拒收而不产生无符号下溢。
+
+Windows 后台检查点 `90e87948`：共享 metadata 压力／RIS 身份退役 1 项、既有 source handoff 1 项及生产 GUI 消费者 9 项均通过，无失败／忽略；GUI 包括原初始发送／resize、PNG／JPEG、精确尺寸／像素数据、滚动、拒收、fresh恢复与同步／主备屏场景。metadata 场景使用生产 PNG 校验所需的资源／工作预算，单独限制 metadata 为 1,024 bytes；按公开 placement 身份折叠有序更新，而非将更新帧数当图片数。真实 SSH 目标仅编译成功：原 producer `exit 0`、独立 `ring_flood` 退出后再 fresh attach 的场景尚未实际运行。Windows 原生像素、最终 WSL／SSH 与含修复的 macOS CI 仍待分别记录，不用后台 GUI、编译或旧候选替代。
+
+发现（discovery）结论：不为静态 iTerm2 适配器伪造 terminfo capability、DA1 attribute 或 `XTSMGRAPHICS` item；`XTGETTCAP` 白名单继续只回答已验证的 `Co`／`colors`／`RGB`。[官方 feature reporting](https://iterm2.com/feature-reporting/) 的 `FILE` 能力涵盖文件下载及其他媒体形式，本实现仅支持静态 inline PNG/JPEG，不广告该广泛能力，也不冒充 iTerm.app。pane 协议从 `19` 起携带 `display_width`／`display_height`；实际连接仍须满足当前版本与 endpoint 的协商要求，不能拿本机 GUI 版本代替远端身份。旧后端必须明确提示更新，不静默降级、不自动替换已运行的 server 或重启会话。本节不宣称 macOS 原生行为已经验收。
+
 #### 当前实现：终端布局与屏幕生命周期（#42）
 
 - 放置锚点由 daemon 在 Kitty 命令的流位置确定，采用包含已丢弃行计数的稳定文本行坐标。输出滚动和浏览历史时，图片跟随关联文本；完全超出 daemon 保留的 10,000 行历史的放置会过期，不会漂移到新输出。部分过期的图片只保留未丢弃的源切片；改变列数时复用同一 Rio 网格的精确行重排映射，不在桌面另建图片位置模型。Windows 本地 ConPTY 的 daemon 镜像与桌面消费者共用同一高度调整／光标补偿；原生 SSH 及远端 Linux 的标准 PTY 保持 Rio 的普通调整语义，不根据 GUI 所在平台选择 ConPTY。

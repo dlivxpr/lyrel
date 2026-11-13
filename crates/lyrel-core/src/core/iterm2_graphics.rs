@@ -1,7 +1,7 @@
 //! Static inline iTerm2 `OSC 1337;File=` admission.
 //!
 //! This module interprets only the bounded, direct `File=` form whose payload
-//! is a static PNG. It has no filesystem, download, URL or renderer authority:
+//! is a static PNG or JPEG. It has no filesystem, download, URL or renderer authority:
 //! `name` is never decoded or resolved and the released protocol's download
 //! (`inline=0`), multipart, PDF and animation facilities are rejected by the
 //! framing layer before this parser runs. Sizing policy reuses the released
@@ -10,7 +10,7 @@
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as BASE64;
 
-use super::graphics_state::MAX_IMAGE_DIMENSION;
+use super::graphics_state::{MAX_IMAGE_DIMENSION, retention::Work};
 use super::kitty_graphics::{
     Action, Control, Image, MAX_IMAGE_BYTES, MAX_TRANSMISSION_BASE64, Medium, WireFormat,
 };
@@ -35,8 +35,12 @@ pub(crate) fn ends_with_partial_opener(bytes: &[u8]) -> bool {
 /// Parse the bytes after `File=` (parameters, `:`, base64 payload) into the
 /// existing image resource/control representation. Returns a refusal reason for
 /// every unsupported or malformed message; callers drop the bytes without
-/// producing a placement or moving the cursor.
-pub(crate) fn parse_file(mut body: Vec<u8>) -> Result<(Control, Image), &'static str> {
+/// producing a placement or moving the cursor. The caller retains the encoded
+/// body's lease; `decode_work` reserves the new decoded allocation before use.
+pub(crate) fn parse_file(
+    body: Vec<u8>,
+    decode_work: &mut Work,
+) -> Result<(Control, Image), &'static str> {
     if body.len() > MAX_FILE_BODY {
         return Err("ENOSPC:iTerm2 file sequence exceeds the encoded limit");
     }
@@ -51,11 +55,12 @@ pub(crate) fn parse_file(mut body: Vec<u8>) -> Result<(Control, Image), &'static
         return Err("ENOSPC:iTerm2 parameters exceed the header limit");
     }
     let header = parse_header(&body[..colon])?;
-    let mut data = body.split_off(colon + 1);
-    // Real producers may wrap base64 lines (the official imgcat script does on
-    // systems whose base64 lacks `-w0`), so compaction is part of the format.
+    let mut data = body;
+    // Compact over the parsed header: no second encoded allocation is needed,
+    // and the removed header leaves room for at most two padding bytes.
+    // Real producers may wrap their base64 lines.
     let mut write = 0;
-    for read in 0..data.len() {
+    for read in colon + 1..data.len() {
         if !data[read].is_ascii_whitespace() {
             data[write] = data[read];
             write += 1;
@@ -71,18 +76,22 @@ pub(crate) fn parse_file(mut body: Vec<u8>) -> Result<(Control, Image), &'static
     if data.len() % 4 == 1 {
         return Err("EINVAL:iTerm2 base64 payload has an ambiguous length");
     }
+    if data.len() % 4 != 0 {
+        data.resize(data.len() + (4 - data.len() % 4), b'=');
+    }
     let padding = data
         .iter()
         .rev()
         .take(2)
         .filter(|byte| **byte == b'=')
         .count();
-    let decoded_len = data.len() / 4 * 3 - padding;
+    let decoded_capacity = data.len() / 4 * 3;
+    let decoded_len = decoded_capacity - padding;
     if decoded_len > MAX_IMAGE_BYTES {
         return Err("ENOSPC:iTerm2 decoded payload exceeds the image limit");
     }
-    if data.len() % 4 != 0 {
-        data.resize(data.len() + (4 - data.len() % 4), b'=');
+    if !decode_work.resize(decoded_capacity) {
+        return Err("ENOSPC:iTerm2 decoded payload exceeds the preparation budget");
     }
     let payload = BASE64
         .decode(&data)
@@ -397,6 +406,11 @@ mod tests {
         body
     }
 
+    fn decode_work() -> Work {
+        let retention = crate::core::graphics_state::retention::Retention::shared();
+        retention.work(retention.owner())
+    }
+
     fn control(
         width: Option<rio_graphics::ResizeParameter>,
         height: Option<rio_graphics::ResizeParameter>,
@@ -443,8 +457,11 @@ mod tests {
     #[test]
     fn static_png_file_reuses_the_existing_resource_control() {
         let image = png(2, 1);
-        let (control, parsed) =
-            parse_file(file("inline=1;size=10;name=Zm9v;width=4;height=2", &image)).unwrap();
+        let (control, parsed) = parse_file(
+            file("inline=1;size=10;name=Zm9v;width=4;height=2", &image),
+            &mut decode_work(),
+        )
+        .unwrap();
         assert!(control.iterm2);
         assert_eq!(control.action, Action::TransmitAndDisplay);
         assert_eq!(control.format, WireFormat::Png);
@@ -468,6 +485,7 @@ mod tests {
         for body in [
             file("inline=0", &image),
             file("", &image),
+            b"inline=1:==".to_vec(),
             file("inline=1", b"%PDF-1.7\n"),
             file("inline=1", b"GIF89a\x01\x00"),
             file("inline=1", b"\xff\xd8\xff\xe0"),
@@ -475,7 +493,7 @@ mod tests {
             file("inline=1;width=4p", &image),
             file("inline=1;height=2%px", &image),
         ] {
-            assert!(parse_file(body).is_err());
+            assert!(parse_file(body, &mut decode_work()).is_err());
         }
         let mut animated = png(2, 1);
         let end = animated.len() - 12;
@@ -483,16 +501,16 @@ mod tests {
             end..end,
             [0, 0, 0, 8, b'a', b'c', b'T', b'L', 0, 0, 0, 1, 0, 0, 0, 0],
         );
-        assert!(parse_file(file("inline=1", &animated)).is_err());
+        assert!(parse_file(file("inline=1", &animated), &mut decode_work()).is_err());
         // A declared `size` is a progress hint, not a second length authority.
-        assert!(parse_file(file("inline=1;size=1", &image)).is_ok());
+        assert!(parse_file(file("inline=1;size=1", &image), &mut decode_work()).is_ok());
         // The header cap is enforced before any payload parsing; the GUI
         // refusal test keeps PTY input bounded.
         let mut oversized = b"inline=1;".to_vec();
         oversized.extend(std::iter::repeat_n(b'x', 9000));
         oversized.push(b':');
         oversized.extend_from_slice(b"AAAA");
-        assert!(parse_file(oversized).is_err());
+        assert!(parse_file(oversized, &mut decode_work()).is_err());
     }
 
     #[test]
@@ -502,7 +520,8 @@ mod tests {
         image::codecs::jpeg::JpegEncoder::new(&mut jpeg)
             .encode_image(&rgb)
             .unwrap();
-        let (control, image) = parse_file(file("inline=1;width=4;height=2", &jpeg)).unwrap();
+        let (control, image) =
+            parse_file(file("inline=1;width=4;height=2", &jpeg), &mut decode_work()).unwrap();
         assert_eq!(control.format, WireFormat::Jpeg);
         assert_eq!((control.cols, control.rows), (4, 2));
         assert_eq!((image.width, image.height), (2, 1));
@@ -528,7 +547,7 @@ mod tests {
         let mut body = b"inline=1;size=9;name=Zm9v\n".to_vec();
         body.push(b':');
         body.extend_from_slice(wrapped.as_bytes());
-        let (control, parsed) = parse_file(body).unwrap();
+        let (control, parsed) = parse_file(body, &mut decode_work()).unwrap();
         assert!(control.iterm2);
         assert_eq!(parsed.data, image);
     }
@@ -554,6 +573,104 @@ mod tests {
                 assert!(image.is_some());
             }
             other => panic!("expected an iTerm2 command, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn accepted_image_survives_following_control_strings_in_one_read() {
+        use crate::core::graphics_state::{GraphicsEffect, GraphicsState, GraphicsUpdate};
+        use crate::core::kitty_graphics::{GraphicsSniffer, Segment, Sniffed};
+        use crate::daemon::protocol::WinSize;
+
+        let body = file("inline=1;width=4;height=2", &png(2, 1));
+        let query: &[u8] = b"\x1b_Ga=q,i=4294967294,f=7\x1b\\";
+        let refused: &[u8] = b"\x1b]1337;File=inline=0:AAAA\x07";
+        let mut duplicate = b"\x1b]1337;File=".to_vec();
+        duplicate.extend_from_slice(&body);
+        duplicate.push(0x07);
+        for (suffix, expected_images) in [(query, 1), (refused, 1), (duplicate.as_slice(), 2)] {
+            let mut state = GraphicsState::new(WinSize {
+                cols: 80,
+                rows: 24,
+                cell_w: 10,
+                cell_h: 20,
+            });
+            let mut sniffer = GraphicsSniffer::new_budgeted(false, state.work_owner());
+            let mut message = b"BEFORE\x1b]1337;File=".to_vec();
+            message.extend_from_slice(&body);
+            message.extend_from_slice(b"\x07AFTER");
+            message.extend_from_slice(suffix);
+            message.extend_from_slice(b"TAIL");
+            let Sniffed::Segments(segments) = sniffer.sniff(&message) else {
+                panic!("the image must reach the ordered authority");
+            };
+            let mut text = Vec::new();
+            let mut replies = Vec::new();
+            for segment in segments {
+                match segment {
+                    Segment::Output(bytes) => {
+                        state.output(&bytes);
+                        text.extend(bytes);
+                    }
+                    Segment::Reply(bytes) => replies.push(bytes),
+                    Segment::Command {
+                        control,
+                        image: Some(image),
+                    } => {
+                        let work = sniffer.take_osc_source_work(image.data.capacity());
+                        let key = state.reserve_resource_key();
+                        let prepared =
+                            GraphicsState::prepare_image_budgeted(image, key, &control, None, work)
+                                .unwrap();
+                        state.apply_prepared(control, prepared);
+                    }
+                    other => panic!("unexpected image input: {other:?}"),
+                }
+            }
+            assert_eq!(text, b"BEFOREAFTERTAIL");
+            if suffix == query {
+                assert_eq!(
+                    replies,
+                    [b"\x1b_Gi=4294967294;ENOTSUPPORTED:Unsupported operation\x1b\\".to_vec()]
+                );
+            } else {
+                assert!(replies.is_empty());
+            }
+            let (replay, _work) = state.replay().expect("accepted images remain replayable");
+            let updates: Vec<_> = replay
+                .into_iter()
+                .filter_map(|effect| match effect {
+                    GraphicsEffect::Frame(packet) => {
+                        Some(GraphicsUpdate::decode_frame_owned(packet.into_vec()).unwrap())
+                    }
+                    GraphicsEffect::Update(update) => Some(update),
+                    _ => None,
+                })
+                .collect();
+            let dimensions: Vec<_> = updates
+                .iter()
+                .filter_map(|update| match update {
+                    GraphicsUpdate::Resource { image, .. } => Some((image.width, image.height)),
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(dimensions, vec![(2, 1); expected_images]);
+            let placements: Vec<_> = updates
+                .iter()
+                .filter_map(|update| match update {
+                    GraphicsUpdate::Place(placement) => Some(placement),
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(placements.len(), expected_images);
+            assert_eq!((placements[0].anchor_row, placements[0].anchor_col), (0, 6));
+            assert!(
+                placements
+                    .iter()
+                    .all(
+                        |placement| (placement.display_width, placement.display_height) == (40, 20)
+                    )
+            );
         }
     }
 }

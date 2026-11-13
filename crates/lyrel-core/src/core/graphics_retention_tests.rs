@@ -22,30 +22,26 @@ fn retention_fixture_daemon() {
         .ok()
         .and_then(|value| value.parse::<usize>().ok())
         .unwrap_or(0);
-    retention::inject_limits(
-        if std::env::var("LYREL_RETENTION_TEST_DEFAULT_LIMITS").is_ok_and(|value| value == "true") {
-            retention::Limits::default()
-        } else {
-            retention::Limits {
-                pane_encoded: 1024,
-                pane_decoded: 8,
-                daemon_encoded: 4096,
-                daemon_decoded: 12,
-                pane_work: 256 << 10,
-                daemon_work: 384 << 10,
-                pane_metadata: if metadata != 0 {
-                    metadata
-                } else {
-                    retention::MAX_PANE_METADATA_BYTES
-                },
-                daemon_metadata: if metadata != 0 {
-                    metadata
-                } else {
-                    retention::MAX_DAEMON_METADATA_BYTES
-                },
-            }
-        },
-    );
+    let mut limits = if std::env::var("LYREL_RETENTION_TEST_DEFAULT_LIMITS")
+        .is_ok_and(|value| value == "true")
+    {
+        retention::Limits::default()
+    } else {
+        retention::Limits {
+            pane_encoded: 1024,
+            pane_decoded: 8,
+            daemon_encoded: 4096,
+            daemon_decoded: 12,
+            pane_work: 256 << 10,
+            daemon_work: 384 << 10,
+            ..retention::Limits::default()
+        }
+    };
+    if metadata != 0 {
+        limits.pane_metadata = metadata;
+        limits.daemon_metadata = metadata;
+    }
+    retention::inject_limits(limits);
     crate::core::config::set_config_dir(dir.into());
     crate::daemon::server::run_daemon().unwrap();
 }
@@ -2445,4 +2441,125 @@ fn retention_daemon_two_visible_panes_retain_and_replay_sixty_distinct_1080p_fra
         consumer.exit();
         daemon.panes().kill(pane_id).unwrap();
     }
+}
+
+// #277: iTerm2 `File=` admissions share the same pane/daemon metadata budget
+// and generation retirement as Kitty resources; there is no second image
+// store or identity namespace. The tiny PNG isolates metadata pressure; real
+// producer-sized inputs are covered through the GUI/SSH consumers.
+#[test]
+fn iterm2_shares_the_metadata_budget_and_session_reset_retires_identities() {
+    use base64::Engine as _;
+    // PNG validation needs its production scratch budget; only metadata is
+    // constrained here, independently of pixel/encoded/work capacity.
+    let daemon = Daemon::with_limits(1024, true);
+    let mut a = daemon.spawn();
+    // The Kitty admission consumes both metadata tickets the budget allows.
+    a.red("a=T,i=1,p=1,c=1,r=1,C=1");
+    let png = {
+        let mut bytes = Vec::new();
+        let mut encoder = png::Encoder::new(&mut bytes, 1, 1);
+        encoder.set_color(png::ColorType::Rgba);
+        encoder.set_depth(png::BitDepth::Eight);
+        encoder
+            .write_header()
+            .unwrap()
+            .write_image_data(&[0xff, 0, 0, 0xff])
+            .unwrap();
+        bytes
+    };
+    let mut refused = b"\x1b]1337;File=inline=1;name=Zm9v:".to_vec();
+    refused.extend_from_slice(
+        base64::engine::general_purpose::STANDARD
+            .encode(&png)
+            .as_bytes(),
+    );
+    refused.push(0x07);
+    a.idle(&refused);
+    assert!(
+        !a.updates.iter().any(|update| matches!(
+            update,
+            GraphicsUpdate::Resource { .. }
+                | GraphicsUpdate::Place(_)
+                | GraphicsUpdate::Remove { .. }
+                | GraphicsUpdate::Evicted { .. }
+        )),
+        "a metadata-exhausted iTerm2 admission produces no resource, placement, removal or eviction"
+    );
+    assert!(
+        !a.text.windows(2).any(|part| part == b"\x1bD"),
+        "a refused iTerm2 admission emits no cursor-advancing output"
+    );
+    // Freeing the Kitty placements reopens the same shared budget.
+    a.idle(b"\x1b_Ga=d,d=A,q=2\x1b\\");
+    a.idle(&refused);
+    // Place frames may revise the same identity as following text advances.
+    // Fold the public updates as a consumer does, rather than count packets.
+    let accepted = a
+        .updates
+        .iter()
+        .filter_map(|update| match update {
+            GraphicsUpdate::Place(placement) => Some((placement.key, placement.clone())),
+            _ => None,
+        })
+        .collect::<BTreeMap<_, _>>();
+    assert_eq!(
+        accepted.len(),
+        1,
+        "the freed budget admits the iTerm2 image"
+    );
+    let accepted = accepted.into_values().next().unwrap();
+    assert_eq!(accepted.z, -1);
+    let (resource, image) = a
+        .updates
+        .iter()
+        .find_map(|update| match update {
+            GraphicsUpdate::Resource { key, image } => Some((*key, image)),
+            _ => None,
+        })
+        .expect("accepted iTerm2 resource reaches the consumer");
+    assert_eq!(resource, accepted.resource);
+    assert_eq!((image.width, image.height), (1, 1));
+    assert_eq!(image.data, png);
+    // Reset must publish retirement of accepted identities before a new
+    // admission uses fresh resource and placement keys.
+    a.idle(b"\x1bc");
+    assert!(
+        a.updates.iter().any(|update| matches!(
+            update,
+            GraphicsUpdate::Remove { placements, resources }
+                if placements.contains(&accepted.key) && resources.contains(&accepted.resource)
+        )),
+        "RIS retires the accepted iTerm2 resource and placement"
+    );
+    a.idle(&refused);
+    let reset_accepted = a
+        .updates
+        .iter()
+        .filter_map(|update| match update {
+            GraphicsUpdate::Resource { key, .. } => Some(*key),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(reset_accepted.len(), 1);
+    assert_ne!(
+        reset_accepted[0], accepted.resource,
+        "reset cannot reuse the retired resource identity"
+    );
+    let reset_placements: BTreeSet<_> = a
+        .updates
+        .iter()
+        .filter_map(|update| match update {
+            GraphicsUpdate::Place(placement) => Some(placement.key),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(reset_placements.len(), 1);
+    assert_ne!(
+        *reset_placements.first().unwrap(),
+        accepted.key,
+        "reset cannot reuse the retired placement identity"
+    );
+    a.exit();
+    daemon.panes().kill(a.session.pane_id()).unwrap();
 }

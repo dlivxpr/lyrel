@@ -1634,6 +1634,188 @@ fn native_ssh_recorded_sixel_survives_ring_eviction_and_fresh_consumer() {
     fixture.kill_pane(pane_id);
 }
 
+// The exact stdout of the official https://iterm2.com/utilities/imgcat script
+// (SHA-256 56f39f8c730eb7a64fed2bdb9e2c0bd2448f72e822caf5b4b17c68a76da52af8)
+// run as `imgcat -l -n -W 40px -H 20px iterm2-fixture.png`: 336 bytes, SHA-256
+// dc577e1046824a01f6222a29f8a3567b8ff0a199d292b8b27535175a66613ae9. `name=` is
+// the producer's own absolute input path; the consumer never decodes or
+// resolves it locally. The PNG is the shared 48x24 fixture (SHA-256
+// 3d6a133dd26429d40b4acb1c72784afa65642a16e6b38c91a6e20320465f041e), whose
+// first decoded RGBA pixel is [255, 0, 33, 255].
+const ITERM2_IMGCAT_OFFICIAL_40X20: &[u8] = b"\x1b]1337;File=inline=1;size=126;name=L21udC9jL1VzZXJzL2RsaXZ4L0FwcERhdGEvTG9jYWwvVGVtcC9seXJlbC1zcGVjMjU4L3d0LTI3\nNi9pdGVybTItZml4dHVyZS5wbmc=;width=40px;height=20px:iVBORw0KGgoAAAANSUhEUgAAADAAAAAYCAYAAAC8/X7cAAAARUlEQVR4nO3PsQ0AIAwDQW9AxQDZ\nf0jTAxGVG/SWvvfJKieTZzgAAAAAAAAAwKVtALqG7ETnFAnAG5I5DgAAAAAAAHwBWKJIfucQ1079\nAAAAAElFTkSuQmCC\x07\n";
+
+#[test]
+#[ignore = "requires the updated fixture SSH endpoint (pane protocol 19), pinned host key, identity, private Linux home and Node; never silently skips"]
+fn native_ssh_recorded_iterm2_survives_ring_eviction_and_fresh_consumer() {
+    let fixture = NativeSshFixture::start(Path::new(env!("CARGO_BIN_EXE_lyrel-server")));
+    let host = fixture.connect_control();
+    let daemon = status(&host);
+    let instance = host.peer().instance.clone();
+    let (probe, endpoint) = fixture.connect_pane();
+    // iTerm2 placements carry protocol-19 display pixels, so a same-version
+    // negotiated endpoint is itself the capability proof: an older daemon or
+    // remote server is refused before any image is claimed to work. There is
+    // no producer-facing terminfo/DA1/XTSMGRAPHICS name for this adapter, and
+    // none is fabricated.
+    assert_eq!(
+        endpoint.protocol,
+        protocol::PROTOCOL_VERSION,
+        "actual remote endpoint must speak the same pane protocol for iTerm2 placements: {endpoint:?}"
+    );
+    eprintln!(
+        "ACTUAL_SSH_ITERM2_ENDPOINT build={} instance={} features={:?}",
+        endpoint.build, endpoint.instance, endpoint.features
+    );
+    drop(probe);
+
+    let mut pane = Consumer::spawn_shell(&fixture);
+    let pane_id = pane.pane;
+    let sender = fixture.install_sender(&host);
+    pane.type_into(format!("{}; echo SENDER_EXIT_$?\n", shell_line(&sender)).as_bytes());
+    pane.until(b"KITTY_READY");
+
+    // The recorded official producer output lands through the real Linux PTY.
+    // Its OSC body is extracted before the text ring, so the surrounding text
+    // is the only protocol-adjacent data in the ordered text stream. RIS gives
+    // the same zero-based screen the GUI seam uses.
+    let mut accepted_bytes = b"\x1bc\x1b[6;1HEARLY_ITERM2\r\n".to_vec();
+    accepted_bytes.extend_from_slice(ITERM2_IMGCAT_OFFICIAL_40X20);
+    accepted_bytes.extend_from_slice(b"AFTER_EARLY");
+    pane.quiet(&accepted_bytes);
+    assert!(
+        !contains(&pane.text, b"\x1b]1337;"),
+        "the iTerm2 OSC is extracted before the text replay"
+    );
+    assert!(contains(&pane.text, b"EARLY_ITERM2"));
+    assert!(contains(&pane.text, b"AFTER_EARLY"));
+    let iterm2 = pane
+        .state
+        .placements
+        .values()
+        .find(|placement| placement.z == -1)
+        .expect("accepted static iTerm2 placement")
+        .clone();
+    assert_eq!(
+        (iterm2.display_width, iterm2.display_height),
+        (40, 20),
+        "the producer's requested device pixels ride the p19 placement fields"
+    );
+    assert_eq!(
+        (iterm2.span_cols, iterm2.span_rows),
+        (4, 1),
+        "40x20 display pixels at 10x20 cells occupy four columns and one row"
+    );
+    let image = &pane.state.resources[&iterm2.resource];
+    assert_eq!((image.width, image.height), (48, 24));
+    let accepted_pixels = pane.state.pixels(&iterm2);
+    assert_eq!(&accepted_pixels[..4], [255, 0, 33, 255]);
+
+    // A fragmented transport must admit the identical producer bytes, and
+    // hostile bounded refusals cannot replace accepted placements or swallow
+    // the ordinary text that follows them.
+    let mut fragmented = ITERM2_IMGCAT_OFFICIAL_40X20.to_vec();
+    fragmented.extend_from_slice(b"FRAGMENTED_ITERM2");
+    pane.exchange("SEND", &fragmented, 0, 7);
+    assert_eq!(
+        pane.state.placements.len(),
+        2,
+        "the fragmented iTerm2 send is admitted byte-boundary-independently"
+    );
+    let accepted_placements = pane.state.placements.clone();
+    pane.quiet(
+        b"\x1b]1337;File=inline=0;name=Zm9v:AAAA\x07\x1b]1337;MultipartFile=inline=1;name=Zm9v\x07\x1b]1337;File=inline=1;name=Zm9v:JVBERi0xLjcK\x07AFTER_REFUSED_ITERM2",
+    );
+    assert_eq!(
+        pane.state.placements, accepted_placements,
+        "refused iTerm2 forms cannot replace or remove accepted placements"
+    );
+    assert!(contains(&pane.text, b"AFTER_REFUSED_ITERM2"));
+    assert!(
+        !contains(&pane.text, b"MultipartFile"),
+        "the dropped multipart form never reaches the text replay"
+    );
+
+    // The original producer must actually exit, not merely stop sending. The
+    // interactive shell reports the child's real exit status; the pane, PTY
+    // and daemon stay alive for the next process.
+    let produced = pane.stats();
+    eprintln!("ORIGINAL_ITERM2_SENDER_BEFORE_EXIT {produced}");
+    assert!(sender_bytes(&produced) > 0);
+    pane.type_into(b"EXIT\n");
+    pane.until(b"SENDER_EXIT_0");
+    assert!(
+        contains(&pane.text, b"SENDER_EXIT_0"),
+        "the original sender must exit with status 0"
+    );
+    eprintln!("ORIGINAL_ITERM2_SENDER_EXIT status=SENDER_EXIT_0");
+
+    // A separate one-shot process now writes SGR-only bytes past the 8 MiB
+    // ring and exits. It carries no OSC, DCS, image or colour command; the
+    // accepted image authority is independent of those bytes.
+    let flood = fixture.install_script(
+        &host,
+        "ring_flood.mjs",
+        include_bytes!("../../../tests/support/ring_flood.mjs"),
+        Vec::new(),
+    );
+    pane.type_into(format!("{}; echo FLOOD_SHELL_EXIT_$?\n", shell_line(&flood)).as_bytes());
+    pane.until(b"FLOOD_SHELL_EXIT_0");
+    let flood_bytes = String::from_utf8_lossy(&pane.text)
+        .lines()
+        .find_map(|line| line.trim().strip_prefix("FLOOD_BYTES=").map(str::to_owned))
+        .expect("one-shot flood byte counter")
+        .parse::<usize>()
+        .expect("one-shot flood byte count");
+    assert!(
+        flood_bytes > 8 << 20,
+        "the one-shot producer must write past the 8 MiB replay ring: {flood_bytes}"
+    );
+    eprintln!("ONE_SHOT_ITERM2_FLOOD_EXIT status=FLOOD_SHELL_EXIT_0 bytes={flood_bytes}");
+    let expected = pane.state.placements.clone();
+    let expected_pixels = pane.state.pixels(
+        pane.state
+            .placements
+            .values()
+            .find(|placement| placement.z == -1)
+            .expect("placement survives the ring trim"),
+    );
+    pane.detach();
+    let mut fresh = attach(&fixture, pane_id);
+    // No STAT after exit: the producer is gone. The replay itself is the proof.
+    fresh.until(b"FLOOD_SHELL_EXIT_0");
+    eprintln!(
+        "FRESH_ITERM2_CONSUMER placements={} text_bytes={} resource_bytes={}",
+        fresh.state.placements.len(),
+        fresh.text_bytes,
+        fresh.resource_pixel_bytes
+    );
+    assert_eq!(
+        fresh.state.placements, expected,
+        "the fresh consumer restores accepted placement authority"
+    );
+    let restored = fresh
+        .state
+        .placements
+        .values()
+        .find(|placement| placement.z == -1)
+        .expect("restored static iTerm2 placement");
+    assert_eq!(fresh.state.pixels(restored), expected_pixels);
+    let restored_image = &fresh.state.resources[&restored.resource];
+    assert_eq!((restored_image.width, restored_image.height), (48, 24));
+    assert!(
+        fresh.text_bytes >= RING_TAIL_FLOOR,
+        "the fresh replay is the real ring tail, not a small snapshot: {} bytes",
+        fresh.text_bytes
+    );
+    assert!(
+        !contains(&fresh.text, b"\x1b]1337;"),
+        "the original OSC never rides the fresh text replay"
+    );
+    assert_eq!(status(&host).pid, daemon.pid);
+    assert_eq!(host.peer().instance, instance);
+    fixture.kill_pane(pane_id);
+}
+
 // Real pinned SSH route -> Linux PTY -> authoritative GlyphState recovery.
 // This complements production GUI paint consumers; it does not claim GPU pixels.
 fn ssh_glyph_outline(width: i16, height: i16) -> Vec<u8> {

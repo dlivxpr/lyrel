@@ -236,11 +236,14 @@ impl ApcTokenizer {
             let capacity = required
                 .max(self.buf.capacity().saturating_mul(2))
                 .min(limit);
-            if !self.work.resize(capacity + self.buf.capacity()) {
+            if !self
+                .work
+                .resize(self.osc_completed + capacity + self.buf.capacity())
+            {
                 return false;
             }
             self.buf.reserve_exact(capacity - self.buf.len());
-            self.work.resize(self.buf.capacity());
+            self.work.resize(self.osc_completed + self.buf.capacity());
         }
         self.buf.extend_from_slice(run);
         true
@@ -250,19 +253,21 @@ impl ApcTokenizer {
     /// resource/control representation, or drop every unsupported byte.
     fn finish_osc_file(&mut self, on_file: &mut impl FnMut(Control, Image)) {
         let body = std::mem::take(&mut self.buf);
-        match super::iterm2_graphics::parse_file(body) {
+        let mut decoding = self.work.temporary();
+        match super::iterm2_graphics::parse_file(body, &mut decoding) {
             Ok((control, image)) => {
                 let png = image.data.capacity();
                 if self.work.resize(self.osc_completed + png) {
                     self.osc_completed += png;
+                    drop(decoding);
                     on_file(control, image);
                 } else {
-                    let _ = self.work.resize(0);
+                    let _ = self.work.resize(self.osc_completed);
                 }
             }
             Err(reason) => {
                 log::debug!("dropping unsupported iTerm2 inline image: {reason}");
-                let _ = self.work.resize(0);
+                let _ = self.work.resize(self.osc_completed);
             }
         }
         self.state = State::Ground;
@@ -857,7 +862,8 @@ impl ApcTokenizer {
 
     fn clear_buffer(&mut self) {
         self.buf = Vec::new();
-        self.work.resize(0);
+        // Completed File sources are consumed only after this tokenizer run.
+        self.work.resize(self.osc_completed);
     }
 
     /// Append within the cap; keep a bounded header prefix on failure so the
@@ -877,10 +883,13 @@ impl ApcTokenizer {
             if self.buf.len() < 4096 {
                 let prefix = run.len().min(4096 - self.buf.len());
                 let required = self.buf.len() + prefix;
-                if self.work.resize(required + self.buf.capacity()) {
+                if self
+                    .work
+                    .resize(self.osc_completed + required + self.buf.capacity())
+                {
                     self.buf
                         .reserve_exact(required.saturating_sub(self.buf.len()));
-                    self.work.resize(self.buf.capacity());
+                    self.work.resize(self.osc_completed + self.buf.capacity());
                     self.buf.extend_from_slice(&run[..prefix]);
                 }
             }
@@ -891,11 +900,14 @@ impl ApcTokenizer {
             let capacity = required
                 .max(self.buf.capacity().saturating_mul(2))
                 .min(limit);
-            if !self.work.resize(capacity + self.buf.capacity()) {
+            if !self
+                .work
+                .resize(self.osc_completed + capacity + self.buf.capacity())
+            {
                 return false;
             }
             self.buf.reserve_exact(capacity - self.buf.len());
-            self.work.resize(self.buf.capacity());
+            self.work.resize(self.osc_completed + self.buf.capacity());
         }
         self.buf.extend_from_slice(run);
         true
