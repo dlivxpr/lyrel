@@ -102,7 +102,7 @@ control 与 pane 分别协商协议；应用版本、control 版本和 pane 版�
 | 协议 | 源码常量 | 当前版本 | 承载内容 |
 | --- | --- | ---: | --- |
 | control | `daemon/control.rs` 的 `CONTROL_VERSION` | 16 | Host 操作、机器树、工作区附着、事件、文件／Git 流和主机指标 |
-| pane | `daemon/protocol.rs` 的 `PROTOCOL_VERSION` | 18 | 创建／附着／观察、输入输出、尺寸、终端模式、agent 状态、图形回放、当前进度、pane 颜色、XTGETTCAP 与 Glyph 注册／查询 |
+| pane | `daemon/protocol.rs` 的 `PROTOCOL_VERSION` | 18 | 创建／附着／观察、输入输出、尺寸、终端模式、agent 状态、图形回放、当前进度、pane 颜色、XTGETTCAP 与 Glyph 注册／查询／保留投影 |
 
 本地 Unix 使用私有 Unix socket，Windows 使用经认证的 loopback TCP；远端通过 SSH／stdio 桥接这些流。远端 server 文件名包含两套版本，当前为 `lyrel-server-c16p18`，Windows 加 `.exe`。
 
@@ -119,7 +119,8 @@ control 的 HELLO 在请求循环前核对版本与 features。增删 wire 消�
 
 1. daemon 的平台生命周期接入 PTY／child 或原生 SSH channel；launch 准备 shell、环境与工作目录，reader 按输出顺序推进 pane 状态。
 2. daemon 保存有界文字回放和几何分段，同时维护 Kitty 图片资源、独立放置、历史锚点与播放时间线。订阅者先获得一致的回放基线，再进入实时输出。
-   pane 级 Glyph Protocol glossary 同样由 daemon 权威持有：只接受 pinned v1.12 校验通过的 `glyf`（PUA、simple/unhinted、64 KiB wire/decoded、1024 FIFO），按请求的 `reply` 级别回复；接受的 `r`/`c` 原样按流位置重发，拒绝/畸形体剥离，RIS 在同一有序位置清空。`q` 不进入消费者：daemon 只向当前 controller 发起一次有界请求，捕获请求位置的 glossary 位，由 controller 用实际字体 fallback 回答 system 位，daemon 写唯一回复；无 controller 时保持静默，旧 token/重复答案丢弃。GUI 仅从接受体重建每 pane 派生绘制（revision、FIFO 镜像），用单元格 effective foreground 绘制，不安装字体、不改 logical width、raw codepoint、普通 fallback、Powerline/boxdraw 或 Kitty placeholder。旧 endpoint 缺少 `glyph-registry` feature 时消费者不派生、不应答并提示更新 daemon；本切片仍不回复 `s`，完整 support 由后续布局、恢复、保留帧与完整客户端 gate 决定。
+   pane 级 Glyph Protocol glossary 同样由 daemon 权威持有：只接受 pinned v1.12 校验通过的 `glyf`（PUA、simple/unhinted、64 KiB wire/decoded、1024 FIFO），按请求的 `reply` 级别回复；接受的 `r`/`c` 原样按流位置重发，拒绝/畸形体剥离，RIS 在同一有序位置清空。`q` 不进入消费者：daemon 只向当前 controller 发起一次有界请求，捕获请求位置的 glossary 位，由 controller 用实际字体 fallback 回答 system 位，daemon 写唯一回复；无 controller 时保持静默，旧 token/重复答案丢弃。GUI 仅从接受体或权威投影重建每 pane 派生绘制（revision、FIFO 镜像），用单元格 effective foreground 绘制，不安装字体、不改 logical width、raw codepoint、普通 fallback、Powerline/boxdraw 或 Kitty placeholder。旧 endpoint 缺少 `glyph-registry` feature 时消费者不派生、不应答并提示更新 daemon；本切片仍不回复 `s`，完整 support 由后续布局、恢复、保留帧与完整客户端 gate 决定。
+   接受的 glossary 不再依赖文字 ring 恢复：daemon 在 `glyph-registry` 之上新增可忽略的 `glyph-state` feature 与 client opt-in，附着时在 ring／图形／颜色回放之后发送有界全量 `GlyphState`（generation + 插入序注册；聚合 wire ≤4 MiB、decoded ≤8 MiB）。未 opt-in 的旧 client 不会收到 kind 72／73，controller 未 opt-in 时 `q` 保持静默；回放文字中的 glyph body 不用于派生。`c`／RIS 在流位置递增 generation，消费者原子替换 registry 并忽略更旧 generation，退休 link 的迟到结果由 link generation 隔离。同一 pane-session 的 Unix `exec` handoff 显式携带该 frame；磁盘 scrollback 剥离完整 glyph APC，旧 handoff 与 daemon 死亡后的新 shell 不复活旧 registry。超过聚合 wire／decoded 预算的注册明确失败，不静默丢弃已接受定义。
 3. 桌面的 `PaneHandshake` 完成路由与接入，`PaneConnection` 配对 reader／writer；`ReaderTask` 管理一次 reader 生命周期，`FrameReader` 顺序消费帧并推进 Rio 网格、模式、解码与回放位置。`LinkWriter` 管理输入队列和背压。
 4. `TerminalLifecycle` 拥有事件 receiver 与批量唤醒，`TerminalView` 适配交互、标题、agent 活动和通知。transport 断开不等于 child 退出，只有真实进程退出才产生 `ChildExited`。
 5. `TerminalElement` 保留唯一的 `request_layout` → `prepaint` → `paint` 管线和命中几何。稳态 grid 锁竞争时保留上一有效帧并重试；输入仍读取 live 模式，不以旧帧模式解释新按键。

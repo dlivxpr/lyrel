@@ -387,7 +387,7 @@ impl<T: EventListener> Handler for ParseBridge<'_, T> {
         *self.keyboard = KeyboardStacks::default();
         self.inner.reset_state();
         if let Some(glyph) = self.glyph {
-            glyph.store.clear_all();
+            glyph.reset();
         }
         if let Some(presentation) = self.presentation {
             let mut facts = presentation.lock().unwrap();
@@ -643,7 +643,7 @@ impl<T: EventListener> Handler for ParseBridge<'_, T> {
 
     fn glyph_clear(&mut self, cp: Option<u32>) {
         if let Some(glyph) = self.glyph {
-            glyph.store.clear(cp);
+            glyph.clear(cp);
         }
     }
 

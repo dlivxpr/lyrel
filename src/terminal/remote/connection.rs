@@ -71,6 +71,7 @@ impl PaneConnection {
             signals,
             link.sender(),
             viewport_reporter.clone(),
+            proxy.parse_state.glyph_generation.load(Ordering::SeqCst),
         );
         Ok(Self {
             link,
@@ -185,6 +186,7 @@ impl PaneConnection {
             signals,
             link.sender(),
             self.viewport_reporter.clone(),
+            proxy.parse_state.glyph_generation.load(Ordering::SeqCst),
         );
         self.reader = reader;
         // Installed after the reader, so the sender reports a refusal

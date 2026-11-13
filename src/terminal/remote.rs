@@ -1,6 +1,6 @@
 use std::borrow::Cow;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 use rio_vt::ansi::CursorShape;
@@ -131,6 +131,12 @@ struct ParseState {
     /// The negotiated endpoint advertises the daemon-owned glossary. Without
     /// it no producer body is applied, derived or answered.
     glyph_authority: AtomicBool,
+    /// The actual endpoint retains the glossary outside the ring and projects
+    /// it to consumers that opted in.
+    glyph_state: AtomicBool,
+    /// Link generation: incremented before a relink so a retired reader's late
+    /// glyph parse cannot mutate the successor's store.
+    glyph_generation: AtomicU64,
     /// A body arrived without that authority; the view reports it once.
     glyph_denied: AtomicBool,
     glyph_denied_reported: AtomicBool,
@@ -692,17 +698,37 @@ impl RemoteTerminal {
         let glyph_authority = self.pane_version.as_ref().is_some_and(|version| {
             version.has_feature(crate::daemon::protocol::FEATURE_GLYPH_REGISTRY)
         });
+        let glyph_state = self.pane_version.as_ref().is_some_and(|version| {
+            version.has_feature(crate::daemon::protocol::FEATURE_GLYPH_STATE)
+        });
+        let had_glyphs = !self.proxy.parse_state.glyphs.is_empty();
         // The new link's endpoint is the one that answers for this pane now;
-        // the replayed stream rebuilds the derived glossary from scratch.
+        // the replayed stream no longer supplies glyph authority, so the new
+        // link's projection rebuilds the store. Bump first: an old reader
+        // still parsing a batch is retired by the same fence as its images.
         self.proxy
             .parse_state
             .glyph_authority
             .store(glyph_authority, Ordering::Relaxed);
         self.proxy
             .parse_state
+            .glyph_state
+            .store(glyph_state, Ordering::Relaxed);
+        self.proxy
+            .parse_state
+            .glyph_generation
+            .fetch_add(1, Ordering::SeqCst);
+        self.proxy
+            .parse_state
             .glyph_denied
             .store(false, Ordering::Relaxed);
-        self.proxy.parse_state.glyphs.clear_all();
+        self.proxy.parse_state.glyphs.reset_link();
+        if had_glyphs && glyph_authority && !glyph_state {
+            // The old backend can keep serving live registrations but cannot
+            // restore them after the ring trims their bytes. Say so instead of
+            // presenting a ring-only recovery as complete support.
+            self.proxy.send(PaneEvent::GlyphUnsupported);
+        }
         let signals = self.reader_signals(false);
         self.connection.adopt_relink(
             stream,
@@ -828,6 +854,9 @@ impl RemoteTerminal {
         let glyph_authority = version.as_ref().is_some_and(|version| {
             version.has_feature(crate::daemon::protocol::FEATURE_GLYPH_REGISTRY)
         });
+        let glyph_state = version.as_ref().is_some_and(|version| {
+            version.has_feature(crate::daemon::protocol::FEATURE_GLYPH_STATE)
+        });
         let proxy = EventProxy {
             tx,
             parse_state: Arc::new(ParseState {
@@ -836,6 +865,8 @@ impl RemoteTerminal {
                 presentation: Mutex::new(presentation),
                 glyphs: Arc::new(super::glyph::GlyphStore::new()),
                 glyph_authority: AtomicBool::new(glyph_authority),
+                glyph_state: AtomicBool::new(glyph_state),
+                glyph_generation: AtomicU64::new(0),
                 glyph_denied: AtomicBool::new(false),
                 glyph_denied_reported: AtomicBool::new(false),
             }),
