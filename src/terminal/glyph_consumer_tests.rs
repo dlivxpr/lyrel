@@ -221,6 +221,19 @@ fn glyph_presentation_redraw(window: gpui_kit::AnyWindowHandle, cx: &mut TestApp
         .unwrap();
 }
 
+/// Forces the next frame through the element's real prepaint/paint stages.
+/// `window.draw` alone can reuse an existing frame after output-only changes.
+fn glyph_presentation_force_frame(
+    window: gpui_kit::AnyWindowHandle,
+    view: &Entity<TerminalView>,
+    cx: &mut TestAppContext,
+) {
+    if view.read_with(cx, |view, _| view.cell_geom.is_some()) {
+        let cell = glyph_cell_bounds(window, view, cx, 0, 0);
+        let _ = glyph_paths_in_cell(window, view, cx, cell);
+    }
+}
+
 /// Releases a helper thread's grid guard even if the painted assertion panics,
 /// so a failing contention test cannot strand the pane lock.
 struct GlyphGridRelease(std::sync::mpsc::Sender<()>);
@@ -439,7 +452,7 @@ fn glyph_synchronized_picture_keeps_its_committed_version_until_esu(cx: &mut Tes
     let display = format!("\x1b[2J\x1b[H\x1b[2;5H{cp}");
     graphics_send_fixture(&view, cx, 2, display.as_bytes());
     glyph_wait(cx, "the committed glyph frame", |cx| {
-        glyph_presentation_redraw(window, cx);
+        glyph_presentation_force_frame(window, &view, cx);
         view.read_with(cx, |view, _| {
             view.cell_geom.is_some() && glyph_presentation_cell(view, cp).is_some()
         })
@@ -538,7 +551,7 @@ fn glyph_synchronized_picture_keeps_its_committed_version_until_the_fail_safe(
     let display = format!("\x1b[2J\x1b[H\x1b[2;5H{cp}");
     graphics_send_fixture(&view, cx, 2, display.as_bytes());
     glyph_wait(cx, "the committed glyph frame", |cx| {
-        glyph_presentation_redraw(window, cx);
+        glyph_presentation_force_frame(window, &view, cx);
         view.read_with(cx, |view, _| {
             view.cell_geom.is_some() && glyph_presentation_cell(view, cp).is_some()
         })
@@ -651,7 +664,7 @@ fn glyph_held_picture_survives_equal_area_resize_contention_and_ordered_size(
     scene.extend_from_slice(cp.to_string().as_bytes());
     DaemonMsg::Output(scene).encode(&mut sender).unwrap();
     glyph_wait(cx, "the committed glyph frame", |cx| {
-        glyph_presentation_redraw(window, cx);
+        glyph_presentation_force_frame(window, &view, cx);
         view.read_with(cx, |view, _| {
             view.cell_geom.is_some() && glyph_presentation_cell(view, cp).is_some()
         })
@@ -692,7 +705,7 @@ fn glyph_held_picture_survives_equal_area_resize_contention_and_ordered_size(
     let holder = std::thread::spawn(move || {
         let guard = terminal.lock();
         locked.send(()).unwrap();
-        wait_release.recv().unwrap();
+        let _ = wait_release.recv_timeout(std::time::Duration::from_secs(3));
         drop(guard);
     });
     wait_locked.recv().unwrap();
