@@ -263,8 +263,7 @@ fn glyph_native_system_coverage_and_registered_paint(cx: &mut TestAppContext) {
     /// glyph has a real id. A nonzero id — even a zero-ink one — is what the
     /// cell would paint, so it is coverage; 0 is `.notdef`.
     let system_covers = |cp: u32, cx: &mut TestAppContext| {
-        let (font, font_size) =
-            view.read_with(cx, |view, _| (view.font.clone(), view.font_size));
+        let (font, font_size) = view.read_with(cx, |view, _| (view.font.clone(), view.font_size));
         cx.update(|cx| {
             let ch = char::from_u32(cp).unwrap();
             let text = gpui_kit::SharedString::from(ch.to_string());
@@ -380,7 +379,11 @@ fn glyph_native_system_coverage_and_registered_paint(cx: &mut TestAppContext) {
         view.grid_buf[2 * cols + 4].fg
     });
     let first = glyph_paths_in_cell(window, &view, cx, cell);
-    assert_eq!(first.len(), 1, "one native registered glyph path: {first:?}");
+    assert_eq!(
+        first.len(),
+        1,
+        "one native registered glyph path: {first:?}"
+    );
     assert_eq!(
         first[0].1.as_solid(),
         Some(expected_fg),
