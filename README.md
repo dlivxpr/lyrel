@@ -107,7 +107,7 @@ npx skills update lyrel         # 后续更新
 <div align="center">
 <sub>
 
-基于 [GPUI Kit](https://gpui-kit.com/) 和 [`rio-vt`](https://crates.io/crates/rio-vt/0.5.29) 构建 · [Apache-2.0](LICENSE) · [问题反馈](https://github.com/dlivxpr/lyrel/issues) · [更新日志](CHANGELOG.md)
+基于 [GPUI Kit](https://gpui-kit.com/) 和 [`rio-vt`](https://crates.io/crates/rio-vt/0.5.30) 构建 · [Apache-2.0](LICENSE) · [问题反馈](https://github.com/dlivxpr/lyrel/issues) · [更新日志](CHANGELOG.md)
 
 来源致谢：本项目衍生自 l0ng-ai 的开源工作，保留 Copyright 2026 l0ng-ai 及 Apache-2.0 许可证声明；身份迁移不变更或移除上游及第三方的版权与许可。
 

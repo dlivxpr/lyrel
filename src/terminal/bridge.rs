@@ -580,8 +580,9 @@ impl<T: EventListener> Handler for ParseBridge<'_, T> {
         cp: u32,
         payload: rio_vt::ansi::glyph_protocol::GlyphPayload,
         width: u8,
+        layout: rio_graphics::glyph_layout::GlyphLayout,
     ) -> Result<(), rio_vt::ansi::glyph_protocol::RegisterError> {
-        self.inner.glyph_register(cp, payload, width)
+        self.inner.glyph_register(cp, payload, width, layout)
     }
 
     fn glyph_clear(&mut self, cp: Option<u32>) {
