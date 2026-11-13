@@ -357,6 +357,12 @@ impl TerminalView {
         if self.frame.alt_screen {
             context.add("alt_screen");
         }
+        if !self.frame_input_active()
+            && self.selection_scroll.reading.is_none()
+            && self.key_flags().reports_events()
+        {
+            context.add("keyboard_events");
+        }
         if self.history.search().is_some() && !self.search_focused && !self.composer_focused {
             context.add("reverse_search");
         }
