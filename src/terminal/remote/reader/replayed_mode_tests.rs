@@ -45,6 +45,7 @@ fn a_replayed_mode_frame_puts_the_client_back_on_the_alternate_screen() {
 /// application reset another member of that mutually exclusive level.
 #[test]
 fn a_replayed_mouse_mode_frame_lands_on_the_effective_encoding_and_level() {
+    crate::core::config::pin_test_config_dir();
     let (client_side, mut daemon_side) = socket_pair();
     let term = RemoteTerminal::from_stream(client_side, TermSize::new(80, 24)).unwrap();
 
@@ -82,6 +83,7 @@ fn a_replayed_mouse_mode_frame_lands_on_the_effective_encoding_and_level() {
 /// restore the *latest* winner, UTF-8, not both flags.
 #[test]
 fn a_replayed_mouse_encoding_transition_restores_utf8_last() {
+    crate::core::config::pin_test_config_dir();
     let (client_side, mut daemon_side) = socket_pair();
     let term = RemoteTerminal::from_stream(client_side, TermSize::new(80, 24)).unwrap();
 
@@ -110,6 +112,7 @@ fn a_replayed_mouse_encoding_transition_restores_utf8_last() {
 
 #[test]
 fn replayed_mouse_encoding_queries_match_live_transitions_and_resets() {
+    crate::core::config::pin_test_config_dir();
     for (sequence, expected) in [
         (
             b"\x1b[?1005h\x1b[?1006h".as_slice(),
