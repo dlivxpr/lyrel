@@ -102,9 +102,9 @@ control 与 pane 分别协商协议；应用版本、control 版本和 pane 版�
 | 协议 | 源码常量 | 当前版本 | 承载内容 |
 | --- | --- | ---: | --- |
 | control | `daemon/control.rs` 的 `CONTROL_VERSION` | 16 | Host 操作、机器树、工作区附着、事件、文件／Git 流和主机指标 |
-| pane | `daemon/protocol.rs` 的 `PROTOCOL_VERSION` | 18 | 创建／附着／观察、输入输出、尺寸、终端模式、agent 状态、图形回放、当前进度、pane 颜色、XTGETTCAP 与 Glyph 注册／查询／保留投影 |
+| pane | `daemon/protocol.rs` 的 `PROTOCOL_VERSION` | 19 | 创建／附着／观察、输入输出、尺寸、终端模式、agent 状态、图形回放、当前进度、pane 颜色、XTGETTCAP、Glyph 注册／查询／保留投影与 iTerm2 精确显示像素 |
 
-本地 Unix 使用私有 Unix socket，Windows 使用经认证的 loopback TCP；远端通过 SSH／stdio 桥接这些流。远端 server 文件名包含两套版本，当前为 `lyrel-server-c16p18`，Windows 加 `.exe`。
+本地 Unix 使用私有 Unix socket，Windows 使用经认证的 loopback TCP；远端通过 SSH／stdio 桥接这些流。远端 server 文件名包含两套版本，当前为 `lyrel-server-c16p19`，Windows 加 `.exe`。
 
 control 的 HELLO 在请求循环前核对版本与 features。增删 wire 消息变体需提升 control 版本，可安全忽略的字段才使用 feature 协商。pane 在实际 endpoint 上先协商版本和有限图形容量，再创建或附着会话；不兼容连接不能先启动 shell 再报告错误。
 

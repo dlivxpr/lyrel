@@ -409,6 +409,20 @@ impl GraphicsState {
             .iter()
             .filter_map(|(key, p)| {
                 let p = &p.placement;
+                if p.display_width != 0 && p.display_height != 0 {
+                    // The iTerm2 sizing policy resolved exact device pixels at
+                    // admission; a font/scale change keeps that image size and
+                    // changes only how many cells it occupies.
+                    return Some((
+                        *key,
+                        p.display_width
+                            .div_ceil(u32::from(size.cell_w.max(1)))
+                            .max(1),
+                        p.display_height
+                            .div_ceil(u32::from(size.cell_h.max(1)))
+                            .max(1),
+                    ));
+                }
                 let c = Control {
                     cols: p.cols,
                     rows: p.rows,

@@ -25,6 +25,13 @@ pub struct Placement {
     pub y: u32,
     pub w: u32,
     pub h: u32,
+    /// Exact destination size in protocol device pixels, resolved by the
+    /// iTerm2 sizing policy at admission. Zero keeps the existing
+    /// `cols`/`rows`-derived Kitty/Sixel mapping.
+    #[serde(default)]
+    pub display_width: u32,
+    #[serde(default)]
+    pub display_height: u32,
     pub offset_x: u32,
     pub offset_y: u32,
     pub z: i32,
@@ -940,6 +947,9 @@ impl GraphicsState {
             image = decoded;
             sixel_cursor = Some(cursor);
         }
+        if control.iterm2 && image.format == WireFormat::Jpeg {
+            image = super::iterm2_graphics::normalize_jpeg(image, &mut work)?;
+        }
         let mut decoded_bytes = if control.action == Action::Compose {
             0
         } else {
@@ -1833,9 +1843,37 @@ impl GraphicsState {
             }
         };
         let id = resource.id;
-        let Some((w, h, span_cols, span_rows)) = self.geometry(control, &resource.image) else {
-            Self::reply(effects, control, id, "EINVAL:Invalid placement rectangle");
-            return;
+        let (w, h, span_cols, span_rows, display_width, display_height) = if control.iterm2 {
+            let cell_width = u32::from(self.size.cell_w.max(1));
+            let cell_height = u32::from(self.size.cell_h.max(1));
+            let view_width = u32::from(self.size.cols.max(1)).saturating_mul(cell_width);
+            let view_height = u32::from(self.size.rows.max(1)).saturating_mul(cell_height);
+            let Some((display_width, display_height)) = super::iterm2_graphics::display_size(
+                resource.image.width,
+                resource.image.height,
+                control,
+                cell_width,
+                cell_height,
+                view_width,
+                view_height,
+            ) else {
+                Self::reply(effects, control, id, "EINVAL:Invalid iTerm2 image size");
+                return;
+            };
+            (
+                resource.image.width,
+                resource.image.height,
+                display_width.div_ceil(cell_width).max(1),
+                display_height.div_ceil(cell_height).max(1),
+                display_width,
+                display_height,
+            )
+        } else {
+            let Some((w, h, span_cols, span_rows)) = self.geometry(control, &resource.image) else {
+                Self::reply(effects, control, id, "EINVAL:Invalid placement rectangle");
+                return;
+            };
+            (w, h, span_cols, span_rows, 0, 0)
         };
         let replacement = self.placement_replacement(resource_key, control.placement);
         if replacement.is_none() && self.placements.len() >= MAX_PLACEMENTS {
@@ -1878,6 +1916,8 @@ impl GraphicsState {
             y: control.y,
             w,
             h,
+            display_width,
+            display_height,
             offset_x: control.offset_x,
             offset_y: control.offset_y,
             z: control.z,
@@ -1922,24 +1962,32 @@ impl GraphicsState {
             history_origin: self.history_origin(),
             epoch: self.viewport_epoch,
         }));
-        if control.sixel && !sixel_display {
-            // DEC Sixel advances through occupied rows (and scrolls), but
-            // retains the start column unless mode 8452 requests the right edge.
+        if (control.sixel && !sixel_display) || control.iterm2 {
+            // DEC Sixel and iTerm2 both advance through occupied rows (and
+            // scroll), but their column rules differ: Sixel keeps the start
+            // column unless mode 8452 requests the right edge; iTerm2 leaves
+            // the cursor in the first column right of the image.
             let start_row = self.term.grid.cursor.pos.row.0;
             let start_col = self.term.grid.cursor.pos.col.0;
             // The DEC text cursor is the final sixel cursor position rounded
             // down to a text cell. That is not the decoded pixel extent: a
             // graphic newline takes a sixel line even with no pixels on it, and
             // a partial last band rounds back into the row it started in.
-            let down = sixel_cursor.map_or(span_rows.saturating_sub(1), |cursor| {
-                cursor.band_top / u32::from(self.size.cell_h.max(1))
-            }) as i32;
+            let down = if control.iterm2 {
+                span_rows.saturating_sub(1) as i32
+            } else {
+                sixel_cursor.map_or(span_rows.saturating_sub(1), |cursor| {
+                    cursor.band_top / u32::from(self.size.cell_h.max(1))
+                }) as i32
+            };
             let scrolls = if self.region.contains(&start_row) {
                 (start_row + down - (self.region.end - 1)).max(0)
             } else {
                 0
             };
-            let col = if self
+            let col = if control.iterm2 {
+                (start_col + span_cols as usize).min(usize::from(self.size.cols.max(1)) - 1)
+            } else if self
                 .term
                 .mode()
                 .contains(rio_vt::crosswords::Mode::SIXEL_CURSOR_TO_THE_RIGHT)
@@ -1952,7 +2000,15 @@ impl GraphicsState {
             for _ in 0..down {
                 movement.extend_from_slice(b"\x1bD");
             }
-            movement.extend_from_slice(format!("\x1b[{}G", col + 1).as_bytes());
+            if control.iterm2 && control.iterm2_do_not_move {
+                // WezTerm's extension restores the pre-image cursor after the
+                // same row advance (and any resulting scroll).
+                movement.extend_from_slice(
+                    format!("\x1b[{};{}H", start_row + 1, start_col + 1).as_bytes(),
+                );
+            } else {
+                movement.extend_from_slice(format!("\x1b[{}G", col + 1).as_bytes());
+            }
             let layout = self.output(&movement);
             effects.push(GraphicsEffect::Output(movement));
             effects.extend(layout);

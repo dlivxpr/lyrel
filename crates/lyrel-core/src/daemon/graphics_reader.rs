@@ -547,9 +547,13 @@ pub(super) fn consume(
                         text(state, &bytes, gate, writer);
                     }
                     Part::Graphics(Segment::Command { control, image }) => {
-                        let source_work = image
-                            .as_ref()
-                            .map(|image| graphics.take_source_work(image.data.capacity()));
+                        let source_work = image.as_ref().map(|image| {
+                            if control.iterm2 {
+                                graphics.take_osc_source_work(image.data.capacity())
+                            } else {
+                                graphics.take_source_work(image.data.capacity())
+                            }
+                        });
                         command(state, control, image, source_work, gate, writer);
                     }
                     Part::Graphics(Segment::Reply(bytes))

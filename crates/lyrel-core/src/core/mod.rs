@@ -11,6 +11,7 @@ pub mod gitignore;
 pub mod glyph_protocol;
 pub mod graphics_state;
 pub mod group_key;
+mod iterm2_graphics;
 #[allow(dead_code)]
 pub mod keychain;
 pub mod kitty_graphics;
