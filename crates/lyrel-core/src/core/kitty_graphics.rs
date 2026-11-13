@@ -1,4 +1,4 @@
-//! Streaming kitty-graphics-protocol extractor (APC `ESC _ G … ST`).
+//! Streaming inline-graphics extractor: Kitty APC and static Sixel DCS.
 //!
 //! The daemon-side counterpart to [`crate::core::osc`]: a tiny, resumable state
 //! machine that pulls kitty graphics commands out of the raw PTY byte stream
@@ -59,19 +59,15 @@ const MAX_TRANSMISSION_BASE64: usize = 48 << 20; // 48 MiB
 /// daemon inside [`crate::daemon::protocol::MAX_FRAME`].
 pub const MAX_IMAGE_BYTES: usize = 32 << 20;
 
-/// A streaming tokenizer that splits raw output into a *passthrough* byte stream
-/// and the kitty graphics commands lifted out of it.
+/// Streaming framing for graphics owned by the daemon, without a second VT
+/// parser. The historical APC name also covers bounded numeric Sixel DCS.
 ///
-/// Feed it raw output bytes. It invokes `on_passthrough` with every byte that is
-/// **not** part of a `_G` graphics sequence — that is the exact input with each
-/// `ESC _ G … ST` removed, and it is what the daemon appends to the replay ring
-/// and forwards to the client. It invokes `on_command` with the complete payload
-/// of each `_G` command (the bytes after `ESC _`, terminator excluded — e.g.
-/// `Ga=T,f=32,…;<base64>`). Non-graphics APC sequences (any payload not starting
-/// with `G`) are passed through verbatim, since only kitty graphics is ours to
-/// intercept; everything else must reach the client's VT parser unchanged. State
-/// persists across `feed` calls, so a sequence split over several reads is still
-/// handled.
+/// Passthrough retains ordinary bytes and foreign APC/DCS verbatim. Complete
+/// commands exclude ESC/ST: `G...` is Kitty and `P...q...` is static Sixel.
+/// Numeric DCS headers over 63 bytes and graphics bodies over their encoded
+/// limit are drained without allowing the desktop mirror to decode them.
+/// State survives PTY read boundaries, including split openers, terminators,
+/// cancellation and a later escape interrupting an unfinished transmission.
 pub struct ApcTokenizer {
     /// Bytes of a `_G` command accumulated after `ESC _ G` while it can still
     /// terminate. Cleared whenever a command finishes or is abandoned.
@@ -92,7 +88,7 @@ enum State {
     Esc,
     /// Held `ESC _`; the next byte decides graphics (`G`) vs. passthrough APC.
     ApcStart,
-    /// DCS header classification delegates to Rio's public parser.
+    /// Rio classifies discovery; graphics mode admits numeric static Sixel.
     DcsStart,
     /// Buffering a `_G` graphics command (stripped from passthrough).
     ApcGraphics,
@@ -227,7 +223,7 @@ impl ApcTokenizer {
                             on_passthrough(&bytes[i + off..i + off + 1]);
                             self.state = State::Ground;
                         } else {
-                        self.state = State::PassApcEsc;
+                            self.state = State::PassApcEsc;
                         }
                         i += off + 1;
                     }
@@ -285,6 +281,15 @@ impl ApcTokenizer {
                         self.start_command();
                         i += 1;
                     }
+                    b'P' => {
+                        self.clear_buffer();
+                        if self.push_graphics(b"P") {
+                            self.state = State::DcsStart;
+                        } else {
+                            self.state = State::ApcDrop;
+                        }
+                        i += 1;
+                    }
                     // A run of ESCs: the earlier one was a lone ESC (passthrough);
                     // keep the newest one held.
                     0x1b => {
@@ -300,6 +305,29 @@ impl ApcTokenizer {
                 },
                 State::DcsStart => {
                     let byte = bytes[i];
+                    if !self.dcs {
+                        if byte == b'q' {
+                            if self.push_graphics(&[byte]) {
+                                self.state = State::ApcGraphics;
+                            } else {
+                                self.clear_buffer();
+                                self.state = State::ApcDrop;
+                            }
+                            i += 1;
+                        } else if byte.is_ascii_digit() || byte == b';' {
+                            if self.buf.len() >= 64 || !self.push_graphics(&[byte]) {
+                                self.clear_buffer();
+                                self.state = State::ApcDrop;
+                            }
+                            i += 1;
+                        } else {
+                            on_passthrough(b"\x1b");
+                            on_passthrough(&self.buf);
+                            self.clear_buffer();
+                            self.state = State::PassApc;
+                        }
+                        continue;
+                    }
                     if matches!(byte, 0x18 | 0x1a | 0x9c) {
                         self.clear_buffer();
                         on_passthrough(b"\x18");
@@ -320,8 +348,7 @@ impl ApcTokenizer {
                         .expect("DCS header parser")
                         .advance(&mut classification, &bytes[i..i + 1]);
                     if byte < 0x20 || byte == 0x7f {
-                        // C0 executes in a DCS header. Forward it once to both
-                        // mirrors, not again inside the owner's query Processor.
+                        // Forward executed C0 once, not again in the owner's query Processor.
                         on_passthrough(&bytes[i..i + 1]);
                         i += 1;
                         continue;
@@ -338,8 +365,6 @@ impl ApcTokenizer {
                             self.state = State::PassApc;
                         }
                     } else if self.buf.len() >= MAX_DCS_HEADER {
-                        // An unterminated/overflowed header is never handed to
-                        // another Processor with an unbounded request buffer.
                         on_passthrough(b"\x18");
                         self.clear_buffer();
                         self.state = State::ApcDrop;
@@ -382,6 +407,16 @@ impl ApcTokenizer {
                         self.start_command();
                         i += 1;
                     }
+                    b'P' => {
+                        on_command(&self.buf, true, false);
+                        self.clear_buffer();
+                        if self.push_graphics(b"P") {
+                            self.state = State::DcsStart;
+                        } else {
+                            self.state = State::ApcDrop;
+                        }
+                        i += 1;
+                    }
                     // ESC began some other escape: abandon this graphics command.
                     // Its bytes were meant as graphics, so they stay stripped —
                     // but the escape itself belongs to the terminal, so forward
@@ -417,6 +452,15 @@ impl ApcTokenizer {
                         self.start_command();
                         i += 1;
                     }
+                    b'P' => {
+                        self.clear_buffer();
+                        if self.push_graphics(b"P") {
+                            self.state = State::DcsStart;
+                        } else {
+                            self.state = State::ApcDrop;
+                        }
+                        i += 1;
+                    }
                     _ => {
                         on_passthrough(b"\x1b");
                         self.state = if self.dcs {
@@ -434,6 +478,15 @@ impl ApcTokenizer {
                     0x1b => i += 1,
                     byte if byte == self.opener()[1] => {
                         self.start_command();
+                        i += 1;
+                    }
+                    b'P' => {
+                        self.clear_buffer();
+                        if self.push_graphics(b"P") {
+                            self.state = State::DcsStart;
+                        } else {
+                            self.state = State::ApcDrop;
+                        }
                         i += 1;
                     }
                     // As in `ApcGraphicsEsc`: the dropped command's bytes stay
@@ -458,6 +511,8 @@ impl ApcTokenizer {
     fn push_graphics(&mut self, run: &[u8]) -> bool {
         let limit = if self.dcs {
             MAX_DISCOVERY_PAYLOAD
+        } else if self.buf.first() == Some(&b'P') {
+            8 << 20
         } else {
             MAX_APC_PAYLOAD
         };
@@ -651,6 +706,7 @@ impl GraphicsSniffer {
         if matches!(self.tokenizer.state, State::Ground)
             && bytes.last() != Some(&0x1b)
             && memchr::memmem::find(bytes, b"\x1b_").is_none()
+            && memchr::memmem::find(bytes, b"\x1bP").is_none()
         {
             return Sniffed::Plain(bytes);
         }
@@ -788,6 +844,8 @@ pub enum Medium {
 /// protocol additions degrade quietly rather than failing the whole command.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Control {
+    /// Internal adapter origin; never parsed from Kitty control keys.
+    pub(crate) sixel: bool,
     pub action: Action,
     pub format: WireFormat,
     pub medium: Medium,
@@ -839,6 +897,7 @@ impl Default for Control {
     fn default() -> Self {
         // Protocol defaults: a=t, f=32, t=d, no compression.
         Self {
+            sixel: false,
             action: Action::Transmit,
             format: WireFormat::Rgba,
             medium: Medium::Direct,
@@ -1476,6 +1535,9 @@ impl GraphicsParser {
     }
 
     fn abort(&mut self, command: &[u8], exhausted: bool) -> Option<Event> {
+        if command.first() == Some(&b'P') {
+            return None;
+        }
         let control = self
             .pending
             .take()
@@ -1504,6 +1566,37 @@ impl GraphicsParser {
         command: &[u8],
         locality: &mut impl FnMut() -> Option<bool>,
     ) -> Option<Event> {
+        if command.first() == Some(&b'P') {
+            let retained = self.pending.as_ref().map_or(0, |p| p.data.capacity());
+            let work = self.work.get_or_insert_with(|| {
+                let retention = super::graphics_state::retention::Retention::shared();
+                retention.work(retention.owner())
+            });
+            if !work.resize(retained + self.completed_bytes + command.len()) {
+                return None;
+            }
+            let data = command.to_vec();
+            self.completed_bytes += data.capacity();
+            work.resize(retained + self.completed_bytes);
+            return Some(Event::Command {
+                control: Control {
+                    sixel: true,
+                    action: Action::TransmitAndDisplay,
+                    quiet: 2,
+                    // Sixel occupies a background bitmap, not Kitty's default
+                    // foreground overlay. Later text must remain visible.
+                    z: -1,
+                    ..Control::default()
+                },
+                image: Some(Image {
+                    width: 0,
+                    height: 0,
+                    data,
+                    format: WireFormat::Rgba,
+                    compressed: false,
+                }),
+            });
+        }
         let control = Control::parse(command)?;
         let data = payload_data(command);
         // A delete aborts a partial upload. Other complete commands must not be
