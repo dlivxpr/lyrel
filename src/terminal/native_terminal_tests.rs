@@ -237,8 +237,14 @@ fn reading_copy_links_theme_and_ime_use_the_painted_semantic_rows(cx: &mut TestA
 
 /// Real fonts must answer the coverage query truthfully and the accepted
 /// registration must paint with the pane's effective foreground. The source
-/// codepoint is PUA-B, which no ordinary primary/fallback font covers, so the
-/// picture can only come from the registration.
+/// codepoint is PUA-B: outside the Nerd Font ranges, so any custom `Path` in
+/// its cell can only come from the registration.
+///
+/// The `system` bit is not assumed: whether the platform text stack covers a
+/// codepoint is platform-dependent (macOS shapes PUA-B through its
+/// last-resort cascade to a real glyph id; DirectWrite answers glyph 0), so
+/// the expected reply is derived from independent shaping evidence below —
+/// never from the query reply itself.
 fn glyph_native_system_coverage_and_registered_paint(cx: &mut TestAppContext) {
     crate::core::config::pin_test_config_dir();
     cx.executor().allow_parking();
@@ -252,6 +258,38 @@ fn glyph_native_system_coverage_and_registered_paint(cx: &mut TestAppContext) {
     let (view, window) = graphics_rooted_consumer(cx, pane, daemon.stream(pane));
     let replies = tempfile::TempDir::new().unwrap();
 
+    /// Independent oracle for the wire `system` bit: shape `cp` alone through
+    /// the pane's real font and platform stack, and read whether any emitted
+    /// glyph has a real id. A nonzero id — even a zero-ink one — is what the
+    /// cell would paint, so it is coverage; 0 is `.notdef`.
+    let system_covers = |cp: u32, cx: &mut TestAppContext| {
+        let (font, font_size) =
+            view.read_with(cx, |view, _| (view.font.clone(), view.font_size));
+        cx.update(|cx| {
+            let ch = char::from_u32(cp).unwrap();
+            let text = gpui_kit::SharedString::from(ch.to_string());
+            let run = gpui_kit::TextRun {
+                len: text.len(),
+                font,
+                color: gpui_kit::Hsla::default(),
+                background_color: None,
+                underline: None,
+                strikethrough: None,
+            };
+            gpui_kit::WindowTextSystem::new(cx.text_system().clone())
+                .shape_line(text, font_size, &[run], None)
+                .runs
+                .iter()
+                .any(|run| run.glyphs.iter().any(|glyph| glyph.id.0 != 0))
+        })
+    };
+    let expected_status = |system: bool, glossary: bool| match (system, glossary) {
+        (true, true) => "system,glossary",
+        (true, false) => "system",
+        (false, true) => "glossary",
+        (false, false) => "",
+    };
+
     let reply = glyph_send(
         &view,
         cx,
@@ -262,8 +300,12 @@ fn glyph_native_system_coverage_and_registered_paint(cx: &mut TestAppContext) {
     );
     assert_eq!(
         reply,
-        format!("\x1b_25a1;q;cp={GLYPH_CP:x};status=\x1b\\").into_bytes(),
-        "U+100000 has no system coverage in the real font stack"
+        format!(
+            "\x1b_25a1;q;cp={GLYPH_CP:x};status={}\x1b\\",
+            expected_status(system_covers(GLYPH_CP, cx), false)
+        )
+        .into_bytes(),
+        "U+100000 reports this stack's real coverage before registration"
     );
 
     let reply = glyph_send(
@@ -280,11 +322,27 @@ fn glyph_native_system_coverage_and_registered_paint(cx: &mut TestAppContext) {
         "A is covered by the real font stack"
     );
 
+    // Before any registration the cell is painted by ordinary font shaping
+    // only: no custom `Path` may appear inside it.
+    let display = format!("\x1b[3;5H{cp}", cp = char::from_u32(GLYPH_CP).unwrap());
+    graphics_send_fixture(&view, cx, 3, display.as_bytes());
+    glyph_wait(cx, "native unregistered codepoint presented", |cx| {
+        view.read_with(cx, |view, _| {
+            view.cell_geom.is_some()
+                && glyph_presented_row(view, 2).chars().nth(4) == Some('\u{100000}')
+        })
+    });
+    let cell = glyph_cell_bounds(window, &view, cx, 2, 4);
+    assert!(
+        glyph_paths_in_cell(window, &view, cx, cell).is_empty(),
+        "no custom path before the registration"
+    );
+
     let reply = glyph_send(
         &view,
         cx,
-        3,
-        &replies.path().join("r3"),
+        4,
+        &replies.path().join("r4"),
         &glyph_register(GLYPH_CP, &glyph_square(1000), 1),
         1,
     );
@@ -297,40 +355,105 @@ fn glyph_native_system_coverage_and_registered_paint(cx: &mut TestAppContext) {
     let reply = glyph_send(
         &view,
         cx,
-        4,
-        &replies.path().join("r4"),
+        5,
+        &replies.path().join("r5"),
         &glyph_query(GLYPH_CP),
         1,
     );
     assert_eq!(
         reply,
-        format!("\x1b_25a1;q;cp={GLYPH_CP:x};status=glossary\x1b\\").into_bytes(),
-        "only the registration covers the PUA-B codepoint"
+        format!(
+            "\x1b_25a1;q;cp={GLYPH_CP:x};status={}\x1b\\",
+            expected_status(system_covers(GLYPH_CP, cx), true)
+        )
+        .into_bytes(),
+        "the registration adds the glossary bit to this stack's coverage"
     );
 
-    let display = format!("\x1b[3;5H{cp}", cp = char::from_u32(GLYPH_CP).unwrap());
-    graphics_send_fixture(&view, cx, 5, display.as_bytes());
+    // The registered definition owns the cell: exactly one `Path` with the
+    // cell's effective foreground.
     glyph_wait(cx, "native glyph painted", |cx| {
-        view.read_with(cx, |view, _| {
-            view.cell_geom.is_some()
-                && glyph_presented_row(view, 2).chars().nth(4) == Some('\u{100000}')
-        })
+        !glyph_paths_in_cell(window, &view, cx, cell).is_empty()
     });
-    let cell = glyph_cell_bounds(window, &view, cx, 2, 4);
-    let paths = glyph_paths_in_cell(window, &view, cx, cell);
-    assert_eq!(
-        paths.len(),
-        1,
-        "one native registered glyph path: {paths:?}"
-    );
     let expected_fg = view.read_with(cx, |view, _| {
         let cols = view.cell_geom.unwrap().cols;
         view.grid_buf[2 * cols + 4].fg
     });
+    let first = glyph_paths_in_cell(window, &view, cx, cell);
+    assert_eq!(first.len(), 1, "one native registered glyph path: {first:?}");
     assert_eq!(
-        paths[0].1.as_solid(),
+        first[0].1.as_solid(),
         Some(expected_fg),
         "native glyph uses the cell's effective foreground"
+    );
+
+    // A replacement redefines the same codepoint: the painted path changes
+    // extent while staying a single registration-owned `Path`.
+    let reply = glyph_send(
+        &view,
+        cx,
+        6,
+        &replies.path().join("r6"),
+        &glyph_register(GLYPH_CP, &glyph_rect(2000, 500), 1),
+        1,
+    );
+    assert_eq!(
+        reply,
+        format!("\x1b_25a1;r;cp={GLYPH_CP:x};status=0\x1b\\").into_bytes(),
+        "replacement accepted"
+    );
+    glyph_wait(cx, "replacement repainted", |cx| {
+        glyph_paths_in_cell(window, &view, cx, cell)
+            .first()
+            .is_some_and(|(bounds, _)| *bounds != first[0].0)
+    });
+    let second = glyph_paths_in_cell(window, &view, cx, cell);
+    assert_eq!(second.len(), 1, "replacement is one glyph path: {second:?}");
+    assert_ne!(
+        second[0].0, first[0].0,
+        "replacement changes the painted extent"
+    );
+    assert_eq!(
+        second[0].1.as_solid(),
+        Some(expected_fg),
+        "replacement keeps the cell's effective foreground"
+    );
+
+    // Clear drops the derived picture: the cell returns to ordinary font
+    // rendering — again no custom `Path` — and the query loses the glossary
+    // bit.
+    let reply = glyph_send(
+        &view,
+        cx,
+        7,
+        &replies.path().join("r7"),
+        &glyph_clear(Some(GLYPH_CP)),
+        1,
+    );
+    assert_eq!(
+        reply,
+        format!("\x1b_25a1;c;cp={GLYPH_CP:x};status=0\x1b\\").into_bytes(),
+        "clear succeeds"
+    );
+    glyph_wait(cx, "clear drops the registered picture", |cx| {
+        glyph_paths_in_cell(window, &view, cx, cell).is_empty()
+    });
+    let reply = glyph_send(
+        &view,
+        cx,
+        8,
+        &replies.path().join("r8"),
+        &glyph_query(GLYPH_CP),
+        1,
+    );
+    assert_eq!(
+        reply,
+        format!(
+            "\x1b_25a1;q;cp={GLYPH_CP:x};status={}\x1b\\",
+            expected_status(system_covers(GLYPH_CP, cx), false)
+        )
+        .into_bytes(),
+        "query after clear no longer reports the glossary"
     );
 }
 
