@@ -18,7 +18,7 @@ local function run()
   vim.bo.bufhidden = 'wipe'
   vim.bo.swapfile = false
   vim.api.nvim_buf_set_lines(0, 0, -1, false, lines)
-  vim.tty.query(names, function(cap, found, seq)
+  require('vim.tty').query(names, function(cap, found, seq)
     vim.schedule(function()
       counts[cap] = (counts[cap] or 0) + 1
       local wanted = expected[cap]
