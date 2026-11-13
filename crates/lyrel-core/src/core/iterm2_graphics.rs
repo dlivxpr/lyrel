@@ -71,7 +71,12 @@ pub(crate) fn parse_file(mut body: Vec<u8>) -> Result<(Control, Image), &'static
     if data.len() % 4 == 1 {
         return Err("EINVAL:iTerm2 base64 payload has an ambiguous length");
     }
-    let padding = data.iter().rev().take(2).filter(|byte| **byte == b'=').count();
+    let padding = data
+        .iter()
+        .rev()
+        .take(2)
+        .filter(|byte| **byte == b'=')
+        .count();
     let decoded_len = data.len() / 4 * 3 - padding;
     if decoded_len > MAX_IMAGE_BYTES {
         return Err("ENOSPC:iTerm2 decoded payload exceeds the image limit");
@@ -192,7 +197,10 @@ fn parse_resize_parameter(value: &[u8]) -> Result<rio_graphics::ResizeParameter,
     if value == b"auto" {
         return Ok(ResizeParameter::Auto);
     }
-    let digits = value.iter().take_while(|byte| byte.is_ascii_digit()).count();
+    let digits = value
+        .iter()
+        .take_while(|byte| byte.is_ascii_digit())
+        .count();
     if digits == 0 {
         return Err("EINVAL:iTerm2 image size has no number");
     }
@@ -235,10 +243,8 @@ fn png_is_animated(png: &[u8]) -> bool {
 /// pixel allocation. The decoder used in ordered preparation is the published
 /// registry `image` release, not the `rio-vt` graphics feature.
 fn jpeg_dimensions(payload: &[u8]) -> Result<(u32, u32), &'static str> {
-    let mut reader = image::ImageReader::with_format(
-        std::io::Cursor::new(payload),
-        image::ImageFormat::Jpeg,
-    );
+    let mut reader =
+        image::ImageReader::with_format(std::io::Cursor::new(payload), image::ImageFormat::Jpeg);
     let mut limits = image::Limits::default();
     limits.max_image_width = Some(MAX_IMAGE_DIMENSION);
     limits.max_image_height = Some(MAX_IMAGE_DIMENSION);
@@ -277,7 +283,9 @@ pub(crate) fn normalize_jpeg(
         .ok_or("ENOSPC:iTerm2 JPEG decoded dimensions exceed the image limit")?;
     // RGB decode (3 bytes/pixel) and the RGBA conversion (4 bytes/pixel) can
     // coexist; two RGBA allocations cover that peak with the charged lease.
-    let budget = bytes.checked_mul(2).ok_or("ENOSPC:iTerm2 JPEG budget overflow")?;
+    let budget = bytes
+        .checked_mul(2)
+        .ok_or("ENOSPC:iTerm2 JPEG budget overflow")?;
     if !work.resize(image.data.capacity() + budget) {
         return Err("ENOSPC:iTerm2 JPEG preparation budget exhausted");
     }
@@ -375,7 +383,11 @@ mod tests {
         let mut encoder = png::Encoder::new(&mut bytes, width, height);
         encoder.set_color(png::ColorType::Rgba);
         encoder.set_depth(png::BitDepth::Eight);
-        encoder.write_header().unwrap().write_image_data(&pixels).unwrap();
+        encoder
+            .write_header()
+            .unwrap()
+            .write_image_data(&pixels)
+            .unwrap();
         bytes
     }
 
@@ -385,7 +397,11 @@ mod tests {
         body
     }
 
-    fn control(width: Option<rio_graphics::ResizeParameter>, height: Option<rio_graphics::ResizeParameter>, preserve: bool) -> Control {
+    fn control(
+        width: Option<rio_graphics::ResizeParameter>,
+        height: Option<rio_graphics::ResizeParameter>,
+        preserve: bool,
+    ) -> Control {
         Control {
             iterm2: true,
             iterm2_width: width,
@@ -400,12 +416,27 @@ mod tests {
         use rio_graphics::ResizeParameter::{Auto, Cells, Pixels, WindowPercent};
         let size = |control: &Control| display_size(48, 24, control, 10, 20, 800, 480).unwrap();
         assert_eq!(size(&control(None, None, true)), (48, 24));
-        assert_eq!(size(&control(Some(Cells(4)), Some(Cells(2)), true)), (40, 20));
-        assert_eq!(size(&control(Some(Cells(8)), Some(Cells(3)), false)), (80, 60));
-        assert_eq!(size(&control(Some(Pixels(100)), Some(Pixels(24)), true)), (48, 24));
-        assert_eq!(size(&control(Some(WindowPercent(50)), Some(Auto), true)), (400, 200));
+        assert_eq!(
+            size(&control(Some(Cells(4)), Some(Cells(2)), true)),
+            (40, 20)
+        );
+        assert_eq!(
+            size(&control(Some(Cells(8)), Some(Cells(3)), false)),
+            (80, 60)
+        );
+        assert_eq!(
+            size(&control(Some(Pixels(100)), Some(Pixels(24)), true)),
+            (48, 24)
+        );
+        assert_eq!(
+            size(&control(Some(WindowPercent(50)), Some(Auto), true)),
+            (400, 200)
+        );
         assert_eq!(size(&control(Some(Cells(4)), Some(Auto), true)), (40, 20));
-        assert_eq!(size(&control(Some(Auto), Some(Pixels(50)), true)), (100, 50));
+        assert_eq!(
+            size(&control(Some(Auto), Some(Pixels(50)), true)),
+            (100, 50)
+        );
         assert_eq!(size(&control(Some(Pixels(0)), Some(Auto), true)), (48, 24));
     }
 
@@ -420,10 +451,13 @@ mod tests {
         assert_eq!(control.quiet, 2);
         assert_eq!(control.z, -1);
         assert_eq!((control.cols, control.rows), (4, 2));
-        assert_eq!((control.iterm2_width, control.iterm2_height), (
-            Some(rio_graphics::ResizeParameter::Cells(4)),
-            Some(rio_graphics::ResizeParameter::Cells(2))
-        ));
+        assert_eq!(
+            (control.iterm2_width, control.iterm2_height),
+            (
+                Some(rio_graphics::ResizeParameter::Cells(4)),
+                Some(rio_graphics::ResizeParameter::Cells(2))
+            )
+        );
         assert_eq!(parsed.data, image);
         assert_eq!(parsed.format, WireFormat::Png);
     }
@@ -445,7 +479,10 @@ mod tests {
         }
         let mut animated = png(2, 1);
         let end = animated.len() - 12;
-        animated.splice(end..end, [0, 0, 0, 8, b'a', b'c', b'T', b'L', 0, 0, 0, 1, 0, 0, 0, 0]);
+        animated.splice(
+            end..end,
+            [0, 0, 0, 8, b'a', b'c', b'T', b'L', 0, 0, 0, 1, 0, 0, 0, 0],
+        );
         assert!(parse_file(file("inline=1", &animated)).is_err());
         // A declared `size` is a progress hint, not a second length authority.
         assert!(parse_file(file("inline=1;size=1", &image)).is_ok());

@@ -415,7 +415,9 @@ impl GraphicsState {
                     // changes only how many cells it occupies.
                     return Some((
                         *key,
-                        p.display_width.div_ceil(u32::from(size.cell_w.max(1))).max(1),
+                        p.display_width
+                            .div_ceil(u32::from(size.cell_w.max(1)))
+                            .max(1),
                         p.display_height
                             .div_ceil(u32::from(size.cell_h.max(1)))
                             .max(1),

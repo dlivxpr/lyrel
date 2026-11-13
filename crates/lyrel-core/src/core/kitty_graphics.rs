@@ -762,10 +762,9 @@ impl ApcTokenizer {
                 State::OscFile => match memchr::memchr3(0x07, 0x1b, 0x9c, &bytes[i..]) {
                     Some(off) => {
                         if off > 0 {
-                            if !self.push_osc(
-                                &bytes[i..i + off],
-                                super::iterm2_graphics::MAX_FILE_BODY,
-                            ) {
+                            if !self
+                                .push_osc(&bytes[i..i + off], super::iterm2_graphics::MAX_FILE_BODY)
+                            {
                                 self.clear_buffer();
                                 self.state = State::OscDrop;
                                 i += off;
