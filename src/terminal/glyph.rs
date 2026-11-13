@@ -283,12 +283,12 @@ fn placement(
             span_h - pad_bottom - (outline.y_max as f32 - extent_bottom) * scale_y
         }
         GlyphAlignV::Center => {
-            let extent_bottom = pad_bottom + (effective_h - extent_h * scale_y) / 2.;
-            span_h - extent_bottom - (outline.y_max as f32 - extent_bottom) * scale_y
+            let placed_bottom = pad_bottom + (effective_h - extent_h * scale_y) / 2.;
+            span_h - placed_bottom - (outline.y_max as f32 - extent_bottom) * scale_y
         }
         GlyphAlignV::End => {
-            let extent_bottom = span_h - pad_top - extent_h * scale_y;
-            span_h - extent_bottom - (outline.y_max as f32 - extent_bottom) * scale_y
+            let placed_bottom = span_h - pad_top - extent_h * scale_y;
+            span_h - placed_bottom - (outline.y_max as f32 - extent_bottom) * scale_y
         }
     };
     if !(left_edge.is_finite() && origin_y.is_finite()) {
@@ -556,10 +556,15 @@ mod tests {
             10.,
         )
         .unwrap();
-        assert_eq!(
-            square, inset,
-            "placement uses the declared frame, not each bbox"
+        close(square.scale_x, inset.scale_x);
+        close(square.scale_y, inset.scale_y);
+        // offset_y is relative to each outline's own y_max; compare the
+        // screen position of the shared authored y=0 instead.
+        close(
+            square.offset_y + 1000. * square.scale_y,
+            inset.offset_y + 900. * inset.scale_y,
         );
+        close(square.offset_x, inset.offset_x);
     }
 
     #[test]
