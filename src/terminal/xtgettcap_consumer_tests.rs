@@ -61,6 +61,10 @@ fn xtgettcap_consumer_exchange(
 fn xtgettcap_real_daemon_rooted_consumer_never_replies_twice(cx: &mut TestAppContext) {
     crate::core::config::pin_test_config_dir();
     cx.executor().allow_parking();
+    cx.update(|cx| {
+        gpui_kit::component::init(cx);
+        cx.set_global(Config::default());
+    });
     let daemon = GraphicsDaemonProcess::start();
     let pane = daemon.spawn();
     let mut observer = daemon
