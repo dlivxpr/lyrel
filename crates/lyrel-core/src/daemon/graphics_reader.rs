@@ -8,6 +8,7 @@ use crate::core::kitty_graphics::{Action, Control, Image, Segment, Sniffed, resp
 pub(super) enum Part {
     Graphics(Segment),
     Clipboard(ClipboardEvent),
+    Capability(Vec<u8>),
 }
 pub(super) enum Extracted<'a> {
     Plain(&'a [u8]),
@@ -36,8 +37,38 @@ pub(super) fn extract<'a>(
     clipboard: &mut ClipboardSniffer,
     graphics: &mut GraphicsSniffer,
     locality: &mut impl FnMut() -> Option<bool>,
+    discovery: &mut crate::core::xtgettcap::Sniffer,
 ) -> Extracted<'a> {
     graphics.begin_read();
+    use crate::core::xtgettcap::{Segment as DiscoverySegment, Sniffed as DiscoverySniffed};
+    match discovery.sniff(raw) {
+        DiscoverySniffed::Plain(bytes) => extract_terminal(bytes, clipboard, graphics, locality),
+        DiscoverySniffed::Segments(segments) => {
+            let mut parts = Vec::new();
+            for segment in segments {
+                match segment {
+                    DiscoverySegment::Query(bytes) => parts.push(Part::Capability(bytes)),
+                    DiscoverySegment::Output(bytes) => {
+                        match extract_terminal(&bytes, clipboard, graphics, locality) {
+                            Extracted::Plain(_) => {
+                                parts.push(Part::Graphics(Segment::Output(bytes)))
+                            }
+                            Extracted::Parts(extracted) => parts.extend(extracted),
+                        }
+                    }
+                }
+            }
+            Extracted::Parts(parts)
+        }
+    }
+}
+
+fn extract_terminal<'a>(
+    raw: &'a [u8],
+    clipboard: &mut ClipboardSniffer,
+    graphics: &mut GraphicsSniffer,
+    locality: &mut impl FnMut() -> Option<bool>,
+) -> Extracted<'a> {
     match clipboard.sniff(raw) {
         ClipboardSniffed::Plain(bytes) => match graphics.sniff_part(bytes, locality) {
             Sniffed::Plain(bytes) => Extracted::Plain(bytes),
@@ -413,6 +444,19 @@ pub(super) fn consume(
         Extracted::Parts(parts) => {
             for part in parts {
                 match part {
+                    Part::Capability(bytes) => {
+                        let mut state = state.lock().unwrap();
+                        let effects = state
+                            .graphics
+                            .as_mut()
+                            .map(|graphics| graphics.output(&bytes))
+                            .unwrap_or_default();
+                        let mut frames = Vec::new();
+                        append_graphics_effects(effects, &mut Vec::new(), &mut frames, writer);
+                        if !frames.is_empty() {
+                            fan_out_output(&mut state, &[], frames, gate);
+                        }
+                    }
                     Part::Graphics(Segment::Output(bytes)) => {
                         text(state, &bytes, gate, writer);
                     }

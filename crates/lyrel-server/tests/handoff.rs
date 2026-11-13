@@ -18,7 +18,7 @@ use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
 
 use lyrel_core::client::PaneClient;
-use lyrel_core::daemon::protocol::{DaemonMsg, ShellSpec, WinSize};
+use lyrel_core::daemon::protocol::{DaemonMsg, PaneProgress, ProgressKind, ShellSpec, WinSize};
 
 const READY_WITHIN: Duration = Duration::from_secs(30);
 const STREAM_WITHIN: Duration = Duration::from_secs(30);
@@ -164,6 +164,30 @@ fn a_handoff_keeps_the_process_the_pty_and_the_shell_that_is_on_it() {
         .input(b"lyrel_kept=survivor; echo lyrel_before_$lyrel_kept\r")
         .expect("the shell takes input");
     collect_until(&mut session, b"lyrel_before_survivor");
+
+    // One shell command emits progress once, then forces those bytes (and a
+    // one-shot notification) out of the production 8 MiB ring. Error survives
+    // a reliable command-end mark too; no later command starts before handoff.
+    let expected_progress = Some(PaneProgress::new(ProgressKind::Error, Some(47)));
+    session
+        .input(b"printf '\\033]9;4;2;47\\007\\033]9;lyrel_handoff_old_notice\\007'; i=0; while [ \"$i\" -lt 8300 ]; do printf '%01024d\\n' \"$i\"; i=$((i + 1)); done; printf 'lyrel_trimmed_%s\\n' \"$lyrel_kept\"\r")
+        .expect("the original shell produces one progress update and a finite flood");
+    loop {
+        match session.recv().expect("bound the live progress observation") {
+            DaemonMsg::Progress(state) => {
+                assert_eq!(
+                    state, expected_progress,
+                    "observe live authority, not OSC text"
+                );
+                break;
+            }
+            DaemonMsg::Exited { code } => panic!("the producer exited before progress: {code:?}"),
+            _ => {}
+        }
+    }
+    // This new live barrier follows the flood; the old marker is deliberately
+    // no longer in the ring. The shell now waits for input without resending.
+    collect_until(&mut session, b"lyrel_trimmed_survivor");
     drop(session);
 
     panes
@@ -191,11 +215,47 @@ fn a_handoff_keeps_the_process_the_pty_and_the_shell_that_is_on_it() {
         .set_recv_timeout(Some(STREAM_WITHIN))
         .expect("bound the stream reads");
 
-    // The replay is the ring the previous image was holding.
-    let replayed = collect_until(&mut session, b"lyrel_before_survivor");
+    // Fresh attachment must restore authority after the real exec even though
+    // the progress sequence itself is no longer available for text replay.
+    let mut replayed = Vec::new();
+    loop {
+        match session
+            .recv()
+            .expect("bound the post-exec progress baseline")
+        {
+            DaemonMsg::Output(bytes) | DaemonMsg::Snapshot(bytes) => replayed.extend(bytes),
+            DaemonMsg::Progress(state) => {
+                assert_eq!(
+                    state, expected_progress,
+                    "the adopted live pane keeps current progress"
+                );
+                break;
+            }
+            DaemonMsg::Exited { code } => {
+                panic!("the adopted pane exited before its baseline: {code:?}")
+            }
+            _ => {}
+        }
+    }
     assert!(
-        windows_contain(&replayed, b"lyrel_before_survivor"),
-        "the pane came back without the output it had before the handoff"
+        replayed.len() > 7 * 1024 * 1024,
+        "the actual production ring must have filled"
+    );
+    assert!(
+        windows_contain(&replayed, b"lyrel_trimmed_survivor"),
+        "the pane came back without the live barrier it printed after eviction"
+    );
+    assert!(
+        !windows_contain(&replayed, b"lyrel_before_survivor"),
+        "the original marker must really have left the ring"
+    );
+    assert!(
+        !windows_contain(&replayed, b"\x1b]9;4;2;47\x07"),
+        "progress restoration must not depend on historical OSC bytes"
+    );
+    assert!(
+        !windows_contain(&replayed, b"lyrel_handoff_old_notice"),
+        "old notifications must not be replayed to a fresh consumer"
     );
 
     // And the variable. Only the shell that ran the first line can answer this;

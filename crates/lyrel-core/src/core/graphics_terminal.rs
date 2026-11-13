@@ -746,6 +746,12 @@ impl Handler for GraphicsState {
             self.replies.push(format!("\x1b[6;{h};{w}t").into_bytes());
         }
     }
+    fn xtgettcap_response(&mut self, generated: String) {
+        let reply = crate::core::xtgettcap::response(&generated);
+        if !reply.is_empty() {
+            self.replies.push(reply);
+        }
+    }
     fn set_title(&mut self, title: Option<String>) {
         self.term.set_title(title);
     }

@@ -39,10 +39,12 @@ impl TerminalView {
                 self.note_output_under_search(cx);
                 self.lifecycle.notify_output(cx);
             }
+            PaneEvent::ProgressChanged => cx.emit(ProgressChanged),
             PaneEvent::Title(title) => self.set_title_when_settled(title, cx),
             PaneEvent::ResetTitle => self.set_title_when_settled(self.default_title.clone(), cx),
             PaneEvent::PtyWrite(text) => self.terminal.write(text.into_bytes()),
             PaneEvent::Exit => {
+                self.input.forget_keys();
                 self.terminal.exited = true;
                 // Nothing is left to settle, and a title still waiting its turn
                 // would land on top of the state below a moment from now.

@@ -32,6 +32,7 @@ pub(super) struct PaneFacts {
     cwd: Option<PathBuf>,
     osc_title: Option<String>,
     shell: ShellState,
+    progress: Option<crate::daemon::protocol::PaneProgress>,
     // A new hop must prove its own integrated far prompt.
     remote_prompt_seen: bool,
     shell_spec: Option<ShellSpec>,
@@ -126,6 +127,7 @@ impl PaneFacts {
         if let Some(cwd) = &self.cwd {
             send(DaemonMsg::Cwd(cwd.clone()));
         }
+        send(DaemonMsg::Progress(self.progress));
     }
 
     pub(super) fn replay_agent(&self, send: &mut impl FnMut(DaemonMsg)) {
@@ -233,6 +235,7 @@ impl PaneFacts {
                 command: None,
                 mark_at_prompt: false,
             },
+            progress: carried.progress,
             // The handoff wire format does not carry proof of a far prompt.
             remote_prompt_seen: false,
             remote: carried.remote.take(),
@@ -251,6 +254,7 @@ impl PaneFacts {
         carried.shell_active = self.shell.active;
         carried.at_prompt = self.shell.at_prompt;
         carried.last_exit = self.shell.last_exit_code;
+        carried.progress = self.progress;
         carried.remote = self.remote.clone();
         carried.agent = self.agent;
         carried.agent_argv = self.agent_argv.clone();
@@ -351,6 +355,11 @@ fn agent_facts_changed(
 }
 
 fn apply_signals(st: &mut PaneFacts, signals: SniffSignals, emit: &mut dyn FnMut(DaemonMsg)) {
+    let progress = signals.progress.apply(st.progress);
+    if progress != st.progress {
+        st.progress = progress;
+        emit(DaemonMsg::Progress(progress));
+    }
     if let Some(cwd) = signals.cwd {
         if st.cwd.as_ref() != Some(&cwd) {
             emit(DaemonMsg::Cwd(cwd.clone()));
@@ -664,3 +673,6 @@ mod marks_tests;
 mod probes_tests;
 #[cfg(test)]
 mod publication_tests;
+
+#[cfg(test)]
+mod progress_tests;

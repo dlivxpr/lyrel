@@ -12,6 +12,7 @@ use super::element::RenderCell;
 pub(super) struct ParsePresentation {
     pub(super) cursor: Option<Pos>,
     pub(super) reading_generation: u64,
+    pub(super) keyboard_generation: u64,
     pub(super) resize_revision: u64,
     pub(super) resize_images_revision: u64,
     /// This pane's application-claimed pointer shape (OSC 22), kept at the
@@ -26,6 +27,7 @@ impl ParsePresentation {
         let mut facts = Self {
             cursor: None,
             reading_generation: 0,
+            keyboard_generation: 0,
             resize_revision: 0,
             resize_images_revision: 0,
             pointer: None,
@@ -49,6 +51,10 @@ impl ParsePresentation {
     pub(super) fn invalidate_reading(&mut self) {
         self.reading_generation = self.reading_generation.wrapping_add(1);
         self.cursor = None;
+    }
+
+    pub(super) fn invalidate_keyboard(&mut self) {
+        self.keyboard_generation = self.keyboard_generation.wrapping_add(1);
     }
 
     pub(super) fn resize(&mut self, cols: usize) {

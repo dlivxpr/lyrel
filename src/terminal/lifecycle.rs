@@ -49,6 +49,7 @@ pub(super) struct LifecycleCallbacks<T: 'static> {
     pub focus: fn(&mut T, bool, &mut Context<T>),
     pub foreground: fn(&mut T, &mut Window, &mut Context<T>),
     pub detach: fn(&mut T),
+    pub deactivate: fn(&mut T),
 }
 
 /// Owns exactly one retained terminal's event receiver, clocks, subscriptions,
@@ -62,7 +63,7 @@ pub(super) struct TerminalLifecycle {
     images: ImageStore,
     released: bool,
     _tasks: [Task<()>; 3],
-    _subscriptions: [Subscription; 3],
+    _subscriptions: [Subscription; 4],
 }
 
 impl TerminalLifecycle {
@@ -124,6 +125,13 @@ impl TerminalLifecycle {
         let blur = cx.on_blur(focus, window, move |view, _, cx| {
             on_focus(view, false, cx);
             cx.notify();
+        });
+
+        let on_deactivate = callbacks.deactivate;
+        let activation = cx.observe_window_activation(window, move |view, window, _| {
+            if !window.is_window_active() {
+                on_deactivate(view);
+            }
         });
 
         let blink_focus = focus.clone();
@@ -197,7 +205,7 @@ impl TerminalLifecycle {
             images,
             released: false,
             _tasks: [pump, blink, foreground],
-            _subscriptions: [focus_in, blur, release],
+            _subscriptions: [focus_in, blur, activation, release],
         }
     }
 

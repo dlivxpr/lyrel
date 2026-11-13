@@ -58,6 +58,8 @@ pub enum PaneEvent {
     Title(String),
     /// Reset to the default window title.
     ResetTitle,
+    /// Authoritative progress changed, independent of terminal output repaint.
+    ProgressChanged,
     /// Write some text to the PTY.
     PtyWrite(String),
     /// Shutdown request.
@@ -90,6 +92,7 @@ impl std::fmt::Debug for PaneEvent {
             PaneEvent::Wakeup => write!(f, "Wakeup"),
             PaneEvent::Title(title) => write!(f, "Title({title})"),
             PaneEvent::ResetTitle => write!(f, "ResetTitle"),
+            PaneEvent::ProgressChanged => write!(f, "ProgressChanged"),
             PaneEvent::PtyWrite(text) => write!(f, "PtyWrite({text})"),
             PaneEvent::Exit => write!(f, "Exit"),
             PaneEvent::ClipboardStore(ty, text) => write!(f, "ClipboardStore({ty:?}, {text})"),
@@ -241,6 +244,7 @@ struct ReaderSignals {
     remote: Arc<Mutex<Option<RemoteContext>>>,
     agent: Arc<Mutex<Option<CLIAgent>>>,
     agent_session: Arc<Mutex<AgentSlot>>,
+    progress: Arc<Mutex<Option<crate::daemon::protocol::PaneProgress>>>,
     /// Whether this link still owes us the attach replay. The reader keeps it
     /// as a plain local: a link's replay is a property of that link's stream
     /// position, and nothing outside the reader thread ever needs to read it.
@@ -580,6 +584,7 @@ pub struct RemoteTerminal {
     auto_supplied_password: bool,
     agent: Arc<Mutex<Option<CLIAgent>>>,
     agent_session: Arc<Mutex<AgentSlot>>,
+    progress: Arc<Mutex<Option<crate::daemon::protocol::PaneProgress>>>,
     /// Derived decode/render cache for the daemon's authoritative graphics state.
     /// The reader applies ordered out-of-band `Graphics` updates and captures
     /// client-grid placement anchors; protocol identities and resource lifetimes
@@ -677,6 +682,7 @@ impl RemoteTerminal {
             remote: self.remote_context.clone(),
             agent: self.agent.clone(),
             agent_session: self.agent_session.clone(),
+            progress: self.progress.clone(),
             awaiting_replay,
             exited: self.exited_flag.clone(),
             child_exited: self.child_exited.clone(),
@@ -774,6 +780,7 @@ impl RemoteTerminal {
         let remote_context: Arc<Mutex<Option<RemoteContext>>> = Arc::new(Mutex::new(None));
         let agent: Arc<Mutex<Option<CLIAgent>>> = Arc::new(Mutex::new(None));
         let agent_session: Arc<Mutex<AgentSlot>> = Arc::new(Mutex::new(AgentSlot::default()));
+        let progress = Arc::new(Mutex::new(None));
         let exited_flag = Arc::new(AtomicBool::new(false));
         let child_exited = Arc::new(AtomicBool::new(false));
         let zle_reading = Arc::new(AtomicBool::new(false));
@@ -802,6 +809,7 @@ impl RemoteTerminal {
                 remote: remote_context.clone(),
                 agent: agent.clone(),
                 agent_session: agent_session.clone(),
+                progress: progress.clone(),
                 awaiting_replay,
                 exited: exited_flag.clone(),
                 child_exited: child_exited.clone(),
@@ -843,6 +851,7 @@ impl RemoteTerminal {
             auto_supplied_password: false,
             agent,
             agent_session,
+            progress,
             images,
             clipboard_writes,
             osc_notes,
@@ -984,6 +993,10 @@ impl RemoteTerminal {
 
     pub fn foreground_cwd(&self) -> Option<PathBuf> {
         self.cwd.lock().ok().and_then(|g| g.clone())
+    }
+
+    pub fn progress(&self) -> Option<crate::daemon::protocol::PaneProgress> {
+        *self.progress.lock().unwrap()
     }
 
     pub fn remote_context(&self) -> Option<RemoteContext> {

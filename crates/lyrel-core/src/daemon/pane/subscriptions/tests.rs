@@ -86,6 +86,7 @@ fn attach_replays_state_in_order_and_installs_subscriber() {
     assert!(
         matches!(rx.try_recv(), Ok(DaemonMsg::Cwd(p)) if p.as_path() == std::path::Path::new("/work"))
     );
+    assert!(matches!(rx.try_recv(), Ok(DaemonMsg::Progress(None))));
     assert!(rx.try_recv().is_err());
 }
 
@@ -192,6 +193,7 @@ fn a_pane_that_left_the_alternate_screen_restores_no_modes() {
     // sending one would put the pane on a screen it had left.
     assert!(matches!(rx.try_recv(), Ok(DaemonMsg::Size(_))));
     assert!(matches!(rx.try_recv(), Ok(DaemonMsg::Snapshot(_))));
+    assert!(matches!(rx.try_recv(), Ok(DaemonMsg::Progress(None))));
     assert!(rx.try_recv().is_err());
 }
 
@@ -216,6 +218,7 @@ fn a_prefix_the_ring_still_carries_is_left_to_the_ring() {
         "the ring speaks for its own modes; nothing goes ahead of it"
     );
     assert!(matches!(rx.try_recv(), Ok(DaemonMsg::Snapshot(_))));
+    assert!(matches!(rx.try_recv(), Ok(DaemonMsg::Progress(None))));
     assert!(rx.try_recv().is_err());
 }
 
@@ -260,6 +263,7 @@ fn attach_to_a_dead_pane_replays_exited() {
     attach_subscriber(&mut st, tx);
     assert!(matches!(rx.try_recv(), Ok(DaemonMsg::Size(_))));
     assert!(matches!(rx.try_recv(), Ok(DaemonMsg::Snapshot(_))));
+    assert!(matches!(rx.try_recv(), Ok(DaemonMsg::Progress(None))));
     assert!(matches!(
         rx.try_recv(),
         Ok(DaemonMsg::Exited { code: None })
@@ -290,6 +294,10 @@ fn observe_replays_state_without_displacing_the_controller() {
     assert!(matches!(observer_rx.try_recv(), Ok(DaemonMsg::Size(_))));
     assert!(matches!(observer_rx.try_recv(), Ok(DaemonMsg::Snapshot(b)) if b == b"screen"));
     assert!(matches!(observer_rx.try_recv(), Ok(DaemonMsg::Cwd(p)) if p == PathBuf::from("/work")));
+    assert!(matches!(
+        observer_rx.try_recv(),
+        Ok(DaemonMsg::Progress(None))
+    ));
     assert!(
         controller_rx.try_recv().is_err(),
         "an observer joining must be invisible to the controller"
