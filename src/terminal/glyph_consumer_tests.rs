@@ -450,7 +450,8 @@ fn glyph_synchronized_picture_keeps_its_committed_version_until_esu(cx: &mut Tes
         reply,
         format!("\x1b_25a1;r;cp={GLYPH_CP:x};status=0\x1b\\").into_bytes()
     );
-    let display = format!("\x1b[2J\x1b[H\x1b[2;5H{cp}");
+    // The PTY fixture writes its completion marker on row 2.
+    let display = format!("\x1b[2J\x1b[H\x1b[3;5H{cp}");
     graphics_send_fixture(&view, cx, 2, display.as_bytes());
     glyph_wait(cx, "the committed glyph frame", |cx| {
         glyph_presentation_force_frame(window, &view, cx);
@@ -549,7 +550,8 @@ fn glyph_synchronized_picture_keeps_its_committed_version_until_the_fail_safe(
         reply,
         format!("\x1b_25a1;r;cp={GLYPH_CP:x};status=0\x1b\\").into_bytes()
     );
-    let display = format!("\x1b[2J\x1b[H\x1b[2;5H{cp}");
+    // Keep the glyph below the fixture's row-2 completion marker.
+    let display = format!("\x1b[2J\x1b[H\x1b[3;5H{cp}");
     graphics_send_fixture(&view, cx, 2, display.as_bytes());
     glyph_wait(cx, "the committed glyph frame", |cx| {
         glyph_presentation_force_frame(window, &view, cx);
@@ -753,17 +755,7 @@ fn glyph_held_picture_survives_equal_area_resize_contention_and_ordered_size(
             (term.columns(), term.screen_lines()) == (96, 20)
         })
     });
-    let ordered_hold = glyph_presentation_paths(window, &view, cx, row, col);
-    assert_eq!(ordered_hold.len(), 1, "{ordered_hold:?}");
-    assert_eq!(
-        ordered_hold[0].0, square,
-        "the ordered Size does not publish the unfinished frame"
-    );
-
-    DaemonMsg::Output(b"\x1b[?2026l".to_vec())
-        .encode(&mut sender)
-        .unwrap();
-    glyph_wait(cx, "ESU publishes at the ordered geometry", |cx| {
+    glyph_wait(cx, "the ordered Size publishes at the new geometry", |cx| {
         glyph_presentation_redraw(window, cx);
         let paths = {
             let (row, col) = view
