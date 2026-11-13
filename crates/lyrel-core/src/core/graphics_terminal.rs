@@ -971,8 +971,7 @@ impl Handler for GraphicsState {
         // parser at the exact stream position. Index values come from the
         // parser's own OSC bounds (0..=258); a wider one is ignored by
         // `PaneColors` rather than mapped onto another slot.
-        self.colors
-            .set(index as u16, [color.r, color.g, color.b]);
+        self.colors.set(index as u16, [color.r, color.g, color.b]);
         self.term.set_color(index, color);
     }
 

@@ -593,14 +593,7 @@ fn a_colour_snapshot_is_replayed_without_its_original_ring_bytes() {
     record_output(&mut st, b"a ring that never carried the OSC set");
 
     let (tx, rx) = mpsc::channel();
-    attach_subscriber_with_permissions(
-        &mut st,
-        tx,
-        &OutputGate::new(),
-        false,
-        false,
-        true,
-    );
+    attach_subscriber_with_permissions(&mut st, tx, &OutputGate::new(), false, false, true);
     let messages = drain(&rx);
     let frame = messages
         .iter()

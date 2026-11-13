@@ -206,6 +206,10 @@ pub struct TerminalModes {
     /// `CSI c` (primary device attributes) queries seen and not yet taken —
     /// see [`Self::take_device_attribute_queries`].
     device_attribute_queries: usize,
+    /// How many `ESC c` full resets this fold has seen. Consumers that keep
+    /// state outside this tracker (the glyph glossary) compare it to clear on
+    /// the same stream position.
+    resets: u64,
     keyboard: KeyboardStacks,
 }
 
@@ -254,6 +258,12 @@ impl TerminalModes {
     /// fed since the last call. Counted only, like the 996 ones.
     pub fn take_device_attribute_queries(&mut self) -> usize {
         std::mem::take(&mut self.device_attribute_queries)
+    }
+
+    /// How many full resets (`ESC c`) this fold has seen. A consumer with
+    /// state outside this tracker clears when the value changes.
+    pub fn resets(&self) -> u64 {
+        self.resets
     }
 
     /// The bytes that put a freshly reset terminal back into these modes, or
@@ -367,6 +377,7 @@ impl TerminalModes {
                     b'c' => {
                         self.on.clear();
                         self.keyboard = KeyboardStacks::default();
+                        self.resets = self.resets.wrapping_add(1);
                         self.state = State::Text;
                     }
                     0x1b => {}

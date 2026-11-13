@@ -102,7 +102,7 @@ control 与 pane 分别协商协议；应用版本、control 版本和 pane 版�
 | 协议 | 源码常量 | 当前版本 | 承载内容 |
 | --- | --- | ---: | --- |
 | control | `daemon/control.rs` 的 `CONTROL_VERSION` | 16 | Host 操作、机器树、工作区附着、事件、文件／Git 流和主机指标 |
-| pane | `daemon/protocol.rs` 的 `PROTOCOL_VERSION` | 18 | 创建／附着／观察、输入输出、尺寸、终端模式、agent 状态、图形回放与当前进度 |
+| pane | `daemon/protocol.rs` 的 `PROTOCOL_VERSION` | 18 | 创建／附着／观察、输入输出、尺寸、终端模式、agent 状态、图形回放、当前进度、pane 颜色、XTGETTCAP 与 Glyph 注册／查询 |
 
 本地 Unix 使用私有 Unix socket，Windows 使用经认证的 loopback TCP；远端通过 SSH／stdio 桥接这些流。远端 server 文件名包含两套版本，当前为 `lyrel-server-c16p18`，Windows 加 `.exe`。
 
@@ -119,6 +119,7 @@ control 的 HELLO 在请求循环前核对版本与 features。增删 wire 消�
 
 1. daemon 的平台生命周期接入 PTY／child 或原生 SSH channel；launch 准备 shell、环境与工作目录，reader 按输出顺序推进 pane 状态。
 2. daemon 保存有界文字回放和几何分段，同时维护 Kitty 图片资源、独立放置、历史锚点与播放时间线。订阅者先获得一致的回放基线，再进入实时输出。
+   pane 级 Glyph Protocol glossary 同样由 daemon 权威持有：只接受 pinned v1.12 校验通过的 `glyf`（PUA、simple/unhinted、64 KiB wire/decoded、1024 FIFO），按请求的 `reply` 级别回复；接受的 `r`/`c` 原样按流位置重发，拒绝/畸形体剥离，RIS 在同一有序位置清空。`q` 不进入消费者：daemon 只向当前 controller 发起一次有界请求，捕获请求位置的 glossary 位，由 controller 用实际字体 fallback 回答 system 位，daemon 写唯一回复；无 controller 时保持静默，旧 token/重复答案丢弃。GUI 仅从接受体重建每 pane 派生绘制（revision、FIFO 镜像），用单元格 effective foreground 绘制，不安装字体、不改 logical width、raw codepoint、普通 fallback、Powerline/boxdraw 或 Kitty placeholder。旧 endpoint 缺少 `glyph-registry` feature 时消费者不派生、不应答并提示更新 daemon；本切片仍不回复 `s`，完整 support 由后续布局、恢复、保留帧与完整客户端 gate 决定。
 3. 桌面的 `PaneHandshake` 完成路由与接入，`PaneConnection` 配对 reader／writer；`ReaderTask` 管理一次 reader 生命周期，`FrameReader` 顺序消费帧并推进 Rio 网格、模式、解码与回放位置。`LinkWriter` 管理输入队列和背压。
 4. `TerminalLifecycle` 拥有事件 receiver 与批量唤醒，`TerminalView` 适配交互、标题、agent 活动和通知。transport 断开不等于 child 退出，只有真实进程退出才产生 `ChildExited`。
 5. `TerminalElement` 保留唯一的 `request_layout` → `prepaint` → `paint` 管线和命中几何。稳态 grid 锁竞争时保留上一有效帧并重试；输入仍读取 live 模式，不以旧帧模式解释新按键。
@@ -219,3 +220,10 @@ coding agent 在真实 PTY 中运行自己的原生 TUI。命令识别、状态 
 桌面只支持 Windows／macOS；Linux 保留 core、server、CLI 与 GUI-free `lyrel-text`，显式排除根桌面包及 `lyrel-markdown-editor`，不预留手机网关。Windows 使用已核验、配套分发的官方 ConPTY。依赖与平台选择见[安装指南](/getting-started/installation)，编译成功不推导原生或跨平台行为通过。
 
 验证需匹配被修改的边界：共享行为使用对应 core／server／CLI 用例和真实 daemon／PTY 路径；GUI 行为还需实际窗口观察；Unix、Windows、macOS 与真实 SSH 的证据分别记录。历史工单中的测试计数、二进制身份、失败与未验证项保留在原记录，不作为当前源码已重新验收的声明。
+
+#266 的当前窄验证（Windows，真实 PTY → 隔离 daemon → 生产 `TerminalView`，`LYREL_CONPTY_DIR` 指向根 `.conpty`）：
+
+- `pwsh scripts/cargo-windows.ps1 test -p lyrel-core --lib glyph_`：25 passed（PUA、reply 0/1/2、composite/hinted、64 KiB wire/decoded、abort、split APC、1024 FIFO、RIS、q 请求位置 glossary、真实 extract→consume 管线）。
+- `pwsh scripts/cargo-windows.ps1 test -p lyrel --lib glyph_consumer_real_pty`：1 passed（真实 q/r/c 回复字节、生产绘制 path/effective fg、replace/clear、raw codepoint）。
+- `pwsh scripts/cargo-windows.ps1 test -p lyrel --lib a_glyph_query`：2 passed（reader→view→Client71 单答案）。
+- `--features native-markdown-tests --test native_terminal glyph_native`：真实字体 coverage 与生产绘制入口；原生窗口像素、WSL 与真实 SSH 仍由父验收，不在本页记为通过。

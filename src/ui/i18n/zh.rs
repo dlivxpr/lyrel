@@ -3,6 +3,9 @@ use super::L10nKey;
 pub fn translate_zh(key: L10nKey) -> Option<&'static str> {
     Some(match key {
         L10nKey::TerminalImageEvicted => "图片已淘汰",
+        L10nKey::TerminalGlyphNeedsDaemonUpdate => {
+            "Glyph 协议需要更新 lyrel 守护进程；当前窗格未改变"
+        }
         L10nKey::TerminalReturnLive => "↓ {rows} 行 · 回到实时输出",
         L10nKey::NotificationInbox => "通知",
         L10nKey::NotificationClearHistory => "清空通知历史",

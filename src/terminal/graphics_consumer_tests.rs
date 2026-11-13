@@ -2964,3 +2964,46 @@ fn synchronized_copy_preserves_tabstop_gaps_custom_clear_reset_and_growth(cx: &m
     }
     assert!(failures.is_empty(), "{}", failures.join("\n"));
 }
+
+/// The real daemon must frame `q` from the PTY to its controller, before any
+/// GUI derives or answers anything. This isolates the ConPTY/daemon half of
+/// the consumer tracer.
+#[test]
+fn glyph_daemon_frames_a_query_to_its_controller() {
+    use std::io::ErrorKind;
+    use std::time::{Duration, Instant};
+
+    let daemon = GraphicsDaemonProcess::start();
+    let pane = daemon.spawn();
+    let mut controller = daemon.stream(pane);
+    controller
+        .set_read_timeout(Some(Duration::from_millis(250)))
+        .unwrap();
+    let request = format!(
+        "SEND 1 1 {} 0\n",
+        graphics_pty_fixture::hex(&glyph_query(0x100000))
+    );
+    daemon
+        .panes()
+        .send_input(pane, request.as_bytes())
+        .unwrap();
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        assert!(
+            Instant::now() < deadline,
+            "the daemon never framed the query to its controller"
+        );
+        match DaemonMsg::read(&mut controller) {
+            Ok(DaemonMsg::GlyphQuery { token, cp }) => {
+                assert_eq!(cp, 0x100000);
+                assert_eq!(token, 0, "the first query takes the first token");
+                return;
+            }
+            Ok(_) => continue,
+            Err(error) if matches!(error.kind(), ErrorKind::WouldBlock | ErrorKind::TimedOut) => {
+                std::thread::sleep(Duration::from_millis(5));
+            }
+            Err(error) => panic!("controller stream failed: {error}"),
+        }
+    }
+}

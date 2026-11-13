@@ -3,6 +3,9 @@ use super::L10nKey;
 pub fn translate_en(key: L10nKey) -> &'static str {
     match key {
         L10nKey::TerminalImageEvicted => "Image evicted",
+        L10nKey::TerminalGlyphNeedsDaemonUpdate => {
+            "Glyph Protocol needs an updated lyrel daemon; this pane was not changed"
+        }
         L10nKey::TerminalReturnLive => "↓ {rows} lines · Return to live",
         L10nKey::NotificationInbox => "Notifications",
         L10nKey::NotificationClearHistory => "Clear notification history",

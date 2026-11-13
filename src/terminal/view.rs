@@ -98,6 +98,13 @@ pub struct AgentDetected(pub crate::core::cli_agent::CLIAgent);
 
 impl gpui_kit::EventEmitter<AgentDetected> for TerminalView {}
 
+/// A producer used Glyph Protocol against a backend that does not own the
+/// glossary. Nothing was rendered or acknowledged; the app tells the user the
+/// daemon needs updating instead of leaving a half-working pane.
+pub struct GlyphUnsupported;
+
+impl gpui_kit::EventEmitter<GlyphUnsupported> for TerminalView {}
+
 /// A file link the user clicked, on its way to whoever can show it. The
 /// terminal resolves the path — it is the only thing that knows the pane's
 /// directory and host — and the app opens it, because the editor and the file
@@ -987,6 +994,7 @@ impl TerminalView {
         )
     }
 
+    #[cfg(test)]
     pub fn adopt_relink(
         &mut self,
         stream: crate::daemon::transport::Stream,
@@ -3339,6 +3347,7 @@ mod gpui_tests {
     }
 
     include!("graphics_consumer_tests.rs");
+    include!("glyph_consumer_tests.rs");
     include!("color_override_consumer_tests.rs");
     include!("xtgettcap_consumer_tests.rs");
     include!("progress_consumer_tests.rs");
