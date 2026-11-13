@@ -120,9 +120,10 @@ const HEADER: usize = 5;
 /// and signed coordinates.
 /// v17 carries daemon-owned playback timelines, visibility pause metadata,
 /// and immutable replacement content for frame one (stable root identity).
-/// v18 carries the daemon-owned glyph glossary and the controller-bound
+/// v18 adds the daemon-owned glyph glossary with its controller-bound
 /// frontend coverage query (`DaemonMsg::GlyphQuery` /
-/// `ClientMsg::GlyphQueryResult`).
+/// `ClientMsg::GlyphQueryResult`), authoritative OSC 9;4 progress snapshots
+/// and ordered updates, and the opt-in pane colour projection.
 pub const PROTOCOL_VERSION: u32 = 18;
 
 pub const FEATURE_PANE_OWNER: &str = "pane-owner";
@@ -141,6 +142,10 @@ pub const FEATURE_AGENT_STATE_AGE: &str = "agent-state-age";
 /// at the stream position where the PTY actually changed geometry; against an
 /// older daemon it must keep reflowing locally at request time.
 pub const FEATURE_RESIZE_ECHO: &str = "resize-echo";
+
+/// Bounded XTGETTCAP is consumed and answered exactly once by the live daemon,
+/// never by a desktop/CLI parser or snapshot replay.
+pub const FEATURE_XTGETTCAP_OWNER: &str = "xtgettcap-owner";
 
 /// The daemon can seed a new pane with the screen a dead one left behind, named
 /// by `ClientMsg::Spawn`'s `restore` field. A client that does not see this
@@ -169,6 +174,13 @@ pub const FEATURE_UPDATE_SERVER: &str = "update-server";
 /// bytes; a client that does sees only daemon-accepted bodies.
 pub const FEATURE_GLYPH_REGISTRY: &str = "glyph-registry";
 
+/// The daemon keeps an authoritative, bounded pane-local colour override layer
+/// and projects it to a consumer that opts in with
+/// `ClientMsg::SubscribePaneColors`. Without this feature a client leaves the
+/// opt-in unsent and refuses OSC colour changes rather than applying a
+/// ring-only copy that a trim would silently lose.
+pub const FEATURE_PANE_COLORS: &str = "pane-colors";
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DaemonVersion {
     pub protocol: u32,
@@ -192,6 +204,8 @@ impl DaemonVersion {
             FEATURE_AGENT_REQUESTS.to_string(),
             FEATURE_AGENT_STATE_AGE.to_string(),
             FEATURE_GLYPH_REGISTRY.to_string(),
+            FEATURE_PANE_COLORS.to_string(),
+            FEATURE_XTGETTCAP_OWNER.to_string(),
         ];
         if cfg!(unix) {
             features.push(FEATURE_HANDOFF.to_string());
@@ -221,6 +235,20 @@ pub fn negotiate_pane<S: Read + Write>(stream: &mut S) -> io::Result<DaemonVersi
     stream.flush()?;
     match DaemonMsg::read(stream)? {
         DaemonMsg::Version(version) if version.protocol == PROTOCOL_VERSION => {
+            if !version.has_feature(FEATURE_XTGETTCAP_OWNER) {
+                return Err(io::Error::other(format!(
+                    "pane peer (build {}) lacks {}; update lyrel or lyrel-server explicitly; no daemon restart was attempted",
+                    version.build, FEATURE_XTGETTCAP_OWNER
+                )));
+            }
+            // Opt in only after the peer says it can project the authoritative
+            // layer. An older daemon never advertises the feature and never
+            // sees this message; an older client never sends it, so the daemon
+            // never sends it a frame kind it cannot decode.
+            if version.has_feature(FEATURE_PANE_COLORS) {
+                ClientMsg::SubscribePaneColors.encode(stream)?;
+                stream.flush()?;
+            }
             // Every session consumer, including CLI and routed clients, starts
             // with a finite source allowance. Rendering consumers additionally
             // grant each resource from their shared process-wide byte budget.
@@ -1036,6 +1064,9 @@ pub enum ClientMsg {
     Negotiate {
         protocol: u32,
     },
+    /// Opt in to authoritative pane colour frames. Sent only after the peer's
+    /// version advertised `FEATURE_PANE_COLORS`, before Spawn/Attach/Observe.
+    SubscribePaneColors,
     /// Finite authority-side allowance, with optional per-resource grants from
     /// a rendering consumer's shared source and decoded-memory budgets.
     GraphicsCapacity {
@@ -1184,6 +1215,30 @@ pub enum ClientMsg {
     Version,
 }
 
+/// Current pane progress, independent of retained terminal text. Never persisted
+/// into a replacement shell; only a live-session handoff carries this state.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
+pub struct PaneProgress {
+    pub kind: ProgressKind,
+    pub percent: Option<u8>,
+}
+
+impl PaneProgress {
+    pub fn new(kind: ProgressKind, percent: Option<u8>) -> Self {
+        assert!(percent.is_none_or(|value| value <= 100));
+        Self { kind, percent }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ProgressKind {
+    Running,
+    Indeterminate,
+    Paused,
+    Error,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DaemonMsg {
     Spawned {
@@ -1196,6 +1251,10 @@ pub enum DaemonMsg {
     /// [`crate::core::kitty_graphics::GraphicsUpdate`] carries compact metadata
     /// and unexpanded resource bytes outside terminal output and replay.
     Graphics(GraphicsPacket),
+    /// Ordered pane colour projection: a full snapshot for a fresh consumer or
+    /// the deltas produced since the last frame. Sent only to a consumer that
+    /// opted in with [`ClientMsg::SubscribePaneColors`].
+    Colors(Vec<u8>),
     /// A resource has not been accepted until every rendering consumer grants
     /// its actual source/decode/GPU reservation. No pixel payload is sent here.
     GraphicsOffer {
@@ -1226,6 +1285,7 @@ pub enum DaemonMsg {
         token: u64,
         cp: u32,
     },
+    Progress(Option<PaneProgress>),
     Cwd(PathBuf),
     Prompt {
         active: bool,
@@ -1309,6 +1369,9 @@ mod kind {
     pub const SEND_INPUT: u8 = 55;
     pub const HANDOFF: u8 = 56;
     pub const AGENT_EVENT: u8 = 58;
+    /// Opt in to authoritative pane colour frames, after the peer advertises
+    /// `FEATURE_PANE_COLORS`. A peer that predates the feature never sees it.
+    pub const SUBSCRIBE_PANE_COLORS: u8 = 59;
 
     pub const SPAWNED: u8 = 1;
     pub const SNAPSHOT: u8 = 2;
@@ -1337,7 +1400,10 @@ mod kind {
     pub const INPUT_ACK: u8 = 51;
     /// Authoritative graphics updates, encoded outside the JSON message arms.
     pub const GRAPHICS: u8 = 60;
+    /// Ordered pane colour projection, encoded as a bounded `ColorFrame`.
+    pub const COLORS: u8 = 61;
     pub const CLIPBOARD_WRITE: u8 = 62;
+    pub const PROGRESS: u8 = 71;
 }
 
 pub fn write_frame<W: Write>(w: &mut W, kind: u8, payload: &[u8]) -> io::Result<()> {
@@ -1494,6 +1560,7 @@ impl ClientMsg {
     pub fn encode<W: Write>(&self, w: &mut W) -> io::Result<()> {
         match self {
             ClientMsg::Negotiate { protocol } => write_frame(w, kind::VERSION, &to_json(protocol)?),
+            ClientMsg::SubscribePaneColors => write_frame(w, kind::SUBSCRIBE_PANE_COLORS, &[]),
             ClientMsg::Spawn {
                 cwd,
                 size,
@@ -1650,6 +1717,7 @@ impl ClientMsg {
             kind::VERSION if !payload.is_empty() => ClientMsg::Negotiate {
                 protocol: from_json(&payload)?,
             },
+            kind::SUBSCRIBE_PANE_COLORS => ClientMsg::SubscribePaneColors,
             kind::SPAWN => {
                 let (cwd, size) = from_json(&payload)?;
                 ClientMsg::Spawn {
@@ -1838,6 +1906,7 @@ impl DaemonMsg {
             DaemonMsg::Snapshot(bytes) => write_frame(w, kind::SNAPSHOT, bytes),
             DaemonMsg::Output(bytes) => write_frame(w, kind::OUTPUT, bytes),
             DaemonMsg::Graphics(frame) => write_frame(w, kind::GRAPHICS, frame),
+            DaemonMsg::Colors(frame) => write_frame(w, kind::COLORS, frame),
             DaemonMsg::GraphicsOffer {
                 token,
                 key,
@@ -1862,6 +1931,7 @@ impl DaemonMsg {
             DaemonMsg::GlyphQuery { token, cp } => {
                 write_frame(w, kind::GLYPH_QUERY, &to_json(&(token, cp))?)
             }
+            DaemonMsg::Progress(state) => write_frame(w, kind::PROGRESS, &to_json(state)?),
             DaemonMsg::Cwd(path) => write_frame(w, kind::CWD, &to_json(path)?),
             DaemonMsg::Prompt {
                 active,
@@ -1917,6 +1987,7 @@ impl DaemonMsg {
             kind::SNAPSHOT => DaemonMsg::Snapshot(payload),
             kind::OUTPUT => DaemonMsg::Output(payload),
             kind::GRAPHICS => DaemonMsg::Graphics(payload.into()),
+            kind::COLORS => DaemonMsg::Colors(payload),
             kind::GRAPHICS_OFFER => {
                 let (token, key, width, height, encoded_bytes, metadata_bytes) =
                     from_json(&payload)?;
@@ -1941,6 +2012,7 @@ impl DaemonMsg {
                 let (token, cp) = from_json(&payload)?;
                 DaemonMsg::GlyphQuery { token, cp }
             }
+            kind::PROGRESS => DaemonMsg::Progress(from_json(&payload)?),
             kind::CWD => DaemonMsg::Cwd(from_json(&payload)?),
             kind::PROMPT => {
                 let (active, at_prompt, last_exit) = from_json(&payload)?;
@@ -2013,6 +2085,67 @@ mod tests {
         cell_w: 8,
         cell_h: 17,
     };
+
+    #[test]
+    fn progress_wire_round_trips_clear_and_all_optional_percent_states() {
+        for kind in [
+            ProgressKind::Running,
+            ProgressKind::Indeterminate,
+            ProgressKind::Paused,
+            ProgressKind::Error,
+        ] {
+            for percent in [None, Some(0), Some(42), Some(100)] {
+                let message = DaemonMsg::Progress(Some(PaneProgress::new(kind, percent)));
+                let mut wire = Vec::new();
+                message.encode(&mut wire).unwrap();
+                assert_eq!(DaemonMsg::read(&mut wire.as_slice()).unwrap(), message);
+            }
+        }
+        let mut wire = Vec::new();
+        DaemonMsg::Progress(None).encode(&mut wire).unwrap();
+        assert_eq!(
+            DaemonMsg::read(&mut wire.as_slice()).unwrap(),
+            DaemonMsg::Progress(None)
+        );
+    }
+
+    #[test]
+    fn progress_requires_actual_endpoint_v18_before_any_session_request() {
+        use std::net::{TcpListener, TcpStream};
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let mut client = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+        let (mut server, _) = listener.accept().unwrap();
+        let peer = std::thread::spawn(move || {
+            server
+                .set_read_timeout(Some(std::time::Duration::from_secs(5)))
+                .unwrap();
+            assert!(matches!(
+                ClientMsg::read(&mut server).unwrap(),
+                ClientMsg::Negotiate {
+                    protocol: PROTOCOL_VERSION
+                }
+            ));
+            let mut old = DaemonVersion::current();
+            old.protocol = 17;
+            DaemonMsg::Version(old).encode(&mut server).unwrap();
+            let mut byte = [0];
+            assert_eq!(
+                server.read(&mut byte).unwrap(),
+                0,
+                "refusal must not send Spawn, Attach, Handoff or restart"
+            );
+        });
+        client
+            .set_read_timeout(Some(std::time::Duration::from_secs(5)))
+            .unwrap();
+        let error = negotiate_pane(&mut client).unwrap_err().to_string();
+        assert!(
+            error.contains("v17") && error.contains("update lyrel"),
+            "{error}"
+        );
+        drop(client);
+        peer.join().unwrap();
+    }
 
     #[test]
     fn graphics_packet_shares_one_charge_until_last_owner_drops() {
@@ -3297,5 +3430,40 @@ mod tests {
             DaemonMsg::Agent(Some(crate::core::cli_agent::CLIAgent::Pi))
         );
         assert!(DaemonMsg::from_frame(kind::AGENT, b"42".to_vec()).is_err());
+    }
+
+    /// The colour opt-in and projection are additive: both peers only use the
+    /// new kinds after the feature is advertised, and neither number collides
+    /// with the Progress kind reserved by the parallel stage.
+    #[test]
+    fn pane_colour_messages_round_trip_on_their_own_kinds() {
+        use crate::core::pane_colors::{ColorFrame, PaneColors};
+
+        assert_ne!(kind::COLORS, 71, "Progress owns DaemonMsg kind 71");
+        assert_ne!(kind::COLORS, kind::GRAPHICS);
+        assert_ne!(kind::COLORS, kind::CLIPBOARD_WRITE);
+        assert_ne!(kind::SUBSCRIBE_PANE_COLORS, kind::VERSION);
+
+        let mut colors = PaneColors::default();
+        colors.set(1, [0x11, 0x22, 0x33]);
+        let frame = ColorFrame::snapshot(&colors).encode();
+        let msg = DaemonMsg::Colors(frame);
+        let mut wire = Vec::new();
+        msg.encode(&mut wire).unwrap();
+        assert_eq!(wire[4], kind::COLORS);
+        assert_eq!(
+            DaemonMsg::from_frame(wire[4], wire[5..].to_vec()).unwrap(),
+            msg
+        );
+
+        let mut wire = Vec::new();
+        ClientMsg::SubscribePaneColors.encode(&mut wire).unwrap();
+        assert_eq!(wire[4], kind::SUBSCRIBE_PANE_COLORS);
+        assert!(wire[5..].is_empty());
+        assert_eq!(
+            ClientMsg::from_frame(wire[4], wire[5..].to_vec()).unwrap(),
+            ClientMsg::SubscribePaneColors
+        );
+        assert!(DaemonVersion::current().has_feature(FEATURE_PANE_COLORS));
     }
 }

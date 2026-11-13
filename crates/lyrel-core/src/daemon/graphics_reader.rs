@@ -10,6 +10,7 @@ pub(super) enum Part {
     Graphics(Segment),
     Clipboard(ClipboardEvent),
     Glyph(GlyphPart),
+    Capability(Vec<u8>),
 }
 
 /// One daemon-framed Glyph Protocol body, applied in stream order.
@@ -49,8 +50,41 @@ pub(super) fn extract<'a>(
     glyph: &mut GlyphSniffer,
     graphics: &mut GraphicsSniffer,
     locality: &mut impl FnMut() -> Option<bool>,
+    discovery: &mut crate::core::xtgettcap::Sniffer,
 ) -> Extracted<'a> {
     graphics.begin_read();
+    use crate::core::xtgettcap::{Segment as DiscoverySegment, Sniffed as DiscoverySniffed};
+    match discovery.sniff(raw) {
+        DiscoverySniffed::Plain(bytes) => {
+            extract_terminal(bytes, clipboard, glyph, graphics, locality)
+        }
+        DiscoverySniffed::Segments(segments) => {
+            let mut parts = Vec::new();
+            for segment in segments {
+                match segment {
+                    DiscoverySegment::Query(bytes) => parts.push(Part::Capability(bytes)),
+                    DiscoverySegment::Output(bytes) => {
+                        match extract_terminal(&bytes, clipboard, glyph, graphics, locality) {
+                            Extracted::Plain(_) => {
+                                parts.push(Part::Graphics(Segment::Output(bytes)))
+                            }
+                            Extracted::Parts(extracted) => parts.extend(extracted),
+                        }
+                    }
+                }
+            }
+            Extracted::Parts(parts)
+        }
+    }
+}
+
+fn extract_terminal<'a>(
+    raw: &'a [u8],
+    clipboard: &mut ClipboardSniffer,
+    glyph: &mut GlyphSniffer,
+    graphics: &mut GraphicsSniffer,
+    locality: &mut impl FnMut() -> Option<bool>,
+) -> Extracted<'a> {
     match clipboard.sniff(raw) {
         ClipboardSniffed::Plain(bytes) => glyph_then_graphics(bytes, glyph, graphics, locality),
         ClipboardSniffed::Segments(segments) => {
@@ -160,6 +194,14 @@ pub(super) fn text(
         .as_mut()
         .map(|graphics| graphics.output(bytes))
         .unwrap_or_default();
+    // Taken after the same parse that produced the text, and published after
+    // the text frame: a query in this chunk is answered by the consumer's own
+    // parse at its exact stream position, while this projection is what a
+    // later attach replays once the original bytes leave the ring.
+    let colors = state
+        .graphics
+        .as_mut()
+        .and_then(|graphics| graphics.take_color_delta());
     record_output(&mut state, bytes);
     if effects.is_empty() {
         fan_out_output(&mut state, bytes, Vec::new(), gate);
@@ -167,6 +209,14 @@ pub(super) fn text(
         let mut frames = vec![GraphicsFrame::Output(bytes.to_vec())];
         append_graphics_effects(effects, &mut Vec::new(), &mut frames, writer);
         fan_out_output(&mut state, bytes, frames, gate);
+    }
+    if let Some(frame) = colors {
+        let PaneState {
+            subscriptions,
+            graphics,
+            ..
+        } = &mut *state;
+        subscriptions.publish_colors(frame.encode(), gate, graphics);
     }
     let owed = detached_color_scheme_queries(&mut state);
     drop(state);
@@ -480,6 +530,19 @@ pub(super) fn consume(
         Extracted::Parts(parts) => {
             for part in parts {
                 match part {
+                    Part::Capability(bytes) => {
+                        let mut state = state.lock().unwrap();
+                        let effects = state
+                            .graphics
+                            .as_mut()
+                            .map(|graphics| graphics.output(&bytes))
+                            .unwrap_or_default();
+                        let mut frames = Vec::new();
+                        append_graphics_effects(effects, &mut Vec::new(), &mut frames, writer);
+                        if !frames.is_empty() {
+                            fan_out_output(&mut state, &[], frames, gate);
+                        }
+                    }
                     Part::Graphics(Segment::Output(bytes)) => {
                         text(state, &bytes, gate, writer);
                     }

@@ -190,12 +190,14 @@ mod pipeline_tests {
         clipboard.set_controller(Some(1), true);
         let mut glyph = GlyphSniffer::new();
         let mut graphics = GraphicsSniffer::new_local(true);
+        let mut discovery = crate::core::xtgettcap::Sniffer::default();
         let extracted = graphics_reader::extract(
             b"\x1b_25a1;q;cp=100000\x1b\\",
             &mut clipboard,
             &mut glyph,
             &mut graphics,
             &mut || Some(true),
+            &mut discovery,
         );
         graphics_reader::consume(extracted, &state, &gate, &writer, Some(1), &mut graphics);
         loop {

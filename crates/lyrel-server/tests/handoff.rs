@@ -18,7 +18,7 @@ use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
 
 use lyrel_core::client::PaneClient;
-use lyrel_core::daemon::protocol::{DaemonMsg, ShellSpec, WinSize};
+use lyrel_core::daemon::protocol::{DaemonMsg, PaneProgress, ProgressKind, ShellSpec, WinSize};
 
 const READY_WITHIN: Duration = Duration::from_secs(30);
 const STREAM_WITHIN: Duration = Duration::from_secs(30);
@@ -164,6 +164,30 @@ fn a_handoff_keeps_the_process_the_pty_and_the_shell_that_is_on_it() {
         .input(b"lyrel_kept=survivor; echo lyrel_before_$lyrel_kept\r")
         .expect("the shell takes input");
     collect_until(&mut session, b"lyrel_before_survivor");
+
+    // One shell command emits progress once, then forces those bytes (and a
+    // one-shot notification) out of the production 8 MiB ring. Error survives
+    // a reliable command-end mark too; no later command starts before handoff.
+    let expected_progress = Some(PaneProgress::new(ProgressKind::Error, Some(47)));
+    session
+        .input(b"printf '\\033]9;4;2;47\\007\\033]9;lyrel_handoff_old_notice\\007'; i=0; while [ \"$i\" -lt 8300 ]; do printf '%01024d\\n' \"$i\"; i=$((i + 1)); done; printf 'lyrel_trimmed_%s\\n' \"$lyrel_kept\"\r")
+        .expect("the original shell produces one progress update and a finite flood");
+    loop {
+        match session.recv().expect("bound the live progress observation") {
+            DaemonMsg::Progress(state) => {
+                assert_eq!(
+                    state, expected_progress,
+                    "observe live authority, not OSC text"
+                );
+                break;
+            }
+            DaemonMsg::Exited { code } => panic!("the producer exited before progress: {code:?}"),
+            _ => {}
+        }
+    }
+    // This new live barrier follows the flood; the old marker is deliberately
+    // no longer in the ring. The shell now waits for input without resending.
+    collect_until(&mut session, b"lyrel_trimmed_survivor");
     drop(session);
 
     panes
@@ -191,11 +215,47 @@ fn a_handoff_keeps_the_process_the_pty_and_the_shell_that_is_on_it() {
         .set_recv_timeout(Some(STREAM_WITHIN))
         .expect("bound the stream reads");
 
-    // The replay is the ring the previous image was holding.
-    let replayed = collect_until(&mut session, b"lyrel_before_survivor");
+    // Fresh attachment must restore authority after the real exec even though
+    // the progress sequence itself is no longer available for text replay.
+    let mut replayed = Vec::new();
+    loop {
+        match session
+            .recv()
+            .expect("bound the post-exec progress baseline")
+        {
+            DaemonMsg::Output(bytes) | DaemonMsg::Snapshot(bytes) => replayed.extend(bytes),
+            DaemonMsg::Progress(state) => {
+                assert_eq!(
+                    state, expected_progress,
+                    "the adopted live pane keeps current progress"
+                );
+                break;
+            }
+            DaemonMsg::Exited { code } => {
+                panic!("the adopted pane exited before its baseline: {code:?}")
+            }
+            _ => {}
+        }
+    }
     assert!(
-        windows_contain(&replayed, b"lyrel_before_survivor"),
-        "the pane came back without the output it had before the handoff"
+        replayed.len() > 7 * 1024 * 1024,
+        "the actual production ring must have filled"
+    );
+    assert!(
+        windows_contain(&replayed, b"lyrel_trimmed_survivor"),
+        "the pane came back without the live barrier it printed after eviction"
+    );
+    assert!(
+        !windows_contain(&replayed, b"lyrel_before_survivor"),
+        "the original marker must really have left the ring"
+    );
+    assert!(
+        !windows_contain(&replayed, b"\x1b]9;4;2;47\x07"),
+        "progress restoration must not depend on historical OSC bytes"
+    );
+    assert!(
+        !windows_contain(&replayed, b"lyrel_handoff_old_notice"),
+        "old notifications must not be replayed to a fresh consumer"
     );
 
     // And the variable. Only the shell that ran the first line can answer this;
@@ -277,5 +337,69 @@ fn a_handoff_to_something_that_will_not_exec_leaves_the_daemon_serving() {
         "the pane the caller was holding is the pane it still holds"
     );
 
+    session.kill().expect("kill the pane");
+}
+
+#[test]
+fn a_handoff_keeps_the_pane_colour_overrides() {
+    use lyrel_core::core::pane_colors::{ColorFrame, PaneColors};
+
+    let daemon = Daemon::start();
+    let panes = daemon.panes();
+    let mut session = panes
+        .spawn(None, size(), Some(interactive_shell()), None, None)
+        .expect("spawn an interactive pane");
+    let pane_id = session.pane_id();
+    session
+        .set_recv_timeout(Some(STREAM_WITHIN))
+        .expect("bound the stream reads");
+    session
+        .input(b"printf '\\033]4;1;#112233\\007\\033]11;#101112\\007'; echo lyrel_colors_set\r")
+        .expect("the shell takes input");
+    collect_until(&mut session, b"lyrel_colors_set");
+    drop(session);
+
+    panes
+        .hand_off(&Daemon::binary())
+        .expect("the daemon hands over");
+    daemon.await_ready();
+
+    let mut session = panes
+        .attach(pane_id, size())
+        .expect("the pane is still there under the same id");
+    session
+        .set_recv_timeout(Some(STREAM_WITHIN))
+        .expect("bound the stream reads");
+
+    let mut colors = None;
+    let mut saw_ring = false;
+    let deadline = Instant::now() + STREAM_WITHIN;
+    while colors.is_none() || !saw_ring {
+        assert!(
+            Instant::now() < deadline,
+            "the handoff replay never delivered the colour projection"
+        );
+        match session.recv().expect("the adopted pane answers") {
+            DaemonMsg::Colors(frame) => {
+                let frame = ColorFrame::decode(&frame).expect("decodable colour snapshot");
+                assert!(frame.is_snapshot(), "an attach carries a full snapshot");
+                let mut state = PaneColors::default();
+                frame.apply(&mut state);
+                colors = Some(state);
+            }
+            DaemonMsg::Snapshot(bytes) | DaemonMsg::Output(bytes) => {
+                saw_ring |= windows_contain(&bytes, b"lyrel_colors_set");
+            }
+            DaemonMsg::Exited { code } => panic!("pane exited after handoff: {code:?}"),
+            _ => {}
+        }
+    }
+    let colors = colors.expect("colour snapshot");
+    assert_eq!(colors.get(1), Some([0x11, 0x22, 0x33]));
+    assert_eq!(
+        colors.get(lyrel_core::core::pane_colors::DEFAULT_BG),
+        Some([0x10, 0x11, 0x12]),
+        "the same live shell keeps its decoded overrides across the exec"
+    );
     session.kill().expect("kill the pane");
 }

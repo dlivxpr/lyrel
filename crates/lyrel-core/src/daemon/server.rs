@@ -851,19 +851,38 @@ fn handle_conn(stream: Stream, registry: Arc<Registry>) -> anyhow::Result<()> {
         false
     };
     let mut graphics_capacity = None;
-    while let ClientMsg::GraphicsCapacity {
-        encoded_bytes,
-        decoded_bytes,
-        offers,
-    } = first
-    {
-        if !negotiated {
-            DaemonMsg::Error("pane protocol handshake required before graphics capacity".into())
-                .encode(&mut &write_stream)?;
-            return Ok(());
+    let mut pane_colors = false;
+    loop {
+        match first {
+            ClientMsg::GraphicsCapacity {
+                encoded_bytes,
+                decoded_bytes,
+                offers,
+            } => {
+                if !negotiated {
+                    DaemonMsg::Error(
+                        "pane protocol handshake required before graphics capacity".into(),
+                    )
+                    .encode(&mut &write_stream)?;
+                    return Ok(());
+                }
+                graphics_capacity = Some((encoded_bytes, decoded_bytes, offers));
+                first = ClientMsg::read(&mut read_stream)?;
+            }
+            ClientMsg::SubscribePaneColors => {
+                if !negotiated {
+                    DaemonMsg::Error("pane protocol handshake required before pane colours".into())
+                        .encode(&mut &write_stream)?;
+                    return Ok(());
+                }
+                pane_colors = true;
+                first = ClientMsg::read(&mut read_stream)?;
+            }
+            other => {
+                first = other;
+                break;
+            }
         }
-        graphics_capacity = Some((encoded_bytes, decoded_bytes, offers));
-        first = ClientMsg::read(&mut read_stream)?;
     }
     let graphics_offers = graphics_capacity.is_some_and(|capacity| capacity.2);
     let graphics_capacity = graphics_capacity.map(|capacity| (capacity.0, capacity.1));
@@ -970,6 +989,7 @@ fn handle_conn(stream: Stream, registry: Arc<Registry>) -> anyhow::Result<()> {
                 await_claim,
                 allow_remote_clipboard_write,
                 graphics_offers.then_some(_graphics_lease.endpoint()),
+                pane_colors,
             )
         }
 
@@ -1024,6 +1044,7 @@ fn handle_conn(stream: Stream, registry: Arc<Registry>) -> anyhow::Result<()> {
                 registry,
                 allow_remote_clipboard_write,
                 graphics_offers.then_some(_graphics_lease.endpoint()),
+                pane_colors,
             )
         }
 
@@ -1049,6 +1070,7 @@ fn handle_conn(stream: Stream, registry: Arc<Registry>) -> anyhow::Result<()> {
                     registry,
                     allow_remote_clipboard_write,
                     graphics_offers.then_some(_graphics_lease.endpoint()),
+                    pane_colors,
                 )
             }
             None => {
@@ -1079,6 +1101,7 @@ fn handle_conn(stream: Stream, registry: Arc<Registry>) -> anyhow::Result<()> {
                     write_stream,
                     registry,
                     graphics_offers.then_some(_graphics_lease.endpoint()),
+                    pane_colors,
                 )
             }
             None => {
@@ -1394,6 +1417,7 @@ fn publish_spawn(
     await_claim: bool,
     allow_remote_clipboard_write: bool,
     graphics_endpoint: Option<u64>,
+    pane_colors: bool,
 ) -> anyhow::Result<()> {
     let id = pane.id;
     let mut claim = UnclaimedSpawn {
@@ -1419,6 +1443,7 @@ fn publish_spawn(
             allow_remote_clipboard_write,
             (!await_claim).then_some(DaemonMsg::Spawned { pane_id: id }),
             Some(claim),
+            pane_colors,
         );
     }
     // Attach the subscriber before publishing. If a short-lived child already
@@ -1426,7 +1451,8 @@ fn publish_spawn(
     // resurrected in the persistent registry. Unclaimed panes never enter
     // handoff snapshots while their ownership connection is still pending.
     let (tx, rx) = mpsc::channel::<DaemonMsg>();
-    let epoch = pane.attach_with_permissions(tx, allow_remote_clipboard_write);
+    let epoch =
+        pane.attach_with_permissions_and_colors(tx, allow_remote_clipboard_write, pane_colors);
     if pane.alive() {
         registry.insert(pane.clone());
     }
@@ -1447,6 +1473,7 @@ fn stream_pane_with_attach(
     registry: Arc<Registry>,
     allow_remote_clipboard_write: bool,
     graphics_endpoint: Option<u64>,
+    pane_colors: bool,
 ) -> anyhow::Result<()> {
     if let Some(endpoint) = graphics_endpoint {
         return graphics_session::run(
@@ -1459,10 +1486,12 @@ fn stream_pane_with_attach(
             allow_remote_clipboard_write,
             None,
             None,
+            pane_colors,
         );
     }
     let (tx, rx) = mpsc::channel::<DaemonMsg>();
-    let epoch = pane.attach_with_permissions(tx, allow_remote_clipboard_write);
+    let epoch =
+        pane.attach_with_permissions_and_colors(tx, allow_remote_clipboard_write, pane_colors);
     run_stream(pane, id, epoch, rx, read_stream, write_stream, registry)
 }
 
@@ -1474,6 +1503,7 @@ fn stream_pane(
     registry: Arc<Registry>,
     allow_remote_clipboard_write: bool,
     graphics_endpoint: Option<u64>,
+    pane_colors: bool,
 ) -> anyhow::Result<()> {
     if let Some(endpoint) = graphics_endpoint {
         return graphics_session::run(
@@ -1486,10 +1516,12 @@ fn stream_pane(
             allow_remote_clipboard_write,
             None,
             None,
+            pane_colors,
         );
     }
     let (tx, rx) = mpsc::channel::<DaemonMsg>();
-    let epoch = pane.attach_with_permissions(tx, allow_remote_clipboard_write);
+    let epoch =
+        pane.attach_with_permissions_and_colors(tx, allow_remote_clipboard_write, pane_colors);
     run_stream(pane, id, epoch, rx, read_stream, write_stream, registry)
 }
 
@@ -1534,6 +1566,7 @@ fn stream_observer(
     write_stream: Stream,
     registry: Arc<Registry>,
     graphics_endpoint: Option<u64>,
+    pane_colors: bool,
 ) -> anyhow::Result<()> {
     if let Some(endpoint) = graphics_endpoint {
         return graphics_session::run(
@@ -1546,6 +1579,7 @@ fn stream_observer(
             false,
             None,
             None,
+            pane_colors,
         );
     }
     read_stream.set_read_timeout(Some(INPUT_RETIRE_WAIT))?;
@@ -1555,7 +1589,7 @@ fn stream_observer(
     // on a connection nothing will ever be sent down again.
     let (tx, rx) = mpsc::channel::<DaemonMsg>();
     let gate = Arc::new(crate::daemon::pane::subscriptions::OutputGate::new());
-    let observer_id = pane.observe(tx, gate.clone());
+    let observer_id = pane.observe_with_colors(tx, gate.clone(), pane_colors);
     let writer = spawn_writer(rx, write_stream, gate);
 
     observe_loop(
@@ -2198,6 +2232,7 @@ mod spawn_claim_tests {
                         true,
                         false,
                         None,
+                        false,
                     )
                 })
             };
@@ -2244,6 +2279,7 @@ mod spawn_claim_tests {
                     true,
                     false,
                     None,
+                    false,
                 )
             })
         };
@@ -2281,6 +2317,7 @@ mod spawn_claim_tests {
                     true,
                     false,
                     None,
+                    false,
                 )
             })
         };
@@ -2357,6 +2394,7 @@ mod spawn_claim_tests {
                 true,
                 false,
                 None,
+                false,
             )
         });
         assert_eq!(

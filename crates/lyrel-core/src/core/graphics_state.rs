@@ -323,6 +323,7 @@ use rio_vt::event::{VoidListener, WindowId};
 use rio_vt::performer::handler::Processor;
 
 use super::kitty_graphics::{Action, Control, MAX_IMAGE_BYTES, response};
+use super::pane_colors::{ColorFrame, PaneColors};
 use super::terminal_resize::ResizeMode;
 use crate::daemon::protocol::WinSize;
 
@@ -517,6 +518,12 @@ pub struct GraphicsState {
     resize_mode: ResizeMode,
     term: Crosswords<VoidListener>,
     processor: Processor,
+    /// Program-selected colours, the authoritative override layer for this
+    /// pane session. `published_colors` is what the current controller (and
+    /// observers) last received, so a new consumer can be sent one bounded
+    /// snapshot and live changes are deltas against that.
+    colors: PaneColors,
+    published_colors: PaneColors,
     screen: u64,
     region: std::ops::Range<i32>,
     dirty: BTreeSet<u64>,
@@ -562,6 +569,8 @@ impl GraphicsState {
                 10_000,
             ),
             processor: Processor::default(),
+            colors: PaneColors::default(),
+            published_colors: PaneColors::default(),
             screen: 0,
             region: 0..i32::from(size.rows.max(1)),
             dirty: BTreeSet::new(),
@@ -922,6 +931,9 @@ impl GraphicsState {
         frame: Option<FramePreparation>,
         mut work: retention::Work,
     ) -> Result<PreparedImage, &'static str> {
+        if control.sixel {
+            image = super::sixel_graphics::decode(image, &mut work)?;
+        }
         let mut decoded_bytes = if control.action == Action::Compose {
             0
         } else {
@@ -1297,6 +1309,43 @@ impl GraphicsState {
             .checked_add(1)
             .expect("graphics identity exhausted");
         self.next_key
+    }
+
+    /// The pane's authoritative override layer. The theme owns every slot this
+    /// does not name; nothing here is a captured theme snapshot.
+    pub fn colors(&self) -> &PaneColors {
+        &self.colors
+    }
+
+    /// Restore an override layer carried across a live daemon handoff. Also
+    /// seeds the inner parser's colour table so both sides of this adapter
+    /// describe the same state.
+    pub fn restore_colors(&mut self, colors: PaneColors) {
+        for (index, rgb) in colors.iter_set() {
+            rio_vt::performer::handler::Handler::set_color(
+                self,
+                usize::from(index),
+                rio_vt::config::colors::ColorRgb {
+                    r: rgb[0],
+                    g: rgb[1],
+                    b: rgb[2],
+                },
+            );
+        }
+        self.colors = colors;
+        self.published_colors = colors;
+    }
+
+    /// The changes since the last consumer was told, or `None` when nothing
+    /// moved. Taking the delta advances the published baseline even when no
+    /// subscriber is attached: the next attach gets a full snapshot.
+    pub fn take_color_delta(&mut self) -> Option<ColorFrame> {
+        let ops = self.published_colors.diff(&self.colors);
+        if ops.is_empty() {
+            return None;
+        }
+        self.published_colors = self.colors;
+        Some(ColorFrame::delta(ops))
     }
 
     fn lookup(&self, control: &Control) -> Option<u64> {
@@ -1804,6 +1853,11 @@ impl GraphicsState {
             );
             return;
         };
+        let sixel_display = control.sixel
+            && self
+                .term
+                .mode()
+                .contains(rio_vt::crosswords::Mode::SIXEL_DISPLAY);
         let placement = Placement {
             key,
             resource: resource_key,
@@ -1818,13 +1872,26 @@ impl GraphicsState {
             offset_x: control.offset_x,
             offset_y: control.offset_y,
             z: control.z,
-            anchor_row: self.history_origin() + i64::from(self.term.grid.cursor.pos.row.0),
-            anchor_col: self.term.grid.cursor.pos.col.0 as i64,
+            anchor_row: self.history_origin()
+                + if sixel_display {
+                    0
+                } else {
+                    i64::from(self.term.grid.cursor.pos.row.0)
+                },
+            anchor_col: if sixel_display {
+                0
+            } else {
+                self.term.grid.cursor.pos.col.0 as i64
+            },
             screen: self.screen,
             span_cols,
             span_rows,
             clip_top: 0,
-            clip_bottom: span_rows,
+            clip_bottom: if sixel_display {
+                span_rows.min(u32::from(self.size.rows.max(1)))
+            } else {
+                span_rows
+            },
             virtual_placement: control.virtual_placement,
             parent,
             relative_x: control.relative_x,
@@ -1846,7 +1913,53 @@ impl GraphicsState {
             history_origin: self.history_origin(),
             epoch: self.viewport_epoch,
         }));
-        if !control.no_move && !control.virtual_placement && parent.is_none() {
+        if control.sixel && !sixel_display {
+            // DEC Sixel advances through occupied rows (and scrolls), but
+            // retains the start column unless mode 8452 requests the right edge.
+            let start_row = self.term.grid.cursor.pos.row.0;
+            let start_col = self.term.grid.cursor.pos.col.0;
+            let down = span_rows.saturating_sub(1) as i32;
+            let scrolls = if self.region.contains(&start_row) {
+                (start_row + down - (self.region.end - 1)).max(0)
+            } else {
+                0
+            };
+            let col = if self
+                .term
+                .mode()
+                .contains(rio_vt::crosswords::Mode::SIXEL_CURSOR_TO_THE_RIGHT)
+            {
+                (start_col + span_cols as usize).min(usize::from(self.size.cols.max(1)) - 1)
+            } else {
+                start_col
+            };
+            let mut movement = Vec::with_capacity(down as usize * 2 + 16);
+            for _ in 0..down {
+                movement.extend_from_slice(b"\x1bD");
+            }
+            movement.extend_from_slice(format!("\x1b[{}G", col + 1).as_bytes());
+            let layout = self.output(&movement);
+            effects.push(GraphicsEffect::Output(movement));
+            effects.extend(layout);
+            let base = self.history_origin();
+            let keep_history = self.screen == 0
+                && self.region.start == 0
+                && self.region.end == i32::from(self.size.rows.max(1));
+            if let Some(anchored) = self.placements.get_mut(&key) {
+                let p = &mut anchored.placement;
+                p.anchor_row = base + i64::from(start_row - scrolls);
+                if scrolls != 0 && !keep_history {
+                    p.clip_top = (base + i64::from(self.region.start) - p.anchor_row).max(0) as u32;
+                    p.clip_bottom = span_rows
+                        .min((base + i64::from(self.region.end) - p.anchor_row).max(0) as u32);
+                }
+                effects.push(GraphicsEffect::Update(GraphicsUpdate::Place(p.clone())));
+            }
+        } else if !control.sixel
+            && !control.no_move
+            && !control.virtual_placement
+            && parent.is_none()
+        {
             // Kitty leaves the cursor on the placement's last row. Do not
             // encode a zero CUD: terminals interpret CSI 0 B as one row.
             let down = span_rows

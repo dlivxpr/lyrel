@@ -31,7 +31,9 @@ const CAPACITY: usize = 1024;
 /// One accepted registration as the renderer sees it.
 pub(crate) struct GlyphView {
     /// Changes on every accepted registration for this codepoint, so a cached
-    /// picture can never be served for a superseded definition.
+    /// picture can never be served for a superseded definition. Retained now
+    /// for the follow-on layout/retained-frame cache keys.
+    #[allow(dead_code)]
     pub revision: u64,
     pub outline: Arc<Outline>,
     pub upm: u16,

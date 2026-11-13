@@ -27,7 +27,7 @@ fn metafied_zsh_history_is_searchable_and_submits_the_original_command(cx: &mut 
     );
     view.update(cx, |view, cx| {
         view.history = TerminalHistory::from_loaded(loaded);
-        view.handle_editor_key(&key("ctrl-r"), cx);
+        view.handle_editor_key(&key("ctrl-r"), false, cx);
         view.commit_text("echo", cx);
         assert_eq!(
             view.history
@@ -35,15 +35,15 @@ fn metafied_zsh_history_is_searchable_and_submits_the_original_command(cx: &mut 
                 .and_then(|search| search.selected_line(view.history.entries())),
             Some(command)
         );
-        view.handle_editor_key(&key("enter"), cx);
+        view.handle_editor_key(&key("enter"), false, cx);
         assert_eq!(view.input.editor().text(), command);
-        view.handle_editor_key(&key("ctrl-r"), cx);
+        view.handle_editor_key(&key("ctrl-r"), false, cx);
         cx.notify();
     });
     window.update(cx, |_, window, _| window.refresh()).unwrap();
     cx.run_until_parked();
     view.update(cx, |view, cx| {
-        view.handle_editor_key(&key("cmd-enter"), cx);
+        view.handle_editor_key(&key("cmd-enter"), false, cx);
         assert!(view.history.search().is_none());
         assert!(view.input.editor().is_empty());
     });
@@ -272,7 +272,7 @@ fn ctrl_r_fuzzy_search_accepts_into_the_editor(cx: &mut TestAppContext) {
                 .collect());
             
 
-            view.handle_editor_key(&key("ctrl-r"), cx);
+            view.handle_editor_key(&key("ctrl-r"), false, cx);
             assert!(view.history.search().is_some(), "Ctrl+R opens the search");
             view.commit_text("gst", cx);
             assert_eq!(
@@ -281,7 +281,7 @@ fn ctrl_r_fuzzy_search_accepts_into_the_editor(cx: &mut TestAppContext) {
                     .and_then(|rs| rs.selected_line(view.history.entries())),
                 Some("git status")
             );
-            view.handle_editor_key(&key("enter"), cx);
+            view.handle_editor_key(&key("enter"), false, cx);
             assert!(view.history.search().is_none(), "Enter closes the search");
             assert_eq!(view.input.editor().text(), "git status");
         })
@@ -301,7 +301,7 @@ fn ctrl_r_steps_matches_and_cmd_enter_runs(cx: &mut TestAppContext) {
                 .collect());
             
 
-            view.handle_editor_key(&key("ctrl-r"), cx);
+            view.handle_editor_key(&key("ctrl-r"), false, cx);
             view.commit_text("git", cx);
             assert_eq!(
                 view.history.search()
@@ -309,14 +309,14 @@ fn ctrl_r_steps_matches_and_cmd_enter_runs(cx: &mut TestAppContext) {
                     .and_then(|rs| rs.selected_line(view.history.entries())),
                 Some("git commit -m x")
             );
-            view.handle_editor_key(&key("ctrl-r"), cx);
+            view.handle_editor_key(&key("ctrl-r"), false, cx);
             assert_eq!(
                 view.history.search()
                     .as_ref()
                     .and_then(|rs| rs.selected_line(view.history.entries())),
                 Some("git status")
             );
-            view.handle_editor_key(&key("cmd-enter"), cx);
+            view.handle_editor_key(&key("cmd-enter"), false, cx);
             assert!(view.history.search().is_none());
             assert!(view.input.editor().is_empty(), "submit clears the editor");
         })
@@ -364,7 +364,7 @@ fn reverse_search_menu_survives_a_real_render_pass(cx: &mut TestAppContext) {
                 },
             );
             view.history = TerminalHistory::from_loaded(history);
-            view.handle_editor_key(&key("ctrl-r"), cx);
+            view.handle_editor_key(&key("ctrl-r"), false, cx);
             view.commit_text("c", cx);
             assert!(
                 view.history.search()
@@ -406,7 +406,7 @@ fn reverse_search_menu_survives_a_real_render_pass(cx: &mut TestAppContext) {
                 view.focus_handle.focus(window, cx);
                 seed_history(view, vec!["echo one".to_string(), "echo two".to_string()]);
                 
-                view.handle_editor_key(&key("ctrl-r"), cx);
+                view.handle_editor_key(&key("ctrl-r"), false, cx);
                 cx.notify();
             })
             .unwrap();
@@ -546,7 +546,7 @@ fn custom_histfile_seed_reaches_the_owning_panes_reverse_search(cx: &mut TestApp
         std::thread::sleep(std::time::Duration::from_millis(5));
     }
     view.update(cx, |view, cx| {
-        view.handle_editor_key(&key("ctrl-r"), cx);
+        view.handle_editor_key(&key("ctrl-r"), false, cx);
         view.commit_text("custom_histfile_seed_184", cx);
         assert_eq!(
             view.history.search().and_then(|search| search.selected_line(view.history.entries())),
@@ -555,7 +555,7 @@ fn custom_histfile_seed_reaches_the_owning_panes_reverse_search(cx: &mut TestApp
         );
         assert!(!view.history.entries().iter().any(|line| line.contains("other_panes_private_seed_184")));
         view.history.cancel_search();
-        view.handle_editor_key(&key("ctrl-r"), cx);
+        view.handle_editor_key(&key("ctrl-r"), false, cx);
         view.commit_text("recorded_during_pane_seed_184", cx);
         assert_eq!(
             view.history.search().and_then(|search| search.selected_line(view.history.entries())),
@@ -563,7 +563,7 @@ fn custom_histfile_seed_reaches_the_owning_panes_reverse_search(cx: &mut TestApp
             "loading the private seed must preserve commands submitted while it was reading",
         );
         view.history.cancel_search();
-        view.handle_editor_key(&key("ctrl-r"), cx);
+        view.handle_editor_key(&key("ctrl-r"), false, cx);
         view.commit_text("读取令牌", cx);
         assert_eq!(
             view.history.search().and_then(|search| search.selected_line(view.history.entries())),

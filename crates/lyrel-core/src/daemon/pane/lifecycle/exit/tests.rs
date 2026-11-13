@@ -13,6 +13,7 @@ fn death_notifies_observers_but_only_controllers_defer_the_reap() {
         observer_tx,
         Arc::new(OutputGate::new()),
         false,
+        false,
     );
     drain(&observer_rx);
     let (dead_tx, dead_rx) = mpsc::channel();
@@ -33,7 +34,13 @@ fn death_notifies_observers_but_only_controllers_defer_the_reap() {
     {
         let mut st = with_both.lock().unwrap();
         attach_subscriber(&mut st, controller_tx);
-        observe_subscriber(&mut st, observer_tx, Arc::new(OutputGate::new()), false);
+        observe_subscriber(
+            &mut st,
+            observer_tx,
+            Arc::new(OutputGate::new()),
+            false,
+            false,
+        );
     }
     drain(&controller_rx);
     drain(&observer_rx);

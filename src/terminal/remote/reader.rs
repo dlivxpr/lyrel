@@ -33,7 +33,8 @@ use crate::terminal::command_cursor::{CommandCursorStyle, CommandMark};
 use crate::terminal::parked_cursor::{CursorCut, ParkedCursorRepair, ParkedCursorScanner};
 use crate::terminal::prompt_reflow::{PromptBreak, PromptMark};
 use lyrel_core::core::term_modes::{COLOR_SCHEME_UPDATES, TerminalModes};
-use rio_vt::performer::handler::{Handler as _, Processor};
+use lyrel_core::core::xtgettcap::MirrorProcessor as Processor;
+use rio_vt::performer::handler::Handler as _;
 
 /// One reader lifetime, retired without joining a potentially silent socket.
 pub(super) struct ReaderTask {
@@ -218,6 +219,7 @@ impl FrameReader {
             remote,
             agent,
             agent_session,
+            progress,
             awaiting_replay,
             exited: exited_flag,
             child_exited,
@@ -232,6 +234,7 @@ impl FrameReader {
             clipboard_write_busy,
             local_conpty,
             color_scheme_updates,
+            colors,
         } = signals;
         let mut awaiting_replay = awaiting_replay;
         proxy.parse_state.presentation.lock().unwrap().cursor = None;
@@ -319,6 +322,7 @@ impl FrameReader {
                                     authority: &proxy.parse_state.glyph_authority,
                                     denied: &proxy.parse_state.glyph_denied,
                                 }),
+                                Some(colors.as_ref()),
                                 &quit,
                                 |term, cut| {
                                     cuts_left -= 1;
@@ -525,6 +529,7 @@ impl FrameReader {
                                 authority: &proxy.parse_state.glyph_authority,
                                 denied: &proxy.parse_state.glyph_denied,
                             }),
+                            None,
                             &quit,
                             |term, cut| match cut {
                                 ReaderCut::Command(mark) => command_cursor.apply(term, mark),
@@ -571,6 +576,22 @@ impl FrameReader {
                         modes.take_color_scheme_queries();
                         report_scheme = true;
                         proxy.send(PaneEvent::Wakeup);
+                    }
+                    DaemonMsg::Colors(frame) => {
+                        flush_batch!();
+                        match lyrel_core::core::pane_colors::ColorFrame::decode(&frame) {
+                            Some(frame) => {
+                                frame.apply(
+                                    &mut colors.lock().unwrap_or_else(|poison| poison.into_inner()),
+                                );
+                                proxy.send(PaneEvent::ColorChanged);
+                                proxy.send(PaneEvent::Wakeup);
+                            }
+                            None => log::warn!(
+                                "ignoring an undecodable pane colour frame ({} bytes)",
+                                frame.len()
+                            ),
+                        }
                     }
                     DaemonMsg::Output(bytes) => {
                         // Live output only ever follows the whole
@@ -750,6 +771,7 @@ impl FrameReader {
                                 drop(bridge);
                             }
                             ParseBridge::new(&mut term, proxy.clone(), &mut keyboard, None)
+                                .with_presentation(Some(&proxy.parse_state.presentation))
                                 .clear_keyboard();
                             drop(term);
                             // Back at a prompt, whatever the command asked
@@ -806,6 +828,14 @@ impl FrameReader {
                             *guard = Some(p);
                         }
                         proxy.send(PaneEvent::Wakeup);
+                    }
+                    DaemonMsg::Progress(state) => {
+                        flush_batch!();
+                        let mut current = progress.lock().unwrap();
+                        if *current != state {
+                            *current = state;
+                            proxy.send(PaneEvent::ProgressChanged);
+                        }
                     }
                     DaemonMsg::Agent(a) => {
                         flush_batch!();
@@ -1112,6 +1142,7 @@ fn feed_grid<T: EventListener + Clone>(
     history_limit: Option<&AtomicUsize>,
     presentation: Option<&Mutex<crate::terminal::presentation::ParsePresentation>>,
     glyph: Option<crate::terminal::glyph::GlyphApply<'_>>,
+    colors: Option<&Mutex<lyrel_core::core::pane_colors::PaneColors>>,
     quit: &AtomicBool,
     mut on_cut: impl FnMut(&mut Crosswords<T>, ReaderCut),
 ) -> Option<std::time::Duration> {
@@ -1144,7 +1175,8 @@ fn feed_grid<T: EventListener + Clone>(
                     history_limit.map(|limit| limit.load(Ordering::Relaxed)),
                 )
                 .with_presentation(presentation)
-                .with_glyph(glyph);
+                .with_glyph(glyph)
+                .with_colors(colors);
                 processor.advance(&mut bridge, &bytes[at..end]);
             }
             held += end - at;
@@ -1152,7 +1184,9 @@ fn feed_grid<T: EventListener + Clone>(
         }
         let Some((_, cut)) = next else { break };
         if matches!(cut, ReaderCut::KeyboardBoundary) {
-            ParseBridge::new(&mut grid, proxy.clone(), keyboard, None).clear_keyboard();
+            ParseBridge::new(&mut grid, proxy.clone(), keyboard, None)
+                .with_presentation(presentation)
+                .clear_keyboard();
         }
         if matches!(
             cut,

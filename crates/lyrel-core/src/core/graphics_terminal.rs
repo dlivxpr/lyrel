@@ -746,6 +746,12 @@ impl Handler for GraphicsState {
             self.replies.push(format!("\x1b[6;{h};{w}t").into_bytes());
         }
     }
+    fn xtgettcap_response(&mut self, generated: String) {
+        let reply = crate::core::xtgettcap::response(&generated);
+        if !reply.is_empty() {
+            self.replies.push(reply);
+        }
+    }
     fn set_title(&mut self, title: Option<String>) {
         self.term.set_title(title);
     }
@@ -915,6 +921,11 @@ impl Handler for GraphicsState {
     }
 
     fn set_color(&mut self, index: usize, color: ColorRgb) {
+        // The pane's effective layer is owned here, fed by the released
+        // parser at the exact stream position. Index values come from the
+        // parser's own OSC bounds (0..=258); a wider one is ignored by
+        // `PaneColors` rather than mapped onto another slot.
+        self.colors.set(index as u16, [color.r, color.g, color.b]);
         self.term.set_color(index, color);
     }
 
@@ -924,6 +935,7 @@ impl Handler for GraphicsState {
     }
 
     fn reset_color(&mut self, index: usize) {
+        self.colors.reset(index as u16);
         self.term.reset_color(index);
     }
 

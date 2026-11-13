@@ -27,11 +27,11 @@ pub(super) enum KeyDelivery {
 
 pub(super) enum EditorIntent<'a> {
     Redraw,
-    Silent,
     AcceptLine,
     Submit,
     AcceptAndSubmit,
-    Handoff(Vec<u8>),
+    Handoff(Vec<u8>, bool),
+    Write(Vec<u8>, bool),
     Commit(&'a str),
 }
 
@@ -49,23 +49,107 @@ pub(super) struct PromptInput {
     select_gesture: bool,
     drag_word: Option<(usize, usize)>,
     goal_col: Option<usize>,
+    pressed_keys: smallvec::SmallVec<[String; 4]>,
+    keyboard_context: Option<(super::input::KeyFlags, u64)>,
 }
 
 impl PromptInput {
+    pub(super) fn forget_keys(&mut self) {
+        self.pressed_keys.clear();
+        self.keyboard_context = None;
+    }
+
+    pub(super) fn begin_key(&mut self, key: &str, held: bool) {
+        if !held {
+            self.pressed_keys.retain(|pressed| pressed.as_str() != key);
+        }
+    }
+
+    fn key_context(&mut self, terminal: &RemoteTerminal) -> super::input::KeyFlags {
+        let term = terminal.term.lock();
+        let flags = super::input::KeyFlags::from_mode_with_local_conpty(
+            &term.mode(),
+            terminal.is_local_conpty(),
+        );
+        let generation = if flags.reports_events() {
+            terminal.presentation_facts().keyboard_generation
+        } else {
+            0
+        };
+        if self.keyboard_context != Some((flags, generation)) {
+            self.pressed_keys.clear();
+            self.keyboard_context = Some((flags, generation));
+        }
+        flags
+    }
+
+    pub(super) fn release_key(&mut self, ks: &gpui_kit::Keystroke, terminal: &RemoteTerminal) {
+        if self.pressed_keys.is_empty() {
+            return;
+        }
+        let flags = self.key_context(terminal);
+        let Some(index) = self
+            .pressed_keys
+            .iter()
+            .position(|pressed| *pressed == ks.key)
+        else {
+            return;
+        };
+        self.pressed_keys.swap_remove(index);
+        if let Some(bytes) = super::input::key_release_to_bytes(ks, flags) {
+            terminal.write(bytes);
+        }
+    }
+
+    fn key_event(&self, ks: &gpui_kit::Keystroke, held: bool) -> super::input::KeyEventType {
+        if held && self.pressed_keys.iter().any(|pressed| *pressed == ks.key) {
+            super::input::KeyEventType::Repeat
+        } else {
+            super::input::KeyEventType::Press
+        }
+    }
+
+    fn encode_key(
+        &mut self,
+        ks: &gpui_kit::Keystroke,
+        held: bool,
+        terminal: &RemoteTerminal,
+    ) -> Option<(Vec<u8>, bool)> {
+        let flags = self.key_context(terminal);
+        super::input::key_event_to_bytes(ks, flags, self.key_event(ks, held))
+    }
+
+    pub(super) fn write_key(
+        &mut self,
+        ks: &gpui_kit::Keystroke,
+        bytes: Vec<u8>,
+        report_release: bool,
+        terminal: &RemoteTerminal,
+    ) {
+        terminal.write(bytes);
+        if report_release && !self.pressed_keys.iter().any(|pressed| *pressed == ks.key) {
+            // Bound even malformed framework input without inventing releases.
+            if self.pressed_keys.len() == 256 {
+                self.pressed_keys.swap_remove(0);
+            }
+            self.pressed_keys.push(ks.key.clone());
+        }
+    }
+
     /// Writes a raw key without replaying a foreground program's input into a later prompt.
     /// The optional epoch asks the GPUI adapter to schedule the existing gap timer.
     pub(super) fn raw_key(
         &mut self,
         ks: &gpui_kit::Keystroke,
+        held: bool,
         terminal: &RemoteTerminal,
-        flags: impl Fn() -> super::input::KeyFlags,
     ) -> KeyDelivery {
         let m = &ks.modifiers;
         if m.control && !m.platform && !m.alt && ks.key == "c" && self.handoff_active(terminal) {
             // A fresh A/B after Ctrl-C need not advance prompt_cycle: remember its report boundary.
             self.interrupt_handoff(terminal);
         }
-        let Some(bytes) = super::input::keystroke_to_bytes(ks, flags()) else {
+        let Some((bytes, report_release)) = self.encode_key(ks, held, terminal) else {
             return KeyDelivery::Unencoded;
         };
         let plain = !m.control && !m.alt && !m.platform;
@@ -74,6 +158,7 @@ impl PromptInput {
         let shell_owns_prompt = self.shell_owns_prompt(terminal);
         if plain
             && ks.key == "backspace"
+            && !report_release
             && !shell_owns_prompt
             && self.gap_holdable(terminal)
             && let Verdict::Held(arm) = self.hold.hold_backspace(&bytes)
@@ -85,7 +170,7 @@ impl PromptInput {
             // Cancel before writing Ctrl-C/D so a prompt edge cannot resurrect an owed Ctrl-U.
             self.observe(terminal, boundary);
         }
-        terminal.write(bytes);
+        self.write_key(ks, bytes, report_release, terminal);
         if !shell_owns_prompt && !interrupt {
             self.observe(
                 terminal,
@@ -112,6 +197,8 @@ impl PromptInput {
             select_gesture: false,
             drag_word: None,
             goal_col: None,
+            pressed_keys: smallvec::SmallVec::new(),
+            keyboard_context: None,
         }
     }
     // The existing editor capability is borrowed by history/completion and render adapters.
@@ -429,11 +516,11 @@ impl PromptInput {
     pub(super) fn key<'a>(
         &mut self,
         ks: &'a gpui_kit::Keystroke,
+        held: bool,
         terminal: &RemoteTerminal,
         history: &mut TerminalHistory,
         completion: &mut TerminalCompletion,
         history_search: bool,
-        flags: impl Fn() -> super::input::KeyFlags,
     ) -> EditorIntent<'a> {
         let m = &ks.modifiers;
         let key = ks.key.as_str();
@@ -521,8 +608,8 @@ impl PromptInput {
         // hand the line over first, then send the key, with every modifier
         // combination going the same way (Alt+F7 is ClearHistory).
         if super::input::is_function_key(key) && !m.platform {
-            if let Some(bytes) = super::input::keystroke_to_bytes(ks, flags()) {
-                return EditorIntent::Handoff(bytes);
+            if let Some((bytes, release)) = self.encode_key(ks, held, terminal) {
+                return EditorIntent::Handoff(bytes, release);
             }
         }
 
@@ -564,12 +651,15 @@ impl PromptInput {
                 return EditorIntent::Redraw;
             }
             if key == "r" && !history_search {
-                return EditorIntent::Handoff(vec![0x12]);
+                let (bytes, release) = self
+                    .encode_key(ks, held, terminal)
+                    .expect("Ctrl+R has a legacy or negotiated encoding");
+                return EditorIntent::Handoff(bytes, release);
             }
             if !self.apply_readline_ctrl(key, terminal, history, completion)
-                && let Some(bytes) = super::input::keystroke_to_bytes(ks, flags())
+                && let Some((bytes, release)) = self.encode_key(ks, held, terminal)
             {
-                return EditorIntent::Handoff(bytes);
+                return EditorIntent::Handoff(bytes, release);
             }
             return EditorIntent::Redraw;
         }
@@ -608,15 +698,15 @@ impl PromptInput {
             }
             "backspace" => {
                 if self.cmd.is_empty() {
-                    terminal.write(vec![0x7f]);
-                    self.observe(
-                        terminal,
-                        RawInput::Key {
-                            key: "backspace",
-                            plain: true,
-                        },
-                    );
-                    return EditorIntent::Silent;
+                    let flags = self.key_context(terminal);
+                    let event = self.key_event(ks, held);
+                    let (bytes, release) = if flags.kitty_active() {
+                        super::input::key_event_to_bytes(ks, flags, event)
+                            .expect("Backspace has a negotiated encoding")
+                    } else {
+                        (vec![0x7f], false)
+                    };
+                    return EditorIntent::Write(bytes, release);
                 }
                 if m.alt && self.cmd.selection().is_none() {
                     self.cmd.delete_word_left();
@@ -658,10 +748,10 @@ impl PromptInput {
                 return EditorIntent::Redraw;
             }
             "escape" => {
-                let bytes =
-                    super::input::keystroke_to_bytes(ks, flags()).unwrap_or_else(|| vec![0x1b]);
-                terminal.write(bytes);
-                return EditorIntent::Silent;
+                let (bytes, release) = self
+                    .encode_key(ks, held, terminal)
+                    .unwrap_or_else(|| (vec![0x1b], false));
+                return EditorIntent::Write(bytes, release);
             }
             _ => {
                 if !m.control && !m.platform && !m.alt {
@@ -672,8 +762,8 @@ impl PromptInput {
                     }
                 }
                 if m.alt && !m.control && !m.platform && key.chars().count() == 1 {
-                    let bytes =
-                        super::input::keystroke_to_bytes(ks, flags()).unwrap_or_else(|| {
+                    let (bytes, release) =
+                        self.encode_key(ks, held, terminal).unwrap_or_else(|| {
                             let name = if m.shift {
                                 key.to_uppercase()
                             } else {
@@ -681,9 +771,9 @@ impl PromptInput {
                             };
                             let mut b = vec![0x1b];
                             b.extend_from_slice(name.as_bytes());
-                            b
+                            (b, false)
                         });
-                    return EditorIntent::Handoff(bytes);
+                    return EditorIntent::Handoff(bytes, release);
                 }
             }
         }

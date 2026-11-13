@@ -2119,16 +2119,16 @@ fn relink_panes(cx: &mut gpui_kit::App, workspace: WorkspaceId) {
                 })
                 .await;
             match opened {
-                Ok((stream, buffered, glyph_authority)) => {
+                Ok((stream, buffered, version)) => {
                     view.update(cx, |view, cx| {
-                        if let Err(e) = view.adopt_relink_with_glyph(
+                        if let Err(e) = view.adopt_relink_with_version(
                             stream,
                             buffered,
                             &adopting,
                             size,
                             cell_w,
                             cell_h,
-                            glyph_authority,
+                            Some(version),
                             cx,
                         ) {
                             view.relink_settled();
@@ -2259,16 +2259,16 @@ fn relink_dead_panes(
         let mut misses = 0usize;
         for (view, opened, pane_id, size, cell_w, cell_h) in attempts {
             match opened.await {
-                Ok((stream, buffered, glyph_authority)) => {
+                Ok((stream, buffered, version)) => {
                     let adopted = view.update(cx, |view, cx| {
-                        view.adopt_relink_with_glyph(
+                        view.adopt_relink_with_version(
                             stream,
                             buffered,
                             &route,
                             size,
                             cell_w,
                             cell_h,
-                            glyph_authority,
+                            Some(version),
                             cx,
                         )
                     });
