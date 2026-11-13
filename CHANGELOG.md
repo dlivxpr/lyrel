@@ -27,6 +27,7 @@
 
 ### 修复
 
+- #268：新 shell 的 Glyph 隔离回归在真实 PTY 中以 raw mode 采集完整回复字节，退出采集后恢复原 tty 模式并再次验证正常 shell 输入；不再将 macOS 行编辑器对 ESC／ST 的回显重绘误判为 glossary 复活。保留磁盘 APC 剥离、空权威 glossary、单次投影与历史 ACK 不重放断言，不放宽回复内容或生产超时。
 - #277：修复同一次 PTY read 中图片后的 APC／OSC 提前释放已完成 iTerm2 source 工作额度、导致 daemon reader panic 与后续文字停滞；保留各图片到有序移交的额度，base64 在原编码 buffer 内压缩并在解码分配前预留工作空间，畸形 padding 拒收而不下溢。不通过延长往返超时掩盖故障。
 - #264：绘制时的 `keyboard_events` key context 与其他 frame facts 一起采样，不再经 `key_flags()` 阻塞等待 reader 持有的 grid；实际按键路由仍读取 live 模式。保留无 prompt 与 prompt 两个既有竞争绘制回归，不通过延长超时掩盖等待。
 - #268：`GlyphState` 的共享解码器拒绝 `upm=0`、`aw=0` 与 `lh=0`，与注册请求的值域一致，避免恢复投影向消费者引入从未能被接受的布局参数。
