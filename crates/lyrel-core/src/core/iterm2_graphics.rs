@@ -468,6 +468,7 @@ mod tests {
         for body in [
             file("inline=0", &image),
             file("", &image),
+            b"inline=1:==".to_vec(),
             file("inline=1", b"%PDF-1.7\n"),
             file("inline=1", b"GIF89a\x01\x00"),
             file("inline=1", b"\xff\xd8\xff\xe0"),
