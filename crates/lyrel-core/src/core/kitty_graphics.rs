@@ -86,6 +86,10 @@ pub struct ApcTokenizer {
     osc_completed: usize,
     /// Discovery reuses this bounded framing, not a second VT grammar.
     dcs: bool,
+    /// Only the graphics splitter owns OSC 1337; the Glyph and XTGETTCAP
+    /// sniffers must forward that control string intact for the graphics
+    /// sniffer behind them.
+    iterm2: bool,
     header: Option<Box<rio_vt::performer::parser::Parser>>,
     /// Which APC body this instance lifts: kitty `G` or Glyph Protocol `25a1`.
     lift: ApcLift,
@@ -168,6 +172,7 @@ impl ApcTokenizer {
             },
             osc_completed: 0,
             dcs: false,
+            iterm2: true,
             header: None,
             lift: ApcLift::KittyGraphics,
             matched: 0,
@@ -180,6 +185,7 @@ impl ApcTokenizer {
     pub(crate) fn glyph() -> Self {
         let mut tokenizer = Self::new();
         tokenizer.lift = ApcLift::GlyphProtocol;
+        tokenizer.iterm2 = false;
         tokenizer
     }
 
@@ -190,6 +196,7 @@ impl ApcTokenizer {
     pub(crate) fn xtgettcap() -> Self {
         let mut tokenizer = Self::new();
         tokenizer.dcs = true;
+        tokenizer.iterm2 = false;
         tokenizer
     }
 
@@ -328,7 +335,7 @@ impl ApcTokenizer {
         on_passthrough: impl FnMut(&[u8]),
         on_command: impl FnMut(&[u8], bool, bool),
     ) {
-        self.tokenize(bytes, on_passthrough, on_command);
+        self.tokenize(bytes, on_passthrough, on_command, |_, _| {});
     }
 
     // Aborts must reach the reassembler in the same ordered stream as complete
@@ -454,7 +461,7 @@ impl ApcTokenizer {
                     // OSC is the third bounded control string this splitter
                     // knows: only the fixed iTerm2 `1337;` prefix is inspected,
                     // and every other OSC stays byte-for-byte passthrough.
-                    b']' if !self.dcs => {
+                    b']' if self.iterm2 && !self.dcs => {
                         self.clear_buffer();
                         self.state = State::OscPrefix;
                         i += 1;

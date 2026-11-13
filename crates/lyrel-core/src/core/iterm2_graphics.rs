@@ -449,6 +449,13 @@ mod tests {
         assert!(parse_file(file("inline=1", &animated)).is_err());
         // A declared `size` is a progress hint, not a second length authority.
         assert!(parse_file(file("inline=1;size=1", &image)).is_ok());
+        // The header cap is enforced before any payload parsing; the GUI
+        // refusal test keeps PTY input bounded.
+        let mut oversized = b"inline=1;".to_vec();
+        oversized.extend(std::iter::repeat_n(b'x', 9000));
+        oversized.push(b':');
+        oversized.extend_from_slice(b"AAAA");
+        assert!(parse_file(oversized).is_err());
     }
 
     #[test]
