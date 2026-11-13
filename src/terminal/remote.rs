@@ -156,9 +156,9 @@ impl EventListener for EventProxy {
             // view's own; repaints arrive with the batch `Wakeup`.
             //
             // `ColorChange` — an echo of an OSC 4 set landing in
-            // `term.colors`. The paint path reads this product's own
-            // palette by design (queries are answered from it too), so
-            // there is no consumer.
+            // `term.colors`. The paint path reads this product's effective
+            // palette by design (queries are answered from that same table),
+            // so there is no consumer.
             //
             // `CurrentDirectoryChanged` — the daemon's sniffer is the
             // authoritative cwd source; this echoes the same OSC 7.
@@ -833,6 +833,15 @@ impl RemoteTerminal {
 
     pub fn detach_link(&mut self) {
         self.connection.detach(&self.images);
+        // Retirement fences future parser writes. Wait out the current grid
+        // slice before releasing its claim so that slice cannot restore it.
+        let pointer_released = {
+            let _grid = self.term.lock();
+            self.presentation_facts().set_pointer(None)
+        };
+        if pointer_released {
+            self.proxy.send(PaneEvent::Wakeup);
+        }
         self.poll_exited();
     }
 

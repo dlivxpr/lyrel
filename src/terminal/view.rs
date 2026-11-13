@@ -1463,6 +1463,28 @@ impl TerminalView {
         self.report_mouse && self.frame.mouse_mode
     }
 
+    /// The pointer shape this pane's terminal content advertises, or `None`
+    /// to leave the platform default where lyrel's policy sets nothing.
+    ///
+    /// Priority is lyrel's own interaction first — a text selection in
+    /// flight and an armed link gesture both answer before the
+    /// application — then the application's OSC 22 claim on this pane's
+    /// content, then the normal terminal policy: an I-beam over selectable
+    /// text, and nothing at all while the application watches the mouse
+    /// itself.
+    pub(super) fn content_cursor(&self) -> Option<gpui_kit::CursorStyle> {
+        if self.selection_scroll.is_selecting() {
+            return Some(gpui_kit::CursorStyle::IBeam);
+        }
+        if self.links.hovered().is_some_and(|link| link.is_armed()) {
+            return Some(gpui_kit::CursorStyle::PointingHand);
+        }
+        if let Some(claimed) = self.terminal.presentation_facts().pointer {
+            return Some(claimed);
+        }
+        (!self.frame_mouse_mode()).then_some(gpui_kit::CursorStyle::IBeam)
+    }
+
     fn write_mouse(
         &self,
         base: u8,
@@ -3210,6 +3232,7 @@ mod gpui_tests {
     include!("lifecycle_consumer_tests.rs");
     include!("reading_consumer_tests.rs");
     include!("reading_lifecycle_consumer_tests.rs");
+    include!("pointer_consumer_tests.rs");
 
     #[gpui_kit::test]
     fn graphics_consumer_streamed_png_and_compression_render_after_rejected_transfer(
