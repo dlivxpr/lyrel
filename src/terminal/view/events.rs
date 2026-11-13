@@ -99,6 +99,15 @@ impl TerminalView {
                 });
                 self.terminal.write(reply.into_bytes());
             }
+            PaneEvent::GlyphQuery { token, cp } => {
+                // The system bit is this pane's real shaping/fallback answer,
+                // measured on the UI thread. The daemon owns the reply and the
+                // glossary bit it captured when the query was read.
+                let system =
+                    crate::terminal::glyph::font_covers(cx, &self.font, self.font_size, cp);
+                self.terminal.answer_glyph_query(token, cp, system);
+            }
+            PaneEvent::GlyphUnsupported => cx.emit(GlyphUnsupported),
         }
     }
 

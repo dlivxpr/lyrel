@@ -197,6 +197,9 @@ pub(super) fn run(
                     ClientMsg::Input(bytes) => pane.write_input(&bytes),
                     ClientMsg::Resize(size) => pane.resize(size),
                     ClientMsg::ClearPresentation { history } => pane.clear_presentation(history),
+                    ClientMsg::GlyphQueryResult { token, cp, system } => {
+                        pane.answer_glyph_query(*epoch, token, cp, system)
+                    }
                     ClientMsg::AuthResponse {
                         request_id,
                         response,

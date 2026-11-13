@@ -314,6 +314,11 @@ impl FrameReader {
                                 cuts,
                                 Some(&proxy.parse_state.history_limit),
                                 Some(&proxy.parse_state.presentation),
+                                Some(crate::terminal::glyph::GlyphApply {
+                                    store: &proxy.parse_state.glyphs,
+                                    authority: &proxy.parse_state.glyph_authority,
+                                    denied: &proxy.parse_state.glyph_denied,
+                                }),
                                 &quit,
                                 |term, cut| {
                                     cuts_left -= 1;
@@ -400,6 +405,20 @@ impl FrameReader {
                         });
                         proxy.send(PaneEvent::Wakeup);
                         out_batch.clear();
+                        if proxy
+                            .parse_state
+                            .glyph_denied
+                            .swap(false, Ordering::Relaxed)
+                            && !proxy
+                                .parse_state
+                                .glyph_denied_reported
+                                .swap(true, Ordering::Relaxed)
+                        {
+                            // The producer used Glyph Protocol against a
+                            // daemon that cannot own the glossary. Nothing was
+                            // derived or acknowledged; say so once.
+                            proxy.send(PaneEvent::GlyphUnsupported);
+                        }
                     }
                 };
             }
@@ -501,6 +520,11 @@ impl FrameReader {
                             cuts,
                             Some(&proxy.parse_state.history_limit),
                             Some(&proxy.parse_state.presentation),
+                            Some(crate::terminal::glyph::GlyphApply {
+                                store: &proxy.parse_state.glyphs,
+                                authority: &proxy.parse_state.glyph_authority,
+                                denied: &proxy.parse_state.glyph_denied,
+                            }),
                             &quit,
                             |term, cut| match cut {
                                 ReaderCut::Command(mark) => command_cursor.apply(term, mark),
@@ -669,6 +693,13 @@ impl FrameReader {
                         } else {
                             clipboard_write_busy.store(false, Ordering::Release);
                         }
+                    }
+                    DaemonMsg::GlyphQuery { token, cp } => {
+                        // Only the daemon writes the `q` reply. This reader
+                        // hands the request to the UI thread, which measures
+                        // the pane's actual font stack and answers the token.
+                        flush_batch!();
+                        proxy.send(PaneEvent::GlyphQuery { token, cp });
                     }
                     DaemonMsg::Cwd(path) => {
                         flush_batch!();
@@ -1080,6 +1111,7 @@ fn feed_grid<T: EventListener + Clone>(
     cuts: Vec<(usize, ReaderCut)>,
     history_limit: Option<&AtomicUsize>,
     presentation: Option<&Mutex<crate::terminal::presentation::ParsePresentation>>,
+    glyph: Option<crate::terminal::glyph::GlyphApply<'_>>,
     quit: &AtomicBool,
     mut on_cut: impl FnMut(&mut Crosswords<T>, ReaderCut),
 ) -> Option<std::time::Duration> {
@@ -1111,7 +1143,8 @@ fn feed_grid<T: EventListener + Clone>(
                     keyboard,
                     history_limit.map(|limit| limit.load(Ordering::Relaxed)),
                 )
-                .with_presentation(presentation);
+                .with_presentation(presentation)
+                .with_glyph(glyph);
                 processor.advance(&mut bridge, &bytes[at..end]);
             }
             held += end - at;

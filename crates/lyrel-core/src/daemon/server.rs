@@ -1631,6 +1631,12 @@ fn run_stream(
                 }
                 pane.resize(size);
             }
+            ClientMsg::GlyphQueryResult { token, cp, system } => {
+                if !pane.controls(epoch) {
+                    break 'conn;
+                }
+                pane.answer_glyph_query(epoch, token, cp, system);
+            }
             ClientMsg::AuthResponse {
                 request_id,
                 response,

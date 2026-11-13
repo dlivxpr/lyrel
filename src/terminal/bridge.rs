@@ -74,6 +74,9 @@ pub(super) struct ParseBridge<'a, T: EventListener> {
     keyboard: &'a mut KeyboardStacks,
     history_limit: Option<usize>,
     presentation: Option<&'a std::sync::Mutex<super::presentation::ParsePresentation>>,
+    /// Daemon-accepted glyph bodies and the negotiated endpoint authority.
+    /// `None` for bridges that are not a live rendering consumer.
+    glyph: Option<super::glyph::GlyphApply<'a>>,
 }
 
 impl<'a, T: EventListener> ParseBridge<'a, T> {
@@ -89,6 +92,7 @@ impl<'a, T: EventListener> ParseBridge<'a, T> {
             keyboard,
             history_limit,
             presentation: None,
+            glyph: None,
         }
     }
 
@@ -97,6 +101,11 @@ impl<'a, T: EventListener> ParseBridge<'a, T> {
         presentation: Option<&'a std::sync::Mutex<super::presentation::ParsePresentation>>,
     ) -> Self {
         self.presentation = presentation;
+        self
+    }
+
+    pub(super) fn with_glyph(mut self, glyph: Option<super::glyph::GlyphApply<'a>>) -> Self {
+        self.glyph = glyph;
         self
     }
 
@@ -352,6 +361,9 @@ impl<T: EventListener> Handler for ParseBridge<'_, T> {
     fn reset_state(&mut self) {
         *self.keyboard = KeyboardStacks::default();
         self.inner.reset_state();
+        if let Some(glyph) = self.glyph {
+            glyph.store.clear_all();
+        }
         if let Some(presentation) = self.presentation {
             let mut facts = presentation.lock().unwrap();
             facts.invalidate_reading();
@@ -585,9 +597,14 @@ impl<T: EventListener> Handler for ParseBridge<'_, T> {
     /// unanswered, and the daemon strips these before they arrive anyway.
     fn kitty_graphics_response(&mut self, _: String) {}
 
-    /// Glyph Protocol replies: same — not a protocol this pane speaks.
+    /// Glyph Protocol replies: the daemon is the only writer of `s`/`r`/`c`
+    /// acknowledgements and of the frontend-bound `q` answer. A consumer that
+    /// repeated them would double-answer the PTY.
     fn glyph_protocol_response(&mut self, _: String) {}
 
+    /// The daemon already validated this body and re-emitted it into the
+    /// ordered stream. Derive the picture here; without the negotiated
+    /// `glyph-registry` authority nothing is accepted or claimed.
     fn glyph_register(
         &mut self,
         cp: u32,
@@ -595,16 +612,24 @@ impl<T: EventListener> Handler for ParseBridge<'_, T> {
         width: u8,
         layout: rio_graphics::glyph_layout::GlyphLayout,
     ) -> Result<(), rio_vt::ansi::glyph_protocol::RegisterError> {
-        self.inner.glyph_register(cp, payload, width, layout)
+        if let Some(glyph) = self.glyph
+            && let rio_vt::ansi::glyph_protocol::GlyphPayload::Glyf { glyf, upm } = payload
+        {
+            glyph.register(cp, &glyf, upm, width, layout);
+        }
+        Ok(())
     }
 
     fn glyph_clear(&mut self, cp: Option<u32>) {
-        self.inner.glyph_clear(cp);
+        if let Some(glyph) = self.glyph {
+            glyph.store.clear(cp);
+        }
     }
 
-    fn glyph_query(&mut self, cp: u32) {
-        self.inner.glyph_query(cp);
-    }
+    /// Queries are answered by the daemon from the controller's font coverage.
+    /// The consumer never writes a `q` reply, and an old endpoint's raw query
+    /// stays unanswered rather than being answered from parsed bytes.
+    fn glyph_query(&mut self, _: u32) {}
 
     fn kitty_chunking_state_mut(
         &mut self,

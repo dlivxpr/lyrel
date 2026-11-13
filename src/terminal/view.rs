@@ -94,6 +94,13 @@ pub struct AgentDetected(pub crate::core::cli_agent::CLIAgent);
 
 impl gpui_kit::EventEmitter<AgentDetected> for TerminalView {}
 
+/// A producer used Glyph Protocol against a backend that does not own the
+/// glossary. Nothing was rendered or acknowledged; the app tells the user the
+/// daemon needs updating instead of leaving a half-working pane.
+pub struct GlyphUnsupported;
+
+impl gpui_kit::EventEmitter<GlyphUnsupported> for TerminalView {}
+
 /// A file link the user clicked, on its way to whoever can show it. The
 /// terminal resolves the path — it is the only thing that knows the pane's
 /// directory and host — and the app opens it, because the editor and the file
@@ -975,6 +982,7 @@ impl TerminalView {
         )
     }
 
+    #[cfg(test)]
     pub fn adopt_relink(
         &mut self,
         stream: crate::daemon::transport::Stream,
@@ -985,11 +993,34 @@ impl TerminalView {
         cell_h: u16,
         cx: &mut Context<Self>,
     ) -> anyhow::Result<()> {
+        self.adopt_relink_with_glyph(stream, buffered, route, size, cell_w, cell_h, false, cx)
+    }
+
+    /// The same, carrying the endpoint feature the relink actually negotiated.
+    #[allow(clippy::too_many_arguments)]
+    pub fn adopt_relink_with_glyph(
+        &mut self,
+        stream: crate::daemon::transport::Stream,
+        buffered: Vec<u8>,
+        route: &crate::terminal::PaneRoute,
+        size: TermSize,
+        cell_w: u16,
+        cell_h: u16,
+        glyph_authority: bool,
+        cx: &mut Context<Self>,
+    ) -> anyhow::Result<()> {
         self.remote_clipboard_write_generation =
             self.remote_clipboard_write_generation.wrapping_add(1);
         self.remote_clipboard_write_in_flight = None;
-        self.terminal
-            .adopt_relink(stream, buffered, route, size, cell_w, cell_h)?;
+        self.terminal.adopt_relink_with_glyph(
+            stream,
+            buffered,
+            route,
+            size,
+            cell_w,
+            cell_h,
+            glyph_authority,
+        )?;
         self.grid_snap = None;
         self.grid_buf.clear();
         self.selection_scroll.clear_presented();
@@ -3209,6 +3240,7 @@ mod gpui_tests {
     }
 
     include!("graphics_consumer_tests.rs");
+    include!("glyph_consumer_tests.rs");
     include!("history_search_pty_consumer_tests.rs");
     include!("graphics_resize_consumer_tests.rs");
     include!("graphics_layout_consumer_tests.rs");

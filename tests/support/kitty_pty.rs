@@ -141,7 +141,7 @@ pub fn pty_sender() {
                 write!(output, "\x1b7\x1b[2;1H\r\nKITTY_STATS_{serial} pid={} bytes={} uploads={} placements={}\r\n\x1b8", std::process::id(), stats.bytes, stats.uploads, stats.placements).unwrap();
                 output.flush().unwrap();
             }
-            "SEND" | "SEND_OK" | "WAIT" => {
+            "SEND" | "SEND_OK" | "SEND_ANY" | "WAIT" => {
                 stats.record(&bytes);
                 for part in bytes.chunks(if fragment == 0 {
                     bytes.len().max(1)
@@ -183,6 +183,7 @@ pub fn pty_sender() {
             }
             other => panic!("unexpected PTY operation {other}"),
         }
+        let mut reply_hex = String::new();
         for _ in 0..replies {
             let mut reply = Vec::new();
             while !(reply.ends_with(b"\x1b\\")
@@ -199,12 +200,17 @@ pub fn pty_sender() {
                     String::from_utf8_lossy(&reply)
                 );
             }
-            write!(
-                output,
-                "\x1b7\x1b[1;1H\r\nKITTY_REPLY {serial} {}\r\n\x1b8",
-                hex(&reply)
-            )
-            .unwrap();
+            if !reply_hex.is_empty() {
+                reply_hex.push(',');
+            }
+            reply_hex.push_str(&hex(&reply));
+        }
+        // A reply vocabulary other than kitty's is delivered to the test as a
+        // file, not as a row that a later request would overwrite.
+        if operation == "SEND_ANY"
+            && let Some(path) = &gate
+        {
+            std::fs::write(path, &reply_hex).unwrap();
         }
         // An unsupported-format query is answered in parser order without
         // creating image work. A valid pixel query can be cancelled by resize;

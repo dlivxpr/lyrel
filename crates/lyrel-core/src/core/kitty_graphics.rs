@@ -41,7 +41,7 @@ pub use super::graphics_state::{
 /// the spec only *recommends* chunking — a sender is free to put a whole frame
 /// in one command, and an uncompressed 4K RGBA frame is ~44 MB of base64. Size
 /// this to admit a one-shot frame that still fits [`MAX_TRANSMISSION_BASE64`];
-/// [`ApcTokenizer::push_graphics`] logs whatever it has to drop.
+/// `ApcTokenizer::push_lifted` logs whatever it has to drop.
 const MAX_APC_PAYLOAD: usize = MAX_TRANSMISSION_BASE64;
 
 /// Cap on the total base64 bytes received for one chunked transmission.
@@ -71,11 +71,39 @@ pub const MAX_IMAGE_BYTES: usize = 32 << 20;
 /// persists across `feed` calls, so a sequence split over several reads is still
 /// handled.
 pub struct ApcTokenizer {
-    /// Bytes of a `_G` command accumulated after `ESC _ G` while it can still
-    /// terminate. Cleared whenever a command finishes or is abandoned.
+    /// Bytes of a lifted command accumulated after `ESC _ <prefix>` while it
+    /// can still terminate. Cleared whenever a command finishes or is abandoned.
     buf: Vec<u8>,
     state: State,
-    work: super::graphics_state::retention::Work,
+    work: Option<super::graphics_state::retention::Work>,
+    lift: ApcLift,
+    /// Bytes of `lift.prefix()` matched so far in [`State::ApcStart`].
+    matched: u8,
+}
+
+/// Which APC body a tokenizer lifts out of the passthrough stream. The framing
+/// state machine is shared; only the prefix, the payload cap and the retention
+/// accounting differ.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ApcLift {
+    KittyGraphics,
+    GlyphProtocol,
+}
+
+impl ApcLift {
+    fn prefix(self) -> &'static [u8] {
+        match self {
+            Self::KittyGraphics => b"G",
+            Self::GlyphProtocol => b"25a1",
+        }
+    }
+
+    fn max_payload(self) -> usize {
+        match self {
+            Self::KittyGraphics => MAX_APC_PAYLOAD,
+            Self::GlyphProtocol => super::glyph_protocol::MAX_APC_BODY,
+        }
+    }
 }
 
 #[derive(Default, Clone, Copy)]
@@ -85,17 +113,17 @@ enum State {
     Ground,
     /// Held one `ESC` in ground state; a following `_` opens an APC.
     Esc,
-    /// Held `ESC _`; the next byte decides graphics (`G`) vs. passthrough APC.
+    /// Held `ESC _`; the next bytes decide whether the APC is ours.
     ApcStart,
-    /// Buffering a `_G` graphics command (stripped from passthrough).
-    ApcGraphics,
-    /// Saw `ESC` inside a graphics command — a following `\` is the terminator.
-    ApcGraphicsEsc,
-    /// Forwarding a non-graphics APC as passthrough (bytes kept verbatim).
+    /// Buffering a lifted command (stripped from passthrough).
+    ApcLifted,
+    /// Saw `ESC` inside a lifted command — a following `\` is the terminator.
+    ApcLiftedEsc,
+    /// Forwarding a non-lifted APC as passthrough (bytes kept verbatim).
     PassApc,
     /// Saw `ESC` inside a passthrough APC — a following `\` is the terminator.
     PassApcEsc,
-    /// Dropping an abandoned/oversized graphics APC (emitted nowhere).
+    /// Dropping an abandoned/oversized lifted APC (emitted nowhere).
     ApcDrop,
     /// Saw `ESC` inside a dropped APC — a following `\` is the terminator.
     ApcDropEsc,
@@ -114,9 +142,27 @@ impl ApcTokenizer {
             state: State::Ground,
             work: {
                 let retention = super::graphics_state::retention::Retention::shared();
-                retention.work(retention.owner())
+                Some(retention.work(retention.owner()))
             },
+            lift: ApcLift::KittyGraphics,
+            matched: 0,
         }
+    }
+
+    /// A tokenizer that lifts Glyph Protocol bodies (`25a1`) with the same
+    /// framing. It has no graphics-retention accounting of its own.
+    pub(crate) fn glyph() -> Self {
+        Self {
+            buf: Vec::new(),
+            state: State::Ground,
+            work: None,
+            lift: ApcLift::GlyphProtocol,
+            matched: 0,
+        }
+    }
+
+    pub(crate) fn ground(&self) -> bool {
+        matches!(self.state, State::Ground)
     }
 
     /// Feed one chunk of output. `on_passthrough` receives runs of non-graphics
@@ -142,6 +188,18 @@ impl ApcTokenizer {
                 on_command(command);
             }
         });
+    }
+
+    /// Feed one chunk and report aborted/exhausted lifted commands too. Used by
+    /// the Glyph Protocol sniffer, which must answer an oversized body from the
+    /// control prefix it managed to keep.
+    pub(crate) fn feed_lifted(
+        &mut self,
+        bytes: &[u8],
+        on_passthrough: impl FnMut(&[u8]),
+        on_command: impl FnMut(&[u8], bool, bool),
+    ) {
+        self.tokenize(bytes, on_passthrough, on_command);
     }
 
     // Aborts must reach the reassembler in the same ordered stream as complete
@@ -192,11 +250,11 @@ impl ApcTokenizer {
                     }
                     None => return,
                 },
-                State::ApcGraphics => match memchr::memchr3(0x1b, 0x18, 0x1a, &bytes[i..]) {
+                State::ApcLifted => match memchr::memchr3(0x1b, 0x18, 0x1a, &bytes[i..]) {
                     Some(off) => {
-                        if self.push_graphics(&bytes[i..i + off]) {
+                        if self.push_lifted(&bytes[i..i + off]) {
                             if bytes[i + off] == 0x1b {
-                                self.state = State::ApcGraphicsEsc;
+                                self.state = State::ApcLiftedEsc;
                             } else {
                                 on_command(&self.buf, true, false);
                                 self.clear_buffer();
@@ -213,7 +271,7 @@ impl ApcTokenizer {
                         }
                     }
                     None => {
-                        if !self.push_graphics(&bytes[i..]) {
+                        if !self.push_lifted(&bytes[i..]) {
                             on_command(&self.buf, true, true);
                             self.clear_buffer();
                             self.state = State::ApcDrop;
@@ -224,6 +282,7 @@ impl ApcTokenizer {
                 State::Esc => match bytes[i] {
                     b'_' => {
                         self.clear_buffer();
+                        self.matched = 0;
                         self.state = State::ApcStart;
                         i += 1;
                     }
@@ -241,23 +300,29 @@ impl ApcTokenizer {
                     }
                 },
                 State::ApcStart => {
-                    if bytes[i] == b'G' {
-                        self.clear_buffer();
-                        if !self.push_graphics(b"G") {
-                            self.state = State::ApcDrop;
-                            i += 1;
-                            continue;
-                        }
-                        self.state = State::ApcGraphics;
+                    let prefix = self.lift.prefix();
+                    if bytes[i] == prefix[self.matched as usize] {
+                        self.matched += 1;
                         i += 1;
+                        if self.matched as usize == prefix.len() {
+                            self.clear_buffer();
+                            if !self.push_lifted(prefix) {
+                                self.state = State::ApcDrop;
+                                continue;
+                            }
+                            self.state = State::ApcLifted;
+                        }
                     } else {
-                        // Not ours: emit the held `ESC _` and forward the rest of
-                        // the APC verbatim (re-examine this byte in `PassApc`).
+                        // Not ours: emit the held `ESC _` and every prefix byte
+                        // matched so far, then forward the rest of the APC
+                        // verbatim (re-examine this byte in `PassApc`).
                         on_passthrough(b"\x1b_");
+                        on_passthrough(&prefix[..self.matched as usize]);
+                        self.matched = 0;
                         self.state = State::PassApc;
                     }
                 }
-                State::ApcGraphicsEsc => match bytes[i] {
+                State::ApcLiftedEsc => match bytes[i] {
                     b'\\' => {
                         on_command(&self.buf, false, false);
                         self.clear_buffer();
@@ -265,19 +330,20 @@ impl ApcTokenizer {
                         i += 1;
                     }
                     0x1b => i += 1, // a run of ESCs; stay poised for `\`
-                    // A bare `ESC _` re-opens: the next byte decides graphics again.
+                    // A bare `ESC _` re-opens: the next bytes decide the lift again.
                     b'_' => {
                         on_command(&self.buf, true, false);
                         self.clear_buffer();
+                        self.matched = 0;
                         self.state = State::ApcStart;
                         i += 1;
                     }
-                    // ESC began some other escape: abandon this graphics command.
-                    // Its bytes were meant as graphics, so they stay stripped —
+                    // ESC began some other escape: abandon this lifted command.
+                    // Its bytes were meant as ours, so they stay stripped —
                     // but the escape itself belongs to the terminal, so forward
                     // it and re-examine this byte from Ground rather than eating
                     // both. Swallowing them would turn a `\x1b[31m` that follows
-                    // an unterminated graphics command into literal `31m`.
+                    // an unterminated command into literal `31m`.
                     _ => {
                         on_command(&self.buf, true, false);
                         self.clear_buffer();
@@ -302,6 +368,7 @@ impl ApcTokenizer {
                     // so the image is simply lost.
                     b'_' => {
                         self.buf.clear();
+                        self.matched = 0;
                         self.state = State::ApcStart;
                         i += 1;
                     }
@@ -318,10 +385,11 @@ impl ApcTokenizer {
                     0x1b => i += 1,
                     b'_' => {
                         self.clear_buffer();
+                        self.matched = 0;
                         self.state = State::ApcStart;
                         i += 1;
                     }
-                    // As in `ApcGraphicsEsc`: the dropped command's bytes stay
+                    // As in `ApcLiftedEsc`: the dropped command's bytes stay
                     // stripped, but the escape that interrupted it is the
                     // terminal's and has to reach the client intact.
                     _ => {
@@ -335,23 +403,38 @@ impl ApcTokenizer {
 
     fn clear_buffer(&mut self) {
         self.buf = Vec::new();
-        self.work.resize(0);
+        if let Some(work) = &mut self.work {
+            work.resize(0);
+        }
     }
 
-    /// Append within the cap; keep a bounded header prefix on failure so the
-    /// ordered abort can correlate an error before the caller clears it.
-    fn push_graphics(&mut self, run: &[u8]) -> bool {
-        if run.len() > MAX_APC_PAYLOAD.saturating_sub(self.buf.len()) {
-            log::debug!(
-                "kitty graphics: dropping a command whose payload passed {MAX_APC_PAYLOAD} bytes"
-            );
+    /// Append within the lift's cap; keep a bounded header prefix on failure so
+    /// the ordered abort can correlate an error before the caller clears it.
+    fn push_lifted(&mut self, run: &[u8]) -> bool {
+        let max = self.lift.max_payload();
+        if run.len() > max.saturating_sub(self.buf.len()) {
+            log::debug!("APC: dropping a command whose payload passed {max} bytes");
             if self.buf.len() < 4096 {
                 let prefix = run.len().min(4096 - self.buf.len());
                 let required = self.buf.len() + prefix;
-                if self.work.resize(required + self.buf.capacity()) {
-                    self.buf
-                        .reserve_exact(required.saturating_sub(self.buf.len()));
-                    self.work.resize(self.buf.capacity());
+                let reserved = match &mut self.work {
+                    Some(work) => {
+                        if work.resize(required + self.buf.capacity()) {
+                            self.buf
+                                .reserve_exact(required.saturating_sub(self.buf.len()));
+                            work.resize(self.buf.capacity());
+                            true
+                        } else {
+                            false
+                        }
+                    }
+                    None => {
+                        self.buf
+                            .reserve_exact(required.saturating_sub(self.buf.len()));
+                        true
+                    }
+                };
+                if reserved {
                     self.buf.extend_from_slice(&run[..prefix]);
                 }
             }
@@ -359,14 +442,19 @@ impl ApcTokenizer {
         }
         let required = self.buf.len() + run.len();
         if required > self.buf.capacity() {
-            let capacity = required
-                .max(self.buf.capacity().saturating_mul(2))
-                .min(MAX_APC_PAYLOAD);
-            if !self.work.resize(capacity + self.buf.capacity()) {
-                return false;
+            let capacity = required.max(self.buf.capacity().saturating_mul(2)).min(max);
+            match &mut self.work {
+                Some(work) => {
+                    if !work.resize(capacity + self.buf.capacity()) {
+                        return false;
+                    }
+                    self.buf.reserve_exact(capacity - self.buf.len());
+                    work.resize(self.buf.capacity());
+                }
+                None => {
+                    self.buf.reserve_exact(capacity - self.buf.len());
+                }
             }
-            self.buf.reserve_exact(capacity - self.buf.len());
-            self.work.resize(self.buf.capacity());
         }
         self.buf.extend_from_slice(run);
         true
@@ -406,7 +494,7 @@ impl GraphicsSniffer {
     pub(crate) fn new_budgeted(local: bool, owner: u64) -> Self {
         let mut sniffer = Self::new_local(local);
         let retention = super::graphics_state::retention::Retention::shared();
-        sniffer.tokenizer.work = retention.work(owner);
+        sniffer.tokenizer.work = Some(retention.work(owner));
         sniffer.parser.work = Some(retention.work(owner));
         sniffer
     }
@@ -449,7 +537,7 @@ impl GraphicsSniffer {
             }
             if matches!(
                 self.tokenizer.state,
-                State::Esc | State::ApcStart | State::ApcGraphics | State::ApcGraphicsEsc
+                State::Esc | State::ApcStart | State::ApcLifted | State::ApcLiftedEsc
             ) {
                 self.locality_denied = true;
             }
@@ -564,7 +652,7 @@ impl GraphicsSniffer {
             || (!parser.local
                 && matches!(
                     tokenizer.state,
-                    State::Esc | State::ApcStart | State::ApcGraphics | State::ApcGraphicsEsc,
+                    State::Esc | State::ApcStart | State::ApcLifted | State::ApcLiftedEsc,
                 ));
         Sniffed::Segments(segments.into_inner())
     }

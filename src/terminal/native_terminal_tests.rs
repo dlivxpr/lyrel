@@ -235,9 +235,115 @@ fn reading_copy_links_theme_and_ime_use_the_painted_semantic_rows(cx: &mut TestA
     graphics_recovery_destroy(view, window, cx);
 }
 
+/// Real fonts must answer the coverage query truthfully and the accepted
+/// registration must paint with the pane's effective foreground. The source
+/// codepoint is PUA-B, which no ordinary primary/fallback font covers, so the
+/// picture can only come from the registration.
+fn glyph_native_system_coverage_and_registered_paint(cx: &mut TestAppContext) {
+    crate::core::config::pin_test_config_dir();
+    cx.executor().allow_parking();
+    let daemon = GraphicsDaemonProcess::start();
+    let pane = daemon.spawn();
+    cx.update(|cx| {
+        crate::register_bundled_fonts(cx);
+        gpui_kit::component::init(cx);
+        cx.set_global(Config::default());
+    });
+    let (view, window) = graphics_rooted_consumer(cx, pane, daemon.stream(pane));
+    let replies = tempfile::TempDir::new().unwrap();
+
+    let reply = glyph_send(
+        &view,
+        cx,
+        1,
+        &replies.path().join("r1"),
+        &glyph_query(GLYPH_CP),
+        1,
+    );
+    assert_eq!(
+        reply,
+        format!("\x1b_25a1;q;cp={GLYPH_CP:x};status=\x1b\\").into_bytes(),
+        "U+100000 has no system coverage in the real font stack"
+    );
+
+    let reply = glyph_send(
+        &view,
+        cx,
+        2,
+        &replies.path().join("r2"),
+        &glyph_query(0x41),
+        1,
+    );
+    assert_eq!(
+        reply,
+        b"\x1b_25a1;q;cp=41;status=system\x1b\\".to_vec(),
+        "A is covered by the real font stack"
+    );
+
+    let reply = glyph_send(
+        &view,
+        cx,
+        3,
+        &replies.path().join("r3"),
+        &glyph_register(GLYPH_CP, &glyph_square(1000), 1),
+        1,
+    );
+    assert_eq!(
+        reply,
+        format!("\x1b_25a1;r;cp={GLYPH_CP:x};status=0\x1b\\").into_bytes(),
+        "registration accepted"
+    );
+
+    let reply = glyph_send(
+        &view,
+        cx,
+        4,
+        &replies.path().join("r4"),
+        &glyph_query(GLYPH_CP),
+        1,
+    );
+    assert_eq!(
+        reply,
+        format!("\x1b_25a1;q;cp={GLYPH_CP:x};status=glossary\x1b\\").into_bytes(),
+        "only the registration covers the PUA-B codepoint"
+    );
+
+    let display = format!("\x1b[3;5H{cp}", cp = char::from_u32(GLYPH_CP).unwrap());
+    graphics_send_fixture(&view, cx, 5, display.as_bytes());
+    glyph_wait(cx, "native glyph painted", |cx| {
+        view.read_with(cx, |view, _| {
+            view.cell_geom.is_some()
+                && glyph_presented_row(view, 2).chars().nth(4) == Some('\u{100000}')
+        })
+    });
+    let cell = glyph_cell_bounds(window, &view, cx, 2, 4);
+    let paths = glyph_paths_in_cell(window, &view, cx, cell);
+    assert_eq!(
+        paths.len(),
+        1,
+        "one native registered glyph path: {paths:?}"
+    );
+    let expected_fg = view.read_with(cx, |view, _| {
+        let cols = view.cell_geom.unwrap().cols;
+        view.grid_buf[2 * cols + 4].fg
+    });
+    assert_eq!(
+        paths[0].1.as_solid(),
+        Some(expected_fg),
+        "native glyph uses the cell's effective foreground"
+    );
+}
+
 pub(crate) fn native_cases() -> impl Iterator<Item = crate::native_markdown::Case> {
-    [crate::native_markdown::Case::new(
-        "terminal::view::gpui_tests::reading_copy_links_theme_and_ime_use_the_painted_semantic_rows",
-        reading_copy_links_theme_and_ime_use_the_painted_semantic_rows,
-    )].into_iter()
+    [
+        crate::native_markdown::Case::new(
+            "terminal::view::native_terminal_tests::glyph_native_system_coverage_and_registered_paint",
+            glyph_native_system_coverage_and_registered_paint,
+        ),
+        crate::native_markdown::Case::new(
+            "terminal::view::gpui_tests::reading_copy_links_theme_and_ime_use_the_painted_semantic_rows",
+            reading_copy_links_theme_and_ime_use_the_painted_semantic_rows,
+        ),
+    ]
+    .into_iter()
 }

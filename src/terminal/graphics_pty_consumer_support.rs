@@ -322,7 +322,7 @@ fn graphics_build_rooted_consumer_at(
     let view = window
         .update(cx, |_, window, cx| {
             let terminal =
-                RemoteTerminal::from_stream_with(stream, size, buffered, source).unwrap();
+                RemoteTerminal::from_stream_with_glyph(stream, size, buffered, source, true).unwrap();
             cx.new(|cx| TerminalView::with_terminal(terminal, pane, window, cx))
         })
         .unwrap();
@@ -675,4 +675,159 @@ fn graphics_recovery_destroy(
             None
         );
     });
+}
+
+// ---- Glyph Protocol producer and production-paint helpers ----------------
+//
+// Shared by the headless consumer tracer and the native-font consumer so both
+// drive the same real PTY fixture, the same reply channel and the same
+// production scene assertions.
+
+use gpui_kit::test::TestWindowExt as _;
+
+/// A supplementary-plane PUA-B codepoint no ordinary font maps, so a painted
+/// glyph can only come from the registration.
+const GLYPH_CP: u32 = 0x100000;
+
+/// A closed simple-glyph square with four on-curve points and no hinting.
+fn glyph_square(side: i16) -> Vec<u8> {
+    glyph_polygon(&[(0, 0), (side, 0), (side, side), (0, side)])
+}
+
+/// A closed simple-glyph rectangle.
+#[allow(dead_code)]
+fn glyph_rect(width: i16, height: i16) -> Vec<u8> {
+    glyph_polygon(&[(0, 0), (width, 0), (width, height), (0, height)])
+}
+
+fn glyph_polygon(points: &[(i16, i16)]) -> Vec<u8> {
+    let count = points.len() as u16;
+    let xs: Vec<i16> = points.iter().map(|(x, _)| *x).collect();
+    let ys: Vec<i16> = points.iter().map(|(_, y)| *y).collect();
+    let mut out = Vec::new();
+    out.extend_from_slice(&1i16.to_be_bytes()); // one contour
+    out.extend_from_slice(&xs.iter().copied().min().unwrap_or(0).to_be_bytes());
+    out.extend_from_slice(&ys.iter().copied().min().unwrap_or(0).to_be_bytes());
+    out.extend_from_slice(&xs.iter().copied().max().unwrap_or(0).to_be_bytes());
+    out.extend_from_slice(&ys.iter().copied().max().unwrap_or(0).to_be_bytes());
+    out.extend_from_slice(&(count - 1).to_be_bytes()); // endPtsOfContours
+    out.extend_from_slice(&0u16.to_be_bytes()); // instructionLength
+    out.extend(std::iter::repeat_n(0x01u8, points.len())); // on-curve, 16-bit deltas
+    let mut previous = 0i16;
+    for x in &xs {
+        out.extend_from_slice(&(x - previous).to_be_bytes());
+        previous = *x;
+    }
+    let mut previous = 0i16;
+    for y in &ys {
+        out.extend_from_slice(&(y - previous).to_be_bytes());
+        previous = *y;
+    }
+    out
+}
+
+fn glyph_register(cp: u32, glyf: &[u8], reply: u8) -> Vec<u8> {
+    use base64::Engine as _;
+    let payload = base64::engine::general_purpose::STANDARD.encode(glyf);
+    format!("\x1b_25a1;r;cp={cp:x};fmt=glyf;reply={reply};upm=1000;{payload}\x1b\\").into_bytes()
+}
+
+fn glyph_query(cp: u32) -> Vec<u8> {
+    format!("\x1b_25a1;q;cp={cp:x}\x1b\\").into_bytes()
+}
+
+#[allow(dead_code)]
+fn glyph_clear(cp: Option<u32>) -> Vec<u8> {
+    match cp {
+        Some(cp) => format!("\x1b_25a1;c;cp={cp:x}\x1b\\").into_bytes(),
+        None => b"\x1b_25a1;c\x1b\\".to_vec(),
+    }
+}
+
+/// Send through the real PTY fixture and read `replies` back through the
+/// request's gate file: Glyph Protocol has its own reply vocabulary, and a
+/// row-1 reply line would be overwritten by the next request.
+fn glyph_send(
+    view: &Entity<TerminalView>,
+    cx: &mut TestAppContext,
+    serial: usize,
+    reply_path: &std::path::Path,
+    bytes: &[u8],
+    replies: usize,
+) -> Vec<u8> {
+    let path = reply_path.to_string_lossy();
+    let request = format!(
+        "SEND_ANY {serial} {replies} {} 0 {}\n",
+        graphics_pty_fixture::hex(bytes),
+        graphics_pty_fixture::hex(path.as_bytes()),
+    );
+    let input_bytes = request.len();
+    view.read_with(cx, |view, _| view.terminal.write(request.into_bytes()));
+    graphics_wait_fixture(view, cx, serial, input_bytes);
+    let text = std::fs::read_to_string(reply_path)
+        .unwrap_or_else(|error| panic!("no reply file for serial {serial}: {error}"));
+    graphics_pty_fixture::unhex(text.trim())
+}
+
+fn glyph_cell_bounds(
+    window: gpui_kit::AnyWindowHandle,
+    view: &Entity<TerminalView>,
+    cx: &mut TestAppContext,
+    row: usize,
+    col: usize,
+) -> gpui_kit::Bounds<gpui_kit::ScaledPixels> {
+    let geom = view.read_with(cx, |view, _| view.cell_geom.expect("production frame"));
+    let scale = window
+        .update(cx, |_, window, _| window.scale_factor())
+        .unwrap();
+    gpui_kit::Bounds::new(
+        gpui_kit::point(
+            geom.origin.x + geom.cell_width * col as f32,
+            geom.origin.y + geom.line_height * row as f32,
+        ),
+        gpui_kit::size(geom.cell_width, geom.line_height),
+    )
+    .map(|pixel| gpui_kit::ScaledPixels(pixel.as_f32() * scale))
+}
+
+/// Renders one production frame and returns the path primitives that land
+/// inside `cell`, with the solid colour they were painted with.
+fn glyph_paths_in_cell(
+    window: gpui_kit::AnyWindowHandle,
+    _view: &Entity<TerminalView>,
+    cx: &mut TestAppContext,
+    cell: gpui_kit::Bounds<gpui_kit::ScaledPixels>,
+) -> Vec<(gpui_kit::Bounds<gpui_kit::ScaledPixels>, gpui_kit::Background)> {
+    window
+        .update(cx, |_, window, cx| {
+            window.simulate_next_frame(cx);
+            window.render_frame(cx);
+            window
+                .painted_scene()
+                .paths
+                .iter()
+                .filter(|path| {
+                    let visible = path.bounds.intersect(&cell);
+                    visible.size.width.0 > 0. && visible.size.height.0 > 0.
+                })
+                .map(|path| (path.bounds, path.color))
+                .collect()
+        })
+        .unwrap()
+}
+
+fn glyph_wait(
+    cx: &mut TestAppContext,
+    what: &str,
+    mut ready: impl FnMut(&mut TestAppContext) -> bool,
+) {
+    graphics_recovery_wait(cx, what, |cx| ready(cx));
+}
+
+fn glyph_presented_row(view: &TerminalView, row: usize) -> String {
+    let cols = view.cell_geom.expect("a production frame was painted").cols;
+    view.grid_buf[row * cols..(row + 1) * cols]
+        .iter()
+        .map(|cell| if cell.c == '\0' { ' ' } else { cell.c })
+        .collect()
 }
