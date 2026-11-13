@@ -64,13 +64,16 @@ impl TerminalView {
                 }
             }
             PaneEvent::ColorRequest(idx, fmt) => {
+                use crate::terminal::palette::{ActivePalette, hsla_to_rgb, query_color};
                 let theme = cx.theme();
-                let rgb = match idx {
-                    256 => crate::terminal::palette::hsla_to_rgb(theme.foreground),
-                    257 => crate::terminal::palette::hsla_to_rgb(theme.background),
-                    258 => crate::terminal::palette::hsla_to_rgb(theme.caret),
-                    i => self.terminal.palette[i.min(255)],
-                };
+                let rgb = query_color(
+                    idx,
+                    &self.terminal.palette,
+                    cx.try_global::<ActivePalette>(),
+                    hsla_to_rgb(theme.foreground),
+                    hsla_to_rgb(theme.background),
+                    hsla_to_rgb(theme.caret),
+                );
                 self.terminal.write(fmt(rgb).into_bytes());
             }
             PaneEvent::Bell => match cx.global::<Config>().bell {

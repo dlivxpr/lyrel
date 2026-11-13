@@ -1287,10 +1287,10 @@ impl TerminalView {
                 if term.synchronized_output() {
                     return None;
                 }
-                let mut palette = self.terminal.palette;
-                if let Some(active) = cx.try_global::<super::palette::ActivePalette>() {
-                    palette[..16].copy_from_slice(&active.ansi16);
-                }
+                let palette = super::palette::effective(
+                    &self.terminal.palette,
+                    cx.try_global::<super::palette::ActivePalette>(),
+                );
                 let found = agent
                     .filter(|a| covers(*a))
                     .and_then(|a| input_area(a, &screen_rows(&term), term.columns()));
