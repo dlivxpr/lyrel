@@ -87,7 +87,7 @@ fn native_ssh_workspace_history_uses_remote_home_and_isolates_inner_hop(cx: &mut
     direct.update(cx, |view, cx| {
         assert!(!view.history.entries().iter().any(|entry| entry.contains("LOCAL_ONLY_185")), "local history leaked into native SSH");
         view.input.editor_mut().set("echo REMOTE_HOME_ONLY");
-        view.handle_editor_key(&key("up"), cx);
+        view.handle_editor_key(&key("up"), false, cx);
         assert_eq!(view.input.editor().text(), "echo REMOTE_HOME_ONLY_185");
     });
 
@@ -122,7 +122,7 @@ fn native_ssh_workspace_history_uses_remote_home_and_isolates_inner_hop(cx: &mut
     cx.run_until_parked();
     nested.update(cx, |view, cx| {
         assert!(!view.history.entries().iter().any(|entry| entry.contains("REMOTE_HOME_ONLY_185") || entry.contains("LOCAL_ONLY_185")), "outer/local history leaked into the real inner hop");
-        view.handle_editor_key(&key("up"), cx);
+        view.handle_editor_key(&key("up"), false, cx);
         assert_eq!(view.input.editor().text(), "", "inner hop must not recall another Host's command");
     });
 }
@@ -205,7 +205,7 @@ fn native_ssh_connected_shell_seeds_remote_history(cx: &mut TestAppContext) {
     }
     view.update(cx, |view, cx| {
         view.input.editor_mut().set("echo LYREL185_NATIVE_HISTORY");
-        view.handle_editor_key(&key("up"), cx);
+        view.handle_editor_key(&key("up"), false, cx);
         assert_eq!(view.input.editor().text(), "echo LYREL185_NATIVE_HISTORY_SEED");
     });
 }

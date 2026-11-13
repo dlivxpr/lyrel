@@ -33,7 +33,8 @@ use crate::terminal::command_cursor::{CommandCursorStyle, CommandMark};
 use crate::terminal::parked_cursor::{CursorCut, ParkedCursorRepair, ParkedCursorScanner};
 use crate::terminal::prompt_reflow::{PromptBreak, PromptMark};
 use lyrel_core::core::term_modes::{COLOR_SCHEME_UPDATES, TerminalModes};
-use rio_vt::performer::handler::{Handler as _, Processor};
+use lyrel_core::core::xtgettcap::MirrorProcessor as Processor;
+use rio_vt::performer::handler::Handler as _;
 
 /// One reader lifetime, retired without joining a potentially silent socket.
 pub(super) struct ReaderTask {
@@ -218,6 +219,7 @@ impl FrameReader {
             remote,
             agent,
             agent_session,
+            progress,
             awaiting_replay,
             exited: exited_flag,
             child_exited,
@@ -719,6 +721,7 @@ impl FrameReader {
                                 drop(bridge);
                             }
                             ParseBridge::new(&mut term, proxy.clone(), &mut keyboard, None)
+                                .with_presentation(Some(&proxy.parse_state.presentation))
                                 .clear_keyboard();
                             drop(term);
                             // Back at a prompt, whatever the command asked
@@ -775,6 +778,14 @@ impl FrameReader {
                             *guard = Some(p);
                         }
                         proxy.send(PaneEvent::Wakeup);
+                    }
+                    DaemonMsg::Progress(state) => {
+                        flush_batch!();
+                        let mut current = progress.lock().unwrap();
+                        if *current != state {
+                            *current = state;
+                            proxy.send(PaneEvent::ProgressChanged);
+                        }
                     }
                     DaemonMsg::Agent(a) => {
                         flush_batch!();
@@ -1119,7 +1130,9 @@ fn feed_grid<T: EventListener + Clone>(
         }
         let Some((_, cut)) = next else { break };
         if matches!(cut, ReaderCut::KeyboardBoundary) {
-            ParseBridge::new(&mut grid, proxy.clone(), keyboard, None).clear_keyboard();
+            ParseBridge::new(&mut grid, proxy.clone(), keyboard, None)
+                .with_presentation(presentation)
+                .clear_keyboard();
         }
         if matches!(
             cut,
