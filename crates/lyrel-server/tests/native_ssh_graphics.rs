@@ -8,10 +8,14 @@ use std::io::Write;
 use std::path::Path;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::Duration;
 
 use fixture::{NativeSshFixture, hex, status, win_size};
 use lyrel_core::core::kitty_graphics::{GraphicsUpdate, Image, Placement};
-use lyrel_core::daemon::protocol::{self, ClientMsg, DaemonMsg, ShellSpec};
+use lyrel_core::core::pane_colors::{CURSOR, ColorFrame, DEFAULT_BG, DEFAULT_FG, PaneColors};
+use lyrel_core::daemon::protocol::{
+    self, ClientMsg, DaemonMsg, FEATURE_PANE_COLORS, FEATURE_STATIC_SIXEL, ShellSpec,
+};
 use lyrel_core::daemon::transport::Stream;
 use lyrel_core::host::Host;
 
@@ -50,7 +54,14 @@ struct State {
     selected: BTreeMap<u64, (u64, u64)>,
     screen: u64,
     epoch: u64,
+    history_origin: i64,
     playback: BTreeMap<u64, lyrel_core::core::graphics_state::Playback>,
+    /// The decoded, daemon-authoritative override layer. A fresh consumer
+    /// starts from the theme and applies the attach snapshot, never a local
+    /// copy of the original OSC bytes.
+    colors: PaneColors,
+    color_frames: u64,
+    color_snapshots: u64,
 }
 
 impl State {
@@ -103,9 +114,14 @@ impl State {
                     self.selected.remove(&key);
                 }
             }
-            GraphicsUpdate::Screen { screen, epoch, .. } => {
+            GraphicsUpdate::Screen {
+                screen,
+                epoch,
+                history_origin,
+            } => {
                 self.screen = screen;
                 self.epoch = epoch;
+                self.history_origin = history_origin;
             }
             GraphicsUpdate::Playback(playback) => {
                 assert!(
@@ -115,6 +131,14 @@ impl State {
                 self.playback.insert(playback.key, playback);
             }
         }
+    }
+
+    fn apply_colors(&mut self, frame: ColorFrame) {
+        if frame.is_snapshot() {
+            self.color_snapshots += 1;
+        }
+        frame.apply(&mut self.colors);
+        self.color_frames += 1;
     }
 
     fn placement(&self, image: u32, placement: u32) -> &Placement {
@@ -139,6 +163,9 @@ struct Consumer {
     state: State,
     serial: u64,
     text: Vec<u8>,
+    /// Text bytes read by the last `collect_until`, so a fresh attach can prove
+    /// its replay is the real 8 MiB ring tail rather than a small snapshot.
+    text_bytes: u64,
     needs_replay: bool,
     resource_pixel_bytes: u64,
     graphics_wire_bytes: u64,
@@ -177,6 +204,7 @@ impl Consumer {
             state: State::default(),
             serial: 0,
             text: Vec::new(),
+            text_bytes: 0,
             needs_replay,
             resource_pixel_bytes: 0,
             graphics_wire_bytes: 0,
@@ -190,8 +218,10 @@ impl Consumer {
 
     fn collect_until(&mut self, marker: &[u8]) -> VecDeque<String> {
         self.text.clear();
+        self.text_bytes = 0;
         let mut trace = VecDeque::new();
         let mut replayed = !self.needs_replay;
+        let mut colors_replayed = !self.needs_replay;
         loop {
             let message = DaemonMsg::read(&mut self.stream).unwrap_or_else(|error| {
                 panic!("bounded real SSH consumer stream: {error}; events={trace:#?}")
@@ -260,13 +290,37 @@ impl Consumer {
                         !contains(&bytes, b"\x1b_G"),
                         "pixel APC entered text replay"
                     );
+                    self.text_bytes += bytes.len() as u64;
                     self.text.extend(bytes);
+                }
+                DaemonMsg::Colors(bytes) => {
+                    assert!(
+                        bytes.len() <= protocol::MAX_FRAME,
+                        "bounded authoritative colour frame"
+                    );
+                    let frame = ColorFrame::decode(&bytes)
+                        .expect("production pane-colour frame must decode");
+                    // `replay_state` sends the full snapshot after the ring and
+                    // graphics replay, so it also ends a replay with no graphics
+                    // resources at all. A delta before that snapshot would mean
+                    // a fresh consumer lost the authority's earlier overrides.
+                    if self.needs_replay {
+                        assert!(
+                            colors_replayed || frame.is_snapshot(),
+                            "fresh consumer needs the authority snapshot before live deltas"
+                        );
+                    }
+                    if frame.is_snapshot() {
+                        colors_replayed = true;
+                        replayed = true;
+                    }
+                    self.state.apply_colors(frame);
                 }
                 DaemonMsg::Error(error) => panic!("remote consumer refused: {error}"),
                 DaemonMsg::Exited { code } => panic!("real Linux sender exited: {code:?}"),
                 _ => {}
             }
-            if replayed && contains(&self.text, marker) {
+            if replayed && colors_replayed && contains(&self.text, marker) {
                 self.needs_replay = false;
                 return trace;
             }
@@ -1048,4 +1102,423 @@ fn native_ssh_graphics_remote_file_temp_posix_shm_preserve_desktop_names() {
 #[ignore = "also requires explicit Linux-side nested SSH key/pin/endpoint; never copies desktop credentials"]
 fn native_ssh_graphics_nested_ssh_refuses_indirect_and_preserves_direct() {
     native_ssh_media_case(true);
+}
+
+// The exact Ubuntu `libsixel-bin 1.10.5-1build1` output of
+// `img2sixel -w 40 -h 40 -p 4 -d none colors.ppm` for the 2x2 red/green over
+// blue/yellow PPM. The daemon's decoder yields `[184, 51, 61]` for the first
+// pixel (the production GUI sees it as BGRA). A recorded real-producer payload
+// is used because the fixed Linux fixture need not install img2sixel.
+const SIXEL_PRODUCER_OUTPUT: &[u8] = b"\x1bPq\"1;1;40;40#0;2;72;20;24#1;2;24;74;11#2;2;74;74;24#3;2;24;20;66#0!19~#1!21~-#0!19~_$#1!19?^!20~-#0!20~#1^!19~$#2!20?_-#0!13BFFN^~~~#2~}!6{!12w$#3!13{wwo_#1!4?@!6B!12F-#3!18~}w#2!20~$#0!18?@F-#3!20~#2!20~-#3!20N#2!20N\x1b\\";
+
+/// 250 SGR resets per line consume the production 8 MiB replay ring without
+/// occupying retained cell rows, so the original colour OSC (or the image's
+/// precedence rows) leaves the ring while the accepted authority remains.
+fn ring_chunk(lines: usize) -> Vec<u8> {
+    let mut line = b"\x1b[0m".repeat(250);
+    line.extend_from_slice(b"\r\n");
+    let mut chunk = Vec::with_capacity(lines * line.len());
+    for _ in 0..lines {
+        chunk.extend_from_slice(&line);
+    }
+    chunk
+}
+
+/// The production replay ring is exactly 8 MiB, but eviction advances to the
+/// next parseable boundary and can drop the remainder of a sequence, so a real
+/// ring tail is at most a few bytes short of the cap.
+const RING_TAIL_FLOOR: u64 = (8 << 20) - 4096;
+
+fn sender_bytes(stats: &str) -> usize {
+    stats
+        .split_whitespace()
+        .find_map(|field| field.strip_prefix("bytes="))
+        .expect("real sender byte counter")
+        .parse()
+        .expect("real sender byte count")
+}
+
+#[test]
+#[ignore = "requires the updated fixture SSH endpoint (pane-colors/static-sixel features), pinned host key, identity, private Linux home and Node; never silently skips"]
+fn native_ssh_pane_colors_projection_survives_ring_eviction_and_fresh_consumer() {
+    let fixture = NativeSshFixture::start(Path::new(env!("CARGO_BIN_EXE_lyrel-server")));
+    let host = fixture.connect_control();
+    let daemon = status(&host);
+    let instance = host.peer().instance.clone();
+    let (probe, endpoint) = fixture.connect_pane();
+    assert_eq!(endpoint.protocol, protocol::PROTOCOL_VERSION);
+    assert!(
+        endpoint.has_feature(FEATURE_PANE_COLORS),
+        "actual remote endpoint must own authoritative pane colours: {endpoint:?}"
+    );
+    assert!(
+        endpoint.has_feature(FEATURE_STATIC_SIXEL),
+        "the same updated candidate must carry the static-sixel feature: {endpoint:?}"
+    );
+    eprintln!(
+        "ACTUAL_SSH_PANE_COLORS_ENDPOINT build={} instance={} features={:?}",
+        endpoint.build, endpoint.instance, endpoint.features
+    );
+    drop(probe);
+
+    // The opt-in is a real handshake command, not a client-side filter: a peer
+    // that sends it before negotiating is refused and cannot fake the feature.
+    let mut unnegotiated = fixture.connect_unnegotiated_pane();
+    ClientMsg::SubscribePaneColors
+        .encode(&mut unnegotiated)
+        .unwrap();
+    match DaemonMsg::read(&mut unnegotiated).unwrap() {
+        DaemonMsg::Error(error) => assert!(
+            error.contains("handshake required before pane colours"),
+            "unexpected refusal: {error}"
+        ),
+        other => panic!("pane colours accepted before handshake: {other:?}"),
+    }
+    assert!(
+        DaemonMsg::read(&mut unnegotiated).is_err(),
+        "the refused stream must close rather than keep a colour subscription"
+    );
+
+    let mut pane = Consumer::spawn(&fixture, fixture.install_sender(&host), 64 << 20, 128 << 20);
+    let pane_id = pane.pane;
+
+    // A real Linux PTY application sets the indexed palette and all named
+    // defaults in one ordered burst. These are live deltas over the theme.
+    pane.quiet(b"\x1b]4;1;#112233\x07\x1b]10;#0a0b0c\x07\x1b]11;#101112\x07\x1b]12;#131415\x07");
+    assert_eq!(pane.state.colors.get(1), Some([0x11, 0x22, 0x33]));
+    assert_eq!(pane.state.colors.get(DEFAULT_FG), Some([0x0a, 0x0b, 0x0c]));
+    assert_eq!(pane.state.colors.get(DEFAULT_BG), Some([0x10, 0x11, 0x12]));
+    assert_eq!(pane.state.colors.get(CURSOR), Some([0x13, 0x14, 0x15]));
+    assert!(
+        pane.state.color_frames > 0,
+        "the opted-in live consumer must receive real ColorFrame messages"
+    );
+
+    // Queries and malformed values publish no override change, and ordinary
+    // text after the refused sequence still reaches the ordered stream.
+    let frames = pane.state.color_frames;
+    pane.quiet(b"\x1b]4;1;?\x07\x1b]10;?\x07\x1b]4;1;rgb:zz/00/00\x07AFTER_BAD_COLOR");
+    assert_eq!(
+        pane.state.color_frames, frames,
+        "a colour probe or malformed value is not a live override change"
+    );
+    assert_eq!(pane.state.colors.get(1), Some([0x11, 0x22, 0x33]));
+    assert!(contains(&pane.text, b"AFTER_BAD_COLOR"));
+
+    // Reset every layer, then accept a smaller final layer. A reset reveals
+    // the current defaults (None), never a captured theme snapshot.
+    pane.quiet(b"\x1b]104;1\x07\x1b]110\x07\x1b]111\x07\x1b]112\x07");
+    for slot in [1, DEFAULT_FG, DEFAULT_BG, CURSOR] {
+        assert_eq!(
+            pane.state.colors.get(slot),
+            None,
+            "reset slot {slot} must return to the live theme"
+        );
+    }
+    pane.quiet(b"\x1b]4;1;#445566\x07\x1b]11;#202122\x07");
+    let accepted = pane.state.colors;
+    assert_eq!(accepted.get(1), Some([0x44, 0x55, 0x66]));
+    assert_eq!(accepted.get(DEFAULT_BG), Some([0x20, 0x21, 0x22]));
+    assert_eq!(accepted.get(DEFAULT_FG), None);
+    assert_eq!(accepted.get(CURSOR), None);
+
+    // The production opt-in command is real for read-only peers too: after
+    // `SubscribePaneColors` the observer receives the authoritative snapshot.
+    let mut opted_in = fixture.connect_unnegotiated_pane();
+    ClientMsg::Negotiate {
+        protocol: protocol::PROTOCOL_VERSION,
+    }
+    .encode(&mut opted_in)
+    .unwrap();
+    let version = match DaemonMsg::read(&mut opted_in).unwrap() {
+        DaemonMsg::Version(version) => version,
+        other => panic!("expected negotiated endpoint, got {other:?}"),
+    };
+    assert!(version.has_feature(FEATURE_PANE_COLORS));
+    ClientMsg::SubscribePaneColors
+        .encode(&mut opted_in)
+        .unwrap();
+    ClientMsg::GraphicsCapacity {
+        encoded_bytes: 64 << 20,
+        decoded_bytes: 128 << 20,
+        offers: true,
+    }
+    .encode(&mut opted_in)
+    .unwrap();
+    ClientMsg::Observe {
+        pane_id,
+        size: win_size(),
+    }
+    .encode(&mut opted_in)
+    .unwrap();
+    let opted_snapshot;
+    loop {
+        match DaemonMsg::read(&mut opted_in).unwrap() {
+            DaemonMsg::Colors(bytes) => {
+                assert!(
+                    bytes.len() <= protocol::MAX_FRAME,
+                    "bounded authoritative colour frame"
+                );
+                let frame =
+                    ColorFrame::decode(&bytes).expect("production pane-colour frame must decode");
+                assert!(frame.is_snapshot(), "an attach carries a full snapshot");
+                let mut colors = PaneColors::default();
+                frame.apply(&mut colors);
+                opted_snapshot = colors;
+                break;
+            }
+            DaemonMsg::Error(error) => panic!("opted-in observer refused: {error}"),
+            DaemonMsg::Exited { code } => panic!("opted-in observer pane exited: {code:?}"),
+            _ => {}
+        }
+    }
+    assert_eq!(
+        opted_snapshot, accepted,
+        "the explicit opt-in must deliver the same decoded authority"
+    );
+    drop(opted_in);
+
+    // A consumer that does not opt in must never receive the frame kind. The
+    // replay tail is the last real DONE marker; no Colors frame may follow it.
+    let marker = format!("KITTY_DONE_{};\r", pane.serial);
+    let mut raw = fixture.connect_unnegotiated_pane();
+    ClientMsg::Negotiate {
+        protocol: protocol::PROTOCOL_VERSION,
+    }
+    .encode(&mut raw)
+    .unwrap();
+    let version = match DaemonMsg::read(&mut raw).unwrap() {
+        DaemonMsg::Version(version) => version,
+        other => panic!("expected negotiated endpoint, got {other:?}"),
+    };
+    assert!(version.has_feature(FEATURE_PANE_COLORS));
+    ClientMsg::GraphicsCapacity {
+        encoded_bytes: 64 << 20,
+        decoded_bytes: 128 << 20,
+        offers: true,
+    }
+    .encode(&mut raw)
+    .unwrap();
+    // Observe, not Attach: attaching would replace the controller under test.
+    ClientMsg::Observe {
+        pane_id,
+        size: win_size(),
+    }
+    .encode(&mut raw)
+    .unwrap();
+    let mut replay = Vec::new();
+    loop {
+        match DaemonMsg::read(&mut raw).unwrap() {
+            DaemonMsg::Colors(_) => panic!("a peer that did not opt in received pane colours"),
+            DaemonMsg::Output(bytes) | DaemonMsg::Snapshot(bytes) => {
+                replay.extend(bytes);
+                if contains(&replay, marker.as_bytes()) {
+                    break;
+                }
+            }
+            DaemonMsg::Exited { code } => panic!("un-opted-in replay pane exited: {code:?}"),
+            _ => {}
+        }
+    }
+    raw.set_read_timeout(Some(Duration::from_millis(1000)))
+        .unwrap();
+    loop {
+        match DaemonMsg::read(&mut raw) {
+            Ok(DaemonMsg::Colors(_)) => {
+                panic!("a peer that did not opt in received pane colours")
+            }
+            Ok(_) => {}
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+                ) =>
+            {
+                break;
+            }
+            Err(error) => panic!("un-opted-in replay drained with {error}"),
+        }
+    }
+    drop(raw);
+
+    // More than the production ring, through the real Linux PTY. Each request
+    // stays under the daemon's 1 MiB Input admission cap (the hex payload is
+    // twice the emitted bytes); 18 x 500 lines is 9,018,000 bytes, past the
+    // 8 MiB ring. The original OSC bytes are gone; the accepted layer is not.
+    for _ in 0..18 {
+        pane.quiet(&ring_chunk(500));
+    }
+    let stopped = pane.stats();
+    assert!(
+        sender_bytes(&stopped) > 8 << 20,
+        "the real sender must write past the 8 MiB replay ring: {stopped}"
+    );
+    pane.detach();
+    let mut fresh = attach(&fixture, pane_id);
+    let replay_stats = fresh.stats();
+    assert_eq!(
+        fresh.state.colors, accepted,
+        "a fresh consumer restores the decoded layer, not a copy of old OSC bytes"
+    );
+    assert!(
+        fresh.state.color_snapshots >= 1,
+        "an attach must carry a full authoritative snapshot"
+    );
+    assert!(
+        fresh.text_bytes >= RING_TAIL_FLOOR,
+        "the fresh replay is the real ring tail, not a small snapshot: {} bytes",
+        fresh.text_bytes
+    );
+    for stale in [
+        b"\x1b]4;1;#445566".as_slice(),
+        b"\x1b]11;#202122".as_slice(),
+    ] {
+        assert!(
+            !contains(&fresh.text, stale),
+            "the original colour OSC left the replay ring"
+        );
+    }
+    assert_eq!(
+        replay_stats, stopped,
+        "a fresh consumer must not make the living sender resend colour state"
+    );
+    assert_eq!(status(&host).pid, daemon.pid);
+    assert_eq!(host.peer().instance, instance);
+    fixture.kill_pane(pane_id);
+}
+
+#[test]
+#[ignore = "requires the updated fixture SSH endpoint (static-sixel feature), pinned host key, identity, private Linux home and Node; never silently skips"]
+fn native_ssh_recorded_sixel_survives_ring_eviction_and_fresh_consumer() {
+    let fixture = NativeSshFixture::start(Path::new(env!("CARGO_BIN_EXE_lyrel-server")));
+    let host = fixture.connect_control();
+    let daemon = status(&host);
+    let instance = host.peer().instance.clone();
+    let (probe, endpoint) = fixture.connect_pane();
+    assert!(
+        endpoint.has_feature(FEATURE_STATIC_SIXEL),
+        "actual remote endpoint must own static Sixel: {endpoint:?}"
+    );
+    eprintln!(
+        "ACTUAL_SSH_SIXEL_ENDPOINT build={} instance={} features={:?}",
+        endpoint.build, endpoint.instance, endpoint.features
+    );
+    drop(probe);
+
+    let mut pane = Consumer::spawn(&fixture, fixture.install_sender(&host), 64 << 20, 128 << 20);
+    let pane_id = pane.pane;
+
+    // The daemon owns discovery through the real SSH route: colour registers,
+    // the pane's current geometry, refused set/reset and ReGIS, in order.
+    assert_eq!(
+        pane.exchange("SEND", b"\x1b[?1;1;0S\x1b[?2;1;0S\x1b[?2;4S\x1b[14t", 1, 0),
+        [b"\x1b[?1;0;1024S\x1b[?2;0;800;480S\x1b[?2;3S\x1b[4;480;800t".to_vec()],
+        "the updated daemon answers Sixel discovery itself; a desktop mirror does not guess"
+    );
+
+    // The recorded official producer output lands through the real Linux PTY.
+    // Its DCS is extracted before the text ring, so the following text is the
+    // only Sixel-adjacent data in the ordered text stream.
+    // RIS gives the same zero-based screen the core producer test uses; `2J`
+    // would fold the preceding viewport into history before the anchor is taken.
+    let mut accepted_bytes = b"\x1bc\x1b[6;1HEARLY_SIXEL\r".to_vec();
+    accepted_bytes.extend_from_slice(SIXEL_PRODUCER_OUTPUT);
+    accepted_bytes.extend_from_slice(b"AFTER_EARLY");
+    pane.quiet(&accepted_bytes);
+    assert!(
+        !contains(&pane.text, b"\x1bPq"),
+        "the Sixel DCS is extracted before the text replay"
+    );
+    assert!(contains(&pane.text, b"EARLY_SIXEL"));
+    assert!(contains(&pane.text, b"AFTER_EARLY"));
+    let sixel = pane
+        .state
+        .placements
+        .values()
+        .find(|placement| placement.z == -1)
+        .expect("accepted static Sixel placement")
+        .clone();
+    assert_eq!(
+        (sixel.anchor_row, sixel.anchor_col),
+        (5, 0),
+        "Sixel anchors at the preceding text cursor, not at the pixel extent; history_origin={} text_tail={:?}",
+        pane.state.history_origin,
+        String::from_utf8_lossy(&pane.text[pane.text.len().saturating_sub(512)..])
+    );
+    assert_eq!(
+        (sixel.span_cols, sixel.span_rows),
+        (4, 2),
+        "40x40 pixels at 10x20 cells occupy four columns and two rows"
+    );
+    let image = &pane.state.resources[&sixel.resource];
+    assert_eq!((image.width, image.height), (40, 40));
+    let accepted_pixels = pane.state.pixels(&sixel);
+    assert_eq!(&accepted_pixels[..4], [184, 51, 61, 255]);
+    assert_eq!(
+        &accepted_pixels[(39 * 40 + 39) * 4..][..4],
+        [189, 189, 61, 255]
+    );
+
+    // Hostile bounded refusals cannot replace the accepted placement and do not
+    // swallow the ordinary text that follows them.
+    let accepted_placements = pane.state.placements.clone();
+    pane.quiet(b"\x1bPq\"1;1;65535;65535~\x1b\\\x1bPq#0;2;101;0;0~\x1b\\AFTER_REFUSED_SIXEL");
+    assert_eq!(
+        pane.state.placements, accepted_placements,
+        "a refused Sixel cannot replace or remove an accepted placement"
+    );
+    assert_eq!(pane.state.pixels(&sixel), accepted_pixels);
+    assert!(contains(&pane.text, b"AFTER_REFUSED_SIXEL"));
+
+    // Push the original precedence rows out of the production 8 MiB ring. Each
+    // request stays under the daemon's 1 MiB Input cap; the image authority is
+    // independent of those bytes; the sender then waits.
+    for _ in 0..18 {
+        pane.quiet(&ring_chunk(500));
+    }
+    let stopped = pane.stats();
+    assert!(
+        sender_bytes(&stopped) > 8 << 20,
+        "the real sender must write past the 8 MiB replay ring: {stopped}"
+    );
+    let expected = pane.state.placements.clone();
+    let expected_pixels = pane.state.pixels(
+        pane.state
+            .placements
+            .values()
+            .find(|placement| placement.z == -1)
+            .expect("placement survives the ring trim"),
+    );
+    pane.detach();
+    let mut fresh = attach(&fixture, pane_id);
+    let replay_stats = fresh.stats();
+    assert_eq!(
+        fresh.state.placements, expected,
+        "the fresh consumer restores accepted placement authority"
+    );
+    let restored = fresh
+        .state
+        .placements
+        .values()
+        .find(|placement| placement.z == -1)
+        .expect("restored static Sixel placement");
+    assert_eq!(fresh.state.pixels(restored), expected_pixels);
+    let restored_image = &fresh.state.resources[&restored.resource];
+    assert_eq!((restored_image.width, restored_image.height), (40, 40));
+    assert!(
+        fresh.text_bytes >= RING_TAIL_FLOOR,
+        "the fresh replay is the real ring tail, not a small snapshot: {} bytes",
+        fresh.text_bytes
+    );
+    assert!(
+        !contains(&fresh.text, b"\x1bPq"),
+        "the original DCS never rides the fresh text replay"
+    );
+    assert_eq!(
+        replay_stats, stopped,
+        "the living producer must not retransmit accepted Sixel on attach"
+    );
+    assert_eq!(status(&host).pid, daemon.pid);
+    assert_eq!(host.peer().instance, instance);
+    fixture.kill_pane(pane_id);
 }
