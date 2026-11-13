@@ -41,12 +41,10 @@ fn omp_binary() -> (String, String) {
 }
 
 /// The pane shell spec that launches the released client with an isolated
-/// HOME, no prompt, no model-facing surfaces and a bounded runtime. The
-/// binary path and every argument are quoted through the repository's single
-/// `quote_for_shell` convention so a path containing spaces or characters
-/// special to the pane's shell cannot split or escape. Environment is applied
-/// through a wrapper script because `ShellSpec` has no env field: the daemon
-/// spawns the wrapper, the wrapper execs omp with the isolation set.
+/// HOME, no prompt, no model-facing surfaces and a bounded runtime. Only
+/// arguments embedded in the wrapper's shell source use `quote_for_shell`;
+/// `ShellSpec::args` contains argv, not pre-quoted shell source. The wrapper
+/// supplies the environment because `ShellSpec` has no env field.
 fn omp_shell_spec(home: &std::path::Path, binary: &str) -> crate::daemon::protocol::ShellSpec {
     use crate::daemon::protocol::ShellSpec;
     std::fs::create_dir_all(home).unwrap();
@@ -93,7 +91,7 @@ fn omp_shell_spec(home: &std::path::Path, binary: &str) -> crate::daemon::protoc
         .unwrap();
         ShellSpec {
             program: "cmd.exe".into(),
-            args: vec!["/c".into(), quoted(&script.display().to_string())],
+            args: vec!["/d".into(), "/c".into(), script.display().to_string()],
             args_are_lyrel_defaults: false,
         }
     } else {
@@ -114,7 +112,7 @@ fn omp_shell_spec(home: &std::path::Path, binary: &str) -> crate::daemon::protoc
         .unwrap();
         ShellSpec {
             program: "sh".into(),
-            args: vec![quoted(&script.display().to_string())],
+            args: vec![script.display().to_string()],
             args_are_lyrel_defaults: false,
         }
     }
@@ -159,8 +157,15 @@ fn glyph_consumer_real_omp_registers_and_paints_its_bundle(cx: &mut TestAppConte
         gpui_kit::component::init(cx);
         cx.set_global(Config::default());
     });
-    let (view, window) =
-        graphics_rooted_consumer(cx, pane, glyph_support_stream(&daemon, pane, true));
+    // The fixture convenience helper sends a SEND command. A real client must
+    // receive only terminal replies, never an injected command or prompt.
+    let (view, window) = graphics_build_rooted_consumer(
+        cx,
+        pane,
+        glyph_support_stream(&daemon, pane, true),
+        Vec::new(),
+    );
+    graphics_assert_production_paint_at(window, &view, cx, TermSize::new(80, 24));
 
     // `s`+DA1 answered => the real client wrote its bundled registrations.
     // The store only fills from daemon-accepted bodies, so entries here are
@@ -217,6 +222,10 @@ fn glyph_consumer_real_omp_registers_and_paints_its_bundle(cx: &mut TestAppConte
     assert!(
         cell_cp >= 0xE000,
         "the painted cell carries a private-use codepoint from the client (got {cell_cp:#x})"
+    );
+    eprintln!(
+        "REAL_OMP_GLYPH version={version:?} family={family} cp={cell_cp:x} paths={}",
+        paths.len()
     );
 
     // The isolated client must still be alive — a rejected handshake exits
