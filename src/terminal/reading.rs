@@ -654,8 +654,8 @@ mod tests {
             contours: Vec::new(),
             x_min: 0,
             y_min: 0,
-            x_max: side,
-            y_max: side,
+            x_max: i32::from(side),
+            y_max: i32::from(side),
         }
     }
 

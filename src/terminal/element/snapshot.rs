@@ -1045,8 +1045,8 @@ mod tests {
             contours: Vec::new(),
             x_min: 0,
             y_min: 0,
-            x_max: side,
-            y_max: side,
+            x_max: i32::from(side),
+            y_max: i32::from(side),
         }
     }
 
@@ -1094,7 +1094,9 @@ mod tests {
     }
 
     #[gpui_kit::test]
-    fn glyph_contended_snapshot_never_rewrites_the_captured_picture(cx: &mut TestAppContext) {
+    fn glyph_contended_snapshot_never_rewrites_the_captured_picture(
+        cx: &mut gpui_kit::TestAppContext,
+    ) {
         use rio_graphics::glyph_layout::GlyphLayout;
         let cp = 0x100000u32;
         let ch = char::from_u32(cp).unwrap();
