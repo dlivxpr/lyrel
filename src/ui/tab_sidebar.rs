@@ -713,7 +713,7 @@ impl LyrelApp {
                         };
                         h_flex()
                             .id(("sidebar-progress", i))
-                            .debug_selector(|| "tab-progress".into())
+                            .test_support()
                             .aria_label(SharedString::from(label.clone()))
                             .w_full()
                             .min_w_0()
