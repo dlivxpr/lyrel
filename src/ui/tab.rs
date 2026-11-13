@@ -1138,3 +1138,6 @@ mod name_tests;
 #[cfg(test)]
 #[path = "tab/tests_navigation.rs"]
 mod navigation_tests;
+#[cfg(test)]
+#[path = "tab/tests_progress.rs"]
+mod progress_tests;

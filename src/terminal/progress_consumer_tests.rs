@@ -424,3 +424,525 @@ fn progress_consumer_real_persisted_screen_after_daemon_death_never_seeds_replac
         );
     });
 }
+
+/// The tab, not the focused pane, owns the summary: two real PTY producers
+/// feed one split tab and the split reports the work of both.
+#[gpui_kit::test]
+fn progress_consumer_split_tab_reads_real_pty_producers(cx: &mut TestAppContext) {
+    use crate::daemon::protocol::{PaneProgress, ProgressKind};
+    use crate::ui::{
+        app::LyrelApp,
+        pane::{Pane, PaneSlot},
+        tab::Tab,
+    };
+    use gpui_kit::Axis;
+    use gpui_kit::test::TestWindowExt as _;
+
+    let daemon = GraphicsDaemonProcess::start();
+    let pane_a = daemon.spawn();
+    let pane_b = daemon.spawn();
+    let (app, mut vcx) = crate::ui::app::test_window::harness(cx);
+    vcx.update(|_, cx| {
+        let mut cfg = cx.global::<Config>().clone();
+        cfg.cursor_blink = false;
+        cx.set_global(cfg);
+    });
+    let views = app.update_in(&mut vcx, |app, window, cx| {
+        let terminal = RemoteTerminal::from_stream_with(
+            daemon.stream(pane_a),
+            TermSize::new(80, 24),
+            Vec::new(),
+            if cfg!(windows) {
+                PtySource::LocalConpty
+            } else {
+                PtySource::Raw
+            },
+        )
+        .unwrap();
+        let a = cx.new(|cx| TerminalView::with_terminal(terminal, pane_a, window, cx));
+        LyrelApp::watch_terminal(&a, window, cx);
+        let terminal = RemoteTerminal::from_stream_with(
+            daemon.stream(pane_b),
+            TermSize::new(80, 24),
+            Vec::new(),
+            if cfg!(windows) {
+                PtySource::LocalConpty
+            } else {
+                PtySource::Raw
+            },
+        )
+        .unwrap();
+        let b = cx.new(|cx| TerminalView::with_terminal(terminal, pane_b, window, cx));
+        LyrelApp::watch_terminal(&b, window, cx);
+        let tree = Pane::split_node(
+            Axis::Horizontal,
+            0.5,
+            Pane::Leaf(PaneSlot::Ready(a.clone())),
+            Pane::Leaf(PaneSlot::Ready(b.clone())),
+        );
+        app.tabs.clear();
+        app.tabs.push(Tab::new(tree));
+        app.tabs.select(0);
+        cx.notify();
+        [a, b]
+    });
+    graphics_send_fixture(&views[0], cx, 27201, b"\x1b]9;4;1;42\x07");
+    graphics_recovery_wait(cx, "split pane progress reached production consumer", |cx| {
+        views[0].read_with(cx, |view, _| {
+            view.progress() == Some(PaneProgress::new(ProgressKind::Running, Some(42)))
+        })
+    });
+    let (kind, label) = app
+        .update_in(&mut vcx, |app, _, cx| app.tabs[0].progress_label(cx))
+        .expect("a split tab reports its live pane's progress");
+    assert_eq!(kind, ProgressKind::Running);
+    let expected = t_fmt(L10nKey::TabProgressRunningPercent, &[("percent", "42")]);
+    assert_eq!(label.as_ref(), expected.as_str());
+    vcx.run_until_parked();
+    vcx.update(|window, cx| {
+        window.render_frame(cx);
+        assert_eq!(
+            window
+                .find(("sidebar-progress-status", 0usize))
+                .label(),
+            Some(expected.as_str())
+        );
+    });
+}
+
+/// Three real PTY producers feed one split tab: the summary reports error
+/// precedence, never an average, and follows per-pane command boundaries.
+#[gpui_kit::test]
+fn progress_consumer_split_tab_aggregates_real_pty_producers(cx: &mut TestAppContext) {
+    use crate::daemon::protocol::{PaneProgress, ProgressKind};
+    use crate::ui::{
+        app::LyrelApp,
+        pane::{Pane, PaneSlot},
+        tab::Tab,
+    };
+    use gpui_kit::Axis;
+    use gpui_kit::test::TestWindowExt as _;
+
+    let daemon = GraphicsDaemonProcess::start();
+    let panes = [daemon.spawn(), daemon.spawn(), daemon.spawn()];
+    let (app, mut vcx) = crate::ui::app::test_window::harness(cx);
+    vcx.update(|_, cx| {
+        let mut cfg = cx.global::<Config>().clone();
+        cfg.cursor_blink = false;
+        cx.set_global(cfg);
+    });
+    let views = app.update_in(&mut vcx, |app, window, cx| {
+        let mut views = Vec::new();
+        for pane in panes {
+            let terminal = RemoteTerminal::from_stream_with(
+                daemon.stream(pane),
+                TermSize::new(80, 24),
+                Vec::new(),
+                if cfg!(windows) {
+                    PtySource::LocalConpty
+                } else {
+                    PtySource::Raw
+                },
+            )
+            .unwrap();
+            let view = cx.new(|cx| TerminalView::with_terminal(terminal, pane, window, cx));
+            LyrelApp::watch_terminal(&view, window, cx);
+            views.push(view);
+        }
+        let left = Pane::split_node(
+            Axis::Horizontal,
+            0.5,
+            Pane::Leaf(PaneSlot::Ready(views[0].clone())),
+            Pane::Leaf(PaneSlot::Ready(views[1].clone())),
+        );
+        let tree = Pane::split_node(
+            Axis::Vertical,
+            0.5,
+            left,
+            Pane::Leaf(PaneSlot::Ready(views[2].clone())),
+        );
+        app.tabs.clear();
+        app.tabs.push(Tab::new(tree));
+        app.tabs.select(0);
+        cx.notify();
+        views
+    });
+    graphics_send_fixture(&views[0], cx, 27201, b"\x1b]9;4;1;42\x07");
+    graphics_send_fixture(&views[1], cx, 27202, b"\x1b]9;4;3\x07");
+    graphics_send_fixture(&views[2], cx, 27203, b"\x1b]9;4;2;61\x07");
+    graphics_recovery_wait(cx, "three real PTY producers reached the split tab", |cx| {
+        views[0].read_with(cx, |view, _| {
+            view.progress() == Some(PaneProgress::new(ProgressKind::Running, Some(42)))
+        }) && views[1].read_with(cx, |view, _| {
+            view.progress() == Some(PaneProgress::new(ProgressKind::Indeterminate, None))
+        }) && views[2].read_with(cx, |view, _| {
+            view.progress() == Some(PaneProgress::new(ProgressKind::Error, Some(61)))
+        })
+    });
+    let (kind, label) = app
+        .update_in(&mut vcx, |app, _, cx| app.tabs[0].progress_label(cx))
+        .expect("the split tab summarizes its leaves");
+    assert_eq!(kind, ProgressKind::Error);
+    assert_eq!(label.as_ref(), t(L10nKey::TabProgressError));
+    assert!(!label.as_ref().contains('%'), "no fabricated average");
+    vcx.run_until_parked();
+    vcx.update(|window, cx| {
+        window.render_frame(cx);
+        assert_eq!(
+            window.find(("sidebar-progress-status", 0usize)).label(),
+            Some(t(L10nKey::TabProgressError))
+        );
+    });
+
+    graphics_send_fixture(&views[1], cx, 27204, b"\x1b]9;4;0\x07");
+    graphics_send_fixture(&views[2], cx, 27205, b"\x1b]9;4;0\x07");
+    graphics_recovery_wait(cx, "explicit clear retired two tasks", |cx| {
+        views[1].read_with(cx, |view, _| view.progress().is_none())
+            && views[2].read_with(cx, |view, _| view.progress().is_none())
+    });
+    let (kind, label) = app
+        .update_in(&mut vcx, |app, _, cx| app.tabs[0].progress_label(cx))
+        .expect("one task remains");
+    assert_eq!(kind, ProgressKind::Running);
+    let expected = t_fmt(L10nKey::TabProgressRunningPercent, &[("percent", "42")]);
+    assert_eq!(label.as_ref(), expected.as_str());
+
+    // A reliable command end retires running work in its own pane.
+    graphics_send_fixture(&views[0], cx, 27206, b"\x1b]133;D;0\x07");
+    graphics_recovery_wait(cx, "command end cleared running progress", |cx| {
+        views[0].read_with(cx, |view, _| view.progress().is_none())
+    });
+    assert_eq!(
+        app.update_in(&mut vcx, |app, _, cx| app.tabs[0].progress_label(cx)),
+        None
+    );
+
+    // An error survives the command end, and the next command retires it.
+    graphics_send_fixture(&views[0], cx, 27207, b"\x1b]9;4;2;61\x07");
+    graphics_recovery_wait(cx, "error reached the pane", |cx| {
+        views[0].read_with(cx, |view, _| {
+            view.progress() == Some(PaneProgress::new(ProgressKind::Error, Some(61)))
+        })
+    });
+    graphics_send_fixture(&views[0], cx, 27208, b"\x1b]133;D;0\x07");
+    graphics_send_fixture(&views[0], cx, 27209, b"\x1b[0m");
+    assert_eq!(
+        views[0].read_with(cx, |view, _| view.progress()),
+        Some(PaneProgress::new(ProgressKind::Error, Some(61))),
+        "a command end must retain the error"
+    );
+    let (kind, label) = app
+        .update_in(&mut vcx, |app, _, cx| app.tabs[0].progress_label(cx))
+        .expect("the retained error is the single task");
+    assert_eq!(kind, ProgressKind::Error);
+    let expected = t_fmt(L10nKey::TabProgressErrorPercent, &[("percent", "61")]);
+    assert_eq!(label.as_ref(), expected.as_str());
+    graphics_send_fixture(&views[0], cx, 27210, b"\x1b]133;C\x07");
+    graphics_recovery_wait(cx, "next command cleared the retained error", |cx| {
+        views[0].read_with(cx, |view, _| view.progress().is_none())
+    });
+    assert_eq!(
+        app.update_in(&mut vcx, |app, _, cx| app.tabs[0].progress_label(cx)),
+        None
+    );
+}
+
+/// Parked, unfocused and moved leaves remain tab members; closed ones leave.
+#[gpui_kit::test]
+fn progress_consumer_split_tab_membership_follows_park_close_and_move(
+    cx: &mut TestAppContext,
+) {
+    use crate::daemon::protocol::{PaneProgress, ProgressKind};
+    use crate::ui::{
+        app::LyrelApp,
+        pane::{Dir, Pane, PaneSlot},
+        tab::Tab,
+    };
+    use gpui_kit::Axis;
+
+    let daemon = GraphicsDaemonProcess::start();
+    let panes = [daemon.spawn(), daemon.spawn(), daemon.spawn()];
+    let (app, mut vcx) = crate::ui::app::test_window::harness(cx);
+    vcx.update(|_, cx| {
+        let mut cfg = cx.global::<Config>().clone();
+        cfg.cursor_blink = false;
+        cx.set_global(cfg);
+    });
+    let views = app.update_in(&mut vcx, |app, window, cx| {
+        let mut views = Vec::new();
+        for pane in panes {
+            let terminal = RemoteTerminal::from_stream_with(
+                daemon.stream(pane),
+                TermSize::new(80, 24),
+                Vec::new(),
+                if cfg!(windows) {
+                    PtySource::LocalConpty
+                } else {
+                    PtySource::Raw
+                },
+            )
+            .unwrap();
+            let view = cx.new(|cx| TerminalView::with_terminal(terminal, pane, window, cx));
+            LyrelApp::watch_terminal(&view, window, cx);
+            views.push(view);
+        }
+        let left = Pane::split_node(
+            Axis::Horizontal,
+            0.5,
+            Pane::Leaf(PaneSlot::Ready(views[0].clone())),
+            Pane::Leaf(PaneSlot::Ready(views[1].clone())),
+        );
+        let tree = Pane::split_node(
+            Axis::Vertical,
+            0.5,
+            left,
+            Pane::Leaf(PaneSlot::Ready(views[2].clone())),
+        );
+        app.tabs.clear();
+        app.tabs.push(Tab::new(tree));
+        app.tabs.select(0);
+        cx.notify();
+        views
+    });
+    graphics_send_fixture(&views[0], cx, 27220, b"\x1b]9;4;1;42\x07");
+    graphics_send_fixture(&views[1], cx, 27221, b"\x1b]9;4;2;61\x07");
+    graphics_recovery_wait(cx, "two real PTY producers reached the tab", |cx| {
+        views[0].read_with(cx, |view, _| {
+            view.progress() == Some(PaneProgress::new(ProgressKind::Running, Some(42)))
+        }) && views[1].read_with(cx, |view, _| {
+            view.progress() == Some(PaneProgress::new(ProgressKind::Error, Some(61)))
+        })
+    });
+    assert_eq!(
+        app.update_in(&mut vcx, |app, _, cx| app.tabs[0].progress_label(cx))
+            .expect("two tasks")
+            .0,
+        ProgressKind::Error
+    );
+
+    app.update_in(&mut vcx, |app, _window, cx| {
+        assert!(
+            app.tabs[0]
+                .park(views[1].entity_id(), app.workspace, cx)
+                .is_some()
+        );
+        assert!(app.tabs[0].is_parked_slot(&PaneSlot::Ready(views[1].clone()), cx));
+    });
+    graphics_send_fixture(&views[0], cx, 27222, b"\x1b]9;4;0\x07");
+    graphics_recovery_wait(cx, "the visible task cleared", |cx| {
+        views[0].read_with(cx, |view, _| view.progress().is_none())
+    });
+    let (kind, label) = app
+        .update_in(&mut vcx, |app, _, cx| app.tabs[0].progress_label(cx))
+        .expect("the parked leaf still reports");
+    assert_eq!(kind, ProgressKind::Error);
+    let expected = t_fmt(L10nKey::TabProgressErrorPercent, &[("percent", "61")]);
+    assert_eq!(label.as_ref(), expected.as_str());
+
+    app.update_in(&mut vcx, |app, _window, cx| {
+        assert!(
+            app.tabs[0]
+                .restore_parked(views[1].entity_id(), app.workspace, cx)
+                .is_some()
+        );
+        assert!(!app.tabs[0].is_parked_slot(&PaneSlot::Ready(views[1].clone()), cx));
+    });
+    assert_eq!(
+        app.update_in(&mut vcx, |app, _, cx| app.tabs[0].progress_label(cx))
+            .expect("unparking does not drop the task")
+            .0,
+        ProgressKind::Error
+    );
+    app.update_in(&mut vcx, |_app, window, cx| {
+        let handle = views[2].read(cx).focus_handle.clone();
+        window.focus(&handle, cx);
+    });
+    assert_eq!(
+        app.update_in(&mut vcx, |app, _, cx| app.tabs[0].progress_label(cx))
+            .expect("focus changes do not change membership")
+            .0,
+        ProgressKind::Error
+    );
+
+    app.update_in(&mut vcx, |app, _window, _cx| {
+        app.tabs[0].pane.close_leaf(views[1].entity_id());
+    });
+    assert_eq!(
+        app.update_in(&mut vcx, |app, _, cx| app.tabs[0].progress_label(cx)),
+        None,
+        "closing the error pane retires its progress"
+    );
+
+    graphics_send_fixture(&views[2], cx, 27223, b"\x1b]9;4;1;15\x07");
+    graphics_recovery_wait(cx, "the moved pane has its own task", |cx| {
+        views[2].read_with(cx, |view, _| {
+            view.progress() == Some(PaneProgress::new(ProgressKind::Running, Some(15)))
+        })
+    });
+    let _other_stream = app.update_in(&mut vcx, |app, window, cx| {
+        let (other, stream) = crate::terminal::view::quiet_test_pane(92, window, cx);
+        LyrelApp::watch_terminal(&other, window, cx);
+        app.tabs
+            .push(Tab::new(Pane::leaf(PaneSlot::Ready(other))));
+        app.tabs.select(0);
+        let moved = Pane::Leaf(PaneSlot::Ready(views[2].clone()));
+        app.tabs[0].pane.close_leaf(views[2].entity_id());
+        let dst = app.tabs[1].pane.first_leaf().expect("destination pane");
+        assert!(app.tabs[1].pane.graft_beside(moved, &dst, Dir::Right).is_ok());
+        cx.notify();
+        stream
+    });
+    assert_eq!(
+        app.update_in(&mut vcx, |app, _, cx| app.tabs[0].progress_label(cx)),
+        None,
+        "the source tab no longer reports the moved pane"
+    );
+    let (kind, label) = app
+        .update_in(&mut vcx, |app, _, cx| app.tabs[1].progress_label(cx))
+        .expect("the destination tab reports the moved pane");
+    assert_eq!(kind, ProgressKind::Running);
+    let expected = t_fmt(L10nKey::TabProgressRunningPercent, &[("percent", "15")]);
+    assert_eq!(label.as_ref(), expected.as_str());
+}
+
+/// A sleeping tab has no live leaves; waking it against the same daemon
+/// restores each pane's authoritative state into the reconstructed tab.
+#[gpui_kit::test]
+fn progress_consumer_split_tab_restores_after_sleep_reconstruction(
+    cx: &mut TestAppContext,
+) {
+    use crate::daemon::protocol::{PaneProgress, ProgressKind};
+    use crate::ui::{
+        app::LyrelApp,
+        pane::{Pane, PaneSlot},
+        tab::Tab,
+    };
+    use gpui_kit::Axis;
+    use gpui_kit::test::TestWindowExt as _;
+
+    let daemon = GraphicsDaemonProcess::start();
+    let panes = [daemon.spawn(), daemon.spawn()];
+    let (app, mut vcx) = crate::ui::app::test_window::harness(cx);
+    vcx.update(|_, cx| {
+        let mut cfg = cx.global::<Config>().clone();
+        cfg.cursor_blink = false;
+        cx.set_global(cfg);
+    });
+    let views = app.update_in(&mut vcx, |app, window, cx| {
+        let mut views = Vec::new();
+        for pane in panes {
+            let terminal = RemoteTerminal::from_stream_with(
+                daemon.stream(pane),
+                TermSize::new(80, 24),
+                Vec::new(),
+                if cfg!(windows) {
+                    PtySource::LocalConpty
+                } else {
+                    PtySource::Raw
+                },
+            )
+            .unwrap();
+            let view = cx.new(|cx| TerminalView::with_terminal(terminal, pane, window, cx));
+            LyrelApp::watch_terminal(&view, window, cx);
+            views.push(view);
+        }
+        let tree = Pane::split_node(
+            Axis::Horizontal,
+            0.5,
+            Pane::Leaf(PaneSlot::Ready(views[0].clone())),
+            Pane::Leaf(PaneSlot::Ready(views[1].clone())),
+        );
+        app.tabs.clear();
+        app.tabs.push(Tab::new(tree));
+        app.tabs.select(0);
+        cx.notify();
+        views
+    });
+    graphics_send_fixture(&views[0], cx, 27230, b"\x1b]9;4;1;42\x07");
+    graphics_send_fixture(&views[1], cx, 27231, b"\x1b]9;4;2;61\x07");
+    graphics_recovery_wait(cx, "both live panes report", |cx| {
+        views[0].read_with(cx, |view, _| {
+            view.progress() == Some(PaneProgress::new(ProgressKind::Running, Some(42)))
+        }) && views[1].read_with(cx, |view, _| {
+            view.progress() == Some(PaneProgress::new(ProgressKind::Error, Some(61)))
+        })
+    });
+    let presentation = app.update_in(&mut vcx, |app, _, _cx| app.tabs[0].presentation().clone());
+    app.update_in(&mut vcx, |app, window, cx| {
+        assert!(crate::ui::session_lifecycle::SessionLifecycle::sleep(
+            &mut app.tabs,
+            0,
+            window,
+            cx
+        ));
+        assert!(app.tabs[0].is_asleep());
+        assert!(
+            app.tabs[0].progress_label(cx).is_none(),
+            "a sleeping tab has no live progress"
+        );
+    });
+    vcx.update(|window, cx| {
+        window.render_frame(cx);
+        assert!(window.try_find(("sidebar-progress-status", 0usize)).is_none());
+    });
+    drop(views);
+
+    let views = app.update_in(&mut vcx, |app, window, cx| {
+        let mut views = Vec::new();
+        for pane in panes {
+            let terminal = RemoteTerminal::from_stream_with(
+                daemon.stream(pane),
+                TermSize::new(80, 24),
+                Vec::new(),
+                if cfg!(windows) {
+                    PtySource::LocalConpty
+                } else {
+                    PtySource::Raw
+                },
+            )
+            .unwrap();
+            let view = cx.new(|cx| TerminalView::with_terminal(terminal, pane, window, cx));
+            LyrelApp::watch_terminal(&view, window, cx);
+            views.push(view);
+        }
+        let tree = Pane::split_node(
+            Axis::Horizontal,
+            0.5,
+            Pane::Leaf(PaneSlot::Ready(views[0].clone())),
+            Pane::Leaf(PaneSlot::Ready(views[1].clone())),
+        );
+        app.tabs[0].finish_wake(tree, presentation);
+        cx.notify();
+        views
+    });
+    graphics_recovery_wait(cx, "the reconstructed split restored daemon progress", |cx| {
+        views[0].read_with(cx, |view, _| {
+            view.progress() == Some(PaneProgress::new(ProgressKind::Running, Some(42)))
+        }) && views[1].read_with(cx, |view, _| {
+            view.progress() == Some(PaneProgress::new(ProgressKind::Error, Some(61)))
+        })
+    });
+    let (kind, label) = app
+        .update_in(&mut vcx, |app, _, cx| app.tabs[0].progress_label(cx))
+        .expect("the reconstructed tab summarizes its leaves");
+    assert_eq!(kind, ProgressKind::Error);
+    assert_eq!(label.as_ref(), t(L10nKey::TabProgressError));
+    vcx.run_until_parked();
+    vcx.update(|window, cx| {
+        window.render_frame(cx);
+        assert_eq!(
+            window.find(("sidebar-progress-status", 0usize)).label(),
+            Some(t(L10nKey::TabProgressError))
+        );
+    });
+    graphics_send_fixture(&views[1], cx, 27232, b"\x1b]9;4;0\x07");
+    graphics_recovery_wait(cx, "the restored error can be cleared", |cx| {
+        views[1].read_with(cx, |view, _| view.progress().is_none())
+    });
+    let expected = t_fmt(L10nKey::TabProgressRunningPercent, &[("percent", "42")]);
+    let (kind, label) = app
+        .update_in(&mut vcx, |app, _, cx| app.tabs[0].progress_label(cx))
+        .expect("the remaining task is exact");
+    assert_eq!(kind, ProgressKind::Running);
+    assert_eq!(label.as_ref(), expected.as_str());
+}
