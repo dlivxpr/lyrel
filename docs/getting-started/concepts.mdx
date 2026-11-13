@@ -442,6 +442,8 @@ node scripts/kitty-capacity-analysis.mjs `
 
 实际生产者回归使用 Ubuntu 官方 `libsixel-bin 1.10.5` 的 `img2sixel -w 40 -h 40 -p 4 -d none colors.ppm` 输出，核验真实 PTY → daemon → ordered consumer 的 RGBA、锚点和后续文字光标。源码接线及 headless consumer 不等于 Windows 原生像素、真实 SSH 或 macOS 已验收；原生与平台组合由 #258 的候选记录分别确认。完整 Sixel 恢复／安全／发现能力属于 #275，本切片不扩大自动发现或宣称完整兼容。
 
+2026-11-13 的 Windows 独立 target 检查点为源码 `4d788ed5`，已合入父集成 `d7ab88d0`：Sixel 核心／真实 PTY 7 项、既有 Kitty 15 项、XTGETTCAP 共存 4 项、未结束同步输出 1 项、生产 `ParseBridge`／rooted `TerminalView` 消费者 2 项均通过，合计 29 项，无 ignored、无零匹配。生产消费者实际检查量化图的 BGRA、最终文字行、文字之下的图片图层、主备屏往返、冻结阅读期间继续输出 Kitty 和最终清除；有效 RED 曾分别命中未接入像素、超长头透传、图片图层不符和镜像启动未准入 decoder，再以同一生产路径获得 GREEN。此为本票窄验证，不是完整 workspace／产品 GUI binary 构建；Windows 原生窗口像素、WSL headless、真实 SSH 与 macOS 未在该分票检查点验收。
+
 Windows 的隔离候选 pane 可执行 `pwsh -NoProfile -File scripts/sixel-static.ps1 -Scene Baseline -KeepVisible`，实际经 WSL 调用上述已准备的官方 `img2sixel`，输出 240×160 像素图片及 `AFTER_SIXEL_274`。`-Scene Scroll`／`Display`／`Clear`／`Refusal` 分别提供底部滚动、DECSDM、清除和超限拒收场景；只在自有候选 pane 运行，不连接或清理用户窗口。截取原生画面时同时记录 cell 尺寸、图片边界与后续文字，不以脚本退出或收到资源 packet 代替像素通过。
 
 #### 当前实现：终端布局与屏幕生命周期（#42）
