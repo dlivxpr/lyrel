@@ -290,8 +290,8 @@ fn glyph_consumer_declared_extents_modes_alignment_padding_and_baseline(
         1000,
         "aw=1000;lh=1000;ymin=-200;size=stretch;align=center,baseline;pad=0,0,0,0",
     );
-    glyph_at(cx, &mut serial, 3, 4, cp);
-    let baseline_cell = glyph_region_bounds(window, &view, cx, 3, 4, 1);
+    glyph_at(cx, &mut serial, 20, 4, cp);
+    let baseline_cell = glyph_region_bounds(window, &view, cx, 20, 4, 1);
     let (font, font_size, line_height) = view.read_with(cx, |view, _| {
         (view.font.clone(), view.font_size, view.line_height)
     });
