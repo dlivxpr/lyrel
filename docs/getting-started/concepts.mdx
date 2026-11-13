@@ -474,7 +474,7 @@ Windows 的隔离候选 pane 可执行 `pwsh -NoProfile -File scripts/sixel-stat
 
 同一次 PTY read 中，已完成的 `File=` 图片即使后面紧接 Kitty APC、另一条 File 或拒收控制串，编码／解码 source 的工作额度仍保留到各图片按流序移交，清理当前控制串不提前释放前一幅图片。base64 在原编码 buffer 内去除头部和空白，补齐 padding 后计算长度，并在新解码分配前取得工作池额度；畸形 padding 拒收而不产生无符号下溢。
 
-本切片的验收尚未完成：初始发送停滞已定位并修复为上述 source 工作额度问题，不是 resize 或往返期限；共享 metadata 场景改用生产 PNG 校验所需的资源／工作预算，仍独立限制 metadata 为 1,024 bytes，避免把其他预算拒收误当 metadata 压力。修正后的 metadata、resize 与像素断言仍待实际结果。真实 SSH 场景已编写原 producer `exit 0`、独立 `ring_flood` 退出后再 fresh attach 的断言，但当前尚未执行；Windows 原生像素及最终 WSL／SSH 结果仍待单独记录，不用后台 GUI 用例或未运行的断言替代。
+Windows 后台检查点 `90e87948`：共享 metadata 压力／RIS 身份退役 1 项、既有 source handoff 1 项及生产 GUI 消费者 9 项均通过，无失败／忽略；GUI 包括原初始发送／resize、PNG／JPEG、精确尺寸／像素数据、滚动、拒收、fresh恢复与同步／主备屏场景。metadata 场景使用生产 PNG 校验所需的资源／工作预算，单独限制 metadata 为 1,024 bytes；按公开 placement 身份折叠有序更新，而非将更新帧数当图片数。真实 SSH 目标仅编译成功：原 producer `exit 0`、独立 `ring_flood` 退出后再 fresh attach 的场景尚未实际运行。Windows 原生像素、最终 WSL／SSH 与含修复的 macOS CI 仍待分别记录，不用后台 GUI、编译或旧候选替代。
 
 发现（discovery）结论：不为静态 iTerm2 适配器伪造 terminfo capability、DA1 attribute 或 `XTSMGRAPHICS` item；`XTGETTCAP` 白名单继续只回答已验证的 `Co`／`colors`／`RGB`。[官方 feature reporting](https://iterm2.com/feature-reporting/) 的 `FILE` 能力涵盖文件下载及其他媒体形式，本实现仅支持静态 inline PNG/JPEG，不广告该广泛能力，也不冒充 iTerm.app。pane 协议从 `19` 起携带 `display_width`／`display_height`；实际连接仍须满足当前版本与 endpoint 的协商要求，不能拿本机 GUI 版本代替远端身份。旧后端必须明确提示更新，不静默降级、不自动替换已运行的 server 或重启会话。本节不宣称 macOS 原生行为已经验收。
 
