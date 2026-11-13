@@ -692,6 +692,45 @@ mod tests {
         assert_eq!(replies(b"\x1b[>c"), [DA2_REPLY]);
     }
 
+    /// The attached client answers DA1 for the endpoint that decodes and
+    /// retains the image: an older daemon or a routed remote server that never
+    /// negotiated static Sixel must not inherit this build's attribute 4.
+    #[test]
+    fn da1_sixel_attribute_follows_the_negotiated_endpoint() {
+        let facts = std::sync::Mutex::new(super::super::presentation::ParsePresentation::new(80));
+        let captured = Replies::default();
+        let mut term = Crosswords::new(
+            TermSize::new(80, 24),
+            CursorShape::Block,
+            captured.clone(),
+            WindowId::from(0),
+            0,
+            10_000,
+        );
+        let mut keyboard = KeyboardStacks::default();
+        {
+            let mut bridge = ParseBridge::new(&mut term, captured.clone(), &mut keyboard, None)
+                .with_presentation(Some(&facts));
+            Processor::default().advance(&mut bridge, b"\x1b[c");
+        }
+        assert_eq!(
+            std::mem::take(&mut *captured.0.lock()),
+            ["\x1b[?6c"],
+            "an endpoint without the feature is advertised without Sixel"
+        );
+        facts.lock().unwrap().endpoint_sixel = true;
+        {
+            let mut bridge = ParseBridge::new(&mut term, captured.clone(), &mut keyboard, None)
+                .with_presentation(Some(&facts));
+            Processor::default().advance(&mut bridge, b"\x1b[c");
+        }
+        assert_eq!(
+            std::mem::take(&mut *captured.0.lock()),
+            ["\x1b[?4;6c"],
+            "a negotiated endpoint admits static Sixel"
+        );
+    }
+
     /// Capability queries this product never answered stay silent: the
     /// version string, the cell pixel size a windowless mirror does not
     /// have, and sixel geometry nothing renders.
