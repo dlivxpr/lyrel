@@ -202,14 +202,17 @@ CPU／RAM 的 refresh 方法仍返回 `()`，没有可传播的刷新错误；�
   <Tab title="Windows">
     Windows 的 GUI、server、CLI 与测试构建共用已准备的 ConPTY（见 `assets/windows/conpty/README.md`）。
     首次构建或准备目录缺失／损坏时运行 `pwsh scripts/prepare-conpty.ps1`，
-    `LYREL_CONPTY_DIR` 可复用共享准备目录。之后 ConPTY 的构建消费不再联网；
-    Cargo 的 Rust 依赖仍需按锁文件获取或事先缓存。
+    `LYREL_CONPTY_DIR` 可复用共享准备目录。之后使用 `pwsh scripts/cargo-windows.ps1 build ...`
+    或 `pwsh scripts/cargo-windows.ps1 test ...` 替代裸 `cargo build`／`cargo test`，其余参数保持不变。
+    脚本从 Cargo JSON 定位实际 executable 并校验、暂存 ConPTY，再运行测试，兼容 Cargo 1.100 的新产物布局，
+    不依赖固定 `deps/` 或 `OUT_DIR` 层数。`--no-run` 只编译并暂存；源码目录之外的独立产物也须携带完整文件对和许可证。
+    构建消费不再联网；Cargo 的 Rust 依赖仍需按锁文件获取或事先缓存。
 
     ```powershell
     git clone https://github.com/dlivxpr/lyrel
     cd lyrel
     pwsh scripts/prepare-conpty.ps1
-    cargo build --release --locked
+    pwsh scripts/cargo-windows.ps1 build --release --locked
     ```
 
     若启用的 TLS 依赖需要构建 `aws-lc-sys`，须提供 NASM；在 x86_64 MSVC 上也可于本次构建终端设置 `$env:AWS_LC_SYS_PREBUILT_NASM = '1'`，使用该正式 crate 随包提供的预构建汇编对象。此选项不禁用汇编、不修改下载源码，也不应通过覆盖 `RUSTFLAGS` 丢失项目的静态 CRT 参数。
