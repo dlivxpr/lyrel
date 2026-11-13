@@ -947,13 +947,7 @@ fn glyph_paths_with_clip_in_region(
                     let visible = path.bounds.intersect(&region);
                     visible.size.width.0 > 0. && visible.size.height.0 > 0.
                 })
-                .map(|path| {
-                    (
-                        path.bounds,
-                        path.content_mask.bounds,
-                        path.color,
-                    )
-                })
+                .map(|path| (path.bounds, path.content_mask.bounds, path.color))
                 .collect()
         })
         .unwrap()

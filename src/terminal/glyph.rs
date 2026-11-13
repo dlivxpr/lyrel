@@ -24,9 +24,7 @@ use gpui_kit::{
 };
 use parking_lot::RwLock;
 use rio_graphics::glyph::glyf_decode::{Outline, PathCmd};
-use rio_graphics::glyph_layout::{
-    GlyphAlignH, GlyphAlignV, GlyphLayout, GlyphSize,
-};
+use rio_graphics::glyph_layout::{GlyphAlignH, GlyphAlignV, GlyphLayout, GlyphSize};
 
 /// Protocol capacity: one registration per codepoint, 1024 simultaneous slots.
 const CAPACITY: usize = 1024;
@@ -264,11 +262,7 @@ fn placement(
         }
         GlyphSize::Stretch => (effective_w / extent_w, effective_h / extent_h),
     };
-    if !(scale_x > 0.
-        && scale_y > 0.
-        && scale_x.is_finite()
-        && scale_y.is_finite())
-    {
+    if !(scale_x > 0. && scale_y > 0. && scale_x.is_finite() && scale_y.is_finite()) {
         return None;
     }
 
@@ -536,16 +530,8 @@ mod tests {
             GlyphAlignV::Center,
             [0.; 4],
         );
-        let square = placement(
-            &outline(0, 0, 1000, 1000),
-            1000,
-            1,
-            &layout,
-            10.,
-            20.,
-            10.,
-        )
-        .unwrap();
+        let square =
+            placement(&outline(0, 0, 1000, 1000), 1000, 1, &layout, 10., 20., 10.).unwrap();
         let inset = placement(
             &outline(200, 300, 800, 900),
             1000,
@@ -579,16 +565,7 @@ mod tests {
                 GlyphAlignV::Start,
                 [0.; 4],
             );
-            placement(
-                &outline(0, 0, 1000, 1000),
-                1000,
-                1,
-                &layout,
-                100.,
-                40.,
-                0.,
-            )
-            .unwrap()
+            placement(&outline(0, 0, 1000, 1000), 1000, 1, &layout, 100., 40., 0.).unwrap()
         };
         let height = mode(GlyphSize::Height);
         close(height.scale_x, 0.04);
@@ -661,16 +638,7 @@ mod tests {
             GlyphAlignV::Start,
             [0.1, 0.2, 0.0, 0.3],
         );
-        let place = placement(
-            &outline(0, 0, 1000, 1000),
-            1000,
-            1,
-            &padded,
-            100.,
-            40.,
-            0.,
-        )
-        .unwrap();
+        let place = placement(&outline(0, 0, 1000, 1000), 1000, 1, &padded, 100., 40., 0.).unwrap();
         close(place.scale_x, 0.05);
         close(place.scale_y, 0.036);
         close(place.offset_x, 30.);
@@ -685,16 +653,8 @@ mod tests {
             GlyphAlignV::Center,
             [0.2; 4],
         );
-        let place = placement(
-            &outline(0, 0, 1000, 1000),
-            1000,
-            1,
-            &centred,
-            100.,
-            40.,
-            0.,
-        )
-        .unwrap();
+        let place =
+            placement(&outline(0, 0, 1000, 1000), 1000, 1, &centred, 100., 40., 0.).unwrap();
         close(place.scale_x, 0.06);
         close(place.scale_y, 0.024);
         close(place.offset_x, 20.);
@@ -716,16 +676,8 @@ mod tests {
                 GlyphAlignV::Start,
                 pad,
             );
-            let place = placement(
-                &outline(0, 0, 1000, 1000),
-                1000,
-                1,
-                &layout,
-                100.,
-                40.,
-                0.,
-            )
-            .unwrap();
+            let place =
+                placement(&outline(0, 0, 1000, 1000), 1000, 1, &layout, 100., 40., 0.).unwrap();
             close(place.scale_x, 0.1);
             close(place.scale_y, 0.04);
             close(place.offset_x, 0.);
@@ -744,18 +696,7 @@ mod tests {
             GlyphAlignV::Center,
             [0., 0., 0., 1.5],
         );
-        assert!(
-            placement(
-                &outline(0, 0, 1000, 1000),
-                1000,
-                1,
-                &invalid,
-                10.,
-                20.,
-                10.
-            )
-            .is_none()
-        );
+        assert!(placement(&outline(0, 0, 1000, 1000), 1000, 1, &invalid, 10., 20., 10.).is_none());
         assert!(
             placement(
                 &outline(0, 0, 0, 0),
@@ -793,16 +734,7 @@ mod tests {
             GlyphAlignV::Start,
             [0.; 4],
         );
-        let place = placement(
-            &outline(0, 0, 1000, 1000),
-            1000,
-            2,
-            &layout,
-            100.,
-            40.,
-            0.,
-        )
-        .unwrap();
+        let place = placement(&outline(0, 0, 1000, 1000), 1000, 2, &layout, 100., 40., 0.).unwrap();
         close(place.scale_x, 0.2);
         close(place.scale_y, 0.04);
         close(place.offset_x, 0.);

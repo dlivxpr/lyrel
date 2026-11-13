@@ -182,9 +182,7 @@ fn glyph_consumer_real_pty_registers_queries_replaces_and_clears_a_monochrome_gl
 /// baseline. Expected geometry is read from the actual cell metrics and the
 /// font's own baseline, not from a copy of the placement formula.
 #[gpui_kit::test]
-fn glyph_consumer_declared_extents_modes_alignment_padding_and_baseline(
-    cx: &mut TestAppContext,
-) {
+fn glyph_consumer_declared_extents_modes_alignment_padding_and_baseline(cx: &mut TestAppContext) {
     crate::core::config::pin_test_config_dir();
     cx.executor().allow_parking();
     let daemon = GraphicsDaemonProcess::start();
@@ -199,17 +197,19 @@ fn glyph_consumer_declared_extents_modes_alignment_padding_and_baseline(
     let cp = GLYPH_CP;
     let mut serial = 0usize;
 
-    let glyph_at = |cx: &mut TestAppContext, serial: &mut usize, row: usize, col: usize, at: u32| {
-        let at_char = char::from_u32(at).unwrap();
-        let text = at_char.to_string();
-        *serial += 1;
-        glyph_show(&view, cx, *serial, row, col, &text);
-        glyph_wait(cx, "declared glyph cell painted", |cx| {
-            view.read_with(cx, |view, _| {
-                view.cell_geom.is_some() && glyph_presented_row(view, row).chars().nth(col) == Some(at_char)
-            })
-        });
-    };
+    let glyph_at =
+        |cx: &mut TestAppContext, serial: &mut usize, row: usize, col: usize, at: u32| {
+            let at_char = char::from_u32(at).unwrap();
+            let text = at_char.to_string();
+            *serial += 1;
+            glyph_show(&view, cx, *serial, row, col, &text);
+            glyph_wait(cx, "declared glyph cell painted", |cx| {
+                view.read_with(cx, |view, _| {
+                    view.cell_geom.is_some()
+                        && glyph_presented_row(view, row).chars().nth(col) == Some(at_char)
+                })
+            });
+        };
 
     // A declared extent is the placement frame. Stretch + start/start fills
     // the cell exactly, and deleting the outline's own bounds from the
@@ -350,9 +350,7 @@ fn glyph_consumer_declared_extents_modes_alignment_padding_and_baseline(
             mode_cp,
             &glyph_square(1000),
             1000,
-            &format!(
-                "aw=1000;lh=1000;ymin=0;size={mode};align=start,start;pad=0,0,0,0"
-            ),
+            &format!("aw=1000;lh=1000;ymin=0;size={mode};align=start,start;pad=0,0,0,0"),
         );
         let text = char::from_u32(mode_cp).unwrap().to_string();
         serial += 1;
@@ -360,8 +358,7 @@ fn glyph_consumer_declared_extents_modes_alignment_padding_and_baseline(
         glyph_wait(cx, "mode glyph painted", |cx| {
             view.read_with(cx, |view, _| {
                 view.cell_geom.is_some()
-                    && glyph_presented_row(view, row).chars().nth(4)
-                        == char::from_u32(mode_cp)
+                    && glyph_presented_row(view, row).chars().nth(4) == char::from_u32(mode_cp)
             })
         });
         let cell = glyph_region_bounds(window, &view, cx, row, 4, 1);
@@ -398,8 +395,7 @@ fn glyph_consumer_declared_extents_modes_alignment_padding_and_baseline(
             "cover" => {
                 let largest = cell.size.width.0.max(cell.size.height.0);
                 assert!(
-                    (size.width.0 - largest).abs() <= 1.5
-                        && (size.height.0 - largest).abs() <= 1.5,
+                    (size.width.0 - largest).abs() <= 1.5 && (size.height.0 - largest).abs() <= 1.5,
                     "cover fills the larger span axis: {size:?} vs {cell:?}"
                 );
                 assert!(
@@ -550,9 +546,7 @@ fn mode_index(mode: &str) -> u32 {
 /// the codepoint's logical one-cell advance, wrapping, selection and copy
 /// untouched.
 #[gpui_kit::test]
-fn glyph_consumer_width_two_span_fallback_clip_and_logical_cells(
-    cx: &mut TestAppContext,
-) {
+fn glyph_consumer_width_two_span_fallback_clip_and_logical_cells(cx: &mut TestAppContext) {
     crate::core::config::pin_test_config_dir();
     cx.executor().allow_parking();
     let daemon = GraphicsDaemonProcess::start();
@@ -793,9 +787,7 @@ fn glyph_consumer_width_two_span_fallback_clip_and_logical_cells(
 /// a stale picture; invalid sizing is rejected by the daemon and paints
 /// nothing.
 #[gpui_kit::test]
-fn glyph_consumer_derived_rendering_follows_geometry_scale_and_revision(
-    cx: &mut TestAppContext,
-) {
+fn glyph_consumer_derived_rendering_follows_geometry_scale_and_revision(cx: &mut TestAppContext) {
     crate::core::config::pin_test_config_dir();
     cx.executor().allow_parking();
     let daemon = GraphicsDaemonProcess::start();
@@ -841,7 +833,11 @@ fn glyph_consumer_derived_rendering_follows_geometry_scale_and_revision(
         first[0].0
     );
     let first_revision = view.read_with(cx, |view, _| {
-        view.terminal.glyphs().get(cp).expect("registration").revision
+        view.terminal
+            .glyphs()
+            .get(cp)
+            .expect("registration")
+            .revision
     });
 
     // Many replacements, ending in a deliberately small outline. A cache
@@ -863,13 +859,19 @@ fn glyph_consumer_derived_rendering_follows_geometry_scale_and_revision(
     }
     glyph_wait(cx, "final replacement repainted", |cx| {
         let cell = glyph_region_bounds(window, &view, cx, 2, 4, 1);
-        glyph_painted(window, &view, cx, cell).first().is_some_and(|path| {
-            (path.0.size.width.0 - cell.size.width.0 * 0.35).abs() <= 1.5
-                && (path.0.size.height.0 - cell.size.height.0 * 0.35).abs() <= 1.5
-        })
+        glyph_painted(window, &view, cx, cell)
+            .first()
+            .is_some_and(|path| {
+                (path.0.size.width.0 - cell.size.width.0 * 0.35).abs() <= 1.5
+                    && (path.0.size.height.0 - cell.size.height.0 * 0.35).abs() <= 1.5
+            })
     });
     let replaced_revision = view.read_with(cx, |view, _| {
-        view.terminal.glyphs().get(cp).expect("registration").revision
+        view.terminal
+            .glyphs()
+            .get(cp)
+            .expect("registration")
+            .revision
     });
     assert!(
         replaced_revision > first_revision,
@@ -895,7 +897,12 @@ fn glyph_consumer_derived_rendering_follows_geometry_scale_and_revision(
         painted[0].0
     );
     assert_eq!(
-        view.read_with(cx, |view, _| view.terminal.glyphs().get(cp).expect("registration").revision),
+        view.read_with(cx, |view, _| view
+            .terminal
+            .glyphs()
+            .get(cp)
+            .expect("registration")
+            .revision),
         replaced_revision,
         "a font-size change does not re-register the outline"
     );
@@ -918,18 +925,19 @@ fn glyph_consumer_derived_rendering_follows_geometry_scale_and_revision(
         painted[0].0
     );
     assert_eq!(
-        view.read_with(cx, |view, _| view.terminal.glyphs().get(cp).expect("registration").revision),
+        view.read_with(cx, |view, _| view
+            .terminal
+            .glyphs()
+            .get(cp)
+            .expect("registration")
+            .revision),
         replaced_revision,
         "a display-scale change does not re-register the outline"
     );
 
     // Invalid sizing is rejected by the pinned parser and paints nothing.
     let invalid_cp = GLYPH_CP + 1;
-    for (offset, params) in [
-        (0, "size=huge"),
-        (1, "pad=0,0,0,2"),
-        (2, "width=3"),
-    ] {
+    for (offset, params) in [(0, "size=huge"), (1, "pad=0,0,0,2"), (2, "width=3")] {
         serial += 1;
         let reply = glyph_send(
             &view,
@@ -941,10 +949,8 @@ fn glyph_consumer_derived_rendering_follows_geometry_scale_and_revision(
         );
         assert_eq!(
             reply,
-            format!(
-                "\x1b_25a1;r;cp={invalid_cp:x};status=1;reason=malformed_payload\x1b\\"
-            )
-            .into_bytes(),
+            format!("\x1b_25a1;r;cp={invalid_cp:x};status=1;reason=malformed_payload\x1b\\")
+                .into_bytes(),
             "invalid sizing is rejected: {params} (case {offset})"
         );
     }
@@ -968,8 +974,7 @@ fn glyph_consumer_derived_rendering_follows_geometry_scale_and_revision(
     glyph_wait(cx, "invalid glyph cell visible", |cx| {
         view.read_with(cx, |view, _| {
             view.cell_geom.is_some()
-                && glyph_presented_row(view, 6).chars().nth(4)
-                    == char::from_u32(invalid_cp)
+                && glyph_presented_row(view, 6).chars().nth(4) == char::from_u32(invalid_cp)
         })
     });
     let rejected_cell = glyph_region_bounds(window, &view, cx, 6, 4, 1);

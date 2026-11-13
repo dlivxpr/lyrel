@@ -530,12 +530,8 @@ pub(super) fn paint_glyphs(
                         let baseline = match baseline {
                             Some(baseline) => baseline,
                             None => {
-                                let measured = text_baseline(
-                                    window,
-                                    &faces[0],
-                                    font_size,
-                                    geom.line_height,
-                                );
+                                let measured =
+                                    text_baseline(window, &faces[0], font_size, geom.line_height);
                                 baseline = Some(measured);
                                 measured
                             }
