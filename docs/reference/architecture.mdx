@@ -185,7 +185,7 @@ Unix 的 daemon handoff 是独立的升级路径：通过 exec 继承本地 PTY 
 
 ## 编辑器与 agent 的边界
 
-文档编辑与终端输入是不同能力，两者都不引入 WebView 或代理第三方应用界面。
+当前的文档编辑与终端输入是不同能力，两者均未引入 WebView 或代理第三方应用界面。下方[文件能力扩展设计](#file-capability-design)仅为待实现的 draw.io 本机引擎定义局部例外，不改变当前行为，也不授权普通文本、Markdown 或终端执行任意网页脚本。
 
 文件缓冲区按 Host 与文档身份加载、监视和保存。编辑器用工作区、`HostId`、目标文档／分组与请求序号核对结果，恢复另有 `context_epoch`；这与文件树按 Host adapter 实例隔离不是同一机制。
 
@@ -196,6 +196,60 @@ Markdown 只有独立维护的 Zorite-derived `lyrel-markdown-editor` 默认即�
 源码例外只涵盖 pinned Zorite `9f069c73a56b06efc84fb7abb700beb50083c827` 的 MIT editor/bidi/ratex 16 文件；registry `zorite-markdown =0.10.1` 仅提供 GUI-free syntax。`UPSTREAM.toml` 记录原始 Git blob 摘要和本地适配，MIT notices 与字体许可进入根 `LICENSE` 并沿平台打包链分发。保留 imported bidi mapping 与超长 nowrap 行的 source-preserving 有界视觉布局；#235 为 `not_planned`，不是 native long-line 或 full RTL 已修复的证明，完整 RTL 仍在已批准验收范围之外。全部源码接线与验收边界见 `HOST_CAPABILITIES.md`；最终 native/实窗/平台与真实 SSH 结果分别记录。LSP 仍属于桌面，headless 不引入 GUI。
 
 coding agent 在真实 PTY 中运行自己的原生 TUI。命令识别、状态 hooks、会话历史、resume／fork 与启动任务投递是独立能力；hooks／产品 SDK bridge 是状态观测与任务交互通道，不替代 agent 界面。内置产品与能力边界见[agent 概览](/agents/overview)和[会话操作](/agents/sessions)，其中 pi 与 omp 是独立产品，名称识别不构成全部能力已经验收的声明。
+
+<a id="file-capability-design"></a>
+## 文件能力扩展设计（已确认，待实现）
+
+本节记录后续文件能力的架构约束，不描述已实现功能。产品范围、术语、逐格式支持深度及验收要求以[文件能力扩展设计](/window/side-panel#file-format-plan)为准；Office、Notebook、kernel 与 Plotly 均不在本轮范围。
+
+### 文件打开与状态归属
+
+文件打开入口需要按格式选择文本编辑、只读阅读或格式编辑，不再要求所有文件先成为文本 buffer。
+
+- 工作台继续拥有文档身份、所属 Host/path、打开请求、dirty、保存／另存为／冲突／关闭、tabs/groups 和焦点交接。格式实现不直接操作文件树或绕过所属 Host 写盘。
+- 当前 `src/ui/code_editor/buffers.rs` 的 `EditorBuffers` 和 `Loaded` 面向文本，整文件读取上限为 4 MiB。扩展时分离共同文档生命周期与格式内容，不把图片／PDF 伪装成文本，也不要求只读内容具有文本输入实体。
+- 源码可编辑格式保留一份权威原文。表格和结构树只提交针对当前 revision 的局部编辑，源码视图与格式视图共享撤销历史；光标、选择、滚动和布局仍归各 presentation。
+- 格式识别结合文件名与内容探针，格式错误必须可见。已识别容器先于通用 ZIP 处理，不把 EPUB 误当压缩包，也不因识别失败而执行系统关联程序。
+- 加载、解析、解码与渲染在后台完成，结果核对文档、所属 Host、连接代次和 revision。关闭或替换目标后，迟到结果不得安装资源、写盘或夺取焦点。
+
+### Host 读取与 headless 能力
+
+当前 `Host::read_file` 是有上限的整文件读取，`RemoteHost` 使用 control 请求返回整段文件字节。支持大文件需要根据真实消费者增加有界分段／流式读取、取消和文件版本核验，不能由每个格式私自读取本机文件系统或单纯扩大帧上限。
+
+读取期间遇到文件变化，需要保持一个一致版本或明确作废本次读取。传输、工作内存、解码像素、页面纹理和缓存分别预算；大文件传输不能阻塞交互控制。远端预览可将必要字节传到桌面，并使用私有、受生命周期管理的临时缓存；缓存不成为原件或新的保存目标。
+
+SQLite 在所属 Host 执行受限只读查询，按分页传回 schema 与必要记录，不默认传输整个远端库。源库与活跃 WAL 的读取必须使用 SQLite 的一致性机制，不裸复制文件拼接快照，不改变源库 journal 模式、不 checkpoint、不加载扩展。查询限时、限量并可取消；分页读取与刷新需要明确快照生命周期。
+
+新增 wire 消息前读取 `daemon/control.rs` 与 `daemon/protocol.rs`，按现有规则升级 control 版本；可安全忽略的字段才通过 feature 协商。新客户端遇到缺少能力的远端必须明确提示，不显示假空结果。GUI、解码引擎和 WebView 依赖不得进入 `lyrel-core`／server／CLI；SQLite 的 headless 依赖单独核对必要性、体积与许可证。
+
+### 格式实现与依赖选择
+
+优先复用已有的原生能力，只有存在独立状态和生命周期的格式才形成独立模块，不预先建立通用插件框架。
+
+| 格式能力 | 优先路线 | 不能假定的事项 |
+| --- | --- | --- |
+| 位图与 SVG | 从 `src/ui/code_editor/markdown/images.rs` 复用安全解码、资源预算、纹理 lease 与预览，补齐动画和多页模型 | 当前静态解码成功不证明 GIF 动画、TIFF 多页或独立文件入口已支持；不扩大现有 SVG 外部资源权限 |
+| PDF | 评估 GUI-free registry 引擎，`hayro` 为优先验证候选；GPUI Kit/Fast 拥有页面虚拟化、纹理释放和文本交互 | 候选不是锁定依赖；密码、文本层、已有批注／表单值及损坏输入需要代表性文件验证，不能直接导入绑定 `gpui-pre` 的 `gpui-pdf` 建立第二套 GUI 类型 |
+| EPUB | 解析容器、阅读顺序、章节和本地资源，按章节加载并呈现正文／图片；书签与阅读偏好独立存储 | 不执行书中脚本，不加载远程资源，不承诺出版方完整 CSS 或固定版式 |
+| CSV 与结构化文本 | 使用保留原文、位置和 token 的解析／编辑模型，将格式操作映射为局部可撤销修改 | `serde_json::Value`、YAML 值树或 XML 扁平映射不能充当所有格式的无损权威模型；不因整体序列化丢注释、重复键、数字或混合内容 |
+| SQLite | 所属 Host 的 headless 只读访问与分页结果，沿用现有 Host/control 所有权 | 当前 GUI 的 `rusqlite` 依赖不等于 server 已具备数据库能力；源库正在写入时不能按普通文件下载 |
+| draw.io | 固定版本的离线本机引擎，通过受控桥接读取内容、接收编辑结果，再由工作台保存 | 在线 `embed.diagrams.net` 不等于离线部署；不能直接复用 Glim 的有限形状预览或 Zorite 白板，也不把尚未验证的 WebView 桥接当成已可用 |
+
+### draw.io 的局部引擎例外
+
+draw.io 是本轮唯一计划引入 WebView／本机图形引擎的格式。例外仅覆盖固定引擎及经过核对的资源，不扩展到任意 HTML 文件、Notebook 输出、项目插件或终端。
+
+工作台向引擎提供当前文档内容；引擎返回编辑结果和状态，不直接选择本机／远端路径或写入原件。桥接校验消息来源、文档身份、请求与版本，拒绝旧文档回调。格式内部 Undo／Redo、dirty、保存、外部冲突、焦点与关闭要经过同一生产流程验证，不能仅用“导出 XML 成功”替代。
+
+离线引擎禁止默认云存储、网络图片、远程导出、插件、自动打开外链或任意本机文件访问。自托管默认端点并不天然离线，必须核对并关闭网络入口；链接与文件访问由工作台按所属 Host 和权限处理。引擎无权限读取未交付的其他文件。
+
+第三方 Rust 依赖继续使用正式 registry，GUI 仍只经 Kit/Fast；不扩大已批准的 pinned Zorite editor/bidi/ratex 源码导入范围。draw.io 引擎、图形库、模板、字体和其他资源分别核对版本、来源、许可与分发通知，不从顶层 Apache-2.0 或 MIT 声明推导整个资源包具有相同条款，不引入 GPL 应用代码。
+
+### 实现前提与验收证据
+
+共享入口和 Host 读取基础优先，其后依次完成位图／SVG、PDF／EPUB、CSV／结构化文本、SQLite／draw.io。顺序不缩减已确认范围；当前没有新增依赖、wire 消息、后台进程或可用性验证结论。
+
+PDF 引擎的格式兼容、保真文本编辑模型、SQLite 的并发读取与 draw.io 的离线集成都是必须验证的技术前提。具体库版本、预算数字及发布资源在验证后确定，不在本节虚构已测结果。验收覆盖独立重开、原件完整性、Undo／Redo、本地／真实远端、两桌面平台和实际 UI；完整清单见产品文档，不以只读源码核对代替。
 
 ## 桌面本地服务
 
