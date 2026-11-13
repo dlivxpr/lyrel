@@ -58,16 +58,15 @@ if ($Scene -eq 'Refusal') {
     if ($Scene -eq 'Clear') { Write-Vt "${esc}[2J${esc}[HCLEARED_SIXEL_274" }
 }
 if ($Scene -eq 'Recovery') {
-    # The producer above has already exited. Trim more than the production 8 MiB
-    # replay ring with ordinary text, then let the operator close and reopen the
-    # window: the accepted image must come back from daemon authority, and this
-    # live marker must be the only new output.
+    # The image producer has exited. Evict its bytes with SGR resets only:
+    # visible filler would wrap and scroll the image out of retained history,
+    # testing normal image retirement instead of same-session restoration.
+    # Reopening must recover the picture without rerunning the producer.
     Write-Vt "`r`nSIXEL_275_RECOVERY_TRIMMING`r`n"
-    $line = 'R' * 1016 + "`r`n"
-    # 520 * 16 * 1018 bytes ≈ 8.5 MiB: more than the production 8 MiB ring and
-    # fewer than the daemon's 10,000 retained text rows.
-    for ($batch = 0; $batch -lt 520; $batch++) {
-        Write-Vt ($line * 16)
+    $batch = "${esc}[0m" * 1024
+    # 2304 * 1024 * 4 bytes = 9 MiB, without moving the cursor or image.
+    for ($index = 0; $index -lt 2304; $index++) {
+        Write-Vt $batch
     }
     Write-Vt "SIXEL_275_RECOVERY_READY close and reopen this window, then press Enter here`r`n"
     [void](Read-Host 'Close/reopen the window, verify the image and AFTER_SIXEL_274, then press Enter')
