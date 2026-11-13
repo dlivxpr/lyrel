@@ -858,6 +858,7 @@ impl DaemonPane {
                 // current context so the first probe answers correctly.
                 let starts_local = state.lock().unwrap().facts.remote().is_none();
                 let mut graphics = owner.map_or_else(|| GraphicsSniffer::new_local(starts_local), |owner| GraphicsSniffer::new_budgeted(starts_local, owner));
+                let mut discovery = crate::core::xtgettcap::Sniffer::default();
                 let mut buf = [0u8; 65536];
 
                 let trace = std::env::var("LYREL_TRACE").is_ok_and(|v| !v.is_empty() && v != "0");
@@ -910,7 +911,7 @@ impl DaemonPane {
                             };
                             let extracted = {
                                 let mut media_locality = || facts_reader.indirect_media_locality(&before);
-                                graphics_reader::extract(raw, &mut clipboard, &mut graphics, &mut media_locality)
+                                graphics_reader::extract(raw, &mut clipboard, &mut graphics, &mut media_locality, &mut discovery)
                             };
                             // Parse once from the stripped slices, without joining ordinary
                             // output. Only cheap OSC metadata precedes the readiness marker;
@@ -1522,6 +1523,7 @@ mod tests {
             let mut clipboard = ClipboardSniffer::default();
             clipboard.set_controller(Some(1), true);
             let mut graphics = GraphicsSniffer::new_local(true);
+            let mut discovery = crate::core::xtgettcap::Sniffer::default();
             let mut pane = test_state(true);
             let (sender, receiver) = mpsc::channel();
             attach_subscriber(&mut pane, sender);
@@ -1530,10 +1532,13 @@ mod tests {
             let gate = OutputGate::new();
             let mut passthrough = Vec::new();
             for chunk in chunks {
-                let extracted =
-                    graphics_reader::extract(chunk, &mut clipboard, &mut graphics, &mut || {
-                        panic!("plain output must not probe host-media locality")
-                    });
+                let extracted = graphics_reader::extract(
+                    chunk,
+                    &mut clipboard,
+                    &mut graphics,
+                    &mut || panic!("plain output must not probe host-media locality"),
+                    &mut discovery,
+                );
                 for bytes in extracted.output() {
                     passthrough.extend_from_slice(bytes);
                 }

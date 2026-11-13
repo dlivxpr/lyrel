@@ -33,7 +33,8 @@ use crate::terminal::command_cursor::{CommandCursorStyle, CommandMark};
 use crate::terminal::parked_cursor::{CursorCut, ParkedCursorRepair, ParkedCursorScanner};
 use crate::terminal::prompt_reflow::{PromptBreak, PromptMark};
 use lyrel_core::core::term_modes::{COLOR_SCHEME_UPDATES, TerminalModes};
-use rio_vt::performer::handler::{Handler as _, Processor};
+use lyrel_core::core::xtgettcap::MirrorProcessor as Processor;
+use rio_vt::performer::handler::Handler as _;
 
 /// One reader lifetime, retired without joining a potentially silent socket.
 pub(super) struct ReaderTask {

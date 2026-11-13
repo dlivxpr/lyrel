@@ -127,6 +127,14 @@ control 的 HELLO 在请求循环前核对版本与 features。增删 wire 消�
 
 同步更新期间，解析、协议应答和输入模式仍实时推进，桌面只延迟发布新的文字、光标和图片帧。结束标记或既有 150 ms fail-safe 解除冻结；CLI `capture --plain` 重建最新收到的状态，不等待 GUI 已提交帧。图形协议范围与历史验收记录见[终端内联图片](/getting-started/concepts#终端内联图片)。
 
+XTGETTCAP 同样只有 daemon 一个实时应答者，不随 controller 附着／脱离转移。
+reader 复用既有有界 control-string framing，Rio public parser 识别 DCS header，完整且不超限的查询才进入
+daemon 的 Rio `Handler::xtgettcap_response`；生成应答按解码名字重写为保守白名单。
+查询 payload 不进入 replay ring、GUI 或 CLI parser，取消／超限查询也不会借普通输出路径绕过限制。
+桌面 callback 对旧 snapshot 中残留的查询保持静默；实际 pane 协商必须确认 `xtgettcap-owner`，
+不能以本机 build 的 feature 列表替代远端 endpoint 的保证。具体白名单和 `8192` 字节限制见
+[终端能力发现](/terminal/mouse-and-scrolling#xtgettcap-discovery)。
+
 <a id="async-lifecycle"></a>
 ## 创建、重连与结果失效
 

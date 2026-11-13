@@ -18,6 +18,7 @@
 ### 修复
 
 - #264：将 Kitty 事件类型协商接入真实 GPUI press／repeat／release 路由，CSI-u、方向键和功能键使用真实 held／keyup 信息；只为实际写入 PTY 的按下配对释放，并在焦点、窗口失活、切屏、模式／命令边界、退出和重连时退役旧配对。有效模式栈、查询与 replay 统一过滤框架缺失的 alternate-key 位，保留 legacy 输入及 ConPTY 已合成的 Enter／Ctrl+J 事件对；IME 预编辑不取得配对，支持关联文本的纯文本提交使用 key code `0`。补充生产输入、真实 PTY／daemon 和精确字节消费者；Windows 实窗、系统中文 IME、真实 SSH 与 macOS 原生验收分别记录，不能由 headless 事件测试代替。
+- #265：复用正式 Rio 的 XTGETTCAP 解码与 response callback，按解码名字仅广告已支持的 256 色／真彩色；未知、未验证、剪贴板、Glyph／Sixel／iTerm2、Rio 产品身份和固定几何均负答。daemon 在附着／脱离／重连中保持单一实时应答者，桌面和历史 replay 不重答；实际 pane endpoint 的 `xtgettcap-owner` feature 缺失时明确要求更新，不自动重启服务，不改变产品级 `TERM`／`TERM_PROGRAM`。原生及真实客户端验收按实际执行记录，不将 headless 协议通过等同于跨平台完整验收。
 
 - #260：终端 `OSC 4/10/11/12` 查询与生产绘制统一使用当前主题的有效 ANSI、默认前景／背景和光标颜色，保留固定扩展色位、亮色可读性、同步输出提交与历史重放副作用抑制；不启用程序驱动动态改色。Windows 独立 target 的真实 PTY → daemon → 生产终端颜色消费者完成有效 RED／GREEN，既有查询重放消费者与四项调色板边界测试通过，均无忽略项；新增 `scripts/terminal-color-query-scene.mjs` 对照入口。原生像素、WSL／真实 SSH 与 macOS 未在本票分支验收，不以返回值或 headless 绘制断言替代。
 - 修复 Markdown 图片后台加载错误的本地化：worker 保留错误类别，回到 UI 线程后才翻译，避免中文界面混入英文 SVG／容量／重定向提示；资源消费者显式覆盖中文界面，保留外部引用拒绝和禁止重定向断言。
