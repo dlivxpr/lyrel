@@ -71,6 +71,41 @@ pub fn build() -> [ColorRgb; 256] {
     p
 }
 
+/// The 256-entry table a pane resolves indexed colours through: the fixed
+/// base with the active theme's sixteen ANSI slots overlaid, including the
+/// `theme_legible_palette` contrast rescue already folded into `ansi16` at
+/// theme-application time. Painting, prompt backdrops and query replies must
+/// share this one view — a query answered from the bare base would report
+/// colours the cells never wear once a preset owns the first sixteen slots.
+pub fn effective(base: &[ColorRgb; 256], active: Option<&ActivePalette>) -> [ColorRgb; 256] {
+    let mut table = *base;
+    if let Some(active) = active {
+        table[..16].copy_from_slice(&active.ansi16);
+    }
+    table
+}
+
+/// Resolve the same indexed/default/cursor colours as the painter without
+/// copying the entire effective table for a single query. Theme ANSI slots
+/// include the legibility adjustment; all other indexed entries stay fixed.
+pub fn query_color(
+    index: usize,
+    table: &[ColorRgb; 256],
+    active: Option<&ActivePalette>,
+    default_fg: ColorRgb,
+    default_bg: ColorRgb,
+    caret: ColorRgb,
+) -> ColorRgb {
+    match (index, active) {
+        (i, Some(active)) if i < 16 => active.ansi16[i],
+        (i, _) if i < 256 => table[i],
+        (256, _) => default_fg,
+        (257, _) => default_bg,
+        (258, _) => caret,
+        _ => default_fg,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -97,5 +132,57 @@ mod tests {
         assert_eq!(p[255].r, 8 + 23 * 10);
         assert_eq!(p[240].r, p[240].g);
         assert_eq!(p[240].g, p[240].b);
+    }
+
+    #[test]
+    fn effective_overlays_only_the_sixteen_theme_slots() {
+        let base = build();
+        let mut ansi16 = [ColorRgb { r: 0, g: 0, b: 0 }; 16];
+        ansi16[1] = ColorRgb { r: 1, g: 2, b: 3 };
+        let active = ActivePalette {
+            ansi16,
+            sel_bg: ColorRgb { r: 0, g: 0, b: 0 },
+        };
+
+        let none = effective(&base, None);
+        assert_eq!(none, base, "no theme overlay keeps the base table");
+
+        let overlaid = effective(&base, Some(&active));
+        assert_eq!(overlaid[1], ansi16[1]);
+        for i in [0usize, 2, 8, 15] {
+            assert_eq!(overlaid[i], ansi16[i]);
+        }
+        assert_eq!(overlaid[16], base[16], "the cube is the theme's to keep");
+        assert_eq!(overlaid[255], base[255]);
+    }
+
+    #[test]
+    fn query_color_mirrors_the_painter_named_and_fallback_rules() {
+        let table = build();
+        let fg = ColorRgb {
+            r: 10,
+            g: 11,
+            b: 12,
+        };
+        let bg = ColorRgb {
+            r: 20,
+            g: 21,
+            b: 22,
+        };
+        let caret = ColorRgb {
+            r: 30,
+            g: 31,
+            b: 32,
+        };
+
+        assert_eq!(query_color(200, &table, None, fg, bg, caret), table[200]);
+        assert_eq!(query_color(256, &table, None, fg, bg, caret), fg);
+        assert_eq!(query_color(257, &table, None, fg, bg, caret), bg);
+        assert_eq!(query_color(258, &table, None, fg, bg, caret), caret);
+        assert_eq!(
+            query_color(259, &table, None, fg, bg, caret),
+            fg,
+            "past the named slots the painter resolves the default foreground"
+        );
     }
 }
