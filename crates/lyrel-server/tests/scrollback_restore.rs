@@ -924,9 +924,22 @@ fn a_replacement_shell_does_not_reactivate_old_glyph_registrations() {
     // query to this stream as the opted-in controller; answering `system:
     // false` makes the pane's own glossary the only possible source of a
     // non-empty status.
-    ClientMsg::Input(b"printf '\\033_25a1;q;cp=100000\\033\\\\'; echo lyrel_query_sent\r".to_vec())
+    const EMPTY_REPLY: &[u8] = b"\x1b_25a1;q;cp=100000;status=\x1b\\";
+    let reply_path = instance.path().join("glyph-query-reply.bin");
+    let quoted_reply = lyrel_core::core::shell_quote::quote_for_shell(
+        reply_path.to_str().expect("temporary reply path is UTF-8"),
+        Some("/bin/sh"),
+    );
+    let query = format!(
+        "(lyrel_mode=$(stty -g); trap 'stty \"$lyrel_mode\"' 0; stty raw -echo; \
+         printf '\\033_25a1;q;cp=100000\\033\\\\'; \
+         dd bs=1 count={} of={} 2>/dev/null); printf 'lyrel_query_%s\\n' captured\r",
+        EMPTY_REPLY.len(),
+        quoted_reply,
+    );
+    ClientMsg::Input(query.into_bytes())
         .encode(&mut stream)
-        .expect("send the coverage query");
+        .expect("send the coverage query to a raw PTY reader");
     stream
         .set_read_timeout(Some(Duration::from_secs(10)))
         .expect("bound the query round trip");
@@ -958,13 +971,13 @@ fn a_replacement_shell_does_not_reactivate_old_glyph_registrations() {
     .encode(&mut stream)
     .expect("answer the font coverage query");
 
-    // The daemon writes the single `q` reply to the pane's tty. Its shell
-    // echo is the observable status; afterwards a marker proves the shell is
-    // still cleanly consuming input (^U clears the pending reply line).
-    while !windows_contain(&live, b"25a1;q;cp=100000;status=") {
+    // Capture the actual reply before the shell's line editor can transform
+    // ESC/ST into redisplay operations. The split marker cannot be satisfied
+    // by the command's input echo and follows dd plus restoration of tty modes.
+    while !windows_contain(&live, b"lyrel_query_captured") {
         assert!(
             Instant::now() < deadline,
-            "the coverage answer never reached the new shell"
+            "the coverage answer never reached the new shell's raw reader"
         );
         match DaemonMsg::read(&mut stream).expect("the pane answers") {
             DaemonMsg::Output(bytes) | DaemonMsg::Snapshot(bytes) => live.extend(bytes),
@@ -973,9 +986,9 @@ fn a_replacement_shell_does_not_reactivate_old_glyph_registrations() {
             _ => {}
         }
     }
-    ClientMsg::Input(b"\x15echo lyrel_glyph_after_query\r".to_vec())
+    ClientMsg::Input(b"printf 'lyrel_glyph_%s\\n' after_query\r".to_vec())
         .encode(&mut stream)
-        .expect("the shell still takes input");
+        .expect("the shell still takes normal input after restoring its tty");
     while !windows_contain(&live, b"lyrel_glyph_after_query") {
         assert!(
             Instant::now() < deadline,
@@ -988,22 +1001,15 @@ fn a_replacement_shell_does_not_reactivate_old_glyph_registrations() {
             _ => {}
         }
     }
-    let status_at = live
-        .windows(b"25a1;q;cp=100000;status=".len())
-        .position(|w| w == b"25a1;q;cp=100000;status=")
-        .expect("the echoed reply was collected");
-    let after_status = live[status_at + b"25a1;q;cp=100000;status=".len()..]
-        .first()
-        .copied();
     assert_eq!(
         projected_frames, 0,
         "the restored pane's empty glossary is projected exactly once, at attach"
     );
-    assert!(
-        matches!(after_status, Some(0x1b) | Some(b'^')),
-        "with no glossary and no system coverage the status must be empty; \
-         a resurrected registry would answer `glossary` (saw {:?})",
-        String::from_utf8_lossy(&live[status_at..(status_at + 60).min(live.len())])
+    assert_eq!(
+        std::fs::read(&reply_path).expect("the raw PTY reader captured the reply"),
+        EMPTY_REPLY,
+        "without glossary or system coverage the complete status must be empty; \
+         a resurrected registry would answer glossary"
     );
     assert!(
         !windows_contain(&live, b"\x1b_25a1;r"),
