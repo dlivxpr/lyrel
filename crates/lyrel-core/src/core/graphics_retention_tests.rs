@@ -2446,3 +2446,92 @@ fn retention_daemon_two_visible_panes_retain_and_replay_sixty_distinct_1080p_fra
         daemon.panes().kill(pane_id).unwrap();
     }
 }
+
+// #277: iTerm2 `File=` admissions share the same pane/daemon metadata budget
+// and generation retirement as Kitty resources; there is no second image
+// store or identity namespace. A 1x1 PNG keeps this test inside the small
+// decoded limits; the real-producer sized inputs live in the GUI/SSH seams.
+#[test]
+fn iterm2_shares_the_metadata_budget_and_session_reset_retires_identities() {
+    use base64::Engine as _;
+    let daemon = Daemon::with_limits(1024, false);
+    let mut a = daemon.spawn();
+    // The Kitty admission consumes both metadata tickets the budget allows.
+    a.red("a=T,i=1,p=1,c=1,r=1,C=1");
+    let png = {
+        let mut bytes = Vec::new();
+        let mut encoder = png::Encoder::new(&mut bytes, 1, 1);
+        encoder.set_color(png::ColorType::Rgba);
+        encoder.set_depth(png::BitDepth::Eight);
+        encoder
+            .write_header()
+            .unwrap()
+            .write_image_data(&[0xff, 0, 0, 0xff])
+            .unwrap();
+        bytes
+    };
+    let mut refused = b"\x1b]1337;File=inline=1;name=Zm9v:".to_vec();
+    refused.extend_from_slice(
+        base64::engine::general_purpose::STANDARD
+            .encode(&png)
+            .as_bytes(),
+    );
+    refused.push(0x07);
+    a.idle(&refused);
+    assert!(
+        !a.updates.iter().any(|update| matches!(
+            update,
+            GraphicsUpdate::Resource { .. }
+                | GraphicsUpdate::Place(_)
+                | GraphicsUpdate::Remove { .. }
+                | GraphicsUpdate::Evicted { .. }
+        )),
+        "a metadata-exhausted iTerm2 admission produces no resource, placement, removal or eviction"
+    );
+    assert!(
+        !a.text.windows(2).any(|part| part == b"\x1bD"),
+        "a refused iTerm2 admission emits no cursor-advancing output"
+    );
+    // Freeing the Kitty placements reopens the same shared budget.
+    a.idle(b"\x1b_Ga=d,d=A,q=2\x1b\\");
+    a.idle(&refused);
+    let accepted = a
+        .updates
+        .iter()
+        .filter_map(|update| match update {
+            GraphicsUpdate::Place(placement) => Some(placement.clone()),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        accepted.len(),
+        1,
+        "the freed budget admits the iTerm2 image"
+    );
+    assert_eq!(accepted[0].z, -1);
+    // A full reset retires this session's identities: the stale pending work
+    // cannot revive the resource, and a new one is accepted under a fresh
+    // generation as ordinary session state.
+    a.idle(b"\x1bc");
+    a.idle(&refused);
+    let reset_accepted = a
+        .updates
+        .iter()
+        .filter_map(|update| match update {
+            GraphicsUpdate::Resource { key, .. } => Some(*key),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(reset_accepted.len(), 1);
+    let reset_placements: Vec<_> = a
+        .updates
+        .iter()
+        .filter_map(|update| match update {
+            GraphicsUpdate::Place(placement) => Some(placement.key),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(reset_placements.len(), 1);
+    a.exit();
+    daemon.panes().kill(a.session.pane_id()).unwrap();
+}
