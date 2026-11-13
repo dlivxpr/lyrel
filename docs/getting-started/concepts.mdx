@@ -470,9 +470,11 @@ Windows 的隔离候选 pane 可执行 `pwsh -NoProfile -File scripts/sixel-stat
 
 #### iTerm2 恢复、边界与发现（#277）
 
-已接受的静态 iTerm2 图片与 Kitty／Sixel 共用同一 pane／daemon 资源、元数据预算和按代退役：producer 停止且其 `OSC 1337` 原文滚出 8 MiB 文本回放环后，新 production consumer 通过 daemon 保留的资源与 placement 恢复像素，不重放 producer。预算测试证明 iTerm2 `File=` 消耗与 Kitty 相同的 metadata 票证，1024-byte 压力预算下先耗尽即拒收，`a=d` 释放后正常准入；`\x1bc` 全量 reset 退役本会话身份，旧 generation 的挂起工作不能复活资源，新身份在新代重新接受。滚动区域最底行的 iTerm2 放置随文本网格一起滚动并保持锚定行，`doNotMoveCursor=1` 在同一次滚动后恢复前置光标；CAN 打断、ESC 截断、超维 PNG、超 8 KiB 头部与 fragment=7 分片均按既有边界判定，拒收不新增资源、不移动光标、不吞掉后续普通文本。GUI consumer 回归以第二段真实官方 `imgcat -l -n -W 40px -H 20px` 输出（336 bytes，SHA-256 `dc577e1046824a01f6222a29f8a3567b8ff0a199d292b8b27535175a66613ae9`）为 producer，测试运行时先重新哈希再驱动断言；fragmented 发送、detach 后原 producer `exit 0`、一次性 `ring_flood` 独立进程写满 8 MiB 环退出、fresh consumer 恢复 placement／像素／不重复 STAT 的断言均保留实际输出计数。
+静态 iTerm2 图片复用 Kitty／Sixel 的 pane／daemon 资源、placement、元数据预算与退役机制，不另建图片存储。新增后台生产消费者回归已覆盖第二段真实官方 `imgcat -l -n -W 40px -H 20px` 输出（336 bytes，SHA-256 `dc577e1046824a01f6222a29f8a3567b8ff0a199d292b8b27535175a66613ae9`）的长输出后 fresh consumer 恢复，以及滚动区域、`doNotMoveCursor=1`、fragment=7 分片、CAN／ESC 中断和超维／超头部输入的非破坏性拒收。该 GUI 恢复场景保留原 sender 并比较发送计数，不能冒称已验证原进程退出。
 
-发现（discovery）结论：iTerm2 `OSC 1337` 没有对应的 terminfo capability、DA1 attribute 或 `XTSMGRAPHICS` item，`XTGETTCAP` 白名单继续只回答已验证的 `Co`/`colors`/`RGB`。官方 feature reporting 的 `F`/`FILE` 覆盖整个 `File` 家族（文件下载、lossy 图片与视频），本实现只支持静态 inline PNG/JPEG，故对 `F` 保持负答、不冒充 iTerm.app 身份。能力证明即协商 endpoint：pane protocol `19` 的 placement 才携带 `display_width`/`display_height`，旧 daemon 或远端 server 在协商阶段被明确拒绝并提示更新，不静默降级、不自动上传或重启服务；真实 SSH 断言 `endpoint.protocol == PROTOCOL_VERSION` 与实际 feature 列表作为身份证据。真实 SSH 恢复与 Windows 原生像素验收按父规格边界另行执行，本切片不宣称 macOS 结果。
+本切片的验收尚未完成：resize 场景仍在定位初始 PTY 发送往返超时；新增共享 metadata 压力／reset 测试尚未执行，不能以 `cargo check --lib` 代替测试编译与运行。真实 SSH 场景已编写原 producer `exit 0`、独立 `ring_flood` 退出后再 fresh attach 的断言，但当前尚未执行；Windows 原生像素及最终 WSL／SSH 结果仍待单独记录，不用后台 GUI 用例或未运行的断言替代。
+
+发现（discovery）结论：不为静态 iTerm2 适配器伪造 terminfo capability、DA1 attribute 或 `XTSMGRAPHICS` item；`XTGETTCAP` 白名单继续只回答已验证的 `Co`／`colors`／`RGB`。[官方 feature reporting](https://iterm2.com/feature-reporting/) 的 `FILE` 能力涵盖文件下载及其他媒体形式，本实现仅支持静态 inline PNG/JPEG，不广告该广泛能力，也不冒充 iTerm.app。pane 协议从 `19` 起携带 `display_width`／`display_height`；实际连接仍须满足当前版本与 endpoint 的协商要求，不能拿本机 GUI 版本代替远端身份。旧后端必须明确提示更新，不静默降级、不自动替换已运行的 server 或重启会话。本节不宣称 macOS 原生行为已经验收。
 
 #### 当前实现：终端布局与屏幕生命周期（#42）
 

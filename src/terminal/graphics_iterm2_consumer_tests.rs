@@ -905,7 +905,11 @@ fn iterm2_fragmented_cancelled_truncated_and_oversized_inputs_are_nondestructive
 fn iterm2_resize_keeps_the_image_on_its_text_row(cx: &mut TestAppContext) {
     crate::core::config::pin_test_config_dir();
     cx.executor().allow_parking();
-    let daemon = GraphicsDaemonProcess::start();
+    let daemon = GraphicsDaemonProcess::start_with(|command, _| {
+        command
+            .env("LYREL_ITERM277_DIAG", "1")
+            .stderr(std::process::Stdio::inherit());
+    });
     let pane = daemon.spawn();
     let stream = daemon.stream(pane);
     let mut controller = stream.try_clone().unwrap();
@@ -958,8 +962,9 @@ fn iterm2_resize_keeps_the_image_on_its_text_row(cx: &mut TestAppContext) {
         }
         assert!(
             std::time::Instant::now() < diagnostic_deadline,
-            "[DEBUG-iterm277] resize setup did not complete: {}",
-            view.read_with(cx, |view, _| view.scrollback_text())
+            "[DEBUG-iterm277] resize setup did not complete: {} graphics={}",
+            view.read_with(cx, |view, _| view.scrollback_text()),
+            view.read_with(cx, |view, _| view.terminal.images().recovery_diagnostics())
         );
         graphics_consumer_progress(cx);
     }
