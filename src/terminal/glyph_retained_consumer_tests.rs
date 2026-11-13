@@ -264,31 +264,26 @@ fn glyph_reading_rows_keep_their_captured_definition_across_replace_and_clear(
 fn glyph_synchronized_picture_keeps_its_committed_version_until_esu(cx: &mut TestAppContext) {
     crate::core::config::pin_test_config_dir();
     cx.executor().allow_parking();
-    let daemon = GraphicsDaemonProcess::start();
-    let pane = daemon.spawn();
     cx.update(|cx| {
         gpui_kit::component::init(cx);
         cx.set_global(Config::default());
     });
-    let (view, window) = graphics_rooted_consumer(cx, pane, daemon.stream(pane));
-    let replies = tempfile::TempDir::new().unwrap();
-    let cp = char::from_u32(GLYPH_CP).unwrap();
-
-    let reply = glyph_send(
-        &view,
+    // ConPTY may emit its own ESU, and a PTY completion barrier may outlast
+    // the 150 ms fail-safe. Test atomic presentation at the existing ordered
+    // daemon-stream seam; the other Glyph consumers retain the full PTY path.
+    let (client, mut sender) = test_stream_pair();
+    let (view, window) = graphics_build_rooted_consumer_at(
         cx,
-        1,
-        &replies.path().join("r1"),
-        &glyph_register(GLYPH_CP, &glyph_square(1000), 1),
-        1,
+        174,
+        client,
+        Vec::new(),
+        TermSize::new(80, 24),
+        PtySource::Raw,
     );
-    assert_eq!(
-        reply,
-        format!("\x1b_25a1;r;cp={GLYPH_CP:x};status=0\x1b\\").into_bytes()
-    );
-    // The PTY fixture writes its completion marker on row 2.
-    let display = format!("\x1b[2J\x1b[H\x1b[3;5H{cp}");
-    graphics_send_fixture(&view, cx, 2, display.as_bytes());
+    let cp = char::from_u32(GLYPH_CP).unwrap();
+    let mut scene = glyph_register(GLYPH_CP, &glyph_square(1000), 0);
+    scene.extend_from_slice(format!("\x1b[2J\x1b[H\x1b[3;5H{cp}").as_bytes());
+    DaemonMsg::Output(scene).encode(&mut sender).unwrap();
     glyph_wait(cx, "the committed glyph frame", |cx| {
         glyph_presentation_force_frame(window, &view, cx);
         view.read_with(cx, |view, _| {
@@ -302,33 +297,34 @@ fn glyph_synchronized_picture_keeps_its_committed_version_until_esu(cx: &mut Tes
     assert_eq!(committed.len(), 1);
     let square = committed[0].0;
 
-    // Begin a synchronized update. The established 150 ms fail-safe belongs
-    // to the separate test below, so this atomicity test owns its clock origin.
-    graphics_send_fixture(&view, cx, 3, b"\x1b[?2026h");
+    // Pin only this atomicity test's clock while the real reader still owns
+    // BSU/ESU and rendering. The separate quiet-stream test keeps real time.
+    DaemonMsg::Output(b"\x1b[?2026h".to_vec())
+        .encode(&mut sender)
+        .unwrap();
+    DaemonMsg::Cwd(std::env::temp_dir())
+        .encode(&mut sender)
+        .unwrap();
     glyph_wait(cx, "the synchronized update was parsed", |cx| {
         view.read_with(cx, |view, _| {
-            view.terminal.term.lock().synchronized_output()
+            let mut term = view.terminal.term.lock();
+            if !term.synchronized_output() {
+                return false;
+            }
+            term.sync_update_started =
+                Some(rio_vt::time::Instant::now() + std::time::Duration::from_secs(60));
+            true
         })
-    });
-    view.read_with(cx, |view, _| {
-        view.terminal.term.lock().sync_update_started =
-            Some(rio_vt::time::Instant::now() + std::time::Duration::from_secs(60));
     });
 
     // Replace the registration while the frame is unfinished.
     let before = view.read_with(cx, |view, _| glyph_presentation_version(view, GLYPH_CP));
-    let reply = glyph_send(
-        &view,
-        cx,
-        4,
-        &replies.path().join("r4"),
-        &glyph_register(GLYPH_CP, &glyph_rect(2000, 500), 1),
-        1,
-    );
-    assert_eq!(
-        reply,
-        format!("\x1b_25a1;r;cp={GLYPH_CP:x};status=0\x1b\\").into_bytes()
-    );
+    DaemonMsg::Output(glyph_register(GLYPH_CP, &glyph_rect(2000, 500), 0))
+        .encode(&mut sender)
+        .unwrap();
+    DaemonMsg::Cwd(std::env::temp_dir())
+        .encode(&mut sender)
+        .unwrap();
     glyph_presentation_wait_version(&view, cx, GLYPH_CP, before);
 
     for paint in 0..2 {
@@ -346,7 +342,12 @@ fn glyph_synchronized_picture_keeps_its_committed_version_until_esu(cx: &mut Tes
         "the repaint must not end the synchronized update"
     );
 
-    graphics_send_fixture(&view, cx, 5, b"\x1b[?2026l");
+    DaemonMsg::Output(b"\x1b[?2026l".to_vec())
+        .encode(&mut sender)
+        .unwrap();
+    DaemonMsg::Cwd(std::env::temp_dir())
+        .encode(&mut sender)
+        .unwrap();
     glyph_wait(cx, "ESU publishes the replacement", |cx| {
         let paths = glyph_presentation_paths(window, &view, cx, row, col);
         paths.len() == 1 && paths[0].0 != square
@@ -364,31 +365,25 @@ fn glyph_synchronized_picture_keeps_its_committed_version_until_the_fail_safe(
 ) {
     crate::core::config::pin_test_config_dir();
     cx.executor().allow_parking();
-    let daemon = GraphicsDaemonProcess::start();
-    let pane = daemon.spawn();
     cx.update(|cx| {
         gpui_kit::component::init(cx);
         cx.set_global(Config::default());
     });
-    let (view, window) = graphics_rooted_consumer(cx, pane, daemon.stream(pane));
-    let replies = tempfile::TempDir::new().unwrap();
-    let cp = char::from_u32(GLYPH_CP).unwrap();
-
-    let reply = glyph_send(
-        &view,
+    // The ordered stream isolates the Glyph presentation lifetime from
+    // ConPTY's own ESU and the PTY fixture's completion round trip.
+    let (client, mut sender) = test_stream_pair();
+    let (view, window) = graphics_build_rooted_consumer_at(
         cx,
-        1,
-        &replies.path().join("r1"),
-        &glyph_register(GLYPH_CP, &glyph_square(1000), 1),
-        1,
+        175,
+        client,
+        Vec::new(),
+        TermSize::new(80, 24),
+        PtySource::Raw,
     );
-    assert_eq!(
-        reply,
-        format!("\x1b_25a1;r;cp={GLYPH_CP:x};status=0\x1b\\").into_bytes()
-    );
-    // Keep the glyph below the fixture's row-2 completion marker.
-    let display = format!("\x1b[2J\x1b[H\x1b[3;5H{cp}");
-    graphics_send_fixture(&view, cx, 2, display.as_bytes());
+    let cp = char::from_u32(GLYPH_CP).unwrap();
+    let mut scene = glyph_register(GLYPH_CP, &glyph_square(1000), 0);
+    scene.extend_from_slice(format!("\x1b[2J\x1b[H\x1b[3;5H{cp}").as_bytes());
+    DaemonMsg::Output(scene).encode(&mut sender).unwrap();
     glyph_wait(cx, "the committed glyph frame", |cx| {
         glyph_presentation_force_frame(window, &view, cx);
         view.read_with(cx, |view, _| {
@@ -402,30 +397,31 @@ fn glyph_synchronized_picture_keeps_its_committed_version_until_the_fail_safe(
     assert_eq!(committed.len(), 1);
     let square = committed[0].0;
 
-    graphics_send_fixture(&view, cx, 3, b"\x1b[?2026h");
+    DaemonMsg::Output(b"\x1b[?2026h".to_vec())
+        .encode(&mut sender)
+        .unwrap();
+    DaemonMsg::Cwd(std::env::temp_dir())
+        .encode(&mut sender)
+        .unwrap();
     glyph_wait(cx, "the synchronized update was parsed", |cx| {
         view.read_with(cx, |view, _| {
-            view.terminal.term.lock().synchronized_output()
+            let mut term = view.terminal.term.lock();
+            if !term.synchronized_output() {
+                return false;
+            }
+            term.sync_update_started =
+                Some(rio_vt::time::Instant::now() + std::time::Duration::from_secs(60));
+            true
         })
-    });
-    view.read_with(cx, |view, _| {
-        view.terminal.term.lock().sync_update_started =
-            Some(rio_vt::time::Instant::now() + std::time::Duration::from_secs(60));
     });
 
     let before = view.read_with(cx, |view, _| glyph_presentation_version(view, GLYPH_CP));
-    let reply = glyph_send(
-        &view,
-        cx,
-        4,
-        &replies.path().join("r4"),
-        &glyph_register(GLYPH_CP, &glyph_rect(2000, 500), 1),
-        1,
-    );
-    assert_eq!(
-        reply,
-        format!("\x1b_25a1;r;cp={GLYPH_CP:x};status=0\x1b\\").into_bytes()
-    );
+    DaemonMsg::Output(glyph_register(GLYPH_CP, &glyph_rect(2000, 500), 0))
+        .encode(&mut sender)
+        .unwrap();
+    DaemonMsg::Cwd(std::env::temp_dir())
+        .encode(&mut sender)
+        .unwrap();
     glyph_presentation_wait_version(&view, cx, GLYPH_CP, before);
     let held = glyph_presentation_paths(window, &view, cx, row, col);
     assert_eq!(held.len(), 1);
@@ -439,6 +435,10 @@ fn glyph_synchronized_picture_keeps_its_committed_version_until_the_fail_safe(
         view.terminal.term.lock().sync_update_started =
             Some(rio_vt::time::Instant::now() - std::time::Duration::from_secs(1));
     });
+    // Wake the real reader after backdating the clock; no ESU is sent.
+    DaemonMsg::Cwd(std::env::temp_dir())
+        .encode(&mut sender)
+        .unwrap();
     glyph_wait(cx, "the fail-safe publishes the replacement", |cx| {
         let paths = glyph_presentation_paths(window, &view, cx, row, col);
         paths.len() == 1 && paths[0].0 != square
