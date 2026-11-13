@@ -27,6 +27,7 @@
 
 ### 修复
 
+- #261：颜色 handoff 回归的完成标记改为由 `printf` 拼接生成，避免 PTY 输入回显在颜色设置执行前误触发 handoff；保留移交后的索引色、默认背景色与同一 shell 断言，不修改生产状态移交或超时。
 - #268：新 shell 的 Glyph 隔离回归在真实 PTY 中以 raw mode 采集完整回复字节，退出采集后恢复原 tty 模式并再次验证正常 shell 输入；不再将 macOS 行编辑器对 ESC／ST 的回显重绘误判为 glossary 复活。保留磁盘 APC 剥离、空权威 glossary、单次投影与历史 ACK 不重放断言，不放宽回复内容或生产超时。
 - #277：修复同一次 PTY read 中图片后的 APC／OSC 提前释放已完成 iTerm2 source 工作额度、导致 daemon reader panic 与后续文字停滞；保留各图片到有序移交的额度，base64 在原编码 buffer 内压缩并在解码分配前预留工作空间，畸形 padding 拒收而不下溢。不通过延长往返超时掩盖故障。
 - #264：绘制时的 `keyboard_events` key context 与其他 frame facts 一起采样，不再经 `key_flags()` 阻塞等待 reader 持有的 grid；实际按键路由仍读取 live 模式。保留无 prompt 与 prompt 两个既有竞争绘制回归，不通过延长超时掩盖等待。

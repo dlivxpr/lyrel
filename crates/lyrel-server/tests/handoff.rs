@@ -403,8 +403,9 @@ fn a_handoff_keeps_the_pane_colour_overrides() {
     session
         .set_recv_timeout(Some(STREAM_WITHIN))
         .expect("bound the stream reads");
+    // A literal echo marker can arrive before the colour-setting printf runs.
     session
-        .input(b"printf '\\033]4;1;#112233\\007\\033]11;#101112\\007'; echo lyrel_colors_set\r")
+        .input(b"printf '\\033]4;1;#112233\\007\\033]11;#101112\\007'; printf 'lyrel_colors_%s\\n' set\r")
         .expect("the shell takes input");
     collect_until(&mut session, b"lyrel_colors_set");
     drop(session);
