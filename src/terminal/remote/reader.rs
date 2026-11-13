@@ -52,6 +52,7 @@ impl ReaderTask {
         signals: ReaderSignals,
         writer: LinkSender,
         viewport_reporter: GraphicsViewportReporter,
+        glyph_generation: u64,
     ) -> Self {
         let pressure_displayed = viewport_reporter.displayed();
         let pressure_term = Arc::downgrade(&term);
@@ -97,7 +98,7 @@ impl ReaderTask {
             .name("lyrel-remote-reader".to_string())
             .spawn(move || {
                 crate::core::threads::promote_to_user_interactive();
-                FrameReader::new(buffered).consume(
+                FrameReader::new(buffered, glyph_generation).consume(
                     term,
                     proxy,
                     read_half,
@@ -149,13 +150,14 @@ struct FrameReader {
     prompt_break: PromptBreak,
     modes: TerminalModes,
     report_scheme: bool,
+    glyph_generation: u64,
     pending: Vec<u8>,
     scratch: Vec<u8>,
     out_batch: Vec<u8>,
 }
 
 impl FrameReader {
-    fn new(buffered: Vec<u8>) -> Self {
+    fn new(buffered: Vec<u8>, glyph_generation: u64) -> Self {
         Self {
             processor: Processor::default(),
             keyboard: KeyboardStacks::default(),
@@ -175,6 +177,7 @@ impl FrameReader {
             prompt_break: PromptBreak::default(),
             modes: TerminalModes::new(),
             report_scheme: false,
+            glyph_generation,
             pending: buffered,
             scratch: vec![0u8; 256 * 1024],
             out_batch: Vec::new(),
@@ -209,6 +212,7 @@ impl FrameReader {
             mut prompt_break,
             mut modes,
             mut report_scheme,
+            glyph_generation,
             mut pending,
             mut scratch,
             mut out_batch,
@@ -321,6 +325,8 @@ impl FrameReader {
                                     store: &proxy.parse_state.glyphs,
                                     authority: &proxy.parse_state.glyph_authority,
                                     denied: &proxy.parse_state.glyph_denied,
+                                    generation: &proxy.parse_state.glyph_generation,
+                                    reader: glyph_generation,
                                 }),
                                 Some(colors.as_ref()),
                                 &quit,
@@ -524,11 +530,11 @@ impl FrameReader {
                             cuts,
                             Some(&proxy.parse_state.history_limit),
                             Some(&proxy.parse_state.presentation),
-                            Some(crate::terminal::glyph::GlyphApply {
-                                store: &proxy.parse_state.glyphs,
-                                authority: &proxy.parse_state.glyph_authority,
-                                denied: &proxy.parse_state.glyph_denied,
-                            }),
+                            // Replayed glyph bodies are not authority: their
+                            // original bytes may have been trimmed, rejected,
+                            // or written by an older daemon that never owned
+                            // the glossary. The projection follows the ring.
+                            None,
                             None,
                             &quit,
                             |term, cut| match cut {
@@ -591,6 +597,53 @@ impl FrameReader {
                                 "ignoring an undecodable pane colour frame ({} bytes)",
                                 frame.len()
                             ),
+                        }
+                    }
+                    DaemonMsg::GlyphState(frame) => {
+                        flush_batch!();
+                        if proxy.parse_state.glyph_generation.load(Ordering::Relaxed)
+                            != glyph_generation
+                            || !proxy.parse_state.glyph_authority.load(Ordering::Relaxed)
+                            || !proxy.parse_state.glyph_state.load(Ordering::Relaxed)
+                        {
+                            continue;
+                        }
+                        let Some(frame) =
+                            lyrel_core::core::glyph_protocol::GlyphFrame::decode(&frame)
+                        else {
+                            log::warn!("ignoring an undecodable glyph state frame");
+                            continue;
+                        };
+                        let mut entries = Vec::with_capacity(frame.glyphs().len());
+                        let mut valid = true;
+                        for glyph in frame.glyphs() {
+                            match rio_graphics::glyph::glyf_decode::decode(&glyph.glyf) {
+                                Ok(outline) => {
+                                    entries.push(crate::terminal::glyph::GlyphReplayEntry {
+                                        cp: glyph.cp,
+                                        outline,
+                                        upm: glyph.upm,
+                                        width: glyph.width,
+                                        layout: glyph.layout,
+                                    });
+                                }
+                                Err(error) => {
+                                    log::warn!(
+                                        "ignoring glyph state entry for cp {:x}: {error:?}",
+                                        glyph.cp
+                                    );
+                                    valid = false;
+                                    break;
+                                }
+                            }
+                        }
+                        if valid
+                            && proxy
+                                .parse_state
+                                .glyphs
+                                .apply_snapshot(frame.generation(), entries)
+                        {
+                            proxy.send(PaneEvent::Wakeup);
                         }
                     }
                     DaemonMsg::Output(bytes) => {

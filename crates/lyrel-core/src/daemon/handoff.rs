@@ -106,6 +106,11 @@ struct PaneRecord {
     /// Length of this pane's ring in the data section, which follows the
     /// manifest in pane order.
     ring_len: u32,
+    /// Length of this pane's encoded glyph projection. All projections follow
+    /// every ring, so a reader that predates the field still finds its rings
+    /// at the same offsets and ignores the trailing data.
+    #[serde(default)]
+    glyph_len: u32,
 }
 
 /// What this process was told on the command line, if it was started as the far
@@ -230,10 +235,12 @@ pub fn take_over(
 fn stage(panes: &[Carried], next_pane_id: u64) -> std::io::Result<std::fs::File> {
     let mut records = Vec::with_capacity(panes.len());
     let mut data = Vec::new();
+    let mut glyph_data = Vec::new();
     for pane in panes {
         // The title travels in the record's own `osc_title` field, not in the
         // ring blob.
         let encoded = crate::daemon::scrollback::encode(&pane.ring, None);
+        let glyphs = pane.glyphs.clone().unwrap_or_default();
         records.push(PaneRecord {
             id: pane.id,
             owner: pane.owner.clone(),
@@ -255,9 +262,12 @@ fn stage(panes: &[Carried], next_pane_id: u64) -> std::io::Result<std::fs::File>
             head_modes: pane.head_modes.clone(),
             colors: pane.colors.clone(),
             ring_len: encoded.len() as u32,
+            glyph_len: glyphs.len() as u32,
         });
         data.extend_from_slice(&encoded);
+        glyph_data.extend_from_slice(&glyphs);
     }
+    data.extend_from_slice(&glyph_data);
 
     let manifest = serde_json::to_vec(&Manifest {
         next_pane_id,
@@ -361,8 +371,8 @@ pub fn adopt(fd: RawFd) -> Option<Adopted> {
     };
 
     let mut cursor = 4 + manifest_len;
-    let mut panes = Vec::with_capacity(manifest.panes.len());
-    for record in manifest.panes {
+    let mut rings = Vec::with_capacity(manifest.panes.len());
+    for record in &manifest.panes {
         let end = cursor + record.ring_len as usize;
         let ring = raw
             .get(cursor..end)
@@ -370,6 +380,24 @@ pub fn adopt(fd: RawFd) -> Option<Adopted> {
             .map(|(segments, _)| segments)
             .unwrap_or_default();
         cursor = end;
+        rings.push(ring);
+    }
+    let mut glyph_cursor = cursor;
+    let mut panes = Vec::with_capacity(manifest.panes.len());
+    for (record, ring) in manifest.panes.into_iter().zip(rings) {
+        let end = glyph_cursor + record.glyph_len as usize;
+        let glyphs = if record.glyph_len > 0 {
+            raw.get(glyph_cursor..end).map(|bytes| bytes.to_vec())
+        } else {
+            None
+        };
+        if record.glyph_len > 0 && glyphs.is_none() {
+            log::warn!(
+                "pane {}: the handoff glyph projection is truncated; keeping its text only",
+                record.id
+            );
+        }
+        glyph_cursor = end;
         panes.push(Carried {
             id: record.id,
             owner: record.owner,
@@ -391,6 +419,7 @@ pub fn adopt(fd: RawFd) -> Option<Adopted> {
             progress: record.progress,
             head_modes: record.head_modes,
             colors: record.colors,
+            glyphs,
         });
     }
 
@@ -438,6 +467,7 @@ mod tests {
             progress: None,
             head_modes: None,
             colors: None,
+            glyphs: None,
         }
     }
 

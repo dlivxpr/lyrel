@@ -13,6 +13,7 @@
 
 ### 新增
 
+- #268：daemon 在 8 MiB 文字回放环之外保留 pane 会话内已接受的 Glyph glossary，并在 ring／graphics／颜色回放之后，向显式发送 `SubscribeGlyphState` 的消费者发送有序有界 `GlyphState` 全量投影（generation + 插入序 `glyf` 注册）。旧 client 或未 opt-in 消费者保持连接，且不会收到 `GlyphQuery`／`GlyphState` 未知 kind；controller 未 opt-in 时 `q` 保持无应答。`c`／RIS 在流位置更新 generation，replacement 保留 FIFO 顺序；消费者原子替换 registry 并忽略更旧 generation，旧 reader 的迟到结果由 link generation 退休。Unix 同会话 handoff 显式携带该 frame，disk scrollback 剥离完整 glyph APC，daemon 死亡后的新 shell 以空 glossary 开始；不增加磁盘 glyph cache、第二 parser 或自动重启。聚合 wire／decoded 预算不足时明确拒绝而非静默丢失，保留 Colors59/61、Progress71、Sixel 协商与 `s` 的后续 gate。
 - #275：静态 Sixel 在 #274 的 daemon authority 上补齐发现、恢复与拒绝语义。pane 协议新增可忽略的 `static-sixel` feature：附着客户端只在本次连接实际协商到它时才在 DA1 附加属性 `4`，旧 daemon／未更新远端 server 不会继承本机 GUI 的声明；`XTSMGRAPHICS` 由持有像素几何与准入上限的 daemon 在附着与脱离两种状态回答（`Pi=1` 当前／最大寄存器 `1024`，`Pi=2 Pa=1` 当前文本区域像素并按每边 4,096 截断，`Pa=2/3/4` 以状态 3 拒绝因为准入同时受单图 32 MiB RGBA 面积预算约束，ReGIS 与未知 item 以状态 1 拒绝），镜像保持沉默；`XTGETTCAP` 白名单不变，`sixel` 仍不是 terminfo 能力名。Sixel DCS 在进入文字环之前提取，发送方停止、8 MiB replay 被淘汰后，全新 consumer 挂回同一存活 pane 仍从有序 Graphics 帧恢复像素与 placement 且发送方计数器不变；超限、非法颜色分量与被取消的截断体不产生 placement、不移动光标、不替换已接受资源；resize 后图片继续与实际文字行共享几何。真实 img2sixel 1.10.5 输出与生产消费者证据按交付记录，Windows 原生像素、WSL headless、真实 SSH 与 macOS 不由 headless 断言替代。
 - #269：Glyph 注册资源身份随呈现快照捕获——`RenderCell` 与 `ReadingCell` 保存 `Arc<GlyphView>`；未完成的同步呈现帧、grid 竞争复用帧和阅读行保留其显示时的版本，live 单元格在下一次成功帧采用当前注册。replace／clear 不再改写正在阅读的画面，返回 live 后采用新版本或普通字体 fallback；RIS 仍按既有破坏性阅读重置丢弃阅读呈现并清空 live registry。不新增 registry／cache 或第二绘制管线，普通 pane 不付逐单元格查找，outline 由最后一个 live／捕获 owner 释放。验证以真实 PTY→daemon→生产消费者为主，原生与前台边界另行记录。
 
@@ -23,6 +24,8 @@
 - #261：终端新增 pane 会话内 `OSC 4/10/11/12` 索引色与默认前景／背景／光标 set/query/reset 覆盖层，绘制、查询与 prompt 背景共用当前主题 + 覆盖后的有效调色板；命令退出保留、主题切换只更新未覆盖默认、复位露出当前主题，其他 pane／界面／配置不受影响。daemon 在回放环之外保留固定 259 槽的有界解码状态，经有序流投影给已协商消费者；ring 裁剪、窗口重附着与同会话 handoff 可恢复，daemon 死亡后的新 shell 从空状态开始。新增 `pane-colors` feature 与客户端 opt-in，新 daemon 绝不向旧客户端发送新帧；缺少该能力的后端在图形窗格附着前收到明确的更新错误，不静默丢弃颜色、不停止旧 daemon、不自动重启。同步输出与阅读态沿用现有 retained-frame 规则；新增真实 PTY／daemon／生产终端消费者、handoff 与恢复路径回归及原生颜色场景入口。Windows 原生、WSL 与真实 SSH 组合验收由集成阶段补齐，不以 headless 结果替代。
 
 ### 修复
+
+- #275：Sixel 原生恢复脚本改用 9 MiB 无滚动的 SGR reset 输出淘汰原传输字节，避免可见长行折行先把图片滚出保留历史，混淆正常资源退役与恢复失败；图片生产进程仍在淘汰与重新附着前退出。
 
 - #263：协商的 `?1005` UTF-8 鼠标坐标编码实际生效——此前终端已应答 1005 已设置，编码器却只查 SGR 并在列／行 ≥223 处静默丢弃报告。现在按生效编码写出（X10 上限保持 223，UTF-8 上限 2015，SGR 不变），按下／松开、修饰键与滚轮在宽窗格送达应用；`?1005`／`?1006` 切换与 DECRQM 查询按模拟器生效状态回答，1015／1016 仍如实回答不支持；daemon 模式折叠按模拟器规则将鼠标上报级别与 1005／1006 编码作为互斥组折叠，重连回放只恢复最终生效状态。Shift 本地选择覆盖与未协商 legacy 行为不变。真实 PTY→daemon→生产消费者断言、原生宽窗格／SSH 场景与未验证项见工单交付记录。
 - #264：将 Kitty 事件类型协商接入真实 GPUI press／repeat／release 路由，CSI-u、方向键和功能键使用真实 held／keyup 信息；只为实际写入 PTY 的按下配对释放，并在焦点、窗口失活、切屏、模式／命令边界、退出和重连时退役旧配对。有效模式栈、查询与 replay 统一过滤框架缺失的 alternate-key 位，保留 legacy 输入及 ConPTY 已合成的 Enter／Ctrl+J 事件对；IME 预编辑不取得配对，支持关联文本的纯文本提交使用 key code `0`。补充生产输入、真实 PTY／daemon 和精确字节消费者；Windows 实窗、系统中文 IME、真实 SSH 与 macOS 原生验收分别记录，不能由 headless 事件测试代替。

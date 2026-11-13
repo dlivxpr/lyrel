@@ -95,6 +95,19 @@ impl PaneState {
         apply(facts, &mut |msg| subscriptions.notify(msg, graphics))
     }
 
+    /// A full reset clears the glossary at the same stream position that fed
+    /// the mode tracker; no later glyph body has to arrive first.
+    fn sync_glyph_reset(&mut self) {
+        let resets = self.modes.resets();
+        if self.glyph_reset_epoch == resets {
+            return;
+        }
+        self.glyph_reset_epoch = resets;
+        if let Some(glyphs) = &mut self.glyphs {
+            glyphs.clear_all();
+        }
+    }
+
     /// Compose the single `q` reply for one controller answer. The pending
     /// entry is removed on the first valid answer; a stale epoch, an old token
     /// or a duplicate answer returns `None` and writes nothing.
@@ -264,6 +277,10 @@ pub struct Carried {
     /// trimmed the OSC that set them, so the new image needs the decoded layer
     /// explicitly; it is never written to disk.
     pub colors: Option<Vec<(u16, [u8; 3])>>,
+    /// The accepted Glyph glossary as an encoded `GlyphFrame`. The ring may
+    /// have trimmed the registration bodies, and the new image must not claim
+    /// state an old handoff format never carried; this is the explicit carry.
+    pub glyphs: Option<Vec<u8>>,
 }
 
 /// The screen a restored pane opens with.
@@ -500,6 +517,23 @@ impl DaemonPane {
         admission: GraphicsReplayAdmission,
         pane_colors: bool,
     ) -> Result<Option<u64>, String> {
+        self.attach_admitted_with_colors_and_glyphs(
+            subscriber,
+            allow_clipboard,
+            admission,
+            pane_colors,
+            false,
+        )
+    }
+
+    pub fn attach_admitted_with_colors_and_glyphs(
+        &self,
+        subscriber: Arc<Sender<DaemonMsg>>,
+        allow_clipboard: bool,
+        admission: GraphicsReplayAdmission,
+        pane_colors: bool,
+        glyph_state: bool,
+    ) -> Result<Option<u64>, String> {
         let foreground = self.backend.foreground_command_running();
         let mut state = self.state.lock().unwrap();
         // A query is bound to the controller that received it; a replacement
@@ -515,6 +549,7 @@ impl DaemonPane {
             admission,
             foreground,
             pane_colors,
+            glyph_state,
         )
     }
 
@@ -534,6 +569,23 @@ impl DaemonPane {
         admission: GraphicsReplayAdmission,
         pane_colors: bool,
     ) -> Result<Option<u64>, String> {
+        self.observe_admitted_with_colors_and_glyphs(
+            subscriber,
+            gate,
+            admission,
+            pane_colors,
+            false,
+        )
+    }
+
+    pub fn observe_admitted_with_colors_and_glyphs(
+        &self,
+        subscriber: Arc<Sender<DaemonMsg>>,
+        gate: Arc<OutputGate>,
+        admission: GraphicsReplayAdmission,
+        pane_colors: bool,
+        glyph_state: bool,
+    ) -> Result<Option<u64>, String> {
         let foreground = self.backend.foreground_command_running();
         let mut state = self.state.lock().unwrap();
         let (subscriptions, graphics, replay) = state.subscription_parts();
@@ -546,6 +598,7 @@ impl DaemonPane {
             admission,
             foreground,
             pane_colors,
+            glyph_state,
         )
     }
 
@@ -701,6 +754,7 @@ impl DaemonPane {
                     .graphics
                     .as_ref()
                     .map(|graphics| graphics.colors().sparse()),
+                glyphs: st.glyphs.as_ref().map(|glyphs| glyphs.frame().encode()),
             }),
         )
     }
@@ -733,6 +787,18 @@ impl DaemonPane {
                 colors.iter().copied(),
             ));
         }
+        let glyph_reset_epoch = modes.resets();
+        let carried_glyphs = carried.glyphs.is_some();
+        let glyphs = carried.glyphs.take().and_then(|bytes| {
+            let frame = crate::core::glyph_protocol::GlyphFrame::decode(&bytes)?;
+            GlyphSession::from_frame(frame)
+        });
+        if carried_glyphs && glyphs.is_none() {
+            log::warn!(
+                "pane {}: the handoff glyph glossary was unreadable; keeping its text only",
+                carried.id
+            );
+        }
 
         Ok(Self::over_pty(
             parts,
@@ -740,10 +806,10 @@ impl DaemonPane {
                 id: carried.id,
                 ring,
                 graphics: Some(graphics),
-                glyphs: None,
+                glyphs,
                 glyph_queries: PendingQueries::default(),
                 next_glyph_token: 0,
-                glyph_reset_epoch: 0,
+                glyph_reset_epoch,
                 subscriptions: Subscriptions::new(false, None),
                 facts,
                 ssh_phase: None,
@@ -1079,18 +1145,34 @@ impl DaemonPane {
         allow_remote_clipboard_write: bool,
         pane_colors: bool,
     ) -> u64 {
+        self.attach_with_permissions_colors_and_glyphs(
+            subscriber,
+            allow_remote_clipboard_write,
+            pane_colors,
+            false,
+        )
+    }
+
+    pub fn attach_with_permissions_colors_and_glyphs(
+        &self,
+        subscriber: Sender<DaemonMsg>,
+        allow_remote_clipboard_write: bool,
+        pane_colors: bool,
+        glyph_state: bool,
+    ) -> u64 {
         // Asked before the state lock, not under it: the probe takes the pty
         // master's lock, and every other caller that holds both takes them in
         // this order.
         let foreground_command = self.backend.foreground_command_running();
         let mut st = self.state.lock().unwrap();
-        let epoch = attach_subscriber_with_permissions(
+        let epoch = attach_subscriber_with_features(
             &mut st,
             subscriber,
             &self.gate,
             allow_remote_clipboard_write,
             foreground_command,
             pane_colors,
+            glyph_state,
         );
         st.glyph_queries.clear();
         let nudge = redraw_nudge(
@@ -1152,9 +1234,26 @@ impl DaemonPane {
         gate: Arc<OutputGate>,
         pane_colors: bool,
     ) -> u64 {
+        self.observe_with_colors_and_glyphs(observer, gate, pane_colors, false)
+    }
+
+    pub fn observe_with_colors_and_glyphs(
+        &self,
+        observer: Sender<DaemonMsg>,
+        gate: Arc<OutputGate>,
+        pane_colors: bool,
+        glyph_state: bool,
+    ) -> u64 {
         let foreground_command = self.backend.foreground_command_running();
         let mut st = self.state.lock().unwrap();
-        let id = observe_subscriber(&mut st, observer, gate, foreground_command, pane_colors);
+        let id = observe_subscriber_with_features(
+            &mut st,
+            observer,
+            gate,
+            foreground_command,
+            pane_colors,
+            glyph_state,
+        );
         let nudge = redraw_nudge(
             &mut st,
             self.runs_foreground_program(foreground_command),
@@ -1439,6 +1538,7 @@ impl Drop for DaemonPane {
 fn record_output(st: &mut PaneState, bytes: &[u8]) {
     st.ring.append(bytes);
     st.modes.feed(bytes);
+    st.sync_glyph_reset();
 }
 
 /// The primary device attributes a client's emulator answers with. Attribute 4
@@ -1611,6 +1711,7 @@ impl PaneState {
         let replay = ReplayState {
             ring: &self.ring,
             modes: &self.modes,
+            glyphs: self.glyphs.as_ref(),
             facts: &self.facts,
             ssh_phase: &self.ssh_phase,
             alive: self.alive,
@@ -1620,6 +1721,7 @@ impl PaneState {
     }
 }
 
+#[cfg(test)]
 fn attach_subscriber_with_permissions(
     st: &mut PaneState,
     subscriber: impl Into<Arc<Sender<DaemonMsg>>>,
@@ -1627,6 +1729,26 @@ fn attach_subscriber_with_permissions(
     allow_remote_clipboard_write: bool,
     foreground_command: bool,
     pane_colors: bool,
+) -> u64 {
+    attach_subscriber_with_features(
+        st,
+        subscriber,
+        gate,
+        allow_remote_clipboard_write,
+        foreground_command,
+        pane_colors,
+        false,
+    )
+}
+
+fn attach_subscriber_with_features(
+    st: &mut PaneState,
+    subscriber: impl Into<Arc<Sender<DaemonMsg>>>,
+    gate: &OutputGate,
+    allow_remote_clipboard_write: bool,
+    foreground_command: bool,
+    pane_colors: bool,
+    glyph_state: bool,
 ) -> u64 {
     let (subscriptions, graphics, replay) = st.subscription_parts();
     subscriptions.attach(
@@ -1637,15 +1759,28 @@ fn attach_subscriber_with_permissions(
         allow_remote_clipboard_write,
         foreground_command,
         pane_colors,
+        glyph_state,
     )
 }
 
+#[cfg(test)]
 fn observe_subscriber(
     st: &mut PaneState,
     observer: impl Into<Arc<Sender<DaemonMsg>>>,
     gate: Arc<OutputGate>,
     foreground_command: bool,
     pane_colors: bool,
+) -> u64 {
+    observe_subscriber_with_features(st, observer, gate, foreground_command, pane_colors, false)
+}
+
+fn observe_subscriber_with_features(
+    st: &mut PaneState,
+    observer: impl Into<Arc<Sender<DaemonMsg>>>,
+    gate: Arc<OutputGate>,
+    foreground_command: bool,
+    pane_colors: bool,
+    glyph_state: bool,
 ) -> u64 {
     let (subscriptions, graphics, replay) = st.subscription_parts();
     subscriptions.observe(
@@ -1655,6 +1790,7 @@ fn observe_subscriber(
         gate,
         foreground_command,
         pane_colors,
+        glyph_state,
     )
 }
 

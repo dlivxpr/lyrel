@@ -258,7 +258,12 @@ mod tests {
                 (2, 2),
                 "cell span derives from the declared extent, not from drawn pixels"
             );
-            decoded.push((placement.w, placement.h, placement.span_cols, placement.span_rows));
+            decoded.push((
+                placement.w,
+                placement.h,
+                placement.span_cols,
+                placement.span_rows,
+            ));
         }
         assert_eq!(
             decoded[0], decoded[1],

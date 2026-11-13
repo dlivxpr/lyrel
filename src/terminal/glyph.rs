@@ -15,7 +15,7 @@
 
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use gpui_kit::{
     App, Bounds, ContentMask, Font, Hsla, PathBuilder, Pixels, SharedString, TextRun, Window,
@@ -52,6 +52,17 @@ struct Inner {
     by_cp: HashMap<u32, Entry>,
     next_insertion: u64,
     next_revision: u64,
+    /// Last daemon snapshot applied on this link. A lower generation is stale.
+    generation: u64,
+}
+
+/// One decoded entry of an authoritative `GlyphState` snapshot.
+pub(crate) struct GlyphReplayEntry {
+    pub cp: u32,
+    pub outline: Outline,
+    pub upm: u16,
+    pub width: u8,
+    pub layout: GlyphLayout,
 }
 
 /// Pane-local derived glyph store. The reader writes accepted registrations;
@@ -134,6 +145,48 @@ impl GlyphStore {
         self.inner.read().by_cp.is_empty()
     }
 
+    /// A new link starts with no derived glossary and no generation claim; the
+    /// daemon's first snapshot on that link is authoritative even if the pane
+    /// was restored from an older image with a lower counter.
+    pub(crate) fn reset_link(&self) {
+        let mut inner = self.inner.write();
+        inner.by_cp.clear();
+        inner.generation = 0;
+    }
+
+    /// Replace the whole derived glossary in one write. Returns false for a
+    /// stale generation; the map is left untouched then. Build all [`Arc`]s
+    /// under the same lock so paint sees the old set or the new one, never an
+    /// empty map between a clear and its entries.
+    pub(crate) fn apply_snapshot(&self, generation: u64, glyphs: Vec<GlyphReplayEntry>) -> bool {
+        let mut inner = self.inner.write();
+        if generation < inner.generation {
+            return false;
+        }
+        inner.by_cp.clear();
+        for glyph in glyphs {
+            let revision = inner.next_revision;
+            inner.next_revision = inner.next_revision.wrapping_add(1);
+            let insertion = inner.next_insertion;
+            inner.next_insertion = inner.next_insertion.wrapping_add(1);
+            inner.by_cp.insert(
+                glyph.cp,
+                Entry {
+                    glyph: Arc::new(GlyphView {
+                        revision,
+                        outline: Arc::new(glyph.outline),
+                        upm: glyph.upm,
+                        width: glyph.width,
+                        layout: glyph.layout,
+                    }),
+                    insertion,
+                },
+            );
+        }
+        inner.generation = generation;
+        true
+    }
+
     #[cfg(test)]
     pub(crate) fn contains(&self, cp: u32) -> bool {
         self.inner.read().by_cp.contains_key(&cp)
@@ -153,18 +206,43 @@ pub(crate) struct GlyphApply<'a> {
     pub store: &'a GlyphStore,
     pub authority: &'a AtomicBool,
     pub denied: &'a AtomicBool,
+    /// Current link generation, compared before every shared mutation so a
+    /// retired reader's late parse cannot revive a cleared or replaced entry.
+    pub generation: &'a AtomicU64,
+    pub reader: u64,
 }
 
 impl GlyphApply<'_> {
+    fn current(&self) -> bool {
+        self.generation.load(Ordering::Relaxed) == self.reader
+    }
+
     /// Apply one accepted `glyf` payload. Returns whether the daemon's
     /// authority was present; a missing authority records the refusal instead.
     pub(crate) fn register(&self, cp: u32, glyf: &[u8], upm: u16, width: u8, layout: GlyphLayout) {
+        if !self.current() {
+            return;
+        }
         if !self.authority.load(Ordering::Relaxed) {
             self.denied.store(true, Ordering::Relaxed);
             return;
         }
         if let Ok(outline) = rio_graphics::glyph::glyf_decode::decode(glyf) {
             self.store.apply(cp, outline, upm, width, layout);
+        }
+    }
+
+    pub(crate) fn clear(&self, cp: Option<u32>) {
+        if self.current() {
+            self.store.clear(cp);
+        }
+    }
+
+    /// RIS. Unlike [`GlyphStore::reset_link`] this keeps the last applied
+    /// snapshot generation; the link is still the same one.
+    pub(crate) fn reset(&self) {
+        if self.current() {
+            self.store.clear_all();
         }
     }
 }
