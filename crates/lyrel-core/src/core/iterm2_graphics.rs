@@ -556,4 +556,102 @@ mod tests {
             other => panic!("expected an iTerm2 command, got {other:?}"),
         }
     }
+
+    #[test]
+    fn accepted_image_survives_following_control_strings_in_one_read() {
+        use crate::core::graphics_state::{GraphicsEffect, GraphicsState, GraphicsUpdate};
+        use crate::core::kitty_graphics::{GraphicsSniffer, Segment, Sniffed};
+        use crate::daemon::protocol::WinSize;
+
+        let body = file("inline=1;width=4;height=2", &png(2, 1));
+        let query: &[u8] = b"\x1b_Ga=q,i=4294967294,f=7\x1b\\";
+        let refused: &[u8] = b"\x1b]1337;File=inline=0:AAAA\x07";
+        let mut duplicate = b"\x1b]1337;File=".to_vec();
+        duplicate.extend_from_slice(&body);
+        duplicate.push(0x07);
+        for (suffix, expected_images) in [(query, 1), (refused, 1), (duplicate.as_slice(), 2)] {
+            let mut state = GraphicsState::new(WinSize {
+                cols: 80,
+                rows: 24,
+                cell_w: 10,
+                cell_h: 20,
+            });
+            let mut sniffer = GraphicsSniffer::new_budgeted(false, state.work_owner());
+            let mut message = b"BEFORE\x1b]1337;File=".to_vec();
+            message.extend_from_slice(&body);
+            message.extend_from_slice(b"\x07AFTER");
+            message.extend_from_slice(suffix);
+            message.extend_from_slice(b"TAIL");
+            let Sniffed::Segments(segments) = sniffer.sniff(&message) else {
+                panic!("the image must reach the ordered authority");
+            };
+            let mut text = Vec::new();
+            let mut replies = Vec::new();
+            for segment in segments {
+                match segment {
+                    Segment::Output(bytes) => {
+                        state.output(&bytes);
+                        text.extend(bytes);
+                    }
+                    Segment::Reply(bytes) => replies.push(bytes),
+                    Segment::Command {
+                        control,
+                        image: Some(image),
+                    } => {
+                        let work = sniffer.take_osc_source_work(image.data.capacity());
+                        let key = state.reserve_resource_key();
+                        let prepared =
+                            GraphicsState::prepare_image_budgeted(image, key, &control, None, work)
+                                .unwrap();
+                        state.apply_prepared(control, prepared);
+                    }
+                    other => panic!("unexpected image input: {other:?}"),
+                }
+            }
+            assert_eq!(text, b"BEFOREAFTERTAIL");
+            if suffix == query {
+                assert_eq!(
+                    replies,
+                    [b"\x1b_Gi=4294967294;ENOTSUPPORTED:Unsupported operation\x1b\\".to_vec()]
+                );
+            } else {
+                assert!(replies.is_empty());
+            }
+            let (replay, _work) = state.replay().expect("accepted images remain replayable");
+            let updates: Vec<_> = replay
+                .into_iter()
+                .filter_map(|effect| match effect {
+                    GraphicsEffect::Frame(packet) => {
+                        Some(GraphicsUpdate::decode_frame_owned(packet.into_vec()).unwrap())
+                    }
+                    GraphicsEffect::Update(update) => Some(update),
+                    _ => None,
+                })
+                .collect();
+            let dimensions: Vec<_> = updates
+                .iter()
+                .filter_map(|update| match update {
+                    GraphicsUpdate::Resource { image, .. } => Some((image.width, image.height)),
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(dimensions, vec![(2, 1); expected_images]);
+            let placements: Vec<_> = updates
+                .iter()
+                .filter_map(|update| match update {
+                    GraphicsUpdate::Place(placement) => Some(placement),
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(placements.len(), expected_images);
+            assert_eq!((placements[0].anchor_row, placements[0].anchor_col), (0, 6));
+            assert!(
+                placements
+                    .iter()
+                    .all(
+                        |placement| (placement.display_width, placement.display_height) == (40, 20)
+                    )
+            );
+        }
+    }
 }
