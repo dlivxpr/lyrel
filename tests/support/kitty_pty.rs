@@ -189,8 +189,7 @@ pub fn pty_sender() {
             // ST terminates Kitty replies; a `t`- or `c`-final CSI terminates
             // the geometry and DA1 answers this fixture also captures.
             while !(reply.ends_with(b"\x1b\\")
-                || (reply.starts_with(b"\x1b[")
-                    && matches!(reply.last(), Some(b't' | b'c'))))
+                || (reply.starts_with(b"\x1b[") && matches!(reply.last(), Some(b't' | b'c'))))
             {
                 let mut byte = [0];
                 input.read_exact(&mut byte).unwrap();
@@ -203,10 +202,20 @@ pub fn pty_sender() {
                     String::from_utf8_lossy(&reply)
                 );
             }
-            if !reply_hex.is_empty() {
-                reply_hex.push(',');
+            // File capture must not remove the regular exchange transcript.
+            if operation == "SEND_ANY" && gate.is_some() {
+                if !reply_hex.is_empty() {
+                    reply_hex.push(',');
+                }
+                reply_hex.push_str(&hex(&reply));
+            } else {
+                write!(
+                    output,
+                    "\x1b7\x1b[1;1H\r\nKITTY_REPLY {serial} {}\r\n\x1b8",
+                    hex(&reply)
+                )
+                .unwrap();
             }
-            reply_hex.push_str(&hex(&reply));
         }
         // A reply vocabulary other than kitty's is delivered to the test as a
         // file, not as a row that a later request would overwrite.
