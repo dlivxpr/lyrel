@@ -14,7 +14,10 @@
 ### 新增
 
 - #268：daemon 在 8 MiB 文字回放环之外保留 pane 会话内已接受的 Glyph glossary，并在 ring／graphics／颜色回放之后，向显式发送 `SubscribeGlyphState` 的消费者发送有序有界 `GlyphState` 全量投影（generation + 插入序 `glyf` 注册）。旧 client 或未 opt-in 消费者保持连接，且不会收到 `GlyphQuery`／`GlyphState` 未知 kind；controller 未 opt-in 时 `q` 保持无应答。`c`／RIS 在流位置更新 generation，replacement 保留 FIFO 顺序；消费者原子替换 registry 并忽略更旧 generation，旧 reader 的迟到结果由 link generation 退休。Unix 同会话 handoff 显式携带该 frame，disk scrollback 剥离完整 glyph APC，daemon 死亡后的新 shell 以空 glossary 开始；不增加磁盘 glyph cache、第二 parser 或自动重启。聚合 wire／decoded 预算不足时明确拒绝而非静默丢失，保留 Colors59/61、Progress71、Sixel 协商与 `s` 的后续 gate。
+- #267：GUI Glyph 消费路径实现 pinned v1.12 §8.5 布局：pad → size → align，声明 extent（`aw`／`lh`／`ymin`）或未声明时的解码点 bbox 与 `contain` em 上限、五种 size、水平／垂直 align（含 baseline 与 descender）、分数 padding 与退化归零、未扣 padding 的 render span 裁剪；`width=2` 仅扩像素 span，末列、非空或已有邻格自行绘制时回退一列，保持 logical width、光标推进、换行、选择与复制。前景、单元格几何、主字体 baseline、span、注册 revision 与 display scale 每帧参与派生，字体／显示缩放不要求应用重注册。保留普通字体、Powerline／boxdraw、Kitty 与 native 路径；本切片仍不回复 `s`。真实 PTY→daemon→production consumer 与确定性边界结果见本票交付证据；Windows 原生像素／显示缩放、WSL、真实 SSH 与 macOS 未在本票宣称通过。
 - #275：静态 Sixel 在 #274 的 daemon authority 上补齐发现、恢复与拒绝语义。pane 协议新增可忽略的 `static-sixel` feature：附着客户端只在本次连接实际协商到它时才在 DA1 附加属性 `4`，旧 daemon／未更新远端 server 不会继承本机 GUI 的声明；`XTSMGRAPHICS` 由持有像素几何与准入上限的 daemon 在附着与脱离两种状态回答（`Pi=1` 当前／最大寄存器 `1024`，`Pi=2 Pa=1` 当前文本区域像素并按每边 4,096 截断，`Pa=2/3/4` 以状态 3 拒绝因为准入同时受单图 32 MiB RGBA 面积预算约束，ReGIS 与未知 item 以状态 1 拒绝），镜像保持沉默；`XTGETTCAP` 白名单不变，`sixel` 仍不是 terminfo 能力名。Sixel DCS 在进入文字环之前提取，发送方停止、8 MiB replay 被淘汰后，全新 consumer 挂回同一存活 pane 仍从有序 Graphics 帧恢复像素与 placement 且发送方计数器不变；超限、非法颜色分量与被取消的截断体不产生 placement、不移动光标、不替换已接受资源；resize 后图片继续与实际文字行共享几何。真实 img2sixel 1.10.5 输出与生产消费者证据按交付记录，Windows 原生像素、WSL headless、真实 SSH 与 macOS 不由 headless 断言替代。
+- #269：Glyph 注册资源身份随呈现快照捕获——`RenderCell` 与 `ReadingCell` 保存 `Arc<GlyphView>`；未完成的同步呈现帧、grid 竞争复用帧和阅读行保留其显示时的版本，live 单元格在下一次成功帧采用当前注册。replace／clear 不再改写正在阅读的画面，返回 live 后采用新版本或普通字体 fallback；RIS 仍按既有破坏性阅读重置丢弃阅读呈现并清空 live registry。不新增 registry／cache 或第二绘制管线，普通 pane 不付逐单元格查找，outline 由最后一个 live／捕获 owner 释放。验证以真实 PTY→daemon→生产消费者为主，原生与前台边界另行记录。
+
 - #274：静态 Sixel 使用正式 Rio parser，经原 daemon／PTY 有序准备、资源预算与 placement 生命周期进入终端；自然尺寸、默认光标／滚动、DECSDM、右侧光标模式及拒收后的文字顺序不套用 Kitty 语义，图片位于文字之下，镜像不再绕过 daemon 解码。保留 Kitty、同步呈现和阅读态；与 #265 的 DCS discovery framer 按各自模式共存，不放宽发现请求预算。Windows 独立 target 的 Sixel／真实 PTY 7 项、Kitty 15 项、XTGETTCAP 4 项、同步输出 1 项、生产消费者 2 项通过（源码 `4d788ed5`），实际官方 img2sixel 原生入口已准备；未宣称 Windows 原生像素、WSL headless、SSH 或 macOS 通过。不扩展文件／URL／动画，不提前宣称 #275 的完整恢复／安全／发现兼容。
 - #271：单终端标签页显示 `OSC 9;4` 的运行中、未定量、暂停及错误进度，仅显示发送方提供的百分比；daemon 在回放环之外保存有界当前状态，支持存活 pane 重挂载及 Unix 同会话 handoff，不从旧文字给新 Shell 复活进度。命令结束清理运行／暂停、错误保留到 clear 或下一命令；独立语义事件不重复驱动 agent 生命周期，隐藏输出保持绘制门控。实际 pane endpoint 升至 v18、control 保持 v16，不兼容时明确拒绝并要求更新，不自动重启服务。本票增加真实 PTY→daemon→生产 tab 消费者及原生场景入口；各平台实际验证以交付证据为准，不宣称未运行的原生／SSH 验收通过。
 - #272：标签页进度汇总其全部终端叶子，包括未聚焦、隐藏和停放的窗格；错误优先，仅单个有效任务提供百分比时显示数值，多任务只显示诚实状态而不做平均。保留智能体等待／完成／未读语义，不增加重复 busy 或完成通知；关闭、移动、停放／恢复、焦点、重连及休眠／唤醒重建按当前成员更新，瞬时进度不写入 durable 布局或 agent payload。新增真实多 PTY→daemon→生产 tab 消费者、确定性成员边界测试和原生多窗格场景；Windows 实窗、WSL 与真实 SSH 仍按父验收边界分别记录，不宣称 macOS 通过。
@@ -23,6 +26,8 @@
 
 ### 修复
 
+- #264：绘制时的 `keyboard_events` key context 与其他 frame facts 一起采样，不再经 `key_flags()` 阻塞等待 reader 持有的 grid；实际按键路由仍读取 live 模式。保留无 prompt 与 prompt 两个既有竞争绘制回归，不通过延长超时掩盖等待。
+- #268：`GlyphState` 的共享解码器拒绝 `upm=0`、`aw=0` 与 `lh=0`，与注册请求的值域一致，避免恢复投影向消费者引入从未能被接受的布局参数。
 - #275：Sixel 原生恢复脚本改用 9 MiB 无滚动的 SGR reset 输出淘汰原传输字节，避免可见长行折行先把图片滚出保留历史，混淆正常资源退役与恢复失败；图片生产进程仍在淘汰与重新附着前退出。
 
 - #263：协商的 `?1005` UTF-8 鼠标坐标编码实际生效——此前终端已应答 1005 已设置，编码器却只查 SGR 并在列／行 ≥223 处静默丢弃报告。现在按生效编码写出（X10 上限保持 223，UTF-8 上限 2015，SGR 不变），按下／松开、修饰键与滚轮在宽窗格送达应用；`?1005`／`?1006` 切换与 DECRQM 查询按模拟器生效状态回答，1015／1016 仍如实回答不支持；daemon 模式折叠按模拟器规则将鼠标上报级别与 1005／1006 编码作为互斥组折叠，重连回放只恢复最终生效状态。Shift 本地选择覆盖与未协商 legacy 行为不变。真实 PTY→daemon→生产消费者断言、原生宽窗格／SSH 场景与未验证项见工单交付记录。

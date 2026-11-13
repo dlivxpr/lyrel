@@ -578,8 +578,8 @@ fn a_bounded_restart_preserves_the_live_replay_suffix_and_geometry() {
 }
 
 impl Instance {
-    /// Like `spawn_restoring_segments`, but keeps the colour projection the
-    /// restarted daemon sends for the replacement pane.
+    /// Like `spawn_restoring_segments`, but also keeps the authoritative colour
+    /// projection sent for the replacement pane.
     fn spawn_restoring_with_colors(
         &self,
         dead: u64,
@@ -638,27 +638,128 @@ impl Instance {
         }
         (pane_id, replayed, colors)
     }
+
+    /// Like `spawn_restoring_with_colors`, but negotiated for the retained
+    /// glyph glossary: the caller keeps the live restored-pane stream and the
+    /// authoritative frame the restarted daemon projects for it. Used only by
+    /// the Unix glyph isolation test — `interactive_shell` elsewhere names
+    /// cmd.exe, and the producer/query exchange assumes `/bin/sh` semantics.
+    #[cfg(unix)]
+    fn spawn_restoring_live(
+        &self,
+        dead: u64,
+    ) -> (
+        u64,
+        transport::Stream,
+        Vec<lyrel_core::daemon::scrollback::Segment>,
+        lyrel_core::core::glyph_protocol::GlyphFrame,
+    ) {
+        let mut stream =
+            transport::connect_endpoint_at(&self.endpoint()).expect("connect to spawn");
+        let endpoint = lyrel_core::daemon::protocol::negotiate_pane(&mut stream)
+            .expect("matching pane protocol");
+        assert!(
+            endpoint.has_feature(lyrel_core::daemon::protocol::FEATURE_GLYPH_STATE),
+            "this path exists only for a daemon that projects the glossary"
+        );
+        ClientMsg::Spawn {
+            cwd: None,
+            size: size(),
+            shell: Some(interactive_shell()),
+            owner: None,
+            workspace: None,
+            restore: Some(RestoreFrom {
+                pane_id: dead,
+                banner: Some("the shell below is new".to_string()),
+            }),
+            allow_remote_clipboard_write: false,
+            await_claim: false,
+        }
+        .encode(&mut stream)
+        .expect("send Spawn");
+
+        let pane_id = match DaemonMsg::read(&mut stream) {
+            Ok(DaemonMsg::Spawned { pane_id }) => pane_id,
+            other => panic!("expected Spawned, got {other:?}"),
+        };
+
+        // The glossary snapshot follows the replayed ring on this negotiated
+        // stream, so it is the boundary that says the replay is done.
+        stream
+            .set_read_timeout(Some(Duration::from_secs(10)))
+            .expect("bound the replay drain");
+        let mut replayed: Vec<lyrel_core::daemon::scrollback::Segment> = Vec::new();
+        let mut geometry = size();
+        let frame = loop {
+            match DaemonMsg::read(&mut stream).expect("the spawned pane answers") {
+                DaemonMsg::Size(next) => geometry = next,
+                DaemonMsg::Snapshot(bytes) | DaemonMsg::Output(bytes) => {
+                    replayed.push(lyrel_core::daemon::scrollback::Segment {
+                        size: geometry,
+                        bytes,
+                    });
+                }
+                DaemonMsg::GlyphState(frame) => {
+                    break lyrel_core::core::glyph_protocol::GlyphFrame::decode(&frame)
+                        .expect("decodable glossary snapshot");
+                }
+                DaemonMsg::Exited { code } => {
+                    panic!("the restored pane exited during replay: {code:?}")
+                }
+                _ => {}
+            }
+        };
+        (pane_id, stream, replayed, frame)
+    }
 }
 
 #[test]
 fn a_replacement_shell_does_not_reactivate_old_temporary_colours() {
     let instance = Instance::new();
     let running = instance.start();
+    #[cfg(unix)]
+    let producer = interactive_shell();
+    #[cfg(windows)]
+    let producer = ShellSpec {
+        program: "powershell.exe".into(),
+        args: vec![
+            "-NoLogo".into(),
+            "-NoProfile".into(),
+            "-Command".into(),
+            "$null=[Console]::ReadLine(); $e=[char]27; $b=[char]7; [Console]::Write(\"${e}]4;1;#112233${b}${e}]11;#101112${b}lyrel_colour_restore\"); $null=[Console]::ReadLine()".into(),
+        ],
+        args_are_lyrel_defaults: false,
+    };
     let mut session = instance
         .panes()
-        .spawn(None, size(), Some(interactive_shell()), None, None)
+        .spawn(None, size(), Some(producer), None, None)
         .expect("spawn a pane");
     session
         .set_recv_timeout(Some(STREAM_WITHIN))
         .expect("bound the stream reads");
     let dead = session.pane_id();
+    // One printf writes both OSC commands and the completion marker, so the
+    // marker can only appear after the colour bytes reached the ring. The
+    // marker text is split in the command itself, which keeps the pty's input
+    // echo from finishing the wait early — the previous form raced the
+    // shutdown snapshot against printf's output.
+    #[cfg(unix)]
     session
-        .input(b"printf '\\033]4;1;#112233\\007\\033]11;#101112\\007'; echo lyrel_colour_restore\r")
+        .input(b"printf '\\033]4;1;#112233\\007\\033]11;#101112\\007lyrel_%s\\n' colour_restore\r")
         .expect("the shell takes input");
+    #[cfg(windows)]
+    session.input(b"1\r").expect("the producer takes input");
     collect_until(&mut session, b"lyrel_colour_restore");
     session.detach().expect("detach");
     instance.stop(running);
 
+    let stored = instance
+        .snapshot_of(dead)
+        .expect("the shutdown wrote the pane's screen");
+    assert!(
+        windows_contain(&stored, b"\x1b]4;1;#112233"),
+        "the persisted snapshot does not carry the historical colour bytes"
+    );
     let _restarted = instance.start();
     let (_new_pane, replayed, colors) = instance.spawn_restoring_with_colors(dead);
     let text: Vec<u8> = replayed
@@ -674,4 +775,241 @@ fn a_replacement_shell_does_not_reactivate_old_temporary_colours() {
         colors.is_empty(),
         "a replacement shell must start with no inherited temporary colours"
     );
+}
+
+/// A small valid `glyf` outline — one closed quad — the only payload format
+/// this build accepts. Only the Unix isolation test produces registrations:
+/// the shell semantics (`cat`, `%b`-free `printf`, `^U` line kill) have no
+/// cmd.exe equivalent here.
+#[cfg(unix)]
+fn glyph_outline(width: i16, height: i16) -> Vec<u8> {
+    let mut bytes = Vec::new();
+    for word in [1, 0, 0, width, height, 3, 0] {
+        bytes.extend_from_slice(&word.to_be_bytes());
+    }
+    bytes.extend_from_slice(&[1; 4]);
+    for delta in [0, width, 0, -width, 0, 0, height, 0] {
+        bytes.extend_from_slice(&delta.to_be_bytes());
+    }
+    bytes
+}
+
+#[cfg(unix)]
+fn base64(bytes: &[u8]) -> String {
+    const DIGITS: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut encoded = String::new();
+    for chunk in bytes.chunks(3) {
+        let bits = (u32::from(chunk[0]) << 16)
+            | (u32::from(*chunk.get(1).unwrap_or(&0)) << 8)
+            | u32::from(*chunk.get(2).unwrap_or(&0));
+        encoded.push(DIGITS[((bits >> 18) & 63) as usize] as char);
+        encoded.push(DIGITS[((bits >> 12) & 63) as usize] as char);
+        encoded.push(if chunk.len() > 1 {
+            DIGITS[((bits >> 6) & 63) as usize] as char
+        } else {
+            '='
+        });
+        encoded.push(if chunk.len() > 2 {
+            DIGITS[(bits & 63) as usize] as char
+        } else {
+            '='
+        });
+    }
+    encoded
+}
+
+/// One complete `r` request — `ESC _ 25a1 ; r ; … ESC \` — as a producer
+/// would emit it.
+#[cfg(unix)]
+fn glyph_registration(cp: u32, glyf: &[u8], width: u8, reply: u8) -> Vec<u8> {
+    format!(
+        "\x1b_25a1;r;cp={cp:x};fmt=glyf;upm=1000;width={width};reply={reply};{}\x1b\\",
+        base64(glyf)
+    )
+    .into_bytes()
+}
+
+/// A daemon's glossary dies with it. The replacement pane a restore seeds
+/// must open with an empty authoritative frame, the historical registration
+/// must never ride the persisted text, and a live `q` must be answered from
+/// the new pane's own (empty) glossary — the strongest external proof that
+/// nothing inherited the old registry.
+#[cfg(unix)]
+#[test]
+fn a_replacement_shell_does_not_reactivate_old_glyph_registrations() {
+    let instance = Instance::new();
+    let running = instance.start();
+    let mut session = instance
+        .panes()
+        .spawn(None, size(), Some(interactive_shell()), None, None)
+        .expect("spawn a pane");
+    session
+        .set_recv_timeout(Some(STREAM_WITHIN))
+        .expect("bound the stream reads");
+    let dead = session.pane_id();
+
+    // A real producer — `cat` on bytes it never saw before — registers a
+    // definition, replaces it, prints ordinary text, and exits. reply=1
+    // earns the live ACK echo that proves the daemon accepted both bodies.
+    const CP: u32 = 0x100000;
+    let mut produced = glyph_registration(CP, &glyph_outline(1000, 1000), 1, 1);
+    produced.extend(glyph_registration(CP, &glyph_outline(2000, 500), 2, 1));
+    let glyphs_file = instance.path().join("glyphs.bin");
+    std::fs::write(&glyphs_file, &produced).unwrap();
+    session
+        .input(
+            format!(
+                "cat '{}'; echo lyrel_glyph_text_kept; echo lyrel_glyph_sender_exit_$?\r",
+                glyphs_file.display()
+            )
+            .as_bytes(),
+        )
+        .expect("the registration producer runs");
+    // The ACK echo and the exit marker share no ordering — the tty echoes a
+    // reply the moment the daemon writes it, before `cat` has finished — so
+    // the drain has to accept either first.
+    let mut live = Vec::new();
+    let live_deadline = Instant::now() + STREAM_WITHIN;
+    while !(windows_contain(&live, b"lyrel_glyph_sender_exit_0")
+        && windows_contain(&live, b"cp=100000;status=0"))
+    {
+        assert!(
+            Instant::now() < live_deadline,
+            "the producer's output or the daemon's ACK never arrived"
+        );
+        match session.recv().expect("the pane answers") {
+            DaemonMsg::Output(bytes) | DaemonMsg::Snapshot(bytes) => live.extend(bytes),
+            DaemonMsg::Exited { code } => panic!("the pane exited during registration: {code:?}"),
+            _ => {}
+        }
+    }
+    assert!(
+        windows_contain(&live, b"\x1b_25a1;r;cp=100000"),
+        "the daemon re-emitted and acknowledged the bodies while it lived"
+    );
+    session.detach().expect("detach");
+    instance.stop(running);
+
+    // The persisted screen keeps the ordinary text but must not carry the
+    // control APCs: a replacement shell's stream can never hand them back.
+    let stored = instance
+        .snapshot_of(dead)
+        .expect("the shutdown wrote the pane's screen");
+    assert!(
+        windows_contain(&stored, b"lyrel_glyph_text_kept"),
+        "the persisted screen keeps ordinary text"
+    );
+    assert!(
+        !windows_contain(&stored, b"\x1b_25a1"),
+        "a complete glyph APC is stripped before persisted bytes outlive the pane"
+    );
+
+    let _restarted = instance.start();
+    let (_new_pane, mut stream, segments, frame) = instance.spawn_restoring_live(dead);
+    let restored: Vec<u8> = segments.into_iter().flat_map(|s| s.bytes).collect();
+    assert!(
+        windows_contain(&restored, b"lyrel_glyph_text_kept"),
+        "the new shell still reads the old pane's ordinary text"
+    );
+    assert!(
+        !windows_contain(&restored, b"\x1b_25a1"),
+        "no historical glyph APC enters the revivable stream"
+    );
+    assert!(
+        frame.glyphs().is_empty(),
+        "the replacement pane opens with an empty authoritative glossary"
+    );
+
+    // Ask the codepoint the dead pane had registered. The daemon routes the
+    // query to this stream as the opted-in controller; answering `system:
+    // false` makes the pane's own glossary the only possible source of a
+    // non-empty status.
+    ClientMsg::Input(b"printf '\\033_25a1;q;cp=100000\\033\\\\'; echo lyrel_query_sent\r".to_vec())
+        .encode(&mut stream)
+        .expect("send the coverage query");
+    stream
+        .set_read_timeout(Some(Duration::from_secs(10)))
+        .expect("bound the query round trip");
+    let deadline = Instant::now() + STREAM_WITHIN;
+    let mut token = None;
+    let mut projected_frames = 0u64;
+    let mut live = Vec::new();
+    while token.is_none() {
+        assert!(
+            Instant::now() < deadline,
+            "the query never reached this pane's controller"
+        );
+        match DaemonMsg::read(&mut stream).expect("the pane answers") {
+            DaemonMsg::GlyphQuery { token: t, cp } => {
+                assert_eq!(cp, CP, "the query carries the codepoint asked about");
+                token = Some(t);
+            }
+            DaemonMsg::Output(bytes) | DaemonMsg::Snapshot(bytes) => live.extend(bytes),
+            DaemonMsg::GlyphState(_) => projected_frames += 1,
+            DaemonMsg::Exited { code } => panic!("the restored pane exited: {code:?}"),
+            _ => {}
+        }
+    }
+    ClientMsg::GlyphQueryResult {
+        token: token.expect("the daemon asked for one codepoint"),
+        cp: CP,
+        system: false,
+    }
+    .encode(&mut stream)
+    .expect("answer the font coverage query");
+
+    // The daemon writes the single `q` reply to the pane's tty. Its shell
+    // echo is the observable status; afterwards a marker proves the shell is
+    // still cleanly consuming input (^U clears the pending reply line).
+    while !windows_contain(&live, b"25a1;q;cp=100000;status=") {
+        assert!(
+            Instant::now() < deadline,
+            "the coverage answer never reached the new shell"
+        );
+        match DaemonMsg::read(&mut stream).expect("the pane answers") {
+            DaemonMsg::Output(bytes) | DaemonMsg::Snapshot(bytes) => live.extend(bytes),
+            DaemonMsg::GlyphState(_) => projected_frames += 1,
+            DaemonMsg::Exited { code } => panic!("the restored pane exited: {code:?}"),
+            _ => {}
+        }
+    }
+    ClientMsg::Input(b"\x15echo lyrel_glyph_after_query\r".to_vec())
+        .encode(&mut stream)
+        .expect("the shell still takes input");
+    while !windows_contain(&live, b"lyrel_glyph_after_query") {
+        assert!(
+            Instant::now() < deadline,
+            "the new shell stopped answering after the query exchange"
+        );
+        match DaemonMsg::read(&mut stream).expect("the pane answers") {
+            DaemonMsg::Output(bytes) | DaemonMsg::Snapshot(bytes) => live.extend(bytes),
+            DaemonMsg::GlyphState(_) => projected_frames += 1,
+            DaemonMsg::Exited { code } => panic!("the restored pane exited: {code:?}"),
+            _ => {}
+        }
+    }
+    let status_at = live
+        .windows(b"25a1;q;cp=100000;status=".len())
+        .position(|w| w == b"25a1;q;cp=100000;status=")
+        .expect("the echoed reply was collected");
+    let after_status = live[status_at + b"25a1;q;cp=100000;status=".len()..]
+        .first()
+        .copied();
+    assert_eq!(
+        projected_frames, 0,
+        "the restored pane's empty glossary is projected exactly once, at attach"
+    );
+    assert!(
+        matches!(after_status, Some(0x1b) | Some(b'^')),
+        "with no glossary and no system coverage the status must be empty; \
+         a resurrected registry would answer `glossary` (saw {:?})",
+        String::from_utf8_lossy(&live[status_at..(status_at + 60).min(live.len())])
+    );
+    assert!(
+        !windows_contain(&live, b"\x1b_25a1;r"),
+        "the historical register ACK is not re-sent to the replacement shell"
+    );
+
+    let _ = ClientMsg::Detach.encode(&mut stream);
+    drop(stream);
 }

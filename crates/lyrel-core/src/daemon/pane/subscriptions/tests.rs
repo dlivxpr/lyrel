@@ -508,6 +508,11 @@ fn an_observer_that_drained_a_full_ring_replay_keeps_getting_output() {
             replayed += b.len();
         }
     }
+    assert_eq!(
+        DaemonMsg::read(&mut client).unwrap(),
+        DaemonMsg::Progress(None),
+        "the replay ends with the authoritative progress baseline"
+    );
     let paid = std::time::Instant::now() + Duration::from_secs(5);
     while observer_gate.queued_bytes() > 0 && std::time::Instant::now() < paid {
         std::thread::sleep(Duration::from_millis(1));

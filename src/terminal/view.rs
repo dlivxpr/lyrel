@@ -198,6 +198,7 @@ impl ShellParts {
 struct FrameFacts {
     alt_screen: bool,
     mouse_mode: bool,
+    keyboard_events: bool,
     has_selection: bool,
     reading_identity: Option<(u64, i64, usize, i64, i64)>,
     cursor: Option<(usize, usize)>,
@@ -2148,6 +2149,11 @@ impl TerminalView {
         self.frame = FrameFacts {
             alt_screen: term.mode().contains(Mode::ALT_SCREEN),
             mouse_mode: term.mode().intersects(Mode::MOUSE_MODE),
+            keyboard_events: super::input::KeyFlags::from_mode_with_local_conpty(
+                &term.mode(),
+                self.terminal.is_local_conpty(),
+            )
+            .reports_events(),
             reading_identity,
             has_selection: self.selection_scroll.has_presented() || term.selection.is_some(),
             cursor: (self.selection_scroll.reading.is_none() && row >= 0)
@@ -3348,6 +3354,7 @@ mod gpui_tests {
 
     include!("graphics_consumer_tests.rs");
     include!("glyph_consumer_tests.rs");
+    include!("glyph_retained_consumer_tests.rs");
     include!("color_override_consumer_tests.rs");
     include!("xtgettcap_consumer_tests.rs");
     include!("progress_consumer_tests.rs");

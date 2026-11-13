@@ -813,21 +813,21 @@ mod tests {
     }
 
     /// A `CSI =` set changes the flags in effect without touching the stack,
-    /// and the query says what is in effect.
+    /// and the query says what is in effect, excluding unsupported alternate keys.
     #[test]
     fn keyboard_set_is_reported_as_the_flags_in_effect() {
         assert_eq!(replies(b"\x1b[>7u\x1b[=3;1u\x1b[?u"), ["\x1b[?3u"]);
-        assert_eq!(replies(b"\x1b[>7u\x1b[=1;3u\x1b[?u"), ["\x1b[?6u"]);
+        assert_eq!(replies(b"\x1b[>7u\x1b[=1;3u\x1b[?u"), ["\x1b[?2u"]);
     }
 
     /// Each screen has a keyboard stack of its own, swapped with it on
     /// `?1049`: what a full-screen program pushed leaves with it, and the
-    /// shell's flags come back.
+    /// shell's supported flags come back without the unavailable alternate-key bit.
     #[test]
     fn each_screen_has_its_own_keyboard_stack() {
         assert_eq!(
             replies(b"\x1b[>5u\x1b[?1049h\x1b[>3u\x1b[?u\x1b[?1049l\x1b[?u"),
-            ["\x1b[?3u", "\x1b[?5u"]
+            ["\x1b[?3u", "\x1b[?1u"]
         );
     }
 

@@ -430,6 +430,32 @@ fn has_room_after(row: &[RenderCell], start: usize, cells: usize) -> bool {
     }
 }
 
+/// Cells a width-two registration may paint into.
+///
+/// The render span is pixels only: the row end and a following cell that
+/// already paints something of its own offer nowhere for the overflow, so
+/// both fall back to the one-cell span the protocol requires (§8.5.2).
+fn glyph_span_cells(row: &[RenderCell], col: usize, width: u8) -> usize {
+    if width != 2 || col + 1 >= row.len() {
+        return 1;
+    }
+    if !row[col + 1].spacer && has_room_after(row, col, 1) {
+        2
+    } else {
+        1
+    }
+}
+
+/// The primary text baseline measured from the row top. Registered outlines
+/// with `align=baseline` put authored y=0 on this line, so descenders follow
+/// the terminal's own text instead of the outline's bbox.
+fn text_baseline(window: &Window, font: &Font, font_size: Pixels, line_height: Pixels) -> Pixels {
+    let font_id = window.text_system().resolve_font(font);
+    window
+        .text_system()
+        .baseline_offset(font_id, font_size, line_height)
+}
+
 pub(super) fn paint_glyphs(
     window: &mut Window,
     cx: &mut App,
@@ -439,7 +465,6 @@ pub(super) fn paint_glyphs(
     base_font: &Font,
     bold_font: Option<&Font>,
     italic_font: Option<&Font>,
-    glyphs: &crate::terminal::glyph::GlyphStore,
 ) {
     let faces = [
         build_font(base_font, false, false),
@@ -450,6 +475,8 @@ pub(super) fn paint_glyphs(
 
     // Resolved only once an icon asks, so a pane without one pays nothing.
     let mut primary_ids: [Option<gpui_kit::FontId>; 4] = [None; 4];
+    // Measured from the primary face only if a registered glyph asks.
+    let mut baseline = None;
 
     let run_buf = &mut [TextRun {
         len: 0,
@@ -494,12 +521,31 @@ pub(super) fn paint_glyphs(
                         size(geom.cell_width, geom.line_height),
                     );
                     let style = GlyphStyle::of(cell);
-                    // A daemon-accepted registration shadows ordinary font
-                    // rendering for its codepoint. The cell keeps the raw
-                    // codepoint for selection/copy/search and its logical
+                    // The registration this cell's snapshot captured shadows
+                    // ordinary font rendering for its codepoint. Painting never
+                    // consults the live registry, so a held frame or a reading
+                    // row keeps the version it displayed. The cell keeps the
+                    // raw codepoint for selection/copy/search and its logical
                     // width; only the pixels change.
-                    if let Some(glyph) = glyphs.get(cell.c as u32) {
-                        crate::terminal::glyph::paint(window, cell_bounds, &glyph, style.fg);
+                    if let Some(glyph) = &cell.glyph {
+                        let baseline = match baseline {
+                            Some(baseline) => baseline,
+                            None => {
+                                let measured =
+                                    text_baseline(window, &faces[0], font_size, geom.line_height);
+                                baseline = Some(measured);
+                                measured
+                            }
+                        };
+                        let span_cells = glyph_span_cells(row_cells, col, glyph.width);
+                        crate::terminal::glyph::paint(
+                            window,
+                            cell_bounds,
+                            span_cells,
+                            baseline,
+                            glyph,
+                            style.fg,
+                        );
                         match native_cell_residue(&style) {
                             None => continue,
                             Some(c) => (col, 1, char_string(c), None, false),
