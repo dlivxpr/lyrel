@@ -774,7 +774,7 @@ fn glyph_consumer_width_two_span_fallback_clip_and_logical_cells(cx: &mut TestAp
 
     // The logical advance still wraps at the last column.
     serial += 1;
-    glyph_show(&view, cx, serial, 9, 79, &format!("{glyph}Z"));
+    glyph_show(&view, cx, serial, 9, 79, &format!("\x1b[?7h{glyph}Z"));
     glyph_wait(cx, "wide-glyph wrap", |cx| {
         view.read_with(cx, |view, _| {
             glyph_presented_row(view, 10).chars().next() == Some('Z')
@@ -985,14 +985,23 @@ fn glyph_consumer_derived_rendering_follows_geometry_scale_and_revision(cx: &mut
         "the width-two proof did not re-register the original glyph"
     );
 
-    // A display-scale change scales the same logical geometry.
+    // A display-scale change scales the same logical geometry. The test
+    // window starts at scale 2, so pick a different one.
     let before_scale = glyph_region_bounds(window, &view, cx, 2, 4, 1);
-    cx.simulate_window_scale_factor_change(window, 2.);
+    let current_scale = window
+        .update(cx, |_, window, _| window.scale_factor())
+        .unwrap();
+    let target_scale = if (current_scale - 2.0).abs() < f32::EPSILON {
+        1.0
+    } else {
+        2.0
+    };
+    cx.simulate_window_scale_factor_change(window, target_scale);
     let _ = glyph_painted(window, &view, cx, before_scale);
     let after_scale = glyph_region_bounds(window, &view, cx, 2, 4, 1);
     assert!(
-        after_scale.size.width.0 > before_scale.size.width.0 + 1.5,
-        "the display scale grew the painted cell: {after_scale:?} vs {before_scale:?}"
+        (after_scale.size.width.0 - before_scale.size.width.0).abs() > 1.5,
+        "the display scale changed the painted cell: {after_scale:?} vs {before_scale:?}"
     );
     let painted = glyph_painted(window, &view, cx, after_scale);
     assert_eq!(painted.len(), 1, "one rescaled glyph path: {painted:?}");

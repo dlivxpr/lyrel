@@ -440,10 +440,21 @@ fn glyph_native_declared_layout_baseline_and_scale(cx: &mut TestAppContext) {
 
     // Display-scale change: same logical geometry, new painted scale.
     let before_scale = glyph_region_bounds(window, &view, cx, 2, 4, 1);
-    cx.simulate_window_scale_factor_change(window, 2.);
+    let current_scale = window
+        .update(cx, |_, window, _| window.scale_factor())
+        .unwrap();
+    let target_scale = if (current_scale - 2.0).abs() < f32::EPSILON {
+        1.0
+    } else {
+        2.0
+    };
+    cx.simulate_window_scale_factor_change(window, target_scale);
     let _ = glyph_paths_with_clip_in_region(window, &view, cx, before_scale);
     let after_scale = glyph_region_bounds(window, &view, cx, 2, 4, 1);
-    assert!(after_scale.size.width.0 > before_scale.size.width.0 + 1.5);
+    assert!(
+        (after_scale.size.width.0 - before_scale.size.width.0).abs() > 1.5,
+        "the display scale changed the painted cell: {after_scale:?} vs {before_scale:?}"
+    );
     let painted = glyph_paths_with_clip_in_region(window, &view, cx, after_scale);
     assert_eq!(painted.len(), 1, "one rescaled native path: {painted:?}");
     let side = after_scale.size.width.0 * 0.9;
