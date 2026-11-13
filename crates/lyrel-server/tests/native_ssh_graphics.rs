@@ -174,6 +174,17 @@ struct Consumer {
 
 impl Consumer {
     fn spawn(fixture: &NativeSshFixture, shell: ShellSpec, encoded: u64, decoded: u64) -> Self {
+        let mut consumer = Self::spawn_parts(fixture, shell, encoded, decoded);
+        consumer.until(b"KITTY_READY");
+        consumer
+    }
+
+    fn spawn_parts(
+        fixture: &NativeSshFixture,
+        shell: ShellSpec,
+        encoded: u64,
+        decoded: u64,
+    ) -> Self {
         let (mut stream, _) = fixture.connect_pane_with_capacity(encoded, decoded);
         ClientMsg::Spawn {
             cwd: Some(fixture.remote_home().into()),
@@ -192,9 +203,29 @@ impl Consumer {
             other => panic!("expected real remote Spawned, got {other:?}"),
         };
         fixture.track_pane(pane);
-        let mut consumer = Self::new(stream, pane, false);
-        consumer.until(b"KITTY_READY");
+        Self::new(stream, pane, false)
+    }
+
+    /// A persistent interactive shell on the real Linux PTY. The producer and
+    /// the one-shot ring flood run as foreground children of this same shell,
+    /// so both can exit while the pane, PTY and daemon stay alive.
+    fn spawn_shell(fixture: &NativeSshFixture) -> Self {
+        let shell = ShellSpec {
+            program: "/bin/sh".into(),
+            args: Vec::new(),
+            args_are_lyrel_defaults: false,
+        };
+        let mut consumer = Self::spawn_parts(fixture, shell, 64 << 20, 128 << 20);
+        consumer.type_into(b"echo SHELL_READY\n");
+        consumer.until(b"SHELL_READY");
         consumer
+    }
+
+    /// Ordinary PTY input, not the sender's SEND/STAT protocol.
+    fn type_into(&mut self, bytes: &[u8]) {
+        ClientMsg::Input(bytes.to_vec())
+            .encode(&mut self.stream)
+            .unwrap();
     }
 
     fn new(stream: Stream, pane: u64, needs_replay: bool) -> Self {
@@ -388,6 +419,17 @@ fn attach(fixture: &NativeSshFixture, pane: u64) -> Consumer {
     .encode(&mut stream)
     .unwrap();
     Consumer::new(stream, pane, true)
+}
+
+/// One `/bin/sh` command line from the checked-in fixture's program and args.
+fn shell_line(spec: &ShellSpec) -> String {
+    let quote = |text: &str| format!("'{}'", text.replace('\'', "'\\''"));
+    let mut line = quote(&spec.program);
+    for arg in &spec.args {
+        line.push(' ');
+        line.push_str(&quote(arg));
+    }
+    line
 }
 
 fn base64(bytes: &[u8]) -> String {
@@ -1111,19 +1153,6 @@ fn native_ssh_graphics_nested_ssh_refuses_indirect_and_preserves_direct() {
 // is used because the fixed Linux fixture need not install img2sixel.
 const SIXEL_PRODUCER_OUTPUT: &[u8] = b"\x1bPq\"1;1;40;40#0;2;72;20;24#1;2;24;74;11#2;2;74;74;24#3;2;24;20;66#0!19~#1!21~-#0!19~_$#1!19?^!20~-#0!20~#1^!19~$#2!20?_-#0!13BFFN^~~~#2~}!6{!12w$#3!13{wwo_#1!4?@!6B!12F-#3!18~}w#2!20~$#0!18?@F-#3!20~#2!20~-#3!20N#2!20N\x1b\\";
 
-/// 250 SGR resets per line consume the production 8 MiB replay ring without
-/// occupying retained cell rows, so the original colour OSC (or the image's
-/// precedence rows) leaves the ring while the accepted authority remains.
-fn ring_chunk(lines: usize) -> Vec<u8> {
-    let mut line = b"\x1b[0m".repeat(250);
-    line.extend_from_slice(b"\r\n");
-    let mut chunk = Vec::with_capacity(lines * line.len());
-    for _ in 0..lines {
-        chunk.extend_from_slice(&line);
-    }
-    chunk
-}
-
 /// The production replay ring is exactly 8 MiB, but eviction advances to the
 /// next parseable boundary and can drop the remainder of a sequence, so a real
 /// ring tail is at most a few bytes short of the cap.
@@ -1179,8 +1208,11 @@ fn native_ssh_pane_colors_projection_survives_ring_eviction_and_fresh_consumer()
         "the refused stream must close rather than keep a colour subscription"
     );
 
-    let mut pane = Consumer::spawn(&fixture, fixture.install_sender(&host), 64 << 20, 128 << 20);
+    let mut pane = Consumer::spawn_shell(&fixture);
     let pane_id = pane.pane;
+    let sender = fixture.install_sender(&host);
+    pane.type_into(format!("{}; echo SENDER_EXIT_$?\n", shell_line(&sender)).as_bytes());
+    pane.until(b"KITTY_READY");
 
     // A real Linux PTY application sets the indexed palette and all named
     // defaults in one ordered burst. These are live deltas over the theme.
@@ -1341,21 +1373,53 @@ fn native_ssh_pane_colors_projection_survives_ring_eviction_and_fresh_consumer()
     }
     drop(raw);
 
-    // More than the production ring, through the real Linux PTY. Each request
-    // stays under the daemon's 1 MiB Input admission cap (the hex payload is
-    // twice the emitted bytes); 18 x 500 lines is 9,018,000 bytes, past the
-    // 8 MiB ring. The original OSC bytes are gone; the accepted layer is not.
-    for _ in 0..18 {
-        pane.quiet(&ring_chunk(500));
-    }
-    let stopped = pane.stats();
+    // The original producer must actually exit, not merely stop sending. The
+    // interactive shell reports the child's real exit status; the pane, PTY and
+    // daemon stay alive for the next process.
+    let produced = pane.stats();
+    eprintln!("ORIGINAL_COLOUR_SENDER_BEFORE_EXIT {produced}");
+    assert!(sender_bytes(&produced) > 0);
+    pane.type_into(b"EXIT\n");
+    pane.until(b"SENDER_EXIT_0");
     assert!(
-        sender_bytes(&stopped) > 8 << 20,
-        "the real sender must write past the 8 MiB replay ring: {stopped}"
+        contains(&pane.text, b"SENDER_EXIT_0"),
+        "the original sender must exit with status 0"
+    );
+    eprintln!("ORIGINAL_COLOUR_SENDER_EXIT status=SENDER_EXIT_0");
+
+    // A separate one-shot process now writes SGR-only bytes past the production
+    // ring and exits. It carries no OSC, DCS, image or colour command.
+    let flood = fixture.install_script(
+        &host,
+        "ring_flood.mjs",
+        include_bytes!("../../../tests/support/ring_flood.mjs"),
+        Vec::new(),
+    );
+    pane.type_into(format!("{}; echo FLOOD_SHELL_EXIT_$?\n", shell_line(&flood)).as_bytes());
+    pane.until(b"FLOOD_SHELL_EXIT_0");
+    let flood_bytes = String::from_utf8_lossy(&pane.text)
+        .lines()
+        .find_map(|line| line.trim().strip_prefix("FLOOD_BYTES=").map(str::to_owned))
+        .expect("one-shot flood byte counter")
+        .parse::<usize>()
+        .expect("one-shot flood byte count");
+    assert!(
+        flood_bytes > 8 << 20,
+        "the one-shot producer must write past the 8 MiB replay ring: {flood_bytes}"
+    );
+    eprintln!("ONE_SHOT_COLOUR_FLOOD_EXIT status=FLOOD_SHELL_EXIT_0 bytes={flood_bytes}");
+    assert_eq!(
+        pane.state.colors, accepted,
+        "the SGR-only flood must not alter the accepted colour layer"
     );
     pane.detach();
     let mut fresh = attach(&fixture, pane_id);
-    let replay_stats = fresh.stats();
+    // No STAT after exit: the producer is gone. The replay itself is the proof.
+    fresh.until(b"FLOOD_SHELL_EXIT_0");
+    eprintln!(
+        "FRESH_COLOUR_CONSUMER snapshots={} text_bytes={}",
+        fresh.state.color_snapshots, fresh.text_bytes
+    );
     assert_eq!(
         fresh.state.colors, accepted,
         "a fresh consumer restores the decoded layer, not a copy of old OSC bytes"
@@ -1378,10 +1442,6 @@ fn native_ssh_pane_colors_projection_survives_ring_eviction_and_fresh_consumer()
             "the original colour OSC left the replay ring"
         );
     }
-    assert_eq!(
-        replay_stats, stopped,
-        "a fresh consumer must not make the living sender resend colour state"
-    );
     assert_eq!(status(&host).pid, daemon.pid);
     assert_eq!(host.peer().instance, instance);
     fixture.kill_pane(pane_id);
@@ -1405,8 +1465,11 @@ fn native_ssh_recorded_sixel_survives_ring_eviction_and_fresh_consumer() {
     );
     drop(probe);
 
-    let mut pane = Consumer::spawn(&fixture, fixture.install_sender(&host), 64 << 20, 128 << 20);
+    let mut pane = Consumer::spawn_shell(&fixture);
     let pane_id = pane.pane;
+    let sender = fixture.install_sender(&host);
+    pane.type_into(format!("{}; echo SENDER_EXIT_$?\n", shell_line(&sender)).as_bytes());
+    pane.until(b"KITTY_READY");
 
     // The daemon owns discovery through the real SSH route: colour registers,
     // the pane's current geometry, refused set/reset and ReGIS, in order.
@@ -1470,17 +1533,42 @@ fn native_ssh_recorded_sixel_survives_ring_eviction_and_fresh_consumer() {
     assert_eq!(pane.state.pixels(&sixel), accepted_pixels);
     assert!(contains(&pane.text, b"AFTER_REFUSED_SIXEL"));
 
-    // Push the original precedence rows out of the production 8 MiB ring. Each
-    // request stays under the daemon's 1 MiB Input cap; the image authority is
-    // independent of those bytes; the sender then waits.
-    for _ in 0..18 {
-        pane.quiet(&ring_chunk(500));
-    }
-    let stopped = pane.stats();
+    // The original producer must actually exit, not merely stop sending. The
+    // interactive shell reports the child's real exit status; the pane, PTY and
+    // daemon stay alive for the next process.
+    let produced = pane.stats();
+    eprintln!("ORIGINAL_SIXEL_SENDER_BEFORE_EXIT {produced}");
+    assert!(sender_bytes(&produced) > 0);
+    pane.type_into(b"EXIT\n");
+    pane.until(b"SENDER_EXIT_0");
     assert!(
-        sender_bytes(&stopped) > 8 << 20,
-        "the real sender must write past the 8 MiB replay ring: {stopped}"
+        contains(&pane.text, b"SENDER_EXIT_0"),
+        "the original sender must exit with status 0"
     );
+    eprintln!("ORIGINAL_SIXEL_SENDER_EXIT status=SENDER_EXIT_0");
+
+    // A separate one-shot process now writes SGR-only bytes past the 8 MiB ring
+    // and exits. It carries no OSC, DCS, image or colour command; the accepted
+    // image authority is independent of those bytes.
+    let flood = fixture.install_script(
+        &host,
+        "ring_flood.mjs",
+        include_bytes!("../../../tests/support/ring_flood.mjs"),
+        Vec::new(),
+    );
+    pane.type_into(format!("{}; echo FLOOD_SHELL_EXIT_$?\n", shell_line(&flood)).as_bytes());
+    pane.until(b"FLOOD_SHELL_EXIT_0");
+    let flood_bytes = String::from_utf8_lossy(&pane.text)
+        .lines()
+        .find_map(|line| line.trim().strip_prefix("FLOOD_BYTES=").map(str::to_owned))
+        .expect("one-shot flood byte counter")
+        .parse::<usize>()
+        .expect("one-shot flood byte count");
+    assert!(
+        flood_bytes > 8 << 20,
+        "the one-shot producer must write past the 8 MiB replay ring: {flood_bytes}"
+    );
+    eprintln!("ONE_SHOT_SIXEL_FLOOD_EXIT status=FLOOD_SHELL_EXIT_0 bytes={flood_bytes}");
     let expected = pane.state.placements.clone();
     let expected_pixels = pane.state.pixels(
         pane.state
@@ -1491,7 +1579,14 @@ fn native_ssh_recorded_sixel_survives_ring_eviction_and_fresh_consumer() {
     );
     pane.detach();
     let mut fresh = attach(&fixture, pane_id);
-    let replay_stats = fresh.stats();
+    // No STAT after exit: the producer is gone. The replay itself is the proof.
+    fresh.until(b"FLOOD_SHELL_EXIT_0");
+    eprintln!(
+        "FRESH_SIXEL_CONSUMER placements={} text_bytes={} resource_bytes={}",
+        fresh.state.placements.len(),
+        fresh.text_bytes,
+        fresh.resource_pixel_bytes
+    );
     assert_eq!(
         fresh.state.placements, expected,
         "the fresh consumer restores accepted placement authority"
@@ -1513,10 +1608,6 @@ fn native_ssh_recorded_sixel_survives_ring_eviction_and_fresh_consumer() {
     assert!(
         !contains(&fresh.text, b"\x1bPq"),
         "the original DCS never rides the fresh text replay"
-    );
-    assert_eq!(
-        replay_stats, stopped,
-        "the living producer must not retransmit accepted Sixel on attach"
     );
     assert_eq!(status(&host).pid, daemon.pid);
     assert_eq!(host.peer().instance, instance);
