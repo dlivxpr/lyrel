@@ -216,6 +216,12 @@ impl Drop for GraphicsDaemonProcess {
     }
 }
 
+/// The actual Ubuntu `libsixel-bin 1.10.5-1build1` output of
+/// `img2sixel -w 40 -h 40 -p 4 -d none colors.ppm` for the 2x2 red/green over
+/// blue/yellow PPM. libsixel quantizes the scaled image, so the first pixel is
+/// `[184, 51, 61]` in RGBA (BGRA after the production decoder).
+const SIXEL_PRODUCER_OUTPUT: &[u8] = b"\x1bPq\"1;1;40;40#0;2;72;20;24#1;2;24;74;11#2;2;74;74;24#3;2;24;20;66#0!19~#1!21~-#0!19~_$#1!19?^!20~-#0!20~#1^!19~$#2!20?_-#0!13BFFN^~~~#2~}!6{!12w$#3!13{wwo_#1!4?@!6B!12F-#3!18~}w#2!20~$#0!18?@F-#3!20~#2!20~-#3!20N#2!20N\x1b\\";
+
 fn graphics_send_fixture(
     view: &Entity<TerminalView>,
     cx: &mut TestAppContext,
@@ -321,8 +327,16 @@ fn graphics_build_rooted_consumer_at(
     let window: gpui_kit::AnyWindowHandle = cx.add_window(|_, _| gpui_kit::EmptyView).into();
     let view = window
         .update(cx, |_, window, cx| {
-            let terminal =
-                RemoteTerminal::from_stream_with(stream, size, buffered, source).unwrap();
+            // The fixture daemon is this same build and the stream above was
+            // negotiated with it, so its version describes the real endpoint.
+            let terminal = RemoteTerminal::from_stream_with_endpoint(
+                stream,
+                size,
+                buffered,
+                source,
+                Some(&crate::daemon::protocol::DaemonVersion::current()),
+            )
+            .unwrap();
             cx.new(|cx| TerminalView::with_terminal(terminal, pane, window, cx))
         })
         .unwrap();

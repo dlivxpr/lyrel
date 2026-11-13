@@ -144,6 +144,14 @@ pub const FEATURE_RESIZE_ECHO: &str = "resize-echo";
 /// never by a desktop/CLI parser or snapshot replay.
 pub const FEATURE_XTGETTCAP_OWNER: &str = "xtgettcap-owner";
 
+/// The daemon admits static inline Sixel into the existing bounded graphics
+/// authority: the DCS is extracted before the text ring, pixels and placements
+/// replay to a fresh consumer without the producer resending, and refusals
+/// leave accepted resources and later text coherent. A client that does not see
+/// this feature must not advertise Sixel in its DA1 answer, because a routed
+/// remote endpoint that lacks it would silently drop the image.
+pub const FEATURE_STATIC_SIXEL: &str = "static-sixel";
+
 /// The daemon can seed a new pane with the screen a dead one left behind, named
 /// by `ClientMsg::Spawn`'s `restore` field. A client that does not see this
 /// feature leaves the field out: an older daemon would ignore it and spawn a
@@ -187,6 +195,7 @@ impl DaemonVersion {
             FEATURE_AGENT_REQUESTS.to_string(),
             FEATURE_AGENT_STATE_AGE.to_string(),
             FEATURE_XTGETTCAP_OWNER.to_string(),
+            FEATURE_STATIC_SIXEL.to_string(),
         ];
         if cfg!(unix) {
             features.push(FEATURE_HANDOFF.to_string());

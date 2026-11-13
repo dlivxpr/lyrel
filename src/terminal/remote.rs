@@ -632,6 +632,46 @@ impl RemoteTerminal {
         cell_w: u16,
         cell_h: u16,
     ) -> anyhow::Result<()> {
+        self.adopt_relink_inner(stream, buffered, route, size, cell_w, cell_h, None)
+    }
+
+    /// A relink that negotiated again keeps DA1 on the endpoint's current
+    /// answer instead of the one this pane was spawned against.
+    pub fn adopt_relink_with_endpoint(
+        &mut self,
+        stream: Stream,
+        buffered: Vec<u8>,
+        route: &PaneRoute,
+        size: TermSize,
+        cell_w: u16,
+        cell_h: u16,
+        endpoint: &crate::daemon::protocol::DaemonVersion,
+    ) -> anyhow::Result<()> {
+        self.adopt_relink_inner(
+            stream,
+            buffered,
+            route,
+            size,
+            cell_w,
+            cell_h,
+            Some(endpoint),
+        )
+    }
+
+    fn adopt_relink_inner(
+        &mut self,
+        stream: Stream,
+        buffered: Vec<u8>,
+        route: &PaneRoute,
+        size: TermSize,
+        cell_w: u16,
+        cell_h: u16,
+        endpoint: Option<&crate::daemon::protocol::DaemonVersion>,
+    ) -> anyhow::Result<()> {
+        self.proxy.parse_state.presentation.lock().unwrap().endpoint_sixel = endpoint
+            .is_some_and(|version| {
+                version.has_feature(crate::daemon::protocol::FEATURE_STATIC_SIXEL)
+            });
         let signals = self.reader_signals(false);
         self.connection.adopt_relink(
             stream,
@@ -684,6 +724,7 @@ impl RemoteTerminal {
             PtySource::for_route(&PaneRoute::Local),
             true,
             crate::terminal::images::ImageStore::new(),
+            None,
         )
     }
 
@@ -712,6 +753,30 @@ impl RemoteTerminal {
             pty,
             false,
             crate::terminal::images::ImageStore::new(),
+            None,
+        )
+    }
+
+    /// A test pane over an already negotiated connection. `endpoint` is the
+    /// version that connection actually answered with; the production
+    /// handshake passes it so DA1 describes the real endpoint, and `None`
+    /// models an endpoint that never negotiated the feature.
+    #[cfg(any(test, feature = "native-markdown-tests"))]
+    pub(super) fn from_stream_with_endpoint(
+        stream: Stream,
+        size: TermSize,
+        buffered: Vec<u8>,
+        pty: PtySource,
+        endpoint: Option<&crate::daemon::protocol::DaemonVersion>,
+    ) -> anyhow::Result<Self> {
+        Self::from_stream_parts(
+            stream,
+            size,
+            buffered,
+            pty,
+            false,
+            crate::terminal::images::ImageStore::new(),
+            endpoint,
         )
     }
 
@@ -728,15 +793,20 @@ impl RemoteTerminal {
         pty: PtySource,
         awaiting_replay: bool,
         images: crate::terminal::images::ImageStore,
+        endpoint: Option<&crate::daemon::protocol::DaemonVersion>,
     ) -> anyhow::Result<Self> {
         let user_config = crate::core::config::Config::load();
         let (tx, rx) = smol::channel::unbounded();
+        let mut presentation = super::presentation::ParsePresentation::new(size.cols);
+        presentation.endpoint_sixel = endpoint.is_some_and(|version| {
+            version.has_feature(crate::daemon::protocol::FEATURE_STATIC_SIXEL)
+        });
         let proxy = EventProxy {
             tx,
             parse_state: Arc::new(ParseState {
                 replaying: AtomicBool::new(false),
                 history_limit: AtomicUsize::new(user_config.scrollback_limit),
-                presentation: Mutex::new(super::presentation::ParsePresentation::new(size.cols)),
+                presentation: Mutex::new(presentation),
             }),
         };
 

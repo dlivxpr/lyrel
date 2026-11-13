@@ -6,14 +6,25 @@ use rio_vt::ansi::sixel;
 use rio_vt::performer::handler::{Handler, Processor};
 use rio_vt::performer::parser::Params;
 
-const SIDE: usize = 4096; // rio-graphics 0.5.30 MAX_GRAPHIC_DIMENSIONS
+pub(crate) const SIDE: usize = 4096; // rio-graphics 0.5.30 MAX_GRAPHIC_DIMENSIONS
 const PALETTE_SCRATCH: usize = 16 << 10;
+
+/// Where the sixel cursor stands when the data ends, in image pixels. The DEC
+/// text cursor after scrolling-mode Sixel is this position rounded down to a
+/// text cell, and it is not the decoded pixel extent: a graphic newline takes
+/// up a sixel line even when no pixel is drawn on it, and a partial last band
+/// rounds back to the cell row it started in.
+#[derive(Clone, Copy)]
+pub(crate) struct Cursor {
+    /// Top of the band the cursor is on after the last `-`.
+    pub band_top: u32,
+}
 
 // Only allocation/relocation admission: colors and pixels are interpreted solely
 // by Rio. Like PNG IHDR admission, this runs before the decoder can allocate.
 // Account for every geometry-changing command, not just the declared raster:
 // Sixel permits later drawing outside that declaration.
-fn scratch(body: &[u8]) -> Option<usize> {
+fn scratch(body: &[u8]) -> Option<(usize, Cursor)> {
     let (mut width, mut height, mut x, mut y) = (0usize, 0usize, 0usize, 0usize);
     let mut repeat = 1usize;
     let mut pixel_work = 0usize;
@@ -88,7 +99,13 @@ fn scratch(body: &[u8]) -> Option<usize> {
     // Rio's u16 index Vec can grow to <2*pixel_count elements. Old/new
     // allocations during growth cost <6 bytes/pixel; finish holds that Vec
     // plus exact RGBA (at most 8 bytes/pixel), palette and lookup table.
-    pixels.checked_mul(8)?.checked_add(PALETTE_SCRATCH)
+    let bytes = pixels.checked_mul(8)?.checked_add(PALETTE_SCRATCH)?;
+    Some((
+        bytes,
+        Cursor {
+            band_top: u32::try_from(y).ok()?,
+        },
+    ))
 }
 
 #[derive(Default)]
@@ -127,13 +144,16 @@ impl Handler for Decoder {
     }
 }
 
-pub(crate) fn decode(mut source: Image, work: &mut retention::Work) -> Result<Image, &'static str> {
+pub(crate) fn decode(
+    mut source: Image,
+    work: &mut retention::Work,
+) -> Result<(Image, Cursor), &'static str> {
     let q = source
         .data
         .iter()
         .position(|byte| *byte == b'q')
         .ok_or("EINVAL:Invalid Sixel header")?;
-    let scratch =
+    let (scratch, cursor) =
         scratch(&source.data[q + 1..]).ok_or("ENOSPC:Sixel dimensions or work exceed limit")?;
     if !work.resize(source.data.capacity() + scratch) {
         return Err("ENOSPC:Sixel preparation budget exhausted");
@@ -156,7 +176,7 @@ pub(crate) fn decode(mut source: Image, work: &mut retention::Work) -> Result<Im
     let image = decoder.image.take().ok_or("EINVAL:Invalid Sixel image")?;
     source.data = Vec::new();
     work.resize(image.data.capacity());
-    Ok(image)
+    Ok((image, cursor))
 }
 
 #[cfg(test)]
@@ -207,7 +227,81 @@ mod tests {
         (effects, output)
     }
 
-    const RED: &[u8] = b"\x1bP0;1q\"1;1;20;40#0;2;100;0;0!20~\x1b\\";
+    // The real producer draws every band of its declared extent; the last band
+    // is four pixels tall so the image is exactly 40 rows and the sixel cursor
+    // ends at band 36 (one text row down at 20px cells).
+    const RED: &[u8] = b"\x1bP0;1q\"1;1;20;40#0;2;100;0;0!20~-!20~-!20~-!20~-!20~-!20~-!20N\x1b\\";
+
+    #[test]
+    fn sixel_raster_extent_is_honored_and_pixel_aspect_stays_square() {
+        // `"Pan;Pad;Ph;Pv` declares the raster extent; the aspect parameters are
+        // ignored because every implementation uses square pixels. Undrawn
+        // pixels keep the background register (0 here), so a declared extent
+        // pads the image instead of cropping it, and both declarations must
+        // yield identical pixels.
+        let mut decoded = Vec::new();
+        for header in [b"\"1;1;20;40".as_slice(), b"\"2;1;20;40"] {
+            let (mut state, mut sniffer) = (state(), GraphicsSniffer::new());
+            feed(&mut state, &mut sniffer, b"\x1bc\x1b[6;5H");
+            let mut bytes = b"\x1bPq".to_vec();
+            bytes.extend_from_slice(header);
+            bytes.extend_from_slice(b"#0;2;100;0;0#0!2~\x1b\\");
+            feed(&mut state, &mut sniffer, &bytes);
+            let placement = state.placements().next().unwrap();
+            assert_eq!(
+                (placement.w, placement.h),
+                (20, 40),
+                "Ph;Pv is the admitted image extent, including undrawn background"
+            );
+            assert_eq!(
+                (placement.span_cols, placement.span_rows),
+                (2, 2),
+                "cell span derives from the declared extent, not from drawn pixels"
+            );
+            decoded.push((placement.w, placement.h, placement.span_cols, placement.span_rows));
+        }
+        assert_eq!(
+            decoded[0], decoded[1],
+            "aspect parameters cannot stretch square pixels"
+        );
+    }
+
+    #[test]
+    fn sixel_cursor_uses_the_final_sixel_position_not_the_pixel_bbox() {
+        // DEC: with scrolling enabled the text cursor becomes the final sixel
+        // cursor position rounded down to a text cell. Four bands at 0/6/12/18
+        // make a 24px image whose last band starts at 18 and rounds back into
+        // the anchor row (cell height 20); a trailing graphic newline moves the
+        // sixel cursor to 24, one text row down, even though it draws nothing.
+        for (body, movement) in [
+            (
+                b"\"1;1;20;24#0;2;100;0;0!20~-!20~-!20~-!20~".as_slice(),
+                b"\x1b[5G".as_slice(),
+            ),
+            (
+                b"\"1;1;20;24#0;2;100;0;0!20~-!20~-!20~-!20~-",
+                b"\x1bD\x1b[5G",
+            ),
+        ] {
+            let (mut state, mut sniffer) = (state(), GraphicsSniffer::new());
+            feed(&mut state, &mut sniffer, b"\x1bc\x1b[6;5H");
+            let mut bytes = b"\x1bPq".to_vec();
+            bytes.extend_from_slice(body);
+            bytes.extend_from_slice(b"\x1b\\");
+            let (effects, _) = feed(&mut state, &mut sniffer, &bytes);
+            let output: Vec<u8> = effects
+                .iter()
+                .flat_map(|effect| match effect {
+                    GraphicsEffect::Output(bytes) => bytes.clone(),
+                    _ => Vec::new(),
+                })
+                .collect();
+            assert_eq!(
+                output, movement,
+                "cursor movement follows the sixel cursor, not the pixel extent"
+            );
+        }
+    }
 
     #[test]
     fn sixel_layout_scroll_display_and_clear_share_authoritative_placements() {

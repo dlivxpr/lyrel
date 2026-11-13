@@ -2119,11 +2119,18 @@ fn relink_panes(cx: &mut gpui_kit::App, workspace: WorkspaceId) {
                 })
                 .await;
             match opened {
-                Ok((stream, buffered)) => {
+                Ok((stream, buffered, endpoint)) => {
                     view.update(cx, |view, cx| {
-                        if let Err(e) =
-                            view.adopt_relink(stream, buffered, &adopting, size, cell_w, cell_h, cx)
-                        {
+                        if let Err(e) = view.adopt_relink_with_endpoint(
+                            stream,
+                            buffered,
+                            &adopting,
+                            size,
+                            cell_w,
+                            cell_h,
+                            &endpoint,
+                            cx,
+                        ) {
                             view.relink_settled();
                             log::warn!("pane {pane_id} re-attached but could not be adopted: {e}");
                         }
@@ -2252,9 +2259,11 @@ fn relink_dead_panes(
         let mut misses = 0usize;
         for (view, opened, pane_id, size, cell_w, cell_h) in attempts {
             match opened.await {
-                Ok((stream, buffered)) => {
+                Ok((stream, buffered, endpoint)) => {
                     let adopted = view.update(cx, |view, cx| {
-                        view.adopt_relink(stream, buffered, &route, size, cell_w, cell_h, cx)
+                        view.adopt_relink_with_endpoint(
+                            stream, buffered, &route, size, cell_w, cell_h, &endpoint, cx,
+                        )
                     });
                     match adopted {
                         Ok(()) => log::info!("pane {pane_id} came back on its own"),

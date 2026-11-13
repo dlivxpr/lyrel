@@ -50,7 +50,7 @@ fn sixel_production_consumer_paints_pixels_and_keeps_following_text_order(cx: &m
     let (view, window) = graphics_rooted_consumer(cx, pane, daemon.stream(pane));
     // The pixel payload is the actual libsixel 1.10.5 producer output, not a
     // private cache insertion or Rio renderer. This includes the real grant.
-    let sixel = b"\x1bPq\"1;1;40;40#0;2;72;20;24#1;2;24;74;11#2;2;74;74;24#3;2;24;20;66#0!19~#1!21~-#0!19~_$#1!19?^!20~-#0!20~#1^!19~$#2!20?_-#0!13BFFN^~~~#2~}!6{!12w$#3!13{wwo_#1!4?@!6B!12F-#3!18~}w#2!20~$#0!18?@F-#3!20~#2!20~-#3!20N#2!20N\x1b\\";
+    let sixel = SIXEL_PRODUCER_OUTPUT;
     let mut bytes = b"\x1bc\x1b[?2026h\x1b[6;5H".to_vec();
     bytes.extend_from_slice(sixel);
     bytes.extend_from_slice(b"AFTER_274\x1b[?2026l");

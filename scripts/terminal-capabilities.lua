@@ -1,6 +1,9 @@
 -- 真实 Neovim TUI 场景（不是 --headless）：
 -- nvim -u NONE --cmd "luafile scripts/terminal-capabilities.lua"
 -- 使用 Neovim 0.12 的公开 vim.tty.query，保留 UI 供原生观察。
+-- 该 API 只能查询 XTGETTCAP：Co/colors/RGB 为正答，其余（含 `sixel` 这个
+-- terminfo 能力名）为负答。静态 Sixel 由 DA1 属性 4 与 XTSMGRAPHICS 发现，
+-- 公开 API 不暴露 DA1，因此本场景不据此断言图像支持或否认。
 local function run()
   local expected = { Co = '256', RGB = '8/8/8' }
   local counts = {}
@@ -32,7 +35,8 @@ local function run()
       end
       if complete then
         table.insert(display, '')
-        table.insert(display, '查询完成；按 :q 退出。此场景不宣称 Sixel/Glyph/剪贴板已实现。')
+        table.insert(display, '查询完成；按 :q 退出。XTGETTCAP 只覆盖 Co/colors/RGB；')
+        table.insert(display, 'Sixel 由 DA1 属性 4 与 XTSMGRAPHICS 发现，公开 API 不查询 DA1。')
       end
       vim.api.nvim_buf_set_lines(0, 0, -1, false, display)
     end)

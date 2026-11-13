@@ -13,16 +13,23 @@ use std::path::PathBuf;
 pub(crate) struct PaneHandshake {
     stream: Stream,
     images: crate::terminal::images::ImageStore,
+    /// What this connection's endpoint actually answered, not what this build
+    /// could do: DA1 and image capability claims follow it.
+    version: crate::daemon::protocol::DaemonVersion,
 }
 
 impl PaneHandshake {
     fn open(route: &PaneRoute, cell_w: u16, cell_h: u16) -> anyhow::Result<Self> {
         let mut stream = connect_routed(route)?;
-        Self::negotiate_pane_protocol(&mut stream, attach_reply_wait(route))?;
+        let version = Self::negotiate_pane_protocol(&mut stream, attach_reply_wait(route))?;
         let images = crate::terminal::images::ImageStore::new();
         images.set_cell_metrics(cell_w, cell_h);
         Self::send_graphics_capacity(&mut stream, &images)?;
-        Ok(Self { stream, images })
+        Ok(Self {
+            stream,
+            images,
+            version,
+        })
     }
 
     pub fn spawn_on(
@@ -101,7 +108,11 @@ impl PaneHandshake {
         restore: Option<RestoreFrom>,
         cancellation: Option<&SpawnCancellation>,
     ) -> anyhow::Result<(RemoteTerminal, u64)> {
-        let Self { mut stream, images } = Self::open(route, cell_w, cell_h)?;
+        let Self {
+            mut stream,
+            images,
+            version,
+        } = Self::open(route, cell_w, cell_h)?;
         let await_claim = route.is_local() && cancellation.is_some();
         if await_claim
             && !crate::daemon::spawn::local_daemon_supports(
@@ -185,6 +196,7 @@ impl PaneHandshake {
             PtySource::for_route(route),
             false,
             images,
+            Some(&version),
         )?;
         term.connection
             .finish_spawn(route.clone(), await_claim.then_some((pane_id, win)));
@@ -195,12 +207,11 @@ impl PaneHandshake {
     fn negotiate_pane_protocol(
         stream: &mut Stream,
         wait: std::time::Duration,
-    ) -> anyhow::Result<()> {
+    ) -> anyhow::Result<crate::daemon::protocol::DaemonVersion> {
         let _ = stream.set_read_timeout(Some(wait));
         let result = crate::daemon::protocol::negotiate_pane(stream);
         let _ = stream.set_read_timeout(None);
-        result?;
-        Ok(())
+        Ok(result?)
     }
     fn send_graphics_capacity(
         stream: &mut Stream,
@@ -223,7 +234,11 @@ impl PaneHandshake {
         cell_h: u16,
         pane_id: u64,
     ) -> anyhow::Result<RemoteTerminal> {
-        let Self { mut stream, images } = Self::open(route, cell_w, cell_h)?;
+        let Self {
+            mut stream,
+            images,
+            version,
+        } = Self::open(route, cell_w, cell_h)?;
         let win = win_size(size, cell_w, cell_h);
 
         ClientMsg::Attach {
@@ -245,6 +260,7 @@ impl PaneHandshake {
             PtySource::for_route(route),
             true,
             images,
+            Some(&version),
         )?;
         term.connection.finish_spawn(route.clone(), None);
         Ok(term)
@@ -263,9 +279,9 @@ impl PaneHandshake {
         cell_w: u16,
         cell_h: u16,
         images: crate::terminal::images::ImageStore,
-    ) -> anyhow::Result<(Stream, Vec<u8>)> {
+    ) -> anyhow::Result<(Stream, Vec<u8>, crate::daemon::protocol::DaemonVersion)> {
         let mut stream = connect_routed(route)?;
-        Self::negotiate_pane_protocol(&mut stream, attach_reply_wait(route))?;
+        let version = Self::negotiate_pane_protocol(&mut stream, attach_reply_wait(route))?;
         Self::send_graphics_capacity(&mut stream, &images)?;
         ClientMsg::Attach {
             pane_id,
@@ -279,7 +295,7 @@ impl PaneHandshake {
             attach_reply_wait(route),
             &images,
         )?;
-        Ok((stream, buffered))
+        Ok((stream, buffered, version))
     }
 
     /// `remote_start_dir` is a directory on the far host, carried as
@@ -324,7 +340,11 @@ impl PaneHandshake {
         remote_start_dir: Option<PathBuf>,
         spec: Box<NativeSshSpec>,
     ) -> anyhow::Result<(RemoteTerminal, u64)> {
-        let Self { mut stream, images } = Self::open(&PaneRoute::Local, cell_w, cell_h)?;
+        let Self {
+            mut stream,
+            images,
+            version,
+        } = Self::open(&PaneRoute::Local, cell_w, cell_h)?;
         let win = win_size(size, cell_w, cell_h);
         let endpoint = (spec.host.clone(), spec.port);
         let user = spec.user.clone();
@@ -365,6 +385,7 @@ impl PaneHandshake {
             PtySource::Raw,
             false,
             images,
+            Some(&version),
         )?;
         term.ssh_endpoint = Some(endpoint);
         term.ssh_user = Some(user);

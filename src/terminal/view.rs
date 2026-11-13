@@ -998,6 +998,34 @@ impl TerminalView {
         self.remote_clipboard_write_in_flight = None;
         self.terminal
             .adopt_relink(stream, buffered, route, size, cell_w, cell_h)?;
+        self.finish_relink(cx);
+        Ok(())
+    }
+
+    /// The production relink, which negotiated again and therefore knows the
+    /// endpoint's current capabilities.
+    pub fn adopt_relink_with_endpoint(
+        &mut self,
+        stream: crate::daemon::transport::Stream,
+        buffered: Vec<u8>,
+        route: &crate::terminal::PaneRoute,
+        size: TermSize,
+        cell_w: u16,
+        cell_h: u16,
+        endpoint: &crate::daemon::protocol::DaemonVersion,
+        cx: &mut Context<Self>,
+    ) -> anyhow::Result<()> {
+        self.input.forget_keys();
+        self.remote_clipboard_write_generation =
+            self.remote_clipboard_write_generation.wrapping_add(1);
+        self.remote_clipboard_write_in_flight = None;
+        self.terminal
+            .adopt_relink_with_endpoint(stream, buffered, route, size, cell_w, cell_h, endpoint)?;
+        self.finish_relink(cx);
+        Ok(())
+    }
+
+    fn finish_relink(&mut self, cx: &mut Context<Self>) {
         self.grid_snap = None;
         self.grid_buf.clear();
         self.selection_scroll.clear_presented();
@@ -1006,7 +1034,6 @@ impl TerminalView {
         self.relink_inflight = false;
         self.title = self.default_title.clone();
         cx.notify();
-        Ok(())
     }
 
     pub fn detach_link(&mut self, cx: &mut Context<Self>) {
@@ -3326,6 +3353,7 @@ mod gpui_tests {
     include!("graphics_resize_consumer_tests.rs");
     include!("graphics_layout_consumer_tests.rs");
     include!("graphics_recovery_consumer_tests.rs");
+    include!("graphics_sixel_consumer_tests.rs");
     include!("graphics_playback_consumer_tests.rs");
     include!("graphics_capacity_consumer_tests.rs");
     include!("native_picture_support.rs");
