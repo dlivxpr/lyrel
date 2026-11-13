@@ -184,7 +184,7 @@ pub fn pty_sender() {
             other => panic!("unexpected PTY operation {other}"),
         }
         let mut reply_hex = String::new();
-        for reply_ix in 0..replies {
+        for _ in 0..replies {
             let mut reply = Vec::new();
             // ST terminates Kitty replies; a `t`- or `c`-final CSI terminates
             // the geometry and DA1 answers this fixture also captures.
@@ -194,18 +194,6 @@ pub fn pty_sender() {
                 let mut byte = [0];
                 input.read_exact(&mut byte).unwrap();
                 reply.push(byte[0]);
-                if operation == "SEND_ANY"
-                    && let Some(dir) = std::env::var_os("LYREL_GLYPH270_DIAG_DIR")
-                {
-                    std::fs::write(
-                        std::path::PathBuf::from(dir).join(format!("{serial}-{reply_ix}.hex")),
-                        hex(&reply),
-                    )
-                    .unwrap();
-                }
-            }
-            if operation == "SEND_ANY" {
-                eprintln!("[DEBUG-glyph270] serial={serial} reply={}", hex(&reply));
             }
             if operation == "SEND_OK" {
                 assert!(

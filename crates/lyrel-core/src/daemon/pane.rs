@@ -1367,9 +1367,6 @@ impl DaemonPane {
         }
         if let Ok(mut writer) = self.writer.lock() {
             let _ = writer.write_all(bytes);
-            if bytes == b"\x1b[?4;6c" || bytes == b"\x1b[?6c" {
-                eprintln!("[DEBUG-glyph270] PTY input DA1 written={bytes:?}");
-            }
             let _ = writer.flush();
         }
     }

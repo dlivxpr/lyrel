@@ -53,7 +53,6 @@ pub(super) fn consume(
                 .unwrap()
                 .subscriptions
                 .controller_renders_glyphs();
-            eprintln!("[DEBUG-glyph270] support rendering={rendering}");
             if rendering {
                 write_graphics_reply(writer, b"\x1b_25a1;s;fmt=glyf\x1b\\");
             }

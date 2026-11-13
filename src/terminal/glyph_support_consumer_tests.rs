@@ -16,12 +16,7 @@ fn glyph_support_stream(daemon: &GraphicsDaemonProcess, pane: u64, glyph_render:
     stream
         .set_read_timeout(Some(std::time::Duration::from_secs(30)))
         .unwrap();
-    let version =
-        crate::daemon::protocol::negotiate_pane_rendering(&mut stream, glyph_render).unwrap();
-    eprintln!(
-        "[DEBUG-glyph270] render={glyph_render} negotiated features={:?}",
-        version.features
-    );
+    crate::daemon::protocol::negotiate_pane_rendering(&mut stream, glyph_render).unwrap();
     ClientMsg::GraphicsCapacity {
         encoded_bytes: 64 << 20,
         decoded_bytes: 128 << 20,
@@ -55,9 +50,7 @@ fn glyph_support_stream(daemon: &GraphicsDaemonProcess, pane: u64, glyph_render:
 fn glyph_support_probe_reaches_the_opted_in_controller() {
     use crate::daemon::protocol::DaemonMsg;
 
-    let daemon = GraphicsDaemonProcess::start_with(|command, _| {
-        command.stderr(std::process::Stdio::inherit());
-    });
+    let daemon = GraphicsDaemonProcess::start();
     let pane = daemon.spawn();
     let mut stream = glyph_support_stream(&daemon, pane, true);
     stream
@@ -169,9 +162,7 @@ fn glyph_send_parts(
 fn glyph_consumer_support_and_query_replies_precede_the_da1_sentinel(cx: &mut TestAppContext) {
     crate::core::config::pin_test_config_dir();
     cx.executor().allow_parking();
-    let daemon = GraphicsDaemonProcess::start_with(|command, _| {
-        command.stderr(std::process::Stdio::inherit());
-    });
+    let daemon = GraphicsDaemonProcess::start();
     let pane = daemon.spawn();
     cx.update(|cx| {
         gpui_kit::component::init(cx);
@@ -179,6 +170,11 @@ fn glyph_consumer_support_and_query_replies_precede_the_da1_sentinel(cx: &mut Te
     });
     let (view, _window) =
         graphics_rooted_consumer(cx, pane, glyph_support_stream(&daemon, pane, true));
+    // ConPTY consumes the first DA1 response as its own terminal identity.
+    // Real omp negotiates that before Glyph; prime the fixture the same way
+    // without changing the measured q/s + DA1 writes or expected replies.
+    #[cfg(windows)]
+    graphics_send_fixture(&view, cx, 9, b"\x1b[c");
     let replies = tempfile::TempDir::new().unwrap();
     // First prove the controller is bound: the `q` round trip requires the
     // pane's current subscriber, so a `q`+DA1 pair that both answer shows the
@@ -261,9 +257,7 @@ fn glyph_consumer_support_and_query_replies_precede_the_da1_sentinel(cx: &mut Te
 fn glyph_consumer_support_answer_tracks_the_controllers_render_opt_in(cx: &mut TestAppContext) {
     crate::core::config::pin_test_config_dir();
     cx.executor().allow_parking();
-    let daemon = GraphicsDaemonProcess::start_with(|command, _| {
-        command.stderr(std::process::Stdio::inherit());
-    });
+    let daemon = GraphicsDaemonProcess::start();
     let pane = daemon.spawn();
     cx.update(|cx| {
         gpui_kit::component::init(cx);
@@ -275,6 +269,9 @@ fn glyph_consumer_support_answer_tracks_the_controllers_render_opt_in(cx: &mut T
     // before the DA1 its own write carried.
     let (view, _window) =
         graphics_rooted_consumer(cx, pane, glyph_support_stream(&daemon, pane, true));
+    // ConPTY's initial DA1 belongs to the host, not the application stdin.
+    #[cfg(windows)]
+    graphics_send_fixture(&view, cx, 9, b"\x1b[c");
     let parts = glyph_send_parts(
         &view,
         cx,
