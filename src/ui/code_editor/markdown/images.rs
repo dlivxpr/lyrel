@@ -560,12 +560,34 @@ enum Import {
     Paths(Vec<PathBuf>),
 }
 
-fn invalid(message: impl Into<String>) -> io::Error {
-    io::Error::new(io::ErrorKind::InvalidData, message.into())
+// Preserve keys across worker threads; format with the UI locale on completion.
+#[derive(Debug)]
+enum ImageError {
+    Localized(L10nKey),
+    Redirect(u16),
+}
+
+impl std::fmt::Display for ImageError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Localized(key) => formatter.write_str(t(*key)),
+            Self::Redirect(status) => write!(
+                formatter,
+                "HTTP {status} — {}",
+                t(L10nKey::MarkdownImageRedirectBlocked)
+            ),
+        }
+    }
+}
+
+impl std::error::Error for ImageError {}
+
+fn invalid(message: impl Into<Box<dyn std::error::Error + Send + Sync>>) -> io::Error {
+    io::Error::new(io::ErrorKind::InvalidData, message)
 }
 fn decode(bytes: &[u8]) -> io::Result<(image::RgbaImage, &'static str)> {
     if bytes.len() as u64 > MAX_BYTES {
-        return Err(invalid(t(L10nKey::MarkdownImageLimit)));
+        return Err(invalid(ImageError::Localized(L10nKey::MarkdownImageLimit)));
     }
     if let Ok(format) = image::guess_format(bytes) {
         let mut reader = image::ImageReader::with_format(std::io::Cursor::new(bytes), format);
@@ -579,7 +601,7 @@ fn decode(bytes: &[u8]) -> io::Result<(image::RgbaImage, &'static str)> {
             .map_err(|error| invalid(error.to_string()))?
             .into_rgba8();
         if rgba.width() as u64 * rgba.height() as u64 > MAX_PIXELS {
-            return Err(invalid(t(L10nKey::MarkdownImageLimit)));
+            return Err(invalid(ImageError::Localized(L10nKey::MarkdownImageLimit)));
         }
         let extension = match format {
             image::ImageFormat::Png => "png",
@@ -589,7 +611,11 @@ fn decode(bytes: &[u8]) -> io::Result<(image::RgbaImage, &'static str)> {
             image::ImageFormat::Bmp => "bmp",
             image::ImageFormat::Tiff => "tiff",
             image::ImageFormat::Ico => "ico",
-            _ => return Err(invalid(t(L10nKey::MarkdownImageUnsupported))),
+            _ => {
+                return Err(invalid(ImageError::Localized(
+                    L10nKey::MarkdownImageUnsupported,
+                )));
+            }
         };
         return Ok((rgba, extension));
     }
@@ -622,17 +648,19 @@ fn decode(bytes: &[u8]) -> io::Result<(image::RgbaImage, &'static str)> {
     let tree = resvg::usvg::Tree::from_data(bytes, &options)
         .map_err(|error| invalid(error.to_string()))?;
     if blocked.load(std::sync::atomic::Ordering::Relaxed) {
-        return Err(invalid(t(L10nKey::MarkdownImageExternalReference)));
+        return Err(invalid(ImageError::Localized(
+            L10nKey::MarkdownImageExternalReference,
+        )));
     }
     let size = tree.size().to_int_size();
     if size.width() > 8192
         || size.height() > 8192
         || size.width() as u64 * size.height() as u64 > MAX_PIXELS
     {
-        return Err(invalid(t(L10nKey::MarkdownImageLimit)));
+        return Err(invalid(ImageError::Localized(L10nKey::MarkdownImageLimit)));
     }
     let mut pixmap = resvg::tiny_skia::Pixmap::new(size.width(), size.height())
-        .ok_or_else(|| invalid(t(L10nKey::MarkdownImageLimit)))?;
+        .ok_or_else(|| invalid(ImageError::Localized(L10nKey::MarkdownImageLimit)))?;
     resvg::render(
         &tree,
         resvg::tiny_skia::Transform::identity(),
@@ -651,7 +679,7 @@ fn decode(bytes: &[u8]) -> io::Result<(image::RgbaImage, &'static str)> {
     }
     Ok((
         image::RgbaImage::from_raw(size.width(), size.height(), rgba)
-            .ok_or_else(|| invalid(t(L10nKey::MarkdownImageUnsupported)))?,
+            .ok_or_else(|| invalid(ImageError::Localized(L10nKey::MarkdownImageUnsupported)))?,
         "svg",
     ))
 }
@@ -680,10 +708,8 @@ fn fetch(url: &url::Url, proxy: Option<&str>) -> io::Result<Vec<u8>> {
         .call()
         .map_err(|error| io::Error::other(error.to_string()))?;
     if !(200..300).contains(&response.status().as_u16()) {
-        return Err(io::Error::other(format!(
-            "HTTP {} — {}",
-            response.status(),
-            t(L10nKey::MarkdownImageRedirectBlocked)
+        return Err(io::Error::other(ImageError::Redirect(
+            response.status().as_u16(),
         )));
     }
     response
@@ -715,7 +741,9 @@ fn store(host: &dyn Host, document: &Path, input: Import) -> io::Result<Vec<Stri
         })
         .collect::<io::Result<Vec<_>>>()?;
     if prepared.is_empty() {
-        return Err(invalid(t(L10nKey::MarkdownImageUnsupported)));
+        return Err(invalid(ImageError::Localized(
+            L10nKey::MarkdownImageUnsupported,
+        )));
     }
     let parent = links::parent(host, document)?;
     let dir = host.join(&parent, "assets");
@@ -726,7 +754,7 @@ fn store(host: &dyn Host, document: &Path, input: Import) -> io::Result<Vec<Stri
     if links::parent(host, &actual_dir)? != actual_parent {
         return Err(io::Error::new(
             io::ErrorKind::PermissionDenied,
-            t(L10nKey::MarkdownImageUnsafeDirectory),
+            ImageError::Localized(L10nKey::MarkdownImageUnsafeDirectory),
         ));
     }
     let mut created = Vec::new();
