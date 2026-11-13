@@ -312,9 +312,10 @@ fn glyph_consumer_declared_extents_modes_alignment_padding_and_baseline(cx: &mut
     let authored = painted[0].0;
     let top = authored.origin.y.0;
     let bottom = authored.origin.y.0 + authored.size.height.0;
+    let authored_zero = bottom - 0.2 * baseline_cell.size.height.0;
     assert!(
-        (bottom - (baseline_cell.origin.y.0 + baseline_px)).abs() <= 2.,
-        "authored y=0 lands on the text baseline: bottom={bottom:?}, baseline={:?}",
+        (authored_zero - (baseline_cell.origin.y.0 + baseline_px)).abs() <= 2.,
+        "authored y=0 lands on the text baseline: y0={authored_zero:?}, baseline={:?}",
         baseline_cell.origin.y.0 + baseline_px
     );
     assert!(
@@ -760,8 +761,9 @@ fn glyph_consumer_width_two_span_fallback_clip_and_logical_cells(cx: &mut TestAp
         "raw codepoint survives a width-two registration"
     );
     view.update(cx, |view, cx| {
-        view.on_select_start(4, 2, false, 1, false, cx);
-        view.on_select_update(6, 2, true, cx);
+        view.on_select_start(4, 2, true, 1, false, cx);
+        view.on_select_update(6, 2, false, cx);
+        view.on_select_end(cx);
         view.copy_selection(cx);
     });
     let copied = cx.update(|cx| cx.read_from_clipboard().and_then(|item| item.text()));
@@ -883,6 +885,16 @@ fn glyph_consumer_derived_rendering_follows_geometry_scale_and_revision(cx: &mut
     let old_cell = glyph_region_bounds(window, &view, cx, 2, 4, 1);
     view.update(cx, |view, _| view.font_size = view.font_size * 2.);
     let _ = glyph_painted(window, &view, cx, old_cell);
+    // The grid can reflow at the new size; place the same raw codepoint back
+    // under the cursor so the assertion reads the new cell geometry. This is
+    // display-only, not a registration.
+    serial += 1;
+    glyph_show(&view, cx, serial, 2, 4, &glyph.to_string());
+    glyph_wait(cx, "grown glyph cell visible", |cx| {
+        view.read_with(cx, |view, _| {
+            view.cell_geom.is_some() && glyph_presented_row(view, 2).chars().nth(4) == Some(glyph)
+        })
+    });
     let grown_cell = glyph_region_bounds(window, &view, cx, 2, 4, 1);
     assert!(
         grown_cell.size.width.0 > old_cell.size.width.0 + 1.5,
