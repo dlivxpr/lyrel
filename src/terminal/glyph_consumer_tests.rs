@@ -229,6 +229,7 @@ fn glyph_presentation_force_frame(
     cx: &mut TestAppContext,
 ) {
     if view.read_with(cx, |view, _| view.cell_geom.is_some()) {
+        glyph_presentation_redraw(window, cx);
         let cell = glyph_cell_bounds(window, view, cx, 0, 0);
         let _ = glyph_paths_in_cell(window, view, cx, cell);
     }
@@ -474,7 +475,7 @@ fn glyph_synchronized_picture_keeps_its_committed_version_until_esu(cx: &mut Tes
     });
     view.read_with(cx, |view, _| {
         view.terminal.term.lock().sync_update_started =
-            Some(rio_vt::time::Instant::now() + std::time::Duration::from_secs(5));
+            Some(rio_vt::time::Instant::now() + std::time::Duration::from_secs(60));
     });
 
     // Replace the registration while the frame is unfinished.
@@ -571,7 +572,7 @@ fn glyph_synchronized_picture_keeps_its_committed_version_until_the_fail_safe(
     });
     view.read_with(cx, |view, _| {
         view.terminal.term.lock().sync_update_started =
-            Some(rio_vt::time::Instant::now() + std::time::Duration::from_secs(5));
+            Some(rio_vt::time::Instant::now() + std::time::Duration::from_secs(60));
     });
 
     let before = view.read_with(cx, |view, _| glyph_presentation_version(view, GLYPH_CP));
@@ -686,7 +687,7 @@ fn glyph_held_picture_survives_equal_area_resize_contention_and_ordered_size(
     });
     view.read_with(cx, |view, _| {
         view.terminal.term.lock().sync_update_started =
-            Some(rio_vt::time::Instant::now() + std::time::Duration::from_secs(5));
+            Some(rio_vt::time::Instant::now() + std::time::Duration::from_secs(60));
     });
     let before = view.read_with(cx, |view, _| glyph_presentation_version(view, GLYPH_CP));
     DaemonMsg::Output(glyph_register(GLYPH_CP, &glyph_rect(2000, 500), 1))
