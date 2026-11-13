@@ -22,30 +22,26 @@ fn retention_fixture_daemon() {
         .ok()
         .and_then(|value| value.parse::<usize>().ok())
         .unwrap_or(0);
-    retention::inject_limits(
-        if std::env::var("LYREL_RETENTION_TEST_DEFAULT_LIMITS").is_ok_and(|value| value == "true") {
-            retention::Limits::default()
-        } else {
-            retention::Limits {
-                pane_encoded: 1024,
-                pane_decoded: 8,
-                daemon_encoded: 4096,
-                daemon_decoded: 12,
-                pane_work: 256 << 10,
-                daemon_work: 384 << 10,
-                pane_metadata: if metadata != 0 {
-                    metadata
-                } else {
-                    retention::MAX_PANE_METADATA_BYTES
-                },
-                daemon_metadata: if metadata != 0 {
-                    metadata
-                } else {
-                    retention::MAX_DAEMON_METADATA_BYTES
-                },
-            }
-        },
-    );
+    let mut limits = if std::env::var("LYREL_RETENTION_TEST_DEFAULT_LIMITS")
+        .is_ok_and(|value| value == "true")
+    {
+        retention::Limits::default()
+    } else {
+        retention::Limits {
+            pane_encoded: 1024,
+            pane_decoded: 8,
+            daemon_encoded: 4096,
+            daemon_decoded: 12,
+            pane_work: 256 << 10,
+            daemon_work: 384 << 10,
+            ..retention::Limits::default()
+        }
+    };
+    if metadata != 0 {
+        limits.pane_metadata = metadata;
+        limits.daemon_metadata = metadata;
+    }
+    retention::inject_limits(limits);
     crate::core::config::set_config_dir(dir.into());
     crate::daemon::server::run_daemon().unwrap();
 }
@@ -2454,7 +2450,9 @@ fn retention_daemon_two_visible_panes_retain_and_replay_sixty_distinct_1080p_fra
 #[test]
 fn iterm2_shares_the_metadata_budget_and_session_reset_retires_identities() {
     use base64::Engine as _;
-    let daemon = Daemon::with_limits(1024, false);
+    // PNG validation needs its production scratch budget; only metadata is
+    // constrained here, independently of pixel/encoded/work capacity.
+    let daemon = Daemon::with_limits(1024, true);
     let mut a = daemon.spawn();
     // The Kitty admission consumes both metadata tickets the budget allows.
     a.red("a=T,i=1,p=1,c=1,r=1,C=1");

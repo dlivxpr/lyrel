@@ -26,6 +26,7 @@
 
 ### 修复
 
+- #277：修复同一次 PTY read 中图片后的 APC／OSC 提前释放已完成 iTerm2 source 工作额度、导致 daemon reader panic 与后续文字停滞；保留各图片到有序移交的额度，base64 在原编码 buffer 内压缩并在解码分配前预留工作空间，畸形 padding 拒收而不下溢。不通过延长往返超时掩盖故障。
 - #264：绘制时的 `keyboard_events` key context 与其他 frame facts 一起采样，不再经 `key_flags()` 阻塞等待 reader 持有的 grid；实际按键路由仍读取 live 模式。保留无 prompt 与 prompt 两个既有竞争绘制回归，不通过延长超时掩盖等待。
 - #268：`GlyphState` 的共享解码器拒绝 `upm=0`、`aw=0` 与 `lh=0`，与注册请求的值域一致，避免恢复投影向消费者引入从未能被接受的布局参数。
 - #275：Sixel 原生恢复脚本改用 9 MiB 无滚动的 SGR reset 输出淘汰原传输字节，避免可见长行折行先把图片滚出保留历史，混淆正常资源退役与恢复失败；图片生产进程仍在淘汰与重新附着前退出。
