@@ -919,6 +919,72 @@ fn glyph_consumer_derived_rendering_follows_geometry_scale_and_revision(cx: &mut
         "a font-size change does not re-register the outline"
     );
 
+    // The reflow must not weaken `width=2` semantics: a free neighbour still
+    // lends a two-cell pixel span while a nonblank neighbour falls back, with
+    // the raw codepoint staying one logical cell. This is a different
+    // codepoint, not a re-registration of `cp`.
+    let span_cp = GLYPH_CP + 3;
+    let span_char = char::from_u32(span_cp).unwrap();
+    serial += 1;
+    glyph_register_ok(
+        &view,
+        cx,
+        serial,
+        &reply_path(serial),
+        span_cp,
+        &glyph_square(1000),
+        1000,
+        "width=2;aw=1000;lh=1000;ymin=0;size=stretch;align=start,start",
+    );
+    serial += 1;
+    glyph_show(&view, cx, serial, 3, 4, &format!("{span_char} "));
+    glyph_wait(cx, "resized width-two span painted", |cx| {
+        view.read_with(cx, |view, _| {
+            glyph_presented_row(view, 3).chars().nth(4) == Some(span_char)
+        })
+    });
+    let span = glyph_region_bounds(window, &view, cx, 3, 4, 2);
+    let painted = glyph_painted(window, &view, cx, span);
+    assert_eq!(painted.len(), 1, "one resized wide path: {painted:?}");
+    assert!(
+        glyph_bounds_close(painted[0].0, span) && glyph_bounds_close(painted[0].1, span),
+        "the wide span survives the font reflow: {:?} / {:?} vs {span:?}",
+        painted[0].0,
+        painted[0].1
+    );
+    serial += 1;
+    glyph_show(&view, cx, serial, 4, 4, &format!("{span_char}X"));
+    glyph_wait(cx, "resized narrow fallback painted", |cx| {
+        view.read_with(cx, |view, _| {
+            glyph_presented_row(view, 4).chars().nth(4) == Some(span_char)
+        })
+    });
+    let resized_row = view.read_with(cx, |view, _| glyph_presented_row(view, 4));
+    assert_eq!(
+        resized_row.chars().nth(5),
+        Some('X'),
+        "the wide codepoint still advances one logical cell after reflow"
+    );
+    let one = glyph_region_bounds(window, &view, cx, 4, 4, 1);
+    let painted = glyph_painted(window, &view, cx, one);
+    assert_eq!(painted.len(), 1, "one resized fallback path: {painted:?}");
+    assert!(
+        glyph_bounds_close(painted[0].0, one) && glyph_bounds_close(painted[0].1, one),
+        "a nonblank neighbour still clips to one cell after reflow: {:?} / {:?}",
+        painted[0].0,
+        painted[0].1
+    );
+    assert_eq!(
+        view.read_with(cx, |view, _| view
+            .terminal
+            .glyphs()
+            .get(cp)
+            .expect("registration")
+            .revision),
+        replaced_revision,
+        "the width-two proof did not re-register the original glyph"
+    );
+
     // A display-scale change scales the same logical geometry.
     let before_scale = glyph_region_bounds(window, &view, cx, 2, 4, 1);
     cx.simulate_window_scale_factor_change(window, 2.);
