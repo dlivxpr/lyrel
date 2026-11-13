@@ -16,7 +16,7 @@ $esc = [char]27
 Write-Vt "${esc}[2J${esc}[H${esc}[?80l${esc}[?8452lSIXEL_274_$Scene`r`n"
 Write-Vt "Official img2sixel 1.10.5: static image then AFTER_SIXEL_274`r`n"
 switch ($Scene) {
-    'Scroll' { Write-Vt "${esc}[22;5H" }
+    'Scroll' { Write-Vt "${esc}[999;5H" }
     'Display' { Write-Vt "${esc}[?80h${esc}[6;5H" }
     default { Write-Vt "${esc}[6;5H" }
 }

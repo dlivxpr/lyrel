@@ -1,4 +1,4 @@
-//! Streaming kitty-graphics-protocol extractor (APC `ESC _ G … ST`).
+//! Streaming inline-graphics extractor: Kitty APC and static Sixel DCS.
 //!
 //! The daemon-side counterpart to [`crate::core::osc`]: a tiny, resumable state
 //! machine that pulls kitty graphics commands out of the raw PTY byte stream
@@ -57,19 +57,15 @@ const MAX_TRANSMISSION_BASE64: usize = 48 << 20; // 48 MiB
 /// daemon inside [`crate::daemon::protocol::MAX_FRAME`].
 pub const MAX_IMAGE_BYTES: usize = 32 << 20;
 
-/// A streaming tokenizer that splits raw output into a *passthrough* byte stream
-/// and the kitty graphics commands lifted out of it.
+/// Streaming framing for graphics owned by the daemon, without a second VT
+/// parser. The historical APC name also covers bounded numeric Sixel DCS.
 ///
-/// Feed it raw output bytes. It invokes `on_passthrough` with every byte that is
-/// **not** part of a `_G` graphics sequence — that is the exact input with each
-/// `ESC _ G … ST` removed, and it is what the daemon appends to the replay ring
-/// and forwards to the client. It invokes `on_command` with the complete payload
-/// of each `_G` command (the bytes after `ESC _`, terminator excluded — e.g.
-/// `Ga=T,f=32,…;<base64>`). Non-graphics APC sequences (any payload not starting
-/// with `G`) are passed through verbatim, since only kitty graphics is ours to
-/// intercept; everything else must reach the client's VT parser unchanged. State
-/// persists across `feed` calls, so a sequence split over several reads is still
-/// handled.
+/// Passthrough retains ordinary bytes and foreign APC/DCS verbatim. Complete
+/// commands exclude ESC/ST: `G...` is Kitty and `P...q...` is static Sixel.
+/// Numeric DCS headers over 63 bytes and graphics bodies over their encoded
+/// limit are drained without allowing the desktop mirror to decode them.
+/// State survives PTY read boundaries, including split openers, terminators,
+/// cancellation and a later escape interrupting an unfinished transmission.
 pub struct ApcTokenizer {
     /// Bytes of a `_G` command accumulated after `ESC _ G` while it can still
     /// terminate. Cleared whenever a command finishes or is abandoned.
@@ -411,9 +407,7 @@ impl ApcTokenizer {
             MAX_APC_PAYLOAD
         };
         if run.len() > limit.saturating_sub(self.buf.len()) {
-            log::debug!(
-                "kitty graphics: dropping a command whose payload passed {MAX_APC_PAYLOAD} bytes"
-            );
+            log::debug!("inline graphics: dropping a command whose payload passed {limit} bytes");
             if self.buf.len() < 4096 {
                 let prefix = run.len().min(4096 - self.buf.len());
                 let required = self.buf.len() + prefix;
@@ -1461,6 +1455,9 @@ impl GraphicsParser {
                     sixel: true,
                     action: Action::TransmitAndDisplay,
                     quiet: 2,
+                    // Sixel occupies a background bitmap, not Kitty's default
+                    // foreground overlay. Later text must remain visible.
+                    z: -1,
                     ..Control::default()
                 },
                 image: Some(Image {

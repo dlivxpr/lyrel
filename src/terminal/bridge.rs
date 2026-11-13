@@ -38,16 +38,16 @@
 //! This keeps push/pop, screen swaps and mode queries on one contract without
 //! changing the emulator's private stack or copying its implementation.
 //!
-//! Sixel and iTerm2 payloads delegate like everything else: with zero cell
-//! dimensions `Crosswords::insert_graphic` returns before touching a cell or
-//! the cursor, so the bytes are consumed by the real parser — not swallowed
-//! mid-sequence — and the grid stays text-only.
+//! Sixel decoding belongs exclusively to the daemon's bounded preparation path.
+//! The mirror uses Handler's inactive Sixel defaults, so an unadmitted or foreign
+//! DCS cannot allocate a second pixel buffer while its text grid is locked.
+//! iTerm2 still delegates with zero cell dimensions until its own adapter lands.
 
 use lyrel_core::core::term_modes::KeyboardStacks;
 use rio_vt::ansi::mode::{Mode, PrivateMode};
 use rio_vt::ansi::{
     ClearMode, CursorShape, KeyboardModes, KeyboardModesApplyBehavior, LineClearMode,
-    TabulationClearMode, sixel,
+    TabulationClearMode,
 };
 use rio_vt::config::colors::ColorRgb;
 use rio_vt::crosswords::Crosswords;
@@ -57,7 +57,6 @@ use rio_vt::crosswords::pos::{CharsetIndex, Column, Line, StandardCharset};
 use rio_vt::crosswords::square::Hyperlink;
 use rio_vt::event::{EventListener, RioEvent};
 use rio_vt::performer::handler::{Handler, ScpCharPath, ScpUpdateMode};
-use rio_vt::performer::parser::Params;
 
 /// The secondary device attributes this pane has always answered (`CSI > c`)
 /// — the previous emulator's own version number, kept byte-for-byte so a
@@ -468,28 +467,8 @@ impl<T: EventListener> Handler for ParseBridge<'_, T> {
         self.inner.text_area_size_chars();
     }
 
-    /// The reply would quote sixel geometry nothing here renders.
+    /// Sixel admission and geometry belong to the daemon, not this mirror.
     fn graphics_attribute(&mut self, _: u16, _: u16) {}
-
-    fn sixel_graphic_start(&mut self, params: &Params) {
-        self.inner.sixel_graphic_start(params);
-    }
-
-    fn is_sixel_graphic_active(&self) -> bool {
-        self.inner.is_sixel_graphic_active()
-    }
-
-    fn sixel_graphic_put(&mut self, byte: u8) -> Result<(), sixel::Error> {
-        self.inner.sixel_graphic_put(byte)
-    }
-
-    fn sixel_graphic_reset(&mut self) {
-        self.inner.sixel_graphic_reset();
-    }
-
-    fn sixel_graphic_finish(&mut self) {
-        self.inner.sixel_graphic_finish();
-    }
 
     fn insert_graphic(
         &mut self,
@@ -645,6 +624,33 @@ mod tests {
             bytes,
         );
         std::mem::take(&mut *captured.0.lock())
+    }
+
+    #[test]
+    fn sixel_mirror_never_starts_an_unadmitted_pixel_decoder() {
+        let captured = Replies::default();
+        let mut term = Crosswords::new(
+            TermSize::new(80, 24),
+            CursorShape::Block,
+            captured.clone(),
+            WindowId::from(0),
+            0,
+            100,
+        );
+        let mut keyboard = KeyboardStacks::default();
+        let mut processor = Processor::default();
+        {
+            let mut bridge = ParseBridge::new(&mut term, captured, &mut keyboard, None);
+            processor.advance(&mut bridge, b"\x1bPq#0;2;100;0;0~");
+            assert!(
+                !bridge.is_sixel_graphic_active(),
+                "pixels belong exclusively to daemon admission, never the locked text mirror"
+            );
+            processor.advance(&mut bridge, b"\x1b\\AFTER");
+        }
+        assert_eq!(term.grid[Line(0)][Column(0)].c(), 'A');
+        assert_eq!(term.grid[Line(0)][Column(4)].c(), 'R');
+        assert_eq!(term.grid.cursor.pos.col, Column(5));
     }
 
     /// Probes branch on these bytes — Claude Code's theme probe ends its

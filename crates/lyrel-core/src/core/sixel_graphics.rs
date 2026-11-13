@@ -228,6 +228,10 @@ mod tests {
             );
             let p = state.placements().next().unwrap();
             assert_eq!(
+                p.z, -1,
+                "following text glyphs must remain visible above Sixel pixels"
+            );
+            assert_eq!(
                 (
                     p.anchor_row - state.history_origin(),
                     p.anchor_col,
@@ -328,6 +332,33 @@ mod tests {
                     .all(|effect| !matches!(effect, GraphicsEffect::Frame(_)))
             );
             assert_eq!(state.placements().count(), 0);
+        }
+    }
+
+    #[test]
+    fn sixel_complete_and_cancelled_dcs_do_not_abort_partial_kitty_upload() {
+        for (sixel, expected_row, count) in [(RED, 1, 2), (b"\x1bPq~\x18".as_slice(), 0, 1)] {
+            let (mut state, mut sniffer) = (state(), GraphicsSniffer::new());
+            feed(
+                &mut state,
+                &mut sniffer,
+                b"\x1b_Ga=t,i=84,f=32,s=1,v=1,m=1,q=2;/wAA\x1b\\",
+            );
+            for part in sixel.chunks(1) {
+                feed(&mut state, &mut sniffer, part);
+            }
+            feed(
+                &mut state,
+                &mut sniffer,
+                b"\x1b_Gm=0;/w==\x1b\\\x1b_Ga=p,i=84,p=1,C=1,q=2\x1b\\",
+            );
+            assert_eq!(state.placements().count(), count);
+            let kitty = state
+                .placements()
+                .find(|p| p.image_id == 84)
+                .expect("the partial Kitty source survives both Sixel completion and cancellation");
+            assert_eq!((kitty.anchor_row, kitty.anchor_col), (expected_row, 0));
+            assert_eq!((kitty.w, kitty.h), (1, 1));
         }
     }
 }

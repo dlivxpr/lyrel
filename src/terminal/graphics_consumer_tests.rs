@@ -67,6 +67,10 @@ fn sixel_production_consumer_paints_pixels_and_keeps_following_text_order(cx: &m
         let image = &images[0];
         assert_eq!((image.anchor_col, image.anchor_row), (4, 5));
         assert_eq!(
+            image.placement.z, -1,
+            "Sixel must paint below following glyphs, not Kitty's default foreground layer"
+        );
+        assert_eq!(
             &image.data.as_ref().unwrap().as_bytes(0).unwrap()[..4],
             &[61, 51, 184, 255]
         );

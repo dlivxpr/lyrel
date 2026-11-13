@@ -434,7 +434,7 @@ node scripts/kitty-capacity-analysis.mjs `
 
 #### 静态 Sixel 接入（#274）
 
-静态内联 `DCS ... q ... ST` 由 daemon 在原 PTY 顺序中提取，复用正式 `rio-vt 0.5.30` 的 Sixel parser，转换为现有 RGBA 资源和独立 placement；不使用 Rio renderer，也不把像素留在文字 replay ring。准备与像素转换在 PTY reader 上、`PaneState` 锁外完成，资源及首次放置均经原有 daemon／桌面准入后才改变布局。
+静态内联 `DCS ... q ... ST` 由 daemon 在原 PTY 顺序中提取，复用正式 `rio-vt 0.5.30` 的 Sixel parser，转换为现有 RGBA 资源和独立 placement；不使用 Rio renderer，也不把像素留在文字 replay ring。准备与像素转换在 PTY reader 上、`PaneState` 锁外完成，资源及首次放置均经原有 daemon／桌面准入后才改变布局。桌面 `ParseBridge` 不再启动 Sixel decoder：未经 daemon 接收的 DCS 不能在持有文字 grid 锁时另行解码，也不能创建第二份无预算像素。图片使用文字背景之上、glyph 之下的图层，保证最后一行上的后续文字可见；Kitty 的默认 z-order 不变。
 
 当前切片采用自然像素尺寸和方形像素；每边受 Rio parser 的 4,096 像素上限约束，最终 RGBA 仍受单图 32 MiB 上限约束。仅接收 7-bit `ESC P`／`ESC \\` 定界的静态内联数据，数值头最多 63 bytes、整条编码最多 8 MiB；不读取文件、URL、PDF 或动画，不新增默认关闭的实验选项。每幅图独立使用 Rio 默认／图内自定义 palette，不跨图保留共享 palette。像素写入及宽度增长搬移合计最多 64 Mi 次；在 decoder 分配前按实际可达宽高预留最多 `8 × pixel_count + 16 KiB` 临时空间，另计仍存活的编码 source，全部计入原有工作池，不能仅信任 raster 声明或压缩重复次数。
 
