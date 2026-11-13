@@ -131,7 +131,25 @@ cargo fmt --check
 应用的拖动和松开报告只属于实际向该应用报告过按下的窗格。从侧边栏、标题栏或其他窗格开始的拖动不会进入本窗格；在本窗格开始的应用拖动可以越过边界，坐标限制在原窗格边缘，直到松开。按住 <kbd>⇧</kbd> 开始的本地选择不会因中途松开修饰键而变成应用拖动；本地松开或下一次无按键的指针移动会清理旧手势所有权。普通点击、滚轮和应用请求的无按键移动报告保持原有规则。
 多个按钮同时按下时，左键、中键和右键分别保留自己的已报告按下；松开一个按钮不会丢弃其他按钮的松开报告。无按键移动统一清理所有旧手势，避免丢失跨窗口松开后留下所有权。
 
-`src/terminal/mouse_reporting_consumer_tests.rs` 通过生产 `Root`／`TerminalElement` 的鼠标事件路由、隔离 daemon 和真实 PTY 子进程读取应用收到的字节，检查跨窗格所有权、修饰键变化、丢失松开以及正常点击／滚轮。它不替代 Windows／macOS 原生窗口的拖动和跨窗口松开验收。
+上报字节按应用协商的坐标编码写出：未扩展协商时保持 X10 字节格式（超过第 223 个可报告位置的事件不发），`?1005h` 使用 UTF-8 编码坐标（按钮位与坐标各按 `32+值` 的 UTF-8 字符写入，可报告位置上限为 2015），`?1006h` 使用 SGR 十进制格式；`?1005` 与 `?1006` 互斥，最后生效者决定编码，DECRQM（`CSI ? Ps $ p`）按当前生效状态回答。模式 1015／1016 未实现，对其 DECRQM 探测回答"不支持"，不会替代已协商编码。断开后重新附着的窗格按 daemon 折叠的生效模式恢复：若应用先开启 1005 再切到 1006（或已关闭某档上报级别），回放只恢复最终生效状态，不会把已被替换的编码重新打开。
+
+`src/terminal/mouse_reporting_consumer_tests.rs` 通过生产 `Root`／`TerminalElement` 的鼠标事件路由、隔离 daemon 和真实 PTY 子进程读取应用收到的字节，检查跨窗格所有权、修饰键变化、丢失松开以及正常点击／滚轮。#263 新增的 `mouse_reporting_utf8_coordinates_reach_the_real_pty_consumer` 在 300 列真 PTY 窗格上断言 1005 模式下超出 X10 范围的按下／松开／修饰键与滚轮字节、Shift 本地选择覆盖、DECRQM 1005／1006／1015 回复与 1005→1006→1005→无扩展切换；`src/terminal/remote/reader/replayed_mode_tests.rs` 覆盖编码转换的重放落点，`crates/lyrel-core` 的 `term_modes` 测试固定折叠与模拟器一致。它们不替代 Windows／macOS 原生窗口的拖动和跨窗口松开验收；原生宽窗格场景可用 `tests/support/mouse_utf8_probe.mjs` 在真实窗格内运行。
+
+```powershell
+cargo test --locked -p lyrel --lib terminal::view::gpui_tests::mouse_reporting_ -- --nocapture --test-threads=1
+cargo test --locked -p lyrel --lib terminal::remote::reader::replayed_mode -- --nocapture --test-threads=1
+cargo test --locked -p lyrel-core --lib core::term_modes -- --nocapture --test-threads=1
+```
+
+Windows 上将上述 `cargo test` 改为 `pwsh scripts/cargo-windows.ps1 test`，由 wrapper 在实际测试 executable 旁暂存固定 ConPTY。宽窗格原生验收在隔离的开发实例中进行，不接管已安装实例或用户会话：
+
+```powershell
+node tests/support/mouse_utf8_probe.mjs
+```
+
+将终端窗格扩大至至少 241 列（探针会输出实际列数，必要时缩小终端字号）。点击第 241 列、第 11 行，1005 模式下应收到 `1b 5b 4d 20 c4 91 2b`，松开为 `1b 5b 4d 23 c4 91 2b`；按住 Ctrl 后按钮字节分别变成 `30`／`33`（十六进制），坐标不变。继续拖动、滚轮和 Alt 修饰键，检查位置与状态；按住 Shift 的本地选择不应产生应用鼠标报告。探针按 `s` 切至 1006 后，相同点击应显示 `SGR report: 0;241;11M` 和 `0;241;11m`；按 `u` 返回 1005，按 `q` 查询。每次模式切换的 DECRQM 回复都应只有当前编码为 `1`、另一编码为 `2`，1015 为 `0`。Ctrl+C 退出并关闭探针启用的鼠标模式。
+
+WSL 或 SSH 场景在实际 lyrel 对应窗格中，用远端 Node 运行同一探针文件；本地 Windows 路径不可当作远端路径。将文件放入自有远端测试目录，再运行 `node /path/to/mouse_utf8_probe.mjs`，重复宽列点击与模式切换，保存探针 stdin 字节和原生窗口截图。SSH 必须使用当前候选 server、隔离配置与固定 host key；仅证明 SSH 能登录、手工注入预期字节或 headless 合成指针，不等价于远端真实鼠标验收。macOS 原生结果需单独取得，不从 Windows 结果推断。
 
 ### 链接的实现职责
 

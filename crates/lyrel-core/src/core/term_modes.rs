@@ -456,9 +456,15 @@ impl TerminalModes {
             if mode == ALT_SCREEN && self.is_on(mode) != on {
                 self.keyboard.swap();
             }
-            // Removed either way: switching a mode on again moves it to the
-            // back, so the replay repeats the application's own order.
-            self.on.retain(|m| *m != mode);
+            // Reporting levels replace one another; resetting any level
+            // clears reporting. Encodings replace one another only on set,
+            // while reset clears just that encoding. Mirror Rio's effective
+            // state so replay cannot resurrect a displaced mode.
+            self.on.retain(|m| match mode {
+                1000 | 1002 | 1003 => !matches!(*m, 1000 | 1002 | 1003),
+                1005 | 1006 if on => !matches!(*m, 1005 | 1006),
+                _ => *m != mode,
+            });
             if on {
                 self.on.push(mode);
             }
@@ -524,18 +530,76 @@ mod tests {
     fn one_csi_may_carry_several_modes() {
         let mut modes = TerminalModes::new();
         modes.feed(b"\x1b[?1000;1002;1006h");
-        assert_eq!(modes.active(), &[1000, 1002, 1006]);
+        // `?1000` and `?1002` are one reporting level in the emulator: the
+        // fold keeps only the last-set parameter, mirroring the effective
+        // state rather than stacking flags the emulator already replaced.
+        assert_eq!(modes.active(), &[1002, 1006]);
+        // Resetting any reporting mode clears the level — the emulator has
+        // no second reporting mode underneath to fall back to.
         modes.feed(b"\x1b[?1000;1002l");
         assert_eq!(modes.active(), &[1006]);
     }
 
     #[test]
-    fn re_setting_a_mode_moves_it_behind_the_ones_set_since() {
+    fn the_mouse_reporting_modes_fold_to_the_level_the_emulator_sees() {
+        // In the emulator `?1000`, `?1002` and `?1003` are not independent
+        // bits but one reporting level, and resetting any reporting mode
+        // ends reporting entirely. A fold that kept `1002` here would
+        // restore reporting on attach even though the application already
+        // turned it off — the prelude has to land on no reporting too.
+        let mut modes = TerminalModes::new();
+        modes.feed(b"\x1b[?1000h\x1b[?1002h\x1b[?1003l");
+        assert!(modes.active().is_empty());
+        assert!(modes.restore_bytes().is_none());
+
+        let mut modes = TerminalModes::new();
+        modes.feed(b"\x1b[?1049h\x1b[?1000h\x1b[?1003h");
+        assert_eq!(modes.active(), &[1049, 1003]);
+    }
+
+    #[test]
+    fn the_utf8_and_sgr_mouse_encodings_are_mutually_exclusive() {
+        // `?1005` and `?1006` select one coordinate encoding; the emulator
+        // clears the other on each set, so a fold that remembers both would
+        // replay a transition the live stream already resolved.
+        let mut modes = TerminalModes::new();
+        modes.feed(b"\x1b[?1005h\x1b[?1006h");
+        assert_eq!(modes.active(), &[1006]);
+
+        let mut modes = TerminalModes::new();
+        modes.feed(b"\x1b[?1006h\x1b[?1005h");
+        assert_eq!(modes.active(), &[1005]);
+
+        // Unsetting an encoding drops only itself; nothing else turns back
+        // on. A `?1006l` after `?1005h ?1006h` leaves neither — replaying
+        // `?1005h` here would re-enable an encoding the application retired.
+        let mut modes = TerminalModes::new();
+        modes.feed(b"\x1b[?1005h\x1b[?1006h\x1b[?1006l");
+        assert!(modes.active().is_empty());
+        let mut modes = TerminalModes::new();
+        modes.feed(b"\x1b[?1006h\x1b[?1005h\x1b[?1005l");
+        assert!(modes.active().is_empty());
+    }
+
+    #[test]
+    fn unimplemented_mouse_encodings_do_not_displace_a_live_one() {
+        // The client's emulator ignores `?1015`/`?1016` entirely — they are
+        // tracked only so a stream that set them replays verbatim — so they
+        // must not clear the encoding the emulator is really using.
+        let mut modes = TerminalModes::new();
+        modes.feed(b"\x1b[?1006h\x1b[?1015h");
+        assert_eq!(modes.active(), &[1006, 1015]);
+        modes.feed(b"\x1b[?1016h");
+        assert_eq!(modes.active(), &[1006, 1015, 1016]);
+    }
+
+    #[test]
+    fn re_setting_a_mouse_reporting_level_keeps_only_the_winner() {
         let mut modes = TerminalModes::new();
         // The emulator treats the reporting modes as a level, so the last one
-        // set is the one that wins — the replay has to end on it too.
+        // set is the only one on — the fold has to end on it too.
         modes.feed(b"\x1b[?1002h\x1b[?1003h\x1b[?1002h");
-        assert_eq!(modes.active(), &[1003, 1002]);
+        assert_eq!(modes.active(), &[1002]);
     }
 
     #[test]
