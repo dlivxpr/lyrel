@@ -1,0 +1,260 @@
+// Real PTY -> daemon/ordered transport -> production TerminalView coverage of
+// Glyph Protocol support negotiation. A real client (omp's pinned
+// glyph-protocol.ts) sends `s` and its confirmation `q` in the same write as a
+// DA1 sentinel and fails the terminal outright when DA1 comes back first, so
+// these cases pin the daemon's reply ordering against the production
+// consumer's own Device Attributes answer — not just "some reply exists".
+//
+// The render opt-in is sent as its raw pane frame (kind 74, empty payload)
+// gated on the endpoint's literal "glyph-support" feature so this file stays
+// runnable on both sides of the negotiation rollout without needing the new
+// protocol declarations.
+
+/// The pane-protocol frame kind a rendering controller uses to declare the
+/// full monochrome v1.12 contract. Mirrors `kind::SUBSCRIBE_GLYPH_RENDER`;
+/// kept literal here so the tests compile before the declaration lands.
+const GLYPH_RENDER_OPT_IN_KIND: u8 = 74;
+
+/// The daemon feature that lets a pane answer `s` truthfully. Mirrors
+/// `FEATURE_GLYPH_SUPPORT`.
+const GLYPH_SUPPORT_FEATURE: &str = "glyph-support";
+
+/// Attach a consumer stream to `pane` like `daemon.stream`, optionally also
+/// declaring the monochrome-render opt-in when the endpoint advertises it.
+fn glyph_support_stream(daemon: &GraphicsDaemonProcess, pane: u64, glyph_render: bool) -> Stream {
+    let mut stream =
+        crate::daemon::transport::connect_endpoint_at(&daemon.endpoint("daemon")).unwrap();
+    stream
+        .set_read_timeout(Some(std::time::Duration::from_secs(30)))
+        .unwrap();
+    let version = crate::daemon::protocol::negotiate_pane(&mut stream).unwrap();
+    if glyph_render && version.has_feature(GLYPH_SUPPORT_FEATURE) {
+        // Raw frame: the kind is part of the same additive pane protocol, and
+        // an endpoint without the feature never sees it.
+        crate::daemon::protocol::write_frame(&mut stream, GLYPH_RENDER_OPT_IN_KIND, &[]).unwrap();
+    }
+    ClientMsg::GraphicsCapacity {
+        encoded_bytes: 64 << 20,
+        decoded_bytes: 128 << 20,
+        offers: true,
+    }
+    .encode(&mut stream)
+    .unwrap();
+    stream.set_read_timeout(None).unwrap();
+    ClientMsg::Attach {
+        pane_id: pane,
+        size: crate::daemon::protocol::WinSize {
+            cols: 80,
+            rows: 24,
+            cell_w: 10,
+            cell_h: 20,
+        },
+        allow_remote_clipboard_write: false,
+    }
+    .encode(&mut stream)
+    .unwrap();
+    stream
+}
+
+/// `glyph_send` for a request that yields more than one reply: the fixture
+/// writes the replies comma-separated into the request's gate file.
+fn glyph_send_parts(
+    view: &Entity<TerminalView>,
+    cx: &mut TestAppContext,
+    serial: usize,
+    reply_path: &std::path::Path,
+    bytes: &[u8],
+    replies: usize,
+) -> Vec<Vec<u8>> {
+    let path = reply_path.to_string_lossy();
+    let request = format!(
+        "SEND_ANY {serial} {replies} {} 0 {}\n",
+        graphics_pty_fixture::hex(bytes),
+        graphics_pty_fixture::hex(path.as_bytes()),
+    );
+    let input_bytes = request.len();
+    view.read_with(cx, |view, _| view.terminal.write(request.into_bytes()));
+    graphics_wait_fixture(view, cx, serial, input_bytes);
+    let text = std::fs::read_to_string(reply_path)
+        .unwrap_or_else(|error| panic!("no reply file for serial {serial}: {error}"));
+    text.trim()
+        .split(',')
+        .map(graphics_pty_fixture::unhex)
+        .collect()
+}
+
+/// The `s` probe must be answered in stream order, ahead of the DA1 the same
+/// producer write carries next — a real client treats "DA1 first" as "glyph
+/// protocol unsupported". `q` then answers the same way against the pane's
+/// real glossary and font coverage. Both replies have to leave the single
+/// ordered writer before the consumer's own `ESC [ c` answer can arrive.
+#[gpui_kit::test]
+fn glyph_consumer_support_and_query_replies_precede_the_da1_sentinel(cx: &mut TestAppContext) {
+    crate::core::config::pin_test_config_dir();
+    cx.executor().allow_parking();
+    let daemon = GraphicsDaemonProcess::start();
+    let pane = daemon.spawn();
+    cx.update(|cx| {
+        gpui_kit::component::init(cx);
+        cx.set_global(Config::default());
+    });
+    let (view, _window) =
+        graphics_rooted_consumer(cx, pane, glyph_support_stream(&daemon, pane, true));
+    let replies = tempfile::TempDir::new().unwrap();
+
+    // The pinned client writes `s` and `ESC [ c` together and accepts the
+    // protocol only when the format list beats the DA1 back.
+    let parts = glyph_send_parts(
+        &view,
+        cx,
+        1,
+        &replies.path().join("s_da1"),
+        b"\x1b_25a1;s\x1b\\\x1b[c",
+        2,
+    );
+    assert_eq!(
+        parts,
+        [
+            b"\x1b_25a1;s;fmt=glyf\x1b\\".to_vec(),
+            b"\x1b[?4;6c".to_vec()
+        ],
+        "the support reply must list only glyf and precede DA1"
+    );
+
+    // The confirmation `q` travels the controller's real font answer plus the
+    // daemon's registry bit — still ordered ahead of the same sentinel.
+    let parts = glyph_send_parts(
+        &view,
+        cx,
+        2,
+        &replies.path().join("q_da1"),
+        &[glyph_query(GLYPH_CP), b"\x1b[c".to_vec()].concat(),
+        2,
+    );
+    assert_eq!(
+        parts.len(),
+        2,
+        "q and DA1 each answer exactly once: {parts:?}"
+    );
+    assert_eq!(
+        parts[0],
+        format!("\x1b_25a1;q;cp={GLYPH_CP:x};status=system\x1b\\").into_bytes(),
+        "the query reply precedes DA1"
+    );
+    assert_eq!(
+        parts[1],
+        b"\x1b[?4;6c".to_vec(),
+        "DA1 follows the query reply"
+    );
+
+    // Register the client's confirmation codepoint the way the pinned client
+    // does — reply=0 so success is silent — then prove the `q` status now
+    // carries `glossary`, still ahead of the sentinel.
+    let parts = glyph_send_parts(
+        &view,
+        cx,
+        3,
+        &replies.path().join("rq_da1"),
+        &[
+            glyph_register(GLYPH_CP, &glyph_square(1000), 0),
+            glyph_query(GLYPH_CP),
+            b"\x1b[c".to_vec(),
+        ]
+        .concat(),
+        2,
+    );
+    assert_eq!(
+        parts[0],
+        format!("\x1b_25a1;q;cp={GLYPH_CP:x};status=system,glossary\x1b\\").into_bytes(),
+        "the registered codepoint reports glossary ahead of DA1"
+    );
+    assert_eq!(parts[1], b"\x1b[?4;6c".to_vec());
+}
+
+/// `s` is bound to the pane's current controller: a rendering controller is
+/// answered with `fmt=glyf`, while a controller that only subscribed to the
+/// retained projection — an older build that knows `glyph-state` but predates
+/// the monochrome-render opt-in — must never see the format advertised. The
+/// probe is sandwiched between `q` and DA1 so silence is proved by two real
+/// replies, not by a timeout. Each phase is a real production consumer: the
+/// replacement's attach demotes the previous controller.
+#[gpui_kit::test]
+fn glyph_consumer_support_answer_tracks_the_controllers_render_opt_in(cx: &mut TestAppContext) {
+    crate::core::config::pin_test_config_dir();
+    cx.executor().allow_parking();
+    let daemon = GraphicsDaemonProcess::start();
+    let pane = daemon.spawn();
+    cx.update(|cx| {
+        gpui_kit::component::init(cx);
+        cx.set_global(Config::default());
+    });
+    let replies = tempfile::TempDir::new().unwrap();
+
+    // A controller that declared the render opt-in is answered `fmt=glyf`
+    // before the DA1 its own write carried.
+    let (view, _window) =
+        graphics_rooted_consumer(cx, pane, glyph_support_stream(&daemon, pane, true));
+    let parts = glyph_send_parts(
+        &view,
+        cx,
+        10,
+        &replies.path().join("rendering_da1"),
+        b"\x1b_25a1;s\x1b\\\x1b[c",
+        2,
+    );
+    assert_eq!(
+        parts[0],
+        b"\x1b_25a1;s;fmt=glyf\x1b\\".to_vec(),
+        "the render-opted controller is advertised glyf first"
+    );
+    assert_eq!(parts[1], b"\x1b[?4;6c".to_vec());
+
+    // A replacement controller that subscribed to the projection but never
+    // declared it renders v1.12 must not inherit the advertisement. The
+    // `s`-silent pane proves itself with the `q` and DA1 replies that do
+    // arrive: two replies for a three-message write, `q` first.
+    let (view, _window) =
+        graphics_rooted_consumer(cx, pane, glyph_support_stream(&daemon, pane, false));
+    let parts = glyph_send_parts(
+        &view,
+        cx,
+        11,
+        &replies.path().join("state_only_da1"),
+        &[
+            b"\x1b_25a1;s\x1b\\".to_vec(),
+            glyph_query(GLYPH_CP),
+            b"\x1b[c".to_vec(),
+        ]
+        .concat(),
+        2,
+    );
+    assert_eq!(
+        parts[0],
+        format!("\x1b_25a1;q;cp={GLYPH_CP:x};status=system\x1b\\").into_bytes(),
+        "without the render opt-in `s` stays silent; `q` still answers coverage"
+    );
+    assert_eq!(
+        parts[1],
+        b"\x1b[?4;6c".to_vec(),
+        "DA1 follows the query reply, no support reply precedes it"
+    );
+
+    // Controller replacement again — rendering declared — re-enables the
+    // advertisement for the pane it now controls.
+    let (view, _window) =
+        graphics_rooted_consumer(cx, pane, glyph_support_stream(&daemon, pane, true));
+    let parts = glyph_send_parts(
+        &view,
+        cx,
+        12,
+        &replies.path().join("rendering_again_da1"),
+        b"\x1b_25a1;s\x1b\\\x1b[c",
+        2,
+    );
+    assert_eq!(
+        parts[0],
+        b"\x1b_25a1;s;fmt=glyf\x1b\\".to_vec(),
+        "the render opt-in binds at attach, not at pane lifetime"
+    );
+    assert_eq!(parts[1], b"\x1b[?4;6c".to_vec());
+}
