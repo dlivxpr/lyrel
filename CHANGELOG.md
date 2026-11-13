@@ -13,6 +13,8 @@
 
 ### 修复
 
+- #265：复用正式 Rio 的 XTGETTCAP 解码与 response callback，按解码名字仅广告已支持的 256 色／真彩色；未知、未验证、剪贴板、Glyph／Sixel／iTerm2、Rio 产品身份和固定几何均负答。daemon 在附着／脱离／重连中保持单一实时应答者，桌面和历史 replay 不重答；实际 pane endpoint 的 `xtgettcap-owner` feature 缺失时明确要求更新，不自动重启服务，不改变产品级 `TERM`／`TERM_PROGRAM`。原生及真实客户端验收按实际执行记录，不将 headless 协议通过等同于跨平台完整验收。
+
 - 修复智能体输出时上滚再下滑出现已消失输入栏的阅读态残影；Markdown 所见即所得编辑器支持 Ctrl/Cmd+F 查找与替换，宽表按页面宽度折行且不再溢出，Markdown 与代码编辑器提供常显水平滚动条；代码编辑器状态栏移入文档面板底部、与全局状态栏并存；原生 SSH 窗格通过远端进程表显示当前 shell 进程树；应用 Toast 与连接提示统一到右下角、全局状态栏上方。
 
 ## [0.3.3] - 2026-11-12

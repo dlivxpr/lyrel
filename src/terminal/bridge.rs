@@ -23,12 +23,11 @@
 //!   when no GUI is attached. A local mirror must not send a second reply.
 //! - `graphics_attribute`: the reply would describe sixel geometry this
 //!   terminal does not render; previously silence.
-//! - `xtgettcap_response`, `kitty_graphics_response`,
-//!   `glyph_protocol_response`: the reply channels for XTGETTCAP, kitty
-//!   graphics and the Glyph Protocol. Kitty transmissions never reach here —
-//!   the daemon lifts them out of the stream — and the other two were
-//!   previously dropped unacknowledged; none of the three is a protocol this
-//!   product advertises, so the parse completes and the reply is not sent.
+//! - `xtgettcap_response`: bounded live requests are extracted and answered
+//!   once by the daemon before publication. This mirror never replies, including
+//!   when replaying snapshots created by an older endpoint.
+//! - `kitty_graphics_response`, `glyph_protocol_response`: Kitty requests are
+//!   owned by the daemon; Glyph is not an advertised product capability.
 //! - `set_mouse_cursor_icon` (left at the trait default): OSC 22 pointer
 //!   shapes were never surfaced to the painter and still are not.
 //!
@@ -560,8 +559,8 @@ impl<T: EventListener> Handler for ParseBridge<'_, T> {
         self.sync_keyboard();
     }
 
-    /// XTGETTCAP replies are a capability advertisement this product never
-    /// made; the request's bytes are fully consumed by the parser.
+    /// The daemon owns every live discovery reply. Historical snapshots may
+    /// still contain queries; a mirror must never inject them into a later PTY.
     fn xtgettcap_response(&mut self, _: String) {}
 
     fn set_modify_other_keys(&mut self, level: u8) {
@@ -664,6 +663,11 @@ mod tests {
         assert!(replies(b"\x1b[>0q").is_empty(), "XTVERSION");
         assert!(replies(b"\x1b[16t").is_empty(), "cell pixel size");
         assert!(replies(b"\x1b[?2;1S").is_empty(), "sixel geometry");
+    }
+
+    #[test]
+    fn xtgettcap_mirror_never_answers_historical_queries() {
+        assert!(replies(b"\x1bP+q436f;524742;544e;4d73\x1b\\historical text").is_empty());
     }
 
     /// Kitty keyboard pop uses `CSI < n u`; bare `CSI n u` restores

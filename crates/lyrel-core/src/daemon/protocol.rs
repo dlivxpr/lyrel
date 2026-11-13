@@ -139,6 +139,10 @@ pub const FEATURE_AGENT_STATE_AGE: &str = "agent-state-age";
 /// older daemon it must keep reflowing locally at request time.
 pub const FEATURE_RESIZE_ECHO: &str = "resize-echo";
 
+/// Bounded XTGETTCAP is consumed and answered exactly once by the live daemon,
+/// never by a desktop/CLI parser or snapshot replay.
+pub const FEATURE_XTGETTCAP_OWNER: &str = "xtgettcap-owner";
+
 /// The daemon can seed a new pane with the screen a dead one left behind, named
 /// by `ClientMsg::Spawn`'s `restore` field. A client that does not see this
 /// feature leaves the field out: an older daemon would ignore it and spawn a
@@ -181,6 +185,7 @@ impl DaemonVersion {
             FEATURE_AGENT_RESULTS.to_string(),
             FEATURE_AGENT_REQUESTS.to_string(),
             FEATURE_AGENT_STATE_AGE.to_string(),
+            FEATURE_XTGETTCAP_OWNER.to_string(),
         ];
         if cfg!(unix) {
             features.push(FEATURE_HANDOFF.to_string());
@@ -210,6 +215,12 @@ pub fn negotiate_pane<S: Read + Write>(stream: &mut S) -> io::Result<DaemonVersi
     stream.flush()?;
     match DaemonMsg::read(stream)? {
         DaemonMsg::Version(version) if version.protocol == PROTOCOL_VERSION => {
+            if !version.has_feature(FEATURE_XTGETTCAP_OWNER) {
+                return Err(io::Error::other(format!(
+                    "pane peer (build {}) lacks {}; update lyrel or lyrel-server explicitly; no daemon restart was attempted",
+                    version.build, FEATURE_XTGETTCAP_OWNER
+                )));
+            }
             // Every session consumer, including CLI and routed clients, starts
             // with a finite source allowance. Rendering consumers additionally
             // grant each resource from their shared process-wide byte budget.
