@@ -922,6 +922,9 @@ impl GraphicsState {
         frame: Option<FramePreparation>,
         mut work: retention::Work,
     ) -> Result<PreparedImage, &'static str> {
+        if control.sixel {
+            image = super::sixel_graphics::decode(image, &mut work)?;
+        }
         let mut decoded_bytes = if control.action == Action::Compose {
             0
         } else {
@@ -1804,6 +1807,11 @@ impl GraphicsState {
             );
             return;
         };
+        let sixel_display = control.sixel
+            && self
+                .term
+                .mode()
+                .contains(rio_vt::crosswords::Mode::SIXEL_DISPLAY);
         let placement = Placement {
             key,
             resource: resource_key,
@@ -1818,13 +1826,26 @@ impl GraphicsState {
             offset_x: control.offset_x,
             offset_y: control.offset_y,
             z: control.z,
-            anchor_row: self.history_origin() + i64::from(self.term.grid.cursor.pos.row.0),
-            anchor_col: self.term.grid.cursor.pos.col.0 as i64,
+            anchor_row: self.history_origin()
+                + if sixel_display {
+                    0
+                } else {
+                    i64::from(self.term.grid.cursor.pos.row.0)
+                },
+            anchor_col: if sixel_display {
+                0
+            } else {
+                self.term.grid.cursor.pos.col.0 as i64
+            },
             screen: self.screen,
             span_cols,
             span_rows,
             clip_top: 0,
-            clip_bottom: span_rows,
+            clip_bottom: if sixel_display {
+                span_rows.min(u32::from(self.size.rows.max(1)))
+            } else {
+                span_rows
+            },
             virtual_placement: control.virtual_placement,
             parent,
             relative_x: control.relative_x,
@@ -1846,7 +1867,53 @@ impl GraphicsState {
             history_origin: self.history_origin(),
             epoch: self.viewport_epoch,
         }));
-        if !control.no_move && !control.virtual_placement && parent.is_none() {
+        if control.sixel && !sixel_display {
+            // DEC Sixel advances through occupied rows (and scrolls), but
+            // retains the start column unless mode 8452 requests the right edge.
+            let start_row = self.term.grid.cursor.pos.row.0;
+            let start_col = self.term.grid.cursor.pos.col.0;
+            let down = span_rows.saturating_sub(1) as i32;
+            let scrolls = if self.region.contains(&start_row) {
+                (start_row + down - (self.region.end - 1)).max(0)
+            } else {
+                0
+            };
+            let col = if self
+                .term
+                .mode()
+                .contains(rio_vt::crosswords::Mode::SIXEL_CURSOR_TO_THE_RIGHT)
+            {
+                (start_col + span_cols as usize).min(usize::from(self.size.cols.max(1)) - 1)
+            } else {
+                start_col
+            };
+            let mut movement = Vec::with_capacity(down as usize * 2 + 16);
+            for _ in 0..down {
+                movement.extend_from_slice(b"\x1bD");
+            }
+            movement.extend_from_slice(format!("\x1b[{}G", col + 1).as_bytes());
+            let layout = self.output(&movement);
+            effects.push(GraphicsEffect::Output(movement));
+            effects.extend(layout);
+            let base = self.history_origin();
+            let keep_history = self.screen == 0
+                && self.region.start == 0
+                && self.region.end == i32::from(self.size.rows.max(1));
+            if let Some(anchored) = self.placements.get_mut(&key) {
+                let p = &mut anchored.placement;
+                p.anchor_row = base + i64::from(start_row - scrolls);
+                if scrolls != 0 && !keep_history {
+                    p.clip_top = (base + i64::from(self.region.start) - p.anchor_row).max(0) as u32;
+                    p.clip_bottom = span_rows
+                        .min((base + i64::from(self.region.end) - p.anchor_row).max(0) as u32);
+                }
+                effects.push(GraphicsEffect::Update(GraphicsUpdate::Place(p.clone())));
+            }
+        } else if !control.sixel
+            && !control.no_move
+            && !control.virtual_placement
+            && parent.is_none()
+        {
             // Kitty leaves the cursor on the placement's last row. Do not
             // encode a zero CUD: terminals interpret CSI 0 B as one row.
             let down = span_rows

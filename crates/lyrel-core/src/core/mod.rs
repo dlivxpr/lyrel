@@ -23,6 +23,7 @@ pub mod proc;
 pub mod session;
 pub mod shell_quote;
 pub mod shells;
+mod sixel_graphics;
 #[allow(dead_code)]
 pub mod ssh_profile;
 pub mod tab_view;

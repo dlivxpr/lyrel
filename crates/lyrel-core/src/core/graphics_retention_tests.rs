@@ -326,6 +326,57 @@ impl Consumer {
     }
 }
 
+// libsixel 1.10.5 img2sixel -w 40 -h 40 -p 4 -d none colors.ppm.
+// The 2x2 PPM is red/green over blue/yellow; libsixel quantizes the scaled image.
+const STATIC_SIXEL: &[u8] = b"\x1bPq\"1;1;40;40#0;2;72;20;24#1;2;24;74;11#2;2;74;74;24#3;2;24;20;66#0!19~#1!21~-#0!19~_$#1!19?^!20~-#0!20~#1^!19~$#2!20?_-#0!13BFFN^~~~#2~}!6{!12w$#3!13{wwo_#1!4?@!6B!12F-#3!18~}w#2!20~$#0!18?@F-#3!20~#2!20~-#3!20N#2!20N\x1b\\";
+
+#[test]
+fn sixel_real_pty_producer_delivers_pixels_and_ordered_following_text() {
+    let daemon = Daemon::with_limits(0, true);
+    let mut consumer = daemon.spawn();
+    let mut bytes = b"\x1bc\x1b[6;5H".to_vec();
+    bytes.extend_from_slice(STATIC_SIXEL);
+    bytes.extend_from_slice(b"AFTER");
+    consumer.idle(&bytes);
+    let image = consumer
+        .updates
+        .iter()
+        .find_map(|update| match update {
+            GraphicsUpdate::Resource { image, .. } => Some(image),
+            _ => None,
+        })
+        .expect("actual Sixel producer reaches the ordered consumer as pixels");
+    assert_eq!((image.width, image.height), (40, 40));
+    let rgba = image.to_rgba8().unwrap();
+    assert_eq!(&rgba[..4], &[184, 51, 61, 255]);
+    assert_eq!(&rgba[(39 * 40 + 39) * 4..][..4], &[189, 189, 61, 255]);
+    let placement = consumer
+        .updates
+        .iter()
+        .find_map(|update| match update {
+            GraphicsUpdate::Place(placement) => Some(placement),
+            _ => None,
+        })
+        .unwrap();
+    assert_eq!((placement.anchor_row, placement.anchor_col), (5, 4));
+    assert_eq!((placement.span_cols, placement.span_rows), (4, 2));
+    assert!(consumer.text.windows(5).any(|part| part == b"AFTER"));
+    assert!(!consumer.text.windows(3).any(|part| part == b"\x1bPq"));
+    let mut terminal = Crosswords::new(
+        CrosswordsSize::new(80, 24),
+        CursorShape::Block,
+        VoidListener,
+        WindowId::from(0),
+        0,
+        100,
+    );
+    Processor::default().advance(&mut terminal, &consumer.text);
+    use rio_vt::crosswords::pos::{Column, Line};
+    assert_eq!(terminal.grid[Line(6)][Column(4)].c(), 'A');
+    assert_eq!(terminal.grid[Line(6)][Column(8)].c(), 'R');
+    consumer.exit();
+}
+
 #[test]
 fn unfinished_synchronized_output_keeps_daemon_queries_and_image_anchors_live() {
     let daemon = Daemon::start();
