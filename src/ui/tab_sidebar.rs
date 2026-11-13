@@ -713,13 +713,18 @@ impl LyrelApp {
                         };
                         h_flex()
                             .id(("sidebar-progress", i))
-                            .test_support()
-                            .aria_label(SharedString::from(label.clone()))
                             .w_full()
                             .min_w_0()
                             .text_xs()
                             .text_color(color)
-                            .child(div().truncate().child(label))
+                            .child(
+                                div()
+                                    .id(("sidebar-progress-status", i))
+                                    .test_support()
+                                    .aria_label(label.clone())
+                                    .truncate()
+                                    .child(label),
+                            )
                     })
                     .or(git_line);
                 // Outside a repo there is no branch line, and the working

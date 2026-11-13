@@ -80,7 +80,7 @@ fn progress_consumer_real_pty_tab_retains_stopped_sender_after_ring_trim(cx: &mu
         vcx.run_until_parked();
         vcx.update(|window, cx| {
             window.render_frame(cx);
-            let status = window.find(("sidebar-progress", 0));
+            let status = window.find(("sidebar-progress-status", 0usize));
             assert!(status.visible());
             let expected = percent.map_or_else(
                 || t(key).to_string(),
@@ -153,7 +153,7 @@ fn progress_consumer_real_pty_tab_retains_stopped_sender_after_ring_trim(cx: &mu
     vcx.update(|window, cx| {
         window.render_frame(cx);
         assert_eq!(
-            window.find(("sidebar-progress", 0)).label(),
+            window.find(("sidebar-progress-status", 0usize)).label(),
             Some(t(L10nKey::TabProgressError))
         );
     });
@@ -166,7 +166,11 @@ fn progress_consumer_real_pty_tab_retains_stopped_sender_after_ring_trim(cx: &mu
     vcx.run_until_parked();
     vcx.update(|window, cx| {
         window.render_frame(cx);
-        assert!(window.try_find(("sidebar-progress", 0)).is_none());
+        assert!(
+            window
+                .try_find(("sidebar-progress-status", 0usize))
+                .is_none()
+        );
     });
 }
 
@@ -401,7 +405,11 @@ fn progress_consumer_real_persisted_screen_after_daemon_death_never_seeds_replac
     vcx.run_until_parked();
     vcx.update(|window, cx| {
         window.render_frame(cx);
-        assert!(window.try_find(("sidebar-progress", 0)).is_none());
+        assert!(
+            window
+                .try_find(("sidebar-progress-status", 0usize))
+                .is_none()
+        );
     });
     graphics_send_fixture(&view, cx, 27121, b"\x1b]9;4;4;61\x07");
     graphics_recovery_wait(cx, "new producer establishes only its own progress", |cx| {
@@ -411,7 +419,7 @@ fn progress_consumer_real_persisted_screen_after_daemon_death_never_seeds_replac
     vcx.update(|window, cx| {
         window.render_frame(cx);
         assert_eq!(
-            window.find(("sidebar-progress", 0)).label(),
+            window.find(("sidebar-progress-status", 0usize)).label(),
             Some(t_fmt(L10nKey::TabProgressPausedPercent, &[("percent", "61")]).as_str())
         );
     });

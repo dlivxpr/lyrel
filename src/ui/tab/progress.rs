@@ -2,11 +2,11 @@ use super::Tab;
 use crate::daemon::protocol::ProgressKind;
 use crate::ui::i18n::{L10nKey, t, t_fmt};
 use crate::ui::pane::Pane;
-use gpui_kit::App;
+use gpui_kit::{App, SharedString};
 
 impl Tab {
     /// This slice deliberately has no split-tab aggregation policy.
-    pub(crate) fn progress_label(&self, cx: &App) -> Option<(ProgressKind, String)> {
+    pub(crate) fn progress_label(&self, cx: &App) -> Option<(ProgressKind, SharedString)> {
         let Pane::Leaf(slot) = &self.pane else {
             return None;
         };
@@ -22,8 +22,8 @@ impl Tab {
             (ProgressKind::Error, true) => L10nKey::TabProgressErrorPercent,
         };
         let label = match state.percent {
-            Some(percent) => t_fmt(key, &[("percent", &percent.to_string())]),
-            None => t(key).to_string(),
+            Some(percent) => t_fmt(key, &[("percent", &percent.to_string())]).into(),
+            None => t(key).into(),
         };
         Some((state.kind, label))
     }
