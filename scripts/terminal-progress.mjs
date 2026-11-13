@@ -1,5 +1,6 @@
 // 运行：node scripts/terminal-progress.mjs
 // 仅向当前 PTY 写入 OSC 9;4，不访问 daemon、配置或其他 pane。
+// 分屏多窗格场景：在每个窗格各运行一次，用不同按键检查标签页汇总。
 import readline from 'node:readline';
 const osc = (payload) => process.stdout.write(`\x1b]${payload}\x07`);
 console.log('OSC 9;4 progress: 1=42%, 2=working, 3=paused 61%, 4=error, c=clear, d=command end, n=next command, f=trim replay, q=quit');

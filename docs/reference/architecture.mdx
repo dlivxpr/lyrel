@@ -130,6 +130,9 @@ control 的 HELLO 在请求循环前核对版本与 features。增删 wire 消�
 v18 pane 流中发布有意义的变化，并在 attach 基线中始终发送当前状态（包括清空）；桌面不从回放文字
 重建权威进度。支持的同进程 handoff 携带状态，磁盘 scrollback、机器树和新 Shell 不携带它。
 `ProgressChanged` 只通知 tab owner 更新语义状态，不调用 agent lifecycle 或绕过隐藏 pane 的输出绘制门控。
+标签页汇总直接从所属全部终端叶子的当前状态派生，包括未聚焦、隐藏和停放的叶子；它不写入机器树或
+会话布局，也不经 agent payload 传递。成员变化、重连与重建后由新叶子及其 daemon 基线自然更新汇总；
+休眠标签页没有叶子，因而没有瞬时进度可显示。
 
 同步更新期间，解析、协议应答和输入模式仍实时推进，桌面只延迟发布新的文字、光标和图片帧。结束标记或既有 150 ms fail-safe 解除冻结；CLI `capture --plain` 重建最新收到的状态，不等待 GUI 已提交帧。图形协议范围与历史验收记录见[终端内联图片](/getting-started/concepts#终端内联图片)。
 
