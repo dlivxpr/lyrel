@@ -629,31 +629,33 @@ impl DaemonPane {
     pub fn carry(&self) -> Option<crate::daemon::pane::Carried> {
         let (master_fd, child_pid, integration_dir) = self.backend.carry()?;
         let st = self.state.lock().unwrap();
-        Some(st.facts.write_carried(Carried {
-            id: self.id,
-            owner: self.owner.clone(),
-            master_fd,
-            child_pid,
-            integration_dir,
-            size: st.ring.tail_size(),
-            ring: st.ring.snapshot(),
-            cwd: None,
-            osc_title: None,
-            shell_spec: None,
-            shell_active: false,
-            at_prompt: false,
-            last_exit: None,
-            remote: None,
-            agent: None,
-            agent_argv: None,
-            agent_session: None,
-            progress: None,
-            head_modes: st.ring.head_restore_bytes(),
-            colors: st
-                .graphics
-                .as_ref()
-                .map(|graphics| graphics.colors().sparse()),
-        }))
+        Some(
+            st.facts.write_carried(Carried {
+                id: self.id,
+                owner: self.owner.clone(),
+                master_fd,
+                child_pid,
+                integration_dir,
+                size: st.ring.tail_size(),
+                ring: st.ring.snapshot(),
+                cwd: None,
+                osc_title: None,
+                shell_spec: None,
+                shell_active: false,
+                at_prompt: false,
+                last_exit: None,
+                remote: None,
+                agent: None,
+                agent_argv: None,
+                agent_session: None,
+                progress: None,
+                head_modes: st.ring.head_restore_bytes(),
+                colors: st
+                    .graphics
+                    .as_ref()
+                    .map(|graphics| graphics.colors().sparse()),
+            }),
+        )
     }
 
     /// Rebuild a pane around a pty this process already holds.
@@ -1021,7 +1023,7 @@ impl DaemonPane {
         // this order.
         let foreground_command = self.backend.foreground_command_running();
         let mut st = self.state.lock().unwrap();
-        let epoch = attach_subscriber_with_permissions_and_colors(
+        let epoch = attach_subscriber_with_permissions(
             &mut st,
             subscriber,
             &self.gate,
@@ -1089,7 +1091,13 @@ impl DaemonPane {
     ) -> u64 {
         let foreground_command = self.backend.foreground_command_running();
         let mut st = self.state.lock().unwrap();
-        let id = observe_subscriber_with_colors(&mut st, observer, gate, foreground_command, pane_colors);
+        let id = observe_subscriber(
+            &mut st,
+            observer,
+            gate,
+            foreground_command,
+            pane_colors,
+        );
         let nudge = redraw_nudge(
             &mut st,
             self.runs_foreground_program(foreground_command),
@@ -1513,7 +1521,14 @@ fn run_redraw_nudge(
 
 #[cfg(test)]
 fn attach_subscriber(st: &mut PaneState, subscriber: Sender<DaemonMsg>) -> u64 {
-    attach_subscriber_with_permissions(st, subscriber, &OutputGate::new(), false, false)
+    attach_subscriber_with_permissions(
+        st,
+        subscriber,
+        &OutputGate::new(),
+        false,
+        false,
+        false,
+    )
 }
 
 /// Composition only: replay inputs are borrowed under the existing pane lock.
@@ -1543,23 +1558,6 @@ fn attach_subscriber_with_permissions(
     gate: &OutputGate,
     allow_remote_clipboard_write: bool,
     foreground_command: bool,
-) -> u64 {
-    attach_subscriber_with_permissions_and_colors(
-        st,
-        subscriber,
-        gate,
-        allow_remote_clipboard_write,
-        foreground_command,
-        false,
-    )
-}
-
-fn attach_subscriber_with_permissions_and_colors(
-    st: &mut PaneState,
-    subscriber: impl Into<Arc<Sender<DaemonMsg>>>,
-    gate: &OutputGate,
-    allow_remote_clipboard_write: bool,
-    foreground_command: bool,
     pane_colors: bool,
 ) -> u64 {
     let (subscriptions, graphics, replay) = st.subscription_parts();
@@ -1575,15 +1573,6 @@ fn attach_subscriber_with_permissions_and_colors(
 }
 
 fn observe_subscriber(
-    st: &mut PaneState,
-    observer: impl Into<Arc<Sender<DaemonMsg>>>,
-    gate: Arc<OutputGate>,
-    foreground_command: bool,
-) -> u64 {
-    observe_subscriber_with_colors(st, observer, gate, foreground_command, false)
-}
-
-fn observe_subscriber_with_colors(
     st: &mut PaneState,
     observer: impl Into<Arc<Sender<DaemonMsg>>>,
     gate: Arc<OutputGate>,
@@ -1912,7 +1901,14 @@ mod tests {
         let mut st = test_state(true);
         st.subscriptions = Subscriptions::new(true, Some(true));
         let (tx, _rx) = mpsc::channel();
-        attach_subscriber_with_permissions(&mut st, tx, &OutputGate::new(), false, false);
+        attach_subscriber_with_permissions(
+            &mut st,
+            tx,
+            &OutputGate::new(),
+            false,
+            false,
+            false,
+        );
         assert!(st.subscriptions.clipboard_allowed());
 
         // And a profile that says no is not something an attaching client can
@@ -1920,17 +1916,38 @@ mod tests {
         let mut st = test_state(true);
         st.subscriptions = Subscriptions::new(false, Some(false));
         let (tx, _rx) = mpsc::channel();
-        attach_subscriber_with_permissions(&mut st, tx, &OutputGate::new(), true, false);
+        attach_subscriber_with_permissions(
+            &mut st,
+            tx,
+            &OutputGate::new(),
+            true,
+            false,
+            false,
+        );
         assert!(!st.subscriptions.clipboard_allowed());
 
         // A pane with no spec of its own — everything on a remote
         // `lyrel-server` — is exactly as permitted as its controller says.
         let mut st = test_state(true);
         let (tx, _rx) = mpsc::channel();
-        attach_subscriber_with_permissions(&mut st, tx, &OutputGate::new(), true, false);
+        attach_subscriber_with_permissions(
+            &mut st,
+            tx,
+            &OutputGate::new(),
+            true,
+            false,
+            false,
+        );
         assert!(st.subscriptions.clipboard_allowed());
         let (tx, _rx) = mpsc::channel();
-        attach_subscriber_with_permissions(&mut st, tx, &OutputGate::new(), false, false);
+        attach_subscriber_with_permissions(
+            &mut st,
+            tx,
+            &OutputGate::new(),
+            false,
+            false,
+            false,
+        );
         assert!(!st.subscriptions.clipboard_allowed());
     }
 
@@ -1949,8 +1966,15 @@ mod tests {
                 &OutputGate::new(),
                 true,
                 false,
+                false,
             );
-            observe_subscriber(&mut st, observer_tx, Arc::new(OutputGate::new()), false);
+            observe_subscriber(
+                &mut st,
+                observer_tx,
+                Arc::new(OutputGate::new()),
+                false,
+                false,
+            );
         }
         drain(&controller_rx);
         drain(&observer_rx);
@@ -2201,7 +2225,14 @@ mod tests {
     fn a_reattach_after_the_first_paint_left_the_ring_makes_the_program_repaint() {
         let mut st = state_running_a_long_lived_program();
         let (tx, _rx) = mpsc::channel();
-        attach_subscriber_with_permissions(&mut st, tx, &OutputGate::new(), false, true);
+        attach_subscriber_with_permissions(
+            &mut st,
+            tx,
+            &OutputGate::new(),
+            false,
+            true,
+            false,
+        );
 
         let transient = redraw_nudge(&mut st, true, std::time::Instant::now())
             .expect("the screen the program painted is gone from the ring");

@@ -1,8 +1,7 @@
 use super::super::test_support::{drain, test_state};
 use super::super::{
-    attach_subscriber, attach_subscriber_with_permissions,
-    attach_subscriber_with_permissions_and_colors, fan_out_output, notify, observe_subscriber,
-    record_output,
+    attach_subscriber, attach_subscriber_with_permissions, fan_out_output, notify,
+    observe_subscriber, record_output,
 };
 use super::*;
 use std::path::PathBuf;
@@ -250,7 +249,7 @@ fn observers_are_told_the_pane_modes_as_well() {
     record_output(&mut st, &vec![b'.'; RING_CAP]);
 
     let (tx, rx) = mpsc::channel();
-    observe_subscriber(&mut st, tx, Arc::new(OutputGate::new()), false);
+    observe_subscriber(&mut st, tx, Arc::new(OutputGate::new()), false, false);
     assert!(matches!(rx.try_recv(), Ok(DaemonMsg::Snapshot(b)) if b == b"\x1b[?1049h"));
 }
 
@@ -281,7 +280,13 @@ fn observe_replays_state_without_displacing_the_controller() {
     drain(&controller_rx);
 
     let (observer_tx, observer_rx) = mpsc::channel();
-    let id = observe_subscriber(&mut st, observer_tx, Arc::new(OutputGate::new()), false);
+    let id = observe_subscriber(
+        &mut st,
+        observer_tx,
+        Arc::new(OutputGate::new()),
+        false,
+        false,
+    );
     assert_eq!(
         st.subscriptions.subscriber_epoch, epoch,
         "observing must not bump the controller epoch"
@@ -325,7 +330,13 @@ fn a_new_controller_preempts_the_old_while_observers_survive() {
     drain(&first_rx);
 
     let (observer_tx, observer_rx) = mpsc::channel();
-    observe_subscriber(&mut st, observer_tx, Arc::new(OutputGate::new()), false);
+    observe_subscriber(
+        &mut st,
+        observer_tx,
+        Arc::new(OutputGate::new()),
+        false,
+        false,
+    );
     drain(&observer_rx);
 
     let (second_tx, second_rx) = mpsc::channel();
@@ -356,7 +367,13 @@ fn a_new_controller_preempts_the_old_while_observers_survive() {
 fn a_gone_observer_is_pruned_on_the_next_broadcast() {
     let mut st = test_state(true);
     let (observer_tx, observer_rx) = mpsc::channel();
-    observe_subscriber(&mut st, observer_tx, Arc::new(OutputGate::new()), false);
+    observe_subscriber(
+        &mut st,
+        observer_tx,
+        Arc::new(OutputGate::new()),
+        false,
+        false,
+    );
     drop(observer_rx);
 
     notify(&mut st, DaemonMsg::Output(b"x".to_vec()));
@@ -374,7 +391,13 @@ fn a_stalled_observer_is_dropped_at_its_budget_while_the_controller_streams_on()
     drain(&controller_rx);
 
     let (observer_tx, observer_rx) = mpsc::channel();
-    observe_subscriber(&mut st, observer_tx, Arc::new(OutputGate::new()), false);
+    observe_subscriber(
+        &mut st,
+        observer_tx,
+        Arc::new(OutputGate::new()),
+        false,
+        false,
+    );
     drain(&observer_rx);
 
     let pane_gate = OutputGate::new();
@@ -418,7 +441,13 @@ fn an_observer_still_reading_a_full_ring_replay_gets_live_output() {
     let mut st = test_state(true);
     st.ring.append(&vec![b'h'; RING_CAP]);
     let (observer_tx, observer_rx) = mpsc::channel();
-    observe_subscriber(&mut st, observer_tx, Arc::new(OutputGate::new()), false);
+    observe_subscriber(
+        &mut st,
+        observer_tx,
+        Arc::new(OutputGate::new()),
+        false,
+        false,
+    );
 
     fan_out_output(&mut st, b"tick", Vec::new(), &OutputGate::new());
     assert_eq!(
@@ -439,7 +468,13 @@ fn an_observer_still_reading_a_full_ring_replay_gets_live_output() {
 fn an_observer_dropped_at_its_budget_is_told_and_let_go() {
     let mut st = test_state(true);
     let (observer_tx, observer_rx) = mpsc::channel();
-    observe_subscriber(&mut st, observer_tx, Arc::new(OutputGate::new()), false);
+    observe_subscriber(
+        &mut st,
+        observer_tx,
+        Arc::new(OutputGate::new()),
+        false,
+        false,
+    );
     drain(&observer_rx);
 
     let chunk = vec![b'x'; 1024 * 1024];
@@ -462,7 +497,7 @@ fn an_observer_that_drained_a_full_ring_replay_keeps_getting_output() {
     st.ring.append(&vec![b'h'; RING_CAP]);
     let (observer_tx, observer_rx) = mpsc::channel();
     let observer_gate = Arc::new(OutputGate::new());
-    observe_subscriber(&mut st, observer_tx, observer_gate.clone(), false);
+    observe_subscriber(&mut st, observer_tx, observer_gate.clone(), false, false);
 
     // The daemon's own writer puts the replay on the wire, as for a phone.
     let (mut client, server) = UnixStream::pair().unwrap();
@@ -503,7 +538,7 @@ fn a_controller_gate_is_charged_for_its_replay() {
     let gate = OutputGate::new();
     gate.add(123);
     let (tx, rx) = mpsc::channel();
-    attach_subscriber_with_permissions(&mut st, tx, &gate, false, false);
+    attach_subscriber_with_permissions(&mut st, tx, &gate, false, false, false);
     assert_eq!(gate.queued_bytes(), b"screen".len() as i64);
     while let Ok(msg) = rx.try_recv() {
         gate.sub(gated_len(&msg));
@@ -516,7 +551,7 @@ fn a_draining_observer_under_the_cap_stays_subscribed() {
     let mut st = test_state(true);
     let (observer_tx, observer_rx) = mpsc::channel();
     let observer_gate = Arc::new(OutputGate::new());
-    observe_subscriber(&mut st, observer_tx, observer_gate.clone(), false);
+    observe_subscriber(&mut st, observer_tx, observer_gate.clone(), false, false);
     drain(&observer_rx);
 
     let pane_gate = OutputGate::new();
@@ -558,7 +593,14 @@ fn a_colour_snapshot_is_replayed_without_its_original_ring_bytes() {
     record_output(&mut st, b"a ring that never carried the OSC set");
 
     let (tx, rx) = mpsc::channel();
-    attach_subscriber_with_permissions_and_colors(&mut st, tx, &OutputGate::new(), false, false, true);
+    attach_subscriber_with_permissions(
+        &mut st,
+        tx,
+        &OutputGate::new(),
+        false,
+        false,
+        true,
+    );
     let messages = drain(&rx);
     let frame = messages
         .iter()
