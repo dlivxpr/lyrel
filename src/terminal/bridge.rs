@@ -107,6 +107,9 @@ impl<'a, T: EventListener> ParseBridge<'a, T> {
     }
 
     fn sync_keyboard(&mut self) {
+        if let Some(presentation) = self.presentation {
+            presentation.lock().unwrap().invalidate_keyboard();
+        }
         Handler::set_keyboard_mode(
             self.inner,
             KeyboardModes::from_bits_truncate(self.keyboard.active()),
@@ -126,6 +129,9 @@ impl<'a, T: EventListener> ParseBridge<'a, T> {
             .contains(rio_vt::crosswords::Mode::ALT_SCREEN);
         if was_alt == is_alt {
             return;
+        }
+        if let Some(presentation) = self.presentation {
+            presentation.lock().unwrap().invalidate_keyboard();
         }
         if is_alt && let Some(presentation) = self.presentation {
             presentation.lock().unwrap().invalidate_reading();
@@ -354,6 +360,7 @@ impl<T: EventListener> Handler for ParseBridge<'_, T> {
         if let Some(presentation) = self.presentation {
             let mut facts = presentation.lock().unwrap();
             facts.invalidate_reading();
+            facts.invalidate_keyboard();
             facts.reset_tabs(self.inner.columns());
         }
         if let Some(limit) = self.history_limit {

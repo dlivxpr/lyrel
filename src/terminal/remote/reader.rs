@@ -703,6 +703,7 @@ impl FrameReader {
                                 drop(bridge);
                             }
                             ParseBridge::new(&mut term, proxy.clone(), &mut keyboard, None)
+                                .with_presentation(Some(&proxy.parse_state.presentation))
                                 .clear_keyboard();
                             drop(term);
                             if released || !resets.is_empty() {
@@ -1075,7 +1076,9 @@ fn feed_grid<T: EventListener + Clone>(
         }
         let Some((_, cut)) = next else { break };
         if matches!(cut, ReaderCut::KeyboardBoundary) {
-            ParseBridge::new(&mut grid, proxy.clone(), keyboard, None).clear_keyboard();
+            ParseBridge::new(&mut grid, proxy.clone(), keyboard, None)
+                .with_presentation(presentation)
+                .clear_keyboard();
         }
         if matches!(
             cut,

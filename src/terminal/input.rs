@@ -2,11 +2,12 @@ use rio_vt::crosswords::Mode;
 
 /// Everything about the terminal's current state that changes how a keystroke
 /// is encoded: keyboard modes and the PTY that receives the bytes.
-#[derive(Clone, Copy, Default)]
+#[derive(Clone, Copy, Default, PartialEq, Eq)]
 pub(super) struct KeyFlags {
     disambiguate: bool,
     report_all_keys: bool,
     report_text: bool,
+    report_events: bool,
     /// DECCKM. ncurses apps turn this on via `smkx` and then only recognise the
     /// SS3 form of the arrow keys, because that is what `kcuu1` & co. spell.
     app_cursor: bool,
@@ -19,6 +20,7 @@ impl KeyFlags {
             disambiguate: mode.contains(Mode::DISAMBIGUATE_ESC_CODES),
             report_all_keys: mode.contains(Mode::REPORT_ALL_KEYS_AS_ESC),
             report_text: mode.contains(Mode::REPORT_ASSOCIATED_TEXT),
+            report_events: mode.contains(Mode::REPORT_EVENT_TYPES),
             app_cursor: mode.contains(Mode::APP_CURSOR),
             local_conpty: false,
         }
@@ -32,11 +34,15 @@ impl KeyFlags {
     }
 
     pub(super) fn kitty_active(self) -> bool {
-        self.disambiguate || self.report_all_keys
+        self.disambiguate || self.report_all_keys || self.report_events
     }
 
     pub(super) fn reports_all_keys(self) -> bool {
         self.report_all_keys
+    }
+
+    pub(super) fn reports_events(self) -> bool {
+        self.report_events
     }
 
     pub(super) fn legacy_newline_bytes(self) -> &'static [u8] {
@@ -115,13 +121,59 @@ pub(super) fn meta_chord_bypasses_ime(ks: &gpui_kit::Keystroke, option_as_alt: b
     meta_modifiers_bypass_ime(&ks.modifiers, option_as_alt)
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum KeyEventType {
+    Press = 1,
+    Repeat = 2,
+    Release = 3,
+}
+
+#[cfg(test)]
 pub(super) fn keystroke_to_bytes(ks: &gpui_kit::Keystroke, flags: KeyFlags) -> Option<Vec<u8>> {
+    key_event_to_bytes(ks, flags, KeyEventType::Press).map(|(bytes, _)| bytes)
+}
+
+/// The boolean says this exact encoding admits a later real release. Legacy
+/// bytes, including ConPTY's already synthesized pairs, never acquire one.
+pub(super) fn key_event_to_bytes(
+    ks: &gpui_kit::Keystroke,
+    flags: KeyFlags,
+    event: KeyEventType,
+) -> Option<(Vec<u8>, bool)> {
     if flags.kitty_active() && !ks.modifiers.platform {
-        if let Some(bytes) = encode_kitty(ks, flags) {
-            return Some(bytes);
+        if let Some(bytes) = encode_kitty(ks, flags, event) {
+            let release = flags.report_events
+                && (flags.report_all_keys
+                    || !matches!(ks.key.as_str(), "enter" | "tab" | "backspace"));
+            return Some((bytes, release));
         }
     }
-    legacy_keystroke_to_bytes(ks, flags)
+    legacy_keystroke_to_bytes(ks, flags).map(|bytes| (bytes, false))
+}
+
+/// Called only after the input owner has consumed a matching delivered press.
+pub(super) fn key_release_to_bytes(
+    ks: &gpui_kit::Keystroke,
+    mut flags: KeyFlags,
+) -> Option<Vec<u8>> {
+    if !flags.report_events
+        || (!flags.report_all_keys && matches!(ks.key.as_str(), "enter" | "tab" | "backspace"))
+    {
+        return None;
+    }
+    // A modifier may have been released before its text key. The original
+    // press, not the modifiers still held, establishes that key's eligibility.
+    flags.report_all_keys = true;
+    encode_kitty(ks, flags, KeyEventType::Release)
+}
+
+pub(super) fn committed_text_to_bytes(text: &str, flags: KeyFlags) -> Vec<u8> {
+    if flags.report_all_keys && flags.report_text && text.chars().all(|c| !c.is_control()) {
+        let text: Vec<u32> = text.chars().map(u32::from).collect();
+        csi_u(0, 1, None, Some(&text))
+    } else {
+        text.as_bytes().to_vec()
+    }
 }
 
 pub(super) fn tab_bytes(shift: bool, flags: KeyFlags) -> Vec<u8> {
@@ -144,12 +196,13 @@ fn xterm_mods(m: &gpui_kit::Modifiers) -> u32 {
     1 + u32::from(m.shift) + 2 * u32::from(m.alt) + 4 * u32::from(m.control)
 }
 
-fn encode_kitty(ks: &gpui_kit::Keystroke, kitty: KeyFlags) -> Option<Vec<u8>> {
+fn encode_kitty(ks: &gpui_kit::Keystroke, kitty: KeyFlags, kind: KeyEventType) -> Option<Vec<u8>> {
     let m = &ks.modifiers;
     let mods = xterm_mods(m);
+    let event = (kitty.report_events && kind != KeyEventType::Press).then_some(kind as u8);
 
     if ks.key.as_str() == "escape" {
-        return Some(csi_u(27, mods, None));
+        return Some(csi_u(27, mods, event, None));
     }
 
     let legacy_ctrl_code = match ks.key.as_str() {
@@ -162,7 +215,7 @@ fn encode_kitty(ks: &gpui_kit::Keystroke, kitty: KeyFlags) -> Option<Vec<u8>> {
         if mods == 1 && !kitty.report_all_keys {
             return None;
         }
-        return Some(csi_u(code, mods, None));
+        return Some(csi_u(code, mods, event, None));
     }
 
     // F3 is the one function key the kitty protocol does not share with
@@ -174,45 +227,58 @@ fn encode_kitty(ks: &gpui_kit::Keystroke, kitty: KeyFlags) -> Option<Vec<u8>> {
     // asked for the protocol is told, while the legacy path below keeps the
     // `\EOR` our `$TERM` spells.
     if ks.key.as_str() == "f3" {
-        let s = if mods == 1 {
-            "\x1b[13~".to_string()
-        } else {
-            format!("\x1b[13;{mods}~")
-        };
-        return Some(s.into_bytes());
+        return Some(tilde_key(13, mods, event));
     }
 
-    if let Some(seq) = functional_key(ks.key.as_str(), mods, kitty.app_cursor()) {
+    if let Some(seq) = functional_key(ks.key.as_str(), mods, kitty.app_cursor(), event) {
         return Some(seq);
     }
 
     if let Some(code) = kitty_function_key(ks.key.as_str()) {
-        return Some(csi_u(code, mods, None));
+        return Some(csi_u(code, mods, event, None));
     }
 
     let modified = m.control || m.alt;
     if modified || kitty.report_all_keys {
         if let Some(code) = text_key_code(ks) {
-            let text = kitty.report_text.then(|| associated_text(ks)).flatten();
-            return Some(csi_u(code, mods, text.as_deref()));
+            let text = (kitty.report_text && kind != KeyEventType::Release)
+                .then(|| associated_text(ks))
+                .flatten();
+            return Some(csi_u(code, mods, event, text.as_deref()));
         }
     }
 
     None
 }
 
-fn csi_u(code: u32, mods: u32, text: Option<&[u32]>) -> Vec<u8> {
+fn csi_u(code: u32, mods: u32, event: Option<u8>, text: Option<&[u32]>) -> Vec<u8> {
+    use std::fmt::Write as _;
     let mut s = format!("\x1b[{code}");
-    match text {
-        Some(cps) => {
-            let joined = cps.iter().map(u32::to_string).collect::<Vec<_>>().join(":");
-            s.push_str(&format!(";{mods};{joined}"));
+    if mods != 1 || event.is_some() || text.is_some() {
+        write!(s, ";{mods}").unwrap();
+        if let Some(event) = event {
+            write!(s, ":{event}").unwrap();
         }
-        None if mods != 1 => s.push_str(&format!(";{mods}")),
-        None => {}
+    }
+    if let Some(text) = text {
+        s.push(';');
+        for (index, codepoint) in text.iter().enumerate() {
+            if index > 0 {
+                s.push(':');
+            }
+            write!(s, "{codepoint}").unwrap();
+        }
     }
     s.push('u');
     s.into_bytes()
+}
+
+fn tilde_key(code: u32, mods: u32, event: Option<u8>) -> Vec<u8> {
+    match event {
+        Some(event) => format!("\x1b[{code};{mods}:{event}~").into_bytes(),
+        None if mods != 1 => format!("\x1b[{code};{mods}~").into_bytes(),
+        None => format!("\x1b[{code}~").into_bytes(),
+    }
 }
 
 /// The cursor, editing and function keys, encoded the way `xterm-256color`'s terminfo
@@ -223,7 +289,7 @@ fn csi_u(code: u32, mods: u32, text: Option<&[u32]>) -> Vec<u8> {
 /// the app has turned on application cursor keys (`smkx`). Modified, they are
 /// always the `CSI 1;<mods>A` form — xterm ignores DECCKM there, and so does
 /// terminfo (`kUP3=\E[1;3A` and friends).
-fn functional_key(key: &str, mods: u32, app_cursor: bool) -> Option<Vec<u8>> {
+fn functional_key(key: &str, mods: u32, app_cursor: bool, event: Option<u8>) -> Option<Vec<u8>> {
     let letter = match key {
         "up" => Some('A'),
         "down" => Some('B'),
@@ -234,6 +300,9 @@ fn functional_key(key: &str, mods: u32, app_cursor: bool) -> Option<Vec<u8>> {
         _ => None,
     };
     if let Some(l) = letter {
+        if let Some(event) = event {
+            return Some(format!("\x1b[1;{mods}:{event}{l}").into_bytes());
+        }
         let s = match (mods, app_cursor) {
             (1, false) => format!("\x1b[{l}"),
             (1, true) => format!("\x1bO{l}"),
@@ -247,10 +316,12 @@ fn functional_key(key: &str, mods: u32, app_cursor: bool) -> Option<Vec<u8>> {
             // the cursor keys use — terminfo spells Shift+F1 `kf13=\E[1;2P`.
             // DECCKM has no say here: unlike `kcuu1`, `kf1` is SS3 under both
             // `smkx` and `rmkx`.
+            FunctionKey::Ss3(l) if event.is_some() => {
+                format!("\x1b[1;{mods}:{}{l}", event.unwrap())
+            }
             FunctionKey::Ss3(l) if mods == 1 => format!("\x1bO{l}"),
             FunctionKey::Ss3(l) => format!("\x1b[1;{mods}{l}"),
-            FunctionKey::Tilde(n) if mods == 1 => format!("\x1b[{n}~"),
-            FunctionKey::Tilde(n) => format!("\x1b[{n};{mods}~"),
+            FunctionKey::Tilde(n) => return Some(tilde_key(n, mods, event)),
         };
         return Some(s.into_bytes());
     }
@@ -262,12 +333,7 @@ fn functional_key(key: &str, mods: u32, app_cursor: bool) -> Option<Vec<u8>> {
         _ => None,
     };
     if let Some(n) = num {
-        let s = if mods != 1 {
-            format!("\x1b[{n};{mods}~")
-        } else {
-            format!("\x1b[{n}~")
-        };
-        return Some(s.into_bytes());
+        return Some(tilde_key(n, mods, event));
     }
     None
 }
@@ -407,7 +473,7 @@ fn legacy_keystroke_to_bytes(ks: &gpui_kit::Keystroke, flags: KeyFlags) -> Optio
         }
     }
 
-    if let Some(seq) = functional_key(key, xterm_mods(m), flags.app_cursor()) {
+    if let Some(seq) = functional_key(key, xterm_mods(m), flags.app_cursor(), None) {
         return Some(seq);
     }
 
@@ -452,11 +518,21 @@ mod tests {
     use gpui_kit::{Keystroke, Modifiers};
     use rio_vt::crosswords::Mode;
 
+    #[test]
+    fn event_types_only_negotiation_encodes_a_reportable_key_press() {
+        let flags = KeyFlags::from_mode(&Mode::REPORT_EVENT_TYPES);
+        assert_eq!(
+            keystroke_to_bytes(&Keystroke::parse("ctrl-q").unwrap(), flags),
+            Some(b"\x1b[113;5u".to_vec())
+        );
+    }
+
     fn full_mode() -> KeyFlags {
         KeyFlags {
             disambiguate: true,
             report_all_keys: true,
             report_text: true,
+            report_events: false,
             app_cursor: false,
             local_conpty: false,
         }
@@ -467,6 +543,7 @@ mod tests {
             disambiguate: true,
             report_all_keys: false,
             report_text: false,
+            report_events: false,
             app_cursor: false,
             local_conpty: false,
         }
@@ -880,6 +957,7 @@ mod tests {
             disambiguate: true,
             report_all_keys: true,
             report_text: true,
+            report_events: false,
             app_cursor: false,
             local_conpty: false,
         };
@@ -1075,6 +1153,7 @@ mod tests {
             disambiguate: true,
             report_all_keys: false,
             report_text: false,
+            report_events: false,
             app_cursor: false,
             local_conpty: false,
         }
@@ -1157,6 +1236,7 @@ mod tests {
             disambiguate: true,
             report_all_keys: true,
             report_text: false,
+            report_events: false,
             app_cursor: false,
             local_conpty: false,
         };
@@ -1186,6 +1266,7 @@ mod tests {
             disambiguate: true,
             report_all_keys: true,
             report_text: false,
+            report_events: false,
             app_cursor: false,
             local_conpty: false,
         };
@@ -1266,6 +1347,7 @@ mod tests {
             disambiguate: true,
             report_all_keys: true,
             report_text: true,
+            report_events: false,
             app_cursor: false,
             local_conpty: false,
         };
@@ -1303,6 +1385,7 @@ mod tests {
             disambiguate: true,
             report_all_keys: true,
             report_text: true,
+            report_events: false,
             app_cursor: false,
             local_conpty: false,
         };
@@ -1319,6 +1402,7 @@ mod tests {
             disambiguate: true,
             report_all_keys: true,
             report_text: true,
+            report_events: false,
             app_cursor: false,
             local_conpty: false,
         };
