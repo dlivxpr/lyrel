@@ -291,9 +291,16 @@ fn sixel_fresh_consumer_restores_the_accepted_image_after_the_ring_trims(
         );
     }
     replay.detach().unwrap();
+    // The production ring holds at most `RING_CAP` (8 MiB): the replay can
+    // never exceed it, and `ReplayRing::evict` additionally drops to the next
+    // escape-sequence boundary, which inside this producer's uniform `\x1b[0m`
+    // filler can only cost a few bytes. "More than the ring ever was" is what
+    // the sender `bytes=` counter above proves; here a tail just short of the
+    // cap is the real, saturated ring — not a synthetic snapshot.
+    let ring = 8 * 1024 * 1024;
     assert!(
-        raw.len() > 8 * 1024 * 1024,
-        "the replay is the real ring tail: {} bytes",
+        raw.len() <= ring && raw.len() >= ring - 8,
+        "the replay is the real bounded ring tail: {} bytes",
         raw.len()
     );
     assert!(
@@ -481,12 +488,21 @@ fn sixel_resize_keeps_the_image_on_its_text_row(cx: &mut TestAppContext) {
     view.read_with(cx, |view, _| {
         let text = sixel_screen_text(view);
         assert!(text.contains("RESIZE_SIXEL") && text.contains("BELOW_SIXEL"));
+        // Growing the grid pulls scrollback rows back above the anchor, so the
+        // text row is wherever the production reflow put it — the contract is
+        // that the image followed it, not that the row stayed at 5.
+        let text_row = sixel_screen_row(view, "RESIZE_SIXEL").expect("anchor text row");
+        let below_row = sixel_screen_row(view, "BELOW_SIXEL").expect("following text row");
+        assert!(
+            text_row < below_row,
+            "the anchor row still precedes the following text: {text}"
+        );
         let images = graphics_visible_images(view);
         let image = images.iter().find(|image| image.placement.z == -1).unwrap();
         let (crop, _) = image.paint_bounds(point(px(0.), px(0.)), px(10.), px(20.), 0, 0, 1.);
         assert_eq!(
             crop.origin.y,
-            px(5. * 20.),
+            px(text_row as f32 * 20.),
             "the image still shares its text row after resize"
         );
     });

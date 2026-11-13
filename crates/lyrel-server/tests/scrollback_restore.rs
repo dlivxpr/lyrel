@@ -578,8 +578,8 @@ fn a_bounded_restart_preserves_the_live_replay_suffix_and_geometry() {
 }
 
 impl Instance {
-    /// Like `spawn_restoring_segments`, but keeps the colour projection the
-    /// restarted daemon sends for the replacement pane.
+    /// Like `spawn_restoring_segments`, but also keeps the authoritative colour
+    /// projection sent for the replacement pane.
     fn spawn_restoring_with_colors(
         &self,
         dead: u64,
@@ -717,21 +717,49 @@ impl Instance {
 fn a_replacement_shell_does_not_reactivate_old_temporary_colours() {
     let instance = Instance::new();
     let running = instance.start();
+    #[cfg(unix)]
+    let producer = interactive_shell();
+    #[cfg(windows)]
+    let producer = ShellSpec {
+        program: "powershell.exe".into(),
+        args: vec![
+            "-NoLogo".into(),
+            "-NoProfile".into(),
+            "-Command".into(),
+            "$null=[Console]::ReadLine(); $e=[char]27; $b=[char]7; [Console]::Write(\"${e}]4;1;#112233${b}${e}]11;#101112${b}lyrel_colour_restore\"); $null=[Console]::ReadLine()".into(),
+        ],
+        args_are_lyrel_defaults: false,
+    };
     let mut session = instance
         .panes()
-        .spawn(None, size(), Some(interactive_shell()), None, None)
+        .spawn(None, size(), Some(producer), None, None)
         .expect("spawn a pane");
     session
         .set_recv_timeout(Some(STREAM_WITHIN))
         .expect("bound the stream reads");
     let dead = session.pane_id();
+    // One printf writes both OSC commands and the completion marker, so the
+    // marker can only appear after the colour bytes reached the ring. The
+    // marker text is split in the command itself, which keeps the pty's input
+    // echo from finishing the wait early — the previous form raced the
+    // shutdown snapshot against printf's output.
+    #[cfg(unix)]
     session
-        .input(b"printf '\\033]4;1;#112233\\007\\033]11;#101112\\007'; echo lyrel_colour_restore\r")
+        .input(b"printf '\\033]4;1;#112233\\007\\033]11;#101112\\007lyrel_%s\\n' colour_restore\r")
         .expect("the shell takes input");
+    #[cfg(windows)]
+    session.input(b"1\r").expect("the producer takes input");
     collect_until(&mut session, b"lyrel_colour_restore");
     session.detach().expect("detach");
     instance.stop(running);
 
+    let stored = instance
+        .snapshot_of(dead)
+        .expect("the shutdown wrote the pane's screen");
+    assert!(
+        windows_contain(&stored, b"\x1b]4;1;#112233"),
+        "the persisted snapshot does not carry the historical colour bytes"
+    );
     let _restarted = instance.start();
     let (_new_pane, replayed, colors) = instance.spawn_restoring_with_colors(dead);
     let text: Vec<u8> = replayed
