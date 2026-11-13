@@ -102,9 +102,9 @@ control 与 pane 分别协商协议；应用版本、control 版本和 pane 版�
 | 协议 | 源码常量 | 当前版本 | 承载内容 |
 | --- | --- | ---: | --- |
 | control | `daemon/control.rs` 的 `CONTROL_VERSION` | 16 | Host 操作、机器树、工作区附着、事件、文件／Git 流和主机指标 |
-| pane | `daemon/protocol.rs` 的 `PROTOCOL_VERSION` | 17 | 创建／附着／观察、输入输出、尺寸、终端模式、agent 状态与图形回放 |
+| pane | `daemon/protocol.rs` 的 `PROTOCOL_VERSION` | 18 | 创建／附着／观察、输入输出、尺寸、终端模式、agent 状态、图形回放与当前进度 |
 
-本地 Unix 使用私有 Unix socket，Windows 使用经认证的 loopback TCP；远端通过 SSH／stdio 桥接这些流。远端 server 文件名包含两套版本，当前为 `lyrel-server-c16p17`，Windows 加 `.exe`。
+本地 Unix 使用私有 Unix socket，Windows 使用经认证的 loopback TCP；远端通过 SSH／stdio 桥接这些流。远端 server 文件名包含两套版本，当前为 `lyrel-server-c16p18`，Windows 加 `.exe`。
 
 control 的 HELLO 在请求循环前核对版本与 features。增删 wire 消息变体需提升 control 版本，可安全忽略的字段才使用 feature 协商。pane 在实际 endpoint 上先协商版本和有限图形容量，再创建或附着会话；不兼容连接不能先启动 shell 再报告错误。
 
@@ -124,6 +124,12 @@ control 的 HELLO 在请求循环前核对版本与 features。增删 wire 消�
 5. `TerminalElement` 保留唯一的 `request_layout` → `prepaint` → `paint` 管线和命中几何。稳态 grid 锁竞争时保留上一有效帧并重试；输入仍读取 live 模式，不以旧帧模式解释新按键。
 
 隐藏 pane 继续消费输出、更新必要状态并释放退休图片资源，但普通输出不触发整窗重绘。daemon 持有图片权威，桌面只保留受预算约束的解码／绘制缓存；图片回收与连接退休不能通过隐藏副本绕过资源上限。
+
+单窗格进度由 `PaneFacts` 保存一个可选 `PaneProgress`，复用 `output_marks` 与原有 `OscTokenizer`
+按顺序折叠 `OSC 9;4` 和命令边界，不另建 VT parser 或历史事件队列。`DaemonMsg::Progress` 在实际
+v18 pane 流中发布有意义的变化，并在 attach 基线中始终发送当前状态（包括清空）；桌面不从回放文字
+重建权威进度。支持的同进程 handoff 携带状态，磁盘 scrollback、机器树和新 Shell 不携带它。
+`ProgressChanged` 只通知 tab owner 更新语义状态，不调用 agent lifecycle 或绕过隐藏 pane 的输出绘制门控。
 
 同步更新期间，解析、协议应答和输入模式仍实时推进，桌面只延迟发布新的文字、光标和图片帧。结束标记或既有 150 ms fail-safe 解除冻结；CLI `capture --plain` 重建最新收到的状态，不等待 GUI 已提交帧。图形协议范围与历史验收记录见[终端内联图片](/getting-started/concepts#终端内联图片)。
 

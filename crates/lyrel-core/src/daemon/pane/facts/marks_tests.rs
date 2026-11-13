@@ -6,6 +6,58 @@ use super::output_marks::{
 use super::*;
 
 #[test]
+fn progress_is_ordered_retained_and_only_command_boundaries_clear_it() {
+    use crate::daemon::protocol::{PaneProgress, ProgressKind};
+    let mut facts = PaneFacts::default();
+    let mut sniffer = OscSniffer::new();
+    let mut messages = Vec::new();
+    let mut read = |facts: &mut PaneFacts, bytes: &[u8]| {
+        apply_signals(facts, sniffer.feed(bytes), &mut |msg| messages.push(msg));
+    };
+    read(&mut facts, b"\x1b]9;4;1;42\x07");
+    assert_eq!(
+        facts.progress,
+        Some(PaneProgress {
+            kind: ProgressKind::Running,
+            percent: Some(42)
+        })
+    );
+    read(&mut facts, b"ordinary output: done 100%\r\n");
+    assert!(
+        facts.progress.is_some(),
+        "text is not a completion boundary"
+    );
+    read(&mut facts, b"\x1b]133;D;0\x07");
+    assert_eq!(facts.progress, None);
+    read(&mut facts, b"\x1b]9;4;2\x07\x1b]133;D;1\x07");
+    assert_eq!(
+        facts.progress,
+        Some(PaneProgress {
+            kind: ProgressKind::Error,
+            percent: None
+        })
+    );
+    read(&mut facts, b"\x1b]133;C\x07\x1b]9;4;4;61\x07");
+    assert_eq!(
+        facts.progress,
+        Some(PaneProgress {
+            kind: ProgressKind::Paused,
+            percent: Some(61)
+        })
+    );
+    read(&mut facts, b"\x1b]9;4;0\x07\x1b]9;4;3\x07");
+    assert_eq!(
+        facts.progress,
+        Some(PaneProgress {
+            kind: ProgressKind::Indeterminate,
+            percent: None
+        })
+    );
+    read(&mut facts, b"\x1b]9;4;0\x07");
+    assert_eq!(facts.progress, None);
+}
+
+#[test]
 fn sniff_osc7_cwd() {
     let mut s = OscSniffer::new();
     let sig = s.feed(b"\x1b]7;file://host/Users/me/dev\x07");

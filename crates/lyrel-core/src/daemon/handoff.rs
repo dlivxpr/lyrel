@@ -96,6 +96,8 @@ struct PaneRecord {
     agent_argv: Option<Vec<String>>,
     agent_session: Option<crate::core::cli_agent::AgentSessionState>,
     #[serde(default)]
+    progress: Option<crate::daemon::protocol::PaneProgress>,
+    #[serde(default)]
     head_modes: Option<Vec<u8>>,
     /// Length of this pane's ring in the data section, which follows the
     /// manifest in pane order.
@@ -245,6 +247,7 @@ fn stage(panes: &[Carried], next_pane_id: u64) -> std::io::Result<std::fs::File>
             agent: pane.agent,
             agent_argv: pane.agent_argv.clone(),
             agent_session: pane.agent_session.clone(),
+            progress: pane.progress,
             head_modes: pane.head_modes.clone(),
             ring_len: encoded.len() as u32,
         });
@@ -380,6 +383,7 @@ pub fn adopt(fd: RawFd) -> Option<Adopted> {
             agent: record.agent,
             agent_argv: record.agent.and(record.agent_argv),
             agent_session: record.agent.and(record.agent_session),
+            progress: record.progress,
             head_modes: record.head_modes,
         });
     }
@@ -425,6 +429,7 @@ mod tests {
             agent: None,
             agent_argv: None,
             agent_session: None,
+            progress: None,
             head_modes: None,
         }
     }
@@ -468,6 +473,19 @@ mod tests {
         assert_eq!(
             adopted.panes[0].head_modes.as_deref(),
             Some(&b"\x1b[>1u\x1b[?2031h"[..])
+        );
+    }
+
+    #[test]
+    fn progress_crosses_same_session_handoff_without_original_output() {
+        use crate::daemon::protocol::{PaneProgress, ProgressKind};
+        let mut pane = carried(271, 21, b"only unrelated text remains");
+        pane.progress = Some(PaneProgress::new(ProgressKind::Paused, Some(61)));
+        let staged = stage(&[pane], 272).unwrap();
+        let adopted = adopt(std::os::fd::IntoRawFd::into_raw_fd(staged)).unwrap();
+        assert_eq!(
+            adopted.panes[0].progress,
+            Some(PaneProgress::new(ProgressKind::Paused, Some(61)))
         );
     }
 
