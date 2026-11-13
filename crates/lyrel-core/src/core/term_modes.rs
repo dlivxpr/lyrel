@@ -65,8 +65,9 @@ const MAX_PARAMS: usize = 64;
 /// public-Handler adapter. It is independent of the emulator's internal stack.
 const KEYBOARD_STACK_MAX_DEPTH: usize = 4096;
 
-/// The flag bits the protocol defines; the emulator truncates the rest.
-const KEYBOARD_FLAGS: u8 = 0b1_1111;
+/// Implemented enhancements. GPUI has no physical/base-layout key data, so
+/// alternate-key reporting (bit 4) must not survive queries or replay either.
+const KEYBOARD_FLAGS: u8 = 0b1_1011;
 
 /// The kitty keyboard flags, kept the way the client's emulator keeps them.
 ///
@@ -107,7 +108,7 @@ impl KeyboardStacks {
         if stack.len() >= KEYBOARD_STACK_MAX_DEPTH {
             stack.remove(0);
         }
-        stack.push(flags);
+        stack.push(flags & KEYBOARD_FLAGS);
         self.reload();
     }
 
@@ -118,6 +119,7 @@ impl KeyboardStacks {
     }
 
     pub fn set(&mut self, flags: u8, how: u16) {
+        let flags = flags & KEYBOARD_FLAGS;
         self.active = match how {
             2 => self.active | flags,
             3 => self.active & !flags,
@@ -498,6 +500,20 @@ mod tests {
     use super::*;
 
     #[test]
+    fn keyboard_replay_retains_only_implemented_enhancements() {
+        let mut modes = TerminalModes::new();
+        modes.feed(b"\x1b[>31u\x1b[=4;2u");
+        assert_eq!(modes.restore_bytes().unwrap(), b"\x1b[>27u");
+        modes.feed(b"\x1b[>4u\x1b[<u");
+        assert_eq!(modes.restore_bytes().unwrap(), b"\x1b[>27u");
+        modes.feed(b"\x1b[?1049h\x1b[>6u");
+        assert_eq!(
+            modes.restore_bytes().unwrap(),
+            b"\x1b[>27u\x1b[?1049h\x1b[>2u"
+        );
+    }
+
+    #[test]
     fn tracks_the_alternate_screen_and_mouse_modes_a_full_screen_tool_sets() {
         let mut modes = TerminalModes::new();
         modes.feed(b"\x1b[?1049h\x1b[?1002h\x1b[?1006h");
@@ -632,7 +648,7 @@ mod tests {
     #[test]
     fn kitty_keyboard_pushes_and_pops_a_stack() {
         let k = keyboard(b"\x1b[>1u\x1b[>7u");
-        assert_eq!((k.primary.as_slice(), k.active), (&[1, 7][..], 7));
+        assert_eq!((k.primary.as_slice(), k.active), (&[1, 3][..], 3));
         // A bare pop is one; a pop of zero is the default too.
         let k = keyboard(b"\x1b[>1u\x1b[>7u\x1b[<u");
         assert_eq!((k.primary.as_slice(), k.active), (&[1][..], 1));
@@ -649,7 +665,7 @@ mod tests {
         let k = keyboard(b"\x1b[>3u\x1b[=1;3u");
         assert_eq!(k.active, 2);
         let k = keyboard(b"\x1b[>3u\x1b[=4u");
-        assert_eq!(k.active, 4);
+        assert_eq!(k.active, 0);
         // A pop reloads from the stack, dropping the set.
         let k = keyboard(b"\x1b[>1u\x1b[>1u\x1b[=0;1u\x1b[<u");
         assert_eq!(k.active, 1);
@@ -660,13 +676,13 @@ mod tests {
         let k = keyboard(b"\x1b[>1u\x1b[?1049h\x1b[>7u");
         assert_eq!(
             (k.primary.as_slice(), k.alternate.as_slice(), k.active),
-            (&[1][..], &[7][..], 7)
+            (&[1][..], &[3][..], 3)
         );
         let k = keyboard(b"\x1b[>1u\x1b[?1049h\x1b[>7u\x1b[?1049l");
         assert_eq!(k.active, 1);
         // Re-entering a screen already on is no swap; `47` is none at all.
         let k = keyboard(b"\x1b[?1049h\x1b[>7u\x1b[?1049h\x1b[?47l");
-        assert!(k.on_alt && k.active == 7);
+        assert!(k.on_alt && k.active == 3);
     }
 
     #[test]
@@ -694,7 +710,7 @@ mod tests {
         modes.feed(b"\x1b[>1u\x1b[?1049h\x1b[>7u\x1b[=3u");
         assert_eq!(
             modes.restore_bytes().unwrap(),
-            b"\x1b[>1u\x1b[?1049h\x1b[>7u\x1b[=3;1u".to_vec()
+            b"\x1b[>1u\x1b[?1049h\x1b[>3u".to_vec()
         );
         let mut modes = TerminalModes::new();
         modes.feed(b"\x1b[>1u");

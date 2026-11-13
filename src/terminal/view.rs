@@ -88,6 +88,10 @@ pub struct AgentSessionChanged;
 
 impl gpui_kit::EventEmitter<AgentSessionChanged> for TerminalView {}
 
+/// A meaningful current-progress change; never a command/agent completion.
+pub struct ProgressChanged;
+impl gpui_kit::EventEmitter<ProgressChanged> for TerminalView {}
+
 /// A coding agent started running in this pane: its foreground went from no
 /// agent to this one. What quick launch counts as the agent being used.
 pub struct AgentDetected(pub crate::core::cli_agent::CLIAgent);
@@ -687,12 +691,15 @@ impl TerminalView {
                         view.agent_activity
                             .focused((view.host_id, view.pane_id), cx);
                     } else {
+                        view.input.forget_keys();
                         view.input.unmark();
                     }
                     view.report_focus_change(focused);
                 },
                 foreground: |view, window, cx| view.poll_foreground(window, cx),
+                deactivate: |view| view.input.forget_keys(),
                 detach: |view| {
+                    view.input.forget_keys();
                     view.grid_snap = None;
                     view.selection_scroll.clear_scrollback();
                     view.terminal.detach_link();
@@ -985,6 +992,7 @@ impl TerminalView {
         cell_h: u16,
         cx: &mut Context<Self>,
     ) -> anyhow::Result<()> {
+        self.input.forget_keys();
         self.remote_clipboard_write_generation =
             self.remote_clipboard_write_generation.wrapping_add(1);
         self.remote_clipboard_write_in_flight = None;
@@ -1020,6 +1028,10 @@ impl TerminalView {
 
     pub fn agent_session(&self) -> Option<crate::core::cli_agent::AgentSessionState> {
         self.terminal.agent_session()
+    }
+
+    pub(crate) fn progress(&self) -> Option<crate::daemon::protocol::PaneProgress> {
+        self.terminal.progress()
     }
 
     /// What this pane is in the middle of, when it can say so. `None` means
@@ -3209,6 +3221,8 @@ mod gpui_tests {
     }
 
     include!("graphics_consumer_tests.rs");
+    include!("xtgettcap_consumer_tests.rs");
+    include!("progress_consumer_tests.rs");
     include!("history_search_pty_consumer_tests.rs");
     include!("graphics_resize_consumer_tests.rs");
     include!("graphics_layout_consumer_tests.rs");

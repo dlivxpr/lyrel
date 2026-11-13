@@ -23,12 +23,11 @@
 //!   when no GUI is attached. A local mirror must not send a second reply.
 //! - `graphics_attribute`: the reply would describe sixel geometry this
 //!   terminal does not render; previously silence.
-//! - `xtgettcap_response`, `kitty_graphics_response`,
-//!   `glyph_protocol_response`: the reply channels for XTGETTCAP, kitty
-//!   graphics and the Glyph Protocol. Kitty transmissions never reach here —
-//!   the daemon lifts them out of the stream — and the other two were
-//!   previously dropped unacknowledged; none of the three is a protocol this
-//!   product advertises, so the parse completes and the reply is not sent.
+//! - `xtgettcap_response`: bounded live requests are extracted and answered
+//!   once by the daemon before publication. This mirror never replies, including
+//!   when replaying snapshots created by an older endpoint.
+//! - `kitty_graphics_response`, `glyph_protocol_response`: Kitty requests are
+//!   owned by the daemon; Glyph is not an advertised product capability.
 //! - `set_mouse_cursor_icon`: named OSC 22 pointer claims reach the pane's
 //!   paint-side facts through `presentation`; the empty `OSC 22 ;` reset the
 //!   upstream callback never sees is released by the reader's own cut.
@@ -106,7 +105,10 @@ impl<'a, T: EventListener> ParseBridge<'a, T> {
         );
     }
 
-    fn sync_keyboard(&mut self) {
+    fn sync_keyboard(&mut self, retire: bool) {
+        if retire && let Some(presentation) = self.presentation {
+            presentation.lock().unwrap().invalidate_keyboard();
+        }
         Handler::set_keyboard_mode(
             self.inner,
             KeyboardModes::from_bits_truncate(self.keyboard.active()),
@@ -116,7 +118,7 @@ impl<'a, T: EventListener> ParseBridge<'a, T> {
 
     pub(super) fn clear_keyboard(&mut self) {
         self.keyboard.clear();
-        self.sync_keyboard();
+        self.sync_keyboard(true);
     }
 
     fn sync_screen(&mut self, was_alt: bool, mode: PrivateMode) {
@@ -127,12 +129,15 @@ impl<'a, T: EventListener> ParseBridge<'a, T> {
         if was_alt == is_alt {
             return;
         }
+        if let Some(presentation) = self.presentation {
+            presentation.lock().unwrap().invalidate_keyboard();
+        }
         if is_alt && let Some(presentation) = self.presentation {
             presentation.lock().unwrap().invalidate_reading();
         }
         if mode.raw() == 1049 {
             self.keyboard.swap();
-            self.sync_keyboard();
+            self.sync_keyboard(false);
         }
         if !is_alt && let Some(limit) = self.history_limit {
             self.inner.grid.update_history(limit);
@@ -354,6 +359,7 @@ impl<T: EventListener> Handler for ParseBridge<'_, T> {
         if let Some(presentation) = self.presentation {
             let mut facts = presentation.lock().unwrap();
             facts.invalidate_reading();
+            facts.invalidate_keyboard();
             facts.reset_tabs(self.inner.columns());
             // A full reset releases any application pointer claim with the
             // rest of the emulator state.
@@ -534,26 +540,27 @@ impl<T: EventListener> Handler for ParseBridge<'_, T> {
 
     fn push_keyboard_mode(&mut self, mode: KeyboardModes) {
         self.keyboard.push(mode.bits());
-        self.sync_keyboard();
+        self.sync_keyboard(true);
     }
 
     fn pop_keyboard_modes(&mut self, to_pop: u16) {
         self.keyboard.pop(to_pop);
-        self.sync_keyboard();
+        self.sync_keyboard(true);
     }
 
     fn set_keyboard_mode(&mut self, mode: KeyboardModes, behavior: KeyboardModesApplyBehavior) {
+        let previous = self.keyboard.active();
         let how = match behavior {
             KeyboardModesApplyBehavior::Replace => 1,
             KeyboardModesApplyBehavior::Union => 2,
             KeyboardModesApplyBehavior::Difference => 3,
         };
         self.keyboard.set(mode.bits(), how);
-        self.sync_keyboard();
+        self.sync_keyboard(previous != self.keyboard.active());
     }
 
-    /// XTGETTCAP replies are a capability advertisement this product never
-    /// made; the request's bytes are fully consumed by the parser.
+    /// The daemon owns every live discovery reply. Historical snapshots may
+    /// still contain queries; a mirror must never inject them into a later PTY.
     fn xtgettcap_response(&mut self, _: String) {}
 
     fn set_modify_other_keys(&mut self, level: u8) {
@@ -683,6 +690,11 @@ mod tests {
         assert!(replies(b"\x1b[>0q").is_empty(), "XTVERSION");
         assert!(replies(b"\x1b[16t").is_empty(), "cell pixel size");
         assert!(replies(b"\x1b[?2;1S").is_empty(), "sixel geometry");
+    }
+
+    #[test]
+    fn xtgettcap_mirror_never_answers_historical_queries() {
+        assert!(replies(b"\x1bP+q436f;524742;544e;4d73\x1b\\historical text").is_empty());
     }
 
     /// Kitty keyboard pop uses `CSI < n u`; bare `CSI n u` restores

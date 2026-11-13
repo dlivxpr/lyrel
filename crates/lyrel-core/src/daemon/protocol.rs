@@ -120,7 +120,8 @@ const HEADER: usize = 5;
 /// and signed coordinates.
 /// v17 carries daemon-owned playback timelines, visibility pause metadata,
 /// and immutable replacement content for frame one (stable root identity).
-pub const PROTOCOL_VERSION: u32 = 17;
+/// v18 adds authoritative OSC 9;4 progress snapshots and ordered updates.
+pub const PROTOCOL_VERSION: u32 = 18;
 
 pub const FEATURE_PANE_OWNER: &str = "pane-owner";
 /// Spawn remains provisional until its requester attaches on the same connection.
@@ -138,6 +139,10 @@ pub const FEATURE_AGENT_STATE_AGE: &str = "agent-state-age";
 /// at the stream position where the PTY actually changed geometry; against an
 /// older daemon it must keep reflowing locally at request time.
 pub const FEATURE_RESIZE_ECHO: &str = "resize-echo";
+
+/// Bounded XTGETTCAP is consumed and answered exactly once by the live daemon,
+/// never by a desktop/CLI parser or snapshot replay.
+pub const FEATURE_XTGETTCAP_OWNER: &str = "xtgettcap-owner";
 
 /// The daemon can seed a new pane with the screen a dead one left behind, named
 /// by `ClientMsg::Spawn`'s `restore` field. A client that does not see this
@@ -181,6 +186,7 @@ impl DaemonVersion {
             FEATURE_AGENT_RESULTS.to_string(),
             FEATURE_AGENT_REQUESTS.to_string(),
             FEATURE_AGENT_STATE_AGE.to_string(),
+            FEATURE_XTGETTCAP_OWNER.to_string(),
         ];
         if cfg!(unix) {
             features.push(FEATURE_HANDOFF.to_string());
@@ -210,6 +216,12 @@ pub fn negotiate_pane<S: Read + Write>(stream: &mut S) -> io::Result<DaemonVersi
     stream.flush()?;
     match DaemonMsg::read(stream)? {
         DaemonMsg::Version(version) if version.protocol == PROTOCOL_VERSION => {
+            if !version.has_feature(FEATURE_XTGETTCAP_OWNER) {
+                return Err(io::Error::other(format!(
+                    "pane peer (build {}) lacks {}; update lyrel or lyrel-server explicitly; no daemon restart was attempted",
+                    version.build, FEATURE_XTGETTCAP_OWNER
+                )));
+            }
             // Every session consumer, including CLI and routed clients, starts
             // with a finite source allowance. Rendering consumers additionally
             // grant each resource from their shared process-wide byte budget.
@@ -1164,6 +1176,30 @@ pub enum ClientMsg {
     Version,
 }
 
+/// Current pane progress, independent of retained terminal text. Never persisted
+/// into a replacement shell; only a live-session handoff carries this state.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
+pub struct PaneProgress {
+    pub kind: ProgressKind,
+    pub percent: Option<u8>,
+}
+
+impl PaneProgress {
+    pub fn new(kind: ProgressKind, percent: Option<u8>) -> Self {
+        assert!(percent.is_none_or(|value| value <= 100));
+        Self { kind, percent }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ProgressKind {
+    Running,
+    Indeterminate,
+    Paused,
+    Error,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DaemonMsg {
     Spawned {
@@ -1199,6 +1235,7 @@ pub enum DaemonMsg {
     /// A completed OSC 5522 clipboard write. The daemon strips the control
     /// sequence from replay; the GUI decides whether it may touch the clipboard.
     ClipboardWrite(Vec<u8>),
+    Progress(Option<PaneProgress>),
     Cwd(PathBuf),
     Prompt {
         active: bool,
@@ -1307,6 +1344,7 @@ mod kind {
     /// Authoritative graphics updates, encoded outside the JSON message arms.
     pub const GRAPHICS: u8 = 60;
     pub const CLIPBOARD_WRITE: u8 = 62;
+    pub const PROGRESS: u8 = 71;
 }
 
 pub fn write_frame<W: Write>(w: &mut W, kind: u8, payload: &[u8]) -> io::Result<()> {
@@ -1821,6 +1859,7 @@ impl DaemonMsg {
                 &to_json(&(key, reclaimed))?,
             ),
             DaemonMsg::ClipboardWrite(frame) => write_frame(w, kind::CLIPBOARD_WRITE, frame),
+            DaemonMsg::Progress(state) => write_frame(w, kind::PROGRESS, &to_json(state)?),
             DaemonMsg::Cwd(path) => write_frame(w, kind::CWD, &to_json(path)?),
             DaemonMsg::Prompt {
                 active,
@@ -1896,6 +1935,7 @@ impl DaemonMsg {
                 DaemonMsg::GraphicsPressureResult { key, reclaimed }
             }
             kind::CLIPBOARD_WRITE => DaemonMsg::ClipboardWrite(payload),
+            kind::PROGRESS => DaemonMsg::Progress(from_json(&payload)?),
             kind::CWD => DaemonMsg::Cwd(from_json(&payload)?),
             kind::PROMPT => {
                 let (active, at_prompt, last_exit) = from_json(&payload)?;
@@ -1968,6 +2008,67 @@ mod tests {
         cell_w: 8,
         cell_h: 17,
     };
+
+    #[test]
+    fn progress_wire_round_trips_clear_and_all_optional_percent_states() {
+        for kind in [
+            ProgressKind::Running,
+            ProgressKind::Indeterminate,
+            ProgressKind::Paused,
+            ProgressKind::Error,
+        ] {
+            for percent in [None, Some(0), Some(42), Some(100)] {
+                let message = DaemonMsg::Progress(Some(PaneProgress::new(kind, percent)));
+                let mut wire = Vec::new();
+                message.encode(&mut wire).unwrap();
+                assert_eq!(DaemonMsg::read(&mut wire.as_slice()).unwrap(), message);
+            }
+        }
+        let mut wire = Vec::new();
+        DaemonMsg::Progress(None).encode(&mut wire).unwrap();
+        assert_eq!(
+            DaemonMsg::read(&mut wire.as_slice()).unwrap(),
+            DaemonMsg::Progress(None)
+        );
+    }
+
+    #[test]
+    fn progress_requires_actual_endpoint_v18_before_any_session_request() {
+        use std::net::{TcpListener, TcpStream};
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let mut client = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+        let (mut server, _) = listener.accept().unwrap();
+        let peer = std::thread::spawn(move || {
+            server
+                .set_read_timeout(Some(std::time::Duration::from_secs(5)))
+                .unwrap();
+            assert!(matches!(
+                ClientMsg::read(&mut server).unwrap(),
+                ClientMsg::Negotiate {
+                    protocol: PROTOCOL_VERSION
+                }
+            ));
+            let mut old = DaemonVersion::current();
+            old.protocol = 17;
+            DaemonMsg::Version(old).encode(&mut server).unwrap();
+            let mut byte = [0];
+            assert_eq!(
+                server.read(&mut byte).unwrap(),
+                0,
+                "refusal must not send Spawn, Attach, Handoff or restart"
+            );
+        });
+        client
+            .set_read_timeout(Some(std::time::Duration::from_secs(5)))
+            .unwrap();
+        let error = negotiate_pane(&mut client).unwrap_err().to_string();
+        assert!(
+            error.contains("v17") && error.contains("update lyrel"),
+            "{error}"
+        );
+        drop(client);
+        peer.join().unwrap();
+    }
 
     #[test]
     fn graphics_packet_shares_one_charge_until_last_owner_drops() {

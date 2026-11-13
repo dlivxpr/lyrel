@@ -32,3 +32,4 @@ pub mod terminal_resize;
 pub mod threads;
 pub mod window_state;
 pub mod worktree;
+pub mod xtgettcap;

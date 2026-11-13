@@ -1,4 +1,5 @@
 pub(crate) mod presentation;
+mod progress;
 
 use crate::core::session::{SessionPane, SessionTab};
 use crate::terminal::view::TerminalView;
