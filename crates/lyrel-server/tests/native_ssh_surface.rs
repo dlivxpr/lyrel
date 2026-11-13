@@ -370,6 +370,11 @@ fn native_ssh_graphics_standard_app_surface() {
                             .expect("exact synthetic sender command/input");
                         fixture.input(panes[index], input.as_bytes().to_vec());
                     }
+                    "close-gui" => {
+                        // Drop reaps only the GUI child this driver created.
+                        // The router, daemon and both live PTYs stay owned here.
+                        gui = OwnedGui(None);
+                    }
                     "reopen" => {
                         if let Some(child) = &mut gui.0 {
                             assert!(
