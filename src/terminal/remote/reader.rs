@@ -136,6 +136,7 @@ struct FrameReader {
     processor: Processor,
     keyboard: KeyboardStacks,
     osc: OscNotifyScanner,
+    pointer_tok: OscTokenizer,
     mode_tok: OscTokenizer,
     zle_tok: OscTokenizer,
     title_tok: OscTokenizer,
@@ -159,6 +160,7 @@ impl FrameReader {
             processor: Processor::default(),
             keyboard: KeyboardStacks::default(),
             osc: OscNotifyScanner::default(),
+            pointer_tok: OscTokenizer::new(&[b"22"]),
             mode_tok: OscTokenizer::new(&[b"133"]),
             zle_tok: OscTokenizer::new(&[b"133"]),
             // Same title retirement rule as the daemon, cut at command boundaries.
@@ -194,6 +196,7 @@ impl FrameReader {
             mut processor,
             mut keyboard,
             mut osc,
+            mut pointer_tok,
             mut mode_tok,
             mut zle_tok,
             mut title_tok,
@@ -258,6 +261,17 @@ impl FrameReader {
             }
             {
                 let mut term = term.lock();
+                if quit.load(Ordering::SeqCst) {
+                    return;
+                }
+                // Release under the same retirement fence as parser writes:
+                // a delayed old teardown must not clear a successor's claim.
+                proxy
+                    .parse_state
+                    .presentation
+                    .lock()
+                    .unwrap()
+                    .set_pointer(None);
                 term.end_sync_update();
                 term.exit();
             }
@@ -282,6 +296,7 @@ impl FrameReader {
                         }
                         command_cuts(&mut command_tok, &out_batch, &mut cuts);
                         title_cuts(&mut title_tok, &mut title_life, &out_batch, &mut cuts);
+                        pointer_cuts(&mut pointer_tok, &out_batch, &mut cuts);
                         let cursor_at_end = cuts.last().is_some_and(|(off, cut)| {
                             *off == out_batch.len() && matches!(cut, ReaderCut::Parked(_))
                         });
@@ -320,7 +335,7 @@ impl FrameReader {
                                         }
                                         ReaderCut::Prompt(mark) => prompt_break.apply(term, mark),
                                         ReaderCut::RetireTitle => term.set_title(None),
-                                        ReaderCut::KeyboardBoundary => {}
+                                        ReaderCut::KeyboardBoundary | ReaderCut::PointerReset => {}
                                     }
                                 },
                             ) else {
@@ -477,6 +492,7 @@ impl FrameReader {
                         let mut cuts: Vec<(usize, ReaderCut)> = Vec::new();
                         command_cuts(&mut command_tok, &bytes, &mut cuts);
                         title_cuts(&mut title_tok, &mut title_life, &bytes, &mut cuts);
+                        pointer_cuts(&mut pointer_tok, &bytes, &mut cuts);
                         let fed = feed_grid(
                             &term,
                             &mut processor,
@@ -491,7 +507,7 @@ impl FrameReader {
                                 ReaderCut::Command(mark) => command_cursor.apply(term, mark),
                                 ReaderCut::Prompt(mark) => prompt_break.apply(term, mark),
                                 ReaderCut::RetireTitle => term.set_title(None),
-                                ReaderCut::Parked(_) => {}
+                                ReaderCut::Parked(_) | ReaderCut::PointerReset => {}
                                 ReaderCut::KeyboardBoundary => {}
                             },
                         );
@@ -706,7 +722,16 @@ impl FrameReader {
                             ParseBridge::new(&mut term, proxy.clone(), &mut keyboard, None)
                                 .clear_keyboard();
                             drop(term);
-                            if released || !resets.is_empty() {
+                            // Back at a prompt, whatever the command asked
+                            // for goes with it — including a pointer claim
+                            // it never released itself.
+                            let pointer_released = proxy
+                                .parse_state
+                                .presentation
+                                .lock()
+                                .unwrap()
+                                .set_pointer(None);
+                            if released || !resets.is_empty() || pointer_released {
                                 proxy.send(PaneEvent::Wakeup);
                             }
                         }
@@ -939,6 +964,9 @@ enum ReaderCut {
     Prompt(PromptMark),
     RetireTitle,
     KeyboardBoundary,
+    /// `OSC 22 ;` — the empty payload upstream's `Handler` never dispatches,
+    /// which is the application's own release of its pointer claim.
+    PointerReset,
 }
 
 /// Adds the batch's command marks to `cuts`, keeping them in stream order
@@ -975,6 +1003,22 @@ fn title_cuts(
     tok.feed_at(bytes, |off, payload| {
         if lifetime.saw(payload) == TitleEffect::Retire {
             cuts.push((off, ReaderCut::RetireTitle));
+        }
+    });
+    if cuts.len() > before {
+        cuts.sort_by_key(|(off, _)| *off);
+    }
+}
+
+/// `OSC 22 ;` is the application's own release: upstream's parser needs a
+/// second param before it calls `set_mouse_cursor_icon`, so the empty reset
+/// is seen only here, cut at stream position like the command marks. A bare
+/// `OSC 22` (no `;`) is malformed for upstream too and stays a no-op.
+fn pointer_cuts(tok: &mut OscTokenizer, bytes: &[u8], cuts: &mut Vec<(usize, ReaderCut)>) {
+    let before = cuts.len();
+    tok.feed_at(bytes, |off, payload| {
+        if payload == b"22;" {
+            cuts.push((off, ReaderCut::PointerReset));
         }
     });
     if cuts.len() > before {
@@ -1086,6 +1130,16 @@ fn feed_grid<T: EventListener + Clone>(
             // another command produces output. All bytes are already parsed.
             grid.end_sync_update();
         }
+        if matches!(
+            cut,
+            ReaderCut::PointerReset | ReaderCut::Command(CommandMark::Finished)
+        ) && let Some(presentation) = presentation
+        {
+            // The application's release and the shell's command-finished
+            // mark both end its claim on the pointer, at stream position —
+            // a set earlier in this same batch already landed.
+            presentation.lock().unwrap().set_pointer(None);
+        }
         on_cut(&mut grid, cut);
         next = cuts.next();
     }
@@ -1101,6 +1155,8 @@ mod live_history_config_tests;
 mod osc_tests;
 #[cfg(test)]
 mod parked_cursor_tests;
+#[cfg(test)]
+mod pointer_tests;
 #[cfg(all(test, unix))]
 mod query_tests;
 #[cfg(test)]

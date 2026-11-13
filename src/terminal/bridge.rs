@@ -28,8 +28,9 @@
 //!   when replaying snapshots created by an older endpoint.
 //! - `kitty_graphics_response`, `glyph_protocol_response`: Kitty requests are
 //!   owned by the daemon; Glyph is not an advertised product capability.
-//! - `set_mouse_cursor_icon` (left at the trait default): OSC 22 pointer
-//!   shapes were never surfaced to the painter and still are not.
+//! - `set_mouse_cursor_icon`: named OSC 22 pointer claims reach the pane's
+//!   paint-side facts through `presentation`; the empty `OSC 22 ;` reset the
+//!   upstream callback never sees is released by the reader's own cut.
 //!
 //! Kitty keyboard operations use the application's shared protocol state,
 //! also used by daemon replay. Rio's internal bounded stack and `set` behavior
@@ -354,6 +355,9 @@ impl<T: EventListener> Handler for ParseBridge<'_, T> {
             let mut facts = presentation.lock().unwrap();
             facts.invalidate_reading();
             facts.reset_tabs(self.inner.columns());
+            // A full reset releases any application pointer claim with the
+            // rest of the emulator state.
+            facts.set_pointer(None);
         }
         if let Some(limit) = self.history_limit {
             self.inner.grid.update_history(limit);
@@ -526,10 +530,19 @@ impl<T: EventListener> Handler for ParseBridge<'_, T> {
         self.inner.set_hyperlink(hyperlink);
     }
 
-    // `set_mouse_cursor_icon` (OSC 22 pointer shapes) is deliberately left at
-    // the trait's default no-op: the painter never surfaced it, and skipping
-    // the override keeps the `cursor_icon` crate out of the dependency set —
-    // the parse completes and the icon goes nowhere, exactly as before.
+    /// A named OSC 22 claim becomes the pane's visible pointer override only
+    /// when a presentation is attached — the GUI reader always hands one
+    /// over; bridges driven without it simply drop the claim like before.
+    /// The empty `OSC 22 ;` release never reaches this callback upstream, so
+    /// the reader's own OSC tokenizer issues that cut.
+    fn set_mouse_cursor_icon(&mut self, icon: cursor_icon::CursorIcon) {
+        if let Some(presentation) = self.presentation {
+            presentation
+                .lock()
+                .unwrap()
+                .set_pointer(Some(super::pointer::cursor_style(icon)));
+        }
+    }
 
     fn set_progress_report(&mut self, report: rio_vt::event::ProgressReport) {
         self.inner.set_progress_report(report);

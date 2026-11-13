@@ -226,10 +226,10 @@ impl TerminalElement {
         let mut placeholders = Vec::new();
         let prompt_shape = self.prompt_cursor_shape(cx);
         {
-            let mut palette = self.view.read(cx).terminal.palette;
-            if let Some(active) = cx.try_global::<crate::terminal::palette::ActivePalette>() {
-                palette[..16].copy_from_slice(&active.ansi16);
-            }
+            let palette = crate::terminal::palette::effective(
+                &self.view.read(cx).terminal.palette,
+                cx.try_global::<crate::terminal::palette::ActivePalette>(),
+            );
             let term = self.view.read(cx).terminal.term.clone();
             // Rendering does not queue for the grid lock. Holding it is the
             // pane's own reader, part-way through feeding a batch of output
