@@ -121,7 +121,11 @@ const HEADER: usize = 5;
 /// v17 carries daemon-owned playback timelines, visibility pause metadata,
 /// and immutable replacement content for frame one (stable root identity).
 /// v18 adds authoritative OSC 9;4 progress snapshots and ordered updates.
-pub const PROTOCOL_VERSION: u32 = 18;
+/// v19 adds exact iTerm2 destination pixels to each graphics placement. That
+/// is additive JSON, but a v18 client would ignore the fields and silently
+/// paint a different size, so mixed builds are rejected instead: the daemon
+/// answers its version and closes, and the client reports the update.
+pub const PROTOCOL_VERSION: u32 = 19;
 
 pub const FEATURE_PANE_OWNER: &str = "pane-owner";
 /// Spawn remains provisional until its requester attaches on the same connection.

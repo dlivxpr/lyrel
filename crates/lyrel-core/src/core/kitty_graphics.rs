@@ -45,13 +45,19 @@ pub use super::graphics_state::{
 const MAX_APC_PAYLOAD: usize = MAX_TRANSMISSION_BASE64;
 const MAX_DISCOVERY_PAYLOAD: usize = 8192;
 const MAX_DCS_HEADER: usize = 128;
+/// Fixed OSC identifier for iTerm2 proprietary commands.
+const ITERM2_OSC_ID: &[u8] = b"1337;";
+/// Bound on a command identifier before its `=` (`MultipartFile` is the longest
+/// name this splitter must recognise); longer unrelated names fall through to
+/// verbatim passthrough.
+const MAX_OSC_IDENT: usize = 16;
 
 /// Cap on the total base64 bytes received for one chunked transmission.
 ///
 /// The decoded transfer must leave room for GraphicsUpdate's metadata within
 /// the pane frame. A 48 MiB base64 limit admits an uncompressed 4K RGBA image
 /// while remaining below the 64 MiB pane-frame ceiling.
-const MAX_TRANSMISSION_BASE64: usize = 48 << 20; // 48 MiB
+pub(crate) const MAX_TRANSMISSION_BASE64: usize = 48 << 20; // 48 MiB
 
 /// Cap on the *resolved* pixel bytes of one image, whatever medium carried it.
 /// Bounds the file/shm fast path (where the sender names an object whose size we
@@ -69,11 +75,15 @@ pub const MAX_IMAGE_BYTES: usize = 32 << 20;
 /// State survives PTY read boundaries, including split openers, terminators,
 /// cancellation and a later escape interrupting an unfinished transmission.
 pub struct ApcTokenizer {
-    /// Bytes of a `_G` command accumulated after `ESC _ G` while it can still
-    /// terminate. Cleared whenever a command finishes or is abandoned.
+    /// Bytes of a `_G` command accumulated after `ESC _ G`, or of an iTerm2
+    /// `File=` body after `1337;File=`, while it can still terminate. Cleared
+    /// whenever a command finishes or is abandoned.
     buf: Vec<u8>,
     state: State,
     work: super::graphics_state::retention::Work,
+    /// Decoded iTerm2 PNG bytes queued for the pane, still charged to this
+    /// tokenizer until the daemon moves the lease into image preparation.
+    osc_completed: usize,
     /// Discovery reuses this bounded framing, not a second VT grammar.
     dcs: bool,
     header: Option<Box<rio_vt::performer::parser::Parser>>,
@@ -102,6 +112,22 @@ enum State {
     ApcDrop,
     /// Saw `ESC` inside a dropped APC — a following `\` is the terminator.
     ApcDropEsc,
+    /// Held `ESC ]`; `buf` matches the fixed `1337;` prefix.
+    OscPrefix,
+    /// Saw `1337;`; `buf` holds the command identifier before `=`.
+    OscIdent,
+    /// Buffering a bounded static `File=` body (parameters `:` payload).
+    OscFile,
+    /// Saw `ESC` inside a candidate file body.
+    OscFileEsc,
+    /// Dropping an unsupported iTerm2 file form without forwarding its bytes.
+    OscDrop,
+    /// Saw `ESC` inside a dropped OSC.
+    OscDropEsc,
+    /// Forwarding an unrelated OSC verbatim.
+    OscPass,
+    /// Saw `ESC` inside a passthrough OSC.
+    OscPassEsc,
 }
 
 impl Default for ApcTokenizer {
@@ -119,6 +145,7 @@ impl ApcTokenizer {
                 let retention = super::graphics_state::retention::Retention::shared();
                 retention.work(retention.owner())
             },
+            osc_completed: 0,
             dcs: false,
             header: None,
         }
@@ -132,6 +159,70 @@ impl ApcTokenizer {
 
     pub(crate) fn at_boundary(&self) -> bool {
         matches!(self.state, State::Ground)
+    }
+
+    /// A new PTY read reuses the completed-source counter, exactly like the
+    /// Kitty parser: commands emitted by the previous read were consumed by
+    /// the daemon before the next one starts.
+    pub(crate) fn begin_read(&mut self) {
+        self.osc_completed = 0;
+        self.work.resize(self.buf.capacity());
+    }
+
+    /// Move a decoded iTerm2 PNG's existing reservation into image preparation.
+    /// Other completed images and partial raw bodies keep their own charge.
+    pub(crate) fn take_osc_source_work(
+        &mut self,
+        capacity: usize,
+    ) -> super::graphics_state::retention::Work {
+        assert!(
+            capacity <= self.osc_completed,
+            "iTerm2 source handoff exceeds its work reservation"
+        );
+        self.osc_completed -= capacity;
+        self.work.split(capacity)
+    }
+
+    /// Append within the OSC cap, charging growth to the shared work budget.
+    fn push_osc(&mut self, run: &[u8], limit: usize) -> bool {
+        if run.len() > limit.saturating_sub(self.buf.len()) {
+            return false;
+        }
+        let required = self.buf.len() + run.len();
+        if required > self.buf.capacity() {
+            let capacity = required
+                .max(self.buf.capacity().saturating_mul(2))
+                .min(limit);
+            if !self.work.resize(capacity + self.buf.capacity()) {
+                return false;
+            }
+            self.buf.reserve_exact(capacity - self.buf.len());
+            self.work.resize(self.buf.capacity());
+        }
+        self.buf.extend_from_slice(run);
+        true
+    }
+
+    /// A complete static `File=` body: parse it into the existing
+    /// resource/control representation, or drop every unsupported byte.
+    fn finish_osc_file(&mut self, on_file: &mut impl FnMut(Control, Image)) {
+        let body = std::mem::take(&mut self.buf);
+        match super::iterm2_graphics::parse_file(body) {
+            Ok((control, image)) => {
+                let png = image.data.capacity();
+                if self.work.resize(self.osc_completed + png) {
+                    self.osc_completed += png;
+                    on_file(control, image);
+                } else {
+                    let _ = self.work.resize(0);
+                }
+            }
+            Err(reason) => {
+                log::debug!("dropping unsupported iTerm2 inline image: {reason}");
+                let _ = self.work.resize(0);
+            }
+        }
+        self.state = State::Ground;
     }
 
     fn opener(&self) -> &'static [u8] {
@@ -179,20 +270,28 @@ impl ApcTokenizer {
         on_passthrough: impl FnMut(&[u8]),
         mut on_command: impl FnMut(&[u8]),
     ) {
-        self.tokenize(bytes, on_passthrough, |command, aborted, _| {
-            if !aborted {
-                on_command(command);
-            }
-        });
+        self.tokenize(
+            bytes,
+            on_passthrough,
+            |command, aborted, _| {
+                if !aborted {
+                    on_command(command);
+                }
+            },
+            |_, _| {},
+        );
     }
 
     // Aborts must reach the reassembler in the same ordered stream as complete
     // commands, including oversize/interruption across different PTY reads.
+    // `on_file` carries an already parsed static iTerm2 image; its bytes never
+    // enter either VT grammar or the text replay ring.
     pub(crate) fn tokenize(
         &mut self,
         bytes: &[u8],
         mut on_passthrough: impl FnMut(&[u8]),
         mut on_command: impl FnMut(&[u8], bool, bool),
+        mut on_file: impl FnMut(Control, Image),
     ) {
         let mut i = 0;
         while i < bytes.len() {
@@ -294,6 +393,14 @@ impl ApcTokenizer {
                     // keep the newest one held.
                     0x1b => {
                         on_passthrough(b"\x1b");
+                        i += 1;
+                    }
+                    // OSC is the third bounded control string this splitter
+                    // knows: only the fixed iTerm2 `1337;` prefix is inspected,
+                    // and every other OSC stays byte-for-byte passthrough.
+                    b']' if !self.dcs => {
+                        self.clear_buffer();
+                        self.state = State::OscPrefix;
                         i += 1;
                     }
                     // The ESC began some other escape: emit it and re-examine this
@@ -497,6 +604,185 @@ impl ApcTokenizer {
                         self.state = State::Ground;
                     }
                 },
+                State::OscPrefix => {
+                    let byte = bytes[i];
+                    if byte == 0x07 || byte == 0x9c {
+                        // A complete non-iTerm2 OSC that ended inside its first
+                        // five bytes (for example the empty `OSC 0`).
+                        on_passthrough(b"\x1b]");
+                        on_passthrough(&self.buf);
+                        on_passthrough(&bytes[i..i + 1]);
+                        self.clear_buffer();
+                        self.state = State::Ground;
+                        i += 1;
+                    } else if byte == 0x1b {
+                        on_passthrough(b"\x1b]");
+                        on_passthrough(&self.buf);
+                        self.clear_buffer();
+                        self.state = State::Esc;
+                        i += 1;
+                    } else if ITERM2_OSC_ID.get(self.buf.len()) == Some(&byte) {
+                        if !self.push_osc(&bytes[i..i + 1], ITERM2_OSC_ID.len()) {
+                            self.clear_buffer();
+                            self.state = State::OscDrop;
+                        } else if self.buf.len() == ITERM2_OSC_ID.len() {
+                            self.clear_buffer();
+                            self.state = State::OscIdent;
+                        }
+                        i += 1;
+                    } else {
+                        on_passthrough(b"\x1b]");
+                        on_passthrough(&self.buf);
+                        self.clear_buffer();
+                        on_passthrough(&bytes[i..i + 1]);
+                        self.state = State::OscPass;
+                        i += 1;
+                    }
+                }
+                State::OscIdent => {
+                    let byte = bytes[i];
+                    if byte == b'=' {
+                        match self.buf.as_slice() {
+                            b"File" => {
+                                self.clear_buffer();
+                                self.state = State::OscFile;
+                            }
+                            b"MultipartFile" | b"FilePart" => {
+                                self.clear_buffer();
+                                self.state = State::OscDrop;
+                            }
+                            _ => {
+                                on_passthrough(b"\x1b]1337;");
+                                on_passthrough(&self.buf);
+                                on_passthrough(b"=");
+                                self.clear_buffer();
+                                self.state = State::OscPass;
+                            }
+                        }
+                        i += 1;
+                    } else if byte == 0x07 || byte == 0x9c {
+                        // `FileEnd` is the last part of an unsupported multipart
+                        // transfer; it is dropped with its earlier parts.
+                        if self.buf.as_slice() != b"FileEnd" {
+                            on_passthrough(b"\x1b]1337;");
+                            on_passthrough(&self.buf);
+                            on_passthrough(&bytes[i..i + 1]);
+                        }
+                        self.clear_buffer();
+                        self.state = State::Ground;
+                        i += 1;
+                    } else if byte == 0x1b {
+                        on_passthrough(b"\x1b]1337;");
+                        on_passthrough(&self.buf);
+                        self.clear_buffer();
+                        self.state = State::Esc;
+                        i += 1;
+                    } else if self.buf.len() >= MAX_OSC_IDENT
+                        || !self.push_osc(&bytes[i..i + 1], MAX_OSC_IDENT)
+                    {
+                        on_passthrough(b"\x1b]1337;");
+                        on_passthrough(&self.buf);
+                        self.clear_buffer();
+                        on_passthrough(&bytes[i..i + 1]);
+                        self.state = State::OscPass;
+                        i += 1;
+                    } else {
+                        i += 1;
+                    }
+                }
+                State::OscFile => match memchr::memchr3(0x07, 0x1b, 0x9c, &bytes[i..]) {
+                    Some(off) => {
+                        if off > 0 {
+                            if !self.push_osc(
+                                &bytes[i..i + off],
+                                super::iterm2_graphics::MAX_FILE_BODY,
+                            ) {
+                                self.clear_buffer();
+                                self.state = State::OscDrop;
+                                i += off;
+                                continue;
+                            }
+                            i += off;
+                        }
+                        if bytes[i] == 0x1b {
+                            self.state = State::OscFileEsc;
+                            i += 1;
+                        } else {
+                            self.finish_osc_file(&mut on_file);
+                            i += 1;
+                        }
+                    }
+                    None => {
+                        if !self.push_osc(&bytes[i..], super::iterm2_graphics::MAX_FILE_BODY) {
+                            self.clear_buffer();
+                            self.state = State::OscDrop;
+                        }
+                        return;
+                    }
+                },
+                State::OscFileEsc => match bytes[i] {
+                    b'\\' => {
+                        self.finish_osc_file(&mut on_file);
+                        i += 1;
+                    }
+                    0x1b => i += 1,
+                    // The escape interrupted our file: its bytes were meant to
+                    // be graphics and stay stripped, but the escape belongs to
+                    // the terminal and is re-examined from `Esc` without being
+                    // forwarded twice.
+                    _ => self.state = State::Esc,
+                },
+                State::OscDrop => match memchr::memchr3(0x07, 0x1b, 0x9c, &bytes[i..]) {
+                    Some(off) => {
+                        self.state = if bytes[i + off] == 0x1b {
+                            State::OscDropEsc
+                        } else {
+                            State::Ground
+                        };
+                        i += off + 1;
+                    }
+                    None => return,
+                },
+                State::OscDropEsc => match bytes[i] {
+                    b'\\' => {
+                        self.state = State::Ground;
+                        i += 1;
+                    }
+                    0x1b => i += 1,
+                    _ => self.state = State::Esc,
+                },
+                State::OscPass => match memchr::memchr3(0x07, 0x1b, 0x9c, &bytes[i..]) {
+                    Some(off) => {
+                        if off > 0 {
+                            on_passthrough(&bytes[i..i + off]);
+                        }
+                        if bytes[i + off] == 0x1b {
+                            self.state = State::OscPassEsc;
+                        } else {
+                            on_passthrough(&bytes[i + off..i + off + 1]);
+                            self.state = State::Ground;
+                        }
+                        i += off + 1;
+                    }
+                    None => {
+                        on_passthrough(&bytes[i..]);
+                        return;
+                    }
+                },
+                State::OscPassEsc => match bytes[i] {
+                    b'\\' => {
+                        on_passthrough(b"\x1b\\");
+                        self.state = State::Ground;
+                        i += 1;
+                    }
+                    0x1b => {
+                        on_passthrough(b"\x1b");
+                        i += 1;
+                    }
+                    // Hold this ESC again: an unrelated OSC that was interrupted
+                    // by a real escape must let that escape be parsed normally.
+                    _ => self.state = State::Esc,
+                },
             }
         }
     }
@@ -612,6 +898,7 @@ impl GraphicsSniffer {
                     .map_or(0, |p| p.data.capacity()),
             );
         }
+        self.tokenizer.begin_read();
     }
 
     /// Move the completed source's existing reservation to its prepared owner.
@@ -627,6 +914,14 @@ impl GraphicsSniffer {
             .as_mut()
             .expect("completed source owns transfer work")
             .split(capacity)
+    }
+
+    /// Transfer a completed iTerm2 PNG's reservation into image preparation.
+    pub(crate) fn take_osc_source_work(
+        &mut self,
+        capacity: usize,
+    ) -> super::graphics_state::retention::Work {
+        self.tokenizer.take_osc_source_work(capacity)
     }
 
     /// Cache this PTY read's locality and irreversibly taint pending indirect
@@ -660,17 +955,27 @@ impl GraphicsSniffer {
         let Self {
             tokenizer, parser, ..
         } = self;
-        let mut events = Vec::new();
-        tokenizer.tokenize(bytes, on_passthrough, |cmd, aborted, exhausted| {
-            if let Some(ev) = if aborted {
-                parser.abort(cmd, exhausted)
-            } else {
-                parser.feed(cmd)
-            } {
-                events.push(ev);
-            }
-        });
-        events
+        let events = std::cell::RefCell::new(Vec::new());
+        tokenizer.tokenize(
+            bytes,
+            on_passthrough,
+            |cmd, aborted, exhausted| {
+                if let Some(ev) = if aborted {
+                    parser.abort(cmd, exhausted)
+                } else {
+                    parser.feed(cmd)
+                } {
+                    events.borrow_mut().push(ev);
+                }
+            },
+            |control, image| {
+                events.borrow_mut().push(Event::Command {
+                    control,
+                    image: Some(image),
+                });
+            },
+        );
+        events.into_inner()
     }
 
     /// Feed a chunk and get back its content **in stream order**, taking a
@@ -707,6 +1012,8 @@ impl GraphicsSniffer {
             && bytes.last() != Some(&0x1b)
             && memchr::memmem::find(bytes, b"\x1b_").is_none()
             && memchr::memmem::find(bytes, b"\x1bP").is_none()
+            && memchr::memmem::find(bytes, b"\x1b]1337;").is_none()
+            && !super::iterm2_graphics::ends_with_partial_opener(bytes)
         {
             return Sniffed::Plain(bytes);
         }
@@ -750,6 +1057,12 @@ impl GraphicsSniffer {
                 } {
                     segments.borrow_mut().push(Segment::from(ev));
                 }
+            },
+            |control, image| {
+                segments.borrow_mut().push(Segment::Command {
+                    control,
+                    image: Some(image),
+                });
             },
         );
         *locality_denied = denied.get()
@@ -823,6 +1136,10 @@ pub enum WireFormat {
     Rgba,
     /// `f=100` — a PNG file; pixels stay encoded (decoded client-side).
     Png,
+    /// Adapter-only static JPEG payload from the iTerm2 `File=` form. Ordered
+    /// preparation normalizes it to [`WireFormat::Rgba`] before any packet is
+    /// published; no Kitty control key can select it.
+    Jpeg,
 }
 
 /// The transmission medium key (`t=`).
@@ -846,6 +1163,15 @@ pub enum Medium {
 pub struct Control {
     /// Internal adapter origin; never parsed from Kitty control keys.
     pub(crate) sixel: bool,
+    /// Internal adapter origin for the static iTerm2 `OSC 1337;File=` form.
+    pub(crate) iterm2: bool,
+    /// iTerm2 `width=`/`height=` sizing units; `None` is `auto`.
+    pub(crate) iterm2_width: Option<rio_graphics::ResizeParameter>,
+    pub(crate) iterm2_height: Option<rio_graphics::ResizeParameter>,
+    /// iTerm2 `preserveAspectRatio` (default true; `0` stretches).
+    pub(crate) iterm2_preserve_aspect_ratio: bool,
+    /// WezTerm's `doNotMoveCursor=1` extension.
+    pub(crate) iterm2_do_not_move: bool,
     pub action: Action,
     pub format: WireFormat,
     pub medium: Medium,
@@ -898,6 +1224,11 @@ impl Default for Control {
         // Protocol defaults: a=t, f=32, t=d, no compression.
         Self {
             sixel: false,
+            iterm2: false,
+            iterm2_width: None,
+            iterm2_height: None,
+            iterm2_preserve_aspect_ratio: true,
+            iterm2_do_not_move: false,
             action: Action::Transmit,
             format: WireFormat::Rgba,
             medium: Medium::Direct,
@@ -1204,7 +1535,7 @@ impl Image {
         let bpp = match self.format {
             WireFormat::Rgb => 3usize,
             WireFormat::Rgba => 4usize,
-            WireFormat::Png => return None,
+            WireFormat::Png | WireFormat::Jpeg => return None,
         };
         (self.width as usize)
             .checked_mul(self.height as usize)?

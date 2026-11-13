@@ -140,6 +140,7 @@ impl Sniffer {
                     segments.push(Segment::Query(query));
                 }
             },
+            |_, _| {},
         );
         Sniffed::Segments(segments.into_inner())
     }
