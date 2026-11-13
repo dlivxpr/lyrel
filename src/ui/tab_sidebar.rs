@@ -700,6 +700,28 @@ impl LyrelApp {
                     }
                     line
                 });
+                // Progress is local to the sole terminal leaf. It temporarily
+                // owns the existing metadata line, not an agent busy/finish dot.
+                let git_line = tab
+                    .progress_label(cx)
+                    .map(|(kind, label)| {
+                        use crate::daemon::protocol::ProgressKind;
+                        let color = match kind {
+                            ProgressKind::Error => cx.theme().danger,
+                            ProgressKind::Paused => cx.theme().warning,
+                            _ => cx.theme().muted_foreground,
+                        };
+                        h_flex()
+                            .id(("sidebar-progress", i))
+                            .debug_selector(|| "tab-progress".into())
+                            .aria_label(SharedString::from(label.clone()))
+                            .w_full()
+                            .min_w_0()
+                            .text_xs()
+                            .text_color(color)
+                            .child(div().truncate().child(label))
+                    })
+                    .or(git_line);
                 // Outside a repo there is no branch line, and the working
                 // directory rides on the title's own line rather than growing
                 // a second one under it: a group of plain shells was a column

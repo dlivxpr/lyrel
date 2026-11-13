@@ -215,6 +215,7 @@ impl FrameReader {
             remote,
             agent,
             agent_session,
+            progress,
             awaiting_replay,
             exited: exited_flag,
             child_exited,
@@ -750,6 +751,14 @@ impl FrameReader {
                             *guard = Some(p);
                         }
                         proxy.send(PaneEvent::Wakeup);
+                    }
+                    DaemonMsg::Progress(state) => {
+                        flush_batch!();
+                        let mut current = progress.lock().unwrap();
+                        if *current != state {
+                            *current = state;
+                            proxy.send(PaneEvent::ProgressChanged);
+                        }
                     }
                     DaemonMsg::Agent(a) => {
                         flush_batch!();

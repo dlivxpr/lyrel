@@ -88,6 +88,10 @@ pub struct AgentSessionChanged;
 
 impl gpui_kit::EventEmitter<AgentSessionChanged> for TerminalView {}
 
+/// A meaningful current-progress change; never a command/agent completion.
+pub struct ProgressChanged;
+impl gpui_kit::EventEmitter<ProgressChanged> for TerminalView {}
+
 /// A coding agent started running in this pane: its foreground went from no
 /// agent to this one. What quick launch counts as the agent being used.
 pub struct AgentDetected(pub crate::core::cli_agent::CLIAgent);
@@ -1020,6 +1024,10 @@ impl TerminalView {
 
     pub fn agent_session(&self) -> Option<crate::core::cli_agent::AgentSessionState> {
         self.terminal.agent_session()
+    }
+
+    pub(crate) fn progress(&self) -> Option<crate::daemon::protocol::PaneProgress> {
+        self.terminal.progress()
     }
 
     /// What this pane is in the middle of, when it can say so. `None` means
@@ -3187,6 +3195,7 @@ mod gpui_tests {
     }
 
     include!("graphics_consumer_tests.rs");
+    include!("progress_consumer_tests.rs");
     include!("history_search_pty_consumer_tests.rs");
     include!("graphics_resize_consumer_tests.rs");
     include!("graphics_layout_consumer_tests.rs");

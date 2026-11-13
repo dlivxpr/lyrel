@@ -214,6 +214,7 @@ pub struct Carried {
     pub agent: Option<crate::core::cli_agent::CLIAgent>,
     pub agent_argv: Option<Vec<String>>,
     pub agent_session: Option<crate::core::cli_agent::AgentSessionState>,
+    pub progress: Option<crate::daemon::protocol::PaneProgress>,
     /// The modes the ring dropped off its front, as bytes that switch them
     /// back on. A program sets them once at startup, so after an `exec` a
     /// long-running TUI would otherwise lose its alternate screen, mouse, 2031
@@ -614,6 +615,7 @@ impl DaemonPane {
             agent: None,
             agent_argv: None,
             agent_session: None,
+            progress: None,
             head_modes: st.ring.head_restore_bytes(),
         }))
     }
