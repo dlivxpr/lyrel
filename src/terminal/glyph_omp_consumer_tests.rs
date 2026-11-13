@@ -1,35 +1,59 @@
-// Real external-client acceptance: the actual installed omp drives its
-// pinned support -> bundled-outline registration -> coverage-confirmation
-// handshake through the same real PTY -> daemon -> production consumer seam
-// as every other Glyph test. Nothing here emulates the client: the pane's
-// shell is the real `omp.exe`, started with no prompt, an isolated profile,
+// Real external-client acceptance: the actual released omp drives its pinned
+// support -> bundled-outline registration -> coverage-confirmation handshake
+// through the same real PTY -> daemon -> production consumer seam as every
+// other Glyph test. Nothing here emulates the client: the pane's shell is the
+// released omp executable, started with no prompt, an isolated HOME/profile,
 // and every discovery surface disabled, then torn down once its icons are
 // proven painted by registration.
 //
-// This is `#[ignore]`d like the native fixtures: it requires the real binary
-// and is run explicitly. A missing binary is a hard failure, never a silent
-// pass — the acceptance claim means omp 18.20.0, not "some client".
-
-/// The exact installed client under test. `where omp` resolves to the Scoop
-/// shim for this binary, verified separately with `omp --version` ==
-/// `omp/18.20.0`.
-const OMP_EXE: &str = r"C:\Users\dlivx\scoop\apps\oh-my-pi\current\omp.exe";
+// This is `#[ignore]`d like the other real-client fixtures: it requires the
+// released binary located by the repository's existing `LYREL_TEST_OMP`
+// contract and is run explicitly. A missing binary is a hard failure, never a
+// silent pass — the acceptance claim means a real released omp, not "some
+// client".
 
 /// The codepoint omp's own handshake confirms after registering its bundle
 /// (the `omp` mark in `glyph-protocol.ts`).
 const OMP_CONFIRM_CP: u32 = 0xf0d57;
 
-/// The pane shell spec that launches the real client with an isolated HOME,
-/// no prompt, no model-facing surfaces and a bounded runtime. Environment is
-/// applied through a wrapper script because `ShellSpec` has no env field: the
-/// daemon spawns the wrapper, the wrapper execs omp with the isolation set.
-fn omp_shell_spec(home: &std::path::Path) -> crate::daemon::protocol::ShellSpec {
+/// A legal profile name scoped to the isolated HOME — never a filesystem path.
+const OMP_PROFILE: &str = "lyrel-glyph-acceptance";
+
+/// Locate the released omp the way `omp_replay_consumer_tests.rs` already does:
+/// the runner passes its absolute path through `LYREL_TEST_OMP`. `--version`
+/// is verified before the handshake so the acceptance records which release
+/// actually negotiated; a non-executable path fails here instead of faking it.
+fn omp_binary() -> (String, String) {
+    let path = std::env::var_os("LYREL_TEST_OMP")
+        .expect("set LYREL_TEST_OMP to an installed released omp executable");
+    let path = path.to_string_lossy().into_owned();
+    let output = std::process::Command::new(&path)
+        .arg("--version")
+        .output()
+        .unwrap_or_else(|error| panic!("LYREL_TEST_OMP={path} did not execute: {error}"));
+    let version = String::from_utf8_lossy(&output.stdout).trim().to_owned();
+    assert!(
+        output.status.success() && !version.is_empty(),
+        "LYREL_TEST_OMP={path} is not a working omp release: {version} (stderr {})",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    (path, version)
+}
+
+/// The pane shell spec that launches the released client with an isolated
+/// HOME, no prompt, no model-facing surfaces and a bounded runtime. The
+/// binary path and every argument are quoted through the repository's single
+/// `quote_for_shell` convention so a path containing spaces or characters
+/// special to the pane's shell cannot split or escape. Environment is applied
+/// through a wrapper script because `ShellSpec` has no env field: the daemon
+/// spawns the wrapper, the wrapper execs omp with the isolation set.
+fn omp_shell_spec(home: &std::path::Path, binary: &str) -> crate::daemon::protocol::ShellSpec {
     use crate::daemon::protocol::ShellSpec;
     std::fs::create_dir_all(home).unwrap();
-    let profile = home.join("profile");
-    std::fs::create_dir_all(&profile).unwrap();
+    let program = if cfg!(windows) { "cmd.exe" } else { "sh" };
+    let quoted = |arg: &str| lyrel_core::core::shell_quote::quote_for_shell(arg, Some(program));
     let omp_args = [
-        format!("--profile={}", profile.display()),
+        format!("--profile={OMP_PROFILE}"),
         "--no-session".into(),
         "--no-tools".into(),
         "--no-lsp".into(),
@@ -42,49 +66,55 @@ fn omp_shell_spec(home: &std::path::Path) -> crate::daemon::protocol::ShellSpec 
         // run so the pane never outlives its assertions.
         "--max-time=90".into(),
     ];
+    let invocation = std::iter::once(binary)
+        .chain(omp_args.iter().map(String::as_str))
+        .map(quoted)
+        .collect::<Vec<_>>()
+        .join(" ");
     if cfg!(windows) {
         let script = home.join("omp-acceptance.cmd");
-        let home = home.display().to_string().replace('/', "\\");
+        let home_escaped = home.display().to_string().replace('/', "\\");
         std::fs::write(
             &script,
             format!(
                 "@echo off\r\n\
-                 set \"HOME={home}\"\r\n\
-                 set \"USERPROFILE={home}\"\r\n\
-                 set \"APPDATA={home}\\\\appdata\"\r\n\
-                 set \"LOCALAPPDATA={home}\\\\localappdata\"\r\n\
-                 set \"XDG_CONFIG_HOME={home}\\\\.config\"\r\n\
-                 set \"XDG_DATA_HOME={home}\\\\.local\\\\share\"\r\n\
-                 set \"XDG_CACHE_HOME={home}\\\\.cache\"\r\n\
+                 set \"HOME={home_escaped}\"\r\n\
+                 set \"USERPROFILE={home_escaped}\"\r\n\
+                 set \"APPDATA={home_escaped}\\\\appdata\"\r\n\
+                 set \"LOCALAPPDATA={home_escaped}\\\\localappdata\"\r\n\
+                 set \"XDG_CONFIG_HOME={home_escaped}\\\\.config\"\r\n\
+                 set \"XDG_DATA_HOME={home_escaped}\\\\.local\\\\share\"\r\n\
+                 set \"XDG_CACHE_HOME={home_escaped}\\\\.cache\"\r\n\
                  set \"TMUX=\"\r\n\
                  set \"STY=\"\r\n\
-                 \"{OMP_EXE}\" {}\r\n",
-                omp_args.join(" ")
+                 {invocation}\r\n",
             ),
         )
         .unwrap();
         ShellSpec {
             program: "cmd.exe".into(),
-            args: vec!["/c".into(), script.display().to_string()],
+            args: vec!["/c".into(), quoted(&script.display().to_string())],
             args_are_lyrel_defaults: false,
         }
     } else {
         let script = home.join("omp-acceptance.sh");
+        let home_q = quoted(&home.display().to_string());
         std::fs::write(
             &script,
             format!(
                 "#!/bin/sh\n\
-                 HOME='{0}' XDG_CONFIG_HOME='{0}/.config' \\\n\
-                 XDG_DATA_HOME='{0}/.local/share' XDG_CACHE_HOME='{0}/.cache' \\\n\
-                 TMUX= STY= exec '{OMP_EXE}' {1}\n",
-                home.display(),
-                omp_args.join(" ")
+                 export HOME={home_q}\n\
+                 export XDG_CONFIG_HOME={home_q}/.config\n\
+                 export XDG_DATA_HOME={home_q}/.local/share\n\
+                 export XDG_CACHE_HOME={home_q}/.cache\n\
+                 export TMUX= STY=\n\
+                 exec {invocation}\n",
             ),
         )
         .unwrap();
         ShellSpec {
             program: "sh".into(),
-            args: vec![script.display().to_string()],
+            args: vec![quoted(&script.display().to_string())],
             args_are_lyrel_defaults: false,
         }
     }
@@ -93,16 +123,15 @@ fn omp_shell_spec(home: &std::path::Path) -> crate::daemon::protocol::ShellSpec 
 /// The client's real startup handshake: `s`+DA1 must be answered so it
 /// registers its bundled outlines with `reply=0`, the confirmation `q`+DA1
 /// must report `glossary`, and only then does its TUI draw the registered
-/// icons. Reaching a painted registered cell proves the whole chain through
-/// the real binary; the registration — not an installed Nerd Font — is what
-/// carries the supplementary-plane mark the fallback fonts cannot cover.
+/// icons. Reaching a painted registered path proves the whole chain through
+/// the real binary. The pane keeps the ordinary primary font — `Config`'s
+/// default `font_family` — and the test reads back the family the production
+/// view actually resolved, so the supplementary-plane mark is supplied by the
+/// registration path and cannot be a Nerd-Font glyph the primary font owns.
 #[gpui_kit::test]
-#[ignore = "requires the real installed omp 18.20.0 binary at OMP_EXE"]
+#[ignore = "requires LYREL_TEST_OMP; real released omp, never calls a model"]
 fn glyph_consumer_real_omp_registers_and_paints_its_bundle(cx: &mut TestAppContext) {
-    assert!(
-        std::path::Path::new(OMP_EXE).is_file(),
-        "real-client acceptance requires {OMP_EXE}; refusing to fake the handshake"
-    );
+    let (binary, version) = omp_binary();
     crate::core::config::pin_test_config_dir();
     cx.executor().allow_parking();
     let daemon = GraphicsDaemonProcess::start();
@@ -119,7 +148,7 @@ fn glyph_consumer_real_omp_registers_and_paints_its_bundle(cx: &mut TestAppConte
                     cell_w: 10,
                     cell_h: 20,
                 },
-                Some(omp_shell_spec(home.path())),
+                Some(omp_shell_spec(home.path(), &binary)),
                 None,
                 None,
             )
@@ -146,7 +175,7 @@ fn glyph_consumer_real_omp_registers_and_paints_its_bundle(cx: &mut TestAppConte
     // The confirmation `q`+DA1 must have reported the glossary: only then
     // does the TUI draw the registered codepoint into a real cell. A painted
     // path inside that cell is the registered outline — the pane's ordinary
-    // primary font has no glyph for this codepoint.
+    // primary font has no glyph for this supplementary-plane codepoint.
     graphics_recovery_wait(cx, "real omp draws a registered icon cell", |cx| {
         view.read_with(cx, |view, _| {
             view.cell_geom.is_some() && view.grid_buf.iter().any(|cell| cell.glyph.is_some())
@@ -169,11 +198,25 @@ fn glyph_consumer_real_omp_registers_and_paints_its_bundle(cx: &mut TestAppConte
         1,
         "the client's bundled icon paints exactly one registered path: {paths:?}"
     );
+    let (family, cell_cp) = view.read_with(cx, |view, _| {
+        (
+            view.font.family.clone(),
+            view.grid_buf[row * view.cell_geom.unwrap().cols + col].c as u32,
+        )
+    });
+    // Read back the resolved primary family and record it beside the release
+    // version: the registered path, not a system Nerd-Font fallback, is the
+    // provenance this test asserts. `font_family`'s default is an ordinary
+    // mono font (never a Nerd Font), which is what "ordinary primary" means.
+    assert_eq!(
+        family.as_str(),
+        Config::default().font_family,
+        "the pane must keep the ordinary primary font, not a Nerd-Font fallback \
+         (client {version})"
+    );
     assert!(
-        view.read_with(cx, |view, _| {
-            view.grid_buf[row * view.cell_geom.unwrap().cols + col].c as u32 >= 0xE000
-        }),
-        "the painted cell carries a private-use codepoint from the client"
+        cell_cp >= 0xE000,
+        "the painted cell carries a private-use codepoint from the client (got {cell_cp:#x})"
     );
 
     // The isolated client must still be alive — a rejected handshake exits
