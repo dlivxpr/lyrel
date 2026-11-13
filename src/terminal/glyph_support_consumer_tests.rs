@@ -5,19 +5,8 @@
 // these cases pin the daemon's reply ordering against the production
 // consumer's own Device Attributes answer — not just "some reply exists".
 //
-// The render opt-in is sent as its raw pane frame (kind 74, empty payload)
-// gated on the endpoint's literal "glyph-support" feature so this file stays
-// runnable on both sides of the negotiation rollout without needing the new
-// protocol declarations.
-
-/// The pane-protocol frame kind a rendering controller uses to declare the
-/// full monochrome v1.12 contract. Mirrors `kind::SUBSCRIBE_GLYPH_RENDER`;
-/// kept literal here so the tests compile before the declaration lands.
-const GLYPH_RENDER_OPT_IN_KIND: u8 = 74;
-
-/// The daemon feature that lets a pane answer `s` truthfully. Mirrors
-/// `FEATURE_GLYPH_SUPPORT`.
-const GLYPH_SUPPORT_FEATURE: &str = "glyph-support";
+// These consumers negotiate through the production rendering handshake; the
+// state-only replacement exercises the same handshake without that credential.
 
 /// Attach a consumer stream to `pane` like `daemon.stream`, optionally also
 /// declaring the monochrome-render opt-in when the endpoint advertises it.
@@ -27,13 +16,12 @@ fn glyph_support_stream(daemon: &GraphicsDaemonProcess, pane: u64, glyph_render:
     stream
         .set_read_timeout(Some(std::time::Duration::from_secs(30)))
         .unwrap();
-    let version = crate::daemon::protocol::negotiate_pane(&mut stream).unwrap();
-    eprintln!("[glyph-support-diag] negotiated features={:?}", version.features);
-    if glyph_render && version.has_feature(GLYPH_SUPPORT_FEATURE) {
-        // Raw frame: the kind is part of the same additive pane protocol, and
-        // an endpoint without the feature never sees it.
-        crate::daemon::protocol::write_frame(&mut stream, GLYPH_RENDER_OPT_IN_KIND, &[]).unwrap();
-    }
+    let version =
+        crate::daemon::protocol::negotiate_pane_rendering(&mut stream, glyph_render).unwrap();
+    eprintln!(
+        "[DEBUG-glyph270] render={glyph_render} negotiated features={:?}",
+        version.features
+    );
     ClientMsg::GraphicsCapacity {
         encoded_bytes: 64 << 20,
         decoded_bytes: 128 << 20,
@@ -67,7 +55,9 @@ fn glyph_support_stream(daemon: &GraphicsDaemonProcess, pane: u64, glyph_render:
 fn glyph_support_probe_reaches_the_opted_in_controller() {
     use crate::daemon::protocol::DaemonMsg;
 
-    let daemon = GraphicsDaemonProcess::start();
+    let daemon = GraphicsDaemonProcess::start_with(|command, _| {
+        command.stderr(std::process::Stdio::inherit());
+    });
     let pane = daemon.spawn();
     let mut stream = glyph_support_stream(&daemon, pane, true);
     stream
@@ -106,20 +96,12 @@ fn glyph_support_probe_reaches_the_opted_in_controller() {
     .encode(&mut stream)
     .unwrap();
 
-    // `s` binds at attach; its reply is daemon-written and needs no
-    // controller, so it lands on the same capture path a real client reads.
-    let s_path = replies.path().join("s");
-    let request = format!(
-        "SEND_ANY 2 1 {} 0 {}\n",
-        graphics_pty_fixture::hex(b"\x1b_25a1;s\x1b\\"),
-        graphics_pty_fixture::hex(s_path.to_string_lossy().as_bytes())
-    );
-    daemon.panes().send_input(pane, request.as_bytes()).unwrap();
-
     let wait_reply = |path: &std::path::Path| -> Vec<u8> {
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
         loop {
-            if let Ok(text) = std::fs::read_to_string(path) {
+            if path.with_extension("done").is_file()
+                && let Ok(text) = std::fs::read_to_string(path)
+            {
                 return graphics_pty_fixture::unhex(text.trim());
             }
             assert!(
@@ -135,6 +117,15 @@ fn glyph_support_probe_reaches_the_opted_in_controller() {
         b"\x1b_25a1;q;cp=100000;status=\x1b\\".to_vec(),
         "the daemon must write the single composed `q` reply to the PTY"
     );
+    // `s` binds at attach; its reply is daemon-written and needs no
+    // controller, so it lands on the same capture path a real client reads.
+    let s_path = replies.path().join("s");
+    let request = format!(
+        "SEND_ANY 2 1 {} 0 {}\n",
+        graphics_pty_fixture::hex(b"\x1b_25a1;s\x1b\\"),
+        graphics_pty_fixture::hex(s_path.to_string_lossy().as_bytes())
+    );
+    daemon.panes().send_input(pane, request.as_bytes()).unwrap();
     assert_eq!(
         wait_reply(&s_path),
         b"\x1b_25a1;s;fmt=glyf\x1b\\".to_vec(),
@@ -178,7 +169,9 @@ fn glyph_send_parts(
 fn glyph_consumer_support_and_query_replies_precede_the_da1_sentinel(cx: &mut TestAppContext) {
     crate::core::config::pin_test_config_dir();
     cx.executor().allow_parking();
-    let daemon = GraphicsDaemonProcess::start();
+    let daemon = GraphicsDaemonProcess::start_with(|command, _| {
+        command.stderr(std::process::Stdio::inherit());
+    });
     let pane = daemon.spawn();
     cx.update(|cx| {
         gpui_kit::component::init(cx);
@@ -268,7 +261,9 @@ fn glyph_consumer_support_and_query_replies_precede_the_da1_sentinel(cx: &mut Te
 fn glyph_consumer_support_answer_tracks_the_controllers_render_opt_in(cx: &mut TestAppContext) {
     crate::core::config::pin_test_config_dir();
     cx.executor().allow_parking();
-    let daemon = GraphicsDaemonProcess::start();
+    let daemon = GraphicsDaemonProcess::start_with(|command, _| {
+        command.stderr(std::process::Stdio::inherit());
+    });
     let pane = daemon.spawn();
     cx.update(|cx| {
         gpui_kit::component::init(cx);

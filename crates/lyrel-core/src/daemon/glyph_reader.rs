@@ -48,12 +48,13 @@ pub(super) fn consume(
             // state-only or detached controller keeps the probe silent, which
             // is the protocol's truthful "unsupported" before the producer's
             // DA1 sentinel, not a fabricated yes.
-            if state
+            let rendering = state
                 .lock()
                 .unwrap()
                 .subscriptions
-                .controller_renders_glyphs()
-            {
+                .controller_renders_glyphs();
+            eprintln!("[DEBUG-glyph270] support rendering={rendering}");
+            if rendering {
                 write_graphics_reply(writer, b"\x1b_25a1;s;fmt=glyf\x1b\\");
             }
         }

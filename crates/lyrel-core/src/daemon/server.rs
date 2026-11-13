@@ -1088,6 +1088,9 @@ fn handle_conn(stream: Stream, registry: Arc<Registry>) -> anyhow::Result<()> {
                 else {
                     return Ok(());
                 };
+                eprintln!(
+                    "[DEBUG-glyph270] attach pane={pane_id} glyph_state={glyph_state} glyph_render={glyph_render}"
+                );
                 stream_pane_with_attach(
                     pane,
                     pane_id,
