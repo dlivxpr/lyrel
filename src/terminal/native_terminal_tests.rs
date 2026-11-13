@@ -334,11 +334,146 @@ fn glyph_native_system_coverage_and_registered_paint(cx: &mut TestAppContext) {
     );
 }
 
+/// Real fonts: a declared advance/baseline registration sits on the actual
+/// primary baseline, then follows a font-size and display-scale change without
+/// asking the application to register again. Prepared for the native slot; the
+/// headless consumer covers the same inputs deterministically.
+fn glyph_native_declared_layout_baseline_and_scale(cx: &mut TestAppContext) {
+    crate::core::config::pin_test_config_dir();
+    cx.executor().allow_parking();
+    let daemon = GraphicsDaemonProcess::start();
+    let pane = daemon.spawn();
+    cx.update(|cx| {
+        crate::register_bundled_fonts(cx);
+        gpui_kit::component::init(cx);
+        cx.set_global(Config::default());
+    });
+    let (view, window) = graphics_rooted_consumer(cx, pane, daemon.stream(pane));
+    let replies = tempfile::TempDir::new().unwrap();
+    let reply_path = |serial: usize| replies.path().join(format!("r{serial}"));
+    let cp = GLYPH_CP;
+    let glyph = char::from_u32(cp).unwrap();
+    let mut serial = 0usize;
+
+    serial += 1;
+    glyph_register_ok(
+        &view,
+        cx,
+        serial,
+        &reply_path(serial),
+        cp,
+        &glyph_square(1000),
+        1000,
+        "aw=1000;lh=1000;ymin=-200;size=advance;align=center,baseline;pad=0.1,0.05,0,0.05",
+    );
+    serial += 1;
+    glyph_show(&view, cx, serial, 2, 4, &glyph.to_string());
+    glyph_wait(cx, "native declared glyph painted", |cx| {
+        view.read_with(cx, |view, _| {
+            view.cell_geom.is_some() && glyph_presented_row(view, 2).chars().nth(4) == Some(glyph)
+        })
+    });
+
+    let cell = glyph_region_bounds(window, &view, cx, 2, 4, 1);
+    let (font, font_size, line_height) = view.read_with(cx, |view, _| {
+        (view.font.clone(), view.font_size, view.line_height)
+    });
+    let scale = window
+        .update(cx, |_, window, _| window.scale_factor())
+        .unwrap();
+    let baseline = window
+        .update(cx, |_, window, _| {
+            let font_id = window.text_system().resolve_font(&font);
+            window
+                .text_system()
+                .baseline_offset(font_id, font_size, line_height)
+        })
+        .unwrap();
+    let painted = glyph_paths_with_clip_in_region(window, &view, cx, cell);
+    assert_eq!(painted.len(), 1, "one native declared path: {painted:?}");
+    let side = cell.size.width.0 * 0.9;
+    assert!(
+        (painted[0].0.size.width.0 - side).abs() <= 1.5
+            && (painted[0].0.size.height.0 - side).abs() <= 1.5,
+        "advance drives the declared extent: {:?} vs side {side}",
+        painted[0].0
+    );
+    let baseline_scaled = baseline.as_f32() * scale;
+    let bottom = painted[0].0.origin.y.0 + painted[0].0.size.height.0;
+    assert!(
+        (bottom - (cell.origin.y.0 + baseline_scaled)).abs() <= 2.,
+        "authored y=0 lands on the real primary baseline: bottom={bottom}, baseline={}",
+        cell.origin.y.0 + baseline_scaled
+    );
+    let first_revision = view.read_with(cx, |view, _| {
+        view.terminal
+            .glyphs()
+            .get(cp)
+            .expect("registration")
+            .revision
+    });
+
+    // Font-size change: the same registration scales to the new real metrics.
+    view.update(cx, |view, _| view.font_size = view.font_size * 2.);
+    let _ = glyph_paths_with_clip_in_region(window, &view, cx, cell);
+    let grown = glyph_region_bounds(window, &view, cx, 2, 4, 1);
+    assert!(grown.size.width.0 > cell.size.width.0 + 1.5);
+    let painted = glyph_paths_with_clip_in_region(window, &view, cx, grown);
+    assert_eq!(painted.len(), 1, "one grown native path: {painted:?}");
+    let side = grown.size.width.0 * 0.9;
+    assert!(
+        (painted[0].0.size.width.0 - side).abs() <= 1.5
+            && (painted[0].0.size.height.0 - side).abs() <= 1.5,
+        "the native declaration scales with the font size: {:?}",
+        painted[0].0
+    );
+    assert_eq!(
+        view.read_with(cx, |view, _| view
+            .terminal
+            .glyphs()
+            .get(cp)
+            .expect("registration")
+            .revision),
+        first_revision,
+        "font-size change does not re-register"
+    );
+
+    // Display-scale change: same logical geometry, new painted scale.
+    let before_scale = glyph_region_bounds(window, &view, cx, 2, 4, 1);
+    cx.simulate_window_scale_factor_change(window, 2.);
+    let _ = glyph_paths_with_clip_in_region(window, &view, cx, before_scale);
+    let after_scale = glyph_region_bounds(window, &view, cx, 2, 4, 1);
+    assert!(after_scale.size.width.0 > before_scale.size.width.0 + 1.5);
+    let painted = glyph_paths_with_clip_in_region(window, &view, cx, after_scale);
+    assert_eq!(painted.len(), 1, "one rescaled native path: {painted:?}");
+    let side = after_scale.size.width.0 * 0.9;
+    assert!(
+        (painted[0].0.size.width.0 - side).abs() <= 1.5
+            && (painted[0].0.size.height.0 - side).abs() <= 1.5,
+        "the native declaration follows the display scale: {:?}",
+        painted[0].0
+    );
+    assert_eq!(
+        view.read_with(cx, |view, _| view
+            .terminal
+            .glyphs()
+            .get(cp)
+            .expect("registration")
+            .revision),
+        first_revision,
+        "display-scale change does not re-register"
+    );
+}
+
 pub(crate) fn native_cases() -> impl Iterator<Item = crate::native_markdown::Case> {
     [
         crate::native_markdown::Case::new(
             "terminal::view::native_terminal_tests::glyph_native_system_coverage_and_registered_paint",
             glyph_native_system_coverage_and_registered_paint,
+        ),
+        crate::native_markdown::Case::new(
+            "terminal::view::native_terminal_tests::glyph_native_declared_layout_baseline_and_scale",
+            glyph_native_declared_layout_baseline_and_scale,
         ),
         crate::native_markdown::Case::new(
             "terminal::view::gpui_tests::reading_copy_links_theme_and_ime_use_the_painted_semantic_rows",
