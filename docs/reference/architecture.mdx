@@ -232,5 +232,7 @@ coding agent 在真实 PTY 中运行自己的原生 TUI。命令识别、状态 
 
 #270 的实际客户端后台检查点为 `c3d5eb53`：正式 `omp/18.20.0` 在隔离 HOME／profile 中无 prompt 启动，关闭 tools、LSP、extensions、skills、rules、context files 和标题生成；真实 PTY → daemon → rooted 生产消费者完成 support → bundle 注册 → coverage confirmation，并用默认主字体 `Hack` 将实际注册的 `U+F0311` 绘制为 1 条 path，1 passed／0 failed／0 ignored。harness 只发送终端回复，不向真实客户端注入 fixture 的 `SEND` 命令。此为后台消费者绘制证据，不是 Windows 原生窗口像素、OS DPI、最终组合、WSL 或真实 SSH 的完整单色验收，也不宣称 macOS 原生通过。
 
+去除临时诊断后的检查点 `3a5942b6`：`cargo fmt --check`、core `glyph_` 38 项、GUI `glyph_` 31 项均通过；GUI 的 2 项忽略分别为私有 PTY sender 和另行显式运行的真实 omp 用例。完整 `q/s + DA1` 排序与 controller render opt-in 替换均实际通过；随后真实 `omp/18.20.0` 单项再次通过，1 passed／0 failed／0 ignored。上述均为窄验证，不是完整 workspace 或原生窗口通过声明。
+
 Windows fixture 的初次 DA1 交换需与真实客户端一样完成 ConPTY 初始化：Microsoft 的 [`InputStateMachineEngine::ActionCsiDispatch`](https://github.com/microsoft/terminal/blob/main/src/terminal/parser/InputStateMachineEngine.cpp) 会将首条 DA1 回复用于宿主属性，而不送入应用 stdin。排序用例在初始化后仍将 `s`／`q` 与 DA1 放在同一 write 中，并精确比较两条真实回复及先后顺序，不通过延长超时或丢弃 sentinel 断言规避该平台行为。
 
