@@ -153,9 +153,9 @@ impl EventListener for EventProxy {
             // view's own; repaints arrive with the batch `Wakeup`.
             //
             // `ColorChange` — an echo of an OSC 4 set landing in
-            // `term.colors`. The paint path reads this product's own
-            // palette by design (queries are answered from it too), so
-            // there is no consumer.
+            // `term.colors`. The paint path reads this product's effective
+            // palette by design (queries are answered from that same table),
+            // so there is no consumer.
             //
             // `CurrentDirectoryChanged` — the daemon's sniffer is the
             // authoritative cwd source; this echoes the same OSC 7.

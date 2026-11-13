@@ -53,8 +53,8 @@ enum UnderlineKind {
 pub(super) struct RenderCell {
     pub(super) c: char,
     pub(super) marks: Option<Box<[char]>>,
-    fg: Hsla,
-    bg: Hsla,
+    pub(super) fg: Hsla,
+    pub(super) bg: Hsla,
     draw_bg: bool,
     bold: bool,
     italic: bool,
