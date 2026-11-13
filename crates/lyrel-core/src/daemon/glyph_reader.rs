@@ -18,7 +18,6 @@ pub(super) fn consume(
 ) {
     let outcome = {
         let mut st = state.lock().unwrap();
-        sync_reset(&mut st);
         st.glyphs
             .get_or_insert_with(GlyphSession::new)
             .handle(body, aborted, exhausted)
@@ -44,24 +43,17 @@ pub(super) fn consume(
     }
 }
 
-/// A full reset clears the glossary at the same stream position the tracker
-/// saw it. The tracker is fed from the same ordered output, so comparing its
-/// reset count is enough; no second RIS scanner exists.
-fn sync_reset(st: &mut PaneState) {
-    let resets = st.modes.resets();
-    if st.glyph_reset_epoch != resets {
-        st.glyph_reset_epoch = resets;
-        if let Some(session) = &mut st.glyphs {
-            session.clear_all();
-        }
-    }
-}
-
 /// Hand one frontend-bound query to the pane's current controller only. The
 /// daemon remains the single reply writer; with no controller the query stays
 /// unanswered (the protocol's frontend-bound rule, not a fabricated negative).
 fn request_query(state: &Arc<Mutex<PaneState>>, cp: u32, glossary: bool) {
     let mut st = state.lock().unwrap();
+    // A controller that never sent `SubscribeGlyphState` cannot decode the
+    // query kind. Leave the frontend-bound request unanswered rather than
+    // breaking an old client's stream.
+    if !st.subscriptions.controller_accepts_glyph_state() {
+        return;
+    }
     let Some(epoch) = st.subscriptions.controller_epoch() else {
         return;
     };
@@ -90,7 +82,7 @@ mod tests {
     fn pane_with_controller() -> (Arc<Mutex<PaneState>>, mpsc::Receiver<DaemonMsg>) {
         let mut pane = test_support::test_state(true);
         let (tx, rx) = mpsc::channel();
-        attach_subscriber(&mut pane, tx);
+        attach_subscriber_with_features(&mut pane, tx, &OutputGate::new(), false, false, false, true);
         (Arc::new(Mutex::new(pane)), rx)
     }
 
@@ -182,7 +174,7 @@ mod pipeline_tests {
     fn a_framed_query_survives_extraction_and_reaches_the_controller() {
         let mut pane = test_support::test_state(true);
         let (tx, rx) = mpsc::channel();
-        attach_subscriber(&mut pane, tx);
+        attach_subscriber_with_features(&mut pane, tx, &OutputGate::new(), false, false, false, true);
         let state = Arc::new(Mutex::new(pane));
         let gate = OutputGate::new();
         let writer = test_support::null_writer();
