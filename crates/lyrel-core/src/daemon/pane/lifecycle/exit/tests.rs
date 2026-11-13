@@ -1,7 +1,5 @@
 use super::super::super::test_support::{drain, null_writer, test_state};
-use super::super::super::{
-    DaemonPane, OutputGate, attach_subscriber, observe_subscriber,
-};
+use super::super::super::{DaemonPane, OutputGate, attach_subscriber, observe_subscriber};
 use super::*;
 #[cfg(windows)]
 use std::sync::Condvar;

@@ -463,8 +463,13 @@ impl Subscriptions {
         self.subscriber_colors = pane_colors;
         gate.reset();
         let epoch = self.subscriber_epoch;
-        let (queued, complete) =
-            replay_state(&replay, graphics.as_ref(), &subscriber, foreground, pane_colors);
+        let (queued, complete) = replay_state(
+            &replay,
+            graphics.as_ref(),
+            &subscriber,
+            foreground,
+            pane_colors,
+        );
         gate.add(queued);
         if complete {
             self.subscriber = Some(subscriber);
@@ -489,8 +494,13 @@ impl Subscriptions {
         let observer = observer.into();
         self.observer_seq += 1;
         // Charge the entire replay before exposing this observer to live output.
-        let (queued, complete) =
-            replay_state(&replay, graphics.as_ref(), &observer, foreground, pane_colors);
+        let (queued, complete) = replay_state(
+            &replay,
+            graphics.as_ref(),
+            &observer,
+            foreground,
+            pane_colors,
+        );
         gate.add(queued);
         if complete {
             self.observers.push(Observer {

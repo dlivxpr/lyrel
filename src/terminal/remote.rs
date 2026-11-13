@@ -84,6 +84,14 @@ pub enum PaneEvent {
     Bell,
     /// Request to write the text area size, formatter attached.
     TextAreaSizeRequest(Arc<dyn Fn(rio_vt::event::WindowSize) -> String + Sync + Send + 'static>),
+    /// The daemon asks this controller whether the pane's actual font stack
+    /// renders `cp`; the view answers with [`RemoteTerminal::answer_glyph_query`].
+    GlyphQuery { token: u64, cp: u32 },
+    /// A producer used Glyph Protocol against an endpoint that does not
+    /// advertise the daemon-owned glossary. Nothing was derived or answered;
+    /// the user is told to update the backend instead of being shown a
+    /// half-working picture.
+    GlyphUnsupported,
 }
 
 impl std::fmt::Debug for PaneEvent {
@@ -101,6 +109,8 @@ impl std::fmt::Debug for PaneEvent {
             PaneEvent::ColorChanged => write!(f, "ColorChanged"),
             PaneEvent::Bell => write!(f, "Bell"),
             PaneEvent::TextAreaSizeRequest(_) => write!(f, "TextAreaSizeRequest"),
+            PaneEvent::GlyphQuery { token, cp } => write!(f, "GlyphQuery({token}, {cp:x})"),
+            PaneEvent::GlyphUnsupported => write!(f, "GlyphUnsupported"),
         }
     }
 }
@@ -116,6 +126,14 @@ struct ParseState {
     history_limit: AtomicUsize,
     /// Cursor compensation and copy tab stops, sampled under the VT guard.
     presentation: Mutex<super::presentation::ParsePresentation>,
+    /// Derived picture of the daemon-accepted glossary for this pane.
+    glyphs: std::sync::Arc<super::glyph::GlyphStore>,
+    /// The negotiated endpoint advertises the daemon-owned glossary. Without
+    /// it no producer body is applied, derived or answered.
+    glyph_authority: AtomicBool,
+    /// A body arrived without that authority; the view reports it once.
+    glyph_denied: AtomicBool,
+    glyph_denied_reported: AtomicBool,
 }
 
 impl EventProxy {
@@ -637,6 +655,7 @@ impl RemoteTerminal {
         }
     }
 
+    #[cfg(test)]
     pub fn adopt_relink(
         &mut self,
         stream: Stream,
@@ -662,12 +681,28 @@ impl RemoteTerminal {
         version: Option<DaemonVersion>,
     ) -> anyhow::Result<()> {
         self.pane_version = version;
-        self.proxy.parse_state.presentation.lock().unwrap().endpoint_sixel = self
-            .pane_version
-            .as_ref()
-            .is_some_and(|version| {
-                version.has_feature(crate::daemon::protocol::FEATURE_STATIC_SIXEL)
-            });
+        self.proxy
+            .parse_state
+            .presentation
+            .lock()
+            .unwrap()
+            .endpoint_sixel = self.pane_version.as_ref().is_some_and(|version| {
+            version.has_feature(crate::daemon::protocol::FEATURE_STATIC_SIXEL)
+        });
+        let glyph_authority = self.pane_version.as_ref().is_some_and(|version| {
+            version.has_feature(crate::daemon::protocol::FEATURE_GLYPH_REGISTRY)
+        });
+        // The new link's endpoint is the one that answers for this pane now;
+        // the replayed stream rebuilds the derived glossary from scratch.
+        self.proxy
+            .parse_state
+            .glyph_authority
+            .store(glyph_authority, Ordering::Relaxed);
+        self.proxy
+            .parse_state
+            .glyph_denied
+            .store(false, Ordering::Relaxed);
+        self.proxy.parse_state.glyphs.clear_all();
         let signals = self.reader_signals(false);
         self.connection.adopt_relink(
             stream,
@@ -743,15 +778,7 @@ impl RemoteTerminal {
         buffered: Vec<u8>,
         pty: PtySource,
     ) -> anyhow::Result<Self> {
-        Self::from_stream_parts(
-            stream,
-            size,
-            buffered,
-            pty,
-            false,
-            crate::terminal::images::ImageStore::new(),
-            None,
-        )
+        Self::from_stream_with_endpoint(stream, size, buffered, pty, None)
     }
 
     /// A test pane over an already negotiated connection. `version` is the
@@ -798,12 +825,19 @@ impl RemoteTerminal {
         presentation.endpoint_sixel = version.as_ref().is_some_and(|version| {
             version.has_feature(crate::daemon::protocol::FEATURE_STATIC_SIXEL)
         });
+        let glyph_authority = version.as_ref().is_some_and(|version| {
+            version.has_feature(crate::daemon::protocol::FEATURE_GLYPH_REGISTRY)
+        });
         let proxy = EventProxy {
             tx,
             parse_state: Arc::new(ParseState {
                 replaying: AtomicBool::new(false),
                 history_limit: AtomicUsize::new(user_config.scrollback_limit),
                 presentation: Mutex::new(presentation),
+                glyphs: Arc::new(super::glyph::GlyphStore::new()),
+                glyph_authority: AtomicBool::new(glyph_authority),
+                glyph_denied: AtomicBool::new(false),
+                glyph_denied_reported: AtomicBool::new(false),
             }),
         };
 
@@ -830,8 +864,9 @@ impl RemoteTerminal {
 
         let local_conpty = Arc::new(AtomicBool::new(pty == PtySource::LocalConpty));
         let color_scheme_updates = Arc::new(AtomicBool::new(false));
-        let color_overrides =
-            Arc::new(Mutex::new(lyrel_core::core::pane_colors::PaneColors::default()));
+        let color_overrides = Arc::new(Mutex::new(
+            lyrel_core::core::pane_colors::PaneColors::default(),
+        ));
         let connection = PaneConnection::start(
             stream,
             buffered,
@@ -1086,6 +1121,19 @@ impl RemoteTerminal {
     /// and deletes images as out-of-band frames arrive from the daemon.
     pub fn images(&self) -> crate::terminal::images::ImageStore {
         self.images.clone()
+    }
+
+    /// The pane's derived picture of the daemon-accepted glyph glossary.
+    pub fn glyphs(&self) -> Arc<crate::terminal::glyph::GlyphStore> {
+        self.proxy.parse_state.glyphs.clone()
+    }
+
+    /// Answer one frontend-bound `q` with the pane's actual font coverage.
+    /// The daemon combines it with the glossary bit it captured and writes the
+    /// single reply; this method never writes to the PTY itself.
+    pub fn answer_glyph_query(&self, token: u64, cp: u32, system: bool) {
+        self.connection
+            .send(crate::daemon::protocol::ClientMsg::GlyphQueryResult { token, cp, system });
     }
 
     /// Desktop notifications the program wrote (OSC 9, 99, 777), oldest

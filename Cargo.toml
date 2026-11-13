@@ -318,9 +318,11 @@ gpui-kit = { version = "=0.9.1", features = ["gpui-fast"] }
 rio-vt = { version = "=0.5.30", default-features = false }
 # Scalar Unicode tables for preedit/copy helpers, matching Rio's pinned version.
 rio-unicode = "=0.5.30"
-# Types only: the `Handler` surface names `rio_graphics::GraphicData` for the
-# sixel/iTerm2/kitty callbacks the parse bridge delegates. Same pin as rio-vt.
-rio-graphics = "=0.5.30"
+# Types plus the released `glyf` outline decoder and registry. `glyph` adds
+# skrifa/parking_lot only — no Rio renderer, PTY or image stack. The daemon
+# validates and retains registrations with it; the GUI decodes accepted bodies
+# for its derived picture.
+rio-graphics = { version = "=0.5.30", features = ["glyph"] }
 
 anyhow = "1"
 log = "0.4"

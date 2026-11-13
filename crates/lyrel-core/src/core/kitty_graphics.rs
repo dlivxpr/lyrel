@@ -87,6 +87,27 @@ pub struct ApcTokenizer {
     /// Discovery reuses this bounded framing, not a second VT grammar.
     dcs: bool,
     header: Option<Box<rio_vt::performer::parser::Parser>>,
+    /// Which APC body this instance lifts: kitty `G` or Glyph Protocol `25a1`.
+    lift: ApcLift,
+    /// Bytes of `lift.prefix()` matched so far in [`State::ApcStart`].
+    matched: u8,
+}
+
+/// Which APC body a tokenizer lifts out of the passthrough stream. The framing
+/// state machine is shared; only the prefix and the payload cap differ.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ApcLift {
+    KittyGraphics,
+    GlyphProtocol,
+}
+
+impl ApcLift {
+    fn prefix(self) -> &'static [u8] {
+        match self {
+            Self::KittyGraphics => b"G",
+            Self::GlyphProtocol => b"25a1",
+        }
+    }
 }
 
 #[derive(Default, Clone, Copy)]
@@ -148,7 +169,22 @@ impl ApcTokenizer {
             osc_completed: 0,
             dcs: false,
             header: None,
+            lift: ApcLift::KittyGraphics,
+            matched: 0,
         }
+    }
+
+    /// A tokenizer that lifts Glyph Protocol bodies (`25a1`) with the same
+    /// framing. It has no DCS discovery; every other control string passes
+    /// through verbatim.
+    pub(crate) fn glyph() -> Self {
+        let mut tokenizer = Self::new();
+        tokenizer.lift = ApcLift::GlyphProtocol;
+        tokenizer
+    }
+
+    pub(crate) fn ground(&self) -> bool {
+        self.at_boundary()
     }
 
     pub(crate) fn xtgettcap() -> Self {
@@ -242,6 +278,7 @@ impl ApcTokenizer {
 
     fn start_command(&mut self) {
         self.clear_buffer();
+        self.matched = 0;
         self.state = if self.dcs {
             let parser = self.header.get_or_insert_with(Default::default);
             **parser = rio_vt::performer::parser::Parser::default();
@@ -280,6 +317,18 @@ impl ApcTokenizer {
             },
             |_, _| {},
         );
+    }
+
+    /// Feed one chunk and report aborted/exhausted lifted commands too. Used by
+    /// the Glyph Protocol sniffer, which must answer an oversized body from the
+    /// control prefix it managed to keep.
+    pub(crate) fn feed_lifted(
+        &mut self,
+        bytes: &[u8],
+        on_passthrough: impl FnMut(&[u8]),
+        on_command: impl FnMut(&[u8], bool, bool),
+    ) {
+        self.tokenize(bytes, on_passthrough, on_command);
     }
 
     // Aborts must reach the reassembler in the same ordered stream as complete
@@ -380,6 +429,13 @@ impl ApcTokenizer {
                         self.start_command();
                         i += 1;
                     }
+                    // Glyph framing owns only `ESC _ 25a1`; a DCS belongs to
+                    // the terminal and stays verbatim.
+                    b'P' if self.lift == ApcLift::GlyphProtocol => {
+                        on_passthrough(b"\x1bP");
+                        self.state = State::PassApc;
+                        i += 1;
+                    }
                     b'P' => {
                         self.clear_buffer();
                         if self.push_graphics(b"P") {
@@ -478,19 +534,25 @@ impl ApcTokenizer {
                     }
                 }
                 State::ApcStart => {
-                    if bytes[i] == b'G' {
-                        self.clear_buffer();
-                        if !self.push_graphics(b"G") {
-                            self.state = State::ApcDrop;
-                            i += 1;
-                            continue;
-                        }
-                        self.state = State::ApcGraphics;
+                    let prefix = self.lift.prefix();
+                    if bytes[i] == prefix[self.matched as usize] {
+                        self.matched += 1;
                         i += 1;
+                        if self.matched as usize == prefix.len() {
+                            self.clear_buffer();
+                            if !self.push_graphics(prefix) {
+                                self.state = State::ApcDrop;
+                                continue;
+                            }
+                            self.state = State::ApcGraphics;
+                        }
                     } else {
-                        // Not ours: emit the held `ESC _` and forward the rest of
-                        // the APC verbatim (re-examine this byte in `PassApc`).
+                        // Not ours: emit the held `ESC _` and every prefix byte
+                        // matched so far, then forward the rest of the APC
+                        // verbatim (re-examine this byte in `PassApc`).
                         on_passthrough(b"\x1b_");
+                        on_passthrough(&prefix[..self.matched as usize]);
+                        self.matched = 0;
                         self.state = State::PassApc;
                     }
                 }
@@ -514,7 +576,7 @@ impl ApcTokenizer {
                         self.start_command();
                         i += 1;
                     }
-                    b'P' => {
+                    b'P' if self.lift == ApcLift::KittyGraphics => {
                         on_command(&self.buf, true, false);
                         self.clear_buffer();
                         if self.push_graphics(b"P") {
@@ -795,7 +857,9 @@ impl ApcTokenizer {
     /// Append within the cap; keep a bounded header prefix on failure so the
     /// ordered abort can correlate an error before the caller clears it.
     fn push_graphics(&mut self, run: &[u8]) -> bool {
-        let limit = if self.dcs {
+        let limit = if self.lift == ApcLift::GlyphProtocol {
+            super::glyph_protocol::MAX_APC_BODY
+        } else if self.dcs {
             MAX_DISCOVERY_PAYLOAD
         } else if self.buf.first() == Some(&b'P') {
             8 << 20

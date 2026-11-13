@@ -13,8 +13,9 @@ use std::path::PathBuf;
 pub(crate) struct PaneHandshake {
     stream: Stream,
     images: crate::terminal::images::ImageStore,
-    /// What this connection's endpoint actually answered, not what this build
-    /// could do: DA1 and image capability claims follow it.
+    /// The endpoint this pane actually reached (local daemon or routed
+    /// server). Its feature list decides which capabilities are usable; the
+    /// local build's own capabilities are never assumed.
     version: DaemonVersion,
 }
 
@@ -299,7 +300,6 @@ impl PaneHandshake {
         cell_w: u16,
         cell_h: u16,
         images: crate::terminal::images::ImageStore,
-
     ) -> anyhow::Result<(Stream, Vec<u8>, DaemonVersion)> {
         let mut stream = connect_routed(route)?;
         let version = Self::negotiate_pane_protocol(&mut stream, attach_reply_wait(route))?;

@@ -643,6 +643,7 @@ impl Element for TerminalElement {
         // map that back to a screen row with the snapshot's scroll state and
         // drop anything scrolled out of the viewport.
         let image_store = self.view.read(cx).terminal.images();
+        let glyph_store = self.view.read(cx).terminal.glyphs();
         let displayed = self.view.read(cx).lifecycle.paint_visibility().clone();
         let images = &snap.images;
         let notice = images.iter().any(|image| image.evicted).then(|| {
@@ -768,6 +769,7 @@ impl Element for TerminalElement {
                 &base_font,
                 bold_font.as_ref(),
                 italic_font.as_ref(),
+                &glyph_store,
             );
             let scale = window.scale_factor();
             paint_special_underlines(window, &geom, &buf, scale);
@@ -781,6 +783,7 @@ impl Element for TerminalElement {
                     &base_font,
                     bold_font.as_ref(),
                     italic_font.as_ref(),
+                    &glyph_store,
                 );
                 paint_special_underlines(window, sg, row, scale);
             }

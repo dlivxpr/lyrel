@@ -871,10 +871,8 @@ fn handle_conn(stream: Stream, registry: Arc<Registry>) -> anyhow::Result<()> {
             }
             ClientMsg::SubscribePaneColors => {
                 if !negotiated {
-                    DaemonMsg::Error(
-                        "pane protocol handshake required before pane colours".into(),
-                    )
-                    .encode(&mut &write_stream)?;
+                    DaemonMsg::Error("pane protocol handshake required before pane colours".into())
+                        .encode(&mut &write_stream)?;
                     return Ok(());
                 }
                 pane_colors = true;
@@ -1666,6 +1664,12 @@ fn run_stream(
                     break 'conn;
                 }
                 pane.resize(size);
+            }
+            ClientMsg::GlyphQueryResult { token, cp, system } => {
+                if !pane.controls(epoch) {
+                    break 'conn;
+                }
+                pane.answer_glyph_query(epoch, token, cp, system);
             }
             ClientMsg::AuthResponse {
                 request_id,

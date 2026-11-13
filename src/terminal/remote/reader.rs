@@ -317,6 +317,11 @@ impl FrameReader {
                                 cuts,
                                 Some(&proxy.parse_state.history_limit),
                                 Some(&proxy.parse_state.presentation),
+                                Some(crate::terminal::glyph::GlyphApply {
+                                    store: &proxy.parse_state.glyphs,
+                                    authority: &proxy.parse_state.glyph_authority,
+                                    denied: &proxy.parse_state.glyph_denied,
+                                }),
                                 Some(colors.as_ref()),
                                 &quit,
                                 |term, cut| {
@@ -404,6 +409,20 @@ impl FrameReader {
                         });
                         proxy.send(PaneEvent::Wakeup);
                         out_batch.clear();
+                        if proxy
+                            .parse_state
+                            .glyph_denied
+                            .swap(false, Ordering::Relaxed)
+                            && !proxy
+                                .parse_state
+                                .glyph_denied_reported
+                                .swap(true, Ordering::Relaxed)
+                        {
+                            // The producer used Glyph Protocol against a
+                            // daemon that cannot own the glossary. Nothing was
+                            // derived or acknowledged; say so once.
+                            proxy.send(PaneEvent::GlyphUnsupported);
+                        }
                     }
                 };
             }
@@ -505,6 +524,11 @@ impl FrameReader {
                             cuts,
                             Some(&proxy.parse_state.history_limit),
                             Some(&proxy.parse_state.presentation),
+                            Some(crate::terminal::glyph::GlyphApply {
+                                store: &proxy.parse_state.glyphs,
+                                authority: &proxy.parse_state.glyph_authority,
+                                denied: &proxy.parse_state.glyph_denied,
+                            }),
                             None,
                             &quit,
                             |term, cut| match cut {
@@ -558,9 +582,7 @@ impl FrameReader {
                         match lyrel_core::core::pane_colors::ColorFrame::decode(&frame) {
                             Some(frame) => {
                                 frame.apply(
-                                    &mut colors
-                                        .lock()
-                                        .unwrap_or_else(|poison| poison.into_inner()),
+                                    &mut colors.lock().unwrap_or_else(|poison| poison.into_inner()),
                                 );
                                 proxy.send(PaneEvent::ColorChanged);
                                 proxy.send(PaneEvent::Wakeup);
@@ -692,6 +714,13 @@ impl FrameReader {
                         } else {
                             clipboard_write_busy.store(false, Ordering::Release);
                         }
+                    }
+                    DaemonMsg::GlyphQuery { token, cp } => {
+                        // Only the daemon writes the `q` reply. This reader
+                        // hands the request to the UI thread, which measures
+                        // the pane's actual font stack and answers the token.
+                        flush_batch!();
+                        proxy.send(PaneEvent::GlyphQuery { token, cp });
                     }
                     DaemonMsg::Cwd(path) => {
                         flush_batch!();
@@ -1112,6 +1141,7 @@ fn feed_grid<T: EventListener + Clone>(
     cuts: Vec<(usize, ReaderCut)>,
     history_limit: Option<&AtomicUsize>,
     presentation: Option<&Mutex<crate::terminal::presentation::ParsePresentation>>,
+    glyph: Option<crate::terminal::glyph::GlyphApply<'_>>,
     colors: Option<&Mutex<lyrel_core::core::pane_colors::PaneColors>>,
     quit: &AtomicBool,
     mut on_cut: impl FnMut(&mut Crosswords<T>, ReaderCut),
@@ -1145,6 +1175,7 @@ fn feed_grid<T: EventListener + Clone>(
                     history_limit.map(|limit| limit.load(Ordering::Relaxed)),
                 )
                 .with_presentation(presentation)
+                .with_glyph(glyph)
                 .with_colors(colors);
                 processor.advance(&mut bridge, &bytes[at..end]);
             }

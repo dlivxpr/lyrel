@@ -9,12 +9,16 @@ use std::thread::JoinHandle;
 use std::time::Duration;
 
 use crate::core::clipboard::ClipboardSniffer;
+use crate::core::glyph_protocol::{GlyphSession, GlyphSniffer, PendingQueries};
 use crate::core::kitty_graphics::{GraphicsEffect, GraphicsSniffer, GraphicsState};
 use crate::core::term_modes::TerminalModes;
 use crate::daemon::protocol::{
     AuthResponse, DaemonMsg, NativeSshSpec, PaneInfo, RemoteContext, RemoteKind, ShellSpec, WinSize,
 };
+use rio_vt::ansi::glyph_protocol::{QueryStatus, format_query_response};
 
+#[path = "glyph_reader.rs"]
+mod glyph_reader;
 #[path = "graphics_admission.rs"]
 mod graphics_admission;
 #[path = "graphics_reader.rs"]
@@ -43,6 +47,16 @@ struct PaneState {
     /// Authoritative resources live with the pane, not its current controller.
     /// Taken on exit even if a client keeps the dead pane's text attached.
     graphics: Option<GraphicsState>,
+    /// The pane's accepted Glyph Protocol glossary. Lazily allocated on the
+    /// first glyph body; survives normal command exit and screen switches and
+    /// is cleared by RIS at the same stream position.
+    glyphs: Option<GlyphSession>,
+    /// Frontend-bound `q` requests awaiting the controller's font answer. The
+    /// glossary bit is captured when the request is read, not when the answer
+    /// arrives.
+    glyph_queries: PendingQueries,
+    next_glyph_token: u64,
+    glyph_reset_epoch: u64,
     subscriptions: Subscriptions,
     facts: PaneFacts,
     /// A native SSH pane's connection phase, as last sent. Status frames go
@@ -79,6 +93,32 @@ impl PaneState {
             ..
         } = self;
         apply(facts, &mut |msg| subscriptions.notify(msg, graphics))
+    }
+
+    /// Compose the single `q` reply for one controller answer. The pending
+    /// entry is removed on the first valid answer; a stale epoch, an old token
+    /// or a duplicate answer returns `None` and writes nothing.
+    fn take_glyph_query_reply(
+        &mut self,
+        epoch: u64,
+        token: u64,
+        cp: u32,
+        system: bool,
+    ) -> Option<String> {
+        if !self.subscriptions.controls(epoch) {
+            return None;
+        }
+        let query = self.glyph_queries.take(token, cp)?;
+        if query.epoch != epoch {
+            return None;
+        }
+        let status = match (system, query.glossary) {
+            (true, true) => QueryStatus::Both,
+            (true, false) => QueryStatus::System,
+            (false, true) => QueryStatus::Glossary,
+            (false, false) => QueryStatus::Free,
+        };
+        Some(format_query_response(cp, status))
     }
 }
 
@@ -462,6 +502,9 @@ impl DaemonPane {
     ) -> Result<Option<u64>, String> {
         let foreground = self.backend.foreground_command_running();
         let mut state = self.state.lock().unwrap();
+        // A query is bound to the controller that received it; a replacement
+        // controller starts with no answers owed to the previous one.
+        state.glyph_queries.clear();
         let (subscriptions, graphics, replay) = state.subscription_parts();
         subscriptions.attach_admitted(
             replay,
@@ -547,6 +590,10 @@ impl DaemonPane {
                         crate::core::terminal_resize::ResizeMode::Raw
                     },
                 )),
+                glyphs: None,
+                glyph_queries: PendingQueries::default(),
+                next_glyph_token: 0,
+                glyph_reset_epoch: 0,
                 subscriptions: Subscriptions::new(allow_remote_clipboard_write, None),
                 facts: PaneFacts::new(
                     spawn.initial_cwd,
@@ -693,6 +740,10 @@ impl DaemonPane {
                 id: carried.id,
                 ring,
                 graphics: Some(graphics),
+                glyphs: None,
+                glyph_queries: PendingQueries::default(),
+                next_glyph_token: 0,
+                glyph_reset_epoch: 0,
                 subscriptions: Subscriptions::new(false, None),
                 facts,
                 ssh_phase: None,
@@ -742,6 +793,10 @@ impl DaemonPane {
             id,
             ring: ReplayRing::new(size),
             graphics: Some(GraphicsState::new(size)),
+            glyphs: None,
+            glyph_queries: PendingQueries::default(),
+            next_glyph_token: 0,
+            glyph_reset_epoch: 0,
             subscriptions: Subscriptions::new(
                 allow_remote_clipboard_write,
                 Some(allow_remote_clipboard_write),
@@ -891,6 +946,12 @@ impl DaemonPane {
                 crate::core::threads::promote_to_user_interactive();
                 let mut facts_reader = FactReader::new(probes);
                 let mut clipboard = ClipboardSniffer::default();
+                // Glyph Protocol framing runs before kitty graphics: accepted
+                // `r`/`c` bodies are re-emitted in place, rejected/malformed
+                // ones are stripped, and `q` becomes a controller-bound
+                // request the daemon answers. The same `ApcTokenizer` framing
+                // owns both lifted prefixes.
+                let mut glyph = GlyphSniffer::new();
                 // Kitty graphics interception (issue #213): lifts image
                 // sequences out of the stream *before* the ring/subscriber see
                 // them, so the base64 pixels never enter replay and the client's
@@ -958,7 +1019,7 @@ impl DaemonPane {
                             };
                             let extracted = {
                                 let mut media_locality = || facts_reader.indirect_media_locality(&before);
-                                graphics_reader::extract(raw, &mut clipboard, &mut graphics, &mut media_locality, &mut discovery)
+                                graphics_reader::extract(raw, &mut clipboard, &mut glyph, &mut graphics, &mut media_locality, &mut discovery)
                             };
                             // Parse once from the stripped slices, without joining ordinary
                             // output. Only cheap OSC metadata precedes the readiness marker;
@@ -1031,6 +1092,7 @@ impl DaemonPane {
             foreground_command,
             pane_colors,
         );
+        st.glyph_queries.clear();
         let nudge = redraw_nudge(
             &mut st,
             self.runs_foreground_program(foreground_command),
@@ -1069,6 +1131,7 @@ impl DaemonPane {
 
     pub fn detach(&self, epoch: u64) -> bool {
         let mut st = self.state.lock().unwrap();
+        st.glyph_queries.clear();
         let PaneState {
             subscriptions,
             graphics,
@@ -1091,13 +1154,7 @@ impl DaemonPane {
     ) -> u64 {
         let foreground_command = self.backend.foreground_command_running();
         let mut st = self.state.lock().unwrap();
-        let id = observe_subscriber(
-            &mut st,
-            observer,
-            gate,
-            foreground_command,
-            pane_colors,
-        );
+        let id = observe_subscriber(&mut st, observer, gate, foreground_command, pane_colors);
         let nudge = redraw_nudge(
             &mut st,
             self.runs_foreground_program(foreground_command),
@@ -1206,6 +1263,20 @@ impl DaemonPane {
         if let Ok(mut writer) = self.writer.lock() {
             let _ = writer.write_all(bytes);
             let _ = writer.flush();
+        }
+    }
+
+    /// Complete one frontend-bound `q` with the controller's font answer. The
+    /// glossary bit comes from the pending entry captured at the request's
+    /// stream position; the daemon remains the only writer of the reply.
+    pub fn answer_glyph_query(&self, epoch: u64, token: u64, cp: u32, system: bool) {
+        let reply = self
+            .state
+            .lock()
+            .unwrap()
+            .take_glyph_query_reply(epoch, token, cp, system);
+        if let Some(reply) = reply {
+            write_graphics_reply(&self.writer, reply.as_bytes());
         }
     }
 
@@ -1525,14 +1596,7 @@ fn run_redraw_nudge(
 
 #[cfg(test)]
 fn attach_subscriber(st: &mut PaneState, subscriber: Sender<DaemonMsg>) -> u64 {
-    attach_subscriber_with_permissions(
-        st,
-        subscriber,
-        &OutputGate::new(),
-        false,
-        false,
-        false,
-    )
+    attach_subscriber_with_permissions(st, subscriber, &OutputGate::new(), false, false, false)
 }
 
 /// Composition only: replay inputs are borrowed under the existing pane lock.
@@ -1615,6 +1679,7 @@ mod tests {
         let run = |chunks: &[&[u8]]| {
             let mut clipboard = ClipboardSniffer::default();
             clipboard.set_controller(Some(1), true);
+            let mut glyph = GlyphSniffer::new();
             let mut graphics = GraphicsSniffer::new_local(true);
             let mut discovery = crate::core::xtgettcap::Sniffer::default();
             let mut pane = test_state(true);
@@ -1628,6 +1693,7 @@ mod tests {
                 let extracted = graphics_reader::extract(
                     chunk,
                     &mut clipboard,
+                    &mut glyph,
                     &mut graphics,
                     &mut || panic!("plain output must not probe host-media locality"),
                     &mut discovery,
@@ -1905,14 +1971,7 @@ mod tests {
         let mut st = test_state(true);
         st.subscriptions = Subscriptions::new(true, Some(true));
         let (tx, _rx) = mpsc::channel();
-        attach_subscriber_with_permissions(
-            &mut st,
-            tx,
-            &OutputGate::new(),
-            false,
-            false,
-            false,
-        );
+        attach_subscriber_with_permissions(&mut st, tx, &OutputGate::new(), false, false, false);
         assert!(st.subscriptions.clipboard_allowed());
 
         // And a profile that says no is not something an attaching client can
@@ -1920,38 +1979,17 @@ mod tests {
         let mut st = test_state(true);
         st.subscriptions = Subscriptions::new(false, Some(false));
         let (tx, _rx) = mpsc::channel();
-        attach_subscriber_with_permissions(
-            &mut st,
-            tx,
-            &OutputGate::new(),
-            true,
-            false,
-            false,
-        );
+        attach_subscriber_with_permissions(&mut st, tx, &OutputGate::new(), true, false, false);
         assert!(!st.subscriptions.clipboard_allowed());
 
         // A pane with no spec of its own — everything on a remote
         // `lyrel-server` — is exactly as permitted as its controller says.
         let mut st = test_state(true);
         let (tx, _rx) = mpsc::channel();
-        attach_subscriber_with_permissions(
-            &mut st,
-            tx,
-            &OutputGate::new(),
-            true,
-            false,
-            false,
-        );
+        attach_subscriber_with_permissions(&mut st, tx, &OutputGate::new(), true, false, false);
         assert!(st.subscriptions.clipboard_allowed());
         let (tx, _rx) = mpsc::channel();
-        attach_subscriber_with_permissions(
-            &mut st,
-            tx,
-            &OutputGate::new(),
-            false,
-            false,
-            false,
-        );
+        attach_subscriber_with_permissions(&mut st, tx, &OutputGate::new(), false, false, false);
         assert!(!st.subscriptions.clipboard_allowed());
     }
 
@@ -2229,14 +2267,7 @@ mod tests {
     fn a_reattach_after_the_first_paint_left_the_ring_makes_the_program_repaint() {
         let mut st = state_running_a_long_lived_program();
         let (tx, _rx) = mpsc::channel();
-        attach_subscriber_with_permissions(
-            &mut st,
-            tx,
-            &OutputGate::new(),
-            false,
-            true,
-            false,
-        );
+        attach_subscriber_with_permissions(&mut st, tx, &OutputGate::new(), false, true, false);
 
         let transient = redraw_nudge(&mut st, true, std::time::Instant::now())
             .expect("the screen the program painted is gone from the ring");

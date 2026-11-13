@@ -172,6 +172,7 @@ fn a_batch_fed_in_slices_parses_as_one() {
         None,
         None,
         None,
+        None,
         &AtomicBool::new(false),
         |term, _| stops.push(cursor(term)),
     );
@@ -193,6 +194,7 @@ fn a_retired_reader_leaves_the_grid_alone() {
         &mut KeyboardStacks::default(),
         b"stale",
         Vec::new(),
+        None,
         None,
         None,
         None,

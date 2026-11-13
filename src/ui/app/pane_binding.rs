@@ -230,6 +230,24 @@ impl LyrelApp {
             },
         )
         .detach();
+        cx.subscribe_in(
+            &view,
+            window,
+            |_app, view, _: &crate::terminal::view::GlyphUnsupported, window, cx| {
+                let (workspace, pane, route) = {
+                    let view = view.read(cx);
+                    (view.owner_workspace(), view.pane_id, view.pane_route())
+                };
+                window.notify_app(
+                    crate::ui::notification_history::Notification::warning(t(
+                        L10nKey::TerminalGlyphNeedsDaemonUpdate,
+                    ))
+                    .pane(workspace, pane, &route),
+                    cx,
+                );
+            },
+        )
+        .detach();
         Self::watch_open_file_requests(&view, window, cx);
         let handle = view.read(cx).focus_handle.clone();
         Self::watch_pane_focus(&handle, view.entity_id(), window, cx);

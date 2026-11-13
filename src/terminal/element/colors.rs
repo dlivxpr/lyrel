@@ -252,11 +252,17 @@ impl PaintColors {
         let rgb = crate::terminal::palette::rgb_color;
         let (default_fg, fg_rgb) = match overrides.get(DEFAULT_FG) {
             Some(overridden) => (to_hsla(rgb(overridden)), rgb(overridden)),
-            None => (theme.foreground, crate::terminal::palette::hsla_to_rgb(theme.foreground)),
+            None => (
+                theme.foreground,
+                crate::terminal::palette::hsla_to_rgb(theme.foreground),
+            ),
         };
         let (default_bg, bg_rgb) = match overrides.get(DEFAULT_BG) {
             Some(overridden) => (to_hsla(rgb(overridden)), rgb(overridden)),
-            None => (theme.background, crate::terminal::palette::hsla_to_rgb(theme.background)),
+            None => (
+                theme.background,
+                crate::terminal::palette::hsla_to_rgb(theme.background),
+            ),
         };
         let caret = match overrides.get(CURSOR) {
             Some(overridden) => to_hsla(rgb(overridden)),

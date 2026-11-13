@@ -113,8 +113,14 @@ pub fn defaults(
 ) -> (ColorRgb, ColorRgb, ColorRgb) {
     use lyrel_core::core::pane_colors::{CURSOR, DEFAULT_BG, DEFAULT_FG};
     (
-        overrides.get(DEFAULT_FG).map(rgb_color).unwrap_or(default_fg),
-        overrides.get(DEFAULT_BG).map(rgb_color).unwrap_or(default_bg),
+        overrides
+            .get(DEFAULT_FG)
+            .map(rgb_color)
+            .unwrap_or(default_fg),
+        overrides
+            .get(DEFAULT_BG)
+            .map(rgb_color)
+            .unwrap_or(default_bg),
         overrides.get(CURSOR).map(rgb_color).unwrap_or(caret),
     )
 }
@@ -142,10 +148,7 @@ pub fn query_color(
             .get(DEFAULT_BG)
             .map(rgb_color)
             .unwrap_or(default_bg),
-        i if i == CURSOR as usize => overrides
-            .get(CURSOR)
-            .map(rgb_color)
-            .unwrap_or(caret),
+        i if i == CURSOR as usize => overrides.get(CURSOR).map(rgb_color).unwrap_or(caret),
         _ => default_fg,
     }
 }
@@ -220,9 +223,21 @@ mod tests {
         assert_eq!(table[2], ansi16[2], "unset slots keep the theme");
         assert_eq!(table[200], base[200]);
 
-        let fg = ColorRgb { r: 10, g: 11, b: 12 };
-        let bg = ColorRgb { r: 20, g: 21, b: 22 };
-        let caret = ColorRgb { r: 30, g: 31, b: 32 };
+        let fg = ColorRgb {
+            r: 10,
+            g: 11,
+            b: 12,
+        };
+        let bg = ColorRgb {
+            r: 20,
+            g: 21,
+            b: 22,
+        };
+        let caret = ColorRgb {
+            r: 30,
+            g: 31,
+            b: 32,
+        };
         assert_eq!(query_color(1, &table, &overrides, fg, bg, caret).r, 9);
         assert_eq!(query_color(2, &table, &overrides, fg, bg, caret), ansi16[2]);
         assert_eq!(query_color(256, &table, &overrides, fg, bg, caret), fg);

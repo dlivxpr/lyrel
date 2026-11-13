@@ -120,7 +120,10 @@ const HEADER: usize = 5;
 /// and signed coordinates.
 /// v17 carries daemon-owned playback timelines, visibility pause metadata,
 /// and immutable replacement content for frame one (stable root identity).
-/// v18 adds authoritative OSC 9;4 progress snapshots and ordered updates.
+/// v18 adds the daemon-owned glyph glossary with its controller-bound
+/// frontend coverage query (`DaemonMsg::GlyphQuery` /
+/// `ClientMsg::GlyphQueryResult`), authoritative OSC 9;4 progress snapshots
+/// and ordered updates, and the opt-in pane colour projection.
 /// v19 adds exact iTerm2 destination pixels to each graphics placement. That
 /// is additive JSON, but a v18 client would ignore the fields and silently
 /// paint a different size, so mixed builds are rejected instead: the daemon
@@ -176,6 +179,13 @@ pub const FEATURE_HANDOFF: &str = "handoff";
 /// and drops the route unanswered, so the client checks first and says why.
 pub const FEATURE_UPDATE_SERVER: &str = "update-server";
 
+/// The daemon owns the Glyph Protocol glossary: it validates and retains
+/// accepted definitions, strips rejected ones, and asks only the current
+/// controller for actual font coverage when answering `q`. A client that does
+/// not see this feature must not derive or claim any glyph from producer
+/// bytes; a client that does sees only daemon-accepted bodies.
+pub const FEATURE_GLYPH_REGISTRY: &str = "glyph-registry";
+
 /// The daemon keeps an authoritative, bounded pane-local colour override layer
 /// and projects it to a consumer that opts in with
 /// `ClientMsg::SubscribePaneColors`. Without this feature a client leaves the
@@ -205,6 +215,7 @@ impl DaemonVersion {
             FEATURE_AGENT_RESULTS.to_string(),
             FEATURE_AGENT_REQUESTS.to_string(),
             FEATURE_AGENT_STATE_AGE.to_string(),
+            FEATURE_GLYPH_REGISTRY.to_string(),
             FEATURE_PANE_COLORS.to_string(),
             FEATURE_XTGETTCAP_OWNER.to_string(),
             FEATURE_STATIC_SIXEL.to_string(),
@@ -1087,6 +1098,15 @@ pub enum ClientMsg {
         key: u64,
     },
     GraphicsViewport(GraphicsViewport),
+    /// The controller's answer to `DaemonMsg::GlyphQuery`: whether the pane's
+    /// actual font fallback renders `cp`. The daemon combines it with the
+    /// registry bit it captured at the request's stream position and writes
+    /// the single `q` reply. Duplicate or stale tokens are ignored.
+    GlyphQueryResult {
+        token: u64,
+        cp: u32,
+        system: bool,
+    },
     Spawn {
         cwd: Option<PathBuf>,
         size: WinSize,
@@ -1271,6 +1291,13 @@ pub enum DaemonMsg {
     /// A completed OSC 5522 clipboard write. The daemon strips the control
     /// sequence from replay; the GUI decides whether it may touch the clipboard.
     ClipboardWrite(Vec<u8>),
+    /// A frontend-bound `q`: only the pane's current controller receives it,
+    /// and only the daemon writes the reply. `token` correlates the answer with
+    /// the request; `cp` is the queried codepoint.
+    GlyphQuery {
+        token: u64,
+        cp: u32,
+    },
     Progress(Option<PaneProgress>),
     Cwd(PathBuf),
     Prompt {
@@ -1323,6 +1350,10 @@ mod kind {
     pub const GRAPHICS_PRESSURE: u8 = 68;
     pub const GRAPHICS_VIEWPORT: u8 = 69;
     pub const GRAPHICS_PRESSURE_RESULT: u8 = 70;
+    /// Client -> daemon: the controller's font-coverage answer for one query.
+    pub const GLYPH_QUERY_RESULT: u8 = 71;
+    /// Daemon -> controller: a frontend-bound `q` awaiting that answer.
+    pub const GLYPH_QUERY: u8 = 72;
     pub const DETACH: u8 = 5;
     pub const KILL: u8 = 6;
     pub const LIST: u8 = 7;
@@ -1616,6 +1647,9 @@ impl ClientMsg {
             ClientMsg::GraphicsViewport(viewport) => {
                 write_frame(w, kind::GRAPHICS_VIEWPORT, &to_json(viewport)?)
             }
+            ClientMsg::GlyphQueryResult { token, cp, system } => {
+                write_frame(w, kind::GLYPH_QUERY_RESULT, &to_json(&(token, cp, system))?)
+            }
             ClientMsg::Input(bytes) => write_frame(w, kind::INPUT, bytes),
             ClientMsg::ClearPresentation { history } => {
                 write_frame(w, kind::CLEAR_PRESENTATION, &to_json(history)?)
@@ -1773,6 +1807,10 @@ impl ClientMsg {
                 key: from_json(&payload)?,
             },
             kind::GRAPHICS_VIEWPORT => ClientMsg::GraphicsViewport(from_json(&payload)?),
+            kind::GLYPH_QUERY_RESULT => {
+                let (token, cp, system) = from_json(&payload)?;
+                ClientMsg::GlyphQueryResult { token, cp, system }
+            }
             kind::INPUT => ClientMsg::Input(payload),
             kind::CLEAR_PRESENTATION => ClientMsg::ClearPresentation {
                 history: from_json(&payload)?,
@@ -1903,6 +1941,9 @@ impl DaemonMsg {
                 &to_json(&(key, reclaimed))?,
             ),
             DaemonMsg::ClipboardWrite(frame) => write_frame(w, kind::CLIPBOARD_WRITE, frame),
+            DaemonMsg::GlyphQuery { token, cp } => {
+                write_frame(w, kind::GLYPH_QUERY, &to_json(&(token, cp))?)
+            }
             DaemonMsg::Progress(state) => write_frame(w, kind::PROGRESS, &to_json(state)?),
             DaemonMsg::Cwd(path) => write_frame(w, kind::CWD, &to_json(path)?),
             DaemonMsg::Prompt {
@@ -1980,6 +2021,10 @@ impl DaemonMsg {
                 DaemonMsg::GraphicsPressureResult { key, reclaimed }
             }
             kind::CLIPBOARD_WRITE => DaemonMsg::ClipboardWrite(payload),
+            kind::GLYPH_QUERY => {
+                let (token, cp) = from_json(&payload)?;
+                DaemonMsg::GlyphQuery { token, cp }
+            }
             kind::PROGRESS => DaemonMsg::Progress(from_json(&payload)?),
             kind::CWD => DaemonMsg::Cwd(from_json(&payload)?),
             kind::PROMPT => {
