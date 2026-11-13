@@ -881,10 +881,8 @@ fn handle_conn(stream: Stream, registry: Arc<Registry>) -> anyhow::Result<()> {
             }
             ClientMsg::SubscribeGlyphState => {
                 if !negotiated {
-                    DaemonMsg::Error(
-                        "pane protocol handshake required before glyph state".into(),
-                    )
-                    .encode(&mut &write_stream)?;
+                    DaemonMsg::Error("pane protocol handshake required before glyph state".into())
+                        .encode(&mut &write_stream)?;
                     return Ok(());
                 }
                 glyph_state = true;
@@ -1649,7 +1647,8 @@ fn stream_observer(
     // on a connection nothing will ever be sent down again.
     let (tx, rx) = mpsc::channel::<DaemonMsg>();
     let gate = Arc::new(crate::daemon::pane::subscriptions::OutputGate::new());
-    let observer_id = pane.observe_with_colors_and_glyphs(tx, gate.clone(), pane_colors, glyph_state);
+    let observer_id =
+        pane.observe_with_colors_and_glyphs(tx, gate.clone(), pane_colors, glyph_state);
     let writer = spawn_writer(rx, write_stream, gate);
 
     observe_loop(

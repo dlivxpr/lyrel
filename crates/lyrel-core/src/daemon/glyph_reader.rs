@@ -82,7 +82,15 @@ mod tests {
     fn pane_with_controller() -> (Arc<Mutex<PaneState>>, mpsc::Receiver<DaemonMsg>) {
         let mut pane = test_support::test_state(true);
         let (tx, rx) = mpsc::channel();
-        attach_subscriber_with_features(&mut pane, tx, &OutputGate::new(), false, false, false, true);
+        attach_subscriber_with_features(
+            &mut pane,
+            tx,
+            &OutputGate::new(),
+            false,
+            false,
+            false,
+            true,
+        );
         (Arc::new(Mutex::new(pane)), rx)
     }
 
@@ -174,7 +182,15 @@ mod pipeline_tests {
     fn a_framed_query_survives_extraction_and_reaches_the_controller() {
         let mut pane = test_support::test_state(true);
         let (tx, rx) = mpsc::channel();
-        attach_subscriber_with_features(&mut pane, tx, &OutputGate::new(), false, false, false, true);
+        attach_subscriber_with_features(
+            &mut pane,
+            tx,
+            &OutputGate::new(),
+            false,
+            false,
+            false,
+            true,
+        );
         let state = Arc::new(Mutex::new(pane));
         let gate = OutputGate::new();
         let writer = test_support::null_writer();

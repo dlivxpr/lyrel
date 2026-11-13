@@ -62,6 +62,8 @@ struct State {
     colors: PaneColors,
     color_frames: u64,
     color_snapshots: u64,
+    glyphs: Option<lyrel_core::core::glyph_protocol::GlyphFrame>,
+    glyph_snapshots: u64,
 }
 
 impl State {
@@ -167,6 +169,7 @@ struct Consumer {
     /// its replay is the real 8 MiB ring tail rather than a small snapshot.
     text_bytes: u64,
     needs_replay: bool,
+    glyph_state_expected: bool,
     resource_pixel_bytes: u64,
     graphics_wire_bytes: u64,
     select_packets: u64,
@@ -185,7 +188,7 @@ impl Consumer {
         encoded: u64,
         decoded: u64,
     ) -> Self {
-        let (mut stream, _) = fixture.connect_pane_with_capacity(encoded, decoded);
+        let (mut stream, endpoint) = fixture.connect_pane_with_capacity(encoded, decoded);
         ClientMsg::Spawn {
             cwd: Some(fixture.remote_home().into()),
             size: win_size(),
@@ -203,7 +206,9 @@ impl Consumer {
             other => panic!("expected real remote Spawned, got {other:?}"),
         };
         fixture.track_pane(pane);
-        Self::new(stream, pane, false)
+        let mut consumer = Self::new(stream, pane, false);
+        consumer.glyph_state_expected = endpoint.has_feature(protocol::FEATURE_GLYPH_STATE);
+        consumer
     }
 
     /// A persistent interactive shell on the real Linux PTY. The producer and
@@ -237,6 +242,7 @@ impl Consumer {
             text: Vec::new(),
             text_bytes: 0,
             needs_replay,
+            glyph_state_expected: false,
             resource_pixel_bytes: 0,
             graphics_wire_bytes: 0,
             select_packets: 0,
@@ -253,11 +259,13 @@ impl Consumer {
         let mut trace = VecDeque::new();
         let mut replayed = !self.needs_replay;
         let mut colors_replayed = !self.needs_replay;
+        let mut glyphs_replayed = !self.needs_replay || !self.glyph_state_expected;
         loop {
             let message = DaemonMsg::read(&mut self.stream).unwrap_or_else(|error| {
                 panic!("bounded real SSH consumer stream: {error}; events={trace:#?}")
             });
             let event = match &message {
+                DaemonMsg::GlyphState(bytes) => format!("GlyphState bytes={}", bytes.len()),
                 DaemonMsg::Graphics(frame) => format!("Graphics bytes={}", frame.len()),
                 DaemonMsg::Snapshot(bytes) => format!(
                     "Snapshot bytes={} marker={} tail(hex)={}",
@@ -347,11 +355,21 @@ impl Consumer {
                     }
                     self.state.apply_colors(frame);
                 }
+                DaemonMsg::GlyphState(bytes) => {
+                    let frame = lyrel_core::core::glyph_protocol::GlyphFrame::decode(&bytes)
+                        .expect("bounded production glyph snapshot");
+                    if let Some(previous) = &self.state.glyphs {
+                        assert!(frame.generation() >= previous.generation());
+                    }
+                    self.state.glyphs = Some(frame);
+                    self.state.glyph_snapshots += 1;
+                    glyphs_replayed = true;
+                }
                 DaemonMsg::Error(error) => panic!("remote consumer refused: {error}"),
                 DaemonMsg::Exited { code } => panic!("real Linux sender exited: {code:?}"),
                 _ => {}
             }
-            if replayed && colors_replayed && contains(&self.text, marker) {
+            if replayed && colors_replayed && glyphs_replayed && contains(&self.text, marker) {
                 self.needs_replay = false;
                 return trace;
             }
@@ -410,7 +428,7 @@ impl Consumer {
 }
 
 fn attach(fixture: &NativeSshFixture, pane: u64) -> Consumer {
-    let (mut stream, _) = fixture.connect_pane();
+    let (mut stream, endpoint) = fixture.connect_pane();
     ClientMsg::Attach {
         pane_id: pane,
         size: win_size(),
@@ -418,7 +436,9 @@ fn attach(fixture: &NativeSshFixture, pane: u64) -> Consumer {
     }
     .encode(&mut stream)
     .unwrap();
-    Consumer::new(stream, pane, true)
+    let mut consumer = Consumer::new(stream, pane, true);
+    consumer.glyph_state_expected = endpoint.has_feature(protocol::FEATURE_GLYPH_STATE);
+    consumer
 }
 
 /// One `/bin/sh` command line from the checked-in fixture's program and args.
@@ -1608,6 +1628,142 @@ fn native_ssh_recorded_sixel_survives_ring_eviction_and_fresh_consumer() {
     assert!(
         !contains(&fresh.text, b"\x1bPq"),
         "the original DCS never rides the fresh text replay"
+    );
+    assert_eq!(status(&host).pid, daemon.pid);
+    assert_eq!(host.peer().instance, instance);
+    fixture.kill_pane(pane_id);
+}
+
+// Real pinned SSH route -> Linux PTY -> authoritative GlyphState recovery.
+// This complements production GUI paint consumers; it does not claim GPU pixels.
+fn ssh_glyph_outline(width: i16, height: i16) -> Vec<u8> {
+    let mut bytes = Vec::new();
+    for word in [1, 0, 0, width, height, 3, 0] {
+        bytes.extend_from_slice(&word.to_be_bytes());
+    }
+    bytes.extend_from_slice(&[1; 4]);
+    for delta in [0, width, 0, -width, 0, 0, height, 0] {
+        bytes.extend_from_slice(&delta.to_be_bytes());
+    }
+    bytes
+}
+
+fn ssh_glyph_registration(cp: u32, glyf: &[u8], reply: u8) -> Vec<u8> {
+    format!(
+        "\x1b_25a1;r;cp={cp:x};fmt=glyf;upm=1000;width=2;reply={reply};{}\x1b\\",
+        base64(glyf)
+    )
+    .into_bytes()
+}
+
+#[test]
+#[ignore = "requires the updated fixture SSH endpoint with glyph-state, fixed public host pin, fixture identity, private Linux home and native Node; never silently skips"]
+fn native_ssh_glyphs_survive_sender_exit_ring_eviction_and_fresh_consumer() {
+    use lyrel_core::daemon::protocol::{FEATURE_GLYPH_REGISTRY, FEATURE_GLYPH_STATE};
+
+    let fixture = NativeSshFixture::start(Path::new(env!("CARGO_BIN_EXE_lyrel-server")));
+    let host = fixture.connect_control();
+    let daemon = status(&host);
+    let instance = host.peer().instance.clone();
+    let (probe, endpoint) = fixture.connect_pane();
+    assert_eq!(endpoint.protocol, protocol::PROTOCOL_VERSION);
+    for feature in [FEATURE_GLYPH_REGISTRY, FEATURE_GLYPH_STATE] {
+        assert!(
+            endpoint.has_feature(feature),
+            "actual remote endpoint lacks {feature}: {endpoint:?}"
+        );
+    }
+    eprintln!(
+        "ACTUAL_SSH_GLYPH_ENDPOINT build={} instance={} features={:?}",
+        endpoint.build, endpoint.instance, endpoint.features
+    );
+    drop(probe);
+
+    let mut pane = Consumer::spawn_shell(&fixture);
+    let pane_id = pane.pane;
+    let sender = fixture.install_sender(&host);
+    pane.type_into(format!("{}; echo SENDER_EXIT_$?\n", shell_line(&sender)).as_bytes());
+    pane.until(b"KITTY_READY");
+
+    const CP: u32 = 0x100000;
+    let original = ssh_glyph_outline(1000, 1000);
+    assert_eq!(
+        pane.send(&ssh_glyph_registration(CP, &original, 1), 1),
+        [b"\x1b_25a1;r;cp=100000;status=0\x1b\\".to_vec()]
+    );
+
+    let replacement = ssh_glyph_outline(2000, 500);
+    assert_eq!(
+        pane.send(&ssh_glyph_registration(CP, &replacement, 1), 1),
+        [b"\x1b_25a1;r;cp=100000;status=0\x1b\\".to_vec()]
+    );
+
+    // Reply-zero registration stays silent; clear removes only its own slot.
+    pane.quiet(&ssh_glyph_registration(CP + 1, &original, 0));
+    assert_eq!(
+        pane.send(b"\x1b_25a1;c;cp=100001\x1b\\", 1),
+        [b"\x1b_25a1;c;cp=100001;status=0\x1b\\".to_vec()]
+    );
+
+    // A hinted definition must not replace an accepted one or swallow text.
+    let mut hinted = original.clone();
+    hinted[12..14].copy_from_slice(&1u16.to_be_bytes());
+    hinted.push(0);
+    let mut refused = ssh_glyph_registration(CP, &hinted, 1);
+    refused.extend_from_slice(b"AFTER_REFUSED_GLYPH");
+    assert_eq!(
+        pane.send(&refused, 1),
+        [b"\x1b_25a1;r;cp=100000;status=1;reason=hinting_unsupported\x1b\\".to_vec()]
+    );
+    assert!(contains(&pane.text, b"AFTER_REFUSED_GLYPH"));
+
+    let produced = pane.stats();
+    assert!(sender_bytes(&produced) > 0);
+    eprintln!("ORIGINAL_GLYPH_SENDER_BEFORE_EXIT {produced}");
+    pane.type_into(b"EXIT\n");
+    pane.until(b"SENDER_EXIT_0");
+    eprintln!("ORIGINAL_GLYPH_SENDER_EXIT status=SENDER_EXIT_0");
+
+    let flood = fixture.install_script(
+        &host,
+        "ring_flood.mjs",
+        include_bytes!("../../../tests/support/ring_flood.mjs"),
+        Vec::new(),
+    );
+    pane.type_into(format!("{}; echo FLOOD_SHELL_EXIT_$?\n", shell_line(&flood)).as_bytes());
+    pane.until(b"FLOOD_SHELL_EXIT_0");
+    let flood_bytes = String::from_utf8_lossy(&pane.text)
+        .lines()
+        .find_map(|line| line.trim().strip_prefix("FLOOD_BYTES="))
+        .expect("one-shot flood byte counter")
+        .parse::<usize>()
+        .unwrap();
+    assert!(flood_bytes > 8 << 20);
+    eprintln!("ONE_SHOT_GLYPH_FLOOD_EXIT status=FLOOD_SHELL_EXIT_0 bytes={flood_bytes}");
+    pane.detach();
+
+    let mut fresh = attach(&fixture, pane_id);
+    fresh.until(b"FLOOD_SHELL_EXIT_0");
+    let restored = fresh
+        .state
+        .glyphs
+        .as_ref()
+        .expect("fresh consumer receives the authoritative glossary after replay");
+    assert_eq!(restored.glyphs().len(), 1);
+    let glyph = &restored.glyphs()[0];
+    assert_eq!((glyph.cp, glyph.upm, glyph.width), (CP, 1000, 2));
+    assert_eq!(glyph.glyf, replacement);
+    assert_eq!(fresh.state.glyph_snapshots, 1);
+    assert!(fresh.text_bytes >= RING_TAIL_FLOOR);
+    assert!(
+        !contains(&fresh.text, b"\x1b_25a1;r"),
+        "original registrations must have left the ring"
+    );
+    eprintln!(
+        "FRESH_GLYPH_CONSUMER snapshots={} text_bytes={} glyphs={}",
+        fresh.state.glyph_snapshots,
+        fresh.text_bytes,
+        fresh.state.glyphs.as_ref().unwrap().glyphs().len()
     );
     assert_eq!(status(&host).pid, daemon.pid);
     assert_eq!(host.peer().instance, instance);

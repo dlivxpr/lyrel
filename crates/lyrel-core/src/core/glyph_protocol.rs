@@ -198,8 +198,9 @@ impl GlyphFrame {
             };
             let mut pad = [0f32; 4];
             for slot in &mut pad {
-                let value =
-                    f32::from_bits(u32::from_le_bytes(frame_bytes(raw, &mut at, 4)?.try_into().ok()?));
+                let value = f32::from_bits(u32::from_le_bytes(
+                    frame_bytes(raw, &mut at, 4)?.try_into().ok()?,
+                ));
                 if !value.is_finite() || !(0.0..=1.0).contains(&value) {
                     return None;
                 }
@@ -534,7 +535,15 @@ impl GlyphSession {
         glyf_decode::decode(glyf).map_err(translate_decode)?;
         self.registry
             .get_or_insert_with(GlyphRegistry::new)
-            .register(cp, StoredPayload::Glyf { glyf: glyf.to_vec() }, upm, width, layout)
+            .register(
+                cp,
+                StoredPayload::Glyf {
+                    glyf: glyf.to_vec(),
+                },
+                upm,
+                width,
+                layout,
+            )
             .map(|_| ())
             .map_err(|_| RegisterError::OutOfNamespace)
     }
@@ -601,8 +610,9 @@ fn payload_sizes(payload: &StoredPayload) -> (usize, usize) {
     let StoredPayload::Glyf { glyf } = payload else {
         return (0, 0);
     };
-    let decoded = glyf_decode::peek_point_count(glyf)
-        .map_or(MAX_GLYF_BYTES, |points| points.saturating_mul(DECODED_BYTES_PER_POINT));
+    let decoded = glyf_decode::peek_point_count(glyf).map_or(MAX_GLYF_BYTES, |points| {
+        points.saturating_mul(DECODED_BYTES_PER_POINT)
+    });
     (glyf.len(), decoded)
 }
 

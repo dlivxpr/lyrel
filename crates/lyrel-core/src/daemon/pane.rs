@@ -569,7 +569,13 @@ impl DaemonPane {
         admission: GraphicsReplayAdmission,
         pane_colors: bool,
     ) -> Result<Option<u64>, String> {
-        self.observe_admitted_with_colors_and_glyphs(subscriber, gate, admission, pane_colors, false)
+        self.observe_admitted_with_colors_and_glyphs(
+            subscriber,
+            gate,
+            admission,
+            pane_colors,
+            false,
+        )
     }
 
     pub fn observe_admitted_with_colors_and_glyphs(
@@ -1765,14 +1771,7 @@ fn observe_subscriber(
     foreground_command: bool,
     pane_colors: bool,
 ) -> u64 {
-    observe_subscriber_with_features(
-        st,
-        observer,
-        gate,
-        foreground_command,
-        pane_colors,
-        false,
-    )
+    observe_subscriber_with_features(st, observer, gate, foreground_command, pane_colors, false)
 }
 
 fn observe_subscriber_with_features(
