@@ -1,7 +1,8 @@
 use super::super::test_support::{drain, test_state};
 use super::super::{
-    attach_subscriber, attach_subscriber_with_permissions, fan_out_output, notify,
-    observe_subscriber, record_output,
+    attach_subscriber, attach_subscriber_with_permissions,
+    attach_subscriber_with_permissions_and_colors, fan_out_output, notify, observe_subscriber,
+    record_output,
 };
 use super::*;
 use std::path::PathBuf;
@@ -246,7 +247,7 @@ fn observers_are_told_the_pane_modes_as_well() {
     record_output(&mut st, &vec![b'.'; RING_CAP]);
 
     let (tx, rx) = mpsc::channel();
-    observe_subscriber(&mut st, tx, Arc::new(OutputGate::new()), false, false);
+    observe_subscriber(&mut st, tx, Arc::new(OutputGate::new()), false);
     assert!(matches!(rx.try_recv(), Ok(DaemonMsg::Snapshot(b)) if b == b"\x1b[?1049h"));
 }
 
@@ -276,7 +277,7 @@ fn observe_replays_state_without_displacing_the_controller() {
     drain(&controller_rx);
 
     let (observer_tx, observer_rx) = mpsc::channel();
-    let id = observe_subscriber(&mut st, observer_tx, Arc::new(OutputGate::new()), false, false);
+    let id = observe_subscriber(&mut st, observer_tx, Arc::new(OutputGate::new()), false);
     assert_eq!(
         st.subscriptions.subscriber_epoch, epoch,
         "observing must not bump the controller epoch"
@@ -528,4 +529,42 @@ fn a_draining_observer_under_the_cap_stays_subscribed() {
         "an observer that keeps draining must stay subscribed"
     );
     assert_eq!(got, sends * chunk.len(), "and must miss no bytes");
+}
+
+/// The colour layer is session state, not a copy of the replay ring: a
+/// consumer that opts in gets a snapshot even when the ring no longer holds
+/// the OSC that set it, and an older set inside the ring cannot resurrect a
+/// slot that was reset later because replay never mutates the layer.
+#[test]
+fn a_colour_snapshot_is_replayed_without_its_original_ring_bytes() {
+    use crate::core::pane_colors::{ColorFrame, PaneColors};
+
+    let mut st = test_state(true);
+    st.graphics
+        .as_mut()
+        .unwrap()
+        .restore_colors(PaneColors::from_sparse([
+            (1, [0x11, 0x22, 0x33]),
+            (crate::core::pane_colors::DEFAULT_BG, [0x10, 0x11, 0x12]),
+        ]));
+    record_output(&mut st, b"a ring that never carried the OSC set");
+
+    let (tx, rx) = mpsc::channel();
+    attach_subscriber_with_permissions_and_colors(&mut st, tx, &OutputGate::new(), false, false, true);
+    let messages = drain(&rx);
+    let frame = messages
+        .iter()
+        .find_map(|msg| match msg {
+            DaemonMsg::Colors(bytes) => Some(ColorFrame::decode(bytes).expect("decodable frame")),
+            _ => None,
+        })
+        .expect("an opted-in attach receives the colour projection");
+    assert!(frame.is_snapshot());
+    let mut colors = PaneColors::default();
+    frame.apply(&mut colors);
+    assert_eq!(colors.get(1), Some([0x11, 0x22, 0x33]));
+    assert_eq!(
+        colors.get(crate::core::pane_colors::DEFAULT_BG),
+        Some([0x10, 0x11, 0x12])
+    );
 }

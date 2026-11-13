@@ -1018,7 +1018,7 @@ impl DaemonPane {
         // this order.
         let foreground_command = self.backend.foreground_command_running();
         let mut st = self.state.lock().unwrap();
-        let epoch = attach_subscriber_with_permissions(
+        let epoch = attach_subscriber_with_permissions_and_colors(
             &mut st,
             subscriber,
             &self.gate,
@@ -1086,7 +1086,7 @@ impl DaemonPane {
     ) -> u64 {
         let foreground_command = self.backend.foreground_command_running();
         let mut st = self.state.lock().unwrap();
-        let id = observe_subscriber(&mut st, observer, gate, foreground_command, pane_colors);
+        let id = observe_subscriber_with_colors(&mut st, observer, gate, foreground_command, pane_colors);
         let nudge = redraw_nudge(
             &mut st,
             self.runs_foreground_program(foreground_command),
@@ -1510,7 +1510,7 @@ fn run_redraw_nudge(
 
 #[cfg(test)]
 fn attach_subscriber(st: &mut PaneState, subscriber: Sender<DaemonMsg>) -> u64 {
-    attach_subscriber_with_permissions(st, subscriber, &OutputGate::new(), false, false, false)
+    attach_subscriber_with_permissions(st, subscriber, &OutputGate::new(), false, false)
 }
 
 /// Composition only: replay inputs are borrowed under the existing pane lock.
@@ -1540,6 +1540,23 @@ fn attach_subscriber_with_permissions(
     gate: &OutputGate,
     allow_remote_clipboard_write: bool,
     foreground_command: bool,
+) -> u64 {
+    attach_subscriber_with_permissions_and_colors(
+        st,
+        subscriber,
+        gate,
+        allow_remote_clipboard_write,
+        foreground_command,
+        false,
+    )
+}
+
+fn attach_subscriber_with_permissions_and_colors(
+    st: &mut PaneState,
+    subscriber: impl Into<Arc<Sender<DaemonMsg>>>,
+    gate: &OutputGate,
+    allow_remote_clipboard_write: bool,
+    foreground_command: bool,
     pane_colors: bool,
 ) -> u64 {
     let (subscriptions, graphics, replay) = st.subscription_parts();
@@ -1555,6 +1572,15 @@ fn attach_subscriber_with_permissions(
 }
 
 fn observe_subscriber(
+    st: &mut PaneState,
+    observer: impl Into<Arc<Sender<DaemonMsg>>>,
+    gate: Arc<OutputGate>,
+    foreground_command: bool,
+) -> u64 {
+    observe_subscriber_with_colors(st, observer, gate, foreground_command, false)
+}
+
+fn observe_subscriber_with_colors(
     st: &mut PaneState,
     observer: impl Into<Arc<Sender<DaemonMsg>>>,
     gate: Arc<OutputGate>,
