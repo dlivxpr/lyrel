@@ -478,7 +478,7 @@ Windows 后台检查点 `90e87948`：共享 metadata 压力／RIS 身份退役 1
 
 WSL 检查点 `897d7c90` 使用原生 Linux Rust/Cargo 1.99.1、Node 22.22.1 与 MIT Kerberos，完整 features 的 headless workspace 构建通过；iTerm2 8 项与 shared handoff 1 项均通过。真实 Windows → 产品 SSH router → 同源 Linux pane19 后端的恢复用例也通过：测试消费者 `6d49660f` 仅补齐 PNG 接收端解码 oracle，原 server 仍为 `897d7c90`；原发送进程真实退出后，独立进程输出 9,218,400 bytes 并退出，全新 consumer 恢复 2 placements、8,388,608 bytes 回放及相同 PNG 像素／几何，daemon PID／instance 不变。此为 1 项实际 SSH 用例，不是仅编译，也不重发图片或在桌面解释远端文件名。
 
-Windows 原生窗口像素、最终统一候选的完整 WSL／组合验收和含修复的 macOS CI 仍待分别记录，不用后台 GUI、旧候选或单项 SSH 结果替代。
+含修复的 [macOS CI 检查点](https://github.com/dlivxpr/lyrel/actions/runs/43498186030) 已实际运行：PR checkout 为 `c4651347`（head `897d7c90`），9 项 iTerm2 生产消费者全部通过，桌面 library 为 3,103 passed／0 failed／35 ignored。该轮 CI 仍因独立的新 shell Glyph 回显 oracle 失败而非全绿，不能把单项修复写成完整 CI 通过。Windows 原生窗口像素、最终统一候选的完整 WSL／组合验收仍待记录，不用后台 GUI、旧候选、字体消费者或单项 SSH 结果替代，也不据此宣称 macOS 实窗验收通过。
 
 发现（discovery）结论：不为静态 iTerm2 适配器伪造 terminfo capability、DA1 attribute 或 `XTSMGRAPHICS` item；`XTGETTCAP` 白名单继续只回答已验证的 `Co`／`colors`／`RGB`。[官方 feature reporting](https://iterm2.com/feature-reporting/) 的 `FILE` 能力涵盖文件下载及其他媒体形式，本实现仅支持静态 inline PNG/JPEG，不广告该广泛能力，也不冒充 iTerm.app。pane 协议从 `19` 起携带 `display_width`／`display_height`；实际连接仍须满足当前版本与 endpoint 的协商要求，不能拿本机 GUI 版本代替远端身份。旧后端必须明确提示更新，不静默降级、不自动替换已运行的 server 或重启会话。本节不宣称 macOS 原生行为已经验收。
 
