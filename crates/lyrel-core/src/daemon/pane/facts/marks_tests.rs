@@ -510,7 +510,14 @@ fn a_finished_or_waiting_turn_keeps_its_reconnect_and_resume_identity() {
         assert_eq!(facts.launch_argv, Some(vec!["omp".into()]));
         assert!(facts.session_scope.is_some());
         let (tx, rx) = mpsc::channel();
-        attach_subscriber_with_permissions(&mut state, tx, &OutputGate::new(), false, true);
+        attach_subscriber_with_permissions(
+            &mut state,
+            tx,
+            &OutputGate::new(),
+            false,
+            true,
+            false,
+        );
         let replay: Vec<_> = rx.try_iter().collect();
         assert!(
             replay
@@ -601,7 +608,14 @@ fn a_replay_does_not_claim_a_prompt_while_a_program_owns_the_pane() {
     st.ring.append(b"\x1b[?1049h\x1b[2Jthe agent's screen");
 
     let (tx, rx) = mpsc::channel();
-    attach_subscriber_with_permissions(&mut st, tx, &OutputGate::new(), false, true);
+    attach_subscriber_with_permissions(
+        &mut st,
+        tx,
+        &OutputGate::new(),
+        false,
+        true,
+        false,
+    );
 
     let replayed = drain(&rx);
     let prompt = replayed
@@ -642,7 +656,14 @@ fn a_replay_still_reports_a_prompt_when_the_shell_owns_the_pane() {
     st.ring.append(b"\x1b[?1049hstranded alt screen");
 
     let (tx, rx) = mpsc::channel();
-    attach_subscriber_with_permissions(&mut st, tx, &OutputGate::new(), false, false);
+    attach_subscriber_with_permissions(
+        &mut st,
+        tx,
+        &OutputGate::new(),
+        false,
+        false,
+        false,
+    );
 
     assert!(
         drain(&rx).iter().any(|msg| matches!(

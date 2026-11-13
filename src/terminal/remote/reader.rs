@@ -234,6 +234,7 @@ impl FrameReader {
             clipboard_write_busy,
             local_conpty,
             color_scheme_updates,
+            colors,
         } = signals;
         let mut awaiting_replay = awaiting_replay;
         proxy.parse_state.presentation.lock().unwrap().cursor = None;
@@ -316,6 +317,7 @@ impl FrameReader {
                                 cuts,
                                 Some(&proxy.parse_state.history_limit),
                                 Some(&proxy.parse_state.presentation),
+                                Some(colors.as_ref()),
                                 &quit,
                                 |term, cut| {
                                     cuts_left -= 1;
@@ -503,6 +505,7 @@ impl FrameReader {
                             cuts,
                             Some(&proxy.parse_state.history_limit),
                             Some(&proxy.parse_state.presentation),
+                            None,
                             &quit,
                             |term, cut| match cut {
                                 ReaderCut::Command(mark) => command_cursor.apply(term, mark),
@@ -549,6 +552,24 @@ impl FrameReader {
                         modes.take_color_scheme_queries();
                         report_scheme = true;
                         proxy.send(PaneEvent::Wakeup);
+                    }
+                    DaemonMsg::Colors(frame) => {
+                        flush_batch!();
+                        match lyrel_core::core::pane_colors::ColorFrame::decode(&frame) {
+                            Some(frame) => {
+                                frame.apply(
+                                    &mut colors
+                                        .lock()
+                                        .unwrap_or_else(|poison| poison.into_inner()),
+                                );
+                                proxy.send(PaneEvent::ColorChanged);
+                                proxy.send(PaneEvent::Wakeup);
+                            }
+                            None => log::warn!(
+                                "ignoring an undecodable pane colour frame ({} bytes)",
+                                frame.len()
+                            ),
+                        }
                     }
                     DaemonMsg::Output(bytes) => {
                         // Live output only ever follows the whole
@@ -1091,6 +1112,7 @@ fn feed_grid<T: EventListener + Clone>(
     cuts: Vec<(usize, ReaderCut)>,
     history_limit: Option<&AtomicUsize>,
     presentation: Option<&Mutex<crate::terminal::presentation::ParsePresentation>>,
+    colors: Option<&Mutex<lyrel_core::core::pane_colors::PaneColors>>,
     quit: &AtomicBool,
     mut on_cut: impl FnMut(&mut Crosswords<T>, ReaderCut),
 ) -> Option<std::time::Duration> {
@@ -1122,7 +1144,8 @@ fn feed_grid<T: EventListener + Clone>(
                     keyboard,
                     history_limit.map(|limit| limit.load(Ordering::Relaxed)),
                 )
-                .with_presentation(presentation);
+                .with_presentation(presentation)
+                .with_colors(colors);
                 processor.advance(&mut bridge, &bytes[at..end]);
             }
             held += end - at;
