@@ -744,10 +744,65 @@ fn glyph_polygon(points: &[(i16, i16)]) -> Vec<u8> {
     out
 }
 
+#[allow(dead_code)]
 fn glyph_register(cp: u32, glyf: &[u8], reply: u8) -> Vec<u8> {
+    glyph_register_with(cp, glyf, 1000, "", reply)
+}
+
+/// A registration with the §8.5 control keys the caller writes verbatim.
+/// `params` is a semicolon-separated list without a trailing separator.
+#[allow(dead_code)]
+fn glyph_register_with(cp: u32, glyf: &[u8], upm: u16, params: &str, reply: u8) -> Vec<u8> {
     use base64::Engine as _;
     let payload = base64::engine::general_purpose::STANDARD.encode(glyf);
-    format!("\x1b_25a1;r;cp={cp:x};fmt=glyf;reply={reply};upm=1000;{payload}\x1b\\").into_bytes()
+    let params = params.trim_end_matches(';');
+    let separator = if params.is_empty() { "" } else { ";" };
+    format!(
+        "\x1b_25a1;r;cp={cp:x};fmt=glyf;reply={reply};upm={upm};{params}{separator}{payload}\x1b\\"
+    )
+    .into_bytes()
+}
+
+/// Send one registration through the real PTY and require the daemon's
+/// success reply.
+#[allow(dead_code)]
+fn glyph_register_ok(
+    view: &Entity<TerminalView>,
+    cx: &mut TestAppContext,
+    serial: usize,
+    reply_path: &std::path::Path,
+    cp: u32,
+    glyf: &[u8],
+    upm: u16,
+    params: &str,
+) {
+    let reply = glyph_send(
+        view,
+        cx,
+        serial,
+        reply_path,
+        &glyph_register_with(cp, glyf, upm, params, 1),
+        1,
+    );
+    assert_eq!(
+        reply,
+        format!("\x1b_25a1;r;cp={cp:x};status=0\x1b\\").into_bytes(),
+        "registration rejected: {params}"
+    );
+}
+
+/// Place text at a zero-based row/column through the real PTY fixture.
+#[allow(dead_code)]
+fn glyph_show(
+    view: &Entity<TerminalView>,
+    cx: &mut TestAppContext,
+    serial: usize,
+    row: usize,
+    col: usize,
+    text: &str,
+) {
+    let bytes = format!("\x1b[{};{}H{text}", row + 1, col + 1).into_bytes();
+    graphics_send_fixture(view, cx, serial, &bytes);
 }
 
 fn glyph_query(cp: u32) -> Vec<u8> {
@@ -794,6 +849,21 @@ fn glyph_cell_bounds(
     row: usize,
     col: usize,
 ) -> gpui_kit::Bounds<gpui_kit::ScaledPixels> {
+    glyph_region_bounds(window, view, cx, row, col, 1)
+}
+
+/// The declared render span of a registration, in the scaled pixels the
+/// painted scene records. `cells` is the span the production code chose, so
+/// a width-two registration that fell back to one cell asks for one here.
+#[allow(dead_code)]
+fn glyph_region_bounds(
+    window: gpui_kit::AnyWindowHandle,
+    view: &Entity<TerminalView>,
+    cx: &mut TestAppContext,
+    row: usize,
+    col: usize,
+    cells: usize,
+) -> gpui_kit::Bounds<gpui_kit::ScaledPixels> {
     let geom = view.read_with(cx, |view, _| view.cell_geom.expect("production frame"));
     let scale = window
         .update(cx, |_, window, _| window.scale_factor())
@@ -803,9 +873,23 @@ fn glyph_cell_bounds(
             geom.origin.x + geom.cell_width * col as f32,
             geom.origin.y + geom.line_height * row as f32,
         ),
-        gpui_kit::size(geom.cell_width, geom.line_height),
+        gpui_kit::size(geom.cell_width * cells as f32, geom.line_height),
     )
     .map(|pixel| gpui_kit::ScaledPixels(pixel.as_f32() * scale))
+}
+
+/// Whether two painted rectangles land on the same pixels within the
+/// fractional layout and tessellation tolerance of one physical pixel.
+#[allow(dead_code)]
+fn glyph_bounds_close(
+    left: gpui_kit::Bounds<gpui_kit::ScaledPixels>,
+    right: gpui_kit::Bounds<gpui_kit::ScaledPixels>,
+) -> bool {
+    let close = |a: f32, b: f32| (a - b).abs() <= 1.5;
+    close(left.origin.x.0, right.origin.x.0)
+        && close(left.origin.y.0, right.origin.y.0)
+        && close(left.size.width.0, right.size.width.0)
+        && close(left.size.height.0, right.size.height.0)
 }
 
 /// Renders one production frame and returns the path primitives that land
@@ -832,6 +916,38 @@ fn glyph_paths_in_cell(
                     visible.size.width.0 > 0. && visible.size.height.0 > 0.
                 })
                 .map(|path| (path.bounds, path.color))
+                .collect()
+        })
+        .unwrap()
+}
+
+/// The same production paths, with the content mask that the renderer clips
+/// them to. A glyph's declared span is that mask, so a test can prove the
+/// visible extent even when the path geometry itself runs past it.
+#[allow(dead_code)]
+fn glyph_paths_with_clip_in_region(
+    window: gpui_kit::AnyWindowHandle,
+    _view: &Entity<TerminalView>,
+    cx: &mut TestAppContext,
+    region: gpui_kit::Bounds<gpui_kit::ScaledPixels>,
+) -> Vec<(
+    gpui_kit::Bounds<gpui_kit::ScaledPixels>,
+    gpui_kit::Bounds<gpui_kit::ScaledPixels>,
+    gpui_kit::Background,
+)> {
+    window
+        .update(cx, |_, window, cx| {
+            window.simulate_next_frame(cx);
+            window.render_frame(cx);
+            window
+                .painted_scene()
+                .paths
+                .iter()
+                .filter(|path| {
+                    let visible = path.bounds.intersect(&region);
+                    visible.size.width.0 > 0. && visible.size.height.0 > 0.
+                })
+                .map(|path| (path.bounds, path.content_mask.bounds, path.color))
                 .collect()
         })
         .unwrap()

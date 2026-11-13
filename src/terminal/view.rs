@@ -3348,6 +3348,7 @@ mod gpui_tests {
 
     include!("graphics_consumer_tests.rs");
     include!("glyph_consumer_tests.rs");
+    include!("glyph_retained_consumer_tests.rs");
     include!("color_override_consumer_tests.rs");
     include!("xtgettcap_consumer_tests.rs");
     include!("progress_consumer_tests.rs");
