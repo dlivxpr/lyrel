@@ -198,7 +198,7 @@ fn xterm_mods(m: &gpui_kit::Modifiers) -> u32 {
 
 fn encode_kitty(ks: &gpui_kit::Keystroke, kitty: KeyFlags, kind: KeyEventType) -> Option<Vec<u8>> {
     let m = &ks.modifiers;
-    let mods = xterm_mods(m);
+    let mods = xterm_mods(m) + 8 * u32::from(m.platform);
     let event = (kitty.report_events && kind != KeyEventType::Press).then_some(kind as u8);
 
     if ks.key.as_str() == "escape" {
@@ -524,6 +524,79 @@ mod tests {
         assert_eq!(
             keystroke_to_bytes(&Keystroke::parse("ctrl-q").unwrap(), flags),
             Some(b"\x1b[113;5u".to_vec())
+        );
+    }
+
+    #[test]
+    fn negotiated_keyboard_event_forms_and_release_exceptions_match_the_protocol() {
+        use super::{KeyEventType, key_event_to_bytes, key_release_to_bytes};
+        let flags = KeyFlags::from_mode(&Mode::REPORT_EVENT_TYPES);
+        for (chord, repeat, release) in [
+            ("up", b"\x1b[1;1:2A".as_slice(), b"\x1b[1;1:3A".as_slice()),
+            ("f1", b"\x1b[1;1:2P".as_slice(), b"\x1b[1;1:3P".as_slice()),
+            ("f3", b"\x1b[13;1:2~".as_slice(), b"\x1b[13;1:3~".as_slice()),
+            (
+                "f13",
+                b"\x1b[57376;1:2u".as_slice(),
+                b"\x1b[57376;1:3u".as_slice(),
+            ),
+            (
+                "ctrl-q",
+                b"\x1b[113;5:2u".as_slice(),
+                b"\x1b[113;5:3u".as_slice(),
+            ),
+        ] {
+            let key = Keystroke::parse(chord).unwrap();
+            assert_eq!(
+                key_event_to_bytes(&key, flags, KeyEventType::Repeat),
+                Some((repeat.to_vec(), true))
+            );
+            assert_eq!(key_release_to_bytes(&key, flags).as_deref(), Some(release));
+            let legacy = KeyFlags::default();
+            assert_eq!(
+                key_event_to_bytes(&key, legacy, KeyEventType::Repeat).map(|(bytes, _)| bytes),
+                keystroke_to_bytes(&key, legacy)
+            );
+            assert_eq!(key_release_to_bytes(&key, legacy), None);
+        }
+        for chord in [
+            "enter",
+            "shift-enter",
+            "tab",
+            "shift-tab",
+            "backspace",
+            "ctrl-backspace",
+        ] {
+            assert_eq!(
+                key_release_to_bytes(&Keystroke::parse(chord).unwrap(), flags),
+                None
+            );
+        }
+        let release = ks(
+            Modifiers {
+                platform: true,
+                ..Default::default()
+            },
+            "q",
+            None,
+        );
+        assert_eq!(
+            key_release_to_bytes(&release, flags),
+            Some(b"\x1b[113;9:3u".to_vec())
+        );
+        let flags = KeyFlags::from_mode(
+            &(Mode::REPORT_EVENT_TYPES
+                | Mode::REPORT_ALL_KEYS_AS_ESC
+                | Mode::REPORT_ASSOCIATED_TEXT),
+        );
+        let text = ks(Modifiers::default(), "a", Some("a"));
+        assert_eq!(
+            key_event_to_bytes(&text, flags, KeyEventType::Repeat),
+            Some((b"\x1b[97;1:2;97u".to_vec(), true))
+        );
+        assert_eq!(
+            key_release_to_bytes(&text, flags),
+            Some(b"\x1b[97;1:3u".to_vec())
         );
     }
 
