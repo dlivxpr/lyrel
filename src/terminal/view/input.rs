@@ -359,7 +359,7 @@ impl TerminalView {
         }
         if !self.frame_input_active()
             && self.selection_scroll.reading.is_none()
-            && self.key_flags().reports_events()
+            && self.frame.keyboard_events
         {
             context.add("keyboard_events");
         }
