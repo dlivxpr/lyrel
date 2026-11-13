@@ -24,8 +24,8 @@ fn generator_results_merge_filter_select_and_accept_the_live_word(cx: &mut TestA
             }
             assert_eq!(shown(view), ["main", "mainline"]);
             assert!(view.render_completion_menu(cx).is_some());
-            view.handle_editor_key(&key("down"), cx);
-            view.handle_editor_key(&key("enter"), cx);
+            view.handle_editor_key(&key("down"), false, cx);
+            view.handle_editor_key(&key("enter"), false, cx);
             assert_eq!(view.input.editor().text(), "git checkout mainline ");
             type_char(view, "x", window, cx);
             assert_eq!(view.input.editor().text(), "git checkout mainline x");
@@ -81,7 +81,7 @@ fn canceled_generators_never_reopen_or_replace_a_new_menu(cx: &mut TestAppContex
         .update(cx, |view, _, cx| {
             view.input.editor_mut().set("git checkout ");
             let (stale, _) = generator_request(view, cwd.path());
-            view.handle_editor_key(&key("escape"), cx);
+            view.handle_editor_key(&key("escape"), false, cx);
             let context = view.completion_context();
             view.completion
                 .merge(stale, context, view.input.editor(), parsed(&["old"]));
@@ -93,7 +93,7 @@ fn canceled_generators_never_reopen_or_replace_a_new_menu(cx: &mut TestAppContex
             view.completion
                 .merge(stale, context, view.input.editor(), parsed(&["old"]));
             assert_eq!(shown(view), ["/work/one", "/work/two"]);
-            view.handle_editor_key(&key("enter"), cx);
+            view.handle_editor_key(&key("enter"), false, cx);
             assert_eq!(view.input.editor().text(), "zzqqx /work/one ");
         })
         .unwrap();
@@ -163,9 +163,9 @@ fn earlier_input_cancellation_and_host_results_cannot_replace_current_suggestion
                 match change {
                     0 => {
                         type_char(view, "x", window, cx);
-                        view.handle_editor_key(&key("backspace"), cx);
+                        view.handle_editor_key(&key("backspace"), false, cx);
                     }
-                    1 => view.handle_editor_key(&key("escape"), cx),
+                    1 => view.handle_editor_key(&key("escape"), false, cx),
                     _ => {
                         view.host_id = crate::ui::host_ops::HostId::from_connection_key(
                             "ssh-direct:other-completion-box:22",
@@ -180,7 +180,7 @@ fn earlier_input_cancellation_and_host_results_cannot_replace_current_suggestion
                 );
                 view.remote_path_results(current, Ok(entries(&["one", "two"], false)), cx);
                 assert_eq!(shown(view), ["/work/one", "/work/two"]);
-                view.handle_editor_key(&key("enter"), cx);
+                view.handle_editor_key(&key("enter"), false, cx);
                 assert_eq!(view.input.editor().text(), "zzqqx /work/one ");
             }
         })
@@ -199,7 +199,7 @@ fn a_late_remote_listing_leaves_a_line_the_editor_no_longer_owns_alone(cx: &mut 
         .update(cx, |view, _, cx| {
             view.input.editor_mut().set("zzqqx /work/");
             let stale = remote_request(view);
-            view.handle_editor_key(&key("ctrl-t"), cx);
+            view.handle_editor_key(&key("ctrl-t"), false, cx);
             view.remote_path_results(stale, Ok(Vec::new()), cx);
             assert_eq!(view.input.editor().text(), "");
             assert!(view.render_completion_menu(cx).is_none());

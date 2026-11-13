@@ -687,12 +687,15 @@ impl TerminalView {
                         view.agent_activity
                             .focused((view.host_id, view.pane_id), cx);
                     } else {
+                        view.input.forget_keys();
                         view.input.unmark();
                     }
                     view.report_focus_change(focused);
                 },
                 foreground: |view, window, cx| view.poll_foreground(window, cx),
+                deactivate: |view| view.input.forget_keys(),
                 detach: |view| {
+                    view.input.forget_keys();
                     view.grid_snap = None;
                     view.selection_scroll.clear_scrollback();
                     view.terminal.detach_link();
@@ -985,6 +988,7 @@ impl TerminalView {
         cell_h: u16,
         cx: &mut Context<Self>,
     ) -> anyhow::Result<()> {
+        self.input.forget_keys();
         self.remote_clipboard_write_generation =
             self.remote_clipboard_write_generation.wrapping_add(1);
         self.remote_clipboard_write_in_flight = None;

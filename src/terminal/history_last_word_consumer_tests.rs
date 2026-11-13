@@ -19,13 +19,13 @@ fn meta_dot_walks_back_through_the_last_words(cx: &mut TestAppContext) {
                 .collect());
             view.input.editor_mut().set("ls ");
 
-            view.handle_editor_key(&meta_dot, cx);
+            view.handle_editor_key(&meta_dot, false, cx);
             assert_eq!(view.input.editor().text(), "ls world", "newest entry's last word");
-            view.handle_editor_key(&meta_dot, cx);
+            view.handle_editor_key(&meta_dot, false, cx);
             assert_eq!(view.input.editor().text(), "ls --release", "repeat steps one back");
-            view.handle_editor_key(&meta_dot, cx);
+            view.handle_editor_key(&meta_dot, false, cx);
             assert_eq!(view.input.editor().text(), "ls status");
-            view.handle_editor_key(&meta_dot, cx);
+            view.handle_editor_key(&meta_dot, false, cx);
             assert_eq!(view.input.editor().text(), "ls status");
             assert_eq!(view.input.editor().cursor(), "ls status".chars().count());
         })
@@ -50,11 +50,11 @@ fn an_intervening_key_restarts_the_last_word_walk(cx: &mut TestAppContext) {
                 .map(String::from)
                 .collect());
 
-            view.handle_editor_key(&meta_dot, cx);
+            view.handle_editor_key(&meta_dot, false, cx);
             assert_eq!(view.input.editor().text(), "world");
-            view.handle_editor_key(&key("left"), cx);
-            view.handle_editor_key(&key("end"), cx);
-            view.handle_editor_key(&meta_dot, cx);
+            view.handle_editor_key(&key("left"), false, cx);
+            view.handle_editor_key(&key("end"), false, cx);
+            view.handle_editor_key(&meta_dot, false, cx);
             assert_eq!(
                 view.input.editor().text(),
                 "worldworld",
@@ -90,10 +90,10 @@ fn an_intervening_ime_commit_restarts_the_last_word_walk(cx: &mut TestAppContext
                 .map(String::from)
                 .collect());
 
-            view.handle_editor_key(&meta_dot, cx);
+            view.handle_editor_key(&meta_dot, false, cx);
             assert_eq!(view.input.editor().text(), "world");
             view.commit_text("x", cx);
-            view.handle_editor_key(&meta_dot, cx);
+            view.handle_editor_key(&meta_dot, false, cx);
             assert_eq!(
                 view.input.editor().text(),
                 "worldxworld",
@@ -124,13 +124,13 @@ fn meta_dot_over_a_selection_records_where_the_word_landed(cx: &mut TestAppConte
             view.input.editor_mut().set_cursor(3);
             view.input.editor_mut().extend_to(6);
 
-            view.handle_editor_key(&meta_dot, cx);
+            view.handle_editor_key(&meta_dot, false, cx);
             assert_eq!(
                 view.input.editor().text(),
                 "ls world",
                 "the word replaced the selection"
             );
-            view.handle_editor_key(&meta_dot, cx);
+            view.handle_editor_key(&meta_dot, false, cx);
             assert_eq!(
                 view.input.editor().text(),
                 "ls --release",

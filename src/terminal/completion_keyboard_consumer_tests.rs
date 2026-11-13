@@ -42,7 +42,7 @@ fn a_candidate_needing_escapes_is_never_half_applied(cx: &mut TestAppContext) {
         assert_eq!(view.input.editor().text(), "cd My", "the unsafe common prefix stays out of the input");
         assert_eq!(shown(view), ["My Music", "My Documents"]);
         assert!(view.render_completion_menu(cx).is_some());
-        view.handle_editor_key(&key("enter"), cx);
+        view.handle_editor_key(&key("enter"), false, cx);
         assert_eq!(view.input.editor().text(), "cd 'My Music'/");
         type_char(view, "x", window, cx);
         assert_eq!(view.input.editor().text(), "cd 'My Music'/x");
@@ -65,14 +65,14 @@ fn insert_newline_action_closes_the_completion_menu_but_enter_still_accepts(cx: 
         view.input.editor_mut().set("zzqqx /work/");
         let request = remote_request(view);
         view.remote_path_results(request, Ok(entries(&["one", "two"], false)), cx);
-        view.handle_editor_key(&key("down"), cx);
-        view.handle_editor_key(&key("enter"), cx);
+        view.handle_editor_key(&key("down"), false, cx);
+        view.handle_editor_key(&key("enter"), false, cx);
         assert_eq!(view.input.editor().text(), "zzqqx /work/two ");
         type_char(view, "x", window, cx);
         assert_eq!(view.input.editor().text(), "zzqqx /work/two x");
     }).unwrap();
     assert_eq!(next_input_until_timeout(&mut daemon), None);
-    window.update(cx, |view, _, cx| view.handle_editor_key(&key("enter"), cx)).unwrap();
+    window.update(cx, |view, _, cx| view.handle_editor_key(&key("enter"), false, cx)).unwrap();
     assert_eq!(next_input_until_timeout(&mut daemon), Some(b"zzqqx /work/two x\r".to_vec()));
 }
 

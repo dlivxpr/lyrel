@@ -5,56 +5,102 @@ use gpui_kit::InputHandler;
 #[gpui_kit::test]
 fn ime_mark_commit_blur_and_resize_preserve_the_current_input_owner(cx: &mut TestAppContext) {
     let (window, terminal, mut daemon) = rooted_harness(cx);
-    DaemonMsg::Prompt { active: true, at_prompt: true, last_exit: None }.encode(&mut daemon).unwrap();
+    DaemonMsg::Prompt {
+        active: true,
+        at_prompt: true,
+        last_exit: None,
+    }
+    .encode(&mut daemon)
+    .unwrap();
     let mut ready = false;
     for _ in 0..200 {
         cx.run_until_parked();
-        ready = window.update(cx, |_, _, cx| terminal.read(cx).input_active()).unwrap();
-        if ready { break; }
+        ready = window
+            .update(cx, |_, _, cx| terminal.read(cx).input_active())
+            .unwrap();
+        if ready {
+            break;
+        }
         std::thread::sleep(std::time::Duration::from_millis(5));
     }
     assert!(ready, "the real pane prompt reaches the editor");
     let mut handler = TerminalInputHandler::new(terminal.clone(), None);
-    let _blur_target = window.update(cx, |_, window, cx| {
-        terminal.update(cx, |view, cx| view.focus_handle.focus(window, cx));
-        handler.replace_and_mark_text_in_range(None, "ni😀", None, window, cx);
-        assert_eq!(handler.marked_text_range(window, cx), Some(0..4));
-        assert_eq!(terminal.read(cx).input.editor().text(), "");
-        terminal.update(cx, |view, cx| view.set_grid_size(40, 12, px(8.), px(17.), 1., cx));
-        assert_eq!(handler.marked_text_range(window, cx), Some(0..4), "resize does not commit a preedit");
-        handler.replace_text_in_range(None, "你好😀", window, cx);
-        assert_eq!(handler.marked_text_range(window, cx), None);
-        assert_eq!(terminal.read(cx).input.editor().text(), "你好😀");
-        handler.replace_and_mark_text_in_range(None, "discard", None, window, cx);
-        let other = cx.focus_handle();
-        other.focus(window, cx);
-        other
-    }).unwrap();
+    let _blur_target = window
+        .update(cx, |_, window, cx| {
+            terminal.update(cx, |view, cx| view.focus_handle.focus(window, cx));
+            handler.replace_and_mark_text_in_range(None, "ni😀", None, window, cx);
+            assert_eq!(handler.marked_text_range(window, cx), Some(0..4));
+            assert_eq!(terminal.read(cx).input.editor().text(), "");
+            terminal.update(cx, |view, cx| {
+                view.set_grid_size(40, 12, px(8.), px(17.), 1., cx)
+            });
+            assert_eq!(
+                handler.marked_text_range(window, cx),
+                Some(0..4),
+                "resize does not commit a preedit"
+            );
+            handler.replace_text_in_range(None, "你好😀", window, cx);
+            assert_eq!(handler.marked_text_range(window, cx), None);
+            assert_eq!(terminal.read(cx).input.editor().text(), "你好😀");
+            handler.replace_and_mark_text_in_range(None, "discard", None, window, cx);
+            let other = cx.focus_handle();
+            other.focus(window, cx);
+            other
+        })
+        .unwrap();
     cx.run_until_parked();
-    window.update(cx, |_, window, cx| {
-        assert_eq!(handler.marked_text_range(window, cx), None, "blur cancels rather than commits");
-        terminal.update(cx, |view, cx| view.focus_handle.focus(window, cx));
-        handler.replace_and_mark_text_in_range(None, "hao", None, window, cx);
-        handler.replace_text_in_range(None, "好", window, cx);
-        assert_eq!(terminal.read(cx).input.editor().text(), "你好😀好");
-    }).unwrap();
-    assert_eq!(next_input_until_timeout(&mut daemon), None, "the shell has not received an unsubmitted draft");
-    DaemonMsg::Output(b"\x1b[?1049h".to_vec()).encode(&mut daemon).unwrap();
+    window
+        .update(cx, |_, window, cx| {
+            assert_eq!(
+                handler.marked_text_range(window, cx),
+                None,
+                "blur cancels rather than commits"
+            );
+            terminal.update(cx, |view, cx| view.focus_handle.focus(window, cx));
+            handler.replace_and_mark_text_in_range(None, "hao", None, window, cx);
+            handler.replace_text_in_range(None, "好", window, cx);
+            assert_eq!(terminal.read(cx).input.editor().text(), "你好😀好");
+        })
+        .unwrap();
+    assert_eq!(
+        next_input_until_timeout(&mut daemon),
+        None,
+        "the shell has not received an unsubmitted draft"
+    );
+    DaemonMsg::Output(b"\x1b[?1049h".to_vec())
+        .encode(&mut daemon)
+        .unwrap();
     let mut fullscreen = false;
     for _ in 0..200 {
         cx.run_until_parked();
-        fullscreen = window.update(cx, |_, _, cx| terminal.read(cx).on_alt_screen()).unwrap();
-        if fullscreen { break; }
+        fullscreen = window
+            .update(cx, |_, _, cx| terminal.read(cx).on_alt_screen())
+            .unwrap();
+        if fullscreen {
+            break;
+        }
         std::thread::sleep(std::time::Duration::from_millis(5));
     }
-    assert!(fullscreen, "the fullscreen program takes the real pane grid");
-    window.update(cx, |_, window, cx| {
-        handler.replace_and_mark_text_in_range(None, "quan", None, window, cx);
-        handler.replace_text_in_range(None, "全屏", window, cx);
-        assert_eq!(terminal.read(cx).input.editor().text(), "你好😀好", "the fullscreen commit does not edit the shell draft");
-        assert_eq!(handler.marked_text_range(window, cx), None);
-    }).unwrap();
-    assert_eq!(next_input_until_timeout(&mut daemon), Some("全屏".as_bytes().to_vec()));
+    assert!(
+        fullscreen,
+        "the fullscreen program takes the real pane grid"
+    );
+    window
+        .update(cx, |_, window, cx| {
+            handler.replace_and_mark_text_in_range(None, "quan", None, window, cx);
+            handler.replace_text_in_range(None, "全屏", window, cx);
+            assert_eq!(
+                terminal.read(cx).input.editor().text(),
+                "你好😀好",
+                "the fullscreen commit does not edit the shell draft"
+            );
+            assert_eq!(handler.marked_text_range(window, cx), None);
+        })
+        .unwrap();
+    assert_eq!(
+        next_input_until_timeout(&mut daemon),
+        Some("全屏".as_bytes().to_vec())
+    );
     assert_eq!(next_input_until_timeout(&mut daemon), None);
 }
 
@@ -85,4 +131,62 @@ fn opening_search_discards_the_terminals_uncommitted_composition(cx: &mut TestAp
             assert!(search.input.read(cx).focus_handle(cx).is_focused(window));
         })
         .unwrap();
+}
+
+#[gpui_kit::test]
+fn negotiated_keyboard_composition_commits_text_without_key_releases(cx: &mut TestAppContext) {
+    let (window, view, mut daemon) = rooted_harness(cx);
+    DaemonMsg::Output(b"\x1b[?1049h\x1b[>27u\x1b]2;IME_EVENTS_READY\x07".to_vec())
+        .encode(&mut daemon)
+        .unwrap();
+    let mut ready = false;
+    for _ in 0..200 {
+        cx.executor()
+            .advance_clock(std::time::Duration::from_millis(5));
+        cx.run_until_parked();
+        ready = view.read_with(cx, |view, _| view.title == "IME_EVENTS_READY");
+        if ready {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    assert!(ready);
+    let mut handler = TerminalInputHandler::new(view.clone(), None);
+    window
+        .update(cx, |_, window, cx| {
+            view.update(cx, |view, cx| view.focus_handle.focus(window, cx));
+            handler.replace_and_mark_text_in_range(None, "zhong", None, window, cx);
+            view.update(cx, |view, cx| {
+                view.on_key_down(
+                    &KeyDownEvent {
+                        keystroke: gpui_kit::Keystroke {
+                            key: "g".into(),
+                            key_char: Some("g".into()),
+                            modifiers: Default::default(),
+                        },
+                        is_held: false,
+                        prefer_character_input: true,
+                    },
+                    window,
+                    cx,
+                )
+            });
+            handler.replace_text_in_range(None, "中文", window, cx);
+            window.dispatch_event(
+                gpui_kit::PlatformInput::KeyUp(gpui_kit::KeyUpEvent {
+                    keystroke: key("g"),
+                }),
+                cx,
+            );
+        })
+        .unwrap();
+    assert_eq!(
+        next_input_until_timeout(&mut daemon),
+        Some(b"\x1b[0;1;20013:25991u".to_vec())
+    );
+    assert_eq!(
+        next_input_until_timeout(&mut daemon),
+        None,
+        "preedit and its key-up never become PTY key events"
+    );
 }
