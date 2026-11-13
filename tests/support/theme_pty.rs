@@ -26,7 +26,13 @@ pub fn theme_query_sender() {
         let serial = fields.next().unwrap();
         let replies: usize = fields.next().unwrap().parse().unwrap();
         let bytes = unhex(fields.next().unwrap());
-        output.write_all(&bytes).unwrap();
+        // An optional fourth field repeats the same payload in one PTY write
+        // burst, so a ring-cap test does not pay a JSON `SendInput` round trip
+        // per kilobyte. Existing three-field callers keep one copy.
+        let repeat: usize = fields.next().map_or(1, |n| n.parse().unwrap());
+        for _ in 0..repeat {
+            output.write_all(&bytes).unwrap();
+        }
         output.flush().unwrap();
         if replies == usize::MAX {
             // Synchronize the PTY writer without inserting a marker or APC

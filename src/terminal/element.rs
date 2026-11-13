@@ -127,6 +127,10 @@ pub(super) struct PaintColors {
     current_match_bg: Hsla,
     fg_rgb: ColorRgb,
     bg_rgb: ColorRgb,
+    /// Program-selected pane colours, folded into the indexed table and the
+    /// named defaults for this frame. `None` in this layer means the live
+    /// theme; a reset is therefore a new frame, not a stored snapshot.
+    pub(super) overrides: lyrel_core::core::pane_colors::PaneColors,
     /// Whether faint text on a light cell is held at the text floor (see
     /// `dim_fg`). Mirrors `theme_legible_palette`.
     legible_dim: bool,
@@ -206,6 +210,9 @@ pub(super) enum SnapshotUnavailable {
 #[derive(Default)]
 pub(super) struct GridSnapshot {
     cursor: Option<GridCursor>,
+    // None preserves the window material; an OSC 11 override belongs to the
+    // committed picture, so synchronized/contended repaints cannot leak it.
+    background_override: Option<Hsla>,
     sliver: Option<Vec<RenderCell>>,
     pub(super) any_selected: bool,
     pub(super) selection_is_lines: bool,
@@ -482,7 +489,14 @@ impl Element for TerminalElement {
             cols: prepaint.cols,
             rows: prepaint.rows,
         };
-        let colors = PaintColors::resolve(cx.theme(), cx);
+        let overrides = *self
+            .view
+            .read(cx)
+            .terminal
+            .color_overrides
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
+        let colors = PaintColors::resolve_with(cx.theme(), overrides, cx);
 
         let font_size = self.view.read(cx).font_size;
         let base_font = self.view.read(cx).font.clone();
@@ -715,6 +729,9 @@ impl Element for TerminalElement {
         });
 
         window.with_content_mask(Some(ContentMask { bounds }), |window| {
+            if let Some(background) = snap.background_override {
+                window.paint_quad(fill(bounds, background));
+            }
             paint_images(window, cx, i64::from(i32::MIN)..below_background);
             paint_backgrounds(window, &geom, &buf);
             if snap.any_selected {

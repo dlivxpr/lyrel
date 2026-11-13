@@ -4,7 +4,7 @@ use super::{
     NativeSshSpec, PaneRoute, PtySource, RemoteTerminal, RestoreFrom, ShellSpec, SpawnCancellation,
     TermSize, win_size,
 };
-use crate::daemon::protocol::{ClientMsg, DaemonMsg};
+use crate::daemon::protocol::{ClientMsg, DaemonMsg, DaemonVersion};
 use crate::daemon::transport::{self, Stream};
 #[cfg(test)]
 use std::io::Read as _;
@@ -15,13 +15,14 @@ pub(crate) struct PaneHandshake {
     images: crate::terminal::images::ImageStore,
     /// What this connection's endpoint actually answered, not what this build
     /// could do: DA1 and image capability claims follow it.
-    version: crate::daemon::protocol::DaemonVersion,
+    version: DaemonVersion,
 }
 
 impl PaneHandshake {
     fn open(route: &PaneRoute, cell_w: u16, cell_h: u16) -> anyhow::Result<Self> {
         let mut stream = connect_routed(route)?;
         let version = Self::negotiate_pane_protocol(&mut stream, attach_reply_wait(route))?;
+        Self::require_pane_colors(&version)?;
         let images = crate::terminal::images::ImageStore::new();
         images.set_cell_metrics(cell_w, cell_h);
         Self::send_graphics_capacity(&mut stream, &images)?;
@@ -30,6 +31,25 @@ impl PaneHandshake {
             images,
             version,
         })
+    }
+
+    /// A rendering pane needs the backend's authoritative colour layer. A
+    /// backend that predates it would silently drop a program's colour
+    /// requests (or answer queries from the wrong table), so the attach is
+    /// refused with a user-visible update message instead. Nothing is stopped,
+    /// restarted, or replaced here: the old daemon and its panes keep running,
+    /// and the user decides when to update.
+    fn require_pane_colors(version: &DaemonVersion) -> anyhow::Result<()> {
+        if version.has_feature(crate::daemon::protocol::FEATURE_PANE_COLORS) {
+            return Ok(());
+        }
+        Err(anyhow::anyhow!(
+            "pane colours require an updated lyrel daemon or lyrel-server: \
+             the backend (build {}, pane protocol v{}) predates pane-local colour state. \
+             Update lyrel or lyrel-server; existing panes and the running backend are left untouched",
+            version.build,
+            version.protocol
+        ))
     }
 
     pub fn spawn_on(
@@ -196,7 +216,7 @@ impl PaneHandshake {
             PtySource::for_route(route),
             false,
             images,
-            Some(&version),
+            Some(version),
         )?;
         term.connection
             .finish_spawn(route.clone(), await_claim.then_some((pane_id, win)));
@@ -207,7 +227,7 @@ impl PaneHandshake {
     fn negotiate_pane_protocol(
         stream: &mut Stream,
         wait: std::time::Duration,
-    ) -> anyhow::Result<crate::daemon::protocol::DaemonVersion> {
+    ) -> anyhow::Result<DaemonVersion> {
         let _ = stream.set_read_timeout(Some(wait));
         let result = crate::daemon::protocol::negotiate_pane(stream);
         let _ = stream.set_read_timeout(None);
@@ -260,7 +280,7 @@ impl PaneHandshake {
             PtySource::for_route(route),
             true,
             images,
-            Some(&version),
+            Some(version),
         )?;
         term.connection.finish_spawn(route.clone(), None);
         Ok(term)
@@ -279,9 +299,12 @@ impl PaneHandshake {
         cell_w: u16,
         cell_h: u16,
         images: crate::terminal::images::ImageStore,
-    ) -> anyhow::Result<(Stream, Vec<u8>, crate::daemon::protocol::DaemonVersion)> {
+
+    ) -> anyhow::Result<(Stream, Vec<u8>, DaemonVersion)> {
         let mut stream = connect_routed(route)?;
         let version = Self::negotiate_pane_protocol(&mut stream, attach_reply_wait(route))?;
+        Self::require_pane_colors(&version)?;
+
         Self::send_graphics_capacity(&mut stream, &images)?;
         ClientMsg::Attach {
             pane_id,
@@ -385,7 +408,7 @@ impl PaneHandshake {
             PtySource::Raw,
             false,
             images,
-            Some(&version),
+            Some(version),
         )?;
         term.ssh_endpoint = Some(endpoint);
         term.ssh_user = Some(user);
@@ -802,6 +825,54 @@ pub(super) fn connect_routed(route: &PaneRoute) -> anyhow::Result<Stream> {
         ack.link.as_deref().unwrap_or("?")
     );
     Ok(stream)
+}
+
+#[cfg(test)]
+mod color_capability_tests {
+    use super::*;
+    use crate::daemon::protocol::{FEATURE_PANE_COLORS, PROTOCOL_VERSION};
+
+    /// A backend without the colour guarantee is refused before any attach or
+    /// spawn is sent, with the negotiated build and protocol named. This is the
+    /// same `io::Error`/`anyhow` path the window already shows for a failed
+    /// pane handshake — not a log line or an internal capability enum.
+    #[test]
+    fn an_old_backend_is_refused_with_a_visible_update_error() {
+        let old = DaemonVersion {
+            protocol: PROTOCOL_VERSION,
+            build: "26.7.4".into(),
+            features: Vec::new(),
+            instance: "old-instance".into(),
+        };
+        let message = PaneHandshake::require_pane_colors(&old)
+            .expect_err("a backend without pane-colour state must be refused")
+            .to_string();
+        assert!(
+            message
+                .to_lowercase()
+                .contains("update lyrel or lyrel-server"),
+            "the refusal must tell the user what to do: {message}"
+        );
+        assert!(
+            message.contains("26.7.4") && message.contains(&format!("v{PROTOCOL_VERSION}")),
+            "the refusal must name the negotiated backend: {message}"
+        );
+        assert!(
+            message.contains("left untouched"),
+            "the refusal must not imply that panes or the daemon were stopped: {message}"
+        );
+    }
+
+    #[test]
+    fn a_backend_that_advertises_the_feature_is_accepted() {
+        let current = DaemonVersion {
+            protocol: PROTOCOL_VERSION,
+            build: "test".into(),
+            features: vec![FEATURE_PANE_COLORS.into()],
+            instance: "new-instance".into(),
+        };
+        PaneHandshake::require_pane_colors(&current).expect("advertised feature is sufficient");
+    }
 }
 
 #[cfg(all(test, unix))]

@@ -334,7 +334,7 @@ fn graphics_build_rooted_consumer_at(
                 size,
                 buffered,
                 source,
-                Some(&crate::daemon::protocol::DaemonVersion::current()),
+                Some(crate::daemon::protocol::DaemonVersion::current()),
             )
             .unwrap();
             cx.new(|cx| TerminalView::with_terminal(terminal, pane, window, cx))

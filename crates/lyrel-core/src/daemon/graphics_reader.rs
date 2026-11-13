@@ -108,6 +108,14 @@ fn text(
         .as_mut()
         .map(|graphics| graphics.output(bytes))
         .unwrap_or_default();
+    // Taken after the same parse that produced the text, and published after
+    // the text frame: a query in this chunk is answered by the consumer's own
+    // parse at its exact stream position, while this projection is what a
+    // later attach replays once the original bytes leave the ring.
+    let colors = state
+        .graphics
+        .as_mut()
+        .and_then(|graphics| graphics.take_color_delta());
     record_output(&mut state, bytes);
     if effects.is_empty() {
         fan_out_output(&mut state, bytes, Vec::new(), gate);
@@ -115,6 +123,14 @@ fn text(
         let mut frames = vec![GraphicsFrame::Output(bytes.to_vec())];
         append_graphics_effects(effects, &mut Vec::new(), &mut frames, writer);
         fan_out_output(&mut state, bytes, frames, gate);
+    }
+    if let Some(frame) = colors {
+        let PaneState {
+            subscriptions,
+            graphics,
+            ..
+        } = &mut *state;
+        subscriptions.publish_colors(frame.encode(), gate, graphics);
     }
     let owed = detached_color_scheme_queries(&mut state);
     drop(state);

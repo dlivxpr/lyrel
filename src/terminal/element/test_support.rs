@@ -38,6 +38,7 @@ pub(super) fn caret_colors() -> PaintColors {
             g: 255,
             b: 255,
         },
+        overrides: lyrel_core::core::pane_colors::PaneColors::default(),
     }
 }
 
@@ -77,6 +78,7 @@ pub(super) fn test_colors() -> PaintColors {
         current_match_bg: wash(0.85),
         fg_rgb: fg,
         bg_rgb: bg,
+        overrides: lyrel_core::core::pane_colors::PaneColors::default(),
         legible_dim: true,
     }
 }

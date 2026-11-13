@@ -245,6 +245,10 @@ pub struct TerminalView {
     frame: FrameFacts,
     grid_retry: Option<gpui_kit::Task<()>>,
     pub(super) selection_scroll: super::selection_scroll::SelectionScroll,
+    /// The effective background last evaluated for DEC mode 2031's dark/light
+    /// report. Overrides change it without touching the theme, so both paths
+    /// compare against this one value.
+    pub(super) color_scheme_bg: rio_vt::config::colors::ColorRgb,
     pub title: String,
     /// A title the pane has been told about but has not adopted yet — see
     /// `set_title_when_settled`. `None` means the tab is showing the newest
@@ -740,6 +744,7 @@ impl TerminalView {
             frame: FrameFacts::default(),
             grid_retry: None,
             selection_scroll: super::selection_scroll::SelectionScroll::default(),
+            color_scheme_bg: super::palette::hsla_to_rgb(cx.theme().background),
             title: DEFAULT_TITLE.to_string(),
             pending_title: None,
             default_title: DEFAULT_TITLE.to_string(),
@@ -992,19 +997,10 @@ impl TerminalView {
         cell_h: u16,
         cx: &mut Context<Self>,
     ) -> anyhow::Result<()> {
-        self.input.forget_keys();
-        self.remote_clipboard_write_generation =
-            self.remote_clipboard_write_generation.wrapping_add(1);
-        self.remote_clipboard_write_in_flight = None;
-        self.terminal
-            .adopt_relink(stream, buffered, route, size, cell_w, cell_h)?;
-        self.finish_relink(cx);
-        Ok(())
+        self.adopt_relink_with_version(stream, buffered, route, size, cell_w, cell_h, None, cx)
     }
 
-    /// The production relink, which negotiated again and therefore knows the
-    /// endpoint's current capabilities.
-    pub fn adopt_relink_with_endpoint(
+    pub fn adopt_relink_with_version(
         &mut self,
         stream: crate::daemon::transport::Stream,
         buffered: Vec<u8>,
@@ -1012,7 +1008,7 @@ impl TerminalView {
         size: TermSize,
         cell_w: u16,
         cell_h: u16,
-        endpoint: &crate::daemon::protocol::DaemonVersion,
+        version: Option<crate::daemon::protocol::DaemonVersion>,
         cx: &mut Context<Self>,
     ) -> anyhow::Result<()> {
         self.input.forget_keys();
@@ -1020,12 +1016,7 @@ impl TerminalView {
             self.remote_clipboard_write_generation.wrapping_add(1);
         self.remote_clipboard_write_in_flight = None;
         self.terminal
-            .adopt_relink_with_endpoint(stream, buffered, route, size, cell_w, cell_h, endpoint)?;
-        self.finish_relink(cx);
-        Ok(())
-    }
-
-    fn finish_relink(&mut self, cx: &mut Context<Self>) {
+            .adopt_relink_with_version(stream, buffered, route, size, cell_w, cell_h, version)?;
         self.grid_snap = None;
         self.grid_buf.clear();
         self.selection_scroll.clear_presented();
@@ -1034,6 +1025,7 @@ impl TerminalView {
         self.relink_inflight = false;
         self.title = self.default_title.clone();
         cx.notify();
+        Ok(())
     }
 
     pub fn detach_link(&mut self, cx: &mut Context<Self>) {
@@ -3347,6 +3339,7 @@ mod gpui_tests {
     }
 
     include!("graphics_consumer_tests.rs");
+    include!("color_override_consumer_tests.rs");
     include!("xtgettcap_consumer_tests.rs");
     include!("progress_consumer_tests.rs");
     include!("history_search_pty_consumer_tests.rs");

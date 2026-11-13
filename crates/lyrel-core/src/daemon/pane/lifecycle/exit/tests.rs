@@ -1,5 +1,7 @@
 use super::super::super::test_support::{drain, null_writer, test_state};
-use super::super::super::{DaemonPane, OutputGate, attach_subscriber, observe_subscriber};
+use super::super::super::{
+    DaemonPane, OutputGate, attach_subscriber, observe_subscriber,
+};
 use super::*;
 #[cfg(windows)]
 use std::sync::Condvar;
@@ -12,6 +14,7 @@ fn death_notifies_observers_but_only_controllers_defer_the_reap() {
         &mut with_observer_only.lock().unwrap(),
         observer_tx,
         Arc::new(OutputGate::new()),
+        false,
         false,
     );
     drain(&observer_rx);
@@ -33,7 +36,13 @@ fn death_notifies_observers_but_only_controllers_defer_the_reap() {
     {
         let mut st = with_both.lock().unwrap();
         attach_subscriber(&mut st, controller_tx);
-        observe_subscriber(&mut st, observer_tx, Arc::new(OutputGate::new()), false);
+        observe_subscriber(
+            &mut st,
+            observer_tx,
+            Arc::new(OutputGate::new()),
+            false,
+            false,
+        );
     }
     drain(&controller_rx);
     drain(&observer_rx);

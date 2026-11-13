@@ -576,3 +576,102 @@ fn a_bounded_restart_preserves_the_live_replay_suffix_and_geometry() {
         "restore must preserve bytes and geometry before the new-shell reset"
     );
 }
+
+impl Instance {
+    /// Like `spawn_restoring_segments`, but keeps the colour projection the
+    /// restarted daemon sends for the replacement pane.
+    fn spawn_restoring_with_colors(
+        &self,
+        dead: u64,
+    ) -> (
+        u64,
+        Vec<lyrel_core::daemon::scrollback::Segment>,
+        Option<lyrel_core::core::pane_colors::PaneColors>,
+    ) {
+        let mut stream =
+            transport::connect_endpoint_at(&self.endpoint()).expect("connect to spawn");
+        lyrel_core::daemon::protocol::negotiate_pane(&mut stream).expect("matching pane protocol");
+        ClientMsg::Spawn {
+            cwd: None,
+            size: size(),
+            shell: Some(interactive_shell()),
+            owner: None,
+            workspace: None,
+            restore: Some(RestoreFrom {
+                pane_id: dead,
+                banner: Some("the shell below is new".to_string()),
+            }),
+            allow_remote_clipboard_write: false,
+            await_claim: false,
+        }
+        .encode(&mut stream)
+        .expect("send Spawn");
+
+        let pane_id = match DaemonMsg::read(&mut stream) {
+            Ok(DaemonMsg::Spawned { pane_id }) => pane_id,
+            other => panic!("expected Spawned, got {other:?}"),
+        };
+        stream
+            .set_read_timeout(Some(Duration::from_secs(2)))
+            .expect("bound the drain");
+        let mut replayed: Vec<lyrel_core::daemon::scrollback::Segment> = Vec::new();
+        let mut colors = None;
+        let mut geometry = size();
+        while let Ok(msg) = DaemonMsg::read(&mut stream) {
+            match msg {
+                DaemonMsg::Size(size) => geometry = size,
+                DaemonMsg::Snapshot(bytes) | DaemonMsg::Output(bytes) => {
+                    replayed.push(lyrel_core::daemon::scrollback::Segment {
+                        size: geometry,
+                        bytes,
+                    });
+                }
+                DaemonMsg::Colors(frame) => {
+                    let frame = lyrel_core::core::pane_colors::ColorFrame::decode(&frame)
+                        .expect("decodable colour projection");
+                    let mut state = lyrel_core::core::pane_colors::PaneColors::default();
+                    frame.apply(&mut state);
+                    colors = Some(state);
+                }
+                _ => {}
+            }
+        }
+        (pane_id, replayed, colors)
+    }
+}
+
+#[test]
+fn a_replacement_shell_does_not_reactivate_old_temporary_colours() {
+    let instance = Instance::new();
+    let running = instance.start();
+    let mut session = instance
+        .panes()
+        .spawn(None, size(), Some(interactive_shell()), None, None)
+        .expect("spawn a pane");
+    session
+        .set_recv_timeout(Some(STREAM_WITHIN))
+        .expect("bound the stream reads");
+    let dead = session.pane_id();
+    session
+        .input(b"printf '\\033]4;1;#112233\\007\\033]11;#101112\\007'; echo lyrel_colour_restore\r")
+        .expect("the shell takes input");
+    collect_until(&mut session, b"lyrel_colour_restore");
+    session.detach().expect("detach");
+    instance.stop(running);
+
+    let _restarted = instance.start();
+    let (_new_pane, replayed, colors) = instance.spawn_restoring_with_colors(dead);
+    let text: Vec<u8> = replayed
+        .into_iter()
+        .flat_map(|segment| segment.bytes)
+        .collect();
+    assert!(
+        windows_contain(&text, b"\x1b]4;1;#112233"),
+        "the persisted text path still carries the historical bytes; the test must prove they are not decoded"
+    );
+    let colors = colors.expect("a restored pane still sends its authoritative (empty) layer");
+    assert!(
+        colors.is_empty(),
+        "a replacement shell must start with no inherited temporary colours"
+    );
+}

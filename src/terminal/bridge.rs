@@ -72,6 +72,10 @@ pub(super) struct ParseBridge<'a, T: EventListener> {
     keyboard: &'a mut KeyboardStacks,
     history_limit: Option<usize>,
     presentation: Option<&'a std::sync::Mutex<super::presentation::ParsePresentation>>,
+    /// Live parse-time mirror of the pane's colour layer. Set only for live
+    /// output; replay is excluded so an older set inside the ring cannot
+    /// resurrect a slot the daemon later reset.
+    colors: Option<&'a std::sync::Mutex<lyrel_core::core::pane_colors::PaneColors>>,
 }
 
 impl<'a, T: EventListener> ParseBridge<'a, T> {
@@ -87,7 +91,16 @@ impl<'a, T: EventListener> ParseBridge<'a, T> {
             keyboard,
             history_limit,
             presentation: None,
+            colors: None,
         }
+    }
+
+    pub(super) fn with_colors(
+        mut self,
+        colors: Option<&'a std::sync::Mutex<lyrel_core::core::pane_colors::PaneColors>>,
+    ) -> Self {
+        self.colors = colors;
+        self
     }
 
     pub(super) fn with_presentation(
@@ -445,6 +458,12 @@ impl<T: EventListener> Handler for ParseBridge<'_, T> {
     }
 
     fn set_color(&mut self, index: usize, color: ColorRgb) {
+        if let Some(colors) = self.colors {
+            colors
+                .lock()
+                .unwrap_or_else(|poison| poison.into_inner())
+                .set(index as u16, [color.r, color.g, color.b]);
+        }
         self.inner.set_color(index, color);
     }
 
@@ -454,6 +473,12 @@ impl<T: EventListener> Handler for ParseBridge<'_, T> {
     }
 
     fn reset_color(&mut self, index: usize) {
+        if let Some(colors) = self.colors {
+            colors
+                .lock()
+                .unwrap_or_else(|poison| poison.into_inner())
+                .reset(index as u16);
+        }
         self.inner.reset_color(index);
     }
 
@@ -786,5 +811,45 @@ mod tests {
     #[test]
     fn a_full_reset_clears_the_keyboard_stacks() {
         assert_eq!(replies(b"\x1b[>5u\x1bc\x1b[?u"), ["\x1b[?0u"]);
+    }
+
+    fn colors_after(bytes: &[u8], track: bool) -> lyrel_core::core::pane_colors::PaneColors {
+        let captured = Replies::default();
+        let mut term = Crosswords::new(
+            TermSize::new(80, 24),
+            CursorShape::Block,
+            captured.clone(),
+            WindowId::from(0),
+            0,
+            10_000,
+        );
+        let mut keyboard = KeyboardStacks::default();
+        let mirror = std::sync::Mutex::new(lyrel_core::core::pane_colors::PaneColors::default());
+        let mut bridge = ParseBridge::new(&mut term, captured.clone(), &mut keyboard, None);
+        if track {
+            bridge = bridge.with_colors(Some(&mirror));
+        }
+        Processor::default().advance(&mut bridge, bytes);
+        *mirror.lock().unwrap()
+    }
+
+    /// Live output updates the pane's colour layer at the exact stream
+    /// position; a replay (`track = false`) must not, or an old set inside the
+    /// ring could resurrect a slot the daemon later reset.
+    #[test]
+    fn live_output_tracks_colours_and_replay_does_not() {
+        let set = b"\x1b]4;1;#112233\x07\x1b]10;#0a0b0c\x07\x1b]4;1;?\x07";
+        let live = colors_after(set, true);
+        assert_eq!(live.get(1), Some([0x11, 0x22, 0x33]));
+        assert_eq!(live.get(256), Some([0x0a, 0x0b, 0x0c]));
+
+        let replay = colors_after(set, false);
+        assert!(
+            replay.is_empty(),
+            "a replayed set must not mutate the live override layer"
+        );
+
+        let reset = colors_after(b"\x1b]104\x07\x1b]110\x07", true);
+        assert!(reset.is_empty());
     }
 }
