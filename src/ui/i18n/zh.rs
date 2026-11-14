@@ -1704,6 +1704,24 @@ pub fn translate_zh(key: L10nKey) -> Option<&'static str> {
         L10nKey::EditorPdfFailed => "PDF 打开失败",
         L10nKey::EditorPdfTooLarge => "此 PDF 超过 32 MiB 查看上限",
         L10nKey::EditorPdfRenderFailed => "无法渲染此页",
+        L10nKey::EditorImagePageOf => "第 {page} 页，共 {pages} 页",
+        L10nKey::EditorImagePageLoading => "正在加载页",
+        L10nKey::EditorImagePagePrevious => "上一页",
+        L10nKey::EditorImagePageNext => "下一页",
+        L10nKey::EditorImagePageMissing => "这一页不存在",
+        L10nKey::EditorImagePageUnsupported => "这一页的 TIFF 采样布局无法显示",
+        L10nKey::EditorImagePageDimensionsLimit => {
+            "页尺寸 {width} × {height} 超过 {limit} 像素的单边预算"
+        }
+        L10nKey::EditorImagePageBytesLimit => {
+            "解码这一页需要 {required} MiB，超过 {limit} MiB 页预算"
+        }
+        L10nKey::EditorImagePagesLimit => "文件页数超过 {pages} 页的 TIFF 预算",
+        L10nKey::EditorImageAnimationLimit => {
+            "动画帧缓冲需要 {required} MiB，超过 {limit} MiB 预算"
+        }
+        L10nKey::EditorImageAnimationEmpty => "此动画没有可显示的帧",
+        L10nKey::EditorImageAnimationTruncated => "此动画在帧数据结束前就结束了",
         L10nKey::EditorTableCommands => "表格…",
         L10nKey::MarkdownCopyAsMarkdown => "复制为 Markdown",
         L10nKey::MarkdownTurnInto => "转换为",

@@ -10,7 +10,7 @@ use lyrel_markdown_editor::{
 use std::{cell::RefCell, io, rc::Rc, time::Duration};
 
 pub(crate) const MAX_BYTES: u64 = 32 * 1024 * 1024;
-const MAX_PIXELS: u64 = 16 * 1024 * 1024;
+pub(crate) const MAX_PIXELS: u64 = 16 * 1024 * 1024;
 const CACHE_BYTES: u64 = 256 * 1024 * 1024;
 
 type Signature = (HostId, PathBuf);
@@ -683,20 +683,24 @@ fn invalid(message: impl Into<Box<dyn std::error::Error + Send + Sync>>) -> io::
     io::Error::new(io::ErrorKind::InvalidData, message)
 }
 
-/// The five static raster formats a workbench document shows.
+/// The image formats a workbench document can open.
 ///
-/// GIF animation and multi-page TIFF are not these: their bytes reach the
-/// external opener, not a document, so no ticket claims frames it cannot draw.
+/// The five static raster formats share [`decode_static`]; GIF animation and
+/// multi-page TIFF have their own frame/page decoders in `image_document` and
+/// are never shown as a static first frame. Markdown preview still resolves
+/// only the static subset through [`decode_static`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum StaticImageFormat {
+pub(crate) enum ImageFormat {
     Png,
     Jpeg,
     WebP,
     Bmp,
     Ico,
+    Gif,
+    Tiff,
 }
 
-impl StaticImageFormat {
+impl ImageFormat {
     pub(crate) fn from_extension(path: &Path) -> Option<Self> {
         let extension = path.extension()?.to_str()?.to_ascii_lowercase();
         Some(match extension.as_str() {
@@ -705,6 +709,8 @@ impl StaticImageFormat {
             "webp" => Self::WebP,
             "bmp" | "dib" => Self::Bmp,
             "ico" => Self::Ico,
+            "gif" => Self::Gif,
+            "tif" | "tiff" => Self::Tiff,
             _ => return None,
         })
     }
@@ -713,7 +719,9 @@ impl StaticImageFormat {
     ///
     /// BMP is left out on purpose: `BM` is two ordinary capital letters, so a
     /// text file opening with them is not evidence enough to take it away
-    /// from the text editor.
+    /// from the text editor. GIF's `GIF87a`/`GIF89a` and TIFF's `II*\0`/`MM\0*`
+    /// (including BigTIFF) are binary structures and cannot be mistaken for
+    /// ordinary text.
     pub(crate) fn probe(bytes: &[u8]) -> Option<Self> {
         if bytes.starts_with(b"\x89PNG\r\n\x1a\n") {
             return Some(Self::Png);
@@ -727,6 +735,16 @@ impl StaticImageFormat {
         if bytes.starts_with(&[0x00, 0x00, 0x01, 0x00]) {
             return Some(Self::Ico);
         }
+        if bytes.starts_with(b"GIF87a") || bytes.starts_with(b"GIF89a") {
+            return Some(Self::Gif);
+        }
+        if bytes.starts_with(b"II\x2a\x00")
+            || bytes.starts_with(b"MM\x00\x2a")
+            || bytes.starts_with(b"II\x2b\x00")
+            || bytes.starts_with(b"MM\x00\x2b")
+        {
+            return Some(Self::Tiff);
+        }
         None
     }
 
@@ -737,6 +755,8 @@ impl StaticImageFormat {
             Self::WebP => "WebP",
             Self::Bmp => "BMP",
             Self::Ico => "ICO",
+            Self::Gif => "GIF",
+            Self::Tiff => "TIFF",
         }
     }
 }
@@ -786,7 +806,11 @@ pub(crate) fn read_bytes(
 /// budgets as a Markdown preview, and under the same rule that a name never
 /// decides how bytes are read: SVG is not among them, so a file called
 /// `.png` is never handed to `usvg`.
-pub(crate) fn decode_static(bytes: &[u8]) -> io::Result<(image::RgbaImage, StaticImageFormat)> {
+///
+/// GIF animation and multi-page TIFF are documents with their own frame/page
+/// decoders; handing their bytes here is refused rather than showing a static
+/// first frame.
+pub(crate) fn decode_static(bytes: &[u8]) -> io::Result<(image::RgbaImage, ImageFormat)> {
     let (rgba, extension) = decode(bytes).map_err(|error| {
         // Budget and unsupported-format refusals are already words; anything
         // else is the decoder saying the bytes are not the picture they claim.
@@ -799,11 +823,11 @@ pub(crate) fn decode_static(bytes: &[u8]) -> io::Result<(image::RgbaImage, Stati
         }
     })?;
     let format = match extension {
-        "png" => StaticImageFormat::Png,
-        "jpg" => StaticImageFormat::Jpeg,
-        "webp" => StaticImageFormat::WebP,
-        "bmp" => StaticImageFormat::Bmp,
-        "ico" => StaticImageFormat::Ico,
+        "png" => ImageFormat::Png,
+        "jpg" => ImageFormat::Jpeg,
+        "webp" => ImageFormat::WebP,
+        "bmp" => ImageFormat::Bmp,
+        "ico" => ImageFormat::Ico,
         _ => {
             return Err(invalid(ImageError::Localized(
                 L10nKey::MarkdownImageUnsupported,

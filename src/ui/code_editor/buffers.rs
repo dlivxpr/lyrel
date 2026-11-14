@@ -7,8 +7,9 @@ const IMAGE_MAX_BYTES: u64 = markdown::images::MAX_BYTES;
 /// PDFs share the owning Host's bounded versioned read and the same 32 MiB
 /// input ceiling; parsing never raises the text or control-frame limits.
 const PDF_MAX_BYTES: u64 = markdown::images::MAX_BYTES;
+use super::image_document::{ImageDocument, ImageOutcome, ImageView};
 use markdown::images;
-use markdown::images::StaticImageFormat;
+use markdown::images::ImageFormat;
 
 const RELOAD_DEBOUNCE: std::time::Duration = std::time::Duration::from_millis(200);
 
@@ -430,15 +431,11 @@ impl EditorBuffers {
             mtime,
             result,
         } = image;
-        // A budget or format refusal is part of the document: it says so in
-        // its own body and status line, and the next external change retries.
-        let outcome = match result {
-            Ok((rgba, format)) => Ok((markdown::images::bitmap(rgba, cx), format)),
-            Err(error) => Err(SharedString::from(error.to_string())),
-        };
         let wrap = cx.global::<crate::core::config::Config>().editor_soft_wrap;
         let id = BufferId::new();
-        let document = cx.new(|_| ImageDocument::new(claimed, outcome));
+        // A budget or format refusal is part of the document: it says so in
+        // its own body and status line, and the next external change retries.
+        let document = cx.new(|cx| ImageDocument::new(claimed, result, cx));
         let view = cx.new(|cx| ImageView::new(document, cx));
         let sub = cx.observe(&view, |_, _, cx| cx.notify());
         let observe = cx.observe(&view, |_, _, cx| cx.notify());
@@ -869,6 +866,11 @@ impl EditorBuffers {
         let markdown = file.input.markdown().is_some();
         let image = file.input.image().cloned();
         let pdf = file.input.pdf().cloned();
+        // The document's own claim survives a rename or a probe-only open;
+        // reload must not fall back to the extension and lose the format.
+        let image_claimed = image
+            .as_ref()
+            .and_then(|view| view.read(cx).document().read(cx).claimed());
         let input_lease = file
             .input
             .markdown()
@@ -899,9 +901,16 @@ impl EditorBuffers {
             cx,
             move |h| {
                 if image_reload {
-                    let claimed = StaticImageFormat::from_extension(&target);
+                    let format = image_claimed
+                        .or_else(|| ImageFormat::from_extension(&target))
+                        .ok_or_else(|| {
+                            std::io::Error::new(
+                                std::io::ErrorKind::InvalidData,
+                                t(L10nKey::MarkdownImageUnsupported),
+                            )
+                        })?;
                     let meta = h.stat(&target)?;
-                    return read_image(h, target, claimed, meta).map(Reloaded::Image);
+                    return read_image(h, target, format, meta).map(Reloaded::Image);
                 }
                 if pdf_reload {
                     let meta = h.stat(&target)?;
@@ -961,10 +970,6 @@ impl EditorBuffers {
                     // A picture cannot be edited, so nothing here can conflict:
                     // the freshest bytes are the document.
                     Reloaded::Image(image) => {
-                        let outcome = match image.result {
-                            Ok((rgba, format)) => Ok((markdown::images::bitmap(rgba, cx), format)),
-                            Err(error) => Err(SharedString::from(error.to_string())),
-                        };
                         file.disk_mtime = image.mtime;
                         file.conflict = None;
                         let document = file
@@ -972,7 +977,7 @@ impl EditorBuffers {
                             .image()
                             .map(|view| view.read(cx).document().clone());
                         if let Some(document) = document {
-                            document.update(cx, |document, cx| document.replace(outcome, cx));
+                            document.update(cx, |document, cx| document.replace(image.result, cx));
                         }
                         cx.notify();
                         return;
@@ -1082,8 +1087,8 @@ pub(super) enum Loaded {
         mtime: Option<MTime>,
         config: EditorConfig,
     },
-    /// A static image: the bytes arrived, but whether they decode is part of
-    /// the document, not of the read — a corrupt picture still gets a place.
+    /// An image: the bytes arrived, but whether they decode is part of the
+    /// document, not of the read — a corrupt picture still gets a place.
     Image(LoadedImage),
     /// A PDF: parse/password failures are the document's own visible state, so
     /// the file still gets a tab with an explanation and a retry path.
@@ -1096,10 +1101,11 @@ pub(super) enum Loaded {
 
 pub(super) struct LoadedImage {
     path: PathBuf,
-    /// What the name claimed; the failure label when the bytes do not decode.
-    claimed: Option<StaticImageFormat>,
+    /// What the name or magic claimed; the failure label when the bytes do
+    /// not decode.
+    claimed: Option<ImageFormat>,
     mtime: Option<MTime>,
-    result: std::io::Result<(image::RgbaImage, StaticImageFormat)>,
+    result: ImageOutcome,
 }
 
 impl Loaded {
@@ -1125,7 +1131,7 @@ fn load_file(
     requested: PathBuf,
 ) -> Result<Loaded, EditorOpenError> {
     let path = h.canonicalize(&requested).unwrap_or(requested);
-    let claimed = StaticImageFormat::from_extension(&path);
+    let claimed = ImageFormat::from_extension(&path);
     let claimed_pdf = is_pdf_path(&path);
     let meta = h.stat(&path).map_err(|e| {
         EditorOpenError::Message(t_fmt(
@@ -1136,8 +1142,8 @@ fn load_file(
     if claimed_pdf {
         return load_pdf(h, path, meta);
     }
-    if claimed.is_some() {
-        return load_image(h, path, claimed, meta);
+    if let Some(format) = claimed {
+        return load_image(h, path, format, meta);
     }
     if meta.len > MAX_FILE_BYTES {
         return Err(EditorOpenError::Message(t_fmt(
@@ -1157,8 +1163,8 @@ fn load_file(
     // A name that claims nothing can still hold a picture. Only magic the
     // formats actually start with counts here, and only after text decoding
     // has had its chance: a file the editor can show as text keeps that.
-    if let Some(format) = StaticImageFormat::probe(&bytes) {
-        return load_image(h, path, Some(format), meta);
+    if let Some(format) = ImageFormat::probe(&bytes) {
+        return load_image(h, path, format, meta);
     }
     if is_pdf_bytes(&bytes) {
         return Ok(Loaded::Pdf {
@@ -1189,17 +1195,17 @@ fn load_file(
     })
 }
 
-/// Reads a static image under the image budget and decodes it, still on the
-/// Host's thread. Only an unreadable file is an open failure; everything the
-/// decoder says becomes the document's own visible state.
+/// Reads an image under the image budget and decodes it, still on the Host's
+/// thread. Only an unreadable file is an open failure; everything the decoder
+/// says becomes the document's own visible state.
 fn load_image(
     h: &dyn lyrel_core::host::Host,
     path: PathBuf,
-    claimed: Option<StaticImageFormat>,
+    format: ImageFormat,
     meta: lyrel_core::host::Meta,
 ) -> Result<Loaded, EditorOpenError> {
     let requested = path.clone();
-    read_image(h, path, claimed, meta)
+    read_image(h, path, format, meta)
         .map(Loaded::Image)
         .map_err(|error| {
             EditorOpenError::Message(t_fmt(
@@ -1286,33 +1292,29 @@ fn pdf_content(bytes: Vec<u8>) -> PdfLoaded {
 fn read_image(
     h: &dyn lyrel_core::host::Host,
     path: PathBuf,
-    claimed: Option<StaticImageFormat>,
+    format: ImageFormat,
     meta: lyrel_core::host::Meta,
 ) -> std::io::Result<LoadedImage> {
     let mut mtime = meta.mtime;
     let result = if meta.len > IMAGE_MAX_BYTES {
         // Not worth reading to say they are too many.
-        Err(images::too_large())
+        Err(SharedString::from(images::too_large().to_string()))
     } else {
-        match images::read_bytes(
+        let (bound, bytes) = images::read_bytes(
             h,
             &path,
             IMAGE_MAX_BYTES,
             &lyrel_core::host::transfer::CancelToken::default(),
             |_| {},
-        ) {
-            Ok((bound, bytes)) => {
-                // The picture and the mtime recorded for later external-change
-                // checks come from the version that was actually opened.
-                mtime = bound.mtime;
-                images::decode_static(&bytes)
-            }
-            Err(error) => Err(error),
-        }
+        )?;
+        // The picture and the mtime recorded for later external-change
+        // checks come from the version that was actually opened.
+        mtime = bound.mtime;
+        image_document::decode_loaded(bytes, format)
     };
     Ok(LoadedImage {
         path,
-        claimed,
+        claimed: Some(format),
         mtime,
         result,
     })
