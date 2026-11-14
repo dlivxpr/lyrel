@@ -89,6 +89,7 @@ macro_rules! l10n_keys {
 
 l10n_keys! {
     TerminalImageEvicted,
+    TerminalGlyphNeedsDaemonUpdate,
     TerminalReturnLive,
     NotificationInbox,
     NotificationClearHistory,
@@ -543,6 +544,14 @@ l10n_keys! {
     RememberKeychain,
     Cancel,
     Close,
+    TabProgressRunning,
+    TabProgressRunningPercent,
+    TabProgressIndeterminate,
+    TabProgressIndeterminatePercent,
+    TabProgressPaused,
+    TabProgressPausedPercent,
+    TabProgressError,
+    TabProgressErrorPercent,
     QuitStopServerTitle,
     QuitStopServerBody,
     QuitAndStop,

@@ -3,6 +3,9 @@ use super::L10nKey;
 pub fn translate_zh(key: L10nKey) -> Option<&'static str> {
     Some(match key {
         L10nKey::TerminalImageEvicted => "图片已淘汰",
+        L10nKey::TerminalGlyphNeedsDaemonUpdate => {
+            "Glyph 协议需要更新 lyrel 守护进程；当前窗格未改变"
+        }
         L10nKey::TerminalReturnLive => "↓ {rows} 行 · 回到实时输出",
         L10nKey::NotificationInbox => "通知",
         L10nKey::NotificationClearHistory => "清空通知历史",
@@ -572,6 +575,14 @@ pub fn translate_zh(key: L10nKey) -> Option<&'static str> {
         L10nKey::QuitAndStop => "退出并停止",
         L10nKey::CloseSshConnectionTitle => "关闭这个 SSH 连接？",
         L10nKey::CloseSshConnectionBody => "连接仍处于活动状态，关闭会断开它。",
+        L10nKey::TabProgressRunning => "进行中",
+        L10nKey::TabProgressRunningPercent => "进行中 · {percent}%",
+        L10nKey::TabProgressIndeterminate => "处理中",
+        L10nKey::TabProgressIndeterminatePercent => "处理中 · {percent}%",
+        L10nKey::TabProgressPaused => "已暂停",
+        L10nKey::TabProgressPausedPercent => "已暂停 · {percent}%",
+        L10nKey::TabProgressError => "失败",
+        L10nKey::TabProgressErrorPercent => "失败 · {percent}%",
         L10nKey::ClosePaneBusyTitle => "关闭这个窗格？",
         L10nKey::CloseTabBusyTitle => "关闭这个标签页？",
         L10nKey::CloseBusyCommandBody => "{what} 还在运行，关闭会终止它。",

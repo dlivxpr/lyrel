@@ -161,7 +161,7 @@ macOS 原生验收延期到 [#166 专门性能后续工单](https://github.com/d
 - 图片 ID 在窗格内独立。非零图片 ID 与非零放置 ID 的组合替换同次放置；省略 `p` 或 `p=0` 时，每次放置独立。`I` 分配新的图片 ID，并让后续按编号的命令选择该编号最新的资源；同一命令不能同时指定 `i` 与 `I`。重新传输同一个 `i` 会移除其旧资源与全部旧放置，不会让旧位置显示新内容。
 - 静态删除支持 `a/i/n/c/p/q/r/x/y/z` 及大写形式。`d=p` 是按 `x/y` 指定的单元删除，不是按放置 ID 删除；定位单次放置使用 `d=i,i=…,p=…`。小写保留可复用资源；大写只在资源没有其他放置引用时回收数据。缺资源、非法放置和不支持的操作返回带身份的错误，并遵守 `q=1/2`。
 - `a=q` 对实际图片内容进行校验，不存储、不替换资源；坏 PNG／zlib、无效像素长度、超限尺寸及不支持的操作不会回报成功。直接传输可跨主机；文件、临时文件及平台 shared memory 仅在发送方确实共享负责 daemon 的主机命名空间时接受，不把远端路径解析到桌面。Windows 支持本地磁盘 regular file、符合条件的临时文件及 named shared memory，Unix 保留 regular file／POSIX shm；具体安全限制与验收前提见下文。
-- daemon 持有唯一资源／放置／选帧和播放时间线，桌面只持有派生解码及绘制缓存。像素不进入持久文字回滚文件，不新增图片磁盘缓存。当前 pane 协议为 `17`（在 `16` 的不可变帧、原子选帧及相对放置关系上增加播放状态／剩余间隔／循环／暂停元数据，以及稳定 root 的新版像素），`CONTROL_VERSION` 保持 `16`；新连接先在实际 pane endpoint 双向协商版本及有限容量，再新建、附着或观察会话；路由前缀先于协商。旧客户端在创建 shell／订阅输出前被明确拒绝，新客户端遇到旧 daemon／远端 server 报告版本并要求更新，不能静默忽略图片消息。独立版本探测不要求开启会话。
+- daemon 持有唯一资源／放置／选帧和播放时间线，桌面只持有派生解码及绘制缓存。像素不进入持久文字回滚文件，不新增图片磁盘缓存。当前 pane 协议为 `19`（在 `18` 的 OSC 9;4 进度快照上增加 iTerm2 placement 的精确显示像素；不可变帧、原子选帧、相对放置及播放元数据语义不变），`CONTROL_VERSION` 保持 `16`；新连接先在实际 pane endpoint 双向协商版本及有限容量，再新建、附着或观察会话；路由前缀先于协商。旧客户端在创建 shell／订阅输出前被明确拒绝，新客户端遇到旧 daemon／远端 server 报告版本并要求更新，不能静默忽略图片消息。独立版本探测不要求开启会话。
 - 应答关联 `i/I/p` 并写回 PTY，不作为终端文本显示；`q=1` 只保留失败，`q=2` 全部静默，没有图片身份的请求不注入应答。续块仅以非零 `q` 覆盖首块的 quiet，显式 `q=0` 不解除此前的静默。删除中止未完成上传；损坏或取消的 APC 不会与后续命令拼成图片。拒收不创建放置、不移动光标，也不删除其他已接受资源。
 - synchronized update 只延迟桌面呈现，不延迟 daemon 的协议状态：处理外提的 Kitty 命令前，权威 Rio 镜像先应用前面的文字／光标／屏幕变化，避免同一 BSU／ESU 批次内的图片错误共用旧锚点。真实 PTY／daemon／rooted consumer 的两处异色图片回归已验证原逻辑失败、修复后通过；最终 agent 原生几何仍分别验收。
 
@@ -431,6 +431,60 @@ node scripts/kitty-capacity-analysis.mjs `
 上述媒体回归还覆盖 4 KiB 对象末尾的有效 8-byte 区域、跨 64 KiB 边界的非对齐区域，以及 `O=4092,S=8` 超出 4 KiB 对象时的统一拒收，Windows 已通过。错误回复直接从同一真实 pane 的 PTY Output 采集：fixture 的完成标记会覆盖终端网格中的回复前缀，不能把最终网格中找不到该前缀误判为 daemon 未回复。每个拒收断言保留媒体名、`O/S/q`、请求序号与真实输出诊断，仍检查具体 `EBADF`、图片／放置身份、quiet 抑制及未出现图片。
 
 #41 的真实 daemon-session 格式／压缩／应答／中断／49 MiB APC 拒收及后续输入回归、GPUI 真实 PNG／raw 解码与 paint 回归，以及退休 worker／继任连接回归已在 Windows 通过。本轮原生有效图、压力与恢复观察见下方；全部无效／超限格式的原生表现、其他 DPI 及 macOS 仍未穷尽验证。仅收到 frame 或派生状态不等同于原生像素验收。
+
+#### 静态 Sixel 接入（#274）
+
+静态内联 `DCS ... q ... ST` 由 daemon 在原 PTY 顺序中提取，复用正式 `rio-vt 0.5.30` 的 Sixel parser，转换为现有 RGBA 资源和独立 placement；不使用 Rio renderer，也不把像素留在文字 replay ring。准备与像素转换在 PTY reader 上、`PaneState` 锁外完成，资源及首次放置均经原有 daemon／桌面准入后才改变布局。桌面 `ParseBridge` 不再启动 Sixel decoder：未经 daemon 接收的 DCS 不能在持有文字 grid 锁时另行解码，也不能创建第二份无预算像素。图片使用文字背景之上、glyph 之下的图层，保证最后一行上的后续文字可见；Kitty 的默认 z-order 不变。
+
+当前切片采用自然像素尺寸和方形像素；每边受 Rio parser 的 4,096 像素上限约束，最终 RGBA 仍受单图 32 MiB 上限约束。仅接收 7-bit `ESC P`／`ESC \\` 定界的静态内联数据，数值头最多 63 bytes、整条编码最多 8 MiB；不读取文件、URL、PDF 或动画，不新增默认关闭的实验选项。每幅图独立使用 Rio 默认／图内自定义 palette，不跨图保留共享 palette。像素写入及宽度增长搬移合计最多 64 Mi 次；在 decoder 分配前按实际可达宽高预留最多 `8 × pixel_count + 16 KiB` 临时空间，另计仍存活的编码 source，全部计入原有工作池，不能仅信任 raster 声明或压缩重复次数。
+
+默认在当前光标位置锚定，纵向占用 `ceil(height / cell_height)` 行；光标停在图片最后一行的起始列，而不是套用 Kitty 的“图片右侧”规则。图片超出滚动区域底部时推进文字及图片历史；`DECSDM`（`?80h`）改为屏幕左上角、不滚动且不移动光标，`?8452h` 则令默认滚动模式的光标停在图片右侧。主／备屏切换、ED2、reset、历史过期及保留阅读共用现有生命周期；拒收不产生 placement、不移动光标、不替换其他资源。Sixel 无成功／失败应答，后续文字仍按原顺序继续。
+
+实际生产者回归使用 Ubuntu 官方 `libsixel-bin 1.10.5` 的 `img2sixel -w 40 -h 40 -p 4 -d none colors.ppm` 输出，核验真实 PTY → daemon → ordered consumer 的 RGBA、锚点和后续文字光标。源码接线及 headless consumer 不等于 Windows 原生像素、真实 SSH 或 macOS 已验收；原生与平台组合由 #258 的候选记录分别确认。完整 Sixel 恢复／安全／发现能力由下方 #275 小节补齐；本切片不扩大自动发现或宣称完整兼容。
+
+2026-11-13 的 Windows 独立 target 检查点为源码 `4d788ed5`，已合入父集成 `d7ab88d0`：Sixel 核心／真实 PTY 7 项、既有 Kitty 15 项、XTGETTCAP 共存 4 项、未结束同步输出 1 项、生产 `ParseBridge`／rooted `TerminalView` 消费者 2 项均通过，合计 29 项，无 ignored、无零匹配。生产消费者实际检查量化图的 BGRA、最终文字行、文字之下的图片图层、主备屏往返、冻结阅读期间继续输出 Kitty 和最终清除；有效 RED 曾分别命中未接入像素、超长头透传、图片图层不符和镜像启动未准入 decoder，再以同一生产路径获得 GREEN。此为本票窄验证，不是完整 workspace／产品 GUI binary 构建；Windows 原生窗口像素、WSL headless、真实 SSH 与 macOS 未在该分票检查点验收。
+
+Windows 的隔离候选 pane 可执行 `pwsh -NoProfile -File scripts/sixel-static.ps1 -Scene Baseline -KeepVisible`，实际经 WSL 调用上述已准备的官方 `img2sixel`，输出 240×160 像素图片及 `AFTER_SIXEL_274`。`-Scene Scroll`／`Display`／`Clear`／`Refusal` 分别提供底部滚动、DECSDM、清除和超限拒收场景；只在自有候选 pane 运行，不连接或清理用户窗口。截取原生画面时同时记录 cell 尺寸、图片边界与后续文字，不以脚本退出或收到资源 packet 代替像素通过。
+
+#### 静态 Sixel 兼容与恢复（#275）
+
+静态 Sixel 在 #274 的 daemon authority 之上补齐发现、恢复与拒绝语义，不新增第二套 decoder、VT parser 或图像权威。daemon 仍是唯一解码与准入者；桌面镜像不解码像素，也不重复回答图形查询。
+
+发现面按实际 endpoint 协商：pane 协议新增可忽略的 `static-sixel` feature。附着客户端回答 DA1 时，只有在本次 pane 连接实际协商到该 feature 才附加属性 `4`（`CSI ? 4 ; 6 c`），否则维持 `CSI ? 6 c`；旧 daemon 或未更新的远端 server 不会继承本机 GUI 的能力声明。daemon 自己在 detached 状态回答同一条构建内的 DA1。`XTSMGRAPHICS`（`CSI ? Pi ; Pa ; Pv S`）由持有像素几何与准入上限的 daemon 在附着与脱离两种状态回答，镜像保持沉默：颜色寄存器 `Pi=1` 的当前／最大值回答已发布 parser 的 `1024`；`Pi=2 Pa=1` 回答当前文本区域的设备像素（按每边 4,096 上限截断）；`Pa=2`／`Pa=3` 与 `Pa=4` 以状态 `3` 拒绝——准入同时受单图 32 MiB RGBA 面积预算约束，矩形“最大值”会虚假承诺；`Pi=3`（ReGIS）与未知 item 分别以状态 `1` 拒绝。`XTGETTCAP` 白名单不变（`Co`／`colors`／`RGB`）；`sixel` 不是 terminfo 能力名，其负答不代表图像不支持，Sixel 由 DA1 与 XTSMGRAPHICS 发现。`scripts/terminal-capabilities.mjs` 同时校验这两条新契约，`.lua` 场景注明公开 `vim.tty.query` 只覆盖 XTGETTCAP。缺少 `static-sixel` 的后端（旧 daemon 或未更新远端 server）既不被广告也不被本地替代：客户端不解码、不保留、不以仅环内像素伪装成功；应用若仍发送 Sixel，旧后端不会把它接入图形权威，因此不会出现“无恢复保证却显示为已接受”的路径。更新该后端是显式的用户操作，不自动重启 daemon 或终止 pane。
+
+尺寸与像素语义沿用已发布 parser：`"Pan;Pad;Ph;Pv` 的 `Ph`／`Pv` 是准入的自然像素范围（未绘制区域保持背景寄存器），`Pan`／`Pad` 被忽略、始终使用方形像素；每边 4,096 像素、单图 32 MiB RGBA、整条编码 8 MiB，另计工作池。光标按 DEC VT330/VT340 手册第 14 章处理：scrolling 模式退出 Sixel 时文字光标取最终 sixel 光标位置并向下取整到文字行，因此尾部 graphic newline 即使没有像素也占一个 sixel 行，而最后一个不足一行的 band 会回到其起始文字行；`DECSDM`（`?80h`）不移动光标，`?8452h` 只把列移到图片右缘，不影响行。实现由准入扫描返回最终 band 顶部（`band_top / cell_height`），不以解码像素 bbox 反推。光标、滚动区域、主／备屏、`ED2`、reset 与保留阅读沿用 #274 的既有生命周期。
+
+恢复不依赖文字回放环：Sixel DCS 在进入 ring 之前就被提取，像素只存在于 daemon 资源权威中。发送方停止后，即使普通输出淘汰了整段 8 MiB replay（但仍在 daemon 保留的 10,000 行文字内），全新 consumer 挂回同一存活 pane 仍从有序 Graphics 帧恢复已接受像素与 placement，不需要生产者重发；被淘汰文字对应的旧 placement 不会复活成可见图片。发送方计数器（字节、上传、放置）在恢复前后保持一致，作为“未重传”的外部证据。拒收（超限 raster、非法颜色分量、被 CAN 取消的截断体）不产生 placement、不移动光标、不替换已接受资源，后续文字按原顺序继续；很小的真实 decoded 预算会拒绝准入且不留下绘制像素。窗口 resize 后图片继续与实际文字行共享几何。
+
+原生 Windows、WSL headless 与真实 SSH 的组合验收由 #258 候选记录分别确认；headless 生产消费者断言不等于原生像素、GPU 或 macOS 验收。
+
+#### 静态 iTerm2 内联图片（#276）
+
+静态 iTerm2 图片接入与 Sixel 相同的 daemon 资源／placement／生命周期权威，不建立 GUI 专用 store、第二个 VT parser 或自动下载路径。只接收官方 `ESC ] 1337 ; File=[参数] : BASE64 BEL|ST` 单段静态形式，并且必须显式 `inline=1`；省略或 `inline=0`（文件下载）、官方 imgcat 默认的 `MultipartFile`／`FilePart`／`FileEnd` 分片形式都在进入文字回放环之前被有界识别并丢弃，既不显示也不写文件。`name=` 仅为发送方文件名提示，绝不解码成路径或用桌面／远端文件系统查找；`size=` 仅为进度提示，不构成第二长度权威。静态负载覆盖 PNG 与 JPEG：PNG 保持编码并由桌面既有解码器绘制；JPEG 先用正式 registry `image 0.25` 的 JPEG codec 只读头部尺寸，检查每边上限与 decoded budget，再在 daemon 有序准备、`PaneState` 锁外归一化为 RGBA，复用既有 RGBA 传输与绘制。GIF（含动画）、APNG、PDF、PICT、下载、路径引用及其他格式明确拒收；不宣称 iTerm2 支持所有 macOS 图像格式。参数里的 `width`／`height` 使用官方 `N` 单元、`Npx`、`N%` 与 `auto` 语法，`preserveAspectRatio` 缺省为 1，`0` 表示拉伸；解析复用 released `rio-graphics 0.5.30` 的 `ResizeCommand`／`ResizeParameter` 与 `GraphicData::compute_display_dimensions`。不启用 `rio-vt` 的 `graphics` feature：其公开 `iterm2_image_protocol::parse` 会在任何准入之前把任意受支持格式整体解码为 RGBA，与本切片的“有界编码／解码／维度准入”冲突；本切片只复用同版值类型、尺寸策略与 `CURSOR_RIGHT_OF_IMAGE`／`CURSOR_DO_NOT_MOVE` 语义。
+
+`File=` 头部最多 8,192 bytes，base64 负载最多 48 MiB（与既有 Kitty 单段上限一致，允许真实生产者按 76 列换行），去掉空白后解码 ≤ 32 MiB；PNG 走既有逐行校验，JPEG 在头部准入后归一化，两种格式最终都受每边 8,192 像素、单图 RGBA 32 MiB、工作池与 pane／daemon resource／metadata 预算约束。placement 新增精确 `display_width`／`display_height` 字段，属于 JSON 增量，但 v18 客户端会忽略字段并画出错误尺寸，因此 pane 协议升到 v19，双向版本不匹配时明确拒绝并提示更新，不做静默混用；Kitty／Sixel 的既有字段、重放和 handoff 语义不变。显示尺寸由 released 策略在准入时解析为设备像素（受每边 4,096 上限约束），随同 placement 以 `display_width`／`display_height` 送到桌面；绘制使用该精确尺寸，而不是把图片重新塞进向上取整的单元框。图片按被占用行数从当前光标行向下推进并滚动，文字光标停在图片最后一行的“图片右侧第一列”（最后一列时截到行尾）；`doNotMoveCursor=1`（WezTerm 扩展）在完成同样的滚动后恢复前置光标。图片位于文字背景之上、glyph 之下，后续文字仍可见；官方 imgcat 在序列后输出的换行是普通文字输出，测试按真实字节固定后续文字位置。
+
+主／备屏切换、`CSI 2J`／`CSI 3J`、reset、历史过期、滚动和保留阅读继续复用既有 placement 生命周期，不为 iTerm2 建第二套屏／清屏／历史状态；Kitty、Sixel、synchronized update 和隐藏窗格通知门控不变。拒收不产生资源或 placement、不移动光标、不替换已接受图片，后续普通输出按原顺序继续。本切片不新增 iTerm2 能力广告：DA1、`XTSMGRAPHICS` 与 `XTGETTCAP` 白名单保持原状，fresh consumer 恢复、真实 SSH 与能力发现由 #277 的完整恢复／安全／发现 gate 验收。
+
+原生产物记录：官方 `https://iterm2.com/utilities/imgcat` 脚本 SHA-256 `56f39f8c730eb7a64fed2bdb9e2c0bd2448f72e822caf5b4b17c68a76da52af8`；确定性 48×24 PNG fixture SHA-256 `3d6a133dd26429d40b4acb1c72784afa65642a16e6b38c91a6e20320465f041e`；实际命令 `bash imgcat-official.sh -l -W 4 -H 2 iterm2-fixture.png` 输出 330 bytes（含 uutils `base64` 的 76 列换行、绝对路径 `name=`、BEL 与尾随换行），SHA-256 `9e2726a99780ae04e9732b41d9d5e533857c0bcae7cd8aafe02fda4c7537366b`。生产 seam 回归使用该真实字节经真实 PTY → daemon → ordered consumer → rooted `TerminalView`，验证 4×1 placement、40×20 设备像素、BGRA 首像素、光标与 `AFTER_IT_276` 文字；边界用例覆盖尺寸模式、拒收、同步帧、主备屏与清除。headless 消费者断言不等于 Windows 原生像素、WSL headless、真实 SSH 或 macOS 验收；这些平台结果与最终候选记录分别确认。
+
+#### iTerm2 恢复、边界与发现（#277）
+
+静态 iTerm2 图片复用 Kitty／Sixel 的 pane／daemon 资源、placement、元数据预算与退役机制，不另建图片存储。新增后台生产消费者回归已覆盖第二段真实官方 `imgcat -l -n -W 40px -H 20px` 输出（336 bytes，SHA-256 `dc577e1046824a01f6222a29f8a3567b8ff0a199d292b8b27535175a66613ae9`）的长输出后 fresh consumer 恢复，以及滚动区域、`doNotMoveCursor=1`、fragment=7 分片、CAN／ESC 中断和超维／超头部输入的非破坏性拒收。该 GUI 恢复场景保留原 sender 并比较发送计数，不能冒称已验证原进程退出。
+
+同一次 PTY read 中，已完成的 `File=` 图片即使后面紧接 Kitty APC、另一条 File 或拒收控制串，编码／解码 source 的工作额度仍保留到各图片按流序移交，清理当前控制串不提前释放前一幅图片。base64 在原编码 buffer 内去除头部和空白，补齐 padding 后计算长度，并在新解码分配前取得工作池额度；畸形 padding 拒收而不产生无符号下溢。
+
+Windows 后台检查点 `90e87948`：共享 metadata 压力／RIS 身份退役 1 项、既有 source handoff 1 项及生产 GUI 消费者 9 项均通过，无失败／忽略；GUI 包括原初始发送／resize、PNG／JPEG、精确尺寸／像素数据、滚动、拒收、fresh恢复与同步／主备屏。metadata 单独限制为 1,024 bytes，其余资源／工作预算满足生产 PNG 校验前提；按 placement 身份折叠有序更新，不将更新帧数当图片数。
+
+WSL 检查点 `897d7c90` 使用原生 Linux Rust/Cargo 1.99.1、Node 22.22.1 与 MIT Kerberos，完整 features 的 headless workspace 构建通过；iTerm2 8 项与 shared handoff 1 项均通过。真实 Windows → 产品 SSH router → 同源 Linux pane19 后端的恢复用例也通过：测试消费者 `6d49660f` 仅补齐 PNG 接收端解码 oracle，原 server 仍为 `897d7c90`；原发送进程真实退出后，独立进程输出 9,218,400 bytes 并退出，全新 consumer 恢复 2 placements、8,388,608 bytes 回放及相同 PNG 像素／几何，daemon PID／instance 不变。此为 1 项实际 SSH 用例，不是仅编译，也不重发图片或在桌面解释远端文件名。
+
+含修复的 [macOS CI 检查点](https://github.com/dlivxpr/lyrel/actions/runs/43498186030) 已实际运行：PR checkout 为 `c4651347`（head `897d7c90`），9 项 iTerm2 生产消费者全部通过，桌面 library 为 3,103 passed／0 failed／35 ignored。该轮 CI 仍因独立的新 shell Glyph 回显 oracle 失败而非全绿，不能把单项修复写成完整 CI 通过。Windows 原生窗口像素、最终统一候选的完整 WSL／组合验收仍待记录，不用后台 GUI、旧候选、字体消费者或单项 SSH 结果替代，也不据此宣称 macOS 实窗验收通过。
+
+发现（discovery）结论：不为静态 iTerm2 适配器伪造 terminfo capability、DA1 attribute 或 `XTSMGRAPHICS` item；`XTGETTCAP` 白名单继续只回答已验证的 `Co`／`colors`／`RGB`。[官方 feature reporting](https://iterm2.com/feature-reporting/) 的 `FILE` 能力涵盖文件下载及其他媒体形式，本实现仅支持静态 inline PNG/JPEG，不广告该广泛能力，也不冒充 iTerm.app。pane 协议从 `19` 起携带 `display_width`／`display_height`；实际连接仍须满足当前版本与 endpoint 的协商要求，不能拿本机 GUI 版本代替远端身份。旧后端必须明确提示更新，不静默降级、不自动替换已运行的 server 或重启会话。本节不宣称 macOS 原生行为已经验收。
+
+2026-11-14 的统一产品候选 `2c0fcd7d` 已在隔离 Windows 实窗补验：官方 `libsixel 1.10.5` 的 240×160 静态输出、官方 `imgcat -l` 的像素尺寸与拉伸输出均实际显示；Sixel 的 `DECSDM`、超限 raster 拒收与清除，以及 iTerm2 的 multipart／download／PDF 拒收后续文字也已观察。随后把 Sixel、iTerm2 与注册 Glyph 放在同一 pane，确认两个图片 producer 均退出，再用 9 MiB 非滚动 SGR 输出淘汰原始传输。实际 ring 已无 Sixel DCS、iTerm2 `File=` 或 Glyph registration；关闭 GUI 后，以新进程附着同一 daemon／pane，三类资源仍显示，仅补普通文字标签与 codepoint、不重传图片或定义。
+
+同源 WSL 完整 features 的 headless workspace 与真实 SSH 的原 producer 退出／ring 淘汰／fresh consumer 恢复另有独立执行记录；[后续测试接缝修正的 CI](https://github.com/dlivxpr/lyrel/actions/runs/43541885955) 已全绿，不覆盖上述历史失败事实，也不将旧产品二进制改标为新 HEAD。后续实际系统 DPI 往返、原生指针优先级和系统中文 IME 的结果及仍缺的硬件持键 repeat 证据，统一见[候选验证边界](/reference/architecture#spec-258-acceptance)。Stage B／C 组合票仍保留，macOS 实窗不在已验收范围。
 
 #### 当前实现：终端布局与屏幕生命周期（#42）
 
@@ -823,7 +877,7 @@ Windows → Linux 原生图片与无重传恢复已补充实测，见远程文�
 - 显示静态图片、透明背景、应用连续替换的画面，以及 daemon 保留的帧、手动选帧和可见性暂停的自动播放；正确处理终端滚动、裁剪和重绘。新增播放路径的自动化与原生验证状态见 #141 小节。不包含图片查看器、点击放大或复制／另存为。
 - 图片属于窗格会话，不属于某个窗口。在历史保留范围和资源预算内，切换工作区、关闭后重开 GUI，以及重新连接同一存活 daemon 后，图片应恢复，无需应用重新发送。
 - 图片不新增磁盘持久化；daemon 结束后不保证历史图片恢复。智能体重新启动后主动重绘，是新的图片输出，不是 lyrel 恢复了旧图片。
-- 以 [Kitty graphics](https://sw.kovidgoyal.net/kitty/graphics-protocol/) 为支持协议，覆盖传输与独立放置、重复放置、裁剪、删除、Unicode 占位符，以及已有的传输并显示路径；SIXEL 与 iTerm2 inline images 不列为本次支持协议。
+- 以 [Kitty graphics](https://sw.kovidgoyal.net/kitty/graphics-protocol/) 为完整支持协议，覆盖传输与独立放置、重复放置、裁剪、删除、Unicode 占位符，以及已有的传输并显示路径；静态 Sixel 的初始接入范围与验证边界见 #274 小节，不等同完整 Sixel 兼容或发现能力。iTerm2 inline images 不列为该 Kitty 验收范围；静态 `File=` 切片、格式与尺寸边界及未验证平台见 #276 小节，其恢复／SSH／发现仍由 #277 gate 负责。
 - lyrel 如实报告已实现的能力。普通 shell 不冒充其他终端；明确的 agent 启动作用域可以提供 Kitty 兼容身份，同时保留真实 lyrel 标记、清空 Kitty 版本并尊重公开关闭选项。尚未覆盖的入口仍可使用应用自身公开协议设置；文档应注明已验证的版本与启动方式，不承诺所有第三方应用自动识别。
 - 单图、每窗格及整体图片资源均须有界，预算不能只按压缩文件大小或图片张数计算。优先回收最旧的非可见历史图片，保留文字；可见图片已占满预算时拒绝新图，不无限增长或阻塞 Shell。被回收图片不再属于可恢复内容。
 - 因预算回收历史图片后，只在仍保留的原显示区域绘制“图片已淘汰”提示，不改写终端文本、插入新行、写入 PTY 或弹出通知。应用主动删除、清屏或显示位置离开历史保留范围时不显示此提示；尚未成功接收的新图没有显示位置时，按协议应答规则报告失败。

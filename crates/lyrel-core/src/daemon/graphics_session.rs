@@ -53,6 +53,9 @@ pub(super) fn run(
     allow_clipboard: bool,
     mut ready: Option<DaemonMsg>,
     mut claim: Option<UnclaimedSpawn>,
+    pane_colors: bool,
+    glyph_state: bool,
+    glyph_render: bool,
 ) -> anyhow::Result<()> {
     read_stream.set_read_timeout(Some(INPUT_RETIRE_WAIT))?;
     let broker = pane.graphics_admission_broker();
@@ -126,17 +129,22 @@ pub(super) fn run(
                     let _ = session.sender.as_ref().unwrap().send(ready);
                 }
                 if observer {
-                    pane.observe_admitted(
+                    pane.observe_admitted_with_colors_and_glyphs(
                         session.sender.as_ref().unwrap().clone(),
                         gate.clone(),
                         admission,
+                        pane_colors,
+                        glyph_state,
                     )?
                     .map(Attached::Observer)
                 } else {
-                    pane.attach_admitted(
+                    pane.attach_admitted_with_colors_and_glyphs(
                         session.sender.as_ref().unwrap().clone(),
                         allow_clipboard,
                         admission,
+                        pane_colors,
+                        glyph_state,
+                        glyph_render,
                     )?
                     .map(Attached::Controller)
                 }
@@ -197,6 +205,9 @@ pub(super) fn run(
                     ClientMsg::Input(bytes) => pane.write_input(&bytes),
                     ClientMsg::Resize(size) => pane.resize(size),
                     ClientMsg::ClearPresentation { history } => pane.clear_presentation(history),
+                    ClientMsg::GlyphQueryResult { token, cp, system } => {
+                        pane.answer_glyph_query(*epoch, token, cp, system)
+                    }
                     ClientMsg::AuthResponse {
                         request_id,
                         response,

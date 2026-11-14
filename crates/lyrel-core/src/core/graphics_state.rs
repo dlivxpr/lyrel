@@ -25,6 +25,13 @@ pub struct Placement {
     pub y: u32,
     pub w: u32,
     pub h: u32,
+    /// Exact destination size in protocol device pixels, resolved by the
+    /// iTerm2 sizing policy at admission. Zero keeps the existing
+    /// `cols`/`rows`-derived Kitty/Sixel mapping.
+    #[serde(default)]
+    pub display_width: u32,
+    #[serde(default)]
+    pub display_height: u32,
     pub offset_x: u32,
     pub offset_y: u32,
     pub z: i32,
@@ -323,6 +330,7 @@ use rio_vt::event::{VoidListener, WindowId};
 use rio_vt::performer::handler::Processor;
 
 use super::kitty_graphics::{Action, Control, MAX_IMAGE_BYTES, response};
+use super::pane_colors::{ColorFrame, PaneColors};
 use super::terminal_resize::ResizeMode;
 use crate::daemon::protocol::WinSize;
 
@@ -459,6 +467,8 @@ pub(crate) struct PreparedImage {
     metadata: Option<retention::MetadataTicket>,
     placement: Option<(u64, retention::MetadataTicket)>,
     frame: Option<FramePreparation>,
+    /// The final sixel cursor position, which is not the decoded pixel extent.
+    sixel_cursor: Option<super::sixel_graphics::Cursor>,
     _work: retention::Work,
 }
 impl PreparedImage {
@@ -517,6 +527,12 @@ pub struct GraphicsState {
     resize_mode: ResizeMode,
     term: Crosswords<VoidListener>,
     processor: Processor,
+    /// Program-selected colours, the authoritative override layer for this
+    /// pane session. `published_colors` is what the current controller (and
+    /// observers) last received, so a new consumer can be sent one bounded
+    /// snapshot and live changes are deltas against that.
+    colors: PaneColors,
+    published_colors: PaneColors,
     screen: u64,
     region: std::ops::Range<i32>,
     dirty: BTreeSet<u64>,
@@ -562,6 +578,8 @@ impl GraphicsState {
                 10_000,
             ),
             processor: Processor::default(),
+            colors: PaneColors::default(),
+            published_colors: PaneColors::default(),
             screen: 0,
             region: 0..i32::from(size.rows.max(1)),
             dirty: BTreeSet::new(),
@@ -742,6 +760,7 @@ impl GraphicsState {
                 &control,
                 &mut effects,
                 Some((placement.key, placement.metadata)),
+                None,
             );
         } else {
             Self::reply(&mut effects, &control, control.id, "ENOENT:Image not found");
@@ -922,6 +941,15 @@ impl GraphicsState {
         frame: Option<FramePreparation>,
         mut work: retention::Work,
     ) -> Result<PreparedImage, &'static str> {
+        let mut sixel_cursor = None;
+        if control.sixel {
+            let (decoded, cursor) = super::sixel_graphics::decode(image, &mut work)?;
+            image = decoded;
+            sixel_cursor = Some(cursor);
+        }
+        if control.iterm2 && image.format == WireFormat::Jpeg {
+            image = super::iterm2_graphics::normalize_jpeg(image, &mut work)?;
+        }
         let mut decoded_bytes = if control.action == Action::Compose {
             0
         } else {
@@ -960,6 +988,7 @@ impl GraphicsState {
             metadata: None,
             placement: None,
             frame,
+            sixel_cursor,
             _work: work,
         })
     }
@@ -1299,6 +1328,43 @@ impl GraphicsState {
         self.next_key
     }
 
+    /// The pane's authoritative override layer. The theme owns every slot this
+    /// does not name; nothing here is a captured theme snapshot.
+    pub fn colors(&self) -> &PaneColors {
+        &self.colors
+    }
+
+    /// Restore an override layer carried across a live daemon handoff. Also
+    /// seeds the inner parser's colour table so both sides of this adapter
+    /// describe the same state.
+    pub fn restore_colors(&mut self, colors: PaneColors) {
+        for (index, rgb) in colors.iter_set() {
+            rio_vt::performer::handler::Handler::set_color(
+                self,
+                usize::from(index),
+                rio_vt::config::colors::ColorRgb {
+                    r: rgb[0],
+                    g: rgb[1],
+                    b: rgb[2],
+                },
+            );
+        }
+        self.colors = colors;
+        self.published_colors = colors;
+    }
+
+    /// The changes since the last consumer was told, or `None` when nothing
+    /// moved. Taking the delta advances the published baseline even when no
+    /// subscriber is attached: the next attach gets a full snapshot.
+    pub fn take_color_delta(&mut self) -> Option<ColorFrame> {
+        let ops = self.published_colors.diff(&self.colors);
+        if ops.is_empty() {
+            return None;
+        }
+        self.published_colors = self.colors;
+        Some(ColorFrame::delta(ops))
+    }
+
     fn lookup(&self, control: &Control) -> Option<u64> {
         self.resources.iter().rev().find_map(|(key, resource)| {
             (resource.root.is_none()
@@ -1390,6 +1456,7 @@ impl GraphicsState {
                     placement: placement_lease,
                     _work: _validation,
                     frame,
+                    sixel_cursor,
                 } = prepared;
                 if control.action == Action::Query {
                     Self::reply(&mut effects, &control, control.id, "OK");
@@ -1466,7 +1533,7 @@ impl GraphicsState {
                 );
                 effects.push(GraphicsEffect::Frame(packet));
                 if control.action == Action::TransmitAndDisplay {
-                    self.place(key, &control, &mut effects, placement_lease);
+                    self.place(key, &control, &mut effects, placement_lease, sixel_cursor);
                 } else {
                     Self::reply(&mut effects, &control, id, "OK");
                 }
@@ -1481,7 +1548,7 @@ impl GraphicsState {
                         .packet
                         .is_some()
                 }) {
-                    self.place(key, &control, &mut effects, None);
+                    self.place(key, &control, &mut effects, None, None);
                 } else {
                     Self::reply(&mut effects, &control, control.id, "ENOENT:Image not found");
                 }
@@ -1765,6 +1832,7 @@ impl GraphicsState {
         control: &Control,
         effects: &mut Vec<GraphicsEffect>,
         reserved_metadata: Option<(u64, retention::MetadataTicket)>,
+        sixel_cursor: Option<super::sixel_graphics::Cursor>,
     ) {
         let resource = &self.resources[&resource_key];
         let parent = match self.relative_parent(control, None) {
@@ -1775,9 +1843,37 @@ impl GraphicsState {
             }
         };
         let id = resource.id;
-        let Some((w, h, span_cols, span_rows)) = self.geometry(control, &resource.image) else {
-            Self::reply(effects, control, id, "EINVAL:Invalid placement rectangle");
-            return;
+        let (w, h, span_cols, span_rows, display_width, display_height) = if control.iterm2 {
+            let cell_width = u32::from(self.size.cell_w.max(1));
+            let cell_height = u32::from(self.size.cell_h.max(1));
+            let view_width = u32::from(self.size.cols.max(1)).saturating_mul(cell_width);
+            let view_height = u32::from(self.size.rows.max(1)).saturating_mul(cell_height);
+            let Some((display_width, display_height)) = super::iterm2_graphics::display_size(
+                resource.image.width,
+                resource.image.height,
+                control,
+                cell_width,
+                cell_height,
+                view_width,
+                view_height,
+            ) else {
+                Self::reply(effects, control, id, "EINVAL:Invalid iTerm2 image size");
+                return;
+            };
+            (
+                resource.image.width,
+                resource.image.height,
+                display_width.div_ceil(cell_width).max(1),
+                display_height.div_ceil(cell_height).max(1),
+                display_width,
+                display_height,
+            )
+        } else {
+            let Some((w, h, span_cols, span_rows)) = self.geometry(control, &resource.image) else {
+                Self::reply(effects, control, id, "EINVAL:Invalid placement rectangle");
+                return;
+            };
+            (w, h, span_cols, span_rows, 0, 0)
         };
         let replacement = self.placement_replacement(resource_key, control.placement);
         if replacement.is_none() && self.placements.len() >= MAX_PLACEMENTS {
@@ -1804,6 +1900,11 @@ impl GraphicsState {
             );
             return;
         };
+        let sixel_display = control.sixel
+            && self
+                .term
+                .mode()
+                .contains(rio_vt::crosswords::Mode::SIXEL_DISPLAY);
         let placement = Placement {
             key,
             resource: resource_key,
@@ -1815,16 +1916,31 @@ impl GraphicsState {
             y: control.y,
             w,
             h,
+            display_width,
+            display_height,
             offset_x: control.offset_x,
             offset_y: control.offset_y,
             z: control.z,
-            anchor_row: self.history_origin() + i64::from(self.term.grid.cursor.pos.row.0),
-            anchor_col: self.term.grid.cursor.pos.col.0 as i64,
+            anchor_row: self.history_origin()
+                + if sixel_display {
+                    0
+                } else {
+                    i64::from(self.term.grid.cursor.pos.row.0)
+                },
+            anchor_col: if sixel_display {
+                0
+            } else {
+                self.term.grid.cursor.pos.col.0 as i64
+            },
             screen: self.screen,
             span_cols,
             span_rows,
             clip_top: 0,
-            clip_bottom: span_rows,
+            clip_bottom: if sixel_display {
+                span_rows.min(u32::from(self.size.rows.max(1)))
+            } else {
+                span_rows
+            },
             virtual_placement: control.virtual_placement,
             parent,
             relative_x: control.relative_x,
@@ -1846,7 +1962,75 @@ impl GraphicsState {
             history_origin: self.history_origin(),
             epoch: self.viewport_epoch,
         }));
-        if !control.no_move && !control.virtual_placement && parent.is_none() {
+        if (control.sixel && !sixel_display) || control.iterm2 {
+            // DEC Sixel and iTerm2 both advance through occupied rows (and
+            // scroll), but their column rules differ: Sixel keeps the start
+            // column unless mode 8452 requests the right edge; iTerm2 leaves
+            // the cursor in the first column right of the image.
+            let start_row = self.term.grid.cursor.pos.row.0;
+            let start_col = self.term.grid.cursor.pos.col.0;
+            // The DEC text cursor is the final sixel cursor position rounded
+            // down to a text cell. That is not the decoded pixel extent: a
+            // graphic newline takes a sixel line even with no pixels on it, and
+            // a partial last band rounds back into the row it started in.
+            let down = if control.iterm2 {
+                span_rows.saturating_sub(1) as i32
+            } else {
+                sixel_cursor.map_or(span_rows.saturating_sub(1), |cursor| {
+                    cursor.band_top / u32::from(self.size.cell_h.max(1))
+                }) as i32
+            };
+            let scrolls = if self.region.contains(&start_row) {
+                (start_row + down - (self.region.end - 1)).max(0)
+            } else {
+                0
+            };
+            let col = if control.iterm2 {
+                (start_col + span_cols as usize).min(usize::from(self.size.cols.max(1)) - 1)
+            } else if self
+                .term
+                .mode()
+                .contains(rio_vt::crosswords::Mode::SIXEL_CURSOR_TO_THE_RIGHT)
+            {
+                (start_col + span_cols as usize).min(usize::from(self.size.cols.max(1)) - 1)
+            } else {
+                start_col
+            };
+            let mut movement = Vec::with_capacity(down as usize * 2 + 16);
+            for _ in 0..down {
+                movement.extend_from_slice(b"\x1bD");
+            }
+            if control.iterm2 && control.iterm2_do_not_move {
+                // WezTerm's extension restores the pre-image cursor after the
+                // same row advance (and any resulting scroll).
+                movement.extend_from_slice(
+                    format!("\x1b[{};{}H", start_row + 1, start_col + 1).as_bytes(),
+                );
+            } else {
+                movement.extend_from_slice(format!("\x1b[{}G", col + 1).as_bytes());
+            }
+            let layout = self.output(&movement);
+            effects.push(GraphicsEffect::Output(movement));
+            effects.extend(layout);
+            let base = self.history_origin();
+            let keep_history = self.screen == 0
+                && self.region.start == 0
+                && self.region.end == i32::from(self.size.rows.max(1));
+            if let Some(anchored) = self.placements.get_mut(&key) {
+                let p = &mut anchored.placement;
+                p.anchor_row = base + i64::from(start_row - scrolls);
+                if scrolls != 0 && !keep_history {
+                    p.clip_top = (base + i64::from(self.region.start) - p.anchor_row).max(0) as u32;
+                    p.clip_bottom = span_rows
+                        .min((base + i64::from(self.region.end) - p.anchor_row).max(0) as u32);
+                }
+                effects.push(GraphicsEffect::Update(GraphicsUpdate::Place(p.clone())));
+            }
+        } else if !control.sixel
+            && !control.no_move
+            && !control.virtual_placement
+            && parent.is_none()
+        {
             // Kitty leaves the cursor on the placement's last row. Do not
             // encode a zero CUD: terminals interpret CSI 0 B as one row.
             let down = span_rows

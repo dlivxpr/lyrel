@@ -12,8 +12,18 @@ use super::element::RenderCell;
 pub(super) struct ParsePresentation {
     pub(super) cursor: Option<Pos>,
     pub(super) reading_generation: u64,
+    pub(super) keyboard_generation: u64,
     pub(super) resize_revision: u64,
     pub(super) resize_images_revision: u64,
+    /// This pane's application-claimed pointer shape (OSC 22), kept at the
+    /// paint-seam facts the frame already reads. `None` is "no application
+    /// owns the pointer": the terminal's own policy applies.
+    pub(super) pointer: Option<gpui_kit::CursorStyle>,
+    /// Whether this pane's negotiated endpoint admits static Sixel. DA1 is
+    /// answered by the attached client, so it must describe the endpoint that
+    /// actually decodes and retains the image — never this build's own
+    /// capability when a routed remote server does not have it.
+    pub(super) endpoint_sixel: bool,
     tab_stops: Vec<bool>,
 }
 
@@ -22,12 +32,24 @@ impl ParsePresentation {
         let mut facts = Self {
             cursor: None,
             reading_generation: 0,
+            keyboard_generation: 0,
             resize_revision: 0,
             resize_images_revision: 0,
+            pointer: None,
+            endpoint_sixel: false,
             tab_stops: Vec::new(),
         };
         facts.resize(cols);
         facts
+    }
+
+    /// Records this pane's application pointer claim (OSC 22). Returns
+    /// whether the visible claim changed — a same-shape or already-released
+    /// release owes no repaint.
+    pub(super) fn set_pointer(&mut self, pointer: Option<gpui_kit::CursorStyle>) -> bool {
+        let changed = self.pointer != pointer;
+        self.pointer = pointer;
+        changed
     }
 
     /// Destructive VT transitions are recorded while parsing, including an
@@ -35,6 +57,10 @@ impl ParsePresentation {
     pub(super) fn invalidate_reading(&mut self) {
         self.reading_generation = self.reading_generation.wrapping_add(1);
         self.cursor = None;
+    }
+
+    pub(super) fn invalidate_keyboard(&mut self) {
+        self.keyboard_generation = self.keyboard_generation.wrapping_add(1);
     }
 
     pub(super) fn resize(&mut self, cols: usize) {

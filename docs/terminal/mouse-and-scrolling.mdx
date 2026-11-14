@@ -107,9 +107,37 @@ cargo fmt --check
 
 生产 `Root`／`TerminalView` 回归检查真实 paint 消费的 cells、caret、图片和复制结果，并另测无后续输入的期限推进；reader 回归检查分片、协议与受控的 150 ms 边界。测试窗口不是原生像素／IME 或真实 SSH 的证明；完整 Kit／Fast／Rio 组合的 Windows／Linux／macOS 与性能结果分别记录，macOS 仍需 #167 实机验收。
 
+<a id="xtgettcap-discovery"></a>
+### 终端能力发现（XTGETTCAP）
+
+应用可用 `DCS + q <十六进制能力名> ST` 查询能力；一个请求可以用分号查询多个名字。
+正式 Rio parser 负责解码，lyrel 按解码后的名字约束应答，不转发 Rio 的整张 terminfo 表。
+当前只允许 `Co`／`colors`（`256`）与 `RGB`（`8/8/8`），分别对应既有 indexed color 和真彩色绘制。
+`TN`／`name`、`co`／`cols`、`li`／`lines` 均负答，不冒充 `rio`，也不继承固定 `80×24`。
+剪贴板、下划线扩展、Glyph、Sixel、iTerm2、Kitty 以及其他未列入白名单的名字暂不通过此接口广告；
+负答表示尚未纳入此发现契约，不表示所有相关协议都完全不存在。后续能力只有完成端到端验收后才更新白名单和本文。
+
+daemon 是实时 XTGETTCAP 的唯一应答者；附着、脱离、重新附着与重连不转移应答所有权。
+桌面解析和 snapshot replay 不写回历史查询，普通文本仍由原有 parser 消费。
+实际 pane endpoint 必须在协商中广告 `xtgettcap-owner`；旧 endpoint 会明确提示更新
+`lyrel`／`lyrel-server`，不会因为本机 GUI 更新而假定远端也支持，更不会自动重启 daemon 或结束用户程序。
+产品级 `TERM`／`TERM_PROGRAM` 策略不变。
+
+查询在进入任何 daemon／GUI／CLI `Processor` 前经现有有界 control-string framing 提取；
+Rio 的公开 parser 负责识别 DCS header，完整查询才交给同版 Rio 的 response callback。
+单次查询（含 DCS header、不含 `ESC P`／`ST`）最多 `8192` 字节，未完成 header 最多 `128` 字节；
+取消或超限的查询静默丢弃，后续普通文本和合法查询继续处理。非 XTGETTCAP DCS 按原有路径消费。
+用于原生候选 pane 的可复现探针：`node scripts/terminal-capabilities.mjs`；加 `--reconnect`
+会在十五秒内持续查询，供关闭窗口但保留会话、重开窗口检查。不将该确定性探针当作 Neovim/notcurses 证据。
+真实消费场景可在 Neovim `0.12` TUI 中运行
+`nvim -u NONE --cmd "luafile scripts/terminal-capabilities.lua"`，脚本使用公开的 `vim.tty.query`
+并显示版本、环境及逐项结果。Neovim 自己会在一秒期限后将负答／缺失能力回调为 `found=false`；
+因此 `Ms` 的 false 表示保留其剪贴板回退，而不是宣称其自动启用了 OSC 52。
+版本检查、headless 启动和此脚本的存在本身都不算真实 TUI 验收通过。
+
 ### 真彩色样式与历史容量
 
-当前终端内核为正式 `rio-vt 0.5.29`。每个 grid 的同时保留样式容量约为 65k，屏幕和历史共同占用名额；超限时新样式可能回退默认前景色，字符仍会保留。这是已知的限定容量差异，不表示普通真彩色输出必然触发。
+当前终端内核为正式 `rio-vt 0.5.30`。每个 grid 的同时保留样式容量约为 65k，屏幕和历史共同占用名额；超限时新样式可能回退默认前景色，字符仍会保留。这是已知的限定容量差异，不表示普通真彩色输出必然触发。
 
 内核的 mark-and-sweep 会回收不再被引用的样式，但主屏连续滚动时，逻辑历史之外的 raw 缓存行也可能保留样式引用。因此，调小回滚缓冲区不能保证避免颜色回退；不能把已有 GC 描述为样式容量无限，也不能通过丢弃输出或擅自缩短历史掩盖该限制。
 
@@ -131,7 +159,38 @@ cargo fmt --check
 应用的拖动和松开报告只属于实际向该应用报告过按下的窗格。从侧边栏、标题栏或其他窗格开始的拖动不会进入本窗格；在本窗格开始的应用拖动可以越过边界，坐标限制在原窗格边缘，直到松开。按住 <kbd>⇧</kbd> 开始的本地选择不会因中途松开修饰键而变成应用拖动；本地松开或下一次无按键的指针移动会清理旧手势所有权。普通点击、滚轮和应用请求的无按键移动报告保持原有规则。
 多个按钮同时按下时，左键、中键和右键分别保留自己的已报告按下；松开一个按钮不会丢弃其他按钮的松开报告。无按键移动统一清理所有旧手势，避免丢失跨窗口松开后留下所有权。
 
-`src/terminal/mouse_reporting_consumer_tests.rs` 通过生产 `Root`／`TerminalElement` 的鼠标事件路由、隔离 daemon 和真实 PTY 子进程读取应用收到的字节，检查跨窗格所有权、修饰键变化、丢失松开以及正常点击／滚轮。它不替代 Windows／macOS 原生窗口的拖动和跨窗口松开验收。
+上报字节按应用协商的坐标编码写出：未扩展协商时保持 X10 字节格式（超过第 223 个可报告位置的事件不发），`?1005h` 使用 UTF-8 编码坐标（按钮位与坐标各按 `32+值` 的 UTF-8 字符写入，可报告位置上限为 2015），`?1006h` 使用 SGR 十进制格式；`?1005` 与 `?1006` 互斥，最后生效者决定编码，DECRQM（`CSI ? Ps $ p`）按当前生效状态回答。模式 1015／1016 未实现，对其 DECRQM 探测回答"不支持"，不会替代已协商编码。断开后重新附着的窗格按 daemon 折叠的生效模式恢复：若应用先开启 1005 再切到 1006（或已关闭某档上报级别），回放只恢复最终生效状态，不会把已被替换的编码重新打开。
+
+`src/terminal/mouse_reporting_consumer_tests.rs` 通过生产 `Root`／`TerminalElement` 的鼠标事件路由、隔离 daemon 和真实 PTY 子进程读取应用收到的字节，检查跨窗格所有权、修饰键变化、丢失松开以及正常点击／滚轮。#263 新增的 `mouse_reporting_utf8_coordinates_reach_the_real_pty_consumer` 在 300 列真 PTY 窗格上断言 1005 模式下超出 X10 范围的按下／松开／修饰键与滚轮字节、Shift 本地选择覆盖、DECRQM 1005／1006／1015 回复与 1005→1006→1005→无扩展切换；`src/terminal/remote/reader/replayed_mode_tests.rs` 覆盖编码转换的重放落点，`crates/lyrel-core` 的 `term_modes` 测试固定折叠与模拟器一致。它们不替代 Windows／macOS 原生窗口的拖动和跨窗口松开验收；原生宽窗格场景可用 `tests/support/mouse_utf8_probe.mjs` 在真实窗格内运行。
+
+```powershell
+cargo test --locked -p lyrel --lib terminal::view::gpui_tests::mouse_reporting_ -- --nocapture --test-threads=1
+cargo test --locked -p lyrel --lib terminal::remote::reader::replayed_mode -- --nocapture --test-threads=1
+cargo test --locked -p lyrel-core --lib core::term_modes -- --nocapture --test-threads=1
+```
+
+Windows 上将上述 `cargo test` 改为 `pwsh scripts/cargo-windows.ps1 test`，由 wrapper 在实际测试 executable 旁暂存固定 ConPTY。宽窗格原生验收在隔离的开发实例中进行，不接管已安装实例或用户会话：
+
+```powershell
+node tests/support/mouse_utf8_probe.mjs
+```
+
+将终端窗格扩大至至少 241 列（探针会输出实际列数，必要时缩小终端字号）。点击第 241 列、第 11 行，1005 模式下应收到 `1b 5b 4d 20 c4 91 2b`，松开为 `1b 5b 4d 23 c4 91 2b`；按住 Ctrl 后按钮字节分别变成 `30`／`33`（十六进制），坐标不变。继续拖动、滚轮和 Alt 修饰键，检查位置与状态；按住 Shift 的本地选择不应产生应用鼠标报告。探针按 `s` 切至 1006 后，相同点击应显示 `SGR report: 0;241;11M` 和 `0;241;11m`；按 `u` 返回 1005，按 `q` 查询。每次模式切换的 DECRQM 回复都应只有当前编码为 `1`、另一编码为 `2`，1015 为 `0`。Ctrl+C 退出并关闭探针启用的鼠标模式。
+
+WSL 或 SSH 场景在实际 lyrel 对应窗格中，用远端 Node 运行同一探针文件；本地 Windows 路径不可当作远端路径。将文件放入自有远端测试目录，再运行 `node /path/to/mouse_utf8_probe.mjs`，重复宽列点击与模式切换，保存探针 stdin 字节和原生窗口截图。SSH 必须使用当前候选 server、隔离配置与固定 host key；仅证明 SSH 能登录、手工注入预期字节或 headless 合成指针，不等价于远端真实鼠标验收。macOS 原生结果需单独取得，不从 Windows 结果推断。
+
+### 应用请求的指针形状（OSC 22）
+
+终端程序可发送 `OSC 22 ; name ST`（或以 BEL 结束）设置当前窗格内容区的指针形状，例如 `pointer`、`text`、`ew-resize`、`ns-resize` 与四个角的 resize。`default` 明确请求系统箭头；`OSC 22 ; ST` 的空名称释放应用覆盖，恢复终端自身策略。分片请求沿有序输出解析，空重置与同批次后续设置保持先后顺序。不识别的名称及格式错误的请求忽略，不修改已有覆盖；合法但平台缺少对应形状的请求使用安全的原生箭头回退。Windows 的 `grab`／`grabbing` 使用与工作台拖动柄相同的手形替代；`help`／`wait`／`progress` 等没有 GPUI 对应形状的名称回退箭头。
+
+工作台菜单和分屏拖动命中区优先于终端内容。内容区内正在进行的本地文字选择、按住链接修饰键的链接操作优先于应用请求；其后才使用应用形状，最后使用普通终端策略（可选择文本的 I-beam，或应用鼠标模式下的系统默认）。覆盖不影响编辑器、侧边栏、标题栏或其他窗格，也不会改变点击／拖动实际投递到哪里。空重置、`RIS`、shell 的命令完成／返回提示符、断连和链接退休会释放旧覆盖；重连后只由新链接的有序重放重新建立应用状态。
+
+此能力仅包括基本 set/reset，不实现 Kitty 的指针堆栈或查询扩展，也不为触发客户端检测而修改 `TERM`／`TERM_PROGRAM`。已有后端版本和 pane 协议协商仍按实际 endpoint 执行；OSC 22 随原有 PTY 字节传输，不新增控制消息，不自动重启 daemon 或已有会话。经过 tmux／screen 或远端路由时，中间层是否转发 OSC 22 必须单独核实，不能从本地 GUI 推断。
+
+客户端仍可能不发送请求：本轮核对的 [Codex `link_pointer.rs`](https://github.com/openai/codex/blob/main/codex-rs/tui/src/tui/link_pointer.rs) 仅在检测结果为 Kitty／Ghostty 且未检测到 multiplexer 时启用指针请求，Kitty 清理发送空名称、其他受支持终端清理发送 `text`。因此 lyrel 支持解析不代表普通 `TERM_PROGRAM=lyrel` 的 Codex 会自动启用该行为；这里不扩展既有命令级兼容身份，也不宣称 tmux／screen 透明转发或真实 Codex 客户端已验收。原生场景直接发送请求，不能替代该客户端的检测证明。
+
+`src/terminal/pointer_consumer_tests.rs` 使用真实 PTY → 隔离 daemon → 有序 pane stream → 生产 `TerminalView`／`TerminalElement`，覆盖 set/reset、平台回退、命令清理，以及真实鼠标事件触发的选择复制和链接打开；`remote/reader/pointer_tests.rs` 补充分片、重放和断连边界。GPUI 测试平台没有原生 cursor reader，因此这些断言观察生产绘制策略与实际操作结果，不冒充操作系统指针像素证据。可在候选隔离窗口的 pane 内运行 `node tests/support/pointer_scene.mjs`，移动／拖动检查应用形状，按 `m` 关闭应用鼠标报告后检查本地选择、菜单及链接优先级，按 `0`／`f`／`r`／`d` 检查重置，再按 `q` 返回 shell。场景打印实际 `TERM`、`TERM_PROGRAM`、`TMUX` 与 `STY`；原生 Windows、macOS 和真实 SSH 的结果必须分别记录，未执行项不作为通过。
+
 
 ### 链接的实现职责
 

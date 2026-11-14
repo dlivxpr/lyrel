@@ -129,6 +129,18 @@ readline 的所有功能仍然有效——这一层建立在其之上，而不�
 重新附着窗格时也按相同的命令边界恢复；之后程序重新协商的键盘模式仍然有效。
 普通 TUI 或复制的记录中的通用 OSC 133 标记不会单独清除正在运行程序的键盘状态。
 
+### 协商后的按键事件
+
+程序通过 Kitty 键盘协议的 `CSI > flags u`／`CSI = flags ; mode u` 协商输入，并用 `CSI ? u` 查询当前有效模式。主屏与备用屏各有有界栈；重新附着使用同一有效模式规则恢复，而不是重新广告程序请求过但未实现的位。
+
+- `2`（报告事件类型）使用 GPUI 的真实 `KeyDownEvent.is_held` 和 `KeyUpEvent`，在 CSI-u、方向键和功能键的编码中区分按下、重复和释放。未协商时继续发送原有字节，按住重复仍按普通按下处理。
+- 只有确实写入当前 PTY 输入队列的按下才能配对释放；本地提示符编辑、补全、搜索、阅读按钮、被保留的提前输入和 IME 文本提交不凭空建立按键配对。失焦、窗口失活、屏幕切换、reset、模式重新协商、命令结束和断链会退役旧配对，不把旧释放写给新的输入所有者。
+- 未启用 `8`（所有按键转义）时，Enter、Tab、Backspace 保留协议规定的释放例外；普通文本也不因单独启用 `2` 获得释放。Windows ConPTY 的旧 Enter／Ctrl+J 转译已经包含合成按下和释放，不再追加真实释放。
+- GPUI 没有提供 physical／base-layout key，也不能可靠区分独立修饰键的左右位置。lyrel 不猜造这些信息；`4`（alternate keys）不会出现在有效模式、查询回复或恢复的栈中。现有 `8` 仅能报告框架实际提供的按键，不能据此宣称获得了缺失的物理键或完整左右修饰键信息。
+- 已开始的 IME 预编辑及平台明确优先交给字符输入的事件继续由输入法处理。只有提交文本写给当前输入所有者；程序同时启用 `8` 与 `16` 时，无物理键信息的提交使用 key code `0` 和 Unicode code points，且没有伪造的释放。
+
+协议字段及例外以 [Kitty keyboard protocol](https://sw.kovidgoyal.net/kitty/keyboard-protocol/) 为准。原生验证可在隔离开发窗格中执行 `node tests/support/kitty_keyboard_boundary.mjs events 31`，检查有效回复为 `27`，依次按住并释放方向键、F3、Ctrl+Q、Shift+Tab，再用系统中文输入法提交文字；每个实际输入块都显示为 `KEYBOARD_EVENT_CHUNK:<hex>`。打开搜索、切换阅读按钮／其他窗格、切出窗口后再回来，检查没有孤立释放或重复文字。运行 `events 2` 对照普通字符与 Enter／Tab／Backspace 的例外，运行 `record` 对照未协商字节。真实 Windows／系统 IME／SSH 验收必须另记实际结果，不能用 headless 事件或直接调用文本处理器代替。
+
 <Note>
   在 macOS 上开启 **将 Option (⌥) 用作 Meta** 后，<kbd>⌥</kbd> 组合键会完全绕过输入法，
   因此 <kbd>⌥ B</kbd> 会以 meta-b 的形式传给 shell，而不会被当作死键吞掉。

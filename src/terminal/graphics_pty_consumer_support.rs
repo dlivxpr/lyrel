@@ -189,7 +189,10 @@ impl GraphicsDaemonProcess {
         stream
             .set_read_timeout(Some(std::time::Duration::from_secs(30)))
             .unwrap();
-        crate::daemon::protocol::negotiate_pane(&mut stream).unwrap();
+        // Every consumer attached through this helper is a real production
+        // TerminalView: it keeps the monochrome contract, so it declares the
+        // render opt-in — the credential `q` routing and `s` answers bind to.
+        crate::daemon::protocol::negotiate_pane_rendering(&mut stream, true).unwrap();
         ClientMsg::GraphicsCapacity {
             encoded_bytes,
             decoded_bytes,
@@ -215,6 +218,12 @@ impl Drop for GraphicsDaemonProcess {
         let _ = self.child.wait();
     }
 }
+
+/// The actual Ubuntu `libsixel-bin 1.10.5-1build1` output of
+/// `img2sixel -w 40 -h 40 -p 4 -d none colors.ppm` for the 2x2 red/green over
+/// blue/yellow PPM. libsixel quantizes the scaled image, so the first pixel is
+/// `[184, 51, 61]` in RGBA (BGRA after the production decoder).
+const SIXEL_PRODUCER_OUTPUT: &[u8] = b"\x1bPq\"1;1;40;40#0;2;72;20;24#1;2;24;74;11#2;2;74;74;24#3;2;24;20;66#0!19~#1!21~-#0!19~_$#1!19?^!20~-#0!20~#1^!19~$#2!20?_-#0!13BFFN^~~~#2~}!6{!12w$#3!13{wwo_#1!4?@!6B!12F-#3!18~}w#2!20~$#0!18?@F-#3!20~#2!20~-#3!20N#2!20N\x1b\\";
 
 fn graphics_send_fixture(
     view: &Entity<TerminalView>,
@@ -321,8 +330,16 @@ fn graphics_build_rooted_consumer_at(
     let window: gpui_kit::AnyWindowHandle = cx.add_window(|_, _| gpui_kit::EmptyView).into();
     let view = window
         .update(cx, |_, window, cx| {
-            let terminal =
-                RemoteTerminal::from_stream_with(stream, size, buffered, source).unwrap();
+            // The fixture daemon is this same build and the stream above was
+            // negotiated with it, so its version describes the real endpoint.
+            let terminal = RemoteTerminal::from_stream_with_endpoint(
+                stream,
+                size,
+                buffered,
+                source,
+                Some(crate::daemon::protocol::DaemonVersion::current()),
+            )
+            .unwrap();
             cx.new(|cx| TerminalView::with_terminal(terminal, pane, window, cx))
         })
         .unwrap();
@@ -389,7 +406,9 @@ fn graphics_recovery_wait(
     reason: &str,
     ready: impl FnMut(&mut TestAppContext) -> bool,
 ) {
-    graphics_recovery_wait_with(cx, std::time::Duration::from_secs(30), ready, |_| reason.to_owned());
+    graphics_recovery_wait_with(cx, std::time::Duration::from_secs(30), ready, |_| {
+        reason.to_owned()
+    });
 }
 
 /// Native agent startup and full-size replay need longer deadlines and live
@@ -415,7 +434,9 @@ fn sync_presented_row(view: &TerminalView, row: usize) -> String {
     view.grid_buf[row * cols..(row + 1) * cols]
         .iter()
         .filter(|cell| !cell.spacer)
-        .flat_map(|cell| std::iter::once(cell.c).chain(cell.marks.as_deref().unwrap_or(&[]).iter().copied()))
+        .flat_map(|cell| {
+            std::iter::once(cell.c).chain(cell.marks.as_deref().unwrap_or(&[]).iter().copied())
+        })
         // Packed untouched cells paint as blanks. Preserve their columns;
         // only the caller deciding a logical range may trim trailing padding.
         .map(|ch| if ch == '\0' { ' ' } else { ch })
@@ -675,4 +696,278 @@ fn graphics_recovery_destroy(
             None
         );
     });
+}
+
+// ---- Glyph Protocol producer and production-paint helpers ----------------
+//
+// Shared by the headless consumer tracer and the native-font consumer so both
+// drive the same real PTY fixture, the same reply channel and the same
+// production scene assertions.
+
+use gpui_kit::test::TestWindowExt as _;
+
+/// A supplementary-plane PUA-B codepoint no ordinary font maps, so a painted
+/// glyph can only come from the registration.
+const GLYPH_CP: u32 = 0x100000;
+
+/// A closed simple-glyph square with four on-curve points and no hinting.
+fn glyph_square(side: i16) -> Vec<u8> {
+    glyph_polygon(&[(0, 0), (side, 0), (side, side), (0, side)])
+}
+
+/// A closed simple-glyph rectangle.
+#[allow(dead_code)]
+fn glyph_rect(width: i16, height: i16) -> Vec<u8> {
+    glyph_polygon(&[(0, 0), (width, 0), (width, height), (0, height)])
+}
+
+fn glyph_polygon(points: &[(i16, i16)]) -> Vec<u8> {
+    let count = points.len() as u16;
+    let xs: Vec<i16> = points.iter().map(|(x, _)| *x).collect();
+    let ys: Vec<i16> = points.iter().map(|(_, y)| *y).collect();
+    let mut out = Vec::new();
+    out.extend_from_slice(&1i16.to_be_bytes()); // one contour
+    out.extend_from_slice(&xs.iter().copied().min().unwrap_or(0).to_be_bytes());
+    out.extend_from_slice(&ys.iter().copied().min().unwrap_or(0).to_be_bytes());
+    out.extend_from_slice(&xs.iter().copied().max().unwrap_or(0).to_be_bytes());
+    out.extend_from_slice(&ys.iter().copied().max().unwrap_or(0).to_be_bytes());
+    out.extend_from_slice(&(count - 1).to_be_bytes()); // endPtsOfContours
+    out.extend_from_slice(&0u16.to_be_bytes()); // instructionLength
+    out.extend(std::iter::repeat_n(0x01u8, points.len())); // on-curve, 16-bit deltas
+    let mut previous = 0i16;
+    for x in &xs {
+        out.extend_from_slice(&(x - previous).to_be_bytes());
+        previous = *x;
+    }
+    let mut previous = 0i16;
+    for y in &ys {
+        out.extend_from_slice(&(y - previous).to_be_bytes());
+        previous = *y;
+    }
+    out
+}
+
+#[allow(dead_code)]
+fn glyph_register(cp: u32, glyf: &[u8], reply: u8) -> Vec<u8> {
+    glyph_register_with(cp, glyf, 1000, "", reply)
+}
+
+/// A registration with the §8.5 control keys the caller writes verbatim.
+/// `params` is a semicolon-separated list without a trailing separator.
+#[allow(dead_code)]
+fn glyph_register_with(cp: u32, glyf: &[u8], upm: u16, params: &str, reply: u8) -> Vec<u8> {
+    use base64::Engine as _;
+    let payload = base64::engine::general_purpose::STANDARD.encode(glyf);
+    let params = params.trim_end_matches(';');
+    let separator = if params.is_empty() { "" } else { ";" };
+    format!(
+        "\x1b_25a1;r;cp={cp:x};fmt=glyf;reply={reply};upm={upm};{params}{separator}{payload}\x1b\\"
+    )
+    .into_bytes()
+}
+
+/// Send one registration through the real PTY and require the daemon's
+/// success reply.
+#[allow(dead_code)]
+fn glyph_register_ok(
+    view: &Entity<TerminalView>,
+    cx: &mut TestAppContext,
+    serial: usize,
+    reply_path: &std::path::Path,
+    cp: u32,
+    glyf: &[u8],
+    upm: u16,
+    params: &str,
+) {
+    let reply = glyph_send(
+        view,
+        cx,
+        serial,
+        reply_path,
+        &glyph_register_with(cp, glyf, upm, params, 1),
+        1,
+    );
+    assert_eq!(
+        reply,
+        format!("\x1b_25a1;r;cp={cp:x};status=0\x1b\\").into_bytes(),
+        "registration rejected: {params}"
+    );
+}
+
+/// Place text at a zero-based row/column through the real PTY fixture.
+#[allow(dead_code)]
+fn glyph_show(
+    view: &Entity<TerminalView>,
+    cx: &mut TestAppContext,
+    serial: usize,
+    row: usize,
+    col: usize,
+    text: &str,
+) {
+    let bytes = format!("\x1b[{};{}H{text}", row + 1, col + 1).into_bytes();
+    graphics_send_fixture(view, cx, serial, &bytes);
+}
+
+fn glyph_query(cp: u32) -> Vec<u8> {
+    format!("\x1b_25a1;q;cp={cp:x}\x1b\\").into_bytes()
+}
+
+#[allow(dead_code)]
+fn glyph_clear(cp: Option<u32>) -> Vec<u8> {
+    match cp {
+        Some(cp) => format!("\x1b_25a1;c;cp={cp:x}\x1b\\").into_bytes(),
+        None => b"\x1b_25a1;c\x1b\\".to_vec(),
+    }
+}
+
+/// Send through the real PTY fixture and read `replies` back through the
+/// request's gate file: Glyph Protocol has its own reply vocabulary, and a
+/// row-1 reply line would be overwritten by the next request.
+fn glyph_send(
+    view: &Entity<TerminalView>,
+    cx: &mut TestAppContext,
+    serial: usize,
+    reply_path: &std::path::Path,
+    bytes: &[u8],
+    replies: usize,
+) -> Vec<u8> {
+    let path = reply_path.to_string_lossy();
+    let request = format!(
+        "SEND_ANY {serial} {replies} {} 0 {}\n",
+        graphics_pty_fixture::hex(bytes),
+        graphics_pty_fixture::hex(path.as_bytes()),
+    );
+    let input_bytes = request.len();
+    view.read_with(cx, |view, _| view.terminal.write(request.into_bytes()));
+    graphics_wait_fixture(view, cx, serial, input_bytes);
+    let text = std::fs::read_to_string(reply_path)
+        .unwrap_or_else(|error| panic!("no reply file for serial {serial}: {error}"));
+    graphics_pty_fixture::unhex(text.trim())
+}
+
+fn glyph_cell_bounds(
+    window: gpui_kit::AnyWindowHandle,
+    view: &Entity<TerminalView>,
+    cx: &mut TestAppContext,
+    row: usize,
+    col: usize,
+) -> gpui_kit::Bounds<gpui_kit::ScaledPixels> {
+    glyph_region_bounds(window, view, cx, row, col, 1)
+}
+
+/// The declared render span of a registration, in the scaled pixels the
+/// painted scene records. `cells` is the span the production code chose, so
+/// a width-two registration that fell back to one cell asks for one here.
+#[allow(dead_code)]
+fn glyph_region_bounds(
+    window: gpui_kit::AnyWindowHandle,
+    view: &Entity<TerminalView>,
+    cx: &mut TestAppContext,
+    row: usize,
+    col: usize,
+    cells: usize,
+) -> gpui_kit::Bounds<gpui_kit::ScaledPixels> {
+    let geom = view.read_with(cx, |view, _| view.cell_geom.expect("production frame"));
+    let scale = window
+        .update(cx, |_, window, _| window.scale_factor())
+        .unwrap();
+    gpui_kit::Bounds::new(
+        gpui_kit::point(
+            geom.origin.x + geom.cell_width * col as f32,
+            geom.origin.y + geom.line_height * row as f32,
+        ),
+        gpui_kit::size(geom.cell_width * cells as f32, geom.line_height),
+    )
+    .map(|pixel| gpui_kit::ScaledPixels(pixel.as_f32() * scale))
+}
+
+/// Whether two painted rectangles land on the same pixels within the
+/// fractional layout and tessellation tolerance of one physical pixel.
+#[allow(dead_code)]
+fn glyph_bounds_close(
+    left: gpui_kit::Bounds<gpui_kit::ScaledPixels>,
+    right: gpui_kit::Bounds<gpui_kit::ScaledPixels>,
+) -> bool {
+    let close = |a: f32, b: f32| (a - b).abs() <= 1.5;
+    close(left.origin.x.0, right.origin.x.0)
+        && close(left.origin.y.0, right.origin.y.0)
+        && close(left.size.width.0, right.size.width.0)
+        && close(left.size.height.0, right.size.height.0)
+}
+
+/// Renders one production frame and returns the path primitives that land
+/// inside `cell`, with the solid colour they were painted with.
+fn glyph_paths_in_cell(
+    window: gpui_kit::AnyWindowHandle,
+    _view: &Entity<TerminalView>,
+    cx: &mut TestAppContext,
+    cell: gpui_kit::Bounds<gpui_kit::ScaledPixels>,
+) -> Vec<(
+    gpui_kit::Bounds<gpui_kit::ScaledPixels>,
+    gpui_kit::Background,
+)> {
+    window
+        .update(cx, |_, window, cx| {
+            window.simulate_next_frame(cx);
+            window.render_frame(cx);
+            window
+                .painted_scene()
+                .paths
+                .iter()
+                .filter(|path| {
+                    let visible = path.bounds.intersect(&cell);
+                    visible.size.width.0 > 0. && visible.size.height.0 > 0.
+                })
+                .map(|path| (path.bounds, path.color))
+                .collect()
+        })
+        .unwrap()
+}
+
+/// The same production paths, with the content mask that the renderer clips
+/// them to. A glyph's declared span is that mask, so a test can prove the
+/// visible extent even when the path geometry itself runs past it.
+#[allow(dead_code)]
+fn glyph_paths_with_clip_in_region(
+    window: gpui_kit::AnyWindowHandle,
+    _view: &Entity<TerminalView>,
+    cx: &mut TestAppContext,
+    region: gpui_kit::Bounds<gpui_kit::ScaledPixels>,
+) -> Vec<(
+    gpui_kit::Bounds<gpui_kit::ScaledPixels>,
+    gpui_kit::Bounds<gpui_kit::ScaledPixels>,
+    gpui_kit::Background,
+)> {
+    window
+        .update(cx, |_, window, cx| {
+            window.simulate_next_frame(cx);
+            window.render_frame(cx);
+            window
+                .painted_scene()
+                .paths
+                .iter()
+                .filter(|path| {
+                    let visible = path.bounds.intersect(&region);
+                    visible.size.width.0 > 0. && visible.size.height.0 > 0.
+                })
+                .map(|path| (path.bounds, path.content_mask.bounds, path.color))
+                .collect()
+        })
+        .unwrap()
+}
+
+fn glyph_wait(
+    cx: &mut TestAppContext,
+    what: &str,
+    mut ready: impl FnMut(&mut TestAppContext) -> bool,
+) {
+    graphics_recovery_wait(cx, what, |cx| ready(cx));
+}
+
+fn glyph_presented_row(view: &TerminalView, row: usize) -> String {
+    let cols = view.cell_geom.expect("a production frame was painted").cols;
+    view.grid_buf[row * cols..(row + 1) * cols]
+        .iter()
+        .map(|cell| if cell.c == '\0' { ' ' } else { cell.c })
+        .collect()
 }

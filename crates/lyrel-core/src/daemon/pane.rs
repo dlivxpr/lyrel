@@ -9,12 +9,16 @@ use std::thread::JoinHandle;
 use std::time::Duration;
 
 use crate::core::clipboard::ClipboardSniffer;
+use crate::core::glyph_protocol::{GlyphSession, GlyphSniffer, PendingQueries};
 use crate::core::kitty_graphics::{GraphicsEffect, GraphicsSniffer, GraphicsState};
 use crate::core::term_modes::TerminalModes;
 use crate::daemon::protocol::{
     AuthResponse, DaemonMsg, NativeSshSpec, PaneInfo, RemoteContext, RemoteKind, ShellSpec, WinSize,
 };
+use rio_vt::ansi::glyph_protocol::{QueryStatus, format_query_response};
 
+#[path = "glyph_reader.rs"]
+mod glyph_reader;
 #[path = "graphics_admission.rs"]
 mod graphics_admission;
 #[path = "graphics_reader.rs"]
@@ -43,6 +47,16 @@ struct PaneState {
     /// Authoritative resources live with the pane, not its current controller.
     /// Taken on exit even if a client keeps the dead pane's text attached.
     graphics: Option<GraphicsState>,
+    /// The pane's accepted Glyph Protocol glossary. Lazily allocated on the
+    /// first glyph body; survives normal command exit and screen switches and
+    /// is cleared by RIS at the same stream position.
+    glyphs: Option<GlyphSession>,
+    /// Frontend-bound `q` requests awaiting the controller's font answer. The
+    /// glossary bit is captured when the request is read, not when the answer
+    /// arrives.
+    glyph_queries: PendingQueries,
+    next_glyph_token: u64,
+    glyph_reset_epoch: u64,
     subscriptions: Subscriptions,
     facts: PaneFacts,
     /// A native SSH pane's connection phase, as last sent. Status frames go
@@ -79,6 +93,45 @@ impl PaneState {
             ..
         } = self;
         apply(facts, &mut |msg| subscriptions.notify(msg, graphics))
+    }
+
+    /// A full reset clears the glossary at the same stream position that fed
+    /// the mode tracker; no later glyph body has to arrive first.
+    fn sync_glyph_reset(&mut self) {
+        let resets = self.modes.resets();
+        if self.glyph_reset_epoch == resets {
+            return;
+        }
+        self.glyph_reset_epoch = resets;
+        if let Some(glyphs) = &mut self.glyphs {
+            glyphs.clear_all();
+        }
+    }
+
+    /// Compose the single `q` reply for one controller answer. The pending
+    /// entry is removed on the first valid answer; a stale epoch, an old token
+    /// or a duplicate answer returns `None` and writes nothing.
+    fn take_glyph_query_reply(
+        &mut self,
+        epoch: u64,
+        token: u64,
+        cp: u32,
+        system: bool,
+    ) -> Option<String> {
+        if !self.subscriptions.controls(epoch) {
+            return None;
+        }
+        let query = self.glyph_queries.take(token, cp)?;
+        if query.epoch != epoch {
+            return None;
+        }
+        let status = match (system, query.glossary) {
+            (true, true) => QueryStatus::Both,
+            (true, false) => QueryStatus::System,
+            (false, true) => QueryStatus::Glossary,
+            (false, false) => QueryStatus::Free,
+        };
+        Some(format_query_response(cp, status))
     }
 }
 
@@ -214,11 +267,20 @@ pub struct Carried {
     pub agent: Option<crate::core::cli_agent::CLIAgent>,
     pub agent_argv: Option<Vec<String>>,
     pub agent_session: Option<crate::core::cli_agent::AgentSessionState>,
+    pub progress: Option<crate::daemon::protocol::PaneProgress>,
     /// The modes the ring dropped off its front, as bytes that switch them
     /// back on. A program sets them once at startup, so after an `exec` a
     /// long-running TUI would otherwise lose its alternate screen, mouse, 2031
     /// and kitty keyboard flags for good.
     pub head_modes: Option<Vec<u8>>,
+    /// Program-selected colours from the same live session. The ring can have
+    /// trimmed the OSC that set them, so the new image needs the decoded layer
+    /// explicitly; it is never written to disk.
+    pub colors: Option<Vec<(u16, [u8; 3])>>,
+    /// The accepted Glyph glossary as an encoded `GlyphFrame`. The ring may
+    /// have trimmed the registration bodies, and the new image must not claim
+    /// state an old handoff format never carried; this is the explicit carry.
+    pub glyphs: Option<Vec<u8>>,
 }
 
 /// The screen a restored pane opens with.
@@ -439,14 +501,20 @@ impl DaemonPane {
         })
     }
 
-    pub fn attach_admitted(
+    pub fn attach_admitted_with_colors_and_glyphs(
         &self,
         subscriber: Arc<Sender<DaemonMsg>>,
         allow_clipboard: bool,
         admission: GraphicsReplayAdmission,
+        pane_colors: bool,
+        glyph_state: bool,
+        glyph_render: bool,
     ) -> Result<Option<u64>, String> {
         let foreground = self.backend.foreground_command_running();
         let mut state = self.state.lock().unwrap();
+        // A query is bound to the controller that received it; a replacement
+        // controller starts with no answers owed to the previous one.
+        state.glyph_queries.clear();
         let (subscriptions, graphics, replay) = state.subscription_parts();
         subscriptions.attach_admitted(
             replay,
@@ -456,20 +524,36 @@ impl DaemonPane {
             allow_clipboard,
             admission,
             foreground,
+            pane_colors,
+            glyph_state,
+            glyph_render,
         )
     }
 
-    pub fn observe_admitted(
+    /// Attach a read-only observer whose retained-content replay was already
+    /// admitted; it shares the controller's projection credentials but never
+    /// becomes a coverage answerer.
+    pub fn observe_admitted_with_colors_and_glyphs(
         &self,
         subscriber: Arc<Sender<DaemonMsg>>,
         gate: Arc<OutputGate>,
         admission: GraphicsReplayAdmission,
+        pane_colors: bool,
+        glyph_state: bool,
     ) -> Result<Option<u64>, String> {
         let foreground = self.backend.foreground_command_running();
         let mut state = self.state.lock().unwrap();
         let (subscriptions, graphics, replay) = state.subscription_parts();
         subscriptions.observe_admitted(
-            replay, graphics, subscriber, gate, &self.gate, admission, foreground,
+            replay,
+            graphics,
+            subscriber,
+            gate,
+            &self.gate,
+            admission,
+            foreground,
+            pane_colors,
+            glyph_state,
         )
     }
 
@@ -514,6 +598,10 @@ impl DaemonPane {
                         crate::core::terminal_resize::ResizeMode::Raw
                     },
                 )),
+                glyphs: None,
+                glyph_queries: PendingQueries::default(),
+                next_glyph_token: 0,
+                glyph_reset_epoch: 0,
                 subscriptions: Subscriptions::new(allow_remote_clipboard_write, None),
                 facts: PaneFacts::new(
                     spawn.initial_cwd,
@@ -596,26 +684,34 @@ impl DaemonPane {
     pub fn carry(&self) -> Option<crate::daemon::pane::Carried> {
         let (master_fd, child_pid, integration_dir) = self.backend.carry()?;
         let st = self.state.lock().unwrap();
-        Some(st.facts.write_carried(Carried {
-            id: self.id,
-            owner: self.owner.clone(),
-            master_fd,
-            child_pid,
-            integration_dir,
-            size: st.ring.tail_size(),
-            ring: st.ring.snapshot(),
-            cwd: None,
-            osc_title: None,
-            shell_spec: None,
-            shell_active: false,
-            at_prompt: false,
-            last_exit: None,
-            remote: None,
-            agent: None,
-            agent_argv: None,
-            agent_session: None,
-            head_modes: st.ring.head_restore_bytes(),
-        }))
+        Some(
+            st.facts.write_carried(Carried {
+                id: self.id,
+                owner: self.owner.clone(),
+                master_fd,
+                child_pid,
+                integration_dir,
+                size: st.ring.tail_size(),
+                ring: st.ring.snapshot(),
+                cwd: None,
+                osc_title: None,
+                shell_spec: None,
+                shell_active: false,
+                at_prompt: false,
+                last_exit: None,
+                remote: None,
+                agent: None,
+                agent_argv: None,
+                agent_session: None,
+                progress: None,
+                head_modes: st.ring.head_restore_bytes(),
+                colors: st
+                    .graphics
+                    .as_ref()
+                    .map(|graphics| graphics.colors().sparse()),
+                glyphs: st.glyphs.as_ref().map(|glyphs| glyphs.frame().encode()),
+            }),
+        )
     }
 
     /// Rebuild a pane around a pty this process already holds.
@@ -640,12 +736,35 @@ impl DaemonPane {
         // same shell that wrote them.
         ring.resize(size);
 
+        let mut graphics = GraphicsState::new(size);
+        if let Some(colors) = carried.colors.as_deref() {
+            graphics.restore_colors(crate::core::pane_colors::PaneColors::from_sparse(
+                colors.iter().copied(),
+            ));
+        }
+        let glyph_reset_epoch = modes.resets();
+        let carried_glyphs = carried.glyphs.is_some();
+        let glyphs = carried.glyphs.take().and_then(|bytes| {
+            let frame = crate::core::glyph_protocol::GlyphFrame::decode(&bytes)?;
+            GlyphSession::from_frame(frame)
+        });
+        if carried_glyphs && glyphs.is_none() {
+            log::warn!(
+                "pane {}: the handoff glyph glossary was unreadable; keeping its text only",
+                carried.id
+            );
+        }
+
         Ok(Self::over_pty(
             parts,
             PaneState {
                 id: carried.id,
                 ring,
-                graphics: Some(GraphicsState::new(size)),
+                graphics: Some(graphics),
+                glyphs,
+                glyph_queries: PendingQueries::default(),
+                next_glyph_token: 0,
+                glyph_reset_epoch,
                 subscriptions: Subscriptions::new(false, None),
                 facts,
                 ssh_phase: None,
@@ -695,6 +814,10 @@ impl DaemonPane {
             id,
             ring: ReplayRing::new(size),
             graphics: Some(GraphicsState::new(size)),
+            glyphs: None,
+            glyph_queries: PendingQueries::default(),
+            next_glyph_token: 0,
+            glyph_reset_epoch: 0,
             subscriptions: Subscriptions::new(
                 allow_remote_clipboard_write,
                 Some(allow_remote_clipboard_write),
@@ -844,6 +967,12 @@ impl DaemonPane {
                 crate::core::threads::promote_to_user_interactive();
                 let mut facts_reader = FactReader::new(probes);
                 let mut clipboard = ClipboardSniffer::default();
+                // Glyph Protocol framing runs before kitty graphics: accepted
+                // `r`/`c` bodies are re-emitted in place, rejected/malformed
+                // ones are stripped, and `q` becomes a controller-bound
+                // request the daemon answers. The same `ApcTokenizer` framing
+                // owns both lifted prefixes.
+                let mut glyph = GlyphSniffer::new();
                 // Kitty graphics interception (issue #213): lifts image
                 // sequences out of the stream *before* the ring/subscriber see
                 // them, so the base64 pixels never enter replay and the client's
@@ -858,6 +987,7 @@ impl DaemonPane {
                 // current context so the first probe answers correctly.
                 let starts_local = state.lock().unwrap().facts.remote().is_none();
                 let mut graphics = owner.map_or_else(|| GraphicsSniffer::new_local(starts_local), |owner| GraphicsSniffer::new_budgeted(starts_local, owner));
+                let mut discovery = crate::core::xtgettcap::Sniffer::default();
                 let mut buf = [0u8; 65536];
 
                 let trace = std::env::var("LYREL_TRACE").is_ok_and(|v| !v.is_empty() && v != "0");
@@ -910,7 +1040,7 @@ impl DaemonPane {
                             };
                             let extracted = {
                                 let mut media_locality = || facts_reader.indirect_media_locality(&before);
-                                graphics_reader::extract(raw, &mut clipboard, &mut graphics, &mut media_locality)
+                                graphics_reader::extract(raw, &mut clipboard, &mut glyph, &mut graphics, &mut media_locality, &mut discovery)
                             };
                             // Parse once from the stripped slices, without joining ordinary
                             // output. Only cheap OSC metadata precedes the readiness marker;
@@ -961,18 +1091,48 @@ impl DaemonPane {
         subscriber: Sender<DaemonMsg>,
         allow_remote_clipboard_write: bool,
     ) -> u64 {
+        self.attach_with_permissions_and_colors(subscriber, allow_remote_clipboard_write, false)
+    }
+
+    pub fn attach_with_permissions_and_colors(
+        &self,
+        subscriber: Sender<DaemonMsg>,
+        allow_remote_clipboard_write: bool,
+        pane_colors: bool,
+    ) -> u64 {
+        self.attach_with_permissions_colors_and_glyphs(
+            subscriber,
+            allow_remote_clipboard_write,
+            pane_colors,
+            false,
+            false,
+        )
+    }
+
+    pub fn attach_with_permissions_colors_and_glyphs(
+        &self,
+        subscriber: Sender<DaemonMsg>,
+        allow_remote_clipboard_write: bool,
+        pane_colors: bool,
+        glyph_state: bool,
+        glyph_render: bool,
+    ) -> u64 {
         // Asked before the state lock, not under it: the probe takes the pty
         // master's lock, and every other caller that holds both takes them in
         // this order.
         let foreground_command = self.backend.foreground_command_running();
         let mut st = self.state.lock().unwrap();
-        let epoch = attach_subscriber_with_permissions(
+        let epoch = attach_subscriber_with_features(
             &mut st,
             subscriber,
             &self.gate,
             allow_remote_clipboard_write,
             foreground_command,
+            pane_colors,
+            glyph_state,
+            glyph_render,
         );
+        st.glyph_queries.clear();
         let nudge = redraw_nudge(
             &mut st,
             self.runs_foreground_program(foreground_command),
@@ -1011,6 +1171,7 @@ impl DaemonPane {
 
     pub fn detach(&self, epoch: u64) -> bool {
         let mut st = self.state.lock().unwrap();
+        st.glyph_queries.clear();
         let PaneState {
             subscriptions,
             graphics,
@@ -1022,9 +1183,35 @@ impl DaemonPane {
     }
 
     pub fn observe(&self, observer: Sender<DaemonMsg>, gate: Arc<OutputGate>) -> u64 {
+        self.observe_with_colors(observer, gate, false)
+    }
+
+    pub fn observe_with_colors(
+        &self,
+        observer: Sender<DaemonMsg>,
+        gate: Arc<OutputGate>,
+        pane_colors: bool,
+    ) -> u64 {
+        self.observe_with_colors_and_glyphs(observer, gate, pane_colors, false)
+    }
+
+    pub fn observe_with_colors_and_glyphs(
+        &self,
+        observer: Sender<DaemonMsg>,
+        gate: Arc<OutputGate>,
+        pane_colors: bool,
+        glyph_state: bool,
+    ) -> u64 {
         let foreground_command = self.backend.foreground_command_running();
         let mut st = self.state.lock().unwrap();
-        let id = observe_subscriber(&mut st, observer, gate, foreground_command);
+        let id = observe_subscriber_with_features(
+            &mut st,
+            observer,
+            gate,
+            foreground_command,
+            pane_colors,
+            glyph_state,
+        );
         let nudge = redraw_nudge(
             &mut st,
             self.runs_foreground_program(foreground_command),
@@ -1133,6 +1320,20 @@ impl DaemonPane {
         if let Ok(mut writer) = self.writer.lock() {
             let _ = writer.write_all(bytes);
             let _ = writer.flush();
+        }
+    }
+
+    /// Complete one frontend-bound `q` with the controller's font answer. The
+    /// glossary bit comes from the pending entry captured at the request's
+    /// stream position; the daemon remains the only writer of the reply.
+    pub fn answer_glyph_query(&self, epoch: u64, token: u64, cp: u32, system: bool) {
+        let reply = self
+            .state
+            .lock()
+            .unwrap()
+            .take_glyph_query_reply(epoch, token, cp, system);
+        if let Some(reply) = reply {
+            write_graphics_reply(&self.writer, reply.as_bytes());
         }
     }
 
@@ -1295,10 +1496,15 @@ impl Drop for DaemonPane {
 fn record_output(st: &mut PaneState, bytes: &[u8]) {
     st.ring.append(bytes);
     st.modes.feed(bytes);
+    st.sync_glyph_reset();
 }
 
-/// The primary device attributes a client's emulator answers with.
-const DA1_REPLY: &[u8] = b"\x1b[?6c";
+/// The primary device attributes a client's emulator answers with. Attribute 4
+/// is Sixel: this pane's build admits static inline Sixel into the bounded
+/// graphics authority, and the attached client answers the same bytes only when
+/// its pane connection actually negotiated the `static-sixel` feature. A routed
+/// remote endpoint that lacks the feature answers without it from its own build.
+const DA1_REPLY: &[u8] = b"\x1b[?4;6c";
 
 /// A pane with no client attached has nobody to answer its queries, and a
 /// replay drops replies, so one asked then is never answered. Programs that
@@ -1448,7 +1654,7 @@ fn run_redraw_nudge(
 
 #[cfg(test)]
 fn attach_subscriber(st: &mut PaneState, subscriber: Sender<DaemonMsg>) -> u64 {
-    attach_subscriber_with_permissions(st, subscriber, &OutputGate::new(), false, false)
+    attach_subscriber_with_permissions(st, subscriber, &OutputGate::new(), false, false, false)
 }
 
 /// Composition only: replay inputs are borrowed under the existing pane lock.
@@ -1463,6 +1669,7 @@ impl PaneState {
         let replay = ReplayState {
             ring: &self.ring,
             modes: &self.modes,
+            glyphs: self.glyphs.as_ref(),
             facts: &self.facts,
             ssh_phase: &self.ssh_phase,
             alive: self.alive,
@@ -1472,12 +1679,36 @@ impl PaneState {
     }
 }
 
+#[cfg(test)]
 fn attach_subscriber_with_permissions(
     st: &mut PaneState,
     subscriber: impl Into<Arc<Sender<DaemonMsg>>>,
     gate: &OutputGate,
     allow_remote_clipboard_write: bool,
     foreground_command: bool,
+    pane_colors: bool,
+) -> u64 {
+    attach_subscriber_with_features(
+        st,
+        subscriber,
+        gate,
+        allow_remote_clipboard_write,
+        foreground_command,
+        pane_colors,
+        false,
+        false,
+    )
+}
+
+fn attach_subscriber_with_features(
+    st: &mut PaneState,
+    subscriber: impl Into<Arc<Sender<DaemonMsg>>>,
+    gate: &OutputGate,
+    allow_remote_clipboard_write: bool,
+    foreground_command: bool,
+    pane_colors: bool,
+    glyph_state: bool,
+    glyph_render: bool,
 ) -> u64 {
     let (subscriptions, graphics, replay) = st.subscription_parts();
     subscriptions.attach(
@@ -1487,17 +1718,41 @@ fn attach_subscriber_with_permissions(
         gate,
         allow_remote_clipboard_write,
         foreground_command,
+        pane_colors,
+        glyph_state,
+        glyph_render,
     )
 }
 
+#[cfg(test)]
 fn observe_subscriber(
     st: &mut PaneState,
     observer: impl Into<Arc<Sender<DaemonMsg>>>,
     gate: Arc<OutputGate>,
     foreground_command: bool,
+    pane_colors: bool,
+) -> u64 {
+    observe_subscriber_with_features(st, observer, gate, foreground_command, pane_colors, false)
+}
+
+fn observe_subscriber_with_features(
+    st: &mut PaneState,
+    observer: impl Into<Arc<Sender<DaemonMsg>>>,
+    gate: Arc<OutputGate>,
+    foreground_command: bool,
+    pane_colors: bool,
+    glyph_state: bool,
 ) -> u64 {
     let (subscriptions, graphics, replay) = st.subscription_parts();
-    subscriptions.observe(replay, graphics, observer, gate, foreground_command)
+    subscriptions.observe(
+        replay,
+        graphics,
+        observer,
+        gate,
+        foreground_command,
+        pane_colors,
+        glyph_state,
+    )
 }
 
 #[cfg(test)]
@@ -1521,7 +1776,9 @@ mod tests {
         let run = |chunks: &[&[u8]]| {
             let mut clipboard = ClipboardSniffer::default();
             clipboard.set_controller(Some(1), true);
+            let mut glyph = GlyphSniffer::new();
             let mut graphics = GraphicsSniffer::new_local(true);
+            let mut discovery = crate::core::xtgettcap::Sniffer::default();
             let mut pane = test_state(true);
             let (sender, receiver) = mpsc::channel();
             attach_subscriber(&mut pane, sender);
@@ -1530,10 +1787,14 @@ mod tests {
             let gate = OutputGate::new();
             let mut passthrough = Vec::new();
             for chunk in chunks {
-                let extracted =
-                    graphics_reader::extract(chunk, &mut clipboard, &mut graphics, &mut || {
-                        panic!("plain output must not probe host-media locality")
-                    });
+                let extracted = graphics_reader::extract(
+                    chunk,
+                    &mut clipboard,
+                    &mut glyph,
+                    &mut graphics,
+                    &mut || panic!("plain output must not probe host-media locality"),
+                    &mut discovery,
+                );
                 for bytes in extracted.output() {
                     passthrough.extend_from_slice(bytes);
                 }
@@ -1807,7 +2068,7 @@ mod tests {
         let mut st = test_state(true);
         st.subscriptions = Subscriptions::new(true, Some(true));
         let (tx, _rx) = mpsc::channel();
-        attach_subscriber_with_permissions(&mut st, tx, &OutputGate::new(), false, false);
+        attach_subscriber_with_permissions(&mut st, tx, &OutputGate::new(), false, false, false);
         assert!(st.subscriptions.clipboard_allowed());
 
         // And a profile that says no is not something an attaching client can
@@ -1815,17 +2076,17 @@ mod tests {
         let mut st = test_state(true);
         st.subscriptions = Subscriptions::new(false, Some(false));
         let (tx, _rx) = mpsc::channel();
-        attach_subscriber_with_permissions(&mut st, tx, &OutputGate::new(), true, false);
+        attach_subscriber_with_permissions(&mut st, tx, &OutputGate::new(), true, false, false);
         assert!(!st.subscriptions.clipboard_allowed());
 
         // A pane with no spec of its own — everything on a remote
         // `lyrel-server` — is exactly as permitted as its controller says.
         let mut st = test_state(true);
         let (tx, _rx) = mpsc::channel();
-        attach_subscriber_with_permissions(&mut st, tx, &OutputGate::new(), true, false);
+        attach_subscriber_with_permissions(&mut st, tx, &OutputGate::new(), true, false, false);
         assert!(st.subscriptions.clipboard_allowed());
         let (tx, _rx) = mpsc::channel();
-        attach_subscriber_with_permissions(&mut st, tx, &OutputGate::new(), false, false);
+        attach_subscriber_with_permissions(&mut st, tx, &OutputGate::new(), false, false, false);
         assert!(!st.subscriptions.clipboard_allowed());
     }
 
@@ -1844,8 +2105,15 @@ mod tests {
                 &OutputGate::new(),
                 true,
                 false,
+                false,
             );
-            observe_subscriber(&mut st, observer_tx, Arc::new(OutputGate::new()), false);
+            observe_subscriber(
+                &mut st,
+                observer_tx,
+                Arc::new(OutputGate::new()),
+                false,
+                false,
+            );
         }
         drain(&controller_rx);
         drain(&observer_rx);
@@ -2096,7 +2364,7 @@ mod tests {
     fn a_reattach_after_the_first_paint_left_the_ring_makes_the_program_repaint() {
         let mut st = state_running_a_long_lived_program();
         let (tx, _rx) = mpsc::channel();
-        attach_subscriber_with_permissions(&mut st, tx, &OutputGate::new(), false, true);
+        attach_subscriber_with_permissions(&mut st, tx, &OutputGate::new(), false, true, false);
 
         let transient = redraw_nudge(&mut st, true, std::time::Instant::now())
             .expect("the screen the program painted is gone from the ring");

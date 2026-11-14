@@ -33,7 +33,8 @@ use crate::terminal::command_cursor::{CommandCursorStyle, CommandMark};
 use crate::terminal::parked_cursor::{CursorCut, ParkedCursorRepair, ParkedCursorScanner};
 use crate::terminal::prompt_reflow::{PromptBreak, PromptMark};
 use lyrel_core::core::term_modes::{COLOR_SCHEME_UPDATES, TerminalModes};
-use rio_vt::performer::handler::{Handler as _, Processor};
+use lyrel_core::core::xtgettcap::MirrorProcessor as Processor;
+use rio_vt::performer::handler::Handler as _;
 
 /// One reader lifetime, retired without joining a potentially silent socket.
 pub(super) struct ReaderTask {
@@ -51,6 +52,7 @@ impl ReaderTask {
         signals: ReaderSignals,
         writer: LinkSender,
         viewport_reporter: GraphicsViewportReporter,
+        glyph_generation: u64,
     ) -> Self {
         let pressure_displayed = viewport_reporter.displayed();
         let pressure_term = Arc::downgrade(&term);
@@ -96,7 +98,7 @@ impl ReaderTask {
             .name("lyrel-remote-reader".to_string())
             .spawn(move || {
                 crate::core::threads::promote_to_user_interactive();
-                FrameReader::new(buffered).consume(
+                FrameReader::new(buffered, glyph_generation).consume(
                     term,
                     proxy,
                     read_half,
@@ -135,6 +137,7 @@ struct FrameReader {
     processor: Processor,
     keyboard: KeyboardStacks,
     osc: OscNotifyScanner,
+    pointer_tok: OscTokenizer,
     mode_tok: OscTokenizer,
     zle_tok: OscTokenizer,
     title_tok: OscTokenizer,
@@ -147,17 +150,19 @@ struct FrameReader {
     prompt_break: PromptBreak,
     modes: TerminalModes,
     report_scheme: bool,
+    glyph_generation: u64,
     pending: Vec<u8>,
     scratch: Vec<u8>,
     out_batch: Vec<u8>,
 }
 
 impl FrameReader {
-    fn new(buffered: Vec<u8>) -> Self {
+    fn new(buffered: Vec<u8>, glyph_generation: u64) -> Self {
         Self {
             processor: Processor::default(),
             keyboard: KeyboardStacks::default(),
             osc: OscNotifyScanner::default(),
+            pointer_tok: OscTokenizer::new(&[b"22"]),
             mode_tok: OscTokenizer::new(&[b"133"]),
             zle_tok: OscTokenizer::new(&[b"133"]),
             // Same title retirement rule as the daemon, cut at command boundaries.
@@ -172,6 +177,7 @@ impl FrameReader {
             prompt_break: PromptBreak::default(),
             modes: TerminalModes::new(),
             report_scheme: false,
+            glyph_generation,
             pending: buffered,
             scratch: vec![0u8; 256 * 1024],
             out_batch: Vec::new(),
@@ -193,6 +199,7 @@ impl FrameReader {
             mut processor,
             mut keyboard,
             mut osc,
+            mut pointer_tok,
             mut mode_tok,
             mut zle_tok,
             mut title_tok,
@@ -205,6 +212,7 @@ impl FrameReader {
             mut prompt_break,
             mut modes,
             mut report_scheme,
+            glyph_generation,
             mut pending,
             mut scratch,
             mut out_batch,
@@ -215,6 +223,7 @@ impl FrameReader {
             remote,
             agent,
             agent_session,
+            progress,
             awaiting_replay,
             exited: exited_flag,
             child_exited,
@@ -229,6 +238,7 @@ impl FrameReader {
             clipboard_write_busy,
             local_conpty,
             color_scheme_updates,
+            colors,
         } = signals;
         let mut awaiting_replay = awaiting_replay;
         proxy.parse_state.presentation.lock().unwrap().cursor = None;
@@ -257,6 +267,17 @@ impl FrameReader {
             }
             {
                 let mut term = term.lock();
+                if quit.load(Ordering::SeqCst) {
+                    return;
+                }
+                // Release under the same retirement fence as parser writes:
+                // a delayed old teardown must not clear a successor's claim.
+                proxy
+                    .parse_state
+                    .presentation
+                    .lock()
+                    .unwrap()
+                    .set_pointer(None);
                 term.end_sync_update();
                 term.exit();
             }
@@ -281,6 +302,7 @@ impl FrameReader {
                         }
                         command_cuts(&mut command_tok, &out_batch, &mut cuts);
                         title_cuts(&mut title_tok, &mut title_life, &out_batch, &mut cuts);
+                        pointer_cuts(&mut pointer_tok, &out_batch, &mut cuts);
                         let cursor_at_end = cuts.last().is_some_and(|(off, cut)| {
                             *off == out_batch.len() && matches!(cut, ReaderCut::Parked(_))
                         });
@@ -299,6 +321,14 @@ impl FrameReader {
                                 cuts,
                                 Some(&proxy.parse_state.history_limit),
                                 Some(&proxy.parse_state.presentation),
+                                Some(crate::terminal::glyph::GlyphApply {
+                                    store: &proxy.parse_state.glyphs,
+                                    authority: &proxy.parse_state.glyph_authority,
+                                    denied: &proxy.parse_state.glyph_denied,
+                                    generation: &proxy.parse_state.glyph_generation,
+                                    reader: glyph_generation,
+                                }),
+                                Some(colors.as_ref()),
                                 &quit,
                                 |term, cut| {
                                     cuts_left -= 1;
@@ -319,7 +349,7 @@ impl FrameReader {
                                         }
                                         ReaderCut::Prompt(mark) => prompt_break.apply(term, mark),
                                         ReaderCut::RetireTitle => term.set_title(None),
-                                        ReaderCut::KeyboardBoundary => {}
+                                        ReaderCut::KeyboardBoundary | ReaderCut::PointerReset => {}
                                     }
                                 },
                             ) else {
@@ -385,6 +415,20 @@ impl FrameReader {
                         });
                         proxy.send(PaneEvent::Wakeup);
                         out_batch.clear();
+                        if proxy
+                            .parse_state
+                            .glyph_denied
+                            .swap(false, Ordering::Relaxed)
+                            && !proxy
+                                .parse_state
+                                .glyph_denied_reported
+                                .swap(true, Ordering::Relaxed)
+                        {
+                            // The producer used Glyph Protocol against a
+                            // daemon that cannot own the glossary. Nothing was
+                            // derived or acknowledged; say so once.
+                            proxy.send(PaneEvent::GlyphUnsupported);
+                        }
                     }
                 };
             }
@@ -476,6 +520,7 @@ impl FrameReader {
                         let mut cuts: Vec<(usize, ReaderCut)> = Vec::new();
                         command_cuts(&mut command_tok, &bytes, &mut cuts);
                         title_cuts(&mut title_tok, &mut title_life, &bytes, &mut cuts);
+                        pointer_cuts(&mut pointer_tok, &bytes, &mut cuts);
                         let fed = feed_grid(
                             &term,
                             &mut processor,
@@ -485,12 +530,18 @@ impl FrameReader {
                             cuts,
                             Some(&proxy.parse_state.history_limit),
                             Some(&proxy.parse_state.presentation),
+                            // Replayed glyph bodies are not authority: their
+                            // original bytes may have been trimmed, rejected,
+                            // or written by an older daemon that never owned
+                            // the glossary. The projection follows the ring.
+                            None,
+                            None,
                             &quit,
                             |term, cut| match cut {
                                 ReaderCut::Command(mark) => command_cursor.apply(term, mark),
                                 ReaderCut::Prompt(mark) => prompt_break.apply(term, mark),
                                 ReaderCut::RetireTitle => term.set_title(None),
-                                ReaderCut::Parked(_) => {}
+                                ReaderCut::Parked(_) | ReaderCut::PointerReset => {}
                                 ReaderCut::KeyboardBoundary => {}
                             },
                         );
@@ -531,6 +582,69 @@ impl FrameReader {
                         modes.take_color_scheme_queries();
                         report_scheme = true;
                         proxy.send(PaneEvent::Wakeup);
+                    }
+                    DaemonMsg::Colors(frame) => {
+                        flush_batch!();
+                        match lyrel_core::core::pane_colors::ColorFrame::decode(&frame) {
+                            Some(frame) => {
+                                frame.apply(
+                                    &mut colors.lock().unwrap_or_else(|poison| poison.into_inner()),
+                                );
+                                proxy.send(PaneEvent::ColorChanged);
+                                proxy.send(PaneEvent::Wakeup);
+                            }
+                            None => log::warn!(
+                                "ignoring an undecodable pane colour frame ({} bytes)",
+                                frame.len()
+                            ),
+                        }
+                    }
+                    DaemonMsg::GlyphState(frame) => {
+                        flush_batch!();
+                        if proxy.parse_state.glyph_generation.load(Ordering::Relaxed)
+                            != glyph_generation
+                            || !proxy.parse_state.glyph_authority.load(Ordering::Relaxed)
+                            || !proxy.parse_state.glyph_state.load(Ordering::Relaxed)
+                        {
+                            continue;
+                        }
+                        let Some(frame) =
+                            lyrel_core::core::glyph_protocol::GlyphFrame::decode(&frame)
+                        else {
+                            log::warn!("ignoring an undecodable glyph state frame");
+                            continue;
+                        };
+                        let mut entries = Vec::with_capacity(frame.glyphs().len());
+                        let mut valid = true;
+                        for glyph in frame.glyphs() {
+                            match rio_graphics::glyph::glyf_decode::decode(&glyph.glyf) {
+                                Ok(outline) => {
+                                    entries.push(crate::terminal::glyph::GlyphReplayEntry {
+                                        cp: glyph.cp,
+                                        outline,
+                                        upm: glyph.upm,
+                                        width: glyph.width,
+                                        layout: glyph.layout,
+                                    });
+                                }
+                                Err(error) => {
+                                    log::warn!(
+                                        "ignoring glyph state entry for cp {:x}: {error:?}",
+                                        glyph.cp
+                                    );
+                                    valid = false;
+                                    break;
+                                }
+                            }
+                        }
+                        if valid
+                            && proxy
+                                .parse_state
+                                .glyphs
+                                .apply_snapshot(frame.generation(), entries)
+                        {
+                            proxy.send(PaneEvent::Wakeup);
+                        }
                     }
                     DaemonMsg::Output(bytes) => {
                         // Live output only ever follows the whole
@@ -654,6 +768,13 @@ impl FrameReader {
                             clipboard_write_busy.store(false, Ordering::Release);
                         }
                     }
+                    DaemonMsg::GlyphQuery { token, cp } => {
+                        // Only the daemon writes the `q` reply. This reader
+                        // hands the request to the UI thread, which measures
+                        // the pane's actual font stack and answers the token.
+                        flush_batch!();
+                        proxy.send(PaneEvent::GlyphQuery { token, cp });
+                    }
                     DaemonMsg::Cwd(path) => {
                         flush_batch!();
                         if let Ok(mut guard) = cwd.lock() {
@@ -703,9 +824,19 @@ impl FrameReader {
                                 drop(bridge);
                             }
                             ParseBridge::new(&mut term, proxy.clone(), &mut keyboard, None)
+                                .with_presentation(Some(&proxy.parse_state.presentation))
                                 .clear_keyboard();
                             drop(term);
-                            if released || !resets.is_empty() {
+                            // Back at a prompt, whatever the command asked
+                            // for goes with it — including a pointer claim
+                            // it never released itself.
+                            let pointer_released = proxy
+                                .parse_state
+                                .presentation
+                                .lock()
+                                .unwrap()
+                                .set_pointer(None);
+                            if released || !resets.is_empty() || pointer_released {
                                 proxy.send(PaneEvent::Wakeup);
                             }
                         }
@@ -750,6 +881,14 @@ impl FrameReader {
                             *guard = Some(p);
                         }
                         proxy.send(PaneEvent::Wakeup);
+                    }
+                    DaemonMsg::Progress(state) => {
+                        flush_batch!();
+                        let mut current = progress.lock().unwrap();
+                        if *current != state {
+                            *current = state;
+                            proxy.send(PaneEvent::ProgressChanged);
+                        }
                     }
                     DaemonMsg::Agent(a) => {
                         flush_batch!();
@@ -938,6 +1077,9 @@ enum ReaderCut {
     Prompt(PromptMark),
     RetireTitle,
     KeyboardBoundary,
+    /// `OSC 22 ;` — the empty payload upstream's `Handler` never dispatches,
+    /// which is the application's own release of its pointer claim.
+    PointerReset,
 }
 
 /// Adds the batch's command marks to `cuts`, keeping them in stream order
@@ -974,6 +1116,22 @@ fn title_cuts(
     tok.feed_at(bytes, |off, payload| {
         if lifetime.saw(payload) == TitleEffect::Retire {
             cuts.push((off, ReaderCut::RetireTitle));
+        }
+    });
+    if cuts.len() > before {
+        cuts.sort_by_key(|(off, _)| *off);
+    }
+}
+
+/// `OSC 22 ;` is the application's own release: upstream's parser needs a
+/// second param before it calls `set_mouse_cursor_icon`, so the empty reset
+/// is seen only here, cut at stream position like the command marks. A bare
+/// `OSC 22` (no `;`) is malformed for upstream too and stays a no-op.
+fn pointer_cuts(tok: &mut OscTokenizer, bytes: &[u8], cuts: &mut Vec<(usize, ReaderCut)>) {
+    let before = cuts.len();
+    tok.feed_at(bytes, |off, payload| {
+        if payload == b"22;" {
+            cuts.push((off, ReaderCut::PointerReset));
         }
     });
     if cuts.len() > before {
@@ -1036,6 +1194,8 @@ fn feed_grid<T: EventListener + Clone>(
     cuts: Vec<(usize, ReaderCut)>,
     history_limit: Option<&AtomicUsize>,
     presentation: Option<&Mutex<crate::terminal::presentation::ParsePresentation>>,
+    glyph: Option<crate::terminal::glyph::GlyphApply<'_>>,
+    colors: Option<&Mutex<lyrel_core::core::pane_colors::PaneColors>>,
     quit: &AtomicBool,
     mut on_cut: impl FnMut(&mut Crosswords<T>, ReaderCut),
 ) -> Option<std::time::Duration> {
@@ -1067,7 +1227,9 @@ fn feed_grid<T: EventListener + Clone>(
                     keyboard,
                     history_limit.map(|limit| limit.load(Ordering::Relaxed)),
                 )
-                .with_presentation(presentation);
+                .with_presentation(presentation)
+                .with_glyph(glyph)
+                .with_colors(colors);
                 processor.advance(&mut bridge, &bytes[at..end]);
             }
             held += end - at;
@@ -1075,7 +1237,9 @@ fn feed_grid<T: EventListener + Clone>(
         }
         let Some((_, cut)) = next else { break };
         if matches!(cut, ReaderCut::KeyboardBoundary) {
-            ParseBridge::new(&mut grid, proxy.clone(), keyboard, None).clear_keyboard();
+            ParseBridge::new(&mut grid, proxy.clone(), keyboard, None)
+                .with_presentation(presentation)
+                .clear_keyboard();
         }
         if matches!(
             cut,
@@ -1084,6 +1248,16 @@ fn feed_grid<T: EventListener + Clone>(
             // A completed command must not leave its last picture held until
             // another command produces output. All bytes are already parsed.
             grid.end_sync_update();
+        }
+        if matches!(
+            cut,
+            ReaderCut::PointerReset | ReaderCut::Command(CommandMark::Finished)
+        ) && let Some(presentation) = presentation
+        {
+            // The application's release and the shell's command-finished
+            // mark both end its claim on the pointer, at stream position —
+            // a set earlier in this same batch already landed.
+            presentation.lock().unwrap().set_pointer(None);
         }
         on_cut(&mut grid, cut);
         next = cuts.next();
@@ -1100,6 +1274,8 @@ mod live_history_config_tests;
 mod osc_tests;
 #[cfg(test)]
 mod parked_cursor_tests;
+#[cfg(test)]
+mod pointer_tests;
 #[cfg(all(test, unix))]
 mod query_tests;
 #[cfg(test)]

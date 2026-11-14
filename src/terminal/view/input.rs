@@ -21,6 +21,7 @@ impl TerminalView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        self.input.begin_key(&ev.keystroke.key, ev.is_held);
         // A child Button owns its keyboard activation. Never encode its Enter
         // as PTY input while the event bubbles through the terminal surface.
         if self.reading_focus.is_focused(window) {
@@ -123,6 +124,12 @@ impl TerminalView {
             return;
         }
 
+        if ev.prefer_character_input
+            || (!self.input.marked().is_empty() && !m.control && !m.platform)
+        {
+            return;
+        }
+
         #[cfg(target_os = "macos")]
         if !window.has_pending_keystrokes()
             && crate::terminal::input::defer_to_ime(ks, self.key_flags())
@@ -131,7 +138,7 @@ impl TerminalView {
         }
 
         if self.input_active() {
-            self.handle_editor_key(ks, cx);
+            self.handle_editor_key(ks, ev.is_held, cx);
             cx.stop_propagation();
             return;
         }
@@ -150,13 +157,7 @@ impl TerminalView {
         }
 
         use crate::terminal::prompt_input::KeyDelivery;
-        let terminal = &self.terminal;
-        let delivery = self.input.raw_key(ks, terminal, || {
-            crate::terminal::input::KeyFlags::from_mode_with_local_conpty(
-                &terminal.term.lock().mode(),
-                terminal.is_local_conpty(),
-            )
-        });
+        let delivery = self.input.raw_key(ks, ev.is_held, &self.terminal);
         if !matches!(delivery, KeyDelivery::Unencoded) {
             if let KeyDelivery::Held(Some(epoch)) = delivery {
                 self.arm_hold_timer(epoch, cx);
@@ -166,6 +167,25 @@ impl TerminalView {
             cx.notify();
             cx.stop_propagation();
         }
+    }
+
+    pub(super) fn on_key_up(
+        &mut self,
+        ev: &gpui_kit::KeyUpEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.focus_handle.is_focused(window)
+            || !window.is_window_active()
+            || self.composer_focused
+            || self.search_focused
+            || self.terminal.exited
+            || !self.accepts_input(cx)
+        {
+            self.input.forget_keys();
+            return;
+        }
+        self.input.release_key(&ev.keystroke, &self.terminal);
     }
 
     pub(super) fn send_shortcut_bytes(&mut self, bytes: &[u8], key: &str, cx: &mut Context<Self>) {
@@ -262,33 +282,55 @@ impl TerminalView {
         }
     }
 
-    pub(super) fn handle_editor_key(&mut self, ks: &gpui_kit::Keystroke, cx: &mut Context<Self>) {
+    pub(super) fn handle_editor_key(
+        &mut self,
+        ks: &gpui_kit::Keystroke,
+        held: bool,
+        cx: &mut Context<Self>,
+    ) {
         use crate::terminal::prompt_input::EditorIntent;
         self.lifecycle.show_cursor();
         self.jump_to_prompt();
         let terminal = &self.terminal;
         match self.input.key(
             ks,
+            held,
             terminal,
             &mut self.history,
             &mut self.completion,
             cx.global::<Config>().history_search,
-            || {
-                crate::terminal::input::KeyFlags::from_mode_with_local_conpty(
-                    &terminal.term.lock().mode(),
-                    terminal.is_local_conpty(),
-                )
-            },
         ) {
             EditorIntent::Redraw => cx.notify(),
-            EditorIntent::Silent => {}
             EditorIntent::AcceptLine => self.accept_line(cx),
             EditorIntent::Submit => self.submit_command(cx),
             EditorIntent::AcceptAndSubmit => {
                 self.completion_accept(cx);
                 self.submit_command(cx);
             }
-            EditorIntent::Handoff(bytes) => self.handoff_line_to_shell(&bytes, cx),
+            EditorIntent::Handoff(bytes, release) => {
+                if self.accepts_input(cx)
+                    && self
+                        .input
+                        .handoff_line(&self.terminal, &mut self.completion)
+                {
+                    self.input.write_key(ks, bytes, release, &self.terminal);
+                }
+                cx.notify();
+            }
+            EditorIntent::Write(bytes, release) => {
+                if self.accepts_input(cx) && !self.terminal.exited {
+                    self.input.write_key(ks, bytes, release, &self.terminal);
+                    if ks.key == "backspace" {
+                        self.input.observe(
+                            &self.terminal,
+                            crate::terminal::typeahead::RawInput::Key {
+                                key: "backspace",
+                                plain: true,
+                            },
+                        );
+                    }
+                }
+            }
             EditorIntent::Commit(text) => self.commit_text(text, cx),
         }
     }
@@ -314,6 +356,12 @@ impl TerminalView {
         // below is about.
         if self.frame.alt_screen {
             context.add("alt_screen");
+        }
+        if !self.frame_input_active()
+            && self.selection_scroll.reading.is_none()
+            && self.frame.keyboard_events
+        {
+            context.add("keyboard_events");
         }
         if self.history.search().is_some() && !self.search_focused && !self.composer_focused {
             context.add("reverse_search");
@@ -632,12 +680,14 @@ impl TerminalView {
             cx.notify();
             return;
         }
-        self.write_gap_text(text, text.as_bytes().to_vec(), false, cx);
+        let bytes = crate::terminal::input::committed_text_to_bytes(text, self.key_flags());
+        self.write_gap_text(text, bytes, false, cx);
         self.lifecycle.show_cursor();
         cx.notify();
     }
 
     pub fn set_marked_text(&mut self, text: String, cx: &mut Context<Self>) {
+        self.input.forget_keys();
         self.input.mark(text);
         cx.notify();
     }
@@ -951,6 +1001,9 @@ impl InputHandler for TerminalInputHandler {
             cx.global::<Config>().macos_option_as_alt,
         ) {
             return false;
+        }
+        if !self.view.read(cx).input.marked().is_empty() {
+            return true;
         }
         if self.view.read(cx).key_flags().reports_all_keys() {
             return false;

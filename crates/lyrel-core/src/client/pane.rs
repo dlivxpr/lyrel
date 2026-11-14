@@ -497,6 +497,20 @@ mod tests {
         DaemonMsg::Version(DaemonVersion::current())
             .encode(writer)
             .unwrap();
+        assert!(
+            matches!(
+                ClientMsg::read(reader).unwrap(),
+                ClientMsg::SubscribePaneColors
+            ),
+            "this build advertises pane colours, so negotiate_pane must opt in"
+        );
+        assert!(
+            matches!(
+                ClientMsg::read(reader).unwrap(),
+                ClientMsg::SubscribeGlyphState
+            ),
+            "this build advertises glyph state, so negotiate_pane must opt in"
+        );
         assert!(matches!(
             ClientMsg::read(reader).unwrap(),
             ClientMsg::GraphicsCapacity { offers: false, .. }

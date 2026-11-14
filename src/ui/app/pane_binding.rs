@@ -189,7 +189,7 @@ impl LyrelApp {
         pending.update(cx, |pending, cx| pending.start(lease, window, cx));
     }
 
-    pub(super) fn watch_terminal(
+    pub(crate) fn watch_terminal(
         view: &Entity<TerminalView>,
         window: &mut Window,
         cx: &mut Context<LyrelApp>,
@@ -197,6 +197,14 @@ impl LyrelApp {
         cx.subscribe_in(&view, window, |app, view, _: &ChildExited, window, cx| {
             app.on_child_exited(view.clone(), window, cx);
         })
+        .detach();
+        cx.subscribe_in(
+            view,
+            window,
+            |_app, _view, _: &crate::terminal::view::ProgressChanged, _window, cx| {
+                cx.notify();
+            },
+        )
         .detach();
         cx.subscribe_in(
             &view,
@@ -219,6 +227,24 @@ impl LyrelApp {
             window,
             |app, view, _: &crate::terminal::view::AuthPromptReady, window, cx| {
                 app.on_auth_prompt_ready(view.clone(), window, cx);
+            },
+        )
+        .detach();
+        cx.subscribe_in(
+            &view,
+            window,
+            |_app, view, _: &crate::terminal::view::GlyphUnsupported, window, cx| {
+                let (workspace, pane, route) = {
+                    let view = view.read(cx);
+                    (view.owner_workspace(), view.pane_id, view.pane_route())
+                };
+                window.notify_app(
+                    crate::ui::notification_history::Notification::warning(t(
+                        L10nKey::TerminalGlyphNeedsDaemonUpdate,
+                    ))
+                    .pane(workspace, pane, &route),
+                    cx,
+                );
             },
         )
         .detach();

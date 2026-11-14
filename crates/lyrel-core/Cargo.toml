@@ -97,6 +97,12 @@ smallvec.workspace = true
 
 # daemon 的图片状态使用同一正式 VT 网格；不引入窗口、GPU 或 Rio 自有 PTY。
 rio-vt.workspace = true
+# Glyph Protocol authority uses the released `glyf` decoder and 1024-slot
+# registry; the workspace feature adds skrifa/parking_lot only.
+# 静态 iTerm2 尺寸复用 released 0.5.30 的 ResizeCommand/ResizeParameter 与
+# compute_display_dimensions 值类型；已在 rio-vt 的既有依赖树中，不启用其
+# image/渲染 feature，也不因此增加新版本。
+rio-graphics.workspace = true
 # 图片滚动挂接使用与 VT 相同的零宽字符判定；不新增版本或后端。
 rio-unicode.workspace = true
 
@@ -183,6 +189,12 @@ miniz_oxide = "0.9.1"
 # Validate PNG streams row-by-row before acknowledging or retaining them. Reuse
 # the published version already locked for the desktop image decoder.
 png = "0.18.1"
+
+# Static JPEG payloads admitted by the iTerm2 File= adapter parse their
+# dimensions before allocation and normalize to RGBA in ordered preparation.
+# The same published registry `image` release the GUI already locks; only the
+# JPEG codec is enabled for the headless server.
+image = { version = "0.25", default-features = false, features = ["jpeg"] }
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2.191"

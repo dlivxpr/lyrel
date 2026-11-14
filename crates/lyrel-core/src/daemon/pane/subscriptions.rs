@@ -9,6 +9,7 @@ use super::GraphicsFrame;
 use super::facts::PaneFacts;
 use super::graphics_admission::GraphicsAdmissionBroker;
 use super::replay::{RING_CAP, ReplayRing};
+use crate::core::glyph_protocol::{GlyphFrame, GlyphSession};
 use crate::core::kitty_graphics::{GraphicsEffect, GraphicsState};
 use crate::core::term_modes::TerminalModes;
 use crate::daemon::protocol::{DaemonMsg, SshPhase, WinSize};
@@ -160,6 +161,10 @@ pub(crate) fn gated_len(msg: &DaemonMsg) -> usize {
         // Lifted from the same PTY read as the output around them.
         DaemonMsg::Graphics(b) => b.len(),
         DaemonMsg::ClipboardWrite(b) => b.len(),
+        // Bounded by `ColorFrame`'s own 260-operation ceiling.
+        DaemonMsg::Colors(b) => b.len(),
+        // One full bounded glossary snapshot.
+        DaemonMsg::GlyphState(b) => b.len(),
         _ => 0,
     }
 }
@@ -168,11 +173,20 @@ struct Observer {
     id: u64,
     tx: Arc<Sender<DaemonMsg>>,
     gate: Arc<OutputGate>,
+    /// This consumer negotiated authoritative colour frames.
+    colors: bool,
 }
 
 pub(super) struct Subscriptions {
     subscriber: Option<Arc<Sender<DaemonMsg>>>,
     subscriber_epoch: u64,
+    /// The controller negotiated colour frames before it attached.
+    subscriber_colors: bool,
+    /// The controller negotiated the retained glyph projection.
+    subscriber_glyphs: bool,
+    /// The controller asserted it renders the complete monochrome contract;
+    /// the only credential that lets the pane answer `s` with `fmt=glyf`.
+    subscriber_glyph_render: bool,
     observers: Vec<Observer>,
     observer_seq: u64,
     allow_remote_clipboard_write: bool,
@@ -185,6 +199,8 @@ pub(super) struct Subscriptions {
 pub(super) struct ReplayState<'a> {
     pub ring: &'a ReplayRing,
     pub modes: &'a TerminalModes,
+    /// The pane's accepted glossary, borrowed like the ring and facts.
+    pub glyphs: Option<&'a GlyphSession>,
     pub facts: &'a PaneFacts,
     pub ssh_phase: &'a Option<SshPhase>,
     pub alive: bool,
@@ -196,6 +212,9 @@ impl Subscriptions {
         Self {
             subscriber: None,
             subscriber_epoch: 0,
+            subscriber_colors: false,
+            subscriber_glyphs: false,
+            subscriber_glyph_render: false,
             observers: Vec::new(),
             observer_seq: 0,
             allow_remote_clipboard_write: allow_clipboard,
@@ -257,6 +276,19 @@ impl Subscriptions {
         self.subscriber.as_ref().map(|_| self.subscriber_epoch)
     }
 
+    /// The frontend-bound `q` and `s` gates name real capability, not
+    /// protocol literacy: the current controller has to both decode the
+    /// projection and declare the complete monochrome render contract. A
+    /// state-only subscriber can read `GlyphState` but cannot truthfully
+    /// answer font coverage — a CLI `run` backend has no font stack to
+    /// measure — so the pane never hands it `GlyphQuery` and never
+    /// advertises `fmt=glyf` for pixels nothing paints. The producer's
+    /// unanswered `q` then sees the protocol's honest silence rather than a
+    /// request queued on a peer that drops it.
+    pub(super) fn controller_renders_glyphs(&self) -> bool {
+        self.subscriber.is_some() && self.subscriber_glyphs && self.subscriber_glyph_render
+    }
+
     // Ownership checks intentionally retain the existing epoch-only semantics.
     pub(super) fn controls(&self, epoch: u64) -> bool {
         self.subscriber_epoch == epoch
@@ -314,6 +346,28 @@ impl Subscriptions {
         self.prune_viewports(graphics);
     }
 
+    /// Ordered colour projections go only to consumers that negotiated them.
+    /// A consumer that did not opt in must never see the frame kind at all:
+    /// it predates this protocol addition and would fail to decode the link.
+    pub(super) fn publish_colors(
+        &mut self,
+        frame: Vec<u8>,
+        gate: &OutputGate,
+        graphics: &mut Option<GraphicsState>,
+    ) {
+        let msg = DaemonMsg::Colors(frame);
+        let len = gated_len(&msg);
+        if self.subscriber_colors
+            && let Some(sub) = &self.subscriber
+            && sub.send(msg.clone()).is_ok()
+        {
+            gate.add(len);
+        }
+        self.observers
+            .retain(|observer| !observer.colors || send_to_observer(observer, &msg, len));
+        self.prune_viewports(graphics);
+    }
+
     pub(super) fn resize(&mut self, size: WinSize) {
         if let Some(sub) = &self.subscriber {
             let _ = sub.send(DaemonMsg::Size(size));
@@ -330,6 +384,9 @@ impl Subscriptions {
             graphics,
         );
         self.subscriber = None;
+        self.subscriber_colors = false;
+        self.subscriber_glyphs = false;
+        self.subscriber_glyph_render = false;
         self.subscriber_epoch += 1;
         self.observers.clear();
     }
@@ -424,19 +481,35 @@ impl Subscriptions {
         gate: &OutputGate,
         allow_clipboard: bool,
         foreground: bool,
+        pane_colors: bool,
+        glyph_state: bool,
+        glyph_render: bool,
     ) -> u64 {
         let subscriber = subscriber.into();
         self.subscriber_epoch += 1;
         self.allow_remote_clipboard_write =
             self.clipboard_write_from_spec.unwrap_or(allow_clipboard);
+        self.subscriber_colors = pane_colors;
+        self.subscriber_glyphs = glyph_state;
+        self.subscriber_glyph_render = glyph_render;
         gate.reset();
         let epoch = self.subscriber_epoch;
-        let (queued, complete) = replay_state(&replay, graphics.as_ref(), &subscriber, foreground);
+        let (queued, complete) = replay_state(
+            &replay,
+            graphics.as_ref(),
+            &subscriber,
+            foreground,
+            pane_colors,
+            glyph_state,
+        );
         gate.add(queued);
         if complete {
             self.subscriber = Some(subscriber);
         } else {
             self.subscriber = None;
+            self.subscriber_colors = false;
+            self.subscriber_glyphs = false;
+            self.subscriber_glyph_render = false;
             self.subscriber_epoch += 1;
         }
         self.prune_viewports(graphics);
@@ -450,17 +523,27 @@ impl Subscriptions {
         observer: impl Into<Arc<Sender<DaemonMsg>>>,
         gate: Arc<OutputGate>,
         foreground: bool,
+        pane_colors: bool,
+        glyph_state: bool,
     ) -> u64 {
         let observer = observer.into();
         self.observer_seq += 1;
         // Charge the entire replay before exposing this observer to live output.
-        let (queued, complete) = replay_state(&replay, graphics.as_ref(), &observer, foreground);
+        let (queued, complete) = replay_state(
+            &replay,
+            graphics.as_ref(),
+            &observer,
+            foreground,
+            pane_colors,
+            glyph_state,
+        );
         gate.add(queued);
         if complete {
             self.observers.push(Observer {
                 id: self.observer_seq,
                 tx: observer,
                 gate,
+                colors: pane_colors,
             });
         }
         self.observer_seq
@@ -475,6 +558,9 @@ impl Subscriptions {
         allow_clipboard: bool,
         admission: GraphicsReplayAdmission,
         foreground: bool,
+        pane_colors: bool,
+        glyph_state: bool,
+        glyph_render: bool,
     ) -> Result<Option<u64>, String> {
         self.publish_evictions(graphics, gate);
         if !admission.activate(&self.admission, graphics)? {
@@ -487,6 +573,9 @@ impl Subscriptions {
             gate,
             allow_clipboard,
             foreground,
+            pane_colors,
+            glyph_state,
+            glyph_render,
         );
         if self.controller_epoch() != Some(epoch) {
             return Err("Graphics replay failed".into());
@@ -504,12 +593,22 @@ impl Subscriptions {
         controller_gate: &OutputGate,
         admission: GraphicsReplayAdmission,
         foreground: bool,
+        pane_colors: bool,
+        glyph_state: bool,
     ) -> Result<Option<u64>, String> {
         self.publish_evictions(graphics, controller_gate);
         if !admission.activate(&self.admission, graphics)? {
             return Ok(None);
         }
-        let id = self.observe(replay, graphics, subscriber, gate, foreground);
+        let id = self.observe(
+            replay,
+            graphics,
+            subscriber,
+            gate,
+            foreground,
+            pane_colors,
+            glyph_state,
+        );
         if !self.has_observer(id) {
             return Err("Graphics replay failed".into());
         }
@@ -525,6 +624,9 @@ impl Subscriptions {
     ) {
         if self.controls(epoch) {
             self.subscriber = None;
+            self.subscriber_colors = false;
+            self.subscriber_glyphs = false;
+            self.subscriber_glyph_render = false;
             self.prune_viewports(graphics);
             self.allow_remote_clipboard_write = self.clipboard_write_from_spec.unwrap_or(false);
             gate.reset();
@@ -568,6 +670,8 @@ fn replay_state(
     graphics: Option<&GraphicsState>,
     subscriber: &Sender<DaemonMsg>,
     foreground_command: bool,
+    pane_colors: bool,
+    glyph_state: bool,
 ) -> (usize, bool) {
     // What the replay queues is charged to the stream's gate like live output,
     // by the same measure its writer credits back (`gated_len`).
@@ -612,6 +716,32 @@ fn replay_state(
             };
             send(DaemonMsg::Graphics(packet));
         }
+    }
+    // After the ring, before live output: replayed bytes may have had their
+    // original OSC trimmed, so the decoded layer is the authority. Replay
+    // itself is parsed with live colour tracking disabled on the consumer, so
+    // an older set inside the ring cannot resurrect a slot that was reset
+    // later. The frame is sent even when empty — a reattached consumer may
+    // still hold the previous link's overrides.
+    if pane_colors {
+        let colors = graphics
+            .map(GraphicsState::colors)
+            .copied()
+            .unwrap_or_default();
+        send(DaemonMsg::Colors(
+            crate::core::pane_colors::ColorFrame::snapshot(&colors).encode(),
+        ));
+    }
+    // The glossary is session state, not text. Replayed glyph bodies are not
+    // applied by this build's consumer; this full snapshot follows every
+    // replayed mutation and precedes live output. It is sent even when empty,
+    // so a reattached consumer cannot keep a stale registry.
+    if glyph_state {
+        let frame = st
+            .glyphs
+            .map(GlyphSession::frame)
+            .unwrap_or_else(|| GlyphFrame::snapshot(0, Vec::new()));
+        send(DaemonMsg::GlyphState(frame.encode()));
     }
     if let Some(prompt) = st.facts.prompt(foreground_command) {
         send(prompt);

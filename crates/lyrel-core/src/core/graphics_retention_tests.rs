@@ -22,30 +22,26 @@ fn retention_fixture_daemon() {
         .ok()
         .and_then(|value| value.parse::<usize>().ok())
         .unwrap_or(0);
-    retention::inject_limits(
-        if std::env::var("LYREL_RETENTION_TEST_DEFAULT_LIMITS").is_ok_and(|value| value == "true") {
-            retention::Limits::default()
-        } else {
-            retention::Limits {
-                pane_encoded: 1024,
-                pane_decoded: 8,
-                daemon_encoded: 4096,
-                daemon_decoded: 12,
-                pane_work: 256 << 10,
-                daemon_work: 384 << 10,
-                pane_metadata: if metadata != 0 {
-                    metadata
-                } else {
-                    retention::MAX_PANE_METADATA_BYTES
-                },
-                daemon_metadata: if metadata != 0 {
-                    metadata
-                } else {
-                    retention::MAX_DAEMON_METADATA_BYTES
-                },
-            }
-        },
-    );
+    let mut limits = if std::env::var("LYREL_RETENTION_TEST_DEFAULT_LIMITS")
+        .is_ok_and(|value| value == "true")
+    {
+        retention::Limits::default()
+    } else {
+        retention::Limits {
+            pane_encoded: 1024,
+            pane_decoded: 8,
+            daemon_encoded: 4096,
+            daemon_decoded: 12,
+            pane_work: 256 << 10,
+            daemon_work: 384 << 10,
+            ..retention::Limits::default()
+        }
+    };
+    if metadata != 0 {
+        limits.pane_metadata = metadata;
+        limits.daemon_metadata = metadata;
+    }
+    retention::inject_limits(limits);
     crate::core::config::set_config_dir(dir.into());
     crate::daemon::server::run_daemon().unwrap();
 }
@@ -324,6 +320,78 @@ impl Consumer {
             }
         }
     }
+}
+
+// libsixel 1.10.5 img2sixel -w 40 -h 40 -p 4 -d none colors.ppm.
+// The 2x2 PPM is red/green over blue/yellow; libsixel quantizes the scaled image.
+const STATIC_SIXEL: &[u8] = b"\x1bPq\"1;1;40;40#0;2;72;20;24#1;2;24;74;11#2;2;74;74;24#3;2;24;20;66#0!19~#1!21~-#0!19~_$#1!19?^!20~-#0!20~#1^!19~$#2!20?_-#0!13BFFN^~~~#2~}!6{!12w$#3!13{wwo_#1!4?@!6B!12F-#3!18~}w#2!20~$#0!18?@F-#3!20~#2!20~-#3!20N#2!20N\x1b\\";
+
+#[test]
+fn sixel_real_pty_producer_delivers_pixels_and_ordered_following_text() {
+    let daemon = Daemon::with_limits(0, true);
+    let mut consumer = daemon.spawn();
+    let mut bytes = b"\x1bc\x1b[6;5H".to_vec();
+    bytes.extend_from_slice(STATIC_SIXEL);
+    bytes.extend_from_slice(b"AFTER");
+    consumer.idle(&bytes);
+    let image = consumer
+        .updates
+        .iter()
+        .find_map(|update| match update {
+            GraphicsUpdate::Resource { image, .. } => Some(image),
+            _ => None,
+        })
+        .expect("actual Sixel producer reaches the ordered consumer as pixels");
+    assert_eq!((image.width, image.height), (40, 40));
+    let rgba = image.to_rgba8().unwrap();
+    assert_eq!(&rgba[..4], &[184, 51, 61, 255]);
+    assert_eq!(&rgba[(39 * 40 + 39) * 4..][..4], &[189, 189, 61, 255]);
+    let placement = consumer
+        .updates
+        .iter()
+        .find_map(|update| match update {
+            GraphicsUpdate::Place(placement) => Some(placement),
+            _ => None,
+        })
+        .unwrap();
+    assert_eq!((placement.anchor_row, placement.anchor_col), (5, 4));
+    assert_eq!((placement.span_cols, placement.span_rows), (4, 2));
+    assert!(consumer.text.windows(5).any(|part| part == b"AFTER"));
+    assert!(!consumer.text.windows(3).any(|part| part == b"\x1bPq"));
+    let mut terminal = Crosswords::new(
+        CrosswordsSize::new(80, 24),
+        CursorShape::Block,
+        VoidListener,
+        WindowId::from(0),
+        0,
+        100,
+    );
+    Processor::default().advance(&mut terminal, &consumer.text);
+    use rio_vt::crosswords::pos::{Column, Line};
+    assert_eq!(terminal.grid[Line(6)][Column(4)].c(), 'A');
+    assert_eq!(terminal.grid[Line(6)][Column(8)].c(), 'R');
+    consumer.exit();
+}
+
+#[test]
+fn sixel_discovery_reports_the_endpoint_graphics_attributes() {
+    let daemon = Daemon::with_limits(0, true);
+    let mut consumer = daemon.spawn();
+    // XTSMGRAPHICS is a live query, not an image: the daemon owns the answer in
+    // both attached and detached states because it alone holds the pane's pixel
+    // geometry and admission bounds. The desktop mirror never replies. A `CSI
+    // 14t` at the end terminates the fixture's byte-level reply capture after
+    // every attribute answer, so the exact bytes and their order are observed.
+    let replies = consumer.exchange(
+        b"\x1b[?1;1;0S\x1b[?1;4S\x1b[?2;1;0S\x1b[?2;4S\x1b[?2;3;4;4S\x1b[?2;2S\x1b[?2;9S\x1b[?3;1;0S\x1b[?9;1S\x1b[14t",
+        1,
+    );
+    assert_eq!(
+        replies,
+        [b"\x1b[?1;0;1024S\x1b[?1;0;1024S\x1b[?2;0;800;480S\x1b[?2;3S\x1b[?2;3S\x1b[?2;3S\x1b[?2;2S\x1b[?3;1S\x1b[?9;1S\x1b[4;480;800t".to_vec()],
+        "color registers, current Sixel geometry, unsupported set/reset, a refused rectangular maximum, ReGIS and unknown items all answer truthfully in request order"
+    );
+    consumer.exit();
 }
 
 #[test]
@@ -2373,4 +2441,125 @@ fn retention_daemon_two_visible_panes_retain_and_replay_sixty_distinct_1080p_fra
         consumer.exit();
         daemon.panes().kill(pane_id).unwrap();
     }
+}
+
+// #277: iTerm2 `File=` admissions share the same pane/daemon metadata budget
+// and generation retirement as Kitty resources; there is no second image
+// store or identity namespace. The tiny PNG isolates metadata pressure; real
+// producer-sized inputs are covered through the GUI/SSH consumers.
+#[test]
+fn iterm2_shares_the_metadata_budget_and_session_reset_retires_identities() {
+    use base64::Engine as _;
+    // PNG validation needs its production scratch budget; only metadata is
+    // constrained here, independently of pixel/encoded/work capacity.
+    let daemon = Daemon::with_limits(1024, true);
+    let mut a = daemon.spawn();
+    // The Kitty admission consumes both metadata tickets the budget allows.
+    a.red("a=T,i=1,p=1,c=1,r=1,C=1");
+    let png = {
+        let mut bytes = Vec::new();
+        let mut encoder = png::Encoder::new(&mut bytes, 1, 1);
+        encoder.set_color(png::ColorType::Rgba);
+        encoder.set_depth(png::BitDepth::Eight);
+        encoder
+            .write_header()
+            .unwrap()
+            .write_image_data(&[0xff, 0, 0, 0xff])
+            .unwrap();
+        bytes
+    };
+    let mut refused = b"\x1b]1337;File=inline=1;name=Zm9v:".to_vec();
+    refused.extend_from_slice(
+        base64::engine::general_purpose::STANDARD
+            .encode(&png)
+            .as_bytes(),
+    );
+    refused.push(0x07);
+    a.idle(&refused);
+    assert!(
+        !a.updates.iter().any(|update| matches!(
+            update,
+            GraphicsUpdate::Resource { .. }
+                | GraphicsUpdate::Place(_)
+                | GraphicsUpdate::Remove { .. }
+                | GraphicsUpdate::Evicted { .. }
+        )),
+        "a metadata-exhausted iTerm2 admission produces no resource, placement, removal or eviction"
+    );
+    assert!(
+        !a.text.windows(2).any(|part| part == b"\x1bD"),
+        "a refused iTerm2 admission emits no cursor-advancing output"
+    );
+    // Freeing the Kitty placements reopens the same shared budget.
+    a.idle(b"\x1b_Ga=d,d=A,q=2\x1b\\");
+    a.idle(&refused);
+    // Place frames may revise the same identity as following text advances.
+    // Fold the public updates as a consumer does, rather than count packets.
+    let accepted = a
+        .updates
+        .iter()
+        .filter_map(|update| match update {
+            GraphicsUpdate::Place(placement) => Some((placement.key, placement.clone())),
+            _ => None,
+        })
+        .collect::<BTreeMap<_, _>>();
+    assert_eq!(
+        accepted.len(),
+        1,
+        "the freed budget admits the iTerm2 image"
+    );
+    let accepted = accepted.into_values().next().unwrap();
+    assert_eq!(accepted.z, -1);
+    let (resource, image) = a
+        .updates
+        .iter()
+        .find_map(|update| match update {
+            GraphicsUpdate::Resource { key, image } => Some((*key, image)),
+            _ => None,
+        })
+        .expect("accepted iTerm2 resource reaches the consumer");
+    assert_eq!(resource, accepted.resource);
+    assert_eq!((image.width, image.height), (1, 1));
+    assert_eq!(image.data, png);
+    // Reset must publish retirement of accepted identities before a new
+    // admission uses fresh resource and placement keys.
+    a.idle(b"\x1bc");
+    assert!(
+        a.updates.iter().any(|update| matches!(
+            update,
+            GraphicsUpdate::Remove { placements, resources }
+                if placements.contains(&accepted.key) && resources.contains(&accepted.resource)
+        )),
+        "RIS retires the accepted iTerm2 resource and placement"
+    );
+    a.idle(&refused);
+    let reset_accepted = a
+        .updates
+        .iter()
+        .filter_map(|update| match update {
+            GraphicsUpdate::Resource { key, .. } => Some(*key),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(reset_accepted.len(), 1);
+    assert_ne!(
+        reset_accepted[0], accepted.resource,
+        "reset cannot reuse the retired resource identity"
+    );
+    let reset_placements: BTreeSet<_> = a
+        .updates
+        .iter()
+        .filter_map(|update| match update {
+            GraphicsUpdate::Place(placement) => Some(placement.key),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(reset_placements.len(), 1);
+    assert_ne!(
+        *reset_placements.first().unwrap(),
+        accepted.key,
+        "reset cannot reuse the retired placement identity"
+    );
+    a.exit();
+    daemon.panes().kill(a.session.pane_id()).unwrap();
 }

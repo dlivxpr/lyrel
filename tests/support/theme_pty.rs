@@ -26,7 +26,13 @@ pub fn theme_query_sender() {
         let serial = fields.next().unwrap();
         let replies: usize = fields.next().unwrap().parse().unwrap();
         let bytes = unhex(fields.next().unwrap());
-        output.write_all(&bytes).unwrap();
+        // An optional fourth field repeats the same payload in one PTY write
+        // burst, so a ring-cap test does not pay a JSON `SendInput` round trip
+        // per kilobyte. Existing three-field callers keep one copy.
+        let repeat: usize = fields.next().map_or(1, |n| n.parse().unwrap());
+        for _ in 0..repeat {
+            output.write_all(&bytes).unwrap();
+        }
         output.flush().unwrap();
         if replies == usize::MAX {
             // Synchronize the PTY writer without inserting a marker or APC
@@ -39,13 +45,26 @@ pub fn theme_query_sender() {
             .unwrap();
             continue;
         }
+        // A reply is whole when its own framing says so: CSI/DCS/APC end at
+        // their final byte or ST, OSC at BEL or ST. The colour probes below
+        // answer `ESC ] … ; rgb:hh/hh/hh`, whose hex digits include `c` — a
+        // one-byte stop would truncate every indexed-colour report.
+        let reply_complete = |reply: &[u8]| {
+            if reply.starts_with(b"\x1b[") {
+                reply.len() > 2 && matches!(reply.last(), Some(0x40..=0x7e))
+            } else {
+                reply.ends_with(b"\x1b\\")
+                    || (reply.starts_with(b"\x1b]") && reply.ends_with(b"\x07"))
+            }
+        };
         let mut received = Vec::new();
         for _ in 0..replies {
+            let start = received.len();
             loop {
                 let mut byte = [0];
                 input.read_exact(&mut byte).unwrap();
                 received.push(byte[0]);
-                if matches!(byte[0], b'n' | b'c') {
+                if reply_complete(&received[start..]) {
                     break;
                 }
             }

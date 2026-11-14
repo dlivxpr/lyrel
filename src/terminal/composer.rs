@@ -645,7 +645,10 @@ fn row_backdrop<T: EventListener>(
     term: &Crosswords<T>,
     line: usize,
     palette: &[ColorRgb; 256],
+    named_fg: Option<ColorRgb>,
+    named_bg: Option<ColorRgb>,
 ) -> Option<ColorRgb> {
+    use rio_vt::config::colors::NamedColor;
     let grid = &term.grid;
     if line >= grid.screen_lines() {
         return None;
@@ -661,6 +664,8 @@ fn row_backdrop<T: EventListener>(
         let rgb = match color {
             AnsiColor::Spec(rgb) => Some(rgb),
             AnsiColor::Indexed(i) => Some(palette[i as usize]),
+            AnsiColor::Named(NamedColor::Foreground) => named_fg,
+            AnsiColor::Named(NamedColor::Background) => named_bg,
             AnsiColor::Named(named) => palette.get(named as usize).copied(),
         };
         match tally.iter_mut().find(|(seen, _)| *seen == rgb) {
@@ -1283,21 +1288,41 @@ impl TerminalView {
         let (found, backdrop, screen_lines, offset) = if !open {
             (None, None, 0, 0)
         } else {
+            let overrides = *self
+                .terminal
+                .color_overrides
+                .lock()
+                .unwrap_or_else(|poison| poison.into_inner());
             let sampled = self.terminal.term.try_lock().map(|term| {
                 if term.synchronized_output() {
                     return None;
                 }
-                let mut palette = self.terminal.palette;
-                if let Some(active) = cx.try_global::<super::palette::ActivePalette>() {
-                    palette[..16].copy_from_slice(&active.ansi16);
-                }
+                let palette = super::palette::effective(
+                    &self.terminal.palette,
+                    cx.try_global::<super::palette::ActivePalette>(),
+                    &overrides,
+                );
+                let named_fg = overrides
+                    .get(lyrel_core::core::pane_colors::DEFAULT_FG)
+                    .map(super::palette::rgb_color);
+                let named_bg = overrides
+                    .get(lyrel_core::core::pane_colors::DEFAULT_BG)
+                    .map(super::palette::rgb_color);
                 let found = agent
                     .filter(|a| covers(*a))
                     .and_then(|a| input_area(a, &screen_rows(&term), term.columns()));
                 // The row over the input is the screen around it, not its own shade.
                 let backdrop = found
                     .as_ref()
-                    .and_then(|area| row_backdrop(&term, area.top.saturating_sub(1), &palette))
+                    .and_then(|area| {
+                        row_backdrop(
+                            &term,
+                            area.top.saturating_sub(1),
+                            &palette,
+                            named_fg,
+                            named_bg,
+                        )
+                    })
                     .map(|rgb| (rgb, self.cell_width * term.columns() as f32));
                 Some((
                     found,

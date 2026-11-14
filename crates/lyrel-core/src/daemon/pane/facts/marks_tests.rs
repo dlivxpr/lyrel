@@ -6,6 +6,58 @@ use super::output_marks::{
 use super::*;
 
 #[test]
+fn progress_is_ordered_retained_and_only_command_boundaries_clear_it() {
+    use crate::daemon::protocol::{PaneProgress, ProgressKind};
+    let mut facts = PaneFacts::default();
+    let mut sniffer = OscSniffer::new();
+    let mut messages = Vec::new();
+    let mut read = |facts: &mut PaneFacts, bytes: &[u8]| {
+        apply_signals(facts, sniffer.feed(bytes), &mut |msg| messages.push(msg));
+    };
+    read(&mut facts, b"\x1b]9;4;1;42\x07");
+    assert_eq!(
+        facts.progress,
+        Some(PaneProgress {
+            kind: ProgressKind::Running,
+            percent: Some(42)
+        })
+    );
+    read(&mut facts, b"ordinary output: done 100%\r\n");
+    assert!(
+        facts.progress.is_some(),
+        "text is not a completion boundary"
+    );
+    read(&mut facts, b"\x1b]133;D;0\x07");
+    assert_eq!(facts.progress, None);
+    read(&mut facts, b"\x1b]9;4;2\x07\x1b]133;D;1\x07");
+    assert_eq!(
+        facts.progress,
+        Some(PaneProgress {
+            kind: ProgressKind::Error,
+            percent: None
+        })
+    );
+    read(&mut facts, b"\x1b]133;C\x07\x1b]9;4;4;61\x07");
+    assert_eq!(
+        facts.progress,
+        Some(PaneProgress {
+            kind: ProgressKind::Paused,
+            percent: Some(61)
+        })
+    );
+    read(&mut facts, b"\x1b]9;4;0\x07\x1b]9;4;3\x07");
+    assert_eq!(
+        facts.progress,
+        Some(PaneProgress {
+            kind: ProgressKind::Indeterminate,
+            percent: None
+        })
+    );
+    read(&mut facts, b"\x1b]9;4;0\x07");
+    assert_eq!(facts.progress, None);
+}
+
+#[test]
 fn sniff_osc7_cwd() {
     let mut s = OscSniffer::new();
     let sig = s.feed(b"\x1b]7;file://host/Users/me/dev\x07");
@@ -458,7 +510,7 @@ fn a_finished_or_waiting_turn_keeps_its_reconnect_and_resume_identity() {
         assert_eq!(facts.launch_argv, Some(vec!["omp".into()]));
         assert!(facts.session_scope.is_some());
         let (tx, rx) = mpsc::channel();
-        attach_subscriber_with_permissions(&mut state, tx, &OutputGate::new(), false, true);
+        attach_subscriber_with_permissions(&mut state, tx, &OutputGate::new(), false, true, false);
         let replay: Vec<_> = rx.try_iter().collect();
         assert!(
             replay
@@ -549,7 +601,7 @@ fn a_replay_does_not_claim_a_prompt_while_a_program_owns_the_pane() {
     st.ring.append(b"\x1b[?1049h\x1b[2Jthe agent's screen");
 
     let (tx, rx) = mpsc::channel();
-    attach_subscriber_with_permissions(&mut st, tx, &OutputGate::new(), false, true);
+    attach_subscriber_with_permissions(&mut st, tx, &OutputGate::new(), false, true, false);
 
     let replayed = drain(&rx);
     let prompt = replayed
@@ -590,7 +642,7 @@ fn a_replay_still_reports_a_prompt_when_the_shell_owns_the_pane() {
     st.ring.append(b"\x1b[?1049hstranded alt screen");
 
     let (tx, rx) = mpsc::channel();
-    attach_subscriber_with_permissions(&mut st, tx, &OutputGate::new(), false, false);
+    attach_subscriber_with_permissions(&mut st, tx, &OutputGate::new(), false, false, false);
 
     assert!(
         drain(&rx).iter().any(|msg| matches!(

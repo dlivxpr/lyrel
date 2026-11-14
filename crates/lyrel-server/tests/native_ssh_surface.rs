@@ -251,10 +251,20 @@ fn native_ssh_graphics_standard_app_surface() {
         "mutations" => "kitty-frame-mutations.mjs",
         "relative" => "kitty-relative.mjs",
         "capacity" => "kitty-capacity.mjs",
-        _ => panic!("native scene must be frames/partial/playback/mutations/relative/capacity"),
+        "colors" => "terminal-color-query-scene.mjs",
+        "progress" => "terminal-progress.mjs",
+        "pointer" => "pointer_scene.mjs",
+        "mouse" => "mouse_utf8_probe.mjs",
+        "keyboard" => "kitty_keyboard_boundary.mjs",
+        _ => panic!("unknown native SSH graphics/terminal scene: {scene}"),
+    };
+    let directory = if matches!(scene.as_str(), "pointer" | "mouse" | "keyboard") {
+        "../../tests/support"
+    } else {
+        "../../scripts"
     };
     let source = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../scripts")
+        .join(directory)
         .join(script);
     let body = std::fs::read(&source).unwrap_or_else(|error| {
         panic!(
@@ -270,6 +280,8 @@ fn native_ssh_graphics_standard_app_surface() {
     for (index, pane) in panes.iter_mut().enumerate() {
         let args = if scene == "capacity" {
             vec!["--pane".into(), index.to_string()]
+        } else if scene == "keyboard" {
+            vec!["events".into(), "31".into()]
         } else {
             Vec::new()
         };
@@ -357,6 +369,11 @@ fn native_ssh_graphics_standard_app_surface() {
                             .as_str()
                             .expect("exact synthetic sender command/input");
                         fixture.input(panes[index], input.as_bytes().to_vec());
+                    }
+                    "close-gui" => {
+                        // Drop reaps only the GUI child this driver created.
+                        // The router, daemon and both live PTYs stay owned here.
+                        gui = OwnedGui(None);
                     }
                     "reopen" => {
                         if let Some(child) = &mut gui.0 {

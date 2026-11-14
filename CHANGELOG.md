@@ -7,8 +7,46 @@
 
 ## [0.3.4] - 2026-11-13
 
+### 依赖升级
+
+- #259：`rio-vt`／`rio-graphics`／`rio-unicode` 原子升级到正式 registry 的精确 `=0.5.30`，同步锁定传递 `rio-grapheme-width 0.5.30`；适配 `glyph_register` 新增的 §8.5 `GlyphLayout` 参数，注册解析默认沿用协议默认布局，本票不启用 Glyph Protocol 能力。保留关闭 VT 默认 features、原 PTY／daemon 和无 GPUI 的共享核心；完整构建、回归、原生与远端验收结果按候选实际执行记录，未执行项不记为通过。
+
+### 新增
+
+- #270：完整单色 Glyph Protocol 正常启用，GUI 对实际支持 `glyph-support` 的 pane endpoint 声明完整绘制能力；daemon 仅为当前 rendering controller 的 `s` 广告 `fmt=glyf`，state-only、observer、脱离及替代 controller 不继承能力声明。保留有界 `q/r/c`、注册／布局／保留态和单一实时回复所有者，不启用颜色格式、全局字体注入、磁盘 glyph cache 或默认关闭实验开关。正式 `omp/18.20.0` 已在隔离真实 PTY／生产消费者中完成 bundle 注册与绘制；该后台证据不替代 Windows 原生像素、WSL／真实 SSH 或最终组合验收。Windows fixture 显式完成 ConPTY 首次 DA1 初始化，真实客户端 harness 分开 shell source 引用与 argv，并禁止向 omp 注入 fixture 命令。
+- #268：daemon 在 8 MiB 文字回放环之外保留 pane 会话内已接受的 Glyph glossary，并在 ring／graphics／颜色回放之后，向显式发送 `SubscribeGlyphState` 的消费者发送有序有界 `GlyphState` 全量投影（generation + 插入序 `glyf` 注册）。旧 client 或未 opt-in 消费者保持连接，且不会收到 `GlyphQuery`／`GlyphState` 未知 kind；controller 未 opt-in 时 `q` 保持无应答。`c`／RIS 在流位置更新 generation，replacement 保留 FIFO 顺序；消费者原子替换 registry 并忽略更旧 generation，旧 reader 的迟到结果由 link generation 退休。Unix 同会话 handoff 显式携带该 frame，disk scrollback 剥离完整 glyph APC，daemon 死亡后的新 shell 以空 glossary 开始；不增加磁盘 glyph cache、第二 parser 或自动重启。聚合 wire／decoded 预算不足时明确拒绝而非静默丢失，保留 Colors59/61、Progress71、Sixel 协商与 `s` 的后续 gate。
+- #267：GUI Glyph 消费路径实现 pinned v1.12 §8.5 布局：pad → size → align，声明 extent（`aw`／`lh`／`ymin`）或未声明时的解码点 bbox 与 `contain` em 上限、五种 size、水平／垂直 align（含 baseline 与 descender）、分数 padding 与退化归零、未扣 padding 的 render span 裁剪；`width=2` 仅扩像素 span，末列、非空或已有邻格自行绘制时回退一列，保持 logical width、光标推进、换行、选择与复制。前景、单元格几何、主字体 baseline、span、注册 revision 与 display scale 每帧参与派生，字体／显示缩放不要求应用重注册。保留普通字体、Powerline／boxdraw、Kitty 与 native 路径；本切片仍不回复 `s`。真实 PTY→daemon→production consumer 与确定性边界结果见本票交付证据；Windows 原生像素／显示缩放、WSL、真实 SSH 与 macOS 未在本票宣称通过。
+- #275：静态 Sixel 在 #274 的 daemon authority 上补齐发现、恢复与拒绝语义。pane 协议新增可忽略的 `static-sixel` feature：附着客户端只在本次连接实际协商到它时才在 DA1 附加属性 `4`，旧 daemon／未更新远端 server 不会继承本机 GUI 的声明；`XTSMGRAPHICS` 由持有像素几何与准入上限的 daemon 在附着与脱离两种状态回答（`Pi=1` 当前／最大寄存器 `1024`，`Pi=2 Pa=1` 当前文本区域像素并按每边 4,096 截断，`Pa=2/3/4` 以状态 3 拒绝因为准入同时受单图 32 MiB RGBA 面积预算约束，ReGIS 与未知 item 以状态 1 拒绝），镜像保持沉默；`XTGETTCAP` 白名单不变，`sixel` 仍不是 terminfo 能力名。Sixel DCS 在进入文字环之前提取，发送方停止、8 MiB replay 被淘汰后，全新 consumer 挂回同一存活 pane 仍从有序 Graphics 帧恢复像素与 placement 且发送方计数器不变；超限、非法颜色分量与被取消的截断体不产生 placement、不移动光标、不替换已接受资源；resize 后图片继续与实际文字行共享几何。真实 img2sixel 1.10.5 输出与生产消费者证据按交付记录，Windows 原生像素、WSL headless、真实 SSH 与 macOS 不由 headless 断言替代。
+- #269：Glyph 注册资源身份随呈现快照捕获——`RenderCell` 与 `ReadingCell` 保存 `Arc<GlyphView>`；未完成的同步呈现帧、grid 竞争复用帧和阅读行保留其显示时的版本，live 单元格在下一次成功帧采用当前注册。replace／clear 不再改写正在阅读的画面，返回 live 后采用新版本或普通字体 fallback；RIS 仍按既有破坏性阅读重置丢弃阅读呈现并清空 live registry。不新增 registry／cache 或第二绘制管线，普通 pane 不付逐单元格查找，outline 由最后一个 live／捕获 owner 释放。验证以真实 PTY→daemon→生产消费者为主，原生与前台边界另行记录。
+
+- #274：静态 Sixel 使用正式 Rio parser，经原 daemon／PTY 有序准备、资源预算与 placement 生命周期进入终端；自然尺寸、默认光标／滚动、DECSDM、右侧光标模式及拒收后的文字顺序不套用 Kitty 语义，图片位于文字之下，镜像不再绕过 daemon 解码。保留 Kitty、同步呈现和阅读态；与 #265 的 DCS discovery framer 按各自模式共存，不放宽发现请求预算。Windows 独立 target 的 Sixel／真实 PTY 7 项、Kitty 15 项、XTGETTCAP 4 项、同步输出 1 项、生产消费者 2 项通过（源码 `4d788ed5`），实际官方 img2sixel 原生入口已准备；未宣称 Windows 原生像素、WSL headless、SSH 或 macOS 通过。不扩展文件／URL／动画，不提前宣称 #275 的完整恢复／安全／发现兼容。
+- #271：单终端标签页显示 `OSC 9;4` 的运行中、未定量、暂停及错误进度，仅显示发送方提供的百分比；daemon 在回放环之外保存有界当前状态，支持存活 pane 重挂载及 Unix 同会话 handoff，不从旧文字给新 Shell 复活进度。命令结束清理运行／暂停、错误保留到 clear 或下一命令；独立语义事件不重复驱动 agent 生命周期，隐藏输出保持绘制门控。实际 pane endpoint 升至 v18、control 保持 v16，不兼容时明确拒绝并要求更新，不自动重启服务。本票增加真实 PTY→daemon→生产 tab 消费者及原生场景入口；各平台实际验证以交付证据为准，不宣称未运行的原生／SSH 验收通过。
+- #272：标签页进度汇总其全部终端叶子，包括未聚焦、隐藏和停放的窗格；错误优先，仅单个有效任务提供百分比时显示数值，多任务只显示诚实状态而不做平均。保留智能体等待／完成／未读语义，不增加重复 busy 或完成通知；关闭、移动、停放／恢复、焦点、重连及休眠／唤醒重建按当前成员更新，瞬时进度不写入 durable 布局或 agent payload。新增真实多 PTY→daemon→生产 tab 消费者、确定性成员边界测试和原生多窗格场景；Windows 实窗、WSL 与真实 SSH 仍按父验收边界分别记录，不宣称 macOS 通过。
+- #262：终端内容区支持 OSC 22 基本指针 set/reset（含空名称释放），按实际 GPUI／平台形状映射并安全回退；保留工作台菜单／分屏拖动、本地文字选择和链接操作优先级，命令结束、提示符、reset、断连与链接退休清理旧覆盖。不增加指针堆栈／查询或终端身份伪装；新增真实 PTY／daemon／生产交互消费者、确定性 reader 边界回归和可复现原生场景。测试平台的绘制策略与操作断言不替代原生指针、macOS 或真实 SSH 验收。
+- #261：终端新增 pane 会话内 `OSC 4/10/11/12` 索引色与默认前景／背景／光标 set/query/reset 覆盖层，绘制、查询与 prompt 背景共用当前主题 + 覆盖后的有效调色板；命令退出保留、主题切换只更新未覆盖默认、复位露出当前主题，其他 pane／界面／配置不受影响。daemon 在回放环之外保留固定 259 槽的有界解码状态，经有序流投影给已协商消费者；ring 裁剪、窗口重附着与同会话 handoff 可恢复，daemon 死亡后的新 shell 从空状态开始。新增 `pane-colors` feature 与客户端 opt-in，新 daemon 绝不向旧客户端发送新帧；缺少该能力的后端在图形窗格附着前收到明确的更新错误，不静默丢弃颜色、不停止旧 daemon、不自动重启。同步输出与阅读态沿用现有 retained-frame 规则；新增真实 PTY／daemon／生产终端消费者、handoff 与恢复路径回归及原生颜色场景入口。Windows 原生、WSL 与真实 SSH 组合验收由集成阶段补齐，不以 headless 结果替代。
+
 ### 修复
 
+- #267：Glyph 绘制快照保留 Kitty Unicode placeholder 的占用身份；即使其 PUA 墨迹被抑制或图片 prototype 已删除，前一格的 `width=2` 注册也不能把该格误当普通空白借用。live 与阅读快照采用同一规则，不改变逻辑列宽、复制内容或图片资源所有权。
+- #270：将 Glyph glossary 投影与字体 coverage 应答凭证分开：CLI／observer 继续接收已协商的 `GlyphState`，但仅实际声明 `SubscribeGlyphRender` 的当前 controller 接收 `GlyphQuery`；没有字体应答端时保持协议规定的静默，不让查询积压到忽略该帧的 CLI。移除无调用的 attach／observe 兼容包装，公开 `RetainedGlyph` 记录标为非穷尽，不改 wire kind、协议版本或 GUI 字体权威。
+- #265／#275：能力探针完整消费 Kitty 完成屏障，保留对额外输入、重复回复与所有查询字节的严格断言；真实 SSH 的完整 Node producer 验收迁到生产 `TerminalView`，让前端实际回答 DA1，daemon 继续拥有 XTGETTCAP／XTSMGRAPHICS。保留原 9 组查询并验证 5 组 Sixel 发现，不伪造回复或缩窄用例。
+- #270：独立 controller probe 的输入与 `Attach` 共用同一有序连接，避免另一连接的 `SendInput` 在附着完成前触发前端绑定查询；保留原 10 秒超时、完整 `q`／`s` 回复与绘制能力声明断言，不改生产协议。
+- #273／#278：主屏历史让位备用屏的图形压力验收先实际解码并绘制历史／最后 live 图片，在等待准入 ACK 时显式驱动生产窗口帧，让窗口归还退休 atlas 租约，不依赖 headless 隐式帧回调时机。原同次 `1049h + APC`、两图片预算、ACK／像素／历史提示与最后 live 图片断言不变；完整回复改由既有文件捕获送到父测试，失败时保留拒绝码与资源上下文，不改生产预算或超时。
+- #261：颜色 handoff 回归的完成标记改为由 `printf` 拼接生成，避免 PTY 输入回显在颜色设置执行前误触发 handoff；保留移交后的索引色、默认背景色与同一 shell 断言，不修改生产状态移交或超时。
+- #268：新 shell 的 Glyph 隔离回归在真实 PTY 中以 raw mode 采集完整回复字节，退出采集后恢复原 tty 模式并再次验证正常 shell 输入；不再将 macOS 行编辑器对 ESC／ST 的回显重绘误判为 glossary 复活。保留磁盘 APC 剥离、空权威 glossary、单次投影与历史 ACK 不重放断言，不放宽回复内容或生产超时。
+- #277：修复同一次 PTY read 中图片后的 APC／OSC 提前释放已完成 iTerm2 source 工作额度、导致 daemon reader panic 与后续文字停滞；保留各图片到有序移交的额度，base64 在原编码 buffer 内压缩并在解码分配前预留工作空间，畸形 padding 拒收而不下溢。不通过延长往返超时掩盖故障。
+- #264：绘制时的 `keyboard_events` key context 与其他 frame facts 一起采样，不再经 `key_flags()` 阻塞等待 reader 持有的 grid；实际按键路由仍读取 live 模式。保留无 prompt 与 prompt 两个既有竞争绘制回归，不通过延长超时掩盖等待。
+- #268：`GlyphState` 的共享解码器拒绝 `upm=0`、`aw=0` 与 `lh=0`，与注册请求的值域一致，避免恢复投影向消费者引入从未能被接受的布局参数。
+- #275：Sixel 原生恢复脚本改用 9 MiB 无滚动的 SGR reset 输出淘汰原传输字节，避免可见长行折行先把图片滚出保留历史，混淆正常资源退役与恢复失败；图片生产进程仍在淘汰与重新附着前退出。
+- #269：同步 Glyph 的帧保留回归使用既有有序 daemon-stream 消费者接缝，避免 ConPTY 自行发送 ESU 或 PTY 往返屏障越过 150 ms fail-safe 后再观察旧帧；保留真实绘制、ESU 发布及无后续输出的超时回归，不放宽生产超时。
+- #275：Sixel 恢复回归分开计量 ring 的 `Size`／`Snapshot` 与模式前导、live `Output`，避免把合法前导字节误判为 8 MiB ring 超限；保留容量上下界及原传输淘汰后的像素／placement 恢复断言。
+
+- #263：协商的 `?1005` UTF-8 鼠标坐标编码实际生效——此前终端已应答 1005 已设置，编码器却只查 SGR 并在列／行 ≥223 处静默丢弃报告。现在按生效编码写出（X10 上限保持 223，UTF-8 上限 2015，SGR 不变），按下／松开、修饰键与滚轮在宽窗格送达应用；`?1005`／`?1006` 切换与 DECRQM 查询按模拟器生效状态回答，1015／1016 仍如实回答不支持；daemon 模式折叠按模拟器规则将鼠标上报级别与 1005／1006 编码作为互斥组折叠，重连回放只恢复最终生效状态。Shift 本地选择覆盖与未协商 legacy 行为不变。真实 PTY→daemon→生产消费者断言、原生宽窗格／SSH 场景与未验证项见工单交付记录。
+- #264：将 Kitty 事件类型协商接入真实 GPUI press／repeat／release 路由，CSI-u、方向键和功能键使用真实 held／keyup 信息；只为实际写入 PTY 的按下配对释放，并在焦点、窗口失活、切屏、模式／命令边界、退出和重连时退役旧配对。有效模式栈、查询与 replay 统一过滤框架缺失的 alternate-key 位，保留 legacy 输入及 ConPTY 已合成的 Enter／Ctrl+J 事件对；IME 预编辑不取得配对，支持关联文本的纯文本提交使用 key code `0`。补充生产输入、真实 PTY／daemon 和精确字节消费者；Windows 实窗、系统中文 IME、真实 SSH 与 macOS 原生验收分别记录，不能由 headless 事件测试代替。
+- #265：复用正式 Rio 的 XTGETTCAP 解码与 response callback，按解码名字仅广告已支持的 256 色／真彩色；未知、未验证、剪贴板、Glyph／Sixel／iTerm2、Rio 产品身份和固定几何均负答。daemon 在附着／脱离／重连中保持单一实时应答者，桌面和历史 replay 不重答；实际 pane endpoint 的 `xtgettcap-owner` feature 缺失时明确要求更新，不自动重启服务，不改变产品级 `TERM`／`TERM_PROGRAM`。原生及真实客户端验收按实际执行记录，不将 headless 协议通过等同于跨平台完整验收。
+
+- #260：终端 `OSC 4/10/11/12` 查询与生产绘制统一使用当前主题的有效 ANSI、默认前景／背景和光标颜色，保留固定扩展色位、亮色可读性、同步输出提交与历史重放副作用抑制；不启用程序驱动动态改色。Windows 独立 target 的真实 PTY → daemon → 生产终端颜色消费者完成有效 RED／GREEN，既有查询重放消费者与四项调色板边界测试通过，均无忽略项；新增 `scripts/terminal-color-query-scene.mjs` 对照入口。原生像素、WSL／真实 SSH 与 macOS 未在本票分支验收，不以返回值或 headless 绘制断言替代。
+- 修复 Markdown 图片后台加载错误的本地化：worker 保留错误类别，回到 UI 线程后才翻译，避免中文界面混入英文 SVG／容量／重定向提示；资源消费者显式覆盖中文界面，保留外部引用拒绝和禁止重定向断言。
 - 修复智能体输出时上滚再下滑出现已消失输入栏的阅读态残影；Markdown 所见即所得编辑器支持 Ctrl/Cmd+F 查找与替换，宽表按页面宽度折行且不再溢出，Markdown 与代码编辑器提供常显水平滚动条；代码编辑器状态栏移入文档面板底部、与全局状态栏并存；原生 SSH 窗格通过远端进程表显示当前 shell 进程树；应用 Toast 与连接提示统一到右下角、全局状态栏上方。
 
 ## [0.3.3] - 2026-11-12

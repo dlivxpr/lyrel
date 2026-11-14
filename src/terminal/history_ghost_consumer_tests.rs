@@ -138,7 +138,7 @@ fn ghost_names_what_up_arrow_recalls(cx: &mut TestAppContext) {
                 view.history.reset_navigation();
                 view.input.editor_mut().set(typed);
                 let ghost = view.ghost_suggestion();
-                view.handle_editor_key(&key("up"), cx);
+                view.handle_editor_key(&key("up"), false, cx);
                 assert_eq!(
                     ghost.as_deref(),
                     Some(view.input.editor().text().as_str()),
@@ -170,9 +170,9 @@ fn submitting_a_command_again_moves_it_to_the_newest_entry(cx: &mut TestAppConte
             );
 
             view.input.editor_mut().set("");
-            view.handle_editor_key(&key("up"), cx);
+            view.handle_editor_key(&key("up"), false, cx);
             assert_eq!(view.input.editor().text(), "git status");
-            view.handle_editor_key(&key("up"), cx);
+            view.handle_editor_key(&key("up"), false, cx);
             assert_eq!(view.input.editor().text(), "make", "↑ never lands on a command twice");
         })
         .unwrap();
