@@ -1,4 +1,5 @@
 //! 工作台编辑 interface：文档文本与 presentation 状态分别读取。
+use super::image_document::ImageView;
 use super::text::TextSnapshot;
 use super::*;
 use lyrel_markdown_editor::EditorState as MarkdownEditor;
@@ -8,17 +9,21 @@ use std::cell::RefCell;
 pub(crate) enum EditorInput {
     Code(Entity<EditorState>),
     Markdown(Entity<MarkdownEditor>),
+    /// 只读静态图片：没有文本，只有取景。
+    Image(Entity<ImageView>),
 }
 #[derive(Clone)]
 pub(crate) enum WeakEditorInput {
     Code(gpui_kit::WeakEntity<EditorState>),
     Markdown(gpui_kit::WeakEntity<MarkdownEditor>),
+    Image(gpui_kit::WeakEntity<ImageView>),
 }
 impl WeakEditorInput {
     pub(crate) fn upgrade(&self) -> Option<EditorInput> {
         match self {
             Self::Code(input) => input.upgrade().map(EditorInput::Code),
             Self::Markdown(input) => input.upgrade().map(EditorInput::Markdown),
+            Self::Image(input) => input.upgrade().map(EditorInput::Image),
         }
     }
 }
@@ -27,6 +32,7 @@ impl EditorInput {
         match self {
             Self::Code(input) => WeakEditorInput::Code(input.downgrade()),
             Self::Markdown(input) => WeakEditorInput::Markdown(input.downgrade()),
+            Self::Image(input) => WeakEditorInput::Image(input.downgrade()),
         }
     }
     pub(crate) fn code(&self) -> Option<&Entity<EditorState>> {
@@ -41,12 +47,23 @@ impl EditorInput {
             _ => None,
         }
     }
+    pub(crate) fn image(&self) -> Option<&Entity<ImageView>> {
+        match self {
+            Self::Image(input) => Some(input),
+            _ => None,
+        }
+    }
+    /// 有文本可编辑、可查找、可保存的输入。图片不是。
+    pub(crate) fn is_text(&self) -> bool {
+        self.code().is_some() || self.markdown().is_some()
+    }
     pub(crate) fn set_soft_wrap(&self, wrap: bool, window: &mut Window, cx: &mut gpui_kit::App) {
         match self {
             Self::Code(input) => {
                 input.update(cx, |state, cx| state.set_soft_wrap(wrap, window, cx))
             }
             Self::Markdown(input) => input.update(cx, |state, cx| state.set_soft_wrap(wrap, cx)),
+            Self::Image(_) => {}
         }
     }
     pub(crate) fn finish_composition(&self, _: &mut Window, cx: &mut gpui_kit::App) {
@@ -58,12 +75,14 @@ impl EditorInput {
         match self {
             Self::Code(input) => input.update(cx, |state, cx| state.set_selected_range(range, cx)),
             Self::Markdown(input) => input.update(cx, |state, cx| state.select_range(range, cx)),
+            Self::Image(_) => {}
         }
     }
     pub(crate) fn add_selection(&self, range: std::ops::Range<usize>, cx: &mut gpui_kit::App) {
         match self {
             Self::Code(input) => input.update(cx, |state, cx| state.add_selection(range, cx)),
             Self::Markdown(input) => input.update(cx, |state, cx| state.add_selection(range, cx)),
+            Self::Image(_) => {}
         }
     }
     pub(crate) fn read<'a>(&'a self, cx: &'a gpui_kit::App) -> InputRead<'a> {
@@ -90,6 +109,7 @@ impl EditorInput {
                 let at = self.read(cx).text().position_to_offset(&position);
                 input.update(cx, |state, cx| state.select_range(at..at, cx));
             }
+            Self::Image(_) => {}
         }
     }
     pub(crate) fn set_scroll_offset(
@@ -102,6 +122,10 @@ impl EditorInput {
             Self::Markdown(input) => {
                 input.update(cx, |state, cx| state.set_scroll_offset(offset, cx))
             }
+            Self::Image(input) => input.update(cx, |view, cx| {
+                view.scroll().set_offset(offset);
+                cx.notify();
+            }),
         }
     }
     pub(crate) fn replace(
@@ -122,6 +146,8 @@ impl EditorInput {
             Self::Markdown(input) => {
                 input.update(cx, |state, cx| state.replace_range(range, text, cx))
             }
+            // 只读文档没有可替换的内容：写不进去，也不留下半次编辑。
+            Self::Image(_) => {}
         }
     }
     pub(crate) fn set_highlighter(&self, language: &'static str, cx: &mut gpui_kit::App) {
@@ -146,12 +172,16 @@ impl InputRead<'_> {
                     .snapshot()
                     .shared_text(),
             ),
+            // 图片没有文本。空快照是这句话的如实写法：不假装有一份空文件，
+            // 也不为它单独造一个第三种文本类型让每个消费者都多一条分支。
+            EditorInput::Image(_) => TextSnapshot::Code(Default::default()),
         }
     }
     pub(crate) fn cursor(&self) -> usize {
         match self.input {
             EditorInput::Code(input) => input.read(self.cx).cursor(),
             EditorInput::Markdown(input) => input.read(self.cx).cursor(),
+            EditorInput::Image(_) => 0,
         }
     }
     pub(crate) fn cursor_position(&self) -> Position {
@@ -161,24 +191,28 @@ impl InputRead<'_> {
         match self.input {
             EditorInput::Code(input) => input.read(self.cx).selected_range(),
             EditorInput::Markdown(input) => input.read(self.cx).selected_range(),
+            EditorInput::Image(_) => 0..0,
         }
     }
     pub(crate) fn occurrence_range(&self) -> std::ops::Range<usize> {
         match self.input {
             EditorInput::Code(_) => self.selected_range(),
             EditorInput::Markdown(input) => input.read(self.cx).occurrence_range(),
+            EditorInput::Image(_) => 0..0,
         }
     }
     pub(crate) fn focus_handle(&self, cx: &gpui_kit::App) -> gpui_kit::FocusHandle {
         match self.input {
             EditorInput::Code(input) => input.read(self.cx).focus_handle(cx),
             EditorInput::Markdown(input) => input.read(self.cx).focus_handle(cx),
+            EditorInput::Image(input) => input.read(self.cx).handle(),
         }
     }
     pub(crate) fn scroll_offset(&self) -> gpui_kit::Point<gpui_kit::Pixels> {
         match self.input {
             EditorInput::Code(input) => input.read(self.cx).scroll_offset(),
             EditorInput::Markdown(input) => input.read(self.cx).scroll_offset(),
+            EditorInput::Image(input) => input.read(self.cx).scroll().offset(),
         }
     }
     pub(crate) fn range_to_bounds(
@@ -188,12 +222,17 @@ impl InputRead<'_> {
         match self.input {
             EditorInput::Code(input) => input.read(self.cx).range_to_bounds(range),
             EditorInput::Markdown(input) => input.read(self.cx).range_to_bounds(range),
+            EditorInput::Image(_) => None,
         }
     }
 }
+/// 一份文件在各个分组里的呈现。
+///
+/// Markdown 的呈现是可以编辑的副本，图片的呈现只是取景：同一份文档在每个
+/// 分组各有缩放与滚动，这就是 presentation state，而不是第二份文档。
 #[derive(Default)]
-pub(super) struct MarkdownPresentations(
-    RefCell<
+pub(super) struct Presentations {
+    markdown: RefCell<
         Vec<(
             TabId,
             split::GroupId,
@@ -202,9 +241,10 @@ pub(super) struct MarkdownPresentations(
             Subscription,
         )>,
     >,
-);
-impl MarkdownPresentations {
-    pub(super) fn view<E: 'static>(
+    images: RefCell<Vec<(TabId, split::GroupId, Entity<ImageView>, Subscription)>>,
+}
+impl Presentations {
+    pub(super) fn markdown_view<E: 'static>(
         &self,
         input: &Entity<MarkdownEditor>,
         tab: TabId,
@@ -212,7 +252,7 @@ impl MarkdownPresentations {
         window: &mut Window,
         cx: &mut Context<E>,
     ) -> Entity<MarkdownEditor> {
-        let mut views = self.0.borrow_mut();
+        let mut views = self.markdown.borrow_mut();
         if let Some((_, _, view, _, _)) = views
             .iter()
             .find(|(t, g, _, _, _)| *t == tab && *g == group)
@@ -249,22 +289,58 @@ impl MarkdownPresentations {
         views.push((tab, group, view.clone(), None, observe));
         view
     }
-    pub(super) fn existing(
+    pub(super) fn markdown_existing(
         &self,
         tab: TabId,
         group: split::GroupId,
     ) -> Option<Entity<MarkdownEditor>> {
-        self.0
+        self.markdown
             .borrow()
             .iter()
             .find(|(t, g, _, _, _)| *t == tab && *g == group)
             .map(|(_, _, view, _, _)| view.clone())
     }
+
+    /// 图片文档在一个分组里的呈现。第一个分组直接用文档自带的那个呈现，
+    /// 之后的分组各得一个新取景，共用同一份解码结果。
+    pub(super) fn image_view<E: 'static>(
+        &self,
+        primary: &Entity<ImageView>,
+        tab: TabId,
+        group: split::GroupId,
+        cx: &mut Context<E>,
+    ) -> Entity<ImageView> {
+        let mut views = self.images.borrow_mut();
+        if let Some((_, _, view, _)) = views.iter().find(|(t, g, _, _)| *t == tab && *g == group) {
+            return view.clone();
+        }
+        let view = if views.is_empty() {
+            primary.clone()
+        } else {
+            let document = primary.read(cx).document().clone();
+            cx.new(|cx| ImageView::new(document, cx))
+        };
+        let observe = cx.observe(&view, |_, _, cx| cx.notify());
+        views.push((tab, group, view.clone(), observe));
+        view
+    }
+
+    pub(super) fn image_existing(
+        &self,
+        tab: TabId,
+        group: split::GroupId,
+    ) -> Option<Entity<ImageView>> {
+        self.images
+            .borrow()
+            .iter()
+            .find(|(t, g, _, _)| *t == tab && *g == group)
+            .map(|(_, _, view, _)| view.clone())
+    }
     pub(super) fn search(
         &self,
         source: &Entity<MarkdownEditor>,
     ) -> Option<Entity<super::markdown_search::MarkdownSearch>> {
-        self.0
+        self.markdown
             .borrow()
             .iter()
             .find(|(_, _, view, _, _)| view == source)
@@ -276,7 +352,7 @@ impl MarkdownPresentations {
         window: &mut Window,
         cx: &mut gpui_kit::App,
     ) -> Entity<super::markdown_search::MarkdownSearch> {
-        let mut views = self.0.borrow_mut();
+        let mut views = self.markdown.borrow_mut();
         let (_, _, _, search, _) = views
             .iter_mut()
             .find(|(_, _, view, _, _)| view == source)
@@ -293,13 +369,20 @@ impl MarkdownPresentations {
         _: &mut Window,
         cx: &mut gpui_kit::App,
     ) {
-        self.0.borrow_mut().retain(|(tab, group, view, _, _)| {
-            let keep = live(*tab, *group);
-            if !keep {
-                view.update(cx, |view, cx| view.finish_owned_composition(cx));
-            }
-            keep
-        });
+        self.markdown
+            .borrow_mut()
+            .retain(|(tab, group, view, _, _)| {
+                let keep = live(*tab, *group);
+                if !keep {
+                    view.update(cx, |view, cx| view.finish_owned_composition(cx));
+                }
+                keep
+            });
+        // 图片呈现没有进行中的输入法组合，也没有缓存的地图与公式：退场只需
+        // 让最后一个句柄落下，解码结果由文档本身继续持有。
+        self.images
+            .borrow_mut()
+            .retain(|(tab, group, _, _)| live(*tab, *group));
     }
     /// File identity changes update capability without replacing source or history.
     pub(super) fn set_source_only(
@@ -313,7 +396,7 @@ impl MarkdownPresentations {
                 view.set_source_only(source_only, cx);
                 view.set_host_link_navigation(!source_only);
             });
-            for (_, _, view, _, _) in self.0.borrow().iter() {
+            for (_, _, view, _, _) in self.markdown.borrow().iter() {
                 if view != primary {
                     view.update(cx, |view, cx| {
                         view.set_source_only(source_only, cx);
@@ -324,7 +407,7 @@ impl MarkdownPresentations {
         }
     }
     pub(super) fn set_soft_wrap(&self, wrap: bool, _: &EditorInput, cx: &mut gpui_kit::App) {
-        for (_, _, view, _, _) in self.0.borrow().iter() {
+        for (_, _, view, _, _) in self.markdown.borrow().iter() {
             view.update(cx, |view, cx| view.set_soft_wrap(wrap, cx));
         }
     }

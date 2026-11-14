@@ -787,6 +787,10 @@ impl LyrelApp {
         let Some(f) = self.active_buffer() else {
             return;
         };
+        // 图片没有符号：打开一个空的符号选择器只会让人以为文件读坏了。
+        if !f.input.is_text() {
+            return;
+        }
         let id = f.id();
         let Some(input) = self.active_editor_input() else {
             return;
@@ -820,10 +824,13 @@ impl LyrelApp {
     }
 
     /// The editor's search row as this window can fill it: Files always,
-    /// Symbols with a file in front.
+    /// Symbols with a text document in front.
     pub(crate) fn editor_search_tabs(&self) -> Vec<SearchTab> {
         let mut tabs = vec![SearchTab::Files];
-        if self.active_buffer().is_some() {
+        if self
+            .active_buffer()
+            .is_some_and(|file| file.input.is_text())
+        {
             tabs.push(SearchTab::Symbols);
         }
         tabs
@@ -1008,7 +1015,7 @@ impl LyrelApp {
         let tab = self.tabs.get(self.tabs.active_index())?.id();
         let input = f
             .presentations
-            .existing(tab, group)
+            .markdown_existing(tab, group)
             .map(super::EditorInput::Markdown)
             .unwrap_or_else(|| f.input.clone());
         let caret = input.read(cx).cursor_position();

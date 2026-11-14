@@ -536,7 +536,8 @@ impl LyrelApp {
         let Some(f) = self.editor.buffers.get(id) else {
             return;
         };
-        if f.untitled.is_some() || f.gutter.fetching {
+        // 图片没有行，也就没有逐行的变更标记；Git 的差异属于文本。
+        if f.untitled.is_some() || f.gutter.fetching || !f.input.is_text() {
             return;
         }
         let host = f.host.clone();

@@ -200,17 +200,18 @@ coding agent 在真实 PTY 中运行自己的原生 TUI。命令识别、状态 
 <a id="file-capability-design"></a>
 ## 文件能力扩展设计（已确认，待实现）
 
-本节记录后续文件能力的架构约束，不描述已实现功能。产品范围、术语、逐格式支持深度及验收要求以[文件能力扩展设计](/window/side-panel#file-format-plan)为准；Office、Notebook、kernel 与 Plotly 均不在本轮范围。
+本节记录后续文件能力的架构约束。#280 的静态图片只读文档已经落地，其余格式仍不描述为已实现功能。产品范围、术语、逐格式支持深度及验收要求以[文件能力扩展设计](/window/side-panel#file-format-plan)为准；Office、Notebook、kernel 与 Plotly 均不在本轮范围。
 
 ### 文件打开与状态归属
 
-文件打开入口需要按格式选择文本编辑、只读阅读或格式编辑，不再要求所有文件先成为文本 buffer。
+文件打开入口需要按格式选择文本编辑、只读阅读或格式编辑，不再要求所有文件先成为文本 buffer。#280 已按这条规则拆开共同文档生命周期与内容种类：
 
 - 工作台继续拥有文档身份、所属 Host/path、打开请求、dirty、保存／另存为／冲突／关闭、tabs/groups 和焦点交接。格式实现不直接操作文件树或绕过所属 Host 写盘。
-- 当前 `src/ui/code_editor/buffers.rs` 的 `EditorBuffers` 和 `Loaded` 面向文本，整文件读取上限为 4 MiB。扩展时分离共同文档生命周期与格式内容，不把图片／PDF 伪装成文本，也不要求只读内容具有文本输入实体。
+- `src/ui/code_editor/buffers.rs` 的 `EditorBuffers` 把读取结果分为 `Loaded::Text` 与 `Loaded::Image`；`Loaded::Image` 携带解码结果或一句可见的失败说明，解码本身仍走 `markdown::images`。图片不是文本 buffer，也没有伪装成 `EditorState`。
+- 文本侧把“是不是可编辑文本”收敛为 `EditorInput::is_text()`：保存、dirty 计算、gutter、LSP、查找、行号与符号跳转都据此让行，图片文档不会因为这些命令写盘或弹出永远落不到位置的行号框。
 - 源码可编辑格式保留一份权威原文。表格和结构树只提交针对当前 revision 的局部编辑，源码视图与格式视图共享撤销历史；光标、选择、滚动和布局仍归各 presentation。
-- 格式识别结合文件名与内容探针，格式错误必须可见。已识别容器先于通用 ZIP 处理，不把 EPUB 误当压缩包，也不因识别失败而执行系统关联程序。
-- 加载、解析、解码与渲染在后台完成，结果核对文档、所属 Host、连接代次和 revision。关闭或替换目标后，迟到结果不得安装资源、写盘或夺取焦点。
+- 格式识别结合文件名与内容探针，格式错误必须可见。已识别容器先于通用 ZIP 处理，不把 EPUB 误当压缩包，也不因识别失败而执行系统关联程序。#280 的探针只认 PNG／JPEG／WebP／ICO 的魔数；BMP 只按扩展名进入，避免把以 `BM` 开头的文本从编辑器手里抢走。
+- 加载、解析、解码与渲染在后台完成，结果核对文档、所属 Host、连接代次和 revision。关闭或替换目标后，迟到结果不得安装资源、写盘或夺取焦点。#280 的图片读取沿用同一 pending／foreground 代次核对，标签页关闭后迟到的解码结果不会安装文档。
 
 ### Host 读取与 headless 能力
 
@@ -243,7 +244,7 @@ SQLite 在所属 Host 执行受限只读查询，按分页传回 schema 与必�
 
 | 工单／能力 | 优先复用源码 | 保留与适配 | 已知缺口及排除部分 |
 | --- | --- | --- | --- |
-| #280，共享文档与静态图片 | Lyrel `src/ui/code_editor/buffers.rs`、`saving.rs`、`markdown/images.rs`；Glim `glim-core/src/document.rs`、`glim-services/src/documents/registry.rs` 仅作内容分类参考 | 泛化现有文档入口，直接复用 Lyrel 解码、控件、lease 与保存／关闭所有者 | 不另建 Glim session；不搬 macOS ImageIO、`sips` 或 `qlmanage`；格式内容探针仍需补齐 |
+| #280，共享文档与静态图片 | Lyrel `src/ui/code_editor/buffers.rs`、`saving.rs`、`markdown/images.rs`；Glim `glim-core/src/document.rs`、`glim-services/src/documents/registry.rs` 仅作内容分类参考 | 已实现：泛化 `Loaded` 为文本／图片两种内容，`EditorInput::is_text()` 守住文本契约，解码、像素预算、纹理 lease 与保存／关闭所有者全部复用 Lyrel 现有模块；新增 `decode_static` 不接受 SVG | 未导入任何上游文件，因此无 `UPSTREAM.toml`；Glim 的 macOS ImageIO、`sips`、`qlmanage` 与 Glim session 未使用。GIF／TIFF 不在本切片，仍走外部打开 |
 | #281，大文件读取 | Lyrel `Host`／control 与现有预算；Glim `glim-core/src/resources.rs`、`glim-services/src/limits.rs`、`work/scheduler.rs` 的适用预算／取消逻辑 | 按需抽取可独立使用的算法，扩展现有 Host 的一致版本、有界读取与取消 | 不导入 Glim `paged.rs` 的 Unix 文件身份、`files.rs`、本机 watcher 或整个资源服务；这些不能代替远端协议 |
 | #282，GIF／TIFF | [Glim `glim-services/src/media.rs`](https://github.com/glimapp/glim/blob/fc2183f2c5f27ddfcdc4badbab6d83d50616831b/crates/glim-services/src/media.rs) 的 GIF 部分、`media/raster.rs` | 移植 `GifPlayback` 的合成、disposal、循环及逐帧逻辑，输入改走 Host，输出接 Lyrel 纹理 lease | Glim TIFF 多页走 Swift ImageIO，并无可直接移植的跨平台实现；基于正式解码库补按需多页，复用图片呈现，不另造解码器 |
 | #283，SVG | Lyrel `markdown/images.rs`；Glim `glim-services/src/svg_preview.rs` 的必要净化／尺寸算法 | 保留现有 resvg 和源码 history，按需要移植纯逻辑而非第二套预览管线 | 不搬 macOS 栅格化；Glim 某路径允许 data image，Lyrel 仍拒绝嵌套 file／network／data image |

@@ -30,12 +30,14 @@ use lyrel_text::{self, EditorConfig, Indent, LineEnding, TextFormat};
 mod buffers;
 pub(crate) mod commands;
 mod document_input;
+mod image_document;
 pub(crate) mod markdown;
 mod markdown_formula;
 mod markdown_search;
 mod text;
 use buffers::Loaded;
-use document_input::{EditorInput, MarkdownPresentations};
+use document_input::{EditorInput, Presentations};
+use image_document::{ImageDocument, ImageView};
 mod gutter;
 mod nav;
 pub(crate) mod outline;
@@ -47,6 +49,9 @@ use saving::{AfterUnsaved, BarKind, EditorBar, EditorBridge, EditorEvent, SaveWa
 #[cfg(any(test, feature = "native-markdown-tests"))]
 mod test_host;
 
+/// 只读图片文档的键盘上下文，与它的取景动作一起供 keymap 使用。
+pub(crate) use image_document::KEY_CONTEXT as IMAGE_KEY_CONTEXT;
+pub(crate) use image_document::{ImageActualSize, ImageFit, ImageZoomIn, ImageZoomOut};
 pub(crate) use nav::KEY_CONTEXT as NAV_KEY_CONTEXT;
 
 /// Retained document identity, independent of any editing presentation or path.
@@ -123,7 +128,7 @@ pub(crate) struct OpenFile {
     /// saveable however the window's own machine has changed underneath it.
     pub(crate) host: SharedHost,
     pub(crate) input: EditorInput,
-    presentations: MarkdownPresentations,
+    presentations: Presentations,
     markdown_resources: Option<Entity<markdown::images::ImageHost>>,
     pub(crate) dirty: bool,
     saved: Fingerprint,
@@ -157,7 +162,11 @@ impl OpenFile {
         self.input
             .markdown()
             .map(|view| view.read(cx).document().read(cx).format())
-            .unwrap_or_else(|| self.format.expect("code document representation"))
+            .or(self.format)
+            // A read-only picture has no text format. Nothing that respects
+            // `is_text()` asks, but panicking here would take the window down
+            // over a file that only has to be looked at.
+            .unwrap_or_default()
     }
 
     fn representation_fingerprint(&self, cx: &gpui_kit::App) -> Option<u64> {
@@ -745,6 +754,11 @@ impl LyrelApp {
             .is_some_and(|file| file.input.markdown().is_some())
     }
 
+    pub(crate) fn image_document_active(&self) -> bool {
+        self.active_buffer()
+            .is_some_and(|file| file.input.image().is_some())
+    }
+
     fn active_editor_input(&self) -> Option<EditorInput> {
         self.editor_input_for(self.tab_code()?.active_id()?)
     }
@@ -755,8 +769,13 @@ impl LyrelApp {
         let group = self.tab_code()?.group;
         Some(
             file.presentations
-                .existing(tab, group)
+                .markdown_existing(tab, group)
                 .map(EditorInput::Markdown)
+                .or_else(|| {
+                    file.presentations
+                        .image_existing(tab, group)
+                        .map(EditorInput::Image)
+                })
                 .unwrap_or_else(|| file.input.clone()),
         )
     }
@@ -1376,15 +1395,18 @@ impl LyrelApp {
         let Some(file) = self.active_buffer() else {
             return;
         };
+        let Some(tab) = self.tabs.get(self.tabs.active_index()).map(|t| t.id()) else {
+            return;
+        };
+        let group = self.tab_code().expect("active editor group").group;
         if let Some(input) = file.input.markdown() {
-            let tab = self
-                .tabs
-                .get(self.tabs.active_index())
-                .expect("active editor tab")
-                .id();
-            let group = self.tab_code().expect("active editor group").group;
-            let view = file.presentations.view(input, tab, group, window, cx);
+            let view = file
+                .presentations
+                .markdown_view(input, tab, group, window, cx);
             EditorInput::Markdown(view).focus(window, cx);
+        } else if let Some(primary) = file.input.image() {
+            let view = file.presentations.image_view(primary, tab, group, cx);
+            EditorInput::Image(view).focus(window, cx);
         } else {
             file.input.focus(window, cx);
         }
@@ -1462,6 +1484,11 @@ impl LyrelApp {
         let Some(f) = self.editor.buffers.get_mut(id) else {
             return;
         };
+        // 只读图片没有要折行的文本：命令对它不生效，也不改下一个文本
+        // 文件的开箱设置。
+        if !f.input.is_text() {
+            return;
+        }
         f.wrap = !f.wrap;
         let wrap = f.wrap;
         f.input.set_soft_wrap(wrap, window, cx);
@@ -1480,6 +1507,10 @@ impl LyrelApp {
         let Some(f) = self.editor.buffers.get_mut(id) else {
             return;
         };
+        // 只读图片没有保存格式可以改：这个按钮对它不该出现，也不该生效。
+        if !f.input.is_text() {
+            return;
+        }
         let mut format = f.format(cx);
         format.line_ending = match format.line_ending {
             LineEnding::Lf => LineEnding::CrLf,
@@ -1727,7 +1758,13 @@ impl LyrelApp {
     }
 
     pub(crate) fn editor_go_to_line(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if !self.code_panel_visible() || self.active_buffer().is_none() {
+        // 行号是文本的位置。图片文档没有行可去，快捷键在这里就是空操作，
+        // 而不是弹出一个永远落不到任何地方的行号框。
+        if !self.code_panel_visible()
+            || !self
+                .active_buffer()
+                .is_some_and(|file| file.input.is_text())
+        {
             return;
         }
         let id = self.tab_code().and_then(TabCode::active_id).unwrap();
@@ -1757,7 +1794,7 @@ impl LyrelApp {
             if shared {
                 let tab = self.tabs.get(tab_ix).unwrap().id();
                 let group = self.tab_code().unwrap().focused_group();
-                if let Some(view) = file.presentations.existing(tab, group) {
+                if let Some(view) = file.presentations.markdown_existing(tab, group) {
                     view.update(cx, |view, cx| view.finish_owned_composition(cx));
                 }
             } else {
@@ -1871,7 +1908,6 @@ impl LyrelApp {
             return menu;
         };
         let state = input.read(cx);
-        let selected = !state.selected_range().is_empty();
         let mut menu = menu.min_w(px(220.)).action_context(state.focus_handle(cx));
         if f.untitled.is_none() {
             menu = menu
@@ -1885,6 +1921,12 @@ impl LyrelApp {
                 )
                 .separator();
         }
+        // 一张图片没有撤销、查找、剪贴板和行命令可给：它只有取景。给它保留
+        // 这些行，等于向读者承诺文档里有能编辑的文本。
+        if input.image().is_some() {
+            return image_document::menu_entries(menu);
+        }
+        let selected = !state.selected_range().is_empty();
         let menu = menu
             .menu(t(L10nKey::AppMenuUndo), Box::new(edit::Undo))
             .menu(t(L10nKey::AppMenuRedo), Box::new(edit::Redo))
@@ -2575,6 +2617,8 @@ impl LyrelApp {
             h_flex()
                 .id(if self.markdown_document_active() {
                     "markdown-status-bar"
+                } else if self.image_document_active() {
+                    "image-status-bar"
                 } else {
                     "code-status-bar"
                 })
@@ -2674,6 +2718,28 @@ impl LyrelApp {
     ) -> AnyElement {
         match id.and_then(|id| self.editor.buffers.get(id)) {
             None => self.render_editor_empty(cx).into_any_element(),
+            Some(f) if f.input.image().is_some() => {
+                let primary = f.input.image().expect("image document presentation");
+                let tab = self
+                    .tabs
+                    .get(self.tabs.active_index())
+                    .expect("visible editor tab")
+                    .id();
+                let code = self.tab_code().expect("visible editor group");
+                let group = if code.focused_slot() == slot {
+                    code.group
+                } else {
+                    code.split.as_ref().expect("second editor group").id
+                };
+                let view = f.presentations.image_view(primary, tab, group, cx);
+                v_flex()
+                    .id(("image-presentation", view.entity_id()))
+                    .min_w_0()
+                    .min_h_0()
+                    .size_full()
+                    .child(view)
+                    .into_any_element()
+            }
             Some(f) if f.input.markdown().is_some() => {
                 let input = f.input.markdown().unwrap();
                 let tab = self
@@ -2687,7 +2753,7 @@ impl LyrelApp {
                 } else {
                     code.split.as_ref().expect("second editor group").id
                 };
-                let view = f.presentations.view(input, tab, group, window, cx);
+                let view = f.presentations.markdown_view(input, tab, group, window, cx);
                 let scrollbar_id = SharedString::from(format!(
                     "markdown-document-scrollbar-{}",
                     view.entity_id().as_u64()
@@ -3012,25 +3078,36 @@ impl LyrelApp {
 
     pub(crate) fn render_document_status(&self, cx: &mut Context<Self>) -> AnyElement {
         let active = self.active_buffer();
-        let cursor: Option<SharedString> = self.active_editor_input().map(|input| {
-            let input = input.read(cx);
-            let pos = input.cursor_position();
-            let ln_col = t_fmt(
-                L10nKey::EditorLnCol,
-                &[
-                    ("line", &(pos.line + 1).to_string()),
-                    ("column", &(pos.character + 1).to_string()),
-                ],
-            );
-            ln_col.into()
-        });
-        let wrap: Option<bool> = active.map(|f| f.wrap);
+        let text = active.is_some_and(|file| file.input.is_text());
+        let image = self
+            .active_editor_input()
+            .and_then(|input| input.image().cloned());
+        let image_status: Option<SharedString> =
+            image.as_ref().map(|view| view.read(cx).status_text(cx));
+        let image_zoom: Option<SharedString> =
+            image.as_ref().map(|view| view.read(cx).zoom_label());
+        let cursor: Option<SharedString> =
+            text.then(|| self.active_editor_input())
+                .flatten()
+                .map(|input| {
+                    let input = input.read(cx);
+                    let pos = input.cursor_position();
+                    let ln_col = t_fmt(
+                        L10nKey::EditorLnCol,
+                        &[
+                            ("line", &(pos.line + 1).to_string()),
+                            ("column", &(pos.character + 1).to_string()),
+                        ],
+                    );
+                    ln_col.into()
+                });
+        let wrap: Option<bool> = active.filter(|_| text).map(|f| f.wrap);
         let native_live = self.active_editor_input().and_then(|input| {
             input
                 .markdown()
                 .map(|view| (view.read(cx).is_live(), view.read(cx).is_source_only()))
         });
-        let indent: Option<SharedString> = active.map(|f| {
+        let indent: Option<SharedString> = active.filter(|_| text).map(|f| {
             let key = if f.indent.hard_tabs {
                 L10nKey::EditorIndentTabs
             } else {
@@ -3038,8 +3115,12 @@ impl LyrelApp {
             };
             t_fmt(key, &[("n", &f.indent.size.to_string())]).into()
         });
-        let line_ending: Option<&'static str> = active.map(|f| f.format(cx).line_ending.label());
-        let encoding: Option<SharedString> = active.map(|f| f.format(cx).encoding_label().into());
+        let line_ending: Option<&'static str> = active
+            .filter(|_| text)
+            .map(|f| f.format(cx).line_ending.label());
+        let encoding: Option<SharedString> = active
+            .filter(|_| text)
+            .map(|f| f.format(cx).encoding_label().into());
         let language: Option<&'static str> = active.and_then(|f| language_label(f.language()));
         let lsp = self.render_lsp_status(cx).map(|(element, _)| element);
 
@@ -3121,6 +3202,35 @@ impl LyrelApp {
                             this.toggle_line_ending(cx);
                             this.focus_editor(window, cx);
                         })),
+                )
+            })
+            // A picture states what it is and what it cannot be: no caret,
+            // no wrap, no line ending, and nothing to save.
+            .when_some(image_status, |this, status| {
+                this.child(
+                    div()
+                        .id("status-image-facts")
+                        .test_support()
+                        .flex_none()
+                        .child(status),
+                )
+            })
+            .when(image_zoom.is_some(), |this| {
+                this.child(
+                    div()
+                        .id("status-image-readonly")
+                        .test_support()
+                        .flex_none()
+                        .child(t(L10nKey::EditorImageReadOnly)),
+                )
+            })
+            .when_some(image_zoom, |this, zoom| {
+                this.child(
+                    div()
+                        .id("status-image-zoom")
+                        .test_support()
+                        .flex_none()
+                        .child(zoom),
                 )
             })
             .when_some(language, |this, l| this.child(div().flex_none().child(l)))

@@ -175,6 +175,29 @@ fn fixed_bindings(cx: &App) -> Vec<KeyBinding> {
         bindings.push(load_binding("shift-alt-f5", EditorPrevChange, input, cx));
         bindings.push(load_binding("alt-f3", EditorPeekChange, input, cx));
     }
+    // The read-only picture's framing. `ImageDocument` is declared only by the
+    // document that draws a picture, so these chords never take a key from a
+    // text field, a shell, or the terminal's arrows.
+    {
+        use crate::ui::code_editor::{ImageActualSize, ImageFit, ImageZoomIn, ImageZoomOut};
+        let image = Some(crate::ui::code_editor::IMAGE_KEY_CONTEXT);
+        let back = per_platform("ctrl--", "alt-left");
+        let forward = per_platform("ctrl-shift--", "alt-right");
+        bindings.extend([
+            load_binding("0", ImageFit, image, cx),
+            load_binding("1", ImageActualSize, image, cx),
+            load_binding("secondary-=", ImageZoomIn, image, cx),
+            load_binding("secondary-+", ImageZoomIn, image, cx),
+            load_binding("+", ImageZoomIn, image, cx),
+            load_binding("secondary--", ImageZoomOut, image, cx),
+            load_binding("secondary-_", ImageZoomOut, image, cx),
+            load_binding("-", ImageZoomOut, image, cx),
+        ]);
+        // Back and Forward keep their editor chords: a picture is a place the
+        // caret came from, and leaving it must work from where it is shown.
+        bindings.push(load_binding(back, EditorNavigateBack, image, cx));
+        bindings.push(load_binding(forward, EditorNavigateForward, image, cx));
+    }
     // The code editor's line commands, for the same tie: ⌘/ is the shortcut
     // sheet, ⌘↵ fullscreen, ⌘⇧↵ maximize and ⌥↑/⌥↓ pane focus off macOS, all
     // context-free. Bound on `CodeEditor`, which only a multi-line code

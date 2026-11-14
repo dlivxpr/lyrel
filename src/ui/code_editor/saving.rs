@@ -90,6 +90,9 @@ fn document_identity(file: &OpenFile, cx: &gpui_kit::App) -> gpui_kit::EntityId 
     match &file.input {
         EditorInput::Code(input) => input.entity_id(),
         EditorInput::Markdown(view) => view.read(cx).document().entity_id(),
+        // A picture never saves, but the identity is asked for by every
+        // save-side prompt and must name something stable.
+        EditorInput::Image(view) => view.entity_id(),
     }
 }
 
@@ -151,6 +154,15 @@ impl EditorPanelState {
         cx: &mut Context<E>,
         bridge: EditorBridge<E>,
     ) {
+        // A picture is read-only: Save and Save As do nothing here rather than
+        // writing text bytes over the file a reader is looking at.
+        if self
+            .buffers
+            .get(id)
+            .is_some_and(|file| !file.input.is_text())
+        {
+            return;
+        }
         if let Some(file) = self.buffers.get(id) {
             file.input.finish_composition(window, cx);
         }
@@ -414,6 +426,11 @@ impl EditorPanelState {
         cx: &mut Context<E>,
         bridge: EditorBridge<E>,
     ) {
+        // A read-only picture must not open a path picker it can never write
+        // through: Save As is about text bytes this document does not have.
+        if self.buffers.get(id).is_some_and(|file| !file.input.is_text()) {
+            return;
+        }
         let Some(identity) = self.save_identity(id, cx) else {
             return;
         };
