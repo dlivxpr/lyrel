@@ -256,11 +256,15 @@ Office 与 Notebook 整项排除本轮：不新增 DOC／DOCX、XLS／XLSX、PPT
 
 共同场景包括损坏文件、无权限、资源超限、取消、迟到结果、外部修改、同名异 Host、窄窗、界面缩放、键盘、焦点和中文 IME。draw.io 还需验证离线资源、剪贴板、远端回写及实际分发许可证。构建成功、依赖声明、源码接线和上游截图均不能代替产品实窗或格式保真证据。
 
-#### 参考实现与证据范围
+#### 实现来源与证据范围
 
-调研依据是 [Glim 格式合同](https://github.com/glimapp/glim/blob/main/docs/file-format-support.md)、[Glim 文档会话设计](https://github.com/glimapp/glim/blob/main/docs/architecture.md)、[Zorite PDF 模块](https://github.com/packetThrower/zorite/blob/main/crates/gpui-pdf/README.md)、[draw.io 集成协议](https://www.drawio.com/docs/reference/embed-mode/)及 [SQLite 备份与一致性约束](https://www.sqlite.org/backup.html)。这些是文档与源码核对，不是本轮的上游程序实测或引擎集成通过记录。
+本轮采用复用并改造上游源码的路线，不把 Glim／Zorite 仅当作界面参考。保留 Lyrel 现有文档与 Host 所有权；文件阅读、表格、结构树及数据库浏览优先移植 Glim 的对应 MIT 模块，PDF 优先移植 Zorite 独立 MIT `gpui-pdf`。已有正式依赖能满足集成时直接使用；必须改源码才能适配时，在受限清单内导入并维护，只为上游缺失或不兼容的部分补充实现。
 
-Glim 的平台框架与 Zorite 的 GPL 应用代码不能因界面相似就直接导入。实现路线、状态归属、候选引擎及许可审查见[文件能力扩展架构](/reference/architecture#file-capability-design)。
+来源固定为 [Glim `fc2183f2`](https://github.com/glimapp/glim/tree/fc2183f2c5f27ddfcdc4badbab6d83d50616831b) 与 [Zorite `9f069c73`](https://github.com/packetThrower/zorite/tree/9f069c73a56b06efc84fb7abb700beb50083c827/crates/gpui-pdf)。逐格式入口、许可范围、保真缺口及导入记录要求见[上游源码复用与适配](/reference/architecture#file-source-reuse)；各 ticket 必须交付复用来源到本地实现的记录及生产路径证据，不能用“已参考”替代源码复用。整项改为从零实现需先在对应 ticket 取得明确决定。
+
+上游的本机路径、macOS 框架、不同 GPUI 类型和有损保存需要适配，不能覆盖 Lyrel 的 Host、Kit/Fast、安全与保真契约。Zorite 的 GPL 应用胶水和 Notebook／白板不在源码许可例外中；draw.io 仍复用固定离线引擎，不把 Glim 的有限形状解析当作完整兼容。具体差异必须在原件完整性、输入、保存和独立重开中验证，不能靠缩减本节范围解决。
+
+当前证据是固定版本的源码与许可核对，不是上游程序实测或 Lyrel 集成通过记录。没有在本次文档更新中导入格式实现、安装依赖或执行新格式；平台、资源预算与真实远端的结果仍须按前述验收记录。
 
 <a id="markdown-editor-design"></a>
 ### Markdown 即时渲染编辑

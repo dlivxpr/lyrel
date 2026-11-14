@@ -95,7 +95,7 @@ Windows 下此 Bash 检查需 LF 工作树：CRLF 脚本会报 `$'\r': command n
 ## 运行时与工具偏好
 
 - Rust edition 2024，CI 使用 stable；仓库未固定具体 toolchain/MSRV。使用 Cargo 与现有 lockfile，不把本机 Rust 版本写成项目要求。
-- 第三方 Rust 依赖默认只用正式 registry，不引入 Git、自定义第三方 path 或 `[patch]`，也不修改下载源码。唯一已批准的源码导入例外为 #236 指定 Zorite editor/bidi 与 #241 的 ratex GUI，独立维护于 `lyrel-markdown-editor`，保留 pinned 来源、MIT notices 与本地修改记录；不是 GPL app 导入许可。编辑此模块先读 `crates/lyrel-markdown-editor/HOST_CAPABILITIES.md`。GUI 仍只经 `gpui-kit` 的官方 Fast 类型；`lyrel-text` 是原 Apache-2.0 codec 的共享 GUI-free 所有者，不是 editor 到 app/core 的反向依赖。
+- 第三方 Rust 依赖默认只用正式 registry，不引入 Git、自定义第三方 path 或 `[patch]`，也不修改下载源码。已接入的源码导入为 #236 指定 Zorite editor/bidi 与 #241 的 ratex GUI，独立维护于 `lyrel-markdown-editor`；编辑该模块先读 `crates/lyrel-markdown-editor/HOST_CAPABILITIES.md`。#279 另批准按 `docs/reference/architecture.mdx` 的「上游源码复用与适配」清单移植、修改固定版本 Glim MIT 模块与 Zorite MIT `gpui-pdf`，优先复用真实实现而非重新编写同等功能；导入前记录逐文件来源、原始摘要、许可及本地适配，不扩展到 GPL 应用代码或清单外资源。其余依赖仍走 registry。GUI 仍只经 `gpui-kit` 的官方 Fast 类型；`lyrel-text` 保持 GUI-free，不反向依赖 editor。
 - Git CLI 仍用于产品的 Git 工作流，不再是 Cargo Git 依赖的拉取前提。Windows MSVC 已设 `+crt-static`，不要用 `RUSTFLAGS` 意外覆盖；ConPTY 先运行 `pwsh scripts/prepare-conpty.ps1`，共享核心的构建脚本只消费准备结果。Linux headless 的 GSSAPI 依赖与 `LIBGSSAPI_IMPL=mit` 见 `.github/workflows/ci.yml`；Windows/macOS 连接 Linux 的 SSH/SFTP、Host/PTY 与 WSL 接线不可因桌面退役删除。
 - 默认配置目录为 Unix 的 `~/.config/lyrel`、Windows 的 `%APPDATA%\lyrel`；覆盖顺序为 `--config-dir`、`LYREL_CONFIG_DIR`、便携模式、默认目录。调试与测试使用隔离目录，避免影响已安装实例。产品级注入的 `TERM_PROGRAM` 值为 `lyrel`；标准环境变量键保持原样。已批准的 #248 例外只作用于已知 coding agent 的命令作用域启动：该命令内临时使用 `TERM_PROGRAM=kitty` 等兼容身份，显式值优先，命令结束恢复 pane 基线；不改变产品级身份或普通 shell。
 
@@ -116,6 +116,7 @@ Windows 下此 Bash 检查需 LF 工作树：CRLF 脚本会报 `$'\r': command n
 ## 分支策略与会话清理
 
 - `implement-spec` 等一次性、长时间运行的任务：会话分支以 PR 形式合入主分支；简单的问题修复直接提交主分支即可。
+- #279 的 `docs/file-preview-editing-design` 及后续功能分支同步主线时，将分支独有提交 rebase 到最新 `origin/main`，不反复双向 merge。共享分支改写前先协调；需更新已发布分支时只用 `--force-with-lease`，lease 拒绝则先核对远端新提交。最终 PR 使用 squash 或线性 rebase 合入；合入后的旧分支不再承载后续工作，不重写主分支或引入与任务无关的历史整理。
 - 会话完成的判定：会话分支已合入主分支，或会话更改已推送 GitHub 且 CI 通过。满足后清理：会话产生的中间文件、创建的分支与 worktree；若用过 Docker，删除会话拉取的镜像；若用过 WSL，清理其中的冗余文件；按实际使用收缩 WSL／Docker 虚拟磁盘。清理只针对会话引入的产物，主检出、既有分支和共享镜像不列入。
 
 ## Agent skills

@@ -193,7 +193,7 @@ Markdown 只有独立维护的 Zorite-derived `lyrel-markdown-editor` 默认即�
 
 每个 presentation 都安装 writing、table/code、owning-Host 图片/链接、结构公式及 Mermaid provider。普通链接采用 release 单击，caret 附近按上游语义显露标记；不保留旧 Ctrl+Click-only、始终隐藏标记或旧 WYSIWYG fallback。MDX 是 source-only，旧 rich component/inspector/workspace embed 已退役；frontmatter 和未知语法保留源码，不执行项目组件。公式与图形在 native Rust 中呈现，不使用浏览器或 Node.js 编辑器。
 
-源码例外只涵盖 pinned Zorite `9f069c73a56b06efc84fb7abb700beb50083c827` 的 MIT editor/bidi/ratex 16 文件；registry `zorite-markdown =0.10.1` 仅提供 GUI-free syntax。`UPSTREAM.toml` 记录原始 Git blob 摘要和本地适配，MIT notices 与字体许可进入根 `LICENSE` 并沿平台打包链分发。保留 imported bidi mapping 与超长 nowrap 行的 source-preserving 有界视觉布局；#235 为 `not_planned`，不是 native long-line 或 full RTL 已修复的证明，完整 RTL 仍在已批准验收范围之外。全部源码接线与验收边界见 `HOST_CAPABILITIES.md`；最终 native/实窗/平台与真实 SSH 结果分别记录。LSP 仍属于桌面，headless 不引入 GUI。
+当前已接入的源码例外涵盖 pinned Zorite `9f069c73a56b06efc84fb7abb700beb50083c827` 的 MIT editor/bidi/ratex 16 文件；registry `zorite-markdown =0.10.1` 仅提供 GUI-free syntax。`UPSTREAM.toml` 记录原始 Git blob 摘要和本地适配，MIT notices 与字体许可进入根 `LICENSE` 并沿平台打包链分发。保留 imported bidi mapping 与超长 nowrap 行的 source-preserving 有界视觉布局；#235 为 `not_planned`，不是 native long-line 或 full RTL 已修复的证明，完整 RTL 仍在已批准验收范围之外。全部源码接线与验收边界见 `HOST_CAPABILITIES.md`；最终 native/实窗/平台与真实 SSH 结果分别记录。#279 新批准、尚待实施的格式源码复用范围见下方[上游源码复用与适配](#file-source-reuse)。LSP 仍属于桌面，headless 不引入 GUI。
 
 coding agent 在真实 PTY 中运行自己的原生 TUI。命令识别、状态 hooks、会话历史、resume／fork 与启动任务投递是独立能力；hooks／产品 SDK bridge 是状态观测与任务交互通道，不替代 agent 界面。内置产品与能力边界见[agent 概览](/agents/overview)和[会话操作](/agents/sessions)，其中 pi 与 omp 是独立产品，名称识别不构成全部能力已经验收的声明。
 
@@ -222,18 +222,43 @@ SQLite 在所属 Host 执行受限只读查询，按分页传回 schema 与必�
 
 新增 wire 消息前读取 `daemon/control.rs` 与 `daemon/protocol.rs`，按现有规则升级 control 版本；可安全忽略的字段才通过 feature 协商。新客户端遇到缺少能力的远端必须明确提示，不显示假空结果。GUI、解码引擎和 WebView 依赖不得进入 `lyrel-core`／server／CLI；SQLite 的 headless 依赖单独核对必要性、体积与许可证。
 
-### 格式实现与依赖选择
+<a id="file-source-reuse"></a>
+### 上游源码复用与适配
 
-优先复用已有的原生能力，只有存在独立状态和生命周期的格式才形成独立模块，不预先建立通用插件框架。
+默认保留 Lyrel 的现有所有者，移植并改造 Glim／Zorite 对应实现，只为缺失能力和必要适配补代码。读过上游后从零重写同等算法，不算完成复用要求。固定来源为 [Glim `fc2183f2c5f27ddfcdc4badbab6d83d50616831b`](https://github.com/glimapp/glim/tree/fc2183f2c5f27ddfcdc4badbab6d83d50616831b) 与 [Zorite `9f069c73a56b06efc84fb7abb700beb50083c827`](https://github.com/packetThrower/zorite/tree/9f069c73a56b06efc84fb7abb700beb50083c827)。这是设计基线，不是可用性或平台验证结论。
 
-| 格式能力 | 优先路线 | 不能假定的事项 |
-| --- | --- | --- |
-| 位图与 SVG | 从 `src/ui/code_editor/markdown/images.rs` 复用安全解码、资源预算、纹理 lease 与预览，补齐动画和多页模型 | 当前静态解码成功不证明 GIF 动画、TIFF 多页或独立文件入口已支持；不扩大现有 SVG 外部资源权限 |
-| PDF | 评估 GUI-free registry 引擎，`hayro` 为优先验证候选；GPUI Kit/Fast 拥有页面虚拟化、纹理释放和文本交互 | 候选不是锁定依赖；密码、文本层、已有批注／表单值及损坏输入需要代表性文件验证，不能直接导入绑定 `gpui-pre` 的 `gpui-pdf` 建立第二套 GUI 类型 |
-| EPUB | 解析容器、阅读顺序、章节和本地资源，按章节加载并呈现正文／图片；书签与阅读偏好独立存储 | 不执行书中脚本，不加载远程资源，不承诺出版方完整 CSS 或固定版式 |
-| CSV 与结构化文本 | 使用保留原文、位置和 token 的解析／编辑模型，将格式操作映射为局部可撤销修改 | `serde_json::Value`、YAML 值树或 XML 扁平映射不能充当所有格式的无损权威模型；不因整体序列化丢注释、重复键、数字或混合内容 |
-| SQLite | 所属 Host 的 headless 只读访问与分页结果，沿用现有 Host/control 所有权 | 当前 GUI 的 `rusqlite` 依赖不等于 server 已具备数据库能力；源库正在写入时不能按普通文件下载 |
-| draw.io | 固定版本的离线本机引擎，通过受控桥接读取内容、接收编辑结果，再由工作台保存 | 在线 `embed.diagrams.net` 不等于离线部署；不能直接复用 Glim 的有限形状预览或 Zorite 白板，也不把尚未验证的 WebView 桥接当成已可用 |
+#279 新增的源码导入例外仅涵盖下表列出的 Glim MIT 实现、Zorite 独立 MIT `crates/gpui-pdf` 及这些模块实际需要、逐文件核对过许可的最小辅助代码。清单外新增能力、整个应用、Zorite GPL 应用胶水、Notebook／白板、品牌、字体、图标和未经许可核对的夹具／资源不在授权内；需要扩大范围时先在对应 ticket 取得明确决定。原 editor/bidi/ratex 例外继续按原范围维护，不改写为整仓授权。
+
+每张实现票按以下顺序交付：
+
+1. 阅读下表对应的固定源码，列出保留的算法／交互、上游缺口和适配点。已有兼容 registry 发布能保留该实现时直接依赖；需要修改源码才能适配时，在允许范围内导入为 Lyrel 自有模块，不修改 Cargo 缓存，不引入 Git／第三方 path／`[patch]`。其余依赖继续使用正式 registry。
+2. 导入前按既有 `crates/lyrel-markdown-editor/UPSTREAM.toml` 约定记录仓库、revision、原路径、原始 Git blob 的 SHA-256、许可／版权、本地路径、负责 ticket 与本地修改。保留源文件 notices，测试／夹具单独登记，实际分发同步携带许可证；本轮仅确定此流程，不预填尚未导入文件的摘要。
+3. 保留可用解析、几何、导航、虚拟化和查询逻辑；将 GUI 适配到唯一 Kit/Fast，将文件操作交给 Lyrel owning Host，将编辑提交接入同一源码／history。按能力落到现有所有者或必要的独立模块，不照搬上游应用壳、会话数据库或另建通用插件框架。
+4. 许可证、正确性、平台、安全或保真存在具体不匹配时，记录对应源码与接口约束，替换最小部分，保留其余实现。不能仅以“GUI 类型不同”“代码太旧”或偏好新抽象为由重写整项；整项从零替代需先在对应 ticket 取得明确决定。上游本身不具备的行为明确列为补齐工作，不降级已确认范围。
+5. 实现阶段另行运行适用的上游回归与 Lyrel 生产消费者，记录复用来源、本地差异和实际结果。源码清单、上游测试或编译成功都不能代替产品验收；本次方案评审不执行这些验证。
+
+### 逐格式源码清单与缺口
+
+下表中的 Glim 路径均相对于固定仓库的 `crates/`；`glim-services` 为读取／解析，`glim-core` 为模型，`glim-app` 为交互。允许从列出的 reader 文件提取并改造必要的交互／展示逻辑，不整体引入旧 GPUI 应用壳。GUI 版本不同不是重新发明解析、选择或分页算法的理由；无法直接保留的 UI 接线以当前 Kit/Fast 控件适配。
+
+| 工单／能力 | 优先复用源码 | 保留与适配 | 已知缺口及排除部分 |
+| --- | --- | --- | --- |
+| #280，共享文档与静态图片 | Lyrel `src/ui/code_editor/buffers.rs`、`saving.rs`、`markdown/images.rs`；Glim `glim-core/src/document.rs`、`glim-services/src/documents/registry.rs` 仅作内容分类参考 | 泛化现有文档入口，直接复用 Lyrel 解码、控件、lease 与保存／关闭所有者 | 不另建 Glim session；不搬 macOS ImageIO、`sips` 或 `qlmanage`；格式内容探针仍需补齐 |
+| #281，大文件读取 | Lyrel `Host`／control 与现有预算；Glim `glim-core/src/resources.rs`、`glim-services/src/limits.rs`、`work/scheduler.rs` 的适用预算／取消逻辑 | 按需抽取可独立使用的算法，扩展现有 Host 的一致版本、有界读取与取消 | 不导入 Glim `paged.rs` 的 Unix 文件身份、`files.rs`、本机 watcher 或整个资源服务；这些不能代替远端协议 |
+| #282，GIF／TIFF | [Glim `glim-services/src/media.rs`](https://github.com/glimapp/glim/blob/fc2183f2c5f27ddfcdc4badbab6d83d50616831b/crates/glim-services/src/media.rs) 的 GIF 部分、`media/raster.rs` | 移植 `GifPlayback` 的合成、disposal、循环及逐帧逻辑，输入改走 Host，输出接 Lyrel 纹理 lease | Glim TIFF 多页走 Swift ImageIO，并无可直接移植的跨平台实现；基于正式解码库补按需多页，复用图片呈现，不另造解码器 |
+| #283，SVG | Lyrel `markdown/images.rs`；Glim `glim-services/src/svg_preview.rs` 的必要净化／尺寸算法 | 保留现有 resvg 和源码 history，按需要移植纯逻辑而非第二套预览管线 | 不搬 macOS 栅格化；Glim 某路径允许 data image，Lyrel 仍拒绝嵌套 file／network／data image |
+| #284–#285，PDF | [Zorite `crates/gpui-pdf/src/`](https://github.com/packetThrower/zorite/tree/9f069c73a56b06efc84fb7abb700beb50083c827/crates/gpui-pdf/src) 的 `lib.rs`、`text.rs`、`outline.rs`、`forms.rs` 显示部分 | 移植 parse／password／page render、`keep_window`／scale、文本几何、选择／搜索和大纲；提取有用的视图逻辑并适配 Kit/Fast、Host、lease 与请求身份，不把整个 `PdfView` 当作黑盒嵌入 | 上游缺 named destination、完整文本裁剪／阅读顺序和有界取消；无 `/AP` 的表单合成只覆盖有限文本并可能丢 Unicode。不得导入表单写值、PDF 标注编辑或 GPL app。#284 选定 backend 前须在实现阶段检查 #285 的文本／大纲前提，不仅看 bitmap |
+| #286，EPUB | [Glim `glim-services/src/books/mod.rs`](https://github.com/glimapp/glim/blob/fc2183f2c5f27ddfcdc4badbab6d83d50616831b/crates/glim-services/src/books/mod.rs)、`books/preferences.rs` 校验部分、`glim-core/src/books.rs`、`glim-app/src/views/reader/books.rs` 与 `books/view.rs` 的适用交互 | 移植容器／OPF／spine／目录、章节净化、资源路径校验、阅读状态与导航；换掉本机 FS、图片解码、Glim 偏好存储和旧 GUI 接线 | 需补全文搜索、固定版式识别及 Host-aware 阅读状态；不导入 FB2／CBZ 或出版方脚本／任意 CSS |
+| #287–#288，CSV／TSV | [Glim `glim-services/src/csv.rs`](https://github.com/glimapp/glim/blob/fc2183f2c5f27ddfcdc4badbab6d83d50616831b/crates/glim-services/src/csv.rs)、`glim-core/src/table.rs`、`glim-app/src/views/reader/csv.rs` 与 `csv/view.rs` | 移植记录读取、行列分页、完整值与导航逻辑，按现有 Kit 控件适配表格；接 Lyrel source／history | 上游只有只读表格，无保真写回；需补记录／单元格源区间、稳定身份、排序筛选及局部编辑。保留可用 reader，不拿显示行号当写入身份 |
+| #289–#291，JSON 系列 | [Glim `glim-services/src/json.rs`](https://github.com/glimapp/glim/blob/fc2183f2c5f27ddfcdc4badbab6d83d50616831b/crates/glim-services/src/json.rs) 的 JSONC 词法处理、`glim-core/src/structured.rs`、`glim-app/src/views/reader/json.rs` 与 `json/view.rs` 的适用树交互 | 保留展开、导航与完整值交互，扩充 occurrence／source range；优先采用正式无损语法库，补局部 mutation 与 JSONL 记录模型 | 上游 `serde_json::Value` 树会丢重复键／原拼写，NDJSON 转数组，均不能作为生产权威模型；不移植整篇格式化来冒充局部编辑，也不扩大到 JSON5 |
+| #292–#294，YAML／TOML／XML | 复用 #289 移植的树交互与 Lyrel history；Glim `glim-services/src/graph.rs` 的 YAML／XML 分支仅作输入／展示差异参考 | 用正式、保留 token／位置的格式专用解析能力补齐语义模型与局部编辑，共享呈现而不共享 JSON 语义 | Glim YAML／XML 是有损只读投影，TOML 没有对应结构编辑实现；不移植 YAML→JSON 或扁平 XML 数据模型，不声称现有代码已支持锚点、日期、CDATA 等保真要求 |
+| #295–#296，SQLite | [Glim `glim-services/src/sqlite/browser.rs`](https://github.com/glimapp/glim/blob/fc2183f2c5f27ddfcdc4badbab6d83d50616831b/crates/glim-services/src/sqlite/browser.rs)、`glim-core/src/table.rs`、`glim-app/src/views/reader/sqlite.rs` 与 `sqlite/view.rs` | 移植受限 SQL 构造、列／分页／筛选／排序／完整值读取及交互；连接与查询移到 owning Host，保留值类型，补 read-view 生命周期 | 明确排除 `sqlite.rs::Snapshot` 的 main／WAL／journal 文件复制；不沿用每次查询独立连接而未声明的跨页语义或把显示文本当无损值 |
+| #297–#298，draw.io | 固定版本官方离线引擎；Glim `glim-services/src/drawio.rs::decode_page` 仅在需要时作为压缩格式辅助代码／夹具来源 | 引擎提供真实画布与编辑，Lyrel 受控 bridge 负责内容、身份、history／保存集成；不用自制形状渲染器替代 | Glim 的基本形状 renderer 与 Zorite 白板不满足兼容和回写；引擎版本／资源许可在实施时单独固定审查 |
+| #299，集成接受 | 前述实际导入模块的 `UPSTREAM.toml`、所需 notices，以及 Lyrel 原生产消费者 | 汇总每张票保留／适配／补齐／拒绝的具体记录，检查是否偷换成整项自建 | 这是实现后的集成接受票；本轮不执行，不把固定源码阅读当兼容、实窗或远端验收 |
+
+Glim 的测试代码可从上述模块内联测试与 `glim-services/tests/reader_boundaries.rs`、`reader_session_regressions.rs` 提取适用场景；`assets/reader-contracts/table.csv`、`table.json`、`sqlite.sql`、`book.epub.json` 仅在逐项核对来源许可后使用。Zorite PDF 的合成测试位于四个 `src/*.rs` 内，不能据此宣称存在完整实文档夹具。保留场景而替换 `/usr/bin/sqlite3`、`/usr/bin/zip` 等平台生成方式；不导入无关格式测试或第三方整包资产。
+
+当前静态审阅还发现 PDF 文本定位的 UTF-8 字节边界风险、未处理的裁剪／命名目标，以及表单 appearance 注释与依赖源码不一致。实现时逐项确认并修复相关路径，保留可用算法；不机械复制已知缺陷，也不据未执行的静态推断声称测试已失败或通过。
 
 ### draw.io 的局部引擎例外
 
@@ -243,7 +268,7 @@ draw.io 是本轮唯一计划引入 WebView／本机图形引擎的格式。例�
 
 离线引擎禁止默认云存储、网络图片、远程导出、插件、自动打开外链或任意本机文件访问。自托管默认端点并不天然离线，必须核对并关闭网络入口；链接与文件访问由工作台按所属 Host 和权限处理。引擎无权限读取未交付的其他文件。
 
-第三方 Rust 依赖继续使用正式 registry，GUI 仍只经 Kit/Fast；不扩大已批准的 pinned Zorite editor/bidi/ratex 源码导入范围。draw.io 引擎、图形库、模板、字体和其他资源分别核对版本、来源、许可与分发通知，不从顶层 Apache-2.0 或 MIT 声明推导整个资源包具有相同条款，不引入 GPL 应用代码。
+draw.io 引擎、图形库、模板、字体和其他资源分别核对版本、来源、许可与分发通知，不从顶层 Apache-2.0 或 MIT 声明推导整个资源包具有相同条款。Rust 侧适用上方限定的源码导入例外，其余依赖仍使用 registry；GUI 仍只经 Kit/Fast，不引入 GPL 应用代码。
 
 ### 实现前提与验收证据
 
