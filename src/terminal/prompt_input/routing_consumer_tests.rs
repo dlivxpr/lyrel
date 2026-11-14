@@ -13,7 +13,7 @@ fn ctrl_l_at_prompt_reaches_the_shell(cx: &mut TestAppContext) {
                 key: "l".to_string(),
                 key_char: None,
             };
-            view.handle_editor_key(&ctrl_l, cx);
+            view.handle_editor_key(&ctrl_l, false, cx);
         })
         .unwrap();
 
@@ -435,8 +435,8 @@ fn a_handoff_walks_the_cursor_back_in_ss3_under_app_cursor_mode(cx: &mut TestApp
             for ch in ["z", "z", "q", "q", "x"] {
                 type_char(view, ch, window, cx);
             }
-            view.handle_editor_key(&key("left"), cx);
-            view.handle_editor_key(&key("left"), cx);
+            view.handle_editor_key(&key("left"), false, cx);
+            view.handle_editor_key(&key("left"), false, cx);
             view.complete_tab(true, cx);
         })
         .unwrap();

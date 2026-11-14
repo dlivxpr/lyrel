@@ -3,12 +3,25 @@ use super::*;
 use crate::core::clipboard::{
     Event as ClipboardEvent, Segment as ClipboardSegment, Sniffed as ClipboardSniffed,
 };
+use crate::core::glyph_protocol::{GlyphSegment, GlyphSniffed, GlyphSniffer};
 use crate::core::kitty_graphics::{Action, Control, Image, Segment, Sniffed, response};
 
 pub(super) enum Part {
     Graphics(Segment),
     Clipboard(ClipboardEvent),
+    Glyph(GlyphPart),
+    Capability(Vec<u8>),
 }
+
+/// One daemon-framed Glyph Protocol body, applied in stream order.
+pub(super) enum GlyphPart {
+    Command {
+        body: Vec<u8>,
+        aborted: bool,
+        exhausted: bool,
+    },
+}
+
 pub(super) enum Extracted<'a> {
     Plain(&'a [u8]),
     Parts(Vec<Part>),
@@ -34,28 +47,52 @@ impl Extracted<'_> {
 pub(super) fn extract<'a>(
     raw: &'a [u8],
     clipboard: &mut ClipboardSniffer,
+    glyph: &mut GlyphSniffer,
+    graphics: &mut GraphicsSniffer,
+    locality: &mut impl FnMut() -> Option<bool>,
+    discovery: &mut crate::core::xtgettcap::Sniffer,
+) -> Extracted<'a> {
+    graphics.begin_read();
+    use crate::core::xtgettcap::{Segment as DiscoverySegment, Sniffed as DiscoverySniffed};
+    match discovery.sniff(raw) {
+        DiscoverySniffed::Plain(bytes) => {
+            extract_terminal(bytes, clipboard, glyph, graphics, locality)
+        }
+        DiscoverySniffed::Segments(segments) => {
+            let mut parts = Vec::new();
+            for segment in segments {
+                match segment {
+                    DiscoverySegment::Query(bytes) => parts.push(Part::Capability(bytes)),
+                    DiscoverySegment::Output(bytes) => {
+                        match extract_terminal(&bytes, clipboard, glyph, graphics, locality) {
+                            Extracted::Plain(_) => {
+                                parts.push(Part::Graphics(Segment::Output(bytes)))
+                            }
+                            Extracted::Parts(extracted) => parts.extend(extracted),
+                        }
+                    }
+                }
+            }
+            Extracted::Parts(parts)
+        }
+    }
+}
+
+fn extract_terminal<'a>(
+    raw: &'a [u8],
+    clipboard: &mut ClipboardSniffer,
+    glyph: &mut GlyphSniffer,
     graphics: &mut GraphicsSniffer,
     locality: &mut impl FnMut() -> Option<bool>,
 ) -> Extracted<'a> {
-    graphics.begin_read();
     match clipboard.sniff(raw) {
-        ClipboardSniffed::Plain(bytes) => match graphics.sniff_part(bytes, locality) {
-            Sniffed::Plain(bytes) => Extracted::Plain(bytes),
-            Sniffed::Segments(segments) => {
-                Extracted::Parts(segments.into_iter().map(Part::Graphics).collect())
-            }
-        },
+        ClipboardSniffed::Plain(bytes) => glyph_then_graphics(bytes, glyph, graphics, locality),
         ClipboardSniffed::Segments(segments) => {
             let mut parts = Vec::new();
             for segment in segments {
                 match segment {
                     ClipboardSegment::Output(bytes) => {
-                        match graphics.sniff_part(&bytes, locality) {
-                            Sniffed::Plain(_) => parts.push(Part::Graphics(Segment::Output(bytes))),
-                            Sniffed::Segments(segments) => {
-                                parts.extend(segments.into_iter().map(Part::Graphics))
-                            }
-                        }
+                        append_glyph_parts(&mut parts, &bytes, glyph, graphics, locality)
                     }
                     ClipboardSegment::Event(event) => parts.push(Part::Clipboard(event)),
                 }
@@ -65,7 +102,87 @@ pub(super) fn extract<'a>(
     }
 }
 
-fn text(
+/// Run the glyph framing first: accepted/rejected bodies leave the stream in
+/// order, and every remaining output run is fed to the kitty sniffer. The
+/// glyph sniffer's fast path keeps the common no-glyph read zero-copy.
+fn glyph_then_graphics<'a>(
+    bytes: &'a [u8],
+    glyph: &mut GlyphSniffer,
+    graphics: &mut GraphicsSniffer,
+    locality: &mut impl FnMut() -> Option<bool>,
+) -> Extracted<'a> {
+    match glyph.sniff(bytes) {
+        GlyphSniffed::Plain(bytes) => match graphics.sniff_part(bytes, locality) {
+            Sniffed::Plain(bytes) => Extracted::Plain(bytes),
+            Sniffed::Segments(segments) => {
+                Extracted::Parts(segments.into_iter().map(Part::Graphics).collect())
+            }
+        },
+        GlyphSniffed::Segments(segments) => {
+            let mut parts = Vec::new();
+            for segment in segments {
+                match segment {
+                    GlyphSegment::Output(run) => match graphics.sniff_part(&run, locality) {
+                        Sniffed::Plain(_) => parts.push(Part::Graphics(Segment::Output(run))),
+                        Sniffed::Segments(segments) => {
+                            parts.extend(segments.into_iter().map(Part::Graphics))
+                        }
+                    },
+                    GlyphSegment::Command {
+                        body,
+                        aborted,
+                        exhausted,
+                    } => parts.push(Part::Glyph(GlyphPart::Command {
+                        body,
+                        aborted,
+                        exhausted,
+                    })),
+                }
+            }
+            Extracted::Parts(parts)
+        }
+    }
+}
+
+/// The clipboard tokenizer owns its output segments, so this path copies the
+/// runs it forwards instead of borrowing them past the loop.
+fn append_glyph_parts(
+    parts: &mut Vec<Part>,
+    bytes: &[u8],
+    glyph: &mut GlyphSniffer,
+    graphics: &mut GraphicsSniffer,
+    locality: &mut impl FnMut() -> Option<bool>,
+) {
+    match glyph.sniff(bytes) {
+        GlyphSniffed::Plain(run) => match graphics.sniff_part(run, locality) {
+            Sniffed::Plain(_) => parts.push(Part::Graphics(Segment::Output(bytes.to_vec()))),
+            Sniffed::Segments(segments) => parts.extend(segments.into_iter().map(Part::Graphics)),
+        },
+        GlyphSniffed::Segments(segments) => {
+            for segment in segments {
+                match segment {
+                    GlyphSegment::Output(run) => match graphics.sniff_part(&run, locality) {
+                        Sniffed::Plain(_) => parts.push(Part::Graphics(Segment::Output(run))),
+                        Sniffed::Segments(segments) => {
+                            parts.extend(segments.into_iter().map(Part::Graphics))
+                        }
+                    },
+                    GlyphSegment::Command {
+                        body,
+                        aborted,
+                        exhausted,
+                    } => parts.push(Part::Glyph(GlyphPart::Command {
+                        body,
+                        aborted,
+                        exhausted,
+                    })),
+                }
+            }
+        }
+    }
+}
+
+pub(super) fn text(
     state: &Arc<Mutex<PaneState>>,
     bytes: &[u8],
     gate: &OutputGate,
@@ -77,6 +194,14 @@ fn text(
         .as_mut()
         .map(|graphics| graphics.output(bytes))
         .unwrap_or_default();
+    // Taken after the same parse that produced the text, and published after
+    // the text frame: a query in this chunk is answered by the consumer's own
+    // parse at its exact stream position, while this projection is what a
+    // later attach replays once the original bytes leave the ring.
+    let colors = state
+        .graphics
+        .as_mut()
+        .and_then(|graphics| graphics.take_color_delta());
     record_output(&mut state, bytes);
     if effects.is_empty() {
         fan_out_output(&mut state, bytes, Vec::new(), gate);
@@ -84,6 +209,14 @@ fn text(
         let mut frames = vec![GraphicsFrame::Output(bytes.to_vec())];
         append_graphics_effects(effects, &mut Vec::new(), &mut frames, writer);
         fan_out_output(&mut state, bytes, frames, gate);
+    }
+    if let Some(frame) = colors {
+        let PaneState {
+            subscriptions,
+            graphics,
+            ..
+        } = &mut *state;
+        subscriptions.publish_colors(frame.encode(), gate, graphics);
     }
     let owed = detached_color_scheme_queries(&mut state);
     drop(state);
@@ -397,18 +530,42 @@ pub(super) fn consume(
         Extracted::Parts(parts) => {
             for part in parts {
                 match part {
+                    Part::Capability(bytes) => {
+                        let mut state = state.lock().unwrap();
+                        let effects = state
+                            .graphics
+                            .as_mut()
+                            .map(|graphics| graphics.output(&bytes))
+                            .unwrap_or_default();
+                        let mut frames = Vec::new();
+                        append_graphics_effects(effects, &mut Vec::new(), &mut frames, writer);
+                        if !frames.is_empty() {
+                            fan_out_output(&mut state, &[], frames, gate);
+                        }
+                    }
                     Part::Graphics(Segment::Output(bytes)) => {
                         text(state, &bytes, gate, writer);
                     }
                     Part::Graphics(Segment::Command { control, image }) => {
-                        let source_work = image
-                            .as_ref()
-                            .map(|image| graphics.take_source_work(image.data.capacity()));
+                        let source_work = image.as_ref().map(|image| {
+                            if control.iterm2 {
+                                graphics.take_osc_source_work(image.data.capacity())
+                            } else {
+                                graphics.take_source_work(image.data.capacity())
+                            }
+                        });
                         command(state, control, image, source_work, gate, writer);
                     }
                     Part::Graphics(Segment::Reply(bytes))
                     | Part::Clipboard(ClipboardEvent::Reply(bytes)) => {
                         write_graphics_reply(writer, &bytes)
+                    }
+                    Part::Glyph(GlyphPart::Command {
+                        body,
+                        aborted,
+                        exhausted,
+                    }) => {
+                        glyph_reader::consume(state, gate, writer, &body, aborted, exhausted);
                     }
                     Part::Clipboard(ClipboardEvent::Write(write)) => {
                         let mut state = state.lock().unwrap();

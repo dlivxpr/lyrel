@@ -88,11 +88,22 @@ pub struct AgentSessionChanged;
 
 impl gpui_kit::EventEmitter<AgentSessionChanged> for TerminalView {}
 
+/// A meaningful current-progress change; never a command/agent completion.
+pub struct ProgressChanged;
+impl gpui_kit::EventEmitter<ProgressChanged> for TerminalView {}
+
 /// A coding agent started running in this pane: its foreground went from no
 /// agent to this one. What quick launch counts as the agent being used.
 pub struct AgentDetected(pub crate::core::cli_agent::CLIAgent);
 
 impl gpui_kit::EventEmitter<AgentDetected> for TerminalView {}
+
+/// A producer used Glyph Protocol against a backend that does not own the
+/// glossary. Nothing was rendered or acknowledged; the app tells the user the
+/// daemon needs updating instead of leaving a half-working pane.
+pub struct GlyphUnsupported;
+
+impl gpui_kit::EventEmitter<GlyphUnsupported> for TerminalView {}
 
 /// A file link the user clicked, on its way to whoever can show it. The
 /// terminal resolves the path — it is the only thing that knows the pane's
@@ -187,6 +198,7 @@ impl ShellParts {
 struct FrameFacts {
     alt_screen: bool,
     mouse_mode: bool,
+    keyboard_events: bool,
     has_selection: bool,
     reading_identity: Option<(u64, i64, usize, i64, i64)>,
     cursor: Option<(usize, usize)>,
@@ -241,6 +253,10 @@ pub struct TerminalView {
     frame: FrameFacts,
     grid_retry: Option<gpui_kit::Task<()>>,
     pub(super) selection_scroll: super::selection_scroll::SelectionScroll,
+    /// The effective background last evaluated for DEC mode 2031's dark/light
+    /// report. Overrides change it without touching the theme, so both paths
+    /// compare against this one value.
+    pub(super) color_scheme_bg: rio_vt::config::colors::ColorRgb,
     pub title: String,
     /// A title the pane has been told about but has not adopted yet — see
     /// `set_title_when_settled`. `None` means the tab is showing the newest
@@ -687,12 +703,15 @@ impl TerminalView {
                         view.agent_activity
                             .focused((view.host_id, view.pane_id), cx);
                     } else {
+                        view.input.forget_keys();
                         view.input.unmark();
                     }
                     view.report_focus_change(focused);
                 },
                 foreground: |view, window, cx| view.poll_foreground(window, cx),
+                deactivate: |view| view.input.forget_keys(),
                 detach: |view| {
+                    view.input.forget_keys();
                     view.grid_snap = None;
                     view.selection_scroll.clear_scrollback();
                     view.terminal.detach_link();
@@ -733,6 +752,7 @@ impl TerminalView {
             frame: FrameFacts::default(),
             grid_retry: None,
             selection_scroll: super::selection_scroll::SelectionScroll::default(),
+            color_scheme_bg: super::palette::hsla_to_rgb(cx.theme().background),
             title: DEFAULT_TITLE.to_string(),
             pending_title: None,
             default_title: DEFAULT_TITLE.to_string(),
@@ -975,6 +995,7 @@ impl TerminalView {
         )
     }
 
+    #[cfg(test)]
     pub fn adopt_relink(
         &mut self,
         stream: crate::daemon::transport::Stream,
@@ -985,11 +1006,26 @@ impl TerminalView {
         cell_h: u16,
         cx: &mut Context<Self>,
     ) -> anyhow::Result<()> {
+        self.adopt_relink_with_version(stream, buffered, route, size, cell_w, cell_h, None, cx)
+    }
+
+    pub fn adopt_relink_with_version(
+        &mut self,
+        stream: crate::daemon::transport::Stream,
+        buffered: Vec<u8>,
+        route: &crate::terminal::PaneRoute,
+        size: TermSize,
+        cell_w: u16,
+        cell_h: u16,
+        version: Option<crate::daemon::protocol::DaemonVersion>,
+        cx: &mut Context<Self>,
+    ) -> anyhow::Result<()> {
+        self.input.forget_keys();
         self.remote_clipboard_write_generation =
             self.remote_clipboard_write_generation.wrapping_add(1);
         self.remote_clipboard_write_in_flight = None;
         self.terminal
-            .adopt_relink(stream, buffered, route, size, cell_w, cell_h)?;
+            .adopt_relink_with_version(stream, buffered, route, size, cell_w, cell_h, version)?;
         self.grid_snap = None;
         self.grid_buf.clear();
         self.selection_scroll.clear_presented();
@@ -1020,6 +1056,10 @@ impl TerminalView {
 
     pub fn agent_session(&self) -> Option<crate::core::cli_agent::AgentSessionState> {
         self.terminal.agent_session()
+    }
+
+    pub(crate) fn progress(&self) -> Option<crate::daemon::protocol::PaneProgress> {
+        self.terminal.progress()
     }
 
     /// What this pane is in the middle of, when it can say so. `None` means
@@ -1455,6 +1495,28 @@ impl TerminalView {
         self.report_mouse && self.frame.mouse_mode
     }
 
+    /// The pointer shape this pane's terminal content advertises, or `None`
+    /// to leave the platform default where lyrel's policy sets nothing.
+    ///
+    /// Priority is lyrel's own interaction first — a text selection in
+    /// flight and an armed link gesture both answer before the
+    /// application — then the application's OSC 22 claim on this pane's
+    /// content, then the normal terminal policy: an I-beam over selectable
+    /// text, and nothing at all while the application watches the mouse
+    /// itself.
+    pub(super) fn content_cursor(&self) -> Option<gpui_kit::CursorStyle> {
+        if self.selection_scroll.is_selecting() {
+            return Some(gpui_kit::CursorStyle::IBeam);
+        }
+        if self.links.hovered().is_some_and(|link| link.is_armed()) {
+            return Some(gpui_kit::CursorStyle::PointingHand);
+        }
+        if let Some(claimed) = self.terminal.presentation_facts().pointer {
+            return Some(claimed);
+        }
+        (!self.frame_mouse_mode()).then_some(gpui_kit::CursorStyle::IBeam)
+    }
+
     fn write_mouse(
         &self,
         base: u8,
@@ -1463,8 +1525,17 @@ impl TerminalView {
         row: usize,
         pressed: bool,
     ) -> bool {
-        let sgr = self.terminal.term.lock().mode().contains(Mode::SGR_MOUSE);
-        if let Some(msg) = encode_mouse(sgr, base, mods, col, row, pressed) {
+        let encoding = {
+            let mode = self.terminal.term.lock().mode();
+            if mode.contains(Mode::SGR_MOUSE) {
+                MouseEncoding::Sgr
+            } else if mode.contains(Mode::UTF8_MOUSE) {
+                MouseEncoding::Utf8
+            } else {
+                MouseEncoding::Legacy
+            }
+        };
+        if let Some(msg) = encode_mouse(encoding, base, mods, col, row, pressed) {
             self.terminal.write(msg);
             true
         } else {
@@ -2078,6 +2149,11 @@ impl TerminalView {
         self.frame = FrameFacts {
             alt_screen: term.mode().contains(Mode::ALT_SCREEN),
             mouse_mode: term.mode().intersects(Mode::MOUSE_MODE),
+            keyboard_events: super::input::KeyFlags::from_mode_with_local_conpty(
+                &term.mode(),
+                self.terminal.is_local_conpty(),
+            )
+            .reports_events(),
             reading_identity,
             has_selection: self.selection_scroll.has_presented() || term.selection.is_some(),
             cursor: (self.selection_scroll.reading.is_none() && row >= 0)
@@ -2230,8 +2306,19 @@ pub(crate) fn reveal_file_path(path: &std::path::Path) -> std::io::Result<()> {
     Ok(())
 }
 
+/// The coordinate encoding the application negotiated for mouse reports.
+/// `?1006` selects SGR, `?1005` selects UTF-8; with neither set the report
+/// uses the original X10 byte packing. The emulator keeps `?1005` and
+/// `?1006` mutually exclusive, so at most one is ever on.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum MouseEncoding {
+    Sgr,
+    Utf8,
+    Legacy,
+}
+
 fn encode_mouse(
-    sgr: bool,
+    encoding: MouseEncoding,
     base: u8,
     mods: &Modifiers,
     col: usize,
@@ -2249,10 +2336,30 @@ fn encode_mouse(
         mod_bits += 16;
     }
 
-    if sgr {
+    if encoding == MouseEncoding::Sgr {
         let c = if pressed { 'M' } else { 'm' };
         let msg = format!("\x1b[<{};{};{}{}", base + mod_bits, col + 1, row + 1, c);
         Some(msg.into_bytes())
+    } else if encoding == MouseEncoding::Utf8 {
+        // 1005 carries at most two UTF-8 bytes per coordinate: the final
+        // one-based position is 2015, encoded as 32 + 2015 = U+07FF.
+        // Check before adding the offset so invalid usize positions cannot
+        // wrap around into an apparently valid report.
+        if col >= 2015 || row >= 2015 {
+            return None;
+        }
+        let code = if pressed {
+            base + mod_bits
+        } else {
+            3 + mod_bits
+        };
+        let mut msg = Vec::with_capacity(9);
+        msg.extend_from_slice(b"\x1b[M");
+        let mut scalar = [0; 4];
+        for value in [32 + u32::from(code), 33 + col as u32, 33 + row as u32] {
+            msg.extend_from_slice(char::from_u32(value)?.encode_utf8(&mut scalar).as_bytes());
+        }
+        Some(msg)
     } else {
         if col >= 223 || row >= 223 {
             return None;
@@ -2324,7 +2431,7 @@ mod tests {
         assert!(!out.contains(" …"), "{out:?}");
     }
     use super::{LoopbackPlan, PortRoute, WheelRoute, cwd_is_on_host, loopback_plan};
-    use super::{encode_mouse, fallback_chain, wheel_route};
+    use super::{MouseEncoding, encode_mouse, fallback_chain, wheel_route};
     use super::{files_cwd, wsl_share_distro, wsl_share_path};
     use gpui_kit::Modifiers;
     use rio_vt::crosswords::Mode;
@@ -2716,11 +2823,11 @@ mod tests {
     fn sgr_mouse_reports_one_based_decimal_with_modifier_bits() {
         let plain = Modifiers::default();
         assert_eq!(
-            encode_mouse(true, 0, &plain, 4, 8, true).unwrap(),
+            encode_mouse(MouseEncoding::Sgr, 0, &plain, 4, 8, true).unwrap(),
             b"\x1b[<0;5;9M".to_vec()
         );
         assert_eq!(
-            encode_mouse(true, 2, &plain, 4, 8, false).unwrap(),
+            encode_mouse(MouseEncoding::Sgr, 2, &plain, 4, 8, false).unwrap(),
             b"\x1b[<2;5;9m".to_vec()
         );
         let all = Modifiers {
@@ -2730,15 +2837,15 @@ mod tests {
             ..Modifiers::default()
         };
         assert_eq!(
-            encode_mouse(true, 0, &all, 0, 0, true).unwrap(),
+            encode_mouse(MouseEncoding::Sgr, 0, &all, 0, 0, true).unwrap(),
             b"\x1b[<28;1;1M".to_vec()
         );
         assert_eq!(
-            encode_mouse(true, 64, &plain, 10, 3, true).unwrap(),
+            encode_mouse(MouseEncoding::Sgr, 64, &plain, 10, 3, true).unwrap(),
             b"\x1b[<64;11;4M".to_vec()
         );
         assert_eq!(
-            encode_mouse(true, 35, &plain, 1, 1, true).unwrap(),
+            encode_mouse(MouseEncoding::Sgr, 35, &plain, 1, 1, true).unwrap(),
             b"\x1b[<35;2;2M".to_vec()
         );
     }
@@ -2747,7 +2854,7 @@ mod tests {
     fn sgr_mouse_has_no_coordinate_cap() {
         let plain = Modifiers::default();
         assert_eq!(
-            encode_mouse(true, 0, &plain, 500, 300, true).unwrap(),
+            encode_mouse(MouseEncoding::Sgr, 0, &plain, 500, 300, true).unwrap(),
             b"\x1b[<0;501;301M".to_vec()
         );
     }
@@ -2756,11 +2863,11 @@ mod tests {
     fn x10_mouse_packs_bytes_and_drops_button_on_release() {
         let plain = Modifiers::default();
         assert_eq!(
-            encode_mouse(false, 0, &plain, 4, 8, true).unwrap(),
+            encode_mouse(MouseEncoding::Legacy, 0, &plain, 4, 8, true).unwrap(),
             vec![0x1b, b'[', b'M', 32, 32 + 1 + 4, 32 + 1 + 8]
         );
         assert_eq!(
-            encode_mouse(false, 2, &plain, 4, 8, false).unwrap(),
+            encode_mouse(MouseEncoding::Legacy, 2, &plain, 4, 8, false).unwrap(),
             vec![0x1b, b'[', b'M', 32 + 3, 32 + 1 + 4, 32 + 1 + 8]
         );
         let ctrl = Modifiers {
@@ -2768,7 +2875,7 @@ mod tests {
             ..Modifiers::default()
         };
         assert_eq!(
-            encode_mouse(false, 1, &ctrl, 0, 0, true).unwrap(),
+            encode_mouse(MouseEncoding::Legacy, 1, &ctrl, 0, 0, true).unwrap(),
             vec![0x1b, b'[', b'M', 32 + 1 + 16, 33, 33]
         );
     }
@@ -2776,10 +2883,69 @@ mod tests {
     #[test]
     fn x10_mouse_drops_out_of_range_coordinates_whole() {
         let plain = Modifiers::default();
-        assert!(encode_mouse(false, 0, &plain, 223, 0, true).is_none());
-        assert!(encode_mouse(false, 0, &plain, 0, 223, true).is_none());
-        let last = encode_mouse(false, 0, &plain, 222, 222, true).unwrap();
+        assert!(encode_mouse(MouseEncoding::Legacy, 0, &plain, 223, 0, true).is_none());
+        assert!(encode_mouse(MouseEncoding::Legacy, 0, &plain, 0, 223, true).is_none());
+        let last = encode_mouse(MouseEncoding::Legacy, 0, &plain, 222, 222, true).unwrap();
         assert_eq!(&last[4..], &[255, 255]);
+    }
+
+    #[test]
+    fn utf8_mouse_reports_coordinates_past_the_legacy_cap() {
+        let plain = Modifiers::default();
+        // Below 95 the UTF-8 scheme is byte-identical to the X10 one.
+        assert_eq!(
+            encode_mouse(MouseEncoding::Utf8, 0, &plain, 4, 8, true).unwrap(),
+            vec![0x1b, b'[', b'M', 32, 32 + 1 + 4, 32 + 1 + 8]
+        );
+        // Cell 95 is the first that gains a second byte under 1005: xterm
+        // encodes `32 + position` as a UTF-8 scalar, so a two-byte sequence
+        // starts where the value passes 127.
+        assert_eq!(
+            encode_mouse(MouseEncoding::Utf8, 0, &plain, 95, 0, true).unwrap(),
+            vec![0x1b, b'[', b'M', 32, 0xC2, 0x80, 33]
+        );
+        // Past the X10 cap of 223 the negotiated 1005 mode still reports.
+        assert_eq!(
+            encode_mouse(MouseEncoding::Utf8, 0, &plain, 240, 10, true).unwrap(),
+            vec![0x1b, b'[', b'M', 32, 0xC4, 0x91, 43]
+        );
+        // Releases keep the shared button-3 code; modifiers ride on it, and
+        // the released coordinate is encoded the same way.
+        let ctrl = Modifiers {
+            control: true,
+            ..Modifiers::default()
+        };
+        assert_eq!(
+            encode_mouse(MouseEncoding::Utf8, 0, &ctrl, 240, 10, false).unwrap(),
+            vec![0x1b, b'[', b'M', 32 + 3 + 16, 0xC4, 0x91, 43]
+        );
+        let all = Modifiers {
+            shift: true,
+            alt: true,
+            control: true,
+            ..Modifiers::default()
+        };
+        assert_eq!(
+            encode_mouse(MouseEncoding::Utf8, 34, &all, 240, 95, true).unwrap(),
+            b"\x1b[M^\xc4\x91\xc2\x80"
+        );
+        assert_eq!(
+            encode_mouse(MouseEncoding::Utf8, 2, &all, 240, 95, false).unwrap(),
+            b"\x1b[M?\xc4\x91\xc2\x80"
+        );
+    }
+
+    #[test]
+    fn utf8_mouse_drops_only_what_utf8_cannot_carry() {
+        let plain = Modifiers::default();
+        // xterm raises the encodable position from 223 to 2015: the offset
+        // value must stay a two-byte UTF-8 scalar (32 + position <= 0x7FF).
+        let last = encode_mouse(MouseEncoding::Utf8, 0, &plain, 2014, 2014, true).unwrap();
+        assert_eq!(&last[3..], &[32, 0xDF, 0xBF, 0xDF, 0xBF]);
+        assert!(encode_mouse(MouseEncoding::Utf8, 0, &plain, 2015, 0, true).is_none());
+        assert!(encode_mouse(MouseEncoding::Utf8, 0, &plain, 0, 2015, true).is_none());
+        assert!(encode_mouse(MouseEncoding::Utf8, 0, &plain, usize::MAX, 0, true).is_none());
+        assert!(encode_mouse(MouseEncoding::Utf8, 0, &plain, 0, usize::MAX, false).is_none());
     }
 
     #[test]
@@ -3187,10 +3353,19 @@ mod gpui_tests {
     }
 
     include!("graphics_consumer_tests.rs");
+    include!("glyph_consumer_tests.rs");
+    include!("glyph_retained_consumer_tests.rs");
+    include!("glyph_support_consumer_tests.rs");
+    include!("glyph_omp_consumer_tests.rs");
+    include!("color_override_consumer_tests.rs");
+    include!("xtgettcap_consumer_tests.rs");
+    include!("progress_consumer_tests.rs");
     include!("history_search_pty_consumer_tests.rs");
     include!("graphics_resize_consumer_tests.rs");
     include!("graphics_layout_consumer_tests.rs");
     include!("graphics_recovery_consumer_tests.rs");
+    include!("graphics_sixel_consumer_tests.rs");
+    include!("graphics_iterm2_consumer_tests.rs");
     include!("graphics_playback_consumer_tests.rs");
     include!("graphics_capacity_consumer_tests.rs");
     include!("native_picture_support.rs");
@@ -3201,6 +3376,7 @@ mod gpui_tests {
     include!("lifecycle_consumer_tests.rs");
     include!("reading_consumer_tests.rs");
     include!("reading_lifecycle_consumer_tests.rs");
+    include!("pointer_consumer_tests.rs");
 
     #[gpui_kit::test]
     fn graphics_consumer_streamed_png_and_compression_render_after_rejected_transfer(

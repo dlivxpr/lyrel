@@ -18,7 +18,7 @@ SSH 窗格在远程机器上运行一个 shell。**远程工作区**则更进一
 从本地切到远端、从远端切回本地或切换两台远端机器时，旧主机的数字不会挂在新主机名称下。
 同一工作区内切标签页、聚焦 PiP 或终端窗格不会改变测量对象。多窗口访问同一主机共享采样，离开其最后一个终端工作流后停止轮询。
 
-指标使用 `host-metrics-v1` capability 和 control v16 消息；当前 pane 协议独立演进为 v17，指标不要求改变 pane 协议。协议分工见[项目架构](/reference/architecture#ipc)。
+指标使用 `host-metrics-v1` capability 和 control v16 消息；当前 pane 协议独立演进为 v19，指标不要求改变 pane 协议。协议分工见[项目架构](/reference/architecture#ipc)。
 重连会重新核对服务器 instance，拒绝旧连接迟到的结果。缺少 capability 时保留正常控制连接，只将指标标为不可用。
 
 

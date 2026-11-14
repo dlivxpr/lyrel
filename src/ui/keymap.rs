@@ -80,6 +80,19 @@ fn fixed_bindings(cx: &App) -> Vec<KeyBinding> {
         load_binding("secondary-+", IncreaseFontSize, None, cx),
         KeyBinding::new("tab", SendTab, Some("Terminal")),
         KeyBinding::new("shift-tab", SendBackTab, Some("Terminal")),
+        // Propagating SendBackTab lets Root consume it as focus navigation
+        // before key-down ever runs. Unbind only the raw negotiated surface,
+        // so its real held metadata reaches the terminal's native listener.
+        KeyBinding::new(
+            "tab",
+            gpui_kit::NoAction,
+            Some("Terminal && keyboard_events"),
+        ),
+        KeyBinding::new(
+            "shift-tab",
+            gpui_kit::NoAction,
+            Some("Terminal && keyboard_events"),
+        ),
     ];
     // Actions dispatch before key listeners: the open history menu must win
     // over macOS's window-wide Cmd+Enter fullscreen binding, only here.

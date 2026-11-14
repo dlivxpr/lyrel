@@ -120,7 +120,15 @@ const HEADER: usize = 5;
 /// and signed coordinates.
 /// v17 carries daemon-owned playback timelines, visibility pause metadata,
 /// and immutable replacement content for frame one (stable root identity).
-pub const PROTOCOL_VERSION: u32 = 17;
+/// v18 adds the daemon-owned glyph glossary with its controller-bound
+/// frontend coverage query (`DaemonMsg::GlyphQuery` /
+/// `ClientMsg::GlyphQueryResult`), authoritative OSC 9;4 progress snapshots
+/// and ordered updates, and the opt-in pane colour projection.
+/// v19 adds exact iTerm2 destination pixels to each graphics placement. That
+/// is additive JSON, but a v18 client would ignore the fields and silently
+/// paint a different size, so mixed builds are rejected instead: the daemon
+/// answers its version and closes, and the client reports the update.
+pub const PROTOCOL_VERSION: u32 = 19;
 
 pub const FEATURE_PANE_OWNER: &str = "pane-owner";
 /// Spawn remains provisional until its requester attaches on the same connection.
@@ -138,6 +146,18 @@ pub const FEATURE_AGENT_STATE_AGE: &str = "agent-state-age";
 /// at the stream position where the PTY actually changed geometry; against an
 /// older daemon it must keep reflowing locally at request time.
 pub const FEATURE_RESIZE_ECHO: &str = "resize-echo";
+
+/// Bounded XTGETTCAP is consumed and answered exactly once by the live daemon,
+/// never by a desktop/CLI parser or snapshot replay.
+pub const FEATURE_XTGETTCAP_OWNER: &str = "xtgettcap-owner";
+
+/// The daemon admits static inline Sixel into the existing bounded graphics
+/// authority: the DCS is extracted before the text ring, pixels and placements
+/// replay to a fresh consumer without the producer resending, and refusals
+/// leave accepted resources and later text coherent. A client that does not see
+/// this feature must not advertise Sixel in its DA1 answer, because a routed
+/// remote endpoint that lacks it would silently drop the image.
+pub const FEATURE_STATIC_SIXEL: &str = "static-sixel";
 
 /// The daemon can seed a new pane with the screen a dead one left behind, named
 /// by `ClientMsg::Spawn`'s `restore` field. A client that does not see this
@@ -158,6 +178,44 @@ pub const FEATURE_HANDOFF: &str = "handoff";
 /// already there. A daemon without it cannot decode a header asking for that
 /// and drops the route unanswered, so the client checks first and says why.
 pub const FEATURE_UPDATE_SERVER: &str = "update-server";
+
+/// The daemon owns the Glyph Protocol glossary: it validates and retains
+/// accepted definitions, strips rejected ones, and asks the pane's render-
+/// opted controller for actual font coverage when answering `q`. A client
+/// that does not see this feature must not derive or claim any glyph from
+/// producer bytes; a client that does sees only daemon-accepted bodies.
+pub const FEATURE_GLYPH_REGISTRY: &str = "glyph-registry";
+
+/// The daemon retains the accepted glyph glossary outside the text replay
+/// ring and projects it after the ring to a consumer that opts in with
+/// `ClientMsg::SubscribeGlyphState`. The opt-in is a decode/transport
+/// credential only: it keeps the pane's snapshots ordered and recoverable
+/// for non-rendering clients, but it does not make the consumer the
+/// frontend-bound `GlyphQuery` answerer — that requires the render opt-in
+/// below. A client that does not see this feature leaves the opt-in unsent,
+/// and a controller that never opted in is not sent projection frames
+/// either, because a peer that predates the projection cannot decode the
+/// kind. The pane protocol version is unchanged: both messages are additive
+/// and gated on this feature.
+pub const FEATURE_GLYPH_STATE: &str = "glyph-state";
+
+/// The render opt-in is the pane's coverage credential: only a controller
+/// that declared it is handed the frontend-bound `GlyphQuery`, and only such
+/// a pane can answer the `s` probe with `fmt=glyf`. The renderer has to keep
+/// the whole monochrome v1.12 contract the advertisement promises, so a
+/// client that merely decodes the projection — or a build that predates it —
+/// is asked neither and must never be described as supported. A client that
+/// does not see this feature leaves the opt-in unsent; `q` and `s` on such a
+/// pane stay silent, the truthful "unsupported" answer. The pane protocol
+/// version is unchanged: the message is additive and gated on this feature.
+pub const FEATURE_GLYPH_SUPPORT: &str = "glyph-support";
+
+/// The daemon keeps an authoritative, bounded pane-local colour override layer
+/// and projects it to a consumer that opts in with
+/// `ClientMsg::SubscribePaneColors`. Without this feature a client leaves the
+/// opt-in unsent and refuses OSC colour changes rather than applying a
+/// ring-only copy that a trim would silently lose.
+pub const FEATURE_PANE_COLORS: &str = "pane-colors";
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DaemonVersion {
@@ -181,6 +239,12 @@ impl DaemonVersion {
             FEATURE_AGENT_RESULTS.to_string(),
             FEATURE_AGENT_REQUESTS.to_string(),
             FEATURE_AGENT_STATE_AGE.to_string(),
+            FEATURE_GLYPH_REGISTRY.to_string(),
+            FEATURE_GLYPH_STATE.to_string(),
+            FEATURE_GLYPH_SUPPORT.to_string(),
+            FEATURE_PANE_COLORS.to_string(),
+            FEATURE_XTGETTCAP_OWNER.to_string(),
+            FEATURE_STATIC_SIXEL.to_string(),
         ];
         if cfg!(unix) {
             features.push(FEATURE_HANDOFF.to_string());
@@ -201,8 +265,21 @@ impl DaemonVersion {
 /// Negotiate on a fresh pane stream, after any routing prefix and before opening
 /// a session. The caller supplies its read deadline. Diagnostic Version probes
 /// remain separate; an older server can answer this probe and be refused before
-/// it is sent a Spawn/Attach request.
+/// it is sent a Spawn/Attach request. Non-rendering streams (CLI, observer,
+/// diagnostics) use this; they never claim they can paint `fmt=glyf`.
 pub fn negotiate_pane<S: Read + Write>(stream: &mut S) -> io::Result<DaemonVersion> {
+    negotiate_pane_rendering(stream, false)
+}
+
+/// Negotiate as a controller that renders the complete monochrome v1.12
+/// contract. Only a rendering GUI consumer calls this variant with
+/// `renders_glyphs`; a CLI or observational stream keeps `negotiate_pane` and
+/// never claims it can paint `fmt=glyf`, so the daemon never advertises `s`
+/// support it cannot honour.
+pub fn negotiate_pane_rendering<S: Read + Write>(
+    stream: &mut S,
+    renders_glyphs: bool,
+) -> io::Result<DaemonVersion> {
     ClientMsg::Negotiate {
         protocol: PROTOCOL_VERSION,
     }
@@ -210,6 +287,36 @@ pub fn negotiate_pane<S: Read + Write>(stream: &mut S) -> io::Result<DaemonVersi
     stream.flush()?;
     match DaemonMsg::read(stream)? {
         DaemonMsg::Version(version) if version.protocol == PROTOCOL_VERSION => {
+            if !version.has_feature(FEATURE_XTGETTCAP_OWNER) {
+                return Err(io::Error::other(format!(
+                    "pane peer (build {}) lacks {}; update lyrel or lyrel-server explicitly; no daemon restart was attempted",
+                    version.build, FEATURE_XTGETTCAP_OWNER
+                )));
+            }
+            // Opt in only after the peer says it can project the authoritative
+            // layer. An older daemon never advertises the feature and never
+            // sees this message; an older client never sends it, so the daemon
+            // never sends it a frame kind it cannot decode.
+            if version.has_feature(FEATURE_PANE_COLORS) {
+                ClientMsg::SubscribePaneColors.encode(stream)?;
+                stream.flush()?;
+            }
+            // Same rule for the retained glossary: only a daemon that owns the
+            // projection is told this client can decode it, and an old client
+            // could never send this message or receive the frame kind.
+            if version.has_feature(FEATURE_GLYPH_STATE) {
+                ClientMsg::SubscribeGlyphState.encode(stream)?;
+                stream.flush()?;
+            }
+            // A rendering controller additionally asserts the complete
+            // monochrome-render contract so the pane may answer `s` with
+            // `fmt=glyf`. `renders_glyphs` is a caller credential, not a
+            // default: `negotiate_pane` leaves it false, and a daemon that
+            // never advertises the feature is never sent this message.
+            if renders_glyphs && version.has_feature(FEATURE_GLYPH_SUPPORT) {
+                ClientMsg::SubscribeGlyphRender.encode(stream)?;
+                stream.flush()?;
+            }
             // Every session consumer, including CLI and routed clients, starts
             // with a finite source allowance. Rendering consumers additionally
             // grant each resource from their shared process-wide byte budget.
@@ -1025,6 +1132,28 @@ pub enum ClientMsg {
     Negotiate {
         protocol: u32,
     },
+    /// Opt in to authoritative pane colour frames. Sent only after the peer's
+    /// version advertised `FEATURE_PANE_COLORS`, before Spawn/Attach/Observe.
+    SubscribePaneColors,
+    /// Opt in to the retained glyph glossary projection — a decode and
+    /// transport credential only. Sent only after the peer advertised
+    /// `FEATURE_GLYPH_STATE`, before Spawn/Attach/Observe. It does not make
+    /// this client the `q` answerer: `GlyphQuery` requires the render opt-in
+    /// below. A peer that never sends this keeps its old stream: it is not
+    /// sent a kind its decoder cannot read.
+    SubscribeGlyphState,
+    /// Assert that this client is a rendering controller for the complete
+    /// monochrome v1.12 contract: it decodes the retained projection (which
+    /// still requires `SubscribeGlyphState`), applies the accepted `r`/`c`
+    /// bodies the daemon re-emits, and answers `q` from its real font stack.
+    /// Sent only after the peer advertised `FEATURE_GLYPH_SUPPORT`, before
+    /// Spawn/Attach/Observe. It is the pane's coverage credential: the
+    /// daemon routes `GlyphQuery` only to a controller that sent it, and it
+    /// binds at attach — an observer or a later replacement controller that
+    /// never sent it does not turn the pane's `s` answer on. A peer that
+    /// never sends this keeps its old stream, is never asked for coverage,
+    /// and never sees `fmt=glyf` advertised for the pane it controls.
+    SubscribeGlyphRender,
     /// Finite authority-side allowance, with optional per-resource grants from
     /// a rendering consumer's shared source and decoded-memory budgets.
     GraphicsCapacity {
@@ -1043,6 +1172,15 @@ pub enum ClientMsg {
         key: u64,
     },
     GraphicsViewport(GraphicsViewport),
+    /// The controller's answer to `DaemonMsg::GlyphQuery`: whether the pane's
+    /// actual font fallback renders `cp`. The daemon combines it with the
+    /// registry bit it captured at the request's stream position and writes
+    /// the single `q` reply. Duplicate or stale tokens are ignored.
+    GlyphQueryResult {
+        token: u64,
+        cp: u32,
+        system: bool,
+    },
     Spawn {
         cwd: Option<PathBuf>,
         size: WinSize,
@@ -1164,6 +1302,30 @@ pub enum ClientMsg {
     Version,
 }
 
+/// Current pane progress, independent of retained terminal text. Never persisted
+/// into a replacement shell; only a live-session handoff carries this state.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
+pub struct PaneProgress {
+    pub kind: ProgressKind,
+    pub percent: Option<u8>,
+}
+
+impl PaneProgress {
+    pub fn new(kind: ProgressKind, percent: Option<u8>) -> Self {
+        assert!(percent.is_none_or(|value| value <= 100));
+        Self { kind, percent }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ProgressKind {
+    Running,
+    Indeterminate,
+    Paused,
+    Error,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DaemonMsg {
     Spawned {
@@ -1176,6 +1338,10 @@ pub enum DaemonMsg {
     /// [`crate::core::kitty_graphics::GraphicsUpdate`] carries compact metadata
     /// and unexpanded resource bytes outside terminal output and replay.
     Graphics(GraphicsPacket),
+    /// Ordered pane colour projection: a full snapshot for a fresh consumer or
+    /// the deltas produced since the last frame. Sent only to a consumer that
+    /// opted in with [`ClientMsg::SubscribePaneColors`].
+    Colors(Vec<u8>),
     /// A resource has not been accepted until every rendering consumer grants
     /// its actual source/decode/GPU reservation. No pixel payload is sent here.
     GraphicsOffer {
@@ -1199,6 +1365,21 @@ pub enum DaemonMsg {
     /// A completed OSC 5522 clipboard write. The daemon strips the control
     /// sequence from replay; the GUI decides whether it may touch the clipboard.
     ClipboardWrite(Vec<u8>),
+    /// A frontend-bound `q`: only the pane's current controller receives it,
+    /// and only when that controller declared the monochrome-render opt-in —
+    /// the credential that says a real font stack stands behind its coverage
+    /// answer. Only the daemon writes the reply. `token` correlates the
+    /// answer with the request; `cp` is the queried codepoint.
+    GlyphQuery {
+        token: u64,
+        cp: u32,
+    },
+    /// A full authoritative glossary snapshot (`GlyphFrame` encoding), sent
+    /// after the replayed text to a consumer that opted in with
+    /// [`ClientMsg::SubscribeGlyphState`]. The generation distinguishes stale
+    /// snapshots; the daemon is the only owner of the registry.
+    GlyphState(Vec<u8>),
+    Progress(Option<PaneProgress>),
     Cwd(PathBuf),
     Prompt {
         active: bool,
@@ -1250,6 +1431,21 @@ mod kind {
     pub const GRAPHICS_PRESSURE: u8 = 68;
     pub const GRAPHICS_VIEWPORT: u8 = 69;
     pub const GRAPHICS_PRESSURE_RESULT: u8 = 70;
+    /// Client -> daemon: the controller's font-coverage answer for one query.
+    pub const GLYPH_QUERY_RESULT: u8 = 71;
+    /// Client -> daemon: opt in to the retained glossary projection. The kind
+    /// spaces are direction-scoped, so 72 is reserved for this client message
+    /// and for the daemon's `GlyphQuery` above.
+    pub const SUBSCRIBE_GLYPH_STATE: u8 = 72;
+    /// Daemon -> render-opted controller: a frontend-bound `q` awaiting that
+    /// controller's coverage answer.
+    pub const GLYPH_QUERY: u8 = 72;
+    /// Daemon -> opted-in consumer: a bounded full glossary snapshot after the
+    /// replayed text. Never sent to a peer that did not opt in.
+    pub const GLYPH_STATE: u8 = 73;
+    /// Client -> daemon: the controller's full monochrome-render opt-in; the
+    /// only credential that lets the pane answer `s` with `fmt=glyf`.
+    pub const SUBSCRIBE_GLYPH_RENDER: u8 = 74;
     pub const DETACH: u8 = 5;
     pub const KILL: u8 = 6;
     pub const LIST: u8 = 7;
@@ -1278,6 +1474,9 @@ mod kind {
     pub const SEND_INPUT: u8 = 55;
     pub const HANDOFF: u8 = 56;
     pub const AGENT_EVENT: u8 = 58;
+    /// Opt in to authoritative pane colour frames, after the peer advertises
+    /// `FEATURE_PANE_COLORS`. A peer that predates the feature never sees it.
+    pub const SUBSCRIBE_PANE_COLORS: u8 = 59;
 
     pub const SPAWNED: u8 = 1;
     pub const SNAPSHOT: u8 = 2;
@@ -1306,7 +1505,10 @@ mod kind {
     pub const INPUT_ACK: u8 = 51;
     /// Authoritative graphics updates, encoded outside the JSON message arms.
     pub const GRAPHICS: u8 = 60;
+    /// Ordered pane colour projection, encoded as a bounded `ColorFrame`.
+    pub const COLORS: u8 = 61;
     pub const CLIPBOARD_WRITE: u8 = 62;
+    pub const PROGRESS: u8 = 71;
 }
 
 pub fn write_frame<W: Write>(w: &mut W, kind: u8, payload: &[u8]) -> io::Result<()> {
@@ -1463,6 +1665,9 @@ impl ClientMsg {
     pub fn encode<W: Write>(&self, w: &mut W) -> io::Result<()> {
         match self {
             ClientMsg::Negotiate { protocol } => write_frame(w, kind::VERSION, &to_json(protocol)?),
+            ClientMsg::SubscribePaneColors => write_frame(w, kind::SUBSCRIBE_PANE_COLORS, &[]),
+            ClientMsg::SubscribeGlyphState => write_frame(w, kind::SUBSCRIBE_GLYPH_STATE, &[]),
+            ClientMsg::SubscribeGlyphRender => write_frame(w, kind::SUBSCRIBE_GLYPH_RENDER, &[]),
             ClientMsg::Spawn {
                 cwd,
                 size,
@@ -1535,6 +1740,9 @@ impl ClientMsg {
             }
             ClientMsg::GraphicsViewport(viewport) => {
                 write_frame(w, kind::GRAPHICS_VIEWPORT, &to_json(viewport)?)
+            }
+            ClientMsg::GlyphQueryResult { token, cp, system } => {
+                write_frame(w, kind::GLYPH_QUERY_RESULT, &to_json(&(token, cp, system))?)
             }
             ClientMsg::Input(bytes) => write_frame(w, kind::INPUT, bytes),
             ClientMsg::ClearPresentation { history } => {
@@ -1616,6 +1824,9 @@ impl ClientMsg {
             kind::VERSION if !payload.is_empty() => ClientMsg::Negotiate {
                 protocol: from_json(&payload)?,
             },
+            kind::SUBSCRIBE_PANE_COLORS => ClientMsg::SubscribePaneColors,
+            kind::SUBSCRIBE_GLYPH_STATE => ClientMsg::SubscribeGlyphState,
+            kind::SUBSCRIBE_GLYPH_RENDER => ClientMsg::SubscribeGlyphRender,
             kind::SPAWN => {
                 let (cwd, size) = from_json(&payload)?;
                 ClientMsg::Spawn {
@@ -1692,6 +1903,10 @@ impl ClientMsg {
                 key: from_json(&payload)?,
             },
             kind::GRAPHICS_VIEWPORT => ClientMsg::GraphicsViewport(from_json(&payload)?),
+            kind::GLYPH_QUERY_RESULT => {
+                let (token, cp, system) = from_json(&payload)?;
+                ClientMsg::GlyphQueryResult { token, cp, system }
+            }
             kind::INPUT => ClientMsg::Input(payload),
             kind::CLEAR_PRESENTATION => ClientMsg::ClearPresentation {
                 history: from_json(&payload)?,
@@ -1800,6 +2015,7 @@ impl DaemonMsg {
             DaemonMsg::Snapshot(bytes) => write_frame(w, kind::SNAPSHOT, bytes),
             DaemonMsg::Output(bytes) => write_frame(w, kind::OUTPUT, bytes),
             DaemonMsg::Graphics(frame) => write_frame(w, kind::GRAPHICS, frame),
+            DaemonMsg::Colors(frame) => write_frame(w, kind::COLORS, frame),
             DaemonMsg::GraphicsOffer {
                 token,
                 key,
@@ -1821,6 +2037,11 @@ impl DaemonMsg {
                 &to_json(&(key, reclaimed))?,
             ),
             DaemonMsg::ClipboardWrite(frame) => write_frame(w, kind::CLIPBOARD_WRITE, frame),
+            DaemonMsg::GlyphQuery { token, cp } => {
+                write_frame(w, kind::GLYPH_QUERY, &to_json(&(token, cp))?)
+            }
+            DaemonMsg::GlyphState(frame) => write_frame(w, kind::GLYPH_STATE, frame),
+            DaemonMsg::Progress(state) => write_frame(w, kind::PROGRESS, &to_json(state)?),
             DaemonMsg::Cwd(path) => write_frame(w, kind::CWD, &to_json(path)?),
             DaemonMsg::Prompt {
                 active,
@@ -1876,6 +2097,7 @@ impl DaemonMsg {
             kind::SNAPSHOT => DaemonMsg::Snapshot(payload),
             kind::OUTPUT => DaemonMsg::Output(payload),
             kind::GRAPHICS => DaemonMsg::Graphics(payload.into()),
+            kind::COLORS => DaemonMsg::Colors(payload),
             kind::GRAPHICS_OFFER => {
                 let (token, key, width, height, encoded_bytes, metadata_bytes) =
                     from_json(&payload)?;
@@ -1896,6 +2118,12 @@ impl DaemonMsg {
                 DaemonMsg::GraphicsPressureResult { key, reclaimed }
             }
             kind::CLIPBOARD_WRITE => DaemonMsg::ClipboardWrite(payload),
+            kind::GLYPH_QUERY => {
+                let (token, cp) = from_json(&payload)?;
+                DaemonMsg::GlyphQuery { token, cp }
+            }
+            kind::GLYPH_STATE => DaemonMsg::GlyphState(payload),
+            kind::PROGRESS => DaemonMsg::Progress(from_json(&payload)?),
             kind::CWD => DaemonMsg::Cwd(from_json(&payload)?),
             kind::PROMPT => {
                 let (active, at_prompt, last_exit) = from_json(&payload)?;
@@ -1968,6 +2196,67 @@ mod tests {
         cell_w: 8,
         cell_h: 17,
     };
+
+    #[test]
+    fn progress_wire_round_trips_clear_and_all_optional_percent_states() {
+        for kind in [
+            ProgressKind::Running,
+            ProgressKind::Indeterminate,
+            ProgressKind::Paused,
+            ProgressKind::Error,
+        ] {
+            for percent in [None, Some(0), Some(42), Some(100)] {
+                let message = DaemonMsg::Progress(Some(PaneProgress::new(kind, percent)));
+                let mut wire = Vec::new();
+                message.encode(&mut wire).unwrap();
+                assert_eq!(DaemonMsg::read(&mut wire.as_slice()).unwrap(), message);
+            }
+        }
+        let mut wire = Vec::new();
+        DaemonMsg::Progress(None).encode(&mut wire).unwrap();
+        assert_eq!(
+            DaemonMsg::read(&mut wire.as_slice()).unwrap(),
+            DaemonMsg::Progress(None)
+        );
+    }
+
+    #[test]
+    fn progress_requires_actual_endpoint_v18_before_any_session_request() {
+        use std::net::{TcpListener, TcpStream};
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let mut client = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+        let (mut server, _) = listener.accept().unwrap();
+        let peer = std::thread::spawn(move || {
+            server
+                .set_read_timeout(Some(std::time::Duration::from_secs(5)))
+                .unwrap();
+            assert!(matches!(
+                ClientMsg::read(&mut server).unwrap(),
+                ClientMsg::Negotiate {
+                    protocol: PROTOCOL_VERSION
+                }
+            ));
+            let mut old = DaemonVersion::current();
+            old.protocol = 17;
+            DaemonMsg::Version(old).encode(&mut server).unwrap();
+            let mut byte = [0];
+            assert_eq!(
+                server.read(&mut byte).unwrap(),
+                0,
+                "refusal must not send Spawn, Attach, Handoff or restart"
+            );
+        });
+        client
+            .set_read_timeout(Some(std::time::Duration::from_secs(5)))
+            .unwrap();
+        let error = negotiate_pane(&mut client).unwrap_err().to_string();
+        assert!(
+            error.contains("v17") && error.contains("update lyrel"),
+            "{error}"
+        );
+        drop(client);
+        peer.join().unwrap();
+    }
 
     #[test]
     fn graphics_packet_shares_one_charge_until_last_owner_drops() {
@@ -3252,5 +3541,40 @@ mod tests {
             DaemonMsg::Agent(Some(crate::core::cli_agent::CLIAgent::Pi))
         );
         assert!(DaemonMsg::from_frame(kind::AGENT, b"42".to_vec()).is_err());
+    }
+
+    /// The colour opt-in and projection are additive: both peers only use the
+    /// new kinds after the feature is advertised, and neither number collides
+    /// with the Progress kind reserved by the parallel stage.
+    #[test]
+    fn pane_colour_messages_round_trip_on_their_own_kinds() {
+        use crate::core::pane_colors::{ColorFrame, PaneColors};
+
+        assert_ne!(kind::COLORS, 71, "Progress owns DaemonMsg kind 71");
+        assert_ne!(kind::COLORS, kind::GRAPHICS);
+        assert_ne!(kind::COLORS, kind::CLIPBOARD_WRITE);
+        assert_ne!(kind::SUBSCRIBE_PANE_COLORS, kind::VERSION);
+
+        let mut colors = PaneColors::default();
+        colors.set(1, [0x11, 0x22, 0x33]);
+        let frame = ColorFrame::snapshot(&colors).encode();
+        let msg = DaemonMsg::Colors(frame);
+        let mut wire = Vec::new();
+        msg.encode(&mut wire).unwrap();
+        assert_eq!(wire[4], kind::COLORS);
+        assert_eq!(
+            DaemonMsg::from_frame(wire[4], wire[5..].to_vec()).unwrap(),
+            msg
+        );
+
+        let mut wire = Vec::new();
+        ClientMsg::SubscribePaneColors.encode(&mut wire).unwrap();
+        assert_eq!(wire[4], kind::SUBSCRIBE_PANE_COLORS);
+        assert!(wire[5..].is_empty());
+        assert_eq!(
+            ClientMsg::from_frame(wire[4], wire[5..].to_vec()).unwrap(),
+            ClientMsg::SubscribePaneColors
+        );
+        assert!(DaemonVersion::current().has_feature(FEATURE_PANE_COLORS));
     }
 }

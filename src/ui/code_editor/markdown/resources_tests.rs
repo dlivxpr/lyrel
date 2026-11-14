@@ -816,6 +816,7 @@ fn attachment_completion_rejects_changed_source_and_selection(cx: &mut TestAppCo
 fn resource_errors_svg_isolation_and_automatic_network_no_redirect(cx: &mut TestAppContext) {
     use std::io::{Read as _, Write as _};
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+    crate::ui::i18n::set_locale("zh-CN");
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     listener.set_nonblocking(true).unwrap();
     let address = listener.local_addr().unwrap();

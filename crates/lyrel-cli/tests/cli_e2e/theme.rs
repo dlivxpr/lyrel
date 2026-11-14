@@ -86,7 +86,7 @@ fn exercise_detached_queries(daemon: &Daemon, refold: bool) {
     query(b"\x1b[?996n", 1, b"\x1b[?997;2n");
     #[cfg(unix)]
     if refold {
-        query(b"\x1b[c", 1, b"\x1b[?6c");
+        query(b"\x1b[c", 1, b"\x1b[?4;6c");
         // Explicit manual handoff, not automatic GUI startup adoption.
         let client = PaneClient::at(daemon.pane_endpoint());
         let before = client.version().unwrap().instance;
@@ -98,7 +98,7 @@ fn exercise_detached_queries(daemon: &Daemon, refold: bool) {
         return;
     }
     // Existing DA1 behavior uses the same real daemon/PTY boundary.
-    query(b"\x1b[c\x1b[0c", 2, b"\x1b[?6c\x1b[?6c");
+    query(b"\x1b[c\x1b[0c", 2, b"\x1b[?4;6c\x1b[?4;6c");
     let hint = daemon.config_dir.join("appearance.json");
     std::fs::write(&hint, r#"{"dark":true}"#).unwrap();
     query(b"\x1b[?996n\x1b[?996n", 2, b"\x1b[?997;1n\x1b[?997;1n");
@@ -128,7 +128,7 @@ fn exercise_detached_queries(daemon: &Daemon, refold: bool) {
     query(b"\x1b[?99", usize::MAX, b"");
     attached.detach().unwrap();
     query(b"6n", 1, b"\x1b[?997;1n");
-    query(b"\x1b[c", 1, b"\x1b[?6c");
+    query(b"\x1b[c", 1, b"\x1b[?4;6c");
 }
 
 fn await_theme_fixture_ready(session: &mut lyrel_core::client::PaneSession) {

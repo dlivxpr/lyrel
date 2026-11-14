@@ -1,6 +1,6 @@
 use std::borrow::Cow;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 use rio_vt::ansi::CursorShape;
@@ -20,10 +20,10 @@ use crate::core::cli_agent::{AgentSessionState, AgentStatus, CLIAgent};
 use crate::core::config::CursorStyle as ConfigCursorStyle;
 use crate::core::osc::{Note, NoteBudget};
 use crate::daemon::protocol::{
-    AuthPromptKind, AuthResponse, ClientMsg, DaemonMsg, LoopbackForward, LoopbackForwardRequest,
-    ManagedForward, NativeSshSpec, PaneProcs, RemoteContext, RestoreFrom, SftpEntry,
-    SftpJobProgress, SftpOp, SftpOpResult, SftpTransferSpec, ShellSpec, SshForwardRule, SshPhase,
-    WinSize, WorkspaceOp, WorkspaceRequest,
+    AuthPromptKind, AuthResponse, ClientMsg, DaemonMsg, DaemonVersion, LoopbackForward,
+    LoopbackForwardRequest, ManagedForward, NativeSshSpec, PaneProcs, RemoteContext, RestoreFrom,
+    SftpEntry, SftpJobProgress, SftpOp, SftpOpResult, SftpTransferSpec, ShellSpec, SshForwardRule,
+    SshPhase, WinSize, WorkspaceOp, WorkspaceRequest,
 };
 use crate::daemon::transport::Stream;
 
@@ -58,6 +58,8 @@ pub enum PaneEvent {
     Title(String),
     /// Reset to the default window title.
     ResetTitle,
+    /// Authoritative progress changed, independent of terminal output repaint.
+    ProgressChanged,
     /// Write some text to the PTY.
     PtyWrite(String),
     /// Shutdown request.
@@ -75,10 +77,21 @@ pub enum PaneEvent {
         usize,
         Arc<dyn Fn(ColorRgb) -> String + Sync + Send + 'static>,
     ),
+    /// The pane's effective colour layer changed; the view re-evaluates the
+    /// dark/light report it owes a program that enabled DEC mode 2031.
+    ColorChanged,
     /// Terminal bell ring.
     Bell,
     /// Request to write the text area size, formatter attached.
     TextAreaSizeRequest(Arc<dyn Fn(rio_vt::event::WindowSize) -> String + Sync + Send + 'static>),
+    /// The daemon asks this controller whether the pane's actual font stack
+    /// renders `cp`; the view answers with [`RemoteTerminal::answer_glyph_query`].
+    GlyphQuery { token: u64, cp: u32 },
+    /// A producer used Glyph Protocol against an endpoint that does not
+    /// advertise the daemon-owned glossary. Nothing was derived or answered;
+    /// the user is told to update the backend instead of being shown a
+    /// half-working picture.
+    GlyphUnsupported,
 }
 
 impl std::fmt::Debug for PaneEvent {
@@ -87,13 +100,17 @@ impl std::fmt::Debug for PaneEvent {
             PaneEvent::Wakeup => write!(f, "Wakeup"),
             PaneEvent::Title(title) => write!(f, "Title({title})"),
             PaneEvent::ResetTitle => write!(f, "ResetTitle"),
+            PaneEvent::ProgressChanged => write!(f, "ProgressChanged"),
             PaneEvent::PtyWrite(text) => write!(f, "PtyWrite({text})"),
             PaneEvent::Exit => write!(f, "Exit"),
             PaneEvent::ClipboardStore(ty, text) => write!(f, "ClipboardStore({ty:?}, {text})"),
             PaneEvent::ClipboardLoad(ty, _) => write!(f, "ClipboardLoad({ty:?})"),
             PaneEvent::ColorRequest(index, _) => write!(f, "ColorRequest({index})"),
+            PaneEvent::ColorChanged => write!(f, "ColorChanged"),
             PaneEvent::Bell => write!(f, "Bell"),
             PaneEvent::TextAreaSizeRequest(_) => write!(f, "TextAreaSizeRequest"),
+            PaneEvent::GlyphQuery { token, cp } => write!(f, "GlyphQuery({token}, {cp:x})"),
+            PaneEvent::GlyphUnsupported => write!(f, "GlyphUnsupported"),
         }
     }
 }
@@ -109,6 +126,20 @@ struct ParseState {
     history_limit: AtomicUsize,
     /// Cursor compensation and copy tab stops, sampled under the VT guard.
     presentation: Mutex<super::presentation::ParsePresentation>,
+    /// Derived picture of the daemon-accepted glossary for this pane.
+    glyphs: std::sync::Arc<super::glyph::GlyphStore>,
+    /// The negotiated endpoint advertises the daemon-owned glossary. Without
+    /// it no producer body is applied, derived or answered.
+    glyph_authority: AtomicBool,
+    /// The actual endpoint retains the glossary outside the ring and projects
+    /// it to consumers that opted in.
+    glyph_state: AtomicBool,
+    /// Link generation: incremented before a relink so a retired reader's late
+    /// glyph parse cannot mutate the successor's store.
+    glyph_generation: AtomicU64,
+    /// A body arrived without that authority; the view reports it once.
+    glyph_denied: AtomicBool,
+    glyph_denied_reported: AtomicBool,
 }
 
 impl EventProxy {
@@ -153,9 +184,9 @@ impl EventListener for EventProxy {
             // view's own; repaints arrive with the batch `Wakeup`.
             //
             // `ColorChange` — an echo of an OSC 4 set landing in
-            // `term.colors`. The paint path reads this product's own
-            // palette by design (queries are answered from it too), so
-            // there is no consumer.
+            // `term.colors`. The paint path reads this product's effective
+            // palette by design (queries are answered from that same table),
+            // so there is no consumer.
             //
             // `CurrentDirectoryChanged` — the daemon's sniffer is the
             // authoritative cwd source; this echoes the same OSC 7.
@@ -237,6 +268,7 @@ struct ReaderSignals {
     remote: Arc<Mutex<Option<RemoteContext>>>,
     agent: Arc<Mutex<Option<CLIAgent>>>,
     agent_session: Arc<Mutex<AgentSlot>>,
+    progress: Arc<Mutex<Option<crate::daemon::protocol::PaneProgress>>>,
     /// Whether this link still owes us the attach replay. The reader keeps it
     /// as a plain local: a link's replay is a property of that link's stream
     /// position, and nothing outside the reader thread ever needs to read it.
@@ -262,6 +294,9 @@ struct ReaderSignals {
     local_conpty: Arc<AtomicBool>,
     /// Whether the program in the pane switched on DEC mode 2031.
     color_scheme_updates: Arc<AtomicBool>,
+    /// The pane's effective colour layer: live output is folded in at its
+    /// exact stream position, and daemon projections converge it after replay.
+    colors: Arc<Mutex<lyrel_core::core::pane_colors::PaneColors>>,
 }
 
 /// What kind of pty is at the far end of a pane's link, which is what decides
@@ -537,6 +572,13 @@ pub struct RemoteTerminal {
     pub term: Arc<FairMutex<Crosswords<EventProxy>>>,
     pub events: smol::channel::Receiver<PaneEvent>,
     pub palette: [ColorRgb; 256],
+    /// Program-selected pane colours, updated in stream order by live parsing
+    /// and by the daemon's authoritative projections. Fixed-size and bounded.
+    pub color_overrides: Arc<Mutex<lyrel_core::core::pane_colors::PaneColors>>,
+    /// The backend this link actually negotiated with, when the handshake
+    /// recorded it. Kept so a routed pane reports the remote's guarantees, not
+    /// this build's.
+    pane_version: Option<DaemonVersion>,
     pub exited: bool,
     /// This link reattached to a pane that was already running rather than
     /// spawning a fresh one, so whatever it reports first — an agent in the
@@ -566,6 +608,7 @@ pub struct RemoteTerminal {
     auto_supplied_password: bool,
     agent: Arc<Mutex<Option<CLIAgent>>>,
     agent_session: Arc<Mutex<AgentSlot>>,
+    progress: Arc<Mutex<Option<crate::daemon::protocol::PaneProgress>>>,
     /// Derived decode/render cache for the daemon's authoritative graphics state.
     /// The reader applies ordered out-of-band `Graphics` updates and captures
     /// client-grid placement anchors; protocol identities and resource lifetimes
@@ -618,6 +661,7 @@ impl RemoteTerminal {
         }
     }
 
+    #[cfg(test)]
     pub fn adopt_relink(
         &mut self,
         stream: Stream,
@@ -627,6 +671,64 @@ impl RemoteTerminal {
         cell_w: u16,
         cell_h: u16,
     ) -> anyhow::Result<()> {
+        self.adopt_relink_with_version(stream, buffered, route, size, cell_w, cell_h, None)
+    }
+
+    /// A relink negotiated again, so the pane keeps the endpoint's current
+    /// version and capability answer instead of the one it spawned against.
+    pub fn adopt_relink_with_version(
+        &mut self,
+        stream: Stream,
+        buffered: Vec<u8>,
+        route: &PaneRoute,
+        size: TermSize,
+        cell_w: u16,
+        cell_h: u16,
+        version: Option<DaemonVersion>,
+    ) -> anyhow::Result<()> {
+        self.pane_version = version;
+        self.proxy
+            .parse_state
+            .presentation
+            .lock()
+            .unwrap()
+            .endpoint_sixel = self.pane_version.as_ref().is_some_and(|version| {
+            version.has_feature(crate::daemon::protocol::FEATURE_STATIC_SIXEL)
+        });
+        let glyph_authority = self.pane_version.as_ref().is_some_and(|version| {
+            version.has_feature(crate::daemon::protocol::FEATURE_GLYPH_REGISTRY)
+        });
+        let glyph_state = self.pane_version.as_ref().is_some_and(|version| {
+            version.has_feature(crate::daemon::protocol::FEATURE_GLYPH_STATE)
+        });
+        let had_glyphs = !self.proxy.parse_state.glyphs.is_empty();
+        // The new link's endpoint is the one that answers for this pane now;
+        // the replayed stream no longer supplies glyph authority, so the new
+        // link's projection rebuilds the store. Bump first: an old reader
+        // still parsing a batch is retired by the same fence as its images.
+        self.proxy
+            .parse_state
+            .glyph_authority
+            .store(glyph_authority, Ordering::Relaxed);
+        self.proxy
+            .parse_state
+            .glyph_state
+            .store(glyph_state, Ordering::Relaxed);
+        self.proxy
+            .parse_state
+            .glyph_generation
+            .fetch_add(1, Ordering::SeqCst);
+        self.proxy
+            .parse_state
+            .glyph_denied
+            .store(false, Ordering::Relaxed);
+        self.proxy.parse_state.glyphs.reset_link();
+        if had_glyphs && glyph_authority && !glyph_state {
+            // The old backend can keep serving live registrations but cannot
+            // restore them after the ring trims their bytes. Say so instead of
+            // presenting a ring-only recovery as complete support.
+            self.proxy.send(PaneEvent::GlyphUnsupported);
+        }
         let signals = self.reader_signals(false);
         self.connection.adopt_relink(
             stream,
@@ -649,6 +751,7 @@ impl RemoteTerminal {
             remote: self.remote_context.clone(),
             agent: self.agent.clone(),
             agent_session: self.agent_session.clone(),
+            progress: self.progress.clone(),
             awaiting_replay,
             exited: self.exited_flag.clone(),
             child_exited: self.child_exited.clone(),
@@ -663,6 +766,7 @@ impl RemoteTerminal {
             clipboard_write_busy: self.clipboard_write_busy.clone(),
             local_conpty: self.local_conpty.clone(),
             color_scheme_updates: self.color_scheme_updates.clone(),
+            colors: self.color_overrides.clone(),
         }
     }
 
@@ -678,6 +782,7 @@ impl RemoteTerminal {
             PtySource::for_route(&PaneRoute::Local),
             true,
             crate::terminal::images::ImageStore::new(),
+            None,
         )
     }
 
@@ -699,6 +804,21 @@ impl RemoteTerminal {
         buffered: Vec<u8>,
         pty: PtySource,
     ) -> anyhow::Result<Self> {
+        Self::from_stream_with_endpoint(stream, size, buffered, pty, None)
+    }
+
+    /// A test pane over an already negotiated connection. `version` is the
+    /// answer that connection actually received; the production handshake
+    /// passes it so DA1 describes the real endpoint, and `None` models an
+    /// endpoint that never negotiated static Sixel.
+    #[cfg(any(test, feature = "native-markdown-tests"))]
+    pub(super) fn from_stream_with_endpoint(
+        stream: Stream,
+        size: TermSize,
+        buffered: Vec<u8>,
+        pty: PtySource,
+        endpoint: Option<DaemonVersion>,
+    ) -> anyhow::Result<Self> {
         Self::from_stream_parts(
             stream,
             size,
@@ -706,6 +826,7 @@ impl RemoteTerminal {
             pty,
             false,
             crate::terminal::images::ImageStore::new(),
+            endpoint,
         )
     }
 
@@ -722,15 +843,32 @@ impl RemoteTerminal {
         pty: PtySource,
         awaiting_replay: bool,
         images: crate::terminal::images::ImageStore,
+        version: Option<DaemonVersion>,
     ) -> anyhow::Result<Self> {
         let user_config = crate::core::config::Config::load();
         let (tx, rx) = smol::channel::unbounded();
+        let mut presentation = super::presentation::ParsePresentation::new(size.cols);
+        presentation.endpoint_sixel = version.as_ref().is_some_and(|version| {
+            version.has_feature(crate::daemon::protocol::FEATURE_STATIC_SIXEL)
+        });
+        let glyph_authority = version.as_ref().is_some_and(|version| {
+            version.has_feature(crate::daemon::protocol::FEATURE_GLYPH_REGISTRY)
+        });
+        let glyph_state = version.as_ref().is_some_and(|version| {
+            version.has_feature(crate::daemon::protocol::FEATURE_GLYPH_STATE)
+        });
         let proxy = EventProxy {
             tx,
             parse_state: Arc::new(ParseState {
                 replaying: AtomicBool::new(false),
                 history_limit: AtomicUsize::new(user_config.scrollback_limit),
-                presentation: Mutex::new(super::presentation::ParsePresentation::new(size.cols)),
+                presentation: Mutex::new(presentation),
+                glyphs: Arc::new(super::glyph::GlyphStore::new()),
+                glyph_authority: AtomicBool::new(glyph_authority),
+                glyph_state: AtomicBool::new(glyph_state),
+                glyph_generation: AtomicU64::new(0),
+                glyph_denied: AtomicBool::new(false),
+                glyph_denied_reported: AtomicBool::new(false),
             }),
         };
 
@@ -742,6 +880,7 @@ impl RemoteTerminal {
         let remote_context: Arc<Mutex<Option<RemoteContext>>> = Arc::new(Mutex::new(None));
         let agent: Arc<Mutex<Option<CLIAgent>>> = Arc::new(Mutex::new(None));
         let agent_session: Arc<Mutex<AgentSlot>> = Arc::new(Mutex::new(AgentSlot::default()));
+        let progress = Arc::new(Mutex::new(None));
         let exited_flag = Arc::new(AtomicBool::new(false));
         let child_exited = Arc::new(AtomicBool::new(false));
         let zle_reading = Arc::new(AtomicBool::new(false));
@@ -756,6 +895,9 @@ impl RemoteTerminal {
 
         let local_conpty = Arc::new(AtomicBool::new(pty == PtySource::LocalConpty));
         let color_scheme_updates = Arc::new(AtomicBool::new(false));
+        let color_overrides = Arc::new(Mutex::new(
+            lyrel_core::core::pane_colors::PaneColors::default(),
+        ));
         let connection = PaneConnection::start(
             stream,
             buffered,
@@ -768,6 +910,7 @@ impl RemoteTerminal {
                 remote: remote_context.clone(),
                 agent: agent.clone(),
                 agent_session: agent_session.clone(),
+                progress: progress.clone(),
                 awaiting_replay,
                 exited: exited_flag.clone(),
                 child_exited: child_exited.clone(),
@@ -782,6 +925,7 @@ impl RemoteTerminal {
                 clipboard_write_busy: clipboard_write_busy.clone(),
                 local_conpty: local_conpty.clone(),
                 color_scheme_updates: color_scheme_updates.clone(),
+                colors: color_overrides.clone(),
             },
         )?;
 
@@ -789,6 +933,8 @@ impl RemoteTerminal {
             term,
             events: rx,
             palette: super::palette::build(),
+            color_overrides,
+            pane_version: version,
             exited: false,
             reattached: awaiting_replay,
             cwd,
@@ -806,6 +952,7 @@ impl RemoteTerminal {
             auto_supplied_password: false,
             agent,
             agent_session,
+            progress,
             images,
             clipboard_writes,
             osc_notes,
@@ -824,6 +971,15 @@ impl RemoteTerminal {
 
     pub fn detach_link(&mut self) {
         self.connection.detach(&self.images);
+        // Retirement fences future parser writes. Wait out the current grid
+        // slice before releasing its claim so that slice cannot restore it.
+        let pointer_released = {
+            let _grid = self.term.lock();
+            self.presentation_facts().set_pointer(None)
+        };
+        if pointer_released {
+            self.proxy.send(PaneEvent::Wakeup);
+        }
         self.poll_exited();
     }
 
@@ -940,6 +1096,10 @@ impl RemoteTerminal {
         self.cwd.lock().ok().and_then(|g| g.clone())
     }
 
+    pub fn progress(&self) -> Option<crate::daemon::protocol::PaneProgress> {
+        *self.progress.lock().unwrap()
+    }
+
     pub fn remote_context(&self) -> Option<RemoteContext> {
         self.remote_context.lock().ok().and_then(|g| g.clone())
     }
@@ -947,6 +1107,13 @@ impl RemoteTerminal {
     /// See the field: an attach to a running pane, not a fresh spawn.
     pub fn reattached(&self) -> bool {
         self.reattached
+    }
+
+    /// The backend this pane's stream actually negotiated with. `None` only
+    /// for in-process test streams that never performed the handshake.
+    #[allow(dead_code)]
+    pub fn pane_version(&self) -> Option<&DaemonVersion> {
+        self.pane_version.as_ref()
     }
 
     pub fn at_prompt(&self) -> bool {
@@ -985,6 +1152,19 @@ impl RemoteTerminal {
     /// and deletes images as out-of-band frames arrive from the daemon.
     pub fn images(&self) -> crate::terminal::images::ImageStore {
         self.images.clone()
+    }
+
+    /// The pane's derived picture of the daemon-accepted glyph glossary.
+    pub fn glyphs(&self) -> Arc<crate::terminal::glyph::GlyphStore> {
+        self.proxy.parse_state.glyphs.clone()
+    }
+
+    /// Answer one frontend-bound `q` with the pane's actual font coverage.
+    /// The daemon combines it with the glossary bit it captured and writes the
+    /// single reply; this method never writes to the PTY itself.
+    pub fn answer_glyph_query(&self, token: u64, cp: u32, system: bool) {
+        self.connection
+            .send(crate::daemon::protocol::ClientMsg::GlyphQueryResult { token, cp, system });
     }
 
     /// Desktop notifications the program wrote (OSC 9, 99, 777), oldest
@@ -1611,7 +1791,8 @@ mod tests {
             std::thread::sleep(std::time::Duration::from_millis(5));
         }
 
-        assert_eq!(reply.as_deref(), Some("\x1b[?7u"));
+        // Alternate-key bit 4 is unavailable without native physical-key data.
+        assert_eq!(reply.as_deref(), Some("\x1b[?3u"));
         assert!(
             term.term
                 .lock()

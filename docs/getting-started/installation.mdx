@@ -129,7 +129,7 @@ lyrel 独立初版为 `0.1.0`；缺少匹配包时不会回退下载上游安装
 
 Windows／macOS 使用 stable Rust 工具链与仓库已有锁文件运行 `cargo build --locked`；应用二进制文件名为 `lyrel-app`，CLI 为 `lyrel`，headless server 为 `lyrel-server`。Linux 使用下列同时排除根桌面包与 `lyrel-markdown-editor` 的命令；GUI-free `lyrel-text` 仍参与 headless 检查，直接构建桌面包会明确拒绝。
 
-GUI 统一通过正式 `gpui-kit =0.9.1` 的官方 `gpui-fast` feature 选择 GPUI Fast，锁文件基线为 `0.1.14` 家族；Kit 同步选择 core、native platform、Base、Component 与 assets 的 Fast 类型。应用导入与测试宏仍经 `gpui_kit`，不直接依赖 engine、不增加 crate alias／patch 或双后端产品开关。GUI HTTP 使用 `gpui-pre-reqwest-client =0.3.12`，与 Fast 共用 `gpui-pre-http-client =0.3.12` 类型身份；保留 `tree-sitter-languages` 和测试专用 `test-support`。当前 Rio 组合为 `=0.5.29`；完整 Kit／Fast／Rio 组合的构建、行为与性能须按升级后的候选重新验证，不能沿用 `0.9.0` 的检查点结果。本轮 SDK 问题与实测边界由 [#235](https://github.com/dlivxpr/lyrel/issues/235) 记录，真实 Mac 验收仍由 [#167](https://github.com/dlivxpr/lyrel/issues/167) 跟踪。
+GUI 统一通过正式 `gpui-kit =0.9.1` 的官方 `gpui-fast` feature 选择 GPUI Fast，锁文件基线为 `0.1.14` 家族；Kit 同步选择 core、native platform、Base、Component 与 assets 的 Fast 类型。应用导入与测试宏仍经 `gpui_kit`，不直接依赖 engine、不增加 crate alias／patch 或双后端产品开关。GUI HTTP 使用 `gpui-pre-reqwest-client =0.3.12`，与 Fast 共用 `gpui-pre-http-client =0.3.12` 类型身份；保留 `tree-sitter-languages` 和测试专用 `test-support`。当前 Rio 组合为 `=0.5.30`；完整 Kit／Fast／Rio 组合的构建、行为与性能须按升级后的候选重新验证，不能沿用 `0.9.0` 的检查点结果。本轮 SDK 问题与实测边界由 [#235](https://github.com/dlivxpr/lyrel/issues/235) 记录，真实 Mac 验收仍由 [#167](https://github.com/dlivxpr/lyrel/issues/167) 跟踪。
 
 `Cargo.lock` 会收录可选后端及其他平台的依赖；Kit 的 additive features 也会保留合法的 `gpui-pre` 上游构建链，不能以包名前缀判断当前公开类型。用 `cargo tree --locked -p lyrel --target x86_64-pc-windows-msvc -e features -i gpui-fast@0.1.14` 检查启用层；macOS 对应使用 `--target aarch64-apple-darwin -i gpui-fast-macos@0.1.14`，确认 `font-kit`，并另查 `-i gpui-pre-http-client@0.3.12`。Kit 使用兼容的 `0.1.x` 约束，更新锁文件时须复核 Fast 家族版本，不能意外漂移此基线。
 
@@ -156,7 +156,7 @@ Windows PowerShell 每条命令写成一行，不复制 Bash 的续行符。单�
 
 Fast 的 development profile 为当前启用的 core、platform、macros 和 Windows／macOS／Apple backend 保留优化；运行性能只比较同条件 Release。官方 `GPUI_VIEW_RETENTION=0` 可在启动时关闭 view retention 以定位差异（默认开启），不是产品 backend 回退。正式二进制的 `LYREL_FPS=1` 只记录终端 paint 次数／耗时，不是 retention 命中率、GPU 帧延迟或物理输入延迟。官方 `Window::reset_layout_stats()`／`layout_stats()` 仅在 `test-support` 提供，包含 `views_built`、`views_reused`、`nodes_created`、`nodes_reused`、`style_writes` 及各 phase 时间；需要时在已有 rooted consumer 临时采样，不在生产热路径新增计数器。必须先测量终端 paint 中实体写入的实际失效影响，再决定是否修复；保留单一 frame buffer／metadata owner、已有生命周期与隐藏 pane 通知门控。
 
-GUI、CLI 与 daemon 的图片权威状态统一采用正式 `rio-vt =0.5.29`（`default-features = false`），`rio-graphics` 与 `rio-unicode` 同时精确固定为 `=0.5.29`，传递测宽依赖为同版 `rio-grapheme-width`。保留 lyrel 自有 daemon、PTY 和渲染，不引入 Rio 的 PTY event loop、窗口或 GPU 后端，不复制宽度表或 VT parser。`lyrel-core` 的 `terminal-width` feature 只控制输入栏／CLI 的测宽 API，不决定 daemon 是否链接 VT 网格。第三方 Rust 依赖来自正式 registry，使用锁定归档及标准 Cargo 缓存，不修改下载源码或配置 source replacement。用 `cargo tree --locked --workspace --target all -e features -i rio-vt@0.5.29 -i rio-graphics@0.5.29 -i rio-unicode@0.5.29 -i rio-grapheme-width@0.5.29` 核对共同类型身份和 feature 边界。
+GUI、CLI 与 daemon 的图片权威状态统一采用正式 `rio-vt =0.5.30`（`default-features = false`），`rio-graphics` 与 `rio-unicode` 同时精确固定为 `=0.5.30`，传递测宽依赖为同版 `rio-grapheme-width`。保留 lyrel 自有 daemon、PTY 和渲染，不引入 Rio 的 PTY event loop、窗口或 GPU 后端，不复制宽度表或 VT parser。`lyrel-core` 的 `terminal-width` feature 只控制输入栏／CLI 的测宽 API，不决定 daemon 是否链接 VT 网格。第三方 Rust 依赖来自正式 registry，使用锁定归档及标准 Cargo 缓存，不修改下载源码或配置 source replacement。用 `cargo tree --locked --workspace --target all -e features -i rio-vt@0.5.30 -i rio-graphics@0.5.30 -i rio-unicode@0.5.30 -i rio-grapheme-width@0.5.30` 核对共同类型身份和 feature 边界。
 
 #236 的唯一受限源码导入例外已经接入：`lyrel-markdown-editor` 独立维护固定 Zorite `9f069c73a56b06efc84fb7abb700beb50083c827` 的 MIT `zorite-editor 0.11.3`、`gpui-bidi 0.1.1`、`ratex-gpui 0.4.1` 共 16 个源文件；不复制 GPL 应用编排，不修改 Cargo 下载缓存或引入第二个 GUI engine。`zorite-markdown =0.10.1` 为关闭默认 view feature 的正式语法依赖。原始 Git blob 的 SHA-256、来源与本地适配见 crate 的 `UPSTREAM.toml`；完整 MIT 与独立字体 notices 见 `licenses/` 与根 `LICENSE`，Host 能力和最终验收边界见 `HOST_CAPABILITIES.md`。
 
@@ -202,14 +202,17 @@ CPU／RAM 的 refresh 方法仍返回 `()`，没有可传播的刷新错误；�
   <Tab title="Windows">
     Windows 的 GUI、server、CLI 与测试构建共用已准备的 ConPTY（见 `assets/windows/conpty/README.md`）。
     首次构建或准备目录缺失／损坏时运行 `pwsh scripts/prepare-conpty.ps1`，
-    `LYREL_CONPTY_DIR` 可复用共享准备目录。之后 ConPTY 的构建消费不再联网；
-    Cargo 的 Rust 依赖仍需按锁文件获取或事先缓存。
+    `LYREL_CONPTY_DIR` 可复用共享准备目录。之后使用 `pwsh scripts/cargo-windows.ps1 build ...`
+    或 `pwsh scripts/cargo-windows.ps1 test ...` 替代裸 `cargo build`／`cargo test`，其余参数保持不变。
+    脚本从 Cargo JSON 定位实际 executable 并校验、暂存 ConPTY，再运行测试，兼容 Cargo 1.100 的新产物布局，
+    不依赖固定 `deps/` 或 `OUT_DIR` 层数。`--no-run` 只编译并暂存；源码目录之外的独立产物也须携带完整文件对和许可证。
+    构建消费不再联网；Cargo 的 Rust 依赖仍需按锁文件获取或事先缓存。
 
     ```powershell
     git clone https://github.com/dlivxpr/lyrel
     cd lyrel
     pwsh scripts/prepare-conpty.ps1
-    cargo build --release --locked
+    pwsh scripts/cargo-windows.ps1 build --release --locked
     ```
 
     若启用的 TLS 依赖需要构建 `aws-lc-sys`，须提供 NASM；在 x86_64 MSVC 上也可于本次构建终端设置 `$env:AWS_LC_SYS_PREBUILT_NASM = '1'`，使用该正式 crate 随包提供的预构建汇编对象。此选项不禁用汇编、不修改下载源码，也不应通过覆盖 `RUSTFLAGS` 丢失项目的静态 CRT 参数。

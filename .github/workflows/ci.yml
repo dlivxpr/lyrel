@@ -65,7 +65,7 @@ jobs:
         shell: pwsh
         run: |
           $Failed = $false
-          Get-ChildItem .github/scripts/*.ps1, scripts/prepare-conpty.ps1 | ForEach-Object {
+          Get-ChildItem .github/scripts/*.ps1, scripts/prepare-conpty.ps1, scripts/cargo-windows.ps1 | ForEach-Object {
             $Tokens = $null
             $Errors = $null
             [void][System.Management.Automation.Language.Parser]::ParseFile($_.FullName, [ref]$Tokens, [ref]$Errors)
@@ -155,7 +155,7 @@ jobs:
         if: runner.os != 'Linux'
         # Cold-cache builds have been observed at ~10 min; warm ones at ~90s.
         timeout-minutes: 30
-        run: cargo build --locked --features updater --target ${{ matrix.target }}
+        run: ${{ runner.os == 'Windows' && 'pwsh -NoProfile -File scripts/cargo-windows.ps1' || 'cargo' }} build --locked --features updater --target ${{ matrix.target }}
 
       - name: Build Linux headless
         if: runner.os == 'Linux'
@@ -195,7 +195,7 @@ jobs:
         id: desktop_tests_compile
         if: runner.os != 'Linux'
         timeout-minutes: 30
-        run: cargo test --locked -p lyrel -p lyrel-markdown-editor -p lyrel-text -p lyrel-core -p lyrel-cli -p lyrel-server --features updater --target ${{ matrix.target }} --no-run
+        run: ${{ runner.os == 'Windows' && 'pwsh -NoProfile -File scripts/cargo-windows.ps1' || 'cargo' }} test --locked -p lyrel -p lyrel-markdown-editor -p lyrel-text -p lyrel-core -p lyrel-cli -p lyrel-server --features updater --target ${{ matrix.target }} --no-run
       - name: Test desktop library and headless
         if: runner.os != 'Linux'
         timeout-minutes: 20
@@ -209,7 +209,7 @@ jobs:
         id: native_markdown_compile
         if: ${{ !cancelled() && runner.os != 'Linux' && steps.desktop_tests_compile.outcome == 'success' }}
         timeout-minutes: 30
-        run: cargo test --locked -p lyrel --features updater,native-markdown-tests --test native_markdown --target ${{ matrix.target }} --no-run
+        run: ${{ runner.os == 'Windows' && 'pwsh -NoProfile -File scripts/cargo-windows.ps1' || 'cargo' }} test --locked -p lyrel --features updater,native-markdown-tests --test native_markdown --target ${{ matrix.target }} --no-run
       - name: Test native Markdown
         if: ${{ !cancelled() && runner.os != 'Linux' && steps.native_markdown_compile.outcome == 'success' }}
         timeout-minutes: 10
@@ -222,7 +222,7 @@ jobs:
         id: native_terminal_compile
         if: ${{ !cancelled() && runner.os != 'Linux' && steps.native_markdown_compile.outcome == 'success' }}
         timeout-minutes: 30
-        run: cargo test --locked -p lyrel --features updater,native-markdown-tests --test native_terminal --target ${{ matrix.target }} --no-run
+        run: ${{ runner.os == 'Windows' && 'pwsh -NoProfile -File scripts/cargo-windows.ps1' || 'cargo' }} test --locked -p lyrel --features updater,native-markdown-tests --test native_terminal --target ${{ matrix.target }} --no-run
       - name: Test native terminal
         if: ${{ !cancelled() && runner.os != 'Linux' && steps.native_terminal_compile.outcome == 'success' }}
         timeout-minutes: 10

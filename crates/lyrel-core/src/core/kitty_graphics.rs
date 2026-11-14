@@ -1,4 +1,4 @@
-//! Streaming kitty-graphics-protocol extractor (APC `ESC _ G … ST`).
+//! Streaming inline-graphics extractor: Kitty APC and static Sixel DCS.
 //!
 //! The daemon-side counterpart to [`crate::core::osc`]: a tiny, resumable state
 //! machine that pulls kitty graphics commands out of the raw PTY byte stream
@@ -43,13 +43,21 @@ pub use super::graphics_state::{
 /// this to admit a one-shot frame that still fits [`MAX_TRANSMISSION_BASE64`];
 /// [`ApcTokenizer::push_graphics`] logs whatever it has to drop.
 const MAX_APC_PAYLOAD: usize = MAX_TRANSMISSION_BASE64;
+const MAX_DISCOVERY_PAYLOAD: usize = 8192;
+const MAX_DCS_HEADER: usize = 128;
+/// Fixed OSC identifier for iTerm2 proprietary commands.
+const ITERM2_OSC_ID: &[u8] = b"1337;";
+/// Bound on a command identifier before its `=` (`MultipartFile` is the longest
+/// name this splitter must recognise); longer unrelated names fall through to
+/// verbatim passthrough.
+const MAX_OSC_IDENT: usize = 16;
 
 /// Cap on the total base64 bytes received for one chunked transmission.
 ///
 /// The decoded transfer must leave room for GraphicsUpdate's metadata within
 /// the pane frame. A 48 MiB base64 limit admits an uncompressed 4K RGBA image
 /// while remaining below the 64 MiB pane-frame ceiling.
-const MAX_TRANSMISSION_BASE64: usize = 48 << 20; // 48 MiB
+pub(crate) const MAX_TRANSMISSION_BASE64: usize = 48 << 20; // 48 MiB
 
 /// Cap on the *resolved* pixel bytes of one image, whatever medium carried it.
 /// Bounds the file/shm fast path (where the sender names an object whose size we
@@ -57,25 +65,53 @@ const MAX_TRANSMISSION_BASE64: usize = 48 << 20; // 48 MiB
 /// daemon inside [`crate::daemon::protocol::MAX_FRAME`].
 pub const MAX_IMAGE_BYTES: usize = 32 << 20;
 
-/// A streaming tokenizer that splits raw output into a *passthrough* byte stream
-/// and the kitty graphics commands lifted out of it.
+/// Streaming framing for graphics owned by the daemon, without a second VT
+/// parser. The historical APC name also covers bounded numeric Sixel DCS.
 ///
-/// Feed it raw output bytes. It invokes `on_passthrough` with every byte that is
-/// **not** part of a `_G` graphics sequence — that is the exact input with each
-/// `ESC _ G … ST` removed, and it is what the daemon appends to the replay ring
-/// and forwards to the client. It invokes `on_command` with the complete payload
-/// of each `_G` command (the bytes after `ESC _`, terminator excluded — e.g.
-/// `Ga=T,f=32,…;<base64>`). Non-graphics APC sequences (any payload not starting
-/// with `G`) are passed through verbatim, since only kitty graphics is ours to
-/// intercept; everything else must reach the client's VT parser unchanged. State
-/// persists across `feed` calls, so a sequence split over several reads is still
-/// handled.
+/// Passthrough retains ordinary bytes and foreign APC/DCS verbatim. Complete
+/// commands exclude ESC/ST: `G...` is Kitty and `P...q...` is static Sixel.
+/// Numeric DCS headers over 63 bytes and graphics bodies over their encoded
+/// limit are drained without allowing the desktop mirror to decode them.
+/// State survives PTY read boundaries, including split openers, terminators,
+/// cancellation and a later escape interrupting an unfinished transmission.
 pub struct ApcTokenizer {
-    /// Bytes of a `_G` command accumulated after `ESC _ G` while it can still
-    /// terminate. Cleared whenever a command finishes or is abandoned.
+    /// Bytes of a `_G` command accumulated after `ESC _ G`, or of an iTerm2
+    /// `File=` body after `1337;File=`, while it can still terminate. Cleared
+    /// whenever a command finishes or is abandoned.
     buf: Vec<u8>,
     state: State,
     work: super::graphics_state::retention::Work,
+    /// Decoded iTerm2 PNG bytes queued for the pane, still charged to this
+    /// tokenizer until the daemon moves the lease into image preparation.
+    osc_completed: usize,
+    /// Discovery reuses this bounded framing, not a second VT grammar.
+    dcs: bool,
+    /// Only the graphics splitter owns OSC 1337; the Glyph and XTGETTCAP
+    /// sniffers must forward that control string intact for the graphics
+    /// sniffer behind them.
+    iterm2: bool,
+    header: Option<Box<rio_vt::performer::parser::Parser>>,
+    /// Which APC body this instance lifts: kitty `G` or Glyph Protocol `25a1`.
+    lift: ApcLift,
+    /// Bytes of `lift.prefix()` matched so far in [`State::ApcStart`].
+    matched: u8,
+}
+
+/// Which APC body a tokenizer lifts out of the passthrough stream. The framing
+/// state machine is shared; only the prefix and the payload cap differ.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ApcLift {
+    KittyGraphics,
+    GlyphProtocol,
+}
+
+impl ApcLift {
+    fn prefix(self) -> &'static [u8] {
+        match self {
+            Self::KittyGraphics => b"G",
+            Self::GlyphProtocol => b"25a1",
+        }
+    }
 }
 
 #[derive(Default, Clone, Copy)]
@@ -87,6 +123,8 @@ enum State {
     Esc,
     /// Held `ESC _`; the next byte decides graphics (`G`) vs. passthrough APC.
     ApcStart,
+    /// Rio classifies discovery; graphics mode admits numeric static Sixel.
+    DcsStart,
     /// Buffering a `_G` graphics command (stripped from passthrough).
     ApcGraphics,
     /// Saw `ESC` inside a graphics command — a following `\` is the terminator.
@@ -99,6 +137,22 @@ enum State {
     ApcDrop,
     /// Saw `ESC` inside a dropped APC — a following `\` is the terminator.
     ApcDropEsc,
+    /// Held `ESC ]`; `buf` matches the fixed `1337;` prefix.
+    OscPrefix,
+    /// Saw `1337;`; `buf` holds the command identifier before `=`.
+    OscIdent,
+    /// Buffering a bounded static `File=` body (parameters `:` payload).
+    OscFile,
+    /// Saw `ESC` inside a candidate file body.
+    OscFileEsc,
+    /// Dropping an unsupported iTerm2 file form without forwarding its bytes.
+    OscDrop,
+    /// Saw `ESC` inside a dropped OSC.
+    OscDropEsc,
+    /// Forwarding an unrelated OSC verbatim.
+    OscPass,
+    /// Saw `ESC` inside a passthrough OSC.
+    OscPassEsc,
 }
 
 impl Default for ApcTokenizer {
@@ -116,7 +170,135 @@ impl ApcTokenizer {
                 let retention = super::graphics_state::retention::Retention::shared();
                 retention.work(retention.owner())
             },
+            osc_completed: 0,
+            dcs: false,
+            iterm2: true,
+            header: None,
+            lift: ApcLift::KittyGraphics,
+            matched: 0,
         }
+    }
+
+    /// A tokenizer that lifts Glyph Protocol bodies (`25a1`) with the same
+    /// framing. It has no DCS discovery; every other control string passes
+    /// through verbatim.
+    pub(crate) fn glyph() -> Self {
+        let mut tokenizer = Self::new();
+        tokenizer.lift = ApcLift::GlyphProtocol;
+        tokenizer.iterm2 = false;
+        tokenizer
+    }
+
+    pub(crate) fn ground(&self) -> bool {
+        self.at_boundary()
+    }
+
+    pub(crate) fn xtgettcap() -> Self {
+        let mut tokenizer = Self::new();
+        tokenizer.dcs = true;
+        tokenizer.iterm2 = false;
+        tokenizer
+    }
+
+    pub(crate) fn at_boundary(&self) -> bool {
+        matches!(self.state, State::Ground)
+    }
+
+    /// A new PTY read reuses the completed-source counter, exactly like the
+    /// Kitty parser: commands emitted by the previous read were consumed by
+    /// the daemon before the next one starts.
+    pub(crate) fn begin_read(&mut self) {
+        self.osc_completed = 0;
+        self.work.resize(self.buf.capacity());
+    }
+
+    /// Move a decoded iTerm2 PNG's existing reservation into image preparation.
+    /// Other completed images and partial raw bodies keep their own charge.
+    pub(crate) fn take_osc_source_work(
+        &mut self,
+        capacity: usize,
+    ) -> super::graphics_state::retention::Work {
+        assert!(
+            capacity <= self.osc_completed,
+            "iTerm2 source handoff exceeds its work reservation"
+        );
+        self.osc_completed -= capacity;
+        self.work.split(capacity)
+    }
+
+    /// Append within the OSC cap, charging growth to the shared work budget.
+    fn push_osc(&mut self, run: &[u8], limit: usize) -> bool {
+        if run.len() > limit.saturating_sub(self.buf.len()) {
+            return false;
+        }
+        let required = self.buf.len() + run.len();
+        if required > self.buf.capacity() {
+            let capacity = required
+                .max(self.buf.capacity().saturating_mul(2))
+                .min(limit);
+            if !self
+                .work
+                .resize(self.osc_completed + capacity + self.buf.capacity())
+            {
+                return false;
+            }
+            self.buf.reserve_exact(capacity - self.buf.len());
+            self.work.resize(self.osc_completed + self.buf.capacity());
+        }
+        self.buf.extend_from_slice(run);
+        true
+    }
+
+    /// A complete static `File=` body: parse it into the existing
+    /// resource/control representation, or drop every unsupported byte.
+    fn finish_osc_file(&mut self, on_file: &mut impl FnMut(Control, Image)) {
+        let body = std::mem::take(&mut self.buf);
+        let mut decoding = self.work.temporary();
+        match super::iterm2_graphics::parse_file(body, &mut decoding) {
+            Ok((control, image)) => {
+                let png = image.data.capacity();
+                if self.work.resize(self.osc_completed + png) {
+                    self.osc_completed += png;
+                    drop(decoding);
+                    on_file(control, image);
+                } else {
+                    let _ = self.work.resize(self.osc_completed);
+                }
+            }
+            Err(reason) => {
+                log::debug!("dropping unsupported iTerm2 inline image: {reason}");
+                let _ = self.work.resize(self.osc_completed);
+            }
+        }
+        self.state = State::Ground;
+    }
+
+    fn opener(&self) -> &'static [u8] {
+        if self.dcs { b"\x1bP" } else { b"\x1b_" }
+    }
+
+    fn boundary(&self, bytes: &[u8]) -> Option<usize> {
+        let control = memchr::memchr3(0x1b, 0x18, 0x1a, bytes);
+        if !self.dcs {
+            return control;
+        }
+        match (control, memchr::memchr(0x9c, bytes)) {
+            (Some(a), Some(b)) => Some(a.min(b)),
+            (a, b) => a.or(b),
+        }
+    }
+
+    fn start_command(&mut self) {
+        self.clear_buffer();
+        self.matched = 0;
+        self.state = if self.dcs {
+            let parser = self.header.get_or_insert_with(Default::default);
+            **parser = rio_vt::performer::parser::Parser::default();
+            parser.advance(&mut DcsHeader::default(), b"\x1bP");
+            State::DcsStart
+        } else {
+            State::ApcStart
+        };
     }
 
     /// Feed one chunk of output. `on_passthrough` receives runs of non-graphics
@@ -137,20 +319,40 @@ impl ApcTokenizer {
         on_passthrough: impl FnMut(&[u8]),
         mut on_command: impl FnMut(&[u8]),
     ) {
-        self.tokenize(bytes, on_passthrough, |command, aborted, _| {
-            if !aborted {
-                on_command(command);
-            }
-        });
+        self.tokenize(
+            bytes,
+            on_passthrough,
+            |command, aborted, _| {
+                if !aborted {
+                    on_command(command);
+                }
+            },
+            |_, _| {},
+        );
+    }
+
+    /// Feed one chunk and report aborted/exhausted lifted commands too. Used by
+    /// the Glyph Protocol sniffer, which must answer an oversized body from the
+    /// control prefix it managed to keep.
+    pub(crate) fn feed_lifted(
+        &mut self,
+        bytes: &[u8],
+        on_passthrough: impl FnMut(&[u8]),
+        on_command: impl FnMut(&[u8], bool, bool),
+    ) {
+        self.tokenize(bytes, on_passthrough, on_command, |_, _| {});
     }
 
     // Aborts must reach the reassembler in the same ordered stream as complete
     // commands, including oversize/interruption across different PTY reads.
-    fn tokenize(
+    // `on_file` carries an already parsed static iTerm2 image; its bytes never
+    // enter either VT grammar or the text replay ring.
+    pub(crate) fn tokenize(
         &mut self,
         bytes: &[u8],
         mut on_passthrough: impl FnMut(&[u8]),
         mut on_command: impl FnMut(&[u8], bool, bool),
+        mut on_file: impl FnMut(Control, Image),
     ) {
         let mut i = 0;
         while i < bytes.len() {
@@ -168,12 +370,21 @@ impl ApcTokenizer {
                         return;
                     }
                 },
-                State::PassApc => match memchr::memchr(0x1b, &bytes[i..]) {
+                State::PassApc => match if self.dcs {
+                    self.boundary(&bytes[i..])
+                } else {
+                    memchr::memchr(0x1b, &bytes[i..])
+                } {
                     Some(off) => {
                         if off > 0 {
                             on_passthrough(&bytes[i..i + off]);
                         }
-                        self.state = State::PassApcEsc;
+                        if self.dcs && bytes[i + off] != 0x1b {
+                            on_passthrough(&bytes[i + off..i + off + 1]);
+                            self.state = State::Ground;
+                        } else {
+                            self.state = State::PassApcEsc;
+                        }
                         i += off + 1;
                     }
                     None => {
@@ -181,7 +392,7 @@ impl ApcTokenizer {
                         return;
                     }
                 },
-                State::ApcDrop => match memchr::memchr3(0x1b, 0x18, 0x1a, &bytes[i..]) {
+                State::ApcDrop => match self.boundary(&bytes[i..]) {
                     Some(off) => {
                         self.state = if bytes[i + off] == 0x1b {
                             State::ApcDropEsc
@@ -192,11 +403,15 @@ impl ApcTokenizer {
                     }
                     None => return,
                 },
-                State::ApcGraphics => match memchr::memchr3(0x1b, 0x18, 0x1a, &bytes[i..]) {
+                State::ApcGraphics => match self.boundary(&bytes[i..]) {
                     Some(off) => {
                         if self.push_graphics(&bytes[i..i + off]) {
                             if bytes[i + off] == 0x1b {
                                 self.state = State::ApcGraphicsEsc;
+                            } else if self.dcs && bytes[i + off] == 0x9c {
+                                on_command(&self.buf, false, false);
+                                self.clear_buffer();
+                                self.state = State::Ground;
                             } else {
                                 on_command(&self.buf, true, false);
                                 self.clear_buffer();
@@ -222,15 +437,38 @@ impl ApcTokenizer {
                     }
                 },
                 State::Esc => match bytes[i] {
-                    b'_' => {
+                    byte if byte == self.opener()[1] => {
+                        self.start_command();
+                        i += 1;
+                    }
+                    // Glyph framing owns only `ESC _ 25a1`; a DCS belongs to
+                    // the terminal and stays verbatim.
+                    b'P' if self.lift == ApcLift::GlyphProtocol => {
+                        on_passthrough(b"\x1bP");
+                        self.state = State::PassApc;
+                        i += 1;
+                    }
+                    b'P' => {
                         self.clear_buffer();
-                        self.state = State::ApcStart;
+                        if self.push_graphics(b"P") {
+                            self.state = State::DcsStart;
+                        } else {
+                            self.state = State::ApcDrop;
+                        }
                         i += 1;
                     }
                     // A run of ESCs: the earlier one was a lone ESC (passthrough);
                     // keep the newest one held.
                     0x1b => {
                         on_passthrough(b"\x1b");
+                        i += 1;
+                    }
+                    // OSC is the third bounded control string this splitter
+                    // knows: only the fixed iTerm2 `1337;` prefix is inspected,
+                    // and every other OSC stays byte-for-byte passthrough.
+                    b']' if self.iterm2 && !self.dcs => {
+                        self.clear_buffer();
+                        self.state = State::OscPrefix;
                         i += 1;
                     }
                     // The ESC began some other escape: emit it and re-examine this
@@ -240,20 +478,93 @@ impl ApcTokenizer {
                         self.state = State::Ground;
                     }
                 },
-                State::ApcStart => {
-                    if bytes[i] == b'G' {
-                        self.clear_buffer();
-                        if !self.push_graphics(b"G") {
-                            self.state = State::ApcDrop;
+                State::DcsStart => {
+                    let byte = bytes[i];
+                    if !self.dcs {
+                        if byte == b'q' {
+                            if self.push_graphics(&[byte]) {
+                                self.state = State::ApcGraphics;
+                            } else {
+                                self.clear_buffer();
+                                self.state = State::ApcDrop;
+                            }
                             i += 1;
-                            continue;
+                        } else if byte.is_ascii_digit() || byte == b';' {
+                            if self.buf.len() >= 64 || !self.push_graphics(&[byte]) {
+                                self.clear_buffer();
+                                self.state = State::ApcDrop;
+                            }
+                            i += 1;
+                        } else {
+                            on_passthrough(b"\x1b");
+                            on_passthrough(&self.buf);
+                            self.clear_buffer();
+                            self.state = State::PassApc;
                         }
-                        self.state = State::ApcGraphics;
+                        continue;
+                    }
+                    if matches!(byte, 0x18 | 0x1a | 0x9c) {
+                        self.clear_buffer();
+                        on_passthrough(b"\x18");
+                        self.state = State::Ground;
                         i += 1;
+                        continue;
+                    }
+                    if byte == 0x1b {
+                        self.clear_buffer();
+                        on_passthrough(b"\x18");
+                        self.state = State::Esc;
+                        i += 1;
+                        continue;
+                    }
+                    let mut classification = DcsHeader::default();
+                    self.header
+                        .as_mut()
+                        .expect("DCS header parser")
+                        .advance(&mut classification, &bytes[i..i + 1]);
+                    if byte < 0x20 || byte == 0x7f {
+                        // Forward executed C0 once, not again in the owner's query Processor.
+                        on_passthrough(&bytes[i..i + 1]);
+                        i += 1;
+                        continue;
+                    }
+                    self.buf.push(byte);
+                    i += 1;
+                    if let Some(query) = classification.query {
+                        if query {
+                            self.state = State::ApcGraphics;
+                        } else {
+                            on_passthrough(self.opener());
+                            on_passthrough(&self.buf);
+                            self.clear_buffer();
+                            self.state = State::PassApc;
+                        }
+                    } else if self.buf.len() >= MAX_DCS_HEADER {
+                        on_passthrough(b"\x18");
+                        self.clear_buffer();
+                        self.state = State::ApcDrop;
+                    }
+                }
+                State::ApcStart => {
+                    let prefix = self.lift.prefix();
+                    if bytes[i] == prefix[self.matched as usize] {
+                        self.matched += 1;
+                        i += 1;
+                        if self.matched as usize == prefix.len() {
+                            self.clear_buffer();
+                            if !self.push_graphics(prefix) {
+                                self.state = State::ApcDrop;
+                                continue;
+                            }
+                            self.state = State::ApcGraphics;
+                        }
                     } else {
-                        // Not ours: emit the held `ESC _` and forward the rest of
-                        // the APC verbatim (re-examine this byte in `PassApc`).
+                        // Not ours: emit the held `ESC _` and every prefix byte
+                        // matched so far, then forward the rest of the APC
+                        // verbatim (re-examine this byte in `PassApc`).
                         on_passthrough(b"\x1b_");
+                        on_passthrough(&prefix[..self.matched as usize]);
+                        self.matched = 0;
                         self.state = State::PassApc;
                     }
                 }
@@ -264,12 +575,27 @@ impl ApcTokenizer {
                         self.state = State::Ground;
                         i += 1;
                     }
-                    0x1b => i += 1, // a run of ESCs; stay poised for `\`
-                    // A bare `ESC _` re-opens: the next byte decides graphics again.
-                    b'_' => {
+                    0x1b if self.dcs => {
                         on_command(&self.buf, true, false);
                         self.clear_buffer();
-                        self.state = State::ApcStart;
+                        self.state = State::Esc;
+                        i += 1;
+                    }
+                    0x1b => i += 1, // existing Kitty APC handling
+                    // A bare `ESC _` re-opens: the next byte decides graphics again.
+                    byte if byte == self.opener()[1] => {
+                        on_command(&self.buf, true, false);
+                        self.start_command();
+                        i += 1;
+                    }
+                    b'P' if self.lift == ApcLift::KittyGraphics => {
+                        on_command(&self.buf, true, false);
+                        self.clear_buffer();
+                        if self.push_graphics(b"P") {
+                            self.state = State::DcsStart;
+                        } else {
+                            self.state = State::ApcDrop;
+                        }
                         i += 1;
                     }
                     // ESC began some other escape: abandon this graphics command.
@@ -300,14 +626,29 @@ impl ApcTokenizer {
                     // swallows every `ESC _G …` after it — the graphics get
                     // forwarded as APC text that the client's vte then discards,
                     // so the image is simply lost.
-                    b'_' => {
-                        self.buf.clear();
-                        self.state = State::ApcStart;
+                    byte if byte == self.opener()[1] => {
+                        if self.dcs {
+                            on_passthrough(b"\x18");
+                        }
+                        self.start_command();
+                        i += 1;
+                    }
+                    b'P' => {
+                        self.clear_buffer();
+                        if self.push_graphics(b"P") {
+                            self.state = State::DcsStart;
+                        } else {
+                            self.state = State::ApcDrop;
+                        }
                         i += 1;
                     }
                     _ => {
                         on_passthrough(b"\x1b");
-                        self.state = State::PassApc; // re-examine this byte
+                        self.state = if self.dcs {
+                            State::Ground
+                        } else {
+                            State::PassApc
+                        };
                     }
                 },
                 State::ApcDropEsc => match bytes[i] {
@@ -316,9 +657,17 @@ impl ApcTokenizer {
                         i += 1;
                     }
                     0x1b => i += 1,
-                    b'_' => {
+                    byte if byte == self.opener()[1] => {
+                        self.start_command();
+                        i += 1;
+                    }
+                    b'P' => {
                         self.clear_buffer();
-                        self.state = State::ApcStart;
+                        if self.push_graphics(b"P") {
+                            self.state = State::DcsStart;
+                        } else {
+                            self.state = State::ApcDrop;
+                        }
                         i += 1;
                     }
                     // As in `ApcGraphicsEsc`: the dropped command's bytes stay
@@ -329,29 +678,218 @@ impl ApcTokenizer {
                         self.state = State::Ground;
                     }
                 },
+                State::OscPrefix => {
+                    let byte = bytes[i];
+                    if byte == 0x07 || byte == 0x9c {
+                        // A complete non-iTerm2 OSC that ended inside its first
+                        // five bytes (for example the empty `OSC 0`).
+                        on_passthrough(b"\x1b]");
+                        on_passthrough(&self.buf);
+                        on_passthrough(&bytes[i..i + 1]);
+                        self.clear_buffer();
+                        self.state = State::Ground;
+                        i += 1;
+                    } else if byte == 0x1b {
+                        on_passthrough(b"\x1b]");
+                        on_passthrough(&self.buf);
+                        self.clear_buffer();
+                        self.state = State::Esc;
+                        i += 1;
+                    } else if ITERM2_OSC_ID.get(self.buf.len()) == Some(&byte) {
+                        if !self.push_osc(&bytes[i..i + 1], ITERM2_OSC_ID.len()) {
+                            self.clear_buffer();
+                            self.state = State::OscDrop;
+                        } else if self.buf.len() == ITERM2_OSC_ID.len() {
+                            self.clear_buffer();
+                            self.state = State::OscIdent;
+                        }
+                        i += 1;
+                    } else {
+                        on_passthrough(b"\x1b]");
+                        on_passthrough(&self.buf);
+                        self.clear_buffer();
+                        on_passthrough(&bytes[i..i + 1]);
+                        self.state = State::OscPass;
+                        i += 1;
+                    }
+                }
+                State::OscIdent => {
+                    let byte = bytes[i];
+                    if byte == b'=' {
+                        match self.buf.as_slice() {
+                            b"File" => {
+                                self.clear_buffer();
+                                self.state = State::OscFile;
+                            }
+                            b"MultipartFile" | b"FilePart" => {
+                                self.clear_buffer();
+                                self.state = State::OscDrop;
+                            }
+                            _ => {
+                                on_passthrough(b"\x1b]1337;");
+                                on_passthrough(&self.buf);
+                                on_passthrough(b"=");
+                                self.clear_buffer();
+                                self.state = State::OscPass;
+                            }
+                        }
+                        i += 1;
+                    } else if byte == 0x07 || byte == 0x9c {
+                        // `FileEnd` is the last part of an unsupported multipart
+                        // transfer; it is dropped with its earlier parts.
+                        if self.buf.as_slice() != b"FileEnd" {
+                            on_passthrough(b"\x1b]1337;");
+                            on_passthrough(&self.buf);
+                            on_passthrough(&bytes[i..i + 1]);
+                        }
+                        self.clear_buffer();
+                        self.state = State::Ground;
+                        i += 1;
+                    } else if byte == 0x1b {
+                        on_passthrough(b"\x1b]1337;");
+                        on_passthrough(&self.buf);
+                        self.clear_buffer();
+                        self.state = State::Esc;
+                        i += 1;
+                    } else if self.buf.len() >= MAX_OSC_IDENT
+                        || !self.push_osc(&bytes[i..i + 1], MAX_OSC_IDENT)
+                    {
+                        on_passthrough(b"\x1b]1337;");
+                        on_passthrough(&self.buf);
+                        self.clear_buffer();
+                        on_passthrough(&bytes[i..i + 1]);
+                        self.state = State::OscPass;
+                        i += 1;
+                    } else {
+                        i += 1;
+                    }
+                }
+                State::OscFile => match memchr::memchr3(0x07, 0x1b, 0x9c, &bytes[i..]) {
+                    Some(off) => {
+                        if off > 0 {
+                            if !self
+                                .push_osc(&bytes[i..i + off], super::iterm2_graphics::MAX_FILE_BODY)
+                            {
+                                self.clear_buffer();
+                                self.state = State::OscDrop;
+                                i += off;
+                                continue;
+                            }
+                            i += off;
+                        }
+                        if bytes[i] == 0x1b {
+                            self.state = State::OscFileEsc;
+                            i += 1;
+                        } else {
+                            self.finish_osc_file(&mut on_file);
+                            i += 1;
+                        }
+                    }
+                    None => {
+                        if !self.push_osc(&bytes[i..], super::iterm2_graphics::MAX_FILE_BODY) {
+                            self.clear_buffer();
+                            self.state = State::OscDrop;
+                        }
+                        return;
+                    }
+                },
+                State::OscFileEsc => match bytes[i] {
+                    b'\\' => {
+                        self.finish_osc_file(&mut on_file);
+                        i += 1;
+                    }
+                    0x1b => i += 1,
+                    // The escape interrupted our file: its bytes were meant to
+                    // be graphics and stay stripped, but the escape belongs to
+                    // the terminal and is re-examined from `Esc` without being
+                    // forwarded twice.
+                    _ => self.state = State::Esc,
+                },
+                State::OscDrop => match memchr::memchr3(0x07, 0x1b, 0x9c, &bytes[i..]) {
+                    Some(off) => {
+                        self.state = if bytes[i + off] == 0x1b {
+                            State::OscDropEsc
+                        } else {
+                            State::Ground
+                        };
+                        i += off + 1;
+                    }
+                    None => return,
+                },
+                State::OscDropEsc => match bytes[i] {
+                    b'\\' => {
+                        self.state = State::Ground;
+                        i += 1;
+                    }
+                    0x1b => i += 1,
+                    _ => self.state = State::Esc,
+                },
+                State::OscPass => match memchr::memchr3(0x07, 0x1b, 0x9c, &bytes[i..]) {
+                    Some(off) => {
+                        if off > 0 {
+                            on_passthrough(&bytes[i..i + off]);
+                        }
+                        if bytes[i + off] == 0x1b {
+                            self.state = State::OscPassEsc;
+                        } else {
+                            on_passthrough(&bytes[i + off..i + off + 1]);
+                            self.state = State::Ground;
+                        }
+                        i += off + 1;
+                    }
+                    None => {
+                        on_passthrough(&bytes[i..]);
+                        return;
+                    }
+                },
+                State::OscPassEsc => match bytes[i] {
+                    b'\\' => {
+                        on_passthrough(b"\x1b\\");
+                        self.state = State::Ground;
+                        i += 1;
+                    }
+                    0x1b => {
+                        on_passthrough(b"\x1b");
+                        i += 1;
+                    }
+                    // Hold this ESC again: an unrelated OSC that was interrupted
+                    // by a real escape must let that escape be parsed normally.
+                    _ => self.state = State::Esc,
+                },
             }
         }
     }
 
     fn clear_buffer(&mut self) {
         self.buf = Vec::new();
-        self.work.resize(0);
+        // Completed File sources are consumed only after this tokenizer run.
+        self.work.resize(self.osc_completed);
     }
 
     /// Append within the cap; keep a bounded header prefix on failure so the
     /// ordered abort can correlate an error before the caller clears it.
     fn push_graphics(&mut self, run: &[u8]) -> bool {
-        if run.len() > MAX_APC_PAYLOAD.saturating_sub(self.buf.len()) {
-            log::debug!(
-                "kitty graphics: dropping a command whose payload passed {MAX_APC_PAYLOAD} bytes"
-            );
+        let limit = if self.lift == ApcLift::GlyphProtocol {
+            super::glyph_protocol::MAX_APC_BODY
+        } else if self.dcs {
+            MAX_DISCOVERY_PAYLOAD
+        } else if self.buf.first() == Some(&b'P') {
+            8 << 20
+        } else {
+            MAX_APC_PAYLOAD
+        };
+        if run.len() > limit.saturating_sub(self.buf.len()) {
+            log::debug!("dropping a control string whose payload passed {limit} bytes");
             if self.buf.len() < 4096 {
                 let prefix = run.len().min(4096 - self.buf.len());
                 let required = self.buf.len() + prefix;
-                if self.work.resize(required + self.buf.capacity()) {
+                if self
+                    .work
+                    .resize(self.osc_completed + required + self.buf.capacity())
+                {
                     self.buf
                         .reserve_exact(required.saturating_sub(self.buf.len()));
-                    self.work.resize(self.buf.capacity());
+                    self.work.resize(self.osc_completed + self.buf.capacity());
                     self.buf.extend_from_slice(&run[..prefix]);
                 }
             }
@@ -361,15 +899,36 @@ impl ApcTokenizer {
         if required > self.buf.capacity() {
             let capacity = required
                 .max(self.buf.capacity().saturating_mul(2))
-                .min(MAX_APC_PAYLOAD);
-            if !self.work.resize(capacity + self.buf.capacity()) {
+                .min(limit);
+            if !self
+                .work
+                .resize(self.osc_completed + capacity + self.buf.capacity())
+            {
                 return false;
             }
             self.buf.reserve_exact(capacity - self.buf.len());
-            self.work.resize(self.buf.capacity());
+            self.work.resize(self.osc_completed + self.buf.capacity());
         }
         self.buf.extend_from_slice(run);
         true
+    }
+}
+
+#[derive(Default)]
+struct DcsHeader {
+    query: Option<bool>,
+}
+
+impl rio_vt::performer::parser::Perform for DcsHeader {
+    fn hook(
+        &mut self,
+        _: &rio_vt::performer::parser::Params,
+        intermediates: &[u8],
+        _: bool,
+        action: char,
+    ) {
+        // Processor's hook matches this pair even when its ignore flag is set.
+        self.query = Some(intermediates == b"+" && action == 'q');
     }
 }
 
@@ -421,6 +980,7 @@ impl GraphicsSniffer {
                     .map_or(0, |p| p.data.capacity()),
             );
         }
+        self.tokenizer.begin_read();
     }
 
     /// Move the completed source's existing reservation to its prepared owner.
@@ -436,6 +996,14 @@ impl GraphicsSniffer {
             .as_mut()
             .expect("completed source owns transfer work")
             .split(capacity)
+    }
+
+    /// Transfer a completed iTerm2 PNG's reservation into image preparation.
+    pub(crate) fn take_osc_source_work(
+        &mut self,
+        capacity: usize,
+    ) -> super::graphics_state::retention::Work {
+        self.tokenizer.take_osc_source_work(capacity)
     }
 
     /// Cache this PTY read's locality and irreversibly taint pending indirect
@@ -469,17 +1037,27 @@ impl GraphicsSniffer {
         let Self {
             tokenizer, parser, ..
         } = self;
-        let mut events = Vec::new();
-        tokenizer.tokenize(bytes, on_passthrough, |cmd, aborted, exhausted| {
-            if let Some(ev) = if aborted {
-                parser.abort(cmd, exhausted)
-            } else {
-                parser.feed(cmd)
-            } {
-                events.push(ev);
-            }
-        });
-        events
+        let events = std::cell::RefCell::new(Vec::new());
+        tokenizer.tokenize(
+            bytes,
+            on_passthrough,
+            |cmd, aborted, exhausted| {
+                if let Some(ev) = if aborted {
+                    parser.abort(cmd, exhausted)
+                } else {
+                    parser.feed(cmd)
+                } {
+                    events.borrow_mut().push(ev);
+                }
+            },
+            |control, image| {
+                events.borrow_mut().push(Event::Command {
+                    control,
+                    image: Some(image),
+                });
+            },
+        );
+        events.into_inner()
     }
 
     /// Feed a chunk and get back its content **in stream order**, taking a
@@ -515,6 +1093,9 @@ impl GraphicsSniffer {
         if matches!(self.tokenizer.state, State::Ground)
             && bytes.last() != Some(&0x1b)
             && memchr::memmem::find(bytes, b"\x1b_").is_none()
+            && memchr::memmem::find(bytes, b"\x1bP").is_none()
+            && memchr::memmem::find(bytes, b"\x1b]1337;").is_none()
+            && !super::iterm2_graphics::ends_with_partial_opener(bytes)
         {
             return Sniffed::Plain(bytes);
         }
@@ -558,6 +1139,12 @@ impl GraphicsSniffer {
                 } {
                     segments.borrow_mut().push(Segment::from(ev));
                 }
+            },
+            |control, image| {
+                segments.borrow_mut().push(Segment::Command {
+                    control,
+                    image: Some(image),
+                });
             },
         );
         *locality_denied = denied.get()
@@ -631,6 +1218,10 @@ pub enum WireFormat {
     Rgba,
     /// `f=100` — a PNG file; pixels stay encoded (decoded client-side).
     Png,
+    /// Adapter-only static JPEG payload from the iTerm2 `File=` form. Ordered
+    /// preparation normalizes it to [`WireFormat::Rgba`] before any packet is
+    /// published; no Kitty control key can select it.
+    Jpeg,
 }
 
 /// The transmission medium key (`t=`).
@@ -652,6 +1243,17 @@ pub enum Medium {
 /// protocol additions degrade quietly rather than failing the whole command.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Control {
+    /// Internal adapter origin; never parsed from Kitty control keys.
+    pub(crate) sixel: bool,
+    /// Internal adapter origin for the static iTerm2 `OSC 1337;File=` form.
+    pub(crate) iterm2: bool,
+    /// iTerm2 `width=`/`height=` sizing units; `None` is `auto`.
+    pub(crate) iterm2_width: Option<rio_graphics::ResizeParameter>,
+    pub(crate) iterm2_height: Option<rio_graphics::ResizeParameter>,
+    /// iTerm2 `preserveAspectRatio` (default true; `0` stretches).
+    pub(crate) iterm2_preserve_aspect_ratio: bool,
+    /// WezTerm's `doNotMoveCursor=1` extension.
+    pub(crate) iterm2_do_not_move: bool,
     pub action: Action,
     pub format: WireFormat,
     pub medium: Medium,
@@ -703,6 +1305,12 @@ impl Default for Control {
     fn default() -> Self {
         // Protocol defaults: a=t, f=32, t=d, no compression.
         Self {
+            sixel: false,
+            iterm2: false,
+            iterm2_width: None,
+            iterm2_height: None,
+            iterm2_preserve_aspect_ratio: true,
+            iterm2_do_not_move: false,
             action: Action::Transmit,
             format: WireFormat::Rgba,
             medium: Medium::Direct,
@@ -1009,7 +1617,7 @@ impl Image {
         let bpp = match self.format {
             WireFormat::Rgb => 3usize,
             WireFormat::Rgba => 4usize,
-            WireFormat::Png => return None,
+            WireFormat::Png | WireFormat::Jpeg => return None,
         };
         (self.width as usize)
             .checked_mul(self.height as usize)?
@@ -1340,6 +1948,9 @@ impl GraphicsParser {
     }
 
     fn abort(&mut self, command: &[u8], exhausted: bool) -> Option<Event> {
+        if command.first() == Some(&b'P') {
+            return None;
+        }
         let control = self
             .pending
             .take()
@@ -1368,6 +1979,37 @@ impl GraphicsParser {
         command: &[u8],
         locality: &mut impl FnMut() -> Option<bool>,
     ) -> Option<Event> {
+        if command.first() == Some(&b'P') {
+            let retained = self.pending.as_ref().map_or(0, |p| p.data.capacity());
+            let work = self.work.get_or_insert_with(|| {
+                let retention = super::graphics_state::retention::Retention::shared();
+                retention.work(retention.owner())
+            });
+            if !work.resize(retained + self.completed_bytes + command.len()) {
+                return None;
+            }
+            let data = command.to_vec();
+            self.completed_bytes += data.capacity();
+            work.resize(retained + self.completed_bytes);
+            return Some(Event::Command {
+                control: Control {
+                    sixel: true,
+                    action: Action::TransmitAndDisplay,
+                    quiet: 2,
+                    // Sixel occupies a background bitmap, not Kitty's default
+                    // foreground overlay. Later text must remain visible.
+                    z: -1,
+                    ..Control::default()
+                },
+                image: Some(Image {
+                    width: 0,
+                    height: 0,
+                    data,
+                    format: WireFormat::Rgba,
+                    compressed: false,
+                }),
+            });
+        }
         let control = Control::parse(command)?;
         let data = payload_data(command);
         // A delete aborts a partial upload. Other complete commands must not be

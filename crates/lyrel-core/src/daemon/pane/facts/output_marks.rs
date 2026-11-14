@@ -1,6 +1,69 @@
 use std::path::PathBuf;
 
 use crate::core::osc::OscTokenizer;
+use crate::daemon::protocol::{PaneProgress, ProgressKind};
+
+/// A bounded composition of all progress marks in one read. Command completion
+/// is conditional on the previous state; no history or per-mark queue is kept.
+#[derive(Default)]
+pub(super) enum ProgressChange {
+    #[default]
+    Keep,
+    ClearRunning,
+    Set(Option<PaneProgress>),
+}
+
+impl ProgressChange {
+    pub(super) fn apply(self, current: Option<PaneProgress>) -> Option<PaneProgress> {
+        match self {
+            Self::Keep => current,
+            Self::ClearRunning => current.filter(|state| state.kind == ProgressKind::Error),
+            Self::Set(state) => state,
+        }
+    }
+
+    fn saw(&mut self, payload: &[u8]) {
+        if let Some(rest) = payload.strip_prefix(b"9;4;") {
+            let mut fields = rest.split(|byte| *byte == b';');
+            let kind = match fields.next() {
+                Some(b"0") => {
+                    *self = Self::Set(None);
+                    return;
+                }
+                Some(b"1") => ProgressKind::Running,
+                Some(b"2") => ProgressKind::Error,
+                Some(b"3") => ProgressKind::Indeterminate,
+                Some(b"4") => ProgressKind::Paused,
+                _ => return,
+            };
+            let percent = match fields.next() {
+                None | Some(b"") => None,
+                Some(value) => {
+                    let Some(value) = std::str::from_utf8(value)
+                        .ok()
+                        .and_then(|value| value.parse::<u8>().ok())
+                        .filter(|value| *value <= 100)
+                    else {
+                        return;
+                    };
+                    Some(value)
+                }
+            };
+            if fields.next().is_none() {
+                *self = Self::Set(Some(PaneProgress { kind, percent }));
+            }
+        } else if payload == b"133;C" || payload.starts_with(b"133;C;") {
+            *self = Self::Set(None);
+        } else if payload == b"133;D" || payload.starts_with(b"133;D;") {
+            *self = match std::mem::take(self) {
+                Self::Set(state) => {
+                    Self::Set(state.filter(|state| state.kind == ProgressKind::Error))
+                }
+                _ => Self::ClearRunning,
+            };
+        }
+    }
+}
 
 #[derive(Default, Clone, PartialEq, Eq)]
 pub(super) struct ShellState {
@@ -31,6 +94,7 @@ pub(super) struct SniffSignals {
     pub(super) shell: Vec<ShellState>,
     pub(super) agent_events: Vec<crate::core::cli_agent::AgentEvent>,
     pub(super) notification: Option<String>,
+    pub(super) progress: ProgressChange,
 }
 
 pub(super) struct OscSniffer {
@@ -67,6 +131,7 @@ impl OscSniffer {
         let notes = &mut self.notes;
         for bytes in parts {
             self.tok.feed(bytes, |payload| {
+                signals.progress.saw(payload);
                 // In stream order, so that a shell which re-titles itself right
                 // after the `D` mark gets the last word over the retirement.
                 if title_life.saw(payload) == crate::core::osc::TitleEffect::Retire {

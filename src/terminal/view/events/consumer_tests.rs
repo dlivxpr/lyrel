@@ -130,3 +130,66 @@ fn daemon_output_reaches_the_grid_through_the_event_pump(cx: &mut TestAppContext
         .unwrap();
     assert_eq!(wait_for(cx, "hello again"), "hello again");
 }
+
+#[gpui_kit::test]
+fn a_glyph_query_is_answered_from_the_panes_font_stack(cx: &mut TestAppContext) {
+    use crate::daemon::protocol::ClientMsg;
+
+    let (window, mut daemon) = harness(cx);
+    window
+        .update(cx, |view, _, cx| {
+            view.handle_event(PaneEvent::GlyphQuery { token: 7, cp: 0x41 }, cx);
+        })
+        .unwrap();
+    loop {
+        match ClientMsg::read(&mut daemon).expect("client socket stays open") {
+            ClientMsg::GlyphQueryResult { token, cp, system } => {
+                assert_eq!((token, cp), (7, 0x41));
+                assert!(system, "the test text system covers every codepoint");
+                break;
+            }
+            // Attach/geometry traffic precedes the answer on this stream.
+            ClientMsg::Resize(_) | ClientMsg::GraphicsCapacity { .. } => continue,
+            other => panic!("expected a glyph query answer, got {other:?}"),
+        }
+    }
+}
+
+#[gpui_kit::test]
+fn a_glyph_query_frame_crosses_the_reader_and_returns_one_answer(cx: &mut TestAppContext) {
+    use crate::daemon::protocol::ClientMsg;
+    use std::io::ErrorKind;
+    use std::time::Duration;
+
+    let (window, mut daemon) = harness(cx);
+    let _ = window;
+    DaemonMsg::GlyphQuery {
+        token: 11,
+        cp: 0x41,
+    }
+    .encode(&mut daemon)
+    .unwrap();
+    daemon
+        .set_read_timeout(Some(Duration::from_millis(250)))
+        .unwrap();
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    loop {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the reader never answered the glyph query"
+        );
+        cx.run_until_parked();
+        match ClientMsg::read(&mut daemon) {
+            Ok(ClientMsg::GlyphQueryResult { token, cp, system }) => {
+                assert_eq!((token, cp), (11, 0x41));
+                assert!(system);
+                return;
+            }
+            Ok(_) => continue,
+            Err(error) if matches!(error.kind(), ErrorKind::WouldBlock | ErrorKind::TimedOut) => {
+                std::thread::sleep(Duration::from_millis(5));
+            }
+            Err(error) => panic!("client socket failed: {error}"),
+        }
+    }
+}

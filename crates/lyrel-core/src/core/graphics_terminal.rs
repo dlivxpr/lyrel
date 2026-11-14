@@ -1,6 +1,7 @@
 //! The daemon's terminal-layout adapter. Rio remains the only VT parser and
 //! grid. Handler callbacks attach graphics lifetime to the same text mutations.
 
+use super::super::sixel_graphics::SIDE;
 use super::*;
 use rio_unicode::UnicodeWidthChar as _;
 use rio_vt::ansi::mode::{Mode, NamedPrivateMode, PrivateMode};
@@ -408,6 +409,20 @@ impl GraphicsState {
             .iter()
             .filter_map(|(key, p)| {
                 let p = &p.placement;
+                if p.display_width != 0 && p.display_height != 0 {
+                    // The iTerm2 sizing policy resolved exact device pixels at
+                    // admission; a font/scale change keeps that image size and
+                    // changes only how many cells it occupies.
+                    return Some((
+                        *key,
+                        p.display_width
+                            .div_ceil(u32::from(size.cell_w.max(1)))
+                            .max(1),
+                        p.display_height
+                            .div_ceil(u32::from(size.cell_h.max(1)))
+                            .max(1),
+                    ));
+                }
                 let c = Control {
                     cols: p.cols,
                     rows: p.rows,
@@ -740,10 +755,61 @@ impl Handler for GraphicsState {
                 .push(format!("\x1b[4;{height};{width}t").into_bytes());
         }
     }
+    /// XTSMGRAPHICS (`CSI ? Pi ; Pa ; Pv S`) belongs to the pane that owns the
+    /// pixel geometry and the image admission bounds: one owner whether a
+    /// client is attached or not, local or routed. The desktop mirror never
+    /// replies, so a replayed or duplicated query cannot produce a second
+    /// answer, and an older endpoint that lacks this handler stays silent
+    /// rather than inheriting the local GUI's claim.
+    fn graphics_attribute(&mut self, pi: u16, pa: u16) {
+        use rio_vt::ansi::sixel::MAX_COLOR_REGISTERS;
+        // Items (Pi): 1 color registers, 2 Sixel geometry, 3 ReGIS.
+        // Actions (Pa): 1 read current, 2 reset, 3 set, 4 read maximum.
+        let mut values = [0u32; 2];
+        let (status, count) = match (pi, pa) {
+            // The released Sixel parser's palette bound is the real one.
+            (1, 1 | 4) => {
+                values[0] = MAX_COLOR_REGISTERS as u32;
+                (0, 1)
+            }
+            (1, 2 | 3) => (3, 0),
+            (1, _) => (2, 0),
+            // One rectangular maximum would over-promise: admission also bounds
+            // a single image's decoded RGBA area, so only the current text area
+            // is truthful. Refuse `Pa=4` instead of guessing a rectangle.
+            (2, 1) => {
+                let width = u32::from(self.size.cols) * u32::from(self.size.cell_w);
+                let height = u32::from(self.size.rows) * u32::from(self.size.cell_h);
+                if width == 0 || height == 0 {
+                    (3, 0)
+                } else {
+                    values = [width.min(SIDE as u32), height.min(SIDE as u32)];
+                    (0, 2)
+                }
+            }
+            (2, 2 | 3 | 4) => (3, 0),
+            (2, _) => (2, 0),
+            // ReGIS is unknown and every other item is an error in Pi.
+            _ => (1, 0),
+        };
+        let mut reply = format!("\x1b[?{pi};{status}").into_bytes();
+        for value in &values[..count] {
+            reply.push(b';');
+            reply.extend_from_slice(value.to_string().as_bytes());
+        }
+        reply.push(b'S');
+        self.replies.push(reply);
+    }
     fn cells_size_pixels(&mut self) {
         let (w, h) = (self.size.cell_w, self.size.cell_h);
         if w != 0 && h != 0 {
             self.replies.push(format!("\x1b[6;{h};{w}t").into_bytes());
+        }
+    }
+    fn xtgettcap_response(&mut self, generated: String) {
+        let reply = crate::core::xtgettcap::response(&generated);
+        if !reply.is_empty() {
+            self.replies.push(reply);
         }
     }
     fn set_title(&mut self, title: Option<String>) {
@@ -915,6 +981,11 @@ impl Handler for GraphicsState {
     }
 
     fn set_color(&mut self, index: usize, color: ColorRgb) {
+        // The pane's effective layer is owned here, fed by the released
+        // parser at the exact stream position. Index values come from the
+        // parser's own OSC bounds (0..=258); a wider one is ignored by
+        // `PaneColors` rather than mapped onto another slot.
+        self.colors.set(index as u16, [color.r, color.g, color.b]);
         self.term.set_color(index, color);
     }
 
@@ -924,6 +995,7 @@ impl Handler for GraphicsState {
     }
 
     fn reset_color(&mut self, index: usize) {
+        self.colors.reset(index as u16);
         self.term.reset_color(index);
     }
 

@@ -2743,6 +2743,15 @@ checksum = "77ce24cb58228fbb8aa041425bb1050850ac19177686ea6e0f41a70416f56fdb"
 
 [[package]]
 name = "font-types"
+version = "0.10.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "39a654f404bbcbd48ea58c617c2993ee91d1cb63727a37bf2323a4edeed1b8c5"
+dependencies = [
+ "bytemuck",
+]
+
+[[package]]
+name = "font-types"
 version = "0.11.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5b38ad915f6dadd993ced50848a8291a543bd41ca62bc10740d5e64e2ab4cfd7"
@@ -6023,6 +6032,7 @@ dependencies = [
  "base64 0.23.1",
  "chrono",
  "core-foundation 0.10.1",
+ "cursor-icon",
  "encoding_rs",
  "fs2",
  "futures-channel",
@@ -6107,6 +6117,7 @@ dependencies = [
  "http",
  "icu_collator",
  "ignore",
+ "image",
  "libc",
  "libgssapi",
  "log",
@@ -6119,6 +6130,7 @@ dependencies = [
  "png 0.18.1",
  "portable-pty",
  "regex",
+ "rio-graphics",
  "rio-unicode",
  "rio-vt",
  "russh",
@@ -6166,6 +6178,7 @@ version = "0.3.4"
 dependencies = [
  "libc",
  "lyrel-core",
+ "png 0.18.1",
  "serde",
  "serde_json",
  "tempfile",
@@ -8806,6 +8819,16 @@ dependencies = [
 
 [[package]]
 name = "read-fonts"
+version = "0.35.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6717cf23b488adf64b9d711329542ba34de147df262370221940dfabc2c91358"
+dependencies = [
+ "bytemuck",
+ "font-types 0.10.1",
+]
+
+[[package]]
+name = "read-fonts"
 version = "0.37.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7b634fabf032fab15307ffd272149b622260f55974d9fad689292a5d33df02e5"
@@ -9020,9 +9043,9 @@ dependencies = [
 
 [[package]]
 name = "rio-grapheme-width"
-version = "0.5.29"
+version = "0.5.30"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7ef9487fce3556a0b27b6598a956c4402a46b8bb25afe2ec53ab0378c75e402c"
+checksum = "93fe7025fab8875f794aa41939d163f1aff30e9198fcc82978a88e3e775cb34f"
 dependencies = [
  "phf 0.13.1",
  "ucd-trie",
@@ -9030,26 +9053,28 @@ dependencies = [
 
 [[package]]
 name = "rio-graphics"
-version = "0.5.29"
+version = "0.5.30"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "736eb317aa3bdb7256f58b1ad18f971a831d6de928854a9aee6e13c6792bcf19"
+checksum = "898501113b4c684514b2f4cf26ffd292b9acc824d7c51c08e5e7d2f8e17384dd"
 dependencies = [
+ "parking_lot 0.12.5",
  "rustc-hash 2.1.3",
+ "skrifa 0.37.0",
  "tracing",
  "web-time",
 ]
 
 [[package]]
 name = "rio-unicode"
-version = "0.5.29"
+version = "0.5.30"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ed68c9eaee951073cac248ece99f5f1ebabf92a1c0305ac28fa622a8fa1679d5"
+checksum = "0274e3731a55261eb6c24e3525334ca024ca1e0dd73702e3b211460ae1159e8f"
 
 [[package]]
 name = "rio-vt"
-version = "0.5.29"
+version = "0.5.30"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "28b1c817c56394ca5777f25a66925e9700e6d395154c7f55f1100a5f8cb0ef39"
+checksum = "29d77b3b5193f3b8122abbf4814dd02d7f7b6e04fc4d9d82e7ac6c9f7d3efee0"
 dependencies = [
  "base64 0.23.1",
  "bitflags 2.13.2",
@@ -10078,6 +10103,16 @@ name = "siphasher"
 version = "1.0.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8ee5873ec9cce0195efcb7a4e9507a04cd49aec9c83d0389df45b1ef7ba2e649"
+
+[[package]]
+name = "skrifa"
+version = "0.37.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8c31071dedf532758ecf3fed987cdb4bd9509f900e026ab684b4ecb81ea49841"
+dependencies = [
+ "bytemuck",
+ "read-fonts 0.35.0",
+]
 
 [[package]]
 name = "skrifa"

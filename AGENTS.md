@@ -55,6 +55,8 @@ flowchart LR
 | Host 架构边界检查，需 Bash 与 LF 脚本行尾 | `bash .github/scripts/check-host-boundary.sh` |
 | 补充 lint，CI 未运行此项 | `cargo clippy --workspace --all-targets --locked` |
 
+Windows：表中的 `cargo build`／`cargo test` 改用 `pwsh scripts/cargo-windows.ps1 build`／`pwsh scripts/cargo-windows.ps1 test`，其余参数不变；脚本从 Cargo JSON 的实际 executable 路径暂存固定 ConPTY，不依赖 Cargo 1.100 已改变的 `deps/`／`OUT_DIR` 布局。`cargo dev`／`cargo run` 前先完成同配置的 wrapper build。准备目录与独立产物契约见 `assets/windows/conpty/README.md`。
+
 Windows/macOS 默认 `build`/`test` 覆盖桌面、`lyrel-markdown-editor`、GUI-free `lyrel-text` 与 core/server/CLI；CI 另执行非默认 `native-markdown-tests` 下的 `native_markdown` 与 `native_terminal` 两个真实字形目标。Linux 使用 `cargo build --locked --workspace --exclude lyrel --exclude lyrel-markdown-editor --all-features` 与对应 `cargo test`；`lyrel-text` 可参与 headless 检查，GUI 依赖不得进入 core/server/CLI。Linux 完整 features 需 MIT Kerberos 开发依赖及 `LIBGSSAPI_IMPL=mit`。不引入手机网关。
 
 Windows 下此 Bash 检查需 LF 工作树：CRLF 脚本会报 `$'\r': command not found`／`invalid option name`。`.gitattributes` 已为 `.sh` 固定 LF；先排除行尾问题，不通过扩大 allowlist 掩盖。
@@ -87,7 +89,7 @@ Windows 下此 Bash 检查需 LF 工作树：CRLF 脚本会报 `$'\r': command n
 - `crates/lyrel-cli/src/cli.rs`：用户可见命令和参数契约。
 - `crates/lyrel-core/src/core/config.rs`：共享配置、目录解析和进程级覆盖；`src/core/config.rs` 是 GPUI 包装与测试写盘守卫。
 - `Cargo.toml`、`Cargo.lock`：workspace、统一版本、features 与正式锁定依赖；`.cargo/config.toml`：开发别名与 Windows 编译参数。
-- `build.rs`：Windows 图标资源；`crates/lyrel-core/build.rs`：GUI、server、CLI 与测试程序共用的已核验 ConPTY 暂存。
+- `build.rs`：Windows 图标资源；`crates/lyrel-core/build.rs`：共用 ConPTY 构建输入核验；`scripts/cargo-windows.ps1`：按 Cargo JSON 暂存实际程序与测试 executable 的 ConPTY。
 - `docs/docs.json`：文档导航；源码构建依赖见 `docs/getting-started/installation.mdx`。修改补全生成流程读 `scripts/fig-convert/README.md`，性能验证读 `scripts/bench/README.md`，后者依赖 macOS/zsh。
 
 ## 运行时与工具偏好

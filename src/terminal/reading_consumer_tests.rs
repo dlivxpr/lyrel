@@ -253,6 +253,7 @@ fn reading_pill_is_centered_localized_focusable_and_returns_live(cx: &mut TestAp
             assert!(window.try_find("terminal-return-live").is_none());
         })
         .unwrap();
+    graphics_wait_fixture(&view, cx, 13, b"SEND 13 0 1b5b306d 0\n".len());
     graphics_send_fixture(&view, cx, 14, b"\x1b[0m");
     daemon.panes().kill(pane).unwrap();
     graphics_recovery_destroy(view, window, cx);

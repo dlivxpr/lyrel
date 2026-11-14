@@ -41,6 +41,143 @@ fn a_replayed_mode_frame_puts_the_client_back_on_the_alternate_screen() {
     assert!(mode.contains(Mode::SGR_MOUSE), "{mode:?}");
 }
 
+/// A remembered reporting level must not resurrect reporting after the
+/// application reset another member of that mutually exclusive level.
+#[test]
+fn a_replayed_mouse_mode_frame_lands_on_the_effective_encoding_and_level() {
+    crate::core::config::pin_test_config_dir();
+    let (client_side, mut daemon_side) = socket_pair();
+    let term = RemoteTerminal::from_stream(client_side, TermSize::new(80, 24)).unwrap();
+
+    // The reporting level cleared itself out of the ring's fold once the
+    // application unset it; only the encoding transition survives.
+    let mut whole = TerminalModes::new();
+    whole.feed(b"\x1b[?1049h\x1b[?1000h\x1b[?1002h\x1b[?1003l\x1b[?1005h\x1b[?1006h");
+    let prelude = whole.restore_bytes().expect("modes still on");
+    DaemonMsg::Snapshot(prelude)
+        .encode(&mut daemon_side)
+        .unwrap();
+    daemon_side.flush().unwrap();
+
+    for _ in 0..600 {
+        if term.term.lock().mode().contains(Mode::ALT_SCREEN) {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+
+    let mode = term.term.lock().mode();
+    assert!(mode.contains(Mode::ALT_SCREEN), "{mode:?}");
+    assert!(
+        !mode.intersects(Mode::MOUSE_MODE),
+        "the application turned reporting off: {mode:?}"
+    );
+    assert!(mode.contains(Mode::SGR_MOUSE), "{mode:?}");
+    assert!(
+        !mode.contains(Mode::UTF8_MOUSE),
+        "the stream ended on SGR, not UTF-8: {mode:?}"
+    );
+}
+
+/// The opposite direction: an encoding transition the ring dropped must
+/// restore the *latest* winner, UTF-8, not both flags.
+#[test]
+fn a_replayed_mouse_encoding_transition_restores_utf8_last() {
+    crate::core::config::pin_test_config_dir();
+    let (client_side, mut daemon_side) = socket_pair();
+    let term = RemoteTerminal::from_stream(client_side, TermSize::new(80, 24)).unwrap();
+
+    let mut whole = TerminalModes::new();
+    whole.feed(b"\x1b[?1002h\x1b[?1006h\x1b[?1005h");
+    DaemonMsg::Snapshot(whole.restore_bytes().expect("modes still on"))
+        .encode(&mut daemon_side)
+        .unwrap();
+    daemon_side.flush().unwrap();
+
+    for _ in 0..600 {
+        if term.term.lock().mode().contains(Mode::UTF8_MOUSE) {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+
+    let mode = term.term.lock().mode();
+    assert!(mode.intersects(Mode::MOUSE_MODE), "{mode:?}");
+    assert!(mode.contains(Mode::UTF8_MOUSE), "{mode:?}");
+    assert!(
+        !mode.contains(Mode::SGR_MOUSE),
+        "the stream ended on UTF-8, not SGR: {mode:?}"
+    );
+}
+
+#[test]
+fn replayed_mouse_encoding_queries_match_live_transitions_and_resets() {
+    crate::core::config::pin_test_config_dir();
+    for (sequence, expected) in [
+        (
+            b"\x1b[?1005h\x1b[?1006h".as_slice(),
+            "\x1b[?1005;2$y\x1b[?1006;1$y",
+        ),
+        (
+            b"\x1b[?1006h\x1b[?1005h".as_slice(),
+            "\x1b[?1005;1$y\x1b[?1006;2$y",
+        ),
+        (
+            b"\x1b[?1005h\x1b[?1006h\x1b[?1006l".as_slice(),
+            "\x1b[?1005;2$y\x1b[?1006;2$y",
+        ),
+        (
+            b"\x1b[?1006h\x1b[?1005h\x1b[?1005l".as_slice(),
+            "\x1b[?1005;2$y\x1b[?1006;2$y",
+        ),
+    ] {
+        let mut whole = TerminalModes::new();
+        whole.feed(sequence);
+        // Exercise every complete-operation ring boundary, including the
+        // empty ring: a suffix must finish the same encoding as a live stream.
+        let boundaries = std::iter::once(0).chain(
+            sequence
+                .iter()
+                .enumerate()
+                .filter_map(|(i, b)| matches!(b, b'h' | b'l').then_some(i + 1)),
+        );
+        for boundary in boundaries {
+            let mut head = TerminalModes::new();
+            head.feed(&sequence[..boundary]);
+            let mut ring = TerminalModes::new();
+            ring.feed(&sequence[boundary..]);
+            let mut replay = whole.replay_prelude(&head, &ring).unwrap_or_default();
+            replay.extend_from_slice(&sequence[boundary..]);
+            let (client_side, mut daemon_side) = socket_pair();
+            let term = RemoteTerminal::from_stream(client_side, TermSize::new(80, 24)).unwrap();
+            DaemonMsg::Snapshot(replay)
+                .encode(&mut daemon_side)
+                .unwrap();
+            DaemonMsg::Output(b"\x1b[?1005$p\x1b[?1006$p\x1b[?1015$p\x1b[?1016$p".to_vec())
+                .encode(&mut daemon_side)
+                .unwrap();
+            daemon_side.flush().unwrap();
+            let mut replies = String::new();
+            for _ in 0..600 {
+                while let Ok(event) = term.events.try_recv() {
+                    if let PaneEvent::PtyWrite(text) = event {
+                        replies.push_str(&text);
+                    }
+                }
+                if replies.matches("$y").count() >= 4 {
+                    break;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(5));
+            }
+            assert_eq!(
+                replies,
+                format!("{expected}\x1b[?1015;0$y\x1b[?1016;0$y"),
+                "sequence {sequence:?}, ring boundary {boundary}"
+            );
+        }
+    }
+}
+
 /// #1074, checked against the emulator itself rather than against our
 /// reading of it: wherever the ring's front falls, the prelude plus what
 /// the ring still holds has to leave the client's kitty keyboard flags

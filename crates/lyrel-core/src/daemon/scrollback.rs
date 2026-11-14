@@ -91,6 +91,60 @@ pub fn trim_to(segments: &mut Vec<Segment>, cap: usize) {
     }
 }
 
+const GLYPH_APC_OPEN: &[u8] = b"\x1b_25a1";
+
+/// Drop complete Glyph Protocol APCs before persisted bytes outlive the pane.
+/// A persisted definition would be state a replacement shell never accepted,
+/// and the protocol's bodies are invisible text. A body split at a segment
+/// boundary is not a complete definition and is left alone; replay never
+/// derives glyphs from historical bytes either.
+fn without_glyph_bodies(bytes: &[u8]) -> Option<Vec<u8>> {
+    let mut keep = 0usize;
+    let mut search = 0usize;
+    let mut out: Option<Vec<u8>> = None;
+    while search + GLYPH_APC_OPEN.len() <= bytes.len() {
+        let Some(found) = memchr::memmem::find(&bytes[search..], GLYPH_APC_OPEN) else {
+            break;
+        };
+        let start = search + found;
+        let body = start + GLYPH_APC_OPEN.len();
+        let limit = bytes
+            .len()
+            .min(body.saturating_add(crate::core::glyph_protocol::MAX_APC_BODY));
+        let mut at = body;
+        let mut end = None;
+        let mut aborted = false;
+        while at < limit {
+            match bytes[at] {
+                0x18 | 0x1a => {
+                    aborted = true;
+                    break;
+                }
+                0x1b if bytes.get(at + 1) == Some(&b'\\') => {
+                    end = Some(at + 2);
+                    break;
+                }
+                _ => at += 1,
+            }
+        }
+        if aborted {
+            search = at + 1;
+            continue;
+        }
+        let Some(end) = end else {
+            search = body;
+            continue;
+        };
+        let out = out.get_or_insert_with(|| Vec::with_capacity(bytes.len()));
+        out.extend_from_slice(&bytes[keep..start]);
+        keep = end;
+        search = end;
+    }
+    let mut out = out?;
+    out.extend_from_slice(&bytes[keep..]);
+    Some(out)
+}
+
 pub fn encode(segments: &[Segment], title: Option<&str>) -> Vec<u8> {
     let mut out = Vec::with_capacity(
         MAGIC.len() + 4 + segments.iter().map(|s| s.bytes.len() + 12).sum::<usize>(),
@@ -98,12 +152,14 @@ pub fn encode(segments: &[Segment], title: Option<&str>) -> Vec<u8> {
     out.extend_from_slice(MAGIC);
     out.extend_from_slice(&(segments.len() as u32).to_le_bytes());
     for seg in segments {
+        let filtered = without_glyph_bodies(&seg.bytes);
+        let bytes = filtered.as_deref().unwrap_or(&seg.bytes);
         out.extend_from_slice(&seg.size.cols.to_le_bytes());
         out.extend_from_slice(&seg.size.rows.to_le_bytes());
         out.extend_from_slice(&seg.size.cell_w.to_le_bytes());
         out.extend_from_slice(&seg.size.cell_h.to_le_bytes());
-        out.extend_from_slice(&(seg.bytes.len() as u32).to_le_bytes());
-        out.extend_from_slice(&seg.bytes);
+        out.extend_from_slice(&(bytes.len() as u32).to_le_bytes());
+        out.extend_from_slice(bytes);
     }
     // Trailing, so a file with no title is byte-identical to the old format:
     // the old reader stopped after the segments and never checked for a tail,
@@ -132,7 +188,10 @@ pub fn decode(raw: &[u8]) -> Option<(Vec<Segment>, Option<String>)> {
         let cell_w = u16::from_le_bytes(take(&mut cur, 2)?.try_into().ok()?);
         let cell_h = u16::from_le_bytes(take(&mut cur, 2)?.try_into().ok()?);
         let len = u32::from_le_bytes(take(&mut cur, 4)?.try_into().ok()?) as usize;
-        let bytes = take(&mut cur, len)?.to_vec();
+        let mut bytes = take(&mut cur, len)?.to_vec();
+        if let Some(filtered) = without_glyph_bodies(&bytes) {
+            bytes = filtered;
+        }
         segments.push(Segment {
             size: WinSize {
                 cols,

@@ -213,7 +213,7 @@ Git 的新增/修改标记种子为绿 `#2F8A52` / `#4CC27A`、琥珀 `#B7791F` 
   同步期间的选择与复制读取 committed cells：Tab 只跳过实际 tab stop 之前的 NUL 展开空白，
   stop 之后的真实 NUL 间隔仍为空格；尾空行／全空选区不凭空加入换行，内部空行与 soft-wrap 间隔保留，
   按行选择单独保留一个末尾换行。普通可达边界以正常 Rio 复制与独立可见字面量共同核验。
-  已知例外：正式 Rio `0.5.28`／`0.5.29` 的 normal copy 在 Simple 选区仅终止于 `LeadingSpacer` 时，
+  已知例外：正式 Rio `0.5.28`／`0.5.29`／`0.5.30` 的 normal copy 在 Simple 选区仅终止于 `LeadingSpacer` 时，
   上游补偿分支会读入前一物理行的首字符；本次不改 normal 路径，也不将该旧 quirk 复制进 held 路径。
   held 只序列化 committed 实际可见选区，不引入前行字符或未选中的下一行 wide base，不宣称所有边界字节无例外等价。
   GUI 通过原有 `ParseBridge` 回调记录一维 stop 元数据，涵盖 HTS／TBC／RIS 与 resize 后新增的默认 stops，

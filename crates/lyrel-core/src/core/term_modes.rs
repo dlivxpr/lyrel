@@ -65,8 +65,9 @@ const MAX_PARAMS: usize = 64;
 /// public-Handler adapter. It is independent of the emulator's internal stack.
 const KEYBOARD_STACK_MAX_DEPTH: usize = 4096;
 
-/// The flag bits the protocol defines; the emulator truncates the rest.
-const KEYBOARD_FLAGS: u8 = 0b1_1111;
+/// Implemented enhancements. GPUI has no physical/base-layout key data, so
+/// alternate-key reporting (bit 4) must not survive queries or replay either.
+const KEYBOARD_FLAGS: u8 = 0b1_1011;
 
 /// The kitty keyboard flags, kept the way the client's emulator keeps them.
 ///
@@ -107,7 +108,7 @@ impl KeyboardStacks {
         if stack.len() >= KEYBOARD_STACK_MAX_DEPTH {
             stack.remove(0);
         }
-        stack.push(flags);
+        stack.push(flags & KEYBOARD_FLAGS);
         self.reload();
     }
 
@@ -118,6 +119,7 @@ impl KeyboardStacks {
     }
 
     pub fn set(&mut self, flags: u8, how: u16) {
+        let flags = flags & KEYBOARD_FLAGS;
         self.active = match how {
             2 => self.active | flags,
             3 => self.active & !flags,
@@ -204,6 +206,10 @@ pub struct TerminalModes {
     /// `CSI c` (primary device attributes) queries seen and not yet taken —
     /// see [`Self::take_device_attribute_queries`].
     device_attribute_queries: usize,
+    /// How many `ESC c` full resets this fold has seen. Consumers that keep
+    /// state outside this tracker (the glyph glossary) compare it to clear on
+    /// the same stream position.
+    resets: u64,
     keyboard: KeyboardStacks,
 }
 
@@ -252,6 +258,12 @@ impl TerminalModes {
     /// fed since the last call. Counted only, like the 996 ones.
     pub fn take_device_attribute_queries(&mut self) -> usize {
         std::mem::take(&mut self.device_attribute_queries)
+    }
+
+    /// How many full resets (`ESC c`) this fold has seen. A consumer with
+    /// state outside this tracker clears when the value changes.
+    pub fn resets(&self) -> u64 {
+        self.resets
     }
 
     /// The bytes that put a freshly reset terminal back into these modes, or
@@ -365,6 +377,7 @@ impl TerminalModes {
                     b'c' => {
                         self.on.clear();
                         self.keyboard = KeyboardStacks::default();
+                        self.resets = self.resets.wrapping_add(1);
                         self.state = State::Text;
                     }
                     0x1b => {}
@@ -456,9 +469,15 @@ impl TerminalModes {
             if mode == ALT_SCREEN && self.is_on(mode) != on {
                 self.keyboard.swap();
             }
-            // Removed either way: switching a mode on again moves it to the
-            // back, so the replay repeats the application's own order.
-            self.on.retain(|m| *m != mode);
+            // Reporting levels replace one another; resetting any level
+            // clears reporting. Encodings replace one another only on set,
+            // while reset clears just that encoding. Mirror Rio's effective
+            // state so replay cannot resurrect a displaced mode.
+            self.on.retain(|m| match mode {
+                1000 | 1002 | 1003 => !matches!(*m, 1000 | 1002 | 1003),
+                1005 | 1006 if on => !matches!(*m, 1005 | 1006),
+                _ => *m != mode,
+            });
             if on {
                 self.on.push(mode);
             }
@@ -498,6 +517,20 @@ mod tests {
     use super::*;
 
     #[test]
+    fn keyboard_replay_retains_only_implemented_enhancements() {
+        let mut modes = TerminalModes::new();
+        modes.feed(b"\x1b[>31u\x1b[=4;2u");
+        assert_eq!(modes.restore_bytes().unwrap(), b"\x1b[>27u");
+        modes.feed(b"\x1b[>4u\x1b[<u");
+        assert_eq!(modes.restore_bytes().unwrap(), b"\x1b[>27u");
+        modes.feed(b"\x1b[?1049h\x1b[>6u");
+        assert_eq!(
+            modes.restore_bytes().unwrap(),
+            b"\x1b[>27u\x1b[?1049h\x1b[>2u"
+        );
+    }
+
+    #[test]
     fn tracks_the_alternate_screen_and_mouse_modes_a_full_screen_tool_sets() {
         let mut modes = TerminalModes::new();
         modes.feed(b"\x1b[?1049h\x1b[?1002h\x1b[?1006h");
@@ -524,18 +557,76 @@ mod tests {
     fn one_csi_may_carry_several_modes() {
         let mut modes = TerminalModes::new();
         modes.feed(b"\x1b[?1000;1002;1006h");
-        assert_eq!(modes.active(), &[1000, 1002, 1006]);
+        // `?1000` and `?1002` are one reporting level in the emulator: the
+        // fold keeps only the last-set parameter, mirroring the effective
+        // state rather than stacking flags the emulator already replaced.
+        assert_eq!(modes.active(), &[1002, 1006]);
+        // Resetting any reporting mode clears the level — the emulator has
+        // no second reporting mode underneath to fall back to.
         modes.feed(b"\x1b[?1000;1002l");
         assert_eq!(modes.active(), &[1006]);
     }
 
     #[test]
-    fn re_setting_a_mode_moves_it_behind_the_ones_set_since() {
+    fn the_mouse_reporting_modes_fold_to_the_level_the_emulator_sees() {
+        // In the emulator `?1000`, `?1002` and `?1003` are not independent
+        // bits but one reporting level, and resetting any reporting mode
+        // ends reporting entirely. A fold that kept `1002` here would
+        // restore reporting on attach even though the application already
+        // turned it off — the prelude has to land on no reporting too.
+        let mut modes = TerminalModes::new();
+        modes.feed(b"\x1b[?1000h\x1b[?1002h\x1b[?1003l");
+        assert!(modes.active().is_empty());
+        assert!(modes.restore_bytes().is_none());
+
+        let mut modes = TerminalModes::new();
+        modes.feed(b"\x1b[?1049h\x1b[?1000h\x1b[?1003h");
+        assert_eq!(modes.active(), &[1049, 1003]);
+    }
+
+    #[test]
+    fn the_utf8_and_sgr_mouse_encodings_are_mutually_exclusive() {
+        // `?1005` and `?1006` select one coordinate encoding; the emulator
+        // clears the other on each set, so a fold that remembers both would
+        // replay a transition the live stream already resolved.
+        let mut modes = TerminalModes::new();
+        modes.feed(b"\x1b[?1005h\x1b[?1006h");
+        assert_eq!(modes.active(), &[1006]);
+
+        let mut modes = TerminalModes::new();
+        modes.feed(b"\x1b[?1006h\x1b[?1005h");
+        assert_eq!(modes.active(), &[1005]);
+
+        // Unsetting an encoding drops only itself; nothing else turns back
+        // on. A `?1006l` after `?1005h ?1006h` leaves neither — replaying
+        // `?1005h` here would re-enable an encoding the application retired.
+        let mut modes = TerminalModes::new();
+        modes.feed(b"\x1b[?1005h\x1b[?1006h\x1b[?1006l");
+        assert!(modes.active().is_empty());
+        let mut modes = TerminalModes::new();
+        modes.feed(b"\x1b[?1006h\x1b[?1005h\x1b[?1005l");
+        assert!(modes.active().is_empty());
+    }
+
+    #[test]
+    fn unimplemented_mouse_encodings_do_not_displace_a_live_one() {
+        // The client's emulator ignores `?1015`/`?1016` entirely — they are
+        // tracked only so a stream that set them replays verbatim — so they
+        // must not clear the encoding the emulator is really using.
+        let mut modes = TerminalModes::new();
+        modes.feed(b"\x1b[?1006h\x1b[?1015h");
+        assert_eq!(modes.active(), &[1006, 1015]);
+        modes.feed(b"\x1b[?1016h");
+        assert_eq!(modes.active(), &[1006, 1015, 1016]);
+    }
+
+    #[test]
+    fn re_setting_a_mouse_reporting_level_keeps_only_the_winner() {
         let mut modes = TerminalModes::new();
         // The emulator treats the reporting modes as a level, so the last one
-        // set is the one that wins — the replay has to end on it too.
+        // set is the only one on — the fold has to end on it too.
         modes.feed(b"\x1b[?1002h\x1b[?1003h\x1b[?1002h");
-        assert_eq!(modes.active(), &[1003, 1002]);
+        assert_eq!(modes.active(), &[1002]);
     }
 
     #[test]
@@ -632,7 +723,7 @@ mod tests {
     #[test]
     fn kitty_keyboard_pushes_and_pops_a_stack() {
         let k = keyboard(b"\x1b[>1u\x1b[>7u");
-        assert_eq!((k.primary.as_slice(), k.active), (&[1, 7][..], 7));
+        assert_eq!((k.primary.as_slice(), k.active), (&[1, 3][..], 3));
         // A bare pop is one; a pop of zero is the default too.
         let k = keyboard(b"\x1b[>1u\x1b[>7u\x1b[<u");
         assert_eq!((k.primary.as_slice(), k.active), (&[1][..], 1));
@@ -649,7 +740,7 @@ mod tests {
         let k = keyboard(b"\x1b[>3u\x1b[=1;3u");
         assert_eq!(k.active, 2);
         let k = keyboard(b"\x1b[>3u\x1b[=4u");
-        assert_eq!(k.active, 4);
+        assert_eq!(k.active, 0);
         // A pop reloads from the stack, dropping the set.
         let k = keyboard(b"\x1b[>1u\x1b[>1u\x1b[=0;1u\x1b[<u");
         assert_eq!(k.active, 1);
@@ -660,13 +751,13 @@ mod tests {
         let k = keyboard(b"\x1b[>1u\x1b[?1049h\x1b[>7u");
         assert_eq!(
             (k.primary.as_slice(), k.alternate.as_slice(), k.active),
-            (&[1][..], &[7][..], 7)
+            (&[1][..], &[3][..], 3)
         );
         let k = keyboard(b"\x1b[>1u\x1b[?1049h\x1b[>7u\x1b[?1049l");
         assert_eq!(k.active, 1);
         // Re-entering a screen already on is no swap; `47` is none at all.
         let k = keyboard(b"\x1b[?1049h\x1b[>7u\x1b[?1049h\x1b[?47l");
-        assert!(k.on_alt && k.active == 7);
+        assert!(k.on_alt && k.active == 3);
     }
 
     #[test]
@@ -694,7 +785,7 @@ mod tests {
         modes.feed(b"\x1b[>1u\x1b[?1049h\x1b[>7u\x1b[=3u");
         assert_eq!(
             modes.restore_bytes().unwrap(),
-            b"\x1b[>1u\x1b[?1049h\x1b[>7u\x1b[=3;1u".to_vec()
+            b"\x1b[>1u\x1b[?1049h\x1b[>3u".to_vec()
         );
         let mut modes = TerminalModes::new();
         modes.feed(b"\x1b[>1u");

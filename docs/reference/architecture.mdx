@@ -23,7 +23,7 @@ workspace 包含六个 crate；桌面 GUI、CLI 和 headless server 复用 `lyre
 
 `src/daemon.rs` 重导出共享 daemon，`src/core/` 在共享核心之上增加 GUI 适配。桌面入口的 `--daemon` 模式在启动 GPUI 前转入共享 daemon，因此后台服务器可以由 `lyrel-app --daemon` 或独立 `lyrel-server --daemon` 承载。
 
-GUI 通过 `gpui-kit =0.9.1` 的官方 `gpui-fast` feature 选择 Fast，应用导入与测试宏仍使用 `gpui_kit` facade。GUI、daemon 图形镜像与 CLI capture 共用 `rio-vt =0.5.29` 的解析器和网格；Rio 的默认 features 关闭，不引入其 PTY、窗口或 GPU 渲染栈。平台 PTY 和终端绘制仍由 lyrel 自己接入。
+GUI 通过 `gpui-kit =0.9.1` 的官方 `gpui-fast` feature 选择 Fast，应用导入与测试宏仍使用 `gpui_kit` facade。GUI、daemon 图形镜像与 CLI capture 共用 `rio-vt =0.5.30` 的解析器和网格；Rio 的默认 features 关闭，不引入其 PTY、窗口或 GPU 渲染栈。平台 PTY 和终端绘制仍由 lyrel 自己接入。
 
 ## 进程与连接拓扑
 
@@ -102,9 +102,9 @@ control 与 pane 分别协商协议；应用版本、control 版本和 pane 版�
 | 协议 | 源码常量 | 当前版本 | 承载内容 |
 | --- | --- | ---: | --- |
 | control | `daemon/control.rs` 的 `CONTROL_VERSION` | 16 | Host 操作、机器树、工作区附着、事件、文件／Git 流和主机指标 |
-| pane | `daemon/protocol.rs` 的 `PROTOCOL_VERSION` | 17 | 创建／附着／观察、输入输出、尺寸、终端模式、agent 状态与图形回放 |
+| pane | `daemon/protocol.rs` 的 `PROTOCOL_VERSION` | 19 | 创建／附着／观察、输入输出、尺寸、终端模式、agent 状态、图形回放、当前进度、pane 颜色、XTGETTCAP、Glyph 注册／查询／保留投影与 iTerm2 精确显示像素 |
 
-本地 Unix 使用私有 Unix socket，Windows 使用经认证的 loopback TCP；远端通过 SSH／stdio 桥接这些流。远端 server 文件名包含两套版本，当前为 `lyrel-server-c16p17`，Windows 加 `.exe`。
+本地 Unix 使用私有 Unix socket，Windows 使用经认证的 loopback TCP；远端通过 SSH／stdio 桥接这些流。远端 server 文件名包含两套版本，当前为 `lyrel-server-c16p19`，Windows 加 `.exe`。
 
 control 的 HELLO 在请求循环前核对版本与 features。增删 wire 消息变体需提升 control 版本，可安全忽略的字段才使用 feature 协商。pane 在实际 endpoint 上先协商版本和有限图形容量，再创建或附着会话；不兼容连接不能先启动 shell 再报告错误。
 
@@ -119,13 +119,33 @@ control 的 HELLO 在请求循环前核对版本与 features。增删 wire 消�
 
 1. daemon 的平台生命周期接入 PTY／child 或原生 SSH channel；launch 准备 shell、环境与工作目录，reader 按输出顺序推进 pane 状态。
 2. daemon 保存有界文字回放和几何分段，同时维护 Kitty 图片资源、独立放置、历史锚点与播放时间线。订阅者先获得一致的回放基线，再进入实时输出。
+   pane 级 Glyph Protocol glossary 同样由 daemon 权威持有：只接受 pinned v1.12 校验通过的 `glyf`（PUA、simple/unhinted、64 KiB wire/decoded、1024 FIFO），按请求的 `reply` 级别回复；接受的 `r`/`c` 原样按流位置重发，拒绝/畸形体剥离，RIS 在同一有序位置清空。`q` 不进入消费者：daemon 只向当前 controller 发起一次有界请求，捕获请求位置的 glossary 位，由 controller 用实际字体 fallback 回答 system 位，daemon 写唯一回复；无 controller 时保持静默，旧 token/重复答案丢弃。GUI 仅从接受体或权威投影重建每 pane 派生绘制（revision、FIFO 镜像），按 §8.5 的 pad → size → align 顺序处理声明 extent 或解码点 bbox（未声明 `contain` 受 em 上限），以主字体实际 baseline 对齐并 clip 到未扣 padding 的 render span，用单元格 effective foreground 绘制。`width=2` 只扩像素 span，末列、非空或已由邻格自行绘制的空白回退一列；不安装字体，不改 logical width、光标推进、换行、选择、复制、raw codepoint、普通 fallback、Powerline/boxdraw 或 Kitty placeholder。前景、几何、baseline、span、注册 revision 与 display scale 每帧参与派生，不复用紧凑 slot/version。
+   绘制在 snapshot acquisition 时把注册资源身份（`Arc<GlyphView>`）捕获进单元格：live 单元格在下一次成功帧采用当前注册；未完成同步帧、grid 竞争复用帧与阅读行保留其捕获版本，直到该 buffer／reading 正常退休，最后一个 owner 释放后才回收 outline。RIS 仍按既有破坏性阅读重置规则丢弃阅读呈现并清空 live registry，不留下陈旧呈现代理。旧 endpoint 缺少 `glyph-registry`／`glyph-state` feature 时消费者不派生、不应答并提示更新 daemon。完整单色支持正常启用，不增加默认关闭的实验开关；GUI 仅向实际声明 `glyph-support` 的 endpoint 发送 `SubscribeGlyphRender`，daemon 仅在当前 controller 声明完整绘制能力时回答 `s`，且只广告 `fmt=glyf`。CLI／observer／仅订阅 state 的旧消费者、脱离及后续未声明能力的替代 controller 不继承该广告；远端以实际 pane 协商为准，不以本机 GUI 版本代替，也不自动替换 server 或终止 pane。
+   接受的 glossary 不再依赖文字 ring 恢复：daemon 在 `glyph-registry` 之上新增可忽略的 `glyph-state` feature 与 client opt-in，附着时在 ring／图形／颜色回放之后发送有界全量 `GlyphState`（generation + 插入序注册；聚合 wire ≤4 MiB、decoded ≤8 MiB）。未 opt-in 的旧 client 不会收到 kind 72／73，controller 未 opt-in 时 `q` 保持静默；回放文字中的 glyph body 不用于派生。`c`／RIS 在流位置递增 generation，消费者原子替换 registry 并忽略更旧 generation，退休 link 的迟到结果由 link generation 隔离。同一 pane-session 的 Unix `exec` handoff 显式携带该 frame；磁盘 scrollback 剥离完整 glyph APC，旧 handoff 与 daemon 死亡后的新 shell 不复活旧 registry。超过聚合 wire／decoded 预算的注册明确失败，不静默丢弃已接受定义。
 3. 桌面的 `PaneHandshake` 完成路由与接入，`PaneConnection` 配对 reader／writer；`ReaderTask` 管理一次 reader 生命周期，`FrameReader` 顺序消费帧并推进 Rio 网格、模式、解码与回放位置。`LinkWriter` 管理输入队列和背压。
 4. `TerminalLifecycle` 拥有事件 receiver 与批量唤醒，`TerminalView` 适配交互、标题、agent 活动和通知。transport 断开不等于 child 退出，只有真实进程退出才产生 `ChildExited`。
 5. `TerminalElement` 保留唯一的 `request_layout` → `prepaint` → `paint` 管线和命中几何。稳态 grid 锁竞争时保留上一有效帧并重试；输入仍读取 live 模式，不以旧帧模式解释新按键。
 
 隐藏 pane 继续消费输出、更新必要状态并释放退休图片资源，但普通输出不触发整窗重绘。daemon 持有图片权威，桌面只保留受预算约束的解码／绘制缓存；图片回收与连接退休不能通过隐藏副本绕过资源上限。
 
+单窗格进度由 `PaneFacts` 保存一个可选 `PaneProgress`，复用 `output_marks` 与原有 `OscTokenizer`
+按顺序折叠 `OSC 9;4` 和命令边界，不另建 VT parser 或历史事件队列。`DaemonMsg::Progress` 在实际
+v18 pane 流中发布有意义的变化，并在 attach 基线中始终发送当前状态（包括清空）；桌面不从回放文字
+重建权威进度。支持的同进程 handoff 携带状态，磁盘 scrollback、机器树和新 Shell 不携带它。
+`ProgressChanged` 只通知 tab owner 更新语义状态，不调用 agent lifecycle 或绕过隐藏 pane 的输出绘制门控。
+标签页汇总直接从所属全部终端叶子的当前状态派生，包括未聚焦、隐藏和停放的叶子；它不写入机器树或
+会话布局，也不经 agent payload 传递。成员变化、重连与重建后由新叶子及其 daemon 基线自然更新汇总；
+休眠标签页没有叶子，因而没有瞬时进度可显示。
+
 同步更新期间，解析、协议应答和输入模式仍实时推进，桌面只延迟发布新的文字、光标和图片帧。结束标记或既有 150 ms fail-safe 解除冻结；CLI `capture --plain` 重建最新收到的状态，不等待 GUI 已提交帧。图形协议范围与历史验收记录见[终端内联图片](/getting-started/concepts#终端内联图片)。
+
+XTGETTCAP 同样只有 daemon 一个实时应答者，不随 controller 附着／脱离转移。
+reader 复用既有有界 control-string framing，Rio public parser 识别 DCS header，完整且不超限的查询才进入
+daemon 的 Rio `Handler::xtgettcap_response`；生成应答按解码名字重写为保守白名单。
+查询 payload 不进入 replay ring、GUI 或 CLI parser，取消／超限查询也不会借普通输出路径绕过限制。
+桌面 callback 对旧 snapshot 中残留的查询保持静默；实际 pane 协商必须确认 `xtgettcap-owner`，
+不能以本机 build 的 feature 列表替代远端 endpoint 的保证。具体白名单和 `8192` 字节限制见
+[终端能力发现](/terminal/mouse-and-scrolling#xtgettcap-discovery)。
 
 <a id="async-lifecycle"></a>
 ## 创建、重连与结果失效
@@ -202,3 +222,72 @@ coding agent 在真实 PTY 中运行自己的原生 TUI。命令识别、状态 
 桌面只支持 Windows／macOS；Linux 保留 core、server、CLI 与 GUI-free `lyrel-text`，显式排除根桌面包及 `lyrel-markdown-editor`，不预留手机网关。Windows 使用已核验、配套分发的官方 ConPTY。依赖与平台选择见[安装指南](/getting-started/installation)，编译成功不推导原生或跨平台行为通过。
 
 验证需匹配被修改的边界：共享行为使用对应 core／server／CLI 用例和真实 daemon／PTY 路径；GUI 行为还需实际窗口观察；Unix、Windows、macOS 与真实 SSH 的证据分别记录。历史工单中的测试计数、二进制身份、失败与未验证项保留在原记录，不作为当前源码已重新验收的声明。
+
+#266 的当前窄验证（Windows，真实 PTY → 隔离 daemon → 生产 `TerminalView`，`LYREL_CONPTY_DIR` 指向根 `.conpty`）：
+
+- `pwsh scripts/cargo-windows.ps1 test -p lyrel-core --lib glyph_`：25 passed（PUA、reply 0/1/2、composite/hinted、64 KiB wire/decoded、abort、split APC、1024 FIFO、RIS、q 请求位置 glossary、真实 extract→consume 管线）。
+- `pwsh scripts/cargo-windows.ps1 test -p lyrel --lib glyph_consumer_real_pty`：1 passed（真实 q/r/c 回复字节、生产绘制 path/effective fg、replace/clear、raw codepoint）。
+- `pwsh scripts/cargo-windows.ps1 test -p lyrel --lib a_glyph_query`：2 passed（reader→view→Client71 单答案）。
+- `--features native-markdown-tests --test native_terminal glyph_native`：真实字体 coverage 与生产绘制入口；原生窗口像素、WSL 与真实 SSH 仍由父验收，不在本页记为通过。
+
+#270 的实际客户端后台检查点为 `c3d5eb53`：正式 `omp/18.20.0` 在隔离 HOME／profile 中无 prompt 启动，关闭 tools、LSP、extensions、skills、rules、context files 和标题生成；真实 PTY → daemon → rooted 生产消费者完成 support → bundle 注册 → coverage confirmation，并用默认主字体 `Hack` 将实际注册的 `U+F0311` 绘制为 1 条 path，1 passed／0 failed／0 ignored。harness 只发送终端回复，不向真实客户端注入 fixture 的 `SEND` 命令。此为后台消费者绘制证据，不是 Windows 原生窗口像素、OS DPI、最终组合、WSL 或真实 SSH 的完整单色验收，也不宣称 macOS 原生通过。
+
+去除临时诊断后的检查点 `3a5942b6`：`cargo fmt --check`、core `glyph_` 38 项、GUI `glyph_` 31 项均通过；GUI 的 2 项忽略分别为私有 PTY sender 和另行显式运行的真实 omp 用例。完整 `q/s + DA1` 排序与 controller render opt-in 替换均实际通过；随后真实 `omp/18.20.0` 单项再次通过，1 passed／0 failed／0 ignored。上述均为窄验证，不是完整 workspace 或原生窗口通过声明。
+
+Windows fixture 的初次 DA1 交换需与真实客户端一样完成 ConPTY 初始化：Microsoft 的 [`InputStateMachineEngine::ActionCsiDispatch`](https://github.com/microsoft/terminal/blob/main/src/terminal/parser/InputStateMachineEngine.cpp) 会将首条 DA1 回复用于宿主属性，而不送入应用 stdin。排序用例在初始化后仍将 `s`／`q` 与 DA1 放在同一 write 中，并精确比较两条真实回复及先后顺序，不通过延长超时或丢弃 sentinel 断言规避该平台行为。
+
+
+<a id="spec-258-acceptance"></a>
+### #258：统一候选的验证边界
+
+2026-11-14 的产品验证使用冻结源码 `2c0fcd7d`：Windows workspace、独立无过滤 CLI E2E、WSL 原生 Linux 完整 features 的 headless workspace，以及真实 Windows→Linux SSH 恢复路径均已执行。Windows 本机另实际运行 `native_terminal`，3 passed／0 failed／0 ignored；该 runner 使用真实 OS 字体与生产绘制入口，但窗口和 display scale 仍由 test platform 驱动，不能代替实窗或系统 DPI 验收。
+
+同源隔离 Windows 实窗使用普通主字体 `Hack`，验证默认／declared Glyph、五种 size、width-two 的空白邻格与非空邻格回退、最后列裁切、替换／清除、主副屏切换、有效前景与字体 15→18 的缩放。真实滚轮进入保留阅读后，后台替换已获注册成功的 Glyph，冻结行仍显示旧方形；返回 live 后，同一 codepoint 显示新条形。未结束的 synchronized update 在既有 fail-safe 后实际绘制，显式 ESU 在 15 秒后才发送；此记录不声称在 150 ms 内截获旧帧。
+
+原始注册字节经 9 MiB 非滚动输出淘汰、Node producer 退出后，新的 GUI 进程在同一存活 daemon／pane 恢复注册；只重发普通 codepoint 文本，不重发定义。正式 `omp/18.20.0` 也在该原生窗口以隔离 profile、无 prompt、关闭 tools／LSP／discovery／标题生成启动，注册 bundle 并显示 `U+F0311`、`U+F12B7`；未调用模型。实际字体 path 证据与原生画面分别保留，不将安装过 Nerd Font 当成成功依据。
+
+后续提交至 `8fb1795d` 仅修正测试／验证接缝和记录，未改变上述生产代码。对应 [CI](https://github.com/dlivxpr/lyrel/actions/runs/43541885955) 全部必需 job 已成功；macOS 实际 checkout 为 `032a4e77`，library 3,106 passed／0 failed／37 ignored，原 inactive-main 图形压力用例明确通过，native terminal 3 项与 native Markdown 37 项均通过。该 CI 的自动化结果不改标为本机产品二进制版本，也不推导 macOS 实窗通过。
+
+同一候选已完成授权的实际系统缩放：单显示器 Q27G4Z 从 100% 改为 125%，等窗口完成 `WM_DPICHANGED` 后核验 Glyph 几何，再恢复 100%；没有重新注册 Glyph，也未留下系统缩放改动。
+
+OSC 22 另以真实 OS cursor 采样核验 `Hand`、`SizeWE`、`SizeNESW`，以及不支持名称、空请求、分片 reset、RIS 的安全回退。采样只计自有 GUI PID 的终端内容：选择、armed link、右键菜单与工作台 divider 覆盖应用请求；相邻 pane 不继承请求，TUI divider 可实际拖动，返回 shell 后恢复 `IBeam`。未打开测试链接，也未向用户实例输入。
+
+增强键盘原生 recorder 请求 flags `31`，有效回复为 `27`；方向键、F3、Ctrl+Q 与 Shift+Tab 均记录到 press 和配对 release。系统微软拼音实际显示 `zhong` 候选，Space 提交“中”后 PTY 只收到一次 `ESC[0;1;20013u`。随后 `zhong'wen` 预编辑期间没有 PTY 输入，Escape 取消后也没有泄漏文字或孤立 release。
+
+同一冻结候选另在真实 Windows pane 完成颜色／进度／鼠标组合：OSC 覆盖与查询样本的 ANSI-1、ANSI-2、默认前景和背景像素分别一致，颜色 producer 退出后背景仍保留，reset 后露出当前 Dark 默认；chrome 像素未变。光标色获得真实查询回复，但该轮 bar 的像素取点落入背景，不计为原生光标色通过。两个同标签页的真实 producer 分别验证 42%、非焦点 pane 错误优先、多任务不显示虚构百分比、单 pane clear 后保留另一 pane 的暂停 61%，正常退出后清除。
+
+随后在同一 `2c0fcd7d` 实窗以独立场景补测 OSC 12：查询返回 `rgb:ffff/0000/0000`，取得终端输入焦点后的 steady block caret 与独立背景参考色块，在保存截图中的取样均为 `[255,0,0]`，相邻终端背景为 `[24,24,26]`。原无光标或取点落空的截图仍保留为无效探针，不冒充产品失败；producer 正常退出并用 OSC 112 恢复默认，只关闭新增测试 pane。
+
+最大化并收起侧栏后，真实 pane 为 234×52：Ctrl 点击第 229 列得到 1005 UTF-8 press／release，坐标字段包含 `c4 85`；切换 1006 后，同位置 Alt 点击得到 `CSI < 8 ; 229 ; 8 M/m`。DECRQM 随生效编码从 `1005=1,1006=2` 切到 `1005=2,1006=1`，`1015=0` 始终如实拒绝。该列超过 legacy 上限 222，不将脚本建议的第 241 列写成实际点击位置；退出后恢复窗口大小和鼠标模式。
+
+真实 Neovim `0.12.6` 的 WSL TUI 在该 Windows ConPTY pane 中执行公开 `vim.tty.query`：`Co=256`、`RGB=8/8/8` 为正答，`Ms/TN/sixel/iterm2/cols/lines/Glyph/unknown` 为负答，共 10 组 PASS、无 FAIL。负答按客户端自身一秒期限回退；实际 `TERM=xterm-256color`、`TERM_PROGRAM=nil`，未冒充其他产品，也不是 `--headless` 或仅加载 Lua 的证明。
+
+新 GUI 的旧后端负例也经过实际产品路由和窗口：使用已有 local-stdio 入口，经只转发字节的私有 Windows bridge 与固定 host-key 的 OpenSSH 连接既有 Linux pane v18 服务。GUI 在创建 shell 前显示 `pane peer (build 0.3.4) speaks protocol v18, this build speaks v19; update lyrel or lyrel-server`；没有点击重试、安装或替换。旧 daemon PID `40673`、pane 数 `0`、control `16`、pane `18` 及 server hash 均未变，本机 daemon PID `15104` 的两个自有 pane 也保持存活。control 路径可连接不代表 pane 能力兼容；空 workspace／tab 的测试元数据不等于已启动远端 shell。
+
+尚缺同一候选的硬件持键 repeat 证据：自动化 `holdKeys` 的 0.8 秒与 2.2 秒输入都只产生一组 press／release，没有事件类型 `2`，不能当作系统自动连发通过。用户当前不便执行人工持键，要求保留该缺口。#258、#273 与 #278 仍未完成，PR 保持 draft；已有 headless held-event 回归、原生 press／release 与 IME 结果不替代缺失证据。macOS 实窗仍未验收。
+
+#### 独立审查后的修复候选
+
+`dff8666c` 修正两项生产所有权缺陷：绘制快照保留 Kitty placeholder 的占用身份，`width=2` Glyph 不再借用被隐藏为普通空格的邻格；daemon 仅向声明 `SubscribeGlyphRender` 的当前 controller 路由字体 coverage 查询，CLI／observer 的 `GlyphState` 投影凭证不再充当字体应答凭证。公开注册记录标为非穷尽，四个无调用包装已移除；不改变 wire kind、协议版本、字体权威或资源预算。
+
+冻结该候选后实际执行的窄验证如下；Windows 的两个 ignored 分别为私有 PTY sender 和需显式提供正式 omp 的用例，不计已执行。
+
+| 验证路径 | passed | failed | ignored |
+| --- | ---: | ---: | ---: |
+| Windows library `glyph_`（含生产消费者） | 32 | 0 | 2 |
+| WSL 原生 Linux、完整 features 的 core Glyph | 38 | 0 | 0 |
+| Unix 新 shell 不继承旧注册 | 1 | 0 | 0 |
+
+Windows 另完成格式检查与实际 app 构建，关键 GUI／core 输入在运行前后 SHA-256 相同；不可变 app SHA-256 为 `d02082173c117291dda77d1513719a916798f37b153697ecce0e5aea8bc3baad`。只正常关闭旧自有 GUI，再以新 GUI 附着原 daemon `15104` 与 pane `3`，没有重注册或重发场景：同一张方形 Glyph 在普通空白邻格前仍可借两格，在 placeholder 邻格前缩回一格。保存截图按同一区域量取纯红像素，普通空白前始终为 18，placeholder 前由 18 降为 8；这是下采样截图的墨迹跨度，不是逻辑列宽或 GPU 原始分辨率。producer 的注册与 draw 事件前后仍各一次，原键盘 recorder 所在 pane `1` 也持续存活。
+
+上述新候选窄验证不改标旧候选的完整 workspace／SSH／DPI／IME 记录；此前缺失的硬件 repeat 已按下方原生证据补齐，macOS 实窗仍不计已验。
+
+修复候选的 [CI 43560374362](https://github.com/dlivxpr/lyrel/actions/runs/43560374362) 已全部成功，PR HEAD 为 `dff8666c`，三个主平台实际 checkout 均为 synthetic merge `0dbd87c56f3d0ddb4969f9242348394b39ccdec9`。以下列出主套件与真实非零 CLI E2E；各项失败数均为零，`—` 表示该平台没有此桌面目标，ignored 不计通过。native runner 仍不能替代 macOS 实窗或物理持键。
+
+| CI 平台 | library passed／ignored | core passed／ignored | CLI E2E passed | native Markdown passed | native terminal passed |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Windows | 3,055／39 | 1,878／28 | 28 | 37 | 3 |
+| macOS | 3,107／37 | 2,012／28 | 29 | 37 | 3 |
+| Linux headless | — | 2,001／34 | 29 | — | — |
+
+硬件持键 repeat 最终在同一候选上实际完成：人工在 pane `1` 的 `kitty_keyboard_boundary.mjs events 31` recorder（有效 flags `27`）中两次真实按住 Space，PTY 依次收到 `ESC[32;1;32u` press、110 个与 45 个连续的 `ESC[32;1:2;32u` repeat（Kitty event type 2），各以 `ESC[32;1:3u` release 结束；此前 `holdKeys` 自动持键 0.8s／2.2s 均只有 press+release，从未产生 `:2` repeat 事件，不能替代此原生证据。原始事件流见 `final-native-2c0fcd7d/config/scrollback/1.bin` 与 `keyboard-hold-repeat-evidence.json`，实窗截图显示连续 `:2` repeat 后接单条 `:3` release。至此 #273／#278 的全部必需人工验收完成，仅剩 macOS 实窗为既定边界外。

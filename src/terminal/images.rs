@@ -154,21 +154,32 @@ impl RenderPlacement {
             return (crop, full);
         }
         let row = self.anchor_row - self.history_origin + display_offset as i64;
-        let natural_width = placement.w as f32 / scale;
-        let natural_height = placement.h as f32 / scale;
-        let available_width = (cell_width.as_f32() * placement.cols as f32
-            - placement.offset_x as f32 / scale)
-            .max(0.);
-        let available_height = (line_height.as_f32() * placement.rows as f32
-            - placement.offset_y as f32 / scale)
-            .max(0.);
-        let ratio = match (placement.cols > 0, placement.rows > 0) {
-            (true, true) => {
-                (available_width / natural_width).min(available_height / natural_height)
-            }
-            (true, false) => available_width / natural_width,
-            (false, true) => available_height / natural_height,
-            (false, false) => 1.,
+        // iTerm2 resolves its cell/px/percent/auto box into exact device
+        // pixels at admission. Paint those, instead of refitting the image into
+        // the cell spans that ceil(display/cell) implies.
+        let crop_size = if placement.display_width != 0 && placement.display_height != 0 {
+            size(
+                px(placement.display_width as f32 / scale),
+                px(placement.display_height as f32 / scale),
+            )
+        } else {
+            let natural_width = placement.w as f32 / scale;
+            let natural_height = placement.h as f32 / scale;
+            let available_width = (cell_width.as_f32() * placement.cols as f32
+                - placement.offset_x as f32 / scale)
+                .max(0.);
+            let available_height = (line_height.as_f32() * placement.rows as f32
+                - placement.offset_y as f32 / scale)
+                .max(0.);
+            let ratio = match (placement.cols > 0, placement.rows > 0) {
+                (true, true) => {
+                    (available_width / natural_width).min(available_height / natural_height)
+                }
+                (true, false) => available_width / natural_width,
+                (false, true) => available_height / natural_height,
+                (false, false) => 1.,
+            };
+            size(px(natural_width * ratio), px(natural_height * ratio))
         };
         let crop = Bounds::new(
             point(
@@ -177,7 +188,7 @@ impl RenderPlacement {
                     + px(placement.offset_x as f32 / scale),
                 origin.y + line_height * row as f32 + px(placement.offset_y as f32 / scale),
             ),
-            size(px(natural_width * ratio), px(natural_height * ratio)),
+            crop_size,
         );
         let sx = crop.size.width / placement.w.max(1) as f32;
         let sy = crop.size.height / placement.h.max(1) as f32;
@@ -2010,6 +2021,9 @@ fn decode(img: &mut Image) -> Option<(Arc<RenderImage>, u32, u32, usize)> {
             let (w, h) = (img.width, img.height);
             (img.take_rgba8()?, w, h)
         }
+        // Adapter-only static JPEG is normalized to RGBA by ordered daemon
+        // preparation; a packet must never reach the desktop still encoded.
+        WireFormat::Jpeg => return None,
     };
     let bytes = (w as usize).checked_mul(h as usize)?.checked_mul(4)?;
     if w != img.width || h != img.height {

@@ -9,7 +9,7 @@ Microsoft 的可再分发伪控制台，与 `lyrel-app.exe` 一起安装，避�
 | 许可证 | MIT，见 `LICENSE.txt`；打包时以 `LICENSE-ConPTY.txt` 名称暂存 |
 | 完整性 | `manifest.json` 固定 nupkg 的 SHA-512（取自 NuGet catalog 的 `packageHash`）与每个文件的 SHA-256 |
 
-**本目录不再保存二进制副本。** `conpty.dll` 与 `OpenConsole.exe` 由显式准备步骤取得：`crates/lyrel-core/build.rs` 为 GUI、server、CLI 及测试程序暂存同一输入，`.github/scripts/bundle-windows.ps1` 使用同一准备目录。构建与打包校验固定摘要；daemon 首次创建 pane 前也核验程序旁的文件对与 MIT 通知，缺失、损坏、架构或版本不匹配均明确报错，不静默退回系统 conhost。
+**本目录不再保存二进制副本。** `conpty.dll` 与 `OpenConsole.exe` 由显式准备步骤取得：`crates/lyrel-core/build.rs` 为 GUI、server、CLI 及测试程序核验同一输入，`scripts/cargo-windows.ps1` 与 `.github/scripts/bundle-windows.ps1` 使用同一准备目录。构建与打包校验固定摘要；daemon 首次创建 pane 前也核验程序旁的文件对与 MIT 通知，缺失、损坏、架构或版本不匹配均明确报错，不静默退回系统 conhost。
 
 ## 准备
 
@@ -42,7 +42,7 @@ in-box conhost:  terminal side sees <ESC>[?9001h<ESC>[?1004h   -> client: no rep
 sideloaded:      terminal side sees ... <ESC>]11;?<BEL>        -> client: rgb:efef/f1f1/f5f5
 ```
 
-`portable-pty` 优先旁加载 `conpty.dll`，而不是使用 `kernel32` 提供的系统实现（`src/win/psuedocon.rs`）。DLL 搜索路径从运行程序所在目录开始，因此文件对与 `LICENSE-ConPTY.txt` 放在 GUI／server 程序旁。`crates/lyrel-core/build.rs` 同时暂存到 Cargo 的 profile 目录与 `deps/`，独立 `-p lyrel-core`、`-p lyrel-server`、`-p lyrel-cli` 构建也保持这一契约。运行时仅在首次创建 pane 前校验一次；恢复文件后需重启对应 daemon。
+`portable-pty` 优先旁加载 `conpty.dll`，而不是使用 `kernel32` 提供的系统实现（`src/win/psuedocon.rs`）。DLL 搜索路径从运行程序所在目录开始，因此文件对与 `LICENSE-ConPTY.txt` 放在 GUI／server 程序旁。Windows 源码构建使用 `pwsh scripts/cargo-windows.ps1 build --locked`，测试使用 `pwsh scripts/cargo-windows.ps1 test --locked`；支持原 Cargo 参数、`-p`、`--target`、`--no-run` 与 `--` 后的测试参数。脚本从 Cargo JSON 的 `compiler-artifact.executable` 获取全部实际程序路径，核验并暂存固定文件后再执行原测试。Cargo 1.100 已改变中间产物布局，不再从 `OUT_DIR` 层数或固定 `deps/` 推断 executable 目录。只运行裸 `cargo build`／`cargo test --no-run` 不执行暂存；直接启动这些产物前也须完成同一次 artifact-aware 构建。运行时仅在首次创建 pane 前校验一次；恢复文件后需重启对应 daemon。
 
 便携发行包另带 `ConPTY-manifest.json`，内容为该发行版本的 `manifest.json`。旧版本 updater 在整个下载 ZIP 通过校验和验证后，以包内目标清单核验 ConPTY 摘要、PE 架构、实际配对版本和 MIT 通知，因此可以验证后续发行采用的新官方包，而不是只接受旧 helper 编译时的固定版本。不能改用现有安装目录旁的独立清单作为信任来源，也不执行目标程序来完成验证；构建与 daemon 的编译期固定 pin 不变。
 

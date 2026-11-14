@@ -152,6 +152,11 @@ ureq = { version = "3", default-features = false, features = ["rustls", "win-sys
 rio-vt.workspace = true
 rio-graphics.workspace = true
 
+# Named only to implement `Handler::set_mouse_cursor_icon`, whose parameter
+# type rio-vt does not re-export; already in the tree transitively, so this
+# pins no new code. The shape mapping itself is `terminal::pointer`.
+cursor-icon = "=1.2.0"
+
 # Desktop notification fallback on Windows. On macOS only its
 # `set_application` is used — never `show`; see
 # `terminal::remote::macos_notify` for why.
@@ -310,12 +315,14 @@ gpui-kit = { version = "=0.9.1", features = ["gpui-fast"] }
 # Sugarloaf renderer stay out (`default-features = false`), and the keyboard
 # mode stacks the daemon folds for replay stay in `lyrel-core`'s own
 # `term_modes`.
-rio-vt = { version = "=0.5.29", default-features = false }
+rio-vt = { version = "=0.5.30", default-features = false }
 # Scalar Unicode tables for preedit/copy helpers, matching Rio's pinned version.
-rio-unicode = "=0.5.29"
-# Types only: the `Handler` surface names `rio_graphics::GraphicData` for the
-# sixel/iTerm2/kitty callbacks the parse bridge delegates. Same pin as rio-vt.
-rio-graphics = "=0.5.29"
+rio-unicode = "=0.5.30"
+# Types plus the released `glyf` outline decoder and registry. `glyph` adds
+# skrifa/parking_lot only — no Rio renderer, PTY or image stack. The daemon
+# validates and retains registrations with it; the GUI decodes accepted bodies
+# for its derived picture.
+rio-graphics = { version = "=0.5.30", features = ["glyph"] }
 
 anyhow = "1"
 log = "0.4"

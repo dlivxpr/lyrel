@@ -288,6 +288,132 @@ fn native_ssh_consumer_assert_shared_geometry(
     });
 }
 
+// DA1 is frontend-owned, unlike daemon-owned XTGETTCAP and XTSMGRAPHICS.
+// Run the unchanged producer against the real view rather than faking replies.
+#[gpui_kit::test]
+#[ignore = "requires explicit isolated native SSH-to-Linux fixture and same-commit desktop server; not native GPU evidence"]
+fn native_ssh_xtgettcap_runs_the_checked_in_terminal_producer(cx: &mut TestAppContext) {
+    native_ssh_consumer_init(cx);
+    let fixture = native_ssh_consumer_fixture();
+    let host = fixture.connect_control();
+    // Hold startup until the production controller and its observer are ready.
+    let mut producer = concat!(
+        "await new Promise(resolve => {\n",
+        "  process.stdin.once('data', resolve);\n",
+        "  process.stdout.write('KITTY_READY\\r\\n');\n",
+        "});\n",
+    )
+    .as_bytes()
+    .to_vec();
+    producer.extend_from_slice(include_bytes!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/scripts/terminal-capabilities.mjs"
+    )));
+    let shell = fixture.install_script(&host, "terminal-capabilities.mjs", &producer, Vec::new());
+    let pane = native_ssh_consumer_spawn(&fixture, shell);
+    let (mut stream, endpoint) = fixture.connect_pane_with_capacity(64 << 20, 128 << 20);
+    assert!(endpoint.has_feature(crate::daemon::protocol::FEATURE_XTGETTCAP_OWNER));
+    eprintln!("ACTUAL_CAPABILITIES_SSH_ENDPOINT {endpoint:?}");
+    ClientMsg::Attach {
+        pane_id: pane,
+        size: native_ssh_graphics_fixture::win_size(),
+        allow_remote_clipboard_write: false,
+    }
+    .encode(&mut stream)
+    .unwrap();
+    stream.set_read_timeout(None).unwrap();
+
+    // Capture the real producer's exit and all exact-byte assertion outcomes,
+    // without controlling its pane or answering a query from the observer.
+    let (mut observer, _) = fixture.connect_pane();
+    ClientMsg::GraphicsCapacity {
+        encoded_bytes: 64 << 20,
+        decoded_bytes: 128 << 20,
+        offers: false,
+    }
+    .encode(&mut observer)
+    .unwrap();
+    ClientMsg::Observe {
+        pane_id: pane,
+        size: native_ssh_graphics_fixture::win_size(),
+    }
+    .encode(&mut observer)
+    .unwrap();
+    let first = DaemonMsg::read(&mut observer).unwrap();
+    let capture = std::thread::spawn(move || {
+        let deadline = std::time::Instant::now() + native_ssh_graphics_fixture::STREAM_WITHIN;
+        let mut first = Some(first);
+        let mut output = Vec::new();
+        loop {
+            let remaining = deadline
+                .checked_duration_since(std::time::Instant::now())
+                .filter(|wait| !wait.is_zero())
+                .expect("real capability producer deadline expired");
+            observer.set_read_timeout(Some(remaining)).unwrap();
+            match first
+                .take()
+                .unwrap_or_else(|| DaemonMsg::read(&mut observer).unwrap())
+            {
+                DaemonMsg::Output(bytes) | DaemonMsg::Snapshot(bytes) => {
+                    assert!(
+                        output.len() + bytes.len() <= 2 << 20,
+                        "bounded producer output"
+                    );
+                    output.extend_from_slice(&bytes);
+                }
+                DaemonMsg::Exited { code } => return (code, output),
+                DaemonMsg::Error(error) => panic!("actual SSH producer failed: {error}"),
+                _ => {}
+            }
+        }
+    });
+
+    let terminal = RemoteTerminal::from_stream_with_endpoint(
+        stream,
+        TermSize::new(80, 24),
+        Vec::new(),
+        PtySource::Raw,
+        Some(endpoint),
+    )
+    .unwrap();
+    let mut view = None;
+    let window = cx.add_window(|window, cx| {
+        let terminal = cx.new(|cx| TerminalView::with_terminal(terminal, pane, window, cx));
+        view = Some(terminal.clone());
+        gpui_kit::component::Root::new(terminal, window, cx)
+    });
+    let view = view.unwrap();
+    view.read_with(cx, |view, _| view.terminal.write(b"RUN\n".to_vec()));
+    graphics_recovery_wait(cx, "real capability producer did not exit", |_| {
+        capture.is_finished()
+    });
+    let (code, output) = capture.join().expect("real capability observer failed");
+    let output = String::from_utf8_lossy(&output);
+    assert_eq!(code, Some(0), "producer assertions failed: {output}");
+    for outcome in [
+        "PASS allowed + denied ordered batch",
+        "PASS fragmented request and ST",
+        "PASS malformed hex",
+        "PASS CAN cancellation",
+        "PASS SUB cancellation",
+        "PASS interrupted DCS",
+        "PASS no historical/duplicate replies",
+        "PASS oversized request followed by ordinary text",
+        "PASS legal query after oversize",
+        "PASS DA1 advertises the static Sixel attribute",
+        "PASS XTSMGRAPHICS color registers",
+        "PASS XTSMGRAPHICS current geometry",
+        "PASS XTSMGRAPHICS denies ReGIS",
+        "PASS XTSMGRAPHICS denies a rectangular maximum",
+    ] {
+        assert!(
+            output.contains(outcome),
+            "missing protocol outcome {outcome}: {output}"
+        );
+    }
+    graphics_recovery_destroy(view, window.into(), cx);
+}
+
 #[gpui_kit::test]
 #[ignore = "requires explicit isolated native SSH-to-Linux fixture and same-commit desktop server; not native GPU evidence"]
 fn native_ssh_consumer_linux_pixels_geometry_and_fresh_soft_hard_recovery(cx: &mut TestAppContext) {

@@ -1,4 +1,5 @@
 pub(crate) mod presentation;
+mod progress;
 
 use crate::core::session::{SessionPane, SessionTab};
 use crate::terminal::view::TerminalView;
@@ -1137,3 +1138,6 @@ mod name_tests;
 #[cfg(test)]
 #[path = "tab/tests_navigation.rs"]
 mod navigation_tests;
+#[cfg(test)]
+#[path = "tab/tests_progress.rs"]
+mod progress_tests;

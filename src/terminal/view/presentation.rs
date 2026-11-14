@@ -135,6 +135,7 @@ impl Render for TerminalView {
             .py(px(GRID_PAD_Y))
             .text_color(cx.theme().foreground)
             .on_key_down(cx.listener(Self::on_key_down))
+            .on_key_up(cx.listener(Self::on_key_up))
             .on_scroll(cx.listener(Self::on_scroll))
             .on_mouse_down(
                 MouseButton::Left,
@@ -237,6 +238,8 @@ impl Render for TerminalView {
                     window.focus(&this.reading_focus, cx);
                 } else if this.reading_focus.is_focused(window) {
                     window.focus(&this.focus_handle, cx);
+                } else if this.key_flags().reports_events() && !this.input_active() {
+                    cx.propagate();
                 } else {
                     this.tab_pressed(true, cx);
                 }
@@ -244,6 +247,8 @@ impl Render for TerminalView {
             .on_action(cx.listener(|this, _: &SendBackTab, window, cx| {
                 if this.reading_focus.is_focused(window) {
                     window.focus(&this.focus_handle, cx);
+                } else if this.key_flags().reports_events() && !this.input_active() {
+                    cx.propagate();
                 } else {
                     this.tab_pressed(false, cx);
                 }

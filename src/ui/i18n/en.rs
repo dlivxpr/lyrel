@@ -3,6 +3,9 @@ use super::L10nKey;
 pub fn translate_en(key: L10nKey) -> &'static str {
     match key {
         L10nKey::TerminalImageEvicted => "Image evicted",
+        L10nKey::TerminalGlyphNeedsDaemonUpdate => {
+            "Glyph Protocol needs an updated lyrel daemon; this pane was not changed"
+        }
         L10nKey::TerminalReturnLive => "↓ {rows} lines · Return to live",
         L10nKey::NotificationInbox => "Notifications",
         L10nKey::NotificationClearHistory => "Clear notification history",
@@ -635,6 +638,14 @@ pub fn translate_en(key: L10nKey) -> &'static str {
         L10nKey::QuitAndStop => "Quit and Stop",
         L10nKey::CloseSshConnectionTitle => "Close this SSH connection?",
         L10nKey::CloseSshConnectionBody => "The connection is live. Closing will end it.",
+        L10nKey::TabProgressRunning => "In progress",
+        L10nKey::TabProgressRunningPercent => "In progress · {percent}%",
+        L10nKey::TabProgressIndeterminate => "Working",
+        L10nKey::TabProgressIndeterminatePercent => "Working · {percent}%",
+        L10nKey::TabProgressPaused => "Paused",
+        L10nKey::TabProgressPausedPercent => "Paused · {percent}%",
+        L10nKey::TabProgressError => "Failed",
+        L10nKey::TabProgressErrorPercent => "Failed · {percent}%",
         L10nKey::ClosePaneBusyTitle => "Close this pane?",
         L10nKey::CloseTabBusyTitle => "Close this tab?",
         L10nKey::CloseBusyCommandBody => "{what} is still running. Closing ends it.",

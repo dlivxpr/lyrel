@@ -3121,6 +3121,105 @@ mod kitty_graphics {
     }
 
     #[test]
+    fn daemon_xtgettcap_is_bounded_ordered_and_owned_across_detach_reconnect() {
+        let daemon = Daemon::start();
+        let version = daemon.panes().version().unwrap();
+        assert!(version.has_feature("xtgettcap-owner"));
+        let mut original = Consumer::spawn(&daemon);
+        let batch = b"\x1bP+q436f;544e;524742;4d73;736978656c;697465726d32;636f;6c69;476c797068;756e6b6e6f776e\x1b\\ordinary_after_query";
+        assert_eq!(
+            original.exchange("SEND", &hex(batch), 10, 1),
+            [
+                b"\x1bP1+r436F=323536\x1b\\".to_vec(),
+                b"\x1bP0+r544E\x1b\\".to_vec(),
+                b"\x1bP1+r524742=382F382F38\x1b\\".to_vec(),
+                b"\x1bP0+r4D73\x1b\\".to_vec(),
+                b"\x1bP0+r736978656C\x1b\\".to_vec(),
+                b"\x1bP0+r697465726D32\x1b\\".to_vec(),
+                b"\x1bP0+r636F\x1b\\".to_vec(),
+                b"\x1bP0+r6C69\x1b\\".to_vec(),
+                b"\x1bP0+r476C797068\x1b\\".to_vec(),
+                b"\x1bP0+r756E6B6E6F776E\x1b\\".to_vec(),
+            ]
+        );
+        assert!(windows_contain(
+            &original.last_output,
+            b"ordinary_after_query"
+        ));
+        assert!(
+            !windows_contain(&original.last_output, b"\x1bP+q"),
+            "no consumer receives a discovery payload"
+        );
+        for cancelled in [
+            b"\x1bP+q436f\x18after_CAN".as_slice(),
+            b"\x1bP+q436f\x1aafter_SUB".as_slice(),
+            b"\x1bP+q436f\x1b[0mafter_interruption".as_slice(),
+        ] {
+            assert!(original.exchange("SEND", &hex(cancelled), 0, 1).is_empty());
+            assert!(windows_contain(&original.last_output, b"after_"));
+        }
+        let oversized = format!("\x1bP+q{}\x1b\\after_oversized", "436f;".repeat(2000));
+        assert!(
+            original
+                .exchange("SEND", &hex(oversized.as_bytes()), 0, 113)
+                .is_empty()
+        );
+        assert!(windows_contain(&original.last_output, b"after_oversized"));
+        assert!(!windows_contain(&original.last_output, b"436f;"));
+        assert_eq!(
+            original.send(b"\x1bP+qxyz\x1b\\", 1),
+            [b"\x1bP0+r\x1b\\".to_vec()]
+        );
+        assert_eq!(
+            original.send(b"\x1bP0+q636f6c6f7273\x1b\\", 1),
+            [b"\x1bP1+r636F6C6F7273=323536\x1b\\".to_vec()]
+        );
+
+        let pane = original.session.pane_id();
+        detach_consumer(original);
+        let gate = daemon.dir.path().join("xtgettcap-detached");
+        daemon
+            .panes()
+            .send_input(
+                pane,
+                format!(
+                    "WAIT 1000 2 {} 1 {}\n",
+                    hex(b"\x1bP+q436f;756e6b6e6f776e\x1b\\detached_after_query"),
+                    hex(gate.to_str().unwrap().as_bytes())
+                )
+                .as_bytes(),
+            )
+            .unwrap();
+        std::fs::write(&gate, []).unwrap();
+        wait_file(&gate.with_extension("done"));
+        let mut restored =
+            Consumer::from_session(daemon.panes().attach(pane, size()).unwrap(), 1000);
+        assert_eq!(
+            restored.finish_exchange(),
+            [
+                b"\x1bP1+r436F=323536\x1b\\".to_vec(),
+                b"\x1bP0+r756E6B6E6F776E\x1b\\".to_vec(),
+            ]
+        );
+        assert!(!windows_contain(&restored.last_output, b"\x1bP+q"));
+        assert_eq!(
+            restored.send(b"\x1bP+q524742\x1b\\", 1),
+            [b"\x1bP1+r524742=382F382F38\x1b\\".to_vec()]
+        );
+        let serial = restored.serial;
+        detach_consumer(restored);
+        let mut reconnected =
+            Consumer::from_session(daemon.panes().attach(pane, size()).unwrap(), serial);
+        // The child's real input barrier rejects any historical/duplicate
+        // response before the next owned live reply.
+        assert_eq!(
+            reconnected.send(b"\x1bP+q436f\x1b\\", 1),
+            [b"\x1bP1+r436F=323536\x1b\\".to_vec()]
+        );
+        reconnected.exit();
+    }
+
+    #[test]
     fn daemon_graphics_unfinished_sync_parses_unicode_anchors_and_replays_without_a_gui() {
         let daemon = Daemon::start();
         let _control = daemon.control("graphics-unfinished-sync");

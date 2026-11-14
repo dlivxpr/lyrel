@@ -24,13 +24,13 @@
 //! latest received state, which can lead a GUI frame held by synchronized output;
 //! once the update settles, equivalent content ranges agree.
 
+use lyrel_core::core::xtgettcap::MirrorProcessor as Processor;
 use lyrel_core::daemon::protocol::WinSize;
 use rio_vt::ansi::CursorShape;
 use rio_vt::crosswords::Crosswords;
 use rio_vt::crosswords::grid::Dimensions as _;
 use rio_vt::crosswords::pos::{Column, Pos};
 use rio_vt::event::{VoidListener, WindowId};
-use rio_vt::performer::handler::Processor;
 
 use crate::backend::CaptureSegment;
 
@@ -180,6 +180,15 @@ mod tests {
     fn unfinished_synchronized_update_captures_received_text_without_an_end_marker() {
         let text = plain(20, 5, "before\r\n\x1b[?2026hreceived now");
         assert_eq!(text, "before\nreceived now");
+    }
+
+    #[test]
+    fn xtgettcap_legacy_snapshot_is_bounded_and_keeps_following_text() {
+        let bytes = format!(
+            "before\x1bP+q{}\x1b\\after\x1bP+q436f\x18cancelled",
+            "436f;".repeat(2000)
+        );
+        assert_eq!(plain(80, 24, &bytes), "beforeaftercancelled");
     }
 
     #[test]

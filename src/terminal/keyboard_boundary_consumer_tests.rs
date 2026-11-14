@@ -2,6 +2,7 @@
 fn keyboard_boundary_real_pty_case(cx: &mut TestAppContext, prior_mode: &str) {
     crate::core::config::pin_test_config_dir();
     cx.executor().allow_parking();
+    let events = prior_mode == "events";
     let bash = crate::core::shells::detect_shells()
         .into_iter()
         .find(|shell| shell.label == "Git Bash")
@@ -63,7 +64,8 @@ fn keyboard_boundary_real_pty_case(cx: &mut TestAppContext, prior_mode: &str) {
     let cycle = view.read_with(cx, |view, _| view.terminal.prompt_cycle());
     // Nothing in this fixture manufactures shell/agent OSC marks. The real
     // default-shell wrapper owns C/D and A/B, after its real Node child exits.
-    let command = format!("node '{}' {prior_mode}\n", fixture.replace('\'', "'\\''"));
+    let prior = if events { "clean" } else { prior_mode };
+    let command = format!("node '{}' {prior}\n", fixture.replace('\'', "'\\''"));
     view.read_with(cx, |view, _| view.terminal.write(command.into_bytes()));
     graphics_recovery_wait(cx, "real shell returned after prior program", |cx| {
         view.read_with(cx, |view, _| {
@@ -82,7 +84,8 @@ fn keyboard_boundary_real_pty_case(cx: &mut TestAppContext, prior_mode: &str) {
         }
     }
     eprintln!("production shell owned completion observed; prior={prior_mode}");
-    let command = format!("node '{}' record\n", fixture.replace('\'', "'\\''"));
+    let recorder = if events { "events 31" } else { "record" };
+    let command = format!("node '{}' {recorder}\n", fixture.replace('\'', "'\\''"));
     view.read_with(cx, |view, _| view.terminal.write(command.into_bytes()));
     graphics_recovery_wait(cx, "next actual PTY program ready", |cx| {
         view.read_with(cx, |view, _| view.title == "KEYBOARD_RECORDER_READY")
@@ -96,16 +99,43 @@ fn keyboard_boundary_real_pty_case(cx: &mut TestAppContext, prior_mode: &str) {
         .unwrap();
     {
         let mut visual = gpui_kit::VisualTestContext::from_window(window, cx);
-        visual.simulate_keystrokes("escape ctrl-c");
+        if events {
+            for chord in ["up", "f3", "ctrl-q", "shift-tab"] {
+                for is_held in [false, true] {
+                    visual.simulate_event(gpui_kit::KeyDownEvent {
+                        keystroke: gpui_kit::Keystroke::parse(chord).unwrap(),
+                        is_held,
+                        prefer_character_input: false,
+                    });
+                }
+                visual.simulate_event(gpui_kit::KeyUpEvent {
+                    keystroke: gpui_kit::Keystroke::parse(chord).unwrap(),
+                });
+            }
+        } else {
+            visual.simulate_keystrokes("escape ctrl-c");
+        }
+    }
+    if events {
+        view.update(cx, |view, cx| view.commit_text("中文", cx));
     }
     view.read_with(cx, |view, _| view.terminal.write(b"\n".to_vec()));
     graphics_recovery_wait(cx, "PTY reported actual keystroke bytes", |cx| {
         view.read_with(cx, |view, _| view.title.starts_with("KEYBOARD_BYTES:"))
     });
+    let expected = if events {
+        b"\x1b[?27u\x1b[A\x1b[1;1:2A\x1b[1;1:3A\x1b[13~\x1b[13;1:2~\x1b[13;1:3~\x1b[113;5u\x1b[113;5:2u\x1b[113;5:3u\x1b[9;2u\x1b[9;2:2u\x1b[9;2:3u\x1b[0;1;20013:25991u".as_slice()
+    } else {
+        b"\x1b\x03".as_slice()
+    };
+    let hex = expected
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
     assert_eq!(
         view.read_with(cx, |view, _| view.title.clone()),
-        "KEYBOARD_BYTES:1b03",
-        "Escape and Ctrl+C must reach the next real program as legacy bytes, not dead Kitty modes"
+        format!("KEYBOARD_BYTES:{hex}"),
+        "the real PTY must receive exactly the production consumer's negotiated bytes"
     );
     graphics_recovery_destroy(view, window, cx);
     daemon.panes().kill(pane).unwrap();
@@ -121,6 +151,12 @@ fn keyboard_boundary_real_pty_clean_program_preserves_keys(cx: &mut TestAppConte
 #[gpui_kit::test]
 fn keyboard_boundary_real_pty_shell_return_preserves_escape_and_ctrl_c(cx: &mut TestAppContext) {
     keyboard_boundary_real_pty_case(cx, "dirty");
+}
+
+#[cfg(windows)]
+#[gpui_kit::test]
+fn keyboard_boundary_real_pty_negotiated_press_repeat_release(cx: &mut TestAppContext) {
+    keyboard_boundary_real_pty_case(cx, "events");
 }
 
 #[gpui_kit::test]
