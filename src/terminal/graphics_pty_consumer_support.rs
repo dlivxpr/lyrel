@@ -223,7 +223,8 @@ impl Drop for GraphicsDaemonProcess {
 /// `img2sixel -w 40 -h 40 -p 4 -d none colors.ppm` for the 2x2 red/green over
 /// blue/yellow PPM. libsixel quantizes the scaled image, so the first pixel is
 /// `[184, 51, 61]` in RGBA (BGRA after the production decoder).
-const SIXEL_PRODUCER_OUTPUT: &[u8] = b"\x1bPq\"1;1;40;40#0;2;72;20;24#1;2;24;74;11#2;2;74;74;24#3;2;24;20;66#0!19~#1!21~-#0!19~_$#1!19?^!20~-#0!20~#1^!19~$#2!20?_-#0!13BFFN^~~~#2~}!6{!12w$#3!13{wwo_#1!4?@!6B!12F-#3!18~}w#2!20~$#0!18?@F-#3!20~#2!20~-#3!20N#2!20N\x1b\\";
+#[cfg(test)]
+const SIXEL_PRODUCER_OUTPUT: &[u8] = b"\x1bPq\"1;1;40;40#0;2;72;20;24#1;2;24;74;11#2;2;74;74;24#3;2;24;20;66#0!19~#1!21~-#0!19~_$#1^!21~$#0!20~#2!20~$#0!13BFFN^~~~#2~}!6{!12w$#2!20~$#0!20~#2!20N\x1b\\";
 
 fn graphics_send_fixture(
     view: &Entity<TerminalView>,
@@ -704,8 +705,8 @@ fn graphics_recovery_destroy(
 // drive the same real PTY fixture, the same reply channel and the same
 // production scene assertions.
 
+#[cfg(test)]
 use gpui_kit::test::TestWindowExt as _;
-
 /// A supplementary-plane PUA-B codepoint no ordinary font maps, so a painted
 /// glyph can only come from the registration.
 const GLYPH_CP: u32 = 0x100000;
@@ -906,6 +907,7 @@ fn glyph_paths_in_cell(
     gpui_kit::Bounds<gpui_kit::ScaledPixels>,
     gpui_kit::Background,
 )> {
+    use gpui_kit::test::TestWindowExt as _;
     window
         .update(cx, |_, window, cx| {
             window.simulate_next_frame(cx);
@@ -938,6 +940,7 @@ fn glyph_paths_with_clip_in_region(
     gpui_kit::Bounds<gpui_kit::ScaledPixels>,
     gpui_kit::Background,
 )> {
+    use gpui_kit::test::TestWindowExt as _;
     window
         .update(cx, |_, window, cx| {
             window.simulate_next_frame(cx);

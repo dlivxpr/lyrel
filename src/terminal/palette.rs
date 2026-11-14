@@ -102,29 +102,6 @@ pub fn rgb_color(rgb: [u8; 3]) -> ColorRgb {
     }
 }
 
-/// The effective named defaults: an explicit pane override, otherwise the
-/// live theme's value. A reset therefore reveals the current theme rather
-/// than any colour captured when the override was set.
-pub fn defaults(
-    overrides: &lyrel_core::core::pane_colors::PaneColors,
-    default_fg: ColorRgb,
-    default_bg: ColorRgb,
-    caret: ColorRgb,
-) -> (ColorRgb, ColorRgb, ColorRgb) {
-    use lyrel_core::core::pane_colors::{CURSOR, DEFAULT_BG, DEFAULT_FG};
-    (
-        overrides
-            .get(DEFAULT_FG)
-            .map(rgb_color)
-            .unwrap_or(default_fg),
-        overrides
-            .get(DEFAULT_BG)
-            .map(rgb_color)
-            .unwrap_or(default_bg),
-        overrides.get(CURSOR).map(rgb_color).unwrap_or(caret),
-    )
-}
-
 /// Resolve the same indexed/default/cursor colours as the painter. `table` is
 /// already the effective table (`effective`), so every indexed slot has the
 /// theme and the pane overrides folded in; the named defaults fall back to the
@@ -247,8 +224,6 @@ mod tests {
             "a default-background reset target is the current theme only when unset"
         );
         assert_eq!(query_color(258, &table, &overrides, fg, bg, caret), caret);
-        let (fg, bg, caret) = defaults(&overrides, fg, bg, caret);
-        assert_eq!((fg.r, bg.g, caret.b), (10, 5, 32));
         assert_eq!(overrides.get(DEFAULT_FG), None);
     }
 
