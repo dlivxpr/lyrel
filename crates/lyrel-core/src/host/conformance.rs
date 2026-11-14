@@ -657,7 +657,9 @@ pub fn open_read_segments_reassemble_one_version(h: &dyn Host, sb: &dyn Sandbox)
     assert_eq!(reader.meta().len, body.len() as u64);
     let mut got = Vec::new();
     loop {
-        let segment = reader.read_segment(crate::host::transfer::SEGMENT_BYTES).unwrap();
+        let segment = reader
+            .read_segment(crate::host::transfer::SEGMENT_BYTES)
+            .unwrap();
         if segment.is_empty() {
             break;
         }
@@ -677,10 +679,7 @@ pub fn open_read_segments_reassemble_one_version(h: &dyn Host, sb: &dyn Sandbox)
 pub fn open_read_rejects_missing_paths_and_directories(h: &dyn Host, sb: &dyn Sandbox) {
     let sandbox = sb.path();
     let missing = h.join(sandbox, "no-such-read.bin");
-    assert_eq!(
-        open_read_error(h, &missing).kind(),
-        io::ErrorKind::NotFound
-    );
+    assert_eq!(open_read_error(h, &missing).kind(), io::ErrorKind::NotFound);
     let dir = h.join(sandbox, "read-dir");
     mkdir(h, &dir);
     assert_eq!(open_read_error(h, &dir).kind(), io::ErrorKind::IsADirectory);
@@ -694,7 +693,11 @@ pub fn open_read_refuses_an_oversized_segment(h: &dyn Host, sb: &dyn Sandbox) {
         .read_segment(crate::host::transfer::SEGMENT_BYTES_MAX + 1)
         .unwrap_err();
     assert_eq!(error.kind(), io::ErrorKind::InvalidInput, "{error}");
-    assert_eq!(reader.read_segment(8).unwrap().len(), 8, "the session survives a bad ask");
+    assert_eq!(
+        reader.read_segment(8).unwrap().len(),
+        8,
+        "the session survives a bad ask"
+    );
 }
 
 pub fn open_read_detects_a_same_size_rewrite(h: &dyn Host, sb: &dyn Sandbox) {

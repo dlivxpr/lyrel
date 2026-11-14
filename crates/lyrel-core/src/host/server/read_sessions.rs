@@ -14,9 +14,7 @@ use std::time::Instant;
 
 use crate::host::HostRead;
 use crate::host::Meta;
-use crate::host::transfer::{
-    MAX_READ_SESSIONS, READ_SESSION_IDLE, SEGMENT_BYTES_MAX,
-};
+use crate::host::transfer::{MAX_READ_SESSIONS, READ_SESSION_IDLE, SEGMENT_BYTES_MAX};
 
 struct Slot {
     reader: Mutex<Box<dyn HostRead>>,
@@ -118,7 +116,8 @@ impl ReadSessions {
     fn reclaim_idle(inner: &mut Inner) {
         let now = Instant::now();
         inner.slots.retain(|_, slot| {
-            let idle = now.duration_since(*slot.last_used.lock().unwrap_or_else(|e| e.into_inner()))
+            let idle = now
+                .duration_since(*slot.last_used.lock().unwrap_or_else(|e| e.into_inner()))
                 >= READ_SESSION_IDLE;
             // A segment in progress owns its handle until it returns; never
             // reclaim a session mid-read just because the clock passed.
@@ -184,7 +183,10 @@ mod tests {
         assert_eq!(sessions.read(id, 1).unwrap().1, vec![1]);
         assert!(sessions.close(id));
         assert_eq!(sessions.len(), 0);
-        assert_eq!(sessions.read(id, 1).unwrap_err().kind(), io::ErrorKind::TimedOut);
+        assert_eq!(
+            sessions.read(id, 1).unwrap_err().kind(),
+            io::ErrorKind::TimedOut
+        );
     }
 
     #[test]
@@ -196,12 +198,19 @@ mod tests {
                 segments: 1,
             }))
             .unwrap();
-        assert_eq!(sessions.read(id, 0).unwrap_err().kind(), io::ErrorKind::InvalidInput);
+        assert_eq!(
+            sessions.read(id, 0).unwrap_err().kind(),
+            io::ErrorKind::InvalidInput
+        );
         assert_eq!(
             sessions.read(id, SEGMENT_BYTES_MAX + 1).unwrap_err().kind(),
             io::ErrorKind::InvalidInput
         );
-        assert_eq!(sessions.len(), 1, "a refused size does not drop the session");
+        assert_eq!(
+            sessions.len(),
+            1,
+            "a refused size does not drop the session"
+        );
     }
 
     #[test]

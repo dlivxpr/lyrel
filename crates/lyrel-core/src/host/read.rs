@@ -94,16 +94,20 @@ pub fn read_file_segmented(
     let capacity = usize::try_from(meta.len).map_err(|_| {
         io::Error::new(
             io::ErrorKind::FileTooLarge,
-            format!("{} does not fit this platform's address space", path.display()),
+            format!(
+                "{} does not fit this platform's address space",
+                path.display()
+            ),
         )
     })?;
     // Account before allocating: concurrent previews share one transfer ledger,
     // and a read that cannot get its bytes back fails instead of shrinking.
-    let _reservation = transfer_admission()
-        .reserve(meta.len, meta.len)
-        .map_err(|pressure: WorkingPressure| {
-            io::Error::new(io::ErrorKind::OutOfMemory, pressure.to_string())
-        })?;
+    let _reservation =
+        transfer_admission()
+            .reserve(meta.len, meta.len)
+            .map_err(|pressure: WorkingPressure| {
+                io::Error::new(io::ErrorKind::OutOfMemory, pressure.to_string())
+            })?;
     let mut bytes = Vec::with_capacity(capacity);
     while (bytes.len() as u64) < meta.len {
         cancel.check().map_err(Cancelled::into_io)?;
@@ -141,4 +145,58 @@ pub fn read_file_segmented(
     // nobody is waiting for.
     cancel.check().map_err(Cancelled::into_io)?;
     Ok(ReadOutcome { meta, bytes })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::host::local::LocalHost;
+
+    #[test]
+    fn a_cancelled_read_stops_between_segments() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("body.bin");
+        std::fs::write(&path, vec![7u8; 600 * 1024]).unwrap();
+        let host = LocalHost::new();
+        let cancel = CancelToken::default();
+        let progress_cancel = cancel.clone();
+        let error = read_file_segmented(&*host, &path, 1024 * 1024, &cancel, move |progress| {
+            if progress.read >= transfer::SEGMENT_BYTES {
+                progress_cancel.cancel();
+            }
+        })
+        .unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::Interrupted, "{error}");
+    }
+
+    #[test]
+    fn a_file_over_the_budget_is_refused_without_reading_it_all() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("too-big.bin");
+        std::fs::write(&path, vec![0u8; 4096]).unwrap();
+        let host = LocalHost::new();
+        let error = read_file_segmented(
+            &*host,
+            &path,
+            1024,
+            &CancelToken::default(),
+            |_| {},
+        )
+        .unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::FileTooLarge, "{error}");
+    }
+
+    #[test]
+    fn a_changed_file_is_not_reported_as_a_short_read() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("changed.bin");
+        std::fs::write(&path, vec![1u8; 2048]).unwrap();
+        let host = LocalHost::new();
+        let mut reader = host.open_read(&path).unwrap();
+        let first = reader.read_segment(1024).unwrap();
+        assert_eq!(first.len(), 1024);
+        std::fs::write(&path, vec![2u8; 2048]).unwrap();
+        let error = reader.read_segment(1024).unwrap_err();
+        assert!(is_file_changed(&error), "{error}");
+    }
 }

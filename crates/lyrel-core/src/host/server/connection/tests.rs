@@ -5,7 +5,10 @@ use crate::daemon::control::{
     ControlServerMsg, ReplyOk, WireErrorKind,
 };
 use crate::host::local::LocalHost;
-use crate::host::{read::read_file_segmented, transfer::{CancelToken, SEGMENT_BYTES}};
+use crate::host::{
+    read::read_file_segmented,
+    transfer::{CancelToken, SEGMENT_BYTES},
+};
 use std::net::{TcpListener, TcpStream};
 use std::time::Duration;
 
@@ -52,7 +55,11 @@ fn call_blob(peer: &mut TcpStream, req_id: u64, req: ControlRequest) -> (Control
     peer.flush().unwrap();
     loop {
         match ControlServerMsg::read(peer).unwrap() {
-            ControlServerMsg::ResponseBlob { req_id: got, reply, blob } if got == req_id => {
+            ControlServerMsg::ResponseBlob {
+                req_id: got,
+                reply,
+                blob,
+            } if got == req_id => {
                 return (reply, blob);
             }
             ControlServerMsg::Response { req_id: got, reply } if got == req_id => {
@@ -108,14 +115,13 @@ fn a_read_session_streams_one_version_over_the_real_link() {
         assert!(blob.len() as u64 <= SEGMENT_BYTES);
         got.extend_from_slice(&blob);
     }
-    assert!(got == bytes, "the whole file arrived from one bound version");
+    assert!(
+        got == bytes,
+        "the whole file arrived from one bound version"
+    );
 
     assert_eq!(
-        call(
-            &mut peer,
-            req_id,
-            ControlRequest::CloseRead { session }
-        ),
+        call(&mut peer, req_id, ControlRequest::CloseRead { session }),
         ControlReply::Ok(ReplyOk::Unit)
     );
     let (reply, _) = call_blob(
@@ -174,10 +180,7 @@ fn a_segment_reports_a_change_over_the_real_link() {
         .unwrap()
         .set_modified(mtime)
         .unwrap();
-    assert_eq!(
-        std::fs::metadata(&path).unwrap().modified().unwrap(),
-        mtime
-    );
+    assert_eq!(std::fs::metadata(&path).unwrap().modified().unwrap(), mtime);
 
     let (reply, _) = call_blob(
         &mut peer,

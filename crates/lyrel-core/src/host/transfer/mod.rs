@@ -127,9 +127,17 @@ mod tests {
         let mut names = HashSet::new();
         for budget in BUDGETS {
             assert!(!budget.name.is_empty());
-            assert!(names.insert(budget.name), "duplicate budget {}", budget.name);
+            assert!(
+                names.insert(budget.name),
+                "duplicate budget {}",
+                budget.name
+            );
             assert!(!budget.unit.is_empty(), "{} has no unit", budget.name);
-            assert!(!budget.description.is_empty(), "{} has no statement of effect", budget.name);
+            assert!(
+                !budget.description.is_empty(),
+                "{} has no statement of effect",
+                budget.name
+            );
             assert!(
                 !matches!(budget.effect, BudgetEffect::Unlimited) || budget.value == u64::MAX,
                 "{} claims unlimited with a finite value",

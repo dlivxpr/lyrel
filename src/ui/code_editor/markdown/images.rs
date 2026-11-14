@@ -366,8 +366,12 @@ impl ImageHost {
         let generation = self.generation;
         let signature = self.signature.clone();
         let cancel = lyrel_core::host::transfer::CancelToken::default();
-        self.transfers
-            .insert(source.clone(), (generation, cancel.clone()));
+        if let Some((_, superseded)) = self
+            .transfers
+            .insert(source.clone(), (generation, cancel.clone()))
+        {
+            superseded.cancel();
+        }
         self.progress.remove(&source);
         self.states.insert(source.clone(), State::Loading);
         // A blocking Host read cannot call back into GPUI, so it reports
@@ -381,7 +385,7 @@ impl ImageHost {
                         if this
                             .transfers
                             .get(&progress_source)
-                            .is_some_and(|(generation, _)| *generation == generation)
+                            .is_some_and(|(current, _)| *current == generation)
                         {
                             this.progress.insert(progress_source.clone(), (read, total));
                             this.notify(cx);
@@ -754,6 +758,10 @@ pub(crate) fn read_bytes(
             if meta.len > budget {
                 return Err(too_large());
             }
+            log::debug!(
+                "host cannot open a versioned read session; using its bounded whole-file read for {}",
+                path.display()
+            );
             let bytes = host.read_file(path, budget)?;
             progress(lyrel_core::host::read::ReadProgress {
                 read: bytes.len() as u64,

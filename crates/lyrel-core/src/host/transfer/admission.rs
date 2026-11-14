@@ -83,10 +83,7 @@ impl TransferAdmission {
     }
 
     pub fn budget(&self) -> u64 {
-        self.inner
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .budget
+        self.inner.lock().unwrap_or_else(|e| e.into_inner()).budget
     }
 
     pub fn reserved(&self) -> u64 {
@@ -109,7 +106,10 @@ impl TransferAdmission {
         minimum: u64,
         desired: u64,
     ) -> Result<WorkingReservation, WorkingPressure> {
-        assert!(minimum <= desired, "minimum {minimum} exceeds desired {desired}");
+        assert!(
+            minimum <= desired,
+            "minimum {minimum} exceeds desired {desired}"
+        );
         let mut state = self.inner.lock().unwrap_or_else(|e| e.into_inner());
         let available = state.budget.saturating_sub(state.reserved);
         let bytes = desired.min(available);

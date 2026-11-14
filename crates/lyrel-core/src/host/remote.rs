@@ -1360,8 +1360,14 @@ mod tests {
             |update| progress.push(update),
         )
         .unwrap();
-        assert!(outcome.bytes == *body, "segments reassemble the bound version");
-        assert_eq!(progress.last().map(|p| (p.read, p.total)), Some((total, total)));
+        assert!(
+            outcome.bytes == *body,
+            "segments reassemble the bound version"
+        );
+        assert_eq!(
+            progress.last().map(|p| (p.read, p.total)),
+            Some((total, total))
+        );
 
         let mut chunks = 0;
         let mut closed = false;
@@ -1399,9 +1405,7 @@ mod tests {
                 )),
                 Vec::new(),
             )),
-            ControlRequest::CloseRead { .. } => {
-                Some((ControlReply::Ok(ReplyOk::Unit), Vec::new()))
-            }
+            ControlRequest::CloseRead { .. } => Some((ControlReply::Ok(ReplyOk::Unit), Vec::new())),
             other => panic!("unexpected request {other:?}"),
         });
 
@@ -1409,6 +1413,27 @@ mod tests {
         let error = reader.read_segment(4).unwrap_err();
         assert!(crate::host::read::is_file_changed(&error), "{error}");
         assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+    }
+
+    #[test]
+    fn a_read_session_fails_when_its_link_goes_down() {
+        use crate::daemon::control::feature::FILE_RANGE;
+
+        let (host, _seen) = host_with_peer_announcing('/', &[FILE_RANGE], |req| match req {
+            ControlRequest::OpenRead { .. } => Some((
+                ControlReply::Ok(ReplyOk::ReadOpened {
+                    session: 6,
+                    meta: read_meta(1024),
+                }),
+                Vec::new(),
+            )),
+            // Returning None drops the peer's socket.
+            ControlRequest::ReadChunk { .. } => None,
+            other => panic!("unexpected request {other:?}"),
+        });
+        let mut reader = host.open_read(Path::new("/lost.png")).unwrap();
+        let error = reader.read_segment(16).unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::ConnectionReset, "{error}");
     }
 
     #[test]
@@ -1424,7 +1449,9 @@ mod tests {
                 Vec::new(),
             )),
             ControlRequest::ReadChunk { .. } => Some((
-                ControlReply::Ok(ReplyOk::FileMeta { meta: read_meta(64) }),
+                ControlReply::Ok(ReplyOk::FileMeta {
+                    meta: read_meta(64),
+                }),
                 Vec::new(),
             )),
             other => panic!("unexpected request {other:?}"),

@@ -52,13 +52,16 @@ impl FileVersion {
         }
         #[cfg(windows)]
         {
-            let info = win_info(file)?;
-            Ok(info.changed.map(|changed| Self {
-                len: info.len,
-                modified: info.modified,
+            let identity = win_identity(file)?;
+            let Some(changed) = win_change_time(file)? else {
+                return Ok(None);
+            };
+            Ok(Some(Self {
+                len: identity.len,
+                modified: identity.modified,
                 changed,
-                volume: info.volume,
-                index: info.index,
+                volume: identity.volume,
+                index: identity.index,
             }))
         }
         #[cfg(not(any(unix, windows)))]
@@ -90,7 +93,7 @@ impl FileVersion {
                 Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(false),
                 Err(error) => return Err(error),
             };
-            let info = match win_info(&file) {
+            let info = match win_identity(&file) {
                 Ok(info) => info,
                 // A path that now names something without a file index (a
                 // directory replaced the file, for instance) is not this
@@ -123,47 +126,56 @@ fn metadata_handle(path: &Path) -> io::Result<File> {
 
 #[cfg(windows)]
 #[derive(Clone, Copy, Debug)]
-struct WinInfo {
+struct WinIdentity {
     len: u64,
     modified: u64,
-    changed: Option<u64>,
     volume: u64,
     index: u64,
 }
 
 #[cfg(windows)]
-fn win_info(file: &File) -> io::Result<WinInfo> {
+fn win_identity(file: &File) -> io::Result<WinIdentity> {
     use std::os::windows::io::AsRawHandle;
     use windows_sys::Win32::Foundation::FILETIME;
     use windows_sys::Win32::Storage::FileSystem::{
-        BY_HANDLE_FILE_INFORMATION, FILE_BASIC_INFO, FileBasicInfo, GetFileInformationByHandle,
-        GetFileInformationByHandleEx,
+        BY_HANDLE_FILE_INFORMATION, GetFileInformationByHandle,
     };
 
-    let handle = file.as_raw_handle();
     let mut by_handle = BY_HANDLE_FILE_INFORMATION::default();
-    let ok = unsafe { GetFileInformationByHandle(handle, &mut by_handle) };
+    let ok = unsafe { GetFileInformationByHandle(file.as_raw_handle(), &mut by_handle) };
     if ok == 0 {
         return Err(io::Error::last_os_error());
     }
-    let mut basic = FILE_BASIC_INFO::default();
+    let ticks =
+        |value: FILETIME| (u64::from(value.dwHighDateTime) << 32) | u64::from(value.dwLowDateTime);
+    Ok(WinIdentity {
+        len: (u64::from(by_handle.nFileSizeHigh) << 32) | u64::from(by_handle.nFileSizeLow),
+        modified: ticks(by_handle.ftLastWriteTime),
+        volume: u64::from(by_handle.dwVolumeSerialNumber),
+        index: (u64::from(by_handle.nFileIndexHigh) << 32) | u64::from(by_handle.nFileIndexLow),
+    })
+}
+
+/// `None` when the volume does not maintain a change time.
+#[cfg(windows)]
+fn win_change_time(file: &File) -> io::Result<Option<u64>> {
+    use std::os::windows::io::AsRawHandle;
+    use windows_sys::Win32::Storage::FileSystem::{
+        FILE_BASIC_INFO, FileBasicInfo, GetFileInformationByHandleEx,
+    };
+
+    let mut info = FILE_BASIC_INFO::default();
     let ok = unsafe {
         GetFileInformationByHandleEx(
-            handle,
+            file.as_raw_handle(),
             FileBasicInfo,
-            std::ptr::from_mut(&mut basic).cast(),
-            u32::try_from(std::mem::size_of::<FILE_BASIC_INFO>()).expect("FILE_BASIC_INFO fits u32"),
+            std::ptr::from_mut(&mut info).cast(),
+            u32::try_from(std::mem::size_of::<FILE_BASIC_INFO>())
+                .expect("FILE_BASIC_INFO fits u32"),
         )
     };
     if ok == 0 {
         return Err(io::Error::last_os_error());
     }
-    let ticks = |value: FILETIME| (u64::from(value.dwHighDateTime) << 32) | u64::from(value.dwLowDateTime);
-    Ok(WinInfo {
-        len: (u64::from(by_handle.nFileSizeHigh) << 32) | u64::from(by_handle.nFileSizeLow),
-        modified: ticks(by_handle.ftLastWriteTime),
-        changed: (basic.ChangeTime > 0).then_some(basic.ChangeTime as u64),
-        volume: u64::from(by_handle.dwVolumeSerialNumber),
-        index: (u64::from(by_handle.nFileIndexHigh) << 32) | u64::from(by_handle.nFileIndexLow),
-    })
+    Ok((info.ChangeTime > 0).then_some(info.ChangeTime as u64))
 }

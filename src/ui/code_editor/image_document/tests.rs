@@ -771,6 +771,11 @@ fn a_large_picture_opens_through_its_hosts_versioned_read(tcx: &mut TestAppConte
     });
     assert_eq!(ready_size(&app, &cx), (1400, 1000));
     assert_eq!(
+        std::fs::read(&path).unwrap(),
+        bytes,
+        "opening a picture never rewrites the original"
+    );
+    assert_eq!(
         host.open_reads.load(std::sync::atomic::Ordering::SeqCst),
         1,
         "the picture came from one bounded versioned session"
