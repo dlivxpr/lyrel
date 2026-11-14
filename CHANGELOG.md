@@ -29,6 +29,7 @@
 
 - #265／#275：能力探针完整消费 Kitty 完成屏障，保留对额外输入、重复回复与所有查询字节的严格断言；真实 SSH 的完整 Node producer 验收迁到生产 `TerminalView`，让前端实际回答 DA1，daemon 继续拥有 XTGETTCAP／XTSMGRAPHICS。保留原 9 组查询并验证 5 组 Sixel 发现，不伪造回复或缩窄用例。
 - #270：独立 controller probe 的输入与 `Attach` 共用同一有序连接，避免另一连接的 `SendInput` 在附着完成前触发前端绑定查询；保留原 10 秒超时、完整 `q`／`s` 回复与绘制能力声明断言，不改生产协议。
+- #273／#278：主屏历史让位备用屏的图形压力验收先实际解码并绘制历史／最后 live 图片，在等待准入 ACK 时显式驱动生产窗口帧，让窗口归还退休 atlas 租约，不依赖 headless 隐式帧回调时机。原同次 `1049h + APC`、两图片预算、ACK／像素／历史提示与最后 live 图片断言不变；完整回复改由既有文件捕获送到父测试，失败时保留拒绝码与资源上下文，不改生产预算或超时。
 - #261：颜色 handoff 回归的完成标记改为由 `printf` 拼接生成，避免 PTY 输入回显在颜色设置执行前误触发 handoff；保留移交后的索引色、默认背景色与同一 shell 断言，不修改生产状态移交或超时。
 - #268：新 shell 的 Glyph 隔离回归在真实 PTY 中以 raw mode 采集完整回复字节，退出采集后恢复原 tty 模式并再次验证正常 shell 输入；不再将 macOS 行编辑器对 ESC／ST 的回显重绘误判为 glossary 复活。保留磁盘 APC 剥离、空权威 glossary、单次投影与历史 ACK 不重放断言，不放宽回复内容或生产超时。
 - #277：修复同一次 PTY read 中图片后的 APC／OSC 提前释放已完成 iTerm2 source 工作额度、导致 daemon reader panic 与后续文字停滞；保留各图片到有序移交的额度，base64 在原编码 buffer 内压缩并在解码分配前预留工作空间，畸形 padding 拒收而不下溢。不通过延长往返超时掩盖故障。

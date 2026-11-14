@@ -1581,6 +1581,8 @@ fn graphics_consumer_inactive_main_history_yields_to_alt_without_reclaiming_last
                 };
                 graphics_send_fixture(&view, cx, 1, first.as_bytes());
                 graphics_layout_wait_image(&view, cx, 7);
+                graphics_recovery_pixels(&view, cx, 7, &[0, 0, 255, 255]);
+                graphics_assert_production_paint(window, &view, cx);
                 graphics_send_fixture(&view, cx, 2, &b"\r\n".repeat(80));
                 graphics_send_fixture(
                     &view,
@@ -1589,7 +1591,56 @@ fn graphics_consumer_inactive_main_history_yields_to_alt_without_reclaiming_last
                     b"\x1b[6;5H\x1b_Ga=T,i=8,p=2,c=2,r=1,C=1,f=32,s=1,v=1,q=2;AAD//w==\x1b\\",
                 );
                 graphics_layout_wait_image(&view, cx, 8);
-                graphics_send_fixture_with_replies(&view, cx, 4, b"\x1b[?1049h\x1b[6;5H\x1b_Ga=T,i=9,p=3,c=2,r=1,C=1,f=32,s=1,v=1;AP8A/w==\x1b\\", 1);
+                graphics_recovery_pixels(&view, cx, 8, &[255, 0, 0, 255]);
+                // A decoded placement is not a presented frame. Establish 8 as
+                // the last main picture before asking history 7 to yield; an
+                // older committed picture still legitimately pins its pixels.
+                graphics_assert_production_paint(window, &view, cx);
+                view.read_with(cx, |view, _| {
+                    let images = &view.grid_snap.as_ref().unwrap().images;
+                    let live = images
+                        .iter()
+                        .find(|image| image.placement.image_id == 8)
+                        .unwrap();
+                    assert!(live.painted.load(std::sync::atomic::Ordering::Acquire));
+                    assert_eq!(
+                        live.data.as_ref().unwrap().as_bytes(0).unwrap(),
+                        [255, 0, 0, 255],
+                        "the last main frame must present the pixels it will retain"
+                    );
+                });
+                let replies = tempfile::TempDir::new().unwrap();
+                let reply_path = replies.path().join("alt-admission");
+                let request = format!(
+                    "SEND_ANY 4 1 {} 0 {}\n",
+                    graphics_pty_fixture::hex(b"\x1b[?1049h\x1b[6;5H\x1b_Ga=T,i=9,p=3,c=2,r=1,C=1,f=32,s=1,v=1;AP8A/w==\x1b\\"),
+                    graphics_pty_fixture::hex(reply_path.to_string_lossy().as_bytes()),
+                );
+                let input_bytes = request.len();
+                view.read_with(cx, |view, _| view.terminal.write(request.into_bytes()));
+                // Atlas retirement belongs to the window. Deliver real frames
+                // while admission waits instead of relying on an implicit
+                // headless frame callback before the daemon's finite deadline.
+                let done_path = reply_path.with_extension("done");
+                graphics_recovery_wait(cx, "alternate admission did not complete", |cx| {
+                    window
+                        .update(cx, |_, window, cx| window.render_frame(cx))
+                        .unwrap();
+                    done_path.is_file()
+                });
+                graphics_wait_fixture(&view, cx, 4, input_bytes);
+                let reply = std::fs::read_to_string(&reply_path).unwrap();
+                let reply = graphics_pty_fixture::unhex(reply.trim());
+                assert!(
+                    reply.ends_with(b";OK\x1b\\"),
+                    "alternate image admission failed; placeholder={placeholder}; reply={:?}; allocations={}; {}",
+                    String::from_utf8_lossy(&reply),
+                    view.read_with(cx, |view, _| view
+                        .terminal
+                        .images()
+                        .allocation_observation()),
+                    view.read_with(cx, |view, _| view.terminal.images().recovery_diagnostics()),
+                );
                 graphics_layout_wait_image(&view, cx, 9);
                 graphics_assert_production_paint(window, &view, cx);
                 view.read_with(cx, |view, _| {
@@ -2983,10 +3034,7 @@ fn glyph_daemon_frames_a_query_to_its_controller() {
         "SEND 1 1 {} 0\n",
         graphics_pty_fixture::hex(&glyph_query(0x100000))
     );
-    daemon
-        .panes()
-        .send_input(pane, request.as_bytes())
-        .unwrap();
+    daemon.panes().send_input(pane, request.as_bytes()).unwrap();
     let deadline = Instant::now() + Duration::from_secs(10);
     loop {
         assert!(
