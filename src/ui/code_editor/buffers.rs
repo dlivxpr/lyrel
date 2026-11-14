@@ -932,8 +932,7 @@ impl EditorBuffers {
                 // own image state and never reach it.
                 if let Some(text) = file.input.text() {
                     let value = text.read(cx);
-                    file.saved =
-                        Fingerprint::of_chunks(value.text().len(), value.text().chunks());
+                    file.saved = Fingerprint::of_chunks(value.text().len(), value.text().chunks());
                 }
                 file.saved_representation = file.representation_fingerprint(cx);
                 access(view).note_edit(id, cx);

@@ -177,7 +177,10 @@ fn a_png_opens_as_a_read_only_document_with_framing(tcx: &mut TestAppContext) {
     });
     settle(&mut cx);
     cx.update(|window, _| {
-        assert!(window.find("image-fit").visible(), "fill keeps the controls");
+        assert!(
+            window.find("image-fit").visible(),
+            "fill keeps the controls"
+        );
         assert!(window.find("status-image-zoom").visible());
     });
     app.update_in(&mut cx, |app, window, cx| {
@@ -450,9 +453,7 @@ fn text_only_commands_leave_a_picture_alone(tcx: &mut TestAppContext) {
         app.editor_go_to_line(window, cx);
         app.editor_go_to_symbol(window, cx);
         app.toggle_line_ending(cx);
-        let wrap_before = cx
-            .global::<crate::core::config::Config>()
-            .editor_soft_wrap;
+        let wrap_before = cx.global::<crate::core::config::Config>().editor_soft_wrap;
         app.toggle_document_wrap(window, cx);
         assert_eq!(
             cx.global::<crate::core::config::Config>().editor_soft_wrap,
@@ -575,11 +576,7 @@ fn the_owning_host_decides_which_bytes_are_shown(tcx: &mut TestAppContext) {
     app.read_with(&cx, |app, _| {
         assert_eq!(app.editor_active_location().unwrap().0, HostId(69));
     });
-    assert_eq!(
-        ready_size(&app, &cx),
-        (10, 10),
-        "the plain host's own copy"
-    );
+    assert_eq!(ready_size(&app, &cx), (10, 10), "the plain host's own copy");
 
     // 映射 Host 的根落在别的目录：读到的是它自己的图，不是本地同名文件。
     let decoy = super::super::test_host::canonical_tempdir();
@@ -627,8 +624,8 @@ fn the_owning_host_decides_which_bytes_are_shown(tcx: &mut TestAppContext) {
         local_bytes,
         "local bytes were left alone"
     );
-    let decoy = image::load_from_memory(&std::fs::read(decoy.path().join("pic.png")).unwrap())
-        .unwrap();
+    let decoy =
+        image::load_from_memory(&std::fs::read(decoy.path().join("pic.png")).unwrap()).unwrap();
     assert_eq!(
         (decoy.width(), decoy.height()),
         (30, 40),

@@ -52,7 +52,10 @@ fn failed_save_does_not_close_the_tab_on_a_later_manual_save(cx: &mut TestAppCon
         assert_eq!(file.id(), id);
         assert!(file.path.as_os_str().is_empty());
         assert!(file.dirty);
-        assert_eq!(file.input.text().unwrap().read(cx).text().to_string(), "original edits");
+        assert_eq!(
+            file.input.text().unwrap().read(cx).text().to_string(),
+            "original edits"
+        );
     });
     assert!(occupied.is_dir());
     assert_eq!(app.read_with(&vcx, |app, _| app.tabs.len()), 2);
