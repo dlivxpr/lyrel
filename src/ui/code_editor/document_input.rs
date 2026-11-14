@@ -287,7 +287,7 @@ impl InputRead<'_> {
             EditorInput::Code(input) => input.read(self.cx).scroll_offset(),
             EditorInput::Markdown(input) => input.read(self.cx).scroll_offset(),
             EditorInput::Image(input) => input.read(self.cx).scroll().offset(),
-            EditorInput::Svg(view) => view.read(self.cx).scroll_offset(cx),
+            EditorInput::Svg(view) => view.read(self.cx).scroll_offset(self.cx),
         }
     }
 }

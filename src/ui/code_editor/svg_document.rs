@@ -10,11 +10,12 @@
 
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::{
-    ActiveTheme as _, Icon, IconName, Sizable as _, h_flex, spinner::Spinner, v_flex,
+    ActiveTheme as _, Disableable as _, Icon, IconName, Sizable as _, h_flex, spinner::Spinner,
+    v_flex,
 };
 use gpui_kit::prelude::*;
 use gpui_kit::{
-    App, Context, Entity, FocusHandle, Focusable, Pixels, Point, Render, ScrollHandle,
+    AnyElement, App, Context, Entity, FocusHandle, Focusable, Pixels, Point, Render, ScrollHandle,
     SharedString, Size, Subscription, Window, div, px, rems,
 };
 use lyrel_markdown_editor::{Document, DocumentEvent, EditorState as SourceEditor};
@@ -601,7 +602,10 @@ impl SvgView {
                         .text_xs()
                         .text_color(warning)
                         .child(t(L10nKey::EditorSvgPreviewFailed))
-                        .tooltip(message),
+                        .tooltip(move |window, cx| {
+                            gpui_kit::component::tooltip::Tooltip::new(message.clone())
+                                .build(window, cx)
+                        }),
                 )
             })
             .when(preview_mode && ready.is_some(), |row| {

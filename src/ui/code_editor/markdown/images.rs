@@ -906,7 +906,10 @@ pub(crate) fn decode_svg_source(source: &str) -> io::Result<SvgRaster> {
 fn svg_options(
     default_width: f32,
     default_height: f32,
-) -> (resvg::usvg::Options, Arc<std::sync::atomic::AtomicBool>) {
+) -> (
+    resvg::usvg::Options<'static>,
+    Arc<std::sync::atomic::AtomicBool>,
+) {
     // usvg has no JavaScript runtime. Disable *both* resource resolvers: its default
     // string resolver reads local files, including for an SVG read on a remote Host.
     let blocked = Arc::new(std::sync::atomic::AtomicBool::new(false));
