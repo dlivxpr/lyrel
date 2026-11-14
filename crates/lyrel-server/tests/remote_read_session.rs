@@ -8,9 +8,9 @@ pub mod fixture;
 use std::path::Path;
 
 use fixture::NativeSshFixture;
+use lyrel_core::host::Host;
 use lyrel_core::host::read::read_file_segmented;
 use lyrel_core::host::transfer::{CancelToken, SEGMENT_BYTES};
-use lyrel_core::host::{Host, HostRead};
 
 fn body(len: usize) -> Vec<u8> {
     (0..len as u32).map(|i| (i % 251) as u8).collect()
@@ -30,6 +30,14 @@ fn a_read_session_streams_one_version_over_real_ssh() {
 
     let bytes = body(3 * 1024 * 1024 + 17);
     let path = fixture.remote_path("read-session.bin");
+    // The fixture home exists, but this test's private child directory does
+    // not: only the graphics fixtures create it. WriteFile does not invent
+    // parents, so make the directory first and let the fixture's Drop remove it.
+    let remote_dir = path.parent().expect("remote fixture path has a directory");
+    if !host.exists(remote_dir) {
+        host.create_dir(remote_dir, false)
+            .expect("create the private remote read-session directory");
+    }
     host.write_file(&path, &bytes).unwrap();
 
     let mut progress = Vec::new();
