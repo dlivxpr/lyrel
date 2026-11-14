@@ -103,6 +103,7 @@ Windows 下此 Bash 检查需 LF 工作树：CRLF 脚本会报 `$'\r': command n
 
 - 单元测试多为内联 `#[cfg(test)] mod tests`；GUI 用 `#[gpui_kit::test]`／`TestAppContext`，异步集成测试用 `#[tokio::test]`。CLI E2E 与真实 native Markdown 字形目标均为 `harness = false` 的自定义 runner；后者由 `tests/native_markdown.rs` 在 OS 主线程初始化平台，不能移回 libtest worker。`native-markdown-tests` 非默认产品 feature，仅开放消费者所需支持代码。
 - 按改动选择测试，例如 `cargo test --locked -p lyrel-core`、`cargo test --locked -p lyrel-cli --test cli_e2e`；Host 契约复用 `crates/lyrel-core/src/host/conformance.rs` 的本地／stdio 共享套件。
+- `cargo check`／`cargo test`／`cargo build` 产生的 warning 视为必须修复项：以当前检出的 zero-warning 输出为交付标准，遗留 warning 须逐条说明理由。
 - 集成测试从 `env!("CARGO_BIN_EXE_lyrel-server")` 等获取真实二进制。沿用 `tempfile::TempDir`、隔离配置／socket、子进程退出清理；GUI 测试写配置前调用 `crate::core::config::pin_test_config_dir()`。
 - Pi 桥契约测试需要当前平台的 Node 22.19+ 位于 `PATH`；Linux 测试不能以 Windows 的 `node.exe` 代替。缺少运行时是验证前提失败，不能跳过用例后宣称完整套件通过。
 - 很多 server 集成测试受 `cfg(unix)` 限制；Windows 绿灯不能替代 Unix 验证。联网、真实 SSH/LSP 的 ignored 用例仅在具备前提时显式运行；检查外部工具缺失导致的跳过。
@@ -111,6 +112,11 @@ Windows 下此 Bash 检查需 LF 工作树：CRLF 脚本会报 `$'\r': command n
 - 行为变更除相关测试外还需实际运行受影响路径；UI 修改按 `docs/design-system.md` 做实际界面验收。交付时区分已运行、跳过和未验证项。
 - 真实程序的冒烟与集成验证优先用可复现脚本、CLI／headless 或后台进程完成，保留命令、退出码与关键日志；桌面交互优先用后台窗口自动化。仅当验收依赖前台焦点或后台无法完成的原生交互时申请前台操作，并履行所需审批；headless 结果不能替代 UI 验收。
 - Linux 相关构建、测试与真实运行优先使用 Docker 启动的轻量 Linux 发行版容器；镜像须兼容待测目标的 libc、依赖与运行时，并参照 CI 准备环境，不以缩小镜像为由删减验证范围。仅当 Docker 不可用或待测行为无法由容器覆盖（如 WSL 专项集成）时使用 WSL，并说明回退原因。
+
+## 分支策略与会话清理
+
+- `implement-spec` 等一次性、长时间运行的任务：会话分支以 PR 形式合入主分支；简单的问题修复直接提交主分支即可。
+- 会话完成的判定：会话分支已合入主分支，或会话更改已推送 GitHub 且 CI 通过。满足后清理：会话产生的中间文件、创建的分支与 worktree；若用过 Docker，删除会话拉取的镜像；若用过 WSL，清理其中的冗余文件；按实际使用收缩 WSL／Docker 虚拟磁盘。清理只针对会话引入的产物，主检出、既有分支和共享镜像不列入。
 
 ## Agent skills
 
