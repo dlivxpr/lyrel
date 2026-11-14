@@ -1860,6 +1860,28 @@ pub fn translate_en(key: L10nKey) -> &'static str {
         L10nKey::EditorSvgLimit => {
             "SVG exceeds the preview’s 8192-pixel edge or 16-million-pixel budget"
         }
+        L10nKey::EditorImagePageOf => "Page {page} of {pages}",
+        L10nKey::EditorImagePageLoading => "Loading page",
+        L10nKey::EditorImagePagePrevious => "Previous page",
+        L10nKey::EditorImagePageNext => "Next page",
+        L10nKey::EditorImagePageMissing => "This page does not exist",
+        L10nKey::EditorImagePageUnsupported => {
+            "This page uses a TIFF sample layout Lyrel cannot show"
+        }
+        L10nKey::EditorImagePageDimensionsLimit => {
+            "Page size {width} × {height} exceeds the {limit}-pixel edge budget"
+        }
+        L10nKey::EditorImagePageBytesLimit => {
+            "Page decoding needs {required} MiB, over the {limit} MiB page budget"
+        }
+        L10nKey::EditorImagePagesLimit => "The file has more than the {pages}-page TIFF budget",
+        L10nKey::EditorImageAnimationLimit => {
+            "Animation frame buffers need {required} MiB, over the {limit} MiB budget"
+        }
+        L10nKey::EditorImageAnimationEmpty => "This animation has no frames to show",
+        L10nKey::EditorImageAnimationTruncated => {
+            "This animation ends before its frame data is complete"
+        }
         L10nKey::EditorTableCommands => "Table…",
         L10nKey::MarkdownCopyAsMarkdown => "Copy as Markdown",
         L10nKey::MarkdownTurnInto => "Turn into",

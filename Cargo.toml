@@ -141,6 +141,13 @@ plist = "1"
 # vision won't accept, so we transcode to PNG. `image` is already in the tree via
 # gpui's own clipboard code, so pinning it here adds no new native code.
 image = "0.25"
+# The image document's GIF and multi-page TIFF decoders. Both are already in
+# the tree through `image`; naming the registry crates directly pins the same
+# image-rs implementations instead of reaching through `image`'s private
+# decoder paths. See `src/ui/code_editor/image_document/UPSTREAM.toml` for the
+# Glim GIF playback source record.
+gif = "0.14.2"
+tiff = "0.11.3"
 
 # The published transport shares gpui-pre-http-client types with Fast through Kit.
 # Its library name is `reqwest_client`; it owns its Tokio runtime.

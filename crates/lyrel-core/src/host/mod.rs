@@ -4,6 +4,7 @@ mod file_version;
 pub mod local;
 pub mod metrics;
 pub mod read;
+mod read_lease;
 pub mod remote;
 pub mod server;
 pub mod session_operations;

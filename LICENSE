@@ -13037,6 +13037,14 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 
+Glim-derived GIF playback source import
+======================================
+
+适用组件：`lyrel` 的 `src/ui/code_editor/image_document/gif.rs`（GIF 合成、disposal、循环与逐行解码）。
+来源：https://github.com/glimapp/glim @ fc2183f2c5f27ddfcdc4badbab6d83d50616831b 的 `crates/glim-services/src/media.rs`（仅 GIF 部分）。
+原始文件摘要与本地适配记录：`src/ui/code_editor/image_document/UPSTREAM.toml`。
+此例外不改变 Lyrel 原有 Apache-2.0 代码、`tiff`／`gif` registry 依赖或 `image` crate 的许可。
+
 Glim 预览传输取消、准入与预算源码导入
 ====================================
 
