@@ -405,10 +405,7 @@ impl EditorPanelState {
                     let file = editor.buffers.get_mut(id).unwrap();
                     file.set_format(
                         TextFormat {
-                            line_ending: file
-                                .format(cx)
-                                .expect("text document")
-                                .line_ending,
+                            line_ending: file.format(cx).expect("text document").line_ending,
                             ..TextFormat::default()
                         },
                         cx,
@@ -432,7 +429,11 @@ impl EditorPanelState {
     ) {
         // A read-only picture must not open a path picker it can never write
         // through: Save As is about text bytes this document does not have.
-        if self.buffers.get(id).is_some_and(|file| !file.input.is_text()) {
+        if self
+            .buffers
+            .get(id)
+            .is_some_and(|file| !file.input.is_text())
+        {
             return;
         }
         let Some(identity) = self.save_identity(id, cx) else {

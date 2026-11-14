@@ -122,8 +122,9 @@ pub(super) fn owning_host(cx: &mut TestAppContext) {
     });
     until(&mut vcx, |cx| {
         app.read_with(cx, |app, cx| {
-            app.active_buffer()
-                .is_some_and(|file| file.input.text().unwrap().read(cx).text().to_string() == inserted)
+            app.active_buffer().is_some_and(|file| {
+                file.input.text().unwrap().read(cx).text().to_string() == inserted
+            })
         })
     });
     app.read_with(&vcx, |app, cx| {

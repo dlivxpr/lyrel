@@ -1753,14 +1753,20 @@ pub(super) mod gpui_tests {
         vcx.update(|window, cx| window.render_frame(cx));
         let first = app.update_in(&mut vcx, |app, window, cx| {
             let input = app.active_editor_input().unwrap();
-            input.text().unwrap().set_cursor_position(Position::new(1, 2), window, cx);
+            input
+                .text()
+                .unwrap()
+                .set_cursor_position(Position::new(1, 2), window, cx);
             app.editor_split(window, cx);
             input
         });
         vcx.update(|window, cx| window.render_frame(cx));
         let second = app.update_in(&mut vcx, |app, window, cx| {
             let input = app.active_editor_input().unwrap();
-            input.text().unwrap().set_cursor_position(Position::new(4, 2), window, cx);
+            input
+                .text()
+                .unwrap()
+                .set_cursor_position(Position::new(4, 2), window, cx);
             app.editor_go_to_symbol(window, cx);
             input
         });
@@ -1773,8 +1779,14 @@ pub(super) mod gpui_tests {
         });
         vcx.run_until_parked();
         app.read_with(&vcx, |app, cx| {
-            assert_eq!(first.text().unwrap().read(cx).cursor_position(), Position::new(1, 2));
-            assert_eq!(second.text().unwrap().read(cx).cursor_position(), Position::new(4, 2));
+            assert_eq!(
+                first.text().unwrap().read(cx).cursor_position(),
+                Position::new(1, 2)
+            );
+            assert_eq!(
+                second.text().unwrap().read(cx).cursor_position(),
+                Position::new(4, 2)
+            );
             assert!(!app.active_buffer().unwrap().dirty);
         });
     }
@@ -1818,7 +1830,10 @@ pub(super) mod gpui_tests {
             input.markdown().unwrap().update(cx, |view, cx| {
                 view.replace_range(0..original.len(), current, cx);
             });
-            input.text().unwrap().set_cursor_position(Position::new(1, 2), window, cx);
+            input
+                .text()
+                .unwrap()
+                .set_cursor_position(Position::new(1, 2), window, cx);
             app.editor_go_to_symbol(window, cx);
         });
         vcx.run_until_parked();
@@ -1875,7 +1890,10 @@ pub(super) mod gpui_tests {
         app.read_with(&vcx, |app, cx| {
             let file = app.active_buffer().unwrap();
             assert_eq!(file.path, path);
-            assert_eq!(file.input.text().unwrap().read(cx).text().to_string(), replacement);
+            assert_eq!(
+                file.input.text().unwrap().read(cx).text().to_string(),
+                replacement
+            );
             assert!(!file.dirty);
         });
     }
