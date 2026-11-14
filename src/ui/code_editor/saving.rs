@@ -90,6 +90,9 @@ fn document_identity(file: &OpenFile, cx: &gpui_kit::App) -> gpui_kit::EntityId 
     match &file.input {
         EditorInput::Code(input) => input.entity_id(),
         EditorInput::Markdown(view) => view.read(cx).document().entity_id(),
+        // A picture never saves, but the identity is asked for by every
+        // save-side prompt and must name something stable.
+        EditorInput::Image(view) => view.entity_id(),
     }
 }
 
@@ -151,6 +154,15 @@ impl EditorPanelState {
         cx: &mut Context<E>,
         bridge: EditorBridge<E>,
     ) {
+        // A picture is read-only: Save and Save As do nothing here rather than
+        // writing text bytes over the file a reader is looking at.
+        if self
+            .buffers
+            .get(id)
+            .is_some_and(|file| !file.input.is_text())
+        {
+            return;
+        }
         if let Some(file) = self.buffers.get(id) {
             file.input.finish_composition(window, cx);
         }
@@ -172,7 +184,7 @@ impl EditorPanelState {
         // Markdown hard breaks and unknown syntax are source: ordinary saves do
         // not apply code cleanup. Explicit workbench cleanup remains undoable.
         if file.input.code().is_some() {
-            let text = file.input.read(cx).text().to_string();
+            let text = file.input.text().unwrap().read(cx).text().to_string();
             if let Some(fixed) = lyrel_text::apply_save_rules(&text, &file.config) {
                 let input = file.input.clone();
                 replace_buffer_text(&input, &fixed, window, cx);
@@ -366,7 +378,8 @@ impl EditorPanelState {
         };
         let file = self.buffers.get(id).unwrap();
         let name = file.label();
-        let encoding = file.format(cx).encoding_label();
+        // Only documents with a text format reach the encoding prompt.
+        let encoding = file.format(cx).expect("text document").encoding_label();
         self.saves_failed(id);
         let answer = window.prompt(
             PromptLevel::Warning,
@@ -392,7 +405,7 @@ impl EditorPanelState {
                     let file = editor.buffers.get_mut(id).unwrap();
                     file.set_format(
                         TextFormat {
-                            line_ending: file.format(cx).line_ending,
+                            line_ending: file.format(cx).expect("text document").line_ending,
                             ..TextFormat::default()
                         },
                         cx,
@@ -414,6 +427,15 @@ impl EditorPanelState {
         cx: &mut Context<E>,
         bridge: EditorBridge<E>,
     ) {
+        // A read-only picture must not open a path picker it can never write
+        // through: Save As is about text bytes this document does not have.
+        if self
+            .buffers
+            .get(id)
+            .is_some_and(|file| !file.input.is_text())
+        {
+            return;
+        }
         let Some(identity) = self.save_identity(id, cx) else {
             return;
         };
@@ -522,7 +544,7 @@ impl EditorPanelState {
                 let total = self
                     .buffers
                     .get(id)
-                    .map(|file| file.input.read(cx).text().lines_len())
+                    .and_then(|file| file.input.text().map(|t| t.read(cx).text().lines_len()))
                     .unwrap_or(1);
                 t_fmt(
                     L10nKey::EditorGoToLinePlaceholder,

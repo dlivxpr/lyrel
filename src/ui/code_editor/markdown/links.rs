@@ -203,7 +203,7 @@ pub(super) fn follow(
             .chain(code.split.as_ref().map(|other| other.id))
             .find_map(|group| {
                 file.presentations
-                    .existing(tab.id(), group)
+                    .markdown_existing(tab.id(), group)
                     .filter(|view| view == source)
                     .map(|_| (tab.id(), group))
             })

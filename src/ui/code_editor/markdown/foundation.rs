@@ -106,6 +106,8 @@ pub(super) fn lifecycle(cx: &mut TestAppContext) {
         assert_eq!(
             app.active_editor_input()
                 .unwrap()
+                .text()
+                .unwrap()
                 .read(cx)
                 .cursor_position(),
             Position::new(1, 2)
@@ -156,6 +158,8 @@ pub(super) fn lifecycle(cx: &mut TestAppContext) {
         assert!(app.active_buffer().unwrap().dirty);
         assert_eq!(
             app.active_editor_input()
+                .unwrap()
+                .text()
                 .unwrap()
                 .read(cx)
                 .cursor_position(),

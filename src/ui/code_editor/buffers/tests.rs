@@ -154,9 +154,12 @@ fn terminal_citation_click_opens_the_editor(cx: &mut TestAppContext, output: &st
             .expect("citation opens the production editor");
         assert_eq!(file.path, expected_path);
         assert_eq!(file.host.id(), expected_host);
-        assert_eq!(file.input.read(cx).cursor_position(), Position::new(2, 0));
         assert_eq!(
-            file.input.read(cx).text().to_string(),
+            file.input.text().unwrap().read(cx).cursor_position(),
+            Position::new(2, 0)
+        );
+        assert_eq!(
+            file.input.text().unwrap().read(cx).text().to_string(),
             "first\nsecond\nrange starts here\nfourth\nfifth\n"
         );
     });
@@ -187,7 +190,7 @@ fn production_markdown_opens_live_without_changing_code_or_plain_untitled(cx: &m
                 !extension.eq_ignore_ascii_case("mdx")
             );
             assert_eq!(
-                file.input.read(cx).text().to_string(),
+                file.input.text().unwrap().read(cx).text().to_string(),
                 "# Heading\n\nbody\n"
             );
             assert!(!file.dirty);
@@ -211,7 +214,10 @@ fn production_markdown_opens_live_without_changing_code_or_plain_untitled(cx: &m
         let file = app.active_buffer().unwrap();
         assert_eq!(file.language(), "rust");
         assert!(file.input.code().is_some());
-        assert_eq!(file.input.read(cx).text().to_string(), "fn main() {}\n");
+        assert_eq!(
+            file.input.text().unwrap().read(cx).text().to_string(),
+            "fn main() {}\n"
+        );
     });
     vcx.dispatch_action(EditorNewFile);
     vcx.run_until_parked();
@@ -227,7 +233,10 @@ fn production_markdown_opens_live_without_changing_code_or_plain_untitled(cx: &m
     app.read_with(&vcx, |app, cx| {
         let file = app.active_buffer().unwrap();
         assert!(file.input.code().is_some());
-        assert_eq!(file.input.read(cx).text().to_string(), "# terminal output");
+        assert_eq!(
+            file.input.text().unwrap().read(cx).text().to_string(),
+            "# terminal output"
+        );
     });
     vcx.dispatch_action(EditorNewMarkdownFile);
     vcx.run_until_parked();
@@ -260,6 +269,8 @@ fn opening_across_tabs_shares_edits_and_closing_one_presentation_keeps_them(
             app.active_buffer()
                 .unwrap()
                 .input
+                .text()
+                .unwrap()
                 .read(cx)
                 .cursor_position(),
             Position::new(1, 2)
@@ -274,6 +285,8 @@ fn opening_across_tabs_shares_edits_and_closing_one_presentation_keeps_them(
         app.active_buffer()
             .unwrap()
             .input
+            .text()
+            .unwrap()
             .read(cx)
             .text()
             .to_string()
@@ -295,6 +308,8 @@ fn opening_across_tabs_shares_edits_and_closing_one_presentation_keeps_them(
             app.active_buffer()
                 .unwrap()
                 .input
+                .text()
+                .unwrap()
                 .read(cx)
                 .text()
                 .to_string(),
@@ -321,7 +336,10 @@ fn opening_across_tabs_shares_edits_and_closing_one_presentation_keeps_them(
         let file = app.active_buffer().unwrap();
         assert_ne!(file.id(), first);
         assert_eq!(file.host.id(), HostId::LOCAL);
-        assert_eq!(file.input.read(cx).text().to_string(), edited);
+        assert_eq!(
+            file.input.text().unwrap().read(cx).text().to_string(),
+            edited
+        );
         assert!(app.editor_unsaved().is_empty());
     });
 }
@@ -382,6 +400,8 @@ fn markdown_byte_fidelity_survives_host_save_local_edit_undo_and_reopen(cx: &mut
             app.active_buffer()
                 .unwrap()
                 .input
+                .text()
+                .unwrap()
                 .read(cx)
                 .text()
                 .to_string(),
@@ -492,8 +512,11 @@ fn markdown_encoding_failure_keeps_original_bytes_and_recoverable_edits(cx: &mut
     app.read_with(&vcx, |app, cx| {
         let file = app.active_buffer().unwrap();
         assert!(file.dirty);
-        assert_eq!(file.format(cx).encoding_label(), "Windows-1252");
-        assert_eq!(file.input.read(cx).text().to_string(), "🎉café  \nlast");
+        assert_eq!(file.format(cx).unwrap().encoding_label(), "Windows-1252");
+        assert_eq!(
+            file.input.text().unwrap().read(cx).text().to_string(),
+            "🎉café  \nlast"
+        );
     });
     vcx.dispatch_action(gpui_kit::component::input::Undo);
     vcx.dispatch_action(crate::core::actions::EditorSave);
@@ -567,23 +590,29 @@ fn markdown_change_commands_target_focused_split_presentation(cx: &mut TestAppCo
             .unwrap()
             .gutter
             .set_base_for_test("one\ntwo\nthree\nfour\n");
-        first.set_cursor_position(Position::new(0, 0), window, cx);
-        second.set_cursor_position(Position::new(1, 0), window, cx);
+        first
+            .text()
+            .unwrap()
+            .set_cursor_position(Position::new(0, 0), window, cx);
+        second
+            .text()
+            .unwrap()
+            .set_cursor_position(Position::new(1, 0), window, cx);
         second.focus(window, cx);
         assert!(app.editor_gutter_step(true, window, cx));
-        assert_eq!(second.read(cx).cursor_position().line, 4);
-        assert_eq!(first.read(cx).cursor_position().line, 0);
+        assert_eq!(second.text().unwrap().read(cx).cursor_position().line, 4);
+        assert_eq!(first.text().unwrap().read(cx).cursor_position().line, 0);
         assert!(app.editor_gutter_revert_at_cursor(window, cx));
         assert_eq!(
-            second.read(cx).text().to_string(),
+            second.text().unwrap().read(cx).text().to_string(),
             "one\nTWO\nthree\nfour\n"
         );
-        assert_eq!(first.read(cx).cursor_position().line, 0);
+        assert_eq!(first.text().unwrap().read(cx).cursor_position().line, 0);
     });
     vcx.dispatch_action(gpui_kit::component::input::Undo);
     app.read_with(&vcx, |_, cx| {
         assert_eq!(
-            second.read(cx).text().to_string(),
+            second.text().unwrap().read(cx).text().to_string(),
             "one\nTWO\nthree\nfour\nfive\n"
         )
     });
@@ -664,6 +693,8 @@ fn markdown_workbench_shares_native_source_history_and_host_save_across_groups(
             app.active_buffer()
                 .unwrap()
                 .input
+                .text()
+                .unwrap()
                 .read(cx)
                 .text()
                 .to_string(),
@@ -680,6 +711,8 @@ fn markdown_workbench_shares_native_source_history_and_host_save_across_groups(
             app.active_buffer()
                 .unwrap()
                 .input
+                .text()
+                .unwrap()
                 .read(cx)
                 .text()
                 .to_string(),
@@ -693,6 +726,8 @@ fn markdown_workbench_shares_native_source_history_and_host_save_across_groups(
             app.active_buffer()
                 .unwrap()
                 .input
+                .text()
+                .unwrap()
                 .read(cx)
                 .text()
                 .to_string(),
@@ -708,6 +743,8 @@ fn markdown_workbench_shares_native_source_history_and_host_save_across_groups(
             app.active_buffer()
                 .unwrap()
                 .input
+                .text()
+                .unwrap()
                 .read(cx)
                 .text()
                 .to_string(),
@@ -743,7 +780,10 @@ fn markdown_workbench_shares_native_source_history_and_host_save_across_groups(
         let file = app.active_buffer().unwrap();
         assert_ne!(file.id(), id);
         assert!(file.input.code().is_none());
-        assert_eq!(file.input.read(cx).text().to_string(), "中🎉alpha\nbeta\n");
+        assert_eq!(
+            file.input.text().unwrap().read(cx).text().to_string(),
+            "中🎉alpha\nbeta\n"
+        );
         assert!(app.editor_unsaved().is_empty());
     });
 }
@@ -810,6 +850,8 @@ fn markdown_native_handler_converts_utf16_and_composition_undo(cx: &mut TestAppC
             app.active_buffer()
                 .unwrap()
                 .input
+                .text()
+                .unwrap()
                 .read(cx)
                 .text()
                 .to_string(),
@@ -881,8 +923,9 @@ fn external_writes_scenario(cx: &mut TestAppContext, markdown: bool) {
     std::fs::write(&path, "external version\n").unwrap();
     wait_until(&mut vcx, |vcx| {
         app.read_with(vcx, |app, cx| {
-            app.active_buffer()
-                .is_some_and(|file| file.input.read(cx).text().to_string() == "external version\n")
+            app.active_buffer().is_some_and(|file| {
+                file.input.text().unwrap().read(cx).text().to_string() == "external version\n"
+            })
         })
     });
     vcx.update(|window, cx| {
@@ -894,6 +937,8 @@ fn external_writes_scenario(cx: &mut TestAppContext, markdown: bool) {
         app.active_buffer()
             .unwrap()
             .input
+            .text()
+            .unwrap()
             .read(cx)
             .text()
             .to_string()
@@ -908,7 +953,7 @@ fn external_writes_scenario(cx: &mut TestAppContext, markdown: bool) {
     app.read_with(&vcx, |app, cx| {
         let file = app.active_buffer().unwrap();
         assert!(matches!(file.conflict, Some(DiskConflict::Changed(_))));
-        assert_eq!(file.input.read(cx).text().to_string(), text);
+        assert_eq!(file.input.text().unwrap().read(cx).text().to_string(), text);
         assert!(app.editor.is_dirty(HostId::LOCAL, &file.path));
     });
 }
@@ -1098,6 +1143,8 @@ fn markdown_clean_reload_survives_selection_and_group_handoff_without_overwritin
             app.active_buffer()
                 .unwrap()
                 .input
+                .text()
+                .unwrap()
                 .read(cx)
                 .text()
                 .to_string()
@@ -1165,7 +1212,13 @@ fn unchanged_text_refresh_preserves_selection_and_saved_undo_history(cx: &mut Te
         }
     });
     let selection = app.read_with(&vcx, |app, cx| {
-        app.active_buffer().unwrap().input.read(cx).selected_range()
+        app.active_buffer()
+            .unwrap()
+            .input
+            .text()
+            .unwrap()
+            .read(cx)
+            .selected_range()
     });
     assert_eq!(selection, 0..3);
 
@@ -1187,10 +1240,13 @@ fn unchanged_text_refresh_preserves_selection_and_saved_undo_history(cx: &mut Te
     app.read_with(&vcx, |app, cx| {
         let file = app.active_buffer().unwrap();
         assert_eq!(
-            file.input.read(cx).text().to_string(),
+            file.input.text().unwrap().read(cx).text().to_string(),
             "NEW161alpha\nbeta\n"
         );
-        assert_eq!(file.input.read(cx).selected_range(), selection);
+        assert_eq!(
+            file.input.text().unwrap().read(cx).selected_range(),
+            selection
+        );
         assert!(!file.dirty);
         assert!(file.conflict.is_none());
     });
@@ -1198,7 +1254,10 @@ fn unchanged_text_refresh_preserves_selection_and_saved_undo_history(cx: &mut Te
     vcx.run_until_parked();
     app.read_with(&vcx, |app, cx| {
         let file = app.active_buffer().unwrap();
-        assert_eq!(file.input.read(cx).text().to_string(), "alpha\nbeta\n");
+        assert_eq!(
+            file.input.text().unwrap().read(cx).text().to_string(),
+            "alpha\nbeta\n"
+        );
         assert!(file.dirty);
     });
     vcx.dispatch_action(Redo);
@@ -1206,7 +1265,7 @@ fn unchanged_text_refresh_preserves_selection_and_saved_undo_history(cx: &mut Te
     app.read_with(&vcx, |app, cx| {
         let file = app.active_buffer().unwrap();
         assert_eq!(
-            file.input.read(cx).text().to_string(),
+            file.input.text().unwrap().read(cx).text().to_string(),
             "NEW161alpha\nbeta\n"
         );
         assert!(!file.dirty);
@@ -1320,6 +1379,8 @@ fn a_late_open_cannot_replace_a_newer_hosts_document_or_cursor(cx: &mut TestAppC
             app.active_buffer()
                 .unwrap()
                 .input
+                .text()
+                .unwrap()
                 .read(cx)
                 .cursor_position(),
             Position::new(1, 3)
@@ -1408,7 +1469,10 @@ fn adopting_a_workspace_discards_a_pending_open_without_losing_dirty_documents(
         let file = app.editor.buffers.get(dirty).unwrap();
         assert_eq!(file.path, dirty_path);
         assert!(file.dirty);
-        assert_eq!(file.input.read(cx).text().to_string(), "DIRTY161keep me\n");
+        assert_eq!(
+            file.input.text().unwrap().read(cx).text().to_string(),
+            "DIRTY161keep me\n"
+        );
     });
     // Open only after the old callback has finished: a newer request must not
     // be what invalidates the stale request on behalf of the transition.
@@ -1425,10 +1489,13 @@ fn adopting_a_workspace_discards_a_pending_open_without_losing_dirty_documents(
         let file = app.active_buffer().unwrap();
         assert_eq!(file.host.id(), HostId(73));
         assert_eq!(
-            file.input.read(cx).text().to_string(),
+            file.input.text().unwrap().read(cx).text().to_string(),
             "new workspace\nsecond line\n"
         );
-        assert_eq!(file.input.read(cx).cursor_position(), Position::new(1, 4));
+        assert_eq!(
+            file.input.text().unwrap().read(cx).cursor_position(),
+            Position::new(1, 4)
+        );
         let files = &app.tab_code().unwrap().files;
         assert!(files.contains(&dirty));
         assert!(files.contains(&file.id()));
@@ -1442,7 +1509,10 @@ fn adopting_a_workspace_discards_a_pending_open_without_losing_dirty_documents(
         let file = app.active_buffer().unwrap();
         assert_eq!(file.id(), dirty);
         assert!(file.dirty);
-        assert_eq!(file.input.read(cx).text().to_string(), "DIRTY161keep me\n");
+        assert_eq!(
+            file.input.text().unwrap().read(cx).text().to_string(),
+            "DIRTY161keep me\n"
+        );
     });
 }
 
@@ -1507,7 +1577,10 @@ fn rebinding_a_host_discards_a_pending_open_without_losing_dirty_documents(
         let file = app.active_buffer().unwrap();
         assert_eq!(file.id(), dirty);
         assert!(file.dirty);
-        assert_eq!(file.input.read(cx).text().to_string(), "DIRTY161keep me\n");
+        assert_eq!(
+            file.input.text().unwrap().read(cx).text().to_string(),
+            "DIRTY161keep me\n"
+        );
     });
     // Do not issue a replacement open until the stale request has settled.
     app.update_in(&mut vcx, |app, window, cx| {
@@ -1523,10 +1596,13 @@ fn rebinding_a_host_discards_a_pending_open_without_losing_dirty_documents(
         assert_eq!(file.host.id(), HostId::LOCAL);
         assert_eq!(file.path, path);
         assert_eq!(
-            file.input.read(cx).text().to_string(),
+            file.input.text().unwrap().read(cx).text().to_string(),
             "new connection\nsecond line\n"
         );
-        assert_eq!(file.input.read(cx).cursor_position(), Position::new(1, 4));
+        assert_eq!(
+            file.input.text().unwrap().read(cx).cursor_position(),
+            Position::new(1, 4)
+        );
         assert_eq!(app.tab_code().unwrap().files.len(), 2);
         assert_eq!(app.editor_unsaved(), vec![dirty]);
     });
@@ -1537,7 +1613,10 @@ fn rebinding_a_host_discards_a_pending_open_without_losing_dirty_documents(
         let file = app.active_buffer().unwrap();
         assert_eq!(file.id(), dirty);
         assert!(file.dirty);
-        assert_eq!(file.input.read(cx).text().to_string(), "DIRTY161keep me\n");
+        assert_eq!(
+            file.input.text().unwrap().read(cx).text().to_string(),
+            "DIRTY161keep me\n"
+        );
     });
 }
 
@@ -1576,7 +1655,10 @@ fn markdown_session_restore_surfaces_failed_reads_without_losing_valid_files(
     app.read_with(&vcx, |app, cx| {
         let file = app.active_buffer().unwrap();
         assert_eq!(file.path.file_name(), valid.file_name());
-        assert_eq!(file.input.read(cx).text().to_string(), "# restored\n");
+        assert_eq!(
+            file.input.text().unwrap().read(cx).text().to_string(),
+            "# restored\n"
+        );
         assert!(file.input.code().is_none());
         assert_eq!(app.tab_code().unwrap().files.len(), 1);
     });
@@ -1621,6 +1703,8 @@ fn markdown_tab_uses_editorconfig_in_each_shared_presentation(cx: &mut TestAppCo
             app.active_buffer()
                 .unwrap()
                 .input
+                .text()
+                .unwrap()
                 .read(cx)
                 .text()
                 .to_string(),
@@ -1635,6 +1719,8 @@ fn markdown_tab_uses_editorconfig_in_each_shared_presentation(cx: &mut TestAppCo
     app.update_in(&mut vcx, |app, window, cx| {
         app.active_editor_input()
             .unwrap()
+            .text()
+            .unwrap()
             .set_cursor_position(Position::new(1, 0), window, cx);
     });
     vcx.update(|window, cx| window.press("tab", cx));
@@ -1644,6 +1730,8 @@ fn markdown_tab_uses_editorconfig_in_each_shared_presentation(cx: &mut TestAppCo
             app.active_buffer()
                 .unwrap()
                 .input
+                .text()
+                .unwrap()
                 .read(cx)
                 .text()
                 .to_string(),
@@ -1657,6 +1745,8 @@ fn markdown_tab_uses_editorconfig_in_each_shared_presentation(cx: &mut TestAppCo
             app.active_buffer()
                 .unwrap()
                 .input
+                .text()
+                .unwrap()
                 .read(cx)
                 .text()
                 .to_string(),

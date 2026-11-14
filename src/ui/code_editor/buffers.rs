@@ -1,6 +1,10 @@
 use super::*;
 use lyrel_core::core::session::WorkspaceId;
 const MAX_FILE_BYTES: u64 = 4 * 1024 * 1024;
+/// Pictures are not text: the workbench image budget is `markdown::images`'.
+const IMAGE_MAX_BYTES: u64 = markdown::images::MAX_BYTES;
+use markdown::images;
+use markdown::images::StaticImageFormat;
 
 const RELOAD_DEBOUNCE: std::time::Duration = std::time::Duration::from_millis(200);
 
@@ -151,6 +155,12 @@ impl EditorBuffers {
         self.files.iter().find(|file| file.id() == id)
     }
 
+    /// 测试等监视装上再改文件,不然外部变化没有观察者。
+    #[cfg(test)]
+    pub(super) fn watching(&self) -> bool {
+        self.watch.is_some()
+    }
+
     pub(super) fn get_mut(&mut self, id: BufferId) -> Option<&mut OpenFile> {
         self.files.iter_mut().find(|file| file.id() == id)
     }
@@ -188,16 +198,21 @@ impl EditorBuffers {
 
     pub(super) fn note_edit(&mut self, id: BufferId, cx: &gpui_kit::App) {
         let Some(file) = self.get_mut(id) else { return };
+        // A read-only image has no edits to compare: it is never unsaved, so
+        // closing it never asks, and Save has nothing to write.
+        let Some(text) = file.input.text() else {
+            return;
+        };
         // Edits retire source applicability, not the read request's identity:
         // a completed owning read must still surface a conflict without overwriting input.
         file.reload_seq = file.reload_seq.wrapping_add(1);
-        let input = file.input.read(cx);
+        let input = text.read(cx);
         let text = input.text();
         let len = text.len();
         let same =
             len == file.saved.len && Fingerprint::of_chunks(len, text.chunks()) == file.saved;
         file.dirty = !same
-            || file.format(cx) != file.saved_format
+            || file.format(cx) != Some(file.saved_format)
             || file.representation_fingerprint(cx) != file.saved_representation;
     }
 
@@ -328,10 +343,14 @@ impl EditorBuffers {
     ) {
         let Some(position) = cursor else { return };
         let Some(file) = self.get_mut(id) else { return };
+        // A picture has no caret to put down: the request is about text.
+        if !file.input.is_text() {
+            return;
+        }
         let input = if let (Some(source), Some(group)) = (file.input.markdown(), target.group) {
             EditorInput::Markdown(
                 file.presentations
-                    .view(source, target.tab, group, window, cx),
+                    .markdown_view(source, target.tab, group, window, cx),
             )
         } else {
             file.input.clone()
@@ -348,31 +367,98 @@ impl EditorBuffers {
         access: Access<E>,
         edited: Edited<E>,
     ) -> (BufferId, bool) {
-        if let Some(id) = self.at(host.id(), &loaded.path) {
+        if let Some(id) = self.at(host.id(), loaded.path()) {
             return (id, false);
         }
-        let language = language_for_path(&loaded.path);
-        let indent = loaded
-            .config
-            .indent(lyrel_text::detect_indent(&loaded.text, language));
-        (
-            self.create(
-                host,
-                loaded.path,
-                None,
-                BufferKind::Text,
-                loaded.text,
-                loaded.format,
-                loaded.config,
-                indent,
-                loaded.mtime,
-                window,
-                cx,
-                access,
-                edited,
-            ),
-            true,
-        )
+        match loaded {
+            Loaded::Image(image) => (self.create_image(host, image, window, cx), true),
+            Loaded::Text {
+                path,
+                text,
+                format,
+                mtime,
+                config,
+            } => {
+                let language = language_for_path(&path);
+                let indent = config.indent(lyrel_text::detect_indent(&text, language));
+                (
+                    self.create(
+                        host,
+                        path,
+                        None,
+                        BufferKind::Text,
+                        text,
+                        format,
+                        config,
+                        indent,
+                        mtime,
+                        window,
+                        cx,
+                        access,
+                        edited,
+                    ),
+                    true,
+                )
+            }
+        }
+    }
+
+    /// A read-only image document: the decode already happened off the UI
+    /// thread, so this only takes the texture lease and installs the state.
+    fn create_image<E: 'static>(
+        &mut self,
+        host: SharedHost,
+        image: LoadedImage,
+        _window: &mut Window,
+        cx: &mut Context<E>,
+    ) -> BufferId {
+        let LoadedImage {
+            path,
+            claimed,
+            mtime,
+            result,
+        } = image;
+        // A budget or format refusal is part of the document: it says so in
+        // its own body and status line, and the next external change retries.
+        let outcome = match result {
+            Ok((rgba, format)) => Ok((markdown::images::bitmap(rgba, cx), format)),
+            Err(error) => Err(SharedString::from(error.to_string())),
+        };
+        let wrap = cx.global::<crate::core::config::Config>().editor_soft_wrap;
+        let id = BufferId::new();
+        let document = cx.new(|_| ImageDocument::new(claimed, outcome));
+        let view = cx.new(|cx| ImageView::new(document, cx));
+        let sub = cx.observe(&view, |_, _, cx| cx.notify());
+        let observe = cx.observe(&view, |_, _, cx| cx.notify());
+        self.files.push(OpenFile {
+            id,
+            path,
+            untitled: None,
+            host,
+            input: EditorInput::Image(view),
+            presentations: Presentations::default(),
+            markdown_resources: None,
+            dirty: false,
+            saved: Fingerprint::default(),
+            format: None,
+            saved_format: TextFormat::default(),
+            saved_representation: None,
+            config: EditorConfig::default(),
+            indent: lyrel_text::detect_indent("", "text"),
+            disk_mtime: mtime,
+            saving: false,
+            save_pending: false,
+            save_as_pending: None,
+            reload_seq: 0,
+            reload_request: 0,
+            conflict: None,
+            wrap,
+            gutter: gutter::BufferGutter::default(),
+            popups: None,
+            _sub: sub,
+            _observe: observe,
+        });
+        id
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -463,8 +549,13 @@ impl EditorBuffers {
             let observe = cx.observe(&input, |_, _, cx| cx.notify());
             (EditorInput::Code(input), Some(popups), sub, observe)
         };
-        let value = input.read(cx);
-        let saved = Fingerprint::of_chunks(value.text().len(), value.text().chunks());
+        // `create` only builds text inputs; a picture goes through
+        // `create_image`, so the text capability is always here.
+        let saved = {
+            let text = input.text().expect("text input");
+            let value = text.read(cx);
+            Fingerprint::of_chunks(value.text().len(), value.text().chunks())
+        };
         let saved_representation = input.markdown().map(|view| {
             view.read(cx)
                 .document()
@@ -477,7 +568,7 @@ impl EditorBuffers {
             untitled,
             host,
             input,
-            presentations: MarkdownPresentations::default(),
+            presentations: Presentations::default(),
             markdown_resources: None,
             dirty: false,
             saved,
@@ -716,6 +807,7 @@ impl EditorBuffers {
         let host = file.host.clone();
         let host_id = host.id();
         let markdown = file.input.markdown().is_some();
+        let image = file.input.image().cloned();
         let input_lease = file
             .input
             .markdown()
@@ -728,11 +820,23 @@ impl EditorBuffers {
         let edit_seq = file.reload_seq;
         file.reload_request = file.reload_request.wrapping_add(1);
         let seq = file.reload_request;
+        // The status line says a fresh read is under way; the old picture
+        // stays until the new one (or its refusal) replaces it.
+        if let Some(view) = &image {
+            let document = view.read(cx).document().clone();
+            document.update(cx, |document, cx| document.begin_reload(cx));
+        }
+        let image_reload = image.is_some();
         HostOps::run_in(
             host,
             window,
             cx,
             move |h| {
+                if image_reload {
+                    let claimed = StaticImageFormat::from_extension(&target);
+                    let meta = h.stat(&target)?;
+                    return read_image(h, target, claimed, meta).map(Reloaded::Image);
+                }
                 let bytes = h.read_file(&target, MAX_FILE_BYTES)?;
                 let decoded = if markdown {
                     lyrel_text::decode_source(&bytes)?
@@ -743,20 +847,17 @@ impl EditorBuffers {
                     std::io::Error::new(std::io::ErrorKind::InvalidData, "no longer text")
                 })?;
                 let mtime = h.stat(&target).ok().and_then(|meta| meta.mtime);
-                Ok((decoded, mtime))
+                Ok(Reloaded::Text(decoded, mtime))
             },
-            move |view,
-                  result: std::io::Result<(lyrel_text::Decoded, Option<MTime>)>,
-                  window,
-                  cx| {
+            move |view, result: std::io::Result<Reloaded>, window, cx| {
                 let Some(file) = access(view).get_mut(id) else {
                     return;
                 };
                 if file.reload_request != seq || !file.is_at(host_id, &expected) {
                     return;
                 }
-                let (decoded, mtime) = match result {
-                    Ok(loaded) => loaded,
+                let reloaded = match result {
+                    Ok(reloaded) => reloaded,
                     Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
                         file.conflict = Some(DiskConflict::Deleted);
                         file.disk_mtime = None;
@@ -766,6 +867,28 @@ impl EditorBuffers {
                     Err(error) => {
                         log::warn!("editor: reload of {} failed: {error}", file.path.display());
                         HostOps::notify_err(window, cx, &file.label(), &error);
+                        return;
+                    }
+                };
+                let (decoded, mtime) = match reloaded {
+                    Reloaded::Text(decoded, mtime) => (decoded, mtime),
+                    // A picture cannot be edited, so nothing here can conflict:
+                    // the freshest bytes are the document.
+                    Reloaded::Image(image) => {
+                        let outcome = match image.result {
+                            Ok((rgba, format)) => Ok((markdown::images::bitmap(rgba, cx), format)),
+                            Err(error) => Err(SharedString::from(error.to_string())),
+                        };
+                        file.disk_mtime = image.mtime;
+                        file.conflict = None;
+                        let document = file
+                            .input
+                            .image()
+                            .map(|view| view.read(cx).document().clone());
+                        if let Some(document) = document {
+                            document.update(cx, |document, cx| document.replace(outcome, cx));
+                        }
+                        cx.notify();
                         return;
                     }
                 };
@@ -805,8 +928,12 @@ impl EditorBuffers {
                     replace_buffer_text(&input, &decoded.text, window, cx);
                 }
                 let file = access(view).get_mut(id).unwrap();
-                let value = file.input.read(cx);
-                file.saved = Fingerprint::of_chunks(value.text().len(), value.text().chunks());
+                // This arm only runs for reloaded text; pictures reload their
+                // own image state and never reach it.
+                if let Some(text) = file.input.text() {
+                    let value = text.read(cx);
+                    file.saved = Fingerprint::of_chunks(value.text().len(), value.text().chunks());
+                }
                 file.saved_representation = file.representation_fingerprint(cx);
                 access(view).note_edit(id, cx);
                 edited(view, id, cx);
@@ -860,13 +987,41 @@ impl EditorBuffers {
         }
     }
 }
-/// A file read off its host, decoded, with everything needed to edit it.
-pub(super) struct Loaded {
+/// A file read off its Host, decoded and ready to become a buffer.
+pub(super) enum Loaded {
+    Text {
+        path: PathBuf,
+        text: String,
+        format: TextFormat,
+        mtime: Option<MTime>,
+        config: EditorConfig,
+    },
+    /// A static image: the bytes arrived, but whether they decode is part of
+    /// the document, not of the read — a corrupt picture still gets a place.
+    Image(LoadedImage),
+}
+
+pub(super) struct LoadedImage {
     path: PathBuf,
-    text: String,
-    format: TextFormat,
+    /// What the name claimed; the failure label when the bytes do not decode.
+    claimed: Option<StaticImageFormat>,
     mtime: Option<MTime>,
-    config: EditorConfig,
+    result: std::io::Result<(image::RgbaImage, StaticImageFormat)>,
+}
+
+impl Loaded {
+    fn path(&self) -> &Path {
+        match self {
+            Self::Text { path, .. } => path,
+            Self::Image(image) => &image.path,
+        }
+    }
+}
+
+/// 一次重新读取在 Host 线程上得到的东西。
+enum Reloaded {
+    Text(lyrel_text::Decoded, Option<MTime>),
+    Image(LoadedImage),
 }
 
 /// Reads, sizes, decodes and configures a file, on the host's own thread.
@@ -875,12 +1030,16 @@ fn load_file(
     requested: PathBuf,
 ) -> Result<Loaded, EditorOpenError> {
     let path = h.canonicalize(&requested).unwrap_or(requested);
+    let claimed = StaticImageFormat::from_extension(&path);
     let meta = h.stat(&path).map_err(|e| {
         EditorOpenError::Message(t_fmt(
             L10nKey::EditorCantOpen,
             &[("path", &path.display().to_string()), ("e", &e.to_string())],
         ))
     })?;
+    if claimed.is_some() {
+        return load_image(h, path, claimed, meta);
+    }
     if meta.len > MAX_FILE_BYTES {
         return Err(EditorOpenError::Message(t_fmt(
             L10nKey::EditorFileTooLarge,
@@ -896,6 +1055,12 @@ fn load_file(
             &[("path", &path.display().to_string()), ("e", &e.to_string())],
         ))
     })?;
+    // A name that claims nothing can still hold a picture. Only magic the
+    // formats actually start with counts here, and only after text decoding
+    // has had its chance: a file the editor can show as text keeps that.
+    if let Some(format) = StaticImageFormat::probe(&bytes) {
+        return load_image(h, path, Some(format), meta);
+    }
     let Some(decoded) = decode_file(&path, &bytes).map_err(|error| {
         EditorOpenError::Message(t_fmt(
             L10nKey::EditorCantRead,
@@ -909,12 +1074,58 @@ fn load_file(
         return Err(EditorOpenError::NotText(path));
     };
     let config = read_editorconfig(h, &path);
-    Ok(Loaded {
+    Ok(Loaded::Text {
         path,
         text: decoded.text,
         format: decoded.format,
         mtime: meta.mtime,
         config,
+    })
+}
+
+/// Reads a static image under the image budget and decodes it, still on the
+/// Host's thread. Only an unreadable file is an open failure; everything the
+/// decoder says becomes the document's own visible state.
+fn load_image(
+    h: &dyn lyrel_core::host::Host,
+    path: PathBuf,
+    claimed: Option<StaticImageFormat>,
+    meta: lyrel_core::host::Meta,
+) -> Result<Loaded, EditorOpenError> {
+    let requested = path.clone();
+    read_image(h, path, claimed, meta)
+        .map(Loaded::Image)
+        .map_err(|error| {
+            EditorOpenError::Message(t_fmt(
+                L10nKey::EditorCantRead,
+                &[
+                    ("path", &requested.display().to_string()),
+                    ("e", &error.to_string()),
+                ],
+            ))
+        })
+}
+
+/// 图片的读取只有一种失败：Host 读不出来。字节读到了但不能解码，是文档
+/// 自己的状态，由调用者装进缓冲区。
+fn read_image(
+    h: &dyn lyrel_core::host::Host,
+    path: PathBuf,
+    claimed: Option<StaticImageFormat>,
+    meta: lyrel_core::host::Meta,
+) -> std::io::Result<LoadedImage> {
+    let result = if meta.len > IMAGE_MAX_BYTES {
+        // Not worth reading to say they are too many.
+        Err(images::too_large())
+    } else {
+        let bytes = h.read_file(&path, IMAGE_MAX_BYTES)?;
+        images::decode_static(&bytes)
+    };
+    Ok(LoadedImage {
+        path,
+        claimed,
+        mtime: meta.mtime,
+        result,
     })
 }
 

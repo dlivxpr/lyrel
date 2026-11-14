@@ -30,12 +30,14 @@ use lyrel_text::{self, EditorConfig, Indent, LineEnding, TextFormat};
 mod buffers;
 pub(crate) mod commands;
 mod document_input;
+mod image_document;
 pub(crate) mod markdown;
 mod markdown_formula;
 mod markdown_search;
 mod text;
 use buffers::Loaded;
-use document_input::{EditorInput, MarkdownPresentations};
+use document_input::{EditorInput, Presentations};
+use image_document::{ImageDocument, ImageView};
 mod gutter;
 mod nav;
 pub(crate) mod outline;
@@ -47,6 +49,9 @@ use saving::{AfterUnsaved, BarKind, EditorBar, EditorBridge, EditorEvent, SaveWa
 #[cfg(any(test, feature = "native-markdown-tests"))]
 mod test_host;
 
+/// 只读图片文档的键盘上下文，与它的取景动作一起供 keymap 使用。
+pub(crate) use image_document::KEY_CONTEXT as IMAGE_KEY_CONTEXT;
+pub(crate) use image_document::{ImageActualSize, ImageFit, ImageZoomIn, ImageZoomOut};
 pub(crate) use nav::KEY_CONTEXT as NAV_KEY_CONTEXT;
 
 /// Retained document identity, independent of any editing presentation or path.
@@ -123,7 +128,7 @@ pub(crate) struct OpenFile {
     /// saveable however the window's own machine has changed underneath it.
     pub(crate) host: SharedHost,
     pub(crate) input: EditorInput,
-    presentations: MarkdownPresentations,
+    presentations: Presentations,
     markdown_resources: Option<Entity<markdown::images::ImageHost>>,
     pub(crate) dirty: bool,
     saved: Fingerprint,
@@ -153,11 +158,13 @@ impl OpenFile {
         self.id
     }
 
-    fn format(&self, cx: &gpui_kit::App) -> TextFormat {
+    /// The format the next save writes back, for documents that have one.
+    /// A read-only picture has no text format and nothing to write.
+    fn format(&self, cx: &gpui_kit::App) -> Option<TextFormat> {
         self.input
             .markdown()
             .map(|view| view.read(cx).document().read(cx).format())
-            .unwrap_or_else(|| self.format.expect("code document representation"))
+            .or(self.format)
     }
 
     fn representation_fingerprint(&self, cx: &gpui_kit::App) -> Option<u64> {
@@ -518,7 +525,11 @@ fn place_cursor(
     window: &mut Window,
     cx: &mut gpui_kit::App,
 ) {
-    input.set_cursor_position(position, window, cx);
+    let Some(text) = input.text() else {
+        // A picture has no caret to put down: the request is about text.
+        return;
+    };
+    text.set_cursor_position(position, window, cx);
     // Native Markdown retains a view-local reveal request until layout paints.
     // Replaying its selection on later frames would overwrite newer navigation.
     if input.markdown().is_some() {
@@ -550,13 +561,18 @@ fn replace_buffer_text(
     window: &mut Window,
     cx: &mut gpui_kit::App,
 ) {
-    let old = input.read(cx).text().to_string();
+    let Some(text) = input.text() else {
+        // Nothing to write into: a picture holds bytes, not editable text.
+        return;
+    };
+    let state = text.read(cx);
+    let old = state.text().to_string();
     let Some((start, old_end, new_end)) = differing_span(&old, new) else {
         return;
     };
-    let cursor = input.read(cx).cursor_position();
-    input.replace(start..old_end, &new[start..new_end], window, cx);
-    input.set_cursor_position(cursor, window, cx);
+    let cursor = state.cursor_position();
+    text.replace(start..old_end, &new[start..new_end], window, cx);
+    text.set_cursor_position(cursor, window, cx);
 }
 
 /// The byte span where `old` and `new` differ: `(start, end in old, end in
@@ -745,6 +761,11 @@ impl LyrelApp {
             .is_some_and(|file| file.input.markdown().is_some())
     }
 
+    pub(crate) fn image_document_active(&self) -> bool {
+        self.active_buffer()
+            .is_some_and(|file| file.input.image().is_some())
+    }
+
     fn active_editor_input(&self) -> Option<EditorInput> {
         self.editor_input_for(self.tab_code()?.active_id()?)
     }
@@ -755,8 +776,13 @@ impl LyrelApp {
         let group = self.tab_code()?.group;
         Some(
             file.presentations
-                .existing(tab, group)
+                .markdown_existing(tab, group)
                 .map(EditorInput::Markdown)
+                .or_else(|| {
+                    file.presentations
+                        .image_existing(tab, group)
+                        .map(EditorInput::Image)
+                })
                 .unwrap_or_else(|| file.input.clone()),
         )
     }
@@ -1206,9 +1232,12 @@ impl LyrelApp {
         };
         let input = file.input.clone();
         self.watch_document_status_focus(&input.read(cx).focus_handle(cx), window, cx);
-        self.editor
-            .nav
-            .track_buffer(id, input.read(cx).text().clone());
+        // 文本历史只属于有文本的文档；图片没有可导航的编辑位置。
+        if let Some(text) = input.text() {
+            self.editor
+                .nav
+                .track_buffer(id, text.read(cx).text().clone());
+        }
         if let Some(source) = input.markdown() {
             let app = cx.entity().downgrade();
             let resources =
@@ -1376,15 +1405,18 @@ impl LyrelApp {
         let Some(file) = self.active_buffer() else {
             return;
         };
+        let Some(tab) = self.tabs.get(self.tabs.active_index()).map(|t| t.id()) else {
+            return;
+        };
+        let group = self.tab_code().expect("active editor group").group;
         if let Some(input) = file.input.markdown() {
-            let tab = self
-                .tabs
-                .get(self.tabs.active_index())
-                .expect("active editor tab")
-                .id();
-            let group = self.tab_code().expect("active editor group").group;
-            let view = file.presentations.view(input, tab, group, window, cx);
+            let view = file
+                .presentations
+                .markdown_view(input, tab, group, window, cx);
             EditorInput::Markdown(view).focus(window, cx);
+        } else if let Some(primary) = file.input.image() {
+            let view = file.presentations.image_view(primary, tab, group, cx);
+            EditorInput::Image(view).focus(window, cx);
         } else {
             file.input.focus(window, cx);
         }
@@ -1462,9 +1494,14 @@ impl LyrelApp {
         let Some(f) = self.editor.buffers.get_mut(id) else {
             return;
         };
+        // 只读图片没有要折行的文本：命令对它不生效，也不改下一个文本
+        // 文件的开箱设置。
+        let Some(text) = f.input.text() else {
+            return;
+        };
         f.wrap = !f.wrap;
         let wrap = f.wrap;
-        f.input.set_soft_wrap(wrap, window, cx);
+        text.set_soft_wrap(wrap, window, cx);
         f.presentations.set_soft_wrap(wrap, &f.input, cx);
         self.update_config(cx, |cfg| cfg.editor_soft_wrap = wrap);
         cx.notify();
@@ -1480,7 +1517,10 @@ impl LyrelApp {
         let Some(f) = self.editor.buffers.get_mut(id) else {
             return;
         };
-        let mut format = f.format(cx);
+        // 只读图片没有保存格式可以改：这个按钮对它不该出现，也不该生效。
+        let Some(mut format) = f.format(cx) else {
+            return;
+        };
         format.line_ending = match format.line_ending {
             LineEnding::Lf => LineEnding::CrLf,
             LineEnding::CrLf => LineEnding::Lf,
@@ -1693,8 +1733,9 @@ impl LyrelApp {
             EditorEvent::Focus => self.focus_editor(window, cx),
             EditorEvent::GoToLine { id, line, column } => {
                 self.focus_editor(window, cx);
-                if let Some(input) = self.editor_input_for(id) {
-                    let lines = input.read(cx).text().lines_len().max(1) as u32;
+                if let Some(input) = self.editor_input_for(id).filter(|i| i.is_text()) {
+                    let text = input.text().expect("checked text input");
+                    let lines = text.read(cx).text().lines_len().max(1) as u32;
                     place_cursor(
                         input,
                         Position {
@@ -1727,7 +1768,13 @@ impl LyrelApp {
     }
 
     pub(crate) fn editor_go_to_line(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if !self.code_panel_visible() || self.active_buffer().is_none() {
+        // 行号是文本的位置。图片文档没有行可去，快捷键在这里就是空操作，
+        // 而不是弹出一个永远落不到任何地方的行号框。
+        if !self.code_panel_visible()
+            || !self
+                .active_buffer()
+                .is_some_and(|file| file.input.is_text())
+        {
             return;
         }
         let id = self.tab_code().and_then(TabCode::active_id).unwrap();
@@ -1757,7 +1804,7 @@ impl LyrelApp {
             if shared {
                 let tab = self.tabs.get(tab_ix).unwrap().id();
                 let group = self.tab_code().unwrap().focused_group();
-                if let Some(view) = file.presentations.existing(tab, group) {
+                if let Some(view) = file.presentations.markdown_existing(tab, group) {
                     view.update(cx, |view, cx| view.finish_owned_composition(cx));
                 }
             } else {
@@ -1841,10 +1888,17 @@ impl LyrelApp {
             return;
         };
         let input = self.editor_input_for(id).expect("retained document");
-        let state = input.read(cx);
-        let suffix = match selected_lines(&state.text(), state.selected_range()) {
-            Some((a, b)) if a == b => format!("#L{a}"),
-            Some((a, b)) => format!("#L{a}-{b}"),
+        let suffix = match input.text() {
+            Some(text) => {
+                let state = text.read(cx);
+                match selected_lines(&state.text(), state.selected_range()) {
+                    Some((a, b)) if a == b => format!("#L{a}"),
+                    Some((a, b)) => format!("#L{a}-{b}"),
+                    None => String::new(),
+                }
+            }
+            // A picture has no lines to point at; the path itself still
+            // names it for the agent.
             None => String::new(),
         };
         let path = f.path.clone();
@@ -1871,7 +1925,6 @@ impl LyrelApp {
             return menu;
         };
         let state = input.read(cx);
-        let selected = !state.selected_range().is_empty();
         let mut menu = menu.min_w(px(220.)).action_context(state.focus_handle(cx));
         if f.untitled.is_none() {
             menu = menu
@@ -1885,6 +1938,14 @@ impl LyrelApp {
                 )
                 .separator();
         }
+        // 一张图片没有撤销、查找、剪贴板和行命令可给：它只有取景。给它保留
+        // 这些行，等于向读者承诺文档里有能编辑的文本。
+        if input.image().is_some() {
+            return image_document::menu_entries(menu);
+        }
+        let selected = input
+            .text()
+            .is_some_and(|text| !text.read(cx).selected_range().is_empty());
         let menu = menu
             .menu(t(L10nKey::AppMenuUndo), Box::new(edit::Undo))
             .menu(t(L10nKey::AppMenuRedo), Box::new(edit::Redo))
@@ -2562,8 +2623,8 @@ impl LyrelApp {
         );
         let conflict_banner = self
             .active_buffer()
-            .and_then(|f| f.conflict.map(|c| (f.id(), c)))
-            .map(|(id, c)| self.render_editor_conflict_banner(id, c, cx));
+            .and_then(|f| f.conflict.map(|c| (f.id(), c, f.input.is_text())))
+            .map(|(id, c, text)| self.render_editor_conflict_banner(id, c, text, cx));
         let bar = self.render_editor_bar(cx);
 
         let header = self.render_editor_header(chrome, window, cx);
@@ -2575,6 +2636,8 @@ impl LyrelApp {
             h_flex()
                 .id(if self.markdown_document_active() {
                     "markdown-status-bar"
+                } else if self.image_document_active() {
+                    "image-status-bar"
                 } else {
                     "code-status-bar"
                 })
@@ -2674,6 +2737,28 @@ impl LyrelApp {
     ) -> AnyElement {
         match id.and_then(|id| self.editor.buffers.get(id)) {
             None => self.render_editor_empty(cx).into_any_element(),
+            Some(f) if f.input.image().is_some() => {
+                let primary = f.input.image().expect("image document presentation");
+                let tab = self
+                    .tabs
+                    .get(self.tabs.active_index())
+                    .expect("visible editor tab")
+                    .id();
+                let code = self.tab_code().expect("visible editor group");
+                let group = if code.focused_slot() == slot {
+                    code.group
+                } else {
+                    code.split.as_ref().expect("second editor group").id
+                };
+                let view = f.presentations.image_view(primary, tab, group, cx);
+                v_flex()
+                    .id(("image-presentation", view.entity_id()))
+                    .min_w_0()
+                    .min_h_0()
+                    .size_full()
+                    .child(view)
+                    .into_any_element()
+            }
             Some(f) if f.input.markdown().is_some() => {
                 let input = f.input.markdown().unwrap();
                 let tab = self
@@ -2687,7 +2772,7 @@ impl LyrelApp {
                 } else {
                     code.split.as_ref().expect("second editor group").id
                 };
-                let view = f.presentations.view(input, tab, group, window, cx);
+                let view = f.presentations.markdown_view(input, tab, group, window, cx);
                 let scrollbar_id = SharedString::from(format!(
                     "markdown-document-scrollbar-{}",
                     view.entity_id().as_u64()
@@ -3012,25 +3097,34 @@ impl LyrelApp {
 
     pub(crate) fn render_document_status(&self, cx: &mut Context<Self>) -> AnyElement {
         let active = self.active_buffer();
-        let cursor: Option<SharedString> = self.active_editor_input().map(|input| {
-            let input = input.read(cx);
-            let pos = input.cursor_position();
-            let ln_col = t_fmt(
-                L10nKey::EditorLnCol,
-                &[
-                    ("line", &(pos.line + 1).to_string()),
-                    ("column", &(pos.character + 1).to_string()),
-                ],
-            );
-            ln_col.into()
-        });
-        let wrap: Option<bool> = active.map(|f| f.wrap);
+        let text = active.is_some_and(|file| file.input.is_text());
+        let image = self
+            .active_editor_input()
+            .and_then(|input| input.image().cloned());
+        let image_status: Option<SharedString> =
+            image.as_ref().map(|view| view.read(cx).status_text(cx));
+        let image_zoom: Option<SharedString> =
+            image.as_ref().map(|view| view.read(cx).zoom_label());
+        let cursor: Option<SharedString> = self
+            .active_editor_input()
+            .and_then(|input| input.text().map(|text| text.read(cx).cursor_position()))
+            .map(|pos| {
+                t_fmt(
+                    L10nKey::EditorLnCol,
+                    &[
+                        ("line", &(pos.line + 1).to_string()),
+                        ("column", &(pos.character + 1).to_string()),
+                    ],
+                )
+                .into()
+            });
+        let wrap: Option<bool> = active.filter(|_| text).map(|f| f.wrap);
         let native_live = self.active_editor_input().and_then(|input| {
             input
                 .markdown()
                 .map(|view| (view.read(cx).is_live(), view.read(cx).is_source_only()))
         });
-        let indent: Option<SharedString> = active.map(|f| {
+        let indent: Option<SharedString> = active.filter(|_| text).map(|f| {
             let key = if f.indent.hard_tabs {
                 L10nKey::EditorIndentTabs
             } else {
@@ -3038,8 +3132,14 @@ impl LyrelApp {
             };
             t_fmt(key, &[("n", &f.indent.size.to_string())]).into()
         });
-        let line_ending: Option<&'static str> = active.map(|f| f.format(cx).line_ending.label());
-        let encoding: Option<SharedString> = active.map(|f| f.format(cx).encoding_label().into());
+        let line_ending: Option<&'static str> = active
+            .filter(|_| text)
+            .and_then(|f| f.format(cx))
+            .map(|format| format.line_ending.label());
+        let encoding: Option<SharedString> = active
+            .filter(|_| text)
+            .and_then(|f| f.format(cx))
+            .map(|format| format.encoding_label().into());
         let language: Option<&'static str> = active.and_then(|f| language_label(f.language()));
         let lsp = self.render_lsp_status(cx).map(|(element, _)| element);
 
@@ -3123,6 +3223,35 @@ impl LyrelApp {
                         })),
                 )
             })
+            // A picture states what it is and what it cannot be: no caret,
+            // no wrap, no line ending, and nothing to save.
+            .when_some(image_status, |this, status| {
+                this.child(
+                    div()
+                        .id("status-image-facts")
+                        .test_support()
+                        .flex_none()
+                        .child(status),
+                )
+            })
+            .when(image_zoom.is_some(), |this| {
+                this.child(
+                    div()
+                        .id("status-image-readonly")
+                        .test_support()
+                        .flex_none()
+                        .child(t(L10nKey::EditorImageReadOnly)),
+                )
+            })
+            .when_some(image_zoom, |this, zoom| {
+                this.child(
+                    div()
+                        .id("status-image-zoom")
+                        .test_support()
+                        .flex_none()
+                        .child(zoom),
+                )
+            })
             .when_some(language, |this, l| this.child(div().flex_none().child(l)))
             .into_any_element()
     }
@@ -3152,10 +3281,14 @@ impl LyrelApp {
             )
     }
 
+    /// `text` is the document's text capability: a read-only picture can be
+    /// reloaded or closed, but offering "Save" or "Keep mine" would promise a
+    /// write that has no text to write.
     fn render_editor_conflict_banner(
         &self,
         id: BufferId,
         conflict: DiskConflict,
+        text: bool,
         cx: &mut Context<Self>,
     ) -> AnyElement {
         use crate::ui::dialog::{self, Tone};
@@ -3203,23 +3336,25 @@ impl LyrelApp {
                         this.editor_reload_from_disk(id, window, cx);
                     }),
                 ))
-                .child(dialog::button(
-                    "editor-conflict-keep",
-                    t(L10nKey::KeepMine),
-                    Tone::Primary,
-                    true,
-                    rungs,
-                    cx,
-                    cx.listener(move |this, _, _w, cx| {
-                        if let Some(f) = this.editor.buffers.get_mut(id) {
-                            // The version seen on disk is now the one a
-                            // save is allowed to replace.
-                            f.disk_mtime = observed;
-                            f.conflict = None;
-                            cx.notify();
-                        }
-                    }),
-                ))
+                .when(text, |row| {
+                    row.child(dialog::button(
+                        "editor-conflict-keep",
+                        t(L10nKey::KeepMine),
+                        Tone::Primary,
+                        true,
+                        rungs,
+                        cx,
+                        cx.listener(move |this, _, _w, cx| {
+                            if let Some(f) = this.editor.buffers.get_mut(id) {
+                                // The version seen on disk is now the one a
+                                // save is allowed to replace.
+                                f.disk_mtime = observed;
+                                f.conflict = None;
+                                cx.notify();
+                            }
+                        }),
+                    ))
+                })
                 .into_any_element(),
             DiskConflict::Deleted => row
                 .child(message(L10nKey::EditorFileDeletedOnDisk))
@@ -3234,17 +3369,19 @@ impl LyrelApp {
                         this.editor_drop_buffer(id, cx);
                     }),
                 ))
-                .child(dialog::button(
-                    "editor-deleted-save",
-                    t(L10nKey::Save),
-                    Tone::Primary,
-                    true,
-                    rungs,
-                    cx,
-                    cx.listener(move |this, _, window, cx| {
-                        this.editor_save_file(id, true, window, cx);
-                    }),
-                ))
+                .when(text, |row| {
+                    row.child(dialog::button(
+                        "editor-deleted-save",
+                        t(L10nKey::Save),
+                        Tone::Primary,
+                        true,
+                        rungs,
+                        cx,
+                        cx.listener(move |this, _, window, cx| {
+                            this.editor_save_file(id, true, window, cx);
+                        }),
+                    ))
+                })
                 .into_any_element(),
         }
     }
@@ -3726,6 +3863,8 @@ mod close_gpui_tests {
                 .active_buffer()
                 .unwrap()
                 .input
+                .text()
+                .unwrap()
                 .read(cx)
                 .text()
                 .to_string()),
@@ -3773,7 +3912,7 @@ mod pane_scrollback_tests {
             let file = app
                 .active_buffer()
                 .expect("scrollback opens a real editor buffer");
-            let text = file.input.read(cx).text().to_string();
+            let text = file.input.text().unwrap().read(cx).text().to_string();
             assert!(
                 text.starts_with("历史 e\u{301} 🎉\nsecond line"),
                 "{text:?}"

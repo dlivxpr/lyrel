@@ -9,7 +9,7 @@ use lyrel_markdown_editor::{
 };
 use std::{cell::RefCell, io, rc::Rc, time::Duration};
 
-const MAX_BYTES: u64 = 32 * 1024 * 1024;
+pub(crate) const MAX_BYTES: u64 = 32 * 1024 * 1024;
 const MAX_PIXELS: u64 = 16 * 1024 * 1024;
 const CACHE_BYTES: u64 = 256 * 1024 * 1024;
 
@@ -18,12 +18,12 @@ type Images = Rc<RefCell<HashMap<String, Bitmap>>>;
 
 /// Cache and preview share this lease, so eviction cannot retire a live preview's tile.
 #[derive(Clone)]
-struct Bitmap {
+pub(crate) struct Bitmap {
     image: Arc<RenderImage>,
     _lease: Entity<()>,
 }
 impl Bitmap {
-    fn new(image: Arc<RenderImage>, cx: &mut App) -> Self {
+    pub(crate) fn new(image: Arc<RenderImage>, cx: &mut App) -> Self {
         let release = image.clone();
         let lease = cx.new(|cx| {
             cx.on_release(move |_, cx| cx.drop_image(release, None))
@@ -33,6 +33,10 @@ impl Bitmap {
             image,
             _lease: lease,
         }
+    }
+    /// The decoded frames, as the UI texture cache draws them.
+    pub(crate) fn image(&self) -> Arc<RenderImage> {
+        self.image.clone()
     }
 }
 #[derive(Clone)]
@@ -565,6 +569,8 @@ enum Import {
 enum ImageError {
     Localized(L10nKey),
     Redirect(u16),
+    /// The bytes were read as an image format but would not decode.
+    Corrupt(String),
 }
 
 impl std::fmt::Display for ImageError {
@@ -576,6 +582,13 @@ impl std::fmt::Display for ImageError {
                 "HTTP {status} — {}",
                 t(L10nKey::MarkdownImageRedirectBlocked)
             ),
+            Self::Corrupt(message) => {
+                write!(
+                    formatter,
+                    "{} ({message})",
+                    t(L10nKey::EditorImageUndecodable)
+                )
+            }
         }
     }
 }
@@ -585,6 +598,105 @@ impl std::error::Error for ImageError {}
 fn invalid(message: impl Into<Box<dyn std::error::Error + Send + Sync>>) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidData, message)
 }
+
+/// The five static raster formats a workbench document shows.
+///
+/// GIF animation and multi-page TIFF are not these: their bytes reach the
+/// external opener, not a document, so no ticket claims frames it cannot draw.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum StaticImageFormat {
+    Png,
+    Jpeg,
+    WebP,
+    Bmp,
+    Ico,
+}
+
+impl StaticImageFormat {
+    pub(crate) fn from_extension(path: &Path) -> Option<Self> {
+        let extension = path.extension()?.to_str()?.to_ascii_lowercase();
+        Some(match extension.as_str() {
+            "png" => Self::Png,
+            "jpg" | "jpeg" | "jpe" | "jfif" => Self::Jpeg,
+            "webp" => Self::WebP,
+            "bmp" | "dib" => Self::Bmp,
+            "ico" => Self::Ico,
+            _ => return None,
+        })
+    }
+
+    /// What the first bytes say, for a file whose name claims nothing.
+    ///
+    /// BMP is left out on purpose: `BM` is two ordinary capital letters, so a
+    /// text file opening with them is not evidence enough to take it away
+    /// from the text editor.
+    pub(crate) fn probe(bytes: &[u8]) -> Option<Self> {
+        if bytes.starts_with(b"\x89PNG\r\n\x1a\n") {
+            return Some(Self::Png);
+        }
+        if bytes.starts_with(&[0xFF, 0xD8, 0xFF]) {
+            return Some(Self::Jpeg);
+        }
+        if bytes.len() >= 12 && &bytes[..4] == b"RIFF" && &bytes[8..12] == b"WEBP" {
+            return Some(Self::WebP);
+        }
+        if bytes.starts_with(&[0x00, 0x00, 0x01, 0x00]) {
+            return Some(Self::Ico);
+        }
+        None
+    }
+
+    pub(crate) fn label(self) -> &'static str {
+        match self {
+            Self::Png => "PNG",
+            Self::Jpeg => "JPEG",
+            Self::WebP => "WebP",
+            Self::Bmp => "BMP",
+            Self::Ico => "ICO",
+        }
+    }
+}
+
+pub(crate) fn too_large() -> io::Error {
+    invalid(ImageError::Localized(L10nKey::MarkdownImageLimit))
+}
+
+/// Decodes one of the five static formats under the same byte and pixel
+/// budgets as a Markdown preview, and under the same rule that a name never
+/// decides how bytes are read: SVG is not among them, so a file called
+/// `.png` is never handed to `usvg`.
+pub(crate) fn decode_static(bytes: &[u8]) -> io::Result<(image::RgbaImage, StaticImageFormat)> {
+    let (rgba, extension) = decode(bytes).map_err(|error| {
+        // Budget and unsupported-format refusals are already words; anything
+        // else is the decoder saying the bytes are not the picture they claim.
+        let described = error
+            .get_ref()
+            .is_some_and(|inner| inner.downcast_ref::<ImageError>().is_some());
+        match described {
+            true => error,
+            false => invalid(ImageError::Corrupt(error.to_string())),
+        }
+    })?;
+    let format = match extension {
+        "png" => StaticImageFormat::Png,
+        "jpg" => StaticImageFormat::Jpeg,
+        "webp" => StaticImageFormat::WebP,
+        "bmp" => StaticImageFormat::Bmp,
+        "ico" => StaticImageFormat::Ico,
+        _ => {
+            return Err(invalid(ImageError::Localized(
+                L10nKey::MarkdownImageUnsupported,
+            )));
+        }
+    };
+    Ok((rgba, format))
+}
+
+/// Uploads decoded pixels as one UI tile under [`Bitmap`]'s lease.
+pub(crate) fn bitmap(rgba: image::RgbaImage, cx: &mut App) -> Bitmap {
+    Bitmap::new(render(rgba), cx)
+}
+
 fn decode(bytes: &[u8]) -> io::Result<(image::RgbaImage, &'static str)> {
     if bytes.len() as u64 > MAX_BYTES {
         return Err(invalid(ImageError::Localized(L10nKey::MarkdownImageLimit)));
@@ -598,7 +710,14 @@ fn decode(bytes: &[u8]) -> io::Result<(image::RgbaImage, &'static str)> {
         reader.limits(limits);
         let rgba = reader
             .decode()
-            .map_err(|error| invalid(error.to_string()))?
+            .map_err(|error| match error {
+                // The reader refuses oversized dimensions before allocating;
+                // that is the budget speaking, not a corrupt file.
+                image::ImageError::Limits(_) => {
+                    invalid(ImageError::Localized(L10nKey::MarkdownImageLimit))
+                }
+                error => invalid(error.to_string()),
+            })?
             .into_rgba8();
         if rgba.width() as u64 * rgba.height() as u64 > MAX_PIXELS {
             return Err(invalid(ImageError::Localized(L10nKey::MarkdownImageLimit)));

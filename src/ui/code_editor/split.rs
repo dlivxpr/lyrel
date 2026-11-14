@@ -314,7 +314,24 @@ impl LyrelApp {
                 .get(id)
                 .expect("split buffer")
                 .presentations
-                .view(origin, tab.id(), code.group, window, cx);
+                .markdown_view(origin, tab.id(), code.group, window, cx);
+        }
+        // A picture's second group gets its own framing, around the same
+        // decoded document.
+        if let (Some(primary), Some(tab), Some(code)) = (
+            self.editor
+                .buffers
+                .get(id)
+                .and_then(|file| file.input.image().cloned()),
+            self.tabs.get(self.tabs.active_index()).map(|tab| tab.id()),
+            self.tab_code(),
+        ) {
+            self.editor
+                .buffers
+                .get(id)
+                .expect("split buffer")
+                .presentations
+                .image_view(&primary, tab, code.group, cx);
         }
         self.editor.dismiss_bar();
         self.focus_editor(window, cx);
@@ -366,7 +383,7 @@ impl LyrelApp {
         let focused = self.editor.buffers.get(other).is_some_and(|file| {
             if file.input.markdown().is_some() {
                 file.presentations
-                    .existing(tab, other_group)
+                    .markdown_existing(tab, other_group)
                     .is_some_and(|view| {
                         view.read(cx).focus_handle(cx).contains_focused(window, cx)
                             || file
@@ -374,6 +391,10 @@ impl LyrelApp {
                                 .search(&view)
                                 .is_some_and(|search| search.read(cx).has_focus(window, cx))
                     })
+            } else if file.input.image().is_some() {
+                file.presentations
+                    .image_existing(tab, other_group)
+                    .is_some_and(|view| view.read(cx).handle().contains_focused(window, cx))
             } else if code.active_id() != Some(other) {
                 file.input
                     .read(cx)
