@@ -236,3 +236,15 @@ coding agent 在真实 PTY 中运行自己的原生 TUI。命令识别、状态 
 
 Windows fixture 的初次 DA1 交换需与真实客户端一样完成 ConPTY 初始化：Microsoft 的 [`InputStateMachineEngine::ActionCsiDispatch`](https://github.com/microsoft/terminal/blob/main/src/terminal/parser/InputStateMachineEngine.cpp) 会将首条 DA1 回复用于宿主属性，而不送入应用 stdin。排序用例在初始化后仍将 `s`／`q` 与 DA1 放在同一 write 中，并精确比较两条真实回复及先后顺序，不通过延长超时或丢弃 sentinel 断言规避该平台行为。
 
+
+### #258：统一候选的验证边界
+
+2026-11-14 的产品验证使用冻结源码 `2c0fcd7d`：Windows workspace、独立无过滤 CLI E2E、WSL 原生 Linux 完整 features 的 headless workspace，以及真实 Windows→Linux SSH 恢复路径均已执行。Windows 本机另实际运行 `native_terminal`，3 passed／0 failed／0 ignored；该 runner 使用真实 OS 字体与生产绘制入口，但窗口和 display scale 仍由 test platform 驱动，不能代替实窗或系统 DPI 验收。
+
+同源隔离 Windows 实窗使用普通主字体 `Hack`，验证默认／declared Glyph、五种 size、width-two 的空白邻格与非空邻格回退、最后列裁切、替换／清除、主副屏切换、有效前景与字体 15→18 的缩放。真实滚轮进入保留阅读后，后台替换已获注册成功的 Glyph，冻结行仍显示旧方形；返回 live 后，同一 codepoint 显示新条形。未结束的 synchronized update 在既有 fail-safe 后实际绘制，显式 ESU 在 15 秒后才发送；此记录不声称在 150 ms 内截获旧帧。
+
+原始注册字节经 9 MiB 非滚动输出淘汰、Node producer 退出后，新的 GUI 进程在同一存活 daemon／pane 恢复注册；只重发普通 codepoint 文本，不重发定义。正式 `omp/18.20.0` 也在该原生窗口以隔离 profile、无 prompt、关闭 tools／LSP／discovery／标题生成启动，注册 bundle 并显示 `U+F0311`、`U+F12B7`；未调用模型。实际字体 path 证据与原生画面分别保留，不将安装过 Nerd Font 当成成功依据。
+
+后续提交至 `8fb1795d` 仅修正测试／验证接缝和记录，未改变上述生产代码。对应 [CI](https://github.com/dlivxpr/lyrel/actions/runs/43541885955) 全部必需 job 已成功；macOS 实际 checkout 为 `032a4e77`，library 3,106 passed／0 failed／37 ignored，原 inactive-main 图形压力用例明确通过，native terminal 3 项与 native Markdown 37 项均通过。该 CI 的自动化结果不改标为本机产品二进制版本，也不推导 macOS 实窗通过。
+
+尚未完成的原生边界：实际 OS display-scale 切换、完整 OS 指针形状／工作台优先级、真实持键与系统中文 IME 的最终组合。当前实窗为 100% 单显示器；字号变化、headless scale 模拟或 PTY 的 shape 文本均不能替代这些证据。#258 与组合验收票仍保留，不能由上述局部结果宣称整规格完成。

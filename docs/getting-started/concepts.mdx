@@ -482,6 +482,10 @@ WSL 检查点 `897d7c90` 使用原生 Linux Rust/Cargo 1.99.1、Node 22.22.1 与
 
 发现（discovery）结论：不为静态 iTerm2 适配器伪造 terminfo capability、DA1 attribute 或 `XTSMGRAPHICS` item；`XTGETTCAP` 白名单继续只回答已验证的 `Co`／`colors`／`RGB`。[官方 feature reporting](https://iterm2.com/feature-reporting/) 的 `FILE` 能力涵盖文件下载及其他媒体形式，本实现仅支持静态 inline PNG/JPEG，不广告该广泛能力，也不冒充 iTerm.app。pane 协议从 `19` 起携带 `display_width`／`display_height`；实际连接仍须满足当前版本与 endpoint 的协商要求，不能拿本机 GUI 版本代替远端身份。旧后端必须明确提示更新，不静默降级、不自动替换已运行的 server 或重启会话。本节不宣称 macOS 原生行为已经验收。
 
+2026-11-14 的统一产品候选 `2c0fcd7d` 已在隔离 Windows 实窗补验：官方 `libsixel 1.10.5` 的 240×160 静态输出、官方 `imgcat -l` 的像素尺寸与拉伸输出均实际显示；Sixel 的 `DECSDM`、超限 raster 拒收与清除，以及 iTerm2 的 multipart／download／PDF 拒收后续文字也已观察。随后把 Sixel、iTerm2 与注册 Glyph 放在同一 pane，确认两个图片 producer 均退出，再用 9 MiB 非滚动 SGR 输出淘汰原始传输。实际 ring 已无 Sixel DCS、iTerm2 `File=` 或 Glyph registration；关闭 GUI 后，以新进程附着同一 daemon／pane，三类资源仍显示，仅补普通文字标签与 codepoint、不重传图片或定义。
+
+同源 WSL 完整 features 的 headless workspace 与真实 SSH 的原 producer 退出／ring 淘汰／fresh consumer 恢复另有独立执行记录；[后续测试接缝修正的 CI](https://github.com/dlivxpr/lyrel/actions/runs/43541885955) 已全绿，不覆盖上述历史失败事实，也不将旧产品二进制改标为新 HEAD。实际 OS DPI 切换、完整原生指针／键盘／IME 组合仍待完成；本记录不表示 #258 的 Stage B／C 组合票或 macOS 原生验收已经完成。
+
 #### 当前实现：终端布局与屏幕生命周期（#42）
 
 - 放置锚点由 daemon 在 Kitty 命令的流位置确定，采用包含已丢弃行计数的稳定文本行坐标。输出滚动和浏览历史时，图片跟随关联文本；完全超出 daemon 保留的 10,000 行历史的放置会过期，不会漂移到新输出。部分过期的图片只保留未丢弃的源切片；改变列数时复用同一 Rio 网格的精确行重排映射，不在桌面另建图片位置模型。Windows 本地 ConPTY 的 daemon 镜像与桌面消费者共用同一高度调整／光标补偿；原生 SSH 及远端 Linux 的标准 PTY 保持 Rio 的普通调整语义，不根据 GUI 所在平台选择 ConPTY。
