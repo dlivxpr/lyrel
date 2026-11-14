@@ -423,6 +423,7 @@ fn has_room_after(row: &[RenderCell], start: usize, cells: usize) -> bool {
         None => true,
         Some(next) => {
             is_blank(next)
+                && !next.kitty_placeholder
                 && !next.draw_bg
                 && !next.selected
                 && !GlyphStyle::of(next).draws_on_blanks()

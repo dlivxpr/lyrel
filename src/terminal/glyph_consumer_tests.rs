@@ -643,6 +643,30 @@ fn glyph_consumer_width_two_span_fallback_clip_and_logical_cells(cx: &mut TestAp
     );
     assert!(glyph_bounds_close(painted[0].1, one));
 
+    // A Kitty placeholder owns a logical cell even when its prototype has
+    // been deleted and the text snapshot suppresses its PUA ink.
+    serial += 1;
+    glyph_show(&view, cx, serial, 6, 4, &format!("{glyph}\u{10eeee}"));
+    glyph_wait(cx, "placeholder-neighbour glyph painted", |cx| {
+        view.read_with(cx, |view, _| {
+            glyph_presented_row(view, 6).chars().nth(4) == Some(glyph)
+        })
+    });
+    let placeholder = glyph_region_bounds(window, &view, cx, 6, 4, 1);
+    let painted = glyph_painted(window, &view, cx, placeholder);
+    assert_eq!(
+        painted.len(),
+        1,
+        "one placeholder-neighbour path: {painted:?}"
+    );
+    assert!(
+        glyph_bounds_close(painted[0].0, placeholder)
+            && glyph_bounds_close(painted[0].1, placeholder),
+        "a Kitty placeholder does not lend its cell: {:?} / {:?} vs {placeholder:?}",
+        painted[0].0,
+        painted[0].1
+    );
+
     // A blank cell that already paints a background is not free either. Move
     // the cursor past it before the fixture marker so it stays background.
     serial += 1;

@@ -100,9 +100,10 @@ impl<'a, T: rio_vt::event::EventListener> CellPainter<'a, T> {
         rendered.wide = cell.wide();
         rendered.wrapped = cell.contains_cell_flag(rio_vt::crosswords::square::CellFlags::WRAPLINE);
         rendered.hyperlink = extras.and_then(|extra| extra.hyperlink.clone());
+        rendered.kitty_placeholder = cell.c() == '\u{10eeee}';
         // Placeholder identity is terminal data, not a font glyph. Even a
         // missing/deleted prototype leaves its cell background but no PUA ink.
-        if rendered.c == '\u{10eeee}' {
+        if rendered.kitty_placeholder {
             rendered.c = ' ';
             rendered.marks = None;
             rendered.underline = UnderlineKind::None;
@@ -200,7 +201,8 @@ fn render_reading_cell(
     // The row captured this definition when it was read. Painting uses it even
     // if the live registry has since replaced or cleared the codepoint.
     rendered.glyph = if spacer { None } else { cell.glyph.clone() };
-    if rendered.c == '\u{10eeee}' {
+    rendered.kitty_placeholder = cell.c == '\u{10eeee}';
+    if rendered.kitty_placeholder {
         rendered.c = ' ';
         rendered.marks = None;
         rendered.glyph = None;

@@ -254,4 +254,12 @@ OSC 22 另以真实 OS cursor 采样核验 `Hand`、`SizeWE`、`SizeNESW`，以�
 
 增强键盘原生 recorder 请求 flags `31`，有效回复为 `27`；方向键、F3、Ctrl+Q 与 Shift+Tab 均记录到 press 和配对 release。系统微软拼音实际显示 `zhong` 候选，Space 提交“中”后 PTY 只收到一次 `ESC[0;1;20013u`。随后 `zhong'wen` 预编辑期间没有 PTY 输入，Escape 取消后也没有泄漏文字或孤立 release。
 
+同一冻结候选另在真实 Windows pane 完成颜色／进度／鼠标组合：OSC 覆盖与查询样本的 ANSI-1、ANSI-2、默认前景和背景像素分别一致，颜色 producer 退出后背景仍保留，reset 后露出当前 Dark 默认；chrome 像素未变。光标色获得真实查询回复，但该轮 bar 的像素取点落入背景，不计为原生光标色通过。两个同标签页的真实 producer 分别验证 42%、非焦点 pane 错误优先、多任务不显示虚构百分比、单 pane clear 后保留另一 pane 的暂停 61%，正常退出后清除。
+
+最大化并收起侧栏后，真实 pane 为 234×52：Ctrl 点击第 229 列得到 1005 UTF-8 press／release，坐标字段包含 `c4 85`；切换 1006 后，同位置 Alt 点击得到 `CSI < 8 ; 229 ; 8 M/m`。DECRQM 随生效编码从 `1005=1,1006=2` 切到 `1005=2,1006=1`，`1015=0` 始终如实拒绝。该列超过 legacy 上限 222，不将脚本建议的第 241 列写成实际点击位置；退出后恢复窗口大小和鼠标模式。
+
+真实 Neovim `0.12.6` 的 WSL TUI 在该 Windows ConPTY pane 中执行公开 `vim.tty.query`：`Co=256`、`RGB=8/8/8` 为正答，`Ms/TN/sixel/iterm2/cols/lines/Glyph/unknown` 为负答，共 10 组 PASS、无 FAIL。负答按客户端自身一秒期限回退；实际 `TERM=xterm-256color`、`TERM_PROGRAM=nil`，未冒充其他产品，也不是 `--headless` 或仅加载 Lua 的证明。
+
+新 GUI 的旧后端负例也经过实际产品路由和窗口：使用已有 local-stdio 入口，经只转发字节的私有 Windows bridge 与固定 host-key 的 OpenSSH 连接既有 Linux pane v18 服务。GUI 在创建 shell 前显示 `pane peer (build 0.3.4) speaks protocol v18, this build speaks v19; update lyrel or lyrel-server`；没有点击重试、安装或替换。旧 daemon PID `40673`、pane 数 `0`、control `16`、pane `18` 及 server hash 均未变，本机 daemon PID `15104` 的两个自有 pane 也保持存活。control 路径可连接不代表 pane 能力兼容；空 workspace／tab 的测试元数据不等于已启动远端 shell。
+
 尚缺同一候选的硬件持键 repeat 证据：自动化 `holdKeys` 的 0.8 秒与 2.2 秒输入都只产生一组 press／release，没有事件类型 `2`，不能当作系统自动连发通过。用户当前不便执行人工持键，要求保留该缺口。#258、#273 与 #278 仍未完成，PR 保持 draft；已有 headless held-event 回归、原生 press／release 与 IME 结果不替代缺失证据。macOS 实窗仍未验收。
