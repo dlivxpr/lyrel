@@ -344,7 +344,8 @@ impl Presentations {
             primary.clone()
         } else {
             let document = primary.read(cx).document().clone();
-            cx.new(|cx| ImageView::new(document, cx))
+            let page = primary.read(cx).page();
+            cx.new(|cx| ImageView::new_at(document, page, cx))
         };
         let observe = cx.observe(&view, |_, _, cx| cx.notify());
         views.push((tab, group, view.clone(), observe));

@@ -8,7 +8,11 @@
 use super::super::test_host::FileHost;
 use super::super::*;
 use super::*;
+// `image_document` has private `gif`/`tiff` submodules; these explicit
+// imports keep the fixture encoders pointing at the registry crates.
 use crate::ui::app::test_window::harness_with_tabs;
+use ::gif;
+use ::tiff;
 use gpui_kit::test::TestWindowExt as _;
 use gpui_kit::{TestAppContext, VisualTestContext};
 use std::path::{Path, PathBuf};
@@ -95,7 +99,7 @@ fn image_view(app: &Entity<LyrelApp>, cx: &VisualTestContext) -> Entity<ImageVie
 }
 
 fn content(app: &Entity<LyrelApp>, cx: &VisualTestContext) -> ImageContent {
-    image_view(app, cx).read_with(cx, |view, cx| view.document().read(cx).content().clone())
+    image_view(app, cx).read_with(cx, |view, _| view.content().clone())
 }
 
 fn ready_size(app: &Entity<LyrelApp>, cx: &VisualTestContext) -> (i32, i32) {
@@ -105,6 +109,21 @@ fn ready_size(app: &Entity<LyrelApp>, cx: &VisualTestContext) -> (i32, i32) {
             (size.width.0, size.height.0)
         }
         ImageContent::Failed(message) => panic!("expected a decoded picture, got: {message}"),
+        ImageContent::Loading => panic!("expected a decoded picture, still loading"),
+    }
+}
+
+/// `ready_size` for an `until` predicate: a page decode may legitimately be
+/// `Loading` on an earlier poll, so only a concrete size or a failure is
+/// decisive.
+fn decoded_size(app: &Entity<LyrelApp>, cx: &VisualTestContext) -> Option<(i32, i32)> {
+    match content(app, cx) {
+        ImageContent::Ready(bitmap) => {
+            let size = bitmap.image().size(0);
+            Some((size.width.0, size.height.0))
+        }
+        ImageContent::Failed(message) => panic!("expected a decoded picture, got: {message}"),
+        ImageContent::Loading => None,
     }
 }
 
@@ -207,27 +226,27 @@ fn a_png_opens_as_a_read_only_document_with_framing(tcx: &mut TestAppContext) {
 fn all_five_static_formats_decode_as_themselves(tcx: &mut TestAppContext) {
     crate::ui::i18n::set_locale("en");
     let dir = super::super::test_host::canonical_tempdir();
-    let cases: [(&str, Vec<u8>, StaticImageFormat); 5] = [
+    let cases: [(&str, Vec<u8>, ImageFormat); 5] = [
         (
             "shot.png",
             solid(image::ImageFormat::Png, 33, 17),
-            StaticImageFormat::Png,
+            ImageFormat::Png,
         ),
-        ("shot.jpg", solid_jpeg(33, 17), StaticImageFormat::Jpeg),
+        ("shot.jpg", solid_jpeg(33, 17), ImageFormat::Jpeg),
         (
             "shot.webp",
             solid(image::ImageFormat::WebP, 33, 17),
-            StaticImageFormat::WebP,
+            ImageFormat::WebP,
         ),
         (
             "shot.bmp",
             solid(image::ImageFormat::Bmp, 33, 17),
-            StaticImageFormat::Bmp,
+            ImageFormat::Bmp,
         ),
         (
             "shot.ico",
             solid(image::ImageFormat::Ico, 33, 17),
-            StaticImageFormat::Ico,
+            ImageFormat::Ico,
         ),
     ];
     let (app, mut cx, _streams) = harness_with_tabs(tcx, 1);
@@ -276,6 +295,7 @@ fn failures_are_documents_instead_of_silent_text(tcx: &mut TestAppContext) {
             "the failure names the decode, got: {message}"
         ),
         ImageContent::Ready(_) => panic!("a truncated png decoded"),
+        ImageContent::Loading => panic!("a truncated png is still loading"),
     }
     cx.update(|window, _| {
         assert!(window.find("status-image-failed").visible());
@@ -327,6 +347,7 @@ fn the_image_budget_refuses_without_falling_back_to_text(tcx: &mut TestAppContex
             "the byte budget is named, got: {message}"
         ),
         ImageContent::Ready(_) => panic!("a file over the image budget decoded"),
+        ImageContent::Loading => panic!("a file over the image budget is loading"),
     }
     app.read_with(&cx, |app, _| {
         assert!(
@@ -347,6 +368,7 @@ fn the_image_budget_refuses_without_falling_back_to_text(tcx: &mut TestAppContex
             assert!(message.contains(&t(L10nKey::MarkdownImageLimit)))
         }
         ImageContent::Ready(_) => panic!("a 8193-pixel-wide picture decoded"),
+        ImageContent::Loading => panic!("a 8193-pixel-wide picture is loading"),
     }
 }
 
@@ -505,7 +527,7 @@ fn an_external_rewrite_replaces_the_picture(tcx: &mut TestAppContext) {
         app.read_with(cx, |app, _| app.editor.buffers.watching())
     });
     std::fs::write(&path, solid(image::ImageFormat::Png, 90, 70)).unwrap();
-    until(&mut cx, |cx| ready_size(&app, cx) == (90, 70));
+    until(&mut cx, |cx| decoded_size(&app, cx) == Some((90, 70)));
     app.read_with(&cx, |app, _| {
         let file = app.active_buffer().expect("still open");
         assert!(file.conflict.is_none(), "a clean picture reloads itself");
@@ -745,6 +767,601 @@ fn a_picture_whose_tab_closed_before_its_read_lands_leaves_nothing_behind(
         )
     });
     assert_eq!(ready_size(&app, &cx), (12, 12));
+}
+
+/// 3×1 的 GIF 夹具：调色板四色（0 红、1 绿、2 蓝、3 透明）。
+fn gif_fixture(
+    frames: &[(u16, Vec<u8>, gif::DisposalMethod)],
+    repeat: gif::Repeat,
+    delay: u16,
+) -> Vec<u8> {
+    let mut bytes = Vec::new();
+    {
+        let mut encoder = gif::Encoder::new(
+            &mut bytes,
+            3,
+            1,
+            &[255, 0, 0, 0, 255, 0, 0, 0, 255, 0, 0, 0],
+        )
+        .expect("palette encodes");
+        encoder.set_repeat(repeat).expect("repeat encodes");
+        for (left, pixels, dispose) in frames {
+            encoder
+                .write_frame(&gif::Frame {
+                    left: *left,
+                    width: pixels.len() as u16,
+                    height: 1,
+                    delay,
+                    dispose: *dispose,
+                    transparent: Some(3),
+                    buffer: std::borrow::Cow::Borrowed(pixels),
+                    ..Default::default()
+                })
+                .expect("frame encodes");
+        }
+    }
+    bytes
+}
+
+fn tiff_fixture(pages: &[(u32, u32, [u8; 3])]) -> Vec<u8> {
+    use tiff::encoder::colortype::RGB8;
+    let mut bytes = Vec::new();
+    {
+        let mut encoder =
+            tiff::encoder::TiffEncoder::new(std::io::Cursor::new(&mut bytes)).expect("tiff starts");
+        for (width, height, colour) in pages {
+            let image = encoder
+                .new_image::<RGB8>(*width, *height)
+                .expect("page starts");
+            let mut pixels = Vec::with_capacity((*width * *height * 3) as usize);
+            for _ in 0..*width * *height {
+                pixels.extend_from_slice(colour);
+            }
+            image.write_data(&pixels).expect("page writes");
+        }
+    }
+    bytes
+}
+
+/// 帧/页的 RGBA 像素；`bitmap` 里的纹理是 GPUI 消费的 BGRA。
+fn frame_pixels(app: &Entity<LyrelApp>, cx: &VisualTestContext) -> Vec<[u8; 4]> {
+    frame_pixels_of(&image_view(app, cx), cx)
+}
+
+/// A presentation may be hidden behind another tab; its frames still live on
+/// the document, so read it by identity rather than through the active tab.
+fn frame_pixels_of(view: &Entity<ImageView>, cx: &VisualTestContext) -> Vec<[u8; 4]> {
+    let ImageContent::Ready(bitmap) = view.read_with(cx, |view, _| view.content().clone()) else {
+        panic!("expected a decoded frame");
+    };
+    let image = bitmap.image();
+    image
+        .as_bytes(0)
+        .expect("one frame")
+        .chunks_exact(4)
+        .map(|pixel| [pixel[2], pixel[1], pixel[0], pixel[3]])
+        .collect()
+}
+
+fn advance(cx: &mut VisualTestContext, millis: u64) {
+    cx.executor().advance_clock(Duration::from_millis(millis));
+    settle(cx);
+}
+
+fn show_tab(app: &Entity<LyrelApp>, cx: &mut VisualTestContext, index: usize) {
+    app.update_in(cx, |app, window, cx| {
+        app.tabs.select(index);
+        app.focus_editor(window, cx);
+        cx.notify();
+    });
+    settle(cx);
+}
+
+#[gpui_kit::test]
+fn gif_animation_composites_frames_and_honours_finite_loops(tcx: &mut TestAppContext) {
+    use gif::DisposalMethod::{Background, Keep, Previous};
+    crate::ui::i18n::set_locale("en");
+    let dir = super::super::test_host::canonical_tempdir();
+    let bytes = gif_fixture(
+        &[
+            (0, vec![0, 0, 0], Keep),
+            (1, vec![1], Background),
+            (0, vec![2], Previous),
+            (2, vec![1], Keep),
+        ],
+        gif::Repeat::Finite(4),
+        10,
+    );
+    let path = fixture(dir.path(), "loop.gif", &bytes);
+    let (app, mut cx, _streams) = harness_with_tabs(tcx, 1);
+    open(&app, &mut cx, &path);
+    until(&mut cx, |cx| {
+        matches!(content(&app, cx), ImageContent::Ready(_))
+    });
+    let red = [255, 0, 0, 255];
+    let green = [0, 255, 0, 255];
+    let blue = [0, 0, 255, 255];
+    let transparent = [0, 0, 0, 0];
+    let cycle = [
+        [red, red, red],
+        [red, green, red],
+        [blue, transparent, red],
+        [red, transparent, green],
+    ];
+    let first = frame_pixels(&app, &cx);
+    let start = cycle
+        .iter()
+        .position(|frame| frame.as_slice() == first.as_slice())
+        .expect("the first visible frame is one of the fixture's frames");
+    let mut seen = 1;
+    while seen < 8 {
+        let previous = frame_pixels(&app, &cx);
+        until(&mut cx, |cx| frame_pixels(&app, cx) != previous);
+        let frame = frame_pixels(&app, &cx);
+        assert_eq!(
+            frame,
+            cycle[(start + seen) % cycle.len()],
+            "frame {seen} after starting at {start}"
+        );
+        seen += 1;
+    }
+    // 动画走完预定圈数后停在最后一帧，而不是循环取累计帧数。
+    let mut previous = frame_pixels(&app, &cx);
+    let mut stable = 0;
+    for _ in 0..20 {
+        advance(&mut cx, 100);
+        let now = frame_pixels(&app, &cx);
+        if now == previous {
+            stable += 1;
+            if stable >= 3 {
+                break;
+            }
+        } else {
+            stable = 0;
+            previous = now;
+        }
+    }
+    assert!(
+        stable >= 3,
+        "the finite animation stops instead of looping forever"
+    );
+    cx.update(|window, _| {
+        assert!(window.find("image-fit").visible());
+        assert!(
+            window
+                .find("status-image-facts")
+                .label()
+                .is_some_and(|facts| facts.contains("GIF") && facts.contains("3 × 1")),
+            "the status names the animation and its source size"
+        );
+    });
+    assert_eq!(
+        std::fs::read(&path).unwrap(),
+        bytes,
+        "the source is untouched"
+    );
+}
+
+#[gpui_kit::test]
+fn hiding_an_animation_stops_its_frames_and_closing_stops_the_task(tcx: &mut TestAppContext) {
+    crate::ui::i18n::set_locale("en");
+    let dir = super::super::test_host::canonical_tempdir();
+    let bytes = gif_fixture(
+        &[
+            (0, vec![0, 0, 0], gif::DisposalMethod::Keep),
+            (0, vec![1, 1, 1], gif::DisposalMethod::Keep),
+            (0, vec![2, 2, 2], gif::DisposalMethod::Keep),
+        ],
+        gif::Repeat::Infinite,
+        10,
+    );
+    let path = fixture(dir.path(), "hidden.gif", &bytes);
+    let (app, mut cx, _streams) = harness_with_tabs(tcx, 2);
+    open(&app, &mut cx, &path);
+    until(&mut cx, |cx| {
+        matches!(content(&app, cx), ImageContent::Ready(_))
+    });
+
+    // 切到终端标签页：图片 presentation 不再被画，帧任务必须停下。
+    let view = image_view(&app, &cx);
+    show_tab(&app, &mut cx, 1);
+    advance(&mut cx, 300);
+    let paused = frame_pixels_of(&view, &cx);
+    for _ in 0..4 {
+        advance(&mut cx, 250);
+    }
+    assert_eq!(
+        frame_pixels_of(&view, &cx),
+        paused,
+        "a hidden animation decodes no further frames"
+    );
+
+    // 回到图片：从停下的那一帧继续，而不是从头或跳帧。
+    show_tab(&app, &mut cx, 0);
+    until(&mut cx, |cx| frame_pixels_of(&view, cx) != paused);
+
+    // 关闭释放文档；弱引用失效后任务不可能再对死文档工作。
+    let document = view.read_with(&cx, |view, _| view.document().downgrade());
+    drop(view);
+    app.update_in(&mut cx, |app, window, cx| {
+        app.editor_close_file(0, window, cx)
+    });
+    settle(&mut cx);
+    assert!(
+        document.upgrade().is_none(),
+        "closing the last presentation releases the document and its frame task"
+    );
+    advance(&mut cx, 500);
+    app.read_with(&cx, |app, _| {
+        assert_eq!(app.editor.buffers.iter().count(), 0);
+    });
+}
+
+#[gpui_kit::test]
+fn a_multipage_tiff_navigates_pages_with_identity_and_keeps_framing(tcx: &mut TestAppContext) {
+    crate::ui::i18n::set_locale("en");
+    let dir = super::super::test_host::canonical_tempdir();
+    let bytes = tiff_fixture(&[
+        (900, 600, [200, 10, 10]),
+        (20, 60, [10, 200, 10]),
+        (70, 10, [10, 10, 200]),
+    ]);
+    let path = fixture(dir.path(), "pages.tiff", &bytes);
+    let (app, mut cx, _streams) = harness_with_tabs(tcx, 1);
+    open(&app, &mut cx, &path);
+    until(&mut cx, |cx| decoded_size(&app, cx) == Some((900, 600)));
+    let view = image_view(&app, &cx);
+    assert_eq!(
+        view.read_with(&cx, |view, cx| view.page_label(cx)),
+        Some(SharedString::from("Page 1 of 3"))
+    );
+    cx.update(|window, _| {
+        assert!(window.find("image-page-facts").visible());
+        assert_eq!(
+            window.find("status-image-page").label(),
+            Some("Page 1 of 3")
+        );
+        assert!(
+            window
+                .find("status-image-facts")
+                .label()
+                .is_some_and(|facts| facts.contains("TIFF") && facts.contains("900 × 600"))
+        );
+    });
+
+    // 实际大小与缩放模式随页保留；页尺寸成为新的取景依据。
+    cx.update(|window, cx| window.press("1", cx));
+    settle(&mut cx);
+    assert_eq!(view.read_with(&cx, |view, _| view.scale()), 1.);
+    cx.update(|window, cx| window.press("pagedown", cx));
+    until(&mut cx, |cx| decoded_size(&app, cx) == Some((20, 60)));
+    assert_eq!(view.read_with(&cx, |view, _| view.scale()), 1.);
+    assert_eq!(view.read_with(&cx, |view, _| view.page()), 1);
+    cx.update(|window, _| {
+        assert_eq!(
+            window.find("status-image-page").label(),
+            Some("Page 2 of 3")
+        );
+        assert!(
+            window
+                .find("status-image-facts")
+                .label()
+                .is_some_and(|facts| facts.contains("20 × 60"))
+        );
+    });
+    let focused = view.read_with(&cx, |view, _| view.handle());
+    cx.update(|window, cx| assert!(focused.contains_focused(window, cx)));
+
+    // 工具栏按钮与键盘是同一组命令。
+    cx.update(|window, cx| window.click("image-page-next", cx));
+    until(&mut cx, |cx| decoded_size(&app, cx) == Some((70, 10)));
+    cx.update(|window, cx| window.click("image-page-previous", cx));
+    until(&mut cx, |cx| decoded_size(&app, cx) == Some((20, 60)));
+    cx.update(|window, cx| window.press("pageup", cx));
+    until(&mut cx, |cx| decoded_size(&app, cx) == Some((900, 600)));
+
+    // 翻页清掉上一页的平移偏移，缩放模式保留；fit 仍按当前页重算。
+    for _ in 0..8 {
+        dispatch(&app, &mut cx, ImageZoomIn);
+    }
+    settle(&mut cx);
+    assert!(
+        view.read_with(&cx, |view, _| view.scroll().max_offset()).x > px(0.),
+        "the zoomed page is wider than the canvas"
+    );
+    cx.update(|window, cx| window.press("right", cx));
+    settle(&mut cx);
+    assert!(
+        view.read_with(&cx, |view, _| view.scroll().offset()).x < px(0.),
+        "pan moved the canvas"
+    );
+    cx.update(|window, cx| window.press("pagedown", cx));
+    until(&mut cx, |cx| decoded_size(&app, cx) == Some((20, 60)));
+    assert_eq!(
+        view.read_with(&cx, |view, _| view.scroll().offset()),
+        Point::default(),
+        "a page change starts at its own origin"
+    );
+    cx.update(|window, cx| window.press("0", cx));
+    settle(&mut cx);
+    assert!(view.read_with(&cx, |view, _| view.scale()) <= 1.);
+    assert_eq!(
+        std::fs::read(&path).unwrap(),
+        bytes,
+        "the source is untouched"
+    );
+}
+
+#[gpui_kit::test]
+fn a_late_page_decode_cannot_replace_the_current_page(tcx: &mut TestAppContext) {
+    crate::ui::i18n::set_locale("en");
+    let dir = super::super::test_host::canonical_tempdir();
+    let bytes = tiff_fixture(&[
+        (40, 20, [200, 10, 10]),
+        (20, 60, [10, 200, 10]),
+        (70, 10, [10, 10, 200]),
+    ]);
+    let path = fixture(dir.path(), "race.tiff", &bytes);
+    let (app, mut cx, _streams) = harness_with_tabs(tcx, 1);
+    open(&app, &mut cx, &path);
+    until(&mut cx, |cx| decoded_size(&app, cx) == Some((40, 20)));
+    let view = image_view(&app, &cx);
+    // 同一帧里连翻两页：第 1 页的异步解码会在第 2 页成为当前页之后落地。
+    cx.update(|_, cx| {
+        view.update(cx, |view, cx| {
+            view.next_page(cx);
+            view.next_page(cx);
+        })
+    });
+    until(&mut cx, |cx| decoded_size(&app, cx) == Some((70, 10)));
+    assert_eq!(
+        view.read_with(&cx, |view, _| view.page()),
+        2,
+        "the later request is the visible page"
+    );
+    cx.update(|window, _| {
+        assert_eq!(
+            window.find("status-image-page").label(),
+            Some("Page 3 of 3")
+        );
+    });
+    // 回到第 2 页仍是它自己的尺寸，没有被第 3 页的缓存顶替。
+    cx.update(|window, cx| window.press("pageup", cx));
+    until(&mut cx, |cx| decoded_size(&app, cx) == Some((20, 60)));
+    assert_eq!(view.read_with(&cx, |view, _| view.page()), 1);
+}
+
+#[gpui_kit::test]
+fn split_tiff_groups_keep_independent_pages_and_live_tiles(tcx: &mut TestAppContext) {
+    crate::ui::i18n::set_locale("en");
+    let dir = super::super::test_host::canonical_tempdir();
+    let bytes = tiff_fixture(&[
+        (40, 20, [200, 10, 10]),
+        (20, 60, [10, 200, 10]),
+        (70, 10, [10, 10, 200]),
+    ]);
+    let path = fixture(dir.path(), "split.tiff", &bytes);
+    let (app, mut cx, _streams) = harness_with_tabs(tcx, 1);
+    open(&app, &mut cx, &path);
+    until(&mut cx, |cx| decoded_size(&app, cx) == Some((40, 20)));
+    app.update_in(&mut cx, |app, window, cx| {
+        assert!(app.editor_split(window, cx), "the TIFF splits");
+    });
+    settle(&mut cx);
+    let (tab, left, right) = app.read_with(&cx, |app, _| {
+        let code = app.tab_code().expect("editor group");
+        let tab = app.tabs.get(app.tabs.active_index()).unwrap().id();
+        let right = code.focused_group();
+        let left = match code.group == right {
+            true => code.split.as_ref().expect("two groups").id,
+            false => code.group,
+        };
+        (tab, left, right)
+    });
+    let (front, other) = app.read_with(&cx, |app, _cx| {
+        let file = app.active_buffer().expect("TIFF");
+        (
+            file.presentations
+                .image_existing(tab, right)
+                .expect("front view"),
+            file.presentations
+                .image_existing(tab, left)
+                .expect("other view"),
+        )
+    });
+    assert_eq!(
+        front.read_with(&cx, |view, _| view.page()),
+        0,
+        "a split starts at the page it was showing"
+    );
+    // 右侧翻到第 3 页，左侧仍在第 1 页；缓存churn 不能收回仍在画的纹理。
+    cx.update(|window, cx| window.press("pagedown", cx));
+    cx.update(|window, cx| window.press("pagedown", cx));
+    until(&mut cx, |cx| {
+        front.read_with(cx, |view, _| {
+            matches!(view.content(), ImageContent::Ready(bitmap) if bitmap.image().size(0).width.0 == 70)
+        })
+    });
+    assert_eq!(other.read_with(&cx, |view, _| view.page()), 0);
+    assert!(matches!(
+        other.read_with(&cx, |view, _| view.content().clone()),
+        ImageContent::Ready(bitmap)
+            if bitmap.image().size(0).width.0 == 40 && bitmap.image().size(0).height.0 == 20
+    ));
+    dispatch(&app, &mut cx, ImageZoomIn);
+    app.read_with(&cx, |app, cx| {
+        let file = app.active_buffer().expect("TIFF");
+        let front = file.presentations.image_existing(tab, right).unwrap();
+        assert!(front.read(cx).scale() > 1., "the focused page zoomed");
+    });
+    // 右侧回到第 1 页仍能读到自己那份，不与左侧错页。
+    cx.update(|window, cx| window.press("pageup", cx));
+    cx.update(|window, cx| window.press("pageup", cx));
+    until(&mut cx, |cx| {
+        front.read_with(cx, |view, _| {
+            matches!(view.content(), ImageContent::Ready(bitmap) if bitmap.image().size(0).width.0 == 40)
+        })
+    });
+    assert_eq!(other.read_with(&cx, |view, _| view.page()), 0);
+}
+
+#[gpui_kit::test]
+fn corrupt_and_oversized_animations_and_pages_fail_visibly(tcx: &mut TestAppContext) {
+    crate::ui::i18n::set_locale("en");
+    let dir = super::super::test_host::canonical_tempdir();
+    let (app, mut cx, _streams) = harness_with_tabs(tcx, 1);
+
+    for (name, bytes) in [
+        ("broken.gif", b"GIF89a and then plain words".to_vec()),
+        ("broken.tiff", b"II\x2a\x00 not a tiff".to_vec()),
+    ] {
+        let path = fixture(dir.path(), name, &bytes);
+        open(&app, &mut cx, &path);
+        until(&mut cx, |cx| {
+            matches!(content(&app, cx), ImageContent::Failed(_))
+        });
+        cx.update(|window, _| {
+            assert!(window.find("status-image-failed").visible());
+            assert!(
+                window.try_find("image-fit").is_none(),
+                "{name} promises no framing over bytes that are not a picture"
+            );
+        });
+        assert_eq!(std::fs::read(&path).unwrap(), bytes, "{name} is untouched");
+    }
+
+    // 截断的动画：首帧可能还在，但失败必须可见，不能停在一张半帧上。
+    let full = gif_fixture(
+        &[
+            (0, vec![0, 0, 0], gif::DisposalMethod::Keep),
+            (0, vec![1, 1, 1], gif::DisposalMethod::Keep),
+        ],
+        gif::Repeat::Finite(0),
+        10,
+    );
+    let mut cut = full.clone();
+    cut.truncate(full.len() * 3 / 4);
+    let path = fixture(dir.path(), "truncated.gif", &cut);
+    open(&app, &mut cx, &path);
+    until(&mut cx, |cx| {
+        matches!(content(&app, cx), ImageContent::Failed(_))
+    });
+    cx.update(|window, _| assert!(window.find("status-image-failed").visible()));
+    assert_eq!(
+        std::fs::read(&path).unwrap(),
+        cut,
+        "the source is untouched"
+    );
+
+    // 动画合成预算超出时打开即拒绝，不静默降采样。
+    let mut over = gif_fixture(
+        &[(0, vec![0, 0, 0], gif::DisposalMethod::Keep)],
+        gif::Repeat::Finite(0),
+        10,
+    );
+    over[6..8].copy_from_slice(&3000u16.to_le_bytes());
+    over[8..10].copy_from_slice(&2000u16.to_le_bytes());
+    let path = fixture(dir.path(), "huge.gif", &over);
+    open(&app, &mut cx, &path);
+    match content(&app, &cx) {
+        ImageContent::Failed(message) => assert!(
+            message.contains("MiB"),
+            "the animation budget is named, got: {message}"
+        ),
+        _ => panic!("an over-budget animation was not refused"),
+    }
+
+    // 单页超出像素预算：可见的页失败，不退回静态图或别的页。
+    let bytes = tiff_fixture(&[(8193, 1, [1, 2, 3])]);
+    let path = fixture(dir.path(), "wide.tiff", &bytes);
+    open(&app, &mut cx, &path);
+    until(&mut cx, |cx| {
+        matches!(content(&app, cx), ImageContent::Failed(_))
+    });
+    cx.update(|window, _| {
+        assert!(window.find("status-image-failed").visible());
+        assert!(
+            window.try_find("image-page-facts").is_none(),
+            "a single-page TIFF does not promise page navigation"
+        );
+    });
+    assert_eq!(
+        std::fs::read(&path).unwrap(),
+        bytes,
+        "the source is untouched"
+    );
+}
+
+#[gpui_kit::test]
+fn the_owning_host_supplies_animation_and_page_bytes(tcx: &mut TestAppContext) {
+    crate::ui::i18n::set_locale("en");
+    let local = super::super::test_host::canonical_tempdir();
+    let decoy = super::super::test_host::canonical_tempdir();
+    let local_gif = gif_fixture(
+        &[(0, vec![0, 0, 0], gif::DisposalMethod::Keep)],
+        gif::Repeat::Finite(0),
+        10,
+    );
+    let remote_gif = {
+        let mut bytes = Vec::new();
+        {
+            let mut encoder =
+                gif::Encoder::new(&mut bytes, 2, 2, &[0, 255, 0, 0, 0, 0]).expect("palette");
+            encoder.set_repeat(gif::Repeat::Finite(0)).expect("repeat");
+            encoder
+                .write_frame(&gif::Frame {
+                    width: 2,
+                    height: 2,
+                    delay: 10,
+                    buffer: std::borrow::Cow::Owned(vec![0, 0, 0, 0]),
+                    ..Default::default()
+                })
+                .expect("frame");
+        }
+        bytes
+    };
+    let local_tiff = tiff_fixture(&[(10, 10, [1, 2, 3])]);
+    let remote_tiff = tiff_fixture(&[(30, 20, [9, 9, 9]), (20, 30, [7, 7, 7])]);
+    fixture(local.path(), "anim.gif", &local_gif);
+    fixture(local.path(), "pages.tiff", &local_tiff);
+    fixture(decoy.path(), "anim.gif", &remote_gif);
+    fixture(decoy.path(), "pages.tiff", &remote_tiff);
+
+    let (app, mut cx, _streams) = harness_with_tabs(tcx, 1);
+    let shared: SharedHost = FileHost::mapped(HostId(72), decoy.path());
+    app.update_in(&mut cx, |app, window, cx| {
+        app.editor_open_on_host(shared.clone(), Path::new("/anim.gif"), window, cx)
+    });
+    until(&mut cx, |cx| {
+        app.read_with(cx, |app, _| {
+            app.editor_active_location()
+                .is_some_and(|(host, _)| host == HostId(72))
+        })
+    });
+    until(&mut cx, |cx| decoded_size(&app, cx) == Some((2, 2)));
+
+    app.update_in(&mut cx, |app, window, cx| {
+        app.editor_open_on_host(shared, Path::new("/pages.tiff"), window, cx)
+    });
+    until(&mut cx, |cx| {
+        app.read_with(cx, |app, _| {
+            app.editor_active_location()
+                .is_some_and(|(host, path)| host == HostId(72) && path.ends_with("pages.tiff"))
+        })
+    });
+    until(&mut cx, |cx| decoded_size(&app, cx) == Some((30, 20)));
+    assert_eq!(
+        image_view(&app, &cx).read_with(&cx, |view, cx| view.page_label(cx)),
+        Some(SharedString::from("Page 1 of 2"))
+    );
+    assert_eq!(
+        std::fs::read(local.path().join("anim.gif")).unwrap(),
+        local_gif
+    );
+    assert_eq!(
+        std::fs::read(local.path().join("pages.tiff")).unwrap(),
+        local_tiff
+    );
 }
 
 /// The production opener must carry a representative large picture through the

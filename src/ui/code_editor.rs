@@ -37,7 +37,6 @@ mod markdown_search;
 mod text;
 use buffers::Loaded;
 use document_input::{EditorInput, Presentations};
-use image_document::{ImageDocument, ImageView};
 mod gutter;
 mod nav;
 pub(crate) mod outline;
@@ -1938,10 +1937,11 @@ impl LyrelApp {
                 )
                 .separator();
         }
-        // 一张图片没有撤销、查找、剪贴板和行命令可给：它只有取景。给它保留
-        // 这些行，等于向读者承诺文档里有能编辑的文本。
-        if input.image().is_some() {
-            return image_document::menu_entries(menu);
+        // 一张图片没有撤销、查找、剪贴板和行命令可给：它只有取景与翻页。给它
+        // 保留这些行，等于向读者承诺文档里有能编辑的文本。
+        if let Some(image) = input.image() {
+            let multipage = image.read(cx).page_count(cx).is_some_and(|count| count > 1);
+            return image_document::menu_entries(menu, multipage);
         }
         let selected = input
             .text()
@@ -3105,6 +3105,8 @@ impl LyrelApp {
             image.as_ref().map(|view| view.read(cx).status_text(cx));
         let image_zoom: Option<SharedString> =
             image.as_ref().map(|view| view.read(cx).zoom_label());
+        let image_page: Option<SharedString> =
+            image.as_ref().and_then(|view| view.read(cx).page_label(cx));
         let cursor: Option<SharedString> = self
             .active_editor_input()
             .and_then(|input| input.text().map(|text| text.read(cx).cursor_position()))
@@ -3230,8 +3232,19 @@ impl LyrelApp {
                     div()
                         .id("status-image-facts")
                         .test_support()
+                        .aria_label(status.clone())
                         .flex_none()
                         .child(status),
+                )
+            })
+            .when_some(image_page, |this, page| {
+                this.child(
+                    div()
+                        .id("status-image-page")
+                        .test_support()
+                        .aria_label(page.clone())
+                        .flex_none()
+                        .child(page),
                 )
             })
             .when(image_zoom.is_some(), |this| {
