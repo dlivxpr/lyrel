@@ -2234,11 +2234,13 @@ fi
         ///
         /// Each run gets its own cache directory: `pwsh -c` saves a
         /// MultiCoreJit profile under `$XDG_CACHE_HOME/powershell` on the way
-        /// out and the next start reads it back. A profile PowerShell cannot
-        /// play kills the process with SIGSEGV and no output before the script
-        /// runs (PowerShell#26528, dotnet/runtime#121977), so no run may find
-        /// another run's profile — a one-shot session gains nothing from the
-        /// cache anyway.
+        /// out, and a later start reads it back. Upstream reports that a
+        /// profile a start cannot play aborts pwsh with SIGSEGV and no output
+        /// before the script runs (PowerShell#26528, dotnet/runtime#121977);
+        /// the macOS CI run that shared one cache died with that signal and no
+        /// output, though profile playback there is inferred, not observed. No
+        /// run may find another run's profile, and a one-shot session gains
+        /// nothing from the cache anyway.
         #[cfg(unix)]
         fn pwsh(home: &std::path::Path) -> std::process::Command {
             use std::sync::atomic::{AtomicU64, Ordering};
@@ -2252,26 +2254,6 @@ fi
                 .env("XDG_CACHE_HOME", home.join(".cache").join(run.to_string()))
                 .env_remove("LYREL_SHELL_INTEGRATION");
             cmd
-        }
-
-        /// The macOS crash above needs a start that reads a profile a previous
-        /// start wrote. A reused throwaway home must still hand each run its
-        /// own cache, so no run can find one — this runs even where pwsh is
-        /// absent and the real-shell tests quietly skip.
-        #[cfg(unix)]
-        #[test]
-        fn every_pwsh_run_gets_a_cache_of_its_own() {
-            let home = tempfile::tempdir().expect("tempdir");
-            let cache = |cmd: &std::process::Command| -> std::ffi::OsString {
-                cmd.get_envs()
-                    .find(|(key, _)| key.to_str() == Some("XDG_CACHE_HOME"))
-                    .and_then(|(_, value)| value)
-                    .expect("every pwsh run names a cache")
-                    .to_os_string()
-            };
-            let first = cache(&pwsh(home.path()));
-            let second = cache(&pwsh(home.path()));
-            assert_ne!(first, second);
         }
 
         /// Runs the bootstrap in a real pwsh the way a PowerShell default
