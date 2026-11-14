@@ -237,6 +237,7 @@ coding agent 在真实 PTY 中运行自己的原生 TUI。命令识别、状态 
 Windows fixture 的初次 DA1 交换需与真实客户端一样完成 ConPTY 初始化：Microsoft 的 [`InputStateMachineEngine::ActionCsiDispatch`](https://github.com/microsoft/terminal/blob/main/src/terminal/parser/InputStateMachineEngine.cpp) 会将首条 DA1 回复用于宿主属性，而不送入应用 stdin。排序用例在初始化后仍将 `s`／`q` 与 DA1 放在同一 write 中，并精确比较两条真实回复及先后顺序，不通过延长超时或丢弃 sentinel 断言规避该平台行为。
 
 
+<a id="spec-258-acceptance"></a>
 ### #258：统一候选的验证边界
 
 2026-11-14 的产品验证使用冻结源码 `2c0fcd7d`：Windows workspace、独立无过滤 CLI E2E、WSL 原生 Linux 完整 features 的 headless workspace，以及真实 Windows→Linux SSH 恢复路径均已执行。Windows 本机另实际运行 `native_terminal`，3 passed／0 failed／0 ignored；该 runner 使用真实 OS 字体与生产绘制入口，但窗口和 display scale 仍由 test platform 驱动，不能代替实窗或系统 DPI 验收。
@@ -247,4 +248,10 @@ Windows fixture 的初次 DA1 交换需与真实客户端一样完成 ConPTY 初
 
 后续提交至 `8fb1795d` 仅修正测试／验证接缝和记录，未改变上述生产代码。对应 [CI](https://github.com/dlivxpr/lyrel/actions/runs/43541885955) 全部必需 job 已成功；macOS 实际 checkout 为 `032a4e77`，library 3,106 passed／0 failed／37 ignored，原 inactive-main 图形压力用例明确通过，native terminal 3 项与 native Markdown 37 项均通过。该 CI 的自动化结果不改标为本机产品二进制版本，也不推导 macOS 实窗通过。
 
-尚未完成的原生边界：实际 OS display-scale 切换、完整 OS 指针形状／工作台优先级、真实持键与系统中文 IME 的最终组合。当前实窗为 100% 单显示器；字号变化、headless scale 模拟或 PTY 的 shape 文本均不能替代这些证据。#258 与组合验收票仍保留，不能由上述局部结果宣称整规格完成。
+同一候选已完成授权的实际系统缩放：单显示器 Q27G4Z 从 100% 改为 125%，等窗口完成 `WM_DPICHANGED` 后核验 Glyph 几何，再恢复 100%；没有重新注册 Glyph，也未留下系统缩放改动。
+
+OSC 22 另以真实 OS cursor 采样核验 `Hand`、`SizeWE`、`SizeNESW`，以及不支持名称、空请求、分片 reset、RIS 的安全回退。采样只计自有 GUI PID 的终端内容：选择、armed link、右键菜单与工作台 divider 覆盖应用请求；相邻 pane 不继承请求，TUI divider 可实际拖动，返回 shell 后恢复 `IBeam`。未打开测试链接，也未向用户实例输入。
+
+增强键盘原生 recorder 请求 flags `31`，有效回复为 `27`；方向键、F3、Ctrl+Q 与 Shift+Tab 均记录到 press 和配对 release。系统微软拼音实际显示 `zhong` 候选，Space 提交“中”后 PTY 只收到一次 `ESC[0;1;20013u`。随后 `zhong'wen` 预编辑期间没有 PTY 输入，Escape 取消后也没有泄漏文字或孤立 release。
+
+尚缺同一候选的硬件持键 repeat 证据：自动化 `holdKeys` 的 0.8 秒与 2.2 秒输入都只产生一组 press／release，没有事件类型 `2`，不能当作系统自动连发通过。用户当前不便执行人工持键，要求保留该缺口。#258、#273 与 #278 仍未完成，PR 保持 draft；已有 headless held-event 回归、原生 press／release 与 IME 结果不替代缺失证据。macOS 实窗仍未验收。
