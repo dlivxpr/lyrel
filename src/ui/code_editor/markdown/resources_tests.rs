@@ -504,7 +504,7 @@ fn wrapped_link(cx: &mut TestAppContext, tail: bool, drag: bool) {
             let file = app.active_buffer().unwrap();
             assert_eq!(file.host.id(), HostId(2381));
             assert_eq!(
-                file.input.read(cx).text().to_string(),
+                file.input.text().unwrap().read(cx).text().to_string(),
                 "# Owning remote target\n"
             );
         });
