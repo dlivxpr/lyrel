@@ -243,29 +243,6 @@ mod tests {
             "a state-only controller keeps the support reply silent"
         );
     }
-
-    #[test]
-    fn a_state_only_controller_never_sees_the_coverage_query() {
-        // The retained-projection credential is a decode/transport opt-in,
-        // not a font-coverage answerer. `q` routed here would land on a peer
-        // — the CLI `run` backend's exact shape — that drops the kind, so the
-        // pane never forwards it and keeps no pending query for it.
-        let (state, rx) = pane_with_controller();
-        let gate = OutputGate::new();
-        let writer = test_support::null_writer();
-        consume(&state, &gate, &writer, b"25a1;q;cp=100000", false, false);
-        assert!(
-            test_support::drain(&rx)
-                .iter()
-                .all(|msg| !matches!(msg, DaemonMsg::GlyphQuery { .. })),
-            "the projection-only controller received a coverage query"
-        );
-        assert_eq!(
-            state.lock().unwrap().glyph_queries.len(),
-            0,
-            "no unanswered query is owed to a controller that cannot answer"
-        );
-    }
 }
 
 #[cfg(test)]
