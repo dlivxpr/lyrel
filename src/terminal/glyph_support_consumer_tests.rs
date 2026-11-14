@@ -252,13 +252,14 @@ fn glyph_consumer_support_and_query_replies_precede_the_da1_sentinel(cx: &mut Te
     assert_eq!(parts[1], b"\x1b[?4;6c".to_vec());
 }
 
-/// `s` is bound to the pane's current controller: a rendering controller is
-/// answered with `fmt=glyf`, while a controller that only subscribed to the
-/// retained projection — an older build that knows `glyph-state` but predates
-/// the monochrome-render opt-in — must never see the format advertised. The
-/// probe is sandwiched between `q` and DA1 so silence is proved by two real
-/// replies, not by a timeout. Each phase is a real production consumer: the
-/// replacement's attach demotes the previous controller.
+/// `s` and `q` are bound to the pane's current coverage credential: a
+/// rendering controller is answered `fmt=glyf` and routed `GlyphQuery`,
+/// while a controller that only subscribed to the retained projection — the
+/// CLI `run` shape, decode-only with no font stack — is asked neither. Its
+/// probes stay silent, proved here by the DA1 the same write carries next:
+/// one reply for a three-message write, and it is the sentinel. Each phase
+/// is a real production consumer: the replacement's attach demotes the
+/// previous controller.
 #[gpui_kit::test]
 fn glyph_consumer_support_answer_tracks_the_controllers_render_opt_in(cx: &mut TestAppContext) {
     crate::core::config::pin_test_config_dir();
@@ -294,9 +295,9 @@ fn glyph_consumer_support_answer_tracks_the_controllers_render_opt_in(cx: &mut T
     assert_eq!(parts[1], b"\x1b[?4;6c".to_vec());
 
     // A replacement controller that subscribed to the projection but never
-    // declared it renders v1.12 must not inherit the advertisement. The
-    // `s`-silent pane proves itself with the `q` and DA1 replies that do
-    // arrive: two replies for a three-message write, `q` first.
+    // declared it renders v1.12 holds no coverage credential: `s` stays
+    // silent, and its `q` is never routed to a peer that could only drop it.
+    // The DA1 is the write's only reply.
     let (view, _window) =
         graphics_rooted_consumer(cx, pane, glyph_support_stream(&daemon, pane, false));
     let parts = glyph_send_parts(
@@ -310,17 +311,12 @@ fn glyph_consumer_support_answer_tracks_the_controllers_render_opt_in(cx: &mut T
             b"\x1b[c".to_vec(),
         ]
         .concat(),
-        2,
+        1,
     );
     assert_eq!(
-        parts[0],
-        format!("\x1b_25a1;q;cp={GLYPH_CP:x};status=system\x1b\\").into_bytes(),
-        "without the render opt-in `s` stays silent; `q` still answers coverage"
-    );
-    assert_eq!(
-        parts[1],
-        b"\x1b[?4;6c".to_vec(),
-        "DA1 follows the query reply, no support reply precedes it"
+        parts,
+        [b"\x1b[?4;6c".to_vec()],
+        "without the render opt-in `s` and `q` stay silent; only DA1 replies"
     );
 
     // Controller replacement again — rendering declared — re-enables the
@@ -341,4 +337,58 @@ fn glyph_consumer_support_answer_tracks_the_controllers_render_opt_in(cx: &mut T
         "the render opt-in binds at attach, not at pane lifetime"
     );
     assert_eq!(parts[1], b"\x1b[?4;6c".to_vec());
+}
+
+/// The retained-projection opt-in is a decode/transport credential, not a
+/// coverage answerer: a `negotiate_pane` controller — the CLI `run`
+/// backend's exact shape, which decodes `GlyphState` but drops a
+/// `GlyphQuery` kind it has no arm for — must never be handed the query at
+/// all. Producer order makes silence observable: `q` precedes the marker
+/// text in one write, so a `GlyphQuery` frame arriving before that marker
+/// would mean the daemon routed coverage to a peer that cannot answer.
+#[test]
+fn glyph_support_query_never_reaches_a_state_only_controller() {
+    use crate::daemon::protocol::DaemonMsg;
+
+    let daemon = GraphicsDaemonProcess::start();
+    let pane = daemon.spawn();
+    let mut stream = glyph_support_stream(&daemon, pane, false);
+    stream
+        .set_read_timeout(Some(std::time::Duration::from_secs(10)))
+        .unwrap();
+
+    // The controller must be attached before its stream position is read:
+    // input on the same connection cannot overtake Attach.
+    let request = format!(
+        "SEND_ANY 1 0 {} 0\n",
+        graphics_pty_fixture::hex(b"\x1b_25a1;q;cp=100000\x1b\\")
+    );
+    ClientMsg::Input(request.into_bytes())
+        .encode(&mut stream)
+        .unwrap();
+
+    // The fixture completes the request with `KITTY_DONE_1` output — the
+    // ordered marker after the unanswered `q`. Any `GlyphQuery` seen first
+    // means the daemon asked a coverage question of a peer that can only
+    // drop it; the producer would wait forever for a reply.
+    let mut seen = Vec::new();
+    let marker = b"KITTY_DONE_1";
+    while !seen
+        .windows(marker.len())
+        .any(|window| window == marker.as_slice())
+    {
+        match DaemonMsg::read(&mut stream) {
+            Ok(DaemonMsg::GlyphQuery { .. }) => {
+                panic!("a decode-only controller was handed the coverage query")
+            }
+            Ok(DaemonMsg::Output(bytes)) | Ok(DaemonMsg::Snapshot(bytes)) => {
+                seen.extend(bytes)
+            }
+            Ok(DaemonMsg::Exited { code }) => {
+                panic!("the producer exited before its marker: {code:?}")
+            }
+            Ok(_) => continue,
+            Err(error) => panic!("controller stream failed: {error}"),
+        }
+    }
 }

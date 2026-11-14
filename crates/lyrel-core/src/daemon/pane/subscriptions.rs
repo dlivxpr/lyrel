@@ -276,17 +276,15 @@ impl Subscriptions {
         self.subscriber.as_ref().map(|_| self.subscriber_epoch)
     }
 
-    /// A controller that did not opt in predates the projection; it must not
-    /// receive `GlyphQuery` either, because its decoder has no arm for it.
-    pub(super) fn controller_accepts_glyph_state(&self) -> bool {
-        self.subscriber.is_some() && self.subscriber_glyphs
-    }
-
-    /// The `s` reply names real capability, not protocol literacy: the
-    /// current controller has to both decode the projection and declare the
-    /// complete monochrome render contract. An older client that subscribed
-    /// to state alone — or no controller at all — leaves `s` silent rather
-    /// than seeing `fmt=glyf` advertised for pixels nothing paints.
+    /// The frontend-bound `q` and `s` gates name real capability, not
+    /// protocol literacy: the current controller has to both decode the
+    /// projection and declare the complete monochrome render contract. A
+    /// state-only subscriber can read `GlyphState` but cannot truthfully
+    /// answer font coverage — a CLI `run` backend has no font stack to
+    /// measure — so the pane never hands it `GlyphQuery` and never
+    /// advertises `fmt=glyf` for pixels nothing paints. The producer's
+    /// unanswered `q` then sees the protocol's honest silence rather than a
+    /// request queued on a peer that drops it.
     pub(super) fn controller_renders_glyphs(&self) -> bool {
         self.subscriber.is_some() && self.subscriber_glyphs && self.subscriber_glyph_render
     }

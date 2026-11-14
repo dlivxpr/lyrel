@@ -180,30 +180,34 @@ pub const FEATURE_HANDOFF: &str = "handoff";
 pub const FEATURE_UPDATE_SERVER: &str = "update-server";
 
 /// The daemon owns the Glyph Protocol glossary: it validates and retains
-/// accepted definitions, strips rejected ones, and asks only the current
-/// controller for actual font coverage when answering `q`. A client that does
-/// not see this feature must not derive or claim any glyph from producer
-/// bytes; a client that does sees only daemon-accepted bodies.
+/// accepted definitions, strips rejected ones, and asks the pane's render-
+/// opted controller for actual font coverage when answering `q`. A client
+/// that does not see this feature must not derive or claim any glyph from
+/// producer bytes; a client that does sees only daemon-accepted bodies.
 pub const FEATURE_GLYPH_REGISTRY: &str = "glyph-registry";
 
-/// The daemon retains the accepted glyph glossary outside the text replay ring
-/// and projects it after the ring to a consumer that opts in with
-/// `ClientMsg::SubscribeGlyphState`. A client that does not see this feature
-/// leaves the opt-in unsent; a controller that never opted in is not sent a
-/// frontend-bound `GlyphQuery` either, because a peer that predates the
-/// projection cannot decode the kind. The pane protocol version is unchanged:
-/// both messages are additive and gated on this feature.
+/// The daemon retains the accepted glyph glossary outside the text replay
+/// ring and projects it after the ring to a consumer that opts in with
+/// `ClientMsg::SubscribeGlyphState`. The opt-in is a decode/transport
+/// credential only: it keeps the pane's snapshots ordered and recoverable
+/// for non-rendering clients, but it does not make the consumer the
+/// frontend-bound `GlyphQuery` answerer — that requires the render opt-in
+/// below. A client that does not see this feature leaves the opt-in unsent,
+/// and a controller that never opted in is not sent projection frames
+/// either, because a peer that predates the projection cannot decode the
+/// kind. The pane protocol version is unchanged: both messages are additive
+/// and gated on this feature.
 pub const FEATURE_GLYPH_STATE: &str = "glyph-state";
 
-/// The daemon can answer the Glyph Protocol `s` probe with `fmt=glyf`, but
-/// only for a pane whose current controller opted in with
-/// `ClientMsg::SubscribeGlyphRender`: the renderer has to keep the whole
-/// monochrome v1.12 contract the advertisement promises, so a client that
-/// merely decodes the projection — or a build that predates it — must never
-/// be described as supported. A client that does not see this feature leaves
-/// the opt-in unsent, and an `s` probe on such a pane stays silent, which is
-/// the truthful "unsupported" answer. The pane protocol version is unchanged:
-/// the message is additive and gated on this feature.
+/// The render opt-in is the pane's coverage credential: only a controller
+/// that declared it is handed the frontend-bound `GlyphQuery`, and only such
+/// a pane can answer the `s` probe with `fmt=glyf`. The renderer has to keep
+/// the whole monochrome v1.12 contract the advertisement promises, so a
+/// client that merely decodes the projection — or a build that predates it —
+/// is asked neither and must never be described as supported. A client that
+/// does not see this feature leaves the opt-in unsent; `q` and `s` on such a
+/// pane stay silent, the truthful "unsupported" answer. The pane protocol
+/// version is unchanged: the message is additive and gated on this feature.
 pub const FEATURE_GLYPH_SUPPORT: &str = "glyph-support";
 
 /// The daemon keeps an authoritative, bounded pane-local colour override layer
@@ -1131,20 +1135,24 @@ pub enum ClientMsg {
     /// Opt in to authoritative pane colour frames. Sent only after the peer's
     /// version advertised `FEATURE_PANE_COLORS`, before Spawn/Attach/Observe.
     SubscribePaneColors,
-    /// Opt in to the retained glyph glossary projection and to frontend-bound
-    /// `q` requests. Sent only after the peer advertised `FEATURE_GLYPH_STATE`,
-    /// before Spawn/Attach/Observe. A peer that never sends this keeps its old
-    /// stream: it is not sent a kind its decoder cannot read.
+    /// Opt in to the retained glyph glossary projection — a decode and
+    /// transport credential only. Sent only after the peer advertised
+    /// `FEATURE_GLYPH_STATE`, before Spawn/Attach/Observe. It does not make
+    /// this client the `q` answerer: `GlyphQuery` requires the render opt-in
+    /// below. A peer that never sends this keeps its old stream: it is not
+    /// sent a kind its decoder cannot read.
     SubscribeGlyphState,
     /// Assert that this client is a rendering controller for the complete
     /// monochrome v1.12 contract: it decodes the retained projection (which
     /// still requires `SubscribeGlyphState`), applies the accepted `r`/`c`
     /// bodies the daemon re-emits, and answers `q` from its real font stack.
     /// Sent only after the peer advertised `FEATURE_GLYPH_SUPPORT`, before
-    /// Spawn/Attach/Observe. It binds at attach: an observer or a later
-    /// replacement controller that never sent it does not turn the pane's `s`
-    /// answer on. A peer that never sends this keeps its old stream and never
-    /// sees `fmt=glyf` advertised for the pane it controls.
+    /// Spawn/Attach/Observe. It is the pane's coverage credential: the
+    /// daemon routes `GlyphQuery` only to a controller that sent it, and it
+    /// binds at attach — an observer or a later replacement controller that
+    /// never sent it does not turn the pane's `s` answer on. A peer that
+    /// never sends this keeps its old stream, is never asked for coverage,
+    /// and never sees `fmt=glyf` advertised for the pane it controls.
     SubscribeGlyphRender,
     /// Finite authority-side allowance, with optional per-resource grants from
     /// a rendering consumer's shared source and decoded-memory budgets.
@@ -1358,8 +1366,10 @@ pub enum DaemonMsg {
     /// sequence from replay; the GUI decides whether it may touch the clipboard.
     ClipboardWrite(Vec<u8>),
     /// A frontend-bound `q`: only the pane's current controller receives it,
-    /// and only the daemon writes the reply. `token` correlates the answer with
-    /// the request; `cp` is the queried codepoint.
+    /// and only when that controller declared the monochrome-render opt-in —
+    /// the credential that says a real font stack stands behind its coverage
+    /// answer. Only the daemon writes the reply. `token` correlates the
+    /// answer with the request; `cp` is the queried codepoint.
     GlyphQuery {
         token: u64,
         cp: u32,
@@ -1427,7 +1437,8 @@ mod kind {
     /// spaces are direction-scoped, so 72 is reserved for this client message
     /// and for the daemon's `GlyphQuery` above.
     pub const SUBSCRIBE_GLYPH_STATE: u8 = 72;
-    /// Daemon -> controller: a frontend-bound `q` awaiting that answer.
+    /// Daemon -> render-opted controller: a frontend-bound `q` awaiting that
+    /// controller's coverage answer.
     pub const GLYPH_QUERY: u8 = 72;
     /// Daemon -> opted-in consumer: a bounded full glossary snapshot after the
     /// replayed text. Never sent to a peer that did not opt in.

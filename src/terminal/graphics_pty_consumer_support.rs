@@ -189,7 +189,10 @@ impl GraphicsDaemonProcess {
         stream
             .set_read_timeout(Some(std::time::Duration::from_secs(30)))
             .unwrap();
-        crate::daemon::protocol::negotiate_pane(&mut stream).unwrap();
+        // Every consumer attached through this helper is a real production
+        // TerminalView: it keeps the monochrome contract, so it declares the
+        // render opt-in — the credential `q` routing and `s` answers bind to.
+        crate::daemon::protocol::negotiate_pane_rendering(&mut stream, true).unwrap();
         ClientMsg::GraphicsCapacity {
             encoded_bytes,
             decoded_bytes,
