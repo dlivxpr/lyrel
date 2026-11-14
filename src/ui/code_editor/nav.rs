@@ -1041,6 +1041,11 @@ impl LyrelApp {
             .presentations
             .markdown_existing(tab, group)
             .map(super::EditorInput::Markdown)
+            .or_else(|| {
+                f.presentations
+                    .svg_existing(tab, group)
+                    .map(super::EditorInput::Svg)
+            })
             .unwrap_or_else(|| f.input.clone());
         // A picture has no caret to chain symbols from.
         let caret = input.text()?.read(cx).cursor_position();
@@ -1402,8 +1407,8 @@ mod tests {
             ("X\n\u{80}\ntarget\n", "X\nnew\nÀ\ntarget\n", 2, 3),
         ] {
             let edits = NavEdit::between(
-                &TextSnapshot::Markdown(Arc::new(old.into())),
-                &TextSnapshot::Markdown(Arc::new(new.into())),
+                &TextSnapshot::Shared(Arc::new(old.into())),
+                &TextSnapshot::Shared(Arc::new(new.into())),
             );
             let mut history = NavHistory::default();
             history.push(at("a.rs", line));
@@ -1464,8 +1469,8 @@ mod tests {
             "use std::fmt;\n{}",
             before.replace("// 第100行🙂", "// 第100行🙂\n// 补全")
         );
-        let before = TextSnapshot::Markdown(Arc::new(before));
-        let after = TextSnapshot::Markdown(Arc::new(after));
+        let before = TextSnapshot::Shared(Arc::new(before));
+        let after = TextSnapshot::Shared(Arc::new(after));
         let mut history = NavHistory::default();
         history.push(at("a.rs", 50));
         history.push(at("other.rs", 0));
@@ -1514,8 +1519,8 @@ mod tests {
                     }
                 })
                 .collect::<String>();
-        let before = TextSnapshot::Markdown(Arc::new(before));
-        let after = TextSnapshot::Markdown(Arc::new(after));
+        let before = TextSnapshot::Shared(Arc::new(before));
+        let after = TextSnapshot::Shared(Arc::new(after));
         let mut history = NavHistory::default();
         history.push(at("a.rs", 800));
         history.shift(&at("a.rs", 0), &NavEdit::between(&before, &after));

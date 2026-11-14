@@ -1,10 +1,11 @@
-//! 工作台文本只读快照；代码共享 Rope，Markdown 共享源文 String，不复制整份文档。
+//! 工作台文本只读快照；代码共享 Rope，共享 Document 的源文只复制句柄。
 use gpui_kit::component::input::{Position, Rope, RopeExt as _};
 use std::{ops::Range, sync::Arc};
 #[derive(Clone)]
 pub(crate) enum TextSnapshot {
     Code(Rope),
-    Markdown(Arc<String>),
+    /// Markdown 与 SVG 等逐行保真 Document 的当前 revision。
+    Shared(Arc<String>),
 }
 impl From<Rope> for TextSnapshot {
     fn from(text: Rope) -> Self {
@@ -45,13 +46,13 @@ impl TextSnapshot {
     pub(crate) fn len(&self) -> usize {
         match self {
             Self::Code(text) => text.len(),
-            Self::Markdown(text) => text.len(),
+            Self::Shared(text) => text.len(),
         }
     }
     pub(crate) fn chunks(&self) -> impl Iterator<Item = &str> {
         let (code, markdown) = match self {
             Self::Code(text) => (Some(text), None),
-            Self::Markdown(text) => (None, Some(text.as_str())),
+            Self::Shared(text) => (None, Some(text.as_str())),
         };
         code.into_iter()
             .flat_map(|text| text.chunks())
@@ -60,7 +61,7 @@ impl TextSnapshot {
     pub(crate) fn reverse_chunks(&self) -> impl Iterator<Item = &str> {
         let (code, markdown) = match self {
             Self::Code(text) => (Some(text), None),
-            Self::Markdown(text) => (None, Some(text.as_str())),
+            Self::Shared(text) => (None, Some(text.as_str())),
         };
         code.into_iter()
             .flat_map(|text| text.chunks_at(text.len()).0.reversed())
@@ -81,26 +82,26 @@ impl TextSnapshot {
                 let (mut chunks, start) = text.chunks_at(at);
                 (chunks.next().unwrap_or(""), start)
             }
-            Self::Markdown(text) => (text.as_str(), 0),
+            Self::Shared(text) => (text.as_str(), 0),
         }
     }
     pub(crate) fn floor_char_boundary(&self, mut at: usize) -> usize {
         at = at.min(self.len());
         match self {
             Self::Code(text) => text.floor_char_boundary(at),
-            Self::Markdown(text) => text.floor_char_boundary(at),
+            Self::Shared(text) => text.floor_char_boundary(at),
         }
     }
     pub(crate) fn ceil_char_boundary(&self, at: usize) -> usize {
         match self {
             Self::Code(text) => text.ceil_char_boundary(at.min(text.len())),
-            Self::Markdown(text) => text.ceil_char_boundary(at.min(text.len())),
+            Self::Shared(text) => text.ceil_char_boundary(at.min(text.len())),
         }
     }
     pub(crate) fn slice(&self, range: Range<usize>) -> String {
         match self {
             Self::Code(text) => text.slice(range).to_string(),
-            Self::Markdown(text) => text[range].to_owned(),
+            Self::Shared(text) => text[range].to_owned(),
         }
     }
     pub(crate) fn lines_len(&self) -> usize {
@@ -133,7 +134,7 @@ impl TextSnapshot {
     pub(crate) fn offset_to_position(&self, at: usize) -> Position {
         match self {
             Self::Code(text) => text.offset_to_position(at),
-            Self::Markdown(text) => {
+            Self::Shared(text) => {
                 let at = text.floor_char_boundary(at.min(text.len()));
                 let start = text[..at].rfind('\n').map_or(0, |at| at + 1);
                 Position::new(
@@ -146,7 +147,7 @@ impl TextSnapshot {
     pub(crate) fn position_to_offset(&self, position: &Position) -> usize {
         match self {
             Self::Code(text) => text.position_to_offset(position),
-            Self::Markdown(text) => {
+            Self::Shared(text) => {
                 let start = self.line_start_offset(position.line as usize);
                 let line = text[start..].split('\n').next().unwrap_or("");
                 let mut units = 0;
@@ -163,7 +164,7 @@ impl TextSnapshot {
     pub(crate) fn word_range(&self, at: usize) -> Option<Range<usize>> {
         match self {
             Self::Code(text) => text.word_range(at),
-            Self::Markdown(text) => {
+            Self::Shared(text) => {
                 use unicode_segmentation::UnicodeSegmentation;
                 text.unicode_word_indices()
                     .find(|(start, word)| *start <= at && at <= *start + word.len())

@@ -198,6 +198,26 @@ fn fixed_bindings(cx: &App) -> Vec<KeyBinding> {
         bindings.push(load_binding(back, EditorNavigateBack, image, cx));
         bindings.push(load_binding(forward, EditorNavigateForward, image, cx));
     }
+    // The SVG preview is the same kind of framed canvas; its context exists
+    // only while that side is shown, so source editing keeps its keys.
+    {
+        use crate::ui::code_editor::{ImageActualSize, ImageFit, ImageZoomIn, ImageZoomOut};
+        let svg = Some(crate::ui::code_editor::SVG_KEY_CONTEXT);
+        let back = per_platform("ctrl--", "alt-left");
+        let forward = per_platform("ctrl-shift--", "alt-right");
+        bindings.extend([
+            load_binding("0", ImageFit, svg, cx),
+            load_binding("1", ImageActualSize, svg, cx),
+            load_binding("secondary-=", ImageZoomIn, svg, cx),
+            load_binding("secondary-+", ImageZoomIn, svg, cx),
+            load_binding("+", ImageZoomIn, svg, cx),
+            load_binding("secondary--", ImageZoomOut, svg, cx),
+            load_binding("secondary-_", ImageZoomOut, svg, cx),
+            load_binding("-", ImageZoomOut, svg, cx),
+        ]);
+        bindings.push(load_binding(back, EditorNavigateBack, svg, cx));
+        bindings.push(load_binding(forward, EditorNavigateForward, svg, cx));
+    }
     // The code editor's line commands, for the same tie: ⌘/ is the shortcut
     // sheet, ⌘↵ fullscreen, ⌘⇧↵ maximize and ⌥↑/⌥↓ pane focus off macOS, all
     // context-free. Bound on `CodeEditor`, which only a multi-line code

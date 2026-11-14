@@ -1851,6 +1851,15 @@ pub fn translate_en(key: L10nKey) -> &'static str {
         L10nKey::EditorImageReadOnly => "Read-only",
         L10nKey::EditorImageUndecodable => "This file could not be decoded as an image",
         L10nKey::EditorImagePixelSize => "{width} × {height}",
+        L10nKey::EditorSvgPreview => "Preview",
+        L10nKey::EditorSvgShowPreview => "Show preview",
+        L10nKey::EditorSvgShowSource => "Show source",
+        L10nKey::EditorSvgRendering => "Rendering preview",
+        L10nKey::EditorSvgPreviewFailed => "Preview failed",
+        L10nKey::EditorSvgInvalid => "SVG source could not be parsed",
+        L10nKey::EditorSvgLimit => {
+            "SVG exceeds the preview’s 8192-pixel edge or 16-million-pixel budget"
+        }
         L10nKey::EditorTableCommands => "Table…",
         L10nKey::MarkdownCopyAsMarkdown => "Copy as Markdown",
         L10nKey::MarkdownTurnInto => "Turn into",

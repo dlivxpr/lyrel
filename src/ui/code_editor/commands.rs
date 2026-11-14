@@ -796,13 +796,11 @@ impl LyrelApp {
         } else {
             selected
         };
-        if matches!(command, Command::Trim)
-            && let Some(view) = input.markdown()
-        {
+        if matches!(command, Command::Trim) && text_input.is_source() {
             // Keep each untouched terminator; one encompassing replacement
             // would turn mixed endings into the document's preferred ending.
             let edits = trailing_whitespace_edits(&text, &selected);
-            view.update(cx, |view, cx| view.replace_ranges(edits, cx));
+            text_input.replace_ranges(edits, cx);
             return true;
         }
         let Some(edit) = plan(&text, selected.clone(), language, tab_size, command) else {
@@ -815,12 +813,12 @@ impl LyrelApp {
                 state.set_selected_range(edit.range, cx);
                 state.replace(edit.replacement, window, cx);
             });
-        } else if let Some(view) = input.markdown().filter(|_| {
-            matches!(
+        } else if text_input.is_source()
+            && matches!(
                 command,
                 Command::MoveUp | Command::MoveDown | Command::CopyUp | Command::CopyDown
             )
-        }) {
+        {
             let selected_lines = whole_lines(&text, &selected);
             let lines = match command {
                 Command::MoveUp => vec![
@@ -832,22 +830,18 @@ impl LyrelApp {
                 }
                 _ => vec![selected_lines.clone()],
             };
-            view.update(cx, |view, cx| {
-                view.replace_lines(
-                    edit.range,
-                    lines,
-                    matches!(command, Command::CopyDown) && !text[selected_lines].ends_with('\n'),
-                    edit.replacement.ends_with('\n'),
-                    cx,
-                )
-            });
+            text_input.replace_lines(
+                edit.range,
+                lines,
+                matches!(command, Command::CopyDown) && !text[selected_lines].ends_with('\n'),
+                edit.replacement.ends_with('\n'),
+                cx,
+            );
         } else {
             text_input.replace(edit.range, &edit.replacement, window, cx);
         }
-        if let Some(view) = input.markdown() {
-            view.update(cx, |view, cx| {
-                view.set_history_selection(selected, edit.selection.clone(), cx)
-            });
+        if text_input.is_source() {
+            text_input.set_history_selection(selected, edit.selection.clone(), cx);
         }
         text_input.set_selected_range(edit.selection, cx);
         true
