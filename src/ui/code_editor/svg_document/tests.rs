@@ -179,7 +179,8 @@ fn save(app: &Entity<LyrelApp>, cx: &mut VisualTestContext) {
 fn width_range(app: &Entity<LyrelApp>, cx: &VisualTestContext) -> std::ops::Range<usize> {
     let text = source_text(app, cx);
     let at = text.find("width=\"").expect("fixture width");
-    let close = text[at..].find('"').expect("closing quote") + at + 1;
+    let value = at + "width=\"".len();
+    let close = text[value..].find('"').expect("closing quote") + value + 1;
     at..close
 }
 
@@ -301,7 +302,7 @@ fn source_edit_preview_and_save_keep_one_document_and_exact_bytes(tcx: &mut Test
     );
 
     // Undo/redo are the same shared history; the preview follows both.
-    cx.simulate_keystrokes("secondary-z");
+    cx.update(|window, cx| window.press(&secondary("z"), cx));
     wait_preview(&app, &mut cx, (40., 30.));
     assert_eq!(
         source_text(&app, &cx),
@@ -311,7 +312,7 @@ fn source_edit_preview_and_save_keep_one_document_and_exact_bytes(tcx: &mut Test
             .trim_start_matches('\u{feff}')
             .to_owned()
     );
-    cx.simulate_keystrokes("secondary-shift-z");
+    cx.update(|window, cx| window.press(&secondary("shift-z"), cx));
     wait_preview(&app, &mut cx, (64., 30.));
 
     // Save and reopen through the owning Host. Reopen is independent of the
@@ -435,7 +436,9 @@ fn split_groups_share_document_history_and_show_both_sides(tcx: &mut TestAppCont
         cx.notify();
     });
     settle(&mut cx);
-    cx.simulate_keystrokes("secondary-z");
+    cx.update(|window, cx| {
+        window.press(&secondary("z"), cx);
+    });
     wait_preview(&app, &mut cx, (40., 30.));
     assert_eq!(
         rendered_revision(&app, &cx),
@@ -723,27 +726,27 @@ fn a_late_preview_never_overwrites_a_newer_revision(tcx: &mut TestAppContext) {
     let host: SharedHost = FileHost::new(HostId(288));
     let (app, mut cx, _streams) = harness_with_tabs(tcx, 1);
 
-    // Pause the very first preview parse, then edit before it finishes. The
-    // second revision must win even when the first result arrives last.
+    // Pause an admitted parse, then make multiple edits while it is in flight.
+    // No stale revision may be published; pending edits collapse to the latest.
     let (release, entered) = test_support::pause_next_render();
     open(&app, &mut cx, host, &path);
     until(&mut cx, |_| {
         entered.load(std::sync::atomic::Ordering::SeqCst)
     });
     let range = width_range(&app, &cx);
+    type_source(&app, &mut cx, range, "width=\"56\"");
+    let range = width_range(&app, &cx);
     type_source(&app, &mut cx, range, "width=\"64\"");
-    wait_preview(&app, &mut cx, (64., 30.));
     let revision = source_document(&app, &cx).read_with(&cx, |document, _| document.revision());
-    assert_eq!(rendered_revision(&app, &cx), Some(revision));
+    assert!(source_text(&app, &cx).contains("width=\"64\""));
+    assert_eq!(rendered_revision(&app, &cx), None);
 
     release.send(()).unwrap();
-    settle(&mut cx);
-    settle(&mut cx);
-    assert_eq!(
-        preview_size(&app, &cx),
-        Some((64., 30.)),
-        "the stale 40×30 result was discarded"
-    );
+    until(&mut cx, |cx| {
+        let rendered = rendered_revision(&app, cx);
+        assert!(rendered.is_none() || rendered == Some(revision));
+        preview_size(&app, cx) == Some((64., 30.))
+    });
     assert_eq!(rendered_revision(&app, &cx), Some(revision));
 
     // A later ordinary edit still installs normally.

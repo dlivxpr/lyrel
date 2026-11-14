@@ -5541,6 +5541,11 @@ impl EntityInputHandler for EditorState {
         self.last_replaced =
             (range.start < range.end).then(|| self.content[range.clone()].to_string());
         self.record_edit(&range, new_text);
+        // A typed selection replacement starts a fresh transaction, but the
+        // following adjacent graphemes belong to that same typing run.
+        if !range.is_empty() && !new_text.is_empty() && self.last_edit_keystroke {
+            self.last_edit = EditKind::Insert(range.start + new_text.len());
+        }
         self.replace_source(range.clone(), new_text, cx);
         self.retired_composition = completing_composition;
         let caret = range.start + new_text.len() - new_text.matches("\r\n").count();

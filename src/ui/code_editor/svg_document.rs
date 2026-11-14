@@ -16,9 +16,13 @@ use gpui_kit::component::{
 use gpui_kit::prelude::*;
 use gpui_kit::{
     AnyElement, App, Context, Entity, FocusHandle, Focusable, Pixels, Point, Render, ScrollHandle,
-    SharedString, Size, Subscription, Window, div, px, rems,
+    SharedString, Size, Subscription, TestSupportExt as _, Window, div, px, rems,
 };
 use lyrel_markdown_editor::{Document, DocumentEvent, EditorState as SourceEditor};
+use std::sync::{
+    Arc,
+    atomic::{AtomicBool, Ordering},
+};
 
 use super::image_document::{ImageActualSize, ImageFit, ImageZoomIn, ImageZoomOut};
 use super::markdown::images::{self, Bitmap};
@@ -78,7 +82,16 @@ pub(crate) struct SvgDocument {
     /// 最近一次真正安装的 revision；测试与状态行都读它。
     rendered_revision: Option<u64>,
     generation: u64,
+    parse_running: bool,
+    cancel: Arc<AtomicBool>,
+    _render: Option<gpui_kit::Task<()>>,
     _document: Subscription,
+}
+
+impl Drop for SvgDocument {
+    fn drop(&mut self) {
+        self.cancel.store(true, Ordering::Release);
+    }
 }
 
 impl SvgDocument {
@@ -92,6 +105,9 @@ impl SvgDocument {
             rendering: false,
             rendered_revision: None,
             generation: 0,
+            parse_running: false,
+            cancel: Arc::default(),
+            _render: None,
             _document: watch,
         };
         this.invalidate(cx);
@@ -116,36 +132,60 @@ impl SvgDocument {
     }
 
     fn invalidate(&mut self, cx: &mut Context<Self>) {
+        self.cancel.store(true, Ordering::Release);
         self.generation = self.generation.wrapping_add(1);
         self.rendering = true;
-        self.schedule(cx);
+        if !self.parse_running {
+            self.schedule(cx);
+        }
         cx.notify();
     }
 
-    /// Captures this revision's source now, parses it off the UI thread, and
-    /// installs the result only if the document still is the same identity and
-    /// no newer request has superseded it.
+    /// 合并等待中的修订；每份文档最多一个在途解析，完成后只处理最新修订。
+    /// debounce 后才取得共享快照，不在每次输入时复制全文。
     fn schedule(&mut self, cx: &mut Context<Self>) {
         let revision = self.document.read(cx).revision();
-        let source = self.document.read(cx).source().to_owned();
         let identity = self.document.entity_id();
         let generation = self.generation;
-        cx.spawn(async move |this, cx| {
+        self._render = Some(cx.spawn(async move |this, cx| {
             cx.background_executor().timer(RENDER_DEBOUNCE).await;
-            let result = crate::ui::host_ops::off_thread(move || {
-                #[cfg(any(test, feature = "native-markdown-tests"))]
-                test_support::block_next_render();
-                images::decode_svg_source(&source)
-            })
-            .await;
-            let Some(result) = result else {
+            let snapshot = this
+                .update(cx, |this, cx| {
+                    let document = this.document.read(cx);
+                    if this.generation != generation || document.revision() != revision {
+                        return None;
+                    }
+                    let snapshot = document.snapshot();
+                    this.parse_running = true;
+                    this.cancel.store(false, Ordering::Release);
+                    Some((snapshot, this.cancel.clone()))
+                })
+                .ok()
+                .flatten();
+            let Some((snapshot, cancel)) = snapshot else {
                 return;
             };
+            #[cfg(any(test, feature = "native-markdown-tests"))]
+            let gate = test_support::take_next_render();
+            let result = crate::ui::host_ops::off_thread(move || {
+                if cancel.load(Ordering::Acquire) {
+                    return None;
+                }
+                #[cfg(any(test, feature = "native-markdown-tests"))]
+                if let Some(gate) = gate {
+                    gate.block();
+                }
+                Some(images::decode_svg_source(snapshot.text()))
+            })
+            .await
+            .flatten()
+            .unwrap_or_else(|| Err(std::io::Error::other(t(L10nKey::EditorSvgPreviewFailed))));
             let _ = this.update(cx, |this, cx| {
+                this.parse_running = false;
+                this._render = None;
                 this.install(identity, revision, generation, result, cx);
             });
-        })
-        .detach();
+        }));
     }
 
     fn install(
@@ -161,6 +201,7 @@ impl SvgDocument {
             || self.generation != generation
         {
             // A late result describes a source the document no longer holds.
+            self.schedule(cx);
             return;
         }
         self.rendering = false;
@@ -598,6 +639,7 @@ impl SvgView {
                 row.child(
                     div()
                         .id(("svg-preview-failed", entity))
+                        .test_support()
                         .flex_none()
                         .text_xs()
                         .text_color(warning)
@@ -660,6 +702,7 @@ impl SvgView {
             .child(
                 div()
                     .id(("svg-preview", cx.entity_id()))
+                    .test_support()
                     .size_full()
                     .overflow_scroll()
                     .track_scroll(&self.scroll)
@@ -691,6 +734,7 @@ fn failed_preview(
     };
     v_flex()
         .id(("svg-preview-error", entity))
+        .test_support()
         .flex_1()
         .min_w_0()
         .min_h_0()
@@ -844,13 +888,19 @@ pub(super) fn menu_entries(
 #[cfg(any(test, feature = "native-markdown-tests"))]
 pub(crate) mod test_support {
     use std::sync::{
-        Arc, Mutex,
+        Arc,
         atomic::{AtomicBool, Ordering},
-        mpsc,
     };
-    use std::time::Duration;
+    use std::{cell::RefCell, sync::mpsc, time::Duration};
 
-    static GATE: Mutex<Option<(mpsc::Receiver<()>, Arc<AtomicBool>)>> = Mutex::new(None);
+    pub(super) struct RenderGate {
+        receiver: mpsc::Receiver<()>,
+        entered: Arc<AtomicBool>,
+    }
+
+    thread_local! {
+        static GATE: RefCell<Option<RenderGate>> = const { RefCell::new(None) };
+    }
 
     /// Pauses the next scheduled preview render before it parses. The returned
     /// sender releases it; the flag reports that the blocking worker has
@@ -858,15 +908,23 @@ pub(crate) mod test_support {
     pub(crate) fn pause_next_render() -> (mpsc::Sender<()>, Arc<AtomicBool>) {
         let (tx, rx) = mpsc::channel();
         let entered = Arc::new(AtomicBool::new(false));
-        *GATE.lock().unwrap() = Some((rx, entered.clone()));
+        GATE.with_borrow_mut(|gate| {
+            *gate = Some(RenderGate {
+                receiver: rx,
+                entered: entered.clone(),
+            })
+        });
         (tx, entered)
     }
 
-    pub(super) fn block_next_render() {
-        let gate = GATE.lock().unwrap().take();
-        if let Some((rx, entered)) = gate {
-            entered.store(true, Ordering::SeqCst);
-            let _ = rx.recv_timeout(Duration::from_secs(20));
+    pub(super) fn take_next_render() -> Option<RenderGate> {
+        GATE.with_borrow_mut(Option::take)
+    }
+
+    impl RenderGate {
+        pub(super) fn block(self) {
+            self.entered.store(true, Ordering::SeqCst);
+            let _ = self.receiver.recv_timeout(Duration::from_secs(20));
         }
     }
 }

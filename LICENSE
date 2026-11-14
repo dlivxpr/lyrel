@@ -13145,3 +13145,11 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
+
+Glim-derived SVG intrinsic dimensions
+====================================
+
+适用组件：`src/ui/code_editor/markdown/images.rs` 中独立 SVG 文档的默认视口与绝对单位换算。
+来源：https://github.com/glimapp/glim @ fc2183f2c5f27ddfcdc4badbab6d83d50616831b，`crates/glim-services/src/svg_preview.rs`。
+Copyright (c) 2026 Glim contributors。适用本附录既有的 Glim MIT 许可正文；原始摘要、本地适配与未导入部分见 `src/ui/code_editor/svg_document/UPSTREAM.toml`。
+

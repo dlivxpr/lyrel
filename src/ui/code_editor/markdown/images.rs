@@ -867,7 +867,7 @@ fn decode(bytes: &[u8]) -> io::Result<(image::RgbaImage, &'static str)> {
     let (options, blocked) = svg_options(100., 100.);
     let tree = resvg::usvg::Tree::from_data(bytes, &options)
         .map_err(|error| invalid(error.to_string()))?;
-    let (rgba, ..) = rasterize_svg(&tree, &blocked, L10nKey::MarkdownImageLimit)?;
+    let (rgba, ..) = rasterize_svg(&tree, &blocked, L10nKey::MarkdownImageLimit, None)?;
     Ok((rgba, "svg"))
 }
 
@@ -890,14 +890,60 @@ pub(crate) struct SvgRaster {
 /// file, network and data images cannot be read.
 pub(crate) fn decode_svg_source(source: &str) -> io::Result<SvgRaster> {
     let (options, blocked) = svg_options(300., 150.);
-    let tree = resvg::usvg::Tree::from_str(source, &options)
+    let xml = resvg::usvg::roxmltree::Document::parse_with_options(
+        source,
+        resvg::usvg::roxmltree::ParsingOptions {
+            allow_dtd: true,
+            ..Default::default()
+        },
+    )
+    .map_err(|error| invalid(ImageError::Svg(error.to_string())))?;
+    let root = xml.root_element();
+    let viewport = if root.attribute("viewBox").is_none() {
+        // Glim 的独立文档默认视口：不接受 usvg 随后按内容 bbox 收缩尺寸。
+        let width = root
+            .attribute("width")
+            .and_then(|value| svg_length(value, 300.))
+            .unwrap_or(300.);
+        let height = root
+            .attribute("height")
+            .and_then(|value| svg_length(value, 150.))
+            .unwrap_or(150.);
+        Some(
+            resvg::usvg::Size::from_wh(width, height)
+                .ok_or_else(|| invalid(ImageError::Localized(L10nKey::EditorSvgLimit)))?,
+        )
+    } else {
+        None
+    };
+    let tree = resvg::usvg::Tree::from_xmltree(&xml, &options)
         .map_err(|error| invalid(ImageError::Svg(error.to_string())))?;
-    let (rgba, width, height) = rasterize_svg(&tree, &blocked, L10nKey::EditorSvgLimit)?;
+    let (rgba, width, height) = rasterize_svg(&tree, &blocked, L10nKey::EditorSvgLimit, viewport)?;
     Ok(SvgRaster {
         rgba,
         width,
         height,
     })
+}
+
+// Glim MIT absolute_length 规则的本地适配，来源见 svg_document/UPSTREAM.toml。
+fn svg_length(value: &str, default: f32) -> Option<f32> {
+    let value = value.trim();
+    let (number, factor) = [
+        ("px", 1.),
+        ("pt", 96. / 72.),
+        ("pc", 16.),
+        ("in", 96.),
+        ("cm", 96. / 2.54),
+        ("mm", 96. / 25.4),
+        ("q", 96. / 101.6),
+        ("%", default / 100.),
+    ]
+    .into_iter()
+    .find_map(|(suffix, factor)| value.strip_suffix(suffix).map(|number| (number, factor)))
+    .unwrap_or((value, 1.));
+    let pixels = number.trim().parse::<f32>().ok()? * factor;
+    (pixels.is_finite() && pixels > 0.).then_some(pixels)
 }
 
 /// Builds parser options that cannot reach the filesystem or the network.
@@ -947,13 +993,14 @@ fn rasterize_svg(
     tree: &resvg::usvg::Tree,
     blocked: &std::sync::atomic::AtomicBool,
     budget: L10nKey,
+    viewport: Option<resvg::usvg::Size>,
 ) -> io::Result<(image::RgbaImage, f32, f32)> {
     if blocked.load(std::sync::atomic::Ordering::Relaxed) {
         return Err(invalid(ImageError::Localized(
             L10nKey::MarkdownImageExternalReference,
         )));
     }
-    let logical = tree.size();
+    let logical = viewport.unwrap_or_else(|| tree.size());
     if !(logical.width().is_finite()
         && logical.height().is_finite()
         && logical.width() > 0.
