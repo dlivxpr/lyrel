@@ -19,15 +19,14 @@ use gpui_kit::component::{
 };
 use gpui_kit::prelude::*;
 use gpui_kit::{
-    App, Context, Entity, FocusHandle, Focusable, Pixels, Point, Render, RenderImage, ScrollHandle,
+    App, Context, Entity, FocusHandle, Focusable, Pixels, Point, Render, ScrollHandle,
     SharedString, Size, Subscription, Task, TestSupportExt as _, Window, div, px, rems,
 };
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use super::image_format::ImageFormat;
-use super::markdown::images::{self, Bitmap};
+use super::markdown::images::{self, Bitmap, ImageFormat};
 use crate::ui::i18n::{L10nKey, t, t_fmt};
 
 mod gif;
@@ -70,14 +69,15 @@ const TIFF_CONCURRENT_DECODES: usize = 2;
 pub(super) type ImageOutcome = Result<DecodedImage, SharedString>;
 
 /// 已解码、尚未装进文档的内容。字节来自 owning Host，解码在 Host 线程
-/// 或后台线程完成；这里只搬运结果。
+/// 或后台线程完成；像素仍是没有 GPUI 纹理的 RGBA，纹理租约在 UI 线程建立。
 pub(super) enum DecodedImage {
     Static {
-        image: Arc<RenderImage>,
+        rgba: image::RgbaImage,
+        format: ImageFormat,
     },
     Gif {
         player: GifPlayback,
-        first: Arc<RenderImage>,
+        first: image::RgbaImage,
         delay: Duration,
     },
     Tiff {
@@ -103,20 +103,19 @@ pub(super) fn decode_loaded(bytes: Vec<u8>, format: ImageFormat) -> ImageOutcome
                 .ok_or_else(|| SharedString::from(t(L10nKey::EditorImageAnimationEmpty)))?;
             Ok(DecodedImage::Gif {
                 player,
-                first: images::render(rgba),
+                first: rgba,
                 delay,
             })
         }
         ImageFormat::Tiff => TiffPages::open(bytes)
             .map(|pages| DecodedImage::Tiff { pages })
             .map_err(|error| SharedString::from(error.to_string())),
-        static_format => {
+        _ => {
             let (rgba, format) = images::decode_static(&bytes)
                 .map_err(|error| SharedString::from(error.to_string()))?;
-            debug_assert_eq!(format, static_format);
-            Ok(DecodedImage::Static {
-                image: images::render(rgba),
-            })
+            // The decoder names the bytes it actually recognised; the name
+            // claimed by the opener only labels a failure.
+            Ok(DecodedImage::Static { rgba, format })
         }
     }
 }
@@ -217,19 +216,19 @@ impl ImageDocument {
 
     fn set(&mut self, outcome: ImageOutcome, cx: &mut Context<Self>) {
         match outcome {
-            Ok(DecodedImage::Static { image }) => {
-                self.format = self.claimed;
-                self.media = Media::Static(ImageContent::Ready(images::bitmap_render(image, cx)));
+            Ok(DecodedImage::Static { rgba, format }) => {
+                self.format = Some(format);
+                self.media = Media::Static(ImageContent::Ready(images::bitmap(rgba, cx)));
             }
             Ok(DecodedImage::Gif {
                 player,
                 first,
                 delay,
             }) => {
-                self.format = self.claimed.or(Some(ImageFormat::Gif));
+                self.format = Some(ImageFormat::Gif);
                 let generation = self.revision;
                 self.media = Media::Gif(GifRun {
-                    frame: ImageContent::Ready(images::bitmap_render(first, cx)),
+                    frame: ImageContent::Ready(images::bitmap(first, cx)),
                     player: Arc::new(Mutex::new(player)),
                     next_delay: delay,
                     visible: false,
@@ -240,7 +239,7 @@ impl ImageDocument {
                 self.start_animation(cx);
             }
             Ok(DecodedImage::Tiff { pages }) => {
-                self.format = self.claimed.or(Some(ImageFormat::Tiff));
+                self.format = Some(ImageFormat::Tiff);
                 let generation = self.revision;
                 self.media = Media::Tiff(TiffRun {
                     pages,
@@ -285,6 +284,11 @@ impl ImageDocument {
         self.reloading
     }
 
+    /// Bumped when a fresh read replaces the document's content.
+    pub(crate) fn revision(&self) -> u64 {
+        self.revision
+    }
+
     /// 某个 presentation 该显示的页；静态与 GIF 忽略页号。
     fn content_for_page(&self, page: usize) -> Option<&ImageContent> {
         match &self.media {
@@ -324,9 +328,7 @@ impl ImageDocument {
         let pages = run.pages.clone();
         let generation = run.generation;
         cx.spawn(async move |this, cx| {
-            let decoded = cx
-                .background_spawn(async move { pages.decode(page).map(tiff::render_page) })
-                .await;
+            let decoded = cx.background_spawn(async move { pages.decode(page) }).await;
             let _ = this.update(cx, |document, cx| {
                 document.page_install(generation, page, decoded, cx);
             });
@@ -338,7 +340,7 @@ impl ImageDocument {
         &mut self,
         generation: u64,
         page: usize,
-        decoded: Result<Arc<RenderImage>, tiff::TiffPageError>,
+        decoded: Result<image::RgbaImage, tiff::TiffPageError>,
         cx: &mut Context<Self>,
     ) {
         let Media::Tiff(run) = &mut self.media else {
@@ -353,7 +355,7 @@ impl ImageDocument {
             return;
         }
         let content = match decoded {
-            Ok(image) => ImageContent::Ready(images::bitmap_render(image, cx)),
+            Ok(image) => ImageContent::Ready(images::bitmap(image, cx)),
             Err(error) => ImageContent::Failed(error.to_string().into()),
         };
         run.cache.insert(page, content);
@@ -407,9 +409,7 @@ impl ImageDocument {
                         let mut player = player
                             .lock()
                             .unwrap_or_else(|poisoned| poisoned.into_inner());
-                        player
-                            .next_frame()
-                            .map(|frame| frame.map(|(rgba, delay)| (images::render(rgba), delay)))
+                        player.next_frame()
                     })
                     .await;
                 if this
@@ -444,7 +444,7 @@ impl ImageDocument {
     fn gif_install(
         &mut self,
         generation: u64,
-        decoded: Result<Option<(Arc<RenderImage>, Duration)>, gif::GifError>,
+        decoded: Result<Option<(image::RgbaImage, Duration)>, gif::GifError>,
         cx: &mut Context<Self>,
     ) {
         let Media::Gif(run) = &mut self.media else {
@@ -455,7 +455,7 @@ impl ImageDocument {
         }
         match decoded {
             Ok(Some((image, delay))) => {
-                run.frame = ImageContent::Ready(images::bitmap_render(image, cx));
+                run.frame = ImageContent::Ready(images::bitmap(image, cx));
                 run.next_delay = delay;
             }
             // 有限循环播完：保持最后一帧，不再请求解码。
@@ -486,6 +486,8 @@ pub(crate) struct ImageView {
     page: usize,
     /// 这个 presentation 正在画的页/帧；页解码迟到时不会被替换。
     shown: ImageContent,
+    /// 与 `shown` 对应的文档读取代次；重新读取后旧图不能继续冒充文件。
+    revision: u64,
     _observe: Subscription,
 }
 
@@ -499,7 +501,7 @@ impl ImageView {
         page: usize,
         cx: &mut Context<Self>,
     ) -> Self {
-        let (page, shown, multipage) = {
+        let (page, shown, multipage, revision) = {
             let document = document.read(cx);
             let count = document.page_count();
             let page = count.map_or(0, |count| page.min(count.saturating_sub(1)));
@@ -510,6 +512,7 @@ impl ImageView {
                     .cloned()
                     .unwrap_or(ImageContent::Loading),
                 count.is_some(),
+                document.revision(),
             )
         };
         if multipage {
@@ -525,6 +528,7 @@ impl ImageView {
             drawn: 1.,
             page,
             shown,
+            revision,
             _observe: observe,
         }
     }
@@ -611,34 +615,57 @@ impl ImageView {
         }
         self.page = page;
         // 新页的尺寸可能不同：不沿用上一页的平移偏移，缩放模式保留。
-        self.shown = ImageContent::Loading;
+        // 已缓存的页直接显示，否则明确进入 Loading 并请求解码。
+        self.shown = self
+            .document
+            .read(cx)
+            .content_for_page(page)
+            .cloned()
+            .unwrap_or(ImageContent::Loading);
         self.scroll.set_offset(Point::default());
-        self.document
-            .update(cx, |document, cx| document.request_page(page, cx));
+        if matches!(self.shown, ImageContent::Loading) {
+            self.document
+                .update(cx, |document, cx| document.request_page(page, cx));
+        }
         cx.notify();
     }
 
     fn sync(&mut self, cx: &mut Context<Self>) {
-        let (count, content) = {
+        let (count, revision, page, content) = {
             let document = self.document.read(cx);
+            let count = document.page_count();
+            let page = count.map_or(self.page, |count| self.page.min(count.saturating_sub(1)));
             (
-                document.page_count(),
-                document.content_for_page(self.page).cloned(),
+                count,
+                document.revision(),
+                page,
+                document.content_for_page(page).cloned(),
             )
         };
         let mut changed = false;
-        if let Some(count) = count
-            && self.page >= count
-        {
-            self.page = count.saturating_sub(1);
+        if page != self.page {
+            self.page = page;
             self.scroll.set_offset(Point::default());
             changed = true;
         }
-        let next = content.unwrap_or(ImageContent::Loading);
-        if !self.shown.same(&next) {
-            self.shown = next;
-            changed = true;
+        if revision != self.revision {
+            // A fresh read owns the document now; whatever was on screen
+            // belonged to the old bytes.
+            self.revision = revision;
+            let next = content.clone().unwrap_or(ImageContent::Loading);
+            if !self.shown.same(&next) {
+                self.shown = next;
+                changed = true;
+            }
+        } else if let Some(next) = content {
+            if !self.shown.same(&next) {
+                self.shown = next;
+                changed = true;
+            }
         }
+        // A missing cache entry on the same page is the document's eviction,
+        // not disappearance: this view still owns its bitmap lease, and the
+        // next page change or reload will ask for bytes again.
         if count.is_some() && matches!(self.shown, ImageContent::Loading) {
             self.document
                 .update(cx, |document, cx| document.request_page(self.page, cx));

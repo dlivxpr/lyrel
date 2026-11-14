@@ -1859,6 +1859,9 @@ pub fn translate_en(key: L10nKey) -> &'static str {
         L10nKey::EditorImagePageUnsupported => {
             "This page uses a TIFF sample layout Lyrel cannot show"
         }
+        L10nKey::EditorImagePageDimensionsLimit => {
+            "Page size {width} × {height} exceeds the {limit}-pixel edge budget"
+        }
         L10nKey::EditorImagePageBytesLimit => {
             "Page decoding needs {required} MiB, over the {limit} MiB page budget"
         }

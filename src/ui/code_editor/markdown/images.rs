@@ -1,5 +1,4 @@
 //! 图片 I/O、权限和异步生命周期只归工作台；editor 仅消费 bitmap 和发出意图。
-use super::super::image_format::ImageFormat;
 use super::super::*;
 use super::links::{self, Target};
 use gpui_kit::component::{WindowExt as _, button::Button};
@@ -11,7 +10,6 @@ use lyrel_markdown_editor::{
 use std::{cell::RefCell, io, rc::Rc, time::Duration};
 
 pub(crate) const MAX_BYTES: u64 = 32 * 1024 * 1024;
-/// 一张图上屏的像素上限；TIFF 单页解码沿用同一上限。
 pub(crate) const MAX_PIXELS: u64 = 16 * 1024 * 1024;
 const CACHE_BYTES: u64 = 256 * 1024 * 1024;
 
@@ -66,6 +64,8 @@ pub(crate) struct ImageHost {
     scanned_revision: Option<u64>,
     images: Images,
     states: HashMap<String, State>,
+    transfers: HashMap<String, (u64, lyrel_core::host::transfer::CancelToken)>,
+    progress: HashMap<String, (u64, u64)>,
     views: HashMap<EntityId, (WeakEntity<MarkdownEditor>, Subscription)>,
     hover: Option<(EntityId, SharedString, gpui_kit::Bounds<gpui_kit::Pixels>)>,
     notice: Option<SharedString>,
@@ -85,8 +85,11 @@ impl ImageHost {
         let document = editor.read(cx).document().clone();
         let subscription =
             cx.subscribe(&document, |this, _, _: &DocumentEvent, cx| this.refresh(cx));
-        cx.on_release(|this, _| this.images.borrow_mut().clear())
-            .detach();
+        cx.on_release(|this, _| {
+            this.cancel_transfers();
+            this.images.borrow_mut().clear();
+        })
+        .detach();
         Self {
             app,
             id,
@@ -98,6 +101,8 @@ impl ImageHost {
             scanned_revision: None,
             images: Rc::new(RefCell::new(HashMap::new())),
             states: HashMap::new(),
+            transfers: HashMap::new(),
+            progress: HashMap::new(),
             views: HashMap::new(),
             hover: None,
             refresh_scheduled: false,
@@ -165,12 +170,19 @@ impl ImageHost {
             host.id() == capture.host.id() && path.as_ref() == Some(&capture.path)
         }) && self.document.read(cx).revision() == capture.revision
     }
-    fn notify(&self, cx: &mut Context<Self>) {
+    fn notify(&mut self, cx: &mut Context<Self>) {
         for (editor, _) in self.views.values() {
             let _ = editor.update(cx, |_, cx| cx.notify());
         }
         let _ = self.app.update(cx, |_, cx| cx.notify());
         cx.notify();
+    }
+    /// Stops every in-flight picture transfer and drops its buffers.
+    fn cancel_transfers(&mut self) {
+        for (_, token) in std::mem::take(&mut self.transfers).into_values() {
+            token.cancel();
+        }
+        self.progress.clear();
     }
     fn message(&mut self, message: impl Into<SharedString>, cx: &mut Context<Self>) {
         let message = message.into();
@@ -251,6 +263,9 @@ impl ImageHost {
     fn refresh(&mut self, cx: &mut Context<Self>) {
         self.views.retain(|_, (view, _)| view.upgrade().is_some());
         let Some((host, path)) = self.identity(cx) else {
+            // The document this preview belonged to is gone; a read still in
+            // flight must stop instead of finishing for nobody.
+            self.cancel_transfers();
             return;
         };
         let signature = path.as_ref().map(|path| (host.id(), path.clone()));
@@ -265,6 +280,7 @@ impl ImageHost {
         self.scanned_revision = Some(revision);
         self.hover = None;
         if changed_identity {
+            self.cancel_transfers();
             self.signature = signature;
             self.generation = self.generation.wrapping_add(1);
             self.images.borrow_mut().clear();
@@ -289,6 +305,18 @@ impl ImageHost {
         };
         let changed = sources != self.sources || changed_identity;
         self.sources = sources;
+        let stale: Vec<String> = self
+            .transfers
+            .keys()
+            .filter(|source| !self.sources.contains(*source))
+            .cloned()
+            .collect();
+        for source in stale {
+            if let Some((_, token)) = self.transfers.remove(&source) {
+                token.cancel();
+            }
+            self.progress.remove(&source);
+        }
         self.states
             .retain(|source, _| self.sources.contains(source));
         self.images
@@ -337,18 +365,58 @@ impl ImageHost {
             .clone();
         let generation = self.generation;
         let signature = self.signature.clone();
+        let cancel = lyrel_core::host::transfer::CancelToken::default();
+        if let Some((_, superseded)) = self
+            .transfers
+            .insert(source.clone(), (generation, cancel.clone()))
+        {
+            superseded.cancel();
+        }
+        self.progress.remove(&source);
         self.states.insert(source.clone(), State::Loading);
+        // A blocking Host read cannot call back into GPUI, so it reports
+        // progress through a channel drained by a UI-side task.
+        let (progress_tx, progress_rx) = smol::channel::unbounded::<(u64, u64)>();
+        let progress_source = source.clone();
+        cx.spawn(async move |this, cx| {
+            while let Ok((read, total)) = progress_rx.recv().await {
+                let live = this
+                    .update(cx, |this, cx| {
+                        if this
+                            .transfers
+                            .get(&progress_source)
+                            .is_some_and(|(current, _)| *current == generation)
+                        {
+                            this.progress.insert(progress_source.clone(), (read, total));
+                            this.notify(cx);
+                        }
+                    })
+                    .is_ok();
+                if !live {
+                    break;
+                }
+            }
+        })
+        .detach();
+        let worker_cancel = cancel.clone();
         HostOps::run(
             host,
             cx,
             move |h| -> io::Result<Arc<RenderImage>> {
                 let bytes = match target {
-                    Resource::File(path) => h.read_file(&path, MAX_BYTES)?,
+                    Resource::File(path) => {
+                        let mut report = |update: lyrel_core::host::read::ReadProgress| {
+                            let _ = progress_tx.send_blocking((update.read, update.total));
+                        };
+                        read_bytes(h, &path, MAX_BYTES, &worker_cancel, &mut report)?.1
+                    }
                     Resource::External(url) => fetch(&url, proxy.as_deref())?,
                 };
                 decode(&bytes).map(|(rgba, _)| render(rgba))
             },
             move |this, result, cx| {
+                this.transfers.remove(&source);
+                this.progress.remove(&source);
                 let current = this.identity(cx).and_then(|(h, p)| p.map(|p| (h.id(), p)));
                 if this.generation != generation
                     || this.signature != signature
@@ -380,6 +448,11 @@ impl ImageHost {
                                 .insert(source.clone(), Bitmap::new(image, cx));
                             this.states.insert(source, State::Ready);
                         }
+                    }
+                    Err(error) if error.kind() == io::ErrorKind::Interrupted => {
+                        // The document, identity or source that asked for this
+                        // picture is gone; leave nothing claiming to be loading.
+                        this.states.remove(&source);
                     }
                     Err(error) => {
                         this.states.insert(source, State::Failed(error.to_string()));
@@ -601,6 +674,125 @@ fn invalid(message: impl Into<Box<dyn std::error::Error + Send + Sync>>) -> io::
     io::Error::new(io::ErrorKind::InvalidData, message)
 }
 
+/// The image formats a workbench document can open.
+///
+/// The five static raster formats share [`decode_static`]; GIF animation and
+/// multi-page TIFF have their own frame/page decoders in `image_document` and
+/// are never shown as a static first frame. Markdown preview still resolves
+/// only the static subset through [`decode_static`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ImageFormat {
+    Png,
+    Jpeg,
+    WebP,
+    Bmp,
+    Ico,
+    Gif,
+    Tiff,
+}
+
+impl ImageFormat {
+    pub(crate) fn from_extension(path: &Path) -> Option<Self> {
+        let extension = path.extension()?.to_str()?.to_ascii_lowercase();
+        Some(match extension.as_str() {
+            "png" => Self::Png,
+            "jpg" | "jpeg" | "jpe" | "jfif" => Self::Jpeg,
+            "webp" => Self::WebP,
+            "bmp" | "dib" => Self::Bmp,
+            "ico" => Self::Ico,
+            "gif" => Self::Gif,
+            "tif" | "tiff" => Self::Tiff,
+            _ => return None,
+        })
+    }
+
+    /// What the first bytes say, for a file whose name claims nothing.
+    ///
+    /// BMP is left out on purpose: `BM` is two ordinary capital letters, so a
+    /// text file opening with them is not evidence enough to take it away
+    /// from the text editor. GIF's `GIF87a`/`GIF89a` and TIFF's `II*\0`/`MM\0*`
+    /// (including BigTIFF) are binary structures and cannot be mistaken for
+    /// ordinary text.
+    pub(crate) fn probe(bytes: &[u8]) -> Option<Self> {
+        if bytes.starts_with(b"\x89PNG\r\n\x1a\n") {
+            return Some(Self::Png);
+        }
+        if bytes.starts_with(&[0xFF, 0xD8, 0xFF]) {
+            return Some(Self::Jpeg);
+        }
+        if bytes.len() >= 12 && &bytes[..4] == b"RIFF" && &bytes[8..12] == b"WEBP" {
+            return Some(Self::WebP);
+        }
+        if bytes.starts_with(&[0x00, 0x00, 0x01, 0x00]) {
+            return Some(Self::Ico);
+        }
+        if bytes.starts_with(b"GIF87a") || bytes.starts_with(b"GIF89a") {
+            return Some(Self::Gif);
+        }
+        if bytes.starts_with(b"II\x2a\x00")
+            || bytes.starts_with(b"MM\x00\x2a")
+            || bytes.starts_with(b"II\x2b\x00")
+            || bytes.starts_with(b"MM\x00\x2b")
+        {
+            return Some(Self::Tiff);
+        }
+        None
+    }
+
+    pub(crate) fn label(self) -> &'static str {
+        match self {
+            Self::Png => "PNG",
+            Self::Jpeg => "JPEG",
+            Self::WebP => "WebP",
+            Self::Bmp => "BMP",
+            Self::Ico => "ICO",
+            Self::Gif => "GIF",
+            Self::Tiff => "TIFF",
+        }
+    }
+}
+
+pub(crate) fn too_large() -> io::Error {
+    invalid(ImageError::Localized(L10nKey::MarkdownImageLimit))
+}
+
+/// Reads one picture's bytes from its owning Host.
+///
+/// The versioned segment session is the real path for a preview: the bytes and
+/// their version stay one object while they travel. A Host that reports
+/// `Unsupported` — an SFTP pane host, or a peer without `host-file-range-v1` —
+/// keeps the previous bounded whole-file read for inputs inside the existing
+/// picture budget; a larger input still fails visibly instead of being read
+/// some other way.
+pub(crate) fn read_bytes(
+    host: &dyn Host,
+    path: &std::path::Path,
+    budget: u64,
+    cancel: &lyrel_core::host::transfer::CancelToken,
+    mut progress: impl FnMut(lyrel_core::host::read::ReadProgress),
+) -> io::Result<(lyrel_core::host::Meta, Vec<u8>)> {
+    match lyrel_core::host::read::read_file_segmented(host, path, budget, cancel, &mut progress) {
+        Ok(outcome) => Ok((outcome.meta, outcome.bytes)),
+        Err(error) if error.kind() == io::ErrorKind::Unsupported => {
+            let meta = host.stat(path)?;
+            if meta.len > budget {
+                return Err(too_large());
+            }
+            log::debug!(
+                "host cannot open a versioned read session; using its bounded whole-file read for {}",
+                path.display()
+            );
+            let bytes = host.read_file(path, budget)?;
+            progress(lyrel_core::host::read::ReadProgress {
+                read: bytes.len() as u64,
+                total: bytes.len() as u64,
+            });
+            Ok((meta, bytes))
+        }
+        Err(error) => Err(error),
+    }
+}
+
 /// Decodes one of the five static formats under the same byte and pixel
 /// budgets as a Markdown preview, and under the same rule that a name never
 /// decides how bytes are read: SVG is not among them, so a file called
@@ -627,30 +819,18 @@ pub(crate) fn decode_static(bytes: &[u8]) -> io::Result<(image::RgbaImage, Image
         "webp" => ImageFormat::WebP,
         "bmp" => ImageFormat::Bmp,
         "ico" => ImageFormat::Ico,
-        "gif" => ImageFormat::Gif,
-        "tiff" => ImageFormat::Tiff,
         _ => {
             return Err(invalid(ImageError::Localized(
                 L10nKey::MarkdownImageUnsupported,
             )));
         }
     };
-    // Animated/multi-page bytes belong to their document decoders; the static
-    // path refuses them instead of showing one frame as the whole file.
-    if !format.is_static() {
-        return Err(invalid(ImageError::Localized(
-            L10nKey::MarkdownImageUnsupported,
-        )));
-    }
     Ok((rgba, format))
 }
 
-/// Wraps an already-converted [`RenderImage`] in the same cache/preview lease.
-///
-/// The GIF and TIFF decoders build the render image on their worker thread, so
-/// the UI thread only takes the lease instead of touching every pixel again.
-pub(crate) fn bitmap_render(image: Arc<RenderImage>, cx: &mut App) -> Bitmap {
-    Bitmap::new(image, cx)
+/// Uploads decoded pixels as one UI tile under [`Bitmap`]'s lease.
+pub(crate) fn bitmap(rgba: image::RgbaImage, cx: &mut App) -> Bitmap {
+    Bitmap::new(render(rgba), cx)
 }
 
 fn decode(bytes: &[u8]) -> io::Result<(image::RgbaImage, &'static str)> {
@@ -758,12 +938,7 @@ fn decode(bytes: &[u8]) -> io::Result<(image::RgbaImage, &'static str)> {
         "svg",
     ))
 }
-
-/// Converts decoded RGBA pixels into the BGRA render image GPUI uploads.
-///
-/// Also used by the GIF and TIFF workers: converting there keeps the UI thread
-/// from walking every pixel of a frame or page on arrival.
-pub(crate) fn render(mut rgba: image::RgbaImage) -> Arc<RenderImage> {
+fn render(mut rgba: image::RgbaImage) -> Arc<RenderImage> {
     for pixel in rgba.pixels_mut() {
         pixel.0.swap(0, 2);
     }
@@ -901,7 +1076,19 @@ pub(crate) fn controls(
     rows.sort_by_key(|(source, _)| *source);
     for (source, state) in rows {
         let message = match state {
-            State::Loading => t(L10nKey::EditorImageLoading).to_owned(),
+            State::Loading => {
+                let percent = host
+                    .progress
+                    .get(source)
+                    .filter(|(_, total)| *total > 0)
+                    .map(|(read, total)| read.saturating_mul(100) / total);
+                match percent {
+                    Some(percent) => {
+                        format!("{} {percent}%", t(L10nKey::EditorImageLoading))
+                    }
+                    None => t(L10nKey::EditorImageLoading).to_owned(),
+                }
+            }
             State::Failed(reason) => format!("{}: {reason}", t(L10nKey::EditorImageFailed)),
             State::Ready => unreachable!(),
         };

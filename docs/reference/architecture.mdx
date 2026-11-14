@@ -101,10 +101,10 @@ control 与 pane 分别协商协议；应用版本、control 版本和 pane 版�
 
 | 协议 | 源码常量 | 当前版本 | 承载内容 |
 | --- | --- | ---: | --- |
-| control | `daemon/control.rs` 的 `CONTROL_VERSION` | 16 | Host 操作、机器树、工作区附着、事件、文件／Git 流和主机指标 |
+| control | `daemon/control.rs` 的 `CONTROL_VERSION` | 17 | Host 操作、机器树、工作区附着、事件、文件／Git 流、主机指标与版本化分段读取 |
 | pane | `daemon/protocol.rs` 的 `PROTOCOL_VERSION` | 19 | 创建／附着／观察、输入输出、尺寸、终端模式、agent 状态、图形回放、当前进度、pane 颜色、XTGETTCAP、Glyph 注册／查询／保留投影与 iTerm2 精确显示像素 |
 
-本地 Unix 使用私有 Unix socket，Windows 使用经认证的 loopback TCP；远端通过 SSH／stdio 桥接这些流。远端 server 文件名包含两套版本，当前为 `lyrel-server-c16p19`，Windows 加 `.exe`。
+本地 Unix 使用私有 Unix socket，Windows 使用经认证的 loopback TCP；远端通过 SSH／stdio 桥接这些流。远端 server 文件名包含两套版本，当前为 `lyrel-server-c17p19`，Windows 加 `.exe`。
 
 control 的 HELLO 在请求循环前核对版本与 features。增删 wire 消息变体需提升 control 版本，可安全忽略的字段才使用 feature 协商。pane 在实际 endpoint 上先协商版本和有限图形容量，再创建或附着会话；不兼容连接不能先启动 shell 再报告错误。
 
@@ -200,7 +200,7 @@ coding agent 在真实 PTY 中运行自己的原生 TUI。命令识别、状态 
 <a id="file-capability-design"></a>
 ## 文件能力扩展设计（已确认，待实现）
 
-本节记录后续文件能力的架构约束。#280 的静态图片只读文档已经落地，其余格式仍不描述为已实现功能。产品范围、术语、逐格式支持深度及验收要求以[文件能力扩展设计](/window/side-panel#file-format-plan)为准；Office、Notebook、kernel 与 Plotly 均不在本轮范围。
+本节记录后续文件能力的架构约束。#280 的静态图片只读文档与 #281 的版本化分段读取已经落地，其余格式仍不描述为已实现功能。产品范围、术语、逐格式支持深度及验收要求以[文件能力扩展设计](/window/side-panel#file-format-plan)为准；Office、Notebook、kernel 与 Plotly 均不在本轮范围。
 
 ### 文件打开与状态归属
 
@@ -213,11 +213,17 @@ coding agent 在真实 PTY 中运行自己的原生 TUI。命令识别、状态 
 - 格式识别结合文件名与内容探针，格式错误必须可见。已识别容器先于通用 ZIP 处理，不把 EPUB 误当压缩包，也不因识别失败而执行系统关联程序。#280 的探针只认 PNG／JPEG／WebP／ICO 的魔数；BMP 只按扩展名进入，避免把以 `BM` 开头的文本从编辑器手里抢走。
 - 加载、解析、解码与渲染在后台完成，结果核对文档、所属 Host、连接代次和 revision。关闭或替换目标后，迟到结果不得安装资源、写盘或夺取焦点。#280 的图片读取沿用同一 pending／foreground 代次核对，标签页关闭后迟到的解码结果不会安装文档。
 
-### Host 读取与 headless 能力
+### Host 读取与大文件传输
 
-当前 `Host::read_file` 是有上限的整文件读取，`RemoteHost` 使用 control 请求返回整段文件字节。支持大文件需要根据真实消费者增加有界分段／流式读取、取消和文件版本核验，不能由每个格式私自读取本机文件系统或单纯扩大帧上限。
+当前 `Host::read_file` 仍是有上限的整文件读取，供文本与既有小文件流程使用；大图片预览和图片文档打开走新增的版本化获取路径 `Host::open_read`，不靠抬高 4 MiB 文本上限或 control 帧上限。
 
-读取期间遇到文件变化，需要保持一个一致版本或明确作废本次读取。传输、工作内存、解码像素、页面纹理和缓存分别预算；大文件传输不能阻塞交互控制。远端预览可将必要字节传到桌面，并使用私有、受生命周期管理的临时缓存；缓存不成为原件或新的保存目标。
+- 读取会话在打开时绑定一个文件版本。`LocalHost` 持有打开句柄，用平台对象身份（Unix `dev`／`ino`，Windows 卷序号／文件索引）与 change metadata（Unix `ctime`，NTFS `ChangeTime`）识别同尺寸改写后恢复 mtime 的文件；每段读取前后都复核句柄版本与路径身份，原子替换、删除或读取期间写入返回 `FileChanged`，不会把两个版本的字节拼成成功原件。拿不到 change metadata 的卷明确报告版本化读取不可用。
+- control v17 增加 `OpenRead`／`ReadChunk`／`CloseRead`、`ReadOpened` 与 `FileChanged`；`RemoteHost` 只在 peer 通告 `host-file-range-v1` 时使用，缺能力时返回 `Unsupported`，不会把整文件读取伪装成分段。服务端每条连接持有有界数量的打开会话，空闲回收，连接退出时全部释放。
+- 分段是拉式、有界的：默认每段 256 KiB，服务端拒绝超过 4 MiB 的段请求；交互 control 帧在段与段之间取得输出锁，不必等整份文件写完。客户端传输工作内存有独立的 256 MiB 账本，超额显式失败，与解码像素（16M）和图片缓存（256 MiB）预算分开。
+- 消费者：Markdown 内联图片按段加载并显示进度；文档、所属 Host、连接代次或来源失效时取消在途读取，已读缓冲与远端会话随之释放；图片文档打开复用同一路径。无分段能力的 Host（例如 SFTP pane host 或未升级 peer）在既有 32 MiB 图片输入预算内沿用有上限的整文件读取，更大的输入仍显式失败。
+- 本切片只在内存中聚合与解码，不创建预览临时文件，因此缓存不会成为原件或新的保存目标，也不形成跨会话内容归档。
+
+预算单位与失败效果写在 `crates/lyrel-core/src/host/transfer/mod.rs` 的 `BUDGETS` 表；256 KiB／4 MiB／256 MiB 是设计边界，不是实测吞吐。真实 SSH、原生窗口与性能测量仍按各自验收边界单独记录。
 
 SQLite 在所属 Host 执行受限只读查询，按分页传回 schema 与必要记录，不默认传输整个远端库。源库与活跃 WAL 的读取必须使用 SQLite 的一致性机制，不裸复制文件拼接快照，不改变源库 journal 模式、不 checkpoint、不加载扩展。查询限时、限量并可取消；分页读取与刷新需要明确快照生命周期。
 
@@ -244,8 +250,8 @@ SQLite 在所属 Host 执行受限只读查询，按分页传回 schema 与必�
 
 | 工单／能力 | 优先复用源码 | 保留与适配 | 已知缺口及排除部分 |
 | --- | --- | --- | --- |
-| #280，共享文档与静态图片 | Lyrel `src/ui/code_editor/buffers.rs`、`saving.rs`、`markdown/images.rs`；Glim `glim-core/src/document.rs`、`glim-services/src/documents/registry.rs` 仅作内容分类参考 | 已实现：泛化 `Loaded` 为文本／图片两种内容，`EditorInput::is_text()` 守住文本契约，解码、像素预算、纹理 lease 与保存／关闭所有者全部复用 Lyrel 现有模块；新增 `decode_static` 不接受 SVG | 未导入任何上游文件，因此无 `UPSTREAM.toml`；Glim 的 macOS ImageIO、`sips`、`qlmanage` 与 Glim session 未使用。GIF／TIFF 由 #282 在后续切片接入，本行不把它们算作 #280 已交付 |
-| #281，大文件读取 | Lyrel `Host`／control 与现有预算；Glim `glim-core/src/resources.rs`、`glim-services/src/limits.rs`、`work/scheduler.rs` 的适用预算／取消逻辑 | 按需抽取可独立使用的算法，扩展现有 Host 的一致版本、有界读取与取消 | 不导入 Glim `paged.rs` 的 Unix 文件身份、`files.rs`、本机 watcher 或整个资源服务；这些不能代替远端协议 |
+| #280，共享文档与静态图片 | Lyrel `src/ui/code_editor/buffers.rs`、`saving.rs`、`markdown/images.rs`；Glim `glim-core/src/document.rs`、`glim-services/src/documents/registry.rs` 仅作内容分类参考 | 已实现：泛化 `Loaded` 为文本／图片两种内容，`EditorInput::is_text()` 守住文本契约，解码、像素预算、纹理 lease 与保存／关闭所有者全部复用 Lyrel 现有模块；新增 `decode_static` 不接受 SVG | 未导入任何上游文件，因此无 `UPSTREAM.toml`；Glim 的 macOS ImageIO、`sips`、`qlmanage` 与 Glim session 未使用。GIF／TIFF 已由 #282 接入，本行不把它们算作 #280 已交付 |
+| #281，大文件读取 | Lyrel `Host`／control 与现有预算；Glim `glim-core/src/resources.rs`、`glim-services/src/limits.rs`、`work/scheduler.rs` 的适用预算／取消逻辑 | 已实现：`Host::open_read` 绑定打开版本，control v17 增加 `OpenRead`／`ReadChunk`／`CloseRead` 与 `FileChanged`；Markdown 图片预览与图片文档是生产消费者，取消接入现有 HostOps 与有界拉式分段。保留 Glim 的链式取消、`reserve_working` 准入与具名预算机制，逐文件摘要见 `crates/lyrel-core/UPSTREAM.toml` | 未导入 Glim `paged.rs` 的 Unix 文件身份、`files.rs`、本机 watcher、异步 scheduler 或整个资源服务；SFTP pane host 仍未实现分段能力，保持原有整文件流程 |
 | #282，GIF／TIFF | [Glim `glim-services/src/media.rs`](https://github.com/glimapp/glim/blob/fc2183f2c5f27ddfcdc4badbab6d83d50616831b/crates/glim-services/src/media.rs) 的 GIF 部分、`media/raster.rs` | 已实现：`image_document/gif.rs` 移植 `GifPlayback` 的合成、Keep／Background／Previous disposal、透明、interlace、finite／infinite repeat 与逐行解码，输入改为 owning Host 字节，输出接 `Bitmap`／纹理 lease；打开时一次核准 64 MiB 合成预算，不足即明确拒绝而不降质，可见时才推进帧。多页 TIFF 用 registry `tiff` 枚举页表、按 presentation 的页请求解码，复用同一取景与文档生命周期。原始摘要与适配见 `image_document/UPSTREAM.toml` | 未导入 Glim `media/raster.rs` 的 `RasterFrame` 与预览降采样（Lyrel 租约与真实分辨率契约替代）；Glim TIFF 走 Swift ImageIO，故按票用正式 `tiff` crate 补齐，不另造 decoder。原生窗口、真实远端与性能仍未验收 |
 | #283，SVG | Lyrel `markdown/images.rs`；Glim `glim-services/src/svg_preview.rs` 的必要净化／尺寸算法 | 保留现有 resvg 和源码 history，按需要移植纯逻辑而非第二套预览管线 | 不搬 macOS 栅格化；Glim 某路径允许 data image，Lyrel 仍拒绝嵌套 file／network／data image |
 | #284–#285，PDF | [Zorite `crates/gpui-pdf/src/`](https://github.com/packetThrower/zorite/tree/9f069c73a56b06efc84fb7abb700beb50083c827/crates/gpui-pdf/src) 的 `lib.rs`、`text.rs`、`outline.rs`、`forms.rs` 显示部分 | 移植 parse／password／page render、`keep_window`／scale、文本几何、选择／搜索和大纲；提取有用的视图逻辑并适配 Kit/Fast、Host、lease 与请求身份，不把整个 `PdfView` 当作黑盒嵌入 | 上游缺 named destination、完整文本裁剪／阅读顺序和有界取消；无 `/AP` 的表单合成只覆盖有限文本并可能丢 Unicode。不得导入表单写值、PDF 标注编辑或 GPL app。#284 选定 backend 前须在实现阶段检查 #285 的文本／大纲前提，不仅看 bitmap |

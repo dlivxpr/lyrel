@@ -4,7 +4,8 @@ const MAX_FILE_BYTES: u64 = 4 * 1024 * 1024;
 /// Pictures are not text: the workbench image budget is `markdown::images`'.
 const IMAGE_MAX_BYTES: u64 = markdown::images::MAX_BYTES;
 use super::image_document::{ImageDocument, ImageOutcome, ImageView};
-use super::image_format::ImageFormat;
+use markdown::images;
+use markdown::images::ImageFormat;
 
 const RELOAD_DEBOUNCE: std::time::Duration = std::time::Duration::from_millis(200);
 
@@ -1000,8 +1001,8 @@ pub(super) enum Loaded {
         mtime: Option<MTime>,
         config: EditorConfig,
     },
-    /// A static image: the bytes arrived, but whether they decode is part of
-    /// the document, not of the read — a corrupt picture still gets a place.
+    /// An image: the bytes arrived, but whether they decode is part of the
+    /// document, not of the read — a corrupt picture still gets a place.
     Image(LoadedImage),
 }
 
@@ -1119,17 +1120,27 @@ fn read_image(
     format: ImageFormat,
     meta: lyrel_core::host::Meta,
 ) -> std::io::Result<LoadedImage> {
+    let mut mtime = meta.mtime;
     let result = if meta.len > IMAGE_MAX_BYTES {
         // Not worth reading to say they are too many.
-        Err(SharedString::from(t(L10nKey::MarkdownImageLimit)))
+        Err(SharedString::from(images::too_large().to_string()))
     } else {
-        let bytes = h.read_file(&path, IMAGE_MAX_BYTES)?;
+        let (bound, bytes) = images::read_bytes(
+            h,
+            &path,
+            IMAGE_MAX_BYTES,
+            &lyrel_core::host::transfer::CancelToken::default(),
+            |_| {},
+        )?;
+        // The picture and the mtime recorded for later external-change
+        // checks come from the version that was actually opened.
+        mtime = bound.mtime;
         image_document::decode_loaded(bytes, format)
     };
     Ok(LoadedImage {
         path,
         claimed: Some(format),
-        mtime: meta.mtime,
+        mtime,
         result,
     })
 }

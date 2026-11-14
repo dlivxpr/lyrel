@@ -10,7 +10,7 @@ license = "MIT"
 copyright = "Copyright (c) 2026 Glim contributors"
 maintainer = "Lyrel"
 import_owner = "#282"
-license_notice = "LICENSE 第三部分 Glim-derived GIF playback appendix"
+license_notice = "LICENSE 的 Glim-derived GIF playback appendix"
 
 # 本地适配：
 # - `GifInput::{File,Temporary}` 与本机路径/临时文件权威换成 owning Host 读到的

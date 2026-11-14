@@ -1697,6 +1697,9 @@ pub fn translate_zh(key: L10nKey) -> Option<&'static str> {
         L10nKey::EditorImagePageNext => "下一页",
         L10nKey::EditorImagePageMissing => "这一页不存在",
         L10nKey::EditorImagePageUnsupported => "这一页的 TIFF 采样布局无法显示",
+        L10nKey::EditorImagePageDimensionsLimit => {
+            "页尺寸 {width} × {height} 超过 {limit} 像素的单边预算"
+        }
         L10nKey::EditorImagePageBytesLimit => {
             "解码这一页需要 {required} MiB，超过 {limit} MiB 页预算"
         }

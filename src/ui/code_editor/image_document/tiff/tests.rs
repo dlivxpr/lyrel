@@ -28,6 +28,21 @@ fn open(bytes: Vec<u8>) -> TiffPages {
     TiffPages::open(Arc::from(bytes)).expect("fixture page table opens")
 }
 
+/// 一页 Gray8；用来构造像素数越过预算、但单边仍在上限内的页面。
+fn gray_page(width: u32, height: u32) -> Vec<u8> {
+    let mut bytes = Vec::new();
+    {
+        let mut encoder = TiffEncoder::new(Cursor::new(&mut bytes)).expect("tiff starts");
+        let image = encoder
+            .new_image::<Gray8>(width, height)
+            .expect("page starts");
+        image
+            .write_data(&vec![7u8; (width * height) as usize])
+            .expect("page writes");
+    }
+    bytes
+}
+
 #[test]
 fn enumerates_pages_and_decodes_distinct_dimensions() {
     let pages = open(rgb_pages(&[
@@ -120,13 +135,31 @@ fn an_unsupported_sample_layout_is_a_visible_refusal() {
 
 #[test]
 fn an_oversized_page_is_refused_by_its_budget() {
-    let bytes = rgb_pages(&[(8193, 1, [1, 2, 3])]);
+    // 8192 × 2049 is one row over the 16 Mi-pixel canvas budget while both
+    // edges stay within the per-edge limit.
+    let bytes = gray_page(8192, 2049);
     match open(bytes).decode(0) {
         Err(TiffPageError::Budget { required, limit }) => {
             assert!(required > limit);
             assert_eq!(limit, MAX_PIXELS * 4);
         }
         other => panic!("expected a page budget error, got {other:?}"),
+    }
+}
+
+#[test]
+fn an_overlong_page_edge_is_refused_by_its_dimensions() {
+    let bytes = rgb_pages(&[(8193, 1, [1, 2, 3])]);
+    match open(bytes).decode(0) {
+        Err(TiffPageError::Dimensions {
+            width,
+            height,
+            limit,
+        }) => {
+            assert_eq!((width, height), (8193, 1));
+            assert_eq!(limit, MAX_EDGE);
+        }
+        other => panic!("expected a page dimension error, got {other:?}"),
     }
 }
 

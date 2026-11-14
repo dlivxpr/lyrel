@@ -158,6 +158,20 @@ fn run_request(
             let meta = h.stat(&path)?;
             (ReplyOk::FileMeta { meta }, bytes)
         }
+        ControlRequest::OpenRead { path } => {
+            let path = p(&path);
+            let reader = h.open_read(&path)?;
+            let (session, meta) = conn.read_sessions.open(reader)?;
+            (ReplyOk::ReadOpened { session, meta }, Vec::new())
+        }
+        ControlRequest::ReadChunk { session, max_bytes } => {
+            let (meta, bytes) = conn.read_sessions.read(session, max_bytes)?;
+            (ReplyOk::FileMeta { meta }, bytes)
+        }
+        ControlRequest::CloseRead { session } => {
+            conn.read_sessions.close(session);
+            (ReplyOk::Unit, Vec::new())
+        }
         ControlRequest::Search {
             roots,
             query,

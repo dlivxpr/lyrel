@@ -41,6 +41,11 @@ macro_rules! for_each_host_case {
             read_file_roundtrips_bytes,
             read_file_over_max_bytes_errors,
             read_file_on_a_dir_errors,
+            open_read_segments_reassemble_one_version,
+            open_read_rejects_missing_paths_and_directories,
+            open_read_refuses_an_oversized_segment,
+            open_read_detects_a_same_size_rewrite,
+            open_read_detects_a_replacement,
             skills_browse_is_readonly_and_host_bound,
             write_file_creates_and_overwrites,
             write_file_reports_its_own_metadata,
@@ -624,6 +629,117 @@ pub fn read_file_on_a_dir_errors(h: &dyn Host, sb: &dyn Sandbox) {
     let d = h.join(sandbox, "adir");
     mkdir(h, &d);
     assert!(h.read_file(&d, 1024 * 1024).is_err());
+}
+
+fn open_read_error(h: &dyn Host, path: &Path) -> io::Error {
+    match h.open_read(path) {
+        Ok(_) => panic!("opened a read session for {}", path.display()),
+        Err(error) => error,
+    }
+}
+
+fn restore_write_time(path: &Path, when: std::time::SystemTime) {
+    let file = std::fs::OpenOptions::new()
+        .write(true)
+        .open(path)
+        .unwrap_or_else(|e| panic!("open {} to restore mtime: {e}", path.display()));
+    file.set_modified(when)
+        .unwrap_or_else(|e| panic!("restore mtime of {}: {e}", path.display()));
+}
+
+pub fn open_read_segments_reassemble_one_version(h: &dyn Host, sb: &dyn Sandbox) {
+    let body: Vec<u8> = (0..(1024 * 1024 + 123) as u32)
+        .map(|i| (i % 251) as u8)
+        .collect();
+    let f = h.join(sb.path(), "segmented.bin");
+    put(h, &f, &body);
+    let mut reader = h.open_read(&f).unwrap();
+    assert_eq!(reader.meta().len, body.len() as u64);
+    let mut got = Vec::new();
+    loop {
+        let segment = reader
+            .read_segment(crate::host::transfer::SEGMENT_BYTES)
+            .unwrap();
+        if segment.is_empty() {
+            break;
+        }
+        assert!(
+            segment.len() as u64 <= crate::host::transfer::SEGMENT_BYTES,
+            "the host returned a segment over the transport unit"
+        );
+        got.extend_from_slice(&segment);
+    }
+    assert!(got == body, "1 MiB body reassembled byte for byte");
+    assert!(
+        reader.read_segment(16).unwrap().is_empty(),
+        "end of the version stays empty"
+    );
+}
+
+pub fn open_read_rejects_missing_paths_and_directories(h: &dyn Host, sb: &dyn Sandbox) {
+    let sandbox = sb.path();
+    let missing = h.join(sandbox, "no-such-read.bin");
+    assert_eq!(open_read_error(h, &missing).kind(), io::ErrorKind::NotFound);
+    let dir = h.join(sandbox, "read-dir");
+    mkdir(h, &dir);
+    assert_eq!(open_read_error(h, &dir).kind(), io::ErrorKind::IsADirectory);
+}
+
+pub fn open_read_refuses_an_oversized_segment(h: &dyn Host, sb: &dyn Sandbox) {
+    let f = h.join(sb.path(), "segments.bin");
+    put(h, &f, &vec![b'x'; 64]);
+    let mut reader = h.open_read(&f).unwrap();
+    let error = reader
+        .read_segment(crate::host::transfer::SEGMENT_BYTES_MAX + 1)
+        .unwrap_err();
+    assert_eq!(error.kind(), io::ErrorKind::InvalidInput, "{error}");
+    assert_eq!(
+        reader.read_segment(8).unwrap().len(),
+        8,
+        "the session survives a bad ask"
+    );
+}
+
+pub fn open_read_detects_a_same_size_rewrite(h: &dyn Host, sb: &dyn Sandbox) {
+    let f = h.join(sb.path(), "rewritten.bin");
+    put(h, &f, &vec![b'a'; 8192]);
+    let mtime = std::fs::metadata(&f).unwrap().modified().unwrap();
+    let mut reader = h.open_read(&f).unwrap();
+    let first = reader.read_segment(4096).unwrap();
+    assert!(first.iter().all(|byte| *byte == b'a'));
+
+    // Same length, same mtime — only change metadata can tell these apart.
+    std::thread::sleep(Duration::from_millis(10));
+    std::fs::write(&f, vec![b'b'; 8192]).unwrap();
+    restore_write_time(&f, mtime);
+    assert_eq!(
+        std::fs::metadata(&f).unwrap().modified().unwrap(),
+        mtime,
+        "the test really restored the mtime"
+    );
+    assert_eq!(std::fs::metadata(&f).unwrap().len(), 8192);
+
+    let error = reader.read_segment(4096).unwrap_err();
+    assert!(
+        crate::host::read::is_file_changed(&error),
+        "a same-size rewrite with a restored mtime must invalidate the read: {error}"
+    );
+}
+
+pub fn open_read_detects_a_replacement(h: &dyn Host, sb: &dyn Sandbox) {
+    let sandbox = sb.path();
+    let f = h.join(sandbox, "replaced.bin");
+    let other = h.join(sandbox, "replacement.tmp");
+    put(h, &f, b"the first version of the file");
+    put(h, &other, b"a replacement of the file!!!!");
+    let mut reader = h.open_read(&f).unwrap();
+    assert_eq!(reader.read_segment(3).unwrap(), b"the");
+    std::fs::rename(&other, &f).expect("replace the file under the open session");
+    let error = reader.read_segment(3).unwrap_err();
+    assert!(
+        crate::host::read::is_file_changed(&error),
+        "an atomic replacement must invalidate the open version: {error}"
+    );
 }
 
 pub fn write_file_creates_and_overwrites(h: &dyn Host, sb: &dyn Sandbox) {

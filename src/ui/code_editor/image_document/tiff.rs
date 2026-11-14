@@ -4,7 +4,7 @@
 //! 解析。页尺寸来自 IFD 头，像素只在某个 presentation 请求该页时解码；
 //! 打开的文档不预解码所有页。
 
-use crate::ui::code_editor::markdown::images::{MAX_PIXELS, render};
+use crate::ui::code_editor::markdown::images::MAX_PIXELS;
 use crate::ui::i18n::{L10nKey, t, t_fmt};
 use image::RgbaImage;
 use std::io::Cursor;
@@ -49,6 +49,7 @@ impl std::error::Error for TiffError {}
 #[derive(Debug)]
 pub(super) enum TiffPageError {
     Missing,
+    Dimensions { width: u32, height: u32, limit: u32 },
     Budget { required: u64, limit: u64 },
     Unsupported(String),
     Corrupt(String),
@@ -58,6 +59,18 @@ impl std::fmt::Display for TiffPageError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Missing => formatter.write_str(t(L10nKey::EditorImagePageMissing)),
+            Self::Dimensions {
+                width,
+                height,
+                limit,
+            } => formatter.write_str(&t_fmt(
+                L10nKey::EditorImagePageDimensionsLimit,
+                &[
+                    ("width", &width.to_string()),
+                    ("height", &height.to_string()),
+                    ("limit", &limit.to_string()),
+                ],
+            )),
             Self::Budget { required, limit } => formatter.write_str(&t_fmt(
                 L10nKey::EditorImagePageBytesLimit,
                 &[
@@ -144,10 +157,17 @@ impl TiffPages {
             return Err(TiffPageError::Corrupt("empty TIFF page".into()));
         }
         let pixels = u64::from(width) * u64::from(height);
-        if width > MAX_EDGE || height > MAX_EDGE || pixels > MAX_PIXELS {
+        if pixels > MAX_PIXELS {
             return Err(TiffPageError::Budget {
                 required: pixels.saturating_mul(4),
                 limit: MAX_PIXELS * 4,
+            });
+        }
+        if width > MAX_EDGE || height > MAX_EDGE {
+            return Err(TiffPageError::Dimensions {
+                width,
+                height,
+                limit: MAX_EDGE,
             });
         }
         let color = decoder
@@ -169,11 +189,6 @@ impl TiffPages {
             .map_err(|error| TiffPageError::Corrupt(error.to_string()))?;
         into_rgba(width, height, &color, result, colormap.as_deref())
     }
-}
-
-/// 解码后一页像素，交给 `/image_document` 在后台转成纹理。
-pub(super) fn render_page(page: RgbaImage) -> Arc<gpui_kit::RenderImage> {
-    render(page)
 }
 
 fn sample_bytes(color: &ColorType) -> u64 {

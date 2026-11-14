@@ -1025,3 +1025,77 @@ pub(super) fn complete_resources(cx: &mut TestAppContext) {
         svg
     );
 }
+
+/// 大图经所属 Host 的版本化分段进入预览，不抬高整文件读取上限。
+#[cfg(test)]
+#[gpui_kit::test]
+fn a_large_preview_image_streams_on_its_owning_host(cx: &mut TestAppContext) {
+    use super::super::test_host::{FileHost, canonical_tempdir, noise_png};
+    use std::sync::atomic::Ordering;
+
+    crate::ui::i18n::set_locale("en");
+    let directory = canonical_tempdir();
+    std::fs::write(directory.path().join("picture.md"), "![large](large.png)\n").unwrap();
+    let bytes = noise_png(1400, 1000);
+    assert!(
+        bytes.len() > 4 * 1024 * 1024,
+        "the fixture is {} bytes, under the old text opening limit",
+        bytes.len()
+    );
+    std::fs::write(directory.path().join("large.png"), &bytes).unwrap();
+    let host = FileHost::mapped(HostId(2811), directory.path());
+    let (app, mut vcx, _streams) = harness_with_tabs(cx, 1);
+    app.update_in(&mut vcx, |app, window, cx| {
+        app.editor_open_on_host(host.clone(), Path::new("/picture.md"), window, cx)
+    });
+    until(&mut vcx, |cx| {
+        app.read_with(cx, |app, cx| {
+            app.active_buffer()
+                .and_then(|file| file.markdown_resources.as_ref())
+                .is_some_and(|resources| resources.read(cx).is_loaded("large.png"))
+        })
+    });
+    assert_eq!(
+        host.open_reads.load(Ordering::SeqCst),
+        1,
+        "the preview opened one versioned session"
+    );
+}
+
+/// 关闭文档会取消仍在进行的图片传输：后续分段不再排队。
+#[cfg(test)]
+#[gpui_kit::test]
+fn closing_a_document_cancels_its_picture_transfer(cx: &mut TestAppContext) {
+    use super::super::test_host::{FileHost, canonical_tempdir, noise_png};
+    use std::sync::atomic::Ordering;
+
+    crate::ui::i18n::set_locale("en");
+    let directory = canonical_tempdir();
+    std::fs::write(directory.path().join("gated.md"), "![gated](gated.png)\n").unwrap();
+    let bytes = noise_png(1000, 800);
+    assert!(bytes.len() > 1024 * 1024, "a multi-segment fixture");
+    std::fs::write(directory.path().join("gated.png"), &bytes).unwrap();
+    let host = FileHost::mapped(HostId(2813), directory.path());
+    let gate = host.pause_next_segment();
+    let (app, mut vcx, _streams) = harness_with_tabs(cx, 1);
+    app.update_in(&mut vcx, |app, window, cx| {
+        app.editor_open_on_host(host.clone(), Path::new("/gated.md"), window, cx)
+    });
+    until(&mut vcx, |_| host.entered.load(Ordering::SeqCst));
+    app.update_in(&mut vcx, |app, window, cx| {
+        app.editor_close_file(0, window, cx)
+    });
+    settle(&mut vcx);
+    settle(&mut vcx);
+    let _ = gate.send(());
+    for _ in 0..20 {
+        settle(&mut vcx);
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert_eq!(host.open_reads.load(Ordering::SeqCst), 1);
+    assert_eq!(
+        host.segments.load(Ordering::SeqCst),
+        1,
+        "the cancelled transfer started no further segment"
+    );
+}

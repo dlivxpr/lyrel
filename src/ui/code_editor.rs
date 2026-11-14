@@ -31,7 +31,6 @@ mod buffers;
 pub(crate) mod commands;
 mod document_input;
 mod image_document;
-mod image_format;
 pub(crate) mod markdown;
 mod markdown_formula;
 mod markdown_search;
@@ -3233,6 +3232,7 @@ impl LyrelApp {
                     div()
                         .id("status-image-facts")
                         .test_support()
+                        .aria_label(status.clone())
                         .flex_none()
                         .child(status),
                 )
@@ -3242,6 +3242,7 @@ impl LyrelApp {
                     div()
                         .id("status-image-page")
                         .test_support()
+                        .aria_label(page.clone())
                         .flex_none()
                         .child(page),
                 )

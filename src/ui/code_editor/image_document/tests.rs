@@ -113,6 +113,20 @@ fn ready_size(app: &Entity<LyrelApp>, cx: &VisualTestContext) -> (i32, i32) {
     }
 }
 
+/// `ready_size` for an `until` predicate: a page decode may legitimately be
+/// `Loading` on an earlier poll, so only a concrete size or a failure is
+/// decisive.
+fn decoded_size(app: &Entity<LyrelApp>, cx: &VisualTestContext) -> Option<(i32, i32)> {
+    match content(app, cx) {
+        ImageContent::Ready(bitmap) => {
+            let size = bitmap.image().size(0);
+            Some((size.width.0, size.height.0))
+        }
+        ImageContent::Failed(message) => panic!("expected a decoded picture, got: {message}"),
+        ImageContent::Loading => None,
+    }
+}
+
 fn dispatch<A: gpui_kit::Action>(app: &Entity<LyrelApp>, cx: &mut VisualTestContext, action: A) {
     let handle = image_view(app, cx).read_with(cx, |view, _| view.handle());
     cx.update(|window, cx| handle.dispatch_action(&action, window, cx));
@@ -513,7 +527,7 @@ fn an_external_rewrite_replaces_the_picture(tcx: &mut TestAppContext) {
         app.read_with(cx, |app, _| app.editor.buffers.watching())
     });
     std::fs::write(&path, solid(image::ImageFormat::Png, 90, 70)).unwrap();
-    until(&mut cx, |cx| ready_size(&app, cx) == (90, 70));
+    until(&mut cx, |cx| decoded_size(&app, cx) == Some((90, 70)));
     app.read_with(&cx, |app, _| {
         let file = app.active_buffer().expect("still open");
         assert!(file.conflict.is_none(), "a clean picture reloads itself");
@@ -809,9 +823,15 @@ fn tiff_fixture(pages: &[(u32, u32, [u8; 3])]) -> Vec<u8> {
     bytes
 }
 
-/// 帧/页的 RGBA 像素；`render` 产物是 GPUI 消费的 BGRA。
+/// 帧/页的 RGBA 像素；`bitmap` 里的纹理是 GPUI 消费的 BGRA。
 fn frame_pixels(app: &Entity<LyrelApp>, cx: &VisualTestContext) -> Vec<[u8; 4]> {
-    let ImageContent::Ready(bitmap) = content(app, cx) else {
+    frame_pixels_of(&image_view(app, cx), cx)
+}
+
+/// A presentation may be hidden behind another tab; its frames still live on
+/// the document, so read it by identity rather than through the active tab.
+fn frame_pixels_of(view: &Entity<ImageView>, cx: &VisualTestContext) -> Vec<[u8; 4]> {
+    let ImageContent::Ready(bitmap) = view.read_with(cx, |view, _| view.content().clone()) else {
         panic!("expected a decoded frame");
     };
     let image = bitmap.image();
@@ -835,13 +855,6 @@ fn show_tab(app: &Entity<LyrelApp>, cx: &mut VisualTestContext, index: usize) {
         cx.notify();
     });
     settle(cx);
-}
-
-fn image_document(
-    app: &Entity<LyrelApp>,
-    cx: &VisualTestContext,
-) -> gpui_kit::WeakEntity<ImageDocument> {
-    image_view(app, cx).read_with(cx, |view, _| view.document().downgrade())
 }
 
 #[gpui_kit::test]
@@ -950,24 +963,26 @@ fn hiding_an_animation_stops_its_frames_and_closing_stops_the_task(tcx: &mut Tes
     });
 
     // 切到终端标签页：图片 presentation 不再被画，帧任务必须停下。
+    let view = image_view(&app, &cx);
     show_tab(&app, &mut cx, 1);
     advance(&mut cx, 300);
-    let paused = frame_pixels(&app, &cx);
+    let paused = frame_pixels_of(&view, &cx);
     for _ in 0..4 {
         advance(&mut cx, 250);
     }
     assert_eq!(
-        frame_pixels(&app, &cx),
+        frame_pixels_of(&view, &cx),
         paused,
         "a hidden animation decodes no further frames"
     );
 
     // 回到图片：从停下的那一帧继续，而不是从头或跳帧。
     show_tab(&app, &mut cx, 0);
-    until(&mut cx, |cx| frame_pixels(&app, cx) != paused);
+    until(&mut cx, |cx| frame_pixels_of(&view, cx) != paused);
 
     // 关闭释放文档；弱引用失效后任务不可能再对死文档工作。
-    let document = image_document(&app, &cx);
+    let document = view.read_with(&cx, |view, _| view.document().downgrade());
+    drop(view);
     app.update_in(&mut cx, |app, window, cx| {
         app.editor_close_file(0, window, cx)
     });
@@ -987,14 +1002,14 @@ fn a_multipage_tiff_navigates_pages_with_identity_and_keeps_framing(tcx: &mut Te
     crate::ui::i18n::set_locale("en");
     let dir = super::super::test_host::canonical_tempdir();
     let bytes = tiff_fixture(&[
-        (40, 20, [200, 10, 10]),
+        (900, 600, [200, 10, 10]),
         (20, 60, [10, 200, 10]),
         (70, 10, [10, 10, 200]),
     ]);
     let path = fixture(dir.path(), "pages.tiff", &bytes);
     let (app, mut cx, _streams) = harness_with_tabs(tcx, 1);
     open(&app, &mut cx, &path);
-    until(&mut cx, |cx| ready_size(&app, cx) == (40, 20));
+    until(&mut cx, |cx| decoded_size(&app, cx) == Some((900, 600)));
     let view = image_view(&app, &cx);
     assert_eq!(
         view.read_with(&cx, |view, cx| view.page_label(cx)),
@@ -1010,7 +1025,7 @@ fn a_multipage_tiff_navigates_pages_with_identity_and_keeps_framing(tcx: &mut Te
             window
                 .find("status-image-facts")
                 .label()
-                .is_some_and(|facts| facts.contains("TIFF") && facts.contains("40 × 20"))
+                .is_some_and(|facts| facts.contains("TIFF") && facts.contains("900 × 600"))
         );
     });
 
@@ -1019,7 +1034,7 @@ fn a_multipage_tiff_navigates_pages_with_identity_and_keeps_framing(tcx: &mut Te
     settle(&mut cx);
     assert_eq!(view.read_with(&cx, |view, _| view.scale()), 1.);
     cx.update(|window, cx| window.press("pagedown", cx));
-    until(&mut cx, |cx| ready_size(&app, cx) == (20, 60));
+    until(&mut cx, |cx| decoded_size(&app, cx) == Some((20, 60)));
     assert_eq!(view.read_with(&cx, |view, _| view.scale()), 1.);
     assert_eq!(view.read_with(&cx, |view, _| view.page()), 1);
     cx.update(|window, _| {
@@ -1039,16 +1054,21 @@ fn a_multipage_tiff_navigates_pages_with_identity_and_keeps_framing(tcx: &mut Te
 
     // 工具栏按钮与键盘是同一组命令。
     cx.update(|window, cx| window.click("image-page-next", cx));
-    until(&mut cx, |cx| ready_size(&app, cx) == (70, 10));
+    until(&mut cx, |cx| decoded_size(&app, cx) == Some((70, 10)));
     cx.update(|window, cx| window.click("image-page-previous", cx));
-    until(&mut cx, |cx| ready_size(&app, cx) == (20, 60));
+    until(&mut cx, |cx| decoded_size(&app, cx) == Some((20, 60)));
     cx.update(|window, cx| window.press("pageup", cx));
-    until(&mut cx, |cx| ready_size(&app, cx) == (40, 20));
+    until(&mut cx, |cx| decoded_size(&app, cx) == Some((900, 600)));
 
     // 翻页清掉上一页的平移偏移，缩放模式保留；fit 仍按当前页重算。
     for _ in 0..8 {
         dispatch(&app, &mut cx, ImageZoomIn);
     }
+    settle(&mut cx);
+    assert!(
+        view.read_with(&cx, |view, _| view.scroll().max_offset()).x > px(0.),
+        "the zoomed page is wider than the canvas"
+    );
     cx.update(|window, cx| window.press("right", cx));
     settle(&mut cx);
     assert!(
@@ -1056,7 +1076,7 @@ fn a_multipage_tiff_navigates_pages_with_identity_and_keeps_framing(tcx: &mut Te
         "pan moved the canvas"
     );
     cx.update(|window, cx| window.press("pagedown", cx));
-    until(&mut cx, |cx| ready_size(&app, cx) == (20, 60));
+    until(&mut cx, |cx| decoded_size(&app, cx) == Some((20, 60)));
     assert_eq!(
         view.read_with(&cx, |view, _| view.scroll().offset()),
         Point::default(),
@@ -1084,7 +1104,7 @@ fn a_late_page_decode_cannot_replace_the_current_page(tcx: &mut TestAppContext) 
     let path = fixture(dir.path(), "race.tiff", &bytes);
     let (app, mut cx, _streams) = harness_with_tabs(tcx, 1);
     open(&app, &mut cx, &path);
-    until(&mut cx, |cx| ready_size(&app, cx) == (40, 20));
+    until(&mut cx, |cx| decoded_size(&app, cx) == Some((40, 20)));
     let view = image_view(&app, &cx);
     // 同一帧里连翻两页：第 1 页的异步解码会在第 2 页成为当前页之后落地。
     cx.update(|_, cx| {
@@ -1093,7 +1113,7 @@ fn a_late_page_decode_cannot_replace_the_current_page(tcx: &mut TestAppContext) 
             view.next_page(cx);
         })
     });
-    until(&mut cx, |cx| ready_size(&app, cx) == (70, 10));
+    until(&mut cx, |cx| decoded_size(&app, cx) == Some((70, 10)));
     assert_eq!(
         view.read_with(&cx, |view, _| view.page()),
         2,
@@ -1107,7 +1127,7 @@ fn a_late_page_decode_cannot_replace_the_current_page(tcx: &mut TestAppContext) 
     });
     // 回到第 2 页仍是它自己的尺寸，没有被第 3 页的缓存顶替。
     cx.update(|window, cx| window.press("pageup", cx));
-    until(&mut cx, |cx| ready_size(&app, cx) == (20, 60));
+    until(&mut cx, |cx| decoded_size(&app, cx) == Some((20, 60)));
     assert_eq!(view.read_with(&cx, |view, _| view.page()), 1);
 }
 
@@ -1123,7 +1143,7 @@ fn split_tiff_groups_keep_independent_pages_and_live_tiles(tcx: &mut TestAppCont
     let path = fixture(dir.path(), "split.tiff", &bytes);
     let (app, mut cx, _streams) = harness_with_tabs(tcx, 1);
     open(&app, &mut cx, &path);
-    until(&mut cx, |cx| ready_size(&app, cx) == (40, 20));
+    until(&mut cx, |cx| decoded_size(&app, cx) == Some((40, 20)));
     app.update_in(&mut cx, |app, window, cx| {
         assert!(app.editor_split(window, cx), "the TIFF splits");
     });
@@ -1318,7 +1338,7 @@ fn the_owning_host_supplies_animation_and_page_bytes(tcx: &mut TestAppContext) {
                 .is_some_and(|(host, _)| host == HostId(72))
         })
     });
-    until(&mut cx, |cx| ready_size(&app, cx) == (2, 2));
+    until(&mut cx, |cx| decoded_size(&app, cx) == Some((2, 2)));
 
     app.update_in(&mut cx, |app, window, cx| {
         app.editor_open_on_host(shared, Path::new("/pages.tiff"), window, cx)
@@ -1329,7 +1349,7 @@ fn the_owning_host_supplies_animation_and_page_bytes(tcx: &mut TestAppContext) {
                 .is_some_and(|(host, path)| host == HostId(72) && path.ends_with("pages.tiff"))
         })
     });
-    until(&mut cx, |cx| ready_size(&app, cx) == (30, 20));
+    until(&mut cx, |cx| decoded_size(&app, cx) == Some((30, 20)));
     assert_eq!(
         image_view(&app, &cx).read_with(&cx, |view, cx| view.page_label(cx)),
         Some(SharedString::from("Page 1 of 2"))
@@ -1342,4 +1362,82 @@ fn the_owning_host_supplies_animation_and_page_bytes(tcx: &mut TestAppContext) {
         std::fs::read(local.path().join("pages.tiff")).unwrap(),
         local_tiff
     );
+}
+
+/// The production opener must carry a representative large picture through the
+/// owning Host's versioned segments, not a raised whole-file limit.
+#[gpui_kit::test]
+fn a_large_picture_opens_through_its_hosts_versioned_read(tcx: &mut TestAppContext) {
+    crate::ui::i18n::set_locale("en");
+    let dir = super::super::test_host::canonical_tempdir();
+    let bytes = super::super::test_host::noise_png(1400, 1000);
+    assert!(
+        bytes.len() > 4 * 1024 * 1024,
+        "the fixture must exceed the old text opening limit, got {} bytes",
+        bytes.len()
+    );
+    let path = fixture(dir.path(), "large-noise.png", &bytes);
+    let (app, mut cx, _streams) = harness_with_tabs(tcx, 1);
+    let host = FileHost::new(HostId(2812));
+    let shared: SharedHost = host.clone();
+    app.update_in(&mut cx, |app, window, cx| {
+        app.editor_open_on_host(shared, &path, window, cx)
+    });
+    until(&mut cx, |cx| {
+        app.read_with(cx, |app, _| app.active_buffer().is_some())
+    });
+    assert_eq!(ready_size(&app, &cx), (1400, 1000));
+    assert_eq!(
+        std::fs::read(&path).unwrap(),
+        bytes,
+        "opening a picture never rewrites the original"
+    );
+    assert_eq!(
+        host.open_reads.load(std::sync::atomic::Ordering::SeqCst),
+        1,
+        "the picture came from one bounded versioned session"
+    );
+}
+
+/// The same consumer over a real control link: a `RemoteHost` talking to the
+/// real server over TCP, with the decode landing in the workbench.
+#[gpui_kit::test]
+fn a_large_picture_loads_over_a_real_control_link(tcx: &mut TestAppContext) {
+    use lyrel_core::daemon::control::ControlHello;
+    use lyrel_core::host::local::LocalHost;
+    use lyrel_core::host::remote::RemoteHost;
+    use lyrel_core::host::server::{Services, serve_with};
+    use std::net::{TcpListener, TcpStream};
+
+    crate::ui::i18n::set_locale("en");
+    let dir = super::super::test_host::canonical_tempdir();
+    let bytes = super::super::test_host::noise_png(1400, 1000);
+    assert!(bytes.len() > 4 * 1024 * 1024);
+    let path = fixture(dir.path(), "remote-noise.png", &bytes);
+
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = listener.local_addr().unwrap();
+    // The link closes when the workbench's last Host handle drops; the test
+    // process ends with the server thread.
+    std::thread::spawn(move || {
+        let (server, _) = listener.accept().unwrap();
+        serve_with(server, LocalHost::new(), Services::none())
+    });
+    let sock = TcpStream::connect(address).unwrap();
+    let remote = RemoteHost::over_tcp(
+        sock,
+        "tcp:gui-large-picture",
+        &ControlHello::host_rpc("tok", "laptop"),
+    )
+    .unwrap();
+    let shared: SharedHost = remote;
+
+    let (app, mut cx, _streams) = harness_with_tabs(tcx, 1);
+    app.update_in(&mut cx, |app, window, cx| {
+        app.editor_open_on_host(shared, &path, window, cx)
+    });
+    until(&mut cx, |cx| {
+        app.read_with(cx, |app, _| app.active_buffer().is_some())
+    });
+    assert_eq!(ready_size(&app, &cx), (1400, 1000));
 }

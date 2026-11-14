@@ -1400,6 +1400,7 @@ l10n_keys! {
     EditorImagePageNext,
     EditorImagePageMissing,
     EditorImagePageUnsupported,
+    EditorImagePageDimensionsLimit,
     EditorImagePageBytesLimit,
     EditorImagePagesLimit,
     EditorImageAnimationLimit,
