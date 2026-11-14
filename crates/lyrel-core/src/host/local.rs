@@ -210,6 +210,21 @@ impl Host for LocalHost {
 
     fn open_read(&self, p: &Path) -> io::Result<Box<dyn HostRead>> {
         guard_off_ui();
+        // Windows refuses to open a directory without backup semantics, so the
+        // kind check comes before the open, exactly as in `read_file`.
+        let lmd = fs::metadata(p)?;
+        if lmd.is_dir() {
+            return Err(io::Error::new(
+                io::ErrorKind::IsADirectory,
+                format!("{} is a directory", p.display()),
+            ));
+        }
+        if !lmd.is_file() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!("{} is not a regular file", p.display()),
+            ));
+        }
         let file = fs::File::open(p)?;
         let md = file.metadata()?;
         if md.is_dir() {

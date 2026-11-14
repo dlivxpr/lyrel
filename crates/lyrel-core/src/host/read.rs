@@ -175,14 +175,8 @@ mod tests {
         let path = dir.path().join("too-big.bin");
         std::fs::write(&path, vec![0u8; 4096]).unwrap();
         let host = LocalHost::new();
-        let error = read_file_segmented(
-            &*host,
-            &path,
-            1024,
-            &CancelToken::default(),
-            |_| {},
-        )
-        .unwrap_err();
+        let error =
+            read_file_segmented(&*host, &path, 1024, &CancelToken::default(), |_| {}).unwrap_err();
         assert_eq!(error.kind(), io::ErrorKind::FileTooLarge, "{error}");
     }
 
