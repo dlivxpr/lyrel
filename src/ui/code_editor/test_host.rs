@@ -24,6 +24,7 @@ pub(super) fn canonical_tempdir() -> tempfile::TempDir {
 
 /// Deterministic pixel noise that does not compress, so a test fixture can be
 /// genuinely larger than the old text limit without shipping a blob.
+#[cfg(test)]
 pub(super) fn noise_png(width: u32, height: u32) -> Vec<u8> {
     let mut state = 0x9e37_79b9_7f4a_7c15u64;
     let mut rgba = image::RgbaImage::new(width, height);
@@ -114,7 +115,7 @@ impl FileHost {
 
     /// Holds the next segment any read session asks for, so a test can close or
     /// replace the target while a transfer is genuinely in flight.
-    #[cfg(any(test, feature = "native-markdown-tests"))]
+    #[cfg(test)]
     pub(super) fn pause_next_segment(&self) -> mpsc::Sender<()> {
         let (tx, rx) = mpsc::channel();
         self.entered.store(false, Ordering::SeqCst);
