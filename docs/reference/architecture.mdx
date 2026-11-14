@@ -280,7 +280,7 @@ OSC 22 另以真实 OS cursor 采样核验 `Hand`、`SizeWE`、`SizeNESW`，以�
 
 Windows 另完成格式检查与实际 app 构建，关键 GUI／core 输入在运行前后 SHA-256 相同；不可变 app SHA-256 为 `d02082173c117291dda77d1513719a916798f37b153697ecce0e5aea8bc3baad`。只正常关闭旧自有 GUI，再以新 GUI 附着原 daemon `15104` 与 pane `3`，没有重注册或重发场景：同一张方形 Glyph 在普通空白邻格前仍可借两格，在 placeholder 邻格前缩回一格。保存截图按同一区域量取纯红像素，普通空白前始终为 18，placeholder 前由 18 降为 8；这是下采样截图的墨迹跨度，不是逻辑列宽或 GPU 原始分辨率。producer 的注册与 draw 事件前后仍各一次，原键盘 recorder 所在 pane `1` 也持续存活。
 
-上述新候选窄验证不改标旧候选的完整 workspace／SSH／DPI／IME 记录，也不替代仍缺失的硬件 repeat 与 macOS 实窗证据。
+上述新候选窄验证不改标旧候选的完整 workspace／SSH／DPI／IME 记录；此前缺失的硬件 repeat 已按下方原生证据补齐，macOS 实窗仍不计已验。
 
 修复候选的 [CI 43560374362](https://github.com/dlivxpr/lyrel/actions/runs/43560374362) 已全部成功，PR HEAD 为 `dff8666c`，三个主平台实际 checkout 均为 synthetic merge `0dbd87c56f3d0ddb4969f9242348394b39ccdec9`。以下列出主套件与真实非零 CLI E2E；各项失败数均为零，`—` 表示该平台没有此桌面目标，ignored 不计通过。native runner 仍不能替代 macOS 实窗或物理持键。
 
@@ -289,3 +289,5 @@ Windows 另完成格式检查与实际 app 构建，关键 GUI／core 输入在�
 | Windows | 3,055／39 | 1,878／28 | 28 | 37 | 3 |
 | macOS | 3,107／37 | 2,012／28 | 29 | 37 | 3 |
 | Linux headless | — | 2,001／34 | 29 | — | — |
+
+硬件持键 repeat 最终在同一候选上实际完成：人工在 pane `1` 的 `kitty_keyboard_boundary.mjs events 31` recorder（有效 flags `27`）中两次真实按住 Space，PTY 依次收到 `ESC[32;1;32u` press、110 个与 45 个连续的 `ESC[32;1:2;32u` repeat（Kitty event type 2），各以 `ESC[32;1:3u` release 结束；此前 `holdKeys` 自动持键 0.8s／2.2s 均只有 press+release，从未产生 `:2` repeat 事件，不能替代此原生证据。原始事件流见 `final-native-2c0fcd7d/config/scrollback/1.bin` 与 `keyboard-hold-repeat-evidence.json`，实窗截图显示连续 `:2` repeat 后接单条 `:3` release。至此 #273／#278 的全部必需人工验收完成，仅剩 macOS 实窗为既定边界外。
