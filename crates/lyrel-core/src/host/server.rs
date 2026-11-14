@@ -1,7 +1,8 @@
+use std::collections::HashSet;
 use std::io;
 #[cfg(all(test, unix))]
 use std::io::Read;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use crate::core::machine::{self, MachineStore};
@@ -48,6 +49,11 @@ pub const MAX_WORKERS: usize = 64;
 pub const WORKER_LINGER: Duration = Duration::from_secs(10);
 
 pub const MAX_QUEUED: usize = 1024;
+
+/// Read views one control connection may hold. A client opens one per open
+/// database document; the bound keeps a peer from pinning transactions on the
+/// server indefinitely.
+pub const MAX_SQLITE_VIEWS: usize = 8;
 
 pub const LAYOUT_EVENT_QUEUE: usize = 1024;
 
@@ -106,6 +112,10 @@ struct Conn {
     watches: Watches,
     git_streams: GitStreams,
     read_sessions: ReadSessions,
+    /// SQLite read views this connection opened. A view belongs to the
+    /// connection that opened it: another peer's id is not addressable, and
+    /// every one of these is closed when the link ends.
+    sqlite_views: Mutex<HashSet<u64>>,
     pool: Pool,
     machine: Option<Arc<MachineStore>>,
     machine_origin: Option<machine::SubscriberId>,
@@ -114,6 +124,18 @@ struct Conn {
 }
 
 impl Conn {
+    /// Release every SQLite view this connection opened. Called on every exit
+    /// path: a disconnect must not leave a read transaction holding a WAL.
+    fn close_sqlite_views(&self) {
+        let views = {
+            let mut views = self.sqlite_views.lock().unwrap_or_else(|e| e.into_inner());
+            views.drain().collect::<Vec<_>>()
+        };
+        for view in views {
+            self.host.sqlite_close(view);
+        }
+    }
+
     fn machine(&self) -> io::Result<&Arc<MachineStore>> {
         self.machine
             .as_ref()

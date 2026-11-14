@@ -7,6 +7,7 @@ pub mod read;
 pub mod remote;
 pub mod server;
 pub mod session_operations;
+pub mod sqlite;
 pub mod transfer;
 
 use std::io;
@@ -366,6 +367,89 @@ pub trait Host: Send + Sync + 'static {
             "host does not support versioned segmented reads",
         ))
     }
+
+    /// Open `path` as one read-only SQLite read view, or report that this
+    /// transport cannot browse databases. Nothing here writes, recovers or
+    /// changes the journal mode: a database that would need that is refused.
+    ///
+    /// The view is owned by this Host and closed by [`Host::sqlite_close`],
+    /// by idleness/age on the far side, or by the connection that opened it.
+    /// A caller must not silently reopen a path per page; that would present
+    /// pages from different database versions as one view.
+    fn sqlite_open(
+        &self,
+        _path: &Path,
+        _cancel: &sqlite::SqliteCancel,
+    ) -> io::Result<sqlite::SqliteOpened> {
+        guard_off_ui();
+        Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "this host cannot browse SQLite databases",
+        ))
+    }
+
+    /// The columns of one table or view in an open read view's version.
+    fn sqlite_columns(
+        &self,
+        _view: u64,
+        _table: &str,
+        _cancel: &sqlite::SqliteCancel,
+    ) -> io::Result<sqlite::SqliteColumns> {
+        guard_off_ui();
+        Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "this host cannot browse SQLite databases",
+        ))
+    }
+
+    fn sqlite_count(
+        &self,
+        _view: u64,
+        _query: &sqlite::SqliteQuery,
+        _cancel: &sqlite::SqliteCancel,
+    ) -> io::Result<u64> {
+        guard_off_ui();
+        Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "this host cannot browse SQLite databases",
+        ))
+    }
+
+    fn sqlite_page(
+        &self,
+        _view: u64,
+        _query: &sqlite::SqliteQuery,
+        _cancel: &sqlite::SqliteCancel,
+    ) -> io::Result<sqlite::SqlitePage> {
+        guard_off_ui();
+        Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "this host cannot browse SQLite databases",
+        ))
+    }
+
+    /// One complete cell value, in a bounded chunk. TEXT and BLOB return raw
+    /// bytes from `offset`; INTEGER and REAL come back whole and exact.
+    fn sqlite_value(
+        &self,
+        _view: u64,
+        _query: &sqlite::SqliteQuery,
+        _row: u32,
+        _column: u32,
+        _offset: u64,
+        _max_bytes: u64,
+        _cancel: &sqlite::SqliteCancel,
+    ) -> io::Result<sqlite::SqliteValue> {
+        guard_off_ui();
+        Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "this host cannot browse SQLite databases",
+        ))
+    }
+
+    /// Close a read view early. Unknown ids are already closed; this must not
+    /// block the caller on the far side and must never be a write.
+    fn sqlite_close(&self, _view: u64) {}
 
     fn canonicalize(&self, p: &Path) -> io::Result<PathBuf>;
 
