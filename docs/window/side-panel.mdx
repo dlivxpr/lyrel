@@ -269,17 +269,18 @@ Office 与 Notebook 整项排除本轮：不新增 DOC／DOCX、XLS／XLSX、PPT
 当前证据是固定版本的源码与许可核对，不是上游程序实测或 Lyrel 集成通过记录。没有在本次文档更新中导入格式实现、安装依赖或执行新格式；平台、资源预算与真实远端的结果仍须按前述验收记录。
 
 <a id="static-image-documents"></a>
-#### 静态图片文档（#280 已实现）
+#### 图片文档：静态图、GIF 与多页 TIFF（#280、#282 已实现）
 
-#280 交付 PNG、JPEG、WebP、BMP、ICO 的只读文档；GIF 动画与多页 TIFF 不在本切片内，仍由系统外部打开，不显示首帧或首页冒充完整内容。
+#280 交付 PNG、JPEG、WebP、BMP、ICO 的只读文档；#282 在同一文档与取景上补齐 GIF 动画与多页 TIFF，不再把它们的首帧或首页当成完整内容。
 
-- 入口与身份：`EditorBuffers` 的打开请求按名字认这五种扩展名；没有匹配名字的文件在原有 4 MiB 有界读取后，按 PNG／JPEG／WebP／ICO 的真实魔数补认。BMP 不参与魔数探测，因为 `BM` 两个字母不足以把一份文本从编辑器手里拿走。识别后的图片走 32 MiB 图片字节预算与像素预算，不提高文本上限。
-- 内容与失败：`Loaded` 从单一文本结构改为 `Text` / `Image` 两种内容。图片内容 `ImageContent::{Ready, Failed}` 把损坏字节、伪装扩展名与超预算都变成文档里可见的状态与状态行文字，不退回文本编辑器、不静默截断，也不把失败写成空文件。
-- 复用：解码、字节／像素预算与纹理租约仍归 `src/ui/code_editor/markdown/images.rs`；本切片只增加 `decode_static` 与 `Bitmap` 的只读消费者。`decode_static` 只接受五种静态格式，名字为 `.png` 的 SVG 不会再进入 `usvg`。
-- 呈现：`src/ui/code_editor/image_document.rs` 提供 fit、实际大小、缩放与方向键平移；`0`／`1`／`⌘`或`Ctrl`+`=`／`-` 只在该文档的键盘上下文生效。状态行显示格式、像素尺寸、缩放百分比与“只读”，不显示行列、自动换行或换行符。分屏时每个分组各自取景，共享一份解码文档。
+- 入口与身份：`EditorBuffers` 的打开请求按名字认七种扩展名；没有匹配名字的文件在原有 4 MiB 有界读取后，按 PNG／JPEG／WebP／ICO／GIF／TIFF 的真实魔数补认。BMP 不参与魔数探测，因为 `BM` 两个字母不足以把一份文本从编辑器手里拿走。识别后的图片走 32 MiB 图片字节预算与像素预算，不提高文本上限。
+- 内容与失败：`Loaded` 从单一文本结构改为 `Text` / `Image` 两种内容。图片内容 `ImageContent::{Ready, Loading, Failed}` 把损坏字节、伪装扩展名、超预算与尚未解码的 TIFF 页都变成文档里可见的状态与状态行文字，不退回文本编辑器、不静默截断，也不把失败写成空文件。
+- GIF：`image_document/gif.rs` 移植 Glim `GifPlayback`，保留帧合成、Keep／Background／Previous disposal、透明、interlace、finite／infinite repeat、0/1 centisecond 延时与逐行增量解码。输入是 owning Host 读到的字节；打开时一次核准 canvas＋restore＋输出帧＋行的 64 MiB 合成预算，超出就拒绝，不按上游预览路径降低分辨率。只有 presentation 真的在画时才推进帧；隐藏标签页停止帧工作，关闭释放文档与任务。
+- TIFF：用正式 registry `tiff` 解码器枚举 IFD 页表，像素只在该 presentation 请求某页时后台解码；页选择属于 presentation，分屏两边可以停在不同的页。单页上限 8192 边／1600 万像素，页数与单页解码缓冲另有显式预算；迟到页结果只装回自己的页，不能替换当前页。页身份显示为“第 N 页，共 M 页”，翻页可用工具栏、右键菜单与 PageUp／PageDown。
+- 复用与许可：GIF 移植的固定来源、原始 blob 摘要与本地适配见 `src/ui/code_editor/image_document/UPSTREAM.toml`；Glim MIT notice 进入根 `LICENSE` 附录。`gif`／`tiff` 是正式 registry 依赖，不是 Git 或 path 覆盖。
+- 呈现：`src/ui/code_editor/image_document.rs` 提供 fit、实际大小、缩放与方向键平移；`0`／`1`／`⌘`或`Ctrl`+`=`／`-` 只在该文档的键盘上下文生效。状态行显示格式、像素尺寸、页身份、缩放百分比与“只读”，不显示行列、自动换行或换行符。分屏时每个分组各自取景，共享一份文档。
 - 文本契约不变：保存、另存为、未保存关闭、撤销、行号跳转、符号、查找、Git gutter 与 LSP 都经 `EditorInput::is_text()` 保持原有行为；对图片执行这些命令不写盘、不弹永久无效的输入条。
-- 复用记录：本票只复用 Lyrel 自身模块（`buffers.rs`、`saving.rs`、`markdown/images.rs`），Glim `document.rs`／`registry.rs` 仅作内容分类参考，没有导入上游源码，因此没有新增 `UPSTREAM.toml`。复用状态的逐票汇总仍归 #299。
-- 证据边界：工作台接缝测试覆盖五种格式、损坏／伪装／字节与像素预算、外部重写、异 Host 与映射 Host 的字节归属、分屏取景、读取迟到时标签页已关闭，以及文本命令隔离。真实产品窗口、SSH 与 macOS 结果分别由集成验收记录，不能由这些测试或编译成功代替。
+- 证据边界：工作台接缝测试覆盖五种静态格式、GIF 合成与有限循环、可见性暂停与关闭、异尺寸 TIFF 页、迟到页、分屏不同页、损坏／截断／字节与像素预算、外部重写、异 Host 与映射 Host 的字节归属、读取迟到时标签页已关闭，以及文本命令隔离。真实产品窗口、SSH、DPI、macOS 与性能尚未由这些测试或编译成功覆盖。
 
 <a id="markdown-editor-design"></a>
 ### Markdown 即时渲染编辑

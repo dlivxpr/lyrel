@@ -1,5 +1,6 @@
 //! 图片 I/O、权限和异步生命周期只归工作台；editor 仅消费 bitmap 和发出意图。
 use super::super::*;
+use super::super::image_format::ImageFormat;
 use super::links::{self, Target};
 use gpui_kit::component::{WindowExt as _, button::Button};
 use gpui_kit::{AnyWindowHandle, App, ClipboardEntry, EntityId, RenderImage, WeakEntity};
@@ -10,7 +11,8 @@ use lyrel_markdown_editor::{
 use std::{cell::RefCell, io, rc::Rc, time::Duration};
 
 pub(crate) const MAX_BYTES: u64 = 32 * 1024 * 1024;
-const MAX_PIXELS: u64 = 16 * 1024 * 1024;
+/// 一张图上屏的像素上限；TIFF 单页解码沿用同一上限。
+pub(crate) const MAX_PIXELS: u64 = 16 * 1024 * 1024;
 const CACHE_BYTES: u64 = 256 * 1024 * 1024;
 
 type Signature = (HostId, PathBuf);
@@ -599,73 +601,15 @@ fn invalid(message: impl Into<Box<dyn std::error::Error + Send + Sync>>) -> io::
     io::Error::new(io::ErrorKind::InvalidData, message)
 }
 
-/// The five static raster formats a workbench document shows.
-///
-/// GIF animation and multi-page TIFF are not these: their bytes reach the
-/// external opener, not a document, so no ticket claims frames it cannot draw.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum StaticImageFormat {
-    Png,
-    Jpeg,
-    WebP,
-    Bmp,
-    Ico,
-}
-
-impl StaticImageFormat {
-    pub(crate) fn from_extension(path: &Path) -> Option<Self> {
-        let extension = path.extension()?.to_str()?.to_ascii_lowercase();
-        Some(match extension.as_str() {
-            "png" => Self::Png,
-            "jpg" | "jpeg" | "jpe" | "jfif" => Self::Jpeg,
-            "webp" => Self::WebP,
-            "bmp" | "dib" => Self::Bmp,
-            "ico" => Self::Ico,
-            _ => return None,
-        })
-    }
-
-    /// What the first bytes say, for a file whose name claims nothing.
-    ///
-    /// BMP is left out on purpose: `BM` is two ordinary capital letters, so a
-    /// text file opening with them is not evidence enough to take it away
-    /// from the text editor.
-    pub(crate) fn probe(bytes: &[u8]) -> Option<Self> {
-        if bytes.starts_with(b"\x89PNG\r\n\x1a\n") {
-            return Some(Self::Png);
-        }
-        if bytes.starts_with(&[0xFF, 0xD8, 0xFF]) {
-            return Some(Self::Jpeg);
-        }
-        if bytes.len() >= 12 && &bytes[..4] == b"RIFF" && &bytes[8..12] == b"WEBP" {
-            return Some(Self::WebP);
-        }
-        if bytes.starts_with(&[0x00, 0x00, 0x01, 0x00]) {
-            return Some(Self::Ico);
-        }
-        None
-    }
-
-    pub(crate) fn label(self) -> &'static str {
-        match self {
-            Self::Png => "PNG",
-            Self::Jpeg => "JPEG",
-            Self::WebP => "WebP",
-            Self::Bmp => "BMP",
-            Self::Ico => "ICO",
-        }
-    }
-}
-
-pub(crate) fn too_large() -> io::Error {
-    invalid(ImageError::Localized(L10nKey::MarkdownImageLimit))
-}
-
 /// Decodes one of the five static formats under the same byte and pixel
 /// budgets as a Markdown preview, and under the same rule that a name never
 /// decides how bytes are read: SVG is not among them, so a file called
 /// `.png` is never handed to `usvg`.
-pub(crate) fn decode_static(bytes: &[u8]) -> io::Result<(image::RgbaImage, StaticImageFormat)> {
+///
+/// GIF animation and multi-page TIFF are documents with their own frame/page
+/// decoders; handing their bytes here is refused rather than showing a static
+/// first frame.
+pub(crate) fn decode_static(bytes: &[u8]) -> io::Result<(image::RgbaImage, ImageFormat)> {
     let (rgba, extension) = decode(bytes).map_err(|error| {
         // Budget and unsupported-format refusals are already words; anything
         // else is the decoder saying the bytes are not the picture they claim.
@@ -678,23 +622,35 @@ pub(crate) fn decode_static(bytes: &[u8]) -> io::Result<(image::RgbaImage, Stati
         }
     })?;
     let format = match extension {
-        "png" => StaticImageFormat::Png,
-        "jpg" => StaticImageFormat::Jpeg,
-        "webp" => StaticImageFormat::WebP,
-        "bmp" => StaticImageFormat::Bmp,
-        "ico" => StaticImageFormat::Ico,
+        "png" => ImageFormat::Png,
+        "jpg" => ImageFormat::Jpeg,
+        "webp" => ImageFormat::WebP,
+        "bmp" => ImageFormat::Bmp,
+        "ico" => ImageFormat::Ico,
+        "gif" => ImageFormat::Gif,
+        "tiff" => ImageFormat::Tiff,
         _ => {
             return Err(invalid(ImageError::Localized(
                 L10nKey::MarkdownImageUnsupported,
             )));
         }
     };
+    // Animated/multi-page bytes belong to their document decoders; the static
+    // path refuses them instead of showing one frame as the whole file.
+    if !format.is_static() {
+        return Err(invalid(ImageError::Localized(
+            L10nKey::MarkdownImageUnsupported,
+        )));
+    }
     Ok((rgba, format))
 }
 
-/// Uploads decoded pixels as one UI tile under [`Bitmap`]'s lease.
-pub(crate) fn bitmap(rgba: image::RgbaImage, cx: &mut App) -> Bitmap {
-    Bitmap::new(render(rgba), cx)
+/// Wraps an already-converted [`RenderImage`] in the same cache/preview lease.
+///
+/// The GIF and TIFF decoders build the render image on their worker thread, so
+/// the UI thread only takes the lease instead of touching every pixel again.
+pub(crate) fn bitmap_render(image: Arc<RenderImage>, cx: &mut App) -> Bitmap {
+    Bitmap::new(image, cx)
 }
 
 fn decode(bytes: &[u8]) -> io::Result<(image::RgbaImage, &'static str)> {
@@ -802,7 +758,12 @@ fn decode(bytes: &[u8]) -> io::Result<(image::RgbaImage, &'static str)> {
         "svg",
     ))
 }
-fn render(mut rgba: image::RgbaImage) -> Arc<RenderImage> {
+
+/// Converts decoded RGBA pixels into the BGRA render image GPUI uploads.
+///
+/// Also used by the GIF and TIFF workers: converting there keeps the UI thread
+/// from walking every pixel of a frame or page on arrival.
+pub(crate) fn render(mut rgba: image::RgbaImage) -> Arc<RenderImage> {
     for pixel in rgba.pixels_mut() {
         pixel.0.swap(0, 2);
     }

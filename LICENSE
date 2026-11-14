@@ -13037,6 +13037,37 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 
+Glim-derived GIF playback source import
+======================================
+
+适用组件：`lyrel` 的 `src/ui/code_editor/image_document/gif.rs`（GIF 合成、disposal、循环与逐行解码）。
+来源：https://github.com/glimapp/glim @ fc2183f2c5f27ddfcdc4badbab6d83d50616831b 的 `crates/glim-services/src/media.rs`（仅 GIF 部分）。
+原始文件摘要与本地适配记录：`src/ui/code_editor/image_document/UPSTREAM.toml`。
+此例外不改变 Lyrel 原有 Apache-2.0 代码、`tiff`／`gif` registry 依赖或 `image` crate 的许可。
+
+MIT License
+
+Copyright (c) 2026 Glim contributors
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+
 智能体品牌图标：Pi、OpenCode、Hermes
 ==================================
 
