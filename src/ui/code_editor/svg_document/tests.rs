@@ -400,7 +400,7 @@ fn split_groups_share_document_history_and_show_both_sides(tcx: &mut TestAppCont
     });
     assert_ne!(front, other, "each group draws its own presentation");
     app.read_with(&cx, |app, cx| {
-        let file = app.active_buffer().expect("SVG buffer");
+        let _ = app.active_buffer().expect("SVG buffer");
         assert_eq!(
             front.read(cx).document().entity_id(),
             other.read(cx).document().entity_id(),

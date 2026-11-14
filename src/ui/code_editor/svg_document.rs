@@ -788,6 +788,7 @@ impl Render for SvgView {
         // mode; the keyboard context itself exists only over the preview, so
         // source editing keeps every key for the text.
         let item = item
+            .child(body)
             .on_action(cx.listener(|this, _: &ImageZoomIn, _, cx| this.zoom_in(cx)))
             .on_action(cx.listener(|this, _: &ImageZoomOut, _, cx| this.zoom_out(cx)))
             .on_action(cx.listener(|this, _: &ImageFit, _, cx| this.fit(cx)))
