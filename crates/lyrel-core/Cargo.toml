@@ -231,6 +231,11 @@ windows-sys = { version = "0.61.2", features = [
     "Win32_NetworkManagement_IpHelper",
     "Win32_Security",
     "Win32_Storage_FileSystem",
+    # `DeviceIoControl`/`OVERLAPPED` and the read-cache oplock control code:
+    # `host::read_lease` asks the volume to report writes that file timestamps
+    # cannot distinguish. See that module.
+    "Win32_System_IO",
+    "Win32_System_Ioctl",
     "Win32_System_Diagnostics_Debug",
     "Win32_System_Memory",
     "Win32_System_SystemInformation",

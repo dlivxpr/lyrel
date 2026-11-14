@@ -10,6 +10,7 @@ use notify::{RecursiveMode, Watcher};
 use crate::core::git;
 use crate::core::gitignore::GitignoreChain;
 use crate::host::file_version::FileVersion;
+use crate::host::read_lease::ReadLease;
 use crate::host::transfer::SEGMENT_BYTES_MAX;
 use crate::host::{
     ContentLimits, ContentQuery, ContentResults, Entry, Host, HostId, HostRead, MTime, Meta,
@@ -225,6 +226,19 @@ impl Host for LocalHost {
                 format!("{} is not a regular file", p.display()),
             ));
         }
+        // Take the write-notification lease before the data handle is opened,
+        // so no write can land between the version being recorded and the
+        // guarantee starting. A volume that cannot grant one gets an honest
+        // "unavailable", never a timestamp that only looks unchanged.
+        let Some(lease) = ReadLease::acquire(p)? else {
+            return Err(io::Error::new(
+                io::ErrorKind::Unsupported,
+                format!(
+                    "{} cannot be held stable for a versioned read: this volume or path grants no read lease",
+                    p.display()
+                ),
+            ));
+        };
         let file = fs::File::open(p)?;
         let md = file.metadata()?;
         if md.is_dir() {
@@ -248,6 +262,12 @@ impl Host for LocalHost {
                 ),
             ));
         };
+        if lease.broke() {
+            return Err(super::read::file_changed(format!(
+                "{} changed while it was being opened",
+                p.display()
+            )));
+        }
         if !version.matches_path(p)? {
             return Err(super::read::file_changed(format!(
                 "{} was replaced while it was being opened",
@@ -261,6 +281,7 @@ impl Host for LocalHost {
         Ok(Box::new(LocalRead {
             path: p.to_path_buf(),
             file,
+            lease,
             version,
             meta: Meta {
                 is_dir: false,
@@ -811,6 +832,9 @@ fn coalesce(
 struct LocalRead {
     path: PathBuf,
     file: fs::File,
+    /// The platform's write notification for this file; `FileVersion` alone
+    /// cannot see two writes inside one timestamp tick, nor a restored mtime.
+    lease: ReadLease,
     version: FileVersion,
     meta: Meta,
     offset: u64,
@@ -869,6 +893,14 @@ impl HostRead for LocalRead {
 
 impl LocalRead {
     fn verify(&self) -> io::Result<()> {
+        // The lease is the version proof: a break cannot be hidden by two
+        // writes sharing a clock tick, and restoring mtime does not undo it.
+        if self.lease.broke() {
+            return Err(super::read::file_changed(format!(
+                "{} changed while it was being read",
+                self.path.display()
+            )));
+        }
         let version = FileVersion::of_open_file(&self.file)?.ok_or_else(|| {
             super::read::file_changed(format!(
                 "{} stopped reporting a change time while it was being read",

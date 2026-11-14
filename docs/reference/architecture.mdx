@@ -217,7 +217,8 @@ coding agent 在真实 PTY 中运行自己的原生 TUI。命令识别、状态 
 
 当前 `Host::read_file` 仍是有上限的整文件读取，供文本与既有小文件流程使用；大图片预览和图片文档打开走新增的版本化获取路径 `Host::open_read`，不靠抬高 4 MiB 文本上限或 control 帧上限。
 
-- 读取会话在打开时绑定一个文件版本。`LocalHost` 持有打开句柄，用平台对象身份（Unix `dev`／`ino`，Windows 卷序号／文件索引）与 change metadata（Unix `ctime`，NTFS `ChangeTime`）识别同尺寸改写后恢复 mtime 的文件；每段读取前后都复核句柄版本与路径身份，原子替换、删除或读取期间写入返回 `FileChanged`，不会把两个版本的字节拼成成功原件。拿不到 change metadata 的卷明确报告版本化读取不可用。
+- 读取会话在打开时绑定一个文件版本。`LocalHost` 在打开数据句柄之前先建立平台写入租约：Unix 用 `(dev, ino)` 对象身份和内核推进、用户态无法回写的 `ctime`，不需要额外句柄；Windows 另开一个异步句柄向卷申请 read-cache opportunistic lock（`FSCTL_REQUEST_OPLOCK` 的 `OPLOCK_LEVEL_CACHE_READ`，等价 Level 2），租约 break 是 advisory 的，不阻塞写者，也不依赖 100ns 时间戳——同一时钟 tick 内的等长写入、或把 mtime 写回旧值，都会让旧会话以 `FileChanged` 失败。每段读取前后都复核租约、句柄指纹（长度、`LastWriteTime`／`ChangeTime`、卷序号／文件索引）与路径身份；原子替换、删除或读取期间写入返回 `FileChanged`，不会把两个版本的字节拼成成功原件。
+- 平台限制：远端 SMB／UNC 路径的 oplock 请求会被网络重定向器拒绝，不维护 oplock 的卷也可能拒绝；此时 `LocalHost::open_read` 明确返回 `Unsupported`，消费者据此决定是否有界整文件读取回退，不会用“时间戳看起来没变”冒充版本证明。Unix 本机读取不额外申请租约，`ctime` 已是单调证据。Windows 的租约覆盖 NTFS／ReFS，且允许其他读者并发持有；拿不到 change metadata 或租约都按版本化读取不可用处理。
 - control v17 增加 `OpenRead`／`ReadChunk`／`CloseRead`、`ReadOpened` 与 `FileChanged`；`RemoteHost` 只在 peer 通告 `host-file-range-v1` 时使用，缺能力时返回 `Unsupported`，不会把整文件读取伪装成分段。服务端每条连接持有有界数量的打开会话，空闲回收，连接退出时全部释放。
 - 分段是拉式、有界的：默认每段 256 KiB，服务端拒绝超过 4 MiB 的段请求；交互 control 帧在段与段之间取得输出锁，不必等整份文件写完。客户端传输工作内存有独立的 256 MiB 账本，超额显式失败，与解码像素（16M）和图片缓存（256 MiB）预算分开。
 - 消费者：Markdown 内联图片按段加载并显示进度；文档、所属 Host、连接代次或来源失效时取消在途读取，已读缓冲与远端会话随之释放；图片文档打开复用同一路径。无分段能力的 Host（例如 SFTP pane host 或未升级 peer）在既有 32 MiB 图片输入预算内沿用有上限的整文件读取，更大的输入仍显式失败。

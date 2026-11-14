@@ -5,11 +5,15 @@
 //!
 //! - Unix：`(dev, ino)` 标识打开的对象；`ctime` 由内核在任何写入或元数据
 //!   变更后推进，用户态只能设置 mtime，不能把 ctime 改回去。
-//! - Windows：卷序号 + 文件索引标识对象；NTFS `ChangeTime` 由系统在写入后
-//!   推进，`SetFileTime` 只能写回 creation/access/write 时间。
+//! - Windows：卷序号 + 文件索引标识对象；`LastWriteTime`／`ChangeTime` 只是
+//!   变化线索，不是版本号——两者按系统时钟中断粒度取值（常见 15.6ms），同一
+//!   tick 内的两次等长写入可能得到相同时间戳，`SetFileTime` 也能把写时间写回
+//!   旧值。Windows 上“这期间没有写入”的证明来自
+//!   [`ReadLease`](super::read_lease) 持有的 read-cache oplock；本模块的指纹
+//!   负责对象身份、同句柄变化与路径替换，不单独充当版本证明。
 //!
-//! 拿不到变化时间（例如不维护 change time 的文件系统）时返回 `None`，调用
-//! 方据此报告“版本化读取不可用”，而不是把弱校验当成一致性证明。
+//! 拿不到变化时间（例如不维护 change time 的文件系统），或 Windows 上拿不到
+//! 读取租约时，调用方据此报告“版本化读取不可用”，而不是把弱校验当成一致性证明。
 
 use std::fs::File;
 use std::io;
