@@ -256,6 +256,8 @@ OSC 22 另以真实 OS cursor 采样核验 `Hand`、`SizeWE`、`SizeNESW`，以�
 
 同一冻结候选另在真实 Windows pane 完成颜色／进度／鼠标组合：OSC 覆盖与查询样本的 ANSI-1、ANSI-2、默认前景和背景像素分别一致，颜色 producer 退出后背景仍保留，reset 后露出当前 Dark 默认；chrome 像素未变。光标色获得真实查询回复，但该轮 bar 的像素取点落入背景，不计为原生光标色通过。两个同标签页的真实 producer 分别验证 42%、非焦点 pane 错误优先、多任务不显示虚构百分比、单 pane clear 后保留另一 pane 的暂停 61%，正常退出后清除。
 
+随后在同一 `2c0fcd7d` 实窗以独立场景补测 OSC 12：查询返回 `rgb:ffff/0000/0000`，取得终端输入焦点后的 steady block caret 与独立背景参考色块，在保存截图中的取样均为 `[255,0,0]`，相邻终端背景为 `[24,24,26]`。原无光标或取点落空的截图仍保留为无效探针，不冒充产品失败；producer 正常退出并用 OSC 112 恢复默认，只关闭新增测试 pane。
+
 最大化并收起侧栏后，真实 pane 为 234×52：Ctrl 点击第 229 列得到 1005 UTF-8 press／release，坐标字段包含 `c4 85`；切换 1006 后，同位置 Alt 点击得到 `CSI < 8 ; 229 ; 8 M/m`。DECRQM 随生效编码从 `1005=1,1006=2` 切到 `1005=2,1006=1`，`1015=0` 始终如实拒绝。该列超过 legacy 上限 222，不将脚本建议的第 241 列写成实际点击位置；退出后恢复窗口大小和鼠标模式。
 
 真实 Neovim `0.12.6` 的 WSL TUI 在该 Windows ConPTY pane 中执行公开 `vim.tty.query`：`Co=256`、`RGB=8/8/8` 为正答，`Ms/TN/sixel/iterm2/cols/lines/Glyph/unknown` 为负答，共 10 组 PASS、无 FAIL。负答按客户端自身一秒期限回退；实际 `TERM=xterm-256color`、`TERM_PROGRAM=nil`，未冒充其他产品，也不是 `--headless` 或仅加载 Lua 的证明。
@@ -263,3 +265,27 @@ OSC 22 另以真实 OS cursor 采样核验 `Hand`、`SizeWE`、`SizeNESW`，以�
 新 GUI 的旧后端负例也经过实际产品路由和窗口：使用已有 local-stdio 入口，经只转发字节的私有 Windows bridge 与固定 host-key 的 OpenSSH 连接既有 Linux pane v18 服务。GUI 在创建 shell 前显示 `pane peer (build 0.3.4) speaks protocol v18, this build speaks v19; update lyrel or lyrel-server`；没有点击重试、安装或替换。旧 daemon PID `40673`、pane 数 `0`、control `16`、pane `18` 及 server hash 均未变，本机 daemon PID `15104` 的两个自有 pane 也保持存活。control 路径可连接不代表 pane 能力兼容；空 workspace／tab 的测试元数据不等于已启动远端 shell。
 
 尚缺同一候选的硬件持键 repeat 证据：自动化 `holdKeys` 的 0.8 秒与 2.2 秒输入都只产生一组 press／release，没有事件类型 `2`，不能当作系统自动连发通过。用户当前不便执行人工持键，要求保留该缺口。#258、#273 与 #278 仍未完成，PR 保持 draft；已有 headless held-event 回归、原生 press／release 与 IME 结果不替代缺失证据。macOS 实窗仍未验收。
+
+#### 独立审查后的修复候选
+
+`dff8666c` 修正两项生产所有权缺陷：绘制快照保留 Kitty placeholder 的占用身份，`width=2` Glyph 不再借用被隐藏为普通空格的邻格；daemon 仅向声明 `SubscribeGlyphRender` 的当前 controller 路由字体 coverage 查询，CLI／observer 的 `GlyphState` 投影凭证不再充当字体应答凭证。公开注册记录标为非穷尽，四个无调用包装已移除；不改变 wire kind、协议版本、字体权威或资源预算。
+
+冻结该候选后实际执行的窄验证如下；Windows 的两个 ignored 分别为私有 PTY sender 和需显式提供正式 omp 的用例，不计已执行。
+
+| 验证路径 | passed | failed | ignored |
+| --- | ---: | ---: | ---: |
+| Windows library `glyph_`（含生产消费者） | 32 | 0 | 2 |
+| WSL 原生 Linux、完整 features 的 core Glyph | 38 | 0 | 0 |
+| Unix 新 shell 不继承旧注册 | 1 | 0 | 0 |
+
+Windows 另完成格式检查与实际 app 构建，关键 GUI／core 输入在运行前后 SHA-256 相同；不可变 app SHA-256 为 `d02082173c117291dda77d1513719a916798f37b153697ecce0e5aea8bc3baad`。只正常关闭旧自有 GUI，再以新 GUI 附着原 daemon `15104` 与 pane `3`，没有重注册或重发场景：同一张方形 Glyph 在普通空白邻格前仍可借两格，在 placeholder 邻格前缩回一格。保存截图按同一区域量取纯红像素，普通空白前始终为 18，placeholder 前由 18 降为 8；这是下采样截图的墨迹跨度，不是逻辑列宽或 GPU 原始分辨率。producer 的注册与 draw 事件前后仍各一次，原键盘 recorder 所在 pane `1` 也持续存活。
+
+上述新候选窄验证不改标旧候选的完整 workspace／SSH／DPI／IME 记录，也不替代仍缺失的硬件 repeat 与 macOS 实窗证据。
+
+修复候选的 [CI 43560374362](https://github.com/dlivxpr/lyrel/actions/runs/43560374362) 已全部成功，PR HEAD 为 `dff8666c`，三个主平台实际 checkout 均为 synthetic merge `0dbd87c56f3d0ddb4969f9242348394b39ccdec9`。以下列出主套件与真实非零 CLI E2E；各项失败数均为零，`—` 表示该平台没有此桌面目标，ignored 不计通过。native runner 仍不能替代 macOS 实窗或物理持键。
+
+| CI 平台 | library passed／ignored | core passed／ignored | CLI E2E passed | native Markdown passed | native terminal passed |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Windows | 3,055／39 | 1,878／28 | 28 | 37 | 3 |
+| macOS | 3,107／37 | 2,012／28 | 29 | 37 | 3 |
+| Linux headless | — | 2,001／34 | 29 | — | — |
