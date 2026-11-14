@@ -10,9 +10,9 @@ use super::super::*;
 use super::*;
 // `image_document` has private `gif`/`tiff` submodules; these explicit
 // imports keep the fixture encoders pointing at the registry crates.
+use crate::ui::app::test_window::harness_with_tabs;
 use ::gif;
 use ::tiff;
-use crate::ui::app::test_window::harness_with_tabs;
 use gpui_kit::test::TestWindowExt as _;
 use gpui_kit::{TestAppContext, VisualTestContext};
 use std::path::{Path, PathBuf};
@@ -837,7 +837,10 @@ fn show_tab(app: &Entity<LyrelApp>, cx: &mut VisualTestContext, index: usize) {
     settle(cx);
 }
 
-fn image_document(app: &Entity<LyrelApp>, cx: &VisualTestContext) -> gpui_kit::WeakEntity<ImageDocument> {
+fn image_document(
+    app: &Entity<LyrelApp>,
+    cx: &VisualTestContext,
+) -> gpui_kit::WeakEntity<ImageDocument> {
     image_view(app, cx).read_with(cx, |view, _| view.document().downgrade())
 }
 
@@ -919,7 +922,11 @@ fn gif_animation_composites_frames_and_honours_finite_loops(tcx: &mut TestAppCon
             "the status names the animation and its source size"
         );
     });
-    assert_eq!(std::fs::read(&path).unwrap(), bytes, "the source is untouched");
+    assert_eq!(
+        std::fs::read(&path).unwrap(),
+        bytes,
+        "the source is untouched"
+    );
 }
 
 #[gpui_kit::test]
@@ -995,7 +1002,10 @@ fn a_multipage_tiff_navigates_pages_with_identity_and_keeps_framing(tcx: &mut Te
     );
     cx.update(|window, _| {
         assert!(window.find("image-page-facts").visible());
-        assert_eq!(window.find("status-image-page").label(), Some("Page 1 of 3"));
+        assert_eq!(
+            window.find("status-image-page").label(),
+            Some("Page 1 of 3")
+        );
         assert!(
             window
                 .find("status-image-facts")
@@ -1013,7 +1023,10 @@ fn a_multipage_tiff_navigates_pages_with_identity_and_keeps_framing(tcx: &mut Te
     assert_eq!(view.read_with(&cx, |view, _| view.scale()), 1.);
     assert_eq!(view.read_with(&cx, |view, _| view.page()), 1);
     cx.update(|window, _| {
-        assert_eq!(window.find("status-image-page").label(), Some("Page 2 of 3"));
+        assert_eq!(
+            window.find("status-image-page").label(),
+            Some("Page 2 of 3")
+        );
         assert!(
             window
                 .find("status-image-facts")
@@ -1052,7 +1065,11 @@ fn a_multipage_tiff_navigates_pages_with_identity_and_keeps_framing(tcx: &mut Te
     cx.update(|window, cx| window.press("0", cx));
     settle(&mut cx);
     assert!(view.read_with(&cx, |view, _| view.scale()) <= 1.);
-    assert_eq!(std::fs::read(&path).unwrap(), bytes, "the source is untouched");
+    assert_eq!(
+        std::fs::read(&path).unwrap(),
+        bytes,
+        "the source is untouched"
+    );
 }
 
 #[gpui_kit::test]
@@ -1083,7 +1100,10 @@ fn a_late_page_decode_cannot_replace_the_current_page(tcx: &mut TestAppContext) 
         "the later request is the visible page"
     );
     cx.update(|window, _| {
-        assert_eq!(window.find("status-image-page").label(), Some("Page 3 of 3"));
+        assert_eq!(
+            window.find("status-image-page").label(),
+            Some("Page 3 of 3")
+        );
     });
     // 回到第 2 页仍是它自己的尺寸，没有被第 3 页的缓存顶替。
     cx.update(|window, cx| window.press("pageup", cx));
@@ -1207,7 +1227,11 @@ fn corrupt_and_oversized_animations_and_pages_fail_visibly(tcx: &mut TestAppCont
         matches!(content(&app, cx), ImageContent::Failed(_))
     });
     cx.update(|window, _| assert!(window.find("status-image-failed").visible()));
-    assert_eq!(std::fs::read(&path).unwrap(), cut, "the source is untouched");
+    assert_eq!(
+        std::fs::read(&path).unwrap(),
+        cut,
+        "the source is untouched"
+    );
 
     // 动画合成预算超出时打开即拒绝，不静默降采样。
     let mut over = gif_fixture(
@@ -1241,7 +1265,11 @@ fn corrupt_and_oversized_animations_and_pages_fail_visibly(tcx: &mut TestAppCont
             "a single-page TIFF does not promise page navigation"
         );
     });
-    assert_eq!(std::fs::read(&path).unwrap(), bytes, "the source is untouched");
+    assert_eq!(
+        std::fs::read(&path).unwrap(),
+        bytes,
+        "the source is untouched"
+    );
 }
 
 #[gpui_kit::test]
@@ -1306,6 +1334,12 @@ fn the_owning_host_supplies_animation_and_page_bytes(tcx: &mut TestAppContext) {
         image_view(&app, &cx).read_with(&cx, |view, cx| view.page_label(cx)),
         Some(SharedString::from("Page 1 of 2"))
     );
-    assert_eq!(std::fs::read(local.path().join("anim.gif")).unwrap(), local_gif);
-    assert_eq!(std::fs::read(local.path().join("pages.tiff")).unwrap(), local_tiff);
+    assert_eq!(
+        std::fs::read(local.path().join("anim.gif")).unwrap(),
+        local_gif
+    );
+    assert_eq!(
+        std::fs::read(local.path().join("pages.tiff")).unwrap(),
+        local_tiff
+    );
 }

@@ -38,7 +38,10 @@ const MAX_EDGE: u32 = 8192;
 #[derive(Debug)]
 pub(super) enum GifError {
     /// canvas + restore + output + row 超出动画合成预算。
-    Budget { required: u64, limit: u64 },
+    Budget {
+        required: u64,
+        limit: u64,
+    },
     EmptyCanvas,
     NoFrames,
     Truncated,

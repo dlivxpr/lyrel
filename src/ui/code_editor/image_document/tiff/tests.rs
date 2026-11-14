@@ -3,8 +3,8 @@
 use super::*;
 use crate::ui::code_editor::markdown::images::MAX_PIXELS;
 use std::io::Cursor;
-use tiff::encoder::colortype::{CMYK8, Gray8, Gray32Float, RGB8, RGB16, RGBA8};
 use tiff::encoder::TiffEncoder;
+use tiff::encoder::colortype::{CMYK8, Gray8, Gray32Float, RGB8, RGB16, RGBA8};
 
 fn rgb_pages(pages: &[(u32, u32, [u8; 3])]) -> Vec<u8> {
     let mut bytes = Vec::new();
@@ -52,10 +52,7 @@ fn enumerates_pages_and_decodes_distinct_dimensions() {
             "page {page}"
         );
     }
-    assert!(matches!(
-        pages.decode(3),
-        Err(TiffPageError::Missing)
-    ));
+    assert!(matches!(pages.decode(3), Err(TiffPageError::Missing)));
 }
 
 #[test]
@@ -112,9 +109,7 @@ fn an_unsupported_sample_layout_is_a_visible_refusal() {
     let mut bytes = Vec::new();
     {
         let mut encoder = TiffEncoder::new(Cursor::new(&mut bytes)).expect("tiff starts");
-        let image = encoder
-            .new_image::<Gray32Float>(1, 1)
-            .expect("page starts");
+        let image = encoder.new_image::<Gray32Float>(1, 1).expect("page starts");
         image.write_data(&[0.5f32]).expect("page writes");
     }
     match open(bytes).decode(0) {

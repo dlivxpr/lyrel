@@ -13,10 +13,10 @@
 //! 页选择与取景属于 presentation；解码结果、动画状态与页缓存属于文档。
 //! 一个分屏的翻页不会改写另一个分屏正在看的页。
 
+use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::{
     ActiveTheme as _, Disableable as _, Icon, IconName, Sizable as _, h_flex, v_flex,
 };
-use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::prelude::*;
 use gpui_kit::{
     App, Context, Entity, FocusHandle, Focusable, Pixels, Point, Render, RenderImage, ScrollHandle,
@@ -151,9 +151,7 @@ impl ImageContent {
     /// 只有真的换了内容才该重画；动画每帧换一块纹理，切页换一张图。
     fn same(&self, other: &Self) -> bool {
         match (self, other) {
-            (Self::Ready(left), Self::Ready(right)) => {
-                Arc::ptr_eq(&left.image(), &right.image())
-            }
+            (Self::Ready(left), Self::Ready(right)) => Arc::ptr_eq(&left.image(), &right.image()),
             (Self::Loading, Self::Loading) => true,
             (Self::Failed(left), Self::Failed(right)) => left == right,
             _ => false,
@@ -327,9 +325,7 @@ impl ImageDocument {
         let generation = run.generation;
         cx.spawn(async move |this, cx| {
             let decoded = cx
-                .background_spawn(async move {
-                    pages.decode(page).map(tiff::render_page)
-                })
+                .background_spawn(async move { pages.decode(page).map(tiff::render_page) })
                 .await;
             let _ = this.update(cx, |document, cx| {
                 document.page_install(generation, page, decoded, cx);
@@ -384,8 +380,9 @@ impl ImageDocument {
         let generation = run.generation;
         let task = cx.spawn(async move |this, cx| {
             loop {
-                let Some((delay, finished)) =
-                    this.update(cx, |document, _| document.gif_wait(generation)).ok()
+                let Some((delay, finished)) = this
+                    .update(cx, |document, _| document.gif_wait(generation))
+                    .ok()
                 else {
                     break;
                 };
@@ -410,9 +407,9 @@ impl ImageDocument {
                         let mut player = player
                             .lock()
                             .unwrap_or_else(|poisoned| poisoned.into_inner());
-                        player.next_frame().map(|frame| {
-                            frame.map(|(rgba, delay)| (images::render(rgba), delay))
-                        })
+                        player
+                            .next_frame()
+                            .map(|frame| frame.map(|(rgba, delay)| (images::render(rgba), delay)))
                     })
                     .await;
                 if this
@@ -567,18 +564,16 @@ impl ImageView {
 
     /// “第 2 页，共 5 页”；单页文档没有页身份可报。
     pub(crate) fn page_label(&self, cx: &App) -> Option<SharedString> {
-        self.page_count(cx)
-            .filter(|count| *count > 1)
-            .map(|count| {
-                t_fmt(
-                    L10nKey::EditorImagePageOf,
-                    &[
-                        ("page", &(self.page + 1).to_string()),
-                        ("pages", &count.to_string()),
-                    ],
-                )
-                .into()
-            })
+        self.page_count(cx).filter(|count| *count > 1).map(|count| {
+            t_fmt(
+                L10nKey::EditorImagePageOf,
+                &[
+                    ("page", &(self.page + 1).to_string()),
+                    ("pages", &count.to_string()),
+                ],
+            )
+            .into()
+        })
     }
 
     fn multipage(&self, cx: &App) -> bool {
@@ -1027,9 +1022,12 @@ impl Render for ImageView {
                 .px_4()
                 .border_1()
                 .border_color(ring)
-                .child(div().text_sm().text_color(muted).child(t(
-                    L10nKey::EditorImagePageLoading,
-                )))
+                .child(
+                    div()
+                        .text_sm()
+                        .text_color(muted)
+                        .child(t(L10nKey::EditorImagePageLoading)),
+                )
                 .into_any_element()
         };
 
@@ -1042,9 +1040,7 @@ impl Render for ImageView {
             .on_action(cx.listener(|this, _: &ImageFit, _, cx| this.fit(cx)))
             .on_action(cx.listener(|this, _: &ImageActualSize, _, cx| this.actual_size(cx)))
             .on_action(cx.listener(|this, _: &ImageNextPage, _, cx| this.next_page(cx)))
-            .on_action(cx.listener(|this, _: &ImagePreviousPage, _, cx| {
-                this.previous_page(cx)
-            }))
+            .on_action(cx.listener(|this, _: &ImagePreviousPage, _, cx| this.previous_page(cx)))
             .on_key_down(
                 cx.listener(|this, event: &gpui_kit::KeyDownEvent, _window, cx| {
                     let key = event.keystroke.key.as_str();
@@ -1120,7 +1116,10 @@ pub(super) fn menu_entries(
         .menu(t(L10nKey::EditorImageActualSize), Box::new(ImageActualSize));
     if multipage {
         menu.separator()
-            .menu(t(L10nKey::EditorImagePagePrevious), Box::new(ImagePreviousPage))
+            .menu(
+                t(L10nKey::EditorImagePagePrevious),
+                Box::new(ImagePreviousPage),
+            )
             .menu(t(L10nKey::EditorImagePageNext), Box::new(ImageNextPage))
     } else {
         menu

@@ -890,9 +890,7 @@ impl EditorBuffers {
                             .image()
                             .map(|view| view.read(cx).document().clone());
                         if let Some(document) = document {
-                            document.update(cx, |document, cx| {
-                                document.replace(image.result, cx)
-                            });
+                            document.update(cx, |document, cx| document.replace(image.result, cx));
                         }
                         cx.notify();
                         return;

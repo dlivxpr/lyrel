@@ -352,9 +352,8 @@ fn into_rgba(
         }
         (ColorType::Palette(depth), DecodingResult::U8(samples)) => {
             exact(samples.len(), expected)?;
-            let map = colormap.ok_or_else(|| {
-                TiffPageError::Unsupported("palette without a color map".into())
-            })?;
+            let map = colormap
+                .ok_or_else(|| TiffPageError::Unsupported("palette without a color map".into()))?;
             let entries = 1usize << usize::from((*depth).min(16));
             if map.len() < entries * 3 {
                 return Err(TiffPageError::Corrupt(
@@ -382,9 +381,8 @@ fn into_rgba(
             )));
         }
     }
-    RgbaImage::from_raw(width, height, out).ok_or_else(|| {
-        TiffPageError::Corrupt("decoded page does not match its dimensions".into())
-    })
+    RgbaImage::from_raw(width, height, out)
+        .ok_or_else(|| TiffPageError::Corrupt("decoded page does not match its dimensions".into()))
 }
 
 fn u16_to_u8(value: u16) -> u8 {

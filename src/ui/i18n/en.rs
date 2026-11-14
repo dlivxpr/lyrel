@@ -1856,13 +1856,13 @@ pub fn translate_en(key: L10nKey) -> &'static str {
         L10nKey::EditorImagePagePrevious => "Previous page",
         L10nKey::EditorImagePageNext => "Next page",
         L10nKey::EditorImagePageMissing => "This page does not exist",
-        L10nKey::EditorImagePageUnsupported => "This page uses a TIFF sample layout Lyrel cannot show",
+        L10nKey::EditorImagePageUnsupported => {
+            "This page uses a TIFF sample layout Lyrel cannot show"
+        }
         L10nKey::EditorImagePageBytesLimit => {
             "Page decoding needs {required} MiB, over the {limit} MiB page budget"
         }
-        L10nKey::EditorImagePagesLimit => {
-            "The file has more than the {pages}-page TIFF budget"
-        }
+        L10nKey::EditorImagePagesLimit => "The file has more than the {pages}-page TIFF budget",
         L10nKey::EditorImageAnimationLimit => {
             "Animation frame buffers need {required} MiB, over the {limit} MiB budget"
         }
