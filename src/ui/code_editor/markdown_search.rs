@@ -523,7 +523,12 @@ mod tests {
         settle(&mut vcx);
         app.read_with(&vcx, |app, cx| {
             assert_eq!(
-                app.active_editor_input().unwrap().text().unwrap().read(cx).selected_range(),
+                app.active_editor_input()
+                    .unwrap()
+                    .text()
+                    .unwrap()
+                    .read(cx)
+                    .selected_range(),
                 8..13
             )
         });
@@ -534,7 +539,12 @@ mod tests {
         settle(&mut vcx);
         app.read_with(&vcx, |app, cx| {
             assert_eq!(
-                app.active_editor_input().unwrap().text().unwrap().read(cx).selected_range(),
+                app.active_editor_input()
+                    .unwrap()
+                    .text()
+                    .unwrap()
+                    .read(cx)
+                    .selected_range(),
                 14..19
             )
         });

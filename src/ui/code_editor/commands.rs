@@ -1288,7 +1288,10 @@ mod gpui_tests {
         vcx.dispatch_action(gpui_kit::component::input::Undo);
         app.read_with(&vcx, |app, cx| {
             let input = app.active_editor_input().unwrap();
-            assert_eq!(input.text().unwrap().read(cx).text().to_string(), "one\ntwo\nthree");
+            assert_eq!(
+                input.text().unwrap().read(cx).text().to_string(),
+                "one\ntwo\nthree"
+            );
             assert_eq!(input.text().unwrap().read(cx).selected_range(), 0..7);
         });
     }
@@ -1326,7 +1329,10 @@ mod gpui_tests {
         vcx.run_until_parked();
         app.read_with(&vcx, |app, cx| {
             let input = app.active_editor_input().unwrap();
-            assert_eq!(input.text().unwrap().read(cx).text().to_string(), "FOO foo foo");
+            assert_eq!(
+                input.text().unwrap().read(cx).text().to_string(),
+                "FOO foo foo"
+            );
             assert_eq!(input.text().unwrap().read(cx).selected_range(), 0..3);
         });
         vcx.dispatch_action(gpui_kit::component::input::Undo);

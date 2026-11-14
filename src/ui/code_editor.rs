@@ -1234,7 +1234,9 @@ impl LyrelApp {
         self.watch_document_status_focus(&input.read(cx).focus_handle(cx), window, cx);
         // 文本历史只属于有文本的文档；图片没有可导航的编辑位置。
         if let Some(text) = input.text() {
-            self.editor.nav.track_buffer(id, text.read(cx).text().clone());
+            self.editor
+                .nav
+                .track_buffer(id, text.read(cx).text().clone());
         }
         if let Some(source) = input.markdown() {
             let app = cx.entity().downgrade();

@@ -120,12 +120,7 @@ impl TextInput<'_> {
     pub(crate) fn read<'a>(&'a self, cx: &'a gpui_kit::App) -> TextRead<'a> {
         TextRead { input: *self, cx }
     }
-    pub(crate) fn set_soft_wrap(
-        &self,
-        wrap: bool,
-        window: &mut Window,
-        cx: &mut gpui_kit::App,
-    ) {
+    pub(crate) fn set_soft_wrap(&self, wrap: bool, window: &mut Window, cx: &mut gpui_kit::App) {
         match self {
             Self::Code(input) => {
                 input.update(cx, |state, cx| state.set_soft_wrap(wrap, window, cx))
