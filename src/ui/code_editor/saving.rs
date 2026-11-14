@@ -91,12 +91,7 @@ fn document_identity(file: &OpenFile, cx: &gpui_kit::App) -> gpui_kit::EntityId 
         EditorInput::Code(input) => input.entity_id(),
         EditorInput::Markdown(view) => view.read(cx).document().entity_id(),
         // SVG's identity is the shared source Document, not one group's view.
-        EditorInput::Svg(view) => view
-            .read(cx)
-            .document()
-            .read(cx)
-            .document()
-            .entity_id(),
+        EditorInput::Svg(view) => view.read(cx).document().read(cx).document().entity_id(),
         // A picture never saves, but the identity is asked for by every
         // save-side prompt and must name something stable.
         EditorInput::Image(view) => view.entity_id(),
@@ -411,10 +406,7 @@ impl EditorPanelState {
                     let file = editor.buffers.get_mut(id).unwrap();
                     file.set_format(
                         TextFormat {
-                            line_ending: file
-                                .format(cx)
-                                .expect("text document")
-                                .line_ending,
+                            line_ending: file.format(cx).expect("text document").line_ending,
                             ..TextFormat::default()
                         },
                         cx,
@@ -438,7 +430,11 @@ impl EditorPanelState {
     ) {
         // A read-only picture must not open a path picker it can never write
         // through: Save As is about text bytes this document does not have.
-        if self.buffers.get(id).is_some_and(|file| !file.input.is_text()) {
+        if self
+            .buffers
+            .get(id)
+            .is_some_and(|file| !file.input.is_text())
+        {
             return;
         }
         let Some(identity) = self.save_identity(id, cx) else {

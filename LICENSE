@@ -13037,6 +13037,40 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 
+Glim 预览传输取消、准入与预算源码导入
+====================================
+
+适用组件：`crates/lyrel-core/src/host/transfer/` 的取消令牌、传输工作内存准入与具名预算机制。
+来源：https://github.com/glimapp/glim @ fc2183f2c5f27ddfcdc4badbab6d83d50616831b
+原始文件摘要与本地适配记录：`crates/lyrel-core/UPSTREAM.toml`。
+保留部分：`Cancellation`/`CancelOnDrop` 链式取消、`reserve_working` 的
+minimum/desired 先记账后分配与 `WorkingPressure`、`PreviewBudgetExceeded` 与
+`preview_budget`。未导入 Glim 的 macOS 内存余量回调、缓存/回收、作业调度器或
+本地 paged-file 实现。此例外不改变 Lyrel 原有 Apache-2.0 代码的许可。
+
+MIT License
+
+Copyright (c) 2026 Glim contributors
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+
 智能体品牌图标：Pi、OpenCode、Hermes
 ==================================
 

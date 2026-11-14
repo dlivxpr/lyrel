@@ -343,7 +343,9 @@ impl SvgView {
         cx: &mut Context<Self>,
     ) {
         let source = self.source.clone();
-        source.update(cx, |source, cx| source.set_history_selection(before, after, cx));
+        source.update(cx, |source, cx| {
+            source.set_history_selection(before, after, cx)
+        });
     }
 
     /// Copies the origin group's source caret/scroll and preview framing into
@@ -498,10 +500,7 @@ impl SvgView {
 
     /// 状态行与工具栏共用的取景按钮：适应窗口、实际大小。
     fn framing_controls(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let ready = matches!(
-            self.document.read(cx).preview(),
-            Some(SvgPreview::Ready(_))
-        );
+        let ready = matches!(self.document.read(cx).preview(), Some(SvgPreview::Ready(_)));
         h_flex()
             .flex_none()
             .items_center()
@@ -546,8 +545,14 @@ impl SvgView {
         };
         let preview_mode = self.mode == SvgMode::Preview;
         let (toggle_label, toggle_tip) = match preview_mode {
-            true => (t(L10nKey::EditorMarkdownSource), t(L10nKey::EditorSvgShowSource)),
-            false => (t(L10nKey::EditorSvgPreview), t(L10nKey::EditorSvgShowPreview)),
+            true => (
+                t(L10nKey::EditorMarkdownSource),
+                t(L10nKey::EditorSvgShowSource),
+            ),
+            false => (
+                t(L10nKey::EditorSvgPreview),
+                t(L10nKey::EditorSvgShowPreview),
+            ),
         };
         let border = cx.theme().border;
         let muted = cx.theme().muted_foreground;

@@ -177,7 +177,10 @@ fn a_png_opens_as_a_read_only_document_with_framing(tcx: &mut TestAppContext) {
     });
     settle(&mut cx);
     cx.update(|window, _| {
-        assert!(window.find("image-fit").visible(), "fill keeps the controls");
+        assert!(
+            window.find("image-fit").visible(),
+            "fill keeps the controls"
+        );
         assert!(window.find("status-image-zoom").visible());
     });
     app.update_in(&mut cx, |app, window, cx| {
@@ -450,9 +453,7 @@ fn text_only_commands_leave_a_picture_alone(tcx: &mut TestAppContext) {
         app.editor_go_to_line(window, cx);
         app.editor_go_to_symbol(window, cx);
         app.toggle_line_ending(cx);
-        let wrap_before = cx
-            .global::<crate::core::config::Config>()
-            .editor_soft_wrap;
+        let wrap_before = cx.global::<crate::core::config::Config>().editor_soft_wrap;
         app.toggle_document_wrap(window, cx);
         assert_eq!(
             cx.global::<crate::core::config::Config>().editor_soft_wrap,
@@ -575,11 +576,7 @@ fn the_owning_host_decides_which_bytes_are_shown(tcx: &mut TestAppContext) {
     app.read_with(&cx, |app, _| {
         assert_eq!(app.editor_active_location().unwrap().0, HostId(69));
     });
-    assert_eq!(
-        ready_size(&app, &cx),
-        (10, 10),
-        "the plain host's own copy"
-    );
+    assert_eq!(ready_size(&app, &cx), (10, 10), "the plain host's own copy");
 
     // 映射 Host 的根落在别的目录：读到的是它自己的图，不是本地同名文件。
     let decoy = super::super::test_host::canonical_tempdir();
@@ -627,8 +624,8 @@ fn the_owning_host_decides_which_bytes_are_shown(tcx: &mut TestAppContext) {
         local_bytes,
         "local bytes were left alone"
     );
-    let decoy = image::load_from_memory(&std::fs::read(decoy.path().join("pic.png")).unwrap())
-        .unwrap();
+    let decoy =
+        image::load_from_memory(&std::fs::read(decoy.path().join("pic.png")).unwrap()).unwrap();
     assert_eq!(
         (decoy.width(), decoy.height()),
         (30, 40),
@@ -748,4 +745,82 @@ fn a_picture_whose_tab_closed_before_its_read_lands_leaves_nothing_behind(
         )
     });
     assert_eq!(ready_size(&app, &cx), (12, 12));
+}
+
+/// The production opener must carry a representative large picture through the
+/// owning Host's versioned segments, not a raised whole-file limit.
+#[gpui_kit::test]
+fn a_large_picture_opens_through_its_hosts_versioned_read(tcx: &mut TestAppContext) {
+    crate::ui::i18n::set_locale("en");
+    let dir = super::super::test_host::canonical_tempdir();
+    let bytes = super::super::test_host::noise_png(1400, 1000);
+    assert!(
+        bytes.len() > 4 * 1024 * 1024,
+        "the fixture must exceed the old text opening limit, got {} bytes",
+        bytes.len()
+    );
+    let path = fixture(dir.path(), "large-noise.png", &bytes);
+    let (app, mut cx, _streams) = harness_with_tabs(tcx, 1);
+    let host = FileHost::new(HostId(2812));
+    let shared: SharedHost = host.clone();
+    app.update_in(&mut cx, |app, window, cx| {
+        app.editor_open_on_host(shared, &path, window, cx)
+    });
+    until(&mut cx, |cx| {
+        app.read_with(cx, |app, _| app.active_buffer().is_some())
+    });
+    assert_eq!(ready_size(&app, &cx), (1400, 1000));
+    assert_eq!(
+        std::fs::read(&path).unwrap(),
+        bytes,
+        "opening a picture never rewrites the original"
+    );
+    assert_eq!(
+        host.open_reads.load(std::sync::atomic::Ordering::SeqCst),
+        1,
+        "the picture came from one bounded versioned session"
+    );
+}
+
+/// The same consumer over a real control link: a `RemoteHost` talking to the
+/// real server over TCP, with the decode landing in the workbench.
+#[gpui_kit::test]
+fn a_large_picture_loads_over_a_real_control_link(tcx: &mut TestAppContext) {
+    use lyrel_core::daemon::control::ControlHello;
+    use lyrel_core::host::local::LocalHost;
+    use lyrel_core::host::remote::RemoteHost;
+    use lyrel_core::host::server::{Services, serve_with};
+    use std::net::{TcpListener, TcpStream};
+
+    crate::ui::i18n::set_locale("en");
+    let dir = super::super::test_host::canonical_tempdir();
+    let bytes = super::super::test_host::noise_png(1400, 1000);
+    assert!(bytes.len() > 4 * 1024 * 1024);
+    let path = fixture(dir.path(), "remote-noise.png", &bytes);
+
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = listener.local_addr().unwrap();
+    // The link closes when the workbench's last Host handle drops; the test
+    // process ends with the server thread.
+    std::thread::spawn(move || {
+        let (server, _) = listener.accept().unwrap();
+        serve_with(server, LocalHost::new(), Services::none())
+    });
+    let sock = TcpStream::connect(address).unwrap();
+    let remote = RemoteHost::over_tcp(
+        sock,
+        "tcp:gui-large-picture",
+        &ControlHello::host_rpc("tok", "laptop"),
+    )
+    .unwrap();
+    let shared: SharedHost = remote;
+
+    let (app, mut cx, _streams) = harness_with_tabs(tcx, 1);
+    app.update_in(&mut cx, |app, window, cx| {
+        app.editor_open_on_host(shared, &path, window, cx)
+    });
+    until(&mut cx, |cx| {
+        app.read_with(cx, |app, _| app.active_buffer().is_some())
+    });
+    assert_eq!(ready_size(&app, &cx), (1400, 1000));
 }

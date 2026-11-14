@@ -353,10 +353,7 @@ impl EditorBuffers {
                     .markdown_view(source, target.tab, group, window, cx),
             )
         } else if let (Some(primary), Some(group)) = (file.input.svg(), target.group) {
-            EditorInput::Svg(
-                file.presentations
-                    .svg_view(primary, target.tab, group, cx),
-            )
+            EditorInput::Svg(file.presentations.svg_view(primary, target.tab, group, cx))
         } else {
             file.input.clone()
         };
@@ -510,9 +507,8 @@ impl EditorBuffers {
                 },
             );
             let preview = cx.new(|cx| SvgDocument::new(document, cx));
-            let presentation = cx.new(|cx| {
-                SvgView::new(preview, SvgMode::Source, wrap, indent.size as usize, cx)
-            });
+            let presentation =
+                cx.new(|cx| SvgView::new(preview, SvgMode::Source, wrap, indent.size as usize, cx));
             let observe = cx.observe(&presentation, |_, _, cx| cx.notify());
             (EditorInput::Svg(presentation), None, sub, observe)
         } else if native_markdown {
@@ -950,8 +946,7 @@ impl EditorBuffers {
                 // own image state and never reach it.
                 if let Some(text) = file.input.text() {
                     let value = text.read(cx);
-                    file.saved =
-                        Fingerprint::of_chunks(value.text().len(), value.text().chunks());
+                    file.saved = Fingerprint::of_chunks(value.text().len(), value.text().chunks());
                 }
                 file.saved_representation = file.representation_fingerprint(cx);
                 access(view).note_edit(id, cx);
@@ -1133,17 +1128,31 @@ fn read_image(
     claimed: Option<StaticImageFormat>,
     meta: lyrel_core::host::Meta,
 ) -> std::io::Result<LoadedImage> {
+    let mut mtime = meta.mtime;
     let result = if meta.len > IMAGE_MAX_BYTES {
         // Not worth reading to say they are too many.
         Err(images::too_large())
     } else {
-        let bytes = h.read_file(&path, IMAGE_MAX_BYTES)?;
-        images::decode_static(&bytes)
+        match images::read_bytes(
+            h,
+            &path,
+            IMAGE_MAX_BYTES,
+            &lyrel_core::host::transfer::CancelToken::default(),
+            |_| {},
+        ) {
+            Ok((bound, bytes)) => {
+                // The picture and the mtime recorded for later external-change
+                // checks come from the version that was actually opened.
+                mtime = bound.mtime;
+                images::decode_static(&bytes)
+            }
+            Err(error) => Err(error),
+        }
     };
     Ok(LoadedImage {
         path,
         claimed,
-        mtime: meta.mtime,
+        mtime,
         result,
     })
 }

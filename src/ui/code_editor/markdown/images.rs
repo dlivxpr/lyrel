@@ -64,6 +64,8 @@ pub(crate) struct ImageHost {
     scanned_revision: Option<u64>,
     images: Images,
     states: HashMap<String, State>,
+    transfers: HashMap<String, (u64, lyrel_core::host::transfer::CancelToken)>,
+    progress: HashMap<String, (u64, u64)>,
     views: HashMap<EntityId, (WeakEntity<MarkdownEditor>, Subscription)>,
     hover: Option<(EntityId, SharedString, gpui_kit::Bounds<gpui_kit::Pixels>)>,
     notice: Option<SharedString>,
@@ -83,8 +85,11 @@ impl ImageHost {
         let document = editor.read(cx).document().clone();
         let subscription =
             cx.subscribe(&document, |this, _, _: &DocumentEvent, cx| this.refresh(cx));
-        cx.on_release(|this, _| this.images.borrow_mut().clear())
-            .detach();
+        cx.on_release(|this, _| {
+            this.cancel_transfers();
+            this.images.borrow_mut().clear();
+        })
+        .detach();
         Self {
             app,
             id,
@@ -96,6 +101,8 @@ impl ImageHost {
             scanned_revision: None,
             images: Rc::new(RefCell::new(HashMap::new())),
             states: HashMap::new(),
+            transfers: HashMap::new(),
+            progress: HashMap::new(),
             views: HashMap::new(),
             hover: None,
             refresh_scheduled: false,
@@ -163,12 +170,19 @@ impl ImageHost {
             host.id() == capture.host.id() && path.as_ref() == Some(&capture.path)
         }) && self.document.read(cx).revision() == capture.revision
     }
-    fn notify(&self, cx: &mut Context<Self>) {
+    fn notify(&mut self, cx: &mut Context<Self>) {
         for (editor, _) in self.views.values() {
             let _ = editor.update(cx, |_, cx| cx.notify());
         }
         let _ = self.app.update(cx, |_, cx| cx.notify());
         cx.notify();
+    }
+    /// Stops every in-flight picture transfer and drops its buffers.
+    fn cancel_transfers(&mut self) {
+        for (_, token) in std::mem::take(&mut self.transfers).into_values() {
+            token.cancel();
+        }
+        self.progress.clear();
     }
     fn message(&mut self, message: impl Into<SharedString>, cx: &mut Context<Self>) {
         let message = message.into();
@@ -249,6 +263,9 @@ impl ImageHost {
     fn refresh(&mut self, cx: &mut Context<Self>) {
         self.views.retain(|_, (view, _)| view.upgrade().is_some());
         let Some((host, path)) = self.identity(cx) else {
+            // The document this preview belonged to is gone; a read still in
+            // flight must stop instead of finishing for nobody.
+            self.cancel_transfers();
             return;
         };
         let signature = path.as_ref().map(|path| (host.id(), path.clone()));
@@ -263,6 +280,7 @@ impl ImageHost {
         self.scanned_revision = Some(revision);
         self.hover = None;
         if changed_identity {
+            self.cancel_transfers();
             self.signature = signature;
             self.generation = self.generation.wrapping_add(1);
             self.images.borrow_mut().clear();
@@ -287,6 +305,18 @@ impl ImageHost {
         };
         let changed = sources != self.sources || changed_identity;
         self.sources = sources;
+        let stale: Vec<String> = self
+            .transfers
+            .keys()
+            .filter(|source| !self.sources.contains(*source))
+            .cloned()
+            .collect();
+        for source in stale {
+            if let Some((_, token)) = self.transfers.remove(&source) {
+                token.cancel();
+            }
+            self.progress.remove(&source);
+        }
         self.states
             .retain(|source, _| self.sources.contains(source));
         self.images
@@ -335,18 +365,58 @@ impl ImageHost {
             .clone();
         let generation = self.generation;
         let signature = self.signature.clone();
+        let cancel = lyrel_core::host::transfer::CancelToken::default();
+        if let Some((_, superseded)) = self
+            .transfers
+            .insert(source.clone(), (generation, cancel.clone()))
+        {
+            superseded.cancel();
+        }
+        self.progress.remove(&source);
         self.states.insert(source.clone(), State::Loading);
+        // A blocking Host read cannot call back into GPUI, so it reports
+        // progress through a channel drained by a UI-side task.
+        let (progress_tx, progress_rx) = smol::channel::unbounded::<(u64, u64)>();
+        let progress_source = source.clone();
+        cx.spawn(async move |this, cx| {
+            while let Ok((read, total)) = progress_rx.recv().await {
+                let live = this
+                    .update(cx, |this, cx| {
+                        if this
+                            .transfers
+                            .get(&progress_source)
+                            .is_some_and(|(current, _)| *current == generation)
+                        {
+                            this.progress.insert(progress_source.clone(), (read, total));
+                            this.notify(cx);
+                        }
+                    })
+                    .is_ok();
+                if !live {
+                    break;
+                }
+            }
+        })
+        .detach();
+        let worker_cancel = cancel.clone();
         HostOps::run(
             host,
             cx,
             move |h| -> io::Result<Arc<RenderImage>> {
                 let bytes = match target {
-                    Resource::File(path) => h.read_file(&path, MAX_BYTES)?,
+                    Resource::File(path) => {
+                        let mut report = |update: lyrel_core::host::read::ReadProgress| {
+                            let _ = progress_tx.send_blocking((update.read, update.total));
+                        };
+                        read_bytes(h, &path, MAX_BYTES, &worker_cancel, &mut report)?.1
+                    }
                     Resource::External(url) => fetch(&url, proxy.as_deref())?,
                 };
                 decode(&bytes).map(|(rgba, _)| render(rgba))
             },
             move |this, result, cx| {
+                this.transfers.remove(&source);
+                this.progress.remove(&source);
                 let current = this.identity(cx).and_then(|(h, p)| p.map(|p| (h.id(), p)));
                 if this.generation != generation
                     || this.signature != signature
@@ -378,6 +448,11 @@ impl ImageHost {
                                 .insert(source.clone(), Bitmap::new(image, cx));
                             this.states.insert(source, State::Ready);
                         }
+                    }
+                    Err(error) if error.kind() == io::ErrorKind::Interrupted => {
+                        // The document, identity or source that asked for this
+                        // picture is gone; leave nothing claiming to be loading.
+                        this.states.remove(&source);
                     }
                     Err(error) => {
                         this.states.insert(source, State::Failed(error.to_string()));
@@ -664,6 +739,43 @@ impl StaticImageFormat {
 
 pub(crate) fn too_large() -> io::Error {
     invalid(ImageError::Localized(L10nKey::MarkdownImageLimit))
+}
+
+/// Reads one picture's bytes from its owning Host.
+///
+/// The versioned segment session is the real path for a preview: the bytes and
+/// their version stay one object while they travel. A Host that reports
+/// `Unsupported` — an SFTP pane host, or a peer without `host-file-range-v1` —
+/// keeps the previous bounded whole-file read for inputs inside the existing
+/// picture budget; a larger input still fails visibly instead of being read
+/// some other way.
+pub(crate) fn read_bytes(
+    host: &dyn Host,
+    path: &std::path::Path,
+    budget: u64,
+    cancel: &lyrel_core::host::transfer::CancelToken,
+    mut progress: impl FnMut(lyrel_core::host::read::ReadProgress),
+) -> io::Result<(lyrel_core::host::Meta, Vec<u8>)> {
+    match lyrel_core::host::read::read_file_segmented(host, path, budget, cancel, &mut progress) {
+        Ok(outcome) => Ok((outcome.meta, outcome.bytes)),
+        Err(error) if error.kind() == io::ErrorKind::Unsupported => {
+            let meta = host.stat(path)?;
+            if meta.len > budget {
+                return Err(too_large());
+            }
+            log::debug!(
+                "host cannot open a versioned read session; using its bounded whole-file read for {}",
+                path.display()
+            );
+            let bytes = host.read_file(path, budget)?;
+            progress(lyrel_core::host::read::ReadProgress {
+                read: bytes.len() as u64,
+                total: bytes.len() as u64,
+            });
+            Ok((meta, bytes))
+        }
+        Err(error) => Err(error),
+    }
 }
 
 /// Decodes one of the five static formats under the same byte and pixel
@@ -1006,7 +1118,19 @@ pub(crate) fn controls(
     rows.sort_by_key(|(source, _)| *source);
     for (source, state) in rows {
         let message = match state {
-            State::Loading => t(L10nKey::EditorImageLoading).to_owned(),
+            State::Loading => {
+                let percent = host
+                    .progress
+                    .get(source)
+                    .filter(|(_, total)| *total > 0)
+                    .map(|(read, total)| read.saturating_mul(100) / total);
+                match percent {
+                    Some(percent) => {
+                        format!("{} {percent}%", t(L10nKey::EditorImageLoading))
+                    }
+                    None => t(L10nKey::EditorImageLoading).to_owned(),
+                }
+            }
             State::Failed(reason) => format!("{}: {reason}", t(L10nKey::EditorImageFailed)),
             State::Ready => unreachable!(),
         };

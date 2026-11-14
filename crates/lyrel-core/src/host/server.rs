@@ -19,6 +19,7 @@ mod dispatch;
 mod negotiation;
 mod output;
 mod pool;
+mod read_sessions;
 mod requests;
 mod subscriptions;
 #[cfg(all(test, unix))]
@@ -33,6 +34,7 @@ use attachments::ConnectionIdentity;
 pub use connection::{serve, serve_halves, serve_halves_with, serve_with};
 use output::Sink;
 use pool::Pool;
+use read_sessions::ReadSessions;
 use requests::Requests;
 use subscriptions::{GitStreams, Watches};
 
@@ -103,6 +105,7 @@ struct Conn {
     requests: Requests,
     watches: Watches,
     git_streams: GitStreams,
+    read_sessions: ReadSessions,
     pool: Pool,
     machine: Option<Arc<MachineStore>>,
     machine_origin: Option<machine::SubscriberId>,

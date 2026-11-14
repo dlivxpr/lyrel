@@ -83,12 +83,15 @@ fn preview_failure(app: &Entity<LyrelApp>, cx: &VisualTestContext) -> Option<Sha
 }
 
 fn rendered_revision(app: &Entity<LyrelApp>, cx: &VisualTestContext) -> Option<u64> {
-    svg_view(app, cx).read_with(cx, |view, cx| {
-        view.document().read(cx).rendered_revision()
-    })
+    svg_view(app, cx).read_with(cx, |view, cx| view.document().read(cx).rendered_revision())
 }
 
-fn open(app: &Entity<LyrelApp>, cx: &mut VisualTestContext, host: SharedHost, path: &Path) -> BufferId {
+fn open(
+    app: &Entity<LyrelApp>,
+    cx: &mut VisualTestContext,
+    host: SharedHost,
+    path: &Path,
+) -> BufferId {
     let path = path.to_path_buf();
     let at = path.clone();
     app.update_in(cx, |app, window, cx| {
@@ -135,7 +138,10 @@ fn replace_source(
     app.update_in(cx, |app, window, cx| {
         app.focus_editor(window, cx);
         let input = app.active_editor_input().expect("SVG document");
-        input.text().unwrap().replace(range, &replacement, window, cx);
+        input
+            .text()
+            .unwrap()
+            .replace(range, &replacement, window, cx);
     });
     settle(cx);
 }
@@ -207,7 +213,11 @@ fn source_edit_preview_and_save_keep_one_document_and_exact_bytes(tcx: &mut Test
     // The mapped Host's file and a same-named local decoy: only the owning
     // Host's bytes may be read or written.
     let remote_file = fixture(remote.path(), "scene.svg", ORIGINAL);
-    let local_file = fixture(local.path(), "scene.svg", b"LOCAL DECOY MUST STAY UNCHANGED");
+    let local_file = fixture(
+        local.path(),
+        "scene.svg",
+        b"LOCAL DECOY MUST STAY UNCHANGED",
+    );
     let host = FileHost::mapped(HostId(283), remote.path());
     let path = PathBuf::from("/scene.svg");
     let (app, mut cx, _streams) = harness_with_tabs(tcx, 1);
@@ -221,7 +231,10 @@ fn source_edit_preview_and_save_keep_one_document_and_exact_bytes(tcx: &mut Test
         let format = file.format(cx).expect("source format");
         assert!(format.bom, "the UTF-8 BOM is part of the saved bytes");
         assert_eq!(format.encoding, encoding_rs::UTF_8);
-        assert!(app.editor.local_file(id).is_none(), "no code language service");
+        assert!(
+            app.editor.local_file(id).is_none(),
+            "no code language service"
+        );
         assert!(app.svg_document_active());
     });
     assert_eq!(
@@ -237,7 +250,10 @@ fn source_edit_preview_and_save_keep_one_document_and_exact_bytes(tcx: &mut Test
         assert!(window.try_find("status-image-readonly").is_none());
     });
     // The default SVG side is source; the preview is the other side.
-    assert_eq!(svg_view(&app, &cx).read_with(&cx, |view, _| view.mode()), SvgMode::Source);
+    assert_eq!(
+        svg_view(&app, &cx).read_with(&cx, |view, _| view.mode()),
+        SvgMode::Source
+    );
 
     // View switching and the real framing keys work over that source.
     cx.update(|window, cx| window.click("svg-mode-toggle", cx));
@@ -265,7 +281,10 @@ fn source_edit_preview_and_save_keep_one_document_and_exact_bytes(tcx: &mut Test
     assert!(view.read_with(&cx, |view, _| view.preview_scale()) <= 1.);
     cx.update(|window, cx| window.click("svg-mode-toggle", cx));
     settle(&mut cx);
-    assert_eq!(svg_view(&app, &cx).read_with(&cx, |view, _| view.mode()), SvgMode::Source);
+    assert_eq!(
+        svg_view(&app, &cx).read_with(&cx, |view, _| view.mode()),
+        SvgMode::Source
+    );
 
     // Untouched save writes the same BOM and every mixed terminator.
     save(&app, &mut cx);
@@ -320,7 +339,10 @@ fn source_edit_preview_and_save_keep_one_document_and_exact_bytes(tcx: &mut Test
     cx.simulate_prompt_answer(t(L10nKey::EditorDiscard));
     settle(&mut cx);
     app.read_with(&cx, |app, _| {
-        assert!(app.editor.buffers.get(id).is_none(), "discarded close released it");
+        assert!(
+            app.editor.buffers.get(id).is_none(),
+            "discarded close released it"
+        );
     });
     assert_eq!(
         std::fs::read(&remote_file).unwrap(),
@@ -368,8 +390,12 @@ fn split_groups_share_document_history_and_show_both_sides(tcx: &mut TestAppCont
     let (front, other) = app.read_with(&cx, |app, _| {
         let file = app.active_buffer().expect("SVG buffer");
         (
-            file.presentations.svg_existing(tab, right).expect("front view"),
-            file.presentations.svg_existing(tab, left).expect("other view"),
+            file.presentations
+                .svg_existing(tab, right)
+                .expect("front view"),
+            file.presentations
+                .svg_existing(tab, left)
+                .expect("other view"),
         )
     });
     assert_ne!(front, other, "each group draws its own presentation");
@@ -387,7 +413,10 @@ fn split_groups_share_document_history_and_show_both_sides(tcx: &mut TestAppCont
         );
     });
     assert_eq!(other.read_with(&cx, |view, _| view.mode()), SvgMode::Source);
-    assert_eq!(front.read_with(&cx, |view, _| view.mode()), SvgMode::Preview);
+    assert_eq!(
+        front.read_with(&cx, |view, _| view.mode()),
+        SvgMode::Preview
+    );
 
     // Typing in the left source updates the right preview.
     let range = width_range(&app, &cx);
@@ -433,7 +462,7 @@ fn scripts_and_nested_or_network_images_stay_closed(tcx: &mut TestAppContext) {
     let script = fixture(
         dir.path(),
         "script.svg",
-        br#"<svg xmlns="http://www.w3.org/2000/svg" width="40" height="30"><script>require('fs').writeFileSync('pwned.txt','x')</script><rect width="40" height="30" fill="#123"/></svg>"#,
+        br##"<svg xmlns="http://www.w3.org/2000/svg" width="40" height="30"><script>require('fs').writeFileSync('pwned.txt','x')</script><rect width="40" height="30" fill="#123"/></svg>"##,
     );
     open_with_preview(&app, &mut cx, host.clone(), &script, (40., 30.));
     assert!(
@@ -543,11 +572,11 @@ fn invalid_and_oversized_sources_keep_editing_and_recover(tcx: &mut TestAppConte
     });
     // Repair by appending the missing end tag; only the preview changes.
     let len = source_text(&app, &cx).len();
-    replace_source(&app, &mut cx, len..len, "</svg>\n");
+    replace_source(&app, &mut cx, len..len, "</svg>");
     wait_preview(&app, &mut cx, (40., 30.));
     let repaired = {
         let mut bytes = std::fs::read(&broken).unwrap();
-        bytes.extend_from_slice(b"</svg>\n");
+        bytes.extend_from_slice(b"</svg>");
         bytes
     };
     save(&app, &mut cx);
@@ -566,7 +595,12 @@ fn invalid_and_oversized_sources_keep_editing_and_recover(tcx: &mut TestAppConte
     });
     let text = source_text(&app, &cx);
     let at = text.find("width=\"20000\"").expect("oversized width");
-    type_source(&app, &mut cx, at..at + "width=\"20000\"".len(), "width=\"40\"");
+    type_source(
+        &app,
+        &mut cx,
+        at..at + "width=\"20000\"".len(),
+        "width=\"40\"",
+    );
     wait_preview(&app, &mut cx, (40., 30.));
     assert!(
         preview_failure(&app, &cx).is_none(),
@@ -666,11 +700,13 @@ fn external_reload_and_dirty_conflict_keep_source_and_bytes(tcx: &mut TestAppCon
     let range = width_range(&app, &cx);
     type_source(&app, &mut cx, range, "width=\"60\"");
     wait_preview(&app, &mut cx, (60., 20.));
-    let conflicting = b"\xef\xbb\xbf<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"10\" height=\"10\"/>\n";
+    let conflicting =
+        b"\xef\xbb\xbf<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"10\" height=\"10\"/>\n";
     std::fs::write(&path, conflicting).unwrap();
     until(&mut cx, |cx| {
         app.read_with(cx, |app, _| {
-            app.active_buffer().is_some_and(|file| file.conflict.is_some())
+            app.active_buffer()
+                .is_some_and(|file| file.conflict.is_some())
         })
     });
     assert!(source_text(&app, &cx).contains("width=\"60\""));
@@ -695,7 +731,9 @@ fn a_late_preview_never_overwrites_a_newer_revision(tcx: &mut TestAppContext) {
     // second revision must win even when the first result arrives last.
     let (release, entered) = test_support::pause_next_render();
     open(&app, &mut cx, host, &path);
-    until(&mut cx, |_| entered.load(std::sync::atomic::Ordering::SeqCst));
+    until(&mut cx, |_| {
+        entered.load(std::sync::atomic::Ordering::SeqCst)
+    });
     let range = width_range(&app, &cx);
     type_source(&app, &mut cx, range, "width=\"64\"");
     wait_preview(&app, &mut cx, (64., 30.));

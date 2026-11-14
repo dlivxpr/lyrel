@@ -146,12 +146,7 @@ impl TextInput<'_> {
     pub(crate) fn read<'a>(&'a self, cx: &'a gpui_kit::App) -> TextRead<'a> {
         TextRead { input: *self, cx }
     }
-    pub(crate) fn set_soft_wrap(
-        &self,
-        wrap: bool,
-        window: &mut Window,
-        cx: &mut gpui_kit::App,
-    ) {
+    pub(crate) fn set_soft_wrap(&self, wrap: bool, window: &mut Window, cx: &mut gpui_kit::App) {
         match self {
             Self::Code(input) => {
                 input.update(cx, |state, cx| state.set_soft_wrap(wrap, window, cx))
@@ -358,7 +353,11 @@ impl TextRead<'_> {
         match self.input {
             TextInput::Code(input) => input.read(self.cx).range_to_bounds(range),
             TextInput::Markdown(input) => input.read(self.cx).range_to_bounds(range),
-            TextInput::Svg(view) => view.read(self.cx).source().read(self.cx).range_to_bounds(range),
+            TextInput::Svg(view) => view
+                .read(self.cx)
+                .source()
+                .read(self.cx)
+                .range_to_bounds(range),
         }
     }
 }
@@ -571,15 +570,13 @@ impl Presentations {
             .retain(|(tab, group, _, _)| live(*tab, *group));
         // SVG 的源码呈现持有可提交的 preedit；离开分组时先结束自己的 lease，
         // Document 与预览仍由文件的其余呈现或缓冲区持有。
-        self.svgs
-            .borrow_mut()
-            .retain(|(tab, group, view, _)| {
-                let keep = live(*tab, *group);
-                if !keep {
-                    view.update(cx, |view, cx| view.finish_composition(cx));
-                }
-                keep
-            });
+        self.svgs.borrow_mut().retain(|(tab, group, view, _)| {
+            let keep = live(*tab, *group);
+            if !keep {
+                view.update(cx, |view, cx| view.finish_composition(cx));
+            }
+            keep
+        });
     }
     /// File identity changes update capability without replacing source or history.
     pub(super) fn set_source_only(

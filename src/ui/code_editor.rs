@@ -32,9 +32,9 @@ pub(crate) mod commands;
 mod document_input;
 mod image_document;
 pub(crate) mod markdown;
-mod svg_document;
 mod markdown_formula;
 mod markdown_search;
+mod svg_document;
 mod text;
 use buffers::Loaded;
 use document_input::{EditorInput, Presentations};
@@ -54,8 +54,8 @@ mod test_host;
 /// 只读图片文档的键盘上下文，与它的取景动作一起供 keymap 使用。
 pub(crate) use image_document::KEY_CONTEXT as IMAGE_KEY_CONTEXT;
 pub(crate) use image_document::{ImageActualSize, ImageFit, ImageZoomIn, ImageZoomOut};
-pub(crate) use svg_document::KEY_CONTEXT as SVG_KEY_CONTEXT;
 pub(crate) use nav::KEY_CONTEXT as NAV_KEY_CONTEXT;
+pub(crate) use svg_document::KEY_CONTEXT as SVG_KEY_CONTEXT;
 
 /// Retained document identity, independent of any editing presentation or path.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -551,10 +551,7 @@ fn place_cursor(
     // Native source presentations retain a view-local reveal request until
     // layout paints. Replaying their selection on later frames would overwrite
     // newer navigation.
-    if input
-        .text()
-        .is_some_and(|text| text.is_source())
-    {
+    if input.text().is_some_and(|text| text.is_source()) {
         return;
     }
     // A target near the top of the file scrolls nowhere and is already done;
@@ -698,9 +695,9 @@ fn is_program(path: &Path) -> bool {
 /// it opens as a source document with its own native preview, so a corrupt or
 /// remote SVG never falls through to the system browser or its network access.
 fn opens_in_browser(path: &Path) -> bool {
-    path.extension().and_then(|e| e.to_str()).is_some_and(|e| {
-        matches!(e.to_ascii_lowercase().as_str(), "html" | "htm" | "xhtml")
-    })
+    path.extension()
+        .and_then(|e| e.to_str())
+        .is_some_and(|e| matches!(e.to_ascii_lowercase().as_str(), "html" | "htm" | "xhtml"))
 }
 
 /// Opens a local file in the default web browser. On macOS that is asked
@@ -1265,7 +1262,9 @@ impl LyrelApp {
         self.watch_document_status_focus(&input.read(cx).focus_handle(cx), window, cx);
         // 文本历史只属于有文本的文档；图片没有可导航的编辑位置。
         if let Some(text) = input.text() {
-            self.editor.nav.track_buffer(id, text.read(cx).text().clone());
+            self.editor
+                .nav
+                .track_buffer(id, text.read(cx).text().clone());
         }
         if let Some(source) = input.markdown() {
             let app = cx.entity().downgrade();
@@ -2008,12 +2007,10 @@ impl LyrelApp {
             return owner.read(cx).editor_file_menu_items(menu, id, app, cx);
         }
         if let Some(svg) = input.svg() {
-            let menu = menu
-                .action_context(svg.read(cx).focus_handle(cx))
-                .menu(
-                    t(L10nKey::EditorGoToLineAction),
-                    Box::new(crate::core::actions::EditorGoToLine),
-                );
+            let menu = menu.action_context(svg.read(cx).focus_handle(cx)).menu(
+                t(L10nKey::EditorGoToLineAction),
+                Box::new(crate::core::actions::EditorGoToLine),
+            );
             let menu = svg_document::menu_entries(menu);
             return owner.read(cx).editor_file_menu_items(menu, id, app, cx);
         }
@@ -3287,14 +3284,12 @@ impl LyrelApp {
                         t(L10nKey::EditorSvgShowSource),
                     ),
                 };
-                this.child(
-                    item("status-svg-mode", label.into())
-                        .tooltip(tip)
-                        .on_click(cx.listener(|this, _, window, cx| {
-                            this.toggle_document_preview(window, cx);
-                            this.focus_editor(window, cx);
-                        })),
-                )
+                this.child(item("status-svg-mode", label.into()).tooltip(tip).on_click(
+                    cx.listener(|this, _, window, cx| {
+                        this.toggle_document_preview(window, cx);
+                        this.focus_editor(window, cx);
+                    }),
+                ))
                 .when_some(size, |this, (width, height)| {
                     this.child(
                         div()
