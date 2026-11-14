@@ -640,10 +640,12 @@ impl Instance {
     }
 
     /// Like `spawn_restoring_with_colors`, but negotiated for the retained
-    /// glyph glossary: the caller keeps the live restored-pane stream and the
-    /// authoritative frame the restarted daemon projects for it. Used only by
-    /// the Unix glyph isolation test — `interactive_shell` elsewhere names
-    /// cmd.exe, and the producer/query exchange assumes `/bin/sh` semantics.
+    /// glyph glossary *and* the monochrome-render opt-in: the caller keeps the
+    /// live restored-pane stream as the coverage answerer the daemon hands
+    /// `GlyphQuery` to, plus the authoritative frame the restarted daemon
+    /// projects for it. Used only by the Unix glyph isolation test —
+    /// `interactive_shell` elsewhere names cmd.exe, and the producer/query
+    /// exchange assumes `/bin/sh` semantics.
     #[cfg(unix)]
     fn spawn_restoring_live(
         &self,
@@ -656,7 +658,9 @@ impl Instance {
     ) {
         let mut stream =
             transport::connect_endpoint_at(&self.endpoint()).expect("connect to spawn");
-        let endpoint = lyrel_core::daemon::protocol::negotiate_pane(&mut stream)
+        // This fixture answers coverage queries: it declares the render
+        // opt-in — the credential the daemon hands `GlyphQuery` to.
+        let endpoint = lyrel_core::daemon::protocol::negotiate_pane_rendering(&mut stream, true)
             .expect("matching pane protocol");
         assert!(
             endpoint.has_feature(lyrel_core::daemon::protocol::FEATURE_GLYPH_STATE),

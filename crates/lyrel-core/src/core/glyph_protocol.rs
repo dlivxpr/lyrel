@@ -74,6 +74,10 @@ pub(crate) enum GlyphOutcome {
 }
 
 /// One accepted registration as the ring-independent projection carries it.
+/// The daemon is the record's only producer: consumers read it out of a
+/// decoded [`GlyphFrame`], and the field set may grow with the projection,
+/// so construction outside this crate is not part of the API.
+#[non_exhaustive]
 #[derive(Debug, Clone, PartialEq)]
 pub struct RetainedGlyph {
     pub cp: u32,

@@ -501,32 +501,6 @@ impl DaemonPane {
         })
     }
 
-    pub fn attach_admitted(
-        &self,
-        subscriber: Arc<Sender<DaemonMsg>>,
-        allow_clipboard: bool,
-        admission: GraphicsReplayAdmission,
-    ) -> Result<Option<u64>, String> {
-        self.attach_admitted_with_colors(subscriber, allow_clipboard, admission, false)
-    }
-
-    pub fn attach_admitted_with_colors(
-        &self,
-        subscriber: Arc<Sender<DaemonMsg>>,
-        allow_clipboard: bool,
-        admission: GraphicsReplayAdmission,
-        pane_colors: bool,
-    ) -> Result<Option<u64>, String> {
-        self.attach_admitted_with_colors_and_glyphs(
-            subscriber,
-            allow_clipboard,
-            admission,
-            pane_colors,
-            false,
-            false,
-        )
-    }
-
     pub fn attach_admitted_with_colors_and_glyphs(
         &self,
         subscriber: Arc<Sender<DaemonMsg>>,
@@ -556,31 +530,9 @@ impl DaemonPane {
         )
     }
 
-    pub fn observe_admitted(
-        &self,
-        subscriber: Arc<Sender<DaemonMsg>>,
-        gate: Arc<OutputGate>,
-        admission: GraphicsReplayAdmission,
-    ) -> Result<Option<u64>, String> {
-        self.observe_admitted_with_colors(subscriber, gate, admission, false)
-    }
-
-    pub fn observe_admitted_with_colors(
-        &self,
-        subscriber: Arc<Sender<DaemonMsg>>,
-        gate: Arc<OutputGate>,
-        admission: GraphicsReplayAdmission,
-        pane_colors: bool,
-    ) -> Result<Option<u64>, String> {
-        self.observe_admitted_with_colors_and_glyphs(
-            subscriber,
-            gate,
-            admission,
-            pane_colors,
-            false,
-        )
-    }
-
+    /// Attach a read-only observer whose retained-content replay was already
+    /// admitted; it shares the controller's projection credentials but never
+    /// becomes a coverage answerer.
     pub fn observe_admitted_with_colors_and_glyphs(
         &self,
         subscriber: Arc<Sender<DaemonMsg>>,

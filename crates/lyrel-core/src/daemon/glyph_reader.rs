@@ -60,15 +60,17 @@ pub(super) fn consume(
     }
 }
 
-/// Hand one frontend-bound query to the pane's current controller only. The
-/// daemon remains the single reply writer; with no controller the query stays
-/// unanswered (the protocol's frontend-bound rule, not a fabricated negative).
+/// Hand one frontend-bound query to the pane's current rendering controller
+/// only. The daemon remains the single reply writer; a controller that never
+/// declared the monochrome-render credential cannot truthfully measure font
+/// coverage — a generic `negotiate_pane` peer such as the CLI `run` backend
+/// decodes the projection yet drops frames it has no arm for, which is why
+/// `SubscribeGlyphState` alone is never the query credential. With no
+/// rendering controller the query stays unanswered (the protocol's
+/// frontend-bound rule, not a fabricated negative).
 fn request_query(state: &Arc<Mutex<PaneState>>, cp: u32, glossary: bool) {
     let mut st = state.lock().unwrap();
-    // A controller that never sent `SubscribeGlyphState` cannot decode the
-    // query kind. Leave the frontend-bound request unanswered rather than
-    // breaking an old client's stream.
-    if !st.subscriptions.controller_accepts_glyph_state() {
+    if !st.subscriptions.controller_renders_glyphs() {
         return;
     }
     let Some(epoch) = st.subscriptions.controller_epoch() else {
@@ -106,9 +108,9 @@ mod tests {
             false,
             false,
             false,
-            // Glyph state — the controller may receive `GlyphQuery` frames —
-            // and no render opt-in. Query tests bind the state credential
-            // only; support probes attach through `pane_with_renderer`.
+            // Glyph state only: this peer decodes `GlyphState` frames but
+            // holds no coverage answerer — the CLI `run` shape. Query tests
+            // attach through `pane_with_renderer`; this fixture stays silent.
             true,
             false,
         );
@@ -116,7 +118,8 @@ mod tests {
     }
 
     /// A controller that opted in to both the state credential and the
-    /// complete monochrome render contract — the `s` probe's reply gate.
+    /// complete monochrome render contract — the coverage answerer `q` is
+    /// routed to and the `s` probe's reply gate.
     fn pane_with_renderer() -> (Arc<Mutex<PaneState>>, mpsc::Receiver<DaemonMsg>) {
         let mut pane = test_support::test_state(true);
         let (tx, rx) = mpsc::channel();
@@ -135,7 +138,7 @@ mod tests {
 
     #[test]
     fn a_query_reaches_the_controller_and_composes_one_reply() {
-        let (state, rx) = pane_with_controller();
+        let (state, rx) = pane_with_renderer();
         let gate = OutputGate::new();
         let writer = test_support::null_writer();
         consume(&state, &gate, &writer, b"25a1;q;cp=100000", false, false);
@@ -183,7 +186,7 @@ mod tests {
 
     #[test]
     fn a_stale_epoch_never_writes_a_reply() {
-        let (state, rx) = pane_with_controller();
+        let (state, rx) = pane_with_renderer();
         let gate = OutputGate::new();
         let writer = test_support::null_writer();
         consume(&state, &gate, &writer, b"25a1;q;cp=100000", false, false);
@@ -228,9 +231,9 @@ mod tests {
     #[test]
     fn a_state_only_controller_keeps_the_support_probe_silent() {
         // A controller that subscribes to glyph state but never opted in to
-        // rendering is exactly the pre-v1.12 peer: it understands `GlyphQuery`
-        // and `GlyphState` frames yet cannot paint registered outlines, so
-        // the daemon must not advertise `fmt=glyf` to it.
+        // rendering is exactly the pre-v1.12 peer: it can decode `GlyphState`
+        // frames yet cannot paint registered outlines, so the daemon must not
+        // advertise `fmt=glyf` to it.
         let (state, _rx) = pane_with_controller();
         let gate = OutputGate::new();
         let (writer, bytes) = test_support::capture_writer();
@@ -238,6 +241,29 @@ mod tests {
         assert!(
             bytes.lock().unwrap().is_empty(),
             "a state-only controller keeps the support reply silent"
+        );
+    }
+
+    #[test]
+    fn a_state_only_controller_never_sees_the_coverage_query() {
+        // The retained-projection credential is a decode/transport opt-in,
+        // not a font-coverage answerer. `q` routed here would land on a peer
+        // — the CLI `run` backend's exact shape — that drops the kind, so the
+        // pane never forwards it and keeps no pending query for it.
+        let (state, rx) = pane_with_controller();
+        let gate = OutputGate::new();
+        let writer = test_support::null_writer();
+        consume(&state, &gate, &writer, b"25a1;q;cp=100000", false, false);
+        assert!(
+            test_support::drain(&rx)
+                .iter()
+                .all(|msg| !matches!(msg, DaemonMsg::GlyphQuery { .. })),
+            "the projection-only controller received a coverage query"
+        );
+        assert_eq!(
+            state.lock().unwrap().glyph_queries.len(),
+            0,
+            "no unanswered query is owed to a controller that cannot answer"
         );
     }
 }
@@ -260,7 +286,9 @@ mod pipeline_tests {
             false,
             false,
             true,
-            false,
+            // Both credentials: `q` only reaches a controller that declared
+            // the monochrome-render opt-in, so the pipeline fixture renders.
+            true,
         );
         let state = Arc::new(Mutex::new(pane));
         let gate = OutputGate::new();
