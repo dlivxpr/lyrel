@@ -371,6 +371,8 @@ pub(crate) fn focused_consumers_and_layout(cx: &mut TestAppContext) {
         assert_eq!(
             app.active_editor_input()
                 .unwrap()
+                .text()
+                .unwrap()
                 .read(cx)
                 .cursor_position(),
             Position::new(2, 3)
@@ -390,6 +392,8 @@ pub(crate) fn focused_consumers_and_layout(cx: &mut TestAppContext) {
     app.read_with(&cx, |app, cx| {
         assert_eq!(
             app.active_editor_input()
+                .unwrap()
+                .text()
                 .unwrap()
                 .read(cx)
                 .cursor_position()
@@ -450,6 +454,8 @@ pub(crate) fn focused_consumers_and_layout(cx: &mut TestAppContext) {
                 app.active_buffer()
                     .unwrap()
                     .input
+                    .text()
+                    .unwrap()
                     .read(cx)
                     .text()
                     .to_string(),

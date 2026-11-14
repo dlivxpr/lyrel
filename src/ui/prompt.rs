@@ -169,18 +169,7 @@ impl Render for TextPrompt {
                     cx.emit(PromptResponse(ix));
                     cx.stop_propagation();
                 }),
-            )
-            .map(|element| {
-                #[cfg(test)]
-                {
-                    use gpui_kit::test::TestSupportExt;
-                    element.test_support()
-                }
-                #[cfg(not(test))]
-                {
-                    element
-                }
-            });
+            );
             match self.stands_apart(ix) {
                 true => apart.push(button),
                 false => packed.push(button),

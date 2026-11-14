@@ -26,14 +26,21 @@ impl SaveContent {
                 revision: Some(document.revision()),
             })
         } else {
-            let input = file.input.read(cx);
-            let text = input.text().to_string();
+            // Only a text document reaches save: a read-only picture never
+            // gets here, so text() and format() are the same capability.
+            let text = file
+                .input
+                .text()
+                .expect("save only runs on text documents")
+                .read(cx)
+                .text()
+                .to_string();
             let text = if text.contains("\r\n") {
                 text.replace("\r\n", "\n")
             } else {
                 text
             };
-            let format = file.format(cx);
+            let format = file.format(cx).expect("save only runs on text documents");
             Ok(Self {
                 bytes: lyrel_text::encode(&text, &format)?,
                 written: Fingerprint::of_str(&text),

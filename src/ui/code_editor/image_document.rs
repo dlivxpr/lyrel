@@ -247,7 +247,8 @@ impl ImageView {
                 let height = f32::from(image.height).max(1.);
                 let fit =
                     (f32::from(viewport.width) / width).min(f32::from(viewport.height) / height);
-                fit.clamp(ZOOM_MIN, 1.)
+                // 用户缩放下限不适用 fit:窄视图也要能把整张图画进去。
+                fit.clamp(f32::EPSILON, 1.)
             }
         }
     }
@@ -342,6 +343,11 @@ impl Render for ImageView {
             )
         };
         let image = content.ready().map(|bitmap| bitmap.image());
+        // 位图像素是文件事实:工具栏标原始像素,布局才换算成逻辑点。
+        let pixels = image
+            .as_ref()
+            .map(|image| image.size(0))
+            .map(|size| (size.width.0, size.height.0));
         let scale_factor = window.scale_factor();
         let natural = image.as_ref().map(|image| {
             let size = image.size(0);
@@ -377,18 +383,12 @@ impl Render for ImageView {
                         .child(format.label()),
                 )
             })
-            .when_some(natural, |row, natural| {
+            .when_some(pixels, |row, (width, height)| {
                 row.child(div().flex_none().text_xs().text_color(muted).child(t_fmt(
                     L10nKey::EditorImagePixelSize,
                     &[
-                        (
-                            "width",
-                            &(f32::from(natural.width).round() as i64).to_string(),
-                        ),
-                        (
-                            "height",
-                            &(f32::from(natural.height).round() as i64).to_string(),
-                        ),
+                        ("width", &width.to_string()),
+                        ("height", &height.to_string()),
                     ],
                 )))
             })
@@ -429,17 +429,16 @@ impl Render for ImageView {
                         .overflow_scroll()
                         .track_scroll(&self.scroll)
                         .child(
+                            // 可滚动的是这个内容盒:它拿到图片的真实尺寸,滚动
+                            // 上限才随放大增长;fit 时 min 仍填满画布以便居中。
                             h_flex()
                                 .min_w_full()
                                 .min_h_full()
+                                .w(natural.width * scale)
+                                .h(natural.height * scale)
                                 .items_center()
                                 .justify_center()
-                                .child(
-                                    gpui_kit::img(image)
-                                        .flex_none()
-                                        .w(natural.width * scale)
-                                        .h(natural.height * scale),
-                                ),
+                                .child(gpui_kit::img(image).size_full()),
                         ),
                 )
                 .into_any_element(),
@@ -490,12 +489,12 @@ impl Render for ImageView {
             .on_key_down(
                 cx.listener(|this, event: &gpui_kit::KeyDownEvent, _window, cx| {
                     let (dx, dy) = match event.keystroke.key.as_str() {
-                        "left" => (px(PAN_STEP), px(0.)),
-                        "right" => (px(-PAN_STEP), px(0.)),
-                        "up" => (px(0.), px(PAN_STEP)),
-                        "down" => (px(0.), px(-PAN_STEP)),
-                        "pageup" => (px(0.), px(PAN_STEP * 8.)),
-                        "pagedown" => (px(0.), px(-PAN_STEP * 8.)),
+                        "left" => (px(-PAN_STEP), px(0.)),
+                        "right" => (px(PAN_STEP), px(0.)),
+                        "up" => (px(0.), px(-PAN_STEP)),
+                        "down" => (px(0.), px(PAN_STEP)),
+                        "pageup" => (px(0.), px(-PAN_STEP * 8.)),
+                        "pagedown" => (px(0.), px(PAN_STEP * 8.)),
                         _ => return,
                     };
                     this.pan(dx, dy, cx);

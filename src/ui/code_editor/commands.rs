@@ -721,7 +721,11 @@ impl LyrelApp {
         let Some(input) = self.active_editor_input() else {
             return false;
         };
-        let state = input.read(cx);
+        // Every line command is about text; a read-only picture has none.
+        let Some(text_input) = input.text() else {
+            return false;
+        };
+        let state = text_input.read(cx);
         let selected = if matches!(command, Command::Next | Command::Skip) {
             state.occurrence_range()
         } else {
@@ -741,7 +745,7 @@ impl LyrelApp {
                 return true;
             }
             if select_word {
-                input.set_selected_range(selected, cx);
+                text_input.set_selected_range(selected, cx);
                 return true;
             }
             let needle = text.slice(selected.clone()).to_string();
@@ -752,9 +756,9 @@ impl LyrelApp {
                 .collect();
             if matches!(command, Command::All) {
                 if let Some(first) = matches.first().cloned() {
-                    input.set_selected_range(first, cx);
+                    text_input.set_selected_range(first, cx);
                     for range in matches.drain(1..) {
-                        input.add_selection(range, cx);
+                        text_input.add_selection(range, cx);
                     }
                 }
             } else {
@@ -764,9 +768,9 @@ impl LyrelApp {
                     .or_else(|| source.find(&needle).map(|at| at..at + needle.len()));
                 if let Some(next) = next {
                     if matches!(command, Command::Skip) {
-                        input.set_selected_range(next, cx);
+                        text_input.set_selected_range(next, cx);
                     } else {
-                        input.add_selection(next, cx);
+                        text_input.add_selection(next, cx);
                     }
                 }
             }
@@ -778,12 +782,12 @@ impl LyrelApp {
             if !selected.is_empty() && selected == range && range.end < text.len() {
                 range.end = whole_lines(&text, &(range.end..range.end)).end;
             }
-            input.set_selected_range(range, cx);
+            text_input.set_selected_range(range, cx);
             return true;
         }
         if matches!(command, Command::Bracket) {
             if let Some(offset) = matching_bracket(&text, state.cursor(), language) {
-                input.set_selected_range(offset..offset, cx);
+                text_input.set_selected_range(offset..offset, cx);
             }
             return true;
         }
@@ -838,14 +842,14 @@ impl LyrelApp {
                 )
             });
         } else {
-            input.replace(edit.range, &edit.replacement, window, cx);
+            text_input.replace(edit.range, &edit.replacement, window, cx);
         }
         if let Some(view) = input.markdown() {
             view.update(cx, |view, cx| {
                 view.set_history_selection(selected, edit.selection.clone(), cx)
             });
         }
-        input.set_selected_range(edit.selection, cx);
+        text_input.set_selected_range(edit.selection, cx);
         true
     }
 }
@@ -1099,7 +1103,7 @@ mod gpui_tests {
         });
         app.update_in(&mut vcx, |app, window, cx| {
             let input = app.active_buffer().unwrap().input.clone();
-            input.set_selected_range(5..5, cx);
+            input.text().unwrap().set_selected_range(5..5, cx);
             input.focus(window, cx);
         });
         vcx.simulate_keystrokes("secondary-/");
@@ -1109,6 +1113,8 @@ mod gpui_tests {
                 app.active_buffer()
                     .unwrap()
                     .input
+                    .text()
+                    .unwrap()
                     .read(cx)
                     .text()
                     .to_string(),
@@ -1125,6 +1131,8 @@ mod gpui_tests {
                 app.active_buffer()
                     .unwrap()
                     .input
+                    .text()
+                    .unwrap()
                     .read(cx)
                     .text()
                     .to_string(),
@@ -1136,7 +1144,7 @@ mod gpui_tests {
         vcx.run_until_parked();
         app.update_in(&mut vcx, |app, window, cx| {
             let input = app.active_editor_input().unwrap();
-            input.set_selected_range(0..3, cx);
+            input.text().unwrap().set_selected_range(0..3, cx);
             input.focus(window, cx);
         });
         vcx.simulate_keystrokes("secondary-shift-l");
@@ -1147,6 +1155,8 @@ mod gpui_tests {
                 app.active_buffer()
                     .unwrap()
                     .input
+                    .text()
+                    .unwrap()
                     .read(cx)
                     .text()
                     .to_string(),
@@ -1160,6 +1170,8 @@ mod gpui_tests {
                 app.active_buffer()
                     .unwrap()
                     .input
+                    .text()
+                    .unwrap()
                     .read(cx)
                     .text()
                     .to_string(),
@@ -1185,7 +1197,7 @@ mod gpui_tests {
         app.update_in(&mut vcx, |app, window, cx| {
             app.toggle_document_preview(window, cx);
             let input = app.active_editor_input().unwrap();
-            input.set_selected_range(4..7, cx);
+            input.text().unwrap().set_selected_range(4..7, cx);
             input.focus(window, cx);
         });
         vcx.dispatch_action(MoveLineUp);
@@ -1233,7 +1245,7 @@ mod gpui_tests {
                     .unwrap(),
                 b"one\r\ntwo\nthree\r\n"
             );
-            assert_eq!(input.read(cx).selected_range(), 4..7);
+            assert_eq!(input.text().unwrap().read(cx).selected_range(), 4..7);
         });
     }
 
@@ -1256,7 +1268,7 @@ mod gpui_tests {
         app.update_in(&mut vcx, |app, window, cx| {
             app.toggle_document_preview(window, cx);
             let input = app.active_editor_input().unwrap();
-            input.set_selected_range(0..7, cx);
+            input.text().unwrap().set_selected_range(0..7, cx);
             input.focus(window, cx);
         });
         vcx.update(|window, cx| {
@@ -1267,17 +1279,17 @@ mod gpui_tests {
         app.read_with(&vcx, |app, cx| {
             let input = app.active_editor_input().unwrap();
             assert_eq!(
-                input.read(cx).text().to_string(),
+                input.text().unwrap().read(cx).text().to_string(),
                 "        one\n        two\nthree"
             );
-            assert_eq!(input.read(cx).selected_range(), 8..23);
+            assert_eq!(input.text().unwrap().read(cx).selected_range(), 8..23);
         });
         vcx.dispatch_action(gpui_kit::component::input::Undo);
         vcx.dispatch_action(gpui_kit::component::input::Undo);
         app.read_with(&vcx, |app, cx| {
             let input = app.active_editor_input().unwrap();
-            assert_eq!(input.read(cx).text().to_string(), "one\ntwo\nthree");
-            assert_eq!(input.read(cx).selected_range(), 0..7);
+            assert_eq!(input.text().unwrap().read(cx).text().to_string(), "one\ntwo\nthree");
+            assert_eq!(input.text().unwrap().read(cx).selected_range(), 0..7);
         });
     }
 
@@ -1306,7 +1318,7 @@ mod gpui_tests {
         });
         app.update_in(&mut vcx, |app, window, cx| {
             let input = app.active_editor_input().unwrap();
-            input.set_selected_range(0..3, cx);
+            input.text().unwrap().set_selected_range(0..3, cx);
             input.focus(window, cx);
             assert!(app.editor_apply_command(Command::All, window, cx));
             assert!(app.editor_apply_command(Command::Upper, window, cx));
@@ -1314,14 +1326,16 @@ mod gpui_tests {
         vcx.run_until_parked();
         app.read_with(&vcx, |app, cx| {
             let input = app.active_editor_input().unwrap();
-            assert_eq!(input.read(cx).text().to_string(), "FOO foo foo");
-            assert_eq!(input.read(cx).selected_range(), 0..3);
+            assert_eq!(input.text().unwrap().read(cx).text().to_string(), "FOO foo foo");
+            assert_eq!(input.text().unwrap().read(cx).selected_range(), 0..3);
         });
         vcx.dispatch_action(gpui_kit::component::input::Undo);
         vcx.run_until_parked();
         app.read_with(&vcx, |app, cx| {
             assert_eq!(
                 app.active_editor_input()
+                    .unwrap()
+                    .text()
                     .unwrap()
                     .read(cx)
                     .text()
@@ -1331,7 +1345,7 @@ mod gpui_tests {
         });
         app.update_in(&mut vcx, |app, window, cx| {
             let input = app.active_editor_input().unwrap();
-            input.set_selected_range(0..3, cx);
+            input.text().unwrap().set_selected_range(0..3, cx);
             input.focus(window, cx);
             assert!(app.editor_apply_command(Command::Next, window, cx));
             assert!(app.editor_apply_command(Command::Next, window, cx));
@@ -1341,6 +1355,8 @@ mod gpui_tests {
         app.read_with(&vcx, |app, cx| {
             assert_eq!(
                 app.active_editor_input()
+                    .unwrap()
+                    .text()
                     .unwrap()
                     .read(cx)
                     .text()
@@ -1353,6 +1369,8 @@ mod gpui_tests {
         app.read_with(&vcx, |app, cx| {
             assert_eq!(
                 app.active_editor_input()
+                    .unwrap()
+                    .text()
                     .unwrap()
                     .read(cx)
                     .text()
@@ -1401,9 +1419,10 @@ mod gpui_tests {
         ] {
             app.update_in(&mut vcx, |app, window, cx| {
                 let input = app.active_editor_input().unwrap();
-                let len = input.read(cx).text().len();
-                input.replace(0..len, before, window, cx);
-                input.set_selected_range(selection, cx);
+                let text = input.text().unwrap();
+                let len = text.read(cx).text().len();
+                text.replace(0..len, before, window, cx);
+                text.set_selected_range(selection, cx);
                 input.focus(window, cx);
                 assert!(app.editor_apply_command(command, window, cx));
             });
@@ -1413,6 +1432,8 @@ mod gpui_tests {
                     app.active_buffer()
                         .unwrap()
                         .input
+                        .text()
+                        .unwrap()
                         .read(cx)
                         .text()
                         .to_string(),
@@ -1426,6 +1447,8 @@ mod gpui_tests {
                     app.active_buffer()
                         .unwrap()
                         .input
+                        .text()
+                        .unwrap()
                         .read(cx)
                         .text()
                         .to_string(),
@@ -1435,19 +1458,20 @@ mod gpui_tests {
         }
         app.update_in(&mut vcx, |app, window, cx| {
             let input = app.active_editor_input().unwrap();
-            let len = input.read(cx).text().len();
-            input.replace(0..len, "(中)\nfoo foo foo\n", window, cx);
-            input.set_selected_range(0..0, cx);
+            let text = input.text().unwrap();
+            let len = text.read(cx).text().len();
+            text.replace(0..len, "(中)\nfoo foo foo\n", window, cx);
+            text.set_selected_range(0..0, cx);
             assert!(app.editor_apply_command(Command::Bracket, window, cx));
-            assert_eq!(input.read(cx).selected_range(), 4..4);
-            input.set_selected_range(7..7, cx);
+            assert_eq!(text.read(cx).selected_range(), 4..4);
+            text.set_selected_range(7..7, cx);
             assert!(app.editor_apply_command(Command::SelectLine, window, cx));
-            assert_eq!(input.read(cx).selected_range(), 6..18);
-            input.set_selected_range(7..7, cx);
+            assert_eq!(text.read(cx).selected_range(), 6..18);
+            text.set_selected_range(7..7, cx);
             assert!(app.editor_apply_command(Command::Next, window, cx));
-            assert_eq!(input.read(cx).selected_range(), 6..9);
+            assert_eq!(text.read(cx).selected_range(), 6..9);
             assert!(app.editor_apply_command(Command::Skip, window, cx));
-            assert_eq!(input.read(cx).selected_range(), 10..13);
+            assert_eq!(text.read(cx).selected_range(), 10..13);
         });
     }
 }

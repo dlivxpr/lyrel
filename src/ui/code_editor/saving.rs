@@ -184,7 +184,7 @@ impl EditorPanelState {
         // Markdown hard breaks and unknown syntax are source: ordinary saves do
         // not apply code cleanup. Explicit workbench cleanup remains undoable.
         if file.input.code().is_some() {
-            let text = file.input.read(cx).text().to_string();
+            let text = file.input.text().unwrap().read(cx).text().to_string();
             if let Some(fixed) = lyrel_text::apply_save_rules(&text, &file.config) {
                 let input = file.input.clone();
                 replace_buffer_text(&input, &fixed, window, cx);
@@ -378,7 +378,8 @@ impl EditorPanelState {
         };
         let file = self.buffers.get(id).unwrap();
         let name = file.label();
-        let encoding = file.format(cx).encoding_label();
+        // Only documents with a text format reach the encoding prompt.
+        let encoding = file.format(cx).expect("text document").encoding_label();
         self.saves_failed(id);
         let answer = window.prompt(
             PromptLevel::Warning,
@@ -404,7 +405,10 @@ impl EditorPanelState {
                     let file = editor.buffers.get_mut(id).unwrap();
                     file.set_format(
                         TextFormat {
-                            line_ending: file.format(cx).line_ending,
+                            line_ending: file
+                                .format(cx)
+                                .expect("text document")
+                                .line_ending,
                             ..TextFormat::default()
                         },
                         cx,
@@ -539,7 +543,7 @@ impl EditorPanelState {
                 let total = self
                     .buffers
                     .get(id)
-                    .map(|file| file.input.read(cx).text().lines_len())
+                    .and_then(|file| file.input.text().map(|t| t.read(cx).text().lines_len()))
                     .unwrap_or(1);
                 t_fmt(
                     L10nKey::EditorGoToLinePlaceholder,

@@ -1,8 +1,9 @@
 //! #280 的生产工作台接缝：静态图片作为真实文档打开、取景、关闭与失败。
 //!
 //! 这些测试只走工作台入口（`open_file_in_editor`、`editor_open_on_host`、
-//! 键位与菜单动作）和真实 `gpui` 窗口，不检查源码接线；夹具在测试内生成，
-//! 不依赖协调目录或任何外部图片。
+//! 键位与菜单动作）和真实 gpui 测试平台窗口，断言生产工作台的可见行为，
+//! 不检查源码接线；夹具在测试内生成，不依赖协调目录或任何外部图片。
+//! 这些不是原生 OS 窗口：真实桌面、DPI 与 SSH 传输由单独验收覆盖。
 
 use super::super::test_host::FileHost;
 use super::super::*;
@@ -390,14 +391,22 @@ fn keyboard_and_controls_frame_the_picture_and_pan_it(tcx: &mut TestAppContext) 
         "fit again"
     );
 
-    // 状态行显示的比例就是画出来的比例。
-    let shown = view.read_with(&cx, |view, _| view.zoom_label().to_string());
+    // 状态行标的是画出来的比例：实际大小就是 100%，一次放大是 125%。
+    cx.update(|window, cx| window.press("1", cx));
+    settle(&mut cx);
     assert_eq!(
-        shown,
-        format!("{:.0}%", view.read_with(&cx, |view, _| view.scale()) * 100.),
-        "the status string is the drawn scale"
+        view.read_with(&cx, |view, _| view.zoom_label().to_string()),
+        "100%"
+    );
+    cx.update(|window, cx| window.press(&secondary("="), cx));
+    settle(&mut cx);
+    assert_eq!(
+        view.read_with(&cx, |view, _| view.zoom_label().to_string()),
+        "125%"
     );
     cx.update(|window, _| assert!(window.find("status-image-zoom").visible()));
+    cx.update(|window, cx| window.press("0", cx));
+    settle(&mut cx);
 
     // 放大到超出画布后，方向键推动滚动位置，并在边缘停住。
     for _ in 0..8 {
@@ -458,7 +467,7 @@ fn text_only_commands_leave_a_picture_alone(tcx: &mut TestAppContext) {
         );
         let file = app.editor.buffers.get(id).expect("still installed");
         assert!(!file.dirty);
-        assert_eq!(file.format(cx), TextFormat::default());
+        assert_eq!(file.format(cx), None, "a picture has no text format");
     });
     settle(&mut cx);
     assert_eq!(
@@ -490,7 +499,10 @@ fn an_external_rewrite_replaces_the_picture(tcx: &mut TestAppContext) {
     let (app, mut cx, _streams) = harness_with_tabs(tcx, 1);
     open(&app, &mut cx, &path);
     assert_eq!(ready_size(&app, &cx), (20, 20));
-
+    // 等监视真的装上再写,不然外部变化没有观察者。
+    until(&mut cx, |cx| {
+        app.read_with(cx, |app, _| app.editor.buffers.watching())
+    });
     std::fs::write(&path, solid(image::ImageFormat::Png, 90, 70)).unwrap();
     until(&mut cx, |cx| ready_size(&app, cx) == (90, 70));
     app.read_with(&cx, |app, _| {
@@ -501,14 +513,50 @@ fn an_external_rewrite_replaces_the_picture(tcx: &mut TestAppContext) {
 }
 
 #[gpui_kit::test]
-fn the_owning_host_decides_which_bytes_are_shown(tcx: &mut TestAppContext) {
+fn a_deleted_picture_offers_close_not_a_write(tcx: &mut TestAppContext) {
     crate::ui::i18n::set_locale("en");
     let dir = super::super::test_host::canonical_tempdir();
     let path = fixture(
         dir.path(),
-        "pic.png",
-        &solid(image::ImageFormat::Png, 10, 10),
+        "doomed.png",
+        &solid(image::ImageFormat::Png, 20, 20),
     );
+    let (app, mut cx, _streams) = harness_with_tabs(tcx, 1);
+    open(&app, &mut cx, &path);
+    assert_eq!(ready_size(&app, &cx), (20, 20));
+
+    until(&mut cx, |cx| {
+        app.read_with(cx, |app, _| app.editor.buffers.watching())
+    });
+    std::fs::remove_file(&path).unwrap();
+    until(&mut cx, |cx| {
+        app.read_with(cx, |app, _| {
+            app.active_buffer()
+                .is_some_and(|file| file.conflict.is_some())
+        })
+    });
+    // 只读图片没有任何可写的命令:banner 给 Close,不给 Save/KeepMine。
+    cx.update(|window, _| {
+        assert!(window.find("editor-deleted-close").visible());
+        assert!(window.try_find("editor-deleted-save").is_none());
+        assert!(window.try_find("editor-conflict-keep").is_none());
+    });
+    // Close 是真实动作,不是摆设。
+    cx.update(|window, cx| window.click("editor-deleted-close", cx));
+    until(&mut cx, |cx| {
+        app.read_with(cx, |app, _| {
+            app.active_buffer()
+                .is_none_or(|file| file.conflict.is_none())
+        })
+    });
+}
+
+#[gpui_kit::test]
+fn the_owning_host_decides_which_bytes_are_shown(tcx: &mut TestAppContext) {
+    crate::ui::i18n::set_locale("en");
+    let dir = super::super::test_host::canonical_tempdir();
+    let local_bytes = solid(image::ImageFormat::Png, 10, 10);
+    let path = fixture(dir.path(), "pic.png", &local_bytes);
     let (app, mut cx, _streams) = harness_with_tabs(tcx, 1);
     let local = open(&app, &mut cx, &path);
 
@@ -526,12 +574,12 @@ fn the_owning_host_decides_which_bytes_are_shown(tcx: &mut TestAppContext) {
     });
     app.read_with(&cx, |app, _| {
         assert_eq!(app.editor_active_location().unwrap().0, HostId(69));
-        assert_eq!(
-            app.editor.local_files().len(),
-            1,
-            "only one is this machine's"
-        );
     });
+    assert_eq!(
+        ready_size(&app, &cx),
+        (10, 10),
+        "the plain host's own copy"
+    );
 
     // 映射 Host 的根落在别的目录：读到的是它自己的图，不是本地同名文件。
     let decoy = super::super::test_host::canonical_tempdir();
@@ -560,6 +608,31 @@ fn the_owning_host_decides_which_bytes_are_shown(tcx: &mut TestAppContext) {
         ready_size(&app, &cx),
         (30, 40),
         "the mapped Host's own file"
+    );
+
+    // 切回本地那份仍然是它自己的图,两份源字节都没被碰过。
+    app.update_in(&mut cx, |app, window, cx| {
+        app.open_file_in_editor(&path, window, cx)
+    });
+    until(&mut cx, |cx| {
+        app.read_with(cx, |app, _| {
+            app.tab_code()
+                .and_then(TabCode::active_id)
+                .is_some_and(|id| id == local)
+        })
+    });
+    assert_eq!(ready_size(&app, &cx), (10, 10), "the local original");
+    assert_eq!(
+        std::fs::read(&path).unwrap(),
+        local_bytes,
+        "local bytes were left alone"
+    );
+    let decoy = image::load_from_memory(&std::fs::read(decoy.path().join("pic.png")).unwrap())
+        .unwrap();
+    assert_eq!(
+        (decoy.width(), decoy.height()),
+        (30, 40),
+        "the decoy bytes were left alone"
     );
 }
 

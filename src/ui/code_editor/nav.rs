@@ -496,10 +496,13 @@ impl LyrelApp {
     }
 
     /// Where the caret is in the buffer in front, if there is one.
+    /// A picture shows nothing the caret could be at: it does not enter
+    /// navigation history as a fake line 1.
     fn nav_here(&self, cx: &gpui_kit::App) -> Option<Sample> {
         let f = self.active_buffer()?;
         let input = self.active_editor_input()?;
-        let state = input.read(cx);
+        let text = input.text()?;
+        let state = text.read(cx);
         Some(Sample {
             at: NavLocation {
                 host: f.host.id(),
@@ -542,7 +545,10 @@ impl LyrelApp {
             buffer: f.untitled.map(|_| id),
             pos: Position::default(),
         };
-        let current = f.input.read(cx).text().clone();
+        let Some(current) = f.input.text().map(|text| text.read(cx).text().clone()) else {
+            // No text changed: a reload of a picture is not a text edit.
+            return;
+        };
         let Some(previous) = self.editor.nav.text_seen.insert(id, current.clone()) else {
             return;
         };
@@ -663,7 +669,8 @@ impl LyrelApp {
         }
         let f = self.editor.buffers.get(id)?;
         let language = f.language();
-        let text = f.input.read(cx).text().clone();
+        // Symbols are facts about text: a document without text has no outline.
+        let text = f.input.text()?.read(cx).text().clone();
         let native_markdown = f.input.markdown().is_some();
         if !outline::supports(&language) {
             return None;
@@ -707,7 +714,11 @@ impl LyrelApp {
                 let (parser, text, outline) = background.await;
                 let _ = app.update(cx, |app, cx| {
                     let current = app.editor.buffers.get(id).is_some_and(|file| {
-                        file.language() == language && file.input.read(cx).text() == text
+                        file.language() == language
+                            && file
+                                .input
+                                .text()
+                                .is_some_and(|now| now.read(cx).text() == text)
                     });
                     let Some(cache) = app
                         .editor
@@ -795,10 +806,13 @@ impl LyrelApp {
         let Some(input) = self.active_editor_input() else {
             return;
         };
-        let (origin, scroll) = {
-            let state = input.read(cx);
-            (state.cursor_position(), state.scroll_offset())
+        let Some(text) = input.text() else {
+            return;
         };
+        let (origin, scroll) = (
+            text.read(cx).cursor_position(),
+            input.read(cx).scroll_offset(),
+        );
         let outline = self.editor_outline(id, true, cx).unwrap_or_default();
         let rows = symbol_rows(&outline);
         let here = outline
@@ -847,11 +861,14 @@ impl LyrelApp {
         else {
             return;
         };
-        let offset = input
+        let Some(text) = input.text() else {
+            return;
+        };
+        let offset = text
             .read(cx)
             .text()
             .position_to_offset(&Position::new(line, column));
-        input.set_selected_range(offset..offset, cx);
+        text.set_selected_range(offset..offset, cx);
     }
 
     /// Begins a preview in the file in front for a picker someone else
@@ -864,10 +881,14 @@ impl LyrelApp {
         let Some(input) = self.active_editor_input() else {
             return;
         };
-        let (origin, scroll) = {
-            let state = input.read(cx);
-            (state.cursor_position(), state.scroll_offset())
+        // A text-only request: pictures have no caret to restore.
+        let Some(text) = input.text() else {
+            return;
         };
+        let (origin, scroll) = (
+            text.read(cx).cursor_position(),
+            input.read(cx).scroll_offset(),
+        );
         self.editor.nav.preview = Some(SymbolPreview {
             buffer: f.id(),
             input: input.downgrade(),
@@ -899,7 +920,10 @@ impl LyrelApp {
         let Some(input) = preview.input.upgrade() else {
             return;
         };
-        input.set_cursor_position(preview.origin, window, cx);
+        let Some(text) = input.text() else {
+            return;
+        };
+        text.set_cursor_position(preview.origin, window, cx);
         input.set_scroll_offset(preview.scroll, cx);
     }
 
@@ -1018,7 +1042,8 @@ impl LyrelApp {
             .markdown_existing(tab, group)
             .map(super::EditorInput::Markdown)
             .unwrap_or_else(|| f.input.clone());
-        let caret = input.read(cx).cursor_position();
+        // A picture has no caret to chain symbols from.
+        let caret = input.text()?.read(cx).cursor_position();
         let segments: Vec<String> = if f.untitled.is_some() {
             vec![f.label().to_string()]
         } else {
@@ -1639,6 +1664,8 @@ pub(super) mod gpui_tests {
             app.active_buffer()
                 .unwrap()
                 .input
+                .text()
+                .unwrap()
                 .read(cx)
                 .cursor_position()
         })
@@ -1726,14 +1753,14 @@ pub(super) mod gpui_tests {
         vcx.update(|window, cx| window.render_frame(cx));
         let first = app.update_in(&mut vcx, |app, window, cx| {
             let input = app.active_editor_input().unwrap();
-            input.set_cursor_position(Position::new(1, 2), window, cx);
+            input.text().unwrap().set_cursor_position(Position::new(1, 2), window, cx);
             app.editor_split(window, cx);
             input
         });
         vcx.update(|window, cx| window.render_frame(cx));
         let second = app.update_in(&mut vcx, |app, window, cx| {
             let input = app.active_editor_input().unwrap();
-            input.set_cursor_position(Position::new(4, 2), window, cx);
+            input.text().unwrap().set_cursor_position(Position::new(4, 2), window, cx);
             app.editor_go_to_symbol(window, cx);
             input
         });
@@ -1746,8 +1773,8 @@ pub(super) mod gpui_tests {
         });
         vcx.run_until_parked();
         app.read_with(&vcx, |app, cx| {
-            assert_eq!(first.read(cx).cursor_position(), Position::new(1, 2));
-            assert_eq!(second.read(cx).cursor_position(), Position::new(4, 2));
+            assert_eq!(first.text().unwrap().read(cx).cursor_position(), Position::new(1, 2));
+            assert_eq!(second.text().unwrap().read(cx).cursor_position(), Position::new(4, 2));
             assert!(!app.active_buffer().unwrap().dirty);
         });
     }
@@ -1791,7 +1818,7 @@ pub(super) mod gpui_tests {
             input.markdown().unwrap().update(cx, |view, cx| {
                 view.replace_range(0..original.len(), current, cx);
             });
-            input.set_cursor_position(Position::new(1, 2), window, cx);
+            input.text().unwrap().set_cursor_position(Position::new(1, 2), window, cx);
             app.editor_go_to_symbol(window, cx);
         });
         vcx.run_until_parked();
@@ -1804,6 +1831,8 @@ pub(super) mod gpui_tests {
                 app.active_buffer()
                     .unwrap()
                     .input
+                    .text()
+                    .unwrap()
                     .read(cx)
                     .text()
                     .to_string(),
@@ -1832,6 +1861,8 @@ pub(super) mod gpui_tests {
             open_md(app, path, replacement, window, cx);
             app.active_editor_input()
                 .unwrap()
+                .text()
+                .unwrap()
                 .set_cursor_position(Position::new(1, 2), window, cx);
         });
         vcx.run_until_parked();
@@ -1844,7 +1875,7 @@ pub(super) mod gpui_tests {
         app.read_with(&vcx, |app, cx| {
             let file = app.active_buffer().unwrap();
             assert_eq!(file.path, path);
-            assert_eq!(file.input.read(cx).text().to_string(), replacement);
+            assert_eq!(file.input.text().unwrap().read(cx).text().to_string(), replacement);
             assert!(!file.dirty);
         });
     }
@@ -2041,6 +2072,8 @@ pub(super) mod gpui_tests {
                     app.active_buffer()
                         .unwrap()
                         .input
+                        .text()
+                        .unwrap()
                         .read(cx)
                         .text()
                         .to_string(),

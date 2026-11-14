@@ -124,6 +124,8 @@ fn cross_extension_reload_scenario(cx: &mut TestAppContext, markdown: bool) {
             app.active_buffer()
                 .unwrap()
                 .input
+                .text()
+                .unwrap()
                 .read(cx)
                 .text()
                 .to_string()
@@ -134,7 +136,7 @@ fn cross_extension_reload_scenario(cx: &mut TestAppContext, markdown: bool) {
         let input = &app.active_buffer().unwrap().input;
         assert_eq!(input.markdown().is_some(), markdown);
         assert_eq!(
-            input.read(cx).text().to_string(),
+            input.text().unwrap().read(cx).text().to_string(),
             "external\nsecond\nthird\nfourth"
         );
         if let Some(view) = input.markdown() {
@@ -292,6 +294,8 @@ fn remote_save_as_scenario(cx: &mut TestAppContext, markdown: bool) {
                 .get(local)
                 .unwrap()
                 .input
+                .text()
+                .unwrap()
                 .read(cx)
                 .text()
                 .to_string(),
@@ -394,6 +398,8 @@ fn replacement_group_scenario(cx: &mut TestAppContext, markdown: bool) {
                 .get(id)
                 .unwrap()
                 .input
+                .text()
+                .unwrap()
                 .read(cx)
                 .text()
                 .to_string(),
@@ -436,6 +442,6 @@ fn markdown_remote_save_as_rejects_identity_changed_while_bar_was_open(cx: &mut 
         let file = app.active_buffer().unwrap();
         assert_eq!(file.path, moved);
         assert_eq!(file.host.id(), HostId(703));
-        assert_eq!(file.input.read(cx).text().to_string(), "original");
+        assert_eq!(file.input.text().unwrap().read(cx).text().to_string(), "original");
     });
 }

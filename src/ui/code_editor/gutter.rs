@@ -552,7 +552,9 @@ impl LyrelApp {
         if f.gutter.fetched.as_ref() == Some(&wanted) {
             return;
         }
-        let format = f.format(cx);
+        let Some(format) = f.format(cx) else {
+            return;
+        };
         if let Some(f) = self.editor.buffers.get_mut(id) {
             f.gutter.fetching = true;
         }
@@ -629,7 +631,11 @@ impl LyrelApp {
             let Ok(Some((base, text, at))) = this.update(cx, |app, cx| {
                 let f = app.editor.buffers.get(id)?;
                 let base = f.gutter.base.clone()?;
-                Some((base, f.input.read(cx).text().clone(), f.gutter.edits))
+                Some((
+                    base,
+                    f.input.text()?.read(cx).text().clone(),
+                    f.gutter.edits,
+                ))
             }) else {
                 return;
             };
@@ -672,7 +678,9 @@ impl LyrelApp {
         };
         if f.gutter.diffed != f.gutter.edits {
             let at = f.gutter.edits;
-            let text = f.input.read(cx).text().to_string();
+            let Some(text) = f.input.text().map(|t| t.read(cx).text().to_string()) else {
+                return Arc::default();
+            };
             let hunks = diff_hunks(&base, &text);
             self.editor_gutter_install(id, at, hunks, cx);
         }
@@ -706,13 +714,16 @@ impl LyrelApp {
         let Some(input) = self.editor_input_for(id) else {
             return false;
         };
-        let line = input.read(cx).cursor_position().line as usize;
+        let Some(text) = input.text() else {
+            return false;
+        };
+        let line = text.read(cx).cursor_position().line as usize;
         let Some(ix) = step_hunk(&hunks, line, forward) else {
             return false;
         };
-        let last = input.read(cx).text().lines_len().saturating_sub(1);
+        let last = text.read(cx).text().lines_len().saturating_sub(1);
         let target = hunks[ix].new.start.min(last);
-        input.set_cursor_position(Position::new(target as u32, 0), window, cx);
+        text.set_cursor_position(Position::new(target as u32, 0), window, cx);
         true
     }
 
@@ -728,7 +739,12 @@ impl LyrelApp {
         let Some(input) = self.editor_input_for(id) else {
             return false;
         };
-        let line = input.read(cx).cursor_position().line as usize;
+        let Some(line) = input
+            .text()
+            .map(|t| t.read(cx).cursor_position().line as usize)
+        else {
+            return false;
+        };
         hunk_at_line(&f.gutter.hunks, line).is_some()
     }
 
@@ -745,7 +761,12 @@ impl LyrelApp {
         let Some(input) = self.editor_input_for(id) else {
             return false;
         };
-        let line = input.read(cx).cursor_position().line as usize;
+        let Some(line) = input
+            .text()
+            .map(|t| t.read(cx).cursor_position().line as usize)
+        else {
+            return false;
+        };
         let Some(ix) = hunk_at_line(&hunks, line) else {
             return false;
         };
@@ -768,13 +789,16 @@ impl LyrelApp {
         let Some(input) = self.editor_input_for(id) else {
             return false;
         };
-        let text = input.read(cx).text().to_string();
+        let Some(text_input) = input.text() else {
+            return false;
+        };
+        let text = text_input.read(cx).text().to_string();
         let (range, replacement) = revert_edit(&text, &base, hunk);
         let line = hunk.new.start;
         let from_peek = f.gutter.peek.is_some();
-        input.replace(range, &replacement, window, cx);
-        let last = input.read(cx).text().lines_len().saturating_sub(1);
-        input.set_cursor_position(Position::new(line.min(last) as u32, 0), window, cx);
+        text_input.replace(range, &replacement, window, cx);
+        let last = text_input.read(cx).text().lines_len().saturating_sub(1);
+        text_input.set_cursor_position(Position::new(line.min(last) as u32, 0), window, cx);
         if from_peek {
             input.focus(window, cx);
         }
@@ -875,16 +899,19 @@ impl LyrelApp {
         let Some(input) = self.editor_input_for(id) else {
             return false;
         };
-        let line = input.read(cx).cursor_position().line as usize;
+        let Some(text) = input.text() else {
+            return false;
+        };
+        let line = text.read(cx).cursor_position().line as usize;
         let ix = match hunk_at_line(&hunks, line) {
             Some(ix) => ix,
             None => {
                 let Some(ix) = step_hunk(&hunks, line, true) else {
                     return false;
                 };
-                let last = input.read(cx).text().lines_len().saturating_sub(1);
+                let last = text.read(cx).text().lines_len().saturating_sub(1);
                 let target = hunks[ix].new.start.min(last);
-                input.set_cursor_position(Position::new(target as u32, 0), window, cx);
+                text.set_cursor_position(Position::new(target as u32, 0), window, cx);
                 ix
             }
         };
@@ -938,7 +965,8 @@ impl LyrelApp {
             PeekAnchor::Point(p) => p + gpui_kit::point(px(8.), px(4.)),
             PeekAnchor::Caret => {
                 let input = self.editor_input_for(id)?;
-                let input = input.read(cx);
+                let text = input.text()?;
+                let input = text.read(cx);
                 let caret = input.cursor();
                 let bounds = input.range_to_bounds(&(caret..caret))?;
                 bounds.bottom_left() + gpui_kit::point(px(0.), px(2.))

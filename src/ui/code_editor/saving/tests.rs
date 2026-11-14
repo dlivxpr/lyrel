@@ -126,7 +126,7 @@ fn failed_save_before_close_keeps_edits_and_cannot_resume_on_a_later_save(cx: &m
         assert_eq!(file.id(), id);
         assert!(file.dirty);
         assert!(file.path.as_os_str().is_empty());
-        assert_eq!(file.input.read(cx).text().to_string(), "original edits");
+        assert_eq!(file.input.text().unwrap().read(cx).text().to_string(), "original edits");
     });
     vcx.dispatch_action(EditorSaveAs);
     settle(&mut vcx);
@@ -251,6 +251,8 @@ fn global_status_navigates_and_saves_the_displayed_document(cx: &mut TestAppCont
             .active_buffer()
             .unwrap()
             .input
+            .text()
+            .unwrap()
             .read(cx)
             .cursor_position();
         assert_eq!((pos.line, pos.character), (1, 1));
@@ -394,7 +396,7 @@ fn markdown_save_as_cancel_and_failed_unsaved_close_keep_edits_through_recovery(
         let file = app.active_buffer().unwrap();
         assert_eq!(file.id(), id);
         assert!(file.input.code().is_none());
-        assert_eq!(file.input.read(cx).text().to_string(), "unsaved Markdown");
+        assert_eq!(file.input.text().unwrap().read(cx).text().to_string(), "unsaved Markdown");
     });
     assert_eq!(std::fs::read_to_string(&path).unwrap(), "original");
     assert_eq!(

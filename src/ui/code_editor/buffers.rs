@@ -155,6 +155,12 @@ impl EditorBuffers {
         self.files.iter().find(|file| file.id() == id)
     }
 
+    /// 测试等监视装上再改文件,不然外部变化没有观察者。
+    #[cfg(test)]
+    pub(super) fn watching(&self) -> bool {
+        self.watch.is_some()
+    }
+
     pub(super) fn get_mut(&mut self, id: BufferId) -> Option<&mut OpenFile> {
         self.files.iter_mut().find(|file| file.id() == id)
     }
@@ -194,19 +200,19 @@ impl EditorBuffers {
         let Some(file) = self.get_mut(id) else { return };
         // A read-only image has no edits to compare: it is never unsaved, so
         // closing it never asks, and Save has nothing to write.
-        if !file.input.is_text() {
+        let Some(text) = file.input.text() else {
             return;
-        }
+        };
         // Edits retire source applicability, not the read request's identity:
         // a completed owning read must still surface a conflict without overwriting input.
         file.reload_seq = file.reload_seq.wrapping_add(1);
-        let input = file.input.read(cx);
+        let input = text.read(cx);
         let text = input.text();
         let len = text.len();
         let same =
             len == file.saved.len && Fingerprint::of_chunks(len, text.chunks()) == file.saved;
         file.dirty = !same
-            || file.format(cx) != file.saved_format
+            || file.format(cx) != Some(file.saved_format)
             || file.representation_fingerprint(cx) != file.saved_representation;
     }
 
@@ -543,8 +549,13 @@ impl EditorBuffers {
             let observe = cx.observe(&input, |_, _, cx| cx.notify());
             (EditorInput::Code(input), Some(popups), sub, observe)
         };
-        let value = input.read(cx);
-        let saved = Fingerprint::of_chunks(value.text().len(), value.text().chunks());
+        // `create` only builds text inputs; a picture goes through
+        // `create_image`, so the text capability is always here.
+        let saved = {
+            let text = input.text().expect("text input");
+            let value = text.read(cx);
+            Fingerprint::of_chunks(value.text().len(), value.text().chunks())
+        };
         let saved_representation = input.markdown().map(|view| {
             view.read(cx)
                 .document()
@@ -917,8 +928,13 @@ impl EditorBuffers {
                     replace_buffer_text(&input, &decoded.text, window, cx);
                 }
                 let file = access(view).get_mut(id).unwrap();
-                let value = file.input.read(cx);
-                file.saved = Fingerprint::of_chunks(value.text().len(), value.text().chunks());
+                // This arm only runs for reloaded text; pictures reload their
+                // own image state and never reach it.
+                if let Some(text) = file.input.text() {
+                    let value = text.read(cx);
+                    file.saved =
+                        Fingerprint::of_chunks(value.text().len(), value.text().chunks());
+                }
                 file.saved_representation = file.representation_fingerprint(cx);
                 access(view).note_edit(id, cx);
                 edited(view, id, cx);

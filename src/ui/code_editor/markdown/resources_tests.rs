@@ -123,7 +123,7 @@ pub(super) fn owning_host(cx: &mut TestAppContext) {
     until(&mut vcx, |cx| {
         app.read_with(cx, |app, cx| {
             app.active_buffer()
-                .is_some_and(|file| file.input.read(cx).text().to_string() == inserted)
+                .is_some_and(|file| file.input.text().unwrap().read(cx).text().to_string() == inserted)
         })
     });
     app.read_with(&vcx, |app, cx| {
@@ -703,7 +703,7 @@ fn unsaved_image_paste_explains_save_location_without_source_or_assets(cx: &mut 
     app.read_with(&vcx, |app, cx| {
         let file = app.active_buffer().unwrap();
         assert!(file.untitled.is_some());
-        assert_eq!(file.input.read(cx).text().len(), 0);
+        assert_eq!(file.input.text().unwrap().read(cx).text().len(), 0);
         assert!(!file.dirty);
     });
 }
@@ -751,6 +751,8 @@ fn attachment_completion_rejects_changed_source_and_selection(cx: &mut TestAppCo
             !app.active_buffer()
                 .unwrap()
                 .input
+                .text()
+                .unwrap()
                 .read(cx)
                 .text()
                 .to_string()
@@ -760,6 +762,8 @@ fn attachment_completion_rejects_changed_source_and_selection(cx: &mut TestAppCo
             app.active_buffer()
                 .unwrap()
                 .input
+                .text()
+                .unwrap()
                 .read(cx)
                 .text()
                 .to_string()
@@ -774,6 +778,8 @@ fn attachment_completion_rejects_changed_source_and_selection(cx: &mut TestAppCo
         app.active_buffer()
             .unwrap()
             .input
+            .text()
+            .unwrap()
             .read(cx)
             .text()
             .to_string()
@@ -796,6 +802,8 @@ fn attachment_completion_rejects_changed_source_and_selection(cx: &mut TestAppCo
             app.active_buffer()
                 .unwrap()
                 .input
+                .text()
+                .unwrap()
                 .read(cx)
                 .text()
                 .to_string(),
@@ -898,6 +906,8 @@ fn resource_errors_svg_isolation_and_automatic_network_no_redirect(cx: &mut Test
             app.active_buffer()
                 .unwrap()
                 .input
+                .text()
+                .unwrap()
                 .read(cx)
                 .text()
                 .to_string(),

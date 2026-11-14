@@ -461,6 +461,8 @@ mod tests {
                 app.active_buffer()
                     .unwrap()
                     .input
+                    .text()
+                    .unwrap()
                     .read(cx)
                     .text()
                     .to_string(),
@@ -475,6 +477,8 @@ mod tests {
                 app.active_buffer()
                     .unwrap()
                     .input
+                    .text()
+                    .unwrap()
                     .read(cx)
                     .text()
                     .to_string(),
@@ -519,7 +523,7 @@ mod tests {
         settle(&mut vcx);
         app.read_with(&vcx, |app, cx| {
             assert_eq!(
-                app.active_editor_input().unwrap().read(cx).selected_range(),
+                app.active_editor_input().unwrap().text().unwrap().read(cx).selected_range(),
                 8..13
             )
         });
@@ -530,7 +534,7 @@ mod tests {
         settle(&mut vcx);
         app.read_with(&vcx, |app, cx| {
             assert_eq!(
-                app.active_editor_input().unwrap().read(cx).selected_range(),
+                app.active_editor_input().unwrap().text().unwrap().read(cx).selected_range(),
                 14..19
             )
         });
@@ -555,6 +559,8 @@ mod tests {
                 app.active_buffer()
                     .unwrap()
                     .input
+                    .text()
+                    .unwrap()
                     .read(cx)
                     .text()
                     .to_string(),
@@ -570,6 +576,8 @@ mod tests {
                 app.active_buffer()
                     .unwrap()
                     .input
+                    .text()
+                    .unwrap()
                     .read(cx)
                     .text()
                     .to_string(),
@@ -587,6 +595,8 @@ mod tests {
                 app.active_buffer()
                     .unwrap()
                     .input
+                    .text()
+                    .unwrap()
                     .read(cx)
                     .text()
                     .to_string(),
@@ -606,6 +616,8 @@ mod tests {
                 app.active_buffer()
                     .unwrap()
                     .input
+                    .text()
+                    .unwrap()
                     .read(cx)
                     .text()
                     .to_string(),

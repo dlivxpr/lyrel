@@ -12,6 +12,17 @@ pub(crate) enum EditorInput {
     /// 只读静态图片：没有文本，只有取景。
     Image(Entity<ImageView>),
 }
+
+/// 一份文档输入的文本能力：代码与 Markdown 有文本，图片没有。
+///
+/// 它是借用视图，不持有第二份状态：所有文本读写都直接落到原实体上。
+/// `EditorInput::text()` 是唯一的取得方式，所以"对图片做文本操作"在类型上
+/// 就不成立，而不是一个静默失败的空操作。
+#[derive(Clone, Copy)]
+pub(crate) enum TextInput<'a> {
+    Code(&'a Entity<EditorState>),
+    Markdown(&'a Entity<MarkdownEditor>),
+}
 #[derive(Clone)]
 pub(crate) enum WeakEditorInput {
     Code(gpui_kit::WeakEntity<EditorState>),
@@ -53,36 +64,23 @@ impl EditorInput {
             _ => None,
         }
     }
+    /// 这份输入的文本能力；只读图片返回 `None`。
+    ///
+    /// 需要文本的调用点从这里取能力再操作，而不是读一个伪造的空文档。
+    pub(crate) fn text(&self) -> Option<TextInput<'_>> {
+        match self {
+            Self::Code(input) => Some(TextInput::Code(input)),
+            Self::Markdown(input) => Some(TextInput::Markdown(input)),
+            Self::Image(_) => None,
+        }
+    }
     /// 有文本可编辑、可查找、可保存的输入。图片不是。
     pub(crate) fn is_text(&self) -> bool {
-        self.code().is_some() || self.markdown().is_some()
-    }
-    pub(crate) fn set_soft_wrap(&self, wrap: bool, window: &mut Window, cx: &mut gpui_kit::App) {
-        match self {
-            Self::Code(input) => {
-                input.update(cx, |state, cx| state.set_soft_wrap(wrap, window, cx))
-            }
-            Self::Markdown(input) => input.update(cx, |state, cx| state.set_soft_wrap(wrap, cx)),
-            Self::Image(_) => {}
-        }
+        self.text().is_some()
     }
     pub(crate) fn finish_composition(&self, _: &mut Window, cx: &mut gpui_kit::App) {
         if let Some(input) = self.markdown() {
             input.update(cx, |state, cx| state.finish_composition(cx));
-        }
-    }
-    pub(crate) fn set_selected_range(&self, range: std::ops::Range<usize>, cx: &mut gpui_kit::App) {
-        match self {
-            Self::Code(input) => input.update(cx, |state, cx| state.set_selected_range(range, cx)),
-            Self::Markdown(input) => input.update(cx, |state, cx| state.select_range(range, cx)),
-            Self::Image(_) => {}
-        }
-    }
-    pub(crate) fn add_selection(&self, range: std::ops::Range<usize>, cx: &mut gpui_kit::App) {
-        match self {
-            Self::Code(input) => input.update(cx, |state, cx| state.add_selection(range, cx)),
-            Self::Markdown(input) => input.update(cx, |state, cx| state.add_selection(range, cx)),
-            Self::Image(_) => {}
         }
     }
     pub(crate) fn read<'a>(&'a self, cx: &'a gpui_kit::App) -> InputRead<'a> {
@@ -95,23 +93,7 @@ impl EditorInput {
             focus.focus(window, cx);
         }
     }
-    pub(crate) fn set_cursor_position(
-        &self,
-        position: Position,
-        window: &mut Window,
-        cx: &mut gpui_kit::App,
-    ) {
-        match self {
-            Self::Code(input) => input.update(cx, |state, cx| {
-                state.set_cursor_position(position, window, cx)
-            }),
-            Self::Markdown(input) => {
-                let at = self.read(cx).text().position_to_offset(&position);
-                input.update(cx, |state, cx| state.select_range(at..at, cx));
-            }
-            Self::Image(_) => {}
-        }
-    }
+    /// 取景与文本共用的滚动：图片的取景就是它的偏移。
     pub(crate) fn set_scroll_offset(
         &self,
         offset: gpui_kit::Point<gpui_kit::Pixels>,
@@ -128,6 +110,58 @@ impl EditorInput {
             }),
         }
     }
+    pub(crate) fn set_highlighter(&self, language: &'static str, cx: &mut gpui_kit::App) {
+        if let Some(input) = self.code() {
+            input.update(cx, |state, cx| state.set_highlighter(language, cx));
+        }
+    }
+}
+impl TextInput<'_> {
+    pub(crate) fn read<'a>(&'a self, cx: &'a gpui_kit::App) -> TextRead<'a> {
+        TextRead { input: *self, cx }
+    }
+    pub(crate) fn set_soft_wrap(
+        &self,
+        wrap: bool,
+        window: &mut Window,
+        cx: &mut gpui_kit::App,
+    ) {
+        match self {
+            Self::Code(input) => {
+                input.update(cx, |state, cx| state.set_soft_wrap(wrap, window, cx))
+            }
+            Self::Markdown(input) => input.update(cx, |state, cx| state.set_soft_wrap(wrap, cx)),
+        }
+    }
+    pub(crate) fn set_selected_range(&self, range: std::ops::Range<usize>, cx: &mut gpui_kit::App) {
+        match self {
+            Self::Code(input) => input.update(cx, |state, cx| state.set_selected_range(range, cx)),
+            Self::Markdown(input) => input.update(cx, |state, cx| state.select_range(range, cx)),
+        }
+    }
+    pub(crate) fn add_selection(&self, range: std::ops::Range<usize>, cx: &mut gpui_kit::App) {
+        match self {
+            Self::Code(input) => input.update(cx, |state, cx| state.add_selection(range, cx)),
+            Self::Markdown(input) => input.update(cx, |state, cx| state.add_selection(range, cx)),
+        }
+    }
+    pub(crate) fn set_cursor_position(
+        &self,
+        position: Position,
+        window: &mut Window,
+        cx: &mut gpui_kit::App,
+    ) {
+        match self {
+            Self::Code(input) => input.update(cx, |state, cx| {
+                state.set_cursor_position(position, window, cx)
+            }),
+            Self::Markdown(input) => {
+                let at = self.read(cx).text().position_to_offset(&position);
+                input.update(cx, |state, cx| state.select_range(at..at, cx));
+            }
+        }
+    }
+    /// 文本替换。只读文档不持有文本能力，所以这个方法在这里根本就不存在。
     pub(crate) fn replace(
         &self,
         range: std::ops::Range<usize>,
@@ -146,13 +180,6 @@ impl EditorInput {
             Self::Markdown(input) => {
                 input.update(cx, |state, cx| state.replace_range(range, text, cx))
             }
-            // 只读文档没有可替换的内容：写不进去，也不留下半次编辑。
-            Self::Image(_) => {}
-        }
-    }
-    pub(crate) fn set_highlighter(&self, language: &'static str, cx: &mut gpui_kit::App) {
-        if let Some(input) = self.code() {
-            input.update(cx, |state, cx| state.set_highlighter(language, cx));
         }
     }
 }
@@ -161,46 +188,7 @@ pub(crate) struct InputRead<'a> {
     cx: &'a gpui_kit::App,
 }
 impl InputRead<'_> {
-    pub(crate) fn text(&self) -> TextSnapshot {
-        match self.input {
-            EditorInput::Code(input) => TextSnapshot::Code(input.read(self.cx).text().clone()),
-            EditorInput::Markdown(input) => TextSnapshot::Markdown(
-                input
-                    .read(self.cx)
-                    .document()
-                    .read(self.cx)
-                    .snapshot()
-                    .shared_text(),
-            ),
-            // 图片没有文本。空快照是这句话的如实写法：不假装有一份空文件，
-            // 也不为它单独造一个第三种文本类型让每个消费者都多一条分支。
-            EditorInput::Image(_) => TextSnapshot::Code(Default::default()),
-        }
-    }
-    pub(crate) fn cursor(&self) -> usize {
-        match self.input {
-            EditorInput::Code(input) => input.read(self.cx).cursor(),
-            EditorInput::Markdown(input) => input.read(self.cx).cursor(),
-            EditorInput::Image(_) => 0,
-        }
-    }
-    pub(crate) fn cursor_position(&self) -> Position {
-        self.text().offset_to_position(self.cursor())
-    }
-    pub(crate) fn selected_range(&self) -> std::ops::Range<usize> {
-        match self.input {
-            EditorInput::Code(input) => input.read(self.cx).selected_range(),
-            EditorInput::Markdown(input) => input.read(self.cx).selected_range(),
-            EditorInput::Image(_) => 0..0,
-        }
-    }
-    pub(crate) fn occurrence_range(&self) -> std::ops::Range<usize> {
-        match self.input {
-            EditorInput::Code(_) => self.selected_range(),
-            EditorInput::Markdown(input) => input.read(self.cx).occurrence_range(),
-            EditorInput::Image(_) => 0..0,
-        }
-    }
+    /// 焦点与滚动是所有文档共有的呈现状态；文本事实见 `TextRead`。
     pub(crate) fn focus_handle(&self, cx: &gpui_kit::App) -> gpui_kit::FocusHandle {
         match self.input {
             EditorInput::Code(input) => input.read(self.cx).focus_handle(cx),
@@ -215,14 +203,57 @@ impl InputRead<'_> {
             EditorInput::Image(input) => input.read(self.cx).scroll().offset(),
         }
     }
+}
+
+/// 一份文本输入的一次读取。只有 `EditorInput::text()` 能造出它，
+/// 所以这里没有一个回答是给图片准备的。
+pub(crate) struct TextRead<'a> {
+    input: TextInput<'a>,
+    cx: &'a gpui_kit::App,
+}
+
+impl TextRead<'_> {
+    pub(crate) fn text(&self) -> TextSnapshot {
+        match self.input {
+            TextInput::Code(input) => TextSnapshot::Code(input.read(self.cx).text().clone()),
+            TextInput::Markdown(input) => TextSnapshot::Markdown(
+                input
+                    .read(self.cx)
+                    .document()
+                    .read(self.cx)
+                    .snapshot()
+                    .shared_text(),
+            ),
+        }
+    }
+    pub(crate) fn cursor(&self) -> usize {
+        match self.input {
+            TextInput::Code(input) => input.read(self.cx).cursor(),
+            TextInput::Markdown(input) => input.read(self.cx).cursor(),
+        }
+    }
+    pub(crate) fn cursor_position(&self) -> Position {
+        self.text().offset_to_position(self.cursor())
+    }
+    pub(crate) fn selected_range(&self) -> std::ops::Range<usize> {
+        match self.input {
+            TextInput::Code(input) => input.read(self.cx).selected_range(),
+            TextInput::Markdown(input) => input.read(self.cx).selected_range(),
+        }
+    }
+    pub(crate) fn occurrence_range(&self) -> std::ops::Range<usize> {
+        match self.input {
+            TextInput::Code(_) => self.selected_range(),
+            TextInput::Markdown(input) => input.read(self.cx).occurrence_range(),
+        }
+    }
     pub(crate) fn range_to_bounds(
         &self,
         range: &std::ops::Range<usize>,
     ) -> Option<gpui_kit::Bounds<gpui_kit::Pixels>> {
         match self.input {
-            EditorInput::Code(input) => input.read(self.cx).range_to_bounds(range),
-            EditorInput::Markdown(input) => input.read(self.cx).range_to_bounds(range),
-            EditorInput::Image(_) => None,
+            TextInput::Code(input) => input.read(self.cx).range_to_bounds(range),
+            TextInput::Markdown(input) => input.read(self.cx).range_to_bounds(range),
         }
     }
 }
