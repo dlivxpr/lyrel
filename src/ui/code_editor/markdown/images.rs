@@ -415,8 +415,17 @@ impl ImageHost {
                 decode(&bytes).map(|(rgba, _)| render(rgba))
             },
             move |this, result, cx| {
-                this.transfers.remove(&source);
-                this.progress.remove(&source);
+                // A completion from an older generation must not drop the
+                // live request's cancel token or progress: only the owner of
+                // the entry may retire it.
+                if this
+                    .transfers
+                    .get(&source)
+                    .is_some_and(|(current, _)| *current == generation)
+                {
+                    this.transfers.remove(&source);
+                    this.progress.remove(&source);
+                }
                 let current = this.identity(cx).and_then(|(h, p)| p.map(|p| (h.id(), p)));
                 if this.generation != generation
                     || this.signature != signature

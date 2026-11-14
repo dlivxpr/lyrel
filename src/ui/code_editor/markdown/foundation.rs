@@ -472,6 +472,8 @@ pub(super) fn extreme_line(cx: &mut TestAppContext) {
             app.active_buffer()
                 .unwrap()
                 .input
+                .text()
+                .unwrap()
                 .read(cx)
                 .text()
                 .to_string(),
