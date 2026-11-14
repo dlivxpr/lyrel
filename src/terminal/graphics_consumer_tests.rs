@@ -748,34 +748,63 @@ fn graphics_consumer_cross_daemon_aggregate_rejects_without_losing_pixels_then_r
                 for _ in 0..20 {
                     graphics_consumer_progress(cx);
                 }
-                let request = format!(
-                    "SEND_OK 5 1 {} 0\n",
-                    graphics_pty_fixture::hex(
-                        b"\x1b[5;5H\x1b_Ga=T,i=8,p=1,c=2,r=1,C=1,f=32,s=1,v=1;/wAA/w==\x1b\\"
-                    )
-                );
-                terminals[2]
-                    .1
-                    .read_with(cx, |view, _| view.terminal.write(request.into_bytes()));
-                // Pump the old window's atlas retirement while the offering
-                // daemon is still inside its bounded admission wait, not after
-                // KITTY_DONE_5 has already certified a possibly refused upload.
-                graphics_recovery_wait(cx, "PTY round trip did not finish: 5", |cx| {
-                    for index in [0, 2] {
-                        terminals[index]
-                            .0
-                            .update(cx, |_, window, cx| window.render_frame(cx))
-                            .unwrap();
-                    }
+                // SEND_OK would kill the fixture on an ENOSPC that is legal in
+                // flight: the request that refuses is the same one asking the
+                // owning daemon to reclaim. Drive the probe through the same
+                // reply file as the acceptance assertions and resend a refused
+                // offer, which the protocol explicitly leaves retryable.
+                let replies = tempfile::TempDir::new().unwrap();
+                let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+                let mut serial = 5;
+                loop {
+                    let reply_path = replies.path().join(format!("probe-{serial}"));
+                    let request = format!(
+                        "SEND_ANY {serial} 1 {} 0 {}\n",
+                        graphics_pty_fixture::hex(
+                            b"\x1b[5;5H\x1b_Ga=T,i=8,p=1,c=2,r=1,C=1,f=32,s=1,v=1;/wAA/w==\x1b\\"
+                        ),
+                        graphics_pty_fixture::hex(reply_path.to_string_lossy().as_bytes()),
+                    );
                     terminals[2].1.read_with(cx, |view, _| {
-                        assert!(
-                            !view.terminal.child_exited(),
-                            "PTY sender exited before serial 5; output={}",
-                            view.scrollback_text()
-                        );
-                        view.scrollback_text().contains("KITTY_DONE_5;")
-                    })
-                });
+                        view.terminal.write(request.clone().into_bytes())
+                    });
+                    // Pump the old window's atlas retirement while the offering
+                    // daemon is still inside its bounded admission wait, not
+                    // after KITTY_DONE has already certified a refused upload.
+                    let done_path = reply_path.with_extension("done");
+                    graphics_recovery_wait(cx, "PTY round trip did not finish", |cx| {
+                        for index in [0, 2] {
+                            terminals[index]
+                                .0
+                                .update(cx, |_, window, cx| window.render_frame(cx))
+                                .unwrap();
+                        }
+                        terminals[2].1.read_with(cx, |view, _| {
+                            assert!(
+                                !view.terminal.child_exited(),
+                                "PTY sender exited before serial {serial}; output={}",
+                                view.scrollback_text()
+                            );
+                            done_path.is_file()
+                        })
+                    });
+                    let reply = std::fs::read_to_string(&reply_path).unwrap();
+                    let reply = graphics_pty_fixture::unhex(reply.trim());
+                    if reply.ends_with(b";OK\x1b\\") {
+                        break;
+                    }
+                    assert!(
+                        reply.ends_with(b"ENOSPC:Desktop graphics budget exhausted\x1b\\"),
+                        "probe serial {serial} met an unrecoverable refusal: {:?}",
+                        String::from_utf8_lossy(&reply)
+                    );
+                    assert!(
+                        std::time::Instant::now() < deadline,
+                        "cross-source pressure must reclaim eligible history before refusing usable capacity: reply={:?}",
+                        String::from_utf8_lossy(&reply)
+                    );
+                    serial += 1;
+                }
             };
             let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
             while terminals[2]

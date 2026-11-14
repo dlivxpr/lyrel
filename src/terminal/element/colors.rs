@@ -232,6 +232,7 @@ fn blend_toward(c: Hsla, dim: f32, under: Rgba) -> Hsla {
 }
 
 impl PaintColors {
+    #[cfg(test)]
     pub(in crate::terminal) fn resolve(
         theme: &gpui_kit::component::Theme,
         cx: &gpui_kit::App,

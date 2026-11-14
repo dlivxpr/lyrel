@@ -1096,7 +1096,7 @@ fn glyph_state_survives_a_producer_that_truly_exits(cx: &mut TestAppContext) {
         cx.set_global(Config::default());
     });
     let daemon = GraphicsDaemonProcess::start();
-    let mut spawn = daemon
+    let spawn = daemon
         .panes()
         .spawn(
             None,

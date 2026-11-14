@@ -258,10 +258,10 @@ fn glyph_native_system_coverage_and_registered_paint(cx: &mut TestAppContext) {
     let (view, window) = graphics_rooted_consumer(cx, pane, daemon.stream(pane));
     let replies = tempfile::TempDir::new().unwrap();
 
-    /// Independent oracle for the wire `system` bit: shape `cp` alone through
-    /// the pane's real font and platform stack, and read whether any emitted
-    /// glyph has a real id. A nonzero id — even a zero-ink one — is what the
-    /// cell would paint, so it is coverage; 0 is `.notdef`.
+    // Independent oracle for the wire `system` bit: shape `cp` alone through
+    // the pane's real font and platform stack, and read whether any emitted
+    // glyph has a real id. A nonzero id — even a zero-ink one — is what the
+    // cell would paint, so it is coverage; 0 is `.notdef`.
     let system_covers = |cp: u32, cx: &mut TestAppContext| {
         let (font, font_size) = view.read_with(cx, |view, _| (view.font.clone(), view.font_size));
         cx.update(|cx| {
