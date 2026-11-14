@@ -49,8 +49,9 @@ reason = """仅参考、未导入：该实现使用 Unix (dev, ino) 与本地 te
 传输。Lyrel 在 LocalHost 内用平台对象身份 + change time 绑定打开版本，并在
 control 会话中复用同一 HostRead，而不是把本机 paged-file 当成远端实现。"""
 
-# #295 只读 SQLite 浏览保留的 Glim MIT 源码记录。GUI 交互适配（reader/sqlite.rs、
-# sqlite/view.rs）尚未交付，未在本条中冒充已导入。
+# #295 只读 SQLite 浏览保留的 Glim MIT 源码记录。GUI 交互按同一固定 revision
+# 的 reader/sqlite.rs 与 view.rs 适配到 Kit/Fast；没有逐字复制其中的 Glim
+# gpui_kit 接线，记录为 [[inspected]]，实际消费者与后端替换见本地文件。
 
 [[source]]
 upstream = "crates/glim-services/src/sqlite/browser.rs"
@@ -92,11 +93,16 @@ reason = """场景参照，未导入文件：727 行/300 列 WAL、跨页列窗�
 [[inspected]]
 upstream = "crates/glim-app/src/views/reader/sqlite.rs"
 sha256 = "1832087dc7b5bddb47302193062a2b34b79d5274ef54b034c1a72825ca4999a0"
-reason = """交互移植尚未交付：reader 编排与 sqlite/view.rs 的表格交互仍需按 Lyrel
-Kit/Fast 与 HostOps worker 适配；当前 #295 只提交 headless Host/control 能力与测试，
-不把空壳 GUI 记作完成。"""
+reason = """按固定 revision 适配交互语义，未逐字复制：schema 列表、表选择、250ms 搜索防抖
+（#296）、分页/列窗、四类后台任务与 Cancellation、refresh 后重发过期结果、失败保留旧页。
+Lyrel 改为一个 HostOps worker + `SqliteCancel` 请求身份，后端换成本地/远端 Host 的
+read view；呈现迁移到 Kit/Fast 的 `sqlite_document.rs`，不再使用 Glim 的 gpui_kit
+组件与每查询新连接。筛选、排序与完整值详情留给 #296。"""
 
 [[inspected]]
 upstream = "crates/glim-app/src/views/reader/sqlite/view.rs"
 sha256 = "93aebc2d503bff29439b869133935252b00f7be89e8e2c0885ddcfbaa74aafe4"
-reason = """同上：列窗、排序与完整值详情属于 #296 的范围，本票未导入视图代码。"""
+reason = """按固定 revision 适配表格语义：固定行号列、可见列窗、双击详情入口（#296）、
+三态排序（#296）、页发布与列变化刷新、resume scroll。Lyrel 以 Kit `DataTable` /
+`TableDelegate` 重写呈现，行号来自页偏移，类型化值不做显示字符串回写；本票只交付
+基础分页与列窗，不绘制无效的排序/筛选/完整值控件。"""

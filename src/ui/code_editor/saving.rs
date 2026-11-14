@@ -90,9 +90,10 @@ fn document_identity(file: &OpenFile, cx: &gpui_kit::App) -> gpui_kit::EntityId 
     match &file.input {
         EditorInput::Code(input) => input.entity_id(),
         EditorInput::Markdown(view) => view.read(cx).document().entity_id(),
-        // A picture never saves, but the identity is asked for by every
-        // save-side prompt and must name something stable.
+        // A picture or a database never saves, but the identity is asked for
+        // by every save-side prompt and must name something stable.
         EditorInput::Image(view) => view.entity_id(),
+        EditorInput::Sqlite(view) => view.entity_id(),
     }
 }
 

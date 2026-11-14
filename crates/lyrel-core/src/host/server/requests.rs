@@ -59,7 +59,7 @@ impl Requests {
             match inflight.get_mut(&req_id) {
                 Some(entry) if entry.cancelled => true,
                 Some(entry) => {
-                    entry.interrupt = Some(interrupt);
+                    entry.interrupt = Some(Arc::clone(&interrupt));
                     false
                 }
                 None => return,

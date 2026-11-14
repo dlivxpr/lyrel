@@ -44,10 +44,15 @@ pub(crate) mod outline;
 mod problems;
 pub(crate) mod saving;
 mod split;
+mod sqlite_document;
+mod sqlite_grid;
 mod strip;
 use saving::{AfterUnsaved, BarKind, EditorBar, EditorBridge, EditorEvent, SaveWaiter};
 #[cfg(any(test, feature = "native-markdown-tests"))]
 mod test_host;
+
+pub(crate) use sqlite_document::KEY_CONTEXT as SQLITE_KEY_CONTEXT;
+pub(crate) use sqlite_document::Refresh as SqliteRefresh;
 
 /// 只读图片文档的键盘上下文，与它的取景动作一起供 keymap 使用。
 pub(crate) use image_document::KEY_CONTEXT as IMAGE_KEY_CONTEXT;
@@ -401,6 +406,20 @@ pub(crate) fn is_markdown_path(path: &Path) -> bool {
         .and_then(|ext| ext.to_str())
         .is_some_and(|ext| {
             ["md", "markdown", "mdx"]
+                .iter()
+                .any(|candidate| ext.eq_ignore_ascii_case(candidate))
+        })
+}
+
+/// The conventional SQLite database extensions. A name is the only signal an
+/// open may use without reading the file: the owning Host then opens it
+/// read-only, and a file that is not a database becomes a visible error in
+/// its own document rather than a text buffer or a whole-file download.
+pub(crate) fn is_sqlite_path(path: &Path) -> bool {
+    path.extension()
+        .and_then(|ext| ext.to_str())
+        .is_some_and(|ext| {
+            ["sqlite", "sqlite3", "db", "db3"]
                 .iter()
                 .any(|candidate| ext.eq_ignore_ascii_case(candidate))
         })
@@ -766,6 +785,11 @@ impl LyrelApp {
             .is_some_and(|file| file.input.image().is_some())
     }
 
+    pub(crate) fn sqlite_document_active(&self) -> bool {
+        self.active_buffer()
+            .is_some_and(|file| file.input.sqlite().is_some())
+    }
+
     fn active_editor_input(&self) -> Option<EditorInput> {
         self.editor_input_for(self.tab_code()?.active_id()?)
     }
@@ -782,6 +806,11 @@ impl LyrelApp {
                     file.presentations
                         .image_existing(tab, group)
                         .map(EditorInput::Image)
+                })
+                .or_else(|| {
+                    file.presentations
+                        .sqlite_existing(tab, group)
+                        .map(EditorInput::Sqlite)
                 })
                 .unwrap_or_else(|| file.input.clone()),
         )
@@ -1417,6 +1446,11 @@ impl LyrelApp {
         } else if let Some(primary) = file.input.image() {
             let view = file.presentations.image_view(primary, tab, group, cx);
             EditorInput::Image(view).focus(window, cx);
+        } else if let Some(primary) = file.input.sqlite() {
+            let view = file
+                .presentations
+                .sqlite_view(primary, tab, group, window, cx);
+            EditorInput::Sqlite(view).focus(window, cx);
         } else {
             file.input.focus(window, cx);
         }
@@ -1942,6 +1976,10 @@ impl LyrelApp {
         // 这些行，等于向读者承诺文档里有能编辑的文本。
         if input.image().is_some() {
             return image_document::menu_entries(menu);
+        }
+        // 数据库没有撤销、查找、剪贴板和行命令可给：它只有刷新与分页。
+        if input.sqlite().is_some() {
+            return sqlite_document::menu_entries(menu);
         }
         let selected = input
             .text()
@@ -2638,6 +2676,8 @@ impl LyrelApp {
                     "markdown-status-bar"
                 } else if self.image_document_active() {
                     "image-status-bar"
+                } else if self.sqlite_document_active() {
+                    "sqlite-status-bar"
                 } else {
                     "code-status-bar"
                 })
@@ -2753,6 +2793,28 @@ impl LyrelApp {
                 let view = f.presentations.image_view(primary, tab, group, cx);
                 v_flex()
                     .id(("image-presentation", view.entity_id()))
+                    .min_w_0()
+                    .min_h_0()
+                    .size_full()
+                    .child(view)
+                    .into_any_element()
+            }
+            Some(f) if f.input.sqlite().is_some() => {
+                let primary = f.input.sqlite().expect("sqlite document presentation");
+                let tab = self
+                    .tabs
+                    .get(self.tabs.active_index())
+                    .expect("visible editor tab")
+                    .id();
+                let code = self.tab_code().expect("visible editor group");
+                let group = if code.focused_slot() == slot {
+                    code.group
+                } else {
+                    code.split.as_ref().expect("second editor group").id
+                };
+                let view = f.presentations.sqlite_view(primary, tab, group, window, cx);
+                v_flex()
+                    .id(("sqlite-presentation", view.entity_id()))
                     .min_w_0()
                     .min_h_0()
                     .size_full()
@@ -3105,6 +3167,10 @@ impl LyrelApp {
             image.as_ref().map(|view| view.read(cx).status_text(cx));
         let image_zoom: Option<SharedString> =
             image.as_ref().map(|view| view.read(cx).zoom_label());
+        let sqlite_status: Option<SharedString> = self
+            .active_editor_input()
+            .and_then(|input| input.sqlite().cloned())
+            .map(|view| view.read(cx).status_text());
         let cursor: Option<SharedString> = self
             .active_editor_input()
             .and_then(|input| input.text().map(|text| text.read(cx).cursor_position()))
@@ -3250,6 +3316,17 @@ impl LyrelApp {
                         .test_support()
                         .flex_none()
                         .child(zoom),
+                )
+            })
+            // A database states the read view, page and journal mode it is
+            // actually showing; the global bar next to it carries Host/path.
+            .when_some(sqlite_status, |this, status| {
+                this.child(
+                    div()
+                        .id("status-sqlite-facts")
+                        .test_support()
+                        .flex_none()
+                        .child(status),
                 )
             })
             .when_some(language, |this, l| this.child(div().flex_none().child(l)))

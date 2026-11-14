@@ -195,16 +195,16 @@ fn a_wal_writer_sees_the_read_view_keep_its_snapshot_until_refresh() {
     let opened = service.open(&path, &cancel).unwrap();
     let view = opened.view;
     assert_eq!(opened.journal_mode, "wal");
-    let query = query(&service, view, "items");
-    assert_eq!(service.count(view, &query, &cancel).unwrap(), 5);
+    let items_query = query(&service, view, "items");
+    assert_eq!(service.count(view, &items_query, &cancel).unwrap(), 5);
 
     writer
         .execute("INSERT INTO items(value) VALUES ('six')", [])
         .unwrap();
     // The same transaction still sees the version it started on, even after
     // the writer committed.
-    assert_eq!(service.count(view, &query, &cancel).unwrap(), 5);
-    let page = service.page(view, &query, &cancel).unwrap();
+    assert_eq!(service.count(view, &items_query, &cancel).unwrap(), 5);
+    let page = service.page(view, &items_query, &cancel).unwrap();
     assert_eq!(page.rows.len(), 5);
     assert!(!page.more);
 
@@ -268,6 +268,7 @@ fn idle_and_max_age_retire_views_without_a_later_request() {
     });
     let cancel = SqliteCancel::default();
     let opened = service.open(&path, &cancel).unwrap();
+    let first_query = query(&service, opened.view, "items");
     std::thread::sleep(Duration::from_millis(80));
     service.sweep_now();
     assert_eq!(
@@ -276,7 +277,7 @@ fn idle_and_max_age_retire_views_without_a_later_request() {
         "the idle view is gone without another request"
     );
     let error = service
-        .count(opened.view, &query(&service, opened.view, "items"), &cancel)
+        .count(opened.view, &first_query, &cancel)
         .unwrap_err();
     assert!(is_stale_view(&error), "{error}");
 
@@ -286,6 +287,7 @@ fn idle_and_max_age_retire_views_without_a_later_request() {
         max_age: Duration::from_millis(60),
     });
     let opened = service.open(&path, &cancel).unwrap();
+    let aged_query = query(&service, opened.view, "items");
     let deadline = Instant::now() + Duration::from_millis(250);
     while Instant::now() < deadline {
         std::thread::sleep(Duration::from_millis(15));
@@ -294,7 +296,7 @@ fn idle_and_max_age_retire_views_without_a_later_request() {
     assert_eq!(service.len(), 0, "a continuously used view still ages out");
     assert!(is_stale_view(
         &service
-            .count(opened.view, &query(&service, opened.view, "items"), &cancel)
+            .count(opened.view, &aged_query, &cancel)
             .unwrap_err()
     ));
 }

@@ -61,7 +61,7 @@ pub(crate) fn columns(connection: &Connection, table: &str) -> rusqlite::Result<
         let mut statement = connection
             .prepare("SELECT name, pk FROM pragma_table_xinfo(?) WHERE hidden != 1 ORDER BY cid")?;
         let rows = statement.query_map([table], |row| {
-            Ok((row.get::<_, String>(0)?, row.get::<_, usize>(1)?))
+            Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
         })?;
         rows.collect::<rusqlite::Result<Vec<_>>>()?
     };
@@ -397,18 +397,4 @@ pub(crate) fn value(
         .optional()?
         .ok_or(rusqlite::Error::QueryReturnedNoRows)?;
     Ok(row)
-}
-
-/// Read a value through `ValueRef`, used by the regression tests to prove the
-/// storage class survives the preview projection.
-#[cfg(test)]
-pub(crate) fn storage_class_of(row: &Row<'_>, index: usize) -> String {
-    match row.get_ref(index) {
-        Ok(ValueRef::Null) => "null".into(),
-        Ok(ValueRef::Integer(_)) => "integer".into(),
-        Ok(ValueRef::Real(_)) => "real".into(),
-        Ok(ValueRef::Text(_)) => "text".into(),
-        Ok(ValueRef::Blob(_)) => "blob".into(),
-        Err(_) => "error".into(),
-    }
 }

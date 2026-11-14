@@ -25,6 +25,8 @@
 - #262：终端内容区支持 OSC 22 基本指针 set/reset（含空名称释放），按实际 GPUI／平台形状映射并安全回退；保留工作台菜单／分屏拖动、本地文字选择和链接操作优先级，命令结束、提示符、reset、断连与链接退休清理旧覆盖。不增加指针堆栈／查询或终端身份伪装；新增真实 PTY／daemon／生产交互消费者、确定性 reader 边界回归和可复现原生场景。测试平台的绘制策略与操作断言不替代原生指针、macOS 或真实 SSH 验收。
 - #261：终端新增 pane 会话内 `OSC 4/10/11/12` 索引色与默认前景／背景／光标 set/query/reset 覆盖层，绘制、查询与 prompt 背景共用当前主题 + 覆盖后的有效调色板；命令退出保留、主题切换只更新未覆盖默认、复位露出当前主题，其他 pane／界面／配置不受影响。daemon 在回放环之外保留固定 259 槽的有界解码状态，经有序流投影给已协商消费者；ring 裁剪、窗口重附着与同会话 handoff 可恢复，daemon 死亡后的新 shell 从空状态开始。新增 `pane-colors` feature 与客户端 opt-in，新 daemon 绝不向旧客户端发送新帧；缺少该能力的后端在图形窗格附着前收到明确的更新错误，不静默丢弃颜色、不停止旧 daemon、不自动重启。同步输出与阅读态沿用现有 retained-frame 规则；新增真实 PTY／daemon／生产终端消费者、handoff 与恢复路径回归及原生颜色场景入口。Windows 原生、WSL 与真实 SSH 组合验收由集成阶段补齐，不以 headless 结果替代。
 
+- #295：只读 SQLite 浏览接入所属 Host 与工作台。`lyrel-core` 移植 Glim `browser.rs` 的标识符引用、单绑定 predicate、稳定顺序、列窗、count、page 与值分块，每个数据库打开一条 `BEGIN DEFERRED` 读取视图；view 有 30 秒 idle／180 秒绝对寿命与进程级 reaper，取消绑定到请求并调用 `sqlite3_interrupt`，连接断开时服务端释放该连接的全部视图。control v18 新增 `sqlite-browse-v1` 与 `Sqlite` 请求，缺少能力的 peer 在发送前拒绝。值保留 NULL、精确 INTEGER、REAL 位模式、原始 TEXT／BLOB，不下载整库、不写数据／schema、不改 journal 模式、不 checkpoint、不加载扩展；`Snapshot` 文件复制被明确排除。工作台新增只读数据库文档、schema／SQL 定义、分页与列窗、加载／空／失败／刷新／取消状态和每分屏独立焦点／表格状态；筛选、排序与完整值检查留给 #296。真实 SSH、原生窗口、系统 IME、macOS 与性能按父验收边界另记，不以 workbench／conformance 结果代替。
+
 ### 修复
 
 - #267：Glyph 绘制快照保留 Kitty Unicode placeholder 的占用身份；即使其 PUA 墨迹被抑制或图片 prototype 已删除，前一格的 `width=2` 注册也不能把该格误当普通空白借用。live 与阅读快照采用同一规则，不改变逻辑列宽、复制内容或图片资源所有权。

@@ -640,7 +640,7 @@ fn run_sqlite(
     request: crate::host::sqlite::SqliteRequest,
     cancel: &crate::host::sqlite::SqliteCancel,
 ) -> io::Result<crate::host::sqlite::SqliteReply> {
-    use crate::host::sqlite::{SqliteReply, SqliteRequest as R, SqliteValue, stale_view};
+    use crate::host::sqlite::{SqliteReply, SqliteRequest as R, SqliteValue};
     let h: &dyn Host = &*conn.host;
     match request {
         R::Open { path } => {
@@ -656,7 +656,7 @@ fn run_sqlite(
                     ));
                 }
             }
-            let opened = h.sqlite_open(Path::new(&path), cancel)?;
+            let opened = h.sqlite_open(std::path::Path::new(&path), cancel)?;
             conn.sqlite_views
                 .lock()
                 .unwrap_or_else(|e| e.into_inner())

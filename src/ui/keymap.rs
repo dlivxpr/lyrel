@@ -198,6 +198,13 @@ fn fixed_bindings(cx: &App) -> Vec<KeyBinding> {
         bindings.push(load_binding(back, EditorNavigateBack, image, cx));
         bindings.push(load_binding(forward, EditorNavigateForward, image, cx));
     }
+    // The database reader's one command. Refresh opens a new read view; it is
+    // bound only while a database presentation holds the keyboard.
+    {
+        use crate::ui::code_editor::SqliteRefresh;
+        let sqlite = Some(crate::ui::code_editor::SQLITE_KEY_CONTEXT);
+        bindings.push(load_binding("secondary-r", SqliteRefresh, sqlite, cx));
+    }
     // The code editor's line commands, for the same tie: ⌘/ is the shortcut
     // sheet, ⌘↵ fullscreen, ⌘⇧↵ maximize and ⌥↑/⌥↓ pane focus off macOS, all
     // context-free. Bound on `CodeEditor`, which only a multi-line code

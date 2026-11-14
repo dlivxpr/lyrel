@@ -17,7 +17,7 @@ use std::collections::HashMap;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Arc, LazyLock, Mutex, MutexGuard, Weak};
+use std::sync::{Arc, Mutex, MutexGuard, OnceLock, Weak};
 use std::time::{Duration, Instant};
 
 use rusqlite::{
@@ -346,6 +346,7 @@ impl SqliteService {
 
     /// Run one sweep now. The background reaper uses the same path; tests call
     /// it directly so a short limit does not need a sleep race.
+    #[cfg(test)]
     pub(crate) fn sweep_now(&self) {
         self.inner.sweep();
     }
@@ -414,7 +415,7 @@ impl Inner {
     /// Remove `handle` if it is still the view registered under `id` and no
     /// operation is using its connection. Returns whether it was retired.
     fn retire_if_idle(&self, id: u64, handle: &Arc<ViewHandle>) -> bool {
-        let Ok(mut connection) = handle.connection.try_lock() else {
+        let Ok(connection) = handle.connection.try_lock() else {
             // An operation owns the connection; the next sweep retires it
             // after that operation returns, and the absolute age still bounds
             // how long it can run through its own query budget.

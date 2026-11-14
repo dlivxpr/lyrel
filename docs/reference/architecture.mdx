@@ -198,17 +198,17 @@ Markdown 只有独立维护的 Zorite-derived `lyrel-markdown-editor` 默认即�
 coding agent 在真实 PTY 中运行自己的原生 TUI。命令识别、状态 hooks、会话历史、resume／fork 与启动任务投递是独立能力；hooks／产品 SDK bridge 是状态观测与任务交互通道，不替代 agent 界面。内置产品与能力边界见[agent 概览](/agents/overview)和[会话操作](/agents/sessions)，其中 pi 与 omp 是独立产品，名称识别不构成全部能力已经验收的声明。
 
 <a id="file-capability-design"></a>
-## 文件能力扩展设计（已确认，待实现）
+## 文件能力扩展设计（部分已实现）
 
-本节记录后续文件能力的架构约束。#280 的静态图片只读文档与 #281 的版本化分段读取已经落地，其余格式仍不描述为已实现功能。产品范围、术语、逐格式支持深度及验收要求以[文件能力扩展设计](/window/side-panel#file-format-plan)为准；Office、Notebook、kernel 与 Plotly 均不在本轮范围。
+本节记录后续文件能力的架构约束。#280 的静态图片只读文档、#281 的版本化分段读取与 #295 的只读 SQLite 浏览已经落地，其余格式仍不描述为已实现功能。产品范围、术语、逐格式支持深度及验收要求以[文件能力扩展设计](/window/side-panel#file-format-plan)为准；Office、Notebook、kernel 与 Plotly 均不在本轮范围。
 
 ### 文件打开与状态归属
 
 文件打开入口需要按格式选择文本编辑、只读阅读或格式编辑，不再要求所有文件先成为文本 buffer。#280 已按这条规则拆开共同文档生命周期与内容种类：
 
 - 工作台继续拥有文档身份、所属 Host/path、打开请求、dirty、保存／另存为／冲突／关闭、tabs/groups 和焦点交接。格式实现不直接操作文件树或绕过所属 Host 写盘。
-- `src/ui/code_editor/buffers.rs` 的 `EditorBuffers` 把读取结果分为 `Loaded::Text` 与 `Loaded::Image`；`Loaded::Image` 携带解码结果或一句可见的失败说明，解码本身仍走 `markdown::images`。图片不是文本 buffer，也没有伪装成 `EditorState`。
-- 文本侧把“是不是可编辑文本”收敛为 `EditorInput::is_text()`：保存、dirty 计算、gutter、LSP、查找、行号与符号跳转都据此让行，图片文档不会因为这些命令写盘或弹出永远落不到位置的行号框。
+- `src/ui/code_editor/buffers.rs` 的 `EditorBuffers` 把读取结果分为 `Loaded::Text`、`Loaded::Image` 与 `Loaded::Sqlite`；图片携带解码结果或一句可见的失败说明，数据库携带所属 Host 已打开的只读读取视图及其失败说明。它们都不是文本 buffer，也没有伪装成 `EditorState`。
+- 文本侧把“是不是可编辑文本”收敛为 `EditorInput::is_text()`：保存、dirty 计算、gutter、LSP、查找、行号与符号跳转都据此让行，图片与数据库文档不会因为这些命令写盘或弹出永远落不到位置的行号框。
 - 源码可编辑格式保留一份权威原文。表格和结构树只提交针对当前 revision 的局部编辑，源码视图与格式视图共享撤销历史；光标、选择、滚动和布局仍归各 presentation。
 - 格式识别结合文件名与内容探针，格式错误必须可见。已识别容器先于通用 ZIP 处理，不把 EPUB 误当压缩包，也不因识别失败而执行系统关联程序。#280 的探针只认 PNG／JPEG／WebP／ICO 的魔数；BMP 只按扩展名进入，避免把以 `BM` 开头的文本从编辑器手里抢走。
 - 加载、解析、解码与渲染在后台完成，结果核对文档、所属 Host、连接代次和 revision。关闭或替换目标后，迟到结果不得安装资源、写盘或夺取焦点。#280 的图片读取沿用同一 pending／foreground 代次核对，标签页关闭后迟到的解码结果不会安装文档。
@@ -225,9 +225,16 @@ coding agent 在真实 PTY 中运行自己的原生 TUI。命令识别、状态 
 
 预算单位与失败效果写在 `crates/lyrel-core/src/host/transfer/mod.rs` 的 `BUDGETS` 表；256 KiB／4 MiB／256 MiB 是设计边界，不是实测吞吐。真实 SSH、原生窗口与性能测量仍按各自验收边界单独记录。
 
-SQLite 在所属 Host 执行受限只读查询，按分页传回 schema 与必要记录，不默认传输整个远端库。源库与活跃 WAL 的读取必须使用 SQLite 的一致性机制，不裸复制文件拼接快照，不改变源库 journal 模式、不 checkpoint、不加载扩展。查询限时、限量并可取消；分页读取与刷新需要明确快照生命周期。
+SQLite 在所属 Host 执行受限只读查询，按分页传回 schema 与必要记录，不默认传输整个远端库。`lyrel-core/src/host/sqlite/` 移植 Glim `browser.rs` 的标识符引用、单绑定参数 predicate、稳定顺序、列窗、count、page 与 value 分块；`sqlite.rs::Snapshot` 的 main／WAL／journal 文件复制被明确排除。
 
-新增 wire 消息前读取 `daemon/control.rs` 与 `daemon/protocol.rs`，按现有规则升级 control 版本；可安全忽略的字段才通过 feature 协商。新客户端遇到缺少能力的远端必须明确提示，不显示假空结果。GUI、解码引擎和 WebView 依赖不得进入 `lyrel-core`／server／CLI；SQLite 的 headless 依赖单独核对必要性、体积与许可证。
+- 打开时以 `READ_ONLY` 连接、`query_only`、`DEFENSIVE`、`trusted_schema=OFF` 与拒绝写／ATTACH／带值 PRAGMA 的 authorizer 固定一条 `BEGIN DEFERRED` 读取视图；schema 列表、列元数据与每一页都来自同一数据库版本。只读打开仍可能正常协调或创建 `-shm`，但不写数据／schema、不改 journal 模式、不 checkpoint、不加载扩展；需要 WAL 恢复才能打开时返回明确拒绝，不升级为写打开。
+- 每个视图有 30 秒 idle 与 180 秒绝对寿命，进程级 reaper 在无后续请求时也会退役；单 Host 最多 64 个视图。过期视图以 `StaleView` 返回，GUI 显示刷新提示并打开新身份，不把旧页冒充当前数据。
+- 取消绑定到请求而非视图：`Requests` 的请求级 interrupt hook 调用 `sqlite3_interrupt`，progress handler 同时检查令牌与查询秒预算；旧 cancel 不能停止同一视图上后续页。连接断开时服务端清空该连接的全部视图。
+- wire 为 control v18 的 `ControlRequest::Sqlite`／`ReplyOk::Sqlite`，能力名 `sqlite-browse-v1`。缺少能力的 peer 在发送前返回 `Unsupported`，不返回假空 schema。GUI 不在本地读取同名路径：`RemoteHost` 把请求发给实际 daemon，映射 Host 在测试宿主中同样转到其根目录。
+- 值保留 NULL、精确 INTEGER、REAL 位模式（含非有限值）、原始 TEXT 与 BLOB 字节；页面携带页号、列窗与 `more`，不拼接另一视图的数据。`SqliteQuery` 没有任意 SQL 字段，所有标识符先对照视图 schema 再引用，search 始终是绑定参数。
+- GUI 文档在 `loading`、空 schema、错误、刷新与取消时都有可见状态；架构列表显示表／视图与存储的 SQL 定义，分页与列窗来自同一视图。筛选、排序与完整值检查器属于 #296，本切片不绘制无效控件。
+
+新增 wire 消息前读取 `daemon/control.rs` 与 `daemon/protocol.rs`，按现有规则升级 control 版本；可安全忽略的字段才通过 feature 协商。新客户端遇到缺少能力的远端必须明确提示，不显示假空结果。GUI、解码引擎和 WebView 依赖不得进入 `lyrel-core`／server／CLI；本切片的 `rusqlite`（`bundled` + `hooks`）作为 headless 依赖单独记录在 `crates/lyrel-core/UPSTREAM.toml` 与根 `LICENSE`。真实 SSH、原生窗口、系统 IME 与 macOS 结果仍按各自验收边界单独记录。
 
 <a id="file-source-reuse"></a>
 ### 上游源码复用与适配

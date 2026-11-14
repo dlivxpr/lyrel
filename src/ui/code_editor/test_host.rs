@@ -242,6 +242,53 @@ impl Host for FileHost {
     fn watch(&self, dirs: &[PathBuf]) -> io::Result<WatchSub> {
         self.inner.watch(dirs)
     }
+    fn sqlite_open(
+        &self,
+        p: &Path,
+        cancel: &lyrel_core::host::sqlite::SqliteCancel,
+    ) -> io::Result<lyrel_core::host::sqlite::SqliteOpened> {
+        self.inner.sqlite_open(&self.path(p), cancel)
+    }
+    fn sqlite_columns(
+        &self,
+        view: u64,
+        table: &str,
+        cancel: &lyrel_core::host::sqlite::SqliteCancel,
+    ) -> io::Result<lyrel_core::host::sqlite::SqliteColumns> {
+        self.inner.sqlite_columns(view, table, cancel)
+    }
+    fn sqlite_count(
+        &self,
+        view: u64,
+        query: &lyrel_core::host::sqlite::SqliteQuery,
+        cancel: &lyrel_core::host::sqlite::SqliteCancel,
+    ) -> io::Result<u64> {
+        self.inner.sqlite_count(view, query, cancel)
+    }
+    fn sqlite_page(
+        &self,
+        view: u64,
+        query: &lyrel_core::host::sqlite::SqliteQuery,
+        cancel: &lyrel_core::host::sqlite::SqliteCancel,
+    ) -> io::Result<lyrel_core::host::sqlite::SqlitePage> {
+        self.inner.sqlite_page(view, query, cancel)
+    }
+    fn sqlite_value(
+        &self,
+        view: u64,
+        query: &lyrel_core::host::sqlite::SqliteQuery,
+        row: u32,
+        column: u32,
+        offset: u64,
+        max_bytes: u64,
+        cancel: &lyrel_core::host::sqlite::SqliteCancel,
+    ) -> io::Result<lyrel_core::host::sqlite::SqliteValue> {
+        self.inner
+            .sqlite_value(view, query, row, column, offset, max_bytes, cancel)
+    }
+    fn sqlite_close(&self, view: u64) {
+        self.inner.sqlite_close(view)
+    }
 }
 
 /// A real local session with one controllable pause before the next segment.

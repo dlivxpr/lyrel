@@ -1,5 +1,6 @@
 //! 工作台编辑 interface：文档文本与 presentation 状态分别读取。
 use super::image_document::ImageView;
+use super::sqlite_document::SqliteView;
 use super::text::TextSnapshot;
 use super::*;
 use lyrel_markdown_editor::EditorState as MarkdownEditor;
@@ -11,6 +12,8 @@ pub(crate) enum EditorInput {
     Markdown(Entity<MarkdownEditor>),
     /// 只读静态图片：没有文本，只有取景。
     Image(Entity<ImageView>),
+    /// 只读 SQLite 数据库：没有文本，只有表结构与分页数据。
+    Sqlite(Entity<SqliteView>),
 }
 
 /// 一份文档输入的文本能力：代码与 Markdown 有文本，图片没有。
@@ -28,6 +31,7 @@ pub(crate) enum WeakEditorInput {
     Code(gpui_kit::WeakEntity<EditorState>),
     Markdown(gpui_kit::WeakEntity<MarkdownEditor>),
     Image(gpui_kit::WeakEntity<ImageView>),
+    Sqlite(gpui_kit::WeakEntity<SqliteView>),
 }
 impl WeakEditorInput {
     pub(crate) fn upgrade(&self) -> Option<EditorInput> {
@@ -35,6 +39,7 @@ impl WeakEditorInput {
             Self::Code(input) => input.upgrade().map(EditorInput::Code),
             Self::Markdown(input) => input.upgrade().map(EditorInput::Markdown),
             Self::Image(input) => input.upgrade().map(EditorInput::Image),
+            Self::Sqlite(input) => input.upgrade().map(EditorInput::Sqlite),
         }
     }
 }
@@ -44,6 +49,7 @@ impl EditorInput {
             Self::Code(input) => WeakEditorInput::Code(input.downgrade()),
             Self::Markdown(input) => WeakEditorInput::Markdown(input.downgrade()),
             Self::Image(input) => WeakEditorInput::Image(input.downgrade()),
+            Self::Sqlite(input) => WeakEditorInput::Sqlite(input.downgrade()),
         }
     }
     pub(crate) fn code(&self) -> Option<&Entity<EditorState>> {
@@ -64,14 +70,20 @@ impl EditorInput {
             _ => None,
         }
     }
-    /// 这份输入的文本能力；只读图片返回 `None`。
+    pub(crate) fn sqlite(&self) -> Option<&Entity<SqliteView>> {
+        match self {
+            Self::Sqlite(input) => Some(input),
+            _ => None,
+        }
+    }
+    /// 这份输入的文本能力；只读图片与数据库返回 `None`。
     ///
     /// 需要文本的调用点从这里取能力再操作，而不是读一个伪造的空文档。
     pub(crate) fn text(&self) -> Option<TextInput<'_>> {
         match self {
             Self::Code(input) => Some(TextInput::Code(input)),
             Self::Markdown(input) => Some(TextInput::Markdown(input)),
-            Self::Image(_) => None,
+            Self::Image(_) | Self::Sqlite(_) => None,
         }
     }
     /// 有文本可编辑、可查找、可保存的输入。图片不是。
@@ -108,6 +120,9 @@ impl EditorInput {
                 view.scroll().set_offset(offset);
                 cx.notify();
             }),
+            // 表格的滚动属于呈现自己的 `TableState`；打开文档时的光标放置
+            // 不适用于数据库，因此这里不假装有第二个滚动所有者。
+            Self::Sqlite(_) => {}
         }
     }
     pub(crate) fn set_highlighter(&self, language: &'static str, cx: &mut gpui_kit::App) {
@@ -189,6 +204,7 @@ impl InputRead<'_> {
             EditorInput::Code(input) => input.read(self.cx).focus_handle(cx),
             EditorInput::Markdown(input) => input.read(self.cx).focus_handle(cx),
             EditorInput::Image(input) => input.read(self.cx).handle(),
+            EditorInput::Sqlite(input) => input.read(self.cx).focus_handle(cx),
         }
     }
     pub(crate) fn scroll_offset(&self) -> gpui_kit::Point<gpui_kit::Pixels> {
@@ -196,6 +212,7 @@ impl InputRead<'_> {
             EditorInput::Code(input) => input.read(self.cx).scroll_offset(),
             EditorInput::Markdown(input) => input.read(self.cx).scroll_offset(),
             EditorInput::Image(input) => input.read(self.cx).scroll().offset(),
+            EditorInput::Sqlite(_) => gpui_kit::Point::default(),
         }
     }
 }
@@ -268,6 +285,7 @@ pub(super) struct Presentations {
         )>,
     >,
     images: RefCell<Vec<(TabId, split::GroupId, Entity<ImageView>, Subscription)>>,
+    sqlite: RefCell<Vec<(TabId, split::GroupId, Entity<SqliteView>, Subscription)>>,
 }
 impl Presentations {
     pub(super) fn markdown_view<E: 'static>(
@@ -362,6 +380,43 @@ impl Presentations {
             .find(|(t, g, _, _)| *t == tab && *g == group)
             .map(|(_, _, view, _)| view.clone())
     }
+
+    /// 数据库文档在一个分组里的呈现。第一个分组直接用文档自带的那个，
+    /// 之后的分组各得自己的焦点、表格滚动与选择，共用同一份读取结果。
+    pub(super) fn sqlite_view<E: 'static>(
+        &self,
+        primary: &Entity<SqliteView>,
+        tab: TabId,
+        group: split::GroupId,
+        window: &mut Window,
+        cx: &mut Context<E>,
+    ) -> Entity<SqliteView> {
+        let mut views = self.sqlite.borrow_mut();
+        if let Some((_, _, view, _)) = views.iter().find(|(t, g, _, _)| *t == tab && *g == group) {
+            return view.clone();
+        }
+        let view = if views.is_empty() {
+            primary.clone()
+        } else {
+            let document = primary.read(cx).document().clone();
+            cx.new(|cx| SqliteView::new(document, window, cx))
+        };
+        let observe = cx.observe(&view, |_, _, cx| cx.notify());
+        views.push((tab, group, view.clone(), observe));
+        view
+    }
+
+    pub(super) fn sqlite_existing(
+        &self,
+        tab: TabId,
+        group: split::GroupId,
+    ) -> Option<Entity<SqliteView>> {
+        self.sqlite
+            .borrow()
+            .iter()
+            .find(|(t, g, _, _)| *t == tab && *g == group)
+            .map(|(_, _, view, _)| view.clone())
+    }
     pub(super) fn search(
         &self,
         source: &Entity<MarkdownEditor>,
@@ -407,6 +462,11 @@ impl Presentations {
         // 图片呈现没有进行中的输入法组合，也没有缓存的地图与公式：退场只需
         // 让最后一个句柄落下，解码结果由文档本身继续持有。
         self.images
+            .borrow_mut()
+            .retain(|(tab, group, _, _)| live(*tab, *group));
+        // 数据库呈现同样没有输入组合；读取视图与页数据由文档持有，退场只让
+        // 这个分组的焦点、滚动与表格选择落下。
+        self.sqlite
             .borrow_mut()
             .retain(|(tab, group, _, _)| live(*tab, *group));
     }
