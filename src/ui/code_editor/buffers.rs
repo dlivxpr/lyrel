@@ -1115,17 +1115,31 @@ fn read_image(
     claimed: Option<StaticImageFormat>,
     meta: lyrel_core::host::Meta,
 ) -> std::io::Result<LoadedImage> {
+    let mut mtime = meta.mtime;
     let result = if meta.len > IMAGE_MAX_BYTES {
         // Not worth reading to say they are too many.
         Err(images::too_large())
     } else {
-        let bytes = h.read_file(&path, IMAGE_MAX_BYTES)?;
-        images::decode_static(&bytes)
+        match images::read_bytes(
+            h,
+            &path,
+            IMAGE_MAX_BYTES,
+            &lyrel_core::host::transfer::CancelToken::default(),
+            |_| {},
+        ) {
+            Ok((bound, bytes)) => {
+                // The picture and the mtime recorded for later external-change
+                // checks come from the version that was actually opened.
+                mtime = bound.mtime;
+                images::decode_static(&bytes)
+            }
+            Err(error) => Err(error),
+        }
     };
     Ok(LoadedImage {
         path,
         claimed,
-        mtime: meta.mtime,
+        mtime,
         result,
     })
 }

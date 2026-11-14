@@ -30,6 +30,7 @@ pub(super) fn handshake<R: Read>(
         feature::CONTROL.to_string(),
         feature::HOST_RPC.to_string(),
         feature::READ_LINK.to_string(),
+        feature::FILE_RANGE.to_string(),
         feature::STDIO_BRIDGE.to_string(),
         // Every host this server fronts can search its own files; the
         // request only needs a name so an older client's peer is never sent

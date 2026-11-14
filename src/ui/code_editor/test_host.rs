@@ -1,11 +1,11 @@
 use super::*;
 use lyrel_core::host::{
-    ContentLimits, ContentQuery, ContentResults, Entry, Host, Meta, Output, SearchHit,
+    ContentLimits, ContentQuery, ContentResults, Entry, Host, HostRead, Meta, Output, SearchHit,
 };
 use std::io;
 use std::sync::{
     Mutex,
-    atomic::{AtomicBool, Ordering},
+    atomic::{AtomicBool, AtomicUsize, Ordering},
     mpsc,
 };
 use std::time::Duration;
@@ -22,6 +22,25 @@ pub(super) fn canonical_tempdir() -> tempfile::TempDir {
     tempfile::tempdir_in(root).unwrap()
 }
 
+/// Deterministic pixel noise that does not compress, so a test fixture can be
+/// genuinely larger than the old text limit without shipping a blob.
+pub(super) fn noise_png(width: u32, height: u32) -> Vec<u8> {
+    let mut state = 0x9e37_79b9_7f4a_7c15u64;
+    let mut rgba = image::RgbaImage::new(width, height);
+    for pixel in rgba.pixels_mut() {
+        state ^= state << 13;
+        state ^= state >> 7;
+        state ^= state << 17;
+        let bytes = state.to_le_bytes();
+        *pixel = image::Rgba([bytes[0], bytes[1], bytes[2], 255]);
+    }
+    let mut out = std::io::Cursor::new(Vec::new());
+    image::DynamicImage::ImageRgba8(rgba)
+        .write_to(&mut out, image::ImageFormat::Png)
+        .expect("noise png encodes");
+    out.into_inner()
+}
+
 /// Real filesystem adapter with a distinct Host identity and controllable
 /// read/write scheduling. Only scheduling is substituted; bytes and metadata
 /// still go through LocalHost, as in the existing settings Host fixtures.
@@ -34,6 +53,13 @@ pub(super) struct FileHost {
     write_gate: Mutex<Option<mpsc::Receiver<()>>>,
     fail_write: AtomicBool,
     root: Option<PathBuf>,
+    /// Held by every opened read session; one `pause_next_segment` gates the
+    /// next segment any of them asks for.
+    segment_gate: Arc<Mutex<Option<mpsc::Receiver<()>>>>,
+    /// Segments actually started across all sessions.
+    pub(super) segments: Arc<AtomicUsize>,
+    /// Versioned read sessions opened through this host.
+    pub(super) open_reads: AtomicUsize,
 }
 
 impl FileHost {
@@ -47,6 +73,9 @@ impl FileHost {
             write_gate: Mutex::new(None),
             fail_write: AtomicBool::new(false),
             root: None,
+            segment_gate: Arc::new(Mutex::new(None)),
+            segments: Arc::new(AtomicUsize::new(0)),
+            open_reads: AtomicUsize::new(0),
         })
     }
 
@@ -80,6 +109,16 @@ impl FileHost {
         let (tx, rx) = mpsc::channel();
         self.entered.store(false, Ordering::SeqCst);
         *self.write_gate.lock().unwrap() = Some(rx);
+        tx
+    }
+
+    /// Holds the next segment any read session asks for, so a test can close or
+    /// replace the target while a transfer is genuinely in flight.
+    #[cfg(any(test, feature = "native-markdown-tests"))]
+    pub(super) fn pause_next_segment(&self) -> mpsc::Sender<()> {
+        let (tx, rx) = mpsc::channel();
+        self.entered.store(false, Ordering::SeqCst);
+        *self.segment_gate.lock().unwrap() = Some(rx);
         tx
     }
 }
@@ -117,6 +156,22 @@ impl Host for FileHost {
                 .map_err(|error| io::Error::new(io::ErrorKind::TimedOut, error))?;
         }
         self.inner.read_file(&self.path(p), max)
+    }
+    fn open_read(&self, p: &Path) -> io::Result<Box<dyn HostRead>> {
+        let gate = self.gate.lock().unwrap().take();
+        if let Some(gate) = gate {
+            self.entered.store(true, Ordering::SeqCst);
+            gate.recv_timeout(Duration::from_secs(10))
+                .map_err(|error| io::Error::new(io::ErrorKind::TimedOut, error))?;
+        }
+        let inner = self.inner.open_read(&self.path(p))?;
+        self.open_reads.fetch_add(1, Ordering::SeqCst);
+        Ok(Box::new(GatedRead {
+            inner,
+            gate: Arc::clone(&self.segment_gate),
+            entered: Arc::clone(&self.entered),
+            segments: Arc::clone(&self.segments),
+        }))
     }
     fn canonicalize(&self, p: &Path) -> io::Result<PathBuf> {
         if self.root.is_some() {
@@ -185,5 +240,30 @@ impl Host for FileHost {
     }
     fn watch(&self, dirs: &[PathBuf]) -> io::Result<WatchSub> {
         self.inner.watch(dirs)
+    }
+}
+
+/// A real local session with one controllable pause before the next segment.
+struct GatedRead {
+    inner: Box<dyn HostRead>,
+    gate: Arc<Mutex<Option<mpsc::Receiver<()>>>>,
+    entered: Arc<AtomicBool>,
+    segments: Arc<AtomicUsize>,
+}
+
+impl HostRead for GatedRead {
+    fn meta(&self) -> Meta {
+        self.inner.meta()
+    }
+
+    fn read_segment(&mut self, max_bytes: u64) -> io::Result<Vec<u8>> {
+        self.segments.fetch_add(1, Ordering::SeqCst);
+        let gate = self.gate.lock().unwrap().take();
+        if let Some(gate) = gate {
+            self.entered.store(true, Ordering::SeqCst);
+            gate.recv_timeout(Duration::from_secs(10))
+                .map_err(|error| io::Error::new(io::ErrorKind::TimedOut, error))?;
+        }
+        self.inner.read_segment(max_bytes)
     }
 }

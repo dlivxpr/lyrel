@@ -66,7 +66,11 @@ use super::protocol::{MAX_FRAME, read_frame, write_frame};
 /// v14 adds independently gated native statistics requests; pane framing stays v7.
 /// v15 adds raw symbolic-link/junction target reads; pane framing stays v7.
 /// v16 adds whole-host metrics and shared pane presentations; pane framing stays v7.
-pub const CONTROL_VERSION: u32 = 16;
+/// v17 adds versioned segmented reads (`OpenRead`/`ReadChunk`/`CloseRead`), the
+/// `FileChanged` refusal and the `host-file-range-v1` feature. A read session
+/// keeps one opened file version on the far side instead of reopening a path
+/// per segment; pane framing stays v7.
+pub const CONTROL_VERSION: u32 = 17;
 
 const DIALECT_MARKER: &str = "speaks control v";
 
@@ -149,6 +153,11 @@ pub mod feature {
     pub const HOST_RPC: &str = "host-rpc";
     /// Raw symbolic-link/junction targets; older peers must be upgraded first.
     pub const READ_LINK: &str = "host-read-link-v1";
+    /// Versioned segmented reads: [`ControlRequest::OpenRead`],
+    /// [`ControlRequest::ReadChunk`] and [`ControlRequest::CloseRead`]. A peer
+    /// without it is asked for nothing; the caller sees `Unsupported` rather
+    /// than a whole-file read pretending to be one version.
+    pub const FILE_RANGE: &str = "host-file-range-v1";
     pub const HOST_METRICS: &str = "host-metrics-v1";
     pub const MACHINE_TREE: &str = "machine-tree";
     pub const STDIO_BRIDGE: &str = "stdio-bridge";
@@ -220,6 +229,21 @@ pub enum ControlRequest {
     ReadFile {
         path: String,
         max_bytes: u64,
+    },
+    /// Open one file version on the peer and keep it open. Gated on
+    /// [`feature::FILE_RANGE`]; the reply carries the far-side session id.
+    OpenRead {
+        path: String,
+    },
+    /// The next bytes of an open read session, at most `max_bytes`.
+    ReadChunk {
+        session: u64,
+        max_bytes: u64,
+    },
+    /// End a read session early and release its handle. Safe for a peer to
+    /// ignore when the session is already gone.
+    CloseRead {
+        session: u64,
     },
     Search {
         roots: Vec<String>,
@@ -572,7 +596,8 @@ impl ControlRequest {
             // between asks would only stack up requests behind a peer that has
             // stopped answering.
             | PaneProcs { .. } => Duration::from_secs(5),
-            ReadFile { .. } | WriteFile { .. } => Duration::from_secs(30),
+            ReadFile { .. } | WriteFile { .. } | ReadChunk { .. } => Duration::from_secs(30),
+            OpenRead { .. } | CloseRead { .. } => Duration::from_secs(5),
             CreateFileNew { .. } | CreateDir { .. } | Rename { .. } | Remove { .. } => {
                 Duration::from_secs(10)
             }
@@ -620,7 +645,10 @@ impl ControlRequest {
     }
 
     pub fn returns_blob(&self) -> bool {
-        matches!(self, ControlRequest::ReadFile { .. })
+        matches!(
+            self,
+            ControlRequest::ReadFile { .. } | ControlRequest::ReadChunk { .. }
+        )
     }
 }
 
@@ -653,6 +681,11 @@ pub enum ReplyOk {
     Path(String),
     OptPath(Option<String>),
     FileMeta {
+        meta: Meta,
+    },
+    /// One bound read session and the version it carries.
+    ReadOpened {
+        session: u64,
         meta: Meta,
     },
     Hits(Vec<SearchHit>),
@@ -730,6 +763,8 @@ pub enum WireErrorKind {
     IsADirectory,
     DirectoryNotEmpty,
     FileTooLarge,
+    /// The file under an open read session is no longer that version.
+    FileChanged,
     GitUnavailable,
     TimedOut,
     ConnectionReset,
@@ -746,6 +781,12 @@ impl WireError {
 
     pub fn from_io(e: &io::Error) -> Self {
         use io::ErrorKind as K;
+        if crate::host::read::is_file_changed(e) {
+            return WireError {
+                kind: WireErrorKind::FileChanged,
+                msg: e.to_string(),
+            };
+        }
         let kind = match e.kind() {
             K::NotFound => WireErrorKind::NotFound,
             K::PermissionDenied => WireErrorKind::PermissionDenied,
@@ -766,6 +807,9 @@ impl WireError {
     }
 
     pub fn into_io(self) -> io::Error {
+        if self.kind == WireErrorKind::FileChanged {
+            return crate::host::read::file_changed(self.msg);
+        }
         io::Error::new(self.kind.to_io_kind(), self.msg)
     }
 }
@@ -782,6 +826,7 @@ impl WireErrorKind {
             WireErrorKind::IsADirectory => K::IsADirectory,
             WireErrorKind::DirectoryNotEmpty => K::DirectoryNotEmpty,
             WireErrorKind::FileTooLarge => K::FileTooLarge,
+            WireErrorKind::FileChanged => K::InvalidData,
             WireErrorKind::TimedOut => K::TimedOut,
             WireErrorKind::ConnectionReset => K::ConnectionReset,
             WireErrorKind::Other => K::Other,

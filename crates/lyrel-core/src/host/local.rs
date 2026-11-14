@@ -1,6 +1,6 @@
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::fs;
-use std::io;
+use std::io::{self, Read};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
@@ -9,9 +9,11 @@ use notify::{RecursiveMode, Watcher};
 
 use crate::core::git;
 use crate::core::gitignore::GitignoreChain;
+use crate::host::file_version::FileVersion;
+use crate::host::transfer::SEGMENT_BYTES_MAX;
 use crate::host::{
-    ContentLimits, ContentQuery, ContentResults, Entry, Host, HostId, MTime, Meta, Output,
-    SearchHit, SharedHost, ShellInventory, WatchHandle, WatchSub, guard_off_ui,
+    ContentLimits, ContentQuery, ContentResults, Entry, Host, HostId, HostRead, MTime, Meta,
+    Output, SearchHit, SharedHost, ShellInventory, WatchHandle, WatchSub, guard_off_ui,
 };
 
 const COALESCE_WINDOW: Duration = Duration::from_millis(100);
@@ -204,6 +206,56 @@ impl Host for LocalHost {
             ));
         }
         fs::read(p)
+    }
+
+    fn open_read(&self, p: &Path) -> io::Result<Box<dyn HostRead>> {
+        guard_off_ui();
+        let file = fs::File::open(p)?;
+        let md = file.metadata()?;
+        if md.is_dir() {
+            return Err(io::Error::new(
+                io::ErrorKind::IsADirectory,
+                format!("{} is a directory", p.display()),
+            ));
+        }
+        if !md.is_file() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!("{} is not a regular file", p.display()),
+            ));
+        }
+        let Some(version) = FileVersion::of_open_file(&file)? else {
+            return Err(io::Error::new(
+                io::ErrorKind::Unsupported,
+                format!(
+                    "{} is on a volume that reports no change time, so one read version cannot be proven",
+                    p.display()
+                ),
+            ));
+        };
+        if !version.matches_path(p)? {
+            return Err(super::read::file_changed(format!(
+                "{} was replaced while it was being opened",
+                p.display()
+            )));
+        }
+        let lmd = fs::symlink_metadata(p)?;
+        let is_symlink = lmd.file_type().is_symlink();
+        #[cfg(windows)]
+        let is_symlink = is_symlink || is_reparse_point(&lmd);
+        Ok(Box::new(LocalRead {
+            path: p.to_path_buf(),
+            file,
+            version,
+            meta: Meta {
+                is_dir: false,
+                is_symlink,
+                len: md.len(),
+                mtime: md.modified().ok().map(MTime::from_system_time),
+                readonly: md.permissions().readonly(),
+            },
+            offset: 0,
+        }))
     }
 
     /// The real path behind `p`, in the spelling the rest of lyrel keys by.
@@ -737,6 +789,90 @@ fn coalesce(
         if batch_tx.send_blocking(batch).is_err() {
             return;
         }
+    }
+}
+
+/// One opened local file, bound to the version observed at open.
+struct LocalRead {
+    path: PathBuf,
+    file: fs::File,
+    version: FileVersion,
+    meta: Meta,
+    offset: u64,
+}
+
+impl HostRead for LocalRead {
+    fn meta(&self) -> Meta {
+        self.meta
+    }
+
+    fn read_segment(&mut self, max_bytes: u64) -> io::Result<Vec<u8>> {
+        guard_off_ui();
+        if max_bytes == 0 || max_bytes > SEGMENT_BYTES_MAX {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!("a read segment must be 1..={SEGMENT_BYTES_MAX} bytes, not {max_bytes}"),
+            ));
+        }
+        let remaining = self.meta.len.saturating_sub(self.offset);
+        if remaining == 0 {
+            return Ok(Vec::new());
+        }
+        self.verify()?;
+        let want = usize::try_from(max_bytes.min(remaining)).map_err(|_| {
+            io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "a read segment does not fit this platform's address space",
+            )
+        })?;
+        let mut bytes = vec![0u8; want];
+        let mut read = 0usize;
+        while read < want {
+            match self.file.read(&mut bytes[read..]) {
+                Ok(0) => break,
+                Ok(count) => read += count,
+                Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
+                Err(error) => return Err(error),
+            }
+        }
+        if read != want {
+            return Err(super::read::file_changed(format!(
+                "{} ended {} bytes into a segment it reported as {}",
+                self.path.display(),
+                read,
+                want
+            )));
+        }
+        // The bytes and the version must still agree after the read, not only
+        // before it: a write that lands inside this segment is a mixed version.
+        self.verify()?;
+        bytes.truncate(read);
+        self.offset += read as u64;
+        Ok(bytes)
+    }
+}
+
+impl LocalRead {
+    fn verify(&self) -> io::Result<()> {
+        let version = FileVersion::of_open_file(&self.file)?.ok_or_else(|| {
+            super::read::file_changed(format!(
+                "{} stopped reporting a change time while it was being read",
+                self.path.display()
+            ))
+        })?;
+        if version != self.version {
+            return Err(super::read::file_changed(format!(
+                "{} changed while it was being read",
+                self.path.display()
+            )));
+        }
+        if !self.version.matches_path(&self.path)? {
+            return Err(super::read::file_changed(format!(
+                "{} was replaced while it was being read",
+                self.path.display()
+            )));
+        }
+        Ok(())
     }
 }
 
