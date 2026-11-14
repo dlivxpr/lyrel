@@ -6,15 +6,22 @@
 #   dist/lyrel-<version>-macos-<arch>.dmg  (drag-to-Applications install)
 #
 # Signing posture is chosen from the environment:
-#   * Developer ID secrets present (APPLE_SIGNING_IDENTITY + APPLE_CERTIFICATE)
-#     -> hardened-runtime signature, then notarize + staple. Passes Gatekeeper.
-#     Notarization uses ASC_KEY_P8/ASC_KEY_ID/ASC_ISSUER_ID if set, else
-#     APPLE_ID/APPLE_PASSWORD/APPLE_TEAM_ID.
+#   * APPLE_SIGNING_IDENTITY + APPLE_CERTIFICATE set -> that identity is
+#     imported into a throwaway keychain and the bundle is signed with
+#     hardened runtime. With notarization credentials (ASC_KEY_P8/ASC_KEY_ID/
+#     ASC_ISSUER_ID, or APPLE_ID/APPLE_PASSWORD/APPLE_TEAM_ID) this expects a
+#     Developer ID certificate, notarizes + staples, and passes Gatekeeper.
+#     Without them the same path also accepts a self-signed code-signing
+#     certificate: notarization is skipped so Gatekeeper still warns, but the
+#     designated requirement pins the certificate leaf instead of the binary,
+#     keeping TCC grants stable across releases while the certificate lives.
 #   * APPLE_SIGNING_IDENTITY alone -> that identity from the login keychain,
 #     without a secure timestamp unless notarization credentials are set.
 #   * Otherwise -> ad-hoc signature. Official releases currently allow this
 #     posture without Developer ID / notarization; its default designated
 #     requirement changes when the executable changes, so TCC grants may reset.
+# The updater refuses updates that change the code-signing posture (ad-hoc <->
+# cert), so the first release under a new posture must ship as a DMG reinstall.
 #
 # Before either artifact is packaged, every Mach-O inside the bundle is
 # asserted to be a thin <arch-label> binary (the sweep below), so a wrong-arch
