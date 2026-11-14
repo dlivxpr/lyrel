@@ -118,10 +118,6 @@ fn open_with_preview(
     id
 }
 
-fn wait_source(app: &Entity<LyrelApp>, cx: &mut VisualTestContext, expected: &str) {
-    until(cx, |cx| source_text(app, cx) == expected);
-}
-
 fn wait_preview(app: &Entity<LyrelApp>, cx: &mut VisualTestContext, expected: (f32, f32)) {
     until(cx, |cx| preview_size(app, cx) == Some(expected));
 }
