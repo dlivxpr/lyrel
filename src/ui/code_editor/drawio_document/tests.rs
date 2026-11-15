@@ -401,28 +401,23 @@ fn surface_events_drive_engine_page_and_zoom_state(tcx: &mut TestAppContext) {
     let (app, mut cx, _streams) = harness_with_tabs(tcx, 1);
     open(&app, &mut cx, &path);
 
-    app.update_in(&mut cx, |app, _window, cx| {
-        let view = app
-            .active_editor_input()
-            .and_then(|input| input.drawio().cloned())
-            .expect("a diagram in front");
-        view.update(cx, |view, cx| {
-            view.on_surface_event(SurfaceEvent::Ready, cx);
-            view.on_surface_event(
-                SurfaceEvent::State {
-                    page: 1,
-                    pages: 3,
-                    zoom: 1.5,
-                },
-                cx,
-            );
-            view.on_surface_event(
-                SurfaceEvent::Blocked {
-                    reason: "the diagram requested the network".into(),
-                },
-                cx,
-            );
-        });
+    let diagram = view(&app, &cx);
+    let _ = diagram.update_in(&mut cx, |view, _window, cx| {
+        view.on_surface_event(SurfaceEvent::Ready, cx);
+        view.on_surface_event(
+            SurfaceEvent::State {
+                page: 1,
+                pages: 3,
+                zoom: 1.5,
+            },
+            cx,
+        );
+        view.on_surface_event(
+            SurfaceEvent::Blocked {
+                reason: "the diagram requested the network".into(),
+            },
+            cx,
+        );
     });
     assert_eq!(
         page(&app, &cx),
@@ -435,19 +430,13 @@ fn surface_events_drive_engine_page_and_zoom_state(tcx: &mut TestAppContext) {
         assert!(status.contains("150%"), "the engine zoom is shown: {status}");
     });
 
-    app.update_in(&mut cx, |app, _window, cx| {
-        let view = app
-            .active_editor_input()
-            .and_then(|input| input.drawio().cloned())
-            .expect("a diagram in front");
-        view.update(cx, |view, cx| {
-            view.on_surface_event(
-                SurfaceEvent::Failed {
-                    message: "engine stopped".into(),
-                },
-                cx,
-            );
-        });
+    let _ = view(&app, &cx).update_in(&mut cx, |view, _window, cx| {
+        view.on_surface_event(
+            SurfaceEvent::Failed {
+                message: "engine stopped".into(),
+            },
+            cx,
+        );
     });
     view(&app, &cx).read_with(&cx, |view, cx| {
         assert!(view.status_text(cx).contains("engine stopped"));
@@ -456,15 +445,9 @@ fn surface_events_drive_engine_page_and_zoom_state(tcx: &mut TestAppContext) {
 
     // A close can race the asynchronous start: the recorded state must fall
     // back to idle instead of keeping a pending engine.
-    app.update_in(&mut cx, |app, _window, cx| {
-        let view = app
-            .active_editor_input()
-            .and_then(|input| input.drawio().cloned())
-            .expect("a diagram in front");
-        view.update(cx, |view, cx| {
-            view.engine = super::EngineStatus::Starting;
-            view.on_surface_event(SurfaceEvent::Closed, cx);
-        });
+    let _ = view(&app, &cx).update_in(&mut cx, |view, _window, cx| {
+        view.engine = super::EngineStatus::Starting;
+        view.on_surface_event(SurfaceEvent::Closed, cx);
     });
     view(&app, &cx).read_with(&cx, |view, _| {
         assert!(
