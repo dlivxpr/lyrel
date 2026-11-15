@@ -809,3 +809,636 @@ fn invalid_budget_and_late_results_preserve_source_and_never_publish_stale_struc
         Some("\"latest\"")
     );
 }
+
+fn click_button(view: &Entity<JsonView>, cx: &mut VisualTestContext, id: &'static str) {
+    cx.update(|window, cx| window.click((id, view.entity_id()), cx));
+    settle(cx);
+}
+
+fn panel_open(view: &Entity<JsonView>, cx: &mut VisualTestContext) -> bool {
+    cx.update(|window, _| {
+        window
+            .try_find(("structure-edit", view.entity_id()))
+            .is_some_and(|panel| panel.visible())
+    })
+}
+
+fn panel_error(view: &Entity<JsonView>, cx: &mut VisualTestContext) -> Option<String> {
+    cx.update(|window, _| {
+        window
+            .try_find(("structure-edit-error", view.entity_id()))
+            .and_then(|error| error.value().map(str::to_owned))
+    })
+}
+
+fn replace_panel_text(
+    view: &Entity<JsonView>,
+    cx: &mut VisualTestContext,
+    id: &'static str,
+    text: &str,
+) {
+    cx.update(|window, cx| {
+        window.click((id, view.entity_id()), cx);
+        window.press("secondary-a", cx);
+        window.input(text, cx);
+    });
+    settle(cx);
+}
+
+fn apply_panel(view: &Entity<JsonView>, cx: &mut VisualTestContext) {
+    cx.update(|window, cx| window.click(("structure-edit-apply", view.entity_id()), cx));
+    settle(cx);
+}
+
+fn cancel_panel(view: &Entity<JsonView>, cx: &mut VisualTestContext) {
+    cx.update(|window, cx| window.click(("structure-edit-cancel", view.entity_id()), cx));
+    settle(cx);
+}
+
+#[gpui_kit::test]
+fn tree_value_edit_targets_the_selected_duplicate_and_saves_exact_bytes(tcx: &mut TestAppContext) {
+    crate::ui::i18n::set_locale("en");
+    let remote = canonical_tempdir();
+    let local = canonical_tempdir();
+    let remote_file = fixture(remote.path(), "edit.jsonc", ORIGINAL);
+    let local_file = fixture(
+        local.path(),
+        "edit.jsonc",
+        b"LOCAL DECOY MUST STAY UNCHANGED",
+    );
+    let host = FileHost::mapped(HostId(2900), remote.path());
+    let path = PathBuf::from("/edit.jsonc");
+    let (app, mut cx, _streams) = harness_with_tabs(tcx, 1);
+    cx.simulate_resize(size(px(1600.), px(1000.)));
+    let (_, view) = open_ready(&app, &mut cx, host.clone(), &path);
+
+    // The second duplicate occurrence is the target; its exact source spelling
+    // prefills the editor, and the first occurrence is never touched.
+    click_row(&view, &mut cx, "$[\"name\"] #2");
+    click_button(&view, &mut cx, "json-edit-value");
+    assert!(panel_open(&view, &mut cx));
+    assert_eq!(
+        view.read_with(&cx, |view, cx| view.edit_texts(cx)),
+        Some((None, "\"second\\u4e2d\"".to_owned()))
+    );
+    assert_eq!(
+        cx.update(|window, _| window
+            .find(("structure-edit-value", view.entity_id()))
+            .focused()),
+        Some(true),
+        "the value field owns the keyboard while the panel is open"
+    );
+    replace_panel_text(&view, &mut cx, "structure-edit-value", "\"tree-edited\"");
+    apply_panel(&view, &mut cx);
+    until(&mut cx, |cx| is_ready(&view, cx));
+    assert!(!panel_open(&view, &mut cx));
+    assert_eq!(
+        row_value(&view, &mut cx, "$[\"name\"]").as_deref(),
+        Some("\"first\"")
+    );
+    assert_eq!(
+        row_value(&view, &mut cx, "$[\"name\"] #2").as_deref(),
+        Some("\"tree-edited\"")
+    );
+    assert_eq!(
+        row_value(&view, &mut cx, "$[\"n\"]").as_deref(),
+        Some("12345678901234567890.00")
+    );
+    let text = source_text(&app, &cx);
+    assert!(text.contains("// first comment"));
+    assert!(text.contains("\"escaped\": \"line\\nbreak\""));
+
+    // The one command is one ordinary history entry and one exact save.
+    save(&app, &mut cx);
+    let expected = replace_bytes(ORIGINAL, b"\"second\\u4e2d\"", b"\"tree-edited\"");
+    assert_eq!(std::fs::read(&remote_file).unwrap(), expected);
+    assert_eq!(
+        std::fs::read(&local_file).unwrap(),
+        b"LOCAL DECOY MUST STAY UNCHANGED"
+    );
+
+    // Undo/redo in the shared source presentation reverse the tree command.
+    toggle_mode(&view, &mut cx);
+    press(&app, &mut cx, &secondary("z"));
+    until(&mut cx, |cx| is_ready(&view, cx));
+    assert!(source_text(&app, &cx).contains("\"second\\u4e2d\""));
+    toggle_mode(&view, &mut cx);
+    assert_eq!(
+        row_value(&view, &mut cx, "$[\"name\"] #2").as_deref(),
+        Some("\"second\\u4e2d\"")
+    );
+    toggle_mode(&view, &mut cx);
+    press(&app, &mut cx, &secondary("shift-z"));
+    until(&mut cx, |cx| is_ready(&view, cx));
+    toggle_mode(&view, &mut cx);
+    assert_eq!(
+        row_value(&view, &mut cx, "$[\"name\"] #2").as_deref(),
+        Some("\"tree-edited\"")
+    );
+    save(&app, &mut cx);
+    assert_eq!(std::fs::read(&remote_file).unwrap(), expected);
+
+    // Independent reopen through the owning Host observes the saved bytes.
+    app.update_in(&mut cx, |app, window, cx| {
+        app.editor_close_file(0, window, cx)
+    });
+    until(&mut cx, |cx| {
+        app.read_with(cx, |app, _| app.editor.buffers.is_empty())
+    });
+    let (_, reopened) = open_ready(&app, &mut cx, host, &path);
+    assert_eq!(
+        row_value(&reopened, &mut cx, "$[\"name\"] #2").as_deref(),
+        Some("\"tree-edited\"")
+    );
+    assert_eq!(
+        source_document(&app, &cx).read_with(&cx, |document, _| document.encode().unwrap()),
+        expected
+    );
+}
+
+const EDITABLE: &[u8] = b"{\n  // keep this comment\n  \"empty\": {},\n  \"items\": [],\n  \"text\": \"a\\u0062\",\n  \"exp\": 1e2,\n  \"neg\": -0,\n  \"big\": 184467440737095516170,\n}\n";
+
+#[gpui_kit::test]
+fn add_rename_and_remove_keep_jsonc_comments_and_empty_containers(tcx: &mut TestAppContext) {
+    crate::ui::i18n::set_locale("en");
+    let dir = canonical_tempdir();
+    let path = fixture(dir.path(), "editable.jsonc", EDITABLE);
+    let host: SharedHost = FileHost::new(HostId(2901));
+    let (app, mut cx, _streams) = harness_with_tabs(tcx, 1);
+    cx.simulate_resize(size(px(1600.), px(1000.)));
+    let (_, view) = open_ready(&app, &mut cx, host, &path);
+
+    // An empty single-line object gains a member without reformatting it.
+    click_row(&view, &mut cx, "$[\"empty\"]");
+    click_button(&view, &mut cx, "json-add-member");
+    assert_eq!(
+        view.read_with(&cx, |view, cx| view.edit_texts(cx)),
+        Some((Some(String::new()), String::new()))
+    );
+    cx.update(|window, cx| window.input("x", cx));
+    replace_panel_text(&view, &mut cx, "structure-edit-value", "1e2");
+    apply_panel(&view, &mut cx);
+    until(&mut cx, |cx| is_ready(&view, cx));
+    assert!(source_text(&app, &cx).contains("\"empty\": {\"x\": 1e2}"));
+    assert!(source_text(&app, &cx).contains("// keep this comment"));
+
+    // An empty array gains an element with its exact spelling.
+    click_row(&view, &mut cx, "$[\"items\"]");
+    click_button(&view, &mut cx, "json-add-member");
+    assert_eq!(
+        view.read_with(&cx, |view, cx| view.edit_texts(cx)),
+        Some((None, String::new()))
+    );
+    replace_panel_text(&view, &mut cx, "structure-edit-value", "-0");
+    apply_panel(&view, &mut cx);
+    until(&mut cx, |cx| is_ready(&view, cx));
+    assert!(source_text(&app, &cx).contains("\"items\": [-0]"));
+
+    // Renaming one key keeps its value escape and every other member.
+    click_row(&view, &mut cx, "$[\"text\"]");
+    click_button(&view, &mut cx, "json-rename-key");
+    assert_eq!(
+        view.read_with(&cx, |view, cx| view.edit_texts(cx)),
+        Some((None, "text".to_owned()))
+    );
+    replace_panel_text(&view, &mut cx, "structure-edit-value", "renamed");
+    apply_panel(&view, &mut cx);
+    until(&mut cx, |cx| is_ready(&view, cx));
+    let text = source_text(&app, &cx);
+    assert!(text.contains("\"renamed\": \"a\\u0062\""));
+    assert!(text.contains("\"empty\": {\"x\": 1e2}"));
+    assert!(text.contains("\"items\": [-0]"));
+    assert!(text.contains("\"exp\": 1e2"));
+    assert!(text.contains("\"neg\": -0"));
+    assert!(text.contains("// keep this comment"));
+
+    // Removing the selected member leaves the comment, key order and the
+    // exact large literal untouched.
+    click_row(&view, &mut cx, "$[\"big\"]");
+    click_button(&view, &mut cx, "json-remove-member");
+    until(&mut cx, |cx| is_ready(&view, cx));
+    let text = source_text(&app, &cx);
+    assert!(!text.contains("\"big\""));
+    assert!(!text.contains("184467440737095516170"));
+    assert!(text.contains("// keep this comment"));
+    assert!(
+        text.find("\"empty\"").unwrap() < text.find("\"items\"").unwrap(),
+        "the retained members keep source order"
+    );
+    assert!(
+        text.find("\"items\"").unwrap() < text.find("\"renamed\"").unwrap(),
+        "renaming does not move the member"
+    );
+    save(&app, &mut cx);
+    assert_eq!(
+        std::fs::read(&path).unwrap(),
+        source_document(&app, &cx).read_with(&cx, |document, _| document.encode().unwrap())
+    );
+}
+
+#[gpui_kit::test]
+fn tree_edits_survive_save_as_failed_writes_conflicts_and_cancelled_close(
+    tcx: &mut TestAppContext,
+) {
+    crate::ui::i18n::set_locale("en");
+    let dir = canonical_tempdir();
+    let original = fixture(dir.path(), "persist.jsonc", EDITABLE);
+    let target = dir.path().join("persisted.jsonc");
+    let host = FileHost::new(HostId::LOCAL);
+    let (app, mut cx, _streams) = harness_with_tabs(tcx, 1);
+    cx.simulate_resize(size(px(1600.), px(1000.)));
+    let (_, view) = open_ready(&app, &mut cx, host.clone(), &original);
+    until(&mut cx, |cx| {
+        app.read_with(cx, |app, _| app.editor.buffers.watching())
+    });
+
+    // A tree edit, then Save As to a new owning-Host target.
+    click_row(&view, &mut cx, "$[\"text\"]");
+    click_button(&view, &mut cx, "json-edit-value");
+    replace_panel_text(&view, &mut cx, "structure-edit-value", "\"changed\"");
+    apply_panel(&view, &mut cx);
+    until(&mut cx, |cx| is_ready(&view, cx));
+    cx.dispatch_action(crate::core::actions::EditorSaveAs);
+    settle(&mut cx);
+    cx.simulate_new_path_selection(|_| Some(target.clone()));
+    until(&mut cx, |cx| {
+        app.read_with(cx, |app, _| {
+            app.active_buffer()
+                .is_some_and(|file| file.path == target && !file.dirty && !file.saving)
+        })
+    });
+    let saved = source_document(&app, &cx).read_with(&cx, |document, _| document.encode().unwrap());
+    assert_eq!(std::fs::read(&target).unwrap(), saved);
+    assert_eq!(std::fs::read(&original).unwrap(), EDITABLE);
+
+    // A failed owning-Host write leaves the edit dirty and the target bytes
+    // unchanged; an ordinary retry then lands the same bytes.
+    click_row(&view, &mut cx, "$[\"text\"]");
+    click_button(&view, &mut cx, "json-edit-value");
+    replace_panel_text(&view, &mut cx, "structure-edit-value", "\"retried\"");
+    apply_panel(&view, &mut cx);
+    until(&mut cx, |cx| is_ready(&view, cx));
+    host.fail_next_write();
+    cx.dispatch_action(crate::core::actions::EditorSave);
+    until(&mut cx, |cx| {
+        app.read_with(cx, |app, _| {
+            app.active_buffer()
+                .is_some_and(|file| file.dirty && !file.saving)
+        })
+    });
+    assert_eq!(std::fs::read(&target).unwrap(), saved);
+    save(&app, &mut cx);
+    let retried = replace_bytes(&saved, b"\"changed\"", b"\"retried\"");
+    assert_eq!(std::fs::read(&target).unwrap(), retried);
+
+    // A dirty external write is a conflict, not a silent replacement. Keep
+    // mine and save the selected tree edit to the owning Host.
+    click_row(&view, &mut cx, "$[\"text\"]");
+    click_button(&view, &mut cx, "json-edit-value");
+    replace_panel_text(&view, &mut cx, "structure-edit-value", "\"kept\"");
+    apply_panel(&view, &mut cx);
+    until(&mut cx, |cx| is_ready(&view, cx));
+    std::fs::write(&target, b"{\"external\": true}\n").unwrap();
+    until(&mut cx, |cx| {
+        app.read_with(cx, |app, _| {
+            app.active_buffer()
+                .is_some_and(|file| file.conflict.is_some())
+        })
+    });
+    assert!(source_text(&app, &cx).contains("\"kept\""));
+    cx.update(|window, cx| window.click("editor-conflict-keep", cx));
+    settle(&mut cx);
+    save(&app, &mut cx);
+    let kept = replace_bytes(&retried, b"\"retried\"", b"\"kept\"");
+    assert_eq!(std::fs::read(&target).unwrap(), kept);
+    settle(&mut cx);
+    assert!(
+        source_text(&app, &cx).contains("\"kept\""),
+        "a stale watcher event must not reload the external content after keep-mine and save"
+    );
+
+    // Cancelling an unsaved close keeps the document and its bytes.
+    click_row(&view, &mut cx, "$[\"text\"]");
+    click_button(&view, &mut cx, "json-edit-value");
+    replace_panel_text(&view, &mut cx, "structure-edit-value", "\"still-open\"");
+    // Apply with the panel's production Enter command. The Apply button's
+    // pointer path is exercised by the earlier edits in this test; after the
+    // conflict/save state its synthetic click did not emit while Enter did.
+    cx.update(|window, cx| window.press("enter", cx));
+    settle(&mut cx);
+    until(&mut cx, |cx| is_ready(&view, cx));
+    let panel = view.read_with(&cx, |view, cx| view.edit_texts(cx));
+    let error = panel_error(&view, &mut cx);
+    assert!(
+        panel.is_none(),
+        "the tree edit must apply before close; panel={panel:?} error={error:?}"
+    );
+    assert!(
+        source_text(&app, &cx).contains("\"still-open\""),
+        "the tree edit must reach the shared source"
+    );
+    assert!(
+        app.read_with(&cx, |app, _| {
+            app.active_buffer().is_some_and(|file| file.dirty)
+        }),
+        "the applied tree edit leaves the document dirty"
+    );
+    assert!(
+        app.update_in(&mut cx, |app, window, cx| app.editor_has_focus(window, cx)),
+        "the applied tree edit returns focus to the editor panel"
+    );
+    cx.dispatch_action(crate::core::actions::CloseActiveTab);
+    settle(&mut cx);
+    assert!(
+        cx.has_pending_prompt(),
+        "an unsaved tree edit must prompt before close"
+    );
+    cx.simulate_prompt_answer(crate::ui::i18n::t(crate::ui::i18n::L10nKey::Cancel));
+    settle(&mut cx);
+    assert!(
+        app.read_with(&cx, |app, _| app.active_buffer().is_some()),
+        "cancelled close keeps the document"
+    );
+    assert_eq!(std::fs::read(&target).unwrap(), kept);
+    save(&app, &mut cx);
+    let still_open = replace_bytes(&kept, b"\"kept\"", b"\"still-open\"");
+    assert_eq!(std::fs::read(&target).unwrap(), still_open);
+
+    // An independent reopen sees the final tree-edited bytes.
+    app.update_in(&mut cx, |app, window, cx| {
+        app.editor_close_file(0, window, cx)
+    });
+    until(&mut cx, |cx| {
+        app.read_with(cx, |app, _| app.editor.buffers.is_empty())
+    });
+    let (_, reopened) = open_ready(&app, &mut cx, host, &target);
+    assert_eq!(
+        row_value(&reopened, &mut cx, "$[\"text\"]").as_deref(),
+        Some("\"still-open\"")
+    );
+    assert_eq!(
+        source_document(&app, &cx).read_with(&cx, |document, _| document.encode().unwrap()),
+        still_open
+    );
+}
+
+#[gpui_kit::test]
+fn stale_and_invalid_source_reject_tree_edits_and_split_keeps_one_history(
+    tcx: &mut TestAppContext,
+) {
+    crate::ui::i18n::set_locale("en");
+    let dir = canonical_tempdir();
+    let original = fixture(dir.path(), "split-edit.jsonc", EDITABLE);
+    let host: SharedHost = FileHost::new(HostId(2903));
+    let (app, mut cx, _streams) = harness_with_tabs(tcx, 1);
+    cx.simulate_resize(size(px(1600.), px(1000.)));
+    open_ready(&app, &mut cx, host, &original);
+
+    app.update_in(&mut cx, |app, window, cx| {
+        assert!(app.editor_split(window, cx), "the JSON document splits");
+    });
+    settle(&mut cx);
+    let (tab, left, right) = app.read_with(&cx, |app, _| {
+        let code = app.tab_code().expect("editor group");
+        let tab = app.tabs.get(app.tabs.active_index()).unwrap().id();
+        let right = code.focused_group();
+        let left = match code.group == right {
+            true => code.split.as_ref().expect("two groups").id,
+            false => code.group,
+        };
+        (tab, left, right)
+    });
+    let (front, other) = app.read_with(&cx, |app, _| {
+        let file = app.active_buffer().expect("JSON buffer");
+        (
+            file.presentations.json_existing(tab, right).expect("front"),
+            file.presentations.json_existing(tab, left).expect("other"),
+        )
+    });
+    assert_eq!(
+        other.read_with(&cx, |view, _| view.mode()),
+        JsonMode::Structure
+    );
+    assert_eq!(
+        front.read_with(&cx, |view, _| view.mode()),
+        JsonMode::Source
+    );
+
+    // Open a tree command in the structure presentation, then change the
+    // source from the other presentation. The pending command must not write.
+    click_row(&other, &mut cx, "$[\"text\"]");
+    click_button(&other, &mut cx, "json-edit-value");
+    assert!(panel_open(&other, &mut cx));
+    app.update_in(&mut cx, |app, window, cx| {
+        front.update(cx, |view, cx| {
+            let focus = view.source().read(cx).focus_handle(cx);
+            focus.focus(window, cx);
+        });
+        app.editor_split_follow_focus(window, cx);
+    });
+    let text = source_text(&app, &cx);
+    let at = text.find("\"a\\u0062\"").expect("fixture value");
+    type_source(
+        &app,
+        &mut cx,
+        at..at + "\"a\\u0062\"".len(),
+        "\"source-wins\"",
+    );
+    until(&mut cx, |cx| is_ready(&front, cx) && is_ready(&other, cx));
+    assert_eq!(
+        panel_error(&other, &mut cx).as_deref(),
+        Some(
+            "The document changed, so this edit was not written. Close this panel and select the node again."
+        )
+    );
+    apply_panel(&other, &mut cx);
+    let text = source_text(&app, &cx);
+    assert!(text.contains("\"source-wins\""));
+    assert!(!text.contains("\"a\\u0062\""));
+    assert!(
+        panel_open(&other, &mut cx),
+        "a stale command stays open for a decision"
+    );
+    cancel_panel(&other, &mut cx);
+    assert!(!panel_open(&other, &mut cx));
+
+    // Make the source invalid from the source presentation: the structure
+    // view reports the error and a pending tree command cannot write guesses.
+    click_row(&other, &mut cx, "$[\"text\"]");
+    click_button(&other, &mut cx, "json-edit-value");
+    app.update_in(&mut cx, |app, window, cx| {
+        front.update(cx, |view, cx| {
+            let focus = view.source().read(cx).focus_handle(cx);
+            focus.focus(window, cx);
+        });
+        app.editor_split_follow_focus(window, cx);
+    });
+    let text = source_text(&app, &cx);
+    let at = text.find("\"source-wins\"").expect("edited value");
+    type_source(
+        &app,
+        &mut cx,
+        at..at + "\"source-wins\"".len(),
+        "\"unterminated",
+    );
+    until(&mut cx, |cx| {
+        other.read_with(cx, |view, cx| view.fatal_error(cx).is_some())
+    });
+    apply_panel(&other, &mut cx);
+    assert!(panel_error(&other, &mut cx).is_some());
+    assert!(source_text(&app, &cx).contains("\"unterminated"));
+    assert_eq!(std::fs::read(&original).unwrap(), EDITABLE);
+    cancel_panel(&other, &mut cx);
+
+    // Repairing the source lets a fresh tree command land in the one shared
+    // history, and undo from the source presentation reverses it.
+    app.update_in(&mut cx, |app, window, cx| {
+        front.update(cx, |view, cx| {
+            let focus = view.source().read(cx).focus_handle(cx);
+            focus.focus(window, cx);
+        });
+        app.editor_split_follow_focus(window, cx);
+    });
+    let text = source_text(&app, &cx);
+    let at = text.find("\"unterminated").expect("broken value");
+    type_source(
+        &app,
+        &mut cx,
+        at..at + "\"unterminated".len(),
+        "\"repaired\"",
+    );
+    until(&mut cx, |cx| is_ready(&front, cx) && is_ready(&other, cx));
+    click_row(&other, &mut cx, "$[\"text\"]");
+    click_button(&other, &mut cx, "json-edit-value");
+    replace_panel_text(&other, &mut cx, "structure-edit-value", "\"tree-final\"");
+    apply_panel(&other, &mut cx);
+    until(&mut cx, |cx| is_ready(&other, cx));
+    assert!(source_text(&app, &cx).contains("\"tree-final\""));
+    app.update_in(&mut cx, |app, window, cx| {
+        front.update(cx, |view, cx| {
+            let focus = view.source().read(cx).focus_handle(cx);
+            focus.focus(window, cx);
+        });
+        app.editor_split_follow_focus(window, cx);
+    });
+    cx.update(|window, cx| window.press(&secondary("z"), cx));
+    until(&mut cx, |cx| is_ready(&front, cx) && is_ready(&other, cx));
+    assert!(source_text(&app, &cx).contains("\"repaired\""));
+    assert!(!source_text(&app, &cx).contains("\"tree-final\""));
+
+    // Closing the document while a panel is open drops the callback and
+    // leaves the owning Host bytes untouched. Closing one presentation is the
+    // existing split contract: the other presentation still owns the buffer,
+    // and only closing the last one retires the document.
+    save(&app, &mut cx);
+    let saved = std::fs::read(&original).unwrap();
+    click_row(&other, &mut cx, "$[\"text\"]");
+    click_button(&other, &mut cx, "json-edit-value");
+    assert!(panel_open(&other, &mut cx));
+    app.update_in(&mut cx, |app, window, cx| {
+        app.editor_close_file(0, window, cx)
+    });
+    settle(&mut cx);
+    assert!(
+        app.read_with(&cx, |app, _| {
+            let group = app.tab_code().map(|code| code.group);
+            app.active_buffer().is_some_and(|file| {
+                group.is_some_and(|group| file.presentations.json_existing(tab, group).is_some())
+            })
+        }),
+        "the other presentation still owns the document"
+    );
+    assert!(
+        app.read_with(&cx, |app, _| !app.editor.buffers.is_empty()),
+        "one presentation close does not retire the shared document"
+    );
+    app.update_in(&mut cx, |app, window, cx| {
+        app.editor_close_file(0, window, cx)
+    });
+    until(&mut cx, |cx| {
+        app.read_with(cx, |app, _| app.editor.buffers.is_empty())
+    });
+    assert_eq!(std::fs::read(&original).unwrap(), saved);
+}
+
+#[gpui_kit::test]
+fn jsonl_does_not_show_json_tree_mutation_controls(tcx: &mut TestAppContext) {
+    crate::ui::i18n::set_locale("en");
+    let dir = canonical_tempdir();
+    let path = fixture(
+        dir.path(),
+        "records.jsonl",
+        b"{\"id\": 1, \"name\": \"one\"}\n{\"id\": 2, \"name\": \"two\"}\n",
+    );
+    let host: SharedHost = FileHost::new(HostId(2904));
+    let (app, mut cx, _streams) = harness_with_tabs(tcx, 1);
+    cx.simulate_resize(size(px(1600.), px(1000.)));
+    let (_, view) = open_ready(&app, &mut cx, host, &path);
+    click_row(&view, &mut cx, "line 1");
+    cx.update(|window, _| {
+        for id in [
+            "json-edit-value",
+            "json-rename-key",
+            "json-add-member",
+            "json-remove-member",
+        ] {
+            assert!(
+                window.try_find((id, view.entity_id())).is_none(),
+                "JSONL must not advertise a JSON-document tree mutation control"
+            );
+        }
+        assert!(window.find(("json-reveal", view.entity_id())).visible());
+        assert!(
+            window
+                .find(("json-full-value-button", view.entity_id()))
+                .visible()
+        );
+    });
+}
+
+#[gpui_kit::test]
+#[ignore = "requires the explicit private Linux SSH fixture, a matching same-commit local router and the running private remote daemon; run alone with --ignored"]
+fn tree_edits_save_through_the_real_native_ssh_route(tcx: &mut TestAppContext) {
+    use lyrel_core::host::Host as _;
+
+    crate::ui::i18n::set_locale("en");
+    let binary = std::env::var_os("LYREL_TEST_SSH_LOCAL_SERVER").expect(
+        "native SSH prerequisite: LYREL_TEST_SSH_LOCAL_SERVER must name the same-commit desktop router binary; also provide the explicit LYREL_TEST_SSH_* fixture endpoint",
+    );
+    let fixture = crate::native_ssh_graphics_fixture::NativeSshFixture::start(Path::new(&binary));
+    let host = fixture.connect_control();
+    let script = b"{\n  // remote comment\n  \"dup\": 1,\n  \"dup\": 2,\n  \"big\": 184467440737095516170,\n}\n";
+    let _ = fixture.install_script(&host, "editing.jsonc", script, Vec::new());
+    let path = fixture.remote_path("editing.jsonc");
+    let (app, mut cx, _streams) = harness_with_tabs(tcx, 1);
+    cx.simulate_resize(size(px(1600.), px(1000.)));
+    let (_, view) = open_ready(&app, &mut cx, host, &path);
+
+    click_row(&view, &mut cx, "$[\"dup\"] #2");
+    click_button(&view, &mut cx, "json-edit-value");
+    replace_panel_text(&view, &mut cx, "structure-edit-value", "\"remote-edited\"");
+    apply_panel(&view, &mut cx);
+    until(&mut cx, |cx| is_ready(&view, cx));
+    save(&app, &mut cx);
+
+    let expected = replace_bytes(script, b"\"dup\": 2", b"\"dup\": \"remote-edited\"");
+    // A second production control client proves the owning Host's bytes.
+    let verifier = fixture.connect_control_as(
+        "fixture:native-ssh-290-verify",
+        "native-ssh-json-290",
+        "isolated-fixture",
+    );
+    let bytes = verifier
+        .read_file(&path, expected.len() as u64 + 1)
+        .expect("independent remote read");
+    eprintln!(
+        "json290 real native SSH saved {} bytes at {}",
+        bytes.len(),
+        path.display()
+    );
+    assert_eq!(bytes, expected);
+    assert_eq!(
+        source_document(&app, &cx).read_with(&cx, |document, _| document.encode().unwrap()),
+        expected
+    );
+}

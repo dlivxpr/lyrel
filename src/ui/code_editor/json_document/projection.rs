@@ -89,12 +89,15 @@ pub(crate) enum JsonNodeKind {
 #[derive(Clone, Debug)]
 pub(crate) struct JsonNode {
     pub(crate) key: String,
+    /// 对象属性名的解码文本（不截断），仅用于编辑时预填；显示仍用 `key`。
+    pub(crate) key_text: Option<String>,
     pub(crate) path: String,
     pub(crate) value: String,
     pub(crate) range: Range<usize>,
     pub(crate) key_range: Option<Range<usize>>,
     pub(crate) kind: JsonNodeKind,
     pub(crate) children: Vec<usize>,
+    pub(crate) parent: Option<usize>,
     pub(crate) record_line: Option<usize>,
     pub(crate) error: Option<String>,
 }
@@ -226,7 +229,9 @@ fn project_document(
                     &value,
                     0,
                     "$".to_owned(),
+                    None,
                     "$".to_owned(),
+                    None,
                     None,
                     text,
                     &mut nodes,
@@ -262,12 +267,14 @@ fn project_lines(text: &str, cancel: &AtomicBool) -> Result<JsonProjection, Proj
         &mut nodes,
         JsonNode {
             key: "JSONL".to_owned(),
+            key_text: None,
             path: "JSONL".to_owned(),
             value: String::new(),
             range: 0..0,
             key_range: None,
             kind: JsonNodeKind::Records,
             children: Vec::new(),
+            parent: None,
             record_line: None,
             error: None,
         },
@@ -304,8 +311,10 @@ fn project_lines(text: &str, cancel: &AtomicBool) -> Result<JsonProjection, Proj
                             &value,
                             value_start,
                             format!("Line {line_number}"),
+                            None,
                             format!("line {line_number}"),
                             None,
+                            Some(root),
                             text,
                             &mut nodes,
                             &mut path_bytes,
@@ -320,12 +329,14 @@ fn project_lines(text: &str, cancel: &AtomicBool) -> Result<JsonProjection, Proj
                             &mut nodes,
                             JsonNode {
                                 key: format!("Line {line_number}"),
+                                key_text: None,
                                 path: format!("line {line_number}"),
                                 value: "No JSON value".to_owned(),
                                 range: value_start..value_end,
                                 key_range: None,
                                 kind: JsonNodeKind::InvalidRecord,
                                 children: Vec::new(),
+                                parent: Some(root),
                                 record_line: Some(line_number),
                                 error: Some("No JSON value".to_owned()),
                             },
@@ -338,12 +349,14 @@ fn project_lines(text: &str, cancel: &AtomicBool) -> Result<JsonProjection, Proj
                         &mut nodes,
                         JsonNode {
                             key: format!("Line {line_number}"),
+                            key_text: None,
                             path: format!("line {line_number}"),
                             value: error.kind().to_string(),
                             range: value_start..value_end,
                             key_range: None,
                             kind: JsonNodeKind::InvalidRecord,
                             children: Vec::new(),
+                            parent: Some(root),
                             record_line: Some(line_number),
                             error: Some(error.kind().to_string()),
                         },
@@ -370,8 +383,10 @@ fn add_value(
     value: &Value<'_>,
     offset: usize,
     key: String,
+    key_text: Option<String>,
     path: String,
     key_range: Option<Range<usize>>,
+    parent: Option<usize>,
     text: &str,
     nodes: &mut Vec<JsonNode>,
     path_bytes: &mut usize,
@@ -381,6 +396,7 @@ fn add_value(
         return Err(ProjectionFailure::Cancelled);
     }
     *path_bytes = path_bytes.saturating_add(path.len());
+    *path_bytes = path_bytes.saturating_add(key_text.as_deref().map_or(0, str::len));
     if *path_bytes > STRUCTURE_PATH_BYTES {
         return Err(ProjectionFailure::PathsTooLarge);
     }
@@ -391,12 +407,14 @@ fn add_value(
         nodes,
         JsonNode {
             key,
+            key_text,
             path,
             value: preview,
             range,
             key_range,
             kind,
             children: Vec::new(),
+            parent,
             record_line: None,
             error: None,
         },
@@ -423,8 +441,10 @@ fn add_value(
                     &property.value,
                     offset,
                     display,
+                    Some(name.to_owned()),
                     path,
                     Some(raw_key),
+                    Some(index),
                     text,
                     nodes,
                     path_bytes,
@@ -438,8 +458,10 @@ fn add_value(
                     element,
                     offset,
                     format!("[{element_index}]"),
+                    None,
                     format!("{}[{element_index}]", nodes[index].path),
                     None,
+                    Some(index),
                     text,
                     nodes,
                     path_bytes,
@@ -488,7 +510,7 @@ fn describe(value: &Value<'_>, text: &str, range: &Range<usize>) -> (JsonNodeKin
     }
 }
 
-fn value_range(value: &Value<'_>) -> Range<usize> {
+pub(super) fn value_range(value: &Value<'_>) -> Range<usize> {
     match value {
         Value::Object(node) => node.range.start..node.range.end,
         Value::Array(node) => node.range.start..node.range.end,
@@ -516,7 +538,7 @@ fn sanitized(value: &str) -> String {
 
 /// JSON 只接受严格语法；JSONC 只额外接受注释和尾随逗号，不打开 JSON5
 /// 的宽松名字、单引号、十六进制、非有限数或扩展转义。
-fn options(format: JsonFormat) -> ParseOptions {
+pub(super) fn options(format: JsonFormat) -> ParseOptions {
     let jsonc = format.allows_comments();
     ParseOptions {
         allow_comments: jsonc,

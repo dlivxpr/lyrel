@@ -30,12 +30,15 @@ use gpui_kit::{
 };
 use lyrel_markdown_editor::{Document, DocumentEvent, EditorState as SourceEditor};
 
+use super::structure_edit::{EditField, StructureEditEvent, StructureEditPanel};
 use super::structure_view::{self, SourceLocation, Treelike, VisibleRow};
 use crate::ui::i18n::{L10nKey, t, t_fmt};
 
+pub(crate) mod mutation;
 pub(crate) mod projection;
 pub(crate) use projection::JsonFormat;
 
+use mutation::{Mutation, MutationError, NodeTarget};
 use projection::{
     JsonNodeKind, JsonProjection, ProjectionFailure, STRUCTURE_INPUT_BYTES, STRUCTURE_NODES,
     STRUCTURE_RECORDS,
@@ -235,6 +238,31 @@ struct FullValue {
     range: Range<usize>,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum EditKind {
+    Value,
+    Key,
+    AddMember,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct EditCaps {
+    value: bool,
+    key: bool,
+    add: bool,
+    add_is_array: bool,
+    remove: bool,
+}
+
+/// 一次明确的树命令：目标 occurrence 在打开面板时固定，提交时按当前
+/// revision 重新解析；面板只是输入控件，不持有文档。
+struct EditSession {
+    panel: Entity<StructureEditPanel>,
+    kind: EditKind,
+    target: NodeTarget,
+    _events: Subscription,
+}
+
 /// 一份 JSON 文件在一个分组里的呈现：模式、源码选择、结构展开与滚动。
 pub(crate) struct JsonView {
     document: Entity<JsonDocument>,
@@ -248,6 +276,8 @@ pub(crate) struct JsonView {
     selected_path: Option<String>,
     selected_range: Option<Range<usize>>,
     full_value: Option<FullValue>,
+    editing: Option<EditSession>,
+    mutation_error: Option<SharedString>,
     seen_revision: Option<u64>,
     _document: Subscription,
     _source_document: Subscription,
@@ -293,6 +323,8 @@ impl JsonView {
             selected_path: None,
             selected_range: None,
             full_value: None,
+            editing: None,
+            mutation_error: None,
             seen_revision: None,
             _document: watch_document,
             _source_document: watch_source_document,
@@ -369,6 +401,15 @@ impl JsonView {
             .nodes()
             .get(self.selected?)
             .map(|node| SharedString::from(node.path.clone()))
+    }
+
+    #[cfg(any(test, feature = "native-markdown-tests"))]
+    pub(crate) fn edit_texts(&self, cx: &App) -> Option<(Option<String>, String)> {
+        let session = self.editing.as_ref()?;
+        Some((
+            session.panel.read(cx).key_text(cx),
+            session.panel.read(cx).value_text(cx),
+        ))
     }
 
     pub(crate) fn full_value_text(&self, cx: &App) -> Option<SharedString> {
@@ -565,6 +606,7 @@ impl JsonView {
     }
 
     pub(crate) fn show_source(&mut self, cx: &mut Context<Self>) {
+        self.close_edit(None, cx);
         if self.mode != JsonMode::Source {
             self.mode = JsonMode::Source;
             cx.notify();
@@ -573,6 +615,7 @@ impl JsonView {
 
     pub(crate) fn toggle_mode(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.finish_composition(cx);
+        self.close_edit(None, cx);
         self.mode = self.mode.opposite();
         let focus = self.focus_handle(cx);
         focus.focus(window, cx);
@@ -580,6 +623,7 @@ impl JsonView {
     }
 
     pub(crate) fn reveal_selected_source(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.close_edit(None, cx);
         let Some(range) = self.selected_detail_range(cx) else {
             return;
         };
@@ -593,6 +637,7 @@ impl JsonView {
     }
 
     pub(crate) fn open_selected_full_value(&mut self, cx: &mut Context<Self>) {
+        self.close_edit(None, cx);
         let Some(index) = self.selected else {
             return;
         };
@@ -619,6 +664,332 @@ impl JsonView {
         }
     }
 
+    /// 当前已安装的投影，且它的 revision 必须仍等于源码权威。任何不一致
+    /// 都按过期处理，不允许用旧范围规划写入。
+    fn current_projection(&self, cx: &App) -> Option<Arc<JsonProjection>> {
+        let document = self.document.read(cx);
+        let projection = document.projection.clone()?;
+        let installed = document.installed_revision()?;
+        let source = document.document().clone();
+        (source.read(cx).revision() == installed).then_some(projection)
+    }
+
+    fn current_text(&self, cx: &App) -> Option<Arc<String>> {
+        let source = self.document.read(cx).document().clone();
+        Some(source.read(cx).snapshot().shared_text())
+    }
+
+    fn structure_editable(&self, cx: &App) -> bool {
+        self.document.read(cx).format() != JsonFormat::JsonLines
+            && self.current_projection(cx).is_some()
+    }
+
+    fn selected_target(&self, cx: &App) -> Option<NodeTarget> {
+        let projection = self.current_projection(cx)?;
+        let node = projection.nodes().get(self.selected?)?;
+        Some(NodeTarget::of(node))
+    }
+
+    fn edit_caps(&self, cx: &App) -> EditCaps {
+        let mut caps = EditCaps::default();
+        let Some(projection) = self.current_projection(cx) else {
+            return caps;
+        };
+        let Some(index) = self.selected else {
+            return caps;
+        };
+        let Some(node) = projection.nodes().get(index) else {
+            return caps;
+        };
+        caps.value = matches!(
+            node.kind,
+            JsonNodeKind::String
+                | JsonNodeKind::Number
+                | JsonNodeKind::Boolean
+                | JsonNodeKind::Null
+        ) && !node.range.is_empty();
+        caps.key = node.key_range.is_some();
+        caps.add = matches!(node.kind, JsonNodeKind::Object | JsonNodeKind::Array);
+        caps.add_is_array = node.kind == JsonNodeKind::Array;
+        caps.remove = node.parent.is_some_and(|parent| {
+            node.key_range.is_some()
+                || projection
+                    .nodes()
+                    .get(parent)
+                    .is_some_and(|parent| parent.kind == JsonNodeKind::Array)
+        });
+        caps
+    }
+
+    fn start_value_edit(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(projection) = self.current_projection(cx) else {
+            return;
+        };
+        let Some(node) = self
+            .selected
+            .and_then(|index| projection.nodes().get(index))
+        else {
+            return;
+        };
+        if !matches!(
+            node.kind,
+            JsonNodeKind::String
+                | JsonNodeKind::Number
+                | JsonNodeKind::Boolean
+                | JsonNodeKind::Null
+        ) {
+            return;
+        }
+        let Some(text) = self.current_text(cx) else {
+            return;
+        };
+        let Some(raw) = text.get(node.range.clone()) else {
+            return;
+        };
+        let target = NodeTarget::of(node);
+        let title = t_fmt(L10nKey::EditorJsonEditValueTitle, &[("path", &node.path)]).into();
+        self.open_edit(
+            window,
+            cx,
+            EditKind::Value,
+            target,
+            title,
+            None,
+            EditField::new(
+                t(L10nKey::EditorJsonValueName),
+                t(L10nKey::EditorJsonValuePlaceholder),
+                raw,
+            ),
+        );
+    }
+
+    fn start_key_rename(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(projection) = self.current_projection(cx) else {
+            return;
+        };
+        let Some(node) = self
+            .selected
+            .and_then(|index| projection.nodes().get(index))
+        else {
+            return;
+        };
+        let (Some(key_text), Some(_)) = (node.key_text.clone(), node.key_range.as_ref()) else {
+            return;
+        };
+        let target = NodeTarget::of(node);
+        let title = t_fmt(L10nKey::EditorJsonRenameKeyTitle, &[("path", &node.path)]).into();
+        self.open_edit(
+            window,
+            cx,
+            EditKind::Key,
+            target,
+            title,
+            None,
+            EditField::new(
+                t(L10nKey::EditorJsonKeyName),
+                t(L10nKey::EditorJsonKeyPlaceholder),
+                key_text,
+            ),
+        );
+    }
+
+    fn start_add_member(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(projection) = self.current_projection(cx) else {
+            return;
+        };
+        let Some(node) = self
+            .selected
+            .and_then(|index| projection.nodes().get(index))
+        else {
+            return;
+        };
+        let (title_key, key_field) = match node.kind {
+            JsonNodeKind::Object => (
+                L10nKey::EditorJsonAddKeyTitle,
+                Some(EditField::new(
+                    t(L10nKey::EditorJsonKeyName),
+                    t(L10nKey::EditorJsonKeyPlaceholder),
+                    "",
+                )),
+            ),
+            JsonNodeKind::Array => (L10nKey::EditorJsonAddItemTitle, None),
+            _ => return,
+        };
+        let target = NodeTarget::of(node);
+        let title = t_fmt(title_key, &[("path", &node.path)]).into();
+        self.open_edit(
+            window,
+            cx,
+            EditKind::AddMember,
+            target,
+            title,
+            key_field,
+            EditField::new(
+                t(L10nKey::EditorJsonValueName),
+                t(L10nKey::EditorJsonValuePlaceholder),
+                "",
+            ),
+        );
+    }
+
+    fn remove_selected(&mut self, cx: &mut Context<Self>) {
+        let Some(target) = self.selected_target(cx) else {
+            return;
+        };
+        match self.apply_mutation(Mutation::RemoveMember { target }, cx) {
+            Ok(()) => {
+                self.mutation_error = None;
+                cx.notify();
+            }
+            Err(error) => {
+                self.mutation_error = Some(self.mutation_message(error));
+                cx.notify();
+            }
+        }
+    }
+
+    fn open_edit(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+        kind: EditKind,
+        target: NodeTarget,
+        title: SharedString,
+        key: Option<EditField>,
+        value: EditField,
+    ) {
+        self.close_edit(None, cx);
+        self.full_value = None;
+        self.mutation_error = None;
+        let owner = cx.entity_id();
+        let panel = cx.new(|cx| StructureEditPanel::new(owner, window, cx, title, key, value));
+        let events = cx.subscribe_in(
+            &panel,
+            window,
+            |view, _, event: &StructureEditEvent, window, cx| match event {
+                StructureEditEvent::Apply => view.apply_edit(window, cx),
+                StructureEditEvent::Cancel => view.close_edit(Some(window), cx),
+            },
+        );
+        panel.update(cx, |panel, cx| panel.focus_first(window, cx));
+        self.editing = Some(EditSession {
+            panel,
+            kind,
+            target,
+            _events: events,
+        });
+        cx.notify();
+    }
+
+    fn close_edit(&mut self, window: Option<&mut Window>, cx: &mut Context<Self>) {
+        if self.editing.take().is_some() {
+            if let Some(window) = window {
+                self.focus.focus(window, cx);
+            }
+            cx.notify();
+        }
+    }
+
+    fn mark_edit_stale(&mut self, cx: &mut Context<Self>) {
+        let Some(session) = &self.editing else {
+            return;
+        };
+        let message: SharedString = t(L10nKey::EditorJsonEditStale).into();
+        session
+            .panel
+            .update(cx, |panel, cx| panel.set_error(Some(message), cx));
+    }
+
+    fn apply_edit(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(session) = self.editing.as_ref() else {
+            return;
+        };
+        let panel = session.panel.clone();
+        let kind = session.kind;
+        let target = session.target.clone();
+        let mutation = match kind {
+            EditKind::Value => Mutation::SetValue {
+                target,
+                value: panel.read(cx).value_text(cx),
+            },
+            EditKind::Key => Mutation::RenameKey {
+                target,
+                key: panel.read(cx).value_text(cx),
+            },
+            EditKind::AddMember => Mutation::AddMember {
+                container: target,
+                key: panel.read(cx).key_text(cx),
+                value: panel.read(cx).value_text(cx),
+            },
+        };
+        match self.apply_mutation(mutation, cx) {
+            Ok(()) => {
+                self.mutation_error = None;
+                self.close_edit(Some(window), cx);
+            }
+            Err(error) => {
+                let message = self.mutation_message(error);
+                panel.update(cx, |panel, cx| panel.set_error(Some(message), cx));
+            }
+        }
+    }
+
+    /// 一次命令一条 history：规划出的替换清单交给共享 Document 的正常
+    /// `replace_ranges`，不另建可写内容。revision 不一致时拒绝写入。
+    fn apply_mutation(
+        &mut self,
+        mutation: Mutation,
+        cx: &mut Context<Self>,
+    ) -> Result<(), MutationError> {
+        let (projection, installed, editor, revision, text, format) = {
+            let json_document = self.document.read(cx);
+            let document = json_document.document().clone();
+            let editor = self.source.clone();
+            let format = json_document.format();
+            let projection = json_document.projection.clone();
+            let installed = json_document.installed_revision();
+            let revision = document.read(cx).revision();
+            let text = document.read(cx).snapshot().shared_text();
+            (projection, installed, editor, revision, text, format)
+        };
+        let projection = projection.ok_or(MutationError::Stale)?;
+        if installed != Some(revision) {
+            return Err(MutationError::Stale);
+        }
+        let replacements = mutation::plan(text.as_str(), &projection, format, &mutation)?;
+        if !replacements.is_empty() {
+            editor.update(cx, |editor, cx| editor.replace_ranges(replacements, cx));
+        }
+        Ok(())
+    }
+
+    fn mutation_message(&self, error: MutationError) -> SharedString {
+        match error {
+            MutationError::Stale => t(L10nKey::EditorJsonEditStale).into(),
+            MutationError::NotEditable | MutationError::Unsupported => {
+                t(L10nKey::EditorJsonEditUnsupported).into()
+            }
+            MutationError::InvalidValue(message) => t_fmt(
+                L10nKey::EditorJsonEditInvalidValue,
+                &[("message", &message)],
+            )
+            .into(),
+            MutationError::ResultInvalid {
+                line,
+                column,
+                message,
+            } => t_fmt(
+                L10nKey::EditorJsonEditResultInvalid,
+                &[
+                    ("line", &line.to_string()),
+                    ("column", &column.to_string()),
+                    ("message", &message),
+                ],
+            )
+            .into(),
+        }
+    }
+
     fn selected_detail_range(&self, cx: &App) -> Option<Range<usize>> {
         let projection = self.document.read(cx).projection()?;
         let node = projection.nodes().get(self.selected?)?;
@@ -637,6 +1008,7 @@ impl JsonView {
             self.selected_range = None;
             self.full_value = None;
             self.seen_revision = None;
+            self.mark_edit_stale(cx);
             return;
         };
         let node_count = projection.node_count();
@@ -680,6 +1052,7 @@ impl JsonView {
             {
                 self.full_value = None;
             }
+            self.mark_edit_stale(cx);
         }
         self.rows = structure_view::visible_rows(projection.as_ref(), &self.expanded);
     }
@@ -703,6 +1076,8 @@ impl JsonView {
         else {
             return;
         };
+        self.close_edit(None, cx);
+        self.mutation_error = None;
         self.selected = Some(index);
         self.selected_path = Some(path);
         self.selected_range = Some(range);
@@ -735,7 +1110,7 @@ impl JsonView {
     }
 
     fn key(&mut self, event: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
-        if event.keystroke.modifiers.modified() {
+        if self.editing.is_some() || event.keystroke.modifiers.modified() {
             return;
         }
         let key = event.keystroke.key.as_str();
@@ -840,6 +1215,9 @@ impl JsonView {
             )
         });
         let has_detail = self.selected_location(cx).is_some();
+        let caps = self.edit_caps(cx);
+        let editable = self.structure_editable(cx);
+        let mutation_error = self.mutation_error.clone();
         let mode = self.mode;
         let (toggle, tip) = match mode {
             JsonMode::Structure => (
@@ -934,6 +1312,64 @@ impl JsonView {
                         .child(location),
                 )
             })
+            .when_some(mutation_error, |row, error| {
+                row.child(
+                    div()
+                        .id(("json-mutation-error", entity))
+                        .test_support()
+                        .flex_none()
+                        .text_xs()
+                        .text_color(warning)
+                        .child(error),
+                )
+            })
+            .when(editable, |row| {
+                row.child(
+                    Button::new(("json-edit-value", entity))
+                        .ghost()
+                        .xsmall()
+                        .flex_none()
+                        .disabled(!caps.value)
+                        .label(t(L10nKey::EditorJsonEditValue))
+                        .on_click(
+                            cx.listener(|this, _, window, cx| this.start_value_edit(window, cx)),
+                        ),
+                )
+                .child(
+                    Button::new(("json-rename-key", entity))
+                        .ghost()
+                        .xsmall()
+                        .flex_none()
+                        .disabled(!caps.key)
+                        .label(t(L10nKey::EditorJsonRenameKey))
+                        .on_click(
+                            cx.listener(|this, _, window, cx| this.start_key_rename(window, cx)),
+                        ),
+                )
+                .child(
+                    Button::new(("json-add-member", entity))
+                        .ghost()
+                        .xsmall()
+                        .flex_none()
+                        .disabled(!caps.add)
+                        .label(match caps.add_is_array {
+                            true => t(L10nKey::EditorJsonAddItem),
+                            false => t(L10nKey::EditorJsonAddKey),
+                        })
+                        .on_click(
+                            cx.listener(|this, _, window, cx| this.start_add_member(window, cx)),
+                        ),
+                )
+                .child(
+                    Button::new(("json-remove-member", entity))
+                        .ghost()
+                        .xsmall()
+                        .flex_none()
+                        .disabled(!caps.remove)
+                        .label(t(L10nKey::EditorJsonRemove))
+                        .on_click(cx.listener(|this, _, _, cx| this.remove_selected(cx))),
+                )
+            })
             .child(div().flex_1())
             .child(
                 Button::new(("json-reveal", entity))
@@ -968,10 +1404,16 @@ impl JsonView {
 
     fn structure_body(&self, cx: &mut Context<Self>) -> AnyElement {
         if let Some((title, detail)) = self.fatal_error(cx) {
-            return structural_error(title, detail, cx).into_any_element();
+            return v_flex()
+                .flex_1()
+                .min_w_0()
+                .min_h_0()
+                .child(structural_error(title, detail, cx))
+                .children(self.render_edit_panel())
+                .into_any_element();
         }
         if !self.structure_ready(cx) {
-            return if self.is_parsing(cx) {
+            let body = if self.is_parsing(cx) {
                 loading_structure(cx).into_any_element()
             } else {
                 structural_error(
@@ -981,6 +1423,13 @@ impl JsonView {
                 )
                 .into_any_element()
             };
+            return v_flex()
+                .flex_1()
+                .min_w_0()
+                .min_h_0()
+                .child(body)
+                .children(self.render_edit_panel())
+                .into_any_element();
         }
         let entity = cx.entity_id();
         let list = uniform_list(
@@ -1117,8 +1566,15 @@ impl JsonView {
             .min_w_0()
             .min_h_0()
             .child(list)
+            .children(self.render_edit_panel())
             .children(detail)
             .into_any_element()
+    }
+
+    fn render_edit_panel(&self) -> Option<AnyElement> {
+        self.editing
+            .as_ref()
+            .map(|session| session.panel.clone().into_any_element())
     }
 
     fn render_full_value(&self, cx: &mut Context<Self>) -> Option<AnyElement> {

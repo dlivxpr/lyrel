@@ -78,3 +78,14 @@ reason = "#279 要求打开、切换视图和普通保存不得规范化未修�
 upstream = "crates/glim-services/src/graph.rs / xml.rs"
 status = "not imported"
 reason = "有损 YAML/XML 投影；不属于本票，也不能作为 JSON 结构模型或 JSON mutation 的依赖"
+
+# #290：同一模块的局部编辑扩展。上游没有任何可编辑的重复键树或局部
+# mutation API，因此这里记录“保留什么、补什么、拒绝什么”，而不是伪装成
+# 新增的 Glim 源文件导入。
+[[extension]]
+ticket = "#290"
+status = "added missing mutation layer over the #289 source-linked projection"
+retained = "#289 的 JSONC 词法边界、逐 occurrence 源码范围、可见行/键盘/完整值交互、每文档单 worker 与 revision/generation 安装；共享 Document 的 history、保存、另存为、冲突与关闭"
+adapted = "`json_document/mutation.rs` 在调用时重新取得当前 LF 源码的 jsonc-parser token 结构，按 `(path, range, key_range)` 重新解析选中 occurrence，规划最小替换清单；新值片段必须恰好是一个 JSON 值，新键由标准 JSON 转义生成并复核，写入前再解析整个结果。清单交给共享 `EditorState::replace_ranges`，一次命令一条 history。`structure_edit.rs` 是单/双字段共享编辑面板，后续 YAML/TOML/XML 可复用。"
+replaced = "没有可移植的上游 mutation；不采用 `serde_json::Value` 序列化、Glim `format_document` 整篇空白重排或 jsonc-parser CST 的整篇 `to_string()` 作为写回路径。注释、键序、未选中转义与数字拼写只受最小 splice 影响。"
+not_imported = "JSON5、JSONL 记录插入/删除（#291）、通用 Value 文档、整篇格式化与第二份可写内容"
