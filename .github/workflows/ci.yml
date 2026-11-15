@@ -190,21 +190,21 @@ jobs:
       # 同一步的全部测试编译达到 30 分钟上限，尚未执行测试。
       # 先完成 library 单元测试，避免同包的普通 library 与大型 libtest 并发争用；
       # 后续完整目标选择复用产物，仍包含所有 binaries、integration tests 和 doctests。
-      # 不改变 profile、测试范围或单步时间上限；原生消费者仍由后续 feature 单独执行。
+      # 覆盖当前全部 default-members，不改变 profile 或时间上限；原生目标仍由后续 feature 执行。
       - name: Compile desktop library unit tests
         if: runner.os != 'Linux'
         timeout-minutes: 30
-        run: ${{ runner.os == 'Windows' && 'pwsh -NoProfile -File scripts/cargo-windows.ps1' || 'cargo' }} test --locked -p lyrel -p lyrel-markdown-editor -p lyrel-text -p lyrel-core -p lyrel-cli -p lyrel-server --features updater --target ${{ matrix.target }} --lib --no-run
+        run: ${{ runner.os == 'Windows' && 'pwsh -NoProfile -File scripts/cargo-windows.ps1' || 'cargo' }} test --locked -p lyrel -p lyrel-markdown-editor -p lyrel-text -p lyrel-epub -p lyrel-core -p lyrel-cli -p lyrel-server --features updater --target ${{ matrix.target }} --lib --no-run
       - name: Compile desktop library and headless tests
         id: desktop_tests_compile
         if: runner.os != 'Linux'
         timeout-minutes: 30
-        run: ${{ runner.os == 'Windows' && 'pwsh -NoProfile -File scripts/cargo-windows.ps1' || 'cargo' }} test --locked -p lyrel -p lyrel-markdown-editor -p lyrel-text -p lyrel-core -p lyrel-cli -p lyrel-server --features updater --target ${{ matrix.target }} --no-run
+        run: ${{ runner.os == 'Windows' && 'pwsh -NoProfile -File scripts/cargo-windows.ps1' || 'cargo' }} test --locked -p lyrel -p lyrel-markdown-editor -p lyrel-text -p lyrel-epub -p lyrel-core -p lyrel-cli -p lyrel-server --features updater --target ${{ matrix.target }} --no-run
       - name: Test desktop library and headless
         if: runner.os != 'Linux'
         timeout-minutes: 20
         # SIGABRT 会丢失 libtest 捕获缓冲；保留原始 panic，并继续收集其他目标结果。
-        run: cargo test --locked -p lyrel -p lyrel-markdown-editor -p lyrel-text -p lyrel-core -p lyrel-cli -p lyrel-server --features updater --target ${{ matrix.target }} --no-fail-fast -- --nocapture
+        run: cargo test --locked -p lyrel -p lyrel-markdown-editor -p lyrel-text -p lyrel-epub -p lyrel-core -p lyrel-cli -p lyrel-server --features updater --target ${{ matrix.target }} --no-fail-fast -- --nocapture
 
       # 显式 feature 只编译当前注册的 replacement native 消费者支持代码。
       # baseline 消费者迁移边界见 editor HOST_CAPABILITIES；编译与执行独立计时。

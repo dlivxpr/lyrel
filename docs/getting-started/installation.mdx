@@ -409,7 +409,7 @@ Node.js 22 显式安装，用于自动化回归、Host 检查和 pi 桥测试；
 
 分类入口为 `.github/scripts/ci-changes.cjs`；新增编译输入时同步检查允许跳过的路径。`LICENSE` 被 server 内嵌，`skills/` 等目录不能按 Markdown 后缀当作纯文档。分类使用 `--no-renames` 保留重命名两端，移出源码目录仍会验证删除的影响。检查名称由原来的 `changes`／`rustfmt`／`host boundary` 收敛为 `preflight`；设置合并门禁时使用新名称及所需平台检查，不引用已移除的名称。
 
-CI 桌面生产检查仍为 `cargo check --locked --features updater --target <target>` 与同 feature 构建，保留 `+crt-static` 和 CRT 断言。普通测试显式选择 `lyrel`、`lyrel-markdown-editor`、`lyrel-text`、core/CLI/server，启用 `updater`；native 目标独立以 `-p lyrel --features updater,native-markdown-tests --test native_markdown` 编译/执行。Linux 使用 `--workspace --exclude lyrel --exclude lyrel-markdown-editor --all-features`，包含 GUI-free `lyrel-text`。各平台实际结果分别记录。
+CI 桌面生产检查仍为 `cargo check --locked --features updater --target <target>` 与同 feature 构建，保留 `+crt-static` 和 CRT 断言。普通测试显式选择全部当前 `default-members`：`lyrel`、`lyrel-markdown-editor`、`lyrel-text`、`lyrel-epub`、core/CLI/server，启用 `updater`；native 目标独立以 `-p lyrel --features updater,native-markdown-tests --test native_markdown` 编译/执行。Linux 使用 `--workspace --exclude lyrel --exclude lyrel-markdown-editor --all-features`，包含 GUI-free `lyrel-text`。各平台实际结果分别记录。
 
 普通桌面／headless 测试先以相同 package／feature 集合和 `--lib --no-run` 完成 library 单元测试编译，再以不带目标过滤的 `--no-run` 编译全部普通目标；后一步复用已有产物，保留 binary、integration test 与后续完整执行时的 doctest 范围。该调度避免同包的普通 library 与大型 libtest 同时争用资源，不改变编译 profile。普通完整目标、原生 Markdown 和原生 terminal 各有独立编译步骤，所有编译步骤仍为 30 分钟；实际普通测试执行为 20 分钟，原生执行为 10 分钟。普通测试使用 `--no-fail-fast` 收集各目标结果，其断言失败后仍执行已可编译的原生目标；编译失败或取消不冒充执行成功。生产检查与构建各为 30 分钟，job 总上限仍为 90 分钟，作为全部步骤共享的最终保护，不保证每一步同时耗尽自身上限。各轮使用相同显式 `--target`，编译日志与执行日志分别定位失败，不把测试编译耗时计作消费者运行耗时。
 

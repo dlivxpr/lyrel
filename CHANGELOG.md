@@ -58,8 +58,9 @@
 - #279：独立 `mxGraphModel` 的可视修改写回同一原生根，修复画布已有新标签而保存确认仍含旧内容的问题；保留模型配置、XML 声明与 BOM。
 
 - #279：macOS draw.io 宿主的协议会话改用 `Arc<Mutex<_>>`，满足 wry 自定义协议回调的 `Send + Sync` 约束；`WKWebView` 仍只由主线程持有，执行脚本和关闭视图前释放会话锁，不扩大资源或网络权限。
-- #279：桌面 CI 先编译 library 单元测试，再以原完整目标集合复用产物，避免大型 library 与 libtest 在同一步争用编译资源；不改变编译 profile、测试范围或单步时限。draw.io 的 Windows URL、HTTP reason 与默认会话入口使用平台／测试门控，macOS 的下载拒绝回调移除无用 `mut`，不压制编译诊断。
+- #279：桌面 CI 先编译 library 单元测试，再以完整目标集合复用产物，避免大型 library 与 libtest 在同一步争用编译资源；将已列为 `default-members` 的 `lyrel-epub` 纳入显式测试集合，不缩减测试范围，不改变编译 profile 或单步时限。draw.io 的 Windows URL、HTTP reason 与默认会话入口使用平台／测试门控，macOS 的下载拒绝回调移除无用 `mut`，不压制编译诊断。
 - daemon handoff 在匿名暂存文件 unlink 失败时立即拒绝，不把 pane 输出写入仍有路径的文件；回归直接验证本次暂存描述符没有目录链接并逐字节恢复内容，不再扫描共享临时目录而受并发空文件影响。
+- #292：YAML 节点属性只扫描自身与实际属性包装节点，不为每个 sequence item 重扫祖先 collection 的全部兄弟；保留锚点／tag 语义和原有节点预算，避免大序列在返回预算错误前耗尽消费者期限。
 
 - #279：draw.io 保存 flush 先确认仍打开的标签编辑器，再序列化并确认模型修订，避免编辑框已有新文字但保存仍写入旧标签。真实固定引擎的活动中文标签输入经 `sync` POST 验证了修复前遗漏、修复后完整提交；原生窗口与系统 IME 另行验收。
 
