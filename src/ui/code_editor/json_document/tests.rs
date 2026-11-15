@@ -1381,12 +1381,8 @@ fn stale_and_invalid_source_reject_tree_edits_and_split_keeps_one_history(
     });
     let text = source_text(&app, &cx);
     let at = text.find("\"a\\u0062\"").expect("fixture value");
-    type_source(
-        &app,
-        &mut cx,
-        at..at + "\"a\\u0062\"".len(),
-        "\"source-wins\"",
-    );
+    // 同长度修改保留 path 与 token range；旧面板仍必须按打开时的 revision 拒绝。
+    type_source(&app, &mut cx, at..at + "\"a\\u0062\"".len(), "\"changed\"");
     until(&mut cx, |cx| is_ready(&front, cx) && is_ready(&other, cx));
     assert_eq!(
         panel_error(&other, &mut cx).as_deref(),
@@ -1396,7 +1392,7 @@ fn stale_and_invalid_source_reject_tree_edits_and_split_keeps_one_history(
     );
     apply_panel(&other, &mut cx);
     let text = source_text(&app, &cx);
-    assert!(text.contains("\"source-wins\""));
+    assert!(text.contains("\"changed\""));
     assert!(!text.contains("\"a\\u0062\""));
     assert!(
         panel_open(&other, &mut cx),
@@ -1417,11 +1413,11 @@ fn stale_and_invalid_source_reject_tree_edits_and_split_keeps_one_history(
         app.editor_split_follow_focus(window, cx);
     });
     let text = source_text(&app, &cx);
-    let at = text.find("\"source-wins\"").expect("edited value");
+    let at = text.find("\"changed\"").expect("edited value");
     type_source(
         &app,
         &mut cx,
-        at..at + "\"source-wins\"".len(),
+        at..at + "\"changed\"".len(),
         "\"unterminated",
     );
     until(&mut cx, |cx| {
