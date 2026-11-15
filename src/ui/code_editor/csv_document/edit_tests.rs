@@ -373,10 +373,7 @@ fn row_delete_removes_one_record_and_its_terminator_only() {
 fn column_insert_keeps_ragged_records_ragged() {
     let table = parse("a,b\nc\n", 16);
     assert_eq!(
-        edited(
-            &table,
-            CsvEdit::InsertColumn { at: 0, right: true }
-        ),
+        edited(&table, CsvEdit::InsertColumn { at: 0, right: true }),
         "a,,b\nc,\n"
     );
     assert_eq!(
@@ -392,10 +389,7 @@ fn column_insert_keeps_ragged_records_ragged() {
     // 短记录没有目标列时不补出中间字段。
     let table = parse("a\nb,c,d\n", 17);
     assert_eq!(
-        edited(
-            &table,
-            CsvEdit::InsertColumn { at: 2, right: true }
-        ),
+        edited(&table, CsvEdit::InsertColumn { at: 2, right: true }),
         "a\nb,c,d,\n"
     );
 }
@@ -404,31 +398,16 @@ fn column_insert_keeps_ragged_records_ragged() {
 fn column_delete_removes_one_separator_and_keeps_single_field_records() {
     let table = parse("a,b,c\nx,y\nq\n", 18);
     assert_eq!(
-        edited(
-            &table,
-            CsvEdit::DeleteColumn {
-                at: 1,
-            }
-        ),
+        edited(&table, CsvEdit::DeleteColumn { at: 1 }),
         "a,c\nx\nq\n"
     );
     assert_eq!(
-        edited(
-            &table,
-            CsvEdit::DeleteColumn {
-                at: 2,
-            }
-        ),
+        edited(&table, CsvEdit::DeleteColumn { at: 2 }),
         "a,b\nx,y\nq\n"
     );
     let table = parse("q\nr\n", 19);
     assert_eq!(
-        edited(
-            &table,
-            CsvEdit::DeleteColumn {
-                at: 0,
-            }
-        ),
+        edited(&table, CsvEdit::DeleteColumn { at: 0 }),
         "\"\"\n\"\"\n"
     );
     let after = parse("\"\"\n", 20);
@@ -439,24 +418,26 @@ fn column_delete_removes_one_separator_and_keeps_single_field_records() {
 fn a_stale_revision_is_refused_without_producing_edits() {
     let table = parse("a,b\n", 21);
     assert_eq!(
-        table.edit(
-            22,
-            CsvEdit::Cell {
-                cell: cell(0, 0),
-                value: "x".into(),
-            }
-        )
-        .err(),
+        table
+            .edit(
+                22,
+                CsvEdit::Cell {
+                    cell: cell(0, 0),
+                    value: "x".into(),
+                }
+            )
+            .err(),
         Some(CsvEditError::Stale)
     );
     assert_eq!(
-        table.edit(
-            22,
-            CsvEdit::DeleteRow {
-                at: CsvRecordId::from_index(0),
-            }
-        )
-        .err(),
+        table
+            .edit(
+                22,
+                CsvEdit::DeleteRow {
+                    at: CsvRecordId::from_index(0),
+                }
+            )
+            .err(),
         Some(CsvEditError::Stale)
     );
 }
@@ -465,35 +446,31 @@ fn a_stale_revision_is_refused_without_producing_edits() {
 fn out_of_range_targets_are_missing_not_guessed() {
     let table = parse("a,b\n", 23);
     assert_eq!(
-        table.edit(
-            23,
-            CsvEdit::Cell {
-                cell: cell(1, 0),
-                value: "x".into(),
-            }
-        )
-        .err(),
+        table
+            .edit(
+                23,
+                CsvEdit::Cell {
+                    cell: cell(1, 0),
+                    value: "x".into(),
+                }
+            )
+            .err(),
         Some(CsvEditError::Missing)
     );
     assert_eq!(
-        table.edit(
-            23,
-            CsvEdit::Cell {
-                cell: cell(0, 2),
-                value: "x".into(),
-            }
-        )
-        .err(),
+        table
+            .edit(
+                23,
+                CsvEdit::Cell {
+                    cell: cell(0, 2),
+                    value: "x".into(),
+                }
+            )
+            .err(),
         Some(CsvEditError::Missing)
     );
     assert_eq!(
-        table.edit(
-            23,
-            CsvEdit::DeleteColumn {
-                at: 2,
-            }
-        )
-        .err(),
+        table.edit(23, CsvEdit::DeleteColumn { at: 2 }).err(),
         Some(CsvEditError::Missing)
     );
 }
@@ -527,10 +504,7 @@ fn clipboard_parsing_handles_quoted_tabs_newlines_and_ragged_rows() {
             vec!["x".to_owned(), "y".to_owned()],
         ]
     );
-    assert_eq!(
-        parse_clipboard("one\n"),
-        vec![vec!["one".to_owned()]]
-    );
+    assert_eq!(parse_clipboard("one\n"), vec![vec!["one".to_owned()]]);
     assert_eq!(parse_clipboard(""), Vec::<Vec<String>>::new());
     // 无法解析的引号退回单格原文，不丢弃用户复制的内容。
     assert_eq!(

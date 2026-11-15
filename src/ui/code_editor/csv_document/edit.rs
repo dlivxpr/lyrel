@@ -60,11 +60,7 @@ impl CsvMutation {
 impl CsvTable {
     /// 计算一次局部编辑。`revision` 是调用方当前文档的 revision；不相等时
     /// 拒绝，而不是把旧区间写进新源文。
-    pub(crate) fn edit(
-        &self,
-        revision: u64,
-        edit: CsvEdit,
-    ) -> Result<CsvMutation, CsvEditError> {
+    pub(crate) fn edit(&self, revision: u64, edit: CsvEdit) -> Result<CsvMutation, CsvEditError> {
         if revision != self.revision() {
             return Err(CsvEditError::Stale);
         }
@@ -205,10 +201,12 @@ impl CsvTable {
                 .ok_or(CsvEditError::Missing)?;
             let fields = record.field_count();
             let offset = match column.cmp(&fields) {
-                std::cmp::Ordering::Less => record
-                    .field_span(column)
-                    .ok_or(CsvEditError::Missing)?
-                    .start,
+                std::cmp::Ordering::Less => {
+                    record
+                        .field_span(column)
+                        .ok_or(CsvEditError::Missing)?
+                        .start
+                }
                 std::cmp::Ordering::Equal => record.span().end,
                 // 短记录没有这一列；让它继续保持缺失，而不是补出中间字段。
                 std::cmp::Ordering::Greater => continue,
@@ -239,7 +237,9 @@ impl CsvTable {
                         replacements.push((span, "\"\"".to_owned()));
                     }
                 }
-                _ if at + 1 < fields => replacements.push((span.start..span.end + 1, String::new())),
+                _ if at + 1 < fields => {
+                    replacements.push((span.start..span.end + 1, String::new()))
+                }
                 _ => replacements.push((span.start - 1..span.end, String::new())),
             }
         }
@@ -278,7 +278,10 @@ impl CsvTable {
             return None;
         }
         let first_column = anchor.column().min(cursor.column());
-        let last_column = anchor.column().max(cursor.column()).min(self.column_count() - 1);
+        let last_column = anchor
+            .column()
+            .max(cursor.column())
+            .min(self.column_count() - 1);
         if first_record == last_record && first_column == last_column {
             return self.cell_value(CsvCellId::new(first_record, first_column));
         }

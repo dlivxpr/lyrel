@@ -1366,8 +1366,7 @@ impl EditorState {
         self.finish_composition(cx);
         let document = self.document.clone();
         let origin = cx.entity_id();
-        let Some((snapshot, caret)) =
-            document.update(cx, |document, cx| document.undo(origin, cx))
+        let Some((snapshot, caret)) = document.update(cx, |document, cx| document.undo(origin, cx))
         else {
             return false;
         };
@@ -1380,8 +1379,7 @@ impl EditorState {
         self.finish_composition(cx);
         let document = self.document.clone();
         let origin = cx.entity_id();
-        let Some((snapshot, caret)) =
-            document.update(cx, |document, cx| document.redo(origin, cx))
+        let Some((snapshot, caret)) = document.update(cx, |document, cx| document.redo(origin, cx))
         else {
             return false;
         };

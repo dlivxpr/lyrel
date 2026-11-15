@@ -694,7 +694,8 @@ impl CsvView {
         let count = self.table(cx).map(|table| table.record_count());
         // 输入开始后源文被外部重载或另一呈现修改时，这份文本属于旧 revision，
         // 不能写回新表格。
-        let stale = self.editing_revision != Some(self.document.read(cx).document().read(cx).revision());
+        let stale =
+            self.editing_revision != Some(self.document.read(cx).document().read(cx).revision());
         self.editing_revision = None;
         if !stale && self.apply_edit(CsvEdit::Cell { cell, value }, cx) {
             if let (Some(step), Some(count)) = (advance, count) {
@@ -731,7 +732,9 @@ impl CsvView {
         };
         if mutation.changed() {
             let source = self.source.clone();
-            source.update(cx, |source, cx| source.replace_ranges(mutation.replacements, cx));
+            source.update(cx, |source, cx| {
+                source.replace_ranges(mutation.replacements, cx)
+            });
         }
         cx.notify();
         true
@@ -741,11 +744,7 @@ impl CsvView {
         self.selection = Some(CsvCellId::new(record, column));
         self.anchor = self.selection;
         self.column_start = (column / COLUMN_WINDOW) * COLUMN_WINDOW;
-        if let Some(position) = self
-            .order
-            .iter()
-            .position(|candidate| *candidate == record)
-        {
+        if let Some(position) = self.order.iter().position(|candidate| *candidate == record) {
             self.scroll
                 .scroll_to_item(position, ScrollStrategy::Nearest);
         }
@@ -2055,19 +2054,17 @@ impl Render for CsvView {
                 .on_action(cx.listener(|this, _: &EditCell, window, cx| {
                     this.begin_edit_selected(window, cx)
                 }))
-                .on_action(cx.listener(|this, _: &InsertRowAbove, _, cx| {
-                    this.insert_row(false, cx)
-                }))
-                .on_action(cx.listener(|this, _: &InsertRowBelow, _, cx| {
-                    this.insert_row(true, cx)
-                }))
+                .on_action(
+                    cx.listener(|this, _: &InsertRowAbove, _, cx| this.insert_row(false, cx)),
+                )
+                .on_action(cx.listener(|this, _: &InsertRowBelow, _, cx| this.insert_row(true, cx)))
                 .on_action(cx.listener(|this, _: &DeleteRow, _, cx| this.delete_row(cx)))
-                .on_action(cx.listener(|this, _: &InsertColumnLeft, _, cx| {
-                    this.insert_column(false, cx)
-                }))
-                .on_action(cx.listener(|this, _: &InsertColumnRight, _, cx| {
-                    this.insert_column(true, cx)
-                }))
+                .on_action(
+                    cx.listener(|this, _: &InsertColumnLeft, _, cx| this.insert_column(false, cx)),
+                )
+                .on_action(
+                    cx.listener(|this, _: &InsertColumnRight, _, cx| this.insert_column(true, cx)),
+                )
                 .on_action(cx.listener(|this, _: &DeleteColumn, _, cx| this.delete_column(cx)))
                 .on_action(cx.listener(
                     |this, _: &gpui_kit::component::input::Escape, window, cx| {
@@ -2141,7 +2138,11 @@ pub(super) fn menu_entries(
         .item(reveal);
     match mode {
         CsvMode::Table => menu
-            .menu_with_disabled(t(L10nKey::EditorCsvEditCell), Box::new(EditCell), !has_selection)
+            .menu_with_disabled(
+                t(L10nKey::EditorCsvEditCell),
+                Box::new(EditCell),
+                !has_selection,
+            )
             .separator()
             .menu_with_disabled(
                 t(L10nKey::EditorCsvInsertRowAbove),

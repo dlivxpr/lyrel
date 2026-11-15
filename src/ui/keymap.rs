@@ -222,8 +222,8 @@ fn fixed_bindings(cx: &App) -> Vec<KeyBinding> {
     // shell, the terminal or the source side of the same document.
     {
         use crate::ui::code_editor::{
-            CsvDeleteColumn, CsvDeleteRow, CsvEditCell, CsvInsertColumnLeft,
-            CsvInsertColumnRight, CsvInsertRowAbove, CsvInsertRowBelow, CSV_KEY_CONTEXT,
+            CSV_KEY_CONTEXT, CsvDeleteColumn, CsvDeleteRow, CsvEditCell, CsvInsertColumnLeft,
+            CsvInsertColumnRight, CsvInsertRowAbove, CsvInsertRowBelow,
         };
         let csv = Some(CSV_KEY_CONTEXT);
         bindings.extend([

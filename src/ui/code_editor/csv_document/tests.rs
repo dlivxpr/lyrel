@@ -389,10 +389,7 @@ fn value(
     })
 }
 
-fn table_state(
-    app: &Entity<LyrelApp>,
-    cx: &VisualTestContext,
-) -> Option<(usize, usize)> {
+fn table_state(app: &Entity<LyrelApp>, cx: &VisualTestContext) -> Option<(usize, usize)> {
     view(app, cx).read_with(cx, |view, cx| view.facts(cx))
 }
 
@@ -405,9 +402,10 @@ fn cell_input_undo_redo_save_and_reopen_preserve_untouched_bytes(tcx: &mut TestA
     let decoy = root.path().join("editable.csv");
     std::fs::write(&decoy, b"LOCAL DECOY").unwrap();
     let owner_file = remote.path().join("editable.csv");
-    let original = "\u{feff}name,value,note\r\na,\"b,c\",\"line 1\nline 2\"\r\nq,1\nragged,only\r\n"
-        .as_bytes()
-        .to_vec();
+    let original =
+        "\u{feff}name,value,note\r\na,\"b,c\",\"line 1\nline 2\"\r\nq,1\nragged,only\r\n"
+            .as_bytes()
+            .to_vec();
     std::fs::write(&owner_file, &original).unwrap();
     let host = FileHost::mapped(HostId(288101), remote.path());
     let (app, mut cx, _streams) = harness_with_tabs(tcx, 1);
@@ -419,7 +417,8 @@ fn cell_input_undo_redo_save_and_reopen_preserve_untouched_bytes(tcx: &mut TestA
 
     edit_cell(&mut cx, id, 1, 1, "更新");
     until(&mut cx, |cx| {
-        value(&app, cx, 1, 1).as_deref() == Some("更新") && !view(&app, cx).read_with(cx, |v, cx| v.is_parsing(cx))
+        value(&app, cx, 1, 1).as_deref() == Some("更新")
+            && !view(&app, cx).read_with(cx, |v, cx| v.is_parsing(cx))
     });
     assert_eq!(
         source(&app, &cx),
@@ -558,8 +557,7 @@ fn row_and_column_operations_are_single_atomic_source_edits(tcx: &mut TestAppCon
     settle(&mut cx);
     cx.update(|window, cx| window.press(&chord("shift-down"), cx));
     until(&mut cx, |cx| {
-        table_state(&app, cx) == Some((4, 2))
-            && source(&app, cx) == "a,b\nc,d\n,\ne\n"
+        table_state(&app, cx) == Some((4, 2)) && source(&app, cx) == "a,b\nc,d\n,\ne\n"
     });
     assert_eq!(value(&app, &cx, 2, 0).as_deref(), Some(""));
     cx.update(|window, cx| window.press(&chord("z"), cx));
@@ -568,8 +566,7 @@ fn row_and_column_operations_are_single_atomic_source_edits(tcx: &mut TestAppCon
     });
     cx.update(|window, cx| window.press(&chord("shift-z"), cx));
     until(&mut cx, |cx| {
-        table_state(&app, cx) == Some((4, 2))
-            && source(&app, cx) == "a,b\nc,d\n,\ne\n"
+        table_state(&app, cx) == Some((4, 2)) && source(&app, cx) == "a,b\nc,d\n,\ne\n"
     });
     cx.update(|window, cx| window.press(&chord("z"), cx));
     until(&mut cx, |cx| {
@@ -642,9 +639,7 @@ fn row_and_column_operations_are_single_atomic_source_edits(tcx: &mut TestAppCon
 }
 
 #[gpui_kit::test]
-fn split_source_and_table_keep_their_own_selection_and_share_history(
-    tcx: &mut TestAppContext,
-) {
+fn split_source_and_table_keep_their_own_selection_and_share_history(tcx: &mut TestAppContext) {
     crate::ui::i18n::set_locale("en");
     let dir = canonical_tempdir();
     let path = dir.path().join("split.csv");
@@ -690,9 +685,9 @@ fn split_source_and_table_keep_their_own_selection_and_share_history(
     until(&mut cx, |cx| {
         other.read_with(cx, |view, cx| {
             !view.is_parsing(cx)
-                && view
-                    .table(cx)
-                    .is_some_and(|table| table.cell_value(CsvCellId::new(1, 1)).as_deref() == Some("X"))
+                && view.table(cx).is_some_and(|table| {
+                    table.cell_value(CsvCellId::new(1, 1)).as_deref() == Some("X")
+                })
         })
     });
     // Both presentations read the same authoritative source.
@@ -706,20 +701,17 @@ fn split_source_and_table_keep_their_own_selection_and_share_history(
             .to_owned()),
         "a,b\nc,X\n"
     );
-    assert_eq!(front.read_with(&cx, |view, cx| view.selected_range(cx)), 0..2);
+    assert_eq!(
+        front.read_with(&cx, |view, cx| view.selected_range(cx)),
+        0..2
+    );
     cx.update(|window, cx| {
         assert!(
-            other
-                .read(cx)
-                .focus_handle(cx)
-                .contains_focused(window, cx),
+            other.read(cx).focus_handle(cx).contains_focused(window, cx),
             "the edited table keeps its own focus"
         );
         assert!(
-            !front
-                .read(cx)
-                .focus_handle(cx)
-                .contains_focused(window, cx),
+            !front.read(cx).focus_handle(cx).contains_focused(window, cx),
             "the other presentation's focus is untouched"
         );
     });
@@ -737,7 +729,10 @@ fn split_source_and_table_keep_their_own_selection_and_share_history(
                 == "a,b\nc,d\n"
         })
     });
-    assert_eq!(front.read_with(&cx, |view, cx| view.selected_range(cx)), 0..2);
+    assert_eq!(
+        front.read_with(&cx, |view, cx| view.selected_range(cx)),
+        0..2
+    );
     cx.update(|window, cx| window.press(&chord("shift-z"), cx));
     until(&mut cx, |cx| {
         front.read_with(cx, |view, cx| {
@@ -750,7 +745,10 @@ fn split_source_and_table_keep_their_own_selection_and_share_history(
                 == "a,b\nc,X\n"
         })
     });
-    assert_eq!(front.read_with(&cx, |view, cx| view.selected_range(cx)), 0..2);
+    assert_eq!(
+        front.read_with(&cx, |view, cx| view.selected_range(cx)),
+        0..2
+    );
 }
 
 #[gpui_kit::test]
@@ -876,7 +874,10 @@ fn table_edit_save_as_paused_save_and_close_keep_the_owning_host(tcx: &mut TestA
         "a completed old save does not mark newer edits clean"
     );
     save(&app, &mut cx);
-    assert_eq!(std::fs::read(&copy_file).unwrap(), b"first,third\nc,second\n");
+    assert_eq!(
+        std::fs::read(&copy_file).unwrap(),
+        b"first,third\nc,second\n"
+    );
     assert_eq!(std::fs::read(&owner_file).unwrap(), b"a,b\nc,d\n");
     assert_eq!(std::fs::read(&decoy).unwrap(), b"LOCAL DECOY");
 
@@ -946,7 +947,8 @@ fn table_edit_failed_save_cancelled_close_and_dirty_conflict_preserve_edits(
     std::fs::write(&path, b"x,y\nz,w\n").unwrap();
     until(&mut cx, |cx| {
         app.read_with(cx, |app, _| {
-            app.active_buffer().is_some_and(|file| file.conflict.is_some())
+            app.active_buffer()
+                .is_some_and(|file| file.conflict.is_some())
         })
     });
     assert!(app.read_with(&cx, |app, _| app.active_buffer().unwrap().dirty));
@@ -957,9 +959,7 @@ fn table_edit_failed_save_cancelled_close_and_dirty_conflict_preserve_edits(
 }
 
 #[gpui_kit::test]
-fn a_cell_editor_opened_before_a_reload_does_not_write_its_stale_value(
-    tcx: &mut TestAppContext,
-) {
+fn a_cell_editor_opened_before_a_reload_does_not_write_its_stale_value(tcx: &mut TestAppContext) {
     crate::ui::i18n::set_locale("en");
     let dir = canonical_tempdir();
     let path = dir.path().join("reload.csv");
@@ -986,8 +986,7 @@ fn a_cell_editor_opened_before_a_reload_does_not_write_its_stale_value(
         app.editor_reload_from_disk(buffer, window, cx)
     });
     until(&mut cx, |cx| {
-        source(&app, cx) == "x,b\nc,d\n"
-            && !view(&app, cx).read_with(cx, |v, cx| v.is_parsing(cx))
+        source(&app, cx) == "x,b\nc,d\n" && !view(&app, cx).read_with(cx, |v, cx| v.is_parsing(cx))
     });
 
     // The open input belongs to the previous revision; committing it must not
