@@ -13,7 +13,7 @@ use crate::archive::{self, Archive};
 use crate::decode::{decode, xml};
 use crate::limits::Limits;
 use crate::opf;
-use crate::sanitize::{sanitize_chapter, BlockFragment, Omissions};
+use crate::sanitize::{BlockFragment, Omissions, sanitize_chapter};
 use crate::{CancellationToken, EpubError};
 
 /// Bibliographic metadata. Never used as document identity: a Host-scoped
@@ -241,10 +241,7 @@ pub(crate) fn read_chapter<R: Read + Seek>(
 /// Maps a TOC or internal href to its spine index and optional fragment.
 pub fn locate(book: &EpubBook, href: &str) -> Option<(usize, Option<String>)> {
     let (path, fragment) = archive::split_fragment(href);
-    let index = book
-        .spine
-        .iter()
-        .position(|item| item.href == path)?;
+    let index = book.spine.iter().position(|item| item.href == path)?;
     Some((index, fragment.map(str::to_owned)))
 }
 

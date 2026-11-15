@@ -263,11 +263,9 @@ impl BookView {
             .map(|block| block.text.as_str())
     }
 
-
     pub(crate) fn search_results(&self) -> &[SearchHit] {
         &self.results
     }
-
 
     pub(crate) fn chapter_label(&self, cx: &App) -> SharedString {
         t_fmt(
@@ -1316,7 +1314,8 @@ impl BookView {
                 );
             }
             element.into_any_element()
-        }).size_full();
+        })
+        .size_full();
         let scrollbar = crate::ui::scrollbar::with_vertical_scrollbar(
             "book-side-scrollbar",
             body,
@@ -1371,7 +1370,11 @@ impl BookView {
                         .child(t(L10nKey::EditorBookNoBookmarks))
                         .into_any_element()
                 } else {
-                    v_flex().flex_1().min_h_0().child(scrollbar).into_any_element()
+                    v_flex()
+                        .flex_1()
+                        .min_h_0()
+                        .child(scrollbar)
+                        .into_any_element()
                 }
             })
             .into_any_element()
@@ -1526,7 +1529,8 @@ impl BookView {
                         .child(body),
                 )
                 .into_any_element()
-        }).size_full();
+        })
+        .size_full();
         let scrollbar = crate::ui::scrollbar::with_vertical_scrollbar(
             "book-content-scrollbar",
             rows,

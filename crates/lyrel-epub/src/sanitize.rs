@@ -123,9 +123,7 @@ pub fn html_with_marks(block: &BlockFragment, ranges: &[Range<usize>], color: &s
                     }
                     let next = [
                         open_until.unwrap_or(usize::MAX),
-                        ranges
-                            .get(range_ix)
-                            .map_or(usize::MAX, |range| range.start),
+                        ranges.get(range_ix).map_or(usize::MAX, |range| range.start),
                         event_end,
                     ]
                     .into_iter()
@@ -148,10 +146,7 @@ pub fn html_with_marks(block: &BlockFragment, ranges: &[Range<usize>], color: &s
 
 fn mark_color(value: &str) -> String {
     let valid = value.len() == 7 || value.len() == 9;
-    if valid
-        && value.starts_with('#')
-        && value[1..].bytes().all(|byte| byte.is_ascii_hexdigit())
-    {
+    if valid && value.starts_with('#') && value[1..].bytes().all(|byte| byte.is_ascii_hexdigit()) {
         value.to_owned()
     } else {
         "yellow".into()
@@ -217,7 +212,10 @@ impl Sanitizer<'_> {
     fn flatten_children(&mut self, parent: Node<'_, '_>, depth: usize) -> Result<(), EpubError> {
         self.cancel.check()?;
         if depth > self.limits.html_depth {
-            return Err(EpubError::limit("HTML depth", self.limits.html_depth as u64));
+            return Err(EpubError::limit(
+                "HTML depth",
+                self.limits.html_depth as u64,
+            ));
         }
         for child in parent.children() {
             if child.is_text() {
@@ -341,10 +339,7 @@ impl Sanitizer<'_> {
             images: std::mem::take(&mut builder.images),
         };
         for id in self.pending_anchors.drain(..) {
-            fragment.anchors.push(Anchor {
-                id,
-                text_offset: 0,
-            });
+            fragment.anchors.push(Anchor { id, text_offset: 0 });
         }
         self.blocks.push(fragment);
         Ok(())
@@ -428,7 +423,8 @@ impl Builder {
             }
         }
         if self.text.is_empty() {
-            self.parts.retain(|part| !matches!(part, Part::Text(text) if text.is_empty()));
+            self.parts
+                .retain(|part| !matches!(part, Part::Text(text) if text.is_empty()));
         }
         self.last_space = self.text.ends_with(' ');
     }
@@ -532,7 +528,9 @@ impl Builder {
         if matches!(tag, "td" | "th") {
             for (name, max) in [("colspan", 1000), ("rowspan", 65534)] {
                 if let Some(value) = attribute(node, name)
-                    && value.parse::<u32>().is_ok_and(|number| number >= 1 && number <= max)
+                    && value
+                        .parse::<u32>()
+                        .is_ok_and(|number| number >= 1 && number <= max)
                 {
                     self.push_html(" ");
                     self.push_html(name);
@@ -661,7 +659,10 @@ fn is_dropped(tag: &str) -> bool {
 }
 
 fn is_transparent(tag: &str) -> bool {
-    matches!(tag, "div" | "section" | "article" | "main" | "header" | "footer" | "aside" | "nav")
+    matches!(
+        tag,
+        "div" | "section" | "article" | "main" | "header" | "footer" | "aside" | "nav"
+    )
 }
 
 fn is_block_tag(tag: &str) -> bool {
@@ -802,14 +803,15 @@ mod tests {
         limits.block_bytes = 64;
         let text = format!("<html><body><p>{}</p></body></html>", "word ".repeat(100));
         let document = roxmltree::Document::parse(&text).unwrap();
-        let error = sanitize_chapter(
-            &document,
-            "c.xhtml",
-            &limits,
-            &CancellationToken::new(),
-        )
-        .unwrap_err();
-        assert!(matches!(error, EpubError::Limit { resource: "block bytes", .. }));
+        let error =
+            sanitize_chapter(&document, "c.xhtml", &limits, &CancellationToken::new()).unwrap_err();
+        assert!(matches!(
+            error,
+            EpubError::Limit {
+                resource: "block bytes",
+                ..
+            }
+        ));
     }
 
     #[test]

@@ -366,11 +366,9 @@ impl BookDocument {
         }
     }
 
-
     pub(crate) fn path(&self) -> &Path {
         &self.path
     }
-
 
     pub(crate) fn state(&self) -> &BookState {
         &self.state
@@ -689,7 +687,10 @@ impl BookDocument {
                     return;
                 }
             }
-            match cx.background_spawn(async move { BookText::new(chapters, &limits) }).await {
+            match cx
+                .background_spawn(async move { BookText::new(chapters, &limits) })
+                .await
+            {
                 Ok(text) => {
                     let _ = this.update(cx, |document, cx| {
                         if document.index_generation == generation {
