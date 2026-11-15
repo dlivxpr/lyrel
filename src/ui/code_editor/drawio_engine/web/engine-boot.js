@@ -1,9 +1,9 @@
 /*
  * Runs before the vendored draw.io viewer bundle.
  *
- * The viewer's own defaults point at viewer.diagrams.net. Nothing in this
- * process is allowed to leave the frozen https://drawio.lyrel.invalid origin,
- * so every resource base is redirected under that origin where the native
+ * The viewer's own defaults point at public diagram hosts. Nothing in this
+ * process is allowed to leave the frozen https://drawio.lyrel.invalid origin, so
+ * every resource base is redirected under that origin where the native
  * request handler answers 403. The response CSP is the second, independent
  * gate; neither one relies on the document or the engine behaving well.
  */

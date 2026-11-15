@@ -126,6 +126,6 @@
   },
   "platform_host": {
     "windows": "webview2-com 0.39.1 + windows 0.62.2, direct ICoreWebView2_22 filter, verified at runtime that the interface exists and fails closed otherwise",
-    "macos": "not implemented in this slice; the surface reports that truthfully and no engine is started"
+    "macos": "wry 0.57.2 wraps a real WKWebView; custom lyrel://app scheme serves the same manifest, incognito data store, CSP response headers, navigation/new-window/download/permission/drag handlers, IPC token/session validation. Source is compiled only on macOS and has not been run locally or in CI; WebKit custom-scheme origin/CSP behavior remains to be verified."
   }
 }

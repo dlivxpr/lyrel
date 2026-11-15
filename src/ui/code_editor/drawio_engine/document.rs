@@ -88,16 +88,23 @@ pub(crate) fn looks_like_drawio(bytes: &[u8]) -> bool {
     let Ok(text) = std::str::from_utf8(prefix) else {
         return false;
     };
-    if !text.trim_start().starts_with('<') {
-        return false;
+    let mut text = text.trim_start();
+    if let Some(rest) = text.strip_prefix("<?xml") {
+        let Some(end) = rest.find("?>") else {
+            return false;
+        };
+        text = rest[end + 2..].trim_start();
     }
-    text.contains("<mxfile") || text.contains("<mxGraphModel")
+    text.starts_with("<mxfile") || text.starts_with("<mxGraphModel")
 }
 
 pub(crate) fn parse(bytes: &[u8]) -> Result<DrawioSource, DrawioError> {
     if bytes.len() > MAX_DOCUMENT_BYTES {
         return Err(DrawioError::TooLarge);
     }
+    // Identity is the file's bytes, including a UTF-8 BOM. Only the XML text
+    // view drops the BOM.
+    let digest = sha256_hex(bytes);
     let bytes = bytes.strip_prefix(b"\xef\xbb\xbf").unwrap_or(bytes);
     let text = std::str::from_utf8(bytes).map_err(|_| DrawioError::NotUtf8)?;
     if text.trim().is_empty() {
@@ -144,7 +151,7 @@ pub(crate) fn parse(bytes: &[u8]) -> Result<DrawioSource, DrawioError> {
             RootKind::Model
         },
         pages,
-        sha256: sha256_hex(bytes),
+        sha256: digest,
     })
 }
 
@@ -214,8 +221,8 @@ mod tests {
     use super::*;
 
     const UNCOMPRESSED: &str = r#"<mxfile host="lyrel.test">
-  <diagram id="one" name="Flow"><?xml version="1.0"?><mxGraphModel><root><mxCell id="0"/><mxCell id="1" parent="0"/></root></mxGraphModel></diagram>
-  <diagram id="two" name="Second"><?xml version="1.0"?><mxGraphModel><root><mxCell id="0"/></root></mxGraphModel></diagram>
+  <diagram id="one" name="Flow"><mxGraphModel><root><mxCell id="0"/><mxCell id="1" parent="0"/></root></mxGraphModel></diagram>
+  <diagram id="two" name="Second"><mxGraphModel><root><mxCell id="0"/></root></mxGraphModel></diagram>
 </mxfile>"#;
 
     const COMPRESSED: &str = r#"<mxfile host="lyrel.test">

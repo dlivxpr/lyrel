@@ -274,6 +274,11 @@ libc = "0.2.191"
 # app appearance to match the active theme (see `ui::theme::sync_native_appearance`)
 # so the native traffic-light buttons render in the right light/dark style.
 [target.'cfg(target_os = "macos")'.dependencies]
+# The draw.io preview's macOS child surface. Wry wraps a real WKWebView for
+# this one engine; Windows still uses its own WebView2 host so the stricter
+# resource filter exists on both platforms.
+wry = { version = "=0.57.2", default-features = false }
+raw-window-handle = "0.6"
 # CFStringTokenizer FFI for dictionary-based CJK word segmentation on
 # double-click (`terminal::smart_select`). Already in the tree transitively,
 # and it makes the Windows jieba fallback unnecessary here.

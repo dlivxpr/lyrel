@@ -792,6 +792,7 @@ impl Render for DrawioView {
                                 }
                             }
                         })
+                        .id("drawio-canvas")
                         .test_support();
                     let overlay = if !matches!(engine, EngineStatus::Ready) && !surface_started {
                         Some(

@@ -11,9 +11,12 @@
     "use strict";
 
     var webview = window.chrome && window.chrome.webview ? window.chrome.webview : null;
+    var ipc = window.ipc;
     var nativePost = webview && typeof webview.postMessage === "function"
         ? webview.postMessage.bind(webview)
-        : null;
+        : (ipc && typeof ipc.postMessage === "function"
+            ? ipc.postMessage.bind(ipc)
+            : null);
     var nativeListen = webview && typeof webview.addEventListener === "function"
         ? webview.addEventListener.bind(webview)
         : null;
@@ -186,35 +189,39 @@
         }
     });
 
+    function handleNativeMessage(input) {
+        var message = input;
+        if (typeof message === "string") {
+            try {
+                message = jsonParse(message);
+            } catch (error) {
+                return;
+            }
+        }
+        if (!message || typeof message !== "object" || message.v !== 1) {
+            return;
+        }
+        if (session === null || message.session !== session) {
+            return;
+        }
+        if (typeof message.seq !== "number" || !Number.isInteger(message.seq) ||
+            message.seq <= lastNativeSeq) {
+            return;
+        }
+        lastNativeSeq = message.seq;
+        if (message.cmd === "page" && typeof message.page === "number" &&
+            Number.isInteger(message.page) && message.page >= 0) {
+            pendingPage = message.page;
+            postToEngine({ v: 1, kind: "page", page: pendingPage });
+        } else if (message.cmd === "fit" || message.cmd === "zoomIn" ||
+            message.cmd === "zoomOut" || message.cmd === "actual") {
+            postToEngine({ v: 1, kind: message.cmd });
+        }
+    }
+
     if (nativeListen !== null) {
         nativeListen("message", function (event) {
-            var message = event.data;
-            if (typeof message === "string") {
-                try {
-                    message = jsonParse(message);
-                } catch (error) {
-                    return;
-                }
-            }
-            if (!message || typeof message !== "object" || message.v !== 1) {
-                return;
-            }
-            if (session === null || message.session !== session) {
-                return;
-            }
-            if (typeof message.seq !== "number" || !Number.isInteger(message.seq) ||
-                message.seq <= lastNativeSeq) {
-                return;
-            }
-            lastNativeSeq = message.seq;
-            if (message.cmd === "page" && typeof message.page === "number" &&
-                Number.isInteger(message.page) && message.page >= 0) {
-                pendingPage = message.page;
-                postToEngine({ v: 1, kind: "page", page: pendingPage });
-            } else if (message.cmd === "fit" || message.cmd === "zoomIn" ||
-                message.cmd === "zoomOut" || message.cmd === "actual") {
-                postToEngine({ v: 1, kind: message.cmd });
-            }
+            handleNativeMessage(event.data);
         });
     }
 
@@ -243,7 +250,12 @@
     }
 
     defineProperty(window, "__lyrel", {
-        value: freeze({ bind: bind }),
+        value: freeze({
+            bind: bind,
+            // macOS has no chrome.webview event channel; the native side
+            // evaluates this function after the top frame finishes loading.
+            nativeMessage: handleNativeMessage
+        }),
         writable: false,
         configurable: false,
         enumerable: false

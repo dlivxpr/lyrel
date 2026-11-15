@@ -221,7 +221,7 @@ Markdown 的每个标签页／编辑组各自保留光标、选择、滚动、�
 | TOML | 结构树与源码相互定位 | 表、数组表、键和值的增删改；保留注释、日期／时间类型和表结构，不任意互转普通表与内联表 |
 | XML | 结构树与源码相互定位，混合内容按原顺序表示 | 元素、属性、文本节点的增删改；保留命名空间、注释和 CDATA，不获取外部 DTD，不解析外部实体 |
 | SQLite | 表／视图、schema、分页记录、筛选、排序与完整单元格查看 | 所属 Host 上的只读查询，只传必要结果；不下载整个远端库，不修改源库，不执行任意写 SQL 或加载扩展；不增加自由 SQL 控制台 |
-| draw.io | #297：固定版本本机 viewer 引擎的离线只读预览，含多页、压缩／非压缩内容、页与缩放控件；引擎字节、来源哈希和分发 notice 固定在 `assets/drawio` | #298 再接可视化编辑、dirty／undo／保存与冲突；不以有限基本形状渲染器或 Zorite 白板替代。查看器不分发 `extensions.min.js`／MathJax／模板／字体，相关图会如实失败；Windows 原生 surface 待实窗验收，macOS 尚无宿主 |
+| draw.io | #297：固定版本本机 viewer 引擎的离线只读预览，含多页、压缩／非压缩内容、页与缩放控件；引擎字节、来源哈希和分发 notice 固定在 `assets/drawio` | #298 再接可视化编辑、dirty／undo／保存与冲突；不以有限基本形状渲染器或 Zorite 白板替代。查看器不分发 `extensions.min.js`／MathJax／模板／字体，相关图会如实失败；Windows 原生 surface 待实窗验收，macOS 已有 wry WKWebView 宿主源码但未在本机/CI 运行 |
 
 Office 与 Notebook 整项排除本轮：不新增 DOC／DOCX、XLS／XLSX、PPT／PPTX 的专用预览或编辑，也不新增 `.ipynb` 专用阅读、单元格编辑、kernel、执行会话或 Plotly 输出。不新增 HTML 网页、音视频、压缩包、字体、其他电子书或专业设计格式。已有普通文本／源码、Markdown 和系统外部打开行为不因排除清单而删除。
 

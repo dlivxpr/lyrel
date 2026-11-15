@@ -59,6 +59,20 @@ impl std::fmt::Display for SurfaceError {
 pub(crate) struct ParentWindow {
     #[cfg(windows)]
     hwnd: windows::Win32::Foundation::HWND,
+    #[cfg(target_os = "macos")]
+    view: raw_window_handle::AppKitWindowHandle,
+}
+
+#[cfg(target_os = "macos")]
+impl raw_window_handle::HasWindowHandle for ParentWindow {
+    fn window_handle(
+        &self,
+    ) -> Result<raw_window_handle::WindowHandle<'_>, raw_window_handle::HandleError> {
+        let raw = raw_window_handle::RawWindowHandle::AppKit(self.view);
+        // The handle stays valid while the GPUI window that produced it is
+        // alive; the surface is dropped with its presentation.
+        Ok(unsafe { raw_window_handle::WindowHandle::borrow_raw(raw) })
+    }
 }
 
 impl ParentWindow {
@@ -74,23 +88,34 @@ impl ParentWindow {
                 _ => Err(SurfaceError::Window),
             };
         }
-        #[cfg(not(windows))]
+        #[cfg(target_os = "macos")]
+        {
+            let handle = raw_window_handle::HasWindowHandle::window_handle(window)
+                .map_err(|_| SurfaceError::Window)?;
+            return match handle.as_raw() {
+                raw_window_handle::RawWindowHandle::AppKit(handle) => Ok(Self { view: handle }),
+                _ => Err(SurfaceError::Window),
+            };
+        }
+        #[cfg(not(any(windows, target_os = "macos")))]
         {
             let _ = window;
             Err(SurfaceError::Unsupported(
-                "the draw.io preview engine has no macOS host in this build",
+                "the draw.io preview engine has no host on this platform",
             ))
         }
     }
 }
 
-/// Creates and owns one WebView2 child surface. Dropping it closes the
-/// controller, destroys the child window, retires the session and removes the
-/// private data directory.
+/// Creates and owns one native child surface. Windows uses WebView2 directly;
+/// macOS uses a WKWebView through wry's registry host. Both expose the same
+/// session, bridge, asset and lifecycle contract.
 pub(crate) struct SurfaceHost {
     #[cfg(windows)]
     inner: windows_host::Host,
-    #[cfg(not(windows))]
+    #[cfg(target_os = "macos")]
+    inner: macos_host::Host,
+    #[cfg(not(any(windows, target_os = "macos")))]
     _unsupported: std::marker::PhantomData<()>,
 }
 
@@ -109,11 +134,17 @@ impl SurfaceHost {
             return windows_host::Host::start(parent, bounds, scale, document, theme, events)
                 .map(|inner| Self { inner });
         }
-        #[cfg(not(windows))]
+        #[cfg(target_os = "macos")]
+        {
+            let _ = scale;
+            return macos_host::Host::start(parent, bounds, document, theme, events)
+                .map(|inner| Self { inner });
+        }
+        #[cfg(not(any(windows, target_os = "macos")))]
         {
             let _ = (parent, bounds, scale, document, theme, events);
             Err(SurfaceError::Unsupported(
-                "the draw.io preview engine has no macOS host in this build",
+                "the draw.io preview engine has no host on this platform",
             ))
         }
     }
@@ -121,7 +152,12 @@ impl SurfaceHost {
     pub(crate) fn set_bounds(&mut self, bounds: Bounds<Pixels>, scale: f32) {
         #[cfg(windows)]
         self.inner.set_bounds(bounds, scale);
-        #[cfg(not(windows))]
+        #[cfg(target_os = "macos")]
+        {
+            let _ = scale;
+            self.inner.set_bounds(bounds);
+        }
+        #[cfg(not(any(windows, target_os = "macos")))]
         {
             let _ = (bounds, scale);
         }
@@ -130,7 +166,9 @@ impl SurfaceHost {
     pub(crate) fn set_visible(&mut self, visible: bool) {
         #[cfg(windows)]
         self.inner.set_visible(visible);
-        #[cfg(not(windows))]
+        #[cfg(target_os = "macos")]
+        self.inner.set_visible(visible);
+        #[cfg(not(any(windows, target_os = "macos")))]
         {
             let _ = visible;
         }
@@ -139,16 +177,20 @@ impl SurfaceHost {
     pub(crate) fn focus(&mut self) {
         #[cfg(windows)]
         self.inner.focus();
+        #[cfg(target_os = "macos")]
+        self.inner.focus();
     }
 
     pub(crate) fn command(&mut self, command: Command) -> Result<(), SurfaceError> {
         #[cfg(windows)]
         return self.inner.command(command);
-        #[cfg(not(windows))]
+        #[cfg(target_os = "macos")]
+        return self.inner.command(command);
+        #[cfg(not(any(windows, target_os = "macos")))]
         {
             let _ = command;
             Err(SurfaceError::Unsupported(
-                "the draw.io preview engine has no macOS host in this build",
+                "the draw.io preview engine has no host on this platform",
             ))
         }
     }
@@ -889,5 +931,252 @@ mod windows_host {
         unsafe {
             env.CreateWebResourceResponse(stream.as_ref(), response.status as i32, &reason, &headers)
         }
+    }
+}
+
+#[cfg(target_os = "macos")]
+mod macos_host {
+    use super::{ParentWindow, PreviewTheme, SurfaceError, SurfaceEvent};
+    use crate::ui::code_editor::drawio_engine::assets::{self, EngineResponse};
+    use crate::ui::code_editor::drawio_engine::bridge::{BridgeEvent, Command, LiveSession};
+    use gpui_kit::{Bounds, Pixels};
+    use smol::channel::Sender;
+    use std::borrow::Cow;
+    use std::cell::RefCell;
+    use std::path::PathBuf;
+    use std::rc::Rc;
+    use std::sync::Arc;
+    use wry::dpi::{LogicalPosition, LogicalSize, Position, Size};
+    use wry::http::Response as HttpResponse;
+    use wry::{
+        NewWindowResponse, PageLoadEvent, PermissionKind, PermissionResponse, Rect, WebView,
+        WebViewBuilder,
+    };
+
+    struct Shared {
+        session: LiveSession,
+        sender: Sender<SurfaceEvent>,
+        closed: bool,
+    }
+
+    pub(super) struct Host {
+        shared: Rc<RefCell<Shared>>,
+        webview: Rc<RefCell<Option<WebView>>>,
+    }
+
+    impl Host {
+        pub(super) fn start(
+            parent: ParentWindow,
+            bounds: Bounds<Pixels>,
+            document: Arc<[u8]>,
+            theme: PreviewTheme,
+            events: Sender<SurfaceEvent>,
+        ) -> Result<Self, SurfaceError> {
+            let session = LiveSession::start_for(document, assets::MAC_SHELL_URL)
+                .map_err(|error| SurfaceError::Platform(error.to_string()))?;
+            let snapshot = session.document().clone();
+            let shared = Rc::new(RefCell::new(Shared {
+                session,
+                sender: events.clone(),
+                closed: false,
+            }));
+            let slot: Rc<RefCell<Option<WebView>>> = Rc::new(RefCell::new(None));
+
+            let protocol = move |_id: &str, request: wry::http::Request<Vec<u8>>| {
+                let method = request.method().as_str();
+                let uri = request.uri().to_string();
+                let response =
+                    assets::respond_from(method, &uri, assets::MAC_ORIGIN, Some(&snapshot));
+                http_response(response)
+            };
+
+            let ipc_shared = shared.clone();
+            let ipc = move |request: wry::http::Request<String>| {
+                let source = request.uri().to_string();
+                let body = request.body().as_bytes().to_vec();
+                let event = {
+                    let mut state = ipc_shared.borrow_mut();
+                    if state.closed {
+                        return;
+                    }
+                    state.session.accept(&source, &body)
+                };
+                match event {
+                    Ok(event) => emit_bridge(&ipc_shared, event),
+                    Err(_) => {
+                        // Stale, foreign or malformed messages are dropped.
+                    }
+                }
+            };
+
+            let nav_sender = events.clone();
+            let navigation = move |url: String| {
+                let allowed = url == assets::MAC_SHELL_URL
+                    || url == assets::MAC_ENGINE_URL
+                    || url == "about:blank";
+                if !allowed {
+                    let _ = nav_sender.try_send(SurfaceEvent::Blocked {
+                        reason: format!("navigation to {url}"),
+                    });
+                }
+                allowed
+            };
+            let popup_sender = events.clone();
+            let new_window = move |_url: String, _features: wry::NewWindowFeatures| {
+                let _ = popup_sender.try_send(SurfaceEvent::Blocked {
+                    reason: "a new window".to_string(),
+                });
+                NewWindowResponse::Deny
+            };
+            let download_sender = events.clone();
+            let mut download = move |_url: String, _path: &mut PathBuf| {
+                let _ = download_sender.try_send(SurfaceEvent::Blocked {
+                    reason: "a download".to_string(),
+                });
+                false
+            };
+            let permission_sender = events.clone();
+            let permission = move |_kind: PermissionKind| {
+                let _ = permission_sender.try_send(SurfaceEvent::Blocked {
+                    reason: "a browser permission".to_string(),
+                });
+                PermissionResponse::Deny
+            };
+            let drag_sender = events.clone();
+            let drag = move |_event: wry::DragDropEvent| {
+                let _ = drag_sender.try_send(SurfaceEvent::Blocked {
+                    reason: "a dragged file".to_string(),
+                });
+                true
+            };
+            let load_shared = shared.clone();
+            let load_slot = slot.clone();
+            let load = move |event: PageLoadEvent, url: String| {
+                if !matches!(event, PageLoadEvent::Finished) || url != assets::MAC_SHELL_URL {
+                    return;
+                }
+                let script = {
+                    let state = load_shared.borrow();
+                    state.session.bind_script(theme)
+                };
+                if let Some(webview) = load_slot.borrow().as_ref() {
+                    let _ = webview.evaluate_script(&script);
+                }
+            };
+
+            let builder = WebViewBuilder::new()
+                .with_url(assets::MAC_SHELL_URL)
+                .with_bounds(rect(bounds))
+                .with_visible(true)
+                .with_accept_first_mouse(true)
+                .with_incognito(true)
+                .with_custom_protocol(assets::MAC_SCHEME.to_string(), protocol)
+                .with_ipc_handler(ipc)
+                .with_navigation_handler(navigation)
+                .with_new_window_req_handler(new_window)
+                .with_download_started_handler(download)
+                .with_permission_handler(permission)
+                .with_drag_drop_handler(drag)
+                .with_on_page_load_handler(load);
+            let webview = builder
+                .build_as_child(&parent)
+                .map_err(|error| SurfaceError::Platform(error.to_string()))?;
+            *slot.borrow_mut() = Some(webview);
+            Ok(Self {
+                shared,
+                webview: slot,
+            })
+        }
+
+        pub(super) fn set_bounds(&mut self, bounds: Bounds<Pixels>) {
+            if let Some(webview) = self.webview.borrow().as_ref() {
+                let _ = webview.set_bounds(rect(bounds));
+            }
+        }
+
+        pub(super) fn set_visible(&mut self, visible: bool) {
+            if let Some(webview) = self.webview.borrow().as_ref() {
+                let _ = webview.set_visible(visible);
+            }
+        }
+
+        pub(super) fn focus(&mut self) {
+            if let Some(webview) = self.webview.borrow().as_ref() {
+                let _ = webview.focus();
+            }
+        }
+
+        pub(super) fn command(&mut self, command: Command) -> Result<(), SurfaceError> {
+            let message = {
+                let mut state = self.shared.borrow_mut();
+                if state.closed {
+                    return Err(SurfaceError::Platform("the diagram surface is closed".into()));
+                }
+                state.session.command(command)
+            };
+            let Some(message) = message else {
+                return Ok(());
+            };
+            let webview = self.webview.borrow();
+            let Some(webview) = webview.as_ref() else {
+                return Err(SurfaceError::Platform(
+                    "the diagram surface is not ready".into(),
+                ));
+            };
+            webview
+                .evaluate_script(&format!("window.__lyrel.nativeMessage({message})"))
+                .map_err(|error| SurfaceError::Platform(error.to_string()))
+        }
+    }
+
+    impl Drop for Host {
+        fn drop(&mut self) {
+            let sender = {
+                let mut shared = self.shared.borrow_mut();
+                shared.closed = true;
+                shared.sender.clone()
+            };
+            let _ = self.webview.borrow_mut().take();
+            let _ = sender.try_send(SurfaceEvent::Closed);
+        }
+    }
+
+    fn rect(bounds: Bounds<Pixels>) -> Rect {
+        Rect {
+            position: Position::Logical(LogicalPosition::new(
+                f64::from(f32::from(bounds.origin.x)),
+                f64::from(f32::from(bounds.origin.y)),
+            )),
+            size: Size::Logical(LogicalSize::new(
+                f64::from(f32::from(bounds.size.width)),
+                f64::from(f32::from(bounds.size.height)),
+            )),
+        }
+    }
+
+    fn http_response(response: EngineResponse) -> HttpResponse<Cow<'static, [u8]>> {
+        let mut builder = HttpResponse::builder().status(response.status);
+        builder = builder.header("Content-Type", response.content_type);
+        builder = builder.header("Content-Length", response.body.bytes().len().to_string());
+        for (name, value) in &response.headers {
+            builder = builder.header(*name, value.as_str());
+        }
+        match builder.body(Cow::Owned(response.body.bytes().to_vec())) {
+            Ok(response) => response,
+            Err(_) => HttpResponse::new(Cow::Owned(Vec::new())),
+        }
+    }
+
+    fn emit_bridge(shared: &Rc<RefCell<Shared>>, event: BridgeEvent) {
+        let sender = match shared.try_borrow() {
+            Ok(state) => state.sender.clone(),
+            Err(_) => return,
+        };
+        let event = match event {
+            BridgeEvent::Ready => SurfaceEvent::Ready,
+            BridgeEvent::State { page, pages, zoom } => SurfaceEvent::State { page, pages, zoom },
+            BridgeEvent::Failed { message } => SurfaceEvent::Failed { message },
+        };
+        let _ = sender.try_send(event);
     }
 }

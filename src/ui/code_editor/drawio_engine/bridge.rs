@@ -61,6 +61,7 @@ impl Command {
 pub(crate) struct LiveSession {
     document: DocumentSession,
     token: SessionToken,
+    shell_url: &'static str,
     ready: bool,
     failed: bool,
     last_inbound: u64,
@@ -72,9 +73,15 @@ pub(crate) struct LiveSession {
 
 impl LiveSession {
     pub(crate) fn start(body: Arc<[u8]>) -> io::Result<Self> {
+        Self::start_for(body, SHELL_URL)
+    }
+
+    /// Starts a session whose top document lives at `shell_url`. Windows uses
+    /// the intercepted https origin; macOS uses its custom scheme.
+    pub(crate) fn start_for(body: Arc<[u8]>, shell_url: &'static str) -> io::Result<Self> {
         let document = DocumentSession::new(body)?;
         let token = SessionToken::random()?;
-        Ok(Self::with_parts(document, token))
+        Ok(Self::with_parts(document, token, shell_url))
     }
 
     #[cfg(test)]
@@ -83,13 +90,18 @@ impl LiveSession {
         session: SessionId,
         token: SessionToken,
     ) -> Self {
-        Self::with_parts(DocumentSession { id: session, body }, token)
+        Self::with_parts(DocumentSession { id: session, body }, token, SHELL_URL)
     }
 
-    fn with_parts(document: DocumentSession, token: SessionToken) -> Self {
+    fn with_parts(
+        document: DocumentSession,
+        token: SessionToken,
+        shell_url: &'static str,
+    ) -> Self {
         Self {
             document,
             token,
+            shell_url,
             ready: false,
             failed: false,
             last_inbound: 0,
@@ -148,7 +160,7 @@ impl LiveSession {
     /// Parses and validates one web message. `source` is WebView2's report of
     /// which document sent it; it is a second gate behind the token.
     pub(crate) fn accept(&mut self, source: &str, body: &[u8]) -> Result<BridgeEvent, Reject> {
-        if source != SHELL_URL {
+        if source != self.shell_url {
             return Err(Reject("source"));
         }
         if body.is_empty() || body.len() > MAX_MESSAGE_BYTES {

@@ -25,6 +25,13 @@ pub(crate) const ENGINE_PATH: &str = "/drawio/engine.html";
 pub(crate) const SHELL_URL: &str = "https://drawio.lyrel.invalid/drawio/shell.html";
 pub(crate) const ENGINE_URL: &str = "https://drawio.lyrel.invalid/drawio/engine.html";
 
+/// macOS registers a custom WKWebView scheme; the same manifest paths and CSP
+/// are served under this origin. WebKit cannot intercept https/file schemes.
+pub(crate) const MAC_SCHEME: &str = "lyrel";
+pub(crate) const MAC_ORIGIN: &str = "lyrel://app";
+pub(crate) const MAC_SHELL_URL: &str = "lyrel://app/drawio/shell.html";
+pub(crate) const MAC_ENGINE_URL: &str = "lyrel://app/drawio/engine.html";
+
 pub(crate) const MAX_DOCUMENT_BYTES: usize = 16 * 1024 * 1024;
 
 const SHELL_CSP: &str = "default-src 'none'; script-src 'self'; style-src 'self'; \
@@ -70,7 +77,7 @@ const ASSETS: [Asset; 8] = [
         path: "/drawio/shell.js",
         content_type: "text/javascript; charset=utf-8",
         bytes: SHELL_JS,
-        sha256: "344344e70617d11407a5013cd5a2395bb5dae36aadd92aa4259a68ea58e93a12",
+        sha256: "ee5288bc2030df0779f43271918d7f0d88db4bd33890b41ec9fdee195a214693",
         license: "Lyrel Apache-2.0",
         csp: None,
     },
@@ -94,7 +101,7 @@ const ASSETS: [Asset; 8] = [
         path: "/drawio/engine-boot.js",
         content_type: "text/javascript; charset=utf-8",
         bytes: ENGINE_BOOT_JS,
-        sha256: "552e8bfb881a1863412167d509a304f447f769c51ef2926353fa056499daff71",
+        sha256: "ca7a4157d42e6e66dc8b61e612d48f7f668aeee94ae9cb9b6bd5f5f29aa66a26",
         license: "Lyrel Apache-2.0",
         csp: None,
     },
@@ -211,10 +218,21 @@ pub(crate) fn respond(
     target: &str,
     session: Option<&DocumentSession>,
 ) -> EngineResponse {
+    respond_from(method, target, ORIGIN, session)
+}
+
+/// The same exact-manifest policy for a platform-specific origin. Windows
+/// intercepts `ORIGIN`; macOS serves the same paths from a custom scheme.
+pub(crate) fn respond_from(
+    method: &str,
+    target: &str,
+    origin: &str,
+    session: Option<&DocumentSession>,
+) -> EngineResponse {
     if method != "GET" {
         return EngineResponse::method_not_allowed();
     }
-    let Some(path) = target.strip_prefix(ORIGIN) else {
+    let Some(path) = target.strip_prefix(origin) else {
         return EngineResponse::forbidden();
     };
     if path.is_empty()

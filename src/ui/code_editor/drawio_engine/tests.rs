@@ -50,11 +50,11 @@ fn every_distributed_asset_matches_its_pinned_hash_and_has_a_license() {
     let viewer = asset_bytes("/drawio/viewer-static.min.js");
     assert!(viewer.len() > 8_000_000, "the real viewer bundle is present");
     assert!(
-        viewer.windows(18).any(|w| w == b"DOMPurify 3.4.17"),
+        viewer.windows(16).any(|w| w == b"DOMPurify 3.4.17"),
         "the vendored sanitizer version is the fixed one"
     );
     assert!(
-        viewer.windows(15).any(|w| w == b"allowEval=!1"),
+        viewer.windows(12).any(|w| w == b"allowEval=!1"),
         "the viewer disables stencil eval"
     );
 }
@@ -310,7 +310,7 @@ fn representative_compressed_and_uncompressed_documents_parse() {
     assert_eq!(parsed.pages.len(), 2);
     assert_eq!(parsed.pages[0].content, DiagramContent::Compressed);
 
-    let plain = br#"<mxfile><diagram id="a" name="One"><?xml version="1.0"?><mxGraphModel><root><mxCell id="0"/></root></mxGraphModel></diagram><diagram id="b"><?xml version="1.0"?><mxGraphModel><root/></mxGraphModel></diagram></mxfile>"#;
+    let plain = br#"<mxfile><diagram id="a" name="One"><mxGraphModel><root><mxCell id="0"/></root></mxGraphModel></diagram><diagram id="b"><mxGraphModel><root/></mxGraphModel></diagram></mxfile>"#;
     let parsed = document::parse(plain).unwrap();
     assert_eq!(parsed.pages.len(), 2);
     assert_eq!(parsed.pages[0].content, DiagramContent::Inline);
