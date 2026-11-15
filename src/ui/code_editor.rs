@@ -82,6 +82,8 @@ pub(crate) use drawio_document::KEY_CONTEXT as DRAWIO_KEY_CONTEXT;
 pub(crate) use drawio_document::{DrawioActualSize, DrawioFit, DrawioZoomIn, DrawioZoomOut};
 pub(crate) use image_document::KEY_CONTEXT as IMAGE_KEY_CONTEXT;
 pub(crate) use image_document::{ImageActualSize, ImageFit, ImageZoomIn, ImageZoomOut};
+/// JSON 结构树的键盘上下文：撤销／重做只在树持有键盘时走共享 history。
+pub(crate) use json_document::KEY_CONTEXT as JSON_KEY_CONTEXT;
 pub(crate) use nav::KEY_CONTEXT as NAV_KEY_CONTEXT;
 pub(crate) use pdf_document::KEY_CONTEXT as PDF_KEY_CONTEXT;
 pub(crate) use pdf_document::{

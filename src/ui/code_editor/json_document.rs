@@ -18,6 +18,7 @@ use std::sync::{
 
 use gpui_kit::ScrollStrategy;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
+use gpui_kit::component::input::{Redo, Undo};
 use gpui_kit::component::{
     ActiveTheme as _, Disableable as _, Icon, IconName, Sizable as _, h_flex, spinner::Spinner,
     v_flex,
@@ -1109,6 +1110,20 @@ impl JsonView {
         }
     }
 
+    /// 结构树持有键盘时的普通撤销：仍由共享源码 presentation 的既有 history
+    /// 执行（`EditorState::undo_document`），不切换 Source 模式，也不另建
+    /// 可写内容或第二套 history。撤销后键盘仍留在树上。
+    fn undo_structure(&mut self, cx: &mut Context<Self>) {
+        let source = self.source.clone();
+        source.update(cx, |source, cx| source.undo_document(cx));
+    }
+
+    /// 结构树持有键盘时的普通重做；见 [`Self::undo_structure`]。
+    fn redo_structure(&mut self, cx: &mut Context<Self>) {
+        let source = self.source.clone();
+        source.update(cx, |source, cx| source.redo_document(cx));
+    }
+
     fn key(&mut self, event: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
         if self.editing.is_some() || event.keystroke.modifiers.modified() {
             return;
@@ -1757,6 +1772,8 @@ impl Render for JsonView {
             JsonMode::Structure => {
                 item.key_context(KEY_CONTEXT)
                     .track_focus(&focus)
+                    .on_action(cx.listener(|this, _: &Undo, _, cx| this.undo_structure(cx)))
+                    .on_action(cx.listener(|this, _: &Redo, _, cx| this.redo_structure(cx)))
                     .on_mouse_down(
                         MouseButton::Left,
                         cx.listener(|this, _, window, cx| {

@@ -576,6 +576,149 @@ fn split_presentations_share_document_and_keep_folds_selection_and_full_value(
     );
 }
 
+/// 树焦点下的普通撤销／重做：树命令就是共享文档的一次 history；键盘不离开
+/// 结构树、模式不切换，另一 presentation 的源码与独立保存字节都跟着同一份
+/// 文档。
+#[gpui_kit::test]
+fn tree_focused_undo_redo_reverses_the_tree_command_and_saves_exact_bytes(
+    tcx: &mut TestAppContext,
+) {
+    crate::ui::i18n::set_locale("en");
+    let remote = canonical_tempdir();
+    let local = canonical_tempdir();
+    let remote_file = fixture(remote.path(), "history.jsonc", ORIGINAL);
+    let local_file = fixture(
+        local.path(),
+        "history.jsonc",
+        b"LOCAL DECOY MUST STAY UNCHANGED",
+    );
+    let host = FileHost::mapped(HostId(2906), remote.path());
+    let path = PathBuf::from("/history.jsonc");
+    let (app, mut cx, _streams) = harness_with_tabs(tcx, 1);
+    cx.simulate_resize(size(px(1600.), px(1000.)));
+    open_ready(&app, &mut cx, host.clone(), &path);
+    let original_text = source_text(&app, &cx);
+
+    // Split: the focused side keeps the tree, the other side shows the source.
+    app.update_in(&mut cx, |app, window, cx| {
+        assert!(app.editor_split(window, cx), "the JSON document splits");
+    });
+    settle(&mut cx);
+    let (tab, left, right) = app.read_with(&cx, |app, _| {
+        let code = app.tab_code().expect("editor group");
+        let tab = app.tabs.get(app.tabs.active_index()).unwrap().id();
+        let right = code.focused_group();
+        let left = match code.group == right {
+            true => code.split.as_ref().expect("two groups").id,
+            false => code.group,
+        };
+        (tab, left, right)
+    });
+    let (front, other) = app.read_with(&cx, |app, _| {
+        let file = app.active_buffer().expect("JSON buffer");
+        (
+            file.presentations.json_existing(tab, right).expect("front"),
+            file.presentations.json_existing(tab, left).expect("other"),
+        )
+    });
+    toggle_mode(&front, &mut cx);
+    toggle_mode(&other, &mut cx);
+    assert_eq!(
+        front.read_with(&cx, |view, _| view.mode()),
+        JsonMode::Structure
+    );
+    assert_eq!(
+        other.read_with(&cx, |view, _| view.mode()),
+        JsonMode::Source
+    );
+
+    // A tree command in the focused tree is one ordinary source history entry.
+    click_row(&front, &mut cx, "$[\"name\"] #2");
+    click_button(&front, &mut cx, "json-edit-value");
+    replace_panel_text(&front, &mut cx, "structure-edit-value", "\"tree-edited\"");
+    apply_panel(&front, &mut cx);
+    until(&mut cx, |cx| is_ready(&front, cx) && is_ready(&other, cx));
+    let edited_text = source_text(&app, &cx);
+    assert!(edited_text.contains("\"tree-edited\""));
+    assert_eq!(
+        other.read_with(&cx, |view, cx| view.source().read(cx).text().to_owned()),
+        edited_text,
+        "the other presentation's source follows the tree command"
+    );
+
+    // Still the tree, still Structure: plain undo is the shared history.
+    let tree_focused = cx.update(|window, cx| {
+        front.read_with(cx, |view, cx| {
+            view.focus_handle(cx).contains_focused(window, cx)
+        })
+    });
+    assert!(tree_focused, "the tree owns the keyboard after applying");
+    cx.update(|window, cx| window.press(&secondary("z"), cx));
+    until(&mut cx, |cx| is_ready(&front, cx) && is_ready(&other, cx));
+    assert_eq!(
+        front.read_with(&cx, |view, _| view.mode()),
+        JsonMode::Structure,
+        "undo from the tree must not switch to the source mode"
+    );
+    assert_eq!(source_text(&app, &cx), original_text);
+    assert_eq!(
+        other.read_with(&cx, |view, cx| view.source().read(cx).text().to_owned()),
+        original_text,
+        "one undo restores the whole source the other presentation shows"
+    );
+    assert_eq!(
+        row_value(&front, &mut cx, "$[\"name\"] #2").as_deref(),
+        Some("\"second\\u4e2d\"")
+    );
+
+    // Plain redo, again from the tree.
+    cx.update(|window, cx| window.press(&secondary("shift-z"), cx));
+    until(&mut cx, |cx| is_ready(&front, cx) && is_ready(&other, cx));
+    assert_eq!(
+        front.read_with(&cx, |view, _| view.mode()),
+        JsonMode::Structure
+    );
+    assert_eq!(source_text(&app, &cx), edited_text);
+    assert_eq!(
+        other.read_with(&cx, |view, cx| view.source().read(cx).text().to_owned()),
+        edited_text
+    );
+    assert_eq!(
+        row_value(&front, &mut cx, "$[\"name\"] #2").as_deref(),
+        Some("\"tree-edited\"")
+    );
+
+    // The owning Host's bytes, and an independent reopen of them.
+    let expected = replace_bytes(ORIGINAL, b"\"second\\u4e2d\"", b"\"tree-edited\"");
+    save(&app, &mut cx);
+    assert_eq!(std::fs::read(&remote_file).unwrap(), expected);
+    assert_eq!(
+        std::fs::read(&local_file).unwrap(),
+        b"LOCAL DECOY MUST STAY UNCHANGED"
+    );
+
+    app.update_in(&mut cx, |app, window, cx| {
+        app.editor_close_file(0, window, cx)
+    });
+    settle(&mut cx);
+    assert!(
+        app.read_with(&cx, |app, _| app.active_buffer().is_some()),
+        "closing one group must retain the shared document in the other"
+    );
+    app.update_in(&mut cx, |app, window, cx| {
+        app.editor_close_file(0, window, cx)
+    });
+    until(&mut cx, |cx| {
+        app.read_with(cx, |app, _| app.editor.buffers.is_empty())
+    });
+    let (_, reopened) = open_ready(&app, &mut cx, host, &path);
+    assert_eq!(
+        row_value(&reopened, &mut cx, "$[\"name\"] #2").as_deref(),
+        Some("\"tree-edited\"")
+    );
+    assert_eq!(std::fs::read(&remote_file).unwrap(), expected);
+}
+
 #[gpui_kit::test]
 fn jsonl_records_keep_line_identity_invalid_lines_and_exact_save(tcx: &mut TestAppContext) {
     crate::ui::i18n::set_locale("en");
