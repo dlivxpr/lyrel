@@ -287,6 +287,24 @@ fn apply_panel(view: &Entity<YamlView>, cx: &mut VisualTestContext) {
     settle(cx);
 }
 
+fn dismiss_save_error(cx: &mut VisualTestContext) {
+    // 失败通知会遮住右下角的 Apply；像用户一样先关闭通知，不等待动画碰巧移开。
+    until(cx, |cx| {
+        cx.update(|window, _| {
+            window
+                .try_find("notification")
+                .is_some_and(|notification| notification.visible())
+        })
+    });
+    cx.update(|window, cx| {
+        window.hover("notification", cx);
+        window.within("notification").click("close", cx);
+    });
+    until(cx, |cx| {
+        cx.update(|window, _| window.try_find("notification").is_none())
+    });
+}
+
 fn cancel_panel(view: &Entity<YamlView>, cx: &mut VisualTestContext) {
     cx.update(|window, cx| window.click(("structure-edit-cancel", view.entity_id()), cx));
     settle(cx);
@@ -1038,6 +1056,7 @@ fn edits_survive_save_as_failed_writes_conflicts_and_cancelled_close(tcx: &mut T
         })
     });
     assert_eq!(std::fs::read(&target).unwrap(), saved);
+    dismiss_save_error(&mut cx);
     save(&app, &mut cx);
     let retried = replace_bytes(&saved, b"\"changed\"", b"\"retried\"");
     assert_eq!(std::fs::read(&target).unwrap(), retried);
@@ -1047,6 +1066,18 @@ fn edits_survive_save_as_failed_writes_conflicts_and_cancelled_close(tcx: &mut T
     replace_panel_text(&view, &mut cx, "structure-edit-value", "\"kept\"");
     apply_panel(&view, &mut cx);
     until(&mut cx, |cx| is_ready(&view, cx));
+    let pending_edit = view.read_with(&cx, |view, cx| view.edit_texts(cx));
+    assert!(
+        pending_edit.is_none(),
+        "the tree edit must be committed before the external rewrite: {pending_edit:?}"
+    );
+    assert!(source_text(&app, &cx).contains("\"kept\""));
+    assert!(
+        app.read_with(&cx, |app, _| app
+            .active_buffer()
+            .is_some_and(|file| file.dirty)),
+        "the committed tree edit must be dirty before the external rewrite"
+    );
     std::fs::write(&target, b"text: external\n").unwrap();
     until(&mut cx, |cx| {
         app.read_with(cx, |app, _| {
