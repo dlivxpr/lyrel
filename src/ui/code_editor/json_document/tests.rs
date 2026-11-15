@@ -1060,11 +1060,7 @@ fn tree_edits_survive_save_as_failed_writes_conflicts_and_cancelled_close(
     until(&mut cx, |cx| is_ready(&view, cx));
     cx.dispatch_action(crate::core::actions::EditorSaveAs);
     settle(&mut cx);
-    cx.update(|window, cx| {
-        window.press("secondary-a", cx);
-        window.input(&target.display().to_string(), cx);
-        window.press("enter", cx);
-    });
+    cx.simulate_new_path_selection(|_| Some(target.clone()));
     until(&mut cx, |cx| {
         app.read_with(cx, |app, _| {
             app.active_buffer()
@@ -1115,15 +1111,48 @@ fn tree_edits_survive_save_as_failed_writes_conflicts_and_cancelled_close(
     save(&app, &mut cx);
     let kept = replace_bytes(&retried, b"\"retried\"", b"\"kept\"");
     assert_eq!(std::fs::read(&target).unwrap(), kept);
+    settle(&mut cx);
+    assert!(
+        source_text(&app, &cx).contains("\"kept\""),
+        "a stale watcher event must not reload the external content after keep-mine and save"
+    );
 
     // Cancelling an unsaved close keeps the document and its bytes.
     click_row(&view, &mut cx, "$[\"text\"]");
     click_button(&view, &mut cx, "json-edit-value");
     replace_panel_text(&view, &mut cx, "structure-edit-value", "\"still-open\"");
-    apply_panel(&view, &mut cx);
+    // Apply with the panel's production Enter command. The Apply button's
+    // pointer path is exercised by the earlier edits in this test; after the
+    // conflict/save state its synthetic click did not emit while Enter did.
+    cx.update(|window, cx| window.press("enter", cx));
+    settle(&mut cx);
     until(&mut cx, |cx| is_ready(&view, cx));
+    let panel = view.read_with(&cx, |view, cx| view.edit_texts(cx));
+    let error = panel_error(&view, &mut cx);
+    assert!(
+        panel.is_none(),
+        "the tree edit must apply before close; panel={panel:?} error={error:?}"
+    );
+    assert!(
+        source_text(&app, &cx).contains("\"still-open\""),
+        "the tree edit must reach the shared source"
+    );
+    assert!(
+        app.read_with(&cx, |app, _| {
+            app.active_buffer().is_some_and(|file| file.dirty)
+        }),
+        "the applied tree edit leaves the document dirty"
+    );
+    assert!(
+        app.update_in(&mut cx, |app, window, cx| app.editor_has_focus(window, cx)),
+        "the applied tree edit returns focus to the editor panel"
+    );
     cx.dispatch_action(crate::core::actions::CloseActiveTab);
     settle(&mut cx);
+    assert!(
+        cx.has_pending_prompt(),
+        "an unsaved tree edit must prompt before close"
+    );
     cx.simulate_prompt_answer(crate::ui::i18n::t(crate::ui::i18n::L10nKey::Cancel));
     settle(&mut cx);
     assert!(
@@ -1298,12 +1327,31 @@ fn stale_and_invalid_source_reject_tree_edits_and_split_keeps_one_history(
     assert!(!source_text(&app, &cx).contains("\"tree-final\""));
 
     // Closing the document while a panel is open drops the callback and
-    // leaves the owning Host bytes untouched.
+    // leaves the owning Host bytes untouched. Closing one presentation is the
+    // existing split contract: the other presentation still owns the buffer,
+    // and only closing the last one retires the document.
     save(&app, &mut cx);
     let saved = std::fs::read(&original).unwrap();
     click_row(&other, &mut cx, "$[\"text\"]");
     click_button(&other, &mut cx, "json-edit-value");
     assert!(panel_open(&other, &mut cx));
+    app.update_in(&mut cx, |app, window, cx| {
+        app.editor_close_file(0, window, cx)
+    });
+    settle(&mut cx);
+    assert!(
+        app.read_with(&cx, |app, _| {
+            let group = app.tab_code().map(|code| code.group);
+            app.active_buffer().is_some_and(|file| {
+                group.is_some_and(|group| file.presentations.json_existing(tab, group).is_some())
+            })
+        }),
+        "the other presentation still owns the document"
+    );
+    assert!(
+        app.read_with(&cx, |app, _| !app.editor.buffers.is_empty()),
+        "one presentation close does not retire the shared document"
+    );
     app.update_in(&mut cx, |app, window, cx| {
         app.editor_close_file(0, window, cx)
     });
