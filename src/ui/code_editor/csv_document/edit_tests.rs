@@ -244,8 +244,8 @@ fn paste_extends_short_records_with_empty_intermediate_fields() {
         apply(table.source(), &mutation.replacements),
         "a,p,q\nb,c\n"
     );
-    // 粘贴起点本身在记录字段数之外：中间列成为空字段，粘贴列仍有值。
-    let table = parse("a\n", 8);
+    // 粘贴起点必须落在当前逻辑列内；短记录在起点之前的缺失列成为空字段。
+    let table = parse("a\nb,c,d\n", 8);
     let mutation = table
         .edit(
             8,
@@ -255,7 +255,23 @@ fn paste_extends_short_records_with_empty_intermediate_fields() {
             },
         )
         .unwrap();
-    assert_eq!(apply(table.source(), &mutation.replacements), "a,,z\n");
+    assert_eq!(
+        apply(table.source(), &mutation.replacements),
+        "a,,z\nb,c,d\n"
+    );
+    // 起点超出逻辑列时明确拒绝，而不是猜测新列位置。
+    assert_eq!(
+        parse("a\n", 9)
+            .edit(
+                9,
+                CsvEdit::Paste {
+                    origin: cell(0, 1),
+                    rows: vec![vec!["z".into()]],
+                },
+            )
+            .err(),
+        Some(CsvEditError::Missing)
+    );
 }
 
 #[test]
