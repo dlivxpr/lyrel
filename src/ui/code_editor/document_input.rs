@@ -1,5 +1,6 @@
 //! 工作台编辑 interface：文档文本与 presentation 状态分别读取。
 use super::book_view::BookView;
+use super::drawio_document::DrawioView;
 use super::image_document::ImageView;
 use super::pdf_document::PdfView;
 use super::sqlite_document::SqliteView;
@@ -26,6 +27,8 @@ pub(crate) enum EditorInput {
     Json(Entity<JsonView>),
     /// CSV／TSV 文档：共享逐行保真 Document 的源码与虚拟化表格。
     Csv(Entity<CsvView>),
+    /// draw.io 图：字节与页表属于文档，渲染只属于固定离线引擎。
+    Drawio(Entity<DrawioView>),
 }
 
 /// 一份文档输入的文本能力：代码与 Markdown 有文本，图片没有。
@@ -52,6 +55,7 @@ pub(crate) enum WeakEditorInput {
     Svg(gpui_kit::WeakEntity<SvgView>),
     Json(gpui_kit::WeakEntity<JsonView>),
     Csv(gpui_kit::WeakEntity<CsvView>),
+    Drawio(gpui_kit::WeakEntity<DrawioView>),
 }
 impl WeakEditorInput {
     pub(crate) fn upgrade(&self) -> Option<EditorInput> {
@@ -65,6 +69,7 @@ impl WeakEditorInput {
             Self::Svg(input) => input.upgrade().map(EditorInput::Svg),
             Self::Json(input) => input.upgrade().map(EditorInput::Json),
             Self::Csv(input) => input.upgrade().map(EditorInput::Csv),
+            Self::Drawio(input) => input.upgrade().map(EditorInput::Drawio),
         }
     }
 }
@@ -80,6 +85,7 @@ impl EditorInput {
             Self::Svg(input) => WeakEditorInput::Svg(input.downgrade()),
             Self::Json(input) => WeakEditorInput::Json(input.downgrade()),
             Self::Csv(input) => WeakEditorInput::Csv(input.downgrade()),
+            Self::Drawio(input) => WeakEditorInput::Drawio(input.downgrade()),
         }
     }
     pub(crate) fn code(&self) -> Option<&Entity<EditorState>> {
@@ -136,6 +142,12 @@ impl EditorInput {
             _ => None,
         }
     }
+    pub(crate) fn drawio(&self) -> Option<&Entity<DrawioView>> {
+        match self {
+            Self::Drawio(input) => Some(input),
+            _ => None,
+        }
+    }
     /// Markdown, SVG, the JSON family and CSV keep the same line-preserving
     /// source authority; every save, reload and dirty comparison reads this
     /// document rather than a presentation's cached text.
@@ -145,7 +157,12 @@ impl EditorInput {
             Self::Svg(view) => Some(view.read(cx).document().read(cx).document().clone()),
             Self::Json(view) => Some(view.read(cx).document().read(cx).document().clone()),
             Self::Csv(view) => Some(view.read(cx).document().read(cx).document().clone()),
-            Self::Code(_) | Self::Image(_) | Self::Pdf(_) | Self::Book(_) | Self::Sqlite(_) => None,
+            Self::Code(_)
+            | Self::Image(_)
+            | Self::Pdf(_)
+            | Self::Book(_)
+            | Self::Sqlite(_)
+            | Self::Drawio(_) => None,
         }
     }
     /// 这份输入的文本能力；只读图片返回 `None`。
@@ -158,10 +175,12 @@ impl EditorInput {
             Self::Svg(input) => Some(TextInput::Svg(input)),
             Self::Json(input) => Some(TextInput::Json(input)),
             Self::Csv(input) => Some(TextInput::Csv(input)),
-            Self::Image(_) | Self::Pdf(_) | Self::Book(_) | Self::Sqlite(_) => None,
+            Self::Image(_) | Self::Pdf(_) | Self::Book(_) | Self::Sqlite(_) | Self::Drawio(_) => {
+                None
+            }
         }
     }
-    /// 有文本可编辑、可查找、可保存的输入。图片不是。
+    /// 有文本可编辑、可查找、可保存的输入。图片和 draw.io 图不是。
     pub(crate) fn is_text(&self) -> bool {
         self.text().is_some()
     }
@@ -214,6 +233,9 @@ impl EditorInput {
             Self::Svg(view) => view.update(cx, |view, cx| view.set_scroll_offset(offset, cx)),
             Self::Json(view) => view.update(cx, |view, cx| view.set_scroll_offset(offset, cx)),
             Self::Csv(view) => view.update(cx, |view, cx| view.set_scroll_offset(offset, cx)),
+            // The engine owns its pan/zoom view; the workbench has no second
+            // scroll axis to synchronise.
+            Self::Drawio(_) => {}
         }
     }
     pub(crate) fn set_highlighter(&self, language: &'static str, cx: &mut gpui_kit::App) {
@@ -391,6 +413,7 @@ impl InputRead<'_> {
             EditorInput::Svg(view) => view.read(self.cx).focus_handle(cx),
             EditorInput::Json(view) => view.read(self.cx).focus_handle(cx),
             EditorInput::Csv(view) => view.read(self.cx).focus_handle(cx),
+            EditorInput::Drawio(view) => view.read(self.cx).handle(),
         }
     }
     pub(crate) fn scroll_offset(&self) -> gpui_kit::Point<gpui_kit::Pixels> {
@@ -404,6 +427,7 @@ impl InputRead<'_> {
             EditorInput::Svg(view) => view.read(self.cx).scroll_offset(self.cx),
             EditorInput::Json(view) => view.read(self.cx).scroll_offset(self.cx),
             EditorInput::Csv(view) => view.read(self.cx).scroll_offset(self.cx),
+            EditorInput::Drawio(_) => gpui_kit::Point::default(),
         }
     }
 }
@@ -519,6 +543,7 @@ pub(super) struct Presentations {
     svgs: RefCell<Vec<(TabId, split::GroupId, Entity<SvgView>, Subscription)>>,
     jsons: RefCell<Vec<(TabId, split::GroupId, Entity<JsonView>, Subscription)>>,
     csvs: RefCell<Vec<(TabId, split::GroupId, Entity<CsvView>, Subscription)>>,
+    drawios: RefCell<Vec<(TabId, split::GroupId, Entity<DrawioView>, Subscription)>>,
 }
 impl Presentations {
     pub(super) fn markdown_view<E: 'static>(
@@ -786,18 +811,6 @@ impl Presentations {
         cx: &mut Context<E>,
     ) -> Entity<JsonView> {
         let mut views = self.jsons.borrow_mut();
-    /// A CSV/TSV document's presentation in one group. The first group uses
-    /// the document's own view; a split group gets its own mode, table
-    /// selection, filter/sort and scrolls over the same Document and table.
-    pub(super) fn csv_view<E: 'static>(
-        &self,
-        primary: &Entity<CsvView>,
-        tab: TabId,
-        group: split::GroupId,
-        window: &mut Window,
-        cx: &mut Context<E>,
-    ) -> Entity<CsvView> {
-        let mut views = self.csvs.borrow_mut();
         if let Some((_, _, view, _)) = views.iter().find(|(t, g, _, _)| *t == tab && *g == group) {
             return view.clone();
         }
@@ -826,6 +839,36 @@ impl Presentations {
                 )
             });
             view
+        };
+        let observe = cx.observe(&view, |_, _, cx| cx.notify());
+        views.push((tab, group, view.clone(), observe));
+        view
+    }
+
+    /// A CSV/TSV document's presentation in one group. The first group uses
+    /// the document's own view; a split group gets its own mode, table
+    /// selection, filter/sort and scrolls over the same Document and table.
+    pub(super) fn csv_view<E: 'static>(
+        &self,
+        primary: &Entity<CsvView>,
+        tab: TabId,
+        group: split::GroupId,
+        window: &mut Window,
+        cx: &mut Context<E>,
+    ) -> Entity<CsvView> {
+        let mut views = self.csvs.borrow_mut();
+        if let Some((_, _, view, _)) = views.iter().find(|(t, g, _, _)| *t == tab && *g == group) {
+            return view.clone();
+        }
+        let view = if views.is_empty() {
+            primary.clone()
+        } else {
+            let document = primary.read(cx).document().clone();
+            let mode = primary.read(cx).mode().opposite();
+            let (wrap, indent) = {
+                let source = primary.read(cx).source().read(cx);
+                (source.is_soft_wrap(), source.tab_indent())
+            };
             let selection = primary.read(cx).selection();
             let source_selection = primary.read(cx).selected_range(cx);
             let source_scroll = primary.read(cx).source_scroll_offset(cx);
@@ -849,12 +892,44 @@ impl Presentations {
         view
     }
 
+    /// A draw.io document's presentation in one group. The first group uses
+    /// the document's own view; a split group gets its own page/zoom and its
+    /// own engine session over the same bytes and page list.
+    pub(super) fn drawio_view<E: 'static>(
+        &self,
+        primary: &Entity<DrawioView>,
+        tab: TabId,
+        group: split::GroupId,
+        cx: &mut Context<E>,
+    ) -> Entity<DrawioView> {
+        let mut views = self.drawios.borrow_mut();
+        if let Some((_, _, view, _)) = views.iter().find(|(t, g, _, _)| *t == tab && *g == group) {
+            return view.clone();
+        }
+        let view = if views.is_empty() {
+            primary.clone()
+        } else {
+            let document = primary.read(cx).document().clone();
+            let page = primary.read(cx).page();
+            cx.new(|cx| DrawioView::new_at(document, page, cx))
+        };
+        let observe = cx.observe(&view, |_, _, cx| cx.notify());
+        views.push((tab, group, view.clone(), observe));
+        view
+    }
+
     pub(super) fn json_existing(
         &self,
         tab: TabId,
         group: split::GroupId,
     ) -> Option<Entity<JsonView>> {
         self.jsons
+            .borrow()
+            .iter()
+            .find(|(t, g, _, _)| *t == tab && *g == group)
+            .map(|(_, _, view, _)| view.clone())
+    }
+
     pub(super) fn csv_existing(
         &self,
         tab: TabId,
@@ -866,6 +941,19 @@ impl Presentations {
             .find(|(t, g, _, _)| *t == tab && *g == group)
             .map(|(_, _, view, _)| view.clone())
     }
+
+    pub(super) fn drawio_existing(
+        &self,
+        tab: TabId,
+        group: split::GroupId,
+    ) -> Option<Entity<DrawioView>> {
+        self.drawios
+            .borrow()
+            .iter()
+            .find(|(t, g, _, _)| *t == tab && *g == group)
+            .map(|(_, _, view, _)| view.clone())
+    }
+
     pub(super) fn search(
         &self,
         source: &Entity<MarkdownEditor>,
@@ -949,6 +1037,11 @@ impl Presentations {
             }
             keep
         });
+        // Dropping the last presentation drops its native surface and session;
+        // there is no engine-owned editing state to flush.
+        self.drawios
+            .borrow_mut()
+            .retain(|(tab, group, _, _)| live(*tab, *group));
     }
     /// File identity changes update capability without replacing source or history.
     pub(super) fn set_source_only(
@@ -980,6 +1073,8 @@ impl Presentations {
             view.update(cx, |view, cx| view.set_soft_wrap(wrap, cx));
         }
         for (_, _, view, _) in self.jsons.borrow().iter() {
+            view.update(cx, |view, cx| view.set_soft_wrap(wrap, cx));
+        }
         for (_, _, view, _) in self.csvs.borrow().iter() {
             view.update(cx, |view, cx| view.set_soft_wrap(wrap, cx));
         }

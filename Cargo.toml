@@ -56,6 +56,12 @@ lyrel-epub = { path = "crates/lyrel-epub" }
 # GUI-free PDF reading backend adapted from the pinned Zorite MIT viewer.
 lyrel-pdf = { path = "crates/lyrel-pdf" }
 base64 = "0.23.1"
+# draw.io documents are read only as far as their page list and root: the
+# fixed engine still owns rendering. DTDs stay disabled.
+roxmltree = "0.21"
+# Session and shell tokens are 128-bit OS entropy, never a timestamp or a
+# hash of the document. `getrandom` is already in the tree.
+getrandom = "0.3.4"
 
 anyhow.workspace = true
 log.workspace = true
@@ -232,6 +238,10 @@ windows-sys = { version = "0.61", features = [
 # The window's public `HasWindowHandle` handle is how `ui::backdrop` reaches
 # the HWND for the DWM calls. Already in the tree at 0.6 via gpui itself.
 raw-window-handle = "0.6"
+# The draw.io preview's child surface only. No general browser is exposed;
+# wry is deliberately not used because it cannot enforce the resource,
+# permission and file-panel policy this ticket requires.
+webview2-com = "=0.39.1"
 # Windows dictionary segmentation; macOS uses CFStringTokenizer instead.
 jieba-rs = "0.11.0"
 # The standalone updater extracts only Windows release ZIPs. Reuse the async
@@ -275,6 +285,11 @@ libc = "0.2.191"
 # app appearance to match the active theme (see `ui::theme::sync_native_appearance`)
 # so the native traffic-light buttons render in the right light/dark style.
 [target.'cfg(target_os = "macos")'.dependencies]
+# The draw.io preview's macOS child surface. Wry wraps a real WKWebView for
+# this one engine; Windows still uses its own WebView2 host so the stricter
+# resource filter exists on both platforms.
+wry = { version = "=0.57.2", default-features = false }
+raw-window-handle = "0.6"
 # CFStringTokenizer FFI for dictionary-based CJK word segmentation on
 # double-click (`terminal::smart_select`). Already in the tree transitively,
 # and it makes the Windows jieba fallback unnecessary here.
