@@ -2032,6 +2032,8 @@ pub fn translate_en(key: L10nKey) -> &'static str {
         L10nKey::EditorDrawioBlocked => "The diagram requested {what}; it was blocked",
         L10nKey::EditorDrawioUnavailable => "The draw.io engine is unavailable",
         L10nKey::EditorDrawioRetry => "Try again",
+        L10nKey::EditorDrawioDelete => "Delete",
+        L10nKey::EditorDrawioEditable => "Editable",
         L10nKey::EditorBookContents => "Contents",
         L10nKey::EditorBookBookmarks => "Bookmarks",
         L10nKey::EditorBookSearch => "Search book",

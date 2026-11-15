@@ -148,6 +148,15 @@ impl EditorInput {
             _ => None,
         }
     }
+    /// The diagram's owning document; None for every other input. Saves and
+    /// the dirty sweep read its bytes and edit generation.
+    pub(crate) fn drawio_document<'a>(
+        &self,
+        cx: &'a gpui_kit::App,
+    ) -> Option<&'a super::drawio_document::DrawioDocument> {
+        self.drawio()
+            .map(|view| view.read(cx).document().read(cx))
+    }
     /// Markdown, SVG, the JSON family and CSV keep the same line-preserving
     /// source authority; every save, reload and dirty comparison reads this
     /// document rather than a presentation's cached text.
@@ -183,6 +192,22 @@ impl EditorInput {
     /// 有文本可编辑、可查找、可保存的输入。图片和 draw.io 图不是。
     pub(crate) fn is_text(&self) -> bool {
         self.text().is_some()
+    }
+    /// Inputs the workbench's save lifecycle writes: every text document and
+    /// the draw.io engine document, whose bytes the engine commits back. A
+    /// picture, database, book or PDF stays read-only.
+    pub(crate) fn is_savable(&self) -> bool {
+        self.is_text() || self.drawio().is_some()
+    }
+    /// The generation a save captures and re-checks after the write lands.
+    /// Source-authority text uses its document revision; a draw.io document
+    /// uses its edit generation, which engine commits advance.
+    pub(crate) fn source_edit_revision(&self, cx: &gpui_kit::App) -> Option<u64> {
+        if let Some(document) = self.source_document(cx) {
+            return Some(document.read(cx).revision());
+        }
+        self.drawio()
+            .map(|view| view.read(cx).document().read(cx).edit_revision())
     }
     pub(crate) fn finish_composition(&self, _: &mut Window, cx: &mut gpui_kit::App) {
         if let Some(input) = self.markdown() {
@@ -970,6 +995,18 @@ impl Presentations {
             .iter()
             .find(|(t, g, _, _)| *t == tab && *g == group)
             .map(|(_, _, view, _)| view.clone())
+    }
+
+    /// Split draw.io presentations created per group, in creation order;
+    /// the owning primary view is not repeated here.
+    pub(super) fn drawios(
+        &self,
+    ) -> Vec<(TabId, split::GroupId, Entity<DrawioView>)> {
+        self.drawios
+            .borrow()
+            .iter()
+            .map(|(tab, group, view, _)| (tab.clone(), *group, view.clone()))
+            .collect()
     }
 
     pub(super) fn drawio_existing(

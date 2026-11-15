@@ -1850,6 +1850,8 @@ pub fn translate_zh(key: L10nKey) -> Option<&'static str> {
         L10nKey::EditorDrawioBlocked => "图请求了{what}，已被阻止",
         L10nKey::EditorDrawioUnavailable => "draw.io 引擎不可用",
         L10nKey::EditorDrawioRetry => "重试",
+        L10nKey::EditorDrawioDelete => "删除",
+        L10nKey::EditorDrawioEditable => "可编辑",
         L10nKey::EditorBookContents => "目录",
         L10nKey::EditorBookBookmarks => "书签",
         L10nKey::EditorBookSearch => "搜索全书",

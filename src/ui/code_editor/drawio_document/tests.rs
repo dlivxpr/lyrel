@@ -14,6 +14,7 @@ use crate::ui::code_editor::drawio_engine::surface::SurfaceEvent;
 use gpui_kit::test::TestWindowExt as _;
 use gpui_kit::{TestAppContext, VisualTestContext};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 fn settle(cx: &mut VisualTestContext) {
@@ -54,7 +55,9 @@ fn uncompressed(xml_pages: usize) -> Vec<u8> {
             "<diagram id=\"u{page}\" name=\"Page {}\">",
             page + 1
         ));
-        out.push_str("&lt;mxGraphModel dx=\"800\" dy=\"600\"&gt;&lt;root&gt;&lt;mxCell id=\"0\"/&gt;&lt;mxCell id=\"1\" parent=\"0\"/&gt;&lt;mxCell id=\"2\" value=\"Uncompressed page {page}\" style=\"rounded=1;whiteSpace=wrap;html=1;\" vertex=\"1\" parent=\"1\"&gt;&lt;mxGeometry x=\"80\" y=\"80\" width=\"200\" height=\"70\" as=\"geometry\"/&gt;&lt;/mxCell&gt;&lt;/root&gt;&lt;/mxGraphModel&gt;");
+        out.push_str(&format!(
+            "&lt;mxGraphModel dx=\"800\" dy=\"600\"&gt;&lt;root&gt;&lt;mxCell id=\"0\"/&gt;&lt;mxCell id=\"1\" parent=\"0\"/&gt;&lt;mxCell id=\"2\" value=\"Uncompressed page {page}\" style=\"rounded=1;whiteSpace=wrap;html=1;\" vertex=\"1\" parent=\"1\"&gt;&lt;mxGeometry x=\"80\" y=\"80\" width=\"200\" height=\"70\" as=\"geometry\"/&gt;&lt;/mxCell&gt;&lt;/root&gt;&lt;/mxGraphModel&gt;"
+        ));
         out.push_str("</diagram>");
     }
     out.push_str("</mxfile>");
@@ -143,7 +146,7 @@ fn uncompressed_and_compressed_diagrams_open_as_read_only_documents(tcx: &mut Te
         assert!(window.find("drawio-format").visible());
         assert!(window.find("drawio-page-facts").visible());
         assert!(window.find("drawio-page-next").visible());
-        assert!(window.find("status-drawio-readonly").visible());
+        assert!(window.find("status-drawio-editable").visible());
         assert!(
             window.try_find("status-cursor").is_none(),
             "a diagram has no caret"
@@ -258,13 +261,12 @@ fn text_commands_and_save_leave_a_diagram_alone(tcx: &mut TestAppContext) {
     crate::ui::i18n::set_locale("en");
     let dir = super::super::test_host::canonical_tempdir();
     let before = compressed(2);
-    let path = fixture(dir.path(), "read-only.drawio", &before);
+    let path = fixture(dir.path(), "unedited.drawio", &before);
     let (app, mut cx, _streams) = harness_with_tabs(tcx, 1);
     let id = open(&app, &mut cx, &path);
 
     app.update_in(&mut cx, |app, window, cx| {
         app.editor_save_active(window, cx);
-        app.editor_save_as_active(window, cx);
         app.editor_go_to_line(window, cx);
         app.editor_go_to_symbol(window, cx);
         app.toggle_line_ending(cx);
@@ -373,7 +375,7 @@ fn malformed_and_non_diagram_files_report_their_own_failure(tcx: &mut TestAppCon
     });
     cx.update(|window, _| {
         assert!(window.find("drawio-failed").visible());
-        assert!(window.find("status-drawio-readonly").visible());
+        assert!(window.find("status-drawio-editable").visible());
     });
     app.update_in(&mut cx, |app, window, cx| {
         app.editor_close_file(0, window, cx)
@@ -457,5 +459,438 @@ fn surface_events_drive_engine_page_and_zoom_state(tcx: &mut TestAppContext) {
             matches!(view.engine, super::EngineStatus::Idle),
             "closing while starting falls back to idle"
         );
+    });
+}
+
+/// One engine commit becomes the buffer's dirty authority and the one shared
+/// undo history — the workbench's own undo, not an engine-local stack, is
+/// what walks the document back through every presentation's edits.
+#[gpui_kit::test]
+fn an_engine_commit_marks_the_document_dirty_and_shares_one_undo_history(
+    tcx: &mut TestAppContext,
+) {
+    crate::ui::i18n::set_locale("en");
+    let dir = super::super::test_host::canonical_tempdir();
+    let original = uncompressed(2);
+    let path = fixture(dir.path(), "edited.drawio", &original);
+    let (app, mut cx, _streams) = harness_with_tabs(tcx, 1);
+    let id = open(&app, &mut cx, &path);
+
+    // A committed revision: the same file with one changed cell label.
+    let committed: Arc<[u8]> = Arc::from(
+        String::from_utf8(uncompressed(2))
+            .unwrap()
+            .replace("Uncompressed page 0", "Uncompressed page 0 edited")
+            .into_bytes()
+            .as_slice(),
+    );
+    let diagram = view(&app, &cx);
+    let _ = diagram.update_in(&mut cx, |view, _window, cx| {
+        view.on_surface_event(SurfaceEvent::Ready, cx);
+        view.on_surface_event(
+            SurfaceEvent::Commit {
+                bytes: committed.clone(),
+            },
+            cx,
+        );
+    });
+    settle(&mut cx);
+    // The document took the commit; the buffer's dirty bit is the frame
+    // sweep's job, run explicitly here so the assertion is not a race.
+    app.update_in(&mut cx, |app, window, cx| app.editor_sync(window, cx));
+    app.read_with(&cx, |app, cx| {
+        let file = app.editor.buffers.get(id).expect("still installed");
+        let document = view_of(file).read(cx).document().read(cx);
+        assert_eq!(document.edit_revision(), 1, "the commit landed");
+        assert_eq!(
+            document.fingerprint(),
+            super::fingerprint(&committed),
+            "the committed bytes are the document"
+        );
+        assert!(file.dirty, "a committed edit is unsaved work");
+        assert!(document.can_undo());
+        assert!(!document.can_redo());
+    });
+
+    // The workbench's own undo walks the shared document history — an edit
+    // made on this presentation is undone the same way on any other.
+    dispatch(&app, &mut cx, DrawioUndo);
+    app.update_in(&mut cx, |app, window, cx| app.editor_sync(window, cx));
+    app.read_with(&cx, |app, cx| {
+        let file = app.editor.buffers.get(id).expect("still installed");
+        assert!(
+            !file.dirty,
+            "undo back to the saved bytes reads clean again"
+        );
+        let document = view_of(file).read(cx).document().read(cx);
+        assert!(!document.can_undo());
+        assert!(document.can_redo());
+        assert_eq!(
+            document.bytes().as_deref(),
+            Some(original.as_slice()),
+            "the undo restored the opened bytes"
+        );
+    });
+    dispatch(&app, &mut cx, DrawioRedo);
+    app.update_in(&mut cx, |app, window, cx| app.editor_sync(window, cx));
+    app.read_with(&cx, |app, cx| {
+        let file = app.editor.buffers.get(id).expect("still installed");
+        assert!(file.dirty, "the redo brings the edit back");
+        let document = view_of(file).read(cx).document().read(cx);
+        assert_eq!(document.bytes().as_deref(), Some(committed.as_ref()));
+    });
+}
+
+/// A commit that no longer parses is refused outright: the document keeps
+/// the last good bytes instead of taking a truncated serialization.
+#[gpui_kit::test]
+fn an_unparseable_commit_keeps_the_last_good_bytes(tcx: &mut TestAppContext) {
+    crate::ui::i18n::set_locale("en");
+    let dir = super::super::test_host::canonical_tempdir();
+    let original = uncompressed(1);
+    let path = fixture(dir.path(), "truncated.drawio", &original);
+    let (app, mut cx, _streams) = harness_with_tabs(tcx, 1);
+    let id = open(&app, &mut cx, &path);
+    let diagram = view(&app, &cx);
+    let _ = diagram.update_in(&mut cx, |view, _window, cx| {
+        view.on_surface_event(SurfaceEvent::Ready, cx);
+        view.on_surface_event(
+            SurfaceEvent::Commit {
+                bytes: Arc::from(b"<mxfile><diagram".as_slice()),
+            },
+            cx,
+        );
+    });
+    settle(&mut cx);
+    app.read_with(&cx, |app, cx| {
+        let file = app.editor.buffers.get(id).expect("still installed");
+        assert!(!file.dirty, "a refused commit changes nothing");
+        let document = view_of(file).read(cx).document().read(cx);
+        assert_eq!(document.edit_revision(), 0);
+        assert_eq!(document.bytes().as_deref(), Some(original.as_slice()));
+    });
+}
+
+/// A save defers through the engine's sync flush: the committed bytes — not
+/// the bytes the file was opened with — are what land on disk through the
+/// same Host write path.
+#[gpui_kit::test]
+fn a_save_writes_the_committed_bytes_and_clears_dirty(tcx: &mut TestAppContext) {
+    crate::ui::i18n::set_locale("en");
+    let dir = super::super::test_host::canonical_tempdir();
+    let path = fixture(dir.path(), "saved.drawio", &uncompressed(1));
+    let (app, mut cx, _streams) = harness_with_tabs(tcx, 1);
+    let id = open(&app, &mut cx, &path);
+    let committed: Arc<[u8]> = Arc::from(
+        String::from_utf8(uncompressed(1))
+            .unwrap()
+            .replace("Uncompressed page 0", "Saved edit")
+            .into_bytes()
+            .as_slice(),
+    );
+    let diagram = view(&app, &cx);
+    let _ = diagram.update_in(&mut cx, |view, _window, cx| {
+        view.on_surface_event(SurfaceEvent::Ready, cx);
+        view.on_surface_event(
+            SurfaceEvent::Commit {
+                bytes: committed.clone(),
+            },
+            cx,
+        );
+    });
+    settle(&mut cx);
+    app.update_in(&mut cx, |app, window, cx| {
+        app.editor_save_file(id, false, window, cx);
+    });
+    until(&mut cx, |_cx| std::fs::read(&path).unwrap().as_slice() == committed.as_ref());
+    app.update_in(&mut cx, |app, window, cx| app.editor_sync(window, cx));
+    app.read_with(&cx, |app, _| {
+        let file = app.editor.buffers.get(id).expect("still installed");
+        assert!(!file.dirty, "the saved bytes are the document");
+        assert!(file.conflict.is_none());
+    });
+    assert_eq!(
+        std::fs::read(&path).unwrap().as_slice(),
+        committed.as_ref(),
+        "the committed serialization is what was written"
+    );
+}
+
+/// An external rewrite under a dirty diagram becomes a conflict with real
+/// content on both sides, not a silent overwrite of engine work.
+#[gpui_kit::test]
+fn an_external_rewrite_under_a_dirty_diagram_conflicts(tcx: &mut TestAppContext) {
+    crate::ui::i18n::set_locale("en");
+    let dir = super::super::test_host::canonical_tempdir();
+    let path = fixture(dir.path(), "raced.drawio", &compressed(2));
+    let (app, mut cx, _streams) = harness_with_tabs(tcx, 1);
+    let id = open(&app, &mut cx, &path);
+    until(&mut cx, |cx| {
+        app.read_with(cx, |app, _| app.editor.buffers.watching())
+    });
+    let committed: Arc<[u8]> = Arc::from(uncompressed(2).as_slice());
+    let diagram = view(&app, &cx);
+    let _ = diagram.update_in(&mut cx, |view, _window, cx| {
+        view.on_surface_event(SurfaceEvent::Ready, cx);
+        view.on_surface_event(
+            SurfaceEvent::Commit {
+                bytes: committed.clone(),
+            },
+            cx,
+        );
+    });
+    settle(&mut cx);
+    app.update_in(&mut cx, |app, window, cx| app.editor_sync(window, cx));
+    app.read_with(&cx, |app, _| {
+        assert!(app.editor.buffers.get(id).unwrap().dirty);
+    });
+    std::fs::write(&path, uncompressed(3)).unwrap();
+    until(&mut cx, |cx| {
+        app.read_with(cx, |app, _| {
+            app.editor
+                .buffers
+                .get(id)
+                .is_some_and(|file| file.conflict.is_some())
+        })
+    });
+    app.read_with(&cx, |app, cx| {
+        let file = app.editor.buffers.get(id).expect("still installed");
+        assert!(file.dirty, "the engine's edits are still the document");
+        let document = view_of(file).read(cx).document().read(cx);
+        assert_eq!(
+            document.bytes().as_deref(),
+            Some(committed.as_ref()),
+            "the external write did not replace live edits"
+        );
+    });
+}
+
+/// A byte-identical commit — the save-time sync flush — still advances the
+/// committed generation the deferred save waits on, without touching dirty
+/// state or pushing a history entry.
+#[gpui_kit::test]
+fn an_identical_commit_confirms_a_flush_without_an_edit(tcx: &mut TestAppContext) {
+    crate::ui::i18n::set_locale("en");
+    let dir = super::super::test_host::canonical_tempdir();
+    let bytes = uncompressed(1);
+    let path = fixture(dir.path(), "flushed.drawio", &bytes);
+    let (app, mut cx, _streams) = harness_with_tabs(tcx, 1);
+    let id = open(&app, &mut cx, &path);
+    let diagram = view(&app, &cx);
+    let _ = diagram.update_in(&mut cx, |view, _window, cx| {
+        view.on_surface_event(SurfaceEvent::Ready, cx);
+        view.on_surface_event(
+            SurfaceEvent::Commit {
+                bytes: Arc::from(bytes.as_slice()),
+            },
+            cx,
+        );
+    });
+    settle(&mut cx);
+    app.update_in(&mut cx, |app, window, cx| app.editor_sync(window, cx));
+    app.read_with(&cx, |app, cx| {
+        let file = app.editor.buffers.get(id).expect("still installed");
+        assert!(!file.dirty, "an identical sync is not an edit");
+        let document = view_of(file).read(cx).document().read(cx);
+        assert_eq!(document.edit_revision(), 0, "no content revision");
+        assert_eq!(document.committed(), 1, "the flush was confirmed");
+        assert!(!document.can_undo());
+    });
+}
+
+fn view_of(file: &OpenFile) -> &Entity<DrawioView> {
+    file.input.drawio().expect("a draw.io document")
+}
+
+/// A remote diagram's committed bytes save back through the owning mapped
+/// host — the file on the other side changes and the original stays put.
+#[gpui_kit::test]
+fn a_mapped_host_round_trips_the_committed_diagram(tcx: &mut TestAppContext) {
+    crate::ui::i18n::set_locale("en");
+    let dir = super::super::test_host::canonical_tempdir();
+    let remote_dir = dir.path().join("remote298");
+    std::fs::create_dir_all(&remote_dir).unwrap();
+    std::fs::write(remote_dir.join("remote.drawio"), uncompressed(1)).unwrap();
+    let host = FileHost::mapped(HostId(298), &remote_dir);
+    let (app, mut cx, _streams) = harness_with_tabs(tcx, 1);
+    app.update_in(&mut cx, |app, window, cx| {
+        app.editor_open_on_host(host.clone(), Path::new("/remote.drawio"), window, cx)
+    });
+    until(&mut cx, |cx| {
+        app.read_with(cx, |app, _| {
+            app.active_buffer()
+                .is_some_and(|file| file.host.id() == HostId(298))
+        })
+    });
+    let committed: Arc<[u8]> = Arc::from(uncompressed(2).as_slice());
+    let diagram = view(&app, &cx);
+    let _ = diagram.update_in(&mut cx, |view, _window, cx| {
+        view.on_surface_event(SurfaceEvent::Ready, cx);
+        view.on_surface_event(
+            SurfaceEvent::Commit {
+                bytes: committed.clone(),
+            },
+            cx,
+        );
+    });
+    settle(&mut cx);
+    let id = app.read_with(&cx, |app, _| {
+        app.active_buffer().expect("remote diagram").id()
+    });
+    app.update_in(&mut cx, |app, window, cx| {
+        app.editor_save_file(id, false, window, cx);
+    });
+    until(&mut cx, |_cx| {
+        std::fs::read(remote_dir.join("remote.drawio")).unwrap().as_slice()
+            == committed.as_ref()
+    });
+    assert_eq!(
+        std::fs::read(remote_dir.join("remote.drawio")).unwrap().as_slice(),
+        committed.as_ref(),
+        "the mapped host wrote the committed serialization back"
+    );
+}
+
+/// The engine's own Ctrl+S is a workbench save: the surface event drains
+/// through the frame sweep into the same Host write path as the toolbar.
+#[gpui_kit::test]
+fn an_engine_save_request_writes_through_the_workbench(tcx: &mut TestAppContext) {
+    crate::ui::i18n::set_locale("en");
+    let dir = super::super::test_host::canonical_tempdir();
+    let path = fixture(dir.path(), "engine-save.drawio", &uncompressed(1));
+    let (app, mut cx, _streams) = harness_with_tabs(tcx, 1);
+    let id = open(&app, &mut cx, &path);
+    let committed: Arc<[u8]> = Arc::from(
+        String::from_utf8(uncompressed(1))
+            .unwrap()
+            .replace("Uncompressed page 0", "Engine save")
+            .into_bytes()
+            .as_slice(),
+    );
+    let diagram = view(&app, &cx);
+    let _ = diagram.update_in(&mut cx, |view, _window, cx| {
+        view.on_surface_event(SurfaceEvent::Ready, cx);
+        view.on_surface_event(
+            SurfaceEvent::Commit {
+                bytes: committed.clone(),
+            },
+            cx,
+        );
+        view.on_surface_event(SurfaceEvent::Save, cx);
+    });
+    settle(&mut cx);
+    // The frame sweep owns the request: run it explicitly, then wait for the
+    // Host write itself rather than for a dirty bit that may already be gone.
+    app.update_in(&mut cx, |app, window, cx| app.editor_sync(window, cx));
+    until(&mut cx, |_cx| std::fs::read(&path).unwrap().as_slice() == committed.as_ref());
+    app.update_in(&mut cx, |app, window, cx| app.editor_sync(window, cx));
+    app.read_with(&cx, |app, _| {
+        assert!(
+            !app.editor.buffers.get(id).unwrap().dirty,
+            "the engine save cleared dirty"
+        );
+    });
+    assert_eq!(
+        std::fs::read(&path).unwrap().as_slice(),
+        committed.as_ref(),
+        "the engine's Ctrl+S wrote its committed serialization through the Host"
+    );
+}
+
+/// Workbench clipboard actions reach the live engine as commands and never
+/// touch a text buffer the document does not have; a missing surface drops
+/// them without disturbing the document.
+#[gpui_kit::test]
+fn clipboard_and_delete_actions_fall_safely_without_a_surface(tcx: &mut TestAppContext) {
+    crate::ui::i18n::set_locale("en");
+    let dir = super::super::test_host::canonical_tempdir();
+    let bytes = uncompressed(1);
+    let path = fixture(dir.path(), "no-surface.drawio", &bytes);
+    let (app, mut cx, _streams) = harness_with_tabs(tcx, 1);
+    let id = open(&app, &mut cx, &path);
+    let diagram = view(&app, &cx);
+    let _ = diagram.update_in(&mut cx, |view, _window, cx| {
+        view.on_surface_event(SurfaceEvent::Ready, cx);
+    });
+    dispatch(&app, &mut cx, DrawioCopy);
+    dispatch(&app, &mut cx, DrawioCut);
+    dispatch(&app, &mut cx, DrawioDelete);
+    dispatch(&app, &mut cx, DrawioPaste);
+    app.update_in(&mut cx, |app, window, cx| app.editor_sync(window, cx));
+    app.read_with(&cx, |app, _| {
+        let file = app.editor.buffers.get(id).unwrap();
+        assert!(!file.dirty, "no phantom edit without a live engine");
+    });
+}
+
+/// A commit that rewrites one page must not cost the file its other pages,
+/// its compressed representation, its unknown attributes or its embedded
+/// resources: the bytes the workbench serves back decode to both pages, and
+/// the untouched page is still there verbatim.
+#[gpui_kit::test]
+fn a_partial_commit_keeps_every_page_attribute_and_embedded_resource(
+    tcx: &mut TestAppContext,
+) {
+    crate::ui::i18n::set_locale("en");
+    let dir = super::super::test_host::canonical_tempdir();
+    let untouched = format!(
+        "<diagram id=\"keep\" name=\"Keep\" custom-attr=\"kept\" background=\"#ffeeaa\">{COMPRESSED_PAGE}</diagram>"
+    );
+    let edited = format!(
+        "<diagram id=\"edit\" name=\"Edit\">{COMPRESSED_PAGE}</diagram>"
+    );
+    let original = format!(
+        "<mxfile host=\"lyrel.test\" version=\"24.7.5\" custom=\"kept\" compressed=\"true\">{edited}{untouched}</mxfile>"
+    );
+    let path = fixture(dir.path(), "multi.drawio", original.as_bytes());
+    let (app, mut cx, _streams) = harness_with_tabs(tcx, 1);
+    let id = open(&app, &mut cx, &path);
+
+    // One page's model changed; every other node is copied through untouched,
+    // exactly the shape the engine's own writePageBack produces for an edit.
+    let rewritten = original.replacen(COMPRESSED_PAGE, "REWRITTEN_PAGE_PAYLOAD", 1);
+    let committed: Arc<[u8]> = Arc::from(rewritten.as_bytes());
+    let diagram = view(&app, &cx);
+    let _ = diagram.update_in(&mut cx, |view, _window, cx| {
+        view.on_surface_event(SurfaceEvent::Ready, cx);
+        view.on_surface_event(
+            SurfaceEvent::Commit {
+                bytes: committed.clone(),
+            },
+            cx,
+        );
+    });
+    settle(&mut cx);
+    app.update_in(&mut cx, |app, window, cx| app.editor_sync(window, cx));
+    app.read_with(&cx, |app, cx| {
+        let file = app.editor.buffers.get(id).expect("still installed");
+        assert!(file.dirty, "the rewritten page is unsaved work");
+        let document = view_of(file).read(cx).document().read(cx);
+        assert_eq!(document.page_count(), 2, "both pages survive the commit");
+        let bytes = document.bytes().expect("ready bytes");
+        let text = std::str::from_utf8(&bytes).unwrap();
+        assert!(text.contains("custom-attr=\"kept\""), "page attribute kept");
+        assert!(text.contains("custom=\"kept\""), "mxfile attribute kept");
+        assert!(
+            text.contains(COMPRESSED_PAGE),
+            "the untouched page's compressed payload is byte-identical"
+        );
+        assert!(
+            text.contains("REWRITTEN_PAGE_PAYLOAD"),
+            "the edited page carries the engine's serialization"
+        );
+    });
+    // An independent consumer decodes the served bytes back to two pages.
+    app.read_with(&cx, |app, cx| {
+        let file = app.editor.buffers.get(id).expect("still installed");
+        let bytes = view_of(file)
+            .read(cx)
+            .document()
+            .read(cx)
+            .bytes()
+            .expect("ready bytes");
+        let source = crate::ui::code_editor::drawio_engine::parse(&bytes)
+            .expect("the committed file still parses");
+        assert_eq!(source.pages.len(), 2, "independent decode sees two pages");
     });
 }

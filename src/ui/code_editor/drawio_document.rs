@@ -1,14 +1,12 @@
-//! Read-only draw.io document: Host-owned bytes, engine-owned rendering.
+//! Editable draw.io document: Host-owned bytes, engine-owned rendering.
 //!
-//! The workbench owns identity, acquisition and lifecycle. The fixed engine
-//! receives the exact bytes through an isolated WebView and never learns a
-//! path. Page selection, zoom and focus belong to a presentation; the parsed
-//! page list and the bytes belong to the document, shared by every split.
-//!
-//! Editing is deliberately absent in this ticket: there is no save path from
-//! the engine, no dirty state and no visual edit control. The bridge contract
-//! already accepts validated state messages so the next ticket can add edits
-//! without changing the Host owner.
+//! The workbench owns identity, acquisition, dirty state and lifecycle. The
+//! fixed engine renders and edits the diagram inside its isolated WebView and
+//! never learns a path; every committed edit returns over the session as the
+//! document's newest bytes, so save, save-as, conflict and unsaved-close all
+//! read the same authority as a text buffer. Page selection, zoom and focus
+//! belong to a presentation; the bytes belong to the document, shared by
+//! every split.
 
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::{
@@ -22,6 +20,7 @@ use gpui_kit::{
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use super::drawio_engine::assets::MAX_DOCUMENT_BYTES;
 use super::drawio_engine::bridge::Command;
 use super::drawio_engine::document::{DrawioError, DrawioSource};
 #[cfg(not(test))]
@@ -32,14 +31,20 @@ use super::drawio_engine::surface::{SurfaceEvent, SurfaceHost};
 use crate::ui::i18n::{L10nKey, t, t_fmt};
 
 gpui_kit::actions!(
-    drawio,
+    drawio_document,
     [
         DrawioNextPage,
         DrawioPreviousPage,
         DrawioZoomIn,
         DrawioZoomOut,
         DrawioFit,
-        DrawioActualSize
+        DrawioActualSize,
+        DrawioUndo,
+        DrawioRedo,
+        DrawioCopy,
+        DrawioCut,
+        DrawioPaste,
+        DrawioDelete,
     ]
 );
 
@@ -62,12 +67,37 @@ enum DrawioContent {
     Failed(SharedString),
 }
 
-/// One draw.io file's authoritative bytes and page list.
+/// One draw.io file's authoritative bytes, page list and edit history.
+///
+/// The document owns three clocks the presentations read differently.
+/// `revision` counts byte replacements — an open or an external reload — and
+/// every presentation that served an older revision reloads its engine.
+/// `edit` counts content-changing commits on top of the current bytes; a
+/// sibling's commit bumps it so every stale surface reloads to the newer
+/// document instead of overwriting it. `committed` counts every accepted
+/// engine commit including byte-identical sync flushes, so a deferred save
+/// can wait for a confirmed revision.
+///
+/// Undo and redo are document state, not engine state: every presentation
+/// shares this one history, so an edit made in one split is undone through
+/// the same stack in any other. Engine-internal undo is an adapter detail and
+/// never crosses the bridge.
 pub(crate) struct DrawioDocument {
     content: DrawioContent,
     reloading: bool,
     revision: u64,
+    edit: u64,
+    committed: u64,
+    fingerprint: super::Fingerprint,
+    past: std::collections::VecDeque<DrawioContent>,
+    future: Vec<DrawioContent>,
+    history_bytes: usize,
 }
+
+/// Undo depth caps: enough to keep long sessions, bounded so a run of
+/// multi-megabyte diagrams cannot pin unbounded memory.
+const MAX_HISTORY: usize = 128;
+const MAX_HISTORY_BYTES: usize = 64 * 1024 * 1024;
 
 impl DrawioDocument {
     pub(super) fn new(
@@ -75,6 +105,7 @@ impl DrawioDocument {
         parsed: Result<DrawioSource, DrawioError>,
         _cx: &mut Context<Self>,
     ) -> Self {
+        let fingerprint = fingerprint(&bytes);
         Self {
             content: match parsed {
                 Ok(source) => DrawioContent::Ready { bytes, source },
@@ -82,6 +113,12 @@ impl DrawioDocument {
             },
             reloading: false,
             revision: 0,
+            edit: 0,
+            committed: 0,
+            fingerprint,
+            past: Default::default(),
+            future: Vec::new(),
+            history_bytes: 0,
         }
     }
 
@@ -92,12 +129,131 @@ impl DrawioDocument {
         cx: &mut Context<Self>,
     ) {
         self.revision = self.revision.wrapping_add(1);
+        self.edit = self.edit.wrapping_add(1);
+        self.committed = self.committed.wrapping_add(1);
+        self.fingerprint = fingerprint(&bytes);
         self.content = match parsed {
             Ok(source) => DrawioContent::Ready { bytes, source },
             Err(error) => DrawioContent::Failed(SharedString::from(error.to_string())),
         };
+        // Fresh bytes are a new lineage: the old history must not undo back
+        // into a document the disk no longer agrees with.
+        self.past.clear();
+        self.future.clear();
+        self.history_bytes = 0;
         self.reloading = false;
         cx.notify();
+    }
+
+    /// The bytes one live engine just committed become the document. A body
+    /// that no longer parses is refused — the last good bytes stay the
+    /// authority rather than being overwritten by a truncated serialization.
+    /// A byte-identical commit (a save sync flush) advances `committed` but
+    /// leaves content, history and dirty state untouched. The revision does
+    /// not move, so the committing presentation keeps its engine session
+    /// while every sibling reloads to the newer bytes.
+    pub(crate) fn commit(
+        &mut self,
+        bytes: Arc<[u8]>,
+        cx: &mut Context<Self>,
+    ) -> Result<(), DrawioError> {
+        if bytes.is_empty() || bytes.len() > MAX_DOCUMENT_BYTES {
+            return Err(DrawioError::TooLarge);
+        }
+        let fingerprint = fingerprint(&bytes);
+        if fingerprint == self.fingerprint {
+            self.committed = self.committed.wrapping_add(1);
+            cx.notify();
+            return Ok(());
+        }
+        let source = super::drawio_engine::parse(&bytes)?;
+        self.push_past();
+        self.edit = self.edit.wrapping_add(1);
+        self.committed = self.committed.wrapping_add(1);
+        self.fingerprint = fingerprint;
+        self.content = DrawioContent::Ready { bytes, source };
+        cx.notify();
+        Ok(())
+    }
+
+    /// The one shared undo step: the previous committed revision becomes the
+    /// document and every presentation — including the one that made the
+    /// change — reloads to it. Returns false when there is nothing to undo.
+    pub(crate) fn undo(&mut self, cx: &mut Context<Self>) -> bool {
+        let Some(previous) = self.past.pop_back() else {
+            return false;
+        };
+        if let DrawioContent::Ready { bytes, .. } = &previous {
+            self.history_bytes = self.history_bytes.saturating_sub(bytes.len());
+        }
+        let restored = std::mem::replace(&mut self.content, previous.clone());
+        self.future.push(restored);
+        self.edit = self.edit.wrapping_add(1);
+        self.fingerprint = self
+            .bytes()
+            .as_deref()
+            .map(fingerprint)
+            .unwrap_or_default();
+        cx.notify();
+        true
+    }
+
+    /// Re-applies the newest undone revision; a new commit clears it first.
+    pub(crate) fn redo(&mut self, cx: &mut Context<Self>) -> bool {
+        let Some(next) = self.future.pop() else {
+            return false;
+        };
+        let current = std::mem::replace(&mut self.content, next.clone());
+        if let DrawioContent::Ready { bytes, .. } = &current {
+            self.history_bytes = self.history_bytes.saturating_add(bytes.len());
+        }
+        self.past.push_back(current);
+        self.trim_past();
+        self.edit = self.edit.wrapping_add(1);
+        self.fingerprint = self
+            .bytes()
+            .as_deref()
+            .map(fingerprint)
+            .unwrap_or_default();
+        cx.notify();
+        true
+    }
+
+    #[cfg(test)]
+    pub(crate) fn can_undo(&self) -> bool {
+        !self.past.is_empty()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn can_redo(&self) -> bool {
+        !self.future.is_empty()
+    }
+
+    /// Moves the current ready content into the undo stack, enforcing the
+    /// entry and byte budgets. Nothing past a failed load is recoverable, so
+    /// a Failed content is dropped rather than becoming an undo target.
+    fn push_past(&mut self) {
+        if let DrawioContent::Ready { bytes, .. } = &self.content {
+            self.history_bytes = self.history_bytes.saturating_add(bytes.len());
+        }
+        match &self.content {
+            DrawioContent::Ready { .. } => self.past.push_back(self.content.clone()),
+            DrawioContent::Failed(_) => {}
+        }
+        self.trim_past();
+        self.future.clear();
+    }
+
+    /// Drops the oldest undo entries until both budgets hold.
+    fn trim_past(&mut self) {
+        while self.past.len() > MAX_HISTORY || self.history_bytes > MAX_HISTORY_BYTES {
+            let Some(evicted) = self.past.pop_front() else {
+                break;
+            };
+            if let DrawioContent::Ready { bytes, .. } = &evicted {
+                self.history_bytes = self.history_bytes.saturating_sub(bytes.len());
+            }
+        }
     }
 
     pub(super) fn begin_reload(&mut self, cx: &mut Context<Self>) {
@@ -111,11 +267,32 @@ impl DrawioDocument {
         self.revision
     }
 
+    /// The edit generation of the current bytes. `commit`, `undo`, `redo`
+    /// and `replace` all advance it; a save captures it so a write that
+    /// raced an engine commit cannot silently retire newer work.
+    pub(crate) fn edit_revision(&self) -> u64 {
+        self.edit
+    }
+
+    /// Every accepted engine commit, including byte-identical sync flushes.
+    /// A deferred save waits on this advancing, not on `edit`, so an
+    /// unchanged model still confirms its flush.
+    pub(crate) fn committed(&self) -> u64 {
+        self.committed
+    }
+
+    /// A cheap digest of the authoritative bytes, recomputed once per
+    /// accepted revision so the dirty comparison stays a comparison — undo
+    /// back to the saved bytes reads clean again.
+    pub(super) fn fingerprint(&self) -> super::Fingerprint {
+        self.fingerprint
+    }
+
     pub(crate) fn reloading(&self) -> bool {
         self.reloading
     }
 
-    fn bytes(&self) -> Option<Arc<[u8]>> {
+    pub(crate) fn bytes(&self) -> Option<Arc<[u8]>> {
         match &self.content {
             DrawioContent::Ready { bytes, .. } => Some(bytes.clone()),
             DrawioContent::Failed(_) => None,
@@ -139,6 +316,12 @@ impl DrawioDocument {
             DrawioContent::Ready { .. } => None,
         }
     }
+}
+
+/// The workbench's saved-state digest, computed once per accepted revision
+/// rather than on every dirty comparison.
+fn fingerprint(bytes: &[u8]) -> super::Fingerprint {
+    super::Fingerprint::of_bytes(bytes)
 }
 
 #[derive(Clone)]
@@ -168,13 +351,24 @@ pub(crate) struct DrawioView {
     last_paint: Instant,
     surface_visible: bool,
     revision: u64,
+    /// The edit generation this presentation's engine session last rendered.
+    /// A sibling's commit bumps the document's generation; this view reloads
+    /// to the newer bytes instead of overwriting them on its next commit.
+    edit: u64,
+    /// Set when the engine asked the workbench to save (its own Ctrl+S); the
+    /// editor's frame sweep drains it into the same Host save path as a
+    /// toolbar save.
+    save_requested: bool,
     _document_observed: Subscription,
 }
 
 impl DrawioView {
     pub(super) fn new(document: Entity<DrawioDocument>, cx: &mut Context<Self>) -> Self {
         let focus = cx.focus_handle();
-        let revision = document.read(cx).revision();
+        let (revision, edit) = {
+            let document = document.read(cx);
+            (document.revision(), document.edit_revision())
+        };
         let observed = cx.observe(&document, |this, _, cx| this.sync(cx));
         let watchdog = cx.spawn(async move |this, cx| {
             loop {
@@ -203,6 +397,8 @@ impl DrawioView {
             last_paint: Instant::now(),
             surface_visible: false,
             revision,
+            edit,
+            save_requested: false,
             _document_observed: observed,
         }
     }
@@ -300,6 +496,74 @@ impl DrawioView {
         }
     }
 
+    /// Workbench undo is document state: the previous committed revision
+    /// becomes the document and every presentation — this one included —
+    /// reloads its engine to it. There is no engine-local undo to race.
+    pub(crate) fn undo(&mut self, cx: &mut Context<Self>) {
+        self.document.update(cx, |document, cx| {
+            document.undo(cx);
+        });
+    }
+
+    pub(crate) fn redo(&mut self, cx: &mut Context<Self>) {
+        self.document.update(cx, |document, cx| {
+            document.redo(cx);
+        });
+    }
+
+    pub(crate) fn delete_selection(&mut self, cx: &mut Context<Self>) {
+        self.send_edit(Command::DeleteCells, cx);
+    }
+
+    pub(crate) fn copy(&mut self, cx: &mut Context<Self>) {
+        self.send_edit(Command::CopyCells, cx);
+    }
+
+    pub(crate) fn cut(&mut self, cx: &mut Context<Self>) {
+        self.send_edit(Command::CutCells, cx);
+    }
+
+    /// The system clipboard's text becomes diagram cells through the engine's
+    /// own paste path; an empty clipboard is a no-op.
+    pub(crate) fn paste(&mut self, cx: &mut Context<Self>) {
+        let Some(text) = cx.read_from_clipboard().and_then(|item| item.text()) else {
+            return;
+        };
+        if text.is_empty() {
+            return;
+        }
+        if let Some(surface) = &mut self.surface {
+            let _ = surface.command(Command::Paste(text));
+            cx.notify();
+        }
+    }
+
+    /// One engine-bound editing command, dropped when the surface is not up
+    /// or has already retired.
+    fn send_edit(&mut self, command: Command, cx: &mut Context<Self>) {
+        if let Some(surface) = &mut self.surface {
+            let _ = surface.command(command);
+            cx.notify();
+        }
+    }
+
+    /// Asks the live engine to serialize and commit its current model, so
+    /// the deferred save captures what is actually on the canvas. False
+    /// means no live session can answer, so the caller saves the committed
+    /// bytes directly.
+    pub(crate) fn flush(&mut self) -> bool {
+        let Some(surface) = &mut self.surface else {
+            return false;
+        };
+        matches!(surface.command(Command::Sync), Ok(true))
+    }
+
+    /// Drained by the editor's frame sweep: the engine asked for the Host's
+    /// save path (its own Ctrl+S), which only the owning workbench can run.
+    pub(crate) fn take_save_request(&mut self) -> bool {
+        std::mem::take(&mut self.save_requested)
+    }
+
     pub(crate) fn zoom_label(&self) -> SharedString {
         format!("{:.0}%", self.zoom * 100.).into()
     }
@@ -329,12 +593,16 @@ impl DrawioView {
     }
 
     fn sync(&mut self, cx: &mut Context<Self>) {
-        let revision = self.document.read(cx).revision();
-        if revision == self.revision {
+        let (revision, edit) = {
+            let document = self.document.read(cx);
+            (document.revision(), document.edit_revision())
+        };
+        if revision == self.revision && edit == self.edit {
             cx.notify();
             return;
         }
         self.revision = revision;
+        self.edit = edit;
         let count = self.page_count(cx);
         self.page = if count == 0 {
             0
@@ -418,8 +686,12 @@ impl DrawioView {
                     return;
                 }
             };
-            let Some(bytes) = self.document.read(cx).bytes() else {
-                return;
+            let (bytes, generation) = {
+                let document = self.document.read(cx);
+                let Some(bytes) = document.bytes() else {
+                    return;
+                };
+                (bytes, (document.revision(), document.edit_revision()))
             };
             let theme = if cx.theme().is_dark() {
                 PreviewTheme::Dark
@@ -430,7 +702,20 @@ impl DrawioView {
             self.engine = EngineStatus::Starting;
             cx.spawn(async move |this, cx| {
                 let _ = this.update(cx, |view, cx| {
-                    view.start_surface(parent, bounds, scale, bytes, theme, cx);
+                    // A reload between scheduling and this callback must not
+                    // be answered by a stale surface: the late starter is
+                    // dropped instead of replacing the new session.
+                    let live = {
+                        let document = view.document.read(cx);
+                        (document.revision(), document.edit_revision())
+                    };
+                    if live == generation {
+                        view.start_surface(parent, bounds, scale, bytes, theme, cx);
+                    } else {
+                        // The document moved on: un-latch so the next paint
+                        // starts a surface for the current bytes.
+                        view.surface_pending = false;
+                    }
                 });
             })
             .detach();
@@ -494,6 +779,46 @@ impl DrawioView {
                 if zoom.is_finite() && zoom > 0. {
                     self.zoom = zoom;
                 }
+            }
+            SurfaceEvent::Commit { bytes } => {
+                // One live engine's newest serialization becomes the document.
+                // Pin this view's generation before observers flush so its own
+                // session survives the notification while siblings reload.
+                match self
+                    .document
+                    .update(cx, |document, cx| document.commit(bytes, cx))
+                {
+                    Ok(()) => {
+                        let document = self.document.read(cx);
+                        self.revision = document.revision();
+                        self.edit = document.edit_revision();
+                    }
+                    Err(error) => {
+                        self.blocked = Some(SharedString::from(format!(
+                            "engine commit was refused: {error}"
+                        )));
+                    }
+                }
+            }
+            SurfaceEvent::Save => {
+                // The engine's own Ctrl+S: flush its live model into the
+                // document, then hand the save to the owning workbench.
+                if let Some(surface) = &mut self.surface {
+                    let _ = surface.command(Command::Sync);
+                }
+                self.save_requested = true;
+            }
+            SurfaceEvent::Undo => {
+                self.undo(cx);
+            }
+            SurfaceEvent::Redo => {
+                self.redo(cx);
+            }
+            SurfaceEvent::Paste => {
+                self.paste(cx);
+            }
+            SurfaceEvent::Clipboard { text } => {
+                cx.write_to_clipboard(gpui_kit::ClipboardItem::new_string(text));
             }
             SurfaceEvent::Blocked { reason } => {
                 self.blocked = Some(SharedString::from(reason));
@@ -845,6 +1170,12 @@ impl Render for DrawioView {
             .on_action(cx.listener(|this, _: &DrawioZoomOut, _, cx| this.zoom_out(cx)))
             .on_action(cx.listener(|this, _: &DrawioFit, _, cx| this.fit(cx)))
             .on_action(cx.listener(|this, _: &DrawioActualSize, _, cx| this.actual_size(cx)))
+            .on_action(cx.listener(|this, _: &DrawioUndo, _, cx| this.undo(cx)))
+            .on_action(cx.listener(|this, _: &DrawioRedo, _, cx| this.redo(cx)))
+            .on_action(cx.listener(|this, _: &DrawioCopy, _, cx| this.copy(cx)))
+            .on_action(cx.listener(|this, _: &DrawioCut, _, cx| this.cut(cx)))
+            .on_action(cx.listener(|this, _: &DrawioPaste, _, cx| this.paste(cx)))
+            .on_action(cx.listener(|this, _: &DrawioDelete, _, cx| this.delete_selection(cx)))
             .on_key_down(cx.listener(|this, event: &gpui_kit::KeyDownEvent, _, cx| {
                 let key = event.keystroke.key.as_str();
                 if event.keystroke.modifiers.secondary(cx) && matches!(key, "pageup" | "pagedown") {
@@ -896,6 +1227,14 @@ pub(super) fn menu_entries(
     multipage: bool,
 ) -> gpui_kit::component::menu::PopupMenu {
     let menu = menu
+        .separator()
+        .menu(t(L10nKey::AppMenuUndo), Box::new(DrawioUndo))
+        .menu(t(L10nKey::AppMenuRedo), Box::new(DrawioRedo))
+        .separator()
+        .menu(t(L10nKey::AppMenuCopy), Box::new(DrawioCopy))
+        .menu(t(L10nKey::AppMenuCut), Box::new(DrawioCut))
+        .menu(t(L10nKey::AppMenuPaste), Box::new(DrawioPaste))
+        .menu(t(L10nKey::EditorDrawioDelete), Box::new(DrawioDelete))
         .separator()
         .menu(t(L10nKey::EditorImageZoomIn), Box::new(DrawioZoomIn))
         .menu(t(L10nKey::EditorImageZoomOut), Box::new(DrawioZoomOut))
