@@ -13,5 +13,5 @@ assets/windows/conpty/LICENSE.txt -text
 assets/drawio/** -text
 src/ui/code_editor/drawio_engine/web/** -text
 
-# WebView2 loader is redistributed byte-for-byte.
+# WebView2 SDK legal notices are retained byte-for-byte.
 assets/windows/webview2/** -text
