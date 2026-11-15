@@ -1196,7 +1196,7 @@ mod macos_host {
                 NewWindowResponse::Deny
             };
             let download_sender = events.clone();
-            let mut download = move |_url: String, _path: &mut PathBuf| {
+            let download = move |_url: String, _path: &mut PathBuf| {
                 let _ = download_sender.try_send(SurfaceEvent::Blocked {
                     reason: "a download".to_string(),
                 });

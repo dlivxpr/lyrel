@@ -186,11 +186,15 @@ jobs:
             "target/${{ matrix.target }}/debug/lyrel-server.exe" `
             "target/${{ matrix.target }}/debug/lyrel-updater.exe"
 
-      # 239a1b4c 的 macOS 日志：14:48:12 开始测试编译，14:55:35 编译根包，
-      # 15:07:00 仍输出未使用代码诊断，15:18:25 达到 30 分钟上限；尚未执行测试。
-      # 旧 native target 将 src/main.rs 连同所有 cfg(test) 模块再编译一次。
-      # 普通单元测试现在位于共享 library；本轮不启用 native-markdown-tests，
-      # 由 required-features 排除原生入口，不过滤普通桌面、headless 或 updater 用例。
+      # 1acd9477 的 macOS 日志中，测试图的普通 library 编译耗时约 21 分钟，
+      # 同一步的全部测试编译达到 30 分钟上限，尚未执行测试。
+      # 先完成 library 单元测试，避免同包的普通 library 与大型 libtest 并发争用；
+      # 后续完整目标选择复用产物，仍包含所有 binaries、integration tests 和 doctests。
+      # 不改变 profile、测试范围或单步时间上限；原生消费者仍由后续 feature 单独执行。
+      - name: Compile desktop library unit tests
+        if: runner.os != 'Linux'
+        timeout-minutes: 30
+        run: ${{ runner.os == 'Windows' && 'pwsh -NoProfile -File scripts/cargo-windows.ps1' || 'cargo' }} test --locked -p lyrel -p lyrel-markdown-editor -p lyrel-text -p lyrel-core -p lyrel-cli -p lyrel-server --features updater --target ${{ matrix.target }} --lib --no-run
       - name: Compile desktop library and headless tests
         id: desktop_tests_compile
         if: runner.os != 'Linux'

@@ -16,12 +16,15 @@ use super::session::SessionId;
 
 /// A reserved origin (RFC 2606 `.invalid`) that can never resolve. WebView2
 /// intercepts every request under it before the network stack sees it.
+#[cfg(any(windows, test))]
 pub(crate) const ORIGIN: &str = "https://drawio.lyrel.invalid";
 
 pub(crate) const SHELL_PATH: &str = "/drawio/shell.html";
 pub(crate) const ENGINE_PATH: &str = "/drawio/engine.html";
 
+#[cfg(any(windows, test))]
 pub(crate) const SHELL_URL: &str = "https://drawio.lyrel.invalid/drawio/shell.html";
+#[cfg(any(windows, test))]
 pub(crate) const ENGINE_URL: &str = "https://drawio.lyrel.invalid/drawio/engine.html";
 
 /// macOS registers a custom WKWebView scheme; the same manifest paths and CSP
@@ -182,6 +185,7 @@ impl EngineBody {
 
 pub(crate) struct EngineResponse {
     pub(crate) status: u16,
+    #[cfg(any(windows, test))]
     pub(crate) reason: &'static str,
     pub(crate) content_type: &'static str,
     pub(crate) headers: Vec<(&'static str, String)>,
@@ -192,6 +196,7 @@ impl EngineResponse {
     fn forbidden() -> Self {
         Self {
             status: 403,
+            #[cfg(any(windows, test))]
             reason: "Forbidden",
             content_type: "text/plain; charset=utf-8",
             headers: base_headers(),
@@ -202,6 +207,7 @@ impl EngineResponse {
     fn method_not_allowed() -> Self {
         let mut response = Self {
             status: 405,
+            #[cfg(any(windows, test))]
             reason: "Method Not Allowed",
             content_type: "text/plain; charset=utf-8",
             headers: base_headers(),
@@ -214,6 +220,7 @@ impl EngineResponse {
     fn too_large() -> Self {
         Self {
             status: 413,
+            #[cfg(any(windows, test))]
             reason: "Payload Too Large",
             content_type: "text/plain; charset=utf-8",
             headers: base_headers(),
@@ -238,6 +245,7 @@ fn asset_response(asset: &Asset) -> EngineResponse {
     }
     EngineResponse {
         status: 200,
+        #[cfg(any(windows, test))]
         reason: "OK",
         content_type: asset.content_type,
         headers,
@@ -249,6 +257,7 @@ fn asset_response(asset: &Asset) -> EngineResponse {
 /// any path not in the manifest is refused. The active session's document is
 /// the one dynamic GET; a commit or sync `POST` under the same session is the
 /// only write, answered by the document the shell proves belongs to it.
+#[cfg(any(windows, test))]
 pub(crate) fn respond(
     method: &str,
     target: &str,
@@ -314,6 +323,7 @@ pub(crate) fn respond_from(
         return (
             EngineResponse {
                 status: 200,
+                #[cfg(any(windows, test))]
                 reason: "OK",
                 content_type: "text/plain; charset=utf-8",
                 headers: base_headers(),
@@ -343,6 +353,7 @@ pub(crate) fn respond_from(
         return (
             EngineResponse {
                 status: 200,
+                #[cfg(any(windows, test))]
                 reason: "OK",
                 content_type: "application/xml; charset=utf-8",
                 headers,
