@@ -350,6 +350,23 @@ impl LyrelApp {
                 .presentations
                 .image_view(&primary, tab, code.group, cx);
         }
+        // YAML's second group opens the other side by default: tree and source
+        // over the same Document and the same parsed projection.
+        if let (Some(primary), Some(tab), Some(code)) = (
+            self.editor
+                .buffers
+                .get(id)
+                .and_then(|file| file.input.yaml().cloned()),
+            self.tabs.get(self.tabs.active_index()).map(|tab| tab.id()),
+            self.tab_code(),
+        ) {
+            self.editor
+                .buffers
+                .get(id)
+                .expect("split buffer")
+                .presentations
+                .yaml_view(&primary, tab, code.group, cx);
+        }
         // CSV/TSV's second group opens the other side by default: table and
         // source over the same Document and the same parsed records.
         if let (Some(primary), Some(tab), Some(code)) = (
@@ -432,6 +449,10 @@ impl LyrelApp {
             } else if file.input.json().is_some() {
                 file.presentations
                     .json_existing(tab, other_group)
+                    .is_some_and(|view| view.read(cx).focus_handle(cx).contains_focused(window, cx))
+            } else if file.input.yaml().is_some() {
+                file.presentations
+                    .yaml_existing(tab, other_group)
                     .is_some_and(|view| view.read(cx).focus_handle(cx).contains_focused(window, cx))
             } else if file.input.toml().is_some() {
                 file.presentations

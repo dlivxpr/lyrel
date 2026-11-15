@@ -1053,6 +1053,11 @@ impl LyrelApp {
             })
             .or_else(|| {
                 f.presentations
+                    .yaml_existing(tab, group)
+                    .map(super::EditorInput::Yaml)
+            })
+            .or_else(|| {
+                f.presentations
                     .toml_existing(tab, group)
                     .map(super::EditorInput::Toml)
             })

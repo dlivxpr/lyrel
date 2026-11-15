@@ -2046,6 +2046,79 @@ pub fn translate_en(key: L10nKey) -> &'static str {
         }
         L10nKey::EditorTomlEditUnsupported => "This node cannot be changed from the tree",
         L10nKey::StructureEditApply => "Apply",
+        L10nKey::EditorYamlStructure => "Structure",
+        L10nKey::EditorYamlSource => "Source",
+        L10nKey::EditorYamlShowStructure => "Show structure",
+        L10nKey::EditorYamlShowSource => "Show source",
+        L10nKey::EditorYamlToggleStructure => "Toggle YAML structure / source",
+        L10nKey::EditorYamlParsing => "Parsing YAML",
+        L10nKey::EditorYamlInvalid => "YAML source could not be parsed",
+        L10nKey::EditorYamlInvalidDetail => "Line {line}, column {column}: {message}",
+        L10nKey::EditorYamlStructureUnavailable => "YAML structure unavailable",
+        L10nKey::EditorYamlSourceStaysEditable => {
+            "The source stays editable; switch to Source to inspect or repair it."
+        }
+        L10nKey::EditorYamlInputLimit => {
+            "YAML structure inspection is limited to {mib} MiB; the source stays editable."
+        }
+        L10nKey::EditorYamlNodeLimit => {
+            "YAML structure exceeds the {count}-node inspection limit; the source stays editable."
+        }
+        L10nKey::EditorYamlPathLimit => {
+            "YAML structure paths exceed the {mib} MiB memory budget; the complete source stays editable."
+        }
+        L10nKey::EditorYamlDepthLimit => {
+            "YAML nesting exceeds {count} levels; the source stays editable."
+        }
+        L10nKey::EditorYamlDocuments => "{count} documents",
+        L10nKey::EditorYamlNodes => "{count} nodes",
+        L10nKey::EditorYamlValueName => "Value",
+        L10nKey::EditorYamlKeyName => "Key",
+        L10nKey::EditorYamlKeyPlaceholder => "Scalar key",
+        L10nKey::EditorYamlValuePlaceholder => "One scalar, e.g. 42, \"text\", 'text' or null",
+        L10nKey::EditorYamlEditValueTitle => "Edit value · {path}",
+        L10nKey::EditorYamlRenameKeyTitle => "Rename key · {path}",
+        L10nKey::EditorYamlAddKeyTitle => "Add key to {path}",
+        L10nKey::EditorYamlAddItemTitle => "Add item to {path}",
+        L10nKey::EditorYamlEditStale => {
+            "The document changed, so this edit was not written. Close this panel and select the node again."
+        }
+        L10nKey::EditorYamlEditAlias => {
+            "This alias is a reference. Edit its anchor, or use Source; the alias is never expanded or detached here."
+        }
+        L10nKey::EditorYamlComplexKeySource => {
+            "Complex key opened in Source at its exact range; edit its syntax there. The same history and save apply."
+        }
+        L10nKey::EditorYamlEditMissingValue => {
+            "This entry has no editable scalar value; use Source."
+        }
+        L10nKey::EditorYamlEditMultiLine => "Multi-line values are edited in Source.",
+        L10nKey::EditorYamlEditNotScalar => "This node is not a scalar value.",
+        L10nKey::EditorYamlEditEmptyDocument => {
+            "An empty document has no member to add from the tree; use Source."
+        }
+        L10nKey::EditorYamlEditUnsupported => {
+            "This node cannot be changed from the tree. Use Source for its original form."
+        }
+        L10nKey::EditorYamlEditInvalidValue => "Not one YAML scalar: {message}",
+        L10nKey::EditorYamlEditResultInvalid => {
+            "This edit would make the source invalid: line {line}, column {column}: {message}"
+        }
+        L10nKey::EditorYamlEditAliasesReference => {
+            "Cannot remove: {count} aliases reference &{name}. Edit the value or remove the aliases first."
+        }
+        L10nKey::EditorYamlAnchorImpact => {
+            "&{anchor} is affected here; editing this {field} changes what {count} aliases resolve to. The aliases stay references."
+        }
+        L10nKey::EditorYamlAnchorImpactNone => {
+            "&{anchor} is affected here; no aliases currently reference it. The anchor stays on its value."
+        }
+        L10nKey::EditorYamlAnchorEdited => {
+            "Edited &{anchor}; {count} aliases now resolve to the new value."
+        }
+        L10nKey::EditorYamlAnchorEditedNone => {
+            "Edited &{anchor}; no aliases currently reference it."
+        }
         L10nKey::EditorCsvTable => "Table",
         L10nKey::EditorCsvShowTable => "Show table",
         L10nKey::EditorCsvShowSource => "Show source",

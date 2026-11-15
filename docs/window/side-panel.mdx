@@ -139,7 +139,7 @@ GitHub 上的 Markdown 来自陌生人，因此渲染时有两项限制：只加
 
 编辑器会监视磁盘上的文件：未修改的文档自动载入外部更改；已有未保存编辑时则保留文本并显示冲突，不覆盖你的修改。关闭时存在未保存的编辑，会先询问再丢弃。超过 4 MB 的文件以及看起来是二进制的文件会被拒绝打开并显示提示，而不是勉强打开导致异常。
 
-本轮文件预览与格式编辑范围见[文件能力扩展设计](#file-format-plan)。PNG／JPEG／WebP／BMP／ICO 由 #280 接入，#282 补齐 GIF 动画与多页 TIFF（见[图片文档](#static-image-documents)）；另已接入 [SVG 源码与安全预览](#svg-documents)、[PDF 页／缩放／密码／既有外观／大纲／选字／搜索](#pdf-reading-documents)、#286 EPUB 阅读、[JSON 家族源码链接结构与局部编辑](#json-documents)及 [SQLite 基础浏览](#sqlite-documents)。#289 交付 JSON 家族检查与源码编辑，#290 交付 JSON／JSONC 树内改值、键与成员增删改，#291 交付 JSONL／NDJSON 的逐行记录编辑。其余未列明的编辑能力仍待完成，各专节分别说明实现和未验收边界。
+本轮文件预览与格式编辑范围见[文件能力扩展设计](#file-format-plan)。PNG／JPEG／WebP／BMP／ICO 由 #280 接入，#282 补齐 GIF 动画与多页 TIFF（见[图片文档](#static-image-documents)）；另已接入 [SVG 源码与安全预览](#svg-documents)、[PDF 页／缩放／密码／既有外观／大纲／选字／搜索](#pdf-reading-documents)、#286 EPUB 阅读、[JSON 家族源码链接结构与局部编辑](#json-documents)、[YAML 源码链接结构与局部编辑](#yaml-documents)及 [SQLite 基础浏览](#sqlite-documents)。#289 交付 JSON 家族检查与源码编辑，#290 交付 JSON／JSONC 树内改值、键与成员增删改，#291 交付 JSONL／NDJSON 的逐行记录编辑，#292 交付 YAML 键／值／sequence 编辑与锚点／别名／tag／多文档保真。其余未列明的编辑能力仍待完成，各专节分别说明实现和未验收边界。
 
 同一窗口中，同一 Host 上的同一文件在多个标签页之间共享一个 buffer、编辑内容和撤销历史；关闭其中一个展示位置不会丢弃其他标签页仍在使用的文档。不同 Host 上即使路径相同，也保持独立。外部监视只跟随当前工作区 Host 的文件；SFTP 文件仍在保存时检查远端版本，不用本机同名文件代替。文件链接、搜索和前后导航携带的行列位置随打开请求一起保留，已经失效的请求不会落到切换后的标签页或工作区。
 
@@ -196,7 +196,7 @@ Markdown 的每个标签页／编辑组各自保留光标、选择、滚动、�
 
 本节记录已确认的后续设计，不是当前版本的支持声明。目标是在 Windows／macOS 桌面的本地与远端工作区中查看文件，并编辑明确纳入范围的格式；格式识别、界面和保存必须一起验收，不能以扩展名数量或解析成功代替完整支持。
 
-> 已有实现：#280／#282 的[图片文档](#static-image-documents)、#283 的 [SVG 源码与安全原生预览](#svg-documents)、#284／#285 的 [PDF 阅读文档](#pdf-reading-documents)、#286 EPUB 阅读、#289／#290／#291 的 [JSON 家族源码链接结构与局部编辑](#json-documents)、#295 的 [SQLite 数据库文档](#sqlite-documents)（筛选／排序／完整值检查已由 #296 补齐）。PDF 大纲／选字复制／搜索已由 #285 补齐；其余格式与编辑能力仍待对应工单完成。源码接入不表示双平台验收通过。
+> 已有实现：#280／#282 的[图片文档](#static-image-documents)、#283 的 [SVG 源码与安全原生预览](#svg-documents)、#284／#285 的 [PDF 阅读文档](#pdf-reading-documents)、#286 EPUB 阅读、#289／#290／#291 的 [JSON 家族源码链接结构与局部编辑](#json-documents)、#292 的 [YAML 源码链接结构与局部编辑](#yaml-documents)、#295 的 [SQLite 数据库文档](#sqlite-documents)（筛选／排序／完整值检查已由 #296 补齐）。PDF 大纲／选字复制／搜索已由 #285 补齐；其余格式与编辑能力仍待对应工单完成。源码接入不表示双平台验收通过。
 
 本节使用以下术语：
 
@@ -217,7 +217,7 @@ Markdown 的每个标签页／编辑组各自保留光标、选择、滚动、�
 | EPUB | 无 DRM 的流式阅读；目录、章节、搜索、书签、阅读位置、字体和主题 | 只读，阅读状态单独保存；不纳入固定版式、DRM 解锁或书籍编辑，不承诺复现出版方的完整 CSS |
 | CSV／TSV | 虚拟化表格、源码访问、完整字段查看 | 单元格输入、复制粘贴、增删行列、Undo／Redo；保留分隔符、引号、多行字段、编码与换行；排序和筛选默认只改变视图，写回排序必须是显式操作 |
 | JSON／JSONC／JSONL／NDJSON | 结构树或逐记录视图，节点与源码相互定位（#289 已交付只读检查与源码编辑） | 在树中修改值、增删或重命名键、编辑数组（#290 已交付 JSON／JSONC）；JSONL／NDJSON 可改记录内值／键／数组并插入或删除整条记录（#291），保留逐行形式、空行、无效邻居与未触及行的编码／行尾；保留注释、重复键、键序和数字字面量 |
-| YAML | 结构树与源码相互定位 | 键、值和序列的增删改；保留注释、锚点、别名及 tag，不静默展开引用；修改锚点时说明对引用值的影响，不能无损表达的自定义构造保留源码访问 |
+| YAML | 结构树与源码相互定位（#292 已实现，见 [YAML 文档](#yaml-documents)） | 键、值和序列的增删改；保留注释、锚点、别名及 tag，不静默展开引用；修改锚点时说明对引用值的影响，不能无损表达的自定义构造保留源码访问 |
 | TOML | 结构树与源码相互定位 | 表、数组表、键和值的增删改；保留注释、日期／时间类型和表结构，不任意互转普通表与内联表 |
 | XML | 结构树与源码相互定位，混合内容按原顺序表示 | 元素、属性、文本节点的增删改；保留命名空间、注释和 CDATA，不获取外部 DTD，不解析外部实体 |
 | SQLite | 表／视图、schema、分页记录、筛选、排序与完整单元格查看 | 所属 Host 上的只读查询，只传必要结果；不下载整个远端库，不修改源库，不执行任意写 SQL 或加载扩展；不增加自由 SQL 控制台 |
@@ -334,6 +334,23 @@ Office 与 Notebook 整项排除本轮：不新增 DOC／DOCX、XLS／XLSX、PPT
 **复用记录与边界**：见 `src/ui/code_editor/json_document/UPSTREAM.toml`。固定上游 Glim `fc2183f2c5f27ddfcdc4badbab6d83d50616831b` 的 `glim-services/src/json.rs`、`glim-core/src/structured.rs` 与 reader `json.rs`／`json/view.rs`；保留 JSONC 词法边界、可见行展开、树行渲染与完整值交互，替换其 Value 树、丢重复键／数字拼写的节点、NDJSON 数组投影与整篇格式化。上游没有可编辑的重复键树或局部 mutation API，因此 #290 在共享 `structure_view` 交互与 `jsonc-parser` 源码范围上补最小的编辑层；#291 在同一投影上补 JSONL／NDJSON 的逐行记录层，明确不使用 Glim 的 NDJSON-to-`Value::Array` 投影作为存储或写回权威。`src/ui/code_editor/structure_view.rs` 继续是格式无关的可见行与源码行列机制，`src/ui/code_editor/structure_edit.rs` 是共享的单／双字段编辑面板，YAML／TOML／XML 可各自实现 `Treelike` 与格式专用 mutation。不交付 JSON5、整篇格式化、通用 Value 文档或把其他格式投影成 JSON。
 
 **证据边界**：工作台回归覆盖映射 Host 与同名本机诱饵、默认结构／记录视图、重复键与精确数字／转义的 occurrence 定位、真实指针／键盘展开、完整值复制、源码编辑与跨呈现 Undo／Redo、普通保存与原字节、外部无效源码修复、JSONL 行 identity／无效行、分屏独立状态、输入预算与暂停后迟到结果；#290 另覆盖选中重复 occurrence 的改值／改名、空 object／array 插入、删除成员、JSONC 注释与尾随逗号保真、保存／另存为／失败写入／外部冲突／取消关闭、分屏中的迟到命令拒绝、关闭后回调不写原件，树焦点下的普通撤销／重做（键盘留在树上、另一呈现源码与独立保存字节一致），以及真实远端路由下的保存回读。#291 覆盖 JSONL／NDJSON 的嵌套值／键／数组编辑、记录整行改值、插入与删除记录、无效邻居不阻塞、空白行与混合行尾／BOM 未触及字节保留、记录预算边界、迟到解析与过期记录命令拒绝、共享 Undo／Redo、保存／另存为／失败写入／外部冲突／取消关闭与独立重开，并新增映射 Host 同名诱饵和真实远端路由保存回读消费者。夹具在测试内隔离生成。真实产品窗口、原生 OS 输入、系统 IME、macOS 与性能仍未验收，不能由 headless 测试或编译成功代替。
+<a id="yaml-documents"></a>
+#### YAML 源码链接结构与局部编辑（#292 已实现）
+
+`.yaml`／`.yml` 打开为同一份逐行保真源码及其结构树，不把 YAML 当作普通代码或 JSON 的另一种写法。
+
+- 权威与保真：源码仍是 `lyrel-markdown-editor::Document` 的唯一内容，编码／BOM、逐行换行、revision、history、保存、另存为、外部重载、冲突与未保存关闭都沿用既有工作台 lifecycle。结构投影只保存源码范围与显示文本，不写回、不复制第二份可变文档，也不经 JSON／`YamlValue` 转换。多文档、mapping／sequence、flow／block、注释、锚点、别名、tag、标量原拼写、block scalar 与 complex key 均保留原字节。
+- 解析：使用 registry 的 `yaml-edit = 0.3.6`（Apache-2.0，`default-features = false`）rowan 无损 CST。CST 只在后台 worker 内存在，跨线程返回拥有型的节点范围与显示文本，不在 UI 线程解析或传递可变 Rc AST。每份文档一个 worker，只安装与当前 Document 身份、revision 与请求代次匹配的投影。
+- 局部编辑：选中标量可改值，选中 entry 可只重命名标量键，选中 mapping／sequence 可在末尾加入标量成员或项，选中成员／项可删除；block 集合删空时替换为等价的 `{}`／`[]`。block scalar 在共享面板的真实多行字段里编辑原始 YAML 片段（头部与正文），同一 parser 校验它恰好是一个目标 block scalar 后做局部 splice；flow collection 复杂键也可在同一面板以完整键片段替换。多行或无法无损表达的复杂键仍打开精确源码范围。命令绑定当前投影的 `(path, range)`，提交前要求已安装投影的 revision 仍等于源码权威；写入前解析整篇结果。替换经共享 `Document::replace_ranges` 成为一条普通 history。
+- 锚点与别名：别名始终显示为 `*name` 引用，不展开成副本，也不在树中生成被引用值的第二个子树。编辑带锚点的值或键时，共享编辑面板说明该锚点当前被多少别名引用，提交后再次说明别名现在解析到的新值；取消不写。删除会悬空外部别名的节点在写入前被拒绝并给出可见原因，不静默 retarget、detach 或复制。tag 与锚点徽标随节点显示。
+- 源码访问：别名节点不可直接改值，编辑时提示其锚点；多行或无法无损表达的复杂键打开精确源码范围；block 集合最后一项删除写成空 flow 集合；空文档的成员插入指向源码。这些不是伪控件或静默 no-op，也不把无法无损表达的构造强行转成 JSON。
+- 预算与迟到：输入最多 1 MiB、结构最多 20,000 节点、完整路径文本合计最多 8 MiB、嵌套最多 512 层；超限时结构视图明确报错，源码仍可编辑与保存。无效 YAML 显示解析错误并保留全部内容；修正后重新投影。Document revision 或请求代次不匹配的迟到结果一律丢弃；结构变化后仍打开的编辑面板拒绝写入。
+- 呈现与历史：默认显示结构树；工具栏与状态行提供 Structure／Source 切换、文档与节点计数、源码定位与树内编辑命令。真实指针点击选择并展开容器，方向键／Home／End／PageUp／PageDown 导航，Space 折叠，Enter 或双击在源码中选中该 occurrence；树持有键盘时 `Ctrl`／`Cmd`+`Z` 与 `Ctrl`／`Cmd`+`Shift`+`Z`（Windows／Linux 另含 `Ctrl`+`Y`）经同一 `EditorState::undo_document`／`redo_document` 撤销／重做，不切换源码、不另建 history。分屏每个分组有独立模式、折叠、选择、编辑面板和结构滚动，同时共享同一 Document 与 history。
+
+**复用记录与边界**：见 `src/ui/code_editor/yaml_document/UPSTREAM.toml`。没有复制 Glim 源文件：固定 `fc2183f2` 的 `glim-services/src/graph.rs` YAML 分支是 `serde_yaml_ng` → `serde_json::Value` 的有损只读投影，会丢锚点／别名／tag／注释／标量样式并把多文档压成数组，因此明确拒绝。#289 的 `Treelike`／可见行／源码行列与 #290 的 `StructureEditPanel` 继续复用；`structure_rows.rs` 的共享行呈现由 JSON、TOML 与本格式共同消费，格式语义和可写范围仍归 `yaml_document/projection.rs` 与 `mutation.rs`。registry 依赖与拒绝原因见同一 `UPSTREAM.toml`，根 `LICENSE` 增加 `yaml-edit`、`rowan` 等条目。
+
+**证据边界**：生产工作台回归覆盖映射 Host 与同名本机诱饵、BOM／混合行尾／UTF16LE／多文档／中文／锚点／别名／tag／block scalar／complex key 的可见树与精确保存、编辑带锚点值后别名仍为引用且可见影响说明、block scalar 多行原始片段编辑、flow 复杂键局部替换、键值／flow 与 block mapping／sequence 的插入与删除、树焦点与跨呈现 Undo／Redo、过期节点与无效源码拒绝写入、输入／节点预算、暂停后迟到解析、另存为／失败写入／外部冲突／取消关闭、独立重开，以及真实 SSH 路由下的保存回读。真实产品窗口、原生 OS 输入、系统 IME、macOS 与性能仍须按最终候选单独记录。
+
 <a id="toml-documents"></a>
 #### TOML 源码链接结构与局部编辑（#293）
 
@@ -343,7 +360,7 @@ Office 与 Notebook 整项排除本轮：不新增 DOC／DOCX、XLS／XLSX、PPT
 - 解析：使用正式 registry 的 `toml_edit = 0.25.19`（MIT OR Apache-2.0）。原范围来自只读 `Document::parse`；`DocumentMut::from_str`→`into_mut()` 会无条件 `despan()`，不能当原源码区间权威。解析失败时显示行列与错误，源码仍可编辑修复。
 - 语句归属与局部编辑：选中键值可改原值片段；选中键、显式表或整个表数组可重命名；可向表／根／AoT entry／inline table 添加键，向表添加子表／表数组，向表数组添加 entry；可删除键值、表子树、entry 或整个表数组。`Table::span()` 只覆盖该表 header，`ArrayOfTables::span()` 可能跨过交错无关表，因此删除只收集目标自己的 header 行、直接 key/value 行与显式后代行并合并区间；`[a]`、交错 `[b]`、稍后 `[a.child]` 以及两个 `[[jobs]]` 之间的无关表不会被容器 span 误删。新键与新值先由同一解析器校验，写入前再解析整个结果并核对目标结构；revision／目标 occurrence 过期时拒绝写入。
 - 呈现：默认结构树支持真实指针选择／展开、方向键／Home／End／PageUp／PageDown、Space 折叠、Enter 在源码中定位键值或 header；工具栏与状态行提供 Structure／Source、节点计数、行列、Reveal in source、Full value 与树内编辑。分屏每个分组独立折叠／选择／滚动／焦点，共享同一 Document 与 history。输入最多 1 MiB、结构最多 20,000 节点、路径合计最多 8 MiB；超限时结构明确报错，源码仍可编辑保存。
-- 复用记录：见 `src/ui/code_editor/toml_document/UPSTREAM.toml`。固定 Glim `fc2183f2c5f27ddfcdc4badbab6d83d50616831b` 没有 TOML 结构编辑器或 mutation；本切片复用 #289 的 `structure_view` 与 #290 的 `structure_edit` 共享机制，TOML 语义／原区间／语句归属／局部规划由 Lyrel 在 `toml_edit` 上补齐，没有把不存在的上游能力伪装成移植。
+- 复用记录：见 `src/ui/code_editor/toml_document/UPSTREAM.toml`。固定 Glim `fc2183f2c5f27ddfcdc4badbab6d83d50616831b` 没有 TOML 结构编辑器或 mutation；本切片复用 #289 的 `structure_view`、#290 的 `structure_edit` 与共享 `structure_rows` 行呈现（TOML 只保留自身格式节点 kind／key／value／color／badge 与编辑语义），TOML 语义／原区间／语句归属／局部规划由 Lyrel 在 `toml_edit` 上补齐，没有把不存在的上游能力伪装成移植。
 - 证据边界：隔离工作台回归覆盖映射 Host／同名本机诱饵、BOM／混合行尾、交错表与 AoT、指针／键盘、完整值、保存／另存为／失败写入／进行中旧保存不清新 dirty／外部冲突／取消关闭／独立重开、invalid／预算／迟到结果、分屏 stale 拒绝，以及显式私有 fixture 的真实远端保存回读。原生 OS 窗口、系统 IME、macOS 与性能仍按最终候选分别验收。
 
 <a id="csv-documents"></a>

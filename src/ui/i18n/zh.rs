@@ -1858,6 +1858,57 @@ pub fn translate_zh(key: L10nKey) -> Option<&'static str> {
         L10nKey::EditorTomlEditResultShape => "修改没有落在所选结构上，未写入任何内容。",
         L10nKey::EditorTomlEditUnsupported => "此节点不能在树中修改",
         L10nKey::StructureEditApply => "应用",
+        L10nKey::EditorYamlStructure => "结构",
+        L10nKey::EditorYamlSource => "源码",
+        L10nKey::EditorYamlShowStructure => "显示结构",
+        L10nKey::EditorYamlShowSource => "显示源码",
+        L10nKey::EditorYamlToggleStructure => "切换 YAML 结构与源码",
+        L10nKey::EditorYamlParsing => "正在解析 YAML",
+        L10nKey::EditorYamlInvalid => "YAML 源码无法解析",
+        L10nKey::EditorYamlInvalidDetail => "第 {line} 行第 {column} 列：{message}",
+        L10nKey::EditorYamlStructureUnavailable => "YAML 结构不可用",
+        L10nKey::EditorYamlSourceStaysEditable => "源码仍可编辑；切换到源码即可检查或修复。",
+        L10nKey::EditorYamlInputLimit => "YAML 结构检查最多读取 {mib} MiB；源码仍可编辑。",
+        L10nKey::EditorYamlNodeLimit => "YAML 结构超过 {count} 个节点的检查上限；源码仍可编辑。",
+        L10nKey::EditorYamlPathLimit => "YAML 结构路径超过 {mib} MiB 内存预算；完整源码仍可编辑。",
+        L10nKey::EditorYamlDepthLimit => "YAML 嵌套超过 {count} 层；源码仍可编辑。",
+        L10nKey::EditorYamlDocuments => "{count} 个文档",
+        L10nKey::EditorYamlNodes => "{count} 个节点",
+        L10nKey::EditorYamlValueName => "值",
+        L10nKey::EditorYamlKeyName => "键",
+        L10nKey::EditorYamlKeyPlaceholder => "标量键",
+        L10nKey::EditorYamlValuePlaceholder => "一个标量，例如 42、\"文本\"、'文本' 或 null",
+        L10nKey::EditorYamlEditValueTitle => "编辑值 · {path}",
+        L10nKey::EditorYamlRenameKeyTitle => "重命名键 · {path}",
+        L10nKey::EditorYamlAddKeyTitle => "向 {path} 添加键",
+        L10nKey::EditorYamlAddItemTitle => "向 {path} 添加项",
+        L10nKey::EditorYamlEditStale => "文档已变化，本次修改没有写入。请关闭面板并重新选择节点。",
+        L10nKey::EditorYamlEditAlias => {
+            "别名只是引用。请编辑它的锚点，或改用源码；这里不会展开或断开别名。"
+        }
+        L10nKey::EditorYamlComplexKeySource => {
+            "已在源码中定位该复杂键的完整范围；请在此编辑其语法。仍使用同一 history 与保存。"
+        }
+        L10nKey::EditorYamlEditMissingValue => "此条目没有可编辑的标量值；请改用源码。",
+        L10nKey::EditorYamlEditMultiLine => "多行值请在源码中编辑。",
+        L10nKey::EditorYamlEditNotScalar => "此节点不是标量值。",
+        L10nKey::EditorYamlEditEmptyDocument => "空文档没有可从树中添加的成员；请改用源码。",
+        L10nKey::EditorYamlEditUnsupported => "此节点不能在树中修改。其原始形式请使用源码。",
+        L10nKey::EditorYamlEditInvalidValue => "不是单个 YAML 标量：{message}",
+        L10nKey::EditorYamlEditResultInvalid => {
+            "此修改会让源码无效：第 {line} 行第 {column} 列：{message}"
+        }
+        L10nKey::EditorYamlEditAliasesReference => {
+            "无法删除：{count} 个别名引用 &{name}。请先修改该值或移除这些别名。"
+        }
+        L10nKey::EditorYamlAnchorImpact => {
+            "此处受 &{anchor} 影响；编辑此{field}会改变 {count} 个别名的解析结果，别名仍然是引用。"
+        }
+        L10nKey::EditorYamlAnchorImpactNone => {
+            "此处受 &{anchor} 影响；当前没有别名引用它，锚点仍留在其值上。"
+        }
+        L10nKey::EditorYamlAnchorEdited => "已修改 &{anchor}；{count} 个别名现在解析到新值。",
+        L10nKey::EditorYamlAnchorEditedNone => "已修改 &{anchor}；当前没有别名引用它。",
         L10nKey::EditorCsvTable => "表格",
         L10nKey::EditorCsvShowTable => "显示表格",
         L10nKey::EditorCsvShowSource => "显示源码",
