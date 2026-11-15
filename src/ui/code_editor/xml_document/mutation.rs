@@ -95,7 +95,7 @@ pub(crate) fn plan(
 ) -> Result<Vec<(Range<usize>, String)>, MutationError> {
     let replacements = match mutation {
         Mutation::SetValue { target, value } => plan_set_value(text, projection, target, value)?,
-        Mutation::Rename { target, name } => plan_rename(projection, target, name)?,
+        Mutation::Rename { target, name } => plan_rename(text, projection, target, name)?,
         Mutation::AddAttribute {
             element,
             name,
@@ -155,6 +155,7 @@ fn plan_set_value(
 }
 
 fn plan_rename(
+    text: &str,
     projection: &XmlProjection,
     target: &NodeTarget,
     name: &str,
