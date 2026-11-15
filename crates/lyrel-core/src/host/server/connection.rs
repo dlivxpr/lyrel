@@ -1,6 +1,7 @@
 //! Negotiated connection lifetime; retirement follows the read loop, not Arc drop.
+use std::collections::HashSet;
 use std::io::{self, Read, Write};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use crate::core::machine;
 use crate::daemon::control::LinkShutdown;
@@ -82,6 +83,7 @@ where
         watches: Watches::new(),
         git_streams: GitStreams::new(),
         read_sessions: ReadSessions::default(),
+        sqlite_views: Mutex::new(HashSet::new()),
         pool: Pool::new(),
         machine: services.machine.clone(),
         machine_origin: machine_sub.as_ref().map(machine::Subscription::id),
@@ -116,6 +118,7 @@ where
     conn.pool.close();
     conn.watches.clear();
     conn.read_sessions.clear();
+    conn.close_sqlite_views();
     conn.identity.release_all(conn.machine.as_deref());
     // Every exit path converges here, including EOF and protocol errors.
     conn.identity.unregister_gui();

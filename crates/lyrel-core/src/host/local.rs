@@ -68,6 +68,9 @@ fn no_prompt_env() -> Vec<(&'static str, Option<&'static str>)> {
 
 pub struct LocalHost {
     gitignore: Arc<Mutex<GitignoreChain>>,
+    /// Read-only SQLite views opened on this machine. One per Host so a
+    /// remote control connection can track and close only its own ids.
+    sqlite: crate::host::sqlite::SqliteService,
 }
 
 impl LocalHost {
@@ -75,6 +78,7 @@ impl LocalHost {
     pub fn new() -> SharedHost {
         Arc::new(LocalHost {
             gitignore: Arc::new(Mutex::new(GitignoreChain::default())),
+            sqlite: crate::host::sqlite::SqliteService::new(),
         })
     }
 
@@ -305,6 +309,64 @@ impl Host for LocalHost {
     /// produces it. What the call is actually *for* — resolving a junction, a
     /// `subst` drive, an 8.3 short name or a symlink — is untouched. See
     /// [`crate::core::path_spelling`].
+    fn sqlite_open(
+        &self,
+        path: &Path,
+        cancel: &crate::host::sqlite::SqliteCancel,
+    ) -> io::Result<crate::host::sqlite::SqliteOpened> {
+        guard_off_ui();
+        self.sqlite.open(path, cancel)
+    }
+
+    fn sqlite_columns(
+        &self,
+        view: u64,
+        table: &str,
+        cancel: &crate::host::sqlite::SqliteCancel,
+    ) -> io::Result<crate::host::sqlite::SqliteColumns> {
+        guard_off_ui();
+        self.sqlite.columns(view, table, cancel)
+    }
+
+    fn sqlite_count(
+        &self,
+        view: u64,
+        query: &crate::host::sqlite::SqliteQuery,
+        cancel: &crate::host::sqlite::SqliteCancel,
+    ) -> io::Result<u64> {
+        guard_off_ui();
+        self.sqlite.count(view, query, cancel)
+    }
+
+    fn sqlite_page(
+        &self,
+        view: u64,
+        query: &crate::host::sqlite::SqliteQuery,
+        cancel: &crate::host::sqlite::SqliteCancel,
+    ) -> io::Result<crate::host::sqlite::SqlitePage> {
+        guard_off_ui();
+        self.sqlite.page(view, query, cancel)
+    }
+
+    fn sqlite_value(
+        &self,
+        view: u64,
+        query: &crate::host::sqlite::SqliteQuery,
+        row: u32,
+        column: u32,
+        offset: u64,
+        max_bytes: u64,
+        cancel: &crate::host::sqlite::SqliteCancel,
+    ) -> io::Result<crate::host::sqlite::SqliteValue> {
+        guard_off_ui();
+        self.sqlite
+            .value(view, query, row, column, offset, max_bytes, cancel)
+    }
+
+    fn sqlite_close(&self, view: u64) {
+        self.sqlite.close(view);
+    }
+
     fn canonicalize(&self, p: &Path) -> io::Result<PathBuf> {
         guard_off_ui();
         Ok(crate::core::path_spelling::local_spelling_buf(
