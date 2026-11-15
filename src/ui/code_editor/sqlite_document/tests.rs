@@ -609,16 +609,16 @@ fn big_value_database(dir: &Path) -> PathBuf {
     let path = dir.join("values.sqlite");
     let connection = rusqlite::Connection::open(&path).expect("fixture database opens");
     connection
-        .execute_batch("CREATE TABLE items(id INTEGER, name TEXT, data BLOB);")
+        .execute_batch("CREATE TABLE items(id INTEGER, name TEXT, data BLOB, ratio REAL);")
         .expect("fixture schema");
     connection
         .execute(
-            "INSERT INTO items VALUES (1, replace(hex(zeroblob(1050000)), '0', 'x'), x'00ff10')",
+            "INSERT INTO items VALUES (1, replace(hex(zeroblob(1050000)), '0', 'x'), x'00ff10', 9e999)",
             [],
         )
         .expect("big row");
     connection
-        .execute("INSERT INTO items VALUES (2, NULL, NULL)", [])
+        .execute("INSERT INTO items VALUES (2, NULL, NULL, NULL)", [])
         .expect("null row");
     drop(connection);
     path
@@ -721,6 +721,11 @@ fn the_value_inspector_reads_and_copies_complete_typed_values(tcx: &mut TestAppC
     assert!(copied.bytes().all(|byte| byte == b'x'));
 
     // BLOB 单元格以十六进制展示与复制；复制的 hex 精确还原字节。
+    // payload 列在窄视口外，先用真实横向滚动把它带入视口再双击。
+    view.update(&mut cx, |view, cx| {
+        view.grid.update(cx, |grid, cx| grid.scroll_to_col(3, cx));
+    });
+    settle(&mut cx);
     cx.update(|window, cx| window.double_click("table-cell-0:3", cx));
     until_named(&mut cx, "blob-value", |cx| {
         view.read_with(cx, |view, _| {
@@ -769,7 +774,47 @@ fn the_value_inspector_reads_and_copies_complete_typed_values(tcx: &mut TestAppC
         );
     });
 
+    // 非有限 REAL 保持 REAL 类型到达检查器与剪贴板，不变成 NULL 或空串。
+    view.update(&mut cx, |view, cx| {
+        view.grid.update(cx, |grid, cx| grid.scroll_to_col(4, cx));
+    });
+    settle(&mut cx);
+    cx.update(|window, cx| window.double_click("table-cell-0:4", cx));
+    until_named(&mut cx, "real-value", |cx| {
+        view.read_with(cx, |view, _| {
+            view.detail.as_ref().is_some_and(|detail| !detail.busy)
+        })
+    });
+    view.read_with(&cx, |view, cx| {
+        let detail = view.detail.as_ref().expect("the inspector opened");
+        assert_eq!(
+            (detail.row, detail.column),
+            (0, 3),
+            "the ratio cell: {}",
+            detail_diagnostic(detail)
+        );
+        assert_eq!(
+            detail.value,
+            Some(SqliteValue::real(f64::INFINITY.to_bits())),
+            "an infinite REAL keeps its bits: {}",
+            detail_diagnostic(detail)
+        );
+        let shown = detail.editor.read(cx).value().to_string();
+        assert_eq!(shown, "Infinity", "the container shows the REAL as itself");
+    });
+    cx.update(|window, cx| window.click("sqlite-value-copy", cx));
+    settle(&mut cx);
+    assert_eq!(
+        cx.update(|_window, cx| cx.read_from_clipboard().and_then(|item| item.text())),
+        Some("Infinity".to_string()),
+        "copying a REAL writes its exact value, not an empty string"
+    );
+
     // NULL 单元格显示 NULL 且复制只提示，不把空字符串当值。
+    view.update(&mut cx, |view, cx| {
+        view.grid.update(cx, |grid, cx| grid.scroll_to_col(2, cx));
+    });
+    settle(&mut cx);
     cx.update(|window, cx| window.double_click("table-cell-1:2", cx));
     until_named(&mut cx, "null-open", |cx| {
         view.read_with(cx, |view, _| {

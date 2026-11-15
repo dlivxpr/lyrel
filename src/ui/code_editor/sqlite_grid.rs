@@ -39,9 +39,13 @@ pub(super) fn value_text(value: &SqliteValue) -> String {
             }
         }
         SqliteValue::Text { preview, total } => {
-            let mut text = String::from_utf8_lossy(preview)
-                .replace(['\r', '\n', '\t'], " ")
-                .to_string();
+            // A bounded preview can end inside a codepoint; keep the valid
+            // prefix instead of showing a character the database lacks.
+            let valid = match std::str::from_utf8(preview) {
+                Ok(text) => text,
+                Err(error) => std::str::from_utf8(&preview[..error.valid_up_to()]).unwrap_or(""),
+            };
+            let mut text = valid.replace(['\r', '\n', '\t'], " ");
             if (preview.len() as u64) < *total {
                 text.push('…');
             }
@@ -289,6 +293,20 @@ mod tests {
             }),
             "BLOB 2 B · 00 FF"
         );
+    }
+
+    #[test]
+    fn a_preview_split_inside_a_codepoint_shows_no_invented_character() {
+        let value = SqliteValue::Text {
+            preview: b"ok\xe4\xb8".to_vec(),
+            total: 5,
+        };
+        let text = value_text(&value);
+        assert!(
+            !text.contains('\u{fffd}'),
+            "no replacement character: {text}"
+        );
+        assert_eq!(text, "ok…", "only bytes that are text stay text");
     }
 
     #[test]
