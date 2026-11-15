@@ -223,6 +223,8 @@ Markdown 的每个标签页／编辑组各自保留光标、选择、滚动、�
 | SQLite | 表／视图、schema、分页记录、筛选、排序与完整单元格查看 | 所属 Host 上的只读查询，只传必要结果；不下载整个远端库，不修改源库，不执行任意写 SQL 或加载扩展；不增加自由 SQL 控制台 |
 | draw.io | #297：固定版本本机 viewer 引擎的离线只读预览，含多页、压缩／非压缩内容、页与缩放控件；引擎字节、来源哈希和分发 notice 固定在 `assets/drawio` | #298：同一固定引擎上的真实可视化编辑——引擎编辑经会话 commit POST 回到 owning 文档，工作台共享 undo/redo、dirty、保存／另存为与外部冲突处理；引擎自身 Ctrl+S 与剪贴板走同一桥。不分发 `extensions.min.js`／MathJax／模板／字体，相关图会如实失败；Windows 原生 surface 已在隔离产品窗口实际渲染 flow、AWS stencils、压缩 XML 和内嵌 SVG（draw.io marker-less base64 约定），macOS 已有 wry WKWebView 宿主源码但未在本机/CI 运行 |
 
+draw.io 保存前会先提交活动标签编辑器，再向所属 Host 保存已确认的模型；不要求先点击另一个图形才能保存标签新文字。
+
 Office 与 Notebook 整项排除本轮：不新增 DOC／DOCX、XLS／XLSX、PPT／PPTX 的专用预览或编辑，也不新增 `.ipynb` 专用阅读、单元格编辑、kernel、执行会话或 Plotly 输出。不新增 HTML 网页、音视频、压缩包、字体、其他电子书或专业设计格式。已有普通文本／源码、Markdown 和系统外部打开行为不因排除清单而删除。
 
 #### 文档、保存与来源

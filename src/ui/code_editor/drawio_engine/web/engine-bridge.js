@@ -360,9 +360,11 @@
         var g = graph();
         switch (kind) {
             case "sync":
-                // A save asks for the live model even when nothing new was
-                // committed on this surface; the sync marker lets the
-                // workbench accept the same sequence again.
+                // The active label editor has not reached the model yet.
+                // Finish it before serializing the confirmed save revision.
+                if (g !== null && g.isEditing()) {
+                    g.stopEditing(false);
+                }
                 commitNow(true);
                 break;
             case "paste":
