@@ -198,6 +198,37 @@ fn fixed_bindings(cx: &App) -> Vec<KeyBinding> {
         bindings.push(load_binding(back, EditorNavigateBack, image, cx));
         bindings.push(load_binding(forward, EditorNavigateForward, image, cx));
     }
+    // The read-only book's commands. `BookDocument` is declared only by the
+    // book presentation, so none of these take a key from a text field, a
+    // shell or the terminal.
+    {
+        use crate::ui::code_editor::{
+            BookAddBookmark, BookCycleSpacing, BookCycleWidth, BookFontLarger, BookFontSmaller,
+            BookNextChapter, BookNextPage, BookNextResult, BookPreviousChapter,
+            BookPreviousPage, BookPreviousResult, BookSearch, BookToggleBookmarks,
+            BookToggleContents,
+        };
+        let book = Some(crate::ui::code_editor::BOOK_KEY_CONTEXT);
+        bindings.extend([
+            load_binding("pageup", BookPreviousPage, book, cx),
+            load_binding("pagedown", BookNextPage, book, cx),
+            load_binding("space", BookNextPage, book, cx),
+            load_binding("shift-space", BookPreviousPage, book, cx),
+            load_binding("alt-left", BookPreviousChapter, book, cx),
+            load_binding("alt-right", BookNextChapter, book, cx),
+            load_binding("secondary-shift-c", BookToggleContents, book, cx),
+            load_binding("secondary-shift-b", BookToggleBookmarks, book, cx),
+            load_binding("secondary-f", BookSearch, book, cx),
+            load_binding("secondary-d", BookAddBookmark, book, cx),
+            load_binding("f3", BookNextResult, book, cx),
+            load_binding("shift-f3", BookPreviousResult, book, cx),
+            load_binding("secondary-=", BookFontLarger, book, cx),
+            load_binding("secondary-+", BookFontLarger, book, cx),
+            load_binding("secondary--", BookFontSmaller, book, cx),
+            load_binding("secondary-shift-s", BookCycleSpacing, book, cx),
+            load_binding("secondary-shift-w", BookCycleWidth, book, cx),
+        ]);
+    }
     // The code editor's line commands, for the same tie: ⌘/ is the shortcut
     // sheet, ⌘↵ fullscreen, ⌘⇧↵ maximize and ⌥↑/⌥↓ pane focus off macOS, all
     // context-free. Bound on `CodeEditor`, which only a multi-line code

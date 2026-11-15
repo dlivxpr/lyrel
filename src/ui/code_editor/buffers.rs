@@ -3,6 +3,8 @@ use lyrel_core::core::session::WorkspaceId;
 const MAX_FILE_BYTES: u64 = 4 * 1024 * 1024;
 /// Pictures are not text: the workbench image budget is `markdown::images`'.
 const IMAGE_MAX_BYTES: u64 = markdown::images::MAX_BYTES;
+use super::book_document::{self, BookDocument, BookOpen, LoadedBook};
+use super::book_view::BookView;
 use super::image_document::{ImageDocument, ImageOutcome, ImageView};
 use markdown::images;
 use markdown::images::ImageFormat;
@@ -373,6 +375,7 @@ impl EditorBuffers {
         }
         match loaded {
             Loaded::Image(image) => (self.create_image(host, image, window, cx), true),
+            Loaded::Book(book) => (self.create_book(host, book, window, cx), true),
             Loaded::Text {
                 path,
                 text,
@@ -433,6 +436,54 @@ impl EditorBuffers {
             untitled: None,
             host,
             input: EditorInput::Image(view),
+            presentations: Presentations::default(),
+            markdown_resources: None,
+            dirty: false,
+            saved: Fingerprint::default(),
+            format: None,
+            saved_format: TextFormat::default(),
+            saved_representation: None,
+            config: EditorConfig::default(),
+            indent: lyrel_text::detect_indent("", "text"),
+            disk_mtime: mtime,
+            saving: false,
+            save_pending: false,
+            save_as_pending: None,
+            reload_seq: 0,
+            reload_request: 0,
+            conflict: None,
+            wrap,
+            gutter: gutter::BufferGutter::default(),
+            popups: None,
+            _sub: sub,
+            _observe: observe,
+        });
+        id
+    }
+
+    /// A book document owns its coherent temporary copy, chapter cache,
+    /// search index and reading record; the presentation is only a view.
+    fn create_book<E: 'static>(
+        &mut self,
+        host: SharedHost,
+        book: LoadedBook,
+        window: &mut Window,
+        cx: &mut Context<E>,
+    ) -> BufferId {
+        let path = book.path.clone();
+        let mtime = book.mtime;
+        let wrap = cx.global::<crate::core::config::Config>().editor_soft_wrap;
+        let id = BufferId::new();
+        let document = cx.new(|cx| BookDocument::new(book, cx));
+        let view = cx.new(|cx| BookView::new(document, window, cx));
+        let sub = cx.observe(&view, |_, _, cx| cx.notify());
+        let observe = cx.observe(&view, |_, _, cx| cx.notify());
+        self.files.push(OpenFile {
+            id,
+            path,
+            untitled: None,
+            host,
+            input: EditorInput::Book(view),
             presentations: Presentations::default(),
             markdown_resources: None,
             dirty: false,
@@ -805,6 +856,10 @@ impl EditorBuffers {
         let host_id = host.id();
         let markdown = file.input.markdown().is_some();
         let image = file.input.image().cloned();
+        let book = file
+            .input
+            .book()
+            .map(|view| view.read(cx).document().clone());
         // The document's own claim survives a rename or a probe-only open;
         // reload must not fall back to the extension and lose the format.
         let image_claimed = image
@@ -834,6 +889,10 @@ impl EditorBuffers {
             window,
             cx,
             move |h| {
+                if book.is_some() {
+                    let meta = h.stat(&target)?;
+                    return book_document::load_claimed(h, target, meta).map(Reloaded::Book);
+                }
                 if image_reload {
                     let format = image_claimed
                         .or_else(|| ImageFormat::from_extension(&target))
@@ -881,6 +940,22 @@ impl EditorBuffers {
                 };
                 let (decoded, mtime) = match reloaded {
                     Reloaded::Text(decoded, mtime) => (decoded, mtime),
+                    // A book cannot be edited, so nothing here can conflict:
+                    // the freshest coherent copy is the document. Typography is
+                    // kept; a changed fingerprint resets position/bookmarks.
+                    Reloaded::Book(book) => {
+                        file.disk_mtime = book.mtime;
+                        file.conflict = None;
+                        let document = file
+                            .input
+                            .book()
+                            .map(|view| view.read(cx).document().clone());
+                        if let Some(document) = document {
+                            document.update(cx, |document, cx| document.replace(book, cx));
+                        }
+                        cx.notify();
+                        return;
+                    }
                     // A picture cannot be edited, so nothing here can conflict:
                     // the freshest bytes are the document.
                     Reloaded::Image(image) => {
@@ -1004,6 +1079,9 @@ pub(super) enum Loaded {
     /// An image: the bytes arrived, but whether they decode is part of the
     /// document, not of the read — a corrupt picture still gets a place.
     Image(LoadedImage),
+    /// A coherent book copy and its package answer. A corrupt or protected
+    /// EPUB is still a document with a place and a visible reason.
+    Book(LoadedBook),
 }
 
 pub(super) struct LoadedImage {
@@ -1020,6 +1098,7 @@ impl Loaded {
         match self {
             Self::Text { path, .. } => path,
             Self::Image(image) => &image.path,
+            Self::Book(book) => &book.path,
         }
     }
 }
@@ -1028,6 +1107,7 @@ impl Loaded {
 enum Reloaded {
     Text(lyrel_text::Decoded, Option<MTime>),
     Image(LoadedImage),
+    Book(LoadedBook),
 }
 
 /// Reads, sizes, decodes and configures a file, on the host's own thread.
@@ -1043,6 +1123,12 @@ fn load_file(
             &[("path", &path.display().to_string()), ("e", &e.to_string())],
         ))
     })?;
+    // A file that names itself an EPUB, or an archive whose container names
+    // one, is a book before it is a picture or a text decode. A generic ZIP
+    // that carries no EPUB container keeps the workbench's existing handling.
+    if let Some(loaded) = load_book_candidate(h, &path, meta)? {
+        return Ok(loaded);
+    }
     if let Some(format) = claimed {
         return load_image(h, path, format, meta);
     }
@@ -1077,6 +1163,14 @@ fn load_file(
         ))
     })?
     else {
+        // A ZIP renamed away from `.epub` is still identified by its container,
+        // not by its extension. A plain archive has no container and keeps the
+        // existing external-open behaviour.
+        if bytes.starts_with(b"PK\x03\x04") || bytes.starts_with(b"PK\x05\x06") {
+            if let Ok(BookOpen::Book(book)) = book_document::load(h, path.clone(), meta) {
+                return Ok(Loaded::Book(book));
+            }
+        }
         return Err(EditorOpenError::NotText(path));
     };
     let config = read_editorconfig(h, &path);
@@ -1087,6 +1181,51 @@ fn load_file(
         mtime: meta.mtime,
         config,
     })
+}
+
+/// Recognises a book before generic text and ZIP handling.
+///
+/// `.epub` is a claim even when the container is broken; a `.zip` becomes a
+/// book only when its package really opens, so ordinary archives retain their
+/// external-open behaviour.
+fn load_book_candidate(
+    h: &dyn lyrel_core::host::Host,
+    path: &Path,
+    meta: lyrel_core::host::Meta,
+) -> Result<Option<Loaded>, EditorOpenError> {
+    let extension = path
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .map(str::to_ascii_lowercase);
+    let claimed = extension.as_deref() == Some("epub");
+    if !claimed && extension.as_deref() != Some("zip") {
+        return Ok(None);
+    }
+    if claimed {
+        return book_document::load_claimed(h, path.to_path_buf(), meta)
+            .map(|book| Some(Loaded::Book(book)))
+            .map_err(|error| book_read_error(path, error));
+    }
+    match book_document::load(h, path.to_path_buf(), meta) {
+        Ok(BookOpen::Book(book)) if book.is_ready() => Ok(Some(Loaded::Book(book))),
+        Ok(BookOpen::Book(_)) | Ok(BookOpen::NotEpub(_)) => Ok(None),
+        Err(error) => Err(book_read_error(path, error)),
+    }
+}
+
+fn book_read_error(path: &Path, error: std::io::Error) -> EditorOpenError {
+    let key = match error.kind() {
+        std::io::ErrorKind::FileTooLarge => L10nKey::EditorFileTooLarge,
+        _ => L10nKey::EditorCantRead,
+    };
+    EditorOpenError::Message(t_fmt(
+        key,
+        &[
+            ("path", &path.display().to_string()),
+            ("e", &error.to_string()),
+            ("size", &error.to_string()),
+        ],
+    ))
 }
 
 /// Reads an image under the image budget and decodes it, still on the Host's

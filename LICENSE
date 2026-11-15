@@ -13153,3 +13153,15 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
+
+Glim-derived EPUB reader source import
+=====================================
+
+适用组件：`crates/lyrel-epub/` 的 EPUB 容器、章节净化与阅读状态，以及
+`src/ui/code_editor/book_document.rs`／`book_view.rs` 的适用阅读交互。
+来源：https://github.com/glimapp/glim @ fc2183f2c5f27ddfcdc4badbab6d83d50616831b。
+逐文件原始摘要、保留／适配／补齐／排除记录见 `crates/lyrel-epub/UPSTREAM.toml`
+与 `src/ui/code_editor/book_view/UPSTREAM.toml`。
+许可：MIT；本附录前述 Glim MIT 全文与 `Copyright (c) 2026 Glim contributors`
+同样适用于本节列出的导入。原始许可副本另保留在
+`crates/lyrel-epub/licenses/glim-MIT.txt`；不改变 Lyrel 原有 Apache-2.0 代码的许可。
