@@ -9,6 +9,7 @@
 
 ### 新增
 
+- #293：TOML 接入共享逐行保真源码与无损结构树。使用正式 registry `toml_edit 0.25.19` 的只读 `Document::parse` 保留 ordinary/inline table、array of tables、dotted/quoted key 与 string/integer/float/boolean/datetime/array 的原字面拼写；不把 TOML 转成 JSON，也不用会被 `despan()` 的 `DocumentMut` 定位原区间。结构树支持真实指针／键盘导航、源码定位与完整值复制，以及改值、重命名键／表／表数组、加键／子表／表数组／entry 和删除；inline table 成员增删保留 inline 形态。删除按每个 header 自己的行、该表直接 key/value 行和显式后代行收集，交错无关表与 AoT entry 不被容器 span 误删；所有命令先校验新片段，写入前再解析结果并按 revision／目标 occurrence 拒绝过期或无效修改，替换清单经共享 `Document::replace_ranges` 成为一条普通 history。保存／另存为／失败写入／外部冲突／取消关闭与独立重开沿用所属 Host；1 MiB／20,000 节点／8 MiB 路径预算超限时源码仍可编辑保存。工作台回归入口覆盖映射 Host 与同名诱饵、BOM／混合行尾、表格形式、交错字节、分屏；真实 SSH 保存回读与原生窗口、系统 IME、macOS、性能按显式私有 fixture／最终候选分别执行并记录，不把未执行项当通过。
 - #285：只读 PDF 补齐大纲导航、选字复制与文档内搜索。左栏大纲按层级缩进，点击或 `↑`／`↓`＋Enter 跳转显式坐标、`/Names` name tree 与旧式 `/Dests` 命名目的地（`/Fit` 整页对齐）；页内／旋转页链接热点按归一化矩形命中，外部 `http(s)` URI 交系统打开。`Ctrl`／`Cmd`+`F` 打开查找条，后台单任务逐页提取并计数（结果与文本层均有预算），Enter／Shift+Enter 步进并回绕、当前命中描边；提取失败的页计为“N 页无法读取”，扫描页如实标注“无文本层”而不把空命中当无结果。拖拽按字形几何选中（CJK 不臆造空格、行间换行、连字展开为完整 Unicode），`Ctrl`／`Cmd`+`C` 复制解码后文本；分屏各自持有页／缩放／选区／查找，文档修订变化退休旧文本层与命中，迟到结果不串文档。仍不创建批注、不填表、不修改 PDF，也不做 OCR。
 
 ## [0.3.4] - 2026-11-13

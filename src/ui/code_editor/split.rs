@@ -433,6 +433,10 @@ impl LyrelApp {
                 file.presentations
                     .json_existing(tab, other_group)
                     .is_some_and(|view| view.read(cx).focus_handle(cx).contains_focused(window, cx))
+            } else if file.input.toml().is_some() {
+                file.presentations
+                    .toml_existing(tab, other_group)
+                    .is_some_and(|view| view.read(cx).focus_handle(cx).contains_focused(window, cx))
             } else if file.input.csv().is_some() {
                 file.presentations
                     .csv_existing(tab, other_group)

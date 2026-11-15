@@ -6352,6 +6352,7 @@ dependencies = [
  "snap",
  "tempfile",
  "tiff",
+ "toml_edit 0.25.19+spec-1.1.0",
  "tray-icon",
  "tree-sitter",
  "unicode-segmentation",

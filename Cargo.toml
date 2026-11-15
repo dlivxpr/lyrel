@@ -102,6 +102,10 @@ serde_json.workspace = true
 # MIT; the Value-backed Glim model is replaced, not wrapped (see
 # src/ui/code_editor/json_document/UPSTREAM.toml). JSON5 stays out.
 jsonc-parser = "=0.34.0"
+# Format-preserving TOML syntax with source spans for the #293 structure tree
+# and local edits. The immutable `Document::parse` tree keeps spans; the
+# `DocumentMut` conversion would despan it. MIT OR Apache-2.0.
+toml_edit = "0.25.19"
 tempfile = "3"
 # Browser session import stays desktop-local; database recovery runs in memory.
 rusqlite = { version = "0.41.0", features = ["bundled"] }
