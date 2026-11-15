@@ -997,3 +997,80 @@ fn a_cell_editor_opened_before_a_reload_does_not_write_its_stale_value(tcx: &mut
     until(&mut cx, |cx| value(&app, cx, 0, 0).as_deref() == Some("x"));
     assert_eq!(std::fs::read(&path).unwrap(), b"x,b\nc,d\n");
 }
+
+/// 真实 pinned SSH 上的生产工作台消费者：远端读取 → 单元格局部修改 → 保存 →
+/// 独立控制连接重读字节 → 关闭后用另一条连接重开。需要显式私有 fixture 与
+/// 同 dialect 的本地 router／远端 server；常规套件不连接任何主机。
+#[gpui_kit::test]
+#[ignore = "requires the explicit private pinned SSH fixture and a same-commit local server; run alone with --ignored"]
+fn remote_ssh_csv_edit_save_and_independent_reopen_keep_exact_bytes(
+    tcx: &mut TestAppContext,
+) {
+    crate::ui::i18n::set_locale("en");
+    use lyrel_core::host::Host as _;
+    let binary = std::path::PathBuf::from(
+        std::env::var_os("LYREL_TEST_SSH_LOCAL_SERVER")
+            .expect("same-commit local lyrel-server for the isolated router"),
+    );
+    let fixture = crate::native_ssh_graphics_fixture::NativeSshFixture::start(&binary);
+    let host = fixture.connect_control();
+    let path = fixture.remote_path("edit.csv");
+    let directory = path.parent().expect("remote fixture directory").to_path_buf();
+    if !host.exists(&directory) {
+        host.create_dir(&directory, false)
+            .expect("create the private remote fixture directory");
+    }
+    let original = "\u{feff}name,value\r\na,\"b,c\"\r\nq,1\n".as_bytes().to_vec();
+    host.write_file(&path, &original)
+        .expect("seed the remote CSV through the real SSH host");
+
+    let decoy_dir = canonical_tempdir();
+    let decoy = decoy_dir.path().join("edit.csv");
+    std::fs::write(&decoy, b"LOCAL DECOY").unwrap();
+    assert!(
+        !Path::new(path.to_str().expect("Linux path is UTF-8")).exists(),
+        "the remote path must not resolve as a local file"
+    );
+
+    let (app, mut cx, _streams) = harness_with_tabs(tcx, 1);
+    cx.simulate_resize(size(px(1600.), px(1000.)));
+    open(&app, &mut cx, host.clone(), &path);
+    ready(&app, &mut cx, 2);
+    let csv = view(&app, &cx);
+    let id = csv.entity_id();
+    edit_cell(&mut cx, id, 1, 0, "更新");
+    until(&mut cx, |cx| {
+        value(&app, cx, 1, 0).as_deref() == Some("更新")
+            && !view(&app, cx).read_with(cx, |v, cx| v.is_parsing(cx))
+    });
+    save(&app, &mut cx);
+
+    let expected = "\u{feff}name,value\r\n更新,\"b,c\"\r\nq,1\n"
+        .as_bytes()
+        .to_vec();
+    let reader = fixture.connect_control();
+    assert_eq!(
+        reader
+            .read_file(&path, 1024 * 1024)
+            .expect("independent remote read"),
+        expected,
+        "the remote file holds exactly the edited field and untouched bytes"
+    );
+    assert_eq!(std::fs::read(&decoy).unwrap(), b"LOCAL DECOY");
+
+    app.update_in(&mut cx, |app, window, cx| {
+        app.editor_close_file(0, window, cx)
+    });
+    until(&mut cx, |cx| {
+        app.read_with(cx, |app, _| app.editor.buffers.is_empty())
+    });
+    open(&app, &mut cx, reader.clone(), &path);
+    ready(&app, &mut cx, 2);
+    assert_eq!(value(&app, &cx, 1, 0).as_deref(), Some("更新"));
+    assert_eq!(
+        reader.read_file(&path, 1024 * 1024).unwrap(),
+        expected,
+        "an independent reopen observes the saved remote bytes"
+    );
+    assert_eq!(std::fs::read(&decoy).unwrap(), b"LOCAL DECOY");
+}
