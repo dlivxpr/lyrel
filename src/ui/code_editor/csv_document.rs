@@ -658,7 +658,7 @@ impl CsvView {
                 _ => {}
             },
         );
-        let focus = editor.read(cx).focus_handle().clone();
+        let focus = editor.read(cx).focus_handle(cx).clone();
         focus.focus(window, cx);
         self.editing = Some(cell);
         self.editing_revision = Some(revision);

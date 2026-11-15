@@ -4,7 +4,7 @@ use super::super::*;
 use super::*;
 use crate::ui::app::test_window::harness_with_tabs;
 use gpui_kit::test::TestWindowExt as _;
-use gpui_kit::{Focusable as _, TestAppContext, VisualTestContext, size};
+use gpui_kit::{TestAppContext, VisualTestContext, size};
 use std::path::Path;
 use std::time::{Duration, Instant};
 
@@ -927,6 +927,8 @@ fn table_edit_failed_save_cancelled_close_and_dirty_conflict_preserve_edits(
     assert_eq!(value(&app, &cx, 0, 0).as_deref(), Some("mine"));
 
     // A failed Host write preserves the edit, the dirty state and the original.
+    cx.update(|window, cx| window.click(cell_id(id, 0, 0), cx));
+    settle(&mut cx);
     host.fail_next_write();
     cx.dispatch_action(crate::core::actions::EditorSave);
     until(&mut cx, |cx| {
