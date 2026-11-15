@@ -12,3 +12,6 @@ assets/windows/conpty/LICENSE.txt -text
 # draw.io engine and our bridge pages are hash-pinned byte-for-byte.
 assets/drawio/** -text
 src/ui/code_editor/drawio_engine/web/** -text
+
+# WebView2 loader is redistributed byte-for-byte.
+assets/windows/webview2/** -text
