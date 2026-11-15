@@ -1,0 +1,131 @@
+{
+  "engine": {
+    "repository": "https://github.com/jgraph/drawio",
+    "version": "32.6.10",
+    "tag": "v32.6.10",
+    "tag_object": "2c345c6a69a01ef2bfba0c414c144126f0e3185f",
+    "commit": "c72c9a98b7a6ce392556ed04c05e0ff19f43f5c3",
+    "published": "2026-11-04T18:21:51Z",
+    "root_license": "Apache-2.0",
+    "root_license_note": "The WAR itself contains no root LICENSE member; assets/drawio/LICENSE is the fixed Git root LICENSE text."
+  },
+  "artifact": {
+    "kind": "official release war",
+    "name": "draw.war",
+    "war_bytes": 49729549,
+    "war_sha256": "a57b06b3b6a876a351dacfe65d027d9509319cd030e9bacf6ae04a034d66a38f",
+    "member": "js/viewer-static.min.js",
+    "compressed_member": false,
+    "viewer_bytes": 8808136,
+    "viewer_sha256": "dfa1cfb4ef24320b67131405da88511e7baba48621ddd5260eea8ec5f6425928",
+    "viewer_war_member_sha1": "ba431f546a4fe80a4482feee97e8c08a85452af4",
+    "public_tree_blob_sha1": "d62689824fedfe9c6272919f37531972e63cf739",
+    "public_tree_bytes": 4935096,
+    "byte_identical_to_public_tree_blob": false,
+    "reproducibility_note": "The distributed member is the release WAR's viewer build, not the 4,935,096-byte blob committed in the fixed public tree. The release build has no public build log or manifest; Lyrel does not claim the published viewer-static.min.js is reproducible from the public tree. The embedded shape and stencil bundles account for part of the difference; this is recorded, not asserted byte-for-byte."
+  },
+  "composition": {
+    "source": "etc/build/build.xml at the fixed commit, viewer-static target",
+    "members": [
+      "base-viewer.min.js: mxClient/client.min.js, draw.io grapheditor Editor/EditorUi/Graph/Shapes/Actions, diagramly DrawioFile/LocalFile/Editor/EditorUi/Pages/Trees/ForceExplorer/Minimal/DrawioComment/DrawioUser, Graph-Resources, Graph-Stylesheet, GraphViewer",
+      "spin.min.js 2.0.0",
+      "purify.min.js DOMPurify 3.4.17",
+      "pako.min.js 2.2.0",
+      "rough.min.js roughjs 4.6.6",
+      "shapes-14-6-5.min.js",
+      "stencils.min.js",
+      "viewer boot snippet: pwa-gated service-worker registration, Editor.initMath(), GraphViewer.processElements()"
+    ],
+    "separately_audited_public_tree_members": {
+      "js/shapes-14-6-5.min.js": {
+        "bytes": 1495336,
+        "sha256": "565463296aa15df2abea2404d7defae5db74b3d23c9b3c75fe743a7af089f3a9",
+        "git_blob_sha1": "bdd28c52e72d45a495e464ec27d59c979b1f9b70"
+      },
+      "js/stencils.min.js": {
+        "bytes": 3873040,
+        "sha256": "b6acdcf854ae27368cbc3108564d93de1eec91090126d2ebca9a69664bbecb3d",
+        "git_blob_sha1": "17d292a74a67f505493e4889001c29b8a4a98d4b"
+      }
+    }
+  },
+  "licenses": {
+    "drawio_core": "Apache-2.0; assets/drawio/LICENSE",
+    "mxgraph": "Apache-2.0 (v4.2.2); assets/drawio/LICENSES/Apache-2.0-mxgraph-4.2.2.txt",
+    "dompurify": {
+      "version": "3.4.17",
+      "declared": "MPL-2.0 OR Apache-2.0",
+      "elected": "Apache-2.0",
+      "text": "assets/drawio/LICENSES/Apache-2.0-DOMPurify-3.4.17.txt"
+    },
+    "spin": {"version": "2.0.0", "license": "MIT", "text": "assets/drawio/LICENSES/MIT-spin-2.0.0.txt"},
+    "pako": {
+      "version": "2.2.0",
+      "license": "MIT AND Zlib",
+      "texts": [
+        "assets/drawio/LICENSES/MIT-pako-2.2.0.txt",
+        "assets/drawio/LICENSES/Zlib-pako-2.2.0.txt"
+      ]
+    },
+    "roughjs": {
+      "version": "4.6.6",
+      "license": "MIT",
+      "text": "assets/drawio/LICENSES/MIT-roughjs-4.6.6.txt",
+      "embedded_dependencies": {
+        "hachure-fill": "^0.5.2 MIT",
+        "path-data-parser": "^0.1.0 MIT",
+        "points-on-curve": "^0.2.0 MIT",
+        "points-on-path": "^0.2.1 MIT"
+      }
+    },
+    "shapes": "upstream shapes/LICENSE terms; assets/drawio/shapes-LICENSE.txt",
+    "stencils": "upstream stencils/LICENSE terms; assets/drawio/stencils-LICENSE.txt"
+  },
+  "excluded_from_distribution": {
+    "js/extensions.min.js": "Not distributed. Contains LGPL-2.1-or-later libavoid (wasm2js, no public corresponding source/binding/build) and EPL-2.0 ELK port (no public exact source). Its obligations cannot be closed from the fixed artifact, so the viewer does not include it.",
+    "js/integrate.min.js": "Not distributed; it embeds extensions.min.js.",
+    "math4/ and MathJax": "Not distributed; math=0 and the native handler refuses the paths.",
+    "templates/": "Not distributed; CC-BY-4.0 upstream.",
+    "styles/fonts/ArchitectsDaughter-Regular.ttf": "Not distributed; font license not established.",
+    "img/": "Not distributed; the viewer bundle embeds only the shape/stencil data it needs.",
+    "plantuml/": "Not distributed; on-demand external library.",
+    "Java server and WEB-INF": "Not distributed.",
+    "perfect-freehand, CryptoJS, JSZip": "Not part of viewer-static.min.js."
+  },
+  "local_adaptation": {
+    "viewer_bytes_modified": false,
+    "served_by": "native WebView2 custom response handler over https://drawio.lyrel.invalid",
+    "shell": "src/ui/code_editor/drawio_engine/web/shell.html + shell.js + shell.css",
+    "engine_page": "src/ui/code_editor/drawio_engine/web/engine.html + engine-boot.js + engine-bridge.js + engine.css",
+    "runtime_overrides": [
+      "urlParams.pwa=0 (no service worker)",
+      "urlParams.math=0 (no MathJax)",
+      "all resource bases rewritten to the reserved same-origin paths, where unknown paths are 403",
+      "window.open/alert/confirm/prompt disabled in the engine page",
+      "CSP response headers for shell and engine; sandbox allow-scripts allow-same-origin only",
+      "native filter AddWebResourceRequestedFilterWithRequestSourceKinds('*', ALL, ALL) with an exact manifest"
+    ],
+    "sanitizer": "DOMPurify 3.4.17 from the fixed release; stencil eval disabled by the vendor boot; CSP has no unsafe-eval."
+  },
+  "distributed_files": {
+    "viewer-static.min.js": "dfa1cfb4ef24320b67131405da88511e7baba48621ddd5260eea8ec5f6425928",
+    "LICENSE": "43070e2d4e532684de521b885f385d0841030efa2b1a20bafb76133a5e1379c1",
+    "THIRD-PARTY-NOTICES.md": "bf234f952cb9b5fc90674503dab71c5bdd6a2288050aaf165a29dba70b8134b7",
+    "shapes-LICENSE.txt": "55f8931a59e1f6e3ffff6c950c44339981c4806925ac0d97517a71164b0ca2ea",
+    "stencils-LICENSE.txt": "f4098ff053b5954abbf69b15811ef06cd277847ca49934beda355c3d841ebdac",
+    "LICENSES/Apache-2.0-DOMPurify-3.4.17.txt": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30",
+    "LICENSES/Apache-2.0-mxgraph-4.2.2.txt": "b40930bbcf80744c86c46a12bc9da056641d722716c378f5659b9e555ef833e1",
+    "LICENSES/MIT-hachure-fill.txt": "5e807b516a9be9229ed459880bf353a336e2d947867247290680d437017be391",
+    "LICENSES/MIT-pako-2.2.0.txt": "a04665b3b2de56c66730c1f720f528175739e4104f79073614aa611da1e85539",
+    "LICENSES/MIT-path-data-parser.txt": "e9754a00aebde654e80f40bcf41dab667d6a41dfbbd2912bcf14fb07d468bf71",
+    "LICENSES/MIT-points-on-curve.txt": "e9754a00aebde654e80f40bcf41dab667d6a41dfbbd2912bcf14fb07d468bf71",
+    "LICENSES/MIT-points-on-path.txt": "b6fc1f7f1d96a48bc97176f3dcef959e364c5c17ba44167511de421500a86c6c",
+    "LICENSES/MIT-roughjs-4.6.6.txt": "dca9a392272606ac748ac0976a2a1133f14eef841c27beaa51a844d53c56a09d",
+    "LICENSES/MIT-spin-2.0.0.txt": "5793f85563bd2b74d7d8c1fb41bdfd0967c58e1b56f5d7b0d30fb23ca06cde3c",
+    "LICENSES/Zlib-pako-2.2.0.txt": "20356aece8f36fda34645e97af3b163da0a88e253b78ffba298590d5b9121ebb"
+  },
+  "platform_host": {
+    "windows": "webview2-com 0.39.1 + windows 0.62.2, direct ICoreWebView2_22 filter, verified at runtime that the interface exists and fails closed otherwise",
+    "macos": "wry 0.57.2 wraps a real WKWebView; custom lyrel://app scheme serves the same manifest, incognito data store, CSP response headers, navigation/new-window/download/permission/drag handlers, IPC token/session validation. Source is compiled only on macOS and has not been run locally or in CI; WebKit custom-scheme origin/CSP behavior remains to be verified."
+  }
+}

@@ -157,10 +157,6 @@ impl BookView {
         let search_input = cx.new(|cx| {
             InputState::new(window, cx).placeholder(t(L10nKey::EditorBookSearchPlaceholder))
         });
-        let weak = cx.entity().downgrade();
-        list.set_scroll_handler(move |event, window, cx| {
-            let _ = weak.update(cx, |view, cx| view.scrolled(event, window, cx));
-        });
         let (intent_tx, intent_rx) = smol::channel::unbounded::<Intent>();
         let weak = cx.entity().downgrade();
         let listener = cx.spawn(async move |_, cx| {
@@ -248,14 +244,17 @@ impl BookView {
         self.focus.clone()
     }
 
+    #[cfg(test)]
     pub(crate) fn chapter(&self) -> usize {
         self.chapter
     }
 
+    #[cfg(test)]
     pub(crate) fn block_count(&self) -> usize {
         self.blocks
     }
 
+    #[cfg(test)]
     pub(crate) fn block_text(&self, index: usize) -> Option<&str> {
         self.data
             .as_ref()
@@ -263,6 +262,7 @@ impl BookView {
             .map(|block| block.text.as_str())
     }
 
+    #[cfg(test)]
     pub(crate) fn search_results(&self) -> &[SearchHit] {
         &self.results
     }
@@ -540,6 +540,7 @@ impl BookView {
                     block as f32 / (self.blocks - 1) as f32
                 },
             };
+            self.visible = block..(block + 1).min(self.blocks);
             self.ensure_states(block, cx);
             self.document.update(cx, |document, cx| {
                 document.set_reading(self.position);
@@ -916,40 +917,16 @@ impl BookView {
         };
         self.active_result = Some(index);
         self.rebuild_marks();
-        if hit.chapter != self.chapter {
-            self.go_to_chapter(hit.chapter, hit.block, None, cx);
-        } else {
-            self.list.scroll_to(gpui_kit::ListOffset {
-                item_ix: hit.block,
-                offset_in_item: px(0.),
-            });
-            self.ensure_states(hit.block, cx);
-            self.position = ReadingPosition {
-                chapter: self.chapter,
-                block: hit.block,
-                fraction: if self.blocks <= 1 {
-                    0.
-                } else {
-                    hit.block as f32 / (self.blocks - 1) as f32
-                },
-            };
-            cx.notify();
-        }
+        self.go_to_chapter(hit.chapter, hit.block, None, cx);
     }
 
-    fn scrolled(
-        &mut self,
-        event: &gpui_kit::ListScrollEvent,
-        _window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        self.visible = event.visible_range.clone();
+    fn scrolled(&mut self, visible: std::ops::Range<usize>, cx: &mut Context<Self>) {
+        self.visible = visible;
         let blocks = self.blocks;
         if blocks == 0 {
             return;
         }
-        let top = self.list.logical_scroll_top();
-        let block = top.item_ix.min(blocks - 1);
+        let block = self.visible.start.min(blocks - 1);
         let fraction = if blocks <= 1 {
             0.
         } else {
@@ -963,7 +940,7 @@ impl BookView {
         let position = self.position;
         self.document
             .update(cx, |document, _| document.set_reading(position));
-        self.ensure_states(event.visible_range.start, cx);
+        self.ensure_states(block, cx);
         if self.save_task.is_none() {
             self.save_task = Some(cx.spawn(async move |this, cx| {
                 cx.background_executor().timer(SAVE_DEBOUNCE).await;
@@ -973,6 +950,7 @@ impl BookView {
                 });
             }));
         }
+        cx.notify();
     }
 
     fn commit_position(&mut self, cx: &mut Context<Self>) {
@@ -991,7 +969,9 @@ impl BookView {
             return;
         }
         let start = center.saturating_sub(4);
-        let end = (center + 28).min(self.blocks);
+        let end = (center + 28)
+            .max(self.visible.end.saturating_add(STATE_MARGIN))
+            .min(self.blocks);
         let keep_start = self.visible.start.saturating_sub(STATE_MARGIN);
         let keep_end = (self.visible.end + STATE_MARGIN).min(self.blocks);
         let mut states = self.states.borrow_mut();
@@ -1006,7 +986,14 @@ impl BookView {
             }
             let html = self.block_html(&data, index);
             let entity = cx.new(|cx| TextViewState::html(&html, cx));
-            let subscription = cx.observe(&entity, |_, _, cx| cx.notify());
+            let chapter = self.chapter;
+            let list = self.list.clone();
+            let subscription = cx.observe(&entity, move |view, _, cx| {
+                if view.chapter == chapter && index < view.blocks {
+                    list.remeasure_items(index..index + 1);
+                    cx.notify();
+                }
+            });
             states.insert(
                 index,
                 BlockState {
@@ -1469,6 +1456,7 @@ impl BookView {
         let Some(data) = self.data.clone() else {
             return div().flex_1().into_any_element();
         };
+        let rendered_data = Arc::clone(&data);
         let states = Rc::clone(&self.states);
         let list = self.list.clone();
         let resolver = data.resolver.clone();
@@ -1518,6 +1506,7 @@ impl BookView {
                     "book-block",
                     ((data.chapter.index as u64) << 32) | index as u64,
                 ))
+                .test_support()
                 .w_full()
                 .pb_2()
                 .child(
@@ -1536,7 +1525,52 @@ impl BookView {
             rows,
             &self.list,
         );
+        // Observe after list layout: wheel, scrollbar and programmatic jumps
+        // share one viewport owner, without reborrowing ListState in its wheel callback.
+        let list = self.list.clone();
+        let previous = self.visible.clone();
+        let blocks = self.blocks;
+        let chapter = self.chapter;
+        let view = cx.entity().downgrade();
+        let viewport = gpui_kit::canvas(
+            |_, _, _| (),
+            move |bounds, _, _, cx| {
+                let start = list
+                    .logical_scroll_top()
+                    .item_ix
+                    .min(blocks.saturating_sub(1));
+                let mut end = start;
+                while end < blocks {
+                    match list.bounds_for_item(end) {
+                        Some(item) if item.top() < bounds.bottom() => end += 1,
+                        _ => break,
+                    }
+                }
+                let visible = start..end.max(start + 1).min(blocks);
+                if visible == previous {
+                    return;
+                }
+                let view = view.clone();
+                let data = Arc::clone(&rendered_data);
+                cx.defer(move |cx| {
+                    let _ = view.update(cx, |view, cx| {
+                        if view.chapter == chapter
+                            && view
+                                .data
+                                .as_ref()
+                                .is_some_and(|current| Arc::ptr_eq(current, &data))
+                            && view.visible != visible
+                        {
+                            view.scrolled(visible, cx);
+                        }
+                    });
+                });
+            },
+        )
+        .absolute()
+        .inset_0();
         v_flex()
+            .relative()
             .bg(colors.background)
             .text_color(colors.foreground)
             .flex_1()
@@ -1544,6 +1578,7 @@ impl BookView {
             .min_w_0()
             .overflow_hidden()
             .child(scrollbar)
+            .child(viewport)
             .into_any_element()
     }
 

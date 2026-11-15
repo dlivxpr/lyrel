@@ -1923,6 +1923,79 @@ pub fn translate_en(key: L10nKey) -> &'static str {
         L10nKey::EditorSvgLimit => {
             "SVG exceeds the preview’s 8192-pixel edge or 16-million-pixel budget"
         }
+        L10nKey::EditorJsonStructure => "Structure",
+        L10nKey::EditorJsonSource => "Source",
+        L10nKey::EditorJsonShowStructure => "Show structure",
+        L10nKey::EditorJsonShowSource => "Show source",
+        L10nKey::EditorJsonToggleStructure => "Toggle JSON structure / source",
+        L10nKey::EditorJsonParsing => "Parsing JSON",
+        L10nKey::EditorJsonInvalid => "JSON source could not be parsed",
+        L10nKey::EditorJsonInvalidDetail => "Line {line}, column {column}: {message}",
+        L10nKey::EditorJsonInvalidRecords => "{count} invalid JSONL records",
+        L10nKey::EditorJsonStructureUnavailable => "JSON structure unavailable",
+        L10nKey::EditorJsonSourceStaysEditable => {
+            "The source stays editable; switch to Source to inspect or repair it."
+        }
+        L10nKey::EditorJsonInputLimit => {
+            "JSON structure inspection is limited to {mib} MiB; the source stays editable."
+        }
+        L10nKey::EditorJsonNodeLimit => {
+            "JSON structure exceeds the {count}-node inspection limit; the source stays editable."
+        }
+        L10nKey::EditorJsonRecordLimit => {
+            "JSONL has more than {count} records; the source stays editable."
+        }
+        L10nKey::EditorJsonPathLimit => {
+            "JSON structure paths exceed the {mib} MiB memory budget; the complete source stays editable."
+        }
+        L10nKey::EditorJsonRecords => "{count} records",
+        L10nKey::EditorJsonNodes => "{count} nodes",
+        L10nKey::EditorJsonReveal => "Reveal in source",
+        L10nKey::EditorJsonFullValue => "Full value",
+        L10nKey::EditorJsonCopyValue => "Copy value",
+        L10nKey::EditorCsvTable => "Table",
+        L10nKey::EditorCsvShowTable => "Show table",
+        L10nKey::EditorCsvShowSource => "Show source",
+        L10nKey::EditorCsvParsing => "Parsing table",
+        L10nKey::EditorCsvQuerying => "Updating view",
+        L10nKey::EditorCsvTableUnavailable => "Table unavailable",
+        L10nKey::EditorCsvSourceIncomplete => "Source is incomplete",
+        L10nKey::EditorCsvTableLimit => "Table limit reached",
+        L10nKey::EditorCsvFixSource => "Fix the source to see the table.",
+        L10nKey::EditorCsvLimitHint => "Source still shows and edits the complete file.",
+        L10nKey::EditorCsvUnterminatedQuote => "unterminated quoted field at line {line}",
+        L10nKey::EditorCsvUnsupportedSyntax => {
+            "quoted syntax at line {line} cannot be represented exactly"
+        }
+        L10nKey::EditorCsvReaderFailed => "could not read records: {error}",
+        L10nKey::EditorCsvLimitSource => "source is larger than {mib} MiB",
+        L10nKey::EditorCsvLimitRecords => "more than {limit} records",
+        L10nKey::EditorCsvLimitColumns => "more than {limit} columns in one record",
+        L10nKey::EditorCsvLimitCells => "more than {limit} cells",
+        L10nKey::EditorCsvFacts => "{records} records × {columns} columns",
+        L10nKey::EditorCsvFilter => "Filter records",
+        L10nKey::EditorCsvFilterStatus => "Filter: {filter} · {visible} of {records}",
+        L10nKey::EditorCsvFilterClear => "Clear filter",
+        L10nKey::EditorCsvRow => "Row {row}",
+        L10nKey::EditorCsvRowShort => "Row",
+        L10nKey::EditorCsvColumn => "Column {column}",
+        L10nKey::EditorCsvCell => "R{record} C{column}",
+        L10nKey::EditorCsvSortAscending => "ascending",
+        L10nKey::EditorCsvSortDescending => "descending",
+        L10nKey::EditorCsvSortStatus => "Column {column} {direction}",
+        L10nKey::EditorCsvFullValue => "Full value",
+        L10nKey::EditorCsvEmptyField => "Empty field",
+        L10nKey::EditorCsvMissingField => "This record has no field {column}",
+        L10nKey::EditorCsvCopyValue => "Copy value",
+        L10nKey::EditorCsvRevealSource => "Show in source",
+        L10nKey::EditorCsvDetailTruncated => {
+            "Showing the first {chars} characters. Copy copies the full value."
+        }
+        L10nKey::EditorCsvNoRecords => "No records",
+        L10nKey::EditorCsvNoMatch => "No records match the filter",
+        L10nKey::EditorCsvSelectCell => "Select a cell to inspect its full value",
+        L10nKey::EditorCsvColumnPrevious => "Previous columns",
+        L10nKey::EditorCsvColumnNext => "Next columns",
         L10nKey::EditorImagePageOf => "Page {page} of {pages}",
         L10nKey::EditorImagePageLoading => "Loading page",
         L10nKey::EditorImagePagePrevious => "Previous page",
@@ -1945,6 +2018,14 @@ pub fn translate_en(key: L10nKey) -> &'static str {
         L10nKey::EditorImageAnimationTruncated => {
             "This animation ends before its frame data is complete"
         }
+        L10nKey::EditorDrawioFailed => "Couldn’t render the draw.io diagram",
+        L10nKey::EditorDrawioLoading => "Rendering diagram",
+        L10nKey::EditorDrawioPageOf => "Page {page} of {pages}",
+        L10nKey::EditorDrawioPagePrevious => "Previous page",
+        L10nKey::EditorDrawioPageNext => "Next page",
+        L10nKey::EditorDrawioBlocked => "The diagram requested {what}; it was blocked",
+        L10nKey::EditorDrawioUnavailable => "The draw.io engine is unavailable",
+        L10nKey::EditorDrawioRetry => "Try again",
         L10nKey::EditorBookContents => "Contents",
         L10nKey::EditorBookBookmarks => "Bookmarks",
         L10nKey::EditorBookSearch => "Search book",

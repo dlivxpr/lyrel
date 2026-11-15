@@ -443,11 +443,6 @@ impl SvgView {
         format!("{:.0}%", self.drawn * 100.).into()
     }
 
-    #[cfg(test)]
-    pub(crate) fn preview_scale(&self) -> f32 {
-        self.drawn
-    }
-
     pub(crate) fn preview_size(&self, cx: &App) -> Option<(f32, f32)> {
         match self.document.read(cx).preview() {
             Some(SvgPreview::Ready(rendered)) => Some((rendered.width, rendered.height)),
@@ -716,7 +711,14 @@ impl SvgView {
                             .h(natural.height * scale)
                             .items_center()
                             .justify_center()
-                            .child(gpui_kit::img(rendered.bitmap.image()).size_full()),
+                            .child(
+                                gpui_kit::img(rendered.bitmap.image())
+                                    .id(("svg-preview-pixels", cx.entity_id()))
+                                    .test_support()
+                                    .flex_none()
+                                    .w(natural.width * scale)
+                                    .h(natural.height * scale),
+                            ),
                     ),
             )
             .into_any_element()

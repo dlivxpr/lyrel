@@ -8,6 +8,9 @@ const MAX_FILE_BYTES: u64 = 4 * 1024 * 1024;
 const IMAGE_MAX_BYTES: u64 = markdown::images::MAX_BYTES;
 use super::book_document::{self, BookDocument, BookOpen, LoadedBook};
 use super::book_view::BookView;
+use super::drawio_document::{DrawioDocument, DrawioView};
+use super::drawio_engine;
+use std::sync::Arc;
 /// PDFs share the owning Host's bounded versioned read and the same 32 MiB
 /// input ceiling; parsing never raises the text or control-frame limits.
 const PDF_MAX_BYTES: u64 = markdown::images::MAX_BYTES;
@@ -328,7 +331,11 @@ impl EditorBuffers {
                     .map(|(path, result)| match result {
                         Ok(file) => Some(file),
                         Err(error) => {
-                            if !is_markdown_path(&path) && !is_svg_path(&path) {
+                            if !is_markdown_path(&path)
+                                && !is_svg_path(&path)
+                                && !is_json_path(&path)
+                                && !is_csv_path(&path)
+                            {
                                 return None;
                             }
                             let message = match error {
@@ -369,6 +376,13 @@ impl EditorBuffers {
             )
         } else if let (Some(primary), Some(group)) = (file.input.svg(), target.group) {
             EditorInput::Svg(file.presentations.svg_view(primary, target.tab, group, cx))
+        } else if let (Some(primary), Some(group)) = (file.input.json(), target.group) {
+            EditorInput::Json(file.presentations.json_view(primary, target.tab, group, cx))
+        } else if let (Some(primary), Some(group)) = (file.input.csv(), target.group) {
+            EditorInput::Csv(
+                file.presentations
+                    .csv_view(primary, target.tab, group, window, cx),
+            )
         } else {
             file.input.clone()
         };
@@ -394,6 +408,7 @@ impl EditorBuffers {
         }
         match loaded {
             Loaded::Image(image) => (self.create_image(host, image, window, cx), true),
+            Loaded::Drawio(drawio) => (self.create_drawio(host, drawio, cx), true),
             Loaded::Sqlite(sqlite) => (self.create_sqlite(host, sqlite, window, cx), true),
             Loaded::Book(book) => (self.create_book(host, book, window, cx), true),
             Loaded::Pdf {
@@ -464,6 +479,58 @@ impl EditorBuffers {
             untitled: None,
             host,
             input: EditorInput::Image(view),
+            presentations: Presentations::default(),
+            markdown_resources: None,
+            dirty: false,
+            saved: Fingerprint::default(),
+            format: None,
+            saved_format: TextFormat::default(),
+            saved_representation: None,
+            config: EditorConfig::default(),
+            indent: lyrel_text::detect_indent("", "text"),
+            disk_mtime: mtime,
+            saving: false,
+            save_pending: false,
+            save_as_pending: None,
+            reload_seq: 0,
+            reload_request: 0,
+            conflict: None,
+            wrap,
+            gutter: gutter::BufferGutter::default(),
+            popups: None,
+            _sub: sub,
+            _observe: observe,
+        });
+        id
+    }
+
+    /// A read-only draw.io document. The page list and failure are already
+    /// decided off the UI thread; the native surface starts only when the
+    /// presentation paints with a real window handle.
+    fn create_drawio<E: 'static>(
+        &mut self,
+        host: SharedHost,
+        drawio: LoadedDrawio,
+        cx: &mut Context<E>,
+    ) -> BufferId {
+        let LoadedDrawio {
+            path,
+            bytes,
+            source,
+            mtime,
+        } = drawio;
+        let wrap = cx.global::<crate::core::config::Config>().editor_soft_wrap;
+        let id = BufferId::new();
+        let document = cx.new(|cx| DrawioDocument::new(bytes, source, cx));
+        let view = cx.new(|cx| DrawioView::new(document, cx));
+        let sub = cx.observe(&view, |_, _, cx| cx.notify());
+        let observe = cx.observe(&view, |_, _, cx| cx.notify());
+        self.files.push(OpenFile {
+            id,
+            path,
+            untitled: None,
+            host,
+            input: EditorInput::Drawio(view),
             presentations: Presentations::default(),
             markdown_resources: None,
             dirty: false,
@@ -662,7 +729,12 @@ impl EditorBuffers {
         let cfg = cx.global::<crate::core::config::Config>();
         let wrap = cfg.editor_soft_wrap;
         let native_svg = untitled.is_none() && is_svg_path(&path);
-        let native_markdown = if native_svg {
+        let native_json = untitled.is_none()
+            && !native_svg
+            && is_json_path(&path)
+            && super::json_document::JsonFormat::from_path(&path).is_some();
+        let native_csv = untitled.is_none() && is_csv_path(&path);
+        let native_markdown = if native_svg || native_json || native_csv {
             false
         } else if untitled.is_some() {
             matches!(kind, BufferKind::Markdown)
@@ -685,6 +757,54 @@ impl EditorBuffers {
                 cx.new(|cx| SvgView::new(preview, SvgMode::Source, wrap, indent.size as usize, cx));
             let observe = cx.observe(&presentation, |_, _, cx| cx.notify());
             (EditorInput::Svg(presentation), None, sub, observe)
+        } else if native_json {
+            let json_format = super::json_document::JsonFormat::from_path(&path)
+                .expect("native JSON path has a JSON-family format");
+            let document = cx.new(|_| lyrel_markdown_editor::Document::new(text, format));
+            let sub = cx.subscribe_in(
+                &document,
+                window,
+                move |view, _, _: &lyrel_markdown_editor::DocumentEvent, _, cx| {
+                    access(view).note_edit(id, cx);
+                    edited(view, id, cx);
+                },
+            );
+            let json_document = cx.new(|cx| JsonDocument::new(document, json_format, cx));
+            let presentation = cx.new(|cx| {
+                JsonView::new(
+                    json_document,
+                    JsonMode::Structure,
+                    wrap,
+                    indent.size as usize,
+                    cx,
+                )
+            });
+            let observe = cx.observe(&presentation, |_, _, cx| cx.notify());
+            (EditorInput::Json(presentation), None, sub, observe)
+        } else if native_csv {
+            let delimiter = csv_delimiter(&path);
+            let document = cx.new(|_| lyrel_markdown_editor::Document::new(text, format));
+            let sub = cx.subscribe_in(
+                &document,
+                window,
+                move |view, _, _: &lyrel_markdown_editor::DocumentEvent, _, cx| {
+                    access(view).note_edit(id, cx);
+                    edited(view, id, cx);
+                },
+            );
+            let table = cx.new(|cx| CsvDocument::new(document, delimiter, cx));
+            let presentation = cx.new(|cx| {
+                CsvView::new(
+                    table,
+                    CsvMode::Table,
+                    wrap,
+                    indent.size as usize,
+                    window,
+                    cx,
+                )
+            });
+            let observe = cx.observe(&presentation, |_, _, cx| cx.notify());
+            (EditorInput::Csv(presentation), None, sub, observe)
         } else if native_markdown {
             let document = cx.new(|_| lyrel_markdown_editor::Document::new(text, format));
             let sub = cx.subscribe_in(
@@ -763,7 +883,7 @@ impl EditorBuffers {
             markdown_resources: None,
             dirty: false,
             saved,
-            format: (!native_markdown && !native_svg).then_some(format),
+            format: (!native_markdown && !native_svg && !native_csv).then_some(format),
             saved_format: format,
             saved_representation,
             config,
@@ -1002,6 +1122,12 @@ impl EditorBuffers {
         let source = file.input.source_document(cx);
         let source_reload = source.is_some();
         let image = file.input.image().cloned();
+        let drawio = file.input.drawio().cloned();
+        let drawio_reload = drawio.is_some();
+        if let Some(view) = &drawio {
+            let document = view.read(cx).document().clone();
+            document.update(cx, |document, cx| document.begin_reload(cx));
+        }
         let sqlite = file.input.sqlite().cloned();
         let book = file
             .input
@@ -1040,6 +1166,26 @@ impl EditorBuffers {
             window,
             cx,
             move |h| {
+                if drawio_reload {
+                    let meta = h.stat(&target)?;
+                    if meta.len > drawio_engine::assets::MAX_DOCUMENT_BYTES as u64 {
+                        return Ok(Reloaded::Drawio(LoadedDrawio {
+                            path: target,
+                            bytes: Arc::from([]),
+                            source: Err(drawio_engine::DrawioError::TooLarge),
+                            mtime: meta.mtime,
+                        }));
+                    }
+                    let bytes =
+                        h.read_file(&target, drawio_engine::assets::MAX_DOCUMENT_BYTES as u64)?;
+                    let source = drawio_engine::parse(&bytes);
+                    return Ok(Reloaded::Drawio(LoadedDrawio {
+                        path: target,
+                        bytes: Arc::from(bytes),
+                        source,
+                        mtime: meta.mtime,
+                    }));
+                }
                 if sqlite_reload {
                     let meta = h.stat(&target)?;
                     return Ok(Reloaded::Sqlite(load_sqlite(h, target, meta)));
@@ -1102,6 +1248,20 @@ impl EditorBuffers {
                 };
                 let (decoded, mtime) = match reloaded {
                     Reloaded::Text(decoded, mtime) => (decoded, mtime),
+                    // A diagram is read-only in this ticket, so the freshest
+                    // bytes are the document. The old engine session is retired
+                    // by the document revision change.
+                    Reloaded::Drawio(drawio) => {
+                        file.disk_mtime = drawio.mtime;
+                        file.conflict = None;
+                        if let Some(view) = file.input.drawio().cloned() {
+                            let LoadedDrawio { bytes, source, .. } = drawio;
+                            let document = view.read(cx).document().clone();
+                            document.update(cx, |document, cx| document.replace(bytes, source, cx));
+                        }
+                        cx.notify();
+                        return;
+                    }
                     // A book cannot be edited, so nothing here can conflict:
                     // the freshest coherent copy is the document. Typography is
                     // kept; a changed fingerprint resets position/bookmarks.
@@ -1272,6 +1432,9 @@ pub(super) enum Loaded {
     /// An image: the bytes arrived, but whether they decode is part of the
     /// document, not of the read — a corrupt picture still gets a place.
     Image(LoadedImage),
+    /// A draw.io file. Parsing its page list happened on the Host thread;
+    /// failure is part of the document, not a reason to fall back to text.
+    Drawio(LoadedDrawio),
     /// 读取视图由所属 Host 建立；失败也保留独立文档和可见错误。
     Sqlite(LoadedSqlite),
     /// A coherent book copy and its package answer. A corrupt or protected
@@ -1284,6 +1447,13 @@ pub(super) enum Loaded {
         mtime: Option<MTime>,
         content: PdfLoaded,
     },
+}
+
+pub(super) struct LoadedDrawio {
+    path: PathBuf,
+    bytes: Arc<[u8]>,
+    source: Result<drawio_engine::DrawioSource, drawio_engine::DrawioError>,
+    mtime: Option<MTime>,
 }
 
 pub(super) struct LoadedSqlite {
@@ -1306,6 +1476,7 @@ impl Loaded {
         match self {
             Self::Text { path, .. } => path,
             Self::Image(image) => &image.path,
+            Self::Drawio(drawio) => &drawio.path,
             Self::Sqlite(sqlite) => &sqlite.path,
             Self::Book(book) => &book.path,
             Self::Pdf { path, .. } => path,
@@ -1317,6 +1488,7 @@ impl Loaded {
 enum Reloaded {
     Text(lyrel_text::Decoded, Option<MTime>),
     Image(LoadedImage),
+    Drawio(LoadedDrawio),
     Sqlite(LoadedSqlite),
     Book(LoadedBook),
     Pdf(PdfLoaded, Option<MTime>),
@@ -1345,6 +1517,9 @@ fn load_file(
     if claimed_pdf {
         return load_pdf(h, path, meta);
     }
+    if is_drawio_path(&path) {
+        return load_drawio(h, path, meta);
+    }
     if let Some(format) = claimed {
         return load_image(h, path, format, meta);
     }
@@ -1368,6 +1543,12 @@ fn load_file(
             &[("path", &path.display().to_string()), ("e", &e.to_string())],
         ))
     })?;
+    // A draw.io document saved with a generic name still has its own root.
+    // This is a bounded probe, and it wins over the text and image fallbacks:
+    // rendering it as source would hide the diagram the file declares.
+    if drawio_engine::looks_like_drawio(&bytes) {
+        return Ok(loaded_drawio(path, meta.mtime, bytes));
+    }
     // A name that claims nothing can still hold a picture. Only magic the
     // formats actually start with counts here, and only after text decoding
     // has had its chance: a file the editor can show as text keeps that.
@@ -1502,6 +1683,46 @@ fn book_read_error(path: &Path, error: std::io::Error) -> EditorOpenError {
     ))
 }
 
+/// Reads a `.drawio`/`.dio` file under the diagram budget. An oversized or
+/// malformed file still becomes a visible document, not a silent text fallback.
+fn load_drawio(
+    h: &dyn lyrel_core::host::Host,
+    path: PathBuf,
+    meta: lyrel_core::host::Meta,
+) -> Result<Loaded, EditorOpenError> {
+    let requested = path.clone();
+    if meta.len > drawio_engine::assets::MAX_DOCUMENT_BYTES as u64 {
+        return Ok(Loaded::Drawio(LoadedDrawio {
+            path,
+            bytes: Arc::from([]),
+            source: Err(drawio_engine::DrawioError::TooLarge),
+            mtime: meta.mtime,
+        }));
+    }
+    let bytes = h
+        .read_file(&path, drawio_engine::assets::MAX_DOCUMENT_BYTES as u64)
+        .map_err(|error| {
+            EditorOpenError::Message(t_fmt(
+                L10nKey::EditorCantRead,
+                &[
+                    ("path", &requested.display().to_string()),
+                    ("e", &error.to_string()),
+                ],
+            ))
+        })?;
+    Ok(loaded_drawio(path, meta.mtime, bytes))
+}
+
+fn loaded_drawio(path: PathBuf, mtime: Option<MTime>, bytes: Vec<u8>) -> Loaded {
+    let source = drawio_engine::parse(&bytes);
+    Loaded::Drawio(LoadedDrawio {
+        path,
+        bytes: Arc::from(bytes),
+        source,
+        mtime,
+    })
+}
+
 /// Reads an image under the image budget and decodes it, still on the Host's
 /// thread. Only an unreadable file is an open failure; everything the decoder
 /// says becomes the document's own visible state.
@@ -1628,7 +1849,7 @@ fn read_image(
 }
 
 fn decode_file(path: &Path, bytes: &[u8]) -> std::io::Result<Option<lyrel_text::Decoded>> {
-    if is_markdown_path(path) || is_svg_path(path) {
+    if is_markdown_path(path) || is_svg_path(path) || is_json_path(path) || is_csv_path(path) {
         lyrel_text::decode_source(bytes)
     } else {
         Ok(lyrel_text::decode(bytes))

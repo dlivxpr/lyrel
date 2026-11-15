@@ -32,12 +32,17 @@ mod book_search;
 mod book_view;
 mod buffers;
 pub(crate) mod commands;
+mod csv_document;
 mod document_input;
+mod drawio_document;
+pub(crate) mod drawio_engine;
 mod image_document;
+mod json_document;
 pub(crate) mod markdown;
 mod markdown_formula;
 mod markdown_search;
 mod pdf_document;
+mod structure_view;
 mod svg_document;
 mod text;
 use buffers::Loaded;
@@ -51,6 +56,8 @@ mod split;
 mod sqlite_document;
 mod sqlite_grid;
 mod strip;
+use csv_document::{CsvDocument, CsvMode, CsvView};
+use json_document::{JsonDocument, JsonMode, JsonView};
 use saving::{AfterUnsaved, BarKind, EditorBar, EditorBridge, EditorEvent, SaveWaiter};
 use svg_document::{SvgDocument, SvgMode, SvgView};
 #[cfg(any(test, feature = "native-markdown-tests"))]
@@ -69,6 +76,9 @@ pub(crate) use book_view::{
     BookNextChapter, BookNextPage, BookNextResult, BookPreviousChapter, BookPreviousPage,
     BookPreviousResult, BookSearch, BookToggleBookmarks, BookToggleContents,
 };
+/// draw.io 预览的键盘上下文：翻页与缩放只在这份图有焦点时生效。
+pub(crate) use drawio_document::KEY_CONTEXT as DRAWIO_KEY_CONTEXT;
+pub(crate) use drawio_document::{DrawioActualSize, DrawioFit, DrawioZoomIn, DrawioZoomOut};
 pub(crate) use image_document::KEY_CONTEXT as IMAGE_KEY_CONTEXT;
 pub(crate) use image_document::{ImageActualSize, ImageFit, ImageZoomIn, ImageZoomOut};
 pub(crate) use nav::KEY_CONTEXT as NAV_KEY_CONTEXT;
@@ -198,7 +208,11 @@ impl OpenFile {
     fn set_format(&mut self, format: TextFormat, cx: &mut gpui_kit::App) {
         if let Some(view) = self.input.markdown() {
             view.update(cx, |view, cx| view.set_format(format, cx));
+        } else if let Some(view) = self.input.json() {
+            view.update(cx, |view, cx| view.set_format(format, cx));
         } else if let Some(view) = self.input.svg() {
+            view.update(cx, |view, cx| view.set_format(format, cx));
+        } else if let Some(view) = self.input.csv() {
             view.update(cx, |view, cx| view.set_format(format, cx));
         } else {
             self.format = Some(format);
@@ -228,6 +242,17 @@ impl OpenFile {
         // the buffer is released and reopened by extension.
         if self.input.svg().is_some() {
             return "svg";
+        }
+        if self.input.json().is_some() {
+            return "json";
+        }
+        // CSV and TSV keep the route chosen at open; a rename is not a
+        // delimiter probe.
+        if self.input.csv().is_some() {
+            return match csv_delimiter(&self.path) {
+                b'\t' => "tsv",
+                _ => "csv",
+            };
         }
         if self.untitled.is_some() {
             return "text";
@@ -453,6 +478,50 @@ pub(crate) fn is_svg_path(path: &Path) -> bool {
         .is_some_and(|extension| extension.eq_ignore_ascii_case("svg"))
 }
 
+/// JSON-family source has its own document route: one plain-source Document
+/// plus a lossless structure/record view. The extension decides the route, so
+/// a temporarily invalid file still opens where it can be repaired.
+pub(crate) fn is_json_path(path: &Path) -> bool {
+    path.extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| {
+            ["json", "jsonc", "jsonl", "ndjson"]
+                .iter()
+                .any(|candidate| extension.eq_ignore_ascii_case(candidate))
+        })
+}
+
+/// CSV/TSV records have one source authority and a derived table. The
+/// extension chooses the delimiter and the route; content never turns an
+/// ordinary text file into a table.
+pub(crate) fn is_csv_path(path: &Path) -> bool {
+    path.extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| matches!(extension.to_ascii_lowercase().as_str(), "csv" | "tsv"))
+}
+
+pub(crate) fn csv_delimiter(path: &Path) -> u8 {
+    match path
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("tsv"))
+    {
+        true => b'\t',
+        false => b',',
+    }
+}
+
+/// draw.io documents have their own read-only engine route. `.drawio` and
+/// `.dio` are unambiguous; a bare `.xml` needs the bounded content probe in
+/// `buffers::load_file`, so it is not claimed here.
+pub(crate) fn is_drawio_path(path: &Path) -> bool {
+    path.extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| {
+            extension.eq_ignore_ascii_case("drawio") || extension.eq_ignore_ascii_case("dio")
+        })
+}
+
 pub(crate) fn language_for_path(path: &Path) -> &'static str {
     if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
         let lowered = name.to_ascii_lowercase();
@@ -475,9 +544,13 @@ pub(crate) fn language_for_path(path: &Path) -> &'static str {
         "js" | "mjs" | "cjs" | "jsx" => "javascript",
         "ts" | "mts" | "cts" => "typescript",
         "tsx" => "tsx",
-        "json" | "jsonc" => "json",
+        "json" => "json",
+        "jsonc" => "jsonc",
+        "jsonl" | "ndjson" => "jsonl",
         "toml" => "toml",
         "yaml" | "yml" => "yaml",
+        "csv" => "csv",
+        "tsv" => "tsv",
         "html" | "htm" => "html",
         "svg" => "svg",
         "css" => "css",
@@ -519,8 +592,12 @@ fn language_label(id: &str) -> Option<&'static str> {
         "typescript" => "TypeScript",
         "tsx" => "TypeScript JSX",
         "json" => "JSON",
+        "jsonc" => "JSONC",
+        "jsonl" => "JSONL",
         "toml" => "TOML",
         "yaml" => "YAML",
+        "csv" => "CSV",
+        "tsv" => "TSV",
         "html" => "HTML",
         "svg" => "SVG",
         "css" => "CSS",
@@ -830,6 +907,19 @@ impl LyrelApp {
             .is_some_and(|file| file.input.svg().is_some())
     }
 
+    pub(crate) fn json_document_active(&self) -> bool {
+        self.active_buffer()
+            .is_some_and(|file| file.input.json().is_some())
+    }
+    pub(crate) fn csv_document_active(&self) -> bool {
+        self.active_buffer()
+            .is_some_and(|file| file.input.csv().is_some())
+    }
+    pub(crate) fn drawio_document_active(&self) -> bool {
+        self.active_buffer()
+            .is_some_and(|file| file.input.drawio().is_some())
+    }
+
     fn active_editor_input(&self) -> Option<EditorInput> {
         self.editor_input_for(self.tab_code()?.active_id()?)
     }
@@ -846,6 +936,16 @@ impl LyrelApp {
                     file.presentations
                         .svg_existing(tab, group)
                         .map(EditorInput::Svg)
+                })
+                .or_else(|| {
+                    file.presentations
+                        .json_existing(tab, group)
+                        .map(EditorInput::Json)
+                })
+                .or_else(|| {
+                    file.presentations
+                        .csv_existing(tab, group)
+                        .map(EditorInput::Csv)
                 })
                 .or_else(|| {
                     file.presentations
@@ -866,6 +966,11 @@ impl LyrelApp {
                     file.presentations
                         .pdf_existing(tab, group)
                         .map(EditorInput::Pdf)
+                })
+                .or_else(|| {
+                    file.presentations
+                        .drawio_existing(tab, group)
+                        .map(EditorInput::Drawio)
                 })
                 .unwrap_or_else(|| file.input.clone()),
         )
@@ -1501,6 +1606,12 @@ impl LyrelApp {
         } else if let Some(primary) = file.input.svg() {
             let view = file.presentations.svg_view(primary, tab, group, cx);
             EditorInput::Svg(view).focus(window, cx);
+        } else if let Some(primary) = file.input.json() {
+            let view = file.presentations.json_view(primary, tab, group, cx);
+            EditorInput::Json(view).focus(window, cx);
+        } else if let Some(primary) = file.input.csv() {
+            let view = file.presentations.csv_view(primary, tab, group, window, cx);
+            EditorInput::Csv(view).focus(window, cx);
         } else if let Some(primary) = file.input.image() {
             let view = file.presentations.image_view(primary, tab, group, cx);
             EditorInput::Image(view).focus(window, cx);
@@ -1514,6 +1625,12 @@ impl LyrelApp {
                 .presentations
                 .book_view(primary, tab, group, window, cx);
             EditorInput::Book(view).focus(window, cx);
+        } else if let Some(primary) = file.input.pdf() {
+            let view = file.presentations.pdf_view(primary, tab, group, window, cx);
+            EditorInput::Pdf(view).focus(window, cx);
+        } else if let Some(primary) = file.input.drawio() {
+            let view = file.presentations.drawio_view(primary, tab, group, cx);
+            EditorInput::Drawio(view).focus(window, cx);
         } else {
             file.input.focus(window, cx);
         }
@@ -1578,6 +1695,18 @@ impl LyrelApp {
         } else if let Some(view) = self
             .active_editor_input()
             .and_then(|input| input.svg().cloned())
+        {
+            view.update(cx, |view, cx| view.toggle_mode(window, cx));
+            cx.notify();
+        } else if let Some(view) = self
+            .active_editor_input()
+            .and_then(|input| input.json().cloned())
+        {
+            view.update(cx, |view, cx| view.toggle_mode(window, cx));
+            cx.notify();
+        } else if let Some(view) = self
+            .active_editor_input()
+            .and_then(|input| input.csv().cloned())
         {
             view.update(cx, |view, cx| view.toggle_mode(window, cx));
             cx.notify();
@@ -1911,6 +2040,10 @@ impl LyrelApp {
                     view.update(cx, |view, cx| view.finish_owned_composition(cx));
                 } else if let Some(view) = file.presentations.svg_existing(tab, group) {
                     view.update(cx, |view, cx| view.finish_composition(cx));
+                } else if let Some(view) = file.presentations.json_existing(tab, group) {
+                    view.update(cx, |view, cx| view.finish_composition(cx));
+                } else if let Some(view) = file.presentations.csv_existing(tab, group) {
+                    view.update(cx, |view, cx| view.finish_composition(cx));
                 }
             } else {
                 file.input.finish_composition(window, cx);
@@ -2079,6 +2212,12 @@ impl LyrelApp {
         if input.sqlite().is_some() {
             return sqlite_document::menu_entries(menu);
         }
+        // A draw.io preview is read-only here: page and zoom controls are the
+        // only true actions, and there is no edit or save command to offer.
+        if let Some(drawio) = input.drawio() {
+            let multipage = drawio.read(cx).page_count(cx) > 1;
+            return drawio_document::menu_entries(menu, multipage);
+        }
         let selected = input
             .text()
             .is_some_and(|text| !text.read(cx).selected_range().is_empty());
@@ -2109,6 +2248,19 @@ impl LyrelApp {
                 Box::new(crate::core::actions::EditorGoToLine),
             );
             let menu = svg_document::menu_entries(menu);
+            return owner.read(cx).editor_file_menu_items(menu, id, app, cx);
+        }
+        if let Some(json) = input.json() {
+            let menu = menu.action_context(json.read(cx).focus_handle(cx)).menu(
+                t(L10nKey::EditorGoToLineAction),
+                Box::new(crate::core::actions::EditorGoToLine),
+            );
+            let menu = json_document::menu_entries(menu);
+            return owner.read(cx).editor_file_menu_items(menu, id, app, cx);
+        }
+        if let Some(csv) = input.csv() {
+            let menu = menu.action_context(csv.read(cx).focus_handle(cx));
+            let menu = csv_document::menu_entries(menu, csv, csv.read(cx).mode(), cx);
             return owner.read(cx).editor_file_menu_items(menu, id, app, cx);
         }
         let menu = menu
@@ -2782,12 +2934,18 @@ impl LyrelApp {
                     "markdown-status-bar"
                 } else if self.svg_document_active() {
                     "svg-status-bar"
+                } else if self.json_document_active() {
+                    "json-status-bar"
+                } else if self.csv_document_active() {
+                    "csv-status-bar"
                 } else if self.image_document_active() {
                     "image-status-bar"
                 } else if self.sqlite_document_active() {
                     "sqlite-status-bar"
                 } else if self.pdf_document_active() {
                     "pdf-status-bar"
+                } else if self.drawio_document_active() {
+                    "drawio-status-bar"
                 } else {
                     "code-status-bar"
                 })
@@ -2931,6 +3089,28 @@ impl LyrelApp {
                     .child(view)
                     .into_any_element()
             }
+            Some(f) if f.input.drawio().is_some() => {
+                let primary = f.input.drawio().expect("draw.io document presentation");
+                let tab = self
+                    .tabs
+                    .get(self.tabs.active_index())
+                    .expect("visible editor tab")
+                    .id();
+                let code = self.tab_code().expect("visible editor group");
+                let group = if code.focused_slot() == slot {
+                    code.group
+                } else {
+                    code.split.as_ref().expect("second editor group").id
+                };
+                let view = f.presentations.drawio_view(primary, tab, group, cx);
+                v_flex()
+                    .id(("drawio-presentation", view.entity_id()))
+                    .min_w_0()
+                    .min_h_0()
+                    .size_full()
+                    .child(view)
+                    .into_any_element()
+            }
             Some(f) if f.input.svg().is_some() => {
                 let primary = f.input.svg().expect("SVG document presentation");
                 let tab = self
@@ -2947,6 +3127,56 @@ impl LyrelApp {
                 let view = f.presentations.svg_view(primary, tab, group, cx);
                 v_flex()
                     .id(("svg-presentation", view.entity_id()))
+                    .min_w_0()
+                    .min_h_0()
+                    .size_full()
+                    .font_family(cx.theme().mono_font_family.clone())
+                    .text_size(rems(1.))
+                    .text_color(cx.theme().foreground)
+                    .child(view)
+                    .into_any_element()
+            }
+            Some(f) if f.input.json().is_some() => {
+                let primary = f.input.json().expect("JSON document presentation");
+                let tab = self
+                    .tabs
+                    .get(self.tabs.active_index())
+                    .expect("visible editor tab")
+                    .id();
+                let code = self.tab_code().expect("visible editor group");
+                let group = if code.focused_slot() == slot {
+                    code.group
+                } else {
+                    code.split.as_ref().expect("second editor group").id
+                };
+                let view = f.presentations.json_view(primary, tab, group, cx);
+                v_flex()
+                    .id(("json-presentation", view.entity_id()))
+                    .min_w_0()
+                    .min_h_0()
+                    .size_full()
+                    .font_family(cx.theme().mono_font_family.clone())
+                    .text_size(rems(1.))
+                    .text_color(cx.theme().foreground)
+                    .child(view)
+                    .into_any_element()
+            }
+            Some(f) if f.input.csv().is_some() => {
+                let primary = f.input.csv().expect("CSV document presentation");
+                let tab = self
+                    .tabs
+                    .get(self.tabs.active_index())
+                    .expect("visible editor tab")
+                    .id();
+                let code = self.tab_code().expect("visible editor group");
+                let group = if code.focused_slot() == slot {
+                    code.group
+                } else {
+                    code.split.as_ref().expect("second editor group").id
+                };
+                let view = f.presentations.csv_view(primary, tab, group, window, cx);
+                v_flex()
+                    .id(("csv-presentation", view.entity_id()))
                     .min_w_0()
                     .min_h_0()
                     .size_full()
@@ -3361,6 +3591,16 @@ impl LyrelApp {
             .map(|view| view.read(cx).zoom_label());
         let image_page: Option<SharedString> =
             image.as_ref().and_then(|view| view.read(cx).page_label(cx));
+        let drawio = self
+            .active_editor_input()
+            .and_then(|input| input.drawio().cloned());
+        let drawio_status: Option<SharedString> =
+            drawio.as_ref().map(|view| view.read(cx).status_text(cx));
+        let drawio_page: Option<SharedString> = drawio
+            .as_ref()
+            .and_then(|view| view.read(cx).page_label(cx));
+        let drawio_zoom: Option<SharedString> =
+            drawio.as_ref().map(|view| view.read(cx).zoom_label());
         let book_status: Option<SharedString> = self
             .active_editor_input()
             .and_then(|input| input.book().cloned())
@@ -3373,9 +3613,18 @@ impl LyrelApp {
             .active_editor_input()
             .and_then(|input| input.book().cloned())
             .map(|view| view.read(cx).progress_label(cx));
-        let cursor: Option<SharedString> = self
+        let csv_view = self
             .active_editor_input()
-            .and_then(|input| input.text().map(|text| text.read(cx).cursor_position()))
+            .and_then(|input| input.csv().cloned());
+        let csv_table_mode = csv_view
+            .as_ref()
+            .is_some_and(|view| view.read(cx).mode() == CsvMode::Table);
+        let cursor: Option<SharedString> = (!csv_table_mode)
+            .then(|| {
+                self.active_editor_input()
+                    .and_then(|input| input.text().map(|text| text.read(cx).cursor_position()))
+            })
+            .flatten()
             .map(|pos| {
                 t_fmt(
                     L10nKey::EditorLnCol,
@@ -3405,6 +3654,34 @@ impl LyrelApp {
                     view.preview_failure(cx),
                 )
             });
+        let json_state = self
+            .active_editor_input()
+            .and_then(|input| input.json().cloned())
+            .map(|view| {
+                let view = view.read(cx);
+                (
+                    view.mode(),
+                    view.is_parsing(cx),
+                    view.fatal_error(cx),
+                    view.selected_location(cx),
+                    view.node_count(cx),
+                    view.record_count(cx),
+                    view.invalid_records(cx),
+                )
+            });
+        let csv_state = csv_view.as_ref().map(|view| {
+            let view = view.read(cx);
+            (
+                view.mode(),
+                view.facts(cx),
+                view.selection(),
+                view.visible_count(),
+                view.is_parsing(cx),
+                view.parse_error(cx),
+                view.filter().to_owned(),
+                view.sort(),
+            )
+        });
         let indent: Option<SharedString> = active.filter(|_| text).map(|f| {
             let key = if f.indent.hard_tabs {
                 L10nKey::EditorIndentTabs
@@ -3467,6 +3744,107 @@ impl LyrelApp {
                         })),
                 )
             })
+            .when_some(
+                csv_state,
+                |this, (mode, facts, selection, visible, parsing, error, filter, sort)| {
+                    let (label, tip) = match mode {
+                        CsvMode::Table => {
+                            (t(L10nKey::EditorCsvTable), t(L10nKey::EditorCsvShowSource))
+                        }
+                        CsvMode::Source => (
+                            t(L10nKey::EditorMarkdownSource),
+                            t(L10nKey::EditorCsvShowTable),
+                        ),
+                    };
+                    let mut this =
+                        this.child(item("status-csv-mode", label.into()).tooltip(tip).on_click(
+                            cx.listener(|this, _, window, cx| {
+                                this.toggle_document_preview(window, cx);
+                                this.focus_editor(window, cx);
+                            }),
+                        ));
+                    if mode == CsvMode::Table {
+                        if let Some((records, columns)) = facts {
+                            this = this.child(
+                                div()
+                                    .id("status-csv-facts")
+                                    .test_support()
+                                    .flex_none()
+                                    .child(t_fmt(
+                                        L10nKey::EditorCsvFacts,
+                                        &[
+                                            ("records", &records.to_string()),
+                                            ("columns", &columns.to_string()),
+                                        ],
+                                    )),
+                            );
+                            if let Some(cell) = selection {
+                                this = this.child(
+                                    div()
+                                        .id("status-csv-cell")
+                                        .test_support()
+                                        .flex_none()
+                                        .child(t_fmt(
+                                            L10nKey::EditorCsvCell,
+                                            &[
+                                                (
+                                                    "record",
+                                                    &(cell.record().index() + 1).to_string(),
+                                                ),
+                                                ("column", &(cell.column() + 1).to_string()),
+                                            ],
+                                        )),
+                                );
+                            }
+                            if !filter.is_empty() {
+                                this = this.child(
+                                    div()
+                                        .id("status-csv-filter")
+                                        .test_support()
+                                        .flex_none()
+                                        .child(t_fmt(
+                                            L10nKey::EditorCsvFilterStatus,
+                                            &[
+                                                ("filter", &filter),
+                                                ("visible", &visible.to_string()),
+                                                ("records", &records.to_string()),
+                                            ],
+                                        )),
+                                );
+                            }
+                            if let Some(sort) = sort {
+                                this = this.child(
+                                    div()
+                                        .id("status-csv-sort")
+                                        .test_support()
+                                        .flex_none()
+                                        .child(csv_document::sort_label(sort)),
+                                );
+                            }
+                        }
+                        if parsing {
+                            this = this.child(
+                                div()
+                                    .id("status-csv-parsing")
+                                    .test_support()
+                                    .flex_none()
+                                    .child(t(L10nKey::EditorCsvParsing)),
+                            );
+                        }
+                        if error.is_some() {
+                            this = this.child(
+                                div()
+                                    .id("status-csv-error")
+                                    .test_support()
+                                    .flex_none()
+                                    .text_color(cx.theme().warning)
+                                    .child(t(L10nKey::EditorCsvTableUnavailable)),
+                            );
+                        }
+                    }
+                    this
+                },
+            )
             .when_some(svg_state, |this, (mode, size, zoom, rendering, failure)| {
                 let (label, tip) = match mode {
                     SvgMode::Source => (
@@ -3528,6 +3906,99 @@ impl LyrelApp {
                     )
                 })
             })
+            .when_some(
+                json_state,
+                |this, (mode, parsing, fatal, location, nodes, records, invalid)| {
+                    let (label, tip) = match mode {
+                        JsonMode::Source => (
+                            t(L10nKey::EditorJsonSource),
+                            t(L10nKey::EditorJsonShowStructure),
+                        ),
+                        JsonMode::Structure => (
+                            t(L10nKey::EditorJsonStructure),
+                            t(L10nKey::EditorJsonShowSource),
+                        ),
+                    };
+                    let mut this = this.child(
+                        item("status-json-mode", label.into())
+                            .tooltip(tip)
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                this.toggle_document_preview(window, cx);
+                                this.focus_editor(window, cx);
+                            })),
+                    );
+                    if let Some(count) = records {
+                        this = this.child(
+                            div()
+                                .id("status-json-count")
+                                .test_support()
+                                .flex_none()
+                                .child(t_fmt(
+                                    L10nKey::EditorJsonRecords,
+                                    &[("count", &count.to_string())],
+                                )),
+                        );
+                    } else if let Some(count) = nodes {
+                        this = this.child(
+                            div()
+                                .id("status-json-count")
+                                .test_support()
+                                .flex_none()
+                                .child(t_fmt(
+                                    L10nKey::EditorJsonNodes,
+                                    &[("count", &count.to_string())],
+                                )),
+                        );
+                    }
+                    if let Some(location) = location {
+                        this = this.child(
+                            div()
+                                .id("status-json-location")
+                                .test_support()
+                                .flex_none()
+                                .child(t_fmt(
+                                    L10nKey::EditorLnCol,
+                                    &[
+                                        ("line", &location.line.to_string()),
+                                        ("column", &location.column.to_string()),
+                                    ],
+                                )),
+                        );
+                    }
+                    if parsing {
+                        this = this.child(
+                            div()
+                                .id("status-json-parsing")
+                                .test_support()
+                                .flex_none()
+                                .child(t(L10nKey::EditorJsonParsing)),
+                        );
+                    }
+                    if let Some((title, _)) = fatal {
+                        this = this.child(
+                            div()
+                                .id("status-json-error")
+                                .test_support()
+                                .flex_none()
+                                .text_color(cx.theme().warning)
+                                .child(title),
+                        );
+                    } else if invalid > 0 {
+                        this = this.child(
+                            div()
+                                .id("status-json-invalid")
+                                .test_support()
+                                .flex_none()
+                                .text_color(cx.theme().warning)
+                                .child(t_fmt(
+                                    L10nKey::EditorJsonInvalidRecords,
+                                    &[("count", &invalid.to_string())],
+                                )),
+                        );
+                    }
+                    this
+                },
+            )
             .when_some(wrap, |this, wrap| {
                 let label = if wrap {
                     t(L10nKey::EditorWrapOn)
@@ -3632,6 +4103,46 @@ impl LyrelApp {
                         .aria_label(status.clone())
                         .flex_none()
                         .child(status),
+                )
+            })
+            // A draw.io preview has no caret, wrap, encoding or save path;
+            // its status names the engine, pages and zoom instead.
+            .when_some(drawio_status, |this, status| {
+                this.child(
+                    div()
+                        .id("status-drawio-facts")
+                        .test_support()
+                        .aria_label(status.clone())
+                        .flex_none()
+                        .child(status),
+                )
+            })
+            .when_some(drawio_page, |this, page| {
+                this.child(
+                    div()
+                        .id("status-drawio-page")
+                        .test_support()
+                        .aria_label(page.clone())
+                        .flex_none()
+                        .child(page),
+                )
+            })
+            .when(drawio.is_some(), |this| {
+                this.child(
+                    div()
+                        .id("status-drawio-readonly")
+                        .test_support()
+                        .flex_none()
+                        .child(t(L10nKey::EditorImageReadOnly)),
+                )
+            })
+            .when_some(drawio_zoom, |this, zoom| {
+                this.child(
+                    div()
+                        .id("status-drawio-zoom")
+                        .test_support()
+                        .flex_none()
+                        .child(zoom),
                 )
             })
             // A PDF states its page identity, zoom and read-only nature; it has

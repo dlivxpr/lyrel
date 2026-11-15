@@ -296,6 +296,7 @@ impl PdfView {
         &self.scroll
     }
 
+    #[cfg(test)]
     pub(crate) fn password_input(&self) -> Entity<InputState> {
         self.password.clone()
     }

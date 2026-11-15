@@ -270,3 +270,82 @@ fn unsupported_and_corrupt_books_stay_visible_read_only_documents(tcx: &mut Test
     }
     assert_eq!(host.writes.load(std::sync::atomic::Ordering::SeqCst), 0);
 }
+
+#[gpui_kit::test]
+fn same_chapter_search_theme_and_reopen_keep_the_last_reading_blocks(tcx: &mut TestAppContext) {
+    crate::ui::i18n::set_locale("en");
+    let dir = canonical_tempdir();
+    let path = fixture(dir.path(), "search-position.epub", false);
+    let original = std::fs::read(&path).unwrap();
+    let host = FileHost::new(HostId(286104));
+    let (app, mut cx, _streams) = harness_with_tabs(tcx, 1);
+    open(&app, &mut cx, host.clone(), &path);
+    until(&mut cx, |cx| {
+        cx.update(|window, _| window.find(("book-block", 0u64)).bounds().size.height > px(16.))
+    });
+    let first = cx.update(|window, _| window.find(("book-block", 0u64)).bounds());
+    cx.simulate_event(gpui_kit::ScrollEvent {
+        position: first.center(),
+        delta: gpui_kit::ScrollDelta::Pixels(gpui_kit::point(px(0.), px(-120.))),
+        ..Default::default()
+    });
+    settle(&mut cx);
+    cx.update(|window, cx| window.click("book-search", cx));
+    settle(&mut cx);
+    cx.update(|window, cx| {
+        window.click("book-search-input", cx);
+        window.input("Complete long chapter paragraph 2999.", cx);
+    });
+    until(&mut cx, |cx| {
+        active(&app, cx).read_with(cx, |view, _| !view.search_results().is_empty())
+    });
+    cx.update(|window, cx| window.click("book-search-next", cx));
+    until(&mut cx, |cx| {
+        active(&app, cx).read_with(cx, |view, cx| view.progress_label(cx).as_ref() == "50%")
+    });
+    cx.update(|window, cx| {
+        window.click("book-theme", cx);
+        window.click("book-theme", cx);
+    });
+    settle(&mut cx);
+    cx.update(|window, _| {
+        assert!(
+            window.find(("book-block", 3001u64)).visible(),
+            "the final paragraph remains visible after changing the theme"
+        );
+    });
+    let record_path = super::super::book_document::record_file(host.id(), &path).unwrap();
+    until(&mut cx, |_| {
+        std::fs::read(&record_path)
+            .ok()
+            .and_then(|bytes| serde_json::from_slice::<lyrel_epub::ReaderRecord>(&bytes).ok())
+            .is_some_and(|record| {
+                record.reading.chapter == 0
+                    && record.reading.fraction > 0.99
+                    && record.prefs.theme == ReaderTheme::Dark
+            })
+    });
+    app.update_in(&mut cx, |app, window, cx| {
+        app.editor_close_file(0, window, cx)
+    });
+    settle(&mut cx);
+    open(&app, &mut cx, host, &path);
+    until(&mut cx, |cx| {
+        active(&app, cx).read_with(cx, |view, cx| {
+            view.progress_label(cx).as_ref() == "50%"
+                && view.document().read(cx).prefs().theme == ReaderTheme::Dark
+        })
+    });
+    cx.update(|window, _| {
+        let row = window.find(("book-block", 3001u64));
+        assert!(
+            row.visible(),
+            "the final paragraph stays in the restored viewport"
+        );
+        assert!(
+            row.bounds().size.height > px(16.),
+            "rich text has a measured line"
+        );
+    });
+    assert_eq!(std::fs::read(&path).unwrap(), original);
+}

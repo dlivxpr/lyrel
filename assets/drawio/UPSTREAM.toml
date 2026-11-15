@@ -1,0 +1,37 @@
+# The fixed offline draw.io engine bundle. Bytes are served unmodified; the
+# Lyrel-owned shell and engine page are separate files under
+# src/ui/code_editor/drawio_engine/web/.
+repository = "https://github.com/jgraph/drawio"
+revision = "c72c9a98b7a6ce392556ed04c05e0ff19f43f5c3"
+tag = "v32.6.10"
+license = "Apache-2.0 with separately licensed embedded components (MIT, Apache-2.0, Zlib) and upstream shape/stencil asset terms"
+copyright = "Copyright (c) JGraph Holdings Ltd and draw.io AG; embedded components retain their own copyrights"
+ticket = "#297"
+maintainer = "Lyrel"
+
+[[source]]
+upstream = "draw.war!js/viewer-static.min.js (release artifact; not byte-identical to the 4,935,096-byte public-tree blob d62689824fedfe9c6272919f37531972e63cf739)"
+local = "assets/drawio/viewer-static.min.js"
+sha256 = "dfa1cfb4ef24320b67131405da88511e7baba48621ddd5260eea8ec5f6425928"
+scope = "official read-only viewer build: draw.io graph engine, mxGraph, grapheditor viewer classes, shapes bundle, stencils bundle"
+adaptation = "none to the bytes; served only over the reserved https://drawio.lyrel.invalid origin with a strict response CSP, pwa=0, math=0, no extensions bundle, no external resources"
+rejected = "extensions.min.js (LGPL-2.1 libavoid and EPL-2.0 ELK sources are not public in the fixed release), integrate.min.js, MathJax/math4, templates, img, fonts, PlantUML, Java server"
+notice = "assets/drawio/LICENSE; assets/drawio/THIRD-PARTY-NOTICES.md; assets/drawio/LICENSES/*"
+
+[[source]]
+upstream = "draw.war!shapes/LICENSE"
+local = "assets/drawio/shapes-LICENSE.txt"
+sha256 = "55f8931a59e1f6e3ffff6c950c44339981c4806925ac0d97517a71164b0ca2ea"
+scope = "asset terms for the shapes embedded in viewer-static.min.js"
+adaptation = "verbatim"
+rejected = "not merged into the Apache-2.0 text"
+notice = "assets/drawio/shapes-LICENSE.txt"
+
+[[source]]
+upstream = "draw.war!stencils/LICENSE"
+local = "assets/drawio/stencils-LICENSE.txt"
+sha256 = "f4098ff053b5954abbf69b15811ef06cd277847ca49934beda355c3d841ebdac"
+scope = "asset terms for the stencils embedded in viewer-static.min.js"
+adaptation = "verbatim"
+rejected = "not merged into the Apache-2.0 text"
+notice = "assets/drawio/stencils-LICENSE.txt"

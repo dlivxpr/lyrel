@@ -18,7 +18,10 @@ if (-not [IO.Path]::IsPathRooted($Prepared)) { $Prepared = Join-Path $Root $Prep
 $Files = @(
     @{ Name = 'conpty.dll'; Source = Join-Path $Prepared 'x64/conpty.dll'; Hash = $Manifest.files.x64.'conpty.dll' },
     @{ Name = 'OpenConsole.exe'; Source = Join-Path $Prepared 'x64/OpenConsole.exe'; Hash = $Manifest.files.x64.'OpenConsole.exe' },
-    @{ Name = 'LICENSE-ConPTY.txt'; Source = Join-Path $Prepared 'LICENSE-ConPTY.txt'; Hash = $Manifest.licenseSha256 }
+    @{ Name = 'LICENSE-ConPTY.txt'; Source = Join-Path $Prepared 'LICENSE-ConPTY.txt'; Hash = $Manifest.licenseSha256 },
+    # The draw.io preview's WebView2 host links the loader as an import
+    # library; Windows resolves it beside the executable.
+    @{ Name = 'WebView2Loader.dll'; Source = Join-Path $Root 'assets/windows/webview2/WebView2Loader.dll'; Hash = '86545b66cdb0603bc26b626fb9ad610cb6e71f28d468f5ea66df23b03dda96d5' }
 )
 foreach ($File in $Files) {
     if (-not (Test-Path -LiteralPath $File.Source -PathType Leaf) -or
