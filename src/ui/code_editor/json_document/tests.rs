@@ -1431,6 +1431,11 @@ fn tree_edits_save_through_the_real_native_ssh_route(tcx: &mut TestAppContext) {
     let bytes = verifier
         .read_file(&path, expected.len() as u64 + 1)
         .expect("independent remote read");
+    eprintln!(
+        "json290 real native SSH saved {} bytes at {}",
+        bytes.len(),
+        path.display()
+    );
     assert_eq!(bytes, expected);
     assert_eq!(
         source_document(&app, &cx).read_with(&cx, |document, _| document.encode().unwrap()),
