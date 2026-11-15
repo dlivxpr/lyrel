@@ -671,17 +671,30 @@ fn the_value_inspector_reads_and_copies_complete_typed_values(tcx: &mut TestAppC
             .value()
             .to_string()
     });
-    assert_eq!(shown.len(), 2_100_000 - 1_048_576);
+    assert_eq!(shown.len(), 1_048_576, "the second bounded chunk");
 
-    // 复制组装全部块，落剪贴板的是完整值，不是预览。
-    cx.update(|window, cx| window.click("sqlite-value-prev", cx));
-    until_named(&mut cx, "copy-full", |cx| {
+    // 第三块只返回剩余字节；块尾正好到值末。
+    cx.update(|window, cx| window.click("sqlite-value-next", cx));
+    until_named(&mut cx, "detail-last-chunk", |cx| {
         view.read_with(cx, |view, _| {
             view.detail
                 .as_ref()
-                .is_some_and(|detail| detail.offset == 0 && !detail.busy)
+                .is_some_and(|detail| detail.offset == 2_097_152 && !detail.busy)
         })
     });
+    let shown = view.read_with(&cx, |view, cx| {
+        view.detail
+            .as_ref()
+            .unwrap()
+            .editor
+            .read(cx)
+            .value()
+            .to_string()
+    });
+    assert_eq!(shown.len(), 2_100_000 - 2_097_152);
+    assert!(shown.bytes().all(|byte| byte == b'x'));
+
+    // 复制组装全部块，落剪贴板的是完整值，不是预览。
     cx.update(|window, cx| window.click("sqlite-value-copy", cx));
     until_named(&mut cx, "blob-open", |cx| {
         cx.update(|_window, cx| cx.read_from_clipboard().and_then(|item| item.text()))
