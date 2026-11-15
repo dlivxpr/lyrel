@@ -316,6 +316,23 @@ impl LyrelApp {
                 .presentations
                 .markdown_view(origin, tab.id(), code.group, window, cx);
         }
+        // An SVG's second group opens the other side by default: source on the
+        // left and its synchronized preview on the right, over one Document.
+        if let (Some(primary), Some(tab), Some(code)) = (
+            self.editor
+                .buffers
+                .get(id)
+                .and_then(|file| file.input.svg().cloned()),
+            self.tabs.get(self.tabs.active_index()).map(|tab| tab.id()),
+            self.tab_code(),
+        ) {
+            self.editor
+                .buffers
+                .get(id)
+                .expect("split buffer")
+                .presentations
+                .svg_view(&primary, tab, code.group, cx);
+        }
         // A picture's second group gets its own framing, around the same
         // decoded document.
         if let (Some(primary), Some(tab), Some(code)) = (
@@ -391,6 +408,10 @@ impl LyrelApp {
                                 .search(&view)
                                 .is_some_and(|search| search.read(cx).has_focus(window, cx))
                     })
+            } else if file.input.svg().is_some() {
+                file.presentations
+                    .svg_existing(tab, other_group)
+                    .is_some_and(|view| view.read(cx).focus_handle(cx).contains_focused(window, cx))
             } else if file.input.image().is_some() {
                 file.presentations
                     .image_existing(tab, other_group)

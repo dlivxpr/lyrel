@@ -37,6 +37,8 @@ mod image_document;
 pub(crate) mod markdown;
 mod markdown_formula;
 mod markdown_search;
+mod pdf_document;
+mod svg_document;
 mod text;
 use buffers::Loaded;
 use document_input::{EditorInput, Presentations};
@@ -48,6 +50,7 @@ pub(crate) mod saving;
 mod split;
 mod strip;
 use saving::{AfterUnsaved, BarKind, EditorBar, EditorBridge, EditorEvent, SaveWaiter};
+use svg_document::{SvgDocument, SvgMode, SvgView};
 #[cfg(any(test, feature = "native-markdown-tests"))]
 mod test_host;
 
@@ -61,6 +64,9 @@ pub(crate) use book_view::{
 pub(crate) use image_document::KEY_CONTEXT as IMAGE_KEY_CONTEXT;
 pub(crate) use image_document::{ImageActualSize, ImageFit, ImageZoomIn, ImageZoomOut};
 pub(crate) use nav::KEY_CONTEXT as NAV_KEY_CONTEXT;
+pub(crate) use pdf_document::KEY_CONTEXT as PDF_KEY_CONTEXT;
+pub(crate) use pdf_document::{PdfActualSize, PdfFitPage, PdfFitWidth, PdfZoomIn, PdfZoomOut};
+pub(crate) use svg_document::KEY_CONTEXT as SVG_KEY_CONTEXT;
 
 /// Retained document identity, independent of any editing presentation or path.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -170,22 +176,21 @@ impl OpenFile {
     /// A read-only picture has no text format and nothing to write.
     fn format(&self, cx: &gpui_kit::App) -> Option<TextFormat> {
         self.input
-            .markdown()
-            .map(|view| view.read(cx).document().read(cx).format())
+            .source_document(cx)
+            .map(|document| document.read(cx).format())
             .or(self.format)
     }
 
     fn representation_fingerprint(&self, cx: &gpui_kit::App) -> Option<u64> {
-        self.input.markdown().map(|view| {
-            view.read(cx)
-                .document()
-                .read(cx)
-                .representation_fingerprint()
-        })
+        self.input
+            .source_document(cx)
+            .map(|document| document.read(cx).representation_fingerprint())
     }
 
     fn set_format(&mut self, format: TextFormat, cx: &mut gpui_kit::App) {
         if let Some(view) = self.input.markdown() {
+            view.update(cx, |view, cx| view.set_format(format, cx));
+        } else if let Some(view) = self.input.svg() {
             view.update(cx, |view, cx| view.set_format(format, cx));
         } else {
             self.format = Some(format);
@@ -210,6 +215,11 @@ impl OpenFile {
     fn language(&self) -> &'static str {
         if self.input.markdown().is_some() {
             return "markdown";
+        }
+        // Save-as or rename does not rebuild this document; it stays SVG until
+        // the buffer is released and reopened by extension.
+        if self.input.svg().is_some() {
+            return "svg";
         }
         if self.untitled.is_some() {
             return "text";
@@ -414,6 +424,15 @@ pub(crate) fn is_markdown_path(path: &Path) -> bool {
         })
 }
 
+/// SVG source has its own document route: the editor with a native preview,
+/// never a browser document. The extension is the only routing key here, so a
+/// corrupt file still opens where its source can be corrected.
+pub(crate) fn is_svg_path(path: &Path) -> bool {
+    path.extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("svg"))
+}
+
 pub(crate) fn language_for_path(path: &Path) -> &'static str {
     if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
         let lowered = name.to_ascii_lowercase();
@@ -440,6 +459,7 @@ pub(crate) fn language_for_path(path: &Path) -> &'static str {
         "toml" => "toml",
         "yaml" | "yml" => "yaml",
         "html" | "htm" => "html",
+        "svg" => "svg",
         "css" => "css",
         "md" | "markdown" | "mdx" => "markdown",
         "sh" | "bash" | "zsh" => "bash",
@@ -482,6 +502,7 @@ fn language_label(id: &str) -> Option<&'static str> {
         "toml" => "TOML",
         "yaml" => "YAML",
         "html" => "HTML",
+        "svg" => "SVG",
         "css" => "CSS",
         "markdown" => "Markdown",
         "bash" => "Shell",
@@ -538,9 +559,10 @@ fn place_cursor(
         return;
     };
     text.set_cursor_position(position, window, cx);
-    // Native Markdown retains a view-local reveal request until layout paints.
-    // Replaying its selection on later frames would overwrite newer navigation.
-    if input.markdown().is_some() {
+    // Native source presentations retain a view-local reveal request until
+    // layout paints. Replaying their selection on later frames would overwrite
+    // newer navigation.
+    if input.text().is_some_and(|text| text.is_source()) {
         return;
     }
     // A target near the top of the file scrolls nowhere and is already done;
@@ -680,14 +702,13 @@ fn is_program(path: &Path) -> bool {
     }
 }
 
-/// A file a browser renders rather than showing its source.
+/// A file a browser renders rather than showing its source. SVG is not one:
+/// it opens as a source document with its own native preview, so a corrupt or
+/// remote SVG never falls through to the system browser or its network access.
 fn opens_in_browser(path: &Path) -> bool {
-    path.extension().and_then(|e| e.to_str()).is_some_and(|e| {
-        matches!(
-            e.to_ascii_lowercase().as_str(),
-            "html" | "htm" | "xhtml" | "svg"
-        )
-    })
+    path.extension()
+        .and_then(|e| e.to_str())
+        .is_some_and(|e| matches!(e.to_ascii_lowercase().as_str(), "html" | "htm" | "xhtml"))
 }
 
 /// Opens a local file in the default web browser. On macOS that is asked
@@ -774,6 +795,15 @@ impl LyrelApp {
             .is_some_and(|file| file.input.image().is_some())
     }
 
+    pub(crate) fn pdf_document_active(&self) -> bool {
+        self.active_buffer()
+            .is_some_and(|file| file.input.pdf().is_some())
+    }
+
+    pub(crate) fn svg_document_active(&self) -> bool {
+        self.active_buffer()
+            .is_some_and(|file| file.input.svg().is_some())
+    }
 
     fn active_editor_input(&self) -> Option<EditorInput> {
         self.editor_input_for(self.tab_code()?.active_id()?)
@@ -789,6 +819,11 @@ impl LyrelApp {
                 .map(EditorInput::Markdown)
                 .or_else(|| {
                     file.presentations
+                        .svg_existing(tab, group)
+                        .map(EditorInput::Svg)
+                })
+                .or_else(|| {
+                    file.presentations
                         .image_existing(tab, group)
                         .map(EditorInput::Image)
                 })
@@ -796,6 +831,8 @@ impl LyrelApp {
                     file.presentations
                         .book_existing(tab, group)
                         .map(EditorInput::Book)
+                        .pdf_existing(tab, group)
+                        .map(EditorInput::Pdf)
                 })
                 .unwrap_or_else(|| file.input.clone()),
         )
@@ -1428,6 +1465,9 @@ impl LyrelApp {
                 .presentations
                 .markdown_view(input, tab, group, window, cx);
             EditorInput::Markdown(view).focus(window, cx);
+        } else if let Some(primary) = file.input.svg() {
+            let view = file.presentations.svg_view(primary, tab, group, cx);
+            EditorInput::Svg(view).focus(window, cx);
         } else if let Some(primary) = file.input.image() {
             let view = file.presentations.image_view(primary, tab, group, cx);
             EditorInput::Image(view).focus(window, cx);
@@ -1485,7 +1525,7 @@ impl LyrelApp {
 
     /// Switch the active native Markdown presentation between live editing and source.
     /// `ToggleDocumentPreview` remains the action ID for existing custom keybindings.
-    pub(crate) fn toggle_document_preview(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn toggle_document_preview(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if !self.code_panel_visible() {
             return;
         }
@@ -1494,6 +1534,12 @@ impl LyrelApp {
             .and_then(|input| input.markdown().cloned())
         {
             view.update(cx, |view, cx| view.toggle_mode(cx));
+            cx.notify();
+        } else if let Some(view) = self
+            .active_editor_input()
+            .and_then(|input| input.svg().cloned())
+        {
+            view.update(cx, |view, cx| view.toggle_mode(window, cx));
             cx.notify();
         }
     }
@@ -1823,6 +1869,8 @@ impl LyrelApp {
                 let group = self.tab_code().unwrap().focused_group();
                 if let Some(view) = file.presentations.markdown_existing(tab, group) {
                     view.update(cx, |view, cx| view.finish_owned_composition(cx));
+                } else if let Some(view) = file.presentations.svg_existing(tab, group) {
+                    view.update(cx, |view, cx| view.finish_composition(cx));
                 }
             } else {
                 file.input.finish_composition(window, cx);
@@ -1987,6 +2035,9 @@ impl LyrelApp {
                 .separator()
                 .menu(t(L10nKey::EditorBookAddBookmark), Box::new(BookAddBookmark));
         }
+        if input.pdf().is_some() {
+            return pdf_document::menu_entries(menu);
+        }
         let selected = input
             .text()
             .is_some_and(|text| !text.read(cx).selected_range().is_empty());
@@ -2009,6 +2060,14 @@ impl LyrelApp {
                     t(L10nKey::EditorGoToLineAction),
                     Box::new(crate::core::actions::EditorGoToLine),
                 );
+            return owner.read(cx).editor_file_menu_items(menu, id, app, cx);
+        }
+        if let Some(svg) = input.svg() {
+            let menu = menu.action_context(svg.read(cx).focus_handle(cx)).menu(
+                t(L10nKey::EditorGoToLineAction),
+                Box::new(crate::core::actions::EditorGoToLine),
+            );
+            let menu = svg_document::menu_entries(menu);
             return owner.read(cx).editor_file_menu_items(menu, id, app, cx);
         }
         let menu = menu
@@ -2680,8 +2739,12 @@ impl LyrelApp {
             h_flex()
                 .id(if self.markdown_document_active() {
                     "markdown-status-bar"
+                } else if self.svg_document_active() {
+                    "svg-status-bar"
                 } else if self.image_document_active() {
                     "image-status-bar"
+                } else if self.pdf_document_active() {
+                    "pdf-status-bar"
                 } else {
                     "code-status-bar"
                 })
@@ -2819,6 +2882,53 @@ impl LyrelApp {
                 let view = f.presentations.image_view(primary, tab, group, cx);
                 v_flex()
                     .id(("image-presentation", view.entity_id()))
+                    .min_w_0()
+                    .min_h_0()
+                    .size_full()
+                    .child(view)
+                    .into_any_element()
+            }
+            Some(f) if f.input.svg().is_some() => {
+                let primary = f.input.svg().expect("SVG document presentation");
+                let tab = self
+                    .tabs
+                    .get(self.tabs.active_index())
+                    .expect("visible editor tab")
+                    .id();
+                let code = self.tab_code().expect("visible editor group");
+                let group = if code.focused_slot() == slot {
+                    code.group
+                } else {
+                    code.split.as_ref().expect("second editor group").id
+                };
+                let view = f.presentations.svg_view(primary, tab, group, cx);
+                v_flex()
+                    .id(("svg-presentation", view.entity_id()))
+                    .min_w_0()
+                    .min_h_0()
+                    .size_full()
+                    .font_family(cx.theme().mono_font_family.clone())
+                    .text_size(rems(1.))
+                    .text_color(cx.theme().foreground)
+                    .child(view)
+                    .into_any_element()
+            }
+            Some(f) if f.input.pdf().is_some() => {
+                let primary = f.input.pdf().expect("pdf document presentation");
+                let tab = self
+                    .tabs
+                    .get(self.tabs.active_index())
+                    .expect("visible editor tab")
+                    .id();
+                let code = self.tab_code().expect("visible editor group");
+                let group = if code.focused_slot() == slot {
+                    code.group
+                } else {
+                    code.split.as_ref().expect("second editor group").id
+                };
+                let view = f.presentations.pdf_view(primary, tab, group, window, cx);
+                v_flex()
+                    .id(("pdf-presentation", view.entity_id()))
                     .min_w_0()
                     .min_h_0()
                     .size_full()
@@ -3171,6 +3281,15 @@ impl LyrelApp {
             image.as_ref().map(|view| view.read(cx).status_text(cx));
         let image_zoom: Option<SharedString> =
             image.as_ref().map(|view| view.read(cx).zoom_label());
+        let pdf = self
+            .active_editor_input()
+            .and_then(|input| input.pdf().cloned());
+        let pdf_status: Option<SharedString> =
+            pdf.as_ref().map(|view| view.read(cx).status_text(cx));
+        let pdf_zoom: Option<SharedString> = pdf
+            .as_ref()
+            .filter(|view| view.read(cx).has_pages())
+            .map(|view| view.read(cx).zoom_label());
         let image_page: Option<SharedString> =
             image.as_ref().and_then(|view| view.read(cx).page_label(cx));
         let book_status: Option<SharedString> = self
@@ -3204,6 +3323,19 @@ impl LyrelApp {
                 .markdown()
                 .map(|view| (view.read(cx).is_live(), view.read(cx).is_source_only()))
         });
+        let svg_state = self
+            .active_editor_input()
+            .and_then(|input| input.svg().cloned())
+            .map(|view| {
+                let view = view.read(cx);
+                (
+                    view.mode(),
+                    view.preview_size(cx),
+                    view.zoom_label(),
+                    view.is_rendering(cx),
+                    view.preview_failure(cx),
+                )
+            });
         let indent: Option<SharedString> = active.filter(|_| text).map(|f| {
             let key = if f.indent.hard_tabs {
                 L10nKey::EditorIndentTabs
@@ -3265,6 +3397,67 @@ impl LyrelApp {
                             this.focus_editor(window, cx);
                         })),
                 )
+            })
+            .when_some(svg_state, |this, (mode, size, zoom, rendering, failure)| {
+                let (label, tip) = match mode {
+                    SvgMode::Source => (
+                        t(L10nKey::EditorMarkdownSource),
+                        t(L10nKey::EditorSvgShowPreview),
+                    ),
+                    SvgMode::Preview => (
+                        t(L10nKey::EditorSvgPreview),
+                        t(L10nKey::EditorSvgShowSource),
+                    ),
+                };
+                this.child(item("status-svg-mode", label.into()).tooltip(tip).on_click(
+                    cx.listener(|this, _, window, cx| {
+                        this.toggle_document_preview(window, cx);
+                        this.focus_editor(window, cx);
+                    }),
+                ))
+                .when_some(size, |this, (width, height)| {
+                    this.child(
+                        div()
+                            .id("status-svg-size")
+                            .test_support()
+                            .flex_none()
+                            .child(t_fmt(
+                                L10nKey::EditorImagePixelSize,
+                                &[
+                                    ("width", &format!("{width:.0}")),
+                                    ("height", &format!("{height:.0}")),
+                                ],
+                            )),
+                    )
+                })
+                .when(rendering, |this| {
+                    this.child(
+                        div()
+                            .id("status-svg-rendering")
+                            .test_support()
+                            .flex_none()
+                            .child(t(L10nKey::EditorSvgRendering)),
+                    )
+                })
+                .when(failure.is_some(), |this| {
+                    this.child(
+                        div()
+                            .id("status-svg-preview-failed")
+                            .test_support()
+                            .flex_none()
+                            .text_color(cx.theme().warning)
+                            .child(t(L10nKey::EditorSvgPreviewFailed)),
+                    )
+                })
+                .when(mode == SvgMode::Preview, |this| {
+                    this.child(
+                        div()
+                            .id("status-svg-zoom")
+                            .test_support()
+                            .flex_none()
+                            .child(zoom),
+                    )
+                })
             })
             .when_some(wrap, |this, wrap| {
                 let label = if wrap {
@@ -3370,6 +3563,35 @@ impl LyrelApp {
                         .aria_label(status.clone())
                         .flex_none()
                         .child(status),
+                )
+            })
+            // A PDF states its page identity, zoom and read-only nature; it has
+            // no caret, wrap, line ending or editable text format.
+            .when_some(pdf_status, |this, status| {
+                this.child(
+                    div()
+                        .id("status-pdf-facts")
+                        .test_support()
+                        .flex_none()
+                        .child(status),
+                )
+            })
+            .when(pdf_zoom.is_some(), |this| {
+                this.child(
+                    div()
+                        .id("status-pdf-readonly")
+                        .test_support()
+                        .flex_none()
+                        .child(t(L10nKey::EditorImageReadOnly)),
+                )
+            })
+            .when_some(pdf_zoom, |this, zoom| {
+                this.child(
+                    div()
+                        .id("status-pdf-zoom")
+                        .test_support()
+                        .flex_none()
+                        .child(zoom),
                 )
             })
             .when_some(language, |this, l| this.child(div().flex_none().child(l)))

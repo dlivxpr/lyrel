@@ -90,10 +90,13 @@ fn document_identity(file: &OpenFile, cx: &gpui_kit::App) -> gpui_kit::EntityId 
     match &file.input {
         EditorInput::Code(input) => input.entity_id(),
         EditorInput::Markdown(view) => view.read(cx).document().entity_id(),
+        // SVG's identity is the shared source Document, not one group's view.
+        EditorInput::Svg(view) => view.read(cx).document().read(cx).document().entity_id(),
         // A picture never saves, but the identity is asked for by every
         // save-side prompt and must name something stable.
         EditorInput::Image(view) => view.entity_id(),
         EditorInput::Book(view) => view.read(cx).document().entity_id(),
+        EditorInput::Pdf(view) => view.read(cx).document().entity_id(),
     }
 }
 
@@ -278,9 +281,8 @@ impl EditorPanelState {
                         if editor.buffers.get(id).is_some_and(|file| {
                             file.dirty
                                 || revision.is_some_and(|saved_revision| {
-                                    file.input.markdown().is_some_and(|view| {
-                                        view.read(cx).document().read(cx).revision()
-                                            != saved_revision
+                                    file.input.source_document(cx).is_some_and(|document| {
+                                        document.read(cx).revision() != saved_revision
                                     })
                                 })
                         }) {
@@ -444,6 +446,8 @@ impl EditorPanelState {
         let suggested = if file.untitled.is_some() {
             let extension = if file.input.markdown().is_some() {
                 "md"
+            } else if file.input.svg().is_some() {
+                "svg"
             } else {
                 "txt"
             };
