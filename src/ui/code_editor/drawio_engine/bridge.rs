@@ -9,6 +9,7 @@
 use std::io;
 use std::sync::Arc;
 
+#[cfg(any(windows, test))]
 use super::assets::SHELL_URL;
 #[cfg(test)]
 use super::session::SessionId;
@@ -107,6 +108,7 @@ pub(crate) struct LiveSession {
 }
 
 impl LiveSession {
+    #[cfg(any(windows, test))]
     pub(crate) fn start(body: Arc<[u8]>) -> io::Result<Self> {
         Self::start_for(body, SHELL_URL)
     }

@@ -411,9 +411,11 @@ Node.js 22 显式安装，用于自动化回归、Host 检查和 pi 桥测试；
 
 CI 桌面生产检查仍为 `cargo check --locked --features updater --target <target>` 与同 feature 构建，保留 `+crt-static` 和 CRT 断言。普通测试显式选择 `lyrel`、`lyrel-markdown-editor`、`lyrel-text`、core/CLI/server，启用 `updater`；native 目标独立以 `-p lyrel --features updater,native-markdown-tests --test native_markdown` 编译/执行。Linux 使用 `--workspace --exclude lyrel --exclude lyrel-markdown-editor --all-features`，包含 GUI-free `lyrel-text`。各平台实际结果分别记录。
 
-普通桌面／headless 测试和原生 Markdown 目标各有独立的 `--no-run` 编译步骤，分别保留 30 分钟上限；实际普通测试执行为 20 分钟，原生执行为 10 分钟。普通测试使用 `--no-fail-fast` 收集各目标结果，其断言失败后仍执行已可编译的原生目标；编译失败或取消不冒充执行成功。生产检查与构建各为 30 分钟，job 总上限仍为 90 分钟，作为全部步骤共享的最终保护，不保证每一步同时耗尽自身上限。各轮使用相同显式 `--target`，编译日志与执行日志分别定位失败，不把测试编译耗时计作消费者运行耗时。
+普通桌面／headless 测试先以相同 package／feature 集合和 `--lib --no-run` 完成 library 单元测试编译，再以不带目标过滤的 `--no-run` 编译全部普通目标；后一步复用已有产物，保留 binary、integration test 与后续完整执行时的 doctest 范围。该调度避免同包的普通 library 与大型 libtest 同时争用资源，不改变编译 profile。普通完整目标、原生 Markdown 和原生 terminal 各有独立编译步骤，所有编译步骤仍为 30 分钟；实际普通测试执行为 20 分钟，原生执行为 10 分钟。普通测试使用 `--no-fail-fast` 收集各目标结果，其断言失败后仍执行已可编译的原生目标；编译失败或取消不冒充执行成功。生产检查与构建各为 30 分钟，job 总上限仍为 90 分钟，作为全部步骤共享的最终保护，不保证每一步同时耗尽自身上限。各轮使用相同显式 `--target`，编译日志与执行日志分别定位失败，不把测试编译耗时计作消费者运行耗时。
 
 `239a1b4c` 的 macOS 日志中，测试编译于 `14:48:12` 开始，根包于 `14:55:35` 开始编译，未使用代码诊断持续至 `15:07:00`，`15:18:25` 达到 30 分钟上限，尚未进入测试执行。旧入口把 `src/main.rs` 同时作为产品 binary 与原生 test target，并随自定义 runner 编译全部 `cfg(test)` 模块。共享 library 与独立 feature-gated 原生入口移除这个重复编译边界；步骤拆分不延长原有 30 分钟编译上限，也不据日志推断所有耗时均来自警告或断言卡死。新候选仍须取得自己的完整平台结果。
+
+后续 `1acd9477` 的 macOS CI 已通过生产检查与构建，但完整测试编译仍在 30 分钟达到上限；日志中的普通 library 从 `20:37:31` 编译至 `20:58:24`，尚未执行测试。上述 library 单元测试预编译针对这一剩余并发编译边界；该日志不能证明修复候选已经通过，实际结果仍须以新提交的 CI 为准。
 
 此前编译预算调整的历史证据保持不变：PR #201 的 Windows CI `42081752060` 已完成普通构建与静态 CRT 断言，随后在测试编译阶段触及原有 20 分钟上限，尚未执行测试；因此仅扩大编译预算，不跳过用例，也不延长实际测试的卡死保护。
 
